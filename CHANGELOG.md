@@ -3,6 +3,8 @@
 ## Unreleased
 
 - Add a versioned data-only JSON exchange contract for provider conformance fixtures, with a strict parser and provider-specific generated examples. Runtime conformance execution remains separate.
+- Add an opt-in Fusion candidate audit with an independently executed regression probe and same-model controls inside the original budget.
+
 - Keep Fusion benchmark fallback active when a cheap repair exhausts its allowance without submitting, even if its partial patch passes the supplied check.
 
 - Recover once from a truncated Fusion benchmark action within the existing call, time and spending limits, without applying partial output.

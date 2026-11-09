@@ -278,7 +278,7 @@ test('contract policy meters the test author and worker inside the same trial', 
 
 
 test('provided probes are equally visible to fixed controls and skip the test-author role', async () => {
-  for (const policy of ['contract-provided', 'contract-draft', 'contract-refine', 'contract-provided-cheap', 'contract-provided-strong']) {
+  for (const policy of ['contract-provided', 'contract-draft', 'contract-refine', 'contract-provided-cheap', 'contract-provided-strong', 'contract-audit', 'contract-audit-cheap', 'contract-audit-strong']) {
   const { root, options } = await fixture();
   try {
     await assert.rejects(runPairBenchmark({ ...options, config: { ...config, maxCalls: 4 }, policy }), /missing_reproducer/);
@@ -298,13 +298,16 @@ test('provided probes are equally visible to fixed controls and skip the test-au
       },
       contractAgent: async (_task, _image, id, _settings, invoke, agentOptions) => {
         assert.equal(agentOptions.providedProbe, task.reproducer);
+        assert.equal(agentOptions.auditCandidate, policy.startsWith('contract-audit'));
         assert.equal(typeof agentOptions.cheapAgent, ['contract-draft', 'contract-refine'].includes(policy) ? 'function' : 'undefined');
-        await invoke(id, roles.cheap, body, signal); return repaired();
+        await invoke(id, roles.cheap, body, signal);
+        if (agentOptions.auditCandidate) await invoke(id, roles.strong, body, signal);
+        return repaired();
       } });
     assert.equal(instructions.length, 2);
     assert.equal(instructions[0], instructions[1]);
     assert.match(instructions[0], /provided probe sentinel/);
-    assert.deepEqual(state.calls.map(call => call.model), [config.cheap, config.strong, policy === 'contract-provided-strong' ? config.strong : config.cheap]);
+    assert.deepEqual(state.calls.map(call => call.model), [config.cheap, config.strong, ['contract-provided-strong', 'contract-audit-strong'].includes(policy) ? config.strong : config.cheap, ...(policy.startsWith('contract-audit') ? [policy === 'contract-audit-cheap' ? config.cheap : config.strong] : [])]);
   } finally { await rm(root, { recursive: true, force: true }); }
   }
 });

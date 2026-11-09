@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { contractRequest, runContractAgent, runSingleDraft, runRefinedDraft } from '../scripts/fusion-contract-agent.mjs';
+import { auditRequest, contractRequest, runContractAgent, runSingleDraft, runRefinedDraft } from '../scripts/fusion-contract-agent.mjs';
 import { models } from '../scripts/fusion-benchmark-accounting.mjs';
 
 const task = { instruction: 'Repair both admission and settlement.', editPaths: ['worker/a.ts'], visibleTests: ['worker/test/a.test.mjs'] };
@@ -302,4 +302,132 @@ test('draft refinement stops on uncertain charges and rejects an escaped candida
   await assert.rejects(runRefinedDraft({ ...task, reproducer: 'supplied' }, 'image', 'strong', 'refine', config,
     async () => {}, undefined, { draft: async () => ({ ...result(), files: [{ path: 'worker/test/a.test.mjs', content: 'escape' }] }),
       makeSandbox: async () => { throw Error('must_not_allocate'); } }), /invalid_edit_path/);
+});
+
+
+test('an independent audit rejects a submitted patch that passed the supplied probe', async () => {
+  const f = fixture([failed, passed, failed, failed, passed], [{}, { probe: 'independent audit sentinel' }, {}]);
+  const output = await runContractAgent(task, 'image', 'audit', config, f.invoke,
+    { ...f.dependencies, providedProbe: 'provided', auditCandidate: true });
+  assert.equal(output.escalated, true);
+  assert.equal(output.auditPassed, false);
+  assert.match(output.auditDigest, /^[a-f0-9]{64}$/);
+  assert.deepEqual(f.seen.filter(x => x.role).map(x => x.role), [models.cheap, models.strong, models.strong]);
+  const workers = f.seen.filter(x => x.instruction);
+  assert.equal(workers[0].instruction.includes('independent audit sentinel'), false);
+  assert.match(workers[1].instruction, /invariant failed/);
+  assert.equal(workers[1].options.initialFiles, undefined);
+  const { files, ...trace } = output;
+  assert.equal(JSON.stringify(trace).includes('sentinel'), false);
+  assert.ok(f.boxes.every(box => box.closed));
+});
+
+test('audit acceptance requires both an original assertion failure and candidate success', async () => {
+  for (const baseline of [failed, passed, { passed: false, assertionFailed: false, feedback: 'syntax error' }]) {
+    const f = fixture([failed, passed, baseline, passed, passed], [{}, { probe: 'audit' }, {}]);
+    const output = await runContractAgent(task, 'image', 'audit', config, f.invoke,
+      { ...f.dependencies, providedProbe: 'provided', auditCandidate: true });
+    assert.equal(output.auditPassed, baseline.assertionFailed);
+    assert.equal(output.escalated, !baseline.assertionFailed);
+    assert.equal(output.turns, baseline.assertionFailed ? 2 : 3);
+    assert.ok(f.boxes.every(box => box.closed));
+  }
+});
+
+test('unusable audits fall back once; uncertain charges and refusals stop', async () => {
+  for (const fault of ['invalid', 'provider_empty', 'provider_truncated', 'unknown_cost', 'provider_refused']) {
+    const f = fixture([failed, passed, passed]);
+    let calls = 0;
+    const invoke = async (...args) => {
+      if (++calls === 2 && fault !== 'invalid') throw Error(fault);
+      return f.invoke(...args);
+    };
+    const run = runContractAgent(task, 'image', 'audit', config, invoke,
+      { ...f.dependencies, providedProbe: 'provided', auditCandidate: true });
+    if (['unknown_cost', 'provider_refused'].includes(fault)) {
+      await assert.rejects(run, new RegExp(fault)); assert.equal(calls, 2);
+    } else {
+      const output = await run;
+      assert.equal(output.escalated, true); assert.equal(output.auditPassed, false);
+      assert.equal(output.auditDigest, null); assert.equal(output.turns, 3);
+    }
+    assert.ok(f.boxes.every(box => box.closed));
+  }
+});
+
+test('incomplete and failed cheap candidates skip the optional audit', async () => {
+  for (const patch of [{ outcome: 'turn_limit' }, { publicPassed: false }]) {
+    const f = fixture([failed, passed, passed]);
+    const cheapAgent = async (...args) => ({ ...await f.dependencies.agent(...args), ...patch });
+    const output = await runContractAgent(task, 'image', 'audit', config, f.invoke,
+      { ...f.dependencies, cheapAgent, providedProbe: 'provided', auditCandidate: true });
+    assert.equal(output.auditPassed, null); assert.equal(output.auditDigest, null);
+    assert.equal(output.turns, 2); assert.equal(output.escalated, true);
+    assert.equal(output.actions.some(action => action.action === 'candidate_audit'), false);
+  }
+});
+
+test('audit mode reserves a fallback call inside the original shared ceiling', async () => {
+  const f = fixture([failed, passed, failed, failed, passed]);
+  const allowances = [];
+  f.dependencies.agent = async (_task, _image, _strategy, id, settings, invoke, _engine, options) => {
+    allowances.push(settings.maxTurns);
+    for (let i = 0; i < settings.maxTurns; i++) await invoke(id, models.strong, actionBody, options.signal);
+    return result();
+  };
+  const output = await runContractAgent(task, 'image', 'audit', config,
+    async (...args) => args[2].response_format ? { choices: [{ finish_reason: 'stop', message: { content: '{"probe":"audit"}' } }] } : f.invoke(...args),
+    { ...f.dependencies, providedProbe: 'provided', auditCandidate: true, cheapMaxCalls: 20 });
+  assert.deepEqual(allowances, [6, 1]);
+  assert.equal(output.turns, 8); assert.equal(output.escalated, true);
+});
+
+test('audit requests contain original and candidate source but never hidden test paths', async () => {
+  const request = auditRequest({ ...task, hiddenTests: ['worker/test/private.test.mjs'] },
+    [{ path: 'worker/a.ts', content: 'original' }], [{ path: 'worker/a.ts', content: 'candidate' }], 8192);
+  const payload = JSON.parse(request.messages[1].content);
+  assert.equal(payload.original[0].content, 'original');
+  assert.equal(payload.candidate[0].content, 'candidate');
+  assert.equal(JSON.stringify(request).includes('private.test'), false);
+  assert.equal(request.max_tokens, 4096);
+  for (const value of [true, 'true']) {
+    await assert.rejects(runContractAgent(task, 'image', 'audit', config, async () => {},
+      { auditCandidate: value }), /invalid_candidate_audit/);
+  }
+});
+
+
+test('candidate audit detects a supplied-probe false accept inside a real sandbox', {
+  skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+}, async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+  const original = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+    .find(item => item.id === 'provided-responses-path');
+  const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+    .receipts.find(item => item.taskId === original.id);
+  const path = original.editPaths[0];
+  const fixtureTask = { ...original, instruction: 'Export fixtureValue equal to 2.', editPaths: [path] };
+  const probe = expectation => `import './worker/test/typescript-setup.mjs';
+    import assert from 'node:assert/strict';
+    const {fixtureValue}=await import('./${path}');
+    assert.ok(${expectation});`;
+  const output = await runContractAgent(fixtureTask, receipt.image, 'sandbox-audit',
+    { ...config, deadlineMs: 120000 }, async (_id, _role, body) => ({ choices: [{ finish_reason: 'stop',
+      message: { content: JSON.stringify(body.response_format ? { probe: probe('fixtureValue === 2') } : {}) } }] }), {
+      providedProbe: probe('fixtureValue >= 1'), auditCandidate: true,
+      agent: async (_task, _image, _strategy, id, _config, invoke, _engine, options) => {
+        await invoke(id, models.strong, actionBody, options.signal);
+        return { ...result(), files: [{ path, content: 'export const fixtureValue = 2;' }] };
+      },
+      cheapAgent: async (_task, _image, _strategy, id, _config, invoke, _engine, options) => {
+        await invoke(id, models.cheap, actionBody, options.signal);
+        return { ...result(), files: [{ path, content: 'export const fixtureValue = 1;' }] };
+      },
+    });
+  assert.equal(output.escalated, true);
+  assert.equal(output.auditPassed, false);
+  assert.equal(output.contractPassed, true);
+  assert.equal(output.files[0].content, 'export const fixtureValue = 2;');
+  assert.equal(output.turns, 3);
 });

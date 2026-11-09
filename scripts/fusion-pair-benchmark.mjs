@@ -12,7 +12,8 @@ export const pairDefaults = Object.freeze({ cheap: 'openai/gpt-6-luna', strong: 
   maxCalls: 12, outputTokens: 8192, deadlineMs: 300000, trialBudgetMicros: 1000000,
   campaignBudgetMicros: 100000000, priorCostMicros: 0 });
 const strategies = ['cheap', 'strong', 'architect'];
-const providedPolicies = ['contract-provided', 'contract-draft', 'contract-refine', 'contract-provided-cheap', 'contract-provided-strong'];
+const auditPolicies = ['contract-audit', 'contract-audit-cheap', 'contract-audit-strong'];
+const providedPolicies = ['contract-provided', 'contract-draft', 'contract-refine', 'contract-provided-cheap', 'contract-provided-strong', ...auditPolicies];
 const contractPolicies = ['contract', 'contract-cheap', 'contract-strong', 'contract-private', ...providedPolicies];
 
 // The caller supplies repair scope before inference; never inspect test answers.
@@ -36,8 +37,8 @@ export function validatePair(config, taskCount, armCount = 3) {
 }
 
 export function pairModel(strategy, role, config) {
-  if (['contract-cheap', 'contract-provided-cheap'].includes(strategy)) return config.cheap;
-  if (['contract-strong', 'contract-provided-strong'].includes(strategy)) return config.strong;
+  if (['contract-cheap', 'contract-provided-cheap', 'contract-audit-cheap'].includes(strategy)) return config.cheap;
+  if (['contract-strong', 'contract-provided-strong', 'contract-audit-strong'].includes(strategy)) return config.strong;
   if (contractPolicies.includes(strategy)) return role === roles.cheap ? config.cheap : config.strong;
   if (!strategies.includes(strategy)) throw new Error('invalid_pair_strategy');
   return strategy === 'strong' || (strategy === 'architect' && role === roles.cheap) ? config.strong : config.cheap;
@@ -141,7 +142,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
         try {
           const result = contractPolicies.includes(strategy)
             ? await contractAgent(task, receipt.image, trialId, execution.settings, invoke(strategy),
-              { agent, ...(['contract-draft', 'contract-refine'].includes(policy) ? { cheapAgent: policy === 'contract-refine' ? runRefinedDraft : runSingleDraft } : {}), cheapMaxCalls, exposeProbe: policy !== 'contract-private', providedProbe: providedPolicies.includes(policy) ? task.reproducer : null })
+              { agent, ...(['contract-draft', 'contract-refine'].includes(policy) ? { cheapAgent: policy === 'contract-refine' ? runRefinedDraft : runSingleDraft } : {}), cheapMaxCalls, auditCandidate: auditPolicies.includes(policy), exposeProbe: policy !== 'contract-private', providedProbe: providedPolicies.includes(policy) ? task.reproducer : null })
             : await agent(providedPolicies.includes(policy) ? withReproducer(task, task.reproducer) : task,
               receipt.image, execution.strategy, trialId, execution.settings, invoke(selectedStrategy), undefined, { preloadSource });
           const verdict = await grade(task, receipt.image, result.files, repo);
