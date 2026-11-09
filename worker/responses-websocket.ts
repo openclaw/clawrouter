@@ -82,7 +82,7 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
           cost = estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, value?.parentTools);
           const connection = await assertProviderAccess(selection.provider, auth, env);
           signal.throwIfAborted();
-          accounting = createProxyAccounting({ ...accountingContext, cost, grantKey: pinned.key });
+          accounting = createProxyAccounting({ ...accountingContext, cost, grantKey: pinned!.key });
           const preparedPlan = planBudgetReservation(auth, selection.capability, cost, connection);
           admitAccountingFacts(accounting.facts, preparedPlan);
           retention = prepareContentRetention(env, auth, selection, accounting.requestId);
