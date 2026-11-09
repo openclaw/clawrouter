@@ -20,7 +20,7 @@ export function scopeStrategy(task) {
   return task.editPaths.length === 1 ? 'cheap' : 'strong';
 }
 
-export function validatePair(config, taskCount) {
+export function validatePair(config, taskCount, armCount = 3) {
   if (JSON.stringify(Object.keys(config).sort()) !== JSON.stringify(Object.keys(pairDefaults).sort())
     || !Object.hasOwn(nativeModels, config.cheap) || !Object.hasOwn(nativeModels, config.strong)
     || config.cheap === config.strong) throw new Error('invalid_pair_config');
@@ -29,7 +29,8 @@ export function validatePair(config, taskCount) {
     if (!Number.isSafeInteger(config[key]) || config[key] < min || config[key] > max) throw new Error(`invalid_${key}`);
   }
   if (!Number.isSafeInteger(taskCount) || taskCount < 1
-    || config.priorCostMicros + taskCount * strategies.length * config.trialBudgetMicros > config.campaignBudgetMicros) {
+    || !Number.isSafeInteger(armCount) || armCount < 1 || armCount > 3
+    || config.priorCostMicros + taskCount * armCount * config.trialBudgetMicros > config.campaignBudgetMicros) {
     throw new Error('campaign_budget_exceeded');
   }
 }
@@ -51,18 +52,19 @@ export function pairExecution(strategy, config) {
 }
 
 export async function runPairBenchmark({ repo, qualificationPath, taskManifest, out, sourceSha, config,
-  cheapReasoning = 'none', cheapMaxCalls = 10, executor = 'interactive', preloadSource = false, policy = 'architect', includeControls = true, env = process.env, fetcher = fetch, agent, contractAgent = runContractAgent, grade = verify, preflight = nativePins }) {
+  cheapReasoning = 'none', cheapMaxCalls = 10, executor = 'interactive', preloadSource = false, policy = 'architect', includeControls = true, controlsOnly = false, env = process.env, fetcher = fetch, agent, contractAgent = runContractAgent, grade = verify, preflight = nativePins }) {
   if (!/^[a-f0-9]{40}$/.test(sourceSha ?? '')) throw new Error('exact_source_required');
   if (!['architect', 'scope', ...contractPolicies].includes(policy)) throw new Error('invalid_pair_policy');
   if (!['interactive', 'single-draft'].includes(executor) || (executor === 'single-draft' && !providedPolicies.includes(policy))) throw new Error('invalid_pair_executor');
   agent ??= executor === 'single-draft' ? runSingleDraft : runAgent;
-  if (typeof includeControls !== 'boolean' || (!includeControls && !contractPolicies.includes(policy))) throw new Error('invalid_control_selection');
+  if (typeof includeControls !== 'boolean' || typeof controlsOnly !== 'boolean'
+    || (controlsOnly && !includeControls) || (!includeControls && !contractPolicies.includes(policy))) throw new Error('invalid_control_selection');
   if (policy !== 'architect') preloadSource = true;
   if (contractPolicies.includes(policy) && config.maxCalls < 4) throw new Error('contract_requires_four_calls');
-  const trialStrategies = includeControls ? ['cheap', 'strong', policy] : [policy];
+  const trialStrategies = controlsOnly ? ['cheap', 'strong'] : includeControls ? ['cheap', 'strong', policy] : [policy];
   const tasks = await loadTasks(taskManifest);
   if (providedPolicies.includes(policy) && tasks.some(task => task.reproducer === undefined)) throw new Error('missing_reproducer');
-  validatePair(config, tasks.length);
+  validatePair(config, tasks.length, trialStrategies.length);
   if (!['none', 'medium'].includes(cheapReasoning)) throw new Error('invalid_cheap_reasoning');
   if (!Number.isSafeInteger(cheapMaxCalls) || cheapMaxCalls < 1 || cheapMaxCalls > 59) throw new Error('invalid_cheap_call_allowance');
   if (typeof preloadSource !== 'boolean') throw new Error('invalid_source_preload');
@@ -70,7 +72,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
   const receipts = validateLocalQualification(tasks, JSON.parse(rawQualification));
   const pins = await preflight(env, fetcher, [config.cheap, config.strong]);
   await mkdir(out, { mode: 0o700 });
-  const state = { version: 1, kind: includeControls ? 'native-pair-repository' : 'native-policy-repository', sourceSha, config, includeControls,
+  const state = { version: 1, kind: controlsOnly ? 'native-controls-repository' : includeControls ? 'native-pair-repository' : 'native-policy-repository', sourceSha, config, includeControls, controlsOnly,
     cheapReasoning, cheapMaxCalls, executor, preloadSource, datasetDigest: hash(JSON.stringify(tasks)), qualificationDigest: hash(rawQualification), receipts, pins,
     strategies: trialStrategies, policy, complete: false, records: [], calls: [], spentOrReservedMicros: config.priorCostMicros,
     limitations: ['One trial per task; report the declared task split and do not infer general superiority.',
@@ -171,7 +173,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   if (!out) throw new Error('qualification, task manifest, explicit config and fresh output directory required');
   const config = JSON.parse(await readFile(configPath, 'utf8'));
   const sourceSha = (await command('git', ['rev-parse', 'HEAD'])).stdout.toString().trim();
-  runPairBenchmark({ repo: process.cwd(), qualificationPath, taskManifest, config, out, sourceSha, policy: process.env.FUSION_PAIR_POLICY ?? 'architect', cheapReasoning: process.env.FUSION_CHEAP_REASONING ?? 'none', cheapMaxCalls: Number(process.env.FUSION_CHEAP_MAX_CALLS ?? 10), executor: process.env.FUSION_PAIR_EXECUTOR ?? 'interactive', preloadSource: process.env.FUSION_PRELOAD_SOURCE === '1', includeControls: process.env.FUSION_PAIR_CONTROLS !== '0' }).catch(() => {
+  runPairBenchmark({ repo: process.cwd(), qualificationPath, taskManifest, config, out, sourceSha, policy: process.env.FUSION_PAIR_POLICY ?? 'architect', cheapReasoning: process.env.FUSION_CHEAP_REASONING ?? 'none', cheapMaxCalls: Number(process.env.FUSION_CHEAP_MAX_CALLS ?? 10), executor: process.env.FUSION_PAIR_EXECUTOR ?? 'interactive', preloadSource: process.env.FUSION_PRELOAD_SOURCE === '1', includeControls: process.env.FUSION_PAIR_CONTROLS !== '0', controlsOnly: process.env.FUSION_PAIR_CONTROLS_ONLY === '1' }).catch(() => {
     console.error('Pair benchmark incomplete; inspect the content-free checkpoint.'); process.exitCode = 1;
   });
 }

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { hash } from '../scripts/fusion-workloads.mjs';
 import { models as roles } from '../scripts/fusion-benchmark-accounting.mjs';
 import { pairDefaults, validatePair, pairModel, pairExecution, scopeStrategy, runPairBenchmark } from '../scripts/fusion-pair-benchmark.mjs';
+import { analyzePairRun } from '../scripts/fusion-pair-analysis.mjs';
 
 const body = { messages: [{ role: 'user', content: 'private prompt sentinel' }], max_tokens: 256 };
 const signal = new AbortController().signal;
@@ -39,6 +40,51 @@ test('architect spends one of the shared calls on the strong planner', () => {
   assert.equal(pairExecution('architect', config).settings.maxTurns + 1, pairExecution('strong', config).settings.maxTurns);
   assert.throws(() => validatePair({ ...config, cheap: config.strong }, 1), /invalid_pair/);
   assert.throws(() => validatePair({ ...config, priorCostMicros: 99999999 }, 1), /campaign_budget/);
+  for (const count of [0, 4, 1.5, '2']) assert.throws(() => validatePair(config, 1, count), /campaign_budget/);
+});
+
+test('fixed controls receive identical supplied context without invoking or budgeting a candidate', async () => {
+  const { root, options } = await fixture();
+  try {
+    const manifest = JSON.parse(await readFile(options.taskManifest));
+    manifest.tasks[0].reproducer = "throw new Error('known regression');";
+    await writeFile(options.taskManifest, JSON.stringify(manifest));
+    const qualification = JSON.parse(await readFile(options.qualificationPath));
+    qualification.receipts[0].taskDigest = hash(JSON.stringify(manifest.tasks[0]));
+    qualification.receipts[0].reproduction = { assertionFailed: true };
+    qualification.receipts[0].oracleReproduction = { passed: true };
+    await writeFile(options.qualificationPath, JSON.stringify(qualification));
+    const seen = [];
+    const state = await runPairBenchmark({ ...options, controlsOnly: true, policy: 'contract-provided',
+      config: { ...config, maxCalls: 4, campaignBudgetMicros: config.priorCostMicros + 2 * config.trialBudgetMicros },
+      grade, fetcher: success,
+      contractAgent: async () => { assert.fail('candidate must not run'); },
+      agent: async (task, _image, _strategy, id, settings, invoke, _unused, agentOptions) => {
+        seen.push({ instruction: task.instruction, settings, preloadSource: agentOptions.preloadSource });
+        await invoke(id, roles.strong, body, signal);
+        return repaired();
+      },
+    });
+    assert.deepEqual(seen[0], seen[1]);
+    assert.match(seen[0].instruction, /known regression/);
+    assert.equal(seen[0].settings.maxTurns, 4);
+    assert.equal(seen[0].preloadSource, true);
+    assert.equal(state.kind, 'native-controls-repository');
+    assert.equal(state.controlsOnly, true);
+    assert.deepEqual(state.strategies, ['cheap', 'strong']);
+    assert.deepEqual(state.calls.map(call => call.model), [config.cheap, config.strong]);
+    assert.equal(state.spentOrReservedMicros, config.priorCostMicros + state.calls.reduce((sum, call) => sum + call.costMicros, 0));
+    assert.equal(JSON.parse(await readFile(join(options.out, 'pair.json'))).kind, state.kind);
+    assert.throws(() => analyzePairRun(state), /incomplete_pair_run/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('fixed-controls selection rejects ambiguous or invalid options before provider access', async () => {
+  for (const controlsOnly of ['true', null, 1]) {
+    await assert.rejects(runPairBenchmark({ sourceSha: 'e'.repeat(40), controlsOnly }), /invalid_control_selection/);
+  }
+  await assert.rejects(runPairBenchmark({ sourceSha: 'e'.repeat(40), controlsOnly: true,
+    includeControls: false, policy: 'contract-provided' }), /invalid_control_selection/);
 });
 
 test('both controls and the pair account for real roles without persisting content', async () => {

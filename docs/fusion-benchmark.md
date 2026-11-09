@@ -413,6 +413,17 @@ check and fallback scaffold but map both roles to one model. Use these ablations
 to distinguish a model-combination gain from the value of a second attempt.
 Policy-only ablations remain explicitly separate from paired-control reports.
 
+For a comparison of the fixed models alone, set `FUSION_PAIR_CONTROLS_ONLY=1`
+or pass `controlsOnly: true`. Both models retain the same executor, task context,
+supplied reproducer and per-trial limits. No candidate or contract workflow runs.
+Keep `includeControls` enabled. The selected policy still determines whether
+the supplied reproducer is required and visible to both controls.
+
+These reports use `kind: native-controls-repository`, list only `cheap` and
+`strong`, and cannot be passed off as three-arm fusion evidence. The three-arm
+analyzer rejects them. Budget preflight counts the actual selected arms in all
+modes; execution still meters every call and reserves unknown charges.
+
 
 Matched one-shot results on the same three exposed development repairs:
 

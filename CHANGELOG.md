@@ -9,6 +9,7 @@
 - Pin the shared source-release workflow to a reviewed commit with complete release listing and exact-byte draft retry checks.
 
 - Declare the bundled OpenAI API and existing ChatGPT subscription transport as separate catalog products, preserving execution, pricing and subscription scope.
+- Add a fixed-model-only Fusion benchmark mode with explicit reporting and budgets for the selected arms.
 
 - Add a matched one-shot Fusion executor and supplied-check single-model ablations for controlled benchmark comparisons.
 
