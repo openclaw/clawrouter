@@ -123,18 +123,51 @@ test('parsing provider selection first preserves authentication precedence for m
   }
 });
 
-for (const family of ['policies', 'users']) test(`failed ${family} imports cannot mask an incorrect secret`, async t => {
+for (const family of ['policies', 'users']) for (const fault of ['transport', 'staging']) test(`${family} import ${fault} failure preserves authentication and fault classification`, async t => {
   const f = await fixture();
-  t.mock.method(globalThis, 'fetch', () => { throw new Error('unexpected upstream dispatch'); });
-  f.authority.sql.exec(`DELETE FROM ${family === 'policies' ? 'access_policies' : 'access_users'}`);
-  f.authority.sql.exec('DELETE FROM policy_binding_meta WHERE meta_key = ?', `${family}_global_initialized`);
-  f.env.POLICY_KV.get = async () => { throw new Error('synthetic unavailable KV'); };
-  for (const [authorization, expected, code] of [
-    ['Bearer clawrouter-live-fixture-incorrect-secret', 401, 'invalid_proxy_key'],
-    [headers.authorization, 500, 'internal_error'],
+  const table = family === 'policies' ? 'access_policies' : 'access_users';
+  const id = family === 'policies' ? 'fixture' : f.credential.principalId;
+  const key = family === 'policies' ? `policies/${id}` : `access/users/${id}`;
+  const marker = `${family}_global_initialized`, reads = [], stages = [];
+  let dispatches = 0;
+  t.mock.method(globalThis, 'fetch', () => { dispatches++; throw new Error('unexpected upstream dispatch'); });
+  f.authority.sql.exec(`DELETE FROM ${table}`);
+  f.authority.sql.exec('DELETE FROM policy_binding_meta WHERE meta_key = ?', marker);
+  const get = f.env.POLICY_KV.get;
+  t.mock.method(f.env.POLICY_KV, 'get', function (readKey, type) {
+    reads.push({ key: readKey, type });
+    if (fault === 'transport' && readKey === key) throw new Error('synthetic unavailable KV');
+    return get.call(this, readKey, type);
+  });
+  if (fault === 'staging') {
+    f.records.set(key, family === 'policies' ? f.policy : { enabled: true });
+    const stage = f.authority.object.stageIdentityRecord;
+    t.mock.method(f.authority.object, 'stageIdentityRecord', function (...args) {
+      if (args[1] === table) {
+        stages.push({ table: args[1], key: args[4], marker: args[6] });
+        throw new Error('synthetic staging failure');
+      }
+      return stage.apply(this, args);
+    });
+  }
+  t.after(async () => {
+    const failures = (await Promise.allSettled(f.pending)).filter(result => result.status === 'rejected');
+    if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'admission fixture background failed');
+  });
+  for (const [authorization, expected, code, attempts] of [
+    ['Bearer clawrouter-live-fixture-incorrect-secret', 401, 'invalid_proxy_key', 0],
+    [headers.authorization, fault === 'transport' ? 503 : 500, fault === 'transport' ? 'identity_admission_unavailable' : 'internal_error', 1],
   ]) {
     const response = await worker.fetch(new Request('https://fixture/v1/messages', { method: 'POST', headers: { ...headers, authorization }, body: JSON.stringify({ model: 'anthropic/claude-sonnet-5', messages: [], max_tokens: 16 }) }), f.env, f.context);
-    assert.equal(response.status, expected); assert.equal(response.headers.get('x-clawrouter-error-code'), code); await response.text();
+    const text = await response.text();
+    assert.equal(response.status, expected); assert.equal(response.headers.get('x-clawrouter-error-code'), code);
+    assert.equal(JSON.parse(text).error.code, code);
+    assert.doesNotMatch(text, /synthetic unavailable KV|synthetic staging failure/);
+    assert.deepEqual(reads, attempts ? [{ key, type: 'stream' }] : []);
+    assert.deepEqual(stages, attempts && fault === 'staging' ? [{ table, key: id, marker }] : []);
+    assert.equal(dispatches, 0);
+    assert.equal([...f.authority.sql.exec(`SELECT COUNT(*) AS count FROM ${table}`)][0].count, 0);
+    assert.equal([...f.authority.sql.exec('SELECT COUNT(*) AS count FROM policy_binding_meta WHERE meta_key = ?', marker)][0].count, 0);
   }
 });
 
