@@ -3,7 +3,7 @@ import { accessBytesResponse } from "./access-byte-fixture.mjs";
 const keyMaterial = "abcdefgh";
 const keyDigest = await sha256(keyMaterial);
 
-export function usageEnv(objectNames, { provider = "openai", limit = 100, providerLimit = limit, fixedCost = 1, retainContent = true, existingUnmetered = false, serviceTiers, credentialServiceTiers, dailyLimit, weeklyLimit, budgetMode } = {}) {
+export function usageEnv(objectNames, { provider = "openai", limit = 100, providerLimit = limit, fixedCost = 1, retainContent = true, existingUnmetered = false, serviceTiers, credentialServiceTiers, dailyLimit, weeklyLimit, budgetMode, admissionReply } = {}) {
   const policy = { enabled: true, generation: "policy_v1", providers: [provider], tenantId: "tenant", monthlyBudgetMicros: limit, requestCostMicros: fixedCost, budgetScope: "principal", retainRequestContent: retainContent };
   if (serviceTiers !== undefined) policy.serviceTiers = serviceTiers;
   if (budgetMode !== undefined) policy.budgetMode = budgetMode;
@@ -18,7 +18,8 @@ export function usageEnv(objectNames, { provider = "openai", limit = 100, provid
     get: () => ({ fetch: async (url, init) => {
       const path = new URL(url).pathname;
       if (path === "/admission/resolve") {
-        const value = { credential: { credentialId: "maintainer_key", credential }, policy: { policyId: "maintainer_access", policy }, owner: null, connections: [{ providerId: provider, enabled: true, monthlyBudgetMicros: providerLimit }], pools: { [provider]: { keys: [], states: {} } } };
+        let value = { credential: { credentialId: "maintainer_key", credential }, policy: { policyId: "maintainer_access", policy }, owner: null, connections: [{ providerId: provider, enabled: true, monthlyBudgetMicros: providerLimit }], pools: { [provider]: { keys: [], states: {} } } };
+        if (admissionReply) value = admissionReply(JSON.parse(JSON.stringify(value)), JSON.parse(init.body));
         return new Headers(init?.headers).has("x-clawrouter-identity-admission") ? accessBytesResponse(JSON.stringify(value), "") : Response.json(value);
       }
       if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "maintainer_key", credential }], missingCredentialIds: [] });

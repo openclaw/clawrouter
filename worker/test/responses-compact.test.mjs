@@ -20,7 +20,7 @@ const wire = JSON.stringify(result, null, 2) + String.fromCharCode(10);
 
 function fixture(t, { mode = "reserve", limit = 100_000_000, fixedCost = null } = {}) {
   const events = [], pending = [], operations = [];
-  const env = usageEnv([], { limit: mode === "unmetered" ? null : limit, providerLimit: mode === "unmetered" ? null : 100_000_000, fixedCost, retainContent: false });
+  const env = usageEnv([], { limit: mode === "unmetered" ? null : limit, providerLimit: mode === "unmetered" ? null : 100_000_000, fixedCost, retainContent: false, budgetMode: mode === "soft" ? "soft" : "reserve" });
   env.OPENAI_API_KEY = "fixture-environment-key";
   const ledger = sqlBudgetNamespace(t);
   env.BUDGET_LEDGER = { ...ledger, get: name => ({ fetch: (url, init) => {
@@ -30,9 +30,7 @@ function fixture(t, { mode = "reserve", limit = 100_000_000, fixedCost = null } 
   const original = env.ACCESS_CONTROL.get;
   env.ACCESS_CONTROL.get = name => ({ fetch: async (url, init) => {
     if (new URL(url).pathname === "/grant-pools/attachment") return Response.json({ attached: false, pending: false });
-    const response = await original(name).fetch(url, init), body = await response.json();
-    if (body.policy) Object.assign(body.policy.policy, { budgetMode: mode === "soft" ? "soft" : "reserve" });
-    return Response.json(body);
+    return original(name).fetch(url, init);
   } });
   env.USAGE_QUEUE = { send: async event => events.push(event) };
   return { env, ledger, events, pending, operations, context: { waitUntil: promise => pending.push(promise) } };
