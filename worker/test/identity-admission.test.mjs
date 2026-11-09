@@ -413,6 +413,11 @@ for (const failure of ['record-limit', 'ordinary-selection']) test('PUBLIC alter
     const stub = get(name);
     return { ...stub, async fetch(url, init) {
       if (!new Headers(init?.headers).has('x-clawrouter-identity-admission')) return stub.fetch(url, init);
+      // Inspect the existing serialized input before constructing its BYOB-only body.
+      if (new URL(url).pathname === '/admission/resolve' && JSON.parse(init.body).selection?.excludedKeys?.length) {
+        alternateCalls++;
+        if (failure === 'ordinary-selection') return accessBytesResponse(JSON.stringify({ error: { code: 'authority_error', message: 'synthetic ordinary selection failure' } }), '', { status: 500 });
+      }
       const response = await stub.fetch(url, { ...init, body: accessBytesResponse(init.body, '').body, duplex: 'half' });
       return accessBytesResponse(await response.text(), '', { status: response.status, headers: response.headers });
     } };
@@ -441,12 +446,6 @@ for (const failure of ['record-limit', 'ordinary-selection']) test('PUBLIC alter
     while (index < roots.length) { const batch = roots.slice(index); index = roots.length; for (const outcome of await Promise.all(batch)) if (outcome.failed) errors.push(outcome.error); }
     if (errors.length) throw new AggregateError(hasPrimary ? [primary, ...errors] : errors, 'primary and independent public fixture roots');
   });
-  f.env.ACCESS_CONTROL.beforeFetch = async (_name, request) => {
-    if (new URL(request.url).pathname === '/admission/resolve' && (await request.clone().json()).selection?.excludedKeys?.length) {
-      alternateCalls++;
-      if (failure === 'ordinary-selection') throw Error('synthetic ordinary selection failure');
-    }
-  };
   f.response = request => {
     assert.equal(originalIds.length, 2);
     if (failure === 'record-limit') {
