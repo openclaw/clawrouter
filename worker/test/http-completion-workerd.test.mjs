@@ -150,7 +150,7 @@ export default {async fetch(request,bindings,ctx){
  check(s.cancels===1&&s.unlocked&&(normalization||s.readReturned)&&s.cancelReturned,'actual read FIRST cancel and unlock');
  check(s.posts===1&&s.events===1&&s.reserves===4,'single provider and accounting with four original reservations');
  const rows=[];for(const [key] of names){const response=await bindings.BUDGET_LEDGER.get(bindings.BUDGET_LEDGER.idFromString(key)).fetch('https://clawrouter.internal/fixture-sql');rows.push(...(await response.json()).filter(row=>reservationIds.includes(row.reservation_id)));}
- check(rows.length===4&&rows.every(row=>reservationIds.includes(row.reservation_id)&&row.settled===1&&row.dispatch_started===1&&row.reserved_micros===7),'same original reservation IDs and terminal SQL');
+ check(rows.length===4&&rows.every(row=>reservationIds.includes(row.reservation_id)&&row.settled===1&&row.dispatch_started===1&&row.reserved_micros===(normalization?0:7)),'same original reservation IDs and terminal SQL');
  const usage=[];for(const name of usageNames){const response=await bindings.USAGE_LEDGER.get(bindings.USAGE_LEDGER.idFromName(name)).fetch('https://clawrouter.internal/fixture-sql');usage.push(...await response.json());}
  check(usage.length===1&&usage[0].request_id==='completion-'+id&&usage[0].actual_cost_micros===(normalization?0:7)&&usage[0].status_code===(normalization?429:200)&&usage[0].status==='client_error','one original cancellation or normalization receipt');
  const stored=await bindings.CONTENT_ARCHIVE.get(archiveKey),text=await stored.text(),record=JSON.parse(text);
