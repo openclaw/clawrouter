@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { crc32, deflateSync } from "node:zlib";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { startWorkerdFixture } from "../../test/helpers/workerd.mjs";
@@ -33,6 +34,57 @@ export default { async fetch(request,env,context) {
  if(path==="/fixture/rows") return env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(url.searchParams.get("name"))).fetch("https://budget/rows");
  if(path==="/fixture/usage") return usageStub(env,"tenant","fixture").fetch("https://usage/snapshot?events=admin");
  if(path==="/fixture/content") { const objects=await env.CONTENT_ARCHIVE.list(); if(objects.objects.length!==1)throw Error("unexpected archive count"); const object=await env.CONTENT_ARCHIVE.get(objects.objects[0].key); const record=await object.json(); return Response.json({size:object.size,provider:record.provider,lengths:record.body.messages[0].content.map(block=>block.source.data.length),metadata:record.body.metadata}); }
+ if(path==="/fixture/retention") {
+  // This OUTER fixture request owns delivery and all original background roots.
+  // Production's small-archive waitUntil scheduling remains unchanged.
+  const roots=[],failures=[],effects={reserve:0,provider:0,r2:0,usage:0};
+  let closed=false,hasPrimary=false,primary,status,errorCode,result;
+  const track=work=>{if(closed)throw Error("retention fixture enrollment closed");const outcome=Promise.resolve(work).then(value=>({failed:false,value}),error=>({failed:true,error}));roots.push(outcome);return work;};
+  const consume=async body=>{
+   const reader=body.getReader(),decoder=new TextDecoder(),cleanup=[];let text="",eof=false,failed=false,reason;
+   try{for(;;){const part=await reader.read();if(part.done){eof=true;break;}text+=decoder.decode(part.value,{stream:true});}text+=decoder.decode();}
+   catch(error){failed=true;reason=error;}
+   finally{if(!eof)try{await reader.cancel();}catch(error){cleanup.push(error);}try{reader.releaseLock();}catch(error){cleanup.push(error);}}
+   if(cleanup.length)throw new AggregateError(failed?[reason,...cleanup]:cleanup,"retention fixture body cleanup");if(failed)throw reason;return text;
+  };
+  const nativeFetch=globalThis.fetch;
+  const selectedEnv={...env,ANTHROPIC_API_KEY:"fixture-upstream-key",
+   BUDGET_LEDGER:{idFromName:name=>env.BUDGET_LEDGER.idFromName(name),get:id=>{const stub=env.BUDGET_LEDGER.get(id);return {fetch(input,init){if(new URL(String(input)).pathname==="/reserve")effects.reserve++;return stub.fetch(input,init);}};}},
+   CONTENT_ARCHIVE:{put(...args){effects.r2++;return track(env.CONTENT_ARCHIVE.put(...args));}},
+   USAGE_QUEUE:{send(event){effects.usage++;return track(ingestUsage(env,event));}}};
+  const ownedContext={waitUntil:track};
+  globalThis.fetch=(input,init)=>{if(String(input).startsWith("https://api.anthropic.com/"))effects.provider++;return nativeFetch(input,init);};
+  try{
+   const response=await worker.fetch(new Request("https://router.example/v1/messages",request),selectedEnv,ownedContext);
+   status=response.status;errorCode=response.headers.get("x-clawrouter-error-code");
+   const text=await track(consume(response.body));
+   if(status===503&&JSON.parse(text).error.message!=="accounting preflight is unavailable")throw Error("unexpected retained denial");
+  }catch(error){hasPrimary=true;primary=error;}
+  finally{
+   // A settled parent may have enrolled children. Every tag is joined, even
+   // when distinct roots reject with undefined or the same reason object.
+   let joined=0;while(joined<roots.length){const batch=roots.slice(joined);joined=roots.length;for(const outcome of await Promise.all(batch))if(outcome.failed)failures.push(outcome.error);}
+   closed=true;globalThis.fetch=nativeFetch;
+  }
+  if(failures.length)throw new AggregateError(hasPrimary?[primary,...failures]:failures,"retention fixture roots");if(hasPrimary)throw primary;
+  // These reads follow the actual joins in the SAME originating request.
+  const snapshot=JSON.parse(await consume((await usageStub(env,"tenant","fixture").fetch("https://usage/snapshot?events=admin")).body));
+  const objects=await env.CONTENT_ARCHIVE.list();
+  result={kind:"fixture-owned delivery and original background joins before R2/usage inspection",status,errorCode,effects,events:snapshot.events.length,archives:objects.objects.length,closed,joined:roots.length};
+  if(status===200){
+   if(objects.objects.length!==1||snapshot.events.length!==1)throw Error("unexpected retained result count");
+   const object=await env.CONTENT_ARCHIVE.get(objects.objects[0].key),bytes=new Uint8Array(await object.arrayBuffer());
+   const record=JSON.parse(new TextDecoder().decode(bytes)),event=snapshot.events[0];
+   if(!Number.isSafeInteger(record.occurredAtMs)||!/^content_[a-f0-9]{32}$/.test(event.content_ref))throw Error("invalid retained metadata");
+   const expected={version:"clawrouter.retained-request.v1",contentRef:event.content_ref,requestId:request.headers.get("x-request-id"),occurredAtMs:record.occurredAtMs,expiresAtMs:record.occurredAtMs+30*86400000,tenantId:"tenant",policyId:"fixture",credentialId:"fixture",principalId:null,provider:"anthropic",capability:"llm.messages",model:"anthropic/claude-opus-5-5",body:record.body};
+   const expectedBytes=new TextEncoder().encode(JSON.stringify(expected));
+   const completeBytesEqual=bytes.length===expectedBytes.length&&bytes.every((value,index)=>value===expectedBytes[index]);
+   const digest=async value=>[...new Uint8Array(await crypto.subtle.digest("SHA-256",value))].map(value=>value.toString(16).padStart(2,"0")).join("");
+   result.archive={size:object.size,completeBytesEqual,sha256:await digest(bytes),expectedSha256:await digest(expectedBytes),bodySha256:await sha256Hex(JSON.stringify(record.body)),provider:record.provider,metadata:record.body.metadata};
+   result.receipt={requestId:event.request_id,contentRef:event.content_ref,retained:event.content_retained,cost:event.actual_cost_micros};
+  }
+  return Response.json(result);
+ }
  if(path==="/fixture/upload") {
   const id=url.searchParams.get("id"), action=url.searchParams.get("action"), state=uploads.get(id);
   if(action==="state") return Response.json(state ? {read:state.read,held:state.held,status:state.status,headersStatus:state.headersStatus,result:state.result,retry:state.retry} : null);
@@ -219,21 +271,37 @@ test("chunked JSON preserves escaped Unicode, duplicate/prototype keys, numbers 
  }
 });
 
-test("real workerd retains a large Claude request in R2 without whole-document transport copies",{timeout:60000},async()=>{
+test("real workerd denies oversized retained Claude input and joins a complete admitted R2 archive",{timeout:60000},async t=>{
  const scratch=join(process.cwd(),".artifacts");await mkdir(scratch,{recursive:true});
- const temporary=await mkdtemp(join(scratch,"anthropic-ingress-retention-"));let worker;
+ const temporary=await mkdtemp(join(scratch,"anthropic-ingress-retention-"));let worker,hasPrimary=false,primary;
+ const roots=[];
+ const observe=work=>{roots.push(work.then(value=>({failed:false,value}),error=>({failed:true,error})));return work;};
+ t.after(async()=>{
+  const failures=[];for(const outcome of await Promise.all(roots))if(outcome.failed)failures.push(outcome.error);
+  try{await worker?.dispose();}catch(error){failures.push(error);}
+  try{await rm(temporary,{recursive:true,force:true});}catch(error){failures.push(error);}
+  if(failures.length)throw new AggregateError(hasPrimary?[primary,...failures]:failures,"retention host cleanup");
+ });
+ const call=(url,init)=>observe((async()=>{const response=await worker.dispatchFetch(url,init);const text=await response.text();assert.equal(response.status,200,text);return JSON.parse(text);})());
  try {
   worker=await startWorkerdFixture(temporary,router,upstream,{r2Buckets:["CONTENT_ARCHIVE"]});
-  assert.equal((await worker.dispatchFetch("https://router.example/fixture/setup?retain")).status,200);
+  assert.equal((await call("https://router.example/fixture/setup?retain")).ok,true);
   const vision=body();vision.metadata={user_id:"synthetic-é-界-😀"};
-  const response=await worker.dispatchFetch("https://router.example/v1/messages",{method:"POST",headers:{authorization:key,"content-type":"application/json"},body:fragmented(JSON.stringify(vision)),duplex:"half"});
-  assert.equal(response.status,200,response.ok?"":await response.text());await response.text();
-  const archive=await(await worker.dispatchFetch("https://router.example/fixture/content")).json();
-  assert.ok(archive.size>26*1024*1024);assert.equal(archive.provider,"anthropic");
-  assert.deepEqual(archive.lengths,vision.messages[0].content.map(block=>block.source.data.length));assert.deepEqual(archive.metadata,vision.metadata);
-  const snapshot=await(await worker.dispatchFetch("https://router.example/fixture/usage")).json();
-  assert.equal(snapshot.events.length,1);assert.equal(snapshot.events[0].content_retained,true);assert.ok(snapshot.events[0].content_ref);assert.equal(snapshot.events[0].actual_cost_micros,60);
- } finally {await worker?.dispose();await rm(temporary,{recursive:true,force:true});}
+  const oversized=JSON.stringify(vision);assert.equal(Buffer.byteLength(oversized),27963145);assert.ok(Buffer.byteLength(oversized)<limit);
+  const send=(text,id)=>call("https://router.example/fixture/retention",{method:"POST",headers:{authorization:key,"content-type":"application/json","x-request-id":id},body:fragmented(text),duplex:"half"});
+  const denied=await send(oversized,"fixture-retention-denied");
+  assert.equal(denied.status,503);assert.equal(denied.errorCode,"accounting_preflight_unavailable");
+  assert.deepEqual(denied.effects,{reserve:0,provider:0,r2:0,usage:0});assert.equal(denied.events,0);assert.equal(denied.archives,0);assert.equal(denied.closed,true);
+  vision.messages[0].content=vision.messages[0].content.slice(0,1);
+  const admitted=JSON.stringify(vision),result=await send(admitted,"fixture-retention-admitted");
+  assert.equal(result.status,200);assert.equal(result.closed,true);assert.ok(result.joined>0);
+  assert.deepEqual(result.effects,{reserve:2,provider:1,r2:1,usage:1});assert.equal(result.events,1);assert.equal(result.archives,1);
+  assert.ok(result.archive.size>5*1024*1024&&result.archive.size<8*1024*1024);
+  assert.equal(result.archive.completeBytesEqual,true);assert.equal(result.archive.sha256,result.archive.expectedSha256);
+  assert.equal(result.archive.bodySha256,createHash("sha256").update(admitted).digest("hex"));
+  assert.equal(result.archive.provider,"anthropic");assert.deepEqual(result.archive.metadata,vision.metadata);
+  assert.equal(result.receipt.requestId,"fixture-retention-admitted");assert.equal(result.receipt.retained,true);assert.ok(result.receipt.contentRef);assert.equal(result.receipt.cost,60);
+ }catch(error){hasPrimary=true;primary=error;throw error;}
 });
 
 for(const [name,text] of [

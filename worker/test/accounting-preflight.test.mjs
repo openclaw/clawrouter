@@ -296,7 +296,9 @@ test("Fusion prepares a mutable admitted MiB dispatch body while its certificate
   const { prepareSelected } = await import("../proxy.ts");
   const env = usageEnv([], { fixedCost: null, retainContent: false });
   env.OPENAI_API_KEY = "synthetic-openai-key";
+  const { correlateIngressRequest } = await import("../correlation.ts");
   const req = new Request("https://router.example/v1/chat/completions", { method: "POST", headers: { authorization: `Bearer ${proxyKey()}` } });
+  assert.equal(correlateIngressRequest(req).error, null);
   const identity = await authenticateProxyKey(req.headers, env, [{ id: "openai", tokenRef: "openai" }]);
   assert.ok(!(identity instanceof Response));
   const config = normalizeFusionConfig({ enabled: true, adviserModels: ["openai/gpt-4.1-mini"], aggregatorModel: "openai/gpt-6-astra", maxProposalChars: 256 });

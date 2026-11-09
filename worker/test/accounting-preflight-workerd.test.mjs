@@ -81,19 +81,19 @@ export default {async fetch(request,bindings,ctx){
   await authorityCall(bindings,'/policies/initialize-all',cases.map(name=>({policyId:name,policy:{...policy,tenantId:name==='identity'?'t'.repeat(1025):'fixture',budgetMode:name==='soft'?'soft':'reserve'}})));
   await authorityCall(bindings,'/credentials/initialize-all',cases.map(name=>({credentialId:name.replaceAll('-','_'),credential:{enabled:true,secretSha256:digest,policyId:name,policyGeneration:'g1'}})));
   await authorityCall(bindings,'/connections/initialize-all',[{providerId:'openai',enabled:true,monthlyBudgetMicros:1000000}]);
-  const row={provider:0,reserve:0,status:0,charge:0,r2:0,providerBeforeStatus:false},events=[],names=new Set(),ids=[];
+  const row={provider:0,reserve:0,statusCalls:0,charge:0,r2:0,providerBeforeStatus:false},events=[],names=new Set(),ids=[];
   const env={...bindings,BUDGET_LEDGER:{idFromName:name=>bindings.BUDGET_LEDGER.idFromName(name),get:id=>{
-   const stub=bindings.BUDGET_LEDGER.get(id);return {fetch(input,init){const path=new URL(String(input)).pathname;if(path==='/reserve'){row.reserve++;ids.push(JSON.parse(init.body).reservationId);}if(path==='/status'){row.status++;}if(path==='/charge')row.charge++;names.add(String(id));return stub.fetch(input,init);}};
+   const stub=bindings.BUDGET_LEDGER.get(id);return {fetch(input,init){const path=new URL(String(input)).pathname;if(path==='/reserve'){row.reserve++;ids.push(JSON.parse(init.body).reservationId);}if(path==='/status'){row.statusCalls++;}if(path==='/charge')row.charge++;names.add(String(id));return stub.fetch(input,init);}};
   }},CONTENT_ARCHIVE:{put(...args){row.r2++;return bindings.CONTENT_ARCHIVE.put(...args);}},
    // Labelled queue-sink injection: real UsageLedger SQLite is awaited in THIS request.
    USAGE_QUEUE:{async send(event){events.push(event);if(event.type)await ingestUsage(bindings,event);else throw Error('unexpected fallback');}}};
-  globalThis.fetch=(input,init)=>{if(String(input).includes('api.openai.com')){row.provider++;row.providerBeforeStatus=row.status===0;}return nativeFetch(input,init);};
+  globalThis.fetch=(input,init)=>{if(String(input).includes('api.openai.com')){row.provider++;row.providerBeforeStatus=row.statusCalls===0;}return nativeFetch(input,init);};
   const body={model:'openai/gpt-6-astra',messages:archiveOverflow?Array.from({length:11000},()=>({role:'user',content:'x'})):[{role:'user',content:'synthetic fixture'}]};
   const response=await worker.fetch(new Request('https://router.example/v1/chat/completions',{method:'POST',headers:{authorization:'Bearer clawrouter-live-'+mode.replaceAll('-','_')+'-abcdefgh','content-type':'application/json'},body:JSON.stringify(body)}),env,{waitUntil:track});
   const text=await response.text(); // Actual delivery precedes delivery-dependent drains.
   let index=0;while(index<roots.length){const batch=roots.slice(index);index=roots.length;await Promise.all(batch);}
-  if(overflow||archiveOverflow){check(response.status===503&&JSON.parse(text).error.code==='accounting_preflight_unavailable','terminal resource denial');check(row.provider===0&&row.reserve===0&&row.status===0&&row.r2===0,'denial before every owned effect');}
-  else{check(response.status===200&&row.provider===1&&row.r2===1&&events.length===1,'healthy complete public accounting');check(events[0].actual_cost_micros===1&&events[0].content_retained,'original priced receipt');check(soft?row.status===4&&row.providerBeforeStatus&&row.charge===4:row.reserve===4,'four real ledger legs');}
+  if(overflow||archiveOverflow){check(response.status===503&&JSON.parse(text).error.code==='accounting_preflight_unavailable','terminal resource denial');check(row.provider===0&&row.reserve===0&&row.statusCalls===0&&row.r2===0,'denial before every owned effect');}
+  else{check(response.status===200&&row.provider===1&&row.r2===1&&events.length===1,'healthy complete public accounting');check(events[0].actual_cost_micros===1&&events[0].content_retained,'original priced receipt');check(soft?row.statusCalls===4&&row.providerBeforeStatus&&row.charge===4:row.reserve===4,'four real ledger legs');}
   const sql=[];for(const id of names){const response=await bindings.BUDGET_LEDGER.get(bindings.BUDGET_LEDGER.idFromString(id)).fetch('https://clawrouter.internal/fixture-sql');sql.push(await response.json());}
   if(!soft&&!overflow&&!archiveOverflow){const records=sql.flatMap(item=>item.reservations);check(records.length===4&&records.every(item=>item.settled===1&&item.reserved_micros===1)&&records.every(item=>ids.includes(item.reservation_id)),'same real SQLite reservation IDs settle once');}
   result={kind:'public Worker and real SQLite; injected direct-ingest queue sink',status:response.status,...row,events:events.length,sqlOwners:sql.length};
