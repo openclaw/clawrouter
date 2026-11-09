@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { contractRequest, runContractAgent } from '../scripts/fusion-contract-agent.mjs';
+import { contractRequest, runContractAgent, runSingleDraft } from '../scripts/fusion-contract-agent.mjs';
 import { models } from '../scripts/fusion-benchmark-accounting.mjs';
 
 const task = { instruction: 'Repair both admission and settlement.', editPaths: ['worker/a.ts'], visibleTests: ['worker/test/a.test.mjs'] };
@@ -191,4 +191,44 @@ test('fresh verification rejects test edits and always retires its own sandbox',
   assert.ok(f.boxes.every(box => box.closed));
   const request = contractRequest(task, [], 8192);
   assert.equal(request.max_tokens, 4096); assert.equal(request.response_format.json_schema.name, 'repair_contract');
+});
+
+
+test('single drafts are bounded and reject out-of-scope or malformed edits before writes', async () => {
+  for (const edits of [[{ path: 'worker/a.ts', search: 'original', replace: 'fixed' }],
+    [{ path: 'worker/test/a.test.mjs', search: 'original', replace: 'fixed' }],
+    [{ path: 'worker/a.ts', search: 'absent', replace: 'fixed' }], []]) {
+    const f = fixture([]); let calls = 0, writes = 0;
+    const output = await runSingleDraft(task, 'image', 'strong', 'draft', config,
+      async () => { calls++; return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ edits }) } }] }; },
+      undefined, { ...f.dependencies, write: async () => { writes++; }, test: async () => passed });
+    assert.equal(calls, 1); assert.equal(writes, edits[0]?.replace === 'fixed' && edits[0]?.search === 'original' && edits[0]?.path === 'worker/a.ts' ? 1 : 0);
+    assert.equal(output.publicPassed, writes === 1);
+    assert.equal(output.files[0].content, writes ? 'fixed' : 'original');
+    assert.ok(f.boxes.every(box => box.closed));
+  }
+});
+
+test('single drafts propagate uncertain charges and refusals; settled truncation returns no patch', async () => {
+  for (const reason of ['unknown_cost', 'provider_refused', 'provider_truncated', 'provider_empty']) {
+    const f = fixture([]); let writes = 0;
+    const run = runSingleDraft(task, 'image', 'strong', 'draft', config, async () => { throw Error(reason); },
+      undefined, { ...f.dependencies, write: async () => { writes++; }, test: async () => passed });
+    if (['unknown_cost', 'provider_refused'].includes(reason)) await assert.rejects(run, new RegExp(reason));
+    else assert.equal((await run).publicPassed, false);
+    assert.equal(writes, 0); assert.ok(f.boxes.every(box => box.closed));
+  }
+});
+
+test('single-draft injection leaves the strong fallback on its original execution route', async () => {
+  const f = fixture([failed, failed, passed]); let draftCalls = 0;
+  const output = await runContractAgent(task, 'image', 'draft', config, f.invoke, {
+    ...f.dependencies, providedProbe: 'provided', cheapAgent: async (_task, _image, _strategy, id, settings, invoke, _engine, options) => {
+      draftCalls++; await invoke(id, models.cheap, actionBody, options.signal); return { ...result(), publicPassed: false };
+    },
+  });
+  assert.equal(draftCalls, 1); assert.equal(output.escalated, true);
+  assert.equal(f.seen.filter(row => row.settings).length, 1);
+  assert.deepEqual(f.seen.filter(row => row.role).map(row => row.role), [models.cheap, models.strong]);
+  assert.equal(output.turns, 2); assert.equal(output.contractPassed, true);
 });
