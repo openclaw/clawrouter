@@ -407,6 +407,8 @@ test('candidate audit detects a supplied-probe false accept inside a real sandbo
   const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
     .receipts.find(item => item.taskId === original.id);
   const path = original.editPaths[0];
+  const { execFileSync } = await import('node:child_process');
+  const originalSource = execFileSync('git', ['show', `${original.base}:${path}`], { encoding: 'utf8' });
   const fixtureTask = { ...original, instruction: 'Export fixtureValue equal to 2.', editPaths: [path] };
   const probe = expectation => `import './worker/test/typescript-setup.mjs';
     import assert from 'node:assert/strict';
@@ -418,16 +420,16 @@ test('candidate audit detects a supplied-probe false accept inside a real sandbo
       providedProbe: probe('fixtureValue >= 1'), auditCandidate: true,
       agent: async (_task, _image, _strategy, id, _config, invoke, _engine, options) => {
         await invoke(id, models.strong, actionBody, options.signal);
-        return { ...result(), files: [{ path, content: 'export const fixtureValue = 2;' }] };
+        return { ...result(), files: [{ path, content: originalSource + '\nexport const fixtureValue = 2;' }] };
       },
       cheapAgent: async (_task, _image, _strategy, id, _config, invoke, _engine, options) => {
         await invoke(id, models.cheap, actionBody, options.signal);
-        return { ...result(), files: [{ path, content: 'export const fixtureValue = 1;' }] };
+        return { ...result(), files: [{ path, content: originalSource + '\nexport const fixtureValue = 1;' }] };
       },
     });
   assert.equal(output.escalated, true);
   assert.equal(output.auditPassed, false);
   assert.equal(output.contractPassed, true);
-  assert.equal(output.files[0].content, 'export const fixtureValue = 2;');
+  assert.equal(output.files[0].content, originalSource + '\nexport const fixtureValue = 2;');
   assert.equal(output.turns, 3);
 });
