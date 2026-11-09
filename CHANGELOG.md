@@ -10,6 +10,8 @@
 
 - Declare the bundled OpenAI API and existing ChatGPT subscription transport as separate catalog products, preserving execution, pricing and subscription scope.
 
+- Add a matched one-shot Fusion executor and supplied-check single-model ablations for controlled benchmark comparisons.
+
 - Recognize regression assertions reported on stdout by Node test reporters in Fusion qualification.
 
 - Add a bounded Fusion draft-repair experiment that revises cheap patches from isolated executable feedback before strong fallback.
