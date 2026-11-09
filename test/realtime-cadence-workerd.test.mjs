@@ -27,11 +27,36 @@ const router = String.raw`
 import handler, { BudgetLedgerObject as RealBudgetLedger } from './worker/index.ts';
 import { putGrantCredentials } from './worker/grant-credentials.ts';
 import { isPreparationLimit } from './worker/provider-templates.ts';
+import { RealtimeSession } from './worker/realtime-session.ts';
 export * from './worker/index.ts';
 ${ownSocket}
 let delay = { authority: 15, ledger: 30 }, calls = { authority: 0, ledger: 0, held: 0 };
 let holdPath = '', releases = [], observations = [], observing = false;
 let holdInspection = false, heldInspection = false;
+const closePhases={entry:null,errorSendInvocation:null,errorSendReturn:null,errorSendThrow:null,clientCloseInvocation:null,clientCloseReturn:null,clientCloseThrow:null,clientCloseCallback:null,upstreamCloseInvocation:null,upstreamCloseReturn:null,upstreamCloseThrow:null,upstreamCloseCallback:null,observerFailed:false};
+const stamp=phase=>{try{closePhases[phase]??=Date.now();}catch{closePhases.observerFailed=true;}};
+// Fixture-only forwarding: no payload inspection, extra I/O or asynchronous root.
+const originalClose=RealtimeSession.prototype.close;
+RealtimeSession.prototype.close=function(...args){
+ if(observing&&!this.closed&&closePhases.entry===null){
+  stamp('entry');
+  for(const [socket,side] of [[this.client,'client'],[this.upstream,'upstream']]){
+   try{
+    const close=socket.close;
+    socket.close=function(...args){stamp(side+'CloseInvocation');try{const value=Reflect.apply(close,this,args);stamp(side+'CloseReturn');return value;}catch(error){stamp(side+'CloseThrow');throw error;}};
+    socket.addEventListener('close',()=>stamp(side+'CloseCallback'));
+   }catch{closePhases.observerFailed=true;}
+  }
+  try{
+   const send=this.client.send;
+   this.client.send=function(...args){stamp('errorSendInvocation');try{const value=Reflect.apply(send,this,args);stamp('errorSendReturn');return value;}catch(error){stamp('errorSendThrow');throw error;}};
+  }catch{closePhases.observerFailed=true;}
+ }
+ return Reflect.apply(originalClose,this,args);
+};
+// Closed RPC path IDs: 0 other, 1 admission, 2 pool resolve, 3 pool select,
+// 4 status, 5 reserve, 6 dispatch, 7 settle. Phase 3 is the existing completed reply.
+const rpcPaths=['/admission/resolve','/grant-pools/resolve','/grant-pools/select','/status','/reserve','/dispatch','/settle'];
 let preparation = { owners:0, main:0, asr:0, reused:0, wrongOwner:0, observations:0, pending:0, peakPending:0, settled:0, registered:0, background:0, phase:'idle', joined:false, operationSettled:false, operationFailed:false, producerClosed:false, enrollmentClosed:false, drainComplete:false, drainFailed:false, drainFailures:0, drainUndefined:0, drainRoots:0 };
 // All original promises and failure reasons stay in this request's drain owner.
 function preparationProbe(ctx, allowCapacity = false, lateFailure = false) {
@@ -100,7 +125,7 @@ function delayed(ns, key) { return new Proxy(ns, { get(target, prop) {
     if(key==='authority'&&holdInspection&&!heldInspection){heldInspection=true;preparation.phase='held-completed-authority-reply';
       try{const gate=await fetch('https://cadence-gate.example/observation');await gate.text();}
       catch(primary){try{await response.body?.cancel();}catch(cleanup){throw new AggregateError([primary,cleanup],'cadence held-reply cleanup');}throw primary;}}
-    if (observing && observed && observations.length < 64) observations.push({ key, started, dispatched, completed: Date.now(), status: response.status });
+    if (observing && observed && observations.length < 64) observations.push({ key, pathId:rpcPaths.indexOf(url.pathname)+1, phaseId:3, started, dispatched, completed: Date.now(), status: response.status });
     return response;
   } }; };
 } }); }
@@ -109,7 +134,7 @@ export default { async fetch(r, env, ctx) {
   if (path === '/fixture-grant') { await putGrantCredentials(env, 'oauth/fixture/openai', { enabled: true, provider: 'openai', kind: 'api_key', credential: 'fixture-upstream-key' }); return new Response('ok'); }
   if (path === '/fixture-delay') { delay = await r.json(); return new Response('ok'); }
   if (path === '/fixture-observe') { observing = true; return new Response('ok'); }
-  if (path === '/fixture-calls') return Response.json({ ...calls, observations, preparation });
+  if (path === '/fixture-calls') return Response.json({ ...calls, observations, preparation, closePhases });
   if (path === '/fixture-hold') { const mode = await r.text(); holdPath = mode === 'on' ? '/status' : mode === 'dispatch' ? '/dispatch' : ''; if (!holdPath) { for (const release of releases) release(); releases = []; } return new Response('ok'); }
   const current={...env,ACCESS_CONTROL:delayed(env.ACCESS_CONTROL,'authority'),BUDGET_LEDGER:delayed(env.BUDGET_LEDGER,'ledger')};
   if(path==='/fixture-owned-inspection'){

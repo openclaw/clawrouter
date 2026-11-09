@@ -1,3 +1,4 @@
+import { admitAdmission, admitIdentity, admitIdentityBytes, admitIdentityCount, identityJson, isIdentityFailure, parseIdentity, readIdentityKv, type IdentitySourceBudget } from "./identity-admission.ts";
 import { videoControlVersion, videoControlBytes, videoJsonBytes } from "./minimax-video-operation.ts";
 import { inspectSearchJson, searchControlVersion, searchControlBytes, searchJsonBytes, searchUnavailable } from "./minimax-search-operation.ts";
 import { credentialExpired } from "./credential-lifecycle.ts";
@@ -16,6 +17,9 @@ import { musicCoverControlVersion, musicCoverUnavailable } from "./minimax-music
 import { miniMaxMusicCoverProjection } from "./native-media-credential.ts";
 
 interface SelectionStore {
+  identity?: IdentitySourceBudget;
+  afterAdmission?(action: () => void): void;
+  planGrant?(input: GrantChoiceInput & { poolKey: string }): { result: { selectedKey: string; selectedCount: number; lastSelectedAt: string }; state?: { cursorKey: string | null; counts: Record<string, { count: number; lastMs: number }> }; commit(): void };
   consumeProjectionBytes?(bytes: number, text?: string): void;
   getCredential(id: string): ProxyCredentialEntry | null;
   getPolicy(id: string): AccessPolicyEntry | null;
@@ -40,13 +44,16 @@ export async function finishAdmissionSelection(env: Env, storage: DurableObjectS
   // One bounded import attempt per key. Recheck both the row marker and the
   // attachment revision after KV yields; an owner publication always wins.
   if ((input.search === searchControlVersion || input.video === videoControlVersion) && keys.length > 32) searchUnavailable();
+  if (store.identity) { admitIdentityCount(keys.length, 256); admitIdentity(keys); }
   const missing = keys.filter(key => !rows(sql.exec("SELECT 1 FROM upstream_grant_projections WHERE grant_key = ?", key)).length);
   if ((input.search === searchControlVersion || input.video === videoControlVersion) && missing.length) searchUnavailable();
   const versions = new Map(missing.map(key => [key, store.grantAttachment(key).revision]));
   let backfillFailed = false;
+  const staged = new Map<string, { text: string | null; legacy: number; revision: number }>();
   if (missing.length) {
     try {
-      const grants = await env.POLICY_KV.get<UpstreamGrant>(missing, "json");
+      const grants = store.identity ? new Map<string, UpstreamGrant | null>() : await env.POLICY_KV.get<UpstreamGrant>(missing, "json");
+      if (store.identity) for (const key of missing) grants.set(key, await readIdentityKv<UpstreamGrant>(() => env.POLICY_KV.get(key, "stream"), store.identity!));
       storage.transactionSync(() => {
         for (const key of missing) {
           if (rows(sql.exec("SELECT 1 FROM upstream_grant_projections WHERE grant_key = ?", key)).length || store.grantAttachment(key).revision !== versions.get(key)) continue;
@@ -54,10 +61,12 @@ export async function finishAdmissionSelection(env: Env, storage: DurableObjectS
           const version = store.grantAttachment(key);
           if (!grant && (version.attached || version.pending || version.generation > 0)) continue;
           const legacy = !!grant && (grant.credentialStore !== "durable_object" || grant.credentialGeneration !== version.generation || version.pending);
-          sql.exec("INSERT INTO upstream_grant_projections (grant_key, projection_json, legacy) VALUES (?, ?, ?)", key, grant && !legacy ? JSON.stringify(routingProjection(grant)) : null, legacy ? 1 : 0);
+          const text = grant && !legacy ? (store.identity ? (admitIdentity(grant, "record"), identityJson(routingProjection(grant), "record")) : JSON.stringify(routingProjection(grant))) : null;
+          if (store.identity) staged.set(key, { text, legacy: legacy ? 1 : 0, revision: version.revision });
+          else sql.exec("INSERT INTO upstream_grant_projections (grant_key, projection_json, legacy) VALUES (?, ?, ?)", key, text, legacy ? 1 : 0);
         }
       });
-    } catch { backfillFailed = true; } // Migration failures retain the old read path.
+    } catch (error) { if (isIdentityFailure(error)) throw error; backfillFailed = true; } // Migration failures retain the old read path.
   }
   const identity = result.credential!.credential.principalId ?? result.credential!.credentialId;
   const [identityHash, fallbackSessionHash] = await Promise.all([sha256Hex(`identity:${identity}`), sha256Hex(`session:${identity}`)]);
@@ -91,26 +100,56 @@ export async function finishAdmissionSelection(env: Env, storage: DurableObjectS
       }
       store.consumeProjectionBytes?.(bytes);
     }
+    if (store.identity) {
+      // Admit ALL known projection sizes before retrieving the first value.
+      for (const key of pool.keys) {
+        const row = rows<{ bytes: number | null }>(sql.exec("SELECT length(CAST(projection_json AS BLOB)) AS bytes FROM upstream_grant_projections WHERE grant_key = ?", key))[0];
+        if (row?.bytes != null) admitIdentityBytes(store.identity, row.bytes);
+      }
+    }
+    // Register the whole current pool before a legacy candidate can return early.
+    // Publication still waits for successful admission and final serialization.
+    for (const key of pool.keys) {
+      const pending = staged.get(key);
+      if (!pending || rows(sql.exec("SELECT 1 FROM upstream_grant_projections WHERE grant_key = ?", key)).length
+        || store.grantAttachment(key).revision !== pending.revision) continue;
+      store.afterAdmission!(() => sql.exec("INSERT OR IGNORE INTO upstream_grant_projections (grant_key, projection_json, legacy) VALUES (?, ?, ?)", key, pending.text, pending.legacy));
+    }
     const candidates: AdmissionPoolCandidate[] = [];
     for (const key of pool.keys) {
-      const row = rows<{ projection_json: string | null; legacy: number }>(sql.exec("SELECT projection_json, legacy FROM upstream_grant_projections WHERE grant_key = ?", key))[0];
+      let row = rows<{ projection_json: string | null; legacy: number }>(sql.exec("SELECT projection_json, legacy FROM upstream_grant_projections WHERE grant_key = ?", key))[0];
+      const pending = staged.get(key); let usedStaged = false;
+      if (!row && pending && store.grantAttachment(key).revision === pending.revision) {
+        // The already-admitted private projection is not another original SQL read.
+        usedStaged = true; row = { projection_json: pending.text, legacy: pending.legacy };
+      }
       if (!row || row.legacy) return fresh;
       if (search && row.projection_json) {
         if (video) store.consumeProjectionBytes?.(0, row.projection_json);
         else inspectSearchJson(row.projection_json);
       }
-      candidates.push({ key, grant: row.projection_json ? JSON.parse(row.projection_json) as UpstreamGrant : null });
+      candidates.push({ key, grant: row.projection_json ? (store.identity && !usedStaged ? parseIdentity(row.projection_json, store.identity) : JSON.parse(row.projection_json)) as UpstreamGrant : null });
     }
     const poolKey = `${encodeURIComponent(provider.id)}/${encodeURIComponent(policy.policyId)}/${encodeURIComponent(poolInput.tenantId)}`;
     const revision = (key: string) => store.grantAttachment(key).revision;
+    let planned: ReturnType<NonNullable<SelectionStore["planGrant"]>> | undefined;
     const snapshot = (): AdmissionPoolSnapshot => {
-      const state = store.selectionState(poolKey);
+      const state = planned?.state ?? store.selectionState(poolKey);
       return { poolKey, candidates, revisions: Object.fromEntries(candidates.map(({ key }) => [key, revision(key)])), cursorKey: state.cursorKey, counts: state.counts, identityHash, fallbackSessionHash };
     };
-    if (input.snapshot === "only") return { ...fresh, snapshots: { [provider.id]: snapshot() } };
-    const selection = selectAdmissionCandidate(env, { provider, endpoint, request, policy, poolKey, candidates, states: pool.states, identityHash, fallbackSessionHash }, choice => store.selectGrant(choice), revision);
+    if (input.snapshot === "only") {
+      const reply = { ...fresh, snapshots: { [provider.id]: snapshot() } };
+      if (store.identity) admitAdmission(reply); return reply;
+    }
+    const selection = selectAdmissionCandidate(env, { provider, endpoint, request, policy, poolKey, candidates, states: pool.states, identityHash, fallbackSessionHash }, choice => {
+      if (!store.identity) return store.selectGrant(choice);
+      planned = store.planGrant!(choice); return planned.result;
+    }, revision);
     if (search) (video ? videoJsonBytes : searchJsonBytes)({ ...fresh, selection });
-    return { ...fresh, selection, ...(input.snapshot === "select" ? { snapshots: { [provider.id]: snapshot() } } : {}) };
+    const reply = { ...fresh, selection, ...(input.snapshot === "select" ? { snapshots: { [provider.id]: snapshot() } } : {}) };
+    if (store.identity) admitAdmission(reply);
+    if (planned) store.afterAdmission!(planned.commit); // Final serialization precedes all selected writes.
+    return reply;
   });
 }
 

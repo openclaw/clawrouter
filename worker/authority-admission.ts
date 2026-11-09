@@ -1,3 +1,4 @@
+import { admitAdmission, admitIdentity, admitIdentityCount, isIdentityFailure, readIdentityKv, type IdentitySourceBudget } from "./identity-admission.ts";
 import { videoControlVersion, videoJsonBytes, videoUnavailable } from "./minimax-video-operation.ts";
 import { isMiniMaxVideoModel } from "../shared/minimax-video-binding.ts";
 import { searchControlVersion, searchJsonBytes, searchUnavailable } from "./minimax-search-operation.ts";
@@ -46,6 +47,7 @@ export interface AdmissionResult {
 }
 
 interface AdmissionStore {
+  identity?: IdentitySourceBudget;
   finishSelection?(input: AdmissionRequest, result: AdmissionResult): Promise<AdmissionResult>;
   getCredential(id: string): ProxyCredentialEntry | null;
   getPolicy(id: string): AccessPolicyEntry | null;
@@ -61,6 +63,8 @@ interface AdmissionStore {
 }
 
 export async function resolveAdmission(env: Env, input: AdmissionRequest, store: AdmissionStore): Promise<AdmissionResult> {
+  if (store.identity) { admitIdentity(input); admitIdentityCount(input.providers?.length ?? 0, 128); }
+  const read = <T>(key: string): Promise<T | null> => store.identity ? readIdentityKv<T>(() => env.POLICY_KV.get(key, "stream"), store.identity) : env.POLICY_KV.get<T>(key, "json");
   // Use the same import fences as the single-purpose resolvers. Every KV
   // await is followed by guarded initialization and a canonical reread.
   const video = input.video === videoControlVersion;
@@ -84,7 +88,7 @@ export async function resolveAdmission(env: Env, input: AdmissionRequest, store:
   if (search && !video && !cover) { searchJsonBytes(input); if (input.allConnections || input.snapshot || input.providers?.length !== 1 || input.selection?.providerId !== "minimax" || input.selection.model != null || input.selection.capability !== "search.web") searchUnavailable(); }
   let credential = store.getCredential(input.credentialId);
   if (!search && !credential && !store.hasMeta("credentials_global_initialized")) {
-    const value = await env.POLICY_KV.get<Record<string, unknown>>(`credentials/${input.credentialId}`, "json") ?? await genuineLegacyKey(env, input.credentialId);
+    const value = await read<Record<string, unknown>>(`credentials/${input.credentialId}`) ?? await genuineLegacyKey(env, input.credentialId, read);
     if (value) store.seedCredential(input.credentialId, value);
     credential = store.getCredential(input.credentialId);
   }
@@ -98,11 +102,11 @@ export async function resolveAdmission(env: Env, input: AdmissionRequest, store:
   try {
     policy = store.getPolicy(policyId);
     if (!search && !policy && !store.hasMeta("policies_global_initialized")) {
-      const value = await env.POLICY_KV.get<Record<string, unknown>>(`policies/${policyId}`, "json") ?? await genuineLegacyKey(env, policyId);
+      const value = await read<Record<string, unknown>>(`policies/${policyId}`) ?? await genuineLegacyKey(env, policyId, read);
       if (value) store.seedPolicy(policyId, value);
       policy = store.getPolicy(policyId);
     }
-  } catch {
+  } catch (error) { if (isIdentityFailure(error)) throw error;
     return { ...result, policyUnavailable: true };
   }
   result.policy = policy;
@@ -115,11 +119,11 @@ export async function resolveAdmission(env: Env, input: AdmissionRequest, store:
       try {
         owner = store.getUser(email);
         if (!search && !owner && !store.hasMeta("users_global_initialized")) {
-          const record = await env.POLICY_KV.get<AccessUserRecord>(`access/users/${email}`, "json");
+          const record = await read<AccessUserRecord>(`access/users/${email}`);
           if (record) store.initializeUsers([{ email, record }]);
           owner = store.getUser(email);
         }
-      } catch {
+      } catch (error) { if (isIdentityFailure(error)) throw error;
         return { ...result, ownerUnavailable: true };
       }
       result.owner = owner;
@@ -133,13 +137,15 @@ export async function resolveAdmission(env: Env, input: AdmissionRequest, store:
     let connections = store.resolveConnections(ids);
     if (search && connections.missingProviderIds.length) searchUnavailable();
     if (!search && !connections.initialized && (input.allConnections || connections.missingProviderIds.length)) {
-      const seeded = (await Promise.all(connections.missingProviderIds.map(id => env.POLICY_KV.get<ProviderConnection>(`connections/${id}`, "json")))).filter(Boolean) as ProviderConnection[];
+      const seeded: ProviderConnection[] = [];
+      for (const id of connections.missingProviderIds) { const value = await read<ProviderConnection>(`connections/${id}`); if (value) seeded.push(value); }
+      if (store.identity) admitIdentity(seeded);
       store.initializeConnections(seeded);
       if (input.allConnections) store.putMeta("connections_global_initialized");
       connections = store.resolveConnections(ids);
     }
     result.connections = connections.connections;
-  } catch {
+  } catch (error) { if (isIdentityFailure(error)) throw error;
     // The Worker must check the secret and policy/model before surfacing a
     // provider-read failure, just as it did with separate RPCs.
     result.connectionsUnavailable = true;
@@ -147,8 +153,9 @@ export async function resolveAdmission(env: Env, input: AdmissionRequest, store:
   for (const provider of providers) {
     if (policy.policy.providers.length && !policy.policy.providers.includes(provider.id)) continue;
     try { result.pools[provider.id] = store.resolveGrantPool({ providerId: provider.id, policyId, tenantId: policy.policy.tenantId ?? "default", defaultKeys: cover ? [] : [`oauth/${policyId}/${provider.tokenRef}`, `oauth/tenants/${policy.policy.tenantId ?? "default"}/${provider.tokenRef}`] }); }
-    catch { result.pools[provider.id] = { keys: [], states: {}, hasAttachment: false, unavailable: true }; }
+    catch (error) { if (isIdentityFailure(error)) throw error; result.pools[provider.id] = { keys: [], states: {}, hasAttachment: false, unavailable: true }; }
   }
+  if (store.identity) admitAdmission(result);
   return input.selection && store.finishSelection ? store.finishSelection(input, result) : result;
 }
 

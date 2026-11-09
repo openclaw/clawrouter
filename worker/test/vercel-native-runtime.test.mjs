@@ -6,6 +6,7 @@ import test from "node:test";
 import { continuationAuthority } from "./continuation-authority.mjs";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 const { default: worker } = await import("../index.ts");
 const { authorityCall } = await import("../authority.ts");
 const { snapshot, configuredUpstream } = await import("../providers.ts");
@@ -31,7 +32,11 @@ async function fixture(t, models = null) {
   t.after(() => snapshot.providers.splice(snapshot.providers.indexOf(row), 1, previous));
   const values = new Map(), pending = [], events = [], sent = [];
   const env = { AI_GATEWAY_API_KEY: "synthetic-environment-fallback", ANTHROPIC_API_KEY: "synthetic-foreign-key", VERCEL_OIDC_TOKEN: "synthetic-oidc",
-    POLICY_KV: { async get(k) { return Array.isArray(k) ? new Map(k.map(k => [k, values.get(k) ?? null])) : values.get(k) ?? null; },
+    POLICY_KV: { async get(k, type) {
+      if (Array.isArray(k)) return new Map(k.map(k => [k, values.get(k) ?? null]));
+      const value = values.get(k) ?? null;
+      return value !== null && type === "stream" ? accessBytesResponse(JSON.stringify(value)).body : value;
+    },
       async put(k, v) { values.set(k, JSON.parse(v)); }, async list() { return { keys: [], list_complete: true }; } },
     BUDGET_LEDGER: sqlBudgetNamespace(t), USAGE_QUEUE: { async send(e) { events.push(e); } } };
   env.ACCESS_CONTROL = continuationAuthority(t, env);

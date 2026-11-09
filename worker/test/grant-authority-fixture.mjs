@@ -11,7 +11,7 @@ export function createGrantAuthority(initialize, env) {
   return {
     sql, storage, object,
     async fetch(url, init) {
-      const selected = new Headers(init?.headers).has("x-clawrouter-policy-collection");
+      const selected = ["x-clawrouter-policy-collection", "x-clawrouter-identity-admission"].some(name => new Headers(init?.headers).has(name));
       if (!selected) return object.fetch(new Request(url, init));
       const response = await object.fetch(new Request(url, { ...init, body: accessBytesResponse(init.body, "").body, duplex: "half" }));
       return accessBytesResponse(await response.text(), "", { status: response.status, headers: response.headers });

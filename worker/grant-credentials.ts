@@ -1,3 +1,4 @@
+import { admitIdentityText, identityUtf8, admitIdentity, identityHeader, identityJson, identitySourceBudget, isIdentityFailure, parseIdentity, readIdentityKv, readIdentityRaw, readIdentityRequest, readIdentityResponse, type IdentitySourceBudget } from "./identity-admission.ts";
 import { videoControlHeader, videoControlVersion, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { miniMaxApiKeySecret, miniMaxMusicCoverProjection, miniMaxMusicCoverIdentity } from "./native-media-credential.ts";
 import { musicCoverControlHeader, musicCoverControlVersion, musicCoverUnavailable, isMusicCoverControl, readCoverControlRequest, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
@@ -72,11 +73,11 @@ export class GrantCredentialObject implements DurableObject {
     this.state = state;
     this.env = env;
     this.vertexRefresh = new VertexOwnerRefresh({
-      order: run => this.order(run), load: key => this.loadRecord(key),
-      read: () => this.state.storage.get<CredentialRecord>("credential"),
+      order: run => this.order(run), load: key => this.loadRecord(key, undefined, true, identitySourceBudget()),
+      read: async () => { const record = await this.state.storage.get<CredentialRecord>("credential"); if (record) admitIdentity(record, "record"); return record; },
       save: record => this.state.storage.put("credential", record),
-      materialize: input => this.materialize(input),
-      result: record => ({ grant: materializedGrant(metadataGrant(record), record) }),
+      materialize: input => this.materialize(input, identitySourceBudget()),
+      result: record => { admitIdentity(record, "record"); const result = { grant: materializedGrant(metadataGrant(record), record) }; admitIdentity(result); return result; },
       publish: async record => { await this.schedule(record); await this.publishProjection(record); },
       failure: (record, persisted) => this.recordRefreshFailure(record, null, "outcome_unknown", persisted ? "provider_ok_persist_failed" : "ambiguous"),
     });
@@ -126,6 +127,10 @@ export class GrantCredentialObject implements DurableObject {
   }
 
   fetch(request: Request): Promise<Response> {
+    if (request.headers.has(identityHeader) && (request.method !== "POST" || new URL(request.url).pathname !== "/materialize")) {
+      const operation = readIdentityRequest(request, false).then(() => json(null), error => this.credentialError(error));
+      this.state.waitUntil?.(operation.then(() => undefined, () => undefined)); return operation;
+    }
     if (request.headers.get(musicCoverControlHeader) === musicCoverControlVersion) {
       const operation = (async () => {
         try {
@@ -185,10 +190,12 @@ export class GrantCredentialObject implements DurableObject {
     if (request.method === "POST" && new URL(request.url).pathname === "/materialize") {
       const operation = (async () => {
         try {
-          const input = await readJson<MaterializeRequest>(request);
-          return json(input.providerId === "anthropic-vertex"
+          const selected = request.headers.has(identityHeader);
+          const input = (selected ? await readIdentityRequest(request, true) : await readJson<MaterializeRequest>(request)) as MaterializeRequest;
+          const result = input.providerId === "anthropic-vertex"
             ? await this.vertexRefresh.materialize(input, request.signal)
-            : await this.order(() => this.materialize(input)));
+            : await this.order(() => this.materialize(input, selected ? identitySourceBudget() : undefined));
+          return selected ? new Response(identityJson(result), { headers: { "content-type": "application/json" } }) : json(result);
         } catch (error) { return this.credentialError(error); }
       })();
       this.state.waitUntil?.(operation.then(() => undefined, () => undefined));
@@ -602,6 +609,7 @@ export class GrantCredentialObject implements DurableObject {
   }
 
   private async credentialError(error: unknown): Promise<Response> {
+      if (isIdentityFailure(error)) return errorResponse(error.code, error.message, error.status);
       if (error instanceof ReauthorizationRequired) return errorResponse(error.code, error.message, error.status, { projection: error.projection });
       if (error instanceof HttpError) {
         const record = await this.state.storage.get<CredentialRecord>("credential");
@@ -719,7 +727,7 @@ export class GrantCredentialObject implements DurableObject {
     return installed;
   }
 
-  private async materialize(input: MaterializeRequest & { wanOriginal?: true }): Promise<OwnerResponse> {
+  private async materialize(input: MaterializeRequest & { wanOriginal?: true }, identity?: IdentitySourceBudget): Promise<OwnerResponse> {
     if (input.wanOriginal) {
       // This private operation consumes only an already-owned exact revision.
       // Do not migrate, diagnose/refresh, adopt a replacement, or publish caches.
@@ -753,7 +761,8 @@ export class GrantCredentialObject implements DurableObject {
       const grant = materializedGrant(metadataGrant(record), record); searchJsonBytes({ grant });
       return { grant };
     }
-    let record = await this.loadRecord(input.key);
+    let record = await this.loadRecord(input.key, undefined, true, identity);
+    if (identity && record) admitIdentity(record, "record");
     // Unlike generic refresh, this operation may only materialize the exact
     // already-admitted owner revision and its actual scalar API-key slot.
     if (input.operation === "minimax.images" && (!record || input.providerId !== "minimax"
@@ -765,7 +774,7 @@ export class GrantCredentialObject implements DurableObject {
       throw new HttpError(403, "minimax_music_authorization_required", "MiniMax music requires the exact original authorized owner revision");
     let migrated = false;
     if (!record && input.legacy && hasPrimaryCredential(input.legacy)) {
-      const metadata = await this.env.POLICY_KV.get<UpstreamGrant>(input.key, "json");
+      const metadata = identity ? await readIdentityKv<UpstreamGrant>(() => this.env.POLICY_KV.get(input.key, "stream"), identity) : await this.env.POLICY_KV.get<UpstreamGrant>(input.key, "json");
       if (metadata?.revokedAt) record = revokedRecord(input.key, metadata);
       else if (metadata && hasPrimaryCredential(metadata)) record = ownerMetadata(credentialRecord(metadata, 1), metadata, input.key);
       if (!record) throw new HttpError(404, "grant_credential_missing", "upstream grant credential is not registered");
@@ -812,6 +821,7 @@ export class GrantCredentialObject implements DurableObject {
         }
       }
       if (changed || migrated) await this.schedule(record);
+      if (identity) admitIdentity(record, "record");
       return { grant: materializedGrant(metadataGrant(record), record) };
     } finally {
       // KV permits one write per key per second. Publish the final owner state
@@ -1129,16 +1139,17 @@ export class GrantCredentialObject implements DurableObject {
     await this.state.storage.setAlarm(Math.max(Date.now() + MIN_ALARM_DELAY_MS, Math.min(...next)));
   }
 
-  private async loadRecord(key: string, stored?: CredentialRecord, repair = true): Promise<CredentialRecord | undefined> {
+  private async loadRecord(key: string, stored?: CredentialRecord, repair = true, identity?: IdentitySourceBudget): Promise<CredentialRecord | undefined> {
     let record = stored ?? await this.state.storage.get<CredentialRecord>("credential");
     if (!record) return record;
+    if (identity) admitIdentity(record, "record");
     // Cover has a separate canonical owner path. Generic materialization and
     // maintenance cannot diagnose, repair or adopt this inactive profile.
     if (record.nativeMediaBinding?.version === "clawrouter.native-media.v2") musicCoverUnavailable(403);
     record = await this.diagnoseUnsettled(record);
     if (canonicalRecord(record)) return repair && record.poolSyncPending ? (await this.reconcileAttachment(key)).record : record;
     if (!record.metadata || record.enabled === undefined) {
-      const metadata = key ? await legacyGrantMetadata(this.env, key) : null;
+      const metadata = key ? await legacyGrantMetadata(this.env, key, false, identity) : null;
       record = { ...record, grantKey: key || record.grantKey, metadata: metadata ?? {}, enabled: record.enabled ?? (metadata !== null && metadata.enabled !== false), poolSyncPending: true };
       // Pre-owner CLI commands revoked only KV. Import negative lifecycle facts
       // once, before any provider I/O; later KV reads never regain authority.
@@ -1436,6 +1447,7 @@ export async function materializeGrantCredentials(
   video?: MiniMaxVideoOperation,
   cover?: MiniMaxMusicCoverControl,
 ): Promise<UpstreamGrant> {
+  if (!cover && !video && !wan && !search) admitIdentity(grant, "record");
   const legacy = !cover && !video && !wan && !search && hasRawCredential(grant) ? grant : null;
   return (await ownerCall<OwnerResponse>(env, key, "/materialize", {
     key,
@@ -1547,6 +1559,12 @@ async function ownerCall<T>(env: Env, key: string, path: string, body: unknown, 
   if (video) return video.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual", headers: { "content-type": "application/json", [videoControlHeader]: videoControlVersion } }), false, signal);
   if (search) return search.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual", headers: { "content-type": "application/json", [searchControlHeader]: searchControlVersion } }), false, signal);
   if (wan) return wan.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual" }), false, signal);
+  if (path === "/materialize") {
+    admitIdentity((body as MaterializeRequest).grant, "record");
+    const text = identityJson(body);
+    return readIdentityResponse<T>(() => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal, headers: { [identityHeader]: "v1" } }), identitySourceBudget(), signal,
+      (status, value) => { const payload = value as { error?: { code?: string; message?: string } }; throw new HttpError(status, payload.error?.code ?? "credential_owner_error", payload.error?.message ?? "grant credential operation failed"); }, "grant");
+  }
   const response = await stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(body), signal });
   const text = await response.text();
   if (!response.ok) {
@@ -1561,19 +1579,21 @@ export function hasPrimaryCredential(grant: UpstreamGrant): boolean {
   return [grant.credential, grant.accessToken, ...Object.values(grant.credentials ?? {})].some((value) => typeof value === "string" && value.length > 0);
 }
 
-async function legacyGrantMetadata(env: Env, key: string, recover = false): Promise<UpstreamGrant | null> {
-  const raw = await env.POLICY_KV.get(key, "text");
+async function legacyGrantMetadata(env: Env, key: string, recover = false, identity?: IdentitySourceBudget): Promise<UpstreamGrant | null> {
+  const raw = identity ? await readIdentityRaw(() => env.POLICY_KV.get(key, "stream"), identity) : await env.POLICY_KV.get(key, "text");
   if (raw === null) return null;
   // Explicit replacement/revocation needs only proof that an old record exists.
   // A failed read remains unknown; corrupt bytes never become owner metadata.
-  if (new TextEncoder().encode(raw).byteLength > MAX_LEGACY_GRANT_BYTES) {
+  if ((identity ? identityUtf8(raw) : new TextEncoder().encode(raw).byteLength) > MAX_LEGACY_GRANT_BYTES) {
     if (recover) return {};
     throw new HttpError(400, "invalid_upstream_grant", "legacy grant metadata exceeds the migration limit");
   }
   let value: unknown = {};
+  if (identity && !raw.trim().startsWith("{")) admitIdentityText(raw, identity);
   if (raw.trim().startsWith("{")) {
-    try { value = JSON.parse(raw); }
-    catch {
+    try { value = identity ? parseIdentity(raw, identity) : JSON.parse(raw); }
+    catch (error) {
+      if (isIdentityFailure(error)) throw error;
       if (recover) return {};
       throw new HttpError(400, "invalid_upstream_grant", "legacy grant metadata is invalid JSON");
     }

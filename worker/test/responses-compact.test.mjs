@@ -7,6 +7,7 @@ const { modelRoute } = await import("../providers.ts");
 const { estimateModelCost } = await import("../pricing.ts");
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 import { proxyKey, usageEnv } from "./usage-budget-fixture.mjs";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 
 const routes = ["/v1/responses/compact", "/v1/native/openai/v1/responses/compact", "/v1/proxy/openai/responses_compact"];
 const owners = ["tenant:maintainer_access:owner@example.com", "provider:openai"];
@@ -20,7 +21,7 @@ const wire = JSON.stringify(result, null, 2) + String.fromCharCode(10);
 
 function fixture(t, { mode = "reserve", limit = 100_000_000, fixedCost = null } = {}) {
   const events = [], pending = [], operations = [];
-  const env = usageEnv([], { limit: mode === "unmetered" ? null : limit, providerLimit: mode === "unmetered" ? null : 100_000_000, fixedCost, retainContent: false });
+  const env = usageEnv([], { limit: mode === "unmetered" ? null : limit, providerLimit: mode === "unmetered" ? null : 100_000_000, fixedCost, retainContent: false, budgetMode: mode === "soft" ? "soft" : "reserve" });
   env.OPENAI_API_KEY = "fixture-environment-key";
   const ledger = sqlBudgetNamespace(t);
   env.BUDGET_LEDGER = { ...ledger, get: name => ({ fetch: (url, init) => {
@@ -30,9 +31,7 @@ function fixture(t, { mode = "reserve", limit = 100_000_000, fixedCost = null } 
   const original = env.ACCESS_CONTROL.get;
   env.ACCESS_CONTROL.get = name => ({ fetch: async (url, init) => {
     if (new URL(url).pathname === "/grant-pools/attachment") return Response.json({ attached: false, pending: false });
-    const response = await original(name).fetch(url, init), body = await response.json();
-    if (body.policy) Object.assign(body.policy.policy, { budgetMode: mode === "soft" ? "soft" : "reserve" });
-    return Response.json(body);
+    return original(name).fetch(url, init);
   } });
   env.USAGE_QUEUE = { send: async event => events.push(event) };
   return { env, ledger, events, pending, operations, context: { waitUntil: promise => pending.push(promise) } };
@@ -484,9 +483,12 @@ for (const route of routes.slice(0, 2)) test("compact authority failure after re
     if (path === "/dispatch") dispatchStarted = true;
     return response;
   } });
-  f.env.ACCESS_CONTROL.beforeFetch = (_name, request) => {
-    if (dispatchStarted && new URL(request.url).pathname === "/grant-pools/resolve") throw new Error("fixture authority unavailable");
-  };
+  const getAuthority = f.env.ACCESS_CONTROL.get.bind(f.env.ACCESS_CONTROL);
+  f.env.ACCESS_CONTROL.get = name => { const stub = getAuthority(name); return { ...stub, fetch(url, init) {
+    if (dispatchStarted && new URL(url).pathname === "/grant-pools/resolve")
+      return accessBytesResponse(JSON.stringify({ error: { code: "authority_error", message: "fixture authority unavailable" } }), "", { status: 500 });
+    return stub.fetch(url, init);
+  } }; };
   const response = await f.request({ model: route.includes("native") ? "gpt-6-astra" : "openai/gpt-6-astra", service_tier: "default" }, {}, route);
   assert.equal(response.status, 503); assert.equal(JSON.parse(await f.consume(response)).error.code, "provider_unavailable");
   assert.equal(f.sent.length, 0); assert.equal(f.events.length, 1); assert.equal(f.events[0].actual_cost_micros, 0);

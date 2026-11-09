@@ -886,7 +886,11 @@ async function fusionDiscoveryFixture(t, { bindings } = {}) {
   const env = {
     OPENAI_API_KEY: "fixture-environment-key", CLAWROUTER_LOCAL_AUTH: "enabled",
     POLICY_KV: {
-      async get(key) { return Array.isArray(key) ? new Map(key.map((item) => [item, records.get(item) ?? null])) : records.get(key) ?? null; },
+      async get(key, type) {
+        if (Array.isArray(key)) return new Map(key.map((item) => [item, records.get(item) ?? null]));
+        const value = records.get(key) ?? null;
+        return value !== null && type === "stream" ? accessCertsResponse(value, "").body : value;
+      },
       async list({ prefix }) {
         assert.equal(prefix, "health/providers/", "discovery only lists saved provider health, never grant credentials");
         calls.push({ path: "kv-list", body: { prefix } });

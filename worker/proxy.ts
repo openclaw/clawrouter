@@ -1,4 +1,5 @@
 import { ProxyCompletion } from "./proxy-completion.ts";
+import { isIdentityFailure } from "./identity-admission.ts";
 import { providerConfigurationList } from "./provider-connections.ts";
 import { admitAccountingJson, isAccountingAdmissionFailure } from "./json-body.ts";
 import { PreparationAdmission, isPreparationLimit, preparationHeader, templateCandidates, preparationValue } from "./provider-templates.ts";
@@ -1166,7 +1167,7 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       try {
         retry = await operation.wait(preparation);
       } catch (error) {
-        if (isPreparationLimit(error) || isAccountingAdmissionFailure(error)) capacityFailure = error;
+        if (isPreparationLimit(error) || isAccountingAdmissionFailure(error) || isIdentityFailure(error)) capacityFailure = error;
         // Ordinary selection failure leaves the original rejection available to the caller.
       } finally {
         // Join logical preparation even when the operation stopped waiting for it.
@@ -1292,7 +1293,7 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       else accounting.fail(402, "denied", (cost.requestTariff || selection.nativeResponse) ? reservation : undefined, content, !!(cost.requestTariff || selection.nativeResponse) && dispatched);
       return errorResponse(soft.denial.code, soft.denial.message, 402);
     }
-    if ((isPreparationLimit(error) || isAccountingAdmissionFailure(error)) && !signal.aborted) {
+    if ((isPreparationLimit(error) || isAccountingAdmissionFailure(error) || isIdentityFailure(error)) && !signal.aborted) {
       operation.stop("upstream", error);
       if (response) void discard(response);
       // Alternate preparation never dispatched. The original received rejection

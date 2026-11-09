@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 import { proxyKey, usageEnv } from "./usage-budget-fixture.mjs";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 const { default: handler } = await import("../index.ts");
 const { providerById } = await import("../providers.ts");
 const { operationAffordability } = await import("../operation-budget.ts");
@@ -15,6 +16,29 @@ const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/deepgram
 const audio = new Uint8Array(Buffer.from(wire.request.base64, "base64"));
 const native = "/v1/native/openai/v1/listen", manifest = "/v1/proxy/openai/listen";
 const owners = ["tenant:maintainer_access:owner@example.com", "provider:openai"];
+
+async function syntheticIdentityJson(response) {
+  const body = response.body, decoder = new TextDecoder(), cleanup = [];
+  let reader, text = "", value, hasPrimary = false, primary;
+  try {
+    reader = body.getReader({ mode: "byob" });
+    for (;;) {
+      const next = await reader.read(new Uint8Array(16 * 1024));
+      if (next.value?.byteLength) text += decoder.decode(next.value, { stream: true });
+      if (next.done) break;
+    }
+    value = JSON.parse(text + decoder.decode());
+  } catch (error) { hasPrimary = true; primary = error; }
+  finally {
+    if (hasPrimary) {
+      try { await (reader ? reader.cancel(primary) : body?.cancel(primary)); } catch (error) { cleanup.push(error); }
+    }
+    try { reader?.releaseLock(); } catch (error) { cleanup.push(error); }
+  }
+  if (cleanup.length) throw new AggregateError(hasPrimary ? [primary, ...cleanup] : cleanup, "synthetic identity reply cleanup failed");
+  if (hasPrimary) throw primary;
+  return value;
+}
 
 function fixture(t, options = {}) {
   // Exercise dispatch by format before source-owned YAML/snapshot activation.
@@ -30,9 +54,11 @@ function fixture(t, options = {}) {
   const events = [], pending = [], admissions = [], ledger = sqlBudgetNamespace(t), originalGet = env.ACCESS_CONTROL.get;
   let edit = value => value;
   env.ACCESS_CONTROL.get = (...args) => { const stub = originalGet(...args); return { fetch: async (url, init) => {
-    const value = await (await stub.fetch(url, init)).json();
+    const response = await stub.fetch(url, init);
+    const marked = new Headers(init?.headers).has("x-clawrouter-identity-admission");
+    const value = marked ? await syntheticIdentityJson(response) : await response.json();
     if (new URL(url).pathname === "/admission/resolve") admissions.push(JSON.parse(init.body));
-    return Response.json(edit(value));
+    return marked ? accessBytesResponse(JSON.stringify(edit(value)), response.url, { status: response.status, headers: response.headers }) : Response.json(edit(value));
   } }; };
   env.BUDGET_LEDGER = ledger; env.OPENAI_API_KEY = "synthetic-original-key";
   env.USAGE_QUEUE = { send: async event => events.push(event) };

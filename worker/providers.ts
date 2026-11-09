@@ -1,3 +1,4 @@
+import { admitIdentity, isIdentityFailure } from "./identity-admission.ts";
 import type { MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { miniMaxVideoDenied, miniMaxVideoIdentity, miniMaxVideoRequirement } from "./minimax-video-credential.ts";
 import { readMiniMaxVideoBinding } from "../shared/minimax-video-binding.ts";
@@ -436,6 +437,7 @@ async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, en
   // Check the snapshot pin before materialization, then recheck the materialized owner.
   if (admitted) assertPinnedGrant(pinned, resolution.selected);
   if (!resolution.selected) return { selected: null, hasConfiguredGrant: resolution.hasConfiguredGrant, retryAt: resolution.retryAt };
+  if (!video && !wan && !search) admitIdentity(resolution.selected, "record");
   const { key, grant } = resolution.selected;
   let materialized: UpstreamGrant;
   try {
@@ -475,7 +477,8 @@ async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, en
       ? await refreshGrant(key, grant, provider, env, false, signal)
       : await cachedGrantCredentials(env, key, grant, () => refreshGrant(key, grant, provider, env, false), (state, ms) => recordCredentialWait(auth, state, ms));
   }
-  catch (error) { if (!video && !wan && !search) evictGrantCredentials(key); throw selectedCredentialFailure(error, key); }
+  catch (error) { if (isIdentityFailure(error)) throw error; if (!video && !wan && !search) evictGrantCredentials(key); throw selectedCredentialFailure(error, key); }
+  if (!video && !wan && !search) admitIdentity(materialized, "record");
   // A shared owner can be replaced after selection. Sharing subscriptions must
   // never authorize a replacement API-key/media transport under that same key.
   if (!grantsVisibleToPolicies([{ key, grant: materialized }], [{ policyId: auth.policyId, policy: auth.policy }]).length)

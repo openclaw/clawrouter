@@ -4,6 +4,10 @@
 
 - Keep ordinary selected JSON HTTP input custody through actual delivery cleanup, archive writes and terminal accounting without delaying response publication; preserve specialized owners and existing accounting outcomes.
 
+- Publish all admitted current-pool migration markers after successful identity admission, including absent grants after a legacy fallback, so canonical rereads do not repeat legacy source imports.
+
+- Bound selected identity SQL/KV sources, admission replies and private copies with complete record/graph profiles, metadata-first SQL guards and atomic refresh publication. Cumulative 2 MiB source overflow denies the whole generation without truncating pools or falling back to old authorization; embedded records retain their independent 1 MiB limit, alternate profile denial is terminal, and existing narrower selection guards and specialized owners remain. Selected pool commits consume their returned SQL row before replying. These are representation limits, not a combined heap or generation-count guarantee.
+
 - Include declared product summaries in provider package indexes, sharing metadata types with the plugin contract while keeping execution and auth configuration private.
 
 - Declare separate Anthropic API and existing Claude subscription catalog products, preserving Messages and token-counting transport boundaries.

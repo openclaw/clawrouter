@@ -1,3 +1,4 @@
+import { admitIdentity, copyIdentity } from "./identity-admission.ts";
 import { grantRevision, grantUsable, REFRESH_MARGIN_MS } from "./grant-eligibility.ts";
 import { HotCache, hotCacheConfig, registerHotCache, tryRunInBackground, type HotCacheState } from "./hot-cache.ts";
 import type { Env, UpstreamGrant } from "./types";
@@ -11,17 +12,19 @@ const credentials = registerHotCache(new HotCache<UpstreamGrant>(1024));
 const entryId = (key: string, grant: UpstreamGrant) => `${key}\n${grant.credentialGeneration ?? ""}\n${grantRevision(grant) ?? ""}`;
 const loader = (materialize: () => Promise<UpstreamGrant>) => async () => {
   const materialized = await materialize();
+  admitIdentity(materialized, "record");
   const expiresAt = materialized.expiresAt ? Date.parse(materialized.expiresAt) - REFRESH_MARGIN_MS : Number.POSITIVE_INFINITY;
   return { value: materialized, cacheable: grantUsable(materialized), expiresAt: Number.isFinite(expiresAt) ? expiresAt : Number.POSITIVE_INFINITY };
 };
 
 export async function cachedGrantCredentials(env: Env, key: string, grant: UpstreamGrant, materialize: () => Promise<UpstreamGrant>, observe?: (state: HotCacheState, waitedMs: number) => void): Promise<UpstreamGrant> {
+  admitIdentity(grant, "record");
   const config = hotCacheConfig(env), start = performance.now();
-  if (!config.maxAgeMs) { const value = await materialize(); observe?.("off", performance.now() - start); return value; }
+  if (!config.maxAgeMs) { const value = await materialize(); admitIdentity(value, "record"); observe?.("off", performance.now() - start); return value; }
   const { value, state } = await credentials.get(entryId(key, grant), config, loader(materialize));
   observe?.(state, performance.now() - start);
   // Callers may decorate the grant; never hand out the shared cached object.
-  return structuredClone(value);
+  return copyIdentity(value);
 }
 
 /**
@@ -30,6 +33,7 @@ export async function cachedGrantCredentials(env: Env, key: string, grant: Upstr
  * mismatch simply leaves the prefetched entry unused.
  */
 export function prefetchGrantCredentials(env: Env, key: string, grant: UpstreamGrant, materialize: () => Promise<UpstreamGrant>): void {
+  admitIdentity(grant, "record");
   const config = hotCacheConfig(env), id = entryId(key, grant);
   if (!config.maxAgeMs || credentials.peek(id, config)) return;
   tryRunInBackground(() => credentials.load(id, config, loader(materialize)));
