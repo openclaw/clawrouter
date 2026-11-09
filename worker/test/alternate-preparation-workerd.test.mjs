@@ -167,6 +167,7 @@ async function withoutOutsideFence(directory, upstream) {
 }
 
 test('public alternate preparation joins held resolution/rejection and fences the final-await abort', { timeout: 120_000 }, async t => {
+  const report = (label, value) => { try { if (typeof t.log === 'function') t.log(label + ' ' + JSON.stringify(value)); } catch {} };
   const directory = await mkdtemp(join(tmpdir(), 'alternate-preparation-'));
   const gates = new Map(), released = new Set(), clients = [], visited = [];
   let runtime, server, primary, releaseFuture = false;
@@ -214,13 +215,13 @@ test('public alternate preparation joins held resolution/rejection and fences th
       const instance = url.searchParams.get('instance') === 'omitted' ? 'omitted' : 'fixed';
       const diagnostic = url.pathname === '/v1/responses' && id === 'final-await';
       let phase = 'dispatch-started';
-      if (diagnostic) console.error('alternate-phase', JSON.stringify({ instance, case: id, phase }));
+      if (diagnostic) report('alternate-phase', { instance, case: id, phase });
       const pending = runtime.dispatchFetch(url.href, { ...options, signal: controller.signal }).then(async r => {
         phase = 'diagnostic-headers-received';
-        if (diagnostic) console.error('alternate-phase', JSON.stringify({ instance, case: id, phase, status: r.status }));
+        if (diagnostic) report('alternate-phase', { instance, case: id, phase, status: r.status });
         return { status: r.status, text: await r.text() };
       }).catch(error => {
-        console.error('alternate-phase', JSON.stringify({ instance, case: Object.hasOwn(cases, id) ? id : 'control', phase }));
+        report('alternate-phase', { instance, case: Object.hasOwn(cases, id) ? id : 'control', phase });
         throw error; // Every unexpected outer transport failure retains identity.
       });
       pending.catch(() => {}); clients.push(pending); return pending;
@@ -252,7 +253,7 @@ test('public alternate preparation joins held resolution/rejection and fences th
         release(id + '/prepare');
       }
       const response = await started;
-      console.error('alternate-assertion', JSON.stringify({ instance: 'fixed', case: id, stage: 'response', status: response.status }));
+      report('alternate-assertion', { instance: 'fixed', case: id, stage: 'response', status: response.status });
       const expected = mode.held || mode.finalAbort || mode.uncertain ? 502 : id === 'success-control' ? 200 : 429;
       if (mode.finalAbort) {
         assert.equal(response.status, 200, 'diagnostic transport, not routed status');
@@ -264,9 +265,9 @@ test('public alternate preparation joins held resolution/rejection and fences th
         if (expected === 502) assert.equal(JSON.parse(response.text).error.code, 'provider_unavailable');
       }
       if (expected === 429) assert.deepEqual(JSON.parse(response.text), { error: 'original rejection' });
-      console.error('alternate-assertion', JSON.stringify({ instance: 'fixed', case: id, stage: 'accounting-drain', status: response.status }));
+      report('alternate-assertion', { instance: 'fixed', case: id, stage: 'accounting-drain', status: response.status });
       await drain(); const s = await json('/state?case=' + id), sql = await json('/sql?case=' + id);
-      console.error('alternate-assertion', JSON.stringify({ instance: 'fixed', case: id, stage: 'receipts', status: response.status }));
+      report('alternate-assertion', { instance: 'fixed', case: id, stage: 'receipts', status: response.status });
       assert.equal(s.provider, id === 'success-control' || mode.uncertain ? 2 : 1);
       assert.equal(s.alternates, mode.disabled ? 0 : 1); assert.equal(s.excludedCount, mode.disabled ? 0 : 1);
       assert.equal(s.admissions, mode.disabled ? 1 : 2);
@@ -286,14 +287,14 @@ test('public alternate preparation joins held resolution/rejection and fences th
     runtime = await withoutOutsideFence(directory, upstream);
     assert.equal((await json('/setup?case=final-await')).ready, true); visited.push('final-await');
     const response = await request('final-await', true);
-    console.error('alternate-assertion', JSON.stringify({ instance: 'omitted', case: 'final-await', stage: 'response', status: response.status }));
+    report('alternate-assertion', { instance: 'omitted', case: 'final-await', stage: 'response', status: response.status });
     assert.equal(response.status, 200, 'diagnostic transport, not routed status');
     const observed = JSON.parse(response.text);
     assert.equal(observed.fixture, 'alternate-final-await'); assert.equal(observed.instance, 'omitted');
     assert.equal(observed.case, 'final-await'); assert.equal(observed.phase, 'body-settled');
     assert.equal(observed.routedStatus, 429, 'omitting ONLY the fence returns an ACTUAL routed 429');
     assert.ok(['fulfilled', 'rejected'].includes(observed.bodyOutcome));
-    console.error('alternate-phase', JSON.stringify({ instance: 'omitted', case: 'final-await', phase: 'body-settled', routedStatus: observed.routedStatus, bodyOutcome: observed.bodyOutcome }));
+    report('alternate-phase', { instance: 'omitted', case: 'final-await', phase: 'body-settled', routedStatus: observed.routedStatus, bodyOutcome: observed.bodyOutcome });
     await drain(); const s = await json('/state?case=final-await'), sql = await json('/sql?case=final-await');
     assert.equal(s.waitObserved, 1); assert.equal(s.interceptions, 1); assert.equal(s.activeWhenQueued, true); assert.equal(s.originalStatus, 429); assert.equal(s.aborted, true); assert.equal(s.provider, 1); assert.equal(s.alternates, 1);
     assert.equal(sql.usage.length, 1); assert.equal(sql.usage[0].status, 'client_error');

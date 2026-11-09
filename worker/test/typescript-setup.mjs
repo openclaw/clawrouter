@@ -1,5 +1,5 @@
 import "../../test/helpers/typescript-resolver.mjs";
-import { tracingChannel } from "node:diagnostics_channel";
+import * as diagnostics from "node:diagnostics_channel";
 
 // Workers provides FixedLengthStream for known-length streamed bodies; Node does not.
 globalThis.FixedLengthStream ??= class FixedLengthStream extends TransformStream {
@@ -26,7 +26,7 @@ export function perRequestAuthority() { overrideHotCacheConfig(HOT_CACHE_DISABLE
 // Partial execution tracing only: files that do not import this setup, earlier
 // imports and before-hook execution are outside this observer. End is not PASS,
 // I/O retirement or process exit. Native visibility still requires hosted proof.
-if (typeof getTestContext === "function") {
+if (typeof getTestContext === "function" && typeof diagnostics.tracingChannel === "function") {
   let disabled = false;
   try {
     const ordinals = new WeakMap(), maximum = 65535;
@@ -63,7 +63,7 @@ if (typeof getTestContext === "function") {
         sink.log("worker-test-phase " + JSON.stringify({ phase, file, ordinal, nesting, type, observed, started, ended, errors, active }));
       } catch { disabled = true; } // Observer failure disables diagnostics only.
     };
-    tracingChannel("node.test").subscribe({
+    diagnostics.tracingChannel("node.test").subscribe({
       start(metadata) { observe("start", metadata); },
       end(metadata) { observe("end", metadata); },
       error(metadata) { observe("error", metadata); },

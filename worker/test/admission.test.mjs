@@ -125,6 +125,7 @@ test('parsing provider selection first preserves authentication precedence for m
 
 for (const family of ['policies', 'users']) for (const fault of ['transport', 'staging']) test(`${family} import ${fault} failure preserves authentication and fault classification`, async t => {
   const f = await fixture();
+  const report = value => { try { if (typeof t.log === 'function') t.log('admission-fault ' + JSON.stringify(value)); } catch {} };
   const table = family === 'policies' ? 'access_policies' : 'access_users';
   const id = family === 'policies' ? 'fixture' : f.credential.principalId;
   const key = family === 'policies' ? `policies/${id}` : `access/users/${id}`;
@@ -160,6 +161,9 @@ for (const family of ['policies', 'users']) for (const fault of ['transport', 's
   ]) {
     const response = await worker.fetch(new Request('https://fixture/v1/messages', { method: 'POST', headers: { ...headers, authorization }, body: JSON.stringify({ model: 'anthropic/claude-sonnet-5', messages: [], max_tokens: 16 }) }), f.env, f.context);
     const text = await response.text();
+    const observedCode = response.headers.get('x-clawrouter-error-code');
+    report({ family, fault, branch: attempts ? 'valid' : 'wrong', kvCount: reads.length, stageCount: stages.length, status: response.status,
+      code: ['invalid_proxy_key', 'identity_admission_unavailable', 'internal_error'].includes(observedCode) ? observedCode : 'unexpected' });
     assert.equal(response.status, expected); assert.equal(response.headers.get('x-clawrouter-error-code'), code);
     assert.equal(JSON.parse(text).error.code, code);
     assert.doesNotMatch(text, /synthetic unavailable KV|synthetic staging failure/);
