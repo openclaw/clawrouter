@@ -50,8 +50,15 @@ The owner joins:
 - Deferred archive scheduling and the memoized original `write()` promise, which
   already joins the R2 put and serializer pipe. A known never-started archive is
   explicitly discarded; it creates no fabricated write receipt.
-- The existing `observed.retired` delivery promise. `observed.result` remains the
-  prompt usage/accounting trigger and is not retirement evidence.
+- An independent ORIGINAL-response reader receipt, enrolled before pre-stream
+  normalization or price inspection. Its zero-prefetch forwarding stream passes
+  the same chunk references and uses unchanged `inputRetirement` for actual reads,
+  memoized FIRST cancellation and unlock. Normalizers can replay or discard their
+  wrappers without discarding this source receipt. Active pulls are child roots;
+  no pull waits on its own retirement or encompassing completion.
+- The existing `observed.retired` delivery promise, in addition to that original
+  source receipt. `observed.result` remains the prompt usage/accounting trigger
+  and is not retirement evidence.
 - The actual usage-to-accounting continuation and its actual terminal sink work,
   including ordinary early failure events and soft-budget checks.
 
@@ -87,7 +94,10 @@ Focused Node cases cover original outcomes, synchronous/undefined failures,
 shared reasons, sealed roots with late children, duplicate close, unused accounting,
 forked IDs, all terminal entry points including finalization false, held original
 R2 sink identity, delivery result before FIRST-cancel retirement and ordinary 402
-publication before held failure accounting. Existing accounting/reservation-reuse,
+publication before held failure accounting. Public `stream:true` regressions
+cover valid first-event SSE replay and both SSE/oversized-JSON rejection
+normalizers with held ORIGINAL FIRST cancellation, including rejection with
+`undefined`. Node also checks original chunk identity. Existing accounting/reservation-reuse,
 alternate-preparation and archive-pipe rejection tests remain regression controls.
 
 One Workerd fixture uses the actual public HTTP route, real SQLite owners, R2 and
@@ -96,10 +106,15 @@ orchestration. The originating diagnostic request consumes the actual public
 Response/first body read before releasing independently held delivery, archive and
 accounting roots. Different release orders retain the caller charge until the last
 actual receipt; original reservation IDs and one real usage row are checked.
+Streaming/rejection cases release archive and actual accounting first, then the
+read continuation, and directly assert completion/charge remain held while only
+ORIGINAL cancellation is outstanding. Normalized 429 responses retain their
+existing zero charge; canceled valid streams retain their original accounting.
 
 The fixture's provider transport stays connected independently of routed abort so
-FIRST reader cancellation can be observed. Its second native read is genuinely
-pending before abort. Read-return/cancel gates and the R2 gate hold application
+FIRST reader cancellation can be observed. In delivery cases, the second native
+read is genuinely pending before abort. Rejection cases instead finish their
+bounded error read before the cancellation hold. Read-return/cancel gates and the R2 gate hold application
 continuations **after** native settlement; they do not prove native latency. The
 cancel-rejection case injects a labelled post-native `undefined` rejection. Original
 promises, actual unlock and every finite fixture root are joined in the originating

@@ -786,6 +786,46 @@ async function proxyMiniMaxSearch(request: Request, env: Env, context: Execution
   } finally { admission.finish(context); }
 }
 
+// Normalization may replay a body or detach its reader cancellation. Keep an
+// independent receipt for the ORIGINAL source before giving it to those wrappers.
+function ownOrdinaryResponse(response: Response, completion: ProxyCompletion): Response {
+  if (!response.body) return response;
+  let forwarded!: Response;
+  completion.start(source => {
+    const reader = response.body!.getReader(), input = inputRetirement(reader);
+    let stopped = false;
+    try {
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          return source.start(async () => {
+            try {
+              const next = await input.read(() => reader.read());
+              if (stopped) return;
+              if (next.done) {
+                stopped = true; controller.close();
+                void input.retire("eof");
+              } else controller.enqueue(next.value); // Forward the original chunk, without a copy.
+            } catch (error) {
+              if (!stopped) { stopped = true; controller.error(error); }
+              void input.retire("cancel", error);
+            }
+          });
+        },
+        cancel(reason) { stopped = true; return input.retire("cancel", reason); },
+      }, { highWaterMark: 0 });
+      forwarded = new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+    } catch (error) {
+      // Construction failure still owns the acquired source; preserve the throw.
+      source.start(() => input.retire("cancel", error));
+      throw error;
+    }
+    // Neither a pull nor cancel waits on encompassing caller completion. The
+    // active source scope can enroll pulls until its original receipt settles.
+    return input.retired;
+  });
+  return forwarded;
+}
+
 async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: ProxyQuery = {}, preauthenticated: AuthorizedIdentity | null = null, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, auditAuth?: AuthorizedIdentity, admission?: JsonAdmission): Promise<Response> {
   const ordinary = admission?.ordinaryCompletion() && !compound && !reservedBudget && !selection.nativeResponse
     && !selection.endpoint.lifecycle && !backgroundResponse(selection.endpoint, selection.body) && !isModelDiscovery(selection.endpoint) && selection.capability.startsWith("llm.")
@@ -1185,6 +1225,7 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       ? selection.body.some(({ query }) => !!query && typeof query === "object" && "stream" in query && query.stream === true)
       : selection.body.stream === true;
     const errorFormat = selection.endpoint.request_format.startsWith("anthropic.") ? "anthropic" : selection.endpoint.request_format.startsWith("openai.") ? "openai" : undefined;
+    if (completion) response = ownOrdinaryResponse(response, completion);
     response = await normalizePreStreamError(response, !cost.requestTariff && streaming && !["audio.binary", "ollama.chat", "radius.messages"].includes(selection.endpoint.response_format), operation, errorFormat ? { format: errorFormat, requestId } : undefined);
     // Price inspection reads delivery bytes, not initial-response headers.
     // Search retains its original deadline through delivery; other native paths

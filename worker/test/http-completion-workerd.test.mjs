@@ -8,7 +8,9 @@ import { dirname, join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { startBundledWorkerdFixture } from '../../test/helpers/workerd.mjs';
 
-const cases = ['account-last', 'archive-last', 'delivery-last', 'cancel-reject'];
+const cases = ['account-last', 'archive-last', 'delivery-last', 'cancel-reject',
+  'sse-replay', 'sse-replay-cancel-reject', 'sse-normalization', 'sse-normalization-cancel-reject',
+  'json-normalization', 'json-normalization-cancel-reject'];
 const router = String.raw`
 import worker from './worker/index.ts';
 export {PolicyBindingIndexObject,GrantCredentialObject} from './worker/index.ts';
@@ -55,7 +57,8 @@ export default {async fetch(request,bindings,ctx){
  if(url.pathname==='/state'){const state=states.get(id);return Response.json(state?{...state,charged:bodyBudgetCharged()}:null);}
  if(url.pathname!=='/fixture'||!__CASES__.includes(id))return new Response(null,{status:404});
  await request.text(); // Explicit outer request lifetime support; no upload/readiness coupling.
- const s={response:false,first:false,bodyDone:false,bodyRejected:false,nativeReadPending:false,nativeReadSettled:false,readReturned:false,
+ const normalization=id.includes('-normalization'),streaming=id.startsWith('sse-')||normalization,cancelReject=id.endsWith('cancel-reject');
+ const s={response:false,first:false,bodyDone:false,bodyRejected:false,status:null,streaming,normalization,nativeReadPending:false,nativeReadSettled:false,readReturned:false,
   nativeCancelSettled:false,cancelReturned:false,cancels:0,unlocked:false,r2Native:false,r2Returned:false,accountEntered:false,accountDone:false,
   completionSeen:0,completionDone:false,completionFailed:null,events:0,posts:0,reserves:0,closed:false,operationDone:false,operationFailed:false};states.set(id,s);
  const roots=[],names=new Map(),reservationIds=[],usageNames=new Set(),caller=new AbortController();
@@ -86,20 +89,20 @@ export default {async fetch(request,bindings,ctx){
     const reader=acquire(...args),read=reader.read.bind(reader),cancel=reader.cancel.bind(reader),unlock=reader.releaseLock.bind(reader);let reads=0,firstCancel;
     reader.read=(...args)=>{
      const index=++reads,original=track(read(...args));
-     if(index!==2)return original;
+     if(index!==2||normalization)return original;
      s.nativeReadPending=true;
      return track(original.then(async value=>{s.nativeReadPending=false;s.nativeReadSettled=true;await gate('read-return');s.readReturned=true;return value;}));
     };
     reader.cancel=(...args)=>firstCancel??=(async()=>{
      s.cancels++;await track(cancel(...args));s.nativeCancelSettled=true;await gate('cancel');s.cancelReturned=true;
-     if(id==='cancel-reject')throw undefined;
+     if(cancelReject)throw undefined;
     })();
     const first=reader.cancel;
     reader.cancel=(...args)=>{
      const original=first(...args);
      // Deliberate post-native rejection is asserted, never an arbitrary ignore.
-     if(!reader.fixtureObserved){reader.fixtureObserved=true;track(original.then(()=>{check(id!=='cancel-reject','expected labelled cancel rejection');},error=>{
-      if(id!=='cancel-reject'||!s.nativeCancelSettled||!s.cancelReturned||error!==undefined)throw error;
+     if(!reader.fixtureObserved){reader.fixtureObserved=true;track(original.then(()=>{check(!cancelReject,'expected labelled cancel rejection');},error=>{
+      if(!cancelReject||!s.nativeCancelSettled||!s.cancelReturned||error!==undefined)throw error;
      }));}
      return original;
     };
@@ -110,18 +113,27 @@ export default {async fetch(request,bindings,ctx){
   }));
  };
  // Controls are registered before dispatch, and never wait on the completion owner.
- const abortControl=track(gate('abort').then(()=>caller.abort(Error('fixture routed abort'))));
+ if(!normalization)track(gate('abort').then(()=>caller.abort(Error('fixture routed abort'))));
  let reader,readOutcome;
  try{
   expectedBody={model:'openai/gpt-6-astra',messages:[{role:'user',content:'x'.repeat(1024*1024+16)}]};
+  if(streaming)expectedBody.stream=true;
   const response=await track(worker.fetch(new Request('https://router.example/v1/chat/completions',{method:'POST',headers:{authorization:'Bearer clawrouter-live-'+id.replaceAll('-','_')+'-fixture-secret','content-type':'application/json','x-request-id':'completion-'+id},body:JSON.stringify(expectedBody),signal:caller.signal}),env,{waitUntil:track}));
-  s.response=true;reader=response.body?.getReader();check(reader,'actual public body');
-  check(response.status===200,'actual public response status');check(s.completionSeen===1,'one caller completion');
+  s.response=true;s.status=response.status;reader=response.body?.getReader();check(reader,'actual public body');
+  check(response.status===(normalization?429:200),'actual public response status');check(s.completionSeen===1,'one caller completion');
   const first=await track(reader.read());check(!first.done&&first.value.byteLength>0,'actual first public body read');s.first=true;
-  const reading=reader.read();readOutcome=track(reading.then(()=>{throw Error('held public read unexpectedly fulfilled');},error=>{
-   check(caller.signal.aborted&&Object.is(error,caller.signal.reason),'original public abort reason');s.bodyRejected=true;s.bodyDone=true;
-  }));
-  await readOutcome;reader.releaseLock();reader=undefined;
+  if(normalization){
+   const decoder=new TextDecoder();let text=decoder.decode(first.value,{stream:true});
+   for(;;){const next=await track(reader.read());if(next.done)break;text+=decoder.decode(next.value,{stream:true});}
+   text+=decoder.decode();check(!!JSON.parse(text).error,'actual normalized error body');s.bodyDone=true;
+  }else{
+   if(streaming)check(response.headers.get('content-type')?.includes('text/event-stream')&&new TextDecoder().decode(first.value).startsWith('data: '),'valid first SSE replay delivered');
+   const reading=reader.read();readOutcome=track(reading.then(()=>{throw Error('held public read unexpectedly fulfilled');},error=>{
+    check(caller.signal.aborted&&Object.is(error,caller.signal.reason),'original public abort reason');s.bodyRejected=true;s.bodyDone=true;
+   }));
+   await readOutcome;
+  }
+  reader.releaseLock();reader=undefined;
   // Result/accounting may be early; the original receipt is a distinct join.
   check(completion&&!s.completionDone,'public response/body do not retire caller');
  }catch(error){hasPrimary=true;primary=error;s.operationFailed=true;}
@@ -135,12 +147,12 @@ export default {async fetch(request,bindings,ctx){
  closed=true;s.closed=true;globalThis.fetch=nativeFetch;
  if(failures.length)throw new AggregateError(hasPrimary?[primary,...failures]:failures,'independent fixture roots');if(hasPrimary)throw primary;
  check(s.completionDone&&s.completionFailed===false&&bodyBudgetCharged()===0,'actual completion and caller charge release');
- check(s.cancels===1&&s.unlocked&&s.readReturned&&s.cancelReturned,'actual read FIRST cancel and unlock');
+ check(s.cancels===1&&s.unlocked&&(normalization||s.readReturned)&&s.cancelReturned,'actual read FIRST cancel and unlock');
  check(s.posts===1&&s.events===1&&s.reserves===4,'single provider and accounting with four original reservations');
  const rows=[];for(const [key] of names){const response=await bindings.BUDGET_LEDGER.get(bindings.BUDGET_LEDGER.idFromString(key)).fetch('https://clawrouter.internal/fixture-sql');rows.push(...(await response.json()).filter(row=>reservationIds.includes(row.reservation_id)));}
  check(rows.length===4&&rows.every(row=>reservationIds.includes(row.reservation_id)&&row.settled===1&&row.dispatch_started===1&&row.reserved_micros===7),'same original reservation IDs and terminal SQL');
  const usage=[];for(const name of usageNames){const response=await bindings.USAGE_LEDGER.get(bindings.USAGE_LEDGER.idFromName(name)).fetch('https://clawrouter.internal/fixture-sql');usage.push(...await response.json());}
- check(usage.length===1&&usage[0].request_id==='completion-'+id&&usage[0].actual_cost_micros===7&&usage[0].status==='client_error','one original cancellation receipt');
+ check(usage.length===1&&usage[0].request_id==='completion-'+id&&usage[0].actual_cost_micros===(normalization?0:7)&&usage[0].status_code===(normalization?429:200)&&usage[0].status==='client_error','one original cancellation or normalization receipt');
  const stored=await bindings.CONTENT_ARCHIVE.get(archiveKey),text=await stored.text(),record=JSON.parse(text);
  expectedBody.model='gpt-6-astra';expectedBody.service_tier='default';check(JSON.stringify(record.body)===JSON.stringify(expectedBody),'actual R2 complete admitted request bytes');
  const expectedArchive={version:'clawrouter.retained-request.v1',contentRef:record.contentRef,requestId:'completion-'+id,occurredAtMs:record.occurredAtMs,
@@ -185,7 +197,11 @@ test('ordinary public HTTP joins original delivery, archive and accounting after
       request.resume(); const parts = new URL(request.url, 'http://fixture').pathname.split('/').filter(Boolean);
       if (parts[0] === 'gate') { const key = parts.slice(1).join('/'); if (releaseFuture || released.has(key)) response.end('released'); else gates.set(key, response); }
       else if (parts[0] === 'provider') {
-        response.writeHead(200, { 'content-type': 'application/json' }); response.write('{"id":"fixture",');
+        const id = parts[1], normalization = id.includes('-normalization'), sse = id.startsWith('sse-');
+        response.writeHead(normalization ? 429 : 200, { 'content-type': sse ? 'text/event-stream' : 'application/json' });
+        response.write(sse ? 'data: '+JSON.stringify(normalization ? { error: { message: 'fixture rejection', type: 'rate_limit_error' } }
+          : { id: 'fixture', object: 'chat.completion.chunk', choices: [{ index: 0, delta: { content: 'fixture' }, finish_reason: null }] })+'\n\n'
+          : normalization ? '{"error":{"message":"'+'x'.repeat(70*1024)+'"}}' : '{"id":"fixture",');
         const key = parts[1] + '/provider-eof'; if (releaseFuture || released.has(key)) response.end(); else gates.set(key, response);
       } else if (parts[0] === 'release-all') { for (const phase of ['abort','archive','accounting','read-return','cancel','provider-eof']) release(parts[1]+'/'+phase); response.end('released'); }
       else { response.writeHead(404); response.end(); }
@@ -216,18 +232,34 @@ test('ordinary public HTTP joins original delivery, archive and accounting after
         }
         throw Error('bounded completion fixture arrival');
       };
-      let s = await wait(s => s.response && s.first && s.nativeReadPending && s.r2Native);
-      assert.equal(s.completionDone, false); assert.ok(s.charged > 0); assert.equal(s.accountEntered, false);
-      release(id+'/abort');
-      s = await wait(s => s.bodyDone && s.accountEntered && s.nativeReadSettled && s.nativeCancelSettled);
+      const normalization = id.includes('-normalization');
+      let s;
+      if(normalization){
+        s = await wait(s => s.response && s.first && s.bodyDone && s.r2Native && s.accountEntered && s.nativeCancelSettled);
+        assert.equal(s.status, 429); assert.equal(s.bodyRejected, false);
+      }else{
+        s = await wait(s => s.response && s.first && s.nativeReadPending && s.r2Native);
+        assert.equal(s.completionDone, false); assert.ok(s.charged > 0); assert.equal(s.accountEntered, false);
+        release(id+'/abort');
+        s = await wait(s => s.bodyDone && s.accountEntered && s.nativeReadSettled && s.nativeCancelSettled);
+        assert.equal(s.status, 200);
+      }
       assert.equal(s.completionDone, false); assert.equal(s.unlocked, false); assert.equal(s.cancels, 1); assert.ok(s.charged > 0);
       const order = id === 'account-last' ? ['delivery','archive','accounting'] : id === 'archive-last' ? ['accounting','delivery','archive'] : ['archive','accounting','delivery'];
       for (const [index, phase] of order.entries()) {
-        if (phase === 'delivery') { release(id+'/read-return'); release(id+'/cancel'); }
-        else release(id+'/'+phase);
+        if (phase === 'delivery') {
+          release(id+'/read-return');
+          if (id.startsWith('sse-') || normalization) {
+            s = await wait(s => s.r2Returned && s.accountDone && (normalization || s.readReturned));
+            assert.equal(s.completionDone, false); assert.ok(s.charged > 0);
+            assert.equal(s.unlocked, false); assert.equal(s.cancelReturned, false); assert.equal(s.cancels, 1);
+          }
+          release(id+'/cancel');
+        } else release(id+'/'+phase);
         if (index < 2) {
           s = await wait(s => phase === 'delivery' ? s.unlocked : phase === 'archive' ? s.r2Returned : s.accountDone);
           assert.equal(s.completionDone, false); assert.ok(s.charged > 0);
+          if (id.startsWith('sse-') || normalization) { assert.equal(s.unlocked, false); assert.equal(s.cancelReturned, false); assert.equal(s.cancels, 1); }
         }
       }
       release(id+'/provider-eof');

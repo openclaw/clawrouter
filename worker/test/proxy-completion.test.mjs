@@ -214,3 +214,76 @@ test("ordinary budget denial publishes 402 while original failure accounting sti
     held.resolve(); // t.after joins the actual accounting and admission-finish roots.
   });
 });
+
+for (const mode of ["sse-replay", "sse-normalization", "json-normalization"]) for (const rejects of [false, true]) {
+  test(`public stream:true ${mode} retains ORIGINAL FIRST cancel, reject=${rejects}`, { timeout: 10_000 }, async t => {
+    const { default: handler } = await import("../index.ts");
+    const { usageEnv, proxyKey } = await import("./usage-budget-fixture.mjs");
+    const { bodyBudgetCharged } = await import("../body-budget.ts");
+    const o = ownership(t), caller = new AbortController(), cancellation = deferred(), cancelEntered = deferred(), readEntered = deferred();
+    const queue = deferred(), accountingDone = deferred(), cleanup = deferred(), completed = deferred(), failure = deferred();
+    void failure.promise.catch(() => {}); // Actual failing roots are also joined by ownership(t).
+    const arrived = phase => Promise.race([phase, failure.promise, completed.promise.then(() => { throw Error("caller completed before held-source assertion"); })]);
+    const normalization = mode !== "sse-replay", events = [];
+    let cancels = 0, posts = 0, reader, readOutcome;
+    const chunk = new TextEncoder().encode(mode === "json-normalization" ? JSON.stringify({ error: { message: "x".repeat(70 * 1024) } })
+      : `data: ${JSON.stringify(normalization ? { error: { message: "fixture rejection", type: "rate_limit_error" } }
+        : { id: "fixture", object: "chat.completion.chunk", choices: [{ index: 0, delta: { content: "fixture" }, finish_reason: null }] })}\n\n`);
+    const original = new ReadableStream({ start(controller) { controller.enqueue(chunk); }, pull() { readEntered.resolve(); },
+      cancel() { cancels++; cancelEntered.resolve(); return cancellation.promise; } }, { highWaterMark: 0 });
+    const env = usageEnv([], { limit: null, providerLimit: null, fixedCost: 7, retainContent: false });
+    env.OPENAI_API_KEY = "synthetic-key";
+    env.USAGE_QUEUE = { async send(event) { events.push(event); await queue.promise; } };
+    t.mock.method(globalThis, "fetch", async () => { posts++; return new Response(original, {
+      status: normalization ? 429 : 200, headers: { "content-type": mode.startsWith("sse") ? "text/event-stream" : "application/json" },
+    }); });
+    o.release(() => { caller.abort(); queue.resolve(); cancellation.resolve(); cleanup.resolve(); });
+    // Pre-registered body ownership also covers an assertion before the first read.
+    o.track(cleanup.promise.then(async () => {
+      const settled = await readOutcome?.then(() => ({ failed: false }), error => ({ failed: true, error }));
+      let unlockFailed = false, unlockError;
+      try { reader?.releaseLock(); } catch (error) { unlockFailed = true; unlockError = error; }
+      if (unlockFailed) throw new AggregateError(settled?.failed ? [settled.error, unlockError] : [unlockError], "client reader cleanup");
+      if (settled?.failed) throw settled.error;
+    }));
+    const context = { waitUntil(work) {
+      o.track(work);
+      // The existing terminal continuation returns the actual finalize boolean.
+      void work.then(result => {
+        if (typeof result === "boolean") accountingDone.resolve(result);
+        else if (result && typeof result.failed === "boolean" && typeof result.unused === "boolean") completed.resolve(result);
+      }, error => failure.reject(error));
+    } };
+    await o.run(async () => {
+      const response = await o.track(handler.fetch(new Request("https://router.example/v1/chat/completions", {
+        method: "POST", signal: caller.signal, headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json", "x-request-id": "stream-completion" },
+        body: JSON.stringify({ model: "openai/gpt-6-astra", stream: true, messages: [{ role: "user", content: "x".repeat(1024 * 1024 + 16) }] }),
+      }), env, context));
+      reader = response.body.getReader(); assert.equal(response.status, normalization ? 429 : 200);
+      const first = await o.track(reader.read()); assert.equal(first.done, false);
+      if (normalization) {
+        const decoder = new TextDecoder(); let text = decoder.decode(first.value, { stream: true });
+        for (;;) { const part = await o.track(reader.read()); if (part.done) break; text += decoder.decode(part.value, { stream: true }); }
+        assert.ok(JSON.parse(text + decoder.decode()).error);
+      } else {
+        assert.equal(first.value, chunk, "normalization and custody forward the ORIGINAL chunk reference");
+        readOutcome = o.track(reader.read().then(() => { throw Error("public pending read unexpectedly fulfilled"); }, error => {
+          assert.equal(error, caller.signal.reason);
+        }));
+        await Promise.race([readEntered.promise, readOutcome.then(() => { throw Error("no original pending read"); })]);
+        caller.abort(Error("fixture public cancellation")); await readOutcome;
+      }
+      await arrived(cancelEntered.promise);
+      assert.equal(cancels, 1); assert.equal(original.locked, true); assert.ok(bodyBudgetCharged() > 0);
+      queue.resolve(); assert.equal(await arrived(accountingDone.promise), true);
+      await tick(); // Completion observers have run; actual accounting is already joined.
+      assert.equal(events.length, 1); assert.equal(events[0].request_id, "stream-completion");
+      assert.equal(events[0].actual_cost_micros, normalization ? 0 : 7); assert.equal(events[0].status_code, normalization ? 429 : 200); assert.equal(posts, 1);
+      assert.equal(original.locked, true); assert.ok(bodyBudgetCharged() > 0, "normalizer wrapper is not ORIGINAL cancellation retirement");
+      if (rejects) cancellation.reject(undefined); else cancellation.resolve();
+      assert.equal((await completed.promise).failed, false); await tick();
+      assert.equal(original.locked, false); assert.equal(cancels, 1); assert.equal(bodyBudgetCharged(), 0);
+      // Unconditional teardown joins all actual context roots before releasing the client lock.
+    });
+  });
+}
