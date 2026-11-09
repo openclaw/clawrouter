@@ -223,7 +223,7 @@ export default {async fetch(request,bindings,context){
    const healthy=await readIdentityResponse(()=>cache.match(cacheKey));
    await put(cacheKey,new Response(JSON.stringify({...healthy,ignored:'x'.repeat(2097152)}),{headers:{'content-type':'application/json','cache-control':'max-age=60'}}));
    clearHotCaches();const originalCalls=traces.admissions,posts=traces.providerPosts;const denied=await send();
-   check(denied.status===503&&denied.body.error.code==='identity_admission_unavailable','actual cache denial');check(traces.admissions===originalCalls&&traces.providerPosts===posts,'no cache authority/provider rescue');
+   check(denied.status===503&&denied.errorCode==='identity_admission_unavailable'&&denied.body.type==='error'&&denied.body.error?.type==='api_error'&&!Object.hasOwn(denied.body.error,'code'),'actual cache denial');check(traces.admissions===originalCalls&&traces.providerPosts===posts,'no cache authority/provider rescue');
   }
   if(mode==='refresh'){
    const auth=await authenticateProxyKey(new Headers(headers),env,[{id:'anthropic',tokenRef:'anthropic'}]),oldPolicy=auth.policy,oldAdmission=proxyAdmission(auth),oldPrincipal=auth.principalId,oldTiers=auth.serviceTiers;
