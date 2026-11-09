@@ -128,6 +128,20 @@ export function analyzePairRepeats(runs) {
     if (runs[i].records.some(row => !money(row.elapsedMs))) throw new Error('invalid_pair_elapsed');
   }
   const candidate = reports[0].candidate;
+  const candidateModelUse = { cheapOnlyAttempts: 0, strongOnlyAttempts: 0, mixedAttempts: 0,
+    noCallAttempts: 0, mixedWinsOverCheap: 0 };
+  for (const run of runs) {
+    for (const row of run.records.filter(row => row.strategy === candidate)) {
+      const used = new Set(run.calls.filter(call => call.trialId === `${row.taskId}:${candidate}`).map(call => call.model));
+      if (!used.size) candidateModelUse.noCallAttempts++;
+      else if (used.size === 1) candidateModelUse[used.has(run.config.cheap) ? 'cheapOnlyAttempts' : 'strongOnlyAttempts']++;
+      else {
+        candidateModelUse.mixedAttempts++;
+        const cheapRow = run.records.find(other => other.taskId === row.taskId && other.strategy === 'cheap');
+        if (row.score > cheapRow.score) candidateModelUse.mixedWinsOverCheap++;
+      }
+    }
+  }
   const totals = runs[0].strategies.map(strategy => {
     const rows = runs.flatMap(run => run.records.filter(row => row.strategy === strategy));
     return { strategy, solved: sum(rows.map(row => row.score)), attempts: rows.length,
@@ -152,7 +166,7 @@ export function analyzePairRepeats(runs) {
     rescuedBeyondCheap: comparisons[0].wins > 0 };
   return { version: 1, kind: 'observed-pair-repeat-analysis', sourceSha: runs[0].sourceSha,
     blocks: runs.length, distinctTasks: reports[0].cases, attemptsPerStrategy: selected.attempts,
-    inputDigests: reports.map(report => report.inputDigest), totals, comparisons,
+    inputDigests: reports.map(report => report.inputDigest), totals, comparisons, candidateModelUse,
     costSavingVersusStrong: saving, latencyRatioVersusStrong: latencyRatio,
     cheapDominatesCandidate: cheap.solved >= selected.solved && comparisons[0].wins === 0
       && cheap.costMicros <= selected.costMicros && cheap.elapsedMs <= selected.elapsedMs,
@@ -161,6 +175,7 @@ export function analyzePairRepeats(runs) {
     spentOrReservedMicros: runs.at(-1).spentOrReservedMicros,
     limitations: ['Repeated attempts are not independent tasks or evidence of statistical significance.',
       'The fixed pilot screen is exploratory; passing it is not production approval.',
+      'A single-model candidate win is not evidence of model mixing; matched retry controls are still needed.',
       'Costs use the input reports\' tariffs and elapsed time is summed, not concurrent wall time.',
       'Internal consistency does not establish authenticity or rule out omitted experiments.'] };
 }

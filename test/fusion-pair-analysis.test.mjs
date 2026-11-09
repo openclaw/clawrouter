@@ -184,3 +184,19 @@ test('false accepts include a passing verdict with mismatched qualified test cou
   assert.equal(report.totals.find(row => row.strategy === 'scope').falseAccepts, 1);
   assert.equal(report.pilotScreen.passed, false);
 });
+
+test('an arm win from another single-model sample is not counted as a mixed-model win', () => {
+  const runs = repeats();
+  const first = analyzePairRepeats(runs);
+  assert.equal(first.comparisons[0].wins, 2);
+  assert.deepEqual(first.candidateModelUse, { cheapOnlyAttempts: 0, strongOnlyAttempts: 4,
+    mixedAttempts: 0, noCallAttempts: 0, mixedWinsOverCheap: 0 });
+  const call = runs[0].calls.find(call => call.trialId === 'case-1:scope');
+  call.costMicros -= 10;
+  runs[0].calls.push({ ...call, model: 'cheap-model', costMicros: 10 });
+  runs[0].records.find(row => row.taskId === 'case-1' && row.strategy === 'scope').calls++;
+  const mixed = analyzePairRepeats(runs);
+  assert.equal(mixed.candidateModelUse.mixedAttempts, 1);
+  assert.equal(mixed.candidateModelUse.mixedWinsOverCheap, 1);
+  assert.equal(mixed.candidateModelUse.strongOnlyAttempts, 3);
+});

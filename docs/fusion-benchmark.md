@@ -97,6 +97,10 @@ qualification digests, model pins, settings and receipts, and continue the
 previous block's spending ledger. Duplicate reports and missing elapsed times
 are rejected. The output distinguishes distinct tasks from repeated attempts,
 sums costs and elapsed times, and reports false accepts and cheap-model dominance.
+It also reports which candidate attempts actually used both models. An observed
+win from a cheap-only or strong-only candidate is another sample from that model,
+not evidence of model mixing. Even mixed-model wins need matched retry controls
+before attributing a benefit to collaboration.
 
 The repeat summary applies a fixed exploratory screen: at least 75% solved,
 no lost strong-control attempt, at least 20% savings, at most twice strong-control
