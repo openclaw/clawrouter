@@ -1,6 +1,7 @@
+import { admitAccountingJson, copyAccountingJson, accountingObjectProjection, accountingArrayProjection, accountingStringCapacity, accountingNumberCapacity } from "./json-body.ts";
 import { assertManagedInputLive, bindManagedInput, inputReceipt, inputUnavailable, uploadJob, validateInputAllocation, type ManagedInputAllocation, type ManagedInputBinding, type ManagedInputReceipt } from "./managed-input-receipt.ts";
-import type { BudgetReservationIntent, BudgetReservationPlan } from "./accounting.ts";
-import { accountingReceipt, type AccountingFacts, type AccountingOutcome } from "./proxy-accounting.ts";
+import { admitBudgetPlan, type BudgetReservationIntent, type BudgetReservationPlan } from "./accounting.ts";
+import { admitAccountingFacts, prospectiveAccountingEvent, accountingReceipt, type AccountingFacts, type AccountingOutcome } from "./proxy-accounting.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import type { UsageIngestReceipt } from "./ledgers.ts";
 import type { ManagedFileDescriptor, ManagedObservationLoss, ManagedProtocol } from "./managed-lifecycle-types.ts";
@@ -159,13 +160,14 @@ export class BackgroundStore {
   }
 
   admit(input: BackgroundAdmission): BackgroundJob {
+    admitBackgroundAdmission(input);
     if (!/^bg_[0-9a-f]{32}$/.test(input.id) || !Number.isSafeInteger(input.admittedAt) || Math.abs(Date.now() - input.admittedAt) > 60_000) invalid();
     if (input.managed) {
       validateManagedAdmission(input);
       if (this.managedRetry(input.managed, input.owner.policyGeneration)) throw new HttpError(409, "background_job_exists", "managed admission already exists");
     }
     if (this.get(input.id)) throw new HttpError(409, "background_job_exists", "background admission already exists");
-    const job = newBackgroundJob(input);
+    const job = copyAccountingJson(newBackgroundJob(input), "capsule");
     encode(job);
     const active = [...this.sql.exec<{ count: number }>("SELECT COUNT(*) AS count FROM responses_background WHERE phase IN ('admitting', 'observing')")][0].count;
     if (active >= backgroundActiveLimit) capacity();
@@ -182,11 +184,13 @@ export class BackgroundStore {
 
   // Input upload and generation share this row, never a global asset index.
   allocateInput(input: ManagedInputAllocation): BackgroundJob {
+    admitInputAllocation(input);
+    const uploadInput = { ...input.admission, managed: undefined, ...input.upload };
     validateInputAllocation(input);
     if (this.get(input.admission.id)) inputUnavailable();
     const job = this.admit(input.admission);
     job.inputReceipt = { binding: input.binding, state: "pending", imageId: null, createClaimed: false,
-      upload: newBackgroundJob({ ...input.admission, managed: undefined, ...input.upload }) };
+      upload: copyAccountingJson(newBackgroundJob(uploadInput), "capsule") };
     this.save(job); return job;
   }
 
@@ -318,6 +322,10 @@ export class BackgroundStore {
       || managed.terminal !== "succeeded" || managed.observationUnavailable || Date.now() >= job.replayUntil) {
       throw new HttpError(409, "managed_files_unavailable", "files require the original succeeded managed job before its retention deadline");
     }
+    admitAccountingJson(files, "capsule");
+    admitAccountingJson(accountingObjectProjection(job, { managed: accountingObjectProjection(managed, {
+      files: accountingArrayProjection(managed.files ?? [], files),
+    }) }), "capsule");
     const merged = new Map<string, ManagedFileDescriptor>();
     for (const entries of [managed.files ?? [], files]) {
       if (!Array.isArray(entries) || entries.length > 64) invalidFiles();
@@ -496,6 +504,49 @@ function invalid(): never { throw new HttpError(400, "background_request_invalid
 function missing(): never { throw new HttpError(404, "background_unavailable", "background recovery record is unavailable; this does not confirm settlement"); }
 
 function invalidFiles(): never { throw new HttpError(400, "managed_files_invalid", "managed files require at most 64 bounded native identifiers and media types"); }
+
+/** Complete paired NEW admission, shared by caller and durable owner. */
+export function admitInputAllocation(input: ManagedInputAllocation): void {
+  admitAccountingJson(input, "capsule");
+  admitBackgroundAdmission(input.admission);
+  const uploadInput = { ...input.admission, managed: undefined, ...input.upload };
+  admitBackgroundAdmission(uploadInput);
+  const prospective = newBackgroundJob(input.admission);
+  const uploadJob = newBackgroundJob(uploadInput);
+  prospective.inputReceipt = { binding: input.binding, state: "pending", imageId: null, createClaimed: false, upload: uploadJob };
+  admitAccountingJson(prospective, "capsule");
+  for (const parent of [prospective, prospectiveBackgroundJob(prospective), prospectiveBackgroundJob(prospective, true)]) for (const upload of [uploadJob, prospectiveBackgroundJob(uploadJob), prospectiveBackgroundJob(uploadJob, true)]) {
+    admitAccountingJson(accountingObjectProjection(parent, { inputReceipt: { ...prospective.inputReceipt,
+      state: "dispatch_unknown", imageId: accountingStringCapacity(16), upload } }), "capsule");
+  }
+}
+
+/** NEW admissions only. Receipt/outbox recovery never re-enters admission. */
+export function admitBackgroundAdmission(input: BackgroundAdmission): void {
+  admitAccountingJson(input, "capsule");
+  admitBudgetPlan(input.plan);
+  admitAccountingFacts(input.facts, input.plan);
+  // Maps below have at most four already-admitted entries; the borrowed facts
+  // remain references until the COMPLETE prospective row has passed.
+  const job = newBackgroundJob(input);
+  admitAccountingJson(job, "capsule");
+  admitAccountingJson(prospectiveBackgroundJob(job), "capsule");
+  admitAccountingJson(prospectiveBackgroundJob(job, true), "capsule");
+}
+
+function prospectiveBackgroundJob(job: BackgroundJob, terminal = false): Record<string, unknown> {
+  const number = accountingNumberCapacity();
+  const legs = job.legs.map(leg => ({ ...leg, reserve: "accepted", settlement: "unavailable", uncertainReserve: false, dispatched: false }));
+  const event = prospectiveAccountingEvent(job.facts!);
+  return { ...job, phase: "observing", amount: number, basis: accountingStringCapacity(Math.max(64, job.facts!.cost.basis.length)),
+    usage: "expired_by_retention", settlements: job.settlements.map(() => "unavailable"), lastError: "observation_unavailable",
+    legs, responseId: accountingStringCapacity(256), nextAttemptAt: number, attempts: number, contentRef: accountingStringCapacity(40),
+    // These are separate complete serialized states, not GC/heap credit. The
+    // existing freeze nulls facts/route before save; earlier graphs may remain.
+    facts: terminal ? null : job.facts, route: terminal ? null : job.route,
+    event: terminal ? event : null, managed: job.managed ? { ...job.managed, submission: "submission_unknown", upstreamId: accountingStringCapacity(128),
+      terminal: "succeeded", observationUnavailable: "canceled_or_deleted" } : undefined };
+}
 
 function newBackgroundJob(input: BackgroundAdmission): BackgroundJob {
   return {

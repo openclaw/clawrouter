@@ -437,6 +437,25 @@ test("retention-required WebSocket keeps reserve, retention, dispatch, send orde
   assert.deepEqual(order, ["reserve", "retention", "dispatch", "send"]);
 });
 
+for (const pinned of [false, true]) test(`accounting archive admission precedes ${pinned ? "pinned" : "unpinned"} reserve and send`, async t => {
+  const f = await websocketFixture(t, { budgets: 1, retain: true });
+  let reserves = 0, puts = 0;
+  const get = f.env.BUDGET_LEDGER.get.bind(f.env.BUDGET_LEDGER);
+  f.env.BUDGET_LEDGER.get = name => ({ fetch(url, init) {
+    if (new URL(url).pathname === "/reserve") reserves++;
+    return get(name).fetch(url, init);
+  } });
+  f.env.CONTENT_ARCHIVE = { async put() { puts++; } };
+  if (pinned) assert.equal((await f.create()).type, "response.completed");
+  const before = { reserves, puts, frames: f.frames.length, events: f.events.length };
+  const denied = await f.create({ archive_extension: Array(32769).fill(0) });
+  assert.equal(denied.type, "error"); assert.equal(denied.error.code, "accounting_preflight_unavailable");
+  assert.deepEqual({ reserves, puts, frames: f.frames.length }, { reserves: before.reserves, puts: before.puts, frames: before.frames });
+  assert.equal(f.events.length, before.events + 1);
+  assert.equal(f.events.at(-1).actual_cost_micros, 0);
+  assert.equal(f.events.at(-1).reserved_cost_micros, 0);
+});
+
 for (const budgetMode of ["soft", "reserve"]) test(`first-turn failover uses refreshed ${budgetMode} policy for reservation and dispatch`, async t => {
   const f = await websocketFixture(t, { budgets: 1, budgetMode: budgetMode === "soft" ? "reserve" : "soft" });
   const getGrant = f.env.GRANT_CREDENTIALS.get.bind(f.env.GRANT_CREDENTIALS);
