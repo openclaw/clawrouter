@@ -90,7 +90,7 @@
 
 - Preserve original budget-reservation failures and every ordered ledger/queue cleanup failure privately after all started operations settle. Keep the existing public accounting-unavailable error, acknowledged reservation IDs and queue recovery behavior.
 
-- Admit complete selected accounting intents, future receipts and retained-TEXT archives before owned effects, including tighter Search/cover sinks. Capture private facts, preserve original accounting IDs and durable recovery, stream admitted archives with bounded backings, and conservatively admit Fusion before its early synthesizer reservation. Resource denial does not truncate required accounting or imply a refund, rollback or heap bound.
+- Admit complete selected accounting intents, future receipts and retained-TEXT archives before owned effects, including tighter Search/cover sinks. Capture private facts, preserve original accounting IDs and durable recovery, stream admitted archives with bounded backings, and conservatively admit Fusion before its early synthesizer reservation. PixVerse allocation capacity denial stays terminal while ordinary lost-ACK recovery retains canonical IDs. Resource denial does not truncate required accounting or imply a refund, rollback or heap bound.
 
 - Bound selected dynamic provider preparation with one explicit allowance across configuration, templates, paths, queries, headers, signing and alternate preparation. Realtime uses a separate allowance per fresh authority observation, shared by its main and ASR stages; the handshake allowance remains separate. Preserve credential and transport semantics while making capacity denial terminal, keeping original abort precedence and accounting IDs; independent response controls own their own allowance.
 

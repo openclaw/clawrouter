@@ -115,7 +115,7 @@ SQL failure after an earlier commit retains its existing uncertainty.
 | --- | --- |
 | Copilot qualification callback | Existing callback uses the receipt factory; its returned cost binds later reserve admission. No caller/qualification transport change. |
 | Managed predictions | Existing prepare/addition calls reach caller and durable preflight; route and provider behavior unchanged. |
-| PixVerse paired generation/upload | Complete pair preflight is shared by caller and store; the existing allocation-recovery catch still needs the narrow terminal-brand escape described below. |
+| PixVerse paired generation/upload | Complete pair preflight is shared by caller and store. A private capacity denial escapes unchanged before recovery lookup; ordinary lost-ACK/concurrent-winner recovery preserves canonical binding and IDs. |
 | Realtime WebSocket | Funded-unit closures retain extracted facts and sinks, not the options/Env/auth/selection/body graph. No session-wide child-count claim. |
 | Private cover | Seed and future receipt plus every actual control message fit the existing tighter sink before funding. No public activation. |
 | Background store | NEW admission/additions only; existing finalization and recovery keep their original semantics. |
@@ -130,10 +130,12 @@ whole backing observations. Its held/rejected R2 sink and direct-ingest queue
 are explicitly injected; neither is platform queue-delivery proof. Existing
 PixVerse Node/SQLite coverage is not public Workerd accounting proof.
 
-Publication remains held: `pixverse-inputs.ts` currently recovers any allocation
-error through a same-key lookup. A new capacity denial must escape that catch
-before lookup, including a concurrent canonical winner. That necessary caller
-fence is outside the fifteen-file lease and awaits its explicit scope amendment.
+The PixVerse allocation catch recognizes only the private admission brand. It
+rethrows that identical failure before recovery lookup, even when a canonical
+winner exists. An ordinary failure with the same HTTP status and code remains
+eligible for the existing same-key recovery; it neither replays allocation nor
+changes original IDs. The authored caller/SQLite regression distinguishes both
+paths without claiming public Workerd proof.
 
 Local semantic tests, TypeScript checking and Workerd execution are UNRUN in
 CODE_ONLY/HOSTED mode. Source/syntax checks are not runtime qualification. Fresh
