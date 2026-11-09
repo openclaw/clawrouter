@@ -1,4 +1,6 @@
 import { perRequestAuthority } from "./typescript-setup.mjs";
+// The static import graph precedes this execution marker.
+console.error("http-continuation-phase", JSON.stringify({ phase: "module-execution-start" }));
 perRequestAuthority();
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -9,9 +11,14 @@ import { materializeGrantCredentials, putGrantCredentials, revokeGrantCredential
 import { HttpError, sha256Hex } from "../utils.ts";
 import { HttpContinuation } from "../http-continuation.ts";
 import { fixture, grantKeys } from "./http-continuation-fixture.mjs";
+const { bodyBudgetCharged } = await import("../body-budget.ts");
+const { ProxyCompletion } = await import("../proxy-completion.ts");
+console.error("http-continuation-phase", JSON.stringify({ phase: "imports-complete" }));
 
 test("two-account HTTP requests pin response and turn identities while stateless calls keep rotating", async t => {
-  const f = await fixture(t);
+  const diagnostic = state => { try { if (typeof t.log === "function") t.log("http-continuation-phase " + JSON.stringify({ case: "first", ...state })); } catch {} };
+  diagnostic({ phase: "first-test-entry" });
+  const f = await fixture(t, true, { diagnostic });
   f.response = (_request, index) => Response.json({ object: "response", id: `resp_${index}`, status: "completed" }, { headers: { "x-codex-turn-state": index === 1 ? "turn_original" : `turn_next_${index}` } });
   const first = await f.request();
   assert.equal(first.status, 200); assert.equal(first.headers.get("x-codex-turn-state"), "turn_original");
@@ -145,18 +152,48 @@ for (const fixedCost of [null, 7]) {
   test(`failed alternate dispatch retains one ${fixedCost === null ? "measured bound" : "fixed tariff"} in both SQL ledgers`, async t => {
     const f = await fixture(t, true, { limit: 1_000_000, fixedCost });
     const cancellation = Promise.withResolvers();
-    let canceled = false, response;
+    let canceled = false, released = false, response;
+    const releaseCancellation = () => { if (!released) { released = true; cancellation.resolve(); } };
+    const children = new WeakSet(), completions = new Map(), initialCharge = bodyBudgetCharged();
+    const fork = ProxyCompletion.prototype.fork;
+    t.mock.method(ProxyCompletion.prototype, "fork", function(...args) {
+      const child = Reflect.apply(fork, this, args);
+      children.add(child);
+      if (!children.has(this) && !completions.has(this)) {
+        const observed = { completion: this.completion, settlements: 0 };
+        observed.outcome = observed.completion.then(value => {
+          observed.settlements++; return { failed: false, value };
+        }, error => {
+          observed.settlements++; return { failed: true, error };
+        });
+        completions.set(this, observed);
+      }
+      return child;
+    });
+    const diagnostic = phase => { try { if (typeof t.log === "function") t.log("http-continuation-phase " + JSON.stringify({ case: fixedCost === null ? "measured-bound" : "fixed-tariff", phase, cancelEntered: canceled, cancelReleased: released })); } catch {} };
     f.response = (_request, index) => {
       if (index === 1) return new Response(new ReadableStream({ cancel() { canceled = true; return cancellation.promise; } }, { highWaterMark: 0 }), { status: 429 });
       assert.equal(canceled, true, "discard the first body before dispatch without waiting for its cleanup");
       throw new Error("fixture connection lost after alternate dispatch");
     };
+    let hasPrimary = false, primary;
     try {
+      diagnostic("request");
       response = await f.request({ max_output_tokens: 32 });
       assert.equal(response.status, 502);
-      assert.equal(JSON.parse(await f.consume(response)).error.code, "provider_unavailable");
+      diagnostic("public-body");
+      assert.equal(JSON.parse(await response.text()).error.code, "provider_unavailable");
       assert.equal(f.sent.length, 2);
       assert.deepEqual(f.sent.map(request => request.headers.get("chatgpt-account-id")), ["synthetic-account-0", "synthetic-account-1"]);
+      assert.equal(canceled, true); assert.equal(released, false);
+      assert.equal(completions.size, 1); const [[owner, completion]] = completions;
+      assert.equal(completion.completion, owner.completion);
+      assert.equal(children.has(owner), false, "observe the TOP owner, not a completed child");
+      assert.equal(completion.settlements, 0, "ORIGINAL top completion waits for FIRST cancel");
+      assert.equal(initialCharge, 0); assert.equal(bodyBudgetCharged(), initialCharge);
+      releaseCancellation(); diagnostic("background-drain"); await f.drain(); diagnostic("accounting");
+      assert.equal(completion.settlements, 1); assert.equal((await completion.outcome).failed, false);
+      assert.equal(bodyBudgetCharged(), initialCharge);
       assert.equal(f.events.length, 1);
       const [event] = f.events;
       assert.equal(event.status, "provider_error"); assert.equal(event.status_code, 502);
@@ -165,11 +202,18 @@ for (const fixedCost of [null, 7]) {
       assert.equal(event.cost_basis, fixedCost === null ? "manifest_reservation" : "policy_fixed");
       assert.equal(event.total_tokens, null);
       await assertBudgets(f, [event.actual_cost_micros]);
-    } finally {
-      cancellation.resolve();
+    } catch (error) { hasPrimary = true; primary = error; }
+    finally {
+      releaseCancellation();
       await response?.body?.cancel().catch(() => {});
-      await f.drain();
+      const outcomes = await Promise.all([
+        f.drain().then(() => ({ failed: false }), error => ({ failed: true, error })),
+        ...[...completions.values()].map(observed => observed.outcome),
+      ]);
+      const failures = outcomes.filter(outcome => outcome.failed).map(outcome => outcome.error);
+      if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "fixture completion cleanup failed");
     }
+    if (hasPrimary) throw primary;
   });
 }
 
@@ -460,14 +504,29 @@ test("caller abort during registration cancels the single owned reader and does 
   };
   const upstream = stream(['{"id":"resp_aborted"}'], { "content-type": "application/json" }, false);
   f.response = () => upstream.response;
-  const response = await f.request({}, {}, "/v1/responses", controller.signal);
-  const consumed = assert.rejects(response.text(), /fixture caller abort/);
-  await entered.promise; controller.abort(new Error("fixture caller abort"));
-  await consumed; await f.drain();
-  assert.equal(upstream.state.canceled, true); assert.equal(f.events.length, 1);
-  assert.equal(f.events[0].actual_cost_micros, 7); assert.equal(f.events[0].status, "client_error");
-  gate.resolve(); await setImmediate();
-  assert.equal(f.events.length, 1);
+  let hasPrimary = false, primary;
+  try {
+    const response = await f.request({}, {}, "/v1/responses", controller.signal);
+    const consumed = assert.rejects(response.text(), /fixture caller abort/);
+    const consumedOutcome = consumed.then(value => ({ failed: false, value }), error => ({ failed: true, error }));
+    const arrival = await Promise.race([entered.promise.then(() => ({ entered: true })),
+      consumedOutcome.then(outcome => ({ entered: false, outcome }))]);
+    if (!arrival.entered) {
+      if (arrival.outcome.failed) throw arrival.outcome.error;
+      assert.fail("consumption settled before registration arrival");
+    }
+    controller.abort(new Error("fixture caller abort"));
+    await consumed; gate.resolve(); await f.drain();
+    assert.equal(upstream.state.canceled, true); assert.equal(f.events.length, 1);
+    assert.equal(f.events[0].actual_cost_micros, 7); assert.equal(f.events[0].status, "client_error");
+    await setImmediate(); assert.equal(f.events.length, 1);
+  } catch (error) { hasPrimary = true; primary = error; }
+  finally {
+    gate.resolve();
+    try { await f.drain(); }
+    catch (error) { throw new AggregateError([...(hasPrimary ? [primary] : []), error], "registration fixture cleanup failed"); }
+  }
+  if (hasPrimary) throw primary;
 });
 
 for (const phase of ["json", "sse_before_terminal", "sse_after_terminal"]) test(`Responses ${phase} cancellation during projection preserves one receipt and stops identity publication`, async t => {
@@ -556,48 +615,138 @@ test("pre-header first cause survives later aborts and late fetch rejection for 
   }
 });
 
+async function withHeldHttpRoots(t, f, release, abortOnFailure, run) {
+  const { default: worker } = await import("../index.ts");
+  const roots = [];
+  let hasPrimary = false, primary, driverCompleted = false, cleanupTask, observer;
+  // Expected failures belong to a named producer, never to a reason value.
+  const start = (thunk, expected = false) => {
+    const row = { expected }; roots.push(row);
+    try { row.actual = Promise.resolve(thunk()); }
+    catch (error) { row.actual = Promise.reject(error); }
+    row.outcome = row.actual.then(value => ({ failed: false, value }), error => ({ failed: true, error }));
+    return row;
+  };
+  const driver = {
+    start,
+    request(thunk) {
+      const request = start(thunk);
+      const body = start(() => request.outcome.then(outcome => outcome.failed ? undefined : outcome.value.text()));
+      return { request, body };
+    },
+    async arrival(entered, row) {
+      const result = await Promise.race([entered.then(() => ({ entered: true })), row.outcome.then(outcome => ({ entered: false, outcome }))]);
+      if (!result.entered) {
+        if (result.outcome.failed) throw result.outcome.error;
+        assert.fail("held HTTP producer completed before arrival");
+      }
+    },
+    drain: () => start(() => f.drain()).actual,
+  };
+  const cleanup = () => cleanupTask ??= Promise.resolve().then(async () => {
+    const failures = [];
+    if (hasPrimary || !driverCompleted) {
+      try { abortOnFailure(hasPrimary ? primary : new Error("fixture teardown before driver completion")); }
+      catch (error) { failures.push(error); }
+    }
+    try { release(); } catch (error) { failures.push(error); }
+    let joined = 0;
+    const join = async () => {
+      while (joined < roots.length) {
+        const row = roots[joined++];
+        try {
+          const outcome = await row.outcome;
+          if (outcome.failed && !row.expected) failures.push(outcome.error);
+        } catch (error) { failures.push(error); }
+      }
+    };
+    await join(); start(() => f.drain()); await join();
+    try { observer?.mock.restore(); } catch (error) { failures.push(error); }
+    return failures;
+  });
+  const finish = async () => {
+    const failures = await cleanup();
+    if (failures.length) throw new AggregateError([...(hasPrimary ? [primary] : []), ...failures], "held HTTP fixture cleanup failed");
+  };
+  t.after(finish);
+  try {
+    const fetch = worker.fetch;
+    observer = t.mock.method(worker, "fetch", function (request, env, context) {
+      if (env !== f.env) return fetch.call(this, request, env, context);
+      return fetch.call(this, request, env, { ...context, waitUntil(promise) {
+        start(() => promise); return context.waitUntil(promise);
+      } });
+    });
+    await run(driver); driverCompleted = true;
+  } catch (error) { hasPrimary = true; primary = error; }
+  finally { await finish(); }
+  if (hasPrimary) throw primary;
+}
+
 test("a response arriving after the deadline is retired without publication or a second receipt", async t => {
-  const deadline = await endpointDeadline(t), f = await fixture(t, false, { limit: 1_000_000, fixedCost: 7 });
+  const deadline = await endpointDeadline(t), f = await fixture(t, false, { limit: 1_000_000, fixedCost: 7 }), caller = new AbortController();
   const entered = Promise.withResolvers(), gate = Promise.withResolvers();
-  f.response = () => { entered.resolve(); return gate.promise; };
-  const pending = f.request();
-  await entered.promise; deadline();
-  const response = await pending;
-  assert.equal(response.status, 502); await f.consume(response);
-  let cancels = 0;
-  gate.resolve(new Response(new ReadableStream({ cancel() { cancels++; return Promise.reject(new Error("fixture cleanup")); } }, { highWaterMark: 0 }), { headers: { "x-codex-turn-state": "never_published" } }));
-  await setImmediate();
-  assert.equal(cancels, 1); assert.equal(f.events.length, 1);
-  assert.equal(f.events[0].status, "timeout");
-  assert.equal(f.bindings().length, 0);
-  await assertBudgets(f, [7]);
+  let cancels = 0, released = false, started = false, driver;
+  const release = () => {
+    if (released) return; released = true;
+    gate.resolve(started ? new Response(new ReadableStream({ cancel() {
+      cancels++; return driver.start(() => Promise.reject(new Error("fixture cleanup")), true).actual;
+    } }, { highWaterMark: 0 }), { headers: { "x-codex-turn-state": "never_published" } }) : undefined);
+  };
+  await withHeldHttpRoots(t, f, release, reason => caller.abort(reason), async d => {
+    driver = d; const original = d.start(() => gate.promise);
+    f.response = () => { started = true; entered.resolve(); return original.actual; };
+    const pending = d.request(() => f.request({}, {}, "/v1/responses", caller.signal));
+    await d.arrival(entered.promise, pending.request); deadline();
+    const response = await pending.request.actual;
+    assert.equal(response.status, 502); await pending.body.actual;
+    assert.equal(released, false);
+    release(); await original.outcome; await setImmediate(); await d.drain();
+    assert.equal(cancels, 1); assert.equal(f.events.length, 1);
+    assert.equal(f.events[0].status, "timeout");
+    assert.equal(f.bindings().length, 0);
+    await assertBudgets(f, [7]);
+  });
 });
 
 test("header registration keeps the first cause and never publishes a late ACK or settles twice", async t => {
   const deadline = await endpointDeadline(t);
   for (const first of ["caller", "publication"]) for (const late of ["resolve", "reject"]) {
     const f = await fixture(t, false, { limit: 1_000_000, fixedCost: null }), caller = new AbortController();
-    const entered = Promise.withResolvers(), gate = Promise.withResolvers();
-    f.env.ACCESS_CONTROL.beforeFetch = async (name, request) => {
-      if (name.startsWith("http-continuations:") && (await request.clone().json()).action === "register") { entered.resolve(); await gate.promise; }
+    const entered = Promise.withResolvers(), gate = Promise.withResolvers(), cancellation = Promise.withResolvers();
+    let cancels = 0, released = false;
+    const release = () => {
+      if (released) return; released = true;
+      if (late === "resolve") gate.resolve(); else gate.reject(new Error("late publication failure"));
+      cancellation.resolve();
     };
-    let cancels = 0;
-    f.response = () => new Response(new ReadableStream({ cancel() { cancels++; caller.abort(); return new Promise(() => {}); } }, { highWaterMark: 0 }), { headers: { "x-codex-turn-state": "held_turn" } });
-    const pending = f.request({ max_output_tokens: 32 }, {}, "/v1/responses", caller.signal);
-    await entered.promise;
-    assert.equal(deadline(), false, "endpoint timer retires before header registration");
-    if (first === "caller") caller.abort(new Error("fixture caller"));
-    else gate.reject(new Error("fixture publication failure"));
-    const response = await pending;
-    assert.equal(response.status, 503); assert.equal(response.headers.has("x-codex-turn-state"), false);
-    await f.consume(response);
-    if (late === "resolve") gate.resolve(); else gate.reject(new Error("late publication failure"));
-    await setImmediate(); await f.drain();
-    assert.equal(cancels, 1); assert.equal(f.events.length, 1);
-    assert.equal(f.events[0].status, first === "caller" ? "client_error" : "provider_error");
-    assert.equal(f.events[0].status_code, 503);
-    assert.equal(f.events[0].actual_cost_micros, f.events[0].reserved_cost_micros);
-    await assertBudgets(f, [f.events[0].actual_cost_micros]);
+    await withHeldHttpRoots(t, f, release, reason => caller.abort(reason), async d => {
+      d.start(() => gate.promise, true); d.start(() => cancellation.promise);
+      f.env.ACCESS_CONTROL.beforeFetch = (name, request) => {
+        const row = d.start(async () => {
+          if (name.startsWith("http-continuations:") && (await request.clone().json()).action === "register") {
+            entered.resolve();
+            try { await gate.promise; } catch (error) { row.expected = true; throw error; }
+          }
+        });
+        return row.actual;
+      };
+      f.response = () => new Response(new ReadableStream({ cancel() { cancels++; caller.abort(); return cancellation.promise; } }, { highWaterMark: 0 }), { headers: { "x-codex-turn-state": "held_turn" } });
+      const pending = d.request(() => f.request({ max_output_tokens: 32 }, {}, "/v1/responses", caller.signal));
+      await d.arrival(entered.promise, pending.request);
+      assert.equal(deadline(), false, "endpoint timer retires before header registration");
+      if (first === "caller") caller.abort(new Error("fixture caller"));
+      else gate.reject(new Error("fixture publication failure"));
+      const response = await pending.request.actual;
+      assert.equal(response.status, 503); assert.equal(response.headers.has("x-codex-turn-state"), false);
+      await pending.body.actual; assert.equal(released, false);
+      release(); await setImmediate(); await d.drain();
+      assert.equal(cancels, 1); assert.equal(f.events.length, 1);
+      assert.equal(f.events[0].status, first === "caller" ? "client_error" : "provider_error");
+      assert.equal(f.events[0].status_code, 503);
+      assert.equal(f.events[0].actual_cost_micros, f.events[0].reserved_cost_micros);
+      await assertBudgets(f, [f.events[0].actual_cost_micros]);
+    });
   }
 });
 
@@ -605,35 +754,38 @@ test("first-event sniffing keeps its deadline while delivered JSON, SSE and body
   const deadline = await endpointDeadline(t);
   for (const phase of ["sniff", "json", "sse", "registration"]) {
     const f = await fixture(t, false, { limit: 1_000_000, fixedCost: null }), caller = new AbortController();
-    const entered = Promise.withResolvers(), gate = Promise.withResolvers();
+    const entered = Promise.withResolvers(), gate = Promise.withResolvers(), cancellation = Promise.withResolvers();
     let pulls = 0, cancels = 0;
-    if (phase === "registration") f.env.ACCESS_CONTROL.beforeFetch = async (name, request) => {
-      if (name.startsWith("http-continuations:") && (await request.clone().json()).action === "register") { entered.resolve(); await gate.promise; }
-    };
-    f.response = () => new Response(new ReadableStream({
-      pull(controller) {
-        if (pulls++ === 0 && phase === "sse") controller.enqueue(new TextEncoder().encode('data: {"type":"response.created"}\n\n'));
-        else if (pulls === 1 && phase === "registration") controller.enqueue(new TextEncoder().encode('{"id":"response_held"}'));
-        else entered.resolve();
-      },
-      cancel() { cancels++; return new Promise(() => {}); },
-    }, { highWaterMark: 0 }), { headers: { "content-type": phase === "sniff" || phase === "sse" ? "text/event-stream" : "application/json" } });
-    const pending = f.request({ stream: true, max_output_tokens: 32 }, {}, "/v1/responses", caller.signal);
-    let response, consumed;
-    if (phase !== "sniff") {
-      response = await pending; assert.equal(response.status, 200);
-      consumed = assert.rejects(response.text(), /fixture caller/);
-    }
-    await entered.promise;
-    assert.equal(deadline(), phase === "sniff", "only first-event normalization retains the endpoint timer");
-    if (phase !== "sniff") caller.abort(new Error("fixture caller after endpoint deadline retirement"));
-    if (phase === "sniff") { response = await pending; assert.equal(response.status, 502); await response.text(); }
-    else await consumed;
-    await f.drain(); gate.resolve(); await setImmediate();
-    assert.equal(cancels, 1); assert.equal(f.events.length, 1);
-    assert.equal(f.events[0].status, phase === "sniff" ? "timeout" : "client_error"); assert.equal(f.events[0].status_code, phase === "sniff" ? 502 : 200);
-    assert.equal(f.events[0].actual_cost_micros, f.events[0].reserved_cost_micros);
-    await assertBudgets(f, [f.events[0].actual_cost_micros]);
+    const release = () => { gate.resolve(); cancellation.resolve(); };
+    await withHeldHttpRoots(t, f, release, reason => caller.abort(reason), async d => {
+      d.start(() => gate.promise); d.start(() => cancellation.promise);
+      if (phase === "registration") f.env.ACCESS_CONTROL.beforeFetch = (name, request) => d.start(async () => {
+        if (name.startsWith("http-continuations:") && (await request.clone().json()).action === "register") { entered.resolve(); await gate.promise; }
+      }).actual;
+      f.response = () => new Response(new ReadableStream({
+        pull(controller) {
+          if (pulls++ === 0 && phase === "sse") controller.enqueue(new TextEncoder().encode('data: {"type":"response.created"}\n\n'));
+          else if (pulls === 1 && phase === "registration") controller.enqueue(new TextEncoder().encode('{"id":"response_held"}'));
+          else entered.resolve();
+        },
+        cancel() { cancels++; return cancellation.promise; },
+      }, { highWaterMark: 0 }), { headers: { "content-type": phase === "sniff" || phase === "sse" ? "text/event-stream" : "application/json" } });
+      const pending = d.request(() => f.request({ stream: true, max_output_tokens: 32 }, {}, "/v1/responses", caller.signal));
+      let response;
+      if (phase !== "sniff") {
+        response = await pending.request.actual; assert.equal(response.status, 200);
+      }
+      await d.arrival(entered.promise, phase === "sniff" ? pending.request : pending.body);
+      assert.equal(deadline(), phase === "sniff", "only first-event normalization retains the endpoint timer");
+      if (phase !== "sniff") caller.abort(new Error("fixture caller after endpoint deadline retirement"));
+      if (phase === "sniff") { response = await pending.request.actual; assert.equal(response.status, 502); await pending.body.actual; }
+      else { await assert.rejects(pending.body.actual, /fixture caller/); pending.body.expected = true; }
+      release(); await d.drain(); await setImmediate();
+      assert.equal(cancels, 1); assert.equal(f.events.length, 1);
+      assert.equal(f.events[0].status, phase === "sniff" ? "timeout" : "client_error"); assert.equal(f.events[0].status_code, phase === "sniff" ? 502 : 200);
+      assert.equal(f.events[0].actual_cost_micros, f.events[0].reserved_cost_micros);
+      await assertBudgets(f, [f.events[0].actual_cost_micros]);
+    });
   }
 });
 
@@ -686,43 +838,50 @@ for (const late of ["response", "rejection"]) test(`Fusion invocation watchdog o
     if (delay === 1_000) timers.push(timer);
     return schedule(() => timer.fire(), delay);
   });
-  const f = await fixture(t, false, { limit: 1_000_000, fixedCost: 7 });
+  const f = await fixture(t, false, { limit: 1_000_000, fixedCost: 7 }), caller = new AbortController();
   f.values.set("config/fusion", { enabled: true, adviserModels: ["openai/gpt-4.1-mini"], aggregatorModel: "openai/gpt-4.1-mini", adviserTimeoutMs: 1_000 });
   const entered = Promise.withResolvers(), upstream = Promise.withResolvers();
-  f.response = (_request, index) => {
-    if (index === 1) { entered.resolve(); return upstream.promise; }
-    return Response.json({ choices: [{ message: { content: "fixture complete" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+  let canceled = 0, released = false, started = false;
+  const release = () => {
+    if (released) return; released = true;
+    if (late === "response") upstream.resolve(started ? new Response(new ReadableStream({ cancel() { canceled++; } }, { highWaterMark: 0 })) : undefined);
+    else upstream.reject(new Error("fixture late upstream failure"));
   };
-  const pending = f.request({ model: "clawrouter/fusion", messages: [{ role: "user", content: "fixture" }] }, {}, "/v1/chat/completions");
-  await entered.promise;
-  assert.equal(f.sent.length, 1);
-  for (const owner of ["default:fixture", "provider:openai"]) assert.equal(f.env.BUDGET_LEDGER.get(owner).reservations().filter(row => row.dispatch_started === 1).length, 1);
-  // The invocation watchdog is registered after Fusion's controller timer and
-  // before the admitted HTTP request's timer. Exercise its earlier expiry alone.
-  assert.equal(timers.length, 3);
-  t.mock.timers.setTime(now + 1_000);
-  timers[1].fire();
-  const response = await pending;
-  assert.equal(response.status, 200); await f.consume(response);
-  assert.equal(timers[0].fired, false); assert.equal(timers[2].fired, false);
-  assert.equal(f.sent[0].signal.reason.cause, "deadline");
-  const expected = [
-    { stage: "fusion_adviser", status: "timeout", code: 502, cost: 7 },
-    { stage: "fusion_synthesizer", status: "success", code: 200, cost: 7 },
-  ];
-  const receipts = () => f.events.map(event => ({ stage: event.compound_request_stage, status: event.status, code: event.status_code, cost: event.actual_cost_micros })).sort((a, b) => a.stage.localeCompare(b.stage));
-  assert.deepEqual(receipts(), expected);
-  assert.equal(new Set(f.events.map(event => event.request_id)).size, 2);
-  assert.ok(f.events.every(event => event.cost_basis === "policy_fixed"));
-  assert.equal(f.events.find(event => event.compound_request_stage === "fusion_adviser").total_tokens, null);
-  await assertBudgets(f, [7, 7]);
-  let canceled = 0;
-  if (late === "response") upstream.resolve(new Response(new ReadableStream({ cancel() { canceled++; } }, { highWaterMark: 0 })));
-  else upstream.reject(new Error("fixture late upstream failure"));
-  await setImmediate(); await f.drain();
-  assert.equal(canceled, late === "response" ? 1 : 0);
-  assert.equal(f.sent.length, 2); assert.deepEqual(receipts(), expected);
-  await assertBudgets(f, [7, 7]);
+  await withHeldHttpRoots(t, f, release, reason => caller.abort(reason), async d => {
+    const original = d.start(() => upstream.promise, late === "rejection");
+    f.response = (_request, index) => {
+      if (index === 1) { started = true; entered.resolve(); return original.actual; }
+      return Response.json({ choices: [{ message: { content: "fixture complete" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+    };
+    const pending = d.request(() => f.request({ model: "clawrouter/fusion", messages: [{ role: "user", content: "fixture" }] }, {}, "/v1/chat/completions", caller.signal));
+    await d.arrival(entered.promise, pending.request);
+    assert.equal(f.sent.length, 1);
+    for (const owner of ["default:fixture", "provider:openai"]) assert.equal(f.env.BUDGET_LEDGER.get(owner).reservations().filter(row => row.dispatch_started === 1).length, 1);
+    // The invocation watchdog is registered after Fusion's controller timer and
+    // before the admitted HTTP request's timer. Exercise its earlier expiry alone.
+    assert.equal(timers.length, 3);
+    t.mock.timers.setTime(now + 1_000);
+    timers[1].fire();
+    const response = await pending.request.actual;
+    assert.equal(response.status, 200); await pending.body.actual; assert.equal(released, false);
+    assert.equal(timers[0].fired, false); assert.equal(timers[2].fired, false);
+    assert.equal(f.sent[0].signal.reason.cause, "deadline");
+    release(); await original.outcome; await d.drain();
+    const expected = [
+      { stage: "fusion_adviser", status: "timeout", code: 502, cost: 7 },
+      { stage: "fusion_synthesizer", status: "success", code: 200, cost: 7 },
+    ];
+    const receipts = () => f.events.map(event => ({ stage: event.compound_request_stage, status: event.status, code: event.status_code, cost: event.actual_cost_micros })).sort((a, b) => a.stage.localeCompare(b.stage));
+    assert.deepEqual(receipts(), expected);
+    assert.equal(new Set(f.events.map(event => event.request_id)).size, 2);
+    assert.ok(f.events.every(event => event.cost_basis === "policy_fixed"));
+    assert.equal(f.events.find(event => event.compound_request_stage === "fusion_adviser").total_tokens, null);
+    await assertBudgets(f, [7, 7]);
+    await setImmediate(); await d.drain();
+    assert.equal(canceled, late === "response" ? 1 : 0);
+    assert.equal(f.sent.length, 2); assert.deepEqual(receipts(), expected);
+    await assertBudgets(f, [7, 7]);
+  });
 });
 
 test("actual Fusion rejection cleanup preserves adviser and synthesizer status with both ledgers at zero", async t => {
@@ -750,30 +909,34 @@ for (const format of ["json", "sse"]) for (const origin of ["caller", "deadline"
   for (const status of [400, 429, 503]) for (const cleanup of ["pending", "rejecting"]) {
     const f = await fixture(t, false, { limit: 1_000_000, fixedCost: 7 }), caller = new AbortController();
     const entered = Promise.withResolvers(), disposal = Promise.withResolvers();
-    let cancels = 0, upstream;
-    f.response = () => upstream = new Response(new ReadableStream({
-      pull() { entered.resolve(); },
-      cancel() { cancels++; return cleanup === "pending" ? disposal.promise : Promise.reject(new Error("fixture cleanup rejection")); },
-    }, { highWaterMark: 0 }), { status, headers: { "content-type": format === "sse" ? "text/event-stream" : "application/json", "retry-after": "17" } });
-    try {
-      const pending = f.request({ stream: true }, {}, "/v1/responses", caller.signal);
-      await entered.promise;
+    let cancels = 0, upstream, released = false;
+    const release = () => { if (!released) { released = true; disposal.resolve(); } };
+    await withHeldHttpRoots(t, f, release, reason => caller.abort(reason), async d => {
+      d.start(() => disposal.promise);
+      f.response = () => upstream = new Response(new ReadableStream({
+        pull() { entered.resolve(); },
+        cancel() { cancels++; return cleanup === "pending" ? disposal.promise : d.start(() => Promise.reject(new Error("fixture cleanup rejection")), true).actual; },
+      }, { highWaterMark: 0 }), { status, headers: { "content-type": format === "sse" ? "text/event-stream" : "application/json", "retry-after": "17" } });
+      const pending = d.request(() => f.request({ stream: true }, {}, "/v1/responses", caller.signal));
+      await d.arrival(entered.promise, pending.request);
       if (origin === "caller") caller.abort(new Error("fixture caller during error normalization"));
       else assert.equal(deadline(), true, "error normalization still owns the endpoint timer");
-      const response = await pending;
+      const response = await pending.request.actual;
       assert.equal(response.status, status, "missing error details must not replace a known rejection with 502");
       assert.equal(response.headers.get("retry-after"), "17");
-      await assert.rejects(response.text(), origin === "caller" ? /fixture caller/ : /deadline/);
-      await f.drain();
+      await assert.rejects(pending.body.actual, origin === "caller" ? /fixture caller/ : /deadline/); pending.body.expected = true;
+      assert.equal(released, false);
+      if (cleanup === "pending") assert.equal(upstream.body.locked, true, "original reader remains owned while FIRST cancellation is pending");
+      release(); await d.drain();
       assert.equal(upstream.body.locked, false); assert.equal(cancels, 1);
       assert.equal(f.sent.length, 1); assert.equal(f.events.length, 1);
       assert.equal(f.events[0].status, status < 500 ? "client_error" : "provider_error");
       assert.equal(f.events[0].status_code, status); assert.equal(f.events[0].actual_cost_micros, 0);
       assert.equal(f.events[0].cost_basis, "none");
       await assertBudgets(f, [0]);
-    } finally { disposal.resolve(); }
-    await setImmediate();
-    assert.equal(f.events.length, 1, "late cleanup does not publish a second receipt");
+      await setImmediate();
+      assert.equal(f.events.length, 1, "late cleanup does not publish a second receipt");
+    });
   }
 });
 

@@ -176,25 +176,74 @@ for (const [name, headers] of Object.entries({ missing: { authorization: "" }, i
 for (const cause of ["fetch_rejection", "caller_abort", "deadline", "consumer_cancel"]) test("compact " + cause + " finalizes dispatched SQL exactly once", async t => {
   const f = fixture(t), caller = new AbortController();
   let enter; const entered = new Promise(resolve => { enter = resolve; });
+  const held = cause === "caller_abort" || cause === "deadline", original = held ? Promise.withResolvers() : null;
+  const roots = [], synthetic = new Error("synthetic compact fetch released after public body");
+  let released = false, originalSettled = false, hasPrimary = false, primary, requestOutcome, bodyOutcome;
+  const observe = (promise, expected = false) => {
+    const outcome = promise.then(value => { if (expected) originalSettled = true; return { failed: false, value }; },
+      error => { if (expected) originalSettled = true; return { failed: true, error }; });
+    roots.push({ expected, outcome }); return outcome;
+  };
+  const release = () => { if (original && !released) { released = true; original.reject(synthetic); } };
+  const originalOutcome = original && observe(original.promise, true);
+  if (held) {
+    const waitUntil = f.context.waitUntil;
+    f.context.waitUntil = promise => { observe(promise); return waitUntil(promise); };
+    t.after(async () => {
+      release(); await requestOutcome; await bodyOutcome;
+      observe(Promise.all(f.pending));
+      const failures = [];
+      for (let index = 0; index < roots.length; index++) {
+        const row = roots[index], outcome = await row.outcome;
+        if (outcome.failed && !row.expected) failures.push(outcome.error);
+      }
+      if (failures.length) throw new AggregateError([...(hasPrimary ? [primary] : []), ...failures], "compact fixture cleanup failed");
+    });
+  }
   if (cause === "deadline") t.mock.timers.enable({ apis: ["setTimeout"] });
-  const upstream = t.mock.method(globalThis, "fetch", async () => {
+  const upstream = t.mock.method(globalThis, "fetch", held ? () => { enter(); return original.promise; } : async () => {
     enter();
     if (cause === "fetch_rejection") throw new Error("fixture upstream failure");
     if (cause === "consumer_cancel") return new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode(wire.slice(0, 30))); } }), { headers: { "content-type": "application/json" } });
-    return new Promise(() => {});
   });
-  const pendingResponse = handler.fetch(request(routes[0], {}, { signal: caller.signal }), f.env, f.context);
-  await entered;
-  if (cause === "caller_abort") caller.abort(new Error("fixture caller cancellation"));
-  if (cause === "deadline") t.mock.timers.tick(600_000);
-  const response = await pendingResponse;
-  if (cause === "consumer_cancel") { assert.equal(response.status, 200); await response.body.cancel("fixture downstream cancellation"); }
-  else { assert.equal(response.status, 502); await response.text(); }
-  await Promise.all(f.pending);
-  assert.equal(upstream.mock.callCount(), 1); assert.equal(f.events.length, 1);
-  assert.equal(f.events[0].status, cause === "deadline" ? "timeout" : cause.includes("cancel") || cause === "caller_abort" ? "client_error" : "provider_error");
-  assert.equal(f.events[0].actual_cost_micros, f.events[0].reserved_cost_micros);
-  settledOnce(f, f.events[0].reserved_cost_micros);
+  try {
+    const pendingResponse = handler.fetch(request(routes[0], {}, { signal: caller.signal }), f.env, f.context);
+    if (held) {
+      requestOutcome = observe(pendingResponse);
+      bodyOutcome = requestOutcome.then(async outcome => {
+        if (outcome.failed) return { failed: false, unused: true };
+        try { return { failed: false, value: await outcome.value.text() }; }
+        catch (error) { return { failed: true, error }; }
+      });
+      roots.push({ expected: false, outcome: bodyOutcome });
+    }
+    if (held) {
+      const arrival = await Promise.race([entered.then(() => ({ entered: true })),
+        requestOutcome.then(outcome => ({ entered: false, outcome }))]);
+      if (!arrival.entered) {
+        if (arrival.outcome.failed) throw arrival.outcome.error;
+        assert.fail("compact request completed before synthetic fetch arrival");
+      }
+    } else await entered;
+    if (cause === "caller_abort") caller.abort(new Error("fixture caller cancellation"));
+    if (cause === "deadline") t.mock.timers.tick(600_000);
+    const response = await pendingResponse;
+    if (cause === "consumer_cancel") { assert.equal(response.status, 200); await response.body.cancel("fixture downstream cancellation"); }
+    else {
+      assert.equal(response.status, 502);
+      if (held) {
+        const body = await bodyOutcome; if (body.failed) throw body.error;
+        assert.equal(originalSettled, false, "synthetic original fetch remains pending through the public body");
+        release(); const outcome = await originalOutcome;
+        assert.equal(outcome.failed, true); assert.equal(outcome.error, synthetic);
+      } else await response.text();
+    }
+    await Promise.all(f.pending);
+    assert.equal(upstream.mock.callCount(), 1); assert.equal(f.events.length, 1);
+    assert.equal(f.events[0].status, cause === "deadline" ? "timeout" : cause.includes("cancel") || cause === "caller_abort" ? "client_error" : "provider_error");
+    assert.equal(f.events[0].actual_cost_micros, f.events[0].reserved_cost_micros);
+    settledOnce(f, f.events[0].reserved_cost_micros);
+  } catch (error) { hasPrimary = true; primary = error; throw error; }
 });
 
 const { fixture: continuationFixture } = await import("./http-continuation-fixture.mjs");
@@ -449,8 +498,18 @@ for (const route of routes.slice(0, 2)) test("compact authority failure after re
 
 for (const route of routes.slice(0, 2)) for (const source of ["kv", "authority"]) for (const cause of ["caller_abort", "deadline"]) test("compact stalled post-dispatch " + source + " honors " + cause + ": " + route, async t => {
   const f = await ownedFixture(t, { pooled: true }), caller = new AbortController();
-  let dispatchStarted = false, entered, release;
-  const reached = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  let dispatchStarted = false, entered, releaseHeld;
+  const reached = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { releaseHeld = resolve; });
+  const roots = [];
+  let released = false, hasPrimary = false, primary, fetchObserver;
+  const release = () => { if (!released) { released = true; releaseHeld(); } };
+  const track = thunk => {
+    const row = {}; roots.push(row);
+    try { row.actual = Promise.resolve(thunk()); } catch (error) { row.actual = Promise.reject(error); }
+    row.outcome = row.actual.then(value => ({ failed: false, value }), error => ({ failed: true, error }));
+    return row;
+  };
+  const join = async () => { for (let index = 0; index < roots.length; index++) await roots[index].outcome; };
   const operations = [], get = f.env.BUDGET_LEDGER.get;
   f.env.BUDGET_LEDGER.get = name => ({ ...get(name), fetch: async (url, init) => {
     const path = new URL(url).pathname; operations.push({ name, path });
@@ -458,37 +517,59 @@ for (const route of routes.slice(0, 2)) for (const source of ["kv", "authority"]
     if (path === "/dispatch") dispatchStarted = true;
     return response;
   } });
-  if (source === "kv") {
-    const read = f.env.POLICY_KV.get;
-    f.env.POLICY_KV.get = async (key, type) => {
-      const value = await read(key, type);
-      if (dispatchStarted && Array.isArray(key)) { entered(); await held; }
-      return value;
-    };
-  } else f.env.ACCESS_CONTROL.beforeFetch = async (_name, request) => {
-    if (dispatchStarted && new URL(request.url).pathname === "/grant-pools/resolve") { entered(); await held; }
-  };
-  if (cause === "deadline") t.mock.timers.enable({ apis: ["setTimeout"] });
-  const pending = f.request({ model: route.includes("native") ? "gpt-6-astra" : "openai/gpt-6-astra", service_tier: "default" }, {}, route, caller.signal);
-  await reached;
-  if (cause === "caller_abort") caller.abort(new Error("fixture qualification canceled"));
-  else t.mock.timers.tick(600_000);
-  const outcome = await Promise.race([pending.then(response => ({ response })), new Promise(resolve => setImmediate(() => resolve({ stalled: true })))]);
-  if (outcome.stalled) {
-    // Release the fixture and collect its HTTP/SQL owner before failing the probe.
-    release(); await f.consume(await pending);
-    assert.fail("post-dispatch qualification ignored " + cause + " while " + source + " was stalled");
-  }
-  assert.equal(outcome.response.status, 502); assert.equal(JSON.parse(await f.consume(outcome.response)).error.code, "provider_unavailable");
-  const assertUnsentOnce = () => {
-    assert.equal(f.sent.length, 0); assert.equal(f.events.length, 1); assert.equal(f.events[0].actual_cost_micros, 0);
-    assert.equal(f.events[0].status, cause === "deadline" ? "timeout" : "client_error");
-    for (const name of ["default:fixture", "provider:openai"]) {
-      const rows = f.env.BUDGET_LEDGER.get(name).reservations(); assert.equal(rows.length, 1); assert.equal(rows[0].settled, 1); assert.equal(rows[0].reserved_micros, 0);
-      for (const path of ["/reserve", "/dispatch", "/settle"]) assert.equal(operations.filter(op => op.name === name && op.path === path).length, 1);
+  try {
+    const fetch = handler.fetch;
+    fetchObserver = t.mock.method(handler, "fetch", function (request, env, context) {
+      if (env !== f.env) return fetch.call(this, request, env, context);
+      return fetch.call(this, request, env, { ...context, waitUntil(promise) {
+        track(() => promise); return context.waitUntil(promise);
+      } });
+    });
+    track(() => held);
+    if (source === "kv") {
+      const read = f.env.POLICY_KV.get;
+      f.env.POLICY_KV.get = (key, type) => track(async () => {
+        const value = await read(key, type);
+        if (dispatchStarted && Array.isArray(key)) { entered(); await held; }
+        return value;
+      }).actual;
+    } else f.env.ACCESS_CONTROL.beforeFetch = (_name, request) => track(async () => {
+      if (dispatchStarted && new URL(request.url).pathname === "/grant-pools/resolve") { entered(); await held; }
+    }).actual;
+    if (cause === "deadline") t.mock.timers.enable({ apis: ["setTimeout"] });
+    const pending = track(() => f.request({ model: route.includes("native") ? "gpt-6-astra" : "openai/gpt-6-astra", service_tier: "default" }, {}, route, caller.signal));
+    const body = track(() => pending.outcome.then(outcome => outcome.failed ? undefined : outcome.value.text()));
+    const arrival = await Promise.race([reached.then(() => ({ entered: true })), pending.outcome.then(outcome => ({ entered: false, outcome }))]);
+    if (!arrival.entered) {
+      if (arrival.outcome.failed) throw arrival.outcome.error;
+      assert.fail("compact request completed before stalled qualification arrival");
     }
-  };
-  assertUnsentOnce();
-  // A late successful authority result cannot dispatch or settle a second time.
-  release(); await new Promise(resolve => setImmediate(resolve)); await f.drain(); assertUnsentOnce();
+    if (cause === "caller_abort") caller.abort(new Error("fixture qualification canceled"));
+    else t.mock.timers.tick(600_000);
+    const probe = await Promise.race([pending.outcome.then(outcome => ({ outcome })), new Promise(resolve => setImmediate(() => resolve({ stalled: true })))]);
+    if (probe.stalled) assert.fail("post-dispatch qualification ignored " + cause + " while " + source + " was stalled");
+    if (probe.outcome.failed) throw probe.outcome.error;
+    assert.equal(probe.outcome.value.status, 502); assert.equal(JSON.parse(await body.actual).error.code, "provider_unavailable");
+    assert.equal(f.sent.length, 0); assert.equal(released, false, "original qualification producer remains held through the public body");
+    release(); await join(); await track(() => f.drain()).actual;
+    const assertUnsentOnce = () => {
+      assert.equal(f.sent.length, 0); assert.equal(f.events.length, 1); assert.equal(f.events[0].actual_cost_micros, 0);
+      assert.equal(f.events[0].status, cause === "deadline" ? "timeout" : "client_error");
+      for (const name of ["default:fixture", "provider:openai"]) {
+        const rows = f.env.BUDGET_LEDGER.get(name).reservations(); assert.equal(rows.length, 1); assert.equal(rows[0].settled, 1); assert.equal(rows[0].reserved_micros, 0);
+        for (const path of ["/reserve", "/dispatch", "/settle"]) assert.equal(operations.filter(op => op.name === name && op.path === path).length, 1);
+      }
+    };
+    assertUnsentOnce();
+    // A late successful authority result cannot dispatch or settle a second time.
+    await new Promise(resolve => setImmediate(resolve)); await track(() => f.drain()).actual; assertUnsentOnce();
+  } catch (error) { hasPrimary = true; primary = error; }
+  finally {
+    release(); await join(); track(() => f.drain()); await join();
+    const failures = [];
+    for (const row of roots) { const outcome = await row.outcome; if (outcome.failed) failures.push(outcome.error); }
+    try { fetchObserver?.mock.restore(); } catch (error) { failures.push(error); }
+    if (failures.length) throw new AggregateError([...(hasPrimary ? [primary] : []), ...failures], "compact qualification cleanup failed");
+  }
+  if (hasPrimary) throw primary;
 });

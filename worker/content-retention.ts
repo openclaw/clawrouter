@@ -34,6 +34,8 @@ export interface PreparedContentRetention {
   /** Above the parser bound the archive streams the body; keep that write sequential. */
   readonly large: boolean;
   write(): Promise<void>;
+  /** Only a never-started ordinary archive may be dropped without a write receipt. */
+  discardUnused?(): void;
 }
 
 // Fusion supplies a private prospective body view before allocating placeholders.
@@ -120,7 +122,11 @@ export function prepareContentRetention(env: Env, auth: AuthorizedIdentity, sele
 function ownedContentRetention(bucket: Env["CONTENT_ARCHIVE"], key: string, expiresAt: string,
   contentRef: string, archive: ReturnType<typeof accountingArchive>): PreparedContentRetention {
   let writing: Promise<void> | undefined;
-  return { contentRef, large: archive.bytes > maxJsonBodyBytes, write() {
+  let unused = false;
+  return { contentRef, large: archive.bytes > maxJsonBodyBytes,
+    discardUnused() { if (!writing) { unused = true; archive.discard(); } },
+    write() {
+    if (unused) throw new TypeError("unused content retention is closed");
     return writing ??= (async () => {
       if (archive.bytes <= 32768) {
         // The COMPLETE admitted serialization fits the same whole-backing

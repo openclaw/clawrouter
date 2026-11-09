@@ -21,6 +21,7 @@ import type { AuthorizedIdentity, CompiledModel, Env, ImageTokenPricing, ModelPr
 import { accountingIdentity, admitAccountingJson, accountingStringCapacity, accountingNumberCapacity, copyAccountingJson } from "./json-body.ts";
 import { randomId } from "./utils";
 import { retainedToolBase, type ToolKnowledge } from "./responses-tool-evidence.ts";
+import type { ProxyCompletion } from "./proxy-completion.ts";
 import type { HostedSearchUsage } from "./responses-hosted-usage.ts";
 
 export interface CompoundRequestContext {
@@ -32,6 +33,7 @@ export interface CompoundRequestContext {
 }
 
 interface AccountingContext {
+  completion?: ProxyCompletion;
   search?: MiniMaxSearchOperation;
   realtime?: true;
   env: Env;
@@ -330,29 +332,45 @@ export function createProxyAccounting(options: AccountingContext) {
   accountingFlags.set(facts, flags);
   admitAccountingFacts(facts, undefined, !!options.search);
   if (facts.model && model) facts.model = { pricing: receiptPricing(model.pricing), upstream: model.upstream };
-  return ownedProxyAccounting(immutableFacts(facts, !!options.search, flags), accountingSinks(env), context.waitUntil?.bind(context), options.search, flags);
+  return ownedProxyAccounting(immutableFacts(facts, !!options.search, flags), accountingSinks(env), context.waitUntil?.bind(context), options.search, flags, options.completion?.fork());
 }
 
 function ownedProxyAccounting(initial: AccountingFacts, sinks: AccountingSinks, waitUntil: ((work: Promise<unknown>) => void) | undefined,
-  search: MiniMaxSearchOperation | undefined, flags: AccountingFlags) {
+  search: MiniMaxSearchOperation | undefined, flags: AccountingFlags, custody?: ProxyCompletion) {
   let facts = initial, chargedUpstreamResponse = false;
   bindAccountingPlan(facts.cost, plan => admitAccountingFacts(facts, plan));
   let responseTier: string | null | undefined;
   const { google } = flags;
+  function terminal(start: () => Promise<boolean>): Promise<boolean> {
+    if (!custody) return start();
+    try {
+      return custody.start(children => {
+        const work = start();
+        void work.then(ok => { if (!ok) children.fail(); }, () => {});
+        return work;
+      });
+    } finally { custody.seal(); }
+  }
   function settle(statusCode: UsageEvent["status_code"], status: UsageEvent["status"], billable: boolean, tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null, characterEstimate: number | null = null, hostedSearch?: HostedSearchUsage, requestTariffOutcome?: RequestTariffOutcome, requestCostReceipt?: RequestCostReceipt) {
-    const outcome: AccountingOutcome = { occurredAtMs: Date.now(), statusCode, status, billable, tokens, reservation, contentRef, servedTier: responseTier, characterEstimate, hostedSearch, requestTariffOutcome, requestCostReceipt };
-    // Error payloads are not a qualified usage receipt. Keep the dispatched
-    // reservation conservative, separately from any explicit policy tariff.
-    if (chargedUpstreamResponse) Object.assign(outcome, { billable: true, tokens: null, characterEstimate: null,
-      pricingUnavailable: facts.fixed == null, hostedSearch: undefined, requestTariffOutcome: "unknown", requestCostReceipt: undefined });
-    const event = accountingReceipt(facts, outcome);
-    return finalizeOwnedAccounting(sinks, reservation, event.actual_cost_micros, event, search);
+    return terminal(() => {
+      const outcome: AccountingOutcome = { occurredAtMs: Date.now(), statusCode, status, billable, tokens, reservation, contentRef, servedTier: responseTier, characterEstimate, hostedSearch, requestTariffOutcome, requestCostReceipt };
+      // Error payloads are not a qualified usage receipt. Keep the dispatched
+      // reservation conservative, separately from any explicit policy tariff.
+      if (chargedUpstreamResponse) Object.assign(outcome, { billable: true, tokens: null, characterEstimate: null,
+        pricingUnavailable: facts.fixed == null, hostedSearch: undefined, requestTariffOutcome: "unknown", requestCostReceipt: undefined });
+      const event = accountingReceipt(facts, outcome);
+      return finalizeOwnedAccounting(sinks, reservation, event.actual_cost_micros, event, search);
+    });
   }
   return {
+    completion: custody?.completion,
+    close() { custody?.seal(); },
     settle,
     pricingFailure(tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null) {
-      const event = accountingReceipt(facts, { occurredAtMs: Date.now(), statusCode: 502, status: "provider_error", billable: true, tokens, reservation, contentRef, pricingUnavailable: true });
-      return finalizeOwnedAccounting(sinks, reservation, event.actual_cost_micros, event, search);
+      return terminal(() => {
+        const event = accountingReceipt(facts, { occurredAtMs: Date.now(), statusCode: 502, status: "provider_error", billable: true, tokens, reservation, contentRef, pricingUnavailable: true });
+        return finalizeOwnedAccounting(sinks, reservation, event.actual_cost_micros, event, search);
+      });
     },
     cost: facts.cost,
     requestId: facts.event.request_id,
@@ -362,7 +380,7 @@ function ownedProxyAccounting(initial: AccountingFacts, sinks: AccountingSinks, 
       const child = Object.freeze({ ...facts, event: Object.freeze({ ...facts.event, id: randomId("usage") }) });
       if (search) controlSinkFacts.add(child);
       accountingFlags.set(child, flags);
-      return ownedProxyAccounting(child, sinks, waitUntil, search, flags);
+      return ownedProxyAccounting(child, sinks, waitUntil, search, flags, custody?.fork());
     },
     setGrant(key: string | null, lane: import("./types").GrantLane) {
       accountingIdentity(key); accountingIdentity(lane);
