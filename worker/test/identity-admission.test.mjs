@@ -401,8 +401,8 @@ for (const failure of ['record-limit', 'ordinary-selection']) test('PUBLIC alter
   const { fixture } = await import('./http-continuation-fixture.mjs');
   const { default: handler } = await import('../index.ts');
   const f = await fixture(t, true, { limit: 1000000, fixedCost: 7 });
-  // This Node namespace CONSTRUCTS its own Request/Response bodies. Make those
-  // selected synthetic producers explicit bytes; actual Workerd bodies stay original.
+  // The shared Node authority fixture owns its byte Request/Response producers.
+  // This selected regression alone adapts its object-backed KV; Workerd stays original.
   const kvGet = f.env.POLICY_KV.get.bind(f.env.POLICY_KV);
   f.env.POLICY_KV.get = async (key, type) => {
     const value = await kvGet(key, type);
@@ -418,8 +418,7 @@ for (const failure of ['record-limit', 'ordinary-selection']) test('PUBLIC alter
         alternateCalls++;
         if (failure === 'ordinary-selection') return accessBytesResponse(JSON.stringify({ error: { code: 'authority_error', message: 'synthetic ordinary selection failure' } }), '', { status: 500 });
       }
-      const response = await stub.fetch(url, { ...init, body: accessBytesResponse(init.body, '').body, duplex: 'half' });
-      return accessBytesResponse(await response.text(), '', { status: response.status, headers: response.headers });
+      return stub.fetch(url, init);
     } };
   };
   const namespace = f.env.BUDGET_LEDGER, budgetGet = namespace.get.bind(namespace), originalIds = [], dispatchedIds = [], settledIds = [];

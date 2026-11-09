@@ -1,3 +1,5 @@
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
+
 const keyMaterial = "abcdefgh";
 const keyDigest = await sha256(keyMaterial);
 
@@ -13,9 +15,12 @@ export function usageEnv(objectNames, { provider = "openai", limit = 100, provid
   if (credentialServiceTiers !== undefined) credential.serviceTiers = credentialServiceTiers;
   const access = {
     idFromName: (name) => name,
-    get: () => ({ fetch: async (url) => {
+    get: () => ({ fetch: async (url, init) => {
       const path = new URL(url).pathname;
-      if (path === "/admission/resolve") return Response.json({ credential: { credentialId: "maintainer_key", credential }, policy: { policyId: "maintainer_access", policy }, owner: null, connections: [{ providerId: provider, enabled: true, monthlyBudgetMicros: providerLimit }], pools: { [provider]: { keys: [], states: {} } } });
+      if (path === "/admission/resolve") {
+        const value = { credential: { credentialId: "maintainer_key", credential }, policy: { policyId: "maintainer_access", policy }, owner: null, connections: [{ providerId: provider, enabled: true, monthlyBudgetMicros: providerLimit }], pools: { [provider]: { keys: [], states: {} } } };
+        return new Headers(init?.headers).has("x-clawrouter-identity-admission") ? accessBytesResponse(JSON.stringify(value), "") : Response.json(value);
+      }
       if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "maintainer_key", credential }], missingCredentialIds: [] });
       if (path === "/policies/resolve") return Response.json({ initialized: true, policies: [{ policyId: "maintainer_access", policy }], missingPolicyIds: [] });
       if (path === "/users/resolve") return Response.json({ initialized: true, users: [], missingEmails: [] });
