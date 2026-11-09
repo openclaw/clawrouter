@@ -1,5 +1,6 @@
 /** Packaging metadata only. Execution remains governed by the provider manifest. */
 export type { ProviderPackageIndex, ProviderPackageResource } from "./package-index.ts";
+export type { ProviderAuthenticationMethod, ProviderCommercialModel, ProviderProductSummary } from "./product-metadata.ts";
 export const PROVIDER_PLUGIN_SCHEMA = "clawrouter.provider-plugin.v1";
 export const PROVIDER_MANIFEST_SCHEMA = "clawrouter.service-provider.v1";
 

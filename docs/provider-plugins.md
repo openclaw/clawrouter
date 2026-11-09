@@ -87,7 +87,14 @@ node scripts/provider-package-index.mjs \
 The versioned index contains validated provider names, package versions and
 content digests. Documentation, licenses, fixtures, and light/dark logos are
 package-relative references with byte sizes and SHA-256 hashes. It contains no
-file contents, absolute paths, upstream URLs, credentials, or auth metadata.
+file contents, absolute paths, upstream URLs, credentials, or auth configuration.
+When a manifest declares products, `products` contains only their provider-scoped
+ID, display name, commercial model, and authentication method, sorted by ID.
+Manifests without products omit the field; no default product is inferred.
+These authored labels do not certify credentials, entitlement, prices or setup
+support. Bindings, endpoints, model selections, offers and refresh configuration
+are excluded. The metadata types are exported by the plugin contract; existing
+imports from `shared/provider-products.ts` remain supported.
 The generator validates execution manifests with the existing compiler and
 reads each package once, using the captured manifest for both validation and
 metadata. Repeat `--plugin` to select packages explicitly.
