@@ -165,7 +165,11 @@ for (const family of ['policies', 'users']) for (const fault of ['transport', 's
     report({ family, fault, branch: attempts ? 'valid' : 'wrong', kvCount: reads.length, stageCount: stages.length, status: response.status,
       code: ['invalid_proxy_key', 'identity_admission_unavailable', 'internal_error'].includes(observedCode) ? observedCode : 'unexpected' });
     assert.equal(response.status, expected); assert.equal(response.headers.get('x-clawrouter-error-code'), code);
-    assert.equal(JSON.parse(text).error.code, code);
+    const envelope = JSON.parse(text);
+    assert.equal(envelope.type, 'error');
+    assert.equal(envelope.error.type, expected === 401 ? 'authentication_error' : 'api_error');
+    assert.equal(typeof envelope.error.message, 'string'); assert.ok(envelope.error.message.length > 0);
+    assert.equal(Object.hasOwn(envelope.error, 'code'), false);
     assert.doesNotMatch(text, /synthetic unavailable KV|synthetic staging failure/);
     assert.deepEqual(reads, attempts ? [{ key, type: 'stream' }] : []);
     assert.deepEqual(stages, attempts && fault === 'staging' ? [{ table, key: id, marker }] : []);
