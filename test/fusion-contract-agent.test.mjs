@@ -127,6 +127,15 @@ test('a failed cheap check escalates within the same shared allowance', async ()
   assert.ok(f.boxes.every(box => box.closed));
 });
 
+test('fallback receives current cheap-check diagnostics after test-author recovery', async () => {
+  const f = fixture([failed, { ...failed, feedback: 'current candidate failure' }, passed],
+    [{ probe: '' }, { probe: 'recovered probe' }, {}, {}]);
+  await runContractAgent(task, 'image', 'recovered-contract', config, f.invoke, f.dependencies);
+  const fallback = f.seen.filter(entry => entry.instruction).at(-1).instruction;
+  assert.match(fallback, /current candidate failure/);
+  assert.doesNotMatch(fallback, /nonempty probe string/);
+});
+
 test('invalid or non-reproducing checks cannot certify a cheap repair', async () => {
   const f = fixture([passed], [{ probe: '' }, { probe: 'non-reproducing' }]);
   const output = await runContractAgent(task, 'image', 'case:contract', config, f.invoke, f.dependencies);
