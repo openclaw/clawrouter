@@ -504,14 +504,22 @@ test("caller abort during registration cancels the single owned reader and does 
   };
   const upstream = stream(['{"id":"resp_aborted"}'], { "content-type": "application/json" }, false);
   f.response = () => upstream.response;
-  const response = await f.request({}, {}, "/v1/responses", controller.signal);
-  const consumed = assert.rejects(response.text(), /fixture caller abort/);
-  await entered.promise; controller.abort(new Error("fixture caller abort"));
-  await consumed; await f.drain();
-  assert.equal(upstream.state.canceled, true); assert.equal(f.events.length, 1);
-  assert.equal(f.events[0].actual_cost_micros, 7); assert.equal(f.events[0].status, "client_error");
-  gate.resolve(); await setImmediate();
-  assert.equal(f.events.length, 1);
+  let hasPrimary = false, primary;
+  try {
+    const response = await f.request({}, {}, "/v1/responses", controller.signal);
+    const consumed = assert.rejects(response.text(), /fixture caller abort/);
+    await entered.promise; controller.abort(new Error("fixture caller abort"));
+    await consumed; gate.resolve(); await f.drain();
+    assert.equal(upstream.state.canceled, true); assert.equal(f.events.length, 1);
+    assert.equal(f.events[0].actual_cost_micros, 7); assert.equal(f.events[0].status, "client_error");
+    await setImmediate(); assert.equal(f.events.length, 1);
+  } catch (error) { hasPrimary = true; primary = error; }
+  finally {
+    gate.resolve();
+    try { await f.drain(); }
+    catch (error) { throw new AggregateError([...(hasPrimary ? [primary] : []), error], "registration fixture cleanup failed"); }
+  }
+  if (hasPrimary) throw primary;
 });
 
 for (const phase of ["json", "sse_before_terminal", "sse_after_terminal"]) test(`Responses ${phase} cancellation during projection preserves one receipt and stops identity publication`, async t => {

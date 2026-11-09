@@ -176,25 +176,67 @@ for (const [name, headers] of Object.entries({ missing: { authorization: "" }, i
 for (const cause of ["fetch_rejection", "caller_abort", "deadline", "consumer_cancel"]) test("compact " + cause + " finalizes dispatched SQL exactly once", async t => {
   const f = fixture(t), caller = new AbortController();
   let enter; const entered = new Promise(resolve => { enter = resolve; });
+  const held = cause === "caller_abort" || cause === "deadline", original = held ? Promise.withResolvers() : null;
+  const roots = [], synthetic = new Error("synthetic compact fetch released after public body");
+  let released = false, originalSettled = false, hasPrimary = false, primary, requestOutcome, bodyOutcome;
+  const observe = (promise, expected = false) => {
+    const outcome = promise.then(value => { if (expected) originalSettled = true; return { failed: false, value }; },
+      error => { if (expected) originalSettled = true; return { failed: true, error }; });
+    roots.push({ expected, outcome }); return outcome;
+  };
+  const release = () => { if (original && !released) { released = true; original.reject(synthetic); } };
+  const originalOutcome = original && observe(original.promise, true);
+  if (held) {
+    const waitUntil = f.context.waitUntil;
+    f.context.waitUntil = promise => { observe(promise); return waitUntil(promise); };
+    t.after(async () => {
+      release(); await requestOutcome; await bodyOutcome;
+      observe(Promise.all(f.pending));
+      const failures = [];
+      for (let index = 0; index < roots.length; index++) {
+        const row = roots[index], outcome = await row.outcome;
+        if (outcome.failed && !row.expected) failures.push(outcome.error);
+      }
+      if (failures.length) throw new AggregateError([...(hasPrimary ? [primary] : []), ...failures], "compact fixture cleanup failed");
+    });
+  }
   if (cause === "deadline") t.mock.timers.enable({ apis: ["setTimeout"] });
-  const upstream = t.mock.method(globalThis, "fetch", async () => {
+  const upstream = t.mock.method(globalThis, "fetch", held ? () => { enter(); return original.promise; } : async () => {
     enter();
     if (cause === "fetch_rejection") throw new Error("fixture upstream failure");
     if (cause === "consumer_cancel") return new Response(new ReadableStream({ start(controller) { controller.enqueue(new TextEncoder().encode(wire.slice(0, 30))); } }), { headers: { "content-type": "application/json" } });
-    return new Promise(() => {});
   });
-  const pendingResponse = handler.fetch(request(routes[0], {}, { signal: caller.signal }), f.env, f.context);
-  await entered;
-  if (cause === "caller_abort") caller.abort(new Error("fixture caller cancellation"));
-  if (cause === "deadline") t.mock.timers.tick(600_000);
-  const response = await pendingResponse;
-  if (cause === "consumer_cancel") { assert.equal(response.status, 200); await response.body.cancel("fixture downstream cancellation"); }
-  else { assert.equal(response.status, 502); await response.text(); }
-  await Promise.all(f.pending);
-  assert.equal(upstream.mock.callCount(), 1); assert.equal(f.events.length, 1);
-  assert.equal(f.events[0].status, cause === "deadline" ? "timeout" : cause.includes("cancel") || cause === "caller_abort" ? "client_error" : "provider_error");
-  assert.equal(f.events[0].actual_cost_micros, f.events[0].reserved_cost_micros);
-  settledOnce(f, f.events[0].reserved_cost_micros);
+  try {
+    const pendingResponse = handler.fetch(request(routes[0], {}, { signal: caller.signal }), f.env, f.context);
+    if (held) {
+      requestOutcome = observe(pendingResponse);
+      bodyOutcome = requestOutcome.then(async outcome => {
+        if (outcome.failed) return { failed: false, unused: true };
+        try { return { failed: false, value: await outcome.value.text() }; }
+        catch (error) { return { failed: true, error }; }
+      });
+      roots.push({ expected: false, outcome: bodyOutcome });
+    }
+    await entered;
+    if (cause === "caller_abort") caller.abort(new Error("fixture caller cancellation"));
+    if (cause === "deadline") t.mock.timers.tick(600_000);
+    const response = await pendingResponse;
+    if (cause === "consumer_cancel") { assert.equal(response.status, 200); await response.body.cancel("fixture downstream cancellation"); }
+    else {
+      assert.equal(response.status, 502);
+      if (held) {
+        const body = await bodyOutcome; if (body.failed) throw body.error;
+        assert.equal(originalSettled, false, "synthetic original fetch remains pending through the public body");
+        release(); const outcome = await originalOutcome;
+        assert.equal(outcome.failed, true); assert.equal(outcome.error, synthetic);
+      } else await response.text();
+    }
+    await Promise.all(f.pending);
+    assert.equal(upstream.mock.callCount(), 1); assert.equal(f.events.length, 1);
+    assert.equal(f.events[0].status, cause === "deadline" ? "timeout" : cause.includes("cancel") || cause === "caller_abort" ? "client_error" : "provider_error");
+    assert.equal(f.events[0].actual_cost_micros, f.events[0].reserved_cost_micros);
+    settledOnce(f, f.events[0].reserved_cost_micros);
+  } catch (error) { hasPrimary = true; primary = error; throw error; }
 });
 
 const { fixture: continuationFixture } = await import("./http-continuation-fixture.mjs");

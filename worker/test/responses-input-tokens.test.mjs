@@ -180,17 +180,59 @@ for (const status of [400, 429, 500]) test("count preserves upstream rejection "
 for (const cause of ["fetch", "abort", "timeout", "cancel", "malformed"]) test("count " + cause + " owns one zero receipt", async t => {
   const f = await setup(t, { fixedCost: 7 }), caller = new AbortController();
   let enter; const entered = new Promise(resolve => { enter = resolve; });
+  const held = cause === "abort" || cause === "timeout", original = held ? Promise.withResolvers() : null;
+  const roots = [], synthetic = new Error("synthetic count fetch released after public body");
+  let released = false, originalSettled = false, hasPrimary = false, primary, requestOutcome, bodyOutcome;
+  const observe = (promise, expected = false) => {
+    const outcome = promise.then(value => { if (expected) originalSettled = true; return { failed: false, value }; },
+      error => { if (expected) originalSettled = true; return { failed: true, error }; });
+    roots.push({ expected, outcome }); return outcome;
+  };
+  const release = () => { if (original && !released) { released = true; original.reject(synthetic); } };
+  const originalOutcome = original && observe(original.promise, true);
+  if (held) {
+    const push = f.pending.push;
+    t.mock.method(f.pending, "push", function (...promises) { for (const promise of promises) observe(promise); return push.apply(this, promises); });
+    t.after(async () => {
+      release(); await requestOutcome; await bodyOutcome;
+      observe(f.drain());
+      const failures = [];
+      for (let index = 0; index < roots.length; index++) {
+        const row = roots[index], outcome = await row.outcome;
+        if (outcome.failed && !row.expected) failures.push(outcome.error);
+      }
+      if (failures.length) throw new AggregateError([...(hasPrimary ? [primary] : []), ...failures], "count fixture cleanup failed");
+    });
+  }
   if (cause === "timeout") t.mock.timers.enable({ apis: ["setTimeout"] });
   f.response = () => { enter(); if (cause === "fetch") throw new Error("synthetic fetch failure");
-    if (["abort", "timeout"].includes(cause)) return new Promise(() => {});
+    if (held) return original.promise;
     if (cause === "cancel") return new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode("{")); } }), { headers: { "content-type": "application/json" } });
     return new Response("{ truncated", { headers: { "content-type": "application/json" } }); };
-  const pending = f.send(routes[0], {}, {}, caller.signal); await entered;
-  if (cause === "abort") caller.abort(); if (cause === "timeout") t.mock.timers.tick(120000);
-  const response = await pending;
-  if (cause === "cancel") await response.body.cancel(); else await f.consume(response);
-  await f.drain(); assert.equal(response.status, ["cancel", "malformed"].includes(cause) ? 200 : 502);
-  assert.equal(f.sent.length, 1); assert.equal(f.events.length, 1); noMoney(f);
+  try {
+    const pending = f.send(routes[0], {}, {}, caller.signal);
+    if (held) {
+      requestOutcome = observe(pending);
+      bodyOutcome = requestOutcome.then(async outcome => {
+        if (outcome.failed) return { failed: false, unused: true };
+        try { return { failed: false, value: await outcome.value.text() }; }
+        catch (error) { return { failed: true, error }; }
+      });
+      roots.push({ expected: false, outcome: bodyOutcome });
+    }
+    await entered;
+    if (cause === "abort") caller.abort(); if (cause === "timeout") t.mock.timers.tick(120000);
+    const response = await pending;
+    if (held) {
+      assert.equal(response.status, 502);
+      const body = await bodyOutcome; if (body.failed) throw body.error;
+      assert.equal(originalSettled, false, "synthetic original fetch remains pending through the public body");
+      release(); const outcome = await originalOutcome;
+      assert.equal(outcome.failed, true); assert.equal(outcome.error, synthetic);
+    } else if (cause === "cancel") await response.body.cancel(); else await f.consume(response);
+    await f.drain(); assert.equal(response.status, ["cancel", "malformed"].includes(cause) ? 200 : 502);
+    assert.equal(f.sent.length, 1); assert.equal(f.events.length, 1); noMoney(f);
+  } catch (error) { hasPrimary = true; primary = error; throw error; }
 });
 
 test("free count respects API grant rate-limit cooldown with Retry-After", async t => {
