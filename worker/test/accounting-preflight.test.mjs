@@ -72,6 +72,64 @@ test("four-leg last-provider overflow precedes ALL reserve attempts and status p
   assert.equal(attempts, 0);
 });
 
+for (const [name, provider, limit, providerLimit, status, code] of [
+  ["unpriced modifier", "anthropic", 1000, 1000, 400, "pricing_required"],
+  ["policy zero", "openai", 0, 1000, 402, "budget_exhausted"],
+  ["provider zero", "openai", 1000, 0, 402, "provider_budget_exhausted"],
+]) test(`HTTP pure-plan ${name} preserves one ordinary failure receipt before effects`, async t => {
+  const { default: handler } = await import("../index.ts");
+  const { usageEnv, proxyKey } = await import("./usage-budget-fixture.mjs");
+  const env = usageEnv([], { provider, limit, providerLimit, fixedCost: null, retainContent: true });
+  env[provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY"] = "fixture-key";
+  const events = [], roots = [], effects = { budget: 0, posts: 0, archive: 0 };
+  let hasPrimary = false, primary;
+  const track = root => { roots.push(root.then(() => ({ failed: false }), error => ({ failed: true, error }))); return root; };
+  t.after(async () => {
+    const failures = []; let index = 0;
+    while (index < roots.length) { const batch = roots.slice(index); index = roots.length; for (const value of await Promise.all(batch)) if (value.failed) failures.push(value.error); }
+    if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "plan-denial roots");
+  });
+  env.USAGE_QUEUE = { async send(event) { events.push(event); } };
+  env.BUDGET_LEDGER = { idFromName: value => value, get: () => ({ async fetch() { effects.budget++; throw Error("unexpected budget I/O"); } }) };
+  env.CONTENT_ARCHIVE = { async put() { effects.archive++; throw Error("unexpected archive I/O"); } };
+  t.mock.method(globalThis, "fetch", async () => { effects.posts++; throw Error("unexpected provider I/O"); });
+  try {
+    const anthropic = provider === "anthropic", requestId = "fixture-plan-denial";
+    const body = { model: anthropic ? "anthropic/claude-sonnet-5-5" : "openai/gpt-6-astra",
+      messages: [{ role: "user", content: "fixture" }], max_tokens: 32, ...(anthropic ? { speed: "fast" } : {}) };
+    const result = await track(handler.fetch(new Request("https://router.example" + (anthropic ? "/v1/messages" : "/v1/chat/completions"), {
+      method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json", "x-request-id": requestId }, body: JSON.stringify(body),
+    }), env, { waitUntil: track }).then(async response => ({ status: response.status, code: response.headers.get("x-clawrouter-error-code"), body: await response.json() })));
+    assert.equal(result.status, status);
+    assert.equal(anthropic ? result.code : result.body.error.code, code);
+    let index = 0; while (index < roots.length) { const batch = roots.slice(index); index = roots.length; await Promise.all(batch); }
+    assert.equal(events.length, 1); assert.equal(events[0].request_id, requestId);
+    assert.equal(events[0].status_code, status); assert.equal(events[0].status, status === 402 ? "denied" : "client_error");
+    assert.equal(events[0].actual_cost_micros, 0); assert.equal(events[0].reserved_cost_micros, 0);
+    assert.deepEqual(effects, { budget: 0, posts: 0, archive: 0 });
+  } catch (error) { hasPrimary = true; primary = error; throw error; }
+});
+
+for (const target of ["policy", "provider", "capacity"]) test(`Realtime pure-plan ${target} keeps existing failure accounting and terminal capacity denial`, async () => {
+  const a = auth(), c = { ...connection }, events = [];
+  let budgetCalls = 0;
+  if (target === "policy") a.policy.monthlyBudgetMicros = 0;
+  if (target === "provider") c.monthlyBudgetMicros = 0;
+  if (target === "capacity") c.providerId = "p".repeat(1025);
+  const env = { USAGE_QUEUE: { async send(event) { events.push(event); } },
+    BUDGET_LEDGER: { idFromName() { budgetCalls++; throw Error("unexpected budget I/O"); } } };
+  await assert.rejects(fundRealtimeUnit({ request: request(), env, context: {}, auth: a, selection: selection(), connection: c,
+    grantKey: null, grantLane: "api_key", signal: new AbortController().signal, unitId: "fixture-unit", outputCap: 100 }),
+  target === "capacity" ? denied : error => error.status === 402 && error.code === (target === "policy" ? "budget_exhausted" : "provider_budget_exhausted"));
+  assert.equal(budgetCalls, 0); assert.equal(events.length, target === "capacity" ? 0 : 1);
+  if (events.length) {
+    assert.equal(events[0].request_id, "fixture-request");
+    // Preserve this owner's existing failure receipt classification.
+    assert.equal(events[0].status_code, 503); assert.equal(events[0].status, "provider_error");
+    assert.equal(events[0].actual_cost_micros, 0); assert.equal(events[0].reserved_cost_micros, 0);
+  }
+});
+
 test("private facts survive borrowed mutation and terminal receipt growth without re-admission", async () => {
   const a = auth(), selected = selection(), borrowedCost = { ...cost };
   const events = [], roots = [];
@@ -112,6 +170,50 @@ test("TEXT archive bytes preserve JSON semantics, own proto and borrowed mutatio
   assert.equal(await new Blob(parts).text(), expected);
   assert.ok(maximumBacking <= 32768); assert.equal(stream.locked, false); assert.equal(archive.retired, true);
   assert.equal(Object.isFrozen(source), false);
+});
+
+test("CPU archive sink drains original bounded chunks through EOF without materializing JSON", async () => {
+  const { consumeCpuArchive } = await import("../../test/helpers/http-cpu.mjs");
+  let pulls = 0, eof = false, writes = 0;
+  const stream = new ReadableStream({ pull(controller) {
+    if (pulls++ < 2) controller.enqueue(new Uint8Array(32768));
+    else { eof = true; controller.close(); }
+  } }, { highWaterMark: 0 });
+  await consumeCpuArchive(stream);
+  assert.equal(eof, true); writes++;
+  assert.equal(pulls, 3); assert.equal(stream.locked, false); assert.equal(writes, 1);
+  await consumeCpuArchive("{}");
+});
+
+for (const reason of [undefined, new Error("shared CPU sink failure")]) test(`CPU archive joins held original cancellation and independent unlock failure: ${reason === undefined ? "undefined" : "shared reason"}`, async t => {
+  const { consumeCpuArchive } = await import("../../test/helpers/http-cpu.mjs");
+  let release, arrived, outcome, expectedFailure = false, hasPrimary = false, primary, unlocked = 0;
+  const held = new Promise(resolve => { release = resolve; }), entered = new Promise(resolve => { arrived = resolve; });
+  const stream = new ReadableStream({ async cancel() { arrived(); await held; throw reason; } }, { highWaterMark: 0 });
+  const reader = stream.getReader(), unlock = reader.releaseLock.bind(reader);
+  t.after(async () => {
+    release();
+    const result = await outcome;
+    if (stream.locked) unlock();
+    if (result?.failed && !expectedFailure) throw new AggregateError(hasPrimary ? [primary, result.error] : [result.error], "CPU sink root");
+  });
+  t.mock.method(stream, "getReader", () => reader);
+  // Labelled read failure; cancellation below is the ORIGINAL native operation.
+  t.mock.method(reader, "read", () => Promise.reject(reason));
+  t.mock.method(reader, "releaseLock", () => { unlock(); unlocked++; throw reason; });
+  try {
+    const work = consumeCpuArchive(stream);
+    outcome = work.then(() => ({ failed: false }), error => ({ failed: true, error }));
+    let done = false; void outcome.then(() => { done = true; });
+    await Promise.race([entered, outcome.then(result => { if (result.failed) throw result.error; throw Error("CPU sink settled before cancellation"); })]);
+    assert.equal(done, false); assert.equal(stream.locked, true); assert.equal(unlocked, 0);
+    release();
+    const result = await outcome;
+    assert.equal(result.failed, true); assert.ok(result.error instanceof AggregateError);
+    assert.equal(result.error.errors.length, 3);
+    for (const error of result.error.errors) assert.strictEqual(error, reason);
+    assert.equal(unlocked, 1); assert.equal(stream.locked, false); expectedFailure = true;
+  } catch (error) { hasPrimary = true; primary = error; throw error; }
 });
 
 for (const reason of [undefined, new Error("synthetic shared reader failure")]) test(`archive reader unlock survives rejected cancellation and preserves ${reason === undefined ? "undefined" : "shared Error"} occurrences`, async t => {

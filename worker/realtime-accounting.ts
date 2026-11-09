@@ -1,4 +1,4 @@
-import { accountingIdentity } from "./json-body.ts";
+import { accountingIdentity, isAccountingAdmissionFailure } from "./json-body.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
 import { emptyReservation, accountingSinks, finalizeOwnedAccounting, planBudgetReservation, type AccountingSinks, type EstimatedCost, markBudgetDispatched, reserveBudget, type BudgetReservation } from './accounting';
 import { admitAccountingFacts, createProxyAccounting } from './proxy-accounting';
@@ -34,13 +34,13 @@ export async function fundRealtimeUnit(o: {
   const cost = soft ? { reserveMicros: 0, basis: 'unpriced_request', inputTokens: null, outputTokens: null }
     : { reserveMicros: Math.max(REALTIME.reservation, policyRequestCost(o.auth.policy, o.selection.capability) ?? 0), basis: 'realtime_full_context_bound', inputTokens: REALTIME.context, outputTokens: REALTIME.output };
   const accounting = createProxyAccounting({ ...o, cost, realtime: true });
-  const softPlan = soft ? prepareSoftBudget(o.auth, o.input ? 'audio.transcription' : o.selection.capability, o.connection, accounting.facts.event.id) : undefined;
-  const reservePlan = !soft ? planBudgetReservation(o.auth, o.selection.capability, cost, o.connection) : undefined;
-  admitAccountingFacts(accounting.facts, softPlan?.reservation ?? reservePlan);
   const sinks = accountingSinks(o.env), input = !!o.input, outputCap = o.outputCap, unitId = o.unitId;
   const fixed = policyRequestCost(o.auth.policy, o.selection.capability);
   let reservation = emptyReservation();
   try {
+    const softPlan = soft ? prepareSoftBudget(o.auth, o.input ? 'audio.transcription' : o.selection.capability, o.connection, accounting.facts.event.id) : undefined;
+    const reservePlan = !soft ? planBudgetReservation(o.auth, o.selection.capability, cost, o.connection) : undefined;
+    admitAccountingFacts(accounting.facts, softPlan?.reservation ?? reservePlan);
     if (soft) {
       const observation = startSoftBudget(o.env, softPlan!, () => undefined);
       reservation = observation.reservation;
@@ -53,6 +53,7 @@ export async function fundRealtimeUnit(o: {
     }
     o.signal.throwIfAborted();
   } catch (error) {
+    if (isAccountingAdmissionFailure(error)) throw error;
     if (!await accounting.settle(503, 'provider_error', false, null, reservation, null)) throw new HttpError(503, 'realtime_accounting_unavailable', 'Realtime accounting failed');
     throw error;
   }

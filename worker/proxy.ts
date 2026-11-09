@@ -864,9 +864,21 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   }
   const { cost, requestId } = accounting;
   const useSoft = !isModelDiscovery(selection.endpoint) && softBudgetPolicy(auth.policy) && !prepared.backgroundRecovery && !reservedBudget && compound?.stage !== "fusion_synthesizer";
-  const softPlan = useSoft ? prepareSoftBudget(auth, selection.capability, prepared.connection, accounting.facts.event.id, !!searchOwner) : undefined;
-  const reservePlan = !useSoft && !reservedBudget ? planBudgetReservation(auth, selection.capability, cost, prepared.connection) : undefined;
-  admitAccountingFacts(accounting.facts, softPlan?.reservation ?? reservePlan ?? reservedBudget?.reservation);
+  let softPlan: ReturnType<typeof prepareSoftBudget> | undefined;
+  let reservePlan: ReturnType<typeof planBudgetReservation> | undefined;
+  try {
+    softPlan = useSoft ? prepareSoftBudget(auth, selection.capability, prepared.connection, accounting.facts.event.id, !!searchOwner) : undefined;
+    reservePlan = !useSoft && !reservedBudget ? planBudgetReservation(auth, selection.capability, cost, prepared.connection) : undefined;
+    admitAccountingFacts(accounting.facts, softPlan?.reservation ?? reservePlan ?? reservedBudget?.reservation);
+  } catch (error) {
+    if (isAccountingAdmissionFailure(error)) throw error;
+    // Pure planning moved before effects; ordinary monetary denials still own
+    // their existing receipt. Never reconstruct a rejected accounting capsule.
+    const failure = error instanceof HttpError ? error : new HttpError(503, "budget_store_unavailable", "budget ledger is unavailable");
+    reservedBudget?.claim();
+    accounting.fail(failure.status, failure.status === 402 ? "denied" : failure.status < 500 ? "client_error" : "provider_error", reservedBudget?.reservation);
+    return errorResponse(failure.code, failure.message, failure.status);
+  }
   let soft: ReturnType<typeof softBudget> | undefined;
   let budgetMs = 0;
   let upstreamMs = 0;
