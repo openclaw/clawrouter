@@ -171,14 +171,14 @@ export default {async fetch(request,bindings,context){
   }
   await call('/fixture/trace?reset',{});
   const send=async()=>{const response=await worker.fetch(new Request('https://router.example/v1/messages',{method:'POST',headers,body:JSON.stringify({model:'anthropic/claude-sonnet-5',max_tokens:16,messages:[]})}),env,{waitUntil:track});
-   const text=await response.text();await drain();return {status:response.status,body:JSON.parse(text)};};
+   const text=await response.text();await drain();return {status:response.status,body:JSON.parse(text),errorCode:response.headers.get('x-clawrouter-error-code')};};
   const first=await send();
   const diagnosticMode=['healthy','cold','cold-routing','pool-commit','sql-limit','kv-limit','colo','refresh'].includes(mode)?mode:'unknown';
   const errorCode=first.body?.error?.code??first.body?.error?.type;
   const errorClass=['identity_admission_unavailable','invalid_proxy_key','access_denied','provider_unavailable','internal_error','api_error','authentication_error','invalid_request_error'].includes(errorCode)?errorCode:first.body?.error?'unexpected':'none';
   try{console.log(JSON.stringify({phase:'identity-public-status',mode:diagnosticMode,status:first.status,errorClass}));}catch{}
   const limited=mode==='sql-limit'||mode==='kv-limit';check(first.status===(limited?503:200),'actual public status');
-  if(limited){check(first.body.error.code==='identity_admission_unavailable','terminal public profile code');check(traces.providerPosts===0,'no provider after denial');}
+  if(limited){check(first.body.type==='error'&&first.body.error?.type==='api_error'&&!Object.hasOwn(first.body.error,'code'),'native Anthropic profile envelope');check(first.errorCode==='identity_admission_unavailable','terminal public profile code');check(traces.providerPosts===0,'no provider after denial');}
   const firstTrace=await call('/fixture/trace',{});
   if(!limited){
    const admission=await authorityCall(env,'/admission/resolve',{credentialId:id,secretSha256:credential.secretSha256,providers:[{id:'anthropic',tokenRef:'anthropic'}]});
