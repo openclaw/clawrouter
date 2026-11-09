@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Retry transient Worker version-override fallbacks during deploy smoke reads and require stable version proof before POSTs, without replaying paid requests.
 - Declare separate Anthropic API and existing Claude subscription catalog products, preserving Messages and token-counting transport boundaries.
 
 - Pin the shared source-release workflow to a reviewed commit with complete release listing and exact-byte draft retry checks.
