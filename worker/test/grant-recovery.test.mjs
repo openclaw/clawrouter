@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { GrantCredentialObject, materializeGrantCredentials, putGrantCredentials, reconcileGrantAttachment, revokeGrantCredentials } from "../grant-credentials.ts";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 
 const key = "oauth/policy/legacy-account";
 const corrupt = '{"accessToken":"old-private",';
@@ -292,6 +293,7 @@ function fixture({ raw = corrupt, generation = 7, providers = ["openai", "retire
   const env = attachGrantCredentialNamespace({ values, POLICY_KV: {
     async get(name, type) {
       const value = values.get(name) ?? null;
+      if (!Array.isArray(name) && type === "stream" && value !== null) return accessBytesResponse(typeof value === "string" ? value : JSON.stringify(value), "").body;
       return value === null ? null : type === "text" ? typeof value === "string" ? value : JSON.stringify(value) : typeof value === "string" ? JSON.parse(value) : structuredClone(value);
     },
     async put(name, value) { values.set(name, JSON.parse(value)); },

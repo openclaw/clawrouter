@@ -4,13 +4,16 @@ import { createServer } from "node:http";
 import test from "node:test";
 import { refreshStoredGrant } from "../providers.ts";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 
 function grantEnv(key, grant, stored = {}) {
   return attachGrantCredentialNamespace({
     stored,
     POLICY_KV: {
-      async get(requested) {
-        return requested === key ? structuredClone(stored[requested] ?? grant) : null;
+      async get(requested, type) {
+        const value = requested === key ? stored[requested] ?? grant : null;
+        if (!Array.isArray(requested) && type === "stream" && value !== null) return accessBytesResponse(typeof value === "string" ? value : JSON.stringify(value), "").body;
+        return value === null ? null : structuredClone(value);
       },
       async put(requested, value) {
         stored[requested] = JSON.parse(value);
