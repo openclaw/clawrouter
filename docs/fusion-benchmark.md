@@ -90,6 +90,20 @@ observations from the supplied run, not statistical significance, a signed
 attestation, or approval to change production routing. Prior campaign expenses
 remain in the spending ledger but are excluded from per-arm comparisons.
 
+Pass two or more report paths in execution order to analyze repeated blocks:
+`node scripts/fusion-pair-analysis.mjs <block-a.json> <block-b.json>`.
+Every block must be complete and settled, use the same source, task and
+qualification digests, model pins, settings and receipts, and continue the
+previous block's spending ledger. Duplicate reports and missing elapsed times
+are rejected. The output distinguishes distinct tasks from repeated attempts,
+sums costs and elapsed times, and reports false accepts and cheap-model dominance.
+
+The repeat summary applies a fixed exploratory screen: at least 75% solved,
+no lost strong-control attempt, at least 20% savings, at most twice strong-control
+elapsed time, and at least one rescue beyond cheap-only. All conditions must
+pass. This screen does not establish significance or authorize production changes;
+it also cannot detect experiments omitted from the supplied report list.
+
 ### Declared-scope routing experiment
 
 Set `FUSION_PAIR_POLICY=scope` on the native paired repair runner to replace

@@ -102,12 +102,77 @@ export function analyzePairRun(run) {
       'This validates internal consistency, not authenticity of the supplied report.'] };
 }
 
+const canonical = value => JSON.stringify(value, (_key, entry) => entry && typeof entry === 'object' && !Array.isArray(entry)
+  ? Object.fromEntries(Object.entries(entry).sort(([a], [b]) => a.localeCompare(b))) : entry);
+
+/** Aggregate consecutive matched blocks without treating repeats as distinct tasks. */
+export function analyzePairRepeats(runs) {
+  if (!Array.isArray(runs) || runs.length < 2) throw new Error('missing_pair_repeats');
+  const reports = runs.map(analyzePairRun);
+  if (new Set(reports.map(report => report.inputDigest)).size !== runs.length) throw new Error('duplicate_pair_repeat');
+  const protocol = run => {
+    const { priorCostMicros: _prior, ...config } = run.config;
+    return canonical({ sourceSha: run.sourceSha, datasetDigest: run.datasetDigest,
+      qualificationDigest: run.qualificationDigest, config, pins: run.pins, policy: run.policy,
+      executor: run.executor, cheapReasoning: run.cheapReasoning, cheapMaxCalls: run.cheapMaxCalls,
+      preloadSource: run.preloadSource, includeControls: run.includeControls, controlsOnly: run.controlsOnly,
+      strategies: [...run.strategies].sort(), receipts: [...run.receipts].sort((a, b) => a.taskId.localeCompare(b.taskId)) });
+  };
+  const expected = protocol(runs[0]);
+  for (let i = 0; i < runs.length; i++) {
+    if (protocol(runs[i]) !== expected) throw new Error('mismatched_pair_protocol');
+    if (i && runs[i].config.priorCostMicros !== runs[i - 1].spentOrReservedMicros) throw new Error('discontinuous_pair_ledger');
+    if (runs[i].records.some(row => !money(row.elapsedMs))) throw new Error('invalid_pair_elapsed');
+  }
+  const candidate = reports[0].candidate;
+  const totals = runs[0].strategies.map(strategy => {
+    const rows = runs.flatMap(run => run.records.filter(row => row.strategy === strategy));
+    return { strategy, solved: sum(rows.map(row => row.score)), attempts: rows.length,
+      costMicros: sum(rows.map(row => row.costMicros)), elapsedMs: sum(rows.map(row => row.elapsedMs)),
+      falseAccepts: rows.filter(row => row.publicPassed === true && row.verdict?.passed === false).length };
+  });
+  const comparisons = ['cheap', 'strong'].map(reference => {
+    const blocks = reports.map(report => report.comparisons.find(row => row.reference === reference));
+    return { reference, wins: sum(blocks.map(row => row.wins)), losses: sum(blocks.map(row => row.losses)),
+      ties: sum(blocks.map(row => row.ties)) };
+  });
+  const selected = totals.find(row => row.strategy === candidate);
+  const strong = totals.find(row => row.strategy === 'strong');
+  const cheap = totals.find(row => row.strategy === 'cheap');
+  const saving = strong.costMicros ? 1 - selected.costMicros / strong.costMicros : null;
+  const latencyRatio = strong.elapsedMs ? selected.elapsedMs / strong.elapsedMs : null;
+  const screen = { minimumSolvedFraction: 0.75, minimumCostSaving: 0.2, maximumLatencyRatio: 2,
+    enoughSolved: selected.solved >= selected.attempts * 0.75,
+    noStrongRegressions: comparisons[1].losses === 0,
+    enoughCostSaving: saving !== null && BigInt(selected.costMicros) * 5n <= BigInt(strong.costMicros) * 4n,
+    withinLatencyLimit: latencyRatio !== null && latencyRatio <= 2,
+    rescuedBeyondCheap: comparisons[0].wins > 0 };
+  return { version: 1, kind: 'observed-pair-repeat-analysis', sourceSha: runs[0].sourceSha,
+    blocks: runs.length, distinctTasks: reports[0].cases, attemptsPerStrategy: selected.attempts,
+    inputDigests: reports.map(report => report.inputDigest), totals, comparisons,
+    costSavingVersusStrong: saving, latencyRatioVersusStrong: latencyRatio,
+    cheapDominatesCandidate: cheap.solved >= selected.solved && comparisons[0].wins === 0
+      && cheap.costMicros <= selected.costMicros && cheap.elapsedMs <= selected.elapsedMs,
+    pilotScreen: { ...screen, passed: screen.enoughSolved && screen.noStrongRegressions
+      && screen.enoughCostSaving && screen.withinLatencyLimit && screen.rescuedBeyondCheap },
+    spentOrReservedMicros: runs.at(-1).spentOrReservedMicros,
+    limitations: ['Repeated attempts are not independent tasks or evidence of statistical significance.',
+      'The fixed pilot screen is exploratory; passing it is not production approval.',
+      'Costs use the input reports\' tariffs and elapsed time is summed, not concurrent wall time.',
+      'Internal consistency does not establish authenticity or rule out omitted experiments.'] };
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
-    const [file, ...extra] = process.argv.slice(2);
-    if (!file || extra.length || (await stat(file)).size > 16 * 1024 * 1024) throw new Error('invalid_pair_file');
-    console.log(JSON.stringify(analyzePairRun(JSON.parse(await readFile(file, 'utf8'))), null, 2));
+    const files = process.argv.slice(2);
+    if (!files.length || files.length > 32) throw new Error('invalid_pair_file');
+    const runs = [];
+    for (const file of files) {
+      if ((await stat(file)).size > 16 * 1024 * 1024) throw new Error('invalid_pair_file');
+      runs.push(JSON.parse(await readFile(file, 'utf8')));
+    }
+    console.log(JSON.stringify(runs.length === 1 ? analyzePairRun(runs[0]) : analyzePairRepeats(runs), null, 2));
   } catch {
-    console.error('Pair analysis requires one complete, settled, internally consistent pair report.'); process.exitCode = 1;
+    console.error('Pair analysis requires complete, settled reports; repeated blocks must share a protocol and consecutive ledgers.'); process.exitCode = 1;
   }
 }
