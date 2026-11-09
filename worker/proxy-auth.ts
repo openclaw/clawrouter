@@ -1,4 +1,4 @@
-import { admitAdmission, admitIdentity, admittedEffectivePolicy, identityPlan } from "./identity-admission.ts";
+import { admitAdmission, admitIdentity, admittedEffectivePolicy, identityFailure, identityPlan } from "./identity-admission.ts";
 import { videoControlVersion, videoUnavailable, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { authorityCall } from "./authority.ts";
 import { coverControlHeaders, musicCoverControlVersion, musicCoverUnavailable, isMusicCoverControl, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
@@ -42,8 +42,14 @@ export function proxyKeyVerification(identity: AuthorizedIdentity): ProxyKeyVeri
 export async function authenticateProxyKey(headers: Headers, env: Env, providers: AdmissionProvider[] = [], allConnections = false, sessionId?: string | null, selection?: AdmissionSelection, freshness: "cached" | "authoritative" = "cached", search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, cover?: MiniMaxMusicCoverControl): Promise<AuthorizedIdentity | Response> {
   const admissionStart = performance.now();
   if (cover) { if (!isMusicCoverControl(cover) || search || video || allConnections || sessionId) musicCoverUnavailable(); coverControlHeaders(headers); }
-  const parsed = proxyKeyFromHeaders(headers);
+  const { parsed } = proxyKeyIngress(headers);
   if (!parsed) return errorResponse("invalid_proxy_key", "a valid ClawRouter proxy key is required", 401);
+  return authenticateParsedProxyKey(parsed, env, providers, allConnections, sessionId, selection, freshness, search, video, cover, admissionStart);
+}
+
+async function authenticateParsedProxyKey(parsed: NonNullable<ReturnType<typeof parseProxyKey>>, env: Env, providers: AdmissionProvider[] = [], allConnections = false, sessionId?: string | null, selection?: AdmissionSelection, freshness: "cached" | "authoritative" = "cached", search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, cover?: MiniMaxMusicCoverControl, admissionStart = performance.now()): Promise<AuthorizedIdentity | Response> {
+  // parseProxyKey accepts ASCII only: units equal encoded bytes. Check before encoding/hash.
+  if (parsed.secret.length > 4096) throw identityFailure("limit");
   const secretSha256 = await sha256Hex(parsed.secret);
   const sessionHash = sessionId ? await sha256Hex(`session:${sessionId}`) : undefined;
   const admissionRequest = { credentialId: parsed.kid, secretSha256, providers, allConnections, selection: selection ? { ...selection, sessionHash } : undefined };
@@ -139,9 +145,9 @@ export function proxyCredentialFailure(credential: ProxyCredential, entry: Acces
 }
 
 export async function inspectKey(headers: Headers, env: Env): Promise<Response> {
-  const parsed = proxyKeyFromHeaders(headers);
+  const { parsed } = proxyKeyIngress(headers);
   if (!parsed) return errorResponse("invalid_proxy_key", "a valid ClawRouter proxy key is required", 401);
-  const result = await authenticateProxyKey(headers, env);
+  const result = await authenticateParsedProxyKey(parsed, env);
   if (result instanceof Response) return result;
   return Response.json({
     kid: parsed.kid, mode: parsed.mode, syntaxValid: true, verified: true, verification: "verified",
@@ -155,7 +161,20 @@ export async function inspectKey(headers: Headers, env: Env): Promise<Response> 
   });
 }
 
-function proxyKeyFromHeaders(headers: Headers) {
-  const candidates = [headers.get("authorization")?.replace(/^Bearer\s+/i, ""), headers.get("x-api-key"), headers.get("x-goog-api-key"), headers.get("api-key")];
-  return candidates.filter((value): value is string => !!value).map(parseProxyKey).find(Boolean);
+export function hasProxyKeyIntent(headers: Headers): boolean {
+  return proxyKeyIngress(headers).intent;
+}
+
+function proxyKeyIngress(headers: Headers) {
+  let intent = false;
+  for (const name of ["authorization", "x-api-key", "x-goog-api-key", "api-key"]) {
+    const raw = headers.get(name);
+    if (raw !== null && raw.length > 4096) throw identityFailure("limit");
+    if (!raw) continue;
+    const parsed = parseProxyKey(name === "authorization" ? raw.replace(/^Bearer\s+/i, "") : raw);
+    if (parsed) return { parsed, intent: true };
+    // Preserve Access precedence for malformed marker-bearing credentials.
+    if (raw.includes("clawrouter-") || raw.includes("ocpk_")) intent = true;
+  }
+  return { parsed: null, intent };
 }
