@@ -9,7 +9,8 @@ import { materializeGrantCredentials, putGrantCredentials, revokeGrantCredential
 import { HttpError, sha256Hex } from "../utils.ts";
 import { HttpContinuation } from "../http-continuation.ts";
 import { fixture, grantKeys } from "./http-continuation-fixture.mjs";
-const { BodyLease, bodyBudgetCharged } = await import("../body-budget.ts");
+const { bodyBudgetCharged } = await import("../body-budget.ts");
+const { ProxyCompletion } = await import("../proxy-completion.ts");
 
 test("two-account HTTP requests pin response and turn identities while stateless calls keep rotating", async t => {
   const f = await fixture(t);
@@ -148,16 +149,29 @@ for (const fixedCost of [null, 7]) {
     const cancellation = Promise.withResolvers();
     let canceled = false, released = false, response;
     const releaseCancellation = () => { if (!released) { released = true; cancellation.resolve(); } };
-    const leases = new Set(), releaseCounts = new Map(), initialCharge = bodyBudgetCharged();
-    const grow = BodyLease.prototype.grow, release = BodyLease.prototype.release;
-    t.mock.method(BodyLease.prototype, "grow", function(bytes) { leases.add(this); return grow.call(this, bytes); });
-    t.mock.method(BodyLease.prototype, "release", function() { const result = release.call(this); releaseCounts.set(this, (releaseCounts.get(this) ?? 0) + 1); return result; });
+    const children = new WeakSet(), completions = new Map(), initialCharge = bodyBudgetCharged();
+    const fork = ProxyCompletion.prototype.fork;
+    t.mock.method(ProxyCompletion.prototype, "fork", function(...args) {
+      const child = Reflect.apply(fork, this, args);
+      children.add(child);
+      if (!children.has(this) && !completions.has(this)) {
+        const observed = { completion: this.completion, settlements: 0 };
+        observed.outcome = observed.completion.then(value => {
+          observed.settlements++; return { failed: false, value };
+        }, error => {
+          observed.settlements++; return { failed: true, error };
+        });
+        completions.set(this, observed);
+      }
+      return child;
+    });
     const diagnostic = phase => t.diagnostic(JSON.stringify({ case: fixedCost === null ? "measured-bound" : "fixed-tariff", phase, cancelEntered: canceled, cancelReleased: released }));
     f.response = (_request, index) => {
       if (index === 1) return new Response(new ReadableStream({ cancel() { canceled = true; return cancellation.promise; } }, { highWaterMark: 0 }), { status: 429 });
       assert.equal(canceled, true, "discard the first body before dispatch without waiting for its cleanup");
       throw new Error("fixture connection lost after alternate dispatch");
     };
+    let hasPrimary = false, primary;
     try {
       diagnostic("request");
       response = await f.request({ max_output_tokens: 32 });
@@ -167,13 +181,14 @@ for (const fixedCost of [null, 7]) {
       assert.equal(f.sent.length, 2);
       assert.deepEqual(f.sent.map(request => request.headers.get("chatgpt-account-id")), ["synthetic-account-0", "synthetic-account-1"]);
       assert.equal(canceled, true); assert.equal(released, false);
-      assert.equal(leases.size, 1); const [callerLease] = leases;
-      assert.equal(releaseCounts.get(callerLease) ?? 0, 0, "ORIGINAL caller lease remains owned before FIRST cancel settles");
-      // This unchanged small input has no byte charge; observe its ACTUAL lease
-      // release instead of enlarging the input or changing its measured budget.
-      assert.equal(callerLease.leased, false); assert.equal(bodyBudgetCharged(), initialCharge);
+      assert.equal(completions.size, 1); const [[owner, completion]] = completions;
+      assert.equal(completion.completion, owner.completion);
+      assert.equal(children.has(owner), false, "observe the TOP owner, not a completed child");
+      assert.equal(completion.settlements, 0, "ORIGINAL top completion waits for FIRST cancel");
+      assert.equal(initialCharge, 0); assert.equal(bodyBudgetCharged(), initialCharge);
       releaseCancellation(); diagnostic("background-drain"); await f.drain(); diagnostic("accounting");
-      assert.equal(releaseCounts.get(callerLease), 1); assert.equal(bodyBudgetCharged(), initialCharge);
+      assert.equal(completion.settlements, 1); assert.equal((await completion.outcome).failed, false);
+      assert.equal(bodyBudgetCharged(), initialCharge);
       assert.equal(f.events.length, 1);
       const [event] = f.events;
       assert.equal(event.status, "provider_error"); assert.equal(event.status_code, 502);
@@ -182,11 +197,18 @@ for (const fixedCost of [null, 7]) {
       assert.equal(event.cost_basis, fixedCost === null ? "manifest_reservation" : "policy_fixed");
       assert.equal(event.total_tokens, null);
       await assertBudgets(f, [event.actual_cost_micros]);
-    } finally {
+    } catch (error) { hasPrimary = true; primary = error; }
+    finally {
       releaseCancellation();
       await response?.body?.cancel().catch(() => {});
-      await f.drain();
+      const outcomes = await Promise.all([
+        f.drain().then(() => ({ failed: false }), error => ({ failed: true, error })),
+        ...[...completions.values()].map(observed => observed.outcome),
+      ]);
+      const failures = outcomes.filter(outcome => outcome.failed).map(outcome => outcome.error);
+      if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "fixture completion cleanup failed");
     }
+    if (hasPrimary) throw primary;
   });
 }
 
