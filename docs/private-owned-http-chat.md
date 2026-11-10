@@ -1195,7 +1195,7 @@ soft-status owners, and the later depth128/status overlap. Exact hosted TAP
 counts and all semantics remain unrun. Source observers retain only synthetic
 fixture/scalar evidence and are not a CONTROL measurement or heap proof.
 
-### Current healthy-status overlap: disjoint CONTROL counterexample
+### Frozen 5879 healthy-status overlap: disjoint CONTROL counterexample
 
 This draft remains incomplete. A covered later borrower can hold four healthy
 private status reads after the 50-ms delivery grace while the response codec
@@ -1204,8 +1204,9 @@ capability remain deferred until HTTP consumer retirement. The native witness
 now warms the same request first and checks that selection feedback remains
 deferred during this overlap. It has not been executed.
 
-The following is a disjoint subset of the current source products, not a sum of
-the old component upper bounds. Count one record, own field, collection cell,
+The following is a disjoint subset of frozen 5879 source products, not a sum of
+the old component upper bounds. The later validator/status draft supersedes its
+changed rows; this historical table is not the new draft inventory. Count one record, own field, collection cell,
 Promise, resolver, handler, reaction, captured binding or logical scope as one
 product. Borrowed target objects are counted once. No physical VM allocation
 or native heap size is inferred. Fields assigned `undefined` remain fields.
@@ -1275,12 +1276,183 @@ acquisition. The added fixtures hold actual post-native work and deliberately
 return early from `.then`; all teardown releases precede original joins.
 Status component carry therefore excludes its changed acquisition block.
 
-The next bounded design decision is the codec's materializing parent stack:
+At frozen5879 the next bounded design decision was the codec's materializing parent stack:
 it is128 of the258 depth products. A private validation-only consumer of the
 same tokenizer, followed by native JSON construction after validation and
 validator retirement, is a candidate within `json-body.ts` and
 `venice-chat-runtime.ts`. This would change the currently adopted private
-materializer contract and is **not implemented**. It requires separate parity,
+materializer contract and was **not implemented at5879**. The later draft below
+implements that adopted change. It requires separate parity,
 DATA-overlap and complete-window proof; no128-product net saving or whole fit
 is claimed. Ordinary parsing, expanded ingress and all accepted profiles must
 remain unchanged. No additional production file is proposed by this evidence.
+
+
+### Private codec validation and permanent shared custody
+
+The private Venice codec now calls the one-shot `validatePrivateJsonBody`
+command. Ordinary `createJsonBodyParser` and expanded-ingress
+`createPrivateJsonBodyParser` are unchanged. The new validator retains six
+scalar counters/modes and the same pinned tokenizer. It constructs no result
+containers, parent-container vector, key values, scalar values or escaping
+facade. Depth is checked before the value count. Key and number chunk lengths
+retain the 4096 limit; ordinary string values do not acquire that limit.
+
+For valid text, `V` counts every value, `K` every key and `U` every decoded
+UTF-16 string unit, including discarded duplicates. The returned scalar is
+`G = 8 * (2V - 1 + K) + 2U`. Its finally clears the tokenizer, callback and text
+aliases. The complete helper invocation returns before codec graph admission
+and native `JSON.parse` of the exact original text. Native parsing has no
+reviver, trim, normalization or intervening await. The caller retains and
+funds the text separately. Invalid validation never reaches the native graph
+factory. Graph admission remains outside syntax catches.
+
+The codec charges its validation-phase wire/text/copy envelope before the validator:
+JSON uses `6R + 65536`; SSE uses `2R + 14F + 65536`, in addition to its existing
+header/model occurrences. It then adds actual `G` before native parsing.
+These are component reservations, not a whole foreground 32 MiB certificate.
+Grant, persistent policy/routing, fresh revalidation, accepted usage and
+consumer backing remain additive. Codec phase replacement does not reset or
+release the independent accepted-usage debit.
+
+The first genuine started codec with its current source claims 65536 bytes
+through the same canonical `ExactBodyCharge` imported from `body-budget.ts`.
+The request root, preflight arena and this claim import that same module; the
+existing 96 MiB counter is used without a replacement namespace, arena or
+counter. The claim is immediately published in one module singleton, with no
+await, callback or table construction between reserve and publication.
+Insufficient capacity leaves the counter unchanged and starts no validator.
+Subsequent requests borrow the existing claim without another reservation.
+
+This is normative custody transfer of an already-loaded fixed dependency
+slice, not prospective admission of ES-module initialization. The guard is in
+response parsing, after provider dispatch; first-claim refusal therefore has
+that post-dispatch timing. Ordinary routes and expanded ingress do not activate
+it. It remains charged through parser failure and all request retirements,
+until the actual Worker module/isolate terminates. There is no private release
+hook or counter reset. Its permanent 65536 debit reduces COMMON headroom for
+ordinary competing traffic; unchanged ordinary APIs do not imply unchanged
+available headroom.
+
+The narrow fixed shared source inventory is separate from every ticket:
+
+| Persistent shared product | Products |
+| --- | ---: |
+| Carried pinned parser/adapter/defs slice |281|
+| New validator function, binding and captured module link |3|
+| Codec import bindings for validator and `ExactBodyCharge` |2|
+| Shared charge singleton binding |1|
+| Retained exact-charge object and its `held` field |2|
+| The two participating module logical scopes and outer links, charged once |4|
+| **Identified fixed slice** |**293**|
+
+The guard is inline in the existing private codec command: it creates no
+persistent guard function, collection, capability or Promise. Its reserve and
+constructor calls, local `charge`, refusal Error, operands and later borrow
+lookup remain request CONTROL. The fixed payload profile contains only the
+pinned static tables, regex source/state, static token records, enum/property
+names and fixed scalar charge. It contains no HTTP object, I/O/cohort owner,
+input-dependent container or rejection reason. 65536 is the explicitly adopted
+normative metadata reservation for this enumerated fixed slice, not 293
+converted into bytes, a native-heap measurement or request execution capacity.
+Other shared implementations retain their existing ownership; this row grants
+no unspent slots to them. Separate actual Worker instances have separate
+canonical module instances and claims.
+
+### Private status transition draft
+
+The four private status readers now run fixed named transitions under the
+existing controller retirement receipt. Their pending bits are published
+before actual fetch/read/FIRSTcancel/unlock/closed access and invocation.
+Actual first callbacks clear only their own bit and enqueue the fixed receiver
+through `queueMicrotask`; the queued transition runs after the callback and
+synchronous observer installation return. The returned value of modified
+`.then` is never used as a settlement receipt. Serial-bound read callbacks
+cannot satisfy a later reused read slot. Queue/installation uncertainty keeps
+UNKNOWN and the original funding.
+
+An installation throw does not revoke an already-started fetch callback. A
+late response still enters the same owner; cleanup acquires its actual body
+and starts FIRSTcancel only once that body exists. An earlier empty-body
+placeholder cannot consume that cancellation. Observation uncertainty remains
+UNKNOWN after these physical cleanup attempts.
+
+This removes `acquire()`/`run()` async continuations, run-observer products and
+logical graph-valued read-result Promises. Decoder, backing, complete text,
+wire/read counters, received view and scalar decision move into explicit
+fields; those fields still count. One bound transition receiver and its queued
+work also count. Read, FIRSTcancel and returned unlock still precede the cache
+or denial decision. Independent closed observation stays diagnostic and joins
+physical retirement afterward. The unchanged decision owner retains the 50 ms
+race, original lookup timing, completion-arrival order, late cache updates and
+close suppression. No status fetch receives a new abort signal.
+
+Source observers now distinguish scalar validator depth from actual tokenizer
+parent cells and assert no native parse before unconditional validator alias
+clear. Existing private materializer attachment observers remain for expanded
+ingress. New authored checks cover native parse/failure boundaries, scalar and
+numeric semantics, duplicate node limits, strict whitespace, wire BOM,
+per-instance first claim, concurrent reuse, permanent baseline, failed-claim
+counter stability and exact request retirement. Seven new top-level tests are
+authored, plus three codec cases in the existing JSON/SSE loops. All semantics
+remain UNRUN_CODE_ONLY_HOSTED. No whole DATA or individual CONTROL-window
+certificate follows from these component changes.
+
+### Revised healthy-overlap blocker after validator and status transitions
+
+The selected layout still fails a necessary CONTROL condition. Use the same
+covered borrower, four healthy pending status reads after grace, and a later
+accepted depth128 object SSE frame as the frozen5879 counterexample. Source,
+consumer and public pulls are live. Deliver that later frame in a new upstream
+chunk after the source read has suspended and the downstream native read
+observers have installed. Parsing then resumes from that actual read; it does
+not run synchronously inside an unreturned downstream `read()` invocation.
+No failed origins or retained error graph
+are needed. The following rows are disjoint source-logical products; this is
+a lower bound, not a complete upper table or physical allocation count.
+
+| Current simultaneous subset | Products | Derivation |
+| --- | ---: | --- |
+| Unchanged ownership rows from the frozen5879 table, excluding parser and status |504|1076 minus276 minus296; the individual ownership rows above remain lower subsets. |
+| Validator depth and function/facade factories |138|Tokenizer array plus128 cells129; validator callback1, adapter functions3 and tokenizer functions2; adapter facade plus two fields3. No consumer-parent array or materialized graph exists yet. |
+| Validator retained scalar/reference cells |37|Helper text/six counters/tokenizer/callback9; adapter bindings3; carried bare-tokenizer bindings17; options object/two fields3; flush-symbol field1; indexed-feed offset/high/low/end4. Function objects and parent cells are already in the preceding row. |
+| Four status readers with native pending read/closed observations |229|Reader object plus22 fields:23 each. Controller/vector/physical receipt20; decision/receipt/index21. Each reader additionally has bound advance function/receiver2, pending read original/follower/two handlers/two receiver links/two serial arguments/two reactions10, closed original/follower/two handlers/two links/two reactions8, and Response/body/reader/decoder4. Thus92+41+4×24. |
+| Later proxy invocation fields omitted by its initial-record row |25|Selection, required, identity, prepared, upload, four preparing fields, preparationAdmitted, nativeResponse/nativeSignal/nativeUsage, publicBody, operation, consumer, usageContext, requestId, softPlan/softAttempt, accounting/accountingCost and three terminal inputs. Fields remain present after assigning undefined. |
+| Pending consumer and public read bridges |26|Each has original/logical/physical/follower Promises4, three resolvers3, two handlers plus two scope links4, and two registrations2. Their reader records were counted above. |
+| Source, consumer and public independent closed observations |30|Each has original/deferred/follower Promises3, resolver1, two handlers/two scope links4 and two registrations2. |
+| Source, consumer and public active pull joins |30|Each has joining/original/follower Promises3, resolver1, two handlers/two scope links4 and two registrations2. These are separate from read and closed roots. |
+| Public reader's dynamic completion base |9|Its separate object/six fields, completion Promise and resolver. The frozen public-reader row explicitly excluded this scope. |
+| Public pull's additional true-leaf observer subset |7|Two handlers/two scope links4, following Promise1 and two registrations2; the input work Promise is already counted in the pull row. |
+| **Current disjoint lower bound** |**1035**|**Exceeds aggregate1024 before the omitted active products.** |
+
+The read serial arguments are explicit bound-function operands. The queued
+status transition is not simultaneously counted while those four reads are
+healthy and pending. The parser has no second depth vector. Shared281 and the
+new fixed shared slice are excluded from this per-ticket total and remain in
+their separately adopted permanent owner. No retired preparation owner,
+terminal accounting fan-out or deferred generation transport is added here.
+
+The source anchors are the unchanged ownership factories named in the prior
+table; `validatePrivateJsonBody` and the carried tokenizer/adapter;
+`OwnedStatusReader` fields/read/observeClosed, `OwnedStatusController` and
+`OwnedSoftBudget`; the actual assignment sites of `OwnedProxyInvocation`;
+`readConsumer`, `acquireConsumerReader`, `OwnedVeniceSource.open`,
+`OwnedVeniceEvents.pull`, `OwnedChatUsage.pull`, `OwnedPublicReader.open/read/pull`
+and `ProxyCompletion.observePrivateLeaf`.
+
+No placement into operation128/source128/read128/terminal128/synchronous512
+can fit this subset, because their aggregate is1024. This necessary failure
+does not authorize pooling windows. It also does not quantify the total
+reduction needed: active tokenizer/native operands, captured reader scopes,
+completion followers, upload/archive/accounting work and failure transitions
+remain omitted. Whole DATA and all five window upper tables are OPEN.
+
+The remaining concrete producers are the two downstream logical/physical
+read bridges and their enclosing fixed usage/public owners, alongside the
+still-separate status decision/controller and accepted-usage owner. A coherent
+representation must remove actual factories or prove actual last consumers;
+clearing a value, lazy error history, the permanent shared reservation, or
+subtracting the old415 envelope cannot repair this healthy schedule. This
+counterexample supplies no justification for a26th production file or a new
+allowance. The current draft is a source-only blocked candidate, not a
+publication or qualification candidate.

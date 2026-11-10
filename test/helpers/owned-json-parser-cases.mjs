@@ -1,7 +1,7 @@
 export const ownedJsonCodecCases = [
   ['compact-object128', true], ['compact-object-string128', true], ['compact-object129', false], ['compact-open2048', false],
   ['compact-mixed', true], ['compact-wide', true], ['compact-key4096', true], ['compact-key4097', false],
-  ['compact-number4096', true], ['compact-number4097', false], ['compact-string8192', true],
+  ['compact-number4096', true], ['compact-number4097', false], ['compact-string8192', true], ['compact-numeric', true], ['compact-strict-space', false], ['compact-invalid-eof', false],
 ];
 
 export const ownedUsageCases = ['wide', 'deep', 'quoted', 'scalar', 'malformed', 'many-lines', 'refusal-omitted',
@@ -61,6 +61,10 @@ export function ownedJsonCodecWire(mode, model) {
   else if (mode === 'compact-key4096' || mode === 'compact-key4097') extra = '{"' + 'k'.repeat(mode === 'compact-key4096' ? 4096 : 4097) + '":0}';
   else if (mode === 'compact-number4096' || mode === 'compact-number4097') extra = '0.' + '0'.repeat(mode === 'compact-number4096' ? 4094 : 4095);
   else if (mode === 'compact-string8192') extra = '"' + 's'.repeat(8192) + '"';
+  else if (mode === 'compact-numeric') extra = '{"negativeZero":-0,"large":1e309,"rounded":9007199254740993,"duplicate":1,"duplicate":2}';
+  else if (mode === 'compact-strict-space') extra = '[\u00a00]';
+  else if (mode === 'compact-invalid-eof') return prefix + '"unfinished\\u';
+  else if (mode === 'compact-bom') return '\ufeff' + ownedJsonCodecWire('compact-mixed', model);
   else throw new Error('unknown compact parser fixture case');
   return prefix + extra + ',"usage":{"prompt_tokens":4,"completion_tokens":3,"total_tokens":7}}';
 }

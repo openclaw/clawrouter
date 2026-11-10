@@ -557,6 +557,46 @@ export function createPrivateJsonBodyParser(): PrivateJsonBodyParser {
   return createBodyParser(true, true);
 }
 
+// Only the genuine private codec calls this after funding its synchronous
+// validator. No container, key, scalar value or facade leaves this scope.
+export function validatePrivateJsonBody(text: string): number {
+  let depth = 0, values = 0, keys = 0, units = 0, length = 0, mode = 0;
+  let consume: ReturnType<typeof createJsonTokenizer> | undefined;
+  let accept: ((token: Token) => void) | undefined;
+  try {
+    accept = (token: Token): void => {
+      switch (token.name) {
+        case "startObject": case "startArray":
+          if (++depth > 128) throw new JsonBodyStructureLimit();
+          break;
+        case "endObject": case "endArray": depth--; return;
+        case "startKey": mode = 1; length = 0; return;
+        case "startNumber": mode = 2; length = 0; return;
+        case "startString": mode = 3; return;
+        case "stringChunk": case "numberChunk":
+          if (token.name === "stringChunk") units += token.value.length;
+          if ((mode === 1 || mode === 2) && (length += token.value.length) > 4096) throw new JsonBodyStructureLimit();
+          return;
+        case "endKey": keys++; mode = 0; return;
+        case "endString": case "endNumber": mode = 0; break;
+        case "nullValue": case "trueValue": case "falseValue": break;
+        default: return;
+      }
+      if (++values > 65_536) throw new JsonBodyStructureLimit();
+    };
+    consume = createJsonTokenizer(accept);
+    for (let offset = 0; offset < text.length;) {
+      const high = text.charCodeAt(offset), low = text.charCodeAt(offset + 1);
+      const end = offset + (high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff ? 2 : 1);
+      consume.push(text.slice(offset, end)); offset = end;
+    }
+    consume.end();
+    return 8 * (2 * values - 1 + keys) + 2 * units;
+  } finally {
+    consume = undefined; accept = undefined; text = "";
+  }
+}
+
 function createBodyParser(enforceStructure: boolean, privateParents: false): JsonBodyParser;
 function createBodyParser(enforceStructure: boolean, privateParents: true): PrivateJsonBodyParser;
 function createBodyParser(enforceStructure: boolean, privateParents: boolean): JsonBodyParser | PrivateJsonBodyParser {

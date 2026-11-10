@@ -191,20 +191,20 @@ for (const streaming of [false, true]) test('native owned Venice ' + (streaming 
       }
       const after = await settledState(f), rows = after.parsers.slice(before.parsers.length);
       assert.equal(rows.length, 1, mode + ' actual private parser invocation');
-      const row = rows[0]; assert.equal(row.cleared, true); assert.equal(row.parents, 0); assert.equal(row.tokens, 0); assert.equal(row.pending, false); assert.equal(row.member, false);
+      const row = rows[0]; assert.equal(row.kind, 'validator'); assert.equal(row.nativeParses, valid ? 1 : 0); assert.equal(row.cleared, true); assert.equal(row.parents, 0); assert.equal(row.tokens, 0); assert.equal(row.pending, false); assert.equal(row.member, false);
       if (valid) {
         assert.equal(row.parentPushes, row.parentPops); assert.equal(row.tokenPushes, row.tokenPops);
       }
       if (mode === 'compact-object128') {
-        assert.equal(row.peakParents, 128); assert.equal(row.peakTokens, 128); assert.equal(row.peakStored, 259);
+        assert.equal(row.peakParents, 0); assert.equal(row.peakDepth, 128); assert.equal(row.peakTokens, 128); assert.equal(row.peakStored, 129);
       } else if (mode === 'compact-object-string128') {
-        assert.equal(row.peakParents, 128); assert.equal(row.peakTokens, 128); assert.equal(row.peakStored, 260);
-        assert.ok(row.objectAttachments >= 128, 'actual child properties existed before both temporary key aliases cleared');
+        assert.equal(row.peakParents, 0); assert.equal(row.peakDepth, 128); assert.equal(row.peakTokens, 128); assert.equal(row.peakStored, 129);
+        assert.equal(row.objectAttachments, 0, 'validation creates no graph properties');
       } else if (mode === 'compact-object129' || mode === 'compact-open2048') {
-        assert.equal(row.peakParents, 128); assert.equal(row.peakTokens, 129); assert.equal(row.peakStored, 260);
-        assert.equal(row.abandonedParents, 128); assert.equal(row.abandonedTokens, 129);
-        assert.equal(row.peakActive, 260); assert.equal(row.peakRejected, 260);
-        assert.ok(row.peakBetween >= 259, 'accepted parent state existed before the rejecting opener');
+        assert.equal(row.peakParents, 0); assert.equal(row.peakDepth, 129); assert.equal(row.peakTokens, 129); assert.equal(row.peakStored, 130);
+        assert.equal(row.parents, 0); assert.equal(row.abandonedTokens, 129);
+        assert.equal(row.peakActive, 130); assert.equal(row.peakRejected, 130);
+        assert.equal(row.peakBetween, 129, 'only the tokenizer retains accepted ancestors between feeds');
       }
       assert.equal(count(after, 'authority', '/authorization/snapshot') - count(before, 'authority', '/authorization/snapshot'), valid ? 2 : 1);
       assert.equal(after.events.length - before.events.length, 1, mode + ' original native accounting event');
@@ -227,8 +227,8 @@ test('native later object-128 SSE transfers one original sniff reader into usage
     assert.equal(response.status, 200); assert.equal(response.text, wire);
     const after = await settledState(f), rows = after.parsers.slice(before.parsers.length);
     assert.equal(rows.length, 2);
-    assert.equal(rows[1].peakParents, 128); assert.equal(rows[1].peakTokens, 128); assert.equal(rows[1].peakStored, 260);
-    assert.equal(rows[1].peakActive, 260); assert.equal(rows[1].peakBetween, 259); assert.equal(rows[1].peakRejected, 0);
+    assert.equal(rows[1].peakParents, 0); assert.equal(rows[1].peakTokens, 128); assert.equal(rows[1].peakStored, 129);
+    assert.equal(rows[1].peakActive, 129); assert.equal(rows[1].peakBetween, 129); assert.equal(rows[1].peakRejected, 0);
     assert.equal(rows[1].consumerReaders, 1, 'the SAME original sniff reader owns the later parser peak');
     assert.equal(rows[1].pricingOwners, 0, 'pricing metadata cleared after its final consumer');
     assert.equal(rows[1].innerWrappers, 0); assert.equal(rows[1].outerWrappers, before.consumers.outer + 1);
@@ -255,8 +255,8 @@ test('native later rejected depth-129 frame preserves published status and the s
     await assert.rejects(f.take(f.body(response)));
     const after = await settledState(f), rows = after.parsers.slice(before.parsers.length);
     assert.equal(rows.length, 2); assert.equal(rows[1].consumerReaders, 1);
-    assert.equal(rows[1].peakParents, 128); assert.equal(rows[1].peakTokens, 129);
-    assert.equal(rows[1].peakActive, 260); assert.equal(rows[1].peakRejected, 260); assert.equal(rows[1].cleared, true);
+    assert.equal(rows[1].peakParents, 0); assert.equal(rows[1].peakTokens, 129);
+    assert.equal(rows[1].peakActive, 130); assert.equal(rows[1].peakRejected, 130); assert.equal(rows[1].cleared, true);
     assert.equal(after.consumers.acquired - before.consumers.acquired, 1);
     assert.equal(after.consumers.retired - before.consumers.retired, 1); assert.equal(after.consumers.live, 0);
     assert.equal(after.consumers.replay, before.consumers.replay);
@@ -373,7 +373,7 @@ for (const phase of ['delivery', 'accounting']) test('native compact parser alia
       await new Promise(resolve => setTimeout(resolve, 10));
     }
     const parser = held.parsers.at(-1);
-    assert.equal(parser.peakParents, 128); assert.equal(parser.peakTokens, 128); assert.equal(parser.cleared, true);
+    assert.equal(parser.peakParents, 0); assert.equal(parser.peakDepth, 128); assert.equal(parser.nativeParses, 1); assert.equal(parser.peakTokens, 128); assert.equal(parser.cleared, true);
     assert.equal(parser.parents, 0); assert.equal(parser.tokens, 0); assert.equal(parser.pending, false);
     assert.ok(held.charged >= before.charged + 32 * 1024 * 1024, 'parser discard is not request/foreground credit retirement');
     assert.equal(held.completed.length, before.completed.length, 'original request retirement remains held');
@@ -977,7 +977,7 @@ test('native later object-128 SSE overlaps four original private status reads af
     const held = await state(f);
     assert.equal(held.statusReaders.length, 4); assert.ok(held.statusReaders.every(row => row.held && !row.retired && !row.decided));
     const current = held.parsers.slice(before.parsers.length);
-    assert.equal(current.length, 2); assert.equal(current[1].peakParents, 128); assert.equal(current[1].statusPending, 4);
+    assert.equal(current.length, 2); assert.equal(current[1].peakParents, 0); assert.equal(current[1].peakDepth, 128); assert.equal(current[1].statusPending, 4);
     assert.equal(count(held, 'authority', '/admission/resolve'), count(before, 'authority', '/admission/resolve'), 'covered later borrower');
     assert.equal(count(held, 'authority', '/grant-pools/record'), count(before, 'authority', '/grant-pools/record'), 'own pending cohort remains deferred');
     assert.equal(held.events.length, before.events.length + 1); assert.equal(held.completed.length, before.completed.length);
@@ -1068,5 +1068,61 @@ test('native private reader joins actual work despite an early then return: ' + 
     await release();
     const response = await f.take(joined); assert.equal(response.status, 200); assert.ok(response.text.includes('[DONE]'));
     const after = await settledState(f); assert.equal(after.events.length, 1); assert.ok(after.charged < held.charged);
+  }, true);
+});
+
+
+for (const instance of [1, 2]) test('native Worker instance ' + instance + ' owns one permanent tokenizer claim', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const baseline = await state(f);
+    assert.equal(baseline.shared.claims, 0); assert.equal(baseline.shared.held, 0);
+    await f.request('https://fixture/v1/catalog', { headers: { authorization: `Bearer ${ownedHttpProxyKey('chat')}` } });
+    assert.equal((await state(f)).shared.claims, 0, 'ordinary default route does not activate private custody');
+    const request = mode => chat('venice', { model: ownedHttpControlModels.venice, ownedVeniceCase: mode });
+    assert.equal((await f.request('https://fixture/v1/chat/completions', request('compact-open2048'))).status, 502);
+    let after = await settledState(f);
+    assert.equal(after.shared.claims, 1); assert.equal(after.shared.held, 65536);
+    assert.equal(after.shared.after - after.shared.before, 65536);
+    assert.equal(after.parsers.at(-1).nativeParses, 0); assert.equal(after.parsers.at(-1).cleared, true);
+    const responses = await Promise.all([f.request('https://fixture/v1/chat/completions', request('compact-object128')),
+      f.request('https://fixture/v1/chat/completions', request('compact-object-string128'))]);
+    assert.ok(responses.every(response => response.status === 200));
+    after = await settledState(f); assert.equal(after.shared.claims, 1);
+    assert.ok(after.parsers.slice(-2).every(row => row.nativeParses === 1 && row.cleared));
+    assert.equal((await f.request('https://fixture/fixture/evict', { method: 'POST', body: 'venice' })).status, 204);
+    assert.equal((await state(f)).charged, baseline.charged + 65536, 'exact request retirement, no shared release');
+  }, true);
+});
+
+test('native first shared claim refusal changes no COMMON debit and starts no validator', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const before = await state(f);
+    const release = async () => { await f.request('https://fixture/fixture/consumer-mode', { method: 'DELETE' }); };
+    f.releases.push(release);
+    assert.equal((await f.request('https://fixture/fixture/consumer-mode', { method: 'POST', body: 'shared-refusal' })).status, 204);
+    const response = await f.request('https://fixture/v1/chat/completions', chat('venice', {
+      model: ownedHttpControlModels.venice, ownedVeniceCase: 'compact-object128',
+    }));
+    assert.equal(response.status, 503);
+    await release();
+    const after = await settledState(f);
+    assert.equal(after.shared.claims, 0); assert.equal(after.shared.refused, 1); assert.equal(after.shared.held, 0);
+    assert.equal(after.parsers.length, before.parsers.length);
+    assert.equal((await f.request('https://fixture/fixture/evict', { method: 'POST', body: 'venice' })).status, 204);
+    assert.equal((await state(f)).charged, before.charged);
+  }, true);
+});
+
+test('native private JSON retains a wire BOM while validating exact decoded text', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const wire = ownedJsonCodecWire('compact-bom', 'zai-org-glm-5-2');
+    const response = await f.request('https://fixture/v1/chat/completions', chat('venice', {
+      model: ownedHttpControlModels.venice, ownedVeniceCase: 'compact-bom',
+    }));
+    assert.equal(response.status, 200);
+    // Response.text consumes the initial BOM; the codec preserves the wire length.
+    assert.equal(response.headers.get('content-length'), String(new TextEncoder().encode(wire).byteLength));
+    assert.equal(response.text, wire.slice(1));
+    const after = await settledState(f); assert.equal(after.parsers.at(-1).nativeParses, 1);
   }, true);
 });

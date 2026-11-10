@@ -1,4 +1,5 @@
-import { createPrivateJsonBodyParser, parseBoundedJson } from "./json-body.ts";
+import { validatePrivateJsonBody, parseBoundedJson } from "./json-body.ts";
+import { ExactBodyCharge } from "./body-budget.ts";
 import { inputRetirement } from "./input-retirement.ts";
 import { nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
@@ -260,20 +261,25 @@ export function retireOwnedVeniceChatCodec(cap: OwnedHttpRevalidation): void {
   if (!--ownedCodecCount) ownedCodecs = undefined;
 }
 
-// One code point is passed to the unchanged parser at a time. The tokenizer's
-// entire batch therefore precedes at most ONE new parent before the consumer's
-// existing depth-128 check. Strings, escapes and surrogate pairing are unchanged.
+// One code point is passed to the unchanged tokenizer at a time. Validation
+// returns through its complete scope before native graph construction starts.
+let ownedTokenizerShared: ExactBodyCharge | undefined;
 function parseOwnedVeniceJson(state: OwnedVeniceCodec, text: string): unknown {
   if (codecOwner(state.cap) !== state || !state.started || !state.source) throw identityFailure("protocol");
-  const parser = createPrivateJsonBodyParser();
-  try {
-    for (let offset = 0; offset < text.length;) {
-      const high = text.charCodeAt(offset), low = text.charCodeAt(offset + 1);
-      const end = offset + (high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff ? 2 : 1);
-      parser.push(text.slice(offset, end)); offset = end;
-    }
-    return parser.take();
-  } finally { parser.discard(); text = ""; }
+  const backing = (state.streaming ? 2 * limit + 14 * frameLimit : 6 * limit) + ownedCodecMetadata;
+  codecPhase(state, backing);
+  // Normative custody of the fixed, already-loaded shared dependency slice.
+  // This permanent COMMON debit is not request capacity or module-init proof.
+  if (!ownedTokenizerShared) {
+    const charge = ExactBodyCharge.reserve(65536);
+    if (!charge) throw identityFailure("limit");
+    ownedTokenizerShared = charge;
+  }
+  const graph = validatePrivateJsonBody(text);
+  // Validation has returned through its unconditional alias clear. The native
+  // constructor sees the EXACT text only after its separate graph admission.
+  codecPhase(state, backing + graph);
+  return JSON.parse(text);
 }
 
 const ownedDefaultCancel = ReadableStreamDefaultReader.prototype.cancel;

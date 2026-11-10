@@ -1491,26 +1491,38 @@ class OwnedStatusReader {
   private body?: ReadableStream<Uint8Array>;
   private reader?: ReadableStreamBYOBReader | ReadableStreamDefaultReader<Uint8Array>;
   private flags = 0;
-  private reading?: Promise<void>;
-  private resolveRead?: () => void;
-  private acceptRead?: (value: ReadableStreamReadResult<Uint8Array>) => void;
-  private rejectRead?: (reason: unknown) => void;
-  private resolveClosed?: () => void;
-  private cancelling?: Promise<void>;
-  private unlocking?: Promise<void>;
-  private closed?: Promise<void>;
   private nativeFailure?: object;
   private acquisition?: SinkOriginOwner;
   private fetching?: SinkOriginOwner;
   private base?: number;
+  private pending = 0; // Original fetch/read=1, FIRSTcancel=2, unlock=4, closed=8.
+  private advanceWork = this.advance.bind(this);
+  private phase = 0; // fetch=1, read=2, cancel=3, unlock=4, closed=5, retired=6.
+  private decoder?: TextDecoder;
+  private text = "";
+  private backing?: Uint8Array<ArrayBuffer>;
+  private value?: Uint8Array;
+  private done = false;
+  private wire = 0;
+  private reads = 0;
+  private spent: number | null = null;
   constructor(private owner: OwnedStatusController, private index: number) {}
   start(): void {
-    const original = this.run();
-    void original.then(this.retired.bind(this), this.unsettled.bind(this));
+    if (this.phase) throw identityFailure("protocol");
+    this.phase = 1;
+    this.pending |= 1;
+    this.acquire();
   }
+  private schedule(): void {
+    if (this.flags & 8192) return;
+    this.flags |= 8192;
+    try { queueMicrotask(this.advanceWork); }
+    catch (reason) { this.unsettled(reason); }
+  }
+  private unknown(): void { this.flags |= 256; holdOwnedHttpRequest(this.owner.cap); }
   private retired(): void {
     try {
-      if (this.original || this.reader || this.body || this.response || this.reading || this.cancelling || this.unlocking || this.closed)
+      if (this.original || this.reader || this.body || this.response || this.pending)
         throw identityFailure("protocol");
       const root = this.owner.root;
       if (this.acquisition !== undefined) compactRetiredSinkOrigin(root, Math.floor(this.acquisition / 32));
@@ -1521,7 +1533,7 @@ class OwnedStatusReader {
   }
   private unsettled(reason: unknown): void {
     this.failure(10, "retire", reason); reason = undefined;
-    holdOwnedHttpRequest(this.owner.cap);
+    this.unknown();
   }
   private claimReader(): number {
     if (this.base !== undefined) return this.base;
@@ -1535,16 +1547,13 @@ class OwnedStatusReader {
       : 32 * (this.claimReader() + offset - 2) + sinkKinds.indexOf(kind);
     return failedSinkOrigin(this.owner.root, origin, reason);
   }
-  private async acquire(): Promise<void> {
+  private acquire(): void {
     const descriptor = this.owner.plan.descriptors[this.index], namespace = this.owner.namespace;
     this.acquisition = sinkOrigin(this.owner.root.sink!, "acquire");
     let stub: DurableObjectStub;
     try { if (!namespace) throw softStatusError(); stub = namespace.get(namespace.idFromName(descriptor.leg.objectName)); }
-    catch (reason) { throw this.failure(0, "acquire", reason); }
+    catch (reason) { this.failure(0, "acquire", reason); reason = undefined; this.flags |= 2048; this.settleRead(); return; }
     this.fetching = sinkOrigin(this.owner.root.sink!, "fetch");
-    // Reuse these slots only before reader acquisition. The actual callbacks,
-    // never an overridden .then return, settle this private void receipt.
-    const following = new Promise<void>((resolve, reject) => { this.resolveRead = resolve; this.rejectRead = reject; });
     let observing = false;
     try {
       this.original = stub.fetch(descriptor.url);
@@ -1552,15 +1561,17 @@ class OwnedStatusReader {
       observing = true;
       void Reflect.apply(then, this.original, [this.fetchResolved.bind(this), this.fetchRejected.bind(this)]);
     } catch (reason) {
-      const failure = this.failure(1, "fetch", reason); reason = undefined;
-      if (observing || this.original) { holdOwnedHttpRequest(this.owner.cap); await new Promise<never>(() => {}); }
-      this.rejectRead!(failure); this.resolveRead = undefined; this.rejectRead = undefined;
+      this.failure(1, "fetch", reason); reason = undefined; this.flags |= 2048;
+      if (observing || this.original) this.unknown();
+      else this.settleRead();
+      this.stopReading();
     }
     stub = undefined as never;
-    await following;
+  }
+  private open(): void {
     this.claimReader();
     try { this.body = this.response!.body ?? undefined; }
-    catch (reason) { this.failure(2, "acquire", reason); holdOwnedHttpRequest(this.owner.cap); await new Promise<never>(() => {}); }
+    catch (reason) { this.failure(2, "acquire", reason); this.unknown(); throw softStatusError(); }
     if (!this.body) return;
     try { this.reader = this.body.getReader({ mode: "byob" }); this.flags |= 1; }
     catch (reason) {
@@ -1571,17 +1582,16 @@ class OwnedStatusReader {
     this.observeClosed();
   }
   private fetchResolved(response: Response): void {
-    if (!this.resolveRead) return;
+    if (this.reads || !(this.pending & 1)) return;
     this.response = response; response = undefined as never; this.original = undefined;
-    this.resolveRead(); this.resolveRead = undefined; this.rejectRead = undefined;
+    this.settleRead();
   }
   private fetchRejected(reason: unknown): void {
-    if (!this.resolveRead) return;
-    const failure = this.failure(1, "fetch", reason); reason = undefined; this.original = undefined;
-    this.rejectRead!(failure); this.resolveRead = undefined; this.rejectRead = undefined;
+    if (this.reads || !(this.pending & 1)) return;
+    this.failure(1, "fetch", reason); reason = undefined; this.flags |= 2048; this.settleRead();
   }
   private observeClosed(): void {
-    this.closed = new Promise<void>(done => { this.resolveClosed = done; });
+    this.pending |= 8;
     let observing = false;
     try {
       let original: Promise<void> | undefined;
@@ -1598,13 +1608,13 @@ class OwnedStatusReader {
       original = undefined;
     } catch (reason) {
       const failure = this.failure(8, "closed", reason); reason = undefined;
-      if (observing) holdOwnedHttpRequest(this.owner.cap); else this.closedResolved();
+      if (observing) this.unknown(); else this.closedResolved();
       throw failure;
     }
   }
-  private closedResolved(): void { if (!this.resolveClosed) return; this.resolveClosed(); this.resolveClosed = undefined; }
+  private closedResolved(): void { if (!(this.pending & 8)) return; this.pending &= ~8; this.schedule(); }
   private closedRejected(reason: unknown): void {
-    if (!this.resolveClosed) return;
+    if (!(this.pending & 8)) return;
     this.flags |= 4;
     if (!(this.flags & 2 && this.nativeFailure)) {
       const failure = this.failure(8, "closed", reason);
@@ -1612,48 +1622,64 @@ class OwnedStatusReader {
     }
     reason = undefined; this.closedResolved();
   }
-  private read(backing: Uint8Array<ArrayBuffer>): Promise<ReadableStreamReadResult<Uint8Array>> {
-    if (this.reading || !(this.flags & 1) || !this.reader) throw softStatusError();
-    this.reading = new Promise<void>(done => { this.resolveRead = done; });
-    const outcome = new Promise<ReadableStreamReadResult<Uint8Array>>((accept, reject) => { this.acceptRead = accept; this.rejectRead = reject; });
+  private read(): void {
+    if (this.pending & 1 || !(this.flags & 1) || !this.reader) throw softStatusError();
+    this.pending |= 1;
     this.flags &= ~32;
     try {
       const reader = this.reader as ReadableStreamBYOBReader, method = reader.read;
       if ((this.flags & 2) && Object.getPrototypeOf(reader) === ReadableStreamBYOBReader.prototype && method === ownedStatusNativeRead) this.flags |= 32;
-      this.original = Reflect.apply(method, reader, [backing]);
+      this.original = Reflect.apply(method, reader, [this.backing]);
       const then = this.original!.then; if (then !== ownedBoundaryThen) this.flags &= ~32;
       // The actual observer's return value is not a settlement receipt. Our
-      // outcome/physical joins are completed only by its first actual callback.
-      void Reflect.apply(then, this.original, [this.readResolved.bind(this), this.readRejected.bind(this)]);
+      // pending bit clears only at its first actual callback; the fixed driver
+      // runs after that callback and the synchronous installation have returned.
+      void Reflect.apply(then, this.original, [this.readResolved.bind(this, this.reads), this.readRejected.bind(this, this.reads)]);
     } catch (reason) {
-      const failure = this.failure(5, "read", reason); reason = undefined;
-      if (this.original) { holdOwnedHttpRequest(this.owner.cap); this.rejectRead!(failure); }
-      else this.readRejected(failure);
+      this.failure(5, "read", reason); reason = undefined; this.flags |= 2048;
+      if (this.original) this.unknown(); else this.settleRead();
+      this.stopReading();
     }
-    return outcome;
   }
   private settleRead(): void {
-    this.original = undefined; this.acceptRead = undefined; this.rejectRead = undefined;
-    this.resolveRead!(); this.resolveRead = undefined; this.reading = undefined;
+    this.original = undefined;
+    this.pending &= ~1; this.schedule();
   }
-  private readResolved(value: ReadableStreamReadResult<Uint8Array>): void {
-    if (!this.resolveRead) return;
+  private readResolved(serial: number, value: ReadableStreamReadResult<Uint8Array>): void {
+    if (serial !== this.reads || !(this.pending & 1)) return;
     try {
-      // Only the native read pair enters our private outcome; no foreign then
-      // property or other result-record alias is assimilated by that Promise.
-      const received = { done: value.done, value: value.value } as ReadableStreamReadResult<Uint8Array>;
-      value = undefined as never; this.acceptRead!(received); this.settleRead();
-    } catch (reason) { this.readRejected(reason); }
+      this.done = value.done; this.value = value.value;
+      value = undefined as never; this.settleRead();
+    } catch (reason) { this.readRejected(serial, reason); }
   }
-  private readRejected(reason: unknown): void {
-    if (!this.resolveRead) return;
+  private readRejected(serial: number, reason: unknown): void {
+    if (serial !== this.reads || !(this.pending & 1)) return;
     const failure = this.flags & 32 && this.nativeFailure ? this.nativeFailure : this.failure(5, "read", reason);
     if (this.flags & 32) this.nativeFailure = failure;
-    reason = undefined; this.rejectRead!(failure); this.settleRead();
+    reason = undefined; this.flags |= 2048; this.settleRead();
+  }
+  private stopReading(): void {
+    if (this.phase >= 3) return;
+    this.phase = 3;
+    // A fetch observer can throw after installation and still deliver its
+    // original response later. Do not spend FIRSTcancel on an absent body.
+    if (this.base !== undefined) this.cancel(); else this.schedule();
+  }
+  private cancelResolved(): void { if (!(this.pending & 2)) return; this.pending &= ~2; this.schedule(); }
+  private cancelRejected(reason: unknown): void {
+    if (!(this.pending & 2)) return;
+    if (!(this.flags & 4096 && this.nativeFailure && this.flags & 4)) { this.failure(6, "cancel", reason); this.flags |= 16; }
+    reason = undefined; this.cancelResolved();
+  }
+  private unlockResolved(): void { if (!(this.pending & 4)) return; this.pending &= ~4; this.schedule(); }
+  private unlockRejected(reason: unknown): void {
+    if (!(this.pending & 4)) return;
+    this.failure(7, "unlock", reason); reason = undefined; this.flags |= 16; this.unlockResolved();
   }
   private cancel(): void {
-    if (this.cancelling || this.flags & 8) return;
-    let resolve!: () => void; this.cancelling = new Promise<void>(done => { resolve = done; });
+    if (this.flags & 16384) return;
+    this.flags |= 16384; this.pending |= 2;
+    if (this.flags & 8) { this.cancelResolved(); return; }
     let observing = false;
     try {
       let original: Promise<void> | undefined, native = false;
@@ -1662,94 +1688,113 @@ class OwnedStatusReader {
         native = !!(this.flags & 2) && Object.getPrototypeOf(reader) === (this.flags & 1 ? ReadableStreamBYOBReader.prototype : ReadableStreamDefaultReader.prototype)
           && method === (this.flags & 1 ? ownedStatusNativeCancel : originalReaderCancel);
         original = Reflect.apply(method, reader, ["soft budget observation stopped"]);
-      } else if (!this.body) { resolve(); return; }
-      else if (this.body.locked) { holdOwnedHttpRequest(this.owner.cap); return; }
+      } else if (!this.body) { this.cancelResolved(); return; }
+      else if (this.body.locked) { this.unknown(); return; }
       else original = this.body.cancel();
       observing = true;
-      const then = original!.then; native &&= then === ownedBoundaryThen;
-      void Reflect.apply(then, original, [() => { resolve(); }, (reason: unknown) => {
-        if (!(native && this.nativeFailure && this.flags & 4)) { this.failure(6, "cancel", reason); this.flags |= 16; }
-        reason = undefined; resolve();
-      }]);
+      const then = original!.then;
+      if (native && then === ownedBoundaryThen) this.flags |= 4096; else this.flags &= ~4096;
+      void Reflect.apply(then, original, [this.cancelResolved.bind(this), this.cancelRejected.bind(this)]);
       original = undefined;
     } catch (reason) {
       this.failure(6, "cancel", reason); reason = undefined; this.flags |= 16;
-      if (observing) holdOwnedHttpRequest(this.owner.cap); else resolve();
+      if (observing) this.unknown(); else this.cancelResolved();
     }
   }
   private unlock(): void {
-    if (this.unlocking) return;
-    let resolve!: () => void; this.unlocking = new Promise<void>(done => { resolve = done; });
-    if (!this.reader) { resolve(); return; }
+    if (this.flags & 32768) return;
+    this.flags |= 32768; this.pending |= 4;
+    if (!this.reader) { this.unlockResolved(); return; }
     let observing = false;
     try {
       let original: unknown;
       { const reader = this.reader, method = reader.releaseLock; original = Reflect.apply(method, reader, []); }
-      if (original === undefined) { resolve(); return; }
+      if (original === undefined) { this.unlockResolved(); return; }
       observing = true;
-      void Promise.resolve(original).then(() => { resolve(); }, reason => {
-        this.failure(7, "unlock", reason); reason = undefined; this.flags |= 16; resolve();
-      });
+      void Promise.resolve(original).then(this.unlockResolved.bind(this), this.unlockRejected.bind(this));
       original = undefined;
     } catch (reason) {
       this.failure(7, "unlock", reason); reason = undefined; this.flags |= 16;
-      if (observing) holdOwnedHttpRequest(this.owner.cap); else resolve();
+      if (observing) this.unknown(); else this.unlockResolved();
     }
   }
-  async run(): Promise<void> {
-    let observed = false, spent: number | null = null;
+  private advance(): void {
+    this.flags &= ~8192;
     try {
-      await this.acquire();
-      let headers = 0, units = 0, ok = false;
-      try { this.response!.headers.forEach((value, key) => {
-        if (++headers > softStatusLimits.headers || key.length > softStatusLimits.headerBytes - units) throw softStatusError();
-        units += key.length;
-        if (value.length > softStatusLimits.headerBytes - units) throw softStatusError();
-        units += value.length;
-      }); ok = this.response!.ok; } catch (reason) { throw this.failure(4, "acquire", reason); }
-      if (!ok) observed = true;
-      else {
-        if (!(this.flags & 1) || !this.reader) throw softStatusError();
-        let backing = new Uint8Array(softStatusLimits.backing), wire = 0, reads = 0, text = "";
-        const decoder = new TextDecoder("utf-8", { fatal: true });
-        for (;;) {
-          if (reads++ >= softStatusLimits.reads) throw softStatusError();
-          let part: ReadableStreamReadResult<Uint8Array> | undefined = await this.read(backing);
-          let bytes = part.value;
+      if (this.phase === 1 || this.phase === 2) {
+        if (this.pending & 1) return;
+        if (this.flags & 2048) { this.stopReading(); return; }
+        if (this.phase === 1) {
+          this.open();
+          let headers = 0, units = 0, ok = false;
+          try { this.response!.headers.forEach((value, key) => {
+            if (++headers > softStatusLimits.headers || key.length > softStatusLimits.headerBytes - units) throw softStatusError();
+            units += key.length;
+            if (value.length > softStatusLimits.headerBytes - units) throw softStatusError();
+            units += value.length;
+          }); ok = this.response!.ok; } catch (reason) { throw this.failure(4, "acquire", reason); }
+          if (!ok) { this.flags |= 64; this.stopReading(); return; }
+          if (!(this.flags & 1) || !this.reader) throw softStatusError();
+          this.backing = new Uint8Array(softStatusLimits.backing);
+          this.decoder = new TextDecoder("utf-8", { fatal: true }); this.phase = 2;
+        } else {
+          let bytes = this.value; this.value = undefined;
           if (bytes) {
-            if (!(bytes.buffer instanceof ArrayBuffer) || bytes.buffer.byteLength > softStatusLimits.backing || bytes.byteLength > softStatusLimits.wire - wire) throw softStatusError();
-            wire += bytes.byteLength;
-            const chunk = decoder.decode(bytes, { stream: !part.done });
-            if (chunk.length > softStatusLimits.wire - text.length) throw softStatusError();
-            text += chunk; backing = new Uint8Array(bytes.buffer);
+            if (!(bytes.buffer instanceof ArrayBuffer) || bytes.buffer.byteLength > softStatusLimits.backing || bytes.byteLength > softStatusLimits.wire - this.wire) throw softStatusError();
+            this.wire += bytes.byteLength;
+            const chunk = this.decoder!.decode(bytes, { stream: !this.done });
+            if (chunk.length > softStatusLimits.wire - this.text.length) throw softStatusError();
+            this.text += chunk; this.backing = new Uint8Array(bytes.buffer);
           }
-          const done = part.done; part = undefined;
-          if (done) {
-            if (!bytes) { const tail = decoder.decode(); if (tail.length > softStatusLimits.wire - text.length) throw softStatusError(); text += tail; }
-            bytes = undefined; this.flags |= 8; break;
+          if (this.done) {
+            if (!bytes) { const tail = this.decoder!.decode(); if (tail.length > softStatusLimits.wire - this.text.length) throw softStatusError(); this.text += tail; }
+            bytes = undefined; this.flags |= 8;
+            let value = parseSoftStatus(this.text); this.text = "";
+            if (value && typeof value === "object" && "spentMicros" in value) {
+              const candidate = (value as { spentMicros?: unknown }).spentMicros;
+              if (typeof candidate === "number" && Number.isSafeInteger(candidate)) this.spent = candidate;
+            }
+            value = undefined; this.flags |= 64; this.stopReading(); return;
           }
           bytes = undefined;
-          if (!backing.byteLength) throw softStatusError();
+          if (!this.backing!.byteLength) throw softStatusError();
         }
-        let value = parseSoftStatus(text); text = "";
-        if (value && typeof value === "object" && "spentMicros" in value) {
-          const candidate = (value as { spentMicros?: unknown }).spentMicros;
-          if (typeof candidate === "number" && Number.isSafeInteger(candidate)) spent = candidate;
-        }
-        value = undefined; observed = true;
+        if (this.reads++ >= softStatusLimits.reads) throw softStatusError();
+        this.read(); return;
       }
-    } catch { observed = false; }
-    // No result reaches the cache/denial command until original cleanup ends.
-    this.cancel(); await this.reading; await this.cancelling;
-    this.unlock(); await this.unlocking;
-    if (this.body?.locked) { holdOwnedHttpRequest(this.owner.cap); await new Promise<never>(() => {}); }
-    // The added independent closed observation is diagnostic/custody only. It
-    // cannot delay the ordinary decision after its read/cancel/unlock boundary.
-    this.owner.decide(this.index, observed && !(this.flags & 16), spent);
-    await this.closed;
-    if (this.body?.locked) { holdOwnedHttpRequest(this.owner.cap); await new Promise<never>(() => {}); }
-    this.reader = undefined; this.body = undefined; this.response = undefined; this.original = undefined;
-    this.reading = undefined; this.resolveRead = undefined; this.acceptRead = undefined; this.rejectRead = undefined; this.resolveClosed = undefined; this.cancelling = undefined; this.unlocking = undefined; this.closed = undefined; this.nativeFailure = undefined;
+      if (this.phase === 3) {
+        if (this.base === undefined) {
+          if (this.pending & 1) return;
+          if (this.response) {
+            try { this.open(); }
+            catch (reason) { reason = undefined; this.flags |= 16; }
+          }
+        }
+        if (!(this.flags & 16384)) { this.cancel(); return; }
+        if (this.pending & 3) return;
+        this.phase = 4; this.unlock(); return;
+      }
+      if (this.phase === 4) {
+        if (this.pending & 4) return;
+        if (this.body?.locked) { this.unknown(); return; }
+        // Independent closed rejection is diagnostic; actual read/cancel/unlock
+        // cleanup still precedes this completion-arrival decision.
+        this.owner.decide(this.index, !!(this.flags & 64) && !(this.flags & 16), this.spent);
+        this.phase = 5;
+      }
+      if (this.phase !== 5 || this.pending || this.flags & (256 | 8192)) return;
+      if (this.body?.locked) { this.unknown(); return; }
+      this.reader = undefined; this.body = undefined; this.response = undefined; this.original = undefined;
+      this.advanceWork = undefined as never; this.nativeFailure = undefined; this.decoder = undefined;
+      this.text = ""; this.backing = undefined; this.value = undefined;
+      this.phase = 6; this.retired();
+    } catch (reason) {
+      if (this.phase < 3) {
+        // Existing parse/header/profile failures are failed observations, not
+        // exhausted-cache updates. Their raw reasons never enter the owner.
+        reason = undefined; this.flags &= ~64; this.stopReading();
+      } else this.unsettled(reason);
+    }
   }
 }
 export function prepareOwnedHttpSoftStatus(cap: OwnedHttpRequest, env: Env, plan: PreparedSoftBudget): void {

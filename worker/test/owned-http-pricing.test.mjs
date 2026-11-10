@@ -9,7 +9,7 @@ const observation = globalThis.__ownedJsonObservation = createOwnedJsonObservati
 globalThis.__ownedUsageWire = ownedUsageWire;
 const sourceHooks = registerHooks({ load(url, context, nextLoad) {
   const result = nextLoad(url, context);
-  if (!url.startsWith('file:') || !/(?:proxy-response|token-usage|http-identity-owner|venice-chat-runtime)\.ts$/.test(url)) return result;
+  if (!url.startsWith('file:') || !/(?:json-body|proxy-response|token-usage|http-identity-owner|venice-chat-runtime)\.ts$/.test(url)) return result;
   const source = typeof result.source === 'string' ? result.source : Buffer.from(result.source).toString('utf8');
   return { ...result, source: observeOwnedJsonSource(fileURLToPath(url), source) };
 } });
@@ -45,6 +45,24 @@ const deferred = () => {
   let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
   void promise.then(() => undefined, () => undefined); return { promise, resolve, reject };
 };
+
+test('private codec claims one permanent COMMON baseline before its first validator', async t => {
+  const baseline = bodyBudgetCharged();
+  assert.equal(observation.shared.claims, 0);
+  await fixture(t, async f => {
+    f.veniceResponse('{"model":"zai-org-glm-5-2","extra":');
+    const failed = await f.request(payload({ model: 'venice/zai-org-glm-5-2' }));
+    assert.equal(failed.status, 502);
+    assert.equal(observation.shared.claims, 1); assert.equal(observation.shared.held, 65536);
+    assert.equal(observation.rows.at(-1).cleared, true); assert.equal(observation.rows.at(-1).nativeParses, 0);
+    f.veniceResponse(ownedJsonCodecWire('compact-object128', 'zai-org-glm-5-2'));
+    const responses = await Promise.all([f.request(payload({ model: 'venice/zai-org-glm-5-2' })), f.request(payload({ model: 'venice/zai-org-glm-5-2' }))]);
+    assert.ok(responses.every(response => response.status === 200)); await f.drain();
+    assert.equal(observation.shared.claims, 1);
+    assert.ok(observation.rows.slice(-2).every(row => row.cleared && row.nativeParses === 1));
+  }, false, 'venice');
+  assert.equal(bodyBudgetCharged(), baseline + 65536, 'all request owners retired; only shared module custody remains');
+});
 
 test('owned later object-128 SSE retains raw wire, usage and one selected/accounting outcome', async t => {
   await fixture(t, async f => {
@@ -113,7 +131,7 @@ async function fixture(t, run, retained = false, variant = 'fireworks') {
   const activeProvider = snapshot.providers.find(item => item.id === variant);
   const activeModel = variant === 'venice' ? activeProvider.models.find(item => item.id === 'venice/zai-org-glm-5-2') : model;
   const activeGrantKey = 'oauth/' + policyId + '/' + variant;
-  const baseline = bodyBudgetCharged(), roots = [], origins = new WeakMap(), bodies = new WeakMap();
+  const baseline = bodyBudgetCharged(), sharedBaseline = observation.shared.held, roots = [], origins = new WeakMap(), bodies = new WeakMap();
   const resources = [], releases = [], values = new Map(), calls = [], sent = [], events = [], retirements = [];
   let done = false, cleanupPromise, hasPrimary = false, primary, rejectMaterialize = false, pressure, archiveGate;
   const own = promise => {
@@ -132,7 +150,7 @@ async function fixture(t, run, retained = false, variant = 'fireworks') {
     for (let i = 0; i < roots.length; i++) await roots[i].outcome;
     for (const root of roots) { const value = await root.outcome; if (value.failed && !root.used) { root.used = true; failures.push(value.error); } }
     try { evictCredentialGeneration(env, kid); } catch (error) { failures.push(error); }
-    try { assert.equal(bodyBudgetCharged(), baseline, 'last actual pricing/body/original roots'); } catch (error) { failures.push(error); }
+    try { assert.equal(bodyBudgetCharged(), baseline + observation.shared.held - sharedBaseline, 'exact request retirement plus permanent shared custody'); } catch (error) { failures.push(error); }
     for (const release of resources) try { release(); } catch (error) { failures.push(error); }
     return failures;
   })();

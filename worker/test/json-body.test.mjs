@@ -1,6 +1,39 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { JsonBodyStructureLimit, mediaJsonBody, parseBoundedJson, utf8Length } from "../json-body.ts";
+import { JsonBodyStructureLimit, mediaJsonBody, parseBoundedJson, utf8Length, validatePrivateJsonBody } from "../json-body.ts";
+
+test("private one-shot validation returns a scalar bound without constructing values", () => {
+  for (const [text, graph] of [
+    ['null', 8], ['true', 8], ['-0', 8], ['1e309', 8], ['9007199254740993', 8],
+    ['"😀"', 12], ['"\\ud800"', 10], ['{"x":0,"x":"q"}', 62],
+    ['{"__proto__":{"x":1},"a":[true,null]}', 134],
+    ['"' + 'x'.repeat(8193) + '"', 8 + 2 * 8193],
+  ]) {
+    assert.equal(validatePrivateJsonBody(text), graph, text.slice(0, 80));
+    assert.equal(validatePrivateJsonBody(' \t\r\n' + text + '\n'), graph);
+  }
+  assert.equal(Object.is(JSON.parse('-0'), -0), true);
+  assert.equal(JSON.parse('1e309'), Infinity);
+  assert.equal(Object.hasOwn(JSON.parse('{"__proto__":0}'), '__proto__'), true);
+});
+
+test("private validator preserves structural admission and exact grammar boundaries", () => {
+  for (const text of [
+    '['.repeat(128) + '0' + ']'.repeat(128),
+    '[' + '0,'.repeat(65534) + '0]',
+    '{' + '"x":0,'.repeat(65534) + '"x":0}',
+    '{"' + 'k'.repeat(4096) + '":0}', '0.' + '0'.repeat(4094),
+  ]) assert.ok(validatePrivateJsonBody(text) > 0);
+  for (const text of [
+    '['.repeat(129) + '0' + ']'.repeat(129), '{"x":'.repeat(2048),
+    '[' + '0,'.repeat(65535) + '0]', '{' + '"x":0,'.repeat(65535) + '"x":0}',
+    '{"' + 'k'.repeat(4097) + '":0}', '0.' + '0'.repeat(4095),
+  ]) assert.throws(() => validatePrivateJsonBody(text), JsonBodyStructureLimit);
+  for (const text of ['', '{', '"\\u', '1e', 'true false', '[0,]', '\u00a0true', '[\u20280]', '\ufeff{}'])
+    assert.throws(() => validatePrivateJsonBody(text), text);
+  const decoded = new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array([239, 187, 191, 123, 125]));
+  assert.equal(validatePrivateJsonBody(decoded), 8, 'decoder BOM behavior remains before exact-text validation');
+});
 
 const encoder = new TextEncoder();
 async function bytes(stream) {

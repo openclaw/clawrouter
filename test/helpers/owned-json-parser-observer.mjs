@@ -10,6 +10,7 @@ export function createOwnedJsonObservation() {
   const consumers = { created: 0, acquired: 0, retired: 0, live: 0, inner: 0, outer: 0,
     read: 0, cancel: 0, unlock: 0, nativeUnlocked: 0, unlockSettled: 0, thenCalls: 0, closed: 0, closedSettled: 0, replay: 0, transferred: 0, pricing: 0, enqueued: 0, oversizedOutput: 0, mutations: 0, held: false, released: false, reasonReads: 0 };
   const usage = { census: 0, parsed: 0, maxGraph: 0, maxContainers: 0, maxStrings: 0, maxAtoms: 0, maxUnits: 0, summaries: 0, cleared: 0 };
+  const shared = { claims: 0, held: 0, refused: 0, before: 0, after: 0 };
   let releaseConsumer, mutateIntake;
   const statusReaders = [], statusReleases = [];
   const publicReaders = { ...consumers }, intakeReaders = { ...consumers }, sourceReaders = { ...consumers };
@@ -147,7 +148,7 @@ export function createOwnedJsonObservation() {
   const peak = row => {
     row.peakParents = Math.max(row.peakParents, row.parents);
     row.peakTokens = Math.max(row.peakTokens, row.tokens);
-    const stored = 2 + row.parents + row.tokens + Number(row.pending) + Number(row.member);
+    const stored = (row.kind === 'validator' ? 1 : 2) + row.parents + row.tokens + Number(row.pending) + Number(row.member);
     row.peakStored = Math.max(row.peakStored, stored);
     if (current === row) row.peakActive = Math.max(row.peakActive, stored);
     else row.peakBetween = Math.max(row.peakBetween, stored);
@@ -156,6 +157,13 @@ export function createOwnedJsonObservation() {
     rows,
     consumers,
     usage,
+    shared,
+    sharedClaim(before, after, held) {
+      if (shared.claims || held !== 65536 || after - before !== held) throw new Error('shared claim is not one exact positive debit');
+      shared.claims++; shared.held = held; shared.before = before; shared.after = after;
+    },
+    sharedRefused(before, after) { if (before !== after) throw new Error('failed shared claim changed COMMON'); shared.refused++; },
+    sharedPressure(charge) { if (!charge) throw new Error('shared claim pressure setup'); releaseConsumer = () => charge.release(); },
     statusReaders,
     statusReader(reader, index) {
       const row = { read: 0, cancel: 0, unlock: 0, nativeUnlocked: 0, unlockSettled: 0, thenCalls: 0, closed: 0, closedSettled: 0, reasonReads: 0, held: false, retired: false, decided: false };
@@ -210,17 +218,29 @@ export function createOwnedJsonObservation() {
       preparations += delta;
       if (preparations < 0) throw new Error('preparation accounting retired twice');
     },
-    begin() {
+    begin(kind = 'materializer') {
       if (preparations !== 0) throw new Error('unused preparation accounting survived into codec');
-      const row = { statusPending: statusReaders.filter(value => value.held && !value.retired).length,
+      const row = { kind, peakDepth: 0, nativeParses: 0, graph: 0, statusPending: statusReaders.filter(value => value.held && !value.retired).length,
         parents: 0, tokens: 0, pending: false, member: false, peakParents: 0, peakTokens: 0, peakStored: 2, peakActive: 2, peakBetween: 2, peakRejected: 0,
         parentPushes: 0, parentPops: 0, tokenPushes: 0, tokenPops: 0, attachments: 0, objectAttachments: 0, cleared: false,
         consumerReaders: consumers.live, pricingOwners: consumers.pricing, innerWrappers: consumers.inner, outerWrappers: consumers.outer };
       rows.push(row); return row;
     },
+    validating(row, depth) { row.peakDepth = Math.max(row.peakDepth, depth); },
+    validated(row, graph) { row.graph = graph; },
+    validatorCleared(row, clear) {
+      if (!clear) throw new Error('validator retained a tokenizer, callback or text alias');
+      row.abandonedTokens = row.tokens; row.tokens = 0; row.cleared = true;
+    },
+    nativeParse() {
+      const row = rows.at(-1);
+      if (current || !row || row.kind !== 'validator' || !row.cleared || row.graph <= 0 || row.nativeParses)
+        throw new Error('native graph constructor overlaps validator or lacks admission');
+      row.nativeParses++;
+    },
     enter(row) { if (row) { if (current) throw new Error('nested fixture parser observation'); current = row; } },
     leave(row) { if (row) { if (current !== row) throw new Error('fixture parser observation mismatch'); current = undefined; peak(row); } },
-    rejected(row) { if (row) row.peakRejected = Math.max(row.peakRejected, 2 + row.parents + row.tokens + Number(row.pending) + Number(row.member)); },
+    rejected(row) { if (row) row.peakRejected = Math.max(row.peakRejected, (row.kind === 'validator' ? 1 : 2) + row.parents + row.tokens + Number(row.pending) + Number(row.member)); },
     consumer(row, parents, pending) {
       if (!row) return;
       if (parents > row.parents) row.parentPushes += parents - row.parents;
@@ -257,6 +277,15 @@ function replace(source, anchor, replacement, count = 1) {
 
 export function observeOwnedJsonSource(path, source) {
   if (/[\\/]worker[\\/]venice-chat-runtime\.ts$/.test(path)) {
+    source = 'import { bodyBudgetCharged as __sharedCharged, bodyBudgetBytes as __sharedLimit } from "./body-budget.ts";\n' + source;
+    source = replace(source, 'const charge = ExactBodyCharge.reserve(65536);',
+      'if (' + probe + '.consumerMode === "shared-refusal") ' + probe + '.sharedPressure(ExactBodyCharge.reserve(__sharedLimit - __sharedCharged() - 65535)); '
+      + 'const __beforeShared = __sharedCharged(); const charge = ExactBodyCharge.reserve(65536);');
+    source = replace(source, 'if (!charge) throw identityFailure("limit");',
+      'if (!charge) { ' + probe + '.sharedRefused(__beforeShared, __sharedCharged()); throw identityFailure("limit"); }');
+    source = replace(source, 'ownedTokenizerShared = charge;',
+      'ownedTokenizerShared = charge; ' + probe + '.sharedClaim(__beforeShared, __sharedCharged(), charge.bytes);');
+    source = replace(source, 'return JSON.parse(text);', probe + '.nativeParse(); return JSON.parse(text);');
     source = replace(source, 'this.reader = (this.flags & 8) ? this.body.getReader({ mode: "byob" }) : this.body.getReader();',
       'this.reader = (this.flags & 8) ? this.body.getReader({ mode: "byob" }) : this.body.getReader(); ' + probe + '.sourceReader(this.reader);');
   } else if (/[\\/]worker[\\/]token-usage\.ts$/.test(path)) {
@@ -270,6 +299,17 @@ export function observeOwnedJsonSource(path, source) {
       'if (privateUsageAccumulators?.has(accept)) ' + probe + '.summary(message?.stop_reason); const delta = messageCounters(usageRecord(root));');
     source = replace(source, 'ownedAcceptedUsage!.delete(this.cap);', 'ownedAcceptedUsage!.delete(this.cap); ' + probe + '.usageCleared();');
   } else if (/[\\/]worker[\\/]json-body\.ts$/.test(path)) {
+    source = replace(source, 'export function validatePrivateJsonBody(text: string): number {',
+      'export function validatePrivateJsonBody(text: string): number { const __validatorProbe = ' + probe + '.begin("validator");');
+    source = replace(source, 'if (++depth > 128) throw new JsonBodyStructureLimit();',
+      'depth++; ' + probe + '.validating(__validatorProbe, depth); if (depth > 128) throw new JsonBodyStructureLimit();');
+    source = replace(source, 'consume.push(text.slice(offset, end)); offset = end;',
+      probe + '.enter(__validatorProbe); try { consume.push(text.slice(offset, end)); } catch (error) { ' + probe + '.rejected(__validatorProbe); throw error; } finally { ' + probe + '.leave(__validatorProbe); } offset = end;');
+    source = replace(source, 'consume.end();\n    return 8 * (2 * values - 1 + keys) + 2 * units;',
+      probe + '.enter(__validatorProbe); try { consume.end(); } finally { ' + probe + '.leave(__validatorProbe); } '
+      + probe + '.validated(__validatorProbe, 8 * (2 * values - 1 + keys) + 2 * units); return 8 * (2 * values - 1 + keys) + 2 * units;');
+    source = replace(source, 'consume = undefined; accept = undefined; text = "";',
+      'consume = undefined; accept = undefined; text = ""; ' + probe + '.validatorCleared(__validatorProbe, consume === undefined && accept === undefined && text === "");');
     source = replace(source, 'let pendingKey: string | undefined;',
       'let pendingKey: string | undefined; const __parserProbe = privateParents ? ' + probe + '.begin() : undefined;');
     source = replace(source, 'parent = parents.at(-1); member = pendingKey;',
@@ -303,8 +343,8 @@ export function observeOwnedJsonSource(path, source) {
       '      this.nativeFailure = undefined; if (this.__probeAcquired) ' + probe + '.publicRetiredReader(); this.resolve();');
     source = replace(source, '    this.observeClosed();', '    ' + probe + '.statusReader(this.reader, this.index); this.observeClosed();');
     source = replace(source, 'this.owner.retire(this.index, this);', probe + '.statusRetired(this.index); this.owner.retire(this.index, this);');
-    source = replace(source, 'this.owner.decide(this.index, observed && !(this.flags & 16), spent);',
-      probe + '.statusDecision(this.index); this.owner.decide(this.index, observed && !(this.flags & 16), spent);');
+    source = replace(source, 'this.owner.decide(this.index, !!(this.flags & 64) && !(this.flags & 16), this.spent);',
+      probe + '.statusDecision(this.index); this.owner.decide(this.index, !!(this.flags & 64) && !(this.flags & 16), this.spent);');
   } else if (/[\\/]worker[\\/]proxy\.ts$/.test(path)) {
     source = replace(source, 'const diagnostics = beginOwnedHttpIntakeDiagnostics(cap);',
       'const diagnostics = beginOwnedHttpIntakeDiagnostics(cap); let __intakeProbeAcquired = false;');
