@@ -4,15 +4,18 @@ import type { PersonalUsageEvent, PersonalUsageReport, UsageCostSummary, UsageMe
 import type { PersonalUsageData } from '../hooks/use-personal-usage';
 import { PersonalUsageTimeSeries } from '../analytics-charts';
 import { formatCount } from '../ui-helpers';
-import { knownLaneCost, personalGlanceMoney, personalSuccessCaption, personalMetricLabels, personalPeak, personalRankedGroups, personalTrendRows, safeUsageSum, tokenTotal, type PersonalUsageMetric } from '../personal-usage-view';
+import { knownLaneCost, personalHistoryComplete, personalGlanceMoney, personalSuccessCaption, personalMetricLabels, personalPeak, personalRankedGroups, personalTrendRows, safeUsageSum, tokenTotal, type PersonalUsageMetric } from '../personal-usage-view';
 import { usageEventAnchor, costCell, costClasses, costClassLabel, costLanes, downloadUsageCsv, emptyFilters, eventsCsv, laneLabel, reportCsv, usageGroupLabel, usageKeyLabel, usageMoney, type PersonalUsageQuery, type UsageKeyName } from '../personal-usage';
 
 const count = (value: number | null) => value === null ? 'Not reported' : value.toLocaleString('en-US');
 const iso = (timestamp: number) => new Date(timestamp).toISOString();
 const priceText = (costClass: string, micros: number | null) => costClass === 'unknown' ? 'Price unknown' : costClass === 'no_charge' ? 'No charge' : usageMoney(micros);
-const tokenPair = (metrics: UsageMetrics) => (metrics.inputReportedCalls ? count(metrics.inputTokens) : 'Not reported') + ' / ' + (metrics.outputReportedCalls ? count(metrics.outputTokens) : 'Not reported');
+const tokenPair = (metrics: UsageMetrics, complete: boolean) => {
+  const tokens = tokenTotal(metrics, complete);
+  return count(tokens.input) + ' / ' + count(tokens.output);
+};
 
-function TokenStats({ metrics: m }: { metrics: UsageMetrics }) {
+function TokenStats({ metrics: m, complete }: { metrics: UsageMetrics; complete: boolean }) {
   const stats = [
     ['Input tokens', m.inputTokens, m.inputReportedCalls],
     ['Output tokens', m.outputTokens, m.outputReportedCalls],
@@ -23,7 +26,7 @@ function TokenStats({ metrics: m }: { metrics: UsageMetrics }) {
   return <dl className="personalTokenStats">
     {stats.map(([label, tokens, reported]) => <div key={label}>
       <dt>{label}</dt>
-      <dd>{reported ? count(tokens) : 'Not reported'}</dd>
+      <dd>{reported || (complete && m.calls === 0 && reported === 0 && tokens === 0) ? count(tokens) : 'Not reported'}</dd>
       <dd className="personalMetricNote"><small>{count(reported)}/{count(m.calls)} calls reported</small></dd>
     </div>)}
   </dl>;
@@ -113,8 +116,10 @@ function MoneyValue({ label, micros }: { label: string; micros: number | null })
 
 export function PersonalUsageSummary({ data, onOpen, keys = [] }: { data: PersonalUsageData; onOpen?: () => void; keys?: readonly UsageKeyName[] }) {
   const { report, reload } = data, value = report.value;
-  const tokens = value ? tokenTotal(value.metrics) : null;
-  const api = value ? knownLaneCost(value.costs, 'api') : null;
+  const complete = value ? personalHistoryComplete(value) : false;
+  const tokens = value ? tokenTotal(value.metrics, complete) : null;
+  const api = value ? knownLaneCost(value.costs, 'api', complete ? value.metrics.calls : undefined) : null;
+  const noApiCalls = api?.value === 0 && !api.present;
   const subscription = value ? knownLaneCost(value.costs, 'subscription') : null;
   const filters = Object.entries(data.query.filters).filter(([, filter]) => filter);
   return <section className="dashboardPanel personalUsageSummary" aria-label="Your personal usage">
@@ -144,7 +149,7 @@ export function PersonalUsageSummary({ data, onOpen, keys = [] }: { data: Person
         </div>
         <div>
           <dt>Known API cost</dt>
-          <MoneyValue label="Known API cost" micros={api.value} />
+          {noApiCalls ? <dd>No API calls</dd> : <MoneyValue label="Known API cost" micros={api.value} />}
           <dd className="personalGlanceMeta">
             Calculated + fixed · USD{' '}
             <UsageHelp label={api.value === null ? 'Unavailable' : api.partial ? 'Partial coverage' : 'Known prices'} attention={api.partial || api.value === null} icon={!api.partial && api.value !== null} ariaLabel="Known API cost and price coverage">
@@ -378,6 +383,7 @@ function UsageActivity({ data, timezone, keys }: { data: PersonalUsageData; time
 
 function UsageDetails({ value, query, setQuery, keys, data }: { value: PersonalUsageReport; query: PersonalUsageQuery; setQuery: (query: PersonalUsageQuery) => void; keys: readonly UsageKeyName[]; data: PersonalUsageData }) {
   const page = data.events.value;
+  const complete = personalHistoryComplete(value);
   return <div className="personalDetailsGrid">
     <div className="personalExportBar">
       <div><h2>Report details</h2><p className="personalNote">CSV exports use the exact report scope and the currently loaded activity page.</p></div>
@@ -386,7 +392,7 @@ function UsageDetails({ value, query, setQuery, keys, data }: { value: PersonalU
     <section className="dashboardPanel personalSection">
       <header className="personalSectionHeader"><div><h2>Costs & field coverage</h2><p>Reporting values, not an invoice. No grand total across lanes.</p></div></header>
       <Costs costs={value.costs} />
-      <TokenStats metrics={value.metrics} />
+      <TokenStats metrics={value.metrics} complete={complete} />
       <p className="personalNote">Coverage counts calls reporting each field, not inferred zeros. Cache and reasoning can overlap input/output. Subscription amounts are usage equivalents, not additional charges. Estimates, upper bounds, partial and unknown prices stay outside the known subtotal.</p>
     </section>
     <section className="dashboardPanel personalSection" aria-label="Detailed usage breakdown">
@@ -405,7 +411,7 @@ function UsageDetails({ value, query, setQuery, keys, data }: { value: PersonalU
                 ? usageGroupLabel(value.groupBy, group.value)
                 : <button className="personalGroupButton" type="button" onClick={() => setQuery({ ...query, filters: { ...query.filters, [value.groupBy]: group.value! } })}>{value.groupBy === 'key' ? usageKeyLabel(group.value, keys) : group.value}</button>}</th>
               <td>{count(group.metrics.calls)}<small>{count(group.metrics.utilityCalls)} utility</small></td>
-              <td>{tokenPair(group.metrics)}</td>
+              <td>{tokenPair(group.metrics, complete)}</td>
               <td><CostBreakdown costs={group.costs} /></td>
             </tr>)}
           </tbody>
@@ -424,7 +430,7 @@ function UsageDetails({ value, query, setQuery, keys, data }: { value: PersonalU
               <td>{count(bucket.metrics.calls)}</td>
               <td>{count(bucket.metrics.successfulCalls)}</td>
               <td>{count(bucket.metrics.errorCalls)} / {count(bucket.metrics.deniedCalls)}</td>
-              <td>{tokenPair(bucket.metrics)}</td>
+              <td>{tokenPair(bucket.metrics, personalHistoryComplete(value, bucket.start, bucket.end))}</td>
               <td><CostBreakdown costs={bucket.costs} /></td>
             </tr>)}
           </tbody>

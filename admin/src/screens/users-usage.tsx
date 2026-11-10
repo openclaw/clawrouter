@@ -149,6 +149,7 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
   const tenantRows = tenants.length ? tenants : tenantSummaryFallback(keys, credentials);
   const serviceByProvider = new Map(services.map((service) => [service.provider, service]));
   const successRate = usage.summary.requestCount ? Math.round((usage.summary.successCount / usage.summary.requestCount) * 100) : null;
+  const successCaption = successRate === null ? "—" : successRate === 0 && usage.summary.successCount > 0 ? "<1%" : successRate === 100 && usage.summary.successCount < usage.summary.requestCount ? ">99%" : `${successRate}%`;
   const untrackedRows = rows.filter((row) => row.enabled && row.budget.ledger === "untracked");
   const exhaustedRows = rows.filter((row) => row.enabled && row.budget.configured && row.budget.remainingMicros !== undefined && row.budget.remainingMicros !== null && row.budget.remainingMicros <= 0);
   const ledgerFailureRows = rows.filter((row) => row.enabled && (row.budget.ledger === "unavailable" || row.budget.ledger === "invalid_policy"));
@@ -159,7 +160,7 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
       <UsageFreshness loaded={usageLoaded} stale={usageStale} error={usageError} updatedAt={usageUpdatedAt} />
       <section className="usageSummaryGrid" aria-label="Usage summary">
         <Metric label="requests" value={usageLoaded ? formatCount(usage.summary.requestCount) : "—"} meta={usageLoaded ? `${formatCount(usage.summary.totalTokens)} tokens` : "Usage unavailable"} />
-        <Metric label="success rate" value={successRate === null ? "—" : `${successRate}%`} meta={!usageLoaded ? "Usage unavailable" : successRate === null ? "No requests in this period" : `${formatCount(usage.summary.successCount)} successful`} />
+        <Metric label="success rate" value={successCaption} meta={!usageLoaded ? "Usage unavailable" : successRate === null ? "No requests in this period" : `${formatCount(usage.summary.successCount)} successful`} />
         <Metric label="errors" value={usageLoaded ? formatCount(usage.summary.errorCount) : "—"} meta="upstream and policy outcomes" />
         <Metric label={spend.label} value={usageLoaded ? spend.value : "—"} meta={usageLoaded ? `Last 30 days · ${spend.note}` : "Usage unavailable"} />
       </section>
