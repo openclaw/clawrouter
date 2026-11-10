@@ -7,16 +7,18 @@ import { admitGenerationFactories, admitGenerationConsumptionFactories, generati
   copyGenerationCoverage, generationCoverageLayout, sameGenerationCoverage,
   type GenerationCoverage, type GenerationAuthentication, type IdentityGenerationPreparation, type IdentityGenerationBorrow } from "./identity-generations.ts";
 import { PrivateCacheReservation, hotCacheNow, hotCacheConfig, tryRunInBackground, type HotCacheConfig } from "./hot-cache.ts";
-import { ownsCredentialPrefetchPermit, moveOwnedCredentialBorrow, type OwnedCredentialBorrow } from "./credential-cache.ts";
+import { ownsCredentialPrefetchPermit, ownsOwnedHttpCredentialPermit, acceptOwnedHttpCredentialMaterialization, retireOwnedHttpGrantCredentials, invalidateOwnedHttpGrantCredentials, moveOwnedCredentialBorrow, type OwnedCredentialBorrow } from "./credential-cache.ts";
 import { materializeGrantCredentials } from "./grant-credentials.ts";
+import { selectedCredentialFailure } from "./grant-credential-failure.ts";
 import { grantRevision, currentGrantRuntime } from "./grant-eligibility.ts";
-import { snapshot as providerSnapshot, ownsOwnedHttpSelectionPermit } from "./providers.ts";
+import { snapshot as providerSnapshot, ownsOwnedHttpSelectionPermit, consumeOwnedHttpProviderCredential } from "./providers.ts";
 import { selectGenerationAdmissionCandidate } from "./authority-grant-selection.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import { GenerationAdvisoryState, waitGenerationFlushWindow, admitGenerationOverlay, generationSelectionWorkingBytes, planGenerationSelection, generationRuntimeWorkingBytes, detachedGenerationRuntime, detachedGenerationFeedback } from "./admission-cache.ts";
 import { authorityCall } from "./authority.ts";
 import { recordGrantRuntime } from "./grant-selection.ts";
 import { ownedGenerationCredentialFailure } from "./proxy-auth.ts";
+import { acceptOwnedHttpAuthentication, hasOwnedHttpProxyInvocation } from "./proxy.ts";
 import { credentialExpired } from "./credential-lifecycle.ts";
 import { safeEqual, sha256Hex, HttpError } from "./utils.ts";
 import { errorResponse } from "./utils.ts";
@@ -36,6 +38,7 @@ interface HttpIdentityOwner {
   current?: GenerationAuthentication;
   retained: GenerationAuthentication[];
   selections: GenerationSelectionHandle[];
+  credentials: OwnedHttpCredential[];
   pending: GenerationPendingWork[];
   kid: string;
   digest: string;
@@ -55,7 +58,7 @@ export async function resolveOwnedHttpAuthentication(cap: OwnedHttpRequest, requ
   growOwnedHttpRequest(cap, 8192 + 2 * (kid.length + digest.length));
   let owner = httpIdentities?.get(cap);
   if (!owner) {
-    owner = { retained: [], selections: [], pending: [], kid, digest, coverageMiss: false, legacySelections: 0 };
+    owner = { retained: [], selections: [], credentials: [], pending: [], kid, digest, coverageMiss: false, legacySelections: 0 };
     (httpIdentities ??= new WeakMap()).set(cap, owner); httpIdentityCount++;
   } else if (owner.kid !== kid || owner.digest !== digest) throw identityFailure("protocol");
   const current = owner.current && authenticationOwner(owner.current);
@@ -63,7 +66,11 @@ export async function resolveOwnedHttpAuthentication(cap: OwnedHttpRequest, requ
   // Early intake asks ONLY for credential/policy/owner authentication. A
   // genuinely covered later facet is still checked separately, before use.
   if (freshness === "cached" && current && (identityOnly || sameGenerationCoverage(current.slot.coverage!.value, required)))
-    return ownedHttpAuthenticationResponse(current);
+    {
+      const response = ownedHttpAuthenticationResponse(current);
+      if (!response && required.selection && hasOwnedHttpProxyInvocation(cap)) reserveOwnedHttpForeground(cap, request, env);
+      return response;
+    }
   const config = hotCacheConfig(env);
   let borrow: IdentityGenerationBorrow | undefined, preparation: IdentityGenerationPreparation | undefined;
   let admittedCoverage = required;
@@ -85,6 +92,7 @@ export async function resolveOwnedHttpAuthentication(cap: OwnedHttpRequest, requ
         ? errorResponse("unknown_proxy_key", "proxy key is not registered", 401)
         : errorResponse("invalid_proxy_key", "proxy key secret is invalid", 401);
       proof = result.proof;
+      if (required.selection && hasOwnedHttpProxyInvocation(cap)) reserveOwnedHttpForeground(cap, request, env);
       preparation = prepareCredentialGeneration(proof); proof = undefined;
       const layout = generationCoverageLayout(required);
       growOwnedHttpRequest(cap, layout.bytes + 8 * layout.fields);
@@ -98,6 +106,7 @@ export async function resolveOwnedHttpAuthentication(cap: OwnedHttpRequest, requ
     }
     next = authenticateCredentialGeneration(borrow, env, admittedCoverage);
     response = ownedHttpAuthenticationResponse(authenticationOwner(next));
+    if (!response && required.selection && hasOwnedHttpProxyInvocation(cap)) reserveOwnedHttpForeground(cap, request, env);
     const previous = owner.current;
     owner.current = next; owner.retained.push(next); next = undefined;
     owner.sessionHash = required.selection?.sessionHash;
@@ -125,6 +134,26 @@ function ownedHttpAuthenticationResponse(owner: GenerationAuthenticationOwner): 
     expiresAt: owner.slot.owner.admission!.credential!.credential.expiresAt, expired: true, active: false,
   }, { status: 401 }), failure.code, failure.message);
   return errorResponse(failure.code, failure.message, failure.status);
+}
+
+export function matchesOwnedHttpAuthentication(cap: OwnedHttpRequest, identity: import("./types").AuthorizedIdentity): boolean {
+  const owner = httpIdentities?.get(cap), current = owner?.current && authenticationOwner(owner.current);
+  return !!current && !current.failure && current.identity === identity;
+}
+export function bindOwnedHttpAuthentication(cap: OwnedHttpRequest, request: Request, env: Env): void {
+  checkOwnedHttpRequest(cap, request, env);
+  const owner = httpIdentities?.get(cap), current = owner?.current && authenticationOwner(owner.current);
+  if (!current || current.failure || !current.identity || current.slot.owner.binding !== env.ACCESS_CONTROL) throw identityFailure("protocol");
+  acceptOwnedHttpAuthentication(cap, current.identity);
+}
+export function invalidateOwnedHttpSelectionCredentials(cap: OwnedHttpRequest, selected: GenerationSelectionHandle): void {
+  const root = httpIdentities?.get(cap), owner = selectedOwner(selected), key = owner.result!.selected?.key;
+  if (!root?.selections.includes(selected)) throw identityFailure("protocol");
+  if (!key) return;
+  for (const credential of root.credentials) {
+    const candidate = httpCredentialOwner(credential);
+    if (candidate.selected?.result?.selected?.key === key) invalidateOwnedHttpGrantCredentials(credential);
+  }
 }
 
 export function ownedHttpCoverageMiss(cap: OwnedHttpRequest): boolean {
@@ -177,6 +206,7 @@ export function selectOwnedHttpIdentity(cap: OwnedHttpRequest, request: Request,
       http.coverageMiss = true; http.legacySelections++;
       selected = await selectOwnedHttpLegacy(cap, request, env, auth, provider, endpoint, selection, recordSelection);
     }
+    selectedOwner(selected).httpProvider = provider;
     http.selections.push(selected);
     const receipt = selected.flush;
     if (receipt.accepted) ownedHttpCompletion(cap).start(() => receipt.completed);
@@ -420,18 +450,133 @@ export async function drainOwnedHttpIdentity(cap: OwnedHttpRequest): Promise<voi
 }
 
 export function retireOwnedHttpIdentity(cap: OwnedHttpRequest): void {
+  const reserved = httpForegroundReservations?.get(cap);
   const owner = httpIdentities?.get(cap);
-  if (!owner) return;
+  if (!owner) { reserved?.dispose(); return; }
   httpIdentities!.delete(cap);
   const failures: unknown[] = [];
+  try { reserved?.dispose(); } catch (error) { failures.push(error); }
   for (const pending of owner.pending) try { pending.dispose(); } catch (error) { failures.push(error); }
   owner.pending.length = 0;
+  for (const credential of owner.credentials) try { retireOwnedHttpGrantCredentials(credential); } catch (error) { failures.push(error); }
+  owner.credentials.length = 0;
   for (const selected of owner.selections) try { selected.dispose(); } catch (error) { failures.push(error); }
   owner.selections.length = 0; owner.current = undefined;
   for (const authentication of owner.retained) try { authentication.dispose(); } catch (error) { failures.push(error); }
   owner.retained.length = 0; owner.kid = ""; owner.digest = ""; owner.sessionHash = undefined;
   if (!--httpIdentityCount) httpIdentities = undefined;
   if (failures.length) throw new AggregateError(failures, "owned HTTP identity retirement");
+}
+
+// A foreground command is distinct from optional prefetch. The capability
+// retains its genuine selected parent through configuration and signing, and
+// exposes only fixed commands/void settlement, never the materialized graph.
+export interface OwnedHttpCredential { dispose(): void }
+interface HttpCredentialOwner {
+  http?: OwnedHttpRequest; request?: Request; env?: Env; selected?: GenerationSelectionOwner;
+  providerPermit?: object; cachePermit?: object; lease: GenerationConsumptionLease;
+  id: string; config?: HotCacheConfig; force: boolean; started: boolean; retained: boolean;
+}
+let httpCredentials: WeakMap<OwnedHttpCredential, HttpCredentialOwner> | undefined;
+let httpCredentialRegistry: GenerationConsumptionLease | undefined;
+let httpCredentialCount = 0;
+let httpForegroundReservations: WeakMap<OwnedHttpRequest, OwnedHttpCredential> | undefined;
+function httpCredentialOwner(cap: OwnedHttpCredential): HttpCredentialOwner {
+  const owner = httpCredentials?.get(cap); if (!owner) throw identityFailure("protocol"); return owner;
+}
+function disposeHttpCredential(this: OwnedHttpCredential): void {
+  const owner = httpCredentialOwner(this);
+  if (owner.cachePermit) throw identityFailure("protocol");
+  retireHttpCredential(this);
+}
+function retireHttpCredential(cap: OwnedHttpCredential): void {
+  const owner = httpCredentialOwner(cap), selected = owner.selected;
+  if (owner.http && httpForegroundReservations?.get(owner.http) === cap) httpForegroundReservations.delete(owner.http);
+  httpCredentials!.delete(cap); owner.http = undefined; owner.request = undefined; owner.env = undefined; owner.selected = undefined;
+  owner.providerPermit = undefined; owner.cachePermit = undefined; owner.config = undefined; owner.id = "";
+  const failures: unknown[] = [];
+  try { if (selected) releaseGenerationSelection(selected); } catch (error) { failures.push(error); }
+  try { owner.lease.release(); } catch (error) { failures.push(error); }
+  if (!--httpCredentialCount) { httpCredentials = undefined; httpForegroundReservations = undefined; const charge = httpCredentialRegistry; httpCredentialRegistry = undefined; try { charge?.release(); } catch (error) { failures.push(error); } }
+  if (failures.length) throw new AggregateError(failures, "owned HTTP credential retirement");
+}
+// Reserve after secret preverification, BEFORE full admission can count its
+// initial choice. Covered hits reserve before their later local count. A failed
+// reservation leaves the proof and any prior published generation releasable.
+export function reserveOwnedHttpForeground(http: OwnedHttpRequest, request: Request, env: Env): void {
+  checkOwnedHttpRequest(http, request, env);
+  if (httpForegroundReservations?.has(http)) return;
+  const lease = GenerationConsumptionLease.reserve(32 * 1024 * 1024);
+  let adopted = false;
+  try {
+    if (!httpCredentials) { httpCredentialRegistry = GenerationConsumptionLease.reserve(512); httpCredentials = new WeakMap(); }
+    const owner: HttpCredentialOwner = { http, request, env, lease, id: "", force: false, started: false, retained: false };
+    const cap = Object.freeze({ dispose: disposeHttpCredential });
+    httpCredentials.set(cap, owner); (httpForegroundReservations ??= new WeakMap()).set(http, cap);
+    httpCredentialCount++; adopted = true;
+  } finally { if (!adopted) lease.release(); }
+}
+export function prepareOwnedHttpCredential(http: OwnedHttpRequest, request: Request, env: Env,
+  selected: GenerationSelectionHandle, providerPermit: object, force: boolean): OwnedHttpCredential {
+  checkOwnedHttpRequest(http, request, env);
+  const root = httpIdentities?.get(http), value = selectedOwner(selected), cap = httpForegroundReservations?.get(http);
+  if (!root?.selections.includes(selected) || value.auth.slot.owner.binding !== env.ACCESS_CONTROL || !cap
+    || !ownsOwnedHttpSelectionPermit(providerPermit, http)) throw identityFailure("protocol");
+  const owner = httpCredentialOwner(cap), grant = value.result!.selected, raw = env.CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS;
+  const revision = grant ? grantRevision(grant.grant) : null;
+  const units = grant ? grant.key.length + generationPrefetchIdUnits(grant.grant.credentialGeneration) + generationPrefetchIdUnits(revision) + 2 : 0;
+  if (Math.max(26361856, 2 * (typeof raw === "string" ? raw.length : 64)) + 6 * units + 65536 > owner.lease.bytes) throw identityFailure("limit");
+  const source = hotCacheConfig(env), config = Object.freeze({ maxAgeMs: source.maxAgeMs, freshMs: source.freshMs });
+  const id = grant ? `${grant.key}\n${grant.grant.credentialGeneration ?? ""}\n${revision ?? ""}` : "";
+  owner.selected = value; owner.providerPermit = providerPermit; owner.id = id; owner.config = config; owner.force = force;
+  value.users++; httpForegroundReservations!.delete(http); return cap;
+}
+
+export function claimOwnedHttpCredential(cap: OwnedHttpCredential, permit: object): {
+  eligible: boolean; id: string; config: HotCacheConfig; authority: Authority; binding: Env["GRANT_CREDENTIALS"] | undefined; force: boolean; key: string;
+} {
+  const owner = httpCredentialOwner(cap), authority = owner.selected?.auth.slot.owner.binding;
+  if (!authority || owner.cachePermit || !ownsOwnedHttpCredentialPermit(permit, cap)) throw identityFailure("protocol");
+  owner.cachePermit = permit;
+  return { eligible: !!owner.selected!.result!.selected, id: owner.id, config: owner.config!, authority,
+    binding: owner.env!.GRANT_CREDENTIALS, force: owner.force, key: owner.selected!.result!.selected?.key ?? "" };
+}
+export async function materializeOwnedHttpCredential(cap: OwnedHttpCredential, permit: object): Promise<void> {
+  const owner = httpCredentialOwner(cap), selected = owner.selected!.result!.selected, provider = owner.selected!.httpProvider;
+  if (owner.cachePermit !== permit || !ownsOwnedHttpCredentialPermit(permit, cap) || owner.started || !selected || !provider) throw identityFailure("protocol");
+  owner.started = true;
+  let original: Promise<import("./types").UpstreamGrant> | undefined, value: import("./types").UpstreamGrant | undefined;
+  try {
+    if (!owner.env!.GRANT_CREDENTIALS) throw new HttpError(503, "provider_not_configured", "provider is not configured");
+    original = materializeGrantCredentials(owner.env!, selected.key, selected.grant, provider.id, provider.auth.refresh, owner.force, owner.request!.signal);
+    void original.then(() => undefined, () => undefined);
+    value = await original;
+    // Actual reader/FIRSTcancel/unlock are joined by the original materializer.
+    // No graph-valued promise escapes this command; the fixed receiver is under
+    // the same full temporary owner until configuration has cleared its aliases.
+    acceptOwnedHttpCredentialMaterialization(permit, cap, value);
+  } catch (error) { throw selectedCredentialFailure(error, selected.key); }
+  finally { value = undefined; original = undefined; }
+}
+export async function consumeOwnedHttpCredential(cap: OwnedHttpCredential, permit: object,
+  materialized: import("./types").UpstreamGrant | null): Promise<void> {
+  const owner = httpCredentialOwner(cap), selected = owner.selected!, result = selected.result!;
+  if (owner.cachePermit !== permit || !ownsOwnedHttpCredentialPermit(permit, cap)
+    || !ownsOwnedHttpSelectionPermit(owner.providerPermit!, owner.http!)) throw identityFailure("protocol");
+  if (!!result.selected !== !!materialized) throw identityFailure("protocol");
+  const providerId = selected.httpProvider?.id;
+  const connection = selected.auth.slot.owner.admission!.connections.find(item => item.providerId === providerId);
+  await consumeOwnedHttpProviderCredential(owner.providerPermit!, owner.http!, selected.auth.identity!, connection, result, materialized);
+}
+export function retainOwnedHttpCredential(cap: OwnedHttpCredential, permit: object): void {
+  const owner = httpCredentialOwner(cap), root = owner.http && httpIdentities?.get(owner.http);
+  if (!root || owner.retained || owner.cachePermit !== permit || !ownsOwnedHttpCredentialPermit(permit, cap)) throw identityFailure("protocol");
+  root.credentials.push(cap); owner.retained = true;
+}
+export function finishOwnedHttpCredential(cap: OwnedHttpCredential, permit: object): void {
+  const owner = httpCredentialOwner(cap);
+  if (owner.cachePermit !== permit || !ownsOwnedHttpCredentialPermit(permit, cap)) throw identityFailure("protocol");
+  retireHttpCredential(cap);
 }
 
 // Deliberately no caller from ordinary admission/preverification. These empty
@@ -1117,7 +1262,7 @@ function createGenerationAuthentication(borrow: IdentityGenerationBorrow, env: P
 interface GenerationSelectionOwner {
   auth: GenerationAuthenticationOwner; lease: GenerationConsumptionLease;
   result?: import("./grant-eligibility.ts").GrantSelectionResult; users: number;
-  prefetchProvider?: (typeof providerSnapshot.providers)[number]; destination?: OwnedCredentialBorrow;
+  prefetchProvider?: (typeof providerSnapshot.providers)[number]; httpProvider?: (typeof providerSnapshot.providers)[number]; destination?: OwnedCredentialBorrow;
 }
 export interface GenerationSelectionHandle {
   dispose(): void;
@@ -1136,7 +1281,7 @@ function selectedOwner(handle: GenerationSelectionHandle): GenerationSelectionOw
 }
 function releaseGenerationSelection(owner: GenerationSelectionOwner): void {
   if (--owner.users) return;
-  owner.result = undefined; owner.prefetchProvider = undefined;
+  owner.result = undefined; owner.prefetchProvider = undefined; owner.httpProvider = undefined;
   const destination = owner.destination; owner.destination = undefined;
   const auth = owner.auth; owner.auth = undefined as never;
   const failures: unknown[] = [];

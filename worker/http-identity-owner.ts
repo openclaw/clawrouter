@@ -216,8 +216,12 @@ export function finishOwnedHttpRequest(cap: OwnedHttpRequest): Promise<void> {
     }
     try { await drainOwnedHttpIdentity(cap); } catch (error) { failures.push(error); }
     if (!owner.unknown) {
-      try { retireOwnedHttpProxy(cap); } catch (error) { failures.push(error); }
-      try { retireOwnedHttpIdentity(cap); } catch (error) { failures.push(error); }
+      // A failed last-consumer handoff is not proof that prepared callbacks
+      // stopped borrowing identity/credential graphs. Preserve their owners.
+      try { retireOwnedHttpProxy(cap); } catch (error) { owner.unknown = true; failures.push(error); }
+      if (!owner.unknown) try { retireOwnedHttpIdentity(cap); } catch (error) { owner.unknown = true; failures.push(error); }
+    }
+    if (!owner.unknown) {
       owner.uploads.length = 0; owner.request = undefined; owner.env = undefined;
       requests!.delete(cap); owner.funding.release();
       if (!--requestCount) { requests = undefined; uploads = undefined; const funding = registryFunding; registryFunding = undefined; funding?.release(); }

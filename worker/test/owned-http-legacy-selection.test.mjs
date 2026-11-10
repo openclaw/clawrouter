@@ -111,6 +111,36 @@ test('lost selection reply remains uncertain and is never replayed', async t => 
   });
 });
 
+test('configured but unusable legacy credentials cannot become environment authentication', async t => {
+  await fixture(t, async f => {
+    // A nonempty admitted credential bundle establishes pool presence, but it
+    // cannot supply this provider's required bearer secret.
+    f.stored.set(key, { provider: provider.id, kind: 'api_key', enabled: true,
+      credentials: { unrelated: 'fixture-only-unusable' }, unknown: { value: ['kept'] } });
+    f.env.OPENAI_API_KEY = 'must-not-rescue-configured-pool';
+    const current = await f.open();
+    const picked = await f.take(f.own(selectOwnedHttpProvider(current.cap, current.request, f.env, current.required)));
+    assert.equal(picked.selected(), false); assert.equal(picked.hasConfiguredGrant(), true);
+    assert.equal(f.count(), 0); assert.equal(f.trace.rpc.includes('/grant-pools/select'), false);
+    assert.equal(f.trace.rpc.includes('/grant-pools/record'), false);
+  });
+});
+
+test('legacy failover resolves its own fresh pool and counts only the nonexcluded choice', async t => {
+  await fixture(t, async f => {
+    const tenant = `oauth/tenants/default/${tokenRef}`;
+    f.stored.set(tenant, { ...f.stored.get(key), credential: 'fixture-only-tenant-key' });
+    const current = await f.open();
+    const first = await f.take(f.own(selectOwnedHttpProvider(current.cap, current.request, f.env, current.required)));
+    assert.equal(first.matchesKey(key), true); const before = f.trace.rpc.length;
+    const next = await f.take(f.own(selectOwnedHttpProvider(current.cap, current.request, f.env,
+      { ...current.required, excludedKeys: [key] })));
+    assert.equal(next.matchesKey(tenant), true); assert.equal(f.count(), 2);
+    assert.deepEqual(f.trace.rpc.slice(before), ['/grant-pools/resolve', '/grant-pools/select']);
+    assert.equal(f.trace.rpc.includes('/grant-pools/record'), false);
+  });
+});
+
 test('a caller abort cannot retire a held ORIGINAL legacy read or count a later selection', async t => {
   await fixture(t, async f => {
     const abort = new AbortController(), current = await f.open(abort.signal), entered = deferred(), release = deferred();

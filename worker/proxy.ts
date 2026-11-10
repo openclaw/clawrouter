@@ -1,8 +1,12 @@
 import { ProxyCompletion } from "./proxy-completion.ts";
 import { isIdentityFailure, identityFailure } from "./identity-admission.ts";
 import { beginOwnedHttpUpload, checkOwnedHttpRequest, checkOwnedHttpUpload, abandonOwnedHttpUpload, growOwnedHttpRequest,
-  ownedHttpCompletion, type OwnedHttpRequest, type OwnedHttpUpload } from "./http-identity-owner.ts";
+  ownedHttpCompletion, holdOwnedHttpRequest, dispatchOwnedHttpUpload, type OwnedHttpRequest, type OwnedHttpUpload } from "./http-identity-owner.ts";
 import { providerConfigurationList } from "./provider-connections.ts";
+import { ownsOwnedHttpSelectionPermit, prepareOwnedHttpProvider } from "./providers.ts";
+import { createJsonBodyParser, JsonBodyStructureLimit } from "./json-body.ts";
+import { bindOwnedHttpAuthentication, matchesOwnedHttpAuthentication, queueOwnedHttpSelectionRuntime,
+  invalidateOwnedHttpSelectionCredentials, type GenerationSelectionHandle } from "./credential-preflight.ts";
 import { admitAccountingJson, isAccountingAdmissionFailure } from "./json-body.ts";
 import { PreparationAdmission, isPreparationLimit, preparationHeader, templateCandidates, preparationValue } from "./provider-templates.ts";
 import { readMiniMaxVideoInput, bindMiniMaxVideoInline, hasMiniMaxVideoInline } from "./minimax-video-inline.ts";
@@ -69,7 +73,7 @@ import { grantStickyInput } from "./grant-sticky.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import { assessModelRequest } from "../shared/model-request-parameters.ts";
 import { admitAccountingFacts, createProxyAccounting, estimateCost, type CompoundRequestContext } from "./proxy-accounting";
-import { authenticateProxyKey, proxySessionHash } from "./proxy-auth";
+import { authenticateProxyKey, authenticateOwnedHttp, proxySessionHash } from "./proxy-auth";
 import { queueGrantRuntime } from "./admission-cache.ts";
 import { evictGrantCredentials } from "./credential-cache.ts";
 import { admissionCacheState, admissionDuration, credentialWait } from "./admission-timing.ts";
@@ -120,6 +124,7 @@ interface OwnedProxyInvocation {
   admission?: JsonAdmission;
   selection?: ProxySelection;
   identity?: AuthorizedIdentity;
+  required?: import("./authority-admission.ts").AdmissionSelection;
   prepared?: PreparedUpstream;
   upload?: OwnedHttpUpload;
   attempts: OwnedHttpUpload[];
@@ -127,6 +132,15 @@ interface OwnedProxyInvocation {
 interface OwnedPreparationReceiver { owner: OwnedHttpRequest; fields?: OwnedPreparedFields }
 let ownedProxyInvocations: WeakMap<OwnedHttpRequest, OwnedProxyInvocation> | undefined;
 let ownedPreparationReceivers: WeakMap<OwnedHttpUpload, OwnedPreparationReceiver> | undefined;
+let ownedPreparedSelections: WeakMap<PreparedUpstream, GenerationSelectionHandle> | undefined;
+let ownedPreparedUploads: WeakMap<PreparedUpstream, OwnedHttpUpload> | undefined;
+let ownedProxyCount = 0;
+export function hasOwnedHttpProxyInvocation(cap: OwnedHttpRequest): boolean { return ownedProxyInvocations?.has(cap) === true; }
+export function acceptOwnedHttpAuthentication(cap: OwnedHttpRequest, identity: AuthorizedIdentity): void {
+  const invocation = ownedProxyInvocations?.get(cap);
+  if (!invocation || !matchesOwnedHttpAuthentication(cap, identity)) throw identityFailure("protocol");
+  invocation.identity = identity;
+}
 
 // Fixed synchronous receiver only. There is no public preparation getter and
 // no callback supplied by the caller; the actual attempt installs this slot.
@@ -134,6 +148,29 @@ export function acceptOwnedHttpPreparation(upload: OwnedHttpUpload, fields: Owne
   const receiver = ownedPreparationReceivers?.get(upload);
   if (!receiver || receiver.fields) throw identityFailure("protocol");
   receiver.fields = fields;
+}
+
+export function checkOwnedHttpProviderInput(cap: OwnedHttpRequest, request: Request, env: Env, selection: ProxySelection): void {
+  checkOwnedHttpRequest(cap, request, env);
+  const invocation = ownedProxyInvocations?.get(cap);
+  if (!invocation || invocation.request !== request || invocation.env !== env || invocation.selection !== selection) throw identityFailure("protocol");
+}
+export async function acceptOwnedHttpConfiguredProvider(cap: OwnedHttpRequest, request: Request, env: Env,
+  selection: ProxySelection, query: ProxyQuery, identity: AuthorizedIdentity, connection: ProviderConnection,
+  upstream: UpstreamAuth, preparation: PreparationAdmission, permit: object, selected: GenerationSelectionHandle): Promise<void> {
+  checkOwnedHttpProviderInput(cap, request, env, selection);
+  if (!ownsOwnedHttpSelectionPermit(permit, cap)) throw identityFailure("protocol");
+  const invocation = ownedProxyInvocations!.get(cap)!;
+  let original: Promise<PreparedUpstream> | undefined, prepared: PreparedUpstream | undefined;
+  try {
+    original = prepareSingleSelected(request, env, selection, query, identity, new Set(), false, connection,
+      undefined, "http", false, undefined, undefined, undefined, preparation, { cap, upstream });
+    void original.then(() => undefined, () => undefined);
+    prepared = await original;
+    request.signal.throwIfAborted(); invocation.identity = identity; invocation.prepared = prepared;
+    (ownedPreparedSelections ??= new WeakMap()).set(prepared, selected);
+    if (invocation.upload) (ownedPreparedUploads ??= new WeakMap()).set(prepared, invocation.upload);
+  } finally { original = undefined; prepared = undefined; upstream = undefined as never; identity = undefined as never; }
 }
 
 function prepareOwnedHttpTransport(cap: OwnedHttpRequest, request: Request, env: Env,
@@ -156,10 +193,16 @@ function prepareOwnedHttpTransport(cap: OwnedHttpRequest, request: Request, env:
 export function retireOwnedHttpProxy(cap: OwnedHttpRequest): void {
   const invocation = ownedProxyInvocations?.get(cap);
   if (!invocation) return;
-  ownedProxyInvocations!.delete(cap);
+  // Validate the intake handoff before deleting this owner's last lookup.
+  // Its body lease is released only after all prepared/body callback aliases.
+  invocation.admission?.checkOwnedRetirement();
+  const admission = invocation.admission;
   invocation.prepared = undefined; invocation.identity = undefined; invocation.selection = undefined;
   invocation.admission = undefined; invocation.upload = undefined; invocation.attempts.length = 0;
-  invocation.request = undefined as never; invocation.env = undefined as never; invocation.context = undefined as never;
+  invocation.required = undefined; invocation.request = undefined as never; invocation.env = undefined as never; invocation.context = undefined as never;
+  admission?.retireOwned();
+  ownedProxyInvocations!.delete(cap);
+  if (!--ownedProxyCount) { ownedProxyInvocations = undefined; ownedPreparationReceivers = undefined; ownedPreparedSelections = undefined; ownedPreparedUploads = undefined; }
 }
 
 // Media-bearing generation formats take the 32 MB envelope on every route form.
@@ -188,13 +231,27 @@ class JsonAdmission implements JsonIntake {
   private intakeOperation?: HttpOperation;
   private intakeStartedAt = 0;
   private intakeBytes = 0;
+  private ownedInputBytes = 0;
   private readonly request: Request;
   private readonly env: Env;
   private readonly mode: AuthMode;
   private readonly providerId: string | undefined;
-  constructor(request: Request, env: Env, mode: AuthMode, providerId?: string) {
-    this.request = request; this.env = env; this.mode = mode; this.providerId = providerId;
+  private readonly owned?: OwnedHttpRequest;
+  constructor(request: Request, env: Env, mode: AuthMode, providerId?: string, owned?: OwnedHttpRequest) {
+    this.request = request; this.env = env; this.mode = mode; this.providerId = providerId; this.owned = owned;
   }
+  checkOwnedRetirement(): void {
+    if (!this.owned || this.input || this.wan || this.search || this.intakeOperation) throw identityFailure("protocol");
+  }
+  retireOwned(): void {
+    this.checkOwnedRetirement();
+    this.lease.release();
+  }
+  noteOwnedInputBytes(bytes: number): void {
+    if (!this.owned || !Number.isSafeInteger(bytes) || bytes < this.ownedInputBytes) throw identityFailure("protocol");
+    this.ownedInputBytes = bytes;
+  }
+  get ownedWireBytes(): number { return this.ownedInputBytes; }
   reserve = async (bytes: number): Promise<void> => {
     if (bytes >= bodyLeaseMinimum) await this.authenticate();
     if (this.lease.grow(bytes)) return;
@@ -267,7 +324,8 @@ class JsonAdmission implements JsonIntake {
   }
   private async authenticate(): Promise<void> {
     if (!this.authenticated) {
-      const auth = await preauthenticate(this.request, this.env, this.mode, this.providerId);
+      const auth = this.owned ? await authenticateOwnedHttp(this.owned, this.request, this.env)
+        : await preauthenticate(this.request, this.env, this.mode, this.providerId);
       if (auth instanceof Response) throw auth;
       this.authenticated = true;
     }
@@ -337,6 +395,139 @@ interface ReservedProxyBudget {
   fusion?: ReturnType<typeof prepareFusionAccounting>;
   claim(): void;
   finishUnclaimed(): Promise<void>;
+}
+
+// Same public JSON grammar/thresholds as readJson, with explicit ORIGINAL
+// request read/FIRSTcancel/unlock ownership instead of fire-and-forget cleanup.
+async function readOwnedHttpJson(cap: OwnedHttpRequest, request: Request, admission: JsonAdmission): Promise<unknown> {
+  growOwnedHttpRequest(cap, 8192);
+  return ownedHttpCompletion(cap).start(async () => {
+    const tooLarge = () => new HttpError(413, "request_too_large", `JSON request body exceeds the ${maxMediaJsonBodyBytes} byte limit`);
+    const body = request.body;
+    if (!body) throw new HttpError(400, "invalid_json", "request body must be valid JSON");
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let originalRead: Promise<ReadableStreamReadResult<Uint8Array>> | undefined;
+    let firstCancel: Promise<void> | undefined, cancelOutcome: Promise<{ failed: boolean; error?: unknown }> | undefined;
+    let cancelStarted = false, eof = false, hasPrimary = false, primary: unknown, publicFailure: unknown;
+    let prefix: Array<Uint8Array | undefined> = [], parser: ReturnType<typeof createJsonBodyParser> | undefined;
+    let decoder: TextDecoder | undefined, parsed: unknown, size = 0;
+    const cancel = () => {
+      if (cancelStarted || eof) return;
+      cancelStarted = true;
+      try { firstCancel = reader ? reader.cancel(request.signal.reason) : body.cancel(request.signal.reason); }
+      catch (error) { firstCancel = Promise.reject(error); }
+      cancelOutcome = firstCancel.then(() => ({ failed: false }), error => ({ failed: true, error }));
+    };
+    const feed = (bytes: Uint8Array) => {
+      for (let offset = 0; offset < bytes.byteLength; offset += 4096) parser!.push(decoder!.decode(bytes.subarray(offset, offset + 4096), { stream: true }));
+    };
+    try {
+      const declared = Number(request.headers.get("content-length"));
+      if (Number.isFinite(declared) && declared > maxMediaJsonBodyBytes) throw tooLarge();
+      if (Number.isFinite(declared) && declared > 0) await admission.reserve(declared);
+      reader = body.getReader(); decoder = new TextDecoder();
+      request.signal.addEventListener("abort", cancel, { once: true });
+      while (true) {
+        if (request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
+        originalRead = reader.read(); void originalRead.then(() => undefined, () => undefined);
+        const item = await originalRead; originalRead = undefined;
+        if (request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
+        if (item.done) { eof = true; break; }
+        size += item.value.byteLength;
+        if (size > maxMediaJsonBodyBytes) throw tooLarge();
+        admission.noteOwnedInputBytes(size);
+        if (!parser && size > maxJsonBodyBytes) {
+          await admission.expand(); parser = createJsonBodyParser();
+          for (let index = 0; index < prefix.length; index++) { feed(prefix[index]!); prefix[index] = undefined; }
+          prefix.length = 0;
+        }
+        await admission.reserve(Math.max(size, item.value.buffer.byteLength));
+        if (parser) feed(item.value);
+        else { growOwnedHttpRequest(cap, 32); prefix.push(item.value); }
+      }
+      if (parser) { parser.push(decoder.decode()); parsed = parser.take(); }
+      else {
+        let text = "";
+        for (let index = 0; index < prefix.length; index++) { text += decoder.decode(prefix[index], { stream: true }); prefix[index] = undefined; }
+        parsed = JSON.parse(text + decoder.decode()); text = "";
+      }
+    } catch (error) {
+      hasPrimary = true; primary = error;
+      publicFailure = error instanceof JsonBodyStructureLimit ? new HttpError(413, "request_too_large", "JSON request exceeds Worker structure limits (65536 values, 128 nesting levels, 4096-character keys/numbers)")
+        : error instanceof HttpError || error instanceof Response ? error : new HttpError(400, "invalid_json", "request body must be valid JSON");
+      cancel();
+    }
+    const failures: unknown[] = [];
+    if (originalRead) try { await originalRead; } catch (error) { /* SAME read origin already consumed above. */ }
+    const canceled = await cancelOutcome;
+    if (canceled?.failed) failures.push(canceled.error);
+    try { request.signal.removeEventListener("abort", cancel); } catch (error) { failures.push(error); }
+    try { reader?.releaseLock(); } catch (error) { failures.push(error); }
+    if (body.locked) { holdOwnedHttpRequest(cap); failures.push(identityFailure("cleanup")); }
+    originalRead = undefined; firstCancel = undefined; cancelOutcome = undefined; reader = undefined; decoder = undefined; parser = undefined; prefix.length = 0;
+    if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "owned HTTP intake cleanup");
+    if (hasPrimary) throw publicFailure;
+    return parsed;
+  });
+}
+
+// concreteOpenAiSelection retains the original input while constructing two
+// shallow string-key carriers. Borrowing a nested object does not copy its graph;
+// each copied string/primitive occurrence and each carrier cell still costs DATA.
+// JSON intake supplies ordinary own data properties, including own __proto__.
+function admitOwnedHttpSelectionCopies(cap: OwnedHttpRequest, body: Record<string, unknown>): void {
+  let members = 0, primitives = 0, units = 0;
+  for (const key in body) if (Object.prototype.hasOwnProperty.call(body, key)) {
+    members++; units += key.length;
+    const value = body[key];
+    if (key === "model") continue; // Both carriers install the admitted upstream id.
+    if (typeof value === "string") units += value.length;
+    else if (value === null || typeof value !== "object") primitives++;
+  }
+  // Missing model is appended. The existing preparation profile admits the
+  // resolved model before copies; reserve its full 16384-unit output here.
+  if (!Object.prototype.hasOwnProperty.call(body, "model")) { members++; units += 5; }
+  units += 16384;
+  growOwnedHttpRequest(cap, 2 * (8 * (1 + 2 * members + primitives) + 2 * units));
+}
+
+/** Inactive compiled UNIFIED Chat entry. The index owns correlation/retirement. */
+export async function proxyOwnedHttpChat(cap: OwnedHttpRequest, request: Request, env: Env, context: ExecutionContext): Promise<Response> {
+  checkOwnedHttpRequest(cap, request, env); growOwnedHttpRequest(cap, 32768);
+  const admission = new JsonAdmission(request, env, "proxy_key", undefined, cap);
+  const invocation: OwnedProxyInvocation = { request, env, context, admission, attempts: [] };
+  (ownedProxyInvocations ??= new WeakMap()).set(cap, invocation); ownedProxyCount++;
+  let body: Record<string, unknown> | undefined;
+  try {
+    try { body = requestObject(await readOwnedHttpJson(cap, request, admission)); }
+    catch (error) {
+      if (error instanceof Response) return error;
+      const denied = await authenticateOwnedHttp(cap, request, env); if (denied) return denied;
+      throw error;
+    }
+    admitOwnedHttpSelectionCopies(cap, body);
+    const preparation = new PreparationAdmission();
+    const selection = concreteOpenAiSelection("/v1/chat/completions", body, env, undefined, preparation);
+    const modelId = typeof body.model === "string" ? body.model : "";
+    if (isSelectionFailure(selection)) {
+      const denied = await authenticateOwnedHttp(cap, request, env); if (denied) return denied;
+      if (!modelId) return errorResponse("model_required", "model is required", 400);
+      return selection.response;
+    }
+    if (selection.capability !== "llm.chat" || selection.endpoint.lifecycle || inlineMusicInput(selection) || publishedMusicInput(selection))
+      throw new HttpError(400, "owned_chat_required", "private owned entry accepts unified Chat only");
+    invocation.selection = selection;
+    const provider = selection.provider, required = { providerId: provider.id, endpointId: selection.endpoint.id,
+      mode: "http" as const, model: selectionUpstreamModel(selection), catalogModelId: selection.model?.id ?? null,
+      capability: selection.capability };
+    const denied = await authenticateOwnedHttp(cap, request, env, [{ id: provider.id,
+      tokenRef: provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? provider.id }], required, correlationMetadata(request).sessionId);
+    if (denied) return denied;
+    invocation.required = required; bindOwnedHttpAuthentication(cap, request, env);
+    if (!invocation.identity) throw identityFailure("protocol");
+    return proxySelected(request, env, context, "proxy_key", selection, new URL(request.url).searchParams,
+      invocation.identity, undefined, undefined, undefined, admission, cap);
+  } finally { body = undefined; }
 }
 
 export async function proxyOpenAi(request: Request, env: Env, context: ExecutionContext, path: string, mode: AuthMode): Promise<Response> {
@@ -879,7 +1070,7 @@ function ownOrdinaryResponse(response: Response, completion: ProxyCompletion): R
   return forwarded;
 }
 
-async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: ProxyQuery = {}, preauthenticated: AuthorizedIdentity | null = null, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, auditAuth?: AuthorizedIdentity, admission?: JsonAdmission): Promise<Response> {
+async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: ProxyQuery = {}, preauthenticated: AuthorizedIdentity | null = null, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, auditAuth?: AuthorizedIdentity, admission?: JsonAdmission, owned?: OwnedHttpRequest): Promise<Response> {
   // Invoke only at the authenticated, validated boundary (or the earlier
   // identity-denial receipt). Never reconstruct the selection or reauthenticate.
   const complete = async (start: (scope?: ProxyCompletion) => Promise<Response>): Promise<Response> => {
@@ -887,12 +1078,12 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       && !selection.endpoint.lifecycle && !backgroundResponse(selection.endpoint, selection.body) && !isModelDiscovery(selection.endpoint) && selection.capability.startsWith("llm.")
       && !["minimax", "anthropic-vertex", "gmi"].includes(selection.provider.id)
       && ["openai.chat_completions", "openai.responses", "openai.responses_compact", "openai.responses_input_tokens", "anthropic.messages"].includes(selection.endpoint.request_format);
-    const completion = ordinary ? new ProxyCompletion() : undefined;
+    const completion = owned ? ownedHttpCompletion(owned) : ordinary ? new ProxyCompletion() : undefined;
     if (completion) admission!.completion = completion.completion;
     try {
       if (completion) context.waitUntil(completion.completion);
       return await (completion ? completion.start(start) : start());
-    } finally { completion?.seal(); }
+    } finally { if (!owned) completion?.seal(); }
   };
   const auth = reservedBudget?.auth ?? await selectedAuth(request, env, mode, selection, preauthenticated);
   if (auth instanceof Response) {
@@ -918,10 +1109,10 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   if (selection.endpoint.inputProfile !== undefined)
     throw new HttpError(400, "managed_input_profile_required", "this endpoint requires its registered native multipart input profile");
   validateSelectedInput(selection);
-  return complete(completion => proxySelectedOwned(request, env, context, auth, selection, queryInput, reservedBudget, compound, admission, completion));
+  return complete(completion => proxySelectedOwned(request, env, context, auth, selection, queryInput, reservedBudget, compound, admission, completion, owned));
 }
 
-async function proxySelectedOwned(request: Request, env: Env, context: ExecutionContext, auth: AuthorizedIdentity, selection: ProxySelection, queryInput: ProxyQuery, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, admission?: JsonAdmission, completion?: ProxyCompletion): Promise<Response> {
+async function proxySelectedOwned(request: Request, env: Env, context: ExecutionContext, auth: AuthorizedIdentity, selection: ProxySelection, queryInput: ProxyQuery, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, admission?: JsonAdmission, completion?: ProxyCompletion, owned?: OwnedHttpRequest): Promise<Response> {
   let failureAccounting: ReturnType<typeof createProxyAccounting> | undefined;
   let accounting: ReturnType<typeof createProxyAccounting> | undefined;
   let retention: PreparedContentRetention | null | undefined;
@@ -953,7 +1144,11 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     continuation = await HttpContinuation.resolve(request, selection, auth, env);
     if (googleContinuationRoute(selection)) googleContinuation = await GoogleContinuation.resolve(request, selection, auth, env);
     const uploadGrant = nativeUploadGrants.get(selection);
-    prepared = await run(() => prepareSelected(request, env, selection, queryInput, auth, new Set(reservedBudget?.failedGrantKey ? [reservedBudget.failedGrantKey] : []), !uploadGrant && !published, reservedBudget?.connection, publishedPin ?? search?.pinned ?? continuation?.pinned ?? googleContinuation?.pinned ?? uploadGrant, "http", true, undefined, searchOwner));
+    if (owned) {
+      await run(() => prepareOwnedHttpAttempt(owned, request, env, selection, queryInput));
+      prepared = ownedProxyInvocations!.get(owned)!.prepared!;
+      if (!prepared) throw identityFailure("protocol");
+    } else prepared = await run(() => prepareSelected(request, env, selection, queryInput, auth, new Set(reservedBudget?.failedGrantKey ? [reservedBudget.failedGrantKey] : []), !uploadGrant && !published, reservedBudget?.connection, publishedPin ?? search?.pinned ?? continuation?.pinned ?? googleContinuation?.pinned ?? uploadGrant, "http", true, undefined, searchOwner));
     assertRequestTariffDestination(selection.endpoint, prepared.url);
     assertNativeResponseDestination(selection.nativeResponse, prepared.url);
     grantFailover = !!(reservedBudget?.failedGrantKey || prepared.failedGrantKey);
@@ -1189,7 +1384,10 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
         active.throwIfAborted();
         dispatched = true;
         return fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal: active, redirect: "manual" });
-      }) : ordinaryFetch(() => fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" }));
+      }) : ordinaryFetch(() => {
+        if (owned) { const upload = ownedPreparedUploads?.get(prepared); if (upload) dispatchOwnedHttpUpload(upload); }
+        return fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" });
+      });
     if (selection.nativeResponse) nativeFetch = pending;
     if (prepared.featherlessCatalog) catalogWork = pending;
     else if (catalogInputs) registerCatalogFetch(pending);
@@ -1210,11 +1408,16 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     }
     accounting.observeUpstreamResponse(response, prepared.url);
     // Metadata permissions and rate limits do not establish inference health.
-    if (!searchOwner && !isModelDiscovery(selection.endpoint)) captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response, selection.provider.id, selectionUpstreamModel(selection));
+    if (!searchOwner && !isModelDiscovery(selection.endpoint)) owned ? captureOwnedHttpRuntime(owned, request, env, prepared, selection, response)
+      : captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response, selection.provider.id, selectionUpstreamModel(selection));
     if (!accounting.upstreamChargePossible && !miniMaxAnthropicRoute(selection.provider, selection.endpoint) && selection.provider.id !== "anthropic-vertex" && selection.provider.id !== "gmi" && !selection.nativeResponse && !selection.endpoint.requestPricing && !grantFailover && !isModelDiscovery(selection.endpoint) && !background && !search && !continuation?.requested && !googleContinuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
       let retry: PreparedUpstream | undefined;
       let capacityFailure: HttpError | undefined;
-      const preparation = run(() => prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection));
+      const preparation = run(async () => {
+        if (!owned) return prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection);
+        await prepareOwnedHttpAttempt(owned, request, env, selection, queryInput, prepared.grantKey!);
+        return ownedProxyInvocations!.get(owned)!.prepared!;
+      });
       const preparationSettled = preparation.then(() => {}, () => {});
       try {
         retry = await operation.wait(preparation);
@@ -1237,9 +1440,13 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
         response = undefined;
         prepared = retry;
         accounting.setGrant(prepared.grantKey, prepared.grantLane);
-        response = await operation.wait(ordinaryFetch(() => fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" })), "upstream", discard);
+        response = await operation.wait(ordinaryFetch(() => {
+        if (owned) { const upload = ownedPreparedUploads?.get(prepared); if (upload) dispatchOwnedHttpUpload(upload); }
+        return fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" });
+      }), "upstream", discard);
         accounting.observeUpstreamResponse(response, prepared.url);
-        captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response, selection.provider.id, selectionUpstreamModel(selection));
+        owned ? captureOwnedHttpRuntime(owned, request, env, prepared, selection, response)
+      : captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response, selection.provider.id, selectionUpstreamModel(selection));
         if (prepared.continuation) continuation?.bind(prepared.continuation);
         if (prepared.continuation && googleContinuation) await googleContinuation.bind(prepared.continuation);
         grantFailover = true;
@@ -1484,6 +1691,35 @@ async function selectedAuth(request: Request, env: Env, mode: AuthMode, selectio
   return (await preauthenticate(request, env, mode, selection.provider.id))!;
 }
 
+async function prepareOwnedHttpAttempt(cap: OwnedHttpRequest, request: Request, env: Env,
+  selection: ProxySelection, query: ProxyQuery, excluded?: string): Promise<void> {
+  const invocation = ownedProxyInvocations?.get(cap);
+  if (!invocation?.required || !invocation.identity) throw identityFailure("protocol");
+  growOwnedHttpRequest(cap, 8192 + 8 * (excluded?.length ?? 0));
+  const input = excluded ? { ...invocation.required, excludedKeys: [excluded] } : invocation.required;
+  try { await prepareOwnedHttpProvider(cap, request, env, input, selection, query); }
+  catch (error) {
+    if (!(error instanceof SelectedGrantCredentialFailure) || excluded || selection.provider.id === "anthropic-vertex"
+      || miniMaxAnthropicRoute(selection.provider, selection.endpoint) || !grantRoutingPolicy(invocation.identity.policy.grantRouting).failover) throw error;
+    growOwnedHttpRequest(cap, 8192 + 8 * error.grantKey.length);
+    try {
+      await prepareOwnedHttpProvider(cap, request, env, { ...invocation.required, excludedKeys: [error.grantKey] }, selection, query);
+      const prepared = invocation.prepared!;
+      if (!prepared.grantKey && !grantRoutingPolicy(invocation.identity.policy.grantRouting).environmentFallback) throw error;
+      prepared.failedGrantKey = error.grantKey;
+    } catch (alternateError) { if (isPreparationLimit(alternateError) || isAccountingAdmissionFailure(alternateError) || isIdentityFailure(alternateError)) throw alternateError; throw error; }
+  }
+}
+function captureOwnedHttpRuntime(cap: OwnedHttpRequest, request: Request, env: Env,
+  prepared: PreparedUpstream, selection: ProxySelection, response: Response): void {
+  if (!prepared.grantKey) return;
+  const selected = ownedPreparedSelections?.get(prepared); if (!selected) throw identityFailure("protocol");
+  growOwnedHttpRequest(cap, 65536);
+  if (response.status === 401 || response.status === 403) invalidateOwnedHttpSelectionCredentials(cap, selected);
+  const state = observeProviderGrantQuota(selection.provider.id, response, selection.provider.quota, selectionUpstreamModel(selection));
+  if (state) queueOwnedHttpSelectionRuntime(cap, request, env, selected, { ...state, grantRevision: prepared.grantRevision });
+}
+
 export async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation, searchOwner?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation): Promise<PreparedUpstream> {
   // Direct prepareSelected callers are standalone preparation entries. Retain
   // the token on their selection for internal retries and subsequent calls.
@@ -1503,7 +1739,7 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
   }
 }
 
-async function prepareSingleSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation, searchOwner?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, preparation?: PreparationAdmission): Promise<PreparedUpstream> {
+async function prepareSingleSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation, searchOwner?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, preparation?: PreparationAdmission, owned?: { cap: OwnedHttpRequest; upstream: UpstreamAuth }): Promise<PreparedUpstream> {
   assertPolicyModel(auth.policy, selection);
   if (isModelDiscovery(selection.endpoint)) {
     queryInput = discoveryQuery(queryInput);
@@ -1534,8 +1770,8 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
   }
   let upstream: UpstreamAuth;
   if (video) videoJsonBytes(selection.body, "input");
-  const stickyHash = await grantStickyHash(request, auth);
-  try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport, model: selectionUpstreamModel(selection), managedLifecycle: !!selection.endpoint.lifecycle }, video?.controlSignal ?? searchOwner?.operation.signal ?? request.signal, wan, searchOwner, video, preparation); }
+  const stickyHash = owned ? null : await grantStickyHash(request, auth);
+  try { upstream = owned ? owned.upstream : await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport, model: selectionUpstreamModel(selection), managedLifecycle: !!selection.endpoint.lifecycle }, video?.controlSignal ?? searchOwner?.operation.signal ?? request.signal, wan, searchOwner, video, preparation); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_not_configured", "provider is not configured"); }
   try {
     if (compact) await assertCompactAccount(auth, env, upstream);
@@ -1582,7 +1818,8 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     const vertexAnthropic = vertexAnthropicRoute(selection.provider, selection.endpoint)
       ? await prepareVertexAnthropicDispatch(request, env, auth, selection, upstream, hasProxyQuery(queryInput), transport) : undefined;
     if (wanCreate(selection.endpoint)) { preflightWanJson(selection.body); assertWanHeaders(request.headers); assertWanHeaders(upstream.headers); }
-    const { headers, url, configuredOwnerUrl, requestBody, streamBody } = vertexAnthropic?.prepared ?? prepareUpstreamRequest(request, env, selection, queryInput, upstream, transport, preparation);
+    const { headers, url, configuredOwnerUrl, requestBody, streamBody } = vertexAnthropic?.prepared ?? (owned ? prepareOwnedHttpTransport(owned.cap, request, env, selection, queryInput, upstream, preparation!)
+      : prepareUpstreamRequest(request, env, selection, queryInput, upstream, transport, preparation));
     if (minimaxAnthropic) preparation?.headers(upstream.headers, true);
     minimaxAnthropic?.apply(url, headers);
     preparation?.headers(headers); preparation?.text(url.href, 16384);

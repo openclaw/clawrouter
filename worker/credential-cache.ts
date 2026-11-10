@@ -3,6 +3,7 @@ import { grantRevision, grantUsable, REFRESH_MARGIN_MS } from "./grant-eligibili
 import { HotCache, hotCacheConfig, registerHotCache, tryRunInBackground, type HotCacheState, type HotCacheConfig, PrivateCacheReservation, hotCacheNow, waitForOtherRequest, JOIN_WAIT_MS } from "./hot-cache.ts";
 import type { Env, UpstreamGrant } from "./types";
 import { checkOwnedGenerationPrefetch, claimOwnedGenerationPrefetch, finishOwnedGenerationPrefetch,
+  claimOwnedHttpCredential, materializeOwnedHttpCredential, consumeOwnedHttpCredential, retainOwnedHttpCredential, finishOwnedHttpCredential, type OwnedHttpCredential,
   materializeOwnedGenerationPrefetch, checkCredentialGenerationDestination, type GenerationSelectionHandle, type OwnedGenerationPrefetch } from "./credential-preflight.ts";
 import { GenerationConsumptionLease } from "./credential-preflight-arena.ts";
 import { measureGenerationGraph, freezeGenerationGraph } from "./identity-generations.ts";
@@ -311,4 +312,144 @@ export function evictOwnedGrantCredentials(cap: OwnedGenerationPrefetch): void {
   try { const entry = lookupOwnedEntry(run.command!); if (entry) { entry.publication = undefined; unpublishOwnedValue(entry); retireOwnedEntry(entry); } }
   catch (error) { hasPrimary = true; primary = error; }
   retireOwnedPrefetch(run, hasPrimary, primary);
+}
+
+
+// Foreground ownership is independent of optional prefetch admission. Every run
+// starts with a genuine full temporary owner, including HIT borrower/terminal
+// products. Cache-coordinate refusal leaves that owner and graph usable.
+interface OwnedHttpCredentialRun {
+  cap?: OwnedHttpCredential; command?: ReturnType<typeof claimOwnedHttpCredential>;
+  value?: UpstreamGrant; original?: Promise<void>; claimed: boolean; retained: boolean; borrowed?: OwnedDestinationValue;
+}
+let ownedHttpCredentialPermits: WeakMap<object, OwnedHttpCredentialRun> | undefined;
+let ownedHttpCredentialRegistry: GenerationConsumptionLease | undefined;
+let ownedHttpCredentialRuns = 0;
+let ownedHttpCredentialOwners: WeakMap<OwnedHttpCredential, OwnedHttpCredentialRun> | undefined;
+export function ownsOwnedHttpCredentialPermit(permit: object, cap: OwnedHttpCredential): boolean {
+  return ownedHttpCredentialPermits?.get(permit)?.cap === cap;
+}
+export function acceptOwnedHttpCredentialMaterialization(permit: object, cap: OwnedHttpCredential, value: UpstreamGrant): void {
+  const run = ownedHttpCredentialPermits?.get(permit);
+  if (!run || run.cap !== cap || run.value) throw identityFailure("protocol");
+  run.value = value;
+}
+export async function prepareOwnedHttpGrantCredentials(cap: OwnedHttpCredential): Promise<void> {
+  // cap is already funded before this async invocation/follower/registry phase.
+  let run: OwnedHttpCredentialRun | undefined, entry: OwnedDestinationEntry | undefined;
+  let borrowed: OwnedDestinationValue | undefined, publication: object | undefined;
+  let destination: PrivateCacheReservation | null | undefined;
+  let hasPrimary = false, primary: unknown;
+  try {
+    if (!ownedHttpCredentialPermits) { ownedHttpCredentialRegistry = GenerationConsumptionLease.reserve(512); ownedHttpCredentialPermits = new WeakMap(); }
+    run = { cap, claimed: false, retained: false }; ownedHttpCredentialPermits.set(run, run);
+    (ownedHttpCredentialOwners ??= new WeakMap()).set(cap, run); ownedHttpCredentialRuns++;
+    run.command = claimOwnedHttpCredential(cap, run); run.claimed = true;
+    const command = run.command;
+    if (!command.eligible) { retainOwnedHttpCredential(cap, run); run.retained = true; await consumeOwnedHttpCredential(cap, run, null); return; }
+    if (!command.force) borrowed = peekOwnedValue(lookupOwnedEntry(command), command.config);
+    if (borrowed) {
+      // SAME immutable graph; the new borrower has positive temporary metadata
+      // funding even when the shared optional vector has no coordinate left.
+      borrowed.borrowers++; run.value = borrowed.grant;
+    } else {
+      // A missing binding reaches the existing materializer error, not an
+      // environment fallback or a new cache-specific mandatory binding rule.
+      if (command.config.maxAgeMs && command.binding) entry = acquireOwnedEntry(command);
+      if (entry) {
+        const deadline = Date.now() + JOIN_WAIT_MS;
+        while (entry.publication) {
+          let pending: object | undefined = entry.publication;
+          const remaining = deadline - Date.now(); if (remaining <= 0) break;
+          await waitForOtherRequest(() => entry!.publication !== pending, remaining); pending = undefined;
+          if (!command.force && (borrowed = peekOwnedValue(entry, command.config))) break;
+        }
+        if (borrowed) { borrowed.borrowers++; run.value = borrowed.grant; }
+        else { publication = Object.freeze({}); entry.publication = publication; }
+      }
+      if (!borrowed) {
+        run.original = materializeOwnedHttpCredential(cap, run);
+        void run.original.then(() => undefined, () => undefined);
+        await run.original; run.original = undefined;
+        if (!run.value) throw identityFailure("protocol");
+        admitIdentity(run.value, "record");
+        // Full original source/temporary credit remains through traversal,
+        // configuration, optional publication and every last operation alias.
+        const vector = measureGenerationGraph(run.value); freezeGenerationGraph(run.value);
+        if (entry && entry.publication === publication && grantUsable(run.value)) {
+          destination = PrivateCacheReservation.reserve({ serializedBytes: vector.serializedBytes,
+            payloadBytes: vector.payloadBytes + 1024, structure: vector.structure + 64 });
+        }
+      }
+    }
+    // Enroll BEFORE the consumer can create any prepared callback alias, even
+    // when that consumer later throws during signing or post-preparation checks.
+    retainOwnedHttpCredential(cap, run); run.retained = true;
+    await consumeOwnedHttpCredential(cap, run, run.value!);
+    if (destination && entry && entry.publication === publication) {
+      const expires = run.value!.expiresAt ? Date.parse(run.value!.expiresAt) - REFRESH_MARGIN_MS : Number.POSITIVE_INFINITY;
+      const next: OwnedDestinationValue = { entry, grant: run.value, funding: destination, storedAt: hotCacheNow(),
+        maxAgeMs: command.config.maxAgeMs, expiresAt: Number.isFinite(expires) ? expires : Number.POSITIVE_INFINITY,
+        published: true, borrowers: 1 };
+      const previous = entry.current; entry.values++; entry.current = next; destination = undefined; borrowed = next;
+      if (previous) { previous.published = false; retireOwnedValue(previous); }
+    }
+    // Prepared revalidation/accounting callbacks may still capture credential
+    // fields. Their ORIGINAL request retains this borrower/temporary, not merely
+    // the fulfilled preparation result. Proxy aliases clear before final retire.
+    run.borrowed = borrowed; borrowed = undefined;
+  } catch (error) { hasPrimary = true; primary = error; }
+  finally {
+    if (run) {
+      if (run.retained) { if (borrowed) run.borrowed = borrowed; borrowed = undefined; }
+      else run.value = undefined;
+      run.original = undefined; if (!run.retained) run.command = undefined;
+    }
+    const failures: unknown[] = [];
+    try { destination?.release(); } catch (error) { failures.push(error); }
+    if (borrowed) { borrowed.borrowers--; try { retireOwnedValue(borrowed); } catch (error) { failures.push(error); } borrowed = undefined; }
+    if (entry) {
+      if (entry.publication === publication) entry.publication = undefined;
+      publication = undefined; entry.active--;
+      try { retireOwnedEntry(entry); } catch (error) { failures.push(error); } entry = undefined;
+    }
+    if (!run?.retained) {
+      try { if (run?.claimed) finishOwnedHttpCredential(cap, run); else cap.dispose(); } catch (error) { failures.push(error); }
+      if (run) {
+        ownedHttpCredentialPermits!.delete(run); ownedHttpCredentialOwners!.delete(cap); run.cap = undefined;
+        if (!--ownedHttpCredentialRuns) { ownedHttpCredentialPermits = undefined; ownedHttpCredentialOwners = undefined; const charge = ownedHttpCredentialRegistry; ownedHttpCredentialRegistry = undefined; try { charge?.release(); } catch (error) { failures.push(error); } }
+      }
+    }
+    run = undefined;
+    if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "owned foreground credential cleanup");
+  }
+  if (hasPrimary) throw primary;
+}
+
+// Named last-consumer command, invoked only after the proxy cleared prepared
+// callbacks/identity/selection aliases and all original request roots settled.
+export function retireOwnedHttpGrantCredentials(cap: OwnedHttpCredential): void {
+  const run = ownedHttpCredentialOwners?.get(cap);
+  if (!run || !run.retained || run.original || !run.claimed) throw identityFailure("protocol");
+  run.value = undefined; run.command = undefined;
+  const borrowed = run.borrowed; run.borrowed = undefined;
+  const failures: unknown[] = [];
+  if (borrowed) { borrowed.borrowers--; try { retireOwnedValue(borrowed); } catch (error) { failures.push(error); } }
+  try { finishOwnedHttpCredential(cap, run); } catch (error) { failures.push(error); }
+  ownedHttpCredentialPermits!.delete(run); ownedHttpCredentialOwners!.delete(cap); run.cap = undefined;
+  if (!--ownedHttpCredentialRuns) { ownedHttpCredentialPermits = undefined; ownedHttpCredentialOwners = undefined; const charge = ownedHttpCredentialRegistry; ownedHttpCredentialRegistry = undefined; try { charge?.release(); } catch (error) { failures.push(error); } }
+  if (failures.length) throw new AggregateError(failures, "owned HTTP foreground last consumer");
+}
+
+export function invalidateOwnedHttpGrantCredentials(cap: OwnedHttpCredential): void {
+  const run = ownedHttpCredentialOwners?.get(cap), command = run?.command;
+  if (!run?.retained || !command || !command.key) throw identityFailure("protocol");
+  const partition = command.binding && ownedAuthorities?.get(command.authority)?.owners.get(command.binding);
+  if (!partition) return;
+  const prefix = `${command.key}\n`;
+  // The invoking foreground temporary prepays this scalar prefix/iterator.
+  // Unpublishing never retires an old accepted prefetch or materialized borrower.
+  for (const entry of partition.entries.values()) if (entry.id.startsWith(prefix)) {
+    entry.publication = undefined; unpublishOwnedValue(entry); retireOwnedEntry(entry);
+  }
 }

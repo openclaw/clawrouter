@@ -2,7 +2,8 @@
 
 This is an inactive implementation checkpoint. The default Worker export and
 ordinary HTTP authentication, selection and credential-cache entrypoints remain
-unchanged. The complete private HTTP vertical is not qualified or registered.
+unchanged. The named compiled HTTP entry and pinned UNIFIED client witness are
+implemented and registered, but the complete vertical is not qualified.
 There is no deployment or public header/Env activation.
 
 The request capability owns a positive charge in the existing common Worker
@@ -64,3 +65,28 @@ entry executes. Local dependency-backed semantics remain unrun; local checks
 are syntax and source checks only.
 
 The current local selection checkpoint also covers nonrecording projected choices without consuming the initial-selection receipt. Legacy feedback is admitted through the actual selected owner and its `grantRevision`, rather than inferred snapshot membership. Its pending fixed cohort drains in the originating HTTP finalizer after the other original roots settle. A cohort that cannot start remains owned and funded. Authored Node and native KV/SQLite witnesses cover count-once, nonrecording, mixed candidate order, and revision-isolated pending observations; execution is still pending hosted qualification.
+
+## Compiled HTTP checkpoint
+
+`privateOwnedHttpChat` is a named build entry. It accepts only POST to
+`/v1/chat/completions`; the default export and public configuration do not select
+it. Catalog discovery in the fixture uses the ordinary control-plane handler.
+The pinned OpenClaw plugin selects its actual unified Chat transport from that
+catalog. One client matrix row is added; all prior rows remain.
+
+Foreground credentials have a separate, genuine capability. The request reserves
+its 32 MiB temporary component after successful secret preverification and before
+full admission can count a choice. A covered generation reserves before local
+selection. A private destination hit borrows the same immutable credential graph;
+misses use original materialization. Optional destination refusal leaves the
+temporary owner usable. Prepared callbacks retain that owner through actual
+delivery, accounting and archive roots. The finalizer clears proxy aliases before
+credential, selected-record and authentication owners. A failed last-consumer
+handoff holds funding instead of releasing a dependent owner.
+
+The two shallow selection carriers prospectively charge every copied string key,
+primitive and string value occurrence, with the existing 16384-unit model bound.
+Nested plain graphs remain borrowed from the intake owner. This component is not
+a proof for the later serializer, accounting or complete HTTP phase overlap.
+Those DATA and CONTROL tables are still open; the checkpoint is not a candidate
+for publication. Node and native tests have only received static syntax checks.

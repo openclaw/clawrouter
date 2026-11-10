@@ -1,6 +1,9 @@
-import { selectOwnedHttpIdentity, type GenerationSelectionHandle } from "./credential-preflight.ts";
+import { selectOwnedHttpIdentity, prepareOwnedHttpCredential, reserveOwnedHttpForeground, type OwnedHttpCredential, type GenerationSelectionHandle } from "./credential-preflight.ts";
 import { checkOwnedHttpRequest, growOwnedHttpRequest, type OwnedHttpRequest } from "./http-identity-owner.ts";
 import { identityFailure as ownedHttpIdentityFailure } from "./identity-admission.ts";
+import { checkOwnedHttpProviderInput, acceptOwnedHttpConfiguredProvider } from "./proxy.ts";
+import type { ProxySelection } from "./proxy-selection.ts";
+import type { ProxyQuery } from "./proxy-query.ts";
 
 import { admitIdentity, isIdentityFailure } from "./identity-admission.ts";
 import type { MiniMaxVideoOperation } from "./minimax-video-operation.ts";
@@ -23,7 +26,7 @@ import { grantRevision, grantUsable, resolveGrantSelection, type PinnedGrant } f
 import { grantsVisibleToPolicies, type GrantRecord } from "./grant-scope.ts";
 import { materializeGrantCredentials, reconcileGrantAttachment, refreshGrantQuota } from "./grant-credentials.ts";
 import { hotCacheConfig, registerHotCache, tryRunInBackground } from "./hot-cache.ts";
-import { cachedGrantCredentials, evictGrantCredentials } from "./credential-cache.ts";
+import { cachedGrantCredentials, evictGrantCredentials, prepareOwnedHttpGrantCredentials } from "./credential-cache.ts";
 import { recordCredentialWait } from "./admission-timing.ts";
 import { applyProviderCredential, applyTransportHeaders, assertOperationConfiguration, grantSupports, providerConfigPresent, providerSecretConfigKey, transportForGrant, type GrantRequirement } from "./provider-auth.ts";
 import type {
@@ -597,4 +600,92 @@ export async function selectOwnedHttpProvider(cap: OwnedHttpRequest, request: Re
     ownedHttpSelectionPermits!.delete(permit);
     if (!--ownedHttpSelectionPermitCount) ownedHttpSelectionPermits = undefined;
   }
+}
+
+
+interface OwnedHttpProviderCommand {
+  cap?: OwnedHttpRequest; request?: Request; env?: Env; selection?: ProxySelection; query?: ProxyQuery;
+  preparation?: PreparationAdmission; selected?: GenerationSelectionHandle;
+}
+let ownedHttpProviderCommands: WeakMap<object, OwnedHttpProviderCommand> | undefined;
+
+// Manifest-derived cells plus the existing bounded preparation profile. This
+// component remains under the HTTP request after copies become prepared fields.
+function ownedHttpPreparationBytes(selection: ProxySelection): number {
+  const provider = selection.provider, endpoint = selection.endpoint;
+  let pairs = 0, units = 0;
+  const count = (fields: Readonly<Record<string, string>> | undefined) => {
+    if (fields) for (const key in fields) if (Object.hasOwn(fields, key)) { pairs++; units += key.length + fields[key].length; }
+  };
+  count(provider.adapter.injectHeaders); count(provider.adapter.injectQuery); count(endpoint.headers); count(endpoint.query);
+  for (const kind in provider.auth.grantTransports) if (Object.hasOwn(provider.auth.grantTransports, kind)) {
+    const transport = provider.auth.grantTransports[kind]; count(transport.headers); count(transport.appendHeaders); count(transport.endpointPaths);
+  }
+  for (const key of provider.config_keys) units += key.length;
+  for (const key of provider.optional_config_keys) units += key.length;
+  // CSV/facts/substitution/path/query/header limits are the SAME acquired
+  // PreparationAdmission profile; no unbounded Env split runs without it.
+  return 65536 + 8 * (2048 + 4 * pairs + provider.models.length)
+    + 2 * (65536 + 2 * 32768 + 256 * 16384 + 4 * units + 4 * 8192 + 4 * 16384);
+}
+
+/** Closed private attempt: selection -> foreground credential -> preparation. */
+export async function prepareOwnedHttpProvider(cap: OwnedHttpRequest, request: Request, env: Env,
+  input: import("./authority-admission.ts").AdmissionSelection, selection: ProxySelection, query: ProxyQuery,
+  recordSelection = true, force = false): Promise<void> {
+  checkOwnedHttpRequest(cap, request, env); checkOwnedHttpProviderInput(cap, request, env, selection);
+  growOwnedHttpRequest(cap, ownedHttpPreparationBytes(selection) + 8192);
+  const permit = Object.freeze({}), command: OwnedHttpProviderCommand = { cap, request, env, selection, query };
+  (ownedHttpSelectionPermits ??= new WeakMap()).set(permit, cap); ownedHttpSelectionPermitCount++;
+  (ownedHttpProviderCommands ??= new WeakMap()).set(permit, command);
+  let credential: OwnedHttpCredential | undefined, hasPrimary = false, primary: unknown;
+  try {
+    const preparation = selection.preparation ??= new PreparationAdmission(); command.preparation = preparation;
+    preparation.paths(selection.pathParams, selection.endpoint.path_param_styles);
+    reserveOwnedHttpForeground(cap, request, env);
+    command.selected = await selectOwnedHttpIdentity(cap, request, env, input, recordSelection, permit);
+    credential = prepareOwnedHttpCredential(cap, request, env, command.selected, permit,
+      force || selection.provider.id === "anthropic-vertex");
+    const original = prepareOwnedHttpGrantCredentials(credential); credential = undefined;
+    void original.then(() => undefined, () => undefined); await original;
+  } catch (error) { hasPrimary = true; primary = error; }
+  const failures: unknown[] = [];
+  try { credential?.dispose(); } catch (error) { failures.push(error); }
+  command.selected = undefined; command.preparation = undefined; command.query = undefined; command.selection = undefined;
+  command.request = undefined; command.env = undefined; command.cap = undefined;
+  ownedHttpProviderCommands!.delete(permit); ownedHttpSelectionPermits!.delete(permit);
+  if (!--ownedHttpSelectionPermitCount) { ownedHttpSelectionPermits = undefined; ownedHttpProviderCommands = undefined; }
+  if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "owned HTTP provider cleanup");
+  if (hasPrimary) throw primary;
+}
+
+// Only a genuine provider permit receives this fixed message from the selected
+// owner. No caller callback, raw graph getter or fulfilled graph promise exists.
+export async function consumeOwnedHttpProviderCredential(permit: object, cap: OwnedHttpRequest,
+  auth: AuthorizedIdentity, connection: ProviderConnection | undefined,
+  result: import("./grant-eligibility.ts").GrantSelectionResult, grant: UpstreamGrant | null): Promise<void> {
+  const command = ownedHttpProviderCommands?.get(permit);
+  if (!command || command.cap !== cap || !ownsOwnedHttpSelectionPermit(permit, cap) || !command.selected) throw ownedHttpIdentityFailure("protocol");
+  const selection = command.selection!, provider = selection.provider, env = command.env!, preparation = command.preparation!;
+  const key = result.selected?.key ?? null;
+  if (key !== null && !command.selected.matchesKey(key) || !!key !== !!grant) throw ownedHttpIdentityFailure("protocol");
+  if (grant && !grantsVisibleToPolicies([{ key: key!, grant }], [{ policyId: auth.policyId, policy: auth.policy }]).length)
+    throw new HttpError(503, "upstream_grant_changed", "shared subscription owner changed");
+  const requirement: GrantRequirement = { provider, endpoint: selection.endpoint, mode: "http", model: selectionUpstreamModelForOwned(selection), managedLifecycle: !!selection.endpoint.lifecycle };
+  if (!grant && result.hasConfiguredGrant) {
+    if (!auth.policy.grantRouting?.environmentFallback) throw grantPoolUnavailable(provider, result.retryAt);
+    try { assertOperationConfiguration(requirement, null, env, preparation); configuredUpstream(provider, null, env, undefined, preparation); }
+    catch (error) { if (isPreparationLimit(error) || isIdentityFailure(error)) throw error; throw grantPoolUnavailable(provider, result.retryAt); }
+  }
+  assertOperationConfiguration(requirement, grant, env, preparation);
+  let upstream: UpstreamAuth | undefined = configuredUpstream(provider, grant, env, undefined, preparation);
+  upstream.grantKey = key; upstream.grantRevision = grant ? grantRevision(grant) : null;
+  try {
+    await acceptOwnedHttpConfiguredProvider(cap, command.request!, env, selection, command.query!, auth,
+      connection ?? { providerId: provider.id, enabled: true }, upstream, preparation, permit, command.selected);
+  } finally { upstream = undefined; grant = null; result = undefined as never; auth = undefined as never; connection = undefined; }
+}
+function selectionUpstreamModelForOwned(selection: ProxySelection): string | null {
+  return !Array.isArray(selection.body) && typeof selection.body.model === "string" ? selection.body.model
+    : selection.pathParams.model ?? selection.pathParams.deployment ?? selection.pathParams.model_id ?? null;
 }
