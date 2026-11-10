@@ -22,9 +22,22 @@ The [plan support article](https://support.claude.com/en/articles/15424964-claud
 explicitly includes Fable 5.2 in Max/Ultra and premium Team/legacy seat-based
 Enterprise subscriptions. Those plans share a separate Fable family limit of
 50% of weekly usage. Pro and standard seats require usage credits from the
-start; usage-based Enterprise and API access are metered. Claude Code requires
-2.1.321 or later, so the existing subscription transport's client version and
-billing prefix are updated together.
+start; usage-based Enterprise and API access are metered. The support article
+requires Claude Code 2.1.321 or later when using Fable 5.2 in that application.
+That application-version requirement is not evidence that a raw Messages request
+must claim that version in its user-agent or billing system block. The Messages
+[migration guide](https://platform.claude.com/docs/en/models/fable-5-2/migration-guide)
+identifies the model by `claude-fable-5-2`; it does not prescribe either version
+field as a model-access requirement.
+
+Keep the router's existing subscription user-agent and injected billing prefix
+at 2.1.288. The prefix is part of earlier requests' system content; changing it
+would change the prefix preceding preserved thinking even when callers replay
+unchanged tools and history. Regression tests exercise the actual transform for
+Fable 5.1, Sonnet 5.5 and Opus 5.5, both reconstructing the historical prefix and
+replaying already-transformed input without adding duplicate billing blocks.
+These synthetic tests prove wire preservation, not cryptographic signature
+acceptance or live Fable 5.2 subscription access under this client identity.
 
 A declared subscription offer is transport compatibility, not proof that a
 specific account has included usage, credits, fast-mode access, or permission to

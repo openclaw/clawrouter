@@ -71,10 +71,10 @@ for (const subscription of [false, true]) for (const route of ["unified", "nativ
     const forwarded = await sent.json();
     if (subscription) {
       assert.equal(sent.headers.get("authorization"), "Bearer synthetic-subscription-token"); assert.equal(sent.headers.has("x-api-key"), false);
-      assert.equal(sent.headers.get("user-agent"), "claude-cli/2.1.321 (external, cli)");
+      assert.equal(sent.headers.get("user-agent"), "claude-cli/2.1.288 (external, cli)");
       assert.match(sent.headers.get("anthropic-beta"), /oauth-2025-04-20/);
       assert.deepEqual(forwarded.system, [
-        { type: "text", text: "x-anthropic-billing-header: cc_version=2.1.321; cc_entrypoint=sdk-cli;" },
+        { type: "text", text: "x-anthropic-billing-header: cc_version=2.1.288; cc_entrypoint=sdk-cli;" },
         { type: "text", text: "You are Claude Code, Anthropic's official CLI for Claude." }, { type: "text", text: prompt.system },
       ]);
     } else { assert.equal(sent.headers.get("x-api-key"), "synthetic-api-key"); assert.equal(sent.headers.has("authorization"), false); assert.equal(forwarded.system, prompt.system); }
