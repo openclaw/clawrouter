@@ -1399,7 +1399,7 @@ async function reserveSelected(request: Request, env: Env, context: ExecutionCon
   const failureAccounting = createProxyAccounting({ context, env, auth, selection, request, compound });
   let prepared: PreparedUpstream;
   try {
-    prepared = await prepareSelected(request, env, selection, {}, auth, new Set(), false);
+    prepared = await prepareSelected(request, env, selection, {}, auth);
   } catch (error) {
     if (isAccountingAdmissionFailure(error)) throw error;
     const failure = selectedFailure(error);
@@ -1450,8 +1450,14 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
   // same authority first, rather than spending an uncounted fifth pool slot.
   // This preference is not a continuation pin: an ordinary credential failure
   // may still exclude it and use the remaining shared failover budget.
-  const prepare = (excluded: ReadonlySet<string>) => prepareSingleSelected(request, env, selection, queryInput, auth, excluded, recordSelection, resolvedConnection,
-    pinned ?? (reservedGrant?.key && excluded.has(reservedGrant.key) ? undefined : reservedGrant), transport, recoverBackground, wan, searchOwner, video, preparation, signal);
+  const prepare = (excluded: ReadonlySet<string>) => {
+    const reuseReserved = !pinned && reservedGrant && !(reservedGrant.key && excluded.has(reservedGrant.key));
+    // Reservation already applied the routing policy and recorded its choice.
+    // Revalidation must not advance routing again; a failed owner still allows
+    // the next loop to choose and record a policy-driven alternate normally.
+    return prepareSingleSelected(request, env, selection, queryInput, auth, excluded, recordSelection && !reuseReserved, resolvedConnection,
+      pinned ?? (reuseReserved ? reservedGrant : undefined), transport, recoverBackground, wan, searchOwner, video, preparation, signal);
+  };
   const excluded = new Set(excludedGrantKeys);
   const routing = grantRoutingPolicy(auth.policy.grantRouting);
   let firstFailure: SelectedGrantCredentialFailure | undefined;

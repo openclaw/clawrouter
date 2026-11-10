@@ -48,7 +48,7 @@ const router = `
         const value = target[name]; return typeof value === "function" ? value.bind(target) : value;
       }});
       super(new Proxy(state, { get(target, name) { if (name === "storage") return storage; const value = target[name]; return typeof value === "function" ? value.bind(target) : value; }}), env);
-      this.storage = state.storage;
+      this.storage = state.storage; this.fixtureEnv = env;
     }
     async fetch(request) {
       const path = new URL(request.url).pathname;
@@ -56,6 +56,7 @@ const router = `
         const record = await this.storage.get("credential"); delete record.refreshRoutingPublished; record.poolSyncPending = false;
         await this.storage.put("credential", record); return new Response("ok");
       }
+      if (path === "/fixture/revoke-after-materialize") { await this.storage.put("fixture/revoke-after-materialize", true); return new Response("ok"); }
       if (path === "/fixture/lose-on-second") { await this.storage.put("fixture/reads-before-loss", 1); return new Response("ok"); }
       if (path === "/fixture/lose-owner") { await this.storage.put("fixture/lose-owner", true); return new Response("ok"); }
       if (path === "/fixture/abandoned") { await this.storage.put("fixture/abandoned", true); return new Response("ok"); }
@@ -72,7 +73,14 @@ const router = `
         await this.storage.delete("fixture/abandoned");
       }
       if (path === "/materialize" && await this.storage.get("fixture/lose-owner")) await this.storage.delete("credential");
-      return super.fetch(request);
+      const response = await super.fetch(request);
+      if (path === "/materialize" && response.ok && await this.storage.get("fixture/revoke-after-materialize")) {
+        await this.storage.delete("fixture/revoke-after-materialize");
+        const authority = this.fixtureEnv.ACCESS_CONTROL.get(this.fixtureEnv.ACCESS_CONTROL.idFromName("policy-bindings"));
+        const revoked = await authority.fetch("https://owner/credentials/mutate", { method: "POST", body: JSON.stringify({ operation: "revoke", credentialId: "fixture", scope: "admin", actor: { auth: "admin_token", email: "fixture-admin@example.com", role: "admin" } }) });
+        if ((await revoked.json()).outcome !== "updated") throw Error("fixture caller revocation failed");
+      }
+      return response;
     }
   }
   export default { ...worker, async fetch(request, env, ctx) {
@@ -88,7 +96,7 @@ const router = `
       ]) { const r = await stub.fetch("https://owner" + path, { method: "POST", body: JSON.stringify(body) }); if (!r.ok) return r; }
       return new Response("ok");
     }
-    if (path === "/fixture/lose-on-second") { const { key } = await request.clone().json(); return env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(key)).fetch(request); }
+    if (["/fixture/lose-on-second", "/fixture/revoke-after-materialize"].includes(path)) { const { key } = await request.clone().json(); return env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(key)).fetch(request); }
     if (path === "/fixture/clock") { clock = (await request.json()).now; return new Response("ok"); }
     if (path === "/fixture/provider") return fetch("https://fixture/control", request);
     if (path === "/fixture/kv-selection") {
@@ -123,9 +131,9 @@ const upstream = `
     return Response.json({ id: "resp_fixture_" + dispatches.length, object: "response", status: "completed", output: [], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 }, servedBy: credential });
   }};
 `;
-async function fixture(t, { second = true, routing = {}, expiresAt = now - 1000 } = {}) {
+async function fixture(t, { second = true, routing = {}, expiresAt = now - 1000, hotCache = false } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "clawrouter-refresh-routing-"));
-  const mf = await startWorkerdFixture(dir, router, upstream);
+  const mf = await startWorkerdFixture(dir, router, upstream, { hotCache });
   t.after(async () => { await mf.dispose(); await rm(dir, { recursive: true, force: true }); });
   const request = (path, method = "GET", body, proxy = false) => mf.dispatchFetch("https://router.example" + path, {
     method, headers: { authorization: proxy ? "Bearer clawrouter-live-fixture-fixture-key" : "Bearer fixture-admin", "content-type": "application/json", origin: "https://router.example" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -354,21 +362,57 @@ test("pool traversal stops after four distinct failed accounts without enabling 
   assert.deepEqual((await f.stats()).dispatches, ["a", "b", "c", "d"].map(name => "Bearer fixture-" + name));
 });
 
+for (const strategy of ["round_robin", "least_used"]) test("healthy fusion selects once at reservation using " + strategy, { timeout: 60000 }, async t => {
+  const f = await fixture(t, { routing: { strategy, stickiness: "none" }, expiresAt: now + 7200000 });
+  await served(await f.proxy(), "fixture-a"); // Real selection makes B the next policy choice, not first eligible A.
+  const counts = async () => (await (await f.request("/v1/admin/upstream-grants")).json()).grants
+    .map(({ tokenRef, selectedCount }) => [tokenRef, selectedCount]).sort();
+  assert.deepEqual(await counts(), [["a", 1], ["b", 0]]);
+  await f.configure({ reset: true });
+  assert.equal((await f.request("/v1/admin/fusion", "PUT", { enabled: true, adviserModels: ["local/qwen3:8b"], aggregatorModel: "openai/gpt-4.1-mini" })).status, 200);
+  const response = await f.request("/v1/chat/completions", "POST", { model: "clawrouter/fusion", messages: [{ role: "user", content: "synthetic fixture" }], max_tokens: 16 }, true);
+  const stats = await f.stats();
+  assert.equal(stats.materializations[0], "oauth/fixture/b", "reservation must apply the configured policy before materializing an owner");
+  await served(response, "fixture-b");
+  assert.deepEqual(stats.materializations, ["oauth/fixture/b", "oauth/fixture/b"], "dispatch revalidates the reserved owner without selecting another");
+  assert.deepEqual(stats.dispatches, ["Bearer fixture-b"]);
+  assert.equal(stats.refreshes, 0);
+  assert.deepEqual(await counts(), [["a", 1], ["b", 1]], "reservation and dispatch record one selection, not two");
+  await served(await f.proxy(), "fixture-a");
+  assert.deepEqual(await counts(), [["a", 2], ["b", 1]], "subsequent routing sees the single completed selection");
+});
+
 for (const mode of ["divergent-response", "divergent-mixed", "reuse", "reuse-at-cap"]) test("fusion counts successful reservation materialization in its four-grant budget: " + mode, { timeout: 60000 }, async t => {
   const f = await fixture(t, { routing: { strategy: "round_robin", stickiness: "none" }, expiresAt: mode === "reuse-at-cap" ? now - 1000 : now + 7200000 });
   for (const name of ["b", "c", "d", "e"]) assert.equal((await f.request(f.base + name, "PUT", { ...f.grant, accessToken: "fixture-" + name, refreshToken: "fixture-refresh-" + name,
     expiresAt: new Date((mode === "divergent-mixed" && name === "c" || mode === "reuse-at-cap" && ["b", "c"].includes(name)) ? now - 1000 : now + 7200000).toISOString() })).status, 200);
   if (mode.startsWith("divergent")) await served(await f.proxy(), "fixture-a"); // real round-robin cursor advances to B
-  await f.configure({ reset: true, status: 503, dispatchStatus: 429, healthy: "Bearer fixture-" + (mode.startsWith("reuse") ? "d" : "e") });
+  await f.configure({ reset: true, status: 503, dispatchStatus: 429, healthy: "Bearer fixture-" + (mode.startsWith("reuse") ? "d" : "a") });
   assert.equal((await f.request("/v1/admin/fusion", "PUT", { enabled: true, adviserModels: ["local/qwen3:8b"], aggregatorModel: "openai/gpt-4.1-mini" })).status, 200);
   const response = await f.request("/v1/chat/completions", "POST", { model: "clawrouter/fusion", messages: [{ role: "user", content: "synthetic fixture" }], max_tokens: 16 }, true);
   const stats = await f.stats();
-  assert.equal(stats.materializations[0], "oauth/fixture/a", "reservation starts with A without advancing selection");
-  assert.deepEqual([...new Set(stats.materializations)], ["a", "b", "c", "d"].map(name => "oauth/fixture/" + name), "no fifth credential owner is touched");
+  const attempted = mode.startsWith("divergent") ? ["b", "c", "d", "e"] : ["a", "b", "c", "d"];
+  assert.equal(stats.materializations[0], "oauth/fixture/" + attempted[0], "reservation follows the real routing cursor");
+  assert.deepEqual([...new Set(stats.materializations)], attempted.map(name => "oauth/fixture/" + name), "no fifth credential owner is touched, including wraparound to A");
   assert.equal(response.status, mode.startsWith("reuse") ? 200 : 429, await response.clone().text());
-  assert.deepEqual(stats.dispatches, (mode === "reuse-at-cap" ? ["d"] : mode === "divergent-mixed" ? ["a", "b", "d"] : ["a", "b", "c", "d"]).map(name => "Bearer fixture-" + name));
+  assert.deepEqual(stats.dispatches, (mode === "reuse-at-cap" ? ["d"] : mode === "divergent-mixed" ? ["b", "d", "e"] : attempted).map(name => "Bearer fixture-" + name));
   assert.equal(stats.refreshes, mode === "reuse-at-cap" ? 3 : mode === "divergent-mixed" ? 1 : 0);
+  const grants = (await (await f.request("/v1/admin/upstream-grants")).json()).grants;
+  for (const row of grants) assert.equal(row.selectedCount, attempted.includes(row.tokenRef) || mode.startsWith("divergent") && row.tokenRef === "a" ? 1 : 0, "each distinct attempted owner is recorded once: " + row.tokenRef);
   if (mode === "reuse-at-cap") assert.deepEqual(stats.materializations.slice(-2), ["oauth/fixture/d", "oauth/fixture/d"], "a successful fourth owner is legitimately reused");
+});
+
+for (const hotCache of [false, true]) test("fusion reuse retains caller revocation checks after reservation failover, hotCache=" + hotCache, { timeout: 60000 }, async t => {
+  const f = await fixture(t, { hotCache }); await f.configure({ status: 503 });
+  // A fails; successful reservation materialization of B revokes the caller.
+  assert.equal((await f.request("/fixture/revoke-after-materialize", "POST", { key: "oauth/fixture/b" })).status, 200);
+  assert.equal((await f.request("/v1/admin/fusion", "PUT", { enabled: true, adviserModels: ["local/qwen3:8b"], aggregatorModel: "openai/gpt-4.1-mini" })).status, 200);
+  const response = await f.request("/v1/chat/completions", "POST", { model: "clawrouter/fusion", messages: [{ role: "user", content: "synthetic fixture" }], max_tokens: 16 }, true);
+  assert.equal(response.status, 403, await response.clone().text());
+  assert.equal((await response.json()).error.code, "proxy_key_revoked");
+  const stats = await f.stats();
+  assert.deepEqual(stats.materializations, ["oauth/fixture/a", "oauth/fixture/b"], "caller is revalidated before reusing the reserved credential");
+  assert.deepEqual(stats.dispatches, []); assert.equal(stats.refreshes, 1);
 });
 
 for (const full of [false, true]) test("fusion reserved credential failure " + (full ? "cannot open a fifth account" : "uses the remaining failover budget"), { timeout: 60000 }, async t => {
