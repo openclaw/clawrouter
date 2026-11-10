@@ -27,7 +27,10 @@ test('native requests use explicit owned endpoints, medium reasoning and JSON an
 
 test('OpenAI tariff includes cached reads, cache writes and reasoning in completion tokens', () => {
   const r = { model: 'gpt-6.1-sol', service_tier: 'default', usage: { prompt_tokens: 1000, completion_tokens: 500, prompt_tokens_details: { cached_tokens: 200, cache_write_tokens: 100 }, completion_tokens_details: { reasoning_tokens: 400 } } };
-  assert.equal(nativeResult('openai/gpt-6.1-sol', r).costMicros, 6670);
+  const out = nativeResult('openai/gpt-6.1-sol', r);
+  assert.equal(out.costMicros, 6670);
+  assert.deepEqual(out.usageBreakdown, { uncachedInputTokens: 700, cacheReadInputTokens: 200,
+    cacheWriteInputTokens: 100, cacheWrite1hInputTokens: 0, outputTokens: 500 });
   assert.throws(() => nativeResult('openai/gpt-6.1-sol', { ...r, service_tier: 'priority' }), /tier_unqualified/);
   assert.throws(() => nativeResult('openai/gpt-6.1-sol', { ...r, model: 'different-model' }), /identity_missing/);
   assert.throws(() => nativeResult('openai/gpt-6.1-sol', { ...r, usage: { ...r.usage, prompt_tokens: 1 } }), /usage_invalid/);
@@ -38,6 +41,8 @@ test('Anthropic tariff counts separate cache buckets and preserves only answer t
     usage: { input_tokens: 100, output_tokens: 200, cache_read_input_tokens: 300, cache_creation_input_tokens: 100, cache_creation: { ephemeral_5m_input_tokens: 40, ephemeral_1h_input_tokens: 60 } } };
   const out = nativeResult('anthropic/claude-sonnet-5.5', r);
   assert.equal(out.costMicros, 2570);
+  assert.deepEqual(out.usageBreakdown, { uncachedInputTokens: 100, cacheReadInputTokens: 300,
+    cacheWriteInputTokens: 40, cacheWrite1hInputTokens: 60, outputTokens: 200 });
   assert.equal(out.result.choices[0].message.content, '{"answer":"B"}');
   assert.equal(JSON.stringify(out).includes('private reasoning'), false);
   assert.throws(() => nativeResult('anthropic/claude-sonnet-5.5', { ...r, usage: { ...r.usage, speed: 'fast' } }), /tier_unqualified/);
