@@ -145,17 +145,21 @@ for (const id of ["groq", "mistral"]) {
     });
     const f = await setup(t, id), timeoutMs = 17777, reached = Promise.withResolvers();
     f.provider.endpoints.find(item => item.id === "transcription").timeout_ms = timeoutMs;
-    const setTimer = globalThis.setTimeout; let deadline, canceled = false;
+    const setTimer = globalThis.setTimeout, clearTimer = globalThis.clearTimeout, deadlines = new Map(); let canceled = false;
     t.mock.method(globalThis, "setTimeout", (callback, delay, ...args) => {
-      if (delay === timeoutMs) { assert.equal(deadline, undefined); deadline = () => callback(...args); }
-      return setTimer(callback, delay, ...args);
+      const timer = setTimer(callback, delay, ...args);
+      if (delay > timeoutMs - 5000 && delay <= timeoutMs) deadlines.set(timer, () => callback(...args));
+      return timer;
+    });
+    t.mock.method(globalThis, "clearTimeout", timer => {
+      deadlines.delete(timer); return clearTimer(timer);
     });
     f.upstream = () => new Response(new ReadableStream({ pull() { reached.resolve(); }, cancel() { canceled = true; } }, { highWaterMark: 0 }), { headers: { "content-type": "application/json" } });
     pending = f.request(form(id), { signal: caller.signal });
     await Promise.race([reached.promise, pending.then(() => { throw Error("request settled before the upstream read"); })]);
     // Exercise the real deadline callback after reader acquisition, not a race
     // between a short wall-clock budget and unrelated upload/admission work.
-    assert.equal(f.sent.length, 1); assert.equal(typeof deadline, "function"); deadline();
+    assert.equal(f.sent.length, 1); assert.equal(deadlines.size, 1); deadlines.values().next().value();
     const response = await pending; assert.equal(response.status, 504); await response.text();
     assert.equal(canceled, true); assert.equal(f.sent.length, 1); await settled(f);
   });
