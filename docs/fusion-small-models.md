@@ -3,6 +3,11 @@
 Research reviewed on 2026-11-05. Keep production Fusion opt-in. This plan tests
 the mechanism before paying for another frontier-model comparison.
 
+Draft refinement skips verification when a response applies no patch. It tells
+the next attempt whether to shorten truncated output or repair invalid edit
+anchors, while retaining the current source and the same three-attempt ceiling.
+Applied drafts still require the visible tests and supplied reproducer to pass.
+
 ## What the evidence supports
 
 | Primary source | Relevant result | Engineering consequence |
