@@ -86,14 +86,29 @@ test('private full bridge keeps a full charge until explicit opaque disposal; no
 
 test('BOTH private RPCs share the same cumulative source owner with no reset or full-admission effect on exhaustion', async t => fixture(t, async f => {
   seed(f); f.stored.set('credentials/bridgekid', { ...credential(), retainedUnknown: 'x'.repeat(600000) });
-  const baseline = bodyBudgetCharged(); let proof, continuation;
-  f.resources.push(() => { if (continuation) releaseCredentialPreflightContinuation(continuation); else if (proof) releaseCredentialPreflight(proof); });
+  const baseline = bodyBudgetCharged(); let proof, continuation, handle;
+  f.resources.push(() => { if (handle) handle.dispose(); else if (continuation) releaseCredentialPreflightContinuation(continuation); else if (proof) releaseCredentialPreflight(proof); });
   const preflight = await f.take(f.own(preflightCredential(f.env, 'bridgekid', digest)));
   assert.equal(preflight.outcome, 'matched'); proof = preflight.proof;
   continuation = consumeCredentialPreflight(proof, f.env, 'bridgekid', digest); proof = undefined;
+  // The discarded cold-field bytes remain charged, but the canonical record is
+  // small. Add a separately valid request whose original intake crosses BOTH RPCs.
+  const admission = { providers: [], retainedUnknown: 'y'.repeat(1600000) };
+  assert.doesNotThrow(() => identityPlan().item(admission, 0));
+  let sentSource, calls = 0; const get = f.env.ACCESS_CONTROL.get;
+  t.mock.method(f.env.ACCESS_CONTROL, 'get', function (...args) {
+    const stub = Reflect.apply(get, this, args), original = stub.fetch;
+    return { fetch(url, init) {
+      if (url.endsWith('/admission/resolve')) { calls++; sentSource = JSON.parse(init.body).source; }
+      return Reflect.apply(original, stub, [url, init]);
+    } };
+  });
   f.trace.writes.length = 0;
-  const operation = completeCredentialAdmission(continuation, { providers: [] }); continuation = undefined;
+  const operation = completeCredentialAdmission(continuation, admission); continuation = undefined;
   const root = f.own(operation), outcome = await root.outcome; root.used = true;
+  if (!outcome.failed) handle = outcome.value; // cleanup owns even an unexpected success
+  assert.equal(calls, 1); assert.ok(sentSource.bytes >= 600000);
+  assert.ok(sentSource.bytes + Buffer.byteLength(JSON.stringify(admission)) > 2097152);
   assert.equal(outcome.failed, true); assert.ok(denied(outcome.error)); assert.deepEqual(f.trace.writes, []);
   assert.equal(f.db.prepare('SELECT count(*) n FROM proxy_credentials').get().n, 1);
   assert.equal(f.db.prepare('SELECT count(*) n FROM access_policies').get().n, 0);
@@ -426,7 +441,7 @@ test('private cold user reaches RAW-dedup normalization with complete output and
   const record = { enabled: true, groups: [' X ', 'x', 'X', ' X ', ...Array.from({ length: 1025 }, (_, i) => 'Group-' + i)] };
   f.stored.set('access/users/fixture@example.com', record);
   const response = await f.call(input()); assert.equal(response.status, 200);
-  assert.deepEqual(response.body.admission.owner, normalizeUser({ email: 'fixture@example.com', record }));
+  assert.deepEqual(response.body.admission.owner, JSON.parse(JSON.stringify(normalizeUser({ email: 'fixture@example.com', record }))));
   assert.equal(response.body.admission.owner.record.groups.filter(group => group === 'x').length, 3);
   assert.ok(f.trace.kv.some(([key, mode]) => key === 'access/users/fixture@example.com' && mode === 'stream'));
   assert.equal(f.db.prepare('SELECT count(*) n FROM access_users').get().n, 1);

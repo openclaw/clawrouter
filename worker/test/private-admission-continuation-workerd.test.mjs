@@ -70,14 +70,14 @@ export class PolicyBindingIndexObject extends Base {
 }
 export default {async fetch(request,env){
  const mode=new URL(request.url).pathname.slice(1),dependency=mode.startsWith('dependency-'),stub=env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName('policy-bindings'));
- const roots=[];let proof,continuation,handle,restoreCopy,restoreDescriptor,hasPrimary=false,primary;
+ const roots=[];let proof,continuation,handle,restoreCopy,restoreDescriptor,hasPrimary=false,primary,phase='configure';
  const own=promise=>{const root={outcome:promise.then(value=>({failed:false,value}),error=>({failed:true,error})),used:false};roots.push(root);return root;};
  const take=async root=>{const result=await root.outcome;root.used=true;if(result.failed)throw result.error;return result.value;};
  const rpc=async(path,body,headers)=>{const response=await take(own(stub.fetch('https://authority'+path,{method:'POST',body,headers})));const text=await take(own(response.text()));return {status:response.status,body:text?JSON.parse(text):null};};
  let result;const baseline=bodyBudgetCharged();
  try{
   const configured=await take(own(stub.fetch('https://authority/fixture/configure',{method:'POST',body:mode})));await take(own(configured.text()));check(configured.status===200,'configure');
-  await env.POLICY_KV.put('credentials/nativebridge',JSON.stringify({...record(digest),...(mode==='principal'?{principalId:' '.repeat(4096)+'FIXTURE@EXAMPLE.COM'+' '.repeat(4096)}:{})}));
+  phase='seed';await env.POLICY_KV.put('credentials/nativebridge',JSON.stringify({...record(digest),...(mode==='principal'?{principalId:' '.repeat(4096)+'FIXTURE@EXAMPLE.COM'+' '.repeat(4096)}:{})}));
   if(mode==='principal')await env.POLICY_KV.put('access/users/fixture@example.com',JSON.stringify({enabled:true,groups:[]}));
   await env.POLICY_KV.put('policies/native-bridge-policy',JSON.stringify({enabled:true,generation:'legacy',providers:[],requestCostMicros:7}));
   if(mode==='provider-only')await env.POLICY_KV.put('connections/anthropic',JSON.stringify({providerId:'anthropic',enabled:true}));
@@ -86,8 +86,8 @@ export default {async fetch(request,env){
    await env.POLICY_KV.put(selectedKey,JSON.stringify({provider:'anthropic',kind:'api_key',enabled:true,credentialStore:'durable_object',credentialGeneration:1,credentialLineage:'synthetic',credentialStatus:'active',hasCredential:true}));
   }
   if(mode==='healthy'||mode==='selection'||mode==='copy-pressure'||mode==='callable-pressure'||mode==='callables'||mode.startsWith('hook-')||mode.startsWith('inert-')||mode==='symbols'){
-   const preflight=await take(own(preflightCredential(env,'nativebridge',digest)));check(preflight.outcome==='matched','preflight');proof=preflight.proof;
-   continuation=consumeCredentialPreflight(proof,env,'nativebridge',digest);proof=undefined;
+   phase='preflight';const preflight=await take(own(preflightCredential(env,'nativebridge',digest)));check(preflight.outcome==='matched','preflight');proof=preflight.proof;
+   phase='continuation';continuation=consumeCredentialPreflight(proof,env,'nativebridge',digest);proof=undefined;
    let admission=mode==='selection'?{providers:[{id:'anthropic',tokenRef:'anthropic'}],selection:{providerId:'anthropic',endpointId:'messages',mode:'http',capability:'llm.messages'}}:{providers:[]};
    let copyFactories=0,symbolReads=0,callableReads=0,inertDescriptors=0,inertInvoked=0,lookupQualified=false;
    if(mode.startsWith('inert-')){
@@ -118,7 +118,7 @@ export default {async fetch(request,env){
     const large={payload:'x'.repeat(4*1048576)};large.self=large;admission[Symbol('large')]=large;
     Object.defineProperty(admission,Symbol('getter'),{enumerable:true,get(){symbolReads++;throw undefined;}});
    }
-   if(mode.startsWith('hook-')){
+   phase='full-admission';if(mode.startsWith('hook-')){
     let invoked=0,failed=false;const fn=()=>{invoked++;throw undefined;},holder=mode==='hook-array'?Object.create(Function.prototype):fn;
     Object.defineProperty(holder,'toJSON',mode==='hook-object'?{value(){invoked++;return 'X'.repeat(20000000);}}:{get(){invoked++;throw undefined;}});
     if(holder!==fn)Object.setPrototypeOf(fn,holder);
@@ -133,14 +133,14 @@ export default {async fetch(request,env){
     let failed=false;try{handle=await take(own(operation));}catch(error){if(!isIdentityFailure(error))throw error;failed=true;}
     check(failed&&copyFactories===0,'pre-copy capacity');result={status:503,copyFactories};
    }else{
-    handle=await take(own(operation));
+    handle=await take(own(operation));phase='opaque-result';
     check(bodyBudgetCharged()-baseline===32*1024*1024,'full result remains funded');check(Object.keys(handle).join(',')==='dispose'&&JSON.stringify(handle)==='{}','opaque');
     handle.dispose();handle=undefined;check(symbolReads===0,'no Symbol getter read');check(callableReads===0,'callables never invoked');check(inertDescriptors===0&&inertInvoked===0,'no inert descriptor carrier or callback');result={status:200,opaque:true,symbolReads,callableReads,inertDescriptors,inertInvoked,lookupQualified};
    }
    }
    admission=undefined;
   }else{
-   const source=identitySourceBudget();if(mode==='limited')source.values=131050;
+   phase='direct-admission';const source=identitySourceBudget();if(mode==='limited')source.values=131050;
    const reply=await rpc('/admission/resolve',JSON.stringify({admission:{credentialId:'nativebridge',secretSha256:digest,providers:mode==='provider-only'||mode==='configuration'||mode==='snapshot-only'||mode==='snapshot-select'||dependency?[{id:'anthropic',tokenRef:dependency?'a':'anthropic'}]:[],...(mode==='configuration'||mode==='snapshot-only'||mode==='snapshot-select'||dependency?{selection:{providerId:'anthropic',endpointId:'messages',mode:'http',capability:'llm.messages'}}:{}),...(mode.endsWith('snapshot')||mode==='snapshot-only'?{snapshot:'only'}:mode==='snapshot-select'?{snapshot:'select'}:{})},source}),{'content-type':'application/json','x-clawrouter-private-admission':'v1'});
    check(reply.status===(mode==='limited'||mode==='configuration'?503:200),'private status');
    if(mode==='provider-only')check(!reply.body.admission.selection&&reply.body.admission.connections[0]?.providerId==='anthropic'&&reply.body.admission.pools.anthropic.keys.length>0,'nonempty provider no selection');
@@ -151,7 +151,7 @@ export default {async fetch(request,env){
    if(mode==='limited'||mode==='configuration')check(reply.body.error.code==='identity_admission_unavailable','capacity classification');
    result={status:reply.status,rotation:mode==='rotation'};
   }
- }catch(error){hasPrimary=true;primary=error;}
+ }catch(error){hasPrimary=true;primary=error;try{console.error(JSON.stringify({fixture:'private-admission',phase,privateFailure:isIdentityFailure(error),primaryIsUndefined:error===undefined}));}catch{}}
  const failures=[];
  for(let i=0;i<roots.length;i++){const outcome=await roots[i].outcome;if(outcome.failed&&!roots[i].used){roots[i].used=true;failures.push(outcome.error);}}
  try{if(handle)handle.dispose();else if(continuation)releaseCredentialPreflightContinuation(continuation);else if(proof)releaseCredentialPreflight(proof);}catch(error){failures.push(error);}
@@ -187,8 +187,10 @@ test('inactive private continuation through actual Workerd KV/RPC/SQLite and opa
     directory = await mkdtemp(join(tmpdir(), 'private-admission-workerd-'));
     runtime = await take(own(startWorkerdFixture(directory, router, upstream, { preventEviction: true })));
     for (const mode of ['healthy', 'provider-only', 'rotation', 'limited', 'selection', 'configuration', 'dependency-choice', 'dependency-snapshot', 'dependency-same-choice', 'dependency-same-snapshot', 'snapshot-only', 'snapshot-select', 'principal', 'copy-pressure', 'callable-pressure', 'callables', 'hook-top', 'hook-object', 'hook-array', 'inert-top', 'inert-object', 'inert-array', 'inert-empty', 'symbols']) {
+      const report = (phase, status) => { try { if (typeof t.log === 'function') t.log(JSON.stringify({ fixture: 'private-admission', case: mode, phase, status })); } catch {} };
+      report('dispatch', null);
       const response = await take(own(runtime.dispatchFetch('https://fixture/' + mode)));
-      const text = await take(own(response.text())); assert.equal(response.status, 200);
+      const text = await take(own(response.text())); report('body', response.status); assert.equal(response.status, 200, mode);
       const result = JSON.parse(text); assert.equal(result.charged, 0); assert.equal(result.sql.charged, 0);
       assert.equal(result.sql.trace.intakes, mode === 'copy-pressure' || mode === 'callable-pressure' || mode.startsWith('hook-') ? 0 : 1); assert.equal(result.status, mode === 'limited' || mode === 'configuration' || mode === 'copy-pressure' || mode === 'callable-pressure' || mode.startsWith('hook-') ? 503 : 200);
       if (mode === 'healthy') { assert.equal(result.opaque, true); assert.equal(result.sql.credentials, 1); assert.equal(result.sql.policies, 1); }
