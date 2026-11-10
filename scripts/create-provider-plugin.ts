@@ -36,6 +36,8 @@ export function createProviderPlugin(id: string, destination: string): string {
         `synthetic request/response data. Replace the license placeholder before distribution.\n\n` +
         `From a ClawRouter checkout, compile this package with:\n\n` +
         `    node scripts/compile-providers.mjs --plugin <package-dir>/clawrouter.plugin.json\n\n` +
+        `Validate fixture declarations (without executing the provider) with:\n\n` +
+        `    node scripts/validate-provider-conformance.mjs --plugin <package-dir>/clawrouter.plugin.json\n\n` +
         `Package creation does not register, enable, or deploy a provider. See\n` +
         `https://github.com/openclaw/clawrouter/blob/main/docs/provider-plugins.md\n`;
     }
