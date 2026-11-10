@@ -216,7 +216,10 @@ export function beginOwnedHttpUpload(cap: OwnedHttpRequest): OwnedHttpUpload {
   const request = requestOwner(cap);
   if (request.sealed) throw identityFailure("protocol");
   fundOwnedHttpRequest(cap, request.funding.bytes + uploadMetadataBytes);
-  const scope = request.completion.fork();
+  // Upload completion is a separate original-root join. Enrolling it in the
+  // logical delivery/accounting completion would prevent that boundary from
+  // ever initiating cancellation of a dispatched, backpressured upload.
+  const scope = new ProxyCompletion();
   const upload = Object.freeze({});
   const owner: UploadOwner = { cap: upload, request, scope, started: false, settled: false, dispatched: false, failures: [] };
   uploads!.set(upload, owner); request.uploads.push(owner);
@@ -312,7 +315,13 @@ export function finishOwnedHttpRequest(cap: OwnedHttpRequest): Promise<void> {
     await owner.completion.completion;
     const failures: unknown[] = [];
     for (const upload of owner.uploads) {
+      // No logical HTTP consumer can still need this request upload now. A
+      // provider can finish its response without draining our original pipe.
+      // Initiate owned cancellation BEFORE joining that original; UNKNOWN
+      // abandonment remains pending and retains all relevant funding.
+      if (!upload.settled) await abandonOwnedHttpUpload(upload.cap);
       if (upload.joined) await upload.joined;
+      await upload.scope.completion;
       if (!upload.settled) { owner.unknown = true; continue; }
       failures.push(...upload.failures);
       try { if (upload.listener) owner.request!.signal.removeEventListener("abort", upload.listener); }

@@ -106,6 +106,32 @@ test('partial preparation owns source cancellation when FixedLengthStream constr
   });
 });
 
+for (const rejected of [false, true]) test(`dispatched upload retires after logical HTTP delivery without a completion self-join${rejected ? ' on original cancel rejection' : ''}`, async t => {
+  await fixture(t, async f => {
+    const entered = deferred(), release = deferred(), accounting = deferred(); let cancels = 0;
+    f.releases.push(accounting.resolve, release.resolve);
+    const upload = beginOwnedHttpUpload(f.cap);
+    const source = new ReadableStream({ cancel() { cancels++; entered.resolve(); return release.promise; } }, { highWaterMark: 0 });
+    adoptOwnedHttpUploadSource(upload, source);
+    pipeOwnedHttpUpload(upload, source, new FixedLengthStream(1)); dispatchOwnedHttpUpload(upload);
+    const accounted = f.own(ownedHttpCompletion(f.cap).start(() => accounting.promise));
+    const response = ownOwnedHttpResponse(f.cap, new Response('data: {"prefix":true}\n\n', { headers: { 'content-type': 'text/event-stream' } }));
+    const delivered = f.own(response.text()), terminal = f.finish();
+    assert.match(await f.take(delivered), /prefix/);
+    assert.equal(cancels, 0, 'logical accounting still owns the dispatched attempt');
+    accounting.resolve(); await f.take(accounted);
+    await f.take(f.own(Promise.race([entered.promise, terminal.outcome.then(() => { throw Error('terminal skipped ORIGINAL cancellation'); })])));
+    assert.equal(cancels, 1); assert.equal(source.locked, true);
+    assert.ok(bodyBudgetCharged() > 0, 'public prefix is not original upload retirement');
+    if (rejected) release.reject(undefined); else release.resolve();
+    const ended = await f.take(terminal).then(() => ({ failed: false }), error => ({ failed: true, error }));
+    assert.equal(ended.failed, true); assert.ok(ended.error instanceof AggregateError);
+    assert.equal(ended.error.errors.length, 1);
+    if (rejected) assert.equal(ended.error.errors[0], undefined);
+    assert.equal(source.locked, false);
+  });
+});
+
 for (const reason of [undefined, new Error('shared fixture failure')]) {
   test(`independent ORIGINAL pipe failures preserve ${reason === undefined ? 'undefined' : 'shared reason'} by origin`, async t => {
     await fixture(t, async f => {

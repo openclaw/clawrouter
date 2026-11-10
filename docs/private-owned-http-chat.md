@@ -31,6 +31,16 @@ fixed-stream, listener and promise aliases. Independent upload failures retain
 their origins, including `undefined` and two occurrences of the same Error.
 The public response must not wait on its own encompassing completion.
 
+Upload scopes are separate from the logical delivery/accounting completion.
+Unused preparation cancels immediately. A dispatched upload can continue while
+logical HTTP consumers remain active. When those consumers finish, retirement
+initiates cancellation of any still-unsettled upload before joining its original
+pipe and scope. Otherwise a provider response that finishes without consuming
+the upload could make the upload wait on its own encompassing completion. A
+held original cancellation still holds the owner and funding; a public SSE
+prefix does not settle it. New Node and native witnesses exercise this dispatched
+case, including an independent `undefined` cancellation failure. They are unrun.
+
 ## Outstanding closure
 
 The request and upload metadata allowances are provisional implementation

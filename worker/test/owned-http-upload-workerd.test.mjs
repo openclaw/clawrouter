@@ -37,21 +37,25 @@ export default {async fetch(request,env,context){
    check(actual.status===200&&actual.body.units===1048576&&actual.body.first===97&&actual.body.last===97,'full original native upload');
    const ended=await outcome();retirementTaken=true;if(ended.failed)throw ended.error;
    check(!source.locked,'original native pipe unlocked');reply={ok:true,units:actual.body.units};
-  }else if(path==='/prefix'){
+  }else if(path==='/prefix'||path==='/dispatched-prefix'){
    released=false;entered=false;done=false;active=true;terminalFailed=false;chargedBefore=baseline;
    const upload=beginOwnedHttpUpload(cap);
    source=new ReadableStream({async cancel(){entered=true;while(!released)await new Promise(resolve=>setTimeout(resolve,1));}},{highWaterMark:0});
    adoptOwnedHttpUploadSource(upload,source);pipeOwnedHttpUpload(upload,source,new FixedLengthStream(1));
-   const original=abandonOwnedHttpUpload(upload);
+   const dispatched=path==='/dispatched-prefix';
+   if(dispatched)dispatchOwnedHttpUpload(upload);
+   const publicResponse=new Response('data: {"prefix":true}\n\n',{headers:{'content-type':'text/event-stream'}});
+   const delivery=dispatched?ownOwnedHttpResponse(cap,publicResponse):publicResponse;
+   const original=dispatched?undefined:abandonOwnedHttpUpload(upload);
    // The originating request owns this cancellation and its terminal tail.
    // The response body never waits on its encompassing completion.
    const settled=outcome();retirementTaken=true;
    context.waitUntil((async()=>{
-    await original;const ended=await settled;
+    if(original)await original;const ended=await settled;
     validateRetirement(ended,()=>check(ended.failed&&ended.error instanceof AggregateError&&ended.error.errors.length===1,'owned abort has one original origin'));
     check(!source.locked,'held original cancellation unlock');source=undefined;done=true;
    })().catch(error=>{terminalFailed=true;done=true;throw error;}));
-   return new Response('data: {"prefix":true}\n\n',{headers:{'content-type':'text/event-stream'}});
+   return delivery;
   }else if(path.startsWith('/response-')){
    const shared=path==='/response-shared'?Error('shared native cleanup'):undefined;
    let cancels=0,unlocks=0;
@@ -139,8 +143,8 @@ test('actual Workerd ORIGINAL upload, independent failures and public-prefix cus
     await t.test('native full 1 MiB ASCII upload', async () => { const value = await get('/large'); assert.equal(value.ok, true); assert.equal(value.units, 1048576); });
     for (const path of ['/undefined', '/shared']) await t.test(`native independent ${path.slice(1)} cancellation origins`, async () => { const value = await get(path); assert.equal(value.origins, 2); assert.equal(value.ok, true); });
     for (const path of ['/response-undefined', '/response-shared', '/response-read']) await t.test(`native original response ${path.slice(10)}`, async () => { const value = await get(path); assert.equal(value.ok, true); assert.equal(value.origins, path === '/response-read' ? 1 : 2); });
-    await t.test('public SSE prefix precedes held ORIGINAL upload cancellation', async () => {
-      const prefix = await text(dispatch('/prefix')); assert.equal(prefix.status, 200); assert.match(prefix.text, /"prefix":true/);
+    for (const path of ['/prefix', '/dispatched-prefix']) await t.test(`public SSE prefix precedes held ORIGINAL upload cancellation: ${path}`, async () => {
+      const prefix = await text(dispatch(path)); assert.equal(prefix.status, 200); assert.match(prefix.text, /"prefix":true/);
       let state;
       for (let i = 0; i < 500; i++) { state = await get('/state'); if (state.entered) break; await new Promise(resolve => setTimeout(resolve, 1)); }
       assert.equal(state.entered, true); assert.equal(state.done, false); assert.ok(state.charged > baseline);
