@@ -489,3 +489,18 @@ checks accepted incorrect candidates which therefore never triggered recovery.
 It reports one sampling block and no significant adjusted paired contrasts;
 its results motivate measuring false acceptance, not a claim that this new
 policy works. Our exposed operational tasks are development cases only.
+
+
+`contract-audit-refine` uses the existing bounded draft-repair executor for its
+cheap stage: at most three patch proposals, each checked against the visible
+tests and supplied reproducer. Rejected drafts receive executable feedback.
+The independent audit still gates cheap acceptance; the strong fallback remains
+interactive and starts from original source. The shared call, time and spending
+limits remain unchanged. `contract-audit-refine-cheap` and
+`contract-audit-refine-strong` are the same-workflow model ablations. Keep
+`FUSION_PAIR_EXECUTOR=interactive` to retain interactive fixed controls and strong
+fallback; choosing `single-draft` explicitly also changes those executors.
+
+This variant targets cheap-stage tool-loop overhead. It is unmeasured and does
+not establish lower latency or higher correctness. A failed provider request
+still stops on uncertain charges, without silently starting a replacement run.
