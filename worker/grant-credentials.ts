@@ -1023,7 +1023,13 @@ export class GrantCredentialObject implements DurableObject {
         ? error.code : stage === "ownership_claim" ? "refresh_ownership_unavailable" : "storage_unavailable";
       try { await this.recordRefreshFailure(record, pending.httpStatus, "persistence_failed", "provider_ok_persist_failed", undefined,
         { stage, code, correlationId: pending.attempt.id }); }
-      catch (failure) { if (failure instanceof SupersededRefresh) return failure.current; } // The pre-egress fence still denies replay if diagnosis cannot be stored.
+      catch (failure) {
+        if (failure instanceof SupersededRefresh) return failure.current;
+        // Diagnosis persistence is not the owner of recovery liveness. Keep a
+        // local wakeup even on paths whose caller cannot persist cleanup state.
+        const current = await this.state.storage.get<CredentialRecord>("credential");
+        if (current) await this.schedule(current);
+      }
       throw new HttpError(502, "grant_refresh_persist_failed", "provider refreshed credentials; local settlement will retry without another provider refresh");
     }
   }
@@ -1096,7 +1102,13 @@ export class GrantCredentialObject implements DurableObject {
     assertCredentialEnabled(record);
     if (record.status === "reauth_required") throw new ReauthorizationRequired("upstream grant requires reauthorization", credentialProjection(record));
     if (record.refreshAttempt) {
-      Object.assign(record, await this.recoverRefreshResult(record));
+      try { Object.assign(record, await this.recoverRefreshResult(record)); }
+      catch (error) {
+        // /quota-refresh and maintenance persist this same object in cleanup.
+        // A failed settlement may already have advanced its durable diagnosis.
+        Object.assign(record, await this.state.storage.get<CredentialRecord>("credential") ?? record);
+        throw error;
+      }
       if (record.refreshAttempt) throw new HttpError(502, "grant_refresh_at_risk", "refresh settlement is blocked; do not replay the stored token");
     }
     // Already inside the owner tail: do not recursively call /materialize.
@@ -1134,10 +1146,19 @@ export class GrantCredentialObject implements DurableObject {
     // Only reached inside the owner tail, after any live refresh finished. A
     // remaining pending marker means its result was not durably settled.
     if (record.refreshAttempt && !["ambiguous", "provider_ok_persist_failed"].includes(record.refreshDiagnosis?.failure?.failureClass ?? "")) {
-      return matchesRefreshResult(record, pending)
-        ? this.recordRefreshFailure(record, pending!.httpStatus, "persistence_failed", "provider_ok_persist_failed", undefined,
-          { stage: "settlement_resume", code: "settlement_interrupted", correlationId: pending!.attempt.id })
-        : this.recordRefreshFailure(record, null, "outcome_unknown", "ambiguous");
+      if (!retained) return this.recordRefreshFailure(record, null, "outcome_unknown", "ambiguous");
+      try {
+        return await this.recordRefreshFailure(record, pending!.httpStatus, "persistence_failed", "provider_ok_persist_failed", undefined,
+          { stage: "settlement_resume", code: "settlement_interrupted", correlationId: pending!.attempt.id });
+      } catch (error) {
+        if (error instanceof SupersededRefresh) throw error;
+        // Diagnosis cannot gate local settlement. Revalidate authority before
+        // continuing, and retain a bounded wakeup if installation also fails.
+        const current = await this.state.storage.get<CredentialRecord>("credential");
+        if (!matchesRefreshResult(current, pending)) throw error;
+        await this.schedule(current!);
+        return current!;
+      }
     }
     // Older canonical owners already diagnosed the failure, but neither pool
     // index knows the new availability field. Repair both once, before use.
@@ -1216,7 +1237,17 @@ export class GrantCredentialObject implements DurableObject {
 
   private async schedule(record: CredentialRecord): Promise<void> {
     const refreshable = !!record.refreshToken || vertexOwnerBinding(record)?.source === "service_account";
-    const next = (record.refreshAttempt ? [timestamp(record.nextRefreshAttemptAt)] : [
+    // If both credential and diagnosis writes failed, the pre-egress fence has
+    // no future retry timestamp. A matching retained result needs a local wakeup;
+    // lost results and diagnosed ownership stops must not regain automatic work.
+    const failure = record.refreshDiagnosis?.failure;
+    const stopped = failure?.failureClass === "ambiguous"
+      || ["refresh_token_already_owned", "refresh_token_previously_used"].includes(failure?.settlement?.code ?? "");
+    const needsLocalRetry = record.refreshAttempt && !(timestamp(record.nextRefreshAttemptAt) > Date.now()) && !stopped;
+    const pending = needsLocalRetry ? this.pendingRefresh ?? await this.state.storage.get<PendingRefreshResult>("refresh-result") : undefined;
+    const localRetry = matchesRefreshResult(record, pending)
+      ? timestamp(refreshRetryAt(record.refreshDiagnosis?.failure?.attemptCount ?? 1, record.expiresAt)) : NaN;
+    const next = (record.refreshAttempt ? [Number.isFinite(localRetry) ? localRetry : timestamp(record.nextRefreshAttemptAt)] : [
       refreshable && record.nextRefreshAttemptAt ? Date.parse(record.nextRefreshAttemptAt) : refreshable && record.expiresAt ? Date.parse(record.expiresAt) - REFRESH_MARGIN_MS : NaN,
       timestamp(record.nextQuotaProbeAt),
       record.maintenance?.keepWarm ? timestamp(record.nextKeepWarmAt) : NaN,
