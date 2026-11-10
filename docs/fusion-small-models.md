@@ -458,3 +458,34 @@ and report incomplete attempts and transport reservations. Do not tune against
 acceptance failures and then describe the same tasks as held out.
 
 Literal source inspection reports `queryMatched: false` with no replacement source when a query has no match. Search text is literal; use a shorter query or an explicit line number after a miss.
+
+
+## Candidate-audit experiment
+
+`FUSION_PAIR_POLICY=contract-audit` adds one independent test-author call after
+an explicitly submitted cheap repair passes the supplied reproducer and visible
+tests. The author receives original source, the proposed source and requirements;
+it receives no final acceptance tests. Its new probe must fail with an assertion
+on the original source and pass on the candidate before the cascade accepts it.
+A malformed, non-reproducing or failed audit triggers repair from the original
+source by the strong worker. Uncertain charges and refusals stop the run.
+
+This is an opt-in benchmark policy. It reserves one audit call and one fallback
+call before allocating cheap turns, within the same total call, time and dollar
+limits. It records only the probe digest and decision. `contract-audit-cheap`
+and `contract-audit-strong` run the identical workflow on one model each, so a
+second sample or test-author benefit need not be credited to model mixing.
+Fixed controls receive the same supplied reproducer. All three audit policies
+also accept the existing explicit `single-draft` executor.
+
+A reproduced probe can still miss requirements or encode a wrong assumption.
+The independent final acceptance suite remains the only score. This experiment
+adds a paid call to every otherwise accepted cheap patch and may reject correct
+patches or leave fewer cheap turns. It needs a measured quality/cost gain before
+use outside the benchmark.
+
+A [2026 local small-model study](https://arxiv.org/abs/2611.00707) found that public
+checks accepted incorrect candidates which therefore never triggered recovery.
+It reports one sampling block and no significant adjusted paired contrasts;
+its results motivate measuring false acceptance, not a claim that this new
+policy works. Our exposed operational tasks are development cases only.
