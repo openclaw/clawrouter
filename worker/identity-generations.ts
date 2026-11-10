@@ -8,6 +8,86 @@ import type { PrivateCacheVector } from "./hot-cache.ts";
 export interface IdentityGenerationPreparation { dispose(): void }
 export interface IdentityGenerationBorrow { dispose(): void }
 
+// These are requested facets, not an assertion that the caller owns them. Only
+// credential-preflight's private slot can bind their frozen copy to a result.
+export interface GenerationCoverage {
+  providers: readonly { id: string; tokenRef: string }[];
+  allConnections: boolean;
+  snapshot?: "only" | "select";
+  selection?: Readonly<import("./authority-admission.ts").AdmissionSelection>;
+}
+export interface GenerationAuthentication {
+  dispose(): void;
+  status(): number;
+  code(): string | undefined;
+}
+
+// Explicit fields copied by the closed facet representation. Exclusion order
+// matters, and undefined/null/pinned-environment remain distinct.
+const coverageSelectionFields = ["providerId", "endpointId", "mode", "model", "catalogModelId", "capability", "sessionHash", "pinnedKey"] as const;
+export function sameGenerationCoverage(owned: GenerationCoverage, required: GenerationCoverage): boolean {
+  if (owned.allConnections !== required.allConnections || owned.snapshot !== required.snapshot
+    || owned.providers.length !== required.providers.length) return false;
+  for (let i = 0; i < owned.providers.length; i++) {
+    if (owned.providers[i].id !== required.providers[i].id || owned.providers[i].tokenRef !== required.providers[i].tokenRef) return false;
+  }
+  const a = owned.selection, b = required.selection;
+  if (!a || !b) return a === b;
+  for (const key of coverageSelectionFields) if (a[key] !== b[key]) return false;
+  if (!a.excludedKeys || !b.excludedKeys) return a.excludedKeys === b.excludedKeys;
+  if (a.excludedKeys.length !== b.excludedKeys.length) return false;
+  for (let i = 0; i < a.excludedKeys.length; i++) if (a.excludedKeys[i] !== b.excludedKeys[i]) return false;
+  return true;
+}
+
+// Prospective retained layout: graph fields + the coverage owner/receipt.
+// No whole-key vector, JSON text, digest, or caller graph is retained.
+export function generationCoverageLayout(input: GenerationCoverage): { bytes: number; fields: number } {
+  if (!Array.isArray(input.providers) || typeof input.allConnections !== "boolean"
+    || input.snapshot !== undefined && input.snapshot !== "only" && input.snapshot !== "select") throw identityFailure("protocol");
+  let bytes = 2 * "value,funding,cache,providers,allConnections,snapshot,selection".replaceAll(",", "").length + 1;
+  let fields = 12;
+  const scalar = (value: unknown): void => {
+    if (typeof value === "string") bytes += 2 * value.length;
+    else if (value === undefined || value === null) bytes++;
+    else throw identityFailure("protocol");
+  };
+  scalar(input.snapshot);
+  for (const provider of input.providers) {
+    if (!provider || typeof provider.id !== "string" || typeof provider.tokenRef !== "string") throw identityFailure("protocol");
+    bytes += 2 * ("idtokenRef".length + provider.id.length + provider.tokenRef.length); fields += 4;
+  }
+  const selection = input.selection;
+  if (selection) {
+    fields++;
+    for (const key of coverageSelectionFields) { bytes += 2 * key.length; fields++; scalar(selection[key]); }
+    if (typeof selection.providerId !== "string" || typeof selection.endpointId !== "string" || typeof selection.capability !== "string"
+      || selection.mode !== "http" && selection.mode !== "websocket") throw identityFailure("protocol");
+    bytes += 2 * "excludedKeys".length; fields++;
+    if (selection.excludedKeys !== undefined) {
+      if (!Array.isArray(selection.excludedKeys)) throw identityFailure("protocol");
+      fields++;
+      for (const key of selection.excludedKeys) { if (typeof key !== "string") throw identityFailure("protocol"); scalar(key); fields++; }
+    }
+  }
+  if (!Number.isSafeInteger(bytes) || !Number.isSafeInteger(fields)) throw identityFailure("limit");
+  return { bytes, fields };
+}
+
+export function copyGenerationCoverage(input: GenerationCoverage): GenerationCoverage {
+  const providers: { id: string; tokenRef: string }[] = [];
+  for (const provider of input.providers) providers.push(Object.freeze({ id: provider.id, tokenRef: provider.tokenRef }));
+  const selection = input.selection && {
+    providerId: input.selection.providerId, endpointId: input.selection.endpointId, mode: input.selection.mode,
+    model: input.selection.model, catalogModelId: input.selection.catalogModelId, capability: input.selection.capability,
+    sessionHash: input.selection.sessionHash, pinnedKey: input.selection.pinnedKey,
+    excludedKeys: input.selection.excludedKeys?.slice(),
+  };
+  if (selection?.excludedKeys) Object.freeze(selection.excludedKeys);
+  if (selection) Object.freeze(selection);
+  return Object.freeze({ providers: Object.freeze(providers), allConnections: input.allConnections, snapshot: input.snapshot, selection });
+}
+
 // Worker-only phases, NOT the DO journal's 965-slot table plus imagined spare
 // slots. The persistent rows remain live while the original RPC roots settle.
 export const generationFactoryCharges = Object.freeze({

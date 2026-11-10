@@ -284,6 +284,48 @@ export function selectAdmissionCandidate(
 }
 
 
+// Retained-generation consumers use the ordinary accepted candidate range.
+// The caller reserves the complete passive working vector before entering.
+// Configuration probes additionally acquire their existing preparation owner;
+// capacity is never mistaken for a configured-pool miss.
+export function selectGenerationAdmissionCandidate(env: Env,
+  input: Parameters<typeof selectAdmissionCandidate>[1], choose: Parameters<typeof selectAdmissionCandidate>[2],
+  revision: Parameters<typeof selectAdmissionCandidate>[3],
+  scratch: <T>(vector: AdmissionScratchVector, run: () => T) => T): GrantSelectionResult {
+  const { provider, endpoint, request, policy } = input;
+  const routing = privateGrantRoutingPolicy(policy.policy.grantRouting, emit => { const plan = identityPlan("record"); emit(plan, 0); }), now = Date.now();
+  const requirement = { provider, endpoint, mode: request.mode, model: request.model };
+  const candidates = input.candidates.map(({ key, grant }) => ({ key, grant, runtimeState: grant ? currentGrantRuntime(grant, input.states[key]) : null }));
+  const filterVector = { C: 0, P: 0, N: 0, U: 0, B: 0 };
+  for (const candidate of candidates) if (candidate.grant) {
+    const plan = identityPlan("record"); plan.item(candidate.grant, 0); const n = plan.counts;
+    filterVector.C = Math.max(filterVector.C, 4 * n.containers + 8);
+    filterVector.P = Math.max(filterVector.P, 8 * n.members + 4 * n.entries + 16);
+    filterVector.N = Math.max(filterVector.N, 4 * n.values + 16);
+    filterVector.U = Math.max(filterVector.U, 4 * n.units);
+  }
+  // Per-candidate credentials/binding/scope inspection finishes before the
+  // next configuration preparation. Escaping filtered vectors were funded by
+  // the outer working owner; no temporary-record alias escapes this callback.
+  const filtered = scratch(filterVector, () => filterGrantCandidates(provider.id, candidates, new Set(request.excludedKeys ?? []), routing, request.pinnedKey, requirement, now));
+  const configured = filtered.available.filter(({ grant }) => privateOperationConfigured(grant, env, requirement, scratch));
+  let priority = Infinity;
+  for (const item of configured) priority = Math.min(priority, grantPriority(item.grant));
+  const active = configured.filter(({ grant }) => grantPriority(grant) === priority);
+  const stickyHash = routing.stickiness === "identity" ? input.identityHash : routing.stickiness === "session" ? request.sessionHash ?? input.fallbackSessionHash : null;
+  const choice = active.length ? choose({ poolKey: input.poolKey, strategy: routing.strategy, stickyHash,
+    switchAtUsedPercent: routing.switchAtUsedPercent, hysteresisPercent: routing.hysteresisPercent,
+    candidates: active.map(item => ({ key: item.key, weight: grantWeight(item.grant), remainingRatio: grantQuotaRatio(item.runtimeState, now, routing.staleAfterSeconds * 1000, request.model) })) }) : null;
+  const selected = active.find(item => item.key === choice?.selectedKey) ?? null;
+  let retryMs = Infinity;
+  if (!selected) for (const item of filtered.recovering ?? []) {
+    if (privateOperationConfigured(item.entry.grant, env, requirement, scratch)) retryMs = Math.min(retryMs, item.atMs);
+  }
+  return { selected: selected ? { ...selected, authorityRevision: revision(selected.key) } : null,
+    hasConfiguredGrant: filtered.hasConfiguredGrant, ...(!selected && retryMs < Infinity ? { retryAt: new Date(retryMs).toISOString() } : {}) };
+}
+
+
 // Private streaming filter: preserve the shared predicates/operation checks but
 // never retain configured/available/active/filter batches. Each singleton and
 // its outcomes are dropped before the next candidate. Full snapshot records

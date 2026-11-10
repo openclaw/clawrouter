@@ -1,11 +1,16 @@
 import { identityJsonProfiles } from "./access-json.ts";
 import type { Env } from "./types";
-import { admitAdmission, admitIdentity, advanceIdentitySource, identityFailure, identityPlan, identitySourceBudget,
+import { admitAdmission, admitIdentity, copyIdentity, admittedEffectivePolicy, advanceIdentitySource, identityFailure, identityPlan, identitySourceBudget,
   identitySourceSnapshot, type IdentitySourceBudget } from "./identity-admission.ts";
-import { admitBridgeFactories, admitBridgeCopyFactories, admissionBridgePhasePayload, reserveAdmissionScratch, retireAdmissionScratch, PreflightTicket, GenerationMetadataCharge, type GenerationRetainedCharge } from "./credential-preflight-arena.ts";
+import { admitBridgeFactories, admitBridgeCopyFactories, admissionBridgePhasePayload, reserveAdmissionScratch, retireAdmissionScratch, PreflightTicket, GenerationMetadataCharge, GenerationConsumptionLease, admissionScratchBytes, type GenerationRetainedCharge } from "./credential-preflight-arena.ts";
 import { admitGenerationFactories, generationMetadata, measureGenerationGraph, freezeGenerationGraph,
-  type IdentityGenerationPreparation, type IdentityGenerationBorrow } from "./identity-generations.ts";
+  copyGenerationCoverage, generationCoverageLayout, sameGenerationCoverage,
+  type GenerationCoverage, type GenerationAuthentication, type IdentityGenerationPreparation, type IdentityGenerationBorrow } from "./identity-generations.ts";
 import { PrivateCacheReservation, hotCacheNow, type HotCacheConfig } from "./hot-cache.ts";
+import { GenerationAdvisoryState, admitGenerationOverlay, generationSelectionWorkingBytes, planGenerationSelection, generationRuntimeWorkingBytes, detachedGenerationRuntime } from "./admission-cache.ts";
+import { authorityCall } from "./authority.ts";
+import { recordGrantRuntime } from "./grant-selection.ts";
+import { ownedGenerationCredentialFailure } from "./proxy-auth.ts";
 import { credentialExpired } from "./credential-lifecycle.ts";
 import { safeEqual } from "./utils.ts";
 import { admissionContinuationHeader, admissionContinuationVersion, admissionContinuationPath, closeAdmissionEnvelope, type AdmissionContinuationEnvelope, checkPreflightIdentity, credentialPreflightHeader, credentialPreflightNamespace,
@@ -306,7 +311,7 @@ type GenerationEntry = { partition: GenerationPartition; kid: string; first?: Ge
 type GenerationSlot = { entry: GenerationEntry; owner: AdmissionOwner; continuation?: CredentialPreflightContinuation;
   handle?: PrivateAdmissionHandle; ready: boolean; published: boolean; borrowers: number; sequence: number; storedAt: number; maxAgeMs: number;
   funding: GenerationMetadataCharge; initialBorrowFunding?: GenerationMetadataCharge; cache?: PrivateCacheReservation; graphCache?: PrivateCacheReservation;
-  temporaryCharge?: GenerationRetainedCharge };
+  temporaryCharge?: GenerationRetainedCharge; advisory?: GenerationAdvisoryState; feedback?: Map<string, GenerationPendingFeedback>; counters?: Map<string, GenerationPendingCount>; countCursor?: Map<string, GenerationPendingCount>; coverage?: { value: GenerationCoverage; funding: GenerationMetadataCharge; cache?: PrivateCacheReservation } };
 type GenerationBorrower = { slot: GenerationSlot; funding: GenerationMetadataCharge; cache?: PrivateCacheReservation };
 type GenerationRegistry = { partitions: WeakMap<Authority, GenerationPartition>;
   preparations: WeakMap<IdentityGenerationPreparation, GenerationSlot>; borrowers: WeakMap<IdentityGenerationBorrow, GenerationBorrower>;
@@ -343,6 +348,8 @@ function retireGenerationSlot(slot: GenerationSlot): void {
   // error was observed. The source owner's actual ticket remains the authority.
   if (!slot.ready && slot.owner.ticket.bytes) return;
   const entry = slot.entry;
+  if (slot.coverage) { const coverage = slot.coverage; slot.coverage = undefined; coverage.value = undefined as never; coverage.cache?.release(); coverage.cache = undefined; coverage.funding.release(); }
+  slot.advisory?.dispose(); slot.advisory = undefined;
   slot.owner.admission = undefined;
   slot.handle = undefined; slot.continuation = undefined;
   retireOwner(slot.owner);
@@ -454,25 +461,27 @@ function promoteGeneration(slot: GenerationSlot, borrower: GenerationBorrower, v
   let registryReceipt: PrivateCacheReservation | undefined;
   let partitionReceipt: PrivateCacheReservation | undefined, entryReceipt: PrivateCacheReservation | undefined;
   let slotReceipt: PrivateCacheReservation | undefined, borrowerReceipt: PrivateCacheReservation | undefined;
-  let graphReceipt: PrivateCacheReservation | undefined, committed = false;
+  let graphReceipt: PrivateCacheReservation | undefined, coverageReceipt: PrivateCacheReservation | undefined, committed = false;
   try {
     if (!registry.cache) { registryReceipt = PrivateCacheReservation.adoptMetadata(registry.funding) ?? undefined; if (!registryReceipt) return false; }
     if (!partition.cache) { partitionReceipt = PrivateCacheReservation.adoptMetadata(partition.funding) ?? undefined; if (!partitionReceipt) return false; }
     if (!entry.cache) { entryReceipt = PrivateCacheReservation.adoptMetadata(entry.funding) ?? undefined; if (!entryReceipt) return false; }
     slotReceipt = PrivateCacheReservation.adoptMetadata(slot.funding) ?? undefined; if (!slotReceipt) return false;
     borrowerReceipt = PrivateCacheReservation.adoptMetadata(borrower.funding) ?? undefined; if (!borrowerReceipt) return false;
+    if (slot.coverage) { coverageReceipt = PrivateCacheReservation.adoptMetadata(slot.coverage.funding) ?? undefined; if (!coverageReceipt) return false; }
     if (!slot.owner.ticket.generationReady) throw identityFailure("protocol");
     graphReceipt = PrivateCacheReservation.transfer(vector, slot.owner.ticket) ?? undefined; if (!graphReceipt) return false;
     // Destination credit precedes publication and source-credit retirement.
     // There is no await, graph clone, callback or release/reacquire interval.
     registry.cache ??= registryReceipt; partition.cache ??= partitionReceipt; entry.cache ??= entryReceipt;
     slot.cache = slotReceipt; borrower.cache = borrowerReceipt; slot.graphCache = graphReceipt;
+    if (slot.coverage) slot.coverage.cache = coverageReceipt;
     const previous = entry.current;
     entry.current = slot; entry.publishedSequence = slot.sequence; slot.published = true; committed = true;
     if (previous && previous !== slot) { previous.published = false; retireGenerationSlot(previous); }
     return true;
   } finally {
-    if (!committed) { graphReceipt?.release(); borrowerReceipt?.release(); slotReceipt?.release(); entryReceipt?.release(); partitionReceipt?.release(); registryReceipt?.release(); }
+    if (!committed) { graphReceipt?.release(); coverageReceipt?.release(); borrowerReceipt?.release(); slotReceipt?.release(); entryReceipt?.release(); partitionReceipt?.release(); registryReceipt?.release(); }
   }
 }
 
@@ -549,4 +558,335 @@ export function evictCredentialGeneration(env: Pick<Env, "ACCESS_CONTROL">, kid:
   const entry = env.ACCESS_CONTROL && generationRegistry?.partitions.get(env.ACCESS_CONTROL)?.entries.get(kid), slot = entry?.current;
   if (!entry || !slot) return;
   entry.current = undefined; slot.published = false; retireGenerationSlot(slot);
+}
+
+// NEW consumption route only. The old generation entrypoint deliberately gains
+// no inferred coverage. Failed prevalidation leaves its preparation releasable.
+export function completeConsumableCredentialGeneration(preparation: IdentityGenerationPreparation,
+  input: Parameters<typeof completeCredentialAdmission>[1], config: HotCacheConfig, signal?: AbortSignal): Promise<IdentityGenerationBorrow> {
+  const slot = generationRegistry?.preparations.get(preparation);
+  if (!slot || slot.coverage) throw identityFailure("protocol");
+  const frame = GenerationConsumptionLease.reserve(4096);
+  let funding: GenerationMetadataCharge | undefined;
+  try {
+    admitIdentity(input); guardAdmissionSerialization(slot.owner, input);
+    const borrowed: GenerationCoverage = { providers: input.providers ?? [], allConnections: input.allConnections === true,
+      snapshot: input.snapshot, selection: input.selection };
+    const layout = generationCoverageLayout(borrowed), owner = generationMetadata.funding;
+    funding = GenerationMetadataCharge.reserve(layout.bytes + owner.payload, layout.fields + owner.structure);
+    const value = copyGenerationCoverage(borrowed);
+    slot.coverage = { value, funding }; funding = undefined;
+    return completeCredentialGeneration(preparation, input, config, signal);
+  } catch (error) {
+    if (slot.coverage) { const coverage = slot.coverage; slot.coverage = undefined; coverage.value = undefined as never; coverage.funding.release(); }
+    throw error;
+  } finally { funding?.release(); frame.release(); }
+}
+
+type GenerationAuthenticationOwner = {
+  slot: GenerationSlot; parent: IdentityGenerationBorrow; lease: GenerationConsumptionLease;
+  identity?: import("./types").AuthorizedIdentity; failure?: import("./utils.ts").HttpError;
+  children: number; closed: boolean;
+};
+// The registry is lazy and its owner is charged before the WeakMap factory.
+let generationAuthentications: WeakMap<GenerationAuthentication, GenerationAuthenticationOwner> | undefined;
+let generationAuthenticationRegistryCharge: GenerationConsumptionLease | undefined;
+let generationAuthenticationCount = 0;
+function authenticationOwner(handle: GenerationAuthentication): GenerationAuthenticationOwner {
+  const owner = generationAuthentications?.get(handle);
+  if (!owner || owner.closed) throw identityFailure("protocol");
+  return owner;
+}
+function generationAuthenticationStatus(this: GenerationAuthentication): number { return authenticationOwner(this).failure?.status ?? 200; }
+function generationAuthenticationCode(this: GenerationAuthentication): string | undefined { return authenticationOwner(this).failure?.code; }
+function retireAuthentication(owner: GenerationAuthenticationOwner): void {
+  if (!owner.closed || owner.children) return;
+  owner.identity = undefined; owner.failure = undefined; owner.slot = undefined as never;
+  const parent = owner.parent; owner.parent = undefined as never;
+  try { parent.dispose(); } finally {
+    owner.lease.release(); generationAuthenticationCount--;
+    if (!generationAuthenticationCount) { generationAuthentications = undefined; generationAuthenticationRegistryCharge?.release(); generationAuthenticationRegistryCharge = undefined; }
+  }
+}
+function disposeGenerationAuthentication(this: GenerationAuthentication): void {
+  const owner = authenticationOwner(this);
+  generationAuthentications!.delete(this); owner.closed = true; retireAuthentication(owner);
+}
+
+// The trusted digest/binding/kid come ONLY from the actual generation owner.
+// A request's facets are compared against its admitted coverage, never inferred
+// from an absent pool/selection or from the stable index key.
+export function authenticateCredentialGeneration(borrow: IdentityGenerationBorrow, env: Pick<Env, "ACCESS_CONTROL">,
+  required: GenerationCoverage): GenerationAuthentication {
+  const slot = generationRegistry?.borrowers.get(borrow)?.slot;
+  if (!slot?.ready || !slot.coverage || slot.owner.binding !== env.ACCESS_CONTROL) throw identityFailure("protocol");
+  const frame = GenerationConsumptionLease.reserve(4096);
+  let lease: GenerationConsumptionLease | undefined, parent: IdentityGenerationBorrow | undefined;
+  try {
+    admitIdentity(required); generationCoverageLayout(required);
+    if (!sameGenerationCoverage(slot.coverage.value, required)) throw identityFailure("protocol");
+    const admission = slot.owner.admission!;
+    // The base graph remains funded by the separately owned parent. Account a
+    // conservative complete policy/identity copy BEFORE effective-policy work.
+    const plan = identityPlan(); plan.item(admission, 0);
+    const counts = plan.counts;
+    const bytes = 4096 + 8 * (counts.containers + 2 * counts.members + counts.entries + counts.values) + 2 * counts.units;
+    lease = GenerationConsumptionLease.reserve(bytes);
+    parent = newGenerationBorrow(slot);
+    const failure = ownedGenerationCredentialFailure(admission, slot.owner.digest);
+    let identity: import("./types").AuthorizedIdentity | undefined;
+    if (!failure) {
+      const credential = admission.credential!.credential, policy = admission.policy!, principal = admission.owner;
+      identity = { serviceTiers: credential.serviceTiers, credentialId: slot.owner.kid, principalId: credential.principalId ?? null,
+        authType: "proxy_key", policyId: credential.policyId,
+        policy: admittedEffectivePolicy(credential.policyId, policy.policy, principal?.record.budgetOverrides),
+        contentRetentionDisabled: principal?.record.contentRetentionDisabled ?? false };
+      admitIdentity(identity);
+    }
+    if (!generationAuthentications) {
+      generationAuthenticationRegistryCharge = GenerationConsumptionLease.reserve(512);
+      generationAuthentications = new WeakMap();
+    }
+    const owner: GenerationAuthenticationOwner = { slot, parent, lease, identity, failure: failure ?? undefined, children: 0, closed: false };
+    const handle = Object.freeze({ dispose: disposeGenerationAuthentication, status: generationAuthenticationStatus, code: generationAuthenticationCode });
+    generationAuthentications.set(handle, owner); generationAuthenticationCount++;
+    parent = undefined; lease = undefined; return handle;
+  } finally { parent?.dispose(); lease?.release(); frame.release(); }
+}
+
+interface GenerationSelectionOwner {
+  auth: GenerationAuthenticationOwner; lease: GenerationConsumptionLease;
+  result?: import("./grant-eligibility.ts").GrantSelectionResult; users: number;
+}
+export interface GenerationSelectionHandle {
+  dispose(): void;
+  selected(): boolean;
+  matchesKey(key: string): boolean;
+  hasConfiguredGrant(): boolean;
+}
+let generationSelections: WeakMap<GenerationSelectionHandle, GenerationSelectionOwner> | undefined;
+let generationSelectionRegistryCharge: GenerationConsumptionLease | undefined;
+let generationSelectionCount = 0;
+function selectedOwner(handle: GenerationSelectionHandle): GenerationSelectionOwner {
+  const value = generationSelections?.get(handle);
+  if (!value) throw identityFailure("protocol");
+  return value;
+}
+function releaseGenerationSelection(owner: GenerationSelectionOwner): void {
+  if (--owner.users) return;
+  owner.result = undefined;
+  const auth = owner.auth; owner.auth = undefined as never;
+  owner.lease.release(); auth.children--; retireAuthentication(auth);
+}
+function disposeGenerationSelection(this: GenerationSelectionHandle): void {
+  const owner = selectedOwner(this); generationSelections!.delete(this);
+  releaseGenerationSelection(owner); generationSelectionCount--;
+  if (!generationSelectionCount) { generationSelections = undefined; generationSelectionRegistryCharge?.release(); generationSelectionRegistryCharge = undefined; }
+}
+function generationSelected(this: GenerationSelectionHandle): boolean { return !!selectedOwner(this).result!.selected; }
+function generationSelectedKey(this: GenerationSelectionHandle, key: string): boolean { return selectedOwner(this).result!.selected?.key === key; }
+function generationConfigured(this: GenerationSelectionHandle): boolean { return selectedOwner(this).result!.hasConfiguredGrant; }
+
+function selectionCovered(coverage: GenerationCoverage, request: import("./authority-admission.ts").AdmissionSelection): boolean {
+  const source = coverage.selection;
+  return !!source && !!coverage.snapshot && source.providerId === request.providerId && source.endpointId === request.endpointId
+    && source.mode === request.mode && source.model === request.model && source.catalogModelId === request.catalogModelId
+    && source.capability === request.capability && source.sessionHash === request.sessionHash;
+}
+export function selectCredentialGeneration(handle: GenerationAuthentication, env: Env,
+  request: import("./authority-admission.ts").AdmissionSelection): GenerationSelectionHandle | undefined {
+  const auth = authenticationOwner(handle), slot = auth.slot;
+  if (auth.failure) throw auth.failure;
+  if (slot.owner.binding !== env.ACCESS_CONTROL || !selectionCovered(slot.coverage!.value, request)) throw identityFailure("protocol");
+  const frame = GenerationConsumptionLease.reserve(4096);
+  let work: GenerationConsumptionLease | undefined, resultLease: GenerationConsumptionLease | undefined;
+  let created: GenerationAdvisoryState | undefined, pending: GenerationPendingCount | undefined;
+  try {
+    admitIdentity(request);
+    const base = generationSelectionWorkingBytes(slot.owner.admission!, request);
+    work = GenerationConsumptionLease.reserve(base);
+    const overlay = slot.advisory ?? (created = GenerationAdvisoryState.create());
+    const planned = planGenerationSelection(env, slot.owner.admission!, overlay, request, (vector, run) => {
+      work!.replace(base + admissionScratchBytes(vector));
+      try { return run(); } finally { work!.replace(base); }
+    });
+    if (!planned) return undefined;
+    const plan = identityPlan("record"); plan.item(planned.result.selected, 0);
+    const counts = plan.counts;
+    resultLease = GenerationConsumptionLease.reserve(4096 + 8 * (counts.containers + 2 * counts.members + counts.entries + counts.values) + 2 * counts.units);
+    const result = planned.result.selected ? { ...planned.result, selected: copyIdentity(planned.result.selected) } : { ...planned.result };
+    freezeGenerationGraph(result);
+    // Both final copy admission and the complete prospective advisory update
+    // precede the first counter/cursor mutation. No authority writes occur here.
+    admitGenerationOverlay(slot.owner.admission!, overlay, planned);
+    overlay.admitSelection(planned);
+    if (planned.selectedKey) pending = prepareGenerationCount(slot, planned);
+    if (!generationSelections) {
+      generationSelectionRegistryCharge = GenerationConsumptionLease.reserve(512); generationSelections = new WeakMap();
+    }
+    const owner: GenerationSelectionOwner = { auth, lease: resultLease, result, users: 1 };
+    const selected = Object.freeze({ dispose: disposeGenerationSelection, selected: generationSelected, matchesKey: generationSelectedKey, hasConfiguredGrant: generationConfigured });
+    generationSelections.set(selected, owner); generationSelectionCount++; auth.children++;
+    slot.advisory = overlay; created = undefined;
+    overlay.commitSelection(planned);
+    if (pending) { commitGenerationCount(slot, pending); pending = undefined; }
+    resultLease = undefined; return selected;
+  } finally { if (pending) releaseGenerationCount(pending); created?.dispose(); resultLease?.release(); work?.release(); frame.release(); }
+}
+
+interface GenerationPendingFeedback {
+  key: string; value?: import("./types").GrantRuntimeState; lease: GenerationConsumptionLease;
+  parent: IdentityGenerationBorrow; inflight: boolean;
+}
+// A pending value's owner survives publication eviction. Replacing it during an
+// original write does not retire that original write's copy or replay its work.
+function releaseGenerationFeedback(record: GenerationPendingFeedback): void {
+  record.value = undefined; record.key = "";
+  const parent = record.parent; record.parent = undefined as never;
+  try { parent.dispose(); } finally { record.lease.release(); }
+}
+export function queueCredentialGenerationRuntime(handle: GenerationAuthentication, key: string,
+  incoming: import("./types").GrantRuntimeState): void {
+  const auth = authenticationOwner(handle), slot = auth.slot;
+  if (auth.failure) throw auth.failure;
+  let covered = false;
+  for (const provider of slot.coverage!.value.providers) if (slot.owner.admission!.pools[provider.id]?.keys.includes(key)) covered = true;
+  if (!covered) throw identityFailure("protocol");
+  const frame = GenerationConsumptionLease.reserve(4096);
+  let work: GenerationConsumptionLease | undefined, held: GenerationConsumptionLease | undefined;
+  let pendingLease: GenerationConsumptionLease | undefined, parent: IdentityGenerationBorrow | undefined, created: GenerationAdvisoryState | undefined;
+  try {
+    admitIdentity(incoming, "record");
+    const overlay = slot.advisory ?? (created = GenerationAdvisoryState.create());
+    let previous = overlay.runtime.get(key);
+    work = GenerationConsumptionLease.reserve(generationRuntimeWorkingBytes(previous, incoming));
+    // Reserve the full detached result and map/owner cells prospectively. This
+    // stays independently backed after transient merge arrays have retired.
+    held = GenerationConsumptionLease.reserve(work.bytes + 4 * key.length + 512);
+    pendingLease = GenerationConsumptionLease.reserve(work.bytes + 4 * key.length + 512);
+    parent = newGenerationBorrow(slot);
+    const value = detachedGenerationRuntime(previous, incoming);
+    admitGenerationOverlay(slot.owner.admission!, overlay, undefined, { key, value });
+    const pendingValue = copyIdentity(value);
+    freezeGenerationGraph(value); freezeGenerationGraph(pendingValue);
+    const record: GenerationPendingFeedback = { key, value: pendingValue, lease: pendingLease, parent, inflight: false };
+    const prior = slot.feedback?.get(key), priorCharge = overlay.runtimeCharges.get(key);
+    slot.feedback ??= new Map();
+    overlay.runtime.set(key, value); overlay.runtimeCharges.set(key, held);
+    slot.feedback.set(key, record); slot.advisory = overlay;
+    held = undefined; pendingLease = undefined; parent = undefined; created = undefined;
+    previous = undefined;
+    priorCharge?.release();
+    if (prior && !prior.inflight) releaseGenerationFeedback(prior);
+  } finally { parent?.dispose(); pendingLease?.release(); held?.release(); created?.dispose(); work?.release(); frame.release(); }
+}
+
+export function flushCredentialGenerationRuntime(handle: GenerationAuthentication, env: Env): Promise<void> {
+  const auth = authenticationOwner(handle), slot = auth.slot;
+  if (auth.failure) throw auth.failure;
+  if (slot.owner.binding !== env.ACCESS_CONTROL) throw identityFailure("protocol");
+  // Separate owner before invoking any original RPC. It never awaits an
+  // encompassing response/completion whose disposal depends on this child.
+  const lease = GenerationConsumptionLease.reserve(32768);
+  try {
+    const parent = newGenerationBorrow(slot);
+    const original = runGenerationFeedback(slot, env, parent, lease);
+    void original.then(() => undefined, () => undefined);
+    return original;
+  } catch (error) { lease.release(); throw error; }
+}
+async function runGenerationFeedback(slot: GenerationSlot, env: Env, parent: IdentityGenerationBorrow, lease: GenerationConsumptionLease): Promise<void> {
+  try {
+    await flushGenerationCounts(slot, env);
+    if (!slot.feedback) return;
+    let remaining = slot.feedback.size;
+    for (const record of slot.feedback.values()) {
+      if (!remaining--) break;
+      if (record.inflight) continue;
+      record.inflight = true;
+      try { await recordGrantRuntime(env, record.key, record.value!); }
+      catch { /* Same ordinary advisory disposition; never replay this write. */ }
+      finally {
+        if (slot.feedback.get(record.key) === record) slot.feedback.delete(record.key);
+        releaseGenerationFeedback(record);
+      }
+    }
+    if (!slot.feedback.size) slot.feedback = undefined;
+  } finally { env = undefined as never; slot = undefined as never; try { parent.dispose(); } finally { lease.release(); } }
+}
+
+interface GenerationPendingCount {
+  id: string; poolKey: string; key: string; count: number; lastMs: number; cursorKey?: string;
+  parent: IdentityGenerationBorrow; lease: GenerationConsumptionLease; inflight: boolean;
+}
+function prepareGenerationCount(slot: GenerationSlot, plan: import("./admission-cache.ts").GenerationSelectionPlan): GenerationPendingCount {
+  const lease = GenerationConsumptionLease.reserve(4096 + 8 * plan.poolKey.length + 6 * plan.selectedKey!.length + 2 * (plan.cursorKey?.length ?? 0));
+  let parent: IdentityGenerationBorrow | undefined;
+  try {
+    parent = newGenerationBorrow(slot);
+    const id = `${plan.poolKey}\n${plan.selectedKey}`, previous = slot.counters?.get(id);
+    return { id, poolKey: plan.poolKey, key: plan.selectedKey!, count: previous && !previous.inflight ? previous.count + 1 : 1,
+      lastMs: plan.lastMs!, cursorKey: plan.cursorKey, parent, lease, inflight: false };
+  } catch (error) { parent?.dispose(); lease.release(); throw error; }
+}
+function commitGenerationCount(slot: GenerationSlot, record: GenerationPendingCount): void {
+  const previous = slot.counters?.get(record.id);
+  slot.counters ??= new Map(); slot.counters.set(record.id, record);
+  if (record.cursorKey) { slot.countCursor ??= new Map(); slot.countCursor.set(record.poolKey, record); }
+  if (previous && !previous.inflight) releaseGenerationCount(previous);
+}
+function releaseGenerationCount(record: GenerationPendingCount): void {
+  record.id = ""; record.poolKey = ""; record.key = ""; record.cursorKey = undefined;
+  const parent = record.parent; record.parent = undefined as never;
+  try { parent.dispose(); } finally { record.lease.release(); }
+}
+async function flushGenerationCounts(slot: GenerationSlot, env: Env): Promise<void> {
+  const pending = slot.counters;
+  if (!pending) return;
+  let remaining = pending.size;
+  for (const record of pending.values()) {
+    if (!remaining--) break;
+    if (record.inflight) continue;
+    record.inflight = true;
+    try {
+      // One record is inside the existing 256-record accepted range. The
+      // ORIGINAL ACK consumer joins read/FIRSTcancel/unlock before settling.
+      await authorityCall(env, "/grant-pools/record", { records: [{ poolKey: record.poolKey, key: record.key,
+        count: record.count, lastMs: record.lastMs, ...(record.cursorKey && slot.countCursor?.get(record.poolKey) === record ? { cursorKey: record.cursorKey } : {}) }] });
+    } catch { /* Advisory failure is not replayed, matching ordinary flushing. */ }
+    finally {
+      if (pending.get(record.id) === record) pending.delete(record.id);
+      if (slot.countCursor?.get(record.poolKey) === record) slot.countCursor.delete(record.poolKey);
+      if (!slot.countCursor?.size) slot.countCursor = undefined;
+      releaseGenerationCount(record);
+    }
+  }
+  if (!pending.size && slot.counters === pending) slot.counters = undefined;
+}
+
+export interface GenerationSelectionHint { dispose(): void }
+interface GenerationHintOwner { selected: GenerationSelectionOwner; lease: GenerationConsumptionLease }
+let generationHints: WeakMap<GenerationSelectionHint, GenerationHintOwner> | undefined;
+let generationHintsCharge: GenerationConsumptionLease | undefined;
+let generationHintCount = 0;
+function disposeGenerationHint(this: GenerationSelectionHint): void {
+  const owner = generationHints?.get(this);
+  if (!owner) throw identityFailure("protocol");
+  generationHints!.delete(this);
+  const selected = owner.selected; owner.selected = undefined as never;
+  try { releaseGenerationSelection(selected); } finally { owner.lease.release(); }
+  if (!--generationHintCount) { generationHints = undefined; generationHintsCharge?.release(); generationHintsCharge = undefined; }
+}
+export function retainCredentialGenerationHint(selected: GenerationSelectionHandle, previous?: GenerationSelectionHint): GenerationSelectionHint {
+  const value = selectedOwner(selected);
+  if (previous && !generationHints?.has(previous)) throw identityFailure("protocol");
+  const lease = GenerationConsumptionLease.reserve(1024);
+  try {
+    if (!generationHints) { generationHintsCharge = GenerationConsumptionLease.reserve(512); generationHints = new WeakMap(); }
+    const owner: GenerationHintOwner = { selected: value, lease }, hint = Object.freeze({ dispose: disposeGenerationHint });
+    generationHints.set(hint, owner); generationHintCount++; value.users++;
+    // A failed prospective reserve leaves the old hint untouched. Publication
+    // replacement retires only its own metadata and child, never the base graph.
+    previous?.dispose(); return hint;
+  } catch (error) { lease.release(); throw error; }
 }

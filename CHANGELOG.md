@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Stage inactive owned generation authentication and local selection with explicit admitted coverage, separately funded derived records and advisory ownership. Default callers remain unchanged; source/factory closure and hosted runtime qualification remain required before publication or activation.
+
 - Add an inactive private retained-generation foundation with proof-bound two-slot preparation, immutable opaque borrowers and atomic exact common-arena handoff. A stable publication watermark prevents delayed resurrection after eviction or expiry; optional metadata pressure demotes matching hits under funded temporary custody without another RPC. Default authentication, cache consumers and providers remain unchanged. Source and hosted runtime qualification are required before activation.
 
 - Add a local, inactive private full-admission continuation candidate with cumulative source ownership, opaque disposal and a typed deferred-effect journal. Private string-keyed request copies omit callable references, while snapshot output, principal/model transforms, scratch and configuration factories receive prospective funding inside the unchanged ticket; final admission rechecks complete candidate projections, including same-generation publications, through sequential control windows. Private callable checks preserve inert serializer shadowing without copying descriptor values; default authentication and provider routes are unchanged. Source and hosted runtime qualification remain required before use.

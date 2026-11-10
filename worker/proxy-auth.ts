@@ -144,6 +144,20 @@ export function proxyCredentialFailure(credential: ProxyCredential, entry: Acces
   return null;
 }
 
+// Pure verdict for the CLOSED generation owner. This returns no identity and
+// installs none of the ordinary proxy-auth WeakMap capabilities. The caller
+// must own/fund the graph and result; ordinary entrypoints above are unchanged.
+export function ownedGenerationCredentialFailure(admission: AdmissionResult, digest: string): HttpError | null {
+  const entry = admission.credential;
+  if (!entry) return new HttpError(401, "unknown_proxy_key", "proxy key is not registered");
+  if (!safeEqual(digest, entry.credential.secretSha256.toLowerCase())) return new HttpError(401, "invalid_proxy_key", "proxy key secret is invalid");
+  if (admission.policyUnavailable) throw new Error("admission policy resolution failed");
+  const failure = proxyCredentialFailure(entry.credential, admission.policy);
+  if (failure) return failure;
+  if (admission.ownerUnavailable) throw new Error("admission owner resolution failed");
+  return proxyCredentialFailure(entry.credential, admission.policy, admission.owner?.record.enabled);
+}
+
 export async function inspectKey(headers: Headers, env: Env): Promise<Response> {
   const { parsed } = proxyKeyIngress(headers);
   if (!parsed) return errorResponse("invalid_proxy_key", "a valid ClawRouter proxy key is required", 401);
