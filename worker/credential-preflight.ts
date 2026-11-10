@@ -1103,7 +1103,7 @@ export function prepareCredentialGenerationPrefetch(hint: GenerationSelectionHin
 }
 // Only the cache module can mint the nonescaping permit. Even a genuine cap
 // holder cannot invoke the named materialization command to obtain a graph.
-export function claimOwnedGenerationPrefetch(cap: OwnedGenerationPrefetch, permit: object): { eligible: boolean; id: string; config: HotCacheConfig; authority: Authority; binding: Env["GRANT_CREDENTIALS"] } {
+export function claimOwnedGenerationPrefetch(cap: OwnedGenerationPrefetch, permit: object): { eligible: boolean; id: string; config: HotCacheConfig; authority: Authority; binding: Env["GRANT_CREDENTIALS"] | undefined } {
   checkOwnedGenerationPrefetch(cap);
   if (!ownsCredentialPrefetchPermit(permit, cap)) throw identityFailure("protocol");
   const owner = generationPrefetchOwner(cap), authority = owner.selected?.auth.slot.owner.binding;
