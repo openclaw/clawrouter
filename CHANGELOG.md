@@ -7,6 +7,7 @@
 - Add an opt-in, network-intercepted Worker runner for model-free native REST JSON plugin fixtures, with synthetic API-key auth and bounded exchange assertions.
 - Keep Fusion benchmark fallback active when a cheap repair exhausts its allowance without submitting, even if its partial patch passes the supplied check.
 - Retain bounded, content-free failed-test fingerprints in Fusion benchmark receipts to compare regressions with qualified baselines.
+- Add an experimental Fusion benchmark handoff from strong execution to a cheap worker after an edit passes visible checks, retaining a bounded executed probe, phase-specific verification instructions, independent final acceptance and shared limits.
 
 - Validate repeated Fusion benchmark blocks against one protocol and a consecutive spend ledger, with joint quality, cost and latency reporting.
 

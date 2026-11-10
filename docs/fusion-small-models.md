@@ -401,6 +401,31 @@ same total calls available to each control. All calls and failed attempts count
 against the trial and campaign budgets. This is an experimental policy, not a
 claim of improvement.
 
+Set `FUSION_PAIR_POLICY=edit-handoff` to test an execution handoff instead of
+an up-front plan. The strong model starts the repair. After its first edit
+passes the visible tests, the cheap model receives the current source and
+working notes and continues verification or repair. A submission before that
+point also requires a successor turn. Failed edits do not trigger a handoff,
+and the ordinary turn-based handoff threshold is disabled for this policy.
+Both workers share the same total call, time and spend limits. Passing visible
+tests selects a handoff point; it does not certify correctness. Independent
+acceptance still scores the final patch. This policy is experimental and needs
+matched quality, cost and latency measurements; the default remains `architect`.
+
+The handoff also includes the latest executed behavior probe and its pass/fail
+result when the source is at most 8 KiB. This is untrusted context that may
+predate the last edit, not acceptance evidence. The successor must inspect its
+coverage and rerun it against current source. An oversized latest probe is
+omitted in full; an older probe is not substituted. Raw probe source and output
+are not added to benchmark receipts.
+
+The successor receives verification-specific instructions and the current source
+snapshot. Its task context retains the read-only repository context but omits the
+initial editable-source preload. It must check task invariants and repair concrete
+failures, then submit when verification is complete. It keeps the full remaining
+allowance; there is no forced early submission. Probe-use receipts require a
+successful model response to context that includes the transferred probe.
+
 Run from a committed task checkout with qualified workload receipts and an
 explicit JSON configuration. Only credentials for the selected models are
 required. Supply credentials through the existing secret injector; do not put
