@@ -79,11 +79,11 @@ test('fixed controls receive identical supplied context without invoking or budg
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test('edit handoff routes the initial worker to strong and the successor to cheap within the same allowance', async () => {
+for (const policy of ['edit-handoff', 'matched-handoff']) test(`${policy} keeps the same allowance and routes both handoff phases explicitly`, async () => {
   const { root, options } = await fixture();
   try {
     const seen = [];
-    const state = await runPairBenchmark({ ...options, policy: 'edit-handoff', grade, fetcher: success,
+    const state = await runPairBenchmark({ ...options, policy, grade, fetcher: success,
       agent: async (_task, _image, strategy, id, settings, invoke, _engine, agentOptions) => {
         seen.push({ strategy, settings, agentOptions });
         await invoke(id, roles.strong, body, signal);
@@ -91,12 +91,18 @@ test('edit handoff routes the initial worker to strong and the successor to chea
         return { ...repaired(), handoffUsed: strategy === 'handoff' };
       },
     });
-    assert.deepEqual(state.calls.map(call => call.model), [config.cheap, config.strong, config.strong, config.cheap]);
+    assert.deepEqual(state.calls.map(call => call.model), policy === 'matched-handoff'
+      ? [config.cheap, config.strong, config.strong, config.strong, config.cheap]
+      : [config.cheap, config.strong, config.strong, config.cheap]);
     assert.equal(seen[2].strategy, 'handoff');
     assert.equal(seen[2].settings.maxTurns, config.maxCalls);
     assert.deepEqual(seen[2].agentOptions, { preloadSource: true, handoffAfterEdit: true });
-    assert.deepEqual(seen.slice(0, 2).map(row => row.agentOptions), [{ preloadSource: true }, { preloadSource: true }]);
-    assert.equal(state.policy, 'edit-handoff');
+    assert.deepEqual(seen[0].agentOptions, { preloadSource: true });
+    assert.deepEqual(seen[1].agentOptions, { preloadSource: true, ...(policy === 'matched-handoff' ? { handoffAfterEdit: true } : {}) });
+    assert.equal(seen[1].strategy, policy === 'matched-handoff' ? 'handoff' : 'strong');
+    assert.equal(seen[1].settings.maxTurns, config.maxCalls);
+    assert.equal(state.records[1].handoffUsed, policy === 'matched-handoff');
+    assert.equal(state.policy, policy);
     assert.equal(state.records[2].handoffUsed, true);
     assert.equal(analyzePairRun(state).candidateModelUse.mixedAttempts, 1);
   } finally { await rm(root, { recursive: true, force: true }); }
@@ -124,7 +130,9 @@ test('both controls and the pair account for real roles without persisting conte
     } });
     assert.equal(state.complete, true);
     assert.deepEqual(state.records.map(row => row.score), [1, 1, 1]);
-    assert.deepEqual(state.calls.map(call => call.model), [config.cheap, config.strong, config.strong, config.cheap]);
+    assert.deepEqual(state.calls.map(call => call.model), policy === 'matched-handoff'
+      ? [config.cheap, config.strong, config.strong, config.strong, config.cheap]
+      : [config.cheap, config.strong, config.strong, config.cheap]);
     assert.equal(state.spentOrReservedMicros, config.priorCostMicros + state.calls.reduce((sum, call) => sum + call.costMicros, 0));
     assert.ok(seen.filter(call => call.model === 'gpt-6-luna').every(call => call.reasoning_effort === 'none'));
     const saved = await readFile(join(options.out, 'pair.json'), 'utf8');
@@ -332,7 +340,9 @@ test('contract policy meters the test author and worker inside the same trial', 
         return { ...repaired(), contractQualified: true, contractPassed: true };
       } });
     assert.deepEqual(state.strategies, ['cheap', 'strong', 'contract']);
-    assert.deepEqual(state.calls.map(call => call.model), [config.cheap, config.strong, config.strong, config.cheap]);
+    assert.deepEqual(state.calls.map(call => call.model), policy === 'matched-handoff'
+      ? [config.cheap, config.strong, config.strong, config.strong, config.cheap]
+      : [config.cheap, config.strong, config.strong, config.cheap]);
     assert.equal(state.records[2].calls, 2);
     assert.equal(state.records[2].contractQualified, true);
     assert.ok(state.records.every(row => row.score === 1));
@@ -387,7 +397,9 @@ test('private contract policy preserves fixed controls and mixed role accounting
         return repaired();
       } });
     assert.deepEqual(state.strategies, ['cheap', 'strong', 'contract-private']);
-    assert.deepEqual(state.calls.map(call => call.model), [config.cheap, config.strong, config.strong, config.cheap]);
+    assert.deepEqual(state.calls.map(call => call.model), policy === 'matched-handoff'
+      ? [config.cheap, config.strong, config.strong, config.strong, config.cheap]
+      : [config.cheap, config.strong, config.strong, config.cheap]);
     assert.equal(state.records[2].calls, 2);
     assert.equal(state.spentOrReservedMicros,
       config.priorCostMicros + state.calls.reduce((sum, call) => sum + call.costMicros, 0));

@@ -426,6 +426,14 @@ failures, then submit when verification is complete. It keeps the full remaining
 allowance; there is no forced early submission. Probe-use receipts require a
 successful model response to context that includes the transferred probe.
 
+Set `FUSION_PAIR_POLICY=matched-handoff` to compare the cheap successor against
+a strong successor using the same handoff point, verification instructions,
+current-source context and shared limits. The cheap-only arm stays unchanged.
+The report records `matched-handoff` as its policy, `strong` for the unmixed
+control and `edit-handoff` for the mixed candidate. This control separates model
+selection from the effect of changing the execution protocol. Do not pool it
+with ordinary `edit-handoff` blocks as one repeated protocol.
+
 Run from a committed task checkout with qualified workload receipts and an
 explicit JSON configuration. Only credentials for the selected models are
 required. Supply credentials through the existing secret injector; do not put
