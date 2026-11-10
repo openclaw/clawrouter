@@ -365,3 +365,39 @@ DATA/CONTROL table. Current fixed component reservations are implementation
 work, not a completed 1024-slot or whole-vertical payload proof. No new allowance,
 profile reduction, default activation, physical-heap or remote-owner retirement
 claim is made.
+
+
+### Operation-local terminal funding
+
+Original-operation metadata no longer needs a second carrier wrapper. A failed
+origin is its own frozen six-field carrier, branded in a private WeakSet.
+Successful records leave the live-origin Map when their original reaction
+settles; a scalar ordinal preserves identity without a successful-operation
+history array. Failure/control records remain CONTROL, not passive scratch.
+
+The existing common request debit now prepays each operation's terminal origins
+before that operation starts. Each origin's current logical component is 2048
+bytes; this component is not a JavaScript object-size claim. The entry reserves
+terminal registration and one untouched-response cancellation. The closed
+operation reservations are:
+
+| Operation | Prepaid origin records | Last required use |
+| --- | ---: | --- |
+| Ledger fetch | 3 | acquisition, fetch, then original acknowledgment read or unused-body FIRSTcancel |
+| Credential/preflight fetch | 2 | acquisition and fetch; the existing bounded reader owns its separate source phase |
+| Provider fetch | 2 | fetch and an unused/late original-response FIRSTcancel |
+| Queue send / archive put / background registration | 1 each | original outcome or registration after start |
+| Archive pipe | 3 | pipe, owned abort, original FIRSTcancel |
+| Upload preparation | 5 | listener add/remove, pipe, abort and partial-source FIRSTcancel |
+| Caller signal | 2 | listener add and final removal |
+| Intake diagnostics | 6 | acquire/read/cancel/unlock and listener add/remove |
+| Owned response reader | 4 | acquire/read/cancel/unlock |
+
+These are reserved bytes in the same request charge, not a new arena or control
+window. Consuming an already-reserved terminal origin cannot compete for fresh
+common capacity. Credits are not released while an original or unknown owner
+remains live. In particular, an upload admitted before another request fills the
+common arena can still initiate its original cancellation and unlock. New Node
+and actual Workerd pressure witnesses exercise that condition; they remain
+unrun. This table covers the new origin products only. Complete simultaneous
+HTTP/generation DATA and CONTROL qualification is still open.

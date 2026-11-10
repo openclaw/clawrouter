@@ -258,3 +258,26 @@ test('post-native cancel rejection is independent of an already failed read', as
     assert.equal(cancels, 1); assert.equal(unlocks, 1); assert.equal(body.locked, false);
   });
 });
+
+
+test('an admitted upload can FIRSTcancel and unlock with no remaining common-arena capacity', async t => {
+  await fixture(t, async f => {
+    const entered = deferred(), release = deferred(); f.releases.push(release.resolve);
+    let cancels = 0;
+    const upload = beginOwnedHttpUpload(f.cap);
+    const source = new ReadableStream({ cancel() { cancels++; entered.resolve(); return release.promise; } }, { highWaterMark: 0 });
+    adoptOwnedHttpUploadSource(upload, source); pipeOwnedHttpUpload(upload, source, new FixedLengthStream(1));
+    const pressure = ExactBodyCharge.reserve(bodyBudgetBytes - bodyBudgetCharged()); assert.ok(pressure);
+    f.releases.push(() => pressure.release());
+    const original = abandonOwnedHttpUpload(upload), root = f.own(original);
+    await Promise.race([entered.promise, original.then(() => { throw new Error('abandonment ended before original cancel entry'); })]);
+    assert.equal(bodyBudgetCharged(), bodyBudgetBytes, 'cancellation does not acquire new common credit');
+    release.resolve(); await f.take(root);
+    assert.equal(cancels, 1); assert.equal(source.locked, false);
+    pressure.release();
+    let failure, failed = false;
+    try { await f.take(f.finish()); } catch (error) { failed = true; failure = error; }
+    assert.equal(failed, true); assert.ok(failure instanceof AggregateError);
+    assert.deepEqual(failure.errors.map(error => error.origin), ['pipe'], 'owned abort retains its original pipe outcome');
+  });
+});

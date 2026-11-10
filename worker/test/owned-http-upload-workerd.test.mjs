@@ -11,18 +11,18 @@ import { startWorkerdFixture } from '../../test/helpers/workerd.mjs';
 const router = String.raw`
 export {PolicyBindingIndexObject,BudgetLedgerObject,UsageLedgerObject,GrantCredentialObject} from './worker/index.ts';
 import {beginOwnedHttpRequest,beginOwnedHttpUpload,adoptOwnedHttpUploadSource,pipeOwnedHttpUpload,dispatchOwnedHttpUpload,abandonOwnedHttpUpload,finishOwnedHttpRequest,ownedHttpCompletion,ownOwnedHttpResponse,ownedHttpSinkOwner,ownedHttpQueueSend,ownedHttpFailureMetadata} from './worker/http-identity-owner.ts';
-import {bodyBudgetCharged,ExactBodyCharge} from './worker/body-budget.ts';
+import {bodyBudgetCharged,bodyBudgetBytes,ExactBodyCharge} from './worker/body-budget.ts';
 import {materializeGrantCredentials,putGrantCredentials} from './worker/grant-credentials.ts';
 import {selectedCredentialFailure,SelectedGrantCredentialFailure} from './worker/grant-credential-failure.ts';
 import {HttpError} from './worker/utils.ts';
 import {jsonBodyStream,jsonBodyBytes} from './worker/json-body.ts';
-let released=false,entered=false,done=false,active=false,terminalFailed=false,chargedBefore=0;
+let released=false,entered=false,done=false,active=false,terminalFailed=false,chargedBefore=0,pressureCancelObserved=false;
 const check=(value,label)=>{if(!value)throw Error(label);};
 const validateRetirement=(outcome,validate)=>{try{validate();}catch(error){throw new AggregateError(outcome.failed?[outcome.error,error]:[error],'native original outcome validation');}};
 export default {async fetch(request,env,context){
  const path=new URL(request.url).pathname;
  if(path==='/release'){released=true;return new Response('released');}
- if(path==='/state')return Response.json({entered,done,active,terminalFailed,charged:bodyBudgetCharged(),chargedBefore});
+ if(path==='/state')return Response.json({entered,done,active,terminalFailed,charged:bodyBudgetCharged(),chargedBefore,pressureCancelObserved});
  let invocationEnv=env,acquisitions=0,materializations=0,reasonReads=0,fault;
  const grantFault=path.startsWith('/grant-acquire-');
  const faultMethod=path.includes('-get-')?'get':'idFromName';
@@ -34,7 +34,7 @@ export default {async fetch(request,env,context){
    get(id){if(faultMethod==='get'){acquisitions++;throw fault;}const stub=env.GRANT_CREDENTIALS.get(id);return{fetch(...args){materializations++;return stub.fetch(...args);}};}}};
  }
  const cap=beginOwnedHttpRequest(request,invocationEnv),baseline=bodyBudgetCharged();
- let hasPrimary=false,primary,retirement,retirementTaken=false,source,reply;
+ let hasPrimary=false,primary,retirement,retirementTaken=false,source,reply,pressure;
  const finish=()=>retirement??=finishOwnedHttpRequest(cap);
  const outcome=async()=>{try{await finish();return {failed:false};}catch(error){return {failed:true,error};}};
  try{
@@ -67,11 +67,12 @@ export default {async fetch(request,env,context){
    check(actual.status===200&&actual.body.units===1048576&&actual.body.first===97&&actual.body.last===97,'full original native upload');
    const ended=await outcome();retirementTaken=true;if(ended.failed)throw ended.error;
    check(!source.locked,'original native pipe unlocked');reply={ok:true,units:actual.body.units};
-  }else if(path==='/prefix'||path==='/dispatched-prefix'){
-   released=false;entered=false;done=false;active=true;terminalFailed=false;chargedBefore=baseline;
+  }else if(path==='/prefix'||path==='/dispatched-prefix'||path==='/pressure-prefix'){
+   released=false;entered=false;done=false;active=true;terminalFailed=false;chargedBefore=baseline;pressureCancelObserved=false;
    const upload=beginOwnedHttpUpload(cap);
-   source=new ReadableStream({async cancel(){entered=true;while(!released)await new Promise(resolve=>setTimeout(resolve,1));}},{highWaterMark:0});
+   source=new ReadableStream({async cancel(){entered=true;if(path==='/pressure-prefix')pressureCancelObserved=bodyBudgetCharged()===bodyBudgetBytes;while(!released)await new Promise(resolve=>setTimeout(resolve,1));}},{highWaterMark:0});
    adoptOwnedHttpUploadSource(upload,source);pipeOwnedHttpUpload(upload,source,new FixedLengthStream(1));
+   if(path==='/pressure-prefix'){pressure=ExactBodyCharge.reserve(bodyBudgetBytes-bodyBudgetCharged());check(pressure,'full common pressure');}
    const dispatched=path==='/dispatched-prefix';
    if(dispatched)dispatchOwnedHttpUpload(upload);
    const publicResponse=new Response('data: {"prefix":true}\n\n',{headers:{'content-type':'text/event-stream'}});
@@ -81,10 +82,16 @@ export default {async fetch(request,env,context){
    // The response body never waits on its encompassing completion.
    const settled=outcome();retirementTaken=true;
    context.waitUntil((async()=>{
-    if(original)await original;const ended=await settled;
-    validateRetirement(ended,()=>check(ended.failed&&ended.error instanceof AggregateError&&ended.error.errors.length===1,'owned abort has one original origin'));
-    check(!source.locked,'held original cancellation unlock');source=undefined;done=true;
-   })().catch(error=>{terminalFailed=true;done=true;throw error;}));
+    let primaryPresent=false,primary;const failures=[];
+    try{if(original)await original;const ended=await settled;
+     validateRetirement(ended,()=>check(ended.failed&&ended.error instanceof AggregateError&&ended.error.errors.length===1,'owned abort has one original origin'));
+     check(!source.locked,'held original cancellation unlock');source=undefined;
+    }catch(error){primaryPresent=true;primary=error;}
+    try{pressure?.release();pressure=undefined;}catch(error){failures.push(error);}
+    done=true;terminalFailed=primaryPresent||failures.length>0;
+    if(failures.length)throw new AggregateError(primaryPresent?[primary,...failures]:failures,'native pressure retirement');
+    if(primaryPresent)throw primary;
+   })());
    return delivery;
   }else if(path.startsWith('/response-')){
    const shared=path==='/response-shared'?Error('shared native cleanup'):undefined;
@@ -126,6 +133,7 @@ export default {async fetch(request,env,context){
  // An early assertion releases the finite fixture gate before joining roots.
  released=true;
  if(!retirementTaken){const ended=await outcome();if(ended.failed)failures.push(ended.error);}
+ try{pressure?.release();pressure=undefined;}catch(error){failures.push(error);}
  source=undefined;
  if(failures.length)throw new AggregateError(hasPrimary?[primary,...failures]:failures,'native upload fixture outcomes');
  if(hasPrimary)throw primary;
@@ -178,11 +186,12 @@ test('actual Workerd ORIGINAL upload, independent failures and public-prefix cus
     await t.test('native full 1 MiB ASCII upload' , async () => { const value = await get('/large'); assert.equal(value.ok, true); assert.equal(value.units, 1048576); });
     for (const path of ['/undefined', '/shared']) await t.test(`native independent ${path.slice(1)} cancellation origins`, async () => { const value = await get(path); assert.equal(value.origins, 2); assert.equal(value.ok, true); });
     for (const path of ['/response-undefined', '/response-shared', '/response-read']) await t.test(`native original response ${path.slice(10)}`, async () => { const value = await get(path); assert.equal(value.ok, true); assert.equal(value.origins, path === '/response-read' ? 1 : 2); });
-    for (const path of ['/prefix', '/dispatched-prefix']) await t.test(`public SSE prefix precedes held ORIGINAL upload cancellation: ${path}`, async () => {
+    for (const path of ['/prefix', '/dispatched-prefix', '/pressure-prefix']) await t.test(`public SSE prefix precedes held ORIGINAL upload cancellation: ${path}`, async () => {
       const prefix = await text(dispatch(path)); assert.equal(prefix.status, 200); assert.match(prefix.text, /"prefix":true/);
       let state;
       for (let i = 0; i < 500; i++) { state = await get('/state'); if (state.entered) break; await new Promise(resolve => setTimeout(resolve, 1)); }
       assert.equal(state.entered, true); assert.equal(state.done, false); assert.ok(state.charged > baseline);
+      if (path === '/pressure-prefix') assert.equal(state.pressureCancelObserved, true, 'FIRSTcancel starts with common arena full');
       await text(dispatch('/release'));
       for (let i = 0; i < 500; i++) { state = await get('/state'); if (state.done) break; await new Promise(resolve => setTimeout(resolve, 1)); }
       assert.equal(state.done, true); assert.equal(state.terminalFailed, false); assert.equal(state.charged, baseline);

@@ -20,9 +20,7 @@ export interface OwnedHttpFailureMetadata {
   readonly origin: SinkOrigin; readonly ordinal: number; readonly failed: boolean;
   readonly primary: boolean; readonly primaryIsUndefined: boolean; readonly disposition: SinkDisposition;
 }
-interface SinkOriginOwner {
-  carrier?: object; metadata?: OwnedHttpFailureMetadata;
-}
+type SinkOriginOwner = { -readonly [K in keyof OwnedHttpFailureMetadata]: OwnedHttpFailureMetadata[K] };
 interface OwnedHttpFailureOrigin { readonly origin?: never }
 interface FailureOwner { cap: OwnedHttpFailureOrigin; failed: boolean; carrier?: object; record: SinkOriginOwner }
 
@@ -38,7 +36,9 @@ interface RequestOwner {
   retirement?: Promise<void>;
   sink?: OwnedHttpSinkOwner;
   sinkCustody?: ProxyCompletion;
-  sinkOrigins?: Array<SinkOriginOwner | undefined>;
+  sinkOrigins?: Map<number, SinkOriginOwner>;
+  nextSinkOrigin: number;
+  sinkCredits: number;
   abortController?: AbortController;
   abortListener?: () => void;
   abortRemoval?: SinkOriginOwner;
@@ -66,7 +66,9 @@ interface UploadOwner {
 
 // Positive metadata backing precedes the registry/owner/control factories.
 // These components are logical allowances, never JavaScript object sizes.
-const requestMetadataBytes = 4096 + 4096 + 2048;
+// Entry owns terminal registration plus one untouched-response cancellation.
+const sinkOriginBytes = 2048;
+const requestMetadataBytes = 4096 + 4096 + 2 * sinkOriginBytes;
 const uploadMetadataBytes = 4096;
 const originalReaderCancel = ReadableStreamDefaultReader.prototype.cancel;
 let requests: WeakMap<OwnedHttpRequest, RequestOwner> | undefined;
@@ -75,7 +77,7 @@ let failureOrigins: WeakMap<OwnedHttpFailureOrigin, FailureOwner> | undefined;
 let registryFunding: ExactBodyCharge | undefined;
 let requestCount = 0;
 let sinkOwners: WeakMap<OwnedHttpSinkOwner, RequestOwner> | undefined;
-let sinkFailures: WeakMap<object, OwnedHttpFailureMetadata> | undefined;
+let sinkFailures: WeakSet<object> | undefined;
 let sinkRegistrations: WeakMap<OwnedHttpSinkRegistration, { owner: RequestOwner; origin: SinkOriginOwner; scope: ProxyCompletion }> | undefined;
 let intakes: WeakMap<OwnedHttpIntakeDiagnostics, { acquire: OwnedHttpFailureOrigin; read: OwnedHttpFailureOrigin; cancel: OwnedHttpFailureOrigin; unlock: OwnedHttpFailureOrigin; listenerAdd: OwnedHttpFailureOrigin; listenerRemove: OwnedHttpFailureOrigin }> | undefined;
 
@@ -106,38 +108,39 @@ function sinkOwner(sink: OwnedHttpSinkOwner): RequestOwner {
   return owner;
 }
 export function ownedHttpFailureMetadata(value: unknown): OwnedHttpFailureMetadata | undefined {
-  return value !== null && (typeof value === "object" || typeof value === "function") ? sinkFailures?.get(value) : undefined;
+  return value !== null && (typeof value === "object" || typeof value === "function") && sinkFailures?.has(value) ? value as OwnedHttpFailureMetadata : undefined;
+}
+function reserveSinkOrigins(sink: OwnedHttpSinkOwner, count: number): void {
+  const owner = sinkOwner(sink);
+  // Operation-local terminal origins are prepaid before acquisition/start.
+  // Cancellation never has to compete for a new common-arena reservation.
+  const charge = owner.funding.replace(owner.funding.bytes + count * sinkOriginBytes);
+  if (!charge) throw identityFailure("limit");
+  owner.funding = charge; owner.sinkCredits += count;
 }
 function sinkOrigin(sink: OwnedHttpSinkOwner, origin: SinkOrigin): SinkOriginOwner {
   const owner = sinkOwner(sink);
-  // Fixed record, carrier, two reactions, scope, outcomes and terminal cells.
-  // Full simultaneous CONTROL accounting remains a separate phase inventory.
-  const charge = owner.funding.replace(owner.funding.bytes + 2048);
-  if (!charge) throw identityFailure("limit");
-  owner.funding = charge;
-  const metadata: OwnedHttpFailureMetadata = { origin, ordinal: owner.sinkOrigins!.length,
+  if (!owner.sinkCredits) throw identityFailure("protocol");
+  owner.sinkCredits--;
+  const record: SinkOriginOwner = { origin, ordinal: owner.nextSinkOrigin++,
     failed: false, primary: false, primaryIsUndefined: false, disposition: "transport" };
-  const record = { carrier: metadata, metadata };
-  owner.sinkOrigins!.push(record);
+  owner.sinkOrigins!.set(record.ordinal, record);
   return record;
 }
 function failedSinkOrigin(record: SinkOriginOwner, reason: unknown, primary = true, disposition: SinkDisposition = "transport"): object {
   // ONLY typeof/presence: no getter, prototype, cause, stack, message or foreign
   // AggregateError inspection. Raw catch values never enter a retained field.
-  if (!record.metadata || !record.carrier) throw identityFailure("protocol");
-  const metadata = record.metadata as { -readonly [K in keyof OwnedHttpFailureMetadata]: OwnedHttpFailureMetadata[K] };
-  if (!metadata.failed) {
-    metadata.failed = true; metadata.primary = primary; metadata.primaryIsUndefined = reason === undefined; metadata.disposition = disposition;
-    Object.freeze(metadata); sinkFailures!.set(record.carrier, metadata);
+  if (!record.failed) {
+    record.failed = true; record.primary = primary; record.primaryIsUndefined = reason === undefined; record.disposition = disposition;
+    Object.freeze(record); sinkFailures!.add(record);
   }
-  return record.carrier;
+  return record;
 }
 function completedSinkOrigin(owner: RequestOwner, record: SinkOriginOwner): void {
-  if (!record.metadata || record.metadata.failed) return;
-  owner.sinkOrigins![record.metadata.ordinal] = undefined;
-  // Successful originals leave no retained receipt/descriptor/history graph.
-  // The scalar origin index is not reused while a failed sibling can refer to it.
-  record.metadata = undefined; record.carrier = undefined;
+  if (record.failed) return;
+  owner.sinkOrigins!.delete(record.ordinal);
+  // No descriptor/wrapper or successful history object remains in the owner.
+  // The originating reaction's local record clears when that reaction returns.
 }
 
 // Internal only: every exported entry below is a closed named native command.
@@ -166,13 +169,15 @@ function sinkOriginal(sink: OwnedHttpSinkOwner, record: SinkOriginOwner, start: 
 
 export function ownedHttpArchivePut(sink: OwnedHttpSinkOwner, bucket: Env["CONTENT_ARCHIVE"], key: string,
   value: string | ReadableStream<Uint8Array>, expiresAt: string): Promise<void> {
-  const owner = sinkOwner(sink), record = sinkOrigin(sink, "put");
+  const owner = sinkOwner(sink);
   if (bucket !== owner.env!.CONTENT_ARCHIVE) throw identityFailure("protocol");
+  reserveSinkOrigins(sink, 1); const record = sinkOrigin(sink, "put");
   return sinkOriginal(sink, record, () => bucket.put(key, value, {
     httpMetadata: { contentType: "application/json" }, customMetadata: { expiresAt },
   }), true);
 }
 export function ownedHttpArchivePipe(sink: OwnedHttpSinkOwner, source: ReadableStream<Uint8Array>, writable: WritableStream<Uint8Array>, signal: AbortSignal): Promise<void> {
+  reserveSinkOrigins(sink, 3); // ORIGINAL pipe, owned abort, original FIRSTcancel.
   const record = sinkOrigin(sink, "pipe");
   return sinkOriginal(sink, record, () => source.pipeTo(writable, { signal }));
 }
@@ -186,7 +191,8 @@ export function ownedHttpArchiveAbort(sink: OwnedHttpSinkOwner, controller: Abor
 }
 
 export function beginOwnedHttpSinkRegistration(sink: OwnedHttpSinkOwner): OwnedHttpSinkRegistration {
-  const owner = sinkOwner(sink), origin = sinkOrigin(sink, "registration");
+  const owner = sinkOwner(sink); reserveSinkOrigins(sink, 1);
+  const origin = sinkOrigin(sink, "registration");
   const cap = Object.freeze({}), scope = owner.sinkCustody!.fork();
   (sinkRegistrations ??= new WeakMap()).set(cap, { owner, origin, scope });
   return cap;
@@ -200,8 +206,7 @@ export function completeOwnedHttpSinkRegistration(cap: OwnedHttpSinkRegistration
     // remove this original; no accepted work depends on registration success.
     if (work) receipt.scope.start(() => work.then(() => undefined, () => undefined));
     if (!context || !work) {
-      const metadata = receipt.origin.metadata as { -readonly [K in keyof OwnedHttpFailureMetadata]: OwnedHttpFailureMetadata[K] };
-      metadata.origin = "registration-missing";
+      receipt.origin.origin = "registration-missing";
       throw failedSinkOrigin(receipt.origin, 0);
     }
     try { context.waitUntil(work); completedSinkOrigin(receipt.owner, receipt.origin); }
@@ -215,12 +220,14 @@ export function abandonUnstartedOwnedHttpRegistration(cap: OwnedHttpSinkRegistra
 }
 
 export function ownedHttpQueueSend(sink: OwnedHttpSinkOwner, queue: Env["USAGE_QUEUE"], message: QueueMessage): Promise<void> {
-  const owner = sinkOwner(sink), record = sinkOrigin(sink, "queue");
+  const owner = sinkOwner(sink);
   if (queue !== owner.env!.USAGE_QUEUE) throw identityFailure("protocol");
+  reserveSinkOrigins(sink, 1); const record = sinkOrigin(sink, "queue");
   return sinkOriginal(sink, record, () => queue.send(message));
 }
 
 export function ownedHttpProviderFetch(sink: OwnedHttpSinkOwner, url: URL, init: RequestInit): Promise<Response> {
+  reserveSinkOrigins(sink, 2); // ORIGINAL fetch and an unused/late body's FIRSTcancel.
   const record = sinkOrigin(sink, "fetch");
   return sinkOriginal(sink, record, () => fetch(url, init));
 }
@@ -228,7 +235,8 @@ export function ownedHttpSignal(cap: OwnedHttpRequest): AbortSignal {
   const owner = requestOwner(cap);
   if (owner.abortController) return owner.abortController.signal;
   growOwnedHttpRequest(cap, 2048);
-  const sink = ownedHttpSinkOwner(cap), adding = sinkOrigin(sink, "listener-add"), removal = sinkOrigin(sink, "listener-remove");
+  const sink = ownedHttpSinkOwner(cap); reserveSinkOrigins(sink, 2);
+  const adding = sinkOrigin(sink, "listener-add"), removal = sinkOrigin(sink, "listener-remove");
   const controller = new AbortController(), stopped = Object.freeze({ kind: "owned-http-aborted" });
   owner.abortController = controller; owner.abortRemoval = removal;
   owner.abortListener = () => controller.abort(stopped);
@@ -246,8 +254,10 @@ export function cancelOwnedHttpResponse(sink: OwnedHttpSinkOwner, response: Resp
 
 export async function ownedHttpLedgerFetch(sink: OwnedHttpSinkOwner, namespace: Env["BUDGET_LEDGER"] | Env["USAGE_LEDGER"],
   objectName: string, path: "/reserve" | "/dispatch" | "/charge" | "/settle" | "/ingest", body: string, signal?: AbortSignal): Promise<Response> {
-  const owner = sinkOwner(sink), acquisition = sinkOrigin(sink, "acquire"), fetching = sinkOrigin(sink, "fetch");
+  const owner = sinkOwner(sink);
   if (namespace !== (path === "/ingest" ? owner.env!.USAGE_LEDGER : owner.env!.BUDGET_LEDGER)) throw identityFailure("protocol");
+  reserveSinkOrigins(sink, 3); // Acquisition, fetch, then body read OR unused-body cancel.
+  const acquisition = sinkOrigin(sink, "acquire"), fetching = sinkOrigin(sink, "fetch");
   let stub: DurableObjectStub | undefined;
   try { stub = namespace.get(namespace.idFromName(objectName)); }
   catch (reason) { throw failedSinkOrigin(acquisition, reason); }
@@ -258,8 +268,10 @@ export async function ownedHttpLedgerFetch(sink: OwnedHttpSinkOwner, namespace: 
 }
 
 export async function ownedHttpPreflightFetch(sink: OwnedHttpSinkOwner, binding: NonNullable<Env["ACCESS_CONTROL"]>, body: string, signal?: AbortSignal): Promise<Response> {
-  const owner = sinkOwner(sink), acquisition = sinkOrigin(sink, "acquire"), fetching = sinkOrigin(sink, "fetch");
+  const owner = sinkOwner(sink);
   if (binding !== owner.env!.ACCESS_CONTROL) throw identityFailure("protocol");
+  reserveSinkOrigins(sink, 2);
+  const acquisition = sinkOrigin(sink, "acquire"), fetching = sinkOrigin(sink, "fetch");
   let stub: DurableObjectStub | undefined;
   try { stub = binding.get(binding.idFromName(credentialPreflightNamespace)); }
   catch (reason) { throw failedSinkOrigin(acquisition, reason); }
@@ -272,8 +284,10 @@ export async function ownedHttpPreflightFetch(sink: OwnedHttpSinkOwner, binding:
 }
 
 export function ownedHttpGrantMaterializeFetch(sink: OwnedHttpSinkOwner, binding: NonNullable<Env["GRANT_CREDENTIALS"]>, key: string, body: string, signal?: AbortSignal): Promise<Response> {
-  const owner = sinkOwner(sink), acquisition = sinkOrigin(sink, "acquire"), fetching = sinkOrigin(sink, "fetch");
+  const owner = sinkOwner(sink);
   if (binding !== owner.env!.GRANT_CREDENTIALS) throw identityFailure("protocol");
+  reserveSinkOrigins(sink, 2);
+  const acquisition = sinkOrigin(sink, "acquire"), fetching = sinkOrigin(sink, "fetch");
   let stub: DurableObjectStub;
   try { stub = binding.get(binding.idFromName(key)); }
   catch (reason) { throw failedSinkOrigin(acquisition, reason); }
@@ -340,15 +354,14 @@ export function beginOwnedHttpRequest(request: Request, env: Env): OwnedHttpRequ
     }
     // Terminal registration is included in entry funding, before any input or
     // original work. A later capacity denial cannot need fresh cleanup credit.
-    const metadata: OwnedHttpFailureMetadata = { origin: "registration", ordinal: 0,
+    const terminalRegistration: SinkOriginOwner = { origin: "registration", ordinal: 0,
       failed: false, primary: false, primaryIsUndefined: false, disposition: "transport" };
-    const terminalRegistration = { carrier: metadata, metadata };
     const sink = Object.freeze({});
     const owner: RequestOwner = { request, env, funding, completion: new ProxyCompletion(), uploads: [], failures: [],
-      sealed: false, unknown: false, sink, sinkCustody: new ProxyCompletion(), sinkOrigins: [terminalRegistration],
+      sealed: false, unknown: false, sink, sinkCustody: new ProxyCompletion(), sinkOrigins: new Map([[0, terminalRegistration]]), nextSinkOrigin: 1, sinkCredits: 1,
       terminalRegistration, budgetDenials: new WeakSet() };
     const cap = Object.freeze({});
-    sinkOwners ??= new WeakMap(); sinkFailures ??= new WeakMap();
+    sinkOwners ??= new WeakMap(); sinkFailures ??= new WeakSet();
     sinkOwners.set(sink, owner); requests.set(cap, owner); requestCount++;
     return cap;
   } catch (error) { funding.release(); throw error; }
@@ -394,7 +407,7 @@ function rememberOwnedHttpFailure(cap: OwnedHttpFailureOrigin, reason: unknown):
   return origin.carrier!;
 }
 export function beginOwnedHttpIntakeDiagnostics(cap: OwnedHttpRequest): OwnedHttpIntakeDiagnostics {
-  growOwnedHttpRequest(cap, 1024);
+  growOwnedHttpRequest(cap, 1024); reserveSinkOrigins(ownedHttpSinkOwner(cap), 6);
   const acquire = beginOwnedHttpFailureOrigin(cap, "acquire"), read = beginOwnedHttpFailureOrigin(cap, "read");
   const cancel = beginOwnedHttpFailureOrigin(cap, "cancel"), unlock = beginOwnedHttpFailureOrigin(cap, "unlock");
   const listenerAdd = beginOwnedHttpFailureOrigin(cap, "abort"), listenerRemove = beginOwnedHttpFailureOrigin(cap, "abort");
@@ -426,7 +439,7 @@ function ownHttpResponse(cap: OwnedHttpRequest, response: Response, publicBounda
   if (!response.body) return response;
   let headerUnits = 0, headerPairs = 0;
   response.headers.forEach((value, key) => { headerUnits += value.length + key.length; headerPairs++; });
-  growOwnedHttpRequest(cap, 4096 + 32 * headerPairs + 4 * headerUnits);
+  growOwnedHttpRequest(cap, 4096 + 32 * headerPairs + 4 * headerUnits); reserveSinkOrigins(ownedHttpSinkOwner(cap), 4);
   const acquisition = beginOwnedHttpFailureOrigin(cap, "acquire"), reading = beginOwnedHttpFailureOrigin(cap, "read");
   const cancellation = beginOwnedHttpFailureOrigin(cap, "cancel"), unlocking = beginOwnedHttpFailureOrigin(cap, "unlock");
   const canceled = Object.freeze({ kind: "owned-http-canceled" });
@@ -491,7 +504,7 @@ function ownHttpResponse(cap: OwnedHttpRequest, response: Response, publicBounda
                     // Only this request's own closed inner boundary proves
                     // propagation. A foreign carrier or raw shared value is a
                     // distinct original and receives its own record.
-                    const propagated = prior && owner.sinkOrigins?.[prior.ordinal]?.carrier === error;
+                    const propagated = prior && owner.sinkOrigins?.get(prior.ordinal) === error;
                     readCarrier = propagated ? error as object : rememberOwnedHttpFailure(reading, error);
                     throw readCarrier;
                   });
@@ -533,7 +546,8 @@ export function beginOwnedHttpUpload(cap: OwnedHttpRequest): OwnedHttpUpload {
   // Upload completion is a separate original-root join. Enrolling it in the
   // logical delivery/accounting completion would prevent that boundary from
   // ever initiating cancellation of a dispatched, backpressured upload.
-  const sink = ownedHttpSinkOwner(cap), adding = sinkOrigin(sink, "listener-add"), listenerRemoval = sinkOrigin(sink, "listener-remove");
+  const sink = ownedHttpSinkOwner(cap); reserveSinkOrigins(sink, 5);
+  const adding = sinkOrigin(sink, "listener-add"), listenerRemoval = sinkOrigin(sink, "listener-remove");
   const scope = new ProxyCompletion();
   const upload = Object.freeze({});
   const owner: UploadOwner = { cap: upload, request, scope, sink, listenerRemoval, started: false, settled: false, dispatched: false, failures: [] };
@@ -678,7 +692,7 @@ export function finishOwnedHttpRequest(cap: OwnedHttpRequest): Promise<void> {
     if (!owner.unknown) {
       owner.uploads.length = 0; owner.request = undefined; owner.env = undefined;
       if (owner.sink) sinkOwners!.delete(owner.sink);
-      for (const origin of owner.sinkOrigins ?? []) if (origin?.carrier) sinkFailures!.delete(origin.carrier);
+      if (owner.sinkOrigins) for (const origin of owner.sinkOrigins.values()) sinkFailures!.delete(origin);
       owner.sinkOrigins = undefined; owner.sink = undefined; owner.sinkCustody = undefined; owner.terminalRegistration = undefined; owner.budgetDenials = undefined;
       requests!.delete(cap); owner.funding.release();
       if (!--requestCount) { requests = undefined; uploads = undefined; failureOrigins = undefined; sinkOwners = undefined; sinkFailures = undefined; sinkRegistrations = undefined; intakes = undefined; const funding = registryFunding; registryFunding = undefined; funding?.release(); }
