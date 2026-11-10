@@ -36,3 +36,24 @@ test('admins refine retained user to deleted key, page events, and export the sa
   await expect(page.getByRole('region',{name:'Retained usage ranking',exact:true})).not.toContainText('999,999');expect(f.queries.some((u:URL)=>u.pathname==='/v1/session/usage/report')).toBe(false);
  }finally{f.close();}
 });
+
+test('unbound retained owners stay unavailable and service keys cannot imply an owner',async({page})=>{
+ const f=await serve(page,'admin');try{
+  await page.goto('/dashboard/usage');
+  const ranking=page.getByRole('region',{name:'Retained usage ranking',exact:true});
+  await expect(page.getByRole('heading',{name:'Exact ranking by user',exact:true})).toBeVisible();
+  const unavailableUser=ranking.getByRole('row').filter({has:page.getByRole('button',{name:'Unavailable identity',exact:true})});
+  await expect(unavailableUser).toHaveCount(1);
+  await expect(unavailableUser.getByRole('button',{name:'Unavailable identity',exact:true})).toBeDisabled();
+  await expect(unavailableUser.locator('td').first()).toHaveText('1');
+  await page.getByRole('combobox',{name:'Group by',exact:true}).selectOption('key');
+  await expect(page.getByRole('heading',{name:'Exact ranking by key',exact:true})).toBeVisible();
+  const unboundKey=ranking.getByRole('row').filter({has:page.getByRole('button',{name:'Unavailable owner · svc_123',exact:true})});
+  await expect(unboundKey).toHaveCount(1);
+  await expect(unboundKey.getByRole('button',{name:'Unavailable owner · svc_123',exact:true})).toBeDisabled();
+  await expect(unboundKey.locator('td').first()).toHaveText('1');
+  await expect(unboundKey.getByRole('link')).toHaveCount(0);
+  const query=f.queries.filter((url:URL)=>url.pathname==='/v1/admin/usage/report').at(-1)!.searchParams;
+  expect(query.get('groupBy')).toBe('key');expect(query.has('user')).toBe(false);expect(query.has('key')).toBe(false);
+ }finally{f.close();}
+});

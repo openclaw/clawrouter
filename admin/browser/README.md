@@ -42,7 +42,9 @@ the data path, not browser layout or interaction.
 
 - Summary reads allocate no cut; full views use replaceable browse cuts.
 - Leaving a view retires its roots and cancels exports. Reentry starts fresh.
-- Presets use server-time days. Custom controls use absolute RFC3339 instants.
+- Presets use server-time days. Custom controls accept RFC3339 instants or
+  YYYY-MM-DD dates in the chosen IANA timezone. Controls preserve the entered
+  text; requests use canonical absolute ISO boundaries, pinned across Refresh.
   Refinements retain the base; widening and Refresh allocate a fresh base.
 - Outside-retention is an error state, not a zero. Partial clipping is disclosed;
   event pages use the returned effective interval. Retries preserve cursor/query.
