@@ -561,7 +561,7 @@ predicate frames belong to CONTROL, not passive DATA. Their aliases clear at
 actual request retirement; the complete overlap is still unqualified.
 
 Additional authored witnesses use the real compiled entry and SQLite authority:
-35 Node cases, 23 native cases, and one Venice invocation in the existing pinned
+37 Node cases, 23 native cases, and one Venice invocation in the existing pinned
 OpenClaw UNIFIED client fixture. They include accepted/rejected structural and
 wire edges, escaped Unicode, raw duplicate/unknown preservation, more than 2 MiB
 of SSE, JSON delivery while archive work is held, and post-native held
@@ -618,8 +618,8 @@ remove the surviving owner's fixed field from the inventory.
 The six completion owners are request, sink custody, upload, codec, preparation
 failure accounting and selected accounting. The five origins are terminal
 registration, request abort-listener removal, upload-listener removal, codec
-output cancellation and codec final abort. Both accounting instances remain
-captured until the selected operation's `finally`; source completion does not
+output cancellation and codec final abort. In that former representation, both accounting instances remained
+captured until the selected operation's `finally`; source completion did not
 retire them. The three counted consumption leases belong to authentication,
 selection and the foreground credential. No generation-slot tree, registry
 index cells, promise/reaction products, active parser call frames, descriptor
@@ -692,3 +692,48 @@ promise/reaction products, active parser/descriptor transitions and concurrent
 upload/account/archive tails. Neither these authored observations nor syntax
 checks prove their combined fit. Publication remains held; semantics are
 UNRUN_CODE_ONLY_HOSTED.
+
+
+### Unused preparation accounting
+
+The private preparation estimate still runs at its original early point. Its
+closed command exposes only failure, close and unused retirement; it cannot
+expose its cost, reserve a budget or fork an accounting graph. Therefore this
+particular command creates no reservation-plan WeakMap entry. Ordinary
+`createProxyAccounting` still creates its original binding and command.
+
+The request and environment, genuine sink and encompassing completion must
+match before the private facade factory. A positive 512-byte metadata component
+is admitted first and stays charged until request retirement. This is a logical
+component, not an object-size or complete CONTROL claim. The temporary context
+and owner parameter aliases clear before the facade is returned.
+
+Once selected accounting exists, the unused command removes its final flags
+entry, seals its never-started accounting child and clears the command alias.
+It joins that child's unused scalar receipt, then the caller clears the facade.
+The construction flags entry also clears in the factory's private `finally`.
+Neither an encompassing completion nor delivery, upload or sink originals are
+joined by this transition. No debit is refunded here. A used early failure
+retains its actual settlement roots; closing its facade does not retire those
+roots, the request or their funding.
+
+| Added private preparation products | Lifetime |
+| --- | --- |
+| Facade plus three method fields and three method functions | Until the caller clears the facade |
+| `command`, `used`, cleared `options` and cleared `owner` captured bindings | Same facade lifetime |
+| `retireUnused` promise, await reaction and activation with `completion`/`receipt` locals | Empty-child join only |
+| Existing accounting command, fact/flag graph, accounting child and its parent observer | Construction/preparation; actual last consumer determines clearance |
+| Temporary own-facts getter call and explicit WeakMap deletion | Synchronous close/unused transition |
+
+These rows replace no unrelated owner. In particular, selected accounting,
+its plan callback, generation registries, upload, archive and generic usage
+observers still overlap response parsing. The eleven facade/state products
+and the empty-child transition must be included in preparation's own peak;
+removing the old command from later parsing is not a whole-vertical fit proof.
+
+Two Node witnesses cover an unused command with a held sibling and the real
+early-403 settlement with exactly one usage event. The existing native compact
+JSON/SSE source observer now counts actual preparation construction and alias
+clear, rejecting codec entry while a preparation command is still retained.
+The original operations and held accounting/archive joins remain in place.
+The new witnesses are authored, not locally executed.

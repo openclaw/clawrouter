@@ -1,5 +1,5 @@
 import type { MiniMaxSearchOperation } from "./minimax-search-operation.ts";
-import { checkOwnedHttpSinkOwner, beginOwnedHttpSinkRegistration, completeOwnedHttpSinkRegistration, abandonUnstartedOwnedHttpRegistration, type OwnedHttpSinkOwner } from "./http-identity-owner.ts";
+import { checkOwnedHttpRequest, ownedHttpSinkOwner, ownedHttpCompletion, growOwnedHttpRequest, checkOwnedHttpSinkOwner, beginOwnedHttpSinkRegistration, completeOwnedHttpSinkRegistration, abandonUnstartedOwnedHttpRegistration, type OwnedHttpRequest, type OwnedHttpSinkOwner } from "./http-identity-owner.ts";
 import { vertexAnthropicRoute } from "./vertex-anthropic-dispatch.ts";
 import { upstreamGenerationMayBeCharged } from "./upstream-billing-outcome.ts";
 import { googleAudioRequest } from "./google-audio-classification.ts";
@@ -267,6 +267,50 @@ function receiptPricing(pricing: ModelPricing | null | undefined): AccountingPri
 }
 
 export function createProxyAccounting(options: AccountingContext) {
+  return createAccounting(options, false);
+}
+
+export interface OwnedHttpPreparationAccounting {
+  fail(statusCode: number, status: UsageEvent["status"], reservation?: BudgetReservation, contentRef?: string | null, dispatched?: boolean): void;
+  close(): void;
+  retireUnused(): Promise<void>;
+}
+
+// This command cannot expose a cost or reserve a budget. Its early estimate and
+// failure receipt retain the ordinary ordering, but need no plan-map binding.
+export function createOwnedHttpPreparationAccounting(owner: OwnedHttpRequest, options: AccountingContext): OwnedHttpPreparationAccounting {
+  checkOwnedHttpRequest(owner, options.request, options.env);
+  if (options.ownedHttp !== ownedHttpSinkOwner(owner) || options.completion !== ownedHttpCompletion(owner)
+    || options.cost !== undefined || options.search !== undefined)
+    throw new TypeError("owned preparation accounting unavailable");
+  growOwnedHttpRequest(owner, 512); // Closed facade, captured cells and empty-child join products.
+  let command: ReturnType<typeof createAccounting> | undefined = createAccounting(options, true);
+  let used = false;
+  options = undefined as never; owner = undefined as never;
+  return {
+    fail(statusCode, status, reservation, contentRef, dispatched) {
+      if (used || !command) throw new TypeError("owned preparation accounting consumed");
+      used = true; command.fail(statusCode, status, reservation, contentRef, dispatched);
+    },
+    close() {
+      if (command) accountingFlags.delete(command.facts);
+      try { command?.close(); } finally { command = undefined; }
+    },
+    async retireUnused() {
+      if (used || !command) throw new TypeError("owned preparation accounting consumed");
+      used = true;
+      const completion = command.completion;
+      accountingFlags.delete(command.facts);
+      try { command.close(); } finally { command = undefined; }
+      // No terminal work was started. Join only this empty child, never the
+      // encompassing HTTP completion or any delivery-dependent sink.
+      const receipt = await completion;
+      if (!receipt?.unused || receipt.failed) throw new TypeError("owned preparation accounting was used");
+    },
+  };
+}
+
+function createAccounting(options: AccountingContext, preparation: boolean) {
   if (options.ownedHttp !== undefined) checkOwnedHttpSinkOwner(options.ownedHttp);
   const { env, context, auth, selection, request, compound } = options;
   for (const value of [auth.policyId, auth.policy.tenantId, auth.credentialId, auth.principalId, auth.authType,
@@ -333,15 +377,17 @@ export function createProxyAccounting(options: AccountingContext) {
   admitAccountingJson(flags, "capsule");
   Object.freeze(flags.billingBinding); Object.freeze(flags);
   accountingFlags.set(facts, flags);
-  admitAccountingFacts(facts, undefined, !!options.search);
-  if (facts.model && model) facts.model = { pricing: receiptPricing(model.pricing), upstream: model.upstream };
-  return ownedProxyAccounting(immutableFacts(facts, !!options.search, flags), accountingSinks(env, options.ownedHttp), context.waitUntil?.bind(context), options.search, flags, options.completion?.fork(), options.ownedHttp !== undefined ? context : undefined);
+  try {
+    admitAccountingFacts(facts, undefined, !!options.search);
+    if (facts.model && model) facts.model = { pricing: receiptPricing(model.pricing), upstream: model.upstream };
+    return ownedProxyAccounting(immutableFacts(facts, !!options.search, flags), accountingSinks(env, options.ownedHttp), context.waitUntil?.bind(context), options.search, flags, options.completion?.fork(), options.ownedHttp !== undefined ? context : undefined, preparation);
+  } finally { if (preparation) accountingFlags.delete(facts); }
 }
 
 function ownedProxyAccounting(initial: AccountingFacts, sinks: AccountingSinks, waitUntil: ((work: Promise<unknown>) => void) | undefined,
-  search: MiniMaxSearchOperation | undefined, flags: AccountingFlags, custody?: ProxyCompletion, registrationContext?: ExecutionContext) {
+  search: MiniMaxSearchOperation | undefined, flags: AccountingFlags, custody?: ProxyCompletion, registrationContext?: ExecutionContext, preparation = false) {
   let facts = initial, chargedUpstreamResponse = false;
-  bindAccountingPlan(facts.cost, plan => admitAccountingFacts(facts, plan));
+  if (!preparation) bindAccountingPlan(facts.cost, plan => admitAccountingFacts(facts, plan));
   let responseTier: string | null | undefined;
   const { google } = flags;
   function terminal(start: () => Promise<boolean>): Promise<boolean> {

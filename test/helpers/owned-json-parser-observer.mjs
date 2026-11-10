@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 // These observers are NOT production factories or a complete CONTROL inventory.
 export function createOwnedJsonObservation() {
   const rows = [];
-  let current;
+  let current, preparations = 0;
   const peak = row => {
     row.peakParents = Math.max(row.peakParents, row.parents);
     row.peakTokens = Math.max(row.peakTokens, row.tokens);
@@ -13,7 +13,12 @@ export function createOwnedJsonObservation() {
   };
   return {
     rows,
+    accounting(delta) {
+      preparations += delta;
+      if (preparations < 0) throw new Error('preparation accounting retired twice');
+    },
     begin() {
+      if (preparations !== 0) throw new Error('unused preparation accounting survived into codec');
       const row = { parents: 0, tokens: 0, pending: false, member: false, peakParents: 0, peakTokens: 0, peakStored: 2,
         parentPushes: 0, parentPops: 0, tokenPushes: 0, tokenPops: 0, attachments: 0, objectAttachments: 0, cleared: false };
       rows.push(row); return row;
@@ -75,6 +80,11 @@ export function observeOwnedJsonSource(path, source) {
       'if (__parserProbe) ' + probe + '.enter(__parserProbe); try { for (let offset = 0; offset < text.length; offset += 4096) consume.push(text.slice(offset, offset + 4096)); } finally { if (__parserProbe) ' + probe + '.leave(__parserProbe); }');
     source = replace(source, 'try { consume.end(); return root; }\n    finally { discard(); }',
       'if (__parserProbe) ' + probe + '.enter(__parserProbe); try { consume.end(); return root; }\n    finally { if (__parserProbe) ' + probe + '.leave(__parserProbe); discard(); }');
+  } else if (/[\\/]worker[\\/]proxy-accounting\.ts$/.test(path)) {
+    source = replace(source, 'options = undefined as never; owner = undefined as never;',
+      'options = undefined as never; owner = undefined as never; ' + probe + '.accounting(1);');
+    source = replace(source, 'finally { command = undefined; }',
+      'finally { const __held = command !== undefined; command = undefined; if (__held) ' + probe + '.accounting(-1); }', 2);
   } else if (/[\\/]stream-json[\\/](?:src[\\/])?core[\\/]parser\.js$/.test(path)) {
     // Exact pinned 3.8 tokenizer: two container-entry and three exit sites.
     // Observe the ORIGINAL stack *before* the consumer sees the returned batch.
@@ -94,7 +104,7 @@ export async function startOwnedJsonObservedFixture(directory, router, upstream,
     resolveDir: process.cwd(), sourcefile: 'owned-json-fixture.ts', loader: 'ts',
   }, bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2022', logLevel: 'silent',
   plugins: [{ name: 'observe-original-json-stacks', setup(build) {
-    build.onLoad({ filter: /(?:[\\/]worker[\\/]json-body\.ts|[\\/]stream-json[\\/](?:src[\\/])?core[\\/]parser\.js)$/ }, async ({ path }) => ({
+    build.onLoad({ filter: /(?:[\\/]worker[\\/](?:json-body|proxy-accounting)\.ts|[\\/]stream-json[\\/](?:src[\\/])?core[\\/]parser\.js)$/ }, async ({ path }) => ({
       contents: observeOwnedJsonSource(path, await readFile(path, 'utf8')),
       loader: path.endsWith('.ts') ? 'ts' : 'js', resolveDir: dirname(path),
     }));

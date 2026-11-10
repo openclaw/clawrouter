@@ -78,7 +78,7 @@ import { assertServiceTier } from "./service-tiers.ts";
 import { grantStickyInput } from "./grant-sticky.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import { assessModelRequest } from "../shared/model-request-parameters.ts";
-import { admitAccountingFacts, createProxyAccounting, estimateCost, type CompoundRequestContext } from "./proxy-accounting";
+import { admitAccountingFacts, createProxyAccounting, createOwnedHttpPreparationAccounting, estimateCost, type OwnedHttpPreparationAccounting, type CompoundRequestContext } from "./proxy-accounting";
 import { authenticateProxyKey, authenticateOwnedHttp, proxySessionHash, retireOwnedHttpControlVerification } from "./proxy-auth";
 import { queueGrantRuntime } from "./admission-cache.ts";
 import { evictGrantCredentials } from "./credential-cache.ts";
@@ -1273,12 +1273,14 @@ function registerProxyBackground(owned: OwnedHttpRequest | undefined, context: E
 
 // Fixed named synchronous calls: no arbitrary graph callback or async scope.
 // The plan was funded before full admission could commit its initial choice.
-function createOwnedHttpAccounting(cap: OwnedHttpRequest, options: Parameters<typeof createProxyAccounting>[0]): ReturnType<typeof createProxyAccounting> {
+function createOwnedHttpAccounting(cap: OwnedHttpRequest, options: Parameters<typeof createProxyAccounting>[0]): ReturnType<typeof createProxyAccounting>;
+function createOwnedHttpAccounting(cap: OwnedHttpRequest, options: Parameters<typeof createProxyAccounting>[0], preparation: true): OwnedHttpPreparationAccounting;
+function createOwnedHttpAccounting(cap: OwnedHttpRequest, options: Parameters<typeof createProxyAccounting>[0], preparation = false): ReturnType<typeof createProxyAccounting> | OwnedHttpPreparationAccounting {
   options.ownedHttp = ownedHttpSinkOwner(cap);
   const body = options.selection.body as Record<string, unknown>;
   enterOwnedHttpPricing(cap, body);
-  let result: ReturnType<typeof createProxyAccounting> | undefined, hasPrimary = false, primary: unknown;
-  try { result = createProxyAccounting(options); } catch (error) { hasPrimary = true; primary = error; }
+  let result: ReturnType<typeof createProxyAccounting> | OwnedHttpPreparationAccounting | undefined, hasPrimary = false, primary: unknown;
+  try { result = preparation ? createOwnedHttpPreparationAccounting(cap, options) : createProxyAccounting(options); } catch (error) { hasPrimary = true; primary = error; }
   const failures: unknown[] = [];
   try { leaveOwnedHttpPricing(cap, body); } catch (error) { failures.push(error); }
   if (failures.length) {
@@ -1348,7 +1350,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
 }
 
 async function proxySelectedOwned(request: Request, env: Env, context: ExecutionContext, auth: AuthorizedIdentity, selection: ProxySelection, queryInput: ProxyQuery, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, admission?: JsonAdmission, completion?: ProxyCompletion, owned?: OwnedHttpRequest): Promise<Response> {
-  let failureAccounting: ReturnType<typeof createProxyAccounting> | undefined;
+  let failureAccounting: ReturnType<typeof createProxyAccounting> | OwnedHttpPreparationAccounting | undefined;
   let accounting: ReturnType<typeof createProxyAccounting> | undefined;
   let retention: PreparedContentRetention | null | undefined;
   let accountingDeferred = false, retentionDeferred = false;
@@ -1363,7 +1365,7 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     return proxyManagedPrediction(request, env, context, auth, selection, queryInput, admission?.wan);
   }
   const accountingContext = { context, env, auth, selection, request, compound, completion, search: searchOwner, startedAtMs: Date.now() };
-  failureAccounting = owned ? createOwnedHttpAccounting(owned, accountingContext) : createProxyAccounting(accountingContext);
+  failureAccounting = owned ? createOwnedHttpAccounting(owned, accountingContext, true) : createProxyAccounting(accountingContext);
   let background: HttpBackground | undefined;
   let prepared: PreparedUpstream;
   let continuation: HttpContinuation | undefined;
@@ -1397,6 +1399,10 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       : estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, continuation?.parentTools, selection.nativeResponse?.tariff, selection.provider.id);
     const options = { ...accountingContext, cost, grantKey: prepared.grantKey, grantLane: prepared.grantLane };
     accounting = owned ? createOwnedHttpAccounting(owned, options) : createProxyAccounting(options);
+    if ("retireUnused" in failureAccounting) {
+      await failureAccounting.retireUnused();
+      failureAccounting = undefined;
+    }
     if (reservedBudget && (reservedBudget.providerId !== selection.provider.id || reservedBudget.modelId !== selection.model?.id || reservedBudget.capability !== selection.capability || cost.reserveMicros > reservedBudget.cost.reserveMicros)) {
       reservedBudget.claim();
       accounting.fail(500, "provider_error", reservedBudget.reservation);
@@ -1412,7 +1418,9 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       failure = new HttpError(503, "upstream_grant_pool_unavailable", `provider ${selection.provider.id} has no available scoped upstream grant`);
     const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
     reservedBudget?.claim();
-    (accounting ?? failureAccounting).fail(failure.status, status, reservedBudget?.reservation);
+    const failureOwner = accounting ?? failureAccounting;
+    if (!failureOwner) throw identityFailure("protocol");
+    failureOwner.fail(failure.status, status, reservedBudget?.reservation);
     return errorResponse(failure.code, failure.message, failure.status, undefined, failure.headers);
   }
   const { cost, requestId } = accounting;

@@ -2,7 +2,9 @@ import './typescript-setup.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { beginOwnedHttpRequest, finishOwnedHttpRequest, ownedHttpSinkOwner, ownedHttpFailureMetadata,
-  ownedHttpQueueSend, ownedHttpArchivePut, ownedHttpArchivePipe, ownedHttpArchiveAbort, ownedHttpArchiveCancel, beginOwnedHttpSinkRegistration, completeOwnedHttpSinkRegistration } from '../http-identity-owner.ts';
+  ownedHttpQueueSend, ownedHttpArchivePut, ownedHttpArchivePipe, ownedHttpArchiveAbort, ownedHttpArchiveCancel, beginOwnedHttpSinkRegistration, completeOwnedHttpSinkRegistration, ownedHttpCompletion } from '../http-identity-owner.ts';
+import { createOwnedHttpPreparationAccounting } from '../proxy-accounting.ts';
+import { snapshot } from '../providers.ts';
 import { accountingSinks, finalizeOwnedAccounting, reserveBudget, settleOwnedBudget } from '../accounting.ts';
 import { materializeGrantCredentials } from '../grant-credentials.ts';
 import { selectedCredentialFailure, SelectedGrantCredentialFailure } from '../grant-credential-failure.ts';
@@ -35,7 +37,7 @@ function environment() {
 // Release first, join each original once by origin, then retire the genuine
 // request. Every native/body command under test enrolls its own retirement.
 async function fixture(t, env, run) {
-  const baseline = bodyBudgetCharged(), cap = beginOwnedHttpRequest(new Request('https://router.example/v1/chat/completions'), env);
+  const baseline = bodyBudgetCharged(), request = new Request('https://router.example/v1/chat/completions'), cap = beginOwnedHttpRequest(request, env);
   const sink = ownedHttpSinkOwner(cap), roots = [], origins = new WeakMap(), releases = [];
   let hasPrimary = false, primary, cleanupPromise, finished = false;
   const own = promise => {
@@ -56,11 +58,51 @@ async function fixture(t, env, run) {
     return errors;
   })();
   t.after(async () => { if (!finished) { const errors = await cleanup(); if (errors.length) throw new AggregateError(hasPrimary ? [primary, ...errors] : errors); } });
-  try { await run({ cap, sink, own, take, releases, baseline }); } catch (error) { hasPrimary = true; primary = error; }
+  try { await run({ cap, request, sink, own, take, releases, baseline }); } catch (error) { hasPrimary = true; primary = error; }
   const errors = await cleanup(); finished = true;
   if (errors.length) throw new AggregateError(hasPrimary ? [primary, ...errors] : errors, 'owned sink fixture cleanup');
   if (hasPrimary) throw primary;
 }
+
+for (const failed of [false, true]) test(`private preparation accounting ${failed ? 'settles one early failure' : 'retires unused without joining a held sibling'}`, async t => {
+  const env = environment(), events = [];
+  env.USAGE_QUEUE.send = async value => { events.push(structuredClone(value)); };
+  await fixture(t, env, async f => {
+    const provider = snapshot.providers.find(value => value.id === 'fireworks');
+    const endpoint = provider.endpoints.find(value => value.request_format === 'openai.chat_completions');
+    const completion = ownedHttpCompletion(f.cap), gate = deferred();
+    f.releases.push(() => gate.resolve());
+    f.own(completion.start(() => gate.promise));
+    const options = { env, request: f.request, context: { waitUntil: value => { f.own(value); } },
+      completion, ownedHttp: f.sink,
+      auth: { ...auth, authType: 'proxy_key', policy: { ...auth.policy, requestCostMicros: 1 } },
+      selection: { provider, endpoint, model: null, capability: 'llm.chat', method: 'POST', body: { messages: [] } } };
+    const before = bodyBudgetCharged();
+    assert.throws(() => createOwnedHttpPreparationAccounting(f.cap, { ...options, request: new Request('https://router.example/other') }));
+    assert.equal(bodyBudgetCharged(), before, 'mixed request rejected before metadata admission');
+    const command = createOwnedHttpPreparationAccounting(f.cap, options);
+    try {
+      assert.equal(bodyBudgetCharged(), before + 512, 'facade and empty-child join prospectively funded');
+      assert.deepEqual(Object.keys(command).sort(), ['close', 'fail', 'retireUnused']);
+      if (failed) {
+        command.fail(403, 'denied');
+        await assert.rejects(command.retireUnused(), /consumed/);
+      } else {
+        await f.take(f.own(command.retireUnused()));
+        assert.equal(events.length, 0, 'unused preparation creates no usage event');
+        assert.throws(() => command.fail(403, 'denied'), /consumed/);
+      }
+    } finally { command.close(); }
+    gate.resolve();
+    // The early-failure original is owned by waitUntil above. Its observer is
+    // joined by fixture cleanup; no second settlement or plan is reconstructed.
+    if (failed) {
+      completion.seal(); await f.take(f.own(completion.completion));
+      assert.equal(events.length, 1); assert.equal(events[0].status_code, 403);
+      assert.equal(events[0].status, 'denied'); assert.equal(events[0].actual_cost_micros, 0);
+    }
+  });
+});
 
 function guardedReason() {
   let reads = 0;
