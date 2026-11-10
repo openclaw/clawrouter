@@ -55,14 +55,15 @@ export function pairExecution(strategy, config) {
 export async function runPairBenchmark({ repo, qualificationPath, taskManifest, out, sourceSha, config,
   cheapReasoning = 'none', cheapMaxCalls = 10, executor = 'interactive', preloadSource = false, policy = 'architect', includeControls = true, controlsOnly = false, env = process.env, fetcher = fetch, agent, contractAgent = runContractAgent, grade = verify, preflight = nativePins }) {
   if (!/^[a-f0-9]{40}$/.test(sourceSha ?? '')) throw new Error('exact_source_required');
-  if (!['architect', 'edit-handoff', 'scope', ...contractPolicies].includes(policy)) throw new Error('invalid_pair_policy');
+  if (!['architect', 'edit-handoff', 'matched-handoff', 'scope', ...contractPolicies].includes(policy)) throw new Error('invalid_pair_policy');
   if (!['interactive', 'single-draft'].includes(executor) || (executor === 'single-draft' && !providedPolicies.includes(policy))) throw new Error('invalid_pair_executor');
   agent ??= executor === 'single-draft' ? runSingleDraft : runAgent;
   if (typeof includeControls !== 'boolean' || typeof controlsOnly !== 'boolean'
     || (controlsOnly && !includeControls) || (!includeControls && !contractPolicies.includes(policy))) throw new Error('invalid_control_selection');
   if (policy !== 'architect') preloadSource = true;
   if (!controlsOnly && contractPolicies.includes(policy) && config.maxCalls < 4) throw new Error('contract_requires_four_calls');
-  const trialStrategies = controlsOnly ? ['cheap', 'strong'] : includeControls ? ['cheap', 'strong', policy] : [policy];
+  const candidateStrategy = policy === 'matched-handoff' ? 'edit-handoff' : policy;
+  const trialStrategies = controlsOnly ? ['cheap', 'strong'] : includeControls ? ['cheap', 'strong', candidateStrategy] : [candidateStrategy];
   const tasks = await loadTasks(taskManifest);
   if (providedPolicies.includes(policy) && tasks.some(task => task.reproducer === undefined)) throw new Error('missing_reproducer');
   validatePair(config, tasks.length, trialStrategies.length);
@@ -139,6 +140,8 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
         const strategy = trialStrategies[(index + offset) % trialStrategies.length], trialId = `${task.id}:${strategy}`;
         const selectedStrategy = strategy === 'scope' ? scopeStrategy(task) : contractPolicies.includes(strategy) ? 'strong' : strategy;
         const start = performance.now(), execution = pairExecution(selectedStrategy, config);
+        const matchedStrong = policy === 'matched-handoff' && strategy === 'strong';
+        if (matchedStrong) execution.strategy = 'handoff';
         const row = { taskId: task.id, split: task.split, strategy, score: 0, status: 'running',
           ...(strategy === 'scope' ? { selectedStrategy, selectedModel: config[selectedStrategy] } : {}) };
         state.records.push(row);
@@ -149,7 +152,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
               { agent, ...(['contract-draft', 'contract-refine'].includes(policy) ? { cheapAgent: policy === 'contract-refine' ? runRefinedDraft : runSingleDraft } : {}), cheapMaxCalls, exposeProbe: policy !== 'contract-private', providedProbe: providedPolicies.includes(policy) ? task.reproducer : null })
             : await agent(providedPolicies.includes(policy) ? withReproducer(task, task.reproducer) : task,
               receipt.image, execution.strategy, trialId, execution.settings, invoke(selectedStrategy), undefined,
-              { preloadSource, ...(strategy === 'edit-handoff' ? { handoffAfterEdit: true } : {}) });
+              { preloadSource, ...(strategy === 'edit-handoff' || matchedStrong ? { handoffAfterEdit: true } : {}) });
           const verdict = await grade(task, receipt.image, result.files, repo);
           const { files, ...trace } = result;
           Object.assign(row, { ...trace, verdict, score: Number(verdict.passed && verdict.tests === receipt.oracleTests
