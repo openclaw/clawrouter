@@ -180,6 +180,7 @@ test('known-cost output truncation fails its trial without skipping the other co
     assert.equal(calls, 3); assert.equal(state.complete, true);
     assert.ok(state.records.every(row => row.status === 'error' && row.errorCode === 'provider_truncated' && row.score === 0));
     assert.ok(state.calls.every(call => typeof call.costMicros === 'number'));
+    assert.ok(state.calls.every(call => call.finishReason === 'length' && call.responseDisposition === 'truncated'));
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
