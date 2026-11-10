@@ -364,7 +364,12 @@ for (const corrupt of [false, true]) test(`workerd KV-only legacy ${corrupt ? "c
 
 for (const stage of ["ownership_claim", "credential_read_before_claim", "credential_read", "credential_write"]) test("workerd local settlement recovers " + stage + " after owner reopen without another token exchange", { timeout: 60000 }, async t => {
   const f = await fixture(t); await f.configure({}); await f.request("/fixture/failure", "POST", { stage });
-  assert.equal((await f.rotate()).status, 502);
+  const response = await f.rotate();
+  assert.equal(response.status, 502);
+  const error = (await response.json()).error;
+  assert.equal(error.code, "grant_refresh_persist_failed");
+  assert.match(error.message, /local settlement will retry without another provider refresh/);
+  assert.doesNotMatch(error.message, /dedicated login/);
   const row = await f.row();
   assert.equal(row.usable, false);
   assert.equal(row.refreshDiagnosis.failure.failureClass, "provider_ok_persist_failed");
@@ -381,6 +386,8 @@ for (const stage of ["ownership_claim", "credential_read_before_claim", "credent
   assert.equal((await f.row()).refreshDiagnosis.failure, null);
   assert.equal((await f.row()).usable, true);
   assert.equal(await f.calls(), 0, "reopened owner settles locally, with zero token egress");
+  const settled = await f.state(), recovered = await f.row();
+  t.diagnostic(JSON.stringify({ stage, reopened: true, usable: recovered.usable, retainedResult: settled.pending, refreshFailure: recovered.refreshDiagnosis.failure, tokenExchangesAfterReopen: await f.calls() }));
 });
 
 for (const reopen of [false, true]) test("workerd first result-retention write failure " + (reopen ? "stays fenced when the result is truly lost" : "recovers from owner memory without upstream replay"), { timeout: 60000 }, async t => {
@@ -421,16 +428,19 @@ for (const mutation of ["replace", "revoke", "stale-attempt"]) test("workerd ret
   assert.equal(await f.calls(), 0);
   if (mutation === "replace") assert.equal(state.accessToken, "fixture-new-access");
   else assert.equal((await f.row()).usable, false);
+  t.diagnostic(JSON.stringify({ mutation, reopened: true, retainedResult: state.pending, rejectedOldReplacement: state.accessToken !== "fixture-rotated", tokenExchangesAfterReopen: await f.calls() }));
 });
 
 for (const stage of ["result_store", "ownership_claim", "credential_write"]) test("workerd pending replacement ownership rejects copies after " + stage, { timeout: 60000 }, async t => {
   const f = await fixture(t); await f.request("/fixture/failure", "POST", { stage });
   assert.equal((await f.rotate()).status, 502);
   await f.request("/fixture/failure", "POST", {});
+  const exchangesBeforeCopy = await f.calls();
   const copy = await f.request("/v1/admin/upstream-grants/tenants/copy/login", "PUT", { ...f.grant, refreshToken: "fixture-rotated-refresh" });
   assert.equal(copy.status, 409);
   assert.doesNotMatch(await copy.text(), /fixture-|fingerprint|[a-f0-9]{64}/);
   assert.equal(await f.calls(), 1);
+  t.diagnostic(JSON.stringify({ stage, copyStatus: copy.status, totalTokenExchanges: await f.calls(), additionalExchangesForCopy: await f.calls() - exchangesBeforeCopy }));
 });
 
 for (const reopen of [false, true]) test("workerd repeated interrupted diagnosis retains an autonomous settlement alarm" + (reopen ? " after reopen" : " in memory"), { timeout: 60000 }, async t => {
@@ -573,18 +583,35 @@ for (const collision of [false, true]) test("workerd quota-refresh preserves the
   assert.equal(await f.calls(), 1, "quota recovery never exchanges the consumed refresh token");
 });
 
-test("workerd replacement-token collision remains blocked and reports only the safe ownership code", { timeout: 60000 }, async t => {
+for (const conflict of ["already_owned", "previously_used"]) test("workerd replacement-token " + conflict + " remains blocked and requests a fresh dedicated login", { timeout: 60000 }, async t => {
   const f = await fixture(t);
-  const other = await f.request("/v1/admin/upstream-grants/tenants/other/login", "PUT", { ...f.grant, refreshToken: "fixture-rotated-refresh" });
-  assert.equal(other.status, 200);
-  assert.equal((await f.rotate()).status, 502);
+  if (conflict === "already_owned") {
+    const other = await f.request("/v1/admin/upstream-grants/tenants/other/login", "PUT", { ...f.grant, refreshToken: "fixture-rotated-refresh" });
+    assert.equal(other.status, 200);
+  } else {
+    // Consume the future replacement under this same owner via real refresh,
+    // then install a different login. The consumed reservation must remain.
+    assert.equal((await f.request(f.base + "?mode=replace", "PUT", { ...f.grant, refreshToken: "fixture-rotated-refresh" })).status, 200);
+    await f.configure({ malformed: true });
+    assert.equal((await f.rotate()).status, 502);
+    assert.equal(await f.calls(), 1);
+    assert.equal((await f.request(f.base + "?mode=replace", "PUT", f.grant)).status, 200);
+    await f.configure({});
+  }
+  const response = await f.rotate();
+  assert.equal(response.status, 502);
+  const error = (await response.json()).error;
+  assert.equal(error.code, "grant_refresh_persist_failed");
+  assert.match(error.message, /fresh dedicated login/);
+  assert.doesNotMatch(error.message, /will retry|fixture-|fingerprint|[a-f0-9]{64}/);
   const row = await f.row();
   assert.equal(row.refreshDiagnosis.failure.settlement.stage, "ownership_claim");
-  assert.equal(row.refreshDiagnosis.failure.settlement.code, "refresh_token_already_owned");
+  assert.equal(row.refreshDiagnosis.failure.settlement.code, "refresh_token_" + conflict);
   assert.equal(row.refreshDiagnosis.failure.nextRetryAt, null);
   assert.equal((await f.state()).alarm, null);
   assert.equal((await f.rotate()).status, 502);
   assert.equal(await f.calls(), 1);
   assert.equal((await f.row()).usable, false);
   assert.equal((await f.state()).accessToken, "fixture-access");
+  t.diagnostic(JSON.stringify({ conflict, status: response.status, code: error.code, message: error.message, nextRetryAt: row.refreshDiagnosis.failure.nextRetryAt, alarm: (await f.state()).alarm, tokenExchanges: await f.calls(), usable: (await f.row()).usable }));
 });

@@ -1030,7 +1030,10 @@ export class GrantCredentialObject implements DurableObject {
         const current = await this.state.storage.get<CredentialRecord>("credential");
         if (current) await this.schedule(current);
       }
-      throw new HttpError(502, "grant_refresh_persist_failed", "provider refreshed credentials; local settlement will retry without another provider refresh");
+      const ownershipConflict = code === "refresh_token_already_owned" || code === "refresh_token_previously_used";
+      throw new HttpError(502, "grant_refresh_persist_failed", ownershipConflict
+        ? "provider refreshed credentials but replacement ownership is blocked; use a fresh dedicated login, do not replay the stored token"
+        : "provider refreshed credentials; local settlement will retry without another provider refresh");
     }
   }
 
