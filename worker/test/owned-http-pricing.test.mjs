@@ -47,6 +47,31 @@ test('owned later object-128 SSE retains raw wire, usage and one selected/accoun
   }, false, 'venice');
 });
 
+test('owned Chat keeps the complete comment prefix and subsequent JSON data byte-for-byte', async t => {
+  await fixture(t, async f => {
+    const model = 'zai-org-glm-5-2', prefix = ':' + 'x'.repeat(8192) + '\n\n';
+    const wire = prefix + 'data: ' + ownedJsonCodecWire('compact-object128', model) + '\n\ndata: [DONE]\n\n';
+    f.veniceResponse(wire, true);
+    const response = await f.request({ model: 'venice/' + model, stream: true });
+    assert.equal(response.status, 200); assert.equal(response.text, wire);
+    await f.drain();
+    assert.equal(f.sent.length, 1); assert.equal(f.events.length, 1);
+    assert.equal(f.calls.filter(row => row.kind === 'authority' && row.path === '/authorization/snapshot').length, 2);
+  }, false, 'venice');
+});
+
+test('owned later rejected frame fails the body after the healthy prefix published HTTP 200', async t => {
+  await fixture(t, async f => {
+    const model = 'zai-org-glm-5-2';
+    f.veniceResponse('data: ' + JSON.stringify({ model, choices: [] }) + '\n\ndata: '
+      + ownedJsonCodecWire('compact-object129', model) + '\n\ndata: [DONE]\n\n', true);
+    const response = await f.take(f.dispatch({ model: 'venice/' + model, stream: true }));
+    assert.equal(response.status, 200); await assert.rejects(f.take(f.bodyRoot(response)));
+    await f.drain(); assert.equal(f.sent.length, 1); assert.equal(f.events.length, 1);
+    assert.equal(f.calls.filter(row => row.kind === 'authority' && row.path === '/authorization/snapshot').length, 2);
+  }, false, 'venice');
+});
+
 test('private codec consumer rejects fabricated owners before original reader acquisition', async () => {
   const baseline = bodyBudgetCharged(), operation = new HttpOperation();
   let acquired = 0;
@@ -364,11 +389,10 @@ for (const streaming of [false, true]) test('real owned Venice ' + (streaming ? 
       f.veniceResponse(delivered, streaming);
       const before = f.calls.length, eventCount = f.events.length;
       const response = await f.take(f.dispatch(payload({ model: veniceModelId, ...(streaming ? { stream: true } : {}) })));
-      let text, failed = false;
-      try { text = await f.take(f.bodyRoot(response)); } catch (error) { if (!streaming || valid) throw error; failed = true; }
+      const text = await f.take(f.bodyRoot(response));
       await f.drain();
-      assert.equal(response.status, streaming || valid ? 200 : 502, mode);
-      assert.equal(failed, streaming && !valid, mode);
+      assert.equal(response.status, valid ? 200 : 502, mode + ' first-frame validation precedes publication');
+      if (!valid) assert.equal(JSON.parse(text).error.code, 'provider_unavailable');
       if (valid) {
         assert.equal(text, delivered, mode + ' exact original response bytes');
         const value = JSON.parse(streaming ? text.slice(6, text.indexOf('\n\n')) : text);

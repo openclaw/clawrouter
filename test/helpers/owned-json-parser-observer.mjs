@@ -4,24 +4,31 @@ import assert from 'node:assert/strict';
 // retain scalar counts, never parser input, keys, values, containers or tokens.
 // These observers are NOT production factories or a complete CONTROL inventory.
 export function createOwnedJsonObservation() {
-  const rows = [];
+  const rows = [], readers = new WeakSet();
   let current, preparations = 0;
   const consumers = { created: 0, acquired: 0, retired: 0, live: 0, inner: 0, outer: 0,
-    read: 0, cancel: 0, unlock: 0, held: false, released: false, reasonReads: 0 };
+    read: 0, cancel: 0, unlock: 0, replay: 0, transferred: 0, pricing: 0, enqueued: 0, held: false, released: false, reasonReads: 0 };
   let releaseConsumer;
   const peak = row => {
     row.peakParents = Math.max(row.peakParents, row.parents);
     row.peakTokens = Math.max(row.peakTokens, row.tokens);
-    row.peakStored = Math.max(row.peakStored, 2 + row.parents + row.tokens + Number(row.pending) + Number(row.member));
+    const stored = 2 + row.parents + row.tokens + Number(row.pending) + Number(row.member);
+    row.peakStored = Math.max(row.peakStored, stored);
+    if (current === row) row.peakActive = Math.max(row.peakActive, stored);
+    else row.peakBetween = Math.max(row.peakBetween, stored);
   };
   return {
     rows,
     consumers,
     consumerMode: 'normal',
     previousCodec: undefined,
-    consumer() { consumers.created++; },
+    consumerCreated() { consumers.created++; },
+    replay() { consumers.replay++; },
+    transferred(reader) { if (!readers.has(reader)) throw new Error("sniff handoff replaced its original reader"); consumers.transferred++; },
+    enqueued(bytes) { consumers.enqueued += bytes; },
+    pricing(delta) { consumers.pricing += delta; if (consumers.pricing < 0) throw new Error("pricing retired twice"); },
     reader(reader) {
-      consumers.acquired++; consumers.live++;
+      consumers.acquired++; consumers.live++; readers.add(reader);
       if (!this.consumerMode.startsWith('read-') || consumers.acquired !== 1) return;
       const kind = this.consumerMode.slice(5);
       let reason = kind === 'undefined' ? undefined : kind === 'primitive' ? 'x'.repeat(17 * 1024 * 1024)
@@ -53,13 +60,14 @@ export function createOwnedJsonObservation() {
     },
     begin() {
       if (preparations !== 0) throw new Error('unused preparation accounting survived into codec');
-      const row = { parents: 0, tokens: 0, pending: false, member: false, peakParents: 0, peakTokens: 0, peakStored: 2,
+      const row = { parents: 0, tokens: 0, pending: false, member: false, peakParents: 0, peakTokens: 0, peakStored: 2, peakActive: 2, peakBetween: 2, peakRejected: 0,
         parentPushes: 0, parentPops: 0, tokenPushes: 0, tokenPops: 0, attachments: 0, objectAttachments: 0, cleared: false,
-        consumerReaders: consumers.live, innerWrappers: consumers.inner, outerWrappers: consumers.outer };
+        consumerReaders: consumers.live, pricingOwners: consumers.pricing, innerWrappers: consumers.inner, outerWrappers: consumers.outer };
       rows.push(row); return row;
     },
     enter(row) { if (row) { if (current) throw new Error('nested fixture parser observation'); current = row; } },
-    leave(row) { if (row) { if (current !== row) throw new Error('fixture parser observation mismatch'); current = undefined; } },
+    leave(row) { if (row) { if (current !== row) throw new Error('fixture parser observation mismatch'); current = undefined; peak(row); } },
+    rejected(row) { if (row) row.peakRejected = Math.max(row.peakRejected, 2 + row.parents + row.tokens + Number(row.pending) + Number(row.member)); },
     consumer(row, parents, pending) {
       if (!row) return;
       if (parents > row.parents) row.parentPushes += parents - row.parents;
@@ -112,7 +120,7 @@ export function observeOwnedJsonSource(path, source) {
     source = replace(source, '(parents ?? stack!).length = 0;',
       '(parents ?? stack!).length = 0; if (__parserProbe) ' + probe + '.discard(__parserProbe, parents?.length === 0, pendingKey === undefined, scalar === "", root === undefined, consume === undefined);');
     source = replace(source, 'for (let offset = 0; offset < text.length; offset += 4096) consume.push(text.slice(offset, offset + 4096));',
-      'if (__parserProbe) ' + probe + '.enter(__parserProbe); try { for (let offset = 0; offset < text.length; offset += 4096) consume.push(text.slice(offset, offset + 4096)); } finally { if (__parserProbe) ' + probe + '.leave(__parserProbe); }');
+      'if (__parserProbe) ' + probe + '.enter(__parserProbe); try { for (let offset = 0; offset < text.length; offset += 4096) consume.push(text.slice(offset, offset + 4096)); } catch (__rejected) { if (__parserProbe) ' + probe + '.rejected(__parserProbe); throw __rejected; } finally { if (__parserProbe) ' + probe + '.leave(__parserProbe); }');
     source = replace(source, 'try { consume.end(); return root; }\n    finally { discard(); }',
       'if (__parserProbe) ' + probe + '.enter(__parserProbe); try { consume.end(); return root; }\n    finally { if (__parserProbe) ' + probe + '.leave(__parserProbe); discard(); }');
   } else if (/[\\/]worker[\\/]proxy-accounting\.ts$/.test(path)) {
@@ -129,10 +137,20 @@ export function observeOwnedJsonSource(path, source) {
       + 'else if (' + probe + '.consumerMode === "stale") codec = ' + probe + '.previousCodec; '
       + 'else if (' + probe + '.consumerMode === "mode") streaming = !streaming; '
       + 'checkOwnedHttpCodecConsumer(http, codec, response, operation, streaming, requestId, usageContext); '
-      + probe + '.previousCodec = codec; ' + probe + '.consumer();');
+      + probe + '.previousCodec = codec; ' + probe + '.consumerCreated();');
     source = replace(source, 'state.reader = state.body.getReader();', 'state.reader = state.body.getReader(); state.__probeAcquired = true; ' + probe + '.reader(state.reader);');
-    source = replace(source, 'finishOwnedHttpIntakeDiagnostics(state.diagnostics);',
-      'finishOwnedHttpIntakeDiagnostics(state.diagnostics); if (state.__probeAcquired) ' + probe + '.retiredReader();');
+    source = replace(source, 'finishOwnedCodecDiagnostics(state.owner.codec, state.role);',
+      'finishOwnedCodecDiagnostics(state.owner.codec, state.role); if (state.__probeAcquired) ' + probe + '.retiredReader();');
+    source = replace(source, 'function replayResponse(response: Response, reader: ReadableStreamDefaultReader<Uint8Array>, chunks: Uint8Array[], readerDone: boolean): Response {',
+      'function replayResponse(response: Response, reader: ReadableStreamDefaultReader<Uint8Array>, chunks: Uint8Array[], readerDone: boolean): Response { ' + probe + '.replay();');
+    source = replace(source, '    return sniff;', '    ' + probe + '.transferred(sniff.reader); return sniff;');
+    source = replace(source, 'if (!finished) controller.enqueue(next.value);\n        } catch (error) {\n          const failure = phase',
+      'if (!finished) { controller.enqueue(next.value); ' + probe + '.enqueued(next.value.byteLength); }\n        } catch (error) {\n          const failure = phase');
+  } else if (/[\\/]worker[\\/]pricing\.ts$/.test(path)) {
+    source = replace(source, 'ownedPricing.set(cap, retained); ownedPricingCount++;',
+      'ownedPricing.set(cap, retained); ownedPricingCount++; ' + probe + '.pricing(1);');
+    source = replace(source, 'plan.body = undefined; ownedPricing!.delete(cap);',
+      'plan.body = undefined; ownedPricing!.delete(cap); ' + probe + '.pricing(-1);');
   } else if (/[\\/]stream-json[\\/](?:src[\\/])?core[\\/]parser\.js$/.test(path)) {
     // Exact pinned 3.8 tokenizer: two container-entry and three exit sites.
     // Observe the ORIGINAL stack *before* the consumer sees the returned batch.
@@ -152,7 +170,7 @@ export async function startOwnedJsonObservedFixture(directory, router, upstream,
     resolveDir: process.cwd(), sourcefile: 'owned-json-fixture.ts', loader: 'ts',
   }, bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2022', logLevel: 'silent',
   plugins: [{ name: 'observe-original-json-stacks', setup(build) {
-    build.onLoad({ filter: /(?:[\\/]worker[\\/](?:json-body|proxy-accounting|proxy-response|http-identity-owner)\.ts|[\\/]stream-json[\\/](?:src[\\/])?core[\\/]parser\.js)$/ }, async ({ path }) => ({
+    build.onLoad({ filter: /(?:[\\/]worker[\\/](?:json-body|proxy-accounting|proxy-response|http-identity-owner|pricing)\.ts|[\\/]stream-json[\\/](?:src[\\/])?core[\\/]parser\.js)$/ }, async ({ path }) => ({
       contents: observeOwnedJsonSource(path, await readFile(path, 'utf8')),
       loader: path.endsWith('.ts') ? 'ts' : 'js', resolveDir: dirname(path),
     }));

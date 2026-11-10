@@ -243,8 +243,8 @@ export default {async fetch(request){
  if(id==='error')return Response.json({error:{type:'invalid_request_error',message:'synthetic rejection'}},{status:400});
  const usage={prompt_tokens:4,completion_tokens:3,total_tokens:7};
  if(id==='venice'&&body.ownedVeniceCase?.startsWith('compact-')){
-  const later=body.ownedVeniceCase==='compact-later-object128',wire=ownedJsonCodecWire(later?'compact-object-string128':body.ownedVeniceCase,body.model);
-  const prefix=later?'data: '+JSON.stringify({model:body.model,choices:[]})+'\n\n':'';
+  const later=body.ownedVeniceCase==='compact-later-object128'||body.ownedVeniceCase==='compact-later-object129',comments=body.ownedVeniceCase==='compact-comment-prefix',wire=ownedJsonCodecWire(later?(body.ownedVeniceCase==='compact-later-object129'?'compact-object129':'compact-object-string128'):comments?'compact-object128':body.ownedVeniceCase,body.model);
+  const prefix=later?'data: '+JSON.stringify({model:body.model,choices:[]})+'\n\n':comments?':'+ 'x'.repeat(8192)+'\n\n':'';
   return new Response(body.stream===true?prefix+'data: '+wire+'\n\ndata: [DONE]\n\n':wire,{headers:{'content-type':body.stream===true?'text/event-stream':'application/json'}});
  }
  if(id==='venice'&&body.ownedVeniceCase&&body.stream!==true){

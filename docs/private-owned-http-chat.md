@@ -556,7 +556,7 @@ predicate frames belong to CONTROL, not passive DATA. Their aliases clear at
 actual request retirement; the complete overlap is still unqualified.
 
 Additional authored witnesses use the real compiled entry and SQLite authority:
-39 Node cases, 30 native cases, and one Venice invocation in the existing pinned
+41 Node cases, 32 native cases, and one Venice invocation in the existing pinned
 OpenClaw UNIFIED client fixture. They include accepted/rejected structural and
 wire edges, escaped Unicode, raw duplicate/unknown preservation, more than 2 MiB
 of SSE, JSON delivery while archive work is held, and post-native held
@@ -788,38 +788,13 @@ The candidate remains incomplete and unpublished. The lower bound establishes
 one concrete overlap to repair; it does not certify a replacement layout or
 request a higher quota. No semantics or heap measurements were run locally.
 
-### Private codec consumers: implemented custody, CONTROL still open
+### A572 consumer checkpoint: historical CONTROL lower bound
 
-The consumer capability binds the actual HTTP request, selected attempt,
-operation, codec response, mode, usage-context identity and request ID. Codec
-body identity is retained at its original output factory. Acquisition checks
-the actual response/body before calling its actual `getReader`. A private
-sniff reader and its buffered prefix transfer directly into replay; the usage
-observer acquires that registered descendant. Header-only public wrapping
-retains the same body. The outer public cancellation guard remains present.
-
-Read and FIRST-cancel joins are enrolled before either original can re-enter.
-First observers normalize acquisition, read, closed, cancel and unlock failures;
-modified methods are invoked with their actual receivers. Native propagation
-requires the registered body, a published failure and the original native
-method/closed getter. A post-native wrapper is a separate operation even when
-it rejects with the same value or with undefined. Unlock failures retain their
-own ordered terminal origin alongside the primary public failure.
-
-Replay and usage pulls enroll their actual original promise before execution.
-Retirement joins read, FIRSTcancel, closed, unlock and active pull before clearing
-reader/body/prefix aliases. Detached cleanup is already enrolled in the request;
-it does not delay publication of a mapped error or a healthy prefix. The fixed
-usage receiver transfers the result directly to the genuine accounting owner;
-the private consumer API exposes only Response and void completion receipts.
-There is no graph-valued public promise or arbitrary graph callback.
-
-Consumer payload admission is additive to the SAME foreground ticket: a
-1 MiB prefix/classification component, 64 KiB execution-metadata component,
-and `96 * headerPairs + 6 * headerUnits` for actual header copies. It creates
-no additional arena or source credit. These are implemented reservations, not
-a completed whole-phase DATA upper bound. Full grant, retained policy/routing,
-codec, generic usage, upload, accounting and archive remain simultaneous owners.
+The A572 checkpoint used a separate consumer capability, two indexes and an
+intermediate replay stream. Its two real downstream readers and their custody
+were counted below. This is historical evidence; the current representation
+is described in the next section. The original completion enrollment stayed
+separate from the already-sealed codec child.
 
 The supplied pinned-tokenizer source inventory gives a per-parser dynamic
 reservation maximum of 415, including its depth subtotal. The between-feed
@@ -865,18 +840,138 @@ usage state and competing sink tails. It is consequently not a 1047 upper
 bound or a 23-product-only repair estimate. The full 415 component cannot be
 added to 343 or to the old parent subtotal. No 1024 fit is claimed.
 
-The new native witness warms a real generation, then sends a one-MiB request
-whose second SSE event contains the depth-128 object. Fixture-only observers
-check two actual consumer readers, zero inner wrappers and the surviving outer
-guard during that parser invocation. Separate native cases cover forged/stale/
-wrong-mode capabilities before reader acquisition and post-native read/cancel/
-unlock failures with held FIRSTcancel, undefined, shared and large reasons.
-Original operations are forwarded, release occurs first, and the existing
-memoized late-body roots and request retirement joins remain in teardown.
-Two Node witnesses cover fabricated capabilities and the same later-event wire.
-All are authored only; local runtime semantics remain UNRUN_CODE_ONLY_HOSTED.
+The A572 fixture asserted two actual readers. The current fixture replaces that
+architecture assertion with one actual-reader handoff and zero replay factories;
+it retains the outer guard and original-operation assertions.
 
-The 22-file candidate is still incomplete. Further representation/lifetime
-work must remove real simultaneous products, with original roots and their
-owners preserved. This checkpoint authorizes no quota increase, reclassification,
-profile reduction, activation or publication.
+### Same-reader consumer reduction and remaining CONTROL gap
+
+The private consumer now uses the genuine revalidation capability as the key
+of one registry. It has no second empty capability or reverse index. Request,
+attempt, operation, requested mode, native usage, context identity and request
+ID are checked by fixed named commands against their existing owners before
+consumer factories. No graph getter or caller-supplied callback was added.
+
+Healthy SSE normalization transfers its actual sniff reader and prefix into
+Chat usage. The locked original Response remains invocation-local until that
+fixed command constructs the final usage stream. Prefix cells clear after
+handoff to the usage/output owner, in original order. No private intermediate
+replay stream, Response, Headers or second reader starts. Ordinary replay and
+the ordinary `observeUsage` implementation are unchanged. A genuinely mapped
+replacement has a different body and acquires its own reader; any abandoned
+original remains separately joined. A fixed private clear command drops the
+usage closure aliases after all original consumers and the public boundary
+join, before root credit release; native stream closure is not release proof.
+
+The private Chat orchestration still calls the ordinary `createSseUsageInspector`,
+`extractUsageTokens` and `responseOutcome` implementations. It drops only
+unreachable format orchestration. Accounting receives the actual usage through
+its fixed named receiver; completion is void, never a graph-valued public
+promise. Logical outcome does not wait for cancellation. Original read,
+FIRSTcancel, unlock, closed and active pull remain separately joined. The
+consumer completion is still enrolled before publication on the open request
+owner, not under its already-sealed codec child.
+
+The source and each actually acquired consumer claim their own ordinal base
+at that acquisition, preserving ordering against intervening revalidation.
+Their fixed roles share the existing request failure registry. No per-role
+capability, empty record index or reverse map remains. Finished-role bits do
+not delete shared records or refund other roles. Accepted originals can still
+report independent failures after UNKNOWN; new acquisitions cannot use that
+reporting path. Source and reader state flags preserve separate failure
+presence, native-propagation proof and terminal states. No method is pinned
+away or replaced to hide a post-native failure.
+
+Pricing registry metadata retires after the final alternate/preparation and
+all synchronous pricing/serialization consumers, before codec parsing. Its
+idempotent final cleanup remains. Request body, upload, facts, cost, IDs,
+plan callbacks, reservations, archive, accounting, identity and liveness
+remain funded; this is no graph-credit refund.
+
+The same DATA reservations remain prospective and additive: codec, usage,
+1 MiB prefix/classification, 64 KiB consumer execution metadata and measured
+header occurrences under the foreground 32 MiB component. Role failure
+factories retain their prepaid common-arena backing. No source counter is
+reset and no second arena is introduced. Removing factories does not establish
+the still-open complete DATA or CONTROL phase inventory.
+
+The following deliberately conservative lower subset starts from A572's
+source-counted 1047 between-feed row. It does not subtract excluded factories,
+pricing metadata that was absent from that row, or unreachable ordinary
+locals that were not counted there. The stable later-object-128 schedule and
+promoted-generation ownership are unchanged.
+
+| Implemented delta from A572 | Products |
+| --- | ---: |
+| Carried between-feed subset | 1047 |
+| Consumer object + fifteen initial fields replaced by object + eight live fields (including current reader and usage receipt) | -7 |
+| Two 13-product reader-state subsets replaced by one object + ten live fields | -15 |
+| Three diagnostic holders/caps/empty indexes (24) replaced by three actual role/base fields | -21 |
+| Two registry/key/value triples replaced by one | -3 |
+| Second native reader never acquired | -1 |
+| Two-entry reader vector never constructed | -3 |
+| Six source booleans become one flag word; diagnostic reference removed | -6 |
+| No JSON TextDecoder in the SSE usage branch; two live usage promises remain counted | -1 |
+| **Carried subset after actual reductions** | **990** |
+| Still-live stock SSE inspector/accumulator/framer products, detailed below | 26 |
+| Private Chat orchestration scope/bindings and two named closures, detailed below | 27 |
+| Explicit final usage-clear command: owner field, function/binding and scope link | 4 |
+| **Current between-feed lower subset** | **1047** |
+
+The 26 stock products at `token-usage.ts` are distinct from the private usage
+stream products already in the carried subset. Inspector: facade plus three
+fields (4), `evidence`, frame-consumer callback, `end` and `result` functions
+(4). Accumulator: facade plus three fields (4), `continuedWork`, `accept`,
+`unfinished` and `result` functions (4). Framer: facade plus three fields (4),
+`decode`, `append`, `overflowed`, `pending`, `push` functions (5), and its
+TextDecoder (1). This omits their captured scopes, state bindings, byte views
+and promise/native products; it is not their complete reservation bound.
+
+The additional 27 private orchestration products are its logical scope and
+outer link (2); the 21 named bindings `owner`, `response`, `operation`,
+`validated`, `usageContext`, `signal`, `state`, `contentType`, `sse`, `inspect`,
+`decoder`, `text`, `bytes`, `finished`, `resolve`, `ready`, `downstream`, `finish`,
+`aborted`, `body`, `output`; and the `finish`/`aborted` function objects and
+captured-scope links (4). The stream callbacks were already counted in the
+carried subset. Empty/cleared named bindings are counted consistently with
+the adopted source-logical convention; no engine closure-pruning assumption
+supplies credit.
+
+The explicit `clearUsage` command adds its binding, function, captured link
+and owner field (4) rather than assuming that the native stream releases
+application closures.
+
+The adopted active-parser component is 415 instead of the between-feed 343.
+Replacing that component once gives a required reservation subset of 1119,
+not 1047+415 and not a measured runtime overflow. Remaining original promises,
+reactions, codec event-state scopes, publication/output and competing sink tails
+are still omitted. Shared tokenizer 281 is accounted once to its existing
+shared owner; it is not an extra per-parser allowance or subtraction here.
+
+Consequently this checkpoint is incomplete and cannot be published. The
+concrete remaining producer is the simultaneous `observeOwnedChatUsage` scope
+and stock SSE frame/accumulator machinery while `ownedVeniceEvents` parses the
+next deep frame. A further representation change must remove real factories
+or prove an earlier last consumer. The narrow next candidate is a closed
+codec-to-usage evidence handoff using the existing accumulator only when the
+actual consumer accepts that exact emitted frame. It must preserve ordinary
+usage/rejection ordering, retain or rebuild evidence under explicit DATA
+funding across first-data authorization, and clear every cue after its actual
+consumer. This is a proposed seam, not an implemented or qualified saving;
+no new source file, cap reduction or quota change is assumed.
+
+Authored Node and native witnesses now distinguish malformed first frames
+(502 before publication) from a rejected later frame (HTTP 200 followed by
+body failure). The old first-frame HTTP 200 oracle contradicted the actual
+normalizer position and was corrected without changing production statuses.
+The later-frame fixture observes actual reader identity, one acquisition,
+zero replay factories, active/between/reject parent-state peaks, pricing-owner
+clearance, unchanged raw wire and fresh RPC/event counts. An 8 KiB comment-prefix
+case proves normalization does not wait for first data while its authorization
+is held. Existing modified read/cancel/unlock, undefined/shared/large reasons,
+held originals and release-first late-body teardown remain in place. Fixture
+scalar observers do not certify the whole CONTROL upper bound.
+
+Static checks only; all runtime semantics remain UNRUN_CODE_ONLY_HOSTED.
+The checkout remains active and retained. No push, PR, activation or full
+source-closure claim is authorized by this checkpoint.

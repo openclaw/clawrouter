@@ -175,6 +175,20 @@ export function matchesOwnedHttpCodecConsumerInput(http: OwnedHttpRequest, codec
     && !!selection && !Array.isArray(selection.body) && (selection.body.stream === true) === streaming
     && selection.endpoint.request_format === "openai.chat_completions" && selection.endpoint.response_format === "openai.chat_completions";
 }
+export function matchesOwnedHttpCodecNormalizationInput(http: OwnedHttpRequest, codec: OwnedHttpRevalidation,
+  attempt: OwnedHttpUpload, operation: HttpOperation, requestId: string): boolean {
+  const owner = ownedProxyInvocations?.get(http);
+  return !!owner && owner.operation === operation && owner.upload === attempt && owner.requestId === requestId
+    && owner.prepared?.ownedVenice === codec && ownedPreparedUploads?.get(owner.prepared) === attempt;
+}
+export function matchesOwnedHttpCodecUsageInput(http: OwnedHttpRequest, codec: OwnedHttpRevalidation,
+  attempt: OwnedHttpUpload, operation: HttpOperation, validated: import("./native-response.ts").ValidatedNativeUsage | undefined,
+  usageContext: Readonly<import("./token-usage.ts").UsageTokenContext> | undefined): boolean {
+  const owner = ownedProxyInvocations?.get(http);
+  return !!owner && owner.operation === operation && owner.upload === attempt && owner.consumer === codec
+    && owner.prepared?.ownedVenice === codec && ownedPreparedUploads?.get(owner.prepared) === attempt
+    && owner.nativeUsage === validated && owner.usageContext === usageContext;
+}
 export function acceptOwnedHttpVeniceUsage(http: OwnedHttpRequest, codec: OwnedHttpRevalidation,
   response: Response, usage: import("./native-response.ts").ValidatedNativeUsage | undefined): void {
   const owner = ownedProxyInvocations?.get(http);
@@ -183,7 +197,7 @@ export function acceptOwnedHttpVeniceUsage(http: OwnedHttpRequest, codec: OwnedH
 }
 export function acceptOwnedCodecUsage(http: OwnedHttpRequest, consumer: OwnedCodecConsumer, response: Response, usage: ObservedUsage): void {
   const owner = ownedProxyInvocations?.get(http);
-  if (!owner || owner.consumer !== consumer || owner.observedUsage !== undefined || !matchesOwnedCodecUsage(consumer, http, response, usage))
+  if (!owner || owner.consumer !== consumer || owner.observedUsage !== undefined || !matchesOwnedCodecUsage(consumer, response, usage))
     throw identityFailure("protocol");
   owner.observedUsage = usage;
 }
@@ -1766,6 +1780,9 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       if (catalogInputs) catalogWork = reading;
       response = catalogInputs ? await operation.wait(reading, "upstream", discard) : await reading;
     }
+    // Final alternate selection and every synchronous pricing/serialization
+    // consumer have finished. Facts, uploads and accounting keep their owners.
+    if (owned) retireOwnedHttpPricing(owned);
     if (owned && prepared.ownedVenice) {
       const receiver = ownedProxyInvocations!.get(owned)!;
       receiver.nativeResponse = response;
@@ -1912,7 +1929,7 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
   let observed: ReturnType<typeof observeUsage> | undefined;
   let delivered: Response, retired: Promise<void>;
   if (codecConsumer) {
-    delivered = observeOwnedCodecUsage(codecConsumer, response, operation);
+    delivered = observeOwnedCodecUsage(codecConsumer, response, operation, nativeUsage, usageContext);
     retired = ownedCodecConsumerRetirement(codecConsumer);
   } else {
     const observe = () => observeUsage(response!, operation, inspection, selection.endpoint.response_format, cost.requestTariff, nativeUsage, usageContext);

@@ -180,10 +180,9 @@ for (const streaming of [false, true]) test('native owned Venice ' + (streaming 
       const response = await f.take(f.dispatch('https://fixture/v1/chat/completions', chat('venice', {
         model: ownedHttpControlModels.venice, ownedVeniceCase: mode, ...(streaming ? { stream: true } : {}),
       })));
-      let text, failed = false;
-      try { text = await f.take(f.body(response)); } catch (error) { if (!streaming || valid) throw error; failed = true; }
-      assert.equal(response.status, streaming || valid ? 200 : 502, mode);
-      assert.equal(failed, streaming && !valid, mode);
+      const text = await f.take(f.body(response));
+      assert.equal(response.status, valid ? 200 : 502, mode + ' first-frame validation precedes publication');
+      if (!valid) assert.equal(JSON.parse(text).error.code, 'provider_unavailable');
       if (valid) {
         assert.equal(text, streaming ? 'data: ' + wire + '\n\ndata: [DONE]\n\n' : wire, mode + ' exact original wire');
         const value = JSON.parse(streaming ? text.slice(6, text.indexOf('\n\n')) : text);
@@ -204,6 +203,8 @@ for (const streaming of [false, true]) test('native owned Venice ' + (streaming 
       } else if (mode === 'compact-object129' || mode === 'compact-open2048') {
         assert.equal(row.peakParents, 128); assert.equal(row.peakTokens, 129); assert.equal(row.peakStored, 260);
         assert.equal(row.abandonedParents, 128); assert.equal(row.abandonedTokens, 129);
+        assert.equal(row.peakActive, 260); assert.equal(row.peakRejected, 260);
+        assert.ok(row.peakBetween >= 259, 'accepted parent state existed before the rejecting opener');
       }
       assert.equal(count(after, 'authority', '/authorization/snapshot') - count(before, 'authority', '/authorization/snapshot'), valid ? 2 : 1);
       assert.equal(after.events.length - before.events.length, 1, mode + ' original native accounting event');
@@ -211,7 +212,7 @@ for (const streaming of [false, true]) test('native owned Venice ' + (streaming 
   }, true);
 });
 
-test('native later object-128 SSE uses actual sniff/replay and usage receipts with only the outer response guard', { timeout: 120000 }, async t => {
+test('native later object-128 SSE transfers one original sniff reader into usage without replay factories', { timeout: 120000 }, async t => {
   await fixture(t, async f => {
     assert.equal((await f.request('https://fixture/v1/chat/completions', chat('venice', {
       model: ownedHttpControlModels.venice, ownedVeniceCase: 'compact-object128', stream: true,
@@ -227,16 +228,72 @@ test('native later object-128 SSE uses actual sniff/replay and usage receipts wi
     const after = await settledState(f), rows = after.parsers.slice(before.parsers.length);
     assert.equal(rows.length, 2);
     assert.equal(rows[1].peakParents, 128); assert.equal(rows[1].peakTokens, 128); assert.equal(rows[1].peakStored, 260);
-    assert.equal(rows[1].consumerReaders, 2, 'both actual downstream readers exist during the later parser peak');
+    assert.equal(rows[1].peakActive, 260); assert.equal(rows[1].peakBetween, 259); assert.equal(rows[1].peakRejected, 0);
+    assert.equal(rows[1].consumerReaders, 1, 'the SAME original sniff reader owns the later parser peak');
+    assert.equal(rows[1].pricingOwners, 0, 'pricing metadata cleared after its final consumer');
     assert.equal(rows[1].innerWrappers, 0); assert.equal(rows[1].outerWrappers, before.consumers.outer + 1);
     assert.equal(after.consumers.created - before.consumers.created, 1);
-    assert.equal(after.consumers.acquired - before.consumers.acquired, 2);
-    assert.equal(after.consumers.retired - before.consumers.retired, 2); assert.equal(after.consumers.live, 0);
+    assert.equal(after.consumers.acquired - before.consumers.acquired, 1);
+    assert.equal(after.consumers.transferred - before.consumers.transferred, 1);
+    assert.equal(after.consumers.replay - before.consumers.replay, 0, 'no intermediate replay stream/Response factories');
+    assert.equal(after.consumers.retired - before.consumers.retired, 1); assert.equal(after.consumers.live, 0);
     assert.equal(after.events.length - before.events.length, 1);
     assert.equal(count(after, 'authority', '/admission/resolve'), count(before, 'authority', '/admission/resolve'), 'genuine covered generation hit');
     assert.equal(count(after, 'authority', '/authorization/snapshot') - count(before, 'authority', '/authorization/snapshot'), 2);
     const upstream = JSON.parse((await f.request('https://fixture/fixture/upstream')).text);
     assert.equal(upstream.filter(row => row.id === 'venice').length, 2, 'warm request plus exactly one later request');
+  }, true);
+});
+
+test('native later rejected depth-129 frame preserves published status and the same reader custody', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const before = await settledState(f);
+    const response = await f.take(f.dispatch('https://fixture/v1/chat/completions', chat('venice', {
+      model: ownedHttpControlModels.venice, ownedVeniceCase: 'compact-later-object129', stream: true,
+    })));
+    assert.equal(response.status, 200, 'the earlier healthy event already published');
+    await assert.rejects(f.take(f.body(response)));
+    const after = await settledState(f), rows = after.parsers.slice(before.parsers.length);
+    assert.equal(rows.length, 2); assert.equal(rows[1].consumerReaders, 1);
+    assert.equal(rows[1].peakParents, 128); assert.equal(rows[1].peakTokens, 129);
+    assert.equal(rows[1].peakActive, 260); assert.equal(rows[1].peakRejected, 260); assert.equal(rows[1].cleared, true);
+    assert.equal(after.consumers.acquired - before.consumers.acquired, 1);
+    assert.equal(after.consumers.retired - before.consumers.retired, 1); assert.equal(after.consumers.live, 0);
+    assert.equal(after.consumers.replay, before.consumers.replay);
+    assert.equal(count(after, 'authority', '/authorization/snapshot') - count(before, 'authority', '/authorization/snapshot'), 2);
+    assert.equal(after.events.length - before.events.length, 1);
+  }, true);
+});
+
+test('native private sniff publishes its 8-KiB comment prefix before held first-data authorization', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const before = await settledState(f), prefix = ':' + 'x'.repeat(8192) + '\n\n';
+    const release = async () => { assert.equal((await f.request('https://fixture/fixture/parser-hold', { method: 'DELETE' })).status, 204); };
+    f.releases.push(release);
+    assert.equal((await f.request('https://fixture/fixture/parser-hold', { method: 'POST', body: 'delivery' })).status, 204);
+    const dispatch = f.dispatch('https://fixture/v1/chat/completions', chat('venice', {
+      model: ownedHttpControlModels.venice, ownedVeniceCase: 'compact-comment-prefix', stream: true,
+    }));
+    let held;
+    for (;;) {
+      held = await state(f);
+      if (held.parserHold?.arrived) break;
+      if (held.completed.length > before.completed.length) { await f.take(dispatch); assert.fail('first-data authorization was not held'); }
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(held.consumers.enqueued - before.consumers.enqueued, Buffer.byteLength(prefix));
+    assert.equal(held.consumers.transferred - before.consumers.transferred, 1);
+    assert.equal(held.consumers.acquired - before.consumers.acquired, 1);
+    assert.equal(held.consumers.replay, before.consumers.replay);
+    const response = await f.take(dispatch);
+    assert.equal(response.status, 200); assert.match(response.headers.get('content-type'), /text\/event-stream/);
+    assert.ok(held.charged >= before.charged + 32 * 1024 * 1024);
+    assert.equal(held.completed.length, before.completed.length);
+    await release();
+    assert.equal(await f.take(f.body(response)), prefix + 'data: ' + ownedJsonCodecWire('compact-object128', 'zai-org-glm-5-2') + '\n\ndata: [DONE]\n\n');
+    const after = await settledState(f);
+    assert.equal(count(after, 'authority', '/authorization/snapshot') - count(before, 'authority', '/authorization/snapshot'), 2);
+    assert.equal(after.events.length - before.events.length, 1); assert.equal(after.consumers.live, 0);
   }, true);
 });
 
