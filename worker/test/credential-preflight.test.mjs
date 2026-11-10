@@ -165,27 +165,95 @@ test('closed grammar follows original duplicate/unknown profile; nullish legacy 
   assert.throws(() => advanceIdentitySource(owner, sent, producer, reply), denied);
 });
 
+// Each branch is tagged before a race. A late losing outcome never throws a
+// manufactured error, and an early ORIGINAL rejection is forwarded unchanged.
+async function originalArrival(arrival, outcome, label, consumed) {
+  const result = await Promise.race([
+    arrival.then(() => ({ arrived: true })),
+    outcome.then(value => ({ arrived: false, value })),
+  ]);
+  if (result.arrived) return;
+  consumed();
+  if (result.value.failed) throw result.value.error;
+  throw Error(`premature originating fulfillment before ${label}`);
+}
+
 for (const reason of [undefined, new Error('shared synthetic reason')]) test('original read/FIRST cancel/unlock preserve each independent origin, including shared/undefined', async t => {
   const ticket = PreflightTicket.reserve(), read = deferred(), cancel = deferred(), entered = deferred(), cancelEntered = deferred();
-  let locked = true, cancels = 0, unlocks = 0, done = false, operation;
+  // Even an unprovided producer is observed BEFORE any possible cleanup reject.
+  const readOutcome = tagged(read.promise), cancelOutcome = tagged(cancel.promise);
+  let locked = true, cancels = 0, unlocks = 0, done = false, operation, consumed = false, readProvided = false, cancelProvided = false;
+  let hasPrimary = false, primary, joined = false, cleanupPromise;
+  const assertSourceFailure = result => {
+    if (!result.failed) throw Error('controlled source unexpectedly fulfilled');
+    // Only outcomes from these actually invoked producers are expected faults.
+    if (!readProvided || !cancelProvided || !unlocks) throw result.error;
+    try { assert.ok(result.error instanceof AggregateError); assert.deepEqual(result.error.errors, [reason, reason, reason]); }
+    catch (assertion) { throw new AggregateError([result.error, assertion], 'unexpected source outcome'); }
+  };
+  const cleanup = () => cleanupPromise ??= (async () => {
+    const failures = [];
+    // Release FIRST. Independently join both original producers even when the
+    // operation failed before invoking read/cancel. Their injected rejections
+    // are expected by producer identity, not by matching a reason value.
+    try { read.reject(reason); } catch (error) { failures.push(error); }
+    try { cancel.reject(reason); } catch (error) { failures.push(error); }
+    try {
+      if (operation) {
+        const result = await operation;
+        if (!consumed) {
+          consumed = true;
+          // The normal controlled source failure must preserve all three roots.
+          assertSourceFailure(result);
+        }
+      }
+    } catch (error) { failures.push(error); }
+    await readOutcome; await cancelOutcome;
+    try { ticket.release(); } catch (error) { failures.push(error); }
+    return failures;
+  })();
+  // Registered before invocation; the SAME cleanup is joined, never replayed.
+  t.after(async () => {
+    const failures = await cleanup();
+    if (!joined && failures.length) throw new AggregateError(failures, 'source fixture teardown');
+  });
   const body = { get locked() { return locked; }, getReader(options) {
     assert.equal(options.mode, 'byob');
-    return { read() { entered.resolve(); return read.promise; }, cancel() { cancels++; cancelEntered.resolve(); return cancel.promise; }, releaseLock() { unlocks++; locked = false; throw reason; } };
+    return { read() { readProvided = true; entered.resolve(); return read.promise; }, cancel() { cancelProvided = true; cancels++; cancelEntered.resolve(); return cancel.promise; }, releaseLock() { unlocks++; locked = false; throw reason; } };
   } };
-  t.after(async () => {
-    read.reject(reason); cancel.reject(reason);
-    try { if (operation) { const result = await operation; assert.equal(result.failed, true); assert.ok(result.error instanceof AggregateError); assert.deepEqual(result.error.errors, [reason, reason, reason]); } }
-    finally { ticket.release(); }
-  });
-  operation = tagged(consumePreflightCredential(ticket, async () => body, identitySourceBudget()));
-  void operation.then(() => { done = true; });
-  await entered.promise; read.reject(reason);
-  await Promise.race([cancelEntered.promise, operation.then(() => { throw Error('premature cleanup settlement'); })]);
-  assert.equal(done, false); assert.equal(ticket.bytes, preflightPayloadBytes); assert.equal(cancels, 1); assert.equal(unlocks, 0);
-  cancel.reject(reason); const result = await operation; operation = undefined;
-  assert.equal(result.failed, true); assert.ok(result.error instanceof AggregateError);
-  assert.deepEqual(result.error.errors, [reason, reason, reason]); assert.equal(cancels, 1); assert.equal(unlocks, 1);
-  ticket.release(); assert.equal(ticket.bytes, 0);
+  try {
+    operation = tagged(consumePreflightCredential(ticket, async () => body, identitySourceBudget()));
+    void operation.then(() => { done = true; });
+    await originalArrival(entered.promise, operation, 'read arrival', () => { consumed = true; });
+    read.reject(reason);
+    await originalArrival(cancelEntered.promise, operation, 'FIRST cancellation arrival', () => { consumed = true; });
+    assert.equal(done, false); assert.equal(ticket.bytes, preflightPayloadBytes); assert.equal(cancels, 1); assert.equal(unlocks, 0);
+    cancel.reject(reason); const result = await operation; consumed = true;
+    assertSourceFailure(result); assert.equal(cancels, 1); assert.equal(unlocks, 1);
+  } catch (error) { hasPrimary = true; primary = error; }
+  finally {
+    const failures = await cleanup(); joined = true;
+    if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, 'source fixture cleanup');
+    if (hasPrimary) throw primary;
+  }
+  assert.equal(ticket.bytes, 0);
+});
+
+for (const reason of [undefined, new Error('early originating failure')]) test('source fixture entry forwards early ORIGINAL rejection including undefined', async () => {
+  const arrival = deferred(), original = Promise.reject(reason), outcome = tagged(original);
+  let consumed = 0;
+  try {
+    const result = await tagged(originalArrival(arrival.promise, outcome, 'read arrival', () => { consumed++; }));
+    assert.equal(result.failed, true); assert.equal(result.error, reason); assert.equal(consumed, 1);
+  } finally { arrival.resolve(); await outcome; }
+});
+test('source fixture entry rejects premature originating fulfillment without waiting for an unused arrival', async () => {
+  const arrival = deferred(), outcome = tagged(Promise.resolve('closed before read'));
+  let consumed = 0;
+  try {
+    const result = await tagged(originalArrival(arrival.promise, outcome, 'read arrival', () => { consumed++; }));
+    assert.equal(result.failed, true); assert.match(result.error.message, /premature originating fulfillment before read arrival/); assert.equal(consumed, 1);
+  } finally { arrival.resolve(); await outcome; }
 });
 
 test('late ORIGINAL transport and body cleanup keep ticket until actual settlement; no header retirement', async t => {
