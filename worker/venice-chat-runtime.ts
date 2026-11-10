@@ -9,7 +9,7 @@ import { HttpError } from "./utils.ts";
 import { identityFailure } from "./identity-admission.ts";
 import { checkOwnedHttpVeniceCodec, checkOwnedHttpVeniceResponse, fundOwnedHttpVeniceCodec,
   beginOwnedHttpVeniceSource, ownOwnedHttpVeniceRetirement, startOwnedHttpVeniceCodec, holdOwnedHttpVeniceSource,
-  retireOwnedHttpVeniceBacking, ownedHttpIntakeFailure, finishOwnedHttpIntakeDiagnostics,
+  retireOwnedHttpVeniceBacking, ownedHttpIntakeFailure, finishOwnedHttpIntakeDiagnostics, retireOwnedVeniceReadDiagnostics,
   type OwnedHttpRevalidation, type OwnedHttpRequest, type OwnedHttpIntakeDiagnostics } from "./http-identity-owner.ts";
 import { revalidateOwnedVeniceChat, assertOwnedVeniceChatLive } from "./venice-chat-authority.ts";
 import { acceptOwnedHttpVeniceUsage } from "./proxy.ts";
@@ -370,7 +370,8 @@ class OwnedVeniceSource {
       catch (reason) { this.cleanup.push(this.failure("retire", reason)); holdOwnedHttpVeniceSource(this.state.cap); return; }
       this.body = undefined; this.reader = undefined; this.input = undefined; this.closed = undefined;
       this.response = undefined;
-      this.listener = undefined; this.done = true; this.resolve();
+      this.listener = undefined; this.done = true;
+      retireOwnedVeniceReadDiagnostics(this.diagnostics); this.resolve();
     });
     return this.retired;
   }

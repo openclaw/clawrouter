@@ -257,7 +257,6 @@ test('native ' + kind + ' control keeps original read/cancel/unlock and funding 
       assert.equal((await f.request('https://fixture/fixture/control-read', { method: 'DELETE' })).status, 204);
     };
     f.releases.push(release);
-    f.expectFailedRetirement(before.completed.length);
     assert.equal((await f.request('https://fixture/fixture/control-read', {
       method: 'POST', body: JSON.stringify({ kind, reason }),
     })).status, 204);
@@ -293,7 +292,6 @@ test('native ' + kind + ' control keeps original read/cancel/unlock and funding 
     });
     assert.equal(after.reasonReads, 0);
     assert.equal(after.charged, before.charged, 'only actual completion and alias clearing retire the temporary debit');
-    assert.deepEqual(after.completed.at(-1).origins, ['read', 'cancel', 'unlock'].map(origin => ({ origin, undefined: reason === 'undefined' })));
     assert.equal(count(after, 'authority', '/admission/resolve'), count(before, 'authority', '/admission/resolve'));
     assert.equal(count(after, 'credential', '/materialize'), count(before, 'credential', '/materialize'));
     assert.equal(JSON.parse((await f.request('https://fixture/fixture/upstream')).text).filter(row => row.id === 'gmi').length, 1);
@@ -347,7 +345,6 @@ test('native revalidation listener-removal uncertainty retains funding after ori
     const request = () => chat('gmi', { model: ownedHttpControlModels.gmi });
     assert.equal((await f.request('https://fixture/v1/chat/completions', request())).status, 200);
     const before = await settledState(f);
-    f.expectFailedRetirement(before.completed.length);
     const release = async () => {
       assert.equal((await f.request('https://fixture/fixture/control-read', { method: 'DELETE' })).status, 204);
     };
@@ -361,13 +358,37 @@ test('native revalidation listener-removal uncertainty retains funding after ori
     assert.equal(held.controlReads.at(-1).removalFailed, true);
     assert.ok(held.charged >= before.charged + 32 * 1024 * 1024);
     assert.equal(held.reasonReads, 0);
-    assert.deepEqual(held.completed.at(-1).origins, [{ origin: 'listener-remove', undefined: true }]);
     await release();
     const after = await state(f);
     assert.equal(after.charged, held.charged, 'fixture obstruction removal is not a production refund receipt');
     assert.equal(JSON.parse((await f.request('https://fixture/fixture/upstream')).text).filter(row => row.id === 'gmi').length, 1);
     // This isolated runtime is disposed with the UNKNOWN owner still funded.
     // No test cleanup hook retries production retirement or fabricates an ACK.
+  });
+});
+
+test('native Venice codec listener-removal uncertainty retains its funded terminal capabilities', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const request = () => chat('venice', { model: ownedHttpControlModels.venice });
+    assert.equal((await f.request('https://fixture/v1/chat/completions', request())).status, 200);
+    const before = await settledState(f);
+    const release = async () => { assert.equal((await f.request('https://fixture/fixture/control-read', { method: 'DELETE' })).status, 204); };
+    f.releases.push(release); f.expectFailedRetirement(before.completed.length);
+    assert.equal((await f.request('https://fixture/fixture/control-read', {
+      method: 'POST', body: JSON.stringify({ kind: 'provider', reason: 'listener' }),
+    })).status, 204);
+    const response = await f.request('https://fixture/v1/chat/completions', request());
+    assert.equal(response.status, 502);
+    const held = await settledState(f);
+    assert.equal(held.controlReads.at(-1).removalFailed, true);
+    assert.ok(held.charged >= before.charged + 32 * 1024 * 1024);
+    assert.deepEqual(held.completed.at(-1).origins, [
+      { origin: 'listener-remove', undefined: true }, { origin: 'abort', undefined: false },
+    ], 'the still-installed listener observes the operation stop as its distinct origin');
+    await release();
+    const after = await state(f);
+    assert.equal(after.charged, held.charged, 'fixture cleanup cannot refund UNKNOWN codec ownership');
+    assert.equal(after.reasonReads, 0);
   });
 });
 

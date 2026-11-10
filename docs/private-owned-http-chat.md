@@ -536,12 +536,21 @@ first-authority await before closing or erroring. Abort also errors an idle SSE
 consumer after the original source joins. UNKNOWN retains all relevant backing.
 Neither source EOF, parser completion nor response publication is a release.
 
+Successful intake diagnostic origins now leave their registration maps and root
+vector after their original operations join. This retires application control
+products without refunding payload or source credit. Failed origins remain in
+their original order until the final failure consumer; no reason-value dedup
+occurs. The JSON parse phase retains only output-cancel and final-abort codec
+origins after source retirement. An UNKNOWN listener or borrower keeps the
+remaining diagnostic capabilities as well as backing; final cleanup cannot
+invalidate a callback capability whose removal was not established.
+
 Additional authored witnesses use the real compiled entry and SQLite authority:
-13 Node cases, 13 native cases, and one Venice invocation in the existing pinned
+13 Node cases, 14 native cases, and one Venice invocation in the existing pinned
 OpenClaw UNIFIED client fixture. They include accepted/rejected structural and
 wire edges, escaped Unicode, raw duplicate/unknown preservation, more than 2 MiB
 of SSE, JSON delivery while archive work is held, and post-native held
-cancellation with independent read/cancel/unlock failures. Native negative
+cancellation with independent read/cancel/unlock failures. The codec's negative
 consumers assert fixed ordered origin/presence receipts instead of hiding
 retirement failures behind a successful public error response. These cases
 are authored only; local semantics remain UNRUN_CODE_ONLY_HOSTED.

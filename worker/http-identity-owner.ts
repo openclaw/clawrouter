@@ -95,7 +95,9 @@ let requestCount = 0;
 let sinkOwners: WeakMap<OwnedHttpSinkOwner, RequestOwner> | undefined;
 let sinkFailures: WeakSet<object> | undefined;
 let sinkRegistrations: WeakMap<OwnedHttpSinkRegistration, { owner: RequestOwner; origin: SinkOriginOwner; scope: ProxyCompletion }> | undefined;
-let intakes: WeakMap<OwnedHttpIntakeDiagnostics, { acquire: OwnedHttpFailureOrigin; read: OwnedHttpFailureOrigin; cancel: OwnedHttpFailureOrigin; unlock: OwnedHttpFailureOrigin; listenerAdd: OwnedHttpFailureOrigin; listenerRemove: OwnedHttpFailureOrigin; abort?: OwnedHttpFailureOrigin; pull?: OwnedHttpFailureOrigin; retire?: OwnedHttpFailureOrigin }> | undefined;
+type IntakePhase = "acquire" | "read" | "cancel" | "unlock" | "listenerAdd" | "listenerRemove" | "abort" | "pull" | "retire";
+type IntakeOwner = Partial<Record<IntakePhase, OwnedHttpFailureOrigin>> & { owner: RequestOwner; venice?: true };
+let intakes: WeakMap<OwnedHttpIntakeDiagnostics, IntakeOwner> | undefined;
 
 // The capability has no graph, callback, receiver or mutable public field.
 // It is minted before the first sink acquisition and stays with the request.
@@ -329,7 +331,7 @@ export function beginOwnedHttpVeniceSource(cap: OwnedHttpRevalidation): OwnedHtt
   const abort = beginOwnedHttpFailureOrigin(owner.http, "abort", true);
   const pull = beginOwnedHttpFailureOrigin(owner.http, "pull", true), retire = beginOwnedHttpFailureOrigin(owner.http, "retire", true);
   const receipt = Object.freeze({});
-  (intakes ??= new WeakMap()).set(receipt, { acquire, read, cancel, unlock, listenerAdd, listenerRemove, abort, pull, retire });
+  (intakes ??= new WeakMap()).set(receipt, { owner: root, venice: true, acquire, read, cancel, unlock, listenerAdd, listenerRemove, abort, pull, retire });
   return receipt;
 }
 export function ownOwnedHttpVeniceRetirement(cap: OwnedHttpRevalidation, work: Promise<void>): void {
@@ -833,16 +835,46 @@ export function beginOwnedHttpIntakeDiagnostics(cap: OwnedHttpRequest): OwnedHtt
   const cancel = beginOwnedHttpFailureOrigin(cap, "cancel"), unlock = beginOwnedHttpFailureOrigin(cap, "unlock");
   const listenerAdd = beginOwnedHttpFailureOrigin(cap, "abort"), listenerRemove = beginOwnedHttpFailureOrigin(cap, "abort");
   const receipt = Object.freeze({});
-  (intakes ??= new WeakMap()).set(receipt, { acquire, read, cancel, unlock, listenerAdd, listenerRemove });
+  (intakes ??= new WeakMap()).set(receipt, { owner: requestOwner(cap), acquire, read, cancel, unlock, listenerAdd, listenerRemove });
   return receipt;
 }
-export function ownedHttpIntakeFailure(cap: OwnedHttpIntakeDiagnostics, phase: "acquire" | "read" | "cancel" | "unlock" | "listenerAdd" | "listenerRemove" | "abort" | "pull" | "retire", reason: unknown): object {
-  const receipt = intakes?.get(cap);
-  if (!receipt?.[phase]) throw identityFailure("protocol");
-  return rememberOwnedHttpFailure(receipt[phase], reason);
+export function ownedHttpIntakeFailure(cap: OwnedHttpIntakeDiagnostics, phase: IntakePhase, reason: unknown): object {
+  const origin = intakes?.get(cap)?.[phase];
+  if (!origin) throw identityFailure("protocol");
+  return rememberOwnedHttpFailure(origin, reason);
 }
 export function finishOwnedHttpIntakeDiagnostics(cap: OwnedHttpIntakeDiagnostics): void {
-  if (!intakes?.delete(cap)) throw identityFailure("protocol");
+  const receipt = intakes?.get(cap);
+  if (!receipt) throw identityFailure("protocol");
+  retireIntakeOrigin(receipt, "acquire"); retireIntakeOrigin(receipt, "read");
+  retireIntakeOrigin(receipt, "cancel"); retireIntakeOrigin(receipt, "unlock");
+  retireIntakeOrigin(receipt, "listenerAdd"); retireIntakeOrigin(receipt, "listenerRemove");
+  retireIntakeOrigin(receipt, "abort"); retireIntakeOrigin(receipt, "pull"); retireIntakeOrigin(receipt, "retire");
+  intakes!.delete(cap);
+}
+function retireIntakeOrigin(receipt: IntakeOwner, phase: IntakePhase): void {
+  const cap = receipt[phase]; if (!cap) return;
+  const origin = failureOrigins?.get(cap);
+  // Failed occurrences stay in the root's ordered vector until its final
+  // consumer. Successful origins need no history after their original joins.
+  if (origin && !origin.failed) {
+    const roots = receipt.owner.failures, index = roots.indexOf(origin);
+    if (index < 0) throw identityFailure("protocol");
+    for (let next = index + 1; next < roots.length; next++) roots[next - 1] = roots[next];
+    roots.length--;
+    completedSinkOrigin(receipt.owner, origin.record); failureOrigins!.delete(cap);
+  }
+  receipt[phase] = undefined;
+}
+export function retireOwnedVeniceReadDiagnostics(cap: OwnedHttpIntakeDiagnostics): void {
+  const receipt = intakes?.get(cap);
+  if (!receipt?.venice) throw identityFailure("protocol");
+  // The codec invokes this only AFTER original read/FIRSTcancel/unlock and
+  // active-pull settlement. Output cancellation and final caller abort retain
+  // their distinct prepaid origins through the public output's last consumer.
+  retireIntakeOrigin(receipt, "acquire"); retireIntakeOrigin(receipt, "read");
+  retireIntakeOrigin(receipt, "unlock"); retireIntakeOrigin(receipt, "listenerAdd");
+  retireIntakeOrigin(receipt, "listenerRemove"); retireIntakeOrigin(receipt, "pull"); retireIntakeOrigin(receipt, "retire");
 }
 
 // Fixed public-Response consumer. No identity or prepared payload escapes.
@@ -1088,9 +1120,7 @@ export function finishOwnedHttpRequest(cap: OwnedHttpRequest): Promise<void> {
     if (owner.sinkCustody) { owner.sinkCustody.seal(); await owner.sinkCustody.completion; }
     for (const origin of owner.failures) {
       if (origin.failed) failures.push(origin.carrier);
-      origin.carrier = undefined; failureOrigins!.delete(origin.cap);
     }
-    owner.failures.length = 0;
     if (!owner.unknown) {
       if (owner.abortListener) {
         try { owner.request!.signal.removeEventListener("abort", owner.abortListener); if (owner.abortRemoval) completedSinkOrigin(owner, owner.abortRemoval); }
@@ -1130,6 +1160,11 @@ export function finishOwnedHttpRequest(cap: OwnedHttpRequest): Promise<void> {
       if (!owner.unknown) try { retireOwnedHttpIdentity(cap); } catch (error) { owner.unknown = true; failures.push(error); }
     }
     if (!owner.unknown) {
+      // Only actual last-consumer clearance retires diagnostic capabilities.
+      // A failed listener removal may leave a live callback even after the
+      // current original body has joined; UNKNOWN keeps those caps funded.
+      for (const origin of owner.failures) { origin.carrier = undefined; failureOrigins!.delete(origin.cap); }
+      owner.failures.length = 0;
       owner.uploads.length = 0; owner.request = undefined; owner.env = undefined;
       if (owner.sink) sinkOwners!.delete(owner.sink);
       if (owner.sinkOrigins) for (const origin of owner.sinkOrigins.values()) sinkFailures!.delete(origin);
