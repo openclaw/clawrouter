@@ -11,7 +11,7 @@ import { runContractAgent, runSingleDraft, runRefinedDraft } from './fusion-cont
 export const pairDefaults = Object.freeze({ cheap: 'openai/gpt-6-luna', strong: 'openai/gpt-6.1-sol',
   maxCalls: 12, outputTokens: 8192, deadlineMs: 300000, trialBudgetMicros: 1000000,
   campaignBudgetMicros: 100000000, priorCostMicros: 0 });
-const strategies = ['cheap', 'strong', 'architect'];
+const strategies = ['cheap', 'strong', 'architect', 'cheap-plan'];
 const providedPolicies = ['contract-provided', 'contract-draft', 'contract-refine', 'contract-provided-cheap', 'contract-provided-strong'];
 const contractPolicies = ['contract', 'contract-cheap', 'contract-strong', 'contract-private', ...providedPolicies];
 
@@ -40,26 +40,28 @@ export function pairModel(strategy, role, config) {
   if (['contract-strong', 'contract-provided-strong'].includes(strategy)) return config.strong;
   if (contractPolicies.includes(strategy)) return role === roles.cheap ? config.cheap : config.strong;
   if (!strategies.includes(strategy)) throw new Error('invalid_pair_strategy');
+  if (strategy === 'cheap-plan') return role === roles.cheap ? config.cheap : config.strong;
   return strategy === 'strong' || (strategy === 'architect' && role === roles.cheap) ? config.strong : config.cheap;
 }
 
 // One planner call is deducted from the same total call allowance as each control.
 export function pairExecution(strategy, config) {
   if (!strategies.includes(strategy)) throw new Error('invalid_pair_strategy');
-  return { strategy: strategy === 'architect' ? 'planned' : 'strong',
-    settings: { maxTurns: config.maxCalls - Number(strategy === 'architect'),
+  const planned = ['architect', 'cheap-plan'].includes(strategy);
+  return { strategy: planned ? 'planned' : 'strong',
+    settings: { maxTurns: config.maxCalls - Number(planned),
       outputTokens: config.outputTokens, deadlineMs: config.deadlineMs } };
 }
 
 export async function runPairBenchmark({ repo, qualificationPath, taskManifest, out, sourceSha, config,
   cheapReasoning = 'none', cheapMaxCalls = 10, executor = 'interactive', preloadSource = false, policy = 'architect', includeControls = true, controlsOnly = false, env = process.env, fetcher = fetch, agent, contractAgent = runContractAgent, grade = verify, preflight = nativePins }) {
   if (!/^[a-f0-9]{40}$/.test(sourceSha ?? '')) throw new Error('exact_source_required');
-  if (!['architect', 'scope', ...contractPolicies].includes(policy)) throw new Error('invalid_pair_policy');
+  if (!['architect', 'cheap-plan', 'scope', ...contractPolicies].includes(policy)) throw new Error('invalid_pair_policy');
   if (!['interactive', 'single-draft'].includes(executor) || (executor === 'single-draft' && !providedPolicies.includes(policy))) throw new Error('invalid_pair_executor');
   agent ??= executor === 'single-draft' ? runSingleDraft : runAgent;
   if (typeof includeControls !== 'boolean' || typeof controlsOnly !== 'boolean'
     || (controlsOnly && !includeControls) || (!includeControls && !contractPolicies.includes(policy))) throw new Error('invalid_control_selection');
-  if (policy !== 'architect') preloadSource = true;
+  if (!['architect', 'cheap-plan'].includes(policy)) preloadSource = true;
   if (!controlsOnly && contractPolicies.includes(policy) && config.maxCalls < 4) throw new Error('contract_requires_four_calls');
   const trialStrategies = controlsOnly ? ['cheap', 'strong'] : includeControls ? ['cheap', 'strong', policy] : [policy];
   const tasks = await loadTasks(taskManifest);

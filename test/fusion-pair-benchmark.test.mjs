@@ -43,6 +43,35 @@ test('architect spends one of the shared calls on the strong planner', () => {
   for (const count of [0, 4, 1.5, '2']) assert.throws(() => validatePair(config, 1, count), /campaign_budget/);
 });
 
+test('cheap-plan reverses planner and executor models within the shared allowance', async () => {
+  const { root, options } = await fixture();
+  try {
+    const seen = [];
+    const state = await runPairBenchmark({ ...options, policy: 'cheap-plan', preloadSource: true,
+      grade, fetcher: success,
+      agent: async (_task, _image, strategy, id, settings, invoke, _unused, agentOptions) => {
+        seen.push({ strategy, maxTurns: settings.maxTurns, preloadSource: agentOptions.preloadSource });
+        if (strategy === 'planned') await invoke(id, roles.cheap, body, signal);
+        await invoke(id, strategy === 'planned' ? roles.critic : roles.strong, body, signal);
+        return repaired();
+      },
+    });
+    assert.deepEqual(state.strategies, ['cheap', 'strong', 'cheap-plan']);
+    assert.deepEqual(seen, [
+      { strategy: 'strong', maxTurns: 3, preloadSource: true },
+      { strategy: 'strong', maxTurns: 3, preloadSource: true },
+      { strategy: 'planned', maxTurns: 2, preloadSource: true },
+    ]);
+    assert.deepEqual(state.calls.map(call => call.model), [config.cheap, config.strong, config.cheap, config.strong]);
+    const candidate = state.records.find(row => row.strategy === 'cheap-plan');
+    assert.equal(candidate.calls, 2);
+    assert.equal(candidate.costMicros, state.calls.slice(2).reduce((sum, call) => sum + call.costMicros, 0));
+    assert.equal(state.spentOrReservedMicros, config.priorCostMicros + state.calls.reduce((sum, call) => sum + call.costMicros, 0));
+    assert.equal(analyzePairRun(state).candidate, 'cheap-plan');
+    assert.ok(!JSON.stringify(state).includes('sentinel'));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('fixed controls receive identical supplied context without invoking or budgeting a candidate', async () => {
   const { root, options } = await fixture();
   try {
