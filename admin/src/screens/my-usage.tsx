@@ -180,15 +180,11 @@ export function PersonalUsageSummary({ data, onOpen, keys = [] }: { data: Person
 
 function UsageControls({ query, onChange, onRefresh, onClear, onPreset, loading }: { query: PersonalUsageQuery; onChange: (query: PersonalUsageQuery) => void; onRefresh: () => void; onClear: () => void; onPreset:(days:7|30,draft:PersonalUsageQuery)=>void; loading: boolean }) {
   const [draft, setDraft] = useState(query);
-  const [error, setError] = useState('');
   useEffect(() => setDraft(query), [query]);
-  const apply = (next: PersonalUsageQuery) => { setError(''); setDraft(next); onChange(next); };
+  const apply = (next: PersonalUsageQuery) => { setDraft(next); onChange(next); };
   const setFilter = (key: keyof PersonalUsageQuery['filters'], value: string) => setDraft({ ...draft, filters: { ...draft.filters, [key]: value } });
   function submit(event: FormEvent) {
     event.preventDefault();
-    if ((!draft.rollingDays && (!draft.from || !draft.to)) || !draft.timezone.trim()) { setError('Start, end and timezone are required.'); return; }
-    if (!draft.rollingDays && (![draft.from,draft.to].every(value=>/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/.test(value)&&Number.isSafeInteger(Date.parse(value))) || Date.parse(draft.from)>=Date.parse(draft.to))) { setError('Use a positive interval with RFC3339 start and end instants.'); return; }
-    setError('');
     onChange(draft);
   }
   return <form className="dashboardPanel personalControls" aria-label="Usage filters" onSubmit={submit}>
@@ -204,7 +200,7 @@ function UsageControls({ query, onChange, onRefresh, onClear, onPreset, loading 
     </select></label>
     <details className="personalAdvanced">
       <summary>Custom dates & exact filters</summary>
-      <p className="personalNote">Start/end accept RFC3339 instants with Z or an explicit UTC offset. End is exclusive. Maximum 30 days; server-confirmed boundaries appear below.</p>
+      <p className="personalNote">Start/end accept YYYY-MM-DD in the chosen IANA timezone, or RFC3339 instants with Z or an explicit UTC offset. End is exclusive. Maximum 30 days; server-confirmed boundaries appear below.</p>
       <div className="personalFilterGrid">
         <label>Start<input value={draft.from} onChange={event => setDraft({ ...draft, from: event.target.value, rollingDays: undefined })} required={!draft.rollingDays} /></label>
         <label>End (exclusive)<input value={draft.to} onChange={event => setDraft({ ...draft, to: event.target.value, rollingDays: undefined })} required={!draft.rollingDays} /></label>
@@ -226,7 +222,6 @@ function UsageControls({ query, onChange, onRefresh, onClear, onPreset, loading 
         <button type="submit">Apply filters</button>
         <button type="button" className="buttonSecondary" onClick={onClear}>Clear filters</button>
       </div>
-      {error ? <p role="alert">{error}</p> : null}
     </details>
   </form>;
 }
@@ -438,7 +433,7 @@ export function MyUsageScreen({ data, keys: currentKeys = [] }: { data: Personal
     return <UsageDetails value={value} query={query} setQuery={setQuery} keys={keys} data={data} />;
   }
   return <div className="personalUsageCanvas">
-    <UsageControls query={query} onChange={setQuery} onRefresh={data.reload} onPreset={data.choosePreset} onClear={()=>{const q=data.complete?.query??data.complete?.requestedQuery;if(q){const next={...q,filters:{},rankOffset:0};if(data.report.error)data.complete.newRange(next);else data.refine(next);}}} loading={report.loading} />
+    <UsageControls query={query} onChange={setQuery} onRefresh={data.reload} onPreset={data.choosePreset} onClear={data.clearFilters} loading={report.loading} />
     <PersonalUsageSummary data={data} keys={keys} />
     {data.complete?.query ? <div className="personalActions"><button type="button" onClick={data.back}>Back to base</button><label>Grain<select value={data.complete.query.grain} onChange={event=>data.refine({...data.complete.query!,grain:event.target.value as 'day'|'minute',rankOffset:0})}><option value="day">Day</option><option value="minute">Minute (up to 24 hours)</option></select></label><label>Current own-key selector<select value={data.complete.query.filters.key?.kind === 'session' ? 'session' : data.complete.query.filters.key?.kind === 'credential' ? 'key:'+data.complete.query.filters.key.id : ''} onChange={event=>{const q=data.complete.query!,filters={...q.filters};delete filters.key;if(event.target.value==='session')filters.key={kind:'session'};else if(event.target.value)filters.key={kind:'credential',id:event.target.value.slice(4)};data.refine({...q,filters,rankOffset:0});}}><option value="">All keys in base</option><option value="session">Dashboard session</option>{data.complete.query.filters.key?.kind==='credential'&&!currentKeys.some(k=>k.credentialId===(data.complete.query!.filters.key as {id:string}).id)?<option value={'key:'+data.complete.query.filters.key.id}>Retained key: {data.complete.query.filters.key.id} (not in current own-key list)</option>:null}{currentKeys.map(key=><option key={key.credentialId} value={'key:'+key.credentialId}>{key.name?'Current name: '+key.name+' — ':''}{key.credentialId}</option>)}</select></label></div> : null}
     <div className="personalTabList" role="tablist" aria-label="Personal usage views" onKeyDown={moveFocus}>

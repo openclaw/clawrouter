@@ -125,3 +125,19 @@ test('admin zero, missing values, retained identities, exact remainder and stale
  d.eventsShown=true;d.events.error='Refresh required (410)';html=renderToStaticMarkup(createElement(CompleteUsageScreen,{data:d}));assert.match(html,/Old displayed report; Refresh required/);assert.match(html,/not a current usable snapshot/);
  for(const error of ['No current access','Outside retained range','Usage capacity unavailable']){const failed={...d,report:{loading:false,error},query:undefined};html=renderToStaticMarkup(createElement(CompleteUsageScreen,{data:failed}));assert.ok(html.includes(error));assert.doesNotMatch(html,/No calls in discovered locations for this range/);}
 });
+
+test('invalid original calendar input remains visible as an alert with no report or full export',()=>{
+ const input={from:'2026-02-30T00:00:00Z',to:'2026-03-01T00:00:00Z',timezone:'UTC'},state={loading:false,error:'Invalid calendar date.',state:'invalid_range'};
+ const d=completeData({},'admin');d.requestedQuery=d.query;d.query=undefined;d.rangeInput=input;d.report=state;
+ let html=renderToStaticMarkup(createElement(CompleteUsageScreen,{data:d}));
+ assert.ok(html.includes('<div role="alert"><p>Invalid calendar date.</p>'));assert.ok(html.includes('value="'+input.from+'"'));assert.doesNotMatch(html,/No calls in discovered locations/);
+ assert.doesNotMatch(html,/Export refreshed snapshot JSON/);
+ const p={...personalData(),query:{...data().query,...input,rollingDays:undefined},report:state,complete:{...d,audience:'personal'}};
+ html=renderToStaticMarkup(createElement(MyUsageScreen,{data:p}));assert.ok(html.includes('<div role="alert"><p>Invalid calendar date.</p>'));assert.ok(html.includes('value="'+input.from+'"'));assert.doesNotMatch(html,/No calls in discovered locations/);
+ assert.ok(html.includes('<button type="button" disabled="">Export refreshed snapshot JSON</button>'));
+});
+test('admin selected controls are distinct from disclosed effective retention bounds',()=>{
+ const d=completeData({},'admin');d.selectedQuery={...d.query,from:500};d.report.value.coverage.clippedFrom=500;
+ const html=renderToStaticMarkup(createElement(CompleteUsageScreen,{data:d}));
+ assert.ok(html.includes('value="1970-01-01T00:00:00.500Z"'));assert.match(html,/Start clipped/);assert.ok(html.includes('1970-01-01T00:00:01.000Z'));
+});
