@@ -48,13 +48,26 @@ The pressure is in the domain model:
 | Grant transport overrides | OpenAI and Anthropic manifests | A distinct product's endpoint, auth, and lifecycle hide inside credential-kind overrides. |
 | One provider connection key | `ProviderConnection.providerId`; `worker/provider-connections.ts` | No explicit identity for two projects/accounts of the same provider. |
 | Model metadata beside execution rules | Provider `models.entries` | The catalogue and router can drift on names, limits, reasoning, and prices. |
-| Model type aliases a client DTO | `CompiledModel = ClientCatalogModel` | Internal execution facts are coupled to the public projection. |
+| Model type ownership (resolved) | `shared/provider-model.ts` | Compiled models and client DTOs share model facts without making the client response the execution contract. |
 | Provider logic in discovery | `supportsHostedSearch` in `worker/discovery.ts` | Discovery must know implementation-specific qualifications. |
 | Central logo registry | `scripts/sync-provider-icons.mjs` | Adding a provider also requires editing an unrelated branding map. |
 
 This is not a proposal to replace tested protocol or accounting code wholesale.
 It moves facts to their owners and puts a compiler between declarations and the
 hot path.
+
+### Model contract ownership
+
+`shared/provider-model.ts` owns `ProviderModelDefinition` and the router-qualified
+pricing types. `CompiledModel` refers to that definition directly. The client
+`ClientCatalogModel` projection currently extends the same fields, preserving the
+v1 response shape and existing type imports from `shared/contracts.ts`.
+
+This separation gives future catalogue import and client presentation changes
+an explicit boundary. It does not turn router price qualification into a public
+catalogue fact, change price units, or establish execution eligibility. The
+provider snapshot still imports account observation types from the existing
+contracts module; that remaining boundary is separate work.
 
 ## 3. Vocabulary and identities
 
