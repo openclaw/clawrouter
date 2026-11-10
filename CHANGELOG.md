@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Exclude Anthropic grants with exhausted prepaid credit for five minutes and retry one eligible same-provider grant before delivery, preserving healthy session stickiness and scoped quota state.
 - Run Fusion native fixture dependencies from the read-only image and include public CA roots for workerd startup, retaining the isolated noexec workspace.
 - Add Fusion follow-up workloads for bounded grant-usage reports and MiniMax Music credential admission, with resource and runtime acceptance checks.
 - Add a matched strong-successor control for the Fusion handoff benchmark to separate model-selection gains from verification-protocol changes.

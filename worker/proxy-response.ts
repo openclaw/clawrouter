@@ -168,6 +168,32 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   return { response: new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers }), result, retired };
 }
 
+// Inspect only a bounded error prefix and replay it through the original reader.
+// Oversized, fragmented or malformed errors retain their original wire response.
+export async function inspectJsonError(response: Response, operation: HttpOperation): Promise<{ response: Response; body?: string }> {
+  if (!response.body) return { response };
+  const reader = response.body.getReader(), chunks: Uint8Array[] = [];
+  const decoder = new TextDecoder();
+  let bytes = 0, body = "", done = false;
+  try {
+    for (let reads = 0; reads < 128; reads++) {
+      const next = await operation.wait(reader.read());
+      done = next.done;
+      if (done) return { response: replayResponse(response, reader, chunks, true), body: body + decoder.decode() };
+      chunks.push(next.value);
+      bytes += next.value.byteLength;
+      if (bytes > 64 * 1024) break;
+      body += decoder.decode(next.value, { stream: true });
+    }
+  } catch {
+    if (operation.signal.aborted) {
+      void reader.cancel(operation.signal.reason).catch(() => undefined); reader.releaseLock();
+      operation.signal.throwIfAborted();
+    }
+  }
+  return { response: replayResponse(response, reader, chunks, done) };
+}
+
 export async function normalizePreStreamError(response: Response, streamingRequested: boolean, operation = new HttpOperation(), native?: NativeErrorContext): Promise<Response> {
   if (!streamingRequested) return response;
   const eventStream = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream") === true;
