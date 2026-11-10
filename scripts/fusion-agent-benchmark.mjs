@@ -162,6 +162,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
   let handoffProbe = '';
   let handoffProbeUsed = false;
   let handoffMessage;
+  let handoffHasProbe = false;
   let taskContext;
   let outcome = 'turn_limit', escalated = false, forceEscalation = false, turns = 0, invalidActions = 0, toolMs = 0, publicPassed = false, adviserFailures = 0, truncationRetries = 0;
   const remaining = () => Math.max(1, config.deadlineMs - Math.ceil(performance.now() - started));
@@ -176,6 +177,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
     handoffMessage = { role: 'user', content:
       `You are taking over an attempted repair. Independently inspect and test the current source against the task. Do not trust the predecessor's conclusion; preserve correct changes and repair remaining defects.\nPrevious notes (unverified):\n${memory}${handoffProbe}\nCurrent source:\n${JSON.stringify(files)}` };
     messages.splice(2, messages.length - 2, handoffMessage);
+    handoffHasProbe = Boolean(handoffProbe);
     memory = ''; handoffUsed = true;
     actions.push({ turn: turns + 1, action: 'handoff', status: 'ok' });
   };
@@ -228,7 +230,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
         }
         response = await invoke(trialId, model, request, deadline);
         requireCompleteResponse(response);
-        if (handoffUsed && handoffProbe && context.includes(handoffMessage)) handoffProbeUsed = true;
+        if (handoffUsed && handoffHasProbe && context.includes(handoffMessage)) handoffProbeUsed = true;
       } catch (error) {
         if (error.message === 'provider_truncated' && truncationRetries === 0
           && turns + 1 < config.maxTurns && !deadline.aborted) {

@@ -82,16 +82,17 @@ test('edit handoff waits for passing visible checks and transfers current source
         assert.ok(body.messages[1].content.includes(task.instruction));
         assert.ok(body.messages[1].content.includes(task.visibleTests[0]));
       }
-      const action = turn === 2 ? { action: 'finish', paths: [], edits: [], query: '', memory: '' }
+      const action = turn >= 2 ? { action: turn === 2 ? 'probe' : 'finish', paths: [], edits: [], query: turn === 2 ? 'console.log(1)' : '', memory: '' }
         : { action: 'edit', paths: [], query: '', memory: turn ? 'ready for independent verification' : 'repair failing check',
           edits: [{ path: task.editPaths[0], search: turn ? broken : original, replace: turn ? repaired : broken }] };
       return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(action) } }] };
     }, undefined, { handoffAfterEdit: true, preloadSource: true });
-  assert.deepEqual(roles, ['openai/gpt-6.1-sol', 'openai/gpt-6.1-sol', 'anthropic/claude-sonnet-5.5']);
+  assert.deepEqual(roles, ['openai/gpt-6.1-sol', 'openai/gpt-6.1-sol', 'anthropic/claude-sonnet-5.5', 'anthropic/claude-sonnet-5.5']);
+  assert.equal(result.handoffProbeUsed, false);
   assert.equal(result.handoffUsed, true);
   assert.equal(result.publicPassed, true);
   assert.equal(result.files[0].content, repaired);
-  assert.deepEqual(result.actions.map(action => action.action), ['edit', 'edit', 'handoff', 'finish']);
+  assert.deepEqual(result.actions.map(action => action.action), ['edit', 'edit', 'handoff', 'probe', 'finish']);
 });
 
 for (const oversized of [false, true]) test(`edit handoff carries only the latest bounded executed probe: oversized=${oversized}`, {
