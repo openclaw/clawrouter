@@ -137,11 +137,26 @@ for (const id of ["groq", "mistral"]) {
     assert.equal(response.status, 499); await response.text(); assert.equal(canceled, true); assert.equal(f.sent.length, 1); await settled(f);
   });
 
-  test(`${id} upstream deadline cancels the physical reader and retains dispatched cost`, async t => {
-    const f = await setup(t, id); f.provider.endpoints.find(item => item.id === "transcription").timeout_ms = 20;
-    let canceled = false;
-    f.upstream = () => new Response(new ReadableStream({ pull() {}, cancel() { canceled = true; } }, { highWaterMark: 0 }), { headers: { "content-type": "application/json" } });
-    const response = await f.request(); assert.equal(response.status, 504); await response.text();
+  test(`${id} upstream deadline cancels the physical reader and retains dispatched cost`, { timeout: 5000 }, async t => {
+    const caller = new AbortController(); let pending;
+    t.after(async () => {
+      caller.abort();
+      if (pending) { const response = await pending; if (!response.bodyUsed) await response.body?.cancel(); }
+    });
+    const f = await setup(t, id), timeoutMs = 17777, reached = Promise.withResolvers();
+    f.provider.endpoints.find(item => item.id === "transcription").timeout_ms = timeoutMs;
+    const setTimer = globalThis.setTimeout; let deadline, canceled = false;
+    t.mock.method(globalThis, "setTimeout", (callback, delay, ...args) => {
+      if (delay === timeoutMs) { assert.equal(deadline, undefined); deadline = () => callback(...args); }
+      return setTimer(callback, delay, ...args);
+    });
+    f.upstream = () => new Response(new ReadableStream({ pull() { reached.resolve(); }, cancel() { canceled = true; } }, { highWaterMark: 0 }), { headers: { "content-type": "application/json" } });
+    pending = f.request(form(id), { signal: caller.signal });
+    await Promise.race([reached.promise, pending.then(() => { throw Error("request settled before the upstream read"); })]);
+    // Exercise the real deadline callback after reader acquisition, not a race
+    // between a short wall-clock budget and unrelated upload/admission work.
+    assert.equal(f.sent.length, 1); assert.equal(typeof deadline, "function"); deadline();
+    const response = await pending; assert.equal(response.status, 504); await response.text();
     assert.equal(canceled, true); assert.equal(f.sent.length, 1); await settled(f);
   });
 
