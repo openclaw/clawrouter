@@ -19,8 +19,23 @@ async function cleanupNativeInvocation({ releases, releasePressure, joinRoots, f
   return failures;
 }
 
+// Assertion consumer shared with the native negative cases. Validation is an
+// additional origin; it must not replace any already-joined invocation outcome.
+function validateNativeTeardown({ teardownReached, hasPrimary, primary, teardownReason, failures, nativePrefetchRows, charged, baseline }) {
+  const check = (ok, label) => { if (!ok) throw Error(label); };
+  try {
+    check(teardownReached && hasPrimary && primary === teardownReason, 'expected primary presence');
+    check(failures.length === 2 && failures.every(error => error === teardownReason), 'independent gate and pressure failures preserved');
+    check(nativePrefetchRows.length === 1 && nativePrefetchRows.every(row => row.byob && row.read > 0 && row.eof && row.unlock && row.backing <= 16384), 'all actual read/unlock roots joined');
+    check(charged === baseline, 'early failure retires last actual consumer');
+  } catch (validationFailure) {
+    throw new AggregateError(hasPrimary ? [primary, ...failures, validationFailure] : [...failures, validationFailure], 'native teardown validation outcomes');
+  }
+}
+
 const router = String.raw`
 ${cleanupNativeInvocation.toString()}
+${validateNativeTeardown.toString()}
 import {PolicyBindingIndexObject as Base} from './worker/authority.ts';
 export {BudgetLedgerObject,UsageLedgerObject,GrantCredentialObject} from './worker/index.ts';
 import {preflightCredential,releaseCredentialPreflight,prepareCredentialGeneration,completeCredentialGeneration,completeConsumableCredentialGeneration,authenticateCredentialGeneration,selectCredentialGeneration,flushCredentialGenerationRuntime,queueCredentialGenerationRuntime,retainCredentialGenerationHint,prepareCredentialGenerationPrefetch,adoptCredentialGenerationDestination,borrowCredentialGeneration,evictCredentialGeneration} from './worker/credential-preflight.ts';
@@ -299,11 +314,9 @@ export default {async fetch(request,env){
   disposals:[...deepPending.map(cap=>()=>cap.dispose()),()=>destinationBorrow?.dispose(),()=>secondSelected?.dispose(),()=>secondAuth?.dispose(),()=>secondBorrow?.dispose(),()=>hint?.dispose(),()=>{if(selected&&!selected.flush.accepted)selected.flush.pending?.dispose();},()=>selected?.dispose(),()=>auth?.dispose(),()=>borrow?.dispose(),()=>prep?.dispose(),()=>{if(proof)releaseCredentialPreflight(proof);}]
  });
  if(teardownProbe){
-  check(teardownReached&&hasPrimary&&primary===teardownReason,'expected primary presence');
-  check(failures.length===2&&failures.every(error=>error===teardownReason),'independent gate and pressure failures preserved');
-  check(nativePrefetchRows.length===1&&nativePrefetchRows.every(row=>row.byob&&row.read>0&&row.eof&&row.unlock&&row.backing<=16384),'all actual read/unlock roots joined');
-  check(bodyBudgetCharged()===baseline,'early failure retires last actual consumer');
-  return Response.json({mode,charged:bodyBudgetCharged(),cleanupFailures:failures.length,primaryIsUndefined:primary===undefined,originalJoined:true});
+  const charged=bodyBudgetCharged();
+  validateNativeTeardown({teardownReached,hasPrimary,primary,teardownReason,failures,nativePrefetchRows,charged,baseline});
+  return Response.json({mode,charged,cleanupFailures:failures.length,primaryIsUndefined:primary===undefined,originalJoined:true});
  }
  if(failures.length)throw new AggregateError(hasPrimary?[primary,...failures]:failures,'owned native roots');if(hasPrimary)throw primary;
  if(!cohortPrepare)check(bodyBudgetCharged()===baseline,'last actual consumer funding');
@@ -355,6 +368,46 @@ for (const primary of [undefined, new Error('fixture shared cleanup failure')]) 
   assert.equal(evicted, true); assert.equal(disposed, true); assert.equal(reads, 1);
   const outcome = new AggregateError([primary, ...failures], 'primary and four independent origins');
   assert.equal(outcome.errors.length, 5); for (const error of outcome.errors) assert.equal(error, primary);
+  assert.deepEqual(await owned.join(), []);
+});
+
+for (const primary of [undefined, new Error('fixture shared late original')]) test('native negative consumer retains an unexpected joined original failure: ' + (primary === undefined ? 'undefined' : 'shared'), async () => {
+  const originalFailure = primary === undefined ? new Error('fixture late original failure') : primary;
+  let resolveFetch, reads = 0, disposed = false;
+  const fetch = new Promise(resolve => { resolveFetch = resolve; }), response = new Response('late original');
+  const owned = nativeFixtureRoots(() => fetch);
+  response.text = () => { reads++; return Promise.reject(originalFailure); };
+  owned.dispatch('https://fixture/unexpected-late-original');
+  const failures = await cleanupNativeInvocation({
+    releases: [() => { resolveFetch(response); throw primary; }], releasePressure() { throw primary; },
+    joinRoots: owned.join, flush() {}, evictions: [], disposals: [() => { disposed = true; }],
+  });
+  assert.equal(reads, 1); assert.equal(disposed, true);
+  assert.throws(() => validateNativeTeardown({ teardownReached: true, hasPrimary: true, primary, teardownReason: primary,
+    failures, nativePrefetchRows: [], charged: 0, baseline: 0 }), error => {
+    assert.ok(error instanceof AggregateError); assert.equal(error.errors.length, 5);
+    assert.equal(error.errors[0], primary); assert.equal(error.errors[1], primary); assert.equal(error.errors[2], primary);
+    assert.equal(error.errors[3], originalFailure); assert.equal(error.errors[4].message, 'independent gate and pressure failures preserved'); return true;
+  });
+  assert.deepEqual(await owned.join(), []);
+});
+
+for (const primary of [undefined, new Error('fixture unexpected pre-hold failure')]) test('native negative consumer retains a pre-hold primary and independent cleanup: ' + (primary === undefined ? 'undefined' : 'error'), async () => {
+  const cleanupFailure = new Error('fixture pre-hold cleanup failure');
+  let resolveFetch, reads = 0;
+  const fetch = new Promise(resolve => { resolveFetch = resolve; }), response = new Response('pre-hold original');
+  const owned = nativeFixtureRoots(() => fetch);
+  response.text = () => { reads++; return Promise.reject(cleanupFailure); };
+  owned.dispatch('https://fixture/unexpected-pre-hold');
+  const failures = await cleanupNativeInvocation({ releases: [() => resolveFetch(response)], releasePressure() {},
+    joinRoots: owned.join, flush() {}, evictions: [], disposals: [] });
+  assert.equal(reads, 1);
+  assert.throws(() => validateNativeTeardown({ teardownReached: false, hasPrimary: true, primary, teardownReason: undefined,
+    failures, nativePrefetchRows: undefined, charged: 0, baseline: 0 }), error => {
+    assert.ok(error instanceof AggregateError); assert.equal(error.errors.length, 3);
+    assert.equal(error.errors[0], primary); assert.equal(error.errors[1], cleanupFailure);
+    assert.equal(error.errors[2].message, 'expected primary presence'); return true;
+  });
   assert.deepEqual(await owned.join(), []);
 });
 

@@ -426,7 +426,7 @@ requests, response bodies and release-first fixture control are joined.
 ## Authored qualification
 
 The source declares 48 focused Node cases, 19 named native modes plus one
-cross-request cohort scenario, and four host late-body/cleanup cases. These are
+cross-request cohort scenario, and eight host late-body/cleanup consumer cases. These are
 authored counts, not executed results.
 
 The new Node fixture covers real SQLite and byte-KV generation hydration,
