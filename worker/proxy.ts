@@ -1,6 +1,8 @@
 import { ProxyCompletion } from "./proxy-completion.ts";
 import { isIdentityFailure, identityFailure } from "./identity-admission.ts";
-import { beginOwnedHttpUpload, checkOwnedHttpRequest, checkOwnedHttpUpload, abandonOwnedHttpUpload, growOwnedHttpRequest,
+import { beginOwnedHttpUpload, checkOwnedHttpRequest, checkOwnedHttpUpload, abandonOwnedHttpUpload, growOwnedHttpRequest, ownedHttpSinkOwner, ownedHttpProviderFetch, ownedHttpSignal, cancelOwnedHttpResponse,
+  beginOwnedHttpIntakeDiagnostics, ownedHttpIntakeFailure, finishOwnedHttpIntakeDiagnostics,
+  beginOwnedHttpSinkRegistration, completeOwnedHttpSinkRegistration, abandonUnstartedOwnedHttpRegistration,
   ownedHttpCompletion, holdOwnedHttpRequest, dispatchOwnedHttpUpload, ownOwnedHttpResponse,
   type OwnedHttpRequest, type OwnedHttpUpload } from "./http-identity-owner.ts";
 import { providerConfigurationList } from "./provider-connections.ts";
@@ -191,7 +193,7 @@ export async function acceptOwnedHttpConfiguredProvider(cap: OwnedHttpRequest, r
       undefined, "http", false, undefined, undefined, undefined, preparation, { cap, upstream });
     void original.then(() => undefined, () => undefined);
     prepared = await original;
-    request.signal.throwIfAborted(); invocation.identity = identity; invocation.prepared = prepared;
+    ownedHttpSignal(cap).throwIfAborted(); invocation.identity = identity; invocation.prepared = prepared;
     (ownedPreparedSelections ??= new WeakMap()).set(prepared, selected);
     if (invocation.upload) (ownedPreparedUploads ??= new WeakMap()).set(prepared, invocation.upload);
   } finally { original = undefined; prepared = undefined; upstream = undefined as never; identity = undefined as never; }
@@ -474,18 +476,22 @@ function ownedHttpJsonDataBytes(text: string): number {
 
 // Same public JSON grammar/thresholds as readJson, with explicit ORIGINAL
 // request read/FIRSTcancel/unlock ownership instead of fire-and-forget cleanup.
+const ownedIntakeNativeCancel = ReadableStreamBYOBReader.prototype.cancel;
 async function readOwnedHttpJson(cap: OwnedHttpRequest, request: Request, admission: JsonAdmission): Promise<unknown> {
   // Original BYOB request/backing, returned view, decoder slice and copying
   // overlap are funded before the first reader/read or authentication await.
   growOwnedHttpRequest(cap, 131072);
+  const diagnostics = beginOwnedHttpIntakeDiagnostics(cap);
   return ownedHttpCompletion(cap).start(async () => {
     const tooLarge = () => new HttpError(413, "request_too_large", `JSON request body exceeds the ${maxMediaJsonBodyBytes} byte limit`);
     const body = request.body;
-    if (!body) throw new HttpError(400, "invalid_json", "request body must be valid JSON");
+    if (!body) { finishOwnedHttpIntakeDiagnostics(diagnostics); throw new HttpError(400, "invalid_json", "request body must be valid JSON"); }
     let reader: ReadableStreamBYOBReader | undefined;
     let originalRead: Promise<ReadableStreamReadResult<Uint8Array>> | undefined;
     let firstCancel: Promise<void> | undefined, cancelOutcome: Promise<{ failed: boolean; error?: unknown }> | undefined;
     let cancelStarted = false, eof = false, hasPrimary = false, primary: unknown, publicFailure: unknown;
+    let streamErrored = false, readFailed = false, closed: Promise<void> | undefined;
+    const stopped = Object.freeze({ kind: "owned-http-intake-stopped" });
     let prefix: Array<Uint8Array | undefined> = [], parser: ReturnType<typeof createJsonBodyParser> | undefined;
     let decoder: TextDecoder | undefined, parsed: unknown, size = 0, backingBytes = 0;
     // Existing expanded-parser bound, including its current scalar before
@@ -494,8 +500,12 @@ async function readOwnedHttpJson(cap: OwnedHttpRequest, request: Request, admiss
     const cancel = () => {
       if (cancelStarted || eof) return;
       cancelStarted = true;
-      try { firstCancel = reader ? reader.cancel(request.signal.reason) : body.cancel(request.signal.reason); }
-      catch (error) { firstCancel = Promise.reject(error); }
+      const propagated = !!reader && readFailed && streamErrored && Object.getPrototypeOf(reader) === ReadableStreamBYOBReader.prototype
+        && !Object.hasOwn(reader, "closed") && reader.cancel === ownedIntakeNativeCancel;
+      try {
+        const actual = reader ? reader.cancel(stopped) : body.cancel(stopped);
+        firstCancel = actual.then(() => undefined, error => { if (!propagated) throw ownedHttpIntakeFailure(diagnostics, "cancel", error); });
+      } catch (error) { firstCancel = Promise.reject(ownedHttpIntakeFailure(diagnostics, "cancel", error)); }
       cancelOutcome = firstCancel.then(() => ({ failed: false }), error => ({ failed: true, error }));
     };
     let tokenQuoted = false, tokenEscaped = false;
@@ -525,11 +535,19 @@ async function readOwnedHttpJson(cap: OwnedHttpRequest, request: Request, admiss
       const declared = Number(request.headers.get("content-length"));
       if (Number.isFinite(declared) && declared > maxMediaJsonBodyBytes) throw tooLarge();
       if (Number.isFinite(declared) && declared > 0) await admission.reserve(declared);
-      reader = body.getReader({ mode: "byob" }); decoder = new TextDecoder();
-      request.signal.addEventListener("abort", cancel, { once: true });
+      try { reader = body.getReader({ mode: "byob" }); }
+      catch (error) { throw ownedHttpIntakeFailure(diagnostics, "acquire", error); }
+      closed = reader.closed.then(() => undefined, () => { streamErrored = true; });
+      decoder = new TextDecoder();
+      try { request.signal.addEventListener("abort", cancel, { once: true }); }
+      catch (error) { throw ownedHttpIntakeFailure(diagnostics, "listenerAdd", error); }
       while (true) {
         if (request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
-        originalRead = reader.read(new Uint8Array(16384)); void originalRead.then(() => undefined, () => undefined);
+        try {
+          const actual = reader.read(new Uint8Array(16384));
+          originalRead = actual.then(value => value, error => { readFailed = true; throw ownedHttpIntakeFailure(diagnostics, "read", error); });
+        } catch (error) { throw ownedHttpIntakeFailure(diagnostics, "read", error); }
+        void originalRead.then(() => undefined, () => undefined);
         const item = await originalRead; originalRead = undefined;
         if (request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
         if (item.done) { eof = true; break; }
@@ -582,10 +600,12 @@ async function readOwnedHttpJson(cap: OwnedHttpRequest, request: Request, admiss
     if (originalRead) try { await originalRead; } catch (error) { /* SAME read origin already consumed above. */ }
     const canceled = await cancelOutcome;
     if (canceled?.failed) failures.push(canceled.error);
-    try { request.signal.removeEventListener("abort", cancel); } catch (error) { failures.push(error); }
-    try { reader?.releaseLock(); } catch (error) { failures.push(error); }
+    try { request.signal.removeEventListener("abort", cancel); } catch (error) { failures.push(ownedHttpIntakeFailure(diagnostics, "listenerRemove", error)); }
+    try { reader?.releaseLock(); } catch (error) { failures.push(ownedHttpIntakeFailure(diagnostics, "unlock", error)); }
     if (body.locked) { holdOwnedHttpRequest(cap); failures.push(identityFailure("cleanup")); }
+    await closed; closed = undefined;
     originalRead = undefined; firstCancel = undefined; cancelOutcome = undefined; reader = undefined; decoder = undefined; parser?.discard(); parser = undefined; prefix.length = 0;
+    finishOwnedHttpIntakeDiagnostics(diagnostics);
     if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "owned HTTP intake cleanup");
     if (hasPrimary) throw publicFailure;
     return parsed;
@@ -1192,9 +1212,25 @@ function ownOrdinaryResponse(response: Response, completion: ProxyCompletion, ow
   return forwarded;
 }
 
+// Internal fixed call sites return only terminal scalars. The private receipt
+// exists BEFORE work starts; registration failure cannot detach started work.
+function registerProxyBackground(owned: OwnedHttpRequest | undefined, context: ExecutionContext, start: () => Promise<void | boolean>): void {
+  if (!owned) { context.waitUntil(start()); return; }
+  const receipt = beginOwnedHttpSinkRegistration(ownedHttpSinkOwner(owned));
+  let work: Promise<void | boolean>;
+  try { work = start(); }
+  catch (primary) {
+    try { abandonUnstartedOwnedHttpRegistration(receipt); }
+    catch (cleanup) { throw new AggregateError([primary, cleanup], "owned background start cleanup"); }
+    throw primary;
+  }
+  completeOwnedHttpSinkRegistration(receipt, context, work);
+}
+
 // Fixed named synchronous calls: no arbitrary graph callback or async scope.
 // The plan was funded before full admission could commit its initial choice.
 function createOwnedHttpAccounting(cap: OwnedHttpRequest, options: Parameters<typeof createProxyAccounting>[0]): ReturnType<typeof createProxyAccounting> {
+  options.ownedHttp = ownedHttpSinkOwner(cap);
   const body = options.selection.body as Record<string, unknown>;
   enterOwnedHttpPricing(cap, body);
   let result: ReturnType<typeof createProxyAccounting> | undefined, hasPrimary = false, primary: unknown;
@@ -1236,7 +1272,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     const completion = owned ? ownedHttpCompletion(owned) : ordinary ? new ProxyCompletion() : undefined;
     if (completion) admission!.completion = completion.completion;
     try {
-      if (completion) context.waitUntil(completion.completion);
+      if (completion && !owned) context.waitUntil(completion.completion);
       return await (completion ? completion.start(start) : start());
     } finally { if (!owned) completion?.seal(); }
   };
@@ -1251,7 +1287,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   const identityDenial = identitySelectionDenied(request, selection.provider.id);
   if (identityDenial) {
     return complete(async completion => {
-      const accounting = createProxyAccounting({ context, env, auth, selection, request, compound, completion, cost: { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 } });
+      const accounting = createProxyAccounting({ context, env, auth, selection, request, compound, completion, ownedHttp: owned ? ownedHttpSinkOwner(owned) : undefined, cost: { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 } });
       try { accounting.fail(identityDenial.status, "denied"); return identityDenial; }
       finally { accounting.close(); }
     });
@@ -1366,7 +1402,7 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       const pending = prepareContentRetention(env, auth, selection, requestId);
       await pending?.write(); return pending;
     });
-    else retention = prepareContentRetention(env, auth, selection, requestId);
+    else retention = prepareContentRetention(env, auth, selection, requestId, owned ? ownedHttpSinkOwner(owned) : undefined);
   }
   catch (error) {
     if (isAccountingAdmissionFailure(error)) throw error;
@@ -1394,6 +1430,7 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       // Fail-closed retention and stateful revalidation must finish before the
       // separate dispatch transition. Durable owners keep their own protocol.
       dispatched: !retention?.large && !prepared.revalidateAccount && !prepared.revalidateMedia, search: searchOwner, preparedPlan: reservePlan,
+      ...(owned ? { ownedHttp: ownedHttpSinkOwner(owned) } : {}),
     }); }
     catch (error) {
       const failure = error instanceof HttpError ? error : new HttpError(503, "budget_store_unavailable", "budget ledger is unavailable");
@@ -1424,12 +1461,12 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     // so serialization and the R2 put overlap the upstream request.
     const pendingRetention = retention;
     retentionDeferred = true;
-    context.waitUntil(run(() => new Promise(resolve => setTimeout(resolve, 0)).then(() => pendingRetention.write()).finally(() => { if (completion) pendingRetention.discardUnused?.(); })).catch(() => logCorrelationError("request content retention failed", requestId)));
+    registerProxyBackground(owned, context, () => run(() => new Promise(resolve => setTimeout(resolve, 0)).then(() => pendingRetention.write()).finally(() => { if (completion) pendingRetention.discardUnused?.(); })).catch(() => logCorrelationError("request content retention failed", requestId)));
   }
   try {
     const dispatchStart = performance.now();
     if (background) await background.dispatch(content);
-    else if (!useSoft) await markBudgetDispatched(env, reservation!, undefined, searchOwner);
+    else if (!useSoft) await markBudgetDispatched(env, reservation!, undefined, searchOwner, owned ? ownedHttpSinkOwner(owned) : undefined);
     if (background || reservation?.reservations.length) budgetMs += performance.now() - dispatchStart;
   }
   catch {
@@ -1438,7 +1475,7 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     return errorResponse("accounting_unavailable", "Budget dispatch could not be recorded; no upstream request was sent.", 503);
   }
   const endpointTimeout = selection.endpoint.timeout_ms ?? 120_000;
-  const operation = searchOwner?.operation ?? music?.operation ?? new HttpOperation(request.signal, Math.min(selection.timeoutMs ?? endpointTimeout, endpointTimeout));
+  const operation = searchOwner?.operation ?? music?.operation ?? new HttpOperation(owned ? ownedHttpSignal(owned) : request.signal, Math.min(selection.timeoutMs ?? endpointTimeout, endpointTimeout));
   const signal = operation.signal;
   // Stateful auxiliary operations requalify after budget/retention awaits, under the same
   // cancellation/deadline owner as transport. Interrupted reads are known-unsent.
@@ -1474,7 +1511,8 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     if (!pending) {
       const dispose = async () => {
         if (!catalogInputs) {
-          if (owner) await response.body?.cancel(signal.reason);
+          if (owned) await cancelOwnedHttpResponse(ownedHttpSinkOwner(owned), response);
+          else if (owner) await response.body?.cancel(signal.reason);
           else await response.body?.cancel(signal.reason).catch(() => undefined);
           return;
         }
@@ -1543,6 +1581,7 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
         return fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal: active, redirect: "manual" });
       }) : ordinaryFetch(() => {
         if (owned) { const upload = ownedPreparedUploads?.get(prepared); if (upload) dispatchOwnedHttpUpload(upload); }
+        if (owned) return ownedHttpProviderFetch(ownedHttpSinkOwner(owned), prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" });
         return fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" });
       });
     if (selection.nativeResponse) nativeFetch = pending;
@@ -1551,10 +1590,12 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     if (useSoft) {
       const checking = completion?.fork();
       try {
-        soft = startSoftBudget(env, softPlan!, error => operation.stop("upstream", error), searchOwner);
-        reservation = soft.reservation;
-        if (checking) checking.start(() => soft!.check);
-        context.waitUntil(soft.check);
+        registerProxyBackground(owned, context, () => {
+          soft = startSoftBudget(env, softPlan!, error => operation.stop("upstream", error), searchOwner);
+          reservation = soft.reservation;
+          if (checking) checking.start(() => soft!.check);
+          return soft.check;
+        });
       } catch (error) { checking?.fail(); throw error; }
       finally { checking?.seal(); }
     }
@@ -1599,6 +1640,7 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
         accounting.setGrant(prepared.grantKey, prepared.grantLane);
         response = await operation.wait(ordinaryFetch(() => {
         if (owned) { const upload = ownedPreparedUploads?.get(prepared); if (upload) dispatchOwnedHttpUpload(upload); }
+        if (owned) return ownedHttpProviderFetch(ownedHttpSinkOwner(owned), prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" });
         return fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" });
       }), "upstream", discard);
         accounting.observeUpstreamResponse(response, prepared.url);
@@ -1773,7 +1815,7 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
   } else {
     accountingDeferred = true;
     const terminalAccounting = accounting;
-    context.waitUntil(run(() => observed.result.then(result => {
+    registerProxyBackground(owned, context, () => run(() => observed.result.then(result => {
     const failure = priceGuard?.failure();
     // Replacing an unpriced response doesn't undo the dispatched work. Retain
     // the hard reservation and record the original usage, not a free rejection.

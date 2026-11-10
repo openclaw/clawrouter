@@ -1,4 +1,5 @@
 import type { MiniMaxSearchOperation } from "./minimax-search-operation.ts";
+import { checkOwnedHttpSinkOwner, beginOwnedHttpSinkRegistration, completeOwnedHttpSinkRegistration, abandonUnstartedOwnedHttpRegistration, type OwnedHttpSinkOwner } from "./http-identity-owner.ts";
 import { vertexAnthropicRoute } from "./vertex-anthropic-dispatch.ts";
 import { upstreamGenerationMayBeCharged } from "./upstream-billing-outcome.ts";
 import { googleAudioRequest } from "./google-audio-classification.ts";
@@ -33,6 +34,7 @@ export interface CompoundRequestContext {
 }
 
 interface AccountingContext {
+  ownedHttp?: OwnedHttpSinkOwner;
   completion?: ProxyCompletion;
   search?: MiniMaxSearchOperation;
   realtime?: true;
@@ -265,6 +267,7 @@ function receiptPricing(pricing: ModelPricing | null | undefined): AccountingPri
 }
 
 export function createProxyAccounting(options: AccountingContext) {
+  if (options.ownedHttp !== undefined) checkOwnedHttpSinkOwner(options.ownedHttp);
   const { env, context, auth, selection, request, compound } = options;
   for (const value of [auth.policyId, auth.policy.tenantId, auth.credentialId, auth.principalId, auth.authType,
     selection.provider.id, selection.capability, selection.model?.id, selection.model?.upstream,
@@ -332,11 +335,11 @@ export function createProxyAccounting(options: AccountingContext) {
   accountingFlags.set(facts, flags);
   admitAccountingFacts(facts, undefined, !!options.search);
   if (facts.model && model) facts.model = { pricing: receiptPricing(model.pricing), upstream: model.upstream };
-  return ownedProxyAccounting(immutableFacts(facts, !!options.search, flags), accountingSinks(env), context.waitUntil?.bind(context), options.search, flags, options.completion?.fork());
+  return ownedProxyAccounting(immutableFacts(facts, !!options.search, flags), accountingSinks(env, options.ownedHttp), context.waitUntil?.bind(context), options.search, flags, options.completion?.fork(), options.ownedHttp !== undefined ? context : undefined);
 }
 
 function ownedProxyAccounting(initial: AccountingFacts, sinks: AccountingSinks, waitUntil: ((work: Promise<unknown>) => void) | undefined,
-  search: MiniMaxSearchOperation | undefined, flags: AccountingFlags, custody?: ProxyCompletion) {
+  search: MiniMaxSearchOperation | undefined, flags: AccountingFlags, custody?: ProxyCompletion, registrationContext?: ExecutionContext) {
   let facts = initial, chargedUpstreamResponse = false;
   bindAccountingPlan(facts.cost, plan => admitAccountingFacts(facts, plan));
   let responseTier: string | null | undefined;
@@ -380,7 +383,7 @@ function ownedProxyAccounting(initial: AccountingFacts, sinks: AccountingSinks, 
       const child = Object.freeze({ ...facts, event: Object.freeze({ ...facts.event, id: randomId("usage") }) });
       if (search) controlSinkFacts.add(child);
       accountingFlags.set(child, flags);
-      return ownedProxyAccounting(child, sinks, waitUntil, search, flags, custody?.fork());
+      return ownedProxyAccounting(child, sinks, waitUntil, search, flags, custody?.fork(), registrationContext);
     },
     setGrant(key: string | null, lane: import("./types").GrantLane) {
       accountingIdentity(key); accountingIdentity(lane);
@@ -395,8 +398,21 @@ function ownedProxyAccounting(initial: AccountingFacts, sinks: AccountingSinks, 
     get upstreamChargePossible() { return chargedUpstreamResponse; },
     fail(statusCode: number, status: UsageEvent["status"], reservation = emptyReservation(), contentRef: string | null = null, dispatched = false) {
       // Missing response headers cannot prove that dispatched upstream work was free.
+      const registration = sinks.ownedHttp !== undefined ? beginOwnedHttpSinkRegistration(sinks.ownedHttp) : undefined;
+      if (registration && !waitUntil) completeOwnedHttpSinkRegistration(registration);
       if (!waitUntil) throw new TypeError("accounting background sink unavailable");
-      waitUntil(settle(statusCode, status, dispatched, null, reservation, contentRef, null, undefined, dispatched ? "unknown" : "unsent"));
+      let original: Promise<boolean>;
+      try { original = settle(statusCode, status, dispatched, null, reservation, contentRef, null, undefined, dispatched ? "unknown" : "unsent"); }
+      catch (error) {
+        // No settlement promise exists on this local synchronous factory path.
+        if (registration) {
+          try { abandonUnstartedOwnedHttpRegistration(registration); }
+          catch (cleanup) { throw new AggregateError([error, cleanup], "owned accounting registration cleanup"); }
+        }
+        throw error;
+      }
+      if (registration) completeOwnedHttpSinkRegistration(registration, registrationContext!, original);
+      else waitUntil(original);
     },
     complete(response: Response, observed: ObservedUsage, reservation: BudgetReservation, contentRef: string | null, termination?: UsageEvent["status"]) {
       if (google) responseTier = googleResponseServiceTier(flags.requestedGoogleTier, observed.tokens?.serviceTier, response.headers.get("x-gemini-service-tier"));

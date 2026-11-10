@@ -311,3 +311,57 @@ already prepared upload at late pricing. The ordinary classifiers and tariffs
 are not replaced. Only body/three verdict scalars and final component sizes enter
 the retained pricing record; the measurement record and its body alias clear
 synchronously before full admission begins.
+
+
+## Private original-operation failure boundary
+
+The private HTTP owner now supplies a genuine, empty sink capability to the
+accounting, ledger, archive and credential-materialization operations. The
+capability is checked before namespace acquisition or native work. It does not
+replace an Env, namespace, stub, queue or bucket. Ordinary calls keep their
+existing branches. The shared soft-budget reader already normalizes original
+acquisition and read failures; its implementation remains unchanged.
+
+The first synchronous catch or non-async original-promise reaction creates only
+fixed metadata: origin, ordinal, failure flag, primary presence, whether the
+primary was `undefined`, and a closed disposition. It does not inspect a reason's
+prototype, message, stack, cause, aggregate contents or serialization hooks.
+Independent operations keep distinct ordinals even when they reject with the
+same object. Successful origin records clear their application references;
+failed records remain owned until final request retirement. Original native
+promise, stream and signal internals are not claimed as application retirement.
+
+Transport rejection cannot mint a validated budget denial or a selected-grant
+refresh error. Budget denial provenance is registered only after the actual
+`allowed:false` acknowledgment. Private credential materialization observes
+both namespace acquisition and fetch before the existing bounded identity
+reader. Only its fully consumed owner response constructs the business error;
+the actual bounded Retry-After header is preserved. Missing modern bindings and
+ordinary credential operations keep their existing behavior.
+
+Non-OK unused ledger responses start their original cancellation in a separate
+custody scope. Recovery queue sends or usage-ledger fallback can proceed while
+that cancellation is pending. Recovered failures remain diagnostic records and
+do not invent a new terminal business failure. A locked unknown response keeps
+funding. Accounting registration reserves its origin before starting work and
+joins accepted work even if `waitUntil` subsequently throws. The encompassing
+HTTP retirement has a separate entry-funded registration, never a self-join.
+
+Public cancellation supplies a bounded carrier before the unchanged usage
+observer. Original response reads, FIRSTcancel and unlock retain distinct
+origins. Native errored-reader cancellation shares its read origin only with a
+verified unmodified native reader/cancel method and rejected native closed
+receipt. A post-native wrapper rejection remains a separate cancel origin.
+
+Authored Node and native tests cover opaque/oversized/undefined failures,
+forged refresh and budget errors, actual GrantCredentialObject materialization,
+recovery before held unused-body cancellation, R2/pipe failure overlap and
+registration after start. Fixture-owned arbitrary reasons stay invocation-local.
+These tests are unrun under CODE_ONLY_HOSTED.
+
+The new failure records, reactions, scopes, registration products and terminal
+aliases still require reconciliation with the complete prospective HTTP
+DATA/CONTROL table. Current fixed component reservations are implementation
+work, not a completed 1024-slot or whole-vertical payload proof. No new allowance,
+profile reduction, default activation, physical-heap or remote-owner retirement
+claim is made.

@@ -127,7 +127,8 @@ for (const rejected of [false, true]) test(`dispatched upload retires after logi
     const ended = await f.take(terminal).then(() => ({ failed: false }), error => ({ failed: true, error }));
     assert.equal(ended.failed, true); assert.ok(ended.error instanceof AggregateError);
     assert.equal(ended.error.errors.length, 1);
-    if (rejected) assert.equal(ended.error.errors[0], undefined);
+    assert.equal(ended.error.errors[0].origin, 'pipe');
+    if (rejected) assert.equal(ended.error.errors[0].primaryIsUndefined, true);
     assert.equal(source.locked, false);
   });
 });
@@ -145,7 +146,9 @@ for (const reason of [undefined, new Error('shared fixture failure')]) {
       let hasFailure = false, failure;
       try { await f.take(terminal); } catch (error) { hasFailure = true; failure = error; }
       assert.equal(hasFailure, true); assert.ok(failure instanceof AggregateError);
-      assert.equal(failure.errors.length, 2); assert.equal(failure.errors[0], reason); assert.equal(failure.errors[1], reason);
+      assert.equal(failure.errors.length, 2);
+      assert.ok(failure.errors.every(error => error.origin === 'pipe' && error.primary && error.primaryIsUndefined === (reason === undefined)));
+      assert.notEqual(failure.errors[0].ordinal, failure.errors[1].ordinal);
     });
   });
 }
@@ -184,11 +187,14 @@ for (const reason of [undefined, new Error('shared native reader cleanup')]) {
       release.resolve();
       let hasCancel = false, cancelError;
       try { await f.take(canceled); } catch (error) { hasCancel = true; cancelError = error; }
-      assert.equal(hasCancel, true); assert.equal(cancelError, reason, 'original unlock failure remains the public cancellation outcome');
+      assert.equal(hasCancel, true); assert.equal(cancelError.origin, 'unlock');
+      assert.equal(cancelError.primaryIsUndefined, reason === undefined, 'original unlock failure remains a bounded public cancellation outcome');
       let failed = false, failure;
       try { await f.take(terminal); } catch (error) { failed = true; failure = error; }
       assert.equal(failed, true); assert.ok(failure instanceof AggregateError);
-      assert.deepEqual(failure.errors, [reason, reason], 'FIRSTcancel and unlock are distinct origins');
+      assert.deepEqual(failure.errors.map(error => error.origin), ['cancel', 'unlock'], 'FIRSTcancel and unlock are distinct origins');
+      assert.ok(failure.errors.every(error => error.primaryIsUndefined === (reason === undefined)));
+      assert.notEqual(failure.errors[0].ordinal, failure.errors[1].ordinal);
       assert.equal(unlocks, 1); assert.equal(body.locked, false);
     });
   });
@@ -202,11 +208,11 @@ test('response acquisition failure cancels the untouched original body and retai
     let hasPrimary = false, primary;
     try { ownOwnedHttpResponse(f.cap, new Response(body)); }
     catch (error) { hasPrimary = true; primary = error; }
-    assert.equal(hasPrimary, true); assert.equal(primary, undefined);
+    assert.equal(hasPrimary, true); assert.equal(primary.origin, 'acquire'); assert.equal(primary.primaryIsUndefined, true);
     let failed = false, failure;
     try { await f.take(f.finish()); } catch (error) { failed = true; failure = error; }
     assert.equal(failed, true); assert.ok(failure instanceof AggregateError);
-    assert.deepEqual(failure.errors, [undefined, undefined]); assert.equal(cancels, 1); assert.equal(body.locked, false);
+    assert.deepEqual(failure.errors.map(error => [error.origin, error.primaryIsUndefined]), [['acquire', true], ['cancel', true]]); assert.equal(cancels, 1); assert.equal(body.locked, false);
   });
 });
 
@@ -217,11 +223,38 @@ test('native errored-stream cancellation propagates one read origin without reas
     const response = ownOwnedHttpResponse(f.cap, new Response(body));
     let hasRead = false, readFailure;
     try { await f.take(f.own(response.text())); } catch (error) { hasRead = true; readFailure = error; }
-    assert.equal(hasRead, true); assert.equal(readFailure, undefined);
+    assert.equal(hasRead, true); assert.equal(readFailure.origin, 'read'); assert.equal(readFailure.primaryIsUndefined, true);
     let failed = false, failure;
     try { await f.take(f.finish()); } catch (error) { failed = true; failure = error; }
     assert.equal(failed, true); assert.ok(failure instanceof AggregateError);
-    assert.deepEqual(failure.errors, [undefined]); assert.equal(canceled, 0, 'native errored stream never calls underlying cancel');
+    assert.deepEqual(failure.errors.map(error => [error.origin, error.primaryIsUndefined]), [['read', true]]); assert.equal(canceled, 0, 'native errored stream never calls underlying cancel');
     assert.equal(body.locked, false);
+  });
+});
+
+
+test('post-native cancel rejection is independent of an already failed read', async t => {
+  await fixture(t, async f => {
+    const body = new ReadableStream({ pull(controller) { controller.error(undefined); } }, { highWaterMark: 0 });
+    const getReader = body.getReader; let cancels = 0, unlocks = 0;
+    Object.defineProperty(body, 'getReader', { value(...args) {
+      const reader = Reflect.apply(getReader, this, args), cancel = reader.cancel, unlock = reader.releaseLock;
+      Object.defineProperty(reader, 'cancel', { value(...values) {
+        cancels++;
+        return Reflect.apply(cancel, this, values).then(() => { throw undefined; }, () => { throw undefined; });
+      } });
+      Object.defineProperty(reader, 'releaseLock', { value() { unlocks++; return Reflect.apply(unlock, this, []); } });
+      return reader;
+    } });
+    const response = ownOwnedHttpResponse(f.cap, new Response(body));
+    let hasRead = false;
+    try { await f.take(f.own(response.text())); } catch (error) { hasRead = true; assert.equal(error.origin, 'read'); }
+    assert.equal(hasRead, true);
+    let failed = false, failure;
+    try { await f.take(f.finish()); } catch (error) { failed = true; failure = error; }
+    assert.equal(failed, true); assert.ok(failure instanceof AggregateError);
+    assert.deepEqual(failure.errors.map(error => [error.origin, error.primaryIsUndefined]), [['read', true], ['cancel', true]]);
+    assert.notEqual(failure.errors[0].ordinal, failure.errors[1].ordinal);
+    assert.equal(cancels, 1); assert.equal(unlocks, 1); assert.equal(body.locked, false);
   });
 });

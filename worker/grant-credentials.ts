@@ -1,4 +1,5 @@
-import { admitIdentityText, identityUtf8, admitIdentity, identityHeader, identityJson, identitySourceBudget, isIdentityFailure, parseIdentity, readIdentityKv, readIdentityRaw, readIdentityRequest, readIdentityResponse, type IdentitySourceBudget } from "./identity-admission.ts";
+import { admitIdentityText, identityUtf8, admitIdentity, identityHeader, identityJson, identitySourceBudget, identityFailure, isIdentityFailure, parseIdentity, readIdentityKv, readIdentityRaw, readIdentityRequest, readIdentityResponse, type IdentitySourceBudget } from "./identity-admission.ts";
+import { checkOwnedHttpSinkOwner, ownedHttpGrantMaterializeFetch, type OwnedHttpSinkOwner } from "./http-identity-owner.ts";
 import { videoControlHeader, videoControlVersion, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { miniMaxApiKeySecret, miniMaxMusicCoverProjection, miniMaxMusicCoverIdentity } from "./native-media-credential.ts";
 import { musicCoverControlHeader, musicCoverControlVersion, musicCoverUnavailable, isMusicCoverControl, readCoverControlRequest, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
@@ -1446,7 +1447,12 @@ export async function materializeGrantCredentials(
   search?: MiniMaxSearchOperation,
   video?: MiniMaxVideoOperation,
   cover?: MiniMaxMusicCoverControl,
+  ownedHttp?: OwnedHttpSinkOwner,
 ): Promise<UpstreamGrant> {
+  if (ownedHttp !== undefined) {
+    checkOwnedHttpSinkOwner(ownedHttp);
+    if (wan || search || video || cover) throw identityFailure("protocol");
+  }
   if (!cover && !video && !wan && !search) admitIdentity(grant, "record");
   const legacy = !cover && !video && !wan && !search && hasRawCredential(grant) ? grant : null;
   return (await ownerCall<OwnerResponse>(env, key, "/materialize", {
@@ -1460,7 +1466,7 @@ export async function materializeGrantCredentials(
     operation,
     ...(wan ? { wanOriginal: true } : {}),
     ...(cover ? { coverOriginal: musicCoverControlVersion } : {}),
-  }, signal, wan, search, video, cover)).grant;
+  }, signal, wan, search, video, cover, ownedHttp)).grant;
 }
 
 export async function revokeGrantCredentials(env: Env, key: string, metadata?: GrantRevokeMetadata, searchActor?: PutRequest["searchActor"], musicActor?: PutRequest["musicActor"], videoActor?: PutRequest["videoActor"]): Promise<UpstreamGrant> {
@@ -1552,7 +1558,31 @@ function updatedCredentialRecord(current: CredentialRecord | undefined, grant: U
 
 
 
-async function ownerCall<T>(env: Env, key: string, path: string, body: unknown, signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, cover?: MiniMaxMusicCoverControl): Promise<T> {
+async function ownerCall<T>(env: Env, key: string, path: string, body: unknown, signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, cover?: MiniMaxMusicCoverControl, ownedHttp?: OwnedHttpSinkOwner): Promise<T> {
+  if (ownedHttp !== undefined) {
+    checkOwnedHttpSinkOwner(ownedHttp);
+    if (path !== "/materialize" || wan || search || video || cover) throw identityFailure("protocol");
+    const binding = env.GRANT_CREDENTIALS;
+    if (!binding) throw new HttpError(503, "provider_not_configured", "provider is not configured");
+    admitIdentity((body as MaterializeRequest).grant, "record");
+    const text = identityJson(body);
+    // Acquisition and fetch are classified before the ordinary bounded reader.
+    // Only its successfully consumed owner response mints a business HttpError;
+    // a forged refresh-shaped transport rejection never reaches that branch.
+    let received: Response | undefined;
+    try {
+      return await readIdentityResponse<T>(() => ownedHttpGrantMaterializeFetch(ownedHttp, binding, key, text, signal)
+        .then(response => { received = response; return response; }), identitySourceBudget(), signal,
+      (status, value) => {
+        // The reader admitted these ORIGINAL headers and the complete body.
+        // Only the protocol Retry-After field is copied, never arbitrary fields.
+        const retryAfter = received!.headers.get("retry-after");
+        const payload = value as { error?: { code?: string; message?: string } };
+        throw new HttpError(status, payload.error?.code ?? "credential_owner_error", payload.error?.message ?? "grant credential operation failed",
+          retryAfter === null ? undefined : { "Retry-After": retryAfter });
+      }, "grant");
+    } finally { received = undefined; }
+  }
   if (cover && (!isMusicCoverControl(cover) || wan || search || video || !["/inspect", "/materialize"].includes(path))) musicCoverUnavailable();
   const stub = env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(key));
   if (cover) return cover.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual", headers: { "content-type": "application/json", [musicCoverControlHeader]: musicCoverControlVersion } }), false, signal);

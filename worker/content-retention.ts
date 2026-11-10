@@ -1,6 +1,8 @@
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledModel, ContentRecord, Env, ProxyRequestBody } from "./types";
 import { maxJsonBodyBytes, randomId } from "./utils.ts";
 import { accountingArchive, accountingIdentity, admitAccountingJson, jsonBodyTransport } from "./json-body.ts";
+import { checkOwnedHttpSinkOwner, ownedHttpArchivePut, ownedHttpArchivePipe, ownedHttpArchiveAbort,
+  ownedHttpArchiveCancel, type OwnedHttpSinkOwner } from "./http-identity-owner.ts";
 
 const retentionPeriodMs = 30 * 86_400_000;
 
@@ -100,7 +102,8 @@ export function prepareInlineMusicRetention(env: Env, auth: AuthorizedIdentity, 
 
 // Allocates the content ref synchronously so usage events can reference it;
 // the R2 write itself can run after the request is dispatched.
-export function prepareContentRetention(env: Env, auth: AuthorizedIdentity, selection: RetainedSelection, requestId: string): PreparedContentRetention | null {
+export function prepareContentRetention(env: Env, auth: AuthorizedIdentity, selection: RetainedSelection, requestId: string, ownedHttp?: OwnedHttpSinkOwner): PreparedContentRetention | null {
+  if (ownedHttp !== undefined) checkOwnedHttpSinkOwner(ownedHttp);
   if (!retentionRequired(auth, selection.capability)) return null;
   for (const value of [requestId, auth.policy.tenantId, auth.policyId, auth.credentialId, auth.principalId,
     selection.provider.id, selection.capability, selection.model?.id]) accountingIdentity(value);
@@ -116,11 +119,11 @@ export function prepareContentRetention(env: Env, auth: AuthorizedIdentity, sele
   const gateway = selection.endpoint.request_format === "cloudflare_ai_gateway.universal" && Array.isArray(selection.body) ? selection.body : undefined;
   // Admission traverses the privacy-filtered view BEFORE the first map/copy.
   const archive = accountingArchive(record, gateway);
-  return ownedContentRetention(env.CONTENT_ARCHIVE, contentKey(tenant, contentRef), expiresAt, contentRef, archive);
+  return ownedContentRetention(env.CONTENT_ARCHIVE, contentKey(tenant, contentRef), expiresAt, contentRef, archive, ownedHttp);
 }
 
 function ownedContentRetention(bucket: Env["CONTENT_ARCHIVE"], key: string, expiresAt: string,
-  contentRef: string, archive: ReturnType<typeof accountingArchive>): PreparedContentRetention {
+  contentRef: string, archive: ReturnType<typeof accountingArchive>, ownedHttp?: OwnedHttpSinkOwner): PreparedContentRetention {
   let writing: Promise<void> | undefined;
   let unused = false;
   return { contentRef, large: archive.bytes > maxJsonBodyBytes,
@@ -132,21 +135,25 @@ function ownedContentRetention(bucket: Env["CONTENT_ARCHIVE"], key: string, expi
         // The COMPLETE admitted serialization fits the same whole-backing
         // ceiling. R2 completion remains a distinct, awaited owner.
         const text = archive.text();
-        await bucket.put(key, text, { httpMetadata: { contentType: "application/json" }, customMetadata: { expiresAt } });
+        if (ownedHttp !== undefined) await ownedHttpArchivePut(ownedHttp, bucket, key, text, expiresAt);
+        else await bucket.put(key, text, { httpMetadata: { contentType: "application/json" }, customMetadata: { expiresAt } });
         return;
       }
       const fixed = new FixedLengthStream(archive.bytes), abort = new AbortController();
-      const pipe = archive.stream().pipeTo(fixed.writable, { signal: abort.signal });
+      const pipe = ownedHttp !== undefined ? ownedHttpArchivePipe(ownedHttp, archive.stream(), fixed.writable, abort.signal)
+        : archive.stream().pipeTo(fixed.writable, { signal: abort.signal });
       const pipeOutcome = pipe.then(() => ({ failed: false as const }), error => ({ failed: true as const, error }));
       let hasPrimary = false, primary: unknown;
       const cleanup: unknown[] = [];
       try {
-        await bucket.put(key, fixed.readable, { httpMetadata: { contentType: "application/json" }, customMetadata: { expiresAt } });
+        if (ownedHttp !== undefined) await ownedHttpArchivePut(ownedHttp, bucket, key, fixed.readable, expiresAt);
+        else await bucket.put(key, fixed.readable, { httpMetadata: { contentType: "application/json" }, customMetadata: { expiresAt } });
       } catch (error) { hasPrimary = true; primary = error; }
       if (hasPrimary) {
-        abort.abort();
+        if (ownedHttp !== undefined) { try { ownedHttpArchiveAbort(ownedHttp, abort); } catch (error) { cleanup.push(error); } }
+        else abort.abort();
         if (!fixed.readable.locked) {
-          try { await fixed.readable.cancel(); } catch (error) { cleanup.push(error); }
+          try { if (ownedHttp !== undefined) await ownedHttpArchiveCancel(ownedHttp, fixed.readable); else await fixed.readable.cancel(); } catch (error) { cleanup.push(error); }
         }
       }
       const outcome = await pipeOutcome;

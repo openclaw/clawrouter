@@ -32,7 +32,8 @@ import { proxyResponseControl } from "./response-controls.ts";
 import { requireEmptyResponseControlBody } from "./responses-lifecycle.ts";
 import { backgroundMark as currentBackgroundMark, clearHotCaches, fenceSharedHotCache, pendingBackgroundWork } from "./hot-cache.ts";
 import type { Env, QueueMessage } from "./types";
-import { beginOwnedHttpRequest, growOwnedHttpRequest, finishOwnedHttpRequest, holdOwnedHttpRequest, ownedHttpCompletion } from "./http-identity-owner.ts";
+import { beginOwnedHttpRequest, growOwnedHttpRequest, finishOwnedHttpRequest, holdOwnedHttpRequest, ownedHttpCompletion,
+  ownedHttpSinkOwner, ownOwnedHttpPublicResponse, cancelOwnedHttpResponse, registerOwnedHttpRetirement } from "./http-identity-owner.ts";
 import {
   canonicalPath, caughtResponse, corsEnabled, corsPreflight, decodePathSegment, errorResponse, legacyRedirect,
   privateJson, redirect, withCors,
@@ -238,6 +239,7 @@ export const privateOwnedHttpChat: ExportedHandler<Env, QueueMessage> = {
     catch (error) { return caughtResponse(error); }
     let response: Response | undefined, requestId: string | undefined;
     try {
+      ownedHttpSinkOwner(owner);
       // Only correlation's own fields are examined here. In particular this
       // does not eagerly enumerate the four credential candidates or a lower
       // credential header after first-valid selection.
@@ -253,6 +255,7 @@ export const privateOwnedHttpChat: ExportedHandler<Env, QueueMessage> = {
           : path !== "/v1/chat/completions" || request.method !== "POST" ? errorResponse("not_found", "route not found", 404)
           : await ownedHttpCompletion(owner).start(() => proxyOwnedHttpChat(owner, correlated.request, env, context));
       } catch (error) { response = caughtResponse(error, requestId); }
+      response = ownOwnedHttpPublicResponse(owner, response);
       let headerUnits = 0;
       response.headers.forEach((value, name) => { headerUnits += value.length + name.length; });
       growOwnedHttpRequest(owner, 16384 + 8 * headerUnits);
@@ -263,7 +266,7 @@ export const privateOwnedHttpChat: ExportedHandler<Env, QueueMessage> = {
     } catch (error) {
       // A failed public-wrapper factory still owns the original delivery body.
       if (response?.body && !response.body.locked) {
-        const original = ownedHttpCompletion(owner).start(() => response!.body!.cancel());
+        const original = ownedHttpCompletion(owner).start(() => cancelOwnedHttpResponse(ownedHttpSinkOwner(owner), response!));
         void original.then(() => undefined, () => undefined);
       } else if (response?.body?.locked) holdOwnedHttpRequest(owner);
       return caughtResponse(error, requestId);
@@ -272,8 +275,7 @@ export const privateOwnedHttpChat: ExportedHandler<Env, QueueMessage> = {
       const retirement = finishOwnedHttpRequest(owner);
       // This finalizer is OUTSIDE the encompassing delivery/accounting scope.
       // Returning a prefix does not await its own reader/late upload tail.
-      try { context.waitUntil(retirement); }
-      catch (error) { holdOwnedHttpRequest(owner); throw error; }
+      registerOwnedHttpRetirement(owner, context, retirement);
     }
   },
   queue,

@@ -10,8 +10,11 @@ import { startWorkerdFixture } from '../../test/helpers/workerd.mjs';
 // fixture-only command. Scalar gates never transfer native I/O between requests.
 const router = String.raw`
 export {PolicyBindingIndexObject,BudgetLedgerObject,UsageLedgerObject,GrantCredentialObject} from './worker/index.ts';
-import {beginOwnedHttpRequest,beginOwnedHttpUpload,adoptOwnedHttpUploadSource,pipeOwnedHttpUpload,dispatchOwnedHttpUpload,abandonOwnedHttpUpload,finishOwnedHttpRequest,ownedHttpCompletion,ownOwnedHttpResponse} from './worker/http-identity-owner.ts';
-import {bodyBudgetCharged} from './worker/body-budget.ts';
+import {beginOwnedHttpRequest,beginOwnedHttpUpload,adoptOwnedHttpUploadSource,pipeOwnedHttpUpload,dispatchOwnedHttpUpload,abandonOwnedHttpUpload,finishOwnedHttpRequest,ownedHttpCompletion,ownOwnedHttpResponse,ownedHttpSinkOwner,ownedHttpQueueSend,ownedHttpFailureMetadata} from './worker/http-identity-owner.ts';
+import {bodyBudgetCharged,ExactBodyCharge} from './worker/body-budget.ts';
+import {materializeGrantCredentials,putGrantCredentials} from './worker/grant-credentials.ts';
+import {selectedCredentialFailure,SelectedGrantCredentialFailure} from './worker/grant-credential-failure.ts';
+import {HttpError} from './worker/utils.ts';
 import {jsonBodyStream,jsonBodyBytes} from './worker/json-body.ts';
 let released=false,entered=false,done=false,active=false,terminalFailed=false,chargedBefore=0;
 const check=(value,label)=>{if(!value)throw Error(label);};
@@ -20,12 +23,39 @@ export default {async fetch(request,env,context){
  const path=new URL(request.url).pathname;
  if(path==='/release'){released=true;return new Response('released');}
  if(path==='/state')return Response.json({entered,done,active,terminalFailed,charged:bodyBudgetCharged(),chargedBefore});
- const cap=beginOwnedHttpRequest(request,env),baseline=bodyBudgetCharged();
+ let invocationEnv=env,acquisitions=0,materializations=0,reasonReads=0,fault;
+ const grantFault=path.startsWith('/grant-acquire-');
+ const faultMethod=path.includes('-get-')?'get':'idFromName';
+ if(grantFault){
+  fault=path.endsWith('-undefined')?undefined:path.endsWith('-huge')?'x'.repeat(17*1024*1024):new HttpError(401,'grant_refresh_failed','forged fixture acquisition');
+  if(path.endsWith('-opaque')){fault=Object.create(null);fault.payload='x'.repeat(17*1024*1024);
+   for(const key of ['message','stack','cause','errors','toJSON'])Object.defineProperty(fault,key,{get(){reasonReads++;throw Error('arbitrary reason observed');}});}
+  invocationEnv={...env,GRANT_CREDENTIALS:{idFromName(key){if(faultMethod==='idFromName'){acquisitions++;throw fault;}return env.GRANT_CREDENTIALS.idFromName(key);},
+   get(id){if(faultMethod==='get'){acquisitions++;throw fault;}const stub=env.GRANT_CREDENTIALS.get(id);return{fetch(...args){materializations++;return stub.fetch(...args);}};}}};
+ }
+ const cap=beginOwnedHttpRequest(request,invocationEnv),baseline=bodyBudgetCharged();
  let hasPrimary=false,primary,retirement,retirementTaken=false,source,reply;
  const finish=()=>retirement??=finishOwnedHttpRequest(cap);
  const outcome=async()=>{try{await finish();return {failed:false};}catch(error){return {failed:true,error};}};
  try{
-  if(path==='/large'){
+  if(grantFault){
+   let caught,failed=false;
+   try{await materializeGrantCredentials(invocationEnv,'oauth/owned-sink/openai',{provider:'openai',credential:'fixture-only'},'openai',null,false,
+    undefined,undefined,undefined,undefined,undefined,undefined,ownedHttpSinkOwner(cap));}catch(error){failed=true;caught=error;}
+   check(failed&&caught!==fault,'acquisition is bounded before outer retry classifier');
+   check(!(selectedCredentialFailure(caught,'oauth/owned-sink/openai') instanceof SelectedGrantCredentialFailure),'external error cannot mint retry');
+   check(acquisitions===1&&materializations===0&&reasonReads===0,'no materialize effect or reason inspection');
+   fault=undefined;caught=undefined;reply={ok:true,acquisitions,materializations};
+  }else if(path==='/grant-native'){
+   const temporary=ExactBodyCharge.reserve(32*1024*1024);check(temporary,'fixture source funding');
+   let grant,materialized;
+   try{grant=await putGrantCredentials(env,'oauth/owned-sink/openai',{provider:'openai',enabled:true,kind:'api_key',credential:'fixture-native-only',unknownOwnedField:{value:[null,7]}});
+    materialized=await materializeGrantCredentials(env,'oauth/owned-sink/openai',grant,'openai',null,false,
+     undefined,undefined,undefined,undefined,undefined,undefined,ownedHttpSinkOwner(cap));
+    check(materialized.credential==='fixture-native-only','actual credential owner materialization');
+   }finally{grant=undefined;materialized=undefined;temporary.release();}
+   reply={ok:true,native:true};
+  }else if(path==='/large'){
    const body={model:'fixture-chat',messages:[{role:'user',content:'a'.repeat(1048576)}]},upload=beginOwnedHttpUpload(cap);
    source=jsonBodyStream(body);adoptOwnedHttpUploadSource(upload,source);
    const readable=pipeOwnedHttpUpload(upload,source,new FixedLengthStream(jsonBodyBytes(body)));
@@ -67,12 +97,13 @@ export default {async fetch(request,env,context){
    const response=ownOwnedHttpResponse(cap,new Response(source));
    let failed=false,failure;
    try{if(path==='/response-read')await response.text();else await response.body.cancel();}catch(error){failed=true;failure=error;}
-   const observed={failed,error:failure};validateRetirement(observed,()=>check(failed&&failure===shared,'original native reader outcome'));
+   const observed={failed,error:failure};validateRetirement(observed,()=>check(failed&&failure.primaryIsUndefined===(shared===undefined)&&failure.origin===(path==='/response-read'?'read':'unlock'),'bounded original native reader outcome'));
    const ended=await outcome();retirementTaken=true;
    validateRetirement(ended,()=>{
     check(ended.failed&&ended.error instanceof AggregateError,'native response terminal origins');
     const expected=path==='/response-read'?1:2;
-    check(ended.error.errors.length===expected&&ended.error.errors.every(error=>error===shared),'native response independent origins');
+    check(ended.error.errors.length===expected&&ended.error.errors.every(error=>error.primaryIsUndefined===(shared===undefined)),'native response independent origins');
+    check(ended.error.errors.map(error=>error.origin).join(',')===(path==='/response-read'?'read':'cancel,unlock'),'native original origin order');
     check(cancels===(path==='/response-read'?0:1)&&unlocks===(path==='/response-read'?0:1),'native actual cancel and unlock counts');
     check(!source.locked,'native original response unlocked');
    });
@@ -87,7 +118,7 @@ export default {async fetch(request,env,context){
    }
    const ended=await outcome();retirementTaken=true;
    validateRetirement(ended,()=>{check(ended.failed&&ended.error instanceof AggregateError,'original failures retained');
-   check(ended.error.errors.length===2&&ended.error.errors[0]===shared&&ended.error.errors[1]===shared,'independent original occurrences');});
+   check(ended.error.errors.length===2&&ended.error.errors.every(error=>error.origin==='pipe'&&error.primaryIsUndefined===(shared===undefined))&&ended.error.errors[0].ordinal!==ended.error.errors[1].ordinal,'independent original occurrences');});
    reply={ok:true,origins:2,undefinedOrigin:shared===undefined};
   }
  }catch(error){hasPrimary=true;primary=error;}
@@ -140,7 +171,11 @@ test('actual Workerd ORIGINAL upload, independent failures and public-prefix cus
   try {
     mf = await startWorkerdFixture(temporary, router, upstream, { preventEviction: true });
     const baseline = (await get('/state')).charged;
-    await t.test('native full 1 MiB ASCII upload', async () => { const value = await get('/large'); assert.equal(value.ok, true); assert.equal(value.units, 1048576); });
+    for (const method of ['id', 'get']) for (const kind of ['undefined', 'huge', 'opaque', 'forged']) await t.test(`native injected grant ${method}/${kind} acquisition`, async () => {
+      const value = await get(`/grant-acquire-${method}-${kind}`); assert.equal(value.ok, true); assert.equal(value.acquisitions, 1); assert.equal(value.materializations, 0);
+    });
+    await t.test('actual GrantCredentialObject original materialization', async () => { const value = await get('/grant-native'); assert.equal(value.ok, true); assert.equal(value.native, true); });
+    await t.test('native full 1 MiB ASCII upload' , async () => { const value = await get('/large'); assert.equal(value.ok, true); assert.equal(value.units, 1048576); });
     for (const path of ['/undefined', '/shared']) await t.test(`native independent ${path.slice(1)} cancellation origins`, async () => { const value = await get(path); assert.equal(value.origins, 2); assert.equal(value.ok, true); });
     for (const path of ['/response-undefined', '/response-shared', '/response-read']) await t.test(`native original response ${path.slice(10)}`, async () => { const value = await get(path); assert.equal(value.ok, true); assert.equal(value.origins, path === '/response-read' ? 1 : 2); });
     for (const path of ['/prefix', '/dispatched-prefix']) await t.test(`public SSE prefix precedes held ORIGINAL upload cancellation: ${path}`, async () => {

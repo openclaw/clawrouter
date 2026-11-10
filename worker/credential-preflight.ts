@@ -23,9 +23,10 @@ import { credentialExpired } from "./credential-lifecycle.ts";
 import { safeEqual, sha256Hex, HttpError } from "./utils.ts";
 import { errorResponse } from "./utils.ts";
 import { markLocalError } from "./native-errors.ts";
-import { checkOwnedHttpRequest, growOwnedHttpRequest, holdOwnedHttpRequest, ownedHttpCompletion, type OwnedHttpRequest } from "./http-identity-owner.ts";
+import { checkOwnedHttpRequest, growOwnedHttpRequest, holdOwnedHttpRequest, ownedHttpCompletion, ownedHttpSinkOwner, ownedHttpPreflightFetch,
+  type OwnedHttpRequest, type OwnedHttpSinkOwner } from "./http-identity-owner.ts";
 import { admissionContinuationHeader, admissionContinuationVersion, admissionContinuationPath, closeAdmissionEnvelope, type AdmissionContinuationEnvelope, checkPreflightIdentity, credentialPreflightHeader, credentialPreflightNamespace,
-  credentialPreflightPath, credentialPreflightVersion } from "./credential-preflight-protocol.ts";
+  credentialPreflightPath, credentialPreflightVersion, closePreflightReply } from "./credential-preflight-protocol.ts";
 import { consumeAdmissionBridge, consumePreflightReply } from "./credential-preflight-source.ts";
 
 // Capture the native Annex B lookups and apply before any input inspection.
@@ -106,7 +107,7 @@ export async function resolveOwnedHttpAuthentication(cap: OwnedHttpRequest, requ
       }
     }
     if (!borrow) {
-      const result = await preflightCredential(env, kid, digest, request.signal);
+      const result = await preflightOwnedHttpCredential(cap, request, env, kid, digest);
       if (result.outcome !== "matched") return result.outcome === "unknown"
         ? errorResponse("unknown_proxy_key", "proxy key is not registered", 401)
         : errorResponse("invalid_proxy_key", "proxy key secret is invalid", 401);
@@ -595,7 +596,8 @@ export async function materializeOwnedHttpCredential(cap: OwnedHttpCredential, p
   let original: Promise<import("./types").UpstreamGrant> | undefined, value: import("./types").UpstreamGrant | undefined;
   try {
     if (!owner.env!.GRANT_CREDENTIALS) throw new HttpError(503, "provider_not_configured", "provider is not configured");
-    original = materializeGrantCredentials(owner.env!, selected.key, selected.grant, provider.id, provider.auth.refresh, owner.force, owner.request!.signal);
+    original = materializeGrantCredentials(owner.env!, selected.key, selected.grant, provider.id, provider.auth.refresh, owner.force, owner.request!.signal,
+      undefined, undefined, undefined, undefined, undefined, ownedHttpSinkOwner(owner.http!));
     void original.then(() => undefined, () => undefined);
     value = await original;
     // Actual reader/FIRSTcancel/unlock are joined by the original materializer.
@@ -638,20 +640,27 @@ const continuations = new WeakMap<CredentialPreflightContinuation, Owner>();
 export type CredentialPreflightResult = { outcome: "unknown" | "invalid" } | { outcome: "matched"; proof: CredentialPreflightProof };
 
 export function preflightCredential(env: Pick<Env, "ACCESS_CONTROL">, kid: string, digest: string, signal?: AbortSignal): Promise<CredentialPreflightResult> {
+  return beginCredentialPreflight(env, kid, digest, signal);
+}
+function preflightOwnedHttpCredential(cap: OwnedHttpRequest, request: Request, env: Env, kid: string, digest: string): Promise<CredentialPreflightResult> {
+  checkOwnedHttpRequest(cap, request, env);
+  return beginCredentialPreflight(env, kid, digest, request.signal, ownedHttpSinkOwner(cap));
+}
+function beginCredentialPreflight(env: Pick<Env, "ACCESS_CONTROL">, kid: string, digest: string, signal?: AbortSignal, ownedHttp?: OwnedHttpSinkOwner): Promise<CredentialPreflightResult> {
   // The common Worker body arena funds every new operation factory first.
   const ticket = PreflightTicket.reserve(); ticket.enter("operation");
   try {
     checkPreflightIdentity(kid, digest);
     if (!env.ACCESS_CONTROL) throw identityFailure("protocol");
     const operation = run({ binding: env.ACCESS_CONTROL, namespace: credentialPreflightNamespace,
-      kid, digest, source: identitySourceBudget(), ticket }, signal);
+      kid, digest, source: identitySourceBudget(), ticket }, signal, ownedHttp);
     // Observe immediately without retaining fulfilled graphs or changing the
     // ORIGINAL operation's fulfillment/rejection delivered to its caller.
     void operation.then(() => undefined, () => undefined);
     return operation;
   } catch (error) { ticket.release(); throw error; }
 }
-async function run(owner: Owner, signal?: AbortSignal): Promise<CredentialPreflightResult> {
+async function run(owner: Owner, signal?: AbortSignal, ownedHttp?: OwnedHttpSinkOwner): Promise<CredentialPreflightResult> {
   let body: string | undefined, init: RequestInit | undefined;
   let sent: IdentitySourceBudget | undefined, replySource: IdentitySourceBudget | undefined;
   let request: { credentialId: string; secretSha256: string; source: IdentitySourceBudget } | undefined;
@@ -664,16 +673,31 @@ async function run(owner: Owner, signal?: AbortSignal): Promise<CredentialPrefli
     plan = identityPlan(); plan.item(request, 0);
     body = JSON.stringify(request);
     init = { method: "POST", headers: { "content-type": "application/json", [credentialPreflightHeader]: credentialPreflightVersion }, body, signal, redirect: "manual" };
-    stub = owner.binding.get(owner.binding.idFromName(owner.namespace));
     replySource = identitySourceBudget();
-    reply = await consumePreflightReply(owner.ticket,
-      () => stub!.fetch(`https://authority${credentialPreflightPath}`, init), replySource, signal);
+    if (ownedHttp !== undefined) {
+      reply = await consumeAdmissionBridge(owner.ticket, () => ownedHttpPreflightFetch(ownedHttp!, owner.binding, body!, signal), replySource, "complete", (value, response) => {
+        if (!response?.ok) {
+          const error = (value as { error?: { code?: unknown; message?: unknown } })?.error;
+          if (response?.status === 503 && error?.code === "identity_admission_unavailable") {
+            for (const kind of ["limit", "protocol", "transport", "cleanup"] as const)
+              if (error.message === `Identity admission failed (${kind})`) throw identityFailure(kind);
+          }
+          throw identityFailure("transport");
+        }
+        return closePreflightReply(value);
+      }, signal) ?? undefined;
+      if (!reply) throw identityFailure("protocol");
+    } else {
+      stub = owner.binding.get(owner.binding.idFromName(owner.namespace));
+      reply = await consumePreflightReply(owner.ticket,
+        () => stub!.fetch(`https://authority${credentialPreflightPath}`, init), replySource, signal);
+    }
     advanceIdentitySource(owner.source, sent, reply.source, replySource);
     // Actual fetch, ORIGINAL body read/FIRST cancel/unlock and late-body cleanup
     // have joined. Clear outbound aliases before changing the payload charge.
     body = undefined; init = undefined; sent = undefined; replySource = undefined;
     const outcome = reply.outcome;
-    request = undefined; plan = undefined; stub = undefined; reply = undefined; signal = undefined;
+    request = undefined; plan = undefined; stub = undefined; reply = undefined; signal = undefined; ownedHttp = undefined;
     if (outcome !== "matched") return { outcome };
     // Exact normative scalar payload: UTF-16 strings + seven 64-bit counters.
     // Control slots remain separately inventoried; this is NOT a heap sizeof.

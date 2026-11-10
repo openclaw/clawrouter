@@ -8,14 +8,18 @@ import { chargeLedgerNamespace, ingestUsageNamespace, settleLedgerNamespace, mus
 import { HttpError, randomId } from "./utils.ts";
 import { accountingAdmissionFailure, accountingIdentity, admitAccountingJson, accountingNumberCapacity, copyAccountingJson } from "./json-body.ts";
 import type { PricingGap } from "./pricing.ts";
+import { checkOwnedHttpSinkOwner, ownedHttpLedgerFetch, readOwnedHttpSinkAcknowledgment,
+  discardOwnedHttpSinkResponse, ownedHttpQueueSend, recordOwnedHttpBudgetDenial, isOwnedHttpBudgetDenial, type OwnedHttpSinkOwner } from "./http-identity-owner.ts";
 
 export interface AccountingSinks {
   readonly budget: Env["BUDGET_LEDGER"];
   readonly usage: Env["USAGE_LEDGER"];
   readonly queue: Env["USAGE_QUEUE"];
+  readonly ownedHttp?: OwnedHttpSinkOwner;
 }
-export function accountingSinks(env: Env): AccountingSinks {
-  return { budget: env.BUDGET_LEDGER, usage: env.USAGE_LEDGER, queue: env.USAGE_QUEUE };
+export function accountingSinks(env: Env, ownedHttp?: OwnedHttpSinkOwner): AccountingSinks {
+  if (ownedHttp !== undefined) checkOwnedHttpSinkOwner(ownedHttp);
+  return { budget: env.BUDGET_LEDGER, usage: env.USAGE_LEDGER, queue: env.USAGE_QUEUE, ...(ownedHttp !== undefined ? { ownedHttp } : {}) };
 }
 
 export interface BudgetReservation {
@@ -37,6 +41,8 @@ interface BudgetSettlementFailure {
   readonly queueReason: unknown;
 }
 const reservationFailureDiagnostics = Symbol("budgetReservationFailure");
+// Only a validated allowed:false response mints a private transport-path denial.
+// A thrown HttpError-shaped value from fetch is never this provenance.
 
 export interface BudgetReservationIntent {
   kind: "policy" | "daily" | "weekly" | "provider";
@@ -135,7 +141,8 @@ export function admitBudgetPlan(plan: BudgetReservationPlan, control = false): v
   if (control) admitAccountingJson(plan, "search");
 }
 
-export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capability: string, cost: EstimatedCost, connection?: ProviderConnection, observe?: (intent: BudgetReservationIntent, state: "attempted" | "denied") => void, options: { dispatched?: boolean; search?: MiniMaxSearchOperation; preparedPlan?: BudgetReservationPlan } = {}): Promise<BudgetReservation> {
+export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capability: string, cost: EstimatedCost, connection?: ProviderConnection, observe?: (intent: BudgetReservationIntent, state: "attempted" | "denied") => void, options: { dispatched?: boolean; search?: MiniMaxSearchOperation; preparedPlan?: BudgetReservationPlan; ownedHttp?: OwnedHttpSinkOwner } = {}): Promise<BudgetReservation> {
+  if (options.ownedHttp !== undefined) checkOwnedHttpSinkOwner(options.ownedHttp);
   const plan = options.preparedPlan ?? planBudgetReservation(auth, capability, cost, connection);
   if (options.search) admitBudgetPlan(plan, true);
   const reservation: BudgetReservation = { reservations: [], reservedMicros: plan.reservedMicros };
@@ -145,9 +152,9 @@ export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capabili
     // I/O; a committed reservation can lose its acknowledgement.
     observe?.(leg, "attempted");
     try {
-      return await reserveLedgerIntent(env, leg, options.search?.operation.signal, options.search);
+      return await reserveLedgerIntent(env, leg, options.search?.operation.signal, options.search, options.ownedHttp);
     } catch (error) {
-      if (error instanceof HttpError && error.status === 402) observe?.(leg, "denied");
+      if (options.ownedHttp !== undefined ? isOwnedHttpBudgetDenial(options.ownedHttp, error) : error instanceof HttpError && error.status === 402) observe?.(leg, "denied");
       throw error;
     }
   }));
@@ -156,7 +163,7 @@ export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capabili
   if (failed) {
     if (reservation.reservations.length) {
       const cleanupFailures: BudgetSettlementFailure[] = [];
-      try { await settleBudgetInternal(accountingSinks(env), reservation, 0, options.search, cleanupFailures); }
+      try { await settleBudgetInternal(accountingSinks(env, options.ownedHttp), reservation, 0, options.search, cleanupFailures); }
       catch {
         const error = new HttpError(503, "accounting_unavailable", "Budget reservation rollback could not finish; retry after accounting recovers.");
         Object.defineProperty(error, reservationFailureDiagnostics, { value: Object.freeze({
@@ -171,7 +178,20 @@ export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capabili
   return reservation;
 }
 
-export async function reserveLedgerIntent(env: Env, intent: BudgetReservationIntent, signal?: AbortSignal, search?: MiniMaxSearchOperation): Promise<LedgerBudgetReservation> {
+export async function reserveLedgerIntent(env: Env, intent: BudgetReservationIntent, signal?: AbortSignal, search?: MiniMaxSearchOperation, ownedHttp?: OwnedHttpSinkOwner): Promise<LedgerBudgetReservation> {
+  if (ownedHttp !== undefined) {
+    checkOwnedHttpSinkOwner(ownedHttp);
+    const response = await ownedHttpLedgerFetch(ownedHttp, env.BUDGET_LEDGER, intent.objectName, "/reserve", JSON.stringify(intent.request), signal);
+    if (!response.ok) { discardOwnedHttpSinkResponse(ownedHttp, response); throw new Error(`budget reserve returned ${response.status}`); }
+    const result = await readOwnedHttpSinkAcknowledgment(ownedHttp, response);
+    if (typeof result.allowed !== "boolean") throw new Error("budget reserve was not acknowledged");
+    if (!result.allowed) {
+      const denial = new HttpError(402, intent.kind === "weekly" ? "weekly_budget_exhausted" : intent.kind === "daily" ? "daily_budget_exhausted" : intent.kind === "policy" ? "budget_exhausted" : "provider_budget_exhausted",
+        withLimitHint(intent.kind === "weekly" ? weeklyBudgetMessage(intent.request.limitMicros) : intent.kind === "daily" ? dailyBudgetMessage(intent.request.limitMicros) : intent.kind === "policy" ? "proxy key budget is exhausted" : `provider ${intent.request.policyId.slice("provider/".length)} monthly budget is exhausted`, intent));
+      recordOwnedHttpBudgetDenial(ownedHttp, denial); throw denial;
+    }
+    return { reservationId: intent.request.reservationId, objectName: intent.objectName, ...(result.dispatched === true ? { dispatched: true } : {}) };
+  }
   const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(intent.objectName));
   const result = search
     ? await search.controlJson<{ allowed: boolean; chargedMicros: number; dispatched?: boolean }>(intent.request, (body, active) => stub.fetch("https://clawrouter.internal/reserve", { method: "POST", body, signal: active }), false, signal)
@@ -212,8 +232,15 @@ export async function finalizeOwnedAccounting(sinks: AccountingSinks, reservatio
   return results.every((result) => result.status === "fulfilled");
 }
 
-export async function markBudgetDispatched(env: Env, reservation: BudgetReservation, signal?: AbortSignal, search?: MiniMaxSearchOperation): Promise<void> {
+export async function markBudgetDispatched(env: Env, reservation: BudgetReservation, signal?: AbortSignal, search?: MiniMaxSearchOperation, ownedHttp?: OwnedHttpSinkOwner): Promise<void> {
+  if (ownedHttp !== undefined) checkOwnedHttpSinkOwner(ownedHttp);
   const results = await Promise.allSettled(reservation.reservations.filter(item => !item.dispatched).map(async (item) => {
+    if (ownedHttp !== undefined) {
+      const response = await ownedHttpLedgerFetch(ownedHttp, env.BUDGET_LEDGER, item.objectName, "/dispatch", JSON.stringify({ reservationId: item.reservationId }), signal);
+      if (!response.ok) { discardOwnedHttpSinkResponse(ownedHttp, response); throw new Error("budget dispatch was not acknowledged"); }
+      if ((await readOwnedHttpSinkAcknowledgment(ownedHttp, response)).dispatched !== true) throw new Error("budget dispatch was not acknowledged");
+      return;
+    }
     const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(item.objectName));
     if (search) {
       const result = await search.controlJson<{ dispatched: boolean }>({ reservationId: item.reservationId }, (body, active) => stub.fetch("https://clawrouter.internal/dispatch", { method: "POST", body, signal: active }), false, signal);
@@ -228,11 +255,11 @@ export async function markBudgetDispatched(env: Env, reservation: BudgetReservat
 }
 
 async function publishUsage(sinks: AccountingSinks, event: UsageEvent, search?: MiniMaxSearchOperation): Promise<void> {
-  try { if (search) await search.task(() => sinks.queue.send(event), true); else await sinks.queue.send(event); }
+  try { if (sinks.ownedHttp !== undefined) await ownedHttpQueueSend(sinks.ownedHttp, sinks.queue, event); else if (search) await search.task(() => sinks.queue.send(event), true); else await sinks.queue.send(event); }
   catch {
     // A rejected send can still have been accepted. Reuse the event ID so
     // direct recovery and later queue delivery converge on one stored row.
-    await ingestUsageNamespace(sinks.usage, event, undefined, search);
+    await ingestUsageNamespace(sinks.usage, event, undefined, search, undefined, sinks.ownedHttp);
   }
 }
 
@@ -267,7 +294,7 @@ async function settleReservation(sinks: AccountingSinks, reservation: LedgerBudg
   const objectName = reservation.objectName;
   let ledgerReason: unknown;
   try {
-    await settleLedgerNamespace(sinks.budget, objectName, body, undefined, search);
+    await settleLedgerNamespace(sinks.budget, objectName, body, undefined, search, undefined, sinks.ownedHttp);
     return;
   } catch (error) {
     ledgerReason = error;
@@ -275,7 +302,7 @@ async function settleReservation(sinks: AccountingSinks, reservation: LedgerBudg
   }
   const message = { kind: "budget_settlement" as const, ledger: { objectName }, request: body };
   try {
-    if (search) await search.task(() => sinks.queue.send(message), true); else await sinks.queue.send(message);
+    if (sinks.ownedHttp !== undefined) await ownedHttpQueueSend(sinks.ownedHttp, sinks.queue, message); else if (search) await search.task(() => sinks.queue.send(message), true); else await sinks.queue.send(message);
   } catch (queueReason) {
     failed?.(Object.freeze({ reservationId, objectName, ledgerReason, queueReason }));
     throw queueReason;
@@ -299,8 +326,11 @@ async function chargeBudget(sinks: AccountingSinks, reservation: BudgetReservati
   }
   const results = await Promise.allSettled((reservation.charges ?? []).map(async item => {
     const request = { ...item.request, amountMicros };
-    try { await chargeLedgerNamespace(sinks.budget, item.objectName, request); }
-    catch { await sinks.queue.send({ kind: "budget_charge", ledger: { objectName: item.objectName }, request }); }
+    try { await chargeLedgerNamespace(sinks.budget, item.objectName, request, undefined, undefined, sinks.ownedHttp); }
+    catch {
+      const message = { kind: "budget_charge" as const, ledger: { objectName: item.objectName }, request };
+      if (sinks.ownedHttp !== undefined) await ownedHttpQueueSend(sinks.ownedHttp, sinks.queue, message); else await sinks.queue.send(message);
+    }
   }));
   const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
   if (failed) throw failed.reason;
