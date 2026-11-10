@@ -37,7 +37,7 @@ async function fixture(t, run, retained = false, variant = 'fireworks') {
   const activeModel = variant === 'venice' ? activeProvider.models.find(item => item.id === 'venice/zai-org-glm-5-2') : model;
   const activeGrantKey = 'oauth/' + policyId + '/' + variant;
   const baseline = bodyBudgetCharged(), roots = [], origins = new WeakMap(), bodies = new WeakMap();
-  const resources = [], releases = [], values = new Map(), calls = [], sent = [], events = [];
+  const resources = [], releases = [], values = new Map(), calls = [], sent = [], events = [], retirements = [];
   let done = false, cleanupPromise, hasPrimary = false, primary, rejectMaterialize = false, pressure, archiveGate;
   const own = promise => {
     if (origins.has(promise)) return origins.get(promise);
@@ -86,15 +86,43 @@ async function fixture(t, run, retained = false, variant = 'fireworks') {
       return stub.fetch(url, init);
     } };
   };
-  let upstreamGate, veniceWire;
+  let upstreamGate, veniceWire, veniceFault;
   t.mock.method(globalThis, 'fetch', async (input, init) => {
     const request = new Request(input, init);
     if (upstreamGate) { upstreamGate.entered.resolve(); await take(own(upstreamGate.release.promise)); }
     const text = await take(own(request.text())); sent.push({ text, method: request.method, url: request.url });
-    if (variant === 'venice') return accessBytesResponse(veniceWire, '', { headers: {
-      'content-type': 'application/json', 'content-length': String(Buffer.byteLength(veniceWire)),
-      etag: 'fixture-etag', digest: 'fixture-digest', 'content-md5': 'fixture-md5',
-    } });
+    if (variant === 'venice') {
+      const response = accessBytesResponse(veniceWire, '', { headers: {
+        'content-type': 'application/json', 'content-length': String(Buffer.byteLength(veniceWire)),
+        etag: 'fixture-etag', digest: 'fixture-digest', 'content-md5': 'fixture-md5',
+      } });
+      if (!veniceFault) return response;
+      const fault = veniceFault, body = response.body;
+      const observed = new Proxy(body, { get(target, key) {
+        if (key === 'getReader') return options => {
+          const reader = target.getReader(options);
+          return new Proxy(reader, { get(current, name) {
+            if (name === 'read') return (...args) => {
+              fault.read++; const original = Reflect.apply(current.read, current, args);
+              return original.then(() => { fault.readSettled++; throw fault.reason; });
+            };
+            if (name === 'cancel') return (...args) => {
+              fault.cancel++; const original = Reflect.apply(current.cancel, current, args);
+              return original.then(async () => {
+                fault.cancelSettled++; fault.entered.resolve(); await fault.release.promise; throw fault.reason;
+              });
+            };
+            if (name === 'releaseLock') return () => { Reflect.apply(current.releaseLock, current, []); fault.unlock++; throw fault.reason; };
+            const value = Reflect.get(current, name, current); return typeof value === 'function' ? value.bind(current) : value;
+          } });
+        };
+        const value = Reflect.get(target, key, target); return typeof value === 'function' ? value.bind(target) : value;
+      } });
+      return new Proxy(response, { get(target, key) {
+        if (key === 'body') return observed;
+        const value = Reflect.get(target, key, target); return typeof value === 'function' ? value.bind(target) : value;
+      } });
+    }
     return Response.json({ id: 'synthetic-priced-chat', model: model.upstream, choices: [{ message: { role: 'assistant', content: 'synthetic answer' }, finish_reason: 'stop' }],
       usage: { prompt_tokens: 4, completion_tokens: 3, total_tokens: 7 } });
   });
@@ -102,7 +130,7 @@ async function fixture(t, run, retained = false, variant = 'fireworks') {
     const original = privateOwnedHttpChat.fetch(new Request('https://router.example/v1/chat/completions', {
       method: 'POST', headers: { authorization: 'Bearer clawrouter-live-' + kid + '-fixture-secret', 'content-type': 'application/json' },
       body: accessBytesResponse(typeof input === 'string' ? input : JSON.stringify(input)).body, duplex: 'half',
-    }), env, { waitUntil: promise => { own(promise); } });
+    }), env, { waitUntil: promise => { retirements.push(own(promise)); } });
     const root = own(original); own(original.then(response => { bodyRoot(response); }, () => {})); return root;
   };
   const request = async input => { const response = await take(dispatch(input)); return { status: response.status, text: await take(bodyRoot(response)), headers: response.headers }; };
@@ -115,8 +143,13 @@ async function fixture(t, run, retained = false, variant = 'fireworks') {
     values.set('connections/' + variant, { providerId: variant, enabled: true });
     await take(own(putGrantCredentials(env, activeGrantKey, { provider: variant, enabled: true, kind: 'api_key', credential: 'fixture-upstream-key' })));
     calls.length = 0;
-    await run({ env, calls, sent, events, own, take, request, dispatch, drain, releases, bodyRoot,
+    await run({ env, calls, sent, events, own, take, request, dispatch, drain, releases, bodyRoot, retirements,
       veniceResponse(wire) { assert.equal(variant, 'venice'); veniceWire = wire; },
+      failVeniceSource(reason) {
+        assert.equal(variant, 'venice'); assert.equal(veniceFault, undefined);
+        veniceFault = { reason, read: 0, readSettled: 0, cancel: 0, cancelSettled: 0, unlock: 0, entered: deferred(), release: deferred() };
+        releases.push(() => veniceFault.release.resolve()); return veniceFault;
+      },
       failMaterialization() { rejectMaterialize = true; },
       holdUpload() { upstreamGate = { entered: deferred(), release: deferred() }; releases.push(() => upstreamGate.release.resolve()); return upstreamGate; },
       holdArchive() { archiveGate = { entered: deferred(), release: deferred() }; releases.push(() => archiveGate.release.resolve()); return archiveGate; },
@@ -336,4 +369,46 @@ test('owned Venice JSON publication does not retire a held ORIGINAL archive', as
     gate.release.resolve(); await f.drain();
     assert.equal(f.calls.filter(row => row.kind === 'archive-complete').length, 1);
   }, true, 'venice');
+});
+
+for (const kind of ['undefined', 'shared', 'huge'])
+test('owned Venice first observers retain independent origins without retaining ' + kind + ' rejection data', async t => {
+  let reasonReads = 0;
+  const opaque = {};
+  for (const key of ['message', 'stack', 'cause', 'errors', 'code', 'status'])
+    Object.defineProperty(opaque, key, { get() { reasonReads++; throw new Error('raw fixture reason observed'); } });
+  const reason = kind === 'undefined' ? undefined : kind === 'huge' ? 'x'.repeat(17 * 1024 * 1024) : opaque;
+  await fixture(t, async f => {
+    f.veniceResponse('{"model":"' + veniceUpstream + '","choices":[]}');
+    const gate = f.failVeniceSource(reason), dispatch = f.dispatch(payload({ model: veniceModelId }));
+    await f.take(f.own(Promise.race([gate.entered.promise, dispatch.outcome.then(outcome => {
+      if (outcome.failed) throw outcome.error;
+      throw new Error('codec returned before original cancellation hold');
+    })])));
+    assert.equal(gate.read, 1); assert.equal(gate.readSettled, 1);
+    assert.equal(gate.cancel, 1); assert.equal(gate.cancelSettled, 1); assert.equal(gate.unlock, 0);
+    assert.ok(bodyBudgetCharged() > 32 * 1024 * 1024); assert.equal(reasonReads, 0);
+    gate.release.resolve();
+    const response = await f.take(dispatch), text = await f.take(f.bodyRoot(response)); await f.drain();
+    const terminalFailures = [];
+    for (const root of f.retirements) {
+      const outcome = await root.outcome;
+      if (outcome.failed) try { await f.take(root); } catch (error) { terminalFailures.push(error); }
+    }
+    try {
+      assert.equal(response.status, 502); assert.equal(JSON.parse(text).error.code, 'provider_unavailable');
+      assert.equal(gate.unlock, 1); assert.equal(reasonReads, 0);
+      assert.equal(terminalFailures.length, 1);
+      assert.ok(terminalFailures[0] instanceof AggregateError);
+      const failures = terminalFailures[0].errors;
+      assert.equal(failures.length, 3);
+      assert.deepEqual(failures.map(value => Object.getOwnPropertyDescriptor(value, 'origin')?.value), ['read', 'cancel', 'unlock']);
+      assert.ok(failures.every(value => Object.getOwnPropertyDescriptor(value, 'primaryIsUndefined')?.value === (kind === 'undefined')));
+      assert.ok(failures.every(value => value !== reason), 'only bounded origin records leave the first observers');
+      assert.equal(new Set(failures).size, 3, 'a shared original reason does not merge independent origins');
+      assert.equal(f.sent.length, 1);
+    } catch (validation) {
+      throw new AggregateError([...terminalFailures, validation], 'owned codec failure-consumer validation');
+    }
+  }, false, 'venice');
 });

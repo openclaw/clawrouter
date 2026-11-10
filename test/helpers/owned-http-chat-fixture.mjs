@@ -70,7 +70,7 @@ function observeControlRead(kind,path,original,signal){
  const fault=controlReadFault;controlReadFault=undefined;
  const row={kind,read:0,readSettled:0,cancel:0,cancelSettled:0,unlock:0,released:false},shared={};
  for(const key of ['message','stack','cause','errors','code','status'])Object.defineProperty(shared,key,{get(){reasonReads++;throw Error('raw reason observed');}});
- const reason=fault.reason==='undefined'?undefined:shared;
+ const reason=fault.reason==='undefined'?undefined:fault.reason==='huge'?'x'.repeat(17*1024*1024):shared;
  let release;const gate=new Promise(resolve=>{release=resolve;});
  // This fixture gate is AFTER the original native cancellation. It is not
  // evidence that a remote producer or physical native storage has retired.
@@ -162,7 +162,7 @@ export default {...handler,async fetch(request,env,context){
  }
  if(path==='/fixture/control-read'){
   if(request.method==='DELETE'){for(const row of controlReads)row.release?.();return new Response(null,{status:204});}
-  const value=await request.json();if(!['authority','credential','provider'].includes(value.kind)||!['undefined','shared','listener'].includes(value.reason))throw Error('fixture read shape');
+  const value=await request.json();if(!['authority','credential','provider'].includes(value.kind)||!['undefined','shared','huge','listener'].includes(value.reason))throw Error('fixture read shape');
   controlReadFault=value;return new Response(null,{status:204});
  }
  if(path==='/fixture/revalidation-change'){

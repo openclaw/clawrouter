@@ -298,7 +298,7 @@ test('native ' + kind + ' control keeps original read/cancel/unlock and funding 
   });
 });
 
-for (const reason of ['undefined', 'shared'])
+for (const reason of ['undefined', 'shared', 'huge'])
 test('native Venice codec joins independently failing original read/cancel/unlock after the post-native hold: ' + reason, { timeout: 120000 }, async t => {
   await fixture(t, async f => {
     const request = () => chat('venice', { model: ownedHttpControlModels.venice });

@@ -546,11 +546,12 @@ remaining diagnostic capabilities as well as backing; final cleanup cannot
 invalidate a callback capability whose removal was not established.
 
 Additional authored witnesses use the real compiled entry and SQLite authority:
-13 Node cases, 14 native cases, and one Venice invocation in the existing pinned
+16 Node cases, 15 native cases, and one Venice invocation in the existing pinned
 OpenClaw UNIFIED client fixture. They include accepted/rejected structural and
 wire edges, escaped Unicode, raw duplicate/unknown preservation, more than 2 MiB
 of SSE, JSON delivery while archive work is held, and post-native held
-cancellation with independent read/cancel/unlock failures. The codec's negative
+cancellation with independent read/cancel/unlock failures, including a 17 MiB
+primitive, shared opaque object and rejected undefined. The codec's negative
 consumers assert fixed ordered origin/presence receipts instead of hiding
 retirement failures behind a successful public error response. These cases
 are authored only; local semantics remain UNRUN_CODE_ONLY_HOSTED.
