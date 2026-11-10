@@ -544,6 +544,11 @@ occurs. The JSON parse phase retains only output-cancel and final-abort codec
 origins after source retirement. An UNKNOWN listener or borrower keeps the
 remaining diagnostic capabilities as well as backing; final cleanup cannot
 invalidate a callback capability whose removal was not established.
+The codec intake capability refers directly to its nine genuine root-origin
+records. It adds no per-origin capability, forwarding owner or second weak
+registration. Its root vector retains failed records; joined successes clear
+their vector cells and registrations before parser reuse. This representation
+change does not add source credit, common funding or CONTROL capacity.
 
 Additional authored witnesses use the real compiled entry and SQLite authority:
 16 Node cases, 15 native cases, and one Venice invocation in the existing pinned

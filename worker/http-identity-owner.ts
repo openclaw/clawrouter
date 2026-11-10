@@ -60,6 +60,7 @@ interface RequestOwner {
   terminalRegistration?: SinkOriginOwner;
   budgetDenials?: WeakSet<object>;
   revalidations?: OwnedHttpRevalidation[];
+  codecOrigins?: SinkOriginOwner[];
 }
 interface UploadOwner {
   cap: OwnedHttpUpload;
@@ -96,7 +97,8 @@ let sinkOwners: WeakMap<OwnedHttpSinkOwner, RequestOwner> | undefined;
 let sinkFailures: WeakSet<object> | undefined;
 let sinkRegistrations: WeakMap<OwnedHttpSinkRegistration, { owner: RequestOwner; origin: SinkOriginOwner; scope: ProxyCompletion }> | undefined;
 type IntakePhase = "acquire" | "read" | "cancel" | "unlock" | "listenerAdd" | "listenerRemove" | "abort" | "pull" | "retire";
-type IntakeOwner = Partial<Record<IntakePhase, OwnedHttpFailureOrigin>> & { owner: RequestOwner; venice?: true };
+type IntakeOwner = (Partial<Record<IntakePhase, OwnedHttpFailureOrigin>> & { owner: RequestOwner; venice?: false })
+  | (Partial<Record<IntakePhase, SinkOriginOwner>> & { owner: RequestOwner; venice: true });
 let intakes: WeakMap<OwnedHttpIntakeDiagnostics, IntakeOwner> | undefined;
 
 // The capability has no graph, callback, receiver or mutable public field.
@@ -329,11 +331,14 @@ export function beginOwnedHttpVeniceSource(cap: OwnedHttpRevalidation): OwnedHtt
   root.revalidationCredits -= 9; owner.codecSource = true;
   // The nine complete origin products were prepaid with this attempt before
   // selection. No common-arena allocation can fail after provider dispatch.
-  const acquire = beginOwnedHttpFailureOrigin(owner.http, "acquire", true), read = beginOwnedHttpFailureOrigin(owner.http, "read", true);
-  const cancel = beginOwnedHttpFailureOrigin(owner.http, "cancel", true), unlock = beginOwnedHttpFailureOrigin(owner.http, "unlock", true);
-  const listenerAdd = beginOwnedHttpFailureOrigin(owner.http, "listener-add", true), listenerRemove = beginOwnedHttpFailureOrigin(owner.http, "listener-remove", true);
-  const abort = beginOwnedHttpFailureOrigin(owner.http, "abort", true);
-  const pull = beginOwnedHttpFailureOrigin(owner.http, "pull", true), retire = beginOwnedHttpFailureOrigin(owner.http, "retire", true);
+  const sink = ownedHttpSinkOwner(owner.http);
+  const acquire = sinkOrigin(sink, "acquire"), read = sinkOrigin(sink, "read");
+  const cancel = sinkOrigin(sink, "cancel"), unlock = sinkOrigin(sink, "unlock");
+  const listenerAdd = sinkOrigin(sink, "listener-add"), listenerRemove = sinkOrigin(sink, "listener-remove");
+  const abort = sinkOrigin(sink, "abort"), pull = sinkOrigin(sink, "pull"), retire = sinkOrigin(sink, "retire");
+  // The intake capability already proves the request/phase. Its original
+  // records need no second per-origin cap, weak entry or forwarding owner.
+  (root.codecOrigins ??= []).push(acquire, read, cancel, unlock, listenerAdd, listenerRemove, abort, pull, retire);
   const receipt = Object.freeze({});
   (intakes ??= new WeakMap()).set(receipt, { owner: root, venice: true, acquire, read, cancel, unlock, listenerAdd, listenerRemove, abort, pull, retire });
   return receipt;
@@ -819,9 +824,9 @@ export function growOwnedHttpRequest(cap: OwnedHttpRequest, bytes: number): void
 // Register fixed operation origins before acquiring/starting an original. Read,
 // FIRSTcancel and unlock are separate origins even when they reject with the
 // same value or undefined. A second observation of one origin adds no error.
-function beginOwnedHttpFailureOrigin(cap: OwnedHttpRequest, kind: SinkOrigin, prepaid = false): OwnedHttpFailureOrigin {
+function beginOwnedHttpFailureOrigin(cap: OwnedHttpRequest, kind: SinkOrigin): OwnedHttpFailureOrigin {
   const owner = requestOwner(cap);
-  if (!prepaid) growOwnedHttpRequest(cap, 256);
+  growOwnedHttpRequest(cap, 256);
   const origin = Object.freeze({});
   const failure: FailureOwner = { cap: origin, failed: false, record: sinkOrigin(ownedHttpSinkOwner(cap), kind) };
   failureOrigins!.set(origin, failure); owner.failures.push(failure);
@@ -843,7 +848,12 @@ export function beginOwnedHttpIntakeDiagnostics(cap: OwnedHttpRequest): OwnedHtt
   return receipt;
 }
 export function ownedHttpIntakeFailure(cap: OwnedHttpIntakeDiagnostics, phase: IntakePhase, reason: unknown): object {
-  const origin = intakes?.get(cap)?.[phase];
+  const receipt = intakes?.get(cap);
+  if (receipt?.venice) {
+    const record = receipt[phase]; if (!record) throw identityFailure("protocol");
+    return failedSinkOrigin(record, reason);
+  }
+  const origin = receipt?.[phase];
   if (!origin) throw identityFailure("protocol");
   return rememberOwnedHttpFailure(origin, reason);
 }
@@ -857,6 +867,16 @@ export function finishOwnedHttpIntakeDiagnostics(cap: OwnedHttpIntakeDiagnostics
   intakes!.delete(cap);
 }
 function retireIntakeOrigin(receipt: IntakeOwner, phase: IntakePhase): void {
+  if (receipt.venice) {
+    const record = receipt[phase]; if (!record) return;
+    if (!record.failed) {
+      const roots = receipt.owner.codecOrigins!, index = roots.indexOf(record);
+      if (index < 0) throw identityFailure("protocol");
+      for (let next = index + 1; next < roots.length; next++) roots[next - 1] = roots[next];
+      roots.length--; completedSinkOrigin(receipt.owner, record);
+    }
+    receipt[phase] = undefined; return;
+  }
   const cap = receipt[phase]; if (!cap) return;
   const origin = failureOrigins?.get(cap);
   // Failed occurrences stay in the root's ordered vector until its final
@@ -1125,6 +1145,7 @@ export function finishOwnedHttpRequest(cap: OwnedHttpRequest): Promise<void> {
     for (const origin of owner.failures) {
       if (origin.failed) failures.push(origin.carrier);
     }
+    for (const origin of owner.codecOrigins ?? []) if (origin.failed) failures.push(origin);
     if (!owner.unknown) {
       if (owner.abortListener) {
         try { owner.request!.signal.removeEventListener("abort", owner.abortListener); if (owner.abortRemoval) completedSinkOrigin(owner, owner.abortRemoval); }
@@ -1169,6 +1190,8 @@ export function finishOwnedHttpRequest(cap: OwnedHttpRequest): Promise<void> {
       // current original body has joined; UNKNOWN keeps those caps funded.
       for (const origin of owner.failures) { origin.carrier = undefined; failureOrigins!.delete(origin.cap); }
       owner.failures.length = 0;
+      if (owner.codecOrigins) owner.codecOrigins.length = 0;
+      owner.codecOrigins = undefined;
       owner.uploads.length = 0; owner.request = undefined; owner.env = undefined;
       if (owner.sink) sinkOwners!.delete(owner.sink);
       if (owner.sinkOrigins) for (const origin of owner.sinkOrigins.values()) sinkFailures!.delete(origin);
