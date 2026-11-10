@@ -35,7 +35,9 @@ import { prepareModelDiscoveryOwner } from "./model-discovery-owner.ts";
 import { REQUESTY_MODELS_FORMAT } from "./requesty-model-catalog.ts";
 import { assertMultipartIntake } from "./transcription-protocol.ts";
 import { prepareVeniceChatAuthority, prepareOwnedVeniceChatAuthority } from "./venice-chat-authority.ts";
-import { prepareVeniceChatResponse, veniceChat } from "./venice-chat-runtime.ts";
+import { prepareVeniceChatResponse, veniceChat, prepareOwnedVeniceChatCodec, checkOwnedVeniceChatCodec,
+  readOwnedVeniceChatResponse, forwardOwnedVeniceUsage, matchesOwnedVeniceUsage } from "./venice-chat-runtime.ts";
+import type { OwnedHttpRevalidation } from "./http-identity-owner.ts";
 import { acquireFeatherlessCatalog, featherlessCatalogResponse, prepareFeatherlessCatalogOwner } from "./featherless-catalog-runtime.ts";
 import { isKeyedModelDiscovery, prepareKeyedModelDiscovery } from "./keyed-model-discovery.ts";
 import { prepareGmiOrganizationBinding, prepareOwnedGmiOrganizationBinding } from "./gmi-organization-binding.ts";
@@ -137,6 +139,9 @@ interface OwnedProxyInvocation {
   preparingUpstream?: UpstreamAuth;
   preparingFields?: OwnedPreparedFields;
   preparingAdmission?: PreparationAdmission;
+  nativeResponse?: Response;
+  nativeSignal?: AbortSignal;
+  nativeUsage?: import("./native-response.ts").ValidatedNativeUsage;
 }
 interface OwnedPreparationReceiver { owner: OwnedHttpRequest; fields?: OwnedPreparedFields }
 let ownedProxyInvocations: WeakMap<OwnedHttpRequest, OwnedProxyInvocation> | undefined;
@@ -145,6 +150,17 @@ let ownedPreparedSelections: WeakMap<PreparedUpstream, GenerationSelectionHandle
 let ownedPreparedUploads: WeakMap<PreparedUpstream, OwnedHttpUpload> | undefined;
 let ownedProxyCount = 0;
 export function hasOwnedHttpProxyInvocation(cap: OwnedHttpRequest): boolean { return ownedProxyInvocations?.has(cap) === true; }
+export function matchesOwnedHttpVeniceResponseInput(cap: OwnedHttpRequest, attempt: OwnedHttpUpload, response: Response, signal: AbortSignal): boolean {
+  const owner = ownedProxyInvocations?.get(cap);
+  return !!owner && owner.nativeResponse === response && owner.nativeSignal === signal && owner.upload === attempt
+    && owner.prepared !== undefined && ownedPreparedUploads?.get(owner.prepared) === attempt;
+}
+export function acceptOwnedHttpVeniceUsage(http: OwnedHttpRequest, codec: OwnedHttpRevalidation,
+  response: Response, usage: import("./native-response.ts").ValidatedNativeUsage | undefined): void {
+  const owner = ownedProxyInvocations?.get(http);
+  if (!owner || owner.prepared?.ownedVenice !== codec || !matchesOwnedVeniceUsage(codec, response, usage)) throw identityFailure("protocol");
+  owner.nativeUsage = usage;
+}
 export function hasBoundOwnedHttpAuthentication(cap: OwnedHttpRequest): boolean {
   return ownedProxyInvocations?.get(cap)?.identity !== undefined;
 }
@@ -248,6 +264,7 @@ export function retireOwnedHttpProxy(cap: OwnedHttpRequest): void {
   retireOwnedHttpControlVerification(cap);
   const admission = invocation.admission;
   invocation.prepared = undefined; invocation.identity = undefined; invocation.selection = undefined;
+  invocation.nativeResponse = undefined; invocation.nativeSignal = undefined; invocation.nativeUsage = undefined;
   invocation.admission = undefined; invocation.upload = undefined; invocation.attempts.length = 0;
   invocation.required = undefined; invocation.request = undefined as never; invocation.env = undefined as never; invocation.context = undefined as never;
   admission?.retireOwned();
@@ -432,6 +449,7 @@ function openRouterMusicCandidate(provider: CompiledProvider, endpoint: Compiled
 }
 
 interface PreparedUpstream {
+  ownedVenice?: OwnedHttpRevalidation;
   headers: Headers;
   url: URL;
   requestBody: string | ReadableStream<Uint8Array> | undefined;
@@ -1547,7 +1565,11 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
         }
         await input.retire("cancel", signal.reason);
       };
-      pending = owner ? owner.start(dispose) : dispose();
+      // The private native codec may publish a late public Response after the
+      // logical attempt sealed. Its prepaid sink custody remains open until
+      // that codec's original output receipt settles; never reenter a sealed
+      // logical completion merely to initiate its original cancellation.
+      pending = owned ? dispose() : owner ? owner.start(dispose) : dispose();
       void pending.catch(() => undefined);
       (discarded ??= new WeakMap()).set(response, pending);
     }
@@ -1575,6 +1597,7 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
   let nativeLease: BodyLease | undefined;
   let nativeUsage: import("./native-response.ts").ValidatedNativeUsage | undefined;
   let nativeRead: ReturnType<NonNullable<ProxySelection["nativeResponse"]>["read"]> | undefined;
+  let ownedNativeRead: Promise<Response> | undefined;
   let nativeFetch: Promise<Response> | undefined;
   let musicRead: Promise<unknown> | undefined;
   let imageRead: Promise<unknown> | undefined;
@@ -1583,7 +1606,8 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
   try {
     // A canceled preflight is known-unsent even if the ledger marks already landed.
     signal.throwIfAborted();
-    nativeLease = searchOwner ? undefined : music ? music.acquireResponse() : prepared.featherlessCatalog ? acquireFeatherlessCatalog() : selection.nativeResponse?.acquire() ?? prepared.acquireDiscovery?.();
+    if (owned && prepared.ownedVenice) checkOwnedVeniceChatCodec(prepared.ownedVenice, selection.nativeResponse!);
+    else nativeLease = searchOwner ? undefined : music ? music.acquireResponse() : prepared.featherlessCatalog ? acquireFeatherlessCatalog() : selection.nativeResponse?.acquire() ?? prepared.acquireDiscovery?.();
     if (!nativeModelEligible(selection.endpoint.request_format, selection.model?.upstream)) throw new HttpError(400, "model_capability_unsupported", "selected model qualification expired before dispatch");
     dispatched = !searchOwner;
     const upstreamStart = performance.now();
@@ -1689,7 +1713,17 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       if (catalogInputs) catalogWork = reading;
       response = catalogInputs ? await operation.wait(reading, "upstream", discard) : await reading;
     }
-    if (selection.nativeResponse) {
+    if (owned && prepared.ownedVenice) {
+      const receiver = ownedProxyInvocations!.get(owned)!;
+      receiver.nativeResponse = response;
+      receiver.nativeSignal = signal;
+      ownedNativeRead = readOwnedVeniceChatResponse(prepared.ownedVenice, response, signal);
+      response = await operation.wait(ownedNativeRead, "upstream", discard);
+      forwardOwnedVeniceUsage(prepared.ownedVenice, owned, response);
+      nativeUsage = receiver.nativeUsage;
+      try { if (prepared.revalidateDelivery) await operation.wait(prepared.revalidateDelivery(signal), "publication"); }
+      catch (error) { void discard(response); throw error; }
+    } else if (selection.nativeResponse) {
       if (selection.endpoint.request_format === "minimax.images") imageInput = ownMiniMaxImageInput(response);
       const reading = selection.nativeResponse.read(imageInput?.response ?? response, signal);
       nativeRead = searchOwner ? searchOwner.track(reading) : reading;
@@ -1755,11 +1789,12 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
         if (failed?.status === "rejected") throw failed.reason;
       })();
       context.waitUntil(retirement.then(() => failedLease?.release()));
-    } else if (nativeRead || nativeFetch) {
+    } else if (nativeRead || ownedNativeRead || nativeFetch) {
       // Cancellation/accounting can finish now. A qualified reader settles only
       // after input retirement; late fetch/results also retain their first cleanup.
       const retirement = (async () => {
         await nativeRead?.then(discardNative, () => undefined);
+        await ownedNativeRead?.then(discard, () => undefined);
         await nativeFetch?.then(discard, () => undefined);
       })();
       context.waitUntil(retirement.then(() => failedLease?.release()));
@@ -2071,7 +2106,10 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     const chatCheck = veniceChat(selection)
       ? await (revalidation ? prepareOwnedVeniceChatAuthority(revalidation, env, auth, selection, upstream, url, headers)
         : prepareVeniceChatAuthority(env, auth, selection, upstream, url, headers)) : undefined;
-    if (chatCheck) selection.nativeResponse = prepareVeniceChatResponse(selection, chatCheck);
+    if (chatCheck) {
+      selection.nativeResponse = prepareVeniceChatResponse(selection, chatCheck);
+      if (revalidation) prepareOwnedVeniceChatCodec(revalidation, selection, selection.nativeResponse!);
+    }
     const catalogCheck = isKeyedModelDiscovery(selection.endpoint.request_format)
       ? await prepareKeyedModelDiscovery(request, env, auth, selection, upstream, url, headers) : undefined;
     const pcmCheck = openRouterPcmRequirement({ ...selection, model: selection.model?.upstream })
@@ -2113,7 +2151,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     }
     const wanCheck = wanCreate(selection.endpoint) && continuation
       ? wanCreateAuthority(env, auth, selection, upstream, configuredOwnerUrl, headers, continuation, wan, preparation) : undefined;
-    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(videoCheck ? { revalidateAccount: videoCheck } : tokenPlanCheck ? { revalidateAccount: tokenPlanCheck, revalidateDelivery: tokenPlanCheck } : wanCheck ? { revalidateAccount: wanCheck } : chatCheck ? { revalidateAccount: chatCheck.revalidate, ...(!Array.isArray(selection.body) && selection.body.stream === true ? {} : { revalidateDelivery: chatCheck.revalidate }) } : ownedGmiCheck ? { revalidateAccount: ownedGmiCheck } : discoveryCheck ? { revalidateAccount: async (signal: AbortSignal) => { await discoveryCheck(signal); }, ...(isModelDiscovery(selection.endpoint) ? { revalidateDiscovery: discoveryCheck, acquireDiscovery: () => nativeResponseLease(16 * 1024 * 1024) } : {}) } : catalogCheck ? { revalidateAccount: catalogCheck } : musicCheck ? { revalidateAccount: musicCheck.revalidate, revalidateDelivery: musicCheck.revalidate } : pcmCheck ? { revalidateAccount: pcmCheck } : vertexAnthropic ? { revalidateAccount: vertexAnthropic.revalidate } : minimaxAnthropic ? { revalidateAccount: minimaxAnthropic.revalidate } : imageCheck ? { revalidateAccount: imageCheck } : nativeMediaCheck ? { revalidateMedia: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
+    return { ...(chatCheck && revalidation ? { ownedVenice: revalidation } : {}), headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(videoCheck ? { revalidateAccount: videoCheck } : tokenPlanCheck ? { revalidateAccount: tokenPlanCheck, revalidateDelivery: tokenPlanCheck } : wanCheck ? { revalidateAccount: wanCheck } : chatCheck ? { revalidateAccount: chatCheck.revalidate, ...(!Array.isArray(selection.body) && selection.body.stream === true ? {} : { revalidateDelivery: chatCheck.revalidate }) } : ownedGmiCheck ? { revalidateAccount: ownedGmiCheck } : discoveryCheck ? { revalidateAccount: async (signal: AbortSignal) => { await discoveryCheck(signal); }, ...(isModelDiscovery(selection.endpoint) ? { revalidateDiscovery: discoveryCheck, acquireDiscovery: () => nativeResponseLease(16 * 1024 * 1024) } : {}) } : catalogCheck ? { revalidateAccount: catalogCheck } : musicCheck ? { revalidateAccount: musicCheck.revalidate, revalidateDelivery: musicCheck.revalidate } : pcmCheck ? { revalidateAccount: pcmCheck } : vertexAnthropic ? { revalidateAccount: vertexAnthropic.revalidate } : minimaxAnthropic ? { revalidateAccount: minimaxAnthropic.revalidate } : imageCheck ? { revalidateAccount: imageCheck } : nativeMediaCheck ? { revalidateMedia: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
   } catch (error) {
     throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
   }

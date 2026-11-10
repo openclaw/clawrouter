@@ -32,7 +32,10 @@ const deferred = () => {
 // Original dispatch, late body and accepted background roots share ONE outcome
 // identity. Release gates first, dynamically join all finite roots, then retire
 // generation publication and fixture resources. Mocks stay installed until joins.
-async function fixture(t, run, retained = false) {
+async function fixture(t, run, retained = false, variant = 'fireworks') {
+  const activeProvider = snapshot.providers.find(item => item.id === variant);
+  const activeModel = variant === 'venice' ? activeProvider.models.find(item => item.id === 'venice/zai-org-glm-5-2') : model;
+  const activeGrantKey = 'oauth/' + policyId + '/' + variant;
   const baseline = bodyBudgetCharged(), roots = [], origins = new WeakMap(), bodies = new WeakMap();
   const resources = [], releases = [], values = new Map(), calls = [], sent = [], events = [];
   let done = false, cleanupPromise, hasPrimary = false, primary, rejectMaterialize = false, pressure, archiveGate;
@@ -83,11 +86,15 @@ async function fixture(t, run, retained = false) {
       return stub.fetch(url, init);
     } };
   };
-  let upstreamGate;
+  let upstreamGate, veniceWire;
   t.mock.method(globalThis, 'fetch', async (input, init) => {
     const request = new Request(input, init);
     if (upstreamGate) { upstreamGate.entered.resolve(); await take(own(upstreamGate.release.promise)); }
     const text = await take(own(request.text())); sent.push({ text, method: request.method, url: request.url });
+    if (variant === 'venice') return accessBytesResponse(veniceWire, '', { headers: {
+      'content-type': 'application/json', 'content-length': String(Buffer.byteLength(veniceWire)),
+      etag: 'fixture-etag', digest: 'fixture-digest', 'content-md5': 'fixture-md5',
+    } });
     return Response.json({ id: 'synthetic-priced-chat', model: model.upstream, choices: [{ message: { role: 'assistant', content: 'synthetic answer' }, finish_reason: 'stop' }],
       usage: { prompt_tokens: 4, completion_tokens: 3, total_tokens: 7 } });
   });
@@ -102,13 +109,14 @@ async function fixture(t, run, retained = false) {
   const drain = async () => { for (let i = 0; i < roots.length; i++) await roots[i].outcome; };
   try {
     values.set('credentials/' + kid, { enabled: true, secretSha256: await take(own(sha256Hex('fixture-secret'))), policyId, policyGeneration: 'pricing' });
-    values.set('policies/' + policyId, { enabled: true, generation: 'pricing', providers: ['fireworks'], models: [modelId], tenantId: 'pricing',
+    values.set('policies/' + policyId, { enabled: true, generation: 'pricing', providers: [variant], models: [activeModel.id], tenantId: 'pricing',
       monthlyBudgetMicros: 1000000000000, requestCostMicros: null, budgetMode: 'reserve', retainRequestContent: retained,
-      grantRouting: { strategy: 'round_robin', environmentFallback: false, eligibleGrants: { fireworks: ['fireworks'] } } });
-    values.set('connections/fireworks', { providerId: 'fireworks', enabled: true });
-    await take(own(putGrantCredentials(env, grantKey, { provider: 'fireworks', enabled: true, kind: 'api_key', credential: 'fixture-upstream-key' })));
+      grantRouting: { strategy: 'round_robin', environmentFallback: false, eligibleGrants: { [variant]: [variant] } } });
+    values.set('connections/' + variant, { providerId: variant, enabled: true });
+    await take(own(putGrantCredentials(env, activeGrantKey, { provider: variant, enabled: true, kind: 'api_key', credential: 'fixture-upstream-key' })));
     calls.length = 0;
     await run({ env, calls, sent, events, own, take, request, dispatch, drain, releases, bodyRoot,
+      veniceResponse(wire) { assert.equal(variant, 'venice'); veniceWire = wire; },
       failMaterialization() { rejectMaterialize = true; },
       holdUpload() { upstreamGate = { entered: deferred(), release: deferred() }; releases.push(() => upstreamGate.release.resolve()); return upstreamGate; },
       holdArchive() { archiveGate = { entered: deferred(), release: deferred() }; releases.push(() => archiveGate.release.resolve()); return archiveGate; },
@@ -274,4 +282,58 @@ test('public JSON is delivered while the ORIGINAL archive and its separately fun
     assert.equal(f.calls.filter(row => row.kind === 'archive-complete').length, 1);
     assert.equal(f.events.length, 1);
   }, true);
+});
+
+const veniceModelId = 'venice/zai-org-glm-5-2', veniceUpstream = 'zai-org-glm-5-2';
+const venicePrefix = '{"model":"' + veniceUpstream + '","extra":';
+for (const [name, expected, make] of [
+  ['depth 128', 200, () => venicePrefix + '['.repeat(127) + '0' + ']'.repeat(127) + '}'],
+  ['depth 129', 502, () => venicePrefix + '['.repeat(128) + '0' + ']'.repeat(128) + '}'],
+  ['2048-parent single prefix', 502, () => venicePrefix + '['.repeat(2048)],
+  ['65536 nodes', 200, () => venicePrefix + '[' + '0,'.repeat(65532) + '0]}'],
+  ['65537 nodes', 502, () => venicePrefix + '[' + '0,'.repeat(65533) + '0]}'],
+  ['4096-unit key', 200, () => venicePrefix + '{"' + 'k'.repeat(4096) + '":0}}'],
+  ['4097-unit key', 502, () => venicePrefix + '{"' + 'k'.repeat(4097) + '":0}}'],
+  ['exact wire limit', 200, () => venicePrefix + '"' + 'x'.repeat(2097152 - Buffer.byteLength(venicePrefix) - 3) + '"}'],
+  ['wire limit plus one', 502, () => venicePrefix + '"' + 'x'.repeat(2097153 - Buffer.byteLength(venicePrefix) - 3) + '"}'],
+  ['escaped Unicode and duplicate own data', 200, () => venicePrefix + '{"__proto__":{"kept":true},"duplicate":1,"duplicate":2,"text":"é😀\\ud800x\\udfff\\n\\\"\\\\"}}'],
+  ['wrong returned model', 502, () => '{"model":"different-model","extra":null}'],
+  ['own error field including null', 502, () => '{"model":"' + veniceUpstream + '","error":null}'],
+]) test('real owned Venice JSON codec preserves ' + name, async t => {
+  await fixture(t, async f => {
+    const wire = make(); f.veniceResponse(wire);
+    const input = payload({ model: veniceModelId }), response = await f.request(input); await f.drain();
+    assert.equal(response.status, expected);
+    assert.equal(f.sent.length, 1, 'the original selected upstream is dispatched exactly once');
+    assert.equal(JSON.parse(f.sent[0].text).model, veniceUpstream);
+    assert.equal(f.calls.filter(row => row.kind === 'credential' && row.path === '/materialize').length, 1);
+    assert.equal(f.calls.filter(row => row.kind === 'authority' && row.path === '/authorization/snapshot').length, expected === 200 ? 2 : 1);
+    if (expected === 200) {
+      assert.equal(response.text, wire, 'unknowns, duplicates and original wire survive validation unchanged');
+      assert.equal(response.headers.get('content-length'), String(Buffer.byteLength(wire)));
+      assert.equal(response.headers.get('etag'), null); assert.equal(response.headers.get('digest'), null);
+      assert.equal(response.headers.get('content-md5'), null); assert.equal(response.headers.get('cache-control'), 'private, no-store');
+      const parsed = JSON.parse(response.text);
+      if (name === 'escaped Unicode and duplicate own data') {
+        assert.equal(Object.hasOwn(parsed.extra, '__proto__'), true); assert.deepEqual(parsed.extra.__proto__, { kept: true });
+        assert.equal(parsed.extra.duplicate, 2); assert.equal(parsed.extra.text, 'é😀\ud800x\udfff\n"\\');
+      }
+    }
+    const reservation = f.calls.find(row => row.kind === 'budget' && row.path === '/reserve');
+    assert.ok(reservation); assert.equal(f.events.length, 1);
+    assert.equal(f.events[0].reserved_cost_micros, reservation.body.costMicros);
+  }, false, 'venice');
+});
+
+test('owned Venice JSON publication does not retire a held ORIGINAL archive', async t => {
+  await fixture(t, async f => {
+    const wire = '{"model":"' + veniceUpstream + '","choices":[],"usage":{"prompt_tokens":4,"completion_tokens":3}}';
+    f.veniceResponse(wire);
+    const gate = f.holdArchive(), response = await f.request(payload({ model: veniceModelId }));
+    assert.equal(response.status, 200); assert.equal(response.text, wire); await f.arrival(gate);
+    assert.equal(f.calls.filter(row => row.kind === 'archive-complete').length, 0);
+    assert.ok(bodyBudgetCharged() > 32 * 1024 * 1024, 'original archive and foreground graph remain funded after public delivery');
+    gate.release.resolve(); await f.drain();
+    assert.equal(f.calls.filter(row => row.kind === 'archive-complete').length, 1);
+  }, true, 'venice');
 });

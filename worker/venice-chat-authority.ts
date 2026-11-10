@@ -121,6 +121,17 @@ export function retireOwnedVeniceRevalidation(cap: OwnedHttpRevalidation): void 
   ownedVenice!.delete(cap);
   if (!--ownedVeniceCount) ownedVenice = undefined;
 }
+export function revalidateOwnedVeniceChat(cap: OwnedHttpRevalidation, signal: AbortSignal): Promise<void> {
+  if (!ownedVenice?.has(cap)) throw identityFailure("protocol");
+  return revalidateOwnedResponseControl(cap, signal);
+}
+export function assertOwnedVeniceChatLive(cap: OwnedHttpRevalidation): void {
+  const state = ownedVenice?.get(cap);
+  if (!state) throw identityFailure("protocol");
+  assertControlCallerLive(state.caller); fundOwnedHttpRevalidationEnvironment(cap);
+  if (state.grant && (!qualified(state.grant) || identity(state.grant) !== state.original)
+    || state.environment && !safeEqual(envValue(state.env, "VENICE_API_KEY") ?? "", state.environment)) unavailable();
+}
 
 function qualified(grant: UpstreamGrant | null): grant is UpstreamGrant {
   return !!grant && grant.provider === "venice" && grant.kind === "api_key" && grant.credentialStore === "durable_object"

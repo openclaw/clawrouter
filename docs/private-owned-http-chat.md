@@ -50,14 +50,13 @@ and delivery still requires an actual prospective inventory under the existing
 ceilings. This checkpoint grants no new arena, control slots, physical-heap
 bound, or default-route coverage.
 
-The reached Venice JSON delivery codec still acquires its ordinary
-`nativeResponseLease(32 MiB)`, which charges 64 MiB. That cannot coexist with
-the private foreground's 32 MiB owner plus any positive request charge in the
-96 MiB common arena. Its ordinary parser also tokenizes a whole 4096-unit feed
-before applying the consumer's depth check. The private delivery owner and
-pre-tokenization feed partition are not implemented yet; the complete HTTP
-candidate remains blocked on that codec boundary. These are source findings,
-not results of local runtime execution.
+The private Venice branch now preserves the native-response descriptor while
+using its genuine foreground owner for response intake and delivery. It does
+not call the ordinary 64 MiB JSON or 16 MiB SSE lease acquisition. The new
+codec and revalidation components share one additive ledger under that owner's
+existing 32 MiB charge. The implemented component reservations below still
+require complete DATA and CONTROL closure; wiring and static checks do not
+establish whole-vertical fit or runtime qualification.
 
 The full-admission bridge can omit selection coverage for legacy completeness
 or a final stale-plan drop. The private provider command permits reacquisition
@@ -460,7 +459,7 @@ inspect. The implementation checks:
 | Snapshot request | Exact planned JSON text times two plus encoded bytes; through original response cleanup |
 | Policy/routing | Separate retained D vectors; routing prefix workspace admitted before construction |
 | Revalidation execution metadata | 65,536 logical-byte component; CONTROL classification remains explicit |
-| Terminal origins | Nine per snapshot/inspect RPC, prepaid before each attempt's selection: 36 for Venice, 18 for GMI |
+| Terminal origins | Nine per snapshot/inspect RPC, prepaid before each attempt's selection: 36 RPC origins plus nine codec origins for Venice, 18 for GMI |
 
 The grant, persistent guard and active phase must fit the SAME 33,554,432-byte
 foreground backing. These component checks are not a completed simultaneous
@@ -480,3 +479,69 @@ native cold/HIT RPC counts and ordinary inspect body, fresh canonical changes,
 and opaque/oversized/undefined/forged acquisition rejection before effects.
 They remain unrun under CODE_ONLY_HOSTED; no native resolution or full numeric
 qualification is claimed by this checkpoint.
+
+## Private Venice codec implementation
+
+The codec capability binds the original request, selected upload attempt,
+authority and credential bindings, selected model/mode, response descriptor,
+actual returned Response and dispatch signal. The private path keeps ordinary
+native-response classification and accounting. Ordinary codec acquisition and
+read functions are unchanged. No response graph or arbitrary callback leaves
+the named codec commands.
+
+One foreground ledger admits `grant + persistent guard + active revalidation
++ codec + generic usage` before each new component's factories. An existing
+component is reduced only after its application aliases clear. The following
+implemented reservations are candidate coefficients, not a completed fit proof.
+`R=2097152`, `F=131072`, `N=65536`; every row also includes the measured header
+and selected-model occurrences.
+
+| Codec component | Implemented logical bytes | Retained overlap |
+| --- | ---: | --- |
+| JSON source/parser | `9R + 24N + 65536 = 20512768` | Whole wire, current BYOB backing, decoded text, parsed data, scalar/descriptor/token transitions |
+| JSON output | `2R + 65536 = 4259840` | Original wire and queued/public-consumer transfer; fresh delivery snapshot/inspect remain additive |
+| SSE frame parsing | `R + 14F + 24N + 65536 = 5570560` | Whole pending native backing, frame, text/line/data/join copies and parsed data |
+| SSE resting/first authorization | `R + 2F + 65536 = 2424832` | Pending backing and frame while original first-data authorization is awaited |
+| Generic SSE usage | `3R + 15F + 65536 = 8323072` | Buffer plus predecessor and enforced complete-frame decode/split/parse occurrences |
+
+The generic usage component grows before first byte publication. Before that,
+only its metadata component is held; no usage reader can have grown its buffer.
+JSON parser/decoded aliases and SSE parsed frame aliases clear before a fresh
+delivery authority RPC. The full grant and persistent policy/routing guard do
+not disappear at these transitions. Complete simultaneous coefficients,
+transient rejection state and all execution products still need final closure.
+
+The private parser feeds the unchanged `createJsonBodyParser` one Unicode code
+point at a time, retaining surrogate pairs. Its existing depth, node, key and
+number limits remain intact. A consumer rejection therefore occurs before an
+additional large parent batch can be built. `take()` transfers the result and
+`discard()` always clears parser state. The pinned tokenizer's batch behavior
+is visible in its [exact dependency source](https://github.com/uhop/stream-json/blob/0f70a661308d12973b63f1e7ec23c396265a5361/src/core/parser.js).
+Both tokenizer parents and consumer frames remain CONTROL products; the small
+feed does not exempt them or establish a 1024-slot fit.
+
+JSON preserves the 2 MiB wire/8192-read limits. SSE preserves its 128 KiB frame,
+2 MiB whole-chunk backing and 32-empty-read checks, without a total-byte or
+total-read ceiling. Original raw bytes, duplicate/unknown fields, own
+`__proto__`, model checks, errors, headers, events and DONE rules remain on the
+actual delivery path. Only the first SSE data frame revalidates asynchronously;
+later frames keep the existing synchronous liveness check.
+
+The original read, FIRST cancellation, unlock, abort/listener, pull and retirement
+origins are distinct. Only bounded metadata reaches their followers. One codec
+child is enrolled before acquisition; a late JSON output enrolls under that
+still-active child even if logical HTTP completion has sealed. The output owns
+its own consumption/cancellation receipt. SSE joins its active pull and any
+first-authority await before closing or erroring. Abort also errors an idle SSE
+consumer after the original source joins. UNKNOWN retains all relevant backing.
+Neither source EOF, parser completion nor response publication is a release.
+
+Additional authored witnesses use the real compiled entry and SQLite authority:
+13 Node cases, 13 native cases, and one Venice invocation in the existing pinned
+OpenClaw UNIFIED client fixture. They include accepted/rejected structural and
+wire edges, escaped Unicode, raw duplicate/unknown preservation, more than 2 MiB
+of SSE, JSON delivery while archive work is held, and post-native held
+cancellation with independent read/cancel/unlock failures. Native negative
+consumers assert fixed ordered origin/presence receipts instead of hiding
+retirement failures behind a successful public error response. These cases
+are authored only; local semantics remain UNRUN_CODE_ONLY_HOSTED.

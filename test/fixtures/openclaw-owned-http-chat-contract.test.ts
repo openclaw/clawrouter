@@ -24,15 +24,15 @@ beforeEach(() => {
 });
 afterEach(() => { vi.restoreAllMocks(); clearLiveCatalogCacheForTests(); });
 
-async function configured(id: string) {
+async function configured(id: string, selectedModel = modelId) {
   const provider = await registerSingleProviderPlugin(plugin);
   expect(provider.id).toBe("clawrouter");
   const config = await buildClawRouterProviderConfig({ apiKey: key(id), baseUrl: origin });
-  const row = config.models.find(row => row.id === modelId);
+  const row = config.models.find(row => row.id === selectedModel);
   expect(row).toBeDefined();
   const original = { ...row, provider: "clawrouter" } as Model<"openai-completions">;
   const model = (provider.normalizeResolvedModel?.({ model: original }) ?? original) as typeof original;
-  expect(model).toMatchObject({ id: modelId, api: "openai-completions", baseUrl: `${origin}/v1` });
+  expect(model).toMatchObject({ id: selectedModel, api: "openai-completions", baseUrl: `${origin}/v1` });
   expect(model.baseUrl).not.toContain("/native/");
   return { provider, model };
 }
@@ -44,7 +44,7 @@ function start(selected: Awaited<ReturnType<typeof configured>>, id: string,
   const host = selectEmbeddedAgentStream({ llmRuntime: defaultLlmRuntime, currentStreamFn: streamSimple,
     model, sessionId: `owned-http-${id}`, resolvedApiKey: apiKey, signal: options.signal });
   expect(host.strategy).toBe("boundary-aware:openai-completions");
-  const wrapped = provider.wrapStreamFn?.({ provider: "clawrouter", modelId, model, streamFn: host.streamFn });
+  const wrapped = provider.wrapStreamFn?.({ provider: "clawrouter", modelId: model.id, model, streamFn: host.streamFn });
   expect(wrapped).toBeDefined();
   const context: Context = { systemPrompt: "Synthetic instructions",
     messages: [{ role: "user", content: `fixture owned_http_${id}`, timestamp: 1 }],
@@ -54,6 +54,15 @@ function start(selected: Awaited<ReturnType<typeof configured>>, id: string,
 }
 
 describe("actual registered OpenClaw unified Chat through the private owned HTTP entry", () => {
+  it("streams Venice through the actual configured UNIFIED boundary on cold and covered requests", async () => {
+    const selected = await configured("venice", "venice/zai-org-glm-5-2");
+    for (let invocation = 0; invocation < 2; invocation++) {
+      const result = await start(selected, "venice").result();
+      expect(result.stopReason, result.errorMessage).toBe("stop");
+      expect(result.content).toContainEqual({ type: "text", text: "synthetic-answer" });
+      expect(result.usage).toMatchObject({ input: 4, output: 3, totalTokens: 7 });
+    }
+  });
   it("delivers cold and covered-hit requests through the same configured unified route", async () => {
     const selected = await configured("chat");
     for (let invocation = 0; invocation < 2; invocation++) {

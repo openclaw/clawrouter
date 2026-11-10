@@ -56,10 +56,17 @@ const priced=snapshot.providers.find(p=>p.id==='fireworks').models.find(m=>m.id=
 priced.pricing={...priced.pricing,cacheWrite1hInputMicrosPerMillion:2000000,cacheWrite5mInputMicrosPerMillion:9000000};
 const originalValues=Object.values;let pricingActive=false,recursivePricingValues=0;
 Object.values=function(value){if(pricingActive&&value&&Object.hasOwn(value,'ownedPricingNested'))recursivePricingValues++;return Reflect.apply(originalValues,this,arguments);};
+const originalFetch=globalThis.fetch;
+globalThis.fetch=function(input,init){
+ const url=typeof input==='string'?input:input instanceof URL?input.href:input.url;
+ if(url!=='https://api.venice.ai/api/v1/chat/completions')return Reflect.apply(originalFetch,this,arguments);
+ calls.push({kind:'provider',path:'/chat/completions',charged:bodyBudgetCharged()});
+ return observeControlRead('provider','/chat/completions',Reflect.apply(originalFetch,this,arguments),init.signal);
+};
 let scoped,offScoped,pressure,controlFault,controlReadFault,reasonReads=0;
 const controlReads=[];
 function observeControlRead(kind,path,original,signal){
- if(!controlReadFault||controlReadFault.kind!==kind||path!==(kind==='authority'?'/authorization/snapshot':'/inspect'))return original;
+ if(!controlReadFault||controlReadFault.kind!==kind||path!==(kind==='authority'?'/authorization/snapshot':kind==='provider'?'/chat/completions':'/inspect'))return original;
  const fault=controlReadFault;controlReadFault=undefined;
  const row={kind,read:0,readSettled:0,cancel:0,cancelSettled:0,unlock:0,released:false},shared={};
  for(const key of ['message','stack','cause','errors','code','status'])Object.defineProperty(shared,key,{get(){reasonReads++;throw Error('raw reason observed');}});
@@ -133,7 +140,7 @@ function environment(env,off=false){
    };const value=Reflect.get(object,key,object);return typeof value==='function'?value.bind(object):value;}});
   };const value=Reflect.get(target,name,target);return typeof value==='function'?value.bind(target):value;}});
   const budget=new Proxy(env.BUDGET_LEDGER,{get(target,name){if(name==='get')return id=>{const stub=target.get(id);return new Proxy(stub,{get(object,key){if(key==='fetch')return(url,init)=>{
-   const value=typeof init?.body==='string'?JSON.parse(init.body):{};calls.push({kind:'budget',path:new URL(url).pathname,reservationId:value.reservationId,costMicros:value.costMicros,actualCostMicros:value.actualCostMicros});return object.fetch(url,init);
+   const value=typeof init?.body==='string'?JSON.parse(init.body):{};calls.push({kind:'budget',path:new URL(url).pathname,charged:bodyBudgetCharged(),reservationId:value.reservationId,costMicros:value.costMicros,actualCostMicros:value.actualCostMicros});return object.fetch(url,init);
   };const value=Reflect.get(object,key,object);return typeof value==='function'?value.bind(object):value;}});};const value=Reflect.get(target,name,target);return typeof value==='function'?value.bind(target):value;}});
   const queue=new Proxy(env.USAGE_QUEUE,{get(target,name){if(name==='send')return (...args)=>{const value=args[0];if(value.type==='clawrouter.usage.v1')events.push({id:value.id,requestId:value.request_id,reserved:value.reserved_cost_micros,status:value.status_code});return Reflect.apply(target.send,target,args);};const value=Reflect.get(target,name,target);return typeof value==='function'?value.bind(target):value;}});
   const values={ACCESS_CONTROL:authority,GRANT_CREDENTIALS:credentials,BUDGET_LEDGER:budget,USAGE_QUEUE:queue,CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS:'60',VOLCANO_ENGINE_API_KEY:'must-not-fallback',ARK_API_KEY:'must-not-fallback'};
@@ -155,7 +162,7 @@ export default {...handler,async fetch(request,env,context){
  }
  if(path==='/fixture/control-read'){
   if(request.method==='DELETE'){for(const row of controlReads)row.release?.();return new Response(null,{status:204});}
-  const value=await request.json();if(!['authority','credential'].includes(value.kind)||!['undefined','shared','listener'].includes(value.reason))throw Error('fixture read shape');
+  const value=await request.json();if(!['authority','credential','provider'].includes(value.kind)||!['undefined','shared','listener'].includes(value.reason))throw Error('fixture read shape');
   controlReadFault=value;return new Response(null,{status:204});
  }
  if(path==='/fixture/revalidation-change'){
@@ -175,7 +182,18 @@ export default {...handler,async fetch(request,env,context){
  const id=ids.find(value=>request.headers.get('authorization')==='Bearer clawrouter-live-owned_http_'+value+'-fixture-secret')??'unknown';
  intakes.push({id,path});
  const roots=[];
- const own=promise=>{const outcome=promise.then(()=>({failed:false}),()=>({failed:true}));roots.push(outcome);return promise;};
+ const own=promise=>{const outcome=promise.then(()=>({failed:false}),error=>{
+  // Only invocation-local inspection of the final owned aggregate. The report
+  // carries fixed origin enums/presence; no raw rejection, message or stack.
+  const errors=error instanceof AggregateError?Object.getOwnPropertyDescriptor(error,'errors')?.value:undefined,origins=[];
+  if(!Array.isArray(errors))origins.push({origin:'unexpected',undefined:false});
+  else for(const value of errors){
+   const origin=value&&typeof value==='object'?Object.getOwnPropertyDescriptor(value,'origin')?.value:undefined;
+   const absent=value&&typeof value==='object'?Object.getOwnPropertyDescriptor(value,'primaryIsUndefined')?.value:undefined;
+   origins.push({origin:['read','cancel','unlock','listener-remove','abort','pull','retire'].includes(origin)?origin:'unexpected',undefined:absent===true});
+  }
+  return{failed:true,origins};
+ });roots.push(outcome);return promise;};
  const observed=new Proxy(context,{get(target,name){if(name==='waitUntil')return promise=>target.waitUntil(own(promise));const value=Reflect.get(target,name,target);return typeof value==='function'?value.bind(target):value;}});
  let response;
  try{pricingActive=id.startsWith('pricing');return response=await privateOwnedHttpChat.fetch(request,environment(env,id==='off'),observed);}
@@ -183,7 +201,7 @@ export default {...handler,async fetch(request,env,context){
   pricingActive=false;
   // This ORIGINAL caller owns these accepted promises; foreign requests read
   // only completed scalar flags. The receipt never claims native physical ACK.
-  context.waitUntil((async()=>{let failed=false;for(let i=0;i<roots.length;i++){const outcome=await roots[i];failed||=outcome.failed;}completed.push({id,failed});})());
+  context.waitUntil((async()=>{let failed=false;const origins=[];for(let i=0;i<roots.length;i++){const outcome=await roots[i];failed||=outcome.failed;if(outcome.origins)origins.push(...outcome.origins);}completed.push({id,failed,origins});})());
   response=undefined;
  }
 }};
@@ -200,10 +218,23 @@ export default {async fetch(request){
  if(id==='invalid')return Response.json({error:{type:'invalid_request_error',message:'fixture credential rejected'}},{status:401});
  if(id==='error')return Response.json({error:{type:'invalid_request_error',message:'synthetic rejection'}},{status:400});
  const usage={prompt_tokens:4,completion_tokens:3,total_tokens:7};
+ if(id==='venice'&&body.ownedVeniceCase&&body.stream!==true){
+  const mode=body.ownedVeniceCase,prefix='{"model":'+JSON.stringify(body.model)+',"extra":';let wire;
+  if(mode==='depth128'||mode==='depth129'){const depth=mode==='depth128'?127:128;wire=prefix+'['.repeat(depth)+'0'+']'.repeat(depth)+'}';}
+  else if(mode==='open2048')wire='['.repeat(2048)+'0'+']'.repeat(2048);
+  else if(mode==='nodes65536'||mode==='nodes65537')wire=prefix+'['+'0,'.repeat(mode==='nodes65536'?65532:65533)+'0]}';
+  else if(mode==='wire-limit'||mode==='wire-plus'){const size=2097152+(mode==='wire-plus'?1:0);wire=prefix+'"'+'x'.repeat(size-prefix.length-3)+'"}';}
+  else if(mode==='unicode-unknown')wire=prefix+'{"__proto__":{"kept":true},"duplicate":1,"duplicate":2,"text":"é😀\\ud800x\\udfff\\n\\\"\\\\"}}';
+  else if(mode==='wrong-model')wire='{"model":"other-model"}';
+  else if(mode==='own-error')wire='{"model":'+JSON.stringify(body.model)+',"error":null}';
+  else throw Error('fixture Venice mode');
+  return new Response(wire,{headers:{'content-type':'application/json','etag':'fixture-etag','digest':'fixture-digest','content-md5':'fixture-md5'}});
+ }
  if(body.stream!==true)return Response.json({id:'fixture-owned-chat',object:'chat.completion',model:body.model,choices:[{index:0,message:{role:'assistant',content:'synthetic-answer'},finish_reason:'stop'}],usage});
  const encoder=new TextEncoder();let stage=0;
  const chunk=(delta,finish_reason=null)=>'data: '+JSON.stringify({id:'fixture-owned-chat',object:'chat.completion.chunk',model:body.model,choices:[{index:0,delta,finish_reason}]})+'\n\n';
  return new Response(new ReadableStream({async pull(controller){
+  if(id==='venice'&&body.ownedVeniceCase==='stream-large'&&stage<20){stage++;controller.enqueue(encoder.encode(chunk({content:'x'.repeat(120000)})));return;}
   if(id==='abort'&&stage>0){await new Promise(resolve=>setTimeout(resolve,10));controller.enqueue(encoder.encode(': keepalive\n\n'));return;}
   if(stage++===0){controller.enqueue(encoder.encode(id==='tool'?chunk({role:'assistant',tool_calls:[{index:0,id:'fixture-tool',type:'function',function:{name:'lookup',arguments:'{"value":"'}}]}):chunk({role:'assistant',content:'synthetic-answer'})));return;}
   if(stage===2&&id==='tool'){controller.enqueue(encoder.encode(chunk({tool_calls:[{index:0,function:{arguments:'fixture"}'}}]})));return;}
