@@ -528,7 +528,7 @@ interface HttpCredentialOwner {
 export interface OwnedHttpRevalidationBacking { readonly revalidationBacking?: never }
 interface HttpRevalidationBacking {
   owner: HttpCredentialOwner; grantBytes: number; persistentBytes: number; phaseBytes: number;
-  codecBytes: number; usageBytes: number; codec: boolean;
+  codecBytes: number; usageBytes: number; consumerBytes: number; codec: boolean;
 }
 let httpRevalidationBackings: WeakMap<OwnedHttpRevalidationBacking, HttpRevalidationBacking> | undefined;
 let httpRevalidationBackingCount = 0;
@@ -551,23 +551,36 @@ export function claimOwnedHttpRevalidationBacking(http: OwnedHttpRequest, grant:
   if (grantBytes + 65536 > owner.lease.bytes) throw identityFailure("limit");
   const cap = Object.freeze({});
   (httpRevalidationBackings ??= new WeakMap()).set(cap, { owner, grantBytes, persistentBytes: 65536, phaseBytes: 0,
-    codecBytes: 0, usageBytes: 0, codec: false });
+    codecBytes: 0, usageBytes: 0, consumerBytes: 0, codec: false });
   owner.revalidation = cap; httpRevalidationBackingCount++; return cap;
 }
 export function admitOwnedHttpRevalidationBacking(cap: OwnedHttpRevalidationBacking, persistentBytes: number, phaseBytes: number): void {
   const state = httpRevalidationBackings?.get(cap);
   if (!state || state.owner.revalidation !== cap || !Number.isSafeInteger(persistentBytes) || persistentBytes < state.persistentBytes
     || !Number.isSafeInteger(phaseBytes) || phaseBytes < 0) throw identityFailure("protocol");
-  if (state.grantBytes + persistentBytes + phaseBytes + state.codecBytes + state.usageBytes > state.owner.lease.bytes) throw identityFailure("limit");
+  if (state.grantBytes + persistentBytes + phaseBytes + state.codecBytes + state.usageBytes + state.consumerBytes > state.owner.lease.bytes) throw identityFailure("limit");
   state.persistentBytes = persistentBytes; state.phaseBytes = phaseBytes;
 }
 export function admitOwnedHttpCodecBacking(cap: OwnedHttpRevalidationBacking, codecBytes: number, usageBytes: number): void {
   const state = httpRevalidationBackings?.get(cap);
   if (!state || state.owner.revalidation !== cap || !Number.isSafeInteger(codecBytes) || codecBytes <= 0
     || !Number.isSafeInteger(usageBytes) || usageBytes < 0) throw identityFailure("protocol");
-  if (state.grantBytes + state.persistentBytes + state.phaseBytes + codecBytes + usageBytes > state.owner.lease.bytes)
+  if (state.grantBytes + state.persistentBytes + state.phaseBytes + codecBytes + usageBytes + state.consumerBytes > state.owner.lease.bytes)
     throw identityFailure("limit");
   state.codec = true; state.codecBytes = codecBytes; state.usageBytes = usageBytes;
+}
+export function admitOwnedHttpConsumerBacking(cap: OwnedHttpRevalidationBacking, bytes: number): void {
+  const state = httpRevalidationBackings?.get(cap);
+  if (!state || state.owner.revalidation !== cap || !Number.isSafeInteger(bytes) || bytes <= 0
+    || bytes < state.consumerBytes) throw identityFailure("protocol");
+  if (state.grantBytes + state.persistentBytes + state.phaseBytes + state.codecBytes + state.usageBytes + bytes > state.owner.lease.bytes)
+    throw identityFailure("limit");
+  state.consumerBytes = bytes;
+}
+export function retireOwnedHttpConsumerBacking(cap: OwnedHttpRevalidationBacking): void {
+  const state = httpRevalidationBackings?.get(cap);
+  if (!state || !state.consumerBytes) throw identityFailure("protocol");
+  state.consumerBytes = 0;
 }
 export function retireOwnedHttpCodecBacking(cap: OwnedHttpRevalidationBacking): void {
   const state = httpRevalidationBackings?.get(cap);
@@ -576,7 +589,7 @@ export function retireOwnedHttpCodecBacking(cap: OwnedHttpRevalidationBacking): 
 }
 export function retireOwnedHttpRevalidationBacking(cap: OwnedHttpRevalidationBacking): void {
   const state = httpRevalidationBackings?.get(cap);
-  if (!state || state.phaseBytes || state.codec || state.codecBytes || state.usageBytes) throw identityFailure("protocol");
+  if (!state || state.phaseBytes || state.codec || state.codecBytes || state.usageBytes || state.consumerBytes) throw identityFailure("protocol");
   state.owner.revalidation = undefined; state.owner = undefined as never;
   httpRevalidationBackings!.delete(cap);
   if (!--httpRevalidationBackingCount) httpRevalidationBackings = undefined;

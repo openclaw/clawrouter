@@ -6,6 +6,7 @@ import type { Env, QueueMessage, AuthorizedIdentity } from "./types.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { UpstreamAuth } from "./providers.ts";
 import type { PreparationAdmission } from "./provider-templates.ts";
+import type { HttpOperation } from "./http-operation.ts";
 import { applyProviderCredential } from "./provider-auth.ts";
 import { proxyKeyVerification } from "./proxy-auth.ts";
 import { HttpError } from "./utils.ts";
@@ -15,9 +16,10 @@ import { acceptOwnedVeniceInspection, retireOwnedVeniceRevalidation } from "./ve
 import { acceptOwnedGmiInspection, retireOwnedGmiRevalidation } from "./gmi-organization-binding.ts";
 import { drainOwnedHttpIdentity, retireOwnedHttpConsumers, retireOwnedHttpIdentity, claimOwnedHttpRevalidationBacking,
   admitOwnedHttpRevalidationBacking, retireOwnedHttpRevalidationBacking, type OwnedHttpRevalidationBacking } from "./credential-preflight.ts";
-import { admitOwnedHttpCodecBacking, retireOwnedHttpCodecBacking } from "./credential-preflight.ts";
-import { retireOwnedHttpProxy, matchesOwnedHttpRevalidationInput, matchesOwnedHttpVeniceResponseInput, matchesOwnedHttpPublicBody } from "./proxy.ts";
-import { retireOwnedVeniceChatCodec, matchesOwnedVeniceRetirement, consumeOwnedVeniceChatResponse, matchesOwnedVeniceOutputBody, matchesOwnedVeniceOutputFailure } from "./venice-chat-runtime.ts";
+import { admitOwnedHttpCodecBacking, retireOwnedHttpCodecBacking, admitOwnedHttpConsumerBacking, retireOwnedHttpConsumerBacking } from "./credential-preflight.ts";
+import { retireOwnedHttpProxy, matchesOwnedHttpRevalidationInput, matchesOwnedHttpVeniceResponseInput, matchesOwnedHttpPublicBody, matchesOwnedHttpCodecConsumerInput } from "./proxy.ts";
+import { retireOwnedVeniceChatCodec, matchesOwnedVeniceRetirement, consumeOwnedVeniceChatResponse, matchesOwnedVeniceOutputBody, matchesOwnedVeniceOutputFailure, matchesOwnedVeniceConsumerInput } from "./venice-chat-runtime.ts";
+import { matchesOwnedCodecConsumerRetirement, retireOwnedCodecConsumers, type OwnedCodecConsumer } from "./proxy-response.ts";
 import { credentialPreflightHeader, credentialPreflightVersion, credentialPreflightPath, credentialPreflightNamespace } from "./credential-preflight-protocol.ts";
 
 // This entry is inactive until the named compiled HTTP adapter invokes it.
@@ -28,7 +30,7 @@ export interface OwnedHttpSinkOwner { readonly sink?: never }
 export interface OwnedHttpSinkRegistration { readonly registration?: never }
 export interface OwnedHttpIntakeDiagnostics { readonly intake?: never }
 export interface OwnedHttpRevalidation { readonly revalidation?: never }
-type SinkOrigin = "acquire" | "fetch" | "body" | "read" | "cancel" | "unlock" | "queue" | "put" | "pipe" | "abort" | "pull" | "retire" | "registration" | "registration-missing" | "listener-add" | "listener-remove";
+type SinkOrigin = "acquire" | "fetch" | "body" | "read" | "closed" | "cancel" | "unlock" | "queue" | "put" | "pipe" | "abort" | "pull" | "retire" | "registration" | "registration-missing" | "listener-add" | "listener-remove";
 type SinkDisposition = "transport" | "missing" | "conflict" | "protocol";
 export interface OwnedHttpFailureMetadata {
   readonly origin: SinkOrigin; readonly ordinal: number; readonly failed: boolean;
@@ -97,9 +99,9 @@ let requestCount = 0;
 let sinkOwners: WeakMap<OwnedHttpSinkOwner, RequestOwner> | undefined;
 let sinkFailures: WeakSet<object> | undefined;
 let sinkRegistrations: WeakMap<OwnedHttpSinkRegistration, { owner: RequestOwner; origin: SinkOriginOwner; scope: ProxyCompletion }> | undefined;
-type IntakePhase = "acquire" | "read" | "cancel" | "unlock" | "listenerAdd" | "listenerRemove" | "abort" | "pull" | "retire";
-type IntakeOwner = (Partial<Record<IntakePhase, OwnedHttpFailureOrigin>> & { owner: RequestOwner; venice?: false })
-  | (Partial<Record<IntakePhase, SinkOriginOwner>> & { owner: RequestOwner; venice: true });
+type IntakePhase = "acquire" | "read" | "closed" | "cancel" | "unlock" | "listenerAdd" | "listenerRemove" | "abort" | "pull" | "retire";
+type IntakeOwner = (Partial<Record<IntakePhase, OwnedHttpFailureOrigin>> & { owner: RequestOwner })
+  | { owner: RequestOwner; codec: "source" | "consumer"; records: Partial<Record<IntakePhase, SinkOriginOwner>>; base: number; credits: number };
 let intakes: WeakMap<OwnedHttpIntakeDiagnostics, IntakeOwner> | undefined;
 
 // The capability has no graph, callback, receiver or mutable public field.
@@ -196,7 +198,7 @@ interface RevalidationOwner {
   active: boolean; graph?: unknown;
   graphKind?: "snapshot" | "inspect"; retainedBytes: number; environmentUnits: number;
   snapshotRequestBytes: number; requestBytes: number;
-  codec?: true; codecSource?: true; codecScope?: ProxyCompletion;
+  codec?: true; codecSource?: true; codecScope?: ProxyCompletion; consumer?: true;
 }
 let revalidations: WeakMap<OwnedHttpRevalidation, RevalidationOwner> | undefined;
 // Same original-wire/text/decoded/parsed component as the private full reader.
@@ -210,8 +212,9 @@ export function reserveOwnedHttpRevalidationOrigins(http: OwnedHttpRequest, prov
   if (owner.sealed) throw identityFailure("protocol");
   // Before this attempt's selection effects: snapshot + inspect at dispatch,
   // and Venice's one existing delivery check. Environment routes leave the
-  // unused inspect credits held, never invent a new operation.
-  const count = providerId === "venice" ? 45 : 18;
+  // unused inspect credits held, never invent a new operation. The two actual
+  // sniff/replay and usage readers each have nine terminal factories prepaid.
+  const count = providerId === "venice" ? 63 : 18;
   reserveSinkOrigins(ownedHttpSinkOwner(http), count);
   owner.revalidationCredits += count;
 }
@@ -318,6 +321,43 @@ export function fundOwnedHttpVeniceCodec(cap: OwnedHttpRevalidation, codecBytes:
   if (owner.selection.provider.id !== "venice") throw identityFailure("protocol");
   admitOwnedHttpCodecBacking(owner.backing, codecBytes, usageBytes); owner.codec = true;
 }
+export function prepareOwnedHttpCodecConsumers(cap: OwnedHttpRevalidation): void {
+  const owner = revalidationOwner(cap);
+  if (!owner.preparing || owner.selection.provider.id !== "venice" || owner.consumer) throw identityFailure("protocol");
+  // Prefix backings/indices/classification and fixed consumer execution metadata
+  // stay additive to codec + generic usage under the SAME foreground ticket.
+  admitOwnedHttpConsumerBacking(owner.backing, 1048576 + 65536); owner.consumer = true;
+}
+export function checkOwnedHttpCodecConsumer(http: OwnedHttpRequest, cap: OwnedHttpRevalidation,
+  response: Response, operation: HttpOperation, streaming: boolean, requestId: string,
+  usageContext?: Readonly<import("./token-usage.ts").UsageTokenContext>): void {
+  const owner = revalidationOwner(cap);
+  if (owner.http !== http || !owner.consumer || !owner.codecSource || !owner.codecScope || owner.preparing
+    || requestOwner(http).sealed || !matchesOwnedVeniceConsumerInput(cap, response, streaming)
+    || !matchesOwnedHttpCodecConsumerInput(http, cap, owner.attempt, operation, streaming, requestId, usageContext)) throw identityFailure("protocol");
+}
+export function fundOwnedHttpCodecConsumerHeaders(cap: OwnedHttpRevalidation, pairs: number, units: number): void {
+  const owner = revalidationOwner(cap);
+  if (!owner.consumer || !Number.isSafeInteger(pairs) || pairs < 0 || !Number.isSafeInteger(units) || units < 0)
+    throw identityFailure("protocol");
+  admitOwnedHttpConsumerBacking(owner.backing, 1048576 + 65536 + 96 * pairs + 6 * units);
+}
+export function beginOwnedCodecConsumerDiagnostics(cap: OwnedHttpRevalidation): OwnedHttpIntakeDiagnostics {
+  const owner = revalidationOwner(cap), root = requestOwner(owner.http);
+  if (!owner.consumer || root.revalidationCredits < 9 || root.sinkCredits < 9) throw identityFailure("protocol");
+  root.revalidationCredits -= 9; root.sinkCredits -= 9;
+  const base = root.nextSinkOrigin; root.nextSinkOrigin += 9;
+  // All nine terminal factories are prepaid before selection. Successful
+  // reads retain no history records; a failed original materializes its own
+  // fixed record before any downstream catch or stream can observe it.
+  const receipt = Object.freeze({});
+  (intakes ??= new WeakMap()).set(receipt, { owner: root, codec: "consumer", records: {}, base, credits: 9 });
+  return receipt;
+}
+export function ownOwnedCodecConsumerRetirement(http: OwnedHttpRequest, cap: OwnedCodecConsumer, work: Promise<void>): void {
+  if (!matchesOwnedCodecConsumerRetirement(cap, http, work)) throw identityFailure("protocol");
+  requestOwner(http).completion.start(() => work);
+}
 function veniceResponseOwner(cap: OwnedHttpRevalidation, response: Response, signal: AbortSignal): RevalidationOwner {
   const owner = revalidationOwner(cap);
   if (!owner.codec || owner.preparing || !matchesOwnedHttpVeniceResponseInput(owner.http, owner.attempt, response, signal)) throw identityFailure("protocol");
@@ -328,20 +368,15 @@ export function checkOwnedHttpVeniceResponse(cap: OwnedHttpRevalidation, respons
 }
 export function beginOwnedHttpVeniceSource(cap: OwnedHttpRevalidation): OwnedHttpIntakeDiagnostics {
   const owner = revalidationOwner(cap), root = requestOwner(owner.http);
-  if (!owner.codec || owner.codecSource || root.revalidationCredits < 9) throw identityFailure("protocol");
-  root.revalidationCredits -= 9; owner.codecSource = true;
+  if (!owner.codec || owner.codecSource || root.revalidationCredits < 9 || root.sinkCredits < 9) throw identityFailure("protocol");
+  root.revalidationCredits -= 9; root.sinkCredits -= 9; owner.codecSource = true;
+  const base = root.nextSinkOrigin; root.nextSinkOrigin += 9;
   // The nine complete origin products were prepaid with this attempt before
   // selection. No common-arena allocation can fail after provider dispatch.
-  const sink = ownedHttpSinkOwner(owner.http);
-  const acquire = sinkOrigin(sink, "acquire"), read = sinkOrigin(sink, "read");
-  const cancel = sinkOrigin(sink, "cancel"), unlock = sinkOrigin(sink, "unlock");
-  const listenerAdd = sinkOrigin(sink, "listener-add"), listenerRemove = sinkOrigin(sink, "listener-remove");
-  const abort = sinkOrigin(sink, "abort"), pull = sinkOrigin(sink, "pull"), retire = sinkOrigin(sink, "retire");
-  // The intake capability already proves the request/phase. Its original
-  // records need no second per-origin cap, weak entry or forwarding owner.
-  (root.codecOrigins ??= []).push(acquire, read, cancel, unlock, listenerAdd, listenerRemove, abort, pull, retire);
+  // No successful-origin history is materialized. First failure observation
+  // consumes its already reserved factory before publishing a bounded carrier.
   const receipt = Object.freeze({});
-  (intakes ??= new WeakMap()).set(receipt, { owner: root, venice: true, acquire, read, cancel, unlock, listenerAdd, listenerRemove, abort, pull, retire });
+  (intakes ??= new WeakMap()).set(receipt, { owner: root, codec: "source", records: {}, base, credits: 9 });
   return receipt;
 }
 export function ownOwnedHttpVeniceRetirement(cap: OwnedHttpRevalidation, work: Promise<void>): void {
@@ -850,8 +885,22 @@ export function beginOwnedHttpIntakeDiagnostics(cap: OwnedHttpRequest): OwnedHtt
 }
 export function ownedHttpIntakeFailure(cap: OwnedHttpIntakeDiagnostics, phase: IntakePhase, reason: unknown): object {
   const receipt = intakes?.get(cap);
-  if (receipt?.venice) {
-    const record = receipt[phase]; if (!record) throw identityFailure("protocol");
+  if (receipt && "codec" in receipt) {
+    if (receipt.codec === "consumer" ? phase === "abort" : phase === "closed") throw identityFailure("protocol");
+    let record = receipt.records[phase];
+    if (!record) {
+      if (!receipt.credits) throw identityFailure("protocol");
+      receipt.credits--;
+      const offset = phase === "acquire" ? 0 : phase === "read" ? 1 : phase === "cancel" ? 2 : phase === "unlock" ? 3
+        : phase === "listenerAdd" ? 4 : phase === "listenerRemove" ? 5 : phase === "abort" || phase === "closed" ? 6 : phase === "pull" ? 7 : 8;
+      record = { origin: phase === "listenerAdd" ? "listener-add" : phase === "listenerRemove" ? "listener-remove" : phase,
+        ordinal: receipt.base + offset, failed: false, primary: false, primaryIsUndefined: false, disposition: "transport" };
+      receipt.owner.sinkOrigins!.set(record.ordinal, record); receipt.records[phase] = record;
+      const roots = receipt.owner.codecOrigins ??= [];
+      let index = roots.length;
+      while (index && roots[index - 1].ordinal > record.ordinal) { roots[index] = roots[index - 1]; index--; }
+      roots[index] = record;
+    }
     return failedSinkOrigin(record, reason);
   }
   const origin = receipt?.[phase];
@@ -863,21 +912,13 @@ export function finishOwnedHttpIntakeDiagnostics(cap: OwnedHttpIntakeDiagnostics
   if (!receipt) throw identityFailure("protocol");
   retireIntakeOrigin(receipt, "acquire"); retireIntakeOrigin(receipt, "read");
   retireIntakeOrigin(receipt, "cancel"); retireIntakeOrigin(receipt, "unlock");
+  retireIntakeOrigin(receipt, "closed");
   retireIntakeOrigin(receipt, "listenerAdd"); retireIntakeOrigin(receipt, "listenerRemove");
   retireIntakeOrigin(receipt, "abort"); retireIntakeOrigin(receipt, "pull"); retireIntakeOrigin(receipt, "retire");
   intakes!.delete(cap);
 }
 function retireIntakeOrigin(receipt: IntakeOwner, phase: IntakePhase): void {
-  if (receipt.venice) {
-    const record = receipt[phase]; if (!record) return;
-    if (!record.failed) {
-      const roots = receipt.owner.codecOrigins!, index = roots.indexOf(record);
-      if (index < 0) throw identityFailure("protocol");
-      for (let next = index + 1; next < roots.length; next++) roots[next - 1] = roots[next];
-      roots.length--; completedSinkOrigin(receipt.owner, record);
-    }
-    receipt[phase] = undefined; return;
-  }
+  if ("codec" in receipt) { if (receipt.records[phase]) receipt.records[phase] = undefined; return; }
   const cap = receipt[phase]; if (!cap) return;
   const origin = failureOrigins?.get(cap);
   // Failed occurrences stay in the root's ordered vector until its final
@@ -893,7 +934,7 @@ function retireIntakeOrigin(receipt: IntakeOwner, phase: IntakePhase): void {
 }
 export function retireOwnedVeniceReadDiagnostics(cap: OwnedHttpIntakeDiagnostics): void {
   const receipt = intakes?.get(cap);
-  if (!receipt?.venice) throw identityFailure("protocol");
+  if (!receipt || !("codec" in receipt) || receipt.codec !== "source") throw identityFailure("protocol");
   // The codec invokes this only AFTER original read/FIRSTcancel/unlock and
   // active-pull settlement. Output cancellation and final caller abort retain
   // their distinct prepaid origins through the public output's last consumer.
@@ -1176,6 +1217,8 @@ export function finishOwnedHttpRequest(cap: OwnedHttpRequest): Promise<void> {
           // original prepare promise and uploads were joined above.
           if (state.preparing) { setRevalidationPhase(state, 0); state.preparing = false; }
           if (state.phaseBytes) throw identityFailure("protocol");
+          retireOwnedCodecConsumers(revalidation);
+          if (state.consumer) { retireOwnedHttpConsumerBacking(state.backing); state.consumer = undefined; }
           retireOwnedVeniceChatCodec(revalidation);
           retireOwnedVeniceRevalidation(revalidation); retireOwnedGmiRevalidation(revalidation); retireOwnedResponseControl(revalidation);
           state.auth = undefined as never; state.selection = undefined as never; state.upstream = undefined as never;

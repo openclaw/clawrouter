@@ -211,6 +211,86 @@ for (const streaming of [false, true]) test('native owned Venice ' + (streaming 
   }, true);
 });
 
+test('native later object-128 SSE uses actual sniff/replay and usage receipts with only the outer response guard', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    assert.equal((await f.request('https://fixture/v1/chat/completions', chat('venice', {
+      model: ownedHttpControlModels.venice, ownedVeniceCase: 'compact-object128', stream: true,
+    }))).status, 200);
+    const before = await settledState(f), model = 'zai-org-glm-5-2';
+    const first = 'data: ' + JSON.stringify({ model, choices: [] }) + '\n\n';
+    const wire = first + 'data: ' + ownedJsonCodecWire('compact-object-string128', model) + '\n\ndata: [DONE]\n\n';
+    const response = await f.request('https://fixture/v1/chat/completions', chat('venice', {
+      model: ownedHttpControlModels.venice, ownedVeniceCase: 'compact-later-object128', stream: true,
+      messages: [{ role: 'user', content: 'x'.repeat(1024 * 1024) }],
+    }));
+    assert.equal(response.status, 200); assert.equal(response.text, wire);
+    const after = await settledState(f), rows = after.parsers.slice(before.parsers.length);
+    assert.equal(rows.length, 2);
+    assert.equal(rows[1].peakParents, 128); assert.equal(rows[1].peakTokens, 128); assert.equal(rows[1].peakStored, 260);
+    assert.equal(rows[1].consumerReaders, 2, 'both actual downstream readers exist during the later parser peak');
+    assert.equal(rows[1].innerWrappers, 0); assert.equal(rows[1].outerWrappers, before.consumers.outer + 1);
+    assert.equal(after.consumers.created - before.consumers.created, 1);
+    assert.equal(after.consumers.acquired - before.consumers.acquired, 2);
+    assert.equal(after.consumers.retired - before.consumers.retired, 2); assert.equal(after.consumers.live, 0);
+    assert.equal(after.events.length - before.events.length, 1);
+    assert.equal(count(after, 'authority', '/admission/resolve'), count(before, 'authority', '/admission/resolve'), 'genuine covered generation hit');
+    assert.equal(count(after, 'authority', '/authorization/snapshot') - count(before, 'authority', '/authorization/snapshot'), 2);
+    const upstream = JSON.parse((await f.request('https://fixture/fixture/upstream')).text);
+    assert.equal(upstream.filter(row => row.id === 'venice').length, 2, 'warm request plus exactly one later request');
+  }, true);
+});
+
+for (const mode of ['forged', 'stale', 'mode']) test('native private consumer rejects ' + mode + ' binding before reader acquisition', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const request = () => chat('venice', { model: ownedHttpControlModels.venice, ownedVeniceCase: 'compact-object128' });
+    assert.equal((await f.request('https://fixture/v1/chat/completions', request())).status, 200);
+    const before = await settledState(f);
+    assert.equal((await f.request('https://fixture/fixture/consumer-mode', { method: 'POST', body: mode })).status, 204);
+    const denied = await f.request('https://fixture/v1/chat/completions', request());
+    assert.equal(denied.status, 503);
+    const after = await settledState(f);
+    assert.equal(after.consumers.acquired, before.consumers.acquired);
+    assert.equal(after.consumers.created, before.consumers.created);
+    assert.equal(after.consumers.live, 0);
+    assert.equal(after.events.length - before.events.length, 1, 'one original accounting outcome, no request replay');
+  }, true);
+});
+
+for (const kind of ['undefined', 'primitive', 'shared']) test('native consumer joins held post-native cancellation and independent ' + kind + ' read/unlock origins', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const before = await settledState(f);
+    f.expectFailedRetirement(before.intakes.length);
+    const release = async () => { assert.equal((await f.request('https://fixture/fixture/consumer-mode', { method: 'DELETE' })).status, 204); };
+    f.releases.push(release);
+    assert.equal((await f.request('https://fixture/fixture/consumer-mode', { method: 'POST', body: 'read-' + kind })).status, 204);
+    const dispatch = f.dispatch('https://fixture/v1/chat/completions', chat('venice', {
+      model: ownedHttpControlModels.venice, ownedVeniceCase: 'compact-later-object128', stream: true,
+    }));
+    let held;
+    for (;;) {
+      held = await state(f);
+      if (held.consumers.held) break;
+      if (held.completed.length > before.completed.length) { await f.take(dispatch); assert.fail('original consumer ended before its cancellation hold'); }
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    const response = await f.take(dispatch); assert.equal(response.status, 200, 'prefix already published before later consumer failure');
+    let hasBodyFailure = false, bodyFailure;
+    try { await f.take(f.body(response)); } catch (error) { hasBodyFailure = true; bodyFailure = error; }
+    assert.equal(hasBodyFailure, true); assert.equal(held.consumers.cancel, 1); assert.equal(held.consumers.unlock, 1);
+    assert.equal(held.consumers.reasonReads, 0); assert.equal(held.completed.length, before.completed.length);
+    assert.ok(held.charged >= before.charged + 32 * 1024 * 1024);
+    await release();
+    const after = await settledState(f), origins = after.completed.at(-1).origins;
+    try {
+      assert.equal(after.consumers.live, 0); assert.equal(after.consumers.cancel, 1); assert.equal(after.consumers.reasonReads, 0);
+      assert.deepEqual(origins.map(value => value.origin), ['read', 'cancel', 'unlock']);
+      assert.ok(origins.every(value => value.undefined === (kind === 'undefined')));
+      assert.equal(origins.length, 3, 'shared rejection values remain three actual operation origins');
+      assert.equal(after.events.length - before.events.length, 1);
+    } catch (validation) { throw new AggregateError([...(hasBodyFailure ? [bodyFailure] : []), validation], 'native consumer failure validation'); }
+  }, true);
+});
+
 for (const phase of ['delivery', 'accounting']) test('native compact parser aliases clear while original ' + phase + ' still owns funded request children', { timeout: 120000 }, async t => {
   await fixture(t, async f => {
     const streaming = phase === 'delivery', before = await settledState(f);

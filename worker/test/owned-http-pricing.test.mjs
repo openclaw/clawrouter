@@ -16,6 +16,8 @@ import { prepareOwnedHttpPricing, enterOwnedHttpPricing } from '../pricing.ts';
 import { beginOwnedHttpRequest, finishOwnedHttpRequest } from '../http-identity-owner.ts';
 import { isIdentityFailure } from '../identity-admission.ts';
 import { ownedJsonCodecCases, ownedJsonCodecWire } from '../../test/helpers/owned-json-parser-cases.mjs';
+import { beginOwnedCodecConsumer, normalizeOwnedCodecPreStreamError, observeOwnedCodecUsage, ownedCodecUsageCompletion } from '../proxy-response.ts';
+import { HttpOperation } from '../http-operation.ts';
 
 const modelId = 'fireworks/glm-5.2', kid = 'http_pricing', policyId = 'http-pricing-policy';
 const provider = snapshot.providers.find(item => item.id === 'fireworks');
@@ -29,6 +31,38 @@ const deferred = () => {
   let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
   void promise.then(() => undefined, () => undefined); return { promise, resolve, reject };
 };
+
+test('owned later object-128 SSE retains raw wire, usage and one selected/accounting outcome', async t => {
+  await fixture(t, async f => {
+    const model = 'zai-org-glm-5-2', first = JSON.stringify({ model, choices: [] });
+    const wire = 'data: ' + first + '\n\ndata: ' + ownedJsonCodecWire('compact-object-string128', model) + '\n\ndata: [DONE]\n\n';
+    f.veniceResponse(wire, true);
+    const response = await f.request({ model: 'venice/' + model, stream: true,
+      messages: [{ role: 'user', content: 'x'.repeat(1024 * 1024) }] });
+    assert.equal(response.status, 200); assert.equal(response.text, wire);
+    await f.drain();
+    assert.equal(f.sent.length, 1);
+    assert.equal(f.calls.filter(row => row.kind === 'authority' && row.path === '/authorization/snapshot').length, 2);
+    assert.equal(f.events.length, 1);
+  }, false, 'venice');
+});
+
+test('private codec consumer rejects fabricated owners before original reader acquisition', async () => {
+  const baseline = bodyBudgetCharged(), operation = new HttpOperation();
+  let acquired = 0;
+  const body = new ReadableStream({ pull(controller) { controller.close(); } }, { highWaterMark: 0 });
+  const getReader = body.getReader;
+  Object.defineProperty(body, 'getReader', { value(...args) { acquired++; return Reflect.apply(getReader, this, args); } });
+  const response = new Response(body, { headers: { 'content-type': 'text/event-stream' } }), cap = Object.freeze({});
+  try {
+    assert.throws(() => beginOwnedCodecConsumer(cap, cap, response, operation, true, 'fixture-request', undefined,
+      { providerId: 'venice', requestFormat: 'openai.chat_completions', responseFormat: 'openai.chat_completions' }), isIdentityFailure);
+    await assert.rejects(normalizeOwnedCodecPreStreamError(cap, response, true, operation, { format: 'openai', requestId: 'fixture-request' }), isIdentityFailure);
+    assert.throws(() => observeOwnedCodecUsage(cap, response, operation), isIdentityFailure);
+    assert.throws(() => ownedCodecUsageCompletion(cap), isIdentityFailure);
+    assert.equal(acquired, 0); assert.equal(bodyBudgetCharged(), baseline);
+  } finally { await body.cancel(); operation.stop('complete'); }
+});
 
 // Original dispatch, late body and accepted background roots share ONE outcome
 // identity. Release gates first, dynamically join all finite roots, then retire

@@ -187,7 +187,12 @@ export default {...handler,async fetch(request,env,context){
   const original=env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName('policy-bindings')).fetch('https://authority/fixture/revalidation-change',{method:'POST',body:await request.text()});
   const response=await original;await response.text();return new Response(null,{status:response.status});
  }
- if(path==='/fixture/state')return Response.json({parsers:globalThis.__ownedJsonObservation?.rows??[],parserHold:parserHold?{arrived:parserHold.arrived,released:parserHold.released}:null,calls,intakes,completed,events,recursivePricingValues,reasonReads,controlReads:controlReads.map(({kind,read,readSettled,cancel,cancelSettled,unlock,released,removalFailed})=>({kind,read,readSettled,cancel,cancelSettled,unlock,released,...(removalFailed?{removalFailed:true}:{})})),charged:bodyBudgetCharged()});
+ if(path==='/fixture/consumer-mode'){
+  if(request.method==='DELETE'){globalThis.__ownedJsonObservation?.releaseConsumer();return new Response(null,{status:204});}
+  const mode=await request.text();if(!['normal','forged','stale','mode','read-undefined','read-primitive','read-shared'].includes(mode)||!globalThis.__ownedJsonObservation)throw Error('fixture consumer mode');
+  globalThis.__ownedJsonObservation.consumerMode=mode;return new Response(null,{status:204});
+ }
+ if(path==='/fixture/state')return Response.json({consumers:globalThis.__ownedJsonObservation?.consumers??null,parsers:globalThis.__ownedJsonObservation?.rows??[],parserHold:parserHold?{arrived:parserHold.arrived,released:parserHold.released}:null,calls,intakes,completed,events,recursivePricingValues,reasonReads,controlReads:controlReads.map(({kind,read,readSettled,cancel,cancelSettled,unlock,released,removalFailed})=>({kind,read,readSettled,cancel,cancelSettled,unlock,released,...(removalFailed?{removalFailed:true}:{})})),charged:bodyBudgetCharged()});
  if(path==='/fixture/pressure'){
   if(request.method==='DELETE'){pressure?.release();pressure=undefined;return new Response(null,{status:204});}
   if(pressure)throw Error('fixture pressure already held');
@@ -238,8 +243,9 @@ export default {async fetch(request){
  if(id==='error')return Response.json({error:{type:'invalid_request_error',message:'synthetic rejection'}},{status:400});
  const usage={prompt_tokens:4,completion_tokens:3,total_tokens:7};
  if(id==='venice'&&body.ownedVeniceCase?.startsWith('compact-')){
-  const wire=ownedJsonCodecWire(body.ownedVeniceCase,body.model);
-  return new Response(body.stream===true?'data: '+wire+'\n\ndata: [DONE]\n\n':wire,{headers:{'content-type':body.stream===true?'text/event-stream':'application/json'}});
+  const later=body.ownedVeniceCase==='compact-later-object128',wire=ownedJsonCodecWire(later?'compact-object-string128':body.ownedVeniceCase,body.model);
+  const prefix=later?'data: '+JSON.stringify({model:body.model,choices:[]})+'\n\n':'';
+  return new Response(body.stream===true?prefix+'data: '+wire+'\n\ndata: [DONE]\n\n':wire,{headers:{'content-type':body.stream===true?'text/event-stream':'application/json'}});
  }
  if(id==='venice'&&body.ownedVeniceCase&&body.stream!==true){
   const mode=body.ownedVeniceCase,prefix='{"model":'+JSON.stringify(body.model)+',"extra":';let wire;

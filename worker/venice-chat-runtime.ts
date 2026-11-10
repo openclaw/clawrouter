@@ -7,7 +7,7 @@ import { sseEventBoundary, type SseBoundaryCursor } from "./proxy-response.ts";
 import { prepareVeniceChatBinding, validateVeniceReturnedModel, type VeniceChatBinding } from "./venice-chat-binding.ts";
 import { HttpError } from "./utils.ts";
 import { identityFailure } from "./identity-admission.ts";
-import { checkOwnedHttpVeniceCodec, checkOwnedHttpVeniceResponse, fundOwnedHttpVeniceCodec,
+import { checkOwnedHttpVeniceCodec, checkOwnedHttpVeniceResponse, fundOwnedHttpVeniceCodec, prepareOwnedHttpCodecConsumers,
   beginOwnedHttpVeniceSource, ownOwnedHttpVeniceRetirement, startOwnedHttpVeniceCodec, holdOwnedHttpVeniceSource,
   retireOwnedHttpVeniceBacking, ownedHttpIntakeFailure, finishOwnedHttpIntakeDiagnostics, retireOwnedVeniceReadDiagnostics,
   type OwnedHttpRevalidation, type OwnedHttpRequest, type OwnedHttpIntakeDiagnostics } from "./http-identity-owner.ts";
@@ -199,7 +199,7 @@ const ownedSseUsage = 3 * limit + 15 * frameLimit + ownedCodecMetadata;
 interface OwnedVeniceCodec {
   cap: OwnedHttpRevalidation; native?: NativeResponse; binding?: VeniceChatBinding;
   streaming: boolean; started: boolean; headersBytes: number;
-  source?: OwnedVeniceSource; output?: Response; usage?: ValidatedNativeUsage;
+  source?: OwnedVeniceSource; output?: Response; outputBody?: ReadableStream<Uint8Array>; usage?: ValidatedNativeUsage;
   outputRetired?: Promise<void>; outputDone?: true;
   outputFailure?: unknown; outputFailed?: true;
 }
@@ -210,6 +210,7 @@ export function prepareOwnedVeniceChatCodec(cap: OwnedHttpRevalidation, selectio
   if (ownedCodecs?.has(cap) || !native || native !== selection.nativeResponse
     || native.origin !== "https://api.venice.ai" || native.path !== "/api/v1/chat/completions" || !selection.model) throw identityFailure("protocol");
   fundOwnedHttpVeniceCodec(cap, ownedCodecMetadata + 4 * selection.model.upstream.length, 0);
+  prepareOwnedHttpCodecConsumers(cap);
   const binding = prepareVeniceChatBinding(selection.body as Record<string, unknown>, selection.model.upstream);
   const state: OwnedVeniceCodec = { cap, native, binding, streaming: !Array.isArray(selection.body) && selection.body.stream === true,
     started: false, headersBytes: 4 * selection.model.upstream.length };
@@ -229,7 +230,12 @@ export function matchesOwnedVeniceUsage(cap: OwnedHttpRevalidation, response: Re
   const state = ownedCodecs?.get(cap); return !!state && state.output === response && state.usage === usage;
 }
 export function matchesOwnedVeniceOutputBody(cap: OwnedHttpRevalidation, body: ReadableStream<Uint8Array> | null): boolean {
-  return !!body && ownedCodecs?.get(cap)?.output?.body === body;
+  return !!body && ownedCodecs?.get(cap)?.outputBody === body;
+}
+export function matchesOwnedVeniceConsumerInput(cap: OwnedHttpRevalidation, response: Response, streaming: boolean): boolean {
+  const state = ownedCodecs?.get(cap);
+  return !!state?.started && state.output === response && state.streaming === streaming
+    && !!state.outputBody && !!state.source;
 }
 export function matchesOwnedVeniceOutputFailure(cap: OwnedHttpRevalidation, failure: unknown): boolean {
   const state = ownedCodecs?.get(cap);
@@ -250,7 +256,7 @@ export function matchesOwnedVeniceRetirement(cap: OwnedHttpRevalidation, work: P
 export function retireOwnedVeniceChatCodec(cap: OwnedHttpRevalidation): void {
   const state = ownedCodecs?.get(cap); if (!state) return;
   if (state.source && (!state.source.done || state.source.pulling) || state.outputRetired && !state.outputDone) throw identityFailure("protocol");
-  state.source?.clear(); state.source = undefined; state.output = undefined; state.usage = undefined;
+  state.source?.clear(); state.source = undefined; state.output = undefined; state.outputBody = undefined; state.usage = undefined;
   state.native = undefined; state.binding = undefined;
   state.outputRetired = undefined; state.outputDone = undefined;
   state.outputFailure = undefined; state.outputFailed = undefined;
@@ -483,6 +489,7 @@ async function ownedVeniceJson(state: OwnedVeniceCodec, source: OwnedVeniceSourc
     } satisfies UnderlyingByteSource, { highWaterMark: 0 });
     try {
       const result = new Response(stream, { status: 200, headers });
+      state.outputBody = stream;
       codecPhase(state, 2 * limit + ownedCodecMetadata, ownedCodecMetadata);
       source.checkAbort(); return result;
     } catch (error) {
@@ -597,5 +604,6 @@ function ownedVeniceEvents(state: OwnedVeniceCodec, source: OwnedVeniceSource, r
   const headers = new Headers(response.headers);
   for (const name of ["content-length", "content-encoding", "etag", "digest", "content-md5"]) headers.delete(name);
   headers.set("cache-control", "private, no-store");
+  state.outputBody = body;
   return new Response(body, { status: 200, headers });
 }

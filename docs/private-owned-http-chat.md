@@ -537,19 +537,14 @@ first-authority await before closing or erroring. Abort also errors an idle SSE
 consumer after the original source joins. UNKNOWN retains all relevant backing.
 Neither source EOF, parser completion nor response publication is a release.
 
-Successful intake diagnostic origins now leave their registration maps and root
-vector after their original operations join. This retires application control
-products without refunding payload or source credit. Failed origins remain in
-their original order until the final failure consumer; no reason-value dedup
-occurs. The JSON parse phase retains only output-cancel and final-abort codec
-origins after source retirement. An UNKNOWN listener or borrower keeps the
-remaining diagnostic capabilities as well as backing; final cleanup cannot
-invalidate a callback capability whose removal was not established.
-The codec intake capability refers directly to its nine genuine root-origin
-records. It adds no per-origin capability, forwarding owner or second weak
-registration. Its root vector retains failed records; joined successes clear
-their vector cells and registrations before parser reuse. This representation
-change does not add source credit, common funding or CONTROL capacity.
+The codec and downstream consumers reserve all their terminal factories before
+selection. They claim fixed ordinal ranges before acquisition, then materialize
+only an actual failed origin at its first observer. The fixed record contains
+presence and category, never a raw rejection graph. Successful operations need
+no history records. Failed records remain in ordinal order until the final
+failure consumer; reason equality never merges separate operations. An UNKNOWN
+listener or borrower retains its relevant capabilities and backing. This
+representation changes neither the reservation nor source/CONTROL limits.
 
 A codec delivery failure is recorded at its original operation. The fixed
 codec retains the exact bounded failure it publishes; the proxy retains the
@@ -561,7 +556,7 @@ predicate frames belong to CONTROL, not passive DATA. Their aliases clear at
 actual request retirement; the complete overlap is still unqualified.
 
 Additional authored witnesses use the real compiled entry and SQLite authority:
-37 Node cases, 23 native cases, and one Venice invocation in the existing pinned
+39 Node cases, 30 native cases, and one Venice invocation in the existing pinned
 OpenClaw UNIFIED client fixture. They include accepted/rejected structural and
 wire edges, escaped Unicode, raw duplicate/unknown preservation, more than 2 MiB
 of SSE, JSON delivery while archive work is held, and post-native held
@@ -784,18 +779,104 @@ replay state, and concurrent upload/account/archive work. It is consequently
 not repaired by calling depth 259/260 or batch nine a complete parser ceiling.
 The private preparation lifetime repair does not close this overlap.
 
-One candidate reduction is to reuse the genuine codec's custody rather than
-construct a second inner response owner. That is not implemented or claimed
-safe: `normalizeFirstSseEvent` and `replayResponse` currently discard their
-original reader-cancellation promises and release the reader immediately.
-The codec's source receipt is a different promise; it does not establish that
-all of those downstream native API roots and callbacks have settled. Removing
-the wrapper without a closed original-operation handoff would replace the
-CONTROL gap with a custody gap. A private normalization/replay receipt in
-`proxy-response.ts` is a proposed additional boundary, outside the current
-21-file production authorization. Ordinary behavior, public cancellation
-protection and accepted profiles must remain unchanged in any such proposal.
+The subsequent 22-file implementation adds genuine consumer custody in
+`proxy-response.ts`. The shared normalizer and usage algorithms remain in that
+module. The following section records the implemented replacement and its
+remaining CONTROL counterexample; the former 1037 row is historical evidence.
 
 The candidate remains incomplete and unpublished. The lower bound establishes
 one concrete overlap to repair; it does not certify a replacement layout or
 request a higher quota. No semantics or heap measurements were run locally.
+
+### Private codec consumers: implemented custody, CONTROL still open
+
+The consumer capability binds the actual HTTP request, selected attempt,
+operation, codec response, mode, usage-context identity and request ID. Codec
+body identity is retained at its original output factory. Acquisition checks
+the actual response/body before calling its actual `getReader`. A private
+sniff reader and its buffered prefix transfer directly into replay; the usage
+observer acquires that registered descendant. Header-only public wrapping
+retains the same body. The outer public cancellation guard remains present.
+
+Read and FIRST-cancel joins are enrolled before either original can re-enter.
+First observers normalize acquisition, read, closed, cancel and unlock failures;
+modified methods are invoked with their actual receivers. Native propagation
+requires the registered body, a published failure and the original native
+method/closed getter. A post-native wrapper is a separate operation even when
+it rejects with the same value or with undefined. Unlock failures retain their
+own ordered terminal origin alongside the primary public failure.
+
+Replay and usage pulls enroll their actual original promise before execution.
+Retirement joins read, FIRSTcancel, closed, unlock and active pull before clearing
+reader/body/prefix aliases. Detached cleanup is already enrolled in the request;
+it does not delay publication of a mapped error or a healthy prefix. The fixed
+usage receiver transfers the result directly to the genuine accounting owner;
+the private consumer API exposes only Response and void completion receipts.
+There is no graph-valued public promise or arbitrary graph callback.
+
+Consumer payload admission is additive to the SAME foreground ticket: a
+1 MiB prefix/classification component, 64 KiB execution-metadata component,
+and `96 * headerPairs + 6 * headerUnits` for actual header copies. It creates
+no additional arena or source credit. These are implemented reservations, not
+a completed whole-phase DATA upper bound. Full grant, retained policy/routing,
+codec, generic usage, upload, accounting and archive remain simultaneous owners.
+
+The supplied pinned-tokenizer source inventory gives a per-parser dynamic
+reservation maximum of 415, including its depth subtotal. The between-feed
+state at accepted depth 128 is 343: fixed state 76, parent/key subtotal 259,
+and the eight-product enclosing codec invocation. The separately identified
+281 shared products must be charged once to their actual shared owner; they
+are neither duplicated per feed nor credited as spare request capacity.
+Remaining module/shared-owner closure is still required. This source-logical
+inventory excludes native implementation frames and physical heap inference.
+
+The following lower inventory uses the same later-SSE schedule as above. Both
+actual downstream readers are pending while a later object-depth-128 frame is
+parsed, and the already published outer response and promoted generation remain
+live. The parser can be between code-point feeds at its deepest scalar.
+
+| Delta from the historical 1037 subset | Products |
+| --- | ---: |
+| Historical subset | 1037 |
+| Remove old parent subtotal, replaced below | -259 |
+| Remove inner wrapper's four origin products and scope/reader subset | -69 |
+| Remove all nine eager codec origin records | -63 |
+| Replace source diagnostic owner with fixed ordinal/credit/record holder | -5 |
+| Remove parser facades already included in the new fixed parser term | -9 |
+| Remove unmaterialized successful codec-origin vector | -1 |
+| Remove generic InputRetirement facade/functions/promise | -7 |
+| Remove transient usage-result carrier cleared before publication | -4 |
+| Complete between-feed parser component, without adding depth again | 343 |
+| New surviving backing/codec/revalidation/proxy owner fields | 7 |
+| Actual consumer owner and its fifteen initial fields | 16 |
+| Two reader-state objects and twelve live fields each, minimum | 26 |
+| Two diagnostic holders, empty record objects and capabilities | 16 |
+| Two consumer WeakMaps and their two key/value entries | 6 |
+| Consumer retirement promise and its resolving function | 2 |
+| Consumer completion child object and six fields | 7 |
+| First sniff reader, absent from the earlier usage-reader row | 1 |
+| Reader vector and two retained entries | 3 |
+| **Current simultaneous lower inventory** | **1047** |
+
+This excludes the consumer capability object itself, additional first-reader
+prefix/output fields, its pending original promises/reactions, active tokenizer
+execution above the between-feed state, normalizer/replay closures, remaining
+usage state and competing sink tails. It is consequently not a 1047 upper
+bound or a 23-product-only repair estimate. The full 415 component cannot be
+added to 343 or to the old parent subtotal. No 1024 fit is claimed.
+
+The new native witness warms a real generation, then sends a one-MiB request
+whose second SSE event contains the depth-128 object. Fixture-only observers
+check two actual consumer readers, zero inner wrappers and the surviving outer
+guard during that parser invocation. Separate native cases cover forged/stale/
+wrong-mode capabilities before reader acquisition and post-native read/cancel/
+unlock failures with held FIRSTcancel, undefined, shared and large reasons.
+Original operations are forwarded, release occurs first, and the existing
+memoized late-body roots and request retirement joins remain in teardown.
+Two Node witnesses cover fabricated capabilities and the same later-event wire.
+All are authored only; local runtime semantics remain UNRUN_CODE_ONLY_HOSTED.
+
+The 22-file candidate is still incomplete. Further representation/lifetime
+work must remove real simultaneous products, with original roots and their
+owners preserved. This checkpoint authorizes no quota increase, reclassification,
+profile reduction, activation or publication.

@@ -113,7 +113,9 @@ import {
   signSigV4, upstreamAuth, upstreamPath, type UpstreamAuth,
 } from "./providers";
 import { assertOperationConfiguration, grantSupports, openRouterPcmRequirement } from "./provider-auth.ts";
-import { normalizePreStreamError, observeUsage, proxyResponseHeaders } from "./proxy-response";
+import { normalizePreStreamError, observeUsage, proxyResponseHeaders, beginOwnedCodecConsumer,
+  normalizeOwnedCodecPreStreamError, observeOwnedCodecUsage, ownedCodecUsageCompletion, ownedCodecConsumerRetirement,
+  matchesOwnedCodecUsage, abandonOwnedCodecConsumer, type OwnedCodecConsumer, type ObservedUsage } from "./proxy-response";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledProvider, CompiledQuotaConfig, Env, ProviderConnection } from "./types";
 import {
   decodePathSegment,
@@ -143,6 +145,11 @@ interface OwnedProxyInvocation {
   nativeSignal?: AbortSignal;
   nativeUsage?: import("./native-response.ts").ValidatedNativeUsage;
   publicBody?: ReadableStream<Uint8Array> | null;
+  operation?: HttpOperation;
+  consumer?: OwnedCodecConsumer;
+  observedUsage?: ObservedUsage;
+  usageContext?: Readonly<import("./token-usage.ts").UsageTokenContext>;
+  requestId?: string;
 }
 interface OwnedPreparationReceiver { owner: OwnedHttpRequest; fields?: OwnedPreparedFields }
 let ownedProxyInvocations: WeakMap<OwnedHttpRequest, OwnedProxyInvocation> | undefined;
@@ -159,11 +166,35 @@ export function matchesOwnedHttpVeniceResponseInput(cap: OwnedHttpRequest, attem
 export function matchesOwnedHttpPublicBody(cap: OwnedHttpRequest, body: ReadableStream<Uint8Array> | null): boolean {
   return !!body && ownedProxyInvocations?.get(cap)?.publicBody === body;
 }
+export function matchesOwnedHttpCodecConsumerInput(http: OwnedHttpRequest, codec: OwnedHttpRevalidation,
+  attempt: OwnedHttpUpload, operation: HttpOperation, streaming: boolean, requestId: string,
+  usageContext?: Readonly<import("./token-usage.ts").UsageTokenContext>): boolean {
+  const owner = ownedProxyInvocations?.get(http), selection = owner?.selection;
+  return !!owner && owner.operation === operation && owner.upload === attempt && owner.requestId === requestId && owner.usageContext === usageContext
+    && owner.prepared?.ownedVenice === codec && ownedPreparedUploads?.get(owner.prepared) === attempt
+    && !!selection && !Array.isArray(selection.body) && (selection.body.stream === true) === streaming
+    && selection.endpoint.request_format === "openai.chat_completions" && selection.endpoint.response_format === "openai.chat_completions";
+}
 export function acceptOwnedHttpVeniceUsage(http: OwnedHttpRequest, codec: OwnedHttpRevalidation,
   response: Response, usage: import("./native-response.ts").ValidatedNativeUsage | undefined): void {
   const owner = ownedProxyInvocations?.get(http);
   if (!owner || owner.prepared?.ownedVenice !== codec || !matchesOwnedVeniceUsage(codec, response, usage)) throw identityFailure("protocol");
   owner.nativeUsage = usage;
+}
+export function acceptOwnedCodecUsage(http: OwnedHttpRequest, consumer: OwnedCodecConsumer, response: Response, usage: ObservedUsage): void {
+  const owner = ownedProxyInvocations?.get(http);
+  if (!owner || owner.consumer !== consumer || owner.observedUsage !== undefined || !matchesOwnedCodecUsage(consumer, http, response, usage))
+    throw identityFailure("protocol");
+  owner.observedUsage = usage;
+}
+function completeOwnedCodecAccounting(http: OwnedHttpRequest, consumer: OwnedCodecConsumer,
+  accounting: ReturnType<typeof createProxyAccounting>, response: Response, reservation: BudgetReservation,
+  content: string | null, termination: import("./types").UsageEvent["status"] | undefined): Promise<boolean> {
+  const owner = ownedProxyInvocations?.get(http);
+  if (!owner || owner.consumer !== consumer || !owner.observedUsage) throw identityFailure("protocol");
+  let usage: ObservedUsage | undefined = owner.observedUsage;
+  try { return accounting.complete(response, usage, reservation, content, termination); }
+  finally { owner.observedUsage = undefined; usage = undefined; }
 }
 export function hasBoundOwnedHttpAuthentication(cap: OwnedHttpRequest): boolean {
   return ownedProxyInvocations?.get(cap)?.identity !== undefined;
@@ -270,6 +301,9 @@ export function retireOwnedHttpProxy(cap: OwnedHttpRequest): void {
   invocation.prepared = undefined; invocation.identity = undefined; invocation.selection = undefined;
   invocation.nativeResponse = undefined; invocation.nativeSignal = undefined; invocation.nativeUsage = undefined;
   invocation.publicBody = undefined;
+  invocation.operation = undefined;
+  invocation.consumer = undefined; invocation.observedUsage = undefined;
+  invocation.usageContext = undefined; invocation.requestId = undefined;
   invocation.admission = undefined; invocation.upload = undefined; invocation.attempts.length = 0;
   invocation.required = undefined; invocation.request = undefined as never; invocation.env = undefined as never; invocation.context = undefined as never;
   admission?.retireOwned();
@@ -1354,6 +1388,8 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
   let accounting: ReturnType<typeof createProxyAccounting> | undefined;
   let retention: PreparedContentRetention | null | undefined;
   let accountingDeferred = false, retentionDeferred = false;
+  let codecConsumer: OwnedCodecConsumer | undefined;
+  let codecPublished = false;
   const run = <T>(start: () => Promise<T>): Promise<T> => completion ? completion.start(start) : start();
   try {
   const searchOwner = admission?.search;
@@ -1528,6 +1564,10 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
   }
   const endpointTimeout = selection.endpoint.timeout_ms ?? 120_000;
   const operation = searchOwner?.operation ?? music?.operation ?? new HttpOperation(owned ? ownedHttpSignal(owned) : request.signal, Math.min(selection.timeoutMs ?? endpointTimeout, endpointTimeout));
+  if (owned) {
+    const invocation = ownedProxyInvocations!.get(owned)!;
+    invocation.operation = operation; invocation.usageContext = usageContext; invocation.requestId = requestId;
+  }
   const signal = operation.signal;
   // Stateful auxiliary operations requalify after budget/retention awaits, under the same
   // cancellation/deadline owner as transport. Interrupted reads are known-unsent.
@@ -1759,8 +1799,15 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       ? selection.body.some(({ query }) => !!query && typeof query === "object" && "stream" in query && query.stream === true)
       : selection.body.stream === true;
     const errorFormat = selection.endpoint.request_format.startsWith("anthropic.") ? "anthropic" : selection.endpoint.request_format.startsWith("openai.") ? "openai" : undefined;
-    if (completion) response = ownOrdinaryResponse(response, completion, owned);
-    response = await normalizePreStreamError(response, !cost.requestTariff && streaming && !["audio.binary", "ollama.chat", "radius.messages"].includes(selection.endpoint.response_format), operation, errorFormat ? { format: errorFormat, requestId } : undefined);
+    const normalizeStreaming = !cost.requestTariff && streaming && !["audio.binary", "ollama.chat", "radius.messages"].includes(selection.endpoint.response_format);
+    if (owned && prepared.ownedVenice) {
+      codecConsumer = beginOwnedCodecConsumer(owned, prepared.ownedVenice, response, operation, streaming, requestId, nativeUsage, usageContext);
+      ownedProxyInvocations!.get(owned)!.consumer = codecConsumer;
+      response = await normalizeOwnedCodecPreStreamError(codecConsumer, response, normalizeStreaming, operation, errorFormat ? { format: errorFormat, requestId } : undefined);
+    } else {
+      if (completion) response = ownOrdinaryResponse(response, completion, owned);
+      response = await normalizePreStreamError(response, normalizeStreaming, operation, errorFormat ? { format: errorFormat, requestId } : undefined);
+    }
     // Price inspection reads delivery bytes, not initial-response headers.
     // Search retains its original deadline through delivery; other native paths
     // retire only the timer and keep caller cancellation connected through EOF.
@@ -1770,6 +1817,7 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       response = priceGuard.response;
     }
   } catch (error) {
+    if (codecConsumer) abandonOwnedCodecConsumer(codecConsumer);
     if (error instanceof PublishedMusicUnsent) dispatched = false;
     if (music) {
       operation.stop("upstream", error);
@@ -1861,38 +1909,50 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     const job = background;
     Object.assign(inspection, { observe: async (fact: import("./token-usage.ts").ResponsesObservation) => { await job.observe(fact, response!.status); } });
   }
-  let observed!: ReturnType<typeof observeUsage>;
-  const observe = () => observeUsage(response!, operation, inspection, selection.endpoint.response_format, cost.requestTariff, nativeUsage, usageContext);
-  if (completion) completion.start(() => { observed = observe(); return observed.retired; });
-  else observed = observe();
+  let observed: ReturnType<typeof observeUsage> | undefined;
+  let delivered: Response, retired: Promise<void>;
+  if (codecConsumer) {
+    delivered = observeOwnedCodecUsage(codecConsumer, response, operation);
+    retired = ownedCodecConsumerRetirement(codecConsumer);
+  } else {
+    const observe = () => observeUsage(response!, operation, inspection, selection.endpoint.response_format, cost.requestTariff, nativeUsage, usageContext);
+    if (completion) completion.start(() => { observed = observe(); return observed.retired; });
+    else observed = observe();
+    delivered = observed!.response; retired = observed!.retired;
+  }
   if (nativeLease) {
     const deliveryLease = nativeLease;
-    context.waitUntil(observed.retired.then(() => deliveryLease.release()));
+    context.waitUntil(retired.then(() => deliveryLease.release()));
   }
-  if (!completion && admission) admission.completion = observed.result;
-  if (searchOwner) searchOwner.track(observed.retired);
+  if (!completion && admission) admission.completion = observed!.result;
+  if (searchOwner) searchOwner.track(retired);
   if (background) {
     if (!response.ok) context.waitUntil(background.unsent(response.status, operation.status ?? "provider_error", content));
     else if (operation.receivedRejection) {
       // Native HTTP-200 rejection evidence remains provisional until delivery:
       // a misbehaving upstream may send billable work after its error event.
       const job = background, statusCode = response.status;
-      context.waitUntil(observed.result.then(result => job.finishRejectedDelivery({
+      context.waitUntil(observed!.result.then(result => job.finishRejectedDelivery({
         statusCode, status: operation.status ?? "provider_error", billable: !result.nonbillable, tokens: result.tokens, contentRef: content,
       })));
     }
   } else {
     accountingDeferred = true;
     const terminalAccounting = accounting;
-    registerProxyBackground(owned, context, () => run(() => observed.result.then(result => {
+    if (codecConsumer && owned) {
+      const consumer = codecConsumer, http = owned;
+      registerProxyBackground(owned, context, () => run(() => ownedCodecUsageCompletion(consumer).then(() =>
+        completeOwnedCodecAccounting(http, consumer, terminalAccounting, delivered, reservation!, content, operation.status))
+        .finally(() => terminalAccounting.close())));
+    } else registerProxyBackground(owned, context, () => run(() => observed!.result.then(result => {
     const failure = priceGuard?.failure();
     // Replacing an unpriced response doesn't undo the dispatched work. Retain
     // the hard reservation and record the original usage, not a free rejection.
     return failure ? terminalAccounting.pricingFailure(failure.tokens, reservation!, content)
-      : terminalAccounting.complete(observed.response, result, reservation!, content, operation.status);
+      : terminalAccounting.complete(observed!.response, result, reservation!, content, operation.status);
     }).finally(() => { if (completion) terminalAccounting.close(); })));
   }
-  response = observed.response;
+  response = delivered;
   const outputHeaders = proxyResponseHeaders(response, selection.provider.id);
   // Header sanitization strips upstream router-code spoofing. Only a verified
   // local JSON replacement may restore this diagnostic; SSE fails after headers.
@@ -1903,8 +1963,11 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
   if (grantFailover) outputHeaders.set("x-clawrouter-grant-failover", "1");
   outputHeaders.set("x-clawrouter-content-retention", music ? content ? "on; retention-days=30" : "off" : retentionRequired(auth, selection.capability) ? "on; retention-days=30" : "off");
   if (owned) ownedProxyInvocations!.get(owned)!.publicBody = response.body;
-  return new Response(response.body, { status: response.status, statusText: response.statusText, headers: outputHeaders });
+  const publishedResponse = new Response(response.body, { status: response.status, statusText: response.statusText, headers: outputHeaders });
+  codecPublished = true;
+  return publishedResponse;
   } finally {
+    if (codecConsumer && !codecPublished) abandonOwnedCodecConsumer(codecConsumer);
     if (completion) {
       failureAccounting?.close();
       if (!accountingDeferred) accounting?.close();

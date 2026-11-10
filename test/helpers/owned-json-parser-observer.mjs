@@ -6,6 +6,9 @@ import assert from 'node:assert/strict';
 export function createOwnedJsonObservation() {
   const rows = [];
   let current, preparations = 0;
+  const consumers = { created: 0, acquired: 0, retired: 0, live: 0, inner: 0, outer: 0,
+    read: 0, cancel: 0, unlock: 0, held: false, released: false, reasonReads: 0 };
+  let releaseConsumer;
   const peak = row => {
     row.peakParents = Math.max(row.peakParents, row.parents);
     row.peakTokens = Math.max(row.peakTokens, row.tokens);
@@ -13,6 +16,37 @@ export function createOwnedJsonObservation() {
   };
   return {
     rows,
+    consumers,
+    consumerMode: 'normal',
+    previousCodec: undefined,
+    consumer() { consumers.created++; },
+    reader(reader) {
+      consumers.acquired++; consumers.live++;
+      if (!this.consumerMode.startsWith('read-') || consumers.acquired !== 1) return;
+      const kind = this.consumerMode.slice(5);
+      let reason = kind === 'undefined' ? undefined : kind === 'primitive' ? 'x'.repeat(17 * 1024 * 1024)
+        : Object.freeze({ get message() { consumers.reasonReads++; throw new Error('foreign reason getter'); },
+          get then() { consumers.reasonReads++; throw new Error('foreign reason then'); } });
+      const read = reader.read, cancel = reader.cancel, unlock = reader.releaseLock;
+      let reads = 0;
+      const released = new Promise(resolve => { releaseConsumer = resolve; });
+      // Faults occur AFTER the actual native method. Production must call these
+      // actual methods, observe their original promises, and retain that join.
+      Object.defineProperty(reader, 'read', { value(...args) {
+        consumers.read++; const original = Reflect.apply(read, this, args);
+        return original.then(value => { if (++reads === 2) throw reason; return value; });
+      } });
+      Object.defineProperty(reader, 'cancel', { value(...args) {
+        consumers.cancel++; const original = Reflect.apply(cancel, this, args);
+        return original.then(async () => { consumers.held = true; await released; const failure = reason; reason = undefined; throw failure; });
+      } });
+      Object.defineProperty(reader, 'releaseLock', { value(...args) {
+        Reflect.apply(unlock, this, args); consumers.unlock++; throw reason;
+      } });
+    },
+    releaseConsumer() { consumers.released = true; releaseConsumer?.(); releaseConsumer = undefined; },
+    retiredReader() { consumers.retired++; if (--consumers.live < 0) throw new Error('consumer reader retired twice'); },
+    wrapper(publicBoundary) { if (publicBoundary) consumers.outer++; else consumers.inner++; },
     accounting(delta) {
       preparations += delta;
       if (preparations < 0) throw new Error('preparation accounting retired twice');
@@ -20,7 +54,8 @@ export function createOwnedJsonObservation() {
     begin() {
       if (preparations !== 0) throw new Error('unused preparation accounting survived into codec');
       const row = { parents: 0, tokens: 0, pending: false, member: false, peakParents: 0, peakTokens: 0, peakStored: 2,
-        parentPushes: 0, parentPops: 0, tokenPushes: 0, tokenPops: 0, attachments: 0, objectAttachments: 0, cleared: false };
+        parentPushes: 0, parentPops: 0, tokenPushes: 0, tokenPops: 0, attachments: 0, objectAttachments: 0, cleared: false,
+        consumerReaders: consumers.live, innerWrappers: consumers.inner, outerWrappers: consumers.outer };
       rows.push(row); return row;
     },
     enter(row) { if (row) { if (current) throw new Error('nested fixture parser observation'); current = row; } },
@@ -85,6 +120,19 @@ export function observeOwnedJsonSource(path, source) {
       'options = undefined as never; owner = undefined as never; ' + probe + '.accounting(1);');
     source = replace(source, 'finally { command = undefined; }',
       'finally { const __held = command !== undefined; command = undefined; if (__held) ' + probe + '.accounting(-1); }', 2);
+  } else if (/[\\/]worker[\\/]http-identity-owner\.ts$/.test(path)) {
+    source = replace(source, 'function ownHttpResponse(cap: OwnedHttpRequest, response: Response, publicBoundary: boolean): Response {',
+      'function ownHttpResponse(cap: OwnedHttpRequest, response: Response, publicBoundary: boolean): Response { ' + probe + '.wrapper(publicBoundary);');
+  } else if (/[\\/]worker[\\/]proxy-response\.ts$/.test(path)) {
+    source = replace(source, 'checkOwnedHttpCodecConsumer(http, codec, response, operation, streaming, requestId, usageContext);',
+      'if (' + probe + '.consumerMode === "forged") codec = Object.freeze({}); '
+      + 'else if (' + probe + '.consumerMode === "stale") codec = ' + probe + '.previousCodec; '
+      + 'else if (' + probe + '.consumerMode === "mode") streaming = !streaming; '
+      + 'checkOwnedHttpCodecConsumer(http, codec, response, operation, streaming, requestId, usageContext); '
+      + probe + '.previousCodec = codec; ' + probe + '.consumer();');
+    source = replace(source, 'state.reader = state.body.getReader();', 'state.reader = state.body.getReader(); state.__probeAcquired = true; ' + probe + '.reader(state.reader);');
+    source = replace(source, 'finishOwnedHttpIntakeDiagnostics(state.diagnostics);',
+      'finishOwnedHttpIntakeDiagnostics(state.diagnostics); if (state.__probeAcquired) ' + probe + '.retiredReader();');
   } else if (/[\\/]stream-json[\\/](?:src[\\/])?core[\\/]parser\.js$/.test(path)) {
     // Exact pinned 3.8 tokenizer: two container-entry and three exit sites.
     // Observe the ORIGINAL stack *before* the consumer sees the returned batch.
@@ -104,7 +152,7 @@ export async function startOwnedJsonObservedFixture(directory, router, upstream,
     resolveDir: process.cwd(), sourcefile: 'owned-json-fixture.ts', loader: 'ts',
   }, bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2022', logLevel: 'silent',
   plugins: [{ name: 'observe-original-json-stacks', setup(build) {
-    build.onLoad({ filter: /(?:[\\/]worker[\\/](?:json-body|proxy-accounting)\.ts|[\\/]stream-json[\\/](?:src[\\/])?core[\\/]parser\.js)$/ }, async ({ path }) => ({
+    build.onLoad({ filter: /(?:[\\/]worker[\\/](?:json-body|proxy-accounting|proxy-response|http-identity-owner)\.ts|[\\/]stream-json[\\/](?:src[\\/])?core[\\/]parser\.js)$/ }, async ({ path }) => ({
       contents: observeOwnedJsonSource(path, await readFile(path, 'utf8')),
       loader: path.endsWith('.ts') ? 'ts' : 'js', resolveDir: dirname(path),
     }));
