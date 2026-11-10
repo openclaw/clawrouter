@@ -99,7 +99,9 @@ fences and current winners before normalization. Staged aliases do not create
 new source allowance.
 
 The private typed ordered journal replaces per-record commit closures. It has
-seed, projection, marker and selection variants, bounded at 231 entries. Seed
+seed, projection, dependency, marker and selection variants, bounded at 231
+entries. Dependency-only receipts and staged projections share the same at-most-98
+pool slots; they do not add a second passive index. Seed
 tables/columns are closed and allowlisted. Projection backfill reads one full
 original KV record at a time, checks the captured pre-read revision against
 current state, projects and clears that holder. Absence, null, legacy, pending
@@ -108,7 +110,14 @@ staged entries before a legacy early return.
 
 All return paths perform final synchronous current credential, secret,
 lifecycle, policy, owner, connections and pool rereads after the last await.
-Stale routing choices are removed rather than committed. Complete result and
+Stale routing choices are removed rather than committed. Every candidate read
+captures its actual attachment revision, including null projections, unselected
+candidates and snapshot-only results. Final synchronous validation probes every
+retained dependency before serialization/effects. A mismatch removes selection,
+snapshots and the planned selection journal entry. Earlier seed effects still
+follow the existing journal contract; no rollback is claimed. A canonical winner
+before the candidate read replaces an obsolete unpublishable staged projection
+with its current dependency; repeated observations retain the first dependency. Complete result and
 envelope planning includes actual consumer headroom before any journal effect.
 The executor marks the journal attempted before its first write; the selection
 entry marks itself attempted before cursor/count writes. An SQL error can leave
@@ -174,6 +183,16 @@ separate channels.
 | 98 choices | 99 | 686 | 196 | 102606 | 0 | 213060 |
 | 128 quota references/reset numbers | 2 | 256 | 128 | 0 | 0 | 3088 |
 | 128 ratios and a singleton | 2 | 129 | 129 | 0 | 0 | 2080 |
+
+Dependency records/indexes remain in the prepaid execution journal CONTROL
+inventory. One temporary replacement record and the final probe use two named
+synchronous slots; two capture/probe frames use the read window. Captured key/kind
+strings and revision scalars are additionally admitted before the receipt factory:
+`D = 8 + 2*(key.length + 10)`, at most 2076 bytes per observation. At most 98
+initial reads plus one selected reread retain at most 205524 such bytes through
+the final decision/serialization overlap. Staged and canonical receipts reuse
+journal slots; duplicate reads never create another retained receipt/index.
+This is a scoped delta accounting statement, not full CONTROL closure.
 
 The selector admits their simultaneous sum; a phase MAX is valid only after its
 last consumer has cleared. Routing, history, policy, user and selection returns
@@ -261,7 +280,10 @@ unlock abort races; and the complete-envelope boundary before RPC copying.
 
 The actual Workerd fixture uses original native KV/RPC bodies and SQLite, with
 the complete Env before DO initialization. It checks healthy opaque ownership,
-current winner rotation and zero-write denial in the originating request.
+current winner rotation and zero-write denial in the originating request. The
+new Node promise-order and native Workerd final-entry races complete a real pending
+B publication after A was chosen (or after a snapshot-only result). They require
+no stale result and zero selection/cursor effects, while preserving seed effects.
 Forwarding observations retain original promises/receivers; no platform body is
 replaced. All finite fixture roots are observed immediately and joined, with
 release-first cleanup and explicit primary presence. These success witnesses

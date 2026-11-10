@@ -653,3 +653,72 @@ test('private default-key rejection measures borrowed megabyte tokenRef before m
   assert.equal(f.trace.writes.length, 0);
   assert.equal(f.trace.kv.some(([key]) => key.startsWith('oauth/')), false);
 }));
+
+for (const snapshot of [undefined, 'only']) test('final private boundary rejects an unselected candidate publication after ' + (snapshot ?? 'choice'), async t => fixture(t, async f => {
+  seed(f);
+  f.stored.set('connections/anthropic', { providerId: 'anthropic', enabled: true });
+  const a = 'oauth/bridge-policy/a', b = 'oauth/bridge-policy/b';
+  const grant = priority => ({ provider: 'anthropic', kind: 'api_key', enabled: true, priority,
+    credentialStore: 'durable_object', credentialStatus: 'active', credentialGeneration: 1,
+    credentialLineage: 'fixture_generation', hasCredential: true });
+  for (const [key, token, value] of [[a, 'a', grant(0)], [b, 'b', grant(5)]]) {
+    f.sql.exec('INSERT INTO upstream_grant_pool_versions(grant_key,generation,revision) VALUES(?,?,?)', key, 1, 7);
+    f.sql.exec('INSERT INTO upstream_grant_pool_members(scope,scope_id,provider_id,token_ref,status) VALUES(?,?,?,?,?)', 'policies', 'bridge-policy', 'anthropic', token, 'active');
+    f.sql.exec('INSERT INTO upstream_grant_projections(grant_key,projection_json,legacy) VALUES(?,?,0)', key, JSON.stringify(value));
+  }
+  const admitted = f.owner.admitGrantAttachment({ key: b, generation: 1, revision: 7, provider: 'anthropic', status: 'active' });
+  assert.equal(admitted.revision, 8); assert.equal(admitted.pending, false);
+  let observed = 0;
+  const originalStore = f.owner.admissionStore;
+  t.mock.method(f.owner, 'admissionStore', function (...args) {
+    const store = Reflect.apply(originalStore, this, args), finish = store.finishSelection;
+    store.finishSelection = (...selectionArgs) => {
+      const original = Reflect.apply(finish, store, selectionArgs);
+      // Register on the ORIGINAL finish promise before the parent's await. This
+      // is the pending publication's real synchronous completion between phases.
+      f.own(original.then(prior => {
+        observed++;
+        if (snapshot) {
+          assert.equal(prior.selection, undefined);
+          assert.equal(prior.snapshots.anthropic.revisions[b], 8);
+        } else assert.equal(prior.selection.selected.key, a);
+        const published = f.owner.publishGrantAttachment({ key: b, generation: 2, revision: 8,
+          admissionRevision: 8, provider: 'anthropic', status: 'active', projection: { ...grant(-1), credentialGeneration: 2 } });
+        assert.equal(published.revision, 9); assert.equal(published.pending, false);
+      }, () => undefined));
+      return original;
+    };
+    return store;
+  });
+  const result = await f.call({ ...input(), providers: [{ id: 'anthropic', tokenRef: 'a' }],
+    selection: { providerId: 'anthropic', endpointId: 'messages', mode: 'http', capability: 'llm.messages' },
+    ...(snapshot ? { snapshot } : {}) });
+  assert.equal(observed, 1); assert.equal(result.status, 200);
+  assert.equal(Object.hasOwn(result.body.admission, 'selection'), false);
+  assert.equal(Object.hasOwn(result.body.admission, 'snapshots'), false);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM upstream_grant_selection').get().n, 0);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM upstream_grant_pool_cursors').get().n, 0);
+  assert.equal(f.db.prepare('SELECT revision FROM upstream_grant_pool_versions WHERE grant_key=?').get(b).revision, 9);
+  assert.equal(f.db.prepare("SELECT status FROM upstream_grant_pool_members WHERE token_ref='b'").get().status, 'active');
+  assert.equal(f.db.prepare('SELECT count(*) n FROM proxy_credentials').get().n, 1);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM access_policies').get().n, 1); // earlier seed contract remains; no rollback claim
+}));
+
+test('candidate dependency receipts share the bounded execution journal, never a second passive index', async t => fixture(t, async f => {
+  const ticket = PreflightTicket.reserve(); f.resources.push(() => ticket.release());
+  const bound = { bytes: 0, identity: identitySourceBudget(), bridge: { ticket, entries: [], attempted: false } };
+  for (let index = 0; index < 98; index++) f.owner.appendAdmissionJournal(bound,
+    { kind: 'projection', key: 'oauth/fixture/' + index, text: null, legacy: 0, revision: 7, eligible: true });
+  for (let index = 0; index < 98; index++) f.owner.appendAdmissionJournal(bound,
+    { kind: 'dependency', key: 'oauth/fixture/' + index, revision: 7 });
+  assert.equal(bound.bridge.entries.length, 98);
+  assert.ok(bound.bridge.entries.every(entry => entry.kind === 'projection'));
+  f.owner.appendAdmissionJournal(bound, { kind: 'dependency', key: 'oauth/fixture/new', revision: 8 });
+  f.owner.appendAdmissionJournal(bound, { kind: 'dependency', key: 'oauth/fixture/new', revision: 9 });
+  assert.equal(bound.bridge.entries.length, 99); assert.equal(bound.bridge.entries[98].revision, 8);
+  bound.bridge.entries[0].eligible = false;
+  f.owner.appendAdmissionJournal(bound, { kind: 'dependency', key: 'oauth/fixture/0', revision: 9 });
+  assert.equal(bound.bridge.entries.length, 99); assert.equal(bound.bridge.entries[0].kind, 'dependency');
+  assert.equal(bound.bridge.entries[0].revision, 9);
+  bound.bridge.entries.length = 0;
+}));

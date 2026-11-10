@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Add a local, inactive private full-admission continuation candidate with cumulative source ownership, opaque disposal and a typed deferred-effect journal. Private scratch and configuration factories receive prospective funding inside the unchanged ticket; default authentication and provider routes are unchanged. Source and hosted runtime qualification remain required before use.
+- Add a local, inactive private full-admission continuation candidate with cumulative source ownership, opaque disposal and a typed deferred-effect journal. Private scratch and configuration factories receive prospective funding inside the unchanged ticket, and final admission rechecks every choice or snapshot candidate dependency; default authentication and provider routes are unchanged. Source and hosted runtime qualification remain required before use.
 
 - Add an inactive private credential-preflight foundation with secret-only opaque proofs, exact common-arena reservations, original-source retirement and prospective final-read admission before cold credential seed writes. Default authentication and generation activation remain unchanged; runtime and factory qualification are required before use.
 

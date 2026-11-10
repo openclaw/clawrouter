@@ -39,6 +39,7 @@ export type AdmissionJournalEntry =
   | { kind: "seed"; family: number; key: string; value: unknown; text: string; marker: string }
   | { kind: "projection"; key: string; text: string | null; legacy: number; revision: number; eligible: boolean }
   | { kind: "marker"; key: string }
+  | { kind: "dependency"; key: string; revision: number }
   | { kind: "selection"; poolKey: string; selectedKey: string; cursorKey: string | null; nowMs: number; attempted: boolean };
 const admissionSeedTables = [["proxy_credentials", "credential_id", "credential_json"], ["access_policies", "policy_id", "policy_json"],
   ["access_users", "email", "user_json"], ["provider_connections", "provider_id", "connection_json"]] as const;
@@ -640,6 +641,7 @@ export class PolicyBindingIndexObject implements DurableObject {
         const plan = identityPlan("record"); plan.item(entry.value, 0);
         base += admissionGraphPayload(plan.counts) + 2 * (entry.text.length + entry.marker.length);
       } else if (entry.kind === "projection") base += 2 * (entry.text?.length ?? 0);
+      else if (entry.kind === "dependency") base += 8;
     }
     return base;
   }
@@ -672,7 +674,22 @@ export class PolicyBindingIndexObject implements DurableObject {
 
   private appendAdmissionJournal(bound: AuthorityReadBound, entry?: AdmissionJournalEntry): void {
     const journal = bound.bridge!;
-    if (journal.attempted || journal.entries.length >= 231) throw identityFailure("limit");
+    if (journal.attempted) throw identityFailure("limit");
+    if (entry?.kind === "dependency") {
+      // A projection and its final-choice dependency use the SAME bounded
+      // journal slot. An earlier observed dependency is never overwritten.
+      for (let index = 0; index < journal.entries.length; index++) {
+        const current = journal.entries[index];
+        if ((current.kind !== "projection" && current.kind !== "dependency") || current.key !== entry.key) continue;
+        if (current.kind === "projection" && current.revision !== entry.revision && !current.eligible) {
+          // A canonical publication won before this candidate was observed.
+          // Its obsolete unpublishable text is dropped; its funding stays held.
+          journal.entries[index] = entry;
+        }
+        return;
+      }
+    }
+    if (journal.entries.length >= 231) throw identityFailure("limit");
     if (entry) journal.entries.push(entry);
   }
 
@@ -687,6 +704,7 @@ export class PolicyBindingIndexObject implements DurableObject {
         const [table, keyColumn, column] = admissionSeedTables[entry.family];
         rows(this.sql.exec(`INSERT INTO ${table} (${keyColumn}, ${column}) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM ${table} WHERE ${keyColumn} = ?) AND NOT EXISTS (SELECT 1 FROM policy_binding_meta WHERE meta_key = ?)`, entry.key, entry.text, entry.key, entry.marker));
       } else if (entry.kind === "marker") this.putMeta(entry.key);
+      else if (entry.kind === "dependency") continue; // final validation only; never an SQL effect
       else if (entry.kind === "projection") {
         if (entry.eligible && this.grantAttachment(entry.key, true).revision === entry.revision) rows(this.sql.exec("INSERT OR IGNORE INTO upstream_grant_projections (grant_key, projection_json, legacy) VALUES (?, ?, ?)", entry.key, entry.text, entry.legacy));
       } else {
@@ -725,6 +743,13 @@ export class PolicyBindingIndexObject implements DurableObject {
         routingCurrent &&= same(pool, prior.pools[provider.id]);
       }
     } else { fresh.connections = []; fresh.pools = {}; routingCurrent = false; }
+    // EVERY observed candidate matters: an unselected projection can change the
+    // choice, and snapshot-only has no selected key. No await occurs between
+    // these original canonical probes and serialization/journal effects.
+    for (const entry of bound.bridge!.entries) if (entry.kind === "projection" || entry.kind === "dependency") {
+      const current = this.grantAttachment(entry.key, true);
+      if (current.revision !== entry.revision) routingCurrent = false;
+    }
     if (prior.selection?.selected) {
       const selected = prior.selection.selected;
       routingCurrent &&= this.grantAttachment(selected.key, true).revision === selected.authorityRevision;

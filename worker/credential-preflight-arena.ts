@@ -278,6 +278,7 @@ export const admissionBridgeFactoryCharges = Object.freeze({
     sqlCursorArrayRowAtOneProbe: 3, finalWrappersAndResultOwners: 12,
     seedAndProjectionScratch: 6, selectionPlanChoiceCursorTimeAttempted: 8,
     historyFoldCursorRowAndAccumulator: 4, markerAndExecutorIterators: 4,
+    dependencyReceiptReplacementAndFinalProbe: 2,
 
   }),
 });
@@ -305,6 +306,7 @@ export const admissionBridgeChoiceFactoryCharges = Object.freeze({
     preparationAndIdentityFailureProducts: 4,
     generatedOutputTransferVectors: 12,
     canonicalSelectAndHistoryFoldCallbacks: 3,
+    dependencyCaptureCallAndFinalProbeFrame: 2,
   }),
 });
 // Passive examples are explicit occurrence vectors, not a hidden control

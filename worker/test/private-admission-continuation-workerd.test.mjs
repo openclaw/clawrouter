@@ -13,6 +13,8 @@ import {bodyBudgetCharged} from './worker/body-budget.ts';
 import {identitySourceBudget} from './worker/identity-admission.ts';
 const digest='ab'.repeat(32),rotated='cd'.repeat(32),selectedKey='oauth/native-bridge-policy/anthropic';
 const check=(ok,label)=>{if(!ok)throw Error(label);};
+const dependencyA='oauth/native-bridge-policy/a',dependencyB='oauth/native-bridge-policy/b';
+const projection=priority=>({provider:'anthropic',kind:'api_key',enabled:true,priority,credentialStore:'durable_object',credentialGeneration:1,credentialLineage:'synthetic',credentialStatus:'active',hasCredential:true});
 const record=secret=>({enabled:true,secretSha256:secret,policyId:'native-bridge-policy',policyGeneration:'legacy',principalId:null});
 function observe(body,row){
  const get=body.getReader.bind(body);
@@ -34,8 +36,27 @@ export class PolicyBindingIndexObject extends Base {
    const result=Reflect.get(target,key,target);return typeof result==='function'?result.bind(target):result;}});
   super({storage},new Proxy(env,{get(target,key,receiver){if(key==='CLAWROUTER_OPTIONAL_CONFIG_KEYS'&&mode==='configuration'){trace.configurationReads=(trace.configurationReads??0)+1;return 'A,'.repeat(1677721)+'A';}return key==='POLICY_KV'?kv:Reflect.get(target,key,receiver);}}));
   const intake=this.completePrivateAdmission;this.completePrivateAdmission=(...args)=>{trace.intakes++;return Reflect.apply(intake,this,args);};
+  const finalize=this.finalPrivateAdmission;this.finalPrivateAdmission=(...args)=>{
+   if(mode==='dependency-choice'||mode==='dependency-snapshot'){
+    const prior=args[1];
+    check(mode==='dependency-choice'?prior.selection?.selected?.key===dependencyA:prior.snapshots?.anthropic?.revisions[dependencyB]===8,'candidate observed before pending publication');
+    trace.dependencyObserved=true;
+    const published=this.publishGrantAttachment({key:dependencyB,generation:2,revision:8,admissionRevision:8,provider:'anthropic',status:'active',projection:{...projection(-1),credentialGeneration:2}});
+    trace.publishedRevision=published.revision;check(published.revision===9&&!published.pending,'actual pending publication');
+   }
+   return Reflect.apply(finalize,this,args);
+  };
+
   this.snapshot=()=>({trace,charged:this.preflightArena?.charged??0,credentials:[...sql.exec('SELECT credential_json FROM proxy_credentials')].length,policies:[...sql.exec('SELECT policy_json FROM access_policies')].length,selection:[...sql.exec('SELECT selected_count FROM upstream_grant_selection')].map(row=>row.selected_count)});
-  this.configure=value=>{mode=value;sql.exec('DELETE FROM proxy_credentials');sql.exec('DELETE FROM access_policies');sql.exec('DELETE FROM policy_binding_meta');sql.exec('DELETE FROM provider_connections');sql.exec('DELETE FROM upstream_grant_projections');sql.exec('DELETE FROM upstream_grant_selection');sql.exec('DELETE FROM upstream_grant_pool_cursors');sql.exec('DELETE FROM upstream_grant_pool_versions');if(mode==='selection'||mode==='configuration')sql.exec('INSERT INTO upstream_grant_pool_versions(grant_key,generation,revision) VALUES(?,?,?)',selectedKey,1,7);trace.kv=[];trace.writes=0;trace.intakes=0;trace.configurationReads=0;};
+  this.configure=value=>{mode=value;sql.exec('DELETE FROM proxy_credentials');sql.exec('DELETE FROM access_policies');sql.exec('DELETE FROM policy_binding_meta');sql.exec('DELETE FROM provider_connections');sql.exec('DELETE FROM upstream_grant_projections');sql.exec('DELETE FROM upstream_grant_selection');sql.exec('DELETE FROM upstream_grant_pool_cursors');sql.exec('DELETE FROM upstream_grant_pool_versions');sql.exec('DELETE FROM upstream_grant_pool_members');if(mode==='selection'||mode==='configuration')sql.exec('INSERT INTO upstream_grant_pool_versions(grant_key,generation,revision) VALUES(?,?,?)',selectedKey,1,7);if(mode==='dependency-choice'||mode==='dependency-snapshot'){
+   for(const [key,token,value] of [[dependencyA,'a',projection(0)],[dependencyB,'b',projection(5)]]){
+    sql.exec('INSERT INTO upstream_grant_pool_versions(grant_key,generation,revision) VALUES(?,?,?)',key,1,7);
+    sql.exec('INSERT INTO upstream_grant_pool_members(scope,scope_id,provider_id,token_ref,status) VALUES(?,?,?,?,?)','policies','native-bridge-policy','anthropic',token,'active');
+    sql.exec('INSERT INTO upstream_grant_projections(grant_key,projection_json,legacy) VALUES(?,?,0)',key,JSON.stringify(value));
+   }
+   check(this.admitGrantAttachment({key:dependencyB,generation:1,revision:7,provider:'anthropic',status:'active'}).revision===8,'pending reservation');
+  }
+  trace.kv=[];trace.writes=0;trace.intakes=0;trace.configurationReads=0;trace.dependencyObserved=false;trace.publishedRevision=0;};
  }
  async fetch(request){
   const path=new URL(request.url).pathname;
@@ -45,7 +66,7 @@ export class PolicyBindingIndexObject extends Base {
  }
 }
 export default {async fetch(request,env){
- const mode=new URL(request.url).pathname.slice(1),stub=env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName('policy-bindings'));
+ const mode=new URL(request.url).pathname.slice(1),dependency=mode==='dependency-choice'||mode==='dependency-snapshot',stub=env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName('policy-bindings'));
  const roots=[];let proof,continuation,handle,hasPrimary=false,primary;
  const own=promise=>{const root={outcome:promise.then(value=>({failed:false,value}),error=>({failed:true,error})),used:false};roots.push(root);return root;};
  const take=async root=>{const result=await root.outcome;root.used=true;if(result.failed)throw result.error;return result.value;};
@@ -55,7 +76,7 @@ export default {async fetch(request,env){
   const configured=await take(own(stub.fetch('https://authority/fixture/configure',{method:'POST',body:mode})));await take(own(configured.text()));check(configured.status===200,'configure');
   await env.POLICY_KV.put('credentials/nativebridge',JSON.stringify(record(digest)));
   await env.POLICY_KV.put('policies/native-bridge-policy',JSON.stringify({enabled:true,generation:'legacy',providers:[],requestCostMicros:7}));
-  if(mode==='selection'||mode==='configuration'){
+  if(mode==='selection'||mode==='configuration'||dependency){
    await env.POLICY_KV.put('connections/anthropic',JSON.stringify({providerId:'anthropic',enabled:true}));
    await env.POLICY_KV.put(selectedKey,JSON.stringify({provider:'anthropic',kind:'api_key',enabled:true,credentialStore:'durable_object',credentialGeneration:1,credentialLineage:'synthetic',credentialStatus:'active',hasCredential:true}));
   }
@@ -68,9 +89,10 @@ export default {async fetch(request,env){
    handle.dispose();handle=undefined;result={status:200,opaque:true};
   }else{
    const source=identitySourceBudget();if(mode==='limited')source.values=131050;
-   const reply=await rpc('/admission/resolve',JSON.stringify({admission:{credentialId:'nativebridge',secretSha256:digest,providers:mode==='configuration'?[{id:'anthropic',tokenRef:'anthropic'}]:[],...(mode==='configuration'?{selection:{providerId:'anthropic',endpointId:'messages',mode:'http',capability:'llm.messages'}}:{})},source}),{'content-type':'application/json','x-clawrouter-private-admission':'v1'});
+   const reply=await rpc('/admission/resolve',JSON.stringify({admission:{credentialId:'nativebridge',secretSha256:digest,providers:mode==='configuration'||dependency?[{id:'anthropic',tokenRef:dependency?'a':'anthropic'}]:[],...(mode==='configuration'||dependency?{selection:{providerId:'anthropic',endpointId:'messages',mode:'http',capability:'llm.messages'}}:{}),...(mode==='dependency-snapshot'?{snapshot:'only'}:{})},source}),{'content-type':'application/json','x-clawrouter-private-admission':'v1'});
    check(reply.status===(mode==='limited'||mode==='configuration'?503:200),'private status');
    if(mode==='rotation')check(reply.body.admission.credential.credential.secretSha256===rotated&&!reply.body.admission.selection,'final canonical winner');
+   if(dependency)check(!Object.hasOwn(reply.body.admission,'selection')&&!Object.hasOwn(reply.body.admission,'snapshots'),'all candidate dependencies revalidated');
    if(mode==='limited'||mode==='configuration')check(reply.body.error.code==='identity_admission_unavailable','capacity classification');
    result={status:reply.status,rotation:mode==='rotation'};
   }
@@ -81,6 +103,7 @@ export default {async fetch(request,env){
  if(failures.length)throw new AggregateError(hasPrimary?[primary,...failures]:failures,'native bridge cleanup');if(hasPrimary)throw primary;
  const snapshot=await rpc('/fixture/result','');check(bodyBudgetCharged()===baseline,'worker charge retired');
  check(snapshot.body.charged===0,'DO original producer retired');
+ if(dependency)check(snapshot.body.trace.dependencyObserved&&snapshot.body.trace.publishedRevision===9&&snapshot.body.selection.length===0,'no stale selection effect');
  if(mode==='selection')check(snapshot.body.selection.length===1&&snapshot.body.selection[0]===1,'one actual selection effect');
  if(mode==='configuration')check(snapshot.body.trace.configurationReads===1&&snapshot.body.selection.length===0,'bounded configuration owner');
  if(mode==='limited'||mode==='configuration')check(snapshot.body.trace.writes===0&&snapshot.body.credentials===0&&snapshot.body.policies===0,'zero writes');
@@ -105,13 +128,14 @@ test('inactive private continuation through actual Workerd KV/RPC/SQLite and opa
   try {
     directory = await mkdtemp(join(tmpdir(), 'private-admission-workerd-'));
     runtime = await take(own(startWorkerdFixture(directory, router, upstream, { preventEviction: true })));
-    for (const mode of ['healthy', 'rotation', 'limited', 'selection', 'configuration']) {
+    for (const mode of ['healthy', 'rotation', 'limited', 'selection', 'configuration', 'dependency-choice', 'dependency-snapshot']) {
       const response = await take(own(runtime.dispatchFetch('https://fixture/' + mode)));
       const text = await take(own(response.text())); assert.equal(response.status, 200);
       const result = JSON.parse(text); assert.equal(result.charged, 0); assert.equal(result.sql.charged, 0);
-      assert.equal(result.sql.trace.intakes, 1); assert.equal(result.status, mode === 'limited' ? 503 : 200);
+      assert.equal(result.sql.trace.intakes, 1); assert.equal(result.status, mode === 'limited' || mode === 'configuration' ? 503 : 200);
       if (mode === 'healthy') { assert.equal(result.opaque, true); assert.equal(result.sql.credentials, 1); assert.equal(result.sql.policies, 1); }
       if (mode === 'selection') { assert.equal(result.opaque, true); assert.deepEqual(result.sql.selection, [1]); assert.ok(result.sql.trace.kv.length >= 3); }
+      if (mode.startsWith('dependency-')) { assert.equal(result.sql.trace.dependencyObserved, true); assert.equal(result.sql.trace.publishedRevision, 9); assert.deepEqual(result.sql.selection, []); }
       if (mode === 'rotation') assert.equal(result.rotation, true);
       if (mode === 'limited') assert.equal(result.sql.trace.writes, 0);
     }

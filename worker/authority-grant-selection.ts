@@ -450,6 +450,11 @@ function finishPrivateSelectedResult(env: Env, input: AdmissionRequest, fresh: A
       let staged = false;
       if (!row && pending && revision(key) === pending.revision) { row = { projection_json: pending.text, legacy: pending.legacy }; staged = true; }
       if (!row || row.legacy) { legacy = true; return; }
+      // This scalar is an execution dependency, including unselected and
+      // snapshot-only candidates. The fixed journal factory owns its receipt;
+      // it is never a free passive index. Staged entries share the same slot.
+      store.privateBridge!.scratch({ C: 0, P: 0, N: 1, U: key.length + "dependency".length, B: 0 },
+        () => store.privateBridge!.stage({ kind: "dependency", key, revision: revision(key) }), true);
       const grant = row.projection_json ? (staged ? JSON.parse(row.projection_json) : parseIdentity(row.projection_json, store.identity!)) as UpstreamGrant : null;
       row = undefined;
       return { key, grant };
