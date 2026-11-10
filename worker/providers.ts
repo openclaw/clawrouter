@@ -4,6 +4,7 @@ import { identityFailure as ownedHttpIdentityFailure } from "./identity-admissio
 import { checkOwnedHttpProviderInput, acceptOwnedHttpConfiguredProvider } from "./proxy.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { ProxyQuery } from "./proxy-query.ts";
+import { reserveOwnedHttpSerialization } from "./pricing.ts";
 
 import { admitIdentity, isIdentityFailure } from "./identity-admission.ts";
 import type { MiniMaxVideoOperation } from "./minimax-video-operation.ts";
@@ -638,6 +639,7 @@ export function reserveOwnedHttpProviderPreparation(cap: OwnedHttpRequest, reque
   selection: ProxySelection): void {
   checkOwnedHttpRequest(cap, request, env); checkOwnedHttpProviderInput(cap, request, env, selection);
   if (ownedHttpPreparationCredits?.has(cap)) throw ownedHttpIdentityFailure("protocol");
+  reserveOwnedHttpSerialization(cap, selection.body as Record<string, unknown>);
   growOwnedHttpRequest(cap, ownedHttpPreparationBytes(selection) + 8192);
   (ownedHttpPreparationCredits ??= new WeakSet()).add(cap); ownedHttpPreparationCreditCount++;
 }
@@ -656,7 +658,10 @@ export async function prepareOwnedHttpProvider(cap: OwnedHttpRequest, request: R
   checkOwnedHttpRequest(cap, request, env); checkOwnedHttpProviderInput(cap, request, env, selection);
   // Initial preparation consumes its pre-admission receipt. An alternate owns
   // a new complete component before its own selection/effects can start.
-  if (!retireOwnedHttpProviderPreparation(cap)) growOwnedHttpRequest(cap, ownedHttpPreparationBytes(selection) + 8192);
+  if (!retireOwnedHttpProviderPreparation(cap)) {
+    reserveOwnedHttpSerialization(cap, selection.body as Record<string, unknown>);
+    growOwnedHttpRequest(cap, ownedHttpPreparationBytes(selection) + 8192);
+  }
   const permit = Object.freeze({}), command: OwnedHttpProviderCommand = { cap, request, env, selection, query };
   (ownedHttpSelectionPermits ??= new WeakMap()).set(permit, cap); ownedHttpSelectionPermitCount++;
   (ownedHttpProviderCommands ??= new WeakMap()).set(permit, command);

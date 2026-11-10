@@ -190,3 +190,45 @@ one-MiB upload and capacity before selection/budget effects. They retain origina
 reservation/settlement IDs and usage events. These tests have received syntax
 checks only. Hosted execution and the complete HTTP funding/CONTROL inventory
 remain pending; this increment is not a publishable complete candidate.
+
+
+## Prospective dispatch and archive DATA increment
+
+The private measurement also counts the existing serializer's products. It does
+not replace `mediaJsonBody`, change ordinary serialization, or authorize a new
+profile. Let T be exact serialized UTF8 bytes, Q the peak pending object-reference
+cells, S the number of strings at least 65536 UTF16 units, and L their total units.
+For a slot, the new `{owner,key,value}` plus its array cell charges C=1, P=7,
+N=1 for an array index (otherwise zero), and U=13 plus the retained string-key
+units and value units. The slots array adds C=1. The temporary key-vector maximum
+is `8+16*length` for arrays or `8+8*members+2*keyUnits` for objects. These include
+all enumerated fields even if a later JSON operation omits a value.
+
+Before the first initial-choice RPC, and again before an alternate choice, the
+request reserves a separate serializer component. Its pending vector is
+`8*(1+Q)`. The remaining component is the maximum of the scan, whole-string and
+media phases. The scan holds the slots plus largest key vector. A sub-MiB media
+sum returns from the scan before the whole `JSON.stringify` text/wire phase,
+bounded by 3T. The media pieces phase includes slots, skeleton, slice text,
+encoded-prefix backings, repeated large-string occurrences, all marker strings
+and piece cells: `slots + 5T + 2L + 272S + 1024`. Only the `pieces` array is
+captured by the returned stream; it does not capture the scan queue, key vector,
+slots or skeleton. The streaming bound is `T + 4L + 16S + 16 + 524288`, including
+whole encoded backings and the current 65536-unit generator chunk/next result.
+The reservation remains held through original upload retirement. Typed views,
+stream/controller products and execution frames still require the separate
+CONTROL inventory; this DATA classification does not make them passive cells.
+
+A possible content archive is funded before policy hydration can count a choice.
+The detached body graph uses the same adopted D formula; its largest scalar's
+additional descriptor occurrence is charged separately. The additional 81920
+bytes cover both bounded record metadata occurrences and URI-encoded key
+construction; 8192 covers fixed-depth descriptor/active-set data and 262144 the
+existing 32768-byte archive serializer's chunk/backing overlap. A later policy
+that disables retention creates no destination or transferable credit. The
+original request charge stays held through the actual archive and other roots.
+
+This increment adds authored refusal-before-serialization and held-original-R2
+witnesses. Static syntax/format checks do not execute them. Accounting facts,
+execution products and the complete simultaneous HTTP/generation CONTROL table
+remain outstanding; this is still not the immutable publication candidate.

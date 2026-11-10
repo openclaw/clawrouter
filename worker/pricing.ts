@@ -22,6 +22,14 @@ interface OwnedHttpPricingPlan {
   hour: boolean;
   cache: boolean;
   queueCapacity: number;
+  keyVectorBytes: number;
+  slotBytes: number;
+  mediaUnits: number;
+  mediaSlots: number;
+  serializationBytes: number;
+  graphBytes: number;
+  maximumScalarUnits: number;
+  retentionBytes: number;
   active: boolean;
 }
 let ownedPricing: WeakMap<OwnedHttpRequest, OwnedHttpPricingPlan> | undefined;
@@ -36,10 +44,25 @@ const ownedPricingMetadataBytes = 4096;
 export function prepareOwnedHttpPricing(cap: OwnedHttpRequest, body: Record<string, unknown>): void {
   if (!matchesOwnedHttpPricingInput(cap, body) || ownedPricing?.has(cap)) throw identityFailure("protocol");
   growOwnedHttpRequest(cap, ownedPricingMetadataBytes + 8); // fixed products + ONE passive queue container
-  const plan: OwnedHttpPricingPlan = { body, bytes: 0, media: false, hour: false, cache: false, queueCapacity: 0, active: false };
+  const plan: OwnedHttpPricingPlan = { body, bytes: 0, media: false, hour: false, cache: false, queueCapacity: 0,
+    keyVectorBytes: 0, slotBytes: 8, mediaUnits: 0, mediaSlots: 0, serializationBytes: 0,
+    graphBytes: 0, maximumScalarUnits: 0, retentionBytes: 0, active: false };
   const pending: object[] = [];
   try {
     measureOwnedHttpJson(cap, plan, body, pending);
+    const scan = plan.keyVectorBytes + plan.slotBytes;
+    // The existing media serializer first scans key vectors/slot records. It
+    // either returns null BEFORE whole JSON text, or builds pieces BEFORE a
+    // streaming closure exists. Only pieces are captured by that closure.
+    const serialize = plan.mediaUnits < 1024 * 1024 ? 3 * plan.bytes
+      : Math.max(plan.slotBytes + 5 * plan.bytes + 2 * plan.mediaUnits + 272 * plan.mediaSlots + 1024,
+        plan.bytes + 4 * plan.mediaUnits + 16 * plan.mediaSlots + 16 + 524288);
+    plan.serializationBytes = 8 * (1 + plan.queueCapacity) + Math.max(scan, serialize);
+    // Policy is not yet authenticated here. Fund the possible detached archive
+    // before admission's initial choice: full body graph, one live scalar
+    // descriptor, bounded record/key metadata, and the 32 KiB streaming path.
+    // A later retain=false verdict never turns this credit into another owner.
+    plan.retentionBytes = plan.graphBytes + 2 * plan.maximumScalarUnits + 81920 + 8192 + 262144;
     plan.media = body.previous_response_id != null || body.conversation != null || body.prompt != null;
     if (!plan.media && body.input != null) plan.media = ownedContentHasMedia(cap, plan, body.input, pending);
     if (!plan.media && Array.isArray(body.messages)) {
@@ -74,6 +97,14 @@ export function prepareOwnedHttpPricing(cap: OwnedHttpRequest, body: Record<stri
     // is stored per depth. Only references to the STILL funded input were queued.
     pending.length = 0;
   }
+}
+
+// Every attempt gets a positive component before selection can count. The
+// original serializer is unchanged; this command publishes no body/plan getter.
+export function reserveOwnedHttpSerialization(cap: OwnedHttpRequest, body: Record<string, unknown>): void {
+  const plan = ownedPricing?.get(cap);
+  if (!plan || plan.body !== body || !matchesOwnedHttpPricingInput(cap, body)) throw identityFailure("protocol");
+  growOwnedHttpRequest(cap, plan.serializationBytes + plan.retentionBytes);
 }
 
 export function enterOwnedHttpPricing(cap: OwnedHttpRequest, body: Record<string, unknown>): void {
@@ -168,16 +199,34 @@ function ownedScalarJsonBytes(value: unknown): number {
   if (typeof value === "bigint") throw new TypeError("BigInt cannot be serialized as JSON");
   return 0; // A child container is counted when removed from the passive queue.
 }
+function countOwnedMediaSlot(plan: OwnedHttpPricingPlan, key: string | number, value: unknown): void {
+  if (typeof value !== "string" || value.length < 64 * 1024) return;
+  // One slots-array cell plus {owner,key,value}: C=1, P=7, N=1 for
+  // an array index; U includes ALL field names and retained key/value units.
+  plan.slotBytes += 64 + (typeof key === "number" ? 8 : 2 * key.length) + 26 + 2 * value.length;
+  plan.mediaSlots++; plan.mediaUnits += value.length;
+}
+function countOwnedJsonScalar(plan: OwnedHttpPricingPlan, value: unknown): void {
+  if (typeof value === "string") {
+    plan.graphBytes += 2 * value.length;
+    plan.maximumScalarUnits = Math.max(plan.maximumScalarUnits, value.length);
+  } else if (value === null || typeof value === "number" || typeof value === "boolean" || value === undefined) plan.graphBytes += 8;
+}
 function measureOwnedHttpJson(cap: OwnedHttpRequest, plan: OwnedHttpPricingPlan, root: object, pending: object[]): void {
   reserveOwnedPricingQueue(cap, plan, 1); pending.push(root);
   while (pending.length) {
     const value = pending.pop()!;
     reserveOwnedPricingQueue(cap, plan, pending.length + childObjects(value));
     plan.bytes += 2; // brackets/braces; punctuation needs no continuation frames
+    plan.graphBytes += 8;
     if (Array.isArray(value)) {
+      plan.graphBytes += 8 * value.length;
+      plan.keyVectorBytes = Math.max(plan.keyVectorBytes, 8 + 16 * value.length);
       if (value.length) plan.bytes += value.length - 1;
       for (let index = 0; index < value.length; index++) {
         const item = value[index], scalar = ownedScalarJsonBytes(item);
+        countOwnedJsonScalar(plan, item);
+        countOwnedMediaSlot(plan, index, item);
         if (item !== null && typeof item === "object") pending.push(item);
         else plan.bytes += scalar < 0 ? 4 : scalar; // array omission is null
       }
@@ -185,14 +234,19 @@ function measureOwnedHttpJson(cap: OwnedHttpRequest, plan: OwnedHttpPricingPlan,
       const item = value as Record<string, unknown>;
       if ("cache_control" in item) plan.cache = true;
       if (isObject(item.cache_control) && item.cache_control.ttl === "1h") plan.hour = true;
-      let members = 0;
+      let members = 0, keys = 0, keyUnits = 0;
       for (const key in item) if (Object.hasOwn(item, key)) {
+        keys++; keyUnits += key.length;
         const child = item[key], scalar = ownedScalarJsonBytes(child);
+        plan.graphBytes += 16 + 2 * key.length;
+        countOwnedJsonScalar(plan, child);
+        countOwnedMediaSlot(plan, key, child);
         if (scalar < 0) continue;
         plan.bytes += quotedOwnedJsonBytes(key) + 1 + scalar;
         if (members++) plan.bytes++;
         if (child !== null && typeof child === "object") pending.push(child);
       }
+      plan.keyVectorBytes = Math.max(plan.keyVectorBytes, 8 + 8 * keys + 2 * keyUnits);
     }
   }
 }

@@ -32,10 +32,10 @@ const deferred = () => {
 // Original dispatch, late body and accepted background roots share ONE outcome
 // identity. Release gates first, dynamically join all finite roots, then retire
 // generation publication and fixture resources. Mocks stay installed until joins.
-async function fixture(t, run) {
+async function fixture(t, run, retained = false) {
   const baseline = bodyBudgetCharged(), roots = [], origins = new WeakMap(), bodies = new WeakMap();
   const resources = [], releases = [], values = new Map(), calls = [], sent = [], events = [];
-  let done = false, cleanupPromise, hasPrimary = false, primary, rejectMaterialize = false, pressure;
+  let done = false, cleanupPromise, hasPrimary = false, primary, rejectMaterialize = false, pressure, archiveGate;
   const own = promise => {
     if (origins.has(promise)) return origins.get(promise);
     const root = { used: false, outcome: promise.then(value => ({ failed: false, value }), error => ({ failed: true, error })) };
@@ -60,7 +60,12 @@ async function fixture(t, run) {
   const env = { CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS: '0', POLICY_KV: {
     async get(key, type) { const value = values.get(key); return value == null ? null : type === 'stream' ? accessBytesResponse(JSON.stringify(value)).body : structuredClone(value); },
     async put(key, value) { values.set(key, JSON.parse(value)); },
-  }, USAGE_QUEUE: { async send(event) { events.push(structuredClone(event)); } } };
+  }, USAGE_QUEUE: { async send(event) { events.push(structuredClone(event)); } }, CONTENT_ARCHIVE: { async put(key, body) {
+    calls.push({ kind: 'archive', key });
+    if (archiveGate) { archiveGate.entered.resolve(); await take(own(archiveGate.release.promise)); }
+    const text = typeof body === 'string' ? body : await take(own(new Response(body).text()));
+    calls.push({ kind: 'archive-complete', bytes: Buffer.byteLength(text) });
+  } } };
   const resourceOwner = { after(close) { resources.push(close); } };
   const budgets = sqlBudgetNamespace(resourceOwner);
   env.BUDGET_LEDGER = { idFromName: name => name, get(name) { const stub = budgets.get(name); return { fetch(url, init) {
@@ -98,7 +103,7 @@ async function fixture(t, run) {
   try {
     values.set('credentials/' + kid, { enabled: true, secretSha256: await take(own(sha256Hex('fixture-secret'))), policyId, policyGeneration: 'pricing' });
     values.set('policies/' + policyId, { enabled: true, generation: 'pricing', providers: ['fireworks'], models: [modelId], tenantId: 'pricing',
-      monthlyBudgetMicros: 1000000000000, requestCostMicros: null, budgetMode: 'reserve', retainRequestContent: false,
+      monthlyBudgetMicros: 1000000000000, requestCostMicros: null, budgetMode: 'reserve', retainRequestContent: retained,
       grantRouting: { strategy: 'round_robin', environmentFallback: false, eligibleGrants: { fireworks: ['fireworks'] } } });
     values.set('connections/fireworks', { providerId: 'fireworks', enabled: true });
     await take(own(putGrantCredentials(env, grantKey, { provider: 'fireworks', enabled: true, kind: 'api_key', credential: 'fixture-upstream-key' })));
@@ -106,6 +111,13 @@ async function fixture(t, run) {
     await run({ env, calls, sent, events, own, take, request, dispatch, drain, releases, bodyRoot,
       failMaterialization() { rejectMaterialize = true; },
       holdUpload() { upstreamGate = { entered: deferred(), release: deferred() }; releases.push(() => upstreamGate.release.resolve()); return upstreamGate; },
+      holdArchive() { archiveGate = { entered: deferred(), release: deferred() }; releases.push(() => archiveGate.release.resolve()); return archiveGate; },
+      async arrival(gate) {
+        // Snapshot preceding roots BEFORE enrolling this waiter. Waiting on a
+        // dynamically growing drain here would include this waiter's own root.
+        const preceding = roots.map(root => root.outcome);
+        await take(own(Promise.race([gate.entered.promise, Promise.all(preceding).then(() => { throw new Error('original roots ended before archive entry'); })])));
+      },
       pressure(bytes) { pressure = ExactBodyCharge.reserve(bodyBudgetBytes - bodyBudgetCharged() - bytes); assert.ok(pressure); },
     });
   } catch (error) { hasPrimary = true; primary = error; }
@@ -198,4 +210,34 @@ test('pricing/common preparation pressure fails before full admission count or b
     assert.equal(f.calls.filter(row => row.kind === 'authority' && row.path === '/admission/resolve').length, 0);
     assert.equal(f.calls.filter(row => row.kind === 'budget').length, 0); assert.equal(f.sent.length, 0);
   });
+});
+
+test('prospective serializer funding refuses before the first media rewrite or selection effect', async t => {
+  await fixture(t, async f => {
+    const input = payload({ messages: [{ role: 'user', content: 'x'.repeat(1024 * 1024) }], extra: { serializationWitness: true } });
+    const wire = JSON.stringify(input), original = JSON.stringify; let serializerCalls = 0;
+    t.mock.method(JSON, 'stringify', function (value, ...args) {
+      if (value?.model === model.upstream && value?.extra?.serializationWitness === true) serializerCalls++;
+      return Reflect.apply(original, this, [value, ...args]);
+    });
+    f.pressure(40 * 1024 * 1024);
+    const response = await f.request(wire);
+    assert.equal(response.status, 503); assert.equal(serializerCalls, 0);
+    assert.equal(f.calls.filter(row => row.kind === 'authority' && row.path === '/admission/resolve').length, 0);
+    assert.equal(f.calls.filter(row => row.kind === 'budget' || row.kind === 'archive').length, 0); assert.equal(f.sent.length, 0);
+  });
+});
+
+test('public JSON is delivered while the ORIGINAL archive and its separately funded copy remain held', async t => {
+  await fixture(t, async f => {
+    const gate = f.holdArchive(), input = payload({ messages: [{ role: 'user', content: 'x'.repeat(1024 * 1024) }] });
+    const response = await f.request(input);
+    assert.equal(response.status, 200); assert.equal(JSON.parse(response.text).id, 'synthetic-priced-chat');
+    await f.arrival(gate);
+    assert.equal(f.calls.filter(row => row.kind === 'archive-complete').length, 0);
+    assert.ok(bodyBudgetCharged() > 32 * 1024 * 1024, 'archive original/copy and HTTP consumers remain funded');
+    gate.release.resolve(); await f.drain();
+    assert.equal(f.calls.filter(row => row.kind === 'archive-complete').length, 1);
+    assert.equal(f.events.length, 1);
+  }, true);
 });
