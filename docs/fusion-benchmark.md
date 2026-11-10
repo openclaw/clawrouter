@@ -424,6 +424,15 @@ These reports use `kind: native-controls-repository`, list only `cheap` and
 analyzer rejects them. Budget preflight counts the actual selected arms in all
 modes; execution still meters every call and reserves unknown charges.
 
+The interactive agent may retry one truncated response when a call and time
+remain. It discards the partial action and requests a shorter complete action;
+the original call remains charged. Reports count `truncationRetries` and include
+a rejected `truncated_output` event. A second truncation ends the trial. The
+agent does not retry unknown charges, refusals, or other provider errors. No
+spending, output-token, time, or total-call limit is increased.
+Paired-run call ledgers retain normalized finish reasons and response outcomes
+without storing partial response text.
+
 
 Matched one-shot results on the same three exposed development repairs:
 
@@ -496,3 +505,26 @@ No model inference on these candidates is included in this fixture change.
 These candidates were unexposed at registration. Consult the benchmark run
 records before reuse; after model exposure, they are development cases rather
 than fresh holdouts.
+
+### Shared truncation-recovery pilot
+
+Two complete blocks at source `0d4b2a0745886146da3522d23e77238b3b46b961`
+compared the same catalog-health and cache-publication repairs. Each arm used
+the interactive executor, supplied reproducer, medium cheap reasoning, 8192
+output tokens, 600 seconds and a $2 trial ceiling. The cheap stage had 20 of
+40 shared calls; fixed controls had 40 calls. Settings did not change between
+blocks. Four attempts per arm represent two distinct repairs.
+
+| Strategy | Solved | Usage-tariff cost | Summed elapsed |
+| --- | --- | --- | --- |
+| Cheap | 1/4 | $0.228726 | 1182.158s |
+| Strong | 2/4 | $1.542267 | 420.322s |
+| Supplied-check cascade | 1/4 | $0.131489 | 796.786s |
+
+The cascade lost one strong-control success and falsely accepted three repairs.
+All four candidate attempts used only the cheap model; its one win over the
+cheap control was another cheap sample, not a model-mixing benefit. The pilot
+failed its quality and no-regression criteria despite lower cost. No truncation
+retry occurred, so this run does not measure the recovery change's benefit.
+Both reports were complete and all new calls settled. Costs apply published
+tariffs to usage; they are not provider invoices. Do not promote this policy.

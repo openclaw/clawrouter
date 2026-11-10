@@ -1,8 +1,8 @@
 import { readFile, mkdir, writeFile, rename } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { runAgent, SpendLedger, toolErrorCode } from './fusion-agent-benchmark.mjs';
-import { nativeModels, nativePins, nativeRequest, nativeResult, nativeErrorMetadata, requireCompleteResponse } from './fusion-native-provider.mjs';
+import { runAgent, SpendLedger, toolErrorCode, finishReason } from './fusion-agent-benchmark.mjs';
+import { nativeModels, nativePins, nativeRequest, nativeResult, nativeErrorMetadata, requireCompleteResponse, responseDisposition } from './fusion-native-provider.mjs';
 import { models as roles, priceBound } from './fusion-benchmark-accounting.mjs';
 import { validateLocalQualification } from './fusion-local-repository.mjs';
 import { loadTasks, verify, hash, command, withReproducer } from './fusion-workloads.mjs';
@@ -105,6 +105,8 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
         throw new Error('unknown_cost');
       }
       normalized = nativeResult(model, raw);
+      attempt.finishReason = finishReason(normalized.result.choices?.[0]?.finish_reason);
+      attempt.responseDisposition = responseDisposition(normalized.result);
       const usage = raw.usage;
       attempt.inputTokens = usage.prompt_tokens ?? usage.input_tokens;
       attempt.outputTokens = usage.completion_tokens ?? usage.output_tokens;

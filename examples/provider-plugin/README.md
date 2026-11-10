@@ -8,5 +8,10 @@ API. No live service is configured here. Do not put credentials in these files.
 execution contract. `assets/` contains local branding; `fixtures/` contains
 synthetic protocol examples, not executable tests or evidence of live support.
 
+`fixtures/request.json` uses `clawrouter.provider-conformance.v1`. It describes
+one synthetic JSON exchange: client request, expected upstream request, supplied
+upstream response, and expected client response. The contract parser validates
+its shape; a host conformance runner is not implemented yet.
+
 See [the plugin contract](../../docs/provider-plugins.md) in the source tree.
 When distributing a standalone copy, include your own setup and support docs.

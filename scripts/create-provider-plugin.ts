@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { parseProviderPluginDescriptor, providerPluginFiles } from "../packages/provider-plugin-contract/src/index.ts";
+import { parseProviderConformanceScenario, parseProviderPluginDescriptor, providerPluginFiles } from "../packages/provider-plugin-contract/src/index.ts";
 import { loadProviderPlugin } from "./provider-plugin-loader.ts";
 
 /** Generate files only. The caller must explicitly compile and admit the provider. */
@@ -22,6 +22,9 @@ export function createProviderPlugin(id: string, destination: string): string {
         .replace(/^id: .+$/m, `id: ${JSON.stringify(id)}`)
         .replace(/^  platform: .+$/m, `  platform: ${JSON.stringify(id)}`)
         .replace("displayName: Example", `displayName: ${JSON.stringify(title)}`);
+    } else if (template.descriptor.fixtures?.includes(path)) {
+      const scenario = parseProviderConformanceScenario(JSON.parse(bytes.toString("utf8")));
+      bytes = `${JSON.stringify({ ...scenario, providerId: id }, null, 2)}\n`;
     } else if (path === template.descriptor.documentation) {
       bytes = `# ${title} provider plugin\n\n` +
         `This is a starter integration, not a configured live service. Replace the\n` +
