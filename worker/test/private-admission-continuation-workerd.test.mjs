@@ -12,7 +12,8 @@ import {preflightCredential,consumeCredentialPreflight,completeCredentialAdmissi
 import {bodyBudgetCharged} from './worker/body-budget.ts';
 import {identitySourceBudget,isIdentityFailure} from './worker/identity-admission.ts';
 const digest='ab'.repeat(32),rotated='cd'.repeat(32),selectedKey='oauth/native-bridge-policy/anthropic';
-const check=(ok,label)=>{if(!ok)throw Error(label);};
+const report=value=>{try{console.error(JSON.stringify({fixture:'private-admission',...value}));}catch{}};
+const check=(ok,label)=>{if(!ok){report({assertion:label});throw Error(label);}};
 const dependencyA='oauth/native-bridge-policy/a',dependencyB='oauth/native-bridge-policy/b';
 const projection=priority=>({provider:'anthropic',kind:'api_key',enabled:true,priority,credentialStore:'durable_object',credentialGeneration:1,credentialLineage:'synthetic',credentialStatus:'active',hasCredential:true});
 const record=secret=>({enabled:true,secretSha256:secret,policyId:'native-bridge-policy',policyGeneration:'legacy',principalId:null});
@@ -39,15 +40,18 @@ export class PolicyBindingIndexObject extends Base {
   const finalize=this.finalPrivateAdmission;this.finalPrivateAdmission=(...args)=>{
    if(mode.startsWith('inert-')){const input=args[0];check(mode==='inert-top'?!Object.hasOwn(input,'extra'):mode==='inert-array'?input.extra.length===1&&input.extra[0]===null:Object.keys(input.extra).length===0,'inert wire omission/null');trace.inertWire=true;}
    if(mode==='symbols'){const input=args[0];check(Object.keys(input).join(',')==='providers,__proto__,unknown,credentialId,secretSha256'&&Object.hasOwn(input,'__proto__')&&input.__proto__.kept===true&&input.unknown.kept===7,'unchanged string wire');trace.stringWire=true;}
+   let stage='final';try{
    if(mode.startsWith('dependency-')){
-    const prior=args[1];
+    stage='dependency-prior';const prior=args[1];
+    report({phase:stage,selectedA:prior.selection?.selected?.key===dependencyA,selectedB:prior.selection?.selected?.key===dependencyB,snapshotRevision:prior.snapshots?.anthropic?.revisions[dependencyB]??null});
     check(mode.endsWith('choice')?prior.selection?.selected?.key===dependencyA:prior.snapshots?.anthropic?.revisions[dependencyB]===8,'candidate observed before pending publication');
     trace.dependencyObserved=true;
     const same=mode.includes('-same-');
-    const published=this.publishGrantAttachment({key:dependencyB,generation:same?1:2,revision:8,admissionRevision:8,provider:'anthropic',status:'active',projection:{...projection(0),credentialGeneration:same?1:2}});
+    stage='dependency-publication';const published=this.publishGrantAttachment({key:dependencyB,generation:same?1:2,revision:8,admissionRevision:8,provider:'anthropic',status:'active',projection:{...projection(0),credentialGeneration:same?1:2}});
     trace.publishedRevision=published.revision;check(published.revision===(same?8:9)&&!published.pending,'actual pending publication');
    }
-   return Reflect.apply(finalize,this,args);
+   stage='final';return Reflect.apply(finalize,this,args);
+   }catch(error){report({phase:stage,privateFailure:isIdentityFailure(error),primaryIsUndefined:error===undefined});throw error;}
   };
 
   this.snapshot=()=>({trace,charged:this.preflightArena?.charged??0,credentials:[...sql.exec('SELECT credential_json FROM proxy_credentials')].length,policies:[...sql.exec('SELECT policy_json FROM access_policies')].length,selection:[...sql.exec('SELECT selected_count FROM upstream_grant_selection')].map(row=>row.selected_count),cursors:[...sql.exec('SELECT grant_key FROM upstream_grant_pool_cursors')].length});
@@ -142,6 +146,7 @@ export default {async fetch(request,env){
   }else{
    phase='direct-admission';const source=identitySourceBudget();if(mode==='limited')source.values=131050;
    const reply=await rpc('/admission/resolve',JSON.stringify({admission:{credentialId:'nativebridge',secretSha256:digest,providers:mode==='provider-only'||mode==='configuration'||mode==='snapshot-only'||mode==='snapshot-select'||dependency?[{id:'anthropic',tokenRef:dependency?'a':'anthropic'}]:[],...(mode==='configuration'||mode==='snapshot-only'||mode==='snapshot-select'||dependency?{selection:{providerId:'anthropic',endpointId:'messages',mode:'http',capability:'llm.messages'}}:{}),...(mode.endsWith('snapshot')||mode==='snapshot-only'?{snapshot:'only'}:mode==='snapshot-select'?{snapshot:'select'}:{})},source}),{'content-type':'application/json','x-clawrouter-private-admission':'v1'});
+   report({phase:'direct-reply',status:reply.status,classification:reply.body?.error?.code==='identity_admission_unavailable'?'identity_admission_unavailable':reply.body?.error?.code==='authority_error'?'authority_error':reply.body?.error?'other':'none'});
    check(reply.status===(mode==='limited'||mode==='configuration'?503:200),'private status');
    if(mode==='provider-only')check(!reply.body.admission.selection&&reply.body.admission.connections[0]?.providerId==='anthropic'&&reply.body.admission.pools.anthropic.keys.length>0,'nonempty provider no selection');
    if(mode==='principal')check(reply.body.admission.owner?.email==='fixture@example.com','padded principal');
@@ -187,7 +192,7 @@ test('inactive private continuation through actual Workerd KV/RPC/SQLite and opa
     directory = await mkdtemp(join(tmpdir(), 'private-admission-workerd-'));
     runtime = await take(own(startWorkerdFixture(directory, router, upstream, { preventEviction: true })));
     for (const mode of ['healthy', 'provider-only', 'rotation', 'limited', 'selection', 'configuration', 'dependency-choice', 'dependency-snapshot', 'dependency-same-choice', 'dependency-same-snapshot', 'snapshot-only', 'snapshot-select', 'principal', 'copy-pressure', 'callable-pressure', 'callables', 'hook-top', 'hook-object', 'hook-array', 'inert-top', 'inert-object', 'inert-array', 'inert-empty', 'symbols']) {
-      const report = (phase, status) => { try { if (typeof t.log === 'function') t.log(JSON.stringify({ fixture: 'private-admission', case: mode, phase, status })); } catch {} };
+      const report = (phase, status) => { try { const log = typeof t.log === 'function' ? t.log : t.diagnostic; if (typeof log === 'function') Reflect.apply(log, t, [JSON.stringify({ fixture: 'private-admission', case: mode, phase, status })]); } catch {} };
       report('dispatch', null);
       const response = await take(own(runtime.dispatchFetch('https://fixture/' + mode)));
       const text = await take(own(response.text())); report('body', response.status); assert.equal(response.status, 200, mode);

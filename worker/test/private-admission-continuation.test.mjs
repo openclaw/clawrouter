@@ -93,7 +93,7 @@ test('BOTH private RPCs share the same cumulative source owner with no reset or 
   continuation = consumeCredentialPreflight(proof, f.env, 'bridgekid', digest); proof = undefined;
   // The discarded cold-field bytes remain charged, but the canonical record is
   // small. Add a separately valid request whose original intake crosses BOTH RPCs.
-  const admission = { providers: [], retainedUnknown: 'y'.repeat(1600000) };
+  const admission = { providers: [], retainedUnknown: ['y'.repeat(800000), 'z'.repeat(800000)] };
   assert.doesNotThrow(() => identityPlan().item(admission, 0));
   let sentSource, calls = 0; const get = f.env.ACCESS_CONTROL.get;
   t.mock.method(f.env.ACCESS_CONTROL, 'get', function (...args) {
