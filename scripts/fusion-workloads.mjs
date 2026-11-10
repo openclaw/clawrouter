@@ -146,13 +146,33 @@ export async function readTaskContext(box, task, timeout = 120000, read = readSo
   if (Buffer.byteLength(JSON.stringify(views)) > 24000) throw new Error('source_context_too_large');
   return views;
 }
+function failureFingerprints(text) {
+  const scopes = [], digests = new Set();
+  let truncated = false;
+  for (const line of text.split('\n')) {
+    const subtest = /^( *)# Subtest: (.+)\r?$/.exec(line);
+    if (subtest) {
+      const depth = subtest[1].length;
+      while (scopes.length && scopes.at(-1).depth >= depth) scopes.pop();
+      scopes.push({ depth, name: subtest[2].trimEnd() });
+    }
+    const failed = /^( *)not ok ([1-9][0-9]*) - (.+)\r?$/.exec(line);
+    if (!failed) continue;
+    const parents = scopes.filter(scope => scope.depth < failed[1].length).map(scope => scope.name);
+    const digest = hash(JSON.stringify([...parents, `${failed[2]}:${failed[3].trimEnd()}`]));
+    if (digests.size === 128 && !digests.has(digest)) { truncated = true; break; }
+    digests.add(digest);
+  }
+  return { version: 1, kind: 'tap-label-path-sha256', digests: [...digests], truncated };
+}
+
 export function testResult(result) {
   const text = result.stdout.toString();
   const count = key => Number(text.match(new RegExp(`^# ${key} (\\d+)$`, 'm'))?.[1] ?? -1);
   const tests = count('tests'), failed = count('fail'), passed = count('pass'), skipped = count('skipped'), cancelled = count('cancelled');
   const valid = tests > 0 && failed >= 0 && passed >= 0 && skipped >= 0 && cancelled === 0 && failed + passed + skipped === tests;
   return { valid, passed: valid && passed > 0 && result.code === 0 && failed === 0, tests, failures: failed, skipped,
-    digest: hash(Buffer.concat([result.stdout, result.stderr])) };
+    digest: hash(Buffer.concat([result.stdout, result.stderr])), failureFingerprints: failureFingerprints(text) };
 }
 
 export async function check(box, paths, timeout = 120000) {

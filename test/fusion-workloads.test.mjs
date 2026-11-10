@@ -49,6 +49,46 @@ test('qualification rejects empty/malformed reports and distinguishes broken tes
   assert.equal(testResult({ code: 0, stdout: Buffer.from('success'), stderr: Buffer.alloc(0) }).valid, false);
 });
 
+test('failed-test fingerprints distinguish nested labels without retaining content', () => {
+  const output = `# Subtest: private suite one\n    # Subtest: private failure\n    not ok 1 - private failure\nnot ok 1 - private suite one\n# Subtest: private suite two\n    # Subtest: private failure\n    not ok 1 - private failure\nnot ok 2 - private suite two\n`;
+  const receipt = testResult({ code: 1, stdout: Buffer.concat([Buffer.from(output), tap(0, 4)]), stderr: Buffer.from('private error details') });
+  const fingerprints = receipt.failureFingerprints;
+  assert.equal(fingerprints.kind, 'tap-label-path-sha256');
+  assert.equal(fingerprints.digests.length, 4);
+  assert.equal(new Set(fingerprints.digests).size, 4);
+  assert.ok(fingerprints.digests.every(value => /^[a-f0-9]{64}$/.test(value)));
+  assert.equal(fingerprints.truncated, false);
+  assert.ok(!JSON.stringify(receipt).includes('private'));
+  const repeated = testResult({ code: 1, stdout: Buffer.concat([Buffer.from(output.replaceAll('\n', '\r\n')), tap(0, 4)]), stderr: Buffer.alloc(0) });
+  assert.deepEqual(repeated.failureFingerprints, fingerprints);
+});
+
+test('failure fingerprints are bounded and do not change acceptance', () => {
+  const lines = Array.from({ length: 129 }, (_, i) => `not ok ${i + 1} - failure ${i}`).join('\n') + '\n';
+  const receipt = testResult({ code: 1, stdout: Buffer.concat([Buffer.from(lines), tap(0, 129)]), stderr: Buffer.alloc(0) });
+  assert.equal(receipt.failureFingerprints.digests.length, 128);
+  assert.equal(receipt.failureFingerprints.truncated, true);
+  assert.equal(receipt.failures, 129);
+  assert.equal(receipt.passed, false);
+  const clean = testResult({ code: 0, stdout: tap(2, 0), stderr: Buffer.alloc(0) });
+  assert.deepEqual(clean.failureFingerprints.digests, []);
+  assert.equal(clean.passed, true);
+});
+
+test('real Node TAP failures produce stable fingerprints', () => {
+  const { NODE_TEST_CONTEXT: _context, ...env } = process.env;
+  const child = spawnSync(process.execPath, ['--test-reporter=tap', '--input-type=module', '-e',
+    "import {describe,it} from 'node:test'; import assert from 'node:assert/strict'; describe('fingerprint fixture',()=>{it('failed behavior',()=>assert.equal(1,2));});"],
+  { timeout: 5000, env });
+  assert.equal(child.error, undefined);
+  assert.equal(child.status, 1);
+  const receipt = testResult({ code: child.status, stdout: child.stdout, stderr: child.stderr });
+  assert.equal(receipt.valid, true);
+  assert.equal(receipt.passed, false);
+  assert.equal(receipt.failureFingerprints.digests.length, 2);
+  assert.ok(!JSON.stringify(receipt).includes('fingerprint fixture'));
+});
+
 
 test('behavior probes use bounded stdin in the task sandbox and retain no script in output', async () => {
   const { probe } = await import('../scripts/fusion-workloads.mjs');
