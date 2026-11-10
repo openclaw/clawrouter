@@ -165,6 +165,32 @@ export function identityPlan(profile: IdentityProfile = "complete") {
   return { item, add, string, object, array, counts };
 }
 
+// Private derived-string planning without joining borrowed components. This is
+// not a new closure/product in ordinary identityPlan or the PR974 factory path.
+export function planPrivateIdentityString(plan: ReturnType<typeof identityPlan>, parts: Iterable<string>, profile: IdentityProfile = "complete"): void {
+  const p = identityJsonProfiles[profile], counts = plan.counts, add = plan.add;
+  if (++counts.values > p.values) fail("limit");
+  let units = 0, high = false;
+  add(2);
+  for (const part of parts) {
+    units += part.length; counts.units += part.length;
+    if (units > 1048576 || counts.units > p.units) fail("limit");
+    for (let index = 0; index < part.length; index++) {
+      const c = part.charCodeAt(index);
+      if (high) {
+        high = false;
+        if (c >= 0xdc00 && c <= 0xdfff) { add(2, 4); continue; }
+        add(6);
+      }
+      if (c >= 0xd800 && c <= 0xdbff) high = true;
+      else if (c >= 0xdc00 && c <= 0xdfff || c < 32 && c !== 8 && c !== 9 && c !== 10 && c !== 12 && c !== 13) add(6);
+      else if (c === 34 || c === 92 || c === 8 || c === 9 || c === 10 || c === 12 || c === 13) add(2);
+      else add(1, c < 128 ? 1 : c < 2048 ? 2 : 3);
+    }
+  }
+  if (high) add(6);
+}
+
 export function admitIdentity(value: unknown, profile: IdentityProfile = "complete"): void {
   identityPlan(profile).item(value, 0);
 }
@@ -245,7 +271,7 @@ function wait<T>(actual: Promise<T>, signal?: AbortSignal): Promise<T> {
 // Original-wire offsets for embedded records, including replacement-decoded
 // UTF8. Each retained block is admitted before its <=16 KiB copy; the complete
 // source ceiling bounds their sum. Discard with the reader after parsing.
-class IdentityWire {
+export class IdentityWire {
   private blocks: Uint8Array[] = [];
   private block = 0; private offset = 0; private bytes = 0; private units = 0;
   add(bytes: Uint8Array): void { if (bytes.byteLength) this.blocks.push(bytes.slice()); }
@@ -271,6 +297,7 @@ class IdentityWire {
     if (this.units !== target) fail("protocol");
     return this.bytes;
   }
+  clear(): void { this.blocks.length = 0; }
   span = (start: number, end: number): number => { const from = this.advance(start); return this.advance(end) - from; };
 }
 
@@ -402,12 +429,17 @@ export async function readIdentityResponse<T>(start: () => Promise<Response>, bu
 
 // The SQL engine has already done its native work. COUNT and BLOB lengths gate
 // JavaScript value materialization; no native-allocation claim is made here.
-export function identitySqlRows(sql: SqlStorage, query: string, bindings: (string | number | null)[], budget: IdentitySourceBudget, maximumRows = 32768): unknown[] {
+export function identitySqlRows(sql: SqlStorage, query: string, bindings: (string | number | null)[], budget: IdentitySourceBudget, maximumRows = 32768, materialize?: <T>(bytes: number, run: () => T) => T): unknown[] {
   const meta = Array.from(sql.exec<{ count: number; bytes: number; largest: number }>(
     `SELECT count(*) AS count, coalesce(sum(length(CAST(value AS BLOB))),0) AS bytes, coalesce(max(length(CAST(value AS BLOB))),0) AS largest FROM (${query})`, ...bindings))[0];
   admitIdentityCount(meta.count, maximumRows);
   if (meta.largest > 1048576) fail("limit");
   admitIdentityBytes(budget, meta.bytes, 2097152);
+  if (materialize) return materialize(meta.bytes, () => {
+    const result: unknown[] = [];
+    for (const row of sql.exec<{ value: string }>(query, ...bindings)) result.push(parseIdentity(row.value, budget));
+    return result;
+  });
   const result: unknown[] = [];
   for (const row of sql.exec<{ value: string }>(query, ...bindings)) result.push(parseIdentity(row.value, budget));
   return result;
@@ -419,4 +451,118 @@ export async function readIdentityRaw(start: () => Promise<ReadableStream<Uint8A
   const owner = new IdentitySource(body);
   try { return await owner.text(budget, undefined, "record"); }
   finally { await owner.retire("cancel"); }
+}
+
+// Private bridge only: fold the ORIGINAL accepted SQL row stream directly.
+// No history array, pair array, truncation or candidate-count cap.
+export function foldIdentitySqlHistory(sql: SqlStorage, poolKey: string, budget: IdentitySourceBudget, materialize?: <T>(bytes: number, run: () => T) => T): Record<string, { count: number; lastMs: number }> {
+  const query = "SELECT json_object('grant_key', grant_key, 'selected_count', selected_count, 'last_selected_ms', last_selected_ms) AS value FROM upstream_grant_selection WHERE pool_key = ?";
+  const meta = Array.from(sql.exec<{ count: number; bytes: number; largest: number }>(`SELECT count(*) AS count, coalesce(sum(length(CAST(value AS BLOB))),0) AS bytes, coalesce(max(length(CAST(value AS BLOB))),0) AS largest FROM (${query})`, poolKey))[0];
+  admitIdentityCount(meta.count, 32768);
+  if (meta.largest > 1048576) fail("limit");
+  checkIdentitySourceAddition(budget, { bytes: meta.bytes, text: 0, values: 4 * meta.count, containers: meta.count, members: 3 * meta.count, entries: 0, units: 0 });
+  admitIdentityBytes(budget, meta.bytes, 2097152);
+  const fold = () => {
+    const counts: Record<string, { count: number; lastMs: number }> = Object.create(null);
+    for (const row of sql.exec<{ value: string }>(query, poolKey)) {
+      let value = parseIdentity(row.value, budget) as { grant_key: string; selected_count: number; last_selected_ms: number };
+      counts[value.grant_key] = { count: value.selected_count, lastMs: value.last_selected_ms };
+      value = undefined as never;
+    }
+    return counts;
+  };
+  return materialize ? materialize(meta.bytes, fold) : fold();
+}
+
+// Prospective generated state, before the unchanged normalizer constructs its
+// defaults, windows, snapshot copies or fact objects. Unknown raw fields already
+// consumed ORIGINAL source credit. This plan consumes no source credit.
+export function admitGeneratedRuntime(value: unknown, plan: ReturnType<typeof identityPlan>, key: string, depth = 0, nested = false): void {
+  const state = value as import("./types").GrantRuntimeState;
+  if (!state || typeof state !== "object" || !Array.isArray(state.windows)) return; // unchanged normalizer owns invalid syntax
+  if (!nested) plan.string(key, true);
+  plan.object(depth, field => {
+    field("status", state.status); field("observedAt", state.observedAt); field("source", state.source);
+    field("cooldownUntil", state.cooldownUntil == null || !Number.isFinite(Date.parse(state.cooldownUntil)) ? null : state.cooldownUntil);
+    field("lastSignal", state.lastSignal);
+    field("grantRevision", typeof state.grantRevision === "string" && state.grantRevision.length <= 64 && Number.isFinite(Date.parse(state.grantRevision)) ? state.grantRevision : null);
+    field("windows", undefined, () => plan.array(depth + 1, entry => {
+      for (const window of state.windows) {
+        if (!window) { entry(null); continue; }
+        entry(undefined, () => plan.object(depth + 2, member => {
+          if (window.observedAt && Number.isFinite(Date.parse(window.observedAt))) member("observedAt", window.observedAt);
+          member("id", typeof window.id === "string" && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(window.id) ? window.id : window.kind);
+          member("kind", window.kind);
+          member("unit", typeof window.unit === "string" && window.unit.length <= 32 ? window.unit : null);
+          member("window", typeof window.window === "string" && window.window.length <= 64 ? window.window : null);
+          member("remaining", window.remaining ?? null); member("limit", window.limit ?? null);
+          member("resetAt", window.resetAt != null && Number.isFinite(Date.parse(window.resetAt)) ? window.resetAt : null);
+          if (window.models) member("models", window.models);
+        }));
+      }
+    }));
+    if (state.windowSnapshots) field("windowSnapshots", undefined, () => plan.object(depth + 1, snapshot => {
+      for (const scope in state.windowSnapshots) if (Object.hasOwn(state.windowSnapshots, scope)) {
+        const item = state.windowSnapshots[scope];
+        snapshot(scope, undefined, () => plan.object(depth + 2, member => {
+          member("observedAt", item.observedAt);
+          member("ids", undefined, () => plan.array(depth + 3, entry => {
+            if (Array.isArray(item.ids)) for (let i = 0; i < item.ids.length; i++) if (item.ids.indexOf(item.ids[i]) === i) entry(item.ids[i]);
+          }));
+        }));
+      }
+    }));
+    for (const group of ["account", "extraUsage"] as const) {
+      const facts = state[group];
+      if (!facts || typeof facts !== "object") continue;
+      const names = group === "account" ? ["email", "displayName", "rateLimitTier", "subscriptionStatus", "extraUsageEnabled"] : ["enabled", "usedCredits", "monthlyLimit", "utilization", "currency", "spendLimitReached"];
+      const accepted = (name: string): boolean => {
+        const v = (facts as unknown as Record<string, unknown>)[name];
+        const boolean = name === "extraUsageEnabled" || name === "enabled" || name === "spendLimitReached";
+        const numeric = name === "usedCredits" || name === "monthlyLimit" || name === "utilization";
+        return boolean ? typeof v === "boolean" : numeric ? typeof v === "number" && Number.isFinite(v) && v >= 0 && v <= Number.MAX_SAFE_INTEGER
+          : typeof v === "string" && v.length <= 320 && !/[\u0000-\u001f\u007f]/.test(v);
+      };
+      if (names.some(accepted)) field(group, undefined, () => plan.object(depth + 1, member => { for (const name of names) if (accepted(name)) member(name, (facts as unknown as Record<string, unknown>)[name]); }));
+    }
+  });
+}
+
+// Admitted JSON only. Compare without a second complete serialization or key
+// vector. The recursion uses the same finite depth channel as the JSON visitor.
+export function equalAdmissionJson(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (!left || !right || typeof left !== "object" || typeof right !== "object") return false;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+    for (let i = 0; i < left.length; i++) if (!equalAdmissionJson(left[i], right[i])) return false;
+    return true;
+  }
+  let a = 0, b = 0;
+  for (const key in left) if (Object.hasOwn(left, key)) {
+    a++;
+    if (!Object.hasOwn(right, key) || !equalAdmissionJson((left as Record<string, unknown>)[key], (right as Record<string, unknown>)[key])) return false;
+  }
+  for (const key in right) if (Object.hasOwn(right, key)) b++;
+  return a === b;
+}
+
+// Exact partial whole-result layout with one prospective normalized replacement.
+// No output state/default/copy is constructed before this complete plan passes.
+export function planPrivateRuntime(result: AdmissionResult, providerId: string, keys: string[], states: Record<string, import("./types").GrantRuntimeState>,
+  nextKey: string, raw: unknown, hasAttachment: boolean): void {
+  const plan = identityPlan();
+  plan.object(0, field => {
+    for (const key in result) if (Object.hasOwn(result, key) && key !== "pools") field(key, (result as unknown as Record<string, unknown>)[key]);
+    field("pools", undefined, () => plan.object(1, pool => {
+      for (const key in result.pools) if (Object.hasOwn(result.pools, key) && key !== providerId) pool(key, result.pools[key]);
+      pool(providerId, undefined, () => plan.object(2, member => {
+        member("keys", keys); member("hasAttachment", hasAttachment);
+        member("states", undefined, () => plan.object(3, state => {
+          for (const key in states) if (Object.hasOwn(states, key) && key !== nextKey) state(key, states[key]);
+          state(nextKey, undefined, () => admitGeneratedRuntime(raw, plan, nextKey, 4, true));
+        }));
+      }));
+    }));
+  });
 }

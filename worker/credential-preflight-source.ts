@@ -1,7 +1,7 @@
 import { inputRetirement, type InputRetirement } from "./input-retirement.ts";
-import { addIdentitySources, admitIdentityBytes, admitIdentityHeaders, identityFailure, identitySourceBudget, parseIdentity,
+import { IdentityWire, isIdentityFailure, addIdentitySources, admitIdentityBytes, admitIdentityHeaders, identityFailure, identitySourceBudget, identityUtf8, parseIdentity,
   type IdentityProfile, type IdentitySourceBudget } from "./identity-admission.ts";
-import { PreflightTicket } from "./credential-preflight-arena.ts";
+import { PreflightTicket, transferAdmissionScratch, retireAdmissionScratch } from "./credential-preflight-arena.ts";
 import { closePreflightReply, closePreflightRequest, credentialPreflightHeader, credentialPreflightPath,
   credentialPreflightVersion, type CredentialPreflightReply, type CredentialPreflightRequest } from "./credential-preflight-protocol.ts";
 
@@ -250,4 +250,211 @@ export function preflightReplyResponse(ticket: PreflightTicket, text: string, st
     } satisfies UnderlyingByteSource, { highWaterMark: 0 });
     return new Response(body, { status, headers: { "content-type": "application/json" } });
   } catch (error) { text = ""; finish(); throw error; }
+}
+
+// Bridge-only finite failure custody. The 974 raw-reason API above is unchanged.
+// A sanitized follower settles only after its ORIGINAL. No raw rejection enters
+// InputRetirement, an async finally, a retained outcome or a failure history.
+export function admissionBridgeReplyResponse(ticket: PreflightTicket, text: string, status = 200): Response {
+  // Caller has cleared request/current/prior/journal graphs. Fund BOTH caller
+  // and producer text occurrences plus the entire prospective encoded backing.
+  transferAdmissionScratch(ticket, { C: 0, P: 0, N: 0, U: 2 * text.length, B: identityUtf8(text) });
+  ticket.enter("terminal");
+  let bytes: Uint8Array<ArrayBuffer> | undefined;
+  let sent = false, closed = false;
+  const finish = () => {
+    if (closed) return;
+    closed = true; bytes = undefined; text = "";
+    retireAdmissionScratch(ticket); ticket.leave("terminal"); ticket.release();
+  };
+  try {
+    bytes = new TextEncoder().encode(text); text = "";
+    const body = new ReadableStream({ type: "bytes",
+      pull(controller) {
+        if (!sent) { sent = true; const chunk = bytes!; bytes = undefined; controller.enqueue(chunk); }
+        else { const request = controller.byobRequest; controller.close(); request?.respond(0); finish(); }
+      },
+      cancel() { finish(); },
+    } satisfies UnderlyingByteSource, { highWaterMark: 0 });
+    return new Response(body, { status, headers: { "content-type": "application/json" } });
+  } catch (error) { text = ""; finish(); throw error; }
+}
+
+type BridgeCategory = "transport" | "cleanup" | "limit" | "protocol" | "json" | "authority";
+type BridgeOutcome<T> = { failed: false; value: T } | { failed: true; undefinedReason: boolean };
+export type BridgeFailureMetadata = Readonly<{ primary: boolean; primaryIsUndefined: boolean; origins: number; originOrder: number; category: BridgeCategory }>;
+const bridgeFailures = new WeakMap<object, BridgeFailureMetadata>();
+export function admissionBridgeFailureMetadata(value: object): BridgeFailureMetadata | undefined { return bridgeFailures.get(value); }
+function bridgeOriginal<T>(start: () => Promise<T>): Promise<BridgeOutcome<T>> {
+  let original: Promise<T> | undefined;
+  try { original = start(); }
+  catch (error) { const undefinedReason = error === undefined; error = undefined; start = undefined as never; return Promise.resolve({ failed: true, undefinedReason }); }
+  start = undefined as never;
+  const follower = Promise.resolve(original).then(value => ({ failed: false as const, value }), error => {
+    const undefinedReason = error === undefined; error = undefined;
+    return { failed: true as const, undefinedReason };
+  });
+  original = undefined;
+  return follower;
+}
+
+class AdmissionBridgeSource {
+  private ticket: PreflightTicket;
+  private body?: ReadableStream<Uint8Array> | null;
+  private reader?: ReadableStreamBYOBReader | ReadableStreamDefaultReader<Uint8Array>;
+  private retirement?: InputRetirement;
+  private byob = false;
+  private ended?: Promise<void>;
+  private pending?: Promise<ReadableStreamReadResult<Uint8Array>>;
+  private first?: Promise<void>;
+  private terminal = false;
+  private eof = false;
+  private signal?: AbortSignal;
+  private abort?: () => void;
+  private category: BridgeCategory = "transport";
+  private primary = false;
+  private primaryIsUndefined = false;
+  private origins = 0;
+  private originOrder = 0;
+  constructor(ticket: PreflightTicket) { this.ticket = ticket; }
+  failure(category: BridgeCategory, origin: number, undefinedReason = false): void {
+    // A bit names a fixed ORIGINAL origin, not the equality of its reason.
+    if (!this.primary) { this.primary = true; this.category = category; this.primaryIsUndefined = undefinedReason; }
+    if (!(this.origins & origin)) this.originOrder = this.originOrder * 16 + Math.log2(origin) + 1;
+    this.origins |= origin;
+    if (category === "cleanup") this.category = "cleanup";
+  }
+  own(body: ReadableStream<Uint8Array> | null, signal?: AbortSignal): void {
+    this.body = body; this.signal = signal;
+    if (!body) return;
+    try { this.reader = body.getReader({ mode: "byob" }); this.byob = true; }
+    catch (error) {
+      this.failure("transport", 256, error === undefined); error = undefined;
+      try { this.reader = body.getReader(); }
+      catch (fallback) { this.failure("transport", 512, fallback === undefined); fallback = undefined; /* UNKNOWN holds all funding. */ }
+    }
+    if (this.reader) this.retirement = inputRetirement({
+      cancel: () => this.first ??= bridgeOriginal(() => this.reader!.cancel("private admission stopped")).then(outcome => {
+        if (outcome.failed) this.failure("cleanup", 4, outcome.undefinedReason);
+      }),
+      releaseLock: () => {
+        try { this.reader!.releaseLock(); }
+        catch (error) { this.failure("cleanup", 8, error === undefined); error = undefined; }
+      },
+    });
+    this.abort = () => { this.stop("cancel"); };
+    if (signal?.aborted) this.abort();
+    else try { signal?.addEventListener("abort", this.abort, { once: true }); }
+    catch (error) { this.failure("transport", 1024, error === undefined); error = undefined; this.stop("cancel"); }
+  }
+  private stop(kind: "cancel" | "eof"): void {
+    if (this.terminal) return;
+    this.terminal = true; this.ticket.enter("terminal");
+    this.ended = this.retirement?.retire(kind);
+    // Only sanitized followers reach generic retirement. Observe its own outcome.
+    if (this.ended) this.ended = this.ended.then(() => undefined, () => { this.failure("cleanup", 16); });
+  }
+  async read<T>(budget: IdentitySourceBudget, profile: IdentityProfile, envelope: import("./access-json.ts").IdentityEnvelope,
+    close: (value: unknown) => T): Promise<T | undefined> {
+    let text = "", parsed: unknown, result: T | undefined, backing: Uint8Array<ArrayBuffer> | undefined;
+    let decoder: TextDecoder | undefined, wire: IdentityWire | undefined;
+    try {
+      if (this.signal?.aborted) { this.failure("transport", 128); throw identityFailure("transport"); }
+      if (!this.body || !this.byob || !this.retirement) throw identityFailure("transport");
+      const maximum = profile === "record" ? 1048576 : 2097152;
+      let reads = 0, bytes = 0;
+      backing = new Uint8Array(16384); decoder = new TextDecoder(); wire = new IdentityWire();
+      for (;;) {
+        if (this.signal?.aborted) { this.failure("transport", 128); throw identityFailure("transport"); }
+        if (reads++ >= 8192) throw identityFailure("limit");
+        this.ticket.enter("read");
+        this.pending = this.retirement.read(() => bridgeOriginal(() => (this.reader as ReadableStreamBYOBReader).read(backing!)).then(outcome => {
+          if (outcome.failed) { this.failure("transport", 2, outcome.undefinedReason); throw identityFailure("transport"); }
+          return outcome.value;
+        }));
+        // Immediate rejection observer; no raw or fulfilled graph history.
+        void this.pending.then(() => undefined, () => undefined);
+        let part = await this.pending;
+        if (this.signal?.aborted) { part = undefined as never; this.failure("transport", 128); throw identityFailure("transport"); }
+        if (part.value) {
+          if (!(part.value.buffer instanceof ArrayBuffer) || part.value.buffer.byteLength > 16384 || part.value.byteLength > maximum - bytes) throw identityFailure("limit");
+          bytes += part.value.byteLength; admitIdentityBytes(budget, part.value.byteLength, maximum);
+          wire.add(part.value);
+          const decoded = decoder.decode(part.value, { stream: !part.done });
+          if (decoded.length > maximum - text.length || decoded.length > 2097152 - budget.text - text.length) throw identityFailure("limit");
+          text += decoded; backing = new Uint8Array(part.value.buffer);
+        } else if (part.done) {
+          const decoded = decoder.decode();
+          if (decoded.length > maximum - text.length || decoded.length > 2097152 - budget.text - text.length) throw identityFailure("limit");
+          text += decoded;
+        }
+        const done = part.done; part = undefined as never; this.pending = undefined;
+        this.ticket.leave("read");
+        if (done) { this.eof = true; break; }
+        if (!backing.byteLength) throw identityFailure("transport");
+      }
+      parsed = parseIdentity(text, budget, profile, envelope, wire.span);
+      result = close(parsed);
+    } catch (error) {
+      if (!this.primary) this.failure(bridgeCategory(error), 32, error === undefined);
+      error = undefined;
+    } finally {
+      parsed = undefined; text = ""; backing = undefined; decoder = undefined; wire?.clear(); wire = undefined; close = undefined as never;
+    }
+    return result;
+  }
+  async finish(): Promise<void> {
+    this.stop(this.eof ? "eof" : "cancel");
+    try { await this.pending; } catch { /* already classified ORIGINAL read */ }
+    await this.first; await this.ended;
+    if (this.body && (!this.reader || this.body.locked)) { this.ticket.holdUnknown(); await new Promise<never>(() => {}); }
+    try { if (this.abort) this.signal?.removeEventListener("abort", this.abort); }
+    catch (error) { this.failure("cleanup", 64, error === undefined); error = undefined; }
+    this.body = undefined; this.reader = undefined; this.retirement = undefined; this.signal = undefined; this.abort = undefined;
+    this.pending = undefined; this.first = undefined; this.ended = undefined;
+    this.ticket.leave("read"); this.ticket.leave("terminal");
+  }
+  report(): void {
+    if (!this.primary) return;
+    const error = this.category === "json" ? new SyntaxError("invalid private admission JSON")
+      : this.category === "authority" ? new Error("Authority identity query failed") : identityFailure(this.category);
+    bridgeFailures.set(error, Object.freeze({ primary: true, primaryIsUndefined: this.primaryIsUndefined, origins: this.origins, originOrder: this.originOrder, category: this.category }));
+    throw error;
+  }
+}
+function bridgeCategory(error: unknown): BridgeCategory {
+  if (isIdentityFailure(error)) {
+    if (error.message === "Identity admission failed (limit)") return "limit";
+    if (error.message === "Identity admission failed (cleanup)") return "cleanup";
+    if (error.message === "Identity admission failed (protocol)") return "protocol";
+    return "transport";
+  }
+  return error instanceof SyntaxError ? "json" : "authority";
+}
+export async function consumeAdmissionBridge<T>(ticket: PreflightTicket,
+  start: () => Promise<Response | ReadableStream<Uint8Array> | null>, budget: IdentitySourceBudget,
+  profile: IdentityProfile, close: (value: unknown, response?: Response) => T,
+  signal?: AbortSignal, validate?: () => void, envelope: import("./access-json.ts").IdentityEnvelope = "generic"): Promise<T | null> {
+  ticket.enter("source");
+  const owner = new AdmissionBridgeSource(ticket);
+  let response: Response | undefined, body: ReadableStream<Uint8Array> | null | undefined, result: T | null | undefined;
+  let acquisition: Promise<BridgeOutcome<Response | ReadableStream<Uint8Array> | null>> | undefined = bridgeOriginal(start);
+  start = undefined as never;
+  try {
+    let outcome = await acquisition; acquisition = undefined;
+    if (outcome.failed) { owner.failure("transport", 1, outcome.undefinedReason); outcome = undefined as never; }
+    else {
+      if (outcome.value instanceof Response) { response = outcome.value; body = response.body; } else body = outcome.value;
+      outcome = undefined as never; owner.own(body ?? null, signal);
+      if (response) admitIdentityHeaders(response.headers);
+      validate?.();
+      result = body === null ? null : await owner.read(budget, profile, envelope, value => close(value, response));
+    }
+  } catch (error) { owner.failure(bridgeCategory(error), 32, error === undefined); error = undefined; }
+  // No raw catch value or original-settled acquisition promise crosses this wait.
+  await owner.finish();
+  if (signal?.aborted) owner.failure("transport", 128);
+  response = undefined; body = undefined; acquisition = undefined; close = undefined as never; validate = undefined; signal = undefined;
+  ticket.leave("source"); owner.report();
+  return result!;
 }
