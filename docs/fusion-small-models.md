@@ -488,3 +488,31 @@ This task has not been used for model inference at introduction. It remains a
 development task; once used for tuning it cannot support an unseen validation
 claim. The supplied instruction is the behavioral contract, not access to the
 reference source or final tests. No model call belongs to fixture qualification.
+
+
+## Lifecycle validation tasks
+
+`benchmarks/fusion/lifecycle-holdout-workloads.json` adds two development
+tasks from merged source fixes: credential cold-import settlement and
+assignment revision publication. The first joins concurrent imports without
+changing failure identity; the second combines compact revisions with ordered
+reconciliation and current-owner reads.
+
+Qualify the manifest with `scripts/qualify-fusion-workloads.mjs` before any
+model calls. Qualification must show the known source repair passes both the
+original visible tests and the independent acceptance tests, while the original
+source fails acceptance. Initial sandbox qualification passed:
+
+| Task | Original visible | Reference visible | Original acceptance | Reference acceptance |
+| --- | --- | --- | --- | --- |
+| Cold imports | 40/40 | 40/40 | 42/51 | 51/51 |
+| Assignment revisions | 11/11 | 11/11 | 5/12 | 22/22 |
+
+The original assignment implementation lacks the newly exported preparation
+functions, so its new API test module cannot load and its executed count is lower. No model result or gain is claimed
+by qualification; changed manifests or source pins require fresh qualification.
+
+The acceptance runner replaces the listed test files from the pinned reference
+only after repair. Those test bodies and the reference source must remain
+unavailable to model planning, editing and routing. Once used for inference,
+these cases are exposed and cannot remain an unseen validation set.
