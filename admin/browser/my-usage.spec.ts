@@ -1,4 +1,5 @@
 import { completeDisplayOutcome, completeDisplayReport } from './fixtures/complete-usage';
+import { parseUsageRangeInput } from '../src/usage-range';
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page, type Route } from '@playwright/test';
 import { fixtureEvents, fixtureMetrics, fixtureNow, fixtureReport, fixtureResponses } from './fixtures/personal-usage';
@@ -298,7 +299,14 @@ test('refresh advances rolling presets but preserves an explicit custom range', 
   let serverNow = fixtureNow;
   const queries = await mockUsage(page, async (route, url) => {
     if (!url.pathname.endsWith('/report')) return false;
-    await route.fulfill({ json: fixtureReport(url.searchParams, serverNow) }); return true;
+    // The legacy display fixture uses Date.parse (UTC for date-only text).
+    // Adapt its input only; keep the actual request and raw controls unchanged.
+    const fixtureParams = new URLSearchParams(url.searchParams);
+    if (fixtureParams.has('from') && fixtureParams.has('to')) {
+      const range = parseUsageRangeInput({ from: fixtureParams.get('from')!, to: fixtureParams.get('to')!, timezone: fixtureParams.get('timezone') ?? 'UTC' });
+      fixtureParams.set('from', new Date(range.from).toISOString()); fixtureParams.set('to', new Date(range.to).toISOString());
+    }
+    await route.fulfill({ json: fixtureReport(fixtureParams, serverNow) }); return true;
   });
   await page.goto('/dashboard/my-usage');
   await expect(summary(page).locator('.personalGlance > div:nth-child(3) > dd:not(.personalGlanceMeta)').first()).toHaveText('42');
@@ -314,12 +322,12 @@ test('refresh advances rolling presets but preserves an explicit custom range', 
   await page.getByLabel('Start', { exact: true }).fill('2026-10-28');
   await page.getByLabel('End (exclusive)', { exact: true }).fill('2026-10-29');
   await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
-  await expect.poll(() => queries.filter(url => url.pathname.endsWith('/report')).at(-1)!.searchParams.get('from')).toBe('2026-10-27T18:15:00.000Z');
+  await expect.poll(() => queries.filter(url => url.pathname.endsWith('/report')).at(-1)!.searchParams.get('from')).toBe('2026-10-28');
   await expect(summary(page).locator('.personalRange')).toContainText('2026-10-28T18:15:00.000Z');
   await expect(page.getByLabel('Start', { exact: true })).toHaveValue('2026-10-28');
   await expect(page.getByLabel('End (exclusive)', { exact: true })).toHaveValue('2026-10-29');
   const custom = queries.filter(url => url.pathname.endsWith('/report')).at(-1)!.searchParams;
-  expect(custom.get('to')).toBe('2026-10-28T18:15:00.000Z');
+  expect(custom.get('to')).toBe('2026-10-29');
   expect(custom.get('timezone')).toBe('Asia/Kathmandu'); expect(custom.has('days')).toBe(false);
   await expect(summary(page).locator('.personalGlance > div:nth-child(3) > dd:not(.personalGlanceMeta)').first()).toHaveText('42');
   const beforeRefresh = queries.filter(url => url.pathname.endsWith('/report')).length;
@@ -330,8 +338,8 @@ test('refresh advances rolling presets but preserves an explicit custom range', 
   await expect(summary(page).locator('.personalRange')).toContainText('2026-10-28T18:15:00.000Z');
   await expect(summary(page).locator('.personalGlance > div:nth-child(3) > dd:not(.personalGlanceMeta)').first()).toHaveText('42');
   const last = queries.filter(url => url.pathname.endsWith('/report')).at(-1)!;
-  expect(last.searchParams.get('from')).toBe('2026-10-27T18:15:00.000Z');
-  expect(last.searchParams.get('to')).toBe('2026-10-28T18:15:00.000Z');
+  expect(last.searchParams.get('from')).toBe('2026-10-28');
+  expect(last.searchParams.get('to')).toBe('2026-10-29');
   expect(last.searchParams.get('timezone')).toBe('Asia/Kathmandu');
   expect(last.searchParams.has('days')).toBe(false); expect(last.searchParams.has('cut')).toBe(false);
   await expect(page.getByLabel('Start', { exact: true })).toHaveValue('2026-10-28');
