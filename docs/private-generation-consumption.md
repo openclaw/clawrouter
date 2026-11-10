@@ -3,8 +3,8 @@
 This inactive slice starts at PR976's qualified retained-generation foundation.
 It does not activate ordinary proxy, HTTP, Access, direct, provider or credential
 cache callers. The ordinary entrypoints remain unchanged. This checkpoint is
-**not a publication candidate**: background/prefetch integration and the complete
-CONTROL/factory closure below remain open. Local semantics are
+**not a publication candidate**: the cross-request flush completion contract and
+complete CONTROL/factory closure below remain open. Local semantics are
 `UNRUN_CODE_ONLY_HOSTED`.
 
 ## Closed ownership
@@ -115,39 +115,88 @@ complete replacement table. The remaining audit must include, by actual phase:
 - Original flush promises, immediate observers, bounded cohort iterators, ACK
   acquisition/read/FIRSTcancel/unlock products, conditional deletion and terminal
   failure handling.
-- Accepted background registration and actual prefetch settlement, once the
-  closed API seam below is resolved. Rejected registration must start nothing.
+- Accepted background registration, the closed prefetch permit, original load,
+  scalar publication polling, and void completion settlement. Rejected registration must start nothing.
 
 No pending/hint callback, arbitrary reason graph or native controller is charged
 as passive collection data. No quota/profile change is authorized by this table.
 
-## Concrete unresolved prefetch seam
+## Closed owned prefetch receipt
 
-`worker/credential-cache.ts:prefetchGrantCredentials` returns `void`. Internally it
-calls `tryRunInBackground(() => credentials.load(...))`, exposing neither the
-registration decision nor the original load promise. `pendingBackgroundWork`
-provides an age-bounded observation, not that original completion.
+The seventh-file boundary adds `prefetchOwnedGrantCredentials` beside the
+unchanged ordinary void API. `prepareCredentialGenerationPrefetch` validates a
+real hint and actual authority binding, reserves positive common-arena backing,
+and acquires a separate hint child before any registration. It copies only the
+required credential binding and scalar cache configuration. It exposes no grant,
+materializer callback, loader or result graph.
 
-Therefore an owner that calls the existing prefetch API cannot prove when its
-hint child may retire. Returning from the function, response publication, cache
-publication, a polling bound or elapsed time cannot release it. The local code
-has not wired that unsafe route.
+The cache module alone mints a nonescaping permit. The preflight module's named
+materialization command requires that permit and the genuine single-use cap.
+Only the existing credential-cache loader receives the independently parsed
+reply. The public receipt contains `accepted` and, on acceptance, only
+`completed: Promise<void>`.
 
-The minimum choices are a closed funded handoff held for the later credential
-adapter, or a separately authorized private receipt in `credential-cache.ts`
-that exposes accepted registration and the exact original completion without
-exposing a grant graph. No seventh production file has been edited.
+OFF, HIT and rejected background registration start no materialization. They
+unwind only the provisional child. Accepted work immediately observes both
+outcomes of the actual `credentials.load` promise, including synchronous throws
+from the start boundary. The child survives publication/hint eviction, an own
+request's scalar publication wait, and becoming the loader after that wait.
+The original load includes publication-finally and the existing materialization
+fetch/read/FIRSTcancel/unlock joins. UNKNOWN holds the original promise, receipt,
+child and backing. Cleanup clears command, binding, original-work and hint
+aliases before releasing the child and settling the void receipt. Independent
+registration and cleanup failures remain separate origins, including shared
+reason objects and literal undefined.
+
+This receipt owns the OLD hint alias only. It does not retire the independent
+credential-cache entry or remote DO reply, and does not claim native producer
+retirement, a physical ACK or a heap bound.
+
+The current implementation reserves a 32 MiB temporary component for the new
+materialization chain, plus separately backed lazy registries. ID conversion,
+configuration normalization and retained ID occurrences are checked before their
+factories. This reservation is **not yet a complete numerical fit proof**: the
+full materialization/loader/source/terminal overlap must be reconciled with the
+complete operation table. No unused slots from PR976 are treated as credit.
+
+## Concrete unresolved flush completion contract
+
+The current local implementation stores `slot.scheduled.completion`, the original
+flush owner promise. A later request's explicit
+`flushCredentialGenerationRuntime` can await that promise. This is a real source
+boundary gap: HotCache deliberately uses scalar polling in the joining request
+because Workerd does not permit foreign-request I/O ownership to move with a
+shared Promise. The new prefetch receipt uses that existing cache path; the
+new explicit flush currently does not.
+
+Two narrowly different contracts are possible within the same production scope:
+
+- Explicit flush returns only the calling request's original cohort receipt;
+  already accepted foreign cohorts remain held by their own children.
+- Explicit flush also waits for foreign cohorts via a separately funded scalar
+  status boundary, while each original owner alone joins and retires its roots.
+
+The second option must separately specify terminal failure delivery and must not
+turn a timeout, scalar disappearance or publication into retirement credit. The
+first must not be described as a drain of all foreign originals. This choice is
+pending ROOT disposition. No runtime failure has been attributed to it. The
+shared-promise path is local-only and publication remains held.
 
 ## Authored qualification
 
 The new Node fixture covers real SQLite and byte-KV generation hydration,
 preverification/facet denial, lifecycle status/code, common pressure, child/hint
 retention, all six strategies with 129 candidates, authoritative successor state,
-and conditional feedback replacement across a held original ACK. The Workerd
+conditional feedback replacement across a held original ACK, opaque refresh,
+ordinary runtime-merge parity and detached account/snapshot aliases. New prefetch
+witnesses cover OFF/HIT/saturation, accepted synchronous undefined failure,
+held original work, publication joining and independent shared-reason failures. The Workerd
 fixture authors real native KV/SQLite/RPC cases for owned authentication, coverage
-denial, revocation and capacity with original BYOB/EOF/unlock observations.
+denial, revocation and capacity. It also authors actual GrantCredentialObject
+materialization with original BYOB/EOF/unlock and explicitly labelled post-native
+read/FIRSTcancel holds. These fixture holds are not new native ACK claims.
 
 Only syntax, embedded syntax, diff formatting and source/privacy inspection have
-run locally. Full entry/refresh parity, background acceptance, the final factory
-inventory and all authored native semantics remain pending. Nothing here claims
+run locally. Full source/factory closure, the cross-request flush decision and all authored
+native semantics remain pending. Nothing here claims
 publication readiness, default activation, deployment or a heap bound.

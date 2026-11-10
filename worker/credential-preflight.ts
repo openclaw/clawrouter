@@ -6,8 +6,12 @@ import { admitBridgeFactories, admitBridgeCopyFactories, admissionBridgePhasePay
 import { admitGenerationFactories, generationMetadata, measureGenerationGraph, freezeGenerationGraph,
   copyGenerationCoverage, generationCoverageLayout, sameGenerationCoverage,
   type GenerationCoverage, type GenerationAuthentication, type IdentityGenerationPreparation, type IdentityGenerationBorrow } from "./identity-generations.ts";
-import { PrivateCacheReservation, hotCacheNow, type HotCacheConfig } from "./hot-cache.ts";
-import { GenerationAdvisoryState, admitGenerationOverlay, generationSelectionWorkingBytes, planGenerationSelection, generationRuntimeWorkingBytes, detachedGenerationRuntime } from "./admission-cache.ts";
+import { PrivateCacheReservation, hotCacheNow, hotCacheConfig, tryRunInBackground, type HotCacheConfig } from "./hot-cache.ts";
+import { ownsCredentialPrefetchPermit } from "./credential-cache.ts";
+import { materializeGrantCredentials } from "./grant-credentials.ts";
+import { grantRevision } from "./grant-eligibility.ts";
+import { snapshot as providerSnapshot } from "./providers.ts";
+import { GenerationAdvisoryState, waitGenerationFlushWindow, admitGenerationOverlay, generationSelectionWorkingBytes, planGenerationSelection, generationRuntimeWorkingBytes, detachedGenerationRuntime, detachedGenerationFeedback } from "./admission-cache.ts";
 import { authorityCall } from "./authority.ts";
 import { recordGrantRuntime } from "./grant-selection.ts";
 import { ownedGenerationCredentialFailure } from "./proxy-auth.ts";
@@ -311,7 +315,7 @@ type GenerationEntry = { partition: GenerationPartition; kid: string; first?: Ge
 type GenerationSlot = { entry: GenerationEntry; owner: AdmissionOwner; continuation?: CredentialPreflightContinuation;
   handle?: PrivateAdmissionHandle; ready: boolean; published: boolean; borrowers: number; sequence: number; storedAt: number; maxAgeMs: number;
   funding: GenerationMetadataCharge; initialBorrowFunding?: GenerationMetadataCharge; cache?: PrivateCacheReservation; graphCache?: PrivateCacheReservation;
-  temporaryCharge?: GenerationRetainedCharge; advisory?: GenerationAdvisoryState; feedback?: Map<string, GenerationPendingFeedback>; counters?: Map<string, GenerationPendingCount>; countCursor?: Map<string, GenerationPendingCount>; coverage?: { value: GenerationCoverage; funding: GenerationMetadataCharge; cache?: PrivateCacheReservation } };
+  temporaryCharge?: GenerationRetainedCharge; advisory?: GenerationAdvisoryState; feedback?: Map<string, GenerationPendingFeedback>; counters?: Map<string, GenerationPendingCount>; countCursor?: Map<string, GenerationPendingCount>; scheduled?: GenerationFlushOwner; nextFlush?: GenerationFlushOwner; coverage?: { value: GenerationCoverage; funding: GenerationMetadataCharge; cache?: PrivateCacheReservation } };
 type GenerationBorrower = { slot: GenerationSlot; funding: GenerationMetadataCharge; cache?: PrivateCacheReservation };
 type GenerationRegistry = { partitions: WeakMap<Authority, GenerationPartition>;
   preparations: WeakMap<IdentityGenerationPreparation, GenerationSlot>; borrowers: WeakMap<IdentityGenerationBorrow, GenerationBorrower>;
@@ -618,10 +622,15 @@ function disposeGenerationAuthentication(this: GenerationAuthentication): void {
 // from an absent pool/selection or from the stable index key.
 export function authenticateCredentialGeneration(borrow: IdentityGenerationBorrow, env: Pick<Env, "ACCESS_CONTROL">,
   required: GenerationCoverage): GenerationAuthentication {
+  return createGenerationAuthentication(borrow, env, required);
+}
+function createGenerationAuthentication(borrow: IdentityGenerationBorrow, env: Pick<Env, "ACCESS_CONTROL">,
+  required: GenerationCoverage, refreshFrom?: GenerationAuthenticationOwner): GenerationAuthentication {
   const slot = generationRegistry?.borrowers.get(borrow)?.slot;
   if (!slot?.ready || !slot.coverage || slot.owner.binding !== env.ACCESS_CONTROL) throw identityFailure("protocol");
   const frame = GenerationConsumptionLease.reserve(4096);
   let lease: GenerationConsumptionLease | undefined, parent: IdentityGenerationBorrow | undefined;
+  let hasPrimary = false, primary: unknown;
   try {
     admitIdentity(required); generationCoverageLayout(required);
     if (!sameGenerationCoverage(slot.coverage.value, required)) throw identityFailure("protocol");
@@ -633,14 +642,15 @@ export function authenticateCredentialGeneration(borrow: IdentityGenerationBorro
     const bytes = 4096 + 8 * (counts.containers + 2 * counts.members + counts.entries + counts.values) + 2 * counts.units;
     lease = GenerationConsumptionLease.reserve(bytes);
     parent = newGenerationBorrow(slot);
-    const failure = ownedGenerationCredentialFailure(admission, slot.owner.digest);
+    if (refreshFrom && (refreshFrom.slot.owner.binding !== slot.owner.binding || refreshFrom.slot.owner.kid !== slot.owner.kid || !required.selection)) throw identityFailure("protocol");
+    const failure = ownedGenerationCredentialFailure(admission, refreshFrom?.slot.owner.digest ?? slot.owner.digest, refreshFrom ? required.selection : undefined);
     let identity: import("./types").AuthorizedIdentity | undefined;
     if (!failure) {
       const credential = admission.credential!.credential, policy = admission.policy!, principal = admission.owner;
       identity = { serviceTiers: credential.serviceTiers, credentialId: slot.owner.kid, principalId: credential.principalId ?? null,
         authType: "proxy_key", policyId: credential.policyId,
         policy: admittedEffectivePolicy(credential.policyId, policy.policy, principal?.record.budgetOverrides),
-        contentRetentionDisabled: principal?.record.contentRetentionDisabled ?? false };
+        contentRetentionDisabled: refreshFrom ? refreshFrom.identity!.contentRetentionDisabled : principal?.record.contentRetentionDisabled ?? false };
       admitIdentity(identity);
     }
     if (!generationAuthentications) {
@@ -651,12 +661,20 @@ export function authenticateCredentialGeneration(borrow: IdentityGenerationBorro
     const handle = Object.freeze({ dispose: disposeGenerationAuthentication, status: generationAuthenticationStatus, code: generationAuthenticationCode });
     generationAuthentications.set(handle, owner); generationAuthenticationCount++;
     parent = undefined; lease = undefined; return handle;
-  } finally { parent?.dispose(); lease?.release(); frame.release(); }
+  } catch (error) { hasPrimary = true; primary = error; throw error; }
+  finally {
+    const failures: unknown[] = [];
+    try { parent?.dispose(); } catch (error) { failures.push(error); }
+    try { lease?.release(); } catch (error) { failures.push(error); }
+    try { frame.release(); } catch (error) { failures.push(error); }
+    if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "generation authentication cleanup");
+  }
 }
 
 interface GenerationSelectionOwner {
   auth: GenerationAuthenticationOwner; lease: GenerationConsumptionLease;
   result?: import("./grant-eligibility.ts").GrantSelectionResult; users: number;
+  prefetchProvider?: (typeof providerSnapshot.providers)[number];
 }
 export interface GenerationSelectionHandle {
   dispose(): void;
@@ -674,7 +692,7 @@ function selectedOwner(handle: GenerationSelectionHandle): GenerationSelectionOw
 }
 function releaseGenerationSelection(owner: GenerationSelectionOwner): void {
   if (--owner.users) return;
-  owner.result = undefined;
+  owner.result = undefined; owner.prefetchProvider = undefined;
   const auth = owner.auth; owner.auth = undefined as never;
   owner.lease.release(); auth.children--; retireAuthentication(auth);
 }
@@ -700,7 +718,8 @@ export function selectCredentialGeneration(handle: GenerationAuthentication, env
   if (slot.owner.binding !== env.ACCESS_CONTROL || !selectionCovered(slot.coverage!.value, request)) throw identityFailure("protocol");
   const frame = GenerationConsumptionLease.reserve(4096);
   let work: GenerationConsumptionLease | undefined, resultLease: GenerationConsumptionLease | undefined;
-  let created: GenerationAdvisoryState | undefined, pending: GenerationPendingCount | undefined;
+  let created: GenerationAdvisoryState | undefined, pending: GenerationPendingCount | undefined, flush: GenerationFlushOwner | undefined;
+  let hasPrimary = false, primary: unknown;
   try {
     admitIdentity(request);
     const base = generationSelectionWorkingBytes(slot.owner.admission!, request);
@@ -720,18 +739,33 @@ export function selectCredentialGeneration(handle: GenerationAuthentication, env
     // precede the first counter/cursor mutation. No authority writes occur here.
     admitGenerationOverlay(slot.owner.admission!, overlay, planned);
     overlay.admitSelection(planned);
-    if (planned.selectedKey) pending = prepareGenerationCount(slot, planned);
+    if (planned.selectedKey) { pending = prepareGenerationCount(slot, planned); flush = prepareGenerationSchedule(slot, env); }
     if (!generationSelections) {
       generationSelectionRegistryCharge = GenerationConsumptionLease.reserve(512); generationSelections = new WeakMap();
     }
-    const owner: GenerationSelectionOwner = { auth, lease: resultLease, result, users: 1 };
+    const provider = providerSnapshot.providers.find(item => item.id === request.providerId);
+    const prefetchProvider = !request.excludedKeys?.length && !request.pinnedKey && provider && provider.id !== "anthropic-vertex"
+      && !(provider.id === "minimax" && provider.endpoints.some(endpoint => endpoint.id === request.endpointId
+        && (endpoint.request_format === "minimax.images" || endpoint.request_format === "minimax.music"))) ? provider : undefined;
+    const owner: GenerationSelectionOwner = { auth, lease: resultLease, result, users: 1, prefetchProvider };
     const selected = Object.freeze({ dispose: disposeGenerationSelection, selected: generationSelected, matchesKey: generationSelectedKey, hasConfiguredGrant: generationConfigured });
     generationSelections.set(selected, owner); generationSelectionCount++; auth.children++;
     slot.advisory = overlay; created = undefined;
     overlay.commitSelection(planned);
     if (pending) { commitGenerationCount(slot, pending); pending = undefined; }
+    if (flush) { commitGenerationSchedule(flush); flush = undefined; }
     resultLease = undefined; return selected;
-  } finally { if (pending) releaseGenerationCount(pending); created?.dispose(); resultLease?.release(); work?.release(); frame.release(); }
+  } catch (error) { hasPrimary = true; primary = error; throw error; }
+  finally {
+    const failures: unknown[] = [];
+    try { if (flush && !flush.started) abandonGenerationFlush(flush); } catch (error) { failures.push(error); }
+    try { if (pending) releaseGenerationCount(pending); } catch (error) { failures.push(error); }
+    try { created?.dispose(); } catch (error) { failures.push(error); }
+    try { resultLease?.release(); } catch (error) { failures.push(error); }
+    try { work?.release(); } catch (error) { failures.push(error); }
+    try { frame.release(); } catch (error) { failures.push(error); }
+    if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "generation selection cleanup");
+  }
 }
 
 interface GenerationPendingFeedback {
@@ -754,23 +788,32 @@ export function queueCredentialGenerationRuntime(handle: GenerationAuthenticatio
   if (!covered) throw identityFailure("protocol");
   const frame = GenerationConsumptionLease.reserve(4096);
   let work: GenerationConsumptionLease | undefined, held: GenerationConsumptionLease | undefined;
-  let pendingLease: GenerationConsumptionLease | undefined, parent: IdentityGenerationBorrow | undefined, created: GenerationAdvisoryState | undefined;
+  let pendingLease: GenerationConsumptionLease | undefined, parent: IdentityGenerationBorrow | undefined, created: GenerationAdvisoryState | undefined, flush: GenerationFlushOwner | undefined;
+  let hasPrimary = false, primary: unknown;
   try {
     admitIdentity(incoming, "record");
     const overlay = slot.advisory ?? (created = GenerationAdvisoryState.create());
     let previous = overlay.runtime.get(key);
-    work = GenerationConsumptionLease.reserve(generationRuntimeWorkingBytes(previous, incoming));
+    if (!previous) for (const provider of slot.coverage!.value.providers) {
+      const pool = slot.owner.admission!.pools[provider.id];
+      if (pool?.keys.includes(key)) { previous = pool.states[key]; break; }
+    }
+    const prior = slot.feedback?.get(key);
+    const localBytes = generationRuntimeWorkingBytes(previous, incoming);
+    const pendingBytes = generationRuntimeWorkingBytes(prior?.value, incoming);
+    work = GenerationConsumptionLease.reserve(Math.max(localBytes, pendingBytes));
     // Reserve the full detached result and map/owner cells prospectively. This
     // stays independently backed after transient merge arrays have retired.
-    held = GenerationConsumptionLease.reserve(work.bytes + 4 * key.length + 512);
-    pendingLease = GenerationConsumptionLease.reserve(work.bytes + 4 * key.length + 512);
+    held = GenerationConsumptionLease.reserve(localBytes + 4 * key.length + 512);
+    pendingLease = GenerationConsumptionLease.reserve(pendingBytes + 4 * key.length + 512);
     parent = newGenerationBorrow(slot);
+    flush = prepareGenerationSchedule(slot, { ACCESS_CONTROL: slot.owner.binding } as Env);
     const value = detachedGenerationRuntime(previous, incoming);
     admitGenerationOverlay(slot.owner.admission!, overlay, undefined, { key, value });
-    const pendingValue = copyIdentity(value);
+    const pendingValue = detachedGenerationFeedback(prior?.value, incoming);
     freezeGenerationGraph(value); freezeGenerationGraph(pendingValue);
     const record: GenerationPendingFeedback = { key, value: pendingValue, lease: pendingLease, parent, inflight: false };
-    const prior = slot.feedback?.get(key), priorCharge = overlay.runtimeCharges.get(key);
+    const priorCharge = overlay.runtimeCharges.get(key);
     slot.feedback ??= new Map();
     overlay.runtime.set(key, value); overlay.runtimeCharges.set(key, held);
     slot.feedback.set(key, record); slot.advisory = overlay;
@@ -778,41 +821,67 @@ export function queueCredentialGenerationRuntime(handle: GenerationAuthenticatio
     previous = undefined;
     priorCharge?.release();
     if (prior && !prior.inflight) releaseGenerationFeedback(prior);
-  } finally { parent?.dispose(); pendingLease?.release(); held?.release(); created?.dispose(); work?.release(); frame.release(); }
+    if (flush) { commitGenerationSchedule(flush); flush = undefined; }
+  } catch (error) { hasPrimary = true; primary = error; throw error; }
+  finally {
+    const failures: unknown[] = [];
+    try { if (flush && !flush.started) abandonGenerationFlush(flush); } catch (error) { failures.push(error); }
+    try { parent?.dispose(); } catch (error) { failures.push(error); }
+    try { pendingLease?.release(); } catch (error) { failures.push(error); }
+    try { held?.release(); } catch (error) { failures.push(error); }
+    try { created?.dispose(); } catch (error) { failures.push(error); }
+    try { work?.release(); } catch (error) { failures.push(error); }
+    try { frame.release(); } catch (error) { failures.push(error); }
+    if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "generation feedback cleanup");
+  }
 }
 
 export function flushCredentialGenerationRuntime(handle: GenerationAuthentication, env: Env): Promise<void> {
   const auth = authenticationOwner(handle), slot = auth.slot;
   if (auth.failure) throw auth.failure;
   if (slot.owner.binding !== env.ACCESS_CONTROL) throw identityFailure("protocol");
-  // Separate owner before invoking any original RPC. It never awaits an
-  // encompassing response/completion whose disposal depends on this child.
-  const lease = GenerationConsumptionLease.reserve(32768);
-  try {
-    const parent = newGenerationBorrow(slot);
-    const original = runGenerationFeedback(slot, env, parent, lease);
-    void original.then(() => undefined, () => undefined);
-    return original;
-  } catch (error) { lease.release(); throw error; }
+  const lease = GenerationConsumptionLease.reserve(4096);
+  let parent: IdentityGenerationBorrow;
+  try { parent = newGenerationBorrow(slot); } catch (error) { lease.release(); throw error; }
+  const operation = drainGenerationFeedback(slot, { ACCESS_CONTROL: slot.owner.binding } as Env, parent, lease);
+  void operation.then(() => undefined, () => undefined);
+  return operation;
 }
-async function runGenerationFeedback(slot: GenerationSlot, env: Env, parent: IdentityGenerationBorrow, lease: GenerationConsumptionLease): Promise<void> {
+async function drainGenerationFeedback(slot: GenerationSlot, env: Env, parent: IdentityGenerationBorrow, lease: GenerationConsumptionLease): Promise<void> {
+  let hasPrimary = false, primary: unknown;
   try {
-    await flushGenerationCounts(slot, env);
-    if (!slot.feedback) return;
-    let remaining = slot.feedback.size;
-    for (const record of slot.feedback.values()) {
-      if (!remaining--) break;
-      if (record.inflight) continue;
-      record.inflight = true;
-      try { await recordGrantRuntime(env, record.key, record.value!); }
-      catch { /* Same ordinary advisory disposition; never replay this write. */ }
-      finally {
-        if (slot.feedback.get(record.key) === record) slot.feedback.delete(record.key);
-        releaseGenerationFeedback(record);
-      }
+    do {
+      const original = slot.scheduled?.completion ?? startGenerationFlush(newGenerationFlush(slot, env), false);
+      // No producer calls this draining API, and this promise is never installed
+      // as slot.scheduled: it cannot join its own encompassing completion.
+      await original;
+    } while (slot.scheduled || slot.nextFlush || slot.feedback?.size || slot.counters?.size);
+  } catch (error) { hasPrimary = true; primary = error; }
+  slot = undefined as never; env = undefined as never;
+  const failures: unknown[] = [];
+  try { parent.dispose(); } catch (error) { failures.push(error); }
+  parent = undefined as never;
+  try { lease.release(); } catch (error) { failures.push(error); }
+  if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "generation drain cleanup");
+  if (hasPrimary) throw primary;
+}
+async function runGenerationFeedback(slot: GenerationSlot, env: Env): Promise<void> {
+  await flushGenerationCounts(slot, env);
+  const pending = slot.feedback;
+  if (!pending) return;
+  let remaining = pending.size;
+  for (const record of pending.values()) {
+    if (!remaining--) break;
+    if (record.inflight) continue;
+    record.inflight = true;
+    try { await recordGrantRuntime(env, record.key, record.value!); }
+    catch { /* Same ordinary advisory disposition; never replay this write. */ }
+    finally {
+      if (pending.get(record.key) === record) pending.delete(record.key);
+      releaseGenerationFeedback(record);
     }
-    if (!slot.feedback.size) slot.feedback = undefined;
-  } finally { env = undefined as never; slot = undefined as never; try { parent.dispose(); } finally { lease.release(); } }
+  }
+  if (!pending.size && slot.feedback === pending) slot.feedback = undefined;
 }
 
 interface GenerationPendingCount {
@@ -889,4 +958,184 @@ export function retainCredentialGenerationHint(selected: GenerationSelectionHand
     // replacement retires only its own metadata and child, never the base graph.
     previous?.dispose(); return hint;
   } catch (error) { lease.release(); throw error; }
+}
+
+// A hint remains dispose-only. This separate single-use capability owns a child
+// before registration and carries no public grant, loader or materializer hook.
+export interface OwnedGenerationPrefetch { dispose(): void }
+interface GenerationPrefetchOwner {
+  selected?: GenerationSelectionOwner; lease: GenerationConsumptionLease;
+  binding?: Env["GRANT_CREDENTIALS"]; id: string; config?: HotCacheConfig;
+  permit?: object; materialized: boolean;
+}
+let generationPrefetches: WeakMap<OwnedGenerationPrefetch, GenerationPrefetchOwner> | undefined;
+let generationPrefetchCharge: GenerationConsumptionLease | undefined;
+let generationPrefetchCount = 0;
+function generationPrefetchOwner(cap: OwnedGenerationPrefetch): GenerationPrefetchOwner {
+  const owner = generationPrefetches?.get(cap);
+  if (!owner) throw identityFailure("protocol");
+  return owner;
+}
+export function checkOwnedGenerationPrefetch(cap: OwnedGenerationPrefetch): void {
+  if (generationPrefetchOwner(cap).permit) throw identityFailure("protocol");
+}
+function disposeGenerationPrefetch(this: OwnedGenerationPrefetch): void {
+  checkOwnedGenerationPrefetch(this); retireGenerationPrefetch(this);
+}
+function retireGenerationPrefetch(cap: OwnedGenerationPrefetch): void {
+  const owner = generationPrefetchOwner(cap), selected = owner.selected;
+  generationPrefetches!.delete(cap);
+  owner.selected = undefined; owner.binding = undefined; owner.id = ""; owner.config = undefined; owner.permit = undefined;
+  const failures: unknown[] = [];
+  try { if (selected) releaseGenerationSelection(selected); } catch (error) { failures.push(error); }
+  try { owner.lease.release(); } catch (error) { failures.push(error); }
+  if (!--generationPrefetchCount) {
+    generationPrefetches = undefined;
+    const charge = generationPrefetchCharge; generationPrefetchCharge = undefined;
+    try { charge?.release(); } catch (error) { failures.push(error); }
+  }
+  if (failures.length) throw new AggregateError(failures, "generation prefetch child cleanup");
+}
+function generationPrefetchIdUnits(value: unknown): number {
+  if (typeof value === "string") return value.length;
+  if (!Array.isArray(value)) return 64;
+  const plan = identityPlan("record"); plan.item(value, 0);
+  return plan.counts.units + plan.counts.entries + 16 * plan.counts.containers + 64;
+}
+export function prepareCredentialGenerationPrefetch(hint: GenerationSelectionHint, env: Env): OwnedGenerationPrefetch {
+  const selected = generationHints?.get(hint)?.selected;
+  if (!selected || selected.auth.slot.owner.binding !== env.ACCESS_CONTROL) throw identityFailure("protocol");
+  // This is an independently backed, full temporary component, never scratch
+  // borrowed from a promoted/zeroed generation ticket. ORIGINAL materialization
+  // request/reader and all registration/terminal products remain under it.
+  const lease = GenerationConsumptionLease.reserve(32 * 1024 * 1024);
+  let retained = false;
+  try {
+    const raw = env.CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS;
+    const grant = selected.result!.selected;
+    // Legacy scalar fields are not retyped here. Conservatively fund ordinary
+    // String conversion of their passive JSON values, including array separators
+    // and object tags, before interpolation; canonical numbers use less.
+    const revision = grant ? grantRevision(grant.grant) : null;
+    const idUnits = grant ? grant.key.length + generationPrefetchIdUnits(grant.grant.credentialGeneration) + generationPrefetchIdUnits(revision) + 2 : 0;
+    const retainedIds = 6 * idUnits + 32768;
+    if (Math.max(21020672, 2 * (typeof raw === "string" ? raw.length : 64)) + retainedIds > lease.bytes) throw identityFailure("limit");
+    const config = hotCacheConfig(env);
+    const id = grant ? `${grant.key}\n${grant.grant.credentialGeneration ?? ""}\n${revision ?? ""}` : "";
+    if (!generationPrefetches) { generationPrefetchCharge = GenerationConsumptionLease.reserve(512); generationPrefetches = new WeakMap(); }
+    const owner: GenerationPrefetchOwner = { selected, lease, binding: env.GRANT_CREDENTIALS, id, config, materialized: false };
+    const cap = Object.freeze({ dispose: disposeGenerationPrefetch });
+    generationPrefetches.set(cap, owner); generationPrefetchCount++; selected.users++; retained = true;
+    return cap;
+  } finally { if (!retained) lease.release(); }
+}
+// Only the cache module can mint the nonescaping permit. Even a genuine cap
+// holder cannot invoke the named materialization command to obtain a graph.
+export function claimOwnedGenerationPrefetch(cap: OwnedGenerationPrefetch, permit: object): { eligible: boolean; id: string; config: HotCacheConfig } {
+  checkOwnedGenerationPrefetch(cap);
+  if (!ownsCredentialPrefetchPermit(permit, cap)) throw identityFailure("protocol");
+  const owner = generationPrefetchOwner(cap); owner.permit = permit;
+  return { eligible: !!owner.selected!.prefetchProvider && !!owner.selected!.result!.selected, id: owner.id, config: owner.config! };
+}
+export function materializeOwnedGenerationPrefetch(cap: OwnedGenerationPrefetch, permit: object): Promise<import("./types").UpstreamGrant> {
+  const owner = generationPrefetchOwner(cap);
+  if (owner.permit !== permit || !ownsCredentialPrefetchPermit(permit, cap) || owner.materialized) throw identityFailure("protocol");
+  const selected = owner.selected!.result!.selected, provider = owner.selected!.prefetchProvider;
+  if (!selected || !provider) throw identityFailure("protocol");
+  owner.materialized = true;
+  // Independently parsed reply custody passes into the EXISTING cache loader.
+  // This child covers the old hint alias, not retirement of that new reply.
+  return materializeGrantCredentials({ GRANT_CREDENTIALS: owner.binding } as Env,
+    selected.key, selected.grant, provider.id, provider.auth.refresh, false);
+}
+export function finishOwnedGenerationPrefetch(cap: OwnedGenerationPrefetch, permit: object): void {
+  const owner = generationPrefetchOwner(cap);
+  if (owner.permit !== permit || !ownsCredentialPrefetchPermit(permit, cap)) throw identityFailure("protocol");
+  retireGenerationPrefetch(cap);
+}
+
+interface GenerationFlushOwner {
+  slot?: GenerationSlot; env?: Env; parent?: IdentityGenerationBorrow; lease: GenerationConsumptionLease;
+  original?: Promise<void>; completion?: Promise<void>; started: boolean;
+}
+function newGenerationFlush(slot: GenerationSlot, env: Env): GenerationFlushOwner {
+  const lease = GenerationConsumptionLease.reserve(32768);
+  try {
+    if (env.ACCESS_CONTROL !== slot.owner.binding) throw identityFailure("protocol");
+    return { slot, env: { ACCESS_CONTROL: slot.owner.binding } as Env, parent: newGenerationBorrow(slot), lease, started: false };
+  }
+  catch (error) { lease.release(); throw error; }
+}
+function prepareGenerationSchedule(slot: GenerationSlot, env: Env): GenerationFlushOwner | undefined {
+  // A queued successor already owns the next bounded cohort. No unbounded
+  // pending-promise history or new registration is created for each update.
+  return slot.nextFlush ? undefined : newGenerationFlush(slot, env);
+}
+function abandonGenerationFlush(owner: GenerationFlushOwner): void {
+  if (owner.started) throw identityFailure("protocol");
+  owner.slot = undefined; owner.env = undefined;
+  const parent = owner.parent; owner.parent = undefined;
+  try { parent?.dispose(); } finally { owner.lease.release(); }
+}
+function commitGenerationSchedule(owner: GenerationFlushOwner): void {
+  const slot = owner.slot!;
+  if (slot.scheduled) { slot.nextFlush = owner; return; }
+  // The child and all start/terminal metadata were acquired BEFORE the accepted
+  // advisory mutation. A rejected registration invokes no timer, RPC or loader.
+  if (!tryRunInBackground(() => startGenerationFlush(owner, true))) abandonGenerationFlush(owner);
+}
+function startGenerationFlush(owner: GenerationFlushOwner, delayed: boolean): Promise<void> {
+  const slot = owner.slot!;
+  if (owner.started || slot.scheduled) throw identityFailure("protocol");
+  owner.started = true; slot.scheduled = owner;
+  const original = runOwnedGenerationFlush(owner, delayed);
+  owner.original = original;
+  // The follower releases only AFTER the ORIGINAL body/ACK operation settles.
+  // UNKNOWN never reaches either callback and holds every accepted child.
+  const completion = original.then(() => finishGenerationFlush(owner, false), reason => finishGenerationFlush(owner, true, reason));
+  owner.completion = completion;
+  void completion.then(() => undefined, () => undefined);
+  return completion;
+}
+async function runOwnedGenerationFlush(owner: GenerationFlushOwner, delayed: boolean): Promise<void> {
+  if (delayed) await waitGenerationFlushWindow();
+  await runGenerationFeedback(owner.slot!, owner.env!);
+}
+function finishGenerationFlush(owner: GenerationFlushOwner, hasPrimary: boolean, primary?: unknown): void {
+  const failures: unknown[] = [];
+  const slot = owner.slot!, next = slot.nextFlush;
+  if (slot.scheduled === owner) slot.scheduled = undefined;
+  slot.nextFlush = undefined;
+  // Clear the retiring ORIGINAL and all application transport aliases before
+  // releasing its backing. The independent successor was already funded.
+  owner.original = undefined; owner.completion = undefined; owner.env = undefined; owner.slot = undefined;
+  const parent = owner.parent; owner.parent = undefined;
+  if (next) {
+    try { if (slot.feedback?.size || slot.counters?.size) commitGenerationSchedule(next); else abandonGenerationFlush(next); }
+    catch (error) { failures.push(error); }
+  }
+  try { parent?.dispose(); } catch (error) { failures.push(error); }
+  try { owner.lease.release(); } catch (error) { failures.push(error); }
+  if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "generation flush cleanup");
+  if (hasPrimary) throw primary;
+}
+
+export function refreshCredentialGenerationAuthentication(handle: GenerationAuthentication, fresh: IdentityGenerationBorrow,
+  env: Pick<Env, "ACCESS_CONTROL">, required: GenerationCoverage): void {
+  const previous = authenticationOwner(handle);
+  if (previous.failure) throw previous.failure;
+  const nextHandle = createGenerationAuthentication(fresh, env, required, previous);
+  const next = authenticationOwner(nextHandle);
+  if (next.failure) {
+    const failure = next.failure;
+    try { nextHandle.dispose(); } catch (cleanup) { throw new AggregateError([failure, cleanup], "generation refresh cleanup"); }
+    throw failure;
+  }
+  // All new policy/identity/capability factories and their exact overlapping
+  // funding have succeeded. Existing children retain the OLD owner record.
+  // The public opaque identity keeps its reference, as ordinary refresh does.
+  generationAuthentications!.delete(nextHandle);
+  generationAuthentications!.set(handle, next);
+  previous.closed = true;
+  retireAuthentication(previous);
 }

@@ -433,6 +433,13 @@ export function detachedGenerationRuntime(previous: GrantRuntimeState | undefine
   const merged = mergeGrantRuntimeState(previous ?? null, incoming);
   return copyIdentity(merged);
 }
+export function detachedGenerationFeedback(previous: GrantRuntimeState | undefined, incoming: GrantRuntimeState): GrantRuntimeState {
+  let merged = incoming;
+  // Ordinary pending feedback falls back to the new observation if merging
+  // previous pending observations fails. Copy/profile failures still propagate.
+  if (previous) try { merged = mergeGrantRuntimeState(previous, incoming); } catch { merged = incoming; }
+  return copyIdentity(merged);
+}
 
 // Prospectively visit the logical ordinary admission view, without cloning its
 // frozen graph. Overlay representation does not weaken the complete profile.
@@ -489,4 +496,11 @@ export function admitGenerationOverlay(admission: AdmissionResult, overlay: Gene
     }
     if (selection && !Object.hasOwn(admission, "selection")) root("selection", selection.result);
   });
+}
+
+
+// Same ordinary coalescing interval; no new deadline or retirement credit.
+// Called only after the owned background registration has accepted the start.
+export function waitGenerationFlushWindow(): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, flushWindowMs));
 }

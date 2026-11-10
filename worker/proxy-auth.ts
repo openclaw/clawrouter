@@ -147,8 +147,20 @@ export function proxyCredentialFailure(credential: ProxyCredential, entry: Acces
 // Pure verdict for the CLOSED generation owner. This returns no identity and
 // installs none of the ordinary proxy-auth WeakMap capabilities. The caller
 // must own/fund the graph and result; ordinary entrypoints above are unchanged.
-export function ownedGenerationCredentialFailure(admission: AdmissionResult, digest: string): HttpError | null {
+export function ownedGenerationCredentialFailure(admission: AdmissionResult, digest: string, refresh?: AdmissionSelection): HttpError | null {
   const entry = admission.credential;
+  if (refresh) {
+    if (!entry || !safeEqual(digest, entry.credential.secretSha256)) return new HttpError(401, "invalid_proxy_key", "proxy key is no longer valid");
+    if (admission.policyUnavailable || admission.ownerUnavailable || admission.connectionsUnavailable) throw new Error("admission unavailable");
+    const failure = proxyCredentialFailure(entry.credential, admission.policy, admission.owner?.record.enabled);
+    if (failure) return failure;
+    if (admission.policy!.policy.providers.length && !admission.policy!.policy.providers.includes(refresh.providerId)) return new HttpError(403, "provider_not_allowed", "policy does not allow provider");
+    if (admission.connections.find(item => item.providerId === refresh.providerId)?.enabled === false) return new HttpError(503, "provider_disabled", "provider is disabled");
+    const provider = snapshot.providers.find(item => item.id === refresh.providerId), endpoint = provider?.endpoints.find(item => item.id === refresh.endpointId);
+    if (!provider || !endpoint) throw identityFailure("protocol");
+    assertPolicyModel(admission.policy!.policy, { model: refresh.catalogModelId ? { id: refresh.catalogModelId } : null, endpoint, capability: refresh.capability });
+    return null;
+  }
   if (!entry) return new HttpError(401, "unknown_proxy_key", "proxy key is not registered");
   if (!safeEqual(digest, entry.credential.secretSha256.toLowerCase())) return new HttpError(401, "invalid_proxy_key", "proxy key secret is invalid");
   if (admission.policyUnavailable) throw new Error("admission policy resolution failed");

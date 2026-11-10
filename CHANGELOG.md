@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Stage inactive owned generation authentication and local selection with explicit admitted coverage, separately funded derived records and advisory ownership. Default callers remain unchanged; source/factory closure and hosted runtime qualification remain required before publication or activation.
+- Stage inactive owned generation authentication and local selection with explicit admitted coverage, separately funded derived records and advisory ownership. Default callers remain unchanged; source/factory closure and hosted runtime qualification remain required before publication or activation. The local private prefetch receipt retains hint children through original cache-load cleanup without exposing credential graphs.
 
 - Add an inactive private retained-generation foundation with proof-bound two-slot preparation, immutable opaque borrowers and atomic exact common-arena handoff. A stable publication watermark prevents delayed resurrection after eviction or expiry; optional metadata pressure demotes matching hits under funded temporary custody without another RPC. Default authentication, cache consumers and providers remain unchanged. Source and hosted runtime qualification are required before activation.
 
