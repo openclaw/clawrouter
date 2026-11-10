@@ -79,11 +79,11 @@ test('fixed controls receive identical supplied context without invoking or budg
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-for (const policy of ['edit-handoff', 'edit-handoff-bounded']) test(`${policy} routes both workers within the same allowance`, async () => {
+test('edit handoff routes the initial worker to strong and the successor to cheap within the same allowance', async () => {
   const { root, options } = await fixture();
   try {
     const seen = [];
-    const state = await runPairBenchmark({ ...options, policy, grade, fetcher: success,
+    const state = await runPairBenchmark({ ...options, policy: 'edit-handoff', grade, fetcher: success,
       agent: async (_task, _image, strategy, id, settings, invoke, _engine, agentOptions) => {
         seen.push({ strategy, settings, agentOptions });
         await invoke(id, roles.strong, body, signal);
@@ -94,10 +94,9 @@ for (const policy of ['edit-handoff', 'edit-handoff-bounded']) test(`${policy} r
     assert.deepEqual(state.calls.map(call => call.model), [config.cheap, config.strong, config.strong, config.cheap]);
     assert.equal(seen[2].strategy, 'handoff');
     assert.equal(seen[2].settings.maxTurns, config.maxCalls);
-    assert.deepEqual(seen[2].agentOptions, { preloadSource: true, handoffAfterEdit: true,
-      ...(policy === 'edit-handoff-bounded' ? { handoffMaxTurns: Math.min(3, config.maxCalls - 1) } : {}) });
+    assert.deepEqual(seen[2].agentOptions, { preloadSource: true, handoffAfterEdit: true });
     assert.deepEqual(seen.slice(0, 2).map(row => row.agentOptions), [{ preloadSource: true }, { preloadSource: true }]);
-    assert.equal(state.policy, policy);
+    assert.equal(state.policy, 'edit-handoff');
     assert.equal(state.records[2].handoffUsed, true);
     assert.equal(analyzePairRun(state).candidateModelUse.mixedAttempts, 1);
   } finally { await rm(root, { recursive: true, force: true }); }

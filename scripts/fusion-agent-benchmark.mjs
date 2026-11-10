@@ -149,9 +149,6 @@ export function actionFeedback(code, action, task) {
 
 export async function runAgent(task, image, strategy, trialId, config, invoke, engine, options = {}) {
   if (options.handoffAfterEdit !== undefined && (strategy !== 'handoff' || typeof options.handoffAfterEdit !== 'boolean')) throw new Error('invalid_edit_handoff');
-  if (options.handoffMaxTurns !== undefined && (options.handoffAfterEdit !== true
-    || !Number.isSafeInteger(options.handoffMaxTurns) || options.handoffMaxTurns < 1
-    || options.handoffMaxTurns > config.maxTurns)) throw new Error('invalid_handoff_turn_limit');
   const box = await sandbox(image), started = performance.now();
   const actions = [];
   let memory = '';
@@ -162,13 +159,12 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
   let selectedCandidate = null, candidatesCompared = false;
   let planUsed = false, reviewUsed = false, handoffUsed = false;
   let handoffReady = false;
-  let handoffTurns = 0;
   let outcome = 'turn_limit', escalated = false, forceEscalation = false, turns = 0, invalidActions = 0, toolMs = 0, publicPassed = false, adviserFailures = 0, truncationRetries = 0;
   const remaining = () => Math.max(1, config.deadlineMs - Math.ceil(performance.now() - started));
   const handoff = async () => {
     const files = await readSource(box, task.editPaths, remaining());
     messages.splice(2, messages.length - 2, { role: 'user', content:
-      `You are taking over an attempted repair. Independently inspect and test the current source against the task. Do not trust the predecessor's conclusion; preserve correct changes and repair remaining defects.${options.handoffMaxTurns === undefined ? '' : ` You have at most ${options.handoffMaxTurns} actions; prioritize unresolved requirements and finish when ready.`}\nPrevious notes (unverified):\n${memory}\nCurrent source:\n${JSON.stringify(files)}` });
+      `You are taking over an attempted repair. Independently inspect and test the current source against the task. Do not trust the predecessor's conclusion; preserve correct changes and repair remaining defects.\nPrevious notes (unverified):\n${memory}\nCurrent source:\n${JSON.stringify(files)}` });
     memory = ''; handoffUsed = true;
     actions.push({ turn: turns + 1, action: 'handoff', status: 'ok' });
   };
@@ -200,7 +196,6 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
     }
     for (; outcome !== 'budget' && turns < config.maxTurns; turns++) {
       if (deadline.aborted) { outcome = 'deadline'; break; }
-      if (handoffUsed && options.handoffMaxTurns !== undefined && handoffTurns >= options.handoffMaxTurns) { outcome = 'handoff_limit'; break; }
       if (strategy === 'handoff' && !handoffUsed && (options.handoffAfterEdit === true
         ? handoffReady : turns >= Math.max(1, Math.floor(config.maxTurns * 2 / 3)))) await handoff();
       const model = strategy === 'handoff' && handoffUsed ? models.critic : executorModel(strategy, turns, forceEscalation);
@@ -209,7 +204,6 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
       const context = agentContext(messages, memory);
       let response;
       try {
-        if (handoffUsed) handoffTurns++;
         let request = bodyFor(context, config);
         if (strategy === 'panel') {
           const fusion = engine.normalizeFusionConfig({ enabled: true, strategy: 'ensemble', aggregatorModel: model,

@@ -11,7 +11,7 @@ import { runContractAgent, runSingleDraft, runRefinedDraft } from './fusion-cont
 export const pairDefaults = Object.freeze({ cheap: 'openai/gpt-6-luna', strong: 'openai/gpt-6.1-sol',
   maxCalls: 12, outputTokens: 8192, deadlineMs: 300000, trialBudgetMicros: 1000000,
   campaignBudgetMicros: 100000000, priorCostMicros: 0 });
-const strategies = ['cheap', 'strong', 'architect', 'edit-handoff', 'edit-handoff-bounded'];
+const strategies = ['cheap', 'strong', 'architect', 'edit-handoff'];
 const providedPolicies = ['contract-provided', 'contract-draft', 'contract-refine', 'contract-provided-cheap', 'contract-provided-strong'];
 const contractPolicies = ['contract', 'contract-cheap', 'contract-strong', 'contract-private', ...providedPolicies];
 
@@ -40,14 +40,14 @@ export function pairModel(strategy, role, config) {
   if (['contract-strong', 'contract-provided-strong'].includes(strategy)) return config.strong;
   if (contractPolicies.includes(strategy)) return role === roles.cheap ? config.cheap : config.strong;
   if (!strategies.includes(strategy)) throw new Error('invalid_pair_strategy');
-  if (strategy.startsWith('edit-handoff')) return role === roles.critic ? config.cheap : config.strong;
+  if (strategy === 'edit-handoff') return role === roles.critic ? config.cheap : config.strong;
   return strategy === 'strong' || (strategy === 'architect' && role === roles.cheap) ? config.strong : config.cheap;
 }
 
 // One planner call is deducted from the same total call allowance as each control.
 export function pairExecution(strategy, config) {
   if (!strategies.includes(strategy)) throw new Error('invalid_pair_strategy');
-  return { strategy: strategy === 'architect' ? 'planned' : strategy.startsWith('edit-handoff') ? 'handoff' : 'strong',
+  return { strategy: strategy === 'architect' ? 'planned' : strategy === 'edit-handoff' ? 'handoff' : 'strong',
     settings: { maxTurns: config.maxCalls - Number(strategy === 'architect'),
       outputTokens: config.outputTokens, deadlineMs: config.deadlineMs } };
 }
@@ -55,7 +55,7 @@ export function pairExecution(strategy, config) {
 export async function runPairBenchmark({ repo, qualificationPath, taskManifest, out, sourceSha, config,
   cheapReasoning = 'none', cheapMaxCalls = 10, executor = 'interactive', preloadSource = false, policy = 'architect', includeControls = true, controlsOnly = false, env = process.env, fetcher = fetch, agent, contractAgent = runContractAgent, grade = verify, preflight = nativePins }) {
   if (!/^[a-f0-9]{40}$/.test(sourceSha ?? '')) throw new Error('exact_source_required');
-  if (!['architect', 'edit-handoff', 'edit-handoff-bounded', 'scope', ...contractPolicies].includes(policy)) throw new Error('invalid_pair_policy');
+  if (!['architect', 'edit-handoff', 'scope', ...contractPolicies].includes(policy)) throw new Error('invalid_pair_policy');
   if (!['interactive', 'single-draft'].includes(executor) || (executor === 'single-draft' && !providedPolicies.includes(policy))) throw new Error('invalid_pair_executor');
   agent ??= executor === 'single-draft' ? runSingleDraft : runAgent;
   if (typeof includeControls !== 'boolean' || typeof controlsOnly !== 'boolean'
@@ -149,8 +149,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
               { agent, ...(['contract-draft', 'contract-refine'].includes(policy) ? { cheapAgent: policy === 'contract-refine' ? runRefinedDraft : runSingleDraft } : {}), cheapMaxCalls, exposeProbe: policy !== 'contract-private', providedProbe: providedPolicies.includes(policy) ? task.reproducer : null })
             : await agent(providedPolicies.includes(policy) ? withReproducer(task, task.reproducer) : task,
               receipt.image, execution.strategy, trialId, execution.settings, invoke(selectedStrategy), undefined,
-              { preloadSource, ...(strategy.startsWith('edit-handoff') ? { handoffAfterEdit: true } : {}),
-                ...(strategy === 'edit-handoff-bounded' ? { handoffMaxTurns: Math.min(3, config.maxCalls - 1) } : {}) });
+              { preloadSource, ...(strategy === 'edit-handoff' ? { handoffAfterEdit: true } : {}) });
           const verdict = await grade(task, receipt.image, result.files, repo);
           const { files, ...trace } = result;
           Object.assign(row, { ...trace, verdict, score: Number(verdict.passed && verdict.tests === receipt.oracleTests

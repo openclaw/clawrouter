@@ -407,14 +407,6 @@ tests selects a handoff point; it does not certify correctness. Independent
 acceptance still scores the final patch. This policy is experimental and needs
 matched quality, cost and latency measurements; the default remains `architect`.
 
-`FUSION_PAIR_POLICY=edit-handoff-bounded` gives the successor at most three
-actions, within the same total allowance (or fewer if the total is smaller).
-The successor can inspect, test or repair. Exhausting its window returns the
-current patch with outcome `handoff_limit`; it does not claim submission or
-successful verification. Failed visible checks remain failures, and independent
-acceptance still determines the score. Compare this stopping rule against fresh
-fixed controls before treating fewer verification calls as an improvement.
-
 Run from a committed task checkout with qualified workload receipts and an
 explicit JSON configuration. Only credentials for the selected models are
 required. Supply credentials through the existing secret injector; do not put
