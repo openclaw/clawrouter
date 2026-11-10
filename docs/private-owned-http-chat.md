@@ -550,8 +550,17 @@ registration. Its root vector retains failed records; joined successes clear
 their vector cells and registrations before parser reuse. This representation
 change does not add source credit, common funding or CONTROL capacity.
 
+A codec delivery failure is recorded at its original operation. The fixed
+codec retains the exact bounded failure it publishes; the proxy retains the
+actual returned-body identity. A downstream native read may forward that
+failure only with this body lineage and the original native read method.
+Foreign or post-native wrapper failures remain independent origins. No foreign
+aggregate is inspected. These three additional owner fields and the bounded
+predicate frames belong to CONTROL, not passive DATA. Their aliases clear at
+actual request retirement; the complete overlap is still unqualified.
+
 Additional authored witnesses use the real compiled entry and SQLite authority:
-16 Node cases, 15 native cases, and one Venice invocation in the existing pinned
+19 Node cases, 18 native cases, and one Venice invocation in the existing pinned
 OpenClaw UNIFIED client fixture. They include accepted/rejected structural and
 wire edges, escaped Unicode, raw duplicate/unknown preservation, more than 2 MiB
 of SSE, JSON delivery while archive work is held, and post-native held

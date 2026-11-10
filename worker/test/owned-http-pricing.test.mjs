@@ -86,16 +86,19 @@ async function fixture(t, run, retained = false, variant = 'fireworks') {
       return stub.fetch(url, init);
     } };
   };
-  let upstreamGate, veniceWire, veniceFault;
+  let upstreamGate, veniceWire, veniceFault, veniceStreaming = false;
   t.mock.method(globalThis, 'fetch', async (input, init) => {
     const request = new Request(input, init);
     if (upstreamGate) { upstreamGate.entered.resolve(); await take(own(upstreamGate.release.promise)); }
     const text = await take(own(request.text())); sent.push({ text, method: request.method, url: request.url });
     if (variant === 'venice') {
-      const response = accessBytesResponse(veniceWire, '', { headers: {
-        'content-type': 'application/json', 'content-length': String(Buffer.byteLength(veniceWire)),
+      const headers = {
+        'content-type': veniceStreaming ? 'text/event-stream' : 'application/json', 'content-length': String(Buffer.byteLength(veniceWire)),
         etag: 'fixture-etag', digest: 'fixture-digest', 'content-md5': 'fixture-md5',
-      } });
+      };
+      const response = veniceStreaming ? new Response(new ReadableStream({ type: 'bytes', start(controller) {
+        controller.enqueue(new TextEncoder().encode(veniceWire)); controller.close();
+      } }), { headers }) : accessBytesResponse(veniceWire, '', { headers });
       if (!veniceFault) return response;
       const fault = veniceFault, body = response.body;
       const observed = new Proxy(body, { get(target, key) {
@@ -104,7 +107,7 @@ async function fixture(t, run, retained = false, variant = 'fireworks') {
           return new Proxy(reader, { get(current, name) {
             if (name === 'read') return (...args) => {
               fault.read++; const original = Reflect.apply(current.read, current, args);
-              return original.then(() => { fault.readSettled++; throw fault.reason; });
+              return original.then(value => { fault.readSettled++; if (fault.read > fault.afterReads) throw fault.reason; return value; });
             };
             if (name === 'cancel') return (...args) => {
               fault.cancel++; const original = Reflect.apply(current.cancel, current, args);
@@ -144,10 +147,10 @@ async function fixture(t, run, retained = false, variant = 'fireworks') {
     await take(own(putGrantCredentials(env, activeGrantKey, { provider: variant, enabled: true, kind: 'api_key', credential: 'fixture-upstream-key' })));
     calls.length = 0;
     await run({ env, calls, sent, events, own, take, request, dispatch, drain, releases, bodyRoot, retirements,
-      veniceResponse(wire) { assert.equal(variant, 'venice'); veniceWire = wire; },
-      failVeniceSource(reason) {
+      veniceResponse(wire, streaming = false) { assert.equal(variant, 'venice'); veniceWire = wire; veniceStreaming = streaming; },
+      failVeniceSource(reason, afterReads = 0) {
         assert.equal(variant, 'venice'); assert.equal(veniceFault, undefined);
-        veniceFault = { reason, read: 0, readSettled: 0, cancel: 0, cancelSettled: 0, unlock: 0, entered: deferred(), release: deferred() };
+        veniceFault = { reason, afterReads, read: 0, readSettled: 0, cancel: 0, cancelSettled: 0, unlock: 0, entered: deferred(), release: deferred() };
         releases.push(() => veniceFault.release.resolve()); return veniceFault;
       },
       failMaterialization() { rejectMaterialize = true; },
@@ -371,32 +374,46 @@ test('owned Venice JSON publication does not retire a held ORIGINAL archive', as
   }, true, 'venice');
 });
 
-for (const kind of ['undefined', 'shared', 'huge'])
-test('owned Venice first observers retain independent origins without retaining ' + kind + ' rejection data', async t => {
+for (const streaming of [false, true]) for (const kind of ['undefined', 'shared', 'huge'])
+test('owned Venice ' + (streaming ? 'delivered SSE' : 'JSON') + ' first observers retain independent origins without retaining ' + kind + ' rejection data', async t => {
   let reasonReads = 0;
   const opaque = {};
   for (const key of ['message', 'stack', 'cause', 'errors', 'code', 'status'])
     Object.defineProperty(opaque, key, { get() { reasonReads++; throw new Error('raw fixture reason observed'); } });
   const reason = kind === 'undefined' ? undefined : kind === 'huge' ? 'x'.repeat(17 * 1024 * 1024) : opaque;
   await fixture(t, async f => {
-    f.veniceResponse('{"model":"' + veniceUpstream + '","choices":[]}');
-    const gate = f.failVeniceSource(reason), dispatch = f.dispatch(payload({ model: veniceModelId }));
-    await f.take(f.own(Promise.race([gate.entered.promise, dispatch.outcome.then(outcome => {
+    const json = '{"model":"' + veniceUpstream + '","choices":[]}';
+    f.veniceResponse(streaming ? 'data: ' + json + '\n\ndata: [DONE]\n\n' : json, streaming);
+    const gate = f.failVeniceSource(reason, streaming ? 1 : 0), dispatch = f.dispatch(payload({ model: veniceModelId, ...(streaming ? { stream: true } : {}) }));
+    const progress = streaming ? f.own(dispatch.outcome.then(async outcome => {
+      if (outcome.failed) throw outcome.error;
+      const body = await f.bodyRoot(outcome.value).outcome;
+      if (body.failed) throw body.error;
+      throw new Error('codec body completed before original cancellation hold');
+    })) : undefined;
+    await f.take(f.own(Promise.race([gate.entered.promise, (progress ?? dispatch).outcome.then(outcome => {
       if (outcome.failed) throw outcome.error;
       throw new Error('codec returned before original cancellation hold');
     })])));
-    assert.equal(gate.read, 1); assert.equal(gate.readSettled, 1);
+    assert.equal(gate.read, streaming ? 2 : 1); assert.equal(gate.readSettled, streaming ? 2 : 1);
     assert.equal(gate.cancel, 1); assert.equal(gate.cancelSettled, 1); assert.equal(gate.unlock, 0);
     assert.ok(bodyBudgetCharged() > 32 * 1024 * 1024); assert.equal(reasonReads, 0);
     gate.release.resolve();
-    const response = await f.take(dispatch), text = await f.take(f.bodyRoot(response)); await f.drain();
+    const response = await f.take(dispatch);
+    let text, bodyFailed = false, bodyFailure;
+    try { text = await f.take(f.bodyRoot(response)); } catch (error) { bodyFailed = true; bodyFailure = error; }
+    if (progress) try { await f.take(progress); } catch { /* same memoized body origin, asserted below */ }
+    await f.drain();
     const terminalFailures = [];
     for (const root of f.retirements) {
       const outcome = await root.outcome;
       if (outcome.failed) try { await f.take(root); } catch (error) { terminalFailures.push(error); }
     }
     try {
-      assert.equal(response.status, 502); assert.equal(JSON.parse(text).error.code, 'provider_unavailable');
+      assert.equal(response.status, streaming ? 200 : 502);
+      assert.equal(bodyFailed, streaming);
+      if (streaming) assert.ok(bodyFailure instanceof AggregateError);
+      else assert.equal(JSON.parse(text).error.code, 'provider_unavailable');
       assert.equal(gate.unlock, 1); assert.equal(reasonReads, 0);
       assert.equal(terminalFailures.length, 1);
       assert.ok(terminalFailures[0] instanceof AggregateError);
@@ -408,7 +425,7 @@ test('owned Venice first observers retain independent origins without retaining 
       assert.equal(new Set(failures).size, 3, 'a shared original reason does not merge independent origins');
       assert.equal(f.sent.length, 1);
     } catch (validation) {
-      throw new AggregateError([...terminalFailures, validation], 'owned codec failure-consumer validation');
+      throw new AggregateError([...(bodyFailed ? [bodyFailure] : []), ...terminalFailures, validation], 'owned codec failure-consumer validation');
     }
   }, false, 'venice');
 });

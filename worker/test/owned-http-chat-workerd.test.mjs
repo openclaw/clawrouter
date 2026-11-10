@@ -43,7 +43,7 @@ async function fixture(t, run) {
     runtime = await take(own(startWorkerdFixture(directory, ownedHttpRouter, ownedHttpUpstream, { preventEviction: true, hotCache: true })));
     await take(own(seedOwnedHttpChat(runtime)));
     assert.equal((await request('https://fixture/fixture/grants', { method: 'POST' })).status, 204);
-    await run({ runtime, own, take, request, releases,
+    await run({ runtime, own, take, request, dispatch, body, releases,
       expectFailedRetirement(index) { assert.ok(Number.isSafeInteger(index) && index >= 0); failedRetirements.add(index); },
     });
   } catch (error) { hasPrimary = true; primary = error; }
@@ -298,18 +298,19 @@ test('native ' + kind + ' control keeps original read/cancel/unlock and funding 
   });
 });
 
-for (const reason of ['undefined', 'shared', 'huge'])
-test('native Venice codec joins independently failing original read/cancel/unlock after the post-native hold: ' + reason, { timeout: 120000 }, async t => {
+for (const streaming of [false, true]) for (const reason of ['undefined', 'shared', 'huge'])
+test('native Venice ' + (streaming ? 'delivered SSE' : 'JSON') + ' codec joins independently failing original read/cancel/unlock after the post-native hold: ' + reason, { timeout: 120000 }, async t => {
   await fixture(t, async f => {
-    const request = () => chat('venice', { model: ownedHttpControlModels.venice });
+    const request = () => chat('venice', { model: ownedHttpControlModels.venice, ...(streaming ? { stream: true } : {}) });
     assert.equal((await f.request('https://fixture/v1/chat/completions', request())).status, 200);
     const before = await settledState(f);
     const release = async () => { assert.equal((await f.request('https://fixture/fixture/control-read', { method: 'DELETE' })).status, 204); };
     f.releases.push(release); f.expectFailedRetirement(before.completed.length);
     assert.equal((await f.request('https://fixture/fixture/control-read', {
-      method: 'POST', body: JSON.stringify({ kind: 'provider', reason }),
+      method: 'POST', body: JSON.stringify({ kind: 'provider', reason, ...(streaming ? { afterReads: 1 } : {}) }),
     })).status, 204);
-    const original = f.request('https://fixture/v1/chat/completions', request()), root = f.own(original);
+    const dispatch = f.dispatch('https://fixture/v1/chat/completions', request());
+    const original = f.take(dispatch).then(async response => ({ response, text: await f.take(f.body(response)) })), root = f.own(original);
     let settled = false;
     const observer = f.own(original.then(() => { settled = true; }, () => { settled = true; }));
     let held;
@@ -320,22 +321,28 @@ test('native Venice codec joins independently failing original read/cancel/unloc
       await new Promise(resolve => setTimeout(resolve, 10));
     }
     assert.deepEqual(held.controlReads.at(-1), {
-      kind: 'provider', read: 1, readSettled: 1, cancel: 1, cancelSettled: 1, unlock: 0, released: false,
+      kind: 'provider', read: streaming ? 2 : 1, readSettled: streaming ? 2 : 1, cancel: 1, cancelSettled: 1, unlock: 0, released: false,
     });
     assert.ok(held.charged >= before.charged + 32 * 1024 * 1024);
     assert.equal(held.reasonReads, 0);
     await release();
-    const failed = await f.take(root); await f.take(observer);
-    assert.equal(failed.status, 502); assert.equal(JSON.parse(failed.text).error.code, 'provider_unavailable');
+    let failed, hasBodyFailure = false, bodyFailure;
+    try { failed = await f.take(root); } catch (error) { hasBodyFailure = true; bodyFailure = error; }
+    await f.take(observer);
+    const response = await f.take(dispatch);
+    try {
+      assert.equal(response.status, streaming ? 200 : 502); assert.equal(hasBodyFailure, streaming);
+      if (!streaming) assert.equal(JSON.parse(failed.text).error.code, 'provider_unavailable');
+    } catch (validation) { throw new AggregateError(hasBodyFailure ? [bodyFailure, validation] : [validation], 'codec public outcome'); }
     const after = await settledState(f);
     assert.deepEqual(after.controlReads.at(-1), {
-      kind: 'provider', read: 1, readSettled: 1, cancel: 1, cancelSettled: 1, unlock: 1, released: true,
+      kind: 'provider', read: streaming ? 2 : 1, readSettled: streaming ? 2 : 1, cancel: 1, cancelSettled: 1, unlock: 1, released: true,
     });
     assert.equal(after.reasonReads, 0); assert.equal(after.charged, before.charged);
     assert.deepEqual(after.completed.at(-1).origins, ['read', 'cancel', 'unlock'].map(origin => ({ origin, undefined: reason === 'undefined' })));
     assert.equal(count(after, 'authority', '/admission/resolve'), count(before, 'authority', '/admission/resolve'));
     assert.equal(count(after, 'credential', '/materialize'), count(before, 'credential', '/materialize'));
-    assert.equal(count(after, 'authority', '/authorization/snapshot'), count(before, 'authority', '/authorization/snapshot') + 1);
+    assert.equal(count(after, 'authority', '/authorization/snapshot'), count(before, 'authority', '/authorization/snapshot') + (streaming ? 2 : 1));
     assert.equal(JSON.parse((await f.request('https://fixture/fixture/upstream')).text).filter(row => row.id === 'venice').length, 2);
   });
 });

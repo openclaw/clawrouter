@@ -16,8 +16,8 @@ import { acceptOwnedGmiInspection, retireOwnedGmiRevalidation } from "./gmi-orga
 import { drainOwnedHttpIdentity, retireOwnedHttpConsumers, retireOwnedHttpIdentity, claimOwnedHttpRevalidationBacking,
   admitOwnedHttpRevalidationBacking, retireOwnedHttpRevalidationBacking, type OwnedHttpRevalidationBacking } from "./credential-preflight.ts";
 import { admitOwnedHttpCodecBacking, retireOwnedHttpCodecBacking } from "./credential-preflight.ts";
-import { retireOwnedHttpProxy, matchesOwnedHttpRevalidationInput, matchesOwnedHttpVeniceResponseInput } from "./proxy.ts";
-import { retireOwnedVeniceChatCodec, matchesOwnedVeniceRetirement, consumeOwnedVeniceChatResponse } from "./venice-chat-runtime.ts";
+import { retireOwnedHttpProxy, matchesOwnedHttpRevalidationInput, matchesOwnedHttpVeniceResponseInput, matchesOwnedHttpPublicBody } from "./proxy.ts";
+import { retireOwnedVeniceChatCodec, matchesOwnedVeniceRetirement, consumeOwnedVeniceChatResponse, matchesOwnedVeniceOutputBody, matchesOwnedVeniceOutputFailure } from "./venice-chat-runtime.ts";
 import { credentialPreflightHeader, credentialPreflightVersion, credentialPreflightPath, credentialPreflightNamespace } from "./credential-preflight-protocol.ts";
 
 // This entry is inactive until the named compiled HTTP adapter invokes it.
@@ -88,6 +88,7 @@ const sinkOriginBytes = 2048;
 const requestMetadataBytes = 4096 + 4096 + 2 * sinkOriginBytes;
 const uploadMetadataBytes = 4096;
 const originalReaderCancel = ReadableStreamDefaultReader.prototype.cancel;
+const originalReaderRead = ReadableStreamDefaultReader.prototype.read;
 let requests: WeakMap<OwnedHttpRequest, RequestOwner> | undefined;
 let uploads: WeakMap<OwnedHttpUpload, UploadOwner> | undefined;
 let failureOrigins: WeakMap<OwnedHttpFailureOrigin, FailureOwner> | undefined;
@@ -977,11 +978,21 @@ function ownHttpResponse(cap: OwnedHttpRequest, response: Response, publicBounda
                   const work = reader!.read();
                   return work.then(value => value, error => {
                     readRejected = true;
-                    const prior = publicBoundary ? ownedHttpFailureMetadata(error) : undefined;
+                    const originalRead = Object.getPrototypeOf(reader) === ReadableStreamDefaultReader.prototype
+                      && reader!.read === originalReaderRead && !Object.hasOwn(reader!, "closed");
+                    const forwarded = publicBoundary && matchesOwnedHttpPublicBody(cap, original!.body);
+                    const prior = forwarded && originalRead ? ownedHttpFailureMetadata(error) : undefined;
                     // Only this request's own closed inner boundary proves
                     // propagation. A foreign carrier or raw shared value is a
                     // distinct original and receives its own record.
-                    const propagated = prior && owner.sinkOrigins?.get(prior.ordinal) === error;
+                    let propagated = !!prior && owner.sinkOrigins?.get(prior.ordinal) === error;
+                    if (originalRead && (!publicBoundary || forwarded)) {
+                      for (const codec of owner.revalidations ?? []) {
+                        if ((forwarded || matchesOwnedVeniceOutputBody(codec, original!.body)) && matchesOwnedVeniceOutputFailure(codec, error)) {
+                          propagated = true; break;
+                        }
+                      }
+                    }
                     readCarrier = propagated ? error as object : rememberOwnedHttpFailure(reading, error);
                     throw readCarrier;
                   });

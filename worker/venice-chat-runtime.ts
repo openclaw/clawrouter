@@ -201,6 +201,7 @@ interface OwnedVeniceCodec {
   streaming: boolean; started: boolean; headersBytes: number;
   source?: OwnedVeniceSource; output?: Response; usage?: ValidatedNativeUsage;
   outputRetired?: Promise<void>; outputDone?: true;
+  outputFailure?: unknown; outputFailed?: true;
 }
 let ownedCodecs: WeakMap<OwnedHttpRevalidation, OwnedVeniceCodec> | undefined;
 let ownedCodecCount = 0;
@@ -227,6 +228,16 @@ function codecPhase(state: OwnedVeniceCodec, bytes: number, usage = 0): void {
 export function matchesOwnedVeniceUsage(cap: OwnedHttpRevalidation, response: Response, usage: ValidatedNativeUsage | undefined): boolean {
   const state = ownedCodecs?.get(cap); return !!state && state.output === response && state.usage === usage;
 }
+export function matchesOwnedVeniceOutputBody(cap: OwnedHttpRevalidation, body: ReadableStream<Uint8Array> | null): boolean {
+  return !!body && ownedCodecs?.get(cap)?.output?.body === body;
+}
+export function matchesOwnedVeniceOutputFailure(cap: OwnedHttpRevalidation, failure: unknown): boolean {
+  const state = ownedCodecs?.get(cap);
+  // This is the exact value published by our fixed codec, never a traversal of
+  // a foreign AggregateError. The caller independently proves forwarded body
+  // lineage and use of the original native reader method.
+  return !!state?.outputFailed && state.outputFailure === failure;
+}
 export function forwardOwnedVeniceUsage(cap: OwnedHttpRevalidation, http: OwnedHttpRequest, response: Response): void {
   const state = codecOwner(cap);
   if (state.output !== response) throw identityFailure("protocol");
@@ -242,6 +253,7 @@ export function retireOwnedVeniceChatCodec(cap: OwnedHttpRevalidation): void {
   state.source?.clear(); state.source = undefined; state.output = undefined; state.usage = undefined;
   state.native = undefined; state.binding = undefined;
   state.outputRetired = undefined; state.outputDone = undefined;
+  state.outputFailure = undefined; state.outputFailed = undefined;
   retireOwnedHttpVeniceBacking(cap); ownedCodecs!.delete(cap);
   if (!--ownedCodecCount) ownedCodecs = undefined;
 }
@@ -493,7 +505,9 @@ function ownedVeniceEvents(state: OwnedVeniceCodec, source: OwnedVeniceSource, r
     if (closed) return; closed = true;
     void source.finish("cancel").then(() => {
       pending = undefined; size = 0;
-      try { source.checkCleanup(true, error); } catch (failure) { if (!canceled) output.error(failure); }
+      try { source.checkCleanup(true, error); } catch (failure) {
+        if (!canceled) { state.outputFailed = true; state.outputFailure = failure; output.error(failure); }
+      }
     });
   };
   const body = new ReadableStream<Uint8Array>({
@@ -547,7 +561,9 @@ function ownedVeniceEvents(state: OwnedVeniceCodec, source: OwnedVeniceSource, r
               void source.finish("eof").then(() => {
                 pending = undefined; size = 0;
                 try { source.checkCleanup(); if (!canceled) controller.close(); }
-                catch (error) { if (!canceled) controller.error(error); }
+                catch (error) {
+                  if (!canceled) { state.outputFailed = true; state.outputFailure = error; controller.error(error); }
+                }
               });
               return;
             }

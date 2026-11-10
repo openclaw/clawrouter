@@ -142,6 +142,7 @@ interface OwnedProxyInvocation {
   nativeResponse?: Response;
   nativeSignal?: AbortSignal;
   nativeUsage?: import("./native-response.ts").ValidatedNativeUsage;
+  publicBody?: ReadableStream<Uint8Array> | null;
 }
 interface OwnedPreparationReceiver { owner: OwnedHttpRequest; fields?: OwnedPreparedFields }
 let ownedProxyInvocations: WeakMap<OwnedHttpRequest, OwnedProxyInvocation> | undefined;
@@ -154,6 +155,9 @@ export function matchesOwnedHttpVeniceResponseInput(cap: OwnedHttpRequest, attem
   const owner = ownedProxyInvocations?.get(cap);
   return !!owner && owner.nativeResponse === response && owner.nativeSignal === signal && owner.upload === attempt
     && owner.prepared !== undefined && ownedPreparedUploads?.get(owner.prepared) === attempt;
+}
+export function matchesOwnedHttpPublicBody(cap: OwnedHttpRequest, body: ReadableStream<Uint8Array> | null): boolean {
+  return !!body && ownedProxyInvocations?.get(cap)?.publicBody === body;
 }
 export function acceptOwnedHttpVeniceUsage(http: OwnedHttpRequest, codec: OwnedHttpRevalidation,
   response: Response, usage: import("./native-response.ts").ValidatedNativeUsage | undefined): void {
@@ -265,6 +269,7 @@ export function retireOwnedHttpProxy(cap: OwnedHttpRequest): void {
   const admission = invocation.admission;
   invocation.prepared = undefined; invocation.identity = undefined; invocation.selection = undefined;
   invocation.nativeResponse = undefined; invocation.nativeSignal = undefined; invocation.nativeUsage = undefined;
+  invocation.publicBody = undefined;
   invocation.admission = undefined; invocation.upload = undefined; invocation.attempts.length = 0;
   invocation.required = undefined; invocation.request = undefined as never; invocation.env = undefined as never; invocation.context = undefined as never;
   admission?.retireOwned();
@@ -1889,6 +1894,7 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
   outputHeaders.set("x-clawrouter-grant-lane", prepared.grantLane);
   if (grantFailover) outputHeaders.set("x-clawrouter-grant-failover", "1");
   outputHeaders.set("x-clawrouter-content-retention", music ? content ? "on; retention-days=30" : "off" : retentionRequired(auth, selection.capability) ? "on; retention-days=30" : "off");
+  if (owned) ownedProxyInvocations!.get(owned)!.publicBody = response.body;
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers: outputHeaders });
   } finally {
     if (completion) {

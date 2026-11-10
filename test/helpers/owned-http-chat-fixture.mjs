@@ -96,7 +96,7 @@ function observeControlRead(kind,path,original,signal){
     return new Proxy(reader,{get(object,key){
      if(key==='read')return(...args)=>{
       row.read++;const work=Reflect.apply(object.read,object,args);
-      return work.then(value=>{row.readSettled++;if(!failed){failed=true;throw reason;}return value;},error=>{row.readSettled++;throw error;});
+      return work.then(value=>{row.readSettled++;if(!failed&&row.read>(fault.afterReads??0)){failed=true;throw reason;}return value;},error=>{row.readSettled++;throw error;});
      };
      if(key==='cancel')return(...args)=>{
       row.cancel++;const work=Reflect.apply(object.cancel,object,args);
@@ -163,6 +163,7 @@ export default {...handler,async fetch(request,env,context){
  if(path==='/fixture/control-read'){
   if(request.method==='DELETE'){for(const row of controlReads)row.release?.();return new Response(null,{status:204});}
   const value=await request.json();if(!['authority','credential','provider'].includes(value.kind)||!['undefined','shared','huge','listener'].includes(value.reason))throw Error('fixture read shape');
+  if(value.afterReads!==undefined&&(value.kind!=='provider'||value.afterReads!==1||value.reason==='listener'))throw Error('fixture read phase');
   controlReadFault=value;return new Response(null,{status:204});
  }
  if(path==='/fixture/revalidation-change'){
