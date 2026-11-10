@@ -1129,13 +1129,15 @@ export function finishOwnedGenerationPrefetch(cap: OwnedGenerationPrefetch, perm
 // A batching boundary, not an acceptance/profile limit: unclaimed records keep
 // their own parents and funding for a subsequent originating-request flush.
 export const generationFlushCohortLimit = 4;
+// New phase-owner field: retained property-name occurrence plus boolean.
+const generationFlushPlanningBytes = 2 * "planning".length + 1;
 export interface GenerationPendingWork { drain(): Promise<void>; dispose(): void }
 export type GenerationFlushReceipt = Readonly<{ accepted: false; pending?: GenerationPendingWork } | { accepted: true; completed: Promise<void> }>;
 const generationFlushRejected: GenerationFlushReceipt = Object.freeze({ accepted: false });
 interface GenerationFlushOwner {
   slot?: GenerationSlot; env?: Env; parent?: IdentityGenerationBorrow; lease: GenerationConsumptionLease;
   counts: GenerationPendingCount[]; feedback: GenerationPendingFeedback[]; failures: unknown[];
-  original?: Promise<void>; completion?: Promise<void>; started: boolean; abandoned: boolean; pending?: GenerationPendingWork;
+  original?: Promise<void>; completion?: Promise<void>; started: boolean; abandoned: boolean; planning: boolean; pending?: GenerationPendingWork;
 }
 let generationPendingWork: WeakMap<GenerationPendingWork, GenerationFlushOwner> | undefined;
 let generationPendingCharge: GenerationConsumptionLease | undefined;
@@ -1179,13 +1181,13 @@ function newGenerationFlush(slot: GenerationSlot, env: Env, nextCount?: Generati
   nextFeedback?: GenerationPendingFeedback, pendingCap = false): GenerationFlushOwner {
   // Fixed claim cells, cursor flags and terminal failure products are CONTROL,
   // never passive scratch. All factories are covered before lists are built.
-  const lease = GenerationConsumptionLease.reserve(32768 + 512 * generationFlushCohortLimit);
+  const lease = GenerationConsumptionLease.reserve(32768 + generationFlushPlanningBytes + 512 * generationFlushCohortLimit);
   let parent: IdentityGenerationBorrow | undefined, prepared: GenerationFlushOwner | undefined;
   try {
     if (env.ACCESS_CONTROL !== slot.owner.binding) throw identityFailure("protocol");
     parent = newGenerationBorrow(slot);
     const owner: GenerationFlushOwner = { slot, env: { ACCESS_CONTROL: slot.owner.binding } as Env, parent, lease,
-      counts: [], feedback: [], failures: [], started: false, abandoned: false };
+      counts: [], feedback: [], failures: [], started: false, abandoned: false, planning: false };
     prepared = owner;
     claimGenerationFlush(owner, nextCount, nextFeedback);
     if (pendingCap) {
@@ -1225,10 +1227,8 @@ function claimGenerationFlush(owner: GenerationFlushOwner, nextCount?: Generatio
   // The retained observations fund their own graphs. This owner separately
   // funds the largest actual serialized outbound envelope plus the bounded
   // ACK/header/terminal component. Rows are sent sequentially, not batched.
-  let requestText = 0;
-  for (const record of counts) requestText = Math.max(requestText, generationCountWireUnits(record));
-  for (const record of feedback) requestText = Math.max(requestText, generationFeedbackWireUnits(record));
-  owner.lease.replace(32768 + 512 * generationFlushCohortLimit + 2 * requestText);
+  const requestText = planGenerationFlushWire(owner);
+  owner.lease.replace(32768 + generationFlushPlanningBytes + 512 * generationFlushCohortLimit + 2 * requestText);
   // Prospective ownership claims and cursor decisions precede the caller's
   // counter/runtime publication. Registration rejection reverses ONLY these
   // unstarted claims; it never drops the independently funded observations.
@@ -1241,20 +1241,42 @@ function claimGenerationFlush(owner: GenerationFlushOwner, nextCount?: Generatio
 }
 // Prospective serialization plans have no source-counter authority. They count
 // every escaped wire occurrence before authorityCall can allocate JSON text.
+function planGenerationFlushWire(owner: GenerationFlushOwner): number {
+  admitGenerationConsumptionFactories();
+  if (owner.started || owner.original || owner.planning) throw identityFailure("protocol");
+  // All four claimed rows/parents stay funded in the synchronous cohort row.
+  // SOURCE/READ/TERMINAL are exclusively assigned to this synchronous visitor;
+  // there is no original request, reader, ACK or cancellation for THIS cohort.
+  owner.planning = true;
+  try {
+    let text = 0;
+    for (const record of owner.counts) text = Math.max(text, generationCountWireUnits(record));
+    for (const record of owner.feedback) text = Math.max(text, generationFeedbackWireUnits(record));
+    return text;
+  } finally {
+    // Helpers return only scalars. Their plans, closures, descriptors and every
+    // recursion/cursor frame have returned or unwound before transport may start.
+    owner.planning = false;
+  }
+}
 function generationCountWireUnits(record: GenerationPendingCount): number {
-  const plan = identityPlan();
-  plan.object(0, root => root("records", undefined, () => plan.array(1, entry => entry(undefined,
-    () => plan.object(2, member => {
-      member("poolKey", record.poolKey); member("key", record.key); member("count", record.count); member("lastMs", record.lastMs);
-      // Fund the optional cursor even when the final fixed-cohort flag is false.
-      if (record.cursorKey) member("cursorKey", record.cursorKey);
-    })))));
-  return plan.counts.text;
+  let plan: ReturnType<typeof identityPlan> | undefined = identityPlan();
+  try {
+    plan.object(0, root => root("records", undefined, () => plan!.array(1, entry => entry(undefined,
+      () => plan!.object(2, member => {
+        member("poolKey", record.poolKey); member("key", record.key); member("count", record.count); member("lastMs", record.lastMs);
+        // Fund the optional cursor even when the final fixed-cohort flag is false.
+        if (record.cursorKey) member("cursorKey", record.cursorKey);
+      })))));
+    return plan.counts.text;
+  } finally { plan = undefined; }
 }
 function generationFeedbackWireUnits(record: GenerationPendingFeedback): number {
-  const plan = identityPlan();
-  plan.object(0, member => { member("key", record.key); member("state", record.value); });
-  return plan.counts.text;
+  let plan: ReturnType<typeof identityPlan> | undefined = identityPlan();
+  try {
+    plan.object(0, member => { member("key", record.key); member("state", record.value); });
+    return plan.counts.text;
+  } finally { plan = undefined; }
 }
 function restoreGenerationClaims(owner: GenerationFlushOwner): void {
   for (const record of owner.counts) if (record.claim === owner) { record.claim = undefined; record.inflight = false; }
@@ -1308,7 +1330,7 @@ function commitGenerationSchedule(owner: GenerationFlushOwner): GenerationFlushR
 }
 function startGenerationFlush(owner: GenerationFlushOwner, delayed: boolean): Promise<void> {
   const slot = owner.slot!;
-  if (owner.started || owner.abandoned) throw identityFailure("protocol");
+  if (owner.started || owner.abandoned || owner.planning) throw identityFailure("protocol");
   // Validate ALL references before the first claim effect. This is synchronous
   // with publication of nextCount/nextFeedback; no borrowed callback runs here.
   for (const record of owner.counts) if (record.claim !== owner || !record.inflight || slot.counters?.get(record.id) !== record) throw identityFailure("protocol");

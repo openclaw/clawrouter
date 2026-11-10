@@ -103,7 +103,7 @@ qualification must verify the ceilings against the actual call paths.
 | Runtime/pending copies | Independent merge-sized backing and key/owner cells; shared observation `W + 4K + 4R + 1024`, pending `W + 4K + 512` | Shared replacement/authority-partition retirement or pending original flush settlement |
 | Matching runtime view | `4096 + sum(W(candidate, observation) + 4K + 128)` reserved before each copied value/key | Last synchronous selection/profile consumer |
 | Pending count | `4096 + 8*poolKeyUnits + 6*grantKeyUnits + 2*cursorUnits` | Original flush settlement |
-| Fixed cohort | `32768 + 512*4 + 2*T` bytes, with `T` the maximum prospectively planned escaped outbound text of the fixed rows; owner/claims/ACK/terminal products are distinct from retained records; factory closure still required | Original ACK acquisition/read/cancel/unlock settlement |
+| Fixed cohort | `32768 + 17 + 512*4 + 2*T` bytes, with `T` the maximum prospectively planned escaped outbound text of the fixed rows; owner/claims/ACK/terminal products are distinct from retained records; factory closure still required | Original ACK acquisition/read/cancel/unlock settlement |
 | Hint | 1024 bytes plus a lazy 512-byte registry owner | Replacement/disposal |
 | Private credential acquisition | Full 33554432-byte temporary component plus prospective ID/configuration guard | Original materialization, publication decision and all alias cleanup |
 | Private credential index | Root, authority and credential-binding partition: 2048 bytes/64 fields each; entry: `2048 + 4*I` bytes/64 fields | Last publication, active loader and retained value |
@@ -119,7 +119,7 @@ entry, value and string-unit counts. No source-counter credit funds new copies.
 entry guard runs before consuming factories. It neither reuses a promoted
 ticket's zero balance nor treats the prior 715-slot table as spare credit.
 All four 128-slot windows remain reserved. The repaired source inventory has a
-synchronous peak of 503, giving `512 + 503 = 1015 <= 1024`. This is a new
+synchronous peak of 499, giving `512 + 499 = 1011 <= 1024`. This is a new
 candidate inventory, not carried source qualification or unused-slot credit.
 These are conservative application product/field
 ceilings, not JS sizes. The table is submitted for source qualification.
@@ -127,9 +127,9 @@ ceilings, not JS sizes. The table is submitted for source qualification.
 | Window | Ceiling | Included original products |
 | --- | ---: | --- |
 | Operation | 113 / 128 | Entry/run/followers, registration, own publication polling, actual materialize/fetch, private index/borrow/adoption, receipt and failure products |
-| Source | 125 / 128 | Acquisition, response/reader, InputRetirement, headers, wire/decoder, 24 parser frames and 48 descriptors |
-| Read | 32 / 128 | Original read, input promise/finally, pull/await, whole backings/views, wire copy and ACK propagation |
-| Terminal | 125 / 128 | FIRSTcancel/read/allSettled, unlock/UNKNOWN, publication-finally, private value/index/borrow retirement, child/ancestor cleanup and independent origins |
+| Source | 125 transport; 122 planning / 128 | Acquisition, response/reader, InputRetirement, headers, wire/decoder, 24 parser frames and 48 descriptors |
+| Read | 32 transport; 115 planning / 128 | Original read, input promise/finally, pull/await, whole backings/views, wire copy and ACK propagation |
+| Terminal | 125 transport; 115 planning / 128 | FIRSTcancel/read/allSettled, unlock/UNKNOWN, publication-finally, private value/index/borrow retirement, child/ancestor cleanup and independent origins |
 
 Each synchronous phase includes 145 persistent products: foundation roots 35,
 coverage/slot/receipt fields 11, authentication owner/lease/parent/capability 53,
@@ -144,7 +144,7 @@ not another grant of slots.
 | Selection/configuration/copy/overlay planning | 294 | 439 |
 | Matching runtime view before selection | 120 | 265 |
 | Runtime merge/generated timestamps/copy/replacement | 306 | 451 |
-| Fixed cohort claim/commit/terminal inventory | 358 | 503 |
+| Fixed cohort claim/commit/terminal inventory | 335 | 480 |
 | Prefetch acquisition, including existing current/adopted values | 354 | 499 |
 | Prefetch publication, including adopted/old-current/new values | 339 | 484 |
 | Destination borrow/provenance/adoption | 259 | 404 |
@@ -169,12 +169,14 @@ borrower contract or move execution objects into passive DATA.
 
 The four claimed records are execution owners:
 `4 * (12 record/fields + 5 lease/charge + 28 borrower/funding + 4 ownership Map
-cells + 1 claim cell) = 200`. They are not passive DATA. The remaining 158 cover
-cohort owner/parent/lease 46, arrays/receipt 6, caller plan/overlay/commit frames
-30, scan/cursor/validation frames 12, failure/aggregate/unwind products 28 and
-prospective envelope planning 24, and pending-cap/claim/rollback products 12.
+cells + 1 claim cell) = 200`. They are not passive DATA. The remaining 135 cover
+cohort owner/parent/lease/phase flag 47, arrays/receipt 6, caller plan/overlay/commit
+frames 30, scan/cursor/validation frames 12, failure/aggregate/unwind products 28
+and pending-cap/claim/rollback products 12. The complete prospective envelope
+visitor uses the exclusive idle windows described below; it is not a 24-product
+synchronous row.
 The cap reuses the same owner/arrays/parent at drain; it does not allocate an
-overlapping second 46-product cohort owner. Borrower terms include optional metadata
+overlapping second 47-product cohort owner. Borrower terms include optional metadata
 receipts. The immutable graph remains under its original owner, not a new clone.
 
 Rows outside the cohort remain independent funded pending owners. Four bounds
@@ -187,6 +189,51 @@ Sequential rows reuse reader products only after actual ACK retirement. Plans,
 scratch callbacks and traversals return before the next phase. Completed record
 aliases clear immediately; there is no retained read/promise history. Pending
 values, hints and accepted children retain parents until their last consumers.
+
+### Fixed-cohort envelope phase
+
+`planGenerationFlushWire` admits the complete alternative inventory before any
+`identityPlan` factory. It requires an unstarted owner with no original promise,
+sets that owner's `planning` flag, and plans the four already-retained rows
+sequentially. The SOURCE, READ and TERMINAL windows of THIS cohort have no
+transport, reader, cancellation or ACK at this point. Other cohorts keep their
+own funded owners; no foreign window is borrowed.
+
+At the unchanged complete depth24, the outer envelope uses `plan.object` and
+recursive `item` can visit object depths1..23, followed by a depth24 scalar or
+denial. Each live object may retain both an inert own `toJSON` data descriptor
+and the active child descriptor. Each descriptor is one object plus four fields
+(`value`, `writable`, `enumerable`, `configurable`): two separate **115-product**
+groups, assigned respectively to READ and TERMINAL. Neither group is 23 products.
+
+SOURCE has **122 products**: 24 item frames; 23 enumeration/array cursors; 25 for
+the seven-counter record (8), returned planner carrier (7), five methods and five
+closure environments; 16 envelope callbacks/environments; 16 enclosing caller,
+object/array and nested-callback frames (including the shallow count-envelope
+path); four simultaneous helper/intrinsic calls; and 14 limit/protocol error,
+constructor, brand and unwind products. Using the full complete-profile ceiling
+also covers the record-limited feedback path. The static entry guard checks all
+three alternative sums against their existing128 ceilings.
+
+The 480-product synchronous cohort row still includes all four claimed records,
+parents, claim lists and caller ownership while this visitor runs. This is an
+explicit alternative window assignment, not use of nine previously unused
+slots. The planner returns only a numeric text size. Its helper clears the plan
+reference in `finally`; all callbacks, cursors, descriptors and recursive frames
+return or unwind before `planning` clears. `startGenerationFlush` rejects a
+planning owner. Only after that boundary may registration start original
+transport, and the windows resume their transport/read/cleanup roles. A planning
+failure starts no original and keeps its error funded through abandonment.
+
+The new owner flag receives an additional prospective **17-byte** common debit
+(`2 * "planning".length + 1`) before the owner factory, in both initial and grown
+cohort charges. This adds funding, not capacity: the 32 MiB/1024 and common96MiB
+limits stay unchanged. No source-profile, depth or four-record batching limit is
+reduced. Node witnesses cover the reported14-level chain, the deepest accepted
+record chain15, and the complete-profile visitor ceiling23. Four live feedback
+records must all be visited before the first RPC. The native deep case retains
+four refused-registration owners, then verifies four actual feedback RPCs/SQL
+rows while joining every same-request blocker.
 
 ### DATA overlaps and admission order
 
@@ -206,8 +253,8 @@ indexes/records stay CONTROL even when they also require payload bytes.
 - Runtime separately owns work, local copy and pending copy. Added timestamp
   members are counted before merge, including overwritten candidates. Old local
   aliases clear before release; replaced inflight feedback stays with its original.
-- Flush funds `34816 + 2*T`, with `T <= 2097152` the largest prospectively planned
-  escaped envelope, at most 4229120 bytes. One row is in transport at a time.
+- Flush funds `34833 + 2*T`, with `T <= 2097152` the largest prospectively planned
+  escaped envelope, at most 4229137 bytes. One row is in transport at a time.
   The fixed portion includes two 4 KiB header sets, 128-byte ACK backings/text,
   parser and terminal metadata. Request records retain their separate funding.
 
@@ -378,8 +425,8 @@ requests, response bodies and release-first fixture control are joined.
 
 ## Authored qualification
 
-The source declares 45 focused Node cases, 16 named native modes plus one
-cross-request cohort scenario, and two host late-body cleanup cases. These are
+The source declares 48 focused Node cases, 19 named native modes plus one
+cross-request cohort scenario, and four host late-body/cleanup cases. These are
 authored counts, not executed results.
 
 The new Node fixture covers real SQLite and byte-KV generation hydration,
@@ -449,6 +496,24 @@ body root for every actual Response, including a late A after assertion failure.
 Release-first teardown joins the dynamically growing fetch/body roster before
 fixture disposal. Separate body/control failures preserve their occurrences even
 when their reasons are the same object or literal undefined.
+
+Native teardown now uses one fixture helper, shared verbatim with its host
+failure tests. It releases every gate first, independently catches pressure
+release, dynamically joins every original root, enrolls the explicit cleanup
+flush, and joins that root roster again. Only then may it reserve a new32MiB
+eviction capability while hint/provenance is still live. Every eviction and cap
+disposal has an independent catch. A pressure-release error, including undefined,
+cannot bypass joins or replace the primary-presence flag. UNKNOWN originals keep
+the join pending; no credit is released on a visibility timeout.
+
+Two actual native cases fail deliberately under pressure while an original read
+is held. Gate release and pressure release independently throw the same reason
+(undefined or one shared Error) after performing their real release. Teardown
+must observe EOF/unlock before eviction, preserve both occurrences and the
+primary, and return to the baseline debit. Host tests use the existing memoized
+Response-body roots to add independent late-body and eviction failures, proving
+that disposal still runs and no equal-reason occurrence disappears. These injected
+failures are fixture evidence, not claims about native physical retirement.
 
 The new authored cases cover originating A then later B/count parity, repeated
 late-debit refusal, live/fresh/revised/foreign-authority runtime observations,

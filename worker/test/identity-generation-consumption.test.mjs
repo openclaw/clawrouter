@@ -8,9 +8,10 @@ const { preflightCredential, releaseCredentialPreflight, prepareCredentialGenera
 const { GenerationMetadataCharge, preflightPayloadBytes, preflightControlSlots } = await import('../credential-preflight-arena.ts');
 const { bodyBudgetCharged, ExactBodyCharge, bodyBudgetBytes } = await import('../body-budget.ts');
 const { PrivateCacheReservation, privateCacheLimits, privateCacheCharged, setHotCacheClock } = await import('../hot-cache.ts');
-const { generationFactoryCharges, measureGenerationGraph, freezeGenerationGraph } = await import('../identity-generations.ts');
+const { generationFactoryCharges, generationConsumptionFactoryCharges, admitGenerationConsumptionFactories, measureGenerationGraph, freezeGenerationGraph } = await import('../identity-generations.ts');
 const { tryRunInBackground, BACKGROUND_WORK_LIMIT, HotCache } = await import('../hot-cache.ts');
-const { identitySourceBudget, isIdentityFailure, admitIdentity } = await import('../identity-admission.ts');
+const { identitySourceBudget, isIdentityFailure, admitIdentity, identityPlan } = await import('../identity-admission.ts');
+const { identityJsonProfiles } = await import('../access-json.ts');
 const digest = 'ab'.repeat(32), rotated = 'cd'.repeat(32);
 const credential = (secretSha256 = digest) => ({ enabled: true, secretSha256, policyId: 'bridge-policy', policyGeneration: 'legacy', principalId: null });
 const denied = error => isIdentityFailure(error) && error.status === 503;
@@ -497,6 +498,56 @@ test('fixed cohort cutoff retains every unclaimed observation and admits claims 
   assert.equal(f.db.prepare('SELECT SUM(selected_count) AS n FROM upstream_grant_selection').get().n, 41);
   const calls = f.trace.rpc.filter(path => path === '/grant-pools/record').length;
   await f.take(f.own(flushCredentialGenerationRuntime(auth, f.env))); assert.equal(f.trace.rpc.filter(path => path === '/grant-pools/record').length, calls);
+  release.resolve(); for (const root of blockers) await f.take(root);
+}));
+
+function inertJsonChain(levels) {
+  let value = { toJSON: null, leaf: 'fixture-deep-value' };
+  for (let i = 1; i < levels; i++) value = { toJSON: null, next: value };
+  return value;
+}
+test('cohort envelope alternate windows fund the full complete-profile visitor and descriptor fields', () => {
+  const table = generationConsumptionFactoryCharges, depth = identityJsonProfiles.complete.depth;
+  const sum = row => Object.values(row).reduce((total, value) => total + value, 0);
+  admitGenerationConsumptionFactories();
+  assert.equal(table.cohortPlanSource.recursiveItemFramesIncludingDeepestScalarOrFailure, depth);
+  assert.equal(table.cohortPlanRead.inertToJsonDescriptorObjectsAndFourFields, 5 * (depth - 1));
+  assert.equal(table.cohortPlanTerminal.activeChildDescriptorObjectsAndFourFields, 5 * (depth - 1));
+  for (const row of [table.cohortPlanSource, table.cohortPlanRead, table.cohortPlanTerminal]) assert.ok(sum(row) <= 128);
+  const plan = identityPlan(); plan.object(0, field => field('state', inertJsonChain(depth - 1)));
+  assert.equal(plan.counts.containers, depth); // Root envelope + deepest accepted chain.
+  assert.throws(() => identityPlan().object(0, field => field('state', inertJsonChain(depth))), capacity);
+});
+
+for (const levels of [14, identityJsonProfiles.record.depth - 1]) test('four live deep feedback records are fully planned before the first RPC: ' + levels, async t => fixture(t, async f => {
+  seedPool(f, 4); let borrow, auth, inPlan = false, inertDescriptors = 0, calls = 0;
+  const release = deferred(), blockers = [];
+  f.releases.push(() => { inPlan = false; release.resolve(); });
+  cleanupGenerations(f, [() => borrow?.dispose(), () => auth?.dispose()]);
+  borrow = await generation(f, poolInput()); auth = authenticateCredentialGeneration(borrow, f.env, { ...poolInput(), allConnections: false });
+  const state = { ...runtimeState('2026-01-03T00:00:00.000Z', 3), toJSON: null, extraUsage: inertJsonChain(levels) };
+  admitIdentity(state, 'record');
+  assert.throws(() => admitIdentity({ ...state, extraUsage: inertJsonChain(identityJsonProfiles.record.depth) }, 'record'), capacity);
+  for (let i = 0; i < BACKGROUND_WORK_LIMIT; i++) { const work = release.promise.then(() => undefined); blockers.push(f.own(work)); assert.equal(tryRunInBackground(() => work), true); }
+  const before = f.trace.rpc.length;
+  for (const token of ['a', 'b', 'g02', 'g03']) { const receipt = queueOwned(f, auth, 'oauth/bridge-policy/' + token, state); assert.equal(receipt.accepted, false); assert.ok(receipt.pending); }
+  assert.equal(f.trace.rpc.length, before); assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM upstream_grant_runtime').get().n, 0);
+  const descriptor = Object.getOwnPropertyDescriptor;
+  t.mock.method(Object, 'getOwnPropertyDescriptor', (value, key) => { const found = descriptor(value, key); if (inPlan && key === 'toJSON' && found?.value === null) inertDescriptors++; return found; });
+  const get = f.env.ACCESS_CONTROL.get;
+  t.mock.method(f.env.ACCESS_CONTROL, 'get', function(...args) { const stub = Reflect.apply(get, this, args); return { fetch(url, init) {
+    if (new URL(url).pathname === '/grant-pools/feedback') {
+      if (!calls) { assert.equal(inPlan, true); assert.ok(inertDescriptors >= 4 * (levels + 1)); inPlan = false; }
+      calls++; const envelope = JSON.parse(init.body); admitIdentity(envelope, 'complete');
+      let chain = envelope.state.extraUsage, seen = 0;
+      while (chain) { assert.equal(chain.toJSON, null); seen++; if (chain.next) chain = chain.next; else { assert.equal(chain.leaf, 'fixture-deep-value'); break; } }
+      assert.equal(seen, levels); assert.equal(envelope.state.toJSON, null);
+    }
+    return stub.fetch(url, init);
+  } }; });
+  inPlan = true; const flush = f.own(flushCredentialGenerationRuntime(auth, f.env));
+  await f.take(flush); assert.equal(calls, 4);
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM upstream_grant_runtime').get().n, 4);
   release.resolve(); for (const root of blockers) await f.take(root);
 }));
 

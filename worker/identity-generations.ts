@@ -238,13 +238,33 @@ export const generationConsumptionFactoryCharges = Object.freeze({
     // 4 * (record+11 fields, lease+exact charge 5, borrower+funding 28,
     // two ownership Map cells 4, one cohort list cell 1). Feedback is smaller.
     fourClaimedRecordsTheirParentsLeasesAndOwnershipCells: 200,
-    cohortOwnerFieldsLeaseExactChargeAndParent: 46,
+    cohortOwnerFieldsLeaseExactChargeAndParent: 47,
     twoClaimArraysFailureArrayAndReceipt: 6,
     simultaneousCallerPlanOverlayAndCommitFrames: 30,
     claimScanCursorDecisionAndValidationFrames: 12,
     independentFailureCellsAggregateAndUnwindFrames: 28,
-    prospectiveEnvelopePlanClosuresAndNestedFrames: 24,
     pendingCapFieldCapabilityWeakEntryClaimAndRollback: 12,
+  }),
+  // ALTERNATIVE occupancy of this cohort's otherwise idle SOURCE/READ/TERMINAL
+  // windows, never concurrent with transport. Root envelope uses plan.object;
+  // item depths 1..23 can hold both descriptors, then a depth-24 scalar/failure.
+  // Each data descriptor is ONE object plus value/writable/enumerable/configurable.
+  // The guard below and owner.planning boundary precede every planner factory.
+  cohortPlanSource: Object.freeze({
+    recursiveItemFramesIncludingDeepestScalarOrFailure: identityJsonProfiles.complete.depth,
+    liveOwnEnumerationOrArrayCursors: identityJsonProfiles.complete.depth - 1,
+    sevenCounterRecordReturnCarrierMethodsAndClosureEnvironments: 25,
+    envelopeFieldNestedCallbacksAndTheirEnvironments: 16,
+    // Count-envelope path also retains both nested object/array callbacks.
+    wireHelperClaimNewOwnerAndOriginatingNestedCallbackFrames: 16,
+    activeStringAddNumericOrDescriptorIntrinsicCalls: 4,
+    limitProtocolErrorBrandConstructorAndUnwindProducts: 14,
+  }),
+  cohortPlanRead: Object.freeze({
+    inertToJsonDescriptorObjectsAndFourFields: 5 * (identityJsonProfiles.complete.depth - 1),
+  }),
+  cohortPlanTerminal: Object.freeze({
+    activeChildDescriptorObjectsAndFourFields: 5 * (identityJsonProfiles.complete.depth - 1),
   }),
   prefetch: Object.freeze({
     capOwnerFieldsLeaseRegistryWeakEntryAndCapability: 24,
@@ -287,6 +307,7 @@ export function admitGenerationConsumptionFactories(): void {
   const sum = (table: Readonly<Record<string, number>>) => { let result = 0; for (const key in table) result += table[key]; return result; };
   const table = generationConsumptionFactoryCharges, persistent = sum(table.persistent);
   if (sum(table.operation) > 128 || sum(table.source) > 128 || sum(table.read) > 128 || sum(table.terminal) > 128
+    || sum(table.cohortPlanSource) > 128 || sum(table.cohortPlanRead) > 128 || sum(table.cohortPlanTerminal) > 128
     || persistent + Math.max(sum(table.coverage), sum(table.authentication), sum(table.selection), sum(table.runtime), sum(table.runtimeView), sum(table.cohort), sum(table.prefetch), sum(table.prefetchPublication), sum(table.destinationBorrow)) > 512) throw identityFailure("protocol");
 }
 
