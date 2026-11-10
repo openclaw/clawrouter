@@ -458,3 +458,18 @@ and report incomplete attempts and transport reservations. Do not tune against
 acceptance failures and then describe the same tasks as held out.
 
 Literal source inspection reports `queryMatched: false` with no replacement source when a query has no match. Search text is literal; use a shorter query or an explicit line number after a miss.
+
+
+## Accounting cleanup evaluation task
+
+`benchmarks/fusion/cleanup-error-workloads.json` adds a pinned real repair for
+reservation rollback diagnostics. Only `worker/accounting.ts` is editable.
+The original accounting tests are visible; final verification replaces that
+same test path with the repaired revision's extended suite in a fresh sandbox.
+Qualification must show the original tests pass both source revisions, the
+extended suite rejects the original, and the repaired source passes it.
+
+This task has not been used for model inference at introduction. It remains a
+development task; once used for tuning it cannot support an unseen validation
+claim. The supplied instruction is the behavioral contract, not access to the
+reference source or final tests. No model call belongs to fixture qualification.

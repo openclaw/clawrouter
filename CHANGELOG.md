@@ -46,6 +46,8 @@
 
 - Add three operational Fusion holdout candidates with supplied regression reproducers and independent acceptance suites.
 
+- Add a pinned Fusion evaluation task for reservation rollback and cleanup error preservation.
+
 - Preserve allowlisted Fusion provider error codes and parameter categories, and identify unknown-cost trial failures without storing provider text.
 - Add an experimental Fusion cascade for supplied, execution-qualified reproducers with equally informed fixed-model controls.
 
