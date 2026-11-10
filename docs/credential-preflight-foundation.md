@@ -55,7 +55,9 @@ Each DO instance has an independent 96 MiB arena. Its charge never funds a
 Worker ticket. The request, original KV reads, staged representation, final
 canonical decision and response producer remain in that DO ticket. Sending
 headers does not retire the response: its new byte producer releases only on
-actual EOF pull or cancellation. An unread response remains charged. The
+actual EOF pull or cancellation. A response whose producer has not completed
+remains charged; a caller leaving its response unread does not prove that the
+runtime has not already consumed the producer. The
 Worker independently joins transport acquisition, late response body, read,
 FIRST cancellation and unlock before it can shrink to a proof.
 
@@ -66,6 +68,59 @@ from application control slots. This is a policy accounting formula, not a JS
 object-size measurement. Full temporary expansion remains 32 MiB. No control
 object, native allocation, shared cache or DO-instance ledger disappears from
 its ledger merely because a string charge shrinks.
+
+## Native no-intake capacity denial
+
+The compound ticket covers admitted application components. If its reservation
+fails **before any input adoption, reader, read, parse or retained application
+borrower**, the native DO entrypoint retains the untouched incoming body. The
+existing error boundary returns the sanitized capacity 503 without acquiring
+another application owner. No cancellation escrow, extra control pool, queue,
+new acknowledgment or reduction from three full tickets is introduced.
+
+Native dispatch and the existing generic error-response scaffolding are outside
+the admitted compound-ticket component. They are not free. The 96 MiB ledger
+does not bound all concurrent native invocations, baseline error construction
+or native heap. The four precharged factory windows and synchronous inventory
+still apply to admitted operations; denial cannot borrow another held ticket's
+terminal window. A native resource failure is not a promise of a deliverable 503.
+
+`pnpm-lock.yaml` pins Workerd **1.20261021.1**. The source identities below are
+Git blob hashes at the exact `v1.20261021.1` tag, not rendered-page line numbers:
+
+| Native source | Exact blob | Relevant boundary |
+| --- | --- | --- |
+| [global-scope.c++](https://github.com/cloudflare/workerd/blob/v1.20261021.1/src/workerd/api/global-scope.c%2B%2B) | `a7f3dd7ccbd0472d61df11ee7bb4828a5480abe7` | Creates the request's `NeuterableInputStream`; attaches neutering to success/failure of the response `DeferredProxy.proxyTask`, including bidirectional proxying. |
+| [worker-entrypoint.c++](https://github.com/cloudflare/workerd/blob/v1.20261021.1/src/workerd/io/worker-entrypoint.c%2B%2B) | `b67c448fe0ea96e0a87800376ddfb2303bba1d4a` | Dispatches the global request handler for actors as well as Workers, then awaits the actual proxy task. |
+| [stream-utils.c++](https://github.com/cloudflare/workerd/blob/v1.20261021.1/src/workerd/util/stream-utils.c%2B%2B) | `cf539f5dfe42ca521d2d052abbeb356b3719ed6e` | Neutering replaces the inner stream pointer with an exception and cancels wrapped in-flight reads. |
+
+This boundary is actual response-proxy completion/failure, not handler return
+or response headers. It does not establish an original producer FIRSTcancel,
+unlock, physical retirement or heap reclamation. It cannot retire an acquired
+`PreflightSource`, a late body, an UNKNOWN lock or a Worker's outbound owner.
+Direct synthetic `owner.fetch(Request)` has no native entrypoint wrapper; its
+fixture must retain and join its own original-body cleanup.
+
+The same-DO native saturation witness starts three actual private preflights.
+Each invocation creates its own fixture gate before its original native KV
+acquisition, keeping all three 32 MiB DO tickets genuinely held. Separate fixture
+control requests signal pure gates only; they never read another request's
+native body or move I/O between request contexts. A fourth open fixture producer
+uses the real DO stub directly, bypassing the Worker's full-ticket capacity.
+It must receive the exact capacity 503 while the DO charge remains 96 MiB and
+the fourth operation adds no application intake, credential KV/SQL or seed.
+The fixture observes the original private intake method without touching the
+denied request body; zero entry plus the source order establishes zero parser
+or reader acquisition for that operation.
+
+Cleanup is established before dispatch. It closes the fixture-owned producer,
+releases every KV gate, joins original transports, response bodies and finite
+children, and releases every returned proof even after an earlier failure.
+Explicit primary presence and origin tracking preserve undefined and independent
+failures with shared reasons. The test drains the denied response but does not
+label that EOF a native proxy acknowledgment or producer-retirement receipt.
+All native assertions are authored only until fresh hosted execution qualifies
+this exact candidate.
 
 ## Data vector and phase maximum
 
