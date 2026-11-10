@@ -2,7 +2,7 @@ import { ExactBodyCharge } from "./body-budget.ts";
 import { identityFailure } from "./identity-admission.ts";
 import { ProxyCompletion } from "./proxy-completion.ts";
 import type { Env } from "./types.ts";
-import { retireOwnedHttpIdentity } from "./credential-preflight.ts";
+import { drainOwnedHttpIdentity, retireOwnedHttpIdentity } from "./credential-preflight.ts";
 import { retireOwnedHttpProxy } from "./proxy.ts";
 
 // This entry is inactive until the named compiled HTTP adapter invokes it.
@@ -214,6 +214,7 @@ export function finishOwnedHttpRequest(cap: OwnedHttpRequest): Promise<void> {
       upload.controller = undefined; upload.listener = undefined; upload.failures.length = 0;
       uploads!.delete(upload.cap);
     }
+    try { await drainOwnedHttpIdentity(cap); } catch (error) { failures.push(error); }
     if (!owner.unknown) {
       try { retireOwnedHttpProxy(cap); } catch (error) { failures.push(error); }
       try { retireOwnedHttpIdentity(cap); } catch (error) { failures.push(error); }

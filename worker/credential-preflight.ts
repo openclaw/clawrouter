@@ -21,7 +21,7 @@ import { credentialExpired } from "./credential-lifecycle.ts";
 import { safeEqual, sha256Hex, HttpError } from "./utils.ts";
 import { errorResponse } from "./utils.ts";
 import { markLocalError } from "./native-errors.ts";
-import { checkOwnedHttpRequest, growOwnedHttpRequest, ownedHttpCompletion, type OwnedHttpRequest } from "./http-identity-owner.ts";
+import { checkOwnedHttpRequest, growOwnedHttpRequest, holdOwnedHttpRequest, ownedHttpCompletion, type OwnedHttpRequest } from "./http-identity-owner.ts";
 import { admissionContinuationHeader, admissionContinuationVersion, admissionContinuationPath, closeAdmissionEnvelope, type AdmissionContinuationEnvelope, checkPreflightIdentity, credentialPreflightHeader, credentialPreflightNamespace,
   credentialPreflightPath, credentialPreflightVersion } from "./credential-preflight-protocol.ts";
 import { consumeAdmissionBridge, consumePreflightReply } from "./credential-preflight-source.ts";
@@ -167,8 +167,8 @@ export function selectOwnedHttpIdentity(cap: OwnedHttpRequest, request: Request,
     let selected: GenerationSelectionHandle | undefined;
     if (admitted.snapshots?.[provider.id]) {
       // A real empty snapshot is covered and must NOT invoke the legacy reader.
-      if (!recordSelection) throw identityFailure("protocol");
-      selected = selectCredentialGeneration(http.current!, env, selection);
+      selected = recordSelection ? selectCredentialGeneration(http.current!, env, selection)
+        : selectOwnedHttpSnapshotUnrecorded(auth, env, selection);
       if (!selected) throw identityFailure("protocol");
     } else {
       // The authority's completeness boundary returned authenticated admission
@@ -183,6 +183,67 @@ export function selectOwnedHttpIdentity(cap: OwnedHttpRequest, request: Request,
     else if (receipt.pending) http.pending.push(receipt.pending);
     return selected;
   });
+}
+
+// Nonrecording preparation must preserve the ordinary first-active choice;
+// neither the initial-selection receipt nor the local counter/cursor is consumed.
+function selectOwnedHttpSnapshotUnrecorded(auth: GenerationAuthenticationOwner, env: Env,
+  request: import("./authority-admission.ts").AdmissionSelection): GenerationSelectionHandle {
+  const slot = auth.slot, admission = slot.owner.admission!, snapshot = admission.snapshots![request.providerId];
+  const provider = providerSnapshot.providers.find(item => item.id === request.providerId)!;
+  const endpoint = provider.endpoints.find(item => item.id === request.endpointId)!;
+  const base = generationSelectionWorkingBytes(admission, request);
+  const work = GenerationConsumptionLease.reserve(base);
+  let view: ReturnType<typeof generationRuntimeView> | undefined, lease: GenerationConsumptionLease | undefined;
+  let result: import("./grant-eligibility.ts").GrantSelectionResult | undefined;
+  let states: Record<string, import("./types").GrantRuntimeState> | undefined;
+  let unpublished: GenerationSelectionHandle | undefined, hasPrimary = false, primary: unknown;
+  try {
+    view = generationRuntimeView(slot, request.providerId);
+    states = Object.create(null);
+    const pool = admission.pools[request.providerId];
+    for (const key in pool.states) if (Object.hasOwn(pool.states, key)) states![key] = view.values[key] ?? slot.advisory?.runtime.get(key) ?? pool.states[key];
+    for (const key of pool.keys) if (view.values[key] || slot.advisory?.runtime.has(key)) states![key] = view.values[key] ?? slot.advisory!.runtime.get(key)!;
+    result = selectGenerationAdmissionCandidate(env, { provider, endpoint, request, policy: admission.policy!,
+      poolKey: snapshot.poolKey, candidates: snapshot.candidates, states: states!,
+      identityHash: snapshot.identityHash, fallbackSessionHash: snapshot.fallbackSessionHash },
+      choice => ({ selectedKey: choice.candidates[0].key }), key => snapshot.revisions[key], (vector, run) => {
+        work.replace(base + admissionScratchBytes(vector));
+        try { return run(); } finally { work.replace(base); }
+      });
+    admitIdentity(result.selected, "record");
+    lease = GenerationConsumptionLease.reserve(generationSelectionPayload(result));
+    const copied = copyIdentity(result); freezeGenerationGraph(copied);
+    if (!generationSelections) { generationSelectionRegistryCharge = GenerationConsumptionLease.reserve(512); generationSelections = new WeakMap(); }
+    const owner: GenerationSelectionOwner = { auth, lease, result: copied, users: 1, prefetchProvider: provider };
+    const handle: GenerationSelectionHandle = Object.freeze({ dispose: disposeGenerationSelection, selected: generationSelected,
+      matchesKey: generationSelectedKey, hasConfiguredGrant: generationConfigured, flush: generationFlushRejected });
+    generationSelections.set(handle, owner); generationSelectionCount++; auth.children++;
+    unpublished = handle; lease = undefined; result = undefined; unpublished = undefined; return handle;
+  } catch (error) { hasPrimary = true; primary = error; throw error; }
+  finally {
+    result = undefined; states = undefined;
+    const failures: unknown[] = [];
+    try { unpublished?.dispose(); } catch (error) { failures.push(error); }
+    try { lease?.release(); } catch (error) { failures.push(error); }
+    try { if (view) { view.values = undefined as never; view.lease.release(); } } catch (error) { failures.push(error); }
+    try { work.release(); } catch (error) { failures.push(error); }
+    if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "owned HTTP nonrecording selection cleanup");
+  }
+}
+
+// The selected owner, not snapshot membership, proves the actual legacy key and
+// revision. Its independently held parent remains alive through pending writes.
+export function queueOwnedHttpSelectionRuntime(cap: OwnedHttpRequest, request: Request, env: Env,
+  selected: GenerationSelectionHandle, incoming: import("./types").GrantRuntimeState): void {
+  checkOwnedHttpRequest(cap, request, env);
+  const http = httpIdentities?.get(cap), owner = selectedOwner(selected), picked = owner.result?.selected;
+  if (!http || !http.selections.includes(selected) || !picked || owner.auth.slot.owner.binding !== env.ACCESS_CONTROL
+    || (incoming.grantRevision ?? null) !== grantRevision(picked.grant)) throw identityFailure("protocol");
+  growOwnedHttpRequest(cap, 4096); // retained receipt/list cells precede publication
+  const receipt = queueGenerationRuntime(owner.auth, picked.key, incoming);
+  if (receipt.accepted) ownedHttpCompletion(cap).start(() => receipt.completed);
+  else if (receipt.pending) http.pending.push(receipt.pending);
 }
 
 // The existing complete/record source profiles bound the retained KV graph.
@@ -332,11 +393,30 @@ async function selectOwnedHttpLegacy(cap: OwnedHttpRequest, request: Request, en
   }
 }
 
-export function sealOwnedHttpIdentity(cap: OwnedHttpRequest, request: Request, env: Env): void {
-  checkOwnedHttpRequest(cap, request, env);
+// Runs after delivery/accounting originals, outside their encompassing scope.
+// Each cap starts its own fixed cohort; no foreign scheduled promise is joined.
+export async function drainOwnedHttpIdentity(cap: OwnedHttpRequest): Promise<void> {
   const owner = httpIdentities?.get(cap);
   if (!owner) return;
-  for (const pending of owner.pending) ownedHttpCompletion(cap).start(() => pending.drain());
+  const failures: unknown[] = [];
+  for (let index = 0; index < owner.pending.length; index++) {
+    const pending = owner.pending[index];
+    let original: Promise<void> | undefined;
+    try {
+      original = pending.drain();
+      // The command consumed this cap. Its ORIGINAL cleanup now owns the parent.
+      owner.pending[index] = undefined as never;
+      void original.then(() => undefined, () => undefined);
+      await original;
+    } catch (error) {
+      if (generationPendingWork?.has(pending)) holdOwnedHttpRequest(cap);
+      failures.push(error);
+    } finally { original = undefined; }
+  }
+  let retained = 0;
+  for (const pending of owner.pending) if (pending) owner.pending[retained++] = pending;
+  owner.pending.length = retained;
+  if (failures.length) throw new AggregateError(failures, "owned HTTP pending cohort cleanup");
 }
 
 export function retireOwnedHttpIdentity(cap: OwnedHttpRequest): void {
@@ -1208,6 +1288,11 @@ export function queueCredentialGenerationRuntime(handle: GenerationAuthenticatio
   let covered = false;
   for (const provider of slot.coverage!.value.providers) if (slot.owner.admission!.pools[provider.id]?.keys.includes(key)) covered = true;
   if (!covered) throw identityFailure("protocol");
+  return queueGenerationRuntime(auth, key, incoming);
+}
+function queueGenerationRuntime(auth: GenerationAuthenticationOwner, key: string,
+  incoming: import("./types").GrantRuntimeState): GenerationFlushReceipt {
+  const slot = auth.slot;
   const frame = GenerationConsumptionLease.reserve(4096);
   let work: GenerationConsumptionLease | undefined, held: GenerationConsumptionLease | undefined;
   let runtimeRegistry: GenerationConsumptionLease | undefined;

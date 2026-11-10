@@ -62,3 +62,5 @@ failure origins, capacity before source factories, and native SSE-prefix deliver
 while cancellation remains held. They are not evidence that the full UNIFIED
 entry executes. Local dependency-backed semantics remain unrun; local checks
 are syntax and source checks only.
+
+The current local selection checkpoint also covers nonrecording projected choices without consuming the initial-selection receipt. Legacy feedback is admitted through the actual selected owner and its `grantRevision`, rather than inferred snapshot membership. Its pending fixed cohort drains in the originating HTTP finalizer after the other original roots settle. A cohort that cannot start remains owned and funded. Authored Node and native KV/SQLite witnesses cover count-once, nonrecording, mixed candidate order, and revision-isolated pending observations; execution is still pending hosted qualification.
