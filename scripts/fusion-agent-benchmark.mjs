@@ -148,6 +148,7 @@ export function actionFeedback(code, action, task) {
 }
 
 export async function runAgent(task, image, strategy, trialId, config, invoke, engine, options = {}) {
+  if (options.handoffAfterEdit !== undefined && (strategy !== 'handoff' || typeof options.handoffAfterEdit !== 'boolean')) throw new Error('invalid_edit_handoff');
   const box = await sandbox(image), started = performance.now();
   const actions = [];
   let memory = '';
@@ -157,6 +158,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
   messages[0].content += ' read and search accept existing FILE paths only: no directories, globs or shell commands. Leave search paths empty to search editable files. Search query is literal text, at most 200 characters. An edit action accepts 1–8 edits; each search must match exactly once in current source.';
   let selectedCandidate = null, candidatesCompared = false;
   let planUsed = false, reviewUsed = false, handoffUsed = false;
+  let handoffReady = false;
   let outcome = 'turn_limit', escalated = false, forceEscalation = false, turns = 0, invalidActions = 0, toolMs = 0, publicPassed = false, adviserFailures = 0, truncationRetries = 0;
   const remaining = () => Math.max(1, config.deadlineMs - Math.ceil(performance.now() - started));
   const handoff = async () => {
@@ -194,7 +196,8 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
     }
     for (; outcome !== 'budget' && turns < config.maxTurns; turns++) {
       if (deadline.aborted) { outcome = 'deadline'; break; }
-      if (strategy === 'handoff' && !handoffUsed && turns >= Math.max(1, Math.floor(config.maxTurns * 2 / 3))) await handoff();
+      if (strategy === 'handoff' && !handoffUsed && (options.handoffAfterEdit === true
+        ? handoffReady : turns >= Math.max(1, Math.floor(config.maxTurns * 2 / 3)))) await handoff();
       const model = strategy === 'handoff' && handoffUsed ? models.critic : executorModel(strategy, turns, forceEscalation);
       if (strategy === 'cascade' && model === models.strong) escalated = true;
       // Bound retained context consistently for every strategy; keep the task and latest tool feedback.
@@ -259,6 +262,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
           const files = await readSource(box, task.editPaths, remaining());
           await writeFiles(box, replaceEdits(task, files, action.edits), remaining());
           const result = await check(box, task.visibleTests, remaining()); publicPassed = result.passed;
+          if (publicPassed) handoffReady = true;
           messages.push({ role: 'user', content: `Visible tests passed: ${publicPassed}\n${result.feedback}` });
         } else if (action.action === 'test' || action.action === 'finish') {
           const result = await check(box, task.visibleTests, remaining()); publicPassed = result.passed;
