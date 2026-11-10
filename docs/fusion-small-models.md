@@ -396,6 +396,17 @@ same total calls available to each control. All calls and failed attempts count
 against the trial and campaign budgets. This is an experimental policy, not a
 claim of improvement.
 
+Set `FUSION_PAIR_POLICY=cheap-plan` to reverse the roles: one cheap planning
+call followed by the strong executor. The same total call, time and spending
+limits apply, including the planning call. Both fixed-model controls receive
+the same source-preload setting. The default remains `architect`.
+
+[Scaling Inference-Time Compute with Teams of Coding Agents](https://arxiv.org/abs/2610.17471)
+reports that cheap planners helped a strong lead on its long-horizon tasks,
+while cheap implementers reduced reward. This motivates the comparison;
+it does not validate this single-call planner or this model pair. Measure
+quality, total cost and latency before using either topology.
+
 Run from a committed task checkout with qualified workload receipts and an
 explicit JSON configuration. Only credentials for the selected models are
 required. Supply credentials through the existing secret injector; do not put
