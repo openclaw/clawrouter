@@ -166,6 +166,7 @@ for (const failedPreparation of [false, true]) test(`real owned token-priced dep
 const pricingCases = [
   ['escaped Unicode/numbers/own proto', () => { const extra = JSON.parse('{"__proto__":{"kept":true}}'); extra.quoted = 'a"\\\n\u0001'; extra.unicode = 'é😀\ud800x\udfff'; extra.numbers = [-0, 1e21, 1e-7, Infinity]; return { extra }; }],
   ['wide content and cache fields', () => ({ messages: [{ role: 'user', content: Array.from({ length: 4096 }, (_, index) => ({ type: 'text', text: String(index), extra: { cache_control: null } })) }] })],
+  ['scalar tool inventory and tagged unknown Chat data', () => ({ tools: Array.from({ length: 4096 }, (_, index) => index % 2 ? null : 'unknown'), input: [{ type: 'additional_tools', tools: [{ type: 'web_search' }] }] })],
   ['null media property is present', () => ({ messages: [{ role: 'user', content: [{ type: 'text', file_id: null }] }] })],
   ['media outside exact roots is ordinary text', () => ({ extra: { image_url: null, cache_control: { ttl: '5m' } } })],
   ['one-hour early return ignores larger five-minute rate', () => ({ extra: [{ cache_control: { ttl: '1h' } }, { cache_control: { ttl: '5m' } }] })],

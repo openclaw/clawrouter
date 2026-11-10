@@ -145,6 +145,10 @@ export function matchesOwnedHttpPricingInput(cap: OwnedHttpRequest, body: Record
     && selection.endpoint.request_format === "openai.chat_completions"
     && selection.endpoint.response_format === "openai.chat_completions";
 }
+export function ownedHttpHasToolPriceCard(cap: OwnedHttpRequest, body: Record<string, unknown>): boolean {
+  if (!matchesOwnedHttpPricingInput(cap, body)) throw identityFailure("protocol");
+  return !!ownedProxyInvocations!.get(cap)!.selection!.endpoint.toolPricing;
+}
 export function reserveOwnedHttpInitialPreparation(cap: OwnedHttpRequest, request: Request, env: Env): void {
   const invocation = ownedProxyInvocations?.get(cap);
   if (!invocation?.selection) throw identityFailure("protocol");

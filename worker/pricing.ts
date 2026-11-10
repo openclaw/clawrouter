@@ -12,7 +12,7 @@ import type { ToolPricing } from "./types";
 import type { XaiImageRequest } from "./xai-images.ts";
 import { ExactBodyCharge } from "./body-budget.ts";
 import { growOwnedHttpRequest, type OwnedHttpRequest } from "./http-identity-owner.ts";
-import { matchesOwnedHttpPricingInput } from "./proxy.ts";
+import { matchesOwnedHttpPricingInput, ownedHttpHasToolPriceCard } from "./proxy.ts";
 import { identityFailure } from "./identity-admission.ts";
 
 interface OwnedHttpPricingPlan {
@@ -21,22 +21,31 @@ interface OwnedHttpPricingPlan {
   media: boolean;
   hour: boolean;
   cache: boolean;
+  serializationBytes: number;
+  retentionBytes: number;
+  toolScratchBytes: number;
+  active: boolean;
+}
+interface OwnedHttpPricingWork extends OwnedHttpPricingPlan {
   queueCapacity: number;
   keyVectorBytes: number;
   slotBytes: number;
   mediaUnits: number;
   mediaSlots: number;
-  serializationBytes: number;
   graphBytes: number;
   maximumScalarUnits: number;
-  retentionBytes: number;
-  active: boolean;
 }
 let ownedPricing: WeakMap<OwnedHttpRequest, OwnedHttpPricingPlan> | undefined;
 let activeOwnedPricing: WeakMap<object, OwnedHttpPricingPlan> | undefined;
 let ownedPricingRegistry: ExactBodyCharge | undefined;
 let ownedPricingCount = 0;
 const ownedPricingMetadataBytes = 4096;
+// Existing accounting JSON profiles, expressed with the adopted DATA formula.
+// These fund copies/serialization; accounting API/visitor products are CONTROL.
+const ownedAccountingCapsuleBytes = 8 * (128 + 2 * 512 + 256 + 1024) + 2 * 32768;
+const ownedAccountingIntentBytes = 8 * (64 + 2 * 128 + 64 + 256) + 2 * 8192;
+const ownedAccountingBytes = 9 * ownedAccountingCapsuleBytes + 8 * ownedAccountingIntentBytes
+  + 4 * 3 * 16384 + 3 * 65536;
 
 // Only the compiled HTTP invocation's actual transformed Chat body can enter.
 // Preparation runs before admission/selection effects. A synchronous activation
@@ -44,10 +53,11 @@ const ownedPricingMetadataBytes = 4096;
 export function prepareOwnedHttpPricing(cap: OwnedHttpRequest, body: Record<string, unknown>): void {
   if (!matchesOwnedHttpPricingInput(cap, body) || ownedPricing?.has(cap)) throw identityFailure("protocol");
   growOwnedHttpRequest(cap, ownedPricingMetadataBytes + 8); // fixed products + ONE passive queue container
-  const plan: OwnedHttpPricingPlan = { body, bytes: 0, media: false, hour: false, cache: false, queueCapacity: 0,
+  const plan: OwnedHttpPricingWork = { body, bytes: 0, media: false, hour: false, cache: false, queueCapacity: 0,
     keyVectorBytes: 0, slotBytes: 8, mediaUnits: 0, mediaSlots: 0, serializationBytes: 0,
-    graphBytes: 0, maximumScalarUnits: 0, retentionBytes: 0, active: false };
+    graphBytes: 0, maximumScalarUnits: 0, retentionBytes: 0, toolScratchBytes: 0, active: false };
   const pending: object[] = [];
+  let retained: OwnedHttpPricingPlan | undefined;
   try {
     measureOwnedHttpJson(cap, plan, body, pending);
     const scan = plan.keyVectorBytes + plan.slotBytes;
@@ -63,6 +73,7 @@ export function prepareOwnedHttpPricing(cap: OwnedHttpRequest, body: Record<stri
     // descriptor, bounded record/key metadata, and the 32 KiB streaming path.
     // A later retain=false verdict never turns this credit into another owner.
     plan.retentionBytes = plan.graphBytes + 2 * plan.maximumScalarUnits + 81920 + 8192 + 262144;
+    plan.toolScratchBytes = ownedToolScratchBytes(body, ownedHttpHasToolPriceCard(cap, body), plan.bytes);
     plan.media = body.previous_response_id != null || body.conversation != null || body.prompt != null;
     if (!plan.media && body.input != null) plan.media = ownedContentHasMedia(cap, plan, body.input, pending);
     if (!plan.media && Array.isArray(body.messages)) {
@@ -83,9 +94,11 @@ export function prepareOwnedHttpPricing(cap: OwnedHttpRequest, body: Record<stri
       try { ownedPricing = new WeakMap(); activeOwnedPricing = new WeakMap(); ownedPricingRegistry = charge; }
       catch (error) { ownedPricing = undefined; activeOwnedPricing = undefined; charge.release(); throw error; }
     }
-    ownedPricing.set(cap, plan); ownedPricingCount++;
+    retained = { body, bytes: plan.bytes, media: plan.media, hour: plan.hour, cache: plan.cache,
+      serializationBytes: plan.serializationBytes, retentionBytes: plan.retentionBytes, toolScratchBytes: plan.toolScratchBytes, active: false };
+    ownedPricing.set(cap, retained); ownedPricingCount++;
   } catch (error) {
-    plan.body = undefined;
+    if (retained) retained.body = undefined;
     if (!ownedPricingCount) {
       ownedPricing = undefined; activeOwnedPricing = undefined;
       const charge = ownedPricingRegistry; ownedPricingRegistry = undefined; charge?.release();
@@ -95,7 +108,7 @@ export function prepareOwnedHttpPricing(cap: OwnedHttpRequest, body: Record<stri
   finally {
     // No iterator, descriptor, suspended continuation or original-work product
     // is stored per depth. Only references to the STILL funded input were queued.
-    pending.length = 0;
+    pending.length = 0; plan.body = undefined; retained = undefined;
   }
 }
 
@@ -104,7 +117,7 @@ export function prepareOwnedHttpPricing(cap: OwnedHttpRequest, body: Record<stri
 export function reserveOwnedHttpSerialization(cap: OwnedHttpRequest, body: Record<string, unknown>): void {
   const plan = ownedPricing?.get(cap);
   if (!plan || plan.body !== body || !matchesOwnedHttpPricingInput(cap, body)) throw identityFailure("protocol");
-  growOwnedHttpRequest(cap, plan.serializationBytes + plan.retentionBytes);
+  growOwnedHttpRequest(cap, plan.serializationBytes + plan.retentionBytes + plan.toolScratchBytes + ownedAccountingBytes);
 }
 
 export function enterOwnedHttpPricing(cap: OwnedHttpRequest, body: Record<string, unknown>): void {
@@ -131,7 +144,7 @@ export function retireOwnedHttpPricing(cap: OwnedHttpRequest): void {
 function ownedHttpPricing(body: Record<string, unknown>, format: string | undefined): OwnedHttpPricingPlan | undefined {
   return format === "openai.chat_completions" ? activeOwnedPricing?.get(body) : undefined;
 }
-function reserveOwnedPricingQueue(cap: OwnedHttpRequest, plan: OwnedHttpPricingPlan, count: number): void {
+function reserveOwnedPricingQueue(cap: OwnedHttpRequest, plan: OwnedHttpPricingWork, count: number): void {
   if (count <= plan.queueCapacity) return;
   // D = 8*(C+P+N)+2U+B. C=1 was funded before []; every queued
   // occurrence is one reference cell (P), with NO copied graph/string/primitive.
@@ -157,7 +170,7 @@ function queueOwnedChildren(value: object, pending: object[]): void {
     if (item !== null && typeof item === "object") pending.push(item);
   }
 }
-function ownedContentHasMedia(cap: OwnedHttpRequest, plan: OwnedHttpPricingPlan, root: unknown, pending: object[]): boolean {
+function ownedContentHasMedia(cap: OwnedHttpRequest, plan: OwnedHttpPricingWork, root: unknown, pending: object[]): boolean {
   if (!root || typeof root !== "object") return false;
   reserveOwnedPricingQueue(cap, plan, 1); pending.push(root);
   try {
@@ -199,20 +212,58 @@ function ownedScalarJsonBytes(value: unknown): number {
   if (typeof value === "bigint") throw new TypeError("BigInt cannot be serialized as JSON");
   return 0; // A child container is counted when removed from the passive queue.
 }
-function countOwnedMediaSlot(plan: OwnedHttpPricingPlan, key: string | number, value: unknown): void {
+function countOwnedMediaSlot(plan: OwnedHttpPricingWork, key: string | number, value: unknown): void {
   if (typeof value !== "string" || value.length < 64 * 1024) return;
   // One slots-array cell plus {owner,key,value}: C=1, P=7, N=1 for
   // an array index; U includes ALL field names and retained key/value units.
   plan.slotBytes += 64 + (typeof key === "number" ? 8 : 2 * key.length) + 26 + 2 * value.length;
   plan.mediaSlots++; plan.mediaUnits += value.length;
 }
-function countOwnedJsonScalar(plan: OwnedHttpPricingPlan, value: unknown): void {
+function countOwnedJsonScalar(plan: OwnedHttpPricingWork, value: unknown): void {
   if (typeof value === "string") {
     plan.graphBytes += 2 * value.length;
     plan.maximumScalarUnits = Math.max(plan.maximumScalarUnits, value.length);
   } else if (value === null || typeof value === "number" || typeof value === "boolean" || value === undefined) plan.graphBytes += 8;
 }
-function measureOwnedHttpJson(cap: OwnedHttpRequest, plan: OwnedHttpPricingPlan, root: object, pending: object[]): void {
+function ownedToolScratchBytes(body: Record<string, unknown>, card: boolean, bytes: number): number {
+  let topCells = 0, topNumbers = 0, topUnits = 0, tagCells = 0, tagNumbers = 0, tagUnits = 0;
+  let types = 0, typeUnits = 0, largestType = 0, coerced = false;
+  // These are the existing pricing helpers' exact two shallow inventories,
+  // not a recursive tool/schema search. No copied array exists during admission.
+  for (let phase = 0; phase < (card ? 2 : 1); phase++) {
+    const count = phase === 0 ? 1 : Array.isArray(body.input) ? body.input.length : 0;
+    for (let index = 0; index < count; index++) {
+      let tools: unknown[] | undefined;
+      if (phase === 0) tools = Array.isArray(body.tools) ? body.tools : undefined;
+      else {
+        const item = (body.input as unknown[])[index];
+        if (isObject(item) && (item.type === "additional_tools" || item.type === "tool_search_output") && Array.isArray(item.tools)) tools = item.tools;
+      }
+      if (!tools) continue;
+      for (let itemIndex = 0; itemIndex < tools.length; itemIndex++) {
+        const item = tools[itemIndex], numeric = item === null || typeof item === "number" || typeof item === "boolean" || item === undefined;
+        const units = typeof item === "string" ? item.length : 0;
+        if (phase === 0) { topCells++; topNumbers += numeric ? 1 : 0; topUnits += units; }
+        else { tagCells++; tagNumbers += numeric ? 1 : 0; tagUnits += units; }
+        if (!isObject(item)) continue;
+        // Chat's ordinary fee classifier performs String(type). Only a passive
+        // array can create a body-sized result; no caller hooks enter this body.
+        if (phase === 0 && Array.isArray(item.type)) coerced = true;
+        if (card && typeof item.type === "string" && /^web_search(?:_preview)?(?:_\d{4}_\d{2}_\d{2})?$/.test(item.type)) {
+          types++; typeUnits += item.type.length; largestType = Math.max(largestType, item.type.length);
+        }
+      }
+    }
+  }
+  const top = 8 * (1 + topCells + topNumbers) + 2 * topUnits;
+  if (!card) return top + 8 + (coerced ? 2 * bytes : 0);
+  const tagged = 8 * (1 + tagCells + tagNumbers) + 2 * tagUnits;
+  const combined = top + tagged - 8;
+  const typed = 8 * (1 + types) + 2 * typeUnits;
+  const singleton = 16 + 2 * largestType, rates = 8 + 16 * types;
+  return Math.max(top + 8 + (coerced ? 2 * bytes : 0), tagged + typed + Math.max(combined + singleton, rates));
+}
+function measureOwnedHttpJson(cap: OwnedHttpRequest, plan: OwnedHttpPricingWork, root: object, pending: object[]): void {
   reserveOwnedPricingQueue(cap, plan, 1); pending.push(root);
   while (pending.length) {
     const value = pending.pop()!;

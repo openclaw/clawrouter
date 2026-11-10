@@ -232,3 +232,28 @@ This increment adds authored refusal-before-serialization and held-original-R2
 witnesses. Static syntax/format checks do not execute them. Accounting facts,
 execution products and the complete simultaneous HTTP/generation CONTROL table
 remain outstanding; this is still not the immutable publication candidate.
+
+
+The existing accounting helpers also receive positive copy/wire funding before
+selection. Their unchanged capsule profile gives
+`8*(128+2*512+256+1024)+2*32768 = 84992` logical bytes; the intent profile gives
+`8*(64+2*128+64+256)+2*8192 = 21504`. The current attempt component reserves
+nine capsule-sized representation allowances (failure/current facts, construction
+and replacement facts, pricing/cost staging, prospective event/envelope, terminal
+event, and visitor/copy temporaries), eight intent-sized allowances (four legs
+and their prospective variants), four concurrent `3*16384` text/wire components,
+and one `3*65536` terminal event component: 1330176 bytes. These are funded
+representation bounds from the existing profiles, not conversion of source
+counters into memory credit. The whole-vertical proof must still close every
+producer and CONTROL overlap; the numeric reservation is not that closure.
+
+Chat tool-copy scratch is measured without constructing any array. The ordinary
+fee classifier's shallow inventory and, only when the genuine compiled endpoint
+has a tool price card, the existing tagged-input inventory are counted separately.
+Every copied scalar/string occurrence is charged. Tagged/type/concat/singleton
+and numeric-rate arrays use their actual simultaneous maxima, with a separate
+bound for the ordinary passive-array type coercion. Their funding overlaps the
+already prepared upload at late pricing. The ordinary classifiers and tariffs
+are not replaced. Only body/three verdict scalars and final component sizes enter
+the retained pricing record; the measurement record and its body alias clear
+synchronously before full admission begins.
