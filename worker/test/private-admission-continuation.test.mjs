@@ -8,7 +8,8 @@ const { preflightCredential, consumeCredentialPreflight, completeCredentialAdmis
 const { PreflightTicket, PreflightInstanceArena, admissionScratchBytes, reserveAdmissionScratch, retireAdmissionScratch, transferAdmissionScratch, preflightPayloadBytes, admissionBridgeFactoryCharges, admissionBridgeChoiceFactoryCharges, admissionBridgeCopyFactoryCharges, admissionBridgeBoundaryFactoryCharges, admissionBridgeSerializationFactoryCharges, admissionBridgePassiveExamples, admissionBridgePhasePayload, preflightControlSlots } = await import('../credential-preflight-arena.ts');
 const { consumeAdmissionBridge, admissionBridgeFailureMetadata } = await import('../credential-preflight-source.ts');
 const { bodyBudgetCharged } = await import('../body-budget.ts');
-const { identitySourceBudget, identityPlan, planPrivateIdentityString, admitGeneratedRuntime, foldIdentitySqlHistory, isIdentityFailure } = await import('../identity-admission.ts');
+const { identitySourceBudget, identityPlan, admitIdentityBytes, parseIdentity, planPrivateIdentityString, admitGeneratedRuntime, foldIdentitySqlHistory, isIdentityFailure } = await import('../identity-admission.ts');
+const { closeAdmissionEnvelope, checkPreflightIdentity, admissionContinuationPath, admissionContinuationHeader, admissionContinuationVersion } = await import('../credential-preflight-protocol.ts');
 const { normalizedChoiceCandidates, consumeOwnedChoiceCandidates, chooseGrantKey, chooseOwnedGrantKey, GRANT_SELECTION_STRATEGIES } = await import('../grant-selection-strategies.ts');
 const { normalizePolicyRecord, normalizePrivatePolicyRecord } = await import('../authority-policy.ts');
 const { grantRoutingPolicy, privateGrantRoutingPolicy, privateGrantKey, validGrantKey } = await import('../grant-routing.ts');
@@ -85,21 +86,38 @@ test('private full bridge keeps a full charge until explicit opaque disposal; no
 }));
 
 test('BOTH private RPCs share the same cumulative source owner with no reset or full-admission effect on exhaustion', async t => fixture(t, async f => {
-  seed(f); f.stored.set('credentials/bridgekid', { ...credential(), retainedUnknown: 'x'.repeat(600000) });
+  seed(f); f.stored.set('credentials/bridgekid', { ...credential(), retainedUnknown: 'x'.repeat(600 * 1024) });
   const baseline = bodyBudgetCharged(); let proof, continuation, handle;
   f.resources.push(() => { if (handle) handle.dispose(); else if (continuation) releaseCredentialPreflightContinuation(continuation); else if (proof) releaseCredentialPreflight(proof); });
   const preflight = await f.take(f.own(preflightCredential(f.env, 'bridgekid', digest)));
   assert.equal(preflight.outcome, 'matched'); proof = preflight.proof;
+  const canonical = JSON.parse(f.db.prepare('SELECT credential_json FROM proxy_credentials WHERE credential_id=?').get('bridgekid').credential_json);
+  assert.equal(Object.hasOwn(canonical, 'retainedUnknown'), false);
   continuation = consumeCredentialPreflight(proof, f.env, 'bridgekid', digest); proof = undefined;
   // The discarded cold-field bytes remain charged, but the canonical record is
   // small. Add a separately valid request whose original intake crosses BOTH RPCs.
-  const admission = { providers: [], retainedUnknown: ['y'.repeat(800000), 'z'.repeat(800000)] };
+  const admission = { providers: [], first: 'y'.repeat(800 * 1024), second: 'z'.repeat(800 * 1024) };
   assert.doesNotThrow(() => identityPlan().item(admission, 0));
-  let sentSource, calls = 0; const get = f.env.ACCESS_CONTROL.get;
+  let sentSource, actualWireBytes, calls = 0, validated = 0; const get = f.env.ACCESS_CONTROL.get;
   t.mock.method(f.env.ACCESS_CONTROL, 'get', function (...args) {
     const stub = Reflect.apply(get, this, args), original = stub.fetch;
     return { fetch(url, init) {
-      if (url.endsWith('/admission/resolve')) { calls++; sentSource = JSON.parse(init.body).source; }
+      if (url.endsWith(admissionContinuationPath)) {
+        calls++; assert.equal(url, 'https://authority' + admissionContinuationPath); assert.equal(init.method, 'POST');
+        assert.equal(new Headers(init.headers).get(admissionContinuationHeader), admissionContinuationVersion);
+        assert.equal(typeof init.body, 'string'); actualWireBytes = Buffer.byteLength(init.body);
+        // Validate the ORIGINAL outbound bytes independently; never reset or
+        // replace the real inherited source prefix forwarded to the DO.
+        const validation = identitySourceBudget();
+        admitIdentityBytes(validation, actualWireBytes, 2097152);
+        const parsed = parseIdentity(init.body, validation, 'complete', 'continuation');
+        const closed = closeAdmissionEnvelope(parsed);
+        checkPreflightIdentity(closed.admission.credentialId, closed.admission.secretSha256);
+        assert.doesNotThrow(() => identityPlan().item(parsed, 0));
+        assert.equal(closed.admission.first.length, 800 * 1024); assert.equal(closed.admission.second.length, 800 * 1024);
+        sentSource = closed.source; assert.ok(sentSource.bytes >= 600 * 1024);
+        assert.ok(sentSource.bytes + actualWireBytes > 2097152); validated++;
+      }
       return Reflect.apply(original, stub, [url, init]);
     } };
   });
@@ -107,9 +125,10 @@ test('BOTH private RPCs share the same cumulative source owner with no reset or 
   const operation = completeCredentialAdmission(continuation, admission); continuation = undefined;
   const root = f.own(operation), outcome = await root.outcome; root.used = true;
   if (!outcome.failed) handle = outcome.value; // cleanup owns even an unexpected success
-  assert.equal(calls, 1); assert.ok(sentSource.bytes >= 600000);
-  assert.ok(sentSource.bytes + Buffer.byteLength(JSON.stringify(admission)) > 2097152);
-  assert.equal(outcome.failed, true); assert.ok(denied(outcome.error)); assert.deepEqual(f.trace.writes, []);
+  assert.equal(calls, 1); assert.equal(validated, 1); assert.ok(sentSource.bytes >= 600 * 1024);
+  assert.ok(sentSource.bytes + actualWireBytes > 2097152);
+  assert.equal(outcome.failed, true); assert.ok(denied(outcome.error));
+  assert.equal(outcome.error.message, 'Identity admission failed (limit)'); assert.deepEqual(f.trace.writes, []);
   assert.equal(f.db.prepare('SELECT count(*) n FROM proxy_credentials').get().n, 1);
   assert.equal(f.db.prepare('SELECT count(*) n FROM access_policies').get().n, 0);
   assert.equal(bodyBudgetCharged(), baseline);
