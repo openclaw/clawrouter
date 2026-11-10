@@ -1,5 +1,9 @@
 import { googleField, googleInt32, googleServiceTier } from "./google-protocol.ts";
 import { anthropicModifiers, type AnthropicModifiers } from "./anthropic-pricing.ts";
+import { identityFailure } from "./identity-admission.ts";
+import { fundOwnedHttpAcceptedUsage, type OwnedHttpRevalidation } from "./http-identity-owner.ts";
+import { checkOwnedAcceptedUsageReceiver, matchesOwnedAcceptedUsageSnapshot, acceptOwnedUsageInspection,
+  revokeOwnedUsageRejection, checkOwnedUsageRetirement, checkOwnedAcceptedUsageTerminal } from "./proxy-response.ts";
 
 export interface UsageTokens {
   reasoning?: number | null; // Subset of output, never an additional billable category.
@@ -163,14 +167,7 @@ export function createSseUsageInspector(revokeRejection?: () => void, acceptJson
     const lines = frame.split("\n");
     const data = lines.filter(line => line.startsWith("data:")).map(line => line.slice(5).trim()).join("\n");
     const error = lines.some(line => /^event:\s*error\s*$/.test(line));
-    if (error) {
-      try { return { kind: "error", value: JSON.parse(data) }; }
-      catch { return { kind: "error" }; }
-    }
-    if (!data) return null;
-    if (data === "[DONE]") return { kind: "done" };
-    try { return { kind: "data", value: JSON.parse(data) }; }
-    catch { return { kind: "invalid" }; }
+    return parseSseData(data, error);
   }
   const frames = createSseFrames(frame => {
     const next = evidence(frame);
@@ -190,6 +187,25 @@ export function createSseUsageInspector(revokeRejection?: () => void, acceptJson
     },
   };
 }
+
+// One native grammar/value constructor for ordinary and private SSE, and the
+// private JSON body. Admission is deliberately outside its syntax catch.
+function parseSseData(data: string, error: boolean, owned?: OwnedAcceptedUsage): SseUsageEvidence | null {
+  if (!error && !data) return null;
+  if (!error && data === "[DONE]") return { kind: "done" };
+  owned?.admitJson(data);
+  if (error) {
+    try { return { kind: "error", value: JSON.parse(data) }; }
+    catch { return { kind: "error" }; }
+  }
+  try { return { kind: "data", value: JSON.parse(data) }; }
+  catch { return { kind: "invalid" }; }
+}
+
+// The set is private and populated only after genuine consumer validation.
+// Ordinary accumulator fields, arbitrary-JS inputs and returned layout stay
+// unchanged. Only the private retained message summary projects stop_reason.
+let privateUsageAccumulators: WeakSet<ReturnType<typeof createSseUsageAccumulator>["accept"]> | undefined;
 
 // Both bounded frame parsing and the Responses scalar projection feed one
 // accounting state owner; parser limits cannot invent a terminal provider error.
@@ -243,13 +259,16 @@ export function createSseUsageAccumulator(revokeRejection?: () => void, context?
     if (root.type === "message_start") {
       protocol = "message";
       const initial = record(root.message);
-      message = { type: "message", stop_reason: initial?.stop_reason, content: Array.isArray(initial?.content) && initial.content.length === 0 ? [] : undefined };
+      message = { type: "message", stop_reason: privateUsageAccumulators?.has(accept)
+        ? initial?.stop_reason === "refusal" ? "refusal" : undefined : initial?.stop_reason,
+        content: Array.isArray(initial?.content) && initial.content.length === 0 ? [] : undefined };
       messageUsage = messageCounters(usageRecord(root));
       messageDeltaSeen = false;
     } else if (root.type === "message_delta") {
       if (!messageUsage) return;
       const messageDelta = record(root.delta);
-      if (message && messageDelta && "stop_reason" in messageDelta) message.stop_reason = messageDelta.stop_reason;
+      if (message && messageDelta && "stop_reason" in messageDelta) message.stop_reason = privateUsageAccumulators?.has(accept)
+        ? messageDelta.stop_reason === "refusal" ? "refusal" : undefined : messageDelta.stop_reason;
       const delta = messageCounters(usageRecord(root));
       messageDeltaSeen = delta != null && pickNumber(delta, "output_tokens") != null;
       if (delta) {
@@ -290,16 +309,246 @@ export function createSseUsageAccumulator(revokeRejection?: () => void, context?
   };
 }
 
+type OwnedUsageMode = "sse" | "json" | "none";
+const ownedUsageMetadata = 65536;
+let ownedAcceptedUsage: WeakMap<OwnedHttpRevalidation, OwnedAcceptedUsage> | undefined;
+let ownedFrameConsumers: WeakMap<(frame: string | null) => void, OwnedAcceptedUsage> | undefined;
+
+// Scalar census only. Native JSON.parse remains the sole grammar and value
+// constructor. Every quoted token and partial atom contributes, even when a
+// later duplicate discards it or malformed input makes parsing throw.
+function ownedJsonGraphUpper(text: string): number {
+  let containers = 0, strings = 0, atoms = 0, units = 0;
+  let quoted = false, escaped = false, atom = false;
+  for (let index = 0; index < text.length; index++) {
+    const code = text.charCodeAt(index);
+    if (quoted) {
+      if (escaped) { units++; escaped = false; }
+      else if (code === 92) { units++; escaped = true; }
+      else if (code === 34) quoted = false;
+      else units++;
+      continue;
+    }
+    if (code === 34) { strings++; quoted = true; atom = false; }
+    else if (code === 123 || code === 91) { containers++; atom = false; }
+    else if (code === 125 || code === 93 || code === 44 || code === 58 || trimCode(code)) atom = false;
+    else if (!atom) { atoms++; atom = true; }
+  }
+  return 16 * (containers + strings + atoms) + 2 * units;
+}
+function trimCode(code: number): boolean {
+  return code >= 9 && code <= 13 || code === 32 || code === 160 || code === 5760
+    || code >= 8192 && code <= 8202 || code === 8232 || code === 8233 || code === 8239 || code === 8287 || code === 12288 || code === 65279;
+}
+
+class OwnedAcceptedUsage {
+  frames?: ReturnType<typeof createSseFrames>;
+  accumulator?: ReturnType<typeof createSseUsageAccumulator>;
+  consumeFrame?: (frame: string | null) => void;
+  decoder?: TextDecoder;
+  text = "";
+  bytes = 0;
+  epoch = 0;
+  flags = 0; // finished=1, complete frame decode=2, event:error=4, JSON overflow=8.
+  bufferBytes = 0;
+  temporaryBytes = 0;
+  frame?: string | null;
+  result?: UsageInspection;
+  constructor(readonly cap: OwnedHttpRevalidation, readonly mode: OwnedUsageMode,
+    readonly context: Readonly<UsageTokenContext> | undefined, readonly provisional: boolean) {}
+  initialize(): void {
+    if (this.flags & 16) throw identityFailure("protocol");
+    this.flags |= 16;
+    if (this.mode === "sse") {
+      this.accumulator = createSseUsageAccumulator(this.provisional ? this.revoke.bind(this) : undefined, this.context);
+      (privateUsageAccumulators ??= new WeakSet()).add(this.accumulator.accept);
+      this.consumeFrame = this.consume.bind(this);
+      (ownedFrameConsumers ??= new WeakMap()).set(this.consumeFrame, this);
+      this.frames = createSseFrames(this.consumeFrame);
+    } else if (this.mode === "json") this.decoder = new TextDecoder();
+  }
+  reserve(temporary: number): void {
+    if (!Number.isSafeInteger(temporary) || temporary < 0) throw identityFailure("protocol");
+    fundOwnedHttpAcceptedUsage(this.cap, ownedUsageMetadata + this.bufferBytes + 2 * this.text.length + temporary);
+    this.temporaryBytes = temporary;
+  }
+  resize(before: number, after: number): void {
+    // Old and replacement are both live until the actual buffer assignment.
+    if (before !== this.bufferBytes) throw identityFailure("protocol");
+    this.reserve(this.temporaryBytes + after);
+  }
+  resized(after: number, temporary: number): void {
+    this.bufferBytes = after;
+    this.reserve(temporary);
+  }
+  admitJson(data: string, retainedText = false): void {
+    // The caller retains this exact text until evidence/extraction has ended.
+    // The fixed metadata also backs the finite counter projections, old/new
+    // summary and extraction/update/entries/filter/fromEntries intermediates.
+    this.reserve((retainedText ? 0 : 2 * data.length) + ownedJsonGraphUpper(data));
+  }
+  private revoke(): void { revokeOwnedUsageRejection(this.cap); }
+  private fold(frame: string): string {
+    let units = 0, lines = 0;
+    this.flags &= ~4;
+    for (let start = 0; start <= frame.length;) {
+      let end = start; while (end < frame.length && frame.charCodeAt(end) !== 10) end++;
+      if (frame.startsWith("data:", start)) {
+        let a = start + 5, b = end;
+        while (a < b && trimCode(frame.charCodeAt(a))) a++;
+        while (b > a && trimCode(frame.charCodeAt(b - 1))) b--;
+        units += b - a + (lines++ ? 1 : 0);
+      }
+      if (frame.startsWith("event:", start)) {
+        let a = start + 6, b = end;
+        while (a < b && trimCode(frame.charCodeAt(a))) a++;
+        while (b > a && trimCode(frame.charCodeAt(b - 1))) b--;
+        if (b - a === 5 && frame.startsWith("error", a)) this.flags |= 4;
+      }
+      if (end === frame.length) break;
+      start = end + 1;
+    }
+    this.reserve(2 * frame.length + 4 * units);
+    let data = "", count = 0;
+    for (let start = 0; start <= frame.length;) {
+      let end = start; while (end < frame.length && frame.charCodeAt(end) !== 10) end++;
+      if (frame.startsWith("data:", start)) {
+        let a = start + 5, b = end;
+        while (a < b && trimCode(frame.charCodeAt(a))) a++;
+        while (b > a && trimCode(frame.charCodeAt(b - 1))) b--;
+        if (count++) data += "\n";
+        data += frame.slice(a, b);
+      }
+      if (end === frame.length) break;
+      start = end + 1;
+    }
+    frame = "";
+    return data;
+  }
+  stageFrame(frame: string | null): void {
+    if (!(this.flags & 2) || this.frame !== undefined) throw identityFailure("protocol");
+    this.frame = frame;
+  }
+  private consume(): void {
+    // The framer's decode/staging calls have returned before this command.
+    // No caller argument retains the decoded frame during graph construction.
+    let frame = this.frame ?? null; this.frame = undefined;
+    let data = "", evidence: SseUsageEvidence | null = null;
+    try {
+      if (frame === null) evidence = { kind: "unavailable" };
+      else { data = this.fold(frame); frame = null; evidence = parseSseData(data, !!(this.flags & 4), this); }
+      if (evidence) this.accumulator!.accept(evidence);
+    } finally {
+      frame = null; data = ""; evidence = null;
+      this.reserve(0);
+    }
+  }
+  push(epoch: number, bytes: Uint8Array): void {
+    if (this.flags & 1 || epoch !== (this.epoch === Number.MAX_SAFE_INTEGER ? 1 : this.epoch + 1)
+      || !matchesOwnedAcceptedUsageSnapshot(this.cap, epoch, bytes)) throw identityFailure("protocol");
+    this.epoch = epoch;
+    if (this.frames) {
+      try { this.frames.push(bytes); }
+      catch (error) { this.flags |= 32; throw error; }
+    }
+    else if (this.mode === "json" && !(this.flags & 8)) {
+      this.bytes += bytes.byteLength;
+      if (this.bytes > usageInspectionLimit) { this.flags |= 8; this.text = ""; this.reserve(0); return; }
+      this.reserve(2 * this.text.length + 4 * (bytes.byteLength + 2));
+      let chunk = this.decoder!.decode(bytes, { stream: true });
+      this.text += chunk; chunk = ""; this.reserve(0);
+    }
+  }
+  finish(ended: boolean): void {
+    if (this.flags & 1) { acceptOwnedUsageInspection(this.cap, this.result!); return; }
+    let pending: string | null = null, data = "", evidence: SseUsageEvidence | null = null, value: unknown;
+    try {
+      if (this.flags & 32) {
+        // A failed accepted-frame operation is terminal. Do not retry its
+        // partial frame during retirement or classify admission as JSON syntax.
+        this.result = { tokens: null, outcome: null };
+      } else if (this.frames) {
+        if (this.provisional) {
+          pending = this.frames.pending();
+          if (pending === null) evidence = { kind: "unavailable" };
+          else { data = this.fold(pending); pending = null; evidence = parseSseData(data, !!(this.flags & 4), this); }
+          this.accumulator!.unfinished(evidence);
+        }
+        this.result = this.accumulator!.result(ended, this.frames.overflowed());
+      } else if (this.mode === "json" && ended && !(this.flags & 8)) {
+        this.reserve(2 * this.text.length + 8);
+        let tail = this.decoder!.decode(); this.text += tail; tail = "";
+        this.admitJson(this.text, true);
+        let valid = false;
+        try { value = JSON.parse(this.text); valid = true; } catch { /* Native syntax failure only. */ }
+        this.result = valid ? { tokens: extractUsageTokens(value, this.context), outcome: responseOutcome(value) }
+          : { tokens: null, outcome: "provider_error" };
+      } else this.result = { tokens: null, outcome: null };
+      this.flags |= 1;
+      acceptOwnedUsageInspection(this.cap, this.result);
+    } finally {
+      pending = null; data = ""; evidence = null; value = undefined; this.text = "";
+      this.reserve(0);
+    }
+  }
+  clear(): void {
+    checkOwnedUsageRetirement(this.cap);
+    if (this.consumeFrame) ownedFrameConsumers!.delete(this.consumeFrame);
+    if (this.accumulator) privateUsageAccumulators!.delete(this.accumulator.accept);
+    this.frames = undefined; this.accumulator = undefined; this.consumeFrame = undefined;
+    this.decoder = undefined; this.text = ""; this.frame = undefined; this.result = undefined;
+    ownedAcceptedUsage!.delete(this.cap);
+    fundOwnedHttpAcceptedUsage(this.cap, 0);
+  }
+}
+export function beginOwnedAcceptedUsage(cap: OwnedHttpRevalidation, response: Response, mode: OwnedUsageMode,
+  context: Readonly<UsageTokenContext> | undefined, provisional: boolean): void {
+  checkOwnedAcceptedUsageReceiver(cap, response, mode, context, provisional);
+  if (ownedAcceptedUsage?.has(cap)) throw identityFailure("protocol");
+  fundOwnedHttpAcceptedUsage(cap, ownedUsageMetadata);
+  const state = new OwnedAcceptedUsage(cap, mode, context, provisional);
+  (ownedAcceptedUsage ??= new WeakMap()).set(cap, state);
+  state.initialize();
+}
+export function pushOwnedAcceptedUsage(cap: OwnedHttpRevalidation, epoch: number, bytes: Uint8Array): void {
+  const state = ownedAcceptedUsage?.get(cap); if (!state) throw identityFailure("protocol");
+  state.push(epoch, bytes);
+}
+export function finishOwnedAcceptedUsage(cap: OwnedHttpRevalidation, ended: boolean): void {
+  checkOwnedAcceptedUsageTerminal(cap, ended);
+  const state = ownedAcceptedUsage?.get(cap); if (!state) throw identityFailure("protocol");
+  state.finish(ended);
+}
+export function matchesOwnedUsageInspection(cap: OwnedHttpRevalidation, value: UsageInspection): boolean {
+  const state = ownedAcceptedUsage?.get(cap); return !!state && state.result === value;
+}
+export function retireOwnedAcceptedUsage(cap: OwnedHttpRevalidation): void { ownedAcceptedUsage?.get(cap)?.clear(); }
+
 export function createSseFrames(consume: (frame: string | null) => void, fatalUtf8 = false) {
+  ownedFrameConsumers?.get(consume)?.resize(0, 8192);
   let buffer = new Uint8Array(8192), length = 0, lineLength = 0, overflow = false, skipLf = false;
+  ownedFrameConsumers?.get(consume)?.resized(8192, 0);
   const decoder = new TextDecoder("utf-8", { fatal: fatalUtf8 });
-  const decode = () => { try { return decoder.decode(buffer.subarray(0, length)); } catch { return null; } };
+  const decode = () => {
+    ownedFrameConsumers?.get(consume)?.reserve(2 * length);
+    let text: string | null;
+    try { text = decoder.decode(buffer.subarray(0, length)); } catch { text = null; }
+    const owned = ownedFrameConsumers?.get(consume);
+    if (owned && owned.flags & 2) {
+      owned.resize(buffer.byteLength, 8192); buffer = new Uint8Array(8192);
+      owned.resized(8192, text === null ? 0 : 2 * text.length);
+    }
+    return text;
+  };
   function append(bytes: Uint8Array) {
     if (overflow) return;
     if (length + bytes.length > usageInspectionLimit) { overflow = true; length = 0; return; }
     if (length + bytes.length > buffer.length) {
+      const owned = ownedFrameConsumers?.get(consume), temporary = owned?.temporaryBytes ?? 0;
+      owned?.resize(buffer.byteLength, Math.min(usageInspectionLimit, Math.max(buffer.length * 2, length + bytes.length)));
       const next = new Uint8Array(Math.min(usageInspectionLimit, Math.max(buffer.length * 2, length + bytes.length)));
       next.set(buffer.subarray(0, length)); buffer = next;
+      owned?.resized(buffer.byteLength, temporary);
     }
     buffer.set(bytes, length); length += bytes.length;
   }
@@ -313,7 +562,15 @@ export function createSseFrames(consume: (frame: string | null) => void, fatalUt
         if (skipLf) { skipLf = false; if (byte === 10) { start = index + 1; continue; } }
         if (byte !== 10 && byte !== 13) continue;
         append(bytes.subarray(start, index)); lineLength += index - start;
-        if (lineLength === 0) { consume(overflow ? null : decode()); length = 0; overflow = false; }
+        if (lineLength === 0) {
+          const owned = ownedFrameConsumers?.get(consume);
+          if (owned) {
+            owned.flags |= 2;
+            try { owned.stageFrame(overflow ? null : decode()); consume(null); }
+            finally { owned.flags &= ~2; }
+          } else consume(overflow ? null : decode());
+          length = 0; overflow = false;
+        }
         else append(new Uint8Array([10]));
         lineLength = 0; skipLf = byte === 13; start = index + 1;
       }

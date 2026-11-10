@@ -10,12 +10,14 @@ import { extractImageUsageTokens } from "./image-generation.ts";
 import { extractCompactUsageTokens } from "./responses-compact.ts";
 import { createResponsesUsageInspector, type ResponsesInspectionTools } from "./responses-usage.ts";
 import { createSseUsageInspector, extractUsageTokens, responseOutcome, usageInspectionLimit, type ResponsesObservation, type UsageInspection, type UsageTokenContext } from "./token-usage.ts";
+import { beginOwnedAcceptedUsage, pushOwnedAcceptedUsage, finishOwnedAcceptedUsage, retireOwnedAcceptedUsage,
+  matchesOwnedUsageInspection } from "./token-usage.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { nativeErrorEnvelope, type NativeErrorContext, type NativeErrorDetails } from "./native-errors.ts";
 
 import type { HostedSearchUsage } from "./responses-hosted-usage.ts";
 import { identityFailure, isIdentityFailure } from "./identity-admission.ts";
-import { checkOwnedHttpCodecConsumer, checkOwnedHttpCodecNormalization, checkOwnedHttpCodecUsage, forwardOwnedHttpCodecUsage, fundOwnedHttpCodecConsumerHeaders, fundOwnedHttpCodecConsumerCapture, beginOwnedCodecConsumerDiagnostics,
+import { checkOwnedHttpCodecConsumer, checkOwnedHttpCodecNormalization, checkOwnedHttpCodecUsage, forwardOwnedHttpCodecUsage, fundOwnedHttpCodecConsumerHeaders, fundOwnedHttpCodecConsumerCapture, settleOwnedHttpCodecConsumerCapture, beginOwnedCodecConsumerDiagnostics,
   ownedHttpCodecFailure, finishOwnedCodecDiagnostics, ownOwnedCodecConsumerRetirement, holdOwnedHttpVeniceSource,
   type OwnedHttpRequest, type OwnedHttpRevalidation } from "./http-identity-owner.ts";
 import { matchesOwnedVeniceOutputBody, matchesOwnedVeniceOutputFailure, matchesOwnedVeniceUsage } from "./venice-chat-runtime.ts";
@@ -143,7 +145,8 @@ function readConsumer(state: CodecReader): Promise<ReadableStreamReadResult<Uint
   let resolve!: () => void;
   const settled = new Promise<void>(done => { resolve = done; });
   state.reading = settled; // A source can cancel synchronously inside read().
-  let observed: Promise<ReadableStreamReadResult<Uint8Array>>;
+  let accept!: (value: ReadableStreamReadResult<Uint8Array>) => void, reject!: (reason: unknown) => void;
+  const observed = new Promise<ReadableStreamReadResult<Uint8Array>>((yes, no) => { accept = yes; reject = no; });
   try {
     const method = reader.read;
     let nativeRead = (state.flags & 8) !== 0 && Object.getPrototypeOf(reader) === ReadableStreamDefaultReader.prototype
@@ -151,10 +154,11 @@ function readConsumer(state: CodecReader): Promise<ReadableStreamReadResult<Uint
     let original: Promise<ReadableStreamReadResult<Uint8Array>> | undefined = Reflect.apply(method, reader, []);
     state.originalRead = original;
     const then = original!.then; nativeRead &&= then === consumerThen;
-    observed = Reflect.apply(then, original, [(value: ReadableStreamReadResult<Uint8Array>) => {
+    void Reflect.apply(then, original, [(value: ReadableStreamReadResult<Uint8Array>) => {
+      if (state.reading !== settled) return;
       try {
         const bytes = value.value;
-        if (!bytes) { state.captured = undefined; return { done: value.done, value: undefined } as ReadableStreamReadResult<Uint8Array>; }
+        if (!bytes) { state.captured = undefined; accept({ done: value.done, value: undefined } as ReadableStreamReadResult<Uint8Array>); return; }
         if (!(bytes instanceof Uint8Array)) throw identityFailure("protocol");
         // First controlled fulfillment: source + destination + the two possible
         // output handoffs coexist. No whole-source backing is hidden by a view.
@@ -162,26 +166,28 @@ function readConsumer(state: CodecReader): Promise<ReadableStreamReadResult<Uint
           + (state.prefixWire?.buffer.byteLength ?? 0) + (state.crossingWire?.buffer.byteLength ?? 0));
         const copy = new Uint8Array(bytes.byteLength); copy.set(bytes);
         state.captured = copy;
-        return { done: value.done, value: copy } as ReadableStreamReadResult<Uint8Array>;
-      } catch (reason) { if (isIdentityFailure(reason)) throw reason; throw consumerFailure(state, "read", reason); }
-      finally { value = undefined as never; state.originalRead = undefined; }
+        accept({ done: value.done, value: copy } as ReadableStreamReadResult<Uint8Array>);
+      } catch (reason) { reject(isIdentityFailure(reason) ? reason : consumerFailure(state, "read", reason)); reason = undefined; }
+      finally { value = undefined as never; state.originalRead = undefined; if (state.reading === settled) state.reading = undefined; resolve(); }
     }, (reason: unknown) => {
+      if (state.reading !== settled) return;
       state.originalRead = undefined;
-      if (nativeRead && publishedConsumerFailure(state, reason)) { state.flags |= 4; throw reason; }
-      state.flags &= ~4; throw consumerFailure(state, "read", reason);
+      if (nativeRead && publishedConsumerFailure(state, reason)) { state.flags |= 4; reject(reason); }
+      else { state.flags &= ~4; reject(consumerFailure(state, "read", reason)); }
+      reason = undefined; if (state.reading === settled) state.reading = undefined; resolve();
     }]);
     original = undefined;
   } catch (reason) {
     const failure = consumerFailure(state, "read", reason); reason = undefined;
+    if (state.reading !== settled) return observed.then(() => { throw failure; }, () => { throw failure; });
     if (state.originalRead) {
       // An actual returned original exists but its first observer did not attach.
       // Public failure is prompt; the pending custody slot cannot be refunded.
-      holdOwnedHttpVeniceSource(state.owner.codec); return Promise.reject(failure);
+      holdOwnedHttpVeniceSource(state.owner.codec); reject(failure); return observed;
     }
-    observed = Promise.reject(failure);
+    reject(failure); if (state.reading === settled) state.reading = undefined; resolve();
+    return observed;
   }
-  void observed.then(() => { if (state.reading === settled) state.reading = undefined; resolve(); },
-    () => { if (state.reading === settled) state.reading = undefined; resolve(); });
   return observed;
 }
 function unlockConsumer(state: CodecReader): void {
@@ -441,6 +447,39 @@ export function matchesOwnedCodecUsage(cap: OwnedCodecConsumer, response: Respon
   return !!owner && (owner.phase === "usage" || owner.phase === "sealed")
     && owner.current === response && owner.delivering === usage;
 }
+export function checkOwnedAcceptedUsageReceiver(cap: OwnedCodecConsumer, response: Response, mode: "sse" | "json" | "none",
+  context: Readonly<UsageTokenContext> | undefined, provisional: boolean): void {
+  const owner = codecConsumers?.get(cap);
+  if (!owner || owner.phase !== "usage" || !owner.usageOwner?.matchesReceiver(response, mode, context, provisional))
+    throw identityFailure("protocol");
+}
+export function matchesOwnedAcceptedUsageSnapshot(cap: OwnedCodecConsumer, epoch: number, bytes: Uint8Array): boolean {
+  const owner = codecConsumers?.get(cap);
+  return !!owner && owner.phase === "usage" && owner.usageOwner?.matchesSnapshot(epoch, bytes) === true;
+}
+export function acceptOwnedUsageInspection(cap: OwnedCodecConsumer, value: UsageInspection): void {
+  const owner = codecConsumers?.get(cap);
+  if (!owner?.usageOwner || !matchesOwnedUsageInspection(cap, value)) throw identityFailure("protocol");
+  owner.usageOwner.receiveInspection(value);
+}
+export function revokeOwnedUsageRejection(cap: OwnedCodecConsumer): void {
+  const owner = codecConsumers?.get(cap);
+  if (!owner?.usageOwner || owner.phase !== "usage") throw identityFailure("protocol");
+  owner.usageOwner.revokeRejection();
+}
+export function checkOwnedUsageRetirement(cap: OwnedCodecConsumer): void {
+  const owner = codecConsumers?.get(cap);
+  if (!owner?.done || !owner.usageOwner) throw identityFailure("protocol");
+}
+export function checkOwnedAcceptedUsageTerminal(cap: OwnedCodecConsumer, ended: boolean): void {
+  const owner = codecConsumers?.get(cap);
+  if (!owner?.usageOwner?.matchesTerminal(ended)) throw identityFailure("protocol");
+}
+export function ownedUsageCaptureBytes(cap: OwnedCodecConsumer): number | null {
+  const owner = codecConsumers?.get(cap);
+  if (!owner?.usageOwner || owner.replacement) return null;
+  return owner.usageOwner.captureBytes();
+}
 // Only the genuine Unified Chat consumer reaches this orchestration. The SSE
 // inspector and JSON usage algorithms are exactly the ordinary implementations.
 function observeOwnedChatUsage(owner: CodecConsumer, response: Response, operation: HttpOperation,
@@ -451,12 +490,11 @@ function observeOwnedChatUsage(owner: CodecConsumer, response: Response, operati
 class OwnedChatUsage {
   private state: CodecReader;
   private signal: AbortSignal;
-  private sse: ReturnType<typeof createSseUsageInspector> | null = null;
-  private inspect = false;
-  private decoder?: TextDecoder;
-  private text = "";
-  private bytes = 0;
-  private finished = false;
+  private mode: "sse" | "json" | "none" = "none";
+  private snapshot?: Uint8Array;
+  private snapshotEpoch = -1; // No accepted-usage factory completed yet.
+  private inspection?: UsageInspection;
+  private finished = 0;
   private resolve!: () => void;
   private ready: Promise<void>;
   private downstream!: ReadableStreamDefaultController<Uint8Array>;
@@ -473,10 +511,9 @@ class OwnedChatUsage {
     const owner = this.state.owner;
     try {
       const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-      this.sse = contentType.includes("text/event-stream") ? createSseUsageInspector(
-        response.ok && this.operation.receivedRejection ? this.revokeRejection.bind(this) : undefined, undefined, this.usageContext) : null;
-      this.inspect = !this.sse && contentType.includes("json");
-      if (this.inspect) this.decoder = new TextDecoder();
+      this.mode = contentType.includes("text/event-stream") ? "sse" : contentType.includes("json") ? "json" : "none";
+      beginOwnedAcceptedUsage(owner.codec, response, this.mode, this.usageContext, response.ok && this.operation.receivedRejection);
+      this.snapshotEpoch = 0;
       const body = new ReadableStream<Uint8Array>(this, { highWaterMark: 0 });
       if (this.signal.aborted) this.aborted();
       else {
@@ -493,7 +530,29 @@ class OwnedChatUsage {
       throw reason;
     } finally { response = undefined as never; }
   }
-  private revokeRejection(): void { this.operation.revokeRejection(); }
+  revokeRejection(): void { this.operation.revokeRejection(); }
+  matchesReceiver(response: Response, mode: "sse" | "json" | "none", context: Readonly<UsageTokenContext> | undefined, provisional: boolean): boolean {
+    return !this.finished && this.state.owner.current === response && response.body === this.state.body && mode === this.mode
+      && context === this.usageContext && provisional === (response.ok && this.operation.receivedRejection);
+  }
+  matchesSnapshot(epoch: number, bytes: Uint8Array): boolean {
+    return !this.finished && this.snapshotEpoch === epoch && this.snapshot === bytes;
+  }
+  matchesTerminal(ended: boolean): boolean { return this.finished === (ended ? 2 : 1) && this.snapshot === undefined; }
+  captureBytes(): number | null {
+    if (this.state.reading || this.state.originalRead || this.state.cancellation || this.state.retirement) return null;
+    // One serial highWaterMark:0 usage pull owns the current snapshot. A later
+    // pull cannot start before the preceding output handoff has completed.
+    // These are actual backing identities, not equality/interning assumptions.
+    const prefix = this.state.prefixWire?.buffer, crossing = this.state.crossingWire?.buffer;
+    const captured = this.state.captured?.buffer, snapshot = this.snapshot?.buffer;
+    let bytes = prefix?.byteLength ?? 0;
+    if (crossing && crossing !== prefix) bytes += crossing.byteLength;
+    if (captured && captured !== prefix && captured !== crossing) bytes += captured.byteLength;
+    if (snapshot && snapshot !== prefix && snapshot !== crossing && snapshot !== captured) bytes += snapshot.byteLength;
+    return bytes;
+  }
+  receiveInspection(value: UsageInspection): void { this.inspection = value; }
   private forward(): void {
     const owner = this.state.owner, value = owner.delivering!;
     try { forwardOwnedHttpCodecUsage(owner.codec, owner.current, value); }
@@ -503,7 +562,8 @@ class OwnedChatUsage {
     if (!this.state.owner.done) throw identityFailure("protocol");
     // Root retirement already joined the actual consumer and public reader.
     // Empty fields remain fields until this owner itself becomes unreachable.
-    this.sse = null; this.decoder = undefined; this.text = "";
+    this.snapshot = undefined; this.inspection = undefined;
+    retireOwnedAcceptedUsage(this.state.owner.codec);
     this.validated = undefined; this.usageContext = undefined;
     this.downstream = undefined as never; this.ready = undefined as never; this.resolve = undefined as never;
     this.listener = undefined as never; this.signal = undefined as never;
@@ -511,29 +571,36 @@ class OwnedChatUsage {
   }
   private finish(delivery: ObservedUsage["delivery"], reason?: unknown): void {
     if (this.finished) return;
-    this.finished = true;
+    this.finished = 1;
     const owner = this.state.owner;
     let listenerFailure: object | undefined;
     try { this.signal.removeEventListener("abort", this.listener); }
     catch (error) { listenerFailure = consumerFailure(this.state, "listenerRemove", error); holdOwnedHttpVeniceSource(owner.codec); }
-    if (delivery === "canceled") this.operation.cancel(reason);
-    else this.operation.stop(delivery === "complete" ? "complete" : "upstream", reason);
     delivery = this.operation.delivery ?? delivery;
-    let inspection: UsageInspection = this.sse?.result(delivery === "complete") ?? { tokens: null, outcome: null };
-    if (delivery === "complete" && this.inspect) {
-      try {
-        this.text += this.decoder!.decode();
-        const value: unknown = JSON.parse(this.text);
-        inspection = { tokens: extractUsageTokens(value, this.usageContext), outcome: responseOutcome(value) };
-      } catch { inspection.outcome = "provider_error"; }
+    if (delivery === "complete") this.finished = 2;
+    let hasInspectionFailure = false, inspectionFailure: unknown;
+    try {
+      if (this.snapshotEpoch < 0) this.inspection = { tokens: null, outcome: null };
+      else finishOwnedAcceptedUsage(owner.codec, delivery === "complete");
     }
-    this.text = "";
-    owner.delivering = { ...inspection, delivery, ...(this.operation.receivedRejection ? { nonbillable: true as const } : {}),
+    catch (failure) {
+      hasInspectionFailure = true; inspectionFailure = failure; delivery = "failed";
+      // A trusted admission failure escapes below. This prepaid terminal
+      // record only settles conservative accounting and the cleanup owner.
+      this.inspection = { tokens: null, outcome: null };
+    }
+    if (delivery === "canceled") this.operation.cancel(reason);
+    else this.operation.stop(delivery === "complete" ? "complete" : "upstream", hasInspectionFailure ? inspectionFailure : reason);
+    owner.delivering = { ...this.inspection!, delivery, ...(this.operation.receivedRejection ? { nonbillable: true as const } : {}),
       ...(this.validated?.requestCostReceipt ? { requestCostReceipt: this.validated.requestCostReceipt } : {}) };
     this.resolve();
     // Logical usage can start accounting before physical reader retirement.
     void retireConsumerReader(this.state, delivery === "complete" ? "eof" : "cancel", !!(this.state.flags & 32));
     sealConsumer(owner);
+    if (hasInspectionFailure) {
+      if (listenerFailure) throw new AggregateError([inspectionFailure, listenerFailure], "owned usage terminal");
+      throw inspectionFailure;
+    }
     if (listenerFailure) throw listenerFailure;
   }
   private aborted(): void {
@@ -567,25 +634,30 @@ class OwnedChatUsage {
         this.state.crossingRead = 1; next = { done: false, value: this.state.crossingWire };
       } else {
         this.state.prefixWire = undefined; this.state.crossingWire = undefined;
+        settleOwnedHttpCodecConsumerCapture(this.state.owner.codec);
         phase = "read";
         next = this.state.flags & 64 ? { done: true, value: undefined } : await readConsumer(this.state);
       }
       if (this.finished) { next = undefined as never; return; }
       phase = "usage";
-      if (next.done) { next = undefined as never; this.sse?.end(); phase = "finish"; this.finish("complete"); phase = "usage"; controller.close(); return; }
-      this.sse?.push(next.value);
-      if (this.inspect) {
-        this.bytes += next.value.byteLength;
-        if (this.bytes > usageInspectionLimit) { this.inspect = false; this.text = ""; }
-        else this.text += this.decoder!.decode(next.value, { stream: true });
+      if (next.done) {
+        next = undefined as never; this.state.captured = undefined;
+        settleOwnedHttpCodecConsumerCapture(this.state.owner.codec);
+        phase = "finish"; this.finish("complete"); phase = "usage"; controller.close(); return;
       }
+      this.snapshot = next.value;
+      this.snapshotEpoch = this.snapshotEpoch === Number.MAX_SAFE_INTEGER ? 1 : this.snapshotEpoch + 1;
+      settleOwnedHttpCodecConsumerCapture(this.state.owner.codec);
+      try { pushOwnedAcceptedUsage(this.state.owner.codec, this.snapshotEpoch, next.value); }
+      finally { this.snapshot = undefined; }
       if (!this.finished) controller.enqueue(next.value);
       this.state.captured = undefined; next = undefined as never;
     } catch (error) {
-      const failure = phase === "usage" ? consumerFailure(this.state, "pull", error) : error;
+      let failure = phase === "usage" && !isIdentityFailure(error) ? consumerFailure(this.state, "pull", error) : error;
       error = undefined;
       if (!this.finished) {
-        try { this.finish("failed", failure); } catch { /* Independent listener origin is already retained. */ }
+        try { this.finish("failed", failure); }
+        catch (cleanup) { failure = new AggregateError([failure, cleanup], "owned usage cleanup"); }
         this.state.owner.outputFailed = true; this.state.owner.outputFailure = failure as object; controller.error(failure);
       } else if (phase === "finish") {
         this.state.owner.outputFailed = true; this.state.owner.outputFailure = failure as object; controller.error(failure);

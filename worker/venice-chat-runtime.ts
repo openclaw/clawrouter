@@ -192,11 +192,6 @@ const ownedCodecMetadata = 65536;
 const ownedJsonSource = 10 * limit + 24 * 65536 + ownedCodecMetadata;
 const ownedSseParsing = 2 * limit + 14 * frameLimit + 24 * 65536 + ownedCodecMetadata;
 const ownedSseResting = 2 * limit + 2 * frameLimit + ownedCodecMetadata;
-// Draft component only: the codec produces <=128 KiB frames, but an actual
-// modified downstream read can supply a larger accepted frame. The unchanged
-// usage parser has no prospective admission seam for that post-capture graph.
-// This component is not a closed bound for the adopted snapshot-at-read policy.
-const ownedSseUsage = 3 * limit + 15 * frameLimit + ownedCodecMetadata;
 interface OwnedVeniceCodec {
   cap: OwnedHttpRevalidation; native?: NativeResponse; binding?: VeniceChatBinding;
   streaming: boolean; started: boolean; headersBytes: number;
@@ -210,7 +205,7 @@ export function prepareOwnedVeniceChatCodec(cap: OwnedHttpRevalidation, selectio
   checkOwnedHttpVeniceCodec(cap, selection);
   if (ownedCodecs?.has(cap) || !native || native !== selection.nativeResponse
     || native.origin !== "https://api.venice.ai" || native.path !== "/api/v1/chat/completions" || !selection.model) throw identityFailure("protocol");
-  fundOwnedHttpVeniceCodec(cap, ownedCodecMetadata + 4 * selection.model.upstream.length, 0);
+  fundOwnedHttpVeniceCodec(cap, ownedCodecMetadata + 4 * selection.model.upstream.length);
   prepareOwnedHttpCodecConsumers(cap);
   const binding = prepareVeniceChatBinding(selection.body as Record<string, unknown>, selection.model.upstream);
   const state: OwnedVeniceCodec = { cap, native, binding, streaming: !Array.isArray(selection.body) && selection.body.stream === true,
@@ -224,8 +219,8 @@ export function checkOwnedVeniceChatCodec(cap: OwnedHttpRevalidation, native: Na
   const state = codecOwner(cap);
   if (state.started || state.native !== native) throw identityFailure("protocol");
 }
-function codecPhase(state: OwnedVeniceCodec, bytes: number, usage = 0): void {
-  fundOwnedHttpVeniceCodec(state.cap, bytes + state.headersBytes, usage);
+function codecPhase(state: OwnedVeniceCodec, bytes: number): void {
+  fundOwnedHttpVeniceCodec(state.cap, bytes + state.headersBytes);
 }
 export function matchesOwnedVeniceUsage(cap: OwnedHttpRevalidation, response: Response, usage: ValidatedNativeUsage | undefined): boolean {
   const state = ownedCodecs?.get(cap); return !!state && state.output === response && state.usage === usage;
@@ -382,40 +377,42 @@ class OwnedVeniceSource {
     if (this.reading || this.flags & 1 || !this.reader) throw identityFailure("protocol");
     let resolve!: () => void;
     const pending = new Promise<void>(done => { resolve = done; }); this.reading = pending;
-    let observed: Promise<ReadableStreamReadResult<Uint8Array>>;
+    let accept!: (value: ReadableStreamReadResult<Uint8Array>) => void, reject!: (reason: unknown) => void;
+    const observed = new Promise<ReadableStreamReadResult<Uint8Array>>((yes, no) => { accept = yes; reject = no; });
     try {
       const reader = this.reader, method = reader.read;
       let native = !!(this.flags & 128) && Object.getPrototypeOf(reader) === ((this.flags & 8) ? ReadableStreamBYOBReader.prototype : ReadableStreamDefaultReader.prototype)
         && method === ((this.flags & 8) ? ownedByobRead : ownedDefaultRead);
       this.originalRead = Reflect.apply(method, reader, (this.flags & 8) ? [new Uint8Array(limit)] : []);
       const then = this.originalRead!.then; native &&= then === ownedSourceThen;
-      observed = Reflect.apply(then, this.originalRead, [(value: ReadableStreamReadResult<Uint8Array>) => {
+      void Reflect.apply(then, this.originalRead, [(value: ReadableStreamReadResult<Uint8Array>) => {
+        if (this.reading !== pending) return;
         try {
           const bytes = value.value;
-          if (!bytes) return { done: value.done, value: undefined } as ReadableStreamReadResult<Uint8Array>;
+          if (!bytes) { accept({ done: value.done, value: undefined } as ReadableStreamReadResult<Uint8Array>); return; }
           // The existing whole-backing profile is checked before the copy. Its
           // source and destination were both admitted by the current phase.
           if (!(bytes instanceof Uint8Array) || !(bytes.buffer instanceof ArrayBuffer) || bytes.buffer.byteLength > limit) {
-            this.flags |= 256; return { done: value.done, value: undefined } as ReadableStreamReadResult<Uint8Array>;
+            this.flags |= 256; accept({ done: value.done, value: undefined } as ReadableStreamReadResult<Uint8Array>); return;
           }
           const captured = new Uint8Array(bytes.byteLength); captured.set(bytes);
-          return { done: value.done, value: captured } as ReadableStreamReadResult<Uint8Array>;
-        } catch (reason) { throw this.failure("read", reason); }
-        finally { value = undefined as never; this.originalRead = undefined; }
+          accept({ done: value.done, value: captured } as ReadableStreamReadResult<Uint8Array>);
+        } catch (reason) { reject(this.failure("read", reason)); reason = undefined; }
+        finally { value = undefined as never; this.originalRead = undefined; if (this.reading === pending) this.reading = undefined; resolve(); }
       }, (reason: unknown) => {
+        if (this.reading !== pending) return;
         this.originalRead = undefined; this.flags |= 4;
-        if (native && this.nativeFailure) throw this.nativeFailure;
-        const failure = this.failure("read", reason); reason = undefined;
+        const failure = native && this.nativeFailure ? this.nativeFailure : this.failure("read", reason); reason = undefined;
         if (native) this.nativeFailure = failure;
-        throw failure;
+        reject(failure); if (this.reading === pending) this.reading = undefined; resolve();
       }]);
     } catch (reason) {
       this.flags |= 4; const failure = this.failure("read", reason); reason = undefined;
-      if (this.originalRead) { holdOwnedHttpVeniceSource(this.state.cap); return Promise.reject(failure); }
-      observed = Promise.reject(failure);
+      if (this.reading !== pending) return observed.then(() => { throw failure; }, () => { throw failure; });
+      if (this.originalRead) { holdOwnedHttpVeniceSource(this.state.cap); reject(failure); return observed; }
+      reject(failure); if (this.reading === pending) this.reading = undefined; resolve();
+      return observed;
     }
-    void observed.then(() => { if (this.reading === pending) this.reading = undefined; resolve(); },
-      () => { if (this.reading === pending) this.reading = undefined; resolve(); });
     return observed;
   }
   private cancel(): void {
@@ -519,7 +516,7 @@ export async function consumeOwnedVeniceChatResponse(cap: OwnedHttpRevalidation,
     let pairs = 0, units = 0;
     response.headers.forEach((value, name) => { pairs++; units += name.length + value.length; });
     state.headersBytes += 32 * pairs + 8 * units;
-    codecPhase(state, state.streaming ? ownedSseResting : ownedJsonSource, state.streaming ? ownedCodecMetadata : 0);
+    codecPhase(state, state.streaming ? ownedSseResting : ownedJsonSource);
     source.open(response, signal);
     const length = response.headers.get("content-length"), encoding = response.headers.get("content-encoding");
     if (response.status !== 200 || response.redirected || response.headers.has("content-range")
@@ -565,7 +562,7 @@ async function ownedVeniceJson(state: OwnedVeniceCodec, source: OwnedVeniceSourc
     let resolveOutput!: () => void, sent = false;
     state.outputRetired = new Promise(resolve => { resolveOutput = resolve; });
     ownOwnedHttpVeniceRetirement(state.cap, state.outputRetired);
-    const finishOutput = () => { outputWire = undefined; state.outputDone = true; resolveOutput(); };
+    const finishOutput = () => { outputWire = undefined; state.outputDone = true; codecPhase(state, ownedCodecMetadata); resolveOutput(); };
     const stream = new ReadableStream<Uint8Array>({
       type: "bytes",
       pull(controller) {
@@ -577,7 +574,7 @@ async function ownedVeniceJson(state: OwnedVeniceCodec, source: OwnedVeniceSourc
     try {
       const result = new Response(stream, { status: 200, headers });
       state.outputBody = stream;
-      codecPhase(state, 2 * limit + ownedCodecMetadata, ownedCodecMetadata);
+      codecPhase(state, 2 * limit + ownedCodecMetadata);
       source.checkAbort(); return result;
     } catch (error) {
       let cleanup: object | undefined;
@@ -595,6 +592,10 @@ function ownedVeniceEvents(state: OwnedVeniceCodec, source: OwnedVeniceSource, r
   const events = new OwnedVeniceEvents(state, source, length);
   state.events = events;
   return events.publish(response);
+}
+function ownedEventSpace(code: number): boolean {
+  return code >= 9 && code <= 13 || code === 32 || code === 160 || code === 5760
+    || code >= 8192 && code <= 8202 || code === 8232 || code === 8233 || code === 8239 || code === 8287 || code === 12288 || code === 65279;
 }
 class OwnedVeniceEvents {
   private frame: Uint8Array = new Uint8Array(frameLimit);
@@ -651,20 +652,36 @@ class OwnedVeniceEvents {
         this.source.checkAbort();
         const boundary = sseEventBoundary(this.frame, 0, this.size, this.cursor);
         if (boundary) {
-          codecPhase(this.state, ownedSseParsing, this.flags & 4 ? ownedSseUsage : ownedCodecMetadata);
-          let text = "", data: string[] | undefined, lines: string[] | undefined, value = "", payload: unknown;
+          codecPhase(this.state, ownedSseParsing);
+          let text = "", value = "", payload: unknown;
           let hasData = false;
           try {
             text = new TextDecoder("utf-8", { fatal: true }).decode(this.frame.subarray(0, boundary.start));
-            let count = 0; for (const char of text) if ((char === "\n" || char === "\r") && ++count > 256) invalid();
-            lines = text.split(/\r\n|\r|\n/); data = [];
-            for (const line of lines) {
-              if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
-              if (/^event:\s*error\s*$/.test(line)) invalid();
+            let count = 0;
+            for (let index = 0; index < text.length; index++)
+              if ((text.charCodeAt(index) === 10 || text.charCodeAt(index) === 13) && ++count > 256) invalid();
+            // The original line split and data join retain up to two complete
+            // vectors during parsing. Fold those same ranges synchronously;
+            // CRLF is one separator, and data removes only ONE ASCII space.
+            for (let start = 0; start <= text.length;) {
+              let end = start;
+              while (end < text.length && text.charCodeAt(end) !== 10 && text.charCodeAt(end) !== 13) end++;
+              if (text.startsWith("data:", start)) {
+                const from = start + 5 + Number(text.charCodeAt(start + 5) === 32);
+                if (hasData) value += "\n";
+                value += text.slice(from, end); hasData = true;
+              }
+              if (text.startsWith("event:", start)) {
+                let from = start + 6, to = end;
+                while (from < to && ownedEventSpace(text.charCodeAt(from))) from++;
+                while (to > from && ownedEventSpace(text.charCodeAt(to - 1))) to--;
+                if (to - from === 5 && text.startsWith("error", from)) invalid();
+              }
+              if (end === text.length) break;
+              start = end + (text.charCodeAt(end) === 13 && text.charCodeAt(end + 1) === 10 ? 2 : 1);
             }
-            hasData = data.length > 0;
             if (hasData) {
-              if (this.flags & 1) invalid(); value = data.join("\n");
+              if (this.flags & 1) invalid();
               if (value === "[DONE]") { if (!(this.flags & 2)) invalid(); this.flags |= 1; }
               else {
                 payload = parseOwnedVeniceJson(this.state, value); validateVeniceReturnedModel(this.state.binding!, payload);
@@ -672,11 +689,11 @@ class OwnedVeniceEvents {
                 this.flags |= 2;
               }
             }
-          } finally { text = ""; value = ""; payload = undefined; data = undefined; lines = undefined; }
-          codecPhase(this.state, ownedSseResting, this.flags & 4 ? ownedSseUsage : ownedCodecMetadata);
+          } finally { text = ""; value = ""; payload = undefined; }
+          codecPhase(this.state, ownedSseResting);
           if (hasData && !(this.flags & 4)) { await revalidateOwnedVeniceChat(this.state.cap, this.source.signal!); this.flags |= 4; }
           this.source.checkAbort(); assertOwnedVeniceChatLive(this.state.cap); if (this.flags & 8) return;
-          codecPhase(this.state, ownedSseResting, ownedSseUsage);
+          codecPhase(this.state, (this.pending?.buffer.byteLength ?? 0) + this.frame.buffer.byteLength + frameLimit + ownedCodecMetadata);
           const bytes = this.frame.slice(0, boundary.end);
           this.frame.copyWithin(0, boundary.end, this.size); this.size -= boundary.end; this.cursor.offset = 0; this.cursor.lineStart = 0;
           controller.enqueue(bytes); return;
@@ -694,6 +711,7 @@ class OwnedVeniceEvents {
           if (this.offset === this.pending.length) { this.pending = undefined; this.offset = 0; }
           continue;
         }
+        codecPhase(this.state, ownedSseResting);
         let next: ReadableStreamReadResult<Uint8Array> | undefined = await this.source.read();
         try {
           if (this.flags & 8) return; this.source.checkAbort();

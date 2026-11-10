@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startWorkerdFixture } from '../../test/helpers/workerd.mjs';
 import { startOwnedJsonObservedFixture } from '../../test/helpers/owned-json-parser-observer.mjs';
-import { ownedJsonCodecCases, ownedJsonCodecWire } from '../../test/helpers/owned-json-parser-cases.mjs';
+import { ownedJsonCodecCases, ownedJsonCodecWire, ownedUsageCases, ownedUsageWire, ownedCodecSseLines } from '../../test/helpers/owned-json-parser-cases.mjs';
 import { ownedHttpModel, ownedHttpPricingModel, ownedHttpControlModels, ownedHttpProxyKey, ownedHttpRouter, ownedHttpUpstream, seedOwnedHttpChat } from '../../test/helpers/owned-http-chat-fixture.mjs';
 
 // One memoized ORIGINAL body root is enrolled as soon as each dispatch resolves,
@@ -861,4 +861,212 @@ test('native independent source closed getter throw keeps its own origin and ori
     assert.deepEqual(after.completed.at(-1).origins, [{ origin: 'closed', undefined: true }]);
     assert.equal(after.reasonReads, 0); assert.equal(after.events.length - before.events.length, 1);
   });
+});
+
+for (const streaming of [true, false]) for (const name of ownedUsageCases.filter(name => streaming || ['wide', 'deep', 'quoted', 'scalar', 'malformed', 'many-lines', 'overflow'].includes(name)))
+test('native genuine accepted usage census and ordinary oracle: ' + name + '/' + streaming, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const request = { method: 'POST', body: JSON.stringify({ name, format: streaming ? 'sse' : 'json' }) };
+    const reference = JSON.parse((await f.request('https://fixture/fixture/usage-reference', request)).text);
+    f.releases.push(async () => { assert.equal((await f.request('https://fixture/fixture/consumer-mode', { method: 'DELETE' })).status, 204); });
+    assert.equal((await f.request('https://fixture/fixture/usage-case', request)).status, 204);
+    const before = await settledState(f);
+    const response = await f.request('https://fixture/v1/chat/completions', chat('venice', { model: ownedHttpControlModels.venice, stream: streaming }));
+    assert.equal(response.status, 200); assert.equal(response.text, ownedUsageWire(name, streaming));
+    const after = await settledState(f);
+    assert.equal(after.events.length - before.events.length, 1);
+    assert.equal(after.events.at(-1).input, reference.tokens?.input ?? null);
+    assert.equal(after.events.at(-1).output, reference.tokens?.output ?? null);
+    assert.equal(after.consumers.acquired, 1); assert.equal(after.consumers.replay, 0);
+    assert.equal(after.consumers.oversizedOutput, 0);
+    assert.equal(after.usage.census, after.usage.parsed); assert.equal(after.usage.cleared, 1);
+    if (name === 'wide') { assert.equal(after.usage.maxContainers, 600002); assert.ok(after.usage.maxGraph >= 9600042); }
+    if (name.startsWith('refusal') || name === 'two-large') assert.ok(after.usage.summaries >= 2);
+    assert.equal(count(after, 'provider', '/chat/completions') - count(before, 'provider', '/chat/completions'), 1);
+  }, true);
+});
+
+for (const when of ['before', 'after']) test('native request capture survives real intake authentication yield: ' + when, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const release = async () => {
+      await f.request('https://fixture/fixture/parser-hold', { method: 'DELETE' });
+      await f.request('https://fixture/fixture/consumer-mode', { method: 'DELETE' });
+    };
+    f.releases.push(release);
+    assert.equal((await f.request('https://fixture/fixture/consumer-mode', { method: 'POST', body: 'intake-request-' + when })).status, 204);
+    assert.equal((await f.request('https://fixture/fixture/parser-hold', { method: 'POST', body: 'intake' })).status, 204);
+    const dispatch = f.dispatch('https://fixture/v1/chat/completions', chat('chat', { messages: [{ role: 'user', content: 'snapA' + 'x'.repeat(1024 * 1024) }] }));
+    let held;
+    for (;;) { held = await state(f); if (held.parserHold?.arrived) break; await new Promise(resolve => setTimeout(resolve, 10)); }
+    assert.ok(held.consumers.intake.capturedBytes >= 1024 * 1024);
+    assert.equal(held.consumers.intake.live, 1); assert.equal(held.completed.length, 0);
+    assert.equal(count(held, 'provider', '/chat/completions'), 0);
+    if (when === 'after') assert.equal((await f.request('https://fixture/fixture/intake-mutate', { method: 'POST' })).status, 204);
+    await release();
+    const response = await f.take(dispatch); assert.equal(response.status, 200); await f.take(f.body(response));
+    const after = await settledState(f), upstream = JSON.parse((await f.request('https://fixture/fixture/upstream')).text);
+    assert.equal(upstream.length, 1); assert.equal(upstream[0].requestMarker, when === 'before' ? 'snapB' : 'snapA');
+    assert.equal(after.events.length, 1); assert.equal(after.consumers.intake.mutations, 1);
+    assert.equal(after.consumers.intake.live, 0); assert.equal(after.consumers.intake.retired, 1);
+  }, true);
+});
+
+test('native aborted intake captures and discards an actual late fulfilled read before retirement', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const release = async () => { await f.request('https://fixture/fixture/consumer-mode', { method: 'DELETE' }); };
+    f.releases.push(release);
+    assert.equal((await f.request('https://fixture/fixture/consumer-mode', { method: 'POST', body: 'intake-request-late' })).status, 204);
+    const dispatch = f.dispatch('https://fixture/v1/chat/completions', chat('chat', { messages: [{ role: 'user', content: 'snapA-late' }] }));
+    let held;
+    for (;;) { held = await state(f); if (held.consumers.intake.held) break; await new Promise(resolve => setTimeout(resolve, 10)); }
+    assert.equal(held.consumers.intake.captures ?? 0, 0); assert.equal(held.completed.length, 0);
+    assert.equal((await f.request('https://fixture/fixture/intake-abort', { method: 'POST' })).status, 204);
+    const aborted = await state(f); assert.equal(aborted.completed.length, 0); assert.ok(aborted.charged >= held.charged);
+    await release();
+    const response = await f.take(dispatch); assert.equal(response.status, 499); await f.take(f.body(response));
+    const after = await settledState(f);
+    assert.equal(after.consumers.intake.captures, 1, 'actual late fulfillment was captured under its original owner');
+    assert.equal(after.consumers.intake.live, 0); assert.equal(after.consumers.intake.retired, 1);
+    assert.equal(count(after, 'provider', '/chat/completions'), 0); assert.equal(after.events.length, 0);
+    assert.ok(after.charged < held.charged, 'only joined intake ownership retires');
+  }, true);
+});
+
+for (const mode of ['unlock-after-success', 'closed-undefined', 'unlock-before-closed-shared'])
+test('native private four soft-status owners overlap delivery and charging: ' + mode, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const kv = await f.runtime.getKVNamespace('POLICY_KV', 'router');
+    await kv.put('connections/volcengine', JSON.stringify({ providerId: 'volcengine', enabled: true, monthlyBudgetMicros: 1000000 }));
+    const release = async () => { await f.request('https://fixture/fixture/consumer-mode', { method: 'DELETE' }); };
+    f.releases.push(release);
+    assert.equal((await f.request('https://fixture/fixture/consumer-mode', { method: 'POST', body: 'status-' + mode })).status, 204);
+    const before = await state(f);
+    const response = await f.request('https://fixture/v1/chat/completions', chat('soft', { stream: true }));
+    assert.equal(response.status, 200); assert.ok(response.text.includes('[DONE]'));
+    let held;
+    for (;;) { held = await state(f); if (held.statusReaders.length === 4 && held.statusReaders.every(row => row.held) && held.events.length === 1) break; await new Promise(resolve => setTimeout(resolve, 10)); }
+    assert.equal(held.completed.length, 0, 'public delivery and logical charge do not retire held originals');
+    assert.ok(held.charged > before.charged);
+    assert.equal(held.statusReaders.every(row => row.retired), false);
+    assert.equal(held.statusReaders.every(row => row.decided), mode === 'closed-undefined', 'closed is independent custody; returned unlock precedes decision');
+    const charges = held.calls.filter(row => row.kind === 'budget' && row.path === '/charge');
+    assert.equal(charges.length, 4); assert.equal(new Set(charges.map(row => row.chargeId)).size, 4);
+    assert.ok(Number(response.headers.get('server-timing')?.match(/cr-budget;dur=([\d.]+)/)?.[1]) >= 40);
+    await release();
+    const after = await settledState(f);
+    assert.ok(after.statusReaders.every(row => row.retired && row.decided && row.unlock === 1 && row.nativeUnlocked === 1));
+    assert.ok(after.statusReaders.every(row => row.reasonReads === 0));
+    assert.equal(after.events.length, 1); assert.ok(after.charged < held.charged);
+    assert.deepEqual(after.calls.filter(row => row.kind === 'budget' && row.path === '/charge').map(row => row.chargeId), charges.map(row => row.chargeId));
+  }, true);
+});
+
+
+test('native later object-128 SSE overlaps four original private status reads after grace', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const kv = await f.runtime.getKVNamespace('POLICY_KV', 'router');
+    await kv.put('connections/venice', JSON.stringify({ providerId: 'venice', enabled: true, monthlyBudgetMicros: 1000000 }));
+    const input = { model: ownedHttpControlModels.venice, stream: true, ownedVeniceCase: 'compact-later-object128' };
+    assert.equal((await f.request('https://fixture/v1/chat/completions', chat('soft_venice', input))).status, 200);
+    const before = await settledState(f);
+    const release = async () => { await f.request('https://fixture/fixture/consumer-mode', { method: 'DELETE' }); };
+    f.releases.push(release);
+    assert.equal((await f.request('https://fixture/fixture/consumer-mode', { method: 'POST', body: 'status-pending-success' })).status, 204);
+    const response = await f.request('https://fixture/v1/chat/completions', chat('soft_venice', input));
+    assert.equal(response.status, 200); assert.ok(response.text.includes('[DONE]'));
+    const held = await state(f);
+    assert.equal(held.statusReaders.length, 4); assert.ok(held.statusReaders.every(row => row.held && !row.retired && !row.decided));
+    const current = held.parsers.slice(before.parsers.length);
+    assert.equal(current.length, 2); assert.equal(current[1].peakParents, 128); assert.equal(current[1].statusPending, 4);
+    assert.equal(count(held, 'authority', '/admission/resolve'), count(before, 'authority', '/admission/resolve'), 'covered later borrower');
+    assert.equal(count(held, 'authority', '/grant-pools/record'), count(before, 'authority', '/grant-pools/record'), 'own pending cohort remains deferred');
+    assert.equal(held.events.length, before.events.length + 1); assert.equal(held.completed.length, before.completed.length);
+    await release();
+    const after = await settledState(f);
+    assert.ok(after.statusReaders.every(row => row.retired && row.decided));
+    assert.equal(after.events.length, before.events.length + 1); assert.ok(after.charged < held.charged);
+    assert.equal(count(after, 'authority', '/grant-pools/record'), count(before, 'authority', '/grant-pools/record') + 1);
+  }, true);
+});
+
+for (const mode of ['line-limit', 'line-plus', 'line-error'])
+test('native private codec range fold preserves line count and event-error boundary: ' + mode, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const response = await f.request('https://fixture/v1/chat/completions', chat('venice', {
+      model: ownedHttpControlModels.venice, stream: true, ownedVeniceCase: mode,
+    }));
+    assert.equal(response.status, mode === 'line-limit' ? 200 : 502);
+    if (mode === 'line-limit') assert.equal(response.text, ownedCodecSseLines('zai-org-glm-5-2', mode));
+    const after = await settledState(f); assert.equal(after.events.length, 1);
+  }, true);
+});
+
+test('native private terminal keeps post-native original pending despite early then return', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    f.releases.push(async () => { await f.request('https://fixture/fixture/parser-hold', { method: 'DELETE' }); });
+    assert.equal((await f.request('https://fixture/fixture/parser-hold', { method: 'POST', body: 'accounting-then' })).status, 204);
+    const response = await f.request('https://fixture/v1/chat/completions', chat('chat', { stream: true }));
+    assert.equal(response.status, 200); assert.ok(response.text.includes('[DONE]'));
+    let held;
+    for (;;) { held = await state(f); if (held.parserHold?.arrived) break; await new Promise(resolve => setTimeout(resolve, 10)); }
+    assert.equal(held.completed.length, 0); assert.ok(held.charged >= 32 * 1024 * 1024);
+    assert.equal((await f.request('https://fixture/fixture/parser-hold', { method: 'DELETE' })).status, 204);
+    const after = await settledState(f); assert.equal(after.events.length, 1); assert.ok(after.charged < held.charged);
+  }, true);
+});
+
+test('native private status fetch ignores early then return and keeps its late body', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const kv = await f.runtime.getKVNamespace('POLICY_KV', 'router');
+    await kv.put('connections/venice', JSON.stringify({ providerId: 'venice', enabled: true, monthlyBudgetMicros: 1000000 }));
+    f.releases.push(async () => { await f.request('https://fixture/fixture/parser-hold', { method: 'DELETE' }); });
+    assert.equal((await f.request('https://fixture/fixture/parser-hold', { method: 'POST', body: 'status-then' })).status, 204);
+    const response = await f.request('https://fixture/v1/chat/completions', chat('soft_venice', { model: ownedHttpControlModels.venice, stream: true }));
+    assert.equal(response.status, 200); assert.ok(response.text.includes('[DONE]'));
+    const held = await state(f);
+    assert.equal(held.parserHold.arrived, true); assert.equal(held.completed.length, 0);
+    assert.equal(held.calls.filter(row => row.kind === 'budget' && row.path === '/status').length, 4);
+    assert.ok(held.charged >= 32 * 1024 * 1024);
+    assert.equal((await f.request('https://fixture/fixture/parser-hold', { method: 'DELETE' })).status, 204);
+    const after = await settledState(f);
+    assert.ok(after.statusReaders.every(row => row.retired && row.decided));
+    assert.equal(after.events.length, 1); assert.ok(after.charged < held.charged);
+  }, true);
+});
+
+test('native private intake charges empty string value cells like null value cells', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    assert.equal((await f.request('https://fixture/v1/chat/completions', chat('chat', { ownedCellCheck: [null, null] }))).status, 200);
+    const nulls = (await settledState(f)).consumers.intake.graphBytes;
+    assert.equal((await f.request('https://fixture/v1/chat/completions', chat('chat', { ownedCellCheck: ['', ''] }))).status, 200);
+    const strings = await settledState(f);
+    assert.equal(strings.consumers.intake.graphBytes, nulls, 'both parsed values own two primitive cells and no string payload units');
+    assert.equal(strings.events.length, 2);
+  }, true);
+});
+
+for (const mode of ['then-early', 'public-then-early', 'source-then-early'])
+test('native private reader joins actual work despite an early then return: ' + mode, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const release = async () => { await f.request('https://fixture/fixture/consumer-mode', { method: 'DELETE' }); };
+    f.releases.push(release);
+    assert.equal((await f.request('https://fixture/fixture/consumer-mode', { method: 'POST', body: mode })).status, 204);
+    let completed = false;
+    const pending = f.request('https://fixture/v1/chat/completions', chat('venice', {
+      model: ownedHttpControlModels.venice, stream: true, ownedVeniceCase: 'compact-later-object128',
+    })).then(value => { completed = true; return value; });
+    const joined = f.own(pending);
+    let held;
+    for (;;) {
+      held = await state(f);
+      const row = mode === 'then-early' ? held.consumers : mode.startsWith('public-') ? held.consumers.public : held.consumers.source;
+      if (row.held && row.thenCalls) break;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(completed, false); assert.equal(held.completed.length, 0);
+    assert.ok(held.charged >= 32 * 1024 * 1024);
+    await release();
+    const response = await f.take(joined); assert.equal(response.status, 200); assert.ok(response.text.includes('[DONE]'));
+    const after = await settledState(f); assert.equal(after.events.length, 1); assert.ok(after.charged < held.charged);
+  }, true);
 });

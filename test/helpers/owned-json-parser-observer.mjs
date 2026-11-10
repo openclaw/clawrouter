@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { ownedUsageWire } from './owned-json-parser-cases.mjs';
 
 // Fixture-only source observers. Forward every original operation unchanged;
 // retain scalar counts, never parser input, keys, values, containers or tokens.
@@ -8,10 +9,73 @@ export function createOwnedJsonObservation() {
   let current, preparations = 0;
   const consumers = { created: 0, acquired: 0, retired: 0, live: 0, inner: 0, outer: 0,
     read: 0, cancel: 0, unlock: 0, nativeUnlocked: 0, unlockSettled: 0, thenCalls: 0, closed: 0, closedSettled: 0, replay: 0, transferred: 0, pricing: 0, enqueued: 0, oversizedOutput: 0, mutations: 0, held: false, released: false, reasonReads: 0 };
-  let releaseConsumer;
-  const publicReaders = { ...consumers }, intakeReaders = { ...consumers };
-  consumers.public = publicReaders; consumers.intake = intakeReaders;
+  const usage = { census: 0, parsed: 0, maxGraph: 0, maxContainers: 0, maxStrings: 0, maxAtoms: 0, maxUnits: 0, summaries: 0, cleared: 0 };
+  let releaseConsumer, mutateIntake;
+  const statusReaders = [], statusReleases = [];
+  const publicReaders = { ...consumers }, intakeReaders = { ...consumers }, sourceReaders = { ...consumers };
+  consumers.public = publicReaders; consumers.intake = intakeReaders; consumers.source = sourceReaders;
   function faultReader(reader, mode, consumers) {
+      if (mode === 'pending-success' || mode === 'then-early') {
+        const read = reader.read;
+        let first = true, release;
+        const held = new Promise(resolve => { release = resolve; });
+        releaseConsumer = release;
+        Object.defineProperty(reader, 'read', { value(...args) {
+          const original = Reflect.apply(read, this, args).then(async result => {
+            consumers.read++;
+            if (first && !result.done) { first = false; consumers.held = true; await held; }
+            return result;
+          });
+          if (mode === 'then-early') {
+            const then = original.then;
+            Object.defineProperty(original, 'then', { value(...handlers) {
+              consumers.thenCalls++; Reflect.apply(then, this, handlers);
+              return Promise.resolve({ done: true, value: undefined });
+            } });
+          }
+          return original;
+        } });
+        return;
+      }
+      if (mode === 'request-before' || mode === 'request-after' || mode === 'request-late') {
+        const read = reader.read;
+        let retained, position = 0, release;
+        const held = new Promise(resolve => { release = resolve; });
+        releaseConsumer = () => { retained = undefined; release(); };
+        mutateIntake = () => { if (!retained) throw new Error('request original view absent'); retained[position] = 66; consumers.mutations++; };
+        Object.defineProperty(reader, 'read', { value(...args) {
+          return Reflect.apply(read, this, args).then(async result => {
+            if (!result.done && result.value) {
+              const marker = new TextDecoder().decode(result.value).indexOf('snapA');
+              if (marker >= 0) {
+                position = marker + 4;
+                if (mode === 'request-before') { result.value[position] = 66; consumers.mutations++; }
+                else retained = result.value;
+                if (mode === 'request-late') { consumers.held = true; await held; }
+              }
+            }
+            consumers.read++; return result;
+          });
+        } });
+        return;
+      }
+      if (mode.startsWith('usage:')) {
+        const [, name, format] = mode.split(':'), read = reader.read;
+        let wire = globalThis.__ownedUsageWire(name, format === 'sse'), offset = 0;
+        releaseConsumer = () => { wire = ''; };
+        Object.defineProperty(reader, 'read', { value(...args) {
+          return Reflect.apply(read, this, args).then(result => {
+            if (offset < wire.length) {
+              const end = Math.min(wire.length, offset + 1900000);
+              const bytes = new TextEncoder().encode(wire.slice(offset, end)); offset = end;
+              return { done: false, value: bytes };
+            }
+            wire = '';
+            return result.done ? result : { done: false, value: new Uint8Array(0) };
+          });
+        } });
+        return;
+      }
       if (mode === 'capture-before' || mode === 'capture-after') {
         const read = reader.read;
         let previous, offset = 0;
@@ -91,6 +155,29 @@ export function createOwnedJsonObservation() {
   return {
     rows,
     consumers,
+    usage,
+    statusReaders,
+    statusReader(reader, index) {
+      const row = { read: 0, cancel: 0, unlock: 0, nativeUnlocked: 0, unlockSettled: 0, thenCalls: 0, closed: 0, closedSettled: 0, reasonReads: 0, held: false, retired: false, decided: false };
+      statusReaders[index] = row;
+      const previous = releaseConsumer;
+      if (this.consumerMode.startsWith('status-')) faultReader(reader, this.consumerMode.slice(7), row);
+      if (releaseConsumer !== previous) statusReleases.push(releaseConsumer);
+      releaseConsumer = previous;
+    },
+    statusDecision(index) { statusReaders[index].decided = true; },
+    statusRetired(index) { statusReaders[index].retired = true; },
+    capturedIntake(length) { intakeReaders.captures = (intakeReaders.captures ?? 0) + 1; intakeReaders.capturedBytes = (intakeReaders.capturedBytes ?? 0) + length; },
+    intakeGraph(bytes) { intakeReaders.graphBytes = bytes; },
+    mutateIntake() { mutateIntake?.(); },
+    census(c, s, a, u, graph) {
+      usage.census++; usage.maxGraph = Math.max(usage.maxGraph, graph);
+      usage.maxContainers = Math.max(usage.maxContainers, c); usage.maxStrings = Math.max(usage.maxStrings, s);
+      usage.maxAtoms = Math.max(usage.maxAtoms, a); usage.maxUnits = Math.max(usage.maxUnits, u);
+    },
+    beforeUsageParse() { if (usage.parsed >= usage.census) throw new Error('native usage parse before census'); usage.parsed++; },
+    summary(value) { if (value !== undefined && value !== 'refusal') throw new Error('private summary retained a stop-reason subtree'); usage.summaries++; },
+    usageCleared() { usage.cleared++; },
     consumerMode: 'normal',
     previousCodec: undefined,
     consumerCreated() { consumers.created++; },
@@ -100,11 +187,15 @@ export function createOwnedJsonObservation() {
     pricing(delta) { consumers.pricing += delta; if (consumers.pricing < 0) throw new Error("pricing retired twice"); },
     reader(reader) {
       consumers.acquired++; consumers.live++; readers.add(reader);
-      if (consumers.acquired === 1) faultReader(reader, this.consumerMode, consumers);
+      if (consumers.acquired === 1 || this.consumerMode.startsWith('usage:') || this.consumerMode === 'then-early') faultReader(reader, this.consumerMode, consumers);
+    },
+    sourceReader(reader) {
+      sourceReaders.acquired++;
+      if (this.consumerMode === 'source-then-early') faultReader(reader, 'then-early', sourceReaders);
     },
     publicReader(reader) {
       publicReaders.acquired++; publicReaders.live++;
-      if (publicReaders.acquired === 1 && this.consumerMode.startsWith('public-')) faultReader(reader, this.consumerMode.slice(7), publicReaders);
+      if ((publicReaders.acquired === 1 || this.consumerMode === 'public-then-early') && this.consumerMode.startsWith('public-')) faultReader(reader, this.consumerMode.slice(7), publicReaders);
     },
     intakeReader(reader) {
       intakeReaders.acquired++; intakeReaders.live++;
@@ -112,7 +203,7 @@ export function createOwnedJsonObservation() {
     },
     intakeRetiredReader() { intakeReaders.retired++; if (--intakeReaders.live < 0) throw new Error('intake reader retired twice'); },
     publicRetiredReader() { publicReaders.retired++; if (--publicReaders.live < 0) throw new Error('public reader retired twice'); },
-    releaseConsumer() { consumers.released = true; releaseConsumer?.(); releaseConsumer = undefined; },
+    releaseConsumer() { consumers.released = true; releaseConsumer?.(); releaseConsumer = undefined; mutateIntake = undefined; for (const release of statusReleases) release(); statusReleases.length = 0; },
     retiredReader() { consumers.retired++; if (--consumers.live < 0) throw new Error('consumer reader retired twice'); },
     wrapper(publicBoundary) { if (publicBoundary) consumers.outer++; else consumers.inner++; },
     accounting(delta) {
@@ -121,7 +212,8 @@ export function createOwnedJsonObservation() {
     },
     begin() {
       if (preparations !== 0) throw new Error('unused preparation accounting survived into codec');
-      const row = { parents: 0, tokens: 0, pending: false, member: false, peakParents: 0, peakTokens: 0, peakStored: 2, peakActive: 2, peakBetween: 2, peakRejected: 0,
+      const row = { statusPending: statusReaders.filter(value => value.held && !value.retired).length,
+        parents: 0, tokens: 0, pending: false, member: false, peakParents: 0, peakTokens: 0, peakStored: 2, peakActive: 2, peakBetween: 2, peakRejected: 0,
         parentPushes: 0, parentPops: 0, tokenPushes: 0, tokenPops: 0, attachments: 0, objectAttachments: 0, cleared: false,
         consumerReaders: consumers.live, pricingOwners: consumers.pricing, innerWrappers: consumers.inner, outerWrappers: consumers.outer };
       rows.push(row); return row;
@@ -164,7 +256,20 @@ function replace(source, anchor, replacement, count = 1) {
 }
 
 export function observeOwnedJsonSource(path, source) {
-  if (/[\\/]worker[\\/]json-body\.ts$/.test(path)) {
+  if (/[\\/]worker[\\/]venice-chat-runtime\.ts$/.test(path)) {
+    source = replace(source, 'this.reader = (this.flags & 8) ? this.body.getReader({ mode: "byob" }) : this.body.getReader();',
+      'this.reader = (this.flags & 8) ? this.body.getReader({ mode: "byob" }) : this.body.getReader(); ' + probe + '.sourceReader(this.reader);');
+  } else if (/[\\/]worker[\\/]token-usage\.ts$/.test(path)) {
+    source = replace(source, 'return 16 * (containers + strings + atoms) + 2 * units;',
+      probe + '.census(containers, strings, atoms, units, 16 * (containers + strings + atoms) + 2 * units); return 16 * (containers + strings + atoms) + 2 * units;');
+    source = replace(source, 'owned?.admitJson(data);', 'owned?.admitJson(data); if (owned) ' + probe + '.beforeUsageParse();');
+    source = replace(source, 'this.admitJson(this.text, true);', 'this.admitJson(this.text, true); ' + probe + '.beforeUsageParse();');
+    source = replace(source, 'messageUsage = messageCounters(usageRecord(root));',
+      'if (privateUsageAccumulators?.has(accept)) ' + probe + '.summary(message.stop_reason); messageUsage = messageCounters(usageRecord(root));');
+    source = replace(source, 'const delta = messageCounters(usageRecord(root));',
+      'if (privateUsageAccumulators?.has(accept)) ' + probe + '.summary(message?.stop_reason); const delta = messageCounters(usageRecord(root));');
+    source = replace(source, 'ownedAcceptedUsage!.delete(this.cap);', 'ownedAcceptedUsage!.delete(this.cap); ' + probe + '.usageCleared();');
+  } else if (/[\\/]worker[\\/]json-body\.ts$/.test(path)) {
     source = replace(source, 'let pendingKey: string | undefined;',
       'let pendingKey: string | undefined; const __parserProbe = privateParents ? ' + probe + '.begin() : undefined;');
     source = replace(source, 'parent = parents.at(-1); member = pendingKey;',
@@ -196,6 +301,10 @@ export function observeOwnedJsonSource(path, source) {
       'try { this.reader = this.body!.getReader(); this.__probeAcquired = true; ' + probe + '.publicReader(this.reader); }');
     source = replace(source, '      this.nativeFailure = undefined; this.resolve();',
       '      this.nativeFailure = undefined; if (this.__probeAcquired) ' + probe + '.publicRetiredReader(); this.resolve();');
+    source = replace(source, '    this.observeClosed();', '    ' + probe + '.statusReader(this.reader, this.index); this.observeClosed();');
+    source = replace(source, 'this.owner.retire(this.index, this);', probe + '.statusRetired(this.index); this.owner.retire(this.index, this);');
+    source = replace(source, 'this.owner.decide(this.index, observed && !(this.flags & 16), spent);',
+      probe + '.statusDecision(this.index); this.owner.decide(this.index, observed && !(this.flags & 16), spent);');
   } else if (/[\\/]worker[\\/]proxy\.ts$/.test(path)) {
     source = replace(source, 'const diagnostics = beginOwnedHttpIntakeDiagnostics(cap);',
       'const diagnostics = beginOwnedHttpIntakeDiagnostics(cap); let __intakeProbeAcquired = false;');
@@ -203,6 +312,10 @@ export function observeOwnedJsonSource(path, source) {
       'try { reader = body.getReader({ mode: "byob" }); __intakeProbeAcquired = true; ' + probe + '.intakeReader(reader); }');
     source = replace(source, 'parser?.discard(); parser = undefined; prefixWire = undefined; captureWire = undefined;',
       'parser?.discard(); parser = undefined; prefixWire = undefined; captureWire = undefined; if (__intakeProbeAcquired) ' + probe + '.intakeRetiredReader();');
+    source = replace(source, 'captureLength = item.value.byteLength; captureWire!.set(item.value);',
+      'captureLength = item.value.byteLength; captureWire!.set(item.value); ' + probe + '.capturedIntake(captureLength);');
+    source = replace(source, 'const graph = ownedHttpJsonDataBytes(text);',
+      'const graph = ownedHttpJsonDataBytes(text); ' + probe + '.intakeGraph(graph);');
   } else if (/[\\/]worker[\\/]proxy-response\.ts$/.test(path)) {
     source = replace(source, 'checkOwnedHttpCodecConsumer(http, codec, response, operation, streaming, requestId, usageContext);',
       'if (' + probe + '.consumerMode === "forged") codec = Object.freeze({}); '
@@ -238,11 +351,11 @@ export async function startOwnedJsonObservedFixture(directory, router, upstream,
   ]);
   const { build } = createRequire(import.meta.resolve('wrangler/package.json'))('esbuild');
   const bundled = await build({ stdin: {
-    contents: 'globalThis.__ownedJsonObservation = (' + createOwnedJsonObservation.toString() + ')();\n' + router,
+    contents: 'globalThis.__ownedUsageWire = ' + ownedUsageWire.toString() + ';\nglobalThis.__ownedJsonObservation = (' + createOwnedJsonObservation.toString() + ')();\n' + router,
     resolveDir: process.cwd(), sourcefile: 'owned-json-fixture.ts', loader: 'ts',
   }, bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2022', logLevel: 'silent',
   plugins: [{ name: 'observe-original-json-stacks', setup(build) {
-    build.onLoad({ filter: /(?:[\\/]worker[\\/](?:json-body|proxy-accounting|proxy-response|proxy|http-identity-owner|pricing)\.ts|[\\/]stream-json[\\/](?:src[\\/])?core[\\/]parser\.js)$/ }, async ({ path }) => ({
+    build.onLoad({ filter: /(?:[\\/]worker[\\/](?:json-body|proxy-accounting|proxy-response|proxy|http-identity-owner|pricing|token-usage|venice-chat-runtime)\.ts|[\\/]stream-json[\\/](?:src[\\/])?core[\\/]parser\.js)$/ }, async ({ path }) => ({
       contents: observeOwnedJsonSource(path, await readFile(path, 'utf8')),
       loader: path.endsWith('.ts') ? 'ts' : 'js', resolveDir: dirname(path),
     }));

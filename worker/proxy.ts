@@ -620,7 +620,7 @@ function ownedHttpJsonDataBytes(text: string): number {
     }
     if (code === 32 || code === 9 || code === 10 || code === 13) { scalar = false; continue; }
     if (previous === 123 && code !== 125 || previous === 91 && code !== 93) nonempty++;
-    if (code === 34) { string = true; scalar = false; }
+    if (code === 34) { primitives++; string = true; scalar = false; }
     else if (code === 123 || code === 91) { containers++; scalar = false; }
     else if (code === 58) { members++; scalar = false; }
     else if (code === 44) { commas++; scalar = false; }
@@ -629,7 +629,9 @@ function ownedHttpJsonDataBytes(text: string): number {
     previous = code;
   }
   const entries = Math.max(0, commas + nonempty - members);
-  return 8 * (containers + 2 * members + entries + primitives) + 2 * units;
+  // Quoted keys contribute their member cells, not a primitive value cell.
+  // Every quoted value (including an empty or root string) contributes one.
+  return 8 * (containers + 2 * members + entries + Math.max(0, primitives - members)) + 2 * units;
 }
 
 // Same public JSON grammar/thresholds as readJson, with explicit ORIGINAL

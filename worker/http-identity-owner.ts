@@ -16,10 +16,10 @@ import { acceptOwnedVeniceInspection, retireOwnedVeniceRevalidation } from "./ve
 import { acceptOwnedGmiInspection, retireOwnedGmiRevalidation } from "./gmi-organization-binding.ts";
 import { drainOwnedHttpIdentity, retireOwnedHttpConsumers, retireOwnedHttpIdentity, claimOwnedHttpRevalidationBacking,
   admitOwnedHttpRevalidationBacking, retireOwnedHttpRevalidationBacking, type OwnedHttpRevalidationBacking } from "./credential-preflight.ts";
-import { admitOwnedHttpCodecBacking, retireOwnedHttpCodecBacking, admitOwnedHttpConsumerBacking, retireOwnedHttpConsumerBacking } from "./credential-preflight.ts";
+import { admitOwnedHttpCodecBacking, admitOwnedHttpUsageBacking, retireOwnedHttpCodecBacking, admitOwnedHttpConsumerBacking, retireOwnedHttpConsumerBacking } from "./credential-preflight.ts";
 import { retireOwnedHttpProxy, matchesOwnedHttpRevalidationInput, matchesOwnedHttpVeniceResponseInput, matchesOwnedHttpPublicBody, matchesOwnedHttpSoftStatusPlan, matchesOwnedHttpCodecConsumerInput, matchesOwnedHttpCodecNormalizationInput, matchesOwnedHttpCodecUsageInput, acceptOwnedCodecUsage } from "./proxy.ts";
 import { retireOwnedVeniceChatCodec, matchesOwnedVeniceRetirement, consumeOwnedVeniceChatResponse, matchesOwnedVeniceOutputBody, matchesOwnedVeniceOutputFailure, matchesOwnedVeniceConsumerInput } from "./venice-chat-runtime.ts";
-import { matchesOwnedCodecOutputFailure, matchesOwnedCodecConsumerRetirement, retireOwnedCodecConsumers, type OwnedCodecConsumer } from "./proxy-response.ts";
+import { matchesOwnedCodecOutputFailure, matchesOwnedCodecConsumerRetirement, retireOwnedCodecConsumers, ownedUsageCaptureBytes, type OwnedCodecConsumer } from "./proxy-response.ts";
 import { credentialPreflightHeader, credentialPreflightVersion, credentialPreflightPath, credentialPreflightNamespace } from "./credential-preflight-protocol.ts";
 import { usageShardName } from "./usage-sharding.ts";
 import { logCorrelationError } from "./correlation.ts";
@@ -354,10 +354,17 @@ export function checkOwnedHttpVeniceCodec(cap: OwnedHttpRevalidation, selection:
     || !matchesOwnedHttpRevalidationInput(owner.http, owner.request, owner.env, owner.auth, selection,
       owner.upstream, owner.attempt, owner.url, owner.headers, owner.preparation!)) throw identityFailure("protocol");
 }
-export function fundOwnedHttpVeniceCodec(cap: OwnedHttpRevalidation, codecBytes: number, usageBytes: number): void {
+export function fundOwnedHttpVeniceCodec(cap: OwnedHttpRevalidation, codecBytes: number): void {
   const owner = revalidationOwner(cap);
   if (owner.selection.provider.id !== "venice") throw identityFailure("protocol");
-  admitOwnedHttpCodecBacking(owner.backing, codecBytes, usageBytes); owner.codec = true;
+  admitOwnedHttpCodecBacking(owner.backing, codecBytes, requestOwner(owner.http).unknown); owner.codec = true;
+}
+export function fundOwnedHttpAcceptedUsage(cap: OwnedHttpRevalidation, bytes: number): void {
+  const owner = codecCustodyOwner(cap), root = requestOwner(owner.http);
+  if (!owner.consumer || !Number.isSafeInteger(bytes) || bytes < 0) throw identityFailure("protocol");
+  // UNKNOWN keeps the admitted high-water debit. Clearing a local alias can
+  // finish without replacing its primary failure or refunding unresolved work.
+  admitOwnedHttpUsageBacking(owner.backing, bytes, root.unknown);
 }
 export function prepareOwnedHttpCodecConsumers(cap: OwnedHttpRevalidation): void {
   const owner = revalidationOwner(cap);
@@ -405,6 +412,15 @@ export function fundOwnedHttpCodecConsumerCapture(cap: OwnedHttpRevalidation, by
   const next = Math.max(owner.consumerDataBytes ?? 0, bytes);
   admitOwnedHttpConsumerBacking(owner.backing, 1048576 + 65536 + (owner.consumerHeaderBytes ?? 0) + next);
   owner.consumerDataBytes = next;
+}
+export function settleOwnedHttpCodecConsumerCapture(cap: OwnedHttpRevalidation): void {
+  const owner = codecCustodyOwner(cap);
+  if (!owner.consumer) throw identityFailure("protocol");
+  if (requestOwner(owner.http).unknown) return;
+  const bytes = ownedUsageCaptureBytes(cap);
+  if (bytes === null) return;
+  admitOwnedHttpConsumerBacking(owner.backing, 1048576 + 65536 + (owner.consumerHeaderBytes ?? 0) + bytes);
+  owner.consumerDataBytes = bytes;
 }
 export function beginOwnedCodecConsumerDiagnostics(cap: OwnedHttpRevalidation): 1 | 2 {
   const owner = revalidationOwner(cap);
@@ -866,27 +882,31 @@ export function discardOwnedHttpSinkResponse(sink: OwnedHttpSinkOwner, response:
 // an unused body's cancellation. Ordinary finalization keeps its existing path.
 class OwnedTerminalOperation {
   original?: Promise<unknown>;
+  private resolveObservation?: () => void;
   flags = 0;
   constructor(readonly owner: OwnedAccountingTerminal, readonly code: number, readonly origin: number, public subject?: unknown) {}
   observe(original: Promise<unknown>): void {
     this.original = original;
+    // A modified actual then method can return before either original outcome.
+    // Only our first observer can settle this prepaid physical receipt.
+    const observed = new Promise<void>(done => { this.resolveObservation = done; });
+    void observed.then(this.settleObservation.bind(this));
     try {
-      const outcome = original.then(this.accept.bind(this), this.reject.bind(this));
-      void outcome.then(this.settleObservation.bind(this));
+      void original.then(this.accept.bind(this), this.reject.bind(this));
     } catch (reason) { this.unknown(reason); }
     original = undefined as never;
   }
   accept(value: unknown): void {
     try { if (this.code < 10) this.subject = value; this.owner.accept(this.code, value); }
     catch (reason) { this.unknown(reason); }
-    finally { value = undefined; this.original = undefined; }
+    finally { value = undefined; this.original = undefined; this.resolveObservation?.(); this.resolveObservation = undefined; }
   }
   reject(reason: unknown): void {
     try {
       failedSinkOrigin(this.owner.root, this.origin, reason); reason = undefined;
       this.owner.reject(this.code);
     } catch (failure) { this.unknown(failure); }
-    finally { reason = undefined; this.original = undefined; }
+    finally { reason = undefined; this.original = undefined; this.resolveObservation?.(); this.resolveObservation = undefined; }
   }
   private settleObservation(): void {
     // Both first observers return only void, including diagnosed consumer
@@ -901,6 +921,10 @@ class OwnedTerminalOperation {
   retire(): void {
     if (this.flags & 3) return;
     this.flags |= 1; this.subject = undefined; this.original = undefined;
+    // reject() exposes no carrier. Its first observer and this separate tail
+    // have now cleared every payload alias; UNKNOWN never reaches this point.
+    // Preserve ordinal/flags in CONTROL, without releasing funding.
+    compactRetiredSinkOrigin(this.owner.root, Math.floor(this.origin / 32));
     this.owner.retireOperation(this.code);
   }
   unknown(reason: unknown): void {
@@ -1260,29 +1284,34 @@ class OwnedPublicReader {
     let resolve!: () => void;
     const joined = new Promise<void>(done => { resolve = done; });
     this.reading = joined;
-    let observed: Promise<ReadableStreamReadResult<Uint8Array>>;
+    let accept!: (value: ReadableStreamReadResult<Uint8Array>) => void, reject!: (reason: unknown) => void;
+    const observed = new Promise<ReadableStreamReadResult<Uint8Array>>((yes, no) => { accept = yes; reject = no; });
     try {
       const reader = this.reader, method = reader.read;
       let native = !!(this.flags & 8) && Object.getPrototypeOf(reader) === ReadableStreamDefaultReader.prototype
         && !Object.hasOwn(reader, "closed") && method === originalReaderRead;
       this.originalRead = Reflect.apply(method, reader, []);
       const then = this.originalRead!.then; native &&= then === ownedBoundaryThen;
-      observed = Reflect.apply(then, this.originalRead, [(value: ReadableStreamReadResult<Uint8Array>) => { this.originalRead = undefined; return value; }, (reason: unknown) => {
+      void Reflect.apply(then, this.originalRead, [(value: ReadableStreamReadResult<Uint8Array>) => {
+        if (this.reading !== joined) return;
+        try { accept({ done: value.done, value: value.value } as ReadableStreamReadResult<Uint8Array>); }
+        catch (reason) { reject(this.failure(1, "read", reason)); reason = undefined; }
+        finally { value = undefined as never; this.originalRead = undefined; if (this.reading === joined) this.reading = undefined; resolve(); }
+      }, (reason: unknown) => {
+        if (this.reading !== joined) return;
         this.originalRead = undefined;
         this.flags |= 32;
-        if (native && this.nativeFailure) throw this.nativeFailure;
-        if (native && this.propagated(reason)) { this.nativeFailure = reason as object; throw reason; }
-        const failure = this.failure(1, "read", reason); reason = undefined;
+        const failure = native && this.nativeFailure ? this.nativeFailure
+          : native && this.propagated(reason) ? reason as object : this.failure(1, "read", reason); reason = undefined;
         if (native) this.nativeFailure = failure;
-        throw failure;
+        reject(failure); if (this.reading === joined) this.reading = undefined; resolve();
       }]);
     } catch (reason) {
       const failure = this.failure(1, "read", reason); reason = undefined;
-      if (this.originalRead) { holdOwnedHttpRequest(this.cap); return Promise.reject(failure); }
-      observed = Promise.reject(failure);
+      if (this.reading !== joined) return observed.then(() => { throw failure; }, () => { throw failure; });
+      if (this.originalRead) { holdOwnedHttpRequest(this.cap); reject(failure); return observed; }
+      reject(failure); if (this.reading === joined) this.reading = undefined; resolve();
     }
-    void observed.then(() => { if (this.reading === joined) this.reading = undefined; resolve(); },
-      () => { if (this.reading === joined) this.reading = undefined; resolve(); });
     return observed;
   }
   private unlock(): void {
@@ -1513,17 +1542,19 @@ class OwnedStatusReader {
     try { if (!namespace) throw softStatusError(); stub = namespace.get(namespace.idFromName(descriptor.leg.objectName)); }
     catch (reason) { throw this.failure(0, "acquire", reason); }
     this.fetching = sinkOrigin(this.owner.root.sink!, "fetch");
-    let following: Promise<void>;
+    // Reuse these slots only before reader acquisition. The actual callbacks,
+    // never an overridden .then return, settle this private void receipt.
+    const following = new Promise<void>((resolve, reject) => { this.resolveRead = resolve; this.rejectRead = reject; });
+    let observing = false;
     try {
       this.original = stub.fetch(descriptor.url);
       const then = this.original.then;
-      following = Reflect.apply(then, this.original, [(response: Response) => { this.original = undefined; this.response = response; }, (reason: unknown) => {
-        this.original = undefined; throw this.failure(1, "fetch", reason);
-      }]);
+      observing = true;
+      void Reflect.apply(then, this.original, [this.fetchResolved.bind(this), this.fetchRejected.bind(this)]);
     } catch (reason) {
       const failure = this.failure(1, "fetch", reason); reason = undefined;
-      if (this.original) { holdOwnedHttpRequest(this.owner.cap); await new Promise<never>(() => {}); }
-      throw failure;
+      if (observing || this.original) { holdOwnedHttpRequest(this.owner.cap); await new Promise<never>(() => {}); }
+      this.rejectRead!(failure); this.resolveRead = undefined; this.rejectRead = undefined;
     }
     stub = undefined as never;
     await following;
@@ -1538,6 +1569,16 @@ class OwnedStatusReader {
     }
     if (!this.reader) return;
     this.observeClosed();
+  }
+  private fetchResolved(response: Response): void {
+    if (!this.resolveRead) return;
+    this.response = response; response = undefined as never; this.original = undefined;
+    this.resolveRead(); this.resolveRead = undefined; this.rejectRead = undefined;
+  }
+  private fetchRejected(reason: unknown): void {
+    if (!this.resolveRead) return;
+    const failure = this.failure(1, "fetch", reason); reason = undefined; this.original = undefined;
+    this.rejectRead!(failure); this.resolveRead = undefined; this.rejectRead = undefined;
   }
   private observeClosed(): void {
     this.closed = new Promise<void>(done => { this.resolveClosed = done; });

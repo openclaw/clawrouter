@@ -1,23 +1,37 @@
-import './typescript-setup.mjs';
 import assert from 'node:assert/strict';
-import test from 'node:test';
-import { privateOwnedHttpChat } from '../index.ts';
-import { continuationAuthority } from './continuation-authority.mjs';
-import { attachGrantCredentialNamespace } from './grant-credential-mock.mjs';
-import { sqlBudgetNamespace } from './sql-budget-namespace.mjs';
-import { accessBytesResponse } from './access-byte-fixture.mjs';
-import { putGrantCredentials } from '../grant-credentials.ts';
-import { snapshot } from '../providers.ts';
-import { estimateCost, OwnedHttpAccountingCommand } from '../proxy-accounting.ts';
-import { bodyBudgetCharged, bodyBudgetBytes, ExactBodyCharge } from '../body-budget.ts';
-import { sha256Hex } from '../utils.ts';
-import { evictCredentialGeneration } from '../credential-preflight.ts';
-import { prepareOwnedHttpPricing, enterOwnedHttpPricing } from '../pricing.ts';
-import { beginOwnedHttpRequest, finishOwnedHttpRequest } from '../http-identity-owner.ts';
-import { isIdentityFailure } from '../identity-admission.ts';
-import { ownedJsonCodecCases, ownedJsonCodecWire } from '../../test/helpers/owned-json-parser-cases.mjs';
-import { beginOwnedCodecConsumer, normalizeOwnedCodecPreStreamError, observeOwnedCodecUsage, ownedCodecUsageCompletion } from '../proxy-response.ts';
-import { HttpOperation } from '../http-operation.ts';
+import { test, after } from 'node:test';
+import { registerHooks } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { createOwnedJsonObservation, observeOwnedJsonSource } from '../../test/helpers/owned-json-parser-observer.mjs';
+import { ownedJsonCodecCases, ownedJsonCodecWire, ownedUsageCases, ownedUsageWire, ownedCodecSseLines } from '../../test/helpers/owned-json-parser-cases.mjs';
+
+const observation = globalThis.__ownedJsonObservation = createOwnedJsonObservation();
+globalThis.__ownedUsageWire = ownedUsageWire;
+const sourceHooks = registerHooks({ load(url, context, nextLoad) {
+  const result = nextLoad(url, context);
+  if (!url.startsWith('file:') || !/(?:proxy-response|token-usage|http-identity-owner|venice-chat-runtime)\.ts$/.test(url)) return result;
+  const source = typeof result.source === 'string' ? result.source : Buffer.from(result.source).toString('utf8');
+  return { ...result, source: observeOwnedJsonSource(fileURLToPath(url), source) };
+} });
+after(() => { sourceHooks.deregister(); delete globalThis.__ownedJsonObservation; delete globalThis.__ownedUsageWire; });
+await import('./typescript-setup.mjs');
+const { privateOwnedHttpChat } = await import('../index.ts');
+const { continuationAuthority } = await import('./continuation-authority.mjs');
+const { attachGrantCredentialNamespace } = await import('./grant-credential-mock.mjs');
+const { sqlBudgetNamespace } = await import('./sql-budget-namespace.mjs');
+const { accessBytesResponse } = await import('./access-byte-fixture.mjs');
+const { putGrantCredentials } = await import('../grant-credentials.ts');
+const { snapshot } = await import('../providers.ts');
+const { estimateCost, OwnedHttpAccountingCommand } = await import('../proxy-accounting.ts');
+const { bodyBudgetCharged, bodyBudgetBytes, ExactBodyCharge } = await import('../body-budget.ts');
+const { sha256Hex } = await import('../utils.ts');
+const { evictCredentialGeneration } = await import('../credential-preflight.ts');
+const { prepareOwnedHttpPricing, enterOwnedHttpPricing } = await import('../pricing.ts');
+const { beginOwnedHttpRequest, finishOwnedHttpRequest } = await import('../http-identity-owner.ts');
+const { isIdentityFailure } = await import('../identity-admission.ts');
+const { beginOwnedCodecConsumer, normalizeOwnedCodecPreStreamError, observeOwnedCodecUsage, ownedCodecUsageCompletion } = await import('../proxy-response.ts');
+const { HttpOperation } = await import('../http-operation.ts');
+const { createSseUsageInspector, extractUsageTokens, responseOutcome, beginOwnedAcceptedUsage, pushOwnedAcceptedUsage, finishOwnedAcceptedUsage } = await import('../token-usage.ts');
 
 const modelId = 'fireworks/glm-5.2', kid = 'http_pricing', policyId = 'http-pricing-policy';
 const provider = snapshot.providers.find(item => item.id === 'fireworks');
@@ -85,6 +99,9 @@ test('private codec consumer rejects fabricated owners before original reader ac
     await assert.rejects(normalizeOwnedCodecPreStreamError(cap, response, true, operation, { format: 'openai', requestId: 'fixture-request' }), isIdentityFailure);
     assert.throws(() => observeOwnedCodecUsage(cap, response, operation), isIdentityFailure);
     assert.throws(() => ownedCodecUsageCompletion(cap), isIdentityFailure);
+    assert.throws(() => beginOwnedAcceptedUsage(cap, response, 'sse', undefined, false), isIdentityFailure);
+    assert.throws(() => pushOwnedAcceptedUsage(cap, 1, new Uint8Array([1])), isIdentityFailure);
+    assert.throws(() => finishOwnedAcceptedUsage(cap, true), isIdentityFailure);
     assert.equal(acquired, 0); assert.equal(bodyBudgetCharged(), baseline);
   } finally { await body.cancel(); operation.stop('complete'); }
 });
@@ -675,4 +692,93 @@ test('owned Venice independent closed getter throw is a closed origin before any
       assert.equal(Object.getOwnPropertyDescriptor(terminal[0].errors[0], 'primaryIsUndefined')?.value, true);
     } catch (validation) { throw new AggregateError([...terminal, validation], 'closed getter validation'); }
   }, false, 'venice');
+});
+
+for (const streaming of [true, false]) for (const name of ownedUsageCases.filter(name => streaming || ['wide', 'deep', 'quoted', 'scalar', 'malformed', 'many-lines', 'overflow'].includes(name)))
+test('owned accepted usage shares ordinary evidence without retaining foreign summary: ' + name + '/' + streaming, async t => {
+  const wire = ownedUsageWire(name, streaming);
+  let reference;
+  if (streaming) {
+    const ordinary = createSseUsageInspector(); ordinary.push(new TextEncoder().encode(wire)); ordinary.end();
+    reference = ordinary.result(); assert.deepEqual(ordinary.result(), reference);
+  } else if (Buffer.byteLength(wire) > 2097152) reference = { tokens: null, outcome: null };
+  else {
+    let value, valid = false; try { value = JSON.parse(wire); valid = true; } catch {}
+    reference = valid ? { tokens: extractUsageTokens(value), outcome: responseOutcome(value) } : { tokens: null, outcome: 'provider_error' };
+  }
+  const before = { ...observation.usage }, acquired = observation.consumers.acquired;
+  observation.consumerMode = 'usage:' + name + ':' + (streaming ? 'sse' : 'json');
+  try {
+    await fixture(t, async f => {
+      f.releases.push(() => observation.releaseConsumer());
+      const native = '{"model":"' + veniceUpstream + '","choices":[]}';
+      f.veniceResponse(streaming ? 'data: ' + native + '\n\ndata: [DONE]\n\n' : native, streaming);
+      const response = await f.request(payload({ model: veniceModelId, stream: streaming }));
+      assert.equal(response.status, 200); assert.equal(response.text, wire);
+      await f.drain();
+      assert.equal(f.events.length, 1); assert.equal(f.sent.length, 1);
+      assert.equal(f.events[0].input_tokens, reference.tokens?.input ?? null);
+      assert.equal(f.events[0].output_tokens, reference.tokens?.output ?? null);
+      assert.equal(observation.consumers.acquired - acquired, 1, 'actual same-reader pipeline');
+      assert.equal(observation.usage.parsed - before.parsed, observation.usage.census - before.census);
+      if (name === 'wide') {
+        assert.equal(observation.usage.maxContainers, 600002);
+        assert.ok(observation.usage.maxGraph >= 9600042);
+      }
+      if (name.startsWith('refusal') || name === 'two-large') assert.ok(observation.usage.summaries > before.summaries);
+    }, false, 'venice');
+    assert.equal(observation.usage.cleared - before.cleared, 1, 'usage state clears only at genuine final retirement');
+  } finally { observation.consumerMode = 'normal'; observation.releaseConsumer(); }
+});
+
+for (const mode of ['line-limit', 'line-plus', 'line-error']) test('private codec range fold keeps exact newline and event-error semantics: ' + mode, async t => {
+  await fixture(t, async f => {
+    const wire = ownedCodecSseLines(veniceUpstream, mode); f.veniceResponse(wire, true);
+    const response = await f.request(payload({ model: veniceModelId, stream: true }));
+    assert.equal(response.status, mode === 'line-limit' ? 200 : 502);
+    if (mode === 'line-limit') assert.equal(response.text, wire);
+    await f.drain(); assert.equal(f.sent.length, 1); assert.equal(f.events.length, 1);
+  }, false, 'venice');
+});
+
+test('private terminal waits for actual first observation when modified then returns early', async t => {
+  await fixture(t, async f => {
+    const gate = deferred(), entered = deferred(), send = f.env.USAGE_QUEUE.send;
+    f.releases.push(gate.resolve, entered.resolve);
+    f.env.USAGE_QUEUE.send = function (message) {
+      const original = gate.promise.then(() => Reflect.apply(send, this, [message]));
+      f.own(original); // Fixture observation is attached before the mutation.
+      const then = original.then;
+      Object.defineProperty(original, 'then', { value(...args) { Reflect.apply(then, this, args); entered.resolve(); return Promise.resolve(); } });
+      return original;
+    };
+    const response = await f.request(payload({})); assert.equal(response.status, 200);
+    await entered.promise;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.ok(bodyBudgetCharged() > 32 * 1024 * 1024, 'early returned observer promise is not original retirement');
+    gate.resolve(); await f.drain(); assert.equal(f.events.length, 1); assert.equal(f.sent.length, 1);
+  });
+});
+
+for (const mode of ['then-early', 'public-then-early', 'source-then-early'])
+test('private reader ignores a premature modified then return: ' + mode, async t => {
+  const row = mode === 'then-early' ? observation.consumers : mode.startsWith('public-') ? observation.consumers.public : observation.consumers.source;
+  row.held = false; const before = row.thenCalls;
+  observation.consumerMode = mode;
+  try {
+    await fixture(t, async f => {
+      f.releases.push(() => observation.releaseConsumer());
+      const wire = 'data: {"model":"' + veniceUpstream + '","choices":[],"usage":{"prompt_tokens":4,"completion_tokens":3,"total_tokens":7}}\n\ndata: [DONE]\n\n';
+      f.veniceResponse(wire, true);
+      let completed = false;
+      const response = f.request(payload({ model: veniceModelId, stream: true })).then(value => { completed = true; return value; });
+      f.own(response);
+      while (!row.held) await new Promise(resolve => setTimeout(resolve, 1));
+      assert.ok(row.thenCalls > before); assert.equal(completed, false);
+      assert.ok(bodyBudgetCharged() >= 32 * 1024 * 1024);
+      observation.releaseConsumer();
+      const result = await response; assert.equal(result.status, 200); assert.equal(result.text, wire);
+      await f.drain(); assert.equal(f.events.length, 1); assert.equal(f.sent.length, 1);
+    }, false, 'venice');
+  } finally { observation.consumerMode = 'normal'; observation.releaseConsumer(); }
 });

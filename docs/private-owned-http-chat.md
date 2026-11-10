@@ -1051,7 +1051,7 @@ before dispatch, body roots remain memoized, and teardown releases before
 joining finite originals. These are authored witnesses, not runtime results;
 all local semantics remain UNRUN_CODE_ONLY_HOSTED.
 
-### Cohesive draft and accepted-usage admission boundary
+### E791 historical draft and accepted-usage admission boundary
 
 The subsequent code-only draft has a private completion-leaf operation, fixed
 terminal accounting, four separately owned soft-status readers, coalesced
@@ -1089,12 +1089,12 @@ hands the complete crossing bytes to the same reader's usage consumer.
 | Captured ASCII frame | 1,800,019 bytes |
 | Unchanged usage wire ceiling | 2,097,152 bytes |
 | Parsed containers C | 600,002 |
-| Parsed property/index occurrences P | 600,001 |
+| Parsed property/index cells P (two per object member) | 600,002 |
 | Primitive value occurrences N | 0 |
 | Key UTF-16 units U | 5 |
-| Graph alone: `8(C+P+N)+2U` | 9,600,034 logical bytes |
+| Graph alone: `8(C+P+N)+2U` | 9,600,042 logical bytes |
 | Current usage component: `3×2 MiB + 15×128 KiB + 65,536` | 8,323,072 logical bytes |
-| Graph-only shortfall | 1,276,962 logical bytes |
+| Graph-only shortfall | 1,276,970 logical bytes |
 
 Frame SHA256:
 `70531d28a20cfd18b29552211e1310a60dbebd3c91981caa0061b83a2ec78fb8`.
@@ -1115,11 +1115,172 @@ The smallest requested additional source boundary is a genuine private
 accepted-frame admission/consumption seam in `token-usage.ts`, retaining the
 shared evidence and full mixed-protocol accumulator semantics and leaving the
 ordinary API unchanged. Its concrete representation must admit actual captured
-bytes, all parsing products and cleanup before their factories. This is a
-proposal for that source only; it is not implemented or proof that the whole
-pipeline will fit afterward. No extra arena, source counter reset or profile
-change is proposed.
+bytes, all parsing products and cleanup before their factories. At E791 this
+was a proposal for that source only. The following source25 draft implements it
+without establishing whole-pipeline fit. No extra arena, source counter reset
+or profile change is introduced.
 
 The whole DATA table and the separate operation/source/read/terminal128 and
 synchronous512 upper bounds remain open. No runtime, publication or completed
 candidate qualification is claimed for this checkpoint.
+
+
+## Accepted-byte usage draft (source 25)
+
+The private consumer now uses the shared `token-usage.ts` evidence parser and
+accumulator. Ordinary callers keep their existing API, returned layout and
+arbitrary-JavaScript accumulator behavior. The new registry accepts only the
+genuine consumer's current response, mode and successive captured snapshot.
+Native `JSON.parse` remains the grammar and value constructor. Capacity checks
+are outside its syntax catches; a failed accepted-frame operation is terminal
+and cannot be replayed by the unfinished-frame cleanup path.
+
+A scalar census charges every container opener C, quoted token S and maximal
+non-string atom A. Quoted raw content supplies the decoded-UTF16 upper U,
+including escape spellings and unfinished strings. The prospective graph
+component is `16(C+S+A)+2U`. This covers scalar strings, duplicate/discarded
+members and malformed-prefix construction. It does not impose the codec's
+128-depth limit on the separate native usage parser.
+
+| Live DATA component | Admission and actual retirement boundary |
+| --- | --- |
+| Accepted read | Original whole backing, capture and possible output copies are admitted before the first controlled fulfillment copies bytes. Only the actual joined read and cleared aliases permit a smaller capture component. UNKNOWN retains its high-water debit. |
+| SSE framing | Old and replacement buffers overlap during growth. Completed frame text is decoded before the frame buffer is replaced by the next 8-KiB buffer; both backings are funded during replacement. Pending-frame inspection retains its buffer. |
+| SSE line fold | Scalar ranges replace the private split/filter/map vectors. The complete frame and old/new data concatenations remain admitted until the actual local aliases clear. Ordinary trimming and event-error precedence remain unchanged. |
+| Native JSON graph | Census precedes `JSON.parse`; text, graph and extraction/update intermediates overlap. The graph charge lasts through evidence acceptance and extraction, not merely through parse return. |
+| JSON accumulation | Decoder output and old/new accumulated text overlap before assignment. Final decoder flush and graph admission occur before the native parser. The existing 2-MiB usage ceiling remains. |
+| Retained message summary | Only the private retained `stop_reason` becomes `"refusal"` or an own `undefined` field. Missing delta retains it; a present non-refusal/null value clears it. Current evidence is still complete for mixed-protocol and rejection decisions. |
+| Codec versus usage | Independent updates preserve the other component. Codec EOF cannot zero live usage. Final usage retirement requires the actual consumer/public/accounting joins. |
+
+The wide 1,800,019-byte fixture's actual graph lower is 9,600,042 logical
+bytes under the two-cell object-member convention. Its census reservation is
+9,600,058. The prior 8,323,072 usage allocation is no longer used. These are
+component facts, not a whole-foreground or whole-request fit certificate.
+
+The private codec also folds its existing SSE line ranges without constructing
+`split` and data vectors during parsing. It retains CRLF handling, removal of
+exactly one ASCII space after `data:`, the existing 256-CR/LF count and
+whitespace-sensitive `event:error` behavior. The ordinary codec is unchanged.
+
+Terminal history now compacts only after its actual first observer and separate
+void tail clear all payload aliases. A private deferred receipt prevents an
+early return from a modified `.then` method from certifying original settlement.
+UNKNOWN keeps the operation and its history. Compaction preserves all ordinal
+facts in two CONTROL Map cells; it releases no DATA or capacity credit.
+
+The unchanged status, history, registration, accounting-receiver and leaf
+blocks carry their source component inventories. The revised terminal adds an
+own observation resolver field, deferred Promise and resolver; its old pending
+and tail expressions therefore require this delta. Sixteen retired status and
+ten retired terminal origins occupy 52 history cells, only after their own
+actual tails and last carrier consumers have ended. Live carriers still cost
+ten products each. This is not a Terminal128 certificate.
+
+Four status reads can still overlap a later accepted depth128 SSE frame after
+the 50-ms grace. The carried status storage/observer envelope is at most372
+before active parser/factory calls; the parser component remains415 with its
+shared281 slice charged once. Their sum is not an allocation across the four
+windows. Request, generation/authentication/selection, upload, codec, public
+consumer, accounting and active call products remain additive. A complete
+operation/source/read/terminal128 and synchronous512 assignment is still open;
+this draft grants no runtime or publication qualification.
+
+Authored coverage adds 24 accepted-usage cases in each of Node and actual
+Workerd, using the ordinary inspector as oracle and real modified reader
+results. Cases cover wide/deep/scalar/quoted/malformed data, many data lines,
+overflow/unfinished input, mixed protocol, refusal transitions and two large
+stop-reason graphs. Native cases additionally exercise successful request
+mutation across intake authentication, aborted late-read discard, four private
+soft-status owners, and the later depth128/status overlap. Exact hosted TAP
+counts and all semantics remain unrun. Source observers retain only synthetic
+fixture/scalar evidence and are not a CONTROL measurement or heap proof.
+
+### Current healthy-status overlap: disjoint CONTROL counterexample
+
+This draft remains incomplete. A covered later borrower can hold four healthy
+private status reads after the 50-ms delivery grace while the response codec
+parses a later depth128 object frame. Its selected count and genuine pending
+capability remain deferred until HTTP consumer retirement. The native witness
+now warms the same request first and checks that selection feedback remains
+deferred during this overlap. It has not been executed.
+
+The following is a disjoint subset of the current source products, not a sum of
+the old component upper bounds. Count one record, own field, collection cell,
+Promise, resolver, handler, reaction, captured binding or logical scope as one
+product. Borrowed target objects are counted once. No physical VM allocation
+or native heap size is inferred. Fields assigned `undefined` remain fields.
+
+| Simultaneously retained subset | Products | Concrete derivation |
+| --- | ---: | --- |
+| Compact parser depth and explicit factories | 276 | Consumer and tokenizer arrays plus 256 parent cells:258. Eleven constructed function objects:11. Two facades with three and two method fields:7. This omits the remaining fixed bindings, pending key, all active parser calls and token batches; neither415 nor its fixed76 upper component is used as a lower bound. |
+| Four pending status readers | 296 | Controller/decision/reader structures:120 (80 reader fields/objects,19 controller/vector/receipt,21 decision/receipt/index). Per reader:13 pending-read products;10 independent-closed products;8 run-observer products;9 suspended-run products;4 Response/body/reader/decoder handles. Thus120+4×44. Grace, leaf and active parsing products are omitted. |
+| Request root | 45 | Initial record16; three collections3; two capabilities2; two registry entries4; exact charge2; two distinct completion bases18. Later added fields are omitted. |
+| Revalidation and backing | 36 | Initial record20; cap1; registry2; request-list cell1; backing record/cap/registry12. Later codec-role/scope fields are omitted. |
+| Codec registry state | 13 | Healthy SSE record11 and registry2. No JSON-only usage or output-retirement fields. |
+| Codec source | 24 | Object plus20 fields21, cleanup vector1, retirement Promise/resolver2. Its actual read/closed/pull observations are omitted here. |
+| Codec event owner | 16 | Object plus12 fields13 and cursor record with two fields3. Backings and active execution are excluded. |
+| Consumer owner and reader | 30 | Consumer record/index/retirement receipt14; actual healthy sniff/usage reader record and15 instantiated fields16. Reader observations are excluded. |
+| Public reader | 22 | Object plus18 fields19, retirement Promise/resolver2 and actual reader1. Dynamic scope and observers are excluded. |
+| Chat usage owner | 19 | Object plus14 fields15, ready Promise/resolver2 and bound abort listener/receiver2. |
+| Accepted usage owner | 24 | Object plus16 fields17, registry2, bound consume/receiver2, private frame index2 and accumulator membership1. The new staged-frame field is included. |
+| Usage framer | 26 | Facade/three fields4; five functions and their scope links10; decoder1; logical scope/link2; nine retained bindings9. Construction-only fatal-UTF8 parameter is omitted. |
+| Mixed-protocol accumulator | 28 | Facade/three fields4; four functions/links8; scope/link2; fourteen retained bindings14. No retained evidence graph is charged as CONTROL here. |
+| HTTP identity owner | 16 | Initial record10, four arrays4, registry2. Later fields/list cells are omitted. |
+| Authentication | 20 | Owner9, three-method capability4, registry2 and consumption lease/exact charge5. Its borrowed generation target is excluded. |
+| Selection | 19 | Initial owner6, five-field capability6, registry2 and consumption lease/exact charge5. Later destination/provider fields are omitted. |
+| Foreground credential | 18 | Initial owner9, dispose capability2, registry2, lease/exact charge5. Later fields are omitted. |
+| Three distinct generation borrowers | 24 | Authentication parent, pending-count parent and pending-cap parent each have record4, dispose capability2 and registry cells2. |
+| Those three borrower funding owners | 18 | Each metadata-charge object/three fields4 plus exact charge/held field2. Optional-coordinate receipts are omitted. |
+| Pending count | 11 | Record and its ten initial fields. Count-map/cursor-map cells and later claim field are omitted. |
+| Deferred pending capability | 25 | Owner12, three empty claim/failure arrays3, authority wrapper2, drain/dispose capability3, registry2 and returned receipt3. Its independent lease is omitted. |
+| Successful accounting receiver | 33 | Initial state10, empty cap1, facts cell2, state registry2, request registry2, request vector/cell2, sinks5 and distinct accounting completion base9. Callback, flags, bound registration and completion reactions are omitted. |
+| Original upload owner | 28 | Retained record12, cap1, failure vector1, registry2, request-list cell1, separate completion base9, AbortController1 and listener function1. Pipe/source and all observer products are omitted. |
+| Proxy invocation | 9 | Initial record6, attempts vector1 and registry2. All later preparation/selection/operation fields are omitted. |
+| **Disjoint subset** | **1076** | **Already52 above the aggregate1024 ceiling, before the omitted products.** |
+
+The pending-read13 consists of the original, logical-outcome and physical
+Promises3; their three retained resolvers3; the actual native `.then` result1;
+two bound handlers and receiver links4; and two registrations2. The closed10
+consists of original/deferred/follower Promises3, resolver1, two bound
+handlers/links4 and two registrations2. The run8 consists of its original and
+following Promises2, two bound handlers/links4 and registrations2. The run9
+counts its suspended scope, `this`, `observed`, `spent`, `backing`, `wire`,
+`reads`, `text` and `decoder`; other block bindings are omitted.
+
+The implementation anchors are `createBodyParser`/`createJsonTokenizer` and
+the carried pinned tokenizer; `OwnedStatusController`, `OwnedStatusReader`,
+`OwnedSoftBudget`; `beginOwnedHttpRequest`, `beginOwnedHttpRevalidation`,
+`OwnedPublicReader`, `beginOwnedHttpUpload`; `OwnedVeniceSource` and
+`OwnedVeniceEvents`; `beginOwnedCodecConsumer`, `acquireConsumerReader`,
+`OwnedChatUsage`; `OwnedAcceptedUsage`, `createSseFrames`,
+`createSseUsageAccumulator`; `resolveOwnedHttpAuthentication`,
+`authenticateCredentialGeneration`, `selectGenerationForConsumer`,
+`reserveOwnedHttpForeground`, `newGenerationBorrow`, `prepareGenerationCount`,
+`newGenerationFlush`, `commitGenerationSchedule`; and
+`makeOwnedAccountingCommand`/`proxyOwnedHttpChat`.
+
+No assignment of this subset to the existing operation128, source128, read128,
+terminal128 and synchronous512 windows can fit: their total is1024. This is a
+necessary-condition failure, not permission to pool the windows. Removing a
+failed-origin record cannot fix this healthy schedule. Shared tokenizer281,
+other shared code, active parser/feed/native operands, generation publication
+owners, upload/accounting/archive originals and all failure branches still need
+their separate accounting. The whole DATA and window upper tables remain open.
+
+The private source, consumer and public read commands now settle their own
+logical and physical receipts from the actual callbacks. A modified `.then`
+return cannot publish a fabricated EOF or certify original retirement. Status
+fetch uses the same distinction, reusing its callback slots before reader
+acquisition. The added fixtures hold actual post-native work and deliberately
+return early from `.then`; all teardown releases precede original joins.
+Status component carry therefore excludes its changed acquisition block.
+
+The next bounded design decision is the codec's materializing parent stack:
+it is128 of the258 depth products. A private validation-only consumer of the
+same tokenizer, followed by native JSON construction after validation and
+validator retirement, is a candidate within `json-body.ts` and
+`venice-chat-runtime.ts`. This would change the currently adopted private
+materializer contract and is **not implemented**. It requires separate parity,
+DATA-overlap and complete-window proof; no128-product net saving or whole fit
+is claimed. Ordinary parsing, expanded ingress and all accepted profiles must
+remain unchanged. No additional production file is proposed by this evidence.
