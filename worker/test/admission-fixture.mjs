@@ -1,3 +1,4 @@
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 import { createGrantAuthority } from "./grant-authority-fixture.mjs";
 import { authorityCall } from "../authority.ts";
 import { sha256Hex } from "../utils.ts";
@@ -9,7 +10,7 @@ export async function admissionFixture() {
   let beforeRead;
   const env = {
     ANTHROPIC_API_KEY: 'synthetic-environment',
-    POLICY_KV: { async get(key, type) { const action = beforeRead; beforeRead = null; await action?.(key); const value = Array.isArray(key) ? new Map(key.map(k => [k, records.get(k) ?? null])) : records.get(key) ?? null; return type === "text" && value !== null ? JSON.stringify(value) : structuredClone(value); }, async put(key, value) { records.set(key, JSON.parse(value)); } },
+    POLICY_KV: { async get(key, type) { const action = beforeRead; beforeRead = null; await action?.(key); const value = Array.isArray(key) ? new Map(key.map(k => [k, records.get(k) ?? null])) : records.get(key) ?? null; return type === "stream" && value !== null ? accessBytesResponse(JSON.stringify(value), "").body : type === "text" && value !== null ? JSON.stringify(value) : structuredClone(value); }, async put(key, value) { records.set(key, JSON.parse(value)); } },
     USAGE_QUEUE: { send: async () => {} },
   };
   const authority = createGrantAuthority(undefined, env);

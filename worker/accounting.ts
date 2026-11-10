@@ -4,9 +4,19 @@ import { dailyBudgetMessage, weeklyBudgetMessage, withLimitHint } from "./policy
 import type { AuthorizedIdentity, BudgetChargeRequest, BudgetReserveRequest, BudgetSettleRequest, Env, ProviderConnection, UsageEvent } from "./types";
 import { budgetLedgerAddress, dailyBudgetLedgerAddress, weeklyBudgetLedgerAddress, budgetPrincipal, providerBudgetLedgerAddress } from "./budget-scope.ts";
 import { logCorrelationError } from "./correlation.ts";
-import { chargeLedger, ingestUsage, settleLedger, musicCoverLedgerControl } from "./ledgers.ts";
+import { chargeLedgerNamespace, ingestUsageNamespace, settleLedgerNamespace, musicCoverLedgerControl } from "./ledgers.ts";
 import { HttpError, randomId } from "./utils.ts";
+import { accountingAdmissionFailure, accountingIdentity, admitAccountingJson, accountingNumberCapacity, copyAccountingJson } from "./json-body.ts";
 import type { PricingGap } from "./pricing.ts";
+
+export interface AccountingSinks {
+  readonly budget: Env["BUDGET_LEDGER"];
+  readonly usage: Env["USAGE_LEDGER"];
+  readonly queue: Env["USAGE_QUEUE"];
+}
+export function accountingSinks(env: Env): AccountingSinks {
+  return { budget: env.BUDGET_LEDGER, usage: env.USAGE_LEDGER, queue: env.USAGE_QUEUE };
+}
 
 export interface BudgetReservation {
   reservations: LedgerBudgetReservation[];
@@ -48,9 +58,18 @@ export interface EstimatedCost {
   requestTariff?: import("./request-tariff.ts").RequestTariff;
 }
 
+// Existing standalone callers pass the factory's cost into reserveBudget.
+// Bind their complete private capsule without retaining caller Env/options or
+// changing that public API. Unowned legacy costs keep their existing behavior.
+const accountingPlanAdmissions = new WeakMap<EstimatedCost, (plan: BudgetReservationPlan) => void>();
+export function bindAccountingPlan(cost: EstimatedCost, admit: (plan: BudgetReservationPlan) => void): void {
+  accountingPlanAdmissions.set(cost, admit);
+}
+
 // Shared with read-only availability. Passing this guard never replaces the
 // atomic reservation; the return value only says whether a ledger is required.
 export function validateBudgetReservation(capability: string, cost: EstimatedCost, policyLimit: number | null | undefined, connection?: ProviderConnection, dailyLimit?: number | null, limitHint?: string | null, weeklyLimit?: number | null): boolean {
+  accountingIdentity(capability); accountingIdentity(limitHint); accountingIdentity(connection?.providerId);
   if (dailyLimit === 0) throw new HttpError(402, "daily_budget_exhausted", withLimitHint(dailyBudgetMessage(0), { limitHint }));
   if (weeklyLimit === 0) throw new HttpError(402, "weekly_budget_exhausted", withLimitHint(weeklyBudgetMessage(0), { limitHint }));
   if (capability === "llm.count_tokens") return false;
@@ -88,11 +107,37 @@ export function planBudgetReservation(auth: AuthorizedIdentity, capability: stri
   if (auth.policy.dailyBudgetMicros != null) add("daily", dailyBudgetLedgerAddress(auth.policyId, auth.policy, budgetPrincipal(auth), at), auth.policy.dailyBudgetMicros);
   if (auth.policy.weeklyBudgetMicros != null) add("weekly", weeklyBudgetLedgerAddress(auth.policyId, auth.policy, budgetPrincipal(auth), at), auth.policy.weeklyBudgetMicros);
   if (providerLimit != null && connection) add("provider", providerBudgetLedgerAddress(connection.providerId, at), providerLimit);
-  return { reservedMicros: cost.reserveMicros, legs };
+  const plan = { reservedMicros: cost.reserveMicros, legs };
+  admitBudgetPlan(plan);
+  accountingPlanAdmissions.get(cost)?.(plan);
+  return plan;
 }
 
-export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capability: string, cost: EstimatedCost, connection?: ProviderConnection, observe?: (intent: BudgetReservationIntent, state: "attempted" | "denied") => void, options: { dispatched?: boolean; search?: MiniMaxSearchOperation } = {}): Promise<BudgetReservation> {
-  const plan = planBudgetReservation(auth, capability, cost, connection);
+/** All four plans and every terminal message variant precede the first reserve. */
+export function admitBudgetPlan(plan: BudgetReservationPlan, control = false): void {
+  if (plan.legs.length > 4) accountingAdmissionFailure();
+  const amount = accountingNumberCapacity();
+  for (const leg of plan.legs) {
+    accountingIdentity(leg.objectName, 8192); accountingIdentity(leg.limitHint);
+    admitAccountingJson(leg, "intent");
+    if (control) {
+      admitAccountingJson({ ...leg.request, dispatched: true }, "search");
+      admitAccountingJson({ reservationId: leg.request.reservationId }, "search");
+      admitAccountingJson({ kind: "budget_settlement", ledger: { objectName: leg.objectName },
+        request: { reservationId: leg.request.reservationId, actualCostMicros: amount } }, "search");
+    }
+    admitAccountingJson({ ...leg.request, dispatched: true }, "intent");
+    admitAccountingJson({ kind: "budget_settlement", ledger: { objectName: leg.objectName },
+      request: { reservationId: leg.request.reservationId, actualCostMicros: amount } }, "intent");
+    admitAccountingJson({ reservationId: leg.request.reservationId }, "intent");
+  }
+  admitAccountingJson(plan, "capsule");
+  if (control) admitAccountingJson(plan, "search");
+}
+
+export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capability: string, cost: EstimatedCost, connection?: ProviderConnection, observe?: (intent: BudgetReservationIntent, state: "attempted" | "denied") => void, options: { dispatched?: boolean; search?: MiniMaxSearchOperation; preparedPlan?: BudgetReservationPlan } = {}): Promise<BudgetReservation> {
+  const plan = options.preparedPlan ?? planBudgetReservation(auth, capability, cost, connection);
+  if (options.search) admitBudgetPlan(plan, true);
   const reservation: BudgetReservation = { reservations: [], reservedMicros: plan.reservedMicros };
   const results = await Promise.allSettled(plan.legs.map(async leg => {
     if (options.dispatched) leg.request.dispatched = true;
@@ -111,7 +156,7 @@ export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capabili
   if (failed) {
     if (reservation.reservations.length) {
       const cleanupFailures: BudgetSettlementFailure[] = [];
-      try { await settleBudgetInternal(env, reservation, 0, options.search, cleanupFailures); }
+      try { await settleBudgetInternal(accountingSinks(env), reservation, 0, options.search, cleanupFailures); }
       catch {
         const error = new HttpError(503, "accounting_unavailable", "Budget reservation rollback could not finish; retry after accounting recovers.");
         Object.defineProperty(error, reservationFailureDiagnostics, { value: Object.freeze({
@@ -141,19 +186,23 @@ export async function reserveLedgerIntent(env: Env, intent: BudgetReservationInt
   return { reservationId: intent.request.reservationId, objectName: intent.objectName, ...(result.dispatched === true ? { dispatched: true } : {}) };
 }
 
-export async function finalizeAccounting(env: Env, reservation: BudgetReservation, actualCostMicros: number, event: UsageEvent, search?: MiniMaxSearchOperation): Promise<boolean> {
+export function finalizeAccounting(env: Env, reservation: BudgetReservation, actualCostMicros: number, event: UsageEvent, search?: MiniMaxSearchOperation): Promise<boolean> {
+  return finalizeOwnedAccounting(accountingSinks(env), reservation, actualCostMicros, event, search);
+}
+
+export async function finalizeOwnedAccounting(sinks: AccountingSinks, reservation: BudgetReservation, actualCostMicros: number, event: UsageEvent, search?: MiniMaxSearchOperation): Promise<boolean> {
   if (search) {
     searchJsonBytes(event);
     let success = true;
-    for (const run of [() => reservation.charges ? chargeBudget(env, reservation, actualCostMicros, search) : settleBudget(env, reservation, actualCostMicros, search),
-      () => publishUsage(env, event, search)]) {
+    for (const run of [() => reservation.charges ? chargeBudget(sinks, reservation, actualCostMicros, search) : settleOwnedBudget(sinks, reservation, actualCostMicros, search),
+      () => publishUsage(sinks, event, search)]) {
       try { await run(); } catch { success = false; logCorrelationError("accounting finalization failed", event.request_id); }
     }
     return success;
   }
   const results = await Promise.allSettled([
-    reservation.charges ? chargeBudget(env, reservation, actualCostMicros) : settleBudget(env, reservation, actualCostMicros),
-    publishUsage(env, event),
+    reservation.charges ? chargeBudget(sinks, reservation, actualCostMicros) : settleOwnedBudget(sinks, reservation, actualCostMicros),
+    publishUsage(sinks, event),
   ]);
   for (const result of results) {
     if (result.status === "rejected") logCorrelationError("accounting finalization failed", event.request_id);
@@ -178,21 +227,25 @@ export async function markBudgetDispatched(env: Env, reservation: BudgetReservat
   if (failed) throw new HttpError(503, "accounting_unavailable", "Budget dispatch could not be recorded; no upstream request was sent.");
 }
 
-async function publishUsage(env: Env, event: UsageEvent, search?: MiniMaxSearchOperation): Promise<void> {
-  try { if (search) await search.task(() => env.USAGE_QUEUE.send(event), true); else await env.USAGE_QUEUE.send(event); }
+async function publishUsage(sinks: AccountingSinks, event: UsageEvent, search?: MiniMaxSearchOperation): Promise<void> {
+  try { if (search) await search.task(() => sinks.queue.send(event), true); else await sinks.queue.send(event); }
   catch {
     // A rejected send can still have been accepted. Reuse the event ID so
     // direct recovery and later queue delivery converge on one stored row.
-    await ingestUsage(env, event, undefined, search);
+    await ingestUsageNamespace(sinks.usage, event, undefined, search);
   }
 }
 
-export async function settleBudget(env: Env, reservation: BudgetReservation, actualCostMicros: number, search?: MiniMaxSearchOperation): Promise<void> {
-  return settleBudgetInternal(env, reservation, actualCostMicros, search);
+export function settleBudget(env: Env, reservation: BudgetReservation, actualCostMicros: number, search?: MiniMaxSearchOperation): Promise<void> {
+  return settleOwnedBudget(accountingSinks(env), reservation, actualCostMicros, search);
 }
 
-async function settleBudgetInternal(env: Env, reservation: BudgetReservation, actualCostMicros: number, search?: MiniMaxSearchOperation, cleanupFailures?: BudgetSettlementFailure[]): Promise<void> {
-  const settle = (item: LedgerBudgetReservation, index: number) => settleReservation(env, item, actualCostMicros, search,
+export async function settleOwnedBudget(sinks: AccountingSinks, reservation: BudgetReservation, actualCostMicros: number, search?: MiniMaxSearchOperation): Promise<void> {
+  return settleBudgetInternal(sinks, reservation, actualCostMicros, search);
+}
+
+async function settleBudgetInternal(sinks: AccountingSinks, reservation: BudgetReservation, actualCostMicros: number, search?: MiniMaxSearchOperation, cleanupFailures?: BudgetSettlementFailure[]): Promise<void> {
+  const settle = (item: LedgerBudgetReservation, index: number) => settleReservation(sinks, item, actualCostMicros, search,
     cleanupFailures ? failure => { cleanupFailures[index] = failure; } : undefined);
   if (search) {
     let failure: unknown, failed = false;
@@ -208,13 +261,13 @@ async function settleBudgetInternal(env: Env, reservation: BudgetReservation, ac
   if (failed) throw failed.reason;
 }
 
-async function settleReservation(env: Env, reservation: LedgerBudgetReservation, actualCostMicros: number, search?: MiniMaxSearchOperation, failed?: (failure: BudgetSettlementFailure) => void): Promise<void> {
+async function settleReservation(sinks: AccountingSinks, reservation: LedgerBudgetReservation, actualCostMicros: number, search?: MiniMaxSearchOperation, failed?: (failure: BudgetSettlementFailure) => void): Promise<void> {
   const reservationId = reservation.reservationId;
   const body: BudgetSettleRequest = { reservationId, actualCostMicros };
   const objectName = reservation.objectName;
   let ledgerReason: unknown;
   try {
-    await settleLedger(env, objectName, body, undefined, search);
+    await settleLedgerNamespace(sinks.budget, objectName, body, undefined, search);
     return;
   } catch (error) {
     ledgerReason = error;
@@ -222,7 +275,7 @@ async function settleReservation(env: Env, reservation: LedgerBudgetReservation,
   }
   const message = { kind: "budget_settlement" as const, ledger: { objectName }, request: body };
   try {
-    if (search) await search.task(() => env.USAGE_QUEUE.send(message), true); else await env.USAGE_QUEUE.send(message);
+    if (search) await search.task(() => sinks.queue.send(message), true); else await sinks.queue.send(message);
   } catch (queueReason) {
     failed?.(Object.freeze({ reservationId, objectName, ledgerReason, queueReason }));
     throw queueReason;
@@ -231,14 +284,14 @@ async function settleReservation(env: Env, reservation: LedgerBudgetReservation,
 
 export function emptyReservation(): BudgetReservation { return { reservations: [], reservedMicros: 0 }; }
 
-async function chargeBudget(env: Env, reservation: BudgetReservation, amountMicros: number, search?: MiniMaxSearchOperation): Promise<void> {
+async function chargeBudget(sinks: AccountingSinks, reservation: BudgetReservation, amountMicros: number, search?: MiniMaxSearchOperation): Promise<void> {
   if (search) {
     let failure: unknown, failed = false;
     for (const item of reservation.charges ?? []) {
       const request = { ...item.request, amountMicros };
       try {
-        try { await chargeLedger(env, item.objectName, request, search); }
-        catch { await search.task(() => env.USAGE_QUEUE.send({ kind: "budget_charge", ledger: { objectName: item.objectName }, request }), true); }
+        try { await chargeLedgerNamespace(sinks.budget, item.objectName, request, search); }
+        catch { await search.task(() => sinks.queue.send({ kind: "budget_charge", ledger: { objectName: item.objectName }, request }), true); }
       } catch (error) { if (!failed) failure = error; failed = true; }
     }
     if (failed) throw failure;
@@ -246,8 +299,8 @@ async function chargeBudget(env: Env, reservation: BudgetReservation, amountMicr
   }
   const results = await Promise.allSettled((reservation.charges ?? []).map(async item => {
     const request = { ...item.request, amountMicros };
-    try { await chargeLedger(env, item.objectName, request); }
-    catch { await env.USAGE_QUEUE.send({ kind: "budget_charge", ledger: { objectName: item.objectName }, request }); }
+    try { await chargeLedgerNamespace(sinks.budget, item.objectName, request); }
+    catch { await sinks.queue.send({ kind: "budget_charge", ledger: { objectName: item.objectName }, request }); }
   }));
   const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
   if (failed) throw failed.reason;
@@ -255,23 +308,49 @@ async function chargeBudget(env: Env, reservation: BudgetReservation, amountMicr
 
 // Sole inactive-cover finalizer. IDs and all four possible attempts exist before
 // I/O. Unlike reserveBudget, this branch NEVER starts an internal rollback.
-export function musicCoverAccounting(env: Env, owner: MiniMaxMusicCoverControl, plan: BudgetReservationPlan, event: UsageEvent) {
-  return ownedMusicCoverAccounting(env, owner, plan, event);
+export function musicCoverAccounting(env: Env, owner: MiniMaxMusicCoverControl, plan: BudgetReservationPlan, event: UsageEvent, soft = false) {
+  return ownedMusicCoverAccounting(accountingSinks(env), owner, plan, event, undefined, soft);
 }
 interface CoverDispatchFacts { invoked: boolean; success: boolean; soft: boolean; fixed: number | null }
 export function musicCoverCompositionAccounting(env: Env, owner: MiniMaxMusicCoverControl, plan: BudgetReservationPlan,
   event: UsageEvent, soft: boolean, fixed: number | null) {
   if (fixed !== null && (!Number.isSafeInteger(fixed) || fixed < 0)) musicCoverUnavailable();
   const dispatch: CoverDispatchFacts = { invoked: false, success: false, soft, fixed };
-  const accounting = ownedMusicCoverAccounting(env, owner, plan, event, dispatch);
+  const accounting = ownedMusicCoverAccounting(accountingSinks(env), owner, plan, event, dispatch, soft);
   return Object.freeze({ ...accounting,
     invoked() { dispatch.invoked = true; },
     succeeded() { if (!dispatch.invoked) musicCoverUnavailable(); dispatch.success = true; },
   });
 }
-function ownedMusicCoverAccounting(env: Env, owner: MiniMaxMusicCoverControl, plan: BudgetReservationPlan, event: UsageEvent,
-  dispatch?: CoverDispatchFacts) {
+function ownedMusicCoverAccounting(sinks: AccountingSinks, owner: MiniMaxMusicCoverControl, plan: BudgetReservationPlan, event: UsageEvent,
+  dispatch?: CoverDispatchFacts, soft = false) {
   if (!isMusicCoverControl(owner) || plan.legs.length > 4) musicCoverUnavailable();
+  admitBudgetPlan(plan, true);
+  if (soft) for (const leg of plan.legs) {
+    const fields = { policy_id: leg.request.policyId, window_key: leg.request.windowKey, scope_key: leg.request.scopeKey ?? "", limit_micros: String(leg.request.limitMicros) };
+    admitAccountingJson(fields, "search");
+    let encoded = "https://clawrouter.internal/status?policy_id=&window_key=&scope_key=&limit_micros=".length;
+    for (const key in fields) for (let i = 0, value = fields[key as keyof typeof fields]; i < value.length; i++) {
+      const code = value.charCodeAt(i), next = value.charCodeAt(i + 1);
+      if (code === 32 || code === 42 || code === 45 || code === 46 || code === 95 || code >= 48 && code <= 57 || code >= 65 && code <= 90 || code >= 97 && code <= 122) encoded++;
+      else if (code < 128) encoded += 3;
+      else if (code < 2048) encoded += 6;
+      else if (code >= 0xd800 && code <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) { encoded += 12; i++; }
+      else encoded += 9;
+      if (encoded > 4096) accountingAdmissionFailure();
+    }
+  }
+  const amount = accountingNumberCapacity();
+  admitAccountingJson({ plan, event: { ...event, actual_cost_micros: amount, status_code: amount, duration_ms: amount, cost_basis: "unpriced_request", status: "provider_error" } }, "capsule");
+  admitAccountingJson({ ...event, actual_cost_micros: amount, status_code: amount, duration_ms: amount, cost_basis: "unpriced_request", status: "provider_error" }, "search");
+  for (const leg of plan.legs) {
+    const message = { kind: "budget_charge", ledger: { objectName: leg.objectName }, request: {
+      chargeId: leg.request.reservationId, policyId: leg.request.policyId, windowKey: leg.request.windowKey,
+      scopeKey: leg.request.scopeKey ?? "", amountMicros: amount, capability: leg.request.capability,
+    } };
+    admitAccountingJson(message, "intent"); admitAccountingJson(message, "search");
+  }
+  plan = copyAccountingJson(plan, "capsule"); event = copyAccountingJson(event, "capsule");
   searchJsonBytes(plan); searchJsonBytes(event);
   const attempts = plan.legs.map(leg => ({ leg, attempted: false, denied: false, acknowledged: false, dispatched: false }));
   let finalization: Promise<void> | undefined;
@@ -279,7 +358,7 @@ function ownedMusicCoverAccounting(env: Env, owner: MiniMaxMusicCoverControl, pl
     async reserve(): Promise<void> {
       for (const attempt of attempts) {
         attempt.attempted = true;
-        const result = await musicCoverLedgerControl<{ allowed: boolean; chargedMicros: number }>(env, attempt.leg.objectName, "/reserve", attempt.leg.request, owner);
+        const result = await musicCoverLedgerControl<{ allowed: boolean; chargedMicros: number }>(sinks.budget, attempt.leg.objectName, "/reserve", attempt.leg.request, owner);
         if (result.allowed === false && result.chargedMicros === 0) { attempt.denied = true; throw new HttpError(402, "budget_exhausted", "Cover budget is exhausted"); }
         if (result.allowed !== true || result.chargedMicros !== attempt.leg.request.costMicros) musicCoverUnavailable();
         attempt.acknowledged = true;
@@ -288,7 +367,7 @@ function ownedMusicCoverAccounting(env: Env, owner: MiniMaxMusicCoverControl, pl
     async dispatchAdmission(): Promise<void> {
       for (const attempt of attempts) {
         if (!attempt.acknowledged) musicCoverUnavailable();
-        const reply = await musicCoverLedgerControl<{ dispatched: boolean }>(env, attempt.leg.objectName, "/dispatch", { reservationId: attempt.leg.request.reservationId }, owner);
+        const reply = await musicCoverLedgerControl<{ dispatched: boolean }>(sinks.budget, attempt.leg.objectName, "/dispatch", { reservationId: attempt.leg.request.reservationId }, owner);
         if (reply.dispatched !== true) musicCoverUnavailable();
         attempt.dispatched = true;
       }
@@ -318,10 +397,10 @@ function ownedMusicCoverAccounting(env: Env, owner: MiniMaxMusicCoverControl, pl
             const request: BudgetChargeRequest = { chargeId: original.reservationId, policyId: original.policyId,
               windowKey: original.windowKey, scopeKey: original.scopeKey ?? "", amountMicros: amount, capability: original.capability };
             try {
-              try { await chargeLedger(env, attempt.leg.objectName, request, undefined, owner); }
+              try { await chargeLedgerNamespace(sinks.budget, attempt.leg.objectName, request, undefined, owner); }
               catch {
                 const message = { kind: "budget_charge" as const, ledger: { objectName: attempt.leg.objectName }, request };
-                await owner.task(message, () => env.USAGE_QUEUE.send(message), true);
+                await owner.task(message, () => sinks.queue.send(message), true);
               }
             } catch { failed = true; }
             continue;
@@ -329,18 +408,18 @@ function ownedMusicCoverAccounting(env: Env, owner: MiniMaxMusicCoverControl, pl
           if (!attempt.attempted || attempt.denied) continue;
           const request: BudgetSettleRequest = { reservationId: attempt.leg.request.reservationId, actualCostMicros: amount };
           try {
-            try { await settleLedger(env, attempt.leg.objectName, request, undefined, undefined, owner); }
+            try { await settleLedgerNamespace(sinks.budget, attempt.leg.objectName, request, undefined, undefined, owner); }
             catch {
               const message = { kind: "budget_settlement" as const, ledger: { objectName: attempt.leg.objectName }, request };
-              await owner.task(message, () => env.USAGE_QUEUE.send(message), true);
+              await owner.task(message, () => sinks.queue.send(message), true);
             }
           } catch { failed = true; }
         }
         // The legacy preparation remains known-unsent. Composition changes
         // this event only from its original, synchronous invocation record.
         try {
-          try { await owner.task(event, () => env.USAGE_QUEUE.send(event), true); }
-          catch { await ingestUsage(env, event, undefined, undefined, owner); }
+          try { await owner.task(event, () => sinks.queue.send(event), true); }
+          catch { await ingestUsageNamespace(sinks.usage, event, undefined, undefined, owner); }
         } catch { failed = true; }
         if (failed) throw new HttpError(503, "accounting_unavailable", "Cover preparation finalization is unavailable");
       })();

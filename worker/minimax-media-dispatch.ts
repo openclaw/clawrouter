@@ -1,3 +1,4 @@
+import type { PreparationAdmission } from "./provider-templates.ts";
 import { inspectGrantCredentials } from "./grant-credentials.ts";
 import { miniMaxApiKeySecret, qualifyMiniMaxEnvironmentBinding, miniMaxMediaProjection, miniMaxMusicRequirement } from "./native-media-credential.ts";
 import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts";
@@ -19,10 +20,10 @@ function ownerIdentity(grant: UpstreamGrant): string {
 // Prepared only for this qualified product. No credential refresh or selection
 // occurs here. The returned check runs after every other pre-dispatch await.
 export async function prepareMiniMaxMediaDispatch(
-  selection: ProxySelection, env: Env, upstream: UpstreamAuth, destination: URL, headers: Headers, auth?: AuthorizedIdentity,
-): Promise<((signal: AbortSignal) => Promise<void>) | undefined> {
+  selection: ProxySelection, env: Env, upstream: UpstreamAuth, destination: URL, headers: Headers, auth?: AuthorizedIdentity, preparation?: PreparationAdmission,
+): Promise<MediaCheck | undefined> {
   if (selection.endpoint.request_format === "minimax.music")
-    return prepareMiniMaxMusicDispatch(selection, env, upstream, destination, headers, auth);
+    return prepareMiniMaxMusicDispatch(selection, env, upstream, destination, headers, auth, preparation);
   if (selection.endpoint.request_format !== "minimax.speech") return;
   const scheme = selection.provider.auth.schemes.find(value => value.type !== "oauth");
   if (selection.provider.id !== "minimax" || upstream.baseUrl !== "https://api.minimax.io"
@@ -35,28 +36,15 @@ export async function prepareMiniMaxMediaDispatch(
     if (!grant) throw denied();
     const identity = ownerIdentity(grant), secret = miniMaxApiKeySecret(grant);
     if (!secret || headers.get("authorization") !== `Bearer ${secret}`) throw denied();
-    return async signal => {
-      signal.throwIfAborted();
-      // /inspect reads the credential owner, not KV, admission or credential caches.
-      // Generation must equal the already selected revision; materialize's
-      // expectedGeneration is deliberately not used as an equality check.
-      const current = await inspectGrantCredentials(env, key, signal);
-      signal.throwIfAborted();
-      if (ownerIdentity(current) !== identity) throw denied();
-    };
+    return speechOwnerCheck(key, identity);
   }
   if (upstream.grant !== null) throw denied();
-  const selected = await qualifyMiniMaxEnvironmentBinding(selection.provider, env);
+  const selected = await qualifyMiniMaxEnvironmentBinding(selection.provider, env, "minimax.speech", preparation);
   if (!selected || headers.get("authorization") !== `Bearer ${selected.secret}`) throw denied();
   const routeIdentity = JSON.stringify(["clawrouter.minimax-media-route.v1", destination.href,
     "MINIMAX_API_KEY", selected.binding, selected.fingerprint]);
-  return async signal => {
-    signal.throwIfAborted();
-    const current = await qualifyMiniMaxEnvironmentBinding(selection.provider, env);
-    signal.throwIfAborted();
-    if (!current || routeIdentity !== JSON.stringify([
-      "clawrouter.minimax-media-route.v1", destination.href, "MINIMAX_API_KEY", current.binding, current.fingerprint])) throw denied();
-  };
+  return speechEnvironmentCheck(selection.provider, destination.href, routeIdentity, preparation);
+
 }
 
 export function miniMaxMusicDenied(): never {
@@ -91,7 +79,7 @@ export async function revalidateMiniMaxMusicOwner(env: Env, auth: AuthorizedIden
 }
 
 async function prepareMiniMaxMusicDispatch(selection: ProxySelection, env: Env, upstream: UpstreamAuth,
-  destination: URL, headers: Headers, auth?: AuthorizedIdentity): Promise<(signal: AbortSignal) => Promise<void>> {
+  destination: URL, headers: Headers, auth?: AuthorizedIdentity, preparation?: PreparationAdmission): Promise<MediaCheck> {
   const requirement = { provider: selection.provider, endpoint: selection.endpoint, mode: "http" as const, model: selection.model?.upstream };
   if (!auth || !miniMaxMusicRequirement(requirement) || selection.capability !== "music.generate"
     || upstream.transport !== null || upstream.baseUrl !== "https://api.minimax.io"
@@ -100,21 +88,50 @@ async function prepareMiniMaxMusicDispatch(selection: ProxySelection, env: Env, 
     const grant = upstream.grant, key = upstream.grantKey;
     if (!grant || !miniMaxApiKeySecret(grant) || headers.get("authorization") !== `Bearer ${miniMaxApiKeySecret(grant)}`) miniMaxMusicDenied();
     miniMaxMusicIdentity(grant);
-    return async signal => { await revalidateMiniMaxMusicOwner(env, auth, requirement, key, grant, signal); };
+    return musicOwnerCheck(auth, requirement, key, grant);
   }
   if (upstream.grant !== null) miniMaxMusicDenied();
-  const selected = await qualifyMiniMaxEnvironmentBinding(selection.provider, env, "minimax.music");
+  const selected = await qualifyMiniMaxEnvironmentBinding(selection.provider, env, "minimax.music", preparation);
   if (!selected || headers.get("authorization") !== `Bearer ${selected.secret}`) miniMaxMusicDenied();
   const caller = publicControlAuthorization(auth);
   const routing = JSON.stringify(grantRoutingPolicy(auth.policy.grantRouting));
   const owner = { providerId: "minimax", endpointId: selection.endpoint.id, grantKey: null, lineage: null,
     routeSha256: `minimax.music:${selection.model!.upstream}:global`, policyGeneration: auth.policy.generation };
-  return async signal => {
-    const policy = await authorizeResponseControl(env, caller, owner, signal);
+  return musicEnvironmentCheck(caller, owner, routing, selection, selected.binding, selected.secret, preparation);
+}
+
+// Module factories cannot retain a preparation-time Env. Revalidation receives
+// the current authority environment explicitly, and projects fresh primitives
+// both before and after the fingerprint await.
+type MediaCheck = (currentEnv: Env, signal: AbortSignal) => Promise<void>;
+function speechOwnerCheck(key: string, identity: string): MediaCheck {
+  return async (currentEnv, signal) => {
+    signal.throwIfAborted();
+    const current = await inspectGrantCredentials(currentEnv, key, signal);
+    signal.throwIfAborted();
+    if (ownerIdentity(current) !== identity) throw denied();
+  };
+}
+function speechEnvironmentCheck(provider: ProxySelection["provider"], destination: string, identity: string, preparation?: PreparationAdmission): MediaCheck {
+  return async (currentEnv, signal) => {
+    signal.throwIfAborted();
+    const current = await qualifyMiniMaxEnvironmentBinding(provider, currentEnv, "minimax.speech", preparation);
+    signal.throwIfAborted();
+    if (!current || identity !== JSON.stringify(["clawrouter.minimax-media-route.v1", destination,
+      "MINIMAX_API_KEY", current.binding, current.fingerprint])) throw denied();
+  };
+}
+function musicOwnerCheck(auth: AuthorizedIdentity, requirement: GrantRequirement, key: string, grant: UpstreamGrant): MediaCheck {
+  return async (currentEnv, signal) => { await revalidateMiniMaxMusicOwner(currentEnv, auth, requirement, key, grant, signal); };
+}
+function musicEnvironmentCheck(caller: ReturnType<typeof publicControlAuthorization>, owner: Parameters<typeof authorizeResponseControl>[2],
+  routing: string, selection: ProxySelection, binding: string, secret: string, preparation?: PreparationAdmission): MediaCheck {
+  return async (currentEnv, signal) => {
+    const policy = await authorizeResponseControl(currentEnv, caller, owner, signal);
     if (!policy || JSON.stringify(grantRoutingPolicy(policy.grantRouting)) !== routing) miniMaxMusicDenied();
     assertPolicyModel(policy, selection);
-    const current = await qualifyMiniMaxEnvironmentBinding(selection.provider, env, "minimax.music");
+    const current = await qualifyMiniMaxEnvironmentBinding(selection.provider, currentEnv, "minimax.music", preparation);
     signal.throwIfAborted(); assertControlCallerLive(caller);
-    if (!current || current.binding !== selected.binding || current.secret !== selected.secret) miniMaxMusicDenied();
+    if (!current || current.binding !== binding || current.secret !== secret) miniMaxMusicDenied();
   };
 }

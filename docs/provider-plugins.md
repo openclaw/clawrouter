@@ -87,7 +87,14 @@ node scripts/provider-package-index.mjs \
 The versioned index contains validated provider names, package versions and
 content digests. Documentation, licenses, fixtures, and light/dark logos are
 package-relative references with byte sizes and SHA-256 hashes. It contains no
-file contents, absolute paths, upstream URLs, credentials, or auth metadata.
+file contents, absolute paths, upstream URLs, credentials, or auth configuration.
+When a manifest declares products, `products` contains only their provider-scoped
+ID, display name, commercial model, and authentication method, sorted by ID.
+Manifests without products omit the field; no default product is inferred.
+These authored labels do not certify credentials, entitlement, prices or setup
+support. Bindings, endpoints, model selections, offers and refresh configuration
+are excluded. The metadata types are exported by the plugin contract; existing
+imports from `shared/provider-products.ts` remain supported.
 The generator validates execution manifests with the existing compiler and
 reads each package once, using the captured manifest for both validation and
 metadata. Repeat `--plugin` to select packages explicitly.
@@ -345,9 +352,110 @@ metadata must never determine its own secret, network, or storage permissions.
 
 ## Contributor contract tests
 
-The starter fixture is intentionally generic JSON data. A future conformance
-runner will own a versioned scenario schema and execute the host adapter, not
-package-supplied test code. Required scenarios depend on declared features:
+The starter fixture uses the data-only `clawrouter.provider-conformance.v1`
+contract. Import `parseProviderConformanceScenario` from the plugin contract
+package to validate parsed JSON. The parser performs no I/O and returns detached
+data. The scaffolder sets each generated fixture's `providerId` to the new ID.
+
+Version 1 supports `kind: json-exchange`: one client `request`, the expected
+`upstream.request`, a supplied `upstream.response`, and the expected client
+`response`. Each scenario has a stable `id`, `providerId`, `endpoint`, and
+`capability`. Optional `model` is an exact, opaque model ID; omitting it describes
+a model-free exchange. The future runner must check these references against
+the selected manifest and must invoke the host adapter, not package code.
+
+Requests specify an uppercase HTTP `method` and an origin-relative `path`,
+including any query. Responses specify a final HTTP `status` from 200 to 599.
+Optional `headers` use lowercase names and single-line string values; they
+describe only the headers asserted by the scenario, not the full transport
+header set. Optional `body` contains an exact JSON value. Omitted bodies and
+JSON `null` remain distinct. Bodies are limited to 32 levels and 10,000 values;
+the package loader separately bounds file sizes. Unknown envelope fields fail
+validation. JSON object keys inside bodies remain provider data.
+
+This is a shape contract, not a conformance runner or an attestation. It does
+not compare adapter output, check manifest references, detect real secrets, or
+make network requests. The existing loader still accepts arbitrary JSON fixture
+resources; it does not require this schema. Use synthetic content and synthetic
+header values only. Do not copy live credentials into examples.
+
+### Validate a package's scenario declarations
+
+```sh
+node scripts/validate-provider-conformance.mjs \
+  --plugin examples/provider-plugin/clawrouter.plugin.json
+```
+
+Repeat `--plugin` to validate several selected packages together. The command
+requires at least one scenario per package and validates every declared fixture
+against the scenario schema. Existing arbitrary JSON fixtures still load and
+compile normally; migrate them before opting into this command.
+
+The command compiles each captured manifest and checks provider identity, unique
+scenario IDs within each package, endpoint/capability bindings, and the declared
+upstream method. Optional model references must match an exact declared router
+model ID with the selected capability. An upstream alias or a matching suffix
+is not a substitute for that ID. The client method can differ from the upstream
+method; this step does not qualify the client route or its mapping.
+
+The loader captures fixture text from the same bytes it hashes, without reopening
+package files for validation. Output is a deterministic
+`clawrouter.provider-conformance-validation.v1` report with `scope: declarations`.
+It includes package content digests and scenario references, not fixture bodies,
+headers, credential configuration, upstream URLs, or absolute paths. The report
+type is exported by the plugin contract. Invalid packages produce no report.
+
+This check does not execute an adapter, compare expected HTTP messages, authorize
+an account, check runtime availability, or prove fixture coverage. A declared
+reference does not establish model availability. The future host runner must separately
+qualify routes, configuration, and supported scenario kinds before execution.
+
+### Execute native REST JSON exchanges
+
+```sh
+node scripts/run-provider-conformance.mjs \
+  --plugin examples/provider-plugin/clawrouter.plugin.json
+```
+
+This separate development command validates all selected packages first, then
+executes their fixtures through the actual Worker entry point. Run it in its own
+Node process with the repository dependencies installed. It temporarily replaces
+the in-process provider registry and intercepts every upstream `fetch`; it never
+falls back to the network. Packages supply data only. They cannot provide code,
+credentials, or host bindings.
+
+The first execution scope is deliberately narrow: model-free `rest_json`
+providers, one required `Authorization: Bearer ${secret}` API-key scheme, one
+`*_API_KEY` configuration value, one fixed HTTPS base URL, and unambiguous literal
+native POST routes. OAuth, grant transports, model catalogs, streaming, lifecycle
+endpoints, and stream/error adapters are rejected before any scenario runs.
+
+A fixture's client path is relative to the provider's native mount. For example,
+`/v1/invoke` runs at `/v1/native/example/v1/invoke`. Upstream paths include the
+complete path and query sent to the provider. The host owns client authorization
+and supplies the synthetic upstream key `synthetic-conformance-key`; fixtures
+can assert `authorization: Bearer synthetic-conformance-key` upstream. Ambient
+API keys are never copied into the fixture environment.
+
+Each scenario must cause exactly one upstream call with redirects disabled.
+The runner compares method, origin, path, asserted headers, and exact JSON body;
+it supplies the authored upstream response and checks the final client status,
+asserted headers, and exact JSON body. Additional headers are allowed. Omitted
+bodies differ from JSON `null`. Observed bodies are bounded to 2 MiB. The host's
+background settlement is joined, but accounting values are not asserted.
+
+Success emits a `clawrouter.provider-conformance-execution.v1` report with scope
+`native-rest-json-exchanges`, package digests, and scenario references. Failure
+emits no partial report and does not echo HTTP values. Registry and transport
+changes are restored before exit. This proves only these deterministic Worker
+exchanges, not live connectivity, entitlement, budget correctness, or complete
+provider coverage. Native model-free bodies retain their native shape; unified
+model-routing transforms are outside this scope.
+
+Streaming, binary bodies, auth setup, local rejection without an upstream call,
+multi-call lifecycle operations, usage assertions, and retry timing need separate
+scenario kinds and host support. They are not represented by `json-exchange`.
+Required scenarios will depend on declared features:
 
 - auth injection and redaction;
 - request and error mapping;
@@ -369,6 +477,7 @@ proof that an account is entitled to upstream access.
 | Compiler `--plugin` input alongside legacy inputs | Landed | Default CLI and snapshot stay equivalent; test mixed-input collisions. |
 | Generated package asset index and setup metadata | Landed | Do not render untrusted SVG or add auth capabilities. |
 | Complete-package scaffold command | Landed | Create only a new directory; never register or deploy a provider. |
+| Fixture declaration validator and native REST JSON host runner | Landed | Opt-in development commands; no live probes or Worker changes. |
 | Product and offer normalization behind compatibility layer | Separate future draft | Shadow-check existing discovery and dispatch; preserve public aliases. |
 | Shared model-catalog import and provenance | Separate future draft | Pin supported core release; qualify prices separately. |
 | Credential/connection and accounting migration | Separate future drafts | Preserve refresh ownership, reservations, and delayed execution settlement. |

@@ -1,6 +1,7 @@
 import { fundRealtimeUnit, type FundedInput } from './realtime-accounting';
 import { authenticateProxyKey, proxyKeyVerification } from './proxy-auth';
 import { prepareSelected } from './proxy';
+import { PreparationAdmission } from './provider-templates';
 import { providerById } from './providers';
 import type { ProxySelection } from './proxy-selection';
 import type { AuthorizedIdentity, Env } from './types';
@@ -32,11 +33,13 @@ export async function proxyRealtimeWebSocket(request: Request, env: Env, context
   const pin = { key: initial.grantKey, revision: initial.grantRevision };
   const fingerprint = JSON.stringify([initial.url.href, [...initial.headers.entries()]]);
   const inspect = async (input = false): Promise<{ auth: AuthorizedIdentity; upstream: typeof initial }> => {
+    // A fresh authority observation owns both sequential model preparations.
+    const preparation = new PreparationAdmission();
     const fresh = await authenticateProxyKey(request.headers, env, [{ id: 'openai', tokenRef: 'openai' }]);
     if (fresh instanceof Response) throw new HttpError(fresh.status, 'realtime_authority_revoked', 'Realtime authority is no longer valid');
     if (JSON.stringify([fresh.authType, fresh.credentialId, fresh.principalId, fresh.policy.tenantId ?? "default"]) !== caller) throw new HttpError(403, 'realtime_caller_changed', 'open a fresh session');
     if (fresh.policyId !== auth.policyId || fresh.policy.generation !== auth.policy.generation) throw new HttpError(403, 'realtime_policy_changed', 'open a fresh session');
-    const upstream = await prepareSelected(request, env, selection, { model: REALTIME.upstream }, fresh, new Set(), false, undefined, pin, 'websocket');
+    const upstream = await prepareSelected(request, env, { ...selection, preparation }, { model: REALTIME.upstream }, fresh, new Set(), false, undefined, pin, 'websocket');
     upstream.url.searchParams.set('model', REALTIME.upstream);
     if ((fresh.policy.budgetMode === 'soft') !== soft) throw new HttpError(403, 'realtime_policy_changed', 'open a fresh session');
     if (!soft && [fresh.policy.monthlyBudgetMicros, fresh.policy.dailyBudgetMicros, fresh.policy.weeklyBudgetMicros, upstream.connection?.monthlyBudgetMicros].every(v => v == null)) throw new HttpError(400, 'realtime_hard_budget_required', 'Realtime requires a durable hard-budget capacity owner');
@@ -45,7 +48,7 @@ export async function proxyRealtimeWebSocket(request: Request, env: Env, context
       if (!inputSelection) throw new HttpError(503, 'realtime_unconfigured', 'Input transcription model is not registered');
       // Same GA socket and pinned grant/account, but a DISTINCT model authority.
       // A realtime-only allowlist must not silently authorize the ASR model.
-      const asr = await prepareSelected(request, env, inputSelection, {}, fresh, new Set(), false, upstream.connection, pin, 'websocket');
+      const asr = await prepareSelected(request, env, { ...inputSelection, preparation }, {}, fresh, new Set(), false, upstream.connection, pin, 'websocket');
       if (!asr.websocket || asr.grantKey !== pin.key || asr.grantRevision !== pin.revision || JSON.stringify([...asr.headers.entries()]) !== JSON.stringify([...initial.headers.entries()])) throw new HttpError(403, 'realtime_route_changed', 'open a fresh session');
     }
     return { auth: fresh, upstream };

@@ -6,6 +6,7 @@ import snapshot from "../generated/provider-snapshot.json" with { type: "json" }
 import { resolveProviderOffer } from "../provider-offers.ts";
 import { grantSupports } from "../provider-auth.ts";
 import { sha256Hex } from "../utils.ts";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 
 const { catalogResponse } = await import("../discovery.ts");
 
@@ -36,12 +37,16 @@ test("Anthropic catalog products follow caller grants, policy selection and cool
   const grants = new Map(), states = {};
   const env = {
     ANTHROPIC_API_KEY: "fixture-environment-key",
-    POLICY_KV: { async get(key) { return Array.isArray(key) ? new Map(key.map(item => [item, grants.get(item) ?? null])) : grants.get(key) ?? null; } },
+    POLICY_KV: { async get(key, type) {
+      if (Array.isArray(key)) return new Map(key.map(item => [item, grants.get(item) ?? null]));
+      const value = grants.get(key) ?? null;
+      return value !== null && type === "stream" ? accessBytesResponse(JSON.stringify(value)).body : value;
+    } },
     ACCESS_CONTROL: { idFromName: name => name, get: () => ({ fetch: async url => {
       assert.equal(new URL(url).pathname, "/admission/resolve", "catalog must not select a grant or mutate authority");
-      return Response.json({ credential: { credentialId: "fixture", credential }, policy: { policyId: "fixture", policy }, owner: null,
+      return accessBytesResponse(JSON.stringify({ credential: { credentialId: "fixture", credential }, policy: { policyId: "fixture", policy }, owner: null,
         connections: [{ providerId: "anthropic", enabled: true, monthlyBudgetMicros: null }],
-        pools: { anthropic: { keys: [...grants.keys()], states } } });
+        pools: { anthropic: { keys: [...grants.keys()], states } } }), url);
     } }) },
   };
   t.mock.method(globalThis, "fetch", () => { throw new Error("catalog must not refresh or probe upstream"); });

@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 import { proxyKey, usageEnv } from "./usage-budget-fixture.mjs";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 const { default: handler } = await import("../index.ts");
 const { providerById } = await import("../providers.ts");
 const { operationAffordability } = await import("../operation-budget.ts");
@@ -15,6 +16,29 @@ const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/deepgram
 const audio = new Uint8Array(Buffer.from(wire.request.base64, "base64"));
 const native = "/v1/native/openai/v1/listen", manifest = "/v1/proxy/openai/listen";
 const owners = ["tenant:maintainer_access:owner@example.com", "provider:openai"];
+
+async function syntheticIdentityJson(response) {
+  const body = response.body, decoder = new TextDecoder(), cleanup = [];
+  let reader, text = "", value, hasPrimary = false, primary;
+  try {
+    reader = body.getReader({ mode: "byob" });
+    for (;;) {
+      const next = await reader.read(new Uint8Array(16 * 1024));
+      if (next.value?.byteLength) text += decoder.decode(next.value, { stream: true });
+      if (next.done) break;
+    }
+    value = JSON.parse(text + decoder.decode());
+  } catch (error) { hasPrimary = true; primary = error; }
+  finally {
+    if (hasPrimary) {
+      try { await (reader ? reader.cancel(primary) : body?.cancel(primary)); } catch (error) { cleanup.push(error); }
+    }
+    try { reader?.releaseLock(); } catch (error) { cleanup.push(error); }
+  }
+  if (cleanup.length) throw new AggregateError(hasPrimary ? [primary, ...cleanup] : cleanup, "synthetic identity reply cleanup failed");
+  if (hasPrimary) throw primary;
+  return value;
+}
 
 function fixture(t, options = {}) {
   // Exercise dispatch by format before source-owned YAML/snapshot activation.
@@ -30,9 +54,11 @@ function fixture(t, options = {}) {
   const events = [], pending = [], admissions = [], ledger = sqlBudgetNamespace(t), originalGet = env.ACCESS_CONTROL.get;
   let edit = value => value;
   env.ACCESS_CONTROL.get = (...args) => { const stub = originalGet(...args); return { fetch: async (url, init) => {
-    const value = await (await stub.fetch(url, init)).json();
+    const response = await stub.fetch(url, init);
+    const marked = new Headers(init?.headers).has("x-clawrouter-identity-admission");
+    const value = marked ? await syntheticIdentityJson(response) : await response.json();
     if (new URL(url).pathname === "/admission/resolve") admissions.push(JSON.parse(init.body));
-    return Response.json(edit(value));
+    return marked ? accessBytesResponse(JSON.stringify(edit(value)), response.url, { status: response.status, headers: response.headers }) : Response.json(edit(value));
   } }; };
   env.BUDGET_LEDGER = ledger; env.OPENAI_API_KEY = "synthetic-original-key";
   env.USAGE_QUEUE = { send: async event => events.push(event) };
@@ -85,27 +111,51 @@ for (const path of [native, manifest]) {
 
   for (const bound of ["entries", "serialized"]) test("Nova-3 bounds the final query including default model: " + path + " " + bound, async t => {
     const f = fixture(t);
-    const pairs = bound === "entries" ? Array.from({ length: 127 }, (_, i) => ["keyterm", "term" + i])
-      : Array.from({ length: 9 }, () => ["keyterm", "x".repeat(1800)]);
-    if (bound === "serialized") pairs[8][1] += "x".repeat(16_384 - new URLSearchParams([...pairs, ["model", "nova-3"]]).toString().length);
+    const serializedPairs = size => {
+      const pairs = Array.from({ length: size > 9000 ? 9 : 5 }, () => ["keyterm", "x".repeat(size > 9000 ? 1800 : 1600)]);
+      pairs.at(-1)[1] += "x".repeat(size - new URLSearchParams([...pairs, ["model", "nova-3"]]).toString().length);
+      assert.ok(pairs.every(([, value]) => value.length <= 2048), "vendor-valid keyterms");
+      return pairs;
+    };
+    const pairs = bound === "entries" ? Array.from({ length: 127 }, (_, i) => ["keyterm", "term" + i]) : serializedPairs(8192);
     const query = new URLSearchParams(pairs), expected = [...pairs, ["model", "nova-3"]];
     const upstream = t.mock.method(globalThis, "fetch", async (input, init) => {
       const outgoing = new URL(input).searchParams;
       assert.deepEqual([...outgoing], expected); assert.deepEqual(init.body, audio);
-      assert.equal(bound === "entries" ? outgoing.size : outgoing.toString().length, bound === "entries" ? 128 : 16_384);
+      assert.equal(bound === "entries" ? outgoing.size : outgoing.toString().length, bound === "entries" ? 128 : 8192);
       assert.equal(init.headers.get("authorization"), "Token synthetic-original-key");
       return Response.json(wire.response);
     });
-    const response = await f.call(audio, { path, query });
+    const response = await f.call(audio, { path, query, headers: { "x-request-id": "query-success" } });
     assert.deepEqual(await response.json(), wire.response); assert.equal(response.status, 200);
-    assert.equal(query.has("model"), false);
-    if (bound === "entries") query.append("keyterm", "overflow");
-    else { pairs[8][1] += "x"; }
-    const denied = await f.call(audio, { path, query: bound === "entries" ? query : new URLSearchParams(pairs) });
-    await denied.text(); assert.equal(denied.status, 400);
-    await Promise.all(f.pending); assert.equal(upstream.mock.callCount(), 1); assert.equal(f.events.length, 1);
+    assert.equal(query.has("model"), false); await Promise.all(f.pending);
+    assert.equal(f.events.length, 1); assert.equal(f.events[0].request_id, "query-success");
     assert.equal(f.events[0].actual_cost_micros, 200); assert.equal(f.events[0].cost_basis, "policy_fixed"); assert.equal(f.events[0].total_tokens, null);
-    for (const name of owners) { const rows = f.ledger.get(name).reservations(); assert.equal(rows.length, 1); assert.equal(rows[0].settled, 1); }
+    const original = owners.map(name => f.ledger.get(name).reservations());
+    for (const rows of original) { assert.equal(rows.length, 1); assert.equal(rows[0].settled, 1); assert.equal(rows[0].dispatch_started, 1); assert.equal(rows[0].reserved_micros, 200); assert.ok(rows[0].reservation_id); }
+    if (bound === "entries") {
+      query.append("keyterm", "overflow");
+      const denied = await f.call(audio, { path, query }); await denied.text(); assert.equal(denied.status, 400);
+      await Promise.all(f.pending); assert.equal(f.events.length, 1);
+    } else {
+      // The vendor's 16 KiB allowance remains valid; selected preparation is
+      // intentionally tighter. Neither denial reserves or dispatches anything.
+      for (const size of [8193, 16384]) {
+        const requestId = "query-capacity-" + size;
+        const denied = await f.call(audio, { path, query: new URLSearchParams(serializedPairs(size)), headers: { "x-request-id": requestId } });
+        assert.equal((await denied.json()).error.code, "provider_preparation_unavailable"); assert.equal(denied.status, 503);
+        await Promise.all(f.pending);
+        const event = f.events.at(-1); assert.equal(event.request_id, requestId); assert.equal(event.status_code, 503);
+        assert.equal(event.actual_cost_micros, 0); assert.equal(event.reserved_cost_micros, 0); assert.equal(event.cost_basis, "none"); assert.equal(event.total_tokens, null);
+        assert.equal(upstream.mock.callCount(), 1);
+        owners.forEach((name, index) => assert.deepEqual(f.ledger.get(name).reservations(), original[index], "same successful reservation IDs and charges"));
+      }
+      const invalid = await f.call(audio, { path, query: new URLSearchParams(serializedPairs(16385)) });
+      assert.equal((await invalid.json()).error.code, "transcription_option_unsupported"); assert.equal(invalid.status, 400);
+      await Promise.all(f.pending); assert.equal(f.events.length, 3); assert.equal(new Set(f.events.map(event => event.id)).size, 3);
+    }
+    assert.equal(upstream.mock.callCount(), 1);
+    owners.forEach((name, index) => assert.deepEqual(f.ledger.get(name).reservations(), original[index]));
   });
 }
 

@@ -3,17 +3,61 @@
 ## Unreleased
 
 - Exclude Anthropic grants with exhausted prepaid credit for five minutes and retry one eligible same-provider grant before delivery, preserving healthy session stickiness and scoped quota state.
+- Add sandbox-qualified Fusion lifecycle repairs for cold-import settlement and assignment revision publication, with independent acceptance checks before model results are scored.
+- Add a versioned data-only JSON exchange contract for provider conformance fixtures, with a strict parser and provider-specific generated examples. Runtime conformance execution remains separate.
+- Add an opt-in, network-intercepted Worker runner for model-free native REST JSON plugin fixtures, with synthetic API-key auth and bounded exchange assertions.
+- Keep Fusion benchmark fallback active when a cheap repair exhausts its allowance without submitting, even if its partial patch passes the supplied check.
+- Retain bounded, content-free failed-test fingerprints in Fusion benchmark receipts to compare regressions with qualified baselines.
+
+- Validate repeated Fusion benchmark blocks against one protocol and a consecutive spend ledger, with joint quality, cost and latency reporting.
+
+- Add an opt-in provider fixture validation command that checks captured scenarios against compiled manifest declarations and reports package digests without exposing fixture contents. This validates references without executing providers.
+
+- Preserve native cache-read and cache-write token buckets in Fusion benchmark receipts so recorded tariff estimates can be reconstructed.
+- Retain content-free Fusion request fingerprints before dispatch so failed requests can be compared without storing prompts or releasing uncertain charges.
+
+- Recover once from a truncated Fusion benchmark action within the existing call, time and spending limits, without applying partial output.
+
+- Add an inactive private retained-generation foundation with proof-bound two-slot preparation, immutable opaque borrowers and atomic exact common-arena handoff. A stable publication watermark prevents delayed resurrection after eviction or expiry; optional metadata pressure demotes matching hits under funded temporary custody without another RPC. Default authentication, cache consumers and providers remain unchanged. Source and hosted runtime qualification are required before activation.
+
+- Stage inactive owned generation authentication and local selection with explicit admitted coverage, separately funded derived records and advisory ownership. Default callers remain unchanged; source/factory closure and hosted runtime qualification remain required before use. Originating selections keep their authority count, authority-bound runtime observations reach live successors, and refused background work retains a drain capability after public disposal. Fixed-cohort envelope planning reserves the complete deep visitor in idle control windows before transport. Private prefetch retains hint children through original materialization cleanup and warms only a separately funded private destination, with dispose-only borrowers, publication fencing and optional-pressure refusal that preserves old entries. Ordinary foreground credential caching is unchanged.
+
+- Add a local, inactive private full-admission continuation candidate with cumulative source ownership, opaque disposal and a typed deferred-effect journal. Private string-keyed request copies omit callable references, while snapshot output, principal/model transforms, scratch and configuration factories receive prospective funding inside the unchanged ticket; final admission rechecks complete candidate projections, including same-generation publications, through sequential control windows. Private callable checks preserve inert serializer shadowing without copying descriptor values; default authentication and provider routes are unchanged. Source and hosted runtime qualification remain required before use.
+
+- Add an inactive private credential-preflight foundation with secret-only opaque proofs, exact common-arena reservations, original-source retirement and prospective final-read admission before cold credential seed writes. Default authentication and generation activation remain unchanged; runtime and factory qualification are required before use.
+
+- Bound each examined raw proxy credential header to 4096 UTF-16 units before normalization, parsing or hashing. Preserve first-valid header precedence and Access fallback while rejecting encountered oversize values with terminal 503; formerly accepted oversized legacy tokens are intentionally denied.
+
+- Keep ordinary selected JSON HTTP input custody through actual delivery cleanup, archive writes and terminal accounting without delaying response publication; preserve specialized owners and existing accounting outcomes.
+
+- Publish all admitted current-pool migration markers after successful identity admission, including absent grants after a legacy fallback, so canonical rereads do not repeat legacy source imports.
+
+- Bound selected identity SQL/KV sources, admission replies and private copies with complete record/graph profiles, metadata-first SQL guards and atomic refresh publication. Cumulative 2 MiB source overflow denies the whole generation without truncating pools or falling back to old authorization; embedded records retain their independent 1 MiB limit, alternate profile denial is terminal, and existing narrower selection guards and specialized owners remain. Selected pool commits consume their returned SQL row before replying. These are representation limits, not a combined heap or generation-count guarantee.
+
+- Include declared product summaries in provider package indexes, sharing metadata types with the plugin contract while keeping execution and auth configuration private.
+
 - Declare separate Anthropic API and existing Claude subscription catalog products, preserving Messages and token-counting transport boundaries.
 
 - Pin the shared source-release workflow to a reviewed commit with complete release listing and exact-byte draft retry checks.
 
 - Declare the bundled OpenAI API and existing ChatGPT subscription transport as separate catalog products, preserving execution, pricing and subscription scope.
+- Add a fixed-model-only Fusion benchmark mode with explicit reporting and budgets for the selected arms.
+
+- Add a matched one-shot Fusion executor and supplied-check single-model ablations for controlled benchmark comparisons.
 
 - Recognize regression assertions reported on stdout by Node test reporters in Fusion qualification.
+
+- Add a bounded Fusion draft-repair experiment that revises cheap patches from isolated executable feedback before strong fallback.
+
+- Add an opt-in Fusion single-draft benchmark policy with executable verification and original-source strong fallback.
 
 - Make the experimental Fusion cheap-stage call allowance explicit in benchmark configuration and reports, while preserving the shared hard ceiling.
 
 - Clarify exact-file navigation and edit limits in the Fusion benchmark agent, with actionable feedback after invalid tool requests.
+
+- Add three operational Fusion holdout candidates with supplied regression reproducers and independent acceptance suites.
+
+- Add a pinned Fusion evaluation task for reservation rollback and cleanup error preservation.
 
 - Preserve allowlisted Fusion provider error codes and parameter categories, and identify unknown-cost trial failures without storing provider text.
 - Add an experimental Fusion cascade for supplied, execution-qualified reproducers with equally informed fixed-model controls.
@@ -90,6 +134,10 @@
 - Bound selected policy collections with shared caller KV admission, private SQL/request/reply profiles, original-stream retirement and prospective candidate checks before normalization or writes. Conservatively reserve structurally valid publication permissions even when expired; actual expiry and permissions remain unchanged, with existing query/ACK public-error mappings preserved.
 
 - Preserve original budget-reservation failures and every ordered ledger/queue cleanup failure privately after all started operations settle. Keep the existing public accounting-unavailable error, acknowledged reservation IDs and queue recovery behavior.
+
+- Admit complete selected accounting intents, future receipts and retained-TEXT archives before owned effects, including tighter Search/cover sinks. Capture private facts, preserve original accounting IDs and durable recovery, stream admitted archives with bounded backings, and conservatively admit Fusion before its early synthesizer reservation. PixVerse allocation capacity denial stays terminal while ordinary lost-ACK recovery retains canonical IDs. Resource denial does not truncate required accounting or imply a refund, rollback or heap bound.
+
+- Bound selected dynamic provider preparation with one explicit allowance across configuration, templates, paths, queries, headers, signing and alternate preparation. Realtime uses a separate allowance per fresh authority observation, shared by its main and ASR stages; the handshake allowance remains separate. Preserve credential and transport semantics while making capacity denial terminal, keeping original abort precedence and accounting IDs; independent response controls own their own allowance.
 
 - Add private MiniMax cover composition with additive local WAVE custody, current-authority-to-POST handoff, original-ID dispatch-aware accounting and independent delivery/cleanup ownership. Public routing, audio-capable native clients and vendor format compatibility remain closed.
 

@@ -629,8 +629,9 @@ for (const providerId of ["anthropic", "openai"]) test(`temporary grant cooldown
         if (phase === "before") { baseline.set(mode, inventory); baselineOffers.set(mode, view.offers); }
         assert.ok(view.models.length > 0, `${phase} ${mode}: keep registered models`);
         if (providerId === "anthropic") {
-          assert.equal(view.models.length, 10);
+          assert.equal(view.models.length, 11);
           assert.ok(view.models.some(({ id }) => id === "anthropic/claude-opus-5-5"));
+          assert.ok(view.models.some(({ id }) => id === "anthropic/claude-fable-5-2"));
           assert.equal(view.routes.length, 4);
         } else {
           assert.ok(view.models.some(({ id }) => id === "openai/gpt-6-astra"));
@@ -886,7 +887,11 @@ async function fusionDiscoveryFixture(t, { bindings } = {}) {
   const env = {
     OPENAI_API_KEY: "fixture-environment-key", CLAWROUTER_LOCAL_AUTH: "enabled",
     POLICY_KV: {
-      async get(key) { return Array.isArray(key) ? new Map(key.map((item) => [item, records.get(item) ?? null])) : records.get(key) ?? null; },
+      async get(key, type) {
+        if (Array.isArray(key)) return new Map(key.map((item) => [item, records.get(item) ?? null]));
+        const value = records.get(key) ?? null;
+        return value !== null && type === "stream" ? accessCertsResponse(value, "").body : value;
+      },
       async list({ prefix }) {
         assert.equal(prefix, "health/providers/", "discovery only lists saved provider health, never grant credentials");
         calls.push({ path: "kv-list", body: { prefix } });

@@ -1,3 +1,8 @@
+import { ProxyCompletion } from "./proxy-completion.ts";
+import { isIdentityFailure } from "./identity-admission.ts";
+import { providerConfigurationList } from "./provider-connections.ts";
+import { admitAccountingJson, isAccountingAdmissionFailure } from "./json-body.ts";
+import { PreparationAdmission, isPreparationLimit, preparationHeader, templateCandidates, preparationValue } from "./provider-templates.ts";
 import { readMiniMaxVideoInput, bindMiniMaxVideoInline, hasMiniMaxVideoInline } from "./minimax-video-inline.ts";
 import { MiniMaxVideoOperation, videoJsonBytes, assertVideoHeaders } from "./minimax-video-operation.ts";
 import { miniMaxVideoDenied } from "./minimax-video-credential.ts";
@@ -49,7 +54,7 @@ import { discoveryQuery, isModelDiscovery, modelDiscoveryResponse, validateDisco
 import { anthropicPricing } from "./anthropic-pricing.ts";
 import { guardAnthropicPrice, type AnthropicPriceGuard } from "./anthropic-price-response.ts";
 import { assertInputTokensRequest } from "./responses-input-tokens.ts";
-import { softBudget, softBudgetPolicy, softBudgetPreflight } from "./soft-budget.ts";
+import { softBudget, prepareSoftBudget, startSoftBudget, softBudgetPolicy, softBudgetPreflight } from "./soft-budget.ts";
 import { prepareUpstreamRequest } from "./proxy-upstream-request.ts";
 import { BodyLease, bodyLeaseMinimum } from "./body-budget.ts";
 import { WanManagedOperation, readWanJson, wanRequestBytes, preflightWanJson, assertWanHeaders } from "./managed-media-json.ts";
@@ -61,7 +66,7 @@ import { assertServiceTier } from "./service-tiers.ts";
 import { grantStickyInput } from "./grant-sticky.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import { assessModelRequest } from "../shared/model-request-parameters.ts";
-import { createProxyAccounting, estimateCost, type CompoundRequestContext } from "./proxy-accounting";
+import { admitAccountingFacts, createProxyAccounting, estimateCost, type CompoundRequestContext } from "./proxy-accounting";
 import { authenticateProxyKey, proxySessionHash } from "./proxy-auth";
 import { queueGrantRuntime } from "./admission-cache.ts";
 import { evictGrantCredentials } from "./credential-cache.ts";
@@ -71,11 +76,11 @@ import {
   prepareManifestRequest, prepareNativeRequest, requestObject, validateSelectedInput, type ProxySelection,
 } from "./proxy-selection";
 import { accessIdentity, accessSessionIdentity, verifiedAccessSession } from "./access";
-import { markBudgetDispatched, reserveBudget, validateBudgetReservation, type BudgetReservation, type EstimatedCost } from "./accounting";
-import { prepareContentRetention, prepareInlineMusicRetention, retentionRequired, type PreparedContentRetention } from "./content-retention";
+import { planBudgetReservation, markBudgetDispatched, reserveBudget, validateBudgetReservation, type BudgetReservation, type EstimatedCost } from "./accounting";
+import { admitProspectiveContentRetention, prepareContentRetention, prepareInlineMusicRetention, retentionRequired, type PreparedContentRetention } from "./content-retention";
 import { correlationMetadata, logCorrelationError } from "./correlation.ts";
 import {
-  FUSION_MODEL_ID, buildAggregatorBody, buildFusionReservationProposals, collectFusionProposals,
+  FUSION_MODEL_ID, prepareFusionAccounting, buildFusionReservationProposals, collectFusionProposals,
   fusionMessagesValid, prepareAdviserBody,
 } from "./fusion";
 import { loadFusionConfig } from "./fusion-config";
@@ -216,6 +221,7 @@ class JsonAdmission implements JsonIntake {
     }
     if (this.request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
   }
+  ordinaryCompletion(): boolean { return !this.search && !this.wan && !this.input && !this.intakeOperation; }
   finish(context: ExecutionContext): void {
     if (this.search) { context.waitUntil(this.search.finish()); return; }
     if (this.wanRefusal) context.waitUntil(this.wanRefusal);
@@ -259,6 +265,7 @@ interface PreparedUpstream {
   continuation?: ContinuationOwner;
   managedBaseUrl?: string;
   revalidateAccount?: (signal: AbortSignal) => Promise<void>;
+  revalidateMedia?: (currentEnv: Env, signal: AbortSignal) => Promise<void>;
   acquireDiscovery?: () => BodyLease;
   revalidateDiscovery?: (signal: AbortSignal) => Promise<import("./types").AccessPolicy>;
   publicCatalog?: Awaited<ReturnType<typeof preparePublicDiscoveryOwner>>;
@@ -275,6 +282,9 @@ interface ReservedProxyBudget {
   modelId: string | null;
   capability: string;
   connection: ProviderConnection;
+  fusion?: ReturnType<typeof prepareFusionAccounting>;
+  claim(): void;
+  finishUnclaimed(): Promise<void>;
 }
 
 export async function proxyOpenAi(request: Request, env: Env, context: ExecutionContext, path: string, mode: AuthMode): Promise<Response> {
@@ -296,7 +306,8 @@ async function proxyUnifiedOpenAi(request: Request, env: Env, context: Execution
   // default before both admission and model-policy checks, including bare IDs.
   if (path === "/v1/moderations" && (body.model === undefined || typeof body.model === "string" && !body.model.includes("/"))) body.model = `openai/${body.model ?? "omni-moderation-latest"}`;
   const modelId = typeof body.model === "string" ? body.model : "";
-  const earlySelection = concreteOpenAiSelection(path, body, env);
+  const preparation = new PreparationAdmission();
+  const earlySelection = concreteOpenAiSelection(path, body, env, undefined, preparation);
   const preauthenticated = await preauthenticate(request, env, mode, mode === "proxy_key" ? modelRoute(modelId, capabilityForPath(path) ?? undefined)?.provider.id : undefined, undefined, isSelectionFailure(earlySelection) ? undefined : earlySelection);
   if (preauthenticated instanceof Response) return preauthenticated;
   if (!modelId) return errorResponse("model_required", "model is required", 400);
@@ -307,7 +318,7 @@ async function proxyUnifiedOpenAi(request: Request, env: Env, context: Execution
     return proxyFusion(request, env, context, mode, body, preauthenticated);
   }
   if (!isSelectionFailure(earlySelection)) return admission.expanded && !mediaEnvelope(earlySelection.endpoint) ? expandedTooLarge() : proxySelected(request, env, context, mode, earlySelection, new URL(request.url).searchParams, preauthenticated, undefined, undefined, undefined, admission);
-  return proxyConcreteOpenAi(request, env, context, path, mode, body, preauthenticated, undefined, undefined, undefined, undefined, admission);
+  return proxyConcreteOpenAi(request, env, context, path, mode, body, preauthenticated, undefined, undefined, undefined, undefined, admission, preparation);
 }
 
 async function proxyConcreteOpenAi(
@@ -323,12 +334,14 @@ async function proxyConcreteOpenAi(
   compound?: CompoundRequestContext,
   auditAuth?: AuthorizedIdentity,
   admission?: JsonAdmission,
+  preparation = new PreparationAdmission(),
 ): Promise<Response> {
-  const result = concreteOpenAiSelection(path, body, env, timeoutMs);
+  const result = concreteOpenAiSelection(path, body, env, timeoutMs, preparation);
   if (isSelectionFailure(result)) {
     if (compound && result.auditSelection) await auditSelectionFailure(request, env, context, mode, result.auditSelection, preauthenticated, result.response.status, compound, auditAuth);
     return result.response;
   }
+  reservedBudget?.fusion?.assertRoute(body, result.body as Record<string, unknown>, result.provider.id, result.endpoint.id, result.pathParams.model);
   if (admission?.expanded && !mediaEnvelope(result.endpoint)) return expandedTooLarge();
   return proxySelected(request, env, context, mode, result, new URL(request.url).searchParams, preauthenticated, reservedBudget, compound, auditAuth, admission);
 }
@@ -352,7 +365,18 @@ async function proxyFusion(
   fusionHeaders.set("x-request-id", requestId);
   // The original body was already parsed. Concrete routes serialize their transformed body separately.
   const fusionRequest = new Request(request.url, { method: request.method, headers: fusionHeaders, signal: request.signal });
-  const aggregatorSelection = concreteOpenAiSelection("/v1/chat/completions", buildAggregatorBody(body, config, buildFusionReservationProposals(config)), env);
+  const aggregatorPreparation = new PreparationAdmission();
+  admitAccountingJson(body, "archive");
+  // Resolve the route with a constant-size envelope before constructing the
+  // worst-case reservation body. The SAME preparation token covers both reads.
+  const probe = concreteOpenAiSelection("/v1/chat/completions", { model: config.aggregatorModel, messages: [] }, env, undefined, aggregatorPreparation);
+  if (isSelectionFailure(probe)) return probe.response;
+  const fusionAuth = await selectedAuth(fusionRequest, env, mode, probe, preauthenticated);
+  if (fusionAuth instanceof Response) return fusionAuth;
+  const renames = fusionAccountingRenames(probe, body, env, aggregatorPreparation);
+  const certificate = prepareFusionAccounting(body, config, { provider: probe.provider.id, endpoint: probe.endpoint.id,
+    upstream: probe.pathParams.model, renames }, view => admitProspectiveContentRetention(fusionAuth, probe, requestId, view));
+  const aggregatorSelection = concreteOpenAiSelection("/v1/chat/completions", certificate.assemble(buildFusionReservationProposals(certificate.config)), env, undefined, aggregatorPreparation);
   if (isSelectionFailure(aggregatorSelection)) {
     if (aggregatorSelection.auditSelection) await auditSelectionFailure(fusionRequest, env, context, mode, aggregatorSelection.auditSelection, preauthenticated, aggregatorSelection.response.status, {
       id: compoundRequestId, stage: "fusion_synthesizer", index: null, size: 1, startedAtMs: compoundStartedAtMs,
@@ -366,41 +390,81 @@ async function proxyFusion(
     });
     return errorResponse("model_parameter_unsupported", parameters.conflicts.map(({ message }) => message).join(" "), 400);
   }
-  const aggregatorBudget = await reserveSelected(fusionRequest, env, context, mode, aggregatorSelection, preauthenticated, {
+  const aggregatorBudget = await reserveSelected(fusionRequest, env, context, mode, aggregatorSelection, fusionAuth, {
     id: compoundRequestId, stage: "fusion_synthesizer", index: null, size: 1, startedAtMs: compoundStartedAtMs,
   });
   if (aggregatorBudget instanceof Response) return aggregatorBudget;
-  const result = await collectFusionProposals(config, body, async (_model, adviserBody, timeoutMs, index, signal) => {
-    const headers = new Headers(fusionRequest.headers);
-    headers.set("x-request-id", randomId(`fusion-adviser-${index + 1}`));
-    const adviserRequest = new Request(fusionRequest.url, { method: "POST", headers, signal: AbortSignal.any([fusionRequest.signal, signal]) });
-    const compound: CompoundRequestContext = {
-      id: compoundRequestId, stage: "fusion_adviser", index: index + 1, size: compoundRequestSize, startedAtMs: compoundStartedAtMs,
-    };
-    const selection = concreteOpenAiSelection("/v1/chat/completions", adviserBody, env, timeoutMs);
-    if (isSelectionFailure(selection)) {
-      if (selection.auditSelection) await auditSelectionFailure(adviserRequest, env, context, mode, selection.auditSelection, preauthenticated, selection.response.status, compound, aggregatorBudget.auth);
-      return selection.response;
+  aggregatorBudget.fusion = certificate;
+  let primary: unknown, hasPrimary = false;
+  try {
+    const result = await collectFusionProposals(certificate.config, certificate.input, async (_model, adviserBody, timeoutMs, index, signal) => {
+      const headers = new Headers(fusionRequest.headers);
+      headers.set("x-request-id", randomId(`fusion-adviser-${index + 1}`));
+      const adviserRequest = new Request(fusionRequest.url, { method: "POST", headers, signal: AbortSignal.any([fusionRequest.signal, signal]) });
+      const compound: CompoundRequestContext = {
+        id: compoundRequestId, stage: "fusion_adviser", index: index + 1, size: compoundRequestSize, startedAtMs: compoundStartedAtMs,
+      };
+      const preparation = new PreparationAdmission();
+      const selection = concreteOpenAiSelection("/v1/chat/completions", adviserBody, env, timeoutMs, preparation);
+      if (isSelectionFailure(selection)) {
+        if (selection.auditSelection) await auditSelectionFailure(adviserRequest, env, context, mode, selection.auditSelection, preauthenticated, selection.response.status, compound, aggregatorBudget.auth);
+        return selection.response;
+      }
+      selection.body = prepareAdviserBody(selection.body as Record<string, unknown>, selection.model, selection.endpoint, config.temperature);
+      return proxySelected(adviserRequest, env, context, mode, selection, new URL(adviserRequest.url).searchParams, preauthenticated, undefined, compound, aggregatorBudget.auth);
+    }, work => context.waitUntil(work));
+    const aggregatorBody = certificate.assemble(result.proposals);
+    const response = await proxyConcreteOpenAi(fusionRequest, env, context, "/v1/chat/completions", mode, aggregatorBody, preauthenticated, undefined, aggregatorBudget, {
+      id: compoundRequestId, stage: "fusion_synthesizer", index: null, size: compoundRequestSize, startedAtMs: compoundStartedAtMs,
+    }, undefined, undefined, aggregatorPreparation);
+    const headers = new Headers(response.headers);
+    headers.set("x-clawrouter-fusion-strategy", fusionStrategy(config));
+    headers.set("x-clawrouter-fusion", result.proposals.length ? "advisers" : "aggregator-only");
+    headers.set("x-clawrouter-fusion-aggregator", config.aggregatorModel);
+    headers.set("x-clawrouter-fusion-adviser-count", String(result.proposals.length));
+    headers.set("x-clawrouter-fusion-failed-count", String(result.failedModels.length));
+    headers.set("x-clawrouter-fusion-latency-ms", String(result.durationMs));
+    if (result.proposals.length) headers.set("x-clawrouter-fusion-advisers", result.proposals.map((proposal) => proposal.model).join(","));
+    return inheritLocalError(response, new Response(response.body, { status: response.status, statusText: response.statusText, headers }));
+  } catch (error) { hasPrimary = true; primary = error; throw error; }
+  finally {
+    try { await aggregatorBudget.finishUnclaimed(); }
+    catch (cleanup) {
+      const failure = new HttpError(503, "accounting_unavailable", "Fusion reservation cleanup could not finish");
+      Object.defineProperty(failure, "accountingCleanup", { value: { hasPrimary, primary, cleanup } });
+      throw failure;
     }
-    selection.body = prepareAdviserBody(selection.body as Record<string, unknown>, selection.model, selection.endpoint, config.temperature);
-    return proxySelected(adviserRequest, env, context, mode, selection, new URL(adviserRequest.url).searchParams, preauthenticated, undefined, compound, aggregatorBudget.auth);
-  });
-  const aggregatorBody = buildAggregatorBody(body, config, result.proposals);
-  const response = await proxyConcreteOpenAi(fusionRequest, env, context, "/v1/chat/completions", mode, aggregatorBody, preauthenticated, undefined, aggregatorBudget, {
-    id: compoundRequestId, stage: "fusion_synthesizer", index: null, size: compoundRequestSize, startedAtMs: compoundStartedAtMs,
-  });
-  const headers = new Headers(response.headers);
-  headers.set("x-clawrouter-fusion-strategy", fusionStrategy(config));
-  headers.set("x-clawrouter-fusion", result.proposals.length ? "advisers" : "aggregator-only");
-  headers.set("x-clawrouter-fusion-aggregator", config.aggregatorModel);
-  headers.set("x-clawrouter-fusion-adviser-count", String(result.proposals.length));
-  headers.set("x-clawrouter-fusion-failed-count", String(result.failedModels.length));
-  headers.set("x-clawrouter-fusion-latency-ms", String(result.durationMs));
-  if (result.proposals.length) headers.set("x-clawrouter-fusion-advisers", result.proposals.map((proposal) => proposal.model).join(","));
-  return inheritLocalError(response, new Response(response.body, { status: response.status, statusText: response.statusText, headers }));
+  }
+}
+
+// Mirror only the declared rename selection; no prompt-field vectors/copies.
+// The certificate records the actual active sequence and upstream primitive.
+function fusionAccountingRenames(selection: ProxySelection, original: Record<string, unknown>, env: Env, owner: PreparationAdmission) {
+  const declared = selection.provider.adapter.requestTransforms.renameFields;
+  admitAccountingJson(declared, "capsule");
+  const active: Array<{ from: string; to: string }> = [];
+  const translated = (key: string) => { for (const rename of active) if (key === rename.from) key = rename.to; return key; };
+  const present = (name: string) => {
+    if (name in Object.prototype) return true;
+    if (translated("model") === name) return true;
+    for (const key in original) if (Object.hasOwn(original, key) && translated(key) === name) return true;
+    return false;
+  };
+  for (const rename of declared) {
+    if (rename.paths.length && !rename.paths.includes("/v1/chat/completions")) continue;
+    let allowed = !rename.upstreams.length || rename.upstreams.includes(selection.pathParams.model);
+    if (!allowed && rename.upstreamConfig) {
+      let value: string | null = null;
+      const key = templateCandidates(selection.provider, rename.upstreamConfig, owner).find(candidate => (value = preparationValue(env, candidate, owner, true)));
+      allowed = !!key && providerConfigurationList(value!, owner, key, undefined, true).includes(selection.pathParams.model);
+    }
+    if (allowed && present(rename.from) && !present(rename.to)) active.push({ from: rename.from, to: rename.to });
+  }
+  return active;
 }
 
 export async function proxyManifest(request: Request, env: Env, context: ExecutionContext, path: string, mode: AuthMode): Promise<Response> {
+  const preparation = new PreparationAdmission();
   const match = path.match(/^\/v1\/(?:playground\/)?proxy\/([^/]+)\/([^/]+)$/);
   if (!match) return errorResponse("route_not_found", "manifest proxy route not found", 404);
   const provider = providerById(decodePathSegment(match[1]));
@@ -414,7 +478,7 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
   }
   const session = mode === "access" ? await verifiedAccessSession(request, env) : null;
   if (mode === "access" && !session) return errorResponse("access_session_required", "a verified session is required", 401);
-  if (nativeRawFormat(endpoint.request_format)) return proxyNativeRaw(request, env, context, mode, provider, endpoint);
+  if (nativeRawFormat(endpoint.request_format)) return proxyNativeRaw(request, env, context, mode, provider, endpoint, preparation);
   let preauthenticated: AuthorizedIdentity | Response | null = null;
   const fileControls = responsesFileControls(provider, endpoint);
   if (fileControls.length) {
@@ -452,7 +516,7 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
       return await proxyResponseControl(request, env, control.action, id, control.protocol ? {} : query, mode, provider.id, controls.map(candidate => ({ createId: candidate.create.id, pathParams: params })), preauthenticated ?? undefined, session ?? undefined, control.protocol, params, context, wanAdmission?.wan);
     }
     if (request.method !== "POST") return errorResponse("method_not_allowed", "control method is not allowed", 405);
-    const envelope = manifestEnvelope(wanAdmission ? await wanAdmission.wanCandidate(endpoint) : await readJson<unknown>(request));
+    const envelope = manifestEnvelope(wanAdmission ? await wanAdmission.wanCandidate(endpoint) : await readJson<unknown>(request), preparation, endpoint.path_param_styles);
     if ((envelope.method ?? endpoint.method).toUpperCase() !== endpoint.method || Object.keys(requestObject(envelope.body)).length || new URL(request.url).search) throw new HttpError(400, "invalid_response_control", "manifest controls accept a bodyless declared method and envelope query only");
     const id = control.protocol ? await (await import("./managed-routes.ts")).managedControlIdentity(control.protocol, control.action, envelope.pathParams, envelope.query) : envelope.pathParams.response_id;
     return await proxyResponseControl(request, env, control.action, id, control.protocol ? {} : envelope.query, mode, provider.id, controls.map(candidate => ({ createId: candidate.create.id, pathParams: envelope.pathParams })), preauthenticated ?? undefined, session ?? undefined, control.protocol, envelope.pathParams, context, wanAdmission?.wan);
@@ -473,10 +537,10 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
         let value = wanCreate(endpoint) ? await admission.wanCandidate(endpoint) : openRouterMusicCandidate(provider, endpoint)
           ? await admission.musicCandidate() : await readJson<unknown>(request, undefined, bodyLimit(endpoint, provider.id), admission);
         if (publicCatalogProvider(endpoint.request_format)) assertPublicDiscoveryEnvelope(value);
-        envelope = manifestEnvelope(value);
+        envelope = manifestEnvelope(value, preparation, endpoint.path_param_styles);
         value = undefined;
       }
-      prepared = prepareManifestRequest(provider, endpoint, envelope.body, envelope.pathParams, env);
+      prepared = prepareManifestRequest(provider, endpoint, envelope.body, envelope.pathParams, env, false, preparation);
       envelope.body = undefined;
     } catch (error) {
       if (error instanceof Response) return error;
@@ -486,11 +550,11 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
     }
     const method = (envelope.method ?? endpoint.method).toUpperCase();
     if (!endpoint.methods.includes(method)) { const auth = await preauthenticate(request, env, mode, provider.id); return auth instanceof Response ? auth : errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405); }
-    if (!session) preauthenticated = admission.wanAuth ?? await preauthenticate(request, env, mode, provider.id, undefined, { provider, endpoint, model: prepared.model, capability: provider.capabilities.find(item => item.endpoint === endpoint.id)?.id ?? endpoint.id, body: prepared.body, pathParams: prepared.pathParams, method });
+    const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
+    const selection: ProxySelection = { preparation, provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method };
+    if (!session) preauthenticated = admission.wanAuth ?? await preauthenticate(request, env, mode, provider.id, undefined, selection);
     if (session) preauthenticated = await accessSessionIdentity(session, env, provider.id, { provider, endpoint, mode: "http", model: prepared.model?.id });
     if (preauthenticated instanceof Response) return preauthenticated;
-    const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
-    const selection = { provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method };
     prepared.body = {};
     await admission.prepareMusic(selection);
     return await proxySelected(request, env, context, mode, selection, envelope.query, preauthenticated, undefined, undefined, undefined, admission);
@@ -498,6 +562,7 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
 }
 
 export async function proxyNative(request: Request, env: Env, context: ExecutionContext, path: string): Promise<Response> {
+  const preparation = new PreparationAdmission();
   const match = path.match(/^\/v1\/native\/([^/]+)(\/.*)$/);
   if (!match) return errorResponse("route_not_found", "native proxy route not found", 404);
   const provider = providerById(decodePathSegment(match[1]));
@@ -519,7 +584,7 @@ export async function proxyNative(request: Request, env: Env, context: Execution
   if (!endpoint || !endpoint.native_proxy || manifestOnlyPublicCatalog(endpoint.request_format) || endpoint.request_format === "featherless.catalog") { const auth = await preauthenticate(request, env, "proxy_key", provider.id); return auth instanceof Response ? auth : errorResponse("route_not_found", "native provider route not found", 404); }
   const method = request.method.toUpperCase();
   if (!endpoint.methods.includes(method)) { const auth = await preauthenticate(request, env, "proxy_key", provider.id); return auth instanceof Response ? auth : errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405); }
-  if (nativeRawFormat(endpoint.request_format)) return proxyNativeRaw(request, env, context, "proxy_key", provider, endpoint);
+  if (nativeRawFormat(endpoint.request_format)) return proxyNativeRaw(request, env, context, "proxy_key", provider, endpoint, preparation);
   const controlEndpoints = matching.filter(candidate => candidate.native_proxy && candidate.methods.includes(method));
   const fileControls = controlEndpoints.flatMap(candidate => responsesFileControls(provider, candidate).map(control => ({ ...control, endpoint: candidate, pathParams: nativeParams(candidate, match[2]) })));
   if (fileControls.length) {
@@ -577,7 +642,7 @@ export async function proxyNative(request: Request, env: Env, context: Execution
       let body = request.method === "GET" || request.method === "HEAD" ? {} : wanCreate(endpoint) ? await admission.wanCandidate(endpoint) : openRouterMusicCandidate(provider, endpoint)
         ? await admission.musicCandidate() : await readJson<unknown>(request, undefined, bodyLimit(endpoint, provider.id), admission);
       endpoint = nativeModelEndpoint(provider, matching, match[2], method, body) ?? endpoint;
-      prepared = prepareNativeRequest(provider, endpoint, body, match[2], env);
+      prepared = prepareNativeRequest(provider, endpoint, body, match[2], env, preparation);
       body = undefined;
     } catch (error) {
       if (error instanceof Response) return error;
@@ -586,7 +651,7 @@ export async function proxyNative(request: Request, env: Env, context: Execution
       throw error;
     }
     const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
-    const selection = { provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method };
+    const selection = { preparation, provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method };
     prepared.body = {};
     await admission.prepareMusic(selection);
     const preauthenticated = admission.wanAuth ?? await preauthenticate(request, env, "proxy_key", provider.id, undefined, selection);
@@ -597,8 +662,8 @@ export async function proxyNative(request: Request, env: Env, context: Execution
 
 const nativeUploadGrants = new WeakMap<ProxySelection, PinnedGrant>();
 
-async function proxyNativeRaw(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, provider: CompiledProvider, endpoint: CompiledEndpoint): Promise<Response> {
-  const selection: ProxySelection = { provider, endpoint, model: null, capability: provider.capabilities.find(item => item.endpoint === endpoint.id)?.id ?? endpoint.id,
+async function proxyNativeRaw(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, provider: CompiledProvider, endpoint: CompiledEndpoint, preparation: PreparationAdmission): Promise<Response> {
+  const selection: ProxySelection = { preparation, provider, endpoint, model: null, capability: provider.capabilities.find(item => item.endpoint === endpoint.id)?.id ?? endpoint.id,
     body: {}, pathParams: {}, method: request.method };
   const initial = await preauthenticate(request, env, mode, provider.id, undefined, selection);
   if (initial instanceof Response) return initial;
@@ -606,7 +671,7 @@ async function proxyNativeRaw(request: Request, env: Env, context: ExecutionCont
   assertPolicyModel(initial.policy, selection);
   await assertProviderAccess(provider, initial, env);
   const original = await upstreamAuth(provider, initial, env, new Set(), await grantStickyHash(request, initial), true, undefined,
-    { provider, endpoint, mode: "http" });
+    { provider, endpoint, mode: "http" }, undefined, undefined, undefined, undefined, preparation);
   // Upload awaits may revoke or replace the selected owner. Fresh admission
   // must retain this selection, never reopen environment or another grant.
   nativeUploadGrants.set(selection, { key: original.grantKey, revision: original.grantRevision });
@@ -626,6 +691,7 @@ function miniMaxVideoRoute(provider: CompiledProvider, endpoint: CompiledEndpoin
 
 async function proxyMiniMaxVideo(request: Request, env: Env, context: ExecutionContext, provider: CompiledProvider,
   endpoint: CompiledEndpoint, mode: AuthMode, route: "native" | "manifest", nativePath?: string): Promise<Response> {
+  const preparation = new PreparationAdmission();
   if (mode !== "proxy_key") return errorResponse("minimax_video_proxy_key_required", "Video requires a proxy key", 403);
   const files = responsesFileControls(provider, endpoint), controls = responsesControls(provider, endpoint);
   const owner = new MiniMaxVideoOperation(files.length ? "file" : controls.length ? "poll" : "create", request, endpoint.timeout_ms ?? 120_000);
@@ -657,10 +723,10 @@ async function proxyMiniMaxVideo(request: Request, env: Env, context: ExecutionC
     let body: unknown = await operation.wait(owner.track(readMiniMaxVideoInput(request, owner, route)));
     let prepared;
     if (route === "manifest") {
-      const envelope = manifestEnvelope(body);
+      const envelope = manifestEnvelope(body, preparation, endpoint.path_param_styles);
       if (envelope.method && envelope.method !== "POST" || Object.keys(envelope.pathParams).length || hasProxyQuery(envelope.query)) miniMaxVideoDenied();
-      prepared = prepareManifestRequest(provider, endpoint, envelope.body, {}, env); envelope.body = undefined;
-    } else prepared = prepareNativeRequest(provider, endpoint, body, nativePath!, env);
+      prepared = prepareManifestRequest(provider, endpoint, envelope.body, {}, env, false, preparation); envelope.body = undefined;
+    } else prepared = prepareNativeRequest(provider, endpoint, body, nativePath!, env, preparation);
     body = undefined;
     // Generic managed preparation leaves model selection to the protocol owner.
     // Native wire IDs and manifest router IDs each require one exact declared card.
@@ -675,7 +741,7 @@ async function proxyMiniMaxVideo(request: Request, env: Env, context: ExecutionC
       || miniMaxVideoRequiresInline(model.upstream) && !hasMiniMaxVideoInline(owner)
       || !model.capabilities.includes("media.predict") || !modelSupportsEndpoint(provider, model, endpoint)) miniMaxVideoDenied();
     input.model = model.upstream;
-    const selection: ProxySelection = { provider, endpoint, model, capability: "media.predict", body: input,
+    const selection: ProxySelection = { preparation, provider, endpoint, model, capability: "media.predict", body: input,
       pathParams: prepared.pathParams, method: "POST" };
     prepared.body = {};
     await operation.wait(owner.track(bindMiniMaxVideoInline(owner, input, [original.credentialId, original.principalId,
@@ -693,6 +759,7 @@ async function proxyMiniMaxVideo(request: Request, env: Env, context: ExecutionC
 
 async function proxyMiniMaxSearch(request: Request, env: Env, context: ExecutionContext, provider: CompiledProvider,
   endpoint: CompiledEndpoint, mode: AuthMode, route: "native" | "manifest", nativePath?: string): Promise<Response> {
+  const preparation = new PreparationAdmission();
   if (mode !== "proxy_key") return errorResponse("minimax_search_proxy_key_required", "Search requires a proxy key", 403);
   const admission = new JsonAdmission(request, env, mode, provider.id);
   const owner = admission.search = new MiniMaxSearchOperation(request, endpoint.timeout_ms ?? 120_000);
@@ -707,24 +774,74 @@ async function proxyMiniMaxSearch(request: Request, env: Env, context: Execution
     await owner.operation.wait(owner.reserveProvider());
     let prepared;
     if (route === "manifest") {
-      const envelope = manifestEnvelope(body);
+      const envelope = manifestEnvelope(body, preparation, endpoint.path_param_styles);
       if (envelope.method && envelope.method !== "POST" || Object.keys(envelope.pathParams).length || hasProxyQuery(envelope.query)) miniMaxSearchDenied();
-      prepared = prepareManifestRequest(provider, endpoint, envelope.body, {}, env);
+      prepared = prepareManifestRequest(provider, endpoint, envelope.body, {}, env, false, preparation);
       envelope.body = undefined;
-    } else prepared = prepareNativeRequest(provider, endpoint, body, nativePath!, env);
+    } else prepared = prepareNativeRequest(provider, endpoint, body, nativePath!, env, preparation);
     body = undefined;
-    const selection: ProxySelection = { provider, endpoint, model: prepared.model, capability: "search.web", body: prepared.body, pathParams: prepared.pathParams, method: "POST" };
+    const selection: ProxySelection = { preparation, provider, endpoint, model: prepared.model, capability: "search.web", body: prepared.body, pathParams: prepared.pathParams, method: "POST" };
     prepared.body = {};
     const trackedContext = { ...context, waitUntil(promise: Promise<unknown>) { context.waitUntil(owner.track(promise)); }, passThroughOnException: () => context.passThroughOnException() } as ExecutionContext;
     return await owner.operation.wait(owner.track(proxySelected(request, env, trackedContext, mode, selection, {}, auth, undefined, undefined, undefined, admission)), "upstream", response => owner.discard(response));
   } finally { admission.finish(context); }
 }
 
+// Normalization may replay a body or detach its reader cancellation. Keep an
+// independent receipt for the ORIGINAL source before giving it to those wrappers.
+function ownOrdinaryResponse(response: Response, completion: ProxyCompletion): Response {
+  if (!response.body) return response;
+  let forwarded!: Response;
+  completion.start(source => {
+    const reader = response.body!.getReader(), input = inputRetirement(reader);
+    let stopped = false;
+    try {
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          return source.start(async () => {
+            try {
+              const next = await input.read(() => reader.read());
+              if (stopped) return;
+              if (next.done) {
+                stopped = true; controller.close();
+                void input.retire("eof");
+              } else controller.enqueue(next.value); // Forward the original chunk, without a copy.
+            } catch (error) {
+              if (!stopped) { stopped = true; controller.error(error); }
+              void input.retire("cancel", error);
+            }
+          });
+        },
+        cancel(reason) { stopped = true; return input.retire("cancel", reason); },
+      }, { highWaterMark: 0 });
+      forwarded = new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+    } catch (error) {
+      // Construction failure still owns the acquired source; preserve the throw.
+      source.start(() => input.retire("cancel", error));
+      throw error;
+    }
+    // Neither a pull nor cancel waits on encompassing caller completion. The
+    // active source scope can enroll pulls until its original receipt settles.
+    return input.retired;
+  });
+  return forwarded;
+}
+
 async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: ProxyQuery = {}, preauthenticated: AuthorizedIdentity | null = null, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, auditAuth?: AuthorizedIdentity, admission?: JsonAdmission): Promise<Response> {
-  const searchOwner = admission?.search;
-  const published = publishedMusicInput(selection);
-  const music = inlineMusicInput(selection) ?? published;
-  const usageContext = Object.freeze({ providerId: selection.provider.id, requestFormat: selection.endpoint.request_format, responseFormat: selection.endpoint.response_format });
+  // Invoke only at the authenticated, validated boundary (or the earlier
+  // identity-denial receipt). Never reconstruct the selection or reauthenticate.
+  const complete = async (start: (scope?: ProxyCompletion) => Promise<Response>): Promise<Response> => {
+    const ordinary = admission?.ordinaryCompletion() && !compound && !reservedBudget && !selection.nativeResponse
+      && !selection.endpoint.lifecycle && !backgroundResponse(selection.endpoint, selection.body) && !isModelDiscovery(selection.endpoint) && selection.capability.startsWith("llm.")
+      && !["minimax", "anthropic-vertex", "gmi"].includes(selection.provider.id)
+      && ["openai.chat_completions", "openai.responses", "openai.responses_compact", "openai.responses_input_tokens", "anthropic.messages"].includes(selection.endpoint.request_format);
+    const completion = ordinary ? new ProxyCompletion() : undefined;
+    if (completion) admission!.completion = completion.completion;
+    try {
+      if (completion) context.waitUntil(completion.completion);
+      return await (completion ? completion.start(start) : start());
+    } finally { completion?.seal(); }
+  };
   const auth = reservedBudget?.auth ?? await selectedAuth(request, env, mode, selection, preauthenticated);
   if (auth instanceof Response) {
     if (compound && auditAuth) {
@@ -735,8 +852,11 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   }
   const identityDenial = identitySelectionDenied(request, selection.provider.id);
   if (identityDenial) {
-    createProxyAccounting({ context, env, auth, selection, request, compound, cost: { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 } }).fail(identityDenial.status, "denied");
-    return identityDenial;
+    return complete(async completion => {
+      const accounting = createProxyAccounting({ context, env, auth, selection, request, compound, completion, cost: { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 } });
+      try { accounting.fail(identityDenial.status, "denied"); return identityDenial; }
+      finally { accounting.close(); }
+    });
   }
   if (selection.endpoint.request_format === "elevenlabs.speech") selection.nativeQuery = qualifyNativeQuery(selection, queryInput, new URL(request.url));
   if (selection.endpoint.request_format === "openrouter.audio_transcription"
@@ -746,12 +866,26 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   if (selection.endpoint.inputProfile !== undefined)
     throw new HttpError(400, "managed_input_profile_required", "this endpoint requires its registered native multipart input profile");
   validateSelectedInput(selection);
+  return complete(completion => proxySelectedOwned(request, env, context, auth, selection, queryInput, reservedBudget, compound, admission, completion));
+}
+
+async function proxySelectedOwned(request: Request, env: Env, context: ExecutionContext, auth: AuthorizedIdentity, selection: ProxySelection, queryInput: ProxyQuery, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, admission?: JsonAdmission, completion?: ProxyCompletion): Promise<Response> {
+  let failureAccounting: ReturnType<typeof createProxyAccounting> | undefined;
+  let accounting: ReturnType<typeof createProxyAccounting> | undefined;
+  let retention: PreparedContentRetention | null | undefined;
+  let accountingDeferred = false, retentionDeferred = false;
+  const run = <T>(start: () => Promise<T>): Promise<T> => completion ? completion.start(start) : start();
+  try {
+  const searchOwner = admission?.search;
+  const published = publishedMusicInput(selection);
+  const music = inlineMusicInput(selection) ?? published;
+  const usageContext = Object.freeze({ providerId: selection.provider.id, requestFormat: selection.endpoint.request_format, responseFormat: selection.endpoint.response_format });
   if (selection.endpoint.lifecycle || selection.endpoint.response_format === "replicate.prediction") {
     const { proxyManagedPrediction } = await import("./managed-predictions.ts");
     return proxyManagedPrediction(request, env, context, auth, selection, queryInput, admission?.wan);
   }
-  const accountingContext = { context, env, auth, selection, request, compound, search: searchOwner, startedAtMs: Date.now() };
-  let accounting: ReturnType<typeof createProxyAccounting> | undefined;
+  const accountingContext = { context, env, auth, selection, request, compound, completion, search: searchOwner, startedAtMs: Date.now() };
+  failureAccounting = createProxyAccounting(accountingContext);
   let background: HttpBackground | undefined;
   let prepared: PreparedUpstream;
   let continuation: HttpContinuation | undefined;
@@ -767,7 +901,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     continuation = await HttpContinuation.resolve(request, selection, auth, env);
     if (googleContinuationRoute(selection)) googleContinuation = await GoogleContinuation.resolve(request, selection, auth, env);
     const uploadGrant = nativeUploadGrants.get(selection);
-    prepared = await prepareSelected(request, env, selection, queryInput, auth, new Set(reservedBudget?.failedGrantKey ? [reservedBudget.failedGrantKey] : []), !uploadGrant && !published, reservedBudget?.connection, publishedPin ?? search?.pinned ?? continuation?.pinned ?? googleContinuation?.pinned ?? uploadGrant, "http", true, undefined, searchOwner);
+    prepared = await run(() => prepareSelected(request, env, selection, queryInput, auth, new Set(reservedBudget?.failedGrantKey ? [reservedBudget.failedGrantKey] : []), !uploadGrant && !published, reservedBudget?.connection, publishedPin ?? search?.pinned ?? continuation?.pinned ?? googleContinuation?.pinned ?? uploadGrant, "http", true, undefined, searchOwner));
     assertRequestTariffDestination(selection.endpoint, prepared.url);
     assertNativeResponseDestination(selection.nativeResponse, prepared.url);
     grantFailover = !!(reservedBudget?.failedGrantKey || prepared.failedGrantKey);
@@ -780,6 +914,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     const cost = estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, continuation?.parentTools, selection.nativeResponse?.tariff, selection.provider.id);
     accounting = createProxyAccounting({ ...accountingContext, cost, grantKey: prepared.grantKey, grantLane: prepared.grantLane });
     if (reservedBudget && (reservedBudget.providerId !== selection.provider.id || reservedBudget.modelId !== selection.model?.id || reservedBudget.capability !== selection.capability || cost.reserveMicros > reservedBudget.cost.reserveMicros)) {
+      reservedBudget.claim();
       accounting.fail(500, "provider_error", reservedBudget.reservation);
       return errorResponse("fusion_reservation_invalid", "fusion synthesizer reservation does not cover the final request", 500);
     }
@@ -787,21 +922,37 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     if (reservedBudget) validateBudgetReservation(selection.capability, cost, auth.policy.monthlyBudgetMicros, reservedBudget.connection, auth.policy.dailyBudgetMicros, auth.policy.limitHint, auth.policy.weeklyBudgetMicros);
   }
   catch (error) {
+    if (isAccountingAdmissionFailure(error)) throw error;
     let failure = selectedFailure(search?.preflightError(error) ?? continuation?.preflightError(error) ?? googleContinuation?.preflightError(error) ?? error);
     if (isModelDiscovery(selection.endpoint) && failure.status === 400 && failure.code === "grant_transport_unavailable")
       failure = new HttpError(503, "upstream_grant_pool_unavailable", `provider ${selection.provider.id} has no available scoped upstream grant`);
     const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
-    (accounting ?? createProxyAccounting(accountingContext)).fail(failure.status, status, reservedBudget?.reservation);
+    reservedBudget?.claim();
+    (accounting ?? failureAccounting).fail(failure.status, status, reservedBudget?.reservation);
     return errorResponse(failure.code, failure.message, failure.status, undefined, failure.headers);
   }
   const { cost, requestId } = accounting;
   const useSoft = !isModelDiscovery(selection.endpoint) && softBudgetPolicy(auth.policy) && !prepared.backgroundRecovery && !reservedBudget && compound?.stage !== "fusion_synthesizer";
+  let softPlan: ReturnType<typeof prepareSoftBudget> | undefined;
+  let reservePlan: ReturnType<typeof planBudgetReservation> | undefined;
+  try {
+    softPlan = useSoft ? prepareSoftBudget(auth, selection.capability, prepared.connection, accounting.facts.event.id, !!searchOwner) : undefined;
+    reservePlan = !useSoft && !reservedBudget ? planBudgetReservation(auth, selection.capability, cost, prepared.connection) : undefined;
+    admitAccountingFacts(accounting.facts, softPlan?.reservation ?? reservePlan ?? reservedBudget?.reservation);
+  } catch (error) {
+    if (isAccountingAdmissionFailure(error)) throw error;
+    // Pure planning moved before effects; ordinary monetary denials still own
+    // their existing receipt. Never reconstruct a rejected accounting capsule.
+    const failure = error instanceof HttpError ? error : new HttpError(503, "budget_store_unavailable", "budget ledger is unavailable");
+    reservedBudget?.claim();
+    accounting.fail(failure.status, failure.status === 402 ? "denied" : failure.status < 500 ? "client_error" : "provider_error", reservedBudget?.reservation);
+    return errorResponse(failure.code, failure.message, failure.status);
+  }
   let soft: ReturnType<typeof softBudget> | undefined;
   let budgetMs = 0;
   let upstreamMs = 0;
   const budgetStart = performance.now();
   let reservation = reservedBudget?.reservation;
-  let retention: PreparedContentRetention | null;
   try {
     if (music) {
       const pending = prepareInlineMusicRetention(env, auth, published?.retentionSelection() ?? selection, requestId, music.operation.signal);
@@ -813,11 +964,14 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     });
     else retention = prepareContentRetention(env, auth, selection, requestId);
   }
-  catch {
+  catch (error) {
+    if (isAccountingAdmissionFailure(error)) throw error;
+    reservedBudget?.claim();
     accounting.fail(503, "provider_error", reservation);
     return errorResponse("content_retention_unavailable", "required request-content retention is temporarily unavailable", 503);
   }
   const content = retention?.contentRef ?? null;
+  reservedBudget?.claim();
   if (prepared.backgroundRecovery) {
     try {
       if (!prepared.continuation || !continuation || reservedBudget) throw new HttpError(400, "background_unsupported", "this route cannot own background recovery");
@@ -835,7 +989,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     try { reservation = await reserveBudget(env, auth, selection.capability, cost, prepared.connection, undefined, {
       // Fail-closed retention and stateful revalidation must finish before the
       // separate dispatch transition. Durable owners keep their own protocol.
-      dispatched: !retention?.large && !prepared.revalidateAccount, search: searchOwner,
+      dispatched: !retention?.large && !prepared.revalidateAccount && !prepared.revalidateMedia, search: searchOwner, preparedPlan: reservePlan,
     }); }
     catch (error) {
       const failure = error instanceof HttpError ? error : new HttpError(503, "budget_store_unavailable", "budget ledger is unavailable");
@@ -854,7 +1008,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   try {
     // Durable background owners read the stored bytes, and expanded bodies must
     // not overlap transport memory: both keep the write ahead of dispatch.
-    if (retention && !searchOwner && (background || retention.large)) await retention.write();
+    if (retention && !searchOwner && (background || retention.large)) await run(() => retention!.write());
   }
   catch {
     if (background) context.waitUntil(background.unsent(503, "provider_error", null));
@@ -865,7 +1019,8 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     // Best-effort and off the critical path: the timer lets dispatch start first,
     // so serialization and the R2 put overlap the upstream request.
     const pendingRetention = retention;
-    context.waitUntil(new Promise(resolve => setTimeout(resolve, 0)).then(() => pendingRetention.write()).catch(() => logCorrelationError("request content retention failed", requestId)));
+    retentionDeferred = true;
+    context.waitUntil(run(() => new Promise(resolve => setTimeout(resolve, 0)).then(() => pendingRetention.write()).finally(() => { if (completion) pendingRetention.discardUnused?.(); })).catch(() => logCorrelationError("request content retention failed", requestId)));
   }
   try {
     const dispatchStart = performance.now();
@@ -883,8 +1038,8 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   const signal = operation.signal;
   // Stateful auxiliary operations requalify after budget/retention awaits, under the same
   // cancellation/deadline owner as transport. Interrupted reads are known-unsent.
-  if (prepared.revalidateAccount && !searchOwner) {
-    try { signal.throwIfAborted(); await operation.wait(prepared.revalidateAccount(signal)); }
+  if ((prepared.revalidateAccount || prepared.revalidateMedia) && !searchOwner) {
+    try { signal.throwIfAborted(); await operation.wait(run(() => prepared.revalidateMedia ? prepared.revalidateMedia(env, signal) : prepared.revalidateAccount!(signal))); }
     catch (error) {
       const failure = signal.aborted ? new HttpError(502, "provider_unavailable", `upstream request to provider ${selection.provider.id} failed`) : selectedFailure(error);
       const status = operation.status ?? (failure.status < 500 ? "client_error" : "provider_error");
@@ -909,12 +1064,16 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     if (signal.aborted) void input.retire("cancel", signal.reason).catch(() => undefined);
   };
   let discarded: WeakMap<Response, Promise<void>> | undefined;
-  const discard = (response: Response): Promise<void> => {
+  const discard = (response: Response, owner = completion): Promise<void> => {
     if (searchOwner) return searchOwner.discard(response);
     let pending = discarded?.get(response);
     if (!pending) {
-      pending = (async () => {
-        if (!catalogInputs) { await response.body?.cancel(signal.reason).catch(() => undefined); return; }
+      const dispose = async () => {
+        if (!catalogInputs) {
+          if (owner) await response.body?.cancel(signal.reason);
+          else await response.body?.cancel(signal.reason).catch(() => undefined);
+          return;
+        }
         if (!response.body) return;
         let input = catalogInputs.get(response.body);
         if (!input) {
@@ -924,12 +1083,19 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
           registerCatalogInput(input, response);
         }
         await input.retire("cancel", signal.reason);
-      })();
+      };
+      pending = owner ? owner.start(dispose) : dispose();
       void pending.catch(() => undefined);
       (discarded ??= new WeakMap()).set(response, pending);
     }
     return pending;
   };
+  const ordinaryFetch = (start: () => Promise<Response>): Promise<Response> => completion ? completion.start(children => {
+    const work = start();
+    // Enroll late-body cleanup before the fetch can settle or the caller can stop waiting.
+    children.start(() => work.then(response => signal.aborted ? discard(response, children) : undefined, () => undefined));
+    return work;
+  }) : start();
   const registerCatalogFetch = (pending: Promise<Response>, dispose = discard): void => {
     // A fetched body transfers into its reader registration. Only unclaimed
     // bodies remain strong references; settled evidence carries no page payload.
@@ -967,19 +1133,26 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
         { headers: { "cache-control": "private, no-store" } }))
       : searchOwner ? searchOwner.providerFetch(async active => {
         await prepared.revalidateAccount?.(active);
+        await prepared.revalidateMedia?.(env, active);
         active.throwIfAborted();
         dispatched = true;
         return fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal: active, redirect: "manual" });
-      }) : fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" });
+      }) : ordinaryFetch(() => fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" }));
     if (selection.nativeResponse) nativeFetch = pending;
     if (prepared.featherlessCatalog) catalogWork = pending;
     else if (catalogInputs) registerCatalogFetch(pending);
     if (useSoft) {
-      soft = softBudget(env, auth, selection.capability, prepared.connection, accounting.facts.event.id, error => operation.stop("upstream", error), searchOwner);
-      reservation = soft.reservation;
-      context.waitUntil(soft.check);
+      const checking = completion?.fork();
+      try {
+        soft = startSoftBudget(env, softPlan!, error => operation.stop("upstream", error), searchOwner);
+        reservation = soft.reservation;
+        if (checking) checking.start(() => soft!.check);
+        context.waitUntil(soft.check);
+      } catch (error) { checking?.fail(); throw error; }
+      finally { checking?.seal(); }
     }
     response = await operation.wait(pending, "upstream", discard);
+    if (completion) response = ownOrdinaryResponse(response, completion);
     if (music) {
       await music.completeUpload();
       prepared.requestBody = undefined;
@@ -1000,27 +1173,32 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     response = await captureResponse(response);
     if (!accounting.upstreamChargePossible && !miniMaxAnthropicRoute(selection.provider, selection.endpoint) && selection.provider.id !== "anthropic-vertex" && selection.provider.id !== "gmi" && !selection.nativeResponse && !selection.endpoint.requestPricing && !grantFailover && !isModelDiscovery(selection.endpoint) && !background && !search && !continuation?.requested && !googleContinuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover, creditExhausted)) {
       let retry: PreparedUpstream | undefined;
-      const preparation = prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection);
+      let capacityFailure: HttpError | undefined;
+      const preparation = run(() => prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection));
       const preparationSettled = preparation.then(() => {}, () => {});
       try {
         retry = await operation.wait(preparation);
-      } catch {
-        // Selection failure leaves the original rejection available to the caller.
+      } catch (error) {
+        if (isPreparationLimit(error) || isAccountingAdmissionFailure(error) || isIdentityFailure(error)) capacityFailure = error;
+        // Ordinary selection failure leaves the original rejection available to the caller.
       } finally {
         // Join logical preparation even when the operation stopped waiting for it.
         await preparationSettled;
       }
       signal.throwIfAborted();
+      if (capacityFailure) throw capacityFailure;
       if (retry) {
         signal.throwIfAborted();
-        void response.body?.cancel().catch(() => undefined);
+        if (completion) void discard(response);
+        else void response.body?.cancel().catch(() => undefined);
         signal.throwIfAborted();
         // The alternate may execute without returning headers. Its uncertainty
         // must not inherit the discarded attempt's nonbillable rejection.
         response = undefined;
         prepared = retry;
         accounting.setGrant(prepared.grantKey, prepared.grantLane);
-        response = await operation.wait(fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" }), "upstream", discard);
+        response = await operation.wait(ordinaryFetch(() => fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" })), "upstream", discard);
+        if (completion) response = ownOrdinaryResponse(response, completion);
         accounting.observeUpstreamResponse(response, prepared.url);
         response = await captureResponse(response);
         if (prepared.continuation) continuation?.bind(prepared.continuation);
@@ -1074,7 +1252,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     // retire only the timer and keep caller cancellation connected through EOF.
     if (!searchOwner) operation.retireDeadline();
     if (selection.capability === "llm.messages" && selection.endpoint.request_format === "anthropic.messages" && reservation?.reservations.length && policyRequestCost(auth.policy, selection.capability) == null) {
-      priceGuard = await guardAnthropicPrice(response, tokens => tokens?.billable === false || !!anthropicPricing(selection.model?.pricing, selection.model?.upstream, accounting.facts.anthropicRequest ?? {}, tokens?.anthropic ?? {}), operation, requestId);
+      priceGuard = await guardAnthropicPrice(response, tokens => tokens?.billable === false || !!anthropicPricing(selection.model?.pricing, selection.model?.upstream, accounting!.facts.anthropicRequest ?? {}, tokens?.anthropic ?? {}), operation, requestId);
       response = priceGuard.response;
     }
   } catch (error) {
@@ -1127,6 +1305,14 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       else accounting.fail(402, "denied", (cost.requestTariff || selection.nativeResponse) ? reservation : undefined, content, !!(cost.requestTariff || selection.nativeResponse) && dispatched);
       return errorResponse(soft.denial.code, soft.denial.message, 402);
     }
+    if ((isPreparationLimit(error) || isAccountingAdmissionFailure(error) || isIdentityFailure(error)) && !signal.aborted) {
+      operation.stop("upstream", error);
+      if (response) void discard(response);
+      // Alternate preparation never dispatched. The original received rejection
+      // remains known nonbillable; capacity is not a credential rescue signal.
+      accounting.fail(error.status, "provider_error", reservation, content, dispatched && response?.ok !== false);
+      return errorResponse(error.code, error.message, error.status);
+    }
     operation.stop("upstream", error);
     if (response) void discard(response);
     if (!dispatched && error instanceof HttpError) {
@@ -1146,7 +1332,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   // keeps its operation deadline through downstream EOF or cancellation.
   if (!searchOwner) operation.retireDeadline();
   if (continuation && response.ok && !operation.receivedRejection && selection.capability !== "llm.responses.compact") {
-    try { await operation.wait(continuation.headers(response), "publication"); }
+    try { await operation.wait(run(() => continuation!.headers(response!)), "publication"); }
     catch (error) {
       operation.stop("publication", error);
       discard(response);
@@ -1160,12 +1346,15 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     const job = background;
     Object.assign(inspection, { observe: async (fact: import("./token-usage.ts").ResponsesObservation) => { await job.observe(fact, response!.status); } });
   }
-  const observed = observeUsage(response, operation, inspection, selection.endpoint.response_format, cost.requestTariff, nativeUsage, usageContext);
+  let observed!: ReturnType<typeof observeUsage>;
+  const observe = () => observeUsage(response!, operation, inspection, selection.endpoint.response_format, cost.requestTariff, nativeUsage, usageContext);
+  if (completion) completion.start(() => { observed = observe(); return observed.retired; });
+  else observed = observe();
   if (nativeLease) {
     const deliveryLease = nativeLease;
     context.waitUntil(observed.retired.then(() => deliveryLease.release()));
   }
-  if (admission) admission.completion = observed.result;
+  if (!completion && admission) admission.completion = observed.result;
   if (searchOwner) searchOwner.track(observed.retired);
   if (background) {
     if (!response.ok) context.waitUntil(background.unsent(response.status, operation.status ?? "provider_error", content));
@@ -1177,13 +1366,17 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
         statusCode, status: operation.status ?? "provider_error", billable: !result.nonbillable, tokens: result.tokens, contentRef: content,
       })));
     }
-  } else context.waitUntil(observed.result.then(result => {
+  } else {
+    accountingDeferred = true;
+    const terminalAccounting = accounting;
+    context.waitUntil(run(() => observed.result.then(result => {
     const failure = priceGuard?.failure();
     // Replacing an unpriced response doesn't undo the dispatched work. Retain
     // the hard reservation and record the original usage, not a free rejection.
-    return failure ? accounting.pricingFailure(failure.tokens, reservation!, content)
-      : accounting.complete(observed.response, result, reservation!, content, operation.status);
-  }));
+    return failure ? terminalAccounting.pricingFailure(failure.tokens, reservation!, content)
+      : terminalAccounting.complete(observed.response, result, reservation!, content, operation.status);
+    }).finally(() => { if (completion) terminalAccounting.close(); })));
+  }
   response = observed.response;
   const outputHeaders = proxyResponseHeaders(response, selection.provider.id);
   // Header sanitization strips upstream router-code spoofing. Only a verified
@@ -1195,25 +1388,45 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   if (grantFailover) outputHeaders.set("x-clawrouter-grant-failover", "1");
   outputHeaders.set("x-clawrouter-content-retention", music ? content ? "on; retention-days=30" : "off" : retentionRequired(auth, selection.capability) ? "on; retention-days=30" : "off");
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers: outputHeaders });
+  } finally {
+    if (completion) {
+      failureAccounting?.close();
+      if (!accountingDeferred) accounting?.close();
+      if (!retentionDeferred) retention?.discardUnused?.();
+    }
+  }
 }
 
 async function reserveSelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, preauthenticated: AuthorizedIdentity | null, compound?: CompoundRequestContext): Promise<ReservedProxyBudget | Response> {
   const auth = await selectedAuth(request, env, mode, selection, preauthenticated);
   if (auth instanceof Response) return auth;
+  const failureAccounting = createProxyAccounting({ context, env, auth, selection, request, compound });
   let prepared: PreparedUpstream;
   try {
     prepared = await prepareSelected(request, env, selection, {}, auth, new Set(), false);
   } catch (error) {
+    if (isAccountingAdmissionFailure(error)) throw error;
     const failure = selectedFailure(error);
     const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
-    createProxyAccounting({ context, env, auth, selection, request, compound }).fail(failure.status, status);
+    failureAccounting.fail(failure.status, status);
     return errorResponse(failure.code, failure.message, failure.status, undefined, failure.headers);
   }
+  // Preparation can pin the API service tier. Admit that successful capsule
+  // before reserve; the early owner is used only when preparation fails.
   const accounting = createProxyAccounting({ context, env, auth, selection, request, compound });
   const { cost } = accounting;
   try {
     const reservation = await reserveBudget(env, auth, selection.capability, cost, prepared.connection);
-    return { auth, reservation, cost, failedGrantKey: prepared.failedGrantKey, providerId: selection.provider.id, modelId: selection.model?.id ?? null, capability: selection.capability, connection: prepared.connection };
+    let claimed = false, cleanup: Promise<void> | undefined;
+    return { auth, reservation, cost, failedGrantKey: prepared.failedGrantKey, providerId: selection.provider.id, modelId: selection.model?.id ?? null, capability: selection.capability, connection: prepared.connection,
+      claim() { claimed = true; },
+      finishUnclaimed() {
+        if (claimed) return Promise.resolve();
+        return cleanup ??= accounting.settle(500, "provider_error", false, null, reservation, null).then(ok => {
+          if (!ok) throw new HttpError(503, "accounting_unavailable", "Fusion reservation cleanup could not finish");
+        });
+      },
+    };
   } catch (error) {
     const failure = error instanceof HttpError ? error : new HttpError(503, "budget_store_unavailable", "budget ledger is unavailable");
     accounting.fail(failure.status, failure.status === 402 ? "denied" : failure.status < 500 ? "client_error" : "provider_error");
@@ -1232,8 +1445,12 @@ async function selectedAuth(request: Request, env: Env, mode: AuthMode, selectio
 }
 
 export async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation, searchOwner?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation): Promise<PreparedUpstream> {
+  // Direct prepareSelected callers are standalone preparation entries. Retain
+  // the token on their selection for internal retries and subsequent calls.
+  const preparation = selection.preparation ??= new PreparationAdmission();
+  preparation.paths(selection.pathParams, selection.endpoint.path_param_styles);
   assertMultipartIntake(selection);
-  const prepare = (excluded: ReadonlySet<string>) => prepareSingleSelected(request, env, selection, queryInput, auth, excluded, recordSelection, resolvedConnection, pinned, transport, recoverBackground, wan, searchOwner, video);
+  const prepare = (excluded: ReadonlySet<string>) => prepareSingleSelected(request, env, selection, queryInput, auth, excluded, recordSelection, resolvedConnection, pinned, transport, recoverBackground, wan, searchOwner, video, preparation);
   try { return await prepare(excludedGrantKeys); }
   catch (error) {
     const routing = grantRoutingPolicy(auth.policy.grantRouting);
@@ -1242,11 +1459,11 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
       const retry = await prepare(new Set([error.grantKey]));
       if (!retry.grantKey && !grantRoutingPolicy(auth.policy.grantRouting).environmentFallback) throw error;
       return { ...retry, failedGrantKey: error.grantKey };
-    } catch { throw error; } // No usable alternate: preserve the original credential failure.
+    } catch (alternateError) { if (isPreparationLimit(alternateError) || isAccountingAdmissionFailure(alternateError)) throw alternateError; throw error; } // No usable alternate: preserve the original credential failure.
   }
 }
 
-async function prepareSingleSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation, searchOwner?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation): Promise<PreparedUpstream> {
+async function prepareSingleSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation, searchOwner?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, preparation?: PreparationAdmission): Promise<PreparedUpstream> {
   assertPolicyModel(auth.policy, selection);
   if (isModelDiscovery(selection.endpoint)) {
     queryInput = discoveryQuery(queryInput);
@@ -1278,7 +1495,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
   let upstream: UpstreamAuth;
   if (video) videoJsonBytes(selection.body, "input");
   const stickyHash = await grantStickyHash(request, auth);
-  try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport, model: selectionUpstreamModel(selection), managedLifecycle: !!selection.endpoint.lifecycle }, video?.controlSignal ?? searchOwner?.operation.signal ?? request.signal, wan, searchOwner, video); }
+  try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport, model: selectionUpstreamModel(selection), managedLifecycle: !!selection.endpoint.lifecycle }, video?.controlSignal ?? searchOwner?.operation.signal ?? request.signal, wan, searchOwner, video, preparation); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_not_configured", "provider is not configured"); }
   try {
     if (compact) await assertCompactAccount(auth, env, upstream);
@@ -1305,9 +1522,9 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     // Decide once from the materialized transport, before reservation. An
     // ordinary failover cannot promote an already reserved request into a job.
     const backgroundRecovery = recoverBackground && backgroundResponse(selection.endpoint, selection.body) && grantSupports(lifecycle, upstream.grant);
-    if (selection.endpoint.lifecycle) assertOperationConfiguration({ provider: selection.provider, endpoint: selection.endpoint, mode: transport, managedLifecycle: true, ...(video ? { model: selection.model?.upstream } : {}) }, upstream.grant, env);
+    if (selection.endpoint.lifecycle) assertOperationConfiguration({ provider: selection.provider, endpoint: selection.endpoint, mode: transport, managedLifecycle: true, ...(video ? { model: selection.model?.upstream } : {}) }, upstream.grant, env, preparation);
     if (backgroundRecovery) {
-      assertOperationConfiguration(lifecycle, upstream.grant, env);
+      assertOperationConfiguration(lifecycle, upstream.grant, env, preparation);
       if (hasProxyQuery(queryInput) || new URL(request.url).search) throw new HttpError(400, "background_query_unsupported", "background create options must be in JSON; caller query parameters are unsupported");
     }
     const converse = ["aws_bedrock.converse", "aws_bedrock.converse_stream"].includes(selection.endpoint.request_format);
@@ -1325,8 +1542,10 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     const vertexAnthropic = vertexAnthropicRoute(selection.provider, selection.endpoint)
       ? await prepareVertexAnthropicDispatch(request, env, auth, selection, upstream, hasProxyQuery(queryInput), transport) : undefined;
     if (wanCreate(selection.endpoint)) { preflightWanJson(selection.body); assertWanHeaders(request.headers); assertWanHeaders(upstream.headers); }
-    const { headers, url, configuredOwnerUrl, requestBody, streamBody } = vertexAnthropic?.prepared ?? prepareUpstreamRequest(request, env, selection, queryInput, upstream, transport);
+    const { headers, url, configuredOwnerUrl, requestBody, streamBody } = vertexAnthropic?.prepared ?? prepareUpstreamRequest(request, env, selection, queryInput, upstream, transport, preparation);
+    if (minimaxAnthropic) preparation?.headers(upstream.headers, true);
     minimaxAnthropic?.apply(url, headers);
+    preparation?.headers(headers); preparation?.text(url.href, 16384);
     const gmiCheck = selection.provider.id === "gmi"
       ? await prepareGmiOrganizationBinding(request, env, auth, selection, upstream, url, headers) : undefined;
     const discoveryCheck = gmiCheck ?? (["openai.models", REQUESTY_MODELS_FORMAT].includes(selection.endpoint.request_format) && selection.capability === "models.list"
@@ -1334,9 +1553,9 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     if (selection.provider.id === "opencode" || selection.provider.id === "opencode-go") {
       for (const name of openCodeSessionHeaders) headers.delete(name);
       const session = transport === "http" ? await openCodeSessionHeader(request, auth, selection, upstream, url) : null;
-      if (session) headers.set(session.name, session.value);
+      if (session) preparationHeader(headers, session.name, session.value, preparation);
     }
-    const signingRegion = !streamBody ? await signSigV4(selection.provider, url, selection.method, requestBody as string | undefined, headers, env, upstream.grant) : undefined;
+    const signingRegion = !streamBody ? await signSigV4(selection.provider, url, selection.method, requestBody as string | undefined, headers, env, upstream.grant, undefined, preparation) : undefined;
     if (selection.provider.id === "aws-bedrock" && (selection.capability === "llm.embeddings" || converse)) {
       const signingScheme = selection.provider.auth.schemes.find(scheme => scheme.type === "sig_v4");
       if (transport !== "http" || signingScheme?.type !== "sig_v4" || signingScheme.service !== "bedrock"
@@ -1362,20 +1581,22 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     const imageCheck = selection.endpoint.request_format === "minimax.images"
       ? prepareMiniMaxImageDispatch(env, auth, selection, upstream, url, headers) : undefined;
     const nativeMediaCheck = ["minimax.speech", "minimax.music"].includes(selection.endpoint.request_format)
-      ? await prepareMiniMaxMediaDispatch(selection, env, upstream, url, headers, auth) : undefined;
+      ? await prepareMiniMaxMediaDispatch(selection, env, upstream, url, headers, auth, preparation) : undefined;
     let continuation: ContinuationOwner | undefined;
     if (selection.capability === "llm.responses" || compact || search || selection.endpoint.lifecycle || googleContinuationRoute(selection)) {
       if (upstream.grantKey && !upstream.grant?.credentialLineage && !googleContinuationRoute(selection)) throw new HttpError(503, "continuation_unavailable", "upstream credential ownership is unavailable");
       const create = compact ? selection.provider.endpoints.find(endpoint => endpoint.id === selection.provider.capabilities.find(capability => capability.id === "llm.responses")?.endpoint) : selection.endpoint;
       if (!create) throw new HttpError(503, "continuation_unavailable", "Responses creation ownership is unavailable");
-      const ownerUrl = compact ? new URL(upstream.baseUrl.replace(/\/$/, "") + upstreamPath(selection.provider, create, {}, env, upstream)) : configuredOwnerUrl;
-      if (compact) upstream.query.forEach((value, name) => ownerUrl.searchParams.set(name, value));
+      const ownerPath = compact ? upstreamPath(selection.provider, create, {}, env, upstream, preparation) : undefined;
+      if (ownerPath !== undefined) preparation?.url(upstream.baseUrl, ownerPath);
+      const ownerUrl = compact ? new URL(upstream.baseUrl.replace(/\/$/, "") + ownerPath) : configuredOwnerUrl;
+      if (compact) upstream.query.forEach((value, name) => { preparation?.urlQuery(ownerUrl, name, value); ownerUrl.searchParams.set(name, value); });
       continuation = {
         providerId: selection.provider.id, endpointId: create.id, grantKey: upstream.grantKey,
         lineage: upstream.grant?.credentialLineage ?? null,
         // A WebSocket GET is only the handshake; both transports execute the
         // same logical Responses POST and must share continuation ownership.
-        routeSha256: await responseRouteDigest(selection.provider, upstream, ownerUrl, headers, upstream.grantKey, selection.endpoint.lifecycle, env, selection.pathParams, selection.model?.upstream),
+        routeSha256: await responseRouteDigest(selection.provider, upstream, ownerUrl, headers, upstream.grantKey, selection.endpoint.lifecycle, env, selection.pathParams, selection.model?.upstream, preparation),
         policyGeneration: auth.policy.generation,
       };
     }
@@ -1389,8 +1610,8 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
       assertNativeResponseDestination(selection.nativeResponse, url);
     }
     const wanCheck = wanCreate(selection.endpoint) && continuation
-      ? wanCreateAuthority(env, auth, selection, upstream, configuredOwnerUrl, headers, continuation, wan) : undefined;
-    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(videoCheck ? { revalidateAccount: videoCheck } : tokenPlanCheck ? { revalidateAccount: tokenPlanCheck, revalidateDelivery: tokenPlanCheck } : wanCheck ? { revalidateAccount: wanCheck } : chatCheck ? { revalidateAccount: chatCheck.revalidate, ...(!Array.isArray(selection.body) && selection.body.stream === true ? {} : { revalidateDelivery: chatCheck.revalidate }) } : discoveryCheck ? { revalidateAccount: async (signal: AbortSignal) => { await discoveryCheck(signal); }, ...(isModelDiscovery(selection.endpoint) ? { revalidateDiscovery: discoveryCheck, acquireDiscovery: () => nativeResponseLease(16 * 1024 * 1024) } : {}) } : catalogCheck ? { revalidateAccount: catalogCheck } : musicCheck ? { revalidateAccount: musicCheck.revalidate, revalidateDelivery: musicCheck.revalidate } : pcmCheck ? { revalidateAccount: pcmCheck } : vertexAnthropic ? { revalidateAccount: vertexAnthropic.revalidate } : minimaxAnthropic ? { revalidateAccount: minimaxAnthropic.revalidate } : imageCheck ? { revalidateAccount: imageCheck } : nativeMediaCheck ? { revalidateAccount: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
+      ? wanCreateAuthority(env, auth, selection, upstream, configuredOwnerUrl, headers, continuation, wan, preparation) : undefined;
+    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(videoCheck ? { revalidateAccount: videoCheck } : tokenPlanCheck ? { revalidateAccount: tokenPlanCheck, revalidateDelivery: tokenPlanCheck } : wanCheck ? { revalidateAccount: wanCheck } : chatCheck ? { revalidateAccount: chatCheck.revalidate, ...(!Array.isArray(selection.body) && selection.body.stream === true ? {} : { revalidateDelivery: chatCheck.revalidate }) } : discoveryCheck ? { revalidateAccount: async (signal: AbortSignal) => { await discoveryCheck(signal); }, ...(isModelDiscovery(selection.endpoint) ? { revalidateDiscovery: discoveryCheck, acquireDiscovery: () => nativeResponseLease(16 * 1024 * 1024) } : {}) } : catalogCheck ? { revalidateAccount: catalogCheck } : musicCheck ? { revalidateAccount: musicCheck.revalidate, revalidateDelivery: musicCheck.revalidate } : pcmCheck ? { revalidateAccount: pcmCheck } : vertexAnthropic ? { revalidateAccount: vertexAnthropic.revalidate } : minimaxAnthropic ? { revalidateAccount: minimaxAnthropic.revalidate } : imageCheck ? { revalidateAccount: imageCheck } : nativeMediaCheck ? { revalidateMedia: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
   } catch (error) {
     throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
   }
@@ -1399,7 +1620,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
 // The create keeps its selected key through durable waits. Metadata inspection
 // never materializes a replacement secret or turns another grant into a retry.
 function wanCreateAuthority(env: Env, auth: AuthorizedIdentity, selection: ProxySelection, upstream: UpstreamAuth,
-  url: URL, headers: Headers, owner: ContinuationOwner, wan?: WanManagedOperation): (signal: AbortSignal) => Promise<void> {
+  url: URL, headers: Headers, owner: ContinuationOwner, wan?: WanManagedOperation, preparation?: PreparationAdmission): (signal: AbortSignal) => Promise<void> {
   const caller = publicControlAuthorization(auth), selected = upstream.grant;
   const originalGeneration = selected?.credentialGeneration, originalLineage = selected?.credentialLineage;
   const unavailable = () => { throw new HttpError(503, "prediction_owner_unavailable", "the original Wan owner or destination is unavailable"); };
@@ -1407,12 +1628,14 @@ function wanCreateAuthority(env: Env, auth: AuthorizedIdentity, selection: Proxy
     const policy = await authorizeResponseControl(env, caller, owner, signal, undefined, wan);
     if (!policy) unavailable();
     assertPolicyModel(policy!, selection);
-    const configured = configuredUpstream(selection.provider, selected, env);
+    const configured = configuredUpstream(selection.provider, selected, env, undefined, preparation);
     assertWanHeaders(configured.headers);
-    const destination = new URL(configured.baseUrl.replace(/\/$/, "") + upstreamPath(selection.provider, selection.endpoint, selection.pathParams, env, configured));
-    configured.query.forEach((value, name) => destination.searchParams.set(name, value));
+    const path = upstreamPath(selection.provider, selection.endpoint, selection.pathParams, env, configured, preparation);
+    preparation?.url(configured.baseUrl, path);
+    const destination = new URL(configured.baseUrl.replace(/\/$/, "") + path);
+    configured.query.forEach((value, name) => { preparation?.urlQuery(destination, name, value); destination.searchParams.set(name, value); });
     if (destination.href !== url.href || await responseRouteDigest(selection.provider, configured, destination, headers,
-      upstream.grantKey, selection.endpoint.lifecycle, env, selection.pathParams) !== owner.routeSha256) unavailable();
+      upstream.grantKey, selection.endpoint.lifecycle, env, selection.pathParams, undefined, preparation) !== owner.routeSha256) unavailable();
     if (upstream.grantKey) {
       const current = await inspectGrantCredentials(env, upstream.grantKey, signal, wan);
       if (!selected || !Number.isSafeInteger(originalGeneration) || !originalLineage
@@ -1421,9 +1644,9 @@ function wanCreateAuthority(env: Env, auth: AuthorizedIdentity, selection: Proxy
         || current.credentialGeneration !== originalGeneration || current.credentialLineage !== originalLineage
         || current.updatedAt !== selected.updatedAt
         || current.expiresAt && (!Number.isFinite(Date.parse(current.expiresAt)) || Date.parse(current.expiresAt) <= Date.now())) unavailable();
-      assertOperationConfiguration({ provider: selection.provider, endpoint: selection.endpoint, mode: "http", model: selection.model?.upstream, managedLifecycle: true }, current, env);
+      assertOperationConfiguration({ provider: selection.provider, endpoint: selection.endpoint, mode: "http", model: selection.model?.upstream, managedLifecycle: true }, current, env, preparation);
     } else {
-      const current = configuredUpstream(selection.provider, null, env);
+      const current = configuredUpstream(selection.provider, null, env, undefined, preparation);
       assertWanHeaders(current.headers);
       if (current.baseUrl !== configured.baseUrl || current.query.toString() !== configured.query.toString()
         || [...current.headers].length !== [...configured.headers].length
@@ -1431,7 +1654,7 @@ function wanCreateAuthority(env: Env, auth: AuthorizedIdentity, selection: Proxy
     }
     // Inspect is an await too: reject configuration movement after the earlier
     // digest check, without constructing another request or selecting a key.
-    const final = configuredUpstream(selection.provider, selected, env);
+    const final = configuredUpstream(selection.provider, selected, env, undefined, preparation);
     assertWanHeaders(final.headers);
     if (final.baseUrl !== configured.baseUrl || final.query.toString() !== configured.query.toString()
       || [...final.headers].length !== [...configured.headers].length

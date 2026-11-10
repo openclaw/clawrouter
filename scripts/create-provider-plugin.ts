@@ -1,7 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { parseProviderPluginDescriptor, providerPluginFiles } from "../packages/provider-plugin-contract/src/index.ts";
+import { parseProviderConformanceScenario, parseProviderPluginDescriptor, providerPluginFiles } from "../packages/provider-plugin-contract/src/index.ts";
 import { loadProviderPlugin } from "./provider-plugin-loader.ts";
 
 /** Generate files only. The caller must explicitly compile and admit the provider. */
@@ -22,6 +22,9 @@ export function createProviderPlugin(id: string, destination: string): string {
         .replace(/^id: .+$/m, `id: ${JSON.stringify(id)}`)
         .replace(/^  platform: .+$/m, `  platform: ${JSON.stringify(id)}`)
         .replace("displayName: Example", `displayName: ${JSON.stringify(title)}`);
+    } else if (template.descriptor.fixtures?.includes(path)) {
+      const scenario = parseProviderConformanceScenario(JSON.parse(bytes.toString("utf8")));
+      bytes = `${JSON.stringify({ ...scenario, providerId: id }, null, 2)}\n`;
     } else if (path === template.descriptor.documentation) {
       bytes = `# ${title} provider plugin\n\n` +
         `This is a starter integration, not a configured live service. Replace the\n` +
@@ -33,6 +36,11 @@ export function createProviderPlugin(id: string, destination: string): string {
         `synthetic request/response data. Replace the license placeholder before distribution.\n\n` +
         `From a ClawRouter checkout, compile this package with:\n\n` +
         `    node scripts/compile-providers.mjs --plugin <package-dir>/clawrouter.plugin.json\n\n` +
+        `Validate fixture declarations (without executing the provider) with:\n\n` +
+        `    node scripts/validate-provider-conformance.mjs --plugin <package-dir>/clawrouter.plugin.json\n\n` +
+        `Execute the starter native JSON exchange in a separate process with synthetic credentials:\n\n` +
+        `    node scripts/run-provider-conformance.mjs --plugin <package-dir>/clawrouter.plugin.json\n\n` +
+        `This checks one deterministic exchange, not live access or complete provider support.\n\n` +
         `Package creation does not register, enable, or deploy a provider. See\n` +
         `https://github.com/openclaw/clawrouter/blob/main/docs/provider-plugins.md\n`;
     }

@@ -1,3 +1,4 @@
+import { accountingIdentity, admitAccountingJson } from "./json-body.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
 import { musicCoverAccounting, musicCoverCompositionAccounting, planBudgetReservation, validateBudgetReservation, type EstimatedCost } from "./accounting.ts";
 import { resolveConnection } from "./authority.ts";
@@ -80,6 +81,7 @@ async function refresh(env: Env, auth: AuthorizedIdentity, key: string, original
 }
 
 function preparationEvent(auth: AuthorizedIdentity, key: string, requestId: string, reserveMicros: number): UsageEvent {
+  for (const value of [auth.policy.tenantId, auth.policyId, auth.credentialId, auth.principalId, auth.authType, key, requestId, capability, model]) accountingIdentity(value);
   const event: UsageEvent = { id: randomId("usage"), type: "clawrouter.usage.v1", occurred_at_ms: Date.now(),
     tenant_id: auth.policy.tenantId ?? "default", policy_id: auth.policyId, credential_id: auth.credentialId,
     grant_key: key, grant_lane: "api_key", principal_id: auth.principalId, auth_type: auth.authType,
@@ -91,7 +93,7 @@ function preparationEvent(auth: AuthorizedIdentity, key: string, requestId: stri
     reserved_input_tokens: null, reserved_output_tokens: null, pricing_ref: null, pricing_effective_at: null,
     cost_basis: "not_dispatched", status_code: null, duration_ms: null, content_retained: false, content_ref: null,
     reporting_known_cost_micros: null, reporting_estimated_cost_micros: null, status: "denied" };
-  searchJsonBytes(event); return event;
+  admitAccountingJson(event, "capsule"); searchJsonBytes(event); return event;
 }
 
 // Private test/integration seam only: no production route calls this function.
@@ -110,7 +112,7 @@ export function prepareInactiveMiniMaxMusicCover(env: Env, headers: Headers, inp
     const estimate = cost(auth.policy), plan = planBudgetReservation(auth, capability, estimate, first.connection, Date.now(), soft);
     // Freeze every attempt ID and event BEFORE secret materialization or ledger I/O.
     const requestId = randomId("cover"), event = preparationEvent(auth, selected.key, requestId, soft ? 0 : plan.reservedMicros);
-    const accounting = musicCoverAccounting(env, control, plan, event);
+    const accounting = musicCoverAccounting(env, control, plan, event, soft);
     let primary: unknown, result: InactiveMusicCoverPreparation | undefined;
     try {
       const materialized = await materializeGrantCredentials(env, selected.key, first.current, "minimax", null, false,

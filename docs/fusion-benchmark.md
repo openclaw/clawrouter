@@ -77,6 +77,13 @@ repair comparison. It checks that each qualified task has every arm and that
 row costs and call counts reconcile with settled attempts. Incomplete runs,
 unknown charges and duplicate or missing outcomes are rejected.
 
+New test receipts include up to 128 SHA-256 fingerprints of failing TAP label
+paths, with a truncation flag. Compare them with qualification receipts to help
+distinguish an existing failure from a new regression. The fingerprints retain
+no test titles, source or error text. They identify reported label paths, not
+authenticated tests, and do not alter acceptance or replace test-count checks.
+Older receipts without fingerprints remain readable.
+
 The summary reports per-task wins and losses against each fixed control, total
 cost, and the number of extra repairs available from choosing correctly between
 the controls. It also compares the candidate with a task-independent random
@@ -89,6 +96,24 @@ cost-saving flag therefore requires no lost strong-model repair. These are
 observations from the supplied run, not statistical significance, a signed
 attestation, or approval to change production routing. Prior campaign expenses
 remain in the spending ledger but are excluded from per-arm comparisons.
+
+Pass two or more report paths in execution order to analyze repeated blocks:
+`node scripts/fusion-pair-analysis.mjs <block-a.json> <block-b.json>`.
+Every block must be complete and settled, use the same source, task and
+qualification digests, model pins, settings and receipts, and continue the
+previous block's spending ledger. Duplicate reports and missing elapsed times
+are rejected. The output distinguishes distinct tasks from repeated attempts,
+sums costs and elapsed times, and reports false accepts and cheap-model dominance.
+It also reports which candidate attempts actually used both models. An observed
+win from a cheap-only or strong-only candidate is another sample from that model,
+not evidence of model mixing. Even mixed-model wins need matched retry controls
+before attributing a benefit to collaboration.
+
+The repeat summary applies a fixed exploratory screen: at least 75% solved,
+no lost strong-control attempt, at least 20% savings, at most twice strong-control
+elapsed time, and at least one rescue beyond cheap-only. All conditions must
+pass. This screen does not establish significance or authorize production changes;
+it also cannot detect experiments omitted from the supplied report list.
 
 ### Declared-scope routing experiment
 
@@ -338,6 +363,12 @@ economic gain. Summed elapsed was 140.495s, 102.845s and 174.969s, with
 Docker qualification overlapping part of this run. These timings are
 descriptive and are not isolated performance measurements.
 
+The cheap stage must explicitly submit a completed repair before it can end the
+contract cascade. A partial patch from a turn-limited, budget-limited or unfinished
+executor cannot bypass strong fallback merely by passing the supplied check and
+visible tests. Fallback still uses the remaining shared time, call and spend limits.
+This does not establish that a submitted patch satisfies every requirement.
+
 `FUSION_CHEAP_MAX_CALLS` sets the contract workflow's cheap-stage allowance
 (integer 1–59, default 10). The runner records it as `cheapMaxCalls`. The stage
 uses at most the remaining shared call budget minus one, preserving a fallback
@@ -352,3 +383,179 @@ The first exposed-task allocation run (20 cheap calls within 40 total) solved
 The cascade saved 39.65% but accepted an incomplete GMI repair and therefore
 failed the no-regression screen. The default allowance remains 10. These are
 three development tasks, not independent holdout evidence.
+
+### Single-draft supplied checks
+
+`FUSION_PAIR_POLICY=contract-draft` uses one cheap-model call to propose
+1–8 exact source edits. It receives the original editable source, declared
+read-only context, visible test examples and the supplied reproducer. The
+runner applies valid edits in an isolated sandbox and runs visible tests;
+the existing contract gate checks the candidate in a separate fresh sandbox.
+A failed or malformed draft falls back to the original-source strong worker,
+with the remaining shared call and time budget. Unknown charges and refusals
+stop execution. A settled empty or truncated draft consumes its call and falls
+back without applying partial output.
+
+Both fixed controls receive the same supplied reproducer and shared ceiling.
+The cheap-stage allowance does not add draft calls: this policy always makes
+one draft attempt. This is an opt-in benchmark policy with no demonstrated
+quality or cost gain yet; production defaults are unchanged.
+
+Single-draft development results (three previously exposed repairs):
+
+| Cheap reasoning | Cheap solved / cost | Strong solved / cost | Cascade solved / cost |
+| --- | --- | --- | --- |
+| none | 2/3 / $0.086882 | 3/3 / $0.484602 | 3/3 / $0.472985 |
+| medium | 3/3 / $0.054392 | 3/3 / $0.489671 | 3/3 / $0.504312 |
+
+The no-reasoning cascade saved only 2.40%, below the 20% development threshold.
+The medium-reasoning cascade cost 2.99% more than strong and was dominated by
+cheap-only. Neither configuration advances to the untouched operational cohort.
+These results calibrate the benchmark scaffold; they do not establish general
+model superiority or justify changing production defaults.
+
+### Bounded draft repair
+
+`FUSION_PAIR_POLICY=contract-refine` allows up to three cheap patch attempts,
+limited further by the shared cheap-stage allowance. After a failed attempt,
+the next request receives the current editable source and bounded executable
+check feedback. Each check runs in a fresh sandbox. The outer contract gate
+still independently checks the final candidate before accepting it or using
+the original-source strong fallback. The fixed controls, hidden acceptance,
+and total call, time and cost limits are unchanged. This is an opt-in
+experiment; it does not change the single-draft or production defaults.
+
+The first bounded-repair development run solved 2/3 for $0.258246, versus
+3/3 for cheap-only ($0.065905) and 3/3 for strong ($0.383451). The Voyage
+repair passed its supplied probe but failed hidden acceptance. This rejects
+promotion even though aggregate cascade cost was lower than strong.
+
+### Matched one-shot execution
+
+`FUSION_PAIR_EXECUTOR=single-draft` applies the same one-patch executor to
+both fixed controls and the strong fallback, rather than comparing a cheap
+draft against an interactive strong agent. It requires a supplied-check policy
+and is recorded as `executor` in the report. The default remains `interactive`.
+A fixed control makes one draft; the cascade can use a cheap draft followed by
+one original-source strong draft when verification fails. All attempts count.
+
+`contract-provided-strong` and `contract-provided-cheap` keep that same supplied
+check and fallback scaffold but map both roles to one model. Use these ablations
+to distinguish a model-combination gain from the value of a second attempt.
+Policy-only ablations remain explicitly separate from paired-control reports.
+
+For a comparison of the fixed models alone, set `FUSION_PAIR_CONTROLS_ONLY=1`
+or pass `controlsOnly: true`. Both models retain the same executor, task context,
+supplied reproducer and per-trial limits. No candidate or contract workflow runs.
+Keep `includeControls` enabled. The selected policy still determines whether
+the supplied reproducer is required and visible to both controls.
+
+These reports use `kind: native-controls-repository`, list only `cheap` and
+`strong`, and cannot be passed off as three-arm fusion evidence. The three-arm
+analyzer rejects them. Budget preflight counts the actual selected arms in all
+modes; execution still meters every call and reserves unknown charges.
+
+The interactive agent may retry one truncated response when a call and time
+remain. It discards the partial action and requests a shorter complete action;
+the original call remains charged. Reports count `truncationRetries` and include
+a rejected `truncated_output` event. A second truncation ends the trial. The
+agent does not retry unknown charges, refusals, or other provider errors. No
+spending, output-token, time, or total-call limit is increased.
+Paired-run call ledgers retain normalized finish reasons and response outcomes
+without storing partial response text.
+
+
+Matched one-shot results on the same three exposed development repairs:
+
+| Strategy | Solved | Total API cost | Summed elapsed |
+| --- | --- | --- | --- |
+| One cheap draft | 1/3 | $0.003417 | 61.234s |
+| One strong draft | 1/3 | $0.073903 | 41.791s |
+| Cheap draft, then strong on failed check | 2/3 | $0.072998 | 118.156s |
+| Strong draft, then strong on failed check | 2/3 | $0.071008 | 97.148s |
+| Cheap draft, then cheap on failed check | 1/3 | $0.009432 | 136.664s |
+
+The single-model retry controls ran after the paired comparison; they were not
+interleaved arms. All used the same one-shot executor, supplied check, medium
+cheap reasoning and four-call shared ceiling. The strong retry matched the
+mixed route's quality at lower cost and latency. These observations do not
+establish a benefit from mixing models. No candidate advances from this study.
+Costs use reported usage and published tariffs, not provider invoices.
+
+A subsequent interactive-agent calibration used medium cheap reasoning and
+20 cheap calls within 40 shared calls. All three arms repaired its first GMI
+case. The next strong-control API call failed at the transport boundary without
+a response or usage, so the run stopped with its full reservation retained.
+There are no complete three-case totals or promotion result for this run. Its
+partial outcomes must not be combined with successful trials from other runs.
+
+The repository repair agent and its executable checks run in the benchmark's
+isolated local environment. The deployed Worker Fusion route supports single
+model execution and adviser/synthesizer requests; it does not execute client
+repository tools or the benchmark's regression checks. A successful repair
+benchmark would still require a caller-side agent integration and separate
+end-to-end validation before describing it as deployed verified repair.
+
+A complete interactive calibration repeated the same three exposed cases with
+medium cheap reasoning and 20 cheap calls within 40 total. Cheap solved 3/3
+for $0.061654, strong 2/3 for $0.371022, and the cascade 3/3 for $0.339482.
+The strong Voyage attempt exhausted its 8192-token output cap; its known cost
+is retained and the attempt counts as an error. Summed elapsed times were
+201.027s, 123.990s and 259.363s respectively. The cascade saved only 8.50%
+and took 2.09 times the strong control's elapsed time. It failed both the
+20% saving and two-times latency gates. Cheap-only was 83.38% cheaper than
+strong on these exposed cases; independent validation is still needed.
+
+The first prospective fixed-model block did not complete. Cheap repaired the
+credential-alias case and passed all 68 acceptance tests. The strong control's
+first request then returned HTTP 400 with a token-limit classification and no
+usage. The run stopped, retaining its full reservation. This partial result is
+not a comparison or evidence of general superiority; the second block was not
+started. Separate synthetic requests with the same output limit and a similar
+request size succeeded, so the original rejection remains unexplained.
+
+
+### Operational holdout candidates
+
+`benchmarks/fusion/operational-holdout-workloads.json` defines three historical
+repair candidates: canonical credential aliases, bounded catalog health reads,
+and invalidated cache publication. Each includes a supplied reproducer and
+separate historical acceptance tests. Qualify each original and repaired image
+before model inference. The manifest uses the current `development` schema
+label; first model exposure and prospective status belong in the run record.
+This dataset definition alone makes no quality, cost or qualification claim.
+
+Qualification passed for all three candidates: original and repaired visible
+suites pass; original acceptance fails 1, 4 and 3 checks respectively, while
+repaired acceptance passes 68, 33 and 60 tests. Each supplied reproducer fails
+on original source and passes on the historical repair. The credential case
+uses contract acceptance because the original full runtime suite hangs; the
+cache case uses integration checks instead of private bookkeeping assertions.
+No model inference on these candidates is included in this fixture change.
+
+These candidates were unexposed at registration. Consult the benchmark run
+records before reuse; after model exposure, they are development cases rather
+than fresh holdouts.
+
+### Shared truncation-recovery pilot
+
+Two complete blocks at source `0d4b2a0745886146da3522d23e77238b3b46b961`
+compared the same catalog-health and cache-publication repairs. Each arm used
+the interactive executor, supplied reproducer, medium cheap reasoning, 8192
+output tokens, 600 seconds and a $2 trial ceiling. The cheap stage had 20 of
+40 shared calls; fixed controls had 40 calls. Settings did not change between
+blocks. Four attempts per arm represent two distinct repairs.
+
+| Strategy | Solved | Usage-tariff cost | Summed elapsed |
+| --- | --- | --- | --- |
+| Cheap | 1/4 | $0.228726 | 1182.158s |
+| Strong | 2/4 | $1.542267 | 420.322s |
+| Supplied-check cascade | 1/4 | $0.131489 | 796.786s |
+
+The cascade lost one strong-control success and falsely accepted three repairs.
+All four candidate attempts used only the cheap model; its one win over the
+cheap control was another cheap sample, not a model-mixing benefit. The pilot
+failed its quality and no-regression criteria despite lower cost. No truncation
+retry occurred, so this run does not measure the recovery change's benefit.
+Both reports were complete and all new calls settled. Costs apply published
+tariffs to usage; they are not provider invoices. Do not promote this policy.

@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { hash } from '../scripts/fusion-workloads.mjs';
 import { models as roles } from '../scripts/fusion-benchmark-accounting.mjs';
 import { pairDefaults, validatePair, pairModel, pairExecution, scopeStrategy, runPairBenchmark } from '../scripts/fusion-pair-benchmark.mjs';
+import { analyzePairRun } from '../scripts/fusion-pair-analysis.mjs';
 
 const body = { messages: [{ role: 'user', content: 'private prompt sentinel' }], max_tokens: 256 };
 const signal = new AbortController().signal;
@@ -39,6 +40,51 @@ test('architect spends one of the shared calls on the strong planner', () => {
   assert.equal(pairExecution('architect', config).settings.maxTurns + 1, pairExecution('strong', config).settings.maxTurns);
   assert.throws(() => validatePair({ ...config, cheap: config.strong }, 1), /invalid_pair/);
   assert.throws(() => validatePair({ ...config, priorCostMicros: 99999999 }, 1), /campaign_budget/);
+  for (const count of [0, 4, 1.5, '2']) assert.throws(() => validatePair(config, 1, count), /campaign_budget/);
+});
+
+test('fixed controls receive identical supplied context without invoking or budgeting a candidate', async () => {
+  const { root, options } = await fixture();
+  try {
+    const manifest = JSON.parse(await readFile(options.taskManifest));
+    manifest.tasks[0].reproducer = "throw new Error('known regression');";
+    await writeFile(options.taskManifest, JSON.stringify(manifest));
+    const qualification = JSON.parse(await readFile(options.qualificationPath));
+    qualification.receipts[0].taskDigest = hash(JSON.stringify(manifest.tasks[0]));
+    qualification.receipts[0].reproduction = { assertionFailed: true };
+    qualification.receipts[0].oracleReproduction = { passed: true };
+    await writeFile(options.qualificationPath, JSON.stringify(qualification));
+    const seen = [];
+    const state = await runPairBenchmark({ ...options, controlsOnly: true, policy: 'contract-provided',
+      config: { ...config, maxCalls: 2, campaignBudgetMicros: config.priorCostMicros + 2 * config.trialBudgetMicros },
+      grade, fetcher: success,
+      contractAgent: async () => { assert.fail('candidate must not run'); },
+      agent: async (task, _image, _strategy, id, settings, invoke, _unused, agentOptions) => {
+        seen.push({ instruction: task.instruction, settings, preloadSource: agentOptions.preloadSource });
+        await invoke(id, roles.strong, body, signal);
+        return repaired();
+      },
+    });
+    assert.deepEqual(seen[0], seen[1]);
+    assert.match(seen[0].instruction, /known regression/);
+    assert.equal(seen[0].settings.maxTurns, 2);
+    assert.equal(seen[0].preloadSource, true);
+    assert.equal(state.kind, 'native-controls-repository');
+    assert.equal(state.controlsOnly, true);
+    assert.deepEqual(state.strategies, ['cheap', 'strong']);
+    assert.deepEqual(state.calls.map(call => call.model), [config.cheap, config.strong]);
+    assert.equal(state.spentOrReservedMicros, config.priorCostMicros + state.calls.reduce((sum, call) => sum + call.costMicros, 0));
+    assert.equal(JSON.parse(await readFile(join(options.out, 'pair.json'))).kind, state.kind);
+    assert.throws(() => analyzePairRun(state), /incomplete_pair_run/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('fixed-controls selection rejects ambiguous or invalid options before provider access', async () => {
+  for (const controlsOnly of ['true', null, 1]) {
+    await assert.rejects(runPairBenchmark({ sourceSha: 'e'.repeat(40), controlsOnly }), /invalid_control_selection/);
+  }
+  await assert.rejects(runPairBenchmark({ sourceSha: 'e'.repeat(40), controlsOnly: true,
+    includeControls: false, policy: 'contract-provided' }), /invalid_control_selection/);
 });
 
 test('both controls and the pair account for real roles without persisting content', async () => {
@@ -63,22 +109,62 @@ test('both controls and the pair account for real roles without persisting conte
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test('unknown charges stop the campaign once and retain the reservation', async () => {
+test('saved paired calls retain disjoint usage buckets used for native pricing', async () => {
   const { root, options } = await fixture();
   try {
-    let dispatched = 0;
+    await runPairBenchmark({ ...options, grade,
+      fetcher: async (url, request) => {
+        if (url.includes('/v1/models/')) return success(url, request);
+        return Response.json({ model: JSON.parse(request.body).model,
+          usage: { prompt_tokens: 20, completion_tokens: 30,
+            prompt_tokens_details: { cached_tokens: 10, cache_write_tokens: 5 } },
+          choices: [{ finish_reason: 'stop', message: { content: 'private completion sentinel' } }] });
+      },
+      agent: async (_task, _image, _strategy, id, _settings, invoke) => {
+        await invoke(id, roles.strong, body, signal); return repaired();
+      },
+    });
+    const saved = JSON.parse(await readFile(join(options.out, 'pair.json'), 'utf8'));
+    for (const call of saved.calls) {
+      assert.deepEqual(call.usageBreakdown, { uncachedInputTokens: 5, cacheReadInputTokens: 10,
+        cacheWriteInputTokens: 5, cacheWrite1hInputTokens: 0, outputTokens: 30 });
+      const price = saved.pins[call.model].usagePrice;
+      assert.equal(call.costMicros, Math.ceil((5 * Math.round(price.input * 1e9)
+        + 10 * Math.round(price.cached * 1e9) + 5 * Math.round(price.write * 1e9)
+        + 30 * Math.round(price.output * 1e9)) / 1000));
+    }
+    assert.equal(saved.spentOrReservedMicros, config.priorCostMicros + saved.calls.reduce((sum, call) => sum + call.costMicros, 0));
+    assert.ok(!JSON.stringify(saved).includes('sentinel'));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+for (const failure of ['http', 'transport']) test(`${failure} failures retain request fingerprints before dispatch and stop once`, async () => {
+  const { root, options } = await fixture();
+  const input = { ...body, messages: [{ role: 'user', content: 'private prompt sentinel λ' }] };
+  try {
+    let dispatched = 0, checkpoint, serializedBody;
     await assert.rejects(runPairBenchmark({ ...options, grade,
       fetcher: async (url, request) => {
         if (url.includes('/v1/models/')) return success(url, request);
         dispatched++;
+        checkpoint = JSON.parse(await readFile(join(options.out, 'pair.json'), 'utf8'));
+        serializedBody = request.body;
+        if (failure === 'transport') throw new Error('synthetic transport failure');
         return Response.json({ error: { type: 'rate_limit_error', message: 'private prompt sentinel' } }, { status: 429 });
       }, agent: async (_task, _image, _strategy, id, _settings, invoke) => {
-        await invoke(id, roles.strong, body, signal); return repaired();
+        await invoke(id, roles.strong, input, signal); return repaired();
       } }), /pair_benchmark_incomplete/);
     const state = JSON.parse(await readFile(join(options.out, 'pair.json'), 'utf8'));
+    assert.equal(checkpoint.calls[0].requestDigest, hash(serializedBody));
+    assert.equal(checkpoint.calls[0].requestBytes, Buffer.byteLength(serializedBody));
+    assert.notEqual(checkpoint.calls[0].requestBytes, serializedBody.length);
+    assert.equal(checkpoint.calls[0].promptDigest, hash(JSON.stringify(input.messages)));
+    assert.equal(state.calls[0].requestDigest, checkpoint.calls[0].requestDigest);
     assert.equal(dispatched, 1); assert.equal(state.complete, false); assert.equal(state.failure, 'unknown_cost');
     assert.equal(state.records[0].errorCode, 'unknown_cost');
     assert.equal(state.calls[0].costMicros, null);
+    assert.match(state.calls[0].requestDigest, /^[a-f0-9]{64}$/);
+    assert.equal(state.calls[0].promptDigest, hash(JSON.stringify(input.messages)));
     assert.equal(state.spentOrReservedMicros, config.priorCostMicros + state.calls[0].reservationMicros);
     assert.ok(!JSON.stringify(state).includes('sentinel'));
   } finally { await rm(root, { recursive: true, force: true }); }
@@ -134,6 +220,7 @@ test('known-cost output truncation fails its trial without skipping the other co
     assert.equal(calls, 3); assert.equal(state.complete, true);
     assert.ok(state.records.every(row => row.status === 'error' && row.errorCode === 'provider_truncated' && row.score === 0));
     assert.ok(state.calls.every(call => typeof call.costMicros === 'number'));
+    assert.ok(state.calls.every(call => call.finishReason === 'length' && call.responseDisposition === 'truncated'));
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -231,9 +318,10 @@ test('contract policy meters the test author and worker inside the same trial', 
 
 
 test('provided probes are equally visible to fixed controls and skip the test-author role', async () => {
+  for (const policy of ['contract-provided', 'contract-draft', 'contract-refine', 'contract-provided-cheap', 'contract-provided-strong']) {
   const { root, options } = await fixture();
   try {
-    await assert.rejects(runPairBenchmark({ ...options, config: { ...config, maxCalls: 4 }, policy: 'contract-provided' }), /missing_reproducer/);
+    await assert.rejects(runPairBenchmark({ ...options, config: { ...config, maxCalls: 4 }, policy }), /missing_reproducer/);
     const manifest = JSON.parse(await readFile(options.taskManifest));
     const task = manifest.tasks[0]; task.reproducer = 'provided probe sentinel';
     await writeFile(options.taskManifest, JSON.stringify(manifest));
@@ -243,20 +331,22 @@ test('provided probes are equally visible to fixed controls and skip the test-au
     await writeFile(options.qualificationPath, JSON.stringify(qualification));
     const instructions = [];
     const state = await runPairBenchmark({ ...options, config: { ...config, maxCalls: 4 },
-      policy: 'contract-provided', grade, fetcher: success,
+      policy, grade, fetcher: success,
       agent: async (task, _image, _strategy, id, _settings, invoke) => {
         instructions.push(task.instruction);
         await invoke(id, roles.strong, body, signal); return repaired();
       },
       contractAgent: async (_task, _image, id, _settings, invoke, agentOptions) => {
         assert.equal(agentOptions.providedProbe, task.reproducer);
+        assert.equal(typeof agentOptions.cheapAgent, ['contract-draft', 'contract-refine'].includes(policy) ? 'function' : 'undefined');
         await invoke(id, roles.cheap, body, signal); return repaired();
       } });
     assert.equal(instructions.length, 2);
     assert.equal(instructions[0], instructions[1]);
     assert.match(instructions[0], /provided probe sentinel/);
-    assert.deepEqual(state.calls.map(call => call.model), [config.cheap, config.strong, config.cheap]);
+    assert.deepEqual(state.calls.map(call => call.model), [config.cheap, config.strong, policy === 'contract-provided-strong' ? config.strong : config.cheap]);
   } finally { await rm(root, { recursive: true, force: true }); }
+  }
 });
 
 test('private contract policy preserves fixed controls and mixed role accounting', async () => {
@@ -356,5 +446,31 @@ test('a policy-only ablation never calls baseline workers or claims a paired rep
     assert.deepEqual(state.calls.map(call => call.model), [config.strong, config.strong]);
     assert.equal(state.spentOrReservedMicros, config.priorCostMicros + state.records[0].costMicros);
     assert.equal(JSON.parse(await readFile(join(options.out, 'pair.json'), 'utf8')).kind, 'native-policy-repository');
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+
+test('single-draft executor is explicit, restricted to supplied checks, and persisted', async () => {
+  const { root, options } = await fixture();
+  try {
+    for (const executor of ['unknown', null, 3]) await assert.rejects(runPairBenchmark({ ...options, executor }), /invalid_pair_executor/);
+    await assert.rejects(runPairBenchmark({ ...options, executor: 'single-draft' }), /invalid_pair_executor/);
+    const manifest = JSON.parse(await readFile(options.taskManifest));
+    manifest.tasks[0].reproducer = 'supplied reproducer';
+    await writeFile(options.taskManifest, JSON.stringify(manifest));
+    const qualification = JSON.parse(await readFile(options.qualificationPath));
+    qualification.receipts[0].taskDigest = hash(JSON.stringify(manifest.tasks[0]));
+    qualification.receipts[0].reproduction = { assertionFailed: true };
+    qualification.receipts[0].oracleReproduction = { passed: true };
+    await writeFile(options.qualificationPath, JSON.stringify(qualification));
+    const state = await runPairBenchmark({ ...options, config: { ...config, maxCalls: 4 },
+      executor: 'single-draft', policy: 'contract-provided', grade, fetcher: success,
+      agent: async (_task, _image, _strategy, id, _settings, invoke) => { await invoke(id, roles.strong, body, signal); return repaired(); },
+      contractAgent: async (_task, _image, id, _settings, invoke) => { await invoke(id, roles.cheap, body, signal); return repaired(); },
+    });
+    assert.equal(state.executor, 'single-draft');
+    assert.equal(JSON.parse(await readFile(join(options.out, 'pair.json'))).executor, 'single-draft');
+    assert.equal(pairModel('contract-provided-strong', roles.cheap, config), config.strong);
+    assert.equal(pairModel('contract-provided-cheap', roles.strong, config), config.cheap);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

@@ -2,6 +2,7 @@ import { perRequestAuthority } from "./typescript-setup.mjs";
 perRequestAuthority();
 import assert from "node:assert/strict";
 import test from "node:test";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 const { catalogResponse, modelsResponse, sessionResponse, entitlementResponse } = await import("../discovery.ts");
 const { sha256Hex } = await import("../utils.ts");
 
@@ -16,7 +17,11 @@ test("models and catalog share read-only grant eligibility, transport support, a
   const env = {
     OPENAI_API_KEY: "fixture-environment-key",
     POLICY_KV: {
-      async get(key) { return Array.isArray(key) ? new Map(key.map((item) => [item, grants.get(item) ?? null])) : grants.get(key) ?? null; },
+      async get(key, type) {
+        if (Array.isArray(key)) return new Map(key.map((item) => [item, grants.get(item) ?? null]));
+        const value = grants.get(key) ?? null;
+        return value !== null && type === "stream" ? accessBytesResponse(JSON.stringify(value)).body : value;
+      },
       async list({ prefix }) { return { keys: [...grants.keys()].filter((key) => key.startsWith(prefix)).map((name) => ({ name })), list_complete: true }; },
     },
     ACCESS_CONTROL: { idFromName: (name) => name, get: () => ({ fetch: async (url, init) => {

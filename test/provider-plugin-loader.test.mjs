@@ -25,6 +25,23 @@ test("loader captures deterministic data and changes its digest with resource co
   assert.match(first.manifestSource, /id: example/);
 });
 
+test("opt-in fixture capture preserves the digested bytes without changing default output", t => {
+  const { root, descriptor } = fixture(t);
+  const ordinary = loadProviderPlugin(descriptor);
+  assert.equal(Object.hasOwn(ordinary, "fixtureSources"), false);
+  const captured = loadProviderPlugin(descriptor, { captureFixtures: true });
+  const path = "fixtures/request.json", source = readFileSync(join(root, path), "utf8");
+  assert.deepEqual(captured.fixtureSources, [{ path, source }]);
+  assert.equal(captured.digest, ordinary.digest);
+  assert.deepEqual(captured.files, ordinary.files);
+  writeFileSync(join(root, path), '{"changed":true}');
+  assert.equal(captured.fixtureSources[0].source, source);
+  assert.notEqual(loadProviderPlugin(descriptor, { captureFixtures: true }).digest, captured.digest);
+  rmSync(join(root, path));
+  symlinkSync(join(root, "README.md"), join(root, path));
+  assert.throws(() => loadProviderPlugin(descriptor, { captureFixtures: true }), /symlink is not allowed/);
+});
+
 test("loader rejects file and parent-directory symlinks, including links within the package", t => {
   for (const directory of [false, true]) {
     const { root, descriptor } = fixture(t);

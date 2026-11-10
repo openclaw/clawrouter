@@ -11,7 +11,11 @@ export async function setup(t, options = {}) {
   const f = await fixture(t, { providerId: "minimax", fixed: options.fixed === undefined ? 700 : options.fixed, configure: provider => configureVideo(provider, options.models) });
   for (const name of ["ACCESS_CONTROL", "BUDGET_LEDGER", "GRANT_CREDENTIALS", "USAGE_LEDGER"]) {
     const namespace = f.env[name], get = namespace.get.bind(namespace);
-    namespace.get = id => { const stub = get(id); return { async fetch(...args) { return syntheticTransport(await stub.fetch(...args)); } }; };
+    namespace.get = id => { const stub = get(id); return { async fetch(...args) {
+      const response = await stub.fetch(...args);
+      const headers = args[0] instanceof Request ? args[0].headers : args[1]?.headers;
+      return new Headers(headers).has("x-clawrouter-identity-admission") ? response : syntheticTransport(response);
+    } }; };
   }
   const upstream = globalThis.fetch;
   t.mock.method(globalThis, "fetch", async (...args) => syntheticTransport(await upstream(args[0], args[1]?.body instanceof ReadableStream ? { ...args[1], duplex: "half" } : args[1])));

@@ -10,6 +10,7 @@ import { observeProviderGrantQuota } from '../provider-quota.ts';
 import { mergeGrantRuntimeState } from '../grant-runtime.ts';
 import { providerById } from '../providers.ts';
 import { grantQuotaExhausted } from '../grant-quota.ts';
+import { bodyBudgetCharged } from '../body-budget.ts';
 const { default: worker } = await import('../index.ts');
 
 const creditBody = JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.' } });
@@ -113,17 +114,43 @@ test('credit error after SSE message bytes never replays generation', async t =>
   assert.equal(result.status, 200); assert.equal(result.body, body); assert.equal(upstream.mock.callCount(), 1);
 });
 
-test('cancellation while reading rejection never dispatches an alternate', async t => {
+for (const attempt of [1, 2]) for (const cancelRejects of [false, true]) test(`credit inspection retains input until first cancel settles (attempt=${attempt}, rejects=${cancelRejects})`, { timeout: 10_000 }, async t => {
   const f = await fixture(t), controller = new AbortController();
-  let canceled = false;
-  const upstream = t.mock.method(globalThis, 'fetch', async () => new Response(new ReadableStream({
-    start(stream) { stream.enqueue(new TextEncoder().encode(creditBody.slice(0, 20))); setTimeout(() => controller.abort(), 5); },
-    cancel() { canceled = true; },
-  }), { status: 400 }));
-  const response = await worker.fetch(new Request('https://fixture/v1/messages', { method: 'POST', headers: admissionHeaders, signal: controller.signal,
-    body: JSON.stringify({ model: 'anthropic/claude-sonnet-5', max_tokens: 16, messages: [{ role: 'user', content: 'synthetic' }] }) }), f.env, f.context);
-  await response.text().catch(error => assert.equal(error.name, 'AbortError')); await Promise.all(f.pending);
-  assert.equal(upstream.mock.callCount(), 1); assert.equal(canceled, true);
+  const reading = Promise.withResolvers(), canceled = Promise.withResolvers(), release = Promise.withResolvers();
+  const baseline = bodyBudgetCharged(), events = [];
+  let cancels = 0, cancelSettled = false, first = true;
+  f.env.USAGE_QUEUE.send = async event => { events.push(event); };
+  const source = new ReadableStream({
+    pull(stream) {
+      if (first) { first = false; stream.enqueue(new TextEncoder().encode(creditBody.slice(0, 20))); }
+      else reading.resolve();
+    },
+    async cancel() {
+      cancels++; canceled.resolve();
+      try { await release.promise; } finally { cancelSettled = true; }
+    },
+  }, { highWaterMark: 0 });
+  let calls = 0;
+  const upstream = t.mock.method(globalThis, 'fetch', async () => ++calls < attempt ? rejected() : new Response(source, { status: 400 }));
+  const pending = worker.fetch(new Request('https://fixture/v1/messages', { method: 'POST', headers: admissionHeaders, signal: controller.signal,
+    body: JSON.stringify({ model: 'anthropic/claude-sonnet-5', max_tokens: 16, messages: [{ role: 'user', content: 'x'.repeat(1024 * 1024 + 16) }] }) }), f.env, f.context);
+  t.after(async () => { controller.abort(); release.resolve(); await pending; await Promise.all(f.pending); });
+  await reading.promise;
+  assert.ok(bodyBudgetCharged() > baseline);
+  controller.abort();
+  const response = await pending;
+  await response.text(); await canceled.promise;
+  await new Promise(setImmediate);
+  assert.equal(response.status, 502);
+  assert.equal(upstream.mock.callCount(), attempt, 'no alternate after cancellation');
+  assert.equal(cancels, 1); assert.equal(cancelSettled, false);
+  assert.ok(bodyBudgetCharged() > baseline, 'caller input remains charged while the original cancellation is pending');
+  assert.equal(source.locked, true, 'original reader stays owned through its first cancellation');
+  assert.equal(events.length, 1); assert.equal(events[0].actual_cost_micros, 0);
+  if (cancelRejects) release.reject(new Error('synthetic cancellation failure')); else release.resolve();
+  await Promise.all(f.pending);
+  assert.equal(cancelSettled, true); assert.equal(source.locked, false);
+  assert.equal(bodyBudgetCharged(), baseline); assert.equal(cancels, 1);
 });
 
 for (const width of [17, 1]) test(`fragmented credit errors respect the 128-read inspection bound (chunk width=${width})`, async t => {

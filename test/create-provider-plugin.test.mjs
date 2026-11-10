@@ -9,6 +9,7 @@ import { createProviderPlugin } from "../scripts/create-provider-plugin.ts";
 import { loadProviderPlugin } from "../scripts/provider-plugin-loader.ts";
 import { loadProviderManifestInputs } from "../scripts/provider-manifest-inputs.mjs";
 import { compileProviderSnapshot } from "../scripts/compile-providers.mjs";
+import { parseProviderConformanceScenario } from "../packages/provider-plugin-contract/src/index.ts";
 
 function temporary(t) {
   const root = mkdtempSync(join(tmpdir(), "create-provider-plugin-"));
@@ -31,6 +32,10 @@ test("scaffold produces a complete provider-specific package that compiles", t =
   assert.equal(snapshot.providers[0].display_name, "Acme Ai");
   assert.match(readFileSync(join(target, "README.md"), "utf8"), /does not register, enable, or deploy/);
   assert.equal(plugin.files.length, 6);
+  const scenario = parseProviderConformanceScenario(JSON.parse(readFileSync(join(target, "fixtures/request.json"), "utf8")));
+  assert.equal(scenario.providerId, "acme-ai");
+  assert.equal(scenario.endpoint, "invoke");
+  assert.equal(scenario.capability, "tool.invoke");
 });
 
 test("scaffold rejects invalid IDs before writing files", t => {

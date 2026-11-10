@@ -2,6 +2,7 @@ import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { fixture } from "./http-continuation-fixture.mjs";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 
 for (const alternate of [false, true]) test(
   `redirect on the ${alternate ? "alternate" : "initial"} grant never replays or escapes to the client`,
@@ -95,11 +96,14 @@ for (const abortAtJoin of [false, true]) test(
       }); }
       return result;
     });
-    f.env.ACCESS_CONTROL.beforeFetch = async (_name, request) => {
-      if (new URL(request.url).pathname === "/admission/resolve" && (await request.clone().json()).selection?.excludedKeys?.length) {
-        failed = true; throw Error("fixture alternate selection failed");
+    const getAuthority = f.env.ACCESS_CONTROL.get.bind(f.env.ACCESS_CONTROL);
+    f.env.ACCESS_CONTROL.get = name => { const stub = getAuthority(name); return { ...stub, fetch(url, init) {
+      if (new URL(url).pathname === "/admission/resolve" && JSON.parse(init.body).selection?.excludedKeys?.length) {
+        failed = true;
+        return accessBytesResponse(JSON.stringify({ error: { code: "authority_error", message: "fixture alternate selection failed" } }), "", { status: 500 });
       }
-    };
+      return stub.fetch(url, init);
+    } }; };
     f.response = () => Response.json({ error: "original rejection" }, { status: 429 });
     const response = await f.request({}, {}, "/v1/responses", caller.signal);
     assert.equal(response.status, abortAtJoin ? 502 : 429);

@@ -1,7 +1,7 @@
 import type { GrantKind } from "./provider-snapshot.ts";
+import type { ProviderProductSummary } from "../packages/provider-plugin-contract/src/product-metadata.ts";
 
-export type ProviderCommercialModel = "metered" | "subscription" | "prepaid" | "unbilled" | "unknown";
-export type ProviderAuthenticationMethod = "api-key" | "oauth2" | "aws-sigv4" | "binding" | "none" | "unknown";
+export type { ProviderAuthenticationMethod, ProviderCommercialModel, ProviderProductSummary } from "../packages/provider-plugin-contract/src/product-metadata.ts";
 
 /** References existing execution declarations; never supplies new credentials or endpoints. */
 export type ProviderProductBinding =
@@ -30,14 +30,8 @@ export interface ProviderOfferDefinition {
 export interface ProviderOfferReference { id: string; productId: string }
 
 /** Authored product metadata, not proof of entitlement, pricing, or onboarding support. */
-export interface ProviderProduct {
-  id: string;
-  displayName: string;
-  commercialModel: ProviderCommercialModel;
-  authenticationMethod: ProviderAuthenticationMethod;
+export interface ProviderProduct extends ProviderProductSummary {
   binding: ProviderProductBinding;
   endpoints: string[];
   offers?: ProviderProductOffer[];
 }
-
-export type ProviderProductSummary = Pick<ProviderProduct, "id" | "displayName" | "commercialModel" | "authenticationMethod">;

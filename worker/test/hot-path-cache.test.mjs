@@ -1,3 +1,4 @@
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 import './typescript-setup.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -620,7 +621,7 @@ test('a wrong secret never starts a remembered credential load', async t => {
 function fakeColo(t) {
   const entries = new Map(), stats = { puts: 0, matches: 0, hits: 0 };
   const cache = {
-    async match(url) { stats.matches++; const body = entries.get(String(url)); if (body) stats.hits++; return body ? new Response(body) : undefined; },
+    async match(url) { stats.matches++; const body = entries.get(String(url)); if (body) stats.hits++; return body ? String(url).split("/")[4] === "admission" ? accessBytesResponse(body, "") : new Response(body) : undefined; },
     async put(url, response) { stats.puts++; const namespace = String(url).split('/')[4]; byNamespace[namespace] = (byNamespace[namespace] ?? 0) + 1; entries.set(String(url), await response.text()); },
   };
   const byNamespace = {};

@@ -3,7 +3,7 @@ import { prepareNativeRawDispatch } from "./native-raw-input.ts";
 import { inlineMusicInput } from "./openrouter-music-runtime.ts";
 import { applyProxyQuery, applyStreamingQuery, type ProxyQuery } from "./proxy-query.ts";
 import { applyTransportHeaders, transformTransportBody } from "./provider-auth.ts";
-import { resolveTemplate } from "./provider-templates.ts";
+import { resolveTemplate, PreparationAdmission, preparationHeader } from "./provider-templates.ts";
 import { copyRequestHeaders, upstreamPath, type UpstreamAuth } from "./providers.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { Env } from "./types.ts";
@@ -11,26 +11,32 @@ import { HttpError, maxJsonBodyBytes } from "./utils.ts";
 
 export function prepareUpstreamRequest(
   request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery,
-  upstream: UpstreamAuth, transport: "http" | "websocket",
+  upstream: UpstreamAuth, transport: "http" | "websocket", owner?: PreparationAdmission,
 ) {
+  owner?.headers(upstream.headers, true);
   const headers = new Headers(upstream.headers);
-  copyRequestHeaders(request.headers, selection.provider, selection.endpoint, headers, env);
-  applyTransportHeaders(headers, upstream.transport, upstream.grant);
-  const path = upstreamPath(selection.provider, selection.endpoint, selection.pathParams, env, upstream);
+  copyRequestHeaders(request.headers, selection.provider, selection.endpoint, headers, env, owner);
+  applyTransportHeaders(headers, upstream.transport, upstream.grant, owner);
+  const path = upstreamPath(selection.provider, selection.endpoint, selection.pathParams, env, upstream, owner);
+  owner?.url(upstream.baseUrl, path);
   const url = new URL(`${upstream.baseUrl.replace(/\/$/, "")}${path}`);
-  upstream.query.forEach((value, name) => url.searchParams.set(name, value));
-  for (const [name, value] of Object.entries(selection.endpoint.query)) url.searchParams.set(name, resolveTemplate(selection.provider, value, env));
+  upstream.query.forEach((value, name) => { owner?.urlQuery(url, name, value); url.searchParams.set(name, value); });
+  for (const name in selection.endpoint.query) { const value = resolveTemplate(selection.provider, selection.endpoint.query[name], env, owner, 4096); owner?.urlQuery(url, name, value); url.searchParams.set(name, value); }
   // Continuations and controls reconstruct the configured route, not the
   // incidental query of one create call. Credential/config changes still pin.
+  owner?.text(url.href, 16384);
   const configuredOwnerUrl = new URL(url);
-  applyProxyQuery(url.searchParams, queryInput, upstream.query.keys());
+  const admittedQuery = owner ? owner.proxyQuery(url, queryInput) : queryInput;
+  applyProxyQuery(url.searchParams, admittedQuery, upstream.query.keys());
+  if (selection.endpoint.streaming === "sse" && !url.searchParams.has("alt") && selection.endpoint.response_format === "google.stream_generate_content") owner?.urlQuery(url, "alt", "sse");
   applyStreamingQuery(url.searchParams, selection.endpoint);
+  owner?.text(url.href, 16384);
   const music = inlineMusicInput(selection);
   if (music) {
     if (transport !== "http" || upstream.transport !== null || upstream.query.size
       || url.href !== "https://openrouter.ai/api/v1/chat/completions")
       throw new HttpError(400, "invalid_inline_music_destination", "inline music requires its original fixed HTTP destination");
-    headers.set("content-type", "application/json"); headers.set("accept", "text/event-stream");
+    preparationHeader(headers, "content-type", "application/json", owner); preparationHeader(headers, "accept", "text/event-stream", owner);
     return { headers, url, configuredOwnerUrl, requestBody: music.transport(), streamBody: true };
   }
   const raw = prepareNativeRawDispatch(selection, url, headers, transport === "http" && upstream.transport === null);

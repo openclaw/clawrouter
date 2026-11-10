@@ -17,19 +17,13 @@ function form(fields = {}, file = new File([audio], "sample.wav", {type:"audio/w
   return body;
 }
 function fixture(t, options = {}, policy = {}) {
-  const env = usageEnv([], { limit:1_000_000, fixedCost:200, retainContent:false, ...options });
+  const env = usageEnv([], { limit:1_000_000, fixedCost:200, retainContent:false, ...options, admissionReply(value, requestBody) {
+    if(value.policy) Object.assign(value.policy.policy,policy);
+    admissions.push(requestBody);
+    return authorityEdit(value);
+  } });
   const events=[], pending=[], retained=[], admissions=[], ledger=sqlBudgetNamespace(t);
-  const original = env.ACCESS_CONTROL.get;
   let authorityEdit = value => value;
-  env.ACCESS_CONTROL.get = (...args) => {
-    const stub=original(...args);
-    return { fetch: async (url,init) => {
-      const response=await stub.fetch(url,init), value=await response.json();
-      if(value.policy) Object.assign(value.policy.policy,policy);
-      if(new URL(url).pathname === "/admission/resolve") admissions.push(JSON.parse(init.body));
-      return Response.json(authorityEdit(value));
-    } };
-  };
   env.BUDGET_LEDGER=ledger; env.OPENAI_API_KEY="fixture-upstream-key";
   env.USAGE_QUEUE={send:async event => events.push(event)};
   env.CONTENT_ARCHIVE={put:async (...args)=>retained.push(args)};
