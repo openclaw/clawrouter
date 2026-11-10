@@ -4,6 +4,7 @@ import { beginOwnedHttpUpload, checkOwnedHttpRequest, checkOwnedHttpUpload, aban
   ownedHttpCompletion, holdOwnedHttpRequest, dispatchOwnedHttpUpload, ownOwnedHttpResponse,
   type OwnedHttpRequest, type OwnedHttpUpload } from "./http-identity-owner.ts";
 import { providerConfigurationList } from "./provider-connections.ts";
+import { prepareOwnedHttpPricing, enterOwnedHttpPricing, leaveOwnedHttpPricing, retireOwnedHttpPricing } from "./pricing.ts";
 import { ownsOwnedHttpSelectionPermit, prepareOwnedHttpProvider, reserveOwnedHttpProviderPreparation, retireOwnedHttpProviderPreparation } from "./providers.ts";
 import { createJsonBodyParser, JsonBodyStructureLimit } from "./json-body.ts";
 import { bindOwnedHttpAuthentication, matchesOwnedHttpAuthentication, queueOwnedHttpSelectionRuntime,
@@ -138,10 +139,17 @@ let ownedPreparedSelections: WeakMap<PreparedUpstream, GenerationSelectionHandle
 let ownedPreparedUploads: WeakMap<PreparedUpstream, OwnedHttpUpload> | undefined;
 let ownedProxyCount = 0;
 export function hasOwnedHttpProxyInvocation(cap: OwnedHttpRequest): boolean { return ownedProxyInvocations?.has(cap) === true; }
+export function matchesOwnedHttpPricingInput(cap: OwnedHttpRequest, body: Record<string, unknown>): boolean {
+  const selection = ownedProxyInvocations?.get(cap)?.selection;
+  return !!selection && selection.body === body && selection.capability === "llm.chat"
+    && selection.endpoint.request_format === "openai.chat_completions"
+    && selection.endpoint.response_format === "openai.chat_completions";
+}
 export function reserveOwnedHttpInitialPreparation(cap: OwnedHttpRequest, request: Request, env: Env): void {
   const invocation = ownedProxyInvocations?.get(cap);
   if (!invocation?.selection) throw identityFailure("protocol");
   if (invocation.preparationAdmitted) return;
+  prepareOwnedHttpPricing(cap, invocation.selection.body as Record<string, unknown>);
   reserveOwnedHttpProviderPreparation(cap, request, env, invocation.selection);
   invocation.preparationAdmitted = true;
 }
@@ -205,6 +213,7 @@ export function retireOwnedHttpProxy(cap: OwnedHttpRequest): void {
   // Validate the intake handoff before deleting this owner's last lookup.
   // Its body lease is released only after all prepared/body callback aliases.
   invocation.admission?.checkOwnedRetirement();
+  retireOwnedHttpPricing(cap);
   retireOwnedHttpProviderPreparation(cap);
   retireOwnedHttpControlVerification(cap);
   const admission = invocation.admission;
@@ -1149,6 +1158,39 @@ function ownOrdinaryResponse(response: Response, completion: ProxyCompletion, ow
   return forwarded;
 }
 
+// Fixed named synchronous calls: no arbitrary graph callback or async scope.
+// The plan was funded before full admission could commit its initial choice.
+function createOwnedHttpAccounting(cap: OwnedHttpRequest, options: Parameters<typeof createProxyAccounting>[0]): ReturnType<typeof createProxyAccounting> {
+  const body = options.selection.body as Record<string, unknown>;
+  enterOwnedHttpPricing(cap, body);
+  let result: ReturnType<typeof createProxyAccounting> | undefined, hasPrimary = false, primary: unknown;
+  try { result = createProxyAccounting(options); } catch (error) { hasPrimary = true; primary = error; }
+  const failures: unknown[] = [];
+  try { leaveOwnedHttpPricing(cap, body); } catch (error) { failures.push(error); }
+  if (failures.length) {
+    try { result?.close(); } catch (error) { failures.push(error); }
+    result = undefined;
+    throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "owned HTTP accounting pricing scope");
+  }
+  if (hasPrimary) throw primary;
+  return result!;
+}
+function estimateOwnedHttpCost(cap: OwnedHttpRequest, selection: ProxySelection, auth: AuthorizedIdentity,
+  parentTools: Parameters<typeof estimateCost>[6]): EstimatedCost {
+  const body = selection.body as Record<string, unknown>;
+  enterOwnedHttpPricing(cap, body);
+  let result: EstimatedCost | undefined, hasPrimary = false, primary: unknown;
+  try {
+    result = estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability),
+      selection.capability, selection.endpoint, parentTools, selection.nativeResponse?.tariff, selection.provider.id);
+  } catch (error) { hasPrimary = true; primary = error; }
+  const failures: unknown[] = [];
+  try { leaveOwnedHttpPricing(cap, body); } catch (error) { failures.push(error); }
+  if (failures.length) { result = undefined; throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "owned HTTP cost pricing scope"); }
+  if (hasPrimary) throw primary;
+  return result!;
+}
+
 async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: ProxyQuery = {}, preauthenticated: AuthorizedIdentity | null = null, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, auditAuth?: AuthorizedIdentity, admission?: JsonAdmission, owned?: OwnedHttpRequest): Promise<Response> {
   // Invoke only at the authenticated, validated boundary (or the earlier
   // identity-denial receipt). Never reconstruct the selection or reauthenticate.
@@ -1207,7 +1249,7 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     return proxyManagedPrediction(request, env, context, auth, selection, queryInput, admission?.wan);
   }
   const accountingContext = { context, env, auth, selection, request, compound, completion, search: searchOwner, startedAtMs: Date.now() };
-  failureAccounting = createProxyAccounting(accountingContext);
+  failureAccounting = owned ? createOwnedHttpAccounting(owned, accountingContext) : createProxyAccounting(accountingContext);
   let background: HttpBackground | undefined;
   let prepared: PreparedUpstream;
   let continuation: HttpContinuation | undefined;
@@ -1237,8 +1279,10 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       if (!prepared.continuation) throw new HttpError(503, "search_state_unavailable", "search owner is unavailable");
       prepared.requestBody = JSON.stringify({ ...selection.body, id: await search.bind(prepared.continuation) });
     }
-    const cost = estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, continuation?.parentTools, selection.nativeResponse?.tariff, selection.provider.id);
-    accounting = createProxyAccounting({ ...accountingContext, cost, grantKey: prepared.grantKey, grantLane: prepared.grantLane });
+    const cost = owned ? estimateOwnedHttpCost(owned, selection, auth, continuation?.parentTools)
+      : estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, continuation?.parentTools, selection.nativeResponse?.tariff, selection.provider.id);
+    const options = { ...accountingContext, cost, grantKey: prepared.grantKey, grantLane: prepared.grantLane };
+    accounting = owned ? createOwnedHttpAccounting(owned, options) : createProxyAccounting(options);
     if (reservedBudget && (reservedBudget.providerId !== selection.provider.id || reservedBudget.modelId !== selection.model?.id || reservedBudget.capability !== selection.capability || cost.reserveMicros > reservedBudget.cost.reserveMicros)) {
       reservedBudget.claim();
       accounting.fail(500, "provider_error", reservedBudget.reservation);

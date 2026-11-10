@@ -10,6 +10,192 @@ import { googleField, googleInt32, googleRequestServiceTier, googleServiceTier }
 import { retainedToolBase, type ToolKnowledge } from "./responses-tool-evidence.ts";
 import type { ToolPricing } from "./types";
 import type { XaiImageRequest } from "./xai-images.ts";
+import { ExactBodyCharge } from "./body-budget.ts";
+import { growOwnedHttpRequest, type OwnedHttpRequest } from "./http-identity-owner.ts";
+import { matchesOwnedHttpPricingInput } from "./proxy.ts";
+import { identityFailure } from "./identity-admission.ts";
+
+interface OwnedHttpPricingPlan {
+  body?: Record<string, unknown>;
+  bytes: number;
+  media: boolean;
+  hour: boolean;
+  cache: boolean;
+  queueCapacity: number;
+  active: boolean;
+}
+let ownedPricing: WeakMap<OwnedHttpRequest, OwnedHttpPricingPlan> | undefined;
+let activeOwnedPricing: WeakMap<object, OwnedHttpPricingPlan> | undefined;
+let ownedPricingRegistry: ExactBodyCharge | undefined;
+let ownedPricingCount = 0;
+const ownedPricingMetadataBytes = 4096;
+
+// Only the compiled HTTP invocation's actual transformed Chat body can enter.
+// Preparation runs before admission/selection effects. A synchronous activation
+// later covers one existing accounting/pricing call, never an async interval.
+export function prepareOwnedHttpPricing(cap: OwnedHttpRequest, body: Record<string, unknown>): void {
+  if (!matchesOwnedHttpPricingInput(cap, body) || ownedPricing?.has(cap)) throw identityFailure("protocol");
+  growOwnedHttpRequest(cap, ownedPricingMetadataBytes + 8); // fixed products + ONE passive queue container
+  const plan: OwnedHttpPricingPlan = { body, bytes: 0, media: false, hour: false, cache: false, queueCapacity: 0, active: false };
+  const pending: object[] = [];
+  try {
+    measureOwnedHttpJson(cap, plan, body, pending);
+    plan.media = body.previous_response_id != null || body.conversation != null || body.prompt != null;
+    if (!plan.media && body.input != null) plan.media = ownedContentHasMedia(cap, plan, body.input, pending);
+    if (!plan.media && Array.isArray(body.messages)) {
+      for (let index = 0; index < body.messages.length && !plan.media; index++) {
+        const message = body.messages[index];
+        if (isObject(message)) plan.media = ownedContentHasMedia(cap, plan, message.content, pending);
+      }
+    }
+    if (!plan.media && Array.isArray(body.tools)) {
+      for (let index = 0; index < body.tools.length && !plan.media; index++) {
+        const tool = body.tools[index];
+        if (isObject(tool)) plan.media = providerAddedTool(tool.type);
+      }
+    }
+    if (!ownedPricing) {
+      const charge = ExactBodyCharge.reserve(512);
+      if (!charge) throw identityFailure("limit");
+      try { ownedPricing = new WeakMap(); activeOwnedPricing = new WeakMap(); ownedPricingRegistry = charge; }
+      catch (error) { ownedPricing = undefined; activeOwnedPricing = undefined; charge.release(); throw error; }
+    }
+    ownedPricing.set(cap, plan); ownedPricingCount++;
+  } catch (error) {
+    plan.body = undefined;
+    if (!ownedPricingCount) {
+      ownedPricing = undefined; activeOwnedPricing = undefined;
+      const charge = ownedPricingRegistry; ownedPricingRegistry = undefined; charge?.release();
+    }
+    throw error;
+  }
+  finally {
+    // No iterator, descriptor, suspended continuation or original-work product
+    // is stored per depth. Only references to the STILL funded input were queued.
+    pending.length = 0;
+  }
+}
+
+export function enterOwnedHttpPricing(cap: OwnedHttpRequest, body: Record<string, unknown>): void {
+  const plan = ownedPricing?.get(cap);
+  if (!plan || plan.body !== body || plan.active || activeOwnedPricing?.has(body)
+    || !matchesOwnedHttpPricingInput(cap, body)) throw identityFailure("protocol");
+  activeOwnedPricing!.set(body, plan); plan.active = true;
+}
+export function leaveOwnedHttpPricing(cap: OwnedHttpRequest, body: Record<string, unknown>): void {
+  const plan = ownedPricing?.get(cap);
+  if (!plan || plan.body !== body || !plan.active || activeOwnedPricing?.get(body) !== plan) throw identityFailure("protocol");
+  activeOwnedPricing.delete(body); plan.active = false;
+}
+export function retireOwnedHttpPricing(cap: OwnedHttpRequest): void {
+  const plan = ownedPricing?.get(cap);
+  if (!plan) return;
+  if (plan.active) throw identityFailure("protocol");
+  plan.body = undefined; ownedPricing!.delete(cap);
+  if (!--ownedPricingCount) {
+    ownedPricing = undefined; activeOwnedPricing = undefined;
+    const charge = ownedPricingRegistry; ownedPricingRegistry = undefined; charge!.release();
+  }
+}
+function ownedHttpPricing(body: Record<string, unknown>, format: string | undefined): OwnedHttpPricingPlan | undefined {
+  return format === "openai.chat_completions" ? activeOwnedPricing?.get(body) : undefined;
+}
+function reserveOwnedPricingQueue(cap: OwnedHttpRequest, plan: OwnedHttpPricingPlan, count: number): void {
+  if (count <= plan.queueCapacity) return;
+  // D = 8*(C+P+N)+2U+B. C=1 was funded before []; every queued
+  // occurrence is one reference cell (P), with NO copied graph/string/primitive.
+  growOwnedHttpRequest(cap, 8 * (count - plan.queueCapacity)); plan.queueCapacity = count;
+}
+function childObjects(value: object): number {
+  let count = 0;
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index++) if (value[index] !== null && typeof value[index] === "object") count++;
+  } else for (const key in value) if (Object.hasOwn(value, key)) {
+    const item = (value as Record<string, unknown>)[key];
+    if (item !== null && typeof item === "object") count++;
+  }
+  return count;
+}
+function queueOwnedChildren(value: object, pending: object[]): void {
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index++) {
+      const item = value[index]; if (item !== null && typeof item === "object") pending.push(item);
+    }
+  } else for (const key in value) if (Object.hasOwn(value, key)) {
+    const item = (value as Record<string, unknown>)[key];
+    if (item !== null && typeof item === "object") pending.push(item);
+  }
+}
+function ownedContentHasMedia(cap: OwnedHttpRequest, plan: OwnedHttpPricingPlan, root: unknown, pending: object[]): boolean {
+  if (!root || typeof root !== "object") return false;
+  reserveOwnedPricingQueue(cap, plan, 1); pending.push(root);
+  try {
+    while (pending.length) {
+      const value = pending.pop()!;
+      if (!Array.isArray(value)) {
+        const item = value as Record<string, unknown>, type = typeof item.type === "string" ? item.type : "";
+        if (type === "image" || type === "image_url" || type === "video_url" || type === "document" || type === "file"
+          || type === "input_image" || type === "input_file" || type === "item_reference" || type === "computer_screenshot"
+          || "image_url" in item || "video_url" in item || "file_id" in item) return true;
+      }
+      reserveOwnedPricingQueue(cap, plan, pending.length + childObjects(value));
+      queueOwnedChildren(value, pending);
+    }
+    return false;
+  } finally { pending.length = 0; }
+}
+function quotedOwnedJsonBytes(value: string): number {
+  let bytes = 2;
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code === 34 || code === 92 || code === 8 || code === 9 || code === 10 || code === 12 || code === 13) bytes += 2;
+    else if (code < 32) bytes += 6;
+    else if (code < 128) bytes++;
+    else if (code < 2048) bytes += 2;
+    else if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) { bytes += 4; index++; } else bytes += 6;
+    } else bytes += code >= 0xdc00 && code <= 0xdfff ? 6 : 3;
+  }
+  return bytes;
+}
+function ownedScalarJsonBytes(value: unknown): number {
+  if (typeof value === "string") return quotedOwnedJsonBytes(value);
+  if (value === null) return 4;
+  if (typeof value === "boolean") return value ? 4 : 5;
+  if (typeof value === "number") return Number.isFinite(value) ? String(value).length : 4;
+  if (typeof value === "undefined" || typeof value === "function" || typeof value === "symbol") return -1;
+  if (typeof value === "bigint") throw new TypeError("BigInt cannot be serialized as JSON");
+  return 0; // A child container is counted when removed from the passive queue.
+}
+function measureOwnedHttpJson(cap: OwnedHttpRequest, plan: OwnedHttpPricingPlan, root: object, pending: object[]): void {
+  reserveOwnedPricingQueue(cap, plan, 1); pending.push(root);
+  while (pending.length) {
+    const value = pending.pop()!;
+    reserveOwnedPricingQueue(cap, plan, pending.length + childObjects(value));
+    plan.bytes += 2; // brackets/braces; punctuation needs no continuation frames
+    if (Array.isArray(value)) {
+      if (value.length) plan.bytes += value.length - 1;
+      for (let index = 0; index < value.length; index++) {
+        const item = value[index], scalar = ownedScalarJsonBytes(item);
+        if (item !== null && typeof item === "object") pending.push(item);
+        else plan.bytes += scalar < 0 ? 4 : scalar; // array omission is null
+      }
+    } else {
+      const item = value as Record<string, unknown>;
+      if ("cache_control" in item) plan.cache = true;
+      if (isObject(item.cache_control) && item.cache_control.ttl === "1h") plan.hour = true;
+      let members = 0;
+      for (const key in item) if (Object.hasOwn(item, key)) {
+        const child = item[key], scalar = ownedScalarJsonBytes(child);
+        if (scalar < 0) continue;
+        plan.bytes += quotedOwnedJsonBytes(key) + 1 + scalar;
+        if (members++) plan.bytes++;
+        if (child !== null && typeof child === "object") pending.push(child);
+      }
+    }
+  }
+}
 
 export interface HostedSearchPrice { version: string; microsPerCall: number | null }
 // Freeze the declared request tariff, not a guess from the response or model name.
@@ -326,6 +512,7 @@ export type PricingEndpoint = Pick<CompiledEndpoint, "request_format" | "outputT
 };
 
 export function estimateModelCost(pricing: ModelPricing, body: Record<string, unknown>, endpoint?: PricingEndpoint, requestPricing?: OutcomeRequestPricing): CostEstimate {
+  const owned = ownedHttpPricing(body, endpoint?.request_format);
   if (unpricedGoogleRequestFormats.has(endpoint?.request_format ?? "") || unpricedNativeAudioFormats.has(endpoint?.request_format ?? ""))
     return { reserveMicros: 0, inputTokens: null, outputTokens: null, pricingAvailable: false };
   if (googleAudioRequest(endpoint?.selectedUpstreamModel, body, endpoint?.request_format ?? "")
@@ -352,10 +539,10 @@ export function estimateModelCost(pricing: ModelPricing, body: Record<string, un
   // Claude base64 images with a recognized header replace their encoded bytes
   // with their visual-token ceiling. Every other media input stays unbounded.
   const images: InlineImageBound | undefined = endpoint?.request_format === "anthropic.messages" ? { encodedBytes: 0, tokens: 0 } : undefined;
-  const unbounded = opaque || (google ? googleHasUnboundedInput(body) : requestHasUnboundedInput(body, images));
+  const unbounded = opaque || (owned ? owned.media : google ? googleHasUnboundedInput(body) : requestHasUnboundedInput(body, images));
   // Opaque/history/media inputs already reserve the full bound; their encoded
   // size cannot refine it. Avoid serializing the conversation just to discard it.
-  const bytes = unbounded ? 0 : endpoint?.request_format === "anthropic.messages" ? jsonBodyBytes(body) : new TextEncoder().encode(JSON.stringify(body)).byteLength;
+  const bytes = unbounded ? 0 : owned ? owned.bytes : endpoint?.request_format === "anthropic.messages" ? jsonBodyBytes(body) : new TextEncoder().encode(JSON.stringify(body)).byteLength;
   const inputTokens = unbounded ? inputLimit
     : Math.min(inputLimit, saturatingAdd(saturatingAdd(bytes - (images?.encodedBytes ?? 0), images?.tokens ?? 0), pricing.inputTokenOverhead));
   const config = google ? googleField(body, "generationConfig", "generation_config") : undefined;
@@ -378,7 +565,7 @@ export function estimateModelCost(pricing: ModelPricing, body: Record<string, un
   const outputTokens = compact || requestPricing ? pricing.defaultMaxOutputTokens : saturatingMultiply(output, choices);
   const rates = resolveRates(pricing, inputTokens, google ? googleRequestServiceTier(body) : body.service_tier, true, google);
   if (!rates) return { reserveMicros: 0, inputTokens, outputTokens, pricingAvailable: false };
-  const inputRate = reservationInputRate(body, rates);
+  const inputRate = reservationInputRate(body, rates, owned);
   const inferenceMicros = saturatingAdd(tokenCost(inputTokens, inputRate), tokenCost(outputTokens, rates.output));
   const reserveMicros = requestPricing ? requestOutcomeReserve(requestPricing, inferenceMicros) : inferenceMicros;
   return reserveMicros == null ? { reserveMicros: 0, inputTokens, outputTokens, pricingAvailable: false } : { reserveMicros, inputTokens, outputTokens };
@@ -478,8 +665,14 @@ function maxRates(base: Rates, extended: Rates): Rates {
   };
 }
 
-function reservationInputRate(body: unknown, rates: Rates): number {
+function reservationInputRate(body: unknown, rates: Rates, owned?: OwnedHttpPricingPlan): number {
   let rate = Math.max(rates.input, rates.cachedInput ?? rates.input, rates.cacheWriteInput ?? rates.input);
+  if (owned) {
+    // Preserve the ordinary ONE-hour early return, including a larger five-minute
+    // rate elsewhere in the same body. These are alternatives, not a combined max.
+    if (owned.hour) return Math.max(rate, rates.cacheWrite1hInput ?? rates.input);
+    return owned.cache ? Math.max(rate, rates.cacheWrite5mInput ?? rates.input) : rate;
+  }
   if (jsonHasCacheTtl(body, "1h")) return Math.max(rate, rates.cacheWrite1hInput ?? rates.input);
   if (jsonHasKey(body, "cache_control")) rate = Math.max(rate, rates.cacheWrite5mInput ?? rates.input);
   return rate;

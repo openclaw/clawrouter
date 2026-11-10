@@ -151,3 +151,42 @@ through delivery and other original roots, then clears those map entries before
 the authentication owners retire. Existing provider-specific authorization and
 credential inspections still execute. A covered generation/credential hit does
 not waive those mandatory fresh provider controls.
+
+
+## Private Chat pricing scope
+
+The ninth production seam is `pricing.ts`. A genuine HTTP invocation registers
+its actual transformed `openai.chat_completions` body before full admission can
+commit an initial choice. The scope is entered only around a named synchronous
+accounting or estimation call and is removed in its cleanup. It covers the early
+failure-accounting estimate as well as the post-preparation estimate. No public
+header, caller graph, asynchronous callback or ambient boolean selects it.
+The ordinary estimator and other protocol branches retain their existing path.
+
+One passive array stores only references to the still-funded input graph. Before
+each growth, its maximum simultaneous cells Q receive `8*(1+Q)` logical bytes
+from the same positive HTTP charge. There are no per-depth call frames, key
+arrays, continuation records, suspended iterators or closures. Fixed plan/scope
+metadata has a positive 4096-byte component; the two lazy registry maps have a
+separate exact 512-byte common-arena owner. All plan and body aliases clear before
+that registry or the request charge can retire. These are logical accounting
+components, not JavaScript object sizes or a whole-vertical CONTROL proof.
+
+The scalar measurement includes JSON punctuation, quoted keys, omitted object
+members, array nulls, finite/nonfinite numbers, control escapes, UTF8 code points
+and escaped lone surrogates. It does not serialize the whole body for pricing.
+The original dispatch serializer and upload remain separate consumers requiring
+their own prospective funding. Media detection keeps the exact input/message
+content/tool roots, type list and property-presence checks, including null values.
+Cache checks cover the whole JSON graph; a one-hour match returns its rate without
+also maximizing the five-minute rate. Other pricing gaps, manifest rates, fixed
+costs, tiers, saturation and rounding remain unchanged.
+
+Authored pricing witnesses use real credential/admission/budget fixtures and the
+compiled native entry: depth 1025, wide content/cache structures, null media,
+media outside the recognized roots, own `__proto__`, Unicode/lone surrogates,
+mixed one-hour/five-minute rates, early materialization failure, a held original
+one-MiB upload and capacity before selection/budget effects. They retain original
+reservation/settlement IDs and usage events. These tests have received syntax
+checks only. Hosted execution and the complete HTTP funding/CONTROL inventory
+remain pending; this increment is not a publishable complete candidate.
