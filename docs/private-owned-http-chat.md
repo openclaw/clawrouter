@@ -39,11 +39,22 @@ and delivery still requires an actual prospective inventory under the existing
 ceilings. This checkpoint grants no new arena, control slots, physical-heap
 bound, or default-route coverage.
 
-The current full-admission bridge intentionally omits snapshots when a candidate
-is a legacy KV grant. The generation consumer then has no selectable snapshot.
-The ordinary caller's legacy `resolveGrantSelection` rescue is excluded from
-this private route. A source-qualified closed legacy-selection seam is required;
-neither environment fallback nor a new compatibility denial is assumed here.
+The full-admission bridge intentionally omits snapshots when a candidate is a
+legacy KV grant. The private provider command classifies that selection-coverage
+miss only after genuine authentication, requested-facet, policy, connection and
+unavailability checks. It owns ordered default-key and KV reads, reuses the pure
+candidate planner, and reserves result storage before one `/grant-pools/select`.
+Nonrecording selection makes no counting RPC; a lost selection reply is uncertain
+and is not replayed. It never writes a second `/grant-pools/record` for that choice.
+The immutable generation and its missing snapshot are unchanged.
+
+The Worker candidate phase keeps its own cumulative seven-counter allowance
+across optional pool resolution and every original KV record. It does not reset
+or reuse the generation's inherited admission ledger. The selection reply keeps
+its existing separate bound. Runtime observations are looked up by actual
+authority, key and `grantRevision`, and detached under positive funding before
+another await can replace their independent owner. This adapter and its SQLite
+witnesses remain source-only implementation work, not runtime qualification.
 
 Authored upload witnesses cover a 1 MiB ASCII Chat serialization, unused and
 partially constructed uploads, held/rejected original cancellation, independent

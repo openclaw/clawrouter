@@ -1,3 +1,7 @@
+import { selectOwnedHttpIdentity, type GenerationSelectionHandle } from "./credential-preflight.ts";
+import { checkOwnedHttpRequest, growOwnedHttpRequest, type OwnedHttpRequest } from "./http-identity-owner.ts";
+import { identityFailure as ownedHttpIdentityFailure } from "./identity-admission.ts";
+
 import { admitIdentity, isIdentityFailure } from "./identity-admission.ts";
 import type { MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { miniMaxVideoDenied, miniMaxVideoIdentity, miniMaxVideoRequirement } from "./minimax-video-credential.ts";
@@ -571,4 +575,26 @@ function encodePathParam(value: string, style: string): string {
   }
   if (value.includes("/") || value === "." || value === "..") throw new HttpError(400, "invalid_path_param", "path parameter must be one segment");
   return encodeURIComponent(value);
+}
+
+// Inactive named provider adapter. The transient permit cannot be supplied by
+// wire data and exposes neither authentication nor the selected grant graph.
+let ownedHttpSelectionPermits: WeakMap<object, OwnedHttpRequest> | undefined;
+let ownedHttpSelectionPermitCount = 0;
+export function ownsOwnedHttpSelectionPermit(permit: object, cap: OwnedHttpRequest): boolean {
+  return ownedHttpSelectionPermits?.get(permit) === cap;
+}
+export async function selectOwnedHttpProvider(cap: OwnedHttpRequest, request: Request, env: Env,
+  selection: import("./authority-admission.ts").AdmissionSelection, recordSelection = true): Promise<GenerationSelectionHandle> {
+  checkOwnedHttpRequest(cap, request, env);
+  growOwnedHttpRequest(cap, 2048);
+  const permit = Object.freeze({});
+  (ownedHttpSelectionPermits ??= new WeakMap()).set(permit, cap); ownedHttpSelectionPermitCount++;
+  try {
+    if (!ownsOwnedHttpSelectionPermit(permit, cap)) throw ownedHttpIdentityFailure("protocol");
+    return await selectOwnedHttpIdentity(cap, request, env, selection, recordSelection, permit);
+  } finally {
+    ownedHttpSelectionPermits!.delete(permit);
+    if (!--ownedHttpSelectionPermitCount) ownedHttpSelectionPermits = undefined;
+  }
 }

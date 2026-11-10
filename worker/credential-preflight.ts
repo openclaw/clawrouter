@@ -1,7 +1,7 @@
 import { identityJsonProfiles } from "./access-json.ts";
 import type { Env } from "./types";
 import { admitAdmission, admitIdentity, copyIdentity, admittedEffectivePolicy, advanceIdentitySource, identityFailure, identityPlan, identitySourceBudget,
-  identitySourceSnapshot, type IdentitySourceBudget } from "./identity-admission.ts";
+  identitySourceSnapshot, admitIdentityCount, readIdentityKv, identityUtf8, type IdentitySourceBudget } from "./identity-admission.ts";
 import { admitBridgeFactories, admitBridgeCopyFactories, admissionBridgePhasePayload, reserveAdmissionScratch, retireAdmissionScratch, PreflightTicket, GenerationMetadataCharge, GenerationConsumptionLease, admissionScratchBytes, type GenerationRetainedCharge } from "./credential-preflight-arena.ts";
 import { admitGenerationFactories, admitGenerationConsumptionFactories, generationMetadata, measureGenerationGraph, freezeGenerationGraph,
   copyGenerationCoverage, generationCoverageLayout, sameGenerationCoverage,
@@ -9,14 +9,16 @@ import { admitGenerationFactories, admitGenerationConsumptionFactories, generati
 import { PrivateCacheReservation, hotCacheNow, hotCacheConfig, tryRunInBackground, type HotCacheConfig } from "./hot-cache.ts";
 import { ownsCredentialPrefetchPermit, moveOwnedCredentialBorrow, type OwnedCredentialBorrow } from "./credential-cache.ts";
 import { materializeGrantCredentials } from "./grant-credentials.ts";
-import { grantRevision } from "./grant-eligibility.ts";
-import { snapshot as providerSnapshot } from "./providers.ts";
+import { grantRevision, currentGrantRuntime } from "./grant-eligibility.ts";
+import { snapshot as providerSnapshot, ownsOwnedHttpSelectionPermit } from "./providers.ts";
+import { selectGenerationAdmissionCandidate } from "./authority-grant-selection.ts";
+import { assertPolicyModel } from "./policy-models.ts";
 import { GenerationAdvisoryState, waitGenerationFlushWindow, admitGenerationOverlay, generationSelectionWorkingBytes, planGenerationSelection, generationRuntimeWorkingBytes, detachedGenerationRuntime, detachedGenerationFeedback } from "./admission-cache.ts";
 import { authorityCall } from "./authority.ts";
 import { recordGrantRuntime } from "./grant-selection.ts";
 import { ownedGenerationCredentialFailure } from "./proxy-auth.ts";
 import { credentialExpired } from "./credential-lifecycle.ts";
-import { safeEqual } from "./utils.ts";
+import { safeEqual, sha256Hex, HttpError } from "./utils.ts";
 import { errorResponse } from "./utils.ts";
 import { markLocalError } from "./native-errors.ts";
 import { checkOwnedHttpRequest, growOwnedHttpRequest, ownedHttpCompletion, type OwnedHttpRequest } from "./http-identity-owner.ts";
@@ -39,6 +41,7 @@ interface HttpIdentityOwner {
   digest: string;
   sessionHash?: string;
   coverageMiss: boolean;
+  legacySelections: number;
 }
 let httpIdentities: WeakMap<OwnedHttpRequest, HttpIdentityOwner> | undefined;
 let httpIdentityCount = 0;
@@ -52,7 +55,7 @@ export async function resolveOwnedHttpAuthentication(cap: OwnedHttpRequest, requ
   growOwnedHttpRequest(cap, 8192 + 2 * (kid.length + digest.length));
   let owner = httpIdentities?.get(cap);
   if (!owner) {
-    owner = { retained: [], selections: [], pending: [], kid, digest, coverageMiss: false };
+    owner = { retained: [], selections: [], pending: [], kid, digest, coverageMiss: false, legacySelections: 0 };
     (httpIdentities ??= new WeakMap()).set(cap, owner); httpIdentityCount++;
   } else if (owner.kid !== kid || owner.digest !== digest) throw identityFailure("protocol");
   const current = owner.current && authenticationOwner(owner.current);
@@ -128,6 +131,205 @@ export function ownedHttpCoverageMiss(cap: OwnedHttpRequest): boolean {
   const owner = httpIdentities?.get(cap);
   if (!owner) throw identityFailure("protocol");
   return owner.coverageMiss;
+}
+
+// Named provider command only. Its permit is created by the provider adapter,
+// never supplied by a public request or obtained from an admission graph.
+export function selectOwnedHttpIdentity(cap: OwnedHttpRequest, request: Request, env: Env,
+  selection: import("./authority-admission.ts").AdmissionSelection, recordSelection: boolean,
+  permit: object): Promise<GenerationSelectionHandle> {
+  checkOwnedHttpRequest(cap, request, env);
+  if (!ownsOwnedHttpSelectionPermit(permit, cap)) throw identityFailure("protocol");
+  const http = httpIdentities?.get(cap), auth = http?.current && authenticationOwner(http.current);
+  if (!http || !auth || auth.slot.owner.binding !== env.ACCESS_CONTROL || !auth.identity) throw identityFailure("protocol");
+  if (auth.failure) throw auth.failure;
+  const admitted = auth.slot.owner.admission!, coverage = auth.slot.coverage!.value;
+  const provider = providerSnapshot.providers.find(item => item.id === selection.providerId);
+  const endpoint = provider?.endpoints.find(item => item.id === selection.endpointId);
+  const tokenRef = provider?.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? provider?.id;
+  // Missing selection is not missing authentication. Check the actual admitted
+  // facets and all business/unavailability gates before classifying coverage.
+  if (!provider || !endpoint || !coverage.providers.some(item => item.id === provider.id && item.tokenRef === tokenRef)
+    || !selectionCovered(coverage, selection)) throw identityFailure("protocol");
+  if (auth.identity.policy.providers.length && !auth.identity.policy.providers.includes(provider.id))
+    throw new HttpError(403, "provider_not_allowed", `policy does not allow provider ${provider.id}`);
+  assertPolicyModel(auth.identity.policy, { model: selection.catalogModelId ? { id: selection.catalogModelId } : null,
+    endpoint, capability: selection.capability });
+  const pool = admitted.pools[provider.id];
+  if (admitted.connectionsUnavailable || pool?.unavailable)
+    throw new HttpError(503, "provider_unavailable", "provider authorization failed");
+  if (!pool || !admitted.policy) throw identityFailure("protocol");
+  if (admitted.connections.find(item => item.providerId === provider.id)?.enabled === false)
+    throw new HttpError(503, "provider_disabled", `provider ${provider.id} is disabled`);
+  // Registry/list cells and failure/continuation products precede both paths.
+  growOwnedHttpRequest(cap, 4096);
+  return ownedHttpCompletion(cap).start(async () => {
+    let selected: GenerationSelectionHandle | undefined;
+    if (admitted.snapshots?.[provider.id]) {
+      // A real empty snapshot is covered and must NOT invoke the legacy reader.
+      if (!recordSelection) throw identityFailure("protocol");
+      selected = selectCredentialGeneration(http.current!, env, selection);
+      if (!selected) throw identityFailure("protocol");
+    } else {
+      // The authority's completeness boundary returned authenticated admission
+      // WITHOUT selecting. Own the ordinary legacy source phase explicitly;
+      // never fill a fake snapshot or infer environment auth from undefined.
+      http.coverageMiss = true; http.legacySelections++;
+      selected = await selectOwnedHttpLegacy(cap, request, env, auth, provider, endpoint, selection, recordSelection);
+    }
+    http.selections.push(selected);
+    const receipt = selected.flush;
+    if (receipt.accepted) ownedHttpCompletion(cap).start(() => receipt.completed);
+    else if (receipt.pending) http.pending.push(receipt.pending);
+    return selected;
+  });
+}
+
+// The existing complete/record source profiles bound the retained KV graph.
+// A complete original response can overlap two UTF-16 source-text occurrences.
+// This is normative application payload, not engine/native allocation sizeof.
+const legacySourceGraphBytes = 8 * (32768 + 2 * 65536 + 32768 + 131072) + 2 * 2097152;
+const legacySourcePhaseBytes = legacySourceGraphBytes + 4 * 2097152 + 65536 + 4096;
+
+async function selectOwnedHttpLegacy(cap: OwnedHttpRequest, request: Request, env: Env,
+  auth: GenerationAuthenticationOwner, provider: import("./types").CompiledProvider,
+  endpoint: import("./types").CompiledEndpoint, selection: import("./authority-admission.ts").AdmissionSelection,
+  recordSelection: boolean): Promise<GenerationSelectionHandle> {
+  const lease = GenerationConsumptionLease.reserve(legacySourcePhaseBytes);
+  const capture: { choice?: import("./grant-selection-strategies.ts").GrantChoiceInput & { poolKey: string } } = {};
+  let resultLease: GenerationConsumptionLease | undefined, unpublished: GenerationSelectionHandle | undefined;
+  let hasPrimary = false, primary: unknown;
+  let keys: string[] | undefined, defaults: string[] | undefined;
+  let candidates: import("./authority-admission.ts").AdmissionPoolCandidate[] | undefined;
+  let states: Record<string, import("./types").GrantRuntimeState> | undefined;
+  let pool: import("./authority-admission.ts").AdmissionPool | undefined;
+  let choice: (import("./grant-selection-strategies.ts").GrantChoiceInput & { poolKey: string }) | undefined;
+  let result: import("./grant-eligibility.ts").GrantSelectionResult | undefined;
+  let original: Promise<unknown> | undefined;
+  let picked: import("./authority-admission.ts").AdmissionPoolCandidate | undefined;
+  let selected: import("./grant-eligibility.ts").SelectedGrant | null = null;
+  let complete: import("./grant-eligibility.ts").GrantSelectionResult | undefined;
+  let identityHash: string | undefined, fallbackSessionHash: string | undefined;
+  let key: string | undefined, choiceReply: { selectedKey: string } | undefined;
+  let retained = legacySourcePhaseBytes, runtimeBytes = 0;
+  try {
+    request.signal.throwIfAborted();
+    const identity = auth.identity!, admitted = auth.slot.owner.admission!;
+    const policyId = identity.policyId, tenantId = identity.policy.tenantId ?? "default";
+    const tokenRef = provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? provider.id;
+    const defaultUnits = 2 * tokenRef.length + policyId.length + tenantId.length + 22;
+    // Borrow components and fund all new default-key occurrences BEFORE concat.
+    retained += 8 * (8 + 2 * 16) + 12 * defaultUnits + 4 * (policyId.length + tenantId.length + tokenRef.length);
+    lease.replace(retained);
+    defaults = [`oauth/${policyId}/${tokenRef}`, `oauth/tenants/${tenantId}/${tokenRef}`];
+    // Preserve the ordinary distinct allowance: this is the Worker candidate
+    // phase's cumulative seven counters. The inherited DO ledger is untouched.
+    const source = identitySourceBudget();
+    pool = selection.excludedKeys?.length ? undefined : admitted.pools[provider.id];
+    if (!pool) {
+      original = authorityCall<import("./authority-admission.ts").AdmissionPool>(env, "/grant-pools/resolve",
+        { providerId: provider.id, policyId, tenantId, defaultKeys: defaults }, "policy-bindings", request.signal,
+        undefined, undefined, undefined, undefined, source);
+      void original.then(() => undefined, () => undefined);
+      pool = await original as import("./authority-admission.ts").AdmissionPool; original = undefined;
+    }
+    request.signal.throwIfAborted();
+    if (pool.unavailable) throw new HttpError(503, "provider_unavailable", "provider authorization failed");
+    admitIdentity(pool); admitIdentityCount(defaults.length + pool.keys.length, 256);
+    let keyUnits = defaultUnits; for (const key of pool.keys) keyUnits += key.length;
+    // Ordered dedup, source Map replacement, candidate/result/filter/choice
+    // vectors and copied key occurrences coexist. All are funded before growth.
+    retained += 16384 + 128 * (defaults.length + pool.keys.length) + 24 * keyUnits;
+    lease.replace(retained);
+    keys = []; for (const key of defaults) if (!keys.includes(key)) keys.push(key);
+    for (const key of pool.keys) if (!keys.includes(key)) keys.push(key);
+    candidates = []; states = Object.create(null);
+    for (const key of keys) {
+      request.signal.throwIfAborted();
+      original = readIdentityKv<import("./types").UpstreamGrant>(() => env.POLICY_KV.get(key, "stream"), source);
+      void original.then(() => undefined, () => undefined);
+      const grant = await original as import("./types").UpstreamGrant | null; original = undefined;
+      request.signal.throwIfAborted();
+      // The shared registry is authority- AND actual grantRevision-bound. Copy
+      // now, before the next await can replace an independently owned value.
+      const pending = grant && auth.slot.entry.partition.runtime?.get(key)?.get(grantRevision(grant));
+      if (pending?.value) {
+        const bytes = generationRuntimeWorkingBytes(pool.states[key], pending.value) + 4 * key.length + 128;
+        lease.replace(retained + runtimeBytes + bytes);
+        states![key] = detachedGenerationRuntime(pool.states[key], pending.value); runtimeBytes += bytes;
+      } else if (pool.states[key]) states![key] = pool.states[key]; // parent/pool owner remains funded
+      candidates.push({ key, grant });
+    }
+    const identityKey = identity.principalId ?? identity.credentialId ?? identity.policyId;
+    // Both prefixed hash representations, encoded inputs and digest/hex roots.
+    const hashes = 6 * identityUtf8(identityKey) + 4096;
+    lease.replace(retained + runtimeBytes + hashes);
+    original = sha256Hex(`identity:${identityKey}`); void original.then(() => undefined, () => undefined);
+    identityHash = await original as string; original = undefined;
+    original = sha256Hex(`session:${identityKey}`); void original.then(() => undefined, () => undefined);
+    fallbackSessionHash = await original as string; original = undefined;
+    request.signal.throwIfAborted();
+    const poolKeyUnits = 3 * (identityUtf8(policyId) + identityUtf8(tenantId) + identityUtf8(provider.id)) + 2;
+    retained += 8 * poolKeyUnits + 512;
+    lease.replace(retained + runtimeBytes);
+    const poolKey = `${encodeURIComponent(provider.id)}/${encodeURIComponent(policyId)}/${encodeURIComponent(tenantId)}`;
+    // The pure planner preserves configuration/priority/quota/pin semantics.
+    // Its callback captures ONLY the prospectively funded choice representation;
+    // the empty key cannot select a real grant or invoke an authority effect.
+    result = selectGenerationAdmissionCandidate(env, { provider, endpoint, request: selection,
+      policy: admitted.policy!, poolKey, candidates, states: states!, identityHash, fallbackSessionHash }, planned => {
+        capture.choice = planned; return { selectedKey: "" };
+      }, () => { throw identityFailure("protocol"); }, (vector, run) => {
+        lease.replace(retained + runtimeBytes + admissionScratchBytes(vector));
+        try { return run(); } finally { lease.replace(retained + runtimeBytes); }
+      });
+    choice = capture.choice; capture.choice = undefined;
+    let maximumResult = 4096;
+    for (const candidate of candidates) {
+      const plan = identityPlan(); plan.item({ key: candidate.key, grant: candidate.grant, runtimeState: states![candidate.key] ?? null }, 0);
+      const n = plan.counts;
+      maximumResult = Math.max(maximumResult, 4096 + 8 * (n.containers + 2 * n.members + n.entries + n.values) + 2 * n.units);
+    }
+    // Every possible selected graph, registry and receipt is positively funded
+    // BEFORE /select can commit. A lost reply is uncertain and is never replayed.
+    resultLease = GenerationConsumptionLease.reserve(maximumResult + 4096);
+    if (!generationSelections) {
+      generationSelectionRegistryCharge = GenerationConsumptionLease.reserve(512); generationSelections = new WeakMap();
+    }
+    const selectedOwner: GenerationSelectionOwner = { auth, lease: resultLease, users: 1, prefetchProvider: provider };
+    const handle: GenerationSelectionHandle = Object.freeze({ dispose: disposeGenerationSelection, selected: generationSelected,
+      matchesKey: generationSelectedKey, hasConfiguredGrant: generationConfigured, flush: generationFlushRejected });
+    generationSelections.set(handle, selectedOwner); generationSelectionCount++; auth.children++;
+    unpublished = handle; resultLease = undefined;
+    request.signal.throwIfAborted();
+    if (choice?.candidates.length) {
+      if (!recordSelection) key = choice.candidates[0].key;
+      else {
+        original = authorityCall<{ selectedKey: string }>(env, "/grant-pools/select", choice, "policy-bindings", request.signal);
+        void original.then(() => undefined, () => undefined);
+        choiceReply = await original as { selectedKey: string }; original = undefined; key = choiceReply.selectedKey;
+      }
+    }
+    request.signal.throwIfAborted();
+    picked = key !== undefined && choice?.candidates.some(item => item.key === key) ? candidates.find(candidate => candidate.key === key) : undefined;
+    selected = picked?.grant ? { key: picked.key, grant: picked.grant, runtimeState: currentGrantRuntime(picked.grant, states![picked.key]) } : null;
+    if (selected) admitIdentity(selected, "record");
+    complete = { selected, hasConfiguredGrant: result.hasConfiguredGrant, ...(!selected && result.retryAt ? { retryAt: result.retryAt } : {}) };
+    selectedOwner.result = copyIdentity(complete); freezeGenerationGraph(selectedOwner.result);
+    unpublished = undefined; return handle;
+  } catch (error) { hasPrimary = true; primary = error; throw error; }
+  finally {
+    // Actual readers/RPCs do not return until their ORIGINAL cleanup joins;
+    // UNKNOWN keeps this frame and debit suspended instead of issuing credit.
+    original = undefined; keys = undefined; defaults = undefined; candidates = undefined; states = undefined;
+    pool = undefined; choice = undefined; capture.choice = undefined; result = undefined; picked = undefined; selected = null; complete = undefined;
+    identityHash = undefined; fallbackSessionHash = undefined; key = undefined; choiceReply = undefined;
+    const failures: unknown[] = [];
+    try { unpublished?.dispose(); } catch (error) { failures.push(error); }
+    try { resultLease?.release(); } catch (error) { failures.push(error); }
+    try { lease.release(); } catch (error) { failures.push(error); }
+    if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "owned HTTP legacy selection cleanup");
+  }
 }
 
 export function sealOwnedHttpIdentity(cap: OwnedHttpRequest, request: Request, env: Env): void {
