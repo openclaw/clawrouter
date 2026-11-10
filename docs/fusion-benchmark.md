@@ -413,6 +413,17 @@ check and fallback scaffold but map both roles to one model. Use these ablations
 to distinguish a model-combination gain from the value of a second attempt.
 Policy-only ablations remain explicitly separate from paired-control reports.
 
+For a comparison of the fixed models alone, set `FUSION_PAIR_CONTROLS_ONLY=1`
+or pass `controlsOnly: true`. Both models retain the same executor, task context,
+supplied reproducer and per-trial limits. No candidate or contract workflow runs.
+Keep `includeControls` enabled. The selected policy still determines whether
+the supplied reproducer is required and visible to both controls.
+
+These reports use `kind: native-controls-repository`, list only `cheap` and
+`strong`, and cannot be passed off as three-arm fusion evidence. The three-arm
+analyzer rejects them. Budget preflight counts the actual selected arms in all
+modes; execution still meters every call and reserves unknown charges.
+
 
 Matched one-shot results on the same three exposed development repairs:
 
@@ -454,6 +465,15 @@ is retained and the attempt counts as an error. Summed elapsed times were
 and took 2.09 times the strong control's elapsed time. It failed both the
 20% saving and two-times latency gates. Cheap-only was 83.38% cheaper than
 strong on these exposed cases; independent validation is still needed.
+
+The first prospective fixed-model block did not complete. Cheap repaired the
+credential-alias case and passed all 68 acceptance tests. The strong control's
+first request then returned HTTP 400 with a token-limit classification and no
+usage. The run stopped, retaining its full reservation. This partial result is
+not a comparison or evidence of general superiority; the second block was not
+started. Separate synthetic requests with the same output limit and a similar
+request size succeeded, so the original rejection remains unexplained.
+
 
 ### Operational holdout candidates
 
