@@ -9,7 +9,8 @@ let charged = 0;
 // Exact logical charges share the body arena. Unlike grow(), this API has no
 // doubling or 1 MiB floor. Replacement transfers custody without a free gap.
 export class ExactBodyCharge {
-  private constructor(private held: number) {}
+  private held: number;
+  private constructor(held: number) { this.held = held; }
   static reserve(bytes: number): ExactBodyCharge | null {
     if (!Number.isSafeInteger(bytes) || bytes <= 0 || bytes > bodyBudgetBytes - charged) return null;
     charged += bytes;

@@ -104,9 +104,10 @@ export class PreflightInstanceArena {
   get charged(): number { return this.#held; }
 }
 export class PreflightTicket {
+  private charge: ExactCharge;
   private windows = { operation: false, source: false, read: false, terminal: false };
   private unknown = false;
-  private constructor(private charge: ExactCharge) {}
+  private constructor(charge: ExactCharge) { this.charge = charge; }
   static reserve(arena?: PreflightInstanceArena): PreflightTicket {
     // Fixed table validation precedes the first per-ticket factory.
     if (!withinFactoryWindow("operation") || !withinFactoryWindow("source") || !withinFactoryWindow("read")

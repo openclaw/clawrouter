@@ -24,6 +24,7 @@ function clear<T>(root: Root<T> | undefined): void {
 // No read history grows with the 8192-read bound. Generic InputRetirement stays
 // unchanged; FIRST cancel and unlock outcomes are independently owned here.
 class PreflightSource {
+  private ticket: PreflightTicket;
   private body?: ReadableStream<Uint8Array> | null;
   private reader?: ReadableStreamBYOBReader | ReadableStreamDefaultReader<Uint8Array>;
   private input?: InputRetirement;
@@ -51,7 +52,7 @@ class PreflightSource {
   private reads = 0;
   private wireBytes = 0;
 
-  constructor(private ticket: PreflightTicket) {}
+  constructor(ticket: PreflightTicket) { this.ticket = ticket; }
   own(body: ReadableStream<Uint8Array> | null, signal?: AbortSignal): void {
     this.body = body; this.signal = signal;
     if (!body) return;
@@ -231,7 +232,7 @@ export async function consumePreflightReply(ticket: PreflightTicket, start: () =
 // publication does not retire its payload: retain until actual EOF pull/cancel.
 export function preflightReplyResponse(ticket: PreflightTicket, text: string, status = 200): Response {
   ticket.enter("terminal");
-  let bytes: Uint8Array | undefined;
+  let bytes: Uint8Array<ArrayBuffer> | undefined;
   let sent = false, closed = false;
   const finish = () => {
     if (closed) return;
@@ -240,13 +241,13 @@ export function preflightReplyResponse(ticket: PreflightTicket, text: string, st
   };
   try {
     bytes = new TextEncoder().encode(text); text = "";
-    const body = new ReadableStream<Uint8Array>({ type: "bytes",
+    const body = new ReadableStream({ type: "bytes",
       pull(controller) {
         if (!sent) { sent = true; const chunk = bytes!; bytes = undefined; controller.enqueue(chunk); }
         else { const request = controller.byobRequest; controller.close(); request?.respond(0); finish(); }
       },
       cancel() { finish(); },
-    }, { highWaterMark: 0 });
+    } satisfies UnderlyingByteSource, { highWaterMark: 0 });
     return new Response(body, { status, headers: { "content-type": "application/json" } });
   } catch (error) { text = ""; finish(); throw error; }
 }
