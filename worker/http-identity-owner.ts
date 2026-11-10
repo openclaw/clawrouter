@@ -1,14 +1,17 @@
 import { ExactBodyCharge } from "./body-budget.ts";
 import { identityFailure } from "./identity-admission.ts";
 import { ProxyCompletion } from "./proxy-completion.ts";
+import { inputRetirement } from "./input-retirement.ts";
 import type { Env } from "./types.ts";
-import { drainOwnedHttpIdentity, retireOwnedHttpIdentity } from "./credential-preflight.ts";
+import { drainOwnedHttpIdentity, retireOwnedHttpConsumers, retireOwnedHttpIdentity } from "./credential-preflight.ts";
 import { retireOwnedHttpProxy } from "./proxy.ts";
 
 // This entry is inactive until the named compiled HTTP adapter invokes it.
 // Capabilities contain no request, identity, credential or preparation graph.
 export interface OwnedHttpRequest { readonly kind?: never }
 export interface OwnedHttpUpload { readonly kind?: never }
+interface OwnedHttpFailureOrigin { readonly origin?: never }
+interface FailureOwner { cap: OwnedHttpFailureOrigin; failed: boolean; reason?: unknown }
 
 interface RequestOwner {
   request?: Request;
@@ -16,6 +19,7 @@ interface RequestOwner {
   funding: ExactBodyCharge;
   completion: ProxyCompletion;
   uploads: UploadOwner[];
+  failures: FailureOwner[];
   sealed: boolean;
   unknown: boolean;
   retirement?: Promise<void>;
@@ -43,6 +47,7 @@ const requestMetadataBytes = 4096;
 const uploadMetadataBytes = 4096;
 let requests: WeakMap<OwnedHttpRequest, RequestOwner> | undefined;
 let uploads: WeakMap<OwnedHttpUpload, UploadOwner> | undefined;
+let failureOrigins: WeakMap<OwnedHttpFailureOrigin, FailureOwner> | undefined;
 let registryFunding: ExactBodyCharge | undefined;
 let requestCount = 0;
 
@@ -64,9 +69,9 @@ export function beginOwnedHttpRequest(request: Request, env: Env): OwnedHttpRequ
     if (!requests) {
       const registry = ExactBodyCharge.reserve(1024);
       if (!registry) throw identityFailure("limit");
-      registryFunding = registry; requests = new WeakMap(); uploads = new WeakMap();
+      registryFunding = registry; requests = new WeakMap(); uploads = new WeakMap(); failureOrigins = new WeakMap();
     }
-    const owner: RequestOwner = { request, env, funding, completion: new ProxyCompletion(), uploads: [], sealed: false, unknown: false };
+    const owner: RequestOwner = { request, env, funding, completion: new ProxyCompletion(), uploads: [], failures: [], sealed: false, unknown: false };
     const cap = Object.freeze({});
     requests.set(cap, owner); requestCount++;
     return cap;
@@ -93,6 +98,108 @@ export function growOwnedHttpRequest(cap: OwnedHttpRequest, bytes: number): void
   const owner = requestOwner(cap);
   if (!Number.isSafeInteger(bytes) || bytes <= 0) throw identityFailure("protocol");
   fundOwnedHttpRequest(cap, owner.funding.bytes + bytes);
+}
+
+// Register fixed operation origins before acquiring/starting an original. Read,
+// FIRSTcancel and unlock are separate origins even when they reject with the
+// same value or undefined. A second observation of one origin adds no error.
+function beginOwnedHttpFailureOrigin(cap: OwnedHttpRequest): OwnedHttpFailureOrigin {
+  const owner = requestOwner(cap);
+  growOwnedHttpRequest(cap, 256);
+  const origin = Object.freeze({});
+  const failure: FailureOwner = { cap: origin, failed: false };
+  failureOrigins!.set(origin, failure); owner.failures.push(failure);
+  return origin;
+}
+function rememberOwnedHttpFailure(cap: OwnedHttpFailureOrigin, reason: unknown): void {
+  const origin = failureOrigins?.get(cap);
+  if (!origin) throw identityFailure("protocol");
+  if (!origin.failed) { origin.failed = true; origin.reason = reason; }
+}
+
+// Fixed public-Response consumer. No identity or prepared payload escapes.
+// The generic InputRetirement contract is unchanged; observe its ORIGINAL
+// operations here so its intentionally suppressed cancel error is not lost.
+export function ownOwnedHttpResponse(cap: OwnedHttpRequest, response: Response): Response {
+  const owner = requestOwner(cap);
+  if (owner.sealed) throw identityFailure("protocol");
+  if (!response.body) return response;
+  let headerUnits = 0, headerPairs = 0;
+  response.headers.forEach((value, key) => { headerUnits += value.length + key.length; headerPairs++; });
+  growOwnedHttpRequest(cap, 4096 + 32 * headerPairs + 4 * headerUnits);
+  const acquisition = beginOwnedHttpFailureOrigin(cap), reading = beginOwnedHttpFailureOrigin(cap);
+  const cancellation = beginOwnedHttpFailureOrigin(cap), unlocking = beginOwnedHttpFailureOrigin(cap);
+  let forwarded!: Response;
+  owner.completion.start(source => {
+    let original: Response | undefined = response;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    try { reader = original.body!.getReader(); }
+    catch (error) {
+      rememberOwnedHttpFailure(acquisition, error);
+      if (original.body!.locked) holdOwnedHttpRequest(cap);
+      else source.start(() => {
+        let work: Promise<void>;
+        try { work = original!.body!.cancel(); }
+        catch (failure) { work = Promise.reject(failure); }
+        void work.then(() => undefined, failure => rememberOwnedHttpFailure(cancellation, failure));
+        return work.finally(() => { original = undefined; });
+      });
+      throw error;
+    }
+    let readRejected = false, streamErrored = false;
+    // Native errored-stream cancellation propagates the stored read error; its
+    // underlying cancel algorithm is not invoked. Classify by original state
+    // observations, never by reason equality (including undefined).
+    let closed: Promise<void> | undefined = reader.closed.then(() => undefined, () => { streamErrored = true; });
+    const input = inputRetirement({
+      cancel(reason?: unknown) {
+        try {
+          const work = reader!.cancel(reason);
+          const propagatedRead = readRejected && streamErrored;
+          void work.then(() => undefined, error => { if (!propagatedRead) rememberOwnedHttpFailure(cancellation, error); });
+          return work;
+        } catch (error) { rememberOwnedHttpFailure(cancellation, error); throw error; }
+      },
+      releaseLock() {
+        try { reader!.releaseLock(); }
+        catch (error) { rememberOwnedHttpFailure(unlocking, error); throw error; }
+        finally { if (original!.body!.locked) holdOwnedHttpRequest(cap); }
+      },
+    });
+    let stopped = false;
+    // Publish this join before any Response/stream factory can fail. It clears
+    // original reader/body aliases only after the generic original-root join.
+    const joined = input.retired.finally(async () => { await closed; closed = undefined; reader = undefined; original = undefined; });
+    void joined.then(() => undefined, () => undefined);
+    try {
+      const body = new ReadableStream<Uint8Array>({
+        pull(controller) {
+          return source.start(async () => {
+            try {
+              const next = await input.read(() => {
+                try {
+                  const work = reader!.read();
+                  void work.then(() => undefined, error => { readRejected = true; rememberOwnedHttpFailure(reading, error); });
+                  return work;
+                } catch (error) { rememberOwnedHttpFailure(reading, error); throw error; }
+              });
+              if (stopped) return;
+              if (next.done) { stopped = true; controller.close(); void input.retire("eof"); }
+              else controller.enqueue(next.value);
+            } catch (error) {
+              if (!stopped) { stopped = true; controller.error(error); }
+              void input.retire("cancel", error);
+            }
+          });
+        },
+        cancel(reason) { stopped = true; return input.retire("cancel", reason); },
+      }, { highWaterMark: 0 });
+      forwarded = new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+    } catch (error) { source.start(() => input.retire("cancel", error)); throw error; }
+    return joined;
+  });
+  response = undefined as never;
+  return forwarded;
 }
 
 // Only control custody leaves this module. Payloads stay in the named command
@@ -214,17 +321,27 @@ export function finishOwnedHttpRequest(cap: OwnedHttpRequest): Promise<void> {
       upload.controller = undefined; upload.listener = undefined; upload.failures.length = 0;
       uploads!.delete(upload.cap);
     }
-    try { await drainOwnedHttpIdentity(cap); } catch (error) { failures.push(error); }
+    for (const origin of owner.failures) {
+      if (origin.failed) failures.push(origin.reason);
+      origin.reason = undefined; failureOrigins!.delete(origin.cap);
+    }
+    owner.failures.length = 0;
     if (!owner.unknown) {
       // A failed last-consumer handoff is not proof that prepared callbacks
       // stopped borrowing identity/credential graphs. Preserve their owners.
       try { retireOwnedHttpProxy(cap); } catch (error) { owner.unknown = true; failures.push(error); }
+      if (!owner.unknown) try { retireOwnedHttpConsumers(cap); } catch (error) { owner.unknown = true; failures.push(error); }
+    }
+    // Fixed-cohort transport starts only after HTTP consumers cleared. Unknown
+    // delivery keeps its graphs/parents and cannot borrow this phase's windows.
+    if (!owner.unknown) {
+      try { await drainOwnedHttpIdentity(cap); } catch (error) { failures.push(error); }
       if (!owner.unknown) try { retireOwnedHttpIdentity(cap); } catch (error) { owner.unknown = true; failures.push(error); }
     }
     if (!owner.unknown) {
       owner.uploads.length = 0; owner.request = undefined; owner.env = undefined;
       requests!.delete(cap); owner.funding.release();
-      if (!--requestCount) { requests = undefined; uploads = undefined; const funding = registryFunding; registryFunding = undefined; funding?.release(); }
+      if (!--requestCount) { requests = undefined; uploads = undefined; failureOrigins = undefined; const funding = registryFunding; registryFunding = undefined; funding?.release(); }
     }
     if (failures.length) throw new AggregateError(failures, "owned HTTP request retirement");
   })();

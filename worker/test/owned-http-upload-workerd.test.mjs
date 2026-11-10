@@ -10,11 +10,12 @@ import { startWorkerdFixture } from '../../test/helpers/workerd.mjs';
 // fixture-only command. Scalar gates never transfer native I/O between requests.
 const router = String.raw`
 export {PolicyBindingIndexObject,BudgetLedgerObject,UsageLedgerObject,GrantCredentialObject} from './worker/index.ts';
-import {beginOwnedHttpRequest,beginOwnedHttpUpload,adoptOwnedHttpUploadSource,pipeOwnedHttpUpload,dispatchOwnedHttpUpload,abandonOwnedHttpUpload,finishOwnedHttpRequest,ownedHttpCompletion} from './worker/http-identity-owner.ts';
+import {beginOwnedHttpRequest,beginOwnedHttpUpload,adoptOwnedHttpUploadSource,pipeOwnedHttpUpload,dispatchOwnedHttpUpload,abandonOwnedHttpUpload,finishOwnedHttpRequest,ownedHttpCompletion,ownOwnedHttpResponse} from './worker/http-identity-owner.ts';
 import {bodyBudgetCharged} from './worker/body-budget.ts';
 import {jsonBodyStream,jsonBodyBytes} from './worker/json-body.ts';
 let released=false,entered=false,done=false,active=false,terminalFailed=false,chargedBefore=0;
 const check=(value,label)=>{if(!value)throw Error(label);};
+const validateRetirement=(outcome,validate)=>{try{validate();}catch(error){throw new AggregateError(outcome.failed?[outcome.error,error]:[error],'native original outcome validation');}};
 export default {async fetch(request,env,context){
  const path=new URL(request.url).pathname;
  if(path==='/release'){released=true;return new Response('released');}
@@ -47,10 +48,31 @@ export default {async fetch(request,env,context){
    const settled=outcome();retirementTaken=true;
    context.waitUntil((async()=>{
     await original;const ended=await settled;
-    check(ended.failed&&ended.error instanceof AggregateError&&ended.error.errors.length===1,'owned abort has one original origin');
+    validateRetirement(ended,()=>check(ended.failed&&ended.error instanceof AggregateError&&ended.error.errors.length===1,'owned abort has one original origin'));
     check(!source.locked,'held original cancellation unlock');source=undefined;done=true;
    })().catch(error=>{terminalFailed=true;done=true;throw error;}));
    return new Response('data: {"prefix":true}\n\n',{headers:{'content-type':'text/event-stream'}});
+  }else if(path.startsWith('/response-')){
+   const shared=path==='/response-shared'?Error('shared native cleanup'):undefined;
+   let cancels=0,unlocks=0;
+   source=new ReadableStream({pull(controller){if(path==='/response-read')controller.error(shared);},cancel(){cancels++;return Promise.reject(shared);}},{highWaterMark:0});
+   if(path!=='/response-read'){
+    const getReader=source.getReader;
+    Object.defineProperty(source,'getReader',{value(...args){const reader=Reflect.apply(getReader,this,args),release=reader.releaseLock;Object.defineProperty(reader,'releaseLock',{value(){Reflect.apply(release,this,[]);unlocks++;throw shared;}});return reader;}});
+   }
+   const response=ownOwnedHttpResponse(cap,new Response(source));
+   let failed=false,failure;
+   try{if(path==='/response-read')await response.text();else await response.body.cancel();}catch(error){failed=true;failure=error;}
+   const observed={failed,error:failure};validateRetirement(observed,()=>check(failed&&failure===shared,'original native reader outcome'));
+   const ended=await outcome();retirementTaken=true;
+   validateRetirement(ended,()=>{
+    check(ended.failed&&ended.error instanceof AggregateError,'native response terminal origins');
+    const expected=path==='/response-read'?1:2;
+    check(ended.error.errors.length===expected&&ended.error.errors.every(error=>error===shared),'native response independent origins');
+    check(cancels===(path==='/response-read'?0:1)&&unlocks===(path==='/response-read'?0:1),'native actual cancel and unlock counts');
+    check(!source.locked,'native original response unlocked');
+   });
+   reply={ok:true,origins:path==='/response-read'?1:2};
   }else{
    const shared=path==='/undefined'?undefined:Error('shared fixture origin');
    for(let index=0;index<2;index++){
@@ -60,8 +82,8 @@ export default {async fetch(request,env,context){
     await abandonOwnedHttpUpload(upload);check(!source.locked,'rejected original cancellation still joins unlock');source=undefined;
    }
    const ended=await outcome();retirementTaken=true;
-   check(ended.failed&&ended.error instanceof AggregateError,'original failures retained');
-   check(ended.error.errors.length===2&&ended.error.errors[0]===shared&&ended.error.errors[1]===shared,'independent original occurrences');
+   validateRetirement(ended,()=>{check(ended.failed&&ended.error instanceof AggregateError,'original failures retained');
+   check(ended.error.errors.length===2&&ended.error.errors[0]===shared&&ended.error.errors[1]===shared,'independent original occurrences');});
    reply={ok:true,origins:2,undefinedOrigin:shared===undefined};
   }
  }catch(error){hasPrimary=true;primary=error;}
@@ -116,6 +138,7 @@ test('actual Workerd ORIGINAL upload, independent failures and public-prefix cus
     const baseline = (await get('/state')).charged;
     await t.test('native full 1 MiB ASCII upload', async () => { const value = await get('/large'); assert.equal(value.ok, true); assert.equal(value.units, 1048576); });
     for (const path of ['/undefined', '/shared']) await t.test(`native independent ${path.slice(1)} cancellation origins`, async () => { const value = await get(path); assert.equal(value.origins, 2); assert.equal(value.ok, true); });
+    for (const path of ['/response-undefined', '/response-shared', '/response-read']) await t.test(`native original response ${path.slice(10)}`, async () => { const value = await get(path); assert.equal(value.ok, true); assert.equal(value.origins, path === '/response-read' ? 1 : 2); });
     await t.test('public SSE prefix precedes held ORIGINAL upload cancellation', async () => {
       const prefix = await text(dispatch('/prefix')); assert.equal(prefix.status, 200); assert.match(prefix.text, /"prefix":true/);
       let state;

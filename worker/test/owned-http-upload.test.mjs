@@ -2,7 +2,8 @@ import './typescript-setup.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { beginOwnedHttpRequest, beginOwnedHttpUpload, adoptOwnedHttpUploadSource, pipeOwnedHttpUpload,
-  dispatchOwnedHttpUpload, abandonOwnedHttpUpload, finishOwnedHttpRequest, ownedHttpCompletion } from '../http-identity-owner.ts';
+  dispatchOwnedHttpUpload, abandonOwnedHttpUpload, finishOwnedHttpRequest, ownedHttpCompletion,
+  ownOwnedHttpResponse } from '../http-identity-owner.ts';
 import { bodyBudgetCharged, bodyBudgetBytes, ExactBodyCharge } from '../body-budget.ts';
 import { jsonBodyBytes, jsonBodyStream } from '../json-body.ts';
 
@@ -134,5 +135,67 @@ test('common capacity refusal precedes source and pipe factories', async t => {
       adoptOwnedHttpUploadSource(upload, source); pipeOwnedHttpUpload(upload, source, new FixedLengthStream(0));
     }, error => error.status === 503);
     assert.equal(factoryCalls, 0);
+  });
+});
+
+for (const reason of [undefined, new Error('shared native reader cleanup')]) {
+  test(`actual response consumer joins held FIRSTcancel and preserves independent ${reason === undefined ? 'undefined' : 'shared Error'} unlock`, async t => {
+    await fixture(t, async f => {
+      const entered = deferred(), release = deferred(); f.releases.push(release.resolve);
+      let cancels = 0, unlocks = 0;
+      const body = new ReadableStream({ cancel() { cancels++; entered.resolve(); return release.promise.then(() => { throw reason; }); } }, { highWaterMark: 0 });
+      const getReader = body.getReader;
+      Object.defineProperty(body, 'getReader', { configurable: true, value(...args) {
+        const reader = Reflect.apply(getReader, this, args), unlock = reader.releaseLock;
+        Object.defineProperty(reader, 'releaseLock', { configurable: true, value() { Reflect.apply(unlock, this, []); unlocks++; throw reason; } });
+        return reader;
+      } });
+      const response = ownOwnedHttpResponse(f.cap, new Response(body));
+      const canceled = f.own(response.body.cancel());
+      const terminal = f.finish();
+      await Promise.race([entered.promise, canceled.outcome.then(() => { throw Error('response retired before FIRSTcancel entry'); })]);
+      assert.equal(cancels, 1); assert.equal(unlocks, 0); assert.equal(body.locked, true); assert.ok(bodyBudgetCharged() > 0);
+      release.resolve();
+      let hasCancel = false, cancelError;
+      try { await f.take(canceled); } catch (error) { hasCancel = true; cancelError = error; }
+      assert.equal(hasCancel, true); assert.equal(cancelError, reason, 'original unlock failure remains the public cancellation outcome');
+      let failed = false, failure;
+      try { await f.take(terminal); } catch (error) { failed = true; failure = error; }
+      assert.equal(failed, true); assert.ok(failure instanceof AggregateError);
+      assert.deepEqual(failure.errors, [reason, reason], 'FIRSTcancel and unlock are distinct origins');
+      assert.equal(unlocks, 1); assert.equal(body.locked, false);
+    });
+  });
+}
+
+test('response acquisition failure cancels the untouched original body and retains both undefined origins', async t => {
+  await fixture(t, async f => {
+    let cancels = 0;
+    const body = new ReadableStream({ cancel() { cancels++; return Promise.reject(undefined); } });
+    Object.defineProperty(body, 'getReader', { value() { throw undefined; } });
+    let hasPrimary = false, primary;
+    try { ownOwnedHttpResponse(f.cap, new Response(body)); }
+    catch (error) { hasPrimary = true; primary = error; }
+    assert.equal(hasPrimary, true); assert.equal(primary, undefined);
+    let failed = false, failure;
+    try { await f.take(f.finish()); } catch (error) { failed = true; failure = error; }
+    assert.equal(failed, true); assert.ok(failure instanceof AggregateError);
+    assert.deepEqual(failure.errors, [undefined, undefined]); assert.equal(cancels, 1); assert.equal(body.locked, false);
+  });
+});
+
+test('native errored-stream cancellation propagates one read origin without reason-value deduplication', async t => {
+  await fixture(t, async f => {
+    let canceled = 0;
+    const body = new ReadableStream({ pull(controller) { controller.error(undefined); }, cancel() { canceled++; } }, { highWaterMark: 0 });
+    const response = ownOwnedHttpResponse(f.cap, new Response(body));
+    let hasRead = false, readFailure;
+    try { await f.take(f.own(response.text())); } catch (error) { hasRead = true; readFailure = error; }
+    assert.equal(hasRead, true); assert.equal(readFailure, undefined);
+    let failed = false, failure;
+    try { await f.take(f.finish()); } catch (error) { failed = true; failure = error; }
+    assert.equal(failed, true); assert.ok(failure instanceof AggregateError);
+    assert.deepEqual(failure.errors, [undefined]); assert.equal(canceled, 0, 'native errored stream never calls underlying cancel');
+    assert.equal(body.locked, false);
   });
 });

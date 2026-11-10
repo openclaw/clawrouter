@@ -196,7 +196,7 @@ export function selectOwnedHttpIdentity(cap: OwnedHttpRequest, request: Request,
     let selected: GenerationSelectionHandle | undefined;
     if (admitted.snapshots?.[provider.id]) {
       // A real empty snapshot is covered and must NOT invoke the legacy reader.
-      selected = recordSelection ? selectCredentialGeneration(http.current!, env, selection)
+      selected = recordSelection ? selectGenerationForConsumer(http.current!, env, selection, true)
         : selectOwnedHttpSnapshotUnrecorded(auth, env, selection);
       if (!selected) throw identityFailure("protocol");
     } else {
@@ -271,7 +271,7 @@ export function queueOwnedHttpSelectionRuntime(cap: OwnedHttpRequest, request: R
   if (!http || !http.selections.includes(selected) || !picked || owner.auth.slot.owner.binding !== env.ACCESS_CONTROL
     || (incoming.grantRevision ?? null) !== grantRevision(picked.grant)) throw identityFailure("protocol");
   growOwnedHttpRequest(cap, 4096); // retained receipt/list cells precede publication
-  const receipt = queueGenerationRuntime(owner.auth, picked.key, incoming);
+  const receipt = queueGenerationRuntime(owner.auth, picked.key, incoming, true);
   if (receipt.accepted) ownedHttpCompletion(cap).start(() => receipt.completed);
   else if (receipt.pending) http.pending.push(receipt.pending);
 }
@@ -449,23 +449,32 @@ export async function drainOwnedHttpIdentity(cap: OwnedHttpRequest): Promise<voi
   if (failures.length) throw new AggregateError(failures, "owned HTTP pending cohort cleanup");
 }
 
-export function retireOwnedHttpIdentity(cap: OwnedHttpRequest): void {
+// Completed HTTP delivery no longer borrows these graphs. Pending capabilities
+// retain their OWN generation parents, so they remain drainable after this
+// explicit phase boundary without retaining prepared/credential/auth aliases.
+export function retireOwnedHttpConsumers(cap: OwnedHttpRequest): void {
   const reserved = httpForegroundReservations?.get(cap);
   const owner = httpIdentities?.get(cap);
   if (!owner) { reserved?.dispose(); return; }
-  httpIdentities!.delete(cap);
   const failures: unknown[] = [];
   try { reserved?.dispose(); } catch (error) { failures.push(error); }
-  for (const pending of owner.pending) try { pending.dispose(); } catch (error) { failures.push(error); }
-  owner.pending.length = 0;
   for (const credential of owner.credentials) try { retireOwnedHttpGrantCredentials(credential); } catch (error) { failures.push(error); }
   owner.credentials.length = 0;
   for (const selected of owner.selections) try { selected.dispose(); } catch (error) { failures.push(error); }
   owner.selections.length = 0; owner.current = undefined;
   for (const authentication of owner.retained) try { authentication.dispose(); } catch (error) { failures.push(error); }
   owner.retained.length = 0; owner.kid = ""; owner.digest = ""; owner.sessionHash = undefined;
+  if (failures.length) throw new AggregateError(failures, "owned HTTP consumer retirement");
+}
+
+export function retireOwnedHttpIdentity(cap: OwnedHttpRequest): void {
+  const owner = httpIdentities?.get(cap);
+  if (!owner) return;
+  // No forgotten pending work may be converted into final retirement credit.
+  if (owner.current || owner.credentials.length || owner.selections.length || owner.retained.length || owner.pending.length)
+    throw identityFailure("protocol");
+  httpIdentities!.delete(cap);
   if (!--httpIdentityCount) httpIdentities = undefined;
-  if (failures.length) throw new AggregateError(failures, "owned HTTP identity retirement");
 }
 
 // A foreground command is distinct from optional prefetch. The capability
@@ -1319,6 +1328,10 @@ function generationSelectionPayload(value: unknown): number {
 }
 export function selectCredentialGeneration(handle: GenerationAuthentication, env: Env,
   request: import("./authority-admission.ts").AdmissionSelection): GenerationSelectionHandle | undefined {
+  return selectGenerationForConsumer(handle, env, request, false);
+}
+function selectGenerationForConsumer(handle: GenerationAuthentication, env: Env,
+  request: import("./authority-admission.ts").AdmissionSelection, deferTransport: boolean): GenerationSelectionHandle | undefined {
   admitGenerationConsumptionFactories();
   const auth = authenticationOwner(handle), slot = auth.slot;
   if (auth.failure) throw auth.failure;
@@ -1368,7 +1381,7 @@ export function selectCredentialGeneration(handle: GenerationAuthentication, env
     slot.advisory = overlay; created = undefined;
     overlay.commitSelection(planned, debit); auth.initialSelection = false;
     if (pending) { commitGenerationCount(slot, pending); pending = undefined; }
-    if (flush) { selectedRecord.flush = commitGenerationSchedule(flush); flush = undefined; }
+    if (flush) { selectedRecord.flush = commitGenerationSchedule(flush, deferTransport); flush = undefined; }
     Object.freeze(selected); unpublished = undefined; return selected;
   } catch (error) { hasPrimary = true; primary = error; throw error; }
   finally {
@@ -1436,7 +1449,7 @@ export function queueCredentialGenerationRuntime(handle: GenerationAuthenticatio
   return queueGenerationRuntime(auth, key, incoming);
 }
 function queueGenerationRuntime(auth: GenerationAuthenticationOwner, key: string,
-  incoming: import("./types").GrantRuntimeState): GenerationFlushReceipt {
+  incoming: import("./types").GrantRuntimeState, deferTransport = false): GenerationFlushReceipt {
   const slot = auth.slot;
   const frame = GenerationConsumptionLease.reserve(4096);
   let work: GenerationConsumptionLease | undefined, held: GenerationConsumptionLease | undefined;
@@ -1481,7 +1494,7 @@ function queueGenerationRuntime(auth: GenerationAuthenticationOwner, key: string
     previous = undefined;
     if (previousShared) { const previousCharge = previousShared.lease; previousShared.value = undefined; previousShared = undefined; previousCharge.release(); }
     if (prior && !prior.inflight) releaseGenerationFeedback(prior);
-    const receipt = commitGenerationSchedule(flush!); flush = undefined;
+    const receipt = commitGenerationSchedule(flush!, deferTransport); flush = undefined;
     return receipt;
   } catch (error) { hasPrimary = true; primary = error; throw error; }
   finally {
@@ -1854,7 +1867,15 @@ function abandonGenerationFlush(owner: GenerationFlushOwner): void {
   try { owner.lease.release(); } catch (error) { failures.push(error); }
   if (failures.length) throw new AggregateError(failures, "generation cohort abandonment");
 }
-function commitGenerationSchedule(owner: GenerationFlushOwner): GenerationFlushReceipt {
+function commitGenerationSchedule(owner: GenerationFlushOwner, deferTransport = false): GenerationFlushReceipt {
+  if (deferTransport) {
+    // The genuine HTTP request retains this independently funded pending cap.
+    // Its originating finalizer claims/joins a fixed cohort after transport,
+    // avoiding an overlapping deep planner or authority reader during delivery.
+    if (!owner.pending || owner.started) throw identityFailure("protocol");
+    restoreGenerationClaims(owner);
+    return Object.freeze({ accepted: false, pending: owner.pending });
+  }
   // Registration and start occur in THIS invocation/request. No shared promise,
   // foreign successor, queue callback or later-request completion is consulted.
   let accepted = false, completion: Promise<void> | undefined;

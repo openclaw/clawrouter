@@ -90,3 +90,46 @@ Nested plain graphs remain borrowed from the intake owner. This component is not
 a proof for the later serializer, accounting or complete HTTP phase overlap.
 Those DATA and CONTROL tables are still open; the checkpoint is not a candidate
 for publication. Node and native tests have only received static syntax checks.
+
+## Intake and delivery checkpoint
+
+The private intake counts whole distinct byte backings before retaining chunk
+views. Its existing positive `BodyLease` credit is counted once; an exact common
+arena charge supplements that credit before decode or parsed-graph factories.
+Small inputs keep native `JSON.parse`, including deep unknown data, duplicate
+last-wins fields and own `__proto__` data. A constant-state lexical pass counts
+all source container, member, array-element, primitive and decoded string-unit
+occurrences before parsing. It creates no key vector, graph or decoded string.
+For valid JSON, array elements equal commas plus nonempty containers minus
+members. The prospective graph component is `8*(C+2M+E+N)+2U`; duplicate source
+members are conservatively included. This is logical application accounting,
+not a native-parser allocation or physical-heap estimate.
+
+The full decoded text and prospective graph overlap stays funded through parse.
+Only after text/buffer/index aliases clear may the exact supplement shrink.
+Expanded input still uses the existing structural limits and parser; its graph,
+current scalar concatenation, decoder chunk and original backing are funded
+before each feed. No source counter becomes payload credit. The intake does not
+change ordinary JSON grammar or impose a new source-size limit.
+
+The private response consumer observes original read, first cancellation and
+unlock origins separately. Independent `undefined` or shared-Error rejections
+remain separate occurrences. A native errored stream's cancellation can instead
+propagate its already-observed read failure without calling the underlying cancel
+algorithm; that propagation is classified by original state, never reason
+equality. Reader-closed and retirement joins clear original aliases before the
+request can release its funding. Unknown locks keep the owner funded.
+
+HTTP selection and runtime feedback reserve their pending work but defer its
+transport to the originating finalizer. After delivery/upload/account/archive
+roots settle, proxy aliases and selected/credential/authentication consumers
+clear before the finalizer starts its own fixed pending cohorts. Pending
+capabilities independently retain their parent generation. This avoids starting
+feedback while full HTTP consumer graphs are still retained; it is not a claim
+that the complete simultaneous CONTROL inventory is closed.
+
+One source ambiguity remains open: the authority's final dependency check can
+remove selection and snapshots, producing the same missing-snapshot shape as
+legacy completeness fallback. The existing reply has no scalar reason. The
+owned caller must distinguish those paths before claiming legacy coverage;
+authority source remains unchanged pending a scoped protocol disposition.

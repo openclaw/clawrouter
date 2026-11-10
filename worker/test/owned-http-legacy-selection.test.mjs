@@ -5,7 +5,7 @@ import { sqliteFixture } from './sqlite-storage.mjs';
 import { accessBytesResponse } from './access-byte-fixture.mjs';
 import { PolicyBindingIndexObject } from '../authority.ts';
 import { resolveOwnedHttpAuthentication, evictCredentialGeneration, queueOwnedHttpSelectionRuntime } from '../credential-preflight.ts';
-import { beginOwnedHttpRequest, finishOwnedHttpRequest } from '../http-identity-owner.ts';
+import { beginOwnedHttpRequest, finishOwnedHttpRequest, ownedHttpCompletion } from '../http-identity-owner.ts';
 import { selectOwnedHttpProvider, snapshot } from '../providers.ts';
 import { bodyBudgetCharged } from '../body-budget.ts';
 import { isIdentityFailure } from '../identity-admission.ts';
@@ -30,6 +30,10 @@ async function fixture(t, run) {
     origins.set(promise, root); roots.push(root); return root;
   };
   const take = async root => { const result = await root.outcome; root.taken = true; if (result.failed) throw result.error; return result.value; };
+  const finish = cap => {
+    const item = requests.find(item => item.cap === cap); assert.ok(item);
+    return item.retirement ??= own(finishOwnedHttpRequest(cap));
+  };
   const env = { CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS: '60', POLICY_KV: { async get(name, type) {
     trace.kv.push([name, type]);
     if (kvOverride) { const override = kvOverride(name, type); if (override !== undefined) return override; }
@@ -55,7 +59,7 @@ async function fixture(t, run) {
     const failures = [];
     for (const release of releases) try { release(); } catch (error) { failures.push(error); }
     for (let i = 0; i < roots.length; i++) await roots[i].outcome;
-    for (const item of requests) try { await take(own(finishOwnedHttpRequest(item.cap))); } catch (error) { failures.push(error); }
+    for (const item of requests) try { await take(finish(item.cap)); } catch (error) { failures.push(error); }
     for (let i = 0; i < roots.length; i++) await roots[i].outcome;
     for (const root of roots) { const result = await root.outcome; if (result.failed && !root.taken) { root.taken = true; failures.push(result.error); } }
     try { evictCredentialGeneration(env, kid); } catch (error) { failures.push(error); }
@@ -72,7 +76,7 @@ async function fixture(t, run) {
     return { request, cap, required };
   };
   const count = () => [...sql.exec('SELECT COALESCE(SUM(selected_count),0) AS n FROM upstream_grant_selection')][0].n;
-  try { await run({ env, owner, sql, stored, trace, open, count, own, take, releases,
+  try { await run({ env, owner, sql, stored, trace, open, count, own, take, finish, releases,
     overrideKv(value) { kvOverride = value; }, selectionReply(value) { selectionReply = value; } }); }
   catch (error) { hasPrimary = true; primary = error; }
   const failures = await cleanup(); finished = true;
@@ -204,6 +208,25 @@ test('legacy observations use the acquired grant revision across live owners wit
     const rotated = await f.take(f.own(selectOwnedHttpProvider(b.cap, b.request, f.env, b.required)));
     assert.equal(rotated.matchesKey(key), true, 'old observation does not bind a new actual grant revision');
     assert.equal(f.count(), 2);
+  });
+});
+
+test('HTTP feedback stays funded until its original delivery roots settle, then drains one own cohort', async t => {
+  await fixture(t, async f => {
+    const revision = '2026-01-01T00:00:00.000Z'; f.stored.set(key, { ...f.stored.get(key), updatedAt: revision });
+    const current = await f.open();
+    const picked = await f.take(f.own(selectOwnedHttpProvider(current.cap, current.request, f.env, current.required)));
+    const released = deferred(); f.releases.push(released.resolve);
+    const original = f.own(ownedHttpCompletion(current.cap).start(() => released.promise));
+    queueOwnedHttpSelectionRuntime(current.cap, current.request, f.env, picked, {
+      grantRevision: revision, updatedAt: new Date().toISOString(), cooldownUntil: new Date(Date.now() + 60000).toISOString(),
+    });
+    assert.equal(f.trace.rpc.includes('/grant-pools/feedback'), false, 'no deep flush planner overlaps live HTTP roots');
+    const terminal = f.finish(current.cap);
+    assert.equal(f.trace.rpc.includes('/grant-pools/feedback'), false); assert.ok(bodyBudgetCharged() > 0);
+    released.resolve(); await f.take(original); await f.take(terminal);
+    assert.equal(f.trace.rpc.filter(path => path === '/grant-pools/feedback').length, 1);
+    assert.equal(f.count(), 1); assert.equal(f.trace.rpc.includes('/grant-pools/record'), false);
   });
 });
 

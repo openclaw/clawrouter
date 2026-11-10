@@ -1,7 +1,8 @@
 import { ProxyCompletion } from "./proxy-completion.ts";
 import { isIdentityFailure, identityFailure } from "./identity-admission.ts";
 import { beginOwnedHttpUpload, checkOwnedHttpRequest, checkOwnedHttpUpload, abandonOwnedHttpUpload, growOwnedHttpRequest,
-  ownedHttpCompletion, holdOwnedHttpRequest, dispatchOwnedHttpUpload, type OwnedHttpRequest, type OwnedHttpUpload } from "./http-identity-owner.ts";
+  ownedHttpCompletion, holdOwnedHttpRequest, dispatchOwnedHttpUpload, ownOwnedHttpResponse,
+  type OwnedHttpRequest, type OwnedHttpUpload } from "./http-identity-owner.ts";
 import { providerConfigurationList } from "./provider-connections.ts";
 import { ownsOwnedHttpSelectionPermit, prepareOwnedHttpProvider } from "./providers.ts";
 import { createJsonBodyParser, JsonBodyStructureLimit } from "./json-body.ts";
@@ -62,7 +63,7 @@ import { guardAnthropicPrice, type AnthropicPriceGuard } from "./anthropic-price
 import { assertInputTokensRequest } from "./responses-input-tokens.ts";
 import { softBudget, prepareSoftBudget, startSoftBudget, softBudgetPolicy, softBudgetPreflight } from "./soft-budget.ts";
 import { prepareUpstreamRequest, prepareOwnedUpstreamRequest } from "./proxy-upstream-request.ts";
-import { BodyLease, bodyLeaseMinimum } from "./body-budget.ts";
+import { BodyLease, ExactBodyCharge, bodyLeaseMinimum } from "./body-budget.ts";
 import { WanManagedOperation, readWanJson, wanRequestBytes, preflightWanJson, assertWanHeaders } from "./managed-media-json.ts";
 import { hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
 import { inheritLocalError } from "./native-errors.ts";
@@ -232,6 +233,8 @@ class JsonAdmission implements JsonIntake {
   private intakeStartedAt = 0;
   private intakeBytes = 0;
   private ownedInputBytes = 0;
+  private ownedBodyCharge = 0;
+  private ownedDataCharge?: ExactBodyCharge;
   private readonly request: Request;
   private readonly env: Env;
   private readonly mode: AuthMode;
@@ -245,16 +248,34 @@ class JsonAdmission implements JsonIntake {
   }
   retireOwned(): void {
     this.checkOwnedRetirement();
-    this.lease.release();
+    const failures: unknown[] = [];
+    try { this.ownedDataCharge?.release(); this.ownedDataCharge = undefined; } catch (error) { failures.push(error); }
+    try { this.lease.release(); this.ownedBodyCharge = 0; } catch (error) { failures.push(error); }
+    if (failures.length) throw new AggregateError(failures, "owned HTTP body funding retirement");
   }
   noteOwnedInputBytes(bytes: number): void {
     if (!this.owned || !Number.isSafeInteger(bytes) || bytes < this.ownedInputBytes) throw identityFailure("protocol");
     this.ownedInputBytes = bytes;
   }
   get ownedWireBytes(): number { return this.ownedInputBytes; }
+  admitOwnedData(bytes: number, cleared = false): void {
+    if (!this.owned || !Number.isSafeInteger(bytes) || bytes < 0) throw identityFailure("protocol");
+    // One body component: existing positive BodyLease credit is counted ONCE.
+    // Supplement with exact COMMON credit; never convert source counters into
+    // funding. Only an explicit alias-clear boundary may shrink this supplement.
+    const extra = Math.max(0, bytes - this.ownedBodyCharge), held = this.ownedDataCharge?.bytes ?? 0;
+    if (extra === held || extra < held && !cleared) return;
+    if (!extra) { this.ownedDataCharge?.release(); this.ownedDataCharge = undefined; return; }
+    const next = this.ownedDataCharge ? this.ownedDataCharge.replace(extra) : ExactBodyCharge.reserve(extra);
+    if (!next) throw identityFailure("limit");
+    this.ownedDataCharge = next;
+  }
   reserve = async (bytes: number): Promise<void> => {
     if (bytes >= bodyLeaseMinimum) await this.authenticate();
-    if (this.lease.grow(bytes)) return;
+    if (this.lease.grow(bytes)) {
+      if (this.owned && bytes >= bodyLeaseMinimum) this.ownedBodyCharge = Math.max(this.ownedBodyCharge, 2 * bytes);
+      return;
+    }
     throw this.providerId === "anthropic"
       ? json({ type: "error", error: { type: "overloaded_error", message: "Large request capacity is busy; retry shortly." } }, 503, { "retry-after": "1" })
       : errorResponse("server_overloaded", "Large request capacity is busy; retry shortly.", 503, undefined, { "retry-after": "1" });
@@ -397,6 +418,34 @@ interface ReservedProxyBudget {
   finishUnclaimed(): Promise<void>;
 }
 
+// Prospective DATA only. Native JSON.parse remains the grammar/last-wins owner.
+// For valid JSON, commas + nonempty containers = members + array entries.
+// Count every source occurrence (including overwritten members), without a
+// visitor stack, key array, substring, decoded-string copy or graph factory.
+function ownedHttpJsonDataBytes(text: string): number {
+  let containers = 0, members = 0, commas = 0, nonempty = 0, primitives = 0, units = 0;
+  let string = false, scalar = false, previous = 0;
+  for (let index = 0; index < text.length; index++) {
+    const code = text.charCodeAt(index);
+    if (string) {
+      if (code === 34) string = false;
+      else { units++; if (code === 92) { index++; if (text.charCodeAt(index) === 117) index += 4; } }
+      continue;
+    }
+    if (code === 32 || code === 9 || code === 10 || code === 13) { scalar = false; continue; }
+    if (previous === 123 && code !== 125 || previous === 91 && code !== 93) nonempty++;
+    if (code === 34) { string = true; scalar = false; }
+    else if (code === 123 || code === 91) { containers++; scalar = false; }
+    else if (code === 58) { members++; scalar = false; }
+    else if (code === 44) { commas++; scalar = false; }
+    else if (code === 125 || code === 93) scalar = false;
+    else if (!scalar) { primitives++; scalar = true; }
+    previous = code;
+  }
+  const entries = Math.max(0, commas + nonempty - members);
+  return 8 * (containers + 2 * members + entries + primitives) + 2 * units;
+}
+
 // Same public JSON grammar/thresholds as readJson, with explicit ORIGINAL
 // request read/FIRSTcancel/unlock ownership instead of fire-and-forget cleanup.
 async function readOwnedHttpJson(cap: OwnedHttpRequest, request: Request, admission: JsonAdmission): Promise<unknown> {
@@ -410,7 +459,11 @@ async function readOwnedHttpJson(cap: OwnedHttpRequest, request: Request, admiss
     let firstCancel: Promise<void> | undefined, cancelOutcome: Promise<{ failed: boolean; error?: unknown }> | undefined;
     let cancelStarted = false, eof = false, hasPrimary = false, primary: unknown, publicFailure: unknown;
     let prefix: Array<Uint8Array | undefined> = [], parser: ReturnType<typeof createJsonBodyParser> | undefined;
-    let decoder: TextDecoder | undefined, parsed: unknown, size = 0;
+    let backings: Set<ArrayBufferLike> | undefined = new Set();
+    let decoder: TextDecoder | undefined, parsed: unknown, size = 0, backingBytes = 0;
+    // Existing expanded-parser bound, including its current scalar before
+    // concatenation. It is a component of the SAME body debit, not a new cap.
+    const parserData = () => 8 * 3 * 65536 + 4 * size + 131072;
     const cancel = () => {
       if (cancelStarted || eof) return;
       cancelStarted = true;
@@ -436,25 +489,40 @@ async function readOwnedHttpJson(cap: OwnedHttpRequest, request: Request, admiss
         size += item.value.byteLength;
         if (size > maxMediaJsonBodyBytes) throw tooLarge();
         admission.noteOwnedInputBytes(size);
+        const nextBacking = parser || !backings!.has(item.value.buffer) ? item.value.buffer.byteLength : 0;
+        await admission.reserve(Math.max(size, parser ? nextBacking : backingBytes + nextBacking));
         if (!parser && size > maxJsonBodyBytes) {
-          await admission.expand(); parser = createJsonBodyParser();
+          await admission.expand();
+          admission.admitOwnedData(backingBytes + nextBacking + parserData());
+          parser = createJsonBodyParser();
           for (let index = 0; index < prefix.length; index++) { feed(prefix[index]!); prefix[index] = undefined; }
-          prefix.length = 0;
+          prefix.length = 0; backings!.clear(); backings = undefined; backingBytes = 0;
         }
-        await admission.reserve(Math.max(size, item.value.buffer.byteLength));
-        if (parser) feed(item.value);
-        else { growOwnedHttpRequest(cap, 32); prefix.push(item.value); }
+        if (parser) {
+          admission.admitOwnedData(item.value.buffer.byteLength + parserData(), true);
+          feed(item.value);
+        } else {
+          admission.admitOwnedData(backingBytes + nextBacking + 4 * size);
+          growOwnedHttpRequest(cap, 40); // view, prefix cell and distinct-backing index cell
+          if (nextBacking) { backings!.add(item.value.buffer); backingBytes += nextBacking; }
+          prefix.push(item.value);
+        }
       }
       if (parser) { parser.push(decoder.decode()); parsed = parser.take(); }
       else {
         let text = "";
         for (let index = 0; index < prefix.length; index++) { text += decoder.decode(prefix[index], { stream: true }); prefix[index] = undefined; }
-        parsed = JSON.parse(text + decoder.decode()); text = "";
+        text += decoder.decode();
+        prefix.length = 0; backings!.clear(); backings = undefined; backingBytes = 0;
+        const graph = ownedHttpJsonDataBytes(text);
+        admission.admitOwnedData(2 * text.length + graph, true);
+        parsed = JSON.parse(text); text = "";
+        admission.admitOwnedData(graph, true);
       }
     } catch (error) {
       hasPrimary = true; primary = error;
       publicFailure = error instanceof JsonBodyStructureLimit ? new HttpError(413, "request_too_large", "JSON request exceeds Worker structure limits (65536 values, 128 nesting levels, 4096-character keys/numbers)")
-        : error instanceof HttpError || error instanceof Response ? error : new HttpError(400, "invalid_json", "request body must be valid JSON");
+        : isIdentityFailure(error) || error instanceof HttpError || error instanceof Response ? error : new HttpError(400, "invalid_json", "request body must be valid JSON");
       cancel();
     }
     const failures: unknown[] = [];
@@ -464,7 +532,7 @@ async function readOwnedHttpJson(cap: OwnedHttpRequest, request: Request, admiss
     try { request.signal.removeEventListener("abort", cancel); } catch (error) { failures.push(error); }
     try { reader?.releaseLock(); } catch (error) { failures.push(error); }
     if (body.locked) { holdOwnedHttpRequest(cap); failures.push(identityFailure("cleanup")); }
-    originalRead = undefined; firstCancel = undefined; cancelOutcome = undefined; reader = undefined; decoder = undefined; parser = undefined; prefix.length = 0;
+    originalRead = undefined; firstCancel = undefined; cancelOutcome = undefined; reader = undefined; decoder = undefined; parser?.discard(); parser = undefined; prefix.length = 0; backings?.clear(); backings = undefined;
     if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "owned HTTP intake cleanup");
     if (hasPrimary) throw publicFailure;
     return parsed;
@@ -1032,7 +1100,8 @@ async function proxyMiniMaxSearch(request: Request, env: Env, context: Execution
 
 // Normalization may replay a body or detach its reader cancellation. Keep an
 // independent receipt for the ORIGINAL source before giving it to those wrappers.
-function ownOrdinaryResponse(response: Response, completion: ProxyCompletion): Response {
+function ownOrdinaryResponse(response: Response, completion: ProxyCompletion, owned?: OwnedHttpRequest): Response {
+  if (owned) return ownOwnedHttpResponse(owned, response);
   if (!response.body) return response;
   let forwarded!: Response;
   completion.start(source => {
@@ -1492,7 +1561,7 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       ? selection.body.some(({ query }) => !!query && typeof query === "object" && "stream" in query && query.stream === true)
       : selection.body.stream === true;
     const errorFormat = selection.endpoint.request_format.startsWith("anthropic.") ? "anthropic" : selection.endpoint.request_format.startsWith("openai.") ? "openai" : undefined;
-    if (completion) response = ownOrdinaryResponse(response, completion);
+    if (completion) response = ownOrdinaryResponse(response, completion, owned);
     response = await normalizePreStreamError(response, !cost.requestTariff && streaming && !["audio.binary", "ollama.chat", "radius.messages"].includes(selection.endpoint.response_format), operation, errorFormat ? { format: errorFormat, requestId } : undefined);
     // Price inspection reads delivery bytes, not initial-response headers.
     // Search retains its original deadline through delivery; other native paths
