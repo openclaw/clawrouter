@@ -9,7 +9,7 @@ full admission retains its current lifecycle, rotation and authority checks.
 
 The local candidate is code-only. Authored Node and actual Workerd witnesses
 are unrun locally. In particular, the runtime normalization assumptions and
-factory inventory require qualification before publication/landing. Neither
+factory inventory require source closure before draft publication; hosted runtime qualification follows publication and is required before landing. Neither
 Node's minimum version nor source review proves those runtime properties.
 
 ## Closed private protocol
