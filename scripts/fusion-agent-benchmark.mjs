@@ -160,13 +160,14 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
   let planUsed = false, reviewUsed = false, handoffUsed = false;
   let handoffReady = false;
   let handoffProbe = '';
+  let handoffProbeUsed = false;
   let outcome = 'turn_limit', escalated = false, forceEscalation = false, turns = 0, invalidActions = 0, toolMs = 0, publicPassed = false, adviserFailures = 0, truncationRetries = 0;
   const remaining = () => Math.max(1, config.deadlineMs - Math.ceil(performance.now() - started));
   const handoff = async () => {
     const files = await readSource(box, task.editPaths, remaining());
     messages.splice(2, messages.length - 2, { role: 'user', content:
       `You are taking over an attempted repair. Independently inspect and test the current source against the task. Do not trust the predecessor's conclusion; preserve correct changes and repair remaining defects.\nPrevious notes (unverified):\n${memory}${handoffProbe}\nCurrent source:\n${JSON.stringify(files)}` });
-    memory = ''; handoffUsed = true;
+    memory = ''; handoffUsed = true; handoffProbeUsed = Boolean(handoffProbe);
     actions.push({ turn: turns + 1, action: 'handoff', status: 'ok' });
   };
   try {
@@ -301,7 +302,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
       if (strategy === 'cascade' && !escalated && publicPassed && turns === 1) { outcome = 'public_test_accept'; turns++; break; }
     }
     const files = await readSource(box, task.editPaths);
-    return { files, actions, selectedCandidate, candidatesCompared, planUsed, reviewUsed, handoffUsed, patchDigest: hash(JSON.stringify(files)), outcome, escalated, turns, invalidActions, adviserFailures,
+    return { files, actions, selectedCandidate, candidatesCompared, planUsed, reviewUsed, handoffUsed, handoffProbeUsed, patchDigest: hash(JSON.stringify(files)), outcome, escalated, turns, invalidActions, adviserFailures,
       publicPassed, truncationRetries, toolMs: Math.round(toolMs), agentMs: Math.round(performance.now() - started) };
   } finally { await box.close(); }
 }

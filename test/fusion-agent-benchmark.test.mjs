@@ -119,6 +119,7 @@ for (const oversized of [false, true]) test(`edit handoff carries only the lates
     }, undefined, { handoffAfterEdit: true });
   assert.deepEqual(roles, ['openai/gpt-6.1-sol', 'openai/gpt-6.1-sol', 'openai/gpt-6.1-sol', 'anthropic/claude-sonnet-5.5']);
   assert.equal(result.outcome, 'submitted');
+  assert.equal(result.handoffProbeUsed, !oversized);
   assert.equal(JSON.stringify(result).includes('probe-sentinel'), false);
 });
 
