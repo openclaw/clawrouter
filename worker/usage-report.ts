@@ -132,11 +132,11 @@ interface VerifiedUsageCaller { session: AccessSession; actor: string; sessionBi
 type UsageVerifier = () => Promise<VerifiedUsageCaller | null>;
 interface CompleteRead {
   kind: 'report' | 'events' | 'validate' | 'release'; query: CompleteUsageQuery;
-  intent?: 'summary' | 'browse' | 'export'; cut?: string; cursor?: string; pageSize?: number;
+  intent?: 'summary' | 'browse' | 'export'; requestedFrom?: number; cut?: string; cursor?: string; pageSize?: number;
 }
 interface PrivateBinding { actor: string; session: string; authority: string }
 interface PrivateVector extends Policy { cut: UsageVisibilityCut }
-interface PrivateCapture { vector: PrivateVector[]; effectiveFrom: number; capturedBetween: { from: number; to: number } }
+interface PrivateCapture { requestedFrom?: number; vector: PrivateVector[]; effectiveFrom: number; capturedBetween: { from: number; to: number } }
 interface InventoryEvidence { revision: string; captureAudit: UsageCoverage['captureAudit']; addresses?: Policy[] }
 interface ResolvedUsage { binding: PrivateBinding; addresses: Policy[]; inventory: InventoryEvidence; personal: boolean; owner?: string }
 type Failure = Exclude<CompleteUsageOutcome<never>,{kind:'complete'}>;
@@ -237,10 +237,11 @@ async function finalValidation(env:Env,verify:UsageVerifier,op:CompleteOperation
   if(stable(current.binding)!==stable(resolved.binding))failComplete('restart','authority');
 }
 function coverageFor(r:ResolvedUsage,c:PrivateCapture,base:CompleteUsageQuery):UsageCoverage{
+  const requestedFrom=c.requestedFrom??base.from;
   return {authority:r.personal?'current_access':'admin_retained',scope:r.personal?'personal_current_access':'admin_current_plus_tracked_retired',
     discoveredScopeEnumeration:'complete',allDiscoveredSourcesAnswered:true,retainedAttributionComplete:true,
     historicalLocations:'not_exhaustively_assessed',formerLocationLateWrites:'not_bounded',captureAudit:r.inventory.captureAudit,
-    effectiveFrom:c.effectiveFrom,clippedFrom:c.effectiveFrom>base.from?base.from:null,capturedBetween:c.capturedBetween};
+    effectiveFrom:c.effectiveFrom,clippedFrom:c.effectiveFrom>requestedFrom?requestedFrom:null,capturedBetween:c.capturedBetween};
 }
 async function completeGroups(env:Env,op:CompleteOperation,capture:PrivateCapture,query:CompleteUsageQuery,sizes:UsageCandidateSize[]):Promise<Omit<CompleteUsageReport,'cut'|'coverage'>>{
   checkSize(sizes);const total=emptyAdditives(),groups=new Map<string,CompleteUsageGroup>();let groupBytes=0;
@@ -281,7 +282,10 @@ export async function readCompleteUsage(env:Env,verify:UsageVerifier,input:Compl
   const op=new CompleteOperation(signal);let operation:string|undefined,binding:PrivateBinding|undefined,published=false;
   try{
     validateCompleteUsageQuery(input.query);
-    if(Object.keys(input).some(k=>!['kind','query','intent','cut','cursor','pageSize'].includes(k))||!['report','events','validate','release'].includes(input.kind))invalid('invalid complete read');
+    if(Object.keys(input).some(k=>!['kind','query','intent','cut','cursor','pageSize','requestedFrom'].includes(k))||!['report','events','validate','release'].includes(input.kind))invalid('invalid complete read');
+    // HTTP-only provenance for the discarded, already-outside-retention DST
+    // prefix. It never authorizes reads; all actual queries remain <= 30*24h.
+    if(input.requestedFrom!==undefined&&(!Number.isSafeInteger(input.requestedFrom)||input.requestedFrom<0||input.kind!=='report'||input.cut||input.query.from!==input.query.to-30*86400000||input.requestedFrom>=input.query.from||input.query.to-input.requestedFrom>31*86400000))invalid('invalid requested range provenance');
     const intent=input.intent??'summary';
     for(const handle of [input.cut,input.cursor])if(handle!==undefined&&(typeof handle!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(handle)))invalid('invalid opaque capability');
     if(!['summary','browse','export'].includes(intent)||input.kind==='report'&&(intent==='summary'&&(input.cut!==undefined||input.cursor!==undefined)||intent==='export'&&input.cut!==undefined||input.cursor!==undefined)
@@ -303,7 +307,7 @@ export async function readCompleteUsage(env:Env,verify:UsageVerifier,input:Compl
       const from=Date.now();
       const cuts=await op.map(resolved.addresses,p=>shardCall<{cut:UsageVisibilityCut;work:UsageCandidateSize}>(env,op,p,{action:'capture',query}));
       sizes=cuts.map(c=>c.work);checkSize(sizes);
-      capture={vector:resolved.addresses.map((p,i)=>({...p,cut:cuts[i].cut})),effectiveFrom:Math.max(query.from,...cuts.map(c=>c.cut.floor)),capturedBetween:{from,to:Math.max(from,Date.now())}};
+      capture={...(input.requestedFrom!==undefined?{requestedFrom:input.requestedFrom}:{}),vector:resolved.addresses.map((p,i)=>({...p,cut:cuts[i].cut})),effectiveFrom:Math.max(query.from,...cuts.map(c=>c.cut.floor)),capturedBetween:{from,to:Math.max(from,Date.now())}};
       if(capture.effectiveFrom>=query.to)return {kind:'outside_retained_range',effectiveFrom:capture.effectiveFrom,requestedTo:query.to};
       query={...query,from:capture.effectiveFrom};
     }

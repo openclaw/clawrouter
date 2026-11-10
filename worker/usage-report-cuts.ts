@@ -16,7 +16,7 @@ interface VectorEntry {tenantId:string;policyId:string;cut:UsageVisibilityCut}
 // transactions (no await), and validate the WHOLE vector including projection
 // qualification and current authority before finalize/publication. This registry
 // validates metadata, never substitutes for source or attribution validation.
-interface Capture {vector:VectorEntry[];effectiveFrom:number;capturedBetween:{from:number;to:number}}
+interface Capture {requestedFrom?:number;vector:VectorEntry[];effectiveFrom:number;capturedBetween:{from:number;to:number}}
 interface CursorPosition {at:number;id:string;shard:number;query:Query;pageSize:number}
 interface Root {
  operation:string;handle:string;binding:Binding;purpose:'browse'|'export';base:Query;
@@ -54,8 +54,10 @@ function subset(base:Query,next:Query,effectiveFrom=base.from):void {
  for(const key of Object.keys(base.filters) as Array<keyof Query['filters']>)if(!equal(base.filters[key],next.filters[key]))fail('restart');
 }
 function capture(value:unknown,base:Query):asserts value is Capture {
- const c=object(value,['vector','effectiveFrom','capturedBetween']);number(c.effectiveFrom);
+ const c=object(value,['vector','effectiveFrom','capturedBetween','requestedFrom']);number(c.effectiveFrom);
  if(c.effectiveFrom<base.from)fail('invalid');
+ // Optional disclosure only: retained/cursor predicates always use bounded base.
+ if(c.requestedFrom!==undefined){number(c.requestedFrom);if(base.from!==base.to-30*86400000||c.requestedFrom>=base.from||base.to-c.requestedFrom>31*86400000)fail('invalid')}
  const interval=object(c.capturedBetween,['from','to']);number(interval.from);number(interval.to);if(interval.from>interval.to)fail('invalid');
  if(!Array.isArray(c.vector)||c.vector.length>64)fail('capacity');const seen=new Set<string>();
  for(const item of c.vector){const v=object(item,['tenantId','policyId','cut']);str(v.tenantId,2048);str(v.policyId,2048);if(new TextEncoder().encode(v.tenantId+v.policyId).length>2048)fail('capacity');

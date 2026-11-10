@@ -1,6 +1,6 @@
 import { authorizeAdmin, verifiedAccessSession, verifiedUsageBinding } from "./access.ts";
 import { readCompleteUsage } from "./usage-report.ts";
-import { parseUsageReportRange, usageDateTools } from "./usage-report-range.ts";
+import { parseUsageReportRange, usageDateTools, reportRetentionMs } from "./usage-report-range.ts";
 import { sameOrigin } from "./request-origin.ts";
 import { privateJson, errorResponse, HttpError } from "./utils.ts";
 import type { AccessSession, Env } from "./types.ts";
@@ -24,9 +24,14 @@ export function parseCompleteUsageRequest(request: Request, kind: Kind, audience
   if (audience === 'personal' && (params.has('user') || params.get('groupBy') === 'user')) invalid('personal owner is fixed');
   const range = parseUsageReportRange(params, now);
   const rawFrom = params.get('from');
-  const from = rawFrom ? (/^\d{4}-\d{2}-\d{2}$/.test(rawFrom) ? usageDateTools(range.timezone).midnight(rawFrom) : Date.parse(rawFrom)) : range.to - Number(params.get('days') ?? 7) * 86400000;
+  const requestedFrom = rawFrom ? (/^\d{4}-\d{2}-\d{2}$/.test(rawFrom) ? usageDateTools(range.timezone).midnight(rawFrom) : Date.parse(rawFrom)) : range.to - Number(params.get('days') ?? 7) * 86400000;
   const groupBy = params.get('groupBy') ?? (audience === 'admin' ? 'user' : 'model'), grain = params.get('grain') ?? 'day', rankBy = params.get('rankBy') ?? 'calls';
-  if (!['user','model','provider','key'].includes(groupBy) || !['day','minute'].includes(grain) || !['calls','tokens','recordedAmount'].includes(rankBy) || grain === 'minute' && range.to-from > 86400000 || range.to-from > 30*86400000) invalid('invalid grouping, rank or range');
+  if (!['user','model','provider','key'].includes(groupBy) || !['day','minute'].includes(grain) || !['calls','tokens','recordedAmount'].includes(rankBy) || grain === 'minute' && range.to-requestedFrom > 86400000) invalid('invalid grouping, rank or range');
+  // The range parser already enforced calendar-vs-instant syntax and duration.
+  // An autumn 30-calendar-day request may exceed 720h, but its excess is
+  // necessarily outside retention (to <= now). Never widen private query bounds.
+  const from = Math.max(requestedFrom, range.to-reportRetentionMs);
+  if (from !== requestedFrom && (kind !== 'report' || cut)) invalid('continuations require effective bounds');
   const rankOffset = Number(params.get('rankOffset') ?? 0), pageSize = Number(params.get('limit') ?? 25);
   if (!Number.isSafeInteger(rankOffset) || rankOffset < 0 || rankOffset > 32768 || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) invalid('invalid page bounds');
   const filters: CompleteUsageQuery['filters'] = {};
@@ -36,7 +41,7 @@ export function parseCompleteUsageRequest(request: Request, kind: Kind, audience
   else if (params.has('key')) { if (params.has('keyKind') && params.get('keyKind') !== 'credential') invalid('invalid key kind'); filters.key = {kind:'credential',id:params.get('key')!}; }
   else if (params.has('keyKind')) invalid('credential id required');
   const query: CompleteUsageQuery = {from,to:range.to,timezone:range.timezone,grain:grain as CompleteUsageQuery['grain'],groupBy:groupBy as CompleteUsageQuery['groupBy'],rankBy:rankBy as CompleteUsageQuery['rankBy'],rankOffset,filters};
-  return {kind,query,...(kind === 'report' ? {intent:intent as 'summary'|'browse'|'export'} : {}),...(cut ? {cut} : {}),...(cursor ? {cursor} : {}),...(kind === 'events' ? {pageSize} : {})};
+  return {kind,query,...(from !== requestedFrom ? {requestedFrom} : {}),...(kind === 'report' ? {intent:intent as 'summary'|'browse'|'export'} : {}),...(cut ? {cut} : {}),...(cursor ? {cursor} : {}),...(kind === 'events' ? {pageSize} : {})};
 }
 function outcomeResponse(outcome: CompleteUsageOutcome<unknown>): Response {
   if (outcome.kind === 'complete' || outcome.kind === 'no_access' || outcome.kind === 'outside_retained_range') return privateJson(outcome);

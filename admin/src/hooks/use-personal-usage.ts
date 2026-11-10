@@ -4,14 +4,14 @@ import type { ConsoleRequest } from '../dashboard-fetch';
 import type { CapturedSessionScope } from '../session-scope';
 import { emptyFilters, type PersonalUsageQuery } from '../personal-usage';
 import { parseUsageRangeInput, type UsageRangeInput } from '../usage-range';
-import { completeQueryString, completeValue, downloadUsageFile, exportRefreshedUsage, releaseUsage, usageEndpoint, type UsageAudience } from '../complete-usage';
+import { completeQueryString, completeValue, downloadUsageFile, exportRefreshedUsage, releaseUsage, usageEndpoint, usageQueryTemplate, type UsageQueryTemplate, type UsageAudience } from '../complete-usage';
 import type { PersonalUsageView } from '../personal-usage-view';
 function rangeControls(query:Pick<CompleteUsageQuery,'from'|'to'|'timezone'>):UsageRangeInput{return {from:new Date(query.from).toISOString(),to:new Date(query.to).toISOString(),timezone:query.timezone};}
 interface ReadState<T> { key:string; value?:T; loading:boolean; error:string; state?:string }
 export interface UsageHookOptions {request:ConsoleRequest;scope:CapturedSessionScope;active:boolean;full:boolean}
 /** Shared computation, instance-owned caches. Admin and personal never share roots/data. */
 export function useUsageReport({request,scope,active,full}:UsageHookOptions,audience:UsageAudience) {
-  const [selection,setSelection]=useState<{query?:CompleteUsageQuery;days:7|30;cut?:string;presetQuery?:CompleteUsageQuery;rangeInput?:UsageRangeInput}>({days:7});
+  const [selection,setSelection]=useState<{query?:CompleteUsageQuery;days:7|30;cut?:string;presetQuery?:UsageQueryTemplate;rangeInput?:UsageRangeInput}>({days:7});
   const [rangeError,setRangeError]=useState('');
   const [revision,setRevision]=useState(0),[eventsRevision,setEventsRevision]=useState(0),[eventsShown,showEvents]=useState(false);
   const [report,setReport]=useState<ReadState<CompleteUsageReport>>({key:'',loading:false,error:''});
@@ -21,8 +21,8 @@ export function useUsageReport({request,scope,active,full}:UsageHookOptions,audi
   const lifetime=useRef(0),lastReport=useRef<CompleteUsageReport|undefined>(undefined),baseInput=useRef<UsageRangeInput|undefined>(undefined);
   const roots=useRef(new Set<string>()),cache=useRef(new Map<string,CompleteUsageReport>()),pages=useRef(new Map<string,CompleteUsageEvents>()),exportController=useRef<AbortController|null>(null),base=useRef<CompleteUsageQuery|null>(null);
   const scopeKey=JSON.stringify([audience,scope.origin,scope.epoch,scope.session.auth,scope.session.role,scope.session.email,scope.session.subject,scope.session.tenantId]);
-  const params=selection.query?completeQueryString(selection.query,audience):new URLSearchParams({days:String(selection.days),groupBy:audience==='admin'?'user':'model'});
-  if(!selection.query&&selection.presetQuery){const exact=completeQueryString(selection.presetQuery,audience);for(const [key,value]of exact)if(key!=='from'&&key!=='to')params.set(key,value);}
+  const params=selection.query?completeQueryString(selection.query,audience,selection.cut?undefined:selection.rangeInput):new URLSearchParams({days:String(selection.days),groupBy:audience==='admin'?'user':'model'});
+  if(!selection.query&&selection.presetQuery){const exact=completeQueryString({...selection.presetQuery,from:0,to:0},audience);for(const [key,value]of exact)if(key!=='from'&&key!=='to')params.set(key,value);}
   params.set('intent',full?'browse':'summary');if(full&&selection.cut)params.set('cut',selection.cut);
   const queryKey=scopeKey+':'+params.toString()+':'+revision,endpoint=usageEndpoint(audience);
   const visible=rangeError?{key:queryKey,loading:false,error:rangeError,state:'invalid_range'}:report.key===queryKey&&scope.isCurrent()?report:{key:queryKey,loading:active,error:''};
@@ -73,9 +73,9 @@ export function useUsageReport({request,scope,active,full}:UsageHookOptions,audi
     setPage({cursor:null,previous:[],number:1});setSelection(s=>({...s,query:widened?{...query,...parseUsageRangeInput(input)}:query,rangeInput:input,cut:widened?undefined:visible.value!.cut!}));
   }
   function newRange(query:CompleteUsageQuery,rangeInput?:UsageRangeInput){setRangeError('');cache.current.clear();setSelection(s=>({...s,query,rangeInput,cut:undefined}));setRevision(r=>r+1);}
-  function customRange(query:CompleteUsageQuery,input:UsageRangeInput,openNew=false){
+  function customRange(query:UsageQueryTemplate,input:UsageRangeInput,openNew=false){
     let range:{from:number;to:number};
-    try{range=parseUsageRangeInput(input);}catch(error){setSelection(s=>({...s,query,rangeInput:input}));setRangeError(error instanceof Error?error.message:String(error));exportController.current?.abort();return;}
+    try{range=parseUsageRangeInput(input);}catch(error){setSelection(s=>({...s,query:undefined,presetQuery:query,rangeInput:input}));setRangeError(error instanceof Error?error.message:String(error));exportController.current?.abort();return;}
     const unchanged=selection.rangeInput&&input.from===selection.rangeInput.from&&input.to===selection.rangeInput.to&&input.timezone===selection.rangeInput.timezone;
     // Controls retain requested bounds; same-cut reads continue at the returned
     // effective bounds, even when the base was partially clipped by retention.
@@ -92,15 +92,15 @@ export function useUsageReport({request,scope,active,full}:UsageHookOptions,audi
   const shownExport:typeof exportState=active&&scope.isCurrent()&&exportState.key===scopeKey?exportState:{key:scopeKey,busy:false,message:''};
   async function startExport(format:'csv'|'json'){
     if(!visible.value||!selectedQuery||visible.error||exportController.current)return;const controller=new AbortController(),generation=lifetime.current;const current=()=>generation===lifetime.current&&scope.isCurrent();exportController.current=controller;setExportState({key:scopeKey,busy:true,message:'Capturing refreshed snapshot…'});
-    try{const file=await exportRefreshedUsage({request,origin:scope.origin,audience,query:selectedQuery,signal:controller.signal,isCurrent:current,onReport:value=>{if(current()&&!controller.signal.aborted)setExportState({key:scopeKey,busy:true,message:'Reconciling refreshed snapshot; totals may differ from the displayed report.',report:value});}},format);
+    try{const file=await exportRefreshedUsage({request,origin:scope.origin,audience,query:selectedQuery,rangeInput:selection.rangeInput,signal:controller.signal,isCurrent:current,onReport:value=>{if(current()&&!controller.signal.aborted)setExportState({key:scopeKey,busy:true,message:'Reconciling refreshed snapshot; totals may differ from the displayed report.',report:value});}},format);
       if(current()&&!controller.signal.aborted){downloadUsageFile(file);setExportState(s=>({...s,busy:false,message:'Refreshed snapshot downloaded.'}));}
     }catch(error){if(current())setExportState(s=>({...s,busy:false,message:error instanceof Error?error.message:String(error)}));}
     finally{if(exportController.current===controller)exportController.current=null;}
   }
-  return {audience,report:visible,events:shownEvents,query:visible.value?.query,requestedQuery:selection.query??selection.presetQuery,rangeInput:selection.rangeInput,selectedQuery,customRange,refine,reload,showEvents,eventsShown,page:page.number,
+  return {audience,report:visible,events:shownEvents,query:visible.value?.query,requestedQuery:selection.query,queryTemplate:selection.presetQuery,rangeInput:selection.rangeInput,selectedQuery,customRange,refine,reload,showEvents,eventsShown,page:page.number,
     retryEvents:()=>{pages.current.delete(eventKey);setEventsRevision(r=>r+1);},
     rollingDays:selection.query?undefined:selection.days,
-    preset:(days:7|30,template?:CompleteUsageQuery)=>{setRangeError('');cache.current.clear();const q=template??visible.value?.query;setSelection({days,presetQuery:q?{...q,grain:'day',rankOffset:0}:undefined});setRevision(r=>r+1);},
+    preset:(days:7|30,template?:UsageQueryTemplate)=>{setRangeError('');cache.current.clear();const q=template??visible.value?.query;setSelection({days,presetQuery:q?{...q,grain:'day',rankOffset:0}:undefined});setRevision(r=>r+1);},
     newRange,
     back:()=>{if(base.current)refine(base.current,baseInput.current);},
     nextPage:()=>{if(shownEvents.value?.nextCursor)setPage(p=>({cursor:shownEvents.value!.nextCursor,previous:[...p.previous,p.cursor].slice(-7),number:p.number+1}));},
@@ -111,14 +111,15 @@ export type CompleteUsageData=ReturnType<typeof useUsageReport>;
 /** Presentation projection only. No additional fetch, authority or aggregate engine. */
 export function usePersonalUsage(options:UsageHookOptions){
   const complete=useUsageReport(options,'personal'),v=complete.report.value,q=v?.query??complete.requestedQuery;
+  const template=useMemo(()=>q??complete.queryTemplate??usageQueryTemplate('personal'),[q,complete.queryTemplate]);
   const report=useMemo<PersonalUsageView|undefined>(()=>v?{range:{from:v.query.from,to:v.query.to,timezone:v.query.timezone,retentionStart:v.coverage.effectiveFrom,clampedStart:v.coverage.clippedFrom!==null,buckets:v.buckets.map(({start,end,label})=>({start,end,label}))},groupBy:v.query.groupBy as PersonalUsageView['groupBy'],metrics:v.metrics,costs:v.costs,groups:v.groups.map(g=>({value:g.identity.value,metrics:g.metrics,costs:g.costs})),buckets:v.buckets,groupsTruncated:v.rank.distinctGroups>v.groups.length,discoveredScopeAnswered:v.coverage.allDiscoveredSourcesAnswered,generatedAt:v.coverage.capturedBetween.to}:undefined,[v]);
-  const query=useMemo<PersonalUsageQuery>(()=>({rollingDays:complete.rollingDays,from:complete.rangeInput?.from??(q?new Date(complete.selectedQuery?.from??q.from).toISOString():''),to:complete.rangeInput?.to??(q?new Date(complete.selectedQuery?.to??q.to).toISOString():''),timezone:complete.rangeInput?.timezone??q?.timezone??'UTC',groupBy:q?.groupBy as PersonalUsageQuery['groupBy']??'model',filters:{...emptyFilters,...Object.fromEntries(Object.entries(q?.filters??{}).filter(([k])=>k!=='user'&&k!=='key')),key:q?.filters.key?.kind==='credential'?q.filters.key.id:''}}),[q,complete.rollingDays,complete.rangeInput,complete.selectedQuery]);
-  function change(next:PersonalUsageQuery,days?:7|30){if(!q){if(days)complete.preset(days);return;}
-    const filters:CompleteUsageQuery['filters']={};for(const k of ['model','provider','status','costClass','lane'] as const)if(next.filters[k])filters[k]=next.filters[k];if(next.filters.key)filters.key={kind:'credential',id:next.filters.key};else if(q.filters.key?.kind==='session')filters.key={kind:'session'};
-    if(days){complete.preset(days,{...q,timezone:next.timezone,groupBy:next.groupBy,filters});return;}
-    complete.customRange({...q,groupBy:next.groupBy,filters},{from:next.from,to:next.to,timezone:next.timezone});
+  const query=useMemo<PersonalUsageQuery>(()=>({rollingDays:complete.rollingDays,from:complete.rangeInput?.from??(q?new Date(complete.selectedQuery?.from??q.from).toISOString():''),to:complete.rangeInput?.to??(q?new Date(complete.selectedQuery?.to??q.to).toISOString():''),timezone:complete.rangeInput?.timezone??template.timezone,groupBy:template.groupBy as PersonalUsageQuery['groupBy'],filters:{...emptyFilters,...Object.fromEntries(Object.entries(template.filters).filter(([k])=>k!=='user'&&k!=='key')),key:template.filters.key?.kind==='credential'?template.filters.key.id:''}}),[q,template,complete.rollingDays,complete.rangeInput,complete.selectedQuery]);
+  function change(next:PersonalUsageQuery,days?:7|30){
+    const filters:CompleteUsageQuery['filters']={};for(const k of ['model','provider','status','costClass','lane'] as const)if(next.filters[k])filters[k]=next.filters[k];if(next.filters.key)filters.key={kind:'credential',id:next.filters.key};else if(template.filters.key?.kind==='session')filters.key={kind:'session'};
+    if(days){complete.preset(days,{...template,timezone:next.timezone,groupBy:next.groupBy,filters});return;}
+    complete.customRange({...template,groupBy:next.groupBy,filters},{from:next.from,to:next.to,timezone:next.timezone});
   }
-  function clearFilters(){if(q)complete.customRange({...q,filters:{},rankOffset:0},{from:query.from,to:query.to,timezone:query.timezone},Boolean(complete.report.error));}
+  function clearFilters(){complete.customRange({...template,filters:{},rankOffset:0},{from:query.from,to:query.to,timezone:query.timezone},Boolean(complete.report.error));}
   const events:Pick<CompleteUsageEvents,'events'|'nextCursor'>|undefined=complete.events.value?{events:complete.events.value.events,nextCursor:complete.events.value.nextCursor}:undefined;
   return {...complete,complete,query,clearFilters,setQuery:(next:PersonalUsageQuery)=>change(next),choosePreset:(days:7|30,next:PersonalUsageQuery)=>change(next,days),report:{...complete.report,value:report},events:{...complete.events,value:events}};
 }

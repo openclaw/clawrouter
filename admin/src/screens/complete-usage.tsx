@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import type { CompleteUsageReport, CompleteUsageQuery, CompleteUsageGroup, UsageAdditives } from '../../../shared/usage-report';
 import type { CompleteUsageData as PersonalUsageData } from '../hooks/use-personal-usage';
-import { usageCaveats, eventFields, prepareUsageFile, prepareUsageGroupsFile, downloadUsageFile } from '../complete-usage';
+import { usageCaveats, eventFields, prepareUsageFile, prepareUsageGroupsFile, downloadUsageFile, usageQueryTemplate } from '../complete-usage';
 import { usageMoney, type UsageKeyName } from '../personal-usage';
 import { PersonalUsageTimeSeries } from '../analytics-charts';
 const iso=(n:number)=>new Date(n).toISOString();
@@ -34,15 +34,16 @@ export function PersonalUsageSummary({data,onOpen}:{data:PersonalUsageData;onOpe
 }
 function Controls({data,keys}:{data:PersonalUsageData;keys:readonly UsageKeyName[]}) {
   const q=data.query??data.requestedQuery,selectedFrom=data.rangeInput?.from??(q?iso(data.selectedQuery?.from??q.from):''),selectedTo=data.rangeInput?.to??(q?iso(data.selectedQuery?.to??q.to):'');
-  const [draft,setDraft]=useState(q),[from,setFrom]=useState(selectedFrom),[to,setTo]=useState(selectedTo);
-  useEffect(()=>{setDraft(q);setFrom(selectedFrom);setTo(selectedTo);},[q,selectedFrom,selectedTo]);
+  const [draft,setDraft]=useState(()=>q??data.queryTemplate??usageQueryTemplate(data.audience)),[from,setFrom]=useState(selectedFrom),[to,setTo]=useState(selectedTo);
+  useEffect(()=>{setDraft(q??data.queryTemplate??usageQueryTemplate(data.audience));setFrom(selectedFrom);setTo(selectedTo);},[q,data.queryTemplate,data.audience,selectedFrom,selectedTo]);
+  function refine(next:typeof draft){setDraft(next);if(data.query&&!data.report.error)data.refine({...data.query,...next});}
   function apply(event:FormEvent,openNew=false){event.preventDefault();if(draft)data.customRange(draft,{from,to,timezone:draft.timezone},openNew);}
   return <form className="dashboardPanel personalControls" onSubmit={apply} aria-label="Usage filters"><div className="personalActions">
-    <button type="button" onClick={()=>data.preset(7)}>Last 7 days</button><button type="button" onClick={()=>data.preset(30)}>Last 30 days</button><button type="button" onClick={data.reload}>Refresh report</button><button type="button" disabled={!q} onClick={data.back}>Back to base</button>
+    <button type="button" onClick={()=>data.preset(7,draft)}>Last 7 days</button><button type="button" onClick={()=>data.preset(30,draft)}>Last 30 days</button><button type="button" onClick={data.reload}>Refresh report</button><button type="button" disabled={!q} onClick={data.back}>Back to base</button>
   </div>{draft?<><div className="personalFilterGrid">
-    <label>Group by<select value={draft.groupBy} onChange={e=>data.refine({...draft,groupBy:e.target.value as CompleteUsageQuery['groupBy'],rankOffset:0})}>{(data.audience==='admin'?['user','key','model','provider']:['key','model','provider']).map(k=><option key={k}>{k}</option>)}</select></label>
-    <label>Rank by<select value={draft.rankBy} onChange={e=>data.refine({...draft,rankBy:e.target.value as CompleteUsageQuery['rankBy'],rankOffset:0})}><option value="calls">Calls</option><option value="tokens">Reported input + output tokens</option><option value="recordedAmount">Recorded accounting amount</option></select></label>
-    {data.audience==='personal'?<label>Current own-key selector<select value={draft.filters.key?.kind==='session'?'session':draft.filters.key?.kind==='credential'?'key:'+draft.filters.key.id:''} onChange={e=>{const filters={...draft.filters};delete filters.key;if(e.target.value==='session')filters.key={kind:'session'};else if(e.target.value)filters.key={kind:'credential',id:e.target.value.slice(4)};data.refine({...draft,filters,rankOffset:0});}}><option value="">All keys in this base</option><option value="session">Dashboard session</option>{keys.map(k=><option key={k.credentialId} value={'key:'+k.credentialId}>{k.name? 'Current name: '+k.name+' — ':''}{k.credentialId}</option>)}</select></label>:null}
+    <label>Group by<select value={draft.groupBy} onChange={e=>refine({...draft,groupBy:e.target.value as CompleteUsageQuery['groupBy'],rankOffset:0})}>{(data.audience==='admin'?['user','key','model','provider']:['key','model','provider']).map(k=><option key={k}>{k}</option>)}</select></label>
+    <label>Rank by<select value={draft.rankBy} onChange={e=>refine({...draft,rankBy:e.target.value as CompleteUsageQuery['rankBy'],rankOffset:0})}><option value="calls">Calls</option><option value="tokens">Reported input + output tokens</option><option value="recordedAmount">Recorded accounting amount</option></select></label>
+    {data.audience==='personal'?<label>Current own-key selector<select value={draft.filters.key?.kind==='session'?'session':draft.filters.key?.kind==='credential'?'key:'+draft.filters.key.id:''} onChange={e=>{const filters={...draft.filters};delete filters.key;if(e.target.value==='session')filters.key={kind:'session'};else if(e.target.value)filters.key={kind:'credential',id:e.target.value.slice(4)};refine({...draft,filters,rankOffset:0});}}><option value="">All keys in this base</option><option value="session">Dashboard session</option>{keys.map(k=><option key={k.credentialId} value={'key:'+k.credentialId}>{k.name? 'Current name: '+k.name+' — ':''}{k.credentialId}</option>)}</select></label>:null}
   </div><details><summary>Custom interval and exact filters</summary><p>Calendar dates in the chosen IANA timezone or RFC3339 instants; end exclusive. Widening opens a new base. Maximum 30 days; minute grain requires at most 24 hours.</p><div className="personalFilterGrid">
     <label>Start<input required value={from} onChange={e=>setFrom(e.target.value)}/></label><label>End<input required value={to} onChange={e=>setTo(e.target.value)}/></label>
     <label>Timezone<input required value={draft.timezone} onChange={e=>setDraft({...draft,timezone:e.target.value})}/></label><label>Grain<select value={draft.grain} onChange={e=>setDraft({...draft,grain:e.target.value as 'day'|'minute'})}><option>day</option><option>minute</option></select></label>

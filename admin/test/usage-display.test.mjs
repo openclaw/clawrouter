@@ -141,3 +141,12 @@ test('admin selected controls are distinct from disclosed effective retention bo
  const html=renderToStaticMarkup(createElement(CompleteUsageScreen,{data:d}));
  assert.ok(html.includes('value="1970-01-01T00:00:00.500Z"'));assert.match(html,/Start clipped/);assert.ok(html.includes('1970-01-01T00:00:01.000Z'));
 });
+
+for(const audience of ['personal','admin'])test(audience+' initial failure keeps empty custom controls without fabricated report data',()=>{
+ const d={...completeData({},audience),query:undefined,report:{error:'Usage capacity unavailable; narrow the range or filters (422)',loading:false}};
+ const html=renderToStaticMarkup(createElement(CompleteUsageScreen,{data:d}));
+ assert.match(html,/Usage capacity unavailable/);assert.match(html,/Custom interval and exact filters/);
+ assert.match(html,/<label>Start<input required="" value=""/);assert.match(html,/<label>End<input required="" value=""/);
+ assert.match(html,new RegExp('<option selected="">'+(audience==='admin'?'user':'model')+'</option>'));
+ assert.equal(html.includes('user (exact)'),audience==='admin');assert.doesNotMatch(html,/No calls in discovered locations|Exact usage over time|Export refreshed snapshot|<dt>Model calls/);
+});

@@ -1,6 +1,12 @@
 import type { CompleteUsageQuery, CompleteUsageReport, CompleteUsageEvents, CompleteUsageEvent, CompleteUsageOutcome, UsageAdditives, UsageMetrics, UsageCostLane, UsageCostClass } from '../../shared/usage-report';
 import type { ConsoleRequest } from './dashboard-fetch';
+import { parseUsageRangeInput, type UsageRangeInput } from './usage-range';
 export type UsageAudience = 'admin' | 'personal';
+export type UsageQueryTemplate = Omit<CompleteUsageQuery,'from'|'to'>;
+/** Controls can exist before data; no invented interval, report or capability. */
+export function usageQueryTemplate(audience:UsageAudience):UsageQueryTemplate {
+  return {timezone:'UTC',grain:'day',groupBy:audience==='admin'?'user':'model',rankBy:'calls',rankOffset:0,filters:{}};
+}
 export const usageCaveats = {
   admin: "Includes current policy locations and former locations still tracked within the authority's 30-day window. Other former locations may contain retained calls, including calls recorded after a move. Not all historical locations have been assessed.",
   personal: 'For your current access. Earlier access and locations are not claimed covered. Other former locations may contain retained calls, including calls recorded after a move. Not all historical locations have been assessed.',
@@ -16,8 +22,14 @@ function fail(message = 'Export did not reconcile; no file was created'): never 
 function safe(value: unknown): number { if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) fail(); return value; }
 function plus(a: number,b: number) { return safe(safe(a)+safe(b)); }
 export function usageEndpoint(audience: UsageAudience) { return audience === 'admin' ? '/v1/admin/usage' : '/v1/session/usage'; }
-export function completeQueryString(query: CompleteUsageQuery, audience: UsageAudience): URLSearchParams {
+/** Original date-only syntax is for fresh reads only; continuations use numeric bounds. */
+export function completeQueryString(query: CompleteUsageQuery, audience: UsageAudience, rangeInput?: UsageRangeInput): URLSearchParams {
   const p = new URLSearchParams({from:new Date(query.from).toISOString(),to:new Date(query.to).toISOString(),timezone:query.timezone,grain:query.grain,groupBy:query.groupBy,rankBy:query.rankBy,rankOffset:String(query.rankOffset??0)});
+  if(rangeInput&&/^\d{4}-\d{2}-\d{2}$/.test(rangeInput.from)&&/^\d{4}-\d{2}-\d{2}$/.test(rangeInput.to)){
+    const range=parseUsageRangeInput(rangeInput);
+    if(rangeInput.timezone!==query.timezone||range.from!==query.from||range.to!==query.to)fail('Selected calendar range does not match query');
+    p.set('from',rangeInput.from);p.set('to',rangeInput.to);
+  }
   for (const [key,value] of Object.entries(query.filters)) {
     if (key === 'user' && audience === 'personal') continue;
     if (key === 'key') { const k=query.filters.key!; p.set('keyKind',k.kind); if(k.kind==='credential')p.set('key',k.id); }
@@ -79,17 +91,19 @@ export function prepareUsageGroupsFile(report:CompleteUsageReport,audience:Usage
   if(bytes(content)>bound)fail('Export exceeds 16 MiB; narrow the range or filters');
   return {content,type:'text/csv;charset=utf-8',filename:'usage-current-rank-page.csv',metadata};
 }
-export async function exportRefreshedUsage({request,origin,audience,query,signal,isCurrent,onReport}:{request:ConsoleRequest;origin:string;audience:UsageAudience;query:CompleteUsageQuery;signal:AbortSignal;isCurrent:()=>boolean;onReport?:(report:CompleteUsageReport)=>void},format:'csv'|'json') {
-  const frozen=structuredClone(query),endpoint=usageEndpoint(audience);let report:CompleteUsageReport|undefined;
+export async function exportRefreshedUsage({request,origin,audience,query,rangeInput,signal,isCurrent,onReport}:{request:ConsoleRequest;origin:string;audience:UsageAudience;query:CompleteUsageQuery;rangeInput?:UsageRangeInput;signal:AbortSignal;isCurrent:()=>boolean;onReport?:(report:CompleteUsageReport)=>void},format:'csv'|'json') {
+  const frozen=structuredClone(query),frozenInput=rangeInput&&structuredClone(rangeInput),endpoint=usageEndpoint(audience);let report:CompleteUsageReport|undefined;
   const current=()=>{if(signal.aborted||!isCurrent())fail('Export cancelled; no file was created');};
   try {
-    current();const p=completeQueryString(frozen,audience);p.set('intent','export');
+    current();const p=completeQueryString(frozen,audience,frozenInput);p.set('intent','export');
     report=completeValue(await request<CompleteUsageOutcome<CompleteUsageReport>>(origin,endpoint+'/report?'+p,{signal}));
     current();if(!report.cut||!/^[A-Za-z0-9_-]{43}$/.test(report.cut))fail();
     if(safe(report.metrics.calls)>50000)fail('Export exceeds 50,000 events; narrow the range or filters');
     const expected=completeQueryString(frozen,audience),actual=completeQueryString(report.query,audience);
     // Retention may advance since the displayed report; only an explicitly disclosed clip is allowed.
-    if(report.query.from!==frozen.from&&(report.query.from<frozen.from||report.query.from!==report.coverage.effectiveFrom||report.coverage.clippedFrom!==frozen.from))fail();
+    if(report.query.from<frozen.from||report.query.from!==report.coverage.effectiveFrom||report.coverage.clippedFrom!==(report.query.from===frozen.from?null:frozen.from))fail();
+    if(report.coverage.authority!==(audience==='admin'?'admin_retained':'current_access')||report.coverage.scope!==(audience==='admin'?'admin_current_plus_tracked_retired':'personal_current_access'))fail();
+    if(audience==='personal'&&frozen.filters.user!==undefined&&report.query.filters.user!==frozen.filters.user)fail();
     expected.set('from',actual.get('from')!);
     expected.sort();actual.sort();if(expected.toString()!==actual.toString())fail();
     onReport?.(report);

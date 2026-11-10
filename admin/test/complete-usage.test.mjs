@@ -1,6 +1,8 @@
+import '../../test/helpers/typescript-resolver.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {exportRefreshedUsage,prepareUsageFile,prepareUsageGroupsFile,downloadUsageFile,metricKeys,usageCaveats} from '../src/complete-usage.ts';
+const {exportRefreshedUsage,completeQueryString,prepareUsageFile,prepareUsageGroupsFile,downloadUsageFile,metricKeys,usageCaveats}=await import('../src/complete-usage.ts');
+import {parseUsageRangeInput} from '../src/usage-range.ts';
 const ok=value=>({kind:'complete',value});
 const metrics=()=>Object.fromEntries(metricKeys.map(k=>[k,0]));
 const query={from:1000,to:2000,timezone:'UTC',grain:'day',groupBy:'model',rankBy:'calls',rankOffset:0,filters:{model:'selected'}};
@@ -20,4 +22,27 @@ test('CSV formula text is neutralized, private extras never serialized, Blob onl
 test('current rank CSV is explicitly partial, additive, nullable and strips private fields',()=>{
  const r=snapshot(sample);r.groups=[{identity:{owner:'=owner',value:'+key',policyId:'PRIVATE'},metrics:r.metrics,costs:r.costs,recordedChargeMicros:r.recordedChargeMicros,chargeReportedCalls:r.chargeReportedCalls}];r.rank={exact:true,distinctGroups:105,offset:100,hasMore:false};r.cut='PRIVATE_CUT';
  const file=prepareUsageGroupsFile(r,'admin');assert.equal(file.metadata.kind,'current rank page');assert.equal(file.metadata.rank.offset,100);assert.equal(file.metadata.rank.distinctGroups,105);assert.match(file.content,/'=owner/);assert.ok(file.content.includes("'+key"));assert.doesNotMatch(file.content,/PRIVATE/);assert.equal(file.content.split(String.fromCharCode(13,10)).filter(Boolean).length,3);assert.ok(file.content.includes('unknown_amountMicros'));assert.equal(file.filename,'usage-current-rank-page.csv');
+});
+
+test('fresh date-only transport requires exact numeric bounds and timezone, not aliases or stale controls',async()=>{
+ const raw={from:'2026-10-10',to:'2026-11-09',timezone:'America/New_York'},q={...query,...parseUsageRangeInput(raw),timezone:raw.timezone};
+ for(const audience of ['personal','admin']){
+  const p=completeQueryString(q,audience,raw);assert.equal(p.get('from'),raw.from);assert.equal(p.get('to'),raw.to);
+  const canonical=completeQueryString(q,audience);assert.equal(canonical.get('from'),'2026-10-10T04:00:00.000Z');assert.equal(canonical.get('to'),'2026-11-09T05:00:00.000Z');
+  for(const input of [{...raw,from:'2026-10-11'},{...raw,to:'2026-11-08'},{...raw,timezone:'US/Eastern'},{...raw,timezone:'UTC'},{...raw,from:'2026-02-30'}]){
+   const f=setup();Object.assign(f.options,{audience,query:q,rangeInput:input});
+   await assert.rejects(f.run(),/match query|calendar/);assert.equal(f.requests.length,0,'mismatched calendar input must not dispatch');
+  }
+ }
+});
+test('refreshed export rejects changed audience, owner and untruthful clipping before paging',async()=>{
+ for(const change of [
+  r=>{r.coverage.authority='admin_retained';},r=>{r.coverage.scope='admin_current_plus_tracked_retired';},
+  r=>{r.query.filters.user='other@example.com';},r=>{r.coverage.effectiveFrom=999;},r=>{r.coverage.clippedFrom=999;},
+  r=>{r.query.from=1200;r.coverage.effectiveFrom=1200;r.coverage.clippedFrom=999;},
+ ]){
+  const f=setup(sample,({kind,report})=>{if(kind==='report')change(report);});
+  f.options.query.filters.user='alice@example.com';f.report.query.filters.user='alice@example.com';
+  await assert.rejects(f.run(),/reconcile/);assert.equal(f.requests.length,2);assert.equal(f.requests.at(-1).init.method,'DELETE');
+ }
 });

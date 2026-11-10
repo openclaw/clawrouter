@@ -5,7 +5,7 @@ import {createHash} from 'node:crypto';
 import {completeFixture} from './usage-complete-fixture.mjs';
 import {perRequestAuthority} from './typescript-setup.mjs';
 const {default:handler}=await import('../index.ts');
-import {exportRefreshedUsage} from '../../admin/src/complete-usage.ts';
+const {exportRefreshedUsage}=await import('../../admin/src/complete-usage.ts');
 perRequestAuthority();
 const token='synthetic-report-token',hash=s=>createHash('sha256').update(s).digest('hex');
 async function fixture(t){
@@ -92,4 +92,73 @@ test('authority change during real HTTP final validation never publishes a repor
  const f=await fixture(t);let changed=false;
  f.hook=async entry=>{if(!changed&&entry.kind==='shard'&&entry.body.action==='validate'){changed=true;await f.direct('/policies/put',{policyId:'p0',policy:{tenantId:'tenant',enabled:false,providers:[]}});}};
  const r=await f.http('/v1/session/usage/report?'+f.p,f.headers);assert.equal(changed,true);assert.notEqual(r.status,200);assert.equal((await r.json()).kind,'restart');assert.equal(f.owner.usageCuts?.roots.size??0,0);
+});
+
+for(const audience of ['personal','admin'])test(audience+' autumn calendar range clips before registry admission and binds continuations/export',async t=>{
+ t.mock.timers.enable({apis:['Date'],now:Date.parse('2026-11-09T06:00:00Z')});
+ const f=await fixture(t),endpoint=audience==='personal'?'/v1/session/usage':'/v1/admin/usage',headers=audience==='personal'?f.headers:f.bearer;
+ const requestedFrom=Date.parse('2026-10-10T04:00:00Z'),to=Date.parse('2026-11-09T05:00:00Z'),floor=f.now-30*86400000+15*60000; // Existing cut TTL safety margin.
+ await f.ingest(0,f.event('boundary',{occurred_at_ms:floor+1}));await f.ingest(0,f.event('recent',{occurred_at_ms:to-1000}));
+ const selection=new URLSearchParams({from:'2026-10-10',to:'2026-11-09',timezone:'America/New_York',model:'model'});
+ const summary=await value(await f.http(endpoint+'/report?'+selection,headers));
+ assert.equal(summary.cut,null);assert.equal(f.owner.usageCuts?.roots.size??0,0);assert.equal(summary.metrics.calls,2);
+ assert.equal(summary.query.from,floor);assert.equal(summary.coverage.clippedFrom,requestedFrom);assert.equal(summary.coverage.effectiveFrom,floor);
+ const browse=await value(await f.http(endpoint+'/report?'+selection+'&intent=browse',headers));assert.equal(browse.metrics.calls,2);
+ const root=[...f.owner.usageCuts.roots.values()].find(r=>r.handle===browse.cut);assert.ok(root);assert.equal(root.base.from,to-30*86400000);assert.equal(root.capture.requestedFrom,requestedFrom);assert.equal(JSON.stringify(browse).includes('requestedFrom'),false);
+ assert.equal((await f.http(endpoint+'/report?'+selection+'&intent=browse&cut='+browse.cut,headers)).status,400,'continuation requires the returned effective range');
+ const p=params(f,browse,{timezone:'America/New_York',model:'model',limit:'1'}),first=await value(await f.http(endpoint+'/events?'+p,headers));
+ assert.deepEqual(first.events.map(e=>e.id),['recent']);assert.ok(first.nextCursor);assert.equal(first.coverage.clippedFrom,requestedFrom);
+ p.set('cursor',first.nextCursor);const second=await value(await f.http(endpoint+'/events?'+p,headers));assert.deepEqual(second.events.map(e=>e.id),['boundary']);assert.equal(second.nextCursor,null);
+ p.set('model','other');assert.notEqual((await f.http(endpoint+'/events?'+p,headers)).status,200);
+ const validation=params(f,browse,{timezone:'America/New_York',model:'model'});assert.deepEqual(await value(await f.http(endpoint+'/validate?'+validation,headers)),{valid:true});
+ const exported=await value(await f.http(endpoint+'/report?'+selection+'&intent=export',headers));assert.notEqual(exported.cut,browse.cut);assert.equal(exported.coverage.clippedFrom,requestedFrom);assert.equal(exported.metrics.calls,2);
+ const final=params(f,exported,{timezone:'America/New_York',model:'model'});assert.deepEqual(await value(await f.http(endpoint+'/validate?'+final,headers)),{valid:true});
+ const exportPage=await value(await f.http(endpoint+'/events?'+final,headers));assert.equal(exportPage.events.length,2);assert.equal(exportPage.coverage.clippedFrom,requestedFrom);
+ // Client inputs are owned by controls and may change while the fresh capture awaits.
+ const query=structuredClone({...browse.query,from:requestedFrom}),rangeInput={from:'2026-10-10',to:'2026-11-09',timezone:'America/New_York'},requests=[];
+ const request=async(_origin,path,init={})=>{const response=await f.http(path,headers,init.method??'GET');requests.push({path,method:init.method,status:response.status});assert.equal(response.status,200,await response.clone().text());return response.json();};
+ const work=exportRefreshedUsage({request,origin:'https://console.example',audience,query,rangeInput,signal:new AbortController().signal,isCurrent:()=>true},'json');
+ query.from=to-3600000;query.filters.model='changed';query.timezone='UTC';rangeInput.from='2026-02-30';rangeInput.timezone='UTC';
+ const file=JSON.parse((await work).content);assert.equal(file.events.length,2);assert.equal(file.metadata.coverage.clippedFrom,requestedFrom);assert.equal(file.metadata.range.from,floor);assert.equal(file.metadata.range.timezone,'America/New_York');assert.equal(file.metadata.filters.model,'model');
+ const firstRequest=new URL(requests[0].path,'https://console.example').searchParams;assert.equal(firstRequest.get('from'),'2026-10-10');assert.equal(firstRequest.get('to'),'2026-11-09');
+ assert.deepEqual(requests.map(r=>r.method==='DELETE'?'release':r.path.split('?')[0].split('/').at(-1)),['report','events','validate','release']);
+ for(const r of requests.slice(1,3))assert.equal(new URL(r.path,'https://console.example').searchParams.get('from'),new Date(floor).toISOString());
+ const released=new URL(requests.at(-1).path,'https://console.example').searchParams.get('cut');assert.equal([...f.owner.usageCuts.roots.values()].some(root=>root.handle===released),false);
+ assert.ok(f.calls.some(c=>c.path==='/usage-cuts/reserve'));
+ for(const c of f.calls){const q=c.kind==='shard'?c.body.query:c.body.base??c.body.query;if(q)assert.ok(q.to-q.from<=30*86400000,'every service/shard/registry query keeps elapsed bound');}
+ const over={...root.base,from:requestedFrom};assert.equal((await f.direct('/usage-cuts/reserve',{binding:root.binding,purpose:'browse',base:over})).status,400);
+ let changed=false;f.hook=async entry=>{if(!changed&&entry.kind==='shard'&&entry.body.action==='validate'){changed=true;if(audience==='admin')f.env.CLAWROUTER_ADMIN_TOKEN_SHA256=hash('rotated');else await f.direct('/policies/put',{policyId:'p0',policy:{tenantId:'tenant',enabled:false,providers:[]}});}};
+ assert.notEqual((await f.http(endpoint+'/validate?'+final,headers)).status,200);assert.equal(changed,true);
+});
+for(const audience of ['personal','admin'])test(audience+' calendar allowance does not relax HTTP elapsed, minute, future or selector guards',async t=>{
+ t.mock.timers.enable({apis:['Date'],now:Date.parse('2026-11-09T06:00:00Z')});const f=await fixture(t),endpoint=audience==='personal'?'/v1/session/usage':'/v1/admin/usage',headers=audience==='personal'?f.headers:f.bearer;
+ for(const fields of [
+  {from:'2026-10-09',to:'2026-11-09'},
+  {from:'2026-10-10T04:00:00Z',to:'2026-11-09T05:00:00Z'},
+  {from:'2026-10-10',to:'2026-11-09T05:00:00Z'},
+  {from:'2026-11-01',to:'2026-11-02',grain:'minute'},
+  {from:'2026-11-09',to:'2026-11-10'},
+  {from:'2026-02-30',to:'2026-03-01'},
+  {from:'2026-11-08',to:'2026-11-09',requestedFrom:'0'},
+  {from:'2026-11-08',to:'2026-11-09',tenantId:'other'},
+ ]){const usageCalls=()=>f.calls.filter(c=>c.kind==='shard'||c.path.startsWith('/usage-')).length,before=usageCalls(),p=new URLSearchParams({timezone:'America/New_York',...fields});assert.equal((await f.http(endpoint+'/report?'+p,headers)).status,400,p.toString());assert.equal(usageCalls(),before,'reject before usage service calls');}
+});
+
+test('calendar provenance is private disclosure, never authority to broaden effective reads',async t=>{
+ t.mock.timers.enable({apis:['Date'],now:Date.parse('2026-11-09T06:00:00Z')});const f=await fixture(t);
+ const q={...f.query,from:f.now-30*86400000},requestedFrom=q.from-3600000;
+ for(const input of [
+  ...[-1,'invalid',q.from,q.to-31*86400000-1].map(requestedFrom=>({query:q,requestedFrom})),
+  {query:{...q,from:q.from+1},requestedFrom},
+  {kind:'events',query:q,cut:'a'.repeat(43),requestedFrom},
+ ]){const before=f.calls.length;await assert.rejects(f.read(input),e=>e.status===400);assert.equal(f.calls.length,before);}
+ const r=await value(await f.http('/v1/session/usage/report?from=2026-10-10&to=2026-11-09&timezone=America/New_York&intent=browse',f.headers));
+ const root=[...f.owner.usageCuts.roots.values()].find(root=>root.handle===r.cut);
+ for(const requestedFrom of [-1,'invalid',root.base.from,root.base.to-31*86400000-1]){
+  const reserve=await f.direct('/usage-cuts/reserve',{binding:root.binding,purpose:'export',base:root.base});assert.equal(reserve.status,200);const {operation}=await reserve.json();
+  const rejected=await f.direct('/usage-cuts/finalize',{binding:root.binding,operation,capture:{...root.capture,requestedFrom}});assert.equal(rejected.status,400);
+  assert.equal((await f.direct('/usage-cuts/observe',{binding:root.binding,operation})).status,410);
+ }
+ const outside=await f.http('/v1/session/usage/report?from=2025-10-10&to=2025-11-09&timezone=America/New_York&intent=export',f.headers);
+ assert.equal(outside.status,200);assert.equal((await outside.json()).kind,'outside_retained_range');assert.equal(f.owner.usageCuts.roots.size,1,'outside range leaves only the existing browse root');
 });
