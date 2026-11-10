@@ -13,9 +13,9 @@ const router = `
   export * from "./worker/index.ts";
   import { PolicyBindingIndexObject as Authority } from "./worker/authority.ts";
   import { GrantCredentialObject as Owner } from "./worker/grant-credentials.ts";
-  import { resolveGrantSelection, grantRoutingPolicy } from "./worker/grant-selection.ts";
+  import { resolveGrantSelection, grantRoutingPolicy, grantSelectionStats } from "./worker/grant-selection.ts";
   import { sha256Hex } from "./worker/utils.ts";
-  let clock = ${now}; Date.now = () => clock;
+  let clock = ${now}; Date.now = () => clock; const events = [];
   export class PolicyBindingIndexObject extends Authority {
     constructor(state, env) { super(state, env); this.sql = state.storage.sql; }
     async fetch(request) {
@@ -87,18 +87,20 @@ const router = `
     env.CLAWROUTER_LOCAL_AUTH = "enabled"; env.CLAWROUTER_ADMIN_TOKEN_SHA256 = await sha256Hex("fixture-admin");
     const path = new URL(request.url).pathname;
     if (path === "/fixture/setup") {
-      const routing = await request.json();
+      const { providerId = "openai", ...routing } = await request.json();
       const stub = env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName("policy-bindings"));
       for (const [path, body] of [
-        ["/policies/initialize-all", [{ policyId: "fixture", policy: { enabled: true, generation: "g1", providers: ["openai"], tenantId: "tenant", monthlyBudgetMicros: 10000000, retainRequestContent: false, grantRouting: { strategy: "threshold", ...routing } } }]],
+        ["/policies/initialize-all", [{ policyId: "fixture", policy: { enabled: true, generation: "g1", providers: [providerId], tenantId: "tenant", monthlyBudgetMicros: 10000000, retainRequestContent: false, grantRouting: { strategy: "threshold", ...routing } } }]],
         ["/credentials/initialize-all", [{ credentialId: "fixture", credential: { enabled: true, secretSha256: await sha256Hex("fixture-key"), policyId: "fixture", policyGeneration: "g1" } }]],
-        ["/connections/initialize-all", [{ providerId: "openai", enabled: true, monthlyBudgetMicros: 10000000 }]],
+        ["/connections/initialize-all", [{ providerId, enabled: true, monthlyBudgetMicros: 10000000 }]],
       ]) { const r = await stub.fetch("https://owner" + path, { method: "POST", body: JSON.stringify(body) }); if (!r.ok) return r; }
       return new Response("ok");
     }
     if (["/fixture/lose-on-second", "/fixture/revoke-after-materialize"].includes(path)) { const { key } = await request.clone().json(); return env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(key)).fetch(request); }
     if (path === "/fixture/clock") { clock = (await request.json()).now; return new Response("ok"); }
     if (path === "/fixture/provider") return fetch("https://fixture/control", request);
+    if (path === "/fixture/events") return Response.json(events);
+    if (path === "/fixture/selection-stats") return Response.json(await grantSelectionStats(env, ["a", "b", "c", "d", "e"].map(name => "oauth/fixture/" + name)));
     if (path === "/fixture/kv-selection") {
       const result = await resolveGrantSelection("openai", "fixture", "tenant", "openai", env, new Set(), grantRoutingPolicy({ strategy: "priority" }), null, false);
       return Response.json({ key: result.selected?.key ?? null });
@@ -112,7 +114,7 @@ const router = `
       return env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName("policy-bindings")).fetch(request);
     }
     if (["/fixture/lose-owner", "/fixture/abandoned"].includes(path)) return env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName("oauth/fixture/a")).fetch(request);
-    return worker.fetch(request, env, ctx);
+    return worker.fetch(request, { ...env, USAGE_QUEUE: { async send(event) { events.push(event); return env.USAGE_QUEUE.send(event); } } }, ctx);
   }};
 `;
 const upstream = `
@@ -126,23 +128,25 @@ const upstream = `
       if (config.status) return Response.json({ error: config.code ?? "server_error" }, { status: config.status, headers: config.retry ? { "retry-after": config.retry } : {} });
       return Response.json({ access_token: "fixture-rotated", refresh_token: "fixture-next-refresh", expires_in: 3600 });
     }
-    const credential = request.headers.get("authorization"); dispatches.push(credential);
+    const credential = request.headers.get("authorization") ?? "Bearer " + request.headers.get("x-api-key"); dispatches.push(credential);
+    const rejection = config.responses?.[credential];
+    if (rejection) return new Response(rejection.body, { status: rejection.status, headers: { "content-type": rejection.contentType ?? "application/json" } });
     if (config.dispatchStatus && credential !== config.healthy) return Response.json({ error: { message: "fixture rejection" } }, { status: config.dispatchStatus });
     return Response.json({ id: "resp_fixture_" + dispatches.length, object: "response", status: "completed", output: [], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 }, servedBy: credential });
   }};
 `;
-async function fixture(t, { second = true, routing = {}, expiresAt = now - 1000, hotCache = false } = {}) {
+async function fixture(t, { second = true, routing = {}, expiresAt = now - 1000, hotCache = false, providerId = "openai" } = {}) {
   const dir = await mkdtemp(join(tmpdir(), "clawrouter-refresh-routing-"));
   const mf = await startWorkerdFixture(dir, router, upstream, { hotCache });
   t.after(async () => { await mf.dispose(); await rm(dir, { recursive: true, force: true }); });
   const request = (path, method = "GET", body, proxy = false) => mf.dispatchFetch("https://router.example" + path, {
     method, headers: { authorization: proxy ? "Bearer clawrouter-live-fixture-fixture-key" : "Bearer fixture-admin", "content-type": "application/json", origin: "https://router.example" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
-  assert.equal((await request("/fixture/setup", "POST", routing)).status, 200);
+  assert.equal((await request("/fixture/setup", "POST", { ...routing, providerId })).status, 200);
   const base = "/v1/admin/upstream-grants/policies/fixture/";
-  const grant = { provider: "openai", kind: "oauth", accessToken: "fixture-a", refreshToken: "fixture-refresh-a", expiresAt: new Date(expiresAt).toISOString() };
+  const grant = providerId === "anthropic" ? { provider: providerId, kind: "api_key", credential: "fixture-a" } : { provider: "openai", kind: "oauth", accessToken: "fixture-a", refreshToken: "fixture-refresh-a", expiresAt: new Date(expiresAt).toISOString() };
   const put = await request(base + "a", "PUT", grant); assert.equal(put.status, 200, await put.clone().text());
-  if (second) assert.equal((await request(base + "b", "PUT", { ...grant, accessToken: "fixture-b", refreshToken: "fixture-refresh-b", expiresAt: new Date(now + 7200000).toISOString() })).status, 200);
+  if (second) assert.equal((await request(base + "b", "PUT", { ...grant, ...(providerId === "anthropic" ? { credential: "fixture-b" } : { accessToken: "fixture-b", refreshToken: "fixture-refresh-b", expiresAt: new Date(now + 7200000).toISOString() }) })).status, 200);
   return { request, base, grant, configure: config => request("/fixture/provider", "POST", config), stats: async () => (await request("/fixture/provider")).json(),
     row: async () => (await (await request("/v1/admin/upstream-grants")).json()).grants.find(g => g.tokenRef === "a"),
     rotate: () => request(base + "a/refresh", "POST"),
@@ -429,4 +433,76 @@ for (const full of [false, true]) test("fusion reserved credential failure " + (
   assert.deepEqual(stats.materializations, (full ? ["a", "b", "c", "d", "d"] : ["a", "a", "b"]).map(name => "oauth/fixture/" + name));
   assert.deepEqual(stats.dispatches, full ? [] : ["Bearer fixture-b"]);
   assert.equal(stats.refreshes, full ? 3 : 0);
+});
+
+const creditRejection = JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "Your credit balance is too low to access the Anthropic API." } });
+async function settledEvents(f, count) {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const events = await (await f.request("/fixture/events")).json();
+    if (events.length >= count) { assert.equal(events.length, count); return events; }
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.fail("fixture accounting did not settle");
+}
+
+for (const mode of ["credit-to-fourth", "prep-credit-429", "four-failed"]) test("integrated credit400 and preparation/rejection traversal: " + mode, { timeout: 60000 }, async t => {
+  const f = await fixture(t, { providerId: "anthropic", routing: { strategy: "priority", stickiness: "none" } });
+  for (const name of ["c", "d", "e"]) assert.equal((await f.request(f.base + name, "PUT", { ...f.grant, credential: "fixture-" + name })).status, 200);
+  if (mode !== "credit-to-fourth") assert.equal((await f.request("/fixture/lose-owner", "POST")).status, 200);
+  const responses = {};
+  for (const name of ["a", "b", "c", ...(mode === "four-failed" ? ["d"] : [])]) responses["Bearer fixture-" + name] = {
+    status: mode !== "credit-to-fourth" && name === "c" ? 429 : 400, body: JSON.stringify({ ...JSON.parse(creditRejection), request_id: "fixture-rejection-" + name }),
+  };
+  await f.configure({ responses });
+  const response = await f.request("/v1/messages", "POST", { model: "anthropic/claude-sonnet-5", messages: [{ role: "user", content: "synthetic fixture" }], max_tokens: 16 }, true);
+  if (mode === "four-failed") { assert.equal(response.status, 400); assert.equal(await response.text(), responses["Bearer fixture-d"].body, "deliver the final owner rejection unchanged, not an earlier attempt"); }
+  else await served(response, "fixture-d");
+  const stats = await f.stats();
+  assert.deepEqual(stats.materializations, ["a", "b", "c", "d"].map(name => "oauth/fixture/" + name), "preparation and HTTP rejections share exactly four distinct owners");
+  assert.deepEqual(stats.dispatches, (mode === "credit-to-fourth" ? ["a", "b", "c", "d"] : ["b", "c", "d"]).map(name => "Bearer fixture-" + name));
+  assert.equal(stats.refreshes, 0);
+  const [event] = await settledEvents(f, 1);
+  assert.equal(event.status_code, mode === "four-failed" ? 400 : 200);
+  assert.equal(event.grant_key, "oauth/fixture/d", "one terminal event belongs to the final attempted owner");
+  if (mode === "four-failed") assert.equal(event.actual_cost_micros, 0, "all definite rejections remain nonbillable");
+  else assert.ok(event.actual_cost_micros > 0, "only the final delivered success is billed");
+  const statsByKey = await (await f.request("/fixture/selection-stats")).json();
+  for (const name of ["a", "b", "c", "d", "e"]) assert.equal(statsByKey["oauth/fixture/" + name].selectedCount, name === "e" ? 0 : 1, "no duplicate or fifth selection: " + name);
+});
+
+for (const fusion of [false, true]) test("integrated generic400 passthrough without credit exclusion: " + (fusion ? "non-Anthropic Fusion" : "Anthropic unrelated input error"), { timeout: 60000 }, async t => {
+  const f = await fixture(t, { providerId: fusion ? "openai" : "anthropic", expiresAt: now + 7200000, routing: { strategy: "priority", stickiness: "none" } });
+  const body = fusion ? creditRejection : JSON.stringify({ type: "error", error: { type: "invalid_request_error", message: "max_tokens is invalid" } });
+  await f.configure({ responses: { "Bearer fixture-a": { status: 400, body } } });
+  if (fusion) assert.equal((await f.request("/v1/admin/fusion", "PUT", { enabled: true, adviserModels: ["local/qwen3:8b"], aggregatorModel: "openai/gpt-4.1-mini" })).status, 200);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const response = await f.request(fusion ? "/v1/chat/completions" : "/v1/messages", "POST", { model: fusion ? "clawrouter/fusion" : "anthropic/claude-sonnet-5", messages: [{ role: "user", content: "synthetic fixture" }], max_tokens: 16 }, true);
+    assert.equal(response.status, 400); assert.equal(await response.text(), body);
+  }
+  const stats = await f.stats();
+  assert.deepEqual(stats.dispatches, ["Bearer fixture-a", "Bearer fixture-a"], "credit-shaped text cannot grant non-Anthropic retry authority, or exclude generic400");
+  assert.deepEqual(stats.materializations, Array(fusion ? 4 : 2).fill("oauth/fixture/a"));
+  const events = await settledEvents(f, fusion ? 4 : 2);
+  assert.ok(events.every(event => event.actual_cost_micros === 0));
+});
+
+for (const stream of [false, true]) test("integrated credit retry stops at accepted response, stream=" + stream, { timeout: 60000 }, async t => {
+  const f = await fixture(t, { providerId: "anthropic", routing: { strategy: "priority", stickiness: "none" } });
+  assert.equal((await f.request(f.base + "c", "PUT", { ...f.grant, credential: "fixture-c" })).status, 200);
+  const body = stream
+    ? 'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":1}}}\n\nevent: error\ndata: ' + creditRejection + '\n\n'
+    : creditRejection;
+  await f.configure({ responses: {
+    "Bearer fixture-a": { status: 400, body: creditRejection },
+    "Bearer fixture-b": { status: 200, body, contentType: stream ? "text/event-stream" : "application/json" },
+  } });
+  const response = await f.request("/v1/messages", "POST", { model: "anthropic/claude-sonnet-5", messages: [{ role: "user", content: "synthetic fixture" }], max_tokens: 16, stream }, true);
+  assert.equal(response.status, 200); assert.equal(await response.text(), body);
+  const stats = await f.stats();
+  assert.deepEqual(stats.dispatches, ["Bearer fixture-a", "Bearer fixture-b"]);
+  assert.deepEqual(stats.materializations, ["oauth/fixture/a", "oauth/fixture/b"]);
+  assert.equal(stats.refreshes, 0);
+  const [event] = await settledEvents(f, 1);
+  assert.equal(event.status_code, 200); assert.equal(event.grant_key, "oauth/fixture/b");
+  assert.ok(event.actual_cost_micros > 0, "accepted or started generation is not refunded by a prior rejection or late credit-shaped error");
 });

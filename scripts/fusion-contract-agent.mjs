@@ -141,7 +141,11 @@ export async function runSingleDraft(task, image, _strategy, trialId, config, in
     }
     let patched;
     try { if (response) patched = replaceEdits(task, files, JSON.parse(response.choices[0].message.content).edits); }
-    catch { actions.push({ action: 'draft', status: 'invalid_edits' }); }
+    catch (error) {
+      const status = ['invalid_edit', 'search_must_match_once', 'invalid_edit_path_or_size'].includes(error.message)
+        ? error.message : 'invalid_edits';
+      actions.push({ action: 'draft', status });
+    }
     if (patched) {
       const start = performance.now();
       await write(box, patched, remaining());
@@ -174,6 +178,18 @@ export async function runRefinedDraft(task, image, strategy, trialId, config, in
       { signal: deadline, initialFiles: files, feedback });
     files = validateEdits(task, result.files);
     turns += result.turns; toolMs += result.toolMs; actions.push(...result.actions);
+    if (result.outcome !== 'draft_submitted') {
+      const status = result.actions.findLast(action => action.action === 'draft')?.status;
+      const guidance = status === 'provider_truncated'
+        ? 'The previous response exceeded the output limit. Return a shorter patch with small, focused edits.'
+        : status === 'search_must_match_once'
+          ? 'Each search must match exactly once in the supplied current source. Copy exact, unique anchors.'
+          : 'Return valid JSON with 1–8 exact search/replace edits to the declared editable files.';
+      feedback = `No edits from the previous response were applied. ${guidance} Work from the supplied current source; do not assume the previous patch exists.`;
+      result = { ...result, publicPassed: false };
+      actions.push({ action: 'draft_check', status: 'not_applied' });
+      continue;
+    }
     const gateStarted = performance.now(), box = await makeSandbox(image);
     let visible, reproduced;
     try {

@@ -238,3 +238,27 @@ hint such as `credit_balance`, `structured_output`, or `unknown`. Raw error text
 is discarded because it can echo request content. A hint is not proof that an
 attempt was unbilled: its reservation remains charged to the campaign until
 accounting is reconciled. No HTTP failure triggers an automatic retry.
+
+### Resource and admission follow-up tasks
+
+`benchmarks/fusion/resource-holdout-workloads.json` adds two real regression
+tasks for follow-up evaluation: bounded grant-usage aggregation and deferred
+MiniMax Music credential prefetch. Each pins the actual parent and repair commit.
+The model can edit only the named production module.
+
+The usage task includes a real workerd cursor-read assertion as well as response
+semantics; returning the right error after scanning the full range is insufficient.
+The Music task checks the original runtime suite before replacing acceptance
+files, then exercises both native and workerd admission behavior with synthetic
+credentials. Qualify both broken and repaired revisions before inference.
+
+These tasks are unused by benchmark models when introduced. Record their first
+exposure before inference; later tuning must treat them as development data.
+Do not pool their outcomes with earlier repeated tasks as one unchanged protocol.
+
+Sandbox dependencies resolve from the read-only image, so native esbuild and
+workerd tools can run without making editable source executable. Workload images
+include the public root certificates bundled with Node for workerd startup. The
+container still has no network, host mounts, elevated capabilities or writable
+dependency tree. Run the native fixture smoke check with `FUSION_NATIVE_IMAGE`
+set to the immutable qualified image ID.

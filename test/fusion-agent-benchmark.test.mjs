@@ -49,6 +49,113 @@ test('every arm fits the predeclared campaign ceiling including previous uncerta
   assert.throws(() => validateExperiment({ ...defaultExperiment, strategies: ['strong', 'strong'] }, 4));
 });
 
+test('edit handoff waits for passing visible checks and transfers current source to the next worker', {
+  skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+}, async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { execFileSync } = await import('node:child_process');
+  const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+  const task = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+    .find(task => task.id === 'provided-responses-path');
+  const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+    .receipts.find(receipt => receipt.taskId === task.id);
+  const original = execFileSync('git', ['show', `${task.base}:${task.editPaths[0]}`], { encoding: 'utf8' });
+  const broken = `throw new Error('synthetic unready patch');\n${original}`;
+  const repaired = `${original}\n// synthetic handoff marker\n`;
+  const roles = [];
+  const result = await runAgent(task, receipt.image, 'handoff', 'edit-handoff-fixture',
+    { maxTurns: 10, deadlineMs: 120000, outputTokens: 256 }, async (_id, role, body) => {
+      const turn = roles.length; roles.push(role);
+      if (turn === 0) {
+        assert.match(body.messages[0].content, /fails before your repair/);
+        assert.match(body.messages[1].content, /Initial editable source/);
+      }
+      if (turn === 1) assert.match(body.messages.at(-1).content, /Visible tests passed: false/);
+      if (turn === 2) {
+        assert.match(body.messages.at(-1).content, /taking over an attempted repair/);
+        assert.match(body.messages.at(-1).content, /synthetic handoff marker/);
+        assert.match(body.messages.at(-1).content, /ready for independent verification/);
+        assert.match(body.messages[0].content, /use finish to submit/);
+        assert.doesNotMatch(body.messages[0].content, /fails before your repair/);
+        assert.match(body.messages[0].content, /visible tests already pass on the broken code/);
+        assert.doesNotMatch(body.messages[1].content, /Initial editable source/);
+        assert.ok(body.messages[1].content.includes(task.instruction));
+        assert.ok(body.messages[1].content.includes(task.visibleTests[0]));
+      }
+      const action = turn >= 2 ? { action: turn === 2 ? 'probe' : 'finish', paths: [], edits: [], query: turn === 2 ? 'console.log(1)' : '', memory: '' }
+        : { action: 'edit', paths: [], query: '', memory: turn ? 'ready for independent verification' : 'repair failing check',
+          edits: [{ path: task.editPaths[0], search: turn ? broken : original, replace: turn ? repaired : broken }] };
+      return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(action) } }] };
+    }, undefined, { handoffAfterEdit: true, preloadSource: true });
+  assert.deepEqual(roles, ['openai/gpt-6.1-sol', 'openai/gpt-6.1-sol', 'anthropic/claude-sonnet-5.5', 'anthropic/claude-sonnet-5.5']);
+  assert.equal(result.handoffProbeUsed, false);
+  assert.equal(result.handoffUsed, true);
+  assert.equal(result.publicPassed, true);
+  assert.equal(result.files[0].content, repaired);
+  assert.deepEqual(result.actions.map(action => action.action), ['edit', 'edit', 'handoff', 'probe', 'finish']);
+});
+
+for (const oversized of [false, true]) test(`edit handoff carries only the latest bounded executed probe: oversized=${oversized}`, {
+  skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+}, async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { execFileSync } = await import('node:child_process');
+  const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+  const task = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+    .find(task => task.id === 'provided-responses-path');
+  const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+    .receipts.find(receipt => receipt.taskId === task.id);
+  const original = execFileSync('git', ['show', `${task.base}:${task.editPaths[0]}`], { encoding: 'utf8' });
+  const query = `${oversized ? `/*${'界'.repeat(3000)}*/` : ''}throw new Error('latest-probe-sentinel');`;
+  assert.equal(Buffer.byteLength(query) > 8192, oversized);
+  assert.ok(query.length < 8192);
+  const roles = [];
+  const result = await runAgent(task, receipt.image, 'handoff', 'probe-handoff-fixture',
+    { maxTurns: 6, deadlineMs: 120000, outputTokens: 8192 }, async (_id, role, body) => {
+      const turn = roles.length; roles.push(role);
+      if (turn === 3) {
+        const context = body.messages.at(-1).content;
+        assert.equal(context.includes('Previously executed probe'), !oversized);
+        assert.equal(context.includes('latest-probe-sentinel'), !oversized);
+        assert.equal(context.includes('old-probe-sentinel'), false);
+        if (!oversized) {
+          assert.match(context, /untrusted; may predate the latest edit/);
+          assert.match(context, /"passed":false/);
+        }
+      }
+      const action = turn < 2 ? { action: 'probe', query: turn ? query : "throw new Error('old-probe-sentinel');", edits: [] }
+        : turn === 2 ? { action: 'edit', query: '', edits: [{ path: task.editPaths[0], search: original, replace: original + '\n// handoff fixture\n' }] }
+          : { action: 'finish', query: '', edits: [] };
+      return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ paths: [], memory: '', ...action }) } }] };
+    }, undefined, { handoffAfterEdit: true });
+  assert.deepEqual(roles, ['openai/gpt-6.1-sol', 'openai/gpt-6.1-sol', 'openai/gpt-6.1-sol', 'anthropic/claude-sonnet-5.5']);
+  assert.equal(result.outcome, 'submitted');
+  assert.equal(result.handoffProbeUsed, !oversized);
+  assert.equal(JSON.stringify(result).includes('probe-sentinel'), false);
+});
+
+test('edit handoff does not switch merely because the ordinary handoff turn was reached', {
+  skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+}, async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+  const task = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+    .find(task => task.id === 'provided-responses-path');
+  const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+    .receipts.find(receipt => receipt.taskId === task.id);
+  const roles = [];
+  const result = await runAgent(task, receipt.image, 'handoff', 'no-edit-handoff-fixture',
+    { maxTurns: 3, deadlineMs: 120000, outputTokens: 256 }, async (_id, role) => {
+      roles.push(role);
+      return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
+        action: 'read', paths: task.editPaths, edits: [], query: '', memory: 'still inspecting',
+      }) } }] };
+    }, undefined, { handoffAfterEdit: true });
+  assert.deepEqual(roles, Array(3).fill('openai/gpt-6.1-sol'));
+  assert.equal(result.handoffUsed, false);
+  assert.equal(result.outcome, 'turn_limit');
+});
+
 test('a charged truncated action is discarded before one bounded recovery in a real sandbox', {
   skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
 }, async () => {

@@ -95,7 +95,7 @@ export function sandboxArgs(image) {
     '--user=1000:1000', '--memory=2g', '--cpus=2', '--pids-limit=128',
     '--tmpfs=/tmp:rw,nosuid,nodev,size=256m,uid=1000,gid=1000',
     '--tmpfs=/work:rw,nosuid,nodev,size=1024m,uid=1000,gid=1000', '--workdir=/work', image,
-    'sh', '-c', 'cp -a --no-preserve=ownership /seed/. /work/ && touch /work/.ready && exec sleep 3600'];
+    'sh', '-c', 'cp -a --no-preserve=ownership /seed/. /work/ && rm -rf /work/node_modules && ln -s /seed/node_modules /work/node_modules && touch /work/.ready && exec sleep 3600'];
 }
 
 // No bind mounts, Docker socket, secrets, network, or caller-selected shell command.
@@ -209,7 +209,7 @@ export async function buildTask(task, { repo, nodeImage, run = command }) {
     for (const [i, file] of inputs.entries()) await writeFile(join(temp, `input${i}`), await git(repo, ['show', `${task.base}:${file}`]));
     // Trusted frozen dependencies are installed during image construction only.
     // Source remains outside /work until each unprivileged isolated trial starts.
-    await writeFile(join(temp, 'Dockerfile'), `FROM ${nodeImage}\nWORKDIR /seed\nCOPY input0 package.json\nCOPY input1 pnpm-lock.yaml\nCOPY input2 pnpm-workspace.yaml\nCOPY input3 admin/package.json\nRUN corepack enable && corepack prepare pnpm@11.28.4 --activate && pnpm install --frozen-lockfile\nCOPY source.tar /tmp/source.tar\nRUN tar -xf /tmp/source.tar -C /seed && rm /tmp/source.tar && chmod -R a+rX /seed\n`);
+    await writeFile(join(temp, 'Dockerfile'), `FROM ${nodeImage}\nWORKDIR /seed\nCOPY input0 package.json\nCOPY input1 pnpm-lock.yaml\nCOPY input2 pnpm-workspace.yaml\nCOPY input3 admin/package.json\nRUN corepack enable && corepack prepare pnpm@11.28.4 --activate && pnpm install --frozen-lockfile\nRUN node -e \"require('node:fs').writeFileSync('/seed/.fixture-ca.pem', require('node:tls').rootCertificates.join('\\n'))\"\nENV SSL_CERT_FILE=/seed/.fixture-ca.pem\nCOPY source.tar /tmp/source.tar\nRUN tar -xf /tmp/source.tar -C /seed && rm /tmp/source.tar && chmod -R a+rX /seed\n`);
     await run('docker', ['build', '--quiet', '--tag', tag, temp], { timeout: 600000, maxBytes: 4 * 1024 * 1024 });
     const image = (await run('docker', ['image', 'inspect', '--format={{.Id}}', tag])).stdout.toString().trim();
     if (!/^sha256:[a-f0-9]{64}$/.test(image)) throw new Error('invalid_image_id');
