@@ -91,7 +91,7 @@ export default {async fetch(request,env){
   if(mode==='provider-only')await env.POLICY_KV.put('connections/anthropic',JSON.stringify({providerId:'anthropic',enabled:true}));
   if(mode==='selection'||mode==='snapshot-only'||mode==='snapshot-select'||mode==='configuration'||dependency){
    await env.POLICY_KV.put('connections/anthropic',JSON.stringify({providerId:'anthropic',enabled:true}));
-   await env.POLICY_KV.put(selectedKey,JSON.stringify({provider:'anthropic',kind:'api_key',enabled:true,credentialStore:'durable_object',credentialGeneration:1,credentialLineage:'synthetic',credentialStatus:'active',hasCredential:true}));
+   if(!dependency)await env.POLICY_KV.put(selectedKey,JSON.stringify({provider:'anthropic',kind:'api_key',enabled:true,credentialStore:'durable_object',credentialGeneration:1,credentialLineage:'synthetic',credentialStatus:'active',hasCredential:true}));
   }
   if(mode==='healthy'||mode==='selection'||mode==='copy-pressure'||mode==='callable-pressure'||mode==='callables'||mode.startsWith('hook-')||mode.startsWith('inert-')||mode==='symbols'){
    phase='preflight';const preflight=await take(own(preflightCredential(env,'nativebridge',digest)));check(preflight.outcome==='matched','preflight');proof=preflight.proof;
