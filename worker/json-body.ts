@@ -539,52 +539,86 @@ function* plainChunks(value: string): Generator<string> {
 
 export class JsonBodyStructureLimit extends Error {}
 
+interface PrivateJsonBodyParser { push(text: string): void; take(): unknown; discard(): void }
+interface JsonBodyParser extends PrivateJsonBodyParser { end(): unknown; enforceStructureLimits(): void }
+type JsonBodyContainer = Record<string, unknown> | unknown[];
+
 // The larger envelope is for media, not unbounded object expansion. A byte cap
 // alone lets millions of tiny arrays/objects exhaust the 128 MB isolate. Parse
 // in bounded feeds directly into the value instead of retaining a second full
 // decoded document for JSON.parse. Limits apply only to bodies above 8 MiB.
-export function createJsonBodyParser(enforceStructure = true) {
-  const stack: Array<{ value: Record<string, unknown> | unknown[]; key?: string }> = [];
+export function createJsonBodyParser(enforceStructure = true): JsonBodyParser {
+  return createBodyParser(enforceStructure, false);
+}
+
+// The genuine private codec prepays this synchronous factory. Its completed
+// graph transfers directly to that codec; no end/getter or callback escapes.
+export function createPrivateJsonBodyParser(): PrivateJsonBodyParser {
+  return createBodyParser(true, true);
+}
+
+function createBodyParser(enforceStructure: boolean, privateParents: false): JsonBodyParser;
+function createBodyParser(enforceStructure: boolean, privateParents: true): PrivateJsonBodyParser;
+function createBodyParser(enforceStructure: boolean, privateParents: boolean): JsonBodyParser | PrivateJsonBodyParser {
+  // Exactly one stack is constructed. Ordinary callers retain their existing
+  // frame representation; the private path has direct parent references only.
+  const stack: Array<{ value: JsonBodyContainer; key?: string }> | undefined = privateParents ? undefined : [];
+  const parents: JsonBodyContainer[] | undefined = privateParents ? [] : undefined;
+  let pendingKey: string | undefined;
   let root: unknown, scalar = "", key = false, nodes = 0, maximumDepth = 0, maximumScalar = 0;
   const checkStructure = () => {
     if (enforceStructure && (nodes > 65_536 || maximumDepth > 128 || maximumScalar > 4096)) throw new JsonBodyStructureLimit();
   };
   function attach(value: unknown) {
     nodes++; checkStructure();
-    const frame = stack.at(-1);
-    if (!frame) root = value;
-    else if (Array.isArray(frame.value)) frame.value.push(value);
+    let parent: JsonBodyContainer | undefined, member: string | undefined;
+    if (parents) {
+      parent = parents.at(-1); member = pendingKey; pendingKey = undefined;
+    } else {
+      const frame = stack!.at(-1); parent = frame?.value; member = frame?.key;
+    }
+    if (!parent) root = value;
+    else if (Array.isArray(parent)) parent.push(value);
     // Define an own property, as JSON.parse does, including __proto__. Repeated
     // keys replace the previous value instead of altering object prototypes.
-    else Object.defineProperty(frame.value, frame.key!, { value, writable: true, enumerable: true, configurable: true });
+    else Object.defineProperty(parent, member!, { value, writable: true, enumerable: true, configurable: true });
   }
   function accept(token: Token) {
     switch (token.name) {
       case "startObject": case "startArray": {
-        maximumDepth = Math.max(maximumDepth, stack.length + 1); checkStructure();
+        maximumDepth = Math.max(maximumDepth, (parents ?? stack!).length + 1); checkStructure();
         const value = token.name === "startArray" ? [] : {};
-        attach(value); stack.push({ value }); break;
+        // A child attaches BEFORE descent, so its parent's key is no longer
+        // needed. The next sibling supplies a new key after ascent.
+        attach(value); if (parents) parents.push(value); else stack!.push({ value }); break;
       }
-      case "endObject": case "endArray": stack.pop(); break;
+      case "endObject": case "endArray": (parents ?? stack!).pop(); break;
       case "startKey": key = true; scalar = ""; break;
       case "startString": case "startNumber": key = false; scalar = ""; break;
       case "stringChunk": case "numberChunk":
         scalar += token.value;
         if (key || token.name === "numberChunk") { maximumScalar = Math.max(maximumScalar, scalar.length); checkStructure(); }
         break;
-      case "endKey": stack.at(-1)!.key = scalar; scalar = ""; break;
+      case "endKey": if (parents) pendingKey = scalar; else stack!.at(-1)!.key = scalar; scalar = ""; break;
       case "endString": attach(scalar); scalar = ""; break;
       case "endNumber": attach(Number(scalar)); scalar = ""; break;
       case "nullValue": case "trueValue": case "falseValue": attach(token.value); break;
     }
   }
   let consume: ReturnType<typeof createJsonTokenizer> | undefined = createJsonTokenizer(accept);
-  const discard = () => { consume = undefined; root = undefined; scalar = ""; stack.length = 0; };
+  const discard = () => { consume = undefined; root = undefined; scalar = ""; pendingKey = undefined; (parents ?? stack!).length = 0; };
+  const push = (text: string): void => {
+    if (!consume) throw new TypeError("JSON parser is retired");
+    for (let offset = 0; offset < text.length; offset += 4096) consume.push(text.slice(offset, offset + 4096));
+  };
+  const take = (): unknown => {
+    if (!consume) throw new TypeError("JSON parser is retired");
+    try { consume.end(); return root; }
+    finally { discard(); }
+  };
+  if (privateParents) return { push, take, discard };
   return {
-    push(text: string): void {
-      if (!consume) throw new TypeError("JSON parser is retired");
-      for (let offset = 0; offset < text.length; offset += 4096) consume.push(text.slice(offset, offset + 4096));
-    },
+    push,
     end(): unknown {
       if (!consume) throw new TypeError("JSON parser is retired");
       consume.end(); return root;
@@ -594,11 +628,7 @@ export function createJsonBodyParser(enforceStructure = true) {
     enforceStructureLimits(): void { enforceStructure = true; checkStructure(); },
     // Move the completed graph to one caller and drop all parser/tokenizer
     // references. Existing end() callers retain their original behavior.
-    take(): unknown {
-      if (!consume) throw new TypeError("JSON parser is retired");
-      try { consume.end(); return root; }
-      finally { discard(); }
-    },
+    take,
     discard,
   };
 }

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { ownedJsonCodecWire } from './owned-json-parser-cases.mjs';
 
 export const ownedHttpModel = 'volcengine/doubao-seed-2-1-pro-260915';
 export const ownedHttpPricingModel = 'fireworks/glm-5.2';
@@ -51,6 +52,17 @@ export class PolicyBindingIndexObject extends NativeAuthority {
  }
 }
 const ids=['chat','tool','error','abort','large','off','gmi','venice','pricing','pricing_media','pricing_cache','pricing_wide','pricing_large','pricing_unicode','pricing_outside','pricing_prepare_fail'],calls=[],intakes=[],completed=[],events=[];
+let parserHold;
+// Post-native fixture gate. The originating fetch/queue continuation keeps its
+// original value; foreign requests release/read scalars only, never native I/O.
+function holdParserPhase(phase,original){
+ const hold=parserHold;if(!hold||hold.phase!==phase||--hold.remaining!==0)return original;
+ return original.then(async value=>{
+  hold.arrived=true;
+  if(!hold.released)await new Promise(resolve=>{hold.release=resolve;});
+  hold.release=undefined;return value;
+ });
+}
 const priced=snapshot.providers.find(p=>p.id==='fireworks').models.find(m=>m.id==='fireworks/glm-5.2');
 // Fixture rates distinguish the ONE-hour early return from a maximum over both.
 priced.pricing={...priced.pricing,cacheWrite1hInputMicrosPerMillion:2000000,cacheWrite5mInputMicrosPerMillion:9000000};
@@ -127,7 +139,7 @@ function controlFailure(kind,origin){
 function environment(env,off=false){
  if(!scoped){
   const authority=new Proxy(env.ACCESS_CONTROL,{get(target,name){if(name==='idFromName')return value=>{controlFailure('authority','id');return target.idFromName(value);};if(name==='get')return id=>{
-   controlFailure('authority','get');const stub=target.get(id);return new Proxy(stub,{get(object,key){if(key==='fetch')return (url,init)=>{const path=new URL(url).pathname;calls.push({kind:'authority',path,charged:bodyBudgetCharged()});return observeControlRead('authority',path,object.fetch(url,init),init.signal);};const value=Reflect.get(object,key,object);return typeof value==='function'?value.bind(object):value;}});
+   controlFailure('authority','get');const stub=target.get(id);return new Proxy(stub,{get(object,key){if(key==='fetch')return (url,init)=>{const path=new URL(url).pathname;calls.push({kind:'authority',path,charged:bodyBudgetCharged()});const original=object.fetch(url,init);return observeControlRead('authority',path,path==='/authorization/snapshot'?holdParserPhase('delivery',original):original,init.signal);};const value=Reflect.get(object,key,object);return typeof value==='function'?value.bind(object):value;}});
   };const value=Reflect.get(target,name,target);return typeof value==='function'?value.bind(target):value;}});
   const credentials=new Proxy(env.GRANT_CREDENTIALS,{get(target,name){if(name==='idFromName')return value=>{controlFailure('credential','id');return target.idFromName(value);};if(name==='get')return id=>{
    controlFailure('credential','get');const stub=target.get(id);return new Proxy(stub,{get(object,key){if(key==='fetch')return (url,init)=>{
@@ -142,7 +154,7 @@ function environment(env,off=false){
   const budget=new Proxy(env.BUDGET_LEDGER,{get(target,name){if(name==='get')return id=>{const stub=target.get(id);return new Proxy(stub,{get(object,key){if(key==='fetch')return(url,init)=>{
    const value=typeof init?.body==='string'?JSON.parse(init.body):{};calls.push({kind:'budget',path:new URL(url).pathname,charged:bodyBudgetCharged(),reservationId:value.reservationId,costMicros:value.costMicros,actualCostMicros:value.actualCostMicros});return object.fetch(url,init);
   };const value=Reflect.get(object,key,object);return typeof value==='function'?value.bind(object):value;}});};const value=Reflect.get(target,name,target);return typeof value==='function'?value.bind(target):value;}});
-  const queue=new Proxy(env.USAGE_QUEUE,{get(target,name){if(name==='send')return (...args)=>{const value=args[0];if(value.type==='clawrouter.usage.v1')events.push({id:value.id,requestId:value.request_id,reserved:value.reserved_cost_micros,status:value.status_code});return Reflect.apply(target.send,target,args);};const value=Reflect.get(target,name,target);return typeof value==='function'?value.bind(target):value;}});
+  const queue=new Proxy(env.USAGE_QUEUE,{get(target,name){if(name==='send')return (...args)=>{const value=args[0];if(value.type==='clawrouter.usage.v1')events.push({id:value.id,requestId:value.request_id,reserved:value.reserved_cost_micros,status:value.status_code});const original=Reflect.apply(target.send,target,args);return value.type==='clawrouter.usage.v1'?holdParserPhase('accounting',original):original;};const value=Reflect.get(target,name,target);return typeof value==='function'?value.bind(target):value;}});
   const values={ACCESS_CONTROL:authority,GRANT_CREDENTIALS:credentials,BUDGET_LEDGER:budget,USAGE_QUEUE:queue,CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS:'60',VOLCANO_ENGINE_API_KEY:'must-not-fallback',ARK_API_KEY:'must-not-fallback'};
   scoped=new Proxy(env,{get(target,name,receiver){return Object.hasOwn(values,name)?values[name]:Reflect.get(target,name,receiver);}});
   offScoped=new Proxy(scoped,{get(target,name,receiver){return name==='CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS'?'0':Reflect.get(target,name,receiver);}});
@@ -166,11 +178,16 @@ export default {...handler,async fetch(request,env,context){
   if(value.afterReads!==undefined&&(value.kind!=='provider'||value.afterReads!==1||value.reason==='listener'))throw Error('fixture read phase');
   controlReadFault=value;return new Response(null,{status:204});
  }
+ if(path==='/fixture/parser-hold'){
+  if(request.method==='DELETE'){if(parserHold){parserHold.released=true;parserHold.release?.();}return new Response(null,{status:204});}
+  const phase=await request.text();if(!['delivery','accounting'].includes(phase)||parserHold)throw Error('fixture parser hold shape');
+  parserHold={phase,remaining:phase==='delivery'?2:1,arrived:false,released:false};return new Response(null,{status:204});
+ }
  if(path==='/fixture/revalidation-change'){
   const original=env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName('policy-bindings')).fetch('https://authority/fixture/revalidation-change',{method:'POST',body:await request.text()});
   const response=await original;await response.text();return new Response(null,{status:response.status});
  }
- if(path==='/fixture/state')return Response.json({calls,intakes,completed,events,recursivePricingValues,reasonReads,controlReads:controlReads.map(({kind,read,readSettled,cancel,cancelSettled,unlock,released,removalFailed})=>({kind,read,readSettled,cancel,cancelSettled,unlock,released,...(removalFailed?{removalFailed:true}:{})})),charged:bodyBudgetCharged()});
+ if(path==='/fixture/state')return Response.json({parsers:globalThis.__ownedJsonObservation?.rows??[],parserHold:parserHold?{arrived:parserHold.arrived,released:parserHold.released}:null,calls,intakes,completed,events,recursivePricingValues,reasonReads,controlReads:controlReads.map(({kind,read,readSettled,cancel,cancelSettled,unlock,released,removalFailed})=>({kind,read,readSettled,cancel,cancelSettled,unlock,released,...(removalFailed?{removalFailed:true}:{})})),charged:bodyBudgetCharged()});
  if(path==='/fixture/pressure'){
   if(request.method==='DELETE'){pressure?.release();pressure=undefined;return new Response(null,{status:204});}
   if(pressure)throw Error('fixture pressure already held');
@@ -209,6 +226,7 @@ export default {...handler,async fetch(request,env,context){
 `;
 
 export const ownedHttpUpstream = String.raw`
+__COMPACT_JSON_WIRE__
 const calls=[];
 export default {async fetch(request){
  if(request.url==='https://fixture.example/state')return Response.json(calls);
@@ -219,6 +237,10 @@ export default {async fetch(request){
  if(id==='invalid')return Response.json({error:{type:'invalid_request_error',message:'fixture credential rejected'}},{status:401});
  if(id==='error')return Response.json({error:{type:'invalid_request_error',message:'synthetic rejection'}},{status:400});
  const usage={prompt_tokens:4,completion_tokens:3,total_tokens:7};
+ if(id==='venice'&&body.ownedVeniceCase?.startsWith('compact-')){
+  const wire=ownedJsonCodecWire(body.ownedVeniceCase,body.model);
+  return new Response(body.stream===true?'data: '+wire+'\n\ndata: [DONE]\n\n':wire,{headers:{'content-type':body.stream===true?'text/event-stream':'application/json'}});
+ }
  if(id==='venice'&&body.ownedVeniceCase&&body.stream!==true){
   const mode=body.ownedVeniceCase,prefix='{"model":'+JSON.stringify(body.model)+',"extra":';let wire;
   if(mode==='depth128'||mode==='depth129'){const depth=mode==='depth128'?127:128;wire=prefix+'['.repeat(depth)+'0'+']'.repeat(depth)+'}';}
@@ -243,4 +265,4 @@ export default {async fetch(request){
   controller.enqueue(encoder.encode(chunk({},id==='tool'?'tool_calls':'stop')+'data: '+JSON.stringify({id:'fixture-owned-chat',object:'chat.completion.chunk',model:body.model,choices:[],usage})+'\n\ndata: [DONE]\n\n'));controller.close();
  },cancel(){row.canceled=true;}}),{headers:{'content-type':'text/event-stream'}});
 }};
-`;
+`.replace('__COMPACT_JSON_WIRE__', () => ownedJsonCodecWire.toString());

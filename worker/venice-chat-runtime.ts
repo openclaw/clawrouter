@@ -1,4 +1,4 @@
-import { createJsonBodyParser, parseBoundedJson } from "./json-body.ts";
+import { createPrivateJsonBodyParser, parseBoundedJson } from "./json-body.ts";
 import { inputRetirement } from "./input-retirement.ts";
 import { nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
@@ -261,8 +261,9 @@ export function retireOwnedVeniceChatCodec(cap: OwnedHttpRevalidation): void {
 // One code point is passed to the unchanged parser at a time. The tokenizer's
 // entire batch therefore precedes at most ONE new parent before the consumer's
 // existing depth-128 check. Strings, escapes and surrogate pairing are unchanged.
-function parseOwnedVeniceJson(text: string): unknown {
-  const parser = createJsonBodyParser();
+function parseOwnedVeniceJson(state: OwnedVeniceCodec, text: string): unknown {
+  if (codecOwner(state.cap) !== state || !state.started || !state.source) throw identityFailure("protocol");
+  const parser = createPrivateJsonBodyParser();
   try {
     for (let offset = 0; offset < text.length;) {
       const high = text.charCodeAt(offset), low = text.charCodeAt(offset + 1);
@@ -457,7 +458,7 @@ async function ownedVeniceJson(state: OwnedVeniceCodec, source: OwnedVeniceSourc
     if (!size || length !== null && Number(length) !== size) invalid();
     await source.finish("eof"); source.checkCleanup(); source.checkAbort();
     text = new TextDecoder("utf-8", { fatal: true }).decode(wire.subarray(0, size));
-    value = parseOwnedVeniceJson(text); text = "";
+    value = parseOwnedVeniceJson(state, text); text = "";
     validateVeniceReturnedModel(state.binding!, value);
     if (value && typeof value === "object" && Object.hasOwn(value, "error")) invalid();
     state.usage = { tokens: extractUsageTokens(value, { providerId: "venice", requestFormat: "openai.chat_completions", responseFormat: "openai.chat_completions" }), outcome: "success" };
@@ -539,7 +540,7 @@ function ownedVeniceEvents(state: OwnedVeniceCodec, source: OwnedVeniceSource, r
                   if (terminal) invalid(); value = data.join("\n");
                   if (value === "[DONE]") { if (!modelSeen) invalid(); terminal = true; }
                   else {
-                    payload = parseOwnedVeniceJson(value); validateVeniceReturnedModel(state.binding!, payload);
+                    payload = parseOwnedVeniceJson(state, value); validateVeniceReturnedModel(state.binding!, payload);
                     if (payload && typeof payload === "object" && Object.hasOwn(payload, "error")) invalid();
                     modelSeen = true;
                   }

@@ -511,13 +511,14 @@ delivery authority RPC. The full grant and persistent policy/routing guard do
 not disappear at these transitions. Complete simultaneous coefficients,
 transient rejection state and all execution products still need final closure.
 
-The private parser feeds the unchanged `createJsonBodyParser` one Unicode code
-point at a time, retaining surrogate pairs. Its existing depth, node, key and
+The private codec feeds `createPrivateJsonBodyParser` one Unicode code point
+at a time, retaining surrogate pairs. It shares the ordinary tokenizer and
+consumer switch; only its parent representation differs. Its existing depth, node, key and
 number limits remain intact. A consumer rejection therefore occurs before an
 additional large parent batch can be built. `take()` transfers the result and
 `discard()` always clears parser state. The pinned tokenizer's batch behavior
 is visible in its [exact dependency source](https://github.com/uhop/stream-json/blob/0f70a661308d12973b63f1e7ec23c396265a5361/src/core/parser.js).
-Both tokenizer parents and consumer frames remain CONTROL products; the small
+Both tokenizer parents and private consumer references remain CONTROL products; the small
 feed does not exempt them or establish a 1024-slot fit.
 
 JSON preserves the 2 MiB wire/8192-read limits. SSE preserves its 128 KiB frame,
@@ -560,7 +561,7 @@ predicate frames belong to CONTROL, not passive DATA. Their aliases clear at
 actual request retirement; the complete overlap is still unqualified.
 
 Additional authored witnesses use the real compiled entry and SQLite authority:
-20 Node cases, 19 native cases, and one Venice invocation in the existing pinned
+32 Node cases, 23 native cases, and one Venice invocation in the existing pinned
 OpenClaw UNIFIED client fixture. They include accepted/rejected structural and
 wire edges, escaped Unicode, raw duplicate/unknown preservation, more than 2 MiB
 of SSE, JSON delivery while archive work is held, and post-native held
@@ -570,15 +571,15 @@ consumers assert fixed ordered origin/presence receipts instead of hiding
 retirement failures behind a successful public error response. These cases
 are authored only; local semantics remain UNRUN_CODE_ONLY_HOSTED.
 
-### Open object-depth CONTROL counterexample
+### Repaired object-depth representation counterexample
 
-The current representation does not fit the adopted 1024 CONTROL ceiling.
+The former frame representation exceeded the adopted 1024 CONTROL ceiling.
 This is a source-counted overlap, not an executed failure or a measured heap
 claim. Use a genuine selected Venice grant and a streamed one-MiB Chat request,
 then a successful JSON response with `model` followed by `extra` containing
 127 nested objects, each with a `child` member. The root plus those objects has
-depth 128. At the deepest scalar, all 128 consumer frames have both `value` and
-`key`, and the tokenizer retains 128 parent entries. The wire, node and key
+depth 128. At the deepest scalar, all 128 former consumer frames had both `value` and
+`key`, and the tokenizer retained 128 parent entries. The wire, node and key
 limits permit this shape. Array-only depth witnesses omit the frame-key peak.
 
 Count an execution object, each explicit owner/control field, each execution
@@ -630,11 +631,56 @@ The source rows come from `createJsonBodyParser`, the pinned tokenizer,
 records and both `ownedProxyAccounting` results. The existing 128-slot windows
 cannot be relabeled to make a simultaneous 1045-product subset fit 1024.
 
-A minimum representation option is a private consumer mode in `json-body.ts`
-that stores frame values and pending keys in two bounded parallel CONTROL
-vectors. It would replace the 513-product consumer representation with 258
-products at depth 128, without changing parser limits or ordinary callers.
-That file is outside the current twenty-file production lease and is not
-edited. This option is not a whole-vertical fit claim: all omitted products and
-the other phases still require complete accounting. Until a representation
-repair is adopted and implemented, publication remains held.
+The private consumer now has one direct parent-reference stack and one pending
+key. It attaches a child before descent and clears that key immediately; the
+parent's next member supplies its next key after ascent. It retains the same
+own-property definition, duplicate last-wins behavior, tokenizer, token switch
+and structural limits. Ordinary callers keep their original frame layout.
+The private command exposes only `push`, `take` and `discard`; the genuine
+current codec validates ownership before the prepaid factory. Transfer and
+unconditional discard clear parent, pending-key, scalar, root and tokenizer
+aliases. They do not retire grant, policy, fresh authority, upload or sink owners.
+
+| Private parent representation only | Accepted depth 128 | Rejection at attempted depth 129 |
+| --- | ---: | ---: |
+| Consumer parent array and admitted reference cells | 129 | 129 |
+| Single pending-key cell | 1 | 1 |
+| Pinned tokenizer array and actual parent cells | 129 | 130 |
+| **Parent subtotal** | **259** | **260** |
+
+These are parent subtotals, not a full parser or vertical fit. The 383-product
+reduction does not grant new CONTROL credit. Shared factory state, active
+consumer/attach/check frames, descriptor object plus its four fields, callback
+products, token batches and wrapper state remain additive. Ordinary mode adds
+only fixed representation-selection state; it has no private parent array.
+
+The exact pinned stream-json 3.8.0 source and published package match. Its
+`jsonParser` holds seven option flags and seven mutable tokenizer-state fields,
+its parent vector, `pushStringChunk`, and the returned write callback. The
+write activation has the input, token array, nine named scan locals, and its
+active match/chunk state. The token array, dynamic chunk records, and returned
+`many` object survive until the consumer finishes that feed. In pinned
+stream-chain 4.4.1, `many` constructs one tagged object with a `values` field;
+`flushable(write)` tags and returns that same write function when final/abort
+are absent. It does not create a promise or an extra default write wrapper.
+These source facts bound specific products; they do not certify a total.
+
+Fixture-only source observers wrap the original parent pushes/pops, pending-key
+assignment/clear and discard boundary. They retain only scalar counts. The
+Node and real Workerd witnesses assert 128/128 accepted stack peaks, the actual
+129th tokenizer parent before consumer rejection, and complete alias clearing.
+No instrumentation is present in production. JSON and SSE cases cover object
+128/129, a 2048-parent prefix, mixed/wide siblings, empty/escaped/lone-surrogate
+keys, duplicate own `__proto__`, 4096/4097 key and number boundaries, and an
+8192-unit ordinary string. They compare independent JSON values and original
+raw response bytes, model, usage and fresh-authority RPC counts. Native holds
+observe parser clearing before first-data authority finishes and while actual
+accounting remains pending; complete public JSON can precede the latter's join.
+All original released work and memoized body roots still join in teardown.
+
+The complete HTTP/generation phase inventory remains open. In particular, the
+former lower bound omitted generation registry and slot trees, remaining
+promise/reaction products, active parser/descriptor transitions and concurrent
+upload/account/archive tails. Neither these authored observations nor syntax
+checks prove their combined fit. Publication remains held; semantics are
+UNRUN_CODE_ONLY_HOSTED.

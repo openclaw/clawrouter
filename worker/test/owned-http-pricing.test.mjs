@@ -15,6 +15,7 @@ import { evictCredentialGeneration } from '../credential-preflight.ts';
 import { prepareOwnedHttpPricing, enterOwnedHttpPricing } from '../pricing.ts';
 import { beginOwnedHttpRequest, finishOwnedHttpRequest } from '../http-identity-owner.ts';
 import { isIdentityFailure } from '../identity-admission.ts';
+import { ownedJsonCodecCases, ownedJsonCodecWire } from '../../test/helpers/owned-json-parser-cases.mjs';
 
 const modelId = 'fireworks/glm-5.2', kid = 'http_pricing', policyId = 'http-pricing-policy';
 const provider = snapshot.providers.find(item => item.id === 'fireworks');
@@ -322,6 +323,30 @@ test('public JSON is delivered while the ORIGINAL archive and its separately fun
 
 const veniceModelId = 'venice/zai-org-glm-5-2', veniceUpstream = 'zai-org-glm-5-2';
 const venicePrefix = '{"model":"' + veniceUpstream + '","extra":';
+for (const streaming of [false, true]) test('real owned Venice ' + (streaming ? 'SSE' : 'JSON') + ' compact parser preserves deep/mixed/key/number and ordinary string boundaries', async t => {
+  await fixture(t, async f => {
+    for (const [mode, valid] of ownedJsonCodecCases) {
+      const wire = ownedJsonCodecWire(mode, veniceUpstream), delivered = streaming ? 'data: ' + wire + '\n\ndata: [DONE]\n\n' : wire;
+      f.veniceResponse(delivered, streaming);
+      const before = f.calls.length, eventCount = f.events.length;
+      const response = await f.take(f.dispatch(payload({ model: veniceModelId, ...(streaming ? { stream: true } : {}) })));
+      let text, failed = false;
+      try { text = await f.take(f.bodyRoot(response)); } catch (error) { if (!streaming || valid) throw error; failed = true; }
+      await f.drain();
+      assert.equal(response.status, streaming || valid ? 200 : 502, mode);
+      assert.equal(failed, streaming && !valid, mode);
+      if (valid) {
+        assert.equal(text, delivered, mode + ' exact original response bytes');
+        const value = JSON.parse(streaming ? text.slice(6, text.indexOf('\n\n')) : text);
+        assert.deepEqual(value, JSON.parse(wire)); assert.equal(value.model, veniceUpstream);
+        assert.deepEqual(value.usage, { prompt_tokens: 4, completion_tokens: 3, total_tokens: 7 });
+      }
+      assert.equal(f.calls.slice(before).filter(row => row.kind === 'authority' && row.path === '/authorization/snapshot').length, valid ? 2 : 1, mode);
+      assert.equal(f.events.length - eventCount, 1, mode + ' original accounting event');
+    }
+  }, false, 'venice');
+});
+
 for (const [name, expected, make] of [
   ['depth 128', 200, () => venicePrefix + '['.repeat(127) + '0' + ']'.repeat(127) + '}'],
   ['object depth 128', 200, () => venicePrefix + '{"child":'.repeat(127) + '0' + '}'.repeat(128)],

@@ -4,11 +4,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startWorkerdFixture } from '../../test/helpers/workerd.mjs';
+import { startOwnedJsonObservedFixture } from '../../test/helpers/owned-json-parser-observer.mjs';
+import { ownedJsonCodecCases, ownedJsonCodecWire } from '../../test/helpers/owned-json-parser-cases.mjs';
 import { ownedHttpModel, ownedHttpPricingModel, ownedHttpControlModels, ownedHttpProxyKey, ownedHttpRouter, ownedHttpUpstream, seedOwnedHttpChat } from '../../test/helpers/owned-http-chat-fixture.mjs';
 
 // One memoized ORIGINAL body root is enrolled as soon as each dispatch resolves,
 // including a late response after an earlier assertion has already failed.
-async function fixture(t, run) {
+async function fixture(t, run, observeParsers = false) {
   const roots = [], bodies = new WeakMap(), releases = [], failedRetirements = new Set();
   let directory, runtime, finished = false, cleanupPromise, hasPrimary = false, primary;
   const own = promise => { const root = { used: false, outcome: promise.then(value => ({ failed: false, value }), error => ({ failed: true, error })) }; roots.push(root); return root; };
@@ -40,7 +42,8 @@ async function fixture(t, run) {
   t.after(async () => { if (!finished) { const failures = await cleanup(); if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures); } });
   try {
     directory = await mkdtemp(join(tmpdir(), 'owned-http-chat-'));
-    runtime = await take(own(startWorkerdFixture(directory, ownedHttpRouter, ownedHttpUpstream, { preventEviction: true, hotCache: true })));
+    const start = observeParsers ? startOwnedJsonObservedFixture : startWorkerdFixture;
+    runtime = await take(own(start(directory, ownedHttpRouter, ownedHttpUpstream, { preventEviction: true, hotCache: true })));
     await take(own(seedOwnedHttpChat(runtime)));
     assert.equal((await request('https://fixture/fixture/grants', { method: 'POST' })).status, 204);
     await run({ runtime, own, take, request, dispatch, body, releases,
@@ -168,6 +171,81 @@ for (const reason of ['undefined', 'huge', 'opaque', 'forged']) test('native cov
     assert.equal(upstream.filter(row => row.id === 'gmi').length, 1);
     assert.equal(after.charged, before.charged, 'all temporary operations retire while the same cached generations remain');
   });
+});
+
+for (const streaming of [false, true]) test('native owned Venice ' + (streaming ? 'SSE' : 'JSON') + ' compact parser observes original depth peaks and preserves complete wire/value semantics', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    for (const [mode, valid] of ownedJsonCodecCases) {
+      const before = await settledState(f), wire = ownedJsonCodecWire(mode, ownedHttpControlModels.venice.slice('venice/'.length));
+      const response = await f.take(f.dispatch('https://fixture/v1/chat/completions', chat('venice', {
+        model: ownedHttpControlModels.venice, ownedVeniceCase: mode, ...(streaming ? { stream: true } : {}),
+      })));
+      let text, failed = false;
+      try { text = await f.take(f.body(response)); } catch (error) { if (!streaming || valid) throw error; failed = true; }
+      assert.equal(response.status, streaming || valid ? 200 : 502, mode);
+      assert.equal(failed, streaming && !valid, mode);
+      if (valid) {
+        assert.equal(text, streaming ? 'data: ' + wire + '\n\ndata: [DONE]\n\n' : wire, mode + ' exact original wire');
+        const value = JSON.parse(streaming ? text.slice(6, text.indexOf('\n\n')) : text);
+        assert.deepEqual(value, JSON.parse(wire)); assert.equal(value.model, 'zai-org-glm-5-2');
+        assert.deepEqual(value.usage, { prompt_tokens: 4, completion_tokens: 3, total_tokens: 7 });
+      }
+      const after = await settledState(f), rows = after.parsers.slice(before.parsers.length);
+      assert.equal(rows.length, 1, mode + ' actual private parser invocation');
+      const row = rows[0]; assert.equal(row.cleared, true); assert.equal(row.parents, 0); assert.equal(row.tokens, 0); assert.equal(row.pending, false);
+      if (valid) {
+        assert.equal(row.parentPushes, row.parentPops); assert.equal(row.tokenPushes, row.tokenPops);
+      }
+      if (mode === 'compact-object128') {
+        assert.equal(row.peakParents, 128); assert.equal(row.peakTokens, 128); assert.equal(row.peakStored, 259);
+      } else if (mode === 'compact-object129' || mode === 'compact-open2048') {
+        assert.equal(row.peakParents, 128); assert.equal(row.peakTokens, 129); assert.equal(row.peakStored, 260);
+        assert.equal(row.abandonedParents, 128); assert.equal(row.abandonedTokens, 129);
+      }
+      assert.equal(count(after, 'authority', '/authorization/snapshot') - count(before, 'authority', '/authorization/snapshot'), valid ? 2 : 1);
+      assert.equal(after.events.length - before.events.length, 1, mode + ' original native accounting event');
+    }
+  }, true);
+});
+
+for (const phase of ['delivery', 'accounting']) test('native compact parser aliases clear while original ' + phase + ' still owns funded request children', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const streaming = phase === 'delivery', before = await settledState(f);
+    const release = async () => { assert.equal((await f.request('https://fixture/fixture/parser-hold', { method: 'DELETE' })).status, 204); };
+    f.releases.push(release);
+    assert.equal((await f.request('https://fixture/fixture/parser-hold', { method: 'POST', body: phase })).status, 204);
+    const dispatch = f.dispatch('https://fixture/v1/chat/completions', chat('venice', {
+      model: ownedHttpControlModels.venice, ownedVeniceCase: 'compact-object128', ...(streaming ? { stream: true } : {}),
+    }));
+    const progress = f.own((async () => {
+      const response = await f.take(dispatch); assert.equal(response.status, 200);
+      return f.take(f.body(response));
+    })());
+    let ended = false;
+    const monitor = f.own(progress.outcome.then(() => { ended = true; }));
+    let held;
+    for (;;) {
+      held = await state(f);
+      if (held.parserHold?.arrived) break;
+      if (held.completed.length > before.completed.length || phase === 'delivery' && ended) {
+        await f.take(progress); assert.fail('original request completed before its parser custody hold');
+      }
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    const parser = held.parsers.at(-1);
+    assert.equal(parser.peakParents, 128); assert.equal(parser.peakTokens, 128); assert.equal(parser.cleared, true);
+    assert.equal(parser.parents, 0); assert.equal(parser.tokens, 0); assert.equal(parser.pending, false);
+    assert.ok(held.charged >= before.charged + 32 * 1024 * 1024, 'parser discard is not request/foreground credit retirement');
+    assert.equal(held.completed.length, before.completed.length, 'original request retirement remains held');
+    if (phase === 'accounting') assert.equal(await f.take(progress), ownedJsonCodecWire('compact-object128', 'zai-org-glm-5-2'), 'complete public JSON is deliverable while accounting remains held');
+    else assert.equal(ended, false, 'first SSE data still waits for its actual fresh authority result');
+    await release();
+    const text = await f.take(progress); await f.take(monitor);
+    if (streaming) assert.equal(text, 'data: ' + ownedJsonCodecWire('compact-object128', 'zai-org-glm-5-2') + '\n\ndata: [DONE]\n\n');
+    const after = await settledState(f);
+    assert.ok(after.charged < held.charged, 'only joined original children permit foreground retirement');
+    assert.equal(count(after, 'authority', '/authorization/snapshot') - count(before, 'authority', '/authorization/snapshot'), 2);
+  }, true);
 });
 
 for (const [mode, expected] of [['depth128', 200], ['object-depth128', 200], ['depth129', 502], ['open2048', 502],
