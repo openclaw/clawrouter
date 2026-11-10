@@ -8,6 +8,7 @@ import { prepareOwnedVeniceChatAuthority } from '../venice-chat-authority.ts';
 import { prepareOwnedGmiOrganizationBinding } from '../gmi-organization-binding.ts';
 import { beginOwnedHttpRequest, finishOwnedHttpRequest } from '../http-identity-owner.ts';
 import { bodyBudgetCharged } from '../body-budget.ts';
+import { prepareOwnedVeniceChatCodec, readOwnedVeniceChatResponse, consumeOwnedVeniceChatResponse } from '../venice-chat-runtime.ts';
 
 const recordLimit = 1048576;
 const record = bytes => '{"pad":"' + 'x'.repeat(bytes - '{"pad":""}'.length) + '"}';
@@ -45,8 +46,9 @@ test('snapshot unknown complete fields and duplicate occurrences retain the exis
   assert.throws(() => parse(oversized), isIdentityFailure, 'unknown array entries consume the complete allowance');
 });
 
-test('private snapshot and inspect reject forged and request-only caps before original namespace acquisition', async () => {
-  let acquisitions = 0;
+test('private snapshot, inspect and codec reject forged and request-only caps before original acquisition', async () => {
+  let acquisitions = 0, graphReads = 0;
+  const unowned = new Proxy({}, { get() { graphReads++; throw undefined; } });
   const namespace = { idFromName() { acquisitions++; throw undefined; }, get() { acquisitions++; throw undefined; } };
   const env = { ACCESS_CONTROL: namespace, GRANT_CREDENTIALS: namespace };
   const request = new Request('https://router.example/v1/chat/completions'), baseline = bodyBudgetCharged();
@@ -56,8 +58,11 @@ test('private snapshot and inspect reject forged and request-only caps before or
     for (const cap of [Object.freeze({}), requestOnly]) {
       assert.throws(() => ownedHttpAuthorizationSnapshot(cap, env, request.signal), isIdentityFailure);
       assert.throws(() => inspectOwnedHttpGrantCredentials(cap, env, request.signal), isIdentityFailure);
+      assert.throws(() => prepareOwnedVeniceChatCodec(cap, unowned, unowned), isIdentityFailure);
+      assert.throws(() => readOwnedVeniceChatResponse(cap, unowned, request.signal), isIdentityFailure);
+      await assert.rejects(consumeOwnedVeniceChatResponse(cap, unowned, request.signal), isIdentityFailure);
     }
-    assert.equal(acquisitions, 0);
+    assert.equal(acquisitions, 0); assert.equal(graphReads, 0);
   } catch (error) { hasPrimary = true; primary = error; }
   const failures = [];
   try { await finishOwnedHttpRequest(requestOnly); } catch (error) { failures.push(error); }

@@ -315,9 +315,13 @@ export function fundOwnedHttpVeniceCodec(cap: OwnedHttpRevalidation, codecBytes:
   if (owner.selection.provider.id !== "venice") throw identityFailure("protocol");
   admitOwnedHttpCodecBacking(owner.backing, codecBytes, usageBytes); owner.codec = true;
 }
-export function checkOwnedHttpVeniceResponse(cap: OwnedHttpRevalidation, response: Response, signal: AbortSignal): void {
+function veniceResponseOwner(cap: OwnedHttpRevalidation, response: Response, signal: AbortSignal): RevalidationOwner {
   const owner = revalidationOwner(cap);
   if (!owner.codec || owner.preparing || !matchesOwnedHttpVeniceResponseInput(owner.http, owner.attempt, response, signal)) throw identityFailure("protocol");
+  return owner;
+}
+export function checkOwnedHttpVeniceResponse(cap: OwnedHttpRevalidation, response: Response, signal: AbortSignal): void {
+  if (!veniceResponseOwner(cap, response, signal).codecScope) throw identityFailure("protocol");
 }
 export function beginOwnedHttpVeniceSource(cap: OwnedHttpRevalidation): OwnedHttpIntakeDiagnostics {
   const owner = revalidationOwner(cap), root = requestOwner(owner.http);
@@ -340,8 +344,8 @@ export function ownOwnedHttpVeniceRetirement(cap: OwnedHttpRevalidation, work: P
   owner.codecScope.start(() => work);
 }
 export function startOwnedHttpVeniceCodec(cap: OwnedHttpRevalidation, response: Response, signal: AbortSignal): Promise<Response> {
-  checkOwnedHttpVeniceResponse(cap, response, signal);
-  const owner = revalidationOwner(cap);
+  const owner = veniceResponseOwner(cap, response, signal);
+  if (owner.codecScope) throw identityFailure("protocol");
   return requestOwner(owner.http).completion.start(children => {
     owner.codecScope = children;
     return consumeOwnedVeniceChatResponse(cap, response, signal);
