@@ -8,8 +8,8 @@ import { startWorkerdFixture } from '../../test/helpers/workerd.mjs';
 const router = String.raw`
 import {PolicyBindingIndexObject as Base} from './worker/authority.ts';
 export {BudgetLedgerObject,UsageLedgerObject,GrantCredentialObject} from './worker/index.ts';
-import {preflightCredential,releaseCredentialPreflight,prepareCredentialGeneration,completeCredentialGeneration,completeConsumableCredentialGeneration,authenticateCredentialGeneration,selectCredentialGeneration,flushCredentialGenerationRuntime,queueCredentialGenerationRuntime,retainCredentialGenerationHint,prepareCredentialGenerationPrefetch,borrowCredentialGeneration,evictCredentialGeneration} from './worker/credential-preflight.ts';
-import {prefetchOwnedGrantCredentials,evictGrantCredentials} from './worker/credential-cache.ts';
+import {preflightCredential,releaseCredentialPreflight,prepareCredentialGeneration,completeCredentialGeneration,completeConsumableCredentialGeneration,authenticateCredentialGeneration,selectCredentialGeneration,flushCredentialGenerationRuntime,queueCredentialGenerationRuntime,retainCredentialGenerationHint,prepareCredentialGenerationPrefetch,adoptCredentialGenerationDestination,borrowCredentialGeneration,evictCredentialGeneration} from './worker/credential-preflight.ts';
+import {prefetchOwnedGrantCredentials,borrowOwnedGrantCredentials,evictOwnedGrantCredentials,evictGrantCredentials} from './worker/credential-cache.ts';
 import {putGrantCredentials} from './worker/grant-credentials.ts';
 import {ExactBodyCharge,bodyBudgetCharged,bodyBudgetBytes} from './worker/body-budget.ts';
 import {PreflightTicket,preflightPayloadBytes} from './worker/credential-preflight-arena.ts';
@@ -73,7 +73,7 @@ export class PolicyBindingIndexObject extends Base {
 }
 export default {async fetch(request,env){
  const mode=new URL(request.url).pathname.slice(1),stub=env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName('policy-bindings'));
- const roots=[],origins=new WeakMap();let proof,prep,borrow,auth,selected,hint,pressure,secondBorrow,secondAuth,secondSelected,hasPrimary=false,primary,result;const releases=[];
+ const roots=[],origins=new WeakMap();let proof,prep,borrow,auth,selected,hint,pressure,destinationBorrow,prefetchEnv,secondBorrow,secondAuth,secondSelected,hasPrimary=false,primary,result;const releases=[];
  const cohortPrepare=mode==='cohort-prepare',prefetch=mode.startsWith('prefetch-'),pairMode=mode==='origin-select'||mode==='shared-runtime',poolMode=prefetch||cohortPrepare||pairMode,key='oauth/native-generation-policy/prefetch';
  const selection={providerId:'anthropic',endpointId:'messages',mode:'http',capability:'llm.messages'};
  const input=poolMode?{providers:[{id:'anthropic',tokenRef:'anthropic'}],snapshot:mode==='origin-select'?'select':'only',selection}:{providers:[]};
@@ -172,23 +172,62 @@ export default {async fetch(request,env){
     calls++;const response=await stub.fetch(...args),body=response.body;check(!!body,'materialization body');
     const row={byob:false,read:0,eof:false,cancel:0,unlock:false,backing:0},acquire=body.getReader.bind(body);rows.push(row);
     body.getReader=options=>{row.byob=options?.mode==='byob';const reader=acquire(options),read=reader.read.bind(reader),cancel=reader.cancel.bind(reader),unlock=reader.releaseLock.bind(reader);
-     reader.read=(...args)=>{const original=read(...args);row.read++;return original.then(async value=>{if(value.done)row.eof=true;if(value.value)row.backing=Math.max(row.backing,value.value.buffer.byteLength);if(first){first=false;entered.resolve();if(mode==='prefetch-held-read')await release.promise;if(mode==='prefetch-held-cancel')throw undefined;}return value;});};
+     reader.read=(...args)=>{const original=read(...args);row.read++;return original.then(async value=>{if(value.done)row.eof=true;if(value.value)row.backing=Math.max(row.backing,value.value.buffer.byteLength);if(first){first=false;entered.resolve();if(mode==='prefetch-held-read'||mode==='prefetch-joined')await release.promise;if(mode==='prefetch-held-cancel')throw undefined;}return value;});};
      reader.cancel=(...args)=>{row.cancel++;const original=cancel(...args);void original.then(()=>{},()=>{});return (async()=>{let failed=false,reason;try{await original;}catch(error){failed=true;reason=error;}cancelEntered.resolve();if(mode==='prefetch-held-cancel')await release.promise;if(failed)throw reason;})();};
      reader.releaseLock=()=>{unlock();row.unlock=!body.locked;if(mode==='prefetch-unlock-failure')throw Error('fixture post-native unlock failure');};return reader;};return response;
    };const value=Reflect.get(stub,name,stub);return typeof value==='function'?value.bind(stub):value;}});};const value=Reflect.get(target,name,target);return typeof value==='function'?value.bind(target):value;}});
    const prefEnv=new Proxy(env,{get(target,name,receiver){return name==='GRANT_CREDENTIALS'?wrapped:Reflect.get(target,name,receiver);}});
+   prefetchEnv=prefEnv;const beforePrefetch=bodyBudgetCharged();
+   if(mode==='prefetch-admission-pressure'){
+    const vector=JSON.stringify(privateCacheCharged());pressure=ExactBodyCharge.reserve(bodyBudgetBytes-beforePrefetch-preflightPayloadBytes+1);check(!!pressure,'temporary pressure');
+    let refused=false;try{prepareCredentialGenerationPrefetch(hint,prefEnv);}catch(error){refused=isIdentityFailure(error);}
+    check(refused&&calls===0&&JSON.stringify(privateCacheCharged())===vector,'capacity before traversal/index/materialization');pressure.release();pressure=undefined;
+    check(bodyBudgetCharged()===beforePrefetch,'temporary refusal preserves debit');
+   }
    const receipt=prefetchOwnedGrantCredentials(prepareCredentialGenerationPrefetch(hint,prefEnv));check(receipt.accepted,'accepted native prefetch');const root=own(receipt.completed);
+   if(mode==='prefetch-joined'){
+    const arrival=await Promise.race([entered.promise.then(()=>true),root.outcome.then(()=>false)]);
+    if(!arrival){await take(root);throw Error('native prefetch settled before join hold');}
+    const second=prefetchOwnedGrantCredentials(prepareCredentialGenerationPrefetch(hint,prefEnv));check(second.accepted,'own native joining request accepted');const joined=own(second.completed);
+    release.resolve();await take(root);await take(joined);check(calls===1,'own scalar join did not duplicate materialization');
+   }
    if(mode==='prefetch-held-read'||mode==='prefetch-held-cancel'){
     const event=mode==='prefetch-held-cancel'?cancelEntered.promise:entered.promise;
     const arrival=await Promise.race([event.then(()=>({entered:true})),root.outcome.then(outcome=>({entered:false,outcome}))]);
     if(!arrival.entered){root.used=true;if(arrival.outcome.failed)throw arrival.outcome.error;throw Error('prefetch finished before post-native fixture hold');}
+    evictOwnedGrantCredentials(prepareCredentialGenerationPrefetch(hint,prefEnv));
     hint.dispose();hint=undefined;selected.dispose();selected=undefined;auth.dispose();auth=undefined;borrow.dispose();borrow=undefined;evictCredentialGeneration(env,kid);evictGrantCredentials(key);
     check(bodyBudgetCharged()>=preflightPayloadBytes,'hint child retained through actual wrapper root');
     if(mode==='prefetch-held-cancel')check(rows[0].cancel===1&&!rows[0].unlock,'FIRSTcancel held before unlock');
    }
    release.resolve();let failed=false,reason;try{await take(root);}catch(error){failed=true;reason=error;}
    if(mode==='prefetch-held-cancel'||mode==='prefetch-unlock-failure')check(failed&&isIdentityFailure(reason),'injected post-native read/unlock failure');else if(failed)throw reason;
-   check(calls===1,'one materialization');for(const row of rows)check(row.byob&&row.read>0&&row.backing<=16384&&row.unlock&&(mode==='prefetch-held-cancel'?row.cancel===1:row.eof),'original native response reader custody');
+   check(calls===1,'one original materialization');
+   if(mode==='prefetch-healthy'||mode==='prefetch-joined'||mode==='prefetch-admission-pressure'||mode==='prefetch-payload-pressure'||mode==='prefetch-structure-pressure'||mode==='prefetch-replace'||mode==='prefetch-expiry'){
+    check(bodyBudgetCharged()>beforePrefetch&&bodyBudgetCharged()<beforePrefetch+preflightPayloadBytes,'positive private destination after temporary retirement');
+    destinationBorrow=borrowOwnedGrantCredentials(prepareCredentialGenerationPrefetch(hint,prefEnv));check(!!destinationBorrow,'genuine private borrower');
+    check(Object.keys(destinationBorrow).join(',')==='dispose'&&JSON.stringify(destinationBorrow)==='{}','no public graph alias');
+    check(!prefetchOwnedGrantCredentials(prepareCredentialGenerationPrefetch(hint,prefEnv)).accepted&&calls===1,'private HIT zero RPC');
+    if(mode==='prefetch-admission-pressure'){
+     const charged=bodyBudgetCharged(),vector=JSON.stringify(privateCacheCharged());pressure=ExactBodyCharge.reserve(bodyBudgetBytes-charged-preflightPayloadBytes-4095);check(!!pressure,'borrower metadata pressure');
+     const held=bodyBudgetCharged();let refused=false;try{borrowOwnedGrantCredentials(prepareCredentialGenerationPrefetch(hint,prefEnv));}catch(error){refused=isIdentityFailure(error);}
+     check(refused&&calls===1&&bodyBudgetCharged()===held&&JSON.stringify(privateCacheCharged())===vector,'borrower refusal before ref/factory effects');pressure.release();pressure=undefined;
+     check(bodyBudgetCharged()===charged,'borrower refusal preserves destination');
+    }
+    if(mode==='prefetch-payload-pressure'||mode==='prefetch-structure-pressure'||mode==='prefetch-replace'){
+     const charged=bodyBudgetCharged(),used=privateCacheCharged();setHotCacheClock(()=>Date.now()+10001);releases.push(()=>setHotCacheClock());
+     if(mode!=='prefetch-replace'){pressure=PrivateCacheReservation.reserve({serializedBytes:0,payloadBytes:mode==='prefetch-payload-pressure'?privateCacheLimits.payloadBytes-used.payloadBytes:1,structure:mode==='prefetch-structure-pressure'?privateCacheLimits.structure-used.structure:1});check(!!pressure,'optional private vector pressure');}
+     const held=bodyBudgetCharged(),refresh=prefetchOwnedGrantCredentials(prepareCredentialGenerationPrefetch(hint,prefEnv));check(refresh.accepted,'private stale refresh');await take(own(refresh.completed));
+     check(calls===2,'second actual native materialization');
+     if(mode!=='prefetch-replace'){check(bodyBudgetCharged()===held,'refused reply retired with old destination intact');pressure.release();pressure=undefined;check(bodyBudgetCharged()===charged,'optional pressure release');}
+     else check(bodyBudgetCharged()>held,'old borrower and new destination both funded');
+    }
+    if(mode==='prefetch-expiry'){setHotCacheClock(()=>Date.now()+60001);releases.push(()=>setHotCacheClock());check(borrowOwnedGrantCredentials(prepareCredentialGenerationPrefetch(hint,prefEnv))===undefined,'expiry removes publication only');}
+    adoptCredentialGenerationDestination(selected,prefEnv,destinationBorrow);const consumed=destinationBorrow;destinationBorrow=undefined;
+    let denied=false;try{consumed.dispose();}catch(error){denied=isIdentityFailure(error);}check(denied,'single-use adoption');
+    evictOwnedGrantCredentials(prepareCredentialGenerationPrefetch(hint,prefEnv));check(bodyBudgetCharged()>beforePrefetch,'selected child retains detached destination');
+   }
+   for(const row of rows)check(row.byob&&row.read>0&&row.backing<=16384&&row.unlock&&(mode==='prefetch-held-cancel'?row.cancel===1:row.eof),'original native response reader custody');
    result={mode,materializations:calls,materializationReads:rows[0].read,postNativeHold:mode==='prefetch-held-read'||mode==='prefetch-held-cancel'};
   }
   if(cohortPrepare){
@@ -213,10 +252,11 @@ export default {async fetch(request,env){
  const failures=[];
  if(cohortPrepare&&hasPrimary)cohortBlockersReleased=true;
  for(const release of releases)try{await release();}catch(error){failures.push(error);}
+ if(hint&&prefetchEnv)try{evictOwnedGrantCredentials(prepareCredentialGenerationPrefetch(hint,prefetchEnv));}catch(error){failures.push(error);}
  pressure?.release();if(!cohortPrepare||hasPrimary)evictCredentialGeneration(env,kid);evictGrantCredentials(key);
  if(prefetch&&auth)try{own(flushCredentialGenerationRuntime(auth,env));}catch(error){failures.push(error);}
  for(let i=0;i<roots.length;i++){const outcome=await roots[i].outcome;if(outcome.failed&&!roots[i].used){roots[i].used=true;failures.push(outcome.error);}}
- for(const release of [()=>secondSelected?.dispose(),()=>secondAuth?.dispose(),()=>secondBorrow?.dispose(),()=>hint?.dispose(),()=>{if(selected&&!selected.flush.accepted)selected.flush.pending?.dispose();},()=>selected?.dispose(),()=>auth?.dispose(),()=>borrow?.dispose(),()=>prep?.dispose(),()=>{if(proof)releaseCredentialPreflight(proof);}])try{release();}catch(error){failures.push(error);}
+ for(const release of [()=>destinationBorrow?.dispose(),()=>secondSelected?.dispose(),()=>secondAuth?.dispose(),()=>secondBorrow?.dispose(),()=>hint?.dispose(),()=>{if(selected&&!selected.flush.accepted)selected.flush.pending?.dispose();},()=>selected?.dispose(),()=>auth?.dispose(),()=>borrow?.dispose(),()=>prep?.dispose(),()=>{if(proof)releaseCredentialPreflight(proof);}])try{release();}catch(error){failures.push(error);}
  if(failures.length)throw new AggregateError(hasPrimary?[primary,...failures]:failures,'owned native roots');if(hasPrimary)throw primary;
  if(!cohortPrepare)check(bodyBudgetCharged()===baseline,'last actual consumer funding');
  return Response.json({...result,charged:bodyBudgetCharged()});
@@ -266,13 +306,13 @@ test('inactive owned generation consumption uses actual native KV/SQLite, prefet
   try {
     directory = await mkdtemp(join(tmpdir(), 'identity-generations-'));
     runtime = await take(own(startWorkerdFixture(directory, router, upstream, { preventEviction: true })));
-    for (const mode of ['owned-auth', 'coverage-denied', 'disabled', 'pressure', 'origin-select', 'shared-runtime', 'prefetch-healthy', 'prefetch-held-read', 'prefetch-held-cancel', 'prefetch-unlock-failure']) {
+    for (const mode of ['owned-auth', 'coverage-denied', 'disabled', 'pressure', 'origin-select', 'shared-runtime', 'prefetch-healthy', 'prefetch-joined', 'prefetch-admission-pressure', 'prefetch-payload-pressure', 'prefetch-structure-pressure', 'prefetch-replace', 'prefetch-expiry', 'prefetch-held-read', 'prefetch-held-cancel', 'prefetch-unlock-failure']) {
       const response = await take(dispatch('https://fixture/' + mode));
       const body = await take(readBody(response)); assert.equal(response.status, 200, mode);
       const result = JSON.parse(body);
       const log = typeof t.log === 'function' ? t.log : t.diagnostic;
       try { if (typeof log === 'function') Reflect.apply(log, t, [JSON.stringify({ fixture: 'identity-generations', case: mode, status: response.status, nativeReads: result.nativeReads ?? 0, intakes: result.intakes ?? 0 })]); } catch {}
-      assert.equal(result.charged, 0); assert.ok(result.nativeReads > 0); assert.equal(result.intakes, mode === 'shared-runtime' ? 2 : 1); if (mode.startsWith('prefetch-')) { assert.equal(result.materializations, 1); assert.ok(result.materializationReads > 0); }
+      assert.equal(result.charged, 0); assert.ok(result.nativeReads > 0); assert.equal(result.intakes, mode === 'shared-runtime' ? 2 : 1); if (mode.startsWith('prefetch-')) { assert.equal(result.materializations, ['prefetch-payload-pressure', 'prefetch-structure-pressure', 'prefetch-replace'].includes(mode) ? 2 : 1); assert.ok(result.materializationReads > 0); }
     }
     let cohortOpen = true;
     const releaseCohort = async () => { if (!cohortOpen) return; cohortOpen = false; const response = await take(dispatch('https://fixture/cohort-release')); await take(readBody(response)); assert.equal(response.status, 200); };

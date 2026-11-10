@@ -4,10 +4,10 @@ This inactive slice starts at PR976's qualified retained-generation foundation.
 It does not activate ordinary proxy, HTTP, Access, direct, provider or credential
 cache callers. The ordinary entrypoints remain unchanged. Publication is held
 for source qualification of the DATA/CONTROL inventory below. The own-request
-fixed-cohort contract is adopted and implemented. The six scoped repairs below are
-a new source candidate; the retained-publication design for private prefetch is
-still held. Neither the old inventory nor the arithmetic below closes that
-separate destination-owner gap. Authored semantics remain
+fixed-cohort contract, six custody repairs and private retained credential
+destination are implemented in this candidate. The new prefetch warms only that
+owned destination; ordinary foreground acceleration needs a future owned adapter.
+Authored semantics remain
 `UNRUN_CODE_ONLY_HOSTED`; static arithmetic is not a runtime result.
 
 ## Closed ownership
@@ -105,6 +105,10 @@ qualification must verify the ceilings against the actual call paths.
 | Pending count | `4096 + 8*poolKeyUnits + 6*grantKeyUnits + 2*cursorUnits` | Original flush settlement |
 | Fixed cohort | `32768 + 512*4 + 2*T` bytes, with `T` the maximum prospectively planned escaped outbound text of the fixed rows; owner/claims/ACK/terminal products are distinct from retained records; factory closure still required | Original ACK acquisition/read/cancel/unlock settlement |
 | Hint | 1024 bytes plus a lazy 512-byte registry owner | Replacement/disposal |
+| Private credential acquisition | Full 33554432-byte temporary component plus prospective ID/configuration guard | Original materialization, publication decision and all alias cleanup |
+| Private credential index | Root, authority and credential-binding partition: 2048 bytes/64 fields each; entry: `2048 + 4*I` bytes/64 fields | Last publication, active loader and retained value |
+| Retained credential value | Exact graph vector plus 1024 bytes/64 fields | Publication or last actual borrower |
+| Private credential borrower | 4096 positive common bytes; lazy 512-byte registry | Dispose or named selected-owner adoption, then last selected child |
 
 `C`, `M`, `E`, `V`, and `U` above are the actual admitted container, member, array
 entry, value and string-unit counts. No source-counter credit funds new copies.
@@ -115,33 +119,53 @@ entry, value and string-unit counts. No source-counter credit funds new copies.
 entry guard runs before consuming factories. It neither reuses a promoted
 ticket's zero balance nor treats the prior 715-slot table as spare credit.
 All four 128-slot windows remain reserved. The repaired source inventory has a
-synchronous peak of 502, giving `512 + 502 = 1014 <= 1024`. This is a new
-candidate inventory, not carried source qualification or a proof that the held
-prefetch destination fits. These are conservative application product/field
+synchronous peak of 503, giving `512 + 503 = 1015 <= 1024`. This is a new
+candidate inventory, not carried source qualification or unused-slot credit.
+These are conservative application product/field
 ceilings, not JS sizes. The table is submitted for source qualification.
 
 | Window | Ceiling | Included original products |
 | --- | ---: | --- |
-| Operation | 107 / 128 | Entry/run/followers, registration, own publication polling, actual load/materialize/fetch, receipt and failure products |
+| Operation | 113 / 128 | Entry/run/followers, registration, own publication polling, actual materialize/fetch, private index/borrow/adoption, receipt and failure products |
 | Source | 125 / 128 | Acquisition, response/reader, InputRetirement, headers, wire/decoder, 24 parser frames and 48 descriptors |
 | Read | 32 / 128 | Original read, input promise/finally, pull/await, whole backings/views, wire copy and ACK propagation |
-| Terminal | 111 / 128 | FIRSTcancel/read/allSettled, unlock/UNKNOWN, publication-finally, child/ancestor cleanup and independent origins |
+| Terminal | 125 / 128 | FIRSTcancel/read/allSettled, unlock/UNKNOWN, publication-finally, private value/index/borrow retirement, child/ancestor cleanup and independent origins |
 
-Each synchronous phase includes 144 persistent products: foundation roots 35,
+Each synchronous phase includes 145 persistent products: foundation roots 35,
 coverage/slot/receipt fields 11, authentication owner/lease/parent/capability 53,
 selection 21, hint 12, originating/runtime fields/registry backing 8 and the pending-cap registry
-owner/charge/counter 4. These remain included across original awaits; they are
+owner/charge/counter 4 and the selected destination-child field 1. These remain included across original awaits; they are
 not another grant of slots.
 
 | Synchronous phase | Additional | Including persistent roots |
 | --- | ---: | ---: |
-| Coverage prevalidation/copy/hydration boundary | 132 | 276 |
-| Authentication/effective policy/refresh rollback | 172 | 316 |
-| Selection/configuration/copy/overlay planning | 294 | 438 |
-| Matching runtime view before selection | 120 | 264 |
-| Runtime merge/generated timestamps/copy/replacement | 306 | 450 |
-| Fixed cohort claim/commit/terminal inventory | 358 | 502 |
-| Hint-prefetch permit/ID/loader boundary | 208 | 352 |
+| Coverage prevalidation/copy/hydration boundary | 132 | 277 |
+| Authentication/effective policy/refresh rollback | 172 | 317 |
+| Selection/configuration/copy/overlay planning | 294 | 439 |
+| Matching runtime view before selection | 120 | 265 |
+| Runtime merge/generated timestamps/copy/replacement | 306 | 451 |
+| Fixed cohort claim/commit/terminal inventory | 358 | 503 |
+| Prefetch acquisition, including existing current/adopted values | 354 | 499 |
+| Prefetch publication, including adopted/old-current/new values | 339 | 484 |
+| Destination borrow/provenance/adoption | 259 | 404 |
+
+Acquisition's 354 products comprise cap 24, permit/run/command 24, ID/config
+frames 16, original request/envelope carriers 32, plan frames/descriptors 80,
+measure/freeze/reserve/commit overlap 32, index owners/receipts 58, two existing
+value owners/receipts 34, adopted child 12, borrower registry 7, distinct prior
+binding partition/entry 33 and genuine binding fields 2. The publication row
+removes the original materialization's 32 carrier products only after its promise
+settles and clears; it adds a third 17-product value owner. The full temporary
+DATA debit stays held. In particular, an adopted A, published B and newly
+published C are not incorrectly treated as two owners. Other independently held
+borrowers retain their own backing; this is a per-operation table.
+
+The borrow row includes 92 existing index/value products, 16 old/new capability
+and owner products, 31 registry/provenance products, 96 ID measurement/planning
+products and 24 detach/adopt/refusal products. The separately funded 4096-byte
+borrower component covers simultaneous old/new capabilities during named transfer
+and terminal retirement metadata. It does not change the foundation's 230-byte
+borrower contract or move execution objects into passive DATA.
 
 The four claimed records are execution owners:
 `4 * (12 record/fields + 5 lease/charge + 28 borrower/funding + 4 ownership Map
@@ -211,8 +235,10 @@ Legacy array-ID conversion uses JSON text length, including numeric text, plus
 `max(26361856, 2*rawConfigUnits) + 6*idUnits + 32768 <= 33554432`.
 This includes retained ID occurrences and terminal metadata. No cache allowance
 or source-counter credit funds it. Once accepted, the full component stays until
-actual load cleanup. The independently parsed new cache/DO reply has its existing
-owner; this receipt retires only the OLD hint alias.
+actual materialization, optional publication decision and cleanup. The parsed
+reply stays under this owner until a new positive retained debit is installed or
+the unused reply aliases clear. The independently executing remote DO remains a
+separate owner; no receipt here retires it.
 
 ## Closed owned prefetch receipt
 
@@ -225,30 +251,78 @@ materializer callback, loader or result graph.
 
 The cache module alone mints a nonescaping permit. The preflight module's named
 materialization command requires that permit and the genuine single-use cap.
-Only the existing credential-cache loader receives the independently parsed
+Only the private destination receives the independently parsed
 reply. The public receipt contains `accepted` and, on acceptance, only
 `completed: Promise<void>`.
 
 OFF, HIT and rejected background registration start no materialization. They
 unwind only the provisional child. Accepted work immediately observes both
-outcomes of the actual `credentials.load` promise, including synchronous throws
-from the start boundary. The child survives publication/hint eviction, an own
+outcomes of the original private materialization operation, including synchronous
+throws from the start boundary. It never calls ordinary `credentials.peek/load`.
+The child survives publication/hint eviction, an own
 request's scalar publication wait, and becoming the loader after that wait.
-The original load includes publication-finally and the existing materialization
+The private original includes publication-finally and the existing materialization
 fetch/read/FIRSTcancel/unlock joins. UNKNOWN holds the original promise, receipt,
 child and backing. Cleanup clears command, binding, original-work and hint
 aliases before releasing the child and settling the void receipt. Independent
 registration and cleanup failures remain separate origins, including shared
 reason objects and literal undefined.
 
-This receipt owns the OLD hint alias only. It does not retire the independent
-credential-cache entry or remote DO reply, and does not claim native producer
-retirement, a physical ACK or a heap bound.
+Publication identity is a frozen empty scalar token, not a foreign run object,
+promise or graph carrier. Polling uses only the invoking request's timer roots.
+A late original whose token was invalidated cannot publish. Expiry, eviction and
+replacement unpublish; they never release an outstanding value borrower.
+
+The lazy index is partitioned by actual authority binding and actual credential
+owner binding, then the ordinary key/generation/revision ID. Root, authority,
+partition and entry reservations all precede their factories. Each 2048-byte,
+64-field fixed component includes its exact-charge/vector receipt, index/owner
+fields, fixed property-name occurrences, flags and scalar cells. The entry adds
+`4*I` for its two retained ID occurrences, including the Map key. A value's
+1024-byte, 64-field component covers its owner, receipt/charge, timestamps,
+publication/borrower fields and fixed property names. These are conservative
+normative components, not JS object weights. Empty indexes clear binding/ID/map
+aliases before releasing their actual reservations.
+
+The graph vector is measured without encoding, stringifying, cloning or key
+arrays; deep freezing is separately prepaid under the full temporary component.
+Every retained string occurrence is counted. The existing record profile bounds
+graph payload by `2*1048576 + 8*65536 = 2621440` and structure by
+`16384 + 49152 = 65536`; actual measurements, not those maxima, enter the shared
+ledger. Closed parsed JSON has no owned byte backings. Escaped serialized
+eligibility is measured exactly. The existing single optional 8 MiB payload,
+8 MiB aggregate serialized and 524288 structural coordinates remain unchanged.
+
+`PrivateCacheReservation.reserve` admits the complete new value/metadata vector
+and obtains a new positive exact debit from the SAME Worker 96 MiB counter while
+the full 32 MiB source component remains charged. The synchronous commit checks
+publication identity again, installs the funded entry and detaches the old
+publication. Old borrowers keep the old debit. Only then do materialized-value,
+original-promise, command and hint aliases clear and the temporary owner retire.
+There is no temporary-to-retained conversion, forged split or free 8 MiB backing.
+Optional refusal preserves an existing entry, clears the unused result after
+original cleanup and returns a void completion. It does not deny authentication.
+Genuine materialization/cleanup failures still reject, including literal undefined.
+
+`borrowOwnedGrantCredentials` consumes a genuine hint cap and returns only a
+frozen dispose-only capability. It neither starts an RPC nor returns a grant.
+Its new 4096-byte caller-lived metadata and lazy 512-byte registry have positive
+common backing before factories/ref increments, even when optional coordinates
+are full. `adoptCredentialGenerationDestination` checks the actual selected-owner,
+authority, credential binding and exact ID before atomically invalidating the old
+cap and attaching a new dispose-only child. ID/provenance traversal has a separate
+full temporary reservation; adopted children keep the old graph's debit. Last
+actual selected-child disposal clears that alias before release. Forged, cloned,
+consumed and double-disposed capabilities fail. No provider consumer is wired.
+
+This receipt owns the hint alias and the new private destination transition. It
+does not fund the unrelated ordinary credential cache or retire a remote DO, and
+does not claim native producer retirement, a physical ACK or a heap bound.
 
 The current implementation reserves a 32 MiB temporary component for the new
 materialization chain, plus separately backed lazy registries. ID conversion,
 configuration normalization and retained ID occurrences are checked before their
-factories. The numerical rows above include the original materialization, loader,
+factories. The numerical rows above include the original materialization, private load,
 source and terminal overlap. They are submitted for source qualification; actual
 hosted semantics remain UNRUN. No unused PR976 slots are treated as credit.
 
@@ -304,17 +378,30 @@ requests, response bodies and release-first fixture control are joined.
 
 ## Authored qualification
 
+The source declares 45 focused Node cases, 16 named native modes plus one
+cross-request cohort scenario, and two host late-body cleanup cases. These are
+authored counts, not executed results.
+
 The new Node fixture covers real SQLite and byte-KV generation hydration,
 preverification/facet denial, lifecycle status/code, common pressure, child/hint
 retention, all six strategies with 129 candidates, authoritative successor state,
 conditional feedback replacement across a held original ACK, opaque refresh,
 ordinary runtime-merge parity and detached account/snapshot aliases. New prefetch
 witnesses cover OFF/HIT/saturation, accepted synchronous undefined failure,
-held original work, publication joining and independent shared-reason failures. The Workerd
+held original work, publication joining and independent shared-reason failures.
+Destination witnesses cover positive retained backing after temporary cleanup,
+private HIT without RPC, no raw alias/clone, actual binding isolation, genuine
+adoption, optional payload/structure refusal with the old entry intact, common
+metadata pressure before borrower factories, held borrowers across expiry/eviction/
+replacement, late invalidation and ordinary-cache isolation. The Workerd
 fixture authors real native KV/SQLite/RPC cases for owned authentication, coverage
 denial, revocation and capacity. It also authors actual GrantCredentialObject
 materialization with original BYOB/EOF/unlock and explicitly labelled post-native
-read/FIRSTcancel holds and an injected post-unlock failure. These fixture holds are not new native ACK claims.
+read/FIRSTcancel holds and an injected post-unlock failure. It includes private
+HIT/adoption, optional-coordinate refusal, replacement/expiry and same-request
+original publication joining. Native pressure assertions precede the temporary
+traversal/index/materialization and new borrower metadata factories. These fixture
+holds are not new native ACK claims.
 
 Only syntax, embedded syntax, diff formatting and source/privacy inspection have
 run locally. Independent source qualification and all authored native semantics
@@ -367,6 +454,7 @@ The new authored cases cover originating A then later B/count parity, repeated
 late-debit refusal, live/fresh/revised/foreign-authority runtime observations,
 refused work after all public owners disappear, native originating receipts and
 pending runtime, native own-request blockers, and host late-body failure origins.
-No dependency-backed local semantics ran. The private prefetch retained graph's
-destination transition remains an explicit held design item; no claim here
-credits the legacy credential-cache publication as a funded receipt.
+No dependency-backed local semantics ran. The private destination now has its own
+prospective retained funding and custody; it never credits legacy credential-cache
+publication as a receipt. The complete new candidate still requires immutable
+source closure before draft publication and hosted execution before landing.

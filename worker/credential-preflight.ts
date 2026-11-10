@@ -7,7 +7,7 @@ import { admitGenerationFactories, admitGenerationConsumptionFactories, generati
   copyGenerationCoverage, generationCoverageLayout, sameGenerationCoverage,
   type GenerationCoverage, type GenerationAuthentication, type IdentityGenerationPreparation, type IdentityGenerationBorrow } from "./identity-generations.ts";
 import { PrivateCacheReservation, hotCacheNow, hotCacheConfig, tryRunInBackground, type HotCacheConfig } from "./hot-cache.ts";
-import { ownsCredentialPrefetchPermit } from "./credential-cache.ts";
+import { ownsCredentialPrefetchPermit, moveOwnedCredentialBorrow, type OwnedCredentialBorrow } from "./credential-cache.ts";
 import { materializeGrantCredentials } from "./grant-credentials.ts";
 import { grantRevision } from "./grant-eligibility.ts";
 import { snapshot as providerSnapshot } from "./providers.ts";
@@ -710,7 +710,7 @@ function createGenerationAuthentication(borrow: IdentityGenerationBorrow, env: P
 interface GenerationSelectionOwner {
   auth: GenerationAuthenticationOwner; lease: GenerationConsumptionLease;
   result?: import("./grant-eligibility.ts").GrantSelectionResult; users: number;
-  prefetchProvider?: (typeof providerSnapshot.providers)[number];
+  prefetchProvider?: (typeof providerSnapshot.providers)[number]; destination?: OwnedCredentialBorrow;
 }
 export interface GenerationSelectionHandle {
   dispose(): void;
@@ -730,8 +730,10 @@ function selectedOwner(handle: GenerationSelectionHandle): GenerationSelectionOw
 function releaseGenerationSelection(owner: GenerationSelectionOwner): void {
   if (--owner.users) return;
   owner.result = undefined; owner.prefetchProvider = undefined;
+  const destination = owner.destination; owner.destination = undefined;
   const auth = owner.auth; owner.auth = undefined as never;
   const failures: unknown[] = [];
+  try { destination?.dispose(); } catch (error) { failures.push(error); }
   try { owner.lease.release(); } catch (error) { failures.push(error); }
   auth.children--;
   try { retireAuthentication(auth); } catch (error) { failures.push(error); }
@@ -1101,11 +1103,11 @@ export function prepareCredentialGenerationPrefetch(hint: GenerationSelectionHin
 }
 // Only the cache module can mint the nonescaping permit. Even a genuine cap
 // holder cannot invoke the named materialization command to obtain a graph.
-export function claimOwnedGenerationPrefetch(cap: OwnedGenerationPrefetch, permit: object): { eligible: boolean; id: string; config: HotCacheConfig } {
+export function claimOwnedGenerationPrefetch(cap: OwnedGenerationPrefetch, permit: object): { eligible: boolean; id: string; config: HotCacheConfig; authority: Authority; binding: Env["GRANT_CREDENTIALS"] } {
   checkOwnedGenerationPrefetch(cap);
   if (!ownsCredentialPrefetchPermit(permit, cap)) throw identityFailure("protocol");
   const owner = generationPrefetchOwner(cap); owner.permit = permit;
-  return { eligible: !!owner.selected!.prefetchProvider && !!owner.selected!.result!.selected, id: owner.id, config: owner.config! };
+  return { eligible: !!owner.selected!.prefetchProvider && !!owner.selected!.result!.selected, id: owner.id, config: owner.config!, authority: owner.selected!.auth.slot.owner.binding, binding: owner.binding };
 }
 export function materializeOwnedGenerationPrefetch(cap: OwnedGenerationPrefetch, permit: object): Promise<import("./types").UpstreamGrant> {
   const owner = generationPrefetchOwner(cap);
@@ -1113,8 +1115,8 @@ export function materializeOwnedGenerationPrefetch(cap: OwnedGenerationPrefetch,
   const selected = owner.selected!.result!.selected, provider = owner.selected!.prefetchProvider;
   if (!selected || !provider) throw identityFailure("protocol");
   owner.materialized = true;
-  // Independently parsed reply custody passes into the EXISTING cache loader.
-  // This child covers the old hint alias, not retirement of that new reply.
+  // The cache module receives this ORIGINAL parsed reply under the temporary
+  // owner. Only its private funded destination may retain it after that owner.
   return materializeGrantCredentials({ GRANT_CREDENTIALS: owner.binding } as Env,
     selected.key, selected.grant, provider.id, provider.auth.refresh, false);
 }
@@ -1383,4 +1385,32 @@ export function refreshCredentialGenerationAuthentication(handle: GenerationAuth
   generationAuthentications!.set(handle, next);
   previous.closed = true;
   retireAuthentication(previous);
+}
+
+
+// Closed provenance gate for the new destination. No data graph or callback is
+// accepted/returned. Caller-lived traversal and ID copies are funded separately.
+export function checkCredentialGenerationDestination(handle: GenerationSelectionHandle, env: Env,
+  authority: Authority, binding: NonNullable<Env["GRANT_CREDENTIALS"]>, id: string): void {
+  admitGenerationConsumptionFactories();
+  const owner = selectedOwner(handle), selected = owner.result!.selected;
+  if (!selected || owner.auth.slot.owner.binding !== authority || env.ACCESS_CONTROL !== authority || env.GRANT_CREDENTIALS !== binding)
+    throw identityFailure("protocol");
+  const lease = GenerationConsumptionLease.reserve(32 * 1024 * 1024);
+  let expected: string | undefined, hasPrimary = false, primary: unknown;
+  try {
+    const units = selected.key.length + generationPrefetchIdUnits(selected.grant.credentialGeneration) + generationPrefetchIdUnits(grantRevision(selected.grant)) + 2;
+    if (26361856 + 6 * units + 32768 > lease.bytes) throw identityFailure("limit");
+    expected = `${selected.key}\n${selected.grant.credentialGeneration ?? ""}\n${grantRevision(selected.grant) ?? ""}`;
+    if (expected !== id) throw identityFailure("protocol");
+  } catch (error) { hasPrimary = true; primary = error; }
+  expected = undefined;
+  try { lease.release(); } catch (cleanup) { throw hasPrimary ? new AggregateError([primary, cleanup], "private credential provenance cleanup") : cleanup; }
+  if (hasPrimary) throw primary;
+}
+export function adoptCredentialGenerationDestination(handle: GenerationSelectionHandle, env: Env, borrowed: OwnedCredentialBorrow): void {
+  const owner = selectedOwner(handle);
+  const adopted = moveOwnedCredentialBorrow(borrowed, handle, env), previous = owner.destination;
+  owner.destination = adopted;
+  previous?.dispose();
 }

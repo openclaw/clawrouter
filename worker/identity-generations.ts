@@ -139,8 +139,8 @@ export const generationConsumptionFactoryCharges = Object.freeze({
     backgroundStartClosureScalarRegistrationSettlerThenAndCallbacks: 7,
     completionPromiseExecutorResolversAndImmediateBothOutcomeObserver: 7,
     originalLoadOrCohortThenCallbacksAndFollower: 4,
-    cacheLoadLoaderClosureAndAsyncPromise: 4,
-    publicationTokenMapAndSetCellsAndFinallyFrame: 5,
+    privateDestinationLoadOriginalAsyncAndAwaitProducts: 4,
+    privatePublicationIdentityActiveCountAndFinallyProducts: 5,
     ownPublicationPollPromisePredicateTimerExecutorResolverAndAwait: 10,
     materializeOwnerCallAndReadResponseAsyncPromisesAndAwaits: 10,
     originalFetchPromiseIdStubRequestInitHeaderCarrierAndStartClosure: 9,
@@ -148,6 +148,7 @@ export const generationConsumptionFactoryCharges = Object.freeze({
     receiptAndFrozenCapabilityProducts: 4,
     registrationFailureOriginAndCleanupCallFrames: 8,
     pendingCapTransferClaimAndRollbackCallProducts: 8,
+    ownedDestinationIndexAndBorrowAdoptionCallFrames: 6,
   }),
   source: Object.freeze({
     originalAcquisitionPromiseExecutorResolversObserverAndFollower: 8,
@@ -174,12 +175,13 @@ export const generationConsumptionFactoryCharges = Object.freeze({
     firstCancelPromiseExecutorResolverOriginalThenAndCallbacks: 8,
     inputRetirementOriginalReadCancelAllSettledArrayAndResults: 9,
     unlockListenerAndUnknownPendingProducts: 5,
-    materializeLoadPublicationFinallyAndCompletionContinuations: 8,
+    materializePrivatePublicationFinallyAndCompletionContinuations: 8,
     clearCommandHintSelectionAuthenticationAndBorrowFrames: 12,
     registryEntryPartitionSlotAndMetadataRetirementFrames: 14,
     independentFailureListsCellsAndAggregateProducts: 28,
     receiptResolveRejectCallbacksAndTerminalFrames: 8,
     pendingCapAndAuthorityObservationRetirementFrames: 10,
+    privateDestinationValueIndexBorrowAndReservationRetirement: 14,
   }),
   // The phase rows below replace each other only after their last consumers
   // return. Persistent is added to EACH row, including across original awaits.
@@ -191,6 +193,7 @@ export const generationConsumptionFactoryCharges = Object.freeze({
     hintOwnerCapabilityRegistryLeaseAndWeakEntry: 12,
     originatingReceiptAndAuthorityRuntimeFields: 8,
     pendingCapabilityRegistryChargeAndCounter: 4,
+    selectedDestinationChildField: 1,
   }),
   coverage: Object.freeze({
     prevalidationFrameLeasePlanAndSerializationGuardProducts: 26,
@@ -249,14 +252,42 @@ export const generationConsumptionFactoryCharges = Object.freeze({
     idAndConfigurationPlanningFrames: 16,
     retainedOriginalRequestEnvelopeAndLoaderCarrierFields: 32,
     prospectivePlanFramesAndDescriptors: 80,
-    parserFreezePublicationAndFailureCallerOverlap: 32,
+    measureFreezeReserveCommitAndFailureCallerOverlap: 32,
+    privateRootAuthorityPartitionEntryOwnersAndReceipts: 58,
+    currentAndAdoptedDestinationValueOwnersReceiptsAndCharges: 34,
+    selectedDestinationBorrowOwnerCapabilityWeakEntry: 12,
+    destinationBorrowRegistryLeaseChargeAndCount: 7,
+    distinctPriorCredentialBindingPartitionAndEntry: 33,
+    genuineCommandAuthorityAndCredentialBindingFields: 2,
+  }),
+  // Only after materialization has settled and its original promise/carriers
+  // clear. The full temporary DATA debit stays held; this is CONTROL lifetime.
+  prefetchPublication: Object.freeze({
+    capOwnerFieldsLeaseRegistryWeakEntryAndCapability: 24,
+    permitRunFieldsRegistryWeakEntryAndCommand: 24,
+    idAndConfigurationPlanningFrames: 16,
+    prospectivePlanFramesAndDescriptors: 80,
+    measureFreezeReserveCommitAndFailureCallerOverlap: 32,
+    privateRootAuthorityPartitionEntryOwnersAndReceipts: 58,
+    adoptedOldCurrentAndNextDestinationValueOwners: 51,
+    selectedDestinationBorrowOwnerCapabilityWeakEntry: 12,
+    destinationBorrowRegistryLeaseChargeAndCount: 7,
+    distinctPriorCredentialBindingPartitionAndEntry: 33,
+    genuineCommandAuthorityAndCredentialBindingFields: 2,
+  }),
+  destinationBorrow: Object.freeze({
+    existingPrivateIndexOwnersAndTwoValues: 92,
+    oldAndNewBorrowCapabilitiesWeakEntriesOwnerAndLease: 16,
+    borrowRegistryAndPrivateProvenanceRun: 31,
+    provenancePlanIdMeasurementFramesAndDescriptors: 96,
+    detachAdoptOrRefusalCleanupFrames: 24,
   }),
 });
 export function admitGenerationConsumptionFactories(): void {
   const sum = (table: Readonly<Record<string, number>>) => { let result = 0; for (const key in table) result += table[key]; return result; };
   const table = generationConsumptionFactoryCharges, persistent = sum(table.persistent);
   if (sum(table.operation) > 128 || sum(table.source) > 128 || sum(table.read) > 128 || sum(table.terminal) > 128
-    || persistent + Math.max(sum(table.coverage), sum(table.authentication), sum(table.selection), sum(table.runtime), sum(table.runtimeView), sum(table.cohort), sum(table.prefetch)) > 512) throw identityFailure("protocol");
+    || persistent + Math.max(sum(table.coverage), sum(table.authentication), sum(table.selection), sum(table.runtime), sum(table.runtimeView), sum(table.cohort), sum(table.prefetch), sum(table.prefetchPublication), sum(table.destinationBorrow)) > 512) throw identityFailure("protocol");
 }
 
 // Metadata layout is charged independently in the common arena before its

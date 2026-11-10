@@ -4,7 +4,7 @@ import test from 'node:test';
 import { sqliteFixture } from './sqlite-storage.mjs';
 import { accessBytesResponse } from './access-byte-fixture.mjs';
 const { PolicyBindingIndexObject } = await import('../authority.ts');
-const { preflightCredential, releaseCredentialPreflight, prepareCredentialGeneration, completeCredentialGeneration, completeConsumableCredentialGeneration, authenticateCredentialGeneration, refreshCredentialGenerationAuthentication, selectCredentialGeneration, flushCredentialGenerationRuntime, queueCredentialGenerationRuntime, retainCredentialGenerationHint, prepareCredentialGenerationPrefetch, borrowCredentialGeneration, evictCredentialGeneration, consumeCredentialPreflight, completeCredentialAdmission } = await import('../credential-preflight.ts');
+const { preflightCredential, releaseCredentialPreflight, prepareCredentialGeneration, completeCredentialGeneration, completeConsumableCredentialGeneration, authenticateCredentialGeneration, refreshCredentialGenerationAuthentication, selectCredentialGeneration, flushCredentialGenerationRuntime, queueCredentialGenerationRuntime, retainCredentialGenerationHint, prepareCredentialGenerationPrefetch, adoptCredentialGenerationDestination, borrowCredentialGeneration, evictCredentialGeneration, consumeCredentialPreflight, completeCredentialAdmission } = await import('../credential-preflight.ts');
 const { GenerationMetadataCharge, preflightPayloadBytes, preflightControlSlots } = await import('../credential-preflight-arena.ts');
 const { bodyBudgetCharged, ExactBodyCharge, bodyBudgetBytes } = await import('../body-budget.ts');
 const { PrivateCacheReservation, privateCacheLimits, privateCacheCharged, setHotCacheClock } = await import('../hot-cache.ts');
@@ -315,7 +315,7 @@ test('runtime copies meter JSON-omitted undefined fields before any clone or acc
   assert.equal(copies, 0); assert.equal(f.trace.rpc.length, rpc);
 }));
 
-const { prefetchOwnedGrantCredentials, evictGrantCredentials } = await import('../credential-cache.ts');
+const { prefetchOwnedGrantCredentials, borrowOwnedGrantCredentials, evictOwnedGrantCredentials, cachedGrantCredentials, evictGrantCredentials } = await import('../credential-cache.ts');
 async function prefetchFixture(t, run) {
   return fixture(t, async f => {
     seedPool(f); let borrow, auth, selected, hint;
@@ -332,12 +332,14 @@ async function prefetchFixture(t, run) {
       calls++; const request = JSON.parse(init.body);
       assert.equal(new URL(url).pathname, '/materialize'); assert.equal(request.key, 'oauth/bridge-policy/a');
       assert.equal(request.force, false); assert.equal(request.providerId, 'anthropic');
-      return Promise.resolve(accessBytesResponse(JSON.stringify({ grant: { ...request.grant, credential: 'fixture-only-token', credentialStore: undefined } }), ''));
+      const grant = { ...request.grant, credential: 'fixture-only-token', credentialStore: undefined };
+      Object.defineProperty(grant, '__proto__', { value: { unknownOwnedField: 'retained' }, enumerable: true });
+      return Promise.resolve(accessBytesResponse(JSON.stringify({ grant }), ''));
     } }; } };
     evictGrantCredentials('oauth/bridge-policy/a');
-    f.resources.push(() => evictGrantCredentials('oauth/bridge-policy/a'));
-    const detach = () => { hint.dispose(); hint = undefined; selected.dispose(); selected = undefined; auth.dispose(); auth = undefined; borrow.dispose(); borrow = undefined; evictCredentialGeneration(f.env, 'bridgekid'); };
-    await run({ ...f, cap() { return prepareCredentialGenerationPrefetch(hint, f.env); }, calls() { return calls; }, detach });
+    f.resources.push(() => { if (hint) evictOwnedGrantCredentials(prepareCredentialGenerationPrefetch(hint, f.env)); evictGrantCredentials('oauth/bridge-policy/a'); });
+    const detach = () => { evictOwnedGrantCredentials(prepareCredentialGenerationPrefetch(hint, f.env)); hint.dispose(); hint = undefined; selected.dispose(); selected = undefined; auth.dispose(); auth = undefined; borrow.dispose(); borrow = undefined; evictCredentialGeneration(f.env, 'bridgekid'); };
+    await run({ ...f, cap() { return prepareCredentialGenerationPrefetch(hint, f.env); }, calls() { return calls; }, adopt(value, env = f.env) { adoptCredentialGenerationDestination(selected, env, value); }, detach });
   });
 }
 
@@ -359,13 +361,14 @@ test('owned prefetch OFF, HIT and saturated registration start nothing and consu
   const accepted = prefetchOwnedGrantCredentials(f.cap()); assert.equal(accepted.accepted, true);
   assert.equal(await f.take(f.own(accepted.completed)), undefined); assert.equal(f.calls(), 1);
   assert.deepEqual(prefetchOwnedGrantCredentials(f.cap()), { accepted: false });
-  assert.equal(f.calls(), 1); assert.equal(bodyBudgetCharged(), baseline);
+  assert.equal(f.calls(), 1); assert.ok(bodyBudgetCharged() > baseline); assert.ok(bodyBudgetCharged() < baseline + preflightPayloadBytes);
+  evictOwnedGrantCredentials(f.cap()); assert.equal(bodyBudgetCharged(), baseline);
   assert.throws(() => prefetchOwnedGrantCredentials({}), denied);
 }));
 
 test('accepted synchronous load throw including undefined is observable after child cleanup', async t => prefetchFixture(t, async f => {
   const baseline = bodyBudgetCharged();
-  t.mock.method(HotCache.prototype, 'load', function () { throw undefined; });
+  t.mock.method(f.env.GRANT_CREDENTIALS, 'idFromName', function () { throw undefined; });
   const receipt = prefetchOwnedGrantCredentials(f.cap()); assert.equal(receipt.accepted, true);
   const root = f.own(receipt.completed); let failed = false, primary;
   try { await f.take(root); } catch (error) { failed = true; primary = error; }
@@ -401,22 +404,22 @@ test('joining prefetch holds its own child until scalar publication wait and its
   const arrival = await Promise.race([entered.promise.then(() => ({ entered: true })), firstRoot.outcome.then(outcome => ({ entered: false, outcome }))]);
   if (!arrival.entered) { firstRoot.used = true; if (arrival.outcome.failed) throw arrival.outcome.error; assert.fail('first prefetch completed before arrival'); }
   const second = prefetchOwnedGrantCredentials(f.cap()); assert.equal(second.accepted, true); const secondRoot = f.own(second.completed);
-  f.detach(); release.resolve(); await f.take(firstRoot); await f.take(secondRoot);
-  assert.equal(f.calls(), 1); assert.equal(bodyBudgetCharged(), 0);
+  release.resolve(); await f.take(firstRoot); await f.take(secondRoot);
+  assert.equal(f.calls(), 1); assert.ok(bodyBudgetCharged() > 0); f.detach(); assert.equal(bodyBudgetCharged(), 0);
 }));
 
 test('independent load and child-cleanup failures retain shared reason occurrences', async t => prefetchFixture(t, async f => {
   const reason = new Error('fixture independent origins'), baseline = bodyBudgetCharged();
   const release = GenerationConsumptionLease.prototype.release;
-  t.mock.method(HotCache.prototype, 'load', function () { throw reason; });
-  t.mock.method(GenerationConsumptionLease.prototype, 'release', function () {
+  t.mock.method(f.env.GRANT_CREDENTIALS, 'idFromName', function () { throw reason; });
+  const releaseMock = t.mock.method(GenerationConsumptionLease.prototype, 'release', function () {
     const own = this.bytes === preflightPayloadBytes; Reflect.apply(release, this, []); if (own) throw reason;
   });
   const receipt = prefetchOwnedGrantCredentials(f.cap()); assert.equal(receipt.accepted, true);
   let failure; try { await f.take(f.own(receipt.completed)); } catch (error) { failure = error; }
   assert.ok(failure instanceof AggregateError);
   const occurrences = error => error instanceof AggregateError ? error.errors.reduce((n, item) => n + occurrences(item), 0) : Number(error === reason);
-  assert.equal(occurrences(failure), 2); assert.equal(bodyBudgetCharged(), baseline);
+  assert.equal(occurrences(failure), 2); assert.equal(bodyBudgetCharged(), baseline); releaseMock.mock.restore();
 }));
 
 const { mergeGrantRuntimeState } = await import('../grant-runtime.ts');
@@ -638,4 +641,107 @@ test('refused pending cap drains after all public owners and publication are dis
   next = await generation(f, poolInput()); next.dispose(); next = undefined; evictCredentialGeneration(f.env, 'bridgekid');
   release.resolve(); for (const root of blockers) await f.take(root);
   assert.equal(bodyBudgetCharged(), baseline);
+}));
+
+
+for (const pressureKind of ['payload', 'structure']) test('private destination optional ' + pressureKind + ' refusal preserves old entry and common-funded borrowers', async t => prefetchFixture(t, async f => {
+  const originalNow = Date.now(); let now = originalNow, pressure, old, fresh;
+  setHotCacheClock(() => now); f.releases.push(() => { pressure?.release(); pressure = undefined; setHotCacheClock(); });
+  f.resources.push(() => { fresh?.dispose(); old?.dispose(); });
+  const first = prefetchOwnedGrantCredentials(f.cap()); assert.equal(first.accepted, true); await f.take(f.own(first.completed));
+  old = borrowOwnedGrantCredentials(f.cap()); assert.ok(old);
+  const charged = bodyBudgetCharged(), vector = privateCacheCharged();
+  const used = privateCacheCharged(); pressure = PrivateCacheReservation.reserve({ serializedBytes: 0,
+    payloadBytes: pressureKind === 'payload' ? privateCacheLimits.payloadBytes - used.payloadBytes : 1,
+    structure: pressureKind === 'structure' ? privateCacheLimits.structure - used.structure : 1 }); assert.ok(pressure);
+  const withPressure = bodyBudgetCharged();
+  now += 10001; // Stale but still usable: refresh must preserve old publication.
+  const refresh = prefetchOwnedGrantCredentials(f.cap()); assert.equal(refresh.accepted, true); await f.take(f.own(refresh.completed));
+  assert.equal(f.calls(), 2); assert.equal(bodyBudgetCharged(), withPressure);
+  fresh = borrowOwnedGrantCredentials(f.cap()); assert.ok(fresh); assert.equal(f.calls(), 2);
+  assert.deepEqual(Object.keys(fresh), ['dispose']); assert.equal(JSON.stringify(fresh), '{}');
+  assert.ok(bodyBudgetCharged() > withPressure);
+  fresh.dispose(); fresh = undefined; pressure.release(); pressure = undefined;
+  assert.equal(bodyBudgetCharged(), charged); assert.deepEqual(privateCacheCharged(), vector);
+  evictOwnedGrantCredentials(f.cap()); assert.ok(bodyBudgetCharged() > 0);
+  old.dispose(); old = undefined;
+}));
+
+test('private destination borrowing is RPC-free and adoption binds genuine selected provenance with no raw alias', async t => prefetchFixture(t, async f => {
+  let value, wrong; f.resources.push(() => { value?.dispose(); wrong?.dispose(); });
+  let freezes = 0, cloneCalls = 0; const freeze = Object.freeze, clone = structuredClone;
+  t.mock.method(Object, 'freeze', item => { if (item && typeof item === 'object' && Object.hasOwn(item, 'credential')) { freezes++; assert.ok(bodyBudgetCharged() >= preflightPayloadBytes); assert.equal(Object.getPrototypeOf(item), Object.prototype); assert.equal(item.__proto__.unknownOwnedField, 'retained'); assert.ok(Object.isFrozen(item.__proto__)); assert.equal(item.unknownGenerationField.token, 'a'); } return freeze(item); });
+  t.mock.method(globalThis, 'structuredClone', (...args) => { cloneCalls++; return Reflect.apply(clone, globalThis, args); });
+  const receipt = prefetchOwnedGrantCredentials(f.cap()); assert.equal(receipt.accepted, true); await f.take(f.own(receipt.completed));
+  assert.ok(freezes > 0); assert.equal(cloneCalls, 0);
+  const calls = f.calls(), charged = bodyBudgetCharged();
+  value = borrowOwnedGrantCredentials(f.cap()); assert.ok(value); assert.equal(f.calls(), calls); assert.ok(bodyBudgetCharged() > charged);
+  assert.deepEqual(Object.keys(value), ['dispose']); assert.equal(JSON.stringify(value), '{}');
+  assert.throws(() => f.adopt({}, f.env), denied);
+  assert.throws(() => f.adopt(value, { ...f.env, GRANT_CREDENTIALS: {} }), denied);
+  f.adopt(value); const consumed = value; value = undefined;
+  assert.throws(() => consumed.dispose(), denied); assert.throws(() => f.adopt(consumed), denied);
+  evictOwnedGrantCredentials(f.cap()); assert.ok(bodyBudgetCharged() > 0);
+  f.detach(); assert.equal(bodyBudgetCharged(), 0);
+}));
+
+for (const kind of ['expire', 'evict', 'replace']) test('private destination ' + kind + ' unpublishes while old borrower remains funded', async t => prefetchFixture(t, async f => {
+  let now = Date.now(), old, current; setHotCacheClock(() => now); f.releases.push(() => setHotCacheClock());
+  f.resources.push(() => { current?.dispose(); old?.dispose(); });
+  const first = prefetchOwnedGrantCredentials(f.cap()); await f.take(f.own(first.completed));
+  old = borrowOwnedGrantCredentials(f.cap()); assert.ok(old);
+  if (kind === 'expire') { now += 60001; assert.equal(borrowOwnedGrantCredentials(f.cap()), undefined); }
+  else if (kind === 'evict') evictOwnedGrantCredentials(f.cap());
+  else { now += 10001; const second = prefetchOwnedGrantCredentials(f.cap()); await f.take(f.own(second.completed)); current = borrowOwnedGrantCredentials(f.cap()); assert.ok(current); evictOwnedGrantCredentials(f.cap()); }
+  const held = bodyBudgetCharged(); assert.ok(held > 0);
+  old.dispose(); old = undefined; assert.ok(bodyBudgetCharged() < held);
+  current?.dispose(); current = undefined;
+}));
+
+test('private warming does not populate ordinary foreground credentials and late invalidation fences publication', async t => prefetchFixture(t, async f => {
+  const entered = deferred(), release = deferred(); f.releases.push(() => release.resolve());
+  const get = f.env.GRANT_CREDENTIALS.get;
+  f.env.GRANT_CREDENTIALS.get = function(...args) { const stub = Reflect.apply(get, this, args), fetch = stub.fetch;
+    return { fetch(url, init) { return fetch(url, init).then(async response => { entered.resolve(); await release.promise; return response; }); } }; };
+  const receipt = prefetchOwnedGrantCredentials(f.cap()), root = f.own(receipt.completed);
+  const arrival = await Promise.race([entered.promise.then(() => true), root.outcome.then(() => false)]);
+  if (!arrival) { await f.take(root); assert.fail('original materialization finished before invalidation hold'); }
+  evictOwnedGrantCredentials(f.cap()); release.resolve(); await f.take(root);
+  assert.equal(borrowOwnedGrantCredentials(f.cap()), undefined);
+  const next = prefetchOwnedGrantCredentials(f.cap()); await f.take(f.own(next.completed));
+  let loads = 0;
+  const ordinary = await f.take(f.own(cachedGrantCredentials(f.env, 'oauth/bridge-policy/a', { credentialGeneration: 1 }, async () => { loads++; return { kind: 'api_key', enabled: true, credential: 'fixture-ordinary-only' }; })));
+  assert.equal(loads, 1); assert.equal(ordinary.credential, 'fixture-ordinary-only');
+}));
+
+test('prefetch temporary admission precedes index, traversal and original materialization', async t => prefetchFixture(t, async f => {
+  const charged = bodyBudgetCharged(), cache = privateCacheCharged(); let pressure;
+  f.releases.push(() => { pressure?.release(); pressure = undefined; });
+  pressure = ExactBodyCharge.reserve(bodyBudgetBytes - charged - preflightPayloadBytes + 1); assert.ok(pressure);
+  assert.throws(() => f.cap(), capacity); assert.equal(f.calls(), 0); assert.deepEqual(privateCacheCharged(), cache);
+  pressure.release(); pressure = undefined; assert.equal(bodyBudgetCharged(), charged);
+}));
+
+
+test('private borrower metadata capacity refuses before increment and preserves the published destination', async t => prefetchFixture(t, async f => {
+  let pressure; f.releases.push(() => { pressure?.release(); pressure = undefined; });
+  const first = prefetchOwnedGrantCredentials(f.cap()); await f.take(f.own(first.completed));
+  const charged = bodyBudgetCharged(), vector = privateCacheCharged(), calls = f.calls();
+  pressure = ExactBodyCharge.reserve(bodyBudgetBytes - charged - preflightPayloadBytes - 4095); assert.ok(pressure);
+  const held = bodyBudgetCharged();
+  assert.throws(() => borrowOwnedGrantCredentials(f.cap()), capacity);
+  assert.equal(bodyBudgetCharged(), held); assert.deepEqual(privateCacheCharged(), vector); assert.equal(f.calls(), calls);
+  pressure.release(); pressure = undefined;
+  const borrow = borrowOwnedGrantCredentials(f.cap()); assert.ok(borrow); borrow.dispose();
+  assert.equal(bodyBudgetCharged(), charged);
+}));
+
+
+test('private credential destination does not cross actual credential-owner binding identity', async t => prefetchFixture(t, async f => {
+  const original = f.env.GRANT_CREDENTIALS; f.releases.push(() => { f.env.GRANT_CREDENTIALS = original; });
+  const first = prefetchOwnedGrantCredentials(f.cap()); await f.take(f.own(first.completed)); const calls = f.calls();
+  f.env.GRANT_CREDENTIALS = { idFromName: original.idFromName, get: original.get };
+  assert.equal(borrowOwnedGrantCredentials(f.cap()), undefined); assert.equal(f.calls(), calls);
+  f.env.GRANT_CREDENTIALS = original;
+  const own = borrowOwnedGrantCredentials(f.cap()); assert.ok(own); own.dispose(); assert.equal(f.calls(), calls);
 }));
