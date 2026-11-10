@@ -1,4 +1,4 @@
-import { canonicalFreshIdentityRouting, admitAdmission, admitIdentity, admitIdentityBytes, admitIdentityCount, identityFailure, identityHeader, identityVersion, identityJson, identityPlan, identitySourceBudget, identitySqlRows, parseIdentity, readIdentityRequest, readIdentityResponse, type IdentitySourceBudget } from "./identity-admission.ts";
+import { addIdentitySources, checkIdentitySourceAddition, canonicalFreshIdentityRouting, admitAdmission, admitIdentity, admitIdentityBytes, admitIdentityCount, identityFailure, identityHeader, identityVersion, identityJson, identityPlan, identitySourceBudget, identitySqlRows, parseIdentity, readIdentityRequest, readIdentityResponse, type IdentitySourceBudget } from "./identity-admission.ts";
 import { PolicyCollection, admitPolicyBindings, admitPolicyBytes, admitPolicyCall, admitPolicyIds, admitPolicyJson, admitPolicyPrincipals, isPolicyCollectionFailure, isPolicyCollectionPath, parsePolicyRecord, policyCandidatePlan, policyCollectionFailure, policyCollectionHeader, policyCollectionVersion, policyId, policyJsonText, policySequencePlan, policySourceBudget, readPolicyRequest, readPolicyResponse, type PolicySourceBudget } from "./policy-collection.ts";
 import { videoControlVersion, videoControlHeader, videoControlBytes, videoJsonBytes, inspectVideoJson, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { effectiveBudgetPolicy } from "./budget-overrides.ts";
@@ -47,12 +47,18 @@ export const selfServiceCredentialLimit = 10;
 const selfServiceCredentialRetentionLimit = 100;
 
 export type { AdmissionProvider, AdmissionPool, AdmissionResult } from "./authority-admission.ts";
-import { genuineLegacyKey, resolveAdmission, type AdmissionRequest } from "./authority-admission.ts";
+import { genuineLegacyKey, prepareCredentialPreflight, resolveAdmission, type AdmissionRequest } from "./authority-admission.ts";
+
+import { PreflightInstanceArena, PreflightTicket } from "./credential-preflight-arena.ts";
+import { credentialPreflightPath, type CredentialPreflightRequest,
+  type CredentialPreflightReply } from "./credential-preflight-protocol.ts";
+import { consumePreflightRequest, consumePreflightCredential, preflightReplyResponse } from "./credential-preflight-source.ts";
 
 export class PolicyBindingIndexObject implements DurableObject {
   private sql: SqlStorage;
   private storage: DurableObjectStorage;
   private responses?: Promise<ResponsesScopeStore>;
+  private preflightArena?: PreflightInstanceArena;
   private env: Env;
   // Reconciliation entry order only; unrelated owner routes remain concurrent.
   private assignmentTail: Promise<void> = Promise.resolve();
@@ -113,6 +119,17 @@ export class PolicyBindingIndexObject implements DurableObject {
           if (error instanceof HttpError && error.code === "user_materialization_unavailable") throw error;
           throw userMaterializationFailure("protocol");
         }
+      }
+      if (path === credentialPreflightPath && !request.headers.has(identityHeader)
+        && !request.headers.has(musicCoverControlHeader) && !request.headers.has(searchControlHeader)
+        && !request.headers.has(videoControlHeader)) {
+        // No public/default admission caller. Only this private path owns the
+        // compound ticket; existing specialized selectors retain precedence.
+        const ticket = PreflightTicket.reserve(this.preflightArena ??= new PreflightInstanceArena());
+        ticket.enter("operation");
+        const operation = this.credentialPreflight(request, ticket);
+        request = undefined as never;
+        return await operation;
       }
       const identityPaths = ["/admission/resolve", "/grant-pools/resolve", "/grant-pools/select"];
       const identityInput = request.headers.has(identityHeader) ? await readIdentityRequest(request, identityPaths.includes(path)) : undefined;
@@ -471,6 +488,76 @@ export class PolicyBindingIndexObject implements DurableObject {
     if (existing) return existing;
     this.putUser(defaults);
     return this.getUser(defaults.email)!;
+  }
+
+  private async credentialPreflight(request: Request | undefined, ticket: PreflightTicket): Promise<Response> {
+    let input: CredentialPreflightRequest | undefined;
+    let staged: { credential: ProxyCredential; text: string; counts: IdentitySourceBudget } | undefined;
+    let replyText: string | undefined;
+    let handedOff = false;
+    try {
+      const intake = consumePreflightRequest(request, ticket);
+      request = undefined;
+      input = await intake;
+      const source = input.source, id = input.credentialId, digest = input.secretSha256;
+      const bound: AuthorityReadBound = { bytes: 0, identity: source };
+      await prepareCredentialPreflight(input, {
+        getCredential: key => this.getCredential(key, bound), hasMeta: key => this.hasMeta(key),
+        seedCredential: (key, raw) => {
+          // CURRENT winner and global fence precede normalization after KV await.
+          if (this.getCredential(key, bound) || this.hasMeta("credentials_global_initialized")) return;
+          const { copilotPublicIdentity: _untrusted, ...credential } = normalizeCredentialRecord(raw, key);
+          // New route only: admit the staged value ONCE before serialization.
+          // Its aliases are funded payload; they are not a second source credit.
+          const plan = identityPlan("record"); plan.item(credential, 0);
+          staged = { credential, text: JSON.stringify(credential), counts: plan.counts };
+        },
+      }, key => consumePreflightCredential(ticket, () => this.env.POLICY_KV.get(key, "stream"), source));
+      replyText = this.storage.transactionSync(() => {
+        let current = this.getCredential(id, bound);
+        const seed = !current && staged && !this.hasMeta("credentials_global_initialized") ? staged : undefined;
+        // This is a prospective check, not source consumption. Actual SQL still
+        // performs LENGTH-before-value and charges its original full reread ONCE.
+        // No await/other owner can change the winner before commit + reread.
+        const finalSource = seed ? addIdentitySources(source, seed.counts) : source;
+        const credential = current?.credential ?? seed?.credential;
+        const outcome = !credential ? "unknown" : typeof credential.secretSha256 === "string" && safeEqual(digest, credential.secretSha256.toLowerCase()) ? "matched" : "invalid";
+        const reply: CredentialPreflightReply = { outcome, source: finalSource };
+        const replyPlan = identityPlan(); replyPlan.item(reply, 0);
+        // Reserve room for the consumer's ORIGINAL reply read too. Outbound JSON
+        // planning itself is NOT a source read and is never charged twice.
+        checkIdentitySourceAddition(finalSource, replyPlan.counts);
+        const text = JSON.stringify(reply);
+        if (seed) {
+          rows(this.sql.exec("INSERT INTO proxy_credentials (credential_id, credential_json) SELECT ?, ? WHERE NOT EXISTS (SELECT 1 FROM proxy_credentials WHERE credential_id = ?) AND NOT EXISTS (SELECT 1 FROM policy_binding_meta WHERE meta_key = ?)", id, seed.text, id, "credentials_global_initialized"));
+          current = this.getCredential(id, bound);
+          // SQL errors are errors, not profile rollback claims. The transaction
+          // has no unrelated await, and the exact staged text was admitted above.
+          if (!current) throw identityFailure("protocol");
+        }
+        current = null;
+        return text;
+      });
+      staged = undefined; input = undefined;
+      const response = preflightReplyResponse(ticket, replyText);
+      replyText = undefined; handedOff = true;
+      return response;
+    } catch (error) {
+      if (!ticket.bytes) throw error;
+      // The existing private HTTP error boundary remains sanitized. This new
+      // route also owns its error response until ORIGINAL body EOF/cancel.
+      staged = undefined; input = undefined;
+      const status = error instanceof HttpError ? error.status : 500;
+      const code = error instanceof HttpError ? error.code : "authority_error";
+      const message = error instanceof HttpError ? error.message : "authority request failed";
+      replyText = JSON.stringify({ error: { code, message } });
+      const response = preflightReplyResponse(ticket, replyText, status);
+      replyText = undefined; handedOff = true;
+      return response;
+    } finally {
+      request = undefined; input = undefined; staged = undefined; replyText = undefined;
+      if (!handedOff) ticket.release();
+    }
   }
 
   private stageIdentityRecord(bound: AuthorityReadBound, table: string, keyColumn: string, column: string, key: string, value: unknown, marker: string): void {

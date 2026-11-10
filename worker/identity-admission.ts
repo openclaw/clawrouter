@@ -22,6 +22,53 @@ export type IdentitySourceBudget = UserSourceCounts & { bytes: number; text: num
 export function identitySourceBudget(): IdentitySourceBudget {
   return { bytes: 0, text: 0, values: 0, containers: 0, members: 0, entries: 0, units: 0 };
 }
+const sourceFields = ["bytes", "text", "values", "containers", "members", "entries", "units"] as const;
+const sourceLimits: IdentitySourceBudget = { bytes: 2097152, text: 2097152, values: 131072,
+  containers: 32768, members: 65536, entries: 32768, units: 2097152 };
+// New private continuation metadata only. Existing intake budgets are unchanged.
+function checkIdentitySource(value: unknown): asserts value is IdentitySourceBudget {
+  if (!value || typeof value !== "object" || Array.isArray(value)
+    || Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) fail("protocol");
+  let fields = 0;
+  for (const key in value) if (Object.hasOwn(value, key)) {
+    if (!(sourceFields as readonly string[]).includes(key)) fail("protocol");
+    fields++;
+  }
+  if (fields !== 7) fail("protocol");
+  for (const key of sourceFields) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !Object.hasOwn(descriptor, "value") || !Number.isSafeInteger(descriptor.value)
+      || descriptor.value < 0 || descriptor.value > sourceLimits[key]) fail("limit");
+  }
+  const source = value as IdentitySourceBudget;
+  if (source.members + source.entries > 98304) fail("limit");
+}
+export function identitySourceSnapshot(value: unknown): IdentitySourceBudget {
+  checkIdentitySource(value);
+  return { bytes: value.bytes, text: value.text, values: value.values, containers: value.containers,
+    members: value.members, entries: value.entries, units: value.units };
+}
+export function checkIdentitySourceAddition(left: IdentitySourceBudget, right: IdentitySourceBudget): void {
+  for (const key of sourceFields) {
+    if (!Number.isSafeInteger(right[key]) || right[key] < 0 || right[key] > sourceLimits[key] - left[key]) fail("limit");
+  }
+  if (left.members + left.entries + right.members + right.entries > 98304) fail("limit");
+}
+export function addIdentitySources(left: IdentitySourceBudget, right: IdentitySourceBudget): IdentitySourceBudget {
+  checkIdentitySourceAddition(left, right);
+  return { bytes: left.bytes + right.bytes, text: left.text + right.text, values: left.values + right.values,
+    containers: left.containers + right.containers, members: left.members + right.members,
+    entries: left.entries + right.entries, units: left.units + right.units };
+}
+export function advanceIdentitySource(owner: IdentitySourceBudget, sent: IdentitySourceBudget,
+  producer: IdentitySourceBudget, reply: IdentitySourceBudget): void {
+  checkIdentitySource(producer);
+  for (const key of sourceFields) if (owner[key] !== sent[key] || producer[key] < sent[key]) fail("protocol");
+  checkIdentitySourceAddition(producer, reply);
+  // The producer already includes sent. Replace once, then add ORIGINAL reply
+  // consumption; neither prospective serialization nor sent gets double credit.
+  for (const key of sourceFields) owner[key] = producer[key] + reply[key];
+}
 export function identityUtf8(text: string): number {
   let bytes = 0;
   for (let i = 0; i < text.length; i++) {
