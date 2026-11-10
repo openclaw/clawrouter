@@ -1,11 +1,12 @@
-import './typescript-setup.mjs';
+import { ownedStaticHeld } from '../../test/helpers/owned-static-custody-observer.mjs';
+await import('./typescript-setup.mjs');
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { privateOwnedHttpChat } from '../index.ts';
-import { bodyBudgetCharged } from '../body-budget.ts';
-import { beginOwnedHttpRequest, finishOwnedHttpRequest, ownedHttpFailureMetadata } from '../http-identity-owner.ts';
-import { acceptOwnedHttpControlVerification, proxyKeyVerification } from '../proxy-auth.ts';
-import { isIdentityFailure } from '../identity-admission.ts';
+const { privateOwnedHttpChat } = await import('../index.ts');
+const { bodyBudgetCharged } = await import('../body-budget.ts');
+const { beginOwnedHttpRequest, finishOwnedHttpRequest, ownedHttpFailureMetadata } = await import('../http-identity-owner.ts');
+const { acceptOwnedHttpControlVerification, proxyKeyVerification } = await import('../proxy-auth.ts');
+const { isIdentityFailure } = await import('../identity-admission.ts');
 import { accessBytesResponse } from './access-byte-fixture.mjs';
 
 const bytesRequest = wire => new Request('https://router.example/v1/chat/completions', {
@@ -34,7 +35,7 @@ test('HTTP control proof cannot be installed from a caller-supplied identity gra
 // Real compiled intake. Missing credentials terminate after parsing/selection;
 // these witnesses do not need an authority, provider or a synthetic auth result.
 async function intake(t, make, check, beforeResponse, checkCleanup) {
-  const baseline = bodyBudgetCharged(), roots = [], origins = new WeakMap(), releases = [];
+  const sharedBefore = ownedStaticHeld(), baseline = bodyBudgetCharged(), roots = [], origins = new WeakMap(), releases = [];
   let done = false, cleanupPromise, hasPrimary = false, primary;
   const own = promise => {
     if (origins.has(promise)) return origins.get(promise);
@@ -47,7 +48,7 @@ async function intake(t, make, check, beforeResponse, checkCleanup) {
     for (const release of releases) try { release(); } catch (error) { failures.push(error); }
     for (let index = 0; index < roots.length; index++) await roots[index].outcome;
     for (const root of roots) { const result = await root.outcome; if (result.failed && !root.used) { root.used = true; failures.push(result.error); } }
-    try { assert.equal(bodyBudgetCharged(), baseline); } catch (error) { failures.push(error); }
+    try { assert.equal(bodyBudgetCharged(), baseline + ownedStaticHeld() - sharedBefore); } catch (error) { failures.push(error); }
     return failures;
   })();
   t.after(async () => { if (!done) { const failures = await cleanup(); if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures); } });

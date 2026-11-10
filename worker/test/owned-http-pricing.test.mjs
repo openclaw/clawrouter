@@ -9,7 +9,7 @@ const observation = globalThis.__ownedJsonObservation = createOwnedJsonObservati
 globalThis.__ownedUsageWire = ownedUsageWire;
 const sourceHooks = registerHooks({ load(url, context, nextLoad) {
   const result = nextLoad(url, context);
-  if (!url.startsWith('file:') || !/(?:json-body|proxy-response|token-usage|http-identity-owner|venice-chat-runtime)\.ts$/.test(url)) return result;
+  if (!url.startsWith('file:') || !/(?:json-body|proxy-response|proxy-completion|token-usage|http-identity-owner|venice-chat-runtime)\.ts$/.test(url)) return result;
   const source = typeof result.source === 'string' ? result.source : Buffer.from(result.source).toString('utf8');
   return { ...result, source: observeOwnedJsonSource(fileURLToPath(url), source) };
 } });
@@ -29,9 +29,9 @@ const { evictCredentialGeneration } = await import('../credential-preflight.ts')
 const { prepareOwnedHttpPricing, enterOwnedHttpPricing } = await import('../pricing.ts');
 const { beginOwnedHttpRequest, finishOwnedHttpRequest } = await import('../http-identity-owner.ts');
 const { isIdentityFailure } = await import('../identity-admission.ts');
-const { beginOwnedCodecConsumer, normalizeOwnedCodecPreStreamError, observeOwnedCodecUsage, ownedCodecUsageCompletion } = await import('../proxy-response.ts');
+const { beginOwnedCodecConsumer, normalizeOwnedCodecPreStreamError, observeOwnedCodecUsage, ownedCodecUsageCompletion, checkOwnedAcceptedUsageReceiver, matchesOwnedAcceptedUsageSnapshot, checkOwnedAcceptedUsageTerminal } = await import('../proxy-response.ts');
 const { HttpOperation } = await import('../http-operation.ts');
-const { createSseUsageInspector, extractUsageTokens, responseOutcome, beginOwnedAcceptedUsage, pushOwnedAcceptedUsage, finishOwnedAcceptedUsage } = await import('../token-usage.ts');
+const { createSseUsageInspector, extractUsageTokens, responseOutcome } = await import('../token-usage.ts');
 
 const modelId = 'fireworks/glm-5.2', kid = 'http_pricing', policyId = 'http-pricing-policy';
 const provider = snapshot.providers.find(item => item.id === 'fireworks');
@@ -117,9 +117,9 @@ test('private codec consumer rejects fabricated owners before original reader ac
     await assert.rejects(normalizeOwnedCodecPreStreamError(cap, response, true, operation, { format: 'openai', requestId: 'fixture-request' }), isIdentityFailure);
     assert.throws(() => observeOwnedCodecUsage(cap, response, operation), isIdentityFailure);
     assert.throws(() => ownedCodecUsageCompletion(cap), isIdentityFailure);
-    assert.throws(() => beginOwnedAcceptedUsage(cap, response, 'sse', undefined, false), isIdentityFailure);
-    assert.throws(() => pushOwnedAcceptedUsage(cap, 1, new Uint8Array([1])), isIdentityFailure);
-    assert.throws(() => finishOwnedAcceptedUsage(cap, true), isIdentityFailure);
+    assert.throws(() => checkOwnedAcceptedUsageReceiver(cap, response, 'sse', undefined, false), isIdentityFailure);
+    assert.equal(matchesOwnedAcceptedUsageSnapshot(cap, 1, new Uint8Array([1])), false);
+    assert.throws(() => checkOwnedAcceptedUsageTerminal(cap, true), isIdentityFailure);
     assert.equal(acquired, 0); assert.equal(bodyBudgetCharged(), baseline);
   } finally { await body.cancel(); operation.stop('complete'); }
 });

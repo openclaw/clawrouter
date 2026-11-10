@@ -1082,7 +1082,7 @@ for (const instance of [1, 2]) test('native Worker instance ' + instance + ' own
     assert.equal((await f.request('https://fixture/v1/chat/completions', request('compact-open2048'))).status, 502);
     let after = await settledState(f);
     assert.equal(after.shared.claims, 1); assert.equal(after.shared.held, 65536);
-    assert.equal(after.shared.after - after.shared.before, 65536);
+    assert.equal(after.shared.after - after.shared.before, 65536); assert.ok(after.driverFactories > 0);
     assert.equal(after.parsers.at(-1).nativeParses, 0); assert.equal(after.parsers.at(-1).cleared, true);
     const responses = await Promise.all([f.request('https://fixture/v1/chat/completions', request('compact-object128')),
       f.request('https://fixture/v1/chat/completions', request('compact-object-string128'))]);
@@ -1097,17 +1097,32 @@ for (const instance of [1, 2]) test('native Worker instance ' + instance + ' own
 test('native first shared claim refusal changes no COMMON debit and starts no validator', { timeout: 120000 }, async t => {
   await fixture(t, async f => {
     const before = await state(f);
-    const release = async () => { await f.request('https://fixture/fixture/consumer-mode', { method: 'DELETE' }); };
+    const release = async () => {
+      await f.request('https://fixture/fixture/consumer-mode', { method: 'DELETE' });
+      await f.request('https://fixture/fixture/control-read', { method: 'DELETE' });
+    };
     f.releases.push(release);
     assert.equal((await f.request('https://fixture/fixture/consumer-mode', { method: 'POST', body: 'shared-refusal' })).status, 204);
+    await f.request('https://fixture/fixture/control-read', { method: 'POST', body: JSON.stringify({ kind: 'provider', mode: 'body-cancel', reason: 'success' }) });
     const response = await f.request('https://fixture/v1/chat/completions', chat('venice', {
       model: ownedHttpControlModels.venice, ownedVeniceCase: 'compact-object128',
     }));
     assert.equal(response.status, 503);
+    let held;
+    for (;;) {
+      held = await state(f);
+      if (held.controlReads.some(row => row.kind === 'provider' && row.held)) break;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    const original = held.controlReads.find(row => row.kind === 'provider');
+    assert.equal(original.cancel, 1); assert.equal(original.read, 0); assert.equal(original.unlock, 0);
+    assert.equal(held.driverFactories, 0); assert.equal(held.completed.length, 0);
+    assert.ok(held.charged > before.charged, 'no refund of the held received body or request');
     await release();
     const after = await settledState(f);
-    assert.equal(after.shared.claims, 0); assert.equal(after.shared.refused, 1); assert.equal(after.shared.held, 0);
-    assert.equal(after.parsers.length, before.parsers.length);
+    assert.equal(after.shared.claims, 0); assert.ok(after.shared.refused >= 1); assert.equal(after.shared.held, 0);
+    assert.equal(after.controlReads.find(row => row.kind === 'provider').cancel, 1);
+    assert.equal(after.parsers.length, before.parsers.length); assert.equal(after.driverFactories, 0);
     assert.equal((await f.request('https://fixture/fixture/evict', { method: 'POST', body: 'venice' })).status, 204);
     assert.equal((await state(f)).charged, before.charged);
   }, true);
@@ -1124,5 +1139,28 @@ test('native private JSON retains a wire BOM while validating exact decoded text
     assert.equal(response.headers.get('content-length'), String(new TextEncoder().encode(wire).byteLength));
     assert.equal(response.text, wire.slice(1));
     const after = await settledState(f); assert.equal(after.parsers.at(-1).nativeParses, 1);
+  }, true);
+});
+
+
+for (const role of ['consumer', 'public', 'source']) for (const duplicate of [false, true])
+test('native fixed handoff preserves ' + role + ' getters and original callbacks: ' + duplicate, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const mode = (role === 'consumer' ? '' : role + '-') + 'handoff-' + (duplicate ? 'duplicates' : 'getters');
+    f.releases.push(async () => { await f.request('https://fixture/fixture/consumer-mode', { method: 'DELETE' }); });
+    assert.equal((await f.request('https://fixture/fixture/consumer-mode', { method: 'POST', body: mode })).status, 204);
+    const response = await f.request('https://fixture/v1/chat/completions', chat('venice', {
+      model: ownedHttpControlModels.venice, stream: true, ownedVeniceCase: 'compact-later-object128',
+    }));
+    assert.equal(response.status, 200); assert.ok(response.text.includes('[DONE]'));
+    const after = await settledState(f), row = role === 'consumer' ? after.consumers : after.consumers[role];
+    assert.ok(row.read > 1); assert.equal(row.methodGets, row.read);
+    assert.equal(row.getterOrder, (role === 'public' ? 'dv' : 'vd').repeat(row.read));
+    if (duplicate) { assert.equal(row.thenCalls, row.read); assert.equal(row.duplicateCalls, row.read); assert.ok(row.staleCalls > 0); }
+    assert.ok(after.driverReads >= row.read, 'compiled path includes the actual lower-level fixed driver');
+    assert.equal(after.consumers.replay, 0); assert.equal(after.consumers.live, 0); assert.equal(after.consumers.public.live, 0);
+    assert.equal(after.events.length, 1);
+    await f.request('https://fixture/fixture/evict', { method: 'POST', body: 'venice' });
+    assert.equal((await state(f)).charged, 65536, 'only the explicit module claim remains');
   }, true);
 });

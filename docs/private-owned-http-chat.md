@@ -1398,7 +1398,7 @@ authored, plus three codec cases in the existing JSON/SSE loops. All semantics
 remain UNRUN_CODE_ONLY_HOSTED. No whole DATA or individual CONTROL-window
 certificate follows from these component changes.
 
-### Revised healthy-overlap blocker after validator and status transitions
+### Frozen DECF healthy-overlap blocker after validator and status transitions
 
 The selected layout still fails a necessary CONTROL condition. Use the same
 covered borrower, four healthy pending status reads after grace, and a later
@@ -1456,3 +1456,177 @@ subtracting the old415 envelope cannot repair this healthy schedule. This
 counterexample supplies no justification for a26th production file or a new
 allowance. The current draft is a source-only blocked candidate, not a
 publication or qualification candidate.
+
+
+### Fixed reader driver and canonical private owners: source-only checkpoint
+
+This draft implements the selected layout as one unit. It preserves the source,
+consumer and public native stream/Response/reader boundaries. `OwnedReaderDriver`
+in `proxy-completion.ts` holds their fixed pending masks, read/pull serials,
+observer-installation depth, active callback tails and queued transition.
+Ordinary `ProxyCompletion`, including the private-leaf method, remains byte
+identical after removing the added import and appended private tail.
+
+A read now resolves a void readiness receipt. Its actual result stays in the
+originating reader's captured-byte/done slots. Consumer and source capture read
+`value` before `done`; the public boundary reads `done` before `value`. Actual
+method/getter receivers, arguments and calls remain observable. Each observer
+publishes its pending state before invocation. Duplicate callbacks cannot
+consume a slot twice; stale read and pull serials cannot consume a later slot.
+A modified `.then` return is ignored as evidence. Callback completion and
+observer-installation completion precede readiness. Installation uncertainty
+keeps UNKNOWN even after a synchronous callback or later native settlement.
+
+FIRSTcancel, returned unlock, independent closed and active pull use the same
+driver, without individual joining deferreds. The driver still retains every
+actual pending original and observation. The sniff's immediate unlock path is
+separate from normal read/cancel-before-unlock retirement. Public error/cancel
+and accounting decisions do not await physical retirement. The public reader
+has one retirement leaf enrolled directly in the request parent before open;
+it has no enclosing completion child or per-pull leaf. Its pull still returns
+its actual void work Promise. A completed pull observer can be consumed before
+a native stream's next demand without losing the already queued transition.
+
+The private usage instance now combines `OwnedAcceptedUsage` and `OwnedChatUsage`
+state through one concrete instance in `token-usage.ts`. The shared framer,
+evidence parser and accumulator algorithms remain. The canonical instance owns
+mode/context, snapshot epoch, final inspection and delivery state; the existing
+indexes point to that instance. Those indexes, inherited fields and forwarding
+receipt still cost CONTROL. The private status instance similarly combines
+`OwnedSoftBudget` and `OwnedStatusController`. Logical check and physical
+retirement remain distinct. Its four readers, post-dispatch binding/config
+lookup, cache decisions, grace race and late responses are retained. The proxy
+uses named void/check/decision commands; no plan getter leaves the private
+status owner. Deferred generation remains unchanged.
+
+#### Static custody extension and refusal ownership
+
+`claimOwnedHttpStaticCustody` is the only singleton guard. It imports unchanged
+`ExactBodyCharge` from the standalone canonical `body-budget.ts`; the lower
+module imports no identity, runtime or consumer module. A successful reserve
+of exactly65536 is immediately published. All three private reader factories
+and the validator use this guard after their genuine capability/current-input
+checks and request funding, before the new reader expression or tokenizer
+factory. The three reader roles validate the current response/body before the
+claim. Native function targets are borrowed; their new reference cells count.
+The guard is not a capability check and is never called by an ordinary route.
+
+The identified lower-module/validator fixed target has this source-logical
+ceiling. Scope links and prototype property cells are explicit accounting
+categories, not a description of physical closure or VM layouts.
+
+| Fixed target | Products |
+| --- | ---: |
+| Carried pinned tokenizer/adapter/defs target |281|
+| Validator function, binding and captured module link |3|
+| Driver constructor, binding, prototype record, two constructor/prototype cells and captured class link |6|
+| Twenty-one concrete prototype members, including three getters: function, property cell and captured scope link each |63|
+| Class logical scope and outer link |2|
+| Five native-function reference bindings; targets are not cloned |5|
+| Singleton binding and exact-charge object/held field |3|
+| Guard function, binding and module link |3|
+| ExactBodyCharge import, three driver imports, three guard imports and validator import |8|
+| Five participating logical module scopes/outer links, once |10|
+| **Named fixed target ceiling** |**384**|
+
+The abstract hook declarations construct no functions. The concrete hook
+implementations remain separately named products in their source/consumer/
+public module ownership; this384 target is not permission to absorb arbitrary
+new shared commands. The whole shared-module ledger remains part of source
+qualification. No instance field, bound driver, constructor resolver, observer
+handler/argument, queued work or active call moves into this fixed target.
+
+The separate fixed payload inventory is the carried patterns/regex sources,
+expected-state/token/literal/escape tables and TERM scalar positions; plus fixed
+class/property/import names, driver phase strings and scalar charge. A bounded
+source census of the pinned static initializer prefix is3360 UTF-16 units;
+this conservatively includes syntax/comments not retained as payload. The new
+driver/guard tail has148 literal units and a7579-unit upper inventory counting
+all identifier occurrences, including erased/syntactic occurrences. These are
+fixed input-independent payload bounds, not source-code storage or heap sizes.
+The65536 reservation is the explicitly adopted normative custody debit, not a
+conversion of384 CONTROL products into bytes and not spare request capacity.
+
+The claim now occurs at the first genuine private reader use, potentially at
+the public wrapper for an early local error, rather than only during response
+parsing. First-claim refusal can therefore happen earlier. Ordinary-only use
+still activates no claim. Request retirement leaves exactly the observed
+permanent baseline; there is no release/reset hook, and separate Worker
+instances own separate counters and claims.
+
+A source claim refusal occurs before creating a source reader/retirement
+receipt. `proxy.ts` retains the received response and sends it through its
+memoized `discard` command; `cancelOwnedHttpResponse` enrolls the original body
+cancellation in sink custody. The native-fetch and local-error paths reuse that
+same discard receipt. A claimed diagnostic role alone is not a pending I/O
+receipt. `retireOwnedVeniceChatCodec` accepts absence of an acquired source;
+`sealConsumer` resolves an empty consumer owner when acquisition never began.
+The full private refusal witness now holds the actual received body cancellation:
+503 publication remains prompt, no driver/validator factory starts, the request
+stays funded, cancellation occurs once, and release precedes exact retirement.
+UNKNOWN original work is never refunded by this deterministic refusal path.
+
+#### Remaining implemented-layout counterexample
+
+The selected factories still fail the healthy schedule: four status readers
+remain pending after grace while a later depth128 SSE object is being validated.
+The source pull is active; consumer/public native reads and all three closed
+observations remain pending. There are no failures, terminal recovery records,
+retired preparation owners or deferred cohort transports in this subset.
+
+| Disjoint surviving subset | Products | Current derivation |
+| --- | ---: | --- |
+| Unchanged ownership subset |385|DECF504 excluding old source24, consumer30, public22, Chat19 and accepted-usage24. Generation, framer, accumulator, accounting, upload and proxy initial rows remain unchanged lower subsets. |
+| Source driver instance |41|Object1 + inherited26 fields + own9 fields + retirement Promise/resolver2 + bound advance function/receiver2 + cleanup vector1. |
+| Consumer and reader |55|Consumer owner/index/receipt14 + reader object1/inherited26/own10 + retirement Promise/resolver2 + bound advance/receiver2. |
+| Public driver instance |37|Object1 + inherited26/own5 + retirement Promise/resolver2 + bound advance/receiver2 + actual native reader1. |
+| One usage instance |35|Object1 + inherited16/own9 fields, ready Promise/resolver2, abort listener/receiver2, accepted registry2, consume function/receiver2, frame index2 and accumulator membership1. |
+| Validator retained subset |175|Unchanged138 depth/functions/facade +37 scalar/reference cells; no materializer parent stack. |
+| Four pending status readers and canonical owner |224|Four reader records92 + canonical decision/controller/vector/receipts/index36 + four pending observation/native-handle subsets24 each. |
+| Later proxy fields |25|Same instantiated fields as DECF, including cleared values. |
+| Consumer/public void read observations |30|Per read: original/readiness/following Promises3, two readiness resolvers2, two bound handlers/receiver links4, four bound kind/serial operands4, two reactions2. |
+| Three pending closed observations |36|Per role: original/following2, two handlers/links4, four bound kind/serial operands4, two reactions2. |
+| Three active pull observations |36|Same twelve-product observation subset per actual pull. |
+| Direct public lifetime-leaf observer subset |9|Two handlers/links4, follower1, two reactions2, retained scope/pending state2; its input retired Promise is counted in the public instance. |
+| **Actual disjoint lower bound** |**1088**|**64 above1024 before omitted products.** |
+
+The26 inherited fields are body, reader, originalRead, captured, readDone,
+reading, retired, driverFlags, nativeFailure, pending, seen, installing,
+activeTails, serial, pullSerial, queued, advanceWork, readAccept, readReject,
+readFailure, cancelOriginal, unlockOriginal, closedOriginal, pullOriginal,
+resolveRetired and native. Clearing them does not remove own fields. The actual
+bound observers retain both kind and serial operands even for one-shot roles.
+This is the concrete surviving producer; a mask alone did not eliminate its
+fields, bound argument cells or native reaction products.
+
+No assignment to operation128/source128/read128/terminal128/synchronous512
+can fit this disjoint1088 subset. The aggregate test is a necessary failure,
+not permission to pool the individual windows. Active validator/native-call
+operands, additional scope links, completion followers, grace losers, upload
+pipe/abort roots, archive/accounting callbacks and error transitions remain
+omitted. Thus64 is only a minimum deficit, not a sufficient savings target.
+The earlier989 skeleton and all gross subtraction projections are invalid as
+upper bounds for this implementation.
+
+| Required phase | DATA and individual-window disposition |
+| --- | --- |
+| Hydration/authorization | Existing32MiB/common96MiB admissions retained; new claim guard/constructor operands require their request windows. Complete upper OPEN. |
+| Sniff/crossing and first-data authorization | Whole source/capture/destination backing and8KiB prefix coexist; original waits and fresh auth are retained. Upper OPEN. |
+| Later depth128 validation | Proven CONTROL lower1088; every individual-window certificate is blocked. DATA still needs full additive closure. |
+| Native graph parse/accepted usage | Validator scope has exited; exact-text parse/evidence/summary consumers and independent codec/usage debits remain. Upper OPEN. |
+| Mapped replacement and abandoned reader | Both actual reader owners and cleanup tails remain until joins. Upper OPEN. |
+| Terminal/recovery and cohort drain | Original fixed terminal engine and generation drain are unchanged; their actual live histories/observers need the later phase table. Upper OPEN. |
+| UNKNOWN | Applicable owners and debits remain; no window reuse or fabricated retirement. Upper OPEN. |
+
+The next bounded design must reduce actual retained driver/status observations
+and enclosing owner products, or prove a real last consumer, within the existing
+sources. This counterexample does not justify a26th file, another arena, quota
+increase, profile reduction or default activation. No full-candidate audit or
+hosted execution should run on this checkpoint.
+
+Authored witnesses preserve the prior cases and add ten Node mechanical driver
+cases and six actual private Workerd role/duplicate cases. Compiled observers
+include the lower module and assert the permanent claim before the first base
+field initializer. Updated debit checks observe the actual singleton publication
+and retain its exact65536 baseline. All semantics are UNRUN_CODE_ONLY_HOSTED;
+raw/generated syntax, whitespace and privacy checks are not runtime evidence.

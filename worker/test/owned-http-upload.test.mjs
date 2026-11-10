@@ -1,11 +1,12 @@
-import './typescript-setup.mjs';
+import { ownedStaticHeld } from '../../test/helpers/owned-static-custody-observer.mjs';
+await import('./typescript-setup.mjs');
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { beginOwnedHttpRequest, beginOwnedHttpUpload, adoptOwnedHttpUploadSource, pipeOwnedHttpUpload,
+const { beginOwnedHttpRequest, beginOwnedHttpUpload, adoptOwnedHttpUploadSource, pipeOwnedHttpUpload,
   dispatchOwnedHttpUpload, abandonOwnedHttpUpload, finishOwnedHttpRequest, ownedHttpCompletion,
-  ownOwnedHttpResponse } from '../http-identity-owner.ts';
-import { bodyBudgetCharged, bodyBudgetBytes, ExactBodyCharge } from '../body-budget.ts';
-import { jsonBodyBytes, jsonBodyStream } from '../json-body.ts';
+  ownOwnedHttpResponse } = await import('../http-identity-owner.ts');
+const { bodyBudgetCharged, bodyBudgetBytes, ExactBodyCharge } = await import('../body-budget.ts');
+const { jsonBodyBytes, jsonBodyStream } = await import('../json-body.ts');
 
 const deferred = () => {
   let resolve, reject;
@@ -17,7 +18,7 @@ const deferred = () => {
 // Every original gets an immediate outcome observer. A taken outcome has one
 // reporting origin; the same promise can be joined again without duplicating it.
 async function fixture(t, run) {
-  const baseline = bodyBudgetCharged(), roots = [], origins = new WeakMap(), releases = [];
+  const sharedBefore = ownedStaticHeld(), baseline = bodyBudgetCharged(), roots = [], origins = new WeakMap(), releases = [];
   const cap = beginOwnedHttpRequest(new Request('https://router.example/v1/chat/completions'), {});
   let cleanupPromise, retirement, hasPrimary = false, primary, finished = false;
   const own = promise => {
@@ -48,7 +49,7 @@ async function fixture(t, run) {
   try { await run({ cap, own, take, releases, finish }); }
   catch (error) { hasPrimary = true; primary = error; }
   const failures = await cleanup(); finished = true;
-  try { assert.equal(bodyBudgetCharged(), baseline, 'last actual upload consumer retires its debit'); }
+  try { assert.equal(bodyBudgetCharged(), baseline + ownedStaticHeld() - sharedBefore, 'exact upload retirement plus observed permanent custody'); }
   catch (error) { failures.push(error); }
   if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, 'upload fixture outcomes');
   if (hasPrimary) throw primary;

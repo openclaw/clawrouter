@@ -1,6 +1,6 @@
 import { ExactBodyCharge } from "./body-budget.ts";
 import { identityFailure, isIdentityFailure, identityHeader, identitySourceBudget, identityPlan, admitIdentityBytes, admitIdentityHeaders, parseIdentity, IdentityWire } from "./identity-admission.ts";
-import { ProxyCompletion } from "./proxy-completion.ts";
+import { ProxyCompletion, OwnedReaderDriver, claimOwnedHttpStaticCustody } from "./proxy-completion.ts";
 import { inputRetirement } from "./input-retirement.ts";
 import type { Env, QueueMessage, AuthorizedIdentity, UsageEvent } from "./types.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
@@ -26,7 +26,7 @@ import { logCorrelationError } from "./correlation.ts";
 import type { AccountingSinks, BudgetReservation } from "./accounting.ts";
 import { matchesOwnedHttpAccountingCommand, retireOwnedHttpAccountingCommands, type OwnedHttpAccountingCommand } from "./proxy-accounting.ts";
 import { parseSoftStatus, softStatusLimits, softStatusError } from "./soft-budget-json.ts";
-import { acceptOwnedHttpSoftStatus, retireOwnedHttpSoftBudget, type PreparedSoftBudget } from "./soft-budget.ts";
+import { OwnedStatusController, retireOwnedHttpSoftBudget, type PreparedSoftBudget } from "./soft-budget.ts";
 
 // This entry is inactive until the named compiled HTTP adapter invokes it.
 // Capabilities contain no request, identity, credential or preparation graph.
@@ -1221,28 +1221,24 @@ export function ownOwnedHttpPublicResponse(cap: OwnedHttpRequest, response: Resp
 }
 const originalReaderClosed = Object.getOwnPropertyDescriptor(ReadableStreamDefaultReader.prototype, "closed")?.get;
 const originalLookupGetter = (Object.prototype as { __lookupGetter__?: unknown }).__lookupGetter__;
-class OwnedPublicReader {
-  private reader?: ReadableStreamDefaultReader<Uint8Array>;
-  private flags = 0;
-  private reading?: Promise<void>;
-  private originalRead?: Promise<ReadableStreamReadResult<Uint8Array>>;
-  private cancelling?: Promise<void>;
-  private unlocking?: Promise<void>;
-  private closed?: Promise<void>;
-  private pulling?: Promise<void>;
-  private nativeFailure?: object;
-  private resolve!: () => void;
-  readonly retired = new Promise<void>(done => { this.resolve = done; });
-  constructor(private cap: OwnedHttpRequest, private owner: RequestOwner, private scope: ProxyCompletion,
-    private original: Response | undefined, private body: ReadableStream<Uint8Array> | undefined,
-    private base: number, private publicBoundary: boolean) {}
+class OwnedPublicReader extends OwnedReaderDriver {
+  constructor(private cap: OwnedHttpRequest, private owner: RequestOwner,
+    private original: Response | undefined, body: ReadableStream<Uint8Array> | undefined,
+    private base: number, private publicBoundary: boolean) { super(); this.body = body; }
   private failure(offset: number, kind: SinkOrigin, reason: unknown): SinkOriginRecord {
     const ordinal = this.base + offset, known = this.owner.sinkOrigins!.has(ordinal);
     const failure = failedSinkOrigin(this.owner, 32 * ordinal + sinkKinds.indexOf(kind), reason);
     if (!known) retainOwnedDiagnostic(this.owner, failure);
     return failure;
   }
-  private propagated(reason: unknown): boolean {
+  protected holdDriver(): void { holdOwnedHttpRequest(this.cap); }
+  protected driverProtocolFailure(): Error { return identityFailure("protocol"); }
+  protected recordDriverFailure(kind: "read" | "closed" | "cancel" | "unlock" | "pull" | "retire", reason: unknown): object {
+    return this.failure(kind === "read" ? 1 : kind === "cancel" ? 2 : kind === "unlock" ? 3 : kind === "closed" ? 4 : kind === "pull" ? 5 : 7, kind, reason);
+  }
+  protected driverCleanupFailure(kind: "closed" | "cancel" | "unlock", _failure: object): void { if (kind !== "closed") this.owner.completion.fail(); }
+  protected driverPullFailure(_failure: object): void { this.owner.completion.fail(); void this.retire(true); }
+  protected propagatedDriverFailure(reason: unknown): boolean {
     const forwarded = this.publicBoundary && matchesOwnedHttpPublicBody(this.cap, this.body ?? null);
     if (!this.publicBoundary || forwarded) for (const codec of this.owner.revalidations ?? []) {
       if (forwarded && matchesOwnedCodecOutputFailure(codec, this.body ?? null, reason)) return true;
@@ -1250,161 +1246,34 @@ class OwnedPublicReader {
     }
     return false;
   }
+  protected captureDriverValue(value: ReadableStreamReadResult<Uint8Array>): void {
+    // Public role deliberately observes done BEFORE value, each exactly once.
+    this.readDone = value.done; this.captured = value.value;
+  }
+  protected driverCleared(): void { this.original = undefined; }
   open(): void {
     if (!this.original || !this.body) throw identityFailure("protocol");
     try { this.reader = this.body!.getReader(); }
     catch (reason) { throw this.failure(0, "acquire", reason); }
-    let resolve!: () => void;
-    this.closed = new Promise<void>(done => { resolve = done; });
-    let following = false;
-    try {
-      const reader = this.reader;
-      if (Object.getPrototypeOf(reader) === ReadableStreamDefaultReader.prototype && !Object.hasOwn(reader, "closed")
-        && typeof originalLookupGetter === "function" && originalLookupGetter.call(reader, "closed") === originalReaderClosed) this.flags |= 8;
-      let original: Promise<void> | undefined = reader.closed;
-      following = true;
-      const then = original.then; if (then !== ownedBoundaryThen) this.flags &= ~8;
-      void Reflect.apply(then, original, [() => { resolve(); }, (reason: unknown) => {
-        this.flags |= 16;
-        if (!(this.flags & 8 && (this.nativeFailure || this.propagated(reason)))) {
-          const failure = this.failure(4, "closed", reason);
-          if (this.flags & 8) this.nativeFailure = failure;
-        }
-        reason = undefined; resolve();
-      }]);
-      original = undefined;
-    } catch (reason) {
-      const failure = this.failure(4, "closed", reason); reason = undefined;
-      if (following) holdOwnedHttpRequest(this.cap); else resolve();
-      throw failure;
-    }
+    const reader = this.reader;
+    this.observeDriverClosed(Object.getPrototypeOf(reader) === ReadableStreamDefaultReader.prototype && !Object.hasOwn(reader, "closed")
+      && typeof originalLookupGetter === "function" && originalLookupGetter.call(reader, "closed") === originalReaderClosed);
   }
-  private read(): Promise<ReadableStreamReadResult<Uint8Array>> {
-    if (this.flags & 1 || this.reading || !this.reader) throw identityFailure("protocol");
-    let resolve!: () => void;
-    const joined = new Promise<void>(done => { resolve = done; });
-    this.reading = joined;
-    let accept!: (value: ReadableStreamReadResult<Uint8Array>) => void, reject!: (reason: unknown) => void;
-    const observed = new Promise<ReadableStreamReadResult<Uint8Array>>((yes, no) => { accept = yes; reject = no; });
-    try {
-      const reader = this.reader, method = reader.read;
-      let native = !!(this.flags & 8) && Object.getPrototypeOf(reader) === ReadableStreamDefaultReader.prototype
-        && !Object.hasOwn(reader, "closed") && method === originalReaderRead;
-      this.originalRead = Reflect.apply(method, reader, []);
-      const then = this.originalRead!.then; native &&= then === ownedBoundaryThen;
-      void Reflect.apply(then, this.originalRead, [(value: ReadableStreamReadResult<Uint8Array>) => {
-        if (this.reading !== joined) return;
-        try { accept({ done: value.done, value: value.value } as ReadableStreamReadResult<Uint8Array>); }
-        catch (reason) { reject(this.failure(1, "read", reason)); reason = undefined; }
-        finally { value = undefined as never; this.originalRead = undefined; if (this.reading === joined) this.reading = undefined; resolve(); }
-      }, (reason: unknown) => {
-        if (this.reading !== joined) return;
-        this.originalRead = undefined;
-        this.flags |= 32;
-        const failure = native && this.nativeFailure ? this.nativeFailure
-          : native && this.propagated(reason) ? reason as object : this.failure(1, "read", reason); reason = undefined;
-        if (native) this.nativeFailure = failure;
-        reject(failure); if (this.reading === joined) this.reading = undefined; resolve();
-      }]);
-    } catch (reason) {
-      const failure = this.failure(1, "read", reason); reason = undefined;
-      if (this.reading !== joined) return observed.then(() => { throw failure; }, () => { throw failure; });
-      if (this.originalRead) { holdOwnedHttpRequest(this.cap); reject(failure); return observed; }
-      reject(failure); if (this.reading === joined) this.reading = undefined; resolve();
-    }
-    return observed;
-  }
-  private unlock(): void {
-    if (this.flags & 2) return;
-    this.flags |= 2;
-    let resolve!: () => void;
-    this.unlocking = new Promise<void>(done => { resolve = done; });
-    if (!this.reader) { resolve(); return; }
-    let following = false;
-    try {
-      let original: unknown;
-      { const reader = this.reader, method = reader.releaseLock; original = Reflect.apply(method, reader, []); }
-      if (original === undefined) { resolve(); return; }
-      following = true;
-      void Promise.resolve(original).then(() => { resolve(); }, reason => {
-        this.failure(3, "unlock", reason); reason = undefined; this.scope.fail(); resolve();
-      });
-      original = undefined;
-    } catch (reason) {
-      this.failure(3, "unlock", reason); reason = undefined; this.scope.fail();
-      if (following) holdOwnedHttpRequest(this.cap); else resolve();
-    }
-  }
-  retire(cancel: boolean): Promise<void> {
-    if (this.flags & 1) return this.retired;
-    this.flags |= 1;
-    const reading = this.reading, pulling = this.pulling;
-    if (cancel) {
-      let resolve!: () => void;
-      this.cancelling = new Promise<void>(done => { resolve = done; });
-      let following = false;
-      try {
-        let original: Promise<void> | undefined, native = false;
-        if (this.reader) {
-          const reader = this.reader, method = reader.cancel;
-          native = !!(this.flags & 8) && Object.getPrototypeOf(reader) === ReadableStreamDefaultReader.prototype
-            && !Object.hasOwn(reader, "closed") && method === originalReaderCancel;
-          original = Reflect.apply(method, reader, []);
-        } else if (this.body && !this.body.locked) original = this.body.cancel();
-        else if (!this.body) { resolve(); }
-        else { holdOwnedHttpRequest(this.cap); }
-        if (original) {
-          following = true;
-          const then = original.then; native &&= then === ownedBoundaryThen;
-          void Reflect.apply(then, original, [() => { resolve(); }, (reason: unknown) => {
-            if (!(native && this.nativeFailure && (this.flags & 16))) { this.failure(2, "cancel", reason); this.scope.fail(); }
-            reason = undefined; resolve();
-          }]);
-          original = undefined;
-        }
-      } catch (reason) {
-        this.failure(2, "cancel", reason); reason = undefined; this.scope.fail();
-        if (following) holdOwnedHttpRequest(this.cap); else resolve();
-      }
-    }
-    // This tail is outside each public pull; it never joins its own completion.
-    const original = (async () => {
-      await reading; await this.cancelling;
-      this.unlock(); await this.unlocking; await this.closed; await pulling;
-      try { if (this.body?.locked) { holdOwnedHttpRequest(this.cap); return; } }
-      catch (reason) { this.failure(7, "retire", reason); holdOwnedHttpRequest(this.cap); return; }
-      this.reader = undefined; this.body = undefined; this.original = undefined;
-      this.reading = undefined; this.originalRead = undefined; this.cancelling = undefined; this.unlocking = undefined; this.closed = undefined; this.pulling = undefined;
-      this.nativeFailure = undefined; this.resolve();
-    })();
-    void original.then(() => undefined, reason => { this.failure(7, "retire", reason); holdOwnedHttpRequest(this.cap); });
-    this.scope.seal();
-    return this.retired;
-  }
+  retire(cancel: boolean): Promise<void> { return this.stopDriver(cancel); }
   pull(controller: ReadableStreamDefaultController<Uint8Array>): Promise<void> {
-    if (this.flags & 1) return Promise.resolve();
-    let resolve!: () => void;
-    const joined = new Promise<void>(done => { resolve = done; });
-    this.pulling = joined;
-    let original: Promise<void>;
-    try { original = this.scope.startPrivateLeaf(() => this.next(controller)); }
-    catch (reason) { const failure = this.failure(8, "registration", reason); reason = undefined; resolve(); void this.retire(true); throw failure; }
-    return original.then(() => { if (this.pulling === joined) this.pulling = undefined; resolve(); }, reason => {
-      this.failure(5, "pull", reason); reason = undefined;
-      if (this.pulling === joined) this.pulling = undefined; resolve(); void this.retire(true);
-    });
+    this.beginDriverPull();
+    return this.ownDriverPull(this.next(controller));
   }
   private async next(controller: ReadableStreamDefaultController<Uint8Array>): Promise<void> {
     let reading = true;
     try {
-      let next: ReadableStreamReadResult<Uint8Array> | undefined = await this.read();
-      reading = false;
-      if (this.flags & 1) { next = undefined; return; }
-      if (next.done) { next = undefined; controller.close(); void this.retire(false); }
-      else { controller.enqueue(next.value); next = undefined; }
+      await this.startDriverRead(); reading = false;
+      if (this.driverFlags & 1) { this.captured = undefined; return; }
+      if (this.readDone) { this.captured = undefined; controller.close(); void this.retire(false); }
+      else { controller.enqueue(this.captured!); this.captured = undefined; }
     } catch (reason) {
       const failure = reading ? reason : this.failure(5, "pull", reason); reason = undefined;
-      if (!(this.flags & 1)) {
+      if (!(this.driverFlags & 1)) {
         try { controller.error(failure); } catch (error) { this.failure(6, "pull", error); }
         void this.retire(true);
       }
@@ -1412,6 +1281,7 @@ class OwnedPublicReader {
   }
   cancel(): void { void this.retire(true); }
 }
+
 function ownHttpResponse(cap: OwnedHttpRequest, response: Response, publicBoundary: boolean): Response {
   const owner = requestOwner(cap);
   if (owner.sealed) throw identityFailure("protocol");
@@ -1429,17 +1299,18 @@ function ownHttpResponse(cap: OwnedHttpRequest, response: Response, publicBounda
     retainOwnedDiagnostic(owner, failure); throw failure;
   }
   if (headerPairs || headerUnits) growOwnedHttpRequest(cap, 32 * headerPairs + 4 * headerUnits);
-  const scope = owner.completion.fork();
   let reader: OwnedPublicReader | undefined;
+  let enrolled = false;
   try {
-    reader = new OwnedPublicReader(cap, owner, scope, response, body, base, publicBoundary);
-    scope.startPrivateLeaf(() => reader!.retired);
+    if (!claimOwnedHttpStaticCustody()) throw identityFailure("limit");
+    reader = new OwnedPublicReader(cap, owner, response, body, base, publicBoundary);
+    owner.completion.startPrivateLeaf(() => reader!.retired); enrolled = true;
     reader.open();
     return new Response(new ReadableStream<Uint8Array>(reader, { highWaterMark: 0 }),
       { status: response.status, statusText: response.statusText, headers: response.headers });
   } catch (reason) {
-    scope.fail();
-    if (reader) void reader.retire(true); else scope.seal();
+    owner.completion.fail();
+    if (reader && enrolled) void reader.retire(true);
     throw reason;
   } finally { response = undefined as never; }
 }
@@ -1451,41 +1322,7 @@ const ownedStatusNativeCancel = ReadableStreamBYOBReader.prototype.cancel;
 const ownedStatusNativeClosed = Object.getOwnPropertyDescriptor(ReadableStreamBYOBReader.prototype, "closed")?.get;
 const ownedStatusGraph = 8 * (32 + 2 * 64 + 64 + 128) + 2 * 4096;
 const ownedStatusData = 3 * 16384 + 6 * 16384 + ownedStatusGraph + 2 * 4096 + 8192;
-class OwnedStatusController {
-  namespace?: Env["BUDGET_LEDGER"];
-  bound = false;
-  started = false;
-  settled = false;
-  private remaining = 0;
-  private resolve!: () => void;
-  readonly retired = new Promise<void>(done => { this.resolve = done; });
-  readonly readers: (OwnedStatusReader | undefined)[] = [];
-  constructor(readonly cap: OwnedHttpRequest, readonly root: RequestOwner, readonly plan: PreparedSoftBudget) {}
-  start(): void {
-    if (this.started || this.settled || !this.bound) throw identityFailure("protocol");
-    this.started = true; this.remaining = this.plan.descriptors.length;
-    for (let index = 0; index < this.plan.descriptors.length; index++) {
-      if (this.plan.descriptors[index].leg.request.limitMicros === 0) { this.decide(index, true, null); this.readers[index] = undefined; this.complete(); continue; }
-      this.readers[index]!.start();
-    }
-    if (!this.remaining) this.finish();
-  }
-  decide(index: number, succeeded: boolean, spent: number | null): void { acceptOwnedHttpSoftStatus(this.cap, index, succeeded, spent); }
-  retire(index: number, reader: OwnedStatusReader): void {
-    if (this.readers[index] !== reader) throw identityFailure("protocol");
-    this.readers[index] = undefined; this.complete();
-  }
-  private complete(): void { if (!--this.remaining) this.finish(); }
-  private finish(): void {
-    if (this.settled) return;
-    this.namespace = undefined; this.settled = true; this.resolve();
-  }
-  abandonUnstarted(): void {
-    if (this.started) return;
-    this.readers.length = 0; this.finish();
-  }
-}
-class OwnedStatusReader {
+export class OwnedStatusReader {
   private response?: Response;
   private original?: Promise<unknown>;
   private body?: ReadableStream<Uint8Array>;
@@ -1519,12 +1356,12 @@ class OwnedStatusReader {
     try { queueMicrotask(this.advanceWork); }
     catch (reason) { this.unsettled(reason); }
   }
-  private unknown(): void { this.flags |= 256; holdOwnedHttpRequest(this.owner.cap); }
+  private unknown(): void { this.flags |= 256; holdOwnedHttpRequest(this.owner.http); }
   private retired(): void {
     try {
       if (this.original || this.reader || this.body || this.response || this.pending)
         throw identityFailure("protocol");
-      const root = this.owner.root;
+      const root = requestOwner(this.owner.http);
       if (this.acquisition !== undefined) compactRetiredSinkOrigin(root, Math.floor(this.acquisition / 32));
       if (this.fetching !== undefined) compactRetiredSinkOrigin(root, Math.floor(this.fetching / 32));
       if (this.base !== undefined) for (let index = 0; index < 9; index++) compactRetiredSinkOrigin(root, this.base + index);
@@ -1537,7 +1374,7 @@ class OwnedStatusReader {
   }
   private claimReader(): number {
     if (this.base !== undefined) return this.base;
-    const root = this.owner.root;
+    const root = requestOwner(this.owner.http);
     if (root.sinkCredits < 9) throw identityFailure("protocol");
     this.base = root.nextSinkOrigin; root.nextSinkOrigin += 9; root.sinkCredits -= 9;
     return this.base;
@@ -1545,15 +1382,15 @@ class OwnedStatusReader {
   failure(offset: number, kind: SinkOrigin, reason: unknown): SinkOriginRecord {
     const origin = offset === 0 ? this.acquisition! : offset === 1 ? this.fetching!
       : 32 * (this.claimReader() + offset - 2) + sinkKinds.indexOf(kind);
-    return failedSinkOrigin(this.owner.root, origin, reason);
+    return failedSinkOrigin(requestOwner(this.owner.http), origin, reason);
   }
   private acquire(): void {
-    const descriptor = this.owner.plan.descriptors[this.index], namespace = this.owner.namespace;
-    this.acquisition = sinkOrigin(this.owner.root.sink!, "acquire");
+    const descriptor = this.owner.prepared.descriptors[this.index], namespace = this.owner.namespace;
+    this.acquisition = sinkOrigin(requestOwner(this.owner.http).sink!, "acquire");
     let stub: DurableObjectStub;
     try { if (!namespace) throw softStatusError(); stub = namespace.get(namespace.idFromName(descriptor.leg.objectName)); }
     catch (reason) { this.failure(0, "acquire", reason); reason = undefined; this.flags |= 2048; this.settleRead(); return; }
-    this.fetching = sinkOrigin(this.owner.root.sink!, "fetch");
+    this.fetching = sinkOrigin(requestOwner(this.owner.http).sink!, "fetch");
     let observing = false;
     try {
       this.original = stub.fetch(descriptor.url);
@@ -1804,7 +1641,7 @@ export function prepareOwnedHttpSoftStatus(cap: OwnedHttpRequest, env: Env, plan
   // Four complete source/read/text/graph overlaps, plus fixed decision metadata.
   growOwnedHttpRequest(cap, 4096 + plan.descriptors.length * ownedStatusData);
   reserveSinkOrigins(ownedHttpSinkOwner(cap), 1 + 11 * plan.descriptors.length);
-  const state = new OwnedStatusController(cap, root, plan); root.softStatus = state;
+  const state = new OwnedStatusController(cap, plan); root.softStatus = state;
   for (let index = 0; index < plan.descriptors.length; index++) {
     state.readers.push(new OwnedStatusReader(state, index));
   }
@@ -1812,7 +1649,7 @@ export function prepareOwnedHttpSoftStatus(cap: OwnedHttpRequest, env: Env, plan
 }
 export function bindOwnedHttpSoftStatus(cap: OwnedHttpRequest, env: Env, plan: PreparedSoftBudget, operation: HttpOperation): void {
   const root = requestOwner(cap), state = root.softStatus;
-  if (!state || state.plan !== plan || state.started || state.settled || root.env !== env
+  if (!state || state.prepared !== plan || state.readersStarted || state.settled || root.env !== env
     || !matchesOwnedHttpSoftStatusPlan(cap, env, plan, operation)) throw identityFailure("protocol");
   const origin = sinkOrigin(root.sink!, "acquire");
   try { state.namespace = env.BUDGET_LEDGER; } catch (reason) { throw failedSinkOrigin(root, origin, reason); }
@@ -1821,7 +1658,7 @@ export function bindOwnedHttpSoftStatus(cap: OwnedHttpRequest, env: Env, plan: P
 export function startOwnedHttpSoftStatus(cap: OwnedHttpRequest): void {
   const state = requestOwner(cap).softStatus;
   if (!state) throw identityFailure("protocol");
-  state.start();
+  state.startReaders();
 }
 export function checkOwnedHttpSoftStatusRetirement(cap: OwnedHttpRequest): void {
   const root = requestOwner(cap);

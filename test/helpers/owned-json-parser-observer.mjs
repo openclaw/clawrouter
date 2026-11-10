@@ -16,6 +16,36 @@ export function createOwnedJsonObservation() {
   const publicReaders = { ...consumers }, intakeReaders = { ...consumers }, sourceReaders = { ...consumers };
   consumers.public = publicReaders; consumers.intake = intakeReaders; consumers.source = sourceReaders;
   function faultReader(reader, mode, consumers) {
+      if (mode === 'handoff-getters' || mode === 'handoff-duplicates') {
+        const read = reader.read, nativeThen = Promise.prototype.then;
+        let stale;
+        consumers.getterOrder = ''; consumers.methodGets = 0; consumers.duplicateCalls = 0; consumers.staleCalls = 0;
+        const poison = Object.freeze({ get done() { throw new Error('stale done consumed'); }, get value() { throw new Error('stale value consumed'); } });
+        Object.defineProperty(reader, 'read', { get() {
+          consumers.methodGets++;
+          return function (...args) {
+            if (this !== reader || args.length !== 0) throw new Error('reader receiver or arguments changed');
+            consumers.read++;
+            if (stale) { const previous = stale; stale = undefined; consumers.staleCalls++; previous(poison); }
+            const original = Reflect.apply(read, this, args).then(result => {
+              let doneRead = false, valueRead = false;
+              return {
+                get done() { if (doneRead) throw new Error('done getter repeated'); doneRead = true; consumers.getterOrder += 'd'; return result.done; },
+                get value() { if (valueRead) throw new Error('value getter repeated'); valueRead = true; consumers.getterOrder += 'v'; return result.value; },
+              };
+            });
+            if (mode === 'handoff-duplicates') Object.defineProperty(original, 'then', { value(yes, no) {
+              consumers.thenCalls++;
+              return Reflect.apply(nativeThen, this, [value => {
+                yes(value); consumers.duplicateCalls++; yes(poison); no(undefined); stale = yes;
+              }, no]);
+            } });
+            return original;
+          };
+        } });
+        releaseConsumer = () => { stale = undefined; };
+        return;
+      }
       if (mode === 'pending-success' || mode === 'then-early') {
         const read = reader.read;
         let first = true, release;
@@ -155,6 +185,9 @@ export function createOwnedJsonObservation() {
   };
   return {
     rows,
+    driverReads: 0, driverFactories: 0,
+    driverFactory() { if (shared.held !== 65536 || shared.claims !== 1) throw new Error("driver field initializer before shared claim"); this.driverFactories++; },
+    driverRead() { this.driverReads++; },
     consumers,
     usage,
     shared,
@@ -195,15 +228,15 @@ export function createOwnedJsonObservation() {
     pricing(delta) { consumers.pricing += delta; if (consumers.pricing < 0) throw new Error("pricing retired twice"); },
     reader(reader) {
       consumers.acquired++; consumers.live++; readers.add(reader);
-      if (consumers.acquired === 1 || this.consumerMode.startsWith('usage:') || this.consumerMode === 'then-early') faultReader(reader, this.consumerMode, consumers);
+      if (consumers.acquired === 1 || this.consumerMode.startsWith('usage:') || this.consumerMode === 'then-early' || this.consumerMode.startsWith('handoff-')) faultReader(reader, this.consumerMode, consumers);
     },
     sourceReader(reader) {
       sourceReaders.acquired++;
-      if (this.consumerMode === 'source-then-early') faultReader(reader, 'then-early', sourceReaders);
+      if (this.consumerMode.startsWith('source-')) faultReader(reader, this.consumerMode.slice(7), sourceReaders);
     },
     publicReader(reader) {
       publicReaders.acquired++; publicReaders.live++;
-      if ((publicReaders.acquired === 1 || this.consumerMode === 'public-then-early') && this.consumerMode.startsWith('public-')) faultReader(reader, this.consumerMode.slice(7), publicReaders);
+      if ((publicReaders.acquired === 1 || this.consumerMode === 'public-then-early' || this.consumerMode.startsWith('public-handoff-')) && this.consumerMode.startsWith('public-')) faultReader(reader, this.consumerMode.slice(7), publicReaders);
     },
     intakeReader(reader) {
       intakeReaders.acquired++; intakeReaders.live++;
@@ -277,17 +310,21 @@ function replace(source, anchor, replacement, count = 1) {
 
 export function observeOwnedJsonSource(path, source) {
   if (/[\\/]worker[\\/]venice-chat-runtime\.ts$/.test(path)) {
-    source = 'import { bodyBudgetCharged as __sharedCharged, bodyBudgetBytes as __sharedLimit } from "./body-budget.ts";\n' + source;
-    source = replace(source, 'const charge = ExactBodyCharge.reserve(65536);',
-      'if (' + probe + '.consumerMode === "shared-refusal") ' + probe + '.sharedPressure(ExactBodyCharge.reserve(__sharedLimit - __sharedCharged() - 65535)); '
-      + 'const __beforeShared = __sharedCharged(); const charge = ExactBodyCharge.reserve(65536);');
-    source = replace(source, 'if (!charge) throw identityFailure("limit");',
-      'if (!charge) { ' + probe + '.sharedRefused(__beforeShared, __sharedCharged()); throw identityFailure("limit"); }');
-    source = replace(source, 'ownedTokenizerShared = charge;',
-      'ownedTokenizerShared = charge; ' + probe + '.sharedClaim(__beforeShared, __sharedCharged(), charge.bytes);');
     source = replace(source, 'return JSON.parse(text);', probe + '.nativeParse(); return JSON.parse(text);');
     source = replace(source, 'this.reader = (this.flags & 8) ? this.body.getReader({ mode: "byob" }) : this.body.getReader();',
       'this.reader = (this.flags & 8) ? this.body.getReader({ mode: "byob" }) : this.body.getReader(); ' + probe + '.sourceReader(this.reader);');
+  } else if (/[\\/]worker[\\/]proxy-completion\.ts$/.test(path)) {
+    source = 'import { bodyBudgetCharged as __sharedCharged, bodyBudgetBytes as __sharedLimit } from "./body-budget.ts";\n' + source;
+    source = replace(source, 'const charge = ExactBodyCharge.reserve(65536);',
+      'if (' + probe + '.consumerMode === "shared-refusal" && !' + probe + '.shared.refused) ' + probe + '.sharedPressure(ExactBodyCharge.reserve(__sharedLimit - __sharedCharged() - 65535)); '
+      + 'const __beforeShared = __sharedCharged(); const charge = ExactBodyCharge.reserve(65536);');
+    source = replace(source, 'if (!charge) return false;',
+      'if (!charge) { ' + probe + '.sharedRefused(__beforeShared, __sharedCharged()); return false; }');
+    source = replace(source, 'ownedHttpStaticCharge = charge;',
+      'ownedHttpStaticCharge = charge; ' + probe + '.sharedClaim(__beforeShared, __sharedCharged(), charge.bytes);');
+    source = replace(source, '  body?: ReadableStream<Uint8Array>;', '  body: ReadableStream<Uint8Array> | undefined = (' + probe + '.driverFactory(), undefined);');
+    source = replace(source, '    this.pending |= 1; this.seen &= ~1; this.serial++; this.readFailure = undefined;',
+      '    ' + probe + '.driverRead(); this.pending |= 1; this.seen &= ~1; this.serial++; this.readFailure = undefined;');
   } else if (/[\\/]worker[\\/]token-usage\.ts$/.test(path)) {
     source = replace(source, 'return 16 * (containers + strings + atoms) + 2 * units;',
       probe + '.census(containers, strings, atoms, units, 16 * (containers + strings + atoms) + 2 * units); return 16 * (containers + strings + atoms) + 2 * units;');
@@ -298,6 +335,8 @@ export function observeOwnedJsonSource(path, source) {
     source = replace(source, 'const delta = messageCounters(usageRecord(root));',
       'if (privateUsageAccumulators?.has(accept)) ' + probe + '.summary(message?.stop_reason); const delta = messageCounters(usageRecord(root));');
     source = replace(source, 'ownedAcceptedUsage!.delete(this.cap);', 'ownedAcceptedUsage!.delete(this.cap); ' + probe + '.usageCleared();');
+    source = replace(source, 'if (!this.finished) controller.enqueue(bytes!);',
+      'if (!this.finished) { controller.enqueue(bytes!); ' + probe + '.enqueued(bytes!); }');
   } else if (/[\\/]worker[\\/]json-body\.ts$/.test(path)) {
     source = replace(source, 'export function validatePrivateJsonBody(text: string): number {',
       'export function validatePrivateJsonBody(text: string): number { const __validatorProbe = ' + probe + '.begin("validator");');
@@ -339,8 +378,8 @@ export function observeOwnedJsonSource(path, source) {
       'function ownHttpResponse(cap: OwnedHttpRequest, response: Response, publicBoundary: boolean): Response { ' + probe + '.wrapper(publicBoundary);');
     source = replace(source, 'try { this.reader = this.body!.getReader(); }',
       'try { this.reader = this.body!.getReader(); this.__probeAcquired = true; ' + probe + '.publicReader(this.reader); }');
-    source = replace(source, '      this.nativeFailure = undefined; this.resolve();',
-      '      this.nativeFailure = undefined; if (this.__probeAcquired) ' + probe + '.publicRetiredReader(); this.resolve();');
+    source = replace(source, 'protected driverCleared(): void { this.original = undefined; }',
+      'protected driverCleared(): void { this.original = undefined; if (this.__probeAcquired) ' + probe + '.publicRetiredReader(); }');
     source = replace(source, '    this.observeClosed();', '    ' + probe + '.statusReader(this.reader, this.index); this.observeClosed();');
     source = replace(source, 'this.owner.retire(this.index, this);', probe + '.statusRetired(this.index); this.owner.retire(this.index, this);');
     source = replace(source, 'this.owner.decide(this.index, !!(this.flags & 64) && !(this.flags & 16), this.spent);',
@@ -363,14 +402,13 @@ export function observeOwnedJsonSource(path, source) {
       + 'else if (' + probe + '.consumerMode === "mode") streaming = !streaming; '
       + 'checkOwnedHttpCodecConsumer(http, codec, response, operation, streaming, requestId, usageContext); '
       + probe + '.previousCodec = codec; ' + probe + '.consumerCreated();');
-    source = replace(source, 'state.reader = state.body.getReader();', 'state.reader = state.body.getReader(); state.__probeAcquired = true; ' + probe + '.reader(state.reader);');
-    source = replace(source, 'finishOwnedCodecDiagnostics(state.owner.codec, state.role);',
-      'finishOwnedCodecDiagnostics(state.owner.codec, state.role); if (state.__probeAcquired) ' + probe + '.retiredReader();');
+    source = replace(source, 'this.reader = this.body.getReader();', 'this.reader = this.body.getReader(); this.__probeAcquired = true; ' + probe + '.reader(this.reader);');
+    source = replace(source, 'finishOwnedCodecDiagnostics(this.owner.codec, this.role);',
+      'finishOwnedCodecDiagnostics(this.owner.codec, this.role); if (this.__probeAcquired) ' + probe + '.retiredReader();');
     source = replace(source, 'function replayResponse(response: Response, reader: ReadableStreamDefaultReader<Uint8Array>, chunks: Uint8Array[], readerDone: boolean): Response {',
       'function replayResponse(response: Response, reader: ReadableStreamDefaultReader<Uint8Array>, chunks: Uint8Array[], readerDone: boolean): Response { ' + probe + '.replay();');
     source = replace(source, '    return sniff;', '    ' + probe + '.transferred(sniff.reader); return sniff;');
-    source = replace(source, 'if (!this.finished) controller.enqueue(next.value);\n      this.state.captured = undefined;',
-      'if (!this.finished) { controller.enqueue(next.value); ' + probe + '.enqueued(next.value); }\n      this.state.captured = undefined;');
+
   } else if (/[\\/]worker[\\/]pricing\.ts$/.test(path)) {
     source = replace(source, 'ownedPricing.set(cap, retained); ownedPricingCount++;',
       'ownedPricing.set(cap, retained); ownedPricingCount++; ' + probe + '.pricing(1);');
@@ -395,7 +433,7 @@ export async function startOwnedJsonObservedFixture(directory, router, upstream,
     resolveDir: process.cwd(), sourcefile: 'owned-json-fixture.ts', loader: 'ts',
   }, bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2022', logLevel: 'silent',
   plugins: [{ name: 'observe-original-json-stacks', setup(build) {
-    build.onLoad({ filter: /(?:[\\/]worker[\\/](?:json-body|proxy-accounting|proxy-response|proxy|http-identity-owner|pricing|token-usage|venice-chat-runtime)\.ts|[\\/]stream-json[\\/](?:src[\\/])?core[\\/]parser\.js)$/ }, async ({ path }) => ({
+    build.onLoad({ filter: /(?:[\\/]worker[\\/](?:json-body|proxy-accounting|proxy-response|proxy-completion|proxy|http-identity-owner|pricing|token-usage|venice-chat-runtime)\.ts|[\\/]stream-json[\\/](?:src[\\/])?core[\\/]parser\.js)$/ }, async ({ path }) => ({
       contents: observeOwnedJsonSource(path, await readFile(path, 'utf8')),
       loader: path.endsWith('.ts') ? 'ts' : 'js', resolveDir: dirname(path),
     }));

@@ -1,3 +1,4 @@
+import { identityFailure } from "./identity-admission.ts";
 import { searchJsonBytes } from "./minimax-search-operation.ts";
 import { musicCoverControlHeader, musicCoverControlVersion, musicCoverUnavailable, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
 import type { BudgetReservationPlan } from "./accounting.ts";
@@ -10,7 +11,7 @@ import { HttpError } from "./utils.ts";
 import { admitSoftStatusRequest } from "./soft-budget-json.ts";
 import { accountingAdmissionFailure, accountingIdentity, accountingNumberCapacity, admitAccountingJson, isAccountingAdmissionFailure } from "./json-body.ts";
 import { readSoftStatus } from "./soft-budget-response.ts";
-import { prepareOwnedHttpSoftStatus, startOwnedHttpSoftStatus, bindOwnedHttpSoftStatus, checkOwnedHttpSoftStatusRetirement, type OwnedHttpRequest } from "./http-identity-owner.ts";
+import { prepareOwnedHttpSoftStatus, startOwnedHttpSoftStatus, bindOwnedHttpSoftStatus, checkOwnedHttpSoftStatusRetirement, type OwnedHttpRequest, type OwnedStatusReader } from "./http-identity-owner.ts";
 import type { HttpOperation } from "./http-operation.ts";
 
 // Soft: ledger status runs concurrently with the upstream request and settlement
@@ -142,8 +143,11 @@ class OwnedSoftBudget {
   private resolve!: () => void;
   private reject!: (reason: unknown) => void;
   readonly check = new Promise<void>((yes, no) => { this.resolve = yes; this.reject = no; });
-  constructor(readonly http: OwnedHttpRequest, readonly prepared: PreparedSoftBudget) { this.remaining = prepared.descriptors.length; }
-  get reservation(): BudgetReservation { return this.prepared.reservation; }
+  constructor(readonly http: OwnedHttpRequest, readonly prepared: PreparedSoftBudget) {
+    this.remaining = prepared.descriptors.length;
+    if (ownedSoftBudgets?.has(http)) throw new TypeError("owned soft budget already prepared");
+    (ownedSoftBudgets ??= new WeakMap()).set(http, this);
+  }
   get denial(): HttpError | undefined { return this.denied; }
   start(env: Env, operation: HttpOperation): void {
     if (this.started) throw new TypeError("owned soft budget already started");
@@ -190,22 +194,60 @@ class OwnedSoftBudget {
   }
   close(): void { this.delivered = true; }
 }
+export class OwnedStatusController extends OwnedSoftBudget {
+  namespace?: Env["BUDGET_LEDGER"];
+  bound = false;
+  readersStarted = false;
+  settled = false;
+  private physicalRemaining = 0;
+  private resolveRetired!: () => void;
+  readonly retired = new Promise<void>(done => { this.resolveRetired = done; });
+  readonly readers: (OwnedStatusReader | undefined)[] = [];
+  constructor(cap: OwnedHttpRequest, plan: PreparedSoftBudget) { super(cap, plan); }
+  startReaders(): void {
+    if (this.readersStarted || this.settled || !this.bound) throw identityFailure("protocol");
+    this.readersStarted = true; this.physicalRemaining = this.prepared.descriptors.length;
+    for (let index = 0; index < this.prepared.descriptors.length; index++) {
+      if (this.prepared.descriptors[index].leg.request.limitMicros === 0) { this.decide(index, true, null); this.readers[index] = undefined; this.completeReader(); continue; }
+      this.readers[index]!.start();
+    }
+    if (!this.physicalRemaining) this.finish();
+  }
+  decide(index: number, succeeded: boolean, spent: number | null): void { this.receive(index, succeeded, spent); }
+  retire(index: number, reader: OwnedStatusReader): void {
+    if (this.readers[index] !== reader) throw identityFailure("protocol");
+    this.readers[index] = undefined; this.completeReader();
+  }
+  private completeReader(): void { if (!--this.physicalRemaining) this.finish(); }
+  private finish(): void {
+    if (this.settled) return;
+    this.namespace = undefined; this.settled = true; this.resolveRetired();
+  }
+  abandonUnstarted(): void {
+    if (this.readersStarted) return;
+    this.readers.length = 0; this.finish();
+  }
+}
+
 let ownedSoftBudgets: WeakMap<OwnedHttpRequest, OwnedSoftBudget> | undefined;
 export function prepareOwnedHttpSoftBudget(http: OwnedHttpRequest, env: Env, prepared: PreparedSoftBudget): void {
   if (ownedSoftBudgets?.has(http)) throw new TypeError("owned soft budget already prepared");
   prepareOwnedHttpSoftStatus(http, env, prepared);
-  (ownedSoftBudgets ??= new WeakMap()).set(http, new OwnedSoftBudget(http, prepared));
 }
-export function startOwnedHttpSoftBudget(http: OwnedHttpRequest, env: Env, prepared: PreparedSoftBudget, operation: HttpOperation): OwnedSoftBudget {
+export function startOwnedHttpSoftBudget(http: OwnedHttpRequest, env: Env, prepared: PreparedSoftBudget, operation: HttpOperation): void {
   const owner = ownedSoftBudgets?.get(http);
   if (!owner || owner.prepared !== prepared) throw new TypeError("owned soft budget plan is not registered");
-  owner.start(env, operation); return owner;
+  owner.start(env, operation);
 }
-export function acceptOwnedHttpSoftStatus(http: OwnedHttpRequest, index: number, succeeded: boolean, spent: number | null): void {
+function ownedSoftBudget(http: OwnedHttpRequest): OwnedSoftBudget {
   const owner = ownedSoftBudgets?.get(http);
-  if (!owner) throw new TypeError("owned soft budget result is not registered");
-  owner.receive(index, succeeded, spent);
+  if (!owner) throw identityFailure("protocol");
+  return owner;
 }
+export function ownedHttpSoftBudgetCheck(http: OwnedHttpRequest): Promise<void> { return ownedSoftBudget(http).check; }
+export function beforeOwnedHttpSoftDelivery(http: OwnedHttpRequest): Promise<number> { return ownedSoftBudget(http).beforeDelivery(); }
+export function ownedHttpSoftDenial(http: OwnedHttpRequest): HttpError | undefined { return ownedSoftBudget(http).denial; }
+export function closeOwnedHttpSoftBudget(http: OwnedHttpRequest): void { ownedSoftBudget(http).close(); }
 export function retireOwnedHttpSoftBudget(http: OwnedHttpRequest): void { checkOwnedHttpSoftStatusRetirement(http); ownedSoftBudgets?.delete(http); }
 
 // Cover completes and physically retires every observation BEFORE its final

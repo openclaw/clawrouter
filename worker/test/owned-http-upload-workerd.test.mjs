@@ -194,7 +194,7 @@ test('actual Workerd ORIGINAL upload, independent failures and public-prefix cus
       if (path === '/pressure-prefix') assert.equal(state.pressureCancelObserved, true, 'FIRSTcancel starts with common arena full');
       await text(dispatch('/release'));
       for (let i = 0; i < 500; i++) { state = await get('/state'); if (state.done) break; await new Promise(resolve => setTimeout(resolve, 1)); }
-      assert.equal(state.done, true); assert.equal(state.terminalFailed, false); assert.equal(state.charged, baseline);
+      assert.equal(state.done, true); assert.equal(state.terminalFailed, false); assert.equal(state.charged, baseline + 65536, 'actual response fixtures established the permanent private claim');
     });
   } catch (error) { hasPrimary = true; primary = error; }
   const failures = await cleanup(); finished = true;

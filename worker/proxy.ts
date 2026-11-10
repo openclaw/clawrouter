@@ -66,7 +66,7 @@ import { discoveryQuery, isModelDiscovery, modelDiscoveryResponse, validateDisco
 import { anthropicPricing } from "./anthropic-pricing.ts";
 import { guardAnthropicPrice, type AnthropicPriceGuard } from "./anthropic-price-response.ts";
 import { assertInputTokensRequest } from "./responses-input-tokens.ts";
-import { softBudget, prepareSoftBudget, startSoftBudget, softBudgetPolicy, softBudgetPreflight, prepareOwnedHttpSoftBudget, startOwnedHttpSoftBudget } from "./soft-budget.ts";
+import { softBudget, prepareSoftBudget, startSoftBudget, softBudgetPolicy, softBudgetPreflight, prepareOwnedHttpSoftBudget, startOwnedHttpSoftBudget, ownedHttpSoftBudgetCheck, beforeOwnedHttpSoftDelivery, ownedHttpSoftDenial, closeOwnedHttpSoftBudget } from "./soft-budget.ts";
 import { prepareUpstreamRequest, prepareOwnedUpstreamRequest } from "./proxy-upstream-request.ts";
 import { BodyLease, ExactBodyCharge, bodyLeaseMinimum } from "./body-budget.ts";
 import { WanManagedOperation, readWanJson, wanRequestBytes, preflightWanJson, assertWanHeaders } from "./managed-media-json.ts";
@@ -1497,24 +1497,23 @@ function startOwnedProxyRetention(http: OwnedHttpRequest, context: ExecutionCont
   completeOwnedHttpSinkRegistration(receipt, context, work!.catch(reportOwnedRetentionFailure.bind(undefined, requestId)));
 }
 function startOwnedProxySoftBudget(http: OwnedHttpRequest, env: Env, context: ExecutionContext, completion: ProxyCompletion,
-  plan: ReturnType<typeof prepareSoftBudget>, operation: HttpOperation): ReturnType<typeof startOwnedHttpSoftBudget> {
+  plan: ReturnType<typeof prepareSoftBudget>, operation: HttpOperation): void {
   const owner = ownedProxyInvocations?.get(http);
   if (!owner || owner.context !== context || owner.env !== env || owner.softPlan !== plan || owner.operation !== operation)
     throw identityFailure("protocol");
   const receipt = beginOwnedHttpSinkRegistration(ownedHttpSinkOwner(http));
-  let soft: ReturnType<typeof startOwnedHttpSoftBudget> | undefined;
+  let check: Promise<void> | undefined;
   try { completion.startPrivateLeaf(() => {
-    soft = startOwnedHttpSoftBudget(http, env, plan, operation);
-    return soft.check;
+    startOwnedHttpSoftBudget(http, env, plan, operation);
+    check = ownedHttpSoftBudgetCheck(http); return check;
   }); } catch (primary) {
     try {
-      if (soft) completeOwnedHttpSinkRegistration(receipt, context, soft.check);
+      if (check) completeOwnedHttpSinkRegistration(receipt, context, check);
       else abandonUnstartedOwnedHttpRegistration(receipt);
     } catch (cleanup) { throw new AggregateError([primary, cleanup], "owned status start cleanup"); }
     throw primary;
   }
-  completeOwnedHttpSinkRegistration(receipt, context, soft!.check);
-  return soft!;
+  completeOwnedHttpSinkRegistration(receipt, context, check!);
 }
 
 // Fixed named synchronous calls: no arbitrary graph callback or async scope.
@@ -1691,7 +1690,8 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     accounting.fail(failure.status, failure.status === 402 ? "denied" : failure.status < 500 ? "client_error" : "provider_error", reservedBudget?.reservation);
     return errorResponse(failure.code, failure.message, failure.status);
   }
-  let soft: ReturnType<typeof softBudget> | ReturnType<typeof startOwnedHttpSoftBudget> | undefined;
+  let soft: ReturnType<typeof softBudget> | undefined;
+  let ownedSoft = false;
   let budgetMs = 0;
   let upstreamMs = 0;
   const budgetStart = performance.now();
@@ -1909,14 +1909,13 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     else if (catalogInputs) registerCatalogFetch(pending);
     if (useSoft) {
       if (owned) {
-        soft = startOwnedProxySoftBudget(owned, env, context, completion!, softPlan!, operation);
-        reservation = soft.reservation;
+        startOwnedProxySoftBudget(owned, env, context, completion!, softPlan!, operation);
+        ownedSoft = true; reservation = softPlan!.reservation;
       } else {
       const checking = completion?.fork();
       try {
         registerProxyBackground(owned, context, () => {
-          soft = owned ? startOwnedHttpSoftBudget(owned, env, softPlan!, operation)
-            : startSoftBudget(env, softPlan!, error => operation.stop("upstream", error), searchOwner);
+          soft = startSoftBudget(env, softPlan!, error => operation.stop("upstream", error), searchOwner);
           reservation = soft.reservation;
           if (checking) checking.start(() => soft!.check);
           return soft.check;
@@ -2021,7 +2020,10 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       nativeUsage = "usage" in validated ? validated.usage : undefined;
     }
     upstreamMs = performance.now() - upstreamStart;
-    if (soft) {
+    if (ownedSoft) {
+      budgetMs = await beforeOwnedHttpSoftDelivery(owned!);
+      const denial = ownedHttpSoftDenial(owned!); if (denial) throw denial;
+    } else if (soft) {
       budgetMs = await soft.beforeDelivery();
       if (soft.denial) throw soft.denial;
     }
@@ -2091,13 +2093,14 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       })();
       context.waitUntil(retirement.then(() => failedLease?.release()));
     } else failedLease?.release();
-    soft?.close();
-    if (soft?.denial) {
-      operation.stop("upstream", soft.denial);
+    if (ownedSoft) closeOwnedHttpSoftBudget(owned!); else soft?.close();
+    const softDenial = ownedSoft ? ownedHttpSoftDenial(owned!) : soft?.denial;
+    if (softDenial) {
+      operation.stop("upstream", softDenial);
       if (response) void discard(response);
       if (nativeUsage?.requestCostReceipt && cost.requestTariff) context.waitUntil(accounting.settle(402, "denied", true, null, reservation!, content, null, undefined, "unknown", nativeUsage.requestCostReceipt));
       else accounting.fail(402, "denied", (cost.requestTariff || selection.nativeResponse) ? reservation : undefined, content, !!(cost.requestTariff || selection.nativeResponse) && dispatched);
-      return errorResponse(soft.denial.code, soft.denial.message, 402);
+      return errorResponse(softDenial.code, softDenial.message, 402);
     }
     if ((isPreparationLimit(error) || isAccountingAdmissionFailure(error) || isIdentityFailure(error)) && !signal.aborted) {
       operation.stop("upstream", error);
