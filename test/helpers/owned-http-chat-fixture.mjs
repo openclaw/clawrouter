@@ -56,7 +56,59 @@ const priced=snapshot.providers.find(p=>p.id==='fireworks').models.find(m=>m.id=
 priced.pricing={...priced.pricing,cacheWrite1hInputMicrosPerMillion:2000000,cacheWrite5mInputMicrosPerMillion:9000000};
 const originalValues=Object.values;let pricingActive=false,recursivePricingValues=0;
 Object.values=function(value){if(pricingActive&&value&&Object.hasOwn(value,'ownedPricingNested'))recursivePricingValues++;return Reflect.apply(originalValues,this,arguments);};
-let scoped,offScoped,pressure,controlFault,reasonReads=0;
+let scoped,offScoped,pressure,controlFault,controlReadFault,reasonReads=0;
+const controlReads=[];
+function observeControlRead(kind,path,original,signal){
+ if(!controlReadFault||controlReadFault.kind!==kind||path!==(kind==='authority'?'/authorization/snapshot':'/inspect'))return original;
+ const fault=controlReadFault;controlReadFault=undefined;
+ const row={kind,read:0,readSettled:0,cancel:0,cancelSettled:0,unlock:0,released:false},shared={};
+ for(const key of ['message','stack','cause','errors','code','status'])Object.defineProperty(shared,key,{get(){reasonReads++;throw Error('raw reason observed');}});
+ const reason=fault.reason==='undefined'?undefined:shared;
+ let release;const gate=new Promise(resolve=>{release=resolve;});
+ // This fixture gate is AFTER the original native cancellation. It is not
+ // evidence that a remote producer or physical native storage has retired.
+ row.release=()=>{row.released=true;release();release=undefined;row.release=undefined;};controlReads.push(row);
+ return original.then(response=>{
+  if(fault.reason==='listener'){
+   const add=signal.addEventListener,remove=signal.removeEventListener;let installed;
+   signal.addEventListener=function(name,callback,options){if(name==='abort'&&!installed)installed=callback;return Reflect.apply(add,this,[name,callback,options]);};
+   signal.removeEventListener=function(name,callback,options){if(name==='abort'&&callback===installed){row.removalFailed=true;throw undefined;}return Reflect.apply(remove,this,[name,callback,options]);};
+   row.release=()=>{
+    // Fixture cleanup can remove its deliberate obstruction. It cannot grant
+    // production a retirement receipt or refund an already UNKNOWN owner.
+    if(installed)Reflect.apply(remove,signal,['abort',installed]);installed=undefined;
+    delete signal.addEventListener;delete signal.removeEventListener;
+    row.released=true;release();release=undefined;row.release=undefined;
+   };
+   return response;
+  }
+  const body=response.body;
+  const observed=new Proxy(body,{get(target,name){
+   if(name==='getReader')return options=>{
+    const reader=target.getReader(options);let failed=false;
+    return new Proxy(reader,{get(object,key){
+     if(key==='read')return(...args)=>{
+      row.read++;const work=Reflect.apply(object.read,object,args);
+      return work.then(value=>{row.readSettled++;if(!failed){failed=true;throw reason;}return value;},error=>{row.readSettled++;throw error;});
+     };
+     if(key==='cancel')return(...args)=>{
+      row.cancel++;const work=Reflect.apply(object.cancel,object,args);
+      const outcome=work.then(()=>({failed:false}),error=>({failed:true,error}));
+      return outcome.then(async result=>{
+       row.cancelSettled++;await gate;
+       if(result.failed)throw result.error;
+       throw reason;
+      });
+     };
+     if(key==='releaseLock')return()=>{Reflect.apply(object.releaseLock,object,[]);row.unlock++;throw reason;};
+     const value=Reflect.get(object,key,object);return typeof value==='function'?value.bind(object):value;
+    }});
+   };
+   const value=Reflect.get(target,name,target);return typeof value==='function'?value.bind(target):value;
+  }});
+  return new Proxy(response,{get(target,name){if(name==='body')return observed;const value=Reflect.get(target,name,target);return typeof value==='function'?value.bind(target):value;}});
+ });
+}
 function controlFailure(kind,origin){
  if(!controlFault||controlFault.kind!==kind||controlFault.origin!==origin)return;
  const reason=controlFault.reason;controlFault=undefined;
@@ -68,7 +120,7 @@ function controlFailure(kind,origin){
 function environment(env,off=false){
  if(!scoped){
   const authority=new Proxy(env.ACCESS_CONTROL,{get(target,name){if(name==='idFromName')return value=>{controlFailure('authority','id');return target.idFromName(value);};if(name==='get')return id=>{
-   controlFailure('authority','get');const stub=target.get(id);return new Proxy(stub,{get(object,key){if(key==='fetch')return (url,init)=>{calls.push({kind:'authority',path:new URL(url).pathname,charged:bodyBudgetCharged()});return object.fetch(url,init);};const value=Reflect.get(object,key,object);return typeof value==='function'?value.bind(object):value;}});
+   controlFailure('authority','get');const stub=target.get(id);return new Proxy(stub,{get(object,key){if(key==='fetch')return (url,init)=>{const path=new URL(url).pathname;calls.push({kind:'authority',path,charged:bodyBudgetCharged()});return observeControlRead('authority',path,object.fetch(url,init),init.signal);};const value=Reflect.get(object,key,object);return typeof value==='function'?value.bind(object):value;}});
   };const value=Reflect.get(target,name,target);return typeof value==='function'?value.bind(target):value;}});
   const credentials=new Proxy(env.GRANT_CREDENTIALS,{get(target,name){if(name==='idFromName')return value=>{controlFailure('credential','id');return target.idFromName(value);};if(name==='get')return id=>{
    controlFailure('credential','get');const stub=target.get(id);return new Proxy(stub,{get(object,key){if(key==='fetch')return (url,init)=>{
@@ -77,7 +129,7 @@ function environment(env,off=false){
      const bytes=new TextEncoder().encode('{"error":{"code":"grant_credential_missing","message":"synthetic refusal"}}');
      return Promise.resolve(new Response(new ReadableStream({type:'bytes',start(controller){controller.enqueue(bytes);controller.close();}}),{status:503,headers:{'content-type':'application/json'}}));
     }
-    return object.fetch(url,init);
+    return observeControlRead('credential',path,object.fetch(url,init),init.signal);
    };const value=Reflect.get(object,key,object);return typeof value==='function'?value.bind(object):value;}});
   };const value=Reflect.get(target,name,target);return typeof value==='function'?value.bind(target):value;}});
   const budget=new Proxy(env.BUDGET_LEDGER,{get(target,name){if(name==='get')return id=>{const stub=target.get(id);return new Proxy(stub,{get(object,key){if(key==='fetch')return(url,init)=>{
@@ -101,11 +153,16 @@ export default {...handler,async fetch(request,env,context){
   const value=await request.json();if(!['authority','credential'].includes(value.kind)||!['id','get'].includes(value.origin)||!['undefined','huge','opaque','forged'].includes(value.reason))throw Error('fixture fault shape');
   controlFault=value;return new Response(null,{status:204});
  }
+ if(path==='/fixture/control-read'){
+  if(request.method==='DELETE'){for(const row of controlReads)row.release?.();return new Response(null,{status:204});}
+  const value=await request.json();if(!['authority','credential'].includes(value.kind)||!['undefined','shared','listener'].includes(value.reason))throw Error('fixture read shape');
+  controlReadFault=value;return new Response(null,{status:204});
+ }
  if(path==='/fixture/revalidation-change'){
   const original=env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName('policy-bindings')).fetch('https://authority/fixture/revalidation-change',{method:'POST',body:await request.text()});
   const response=await original;await response.text();return new Response(null,{status:response.status});
  }
- if(path==='/fixture/state')return Response.json({calls,intakes,completed,events,recursivePricingValues,reasonReads,charged:bodyBudgetCharged()});
+ if(path==='/fixture/state')return Response.json({calls,intakes,completed,events,recursivePricingValues,reasonReads,controlReads:controlReads.map(({kind,read,readSettled,cancel,cancelSettled,unlock,released,removalFailed})=>({kind,read,readSettled,cancel,cancelSettled,unlock,released,...(removalFailed?{removalFailed:true}:{})})),charged:bodyBudgetCharged()});
  if(path==='/fixture/pressure'){
   if(request.method==='DELETE'){pressure?.release();pressure=undefined;return new Response(null,{status:204});}
   if(pressure)throw Error('fixture pressure already held');

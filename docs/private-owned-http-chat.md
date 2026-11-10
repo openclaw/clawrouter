@@ -50,6 +50,15 @@ and delivery still requires an actual prospective inventory under the existing
 ceilings. This checkpoint grants no new arena, control slots, physical-heap
 bound, or default-route coverage.
 
+The reached Venice JSON delivery codec still acquires its ordinary
+`nativeResponseLease(32 MiB)`, which charges 64 MiB. That cannot coexist with
+the private foreground's 32 MiB owner plus any positive request charge in the
+96 MiB common arena. Its ordinary parser also tokenizes a whole 4096-unit feed
+before applying the consumer's depth check. The private delivery owner and
+pre-tokenization feed partition are not implemented yet; the complete HTTP
+candidate remains blocked on that codec boundary. These are source findings,
+not results of local runtime execution.
+
 The full-admission bridge can omit selection coverage for legacy completeness
 or a final stale-plan drop. The private provider command permits reacquisition
 only after a successful reply has BOTH selection and snapshots absent, and after
@@ -358,6 +367,14 @@ forged refresh and budget errors, actual GrantCredentialObject materialization,
 recovery before held unused-body cancellation, R2/pipe failure overlap and
 registration after start. Fixture-owned arbitrary reasons stay invocation-local.
 These tests are unrun under CODE_ONLY_HOSTED.
+
+Revalidation reader witnesses use the actual DO reply and original native
+BYOB reader. A fixture-only hold occurs after its original cancellation settles;
+it is not a producer-retirement receipt. Separate read, cancellation and unlock
+failures keep their own origins, including `undefined` and a shared opaque
+reason. Gate release precedes every host teardown join. A failed signal-listener
+removal keeps the request UNKNOWN even if its reader is already unlocked;
+removing a fixture obstruction later does not refund that owner.
 
 The new failure records, reactions, scopes, registration products and terminal
 aliases still require reconciliation with the complete prospective HTTP

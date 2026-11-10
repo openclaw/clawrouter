@@ -447,7 +447,7 @@ async function consumeRevalidationRpc(cap: OwnedHttpRevalidation, signal: AbortS
     });
     try { closed = reader!.closed.then(() => undefined, () => { streamErrored = true; }); }
     catch (reason) { throw failedSinkOrigin(reading, reason); }
-    listener = () => { if (!eof) void input!.retire("cancel"); };
+    listener = () => { if (!eof && input) void input.retire("cancel"); };
     try { signal.addEventListener("abort", listener, { once: true }); completedSinkOrigin(root, listenerAdd); }
     catch (reason) { throw failedSinkOrigin(listenerAdd, reason); }
     if (!byob || signal.aborted) throw identityFailure("transport");
@@ -514,7 +514,11 @@ async function consumeRevalidationRpc(cap: OwnedHttpRevalidation, signal: AbortS
     } else if (body?.locked) { root.unknown = true; await new Promise<never>(() => {}); }
     if (listener) {
       try { signal.removeEventListener("abort", listener); completedSinkOrigin(root, listenerRemove); }
-      catch (reason) { cleanupFailed = true; failedSinkOrigin(listenerRemove, reason, false); }
+      catch (reason) {
+        // A throwing removal does not prove the signal released this closure.
+        // Keep its request/foreground funding even when the reader unlocked.
+        root.unknown = true; cleanupFailed = true; failedSinkOrigin(listenerRemove, reason, false);
+      }
     }
     listener = undefined; reader = undefined; input = undefined; first = undefined; body = undefined; response = undefined; original = undefined; received = undefined;
     wire?.clear(); wire = undefined; decoder = undefined; backing = undefined; text = ""; graph = undefined;

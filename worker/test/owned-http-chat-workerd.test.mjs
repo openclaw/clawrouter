@@ -182,6 +182,86 @@ test('native covered ' + provider + ' revalidation uses fresh canonical ' + chan
   });
 });
 
+for (const kind of ['authority', 'credential']) for (const reason of ['undefined', 'shared'])
+test('native ' + kind + ' control keeps original read/cancel/unlock and funding across a post-native cancellation hold: ' + reason, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const request = () => chat('gmi', { model: ownedHttpControlModels.gmi });
+    assert.equal((await f.request('https://fixture/v1/chat/completions', request())).status, 200);
+    const before = await settledState(f);
+    // Release is enrolled before the failing request. Teardown must release it
+    // even if arrival assertions fail, then join that request's original roots.
+    const release = async () => {
+      assert.equal((await f.request('https://fixture/fixture/control-read', { method: 'DELETE' })).status, 204);
+    };
+    f.releases.push(release);
+    assert.equal((await f.request('https://fixture/fixture/control-read', {
+      method: 'POST', body: JSON.stringify({ kind, reason }),
+    })).status, 204);
+    let settled = false;
+    const original = f.request('https://fixture/v1/chat/completions', request());
+    const root = f.own(original);
+    // The arrival wait also observes an early original rejection/fulfillment;
+    // it cannot hang until teardown behind a gate the request never reached.
+    const observer = f.own(original.then(() => { settled = true; }, () => { settled = true; }));
+    let held;
+    for (;;) {
+      held = await state(f);
+      if (held.controlReads.at(-1)?.cancelSettled === 1) break;
+      if (settled) {
+        await f.take(root);
+        assert.fail('control request fulfilled before original cancellation hold');
+      }
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(settled, false, 'public failure does not substitute for the original cleanup join');
+    assert.deepEqual(held.controlReads.at(-1), {
+      kind, read: 1, readSettled: 1, cancel: 1, cancelSettled: 1, unlock: 0, released: false,
+    });
+    assert.ok(held.charged >= before.charged + 32 * 1024 * 1024, 'foreground backing remains held');
+    assert.equal(held.reasonReads, 0, 'no arbitrary reason getters while a sibling cleanup is held');
+    await release();
+    const failed = await f.take(root); await f.take(observer);
+    assert.equal(failed.status, 503);
+    assert.equal(JSON.parse(failed.text).error.code, 'identity_admission_unavailable');
+    const after = await settledState(f);
+    assert.deepEqual(after.controlReads.at(-1), {
+      kind, read: 1, readSettled: 1, cancel: 1, cancelSettled: 1, unlock: 1, released: true,
+    });
+    assert.equal(after.reasonReads, 0);
+    assert.equal(after.charged, before.charged, 'only actual completion and alias clearing retire the temporary debit');
+    assert.equal(count(after, 'authority', '/admission/resolve'), count(before, 'authority', '/admission/resolve'));
+    assert.equal(count(after, 'credential', '/materialize'), count(before, 'credential', '/materialize'));
+    assert.equal(JSON.parse((await f.request('https://fixture/fixture/upstream')).text).filter(row => row.id === 'gmi').length, 1);
+  });
+});
+
+test('native revalidation listener-removal uncertainty retains funding after original body completion', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const request = () => chat('gmi', { model: ownedHttpControlModels.gmi });
+    assert.equal((await f.request('https://fixture/v1/chat/completions', request())).status, 200);
+    const before = await settledState(f);
+    const release = async () => {
+      assert.equal((await f.request('https://fixture/fixture/control-read', { method: 'DELETE' })).status, 204);
+    };
+    f.releases.push(release);
+    assert.equal((await f.request('https://fixture/fixture/control-read', {
+      method: 'POST', body: JSON.stringify({ kind: 'authority', reason: 'listener' }),
+    })).status, 204);
+    const response = await f.request('https://fixture/v1/chat/completions', request());
+    assert.equal(response.status, 503);
+    const held = await settledState(f);
+    assert.equal(held.controlReads.at(-1).removalFailed, true);
+    assert.ok(held.charged >= before.charged + 32 * 1024 * 1024);
+    assert.equal(held.reasonReads, 0);
+    await release();
+    const after = await state(f);
+    assert.equal(after.charged, held.charged, 'fixture obstruction removal is not a production refund receipt');
+    assert.equal(JSON.parse((await f.request('https://fixture/fixture/upstream')).text).filter(row => row.id === 'gmi').length, 1);
+    // This isolated runtime is disposed with the UNKNOWN owner still funded.
+    // No test cleanup hook retries production retirement or fabricates an ACK.
+  });
+});
+
 test('compiled owned HTTP Chat preserves JSON and covered-hit zero foreground authority/materialization RPCs', { timeout: 120000 }, async t => {
   await fixture(t, async f => {
     const first = await f.request('https://fixture/v1/chat/completions', chat('chat'));
