@@ -150,7 +150,10 @@ retained dependency before serialization/effects. A mismatch removes selection,
 snapshots and the planned selection journal entry. Earlier seed effects still
 follow the existing journal contract; no rollback is claimed. A canonical winner
 before the candidate read replaces an obsolete unpublishable staged projection
-with its current dependency; repeated observations retain the first dependency. Complete result and
+with its current dependency; repeated observations retain the first dependency. Unobserved,
+unpublishable staging rows are not dependencies of a current choice. Observing
+a canonical row converts such staging to a dependency receipt even if its
+revision happens to match; eligible staged projections keep their own receipt. Complete result and
 envelope planning includes actual consumer headroom before any journal effect.
 The executor marks the journal attempted before its first write; the selection
 entry marks itself attempted before cursor/count writes. An SQL error can leave

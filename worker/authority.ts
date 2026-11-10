@@ -681,9 +681,10 @@ export class PolicyBindingIndexObject implements DurableObject {
       for (let index = 0; index < journal.entries.length; index++) {
         const current = journal.entries[index];
         if ((current.kind !== "projection" && current.kind !== "dependency") || current.key !== entry.key) continue;
-        if (current.kind === "projection" && current.revision !== entry.revision && !current.eligible) {
+        if (current.kind === "projection" && !current.eligible) {
           // A canonical publication won before this candidate was observed.
-          // Its obsolete unpublishable text is dropped; its funding stays held.
+          // Its unpublishable text is dropped; its funding stays held. Record
+          // the observed dependency even when the revision happens to match.
           journal.entries[index] = entry;
         }
         return;
@@ -746,7 +747,7 @@ export class PolicyBindingIndexObject implements DurableObject {
     // EVERY observed candidate matters: an unselected projection can change the
     // choice, and snapshot-only has no selected key. No await occurs between
     // these original canonical probes and serialization/journal effects.
-    for (const entry of bound.bridge!.entries) if (entry.kind === "projection" || entry.kind === "dependency") {
+    for (const entry of bound.bridge!.entries) if (entry.kind === "dependency" || entry.kind === "projection" && entry.eligible) {
       const current = this.grantAttachment(entry.key, true);
       if (current.revision !== entry.revision) routingCurrent = false;
     }

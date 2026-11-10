@@ -750,5 +750,25 @@ test('candidate dependency receipts share the bounded execution journal, never a
   f.owner.appendAdmissionJournal(bound, { kind: 'dependency', key: 'oauth/fixture/0', revision: 9 });
   assert.equal(bound.bridge.entries.length, 99); assert.equal(bound.bridge.entries[0].kind, 'dependency');
   assert.equal(bound.bridge.entries[0].revision, 9);
+  bound.bridge.entries[1].eligible = false;
+  f.owner.appendAdmissionJournal(bound, { kind: 'dependency', key: 'oauth/fixture/1', revision: 7 });
+  assert.equal(bound.bridge.entries[1].kind, 'dependency'); assert.equal(bound.bridge.entries[1].revision, 7);
   bound.bridge.entries.length = 0;
+}));
+
+
+test('unobserved unpublishable staging is not a dependency of the final current result', async t => fixture(t, async f => {
+  seed(f);
+  const request = { ...input(), providers: [{ id: 'anthropic', tokenRef: 'anthropic' }],
+    selection: { providerId: 'anthropic', endpointId: 'messages', mode: 'http', capability: 'llm.messages' } };
+  const response = await f.call(request); assert.equal(response.status, 200);
+  const prior = response.body.admission; assert.ok(prior.selection);
+  f.sql.exec('INSERT INTO upstream_grant_pool_versions(grant_key,generation,revision) VALUES(?,?,?)', 'oauth/old-pool/unused', 2, 9);
+  const ticket = PreflightTicket.reserve();
+  const bound = { bytes: 0, identity: identitySourceBudget(), bridge: { ticket, attempted: false, result: prior,
+    entries: [{ kind: 'projection', key: 'oauth/old-pool/unused', text: null, legacy: 0, revision: 7, eligible: false }] } };
+  f.resources.push(() => { bound.bridge.entries.length = 0; bound.bridge.result = undefined; bound.bridge.prior = undefined; retireAdmissionScratch(ticket); ticket.release(); });
+  const fresh = f.owner.finalPrivateAdmission(request, prior, bound);
+  assert.deepEqual(fresh.selection, prior.selection);
+  assert.equal(bound.bridge.entries.length, 1); assert.equal(bound.bridge.entries[0].eligible, false);
 }));

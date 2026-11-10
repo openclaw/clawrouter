@@ -48,7 +48,7 @@ export class PolicyBindingIndexObject extends Base {
    return Reflect.apply(finalize,this,args);
   };
 
-  this.snapshot=()=>({trace,charged:this.preflightArena?.charged??0,credentials:[...sql.exec('SELECT credential_json FROM proxy_credentials')].length,policies:[...sql.exec('SELECT policy_json FROM access_policies')].length,selection:[...sql.exec('SELECT selected_count FROM upstream_grant_selection')].map(row=>row.selected_count)});
+  this.snapshot=()=>({trace,charged:this.preflightArena?.charged??0,credentials:[...sql.exec('SELECT credential_json FROM proxy_credentials')].length,policies:[...sql.exec('SELECT policy_json FROM access_policies')].length,selection:[...sql.exec('SELECT selected_count FROM upstream_grant_selection')].map(row=>row.selected_count),cursors:[...sql.exec('SELECT grant_key FROM upstream_grant_pool_cursors')].length});
   this.configure=value=>{mode=value;sql.exec('DELETE FROM proxy_credentials');sql.exec('DELETE FROM access_policies');sql.exec('DELETE FROM policy_binding_meta');sql.exec('DELETE FROM provider_connections');sql.exec('DELETE FROM upstream_grant_projections');sql.exec('DELETE FROM upstream_grant_selection');sql.exec('DELETE FROM upstream_grant_pool_cursors');sql.exec('DELETE FROM upstream_grant_pool_versions');sql.exec('DELETE FROM upstream_grant_pool_members');if(mode==='selection'||mode==='configuration')sql.exec('INSERT INTO upstream_grant_pool_versions(grant_key,generation,revision) VALUES(?,?,?)',selectedKey,1,7);if(mode==='dependency-choice'||mode==='dependency-snapshot'){
    for(const [key,token,value] of [[dependencyA,'a',projection(0)],[dependencyB,'b',projection(5)]]){
     sql.exec('INSERT INTO upstream_grant_pool_versions(grant_key,generation,revision) VALUES(?,?,?)',key,1,7);
@@ -124,7 +124,7 @@ export default {async fetch(request,env){
  if(failures.length)throw new AggregateError(hasPrimary?[primary,...failures]:failures,'native bridge cleanup');if(hasPrimary)throw primary;
  const snapshot=await rpc('/fixture/result','');check(bodyBudgetCharged()===baseline,'worker charge retired');
  check(snapshot.body.charged===0,'DO original producer retired');
- if(dependency)check(snapshot.body.trace.dependencyObserved&&snapshot.body.trace.publishedRevision===9&&snapshot.body.selection.length===0,'no stale selection effect');
+ if(dependency)check(snapshot.body.trace.dependencyObserved&&snapshot.body.trace.publishedRevision===9&&snapshot.body.selection.length===0&&snapshot.body.cursors===0,'no stale selection effect');
  if(mode==='copy-pressure')check(snapshot.body.trace.intakes===0,'zero private RPC before copy');
  if(mode==='selection')check(snapshot.body.selection.length===1&&snapshot.body.selection[0]===1,'one actual selection effect');
  if(mode==='configuration')check(snapshot.body.trace.configurationReads===1&&snapshot.body.selection.length===0,'bounded configuration owner');
@@ -157,7 +157,7 @@ test('inactive private continuation through actual Workerd KV/RPC/SQLite and opa
       assert.equal(result.sql.trace.intakes, mode === 'copy-pressure' ? 0 : 1); assert.equal(result.status, mode === 'limited' || mode === 'configuration' || mode === 'copy-pressure' ? 503 : 200);
       if (mode === 'healthy') { assert.equal(result.opaque, true); assert.equal(result.sql.credentials, 1); assert.equal(result.sql.policies, 1); }
       if (mode === 'selection') { assert.equal(result.opaque, true); assert.deepEqual(result.sql.selection, [1]); assert.ok(result.sql.trace.kv.length >= 3); }
-      if (mode.startsWith('dependency-')) { assert.equal(result.sql.trace.dependencyObserved, true); assert.equal(result.sql.trace.publishedRevision, 9); assert.deepEqual(result.sql.selection, []); }
+      if (mode.startsWith('dependency-')) { assert.equal(result.sql.trace.dependencyObserved, true); assert.equal(result.sql.trace.publishedRevision, 9); assert.deepEqual(result.sql.selection, []); assert.equal(result.sql.cursors, 0); }
       if (mode === 'copy-pressure') assert.equal(result.copyFactories, 0);
       if (mode === 'symbols') { assert.equal(result.symbolReads, 0); assert.equal(result.sql.trace.stringWire, true); }
       if (mode === 'rotation') assert.equal(result.rotation, true);
