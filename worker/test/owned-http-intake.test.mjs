@@ -6,6 +6,11 @@ import { bodyBudgetCharged } from '../body-budget.ts';
 import { beginOwnedHttpRequest, finishOwnedHttpRequest } from '../http-identity-owner.ts';
 import { acceptOwnedHttpControlVerification, proxyKeyVerification } from '../proxy-auth.ts';
 import { isIdentityFailure } from '../identity-admission.ts';
+import { accessBytesResponse } from './access-byte-fixture.mjs';
+
+const bytesRequest = wire => new Request('https://router.example/v1/chat/completions', {
+  method: 'POST', duplex: 'half', body: accessBytesResponse(wire).body,
+});
 
 test('HTTP control proof cannot be installed from a caller-supplied identity graph', async () => {
   const baseline = bodyBudgetCharged(), request = new Request('https://router.example/v1/chat/completions');
@@ -66,7 +71,7 @@ test('compiled intake funds small-wire large graphs BEFORE native JSON.parse', a
     if (text === wire) { calls++; charged = bodyBudgetCharged(); }
     return Reflect.apply(original, this, [text, reviver]);
   });
-  await intake(t, () => new Request('https://router.example/v1/chat/completions', { method: 'POST', body: wire }), async (response, text, baseline) => {
+  await intake(t, () => bytesRequest(wire), async (response, text, baseline) => {
     assert.equal(response.status, 401); assert.equal(calls, 1);
     // The array's cells and null occurrences alone exceed its <1 MiB wire.
     // This assertion observes the genuine allocation boundary, not a test plan.
@@ -75,19 +80,21 @@ test('compiled intake funds small-wire large graphs BEFORE native JSON.parse', a
   });
 });
 
-test('compiled intake retains WHOLE distinct input backings until their consumers clear', async t => {
+test('compiled intake prefunds ORIGINAL native BYOB backings and copies short chunks without retaining oversized buffers', async t => {
   const wire = '{"model":"not-a-catalog-model","extra":null}', bytes = new TextEncoder().encode(wire), cut = 20;
-  let peak = 0, stage = 0;
+  const reads = []; let stage = 0;
   await intake(t, () => new Request('https://router.example/v1/chat/completions', { method: 'POST', duplex: 'half', body: new ReadableStream({
-    pull(controller) {
-      peak = Math.max(peak, bodyBudgetCharged());
-      if (stage === 2) { controller.close(); return; }
-      const source = stage++ === 0 ? bytes.subarray(0, cut) : bytes.subarray(cut), backing = new Uint8Array(300 * 1024);
-      backing.set(source); controller.enqueue(backing.subarray(0, source.length));
+    type: 'bytes', pull(controller) {
+      const view = controller.byobRequest.view;
+      reads.push({ backing: view.buffer.byteLength, charged: bodyBudgetCharged() });
+      if (stage === 2) { controller.close(); controller.byobRequest.respond(0); return; }
+      const source = stage++ === 0 ? bytes.subarray(0, cut) : bytes.subarray(cut);
+      view.set(source); controller.byobRequest.respond(source.byteLength);
     },
   }, { highWaterMark: 0 }) }), async (response, _text, baseline) => {
     assert.equal(response.status, 401);
-    assert.ok(peak - baseline >= 600 * 1024, 'two distinct original backings, not two tiny view lengths');
+    assert.equal(reads.length, 3, 'both ORIGINAL chunks plus EOF');
+    assert.ok(reads.every(row => row.backing === 16384 && row.charged - baseline >= 131072), 'WHOLE provided and returned backings admitted before every original read');
   });
 });
 
@@ -106,7 +113,7 @@ test('native JSON grammar, deep unknown data, duplicate keys and own __proto__ s
     }
     return value;
   });
-  await intake(t, () => new Request('https://router.example/v1/chat/completions', { method: 'POST', body: wire }), async response => {
+  await intake(t, () => bytesRequest(wire), async response => {
     assert.equal(response.status, 401);
     assert.deepEqual(observed, { own: true, prototype: true, kept: true, escaped: true, depth: 1500, leaf: null, lastWins: true });
   });

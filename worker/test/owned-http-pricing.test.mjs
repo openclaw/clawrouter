@@ -94,7 +94,7 @@ async function fixture(t, run, retained = false) {
   const dispatch = input => {
     const original = privateOwnedHttpChat.fetch(new Request('https://router.example/v1/chat/completions', {
       method: 'POST', headers: { authorization: 'Bearer clawrouter-live-' + kid + '-fixture-secret', 'content-type': 'application/json' },
-      body: typeof input === 'string' ? input : JSON.stringify(input),
+      body: accessBytesResponse(typeof input === 'string' ? input : JSON.stringify(input)).body, duplex: 'half',
     }), env, { waitUntil: promise => { own(promise); } });
     const root = own(original); own(original.then(response => { bodyRoot(response); }, () => {})); return root;
   };

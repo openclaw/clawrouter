@@ -475,17 +475,18 @@ function ownedHttpJsonDataBytes(text: string): number {
 // Same public JSON grammar/thresholds as readJson, with explicit ORIGINAL
 // request read/FIRSTcancel/unlock ownership instead of fire-and-forget cleanup.
 async function readOwnedHttpJson(cap: OwnedHttpRequest, request: Request, admission: JsonAdmission): Promise<unknown> {
-  growOwnedHttpRequest(cap, 8192);
+  // Original BYOB request/backing, returned view, decoder slice and copying
+  // overlap are funded before the first reader/read or authentication await.
+  growOwnedHttpRequest(cap, 131072);
   return ownedHttpCompletion(cap).start(async () => {
     const tooLarge = () => new HttpError(413, "request_too_large", `JSON request body exceeds the ${maxMediaJsonBodyBytes} byte limit`);
     const body = request.body;
     if (!body) throw new HttpError(400, "invalid_json", "request body must be valid JSON");
-    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let reader: ReadableStreamBYOBReader | undefined;
     let originalRead: Promise<ReadableStreamReadResult<Uint8Array>> | undefined;
     let firstCancel: Promise<void> | undefined, cancelOutcome: Promise<{ failed: boolean; error?: unknown }> | undefined;
     let cancelStarted = false, eof = false, hasPrimary = false, primary: unknown, publicFailure: unknown;
     let prefix: Array<Uint8Array | undefined> = [], parser: ReturnType<typeof createJsonBodyParser> | undefined;
-    let backings: Set<ArrayBufferLike> | undefined = new Set();
     let decoder: TextDecoder | undefined, parsed: unknown, size = 0, backingBytes = 0;
     // Existing expanded-parser bound, including its current scalar before
     // concatenation. It is a component of the SAME body debit, not a new cap.
@@ -524,34 +525,40 @@ async function readOwnedHttpJson(cap: OwnedHttpRequest, request: Request, admiss
       const declared = Number(request.headers.get("content-length"));
       if (Number.isFinite(declared) && declared > maxMediaJsonBodyBytes) throw tooLarge();
       if (Number.isFinite(declared) && declared > 0) await admission.reserve(declared);
-      reader = body.getReader(); decoder = new TextDecoder();
+      reader = body.getReader({ mode: "byob" }); decoder = new TextDecoder();
       request.signal.addEventListener("abort", cancel, { once: true });
       while (true) {
         if (request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
-        originalRead = reader.read(); void originalRead.then(() => undefined, () => undefined);
+        originalRead = reader.read(new Uint8Array(16384)); void originalRead.then(() => undefined, () => undefined);
         const item = await originalRead; originalRead = undefined;
         if (request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
         if (item.done) { eof = true; break; }
+        if (item.value.buffer.byteLength > 16384) throw identityFailure("limit");
+        if (!item.value.byteLength) continue;
         size += item.value.byteLength;
         if (size > maxMediaJsonBodyBytes) throw tooLarge();
         admission.noteOwnedInputBytes(size);
-        const nextBacking = parser || !backings!.has(item.value.buffer) ? item.value.buffer.byteLength : 0;
+        // A short native read must not retain a whole 16 KiB backing for one
+        // byte. The exact copy is admitted before its factory; the original
+        // whole backing stays covered by the fixed read component until clear.
+        const nextBacking = parser ? item.value.buffer.byteLength : item.value.byteLength;
         await admission.reserve(Math.max(size, parser ? nextBacking : backingBytes + nextBacking));
         if (!parser && size > maxJsonBodyBytes) {
           await admission.expand();
           admission.admitOwnedData(backingBytes + nextBacking + parserData());
           parser = createJsonBodyParser();
           for (let index = 0; index < prefix.length; index++) { feed(prefix[index]!); prefix[index] = undefined; }
-          prefix.length = 0; backings!.clear(); backings = undefined; backingBytes = 0;
+          prefix.length = 0; backingBytes = 0;
         }
         if (parser) {
           admission.admitOwnedData(item.value.buffer.byteLength + parserData(), true);
           feed(item.value);
         } else {
           admission.admitOwnedData(backingBytes + nextBacking + 4 * size);
-          growOwnedHttpRequest(cap, 40); // view, prefix cell and distinct-backing index cell
-          if (nextBacking) { backings!.add(item.value.buffer); backingBytes += nextBacking; }
-          prefix.push(item.value);
+          growOwnedHttpRequest(cap, 40); // retained view, prefix cell and copy-factory products
+          const retained = item.value.byteLength === item.value.buffer.byteLength ? item.value : item.value.slice();
+          backingBytes += retained.buffer.byteLength;
+          prefix.push(retained);
         }
       }
       if (parser) { feedText(decoder.decode()); parsed = parser.take(); }
@@ -559,7 +566,7 @@ async function readOwnedHttpJson(cap: OwnedHttpRequest, request: Request, admiss
         let text = "";
         for (let index = 0; index < prefix.length; index++) { text += decoder.decode(prefix[index], { stream: true }); prefix[index] = undefined; }
         text += decoder.decode();
-        prefix.length = 0; backings!.clear(); backings = undefined; backingBytes = 0;
+        prefix.length = 0; backingBytes = 0;
         const graph = ownedHttpJsonDataBytes(text);
         admission.admitOwnedData(2 * text.length + graph, true);
         parsed = JSON.parse(text); text = "";
@@ -578,7 +585,7 @@ async function readOwnedHttpJson(cap: OwnedHttpRequest, request: Request, admiss
     try { request.signal.removeEventListener("abort", cancel); } catch (error) { failures.push(error); }
     try { reader?.releaseLock(); } catch (error) { failures.push(error); }
     if (body.locked) { holdOwnedHttpRequest(cap); failures.push(identityFailure("cleanup")); }
-    originalRead = undefined; firstCancel = undefined; cancelOutcome = undefined; reader = undefined; decoder = undefined; parser?.discard(); parser = undefined; prefix.length = 0; backings?.clear(); backings = undefined;
+    originalRead = undefined; firstCancel = undefined; cancelOutcome = undefined; reader = undefined; decoder = undefined; parser?.discard(); parser = undefined; prefix.length = 0;
     if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "owned HTTP intake cleanup");
     if (hasPrimary) throw publicFailure;
     return parsed;

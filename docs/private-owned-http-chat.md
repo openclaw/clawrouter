@@ -112,8 +112,18 @@ for publication. Node and native tests have only received static syntax checks.
 
 ## Intake and delivery checkpoint
 
-The private intake counts whole distinct byte backings before retaining chunk
-views. Its existing positive `BodyLease` credit is counted once; an exact common
+The private native intake reserves a 131072-byte read component before acquiring
+its original BYOB reader. Each original read supplies a fresh 16384-byte backing;
+the returned whole backing is checked, including short views. Original provided
+and returned backings remain covered across any authentication await. A short
+chunk receives an exact-size retained copy only after prospective admission;
+the larger original backing is cleared after that iteration. Zero-byte chunks
+retain no history. Node fixtures use explicit native-byte producers; hosted
+Workerd must qualify the actual native request boundary. There is no default-
+reader fallback or change to the ordinary entrypoint. This is a bounded read
+workspace, not a lower wire-size or JSON profile.
+
+The existing positive `BodyLease` credit is counted once; an exact common
 arena charge supplements that credit before decode or parsed-graph factories.
 Small inputs keep native `JSON.parse`, including deep unknown data, duplicate
 last-wins fields and own `__proto__` data. A constant-state lexical pass counts
