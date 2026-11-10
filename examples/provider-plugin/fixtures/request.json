@@ -1,5 +1,14 @@
 {
-  "description": "Synthetic request and response shape; no live provider verification.",
-  "request": { "input": "example" },
-  "response": { "output": "example" }
+  "schema": "clawrouter.provider-conformance.v1",
+  "kind": "json-exchange",
+  "id": "invoke-success",
+  "providerId": "example",
+  "endpoint": "invoke",
+  "capability": "tool.invoke",
+  "request": { "method": "POST", "path": "/v1/invoke", "body": { "input": "example" } },
+  "upstream": {
+    "request": { "method": "POST", "path": "/v1/invoke", "body": { "input": "example" } },
+    "response": { "status": 200, "body": { "output": "example" } }
+  },
+  "response": { "status": 200, "body": { "output": "example" } }
 }

@@ -352,9 +352,37 @@ metadata must never determine its own secret, network, or storage permissions.
 
 ## Contributor contract tests
 
-The starter fixture is intentionally generic JSON data. A future conformance
-runner will own a versioned scenario schema and execute the host adapter, not
-package-supplied test code. Required scenarios depend on declared features:
+The starter fixture uses the data-only `clawrouter.provider-conformance.v1`
+contract. Import `parseProviderConformanceScenario` from the plugin contract
+package to validate parsed JSON. The parser performs no I/O and returns detached
+data. The scaffolder sets each generated fixture's `providerId` to the new ID.
+
+Version 1 supports `kind: json-exchange`: one client `request`, the expected
+`upstream.request`, a supplied `upstream.response`, and the expected client
+`response`. Each scenario has a stable `id`, `providerId`, `endpoint`, and
+`capability`. Optional `model` is an exact, opaque model ID; omitting it describes
+a model-free exchange. The future runner must check these references against
+the selected manifest and must invoke the host adapter, not package code.
+
+Requests specify an uppercase HTTP `method` and an origin-relative `path`,
+including any query. Responses specify a final HTTP `status` from 200 to 599.
+Optional `headers` use lowercase names and single-line string values; they
+describe only the headers asserted by the scenario, not the full transport
+header set. Optional `body` contains an exact JSON value. Omitted bodies and
+JSON `null` remain distinct. Bodies are limited to 32 levels and 10,000 values;
+the package loader separately bounds file sizes. Unknown envelope fields fail
+validation. JSON object keys inside bodies remain provider data.
+
+This is a shape contract, not a conformance runner or an attestation. It does
+not compare adapter output, check manifest references, detect real secrets, or
+make network requests. The existing loader still accepts arbitrary JSON fixture
+resources; it does not require this schema. Use synthetic content and synthetic
+header values only. Do not copy live credentials into examples.
+
+Streaming, binary bodies, auth setup, local rejection without an upstream call,
+multi-call lifecycle operations, usage assertions, and retry timing need separate
+scenario kinds and host support. They are not represented by `json-exchange`.
+Required scenarios will depend on declared features:
 
 - auth injection and redaction;
 - request and error mapping;
