@@ -138,22 +138,33 @@ test('saved paired calls retain disjoint usage buckets used for native pricing',
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test('unknown charges stop the campaign once and retain the reservation', async () => {
+for (const failure of ['http', 'transport']) test(`${failure} failures retain request fingerprints before dispatch and stop once`, async () => {
   const { root, options } = await fixture();
+  const input = { ...body, messages: [{ role: 'user', content: 'private prompt sentinel λ' }] };
   try {
-    let dispatched = 0;
+    let dispatched = 0, checkpoint, serializedBody;
     await assert.rejects(runPairBenchmark({ ...options, grade,
       fetcher: async (url, request) => {
         if (url.includes('/v1/models/')) return success(url, request);
         dispatched++;
+        checkpoint = JSON.parse(await readFile(join(options.out, 'pair.json'), 'utf8'));
+        serializedBody = request.body;
+        if (failure === 'transport') throw new Error('synthetic transport failure');
         return Response.json({ error: { type: 'rate_limit_error', message: 'private prompt sentinel' } }, { status: 429 });
       }, agent: async (_task, _image, _strategy, id, _settings, invoke) => {
-        await invoke(id, roles.strong, body, signal); return repaired();
+        await invoke(id, roles.strong, input, signal); return repaired();
       } }), /pair_benchmark_incomplete/);
     const state = JSON.parse(await readFile(join(options.out, 'pair.json'), 'utf8'));
+    assert.equal(checkpoint.calls[0].requestDigest, hash(serializedBody));
+    assert.equal(checkpoint.calls[0].requestBytes, Buffer.byteLength(serializedBody));
+    assert.notEqual(checkpoint.calls[0].requestBytes, serializedBody.length);
+    assert.equal(checkpoint.calls[0].promptDigest, hash(JSON.stringify(input.messages)));
+    assert.equal(state.calls[0].requestDigest, checkpoint.calls[0].requestDigest);
     assert.equal(dispatched, 1); assert.equal(state.complete, false); assert.equal(state.failure, 'unknown_cost');
     assert.equal(state.records[0].errorCode, 'unknown_cost');
     assert.equal(state.calls[0].costMicros, null);
+    assert.match(state.calls[0].requestDigest, /^[a-f0-9]{64}$/);
+    assert.equal(state.calls[0].promptDigest, hash(JSON.stringify(input.messages)));
     assert.equal(state.spentOrReservedMicros, config.priorCostMicros + state.calls[0].reservationMicros);
     assert.ok(!JSON.stringify(state).includes('sentinel'));
   } finally { await rm(root, { recursive: true, force: true }); }
