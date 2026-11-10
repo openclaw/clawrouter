@@ -49,6 +49,7 @@ export interface AdmissionResult {
 export interface AdmissionStore {
   readPrivate?<T>(key: string): Promise<T | null>;
   privateResult?(result: AdmissionResult): void;
+  privatePrincipal?(value: string): string | null;
   privatePool?(provider: AdmissionProvider, policyId: string, tenantId: string): AdmissionPool;
   identity?: IdentitySourceBudget;
   finishSelection?(input: AdmissionRequest, result: AdmissionResult): Promise<AdmissionResult>;
@@ -136,7 +137,7 @@ export async function resolveAdmission(env: Env, input: AdmissionRequest, store:
   if (!policy || !credential.credential.enabled || credentialExpired(credential.credential) || !policy.policy.enabled || credential.credential.policyGeneration !== policy.policy.generation) return result;
   const principalId = credential.credential.principalId;
   if (principalId) {
-    const email = normalizeEmail(principalId);
+    const email = store.privatePrincipal ? store.privatePrincipal(principalId) : normalizeEmail(principalId);
     if (email) {
       let owner: AccessControlUser | null;
       try {

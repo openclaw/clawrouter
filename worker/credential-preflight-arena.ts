@@ -309,6 +309,27 @@ export const admissionBridgeChoiceFactoryCharges = Object.freeze({
     dependencyCaptureCallAndFinalProbeFrame: 2,
   }),
 });
+// Sequential private phases: these do NOT add a fifth live window. Principal
+// hydration finishes before its cold await; snapshot output reservation transfers
+// before selector factories; final projection comparison follows the last await.
+// Their retained DATA is still charged concurrently with every later phase.
+export const admissionBridgeBoundaryFactoryCharges = Object.freeze({
+  source: Object.freeze({ scratchVectorGuardOwnerLeaseCloseAndMethods: 24,
+    nestedCanonicalValueLeaseAndCallback: 24, metadataCursorArrayRow: 3,
+    valueCursorArrayRow: 3, principalTransformAndRegExpProducts: 4,
+    snapshotPlannerIteratorAndArithmeticFrames: 6, snapshotCursorOccurrenceAdmission: 2, finalProbeCallAndComparison: 4 }),
+  read: Object.freeze({ planRecordsCountersAndClosures: 16,
+    prospectiveDescriptorsAndFrames: 72, parseScannerAndOriginalValueFrames: 24,
+    finalDependencyIteratorAndOutcome: 4 }),
+});
+// Prevalidation completes before copy/RPC and before the continuation transfers.
+// One current prototype descriptor is inspected and cleared; no descriptor/key
+// history, callback graph or Symbol vector is retained. These are CONTROL.
+export const admissionBridgeSerializationFactoryCharges = Object.freeze({
+  source: Object.freeze({ scratchVectorGuardOwnerLeaseCloseAndMethods: 24,
+    visitorAndRecursiveCallFrames: 26, activeDataAndPrototypeDescriptors: 25,
+    ownPropertyIterators: 24, prototypeLookupFrame: 1, failureUnwindAndWindowProducts: 6 }),
+});
 // Worker pre-copy string-field pass, BEFORE source acquisition. It borrows the
 // otherwise idle prepaid source window and clears all metadata before the string-keyed carrier.
 // The original copy lease remains active until all request aliases clear.
@@ -330,6 +351,18 @@ export function admitBridgeFactories(): void {
     let count = 0;
     const table: Readonly<Record<string, number>> = admissionBridgeFactoryCharges[window];
     for (const name in table) count += table[name];
+    if (count > preflightControlSlots[window]) throw identityFailure("limit");
+  }
+  for (const key in admissionBridgeSerializationFactoryCharges) {
+    const window = key as keyof typeof admissionBridgeSerializationFactoryCharges;
+    const table: Readonly<Record<string, number>> = admissionBridgeSerializationFactoryCharges[window];
+    let count = 0; for (const name in table) count += table[name];
+    if (count > preflightControlSlots[window]) throw identityFailure("limit");
+  }
+  for (const key in admissionBridgeBoundaryFactoryCharges) {
+    const window = key as keyof typeof admissionBridgeBoundaryFactoryCharges;
+    const table: Readonly<Record<string, number>> = admissionBridgeBoundaryFactoryCharges[window];
+    let count = 0; for (const name in table) count += table[name];
     if (count > preflightControlSlots[window]) throw identityFailure("limit");
   }
   for (const key in admissionBridgeChoiceFactoryCharges) {

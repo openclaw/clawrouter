@@ -74,8 +74,13 @@ owner replacements keep their positions and absent owner fields append.
 JSON planning alone does not fund object spread. The private Worker now performs
 a separate allocation-free own-property pass over enumerable string properties
 before the source snapshot, inner carrier or outer carrier. It counts keys and value cells
-even for undefined values that JSON omits. String key/value occurrences add U;
-number/boolean/null/undefined values add N; property references add their P cells.
+even for undefined values that JSON omits. Callable and Symbol values at string
+keys stage as undefined, with the same key position and omission. No callable
+reference or Symbol payload becomes passive scratch. String key/value occurrences add U;
+number/boolean/null/undefined values (including those omitted-value replacements)
+add N; admitted plain-object references add their P cells. Own accessors, custom
+prototypes and own callable `toJSON` already fail the ordinary JSON-data planner;
+this path does not execute hooks to inspect or fund them.
 Owner replacements and both carriers are included conservatively, including the
 seven-counter snapshot. The existing phase lease grows before each factory and
 stays live through original transport/cleanup; clearing request aliases never
@@ -116,6 +121,33 @@ transfer is provided. Disposal removes the map entry and clears the graph and
 owner aliases before releasing the same full ticket. Forged/double use fails.
 No scalar shrink or GC release is used while the full graph is held.
 
+The adopted PRIVATE input contract is passive JSON data, not arbitrary
+serialization-hook execution. Before consuming the continuation, a private walk
+checks every reached function, including nested object members and array slots.
+A callable or accessor `toJSON` descriptor anywhere on that function's prototype
+chain is a protocol failure, with zero hook invocation/serialization/RPC. Inert
+data descriptors shadow inherited hooks normally. No `Get` invokes a getter.
+Ordinary `identityPlan` and public callers are unchanged. Plain functions retain
+object omission/array-null behavior; root carrier fields still stage undefined.
+
+The walk uses no whole-key vector or Symbol enumeration. It admits the existing
+24-level profile's descriptor string references and active key path before each
+data descriptor: N=25, U=2097152+256+activeKeyUnits, no passive containers. The
+otherwise idle source window lists 106 CONTROL products: scratch guard/lease24,
+visitor/call frames26, active data/prototype descriptors25, iterators24, prototype
+lookup frame1, failure/unwind/window products6. Prototype walking is iterative
+with one current descriptor, no retained history or new arbitrary depth cap.
+Only descriptor type/presence is classified; ignored descriptor values and
+callback graphs are not copied, traversed or retained beyond synchronous
+inspection. Visitor/input/descriptor/lease aliases clear before window reuse.
+Failure leaves the SAME continuation/ticket owned, and the guard lease retires.
+A later release or a clean retry through that same owner follows existing API
+semantics; it is not an automatic authentication retry.
+
+Reflective Proxy traps are an unsupported exotic input boundary: standard JS
+cannot promise noninvoking descriptor/prototype inspection of a Proxy. This
+candidate makes no Proxy-support or arbitrary callback-graph/whole-heap claim.
+
 ## Cumulative source and commit order
 
 The seven inherited counters are bytes, text, values, containers, members,
@@ -144,9 +176,13 @@ staged entries before a legacy early return.
 All return paths perform final synchronous current credential, secret,
 lifecycle, policy, owner, connections and pool rereads after the last await.
 Stale routing choices are removed rather than committed. Every candidate read
-captures its actual attachment revision, including null projections, unselected
-candidates and snapshot-only results. Final synchronous validation probes every
-retained dependency before serialization/effects. A mismatch removes selection,
+captures its actual attachment revision AND complete projection text/null/legacy,
+including unselected candidates and snapshot-only results. Revision alone cannot
+detect an accepted same-generation publication. Final synchronous validation probes every
+retained dependency before serialization/effects. Full canonical projection rereads
+use LENGTH/legacy/null metadata before value acquisition, prospective SQL funding,
+and the SAME cumulative raw/structural source meter. No JSON projection or hash
+substitutes for the full original source. A mismatch removes selection,
 snapshots and the planned selection journal entry. Earlier seed effects still
 follow the existing journal contract; no rollback is claimed. A canonical winner
 before the candidate read replaces an obsolete unpublishable staged projection
@@ -223,12 +259,55 @@ separate channels.
 Dependency records/indexes remain in the prepaid execution journal CONTROL
 inventory. One temporary replacement record and the final probe use two named
 synchronous slots; two capture/probe frames use the read window. Captured key/kind
-strings and revision scalars are additionally admitted before the receipt factory:
-`D = 8 + 2*(key.length + 10)`, at most 2076 bytes per observation. At most 98
-initial reads plus one selected reread retain at most 205524 such bytes through
-the final decision/serialization overlap. Staged and canonical receipts reuse
-journal slots; duplicate reads never create another retained receipt/index.
-This is a scoped delta accounting statement, not full CONTROL closure.
+strings, revision/legacy scalars and the complete captured projection text are
+admitted before the receipt factory: `D = 16 + 2*(key.length + 10 + text.length)`
+(null text contributes zero). The old 205524-byte scalar-only bound is withdrawn.
+All observed projection texts stay funded through final comparison/serialization;
+SQL materialization and final parse overlap receive separate leases. Staged and
+canonical receipts reuse journal slots; duplicate observations preserve the first
+receipt, with conservative retained funding for each actual observation.
+
+Snapshot output is a separate retained DATA reservation, made before the empty
+candidate array, encoded pool key, candidate growth, revision dictionary and
+wrappers. Both `only` and `select` reserve the complete current-pool upper bound.
+For n candidates, key-unit sum K, F copied result fields and Q copied primitive
+fields, the vector is C=n+5, P=7n+2F+24, N=n+Q+2. U includes 2K, 8n candidate
+field-name units, result field/value strings, provider id, four prospective
+encoded-component sums plus eight separators, two copies of both hash strings,
+and 512 fixed field units. Each encoded-component sum uses three times original
+UTF8 bytes. The actual returned cursor-string occurrence is separately admitted after the
+original history read, before snapshot construction; no new cursor-length cap.
+Existing SQL graph leases do not pay for these new occurrences.
+The reservation's guard returns before the choice window; its retained DATA
+remains owned across return until final result/journal aliases clear.
+
+Private principal hydration now reserves `U = 3*UTF8(principal)+64` before
+`normalizeEmail` can trim/lowercase. This covers both transforms and the retained
+normalized occurrence through the actual cold-user await, including null output.
+No prelength cap rejects valid padded email. Post-hash selection passes the raw
+principal to the already-guarded private `getUser` instead of first normalizing
+it without an owner. Ordinary `normalizeEmail` callers do not change. The shared
+selection-store user callback replaces its duplicate closure, paying for the new
+private-principal callback without adding an operation-window product.
+
+Private quota selection now adds BOTH `model.length` (new requirement occurrence)
+and `UTF8(model)` (lowercase upper bound) to simultaneous U. The original input
+model is separate. This covers the reached unchanged shared model-window helper;
+it does not sum sequential lowercase temporaries after their last consumer.
+
+The additional sequential boundary table names source70/read116 products:
+24 scratch vector/guard/owner/lease/method products, 24 nested canonical guard
+products, two sets of three SQL cursor/array/row products, four principal transform
+products, six snapshot planner/iterator/arithmetic frames, two cursor-admission
+products and four final probe
+frames; read has 16 plan products, 72 descriptors/frames, 24 parse frames and four
+final dependency iterator/outcome products. These reuse idle source/read windows,
+not extra windows. Snapshot admission occurs before selector factories; principal
+normalization finishes before cold acquisition; final comparison follows all
+hydration/hash awaits. Final source/read enter/leave is explicit. Persistent
+operation128/synchronous503 and selector source123/read128 remain unchanged;
+terminal79 remains prepaid. The maximum named combination remains 961, NOT a
+whole-phase source proof. All actual overlaps still require immutable closure.
 
 The selector admits their simultaneous sum; a phase MAX is valid only after its
 last consumer has cleared. Routing, history, policy, user and selection returns
@@ -318,12 +397,18 @@ The actual Workerd fixture uses original native KV/RPC bodies and SQLite, with
 the complete Env before DO initialization. It checks healthy opaque ownership,
 current winner rotation and zero-write denial in the originating request. The
 new Node promise-order and native Workerd final-entry races complete a real pending
-B publication after A was chosen (or after a snapshot-only result). They require
+B publication after A was chosen (or after a snapshot-only result), both with
+and without a generation/revision advance. They require
 no stale result and zero selection/cursor effects, while preserving seed effects.
 Forwarding observations retain original promises/receivers; no platform body is
 replaced. All finite fixture roots are observed immediately and joined, with
 release-first cleanup and explicit primary presence. These success witnesses
-remain requirements; local runtime execution is prohibited. Configuration tests
+remain requirements; local runtime execution is prohibited. New fixtures require 1025 callables to remain uninvoked and stage only undefined,
+including pressure before copy/RPC; top/nested/array own/inherited callable and
+accessor serializers with protocol denial, zero invocation/RPC and retained
+continuation custody; plain-function omission/null parity; snapshot pressure before candidate values or
+effects; long rejected and valid-padded principal guards; and maximum ASCII plus
+Unicode model-scoped quota pressure before the shared helper. Configuration tests
 also exercise the actual bounded preparation owner, prospective scratch pressure
 and private capacity propagation through real DO selection.
 

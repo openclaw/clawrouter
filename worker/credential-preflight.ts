@@ -1,3 +1,4 @@
+import { identityJsonProfiles } from "./access-json.ts";
 import type { Env } from "./types";
 import { admitAdmission, admitIdentity, advanceIdentitySource, identityFailure, identityPlan, identitySourceBudget,
   identitySourceSnapshot, type IdentitySourceBudget } from "./identity-admission.ts";
@@ -117,11 +118,69 @@ export function completeCredentialAdmission(continuation: CredentialPreflightCon
     || input.cover !== undefined || input.video !== undefined || input.search !== undefined) throw identityFailure("protocol");
   // Validate the bridge inventory before consuming the single-use owner.
   admitBridgeFactories();
+  guardAdmissionSerialization(owner, input);
   continuations.delete(continuation);
   const operation = runAdmission(owner, input, signal);
   void operation.then(() => undefined, () => undefined);
   return operation;
 }
+// PRIVATE passive-data prevalidation. The ordinary planner intentionally skips
+// callable members; JSON serialization would consult their toJSON FIRST. Inspect
+// descriptors/prototypes without Get, hook invocation, Symbol enumeration or a
+// retained key vector. Failed prevalidation leaves the continuation owned.
+function guardAdmissionSerialization(owner: AdmissionOwner, input: Record<string, unknown>): void {
+  const worker = admissionBridgePhasePayload.workerReply, ticket = owner.ticket;
+  ticket.enter("source");
+  let lease: ReturnType<typeof reserveAdmissionScratch> | undefined;
+  let visit: ((value: unknown, depth: number, keyUnits: number) => void) | undefined;
+  try {
+    // Parent data descriptors can coexist along the existing 24-level JSON
+    // profile. Fund their admitted string references plus active key occurrences;
+    // omitted callable-member keys are measured before their descriptor factory.
+    lease = reserveAdmissionScratch(ticket, worker.admittedRepresentations + worker.flatten + worker.decodedChunk,
+      { C: 0, P: 0, N: 25, U: identityJsonProfiles.complete.units + 256, B: 0 });
+    visit = (value: unknown, depth: number, keyUnits: number): void => {
+      if (typeof value === "function") {
+        let current: object | null = value;
+        while (current) {
+          let descriptor = Object.getOwnPropertyDescriptor(current, "toJSON");
+          if (descriptor) {
+            const unsupported = !Object.hasOwn(descriptor, "value") || typeof descriptor.value === "function";
+            // No descriptor value/callback graph survives classification.
+            descriptor = undefined; current = null; value = undefined;
+            if (unsupported) throw identityFailure("protocol");
+            return;
+          }
+          current = Object.getPrototypeOf(current);
+        }
+        value = undefined; return;
+      }
+      if (value === null || typeof value !== "object") return;
+      if (depth >= identityJsonProfiles.complete.depth) throw identityFailure("limit");
+      if (Array.isArray(value)) {
+        for (let index = 0; index < value.length; index++) {
+          const key = String(index);
+          lease!.admit({ C: 0, P: 0, N: 25, U: identityJsonProfiles.complete.units + 256 + keyUnits + key.length, B: 0 });
+          let descriptor = Object.getOwnPropertyDescriptor(value, key);
+          try {
+            if (descriptor && !Object.hasOwn(descriptor, "value")) throw identityFailure("protocol");
+            visit!(descriptor?.value, depth + 1, keyUnits + key.length);
+          } finally { descriptor = undefined; }
+        }
+      } else for (const key in value) if (Object.hasOwn(value, key)) {
+        lease!.admit({ C: 0, P: 0, N: 25, U: identityJsonProfiles.complete.units + 256 + keyUnits + key.length, B: 0 });
+        let descriptor = Object.getOwnPropertyDescriptor(value, key);
+        try {
+          if (!descriptor || !Object.hasOwn(descriptor, "value")) throw identityFailure("protocol");
+          visit!(descriptor.value, depth + 1, keyUnits + key.length);
+        } finally { descriptor = undefined; }
+      }
+      value = undefined;
+    };
+    visit(input, 0, 0);
+  } finally { visit = undefined; input = undefined as never; lease?.retire(); lease = undefined; ticket.leave("source"); }
+}
+
 // Private copy admission is distinct from JSON planning: enumerable own string
 // properties with undefined values still create key/value cells in the temporary copy.
 // No key vector or Symbol enumeration. The earlier JSON admission checked
@@ -143,7 +202,7 @@ function fundAdmissionCopy(owner: AdmissionOwner, input: Record<string, unknown>
       const value: unknown = input[key];
       vector.P += 2; vector.U += key.length;
       if (typeof value === "string") vector.U += value.length;
-      else if (value == null || typeof value === "number" || typeof value === "boolean") vector.N++;
+      else if (value == null || typeof value === "number" || typeof value === "boolean" || typeof value === "function" || typeof value === "symbol") vector.N++;
       // Reference cells keep their already-admitted borrowed graphs under the
       // full ticket. No equality/interning credit is taken for string values.
       phase.admit(vector);
@@ -186,7 +245,11 @@ async function runAdmission(owner: AdmissionOwner, input: Record<string, unknown
       // Null prototype keeps __proto__ as data without per-field descriptors.
       // Symbol keys have no JSON representation and are never enumerated/read.
       copied = Object.create(null) as Record<string, unknown>;
-      for (const key in input) if (Object.hasOwn(input, key)) copied[key] = input[key];
+      for (const key in input) if (Object.hasOwn(input, key)) {
+        const value = input[key];
+        // JSON-omitted executable/opaque values never become passive borrowers.
+        copied[key] = typeof value === "function" || typeof value === "symbol" ? undefined : value;
+      }
       copied.credentialId = owner.kid; copied.secretSha256 = owner.digest;
       request = { admission: copied, source: sent };
     } finally { owner.ticket.leave("source"); }

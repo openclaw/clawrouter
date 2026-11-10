@@ -111,7 +111,7 @@ export async function finishAdmissionSelection(env: Env, storage: DurableObjectS
     // filtering and updating counters in this same synchronous transaction.
     const credential = store.getCredential(input.credentialId);
     const policy = credential ? store.getPolicy(credential.credential.policyId) : null;
-    const owner = credential?.credential.principalId ? store.getUser(normalizeEmail(credential.credential.principalId) ?? credential.credential.principalId) : null;
+    const owner = credential?.credential.principalId ? store.getUser(store.privateBridge ? credential.credential.principalId : normalizeEmail(credential.credential.principalId) ?? credential.credential.principalId) : null;
     const fresh: AdmissionResult = { ...result, credential, policy, owner };
     if (!credential || !policy || !credential.credential.enabled || credentialExpired(credential.credential) || !policy.policy.enabled || credential.credential.policyGeneration !== policy.policy.generation || owner?.record.enabled === false || !input.secretSha256 || !safeEqual(input.secretSha256, credential.credential.secretSha256)) return fresh;
     if (credential.credential.principalId !== result.credential!.credential.principalId || policy.policyId !== poolInput.policyId || (policy.policy.tenantId ?? "default") !== poolInput.tenantId) return { ...fresh, pools: {} };
@@ -363,7 +363,7 @@ export function privateChoiceScratch(routing: unknown, model?: string | null): A
     P: 2 * counts.members + counts.entries + 686 + 256 + 129 + 22,
     N: counts.values + 196 + 128 + 129 + 4,
     U: counts.units + 102606 + 2 * 1024 + 2 * (64 + 1 + 1024)
-      + (typeof model === "string" ? identityUtf8(model) : 0),
+      + (typeof model === "string" ? model.length + identityUtf8(model) : 0),
     B: 4,
   };
 }
@@ -428,6 +428,29 @@ export function privateProjectionScratch(grant: UpstreamGrant): AdmissionScratch
     N: plan.counts.values + 256, U: 2 * plan.counts.units + plan.counts.text + 8192, B: 0 };
 }
 
+// Passive OUTPUT occurrences, separate from SQL graph/source allowances. The
+// complete pool upper bound funds both snapshot modes before any growth; no
+// lease/guard survives into the already-tight choice window.
+export function privateSnapshotScratch(fresh: AdmissionResult, providerId: string, policyId: string, tenantId: string,
+  keys: readonly string[], identityHash: string, fallbackSessionHash: string, snapshot: boolean): AdmissionScratchVector {
+  let fields = 0, units = 0, primitives = 0;
+  for (const key in fresh) if (Object.hasOwn(fresh, key)) {
+    fields++; units += key.length;
+    const value = (fresh as unknown as Record<string, unknown>)[key];
+    if (typeof value === "string") units += value.length;
+    else if (value == null || typeof value === "number" || typeof value === "boolean") primitives++;
+  }
+  let keyUnits = 0;
+  if (snapshot) for (const key of keys) keyUnits += key.length;
+  const count = snapshot ? keys.length : 0;
+  // Each encoded component <= 3*UTF8 units; components, local poolKey,
+  // selection input and returned snapshot occurrences overlap.
+  const encoded = 3 * (identityUtf8(providerId) + identityUtf8(policyId) + identityUtf8(tenantId));
+  return { C: count + 5, P: 7 * count + 2 * fields + 24, N: count + primitives + 2,
+    U: 2 * keyUnits + 8 * count + units + providerId.length + 4 * encoded + 8
+      + 2 * (identityHash.length + fallbackSessionHash.length) + 512, B: 0 };
+}
+
 // Original projection rows are streamed when the public result does not request
 // a snapshot. A selected reread is metered again BEFORE any journal effect.
 // Snapshot data is prospectively admitted as part of the full result before
@@ -435,6 +458,11 @@ export function privateProjectionScratch(grant: UpstreamGrant): AdmissionScratch
 function finishPrivateSelectedResult(env: Env, input: AdmissionRequest, fresh: AdmissionResult,
   provider: CompiledProvider, endpoint: CompiledEndpoint, request: AdmissionSelection, policy: AccessPolicyEntry,
   tenantId: string, pool: AdmissionPool, identityHash: string, fallbackSessionHash: string, store: SelectionStore, sql: SqlStorage): AdmissionResult {
+  // Reserve ALL prospective output occurrences before even the empty array.
+  // This one-shot lease transfers into the ticket before selection factories;
+  // data remains held until final result/journal aliases clear, not return.
+  store.privateBridge!.scratch(privateSnapshotScratch(fresh, provider.id, policy.policyId, tenantId, pool.keys,
+    identityHash, fallbackSessionHash, !!input.snapshot), () => undefined, true);
   const retained: AdmissionPoolCandidate[] = [];
   const poolKey = `${encodeURIComponent(provider.id)}/${encodeURIComponent(policy.policyId)}/${encodeURIComponent(tenantId)}`;
   const revision = (key: string) => store.grantAttachment(key).revision;
@@ -450,11 +478,11 @@ function finishPrivateSelectedResult(env: Env, input: AdmissionRequest, fresh: A
       let staged = false;
       if (!row && pending && revision(key) === pending.revision) { row = { projection_json: pending.text, legacy: pending.legacy }; staged = true; }
       if (!row || row.legacy) { legacy = true; return; }
-      // This scalar is an execution dependency, including unselected and
+      // This full projection is an execution dependency, including unselected and
       // snapshot-only candidates. The fixed journal factory owns its receipt;
       // it is never a free passive index. Staged entries share the same slot.
-      store.privateBridge!.scratch({ C: 0, P: 0, N: 1, U: key.length + "dependency".length, B: 0 },
-        () => store.privateBridge!.stage({ kind: "dependency", key, revision: revision(key) }), true);
+      store.privateBridge!.scratch({ C: 0, P: 0, N: 2, U: key.length + "dependency".length + (row.projection_json?.length ?? 0), B: 0 },
+        () => store.privateBridge!.stage({ kind: "dependency", key, revision: revision(key), text: row!.projection_json, legacy: row!.legacy }), true);
       const grant = row.projection_json ? (staged ? JSON.parse(row.projection_json) : parseIdentity(row.projection_json, store.identity!)) as UpstreamGrant : null;
       row = undefined;
       return { key, grant };
@@ -481,6 +509,9 @@ function finishPrivateSelectedResult(env: Env, input: AdmissionRequest, fresh: A
   }
   const snapshot = (): AdmissionPoolSnapshot => {
     const state = planned?.state ?? store.selectionState(poolKey);
+    // The ORIGINAL history owner funds its cursor; this is the additional
+    // returned snapshot string occurrence. Admit actual length before copying.
+    store.privateBridge!.scratch({ C: 0, P: 0, N: 0, U: state.cursorKey?.length ?? 0, B: 0 }, () => undefined, true);
     const plan = identityPlan();
     plan.object(0, field => {
       for (const key in fresh) if (Object.hasOwn(fresh, key) && key !== "snapshots") field(key, (fresh as unknown as Record<string, unknown>)[key]);

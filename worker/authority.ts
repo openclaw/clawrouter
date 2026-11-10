@@ -39,7 +39,7 @@ export type AdmissionJournalEntry =
   | { kind: "seed"; family: number; key: string; value: unknown; text: string; marker: string }
   | { kind: "projection"; key: string; text: string | null; legacy: number; revision: number; eligible: boolean }
   | { kind: "marker"; key: string }
-  | { kind: "dependency"; key: string; revision: number }
+  | { kind: "dependency"; key: string; revision: number; text: string | null; legacy: number }
   | { kind: "selection"; poolKey: string; selectedKey: string; cursorKey: string | null; nowMs: number; attempted: boolean };
 const admissionSeedTables = [["proxy_credentials", "credential_id", "credential_json"], ["access_policies", "policy_id", "policy_json"],
   ["access_users", "email", "user_json"], ["provider_connections", "provider_id", "connection_json"]] as const;
@@ -471,12 +471,14 @@ export class PolicyBindingIndexObject implements DurableObject {
   }
 
   private admissionStore(bound?: AuthorityReadBound): AdmissionStore {
+    const getUser = (id: string) => this.getUser(id, bound);
     return {
         identity: bound?.identity,
+        privatePrincipal: bound?.bridge ? value => this.privatePrincipal(bound, value) : undefined,
         privateResult: bound?.bridge ? result => { bound.bridge!.result = result; } : undefined,
         privatePool: bound?.bridge ? (provider, policyId, tenantId) => this.resolveGrantPool({ providerId: provider.id, policyId, tenantId }, bound, { tokenRef: provider.tokenRef }) : undefined,
         readPrivate: bound?.bridge ? <T>(key: string) => this.privateReadRecord<T>(bound, key) : undefined,
-        getCredential: id => this.getCredential(id, bound), getPolicy: id => this.getPolicy(id, bound), getUser: id => this.getUser(id, bound), hasMeta: key => this.hasMeta(key),
+        getCredential: id => this.getCredential(id, bound), getPolicy: id => this.getPolicy(id, bound), getUser, hasMeta: key => this.hasMeta(key),
         seedCredential: (id, value) => {
           if (!bound?.identity) return this.initializeCredentials([{ credentialId: id, credential: normalizeCredentialRecord(value, id) }]);
           if (this.getCredential(id, bound) || this.hasMeta("credentials_global_initialized")) return;
@@ -517,7 +519,7 @@ export class PolicyBindingIndexObject implements DurableObject {
         resolveConnections: ids => this.resolveConnections(ids, bound), putMeta: key => { if (bound?.bridge) { this.appendAdmissionJournal(bound); this.appendAdmissionJournal(bound, { kind: "marker", key }); } else if (bound?.identity) bound.commit!.push(() => this.putMeta(key)); else this.putMeta(key); }, resolveGrantPool: input => this.resolveGrantPool(input, bound), finishSelection: (input, result) => finishAdmissionSelection(this.env, this.storage, input, result, {
           identity: bound?.identity,
           privateBridge: bound?.bridge ? { choice: run => this.privateControlPhase(bound, run), scratch: (vector, run, retained) => this.privateScratchPhase(bound, vector, run, retained), materialize: (bytes, run) => this.privateSqlValue(bound, bytes, run), current: result => { bound.bridge!.prior = bound.bridge!.result; bound.bridge!.result = result; }, hashes: identity => this.privateHashPhase(bound, identity), connections: providers => this.resolvePrivateProviderConnections(providers, bound), pool: (input, tokenRef) => this.resolveGrantPool(input, bound, { tokenRef }), read: key => this.privateReadRecord<UpstreamGrant>(bound, key), stage: entry => this.appendAdmissionJournal(bound, entry), projection: key => bound.bridge!.entries.find((entry): entry is Extract<AdmissionJournalEntry, { kind: "projection" }> => entry.kind === "projection" && entry.key === key) } : undefined, afterAdmission: action => bound!.commit!.push(action),
-          getCredential: id => this.getCredential(id, bound), getPolicy: id => this.getPolicy(id, bound), getUser: email => this.getUser(email, bound),
+          getCredential: id => this.getCredential(id, bound), getPolicy: id => this.getPolicy(id, bound), getUser,
           resolveConnections: ids => this.resolveConnections(ids, bound), resolveGrantPool: request => this.resolveGrantPool(request, bound),
           grantAttachment: key => this.grantAttachment(key, !!bound?.bridge), consumeProjectionBytes: (bytes, text) => { if (bound && (bound.bytes += bytes) > (bound.video ? videoControlBytes : searchControlBytes)) searchUnavailable(); if (bound?.video && text !== undefined) inspectVideoRecord(text, bound); },
           selectGrant: request => this.selectGrant(request, bound), selectionState: poolKey => this.selectionState(poolKey, bound), planGrant: request => this.planGrant(request, bound),
@@ -641,7 +643,7 @@ export class PolicyBindingIndexObject implements DurableObject {
         const plan = identityPlan("record"); plan.item(entry.value, 0);
         base += admissionGraphPayload(plan.counts) + 2 * (entry.text.length + entry.marker.length);
       } else if (entry.kind === "projection") base += 2 * (entry.text?.length ?? 0);
-      else if (entry.kind === "dependency") base += 8;
+      else if (entry.kind === "dependency") base += 16 + 2 * (entry.text?.length ?? 0);
     }
     return base;
   }
@@ -717,6 +719,25 @@ export class PolicyBindingIndexObject implements DurableObject {
     }
   }
 
+  private privateProjectionCurrent(bound: AuthorityReadBound,
+    entry: Extract<AdmissionJournalEntry, { kind: "dependency" | "projection" }>): boolean {
+    // SAME-generation publications can change the full projection without a
+    // revision change. Meter this ORIGINAL final reread, metadata before value.
+    const size = rows<{ bytes: number | null; legacy: number }>(this.sql.exec(
+      "SELECT length(CAST(projection_json AS BLOB)) AS bytes, legacy FROM upstream_grant_projections WHERE grant_key = ?", entry.key))[0];
+    if (!size) return entry.kind === "projection"; // still-owned absent staged row
+    if (size.legacy !== entry.legacy || (size.bytes === null) !== (entry.text === null)) return false;
+    if (size.bytes === null) return true;
+    admitIdentityBytes(bound.identity!, size.bytes);
+    return this.privateSqlValue(bound, size.bytes, () => {
+      const row = rows<{ projection_json: string | null; legacy: number }>(this.sql.exec(
+        "SELECT projection_json, legacy FROM upstream_grant_projections WHERE grant_key = ?", entry.key))[0];
+      if (!row || row.projection_json === null) throw identityFailure("protocol");
+      parseIdentity(row.projection_json, bound.identity!); // full cumulative source, including discarded fields
+      return row.legacy === entry.legacy && row.projection_json === entry.text;
+    });
+  }
+
   private finalPrivateAdmission(input: AdmissionRequest, prior: AdmissionResult, bound: AuthorityReadBound): AdmissionResult {
     // AFTER the last hydration/hash await, including every early/no-selection
     // return. The final decision, outbound plan and journal execution have no await.
@@ -749,7 +770,7 @@ export class PolicyBindingIndexObject implements DurableObject {
     // these original canonical probes and serialization/journal effects.
     for (const entry of bound.bridge!.entries) if (entry.kind === "dependency" || entry.kind === "projection" && entry.eligible) {
       const current = this.grantAttachment(entry.key, true);
-      if (current.revision !== entry.revision) routingCurrent = false;
+      if (current.revision !== entry.revision || !this.privateProjectionCurrent(bound, entry)) routingCurrent = false;
     }
     if (prior.selection?.selected) {
       const selected = prior.selection.selected;
@@ -783,7 +804,10 @@ export class PolicyBindingIndexObject implements DurableObject {
       bound.bridge!.prior = undefined; bound.bridge!.result = result;
       if (signal?.aborted) throw identityFailure("transport");
       text = this.storage.transactionSync(() => {
-        result = this.finalPrivateAdmission(envelope!.admission, result!, bound!);
+        ticket.enter("source");
+        try { ticket.enter("read"); try { result = this.finalPrivateAdmission(envelope!.admission, result!, bound!); }
+          finally { ticket.leave("read"); } }
+        finally { ticket.leave("source"); }
         admitAdmission(result);
         const reply = { admission: result, source: envelope!.source };
         const plan = identityPlan(); plan.item(reply, 0);
@@ -941,6 +965,16 @@ export class PolicyBindingIndexObject implements DurableObject {
     if (!row) searchUnavailable();
     if (bound.video) inspectVideoRecord(row.value, bound); else inspectSearchJson(row.value);
     return JSON.parse(row.value);
+  }
+
+  private privatePrincipal(bound: AuthorityReadBound, value: string): string | null {
+    // BEFORE trim/lowercase; retain the returned normalized occurrence across
+    // the actual cold-user await. No prelength denial of valid padded emails.
+    const ticket = bound.bridge!.ticket; ticket.enter("source");
+    try { return this.privateScratchPhase(bound, { C: 0, P: 0, N: 0,
+      U: 3 * (typeof value === "string" ? identityUtf8(value) : 0) + 64, B: 0 },
+      () => normalizeEmail(value), true); }
+    finally { ticket.leave("source"); }
   }
 
   private getUser(email: string, bound?: AuthorityReadBound): AccessControlUser | null {

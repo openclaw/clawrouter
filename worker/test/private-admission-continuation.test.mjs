@@ -5,7 +5,7 @@ import { sqliteFixture } from './sqlite-storage.mjs';
 import { accessBytesResponse } from './access-byte-fixture.mjs';
 const { PolicyBindingIndexObject } = await import('../authority.ts');
 const { preflightCredential, consumeCredentialPreflight, completeCredentialAdmission, releaseCredentialPreflight, releaseCredentialPreflightContinuation } = await import('../credential-preflight.ts');
-const { PreflightTicket, PreflightInstanceArena, admissionScratchBytes, reserveAdmissionScratch, retireAdmissionScratch, transferAdmissionScratch, preflightPayloadBytes, admissionBridgeFactoryCharges, admissionBridgeChoiceFactoryCharges, admissionBridgeCopyFactoryCharges, admissionBridgePassiveExamples, admissionBridgePhasePayload, preflightControlSlots } = await import('../credential-preflight-arena.ts');
+const { PreflightTicket, PreflightInstanceArena, admissionScratchBytes, reserveAdmissionScratch, retireAdmissionScratch, transferAdmissionScratch, preflightPayloadBytes, admissionBridgeFactoryCharges, admissionBridgeChoiceFactoryCharges, admissionBridgeCopyFactoryCharges, admissionBridgeBoundaryFactoryCharges, admissionBridgeSerializationFactoryCharges, admissionBridgePassiveExamples, admissionBridgePhasePayload, preflightControlSlots } = await import('../credential-preflight-arena.ts');
 const { consumeAdmissionBridge, admissionBridgeFailureMetadata } = await import('../credential-preflight-source.ts');
 const { bodyBudgetCharged } = await import('../body-budget.ts');
 const { identitySourceBudget, identityPlan, planPrivateIdentityString, admitGeneratedRuntime, foldIdentitySqlHistory, isIdentityFailure } = await import('../identity-admission.ts');
@@ -14,7 +14,7 @@ const { normalizePolicyRecord, normalizePrivatePolicyRecord } = await import('..
 const { grantRoutingPolicy, privateGrantRoutingPolicy, privateGrantKey, validGrantKey } = await import('../grant-routing.ts');
 const { normalizeUser, normalizePrivateUser } = await import('../authority-users.ts');
 const { normalizeGrantRuntimeState, normalizePrivateGrantRuntimeState } = await import('../grant-runtime.ts');
-const { selectAdmissionCandidate, selectPrivateAdmissionCandidate, privatePreparationScratch, privateHashScratch } = await import('../authority-grant-selection.ts');
+const { selectAdmissionCandidate, selectPrivateAdmissionCandidate, privatePreparationScratch, privateHashScratch, privateSnapshotScratch, privateChoiceScratch } = await import('../authority-grant-selection.ts');
 const { default: providerSnapshot } = await import('../generated/provider-snapshot.json', { with: { type: 'json' } });
 const digest = 'ab'.repeat(32), rotated = 'cd'.repeat(32);
 const credential = (secretSha256 = digest) => ({ enabled: true, secretSha256, policyId: 'bridge-policy', policyGeneration: 'legacy', principalId: null });
@@ -628,7 +628,7 @@ test('passive vector examples do not reclassify journal ownership, guards or nat
   assert.equal(admissionBridgeFactoryCharges.synchronous.journalIndexSlots, 231);
   assert.ok(admissionBridgeChoiceFactoryCharges.source.preparationOwnerAndScalarState >= 14);
   assert.ok(admissionBridgeChoiceFactoryCharges.source.scratchVectorGuardWeakOwnerLeaseCloseAndMethods > 0);
-  for (const table of [admissionBridgeFactoryCharges, admissionBridgeChoiceFactoryCharges, admissionBridgeCopyFactoryCharges]) for (const [window, entries] of Object.entries(table)) {
+  for (const table of [admissionBridgeFactoryCharges, admissionBridgeChoiceFactoryCharges, admissionBridgeCopyFactoryCharges, admissionBridgeBoundaryFactoryCharges, admissionBridgeSerializationFactoryCharges]) for (const [window, entries] of Object.entries(table)) {
     assert.ok(Object.values(entries).reduce((total, value) => total + value, 0) <= preflightControlSlots[window], window);
   }
   assert.equal(Object.values(admissionBridgePhasePayload.workerReply).reduce((total, value) => total + value, 0), 21020672);
@@ -684,14 +684,14 @@ test('private default-key rejection measures borrowed megabyte tokenRef before m
   assert.equal(f.trace.kv.some(([key]) => key.startsWith('oauth/')), false);
 }));
 
-for (const snapshot of [undefined, 'only']) test('final private boundary rejects an unselected candidate publication after ' + (snapshot ?? 'choice'), async t => fixture(t, async f => {
+for (const advance of [true, false]) for (const snapshot of [undefined, 'only']) test('final private boundary rejects ' + (advance ? 'new-generation' : 'SAME-generation') + ' unselected publication after ' + (snapshot ?? 'choice'), async t => fixture(t, async f => {
   seed(f);
   f.stored.set('connections/anthropic', { providerId: 'anthropic', enabled: true });
   const a = 'oauth/bridge-policy/a', b = 'oauth/bridge-policy/b';
   const grant = priority => ({ provider: 'anthropic', kind: 'api_key', enabled: true, priority,
     credentialStore: 'durable_object', credentialStatus: 'active', credentialGeneration: 1,
     credentialLineage: 'fixture_generation', hasCredential: true });
-  for (const [key, token, value] of [[a, 'a', grant(0)], [b, 'b', grant(5)]]) {
+  for (const [key, token, value] of [[a, 'a', grant(2)], [b, 'b', grant(5)]]) {
     f.sql.exec('INSERT INTO upstream_grant_pool_versions(grant_key,generation,revision) VALUES(?,?,?)', key, 1, 7);
     f.sql.exec('INSERT INTO upstream_grant_pool_members(scope,scope_id,provider_id,token_ref,status) VALUES(?,?,?,?,?)', 'policies', 'bridge-policy', 'anthropic', token, 'active');
     f.sql.exec('INSERT INTO upstream_grant_projections(grant_key,projection_json,legacy) VALUES(?,?,0)', key, JSON.stringify(value));
@@ -712,9 +712,9 @@ for (const snapshot of [undefined, 'only']) test('final private boundary rejects
           assert.equal(prior.selection, undefined);
           assert.equal(prior.snapshots.anthropic.revisions[b], 8);
         } else assert.equal(prior.selection.selected.key, a);
-        const published = f.owner.publishGrantAttachment({ key: b, generation: 2, revision: 8,
-          admissionRevision: 8, provider: 'anthropic', status: 'active', projection: { ...grant(-1), credentialGeneration: 2 } });
-        assert.equal(published.revision, 9); assert.equal(published.pending, false);
+        const published = f.owner.publishGrantAttachment({ key: b, generation: advance ? 2 : 1, revision: 8,
+          admissionRevision: 8, provider: 'anthropic', status: 'active', projection: { ...grant(0), credentialGeneration: advance ? 2 : 1 } });
+        assert.equal(published.revision, advance ? 9 : 8); assert.equal(published.pending, false);
       }, () => undefined));
       return original;
     };
@@ -728,7 +728,7 @@ for (const snapshot of [undefined, 'only']) test('final private boundary rejects
   assert.equal(Object.hasOwn(result.body.admission, 'snapshots'), false);
   assert.equal(f.db.prepare('SELECT count(*) n FROM upstream_grant_selection').get().n, 0);
   assert.equal(f.db.prepare('SELECT count(*) n FROM upstream_grant_pool_cursors').get().n, 0);
-  assert.equal(f.db.prepare('SELECT revision FROM upstream_grant_pool_versions WHERE grant_key=?').get(b).revision, 9);
+  assert.equal(f.db.prepare('SELECT revision FROM upstream_grant_pool_versions WHERE grant_key=?').get(b).revision, advance ? 9 : 8);
   assert.equal(f.db.prepare("SELECT status FROM upstream_grant_pool_members WHERE token_ref='b'").get().status, 'active');
   assert.equal(f.db.prepare('SELECT count(*) n FROM proxy_credentials').get().n, 1);
   assert.equal(f.db.prepare('SELECT count(*) n FROM access_policies').get().n, 1); // earlier seed contract remains; no rollback claim
@@ -740,18 +740,18 @@ test('candidate dependency receipts share the bounded execution journal, never a
   for (let index = 0; index < 98; index++) f.owner.appendAdmissionJournal(bound,
     { kind: 'projection', key: 'oauth/fixture/' + index, text: null, legacy: 0, revision: 7, eligible: true });
   for (let index = 0; index < 98; index++) f.owner.appendAdmissionJournal(bound,
-    { kind: 'dependency', key: 'oauth/fixture/' + index, revision: 7 });
+    { kind: 'dependency', key: 'oauth/fixture/' + index, revision: 7, text: null, legacy: 0 });
   assert.equal(bound.bridge.entries.length, 98);
   assert.ok(bound.bridge.entries.every(entry => entry.kind === 'projection'));
-  f.owner.appendAdmissionJournal(bound, { kind: 'dependency', key: 'oauth/fixture/new', revision: 8 });
-  f.owner.appendAdmissionJournal(bound, { kind: 'dependency', key: 'oauth/fixture/new', revision: 9 });
+  f.owner.appendAdmissionJournal(bound, { kind: 'dependency', key: 'oauth/fixture/new', revision: 8, text: null, legacy: 0 });
+  f.owner.appendAdmissionJournal(bound, { kind: 'dependency', key: 'oauth/fixture/new', revision: 9, text: null, legacy: 0 });
   assert.equal(bound.bridge.entries.length, 99); assert.equal(bound.bridge.entries[98].revision, 8);
   bound.bridge.entries[0].eligible = false;
-  f.owner.appendAdmissionJournal(bound, { kind: 'dependency', key: 'oauth/fixture/0', revision: 9 });
+  f.owner.appendAdmissionJournal(bound, { kind: 'dependency', key: 'oauth/fixture/0', revision: 9, text: null, legacy: 0 });
   assert.equal(bound.bridge.entries.length, 99); assert.equal(bound.bridge.entries[0].kind, 'dependency');
   assert.equal(bound.bridge.entries[0].revision, 9);
   bound.bridge.entries[1].eligible = false;
-  f.owner.appendAdmissionJournal(bound, { kind: 'dependency', key: 'oauth/fixture/1', revision: 7 });
+  f.owner.appendAdmissionJournal(bound, { kind: 'dependency', key: 'oauth/fixture/1', revision: 7, text: null, legacy: 0 });
   assert.equal(bound.bridge.entries[1].kind, 'dependency'); assert.equal(bound.bridge.entries[1].revision, 7);
   bound.bridge.entries.length = 0;
 }));
@@ -771,4 +771,181 @@ test('unobserved unpublishable staging is not a dependency of the final current 
   const fresh = f.owner.finalPrivateAdmission(request, prior, bound);
   assert.deepEqual(fresh.selection, prior.selection);
   assert.equal(bound.bridge.entries.length, 1); assert.equal(bound.bridge.entries[0].eligible, false);
+}));
+
+
+for (const pressure of [false, true]) test('1025 JSON-omitted callables stage funded undefined, without invocation: pressure=' + pressure, async t => fixture(t, async f => {
+  seed(f); let proof, continuation, handle, calls = 0, copied = 0, rpc = 0;
+  f.resources.push(() => { if (handle) handle.dispose(); else if (continuation) releaseCredentialPreflightContinuation(continuation); else if (proof) releaseCredentialPreflight(proof); });
+  const preflight = await f.take(f.own(preflightCredential(f.env, 'bridgekid', digest))); proof = preflight.proof;
+  continuation = consumeCredentialPreflight(proof, f.env, 'bridgekid', digest); proof = undefined;
+  const borrowed = { providers: [] };
+  for (let i = 0; i < 1025; i++) borrowed[String(i).padStart(4, '0') + (pressure ? 'x'.repeat(6396) : '')] = () => { calls++; throw undefined; };
+  const stringify = JSON.stringify, get = f.env.ACCESS_CONTROL.get;
+  t.mock.method(JSON, 'stringify', function (value, ...args) {
+    if (value?.admission && Object.hasOwn(value.admission, '0000' + (pressure ? 'x'.repeat(6396) : ''))) {
+      copied++;
+      for (let i = 0; i < 1025; i++) assert.equal(value.admission[String(i).padStart(4, '0')], undefined);
+      assert.equal(Object.keys(value.admission).length, 1028);
+    }
+    return Reflect.apply(stringify, this, [value, ...args]);
+  });
+  t.mock.method(f.env.ACCESS_CONTROL, 'get', function (...args) { rpc++; return Reflect.apply(get, this, args); });
+  const operation = completeCredentialAdmission(continuation, borrowed); continuation = undefined;
+  const root = f.own(operation), outcome = await root.outcome; root.used = true;
+  if (pressure) { assert.equal(outcome.failed, true); assert.ok(denied(outcome.error)); assert.equal(copied, 0); assert.equal(rpc, 0); }
+  else { assert.equal(outcome.failed, false); handle = outcome.value; assert.equal(copied, 1); assert.equal(rpc, 1); handle.dispose(); handle = undefined; }
+  assert.equal(calls, 0); assert.equal(typeof borrowed[Object.keys(borrowed)[1]], 'function');
+}));
+
+test('private JSON data refuses own custom serializers and accessors before any callback execution', async t => fixture(t, async f => {
+  seed(f); let continuation, calls = 0;
+  f.resources.push(() => { if (continuation) releaseCredentialPreflightContinuation(continuation); });
+  const preflight = await f.take(f.own(preflightCredential(f.env, 'bridgekid', digest)));
+  continuation = consumeCredentialPreflight(preflight.proof, f.env, 'bridgekid', digest);
+  for (const value of [{ toJSON() { calls++; throw undefined; } }, Object.defineProperty({}, 'value', { enumerable: true, get() { calls++; throw undefined; } })]) {
+    assert.throws(() => completeCredentialAdmission(continuation, { providers: [], unknown: value }), denied);
+  }
+  assert.equal(calls, 0);
+}));
+
+for (const snapshot of ['only', 'select']) test('snapshot output pressure precedes candidate factories and every effect: ' + snapshot, async t => fixture(t, async f => {
+  seed(f); f.stored.set('connections/anthropic', { providerId: 'anthropic', enabled: true });
+  let guards = 0, afterGuardValues = 0;
+  const scratch = f.owner.privateScratchPhase, base = f.owner.privatePayloadBase;
+  const sql = f.owner.sql.exec;
+  t.mock.method(f.owner.sql, 'exec', function (query, ...args) {
+    if (guards && /^SELECT projection_json, legacy/.test(query)) afterGuardValues++;
+    return Reflect.apply(sql, this, [query, ...args]);
+  });
+  t.mock.method(f.owner, 'privateScratchPhase', function (bound, vector, run, retained) {
+    const fresh = bound.bridge.result;
+    if (fresh?.pools?.anthropic && vector.C === fresh.pools.anthropic.keys.length + 5 && vector.P === 7 * fresh.pools.anthropic.keys.length + 2 * Object.keys(fresh).length + 24) {
+      guards++;
+      const mock = t.mock.method(this, 'privatePayloadBase', () => preflightPayloadBytes);
+      try { return Reflect.apply(scratch, this, [bound, vector, run, retained]); } finally { mock.mock.restore(); }
+    }
+    return Reflect.apply(scratch, this, [bound, vector, run, retained]);
+  });
+  const result = await f.call({ ...input(), providers: [{ id: 'anthropic', tokenRef: 'anthropic' }], snapshot,
+    selection: { providerId: 'anthropic', endpointId: 'messages', mode: 'http', capability: 'llm.messages' } });
+  assert.equal(guards, 1); assert.equal(result.status, 503); assert.equal(result.body.error.code, 'identity_admission_unavailable');
+  assert.equal(afterGuardValues, 0); assert.deepEqual(f.trace.writes, []); assert.equal(f.owner.privatePayloadBase, base);
+}));
+
+test('snapshot-output vector funds candidates, revisions, pool-key intermediates, hashes and wrapper fields', () => {
+  const fresh = { credential: null, policy: null, owner: null, connections: [], pools: {} };
+  const keys = Array.from({ length: 98 }, (_, i) => 'oauth/fixture/' + i);
+  const vector = privateSnapshotScratch(fresh, 'anthropic', 'policy', 'default', keys, 'a'.repeat(64), 'b'.repeat(64), true);
+  const units = keys.reduce((sum, key) => sum + key.length, 0);
+  assert.ok(admissionScratchBytes(vector) > 16 + 32 * keys.length + 2 * units);
+  assert.equal(vector.C, 103); assert.ok(vector.P >= 7 * keys.length); assert.ok(vector.N >= keys.length);
+  const ticket = PreflightTicket.reserve(); let lease;
+  try { lease = reserveAdmissionScratch(ticket, 0, vector); lease.retain(); ticket.release(); assert.equal(ticket.bytes, preflightPayloadBytes); }
+  finally { retireAdmissionScratch(ticket); ticket.release(); }
+});
+
+for (const valid of [false, true]) test('private principal transforms are funded before trim/lowercase, including long padding: ' + valid, async t => fixture(t, async f => {
+  const principal = valid ? ' '.repeat(200000) + 'FIXTURE@EXAMPLE.COM' + ' '.repeat(200000) : ' ' + 'A'.repeat(400000) + ' ';
+  const ticket = PreflightTicket.reserve(), bound = { bytes: 0, identity: identitySourceBudget(), bridge: { ticket, entries: [], attempted: false } };
+  f.resources.push(() => { retireAdmissionScratch(ticket); ticket.release(); });
+  let transforms = 0; const trim = String.prototype.trim;
+  t.mock.method(String.prototype, 'trim', function (...args) { if (String(this) === principal) transforms++; return Reflect.apply(trim, this, args); });
+  const pressure = t.mock.method(f.owner, 'privatePayloadBase', () => preflightPayloadBytes);
+  assert.throws(() => f.owner.privatePrincipal(bound, principal), denied); assert.equal(transforms, 0); pressure.mock.restore();
+  assert.equal(f.owner.privatePrincipal(bound, principal), valid ? 'fixture@example.com' : null); assert.equal(transforms, 1);
+  ticket.release(); assert.equal(ticket.bytes, preflightPayloadBytes); // returned occurrence remains owned across future cold awaits
+}));
+
+test('actual private cold principal keeps padded-email semantics across hydration and final checks', async t => fixture(t, async f => {
+  seed(f); f.stored.set('credentials/bridgekid', { ...credential(), principalId: ' '.repeat(4096) + 'FIXTURE@EXAMPLE.COM' + ' '.repeat(4096) });
+  f.stored.set('access/users/fixture@example.com', { enabled: true, groups: [] });
+  const response = await f.call(input()); assert.equal(response.status, 200); assert.equal(response.body.admission.owner.email, 'fixture@example.com');
+  assert.equal(f.trace.kv.filter(([key]) => key === 'access/users/fixture@example.com').length, 1);
+}));
+
+for (const model of ['A'.repeat(1048576), '\u0130'.repeat(131072)]) test('private model-scoped quota funds requirement plus lowercase before shared helper: ' + (model.length === 1048576 ? 'max ASCII' : 'Unicode'), t => {
+  const provider = providerSnapshot.providers.find(value => value.id === 'anthropic'), endpoint = provider.endpoints.find(value => value.id === 'messages');
+  const key = 'oauth/fixture/a', grant = { provider: 'anthropic', kind: 'api_key', enabled: true, credentialStore: 'durable_object', credentialStatus: 'active', hasCredential: true, credentialGeneration: 1, credentialLineage: 'synthetic' };
+  const now = new Date().toISOString(), candidates = [{ key, grant }];
+  const input = { provider, endpoint, request: { providerId: provider.id, endpointId: endpoint.id, mode: 'http', model },
+    policy: { policyId: 'fixture', policy: normalizePolicyRecord({}, false) }, poolKey: 'fixture', candidates,
+    states: { [key]: { grantRevision: null, observedAt: now, windows: [{ models: [model.length === 1048576 ? 'a' : 'i'], remaining: 7, limit: 10, resetAt: null }] } }, identityHash: '', fallbackSessionHash: '' };
+  const zero = privateChoiceScratch(input.policy.policy.grantRouting), vector = privateChoiceScratch(input.policy.policy.grantRouting, model);
+  assert.equal(vector.U - zero.U, model.length + Buffer.byteLength(model));
+  const ticket = PreflightTicket.reserve(); let lowered = 0, choices = 0;
+  const lower = String.prototype.toLowerCase;
+  t.mock.method(String.prototype, 'toLowerCase', function (...args) { if (String(this) === model) lowered++; return Reflect.apply(lower, this, args); });
+  const choose = value => { choices++; assert.equal(value.candidates[0].remainingRatio, 0.7); return { selectedKey: key }; };
+  let pressure = true;
+  const scratch = (next, run) => {
+    const lease = reserveAdmissionScratch(ticket, pressure ? preflightPayloadBytes - admissionScratchBytes(vector) + 1 : 0, next);
+    try { return run(); } finally { lease.retire(); }
+  };
+  try {
+    assert.throws(() => selectPrivateAdmissionCandidate({}, input, choose, () => 1, candidates, () => candidates[0], () => true, scratch), denied);
+    assert.equal(lowered, 0); assert.equal(choices, 0); pressure = false;
+    const result = selectPrivateAdmissionCandidate({}, input, choose, () => 1, candidates, () => candidates[0], () => true, scratch);
+    assert.equal(result.selected.key, key); assert.ok(lowered > 0); assert.equal(choices, 1);
+  } finally { retireAdmissionScratch(ticket); ticket.release(); }
+});
+
+
+test('final projection receipt distinguishes present-null, legacy, text and absent staging without revision credit', async t => fixture(t, async f => {
+  const ticket = PreflightTicket.reserve(), bound = { bytes: 0, identity: identitySourceBudget(), bridge: { ticket, entries: [], attempted: false } };
+  f.resources.push(() => { retireAdmissionScratch(ticket); ticket.release(); });
+  const key = 'oauth/fixture/a', text = JSON.stringify({ provider: 'anthropic', priority: 5 });
+  const entry = { kind: 'dependency', key, revision: 7, text, legacy: 0 };
+  f.sql.exec('INSERT INTO upstream_grant_projections(grant_key,projection_json,legacy) VALUES(?,?,0)', key, text);
+  assert.equal(f.owner.privateProjectionCurrent(bound, entry), true); assert.ok(bound.identity.values > 0);
+  f.sql.exec('UPDATE upstream_grant_projections SET projection_json=? WHERE grant_key=?', JSON.stringify({ provider: 'anthropic', priority: 0 }), key);
+  assert.equal(f.owner.privateProjectionCurrent(bound, entry), false);
+  f.sql.exec('UPDATE upstream_grant_projections SET projection_json=NULL WHERE grant_key=?', key);
+  assert.equal(f.owner.privateProjectionCurrent(bound, entry), false);
+  const absent = { ...entry, text: null };
+  assert.equal(f.owner.privateProjectionCurrent(bound, absent), true);
+  f.sql.exec('UPDATE upstream_grant_projections SET legacy=1 WHERE grant_key=?', key);
+  assert.equal(f.owner.privateProjectionCurrent(bound, absent), false);
+  f.sql.exec('DELETE FROM upstream_grant_projections WHERE grant_key=?', key);
+  assert.equal(f.owner.privateProjectionCurrent(bound, absent), false);
+  assert.equal(f.owner.privateProjectionCurrent(bound, { ...absent, kind: 'projection', eligible: true }), true);
+}));
+
+
+for (const location of ['top', 'object', 'array']) for (const inherited of [false, true]) for (const accessor of [false, true])
+test('private callable serializer rejects before invocation/RPC and retains continuation: ' + [location, inherited, accessor].join('/'), async t => fixture(t, async f => {
+  seed(f); const baseline = bodyBudgetCharged(); let proof, continuation, handle, invoked = 0, rpc = 0;
+  f.resources.push(() => { if (handle) handle.dispose(); else if (continuation) releaseCredentialPreflightContinuation(continuation); else if (proof) releaseCredentialPreflight(proof); });
+  const preflight = await f.take(f.own(preflightCredential(f.env, 'bridgekid', digest))); proof = preflight.proof;
+  continuation = consumeCredentialPreflight(proof, f.env, 'bridgekid', digest); proof = undefined;
+  const fn = () => { invoked++; throw undefined; }, holder = inherited ? Object.create(Function.prototype) : fn;
+  Object.defineProperty(holder, 'toJSON', accessor ? { get() { invoked++; throw undefined; } } : { value() { invoked++; return 'X'.repeat(20000000); } });
+  if (inherited) Object.setPrototypeOf(fn, holder);
+  const admission = { providers: [], extra: location === 'top' ? fn : location === 'object' ? { fn } : [fn] };
+  const get = f.env.ACCESS_CONTROL.get;
+  t.mock.method(f.env.ACCESS_CONTROL, 'get', function (...args) { rpc++; return Reflect.apply(get, this, args); });
+  assert.throws(() => completeCredentialAdmission(continuation, admission), error => denied(error) && error.message === 'Identity admission failed (protocol)');
+  assert.equal(invoked, 0); assert.equal(rpc, 0); assert.equal(bodyBudgetCharged() - baseline, preflightPayloadBytes);
+  const operation = completeCredentialAdmission(continuation, { providers: [] }); continuation = undefined;
+  handle = await f.take(f.own(operation)); handle.dispose(); handle = undefined;
+  assert.equal(bodyBudgetCharged(), baseline); assert.equal(invoked, 0);
+}));
+
+test('plain nested functions retain omission/array-null wire, including inert serializer properties', async t => fixture(t, async f => {
+  seed(f); let proof, continuation, handle, invoked = 0, wire;
+  f.resources.push(() => { if (handle) handle.dispose(); else if (continuation) releaseCredentialPreflightContinuation(continuation); else if (proof) releaseCredentialPreflight(proof); });
+  const get = f.env.ACCESS_CONTROL.get;
+  t.mock.method(f.env.ACCESS_CONTROL, 'get', function (...args) {
+    const stub = Reflect.apply(get, this, args), original = stub.fetch;
+    return { fetch(url, init) { if (url.endsWith('/admission/resolve')) wire = JSON.parse(init.body).admission; return Reflect.apply(original, stub, [url, init]); } };
+  });
+  const preflight = await f.take(f.own(preflightCredential(f.env, 'bridgekid', digest))); proof = preflight.proof;
+  continuation = consumeCredentialPreflight(proof, f.env, 'bridgekid', digest); proof = undefined;
+  const fn = () => { invoked++; throw undefined; };
+  Object.defineProperty(fn, 'toJSON', { value: 'inert' });
+  const admission = { providers: [], extra: { omitted: fn, array: [fn, undefined, Symbol('value')], kept: 7 } };
+  Object.defineProperty(admission.extra, Symbol('unread'), { get() { invoked++; throw undefined; }, enumerable: true });
+  const operation = completeCredentialAdmission(continuation, admission); continuation = undefined;
+  handle = await f.take(f.own(operation)); handle.dispose(); handle = undefined;
+  assert.deepEqual(wire.extra, { array: [null, null, null], kept: 7 }); assert.equal(invoked, 0);
 }));
