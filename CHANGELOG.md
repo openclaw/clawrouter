@@ -50,6 +50,8 @@
 
 - Add an opt-in Fusion single-draft benchmark policy with executable verification and original-source strong fallback.
 
+- Give Fusion draft refinement specific feedback for rejected patches and skip verification when no patch was applied.
+
 - Make the experimental Fusion cheap-stage call allowance explicit in benchmark configuration and reports, while preserving the shared hard ceiling.
 
 - Clarify exact-file navigation and edit limits in the Fusion benchmark agent, with actionable feedback after invalid tool requests.
