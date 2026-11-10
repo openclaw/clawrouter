@@ -10,6 +10,8 @@ import { HttpError } from "./utils.ts";
 import { admitSoftStatusRequest } from "./soft-budget-json.ts";
 import { accountingAdmissionFailure, accountingIdentity, accountingNumberCapacity, admitAccountingJson, isAccountingAdmissionFailure } from "./json-body.ts";
 import { readSoftStatus } from "./soft-budget-response.ts";
+import { prepareOwnedHttpSoftStatus, startOwnedHttpSoftStatus, bindOwnedHttpSoftStatus, checkOwnedHttpSoftStatusRetirement, type OwnedHttpRequest } from "./http-identity-owner.ts";
+import type { HttpOperation } from "./http-operation.ts";
 
 // Soft: ledger status runs concurrently with the upstream request and settlement
 // is asynchronous. Stored policies without a mode keep reserve (hard caps); new
@@ -124,6 +126,87 @@ function observeSoftBudget(namespace: Env["BUDGET_LEDGER"], config: ReturnType<t
     close() { delivered = true; },
   };
 }
+
+// Closed private entry. Ordinary observers and readSoftStatus remain unchanged.
+class OwnedSoftBudget {
+  private config?: ReturnType<typeof hotCacheConfig>;
+  private operation?: HttpOperation;
+  private failure?: unknown;
+  private hasFailure = false;
+  private delivered = false;
+  private complete = false;
+  private started = false;
+  private remaining: number;
+  private received = 0;
+  private denied?: HttpError;
+  private resolve!: () => void;
+  private reject!: (reason: unknown) => void;
+  readonly check = new Promise<void>((yes, no) => { this.resolve = yes; this.reject = no; });
+  constructor(readonly http: OwnedHttpRequest, readonly prepared: PreparedSoftBudget) { this.remaining = prepared.descriptors.length; }
+  get reservation(): BudgetReservation { return this.prepared.reservation; }
+  get denial(): HttpError | undefined { return this.denied; }
+  start(env: Env, operation: HttpOperation): void {
+    if (this.started) throw new TypeError("owned soft budget already started");
+    bindOwnedHttpSoftStatus(this.http, env, this.prepared, operation);
+    this.started = true;
+    // Keep the original namespace/config lookup point after provider dispatch.
+    this.config = hotCacheConfig(env); this.operation = operation;
+    void this.check.then(() => undefined, () => undefined);
+    startOwnedHttpSoftStatus(this.http);
+    if (!this.remaining) { this.complete = true; this.resolve(); }
+  }
+  receive(index: number, succeeded: boolean, spent: number | null): void {
+    if (!this.started || !Number.isInteger(index) || index < 0 || index >= this.prepared.descriptors.length || this.received & 1 << index)
+      throw new TypeError("owned soft budget result is not current");
+    this.received |= 1 << index;
+    try {
+      if (succeeded) {
+        const leg = this.prepared.descriptors[index].leg;
+        if (leg.request.limitMicros !== 0 && (spent === null || !Number.isSafeInteger(spent) || spent < leg.request.limitMicros)) exhausted.delete(legId(leg));
+        else {
+          exhausted.set(legId(leg), true, this.config!, hotCacheNow() + this.config!.freshMs);
+          if (!this.delivered && !this.denied) {
+            this.denied = softDenial(leg, { providerId: this.prepared.providerId });
+            this.operation!.stop("upstream", this.denied);
+          }
+        }
+      }
+    } catch (error) {
+      if (isAccountingAdmissionFailure(error)) { this.failure = error; this.hasFailure = true; }
+      // The ordinary observer swallows other cache/denial observation failures.
+    }
+    if (!--this.remaining) {
+      this.complete = true;
+      if (this.hasFailure) this.reject(this.failure); else this.resolve();
+    }
+  }
+  async beforeDelivery(): Promise<number> {
+    if (this.hasFailure) throw this.failure;
+    if (this.complete || this.denied) { this.delivered = true; return 0; }
+    const start = performance.now(); let timer: ReturnType<typeof setTimeout> | undefined;
+    try { await Promise.race([this.check, new Promise<void>(resolve => { timer = setTimeout(resolve, softBudgetGraceMs); })]); }
+    finally { clearTimeout(timer); }
+    this.delivered = true; return performance.now() - start;
+  }
+  close(): void { this.delivered = true; }
+}
+let ownedSoftBudgets: WeakMap<OwnedHttpRequest, OwnedSoftBudget> | undefined;
+export function prepareOwnedHttpSoftBudget(http: OwnedHttpRequest, env: Env, prepared: PreparedSoftBudget): void {
+  if (ownedSoftBudgets?.has(http)) throw new TypeError("owned soft budget already prepared");
+  prepareOwnedHttpSoftStatus(http, env, prepared);
+  (ownedSoftBudgets ??= new WeakMap()).set(http, new OwnedSoftBudget(http, prepared));
+}
+export function startOwnedHttpSoftBudget(http: OwnedHttpRequest, env: Env, prepared: PreparedSoftBudget, operation: HttpOperation): OwnedSoftBudget {
+  const owner = ownedSoftBudgets?.get(http);
+  if (!owner || owner.prepared !== prepared) throw new TypeError("owned soft budget plan is not registered");
+  owner.start(env, operation); return owner;
+}
+export function acceptOwnedHttpSoftStatus(http: OwnedHttpRequest, index: number, succeeded: boolean, spent: number | null): void {
+  const owner = ownedSoftBudgets?.get(http);
+  if (!owner) throw new TypeError("owned soft budget result is not registered");
+  owner.receive(index, succeeded, spent);
+}
+export function retireOwnedHttpSoftBudget(http: OwnedHttpRequest): void { checkOwnedHttpSoftStatusRetirement(http); ownedSoftBudgets?.delete(http); }
 
 // Cover completes and physically retires every observation BEFORE its final
 // authority tail. No grace-period, cache or post-dispatch background work.

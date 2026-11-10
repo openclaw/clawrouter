@@ -72,6 +72,9 @@ export function bindAccountingPlan(cost: EstimatedCost, admit: (plan: BudgetRese
   accountingPlanAdmissions.set(cost, admit);
 }
 
+/** @internal Called only after a genuine private accounting owner clears its facts. */
+export function unbindOwnedAccountingPlan(cost: EstimatedCost): void { accountingPlanAdmissions.delete(cost); }
+
 // Shared with read-only availability. Passing this guard never replaces the
 // atomic reservation; the return value only says whether a ledger is required.
 export function validateBudgetReservation(capability: string, cost: EstimatedCost, policyLimit: number | null | undefined, connection?: ProviderConnection, dailyLimit?: number | null, limitHint?: string | null, weeklyLimit?: number | null): boolean {

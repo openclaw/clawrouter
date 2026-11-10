@@ -7,30 +7,31 @@ export function createOwnedJsonObservation() {
   const rows = [], readers = new WeakSet();
   let current, preparations = 0;
   const consumers = { created: 0, acquired: 0, retired: 0, live: 0, inner: 0, outer: 0,
-    read: 0, cancel: 0, unlock: 0, nativeUnlocked: 0, unlockSettled: 0, thenCalls: 0, closed: 0, closedSettled: 0, replay: 0, transferred: 0, pricing: 0, enqueued: 0, held: false, released: false, reasonReads: 0 };
+    read: 0, cancel: 0, unlock: 0, nativeUnlocked: 0, unlockSettled: 0, thenCalls: 0, closed: 0, closedSettled: 0, replay: 0, transferred: 0, pricing: 0, enqueued: 0, oversizedOutput: 0, mutations: 0, held: false, released: false, reasonReads: 0 };
   let releaseConsumer;
-  const peak = row => {
-    row.peakParents = Math.max(row.peakParents, row.parents);
-    row.peakTokens = Math.max(row.peakTokens, row.tokens);
-    const stored = 2 + row.parents + row.tokens + Number(row.pending) + Number(row.member);
-    row.peakStored = Math.max(row.peakStored, stored);
-    if (current === row) row.peakActive = Math.max(row.peakActive, stored);
-    else row.peakBetween = Math.max(row.peakBetween, stored);
-  };
-  return {
-    rows,
-    consumers,
-    consumerMode: 'normal',
-    previousCodec: undefined,
-    consumerCreated() { consumers.created++; },
-    replay() { consumers.replay++; },
-    transferred(reader) { if (!readers.has(reader)) throw new Error("sniff handoff replaced its original reader"); consumers.transferred++; },
-    enqueued(bytes) { consumers.enqueued += bytes; },
-    pricing(delta) { consumers.pricing += delta; if (consumers.pricing < 0) throw new Error("pricing retired twice"); },
-    reader(reader) {
-      consumers.acquired++; consumers.live++; readers.add(reader);
-      if (consumers.acquired !== 1) return;
-      const mode = this.consumerMode;
+  const publicReaders = { ...consumers }, intakeReaders = { ...consumers };
+  consumers.public = publicReaders; consumers.intake = intakeReaders;
+  function faultReader(reader, mode, consumers) {
+      if (mode === 'capture-before' || mode === 'capture-after') {
+        const read = reader.read;
+        let previous, offset = 0;
+        releaseConsumer = () => { previous = undefined; };
+        Object.defineProperty(reader, 'read', { value(...args) {
+          if (previous) { previous[offset] = 57; previous = undefined; consumers.mutations++; }
+          return Reflect.apply(read, this, args).then(result => {
+            if (!result.done && result.value) {
+              const marker = new TextDecoder().decode(result.value).indexOf('"prompt_tokens":4');
+              if (marker >= 0) {
+                const index = marker + '"prompt_tokens":'.length;
+                if (mode === 'capture-before') { result.value[index] = 57; consumers.mutations++; }
+                else { previous = result.value; offset = index; }
+              }
+            }
+            return result;
+          });
+        } });
+        return;
+      }
       if (!mode.startsWith('read-') && !mode.startsWith('unlock-') && !mode.startsWith('closed-')) return;
       const kind = mode.split('-').at(-1);
       let reason = kind === 'undefined' ? undefined : kind === 'primitive' ? 'x'.repeat(17 * 1024 * 1024)
@@ -78,7 +79,39 @@ export function createOwnedJsonObservation() {
       Object.defineProperty(reader, 'releaseLock', { value(...args) {
         Reflect.apply(unlock, this, args); consumers.unlock++; throw reason;
       } });
+  }
+  const peak = row => {
+    row.peakParents = Math.max(row.peakParents, row.parents);
+    row.peakTokens = Math.max(row.peakTokens, row.tokens);
+    const stored = 2 + row.parents + row.tokens + Number(row.pending) + Number(row.member);
+    row.peakStored = Math.max(row.peakStored, stored);
+    if (current === row) row.peakActive = Math.max(row.peakActive, stored);
+    else row.peakBetween = Math.max(row.peakBetween, stored);
+  };
+  return {
+    rows,
+    consumers,
+    consumerMode: 'normal',
+    previousCodec: undefined,
+    consumerCreated() { consumers.created++; },
+    replay() { consumers.replay++; },
+    transferred(reader) { if (!readers.has(reader)) throw new Error("sniff handoff replaced its original reader"); consumers.transferred++; },
+    enqueued(bytes) { consumers.enqueued += bytes.byteLength; if (bytes.buffer.byteLength !== bytes.byteLength) consumers.oversizedOutput++; },
+    pricing(delta) { consumers.pricing += delta; if (consumers.pricing < 0) throw new Error("pricing retired twice"); },
+    reader(reader) {
+      consumers.acquired++; consumers.live++; readers.add(reader);
+      if (consumers.acquired === 1) faultReader(reader, this.consumerMode, consumers);
     },
+    publicReader(reader) {
+      publicReaders.acquired++; publicReaders.live++;
+      if (publicReaders.acquired === 1 && this.consumerMode.startsWith('public-')) faultReader(reader, this.consumerMode.slice(7), publicReaders);
+    },
+    intakeReader(reader) {
+      intakeReaders.acquired++; intakeReaders.live++;
+      if (intakeReaders.acquired === 1 && this.consumerMode.startsWith('intake-')) faultReader(reader, this.consumerMode.slice(7), intakeReaders);
+    },
+    intakeRetiredReader() { intakeReaders.retired++; if (--intakeReaders.live < 0) throw new Error('intake reader retired twice'); },
+    publicRetiredReader() { publicReaders.retired++; if (--publicReaders.live < 0) throw new Error('public reader retired twice'); },
     releaseConsumer() { consumers.released = true; releaseConsumer?.(); releaseConsumer = undefined; },
     retiredReader() { consumers.retired++; if (--consumers.live < 0) throw new Error('consumer reader retired twice'); },
     wrapper(publicBoundary) { if (publicBoundary) consumers.outer++; else consumers.inner++; },
@@ -152,13 +185,24 @@ export function observeOwnedJsonSource(path, source) {
     source = replace(source, 'try { consume.end(); return root; }\n    finally { discard(); }',
       'if (__parserProbe) ' + probe + '.enter(__parserProbe); try { consume.end(); return root; }\n    finally { if (__parserProbe) ' + probe + '.leave(__parserProbe); discard(); }');
   } else if (/[\\/]worker[\\/]proxy-accounting\.ts$/.test(path)) {
-    source = replace(source, 'options = undefined as never; owner = undefined as never;',
-      'options = undefined as never; owner = undefined as never; ' + probe + '.accounting(1);');
-    source = replace(source, 'finally { command = undefined; }',
-      'finally { const __held = command !== undefined; command = undefined; if (__held) ' + probe + '.accounting(-1); }', 2);
+    source = replace(source, '    records.push(cap);',
+      '    records.push(cap); if (preparation) ' + probe + '.accounting(1);');
+    source = replace(source, '  unbindOwnedAccountingPlan(state.factsCell.current.cost);',
+      '  if (state.state & 1) ' + probe + '.accounting(-1); unbindOwnedAccountingPlan(state.factsCell.current.cost);');
   } else if (/[\\/]worker[\\/]http-identity-owner\.ts$/.test(path)) {
     source = replace(source, 'function ownHttpResponse(cap: OwnedHttpRequest, response: Response, publicBoundary: boolean): Response {',
       'function ownHttpResponse(cap: OwnedHttpRequest, response: Response, publicBoundary: boolean): Response { ' + probe + '.wrapper(publicBoundary);');
+    source = replace(source, 'try { this.reader = this.body!.getReader(); }',
+      'try { this.reader = this.body!.getReader(); this.__probeAcquired = true; ' + probe + '.publicReader(this.reader); }');
+    source = replace(source, '      this.nativeFailure = undefined; this.resolve();',
+      '      this.nativeFailure = undefined; if (this.__probeAcquired) ' + probe + '.publicRetiredReader(); this.resolve();');
+  } else if (/[\\/]worker[\\/]proxy\.ts$/.test(path)) {
+    source = replace(source, 'const diagnostics = beginOwnedHttpIntakeDiagnostics(cap);',
+      'const diagnostics = beginOwnedHttpIntakeDiagnostics(cap); let __intakeProbeAcquired = false;');
+    source = replace(source, 'try { reader = body.getReader({ mode: "byob" }); }',
+      'try { reader = body.getReader({ mode: "byob" }); __intakeProbeAcquired = true; ' + probe + '.intakeReader(reader); }');
+    source = replace(source, 'parser?.discard(); parser = undefined; prefixWire = undefined; captureWire = undefined;',
+      'parser?.discard(); parser = undefined; prefixWire = undefined; captureWire = undefined; if (__intakeProbeAcquired) ' + probe + '.intakeRetiredReader();');
   } else if (/[\\/]worker[\\/]proxy-response\.ts$/.test(path)) {
     source = replace(source, 'checkOwnedHttpCodecConsumer(http, codec, response, operation, streaming, requestId, usageContext);',
       'if (' + probe + '.consumerMode === "forged") codec = Object.freeze({}); '
@@ -172,8 +216,8 @@ export function observeOwnedJsonSource(path, source) {
     source = replace(source, 'function replayResponse(response: Response, reader: ReadableStreamDefaultReader<Uint8Array>, chunks: Uint8Array[], readerDone: boolean): Response {',
       'function replayResponse(response: Response, reader: ReadableStreamDefaultReader<Uint8Array>, chunks: Uint8Array[], readerDone: boolean): Response { ' + probe + '.replay();');
     source = replace(source, '    return sniff;', '    ' + probe + '.transferred(sniff.reader); return sniff;');
-    source = replace(source, 'if (!finished) controller.enqueue(next.value);\n        } catch (error) {\n          const failure = phase',
-      'if (!finished) { controller.enqueue(next.value); ' + probe + '.enqueued(next.value.byteLength); }\n        } catch (error) {\n          const failure = phase');
+    source = replace(source, 'if (!this.finished) controller.enqueue(next.value);\n      this.state.captured = undefined;',
+      'if (!this.finished) { controller.enqueue(next.value); ' + probe + '.enqueued(next.value); }\n      this.state.captured = undefined;');
   } else if (/[\\/]worker[\\/]pricing\.ts$/.test(path)) {
     source = replace(source, 'ownedPricing.set(cap, retained); ownedPricingCount++;',
       'ownedPricing.set(cap, retained); ownedPricingCount++; ' + probe + '.pricing(1);');
@@ -198,7 +242,7 @@ export async function startOwnedJsonObservedFixture(directory, router, upstream,
     resolveDir: process.cwd(), sourcefile: 'owned-json-fixture.ts', loader: 'ts',
   }, bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2022', logLevel: 'silent',
   plugins: [{ name: 'observe-original-json-stacks', setup(build) {
-    build.onLoad({ filter: /(?:[\\/]worker[\\/](?:json-body|proxy-accounting|proxy-response|http-identity-owner|pricing)\.ts|[\\/]stream-json[\\/](?:src[\\/])?core[\\/]parser\.js)$/ }, async ({ path }) => ({
+    build.onLoad({ filter: /(?:[\\/]worker[\\/](?:json-body|proxy-accounting|proxy-response|proxy|http-identity-owner|pricing)\.ts|[\\/]stream-json[\\/](?:src[\\/])?core[\\/]parser\.js)$/ }, async ({ path }) => ({
       contents: observeOwnedJsonSource(path, await readFile(path, 'utf8')),
       loader: path.endsWith('.ts') ? 'ts' : 'js', resolveDir: dirname(path),
     }));

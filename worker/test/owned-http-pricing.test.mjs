@@ -8,7 +8,7 @@ import { sqlBudgetNamespace } from './sql-budget-namespace.mjs';
 import { accessBytesResponse } from './access-byte-fixture.mjs';
 import { putGrantCredentials } from '../grant-credentials.ts';
 import { snapshot } from '../providers.ts';
-import { estimateCost } from '../proxy-accounting.ts';
+import { estimateCost, OwnedHttpAccountingCommand } from '../proxy-accounting.ts';
 import { bodyBudgetCharged, bodyBudgetBytes, ExactBodyCharge } from '../body-budget.ts';
 import { sha256Hex } from '../utils.ts';
 import { evictCredentialGeneration } from '../credential-preflight.ts';
@@ -302,6 +302,50 @@ for (const failedPreparation of [false, true]) test(`real owned token-priced dep
       assert.equal(reservations.length, 1); assert.equal(reservations[0].body.costMicros, expected);
       assert.equal(f.events.length, 1); assert.equal(f.events[0].reserved_cost_micros, expected);
     } else assert.equal(f.calls.filter(row => row.kind === 'budget' && row.path === '/reserve').length, 0);
+  });
+});
+
+test('genuine unused preparation retires while its streamed upload sibling is held', async t => {
+  const retire = OwnedHttpAccountingCommand.prototype.retireUnused;
+  let retired = 0, empty = false, debitAtRetirement = 0;
+  t.mock.method(OwnedHttpAccountingCommand.prototype, 'retireUnused', async function () {
+    empty = Object.keys(this).length === 0;
+    await Reflect.apply(retire, this, []); retired++; debitAtRetirement = bodyBudgetCharged();
+    assert.throws(() => this.fail(403, 'denied'), /unavailable/);
+    await assert.rejects(Reflect.apply(retire, this, []), /unavailable/);
+  });
+  await fixture(t, async f => {
+    const held = f.holdUpload(); // Release registered before the actual dispatch.
+    const root = f.dispatch(payload({ messages: [{ role: 'user', content: 'x'.repeat(1024 * 1024) }] }));
+    await f.arrival(held);
+    assert.equal(retired, 1); assert.equal(empty, true, 'no facts or identity on the opaque receiver');
+    assert.ok(debitAtRetirement > 32 * 1024 * 1024, 'retiring unused metadata did not retire the upload/identity owners');
+    assert.equal(f.events.length, 0); assert.equal(f.sent.length, 0, 'actual upload has not been drained');
+    held.release.resolve();
+    const response = await f.take(root); assert.equal(response.status, 200);
+    await f.take(f.bodyRoot(response)); await f.drain();
+    assert.equal(f.events.length, 1); assert.equal(f.sent.length, 1);
+  });
+});
+
+test('genuine preparation failure settles exactly once without a successful accounting receiver', async t => {
+  const fail = OwnedHttpAccountingCommand.prototype.fail;
+  let failures = 0, unused = 0, requestId, eventId;
+  t.mock.method(OwnedHttpAccountingCommand.prototype, 'fail', function (...args) {
+    failures++; requestId = this.requestId; eventId = this.eventId;
+    assert.deepEqual(Object.keys(this), []);
+    return Reflect.apply(fail, this, args);
+  });
+  const retire = OwnedHttpAccountingCommand.prototype.retireUnused;
+  t.mock.method(OwnedHttpAccountingCommand.prototype, 'retireUnused', function (...args) { unused++; return Reflect.apply(retire, this, args); });
+  await fixture(t, async f => {
+    f.failMaterialization();
+    const response = await f.request(payload({})); await f.drain();
+    assert.equal(response.status, 503); assert.equal(failures, 1); assert.equal(unused, 0);
+    assert.equal(f.sent.length, 0); assert.equal(f.events.length, 1);
+    assert.equal(f.events[0].request_id, requestId); assert.equal(f.events[0].id, eventId);
+    assert.equal(f.events[0].status_code, 503); assert.equal(f.events[0].status, 'provider_error');
+    assert.equal(f.events[0].actual_cost_micros, 0);
   });
 });
 

@@ -1,5 +1,6 @@
 import type { MiniMaxSearchOperation } from "./minimax-search-operation.ts";
-import { checkOwnedHttpRequest, ownedHttpSinkOwner, growOwnedHttpRequest, checkOwnedHttpSinkOwner, beginOwnedHttpSinkRegistration, completeOwnedHttpSinkRegistration, abandonUnstartedOwnedHttpRegistration, type OwnedHttpRequest, type OwnedHttpSinkOwner } from "./http-identity-owner.ts";
+import { checkOwnedHttpRequest, ownedHttpSinkOwner, claimOwnedHttpAccountingFactory, checkOwnedHttpSinkOwner, checkOwnedHttpAccountingRetirement, beginOwnedHttpSinkRegistration, completeOwnedHttpSinkRegistration, abandonUnstartedOwnedHttpRegistration, startOwnedHttpAccountingTerminal, type OwnedHttpRequest, type OwnedHttpSinkOwner } from "./http-identity-owner.ts";
+import { acceptOwnedHttpAccountingCost, matchesOwnedHttpAccountingInput } from "./proxy.ts";
 import { vertexAnthropicRoute } from "./vertex-anthropic-dispatch.ts";
 import { upstreamGenerationMayBeCharged } from "./upstream-billing-outcome.ts";
 import { googleAudioRequest } from "./google-audio-classification.ts";
@@ -11,7 +12,7 @@ import { reportingEstimate } from "./reporting-estimate.ts";
 import { policyRequestCost } from "../shared/request-pricing.ts";
 import { isModelDiscovery } from "./model-discovery.ts";
 import { anthropicModifiers, anthropicPricing, type AnthropicModifiers } from "./anthropic-pricing.ts";
-import { emptyReservation, accountingSinks, bindAccountingPlan, finalizeOwnedAccounting, type AccountingSinks, type BudgetReservation, type EstimatedCost } from "./accounting";
+import { emptyReservation, accountingSinks, bindAccountingPlan, unbindOwnedAccountingPlan, finalizeOwnedAccounting, type AccountingSinks, type BudgetReservation, type EstimatedCost } from "./accounting";
 import { correlationMetadata } from "./correlation";
 import { googleField, googleRequestServiceTier, googleResponseServiceTier, googleServiceTier } from "./google-protocol.ts";
 import { actualModelCost, anthropicWebPrice, estimateModelCost, hostedSearchCost, hostedSearchPrice, outcomeRequestPricingGap, requestPricingGap, type AnthropicWebPrice, type HostedSearchPrice, type PricingEndpoint, type RequestCostReceipt } from "./pricing";
@@ -270,47 +271,144 @@ export function createProxyAccounting(options: AccountingContext) {
   return createAccounting(options, false);
 }
 
-export interface OwnedHttpPreparationAccounting {
-  fail(statusCode: number, status: UsageEvent["status"], reservation?: BudgetReservation, contentRef?: string | null, dispatched?: boolean): void;
-  close(): void;
-  retireUnused(): Promise<void>;
+// An empty, frozen receiver: all graph-bearing state stays in this registry.
+// Methods live on one shared prototype and accept only fixed commands.
+interface OwnedAccountingState {
+  http: OwnedHttpRequest; factsCell: { current: AccountingFacts }; flags: AccountingFlags; sinks: AccountingSinks;
+  custody: ProxyCompletion; context: ExecutionContext; waitUntil?: (work: Promise<unknown>) => void;
+  state: number; charged: boolean; responseTier?: string | null;
+  terminalEvent?: UsageEvent; terminalReservation?: BudgetReservation;
+}
+let ownedAccountingStates: WeakMap<OwnedHttpAccountingCommand, OwnedAccountingState> | undefined;
+let ownedAccountingRequests: WeakMap<OwnedHttpRequest, OwnedHttpAccountingCommand[]> | undefined;
+let ownedAccountingRequestCount = 0;
+function ownedAccountingState(cap: OwnedHttpAccountingCommand): OwnedAccountingState {
+  const state = ownedAccountingStates?.get(cap);
+  if (!state) throw new TypeError("owned accounting unavailable");
+  return state;
+}
+function bindOwnedAccountingFacts(cell: { current: AccountingFacts }): void {
+  // The sole plan callback captures the current-facts cell, not Env/options.
+  bindAccountingPlan(cell.current.cost, plan => admitAccountingFacts(cell.current, plan));
+}
+export class OwnedHttpAccountingCommand {
+  private constructor() {}
+  get requestId(): string { return ownedAccountingState(this).factsCell.current.event.request_id; }
+  get eventId(): string { return ownedAccountingState(this).factsCell.current.event.id; }
+  get upstreamChargePossible(): boolean { return ownedAccountingState(this).charged; }
+  close(): void { ownedAccountingState(this).custody.seal(); }
+  admitPlan(plan: unknown): void { admitAccountingFacts(ownedAccountingState(this).factsCell.current, plan); }
+  setGrant(key: string | null, lane: import("./types").GrantLane): void {
+    const state = ownedAccountingState(this);
+    accountingIdentity(key); accountingIdentity(lane);
+    state.factsCell.current = Object.freeze({ ...state.factsCell.current, event: Object.freeze({ ...state.factsCell.current.event, grant_key: key, grant_lane: lane }) });
+    accountingFlags.set(state.factsCell.current, state.flags);
+  }
+  observeUpstreamResponse(response: Response, url: URL): void {
+    const state = ownedAccountingState(this);
+    state.charged ||= upstreamGenerationMayBeCharged(state.flags.billingBinding, url, response.status) || state.flags.vertex && !response.ok;
+  }
+  settle(statusCode: UsageEvent["status_code"], status: UsageEvent["status"], billable: boolean, tokens: UsageTokens | null,
+    reservation: BudgetReservation, contentRef: string | null, characterEstimate: number | null = null,
+    hostedSearch?: HostedSearchUsage, requestTariffOutcome?: RequestTariffOutcome, requestCostReceipt?: RequestCostReceipt): Promise<boolean> {
+    const state = ownedAccountingState(this);
+    const outcome: AccountingOutcome = { occurredAtMs: Date.now(), statusCode, status, billable, tokens, reservation, contentRef,
+      servedTier: state.responseTier, characterEstimate, hostedSearch, requestTariffOutcome, requestCostReceipt };
+    if (state.charged) Object.assign(outcome, { billable: true, tokens: null, characterEstimate: null,
+      pricingUnavailable: state.factsCell.current.fixed == null, hostedSearch: undefined, requestTariffOutcome: "unknown", requestCostReceipt: undefined });
+    return startOwnedAccountingTerminal(this, outcome);
+  }
+  pricingFailure(tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null): Promise<boolean> {
+    return startOwnedAccountingTerminal(this, { occurredAtMs: Date.now(), statusCode: 502, status: "provider_error", billable: true,
+      tokens, reservation, contentRef, pricingUnavailable: true });
+  }
+  complete(response: Response, observed: ObservedUsage, reservation: BudgetReservation, contentRef: string | null,
+    termination?: UsageEvent["status"]): Promise<boolean> {
+    const state = ownedAccountingState(this), flags = state.flags;
+    if (flags.google) state.responseTier = googleResponseServiceTier(flags.requestedGoogleTier, observed.tokens?.serviceTier, response.headers.get("x-gemini-service-tier"));
+    const tokens = flags.google && observed.tokens ? { ...observed.tokens, serviceTier: state.responseTier } : observed.tokens;
+    if (flags.vertex && (observed.nonbillable || termination || observed.outcome === "provider_error")) state.charged = true;
+    const status = termination ?? (!response.ok ? response.status < 500 ? "client_error" : "provider_error" : observed.outcome ?? "success");
+    return this.settle(response.status, status, (response.ok || flags.nativeResponse) && !observed.nonbillable, tokens, reservation,
+      contentRef, observed.binaryComplete && observed.delivery === "complete" && response.ok && !termination ? flags.characterEstimate : null,
+      observed.hostedSearch, observed.requestTariffOutcome, observed.requestCostReceipt);
+  }
+  fail(statusCode: number, status: UsageEvent["status"], reservation = emptyReservation(), contentRef: string | null = null, dispatched = false): void {
+    const state = ownedAccountingState(this), registration = beginOwnedHttpSinkRegistration(state.sinks.ownedHttp!);
+    if (!state.waitUntil) completeOwnedHttpSinkRegistration(registration);
+    let original: Promise<boolean>;
+    try { original = this.settle(statusCode, status, dispatched, null, reservation, contentRef, null, undefined, dispatched ? "unknown" : "unsent"); }
+    catch (primary) {
+      try { abandonUnstartedOwnedHttpRegistration(registration); }
+      catch (cleanup) { throw new AggregateError([primary, cleanup], "owned accounting registration cleanup"); }
+      throw primary;
+    }
+    completeOwnedHttpSinkRegistration(registration, state.context, original);
+  }
+  async retireUnused(): Promise<void> {
+    const state = ownedAccountingState(this);
+    if (state.state !== 1) throw new TypeError("owned preparation accounting consumed");
+    state.state |= 4; state.custody.seal();
+    const receipt = await state.custody.completion;
+    if (!receipt.unused || receipt.failed) throw new TypeError("owned preparation accounting was used");
+    clearOwnedAccounting(this, state);
+  }
+}
+function makeOwnedAccountingCommand(http: OwnedHttpRequest, current: AccountingFacts, flags: AccountingFlags, sinks: AccountingSinks,
+    context: ExecutionContext, waitUntil: ((work: Promise<unknown>) => void) | undefined, custody: ProxyCompletion, preparation: boolean): OwnedHttpAccountingCommand {
+    const cap = Object.freeze(Object.create(OwnedHttpAccountingCommand.prototype)) as OwnedHttpAccountingCommand;
+    const state: OwnedAccountingState = { http, factsCell: { current }, flags, sinks, context, waitUntil, custody, state: preparation ? 1 : 0, charged: false };
+    (ownedAccountingStates ??= new WeakMap()).set(cap, state);
+    let records = ownedAccountingRequests?.get(http);
+    if (!records) { (ownedAccountingRequests ??= new WeakMap()).set(http, records = []); ownedAccountingRequestCount++; }
+    records.push(cap);
+    if (!preparation) { bindOwnedAccountingFacts(state.factsCell); acceptOwnedHttpAccountingCost(http, cap, current.cost); }
+    return cap;
+  }
+
+export type OwnedHttpPreparationAccounting = OwnedHttpAccountingCommand;
+function startOwnedAccountingTerminal(cap: OwnedHttpAccountingCommand, outcome: AccountingOutcome): Promise<boolean> {
+  const state = ownedAccountingState(cap);
+  if (state.state & 6) throw new TypeError("owned accounting consumed");
+  state.state |= 2;
+  const event = accountingReceipt(state.factsCell.current, outcome);
+  state.terminalEvent = event; state.terminalReservation = outcome.reservation;
+  try { return startOwnedHttpAccountingTerminal(state.http, cap, state.sinks, outcome.reservation, event, state.custody); }
+  finally { state.terminalEvent = undefined; state.terminalReservation = undefined; state.custody.seal(); }
+}
+export function matchesOwnedHttpAccountingCommand(http: OwnedHttpRequest, cap: OwnedHttpAccountingCommand, sinks?: AccountingSinks, custody?: ProxyCompletion, event?: UsageEvent, reservation?: BudgetReservation): boolean {
+  const state = ownedAccountingStates?.get(cap);
+  return !!state && state.http === http && (sinks === undefined || state.sinks === sinks && !!(state.state & 2) && state.custody === custody && state.terminalEvent === event && state.terminalReservation === reservation);
+}
+function clearOwnedAccounting(cap: OwnedHttpAccountingCommand, state: OwnedAccountingState): void {
+  unbindOwnedAccountingPlan(state.factsCell.current.cost); accountingFlags.delete(state.factsCell.current);
+  state.factsCell.current = undefined as never; state.flags = undefined as never; state.sinks = undefined as never;
+  state.context = undefined as never; state.waitUntil = undefined; state.http = undefined as never;
+  ownedAccountingStates!.delete(cap);
+}
+export function retireOwnedHttpAccountingCommands(http: OwnedHttpRequest): void {
+  checkOwnedHttpAccountingRetirement(http);
+  const commands = ownedAccountingRequests?.get(http);
+  if (!commands) return;
+  for (const cap of commands) { const state = ownedAccountingStates?.get(cap); if (state) clearOwnedAccounting(cap, state); }
+  commands.length = 0; ownedAccountingRequests!.delete(http);
+  if (!--ownedAccountingRequestCount) { ownedAccountingRequests = undefined; ownedAccountingStates = undefined; }
+}
+export function createOwnedHttpAccountingCommand(http: OwnedHttpRequest, options: AccountingContext, preparation = false): OwnedHttpAccountingCommand {
+  checkOwnedHttpRequest(http, options.request, options.env);
+  if (options.ownedHttp !== ownedHttpSinkOwner(http) || !options.completion || options.search !== undefined
+    || preparation && options.cost !== undefined || !matchesOwnedHttpAccountingInput(http, options.request, options.env, options.auth, options.selection))
+    throw new TypeError("owned accounting unavailable");
+  claimOwnedHttpAccountingFactory(http);
+  return createAccounting(options, preparation, http);
+}
+export function createOwnedHttpPreparationAccounting(http: OwnedHttpRequest, options: AccountingContext): OwnedHttpPreparationAccounting {
+  return createOwnedHttpAccountingCommand(http, options, true);
 }
 
-// This command cannot expose a cost or reserve a budget. Its early estimate and
-// failure receipt retain the ordinary ordering, but need no plan-map binding.
-export function createOwnedHttpPreparationAccounting(owner: OwnedHttpRequest, options: AccountingContext): OwnedHttpPreparationAccounting {
-  checkOwnedHttpRequest(owner, options.request, options.env);
-  if (options.ownedHttp !== ownedHttpSinkOwner(owner) || !options.completion
-    || options.cost !== undefined || options.search !== undefined)
-    throw new TypeError("owned preparation accounting unavailable");
-  growOwnedHttpRequest(owner, 512); // Closed facade, captured cells and empty-child join products.
-  let command: ReturnType<typeof createAccounting> | undefined = createAccounting(options, true);
-  let used = false;
-  options = undefined as never; owner = undefined as never;
-  return {
-    fail(statusCode, status, reservation, contentRef, dispatched) {
-      if (used || !command) throw new TypeError("owned preparation accounting consumed");
-      used = true; command.fail(statusCode, status, reservation, contentRef, dispatched);
-    },
-    close() {
-      if (command) accountingFlags.delete(command.facts);
-      try { command?.close(); } finally { command = undefined; }
-    },
-    async retireUnused() {
-      if (used || !command) throw new TypeError("owned preparation accounting consumed");
-      used = true;
-      const completion = command.completion;
-      accountingFlags.delete(command.facts);
-      try { command.close(); } finally { command = undefined; }
-      // No terminal work was started. Join only this empty child, never the
-      // encompassing HTTP completion or any delivery-dependent sink.
-      const receipt = await completion;
-      if (!receipt?.unused || receipt.failed) throw new TypeError("owned preparation accounting was used");
-    },
-  };
-}
-
-function createAccounting(options: AccountingContext, preparation: boolean) {
+function createAccounting(options: AccountingContext, preparation: boolean): ReturnType<typeof ownedProxyAccounting>;
+function createAccounting(options: AccountingContext, preparation: boolean, http: OwnedHttpRequest): OwnedHttpAccountingCommand;
+function createAccounting(options: AccountingContext, preparation: boolean, http?: OwnedHttpRequest): ReturnType<typeof ownedProxyAccounting> | OwnedHttpAccountingCommand {
   if (options.ownedHttp !== undefined) checkOwnedHttpSinkOwner(options.ownedHttp);
   const { env, context, auth, selection, request, compound } = options;
   for (const value of [auth.policyId, auth.policy.tenantId, auth.credentialId, auth.principalId, auth.authType,
@@ -380,6 +478,8 @@ function createAccounting(options: AccountingContext, preparation: boolean) {
   try {
     admitAccountingFacts(facts, undefined, !!options.search);
     if (facts.model && model) facts.model = { pricing: receiptPricing(model.pricing), upstream: model.upstream };
+    if (http) return makeOwnedAccountingCommand(http, immutableFacts(facts, false, flags), flags,
+      accountingSinks(env, options.ownedHttp), context, context.waitUntil?.bind(context), options.completion!.fork(), preparation);
     return ownedProxyAccounting(immutableFacts(facts, !!options.search, flags), accountingSinks(env, options.ownedHttp), context.waitUntil?.bind(context), options.search, flags, options.completion?.fork(), options.ownedHttp !== undefined ? context : undefined, preparation);
   } finally { if (preparation) accountingFlags.delete(facts); }
 }

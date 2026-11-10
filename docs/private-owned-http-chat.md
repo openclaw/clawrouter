@@ -1050,3 +1050,76 @@ JSON cases exercise the actual BYOB source. Every gate release is registered
 before dispatch, body roots remain memoized, and teardown releases before
 joining finite originals. These are authored witnesses, not runtime results;
 all local semantics remain UNRUN_CODE_ONLY_HOSTED.
+
+### Cohesive draft and accepted-usage admission boundary
+
+The subsequent code-only draft has a private completion-leaf operation, fixed
+terminal accounting, four separately owned soft-status readers, coalesced
+request/response snapshots and shared private stream commands. Registration
+keeps its dynamic scope but enrolls complete work without another child.
+Usage settlement, small deferred retention and status checking no longer keep
+callbacks in the generic proxy invocation's scope. These are implemented
+representation changes, not a completed DATA or CONTROL certificate.
+
+Status readers now observe closed work in a narrow method. Their real physical
+retirement removes the reader from its controller. Only then may its bounded
+diagnostic records become scalar history; ordinal, origin, primary presence,
+undefined presence and disposition remain retained. Final request retirement
+consumes that history in acquisition order through fixed scalar diagnostics
+before clearing it. A reporting failure retains UNKNOWN. This changes neither
+the decision's fail-open/cache rules nor the original joins. The earlier
+499-status and 428-terminal component envelopes describe older source blocks
+and cannot be carried as bounds for this draft.
+
+The adopted snapshot policy reveals a further source boundary. A genuine
+codec's modified downstream `read()` may return bytes that differ before the
+first controlled fulfillment capture. The private consumer captures those
+actual bytes and the usage inspector must consume them. The codec's earlier
+128-KiB frame validation therefore does not bound this later inspector's
+accepted frame. Its ordinary inspection limit remains 2 MiB.
+
+One exact source counterexample is the single SSE frame
+`data: {"extra":[[],[],…]}\n\n`, containing 600,000 empty arrays. A modified
+genuine read supplies this frame before capture; no caller-provided graph or
+capability is used. The eight-KiB normalizer cut still publishes promptly and
+hands the complete crossing bytes to the same reader's usage consumer.
+
+| Component | Exact value |
+| --- | ---: |
+| Captured ASCII frame | 1,800,019 bytes |
+| Unchanged usage wire ceiling | 2,097,152 bytes |
+| Parsed containers C | 600,002 |
+| Parsed property/index occurrences P | 600,001 |
+| Primitive value occurrences N | 0 |
+| Key UTF-16 units U | 5 |
+| Graph alone: `8(C+P+N)+2U` | 9,600,034 logical bytes |
+| Current usage component: `3×2 MiB + 15×128 KiB + 65,536` | 8,323,072 logical bytes |
+| Graph-only shortfall | 1,276,962 logical bytes |
+
+Frame SHA256:
+`70531d28a20cfd18b29552211e1310a60dbebd3c91981caa0061b83a2ec78fb8`.
+This calculation excludes the simultaneous frame buffer, decoded text,
+split/filter/join products, captured crossing backing and output aliases. It
+demonstrates an insufficient prospective component, not a measured heap
+overflow or a whole-pipeline bound. Independently earmarked capture/source
+credit cannot silently fund this parsed graph while those aliases remain.
+
+The actual allocation is `JSON.parse(data)` inside
+`createSseUsageInspector` in `token-usage.ts`. The current private caller cannot
+admit that exact frame's products immediately before their factories through
+the existing API. Copying the evidence parser into the proxy would duplicate
+the shared algorithm; treating the upstream validation as coverage would use
+different bytes; applying a new 128-KiB usage ceiling would reduce the profile.
+
+The smallest requested additional source boundary is a genuine private
+accepted-frame admission/consumption seam in `token-usage.ts`, retaining the
+shared evidence and full mixed-protocol accumulator semantics and leaving the
+ordinary API unchanged. Its concrete representation must admit actual captured
+bytes, all parsing products and cleanup before their factories. This is a
+proposal for that source only; it is not implemented or proof that the whole
+pipeline will fit afterward. No extra arena, source counter reset or profile
+change is proposed.
+
+The whole DATA table and the separate operation/source/read/terminal128 and
+synchronous512 upper bounds remain open. No runtime, publication or completed
+candidate qualification is claimed for this checkpoint.

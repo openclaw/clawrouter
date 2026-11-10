@@ -691,41 +691,101 @@ test('known HTTP preparation pressure denies BEFORE full admission can count or 
 });
 
 
+for (const streaming of [false, true]) for (const mode of ['capture-before', 'capture-after'])
+test('native accepted-byte capture preserves ' + mode + ' mutation policy and usage: ' + streaming, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const before = await settledState(f);
+    const release = async () => { assert.equal((await f.request('https://fixture/fixture/consumer-mode', { method: 'DELETE' })).status, 204); };
+    f.releases.push(release);
+    assert.equal((await f.request('https://fixture/fixture/consumer-mode', { method: 'POST', body: mode })).status, 204);
+    const response = await f.request('https://fixture/v1/chat/completions', chat('venice', { model: ownedHttpControlModels.venice, stream: streaming }));
+    assert.equal(response.status, 200);
+    const expected = mode === 'capture-before' ? 9 : 4;
+    assert.ok(response.text.includes('"prompt_tokens":' + expected));
+    const after = await settledState(f);
+    assert.equal(after.consumers.mutations, 1); assert.equal(after.consumers.oversizedOutput, 0, 'no future slab bytes exposed through buffer');
+    assert.equal(after.consumers.acquired, 1); assert.equal(after.consumers.replay, 0);
+    assert.equal(after.events.length - before.events.length, 1);
+    assert.equal(after.events.at(-1).input, expected, 'usage consumes actual accepted captured bytes, not codec identity');
+    assert.equal(after.events.at(-1).output, 3);
+    assert.equal(count(after, 'provider', '/chat/completions') - count(before, 'provider', '/chat/completions'), 1);
+  }, true);
+});
+
 for (const mode of [
   ...['before', 'after'].flatMap(order => ['success', 'undefined', 'primitive', 'shared'].map(kind => 'unlock-' + order + '-' + kind)),
   'closed-undefined', 'closed-shared', 'unlock-before-closed-shared',
-]) test('native consumer original ' + mode + ' is joined independently of public completion', { timeout: 120000 }, async t => {
+]) test('native request intake keeps its original ' + mode + ' before returning', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const before = await settledState(f), kind = mode.split('-').at(-1);
+    if (kind !== 'success') f.expectFailedRetirement(before.intakes.length);
+    const release = async () => { assert.equal((await f.request('https://fixture/fixture/consumer-mode', { method: 'DELETE' })).status, 204); };
+    f.releases.push(release);
+    assert.equal((await f.request('https://fixture/fixture/consumer-mode', { method: 'POST', body: 'intake-' + mode })).status, 204);
+    const dispatch = f.dispatch('https://fixture/v1/chat/completions', chat('chat'));
+    let delivered = false;
+    const observer = f.own(dispatch.outcome.then(() => { delivered = true; }));
+    let held;
+    for (;;) {
+      held = await state(f);
+      if (held.consumers.intake.held) break;
+      if (delivered) { await f.take(dispatch); assert.fail('intake returned before its actual hold'); }
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(delivered, false, 'request intake keeps cleanup-before-return ordering');
+    assert.equal(held.consumers.intake.live, 1); assert.equal(held.consumers.intake.unlock, 1);
+    assert.equal(held.consumers.intake.nativeUnlocked, mode.startsWith('unlock-after-') ? 0 : 1);
+    assert.equal(held.reasonReads + held.consumers.intake.reasonReads, 0);
+    assert.ok(held.charged > before.charged, 'the actual intake debit survives the hold');
+    assert.equal(count(held, 'authority', '/admission/resolve'), count(before, 'authority', '/admission/resolve'));
+    await release();
+    const response = await f.take(dispatch); await f.take(f.body(response)); await f.take(observer);
+    assert.equal(response.status, kind === 'success' || mode.startsWith('closed-') ? 200 : 500);
+    const after = await settledState(f), row = after.consumers.intake;
+    assert.equal(row.unlock, 1); assert.equal(row.nativeUnlocked, 1); assert.equal(row.unlockSettled, 1); assert.equal(row.live, 0);
+    assert.deepEqual(after.completed.at(-1).origins.map(value => value.origin), kind === 'success' ? []
+      : mode.startsWith('closed-') ? ['closed'] : mode.includes('-closed-') ? ['unlock', 'closed'] : ['unlock']);
+    assert.equal(row.reasonReads, 0);
+  }, true);
+});
+
+for (const stage of ['consumer', 'public']) for (const mode of [
+  ...['before', 'after'].flatMap(order => ['success', 'undefined', 'primitive', 'shared'].map(kind => 'unlock-' + order + '-' + kind)),
+  'closed-undefined', 'closed-shared', 'unlock-before-closed-shared',
+]) test('native ' + stage + ' original ' + mode + ' is joined independently of public completion', { timeout: 120000 }, async t => {
   await fixture(t, async f => {
     const before = await settledState(f), kind = mode.split('-').at(-1);
     if (kind !== 'success') f.expectFailedRetirement(before.intakes.length);
     const release = async () => { assert.equal((await f.request('https://fixture/fixture/consumer-mode', { method: 'DELETE' })).status, 204); };
     f.releases.push(release); // Before setup or dispatch can fail.
-    assert.equal((await f.request('https://fixture/fixture/consumer-mode', { method: 'POST', body: mode })).status, 204);
+    assert.equal((await f.request('https://fixture/fixture/consumer-mode', { method: 'POST', body: (stage === 'public' ? 'public-' : '') + mode })).status, 204);
     const dispatch = f.dispatch('https://fixture/v1/chat/completions', chat('venice', {
       model: ownedHttpControlModels.venice, ownedVeniceCase: 'compact-later-object128', stream: true,
     }));
     let held;
     for (;;) {
       held = await state(f);
-      if (held.consumers.held) break;
+      if ((stage === 'public' ? held.consumers.public : held.consumers).held) break;
       if (held.completed.length > before.completed.length) { await f.take(dispatch); assert.fail('consumer ended before returned-work arrival'); }
       await new Promise(resolve => setTimeout(resolve, 10));
     }
     const response = await f.take(dispatch); assert.equal(response.status, 200);
     const text = await f.take(f.body(response)); assert.ok(text.includes('data: [DONE]'), 'public output does not wait for independent retirement');
     held = await state(f);
-    assert.equal(held.completed.length, before.completed.length); assert.equal(held.consumers.live, 1);
+    const heldReader = stage === 'public' ? held.consumers.public : held.consumers;
+    assert.equal(held.completed.length, before.completed.length); assert.equal(heldReader.live, 1);
     assert.equal(held.consumers.acquired, 1); assert.equal(held.consumers.replay, 0);
-    assert.equal(held.consumers.unlock, 1); assert.equal(held.consumers.reasonReads, 0);
-    assert.equal(held.consumers.nativeUnlocked, mode.startsWith('unlock-after-') ? 0 : 1);
-    assert.equal(held.consumers.unlockSettled, mode.startsWith('closed-') ? 1 : 0);
+    assert.equal(heldReader.unlock, 1); assert.equal(heldReader.reasonReads, 0);
+    assert.equal(heldReader.nativeUnlocked, mode.startsWith('unlock-after-') ? 0 : 1);
+    assert.equal(heldReader.unlockSettled, mode.startsWith('closed-') ? 1 : 0);
     assert.ok(held.charged >= before.charged + 32 * 1024 * 1024);
     await release();
     const after = await settledState(f), origins = after.completed.at(-1).origins ?? [];
-    assert.equal(after.consumers.unlock, 1); assert.equal(after.consumers.nativeUnlocked, 1);
-    assert.equal(after.consumers.unlockSettled, 1); assert.equal(after.consumers.live, 0);
-    assert.equal(after.consumers.thenCalls, mode === 'unlock-after-success' ? 1 : 0);
-    assert.equal(after.consumers.reasonReads, 0); assert.ok(after.charged < held.charged);
+    const retiredReader = stage === 'public' ? after.consumers.public : after.consumers;
+    assert.equal(retiredReader.unlock, 1); assert.equal(retiredReader.nativeUnlocked, 1);
+    assert.equal(retiredReader.unlockSettled, 1); assert.equal(retiredReader.live, 0);
+    assert.equal(retiredReader.thenCalls, mode === 'unlock-after-success' ? 1 : 0);
+    assert.equal(retiredReader.reasonReads, 0); assert.ok(after.charged < held.charged);
     assert.deepEqual(origins.map(value => value.origin), kind === 'success' ? [] : mode.startsWith('closed-') ? ['closed']
       : mode.includes('-closed-') ? ['unlock', 'closed'] : ['unlock']);
     assert.ok(origins.every(value => value.undefined === (kind === 'undefined')));

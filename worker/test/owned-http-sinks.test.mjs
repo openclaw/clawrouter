@@ -64,46 +64,47 @@ async function fixture(t, env, run) {
   if (hasPrimary) throw primary;
 }
 
-for (const failed of [false, true]) test(`private preparation accounting ${failed ? 'settles one early failure' : 'retires unused without joining a held sibling'}`, async t => {
-  const env = environment(), events = [];
-  env.USAGE_QUEUE.send = async value => { events.push(structuredClone(value)); };
+test('a genuine sink does not authorize caller-supplied preparation identity or request', async t => {
+  const env = environment();
   await fixture(t, env, async f => {
     const provider = snapshot.providers.find(value => value.id === 'fireworks');
     const endpoint = provider.endpoints.find(value => value.request_format === 'openai.chat_completions');
-    const completion = ownedHttpCompletion(f.cap), gate = deferred();
-    f.releases.push(() => gate.resolve());
-    f.own(completion.start(() => gate.promise));
-    const accountingCompletion = completion.fork();
-    f.releases.push(() => accountingCompletion.seal());
+    const completion = ownedHttpCompletion(f.cap).fork();
+    f.releases.push(() => completion.seal());
     const options = { env, request: f.request, context: { waitUntil: value => { f.own(value); } },
-      completion: accountingCompletion, ownedHttp: f.sink,
+      completion, ownedHttp: f.sink,
       auth: { ...auth, authType: 'proxy_key', policy: { ...auth.policy, requestCostMicros: 1 } },
       selection: { provider, endpoint, model: null, capability: 'llm.chat', method: 'POST', body: { messages: [] } } };
     const before = bodyBudgetCharged();
-    assert.throws(() => createOwnedHttpPreparationAccounting(f.cap, { ...options, request: new Request('https://router.example/other') }));
-    assert.equal(bodyBudgetCharged(), before, 'mixed request rejected before metadata admission');
-    const command = createOwnedHttpPreparationAccounting(f.cap, options);
-    try {
-      assert.equal(bodyBudgetCharged(), before + 512, 'facade and empty-child join prospectively funded');
-      assert.deepEqual(Object.keys(command).sort(), ['close', 'fail', 'retireUnused']);
-      if (failed) {
-        command.fail(403, 'denied');
-        await assert.rejects(command.retireUnused(), /consumed/);
-      } else {
-        await f.take(f.own(command.retireUnused()));
-        assert.equal(events.length, 0, 'unused preparation creates no usage event');
-        assert.throws(() => command.fail(403, 'denied'), /consumed/);
-      }
-    } finally { command.close(); accountingCompletion.seal(); }
-    gate.resolve();
-    // The early-failure original is owned by waitUntil above. Its observer is
-    // joined by fixture cleanup; no second settlement or plan is reconstructed.
-    if (failed) {
-      completion.seal(); await f.take(f.own(completion.completion));
-      assert.equal(events.length, 1); assert.equal(events[0].status_code, 403);
-      assert.equal(events[0].status, 'denied'); assert.equal(events[0].actual_cost_micros, 0);
+    for (const request of [f.request, new Request('https://router.example/other')]) {
+      assert.throws(() => createOwnedHttpPreparationAccounting(f.cap, { ...options, request }));
+      assert.equal(bodyBudgetCharged(), before, 'closed invocation provenance precedes metadata factories');
     }
+    completion.seal();
   });
+});
+
+for (const kind of ['undefined', 'shared']) test(`retired sink diagnostics consume every ${kind} origin once in acquisition order`, async t => {
+  const reports = [], first = deferred(), second = deferred(), env = environment();
+  let calls = 0, reads = 0;
+  const reason = kind === 'undefined' ? undefined : Object.freeze({
+    get message() { reads++; throw Error('foreign failure must stay opaque'); },
+    get stack() { reads++; throw Error('foreign failure must stay opaque'); },
+  });
+  t.mock.method(console, 'warn', function (...fields) { reports.push(fields); });
+  env.USAGE_QUEUE.send = function () { return ++calls === 1 ? first.promise : second.promise; };
+  await fixture(t, env, async f => {
+    f.releases.push(() => first.reject(reason), () => second.reject(reason));
+    const a = f.own(ownedHttpQueueSend(f.sink, env.USAGE_QUEUE, event));
+    const b = f.own(ownedHttpQueueSend(f.sink, env.USAGE_QUEUE, event));
+    second.reject(reason); await assert.rejects(f.take(b), error => ownedHttpFailureMetadata(error)?.origin === 'queue');
+    first.reject(reason); await assert.rejects(f.take(a), error => ownedHttpFailureMetadata(error)?.origin === 'queue');
+    assert.equal(reports.length, 0, 'reporting waits for actual request retirement');
+  });
+  assert.equal(reads, 0); assert.equal(calls, 2); assert.equal(reports.length, 2);
+  assert.ok(reports.every(row => row[0] === 'owned_http_diagnostic' && row[1] === 'queue'
+    && row[3] === true && row[4] === true && row[5] === (kind === 'undefined') && row[6] === 0));
+  assert.ok(reports[0][2] < reports[1][2], 'arrival order does not reorder acquired origins');
 });
 
 function guardedReason() {
