@@ -46,7 +46,10 @@ export interface AdmissionResult {
   snapshots?: Record<string, AdmissionPoolSnapshot>;
 }
 
-interface AdmissionStore {
+export interface AdmissionStore {
+  readPrivate?<T>(key: string): Promise<T | null>;
+  privateResult?(result: AdmissionResult): void;
+  privatePool?(provider: AdmissionProvider, policyId: string, tenantId: string): AdmissionPool;
   identity?: IdentitySourceBudget;
   finishSelection?(input: AdmissionRequest, result: AdmissionResult): Promise<AdmissionResult>;
   getCredential(id: string): ProxyCredentialEntry | null;
@@ -83,7 +86,7 @@ export async function prepareCredentialPreflight(input: { credentialId: string }
 
 export async function resolveAdmission(env: Env, input: AdmissionRequest, store: AdmissionStore): Promise<AdmissionResult> {
   if (store.identity) { admitIdentity(input); admitIdentityCount(input.providers?.length ?? 0, 128); }
-  const read = <T>(key: string): Promise<T | null> => store.identity ? readIdentityKv<T>(() => env.POLICY_KV.get(key, "stream"), store.identity) : env.POLICY_KV.get<T>(key, "json");
+  const read = <T>(key: string): Promise<T | null> => store.readPrivate ? store.readPrivate<T>(key) : store.identity ? readIdentityKv<T>(() => env.POLICY_KV.get(key, "stream"), store.identity) : env.POLICY_KV.get<T>(key, "json");
   // Use the same import fences as the single-purpose resolvers. Every KV
   // await is followed by guarded initialization and a canonical reread.
   const video = input.video === videoControlVersion;
@@ -112,6 +115,7 @@ export async function resolveAdmission(env: Env, input: AdmissionRequest, store:
     credential = store.getCredential(input.credentialId);
   }
   const result: AdmissionResult = { credential, policy: null, owner: null, connections: [], pools: {} };
+  store.privateResult?.(result);
   if (!credential) return result;
   // A wrong secret stops before policy, connection and pool reads, so a known key
   // id cannot make the global authority do pool work. The Worker re-verifies.
@@ -151,27 +155,54 @@ export async function resolveAdmission(env: Env, input: AdmissionRequest, store:
     }
   }
   const providers = input.providers ?? [];
-  const ids = [...new Set(providers.filter(provider => input.allConnections || !policy.policy.providers.length || policy.policy.providers.includes(provider.id)).map(provider => provider.id))];
-  try {
-    let connections = store.resolveConnections(ids);
-    if (search && connections.missingProviderIds.length) searchUnavailable();
-    if (!search && !connections.initialized && (input.allConnections || connections.missingProviderIds.length)) {
-      const seeded: ProviderConnection[] = [];
-      for (const id of connections.missingProviderIds) { const value = await read<ProviderConnection>(`connections/${id}`); if (value) seeded.push(value); }
-      if (store.identity) admitIdentity(seeded);
-      store.initializeConnections(seeded);
-      if (input.allConnections) store.putMeta("connections_global_initialized");
-      connections = store.resolveConnections(ids);
+  if (store.readPrivate) {
+    // One original missing record at a time: no retained missing-id or raw
+    // backfill batch across KV awaits. The parsed providers remain borrowed.
+    try {
+      const initialized = store.hasMeta("connections_global_initialized");
+      for (let index = 0; index < providers.length; index++) {
+        const id = providers[index].id;
+        if (!input.allConnections && policy.policy.providers.length && !policy.policy.providers.includes(id)) continue;
+        let duplicate = false;
+        for (let before = 0; before < index; before++) if (providers[before].id === id) { duplicate = true; break; }
+        if (duplicate) continue;
+        let current = store.resolveConnections([id]);
+        if (!initialized && (input.allConnections || current.missingProviderIds.length)) {
+          // An existing row does not need another KV read even for allConnections.
+          if (current.missingProviderIds.length) {
+            let value = await read<ProviderConnection>(`connections/${id}`);
+            try { if (value) store.initializeConnections([value]); } finally { value = null; }
+          }
+          current = store.resolveConnections([id]);
+        }
+        if (current.connections.length) result.connections.push(current.connections[0]);
+      }
+      if (!initialized && input.allConnections) store.putMeta("connections_global_initialized");
+    } catch (error) { if (isIdentityFailure(error)) throw error; result.connectionsUnavailable = true; }
+  } else {
+    const ids = [...new Set(providers.filter(provider => input.allConnections || !policy.policy.providers.length || policy.policy.providers.includes(provider.id)).map(provider => provider.id))];
+    try {
+      let connections = store.resolveConnections(ids);
+      if (search && connections.missingProviderIds.length) searchUnavailable();
+      if (!search && !connections.initialized && (input.allConnections || connections.missingProviderIds.length)) {
+        const seeded: ProviderConnection[] = [];
+        for (const id of connections.missingProviderIds) { const value = await read<ProviderConnection>(`connections/${id}`); if (value) seeded.push(value); }
+        if (store.identity) admitIdentity(seeded);
+        store.initializeConnections(seeded);
+        if (input.allConnections) store.putMeta("connections_global_initialized");
+        connections = store.resolveConnections(ids);
+      }
+      result.connections = connections.connections;
+    } catch (error) { if (isIdentityFailure(error)) throw error;
+      // The Worker must check the secret and policy/model before surfacing a
+      // provider-read failure, just as it did with separate RPCs.
+      result.connectionsUnavailable = true;
     }
-    result.connections = connections.connections;
-  } catch (error) { if (isIdentityFailure(error)) throw error;
-    // The Worker must check the secret and policy/model before surfacing a
-    // provider-read failure, just as it did with separate RPCs.
-    result.connectionsUnavailable = true;
   }
   for (const provider of providers) {
     if (policy.policy.providers.length && !policy.policy.providers.includes(provider.id)) continue;
-    try { result.pools[provider.id] = store.resolveGrantPool({ providerId: provider.id, policyId, tenantId: policy.policy.tenantId ?? "default", defaultKeys: cover ? [] : [`oauth/${policyId}/${provider.tokenRef}`, `oauth/tenants/${policy.policy.tenantId ?? "default"}/${provider.tokenRef}`] }); }
+    try { result.pools[provider.id] = store.privatePool ? store.privatePool(provider, policyId, policy.policy.tenantId ?? "default")
+      : store.resolveGrantPool({ providerId: provider.id, policyId, tenantId: policy.policy.tenantId ?? "default", defaultKeys: cover ? [] : [`oauth/${policyId}/${provider.tokenRef}`, `oauth/tenants/${policy.policy.tenantId ?? "default"}/${provider.tokenRef}`] }); }
     catch (error) { if (isIdentityFailure(error)) throw error; result.pools[provider.id] = { keys: [], states: {}, hasAttachment: false, unavailable: true }; }
   }
   if (store.identity) admitAdmission(result);
@@ -181,4 +212,21 @@ export async function resolveAdmission(env: Env, input: AdmissionRequest, store:
 export async function genuineLegacyKey(env: Env, id: string, boundedRead?: (key: string) => Promise<Record<string, unknown> | null>): Promise<Record<string, unknown> | null> {
   const value = boundedRead ? await boundedRead(`keys/${id}`) : await env.POLICY_KV.get<Record<string, unknown>>(`keys/${id}`, "json");
   return value && (value.generation == null || value.generation === "legacy") ? value : null;
+}
+
+// Private default-key planning borrows JSON components. Array template coercion
+// is visited in join order without constructing the potentially megabyte string.
+function* privateTemplateParts(value: unknown, arrayEntry = false): Generator<string> {
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index++) {
+      if (index) yield ",";
+      yield* privateTemplateParts(value[index], true);
+    }
+  } else if (!arrayEntry || value != null) yield String(value);
+}
+export function* privateDefaultKeyParts(policyId: string, tenantId: string, tokenRef: unknown, tenant: boolean): Generator<string> {
+  yield tenant ? "oauth/tenants/" : "oauth/";
+  yield* privateTemplateParts(tenant ? tenantId : policyId);
+  yield "/";
+  yield* privateTemplateParts(tokenRef);
 }

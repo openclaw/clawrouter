@@ -1,0 +1,122 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { startWorkerdFixture } from '../../test/helpers/workerd.mjs';
+
+const router = String.raw`
+import {PolicyBindingIndexObject as Base} from './worker/authority.ts';
+export {BudgetLedgerObject,UsageLedgerObject,GrantCredentialObject} from './worker/index.ts';
+import {preflightCredential,consumeCredentialPreflight,completeCredentialAdmission,releaseCredentialPreflight,releaseCredentialPreflightContinuation} from './worker/credential-preflight.ts';
+import {bodyBudgetCharged} from './worker/body-budget.ts';
+import {identitySourceBudget} from './worker/identity-admission.ts';
+const digest='ab'.repeat(32),rotated='cd'.repeat(32),selectedKey='oauth/native-bridge-policy/anthropic';
+const check=(ok,label)=>{if(!ok)throw Error(label);};
+const record=secret=>({enabled:true,secretSha256:secret,policyId:'native-bridge-policy',policyGeneration:'legacy',principalId:null});
+function observe(body,row){
+ const get=body.getReader.bind(body);
+ body.getReader=options=>{row.byob=options?.mode==='byob';const reader=get(options),read=reader.read.bind(reader),unlock=reader.releaseLock.bind(reader);
+  reader.read=(...args)=>{row.reads++;const actual=read(...args);void actual.then(part=>{if(part.done)row.eof=true;if(part.value)row.backing=Math.max(row.backing,part.value.buffer.byteLength);},()=>{});return actual;};
+  reader.releaseLock=()=>{unlock();row.unlocked=!body.locked;};return reader;
+ };return body;
+}
+export class PolicyBindingIndexObject extends Base {
+ constructor(state,env){
+  const sql=state.storage.sql,native=env.POLICY_KV,get=native.get.bind(native),trace={kv:[],writes:0,intakes:0};let mode='healthy';
+  const kv=new Proxy(native,{get(target,key){if(key==='get')return async(name,type)=>{
+   const result=await get(name,type);
+   if(type==='stream'&&result){const row={byob:false,reads:0,eof:false,unlocked:false,backing:0};trace.kv.push(row);observe(result,row);
+    if(mode==='rotation'&&name==='policies/native-bridge-policy')sql.exec('INSERT OR REPLACE INTO proxy_credentials(credential_id,credential_json) VALUES(?,?)','nativebridge',JSON.stringify(record(rotated)));
+   }return result;
+  };const result=Reflect.get(target,key,target);return typeof result==='function'?result.bind(target):result;}});
+  const storage=new Proxy(state.storage,{get(target,key){if(key==='sql')return {exec(query,...args){if(/^(INSERT|UPDATE|DELETE)/.test(query))trace.writes++;return sql.exec(query,...args);}};
+   const result=Reflect.get(target,key,target);return typeof result==='function'?result.bind(target):result;}});
+  super({storage},new Proxy(env,{get(target,key,receiver){if(key==='CLAWROUTER_OPTIONAL_CONFIG_KEYS'&&mode==='configuration'){trace.configurationReads=(trace.configurationReads??0)+1;return 'A,'.repeat(1677721)+'A';}return key==='POLICY_KV'?kv:Reflect.get(target,key,receiver);}}));
+  const intake=this.completePrivateAdmission;this.completePrivateAdmission=(...args)=>{trace.intakes++;return Reflect.apply(intake,this,args);};
+  this.snapshot=()=>({trace,charged:this.preflightArena?.charged??0,credentials:[...sql.exec('SELECT credential_json FROM proxy_credentials')].length,policies:[...sql.exec('SELECT policy_json FROM access_policies')].length,selection:[...sql.exec('SELECT selected_count FROM upstream_grant_selection')].map(row=>row.selected_count)});
+  this.configure=value=>{mode=value;sql.exec('DELETE FROM proxy_credentials');sql.exec('DELETE FROM access_policies');sql.exec('DELETE FROM policy_binding_meta');sql.exec('DELETE FROM provider_connections');sql.exec('DELETE FROM upstream_grant_projections');sql.exec('DELETE FROM upstream_grant_selection');sql.exec('DELETE FROM upstream_grant_pool_cursors');sql.exec('DELETE FROM upstream_grant_pool_versions');if(mode==='selection'||mode==='configuration')sql.exec('INSERT INTO upstream_grant_pool_versions(grant_key,generation,revision) VALUES(?,?,?)',selectedKey,1,7);trace.kv=[];trace.writes=0;trace.intakes=0;trace.configurationReads=0;};
+ }
+ async fetch(request){
+  const path=new URL(request.url).pathname;
+  if(path==='/fixture/configure'){this.configure(await request.text());return new Response('configured');}
+  if(path==='/fixture/result')return Response.json(this.snapshot());
+  return super.fetch(request);
+ }
+}
+export default {async fetch(request,env){
+ const mode=new URL(request.url).pathname.slice(1),stub=env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName('policy-bindings'));
+ const roots=[];let proof,continuation,handle,hasPrimary=false,primary;
+ const own=promise=>{const root={outcome:promise.then(value=>({failed:false,value}),error=>({failed:true,error})),used:false};roots.push(root);return root;};
+ const take=async root=>{const result=await root.outcome;root.used=true;if(result.failed)throw result.error;return result.value;};
+ const rpc=async(path,body,headers)=>{const response=await take(own(stub.fetch('https://authority'+path,{method:'POST',body,headers})));const text=await take(own(response.text()));return {status:response.status,body:text?JSON.parse(text):null};};
+ let result;const baseline=bodyBudgetCharged();
+ try{
+  const configured=await take(own(stub.fetch('https://authority/fixture/configure',{method:'POST',body:mode})));await take(own(configured.text()));check(configured.status===200,'configure');
+  await env.POLICY_KV.put('credentials/nativebridge',JSON.stringify(record(digest)));
+  await env.POLICY_KV.put('policies/native-bridge-policy',JSON.stringify({enabled:true,generation:'legacy',providers:[],requestCostMicros:7}));
+  if(mode==='selection'||mode==='configuration'){
+   await env.POLICY_KV.put('connections/anthropic',JSON.stringify({providerId:'anthropic',enabled:true}));
+   await env.POLICY_KV.put(selectedKey,JSON.stringify({provider:'anthropic',kind:'api_key',enabled:true,credentialStore:'durable_object',credentialGeneration:1,credentialLineage:'synthetic',credentialStatus:'active',hasCredential:true}));
+  }
+  if(mode==='healthy'||mode==='selection'){
+   const preflight=await take(own(preflightCredential(env,'nativebridge',digest)));check(preflight.outcome==='matched','preflight');proof=preflight.proof;
+   continuation=consumeCredentialPreflight(proof,env,'nativebridge',digest);proof=undefined;
+   const admission=mode==='selection'?{providers:[{id:'anthropic',tokenRef:'anthropic'}],selection:{providerId:'anthropic',endpointId:'messages',mode:'http',capability:'llm.messages'}}:{providers:[]};
+   const consumed=continuation,operation=completeCredentialAdmission(consumed,admission);continuation=undefined;handle=await take(own(operation));
+   check(bodyBudgetCharged()-baseline===32*1024*1024,'full result remains funded');check(Object.keys(handle).join(',')==='dispose'&&JSON.stringify(handle)==='{}','opaque');
+   handle.dispose();handle=undefined;result={status:200,opaque:true};
+  }else{
+   const source=identitySourceBudget();if(mode==='limited')source.values=131050;
+   const reply=await rpc('/admission/resolve',JSON.stringify({admission:{credentialId:'nativebridge',secretSha256:digest,providers:mode==='configuration'?[{id:'anthropic',tokenRef:'anthropic'}]:[],...(mode==='configuration'?{selection:{providerId:'anthropic',endpointId:'messages',mode:'http',capability:'llm.messages'}}:{})},source}),{'content-type':'application/json','x-clawrouter-private-admission':'v1'});
+   check(reply.status===(mode==='limited'||mode==='configuration'?503:200),'private status');
+   if(mode==='rotation')check(reply.body.admission.credential.credential.secretSha256===rotated&&!reply.body.admission.selection,'final canonical winner');
+   if(mode==='limited'||mode==='configuration')check(reply.body.error.code==='identity_admission_unavailable','capacity classification');
+   result={status:reply.status,rotation:mode==='rotation'};
+  }
+ }catch(error){hasPrimary=true;primary=error;}
+ const failures=[];
+ for(let i=0;i<roots.length;i++){const outcome=await roots[i].outcome;if(outcome.failed&&!roots[i].used){roots[i].used=true;failures.push(outcome.error);}}
+ try{if(handle)handle.dispose();else if(continuation)releaseCredentialPreflightContinuation(continuation);else if(proof)releaseCredentialPreflight(proof);}catch(error){failures.push(error);}
+ if(failures.length)throw new AggregateError(hasPrimary?[primary,...failures]:failures,'native bridge cleanup');if(hasPrimary)throw primary;
+ const snapshot=await rpc('/fixture/result','');check(bodyBudgetCharged()===baseline,'worker charge retired');
+ check(snapshot.body.charged===0,'DO original producer retired');
+ if(mode==='selection')check(snapshot.body.selection.length===1&&snapshot.body.selection[0]===1,'one actual selection effect');
+ if(mode==='configuration')check(snapshot.body.trace.configurationReads===1&&snapshot.body.selection.length===0,'bounded configuration owner');
+ if(mode==='limited'||mode==='configuration')check(snapshot.body.trace.writes===0&&snapshot.body.credentials===0&&snapshot.body.policies===0,'zero writes');
+ for(const row of snapshot.body.trace.kv)check(row.byob&&row.reads>0&&row.eof&&row.unlocked&&row.backing<=16384,'original native KV owner');
+ return Response.json({...result,charged:bodyBudgetCharged()-baseline,sql:snapshot.body});
+}};
+`;
+const upstream = `export default {fetch(){throw Error('private bridge must not dispatch');}}`;
+test('inactive private continuation through actual Workerd KV/RPC/SQLite and opaque original result custody', { timeout: 120000 }, async t => {
+  let runtime, directory, hasPrimary = false, primary, finished = false, cleanupPromise;
+  const roots = [];
+  const own = promise => { const root = { outcome: promise.then(value => ({ failed: false, value }), error => ({ failed: true, error })), used: false }; roots.push(root); return root; };
+  const take = async root => { const result = await root.outcome; root.used = true; if (result.failed) throw result.error; return result.value; };
+  const cleanup = () => cleanupPromise ??= (async () => {
+    const errors = [];
+    for (let i = 0; i < roots.length; i++) { const result = await roots[i].outcome; if (result.failed && !roots[i].used) { roots[i].used = true; errors.push(result.error); } }
+    if (runtime) try { await runtime.dispose(); } catch (error) { errors.push(error); }
+    if (directory) try { await rm(directory, { recursive: true, force: true }); } catch (error) { errors.push(error); }
+    return errors;
+  })();
+  t.after(async () => { if (!finished) { const errors = await cleanup(); if (errors.length) throw new AggregateError(errors, 'native fixture cleanup'); } });
+  try {
+    directory = await mkdtemp(join(tmpdir(), 'private-admission-workerd-'));
+    runtime = await take(own(startWorkerdFixture(directory, router, upstream, { preventEviction: true })));
+    for (const mode of ['healthy', 'rotation', 'limited', 'selection', 'configuration']) {
+      const response = await take(own(runtime.dispatchFetch('https://fixture/' + mode)));
+      const text = await take(own(response.text())); assert.equal(response.status, 200);
+      const result = JSON.parse(text); assert.equal(result.charged, 0); assert.equal(result.sql.charged, 0);
+      assert.equal(result.sql.trace.intakes, 1); assert.equal(result.status, mode === 'limited' ? 503 : 200);
+      if (mode === 'healthy') { assert.equal(result.opaque, true); assert.equal(result.sql.credentials, 1); assert.equal(result.sql.policies, 1); }
+      if (mode === 'selection') { assert.equal(result.opaque, true); assert.deepEqual(result.sql.selection, [1]); assert.ok(result.sql.trace.kv.length >= 3); }
+      if (mode === 'rotation') assert.equal(result.rotation, true);
+      if (mode === 'limited') assert.equal(result.sql.trace.writes, 0);
+    }
+  } catch (error) { hasPrimary = true; primary = error; }
+  const failures = await cleanup(); finished = true;
+  if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, 'native bridge outcomes');
+  if (hasPrimary) throw primary;
+});

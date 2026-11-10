@@ -1,10 +1,10 @@
 import type { Env } from "./types";
-import { advanceIdentitySource, identityFailure, identityPlan, identitySourceBudget,
+import { admitAdmission, admitIdentity, advanceIdentitySource, identityFailure, identityPlan, identitySourceBudget,
   identitySourceSnapshot, type IdentitySourceBudget } from "./identity-admission.ts";
-import { PreflightTicket } from "./credential-preflight-arena.ts";
-import { checkPreflightIdentity, credentialPreflightHeader, credentialPreflightNamespace,
+import { admitBridgeFactories, admissionBridgePhasePayload, reserveAdmissionScratch, retireAdmissionScratch, PreflightTicket } from "./credential-preflight-arena.ts";
+import { admissionContinuationHeader, admissionContinuationVersion, admissionContinuationPath, closeAdmissionEnvelope, type AdmissionContinuationEnvelope, checkPreflightIdentity, credentialPreflightHeader, credentialPreflightNamespace,
   credentialPreflightPath, credentialPreflightVersion } from "./credential-preflight-protocol.ts";
-import { consumePreflightReply } from "./credential-preflight-source.ts";
+import { consumeAdmissionBridge, consumePreflightReply } from "./credential-preflight-source.ts";
 
 // Deliberately no caller from ordinary admission/preverification. These empty
 // carriers grant neither identity nor authentication and have no wire encoding.
@@ -68,7 +68,7 @@ async function run(owner: Owner, signal?: AbortSignal): Promise<CredentialPrefli
 }
 function retireOwner(owner: Owner): void {
   owner.kid = ""; owner.digest = ""; owner.binding = undefined as never;
-  owner.ticket.release();
+  retireAdmissionScratch(owner.ticket); owner.ticket.release();
 }
 function ownerOf(proof: CredentialPreflightProof, env: Pick<Env, "ACCESS_CONTROL">, kid: string, digest: string): Owner {
   const owner = proofs.get(proof);
@@ -95,4 +95,90 @@ export function releaseCredentialPreflightContinuation(continuation: CredentialP
   const owner = continuations.get(continuation);
   if (!owner) throw identityFailure("protocol");
   continuations.delete(continuation); retireOwner(owner);
+}
+
+// Inactive continuation: the caller never receives the full admission graph.
+export interface PrivateAdmissionHandle { dispose(): void }
+type AdmissionOwner = Owner & { admission?: import("./authority-admission.ts").AdmissionResult };
+const admissions = new WeakMap<PrivateAdmissionHandle, AdmissionOwner>();
+function disposeAdmission(this: PrivateAdmissionHandle): void {
+  const owner = admissions.get(this);
+  if (!owner) throw identityFailure("protocol");
+  admissions.delete(this); owner.admission = undefined; retireOwner(owner);
+}
+export function completeCredentialAdmission(continuation: CredentialPreflightContinuation,
+  input: Omit<import("./authority-admission.ts").AdmissionRequest, "credentialId" | "secretSha256"> & { credentialId?: string; secretSha256?: string },
+  signal?: AbortSignal): Promise<PrivateAdmissionHandle> {
+  const owner = continuations.get(continuation);
+  if (!owner) throw identityFailure("protocol");
+  admitIdentity(input);
+  if (input.credentialId !== undefined && input.credentialId !== owner.kid
+    || input.secretSha256 !== undefined && input.secretSha256 !== owner.digest
+    || input.cover !== undefined || input.video !== undefined || input.search !== undefined) throw identityFailure("protocol");
+  // Validate the bridge inventory before consuming the single-use owner.
+  admitBridgeFactories();
+  continuations.delete(continuation);
+  const operation = runAdmission(owner, input, signal);
+  void operation.then(() => undefined, () => undefined);
+  return operation;
+}
+async function runAdmission(owner: AdmissionOwner, input: Record<string, unknown>, signal?: AbortSignal): Promise<PrivateAdmissionHandle> {
+  let body: string | undefined, init: RequestInit | undefined, request: unknown;
+  let sent: IdentitySourceBudget | undefined, replySource: IdentitySourceBudget | undefined;
+  let reply: AdmissionContinuationEnvelope<import("./authority-admission.ts").AdmissionResult> | null | undefined;
+  let stub: DurableObjectStub | undefined, retained = false;
+  // Source-proven Worker overlap includes outgoing text, reply wire/text/graph,
+  // flattening and the current decoded chunk. This is an application component
+  // bound, not a fabricated byte backing in PASSIVE_SCRATCH_DATA.
+  const worker = admissionBridgePhasePayload.workerReply;
+  let phase: ReturnType<typeof reserveAdmissionScratch> | undefined;
+  try {
+    phase = reserveAdmissionScratch(owner.ticket, worker.admittedRepresentations + worker.flatten + worker.decodedChunk,
+      { C: 0, P: 0, N: 0, U: 0, B: 0 });
+    sent = identitySourceSnapshot(owner.source);
+    // Visit original borrowed fields and the exact owner replacements BEFORE
+    // constructing the inner spread or either outer carrier. Replacement keys
+    // keep their original position; new keys append in object-literal order.
+    const plan = identityPlan();
+    plan.object(0, field => {
+      field("admission", undefined, () => plan.object(1, member => {
+        for (const key in input) if (Object.hasOwn(input, key)) member(key,
+          key === "credentialId" ? owner.kid : key === "secretSha256" ? owner.digest : input[key]);
+        if (!Object.prototype.propertyIsEnumerable.call(input, "credentialId")) member("credentialId", owner.kid);
+        if (!Object.prototype.propertyIsEnumerable.call(input, "secretSha256")) member("secretSha256", owner.digest);
+      }));
+      field("source", sent);
+    });
+    request = { admission: { ...input, credentialId: owner.kid, secretSha256: owner.digest }, source: sent };
+    body = JSON.stringify(request); request = undefined; input = undefined as never;
+    init = { method: "POST", headers: { "content-type": "application/json", [admissionContinuationHeader]: admissionContinuationVersion }, body, signal, redirect: "manual" };
+    stub = owner.binding.get(owner.binding.idFromName(owner.namespace));
+    replySource = identitySourceBudget();
+    reply = await consumeAdmissionBridge(owner.ticket, () => stub!.fetch(`https://authority${admissionContinuationPath}`, init), replySource, "complete", (value, response) => {
+      if (!response?.ok) {
+        const error = (value as { error?: { code?: unknown; message?: unknown } })?.error;
+        if (response?.status === 503 && error?.code === "identity_admission_unavailable") {
+          for (const kind of ["limit", "protocol", "transport", "cleanup"] as const) if (error.message === `Identity admission failed (${kind})`) throw identityFailure(kind);
+          throw identityFailure("protocol");
+        }
+        throw new Error("Authority identity query failed");
+      }
+      const closed = closeAdmissionEnvelope<import("./authority-admission.ts").AdmissionResult>(value);
+      admitAdmission(closed.admission);
+      return closed;
+    }, signal, undefined, "continuation");
+    if (!reply) throw identityFailure("protocol");
+    if (signal?.aborted) throw identityFailure("transport");
+    advanceIdentitySource(owner.source, sent, reply.source, replySource);
+    owner.admission = reply.admission;
+    body = undefined; init = undefined; request = undefined; reply = undefined; sent = undefined; replySource = undefined; stub = undefined; signal = undefined;
+    // Full graph remains under the SAME 32 MiB ticket. No scalar shrink/GC credit.
+    const handle = Object.freeze({ dispose: disposeAdmission });
+    admissions.set(handle, owner); retained = true;
+    return handle;
+  } finally {
+    body = undefined; init = undefined; request = undefined; reply = undefined; sent = undefined; replySource = undefined; stub = undefined; signal = undefined; input = undefined as never;
+    phase?.retire();
+    if (!retained) { owner.admission = undefined; retireOwner(owner); }
+  }
 }

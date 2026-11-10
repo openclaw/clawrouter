@@ -37,3 +37,14 @@ export function closePreflightReply(value: unknown): CredentialPreflightReply {
   if (value.outcome !== "unknown" && value.outcome !== "invalid" && value.outcome !== "matched") throw identityFailure("protocol");
   return { outcome: value.outcome, source: identitySourceSnapshot(value.source) };
 }
+
+// Private bridge selector. No public/default caller forwards this header.
+export const admissionContinuationHeader = "x-clawrouter-private-admission";
+export const admissionContinuationVersion = "v1";
+export const admissionContinuationPath = "/admission/resolve";
+export interface AdmissionContinuationEnvelope<T> { admission: T; source: IdentitySourceBudget }
+export function closeAdmissionEnvelope<T>(value: unknown): AdmissionContinuationEnvelope<T> {
+  fields(value, ["admission", "source"]);
+  if (!value.admission || typeof value.admission !== "object" || Array.isArray(value.admission)) throw identityFailure("protocol");
+  return { admission: value.admission as T, source: identitySourceSnapshot(value.source) };
+}
