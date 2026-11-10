@@ -9,7 +9,9 @@ const { Log, LogLevel } = require("miniflare");
 import { startWorkerdFixture } from "../../test/helpers/workerd.mjs";
 
 // Real Worker + SQLite DOs. Only provider egress, clock, and named storage
-// failures are controlled. No real credentials or upstream requests.
+// failures are controlled. Explicit cold-state cases also seed one private
+// authority field or a legacy-v1 record; these are not production mutations.
+// No real credentials or upstream requests.
 const now = Date.parse("2030-01-01T00:00:00Z");
 const router = `
   export * from "./worker/index.ts";
@@ -27,6 +29,10 @@ const router = `
             await env.POLICY_KV.delete("fixture/read-armed"); throw Error("fixture-private read failure");
           }
           return target.get(key);
+        };
+        if (name === "delete") return async key => {
+          if (key === "refresh-result" && await env.POLICY_KV.get("fixture/failure") === "result_cleanup") throw Error("fixture-private cleanup failure");
+          return target.delete(key);
         };
         if (name === "put") return async (key, value) => {
           if (key === "credential" && value?.accessToken === "fixture-rotated" && await env.POLICY_KV.get("fixture/fail-write") === "yes") throw new Error("fixture write failure");
@@ -56,9 +62,34 @@ const router = `
       if (path === "/fixture/clear-index") { await this.fixtureStorage.deleteAll(); return new Response("ok"); }
       if (path === "/fixture/pending") { const record = await this.fixtureStorage.get("credential"); await this.fixtureStorage.put("credential", { ...record, refreshAttempt: { id: "fixture-abandoned", generation: record.generation } }); return new Response("ok"); }
       if (path === "/fixture/stale-attempt") { const record = await this.fixtureStorage.get("credential"); await this.fixtureStorage.put("credential", { ...record, refreshAttempt: { ...record.refreshAttempt, id: "fixture-different-attempt" } }); return new Response("ok"); }
+      if (path === "/fixture/authority-shift") {
+        const { field } = await request.json(), record = await this.fixtureStorage.get("credential");
+        if (!["generation", "lineage"].includes(field)) return new Response(null, { status: 400 });
+        const changed = { ...record, [field]: field === "generation" ? record.generation + 1 : "fixture-concurrent-lineage" };
+        await this.fixtureStorage.put("credential", changed);
+        return Response.json({ changedFields: Object.keys(changed).filter(key => JSON.stringify(changed[key]) !== JSON.stringify(record[key])) });
+      }
+      if (path === "/fixture/legacy-owner") {
+        // Explicit legacy VERSION-1 fixture, NOT an actual v0.5.0 writer run.
+        // Shape from 608050e4 grant-credential-record.ts and owner/revokedRecord.
+        const { mode } = await request.json(), revoked = mode === "revoked";
+        // Revoke/permanent failure advance generation; same-generation status changes are invalid.
+        const record = { version: 1, generation: revoked || mode === "terminal" ? 2 : 1, lineage: "fixture-legacy-lineage",
+          enabled: !revoked, status: mode === "terminal" ? "reauth_required" : "active",
+          grantKey: "oauth/pool/claude", providerId: "anthropic", kind: "subscription",
+          accessToken: "fixture-legacy-access", refreshToken: "fixture-legacy-refresh",
+          expiresAt: new Date(${now} + 86400000).toISOString(), updatedAt: new Date(${now}).toISOString(),
+          metadata: { provider: "anthropic", kind: "subscription", enabled: !revoked }, maintenance: { keepWarm: false },
+          revokedAt: revoked ? new Date(${now}).toISOString() : null, nextRefreshAttemptAt: null, poolSyncPending: true,
+          ...(mode === "pending" ? { refreshAttempt: { id: "fixture-old-attempt", generation: 1 } } : {}) };
+        if (revoked) { delete record.accessToken; delete record.refreshToken; }
+        await this.fixtureStorage.put("credential", record);
+        await this.fixtureStorage.delete("refresh-result"); await this.fixtureStorage.deleteAlarm();
+        return Response.json({ version: record.version, mode, retainedResult: false });
+      }
       if (path === "/fixture/state") {
         const record = await this.fixtureStorage.get("credential");
-        return Response.json({ alarm: await this.fixtureStorage.getAlarm(), generation: record?.generation, accessToken: record?.accessToken, nextRefreshAttemptAt: record?.nextRefreshAttemptAt, refreshDiagnosis: record?.refreshDiagnosis, pending: !!(await this.fixtureStorage.get("refresh-result")) });
+        return Response.json({ alarm: await this.fixtureStorage.getAlarm(), generation: record?.generation, enabled: record?.enabled, revoked: !!record?.revokedAt, status: record?.status, accessToken: record?.accessToken, nextRefreshAttemptAt: record?.nextRefreshAttemptAt, refreshDiagnosis: record?.refreshDiagnosis, pending: !!(await this.fixtureStorage.get("refresh-result")) });
       }
       if (path === "/fixture/alarm") { await this.alarm(); return new Response("ok"); }
       // Simulates a separately committed newer generation at the durable boundary.
@@ -87,28 +118,29 @@ const router = `
     if (path === "/fixture/clock") { clock = (await request.json()).now; return new Response("ok"); }
     if (path === "/fixture/failure") { const { stage } = await request.json(); if (stage) await env.POLICY_KV.put("fixture/failure", stage); else await env.POLICY_KV.delete("fixture/failure"); return new Response("ok"); }
     if (path === "/fixture/fail-write") { await env.POLICY_KV.put("fixture/fail-write", "yes"); return new Response("ok"); }
+    if (path === "/fixture/materialize") return env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName("oauth/pool/claude")).fetch("https://owner/materialize", { method: "POST", body: await request.text() });
     if (path === "/fixture/quota-owner") return env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName("oauth/pool/claude")).fetch("https://owner/quota-refresh", { method: "POST", body: JSON.stringify({ key: "oauth/pool/claude" }) });
     if (path === "/fixture/clear-index") return env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName("clawrouter:refresh-ownership:v1")).fetch(request);
-    if (["/fixture/state", "/fixture/alarm", "/fixture/newer", "/fixture/pending", "/fixture/stale-attempt"].includes(path)) return env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName("oauth/pool/claude")).fetch(request);
+    if (["/fixture/state", "/fixture/alarm", "/fixture/newer", "/fixture/pending", "/fixture/stale-attempt", "/fixture/authority-shift", "/fixture/legacy-owner"].includes(path)) return env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName("oauth/pool/claude")).fetch(request);
     return handler.fetch(request, env, ctx);
   }};
 `;
 // A Durable Object keeps held egress alive across separate control requests.
 const upstream = `
   export class Upstream {
-    config = {}; calls = 0; release;
+    config = {}; calls = 0; dispatches = 0; release;
     async fetch(request) {
       const path = new URL(request.url).pathname;
       if (path === "/control") {
         if (request.method === "POST") {
           const next = await request.json();
           if (next.release) { const resume = this.release; this.release = undefined; resume?.(); return Response.json({ released: !!resume }); }
-          this.config = next; this.calls = 0;
+          this.config = next; this.calls = 0; this.dispatches = 0;
         }
-        return Response.json({ calls: this.calls });
+        return Response.json({ calls: this.calls, dispatches: this.dispatches });
       }
-      if (path.endsWith("/messages")) return Response.json({ id: "msg_fixture", type: "message", role: "assistant", content: [{ type: "text", text: "synthetic fixture" }],
-        usage: { input_tokens: 1, output_tokens: 1, speed: "standard", inference_geo: "global", service_tier: "standard" }, servedBy: request.headers.get("authorization") });
+      if (path.endsWith("/messages")) { this.dispatches++; return Response.json({ id: "msg_fixture", type: "message", role: "assistant", content: [{ type: "text", text: "synthetic fixture" }],
+        usage: { input_tokens: 1, output_tokens: 1, speed: "standard", inference_geo: "global", service_tier: "standard" }, servedBy: request.headers.get("authorization") }); }
       if (!path.endsWith("/token")) return this.config.quota401 ? new Response(null, { status: 401 }) : Response.json({});
       this.calls++;
       if (this.config.hold) await new Promise(resolve => { this.release = resolve; });
@@ -133,7 +165,9 @@ async function fixture(t) {
   const grant = { provider: "anthropic", kind: "subscription", accessToken: "fixture-access", refreshToken: "fixture-refresh", expiresAt: new Date(now + 300000).toISOString(), maintenance: { keepWarm: false } };
   const put = await request(base, "PUT", grant); assert.equal(put.status, 200, await put.clone().text());
   const row = async () => { const response = await request("/v1/admin/upstream-grants"); assert.equal(response.status, 200); const text = await response.text(); assert.doesNotMatch(text, /fixture-(?:access|refresh|rotated|private)|fingerprint|[a-f0-9]{64}/); return JSON.parse(text).grants.find(g => g.tokenRef === "claude"); };
-  return { request, base, grant, row,
+  return { request, base, grant,
+    materialize: () => request("/fixture/materialize", "POST", { key: "oauth/pool/claude", grant, providerId: "anthropic", force: false }),
+    egress: async () => (await (await request("/fixture/provider")).json()), row,
     proxy: () => request("/v1/messages", "POST", { model: "anthropic/claude-sonnet-5", max_tokens: 16, messages: [{ role: "user", content: "synthetic fixture" }] }, { authorization: "Bearer clawrouter-live-fixture-fixture-key" }),
     state: async () => (await request("/fixture/state", "POST")).json(), configure: config => request("/fixture/provider", "POST", config), release: async () => { const response = await request("/fixture/provider", "POST", { release: true }); assert.equal((await response.json()).released, true, "provider response was held until release"); }, calls: async () => (await (await request("/fixture/provider")).json()).calls, rotate: () => request(base + "/refresh", "POST"), restart: async () => { await mf.dispose(); mf = await startWorkerdFixture(dir, router, upstream, options); }, http: () => mf.ready };
 }
@@ -412,35 +446,83 @@ for (const reopen of [false, true]) test("workerd first result-retention write f
   }
 });
 
-for (const mutation of ["replace", "revoke", "stale-attempt"]) test("workerd retained result cannot resurrect " + mutation, { timeout: 60000 }, async t => {
-  const f = await fixture(t); await f.request("/fixture/failure", "POST", { stage: "credential_write" });
+for (const mutation of ["replace", "revoke", "stale-attempt", "generation", "lineage"]) test("workerd retained result cannot resurrect " + mutation + " after cold reopen", { timeout: 60000 }, async t => {
+  const f = await fixture(t); assert.equal((await f.request("/fixture/proxy-setup", "POST")).status, 200);
+  await f.request("/fixture/failure", "POST", { stage: "credential_write" });
   assert.equal((await f.rotate()).status, 502);
   const retry = Date.parse((await f.row()).refreshDiagnosis.failure.nextRetryAt);
-  await f.request("/fixture/failure", "POST", {});
+  assert.equal(await f.calls(), 1, "retained pair came from one real fixture exchange");
+  assert.equal((await f.state()).pending, true);
+  const realMutation = mutation === "replace" || mutation === "revoke";
+  await f.request("/fixture/failure", "POST", realMutation ? { stage: "result_cleanup" } : {});
   const response = mutation === "replace"
     ? await f.request(f.base + "?mode=replace", "PUT", { ...f.grant, accessToken: "fixture-new-access", refreshToken: "fixture-new-login", expiresAt: new Date(now + 86400000).toISOString() })
-    : mutation === "revoke" ? await f.request(f.base + "/revoke", "POST") : await f.request("/fixture/stale-attempt", "POST");
-  assert.equal(response.status, 200, await response.clone().text());
-  await f.restart(); await f.request("/fixture/clock", "POST", { now: retry }); await f.request("/fixture/alarm", "POST");
+    : mutation === "revoke" ? await f.request(f.base + "/revoke", "POST")
+    : mutation === "stale-attempt" ? await f.request("/fixture/stale-attempt", "POST")
+    : await f.request("/fixture/authority-shift", "POST", { field: mutation });
+  assert.equal(response.status, realMutation ? 500 : 200, await response.clone().text());
+  if (["generation", "lineage"].includes(mutation)) assert.deepEqual((await response.json()).changedFields, [mutation], "private concurrent-authority seed changes exactly one fence");
+  const interrupted = await f.state();
+  assert.equal(interrupted.pending, true, "stale replacement slot survives real commit plus cleanup failure");
+  if (mutation === "revoke") { assert.equal(interrupted.revoked, true); assert.equal(interrupted.enabled, false); assert.equal(interrupted.accessToken, undefined); }
+  if (mutation === "replace") assert.equal(interrupted.accessToken, "fixture-new-access");
+  await f.request("/fixture/failure", "POST", {}); await f.restart();
+  assert.equal((await f.state()).pending, true, "physical SQLite reopen still contains stale slot before reader cleanup");
+  await f.request("/fixture/clock", "POST", { now: retry });
+  const materialized = await f.materialize(), material = await materialized.json();
+  assert.equal(materialized.status, mutation === "replace" ? 200 : mutation === "revoke" ? 409 : 502);
+  if (mutation === "replace") assert.equal(material.grant.accessToken, "fixture-new-access");
+  else { assert.equal(material.error.code, mutation === "revoke" ? "grant_disabled" : "grant_refresh_at_risk"); assert.equal(material.grant, undefined); }
+  assert.equal((await f.request("/fixture/alarm", "POST")).status, 200);
   const state = await f.state();
   assert.equal(state.pending, false);
   assert.notEqual(state.accessToken, "fixture-rotated");
   assert.equal(await f.calls(), 0);
   if (mutation === "replace") assert.equal(state.accessToken, "fixture-new-access");
   else assert.equal((await f.row()).usable, false);
-  t.diagnostic(JSON.stringify({ mutation, reopened: true, retainedResult: state.pending, rejectedOldReplacement: state.accessToken !== "fixture-rotated", tokenExchangesAfterReopen: await f.calls() }));
+  const delivered = await f.proxy();
+  assert.equal(delivered.status, mutation === "replace" ? 200 : 503);
+  if (mutation === "replace") assert.equal((await delivered.json()).servedBy, "Bearer fixture-new-access");
+  else { assert.equal((await delivered.json()).error.type, "api_error"); assert.equal(delivered.headers.get("x-clawrouter-error-code"), mutation === "revoke" ? "provider_not_configured" : "upstream_grant_pool_unavailable"); }
+  assert.deepEqual(await f.egress(), { calls: 0, dispatches: mutation === "replace" ? 1 : 0 });
+  t.diagnostic(JSON.stringify({ mutation, privateAuthoritySeed: !realMutation, coldStaleSlot: true, materializeStatus: materialized.status, deliveryStatus: delivered.status, retainedResult: state.pending, rejectedOldReplacement: state.accessToken !== "fixture-rotated", ...await f.egress() }));
 });
 
-for (const stage of ["result_store", "ownership_claim", "credential_write"]) test("workerd pending replacement ownership rejects copies after " + stage, { timeout: 60000 }, async t => {
+for (const [stage, reopen] of [["result_store", false], ["ownership_claim", false], ["credential_write", false], ["ownership_claim", true], ["credential_write", true]]) test("workerd pending replacement ownership rejects copies after " + stage + (reopen ? " and cold reopen" : ""), { timeout: 60000 }, async t => {
   const f = await fixture(t); await f.request("/fixture/failure", "POST", { stage });
   assert.equal((await f.rotate()).status, 502);
   await f.request("/fixture/failure", "POST", {});
+  if (reopen) { await f.restart(); assert.equal((await f.state()).pending, true); }
   const exchangesBeforeCopy = await f.calls();
   const copy = await f.request("/v1/admin/upstream-grants/tenants/copy/login", "PUT", { ...f.grant, refreshToken: "fixture-rotated-refresh" });
   assert.equal(copy.status, 409);
   assert.doesNotMatch(await copy.text(), /fixture-|fingerprint|[a-f0-9]{64}/);
-  assert.equal(await f.calls(), 1);
-  t.diagnostic(JSON.stringify({ stage, copyStatus: copy.status, totalTokenExchanges: await f.calls(), additionalExchangesForCopy: await f.calls() - exchangesBeforeCopy }));
+  assert.equal(await f.calls(), reopen ? 0 : 1);
+  assert.equal((await f.egress()).dispatches, 0);
+  t.diagnostic(JSON.stringify({ stage, reopened: reopen, copyStatus: copy.status, tokenExchangesInCurrentRuntime: await f.calls(), additionalExchangesForCopy: await f.calls() - exchangesBeforeCopy }));
+});
+
+// Old-shape VERSION-1 rows seeded privately, not an actual historical writer or release upgrade.
+for (const [mode, status, code] of [["healthy", 200, null], ["revoked", 409, "grant_disabled"], ["terminal", 401, "grant_reauthorization_required"], ["pending", 502, "grant_refresh_at_risk"]]) test("workerd legacy-version1 current reader cold-opens " + mode, { timeout: 60000 }, async t => {
+  const f = await fixture(t); assert.equal((await f.request("/fixture/proxy-setup", "POST")).status, 200);
+  const seeded = await f.request("/fixture/legacy-owner", "POST", { mode });
+  assert.equal(seeded.status, 200); assert.deepEqual(await seeded.json(), { version: 1, mode, retainedResult: false });
+  await f.restart(); assert.equal((await f.state()).pending, false);
+  const response = await f.materialize(), body = await response.json();
+  assert.equal(response.status, status, body.error?.code);
+  if (code) { assert.equal(body.error.code, code); assert.equal(body.grant, undefined); }
+  else assert.equal(body.grant.accessToken, "fixture-legacy-access");
+  if (mode === "pending") {
+    assert.equal((await f.rotate()).status, 502);
+    assert.equal((await f.request("/fixture/alarm", "POST")).status, 200);
+    assert.equal((await f.state()).refreshDiagnosis.failure.failureClass, "ambiguous");
+  }
+  const delivered = await f.proxy(); assert.equal(delivered.status, mode === "healthy" ? 200 : 503);
+  if (mode === "healthy") assert.equal((await delivered.json()).servedBy, "Bearer fixture-legacy-access");
+  assert.equal((await f.row()).usable, mode === "healthy");
+  assert.equal((await f.state()).pending, false);
+  assert.deepEqual(await f.egress(), { calls: 0, dispatches: mode === "healthy" ? 1 : 0 });
+  t.diagnostic(JSON.stringify({ compatibility: "old-shape-version1-current-reader", mode, coldReopened: true, materializeStatus: response.status, deliveryStatus: delivered.status, ...await f.egress() }));
 });
 
 for (const reopen of [false, true]) test("workerd repeated interrupted diagnosis retains an autonomous settlement alarm" + (reopen ? " after reopen" : " in memory"), { timeout: 60000 }, async t => {
