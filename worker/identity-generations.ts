@@ -12,7 +12,7 @@ export interface IdentityGenerationBorrow { dispose(): void }
 // slots. The persistent rows remain live while the original RPC roots settle.
 export const generationFactoryCharges = Object.freeze({
   persistent: Object.freeze({ registryThreeWeakMapsOwnerAndTwoChargeProducts: 6, partitionMapOwnerWeakEntryAndCharges: 5, entryMapCellOwnerAndCharges: 4,
-    twoSlotFields: 2, slotOwnerChargeAndVectorReceipt: 4, initialBorrowCharge: 2, preparationWeakEntryCapabilityAndMethod: 3,
+    twoSlotFieldsAndPublicationWatermark: 3, slotOwnerChargeAndVectorReceipt: 4, demotedTemporaryOwnerField: 1, initialBorrowCharge: 2, preparationWeakEntryCapabilityAndMethod: 3,
     continuationCapabilityAndWeakEntry: 2, sourceOwnerCounterTicketWindowsAndCharge: 5 }),
   prepare: Object.freeze({ originalProofAndWeakEntry: 2, fundingAndTransferCallFrames: 12, tableVisitorAndArithmetic: 4, rollbackAndUnwind: 6 }),
   rpc: Object.freeze({ entryRunPromisesObserversAndAwaits: 18, requestPlanAndClosures: 16,
@@ -29,6 +29,12 @@ export const generationFactoryCharges = Object.freeze({
     numberAndIndexConversions: 2, vectorReceiptsWeakEntriesTransferAndRollbackFrames: 20,
     borrowerChargesOwnerWeakEntryCapabilityMethodAndReceipt: 7, publicationAndTransferFrames: 8,
     traversalScratchVectorOwnerLeaseCloseAndMethods: 24 }),
+  hit: Object.freeze({ entryValidationAndFactoryAdmissionFrames: 8, metadataReserveOwnerAndExactCharge: 4,
+    optionalAdoptionAndFitFrames: 3, demotionAndReplacementFrames: 5, replacementExactCharge: 1,
+    ledgerReleaseAndPublicationFrames: 2, borrowerOwnerWeakEntryCapabilityAndMethod: 4,
+    failureAndUnwindFrames: 4 }),
+  retirement: Object.freeze({ borrowerLookupAndEntryFrames: 2, lastGraphOwnerAndTicketFrames: 10,
+    cacheAndExactChargeReleaseFrames: 8, emptyEntryPartitionRegistryFrames: 6, protocolFailureAndUnwind: 4 }),
 });
 
 export function admitGenerationFactories(): void {
@@ -37,7 +43,7 @@ export function admitGenerationFactories(): void {
   if (persistent + Math.max(sum(generationFactoryCharges.prepare), sum(generationFactoryCharges.rpc)) > 128
     || sum(generationFactoryCharges.source) > 128 || sum(generationFactoryCharges.read) > 128
     || sum(generationFactoryCharges.terminal) > 128
-    || persistent + sum(generationFactoryCharges.handoff) > 512) throw identityFailure("protocol");
+    || persistent + Math.max(sum(generationFactoryCharges.handoff), sum(generationFactoryCharges.hit), sum(generationFactoryCharges.retirement)) > 512) throw identityFailure("protocol");
 }
 
 // Metadata layout is charged independently in the common arena before its
@@ -46,12 +52,13 @@ export function admitGenerationFactories(): void {
 export const generationMetadata = Object.freeze({
   registry: Object.freeze({ payload: 2 * "partitions,preparations,borrowers,count,funding,cache".replaceAll(",", "").length + 8, structure: 16 }),
   partition: Object.freeze({ payload: 2 * "binding,entries,funding,cache".replaceAll(",", "").length, structure: 10 }),
-  entry: Object.freeze({ payload: 2 * "partition,kid,first,second,current,sequence,funding,cache".replaceAll(",", "").length + 8, structure: 18 }),
-  slot: Object.freeze({ payload: 2 * ("entry,owner,continuation,handle,ready,published,borrowers,sequence,storedAt,maxAgeMs,funding,initialBorrowFunding,cache,graphCache".replaceAll(",", "").length
+  entry: Object.freeze({ payload: 2 * "partition,kid,first,second,current,sequence,publishedSequence,funding,cache".replaceAll(",", "").length + 2 * 8, structure: 19 }),
+  slot: Object.freeze({ payload: 2 * ("entry,owner,continuation,handle,ready,published,borrowers,sequence,storedAt,maxAgeMs,funding,initialBorrowFunding,cache,graphCache,temporaryCharge".replaceAll(",", "").length
     + "binding,namespace,kid,digest,source,ticket,admission,bytes,text,values,containers,members,entries,units".replaceAll(",", "").length
     + "charge,worker,generationPayload,windows,unknown,operation,source,read,terminal,held".replaceAll(",", "").length
     + "serializedBytes,payloadBytes,structure".replaceAll(",", "").length
-    + "charge,unknown,held,serialized,payload,fields,charge,metadata".replaceAll(",", "").length) + 8 + 16 * 8 + 1 + 4 * 8, structure: 77 }),
+    + "charge,unknown,held,serialized,payload,fields,charge,metadata".replaceAll(",", "").length
+    + "held".length) + 8 + 16 * 8 + 1 + 5 * 8, structure: 80 }),
   borrower: Object.freeze({ payload: 2 * "slot,funding,cache,dispose".replaceAll(",", "").length, structure: 10 }),
   // Charge/vector receipt fields, weak association, methods, and scalar cells.
   funding: Object.freeze({ payload: 2 * "charge,payloadBytes,structure,held,serialized,payload,fields,charge,metadata".replaceAll(",", "").length + 6 * 8, structure: 18 }),

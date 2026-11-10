@@ -182,6 +182,15 @@ export class GenerationRetainedCharge {
   }
   get bytes(): number { return this.charge.bytes; }
   holdUnknown(): void { this.unknown = true; }
+  expandForBorrow(): boolean {
+    if (this.unknown || !this.charge.bytes) return false;
+    // Reuse this exclusive Worker backing. Failure leaves the old debit intact;
+    // no source credit is released before the full temporary owner exists.
+    const next = this.charge.replace(preflightPayloadBytes);
+    if (!next) return false;
+    this.charge = next;
+    return true;
+  }
   release(): void { if (!this.unknown) this.charge.release(); }
 }
 

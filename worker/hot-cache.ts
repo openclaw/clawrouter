@@ -298,6 +298,16 @@ export class PrivateCacheReservation {
     privateSerialized += serialized; privatePayload += payload; privateStructure += fields;
     return receipt;
   }
+  demoteForBorrow(): GenerationRetainedCharge | null {
+    const charge = this.charge;
+    if (!(charge instanceof GenerationRetainedCharge) || !charge.expandForBorrow()) return null;
+    // Only the graph leaves the optional cache. Every existing metadata receipt
+    // remains charged until its actual owner retires. The caller takes this SAME
+    // backing synchronously, before publication or the ledger claim is removed.
+    this.charge = undefined;
+    this.release();
+    return charge;
+  }
   release(): void {
     privateSerialized -= this.serialized; privatePayload -= this.payload; privateStructure -= this.fields;
     this.serialized = 0; this.payload = 0; this.fields = 0;

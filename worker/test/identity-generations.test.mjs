@@ -7,12 +7,13 @@ const { PolicyBindingIndexObject } = await import('../authority.ts');
 const { preflightCredential, releaseCredentialPreflight, prepareCredentialGeneration, completeCredentialGeneration, borrowCredentialGeneration, evictCredentialGeneration, consumeCredentialPreflight, completeCredentialAdmission } = await import('../credential-preflight.ts');
 const { GenerationMetadataCharge, preflightPayloadBytes, preflightControlSlots } = await import('../credential-preflight-arena.ts');
 const { bodyBudgetCharged, ExactBodyCharge, bodyBudgetBytes } = await import('../body-budget.ts');
-const { PrivateCacheReservation, privateCacheLimits, privateCacheCharged } = await import('../hot-cache.ts');
+const { PrivateCacheReservation, privateCacheLimits, privateCacheCharged, setHotCacheClock } = await import('../hot-cache.ts');
 const { generationFactoryCharges, measureGenerationGraph, freezeGenerationGraph } = await import('../identity-generations.ts');
 const { identitySourceBudget, isIdentityFailure } = await import('../identity-admission.ts');
 const digest = 'ab'.repeat(32), rotated = 'cd'.repeat(32);
 const credential = (secretSha256 = digest) => ({ enabled: true, secretSha256, policyId: 'bridge-policy', policyGeneration: 'legacy', principalId: null });
 const denied = error => isIdentityFailure(error) && error.status === 503;
+const capacity = error => denied(error) && error.message === 'Identity admission failed (limit)';
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); void promise.then(() => undefined, () => undefined); return { promise, resolve, reject }; };
 const on = { maxAgeMs: 60000, freshMs: 10000 }, off = { maxAgeMs: 0, freshMs: 0 };
 async function fixture(t, run) {
@@ -143,6 +144,111 @@ test('forged and double preparation fail; disposed provisional owner releases it
   assert.equal(bodyBudgetCharged(), baseline);
 }));
 
+for (const mode of ['evict', 'expire', 'failed-new']) test(`publication watermark survives ${mode} while an older ORIGINAL reply EOF outcome is held`, async t => fixture(t, async f => {
+  seed(f); const baseline = bodyBudgetCharged(); let prep, a, b, hit, proof, now = 1000;
+  const entered = deferred(), release = deferred(), caller = new AbortController();
+  f.releases.push(() => caller.abort(), () => release.resolve());
+  f.resources.push(() => setHotCacheClock()); setHotCacheClock(() => now);
+  cleanupGenerations(f, [() => { prep?.dispose(); }, () => { a?.dispose(); }, () => { b?.dispose(); }, () => { hit?.dispose(); }, () => { if (proof) releaseCredentialPreflight(proof); }]);
+  const originalGet = f.env.ACCESS_CONTROL.get; let held = false, unlocked = false;
+  t.mock.method(f.env.ACCESS_CONTROL, 'get', function (...args) {
+    const stub = Reflect.apply(originalGet, this, args), fetch = stub.fetch;
+    return { async fetch(url, init) {
+      const response = await Reflect.apply(fetch, stub, [url, init]);
+      if (url.endsWith('/admission/resolve') && !held) {
+        held = true;
+        const acquire = response.body.getReader.bind(response.body);
+        response.body.getReader = options => {
+          const reader = acquire(options), read = reader.read.bind(reader), unlock = reader.releaseLock.bind(reader);
+          reader.read = async (...values) => { const value = await read(...values); if (value.done) { entered.resolve(); await release.promise; } return value; };
+          reader.releaseLock = () => { unlock(); unlocked = true; }; return reader;
+        };
+      }
+      return response;
+    } };
+  });
+  prep = await prepare(f);
+  const first = f.own(completeCredentialGeneration(prep, { providers: [] }, on, caller.signal).then(value => { a = value; return value; })); prep = undefined;
+  const arrival = await Promise.race([entered.promise.then(() => ({ entered: true })), first.outcome.then(outcome => ({ entered: false, outcome }))]);
+  if (!arrival.entered) { first.used = true; if (arrival.outcome.failed) throw arrival.outcome.error; assert.fail('A settled before held ORIGINAL read'); }
+  assert.equal(unlocked, false);
+  prep = await prepare(f);
+  const second = f.own(completeCredentialGeneration(prep, mode === 'failed-new' ? { providers: [], credentialId: 'other' } : { providers: [] }, on).then(value => { b = value; return value; })); prep = undefined;
+  if (mode === 'failed-new') {
+    const outcome = await second.outcome; second.used = true;
+    assert.equal(outcome.failed, true); assert.ok(denied(outcome.error));
+  } else {
+    await f.take(second);
+    hit = borrowCredentialGeneration(f.env, 'bridgekid', digest, on); assert.ok(hit); hit.dispose(); hit = undefined;
+    const live = bodyBudgetCharged();
+    if (mode === 'expire') { now = 61000; hit = borrowCredentialGeneration(f.env, 'bridgekid', digest, on); assert.equal(hit, undefined); now = 1000; }
+    else evictCredentialGeneration(f.env, 'bridgekid');
+    assert.equal(bodyBudgetCharged(), live, 'newer borrowed generation retains all funding');
+  }
+  release.resolve(); await f.take(first); assert.equal(unlocked, true);
+  hit = borrowCredentialGeneration(f.env, 'bridgekid', digest, on);
+  if (mode === 'failed-new') { assert.ok(hit, 'failed newer construction is not a publication fence'); hit.dispose(); hit = undefined; }
+  else {
+    assert.equal(hit, undefined, 'older result cannot resurrect publication');
+    assert.ok(bodyBudgetCharged() - baseline >= preflightPayloadBytes);
+    const third = await f.take(f.own(preflightCredential(f.env, 'bridgekid', digest))); if (third.outcome === 'matched') proof = third.proof;
+    assert.equal(third.outcome, 'matched'); const calls = f.trace.rpc.length;
+    assert.throws(() => { prep = prepareCredentialGeneration(proof); proof = undefined; }, capacity);
+    assert.equal(f.trace.rpc.length, calls, 'both borrowed slots block C before hydration');
+    releaseCredentialPreflight(proof); proof = undefined;
+    b.dispose(); b = undefined; assert.ok(bodyBudgetCharged() - baseline >= preflightPayloadBytes, 'A remains funded after B retires');
+  }
+  evictCredentialGeneration(f.env, 'bridgekid'); a.dispose(); a = undefined;
+  assert.equal(bodyBudgetCharged(), baseline);
+  assert.deepEqual(privateCacheCharged(), { serializedBytes: 0, payloadBytes: 0, structure: 0 });
+}));
+
+for (const coordinate of ['payloadBytes', 'structure']) test(`a matching hit under optional ${coordinate} pressure demotes SAME graph with every borrower funded`, async t => fixture(t, async f => {
+  seed(f); const baseline = bodyBudgetCharged(); let prep, a, b, pressure, graph, originalGraph, freezes = 0;
+  cleanupGenerations(f, [() => { pressure?.release(); }, () => { prep?.dispose(); }, () => { a?.dispose(); }, () => { b?.dispose(); }]);
+  f.resources.push(() => { graph = undefined; originalGraph = undefined; });
+  const originalFreeze = Object.freeze;
+  t.mock.method(Object, 'freeze', function (value) {
+    if (value && Object.hasOwn(value, 'credential') && Object.hasOwn(value, 'connections') && Object.hasOwn(value, 'pools')) { graph = value; freezes++; }
+    return Reflect.apply(originalFreeze, Object, [value]);
+  });
+  prep = await prepare(f); const operation = completeCredentialGeneration(prep, { providers: [] }, on); prep = undefined;
+  a = await f.take(f.own(operation)); assert.ok(graph); assert.equal(freezes, 1);
+  const used = privateCacheCharged(), vector = { serializedBytes: 0, payloadBytes: 1, structure: 1 };
+  vector[coordinate] = privateCacheLimits[coordinate] - used[coordinate];
+  pressure = PrivateCacheReservation.reserve(vector); assert.ok(pressure);
+  assert.equal(privateCacheCharged()[coordinate], privateCacheLimits[coordinate]);
+  assert.ok(bodyBudgetBytes - bodyBudgetCharged() > preflightPayloadBytes, 'common arena has ample capacity');
+  const calls = f.trace.rpc.length; originalGraph = graph;
+  b = borrowCredentialGeneration(f.env, 'bridgekid', digest, on); assert.ok(b);
+  assert.equal(graph, originalGraph); assert.equal(freezes, 1); assert.equal(f.trace.rpc.length, calls);
+  assert.equal(borrowCredentialGeneration(f.env, 'bridgekid', digest, on), undefined, 'publication was removed, not the admitted hit');
+  assert.ok(bodyBudgetCharged() - baseline >= preflightPayloadBytes + vector.payloadBytes);
+  assert.equal(privateCacheCharged().structure, used.structure + vector.structure - measureGenerationGraph(graph).structure, 'old metadata claims survive demotion');
+  const live = bodyBudgetCharged(); a.dispose(); a = undefined;
+  assert.equal(bodyBudgetCharged(), live - 230, 'only the old borrower metadata retires');
+  graph = undefined; originalGraph = undefined; b.dispose(); b = undefined;
+  assert.equal(bodyBudgetCharged(), baseline + vector.payloadBytes);
+  pressure.release(); pressure = undefined; assert.equal(bodyBudgetCharged(), baseline);
+  assert.deepEqual(privateCacheCharged(), { serializedBytes: 0, payloadBytes: 0, structure: 0 });
+}));
+
+test('matching-hit demotion refuses genuine common-arena pressure without changing the old owner or publication', async t => fixture(t, async f => {
+  seed(f); const baseline = bodyBudgetCharged(); let prep, a, b, pressure, common;
+  cleanupGenerations(f, [() => { pressure?.release(); }, () => { common?.release(); }, () => { prep?.dispose(); }, () => { a?.dispose(); }, () => { b?.dispose(); }]);
+  prep = await prepare(f); const operation = completeCredentialGeneration(prep, { providers: [] }, on); prep = undefined; a = await f.take(f.own(operation));
+  const used = privateCacheCharged();
+  pressure = PrivateCacheReservation.reserve({ serializedBytes: 0, payloadBytes: 1, structure: privateCacheLimits.structure - used.structure }); assert.ok(pressure);
+  common = ExactBodyCharge.reserve(bodyBudgetBytes - bodyBudgetCharged() - 230); assert.ok(common);
+  const charged = bodyBudgetCharged(), cache = privateCacheCharged(), calls = f.trace.rpc.length;
+  assert.throws(() => { b = borrowCredentialGeneration(f.env, 'bridgekid', digest, on); }, capacity);
+  assert.equal(bodyBudgetCharged(), charged); assert.deepEqual(privateCacheCharged(), cache); assert.equal(f.trace.rpc.length, calls);
+  common.release(); common = undefined;
+  b = borrowCredentialGeneration(f.env, 'bridgekid', digest, on); assert.ok(b); assert.equal(f.trace.rpc.length, calls);
+  a.dispose(); a = undefined; b.dispose(); b = undefined; pressure.release(); pressure = undefined;
+  assert.equal(bodyBudgetCharged(), baseline);
+}));
+
 test('wrong/unknown preverification resolves before generation capacity; valid proof expansion failure remains releasable', async t => fixture(t, async f => {
   seed(f); const baseline = bodyBudgetCharged(); let proof, pressure;
   f.resources.push(() => { pressure?.release(); if (proof) releaseCredentialPreflight(proof); });
@@ -219,6 +325,8 @@ test('actual Worker generation CONTROL phases fit the existing four windows plus
   assert.ok(persistent + count(generationFactoryCharges.rpc) <= preflightControlSlots.operation);
   for (const name of ['source', 'read', 'terminal']) assert.ok(count(generationFactoryCharges[name]) <= preflightControlSlots[name]);
   assert.ok(persistent + count(generationFactoryCharges.handoff) <= preflightControlSlots.synchronous);
+  assert.ok(persistent + count(generationFactoryCharges.hit) <= preflightControlSlots.synchronous);
+  assert.ok(persistent + count(generationFactoryCharges.retirement) <= preflightControlSlots.synchronous);
 });
 
 test('atomic promotion succeeds at a FULL common arena using source credit, not extra destination allocation', async t => fixture(t, async f => {

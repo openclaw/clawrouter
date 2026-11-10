@@ -65,10 +65,15 @@ new authentication result. Future adapters must separately establish coverage
 of their requested query and carry a borrow through every use, background task
 and hint. None of those adapters are activated here.
 
-A later construction cannot be replaced by an older delayed publication. A
-stable-entry sequence is a publication fence, not an index key. A failed newer
-construction leaves the old publication intact. Eviction removes publication
-only: borrowers retain the graph, charge, slot and all needed index owners.
+Each stable entry retains the last **successfully published** sequence, separately
+from its construction sequence and current publication pointer. This watermark is
+funded before entry construction. Promotion checks it before any vector transfer
+and advances it only after successful transfer/publication. Eviction, expiry and
+individual slot retirement cannot erase it while the entry has any live slot.
+Thus held A cannot resurrect after newer published B is evicted or expires, even
+when B remains borrowed. A failed B never fences a valid pending A. The watermark
+retires only with the empty entry. Eviction removes publication only: borrowers
+retain the graph, charge, slot and all needed index owners.
 
 ## Common-arena and optional vector
 
@@ -92,8 +97,9 @@ per number and one per boolean/null. The JSON result has no owned byte backing;
 any future backing-bearing representation requires its entire backing in the
 vector. No serialized text or encoded copy is retained. Escaped wire is measured
 before either could be materialized. Borrowing the same immutable tree charges
-that tree once; each new borrower has its own funded metadata and optional-vector
-claim. Equal strings receive no interning or equality credit.
+that tree once; each new borrower has its own funded metadata. Cached borrower
+metadata also claims the optional vector. Equal strings receive no interning or
+equality credit.
 
 `PrivateCacheReservation` is a receipt, unlike ordinary `HotCache.publish`'s
 boolean. Its scalar ledger check, exact backing transition and commit are
@@ -105,9 +111,29 @@ remain claimed until their actual index/slot/borrower owners retire.
 A full common arena does not force an additional destination allocation: replacing
 this operation's 32 MiB with its smaller retained charge works in place. The
 initial borrower is funded before hydration for this case. Additional borrowers
-reserve their complete metadata before construction. Failure creates no borrow
-and changes no old owner. Optional shared coordinates are never a prerequisite
-for the initial temporary reservation or full hydration.
+reserve their complete metadata before construction. Optional shared coordinates
+are never a prerequisite for initial hydration or a permitted matching hit.
+
+If a matching hit's new metadata cannot fit the optional payload or structure
+coordinate, `demoteForBorrow` first expands the graph's exclusively owned
+`GenerationRetainedCharge` to 33,554,432 bytes with exact `replace`. It retains
+the same charge wrapper and graph. Only after replacement succeeds does it detach
+the graph receipt, remove its optional coordinates and clear publication. The
+slot takes the full temporary backing synchronously. It never takes another slot,
+performs an RPC, rematerializes the graph or releases/reacquires live credit.
+The last-successful-publication watermark survives this removal too.
+
+All previous metadata receipts remain in the optional vector until their actual
+owners retire; demotion does not reclaim their coordinates. The new borrower has
+its own 230-byte common-arena charge and its factory products are in the hit
+CONTROL window. Existing borrowers retain their original metadata charges. The
+full temporary charge releases only after the graph aliases clear and the final
+borrower retires. A demoted slot has no publication, so it cannot accrue further
+matching-hit borrowers. Existing retired-ticket aliases cannot release its new
+backing. UNKNOWN forbids replacement/release. If the **common arena** cannot fund
+the full replacement, the old debit, vector, publication and all old borrowers
+remain intact; only the provisional new metadata is released. That is genuine
+common capacity denial, not an optional-cache admission prerequisite.
 
 ## Data phase inventory
 
@@ -128,33 +154,48 @@ receipt. Unused precharged transition fields are not reused for another purpose.
 | --- | ---: | ---: |
 | Registry: three WeakMaps and ownership | 104 | 16 |
 | Actual binding partition | 52 | 10 |
-| Stable entry | 108 + 4K | 18 |
-| Slot, source owner and handoff products | 911 + 2(K + 64 + 15) | 77 |
+| Stable entry, including successful-publication watermark | 150 + 4K | 19 |
+| Slot, source owner and handoff/demotion products | 957 + 2(K + 64 + 15) | 80 |
 | Each borrower | 46 | 10 |
 | Funding/receipt layout added to each row | 184 | 18 |
 
 `K` is the actual key-ID length, at most 4,077 under the unchanged protocol.
 A new isolated stable entry plus first slot/borrower therefore reserves
-`2299 + 6K`, at most **26,761 bytes**, and **221 structure units**. Existing
+`2387 + 6K`, at most **26,849 bytes**, and **225 structure units**. Existing
 partitions/entries retain their own funding; a new slot never releases another
 slot's share. Subsequent borrowers reserve **230 bytes / 28 units** each.
 The index Map's key and entry's key field are separate string occurrences.
+The watermark adds 42 bytes (17 UTF-16 key units and one number) and one member.
+The slot adds 46 bytes and three structure units: the `temporaryCharge` key/member
+plus the replacement exact-charge object's `held` key/number/member. Both old
+zeroed and successor charge products are funded during replacement. This is a
+prospective slot reservation, not a charge discovered after the factory.
 
 | Worker phase | Complete simultaneous component |
 | --- | --- |
 | Preflight proof / prepare | Existing genuine proof plus prospectively funded metadata; full ticket expansion before proof consumption |
 | Request copy and original RPC | Existing 21,020,672-byte Worker component + actual copied string fields + retained generation metadata; prospective sum must fit 33,554,432 |
-| Measure/freeze after original joins | 21,020,672 + at most 26,761 metadata + 49,928 traversal scratch = **21,097,361** |
+| Measure/freeze after original joins | 21,020,672 + at most 26,849 metadata + 49,928 traversal scratch = **21,097,449** |
 | Provisional promotion | Same temporary graph and metadata; optional coordinates earmarked, no independently spendable successor |
 | Atomic replacement/publication | Exact measured graph payload replaces full source charge; metadata and handoff products remain funded independently |
 | Uncached fallback | Original 33,554,432-byte ticket plus its funded metadata/slot until actual last borrower |
 | Published/borrowed | One immutable graph receipt plus all live metadata receipts; no full ticket remains for a promoted value |
+| Matching hit / demotion | Old graph and all old metadata stay funded; new borrower reserves 230 bytes first; exact replacement funds the full 33,554,432 before the graph vector detaches |
+| Demoted / borrowed | Same graph under full temporary backing, old metadata receipts unchanged, one newly funded borrower; no publication or new slot |
 
 The 49,928 traversal bound is `8*(1+80) + 2*(24*1024+64)`: fixed counters,
 current number representation, bounded active property keys and 24-level frames.
 Measurement and freezing are sequential; no retained full-key index exists.
 The source tree's owner remains funded throughout both traversals. New metadata
 can reduce available copy scratch, but never lowers a JSON/source profile.
+The unchanged complete graph bound is 5,242,880 payload bytes / 131,072 structure
+units. Graph plus the new fixed owner bound and new borrower is at most
+`5,242,880 + 26,849 + 230 = 5,269,959` during demotion, below the full temporary
+payload. Additional old borrower metadata stays separately backed and claimed in
+the shared vector; it is not reclassified as graph DATA or erased. At the common
+arena boundary, `replace` tests the absolute new charge against **all** concurrent
+charges, including every old borrower, other slot and pressure owner. It therefore
+cannot turn the temporary replacement into an additional spendable 32 MiB.
 
 ## CONTROL and factory inventory
 
@@ -165,20 +206,44 @@ each group in `generationFactoryCharges`.
 
 | Group | Slots | Products |
 | --- | ---: | --- |
-| Persistent across RPC | 33 | Three registry WeakMaps, owners, index Map/cells, two slot fields, charge products, preparation/continuation capabilities and WeakMap entries, source owner/counter/ticket/windows |
+| Persistent across RPC | 35 | Three registry WeakMaps, owners, index Map/cells, two slot fields, publication watermark, demoted owner field, charge products, preparation/continuation capabilities and WeakMap entries, source owner/counter/ticket/windows |
 | Prepare | 24 | Prior proof/entry, reservation/transfer frames, table arithmetic, rollback/unwind |
 | RPC operation | 48 | Both entry/run/observer promises and callbacks/awaits, prospective plan/closures, original binding/id/stub/init/header/carrier, result handle and failure/unwind |
 | Source | 112 | Acquisition followers, original source owner, consume/awaits, headers, reader/retirement products, decoder/wire, signal registration, grammar/descriptors, terminal continuation |
 | Read | 24 | Original/propagated followers, pending/finally products, pull/await, backing views and bounded failure state |
 | Terminal | 35 | Finish/FIRSTcancel, original joins, unlock/listener, UNKNOWN promise, fixed failure and unwind |
 | Handoff | 168 | Measurement record/two visitors, bounded traversal/enumeration frames, conversions, receipts/weak entries/transfer/rollback, borrower products, scratch guard and publication frames |
+| Matching hit | 31 | Entry/validation/admission frames 8; metadata owner/exact charge/reservation 4; optional-adoption/fit 3; demotion/replace frames 5; successor exact charge 1; ledger/publication frames 2; borrower owner/WeakMap entry/capability/method 4; failure/unwind 4 |
+| Retirement | 30 | Borrow lookup/entry 2; last graph owner/ticket frames 10; cache/exact-release frames 8; empty entry/partition/registry frames 6; protocol failure/unwind 4 |
 
-Operation maximum is `33 + max(24,48) = 81 <= 128`; source/read/terminal
-are each <=128. Synchronous handoff is `33 + 168 = 201 <= 512`.
+Operation maximum is `35 + max(24,48) = 83 <= 128`; source/read/terminal
+are each <=128. Synchronous maximum is `35 + max(168,31,30) = 203 <= 512`.
 Conservatively reserving all four full windows plus that synchronous inventory
-uses **713 of 1024 slots**. The measured helper graph is DATA, while every
+uses **715 of 1024 slots**. This is the updated source inventory submitted for
+bounded source qualification, not runtime certification or an inferred spare
+allocation budget. The measured helper graph is DATA, while every
 promise, follower, callback, execution frame, listener, receipt and ownership
 index remains CONTROL. No source counter is converted into a control credit.
+
+The new hit path is synchronous throughout: `borrowCredentialGeneration` validates
+then admits the fixed table; `newGenerationBorrow` reserves metadata before its
+owner/capability/WeakMap factories; `adoptMetadata` either creates its precharged
+receipt or returns null before a receipt factory. On refusal, the nested chain is
+`newGenerationBorrow -> demoteForBorrow -> expandForBorrow -> ExactBodyCharge.replace`.
+The old and new exact-charge handles overlap only until assignment of the
+successor. No new promise, callback, listener, read, cancellation or visitor is
+created by demotion. The retained wrapper already exists. Ledger removal and
+publication clearing finish before borrower construction. The 31-slot row counts
+these frames/products, including failure while the old owner is still live.
+
+Handoff starts only after complete admission's original roots and `finally`
+have joined. Measurement and freeze visitors do not overlap their recursion;
+the conservative 168-slot row nevertheless includes both. Hit and retirement
+have no source/read window acquisition, await or callback reentry, so neither
+overlaps handoff execution. Prior borrowers' owner/receipt/WeakMap products stay
+funded by their retained metadata claims, not hidden in these transient frame
+counts. Retirement clears graph aliases before releasing either graph receipt
+or demoted charge, then clears slots/indexes before releasing their metadata.
 
 ## Retirement and failure
 
@@ -203,15 +268,21 @@ promotion, exact small charges, independent vector boundaries, full-arena atomic
 replacement, optional pressure fallback, two slots across OFF/rotation, wrong and
 unknown preverification, forged/double consume, failure preserving old publication,
 last-read abort, held/rejected FIRSTcancel and unlock with undefined/shared reasons,
-late original acquisition, own `__proto__`, RPC-free borrowing and ordinary bridge
+late original acquisition, own `__proto__`, RPC-free borrowing, publication history
+through eviction/expiry, failed-newer publication, payload/structure pressured
+matching hits, genuine common-arena refusal, and ordinary bridge
 nonactivation. Cleanup is installed before work, observes every original promise,
 releases finite gates first, joins all enrolled roots and preserves independent
 cleanup failures without reason-value deduplication.
 
 `worker/test/identity-generations-workerd.test.mjs` uses real Workerd DO dispatch,
-SQLite, original native KV BYOB bodies and the complete private RPC path. Seven
+SQLite, original native KV BYOB bodies and the complete private RPC path. Twelve
 cases cover promotion, full arena, optional cache pressure, OFF, rotation,
-preverification and UNKNOWN retention. Native observations require original
+preverification, held-A/published-B eviction and expiry, failed B, both pressured
+matching-hit coordinates, and UNKNOWN retention. Held reply reads retain the
+original native reader/body, delay only the original EOF outcome, and execute
+within one fixture request's context. Cleanup releases gates first, then joins
+original roots before retiring borrowers. Native observations require original
 read/EOF/unlock and <=16 KiB backing. The final deliberate UNKNOWN ticket remains
 charged until fixture-isolate disposal; this is an accounting-hold witness, not
 an original producer retirement or physical reclamation claim.

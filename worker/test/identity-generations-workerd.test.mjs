@@ -11,12 +11,13 @@ export {BudgetLedgerObject,UsageLedgerObject,GrantCredentialObject} from './work
 import {preflightCredential,releaseCredentialPreflight,prepareCredentialGeneration,completeCredentialGeneration,borrowCredentialGeneration,evictCredentialGeneration} from './worker/credential-preflight.ts';
 import {ExactBodyCharge,bodyBudgetCharged,bodyBudgetBytes} from './worker/body-budget.ts';
 import {PreflightTicket,preflightPayloadBytes} from './worker/credential-preflight-arena.ts';
-import {PrivateCacheReservation,privateCacheCharged} from './worker/hot-cache.ts';
+import {PrivateCacheReservation,privateCacheCharged,privateCacheLimits,setHotCacheClock} from './worker/hot-cache.ts';
 import {isIdentityFailure} from './worker/identity-admission.ts';
 import {measureGenerationGraph,freezeGenerationGraph} from './worker/identity-generations.ts';
 const digest='ab'.repeat(32),rotated='cd'.repeat(32),kid='nativegeneration';
 const on={maxAgeMs:60000,freshMs:10000},off={maxAgeMs:0,freshMs:0};
 const check=(ok,label)=>{if(!ok)throw Error(label);};
+const deferred=()=>{let resolve;const promise=new Promise(yes=>{resolve=yes;});void promise.then(()=>{},()=>{});return {promise,resolve};};
 const record=secret=>({enabled:true,secretSha256:secret,policyId:'native-generation-policy',policyGeneration:'legacy',principalId:null});
 export class PolicyBindingIndexObject extends Base {
  constructor(state,env){
@@ -48,7 +49,7 @@ export class PolicyBindingIndexObject extends Base {
 }
 export default {async fetch(request,env){
  const mode=new URL(request.url).pathname.slice(1),stub=env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName('policy-bindings'));
- const roots=[];let proof,prep,a,b,pressure,hasPrimary=false,primary,result;
+ const roots=[],releases=[];let proof,prep,a,b,hit,pressure,hasPrimary=false,primary,result,generationEnv=env,graph,originalFreeze,freezes=0;
  const own=promise=>{const root={outcome:promise.then(value=>({failed:false,value}),error=>({failed:true,error})),used:false};roots.push(root);return root;};
  const take=async root=>{const outcome=await root.outcome;root.used=true;if(outcome.failed)throw outcome.error;return outcome.value;};
  const rpc=async path=>{const response=await take(own(stub.fetch('https://authority'+path))),body=await take(own(response.text()));check(response.status===200,'fixture RPC');return body?body:null;};
@@ -69,15 +70,75 @@ export default {async fetch(request,env){
    const wrong=await take(own(preflightCredential(env,kid,rotated)));if(wrong.outcome==='matched')proof=wrong.proof;check(wrong.outcome==='invalid','invalid preliminary result');
    check(bodyBudgetCharged()===baseline,'no generation funding');
    result={mode,preverify:true};
+  }else if(mode==='fence-evict'||mode==='fence-expire'||mode==='fence-failed'){
+   const entered=deferred(),release=deferred(),caller=new AbortController();let now=1000,held=false,unlocked=false;
+   releases.push(()=>caller.abort(),()=>release.resolve());setHotCacheClock(()=>now);
+   const binding=env.ACCESS_CONTROL;
+   generationEnv={ACCESS_CONTROL:{idFromName(name){return binding.idFromName(name);},get(id){
+    const original=binding.get(id);
+    return {async fetch(url,init){
+     const response=await original.fetch(url,init);
+     if(url.endsWith('/admission/resolve')&&!held){
+      held=true;const acquire=response.body.getReader.bind(response.body);
+      response.body.getReader=options=>{const reader=acquire(options),read=reader.read.bind(reader),unlock=reader.releaseLock.bind(reader);
+       reader.read=async(...args)=>{const value=await read(...args);if(value.done){entered.resolve();await release.promise;}return value;};
+       reader.releaseLock=()=>{unlock();unlocked=true;};return reader;};
+     }return response;
+    }};
+   }}};
+   let preflight=await take(own(preflightCredential(generationEnv,kid,digest)));if(preflight.outcome==='matched')proof=preflight.proof;check(!!proof,'A preflight');
+   prep=prepareCredentialGeneration(proof);proof=undefined;
+   const first=own(completeCredentialGeneration(prep,{providers:[]},on,caller.signal).then(value=>{a=value;return value;}));prep=undefined;
+   const arrival=await Promise.race([entered.promise.then(()=>({entered:true})),first.outcome.then(outcome=>({entered:false,outcome}))]);
+   if(!arrival.entered){first.used=true;if(arrival.outcome.failed)throw arrival.outcome.error;throw Error('A settled before original EOF hold');}
+   check(!unlocked,'A ORIGINAL unlock held');
+   preflight=await take(own(preflightCredential(generationEnv,kid,digest)));if(preflight.outcome==='matched')proof=preflight.proof;check(!!proof,'B preflight');
+   prep=prepareCredentialGeneration(proof);proof=undefined;
+   const second=own(completeCredentialGeneration(prep,mode==='fence-failed'?{providers:[],credentialId:'other'}:{providers:[]},on).then(value=>{b=value;return value;}));prep=undefined;
+   if(mode==='fence-failed'){
+    const outcome=await second.outcome;second.used=true;check(outcome.failed&&isIdentityFailure(outcome.error),'B ordinary prevalidation denial');
+   }else{
+    await take(second);hit=borrowCredentialGeneration(generationEnv,kid,digest,on);check(!!hit,'B published');hit.dispose();hit=undefined;
+    const live=bodyBudgetCharged();
+    if(mode==='fence-expire'){now=61000;hit=borrowCredentialGeneration(generationEnv,kid,digest,on);check(!hit,'B expired');now=1000;}
+    else evictCredentialGeneration(generationEnv,kid);
+    check(bodyBudgetCharged()===live,'B remains borrowed/funded after publication removal');
+   }
+   release.resolve();await take(first);check(unlocked,'A ORIGINAL unlock joined');
+   hit=borrowCredentialGeneration(generationEnv,kid,digest,on);
+   check(!!hit===(mode==='fence-failed'),'successful-publication watermark only');
+   if(hit){hit.dispose();hit=undefined;}
+   if(mode!=='fence-failed'){
+    check(bodyBudgetCharged()-baseline>=preflightPayloadBytes,'A uncached under its full owner');
+    const third=await take(own(preflightCredential(generationEnv,kid,digest)));if(third.outcome==='matched')proof=third.proof;check(!!proof,'C preliminary match');
+    let denied=false;try{prep=prepareCredentialGeneration(proof);proof=undefined;}catch(error){if(!isIdentityFailure(error)||error.message!=='Identity admission failed (limit)')throw error;denied=true;}
+    check(denied,'both borrowed slots block C before hydration');releaseCredentialPreflight(proof);proof=undefined;
+    b.dispose();b=undefined;check(bodyBudgetCharged()-baseline>=preflightPayloadBytes,'A survives B retirement');
+   }
+   const actual=JSON.parse(await rpc('/fixture/result'));
+   check(actual.trace.intakes===(mode==='fence-failed'?1:2)&&actual.trace.preflights===(mode==='fence-failed'?2:3),'actual native A/B, zero C hydration');
+   check(actual.charged===0&&actual.trace.kv.every(row=>row.byob&&row.reads>0&&row.eof&&row.unlocked&&row.backing<=16384),'native source/SQL roots joined');
+   result={mode,nativeReads:actual.trace.kv.length,intakes:actual.trace.intakes};
   }else{
    const preflight=await take(own(preflightCredential(env,kid,digest)));check(preflight.outcome==='matched','preflight');proof=preflight.proof;
    prep=prepareCredentialGeneration(proof);proof=undefined;
    if(mode==='full-arena'){pressure=ExactBodyCharge.reserve(bodyBudgetBytes-bodyBudgetCharged());check(!!pressure&&bodyBudgetCharged()===bodyBudgetBytes,'full arena');}
    if(mode==='cache-pressure'){pressure=PrivateCacheReservation.reserve({serializedBytes:1,payloadBytes:8388608,structure:1});check(!!pressure,'cache pressure');}
    if(mode==='rotation')await rpc('/fixture/rotate');
+   const hitPressure=mode==='hit-payload'||mode==='hit-structure';let used,vector;
+   if(hitPressure){
+    originalFreeze=Object.freeze;
+    Object.freeze=function(value){if(value&&Object.hasOwn(value,'credential')&&Object.hasOwn(value,'connections')&&Object.hasOwn(value,'pools')){graph=value;freezes++;}return Reflect.apply(originalFreeze,Object,[value]);};
+   }
    const operation=completeCredentialGeneration(prep,{providers:[]},mode==='off'?off:on);prep=undefined;
    a=await take(own(operation));check(Object.isFrozen(a)&&Object.keys(a).join(',')==='dispose','opaque borrower');
    const before=JSON.parse(await rpc('/fixture/result'));
+   if(hitPressure){
+    used=privateCacheCharged();vector={serializedBytes:0,payloadBytes:1,structure:1};
+    const coordinate=mode==='hit-payload'?'payloadBytes':'structure';vector[coordinate]=privateCacheLimits[coordinate]-used[coordinate];
+    pressure=PrivateCacheReservation.reserve(vector);check(!!pressure&&privateCacheCharged()[coordinate]===privateCacheLimits[coordinate],'exact optional pressure');
+    check(bodyBudgetBytes-bodyBudgetCharged()>preflightPayloadBytes,'ample common backing before hit');
+   }
    b=borrowCredentialGeneration(env,kid,digest,on);
    const promoted=mode!=='cache-pressure'&&mode!=='off'&&mode!=='rotation';
    check(!!b===promoted,'matching promotion state');
@@ -88,14 +149,22 @@ export default {async fetch(request,env){
    if(mode==='full-arena')check(bodyBudgetCharged()<bodyBudgetBytes-16777216,'atomic source replacement');
    if(mode==='cache-pressure'||mode==='off'||mode==='rotation')check(bodyBudgetCharged()-baseline>=preflightPayloadBytes,'uncached source ticket');
    const live=bodyBudgetCharged();evictCredentialGeneration(env,kid);check(bodyBudgetCharged()===live,'eviction only removes publication');
-   result={mode,promoted,nativeReads:before.trace.kv.length,intakes:after.trace.intakes};
+   if(hitPressure){
+    check(!!graph&&Object.isFrozen(graph)&&Object.isFrozen(graph.credential.credential)&&freezes===1,'original graph frozen once, no hit replacement');
+    check(privateCacheCharged().structure===used.structure+vector.structure-measureGenerationGraph(graph).structure,'old metadata receipts stay funded');
+    hit=borrowCredentialGeneration(env,kid,digest,on);check(!hit,'demoted publication absent');
+    check(live-baseline>=preflightPayloadBytes+vector.payloadBytes,'same graph now has full temporary backing');
+    a.dispose();a=undefined;check(bodyBudgetCharged()===live-230,'only first borrower metadata retired');
+   }
+   result={mode,promoted:promoted&&!hitPressure,demoted:hitPressure,nativeReads:before.trace.kv.length,intakes:after.trace.intakes};
   }
  }catch(error){hasPrimary=true;primary=error;}
  const failures=[];
+ for(const release of releases)try{release();}catch(error){failures.push(error);}
  // Original transport/body outcomes are observed immediately and joined before
  // any borrower/proof release. Every independent origin is retained, even undefined.
  for(let i=0;i<roots.length;i++){const outcome=await roots[i].outcome;if(outcome.failed&&!roots[i].used){roots[i].used=true;failures.push(outcome.error);}}
- for(const release of [()=>evictCredentialGeneration(env,kid),()=>{b?.dispose();b=undefined;},()=>{a?.dispose();a=undefined;},()=>{prep?.dispose();prep=undefined;},()=>{if(proof){releaseCredentialPreflight(proof);proof=undefined;}},()=>{pressure?.release();pressure=undefined;}])try{release();}catch(error){failures.push(error);}
+ for(const release of [()=>{graph=undefined;if(originalFreeze){Object.freeze=originalFreeze;originalFreeze=undefined;}},()=>evictCredentialGeneration(generationEnv,kid),()=>{hit?.dispose();hit=undefined;},()=>{b?.dispose();b=undefined;},()=>{a?.dispose();a=undefined;},()=>{prep?.dispose();prep=undefined;},()=>{if(proof){releaseCredentialPreflight(proof);proof=undefined;}},()=>{pressure?.release();pressure=undefined;},()=>setHotCacheClock()])try{release();}catch(error){failures.push(error);}
  if(failures.length)throw new AggregateError(hasPrimary?[primary,...failures]:failures,'generation fixture roots');
  if(hasPrimary)throw primary;
  check(bodyBudgetCharged()===baseline,'all original owners released');
@@ -122,7 +191,7 @@ test('inactive generations use actual Workerd native KV/SQLite/RPC and exact com
   try {
     directory = await mkdtemp(join(tmpdir(), 'identity-generations-'));
     runtime = await take(own(startWorkerdFixture(directory, router, upstream, { preventEviction: true })));
-    for (const mode of ['healthy', 'full-arena', 'cache-pressure', 'off', 'rotation', 'preverify', 'unknown-hold']) {
+    for (const mode of ['healthy', 'full-arena', 'cache-pressure', 'off', 'rotation', 'preverify', 'fence-evict', 'fence-expire', 'fence-failed', 'hit-payload', 'hit-structure', 'unknown-hold']) {
       const response = await take(own(runtime.dispatchFetch('https://fixture/' + mode)));
       const body = await take(own(response.text())); assert.equal(response.status, 200, mode);
       const result = JSON.parse(body);

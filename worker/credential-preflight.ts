@@ -2,7 +2,7 @@ import { identityJsonProfiles } from "./access-json.ts";
 import type { Env } from "./types";
 import { admitAdmission, admitIdentity, advanceIdentitySource, identityFailure, identityPlan, identitySourceBudget,
   identitySourceSnapshot, type IdentitySourceBudget } from "./identity-admission.ts";
-import { admitBridgeFactories, admitBridgeCopyFactories, admissionBridgePhasePayload, reserveAdmissionScratch, retireAdmissionScratch, PreflightTicket, GenerationMetadataCharge } from "./credential-preflight-arena.ts";
+import { admitBridgeFactories, admitBridgeCopyFactories, admissionBridgePhasePayload, reserveAdmissionScratch, retireAdmissionScratch, PreflightTicket, GenerationMetadataCharge, type GenerationRetainedCharge } from "./credential-preflight-arena.ts";
 import { admitGenerationFactories, generationMetadata, measureGenerationGraph, freezeGenerationGraph,
   type IdentityGenerationPreparation, type IdentityGenerationBorrow } from "./identity-generations.ts";
 import { PrivateCacheReservation, hotCacheNow, type HotCacheConfig } from "./hot-cache.ts";
@@ -302,10 +302,11 @@ async function runAdmission(owner: AdmissionOwner, input: Record<string, unknown
 type GenerationPartition = { binding: Authority; entries: Map<string, GenerationEntry>;
   funding: GenerationMetadataCharge; cache?: PrivateCacheReservation };
 type GenerationEntry = { partition: GenerationPartition; kid: string; first?: GenerationSlot;
-  second?: GenerationSlot; current?: GenerationSlot; sequence: number; funding: GenerationMetadataCharge; cache?: PrivateCacheReservation };
+  second?: GenerationSlot; current?: GenerationSlot; sequence: number; publishedSequence: number; funding: GenerationMetadataCharge; cache?: PrivateCacheReservation };
 type GenerationSlot = { entry: GenerationEntry; owner: AdmissionOwner; continuation?: CredentialPreflightContinuation;
   handle?: PrivateAdmissionHandle; ready: boolean; published: boolean; borrowers: number; sequence: number; storedAt: number; maxAgeMs: number;
-  funding: GenerationMetadataCharge; initialBorrowFunding?: GenerationMetadataCharge; cache?: PrivateCacheReservation; graphCache?: PrivateCacheReservation };
+  funding: GenerationMetadataCharge; initialBorrowFunding?: GenerationMetadataCharge; cache?: PrivateCacheReservation; graphCache?: PrivateCacheReservation;
+  temporaryCharge?: GenerationRetainedCharge };
 type GenerationBorrower = { slot: GenerationSlot; funding: GenerationMetadataCharge; cache?: PrivateCacheReservation };
 type GenerationRegistry = { partitions: WeakMap<Authority, GenerationPartition>;
   preparations: WeakMap<IdentityGenerationPreparation, GenerationSlot>; borrowers: WeakMap<IdentityGenerationBorrow, GenerationBorrower>;
@@ -348,6 +349,7 @@ function retireGenerationSlot(slot: GenerationSlot): void {
   slot.owner.source = undefined as never; slot.owner.ticket = undefined as never; slot.owner = undefined as never;
   slot.initialBorrowFunding?.release(); slot.initialBorrowFunding = undefined;
   slot.graphCache?.release(); slot.graphCache = undefined;
+  slot.temporaryCharge?.release(); slot.temporaryCharge = undefined;
   slot.cache?.release(); slot.cache = undefined; slot.funding.release();
   if (entry.first === slot) entry.first = undefined;
   if (entry.second === slot) entry.second = undefined;
@@ -385,7 +387,7 @@ export function prepareCredentialGeneration(proof: CredentialPreflightProof): Id
     }
     if (!entry) {
       const funding = generationFunding("entry", 2 * owner.kid.length);
-      entry = { partition, kid: owner.kid, sequence: 0, funding }; partition.entries.set(owner.kid, entry);
+      entry = { partition, kid: owner.kid, sequence: 0, publishedSequence: 0, funding }; partition.entries.set(owner.kid, entry);
     }
     if (!Number.isSafeInteger(entry.sequence + 1)) throw identityFailure("limit");
     slotFunding = generationFunding("slot", owner.kid.length + owner.digest.length + owner.namespace.length);
@@ -427,7 +429,16 @@ function newGenerationBorrow(slot: GenerationSlot): IdentityGenerationBorrow {
   try {
     if (slot.graphCache) {
       cache = PrivateCacheReservation.adoptMetadata(funding) ?? undefined;
-      if (!cache) throw identityFailure("limit");
+      if (!cache) {
+        // Optional metadata pressure cannot reject a matching hit. Expand the
+        // SAME graph owner before removing publication; all old borrows survive.
+        // A refusal here is actual common-arena/UNKNOWN pressure, not cache fit.
+        const temporary = slot.graphCache.demoteForBorrow();
+        if (!temporary) throw identityFailure("limit");
+        slot.temporaryCharge = temporary; slot.graphCache = undefined;
+        slot.published = false;
+        if (slot.entry.current === slot) slot.entry.current = undefined;
+      }
     }
     const borrower = { slot, funding, cache }, handle = Object.freeze({ dispose: disposeGenerationBorrow });
     generationRegistry!.borrowers.set(handle, borrower); slot.borrowers++;
@@ -437,7 +448,9 @@ function newGenerationBorrow(slot: GenerationSlot): IdentityGenerationBorrow {
 
 function promoteGeneration(slot: GenerationSlot, borrower: GenerationBorrower, vector: ReturnType<typeof measureGenerationGraph>): boolean {
   const entry = slot.entry, partition = entry.partition, registry = generationRegistry!;
-  if (entry.current && entry.current.sequence > slot.sequence) return false;
+  // Publication history belongs to the stable entry, not to its current value.
+  // Eviction/expiry can clear current while a newer borrowed generation lives.
+  if (entry.publishedSequence > slot.sequence) return false;
   let registryReceipt: PrivateCacheReservation | undefined;
   let partitionReceipt: PrivateCacheReservation | undefined, entryReceipt: PrivateCacheReservation | undefined;
   let slotReceipt: PrivateCacheReservation | undefined, borrowerReceipt: PrivateCacheReservation | undefined;
@@ -455,7 +468,7 @@ function promoteGeneration(slot: GenerationSlot, borrower: GenerationBorrower, v
     registry.cache ??= registryReceipt; partition.cache ??= partitionReceipt; entry.cache ??= entryReceipt;
     slot.cache = slotReceipt; borrower.cache = borrowerReceipt; slot.graphCache = graphReceipt;
     const previous = entry.current;
-    entry.current = slot; slot.published = true; committed = true;
+    entry.current = slot; entry.publishedSequence = slot.sequence; slot.published = true; committed = true;
     if (previous && previous !== slot) { previous.published = false; retireGenerationSlot(previous); }
     return true;
   } finally {
@@ -529,6 +542,7 @@ export function borrowCredentialGeneration(env: Pick<Env, "ACCESS_CONTROL">, kid
     slot.published = false; entry!.current = undefined; retireGenerationSlot(slot); return undefined;
   }
   if (!safeEqual(slot.owner.digest, digest) || !generationCredentialMatches(slot, digest)) return undefined;
+  admitGenerationFactories();
   return newGenerationBorrow(slot);
 }
 export function evictCredentialGeneration(env: Pick<Env, "ACCESS_CONTROL">, kid: string): void {
