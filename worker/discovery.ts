@@ -26,7 +26,7 @@ import { publicSession, sessionPolicies, sessionPolicyIdentity, verifiedAccessSe
 import { contentRetentionDefault } from "./content-retention.ts";
 import { loadFusionConfig } from "./fusion-config";
 import { FUSION_MODEL_ID } from "./fusion";
-import { authenticateProxyKey, proxyAdmission } from "./proxy-auth";
+import { authenticateProxyKey, hasProxyKeyIntent, proxyAdmission } from "./proxy-auth";
 import { assertProviderAccess, listHealth, modelRoute, modelSupportsEndpoint, providerReadinessForState, snapshot, unifiedPathForEndpoint, type Readiness } from "./providers";
 import type { AccessSession, AuthorizedIdentity, CompiledModel, CompiledProvider, Env, UpstreamGrant } from "./types";
 import { errorResponse, HttpError, privateJson, sha256Hex } from "./utils";
@@ -406,7 +406,7 @@ async function discoveryResponse(request: Request, env: Env, variant: string, re
   // Freeze the configured value once for both cache identity and projection.
   // Request/forwarded origins and publication response URLs cannot supply it.
   const publicOrigin = readPublishedInputOrigin(env.CLAWROUTER_PUBLIC_ORIGIN);
-  const hasKey = ["authorization", "x-api-key", "x-goog-api-key", "api-key"].some((name) => request.headers.get(name)?.includes("clawrouter-") || request.headers.get(name)?.includes("ocpk_"));
+  const hasKey = hasProxyKeyIntent(request.headers);
   if (!hasKey) {
     const session = await verifiedAccessSession(request, env);
     if (!session) return errorResponse("client_auth_required", "a valid ClawRouter proxy key or Cloudflare Access session is required", 401);

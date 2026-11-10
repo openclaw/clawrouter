@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Bound each examined raw proxy credential header to 4096 UTF-16 units before normalization, parsing or hashing. Preserve first-valid header precedence and Access fallback while rejecting encountered oversize values with terminal 503; formerly accepted oversized legacy tokens are intentionally denied.
+
 - Keep ordinary selected JSON HTTP input custody through actual delivery cleanup, archive writes and terminal accounting without delaying response publication; preserve specialized owners and existing accounting outcomes.
 
 - Publish all admitted current-pool migration markers after successful identity admission, including absent grants after a legacy fallback, so canonical rereads do not repeat legacy source imports.

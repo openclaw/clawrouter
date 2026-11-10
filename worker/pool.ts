@@ -3,14 +3,14 @@ import { upstreamGrantResponses } from "./admin";
 import { grantRoutingPolicy } from "./grant-selection";
 import { grantUsageSnapshot } from "./ledgers";
 import { policyAllowsModel } from "./policy-models";
-import { authenticateProxyKey } from "./proxy-auth";
+import { authenticateProxyKey, hasProxyKeyIntent } from "./proxy-auth";
 import { snapshot } from "./providers";
 import { modelEligibility, planLabel, policyGrants, quotaFree } from "../shared/subscription-pool.ts";
 import type { Env, UpstreamGrant } from "./types";
 import { errorResponse, HttpError, privateJson, sha256Hex } from "./utils";
 
 export async function poolResponse(request: Request, env: Env): Promise<Response> {
-  const hasKey = ["authorization", "x-api-key", "x-goog-api-key", "api-key"].some(name => /(?:clawrouter-|ocpk_)/.test(request.headers.get(name) ?? ""));
+  const hasKey = hasProxyKeyIntent(request.headers);
   const session = hasKey ? null : await verifiedAccessSession(request, env);
   const policyId = new URL(request.url).searchParams.get("policyId");
   const entry = session && policyId ? (await sessionPolicies(session, env)).find(entry => entry.policyId === policyId) : null;
