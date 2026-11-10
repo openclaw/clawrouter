@@ -459,7 +459,7 @@ inspect. The implementation checks:
 | Snapshot request | Exact planned JSON text times two plus encoded bytes; through original response cleanup |
 | Policy/routing | Separate retained D vectors; routing prefix workspace admitted before construction |
 | Revalidation execution metadata | 65,536 logical-byte component; CONTROL classification remains explicit |
-| Terminal origins | Nine per snapshot/inspect RPC, prepaid before each attempt's selection: 36 RPC origins plus nine codec origins for Venice, 18 for GMI |
+| Terminal origins | Nine per snapshot/inspect RPC, prepaid before each attempt's selection: 36 RPC origins plus ten source and two nine-origin consumer roles for Venice (64 prepaid), 18 for GMI |
 
 The grant, persistent guard and active phase must fit the SAME 33,554,432-byte
 foreground backing. These component checks are not a completed simultaneous
@@ -556,7 +556,7 @@ predicate frames belong to CONTROL, not passive DATA. Their aliases clear at
 actual request retirement; the complete overlap is still unqualified.
 
 Additional authored witnesses use the real compiled entry and SQLite authority:
-41 Node cases, 32 native cases, and one Venice invocation in the existing pinned
+55 Node cases, 57 native cases, and one Venice invocation in the existing pinned
 OpenClaw UNIFIED client fixture. They include accepted/rejected structural and
 wire edges, escaped Unicode, raw duplicate/unknown preservation, more than 2 MiB
 of SSE, JSON delivery while archive work is held, and post-native held
@@ -975,3 +975,78 @@ scalar observers do not certify the whole CONTROL upper bound.
 Static checks only; all runtime semantics remain UNRUN_CODE_ONLY_HOSTED.
 The checkout remains active and retained. No push, PR, activation or full
 source-closure claim is authorized by this checkpoint.
+
+
+### Actual returned-unlock and independent closed custody correction
+
+The prior cancellation witnesses held a returned cancellation promise, then
+called native unlock and threw synchronously. They did not prove ownership of
+work returned by a modified unlock. The private source and consumer now publish
+their once-only unlock flag and VOID join before reading or invoking the actual
+`releaseLock` method. A native undefined return settles synchronously. A returned
+promise or thenable gets an immediate two-outcome observer; only its sanitized
+VOID follower and fixed failure metadata remain in the adapter. A synchronous
+throw and a rejected undefined return both retain the unlock origin.
+
+Retirement joins that actual work with read, FIRSTcancel, closed and active pull
+before testing the physical body lock or clearing source aliases. Native unlock
+followed by a held return therefore retains funding despite an unlocked body.
+A held return which later performs native unlock remains pending; it is not
+prematurely latched UNKNOWN. A final locked body, unjoinable observer attachment,
+or other unresolved disposition still holds its owner. Public consumer output,
+cancellation and mapped-error publication do not await the separate retirement.
+The source's existing JSON validation and SSE EOF cleanup order is unchanged.
+The synchronous private adapter initiates observation; ordinary InputRetirement
+is unchanged. Hidden work which was not returned is not a claimed join.
+
+The source also owns an independent CLOSED origin. Its join exists before the
+actual getter is accessed. Getter throws retain that origin, not read. A modified
+closed promise can reject after successful reads without becoming a new public
+or billing failure. Its bounded diagnostic remains in the original terminal
+ledger. Propagation sharing is limited to this source's original reader,
+verified original closed getter and actual native read/cancel methods. Modified
+methods/getters retain independent origins. No foreign reason is inspected,
+compared for equality, copied into an application record, or traversed.
+
+The incremental factory inventory is additional to the earlier incomplete
+HTTP inventory. These rows describe actual products, not spare capacity:
+
+| Reached product | Factory and lifetime |
+| --- | --- |
+| Source fields | Two new fields: unlock join and bounded native-propagation carrier. They survive until original joins and explicit source clearing. The existing flag word adds two bits, not another object. |
+| Consumer field | One unlock-join field per actually acquired reader, including a mapped replacement if it starts. It clears only after its join and final lock check. |
+| Each unlock deferred | One Promise, executor function and captured-scope link, resolver function/reference and the existing method activation's resolve binding; executor activation/parameter are transient. The flag is set before the factory and actual method access. |
+| Each returned-unlock observer | Actual returned-work reference; at most one Promise assimilation result; two handler functions and their captured links; the chained Promise and two outcome reactions. Native void constructs none of these returned-work products. Actual thenable assimilation retains its original owner; it is not a native-heap exemption. |
+| Unlock execution | Source `unlock` method/prototype entry; consumer's existing function. Their active receiver, resolve/following/reader/method/original/catch bindings, actual Reflect.apply call operands and empty argument vector remain CONTROL. Actual methods are never replaced by pinned native methods. |
+| Unlock retirement | An additional await/join continuation and its outcome reactions in each already-owned retirement path. The reader/body, closed receipt, FIRSTcancel, active pull and original operation stay owned across it. |
+| Source closed observation | A deferred VOID Promise plus executor/resolver products, two original-outcome handlers/reactions and their chained Promise; actual getter/original reference, reader/native-proof/following/catch bindings and call operands. The old single chained closed follower is replaced, not counted a second time. |
+| Native propagation proof | Five additional shared intrinsic bindings: two read methods, two closed getters and getter lookup. Construction uses two sequential descriptor records, each with four fields; they are temporary, not retained source descriptors. Existing shared library functions are referenced, not recreated. Per-read native predicate, actual-method receiver and argument-vector products remain CONTROL until that call unwinds. |
+| Independent closed failure | One record with six fields, two Map cells and one ordered-vector cell: ten products when this new origin fails. Classification/lookup/insertion and unwind activations remain additive. The source claims its tenth ordinal at its existing acquisition, not before intervening revalidation. |
+
+Before selection effects, Venice now reserves 64 terminal-origin charges rather
+than 63: 36 existing revalidation, ten source, and two nine-origin consumer
+roles. The new origin reserves an additional 2048 positive bytes through the
+same common arena replacement. There is no new allowance or arena. Failure
+preserves the existing debit. Finishing one role does not delete/refund the
+ledger while another original or UNKNOWN owner remains. This DATA reservation
+does not convert execution products into passive scratch or prove CONTROL fit.
+
+The source's two new persistent fields alone raise the prior 1047 between-feed
+subset to at least 1049, and the corresponding active-parser reservation subset
+from 1119 to at least 1121. That is still before the deferred/observer/activation
+and competing-retirement omissions itemized above. Returned unlock can overlap
+another consumer or mapped replacement; failed closed metadata can coexist with
+later successful parsing. No subtraction or combined upper-bound certificate is
+claimed. The proposed frame-evidence handoff remains unimplemented and awaits
+its separate disposition. The current candidate remains nonpublishable.
+
+Fourteen additional authored Node cases and 25 native cases exercise the actual
+returns: native unlock before the held return, held return before native unlock,
+thenable success, undefined/shared/oversized rejection, independent closed
+rejection after successful reads, shared closed/unlock origins, and a throwing
+closed getter. They assert one actual unlock, native-versus-return settlement,
+prompt public SSE/consumer output, held debit and eventual final retirement.
+JSON cases exercise the actual BYOB source. Every gate release is registered
+before dispatch, body roots remain memoized, and teardown releases before
+joining finite originals. These are authored witnesses, not runtime results;
+all local semantics remain UNRUN_CODE_ONLY_HOSTED.

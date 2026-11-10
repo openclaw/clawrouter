@@ -689,3 +689,116 @@ test('known HTTP preparation pressure denies BEFORE full admission can count or 
     assert.deepEqual(JSON.parse((await f.request('https://fixture/fixture/upstream')).text), []);
   });
 });
+
+
+for (const mode of [
+  ...['before', 'after'].flatMap(order => ['success', 'undefined', 'primitive', 'shared'].map(kind => 'unlock-' + order + '-' + kind)),
+  'closed-undefined', 'closed-shared', 'unlock-before-closed-shared',
+]) test('native consumer original ' + mode + ' is joined independently of public completion', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const before = await settledState(f), kind = mode.split('-').at(-1);
+    if (kind !== 'success') f.expectFailedRetirement(before.intakes.length);
+    const release = async () => { assert.equal((await f.request('https://fixture/fixture/consumer-mode', { method: 'DELETE' })).status, 204); };
+    f.releases.push(release); // Before setup or dispatch can fail.
+    assert.equal((await f.request('https://fixture/fixture/consumer-mode', { method: 'POST', body: mode })).status, 204);
+    const dispatch = f.dispatch('https://fixture/v1/chat/completions', chat('venice', {
+      model: ownedHttpControlModels.venice, ownedVeniceCase: 'compact-later-object128', stream: true,
+    }));
+    let held;
+    for (;;) {
+      held = await state(f);
+      if (held.consumers.held) break;
+      if (held.completed.length > before.completed.length) { await f.take(dispatch); assert.fail('consumer ended before returned-work arrival'); }
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    const response = await f.take(dispatch); assert.equal(response.status, 200);
+    const text = await f.take(f.body(response)); assert.ok(text.includes('data: [DONE]'), 'public output does not wait for independent retirement');
+    held = await state(f);
+    assert.equal(held.completed.length, before.completed.length); assert.equal(held.consumers.live, 1);
+    assert.equal(held.consumers.acquired, 1); assert.equal(held.consumers.replay, 0);
+    assert.equal(held.consumers.unlock, 1); assert.equal(held.consumers.reasonReads, 0);
+    assert.equal(held.consumers.nativeUnlocked, mode.startsWith('unlock-after-') ? 0 : 1);
+    assert.equal(held.consumers.unlockSettled, mode.startsWith('closed-') ? 1 : 0);
+    assert.ok(held.charged >= before.charged + 32 * 1024 * 1024);
+    await release();
+    const after = await settledState(f), origins = after.completed.at(-1).origins ?? [];
+    assert.equal(after.consumers.unlock, 1); assert.equal(after.consumers.nativeUnlocked, 1);
+    assert.equal(after.consumers.unlockSettled, 1); assert.equal(after.consumers.live, 0);
+    assert.equal(after.consumers.thenCalls, mode === 'unlock-after-success' ? 1 : 0);
+    assert.equal(after.consumers.reasonReads, 0); assert.ok(after.charged < held.charged);
+    assert.deepEqual(origins.map(value => value.origin), kind === 'success' ? [] : mode.startsWith('closed-') ? ['closed']
+      : mode.includes('-closed-') ? ['unlock', 'closed'] : ['unlock']);
+    assert.ok(origins.every(value => value.undefined === (kind === 'undefined')));
+    assert.equal(after.events.length - before.events.length, 1);
+    assert.equal(count(after, 'provider', '/chat/completions') - count(before, 'provider', '/chat/completions'), 1);
+  }, true);
+});
+
+for (const [mode, kind, streaming] of [
+  ...['unlock-before', 'unlock-after'].flatMap(mode => ['success', 'undefined', 'shared', 'huge'].map(kind => [mode, kind, true])),
+  ['closed', 'undefined', true], ['closed', 'shared', true], ['unlock-before-closed', 'shared', true],
+  ['unlock-before', 'success', false], ['unlock-after', 'success', false],
+]) test('native source original ' + mode + '/' + kind + '/' + (streaming ? 'SSE' : 'BYOB JSON') + ' settles before lock disposition', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const before = await settledState(f);
+    if (kind !== 'success') f.expectFailedRetirement(before.intakes.length);
+    const release = async () => { assert.equal((await f.request('https://fixture/fixture/control-read', { method: 'DELETE' })).status, 204); };
+    f.releases.push(release);
+    assert.equal((await f.request('https://fixture/fixture/control-read', {
+      method: 'POST', body: JSON.stringify({ kind: 'provider', mode, reason: kind }),
+    })).status, 204);
+    const dispatch = f.dispatch('https://fixture/v1/chat/completions', chat('venice', {
+      model: ownedHttpControlModels.venice, ownedVeniceCase: streaming ? 'compact-later-object128' : 'compact-object128', ...(streaming ? { stream: true } : {}),
+    }));
+    let held;
+    for (;;) {
+      held = await state(f);
+      if (held.controlReads.at(-1)?.held) break;
+      if (held.completed.length > before.completed.length) { await f.take(dispatch); assert.fail('source ended before returned-work arrival'); }
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    const row = held.controlReads.at(-1);
+    assert.equal(row.read, row.readSettled); assert.ok(row.read > 0); assert.equal(held.reasonReads, 0);
+    if (mode !== 'closed') {
+      assert.equal(row.unlock, 1); assert.equal(row.unlockSettled, 0);
+      assert.equal(row.nativeUnlocked, mode.startsWith('unlock-before') ? 1 : 0);
+    }
+    if (streaming) assert.equal((await f.take(dispatch)).status, 200, 'headers/prefix remain deliverable while source retirement is held');
+    assert.equal(held.completed.length, before.completed.length); assert.ok(held.charged >= before.charged + 32 * 1024 * 1024);
+    await release();
+    const response = await f.take(dispatch); let text, hasBodyFailure = false, bodyFailure;
+    try { text = await f.take(f.body(response)); } catch (error) { hasBodyFailure = true; bodyFailure = error; }
+    try {
+      const after = await settledState(f), final = after.controlReads.at(-1), origins = after.completed.at(-1).origins ?? [];
+      assert.equal(response.status, 200); assert.equal(final.unlock, 1); assert.equal(final.nativeUnlocked, 1);
+      assert.equal(final.unlockSettled, 1); assert.equal(final.thenCalls, mode === 'unlock-after' && kind === 'success' ? 1 : 0);
+      assert.equal(after.reasonReads, 0); assert.ok(after.charged < held.charged);
+      assert.equal(hasBodyFailure, kind !== 'success' && mode !== 'closed');
+      if (!hasBodyFailure) assert.ok(streaming ? text.includes('data: [DONE]') : JSON.parse(text).choices);
+      assert.deepEqual(origins.map(value => value.origin), kind === 'success' ? [] : mode === 'closed' ? ['closed']
+        : mode === 'unlock-before-closed' ? ['unlock', 'closed'] : ['unlock']);
+      assert.ok(origins.every(value => value.undefined === (kind === 'undefined')));
+      assert.equal(after.events.length - before.events.length, 1);
+      assert.equal(count(after, 'provider', '/chat/completions') - count(before, 'provider', '/chat/completions'), 1);
+    } catch (validation) { throw new AggregateError([...(hasBodyFailure ? [bodyFailure] : []), validation], 'native original returned-work validation'); }
+  });
+});
+
+
+test('native independent source closed getter throw keeps its own origin and original cleanup', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const before = await settledState(f); f.expectFailedRetirement(before.intakes.length);
+    f.releases.push(async () => { assert.equal((await f.request('https://fixture/fixture/control-read', { method: 'DELETE' })).status, 204); });
+    assert.equal((await f.request('https://fixture/fixture/control-read', {
+      method: 'POST', body: JSON.stringify({ kind: 'provider', mode: 'closed-getter', reason: 'undefined' }),
+    })).status, 204);
+    const response = await f.request('https://fixture/v1/chat/completions', chat('venice', {
+      model: ownedHttpControlModels.venice, ownedVeniceCase: 'compact-object128',
+    }));
+    const after = await settledState(f), row = after.controlReads.at(-1);
+    assert.equal(response.status, 502); assert.equal(JSON.parse(response.text).error.code, 'provider_unavailable');
+    assert.equal(row.closedGetter, 1); assert.equal(row.read, 0); assert.equal(row.unlock, 1); assert.equal(row.nativeUnlocked, 1);
+    assert.deepEqual(after.completed.at(-1).origins, [{ origin: 'closed', undefined: true }]);
+    assert.equal(after.reasonReads, 0); assert.equal(after.events.length - before.events.length, 1);
+  });
+});

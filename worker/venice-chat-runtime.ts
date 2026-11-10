@@ -282,6 +282,11 @@ function parseOwnedVeniceJson(state: OwnedVeniceCodec, text: string): unknown {
 
 const ownedDefaultCancel = ReadableStreamDefaultReader.prototype.cancel;
 const ownedByobCancel = ReadableStreamBYOBReader.prototype.cancel;
+const ownedDefaultRead = ReadableStreamDefaultReader.prototype.read;
+const ownedByobRead = ReadableStreamBYOBReader.prototype.read;
+const ownedDefaultClosed = Object.getOwnPropertyDescriptor(ReadableStreamDefaultReader.prototype, "closed")!.get;
+const ownedByobClosed = Object.getOwnPropertyDescriptor(ReadableStreamBYOBReader.prototype, "closed")!.get;
+const ownedLookupGetter = (Object.prototype as { __lookupGetter__?: unknown }).__lookupGetter__;
 class OwnedVeniceSource {
   readonly state: OwnedVeniceCodec;
   body?: ReadableStream<Uint8Array> | null;
@@ -291,11 +296,14 @@ class OwnedVeniceSource {
   signal?: AbortSignal;
   listener?: () => void;
   closed?: Promise<void>;
+  unlocking?: Promise<void>;
+  private nativeFailure?: object;
   pulling?: Promise<void>;
   retired: Promise<void>;
   private resolve!: () => void;
   // finishing=1, errored=2, read failed=4, BYOB=8,
-  // cleanup reported=16, unreadable body=32. No state is inferred from reason equality.
+  // cleanup reported=16, unreadable body=32, unlock attempted=64, native closed=128.
+  // Native propagation also requires the actual original method/body lineage.
   private flags = 0;
   private cleanup: object[] = [];
   abortFailure?: object;
@@ -323,22 +331,47 @@ class OwnedVeniceSource {
     this.input = inputRetirement({
       cancel: () => {
         try {
-          const reader = this.reader!, propagated = (this.flags & 4) && (this.flags & 2)
-            && Object.getPrototypeOf(reader) === ((this.flags & 8) ? ReadableStreamBYOBReader.prototype : ReadableStreamDefaultReader.prototype)
-            && !Object.hasOwn(reader, "closed") && reader.cancel === ((this.flags & 8) ? ownedByobCancel : ownedDefaultCancel);
-          let original: Promise<void> | undefined = reader.cancel();
-          const settled = original.then(() => undefined, reason => { if (!propagated) this.cleanup.push(this.failure("cancel", reason)); });
+          const reader = this.reader!, method = reader.cancel;
+          const native = Object.getPrototypeOf(reader) === ((this.flags & 8) ? ReadableStreamBYOBReader.prototype : ReadableStreamDefaultReader.prototype)
+            && method === ((this.flags & 8) ? ownedByobCancel : ownedDefaultCancel);
+          let original: Promise<void> | undefined = Reflect.apply(method, reader, []);
+          const settled = original!.then(() => undefined, reason => {
+            if (!(native && (this.flags & 128) && (this.flags & 2) && this.nativeFailure)) this.cleanup.push(this.failure("cancel", reason));
+          });
           original = undefined; return settled;
         } catch (reason) { this.cleanup.push(this.failure("cancel", reason)); return Promise.resolve(); }
       },
-      releaseLock: () => {
-        try { this.reader!.releaseLock(); }
-        catch (reason) { this.cleanup.push(this.failure("unlock", reason)); }
-        if (this.body!.locked) holdOwnedHttpVeniceSource(this.state.cap);
-      },
+      releaseLock: () => { this.unlock(); },
     });
-    try { this.closed = this.reader.closed.then(() => undefined, () => { this.flags |= 2; }); }
-    catch (reason) { throw this.failure("read", reason); }
+    let resolveClosed!: () => void;
+    this.closed = new Promise<void>(done => { resolveClosed = done; });
+    let following = false;
+    try {
+      let original: Promise<void> | undefined;
+      {
+        const reader = this.reader;
+        if (Object.getPrototypeOf(reader) === ((this.flags & 8) ? ReadableStreamBYOBReader.prototype : ReadableStreamDefaultReader.prototype)
+          && !Object.hasOwn(reader, "closed") && typeof ownedLookupGetter === "function"
+          && ownedLookupGetter.call(reader, "closed") === ((this.flags & 8) ? ownedByobClosed : ownedDefaultClosed)) this.flags |= 128;
+        original = reader.closed;
+      }
+      following = true;
+      void original.then(() => { resolveClosed(); }, reason => {
+        this.flags |= 2;
+        // This exact body's native read/closed pair can propagate one failure.
+        // Modified getters/promises always retain their independent origin.
+        if (!((this.flags & 128) && this.nativeFailure)) {
+          const failure = this.failure("closed", reason);
+          if (this.flags & 128) this.nativeFailure = failure;
+        }
+        reason = undefined; resolveClosed();
+      });
+      original = undefined;
+    } catch (reason) {
+      const failure = this.failure("closed", reason); reason = undefined;
+      if (following) holdOwnedHttpVeniceSource(this.state.cap); else resolveClosed();
+      throw failure;
+    }
     this.listener = () => {
       this.abortFailure ??= this.failure("abort", signal.reason);
       if (this.outputAbort) this.outputAbort(); else void this.finish("cancel");
@@ -357,12 +390,40 @@ class OwnedVeniceSource {
     this.checkAbort();
     return this.input!.read(() => {
       try {
-        let original: Promise<ReadableStreamReadResult<Uint8Array>> | undefined = (this.flags & 8) ? (this.reader as ReadableStreamBYOBReader).read(new Uint8Array(limit))
-          : (this.reader as ReadableStreamDefaultReader<Uint8Array>).read();
-        const settled = original.then(value => value, reason => { this.flags |= 4; throw this.failure("read", reason); });
+        const reader = this.reader!, method = reader.read;
+        const native = !!(this.flags & 128) && Object.getPrototypeOf(reader) === ((this.flags & 8) ? ReadableStreamBYOBReader.prototype : ReadableStreamDefaultReader.prototype)
+          && method === ((this.flags & 8) ? ownedByobRead : ownedDefaultRead);
+        let original: Promise<ReadableStreamReadResult<Uint8Array>> | undefined = Reflect.apply(method, reader, (this.flags & 8) ? [new Uint8Array(limit)] : []);
+        const settled = original!.then(value => value, reason => {
+          this.flags |= 4;
+          if (native && this.nativeFailure) throw this.nativeFailure;
+          const failure = this.failure("read", reason);
+          if (native) this.nativeFailure = failure;
+          throw failure;
+        });
         original = undefined; return settled;
       } catch (reason) { this.flags |= 4; throw this.failure("read", reason); }
     });
+  }
+  private unlock(): void {
+    if (this.flags & 64) return;
+    this.flags |= 64;
+    let resolve!: () => void;
+    this.unlocking = new Promise<void>(done => { resolve = done; });
+    let following = false;
+    try {
+      let original: unknown;
+      { const reader = this.reader!, method = reader.releaseLock; original = Reflect.apply(method, reader, []); }
+      if (original === undefined) { resolve(); return; }
+      following = true;
+      void Promise.resolve(original).then(() => { resolve(); }, reason => {
+        this.cleanup.push(this.failure("unlock", reason)); reason = undefined; resolve();
+      });
+      original = undefined;
+    } catch (reason) {
+      this.cleanup.push(this.failure("unlock", reason)); reason = undefined;
+      if (following) holdOwnedHttpVeniceSource(this.state.cap); else resolve();
+    }
   }
   finish(kind: "eof" | "cancel"): Promise<void> {
     if ((this.flags & 1)) return this.retired;
@@ -380,10 +441,10 @@ class OwnedVeniceSource {
     const cleanupSettled = cleanup.then(() => undefined, reason => { this.cleanup.push(this.failure("retire", reason)); });
     const pullSettled = active?.then(() => undefined, reason => { this.cleanup.push(this.failure("pull", reason)); });
     void Promise.all([cleanupSettled, pullSettled]).then(async () => {
-      await this.closed;
+      await this.unlocking; await this.closed;
       try { if ((this.flags & 32) || this.body?.locked) { holdOwnedHttpVeniceSource(this.state.cap); return; } }
       catch (reason) { this.cleanup.push(this.failure("retire", reason)); holdOwnedHttpVeniceSource(this.state.cap); return; }
-      this.body = undefined; this.reader = undefined; this.input = undefined; this.closed = undefined;
+      this.body = undefined; this.reader = undefined; this.input = undefined; this.closed = undefined; this.unlocking = undefined;
       this.response = undefined;
       this.listener = undefined; this.done = true;
       this.resolve();
@@ -407,7 +468,7 @@ class OwnedVeniceSource {
   }
   clear(): void {
     if (!this.done || this.pulling) throw identityFailure("protocol");
-    this.cleanup.length = 0; this.abortFailure = undefined; this.signal = undefined; this.outputAbort = undefined;
+    this.cleanup.length = 0; this.nativeFailure = undefined; this.abortFailure = undefined; this.signal = undefined; this.outputAbort = undefined;
     finishOwnedCodecDiagnostics(this.state.cap, 0);
   }
 }

@@ -39,8 +39,8 @@ interface CodecConsumer {
 interface CodecReader {
   owner: CodecConsumer; role: 1 | 2; body?: ReadableStream<Uint8Array>;
   reader?: ReadableStreamDefaultReader<Uint8Array>; closed?: Promise<void>; reading?: Promise<void>;
-  cancellation?: Promise<void>; retirement?: Promise<void>; pulling?: Promise<void>;
-  // stopped=1, unlocked=2, native propagated read=4, native closed=8,
+  cancellation?: Promise<void>; unlocking?: Promise<void>; retirement?: Promise<void>; pulling?: Promise<void>;
+  // stopped=1, unlock attempted=2, native propagated read=4, native closed=8,
   // errored=16, transferred sniff=32, sniff EOF=64. Independent states persist.
   flags: number; unlockFailure?: object;
   prefix?: Uint8Array[]; prefixIndex?: number;
@@ -140,16 +140,29 @@ function readConsumer(state: CodecReader): Promise<ReadableStreamReadResult<Uint
     () => { if (state.reading === settled) state.reading = undefined; resolve(); });
   return observed;
 }
-function unlockConsumer(state: CodecReader): object | undefined {
+function unlockConsumer(state: CodecReader): void {
   if (state.flags & 2) return;
   state.flags |= 2;
-  if (!state.reader) return;
-  let failure: object | undefined;
-  try { state.reader.releaseLock(); }
-  catch (reason) { failure = consumerFailure(state, "unlock", reason); state.unlockFailure = failure; }
-  try { if (state.body?.locked) holdOwnedHttpVeniceSource(state.owner.codec); }
-  catch (reason) { consumerFailure(state, "retire", reason); holdOwnedHttpVeniceSource(state.owner.codec); }
-  return failure;
+  let resolve!: () => void;
+  state.unlocking = new Promise<void>(done => { resolve = done; });
+  // Publish the join BEFORE actual method access or synchronous reentry.
+  if (!state.reader) { resolve(); return; }
+  let following = false;
+  try {
+    let original: unknown;
+    { const reader = state.reader, method = reader.releaseLock; original = Reflect.apply(method, reader, []); }
+    if (original === undefined) { resolve(); return; } // Native void fast path.
+    following = true;
+    void Promise.resolve(original).then(() => { resolve(); }, reason => {
+      state.unlockFailure = consumerFailure(state, "unlock", reason); reason = undefined; resolve();
+    });
+    original = undefined;
+  } catch (reason) {
+    state.unlockFailure = consumerFailure(state, "unlock", reason); reason = undefined;
+    // A failed observer attachment cannot certify a returned original. A
+    // synchronous method throw itself is settled; final lock disposition waits.
+    if (following) holdOwnedHttpVeniceSource(state.owner.codec); else resolve();
+  }
 }
 function retireConsumerReader(state: CodecReader, kind: "eof" | "cancel", immediateUnlock: boolean): Promise<void> {
   if (state.retirement) return state.retirement;
@@ -179,11 +192,11 @@ function retireConsumerReader(state: CodecReader, kind: "eof" | "cancel", immedi
   let joining: Promise<void> | undefined = (async () => {
     await reading; await state.cancellation;
     if (!immediateUnlock) unlockConsumer(state);
-    await state.closed; await pulling;
+    await state.unlocking; await state.closed; await pulling;
     try { if (state.body?.locked) { holdOwnedHttpVeniceSource(state.owner.codec); return await new Promise<void>(() => {}); } }
     catch (reason) { consumerFailure(state, "retire", reason); holdOwnedHttpVeniceSource(state.owner.codec); return await new Promise<void>(() => {}); }
     if (state.prefix) state.prefix.length = 0; state.prefix = undefined;
-    state.reader = undefined; state.reading = undefined; state.cancellation = undefined; state.closed = undefined; state.pulling = undefined;
+    state.reader = undefined; state.reading = undefined; state.cancellation = undefined; state.unlocking = undefined; state.closed = undefined; state.pulling = undefined;
     state.body = undefined;
     finishOwnedCodecDiagnostics(state.owner.codec, state.role);
   })();

@@ -7,7 +7,7 @@ export function createOwnedJsonObservation() {
   const rows = [], readers = new WeakSet();
   let current, preparations = 0;
   const consumers = { created: 0, acquired: 0, retired: 0, live: 0, inner: 0, outer: 0,
-    read: 0, cancel: 0, unlock: 0, replay: 0, transferred: 0, pricing: 0, enqueued: 0, held: false, released: false, reasonReads: 0 };
+    read: 0, cancel: 0, unlock: 0, nativeUnlocked: 0, unlockSettled: 0, thenCalls: 0, closed: 0, closedSettled: 0, replay: 0, transferred: 0, pricing: 0, enqueued: 0, held: false, released: false, reasonReads: 0 };
   let releaseConsumer;
   const peak = row => {
     row.peakParents = Math.max(row.peakParents, row.parents);
@@ -29,14 +29,42 @@ export function createOwnedJsonObservation() {
     pricing(delta) { consumers.pricing += delta; if (consumers.pricing < 0) throw new Error("pricing retired twice"); },
     reader(reader) {
       consumers.acquired++; consumers.live++; readers.add(reader);
-      if (!this.consumerMode.startsWith('read-') || consumers.acquired !== 1) return;
-      const kind = this.consumerMode.slice(5);
+      if (consumers.acquired !== 1) return;
+      const mode = this.consumerMode;
+      if (!mode.startsWith('read-') && !mode.startsWith('unlock-') && !mode.startsWith('closed-')) return;
+      const kind = mode.split('-').at(-1);
       let reason = kind === 'undefined' ? undefined : kind === 'primitive' ? 'x'.repeat(17 * 1024 * 1024)
         : Object.freeze({ get message() { consumers.reasonReads++; throw new Error('foreign reason getter'); },
           get then() { consumers.reasonReads++; throw new Error('foreign reason then'); } });
       const read = reader.read, cancel = reader.cancel, unlock = reader.releaseLock;
       let reads = 0;
       const released = new Promise(resolve => { releaseConsumer = resolve; });
+      if (!mode.startsWith('read-')) {
+        if (mode.startsWith('closed-') || mode.includes('-closed-')) {
+          const original = reader.closed;
+          const observed = original.then(() => {
+            consumers.closed++; consumers.held = true;
+            return released.then(() => { consumers.closedSettled++; if (kind !== 'success') throw reason; });
+          });
+          Object.defineProperty(reader, 'closed', { get() { return observed; } });
+        }
+        Object.defineProperty(reader, 'releaseLock', { value(...args) {
+          consumers.unlock++;
+          const native = () => { Reflect.apply(unlock, this, args); consumers.nativeUnlocked++; };
+          if (mode.startsWith('closed-')) { native(); consumers.unlockSettled++; return; }
+          if (mode.startsWith('unlock-before-')) native();
+          consumers.held = true;
+          const original = released.then(() => {
+            if (mode.startsWith('unlock-after-')) native();
+            consumers.unlockSettled++;
+            if (kind !== 'success') throw reason;
+          });
+          return mode === 'unlock-after-success' ? { then(fulfilled, rejected) {
+            consumers.thenCalls++; return original.then(fulfilled, rejected);
+          } } : original;
+        } });
+        return;
+      }
       // Faults occur AFTER the actual native method. Production must call these
       // actual methods, observe their original promises, and retain that join.
       Object.defineProperty(reader, 'read', { value(...args) {

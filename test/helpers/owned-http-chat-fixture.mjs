@@ -83,6 +83,7 @@ function observeControlRead(kind,path,original,signal){
  const row={kind,read:0,readSettled:0,cancel:0,cancelSettled:0,unlock:0,released:false},shared={};
  for(const key of ['message','stack','cause','errors','code','status'])Object.defineProperty(shared,key,{get(){reasonReads++;throw Error('raw reason observed');}});
  const reason=fault.reason==='undefined'?undefined:fault.reason==='huge'?'x'.repeat(17*1024*1024):shared;
+ if(fault.mode)Object.assign(row,{held:false,nativeUnlocked:0,unlockSettled:0,thenCalls:0,closedNative:0,closedSettled:0,closedGetter:0});
  let release;const gate=new Promise(resolve=>{release=resolve;});
  // This fixture gate is AFTER the original native cancellation. It is not
  // evidence that a remote producer or physical native storage has retired.
@@ -105,6 +106,26 @@ function observeControlRead(kind,path,original,signal){
   const observed=new Proxy(body,{get(target,name){
    if(name==='getReader')return options=>{
     const reader=target.getReader(options);let failed=false;
+    if(fault.mode){
+     const read=reader.read,unlock=reader.releaseLock;
+     Object.defineProperty(reader,'read',{value(...args){row.read++;const work=Reflect.apply(read,this,args);return work.then(value=>{row.readSettled++;return value;});}});
+     if(fault.mode==='closed-getter')Object.defineProperty(reader,'closed',{get(){row.closedGetter++;throw reason;}});
+     if(fault.mode==='closed'||fault.mode==='unlock-before-closed'){
+      const originalClosed=reader.closed;
+      const observed=originalClosed.then(()=>{row.closedNative++;if(fault.mode==='closed')row.held=true;return gate.then(()=>{row.closedSettled++;if(fault.reason!=='success')throw reason;});});
+      Object.defineProperty(reader,'closed',{get(){return observed;}});
+     }
+     Object.defineProperty(reader,'releaseLock',{value(...args){
+      row.unlock++;
+      const native=()=>{Reflect.apply(unlock,this,args);row.nativeUnlocked++;};
+      if(fault.mode.startsWith('closed')){native();row.unlockSettled++;return;}
+      if(fault.mode.startsWith('unlock-before'))native();
+      row.held=true;
+      const original=gate.then(()=>{if(fault.mode==='unlock-after')native();row.unlockSettled++;if(fault.reason!=='success')throw reason;});
+      return fault.mode==='unlock-after'&&fault.reason==='success'?{then(fulfilled,rejected){row.thenCalls++;return original.then(fulfilled,rejected);}}:original;
+     }});
+     return reader;
+    }
     return new Proxy(reader,{get(object,key){
      if(key==='read')return(...args)=>{
       row.read++;const work=Reflect.apply(object.read,object,args);
@@ -174,8 +195,10 @@ export default {...handler,async fetch(request,env,context){
  }
  if(path==='/fixture/control-read'){
   if(request.method==='DELETE'){for(const row of controlReads)row.release?.();return new Response(null,{status:204});}
-  const value=await request.json();if(!['authority','credential','provider'].includes(value.kind)||!['undefined','shared','huge','listener'].includes(value.reason))throw Error('fixture read shape');
+  const value=await request.json();if(!['authority','credential','provider'].includes(value.kind)||!['undefined','shared','huge','listener','success'].includes(value.reason))throw Error('fixture read shape');
   if(value.afterReads!==undefined&&(value.kind!=='provider'||value.afterReads!==1||value.reason==='listener'))throw Error('fixture read phase');
+  if(value.mode!==undefined&&(value.kind!=='provider'||!['unlock-before','unlock-after','closed','closed-getter','unlock-before-closed'].includes(value.mode)||value.reason==='listener'||value.afterReads!==undefined))throw Error('fixture returned work shape');
+  if(value.reason==='success'&&value.mode===undefined)throw Error('fixture success shape');
   controlReadFault=value;return new Response(null,{status:204});
  }
  if(path==='/fixture/parser-hold'){
@@ -189,10 +212,10 @@ export default {...handler,async fetch(request,env,context){
  }
  if(path==='/fixture/consumer-mode'){
   if(request.method==='DELETE'){globalThis.__ownedJsonObservation?.releaseConsumer();return new Response(null,{status:204});}
-  const mode=await request.text();if(!['normal','forged','stale','mode','read-undefined','read-primitive','read-shared'].includes(mode)||!globalThis.__ownedJsonObservation)throw Error('fixture consumer mode');
+  const mode=await request.text();if(!['normal','forged','stale','mode','read-undefined','read-primitive','read-shared','unlock-before-success','unlock-before-undefined','unlock-before-primitive','unlock-before-shared','unlock-after-success','unlock-after-undefined','unlock-after-primitive','unlock-after-shared','unlock-before-closed-shared','closed-undefined','closed-shared'].includes(mode)||!globalThis.__ownedJsonObservation)throw Error('fixture consumer mode');
   globalThis.__ownedJsonObservation.consumerMode=mode;return new Response(null,{status:204});
  }
- if(path==='/fixture/state')return Response.json({consumers:globalThis.__ownedJsonObservation?.consumers??null,parsers:globalThis.__ownedJsonObservation?.rows??[],parserHold:parserHold?{arrived:parserHold.arrived,released:parserHold.released}:null,calls,intakes,completed,events,recursivePricingValues,reasonReads,controlReads:controlReads.map(({kind,read,readSettled,cancel,cancelSettled,unlock,released,removalFailed})=>({kind,read,readSettled,cancel,cancelSettled,unlock,released,...(removalFailed?{removalFailed:true}:{})})),charged:bodyBudgetCharged()});
+ if(path==='/fixture/state')return Response.json({consumers:globalThis.__ownedJsonObservation?.consumers??null,parsers:globalThis.__ownedJsonObservation?.rows??[],parserHold:parserHold?{arrived:parserHold.arrived,released:parserHold.released}:null,calls,intakes,completed,events,recursivePricingValues,reasonReads,controlReads:controlReads.map(({kind,read,readSettled,cancel,cancelSettled,unlock,released,removalFailed,held,nativeUnlocked,unlockSettled,thenCalls,closedNative,closedSettled,closedGetter})=>({kind,read,readSettled,cancel,cancelSettled,unlock,released,...(removalFailed?{removalFailed:true}:{}),...(held===undefined?{}:{held,nativeUnlocked,unlockSettled,thenCalls,closedNative,closedSettled,closedGetter})})),charged:bodyBudgetCharged()});
  if(path==='/fixture/pressure'){
   if(request.method==='DELETE'){pressure?.release();pressure=undefined;return new Response(null,{status:204});}
   if(pressure)throw Error('fixture pressure already held');
@@ -213,7 +236,7 @@ export default {...handler,async fetch(request,env,context){
   else for(const value of errors){
    const origin=value&&typeof value==='object'?Object.getOwnPropertyDescriptor(value,'origin')?.value:undefined;
    const absent=value&&typeof value==='object'?Object.getOwnPropertyDescriptor(value,'primaryIsUndefined')?.value:undefined;
-   origins.push({origin:['read','cancel','unlock','listener-remove','abort','pull','retire'].includes(origin)?origin:'unexpected',undefined:absent===true});
+   origins.push({origin:['read','cancel','unlock','closed','listener-remove','abort','pull','retire'].includes(origin)?origin:'unexpected',undefined:absent===true});
   }
   return{failed:true,origins};
  });roots.push(outcome);return promise;};

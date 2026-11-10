@@ -164,6 +164,37 @@ async function fixture(t, run, retained = false, variant = 'fireworks') {
       const observed = new Proxy(body, { get(target, key) {
         if (key === 'getReader') return options => {
           const reader = target.getReader(options);
+          if (fault.mode) {
+            const read = reader.read, unlock = reader.releaseLock;
+            Object.defineProperty(reader, 'read', { value(...args) {
+              fault.read++; const original = Reflect.apply(read, this, args);
+              return original.then(value => { fault.readSettled++; return value; });
+            } });
+            if (fault.mode === 'closed-getter') Object.defineProperty(reader, 'closed', { get() { fault.closedGetter++; throw fault.reason; } });
+            if (fault.mode === 'closed' || fault.mode === 'unlock-before-closed') {
+              const original = reader.closed;
+              const observed = original.then(() => {
+                fault.closedNative++; if (fault.mode === 'closed') fault.entered.resolve();
+                return fault.release.promise.then(() => { fault.closedSettled++; if (fault.failed) throw fault.reason; });
+              });
+              Object.defineProperty(reader, 'closed', { get() { return observed; } });
+            }
+            Object.defineProperty(reader, 'releaseLock', { value(...args) {
+              fault.unlock++;
+              const native = () => { Reflect.apply(unlock, this, args); fault.nativeUnlocked++; };
+              if (fault.mode.startsWith('closed')) { native(); fault.unlockSettled++; return; }
+              if (fault.mode.startsWith('unlock-before')) native();
+              fault.entered.resolve();
+              const original = fault.release.promise.then(() => {
+                if (fault.mode === 'unlock-after') native();
+                fault.unlockSettled++; if (fault.failed) throw fault.reason;
+              });
+              return fault.mode === 'unlock-after' && !fault.failed ? { then(fulfilled, rejected) {
+                fault.thenCalls++; return original.then(fulfilled, rejected);
+              } } : original;
+            } });
+            return reader;
+          }
           return new Proxy(reader, { get(current, name) {
             if (name === 'read') return (...args) => {
               fault.read++; const original = Reflect.apply(current.read, current, args);
@@ -211,6 +242,13 @@ async function fixture(t, run, retained = false, variant = 'fireworks') {
       failVeniceSource(reason, afterReads = 0) {
         assert.equal(variant, 'venice'); assert.equal(veniceFault, undefined);
         veniceFault = { reason, afterReads, read: 0, readSettled: 0, cancel: 0, cancelSettled: 0, unlock: 0, entered: deferred(), release: deferred() };
+        releases.push(() => veniceFault.release.resolve()); return veniceFault;
+      },
+      holdVeniceWork(mode, reason, failed) {
+        assert.equal(variant, 'venice'); assert.equal(veniceFault, undefined);
+        veniceFault = { mode, reason, failed, read: 0, readSettled: 0, unlock: 0, nativeUnlocked: 0, unlockSettled: 0, thenCalls: 0,
+          closedNative: 0, closedSettled: 0, closedGetter: 0, entered: deferred(), release: deferred() };
+        // Unconditionally release before any dispatch, even on setup/assertion failure.
         releases.push(() => veniceFault.release.resolve()); return veniceFault;
       },
       failMaterialization() { rejectMaterialize = true; },
@@ -511,5 +549,86 @@ test('owned Venice ' + (streaming ? 'delivered SSE' : 'JSON') + ' first observer
     } catch (validation) {
       throw new AggregateError([...(bodyFailed ? [bodyFailure] : []), ...terminalFailures, validation], 'owned codec failure-consumer validation');
     }
+  }, false, 'venice');
+});
+
+
+for (const [mode, kind, streaming] of [
+  ...['unlock-before', 'unlock-after'].flatMap(mode => ['success', 'undefined', 'shared', 'huge'].map(kind => [mode, kind, true])),
+  ['closed', 'undefined', true], ['closed', 'shared', true], ['unlock-before-closed', 'shared', true],
+  ['unlock-before', 'success', false], ['unlock-after', 'success', false],
+]) test('owned Venice original ' + mode + '/' + kind + '/' + (streaming ? 'SSE' : 'BYOB JSON') + ' retains its actual returned settlement', async t => {
+  let reasonReads = 0;
+  const shared = {};
+  for (const key of ['message', 'stack', 'cause', 'errors', 'code', 'status', 'then'])
+    Object.defineProperty(shared, key, { get() { reasonReads++; throw new Error('foreign returned-work reason'); } });
+  const reason = kind === 'undefined' ? undefined : kind === 'huge' ? 'x'.repeat(17 * 1024 * 1024) : shared;
+  await fixture(t, async f => {
+    const json = '{"model":"' + veniceUpstream + '","choices":[]}';
+    const wire = streaming ? 'data: ' + json + '\n\ndata: [DONE]\n\n' : json;
+    f.veniceResponse(wire, streaming);
+    const gate = f.holdVeniceWork(mode, reason, kind !== 'success');
+    const dispatch = f.dispatch(payload({ model: veniceModelId, ...(streaming ? { stream: true } : {}) }));
+    const completed = f.own(dispatch.outcome.then(async outcome => {
+      if (outcome.failed) throw outcome.error;
+      const body = await f.bodyRoot(outcome.value).outcome;
+      if (body.failed) throw body.error;
+      throw new Error('source completed before returned-work arrival');
+    }));
+    await f.take(f.own(Promise.race([gate.entered.promise, completed.outcome.then(outcome => { throw outcome.error; })])));
+    assert.ok(bodyBudgetCharged() > 32 * 1024 * 1024);
+    assert.equal(gate.read, gate.readSettled, 'successful original reads precede the independent returned-work failure');
+    assert.ok(gate.read > 0); assert.equal(reasonReads, 0);
+    if (mode !== 'closed') {
+      assert.equal(gate.unlock, 1); assert.equal(gate.unlockSettled, 0);
+      assert.equal(gate.nativeUnlocked, mode.startsWith('unlock-before') ? 1 : 0);
+    }
+    if (streaming) assert.equal((await f.take(dispatch)).status, 200, 'public prefix does not await retirement');
+    gate.release.resolve();
+    const response = await f.take(dispatch);
+    let text, hasBodyFailure = false, bodyFailure;
+    try { text = await f.take(f.bodyRoot(response)); } catch (error) { hasBodyFailure = true; bodyFailure = error; }
+    try { await f.take(completed); } catch { /* same body origin, or the deliberate completion sentinel */ }
+    await f.drain();
+    const terminal = [];
+    for (const root of f.retirements) if ((await root.outcome).failed)
+      try { await f.take(root); } catch (error) { terminal.push(error); }
+    try {
+      assert.equal(response.status, 200); assert.equal(gate.unlock, 1); assert.equal(gate.nativeUnlocked, 1);
+      assert.equal(gate.unlockSettled, 1); assert.equal(gate.thenCalls, mode === 'unlock-after' && kind === 'success' ? 1 : 0);
+      assert.equal(reasonReads, 0); assert.equal(f.sent.length, 1);
+      assert.equal(hasBodyFailure, kind !== 'success' && mode !== 'closed');
+      if (!hasBodyFailure) assert.equal(text, wire);
+      const expected = kind === 'success' ? [] : mode === 'closed' ? ['closed'] : mode === 'unlock-before-closed' ? ['unlock', 'closed'] : ['unlock'];
+      assert.equal(terminal.length, expected.length ? 1 : 0);
+      if (expected.length) {
+        assert.ok(terminal[0] instanceof AggregateError);
+        const failures = terminal[0].errors;
+        assert.deepEqual(failures.map(value => Object.getOwnPropertyDescriptor(value, 'origin')?.value), expected);
+        assert.ok(failures.every(value => value !== reason && Object.getOwnPropertyDescriptor(value, 'primaryIsUndefined')?.value === (kind === 'undefined')));
+        assert.equal(new Set(failures).size, expected.length, 'independent operations retain separate origins');
+      }
+    } catch (validation) { throw new AggregateError([...(hasBodyFailure ? [bodyFailure] : []), ...terminal, validation], 'returned-work validation'); }
+  }, false, 'venice');
+});
+
+
+test('owned Venice independent closed getter throw is a closed origin before any read', async t => {
+  await fixture(t, async f => {
+    f.veniceResponse('{"model":"' + veniceUpstream + '","choices":[]}');
+    const gate = f.holdVeniceWork('closed-getter', undefined, true);
+    const response = await f.request(payload({ model: veniceModelId }));
+    await f.drain();
+    const terminal = [];
+    for (const root of f.retirements) if ((await root.outcome).failed)
+      try { await f.take(root); } catch (error) { terminal.push(error); }
+    try {
+      assert.equal(response.status, 502); assert.equal(JSON.parse(response.text).error.code, 'provider_unavailable');
+      assert.equal(gate.closedGetter, 1); assert.equal(gate.read, 0);
+      assert.equal(gate.unlock, 1); assert.equal(gate.nativeUnlocked, 1);
+      assert.equal(terminal.length, 1); assert.ok(terminal[0] instanceof AggregateError);
+      assert.deepEqual(terminal[0].errors.map(value => Object.getOwnPropertyDescriptor(value, 'origin')?.value), ['closed']);
+      assert.equal(Object.getOwnPropertyDescriptor(terminal[0].errors[0], 'primaryIsUndefined')?.value, true);
+    } catch (validation) { throw new AggregateError([...terminal, validation], 'closed getter validation'); }
   }, false, 'venice');
 });

@@ -213,10 +213,10 @@ export function reserveOwnedHttpRevalidationOrigins(http: OwnedHttpRequest, prov
   if (owner.sealed) throw identityFailure("protocol");
   // Before this attempt's selection effects: snapshot + inspect at dispatch,
   // and Venice's one existing delivery check. Environment routes leave the
-  // unused inspect credits held, never invent a new operation. The two actual
-  // codec source, first consumer and possible mapped replacement each have
-  // nine terminal factories prepaid; healthy sniff/usage uses ONE consumer.
-  const count = providerId === "venice" ? 63 : 18;
+  // unused inspect credits held, never invent a new operation. The source has
+  // ten distinct origins (including closed); each consumer has nine. This
+  // extra origin uses positive SAME-common backing before selection effects.
+  const count = providerId === "venice" ? 64 : 18;
   reserveSinkOrigins(ownedHttpSinkOwner(http), count);
   owner.revalidationCredits += count;
 }
@@ -370,11 +370,11 @@ export function beginOwnedCodecConsumerDiagnostics(cap: OwnedHttpRevalidation): 
   return role;
 }
 function claimCodecRole(owner: RevalidationOwner, role: OwnedCodecRole): void {
-  const root = requestOwner(owner.http), bit = 1 << role;
-  if ((owner.codecRoles ?? 0) & bit || root.revalidationCredits < 9 || root.sinkCredits < 9) throw identityFailure("protocol");
-  root.revalidationCredits -= 9; root.sinkCredits -= 9;
+  const root = requestOwner(owner.http), bit = 1 << role, width = role === 0 ? 10 : 9;
+  if ((owner.codecRoles ?? 0) & bit || root.revalidationCredits < width || root.sinkCredits < width) throw identityFailure("protocol");
+  root.revalidationCredits -= width; root.sinkCredits -= width;
   // Claim at ACTUAL acquisition, preserving order against fresh revalidation.
-  const base = root.nextSinkOrigin; root.nextSinkOrigin += 9;
+  const base = root.nextSinkOrigin; root.nextSinkOrigin += width;
   if (role === 0) owner.sourceBase = base;
   else if (role === 1) owner.consumerBase = base;
   else owner.replacementBase = base;
@@ -389,12 +389,12 @@ function codecCustodyOwner(cap: OwnedHttpRevalidation): RevalidationOwner {
 }
 export function ownedHttpCodecFailure(cap: OwnedHttpRevalidation, role: OwnedCodecRole, phase: IntakePhase, reason: unknown): object {
   const owner = codecCustodyOwner(cap), roles = owner.codecRoles ?? 0;
-  if (role !== 0 && role !== 1 && role !== 2 || !(roles & 1 << role) || roles & 1 << (role + 3) || (role === 0 ? phase === "closed" : phase === "abort"))
+  if (role !== 0 && role !== 1 && role !== 2 || !(roles & 1 << role) || roles & 1 << (role + 3) || (role !== 0 && phase === "abort"))
     throw identityFailure("protocol");
   const root = requestOwner(owner.http);
   const base = role === 0 ? owner.sourceBase! : role === 1 ? owner.consumerBase! : owner.replacementBase!;
   const offset = phase === "acquire" ? 0 : phase === "read" ? 1 : phase === "cancel" ? 2 : phase === "unlock" ? 3
-    : phase === "listenerAdd" ? 4 : phase === "listenerRemove" ? 5 : phase === "abort" || phase === "closed" ? 6 : phase === "pull" ? 7 : phase === "retire" ? 8 : -1;
+    : phase === "listenerAdd" ? 4 : phase === "listenerRemove" ? 5 : phase === "abort" ? 6 : phase === "closed" ? role === 0 ? 9 : 6 : phase === "pull" ? 7 : phase === "retire" ? 8 : -1;
   if (offset < 0) throw identityFailure("protocol");
   const ordinal = base + offset;
   let record = root.sinkOrigins!.get(ordinal);
