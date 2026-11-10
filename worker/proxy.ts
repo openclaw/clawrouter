@@ -277,6 +277,7 @@ interface PreparedUpstream {
 
 interface ReservedProxyBudget {
   failedGrantKeys?: string[];
+  grant: PinnedGrant;
   auth: AuthorizedIdentity;
   reservation: BudgetReservation;
   cost: EstimatedCost;
@@ -904,7 +905,7 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     continuation = await HttpContinuation.resolve(request, selection, auth, env);
     if (googleContinuationRoute(selection)) googleContinuation = await GoogleContinuation.resolve(request, selection, auth, env);
     const uploadGrant = nativeUploadGrants.get(selection);
-    prepared = await run(() => prepareSelected(request, env, selection, queryInput, auth, failedGrantKeys, !uploadGrant && !published, reservedBudget?.connection, publishedPin ?? search?.pinned ?? continuation?.pinned ?? googleContinuation?.pinned ?? uploadGrant, "http", true, undefined, searchOwner));
+    prepared = await run(() => prepareSelected(request, env, selection, queryInput, auth, failedGrantKeys, !uploadGrant && !published, reservedBudget?.connection, publishedPin ?? search?.pinned ?? continuation?.pinned ?? googleContinuation?.pinned ?? uploadGrant, "http", true, undefined, searchOwner, undefined, request.signal, reservedBudget?.grant));
     assertRequestTariffDestination(selection.endpoint, prepared.url);
     assertNativeResponseDestination(selection.nativeResponse, prepared.url);
     for (const key of prepared.failedGrantKeys ?? []) failedGrantKeys.add(key);
@@ -1413,7 +1414,7 @@ async function reserveSelected(request: Request, env: Env, context: ExecutionCon
   try {
     const reservation = await reserveBudget(env, auth, selection.capability, cost, prepared.connection);
     let claimed = false, cleanup: Promise<void> | undefined;
-    return { auth, reservation, cost, failedGrantKeys: prepared.failedGrantKeys, providerId: selection.provider.id, modelId: selection.model?.id ?? null, capability: selection.capability, connection: prepared.connection,
+    return { auth, reservation, cost, grant: { key: prepared.grantKey, revision: prepared.grantRevision }, failedGrantKeys: prepared.failedGrantKeys, providerId: selection.provider.id, modelId: selection.model?.id ?? null, capability: selection.capability, connection: prepared.connection,
       claim() { claimed = true; },
       finishUnclaimed() {
         if (claimed) return Promise.resolve();
@@ -1439,13 +1440,18 @@ async function selectedAuth(request: Request, env: Env, mode: AuthMode, selectio
   return (await preauthenticate(request, env, mode, selection.provider.id))!;
 }
 
-export async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation, searchOwner?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, signal = request.signal): Promise<PreparedUpstream> {
+export async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation, searchOwner?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, signal = request.signal, reservedGrant?: PinnedGrant): Promise<PreparedUpstream> {
   // Direct prepareSelected callers are standalone preparation entries. Retain
   // the token on their selection for internal retries and subsequent calls.
   const preparation = selection.preparation ??= new PreparationAdmission();
   preparation.paths(selection.pathParams, selection.endpoint.path_param_styles);
   assertMultipartIntake(selection);
-  const prepare = (excluded: ReadonlySet<string>) => prepareSingleSelected(request, env, selection, queryInput, auth, excluded, recordSelection, resolvedConnection, pinned, transport, recoverBackground, wan, searchOwner, video, preparation, signal);
+  // Fusion already materialized this owner for its reservation. Revalidate the
+  // same authority first, rather than spending an uncounted fifth pool slot.
+  // This preference is not a continuation pin: an ordinary credential failure
+  // may still exclude it and use the remaining shared failover budget.
+  const prepare = (excluded: ReadonlySet<string>) => prepareSingleSelected(request, env, selection, queryInput, auth, excluded, recordSelection, resolvedConnection,
+    pinned ?? (reservedGrant?.key && excluded.has(reservedGrant.key) ? undefined : reservedGrant), transport, recoverBackground, wan, searchOwner, video, preparation, signal);
   const excluded = new Set(excludedGrantKeys);
   const routing = grantRoutingPolicy(auth.policy.grantRouting);
   let firstFailure: SelectedGrantCredentialFailure | undefined;
