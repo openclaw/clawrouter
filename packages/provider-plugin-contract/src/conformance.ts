@@ -2,6 +2,15 @@
 export const PROVIDER_CONFORMANCE_SCHEMA = "clawrouter.provider-conformance.v1";
 export const PROVIDER_CONFORMANCE_VALIDATION_SCHEMA = "clawrouter.provider-conformance-validation.v1";
 
+export const PROVIDER_CONFORMANCE_EXECUTION_SCHEMA = "clawrouter.provider-conformance-execution.v1";
+
+/** Narrow host execution result, not an entitlement or live-provider attestation. */
+export interface ProviderConformanceExecution {
+  schema: typeof PROVIDER_CONFORMANCE_EXECUTION_SCHEMA;
+  scope: "native-rest-json-exchanges";
+  packages: ProviderConformanceValidation["packages"];
+}
+
 /** Authored-reference validation only; never an adapter execution attestation. */
 export interface ProviderConformanceValidation {
   schema: typeof PROVIDER_CONFORMANCE_VALIDATION_SCHEMA;

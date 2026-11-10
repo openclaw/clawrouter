@@ -5,15 +5,16 @@ import { providerPluginManifest } from "./provider-manifest-inputs.mjs";
 import { loadProviderPlugins } from "./provider-plugin-loader.ts";
 
 /**
- * Validate authored references only. No fixture or adapter code is executed.
- * @returns {import('../packages/provider-plugin-contract/src/index.ts').ProviderConformanceValidation}
+ * Capture and validate all package inputs once for declaration and execution tooling.
+ * No fixture or adapter code is executed.
  */
-export function validateProviderConformance(pluginPaths) {
+export function loadProviderConformancePlan(pluginPaths) {
   if (!pluginPaths.length) throw new Error("select at least one provider plugin");
   const plugins = loadProviderPlugins(pluginPaths, { captureFixtures: true });
   const snapshot = compileProviderSnapshot(plugins.map(providerPluginManifest));
   const providers = new Map(snapshot.providers.map(provider => [provider.id, provider]));
-  return {
+  const cases = [];
+  const report = {
     schema: PROVIDER_CONFORMANCE_VALIDATION_SCHEMA,
     scope: "declarations",
     packages: plugins.map(plugin => {
@@ -41,12 +42,19 @@ export function validateProviderConformance(pluginPaths) {
           if (!model) fail("model must reference an exact declared router model ID");
           if (!model.capabilities.includes(scenario.capability)) fail("model does not declare this capability");
         }
+        cases.push({ provider, scenario });
         return { id: scenario.id, fixture: path, endpoint: scenario.endpoint, capability: scenario.capability,
           ...(scenario.model !== undefined ? { model: scenario.model } : {}) };
       }).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
       return { id: provider.id, version: plugin.descriptor.version, digest: plugin.digest, scenarios };
     }),
   };
+  return { report, snapshot, cases };
+}
+
+/** Authored-reference report only; the captured execution plan stays internal to tooling. */
+export function validateProviderConformance(pluginPaths) {
+  return loadProviderConformancePlan(pluginPaths).report;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
