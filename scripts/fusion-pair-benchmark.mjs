@@ -110,6 +110,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
       const usage = raw.usage;
       attempt.inputTokens = usage.prompt_tokens ?? usage.input_tokens;
       attempt.outputTokens = usage.completion_tokens ?? usage.output_tokens;
+      attempt.usageBreakdown = normalized.usageBreakdown;
       attempt.promptDigest = hash(JSON.stringify(body.messages));
       attempt.responseDigest = hash(normalized.result.choices?.[0]?.message?.content ?? '');
       await ledger.settle(attempt, normalized.costMicros, response.status);

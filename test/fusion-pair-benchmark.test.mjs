@@ -109,6 +109,35 @@ test('both controls and the pair account for real roles without persisting conte
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test('saved paired calls retain disjoint usage buckets used for native pricing', async () => {
+  const { root, options } = await fixture();
+  try {
+    await runPairBenchmark({ ...options, grade,
+      fetcher: async (url, request) => {
+        if (url.includes('/v1/models/')) return success(url, request);
+        return Response.json({ model: JSON.parse(request.body).model,
+          usage: { prompt_tokens: 20, completion_tokens: 30,
+            prompt_tokens_details: { cached_tokens: 10, cache_write_tokens: 5 } },
+          choices: [{ finish_reason: 'stop', message: { content: 'private completion sentinel' } }] });
+      },
+      agent: async (_task, _image, _strategy, id, _settings, invoke) => {
+        await invoke(id, roles.strong, body, signal); return repaired();
+      },
+    });
+    const saved = JSON.parse(await readFile(join(options.out, 'pair.json'), 'utf8'));
+    for (const call of saved.calls) {
+      assert.deepEqual(call.usageBreakdown, { uncachedInputTokens: 5, cacheReadInputTokens: 10,
+        cacheWriteInputTokens: 5, cacheWrite1hInputTokens: 0, outputTokens: 30 });
+      const price = saved.pins[call.model].usagePrice;
+      assert.equal(call.costMicros, Math.ceil((5 * Math.round(price.input * 1e9)
+        + 10 * Math.round(price.cached * 1e9) + 5 * Math.round(price.write * 1e9)
+        + 30 * Math.round(price.output * 1e9)) / 1000));
+    }
+    assert.equal(saved.spentOrReservedMicros, config.priorCostMicros + saved.calls.reduce((sum, call) => sum + call.costMicros, 0));
+    assert.ok(!JSON.stringify(saved).includes('sentinel'));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('unknown charges stop the campaign once and retain the reservation', async () => {
   const { root, options } = await fixture();
   try {

@@ -430,6 +430,15 @@ cost and time. Missing or invalid time leaves latency and dominance unknown.
 Actual call identities distinguish mixed attempts and rescues from single-model
 resampling; neither savings nor a passing public check establishes a fusion gain.
 
+New paired-call receipts include `usageBreakdown`: disjoint uncached input,
+cache-read input, ordinary cache-write input, one-hour cache-write input, and
+output token counts. Use each model pin's `usagePrice` tariff for these buckets;
+`price` is the conservative reservation tariff. One-hour writes use twice the uncached input rate. Output counts already include
+reasoning tokens. The existing top-level input count retains its provider's
+semantics. Older receipts without a breakdown cannot reconstruct cache discounts;
+missing cache counts must not be interpreted as zero. These are tariff estimates,
+not provider invoices.
+
 An unknown charge retains its reservation and stops the campaign. Provider
 refusal also stops the campaign, without retry or model fallback.
 

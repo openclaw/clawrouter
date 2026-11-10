@@ -11,6 +11,8 @@
 
 - Add an opt-in provider fixture validation command that checks captured scenarios against compiled manifest declarations and reports package digests without exposing fixture contents. This validates references without executing providers.
 
+- Preserve native cache-read and cache-write token buckets in Fusion benchmark receipts so recorded tariff estimates can be reconstructed.
+
 - Recover once from a truncated Fusion benchmark action within the existing call, time and spending limits, without applying partial output.
 
 - Add an inactive private retained-generation foundation with proof-bound two-slot preparation, immutable opaque borrowers and atomic exact common-arena handoff. A stable publication watermark prevents delayed resurrection after eviction or expiry; optional metadata pressure demotes matching hits under funded temporary custody without another RPC. Default authentication, cache consumers and providers remain unchanged. Source and hosted runtime qualification are required before activation.
