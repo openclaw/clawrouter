@@ -57,6 +57,25 @@ const settledState = async f => {
   }
 };
 
+test('native expanded owned intake retains depth 128 and rejects depth 129 before selection', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    for (const depth of [128, 129]) {
+      let nested = 'quoted " \\ {[ ]}';
+      for (let index = 1; index < depth; index++) nested = { child: nested };
+      const request = chat('chat');
+      request.body = ' '.repeat(8 * 1024 * 1024) + JSON.stringify({ extra: nested });
+      const before = await settledState(f);
+      const response = await f.request('https://fixture/v1/chat/completions', request);
+      assert.equal(response.status, depth === 128 ? 400 : 413, String(depth));
+      assert.equal(JSON.parse(response.text).error.code, depth === 128 ? 'model_required' : 'request_too_large');
+      const after = await settledState(f), calls = after.calls.slice(before.calls.length);
+      assert.equal(calls.filter(row => row.kind === 'authority' && row.path === '/grant-pools/select').length, 0);
+      assert.equal(calls.filter(row => row.kind === 'budget').length, 0);
+      assert.equal(JSON.parse((await f.request('https://fixture/fixture/upstream')).text).length, 0);
+    }
+  });
+});
+
 test('native owned pricing preserves deep/wide JSON, media presence, cache-rate precedence and original reservation IDs', { timeout: 120000 }, async t => {
   await fixture(t, async f => {
     let deep = 'text'; for (let index = 0; index < 1025; index++) deep = { ownedPricingNested: deep };

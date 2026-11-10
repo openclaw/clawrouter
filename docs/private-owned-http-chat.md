@@ -120,6 +120,29 @@ current scalar concatenation, decoder chunk and original backing are funded
 before each feed. No source counter becomes payload credit. The intake does not
 change ordinary JSON grammar or impose a new source-size limit.
 
+The private caller also partitions decoded feeds at relative nesting growth 16.
+The pinned `stream-json` 3.8.0 tokenizer returns a whole token batch before the
+existing consumer checks depth. Its parent stack therefore needs a bound before
+that consumer runs: at most 128 accepted parents plus 16 pending parents. The
+partition scans quotes and escapes with two booleans and scalar cursors; it adds
+no per-depth frame. The ordinary tokenizer/parser and their callers are unchanged.
+Inputs with several simultaneous syntax/structure faults can encounter a
+different first fault at a different feed boundary, as with ordinary chunking.
+Valid depth 128 remains accepted; depth 129 still reaches the existing refusal.
+
+Before the tokenizer factory/feed, an additional 524288-byte DATA component
+covers its whole batch, carried lexeme, decoder slice, scalar-merge overlap and
+bounded regex products. A feed has at most 4096 decoded units plus the tokenizer's
+16-unit lookahead and one held surrogate. Per unit, an upper bound is one dynamic
+two-field chunk record (80 logical bytes excluding its value units), three token
+reference cells (24 bytes), and two bytes of value units: 435978 bytes for 4113
+units. The remaining component covers simultaneous merge/buffer/regex data.
+This is prospective passive DATA; the parser frames, tokenizer parent stack and
+execution products remain in the open whole-vertical CONTROL inventory.
+The exact dependency source is the frozen 3.8.0 parser blob
+`afeed37cef5b9338b50c1594d17478ec83d22f59` in upstream commit
+`0f70a661308d12973b63f1e7ec23c396265a5361`.
+
 The private response consumer observes original read, first cancellation and
 unlock origins separately. Independent `undefined` or shared-Error rejections
 remain separate occurrences. A native errored stream's cancellation can instead

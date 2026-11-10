@@ -486,7 +486,7 @@ async function readOwnedHttpJson(cap: OwnedHttpRequest, request: Request, admiss
     let decoder: TextDecoder | undefined, parsed: unknown, size = 0, backingBytes = 0;
     // Existing expanded-parser bound, including its current scalar before
     // concatenation. It is a component of the SAME body debit, not a new cap.
-    const parserData = () => 8 * 3 * 65536 + 4 * size + 131072;
+    const parserData = () => 8 * 3 * 65536 + 4 * size + 131072 + 524288;
     const cancel = () => {
       if (cancelStarted || eof) return;
       cancelStarted = true;
@@ -494,8 +494,28 @@ async function readOwnedHttpJson(cap: OwnedHttpRequest, request: Request, admiss
       catch (error) { firstCancel = Promise.reject(error); }
       cancelOutcome = firstCancel.then(() => ({ failed: false }), error => ({ failed: true, error }));
     };
+    let tokenQuoted = false, tokenEscaped = false;
+    const feedText = (text: string) => {
+      let from = 0, growth = 0;
+      for (let index = 0; index < text.length; index++) {
+        const code = text.charCodeAt(index);
+        if (tokenQuoted) {
+          if (tokenEscaped) tokenEscaped = false;
+          else if (code === 92) tokenEscaped = true;
+          else if (code === 34) tokenQuoted = false;
+        } else if (code === 34) tokenQuoted = true;
+        else if (code === 91 || code === 123) {
+          // The pinned tokenizer returns its WHOLE feed before the unchanged
+          // 128-depth consumer checks it. Bound its temporary execution-stack
+          // growth to 16, without reducing accepted depth or ordinary feeds.
+          if (growth === 16) { parser!.push(text.slice(from, index)); from = index; growth = 0; }
+          growth++;
+        } else if (code === 93 || code === 125) growth--;
+      }
+      if (from < text.length) parser!.push(text.slice(from));
+    };
     const feed = (bytes: Uint8Array) => {
-      for (let offset = 0; offset < bytes.byteLength; offset += 4096) parser!.push(decoder!.decode(bytes.subarray(offset, offset + 4096), { stream: true }));
+      for (let offset = 0; offset < bytes.byteLength; offset += 4096) feedText(decoder!.decode(bytes.subarray(offset, offset + 4096), { stream: true }));
     };
     try {
       const declared = Number(request.headers.get("content-length"));
@@ -531,7 +551,7 @@ async function readOwnedHttpJson(cap: OwnedHttpRequest, request: Request, admiss
           prefix.push(item.value);
         }
       }
-      if (parser) { parser.push(decoder.decode()); parsed = parser.take(); }
+      if (parser) { feedText(decoder.decode()); parsed = parser.take(); }
       else {
         let text = "";
         for (let index = 0; index < prefix.length; index++) { text += decoder.decode(prefix[index], { stream: true }); prefix[index] = undefined; }

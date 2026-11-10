@@ -171,6 +171,23 @@ const pricingCases = [
   ['media outside exact roots is ordinary text', () => ({ extra: { image_url: null, cache_control: { ttl: '5m' } } })],
   ['one-hour early return ignores larger five-minute rate', () => ({ extra: [{ cache_control: { ttl: '1h' } }, { cache_control: { ttl: '5m' } }] })],
 ];
+
+for (const depth of [128, 129]) test(`expanded owned intake preserves the existing depth ${depth} boundary`, async t => {
+  await fixture(t, async f => {
+    // Whitespace crosses the existing 8 MiB parser boundary without making a
+    // larger retained graph. Include escaped quotes/brackets in the scalar so
+    // the private feed partition must distinguish structure from string data.
+    let nested = 'quoted " \\ {[ ]}';
+    for (let index = 1; index < depth; index++) nested = { child: nested };
+    const wire = ' '.repeat(8 * 1024 * 1024) + JSON.stringify({ extra: nested });
+    const response = await f.request(wire); await f.drain();
+    assert.equal(response.status, depth === 128 ? 400 : 413);
+    assert.equal(JSON.parse(response.text).error.code, depth === 128 ? 'model_required' : 'request_too_large');
+    assert.equal(f.sent.length, 0);
+    assert.equal(f.calls.filter(row => row.kind === 'authority' && row.path === '/grant-pools/select').length, 0);
+    assert.equal(f.calls.filter(row => row.kind === 'budget').length, 0);
+  });
+});
 for (const [name, make] of pricingCases) test('owned pricing preserves ordinary math and wire: ' + name, async t => {
   const saved = model.pricing; model.pricing = { ...saved, cacheWrite1hInputMicrosPerMillion: 2000000, cacheWrite5mInputMicrosPerMillion: 9000000 };
   t.after(() => { model.pricing = saved; });
