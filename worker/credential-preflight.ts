@@ -2,7 +2,12 @@ import { identityJsonProfiles } from "./access-json.ts";
 import type { Env } from "./types";
 import { admitAdmission, admitIdentity, advanceIdentitySource, identityFailure, identityPlan, identitySourceBudget,
   identitySourceSnapshot, type IdentitySourceBudget } from "./identity-admission.ts";
-import { admitBridgeFactories, admitBridgeCopyFactories, admissionBridgePhasePayload, reserveAdmissionScratch, retireAdmissionScratch, PreflightTicket } from "./credential-preflight-arena.ts";
+import { admitBridgeFactories, admitBridgeCopyFactories, admissionBridgePhasePayload, reserveAdmissionScratch, retireAdmissionScratch, PreflightTicket, GenerationMetadataCharge } from "./credential-preflight-arena.ts";
+import { admitGenerationFactories, generationMetadata, measureGenerationGraph, freezeGenerationGraph,
+  type IdentityGenerationPreparation, type IdentityGenerationBorrow } from "./identity-generations.ts";
+import { PrivateCacheReservation, hotCacheNow, type HotCacheConfig } from "./hot-cache.ts";
+import { credentialExpired } from "./credential-lifecycle.ts";
+import { safeEqual } from "./utils.ts";
 import { admissionContinuationHeader, admissionContinuationVersion, admissionContinuationPath, closeAdmissionEnvelope, type AdmissionContinuationEnvelope, checkPreflightIdentity, credentialPreflightHeader, credentialPreflightNamespace,
   credentialPreflightPath, credentialPreflightVersion } from "./credential-preflight-protocol.ts";
 import { consumeAdmissionBridge, consumePreflightReply } from "./credential-preflight-source.ts";
@@ -289,4 +294,245 @@ async function runAdmission(owner: AdmissionOwner, input: Record<string, unknown
     phase?.retire();
     if (!retained) { owner.admission = undefined; retireOwner(owner); }
   }
+}
+
+// The new index is deliberately unreachable from ordinary admission/cache APIs.
+// Namespace policy-bindings and auth kind proxy-key are closed constants: a
+// provider, digest, request or generation never creates another stable entry.
+type GenerationPartition = { binding: Authority; entries: Map<string, GenerationEntry>;
+  funding: GenerationMetadataCharge; cache?: PrivateCacheReservation };
+type GenerationEntry = { partition: GenerationPartition; kid: string; first?: GenerationSlot;
+  second?: GenerationSlot; current?: GenerationSlot; sequence: number; funding: GenerationMetadataCharge; cache?: PrivateCacheReservation };
+type GenerationSlot = { entry: GenerationEntry; owner: AdmissionOwner; continuation?: CredentialPreflightContinuation;
+  handle?: PrivateAdmissionHandle; ready: boolean; published: boolean; borrowers: number; sequence: number; storedAt: number; maxAgeMs: number;
+  funding: GenerationMetadataCharge; initialBorrowFunding?: GenerationMetadataCharge; cache?: PrivateCacheReservation; graphCache?: PrivateCacheReservation };
+type GenerationBorrower = { slot: GenerationSlot; funding: GenerationMetadataCharge; cache?: PrivateCacheReservation };
+type GenerationRegistry = { partitions: WeakMap<Authority, GenerationPartition>;
+  preparations: WeakMap<IdentityGenerationPreparation, GenerationSlot>; borrowers: WeakMap<IdentityGenerationBorrow, GenerationBorrower>;
+  count: number; funding: GenerationMetadataCharge; cache?: PrivateCacheReservation };
+let generationRegistry: GenerationRegistry | undefined;
+function retireGenerationRegistry(): void {
+  if (generationRegistry?.count !== 0) return;
+  const registry = generationRegistry; generationRegistry = undefined;
+  registry.partitions = undefined as never; registry.preparations = undefined as never; registry.borrowers = undefined as never;
+  registry.cache?.release(); registry.cache = undefined; registry.funding.release();
+}
+
+function generationFunding(kind: keyof typeof generationMetadata, stringUnits = 0): GenerationMetadataCharge {
+  const layout = generationMetadata[kind], funding = generationMetadata.funding;
+  return GenerationMetadataCharge.reserve(layout.payload + funding.payload + 2 * stringUnits, layout.structure + funding.structure);
+}
+function retireGenerationEntry(entry: GenerationEntry): void {
+  if (entry.first || entry.second) return;
+  const partition = entry.partition;
+  partition.entries.delete(entry.kid); entry.kid = "";
+  entry.partition = undefined as never;
+  entry.cache?.release(); entry.cache = undefined; entry.funding.release();
+  if (!partition.entries.size) {
+    generationRegistry!.partitions.delete(partition.binding); partition.binding = undefined as never;
+    partition.entries = undefined as never;
+    partition.cache?.release(); partition.cache = undefined; partition.funding.release();
+    generationRegistry!.count--; retireGenerationRegistry();
+  }
+}
+function retireGenerationSlot(slot: GenerationSlot): void {
+  if (!slot.owner) return;
+  if (slot.published || slot.borrowers) return;
+  // A failed/unknown original operation cannot retire its slot just because an
+  // error was observed. The source owner's actual ticket remains the authority.
+  if (!slot.ready && slot.owner.ticket.bytes) return;
+  const entry = slot.entry;
+  slot.owner.admission = undefined;
+  slot.handle = undefined; slot.continuation = undefined;
+  retireOwner(slot.owner);
+  slot.owner.source = undefined as never; slot.owner.ticket = undefined as never; slot.owner = undefined as never;
+  slot.initialBorrowFunding?.release(); slot.initialBorrowFunding = undefined;
+  slot.graphCache?.release(); slot.graphCache = undefined;
+  slot.cache?.release(); slot.cache = undefined; slot.funding.release();
+  if (entry.first === slot) entry.first = undefined;
+  if (entry.second === slot) entry.second = undefined;
+  if (entry.current === slot) entry.current = undefined;
+  slot.entry = undefined as never;
+  retireGenerationEntry(entry);
+}
+function disposeGenerationPreparation(this: IdentityGenerationPreparation): void {
+  const slot = generationRegistry?.preparations.get(this);
+  if (!slot) throw identityFailure("protocol");
+  generationRegistry!.preparations.delete(this);
+  if (slot.continuation) releaseCredentialPreflightContinuation(slot.continuation);
+  slot.continuation = undefined; retireGenerationSlot(slot);
+}
+
+export function prepareCredentialGeneration(proof: CredentialPreflightProof): IdentityGenerationPreparation {
+  const owner = proofs.get(proof);
+  if (!owner || owner.namespace !== credentialPreflightNamespace) throw identityFailure("protocol");
+  admitGenerationFactories();
+  let partition = generationRegistry?.partitions.get(owner.binding), entry = partition?.entries.get(owner.kid);
+  if (entry?.first && entry.second) throw identityFailure("limit");
+  // Every index/product has real prospective small funding BEFORE its factory.
+  // Any failure here leaves the genuine proof registered and releasable.
+  let slotFunding: GenerationMetadataCharge | undefined;
+  let initialBorrowFunding: GenerationMetadataCharge | undefined;
+  try {
+    if (!generationRegistry) {
+      const funding = generationFunding("registry");
+      generationRegistry = { partitions: new WeakMap(), preparations: new WeakMap(), borrowers: new WeakMap(), count: 0, funding };
+    }
+    if (!partition) {
+      const funding = generationFunding("partition");
+      partition = { binding: owner.binding, entries: new Map(), funding };
+      generationRegistry!.partitions.set(owner.binding, partition); generationRegistry.count++;
+    }
+    if (!entry) {
+      const funding = generationFunding("entry", 2 * owner.kid.length);
+      entry = { partition, kid: owner.kid, sequence: 0, funding }; partition.entries.set(owner.kid, entry);
+    }
+    if (!Number.isSafeInteger(entry.sequence + 1)) throw identityFailure("limit");
+    slotFunding = generationFunding("slot", owner.kid.length + owner.digest.length + owner.namespace.length);
+    initialBorrowFunding = generationFunding("borrower");
+    // Expansion is atomic and precedes consuming proof. Shared-cache vector
+    // pressure is NOT a prerequisite for full hydration.
+    owner.ticket.expandForContinuation();
+    owner.ticket.retainGenerationComponent(generationRegistry.funding.bytes + partition.funding.bytes
+      + entry.funding.bytes + slotFunding.bytes + initialBorrowFunding.bytes);
+    const continuation = Object.freeze({});
+    const slot: GenerationSlot = { entry, owner, continuation, ready: false, published: false, borrowers: 0,
+      sequence: ++entry.sequence, storedAt: hotCacheNow(), maxAgeMs: 0, funding: slotFunding, initialBorrowFunding };
+    const preparation = Object.freeze({ dispose: disposeGenerationPreparation });
+    if (!entry.first) entry.first = slot; else entry.second = slot;
+    continuations.set(continuation, owner); generationRegistry!.preparations.set(preparation, slot); proofs.delete(proof);
+    return preparation;
+  } catch (error) {
+    initialBorrowFunding?.release(); slotFunding?.release();
+    if (entry) retireGenerationEntry(entry);
+    else if (partition && !partition.entries.size) { generationRegistry!.partitions.delete(owner.binding); partition.funding.release(); generationRegistry!.count--; }
+    retireGenerationRegistry();
+    throw error;
+  }
+}
+
+function disposeGenerationBorrow(this: IdentityGenerationBorrow): void {
+  const borrower = generationRegistry?.borrowers.get(this);
+  if (!borrower) throw identityFailure("protocol");
+  generationRegistry!.borrowers.delete(this);
+  const slot = borrower.slot;
+  borrower.slot = undefined as never;
+  borrower.cache?.release(); borrower.cache = undefined; borrower.funding.release();
+  slot.borrowers--; retireGenerationSlot(slot);
+}
+function newGenerationBorrow(slot: GenerationSlot): IdentityGenerationBorrow {
+  const funding = slot.initialBorrowFunding ?? generationFunding("borrower");
+  slot.initialBorrowFunding = undefined;
+  let cache: PrivateCacheReservation | undefined;
+  try {
+    if (slot.graphCache) {
+      cache = PrivateCacheReservation.adoptMetadata(funding) ?? undefined;
+      if (!cache) throw identityFailure("limit");
+    }
+    const borrower = { slot, funding, cache }, handle = Object.freeze({ dispose: disposeGenerationBorrow });
+    generationRegistry!.borrowers.set(handle, borrower); slot.borrowers++;
+    return handle;
+  } catch (error) { cache?.release(); funding.release(); throw error; }
+}
+
+function promoteGeneration(slot: GenerationSlot, borrower: GenerationBorrower, vector: ReturnType<typeof measureGenerationGraph>): boolean {
+  const entry = slot.entry, partition = entry.partition, registry = generationRegistry!;
+  if (entry.current && entry.current.sequence > slot.sequence) return false;
+  let registryReceipt: PrivateCacheReservation | undefined;
+  let partitionReceipt: PrivateCacheReservation | undefined, entryReceipt: PrivateCacheReservation | undefined;
+  let slotReceipt: PrivateCacheReservation | undefined, borrowerReceipt: PrivateCacheReservation | undefined;
+  let graphReceipt: PrivateCacheReservation | undefined, committed = false;
+  try {
+    if (!registry.cache) { registryReceipt = PrivateCacheReservation.adoptMetadata(registry.funding) ?? undefined; if (!registryReceipt) return false; }
+    if (!partition.cache) { partitionReceipt = PrivateCacheReservation.adoptMetadata(partition.funding) ?? undefined; if (!partitionReceipt) return false; }
+    if (!entry.cache) { entryReceipt = PrivateCacheReservation.adoptMetadata(entry.funding) ?? undefined; if (!entryReceipt) return false; }
+    slotReceipt = PrivateCacheReservation.adoptMetadata(slot.funding) ?? undefined; if (!slotReceipt) return false;
+    borrowerReceipt = PrivateCacheReservation.adoptMetadata(borrower.funding) ?? undefined; if (!borrowerReceipt) return false;
+    if (!slot.owner.ticket.generationReady) throw identityFailure("protocol");
+    graphReceipt = PrivateCacheReservation.transfer(vector, slot.owner.ticket) ?? undefined; if (!graphReceipt) return false;
+    // Destination credit precedes publication and source-credit retirement.
+    // There is no await, graph clone, callback or release/reacquire interval.
+    registry.cache ??= registryReceipt; partition.cache ??= partitionReceipt; entry.cache ??= entryReceipt;
+    slot.cache = slotReceipt; borrower.cache = borrowerReceipt; slot.graphCache = graphReceipt;
+    const previous = entry.current;
+    entry.current = slot; slot.published = true; committed = true;
+    if (previous && previous !== slot) { previous.published = false; retireGenerationSlot(previous); }
+    return true;
+  } finally {
+    if (!committed) { graphReceipt?.release(); borrowerReceipt?.release(); slotReceipt?.release(); entryReceipt?.release(); partitionReceipt?.release(); registryReceipt?.release(); }
+  }
+}
+
+export function completeCredentialGeneration(preparation: IdentityGenerationPreparation,
+  input: Parameters<typeof completeCredentialAdmission>[1], config: HotCacheConfig, signal?: AbortSignal): Promise<IdentityGenerationBorrow> {
+  const slot = generationRegistry?.preparations.get(preparation);
+  if (!slot || !slot.continuation || !Number.isFinite(config.maxAgeMs) || config.maxAgeMs < 0 || config.maxAgeMs > 3_600_000) throw identityFailure("protocol");
+  generationRegistry!.preparations.delete(preparation);
+  slot.maxAgeMs = config.maxAgeMs;
+  const operation = runGeneration(slot, input, signal);
+  void operation.then(() => undefined, () => undefined);
+  return operation;
+}
+async function runGeneration(slot: GenerationSlot, input: Parameters<typeof completeCredentialAdmission>[1], signal?: AbortSignal): Promise<IdentityGenerationBorrow> {
+  let handle: PrivateAdmissionHandle | undefined, borrow: IdentityGenerationBorrow | undefined;
+  let traversal: ReturnType<typeof reserveAdmissionScratch> | undefined;
+  try {
+    handle = await completeCredentialAdmission(slot.continuation!, input, signal);
+    // completeCredentialAdmission's finally and ORIGINAL joins have completed.
+    slot.continuation = undefined; slot.handle = handle;
+    if (admissions.get(handle) !== slot.owner || !slot.owner.ticket.generationReady) throw identityFailure("protocol");
+    if (signal?.aborted) throw identityFailure("transport");
+    input = undefined as never; signal = undefined;
+    // The reply is an ordinary parsed JSON tree. Its whole profile and scalar
+    // fields stay funded; bounded traversal scratch is admitted BEFORE visiting.
+    traversal = reserveAdmissionScratch(slot.owner.ticket, 21020672,
+      { C: 1, P: 0, N: 80, U: 24 * 1024 + 64, B: 0 });
+    const vector = measureGenerationGraph(slot.owner.admission);
+    freezeGenerationGraph(slot.owner.admission);
+    traversal.retire(); traversal = undefined;
+    slot.ready = true;
+    // No raw getter, callback, graph clone, serializer hook or new source prefix.
+    borrow = newGenerationBorrow(slot);
+    admissions.delete(handle); slot.handle = undefined; handle = undefined;
+    if (slot.maxAgeMs && generationCredentialMatches(slot, slot.owner.digest)) promoteGeneration(slot, generationRegistry?.borrowers.get(borrow)!, vector);
+    const result = borrow; borrow = undefined; return result;
+  } finally {
+    input = undefined as never; signal = undefined;
+    traversal?.retire();
+    if (borrow) borrow.dispose();
+    if (handle && admissions.has(handle)) { handle.dispose(); slot.handle = undefined; }
+    if (slot.continuation && continuations.has(slot.continuation)) releaseCredentialPreflightContinuation(slot.continuation);
+    slot.continuation = undefined;
+    retireGenerationSlot(slot);
+  }
+}
+function generationCredentialMatches(slot: GenerationSlot, digest: string): boolean {
+  const admission = slot.owner.admission, credential = admission?.credential?.credential;
+  return !!credential && credential.enabled && !credentialExpired(credential)
+    && safeEqual(credential.secretSha256, digest) && !!admission?.policy?.policy.enabled
+    && credential.policyGeneration === admission.policy.policy.generation
+    && !admission.policyUnavailable && !admission.ownerUnavailable && !admission.connectionsUnavailable
+    && (credential.principalId == null || admission.owner?.record.enabled === true);
+}
+
+// A permitted hit only verifies/borrows this immutable snapshot; it is not a new
+// authentication result and never performs an RPC. Future adapters must retain
+// the borrow for every use/background obligation. OFF still counts live slots.
+export function borrowCredentialGeneration(env: Pick<Env, "ACCESS_CONTROL">, kid: string, digest: string,
+  config: HotCacheConfig): IdentityGenerationBorrow | undefined {
+  checkPreflightIdentity(kid, digest);
+  if (!env.ACCESS_CONTROL || !config.maxAgeMs) return undefined;
+  const entry = generationRegistry?.partitions.get(env.ACCESS_CONTROL)?.entries.get(kid), slot = entry?.current;
+  if (!slot || !slot.ready || !slot.published) return undefined;
+  const now = hotCacheNow();
+  if (now < slot.storedAt || now - slot.storedAt >= Math.min(config.maxAgeMs, slot.maxAgeMs)) {
+    slot.published = false; entry!.current = undefined; retireGenerationSlot(slot); return undefined;
+  }
+  if (!safeEqual(slot.owner.digest, digest) || !generationCredentialMatches(slot, digest)) return undefined;
+  return newGenerationBorrow(slot);
+}
+export function evictCredentialGeneration(env: Pick<Env, "ACCESS_CONTROL">, kid: string): void {
+  const entry = env.ACCESS_CONTROL && generationRegistry?.partitions.get(env.ACCESS_CONTROL)?.entries.get(kid), slot = entry?.current;
+  if (!entry || !slot) return;
+  entry.current = undefined; slot.published = false; retireGenerationSlot(slot);
 }
