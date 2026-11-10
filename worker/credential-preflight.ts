@@ -1106,8 +1106,10 @@ export function prepareCredentialGenerationPrefetch(hint: GenerationSelectionHin
 export function claimOwnedGenerationPrefetch(cap: OwnedGenerationPrefetch, permit: object): { eligible: boolean; id: string; config: HotCacheConfig; authority: Authority; binding: Env["GRANT_CREDENTIALS"] } {
   checkOwnedGenerationPrefetch(cap);
   if (!ownsCredentialPrefetchPermit(permit, cap)) throw identityFailure("protocol");
-  const owner = generationPrefetchOwner(cap); owner.permit = permit;
-  return { eligible: !!owner.selected!.prefetchProvider && !!owner.selected!.result!.selected, id: owner.id, config: owner.config!, authority: owner.selected!.auth.slot.owner.binding, binding: owner.binding };
+  const owner = generationPrefetchOwner(cap), authority = owner.selected?.auth.slot.owner.binding;
+  if (!authority) throw identityFailure("protocol");
+  owner.permit = permit;
+  return { eligible: !!owner.selected!.prefetchProvider && !!owner.selected!.result!.selected, id: owner.id, config: owner.config!, authority, binding: owner.binding };
 }
 export function materializeOwnedGenerationPrefetch(cap: OwnedGenerationPrefetch, permit: object): Promise<import("./types").UpstreamGrant> {
   const owner = generationPrefetchOwner(cap);
