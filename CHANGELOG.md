@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an inactive private credential-preflight foundation with secret-only opaque proofs, exact common-arena reservations, original-source retirement and prospective final-read admission before cold credential seed writes. Default authentication and generation activation remain unchanged; runtime and factory qualification are required before use.
+
 - Bound each examined raw proxy credential header to 4096 UTF-16 units before normalization, parsing or hashing. Preserve first-valid header precedence and Access fallback while rejecting encountered oversize values with terminal 503; formerly accepted oversized legacy tokens are intentionally denied.
 
 - Keep ordinary selected JSON HTTP input custody through actual delivery cleanup, archive writes and terminal accounting without delaying response publication; preserve specialized owners and existing accounting outcomes.

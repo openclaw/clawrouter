@@ -62,6 +62,25 @@ interface AdmissionStore {
   resolveGrantPool(input: { providerId: string; policyId: string; tenantId: string; defaultKeys: string[] }): AdmissionPool;
 }
 
+// Inactive private foundation only. No policy/user/connection/pool work, and no
+// authentication result. The owner performs the final synchronous winner check.
+export async function prepareCredentialPreflight(input: { credentialId: string },
+  store: Pick<AdmissionStore, "getCredential" | "hasMeta" | "seedCredential">,
+  read: (key: string) => Promise<Record<string, unknown> | null>): Promise<void> {
+  let credential = store.getCredential(input.credentialId), value: Record<string, unknown> | null = null;
+  try {
+    if (!credential && !store.hasMeta("credentials_global_initialized")) {
+      value = await read(`credentials/${input.credentialId}`);
+      if (value == null) {
+        const legacy = await read(`keys/${input.credentialId}`);
+        value = legacy && (legacy.generation == null || legacy.generation === "legacy") ? legacy : null;
+      }
+      // The callback checks the CURRENT canonical row/fence before normalization.
+      if (value) store.seedCredential(input.credentialId, value);
+    }
+  } finally { credential = null; value = null; }
+}
+
 export async function resolveAdmission(env: Env, input: AdmissionRequest, store: AdmissionStore): Promise<AdmissionResult> {
   if (store.identity) { admitIdentity(input); admitIdentityCount(input.providers?.length ?? 0, 128); }
   const read = <T>(key: string): Promise<T | null> => store.identity ? readIdentityKv<T>(() => env.POLICY_KV.get(key, "stream"), store.identity) : env.POLICY_KV.get<T>(key, "json");
