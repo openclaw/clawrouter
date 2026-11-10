@@ -338,6 +338,12 @@ economic gain. Summed elapsed was 140.495s, 102.845s and 174.969s, with
 Docker qualification overlapping part of this run. These timings are
 descriptive and are not isolated performance measurements.
 
+The cheap stage must explicitly submit a completed repair before it can end the
+contract cascade. A partial patch from a turn-limited, budget-limited or unfinished
+executor cannot bypass strong fallback merely by passing the supplied check and
+visible tests. Fallback still uses the remaining shared time, call and spend limits.
+This does not establish that a submitted patch satisfies every requirement.
+
 `FUSION_CHEAP_MAX_CALLS` sets the contract workflow's cheap-stage allowance
 (integer 1–59, default 10). The runner records it as `cheapMaxCalls`. The stage
 uses at most the remaining shared call budget minus one, preserving a fallback
