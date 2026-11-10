@@ -84,6 +84,45 @@ test('edit handoff waits for passing visible checks and transfers current source
   assert.deepEqual(result.actions.map(action => action.action), ['edit', 'edit', 'handoff', 'finish']);
 });
 
+for (const breakRepair of [false, true]) test(`bounded handoff stops its successor and preserves failed-check state: ${breakRepair}`, {
+  skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+}, async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { execFileSync } = await import('node:child_process');
+  const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+  const task = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+    .find(task => task.id === 'provided-responses-path');
+  const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+    .receipts.find(receipt => receipt.taskId === task.id);
+  const original = execFileSync('git', ['show', `${task.base}:${task.editPaths[0]}`], { encoding: 'utf8' });
+  const repaired = `${original}\n// synthetic bounded handoff\n`;
+  const roles = [];
+  const result = await runAgent(task, receipt.image, 'handoff', 'bounded-handoff-fixture',
+    { maxTurns: 10, deadlineMs: 120000, outputTokens: 256 }, async (_id, role, body) => {
+      roles.push(role);
+      if (roles.length === 2) assert.match(body.messages.at(-1).content, /at most 3 actions/);
+      const action = roles.length === 1
+        ? { action: 'edit', edits: [{ path: task.editPaths[0], search: original, replace: repaired }] }
+        : breakRepair && roles.length === 2
+          ? { action: 'edit', edits: [{ path: task.editPaths[0], search: repaired, replace: `throw new Error('broken successor');\n${repaired}` }] }
+          : { action: 'test', edits: [] };
+      return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ paths: [], query: '', memory: '', ...action }) } }] };
+    }, undefined, { handoffAfterEdit: true, handoffMaxTurns: 3 });
+  assert.deepEqual(roles, ['openai/gpt-6.1-sol', ...Array(3).fill('anthropic/claude-sonnet-5.5')]);
+  assert.equal(result.outcome, 'handoff_limit');
+  assert.equal(result.publicPassed, !breakRepair);
+  assert.equal(result.files[0].content.includes("broken successor"), breakRepair);
+});
+
+test('invalid handoff caps fail before creating a sandbox', async () => {
+  for (const limit of [0, -1, 1.5, 11, '3', NaN]) {
+    await assert.rejects(runAgent({}, 'unused', 'handoff', 'invalid-limit', { maxTurns: 10 }, null, null,
+      { handoffAfterEdit: true, handoffMaxTurns: limit }), /invalid_handoff_turn_limit/);
+  }
+  await assert.rejects(runAgent({}, 'unused', 'handoff', 'invalid-limit', { maxTurns: 10 }, null, null,
+    { handoffMaxTurns: 3 }), /invalid_handoff_turn_limit/);
+});
+
 test('edit handoff does not switch merely because the ordinary handoff turn was reached', {
   skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
 }, async () => {
