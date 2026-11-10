@@ -17,6 +17,9 @@ import { recordGrantRuntime } from "./grant-selection.ts";
 import { ownedGenerationCredentialFailure } from "./proxy-auth.ts";
 import { credentialExpired } from "./credential-lifecycle.ts";
 import { safeEqual } from "./utils.ts";
+import { errorResponse } from "./utils.ts";
+import { markLocalError } from "./native-errors.ts";
+import { checkOwnedHttpRequest, growOwnedHttpRequest, ownedHttpCompletion, type OwnedHttpRequest } from "./http-identity-owner.ts";
 import { admissionContinuationHeader, admissionContinuationVersion, admissionContinuationPath, closeAdmissionEnvelope, type AdmissionContinuationEnvelope, checkPreflightIdentity, credentialPreflightHeader, credentialPreflightNamespace,
   credentialPreflightPath, credentialPreflightVersion } from "./credential-preflight-protocol.ts";
 import { consumeAdmissionBridge, consumePreflightReply } from "./credential-preflight-source.ts";
@@ -26,6 +29,128 @@ import { consumeAdmissionBridge, consumePreflightReply } from "./credential-pref
 const serializationLookupGetter = (Object.prototype as { __lookupGetter__?: unknown }).__lookupGetter__;
 const serializationLookupSetter = (Object.prototype as { __lookupSetter__?: unknown }).__lookupSetter__;
 const serializationApply = Reflect.apply;
+
+interface HttpIdentityOwner {
+  current?: GenerationAuthentication;
+  retained: GenerationAuthentication[];
+  selections: GenerationSelectionHandle[];
+  pending: GenerationPendingWork[];
+  kid: string;
+  digest: string;
+  sessionHash?: string;
+  coverageMiss: boolean;
+}
+let httpIdentities: WeakMap<OwnedHttpRequest, HttpIdentityOwner> | undefined;
+let httpIdentityCount = 0;
+
+/** Closed HTTP authentication. Preverification never substitutes for this phase. */
+export async function resolveOwnedHttpAuthentication(cap: OwnedHttpRequest, request: Request, env: Env,
+  kid: string, digest: string, required: GenerationCoverage, freshness: "cached" | "authoritative" = "cached"): Promise<Response | null> {
+  checkOwnedHttpRequest(cap, request, env);
+  // Strings, requested-facet carrier, registry fields and terminal products are
+  // admitted before their factories. Hydration retains its separate SAME ticket.
+  growOwnedHttpRequest(cap, 8192 + 2 * (kid.length + digest.length));
+  let owner = httpIdentities?.get(cap);
+  if (!owner) {
+    owner = { retained: [], selections: [], pending: [], kid, digest, coverageMiss: false };
+    (httpIdentities ??= new WeakMap()).set(cap, owner); httpIdentityCount++;
+  } else if (owner.kid !== kid || owner.digest !== digest) throw identityFailure("protocol");
+  const current = owner.current && authenticationOwner(owner.current);
+  const identityOnly = !required.providers.length && !required.allConnections && required.snapshot === undefined && required.selection === undefined;
+  // Early intake asks ONLY for credential/policy/owner authentication. A
+  // genuinely covered later facet is still checked separately, before use.
+  if (freshness === "cached" && current && (identityOnly || sameGenerationCoverage(current.slot.coverage!.value, required)))
+    return ownedHttpAuthenticationResponse(current);
+  const config = hotCacheConfig(env);
+  let borrow: IdentityGenerationBorrow | undefined, preparation: IdentityGenerationPreparation | undefined;
+  let admittedCoverage = required;
+  let proof: CredentialPreflightProof | undefined, next: GenerationAuthentication | undefined;
+  let hasPrimary = false, primary: unknown, response: Response | null = null;
+  try {
+    if (freshness === "cached") {
+      borrow = borrowCredentialGeneration(env, kid, digest, config);
+      if (borrow) {
+        const slot = generationRegistry!.borrowers.get(borrow)!.slot;
+        if (!slot.coverage || !identityOnly && !sameGenerationCoverage(slot.coverage.value, required)) {
+          owner.coverageMiss = true; borrow.dispose(); borrow = undefined;
+        } else admittedCoverage = slot.coverage.value;
+      }
+    }
+    if (!borrow) {
+      const result = await preflightCredential(env, kid, digest, request.signal);
+      if (result.outcome !== "matched") return result.outcome === "unknown"
+        ? errorResponse("unknown_proxy_key", "proxy key is not registered", 401)
+        : errorResponse("invalid_proxy_key", "proxy key secret is invalid", 401);
+      proof = result.proof;
+      preparation = prepareCredentialGeneration(proof); proof = undefined;
+      const layout = generationCoverageLayout(required);
+      growOwnedHttpRequest(cap, layout.bytes + 8 * layout.fields);
+      const providers = required.providers.map(provider => ({ id: provider.id, tokenRef: provider.tokenRef }));
+      const selection = required.selection ? { ...required.selection, ...(required.selection.excludedKeys ? { excludedKeys: [...required.selection.excludedKeys] } : {}) } : undefined;
+      const input = { credentialId: kid, secretSha256: digest, providers,
+        allConnections: required.allConnections, snapshot: required.snapshot, selection };
+      const original = completeConsumableCredentialGeneration(preparation, input, config, request.signal);
+      preparation = undefined;
+      borrow = await original;
+    }
+    next = authenticateCredentialGeneration(borrow, env, admittedCoverage);
+    response = ownedHttpAuthenticationResponse(authenticationOwner(next));
+    const previous = owner.current;
+    owner.current = next; owner.retained.push(next); next = undefined;
+    owner.sessionHash = required.selection?.sessionHash;
+    // Early intake authentication has no selected children. Retire it after the
+    // later, genuinely covered authentication has taken custody, not beforehand.
+    if (previous && !authenticationOwner(previous).children) {
+      const index = owner.retained.indexOf(previous); owner.retained.splice(index, 1); previous.dispose();
+    }
+  } catch (error) { hasPrimary = true; primary = error; }
+  const failures: unknown[] = [];
+  try { next?.dispose(); } catch (error) { failures.push(error); }
+  try { borrow?.dispose(); } catch (error) { failures.push(error); }
+  try { preparation?.dispose(); } catch (error) { failures.push(error); }
+  try { if (proof) releaseCredentialPreflight(proof); } catch (error) { failures.push(error); }
+  if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "owned HTTP authentication cleanup");
+  if (hasPrimary) throw primary;
+  return response;
+}
+
+function ownedHttpAuthenticationResponse(owner: GenerationAuthenticationOwner): Response | null {
+  const failure = owner.failure;
+  if (!failure) return null;
+  if (failure.code === "proxy_key_expired") return markLocalError(Response.json({
+    error: { code: failure.code, message: failure.message },
+    expiresAt: owner.slot.owner.admission!.credential!.credential.expiresAt, expired: true, active: false,
+  }, { status: 401 }), failure.code, failure.message);
+  return errorResponse(failure.code, failure.message, failure.status);
+}
+
+export function ownedHttpCoverageMiss(cap: OwnedHttpRequest): boolean {
+  const owner = httpIdentities?.get(cap);
+  if (!owner) throw identityFailure("protocol");
+  return owner.coverageMiss;
+}
+
+export function sealOwnedHttpIdentity(cap: OwnedHttpRequest, request: Request, env: Env): void {
+  checkOwnedHttpRequest(cap, request, env);
+  const owner = httpIdentities?.get(cap);
+  if (!owner) return;
+  for (const pending of owner.pending) ownedHttpCompletion(cap).start(() => pending.drain());
+}
+
+export function retireOwnedHttpIdentity(cap: OwnedHttpRequest): void {
+  const owner = httpIdentities?.get(cap);
+  if (!owner) return;
+  httpIdentities!.delete(cap);
+  const failures: unknown[] = [];
+  for (const pending of owner.pending) try { pending.dispose(); } catch (error) { failures.push(error); }
+  owner.pending.length = 0;
+  for (const selected of owner.selections) try { selected.dispose(); } catch (error) { failures.push(error); }
+  owner.selections.length = 0; owner.current = undefined;
+  for (const authentication of owner.retained) try { authentication.dispose(); } catch (error) { failures.push(error); }
+  owner.retained.length = 0; owner.kid = ""; owner.digest = ""; owner.sessionHash = undefined;
+  if (!--httpIdentityCount) httpIdentities = undefined;
+  if (failures.length) throw new AggregateError(failures, "owned HTTP identity retirement");
+}
 
 // Deliberately no caller from ordinary admission/preverification. These empty
 // carriers grant neither identity nor authentication and have no wire encoding.

@@ -1,5 +1,7 @@
 import { ProxyCompletion } from "./proxy-completion.ts";
-import { isIdentityFailure } from "./identity-admission.ts";
+import { isIdentityFailure, identityFailure } from "./identity-admission.ts";
+import { beginOwnedHttpUpload, checkOwnedHttpRequest, checkOwnedHttpUpload, abandonOwnedHttpUpload, growOwnedHttpRequest,
+  ownedHttpCompletion, type OwnedHttpRequest, type OwnedHttpUpload } from "./http-identity-owner.ts";
 import { providerConfigurationList } from "./provider-connections.ts";
 import { admitAccountingJson, isAccountingAdmissionFailure } from "./json-body.ts";
 import { PreparationAdmission, isPreparationLimit, preparationHeader, templateCandidates, preparationValue } from "./provider-templates.ts";
@@ -55,7 +57,7 @@ import { anthropicPricing } from "./anthropic-pricing.ts";
 import { guardAnthropicPrice, type AnthropicPriceGuard } from "./anthropic-price-response.ts";
 import { assertInputTokensRequest } from "./responses-input-tokens.ts";
 import { softBudget, prepareSoftBudget, startSoftBudget, softBudgetPolicy, softBudgetPreflight } from "./soft-budget.ts";
-import { prepareUpstreamRequest } from "./proxy-upstream-request.ts";
+import { prepareUpstreamRequest, prepareOwnedUpstreamRequest } from "./proxy-upstream-request.ts";
 import { BodyLease, bodyLeaseMinimum } from "./body-budget.ts";
 import { WanManagedOperation, readWanJson, wanRequestBytes, preflightWanJson, assertWanHeaders } from "./managed-media-json.ts";
 import { hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
@@ -109,6 +111,56 @@ import {
 } from "./utils";
 
 type AuthMode = "proxy_key" | "access";
+
+type OwnedPreparedFields = ReturnType<typeof prepareUpstreamRequest>;
+interface OwnedProxyInvocation {
+  request: Request;
+  env: Env;
+  context: ExecutionContext;
+  admission?: JsonAdmission;
+  selection?: ProxySelection;
+  identity?: AuthorizedIdentity;
+  prepared?: PreparedUpstream;
+  upload?: OwnedHttpUpload;
+  attempts: OwnedHttpUpload[];
+}
+interface OwnedPreparationReceiver { owner: OwnedHttpRequest; fields?: OwnedPreparedFields }
+let ownedProxyInvocations: WeakMap<OwnedHttpRequest, OwnedProxyInvocation> | undefined;
+let ownedPreparationReceivers: WeakMap<OwnedHttpUpload, OwnedPreparationReceiver> | undefined;
+
+// Fixed synchronous receiver only. There is no public preparation getter and
+// no callback supplied by the caller; the actual attempt installs this slot.
+export function acceptOwnedHttpPreparation(upload: OwnedHttpUpload, fields: OwnedPreparedFields): void {
+  const receiver = ownedPreparationReceivers?.get(upload);
+  if (!receiver || receiver.fields) throw identityFailure("protocol");
+  receiver.fields = fields;
+}
+
+function prepareOwnedHttpTransport(cap: OwnedHttpRequest, request: Request, env: Env,
+  selection: ProxySelection, query: ProxyQuery, upstream: UpstreamAuth, preparation: PreparationAdmission): OwnedPreparedFields {
+  checkOwnedHttpRequest(cap, request, env);
+  const invocation = ownedProxyInvocations?.get(cap);
+  if (!invocation || invocation.selection !== selection) throw identityFailure("protocol");
+  const upload = beginOwnedHttpUpload(cap);
+  invocation.upload = upload; invocation.attempts.push(upload);
+  const receiver: OwnedPreparationReceiver = { owner: cap };
+  (ownedPreparationReceivers ??= new WeakMap()).set(upload, receiver);
+  try {
+    prepareOwnedUpstreamRequest(upload, request, env, selection, query, upstream, preparation);
+    if (!receiver.fields) throw identityFailure("protocol");
+    return receiver.fields;
+  } catch (error) { void abandonOwnedHttpUpload(upload); throw error; }
+  finally { receiver.fields = undefined; ownedPreparationReceivers!.delete(upload); }
+}
+
+export function retireOwnedHttpProxy(cap: OwnedHttpRequest): void {
+  const invocation = ownedProxyInvocations?.get(cap);
+  if (!invocation) return;
+  ownedProxyInvocations!.delete(cap);
+  invocation.prepared = undefined; invocation.identity = undefined; invocation.selection = undefined;
+  invocation.admission = undefined; invocation.upload = undefined; invocation.attempts.length = 0;
+  invocation.request = undefined as never; invocation.env = undefined as never; invocation.context = undefined as never;
+}
 
 // Media-bearing generation formats take the 32 MB envelope on every route form.
 const mediaFormats = new Set(["anthropic.messages", "openai.responses", "openai.responses_compact", "openai.responses_input_tokens", "openai.chat_completions", "google.embed_content", "google.batch_embed_contents", "xai.images_generations", "xai.images_edits", "openrouter.audio_transcription"]);

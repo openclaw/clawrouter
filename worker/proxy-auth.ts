@@ -19,12 +19,35 @@ import type { AccessPolicyEntry, AuthorizedIdentity, Env, ProxyCredential } from
 import type { AdmissionProvider, AdmissionResult } from "./authority.ts";
 import { resolveAdmission } from "./admission-cache.ts";
 import { errorResponse, HttpError, parseProxyKey, safeEqual, sha256Hex } from "./utils.ts";
+import { checkOwnedHttpRequest, growOwnedHttpRequest, ownedHttpCompletion, type OwnedHttpRequest } from "./http-identity-owner.ts";
+import { resolveOwnedHttpAuthentication } from "./credential-preflight.ts";
 
 export interface ProxyKeyVerification { readonly kind: "proxy_key"; readonly credentialId: string; readonly principalId: string | null; readonly secretSha256: string; readonly expiresAt?: string | null }
 const verifiedKeys = new WeakMap<AuthorizedIdentity, ProxyKeyVerification>();
 // Scoped to this authenticated operation. Cross-request reuse happens only in
 // admission-cache.ts, bounded by the hot-cache max age.
 const admissions = new WeakMap<AuthorizedIdentity, AdmissionResult>();
+
+/** Private HTTP entry only; no identity or admission graph leaves its owner. */
+export function authenticateOwnedHttp(cap: OwnedHttpRequest, request: Request, env: Env,
+  providers: AdmissionProvider[] = [], selection?: AdmissionSelection, sessionId?: string | null,
+  freshness: "cached" | "authoritative" = "cached"): Promise<Response | null> {
+  checkOwnedHttpRequest(cap, request, env);
+  // Four examined RAW headers (4096 units each), replacement/parser strings,
+  // ASCII hash bytes and two digest products. Native header allocation is not
+  // included. The session input is separately admitted before prefix/encoding.
+  growOwnedHttpRequest(cap, 131072 + (sessionId ? 8 * sessionId.length + 256 : 0));
+  return ownedHttpCompletion(cap).start(async () => {
+    const { parsed } = proxyKeyIngress(request.headers);
+    if (!parsed) return errorResponse("invalid_proxy_key", "a valid ClawRouter proxy key is required", 401);
+    if (parsed.secret.length > 4096) throw identityFailure("limit");
+    const digest = await sha256Hex(parsed.secret);
+    const sessionHash = sessionId ? await sha256Hex(`session:${sessionId}`) : undefined;
+    const required = { providers, allConnections: false, snapshot: selection ? "select" as const : undefined,
+      selection: selection ? { ...selection, sessionHash } : undefined };
+    return resolveOwnedHttpAuthentication(cap, request, env, parsed.kid, digest, required, freshness);
+  });
+}
 const coverIdentities = new WeakMap<MiniMaxMusicCoverControl, AuthorizedIdentity>();
 export function musicCoverVerification(owner: MiniMaxMusicCoverControl): AuthorizedIdentity | undefined { return coverIdentities.get(owner); }
 export function retireMusicCoverVerification(owner: MiniMaxMusicCoverControl): void {
