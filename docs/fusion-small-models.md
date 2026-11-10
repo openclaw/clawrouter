@@ -424,6 +424,12 @@ campaign's accumulated spend and unresolved reservations before starting.
 `pair.json` records exact source and dataset digests, declared splits, model
 pins, both controls, action metadata, acceptance counts, elapsed time and actual
 usage-based charges. It excludes prompts, completions and generated source.
+Single-block analysis reports cost savings versus strong, summed elapsed time,
+latency ratio, and whether cheap dominates the candidate on observed quality,
+cost and time. Missing or invalid time leaves latency and dominance unknown.
+Actual call identities distinguish mixed attempts and rescues from single-model
+resampling; neither savings nor a passing public check establishes a fusion gain.
+
 An unknown charge retains its reservation and stops the campaign. Provider
 refusal also stops the campaign, without retry or model fallback.
 

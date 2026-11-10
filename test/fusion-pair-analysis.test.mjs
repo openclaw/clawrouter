@@ -200,3 +200,45 @@ test('an arm win from another single-model sample is not counted as a mixed-mode
   assert.equal(mixed.candidateModelUse.mixedWinsOverCheap, 1);
   assert.equal(mixed.candidateModelUse.strongOnlyAttempts, 3);
 });
+
+
+test('single-block savings expose cheap dominance and summed latency', () => {
+  const run = fixture([[1, 1, 1]]);
+  for (const row of run.records) row.elapsedMs = row.strategy === 'scope' ? 250 : 100;
+  const report = analyzePairRun(run);
+  assert.equal(report.observedCostSavingWithoutStrongRegressions, true);
+  assert.equal(report.costSavingVersusStrong, 0.6);
+  assert.equal(report.latencyRatioVersusStrong, 2.5);
+  assert.equal(report.cheapDominatesCandidate, true);
+  assert.equal(report.totals[2].elapsedMs, 250);
+});
+
+test('single-block missing or invalid time cannot establish latency or cheap dominance', () => {
+  for (const elapsed of [undefined, null, -1, NaN, '100']) {
+    const run = fixture([[1, 1, 1]]);
+    for (const row of run.records) row.elapsedMs = 100;
+    run.records[2].elapsedMs = elapsed;
+    const report = analyzePairRun(run);
+    assert.equal(report.totals[2].elapsedMs, null);
+    assert.equal(report.latencyRatioVersusStrong, null);
+    assert.equal(report.cheapDominatesCandidate, null);
+  }
+  const run = fixture([[1, 1, 1]]);
+  for (const row of run.records) row.elapsedMs = 0;
+  assert.equal(analyzePairRun(run).latencyRatioVersusStrong, null);
+});
+
+test('single-block model use distinguishes rescues, single-model samples and no-call attempts', () => {
+  const run = fixture([[0, 1, 1], [1, 1, 1], [0, 0, 0], [0, 1, 1]]);
+  const mixed = run.calls.find(call => call.trialId === 'case-0:scope');
+  mixed.costMicros -= 10;
+  run.calls.push({ ...mixed, model: 'cheap-model', costMicros: 10 });
+  run.records.find(row => row.taskId === 'case-0' && row.strategy === 'scope').calls++;
+  run.calls.find(call => call.trialId === 'case-1:scope').model = 'cheap-model';
+  run.calls = run.calls.filter(call => call.trialId !== 'case-2:scope');
+  const empty = run.records.find(row => row.taskId === 'case-2' && row.strategy === 'scope');
+  empty.calls = 0; empty.costMicros = 0;
+  run.spentOrReservedMicros -= 40;
+  assert.deepEqual(analyzePairRun(run).candidateModelUse, { cheapOnlyAttempts: 1, strongOnlyAttempts: 1,
+    mixedAttempts: 1, noCallAttempts: 1, mixedWinsOverCheap: 1 });
+});

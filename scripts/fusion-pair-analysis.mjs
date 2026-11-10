@@ -12,6 +12,25 @@ const sum = values => {
   return value;
 };
 
+
+function modelUse(runs, candidate) {
+  const result = { cheapOnlyAttempts: 0, strongOnlyAttempts: 0, mixedAttempts: 0,
+    noCallAttempts: 0, mixedWinsOverCheap: 0 };
+  for (const run of runs) {
+    for (const row of run.records.filter(row => row.strategy === candidate)) {
+      const used = new Set(run.calls.filter(call => call.trialId === `${row.taskId}:${candidate}`).map(call => call.model));
+      if (!used.size) result.noCallAttempts++;
+      else if (used.size === 1) result[used.has(run.config.cheap) ? 'cheapOnlyAttempts' : 'strongOnlyAttempts']++;
+      else {
+        result.mixedAttempts++;
+        const cheapRow = run.records.find(other => other.taskId === row.taskId && other.strategy === 'cheap');
+        if (row.score > cheapRow.score) result.mixedWinsOverCheap++;
+      }
+    }
+  }
+  return result;
+}
+
 /** Observed paired outcomes, not a significance test or a production approval. */
 export function analyzePairRun(run) {
   if (run?.version !== 1 || run.kind !== 'native-pair-repository' || run.complete !== true || run.failure) {
@@ -66,7 +85,8 @@ export function analyzePairRun(run) {
   const totals = run.strategies.map(strategy => {
     const rows = [...cases.values()].map(entry => entry.rows.get(strategy));
     return { strategy, solved: rows.reduce((total, row) => total + row.score, 0),
-      costMicros: sum(rows.map(row => row.costMicros)), calls: sum(rows.map(row => row.calls)) };
+      costMicros: sum(rows.map(row => row.costMicros)), calls: sum(rows.map(row => row.calls)),
+      elapsedMs: rows.every(row => money(row.elapsedMs)) ? sum(rows.map(row => row.elapsedMs)) : null };
   });
   const cheap = totals.find(row => row.strategy === 'cheap'), strong = totals.find(row => row.strategy === 'strong');
   const selected = totals.find(row => row.strategy === candidate);
@@ -78,7 +98,7 @@ export function analyzePairRun(run) {
     }
     return { reference, wins, losses, ties: cases.size - wins - losses };
   };
-  const versusStrong = comparison('strong');
+  const versusCheap = comparison('cheap'), versusStrong = comparison('strong');
   let mixture = null;
   // A task-independent coin chooses a model before seeing that task's outcome.
   // Interpolate only inside the observed control-cost interval; never extrapolate.
@@ -94,12 +114,20 @@ export function analyzePairRun(run) {
   return { version: 1, kind: 'observed-pair-analysis', sourceSha: run.sourceSha,
     datasetDigest: run.datasetDigest, qualificationDigest: run.qualificationDigest,
     inputDigest: createHash('sha256').update(JSON.stringify(run)).digest('hex'),
-    cases: cases.size, candidate, totals, comparisons: [comparison('cheap'), versusStrong],
+    cases: cases.size, candidate, totals, comparisons: [versusCheap, versusStrong],
+    candidateModelUse: modelUse([run], candidate),
+    costSavingVersusStrong: strong.costMicros ? 1 - selected.costMicros / strong.costMicros : null,
+    latencyRatioVersusStrong: strong.elapsedMs > 0 && selected.elapsedMs !== null ? selected.elapsedMs / strong.elapsedMs : null,
+    cheapDominatesCandidate: cheap.elapsedMs === null || selected.elapsedMs === null ? null
+      : cheap.solved >= selected.solved && versusCheap.wins === 0
+        && cheap.costMicros <= selected.costMicros && cheap.elapsedMs <= selected.elapsedMs,
     controlOracleSolved: oracleSolved, controlComplementarity: oracleSolved - Math.max(cheap.solved, strong.solved),
     matchedCostRandomMixture: mixture,
     observedCostSavingWithoutStrongRegressions: versusStrong.losses === 0 && selected.costMicros < strong.costMicros,
     observedQualityGainOverBestFixed: selected.solved > Math.max(cheap.solved, strong.solved),
     limitations: ['Single-trial observations do not establish statistical significance or production readiness.',
+      'Missing or invalid elapsed time is reported as unknown; totals are summed, not concurrent wall time.',
+      'A single-model candidate win is not evidence of model mixing; matched retry controls are still needed.',
       'Random-mixture values are expectations from these control observations, not fresh executed trials.',
       'Prior campaign reservations are excluded from arm comparisons but must remain in the spending ledger.',
       'This validates internal consistency, not authenticity of the supplied report.'] };
@@ -128,20 +156,7 @@ export function analyzePairRepeats(runs) {
     if (runs[i].records.some(row => !money(row.elapsedMs))) throw new Error('invalid_pair_elapsed');
   }
   const candidate = reports[0].candidate;
-  const candidateModelUse = { cheapOnlyAttempts: 0, strongOnlyAttempts: 0, mixedAttempts: 0,
-    noCallAttempts: 0, mixedWinsOverCheap: 0 };
-  for (const run of runs) {
-    for (const row of run.records.filter(row => row.strategy === candidate)) {
-      const used = new Set(run.calls.filter(call => call.trialId === `${row.taskId}:${candidate}`).map(call => call.model));
-      if (!used.size) candidateModelUse.noCallAttempts++;
-      else if (used.size === 1) candidateModelUse[used.has(run.config.cheap) ? 'cheapOnlyAttempts' : 'strongOnlyAttempts']++;
-      else {
-        candidateModelUse.mixedAttempts++;
-        const cheapRow = run.records.find(other => other.taskId === row.taskId && other.strategy === 'cheap');
-        if (row.score > cheapRow.score) candidateModelUse.mixedWinsOverCheap++;
-      }
-    }
-  }
+  const candidateModelUse = modelUse(runs, candidate);
   const totals = runs[0].strategies.map(strategy => {
     const rows = runs.flatMap(run => run.records.filter(row => row.strategy === strategy));
     return { strategy, solved: sum(rows.map(row => row.score)), attempts: rows.length,
