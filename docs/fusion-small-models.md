@@ -414,6 +414,13 @@ coverage and rerun it against current source. An oversized latest probe is
 omitted in full; an older probe is not substituted. Raw probe source and output
 are not added to benchmark receipts.
 
+The successor receives verification-specific instructions and the current source
+snapshot. Its task context retains the read-only repository context but omits the
+initial editable-source preload. It must check task invariants and repair concrete
+failures, then submit when verification is complete. It keeps the full remaining
+allowance; there is no forced early submission. Probe-use receipts require a
+successful model response to context that includes the transferred probe.
+
 Run from a committed task checkout with qualified workload receipts and an
 explicit JSON configuration. Only credentials for the selected models are
 required. Supply credentials through the existing secret injector; do not put

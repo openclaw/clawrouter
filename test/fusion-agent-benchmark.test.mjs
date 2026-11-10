@@ -66,17 +66,27 @@ test('edit handoff waits for passing visible checks and transfers current source
   const result = await runAgent(task, receipt.image, 'handoff', 'edit-handoff-fixture',
     { maxTurns: 10, deadlineMs: 120000, outputTokens: 256 }, async (_id, role, body) => {
       const turn = roles.length; roles.push(role);
+      if (turn === 0) {
+        assert.match(body.messages[0].content, /fails before your repair/);
+        assert.match(body.messages[1].content, /Initial editable source/);
+      }
       if (turn === 1) assert.match(body.messages.at(-1).content, /Visible tests passed: false/);
       if (turn === 2) {
         assert.match(body.messages.at(-1).content, /taking over an attempted repair/);
         assert.match(body.messages.at(-1).content, /synthetic handoff marker/);
         assert.match(body.messages.at(-1).content, /ready for independent verification/);
+        assert.match(body.messages[0].content, /use finish to submit/);
+        assert.doesNotMatch(body.messages[0].content, /fails before your repair/);
+        assert.match(body.messages[0].content, /visible tests already pass on the broken code/);
+        assert.doesNotMatch(body.messages[1].content, /Initial editable source/);
+        assert.ok(body.messages[1].content.includes(task.instruction));
+        assert.ok(body.messages[1].content.includes(task.visibleTests[0]));
       }
       const action = turn === 2 ? { action: 'finish', paths: [], edits: [], query: '', memory: '' }
         : { action: 'edit', paths: [], query: '', memory: turn ? 'ready for independent verification' : 'repair failing check',
           edits: [{ path: task.editPaths[0], search: turn ? broken : original, replace: turn ? repaired : broken }] };
       return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(action) } }] };
-    }, undefined, { handoffAfterEdit: true });
+    }, undefined, { handoffAfterEdit: true, preloadSource: true });
   assert.deepEqual(roles, ['openai/gpt-6.1-sol', 'openai/gpt-6.1-sol', 'anthropic/claude-sonnet-5.5']);
   assert.equal(result.handoffUsed, true);
   assert.equal(result.publicPassed, true);

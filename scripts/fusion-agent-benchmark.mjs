@@ -161,18 +161,28 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
   let handoffReady = false;
   let handoffProbe = '';
   let handoffProbeUsed = false;
+  let handoffMessage;
+  let taskContext;
   let outcome = 'turn_limit', escalated = false, forceEscalation = false, turns = 0, invalidActions = 0, toolMs = 0, publicPassed = false, adviserFailures = 0, truncationRetries = 0;
   const remaining = () => Math.max(1, config.deadlineMs - Math.ceil(performance.now() - started));
   const handoff = async () => {
     const files = await readSource(box, task.editPaths, remaining());
-    messages.splice(2, messages.length - 2, { role: 'user', content:
-      `You are taking over an attempted repair. Independently inspect and test the current source against the task. Do not trust the predecessor's conclusion; preserve correct changes and repair remaining defects.\nPrevious notes (unverified):\n${memory}${handoffProbe}\nCurrent source:\n${JSON.stringify(files)}` });
-    memory = ''; handoffUsed = true; handoffProbeUsed = Boolean(handoffProbe);
+    if (options.handoffAfterEdit === true) {
+      messages[0].content = messages[0].content.replace(
+        'Write a probe of the reported invariant and check that it fails before your repair and passes afterward.',
+        'You are now verifying an existing candidate repair. Inspect the current source and the task invariants. Rerun the transferred probe after checking its coverage, or write a focused probe if none is suitable. You do not need to reconstruct the earlier broken tree. If a concrete defect remains, repair and verify it. Once the task invariants pass and no concrete defect remains, use finish to submit; avoid repeating already completed checks or speculative exploration.');
+      messages[1].content = taskContext;
+    }
+    handoffMessage = { role: 'user', content:
+      `You are taking over an attempted repair. Independently inspect and test the current source against the task. Do not trust the predecessor's conclusion; preserve correct changes and repair remaining defects.\nPrevious notes (unverified):\n${memory}${handoffProbe}\nCurrent source:\n${JSON.stringify(files)}` };
+    messages.splice(2, messages.length - 2, handoffMessage);
+    memory = ''; handoffUsed = true;
     actions.push({ turn: turns + 1, action: 'handoff', status: 'ok' });
   };
   try {
     const context = await readTaskContext(box, task, remaining());
     if (context.length) messages[1].content += `\nOriginal read-only repository context (verify current source with tools if needed):\n${JSON.stringify(context)}`;
+    taskContext = messages[1].content;
     if (options.preloadSource === true) {
       const files = await readSource(box, task.editPaths);
       messages[1].content += `\nInitial editable source (use tools for current source after edits):\n${JSON.stringify(sourceView(files, task.editPaths))}`;
@@ -218,6 +228,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
         }
         response = await invoke(trialId, model, request, deadline);
         requireCompleteResponse(response);
+        if (handoffUsed && handoffProbe && context.includes(handoffMessage)) handoffProbeUsed = true;
       } catch (error) {
         if (error.message === 'provider_truncated' && truncationRetries === 0
           && turns + 1 < config.maxTurns && !deadline.aborted) {
