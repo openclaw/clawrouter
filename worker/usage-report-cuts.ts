@@ -74,14 +74,23 @@ function bytes(value:unknown):number{return new TextEncoder().encode(JSON.string
 function equal(a:unknown,b:unknown):boolean{return text(a)===text(b)}
 
 export class UsageReportCuts {
- private roots=new Map<string,Root>();private clock=0;private timer:ReturnType<typeof setTimeout>|undefined;private timerAt:number|undefined;
+ private roots=new Map<string,Root>();private clock=0;
+ private timers=new Map<string,{expiry:ReturnType<typeof setTimeout>;pending?:ReturnType<typeof setTimeout>}>();
  private now():number {const now=Date.now();number(now);if(now>Number.MAX_SAFE_INTEGER-reportCutTtlMs)fail("invalid");this.clock=Math.max(this.clock,now);return this.clock}
- private sweep():void {const now=this.now();for(const [op,r] of this.roots)if(now>=r.expires||!r.capture&&now>=r.pendingUntil)this.roots.delete(op);this.arm()}
- private arm():void {
-  let next=Infinity;for(const r of this.roots.values())next=Math.min(next,r.capture?r.expires:Math.min(r.expires,r.pendingUntil));
-  if(this.timer!==undefined&&this.timerAt===next)return; // Reads cannot postpone a timer after wall-clock rollback.
-  if(this.timer!==undefined)clearTimeout(this.timer);this.timer=undefined;this.timerAt=undefined;
-  if(next!==Infinity){this.timerAt=next;this.timer=setTimeout(()=>{this.timer=undefined;this.timerAt=undefined;this.clock=Math.max(this.clock,next);this.sweep()},Math.max(1,next-this.clock))}
+ private sweep():void {const now=this.now();for(const [op,r] of this.roots)if(now>=r.expires||!r.capture&&now>=r.pendingUntil)this.drop(op)}
+ private drop(operation:string):void {
+  const timers=this.timers.get(operation);
+  if(timers){clearTimeout(timers.expiry);if(timers.pending!==undefined)clearTimeout(timers.pending);this.timers.delete(operation)}
+  this.roots.delete(operation);
+ }
+ private watch(root:Root):void {
+  // At most two timers per admitted root (512 total). Start ONCE; changing the
+  // earliest root or finalizing never reschedules another root's elapsed TTL.
+  // Wall-clock sweep also expires forward jumps; callbacks need no clock read.
+  const operation=root.operation,now=this.now();
+  const expiry=setTimeout(()=>this.drop(operation),Math.max(1,root.expires-now));
+  const pending=setTimeout(()=>{if(!this.roots.get(operation)?.capture)this.drop(operation)},Math.max(1,root.pendingUntil-now));
+  this.timers.set(operation,{expiry,pending});
  }
  private admit(root:Root,previous?:Root):void {
   const size=bytes(root);let total=size;for(const r of this.roots.values())if(r!==previous)total+=bytes(r);
@@ -91,7 +100,7 @@ export class UsageReportCuts {
   if(typeof handle!=='string'||!opaque.test(handle))fail('invalid');
   const root=byOperation?this.roots.get(handle):[...this.roots.values()].find(r=>r.handle===handle);
   if(!root||!equal(root.binding,b))fail('restart');
-  if(root.revision!==revision){this.roots.delete(root.operation);this.arm();fail('restart')}
+  if(root.revision!==revision){this.drop(root.operation);fail('restart')}
   return root;
  }
  /** Explicit private DO actions only. Unknown fields/intent combinations fail
@@ -105,25 +114,27 @@ export class UsageReportCuts {
    query(x.base);if(!['summary','browse','export'].includes(x.purpose as string))fail('invalid');
    if(x.purpose==='summary')return {cut:null};
    const own=[...this.roots.values()].filter(r=>equal(r.binding,b)&&r.purpose===x.purpose);
-   if(own.length>=2){const oldest=x.purpose==='browse'?own.filter(r=>r.capture).sort((a,b)=>a.opened-b.opened)[0]:undefined;if(!oldest)fail('capacity');this.roots.delete(oldest.operation)}
-   if(this.roots.size>=256){this.arm();fail('capacity')}
+   if(own.length>=2){const oldest=x.purpose==='browse'?own.filter(r=>r.capture).sort((a,b)=>a.opened-b.opened)[0]:undefined;if(!oldest)fail('capacity');this.drop(oldest.operation)}
+   if(this.roots.size>=256)fail('capacity');
    const opened=this.now();const root:Root={operation:token(),handle:token(),binding:b,purpose:x.purpose as Root['purpose'],base:x.base,revision,opened,expires:opened+reportCutTtlMs,pendingUntil:opened+20000,capture:null,cursors:[]};
-   try{this.admit(root)}finally{this.arm()}
-   this.roots.set(root.operation,JSON.parse(text(root)));this.arm();return {operation:root.operation,expiresAt:root.expires};
+   this.admit(root);
+   this.roots.set(root.operation,JSON.parse(text(root)));this.watch(root);return {operation:root.operation,expiresAt:root.expires};
   }
   if(action==='release'){
    const handle=x.cut??x.operation;if(typeof handle!=='string'||!opaque.test(handle)||(x.cut!==undefined&&x.operation!==undefined))fail('invalid');
    // Uniform success for missing/foreign; only the matching binding is removed.
-   for(const [op,r] of this.roots)if((x.cut!==undefined?r.handle===handle:r.operation===handle)&&equal(r.binding,b))this.roots.delete(op);
-   this.arm();return {released:true};
+   for(const [op,r] of this.roots)if((x.cut!==undefined?r.handle===handle:r.operation===handle)&&equal(r.binding,b))this.drop(op);
+   return {released:true};
   }
   const root=this.match(action==='finalize'||action==='observe'?x.operation:x.cut,b,revision,action==='finalize'||action==='observe');
   if(action==='observe')return root.capture?{state:'ready',cut:root.handle,expiresAt:root.expires}:{state:'pending'};
   if(action==='finalize'){
    try{capture(x.capture,root.base);
     if(root.capture){if(!equal(root.capture,x.capture))fail('restart');return {cut:root.handle,expiresAt:root.expires}}
-    const updated={...root,capture:x.capture};this.admit(updated,root);this.roots.set(root.operation,JSON.parse(text(updated)));this.arm();return {cut:root.handle,expiresAt:root.expires};
-   }catch(error){if(!root.capture){this.roots.delete(root.operation);this.arm()}throw error}
+    const updated={...root,capture:x.capture};this.admit(updated,root);this.roots.set(root.operation,JSON.parse(text(updated)));
+    const timers=this.timers.get(root.operation)!;if(timers.pending!==undefined){clearTimeout(timers.pending);timers.pending=undefined}
+    return {cut:root.handle,expiresAt:root.expires};
+   }catch(error){if(!root.capture)this.drop(root.operation);throw error}
   }
   if(!root.capture)fail('pending');query(x.query);subset(root.base,x.query,root.capture.effectiveFrom);
   if(action==='read')return JSON.parse(text({purpose:root.purpose,base:root.base,capture:root.capture,expiresAt:root.expires}));

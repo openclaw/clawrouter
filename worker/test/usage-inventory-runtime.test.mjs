@@ -6,7 +6,7 @@ import {join,resolve} from 'node:path';
 import {startWorkerdFixture} from '../../test/helpers/workerd.mjs';
 import {requireBaselineCommit} from '../../test/helpers/personal-usage-baseline.mjs';
 const baseline='df8c3800fbb413fbe7db6833387a1e885d1379cb';
-test('workerd: actual old authority REPLACE captures tenants; owner timers reclaim canceled pending roots without client finally',{timeout:60000},async t=>{
+test('workerd: actual old authority REPLACE captures tenants; owner timers reclaim abandoned pending roots without client finally',{timeout:60000},async t=>{
  if(!requireBaselineCommit(t,baseline))return;
  const scratch=resolve('.openclaw/tmp');await mkdir(scratch,{recursive:true});const temporary=await mkdtemp(join(scratch,'usage-inventory-'));let worker;
  try {
