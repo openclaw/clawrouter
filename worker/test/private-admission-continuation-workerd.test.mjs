@@ -81,7 +81,11 @@ export default {async fetch(request,env){
  let result;const baseline=bodyBudgetCharged();
  try{
   const configured=await take(own(stub.fetch('https://authority/fixture/configure',{method:'POST',body:mode})));await take(own(configured.text()));check(configured.status===200,'configure');
-  phase='seed';await env.POLICY_KV.put('credentials/nativebridge',JSON.stringify({...record(digest),...(mode==='principal'?{principalId:' '.repeat(4096)+'FIXTURE@EXAMPLE.COM'+' '.repeat(4096)}:{})}));
+  phase='seed';
+  // Earlier modes own this synthetic default grant. Dependency modes clear its
+  // KV record together with the SQL generation already reset by configure.
+  if(dependency)await env.POLICY_KV.delete(selectedKey);
+  await env.POLICY_KV.put('credentials/nativebridge',JSON.stringify({...record(digest),...(mode==='principal'?{principalId:' '.repeat(4096)+'FIXTURE@EXAMPLE.COM'+' '.repeat(4096)}:{})}));
   if(mode==='principal')await env.POLICY_KV.put('access/users/fixture@example.com',JSON.stringify({enabled:true,groups:[]}));
   await env.POLICY_KV.put('policies/native-bridge-policy',JSON.stringify({enabled:true,generation:'legacy',providers:[],requestCostMicros:7}));
   if(mode==='provider-only')await env.POLICY_KV.put('connections/anthropic',JSON.stringify({providerId:'anthropic',enabled:true}));
