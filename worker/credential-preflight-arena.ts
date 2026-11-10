@@ -78,6 +78,7 @@ function withinFactoryWindow(window: keyof typeof preflightFactoryCharges): bool
 }
 
 type Window = "operation" | "source" | "read" | "terminal";
+const generationTransferAuthority = Symbol("ready Worker ticket transfer");
 interface ExactCharge { readonly bytes: number; replace(bytes: number): ExactCharge | null; release(): void }
 // A DO instance has its own arena. It never funds Worker tickets and never
 // borrows the Worker's common body counter. Only the Worker default below does.
@@ -105,18 +106,42 @@ export class PreflightInstanceArena {
 }
 export class PreflightTicket {
   private charge: ExactCharge;
+  #worker: boolean;
+  #generationPayload = 0;
   private windows = { operation: false, source: false, read: false, terminal: false };
   private unknown = false;
-  private constructor(charge: ExactCharge) { this.charge = charge; }
+  private constructor(charge: ExactCharge, worker: boolean) { this.charge = charge; this.#worker = worker; }
   static reserve(arena?: PreflightInstanceArena): PreflightTicket {
     // Fixed table validation precedes the first per-ticket factory.
     if (!withinFactoryWindow("operation") || !withinFactoryWindow("source") || !withinFactoryWindow("read")
       || !withinFactoryWindow("terminal") || !withinFactoryWindow("synchronous")) throw identityFailure("protocol");
     const charge = arena ? arena.reserve(preflightPayloadBytes) : ExactBodyCharge.reserve(preflightPayloadBytes);
     if (!charge) throw identityFailure("limit");
-    return new PreflightTicket(charge);
+    return new PreflightTicket(charge, !arena);
   }
   get bytes(): number { return this.charge.bytes; }
+  // Used only after the originating complete-admission promise has settled.
+  // A response/graph assignment is not readiness; UNKNOWN never transfers.
+  get generationReady(): boolean {
+    return this.charge.bytes === preflightPayloadBytes && !this.unknown
+      && !this.windows.source && !this.windows.read && !this.windows.terminal && !admissionScratchHeld(this);
+  }
+  get generationPayload(): number { return this.#generationPayload; }
+  retainGenerationComponent(bytes: number): void {
+    if (!this.#worker || !this.generationReady || !Number.isSafeInteger(bytes) || bytes <= 0 || bytes > preflightPayloadBytes) throw identityFailure("protocol");
+    this.#generationPayload = bytes;
+  }
+  transferGeneration(bytes: number): GenerationRetainedCharge | null {
+    if (!this.#worker || !this.generationReady) throw identityFailure("protocol");
+    // replace invalidates the original charge. The successor is NEVER installed
+    // in this ticket: an old dispose/release cannot retire the retained owner.
+    const next = this.charge.replace(bytes);
+    if (!next) return null;
+    retireAdmissionScratch(this);
+    this.#generationPayload = 0;
+    this.windows.operation = false;
+    return GenerationRetainedCharge.fromReadyWorker(next, generationTransferAuthority);
+  }
   enter(window: Window): void {
     if (!this.charge.bytes || this.windows[window]) throw identityFailure("protocol");
     this.windows[window] = true;
@@ -142,7 +167,51 @@ export class PreflightTicket {
     if (this.unknown || this.windows.source || this.windows.read || this.windows.terminal || admissionScratchHeld(this)) return;
     this.windows.operation = false;
     this.charge.release();
+    this.#generationPayload = 0;
   }
+}
+
+export class GenerationRetainedCharge {
+  private charge: ExactCharge;
+  private unknown = false;
+  private constructor(charge: ExactCharge) { this.charge = charge; }
+  // The only factory call is the provenance-checked ticket transfer above.
+  static fromReadyWorker(charge: ExactCharge, authority: symbol): GenerationRetainedCharge {
+    if (authority !== generationTransferAuthority) throw identityFailure("protocol");
+    return new GenerationRetainedCharge(charge);
+  }
+  get bytes(): number { return this.charge.bytes; }
+  holdUnknown(): void { this.unknown = true; }
+  expandForBorrow(): boolean {
+    if (this.unknown || !this.charge.bytes) return false;
+    // Reuse this exclusive Worker backing. Failure leaves the old debit intact;
+    // no source credit is released before the full temporary owner exists.
+    const next = this.charge.replace(preflightPayloadBytes);
+    if (!next) return false;
+    this.charge = next;
+    return true;
+  }
+  release(): void { if (!this.unknown) this.charge.release(); }
+}
+
+// Small construction/index/borrower products have real exact common-arena
+// backing, independently of the 32 MiB source ticket. No grow() floor/doubling.
+// A cache-vector receipt may account this SAME funding without reacquiring it.
+export class GenerationMetadataCharge {
+  private charge: ExactBodyCharge;
+  readonly payloadBytes: number;
+  readonly structure: number;
+  private constructor(charge: ExactBodyCharge, payloadBytes: number, structure: number) {
+    this.charge = charge; this.payloadBytes = payloadBytes; this.structure = structure;
+  }
+  static reserve(payloadBytes: number, structure: number): GenerationMetadataCharge {
+    if (!Number.isSafeInteger(payloadBytes) || payloadBytes <= 0 || !Number.isSafeInteger(structure) || structure <= 0) throw identityFailure("protocol");
+    const charge = ExactBodyCharge.reserve(payloadBytes);
+    if (!charge) throw identityFailure("limit");
+    return new GenerationMetadataCharge(charge, payloadBytes, structure);
+  }
+  get bytes(): number { return this.charge.bytes; }
+  release(): void { this.charge.release(); }
 }
 
 // NEW private bridge policy only. Existing PR974 factory/data accounting above
@@ -189,7 +258,11 @@ export function reserveAdmissionScratch(ticket: PreflightTicket, base: number, v
   let owner = admissionScratch.get(ticket);
   const held = owner ? owner.active + owner.retained : 0;
   // Retained/active borrowers prohibit reducing their already admitted base.
-  const completeBase = held ? Math.max(base, owner!.base) : base;
+  // New generation metadata remains an explicit simultaneous COMPONENT of the
+  // same 32 MiB payload, never passive DATA or free CONTROL. Ordinary tickets
+  // have zero here; their admission and scratch behavior is unchanged.
+  const requestedBase = base + ticket.generationPayload;
+  const completeBase = held ? Math.max(requestedBase, owner!.base) : requestedBase;
   if (owner?.unknown || completeBase > preflightPayloadBytes - held - bytes) throw identityFailure("limit");
   if (!owner) { owner = { base: completeBase, active: 0, retained: 0, leases: 0, unknown: false }; admissionScratch.set(ticket, owner); }
   owner.base = completeBase; owner.active += bytes; owner.leases++;
