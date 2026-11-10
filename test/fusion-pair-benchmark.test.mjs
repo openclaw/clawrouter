@@ -79,6 +79,35 @@ test('fixed controls receive identical supplied context without invoking or budg
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+for (const policy of ['edit-handoff', 'matched-handoff']) test(`${policy} keeps the same allowance and routes both handoff phases explicitly`, async () => {
+  const { root, options } = await fixture();
+  try {
+    const seen = [];
+    const state = await runPairBenchmark({ ...options, policy, grade, fetcher: success,
+      agent: async (_task, _image, strategy, id, settings, invoke, _engine, agentOptions) => {
+        seen.push({ strategy, settings, agentOptions });
+        await invoke(id, roles.strong, body, signal);
+        if (strategy === 'handoff') await invoke(id, roles.critic, body, signal);
+        return { ...repaired(), handoffUsed: strategy === 'handoff' };
+      },
+    });
+    assert.deepEqual(state.calls.map(call => call.model), policy === 'matched-handoff'
+      ? [config.cheap, config.strong, config.strong, config.strong, config.cheap]
+      : [config.cheap, config.strong, config.strong, config.cheap]);
+    assert.equal(seen[2].strategy, 'handoff');
+    assert.equal(seen[2].settings.maxTurns, config.maxCalls);
+    assert.deepEqual(seen[2].agentOptions, { preloadSource: true, handoffAfterEdit: true });
+    assert.deepEqual(seen[0].agentOptions, { preloadSource: true });
+    assert.deepEqual(seen[1].agentOptions, { preloadSource: true, ...(policy === 'matched-handoff' ? { handoffAfterEdit: true } : {}) });
+    assert.equal(seen[1].strategy, policy === 'matched-handoff' ? 'handoff' : 'strong');
+    assert.equal(seen[1].settings.maxTurns, config.maxCalls);
+    assert.equal(state.records[1].handoffUsed, policy === 'matched-handoff');
+    assert.equal(state.policy, policy);
+    assert.equal(state.records[2].handoffUsed, true);
+    assert.equal(analyzePairRun(state).candidateModelUse.mixedAttempts, 1);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('fixed-controls selection rejects ambiguous or invalid options before provider access', async () => {
   for (const controlsOnly of ['true', null, 1]) {
     await assert.rejects(runPairBenchmark({ sourceSha: 'e'.repeat(40), controlsOnly }), /invalid_control_selection/);

@@ -229,6 +229,7 @@ test('single drafts are bounded and reject out-of-scope or malformed edits befor
     assert.equal(calls, 1); assert.equal(writes, edits[0]?.replace === 'fixed' && edits[0]?.search === 'original' && edits[0]?.path === 'worker/a.ts' ? 1 : 0);
     assert.equal(output.publicPassed, writes === 1);
     assert.equal(output.files[0].content, writes ? 'fixed' : 'original');
+    if (edits[0]?.search === 'absent') assert.equal(output.actions[0].status, 'search_must_match_once');
     assert.ok(f.boxes.every(box => box.closed));
   }
 });
@@ -264,7 +265,7 @@ test('bounded draft refinement carries current source and failed checks into one
   const output = await runRefinedDraft(refinedTask, 'image', 'strong', 'refine', config, async () => {}, undefined, {
     draft: async (_task, _image, _strategy, _id, settings, _invoke, _engine, options) => {
       seen.push({ settings, options });
-      return { ...result(), files: [{ path: 'worker/a.ts', content: seen.length === 1 ? 'incomplete' : 'fixed' }], publicPassed: false };
+      return { ...result(), outcome: 'draft_submitted', files: [{ path: 'worker/a.ts', content: seen.length === 1 ? 'incomplete' : 'fixed' }], publicPassed: false };
     },
     makeSandbox: async () => { const box = { closed: false, async close() { this.closed = true; } }; boxes.push(box); return box; },
     write: async () => {}, test: async () => passed,
@@ -285,11 +286,47 @@ test('draft refinement stops at the available allowance or three drafts', async 
     const f = fixture([]);
     const output = await runRefinedDraft({ ...task, reproducer: 'supplied' }, 'image', 'strong', 'refine',
       { ...config, maxTurns: allowance }, async () => {}, undefined, {
-        ...f.dependencies, draft: async () => { calls++; return result(); }, test: async () => passed, runProbe: async () => failed,
+        ...f.dependencies, draft: async () => { calls++; return { ...result(), outcome: 'draft_submitted' }; }, test: async () => passed, runProbe: async () => failed,
       });
     assert.equal(calls, Math.min(allowance, 3)); assert.equal(output.turns, calls);
     assert.ok(f.boxes.every(box => box.closed));
   }
+});
+
+test('rejected drafts get actionable feedback without checking unchanged source', async () => {
+  for (const [status, expected] of [['provider_truncated', /shorter patch/],
+    ['search_must_match_once', /exact, unique anchors/], ['invalid_edits', /valid JSON/]]) {
+    const seen = []; let checks = 0, probes = 0, boxes = 0;
+    const output = await runRefinedDraft({ ...task, reproducer: 'supplied' }, 'image', 'strong', 'refine',
+      config, async () => {}, undefined, {
+        draft: async (_task, _image, _strategy, _id, _config, _invoke, _engine, options) => {
+          seen.push(options);
+          return { ...result(), outcome: seen.length === 1 ? 'draft_rejected' : 'draft_submitted',
+            files: [{ path: 'worker/a.ts', content: seen.length === 1 ? 'original' : 'fixed' }],
+            actions: [{ action: 'draft', status: seen.length === 1 ? status : 'ok' }] };
+        },
+        makeSandbox: async () => { boxes++; return { close: async () => {} }; },
+        write: async () => {}, test: async () => { checks++; return passed; },
+        runProbe: async () => { probes++; return passed; },
+      });
+    assert.equal(seen.length, 2); assert.equal(boxes, 1); assert.equal(checks, 1); assert.equal(probes, 1);
+    assert.match(seen[1].feedback, expected);
+    assert.match(seen[1].feedback, /No edits.*were applied/);
+    assert.equal(seen[1].initialFiles[0].content, 'original');
+    assert.equal(output.outcome, 'draft_submitted'); assert.equal(output.publicPassed, true);
+    assert.deepEqual(output.actions.filter(action => action.action === 'draft_check').map(action => action.status), ['not_applied', 'passed']);
+  }
+});
+
+test('exhausting rejected drafts cannot certify unchanged source', async () => {
+  let calls = 0;
+  const output = await runRefinedDraft({ ...task, reproducer: 'supplied' }, 'image', 'strong', 'refine',
+    config, async () => {}, undefined, {
+      draft: async () => { calls++; return { ...result(), outcome: 'draft_rejected', actions: [{ action: 'draft', status: 'provider_empty' }] }; },
+      makeSandbox: async () => { throw Error('unchanged source must not be checked'); },
+    });
+  assert.equal(calls, 3); assert.equal(output.turns, 3); assert.equal(output.publicPassed, false);
+  assert.equal(output.outcome, 'draft_rejected');
 });
 
 test('draft refinement stops on uncertain charges and rejects an escaped candidate before verification', async () => {

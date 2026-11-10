@@ -184,3 +184,28 @@ test('fresh corpus excludes repairs contradicted by their original visible tests
   assert.equal(tasks.length, 2);
   assert.ok(tasks.every(task => !['cerebras-worker-redirect-mode', 'minimax-regional-availability'].includes(task.id)));
 });
+
+// Native fixtures must execute image-owned dependencies while edits remain noexec.
+test('sandbox supports native fixtures without making edited source executable', {
+  skip: !process.env.FUSION_NATIVE_IMAGE,
+}, async () => {
+  const box = await sandbox(process.env.FUSION_NATIVE_IMAGE);
+  try {
+    await box.exec(['node', '--input-type=module', '-e', `
+      import assert from 'node:assert/strict';
+      import fs from 'node:fs';
+      import { execFileSync } from 'node:child_process';
+      import { createRequire } from 'node:module';
+      const projectRequire = createRequire('/work/package.json');
+      const require = createRequire(projectRequire.resolve('wrangler/package.json'));
+      assert.equal(require('esbuild').transformSync('const n: number = 1', { loader: 'ts' }).warnings.length, 0);
+      fs.writeFileSync('/work/execution-probe.sh', '#!/bin/sh\\nexit 0\\n', { mode: 0o755 });
+      assert.throws(() => execFileSync('/work/execution-probe.sh'), error => error.code === 'EACCES');
+      assert.throws(() => fs.writeFileSync('/work/node_modules/.write-probe', ''), error => ['EROFS', 'EACCES'].includes(error.code));
+      const { Miniflare, convertV4MiniflareOptions } = require('miniflare');
+      const runtime = new Miniflare(convertV4MiniflareOptions({ workers: [{ name: 'fixture', modules: true, script: 'export default { fetch() { return new Response("native fixture") } }', compatibilityDate: '2026-01-01' }] }));
+      try { assert.equal(await (await runtime.dispatchFetch('https://fixture.example')).text(), 'native fixture'); }
+      finally { await runtime.dispose(); }
+    `], { timeout: 30000 });
+  } finally { await box.close(); }
+});

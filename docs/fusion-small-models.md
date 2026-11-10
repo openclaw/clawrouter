@@ -3,6 +3,11 @@
 Research reviewed on 2026-11-05. Keep production Fusion opt-in. This plan tests
 the mechanism before paying for another frontier-model comparison.
 
+Draft refinement skips verification when a response applies no patch. It tells
+the next attempt whether to shorten truncated output or repair invalid edit
+anchors, while retaining the current source and the same three-attempt ceiling.
+Applied drafts still require the visible tests and supplied reproducer to pass.
+
 ## What the evidence supports
 
 | Primary source | Relevant result | Engineering consequence |
@@ -395,6 +400,39 @@ the cheap model executes the remaining actions. The plan consumes one of the
 same total calls available to each control. All calls and failed attempts count
 against the trial and campaign budgets. This is an experimental policy, not a
 claim of improvement.
+
+Set `FUSION_PAIR_POLICY=edit-handoff` to test an execution handoff instead of
+an up-front plan. The strong model starts the repair. After its first edit
+passes the visible tests, the cheap model receives the current source and
+working notes and continues verification or repair. A submission before that
+point also requires a successor turn. Failed edits do not trigger a handoff,
+and the ordinary turn-based handoff threshold is disabled for this policy.
+Both workers share the same total call, time and spend limits. Passing visible
+tests selects a handoff point; it does not certify correctness. Independent
+acceptance still scores the final patch. This policy is experimental and needs
+matched quality, cost and latency measurements; the default remains `architect`.
+
+The handoff also includes the latest executed behavior probe and its pass/fail
+result when the source is at most 8 KiB. This is untrusted context that may
+predate the last edit, not acceptance evidence. The successor must inspect its
+coverage and rerun it against current source. An oversized latest probe is
+omitted in full; an older probe is not substituted. Raw probe source and output
+are not added to benchmark receipts.
+
+The successor receives verification-specific instructions and the current source
+snapshot. Its task context retains the read-only repository context but omits the
+initial editable-source preload. It must check task invariants and repair concrete
+failures, then submit when verification is complete. It keeps the full remaining
+allowance; there is no forced early submission. Probe-use receipts require a
+successful model response to context that includes the transferred probe.
+
+Set `FUSION_PAIR_POLICY=matched-handoff` to compare the cheap successor against
+a strong successor using the same handoff point, verification instructions,
+current-source context and shared limits. The cheap-only arm stays unchanged.
+The report records `matched-handoff` as its policy, `strong` for the unmixed
+control and `edit-handoff` for the mixed candidate. This control separates model
+selection from the effect of changing the execution protocol. Do not pool it
+with ordinary `edit-handoff` blocks as one repeated protocol.
 
 Run from a committed task checkout with qualified workload receipts and an
 explicit JSON configuration. Only credentials for the selected models are
