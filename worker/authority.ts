@@ -99,11 +99,13 @@ export class PolicyBindingIndexObject implements DurableObject {
         const revision = this.storage.transactionSync(() => maintainUsageInventory(this.sql));
         return json((this.usageCuts ??= new UsageReportCuts()).dispatch(path.slice("/usage-cuts/".length), input, revision));
       }
-      if (path === "/usage-inventory") {
+      if (path === "/usage-inventory" || path === "/usage-inventory-evidence") {
         if (!this.usageOwner || request.method !== "POST") return errorResponse("route_not_found", "route not found", 404);
         const input = await readJson<Record<string, unknown>>(request, undefined, 64);
         if (!input || Array.isArray(input) || Object.keys(input).length) invalidAuthorityRequest("invalid inventory request");
-        return json(this.storage.transactionSync(() => readUsageInventory(this.sql, this.hasMeta("policies_global_initialized"))));
+        return json(this.storage.transactionSync(() => path === "/usage-inventory-evidence"
+          ? (maintainUsageInventory(this.sql), usageInventoryEvidence(this.sql))
+          : readUsageInventory(this.sql, this.hasMeta("policies_global_initialized"))));
       }
       if (request.headers.has(policyCollectionHeader)) {
         // A private protocol selector, not authority or a public caller header.
@@ -2282,6 +2284,12 @@ interface UsageInventory {
   historicalLocations: 'not_exhaustively_assessed'; formerLocationLateWrites: 'not_bounded';
   captureAudit: {startedAt: number; verifiedSince: number; captureGapObserved: boolean};
 }
+function usageInventoryEvidence(sql: SqlStorage): Omit<UsageInventory, 'addresses'> {
+  const state = rows<{revision:string;started_at:number;verified_since:number;capture_gap:number;version:number}>(sql.exec('SELECT * FROM usage_inventory_state WHERE id = 1'))[0];
+  if (state.version !== 1) inventoryUnavailable('version');
+  return {revision:state.revision,historicalLocations:'not_exhaustively_assessed',formerLocationLateWrites:'not_bounded',
+    captureAudit:{startedAt:state.started_at,verifiedSince:state.verified_since,captureGapObserved:state.capture_gap === 1}};
+}
 function inventoryUnavailable(reason: string): never { throw new HttpError(503, 'usage_inventory_unavailable', 'Usage inventory unavailable (' + reason + ')'); }
 function maintainUsageInventory(sql: SqlStorage, now = Date.now()): string {
   ensureUsageInventory(sql);
@@ -2308,6 +2316,5 @@ function readUsageInventory(sql: SqlStorage, initialized: boolean): UsageInvento
   const addresses = rows<{policy_id:string;tenant_id:string}>(sql.exec(union + ' ORDER BY tenant_id COLLATE BINARY, policy_id COLLATE BINARY')).map(row => ({policyId:row.policy_id,tenantId:row.tenant_id}));
   const state = rows<{revision:string;started_at:number;verified_since:number;capture_gap:number;version:number}>(sql.exec('SELECT * FROM usage_inventory_state WHERE id = 1'))[0];
   if (state.version !== 1) inventoryUnavailable('version');
-  return {addresses,revision:state.revision,historicalLocations:'not_exhaustively_assessed',formerLocationLateWrites:'not_bounded',
-    captureAudit:{startedAt:state.started_at,verifiedSince:state.verified_since,captureGapObserved:state.capture_gap === 1}};
+  return {addresses,...usageInventoryEvidence(sql)};
 }

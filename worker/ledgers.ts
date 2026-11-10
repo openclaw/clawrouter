@@ -9,7 +9,8 @@ import type { GrantUsageSnapshot, GrantUsageRow, GrantUsageTotals } from "../sha
 import type { BudgetChargeRequest, BudgetReserveRequest, BudgetSettleRequest, Env, QueueMessage, UsageEvent } from "./types";
 import { budgetLedgerAddress, dailyBudgetLedgerAddress, weeklyBudgetLedgerAddress, providerBudgetLedgerAddress } from "./budget-scope.ts";
 import { mergePrincipalUsage, mergeUsageSnapshots, usageCutoffs, usageDayMs, usageShardName, type PrincipalUsage, type UsageSnapshot, type UsageTotals } from "./usage-sharding.ts";
-import { errorResponse, HttpError, json, normalizeEmail } from "./utils.ts";
+import { errorResponse, HttpError, json, normalizeEmail, readJson } from "./utils.ts";
+import { dispatchCompleteUsageShard } from "./usage-report-store.ts";
 import { backfillUsageRollups, ensureUsageRollups, rollupOwnerCondition, rollupSummaryColumns, rollupTotalColumns, usageRollupAlarmMs, usageRollupProgress } from "./usage-rollups.ts";
 
 export type UsageEventScope = { kind: "admin" } | { kind: "principal" | "credential"; id: string };
@@ -187,6 +188,14 @@ export class UsageLedgerObject implements DurableObject {
       return json(receipt);
     }
     // Internal DO transport only; never forwarded from a public mutation route.
+    if (request.method === "POST" && url.pathname === "/complete-usage") {
+      try {
+        const input = await readJson<unknown>(request, undefined, 1024 * 1024);
+        return json(this.state.storage.transactionSync(() => dispatchCompleteUsageShard(this.sql, input)));
+      } catch {
+        return json({ kind: "unavailable", reason: "source" });
+      }
+    }
     if (request.method === "POST" && (url.pathname === "/personal-report" || url.pathname === "/personal-events")) {
       const body = await request.json<{ query: UsageReportQuery; limit: number; before?: UsageEventPosition; includeEqualId?: boolean }>();
       return json(url.pathname === "/personal-report" ? queryUsageReport(this.sql, body.query) : queryUsageEvents(this.sql, body.query, body.limit, body.before, body.includeEqualId));

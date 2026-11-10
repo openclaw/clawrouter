@@ -7,7 +7,7 @@ import type {UsageVisibilityCut} from './usage-report-visibility.ts';
 // fingerprints afresh; unit4 owns provenance, not this memory owner.
 interface Binding {actor:string; session:string; authority:string}
 interface Query {
- from:number; to:number; timezone:string; grain:'day'|'minute';
+ from:number; to:number; timezone:string; grain:'day'|'minute'; rankOffset?:number;
  groupBy:'model'|'provider'|'key'|'user'; rankBy:'calls'|'tokens'|'recordedAmount';
  filters:{user?:string; key?:{kind:'session'}|{kind:'credential';id:string}; model?:string; provider?:string; status?:string; lane?:string; costClass?:string};
 }
@@ -41,7 +41,8 @@ function binding(value:unknown):asserts value is Binding {
  for(const key of ['actor','session','authority'])if(typeof b[key]!=='string'||!digest.test(b[key] as string))fail('invalid');
 }
 function query(value:unknown):asserts value is Query {
- const q=object(value,['from','to','timezone','grain','groupBy','rankBy','filters']);number(q.from);number(q.to);
+ const q=object(value,['from','to','timezone','grain','groupBy','rankBy','rankOffset','filters']);number(q.from);number(q.to);
+ if(q.rankOffset!==undefined){number(q.rankOffset);if(q.rankOffset>32768)fail('invalid')}
  if(q.from>=q.to||q.to-q.from>30*86400000)fail('invalid');str(q.timezone,100);
  if(!['day','minute'].includes(q.grain as string)||q.grain==='minute'&&q.to-q.from>86400000||!['model','provider','key','user'].includes(q.groupBy as string)||!['calls','tokens','recordedAmount'].includes(q.rankBy as string))fail('invalid');
  const f=object(q.filters,['user','key','model','provider','status','lane','costClass']);
