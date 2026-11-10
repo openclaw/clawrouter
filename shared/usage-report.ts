@@ -81,7 +81,7 @@ export interface PersonalUsageEvent {
   costClass: UsageCostClass;
   reportingCostMicros: number | null;
   estimateReason?: string | null;
-  recordedChargeMicros: number;
+  recordedChargeMicros: number | null;
   costBasis: string | null;
   pricingRef: string | null;
   requestedTier: string | null;

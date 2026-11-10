@@ -1,3 +1,5 @@
+import { withUsageRetention, maintainUsageVisibility } from "./usage-report-visibility.ts";
+import { reportRetentionMs } from "./usage-report-range.ts";
 import { searchJsonBytes } from "./minimax-search-operation.ts";
 import { musicCoverControlHeader, musicCoverControlVersion, musicCoverUnavailable, readCoverControlRequest, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
 import type { MiniMaxSearchOperation } from "./minimax-search-operation.ts";
@@ -18,8 +20,8 @@ export interface UsageIngestReceipt {
 
 const reservationLeaseMs = 15 * 60 * 1_000;
 const chargeRetentionMs = 45 * 86_400_000;
-const usageWindowDays = 30;
-const usageRetentionMs = usageWindowDays * usageDayMs;
+const usageRetentionMs = reportRetentionMs;
+const usageWindowDays = usageRetentionMs / usageDayMs;
 const usageAttributionBatchSize = 250;
 
 export class BudgetLedgerObject implements DurableObject {
@@ -214,6 +216,7 @@ export class UsageLedgerObject implements DurableObject {
 
   async alarm(): Promise<void> {
     this.cleanup();
+    this.state.storage.transactionSync(() => maintainUsageVisibility(this.sql));
     const attributionPending = this.backfillAttribution();
     const before = usageRollupProgress(this.sql).last_rowid;
     backfillUsageRollups(this.sql, fn => this.state.storage.transactionSync(fn));
@@ -420,10 +423,10 @@ export class UsageLedgerObject implements DurableObject {
   }
 
   private cleanup(cutoff = Date.now() - usageRetentionMs): void {
-    this.state.storage.transactionSync(() => withUsageReportPair(this.sql, () => {
+    this.state.storage.transactionSync(() => withUsageReportPair(this.sql, () => withUsageRetention(this.sql, cutoff, () => {
       this.sql.exec("DELETE FROM usage_events WHERE occurred_at_ms < ?", cutoff);
       this.sql.exec("DELETE FROM usage_report_events WHERE occurred_at_ms < ?", cutoff);
-    }));
+    })));
   }
   private ensureSchema(): void {
     this.sql.exec("CREATE TABLE IF NOT EXISTS usage_events (id TEXT PRIMARY KEY, occurred_at_ms INTEGER NOT NULL, tenant_id TEXT NOT NULL, policy_id TEXT NOT NULL, provider TEXT NOT NULL, status TEXT NOT NULL, status_code INTEGER, input_tokens INTEGER, output_tokens INTEGER, total_tokens INTEGER, actual_cost_micros INTEGER NOT NULL, event_json TEXT NOT NULL)");
