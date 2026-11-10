@@ -315,7 +315,7 @@ type GenerationEntry = { partition: GenerationPartition; kid: string; first?: Ge
 type GenerationSlot = { entry: GenerationEntry; owner: AdmissionOwner; continuation?: CredentialPreflightContinuation;
   handle?: PrivateAdmissionHandle; ready: boolean; published: boolean; borrowers: number; sequence: number; storedAt: number; maxAgeMs: number;
   funding: GenerationMetadataCharge; initialBorrowFunding?: GenerationMetadataCharge; cache?: PrivateCacheReservation; graphCache?: PrivateCacheReservation;
-  temporaryCharge?: GenerationRetainedCharge; advisory?: GenerationAdvisoryState; feedback?: Map<string, GenerationPendingFeedback>; counters?: Map<string, GenerationPendingCount>; countCursor?: Map<string, GenerationPendingCount>; scheduled?: GenerationFlushOwner; nextFlush?: GenerationFlushOwner; coverage?: { value: GenerationCoverage; funding: GenerationMetadataCharge; cache?: PrivateCacheReservation } };
+  temporaryCharge?: GenerationRetainedCharge; advisory?: GenerationAdvisoryState; feedback?: Map<string, GenerationPendingFeedback>; counters?: Map<string, GenerationPendingCount>; countCursor?: Map<string, GenerationPendingCount>; coverage?: { value: GenerationCoverage; funding: GenerationMetadataCharge; cache?: PrivateCacheReservation } };
 type GenerationBorrower = { slot: GenerationSlot; funding: GenerationMetadataCharge; cache?: PrivateCacheReservation };
 type GenerationRegistry = { partitions: WeakMap<Authority, GenerationPartition>;
   preparations: WeakMap<IdentityGenerationPreparation, GenerationSlot>; borrowers: WeakMap<IdentityGenerationBorrow, GenerationBorrower>;
@@ -607,10 +607,15 @@ function retireAuthentication(owner: GenerationAuthenticationOwner): void {
   if (!owner.closed || owner.children) return;
   owner.identity = undefined; owner.failure = undefined; owner.slot = undefined as never;
   const parent = owner.parent; owner.parent = undefined as never;
-  try { parent.dispose(); } finally {
-    owner.lease.release(); generationAuthenticationCount--;
-    if (!generationAuthenticationCount) { generationAuthentications = undefined; generationAuthenticationRegistryCharge?.release(); generationAuthenticationRegistryCharge = undefined; }
+  const failures: unknown[] = [];
+  try { parent.dispose(); } catch (error) { failures.push(error); }
+  try { owner.lease.release(); } catch (error) { failures.push(error); }
+  if (!--generationAuthenticationCount) {
+    generationAuthentications = undefined;
+    const charge = generationAuthenticationRegistryCharge; generationAuthenticationRegistryCharge = undefined;
+    try { charge?.release(); } catch (error) { failures.push(error); }
   }
+  if (failures.length) throw new AggregateError(failures, "generation authentication retirement");
 }
 function disposeGenerationAuthentication(this: GenerationAuthentication): void {
   const owner = authenticationOwner(this);
@@ -681,6 +686,7 @@ export interface GenerationSelectionHandle {
   selected(): boolean;
   matchesKey(key: string): boolean;
   hasConfiguredGrant(): boolean;
+  readonly flush: GenerationFlushReceipt;
 }
 let generationSelections: WeakMap<GenerationSelectionHandle, GenerationSelectionOwner> | undefined;
 let generationSelectionRegistryCharge: GenerationConsumptionLease | undefined;
@@ -694,12 +700,22 @@ function releaseGenerationSelection(owner: GenerationSelectionOwner): void {
   if (--owner.users) return;
   owner.result = undefined; owner.prefetchProvider = undefined;
   const auth = owner.auth; owner.auth = undefined as never;
-  owner.lease.release(); auth.children--; retireAuthentication(auth);
+  const failures: unknown[] = [];
+  try { owner.lease.release(); } catch (error) { failures.push(error); }
+  auth.children--;
+  try { retireAuthentication(auth); } catch (error) { failures.push(error); }
+  if (failures.length) throw new AggregateError(failures, "generation selection retirement");
 }
 function disposeGenerationSelection(this: GenerationSelectionHandle): void {
   const owner = selectedOwner(this); generationSelections!.delete(this);
-  releaseGenerationSelection(owner); generationSelectionCount--;
-  if (!generationSelectionCount) { generationSelections = undefined; generationSelectionRegistryCharge?.release(); generationSelectionRegistryCharge = undefined; }
+  const failures: unknown[] = [];
+  try { releaseGenerationSelection(owner); } catch (error) { failures.push(error); }
+  if (!--generationSelectionCount) {
+    generationSelections = undefined;
+    const charge = generationSelectionRegistryCharge; generationSelectionRegistryCharge = undefined;
+    try { charge?.release(); } catch (error) { failures.push(error); }
+  }
+  if (failures.length) throw new AggregateError(failures, "generation selection handle cleanup");
 }
 function generationSelected(this: GenerationSelectionHandle): boolean { return !!selectedOwner(this).result!.selected; }
 function generationSelectedKey(this: GenerationSelectionHandle, key: string): boolean { return selectedOwner(this).result!.selected?.key === key; }
@@ -711,6 +727,11 @@ function selectionCovered(coverage: GenerationCoverage, request: import("./autho
     && source.mode === request.mode && source.model === request.model && source.catalogModelId === request.catalogModelId
     && source.capability === request.capability && source.sessionHash === request.sessionHash;
 }
+function generationSelectionPayload(value: unknown): number {
+  const plan = identityPlan("record"); plan.item(value, 0);
+  const counts = plan.counts;
+  return 4096 + 8 * (counts.containers + 2 * counts.members + counts.entries + counts.values) + 2 * counts.units;
+}
 export function selectCredentialGeneration(handle: GenerationAuthentication, env: Env,
   request: import("./authority-admission.ts").AdmissionSelection): GenerationSelectionHandle | undefined {
   const auth = authenticationOwner(handle), slot = auth.slot;
@@ -719,6 +740,7 @@ export function selectCredentialGeneration(handle: GenerationAuthentication, env
   const frame = GenerationConsumptionLease.reserve(4096);
   let work: GenerationConsumptionLease | undefined, resultLease: GenerationConsumptionLease | undefined;
   let created: GenerationAdvisoryState | undefined, pending: GenerationPendingCount | undefined, flush: GenerationFlushOwner | undefined;
+  let unpublished: GenerationSelectionHandle | undefined;
   let hasPrimary = false, primary: unknown;
   try {
     admitIdentity(request);
@@ -730,16 +752,14 @@ export function selectCredentialGeneration(handle: GenerationAuthentication, env
       try { return run(); } finally { work!.replace(base); }
     });
     if (!planned) return undefined;
-    const plan = identityPlan("record"); plan.item(planned.result.selected, 0);
-    const counts = plan.counts;
-    resultLease = GenerationConsumptionLease.reserve(4096 + 8 * (counts.containers + 2 * counts.members + counts.entries + counts.values) + 2 * counts.units);
+    resultLease = GenerationConsumptionLease.reserve(generationSelectionPayload(planned.result.selected));
     const result = planned.result.selected ? { ...planned.result, selected: copyIdentity(planned.result.selected) } : { ...planned.result };
     freezeGenerationGraph(result);
     // Both final copy admission and the complete prospective advisory update
     // precede the first counter/cursor mutation. No authority writes occur here.
     admitGenerationOverlay(slot.owner.admission!, overlay, planned);
     overlay.admitSelection(planned);
-    if (planned.selectedKey) { pending = prepareGenerationCount(slot, planned); flush = prepareGenerationSchedule(slot, env); }
+    if (planned.selectedKey) { pending = prepareGenerationCount(slot, planned); flush = newGenerationFlush(slot, env, pending); }
     if (!generationSelections) {
       generationSelectionRegistryCharge = GenerationConsumptionLease.reserve(512); generationSelections = new WeakMap();
     }
@@ -748,16 +768,22 @@ export function selectCredentialGeneration(handle: GenerationAuthentication, env
       && !(provider.id === "minimax" && provider.endpoints.some(endpoint => endpoint.id === request.endpointId
         && (endpoint.request_format === "minimax.images" || endpoint.request_format === "minimax.music"))) ? provider : undefined;
     const owner: GenerationSelectionOwner = { auth, lease: resultLease, result, users: 1, prefetchProvider };
-    const selected = Object.freeze({ dispose: disposeGenerationSelection, selected: generationSelected, matchesKey: generationSelectedKey, hasConfiguredGrant: generationConfigured });
+    // The operation's receipt belongs to THIS caller/request, not to the shared
+    // generation slot. It exposes no data graph and is never used by hints.
+    const selectedRecord = { dispose: disposeGenerationSelection, selected: generationSelected, matchesKey: generationSelectedKey,
+      hasConfiguredGrant: generationConfigured, flush: generationFlushRejected as GenerationFlushReceipt };
+    const selected: GenerationSelectionHandle = selectedRecord;
     generationSelections.set(selected, owner); generationSelectionCount++; auth.children++;
+    unpublished = selected; resultLease = undefined;
     slot.advisory = overlay; created = undefined;
     overlay.commitSelection(planned);
     if (pending) { commitGenerationCount(slot, pending); pending = undefined; }
-    if (flush) { commitGenerationSchedule(flush); flush = undefined; }
-    resultLease = undefined; return selected;
+    if (flush) { selectedRecord.flush = commitGenerationSchedule(flush); flush = undefined; }
+    Object.freeze(selected); unpublished = undefined; return selected;
   } catch (error) { hasPrimary = true; primary = error; throw error; }
   finally {
     const failures: unknown[] = [];
+    try { unpublished?.dispose(); } catch (error) { failures.push(error); }
     try { if (flush && !flush.started) abandonGenerationFlush(flush); } catch (error) { failures.push(error); }
     try { if (pending) releaseGenerationCount(pending); } catch (error) { failures.push(error); }
     try { created?.dispose(); } catch (error) { failures.push(error); }
@@ -770,17 +796,20 @@ export function selectCredentialGeneration(handle: GenerationAuthentication, env
 
 interface GenerationPendingFeedback {
   key: string; value?: import("./types").GrantRuntimeState; lease: GenerationConsumptionLease;
-  parent: IdentityGenerationBorrow; inflight: boolean;
+  parent: IdentityGenerationBorrow; inflight: boolean; claim?: GenerationFlushOwner;
 }
 // A pending value's owner survives publication eviction. Replacing it during an
 // original write does not retire that original write's copy or replay its work.
 function releaseGenerationFeedback(record: GenerationPendingFeedback): void {
-  record.value = undefined; record.key = "";
+  record.value = undefined; record.key = ""; record.claim = undefined;
   const parent = record.parent; record.parent = undefined as never;
-  try { parent.dispose(); } finally { record.lease.release(); }
+  const failures: unknown[] = [];
+  try { parent.dispose(); } catch (error) { failures.push(error); }
+  try { record.lease.release(); } catch (error) { failures.push(error); }
+  if (failures.length) throw new AggregateError(failures, "generation pending record cleanup");
 }
 export function queueCredentialGenerationRuntime(handle: GenerationAuthentication, key: string,
-  incoming: import("./types").GrantRuntimeState): void {
+  incoming: import("./types").GrantRuntimeState): GenerationFlushReceipt {
   const auth = authenticationOwner(handle), slot = auth.slot;
   if (auth.failure) throw auth.failure;
   let covered = false;
@@ -807,12 +836,12 @@ export function queueCredentialGenerationRuntime(handle: GenerationAuthenticatio
     held = GenerationConsumptionLease.reserve(localBytes + 4 * key.length + 512);
     pendingLease = GenerationConsumptionLease.reserve(pendingBytes + 4 * key.length + 512);
     parent = newGenerationBorrow(slot);
-    flush = prepareGenerationSchedule(slot, { ACCESS_CONTROL: slot.owner.binding } as Env);
     const value = detachedGenerationRuntime(previous, incoming);
     admitGenerationOverlay(slot.owner.admission!, overlay, undefined, { key, value });
     const pendingValue = detachedGenerationFeedback(prior?.value, incoming);
     freezeGenerationGraph(value); freezeGenerationGraph(pendingValue);
     const record: GenerationPendingFeedback = { key, value: pendingValue, lease: pendingLease, parent, inflight: false };
+    flush = newGenerationFlush(slot, { ACCESS_CONTROL: slot.owner.binding } as Env, undefined, record);
     const priorCharge = overlay.runtimeCharges.get(key);
     slot.feedback ??= new Map();
     overlay.runtime.set(key, value); overlay.runtimeCharges.set(key, held);
@@ -821,7 +850,8 @@ export function queueCredentialGenerationRuntime(handle: GenerationAuthenticatio
     previous = undefined;
     priorCharge?.release();
     if (prior && !prior.inflight) releaseGenerationFeedback(prior);
-    if (flush) { commitGenerationSchedule(flush); flush = undefined; }
+    const receipt = commitGenerationSchedule(flush!); flush = undefined;
+    return receipt;
   } catch (error) { hasPrimary = true; primary = error; throw error; }
   finally {
     const failures: unknown[] = [];
@@ -836,57 +866,20 @@ export function queueCredentialGenerationRuntime(handle: GenerationAuthenticatio
   }
 }
 
+// This completion joins ONLY this invocation's synchronously claimed cohort.
+// It never awaits a foreign request's original work or promises a global drain.
 export function flushCredentialGenerationRuntime(handle: GenerationAuthentication, env: Env): Promise<void> {
   const auth = authenticationOwner(handle), slot = auth.slot;
   if (auth.failure) throw auth.failure;
   if (slot.owner.binding !== env.ACCESS_CONTROL) throw identityFailure("protocol");
-  const lease = GenerationConsumptionLease.reserve(4096);
-  let parent: IdentityGenerationBorrow;
-  try { parent = newGenerationBorrow(slot); } catch (error) { lease.release(); throw error; }
-  const operation = drainGenerationFeedback(slot, { ACCESS_CONTROL: slot.owner.binding } as Env, parent, lease);
-  void operation.then(() => undefined, () => undefined);
-  return operation;
-}
-async function drainGenerationFeedback(slot: GenerationSlot, env: Env, parent: IdentityGenerationBorrow, lease: GenerationConsumptionLease): Promise<void> {
-  let hasPrimary = false, primary: unknown;
-  try {
-    do {
-      const original = slot.scheduled?.completion ?? startGenerationFlush(newGenerationFlush(slot, env), false);
-      // No producer calls this draining API, and this promise is never installed
-      // as slot.scheduled: it cannot join its own encompassing completion.
-      await original;
-    } while (slot.scheduled || slot.nextFlush || slot.feedback?.size || slot.counters?.size);
-  } catch (error) { hasPrimary = true; primary = error; }
-  slot = undefined as never; env = undefined as never;
-  const failures: unknown[] = [];
-  try { parent.dispose(); } catch (error) { failures.push(error); }
-  parent = undefined as never;
-  try { lease.release(); } catch (error) { failures.push(error); }
-  if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "generation drain cleanup");
-  if (hasPrimary) throw primary;
-}
-async function runGenerationFeedback(slot: GenerationSlot, env: Env): Promise<void> {
-  await flushGenerationCounts(slot, env);
-  const pending = slot.feedback;
-  if (!pending) return;
-  let remaining = pending.size;
-  for (const record of pending.values()) {
-    if (!remaining--) break;
-    if (record.inflight) continue;
-    record.inflight = true;
-    try { await recordGrantRuntime(env, record.key, record.value!); }
-    catch { /* Same ordinary advisory disposition; never replay this write. */ }
-    finally {
-      if (pending.get(record.key) === record) pending.delete(record.key);
-      releaseGenerationFeedback(record);
-    }
-  }
-  if (!pending.size && slot.feedback === pending) slot.feedback = undefined;
+  const owner = newGenerationFlush(slot, env);
+  try { return startGenerationFlush(owner, false); }
+  catch (primary) { try { abandonGenerationFlush(owner); } catch (cleanup) { throw new AggregateError([primary, cleanup], "generation flush start"); } throw primary; }
 }
 
 interface GenerationPendingCount {
   id: string; poolKey: string; key: string; count: number; lastMs: number; cursorKey?: string;
-  parent: IdentityGenerationBorrow; lease: GenerationConsumptionLease; inflight: boolean;
+  parent: IdentityGenerationBorrow; lease: GenerationConsumptionLease; inflight: boolean; sendCursor: boolean; claim?: GenerationFlushOwner;
 }
 function prepareGenerationCount(slot: GenerationSlot, plan: import("./admission-cache.ts").GenerationSelectionPlan): GenerationPendingCount {
   const lease = GenerationConsumptionLease.reserve(4096 + 8 * plan.poolKey.length + 6 * plan.selectedKey!.length + 2 * (plan.cursorKey?.length ?? 0));
@@ -895,8 +888,14 @@ function prepareGenerationCount(slot: GenerationSlot, plan: import("./admission-
     parent = newGenerationBorrow(slot);
     const id = `${plan.poolKey}\n${plan.selectedKey}`, previous = slot.counters?.get(id);
     return { id, poolKey: plan.poolKey, key: plan.selectedKey!, count: previous && !previous.inflight ? previous.count + 1 : 1,
-      lastMs: plan.lastMs!, cursorKey: plan.cursorKey, parent, lease, inflight: false };
-  } catch (error) { parent?.dispose(); lease.release(); throw error; }
+      lastMs: plan.lastMs!, cursorKey: plan.cursorKey, parent, lease, inflight: false, sendCursor: false };
+  } catch (primary) {
+    const failures: unknown[] = [];
+    try { parent?.dispose(); } catch (error) { failures.push(error); }
+    try { lease.release(); } catch (error) { failures.push(error); }
+    if (failures.length) throw new AggregateError([primary, ...failures], "generation count preparation");
+    throw primary;
+  }
 }
 function commitGenerationCount(slot: GenerationSlot, record: GenerationPendingCount): void {
   const previous = slot.counters?.get(record.id);
@@ -905,32 +904,12 @@ function commitGenerationCount(slot: GenerationSlot, record: GenerationPendingCo
   if (previous && !previous.inflight) releaseGenerationCount(previous);
 }
 function releaseGenerationCount(record: GenerationPendingCount): void {
-  record.id = ""; record.poolKey = ""; record.key = ""; record.cursorKey = undefined;
+  record.id = ""; record.poolKey = ""; record.key = ""; record.cursorKey = undefined; record.claim = undefined;
   const parent = record.parent; record.parent = undefined as never;
-  try { parent.dispose(); } finally { record.lease.release(); }
-}
-async function flushGenerationCounts(slot: GenerationSlot, env: Env): Promise<void> {
-  const pending = slot.counters;
-  if (!pending) return;
-  let remaining = pending.size;
-  for (const record of pending.values()) {
-    if (!remaining--) break;
-    if (record.inflight) continue;
-    record.inflight = true;
-    try {
-      // One record is inside the existing 256-record accepted range. The
-      // ORIGINAL ACK consumer joins read/FIRSTcancel/unlock before settling.
-      await authorityCall(env, "/grant-pools/record", { records: [{ poolKey: record.poolKey, key: record.key,
-        count: record.count, lastMs: record.lastMs, ...(record.cursorKey && slot.countCursor?.get(record.poolKey) === record ? { cursorKey: record.cursorKey } : {}) }] });
-    } catch { /* Advisory failure is not replayed, matching ordinary flushing. */ }
-    finally {
-      if (pending.get(record.id) === record) pending.delete(record.id);
-      if (slot.countCursor?.get(record.poolKey) === record) slot.countCursor.delete(record.poolKey);
-      if (!slot.countCursor?.size) slot.countCursor = undefined;
-      releaseGenerationCount(record);
-    }
-  }
-  if (!pending.size && slot.counters === pending) slot.counters = undefined;
+  const failures: unknown[] = [];
+  try { parent.dispose(); } catch (error) { failures.push(error); }
+  try { record.lease.release(); } catch (error) { failures.push(error); }
+  if (failures.length) throw new AggregateError(failures, "generation pending record cleanup");
 }
 
 export interface GenerationSelectionHint { dispose(): void }
@@ -943,21 +922,34 @@ function disposeGenerationHint(this: GenerationSelectionHint): void {
   if (!owner) throw identityFailure("protocol");
   generationHints!.delete(this);
   const selected = owner.selected; owner.selected = undefined as never;
-  try { releaseGenerationSelection(selected); } finally { owner.lease.release(); }
-  if (!--generationHintCount) { generationHints = undefined; generationHintsCharge?.release(); generationHintsCharge = undefined; }
+  const failures: unknown[] = [];
+  try { releaseGenerationSelection(selected); } catch (error) { failures.push(error); }
+  try { owner.lease.release(); } catch (error) { failures.push(error); }
+  if (!--generationHintCount) {
+    generationHints = undefined;
+    const charge = generationHintsCharge; generationHintsCharge = undefined;
+    try { charge?.release(); } catch (error) { failures.push(error); }
+  }
+  if (failures.length) throw new AggregateError(failures, "generation hint retirement");
 }
 export function retainCredentialGenerationHint(selected: GenerationSelectionHandle, previous?: GenerationSelectionHint): GenerationSelectionHint {
   const value = selectedOwner(selected);
   if (previous && !generationHints?.has(previous)) throw identityFailure("protocol");
   const lease = GenerationConsumptionLease.reserve(1024);
+  let unpublished: GenerationSelectionHint | undefined;
   try {
     if (!generationHints) { generationHintsCharge = GenerationConsumptionLease.reserve(512); generationHints = new WeakMap(); }
     const owner: GenerationHintOwner = { selected: value, lease }, hint = Object.freeze({ dispose: disposeGenerationHint });
     generationHints.set(hint, owner); generationHintCount++; value.users++;
+    unpublished = hint;
     // A failed prospective reserve leaves the old hint untouched. Publication
     // replacement retires only its own metadata and child, never the base graph.
-    previous?.dispose(); return hint;
-  } catch (error) { lease.release(); throw error; }
+    previous?.dispose(); unpublished = undefined; return hint;
+  } catch (primary) {
+    try { if (unpublished) unpublished.dispose(); else lease.release(); }
+    catch (cleanup) { throw new AggregateError([primary, cleanup], "generation hint replacement"); }
+    throw primary;
+  }
 }
 
 // A hint remains dispose-only. This separate single-use capability owns a child
@@ -1020,7 +1012,8 @@ export function prepareCredentialGenerationPrefetch(hint: GenerationSelectionHin
     const idUnits = grant ? grant.key.length + generationPrefetchIdUnits(grant.grant.credentialGeneration) + generationPrefetchIdUnits(revision) + 2 : 0;
     const retainedIds = 6 * idUnits + 32768;
     if (Math.max(21020672, 2 * (typeof raw === "string" ? raw.length : 64)) + retainedIds > lease.bytes) throw identityFailure("limit");
-    const config = hotCacheConfig(env);
+    const currentConfig = hotCacheConfig(env);
+    const config = Object.freeze({ maxAgeMs: currentConfig.maxAgeMs, freshMs: currentConfig.freshMs });
     const id = grant ? `${grant.key}\n${grant.grant.credentialGeneration ?? ""}\n${revision ?? ""}` : "";
     if (!generationPrefetches) { generationPrefetchCharge = GenerationConsumptionLease.reserve(512); generationPrefetches = new WeakMap(); }
     const owner: GenerationPrefetchOwner = { selected, lease, binding: env.GRANT_CREDENTIALS, id, config, materialized: false };
@@ -1054,66 +1047,175 @@ export function finishOwnedGenerationPrefetch(cap: OwnedGenerationPrefetch, perm
   retireGenerationPrefetch(cap);
 }
 
+// A batching boundary, not an acceptance/profile limit: unclaimed records keep
+// their own parents and funding for a subsequent originating-request flush.
+export const generationFlushCohortLimit = 4;
+export type GenerationFlushReceipt = Readonly<{ accepted: false } | { accepted: true; completed: Promise<void> }>;
+const generationFlushRejected: GenerationFlushReceipt = Object.freeze({ accepted: false });
 interface GenerationFlushOwner {
   slot?: GenerationSlot; env?: Env; parent?: IdentityGenerationBorrow; lease: GenerationConsumptionLease;
-  original?: Promise<void>; completion?: Promise<void>; started: boolean;
+  counts: GenerationPendingCount[]; feedback: GenerationPendingFeedback[]; failures: unknown[];
+  original?: Promise<void>; completion?: Promise<void>; started: boolean; abandoned: boolean;
 }
-function newGenerationFlush(slot: GenerationSlot, env: Env): GenerationFlushOwner {
-  const lease = GenerationConsumptionLease.reserve(32768);
+function newGenerationFlush(slot: GenerationSlot, env: Env, nextCount?: GenerationPendingCount,
+  nextFeedback?: GenerationPendingFeedback): GenerationFlushOwner {
+  // Fixed claim cells, cursor flags and terminal failure products are CONTROL,
+  // never passive scratch. All factories are covered before lists are built.
+  const lease = GenerationConsumptionLease.reserve(32768 + 512 * generationFlushCohortLimit);
+  let parent: IdentityGenerationBorrow | undefined;
   try {
     if (env.ACCESS_CONTROL !== slot.owner.binding) throw identityFailure("protocol");
-    return { slot, env: { ACCESS_CONTROL: slot.owner.binding } as Env, parent: newGenerationBorrow(slot), lease, started: false };
+    parent = newGenerationBorrow(slot);
+    const counts: GenerationPendingCount[] = [], feedback: GenerationPendingFeedback[] = [];
+    if (nextCount) counts.push(nextCount);
+    if (nextFeedback) feedback.push(nextFeedback);
+    // New accepted work is included first; older unclaimed work fills the
+    // remaining fixed cohort. Neither list can acquire later replacements.
+    if (slot.counters) for (const record of slot.counters.values()) {
+      if (counts.length + feedback.length === generationFlushCohortLimit) break;
+      if (!record.inflight && record.id !== nextCount?.id) counts.push(record);
+    }
+    if (slot.feedback) for (const record of slot.feedback.values()) {
+      if (counts.length + feedback.length === generationFlushCohortLimit) break;
+      if (!record.inflight && record.key !== nextFeedback?.key) feedback.push(record);
+    }
+    // The retained observations fund their own graphs. This owner separately
+    // funds the largest actual serialized outbound envelope plus the bounded
+    // ACK/header/terminal component. Rows are sent sequentially, not batched.
+    let requestText = 0;
+    for (const record of counts) requestText = Math.max(requestText, generationCountWireUnits(record));
+    for (const record of feedback) requestText = Math.max(requestText, generationFeedbackWireUnits(record));
+    lease.replace(32768 + 512 * generationFlushCohortLimit + 2 * requestText);
+    const owner: GenerationFlushOwner = { slot, env: { ACCESS_CONTROL: slot.owner.binding } as Env, parent, lease,
+      counts, feedback, failures: [], started: false, abandoned: false };
+    // Prospective ownership claims and cursor decisions precede the caller's
+    // counter/runtime publication. Registration rejection reverses ONLY these
+    // unstarted claims; it never drops the independently funded observations.
+    for (const record of counts) {
+      record.sendCursor = record === nextCount ? !!record.cursorKey
+        : !(nextCount?.cursorKey && nextCount.poolKey === record.poolKey) && slot.countCursor?.get(record.poolKey) === record;
+      record.inflight = true; record.claim = owner;
+    }
+    for (const record of feedback) { record.inflight = true; record.claim = owner; }
+    return owner;
+  } catch (primary) {
+    const failures: unknown[] = [];
+    try { parent?.dispose(); } catch (error) { failures.push(error); }
+    try { lease.release(); } catch (error) { failures.push(error); }
+    if (failures.length) throw new AggregateError([primary, ...failures], "generation cohort preparation");
+    throw primary;
   }
-  catch (error) { lease.release(); throw error; }
 }
-function prepareGenerationSchedule(slot: GenerationSlot, env: Env): GenerationFlushOwner | undefined {
-  // A queued successor already owns the next bounded cohort. No unbounded
-  // pending-promise history or new registration is created for each update.
-  return slot.nextFlush ? undefined : newGenerationFlush(slot, env);
+// Prospective serialization plans have no source-counter authority. They count
+// every escaped wire occurrence before authorityCall can allocate JSON text.
+function generationCountWireUnits(record: GenerationPendingCount): number {
+  const plan = identityPlan();
+  plan.object(0, root => root("records", undefined, () => plan.array(1, entry => entry(undefined,
+    () => plan.object(2, member => {
+      member("poolKey", record.poolKey); member("key", record.key); member("count", record.count); member("lastMs", record.lastMs);
+      // Fund the optional cursor even when the final fixed-cohort flag is false.
+      if (record.cursorKey) member("cursorKey", record.cursorKey);
+    })))));
+  return plan.counts.text;
+}
+function generationFeedbackWireUnits(record: GenerationPendingFeedback): number {
+  const plan = identityPlan();
+  plan.object(0, member => { member("key", record.key); member("state", record.value); });
+  return plan.counts.text;
 }
 function abandonGenerationFlush(owner: GenerationFlushOwner): void {
   if (owner.started) throw identityFailure("protocol");
-  owner.slot = undefined; owner.env = undefined;
+  if (owner.abandoned) return;
+  owner.abandoned = true;
+  for (const record of owner.counts) if (record.claim === owner) { record.claim = undefined; record.inflight = false; }
+  for (const record of owner.feedback) if (record.claim === owner) { record.claim = undefined; record.inflight = false; }
+  owner.counts.length = 0; owner.feedback.length = 0; owner.slot = undefined; owner.env = undefined;
   const parent = owner.parent; owner.parent = undefined;
-  try { parent?.dispose(); } finally { owner.lease.release(); }
+  const failures = owner.failures;
+  try { parent?.dispose(); } catch (error) { failures.push(error); }
+  try { owner.lease.release(); } catch (error) { failures.push(error); }
+  if (failures.length) throw new AggregateError(failures, "generation cohort abandonment");
 }
-function commitGenerationSchedule(owner: GenerationFlushOwner): void {
-  const slot = owner.slot!;
-  if (slot.scheduled) { slot.nextFlush = owner; return; }
-  // The child and all start/terminal metadata were acquired BEFORE the accepted
-  // advisory mutation. A rejected registration invokes no timer, RPC or loader.
-  if (!tryRunInBackground(() => startGenerationFlush(owner, true))) abandonGenerationFlush(owner);
+function commitGenerationSchedule(owner: GenerationFlushOwner): GenerationFlushReceipt {
+  // Registration and start occur in THIS invocation/request. No shared promise,
+  // foreign successor, queue callback or later-request completion is consulted.
+  let accepted = false, completion: Promise<void> | undefined;
+  try {
+    accepted = tryRunInBackground(() => {
+      try { return completion = startGenerationFlush(owner, true); }
+      catch (primary) {
+        try { abandonGenerationFlush(owner); }
+        catch (cleanup) { return completion = Promise.reject(new AggregateError([primary, cleanup], "generation background start")); }
+        return completion = Promise.reject(primary);
+      }
+    });
+  } catch (primary) {
+    if (!owner.started) {
+      try { abandonGenerationFlush(owner); } catch (cleanup) { throw new AggregateError([primary, cleanup], "generation registration"); }
+      throw primary;
+    }
+    // Once started, registration failure cannot orphan the accepted ORIGINAL.
+    // Its receipt still joins cleanup, then reports this independent failure.
+    owner.failures.push(primary); accepted = true;
+  }
+  if (!accepted && !owner.started) { abandonGenerationFlush(owner); return generationFlushRejected; }
+  if (!completion) throw identityFailure("protocol");
+  void completion.then(() => undefined, () => undefined);
+  return Object.freeze({ accepted: true, completed: completion });
 }
 function startGenerationFlush(owner: GenerationFlushOwner, delayed: boolean): Promise<void> {
   const slot = owner.slot!;
-  if (owner.started || slot.scheduled) throw identityFailure("protocol");
-  owner.started = true; slot.scheduled = owner;
-  const original = runOwnedGenerationFlush(owner, delayed);
-  owner.original = original;
-  // The follower releases only AFTER the ORIGINAL body/ACK operation settles.
-  // UNKNOWN never reaches either callback and holds every accepted child.
-  const completion = original.then(() => finishGenerationFlush(owner, false), reason => finishGenerationFlush(owner, true, reason));
+  if (owner.started || owner.abandoned) throw identityFailure("protocol");
+  // Validate ALL references before the first claim effect. This is synchronous
+  // with publication of nextCount/nextFeedback; no borrowed callback runs here.
+  for (const record of owner.counts) if (record.claim !== owner || !record.inflight || slot.counters?.get(record.id) !== record) throw identityFailure("protocol");
+  for (const record of owner.feedback) if (record.claim !== owner || !record.inflight || slot.feedback?.get(record.key) !== record) throw identityFailure("protocol");
+  owner.started = true;
+  // Every original begins and finishes in the accepted thunk's request context.
+  // UNKNOWN at any original keeps the whole remaining fixed cohort funded.
+  owner.original = runOwnedGenerationFlush(owner, delayed);
+  const completion = owner.original.then(() => finishGenerationFlush(owner, false), reason => finishGenerationFlush(owner, true, reason));
   owner.completion = completion;
   void completion.then(() => undefined, () => undefined);
   return completion;
 }
 async function runOwnedGenerationFlush(owner: GenerationFlushOwner, delayed: boolean): Promise<void> {
-  if (delayed) await waitGenerationFlushWindow();
-  await runGenerationFeedback(owner.slot!, owner.env!);
+  // A coalescing timer failure must not discard already-claimed, unattempted
+  // observations. Retain that independent origin and attempt the fixed cohort.
+  if (delayed) try { await waitGenerationFlushWindow(); } catch (error) { owner.failures.push(error); }
+  const slot = owner.slot!, env = owner.env!;
+  for (let i = 0; i < owner.counts.length; i++) {
+    const record = owner.counts[i];
+    try { await authorityCall(env, "/grant-pools/record", { records: [{ poolKey: record.poolKey, key: record.key,
+      count: record.count, lastMs: record.lastMs, ...(record.sendCursor && record.cursorKey ? { cursorKey: record.cursorKey } : {}) }] }); }
+    catch { /* Ordinary best effort. An attempted count is never replayed. */ }
+    if (slot.counters?.get(record.id) === record) slot.counters.delete(record.id);
+    if (slot.countCursor?.get(record.poolKey) === record) slot.countCursor.delete(record.poolKey);
+    try { releaseGenerationCount(record); } catch (error) { owner.failures.push(error); }
+    // No completed-record/promise history. Only bounded failure origins remain.
+    owner.counts[i] = undefined as never;
+  }
+  owner.counts.length = 0;
+  for (let i = 0; i < owner.feedback.length; i++) {
+    const record = owner.feedback[i];
+    try { await recordGrantRuntime(env, record.key, record.value!); }
+    catch { /* Ordinary best effort; do not replay a lost ACK. */ }
+    if (slot.feedback?.get(record.key) === record) slot.feedback.delete(record.key);
+    try { releaseGenerationFeedback(record); } catch (error) { owner.failures.push(error); }
+    owner.feedback[i] = undefined as never;
+  }
+  owner.feedback.length = 0;
+  if (!slot.counters?.size) slot.counters = undefined;
+  if (!slot.countCursor?.size) slot.countCursor = undefined;
+  if (!slot.feedback?.size) slot.feedback = undefined;
 }
 function finishGenerationFlush(owner: GenerationFlushOwner, hasPrimary: boolean, primary?: unknown): void {
-  const failures: unknown[] = [];
-  const slot = owner.slot!, next = slot.nextFlush;
-  if (slot.scheduled === owner) slot.scheduled = undefined;
-  slot.nextFlush = undefined;
-  // Clear the retiring ORIGINAL and all application transport aliases before
-  // releasing its backing. The independent successor was already funded.
+  // No successor launch here. Other requests' records/receipts stay under their
+  // own accepted owners. Completion says nothing about global pending work.
   owner.original = undefined; owner.completion = undefined; owner.env = undefined; owner.slot = undefined;
+  owner.counts.length = 0; owner.feedback.length = 0;
   const parent = owner.parent; owner.parent = undefined;
-  if (next) {
-    try { if (slot.feedback?.size || slot.counters?.size) commitGenerationSchedule(next); else abandonGenerationFlush(next); }
-    catch (error) { failures.push(error); }
-  }
+  const failures = owner.failures;
   try { parent?.dispose(); } catch (error) { failures.push(error); }
   try { owner.lease.release(); } catch (error) { failures.push(error); }
   if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "generation flush cleanup");

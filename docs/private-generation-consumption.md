@@ -3,8 +3,8 @@
 This inactive slice starts at PR976's qualified retained-generation foundation.
 It does not activate ordinary proxy, HTTP, Access, direct, provider or credential
 cache callers. The ordinary entrypoints remain unchanged. This checkpoint is
-**not a publication candidate**: the cross-request flush completion contract and
-complete CONTROL/factory closure below remain open. Local semantics are
+**not a publication candidate**: the complete CONTROL/factory closure below remains open. The own-request fixed-
+cohort contract is adopted and implemented; its authored semantics remain UNRUN. Local semantics are
 `UNRUN_CODE_ONLY_HOSTED`.
 
 ## Closed ownership
@@ -90,7 +90,7 @@ source closure; these expressions alone are **not** a fit certificate.
 | Runtime merge | Four simultaneous record-vector allowances for the two actual inputs | Detached output admission |
 | Runtime/pending copies | Independent merge-sized backing and key/owner cells | Replacement or original flush settlement |
 | Pending count | `4096 + 8*poolKeyUnits + 6*grantKeyUnits + 2*cursorUnits` | Original flush settlement |
-| ACK flush | 32768 bytes, distinct from retained request records | Original ACK acquisition/read/cancel/unlock settlement |
+| Fixed cohort | `32768 + 512*4 + 2*T` bytes, with `T` the maximum prospectively planned escaped outbound text of the fixed rows; owner/claims/ACK/terminal products are distinct from retained records; factory closure still required | Original ACK acquisition/read/cancel/unlock settlement |
 | Hint | 1024 bytes plus a lazy 512-byte registry owner | Replacement/disposal |
 
 `C`, `M`, `E`, `V`, and `U` above are the actual admitted container, member, array
@@ -112,7 +112,7 @@ complete replacement table. The remaining audit must include, by actual phase:
   final retirement frames.
 - Mutable overlay ownership indexes; pending count/runtime execution records and
   latest-cursor indexes. Execution records are not passive DATA by relabeling.
-- Original flush promises, immediate observers, bounded cohort iterators, ACK
+- Original flush promises, immediate observers, bounded cohort claim lists/cursor flags, original per-record ACK
   acquisition/read/FIRSTcancel/unlock products, conditional deletion and terminal
   failure handling.
 - Accepted background registration, the closed prefetch permit, original load,
@@ -159,28 +159,50 @@ factories. This reservation is **not yet a complete numerical fit proof**: the
 full materialization/loader/source/terminal overlap must be reconciled with the
 complete operation table. No unused slots from PR976 are treated as credit.
 
-## Concrete unresolved flush completion contract
+## Originating-request fixed cohorts
 
-The current local implementation stores `slot.scheduled.completion`, the original
-flush owner promise. A later request's explicit
-`flushCredentialGenerationRuntime` can await that promise. This is a real source
-boundary gap: HotCache deliberately uses scalar polling in the joining request
-because Workerd does not permit foreign-request I/O ownership to move with a
-shared Promise. The new prefetch receipt uses that existing cache path; the
-new explicit flush currently does not.
+ROOT adopted the own-originating-request cohort contract. A consuming operation
+prospectively funds and fixes at most four count/runtime claims, including its new
+record first, before publishing counters/runtime state. This is a flush batching
+boundary, not a record/profile acceptance cap. Excess unclaimed observations keep
+their existing parents and charges for a later originating-request flush.
 
-Two narrowly different contracts are possible within the same production scope:
+The complete outbound envelope is planned before claims/effects; its escaped
+text is independently funded, not borrowed from pending-record credit. Each
+cohort owns its claim lists, fixed cursor flags, parent, original work,
+followers and failure cleanup. Unstarted registration rejection restores only
+that cohort's provisional claims. Accepted work starts in the accepting request;
+no shared slot contains a scheduled completion or queued successor. No foreign
+completion is awaited, and no successor is launched from another request's
+continuation. A new count after an in-flight claim starts with its own delta,
+without adding the already-claimed delta again.
 
-- Explicit flush returns only the calling request's original cohort receipt;
-  already accepted foreign cohorts remain held by their own children.
-- Explicit flush also waits for foreign cohorts via a separately funded scalar
-  status boundary, while each original owner alone joins and retires its roots.
+The selection handle exposes only its own operation's scalar/void `flush`
+receipt in addition to its existing closed methods. Runtime feedback returns the
+same receipt type. Receipts belong to their originating caller/request, are not
+stored in the shared generation slot, and expose no graph. Hints retain only the
+private selected owner, not a public operation receipt.
 
-The second option must separately specify terminal failure delivery and must not
-turn a timeout, scalar disappearance or publication into retirement credit. The
-first must not be described as a drain of all foreign originals. This choice is
-pending ROOT disposition. No runtime failure has been attributed to it. The
-shared-promise path is local-only and publication remains held.
+`flushCredentialGenerationRuntime` synchronously claims its own fixed cohort
+and returns that original completion. It is not a global drain of foreign work
+or future updates. Each attempted row joins its original transport/read/ACK
+cleanup, deletes only an identical pending record, clears its claim aliases,
+and retires its independent parent. Known independent cleanup failures are
+retained while the remaining fixed rows are attempted. A lost ACK is not
+replayed. UNKNOWN keeps the original and the entire remaining cohort funded.
+
+There is no visibility polling API, timeout retirement credit, self-join or
+public-response delay. Ordinary advisory cursor ordering is unchanged; this
+slice makes no stronger global ordering promise.
+
+The new Node witnesses distinguish A's held original from B's completion and
+exercise a four-record cutoff with 41 accepted deltas. The native fixture creates
+separate A/B HTTP invocations over the same genuine published generation. A's
+actual authority reply remains held while B claims and completes its own row;
+the SQL total must be two, both before and after A's release. The fixture gate
+shares only scalars and polls on each native request's own timer roots. It neither
+awaits a foreign gate promise nor adds a production visibility API. The original
+requests, response bodies and release-first fixture control are joined.
 
 ## Authored qualification
 
@@ -194,9 +216,8 @@ held original work, publication joining and independent shared-reason failures. 
 fixture authors real native KV/SQLite/RPC cases for owned authentication, coverage
 denial, revocation and capacity. It also authors actual GrantCredentialObject
 materialization with original BYOB/EOF/unlock and explicitly labelled post-native
-read/FIRSTcancel holds. These fixture holds are not new native ACK claims.
+read/FIRSTcancel holds and an injected post-unlock failure. These fixture holds are not new native ACK claims.
 
 Only syntax, embedded syntax, diff formatting and source/privacy inspection have
-run locally. Full source/factory closure, the cross-request flush decision and all authored
-native semantics remain pending. Nothing here claims
+run locally. Full source/factory closure, and all authored native semantics remain pending. Nothing here claims
 publication readiness, default activation, deployment or a heap bound.

@@ -48,6 +48,7 @@ export function evictGrantCredentials(key: string): void {
 }
 
 export type OwnedCredentialPrefetchReceipt = Readonly<{ accepted: false } | { accepted: true; completed: Promise<void> }>;
+const ownedPrefetchRejected: OwnedCredentialPrefetchReceipt = Object.freeze({ accepted: false });
 interface OwnedPrefetchRun {
   cap?: OwnedGenerationPrefetch; command?: { eligible: boolean; id: string; config: import("./hot-cache.ts").HotCacheConfig };
   original?: Promise<unknown>; completed?: Promise<void>; resolve?: () => void; reject?: (error: unknown) => void;
@@ -121,7 +122,7 @@ export function prefetchOwnedGrantCredentials(cap: OwnedGenerationPrefetch): Own
   try {
     run.command = claimOwnedGenerationPrefetch(cap, run); run.claimed = true;
     if (!run.command.eligible || !run.command.config.maxAgeMs || credentials.peek(run.command.id, run.command.config)) {
-      retireOwnedPrefetch(run, false); return Object.freeze({ accepted: false });
+      retireOwnedPrefetch(run, false); return ownedPrefetchRejected;
     }
     const completed = new Promise<void>((resolve, reject) => { run.resolve = resolve; run.reject = reject; });
     run.completed = completed;
@@ -138,7 +139,7 @@ export function prefetchOwnedGrantCredentials(cap: OwnedGenerationPrefetch): Own
       const resolve = run.resolve!;
       retireOwnedPrefetch(run, false);
       run.resolve = undefined; run.reject = undefined; run.completed = undefined;
-      resolve(); return Object.freeze({ accepted: false });
+      resolve(); return ownedPrefetchRejected;
     }
     return Object.freeze({ accepted: true, completed });
   } catch (primary) {
