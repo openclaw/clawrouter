@@ -560,7 +560,7 @@ predicate frames belong to CONTROL, not passive DATA. Their aliases clear at
 actual request retirement; the complete overlap is still unqualified.
 
 Additional authored witnesses use the real compiled entry and SQLite authority:
-19 Node cases, 18 native cases, and one Venice invocation in the existing pinned
+20 Node cases, 19 native cases, and one Venice invocation in the existing pinned
 OpenClaw UNIFIED client fixture. They include accepted/rejected structural and
 wire edges, escaped Unicode, raw duplicate/unknown preservation, more than 2 MiB
 of SSE, JSON delivery while archive work is held, and post-native held
@@ -569,3 +569,72 @@ primitive, shared opaque object and rejected undefined. The codec's negative
 consumers assert fixed ordered origin/presence receipts instead of hiding
 retirement failures behind a successful public error response. These cases
 are authored only; local semantics remain UNRUN_CODE_ONLY_HOSTED.
+
+### Open object-depth CONTROL counterexample
+
+The current representation does not fit the adopted 1024 CONTROL ceiling.
+This is a source-counted overlap, not an executed failure or a measured heap
+claim. Use a genuine selected Venice grant and a streamed one-MiB Chat request,
+then a successful JSON response with `model` followed by `extra` containing
+127 nested objects, each with a `child` member. The root plus those objects has
+depth 128. At the deepest scalar, all 128 consumer frames have both `value` and
+`key`, and the tokenizer retains 128 parent entries. The wire, node and key
+limits permit this shape. Array-only depth witnesses omit the frame-key peak.
+
+Count an execution object, each explicit owner/control field, each execution
+index entry and each distinct retained callback separately. Parsed business
+graphs and passive DATA are excluded from the following lower bound. Aliased
+objects are counted once; different owner reference fields remain fields.
+Clearing a reference permits its referenced product to retire; it does not
+remove the surviving owner's fixed field from the inventory.
+
+| Simultaneously retained products at the deepest scalar | CONTROL lower bound |
+| --- | ---: |
+| Consumer stack array, 128 entries, 128 frame objects and 256 frame fields | 513 |
+| Pinned tokenizer parent array and 128 entries | 129 |
+| Request owner, its four vectors and request/sink capabilities | 28 |
+| Original upload owner, capability and failure vector | 18 |
+| Revalidation owner and capability | 26 |
+| Additive foreground-backing record and capability | 9 |
+| Codec registry state | 8 |
+| Joined codec source, cleanup vector, diagnostic receipt and capability | 34 |
+| Proxy invocation and attempt vector | 18 |
+| Still-owned JSON intake instance | 14 |
+| HTTP identity owner and its four vectors | 15 |
+| Foreground credential owner and dispose capability | 16 |
+| Authentication owner and closed authentication capability | 13 |
+| Selected owner and closed selection capability | 12 |
+| Six completion owners, each object plus six fields | 42 |
+| Five still-live origins, each object plus six fields | 35 |
+| Two accounting command objects, fields and retained callback products | 52 |
+| Venice revalidation state and response-control state | 15 |
+| Foreground cache run and its closed command | 16 |
+| Three consumption leases and their distinct exact charges | 15 |
+| Parser and tokenizer command objects and their fields | 9 |
+| Active HTTP operation and its cancellation callback | 8 |
+| **Lower bound, before omitted products** | **1045** |
+
+The six completion owners are request, sink custody, upload, codec, preparation
+failure accounting and selected accounting. The five origins are terminal
+registration, request abort-listener removal, upload-listener removal, codec
+output cancellation and codec final abort. Both accounting instances remain
+captured until the selected operation's `finally`; source completion does not
+retire them. The three counted consumption leases belong to authentication,
+selection and the foreground credential. No generation-slot tree, registry
+index cells, promise/reaction products, active parser call frames, descriptor
+transition or upload/account/archive tail is included in this lower bound.
+
+The source rows come from `createJsonBodyParser`, the pinned tokenizer,
+`RequestOwner`, `UploadOwner`, `RevalidationOwner`, `OwnedVeniceSource`,
+`OwnedProxyInvocation`, `JsonAdmission`, the private credential ownership
+records and both `ownedProxyAccounting` results. The existing 128-slot windows
+cannot be relabeled to make a simultaneous 1045-product subset fit 1024.
+
+A minimum representation option is a private consumer mode in `json-body.ts`
+that stores frame values and pending keys in two bounded parallel CONTROL
+vectors. It would replace the 513-product consumer representation with 258
+products at depth 128, without changing parser limits or ordinary callers.
+That file is outside the current twenty-file production lease and is not
+edited. This option is not a whole-vertical fit claim: all omitted products and
+the other phases still require complete accounting. Until a representation
+repair is adopted and implemented, publication remains held.

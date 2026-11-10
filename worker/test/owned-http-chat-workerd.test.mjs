@@ -170,7 +170,7 @@ for (const reason of ['undefined', 'huge', 'opaque', 'forged']) test('native cov
   });
 });
 
-for (const [mode, expected] of [['depth128', 200], ['depth129', 502], ['open2048', 502],
+for (const [mode, expected] of [['depth128', 200], ['object-depth128', 200], ['depth129', 502], ['open2048', 502],
   ['nodes65536', 200], ['nodes65537', 502], ['wire-limit', 200], ['wire-plus', 502],
   ['unicode-unknown', 200], ['wrong-model', 502], ['own-error', 502]])
 test('owned native Venice JSON preserves its original ' + mode + ' boundary', { timeout: 120000 }, async t => {

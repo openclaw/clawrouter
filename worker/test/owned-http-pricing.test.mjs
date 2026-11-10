@@ -324,6 +324,7 @@ const veniceModelId = 'venice/zai-org-glm-5-2', veniceUpstream = 'zai-org-glm-5-
 const venicePrefix = '{"model":"' + veniceUpstream + '","extra":';
 for (const [name, expected, make] of [
   ['depth 128', 200, () => venicePrefix + '['.repeat(127) + '0' + ']'.repeat(127) + '}'],
+  ['object depth 128', 200, () => venicePrefix + '{"child":'.repeat(127) + '0' + '}'.repeat(128)],
   ['depth 129', 502, () => venicePrefix + '['.repeat(128) + '0' + ']'.repeat(128) + '}'],
   ['2048-parent single prefix', 502, () => venicePrefix + '['.repeat(2048)],
   ['65536 nodes', 200, () => venicePrefix + '[' + '0,'.repeat(65532) + '0]}'],

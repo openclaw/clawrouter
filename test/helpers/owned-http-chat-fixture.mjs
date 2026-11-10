@@ -222,6 +222,7 @@ export default {async fetch(request){
  if(id==='venice'&&body.ownedVeniceCase&&body.stream!==true){
   const mode=body.ownedVeniceCase,prefix='{"model":'+JSON.stringify(body.model)+',"extra":';let wire;
   if(mode==='depth128'||mode==='depth129'){const depth=mode==='depth128'?127:128;wire=prefix+'['.repeat(depth)+'0'+']'.repeat(depth)+'}';}
+  else if(mode==='object-depth128')wire=prefix+'{"child":'.repeat(127)+'0'+'}'.repeat(128);
   else if(mode==='open2048')wire='['.repeat(2048)+'0'+']'.repeat(2048);
   else if(mode==='nodes65536'||mode==='nodes65537')wire=prefix+'['+'0,'.repeat(mode==='nodes65536'?65532:65533)+'0]}';
   else if(mode==='wire-limit'||mode==='wire-plus'){const size=2097152+(mode==='wire-plus'?1:0);wire=prefix+'"'+'x'.repeat(size-prefix.length-3)+'"}';}
