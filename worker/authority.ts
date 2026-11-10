@@ -1,3 +1,4 @@
+import { consumeOwnedHttpAuthorizationSnapshot, type OwnedHttpRevalidation } from "./http-identity-owner.ts";
 import { admitGeneratedRuntime, planPrivateIdentityString, planPrivateRuntime, equalAdmissionJson, admitIdentityHeaders, foldIdentitySqlHistory, addIdentitySources, checkIdentitySourceAddition, canonicalFreshIdentityRouting, admitAdmission, admitIdentity, admitIdentityBytes, admitIdentityCount, identityFailure, identityHeader, identityVersion, identityJson, identityPlan, identitySourceBudget, identityUtf8, identitySqlRows, parseIdentity, readIdentityRequest, readIdentityResponse, type IdentitySourceBudget } from "./identity-admission.ts";
 import { PolicyCollection, admitPolicyBindings, admitPolicyBytes, admitPolicyCall, admitPolicyIds, admitPolicyJson, admitPolicyPrincipals, isPolicyCollectionFailure, isPolicyCollectionPath, parsePolicyRecord, policyCandidatePlan, policyCollectionFailure, policyCollectionHeader, policyCollectionVersion, policyId, policyJsonText, policySequencePlan, policySourceBudget, readPolicyRequest, readPolicyResponse, type PolicySourceBudget } from "./policy-collection.ts";
 import { videoControlVersion, videoControlHeader, videoControlBytes, videoJsonBytes, inspectVideoJson, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
@@ -1953,6 +1954,10 @@ function invalidAuthorityValue(message: string): never {
   invalidAuthorityRequest(message);
 }
 
+
+export function ownedHttpAuthorizationSnapshot(cap: OwnedHttpRevalidation, env: Env, signal: AbortSignal): Promise<void> {
+  return consumeOwnedHttpAuthorizationSnapshot(cap, env, signal);
+}
 
 export async function authorityCall<T>(env: Env, path: string, body: unknown, objectName = "policy-bindings", signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, cover?: MiniMaxMusicCoverControl, identityBudget?: IdentitySourceBudget): Promise<T> {
   const stub = env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName(objectName));

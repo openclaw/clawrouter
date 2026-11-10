@@ -126,15 +126,59 @@ for (const provider of ['gmi', 'venice']) test(`owned unified ${provider} keeps 
     assert.equal(first.status, 200, 'genuine generation proof reaches original provider authority');
     assert.equal(JSON.parse(first.text).model, ownedHttpControlModels[provider].slice(provider.length + 1));
     const before = await state(f);
-    assert.ok(count(before, 'authority', '/authorization/snapshot') > 0, 'provider freshness was not bypassed');
+    const revalidations = provider === 'venice' ? 2 : 1;
+    assert.equal(count(before, 'authority', '/authorization/snapshot'), revalidations, 'dispatch plus existing delivery only');
+    assert.equal(count(before, 'credential', '/inspect'), revalidations);
     const hit = await f.request('https://fixture/v1/chat/completions', request());
     assert.equal(hit.status, 200);
     const after = await state(f);
     assert.equal(count(after, 'authority', '/admission/resolve'), count(before, 'authority', '/admission/resolve'), 'covered generation hit');
     assert.equal(count(after, 'credential', '/materialize'), count(before, 'credential', '/materialize'), 'covered private credential hit');
-    assert.ok(count(after, 'authority', '/authorization/snapshot') > count(before, 'authority', '/authorization/snapshot'), 'mandatory provider revalidation still executes');
+    assert.equal(count(after, 'authority', '/authorization/snapshot') - count(before, 'authority', '/authorization/snapshot'), revalidations);
+    assert.equal(count(after, 'credential', '/inspect') - count(before, 'credential', '/inspect'), revalidations);
+    assert.ok(after.calls.filter(row => row.path === '/inspect').every(row => row.emptyInspect === true), 'ordinary inspect body, no special producer marker');
     const rows = JSON.parse((await f.request('https://fixture/fixture/upstream')).text).filter(row => row.id === provider);
     assert.equal(rows.length, 2); assert.ok(rows.every(row => row.organization === (provider === 'gmi' ? 'fixture-organization' : null)));
+  });
+});
+
+for (const kind of ['authority', 'credential']) for (const origin of ['id', 'get'])
+for (const reason of ['undefined', 'huge', 'opaque', 'forged']) test('native covered control ' + kind + '/' + origin + '/' + reason + ' fails before acquisition effects', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const request = () => chat('gmi', { model: ownedHttpControlModels.gmi });
+    assert.equal((await f.request('https://fixture/v1/chat/completions', request())).status, 200);
+    const before = await settledState(f);
+    assert.equal((await f.request('https://fixture/fixture/control-fault', { method: 'POST', body: JSON.stringify({ kind, origin, reason }) })).status, 204);
+    const failed = await f.request('https://fixture/v1/chat/completions', request());
+    assert.equal(failed.status, 503);
+    assert.equal(JSON.parse(failed.text).error.code, 'identity_admission_unavailable');
+    const after = await settledState(f);
+    assert.equal(after.reasonReads, 0, 'no getter/stringification of arbitrary rejection graphs');
+    assert.equal(count(after, 'authority', '/admission/resolve'), count(before, 'authority', '/admission/resolve'));
+    assert.equal(count(after, 'credential', '/materialize'), count(before, 'credential', '/materialize'), 'no false refresh/alternate');
+    assert.equal(count(after, kind, kind === 'authority' ? '/authorization/snapshot' : '/inspect'),
+      count(before, kind, kind === 'authority' ? '/authorization/snapshot' : '/inspect'), 'failed acquisition starts no RPC');
+    const upstream = JSON.parse((await f.request('https://fixture/fixture/upstream')).text);
+    assert.equal(upstream.filter(row => row.id === 'gmi').length, 1);
+    assert.equal(after.charged, before.charged, 'all temporary operations retire while the same cached generations remain');
+  });
+});
+
+for (const provider of ['gmi', 'venice']) for (const change of ['disabled', 'rotated', 'policy-provider', 'policy-model'])
+test('native covered ' + provider + ' revalidation uses fresh canonical ' + change, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const request = () => chat(provider, { model: ownedHttpControlModels[provider] });
+    assert.equal((await f.request('https://fixture/v1/chat/completions', request())).status, 200);
+    const before = await settledState(f);
+    assert.equal((await f.request('https://fixture/fixture/revalidation-change', { method: 'POST', body: JSON.stringify({ provider, change }) })).status, 204);
+    const failed = await f.request('https://fixture/v1/chat/completions', request());
+    assert.equal(failed.status, 403);
+    const after = await settledState(f);
+    assert.equal(count(after, 'authority', '/admission/resolve'), count(before, 'authority', '/admission/resolve'), 'genuine covered HIT');
+    assert.equal(count(after, 'authority', '/authorization/snapshot') - count(before, 'authority', '/authorization/snapshot'), 1);
+    assert.equal(count(after, 'credential', '/inspect'), count(before, 'credential', '/inspect'), 'snapshot denial precedes inspect');
+    const upstream = JSON.parse((await f.request('https://fixture/fixture/upstream')).text);
+    assert.equal(upstream.filter(row => row.id === provider).length, 1, 'no retry or fallback after changed authority');
   });
 });
 

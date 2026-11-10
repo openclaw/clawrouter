@@ -7,7 +7,7 @@ import { admitGenerationFactories, admitGenerationConsumptionFactories, generati
   copyGenerationCoverage, generationCoverageLayout, sameGenerationCoverage,
   type GenerationCoverage, type GenerationAuthentication, type IdentityGenerationPreparation, type IdentityGenerationBorrow } from "./identity-generations.ts";
 import { PrivateCacheReservation, hotCacheNow, hotCacheConfig, tryRunInBackground, type HotCacheConfig } from "./hot-cache.ts";
-import { ownsCredentialPrefetchPermit, ownsOwnedHttpCredentialPermit, acceptOwnedHttpCredentialMaterialization, retireOwnedHttpGrantCredentials, invalidateOwnedHttpGrantCredentials, moveOwnedCredentialBorrow, type OwnedCredentialBorrow } from "./credential-cache.ts";
+import { hasJoinedOwnedHttpCredentialValue, ownsCredentialPrefetchPermit, ownsOwnedHttpCredentialPermit, acceptOwnedHttpCredentialMaterialization, retireOwnedHttpGrantCredentials, invalidateOwnedHttpGrantCredentials, moveOwnedCredentialBorrow, type OwnedCredentialBorrow } from "./credential-cache.ts";
 import { materializeGrantCredentials } from "./grant-credentials.ts";
 import { selectedCredentialFailure } from "./grant-credential-failure.ts";
 import { grantRevision, currentGrantRuntime } from "./grant-eligibility.ts";
@@ -523,6 +523,48 @@ interface HttpCredentialOwner {
   http?: OwnedHttpRequest; request?: Request; env?: Env; selected?: GenerationSelectionOwner;
   providerPermit?: object; cachePermit?: object; lease: GenerationConsumptionLease;
   id: string; config?: HotCacheConfig; force: boolean; started: boolean; retained: boolean;
+  revalidation?: OwnedHttpRevalidationBacking;
+}
+export interface OwnedHttpRevalidationBacking { readonly revalidationBacking?: never }
+interface HttpRevalidationBacking {
+  owner: HttpCredentialOwner; grantBytes: number; persistentBytes: number; phaseBytes: number;
+}
+let httpRevalidationBackings: WeakMap<OwnedHttpRevalidationBacking, HttpRevalidationBacking> | undefined;
+let httpRevalidationBackingCount = 0;
+export function claimOwnedHttpRevalidationBacking(http: OwnedHttpRequest, grant: import("./types").UpstreamGrant | null,
+  providerId: "venice" | "gmi"): OwnedHttpRevalidationBacking {
+  const root = httpIdentities?.get(http);
+  if (!root) throw identityFailure("protocol");
+  let owner: HttpCredentialOwner | undefined;
+  for (let i = 0; i < root.credentials.length; i++) {
+    const cap = root.credentials[i], candidate = httpCredentialOwner(cap);
+    if (!candidate.revalidation && candidate.http === http && candidate.selected?.httpProvider?.id === providerId
+      && candidate.cachePermit && hasJoinedOwnedHttpCredentialValue(candidate.cachePermit, cap, grant)) { owner = candidate; break; }
+  }
+  if (!owner || owner.lease.bytes !== 33554432) throw identityFailure("protocol");
+  // SAME prepaid full foreground backing. It was acquired before admission's
+  // selection/count effects; no new reservation competes after budget reserve.
+  const plan = identityPlan("record"); if (grant) plan.item(grant, 0);
+  const n = plan.counts, grantBytes = 8 * (n.containers + 2 * n.members + n.entries + n.values) + 2 * n.units
+    + 4096 + 6 * (owner.id.length + (owner.selected?.result?.selected?.key.length ?? 0));
+  if (grantBytes + 65536 > owner.lease.bytes) throw identityFailure("limit");
+  const cap = Object.freeze({});
+  (httpRevalidationBackings ??= new WeakMap()).set(cap, { owner, grantBytes, persistentBytes: 65536, phaseBytes: 0 });
+  owner.revalidation = cap; httpRevalidationBackingCount++; return cap;
+}
+export function admitOwnedHttpRevalidationBacking(cap: OwnedHttpRevalidationBacking, persistentBytes: number, phaseBytes: number): void {
+  const state = httpRevalidationBackings?.get(cap);
+  if (!state || state.owner.revalidation !== cap || !Number.isSafeInteger(persistentBytes) || persistentBytes < state.persistentBytes
+    || !Number.isSafeInteger(phaseBytes) || phaseBytes < 0) throw identityFailure("protocol");
+  if (state.grantBytes + persistentBytes + phaseBytes > state.owner.lease.bytes) throw identityFailure("limit");
+  state.persistentBytes = persistentBytes; state.phaseBytes = phaseBytes;
+}
+export function retireOwnedHttpRevalidationBacking(cap: OwnedHttpRevalidationBacking): void {
+  const state = httpRevalidationBackings?.get(cap);
+  if (!state || state.phaseBytes) throw identityFailure("protocol");
+  state.owner.revalidation = undefined; state.owner = undefined as never;
+  httpRevalidationBackings!.delete(cap);
+  if (!--httpRevalidationBackingCount) httpRevalidationBackings = undefined;
 }
 let httpCredentials: WeakMap<OwnedHttpCredential, HttpCredentialOwner> | undefined;
 let httpCredentialRegistry: GenerationConsumptionLease | undefined;
@@ -538,6 +580,7 @@ function disposeHttpCredential(this: OwnedHttpCredential): void {
 }
 function retireHttpCredential(cap: OwnedHttpCredential): void {
   const owner = httpCredentialOwner(cap), selected = owner.selected;
+  if (owner.revalidation) throw identityFailure("protocol");
   if (owner.http && httpForegroundReservations?.get(owner.http) === cap) httpForegroundReservations.delete(owner.http);
   httpCredentials!.delete(cap); owner.http = undefined; owner.request = undefined; owner.env = undefined; owner.selected = undefined;
   owner.providerPermit = undefined; owner.cachePermit = undefined; owner.config = undefined; owner.id = "";

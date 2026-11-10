@@ -4,17 +4,31 @@ import { assertPolicyModel } from "./policy-models.ts";
 import { applyProviderCredential } from "./provider-auth.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { UpstreamAuth } from "./providers.ts";
-import { assertControlCallerLive, authorizeResponseControl, publicControlAuthorization } from "./response-control-authorization.ts";
-import type { AuthorizedIdentity, Env, UpstreamGrant } from "./types.ts";
+import { assertControlCallerLive, authorizeResponseControl, publicControlAuthorization, bindOwnedResponseControl, revalidateOwnedResponseControl, type ResponseControlAuthorization } from "./response-control-authorization.ts";
+import { applyOwnedHttpRevalidationCredential, checkOwnedHttpRevalidation, matchesOwnedHttpRevalidationGraph, admitOwnedHttpRevalidationRouting, fundOwnedHttpRevalidationEnvironment, type OwnedHttpRevalidation } from "./http-identity-owner.ts";
+import { privateGrantRoutingPolicy } from "./grant-routing.ts";
+import { identityPlan, identityFailure } from "./identity-admission.ts";
+import type { AccessPolicy, GrantRoutingPolicy, AuthorizedIdentity, Env, UpstreamGrant } from "./types.ts";
 import { envValue, HttpError, safeEqual, sha256Hex } from "./utils.ts";
 
 // This is a fresh check of an already selected credential, never a new pool
 // selection, refresh or environment fallback. Delivery repeats the same check.
-export async function prepareVeniceChatAuthority(env: Env, auth: AuthorizedIdentity, selection: ProxySelection,
-  upstream: UpstreamAuth, url: URL, headers: Headers): Promise<{ revalidate(signal: AbortSignal): Promise<void>; assertLive(): void }> {
+type VeniceChatAuthority = { revalidate(signal: AbortSignal): Promise<void>; assertLive(): void };
+export function prepareVeniceChatAuthority(env: Env, auth: AuthorizedIdentity, selection: ProxySelection,
+  upstream: UpstreamAuth, url: URL, headers: Headers): Promise<VeniceChatAuthority> {
+  return prepareVeniceAuthority(env, auth, selection, upstream, url, headers);
+}
+export function prepareOwnedVeniceChatAuthority(cap: OwnedHttpRevalidation, env: Env, auth: AuthorizedIdentity, selection: ProxySelection,
+  upstream: UpstreamAuth, url: URL, headers: Headers): Promise<VeniceChatAuthority> {
+  return prepareVeniceAuthority(env, auth, selection, upstream, url, headers, cap);
+}
+async function prepareVeniceAuthority(env: Env, auth: AuthorizedIdentity, selection: ProxySelection,
+  upstream: UpstreamAuth, url: URL, headers: Headers, owned?: OwnedHttpRevalidation): Promise<VeniceChatAuthority> {
+  if (owned !== undefined) checkOwnedHttpRevalidation(owned, env, auth, selection, upstream, url, headers);
   const { grant, grantKey } = upstream;
   const selectedHeaders = new Headers();
-  applyProviderCredential(selection.provider, grant, env, selectedHeaders, new URLSearchParams());
+  if (owned !== undefined) applyOwnedHttpRevalidationCredential(owned, selectedHeaders, new URLSearchParams());
+  else applyProviderCredential(selection.provider, grant, env, selectedHeaders, new URLSearchParams());
   const authorization = selectedHeaders.get("authorization");
   if (selection.provider.id !== "venice" || !selection.model || upstream.transport !== null
     || upstream.baseUrl !== "https://api.venice.ai/api/v1" || url.href !== "https://api.venice.ai/api/v1/chat/completions"
@@ -30,9 +44,16 @@ export async function prepareVeniceChatAuthority(env: Env, auth: AuthorizedIdent
     routeSha256: await sha256Hex(JSON.stringify([url.href, selection.endpoint.id, selection.model.upstream])) };
   const assertLive = () => {
     assertControlCallerLive(caller);
+    if (owned !== undefined) fundOwnedHttpRevalidationEnvironment(owned);
     if (grant && (!qualified(grant) || identity(grant) !== original)
       || environment && !safeEqual(envValue(env, "VENICE_API_KEY") ?? "", environment)) unavailable();
   };
+  if (owned !== undefined) {
+    bindOwnedResponseControl(owned, env, caller, owner);
+    (ownedVenice ??= new WeakMap()).set(owned, { env, selection, grant, grantKey, original, environment, caller });
+    ownedVeniceCount++;
+    return { assertLive, revalidate: signal => revalidateOwnedResponseControl(owned, signal) };
+  }
   return { assertLive, async revalidate(signal) {
     const policy = await authorizeResponseControl(env, caller, owner, signal);
     if (!policy) unavailable();
@@ -50,6 +71,55 @@ export async function prepareVeniceChatAuthority(env: Env, auth: AuthorizedIdent
     }
     signal.throwIfAborted(); assertLive();
   } };
+}
+
+interface OwnedVenice {
+  env: Env; selection: ProxySelection; grant: UpstreamGrant | null; grantKey: string | null;
+  original: string | null; environment: string | null; caller: ResponseControlAuthorization;
+  policy?: AccessPolicy; routing?: GrantRoutingPolicy; inspected?: true;
+}
+let ownedVenice: WeakMap<OwnedHttpRevalidation, OwnedVenice> | undefined;
+let ownedVeniceCount = 0;
+export function acceptOwnedVenicePolicy(cap: OwnedHttpRevalidation, policy: AccessPolicy): void {
+  const state = ownedVenice?.get(cap);
+  if (!state || !matchesOwnedHttpRevalidationGraph(cap, policy, "policy")) throw identityFailure("protocol");
+  assertPolicyModel(policy, state.selection);
+  state.policy = policy;
+  state.routing = privateGrantRoutingPolicy(policy.grantRouting, emit => {
+    const plan = identityPlan(); emit(plan, 0); admitOwnedHttpRevalidationRouting(cap, plan.counts);
+  });
+}
+export function acceptOwnedVeniceInspection(cap: OwnedHttpRevalidation, value: unknown): void {
+  const state = ownedVenice?.get(cap);
+  if (!state?.policy || !state.routing || !state.grantKey || !matchesOwnedHttpRevalidationGraph(cap, value, "inspect")) throw identityFailure("protocol");
+  const current = (value as { grant: UpstreamGrant | null }).grant;
+  if (!qualified(current) || identity(current) !== state.original
+    || !filterGrantCandidates("venice", [{ key: state.grantKey, grant: current, runtimeState: null }], new Set(),
+      state.routing, state.grantKey, undefined, Date.now()).available.length) unavailable();
+  state.inspected = true;
+}
+export function finishOwnedVeniceRevalidation(cap: OwnedHttpRevalidation): void {
+  const state = ownedVenice?.get(cap);
+  if (!state?.policy || !state.routing) throw identityFailure("protocol");
+  fundOwnedHttpRevalidationEnvironment(cap);
+  if (state.grantKey) { if (!state.inspected) throw identityFailure("protocol"); }
+  else if (Object.hasOwn(state.routing.eligibleGrants, "venice") && !state.routing.environmentFallback
+    || !safeEqual(envValue(state.env, "VENICE_API_KEY") ?? "", state.environment!)) unavailable();
+  assertControlCallerLive(state.caller);
+  if (state.grant && (!qualified(state.grant) || identity(state.grant) !== state.original)
+    || state.environment && !safeEqual(envValue(state.env, "VENICE_API_KEY") ?? "", state.environment)) unavailable();
+}
+export function clearOwnedVeniceRevalidation(cap: OwnedHttpRevalidation): void {
+  const state = ownedVenice?.get(cap);
+  if (state) { state.policy = undefined; state.routing = undefined; state.inspected = undefined; }
+}
+export function retireOwnedVeniceRevalidation(cap: OwnedHttpRevalidation): void {
+  const state = ownedVenice?.get(cap); if (!state) return;
+  clearOwnedVeniceRevalidation(cap);
+  state.env = undefined as never; state.selection = undefined as never; state.grant = null; state.grantKey = null;
+  state.original = null; state.environment = null; state.caller = undefined as never;
+  ownedVenice!.delete(cap);
+  if (!--ownedVeniceCount) ownedVenice = undefined;
 }
 
 function qualified(grant: UpstreamGrant | null): grant is UpstreamGrant {

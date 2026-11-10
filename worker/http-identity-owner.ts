@@ -1,10 +1,21 @@
 import { ExactBodyCharge } from "./body-budget.ts";
-import { identityFailure, identityHeader } from "./identity-admission.ts";
+import { identityFailure, isIdentityFailure, identityHeader, identitySourceBudget, identityPlan, admitIdentityBytes, admitIdentityHeaders, parseIdentity, IdentityWire } from "./identity-admission.ts";
 import { ProxyCompletion } from "./proxy-completion.ts";
 import { inputRetirement } from "./input-retirement.ts";
-import type { Env, QueueMessage } from "./types.ts";
-import { drainOwnedHttpIdentity, retireOwnedHttpConsumers, retireOwnedHttpIdentity } from "./credential-preflight.ts";
-import { retireOwnedHttpProxy } from "./proxy.ts";
+import type { Env, QueueMessage, AuthorizedIdentity } from "./types.ts";
+import type { ProxySelection } from "./proxy-selection.ts";
+import type { UpstreamAuth } from "./providers.ts";
+import type { PreparationAdmission } from "./provider-templates.ts";
+import { applyProviderCredential } from "./provider-auth.ts";
+import { proxyKeyVerification } from "./proxy-auth.ts";
+import { HttpError } from "./utils.ts";
+import { selectedCredentialFailure } from "./grant-credential-failure.ts";
+import { acceptOwnedAuthorizationSnapshot, retireOwnedResponseControl } from "./response-control-authorization.ts";
+import { acceptOwnedVeniceInspection, retireOwnedVeniceRevalidation } from "./venice-chat-authority.ts";
+import { acceptOwnedGmiInspection, retireOwnedGmiRevalidation } from "./gmi-organization-binding.ts";
+import { drainOwnedHttpIdentity, retireOwnedHttpConsumers, retireOwnedHttpIdentity, claimOwnedHttpRevalidationBacking,
+  admitOwnedHttpRevalidationBacking, retireOwnedHttpRevalidationBacking, type OwnedHttpRevalidationBacking } from "./credential-preflight.ts";
+import { retireOwnedHttpProxy, matchesOwnedHttpRevalidationInput } from "./proxy.ts";
 import { credentialPreflightHeader, credentialPreflightVersion, credentialPreflightPath, credentialPreflightNamespace } from "./credential-preflight-protocol.ts";
 
 // This entry is inactive until the named compiled HTTP adapter invokes it.
@@ -14,6 +25,7 @@ export interface OwnedHttpUpload { readonly kind?: never }
 export interface OwnedHttpSinkOwner { readonly sink?: never }
 export interface OwnedHttpSinkRegistration { readonly registration?: never }
 export interface OwnedHttpIntakeDiagnostics { readonly intake?: never }
+export interface OwnedHttpRevalidation { readonly revalidation?: never }
 type SinkOrigin = "acquire" | "fetch" | "body" | "read" | "cancel" | "unlock" | "queue" | "put" | "pipe" | "abort" | "registration" | "registration-missing" | "listener-add" | "listener-remove";
 type SinkDisposition = "transport" | "missing" | "conflict" | "protocol";
 export interface OwnedHttpFailureMetadata {
@@ -39,11 +51,13 @@ interface RequestOwner {
   sinkOrigins?: Map<number, SinkOriginOwner>;
   nextSinkOrigin: number;
   sinkCredits: number;
+  revalidationCredits: number;
   abortController?: AbortController;
   abortListener?: () => void;
   abortRemoval?: SinkOriginOwner;
   terminalRegistration?: SinkOriginOwner;
   budgetDenials?: WeakSet<object>;
+  revalidations?: OwnedHttpRevalidation[];
 }
 interface UploadOwner {
   cap: OwnedHttpUpload;
@@ -165,6 +179,353 @@ function sinkOriginal(sink: OwnedHttpSinkOwner, record: SinkOriginOwner, start: 
     return outcome.then(() => undefined, () => undefined);
   });
   return outcome;
+}
+
+interface RevalidationOwner {
+  http: OwnedHttpRequest; request: Request; env: Env; auth: AuthorizedIdentity;
+  selection: ProxySelection; upstream: UpstreamAuth; attempt: OwnedHttpUpload;
+  url: URL; headers: Headers; preparation?: PreparationAdmission;
+  backing: OwnedHttpRevalidationBacking; persistentBytes: number; phaseBytes: number; preparing: boolean;
+  active: boolean; graph?: unknown;
+  graphKind?: "snapshot" | "inspect"; retainedBytes: number; environmentUnits: number;
+  snapshotRequestBytes: number; requestBytes: number;
+}
+let revalidations: WeakMap<OwnedHttpRevalidation, RevalidationOwner> | undefined;
+// Same original-wire/text/decoded/parsed component as the private full reader.
+// Retained policy/routing occurrences are ADDITIVE during the inspect RPC.
+const revalidationSourceBytes = 16793600 + 2 * 2097152 + 32768;
+const revalidationControlBytes = 65536;
+const originalByobCancel = ReadableStreamBYOBReader.prototype.cancel;
+export function reserveOwnedHttpRevalidationOrigins(http: OwnedHttpRequest, providerId: string): void {
+  if (providerId !== "venice" && providerId !== "gmi") return;
+  const owner = requestOwner(http);
+  if (owner.sealed) throw identityFailure("protocol");
+  // Before this attempt's selection effects: snapshot + inspect at dispatch,
+  // and Venice's one existing delivery check. Environment routes leave the
+  // unused inspect credits held, never invent a new operation.
+  const count = providerId === "venice" ? 36 : 18;
+  reserveSinkOrigins(ownedHttpSinkOwner(http), count);
+  owner.revalidationCredits += count;
+}
+
+export function beginOwnedHttpRevalidation(http: OwnedHttpRequest, request: Request, env: Env,
+  auth: AuthorizedIdentity, selection: ProxySelection, upstream: UpstreamAuth, attempt: OwnedHttpUpload,
+  url: URL, headers: Headers, preparation: PreparationAdmission): OwnedHttpRevalidation {
+  checkOwnedHttpRequest(http, request, env);
+  if (!matchesOwnedHttpRevalidationInput(http, request, env, auth, selection, upstream, attempt, url, headers, preparation)
+    || !["venice", "gmi"].includes(selection.provider.id) || selection.capability !== "llm.chat"
+    || selection.endpoint.request_format !== "openai.chat_completions"
+    || selection.endpoint.response_format !== "openai.chat_completions"
+    || auth.authType !== "proxy_key" || !proxyKeyVerification(auth) || !env.ACCESS_CONTROL) throw identityFailure("protocol");
+  // Frame/visitor/registry/cap backing precedes every private guard factory.
+  const backing = claimOwnedHttpRevalidationBacking(http, upstream.grant, selection.provider.id as "venice" | "gmi");
+  let persistentBytes = revalidationControlBytes, admitted = false;
+  try {
+    const secret = selection.provider.id === "venice" ? env.VENICE_API_KEY : env.GMI_API_KEY;
+    const units = (upstream.grant?.credential?.length ?? 0) + (upstream.grant?.accessToken?.length ?? 0)
+      + (upstream.grant?.credentialLineage?.length ?? 0) + (typeof upstream.grant?.accountId === "string" ? upstream.grant.accountId.length : 0)
+      + (typeof secret === "string" ? secret.length : 0)
+      + auth.policyId.length + (auth.credentialId?.length ?? 0) + (auth.principalId?.length ?? 0)
+      + auth.policy.generation.length + (auth.policy.tenantId?.length ?? 7)
+      + (upstream.grantKey?.length ?? 0) + selection.endpoint.id.length + (selection.model?.upstream.length ?? 0) + url.href.length;
+    // Header normalization, identity/route JSON and both hash representations
+    // coexist with borrowed records. No equality/interning credit is used.
+    const original = identityPlan();
+    if (upstream.grant) original.array(0, entry => {
+      entry(upstream.grant!.provider); entry(upstream.grant!.kind); entry(upstream.grant!.credentialGeneration);
+      entry(upstream.grant!.credentialLineage); entry(upstream.grant!.accountId ?? null);
+    });
+    const rpc = identityPlan();
+    rpc.object(0, field => { field("credentialId", auth.credentialId); field("principalId", auth.principalId); field("policyId", auth.policyId); });
+    const snapshotRequestBytes = 2 * rpc.counts.text + rpc.counts.bytes;
+    const bindingUnits = auth.policyId.length + (auth.credentialId?.length ?? 0) + (auth.principalId?.length ?? 0)
+      + 2 * auth.policy.generation.length + (auth.policy.tenantId?.length ?? 7) + (upstream.grantKey?.length ?? 0)
+      + selection.endpoint.id.length + (upstream.grant?.credentialLineage?.length ?? 0);
+    persistentBytes = revalidationControlBytes + 4 * original.counts.text + 4 * bindingUnits
+      + 4 * (typeof secret === "string" ? secret.length : 0) + 1024;
+    admitOwnedHttpRevalidationBacking(backing, persistentBytes, 12 * units + revalidationControlBytes); admitted = true;
+    const cap = Object.freeze({});
+    const state: RevalidationOwner = { http, request, env, auth, selection, upstream, attempt, url, headers, preparation, active: false,
+      backing, persistentBytes, phaseBytes: 12 * units + revalidationControlBytes, preparing: true,
+      retainedBytes: 0, snapshotRequestBytes, requestBytes: 0, environmentUnits: typeof secret === "string" ? secret.length : 0 };
+    (revalidations ??= new WeakMap()).set(cap, state);
+    (requestOwner(http).revalidations ??= []).push(cap);
+    return cap;
+  } catch (error) {
+    if (admitted) admitOwnedHttpRevalidationBacking(backing, persistentBytes, 0);
+    retireOwnedHttpRevalidationBacking(backing); throw error;
+  }
+}
+function revalidationOwner(cap: OwnedHttpRevalidation): RevalidationOwner {
+  const owner = revalidations?.get(cap);
+  if (!owner || requestOwner(owner.http).unknown) throw identityFailure("protocol");
+  return owner;
+}
+export function checkOwnedHttpRevalidation(cap: OwnedHttpRevalidation, env: Env, auth: AuthorizedIdentity,
+  selection: ProxySelection, upstream: UpstreamAuth, url: URL, headers: Headers, request?: Request): void {
+  const owner = revalidationOwner(cap);
+  if (owner.env !== env || owner.auth !== auth || owner.selection !== selection || owner.upstream !== upstream
+    || owner.url !== url || owner.headers !== headers || request !== undefined && owner.request !== request
+    || !proxyKeyVerification(auth) || auth.authType !== "proxy_key") throw identityFailure("protocol");
+}
+export function matchesOwnedHttpRevalidationCaller(cap: OwnedHttpRevalidation,
+  proof: unknown, credentialId: string | null, principalId: string | null, policyId: string, providerId: string, grantKey: string | null): boolean {
+  const owner = revalidationOwner(cap), auth = owner.auth;
+  return proof === proxyKeyVerification(auth) && credentialId === auth.credentialId && principalId === auth.principalId
+    && policyId === auth.policyId && providerId === owner.selection.provider.id && grantKey === owner.upstream.grantKey;
+}
+export function beginOwnedHttpRevalidationRead(cap: OwnedHttpRevalidation): void {
+  const owner = revalidationOwner(cap);
+  if (owner.active || owner.preparing || owner.phaseBytes) throw identityFailure("protocol");
+  setRevalidationPhase(owner, revalidationSourceBytes + revalidationControlBytes);
+  owner.active = true; owner.retainedBytes = 0;
+}
+export function finishOwnedHttpRevalidationPreparation(http: OwnedHttpRequest): void {
+  const root = requestOwner(http);
+  if (root.revalidations) for (const cap of root.revalidations) {
+    const owner = revalidationOwner(cap);
+    if (owner.preparing) {
+      setRevalidationPhase(owner, 0);
+      owner.preparing = false; owner.preparation = undefined;
+    }
+  }
+}
+export function applyOwnedHttpRevalidationCredential(cap: OwnedHttpRevalidation, headers: Headers, query: URLSearchParams): void {
+  const owner = revalidationOwner(cap);
+  if (!owner.preparing || !owner.preparation) throw identityFailure("protocol");
+  applyProviderCredential(owner.selection.provider, owner.upstream.grant, owner.env, headers, query, owner.preparation);
+}
+function setRevalidationPhase(owner: RevalidationOwner, bytes: number): void {
+  admitOwnedHttpRevalidationBacking(owner.backing, owner.persistentBytes, bytes);
+  owner.phaseBytes = bytes;
+}
+export function fundOwnedHttpRevalidationEnvironment(cap: OwnedHttpRevalidation): void {
+  const owner = revalidationOwner(cap);
+  const value = owner.selection.provider.id === "venice" ? owner.env.VENICE_API_KEY : owner.env.GMI_API_KEY;
+  const units = typeof value === "string" ? value.length : 0;
+  if (units > owner.environmentUnits) {
+    fundRevalidationCopies(owner, 12 * (units - owner.environmentUnits));
+    owner.environmentUnits = units;
+  }
+}
+function fundRevalidationCopies(owner: RevalidationOwner, bytes: number): void {
+  // This already-enrolled request child can execute during delivery after
+  // request sealing. It cannot enroll a new request or fund another owner.
+  if (requestOwner(owner.http).unknown || !Number.isSafeInteger(bytes) || bytes <= 0) throw identityFailure("protocol");
+  const total = owner.persistentBytes + bytes;
+  admitOwnedHttpRevalidationBacking(owner.backing, total, owner.phaseBytes);
+  owner.persistentBytes = total;
+}
+export function matchesOwnedHttpRevalidationGraph(cap: OwnedHttpRevalidation, value: unknown,
+  kind: "snapshot" | "policy" | "inspect" | "grant"): boolean {
+  const owner = revalidationOwner(cap);
+  if (!owner.active || !owner.graph || typeof owner.graph !== "object") return false;
+  const graph = owner.graph as { policy?: { policy?: unknown }; grant?: unknown };
+  return kind === "snapshot" ? owner.graphKind === "snapshot" && value === graph
+    : kind === "policy" ? owner.graphKind === "snapshot" && value === graph.policy?.policy
+    : kind === "inspect" ? owner.graphKind === "inspect" && value === graph
+    : owner.graphKind === "inspect" && value === graph.grant;
+}
+export function retainOwnedHttpRevalidationPolicy(cap: OwnedHttpRevalidation, policy: unknown): void {
+  if (!matchesOwnedHttpRevalidationGraph(cap, policy, "policy")) throw identityFailure("protocol");
+  const owner = revalidationOwner(cap), plan = identityPlan("record");
+  plan.item(policy, 0);
+  const n = plan.counts;
+  // Upper bound for D: every value is conservatively a primitive occurrence,
+  // in addition to each distinct parsed container and each key/value cell.
+  owner.retainedBytes = 8 * (n.containers + 2 * n.members + n.entries + n.values) + 2 * n.units;
+}
+export function admitOwnedHttpRevalidationRouting(cap: OwnedHttpRevalidation,
+  counts: { values: number; containers: number; members: number; entries: number; units: number }): void {
+  const owner = revalidationOwner(cap);
+  if (!owner.active || owner.graphKind !== "snapshot") throw identityFailure("protocol");
+  const bytes = 8 * (counts.containers + 2 * counts.members + counts.entries + counts.values) + 2 * counts.units;
+  if (!Number.isSafeInteger(bytes) || bytes < 0) throw identityFailure("limit");
+  // The private bounded normalizer's passive prefix workspace is no larger
+  // than a second output occurrence vector; it ends before inspect starts.
+  setRevalidationPhase(owner, owner.requestBytes + Math.max(revalidationSourceBytes + revalidationControlBytes,
+    owner.retainedBytes + 2 * bytes + revalidationControlBytes));
+  owner.retainedBytes += bytes;
+}
+export function endOwnedHttpRevalidationRead(cap: OwnedHttpRevalidation): void {
+  const owner = revalidationOwner(cap);
+  if (!owner.active || owner.graph !== undefined || owner.requestBytes) throw identityFailure("protocol");
+  // Fixed receivers clear policy/routing before this command; the consumed
+  // source's read/FIRSTcancel/unlock have already settled.
+  owner.retainedBytes = 0; owner.active = false; setRevalidationPhase(owner, 0);
+}
+
+// Named operations only: callers cannot supply a namespace/path/body/graph or
+// callback. A successful consumed snapshot is delivered to one fixed receiver.
+export function consumeOwnedHttpAuthorizationSnapshot(cap: OwnedHttpRevalidation, env: Env, signal: AbortSignal): Promise<void> {
+  return startOwnedRevalidationRpc(cap, env, signal, "snapshot");
+}
+export function consumeOwnedHttpGrantInspection(cap: OwnedHttpRevalidation, env: Env, signal: AbortSignal): Promise<void> {
+  return startOwnedRevalidationRpc(cap, env, signal, "inspect");
+}
+function startOwnedRevalidationRpc(cap: OwnedHttpRevalidation, env: Env, signal: AbortSignal, kind: "snapshot" | "inspect"): Promise<void> {
+  const owner = revalidationOwner(cap);
+  if (env !== owner.env || !owner.active || !owner.phaseBytes || owner.graph !== undefined
+    || kind === "inspect" && !owner.upstream.grantKey) throw identityFailure("protocol");
+  const sink = ownedHttpSinkOwner(owner.http), root = sinkOwner(sink);
+  if (root.revalidationCredits < 9) throw identityFailure("protocol");
+  setRevalidationPhase(owner, revalidationSourceBytes + owner.retainedBytes + revalidationControlBytes
+    + (kind === "snapshot" ? owner.snapshotRequestBytes : 6));
+  owner.requestBytes = kind === "snapshot" ? owner.snapshotRequestBytes : 6;
+  // Stub, fetch, reader acquisition/fallback, read, FIRSTcancel, unlock, and
+  // abort listener installation/removal. No fresh charge is needed in cleanup.
+  root.revalidationCredits -= 9;
+  try { return root.sinkCustody!.start(() => consumeRevalidationRpc(cap, signal, kind)); }
+  catch (error) { owner.requestBytes = 0; root.revalidationCredits += 9; throw error; }
+}
+async function consumeRevalidationRpc(cap: OwnedHttpRevalidation, signal: AbortSignal, kind: "snapshot" | "inspect"): Promise<void> {
+  const owner = revalidationOwner(cap), sink = ownedHttpSinkOwner(owner.http), root = sinkOwner(sink);
+  const acquisition = sinkOrigin(sink, "acquire"), fetching = sinkOrigin(sink, "fetch");
+  const readerAcquisition = sinkOrigin(sink, "acquire"), fallbackAcquisition = sinkOrigin(sink, "acquire");
+  const reading = sinkOrigin(sink, "read"), cancelling = sinkOrigin(sink, "cancel"), unlocking = sinkOrigin(sink, "unlock");
+  const listenerAdd = sinkOrigin(sink, "listener-add"), listenerRemove = sinkOrigin(sink, "listener-remove");
+  let response: Response | undefined, reader: ReadableStreamBYOBReader | ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let body: ReadableStream<Uint8Array> | null | undefined, original: Promise<Response> | undefined, received: Promise<Response> | undefined;
+  let closed: Promise<void> | undefined, first: Promise<void> | undefined, input: ReturnType<typeof inputRetirement> | undefined;
+  let listener: (() => void) | undefined, wire: IdentityWire | undefined, decoder: TextDecoder | undefined;
+  let backing: Uint8Array<ArrayBuffer> | undefined, text = "", graph: unknown, eof = false, byob = false, streamErrored = false;
+  let requestBody: string | undefined;
+  let hasPrimary = false, primary: unknown, cleanupFailed = false;
+  const budget = identitySourceBudget();
+  try {
+    if (signal.aborted) throw identityFailure("transport");
+    const binding = kind === "snapshot" ? owner.env.ACCESS_CONTROL : owner.env.GRANT_CREDENTIALS;
+    if (!binding) throw new HttpError(503, "provider_not_configured", "provider is not configured");
+    const key = kind === "snapshot" ? "policy-bindings" : owner.upstream.grantKey!;
+    let stub: DurableObjectStub | undefined;
+    try { stub = binding.get(binding.idFromName(key)); completedSinkOrigin(root, acquisition); }
+    catch (reason) { throw failedSinkOrigin(acquisition, reason); }
+    requestBody = kind === "snapshot" ? JSON.stringify({ credentialId: owner.auth.credentialId,
+      principalId: owner.auth.principalId, policyId: owner.auth.policyId }) : "{}";
+    try {
+      original = stub.fetch(kind === "snapshot" ? "https://clawrouter.internal/authorization/snapshot" : "https://clawrouter.internal/inspect",
+        { method: "POST", body: requestBody, signal });
+    } catch (reason) { throw failedSinkOrigin(fetching, reason); }
+    finally { stub = undefined; }
+    // First observer, before any catch/finally can retain the raw rejection.
+    try {
+      received = original.then(value => { completedSinkOrigin(root, fetching); return value; },
+        reason => { throw failedSinkOrigin(fetching, reason); });
+    } catch (reason) { throw failedSinkOrigin(fetching, reason); }
+    original = undefined;
+    response = await received; received = undefined;
+    try { body = response.body; }
+    catch (reason) { failedSinkOrigin(readerAcquisition, reason); root.unknown = true; await new Promise<never>(() => {}); }
+    if (!body) throw identityFailure("protocol");
+    try { reader = body.getReader({ mode: "byob" }); byob = true; completedSinkOrigin(root, readerAcquisition); }
+    catch (reason) {
+      failedSinkOrigin(readerAcquisition, reason);
+      try { reader = body.getReader(); completedSinkOrigin(root, fallbackAcquisition); }
+      catch (error) { failedSinkOrigin(fallbackAcquisition, error); }
+    }
+    if (!reader) { root.unknown = true; await new Promise<never>(() => {}); }
+    input = inputRetirement({
+      cancel() {
+        if (!first) {
+          try {
+            const propagated = reading.failed && streamErrored && byob
+              && Object.getPrototypeOf(reader) === ReadableStreamBYOBReader.prototype
+              && !Object.hasOwn(reader!, "closed") && reader!.cancel === originalByobCancel;
+            const work = reader!.cancel();
+            first = work.then(() => { completedSinkOrigin(root, cancelling); }, reason => {
+              if (propagated) return;
+              cleanupFailed = true; failedSinkOrigin(cancelling, reason, false);
+            });
+          } catch (reason) { cleanupFailed = true; failedSinkOrigin(cancelling, reason, false); first = Promise.resolve(); }
+        }
+        return first;
+      },
+      releaseLock() {
+        try { reader!.releaseLock(); completedSinkOrigin(root, unlocking); }
+        catch (reason) { cleanupFailed = true; failedSinkOrigin(unlocking, reason, false); }
+      },
+    });
+    try { closed = reader!.closed.then(() => undefined, () => { streamErrored = true; }); }
+    catch (reason) { throw failedSinkOrigin(reading, reason); }
+    listener = () => { if (!eof) void input!.retire("cancel"); };
+    try { signal.addEventListener("abort", listener, { once: true }); completedSinkOrigin(root, listenerAdd); }
+    catch (reason) { throw failedSinkOrigin(listenerAdd, reason); }
+    if (!byob || signal.aborted) throw identityFailure("transport");
+    admitIdentityHeaders(response.headers);
+    wire = new IdentityWire(); decoder = new TextDecoder(); backing = new Uint8Array(16384);
+    for (let reads = 0; ; reads++) {
+      if (reads >= 8192) throw identityFailure("limit");
+      if (signal.aborted) throw identityFailure("transport");
+      let part: ReadableStreamReadResult<Uint8Array<ArrayBuffer>> | undefined;
+      try {
+        part = await input.read(() => {
+          let work: Promise<ReadableStreamReadResult<Uint8Array<ArrayBuffer>>>;
+          try { work = (reader as ReadableStreamBYOBReader).read(backing!); }
+          catch (reason) { throw failedSinkOrigin(reading, reason); }
+          return work.then(value => value, reason => { throw failedSinkOrigin(reading, reason); });
+        });
+        if (signal.aborted) throw identityFailure("transport");
+        if (part.value) {
+          if (!(part.value.buffer instanceof ArrayBuffer) || part.value.buffer.byteLength > 16384) throw identityFailure("limit");
+          admitIdentityBytes(budget, part.value.byteLength, 2097152); wire.add(part.value);
+          const chunk = decoder.decode(part.value, { stream: !part.done });
+          if (chunk.length > 2097152 - text.length) throw identityFailure("limit");
+          text += chunk; backing = new Uint8Array(part.value.buffer);
+        }
+        if (part.done) {
+          if (!part.value) { const chunk = decoder.decode(); if (chunk.length > 2097152 - text.length) throw identityFailure("limit"); text += chunk; }
+          eof = true; break;
+        }
+        if (!backing.byteLength) throw identityFailure("transport");
+      } finally { part = undefined; }
+    }
+    completedSinkOrigin(root, reading);
+    try { graph = parseIdentity(text, budget, "complete", kind === "snapshot" ? "authorization-snapshot" : "grant", wire.span); }
+    catch (error) { throw isIdentityFailure(error) ? error : identityFailure("protocol"); }
+    finally { text = ""; wire.clear(); wire = undefined; decoder = undefined; backing = undefined; }
+    await input.retire("eof");
+    if (body.locked) { root.unknown = true; await new Promise<never>(() => {}); }
+    await closed; closed = undefined; input = undefined; reader = undefined; body = undefined; first = undefined;
+    if (cleanupFailed) throw identityFailure("cleanup");
+    if (signal.aborted) throw identityFailure("transport");
+    if (!response.ok) {
+      if (kind === "snapshot") throw identityFailure("transport");
+      const payload = graph as { error?: { code?: string; message?: string } };
+      const retryAfter = response.headers.get("retry-after");
+      const code = typeof payload?.error?.code === "string" ? payload.error.code : "credential_owner_error";
+      const message = typeof payload?.error?.message === "string" ? payload.error.message : "grant credential operation failed";
+      // This genuine consumed producer error may outlive the source phase.
+      // Its retained strings/header occurrence move under the request owner.
+      fundRevalidationCopies(owner, 4096 + 8 * (code.length + message.length + (retryAfter?.length ?? 0))
+        + 2 * owner.upstream.grantKey!.length);
+      throw selectedCredentialFailure(new HttpError(response.status, code, message,
+        retryAfter === null ? undefined : { "Retry-After": retryAfter }), owner.upstream.grantKey!);
+    }
+    owner.graph = graph; owner.graphKind = kind;
+    if (kind === "snapshot") acceptOwnedAuthorizationSnapshot(cap, graph);
+    else if (owner.selection.provider.id === "venice") acceptOwnedVeniceInspection(cap, graph);
+    else acceptOwnedGmiInspection(cap, graph);
+  } catch (error) { hasPrimary = true; primary = error; }
+  finally {
+    if (input) {
+      await input.retire(eof ? "eof" : "cancel");
+      if (body?.locked) { root.unknown = true; await new Promise<never>(() => {}); }
+      await closed; closed = undefined;
+    } else if (body?.locked) { root.unknown = true; await new Promise<never>(() => {}); }
+    if (listener) {
+      try { signal.removeEventListener("abort", listener); completedSinkOrigin(root, listenerRemove); }
+      catch (reason) { cleanupFailed = true; failedSinkOrigin(listenerRemove, reason, false); }
+    }
+    listener = undefined; reader = undefined; input = undefined; first = undefined; body = undefined; response = undefined; original = undefined; received = undefined;
+    wire?.clear(); wire = undefined; decoder = undefined; backing = undefined; text = ""; graph = undefined;
+    owner.graph = undefined; owner.graphKind = undefined; requestBody = undefined; owner.requestBytes = 0;
+    completedSinkOrigin(root, acquisition); completedSinkOrigin(root, fetching);
+    completedSinkOrigin(root, readerAcquisition); completedSinkOrigin(root, fallbackAcquisition);
+    completedSinkOrigin(root, reading); completedSinkOrigin(root, cancelling); completedSinkOrigin(root, unlocking);
+    completedSinkOrigin(root, listenerAdd); completedSinkOrigin(root, listenerRemove);
+  }
+  if (cleanupFailed) throw identityFailure("cleanup");
+  if (hasPrimary) throw ownedHttpFailureMetadata(primary) ? identityFailure("transport") : primary;
 }
 
 export function ownedHttpArchivePut(sink: OwnedHttpSinkOwner, bucket: Env["CONTENT_ARCHIVE"], key: string,
@@ -358,7 +719,7 @@ export function beginOwnedHttpRequest(request: Request, env: Env): OwnedHttpRequ
       failed: false, primary: false, primaryIsUndefined: false, disposition: "transport" };
     const sink = Object.freeze({});
     const owner: RequestOwner = { request, env, funding, completion: new ProxyCompletion(), uploads: [], failures: [],
-      sealed: false, unknown: false, sink, sinkCustody: new ProxyCompletion(), sinkOrigins: new Map([[0, terminalRegistration]]), nextSinkOrigin: 1, sinkCredits: 1,
+      sealed: false, unknown: false, sink, sinkCustody: new ProxyCompletion(), sinkOrigins: new Map([[0, terminalRegistration]]), nextSinkOrigin: 1, sinkCredits: 1, revalidationCredits: 0,
       terminalRegistration, budgetDenials: new WeakSet() };
     const cap = Object.freeze({});
     sinkOwners ??= new WeakMap(); sinkFailures ??= new WeakSet();
@@ -680,7 +1041,25 @@ export function finishOwnedHttpRequest(cap: OwnedHttpRequest): Promise<void> {
     if (!owner.unknown) {
       // A failed last-consumer handoff is not proof that prepared callbacks
       // stopped borrowing identity/credential graphs. Preserve their owners.
-      try { retireOwnedHttpProxy(cap); } catch (error) { owner.unknown = true; failures.push(error); }
+      try {
+        retireOwnedHttpProxy(cap);
+        for (const revalidation of owner.revalidations ?? []) {
+          const state = revalidations!.get(revalidation)!;
+          if (state.active || state.graph !== undefined) throw identityFailure("protocol");
+          // A failed preparation may never have published its callbacks. Its
+          // original prepare promise and uploads were joined above.
+          if (state.preparing) { setRevalidationPhase(state, 0); state.preparing = false; }
+          if (state.phaseBytes) throw identityFailure("protocol");
+          retireOwnedVeniceRevalidation(revalidation); retireOwnedGmiRevalidation(revalidation); retireOwnedResponseControl(revalidation);
+          state.auth = undefined as never; state.selection = undefined as never; state.upstream = undefined as never;
+          state.env = undefined as never; state.request = undefined as never; state.attempt = undefined as never;
+          state.url = undefined as never; state.headers = undefined as never;
+          state.preparation = undefined;
+          retireOwnedHttpRevalidationBacking(state.backing); state.backing = undefined as never;
+          revalidations!.delete(revalidation);
+        }
+        owner.revalidations = undefined;
+      } catch (error) { owner.unknown = true; failures.push(error); }
       if (!owner.unknown) try { retireOwnedHttpConsumers(cap); } catch (error) { owner.unknown = true; failures.push(error); }
     }
     // Fixed-cohort transport starts only after HTTP consumers cleared. Unknown
@@ -695,7 +1074,7 @@ export function finishOwnedHttpRequest(cap: OwnedHttpRequest): Promise<void> {
       if (owner.sinkOrigins) for (const origin of owner.sinkOrigins.values()) sinkFailures!.delete(origin);
       owner.sinkOrigins = undefined; owner.sink = undefined; owner.sinkCustody = undefined; owner.terminalRegistration = undefined; owner.budgetDenials = undefined;
       requests!.delete(cap); owner.funding.release();
-      if (!--requestCount) { requests = undefined; uploads = undefined; failureOrigins = undefined; sinkOwners = undefined; sinkFailures = undefined; sinkRegistrations = undefined; intakes = undefined; const funding = registryFunding; registryFunding = undefined; funding?.release(); }
+      if (!--requestCount) { requests = undefined; uploads = undefined; failureOrigins = undefined; sinkOwners = undefined; sinkFailures = undefined; sinkRegistrations = undefined; intakes = undefined; revalidations = undefined; const funding = registryFunding; registryFunding = undefined; funding?.release(); }
     }
     if (failures.length) throw new AggregateError(failures, "owned HTTP request retirement");
   })();

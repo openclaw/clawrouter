@@ -1,6 +1,6 @@
 import { ProxyCompletion } from "./proxy-completion.ts";
 import { isIdentityFailure, identityFailure } from "./identity-admission.ts";
-import { beginOwnedHttpUpload, checkOwnedHttpRequest, checkOwnedHttpUpload, abandonOwnedHttpUpload, growOwnedHttpRequest, ownedHttpSinkOwner, ownedHttpProviderFetch, ownedHttpSignal, cancelOwnedHttpResponse,
+import { beginOwnedHttpUpload, beginOwnedHttpRevalidation, finishOwnedHttpRevalidationPreparation, checkOwnedHttpRequest, checkOwnedHttpUpload, abandonOwnedHttpUpload, growOwnedHttpRequest, ownedHttpSinkOwner, ownedHttpProviderFetch, ownedHttpSignal, cancelOwnedHttpResponse,
   beginOwnedHttpIntakeDiagnostics, ownedHttpIntakeFailure, finishOwnedHttpIntakeDiagnostics,
   beginOwnedHttpSinkRegistration, completeOwnedHttpSinkRegistration, abandonUnstartedOwnedHttpRegistration,
   ownedHttpCompletion, holdOwnedHttpRequest, dispatchOwnedHttpUpload, ownOwnedHttpResponse,
@@ -34,11 +34,11 @@ import { inputRetirement, type InputRetirement } from "./input-retirement.ts";
 import { prepareModelDiscoveryOwner } from "./model-discovery-owner.ts";
 import { REQUESTY_MODELS_FORMAT } from "./requesty-model-catalog.ts";
 import { assertMultipartIntake } from "./transcription-protocol.ts";
-import { prepareVeniceChatAuthority } from "./venice-chat-authority.ts";
+import { prepareVeniceChatAuthority, prepareOwnedVeniceChatAuthority } from "./venice-chat-authority.ts";
 import { prepareVeniceChatResponse, veniceChat } from "./venice-chat-runtime.ts";
 import { acquireFeatherlessCatalog, featherlessCatalogResponse, prepareFeatherlessCatalogOwner } from "./featherless-catalog-runtime.ts";
 import { isKeyedModelDiscovery, prepareKeyedModelDiscovery } from "./keyed-model-discovery.ts";
-import { prepareGmiOrganizationBinding } from "./gmi-organization-binding.ts";
+import { prepareGmiOrganizationBinding, prepareOwnedGmiOrganizationBinding } from "./gmi-organization-binding.ts";
 import { fetchPublicModelDiscovery } from "./public-model-discovery.ts";
 import { assertPublicDiscoveryEnvelope, preparePublicDiscoveryOwner } from "./public-model-discovery-owner.ts";
 import { manifestOnlyPublicCatalog, publicCatalogProvider } from "./public-model-discovery-formats.ts";
@@ -133,6 +133,10 @@ interface OwnedProxyInvocation {
   preparationAdmitted?: true;
   upload?: OwnedHttpUpload;
   attempts: OwnedHttpUpload[];
+  preparingIdentity?: AuthorizedIdentity;
+  preparingUpstream?: UpstreamAuth;
+  preparingFields?: OwnedPreparedFields;
+  preparingAdmission?: PreparationAdmission;
 }
 interface OwnedPreparationReceiver { owner: OwnedHttpRequest; fields?: OwnedPreparedFields }
 let ownedProxyInvocations: WeakMap<OwnedHttpRequest, OwnedProxyInvocation> | undefined;
@@ -143,6 +147,15 @@ let ownedProxyCount = 0;
 export function hasOwnedHttpProxyInvocation(cap: OwnedHttpRequest): boolean { return ownedProxyInvocations?.has(cap) === true; }
 export function hasBoundOwnedHttpAuthentication(cap: OwnedHttpRequest): boolean {
   return ownedProxyInvocations?.get(cap)?.identity !== undefined;
+}
+export function matchesOwnedHttpRevalidationInput(cap: OwnedHttpRequest, request: Request, env: Env,
+  auth: AuthorizedIdentity, selection: ProxySelection, upstream: UpstreamAuth, attempt: OwnedHttpUpload,
+  url: URL, headers: Headers, preparation: PreparationAdmission): boolean {
+  const invocation = ownedProxyInvocations?.get(cap);
+  return !!invocation && invocation.request === request && invocation.env === env && invocation.selection === selection
+    && invocation.preparingIdentity === auth && invocation.preparingUpstream === upstream && invocation.upload === attempt
+    && invocation.preparingFields?.url === url && invocation.preparingFields.headers === headers
+    && invocation.preparingAdmission === preparation;
 }
 export function matchesOwnedHttpPricingInput(cap: OwnedHttpRequest, body: Record<string, unknown>): boolean {
   const selection = ownedProxyInvocations?.get(cap)?.selection;
@@ -188,15 +201,22 @@ export async function acceptOwnedHttpConfiguredProvider(cap: OwnedHttpRequest, r
   if (!ownsOwnedHttpSelectionPermit(permit, cap)) throw identityFailure("protocol");
   const invocation = ownedProxyInvocations!.get(cap)!;
   let original: Promise<PreparedUpstream> | undefined, prepared: PreparedUpstream | undefined;
+  invocation.preparingIdentity = identity; invocation.preparingUpstream = upstream;
+  invocation.preparingAdmission = preparation;
   try {
     original = prepareSingleSelected(request, env, selection, query, identity, new Set(), false, connection,
       undefined, "http", false, undefined, undefined, undefined, preparation, { cap, upstream });
     void original.then(() => undefined, () => undefined);
     prepared = await original;
+    original = undefined; finishOwnedHttpRevalidationPreparation(cap);
     ownedHttpSignal(cap).throwIfAborted(); invocation.identity = identity; invocation.prepared = prepared;
     (ownedPreparedSelections ??= new WeakMap()).set(prepared, selected);
     if (invocation.upload) (ownedPreparedUploads ??= new WeakMap()).set(prepared, invocation.upload);
-  } finally { original = undefined; prepared = undefined; upstream = undefined as never; identity = undefined as never; }
+  } finally {
+    invocation.preparingIdentity = undefined; invocation.preparingUpstream = undefined; invocation.preparingFields = undefined;
+    invocation.preparingAdmission = undefined;
+    original = undefined; prepared = undefined; upstream = undefined as never; identity = undefined as never;
+  }
 }
 
 function prepareOwnedHttpTransport(cap: OwnedHttpRequest, request: Request, env: Env,
@@ -211,6 +231,7 @@ function prepareOwnedHttpTransport(cap: OwnedHttpRequest, request: Request, env:
   try {
     prepareOwnedUpstreamRequest(upload, request, env, selection, query, upstream, preparation);
     if (!receiver.fields) throw identityFailure("protocol");
+    invocation.preparingFields = receiver.fields;
     return receiver.fields;
   } catch (error) { void abandonOwnedHttpUpload(upload); throw error; }
   finally { receiver.fields = undefined; ownedPreparationReceivers!.delete(upload); }
@@ -2022,7 +2043,11 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     if (minimaxAnthropic) preparation?.headers(upstream.headers, true);
     minimaxAnthropic?.apply(url, headers);
     preparation?.headers(headers); preparation?.text(url.href, 16384);
-    const gmiCheck = selection.provider.id === "gmi"
+    const revalidation = owned && (selection.provider.id === "gmi" || veniceChat(selection))
+      ? beginOwnedHttpRevalidation(owned.cap, request, env, auth, selection, upstream, ownedProxyInvocations!.get(owned.cap)!.upload!, url, headers, preparation!) : undefined;
+    const ownedGmiCheck = selection.provider.id === "gmi" && revalidation
+      ? await prepareOwnedGmiOrganizationBinding(revalidation, request, env, auth, selection, upstream, url, headers) : undefined;
+    const gmiCheck = selection.provider.id === "gmi" && !owned
       ? await prepareGmiOrganizationBinding(request, env, auth, selection, upstream, url, headers) : undefined;
     const discoveryCheck = gmiCheck ?? (["openai.models", REQUESTY_MODELS_FORMAT].includes(selection.endpoint.request_format) && selection.capability === "models.list"
       ? await prepareModelDiscoveryOwner(request, env, auth, selection, upstream, url, headers) : undefined);
@@ -2044,7 +2069,8 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
       assertNativeResponseDestination(selection.nativeResponse, url);
     }
     const chatCheck = veniceChat(selection)
-      ? await prepareVeniceChatAuthority(env, auth, selection, upstream, url, headers) : undefined;
+      ? await (revalidation ? prepareOwnedVeniceChatAuthority(revalidation, env, auth, selection, upstream, url, headers)
+        : prepareVeniceChatAuthority(env, auth, selection, upstream, url, headers)) : undefined;
     if (chatCheck) selection.nativeResponse = prepareVeniceChatResponse(selection, chatCheck);
     const catalogCheck = isKeyedModelDiscovery(selection.endpoint.request_format)
       ? await prepareKeyedModelDiscovery(request, env, auth, selection, upstream, url, headers) : undefined;
@@ -2087,7 +2113,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     }
     const wanCheck = wanCreate(selection.endpoint) && continuation
       ? wanCreateAuthority(env, auth, selection, upstream, configuredOwnerUrl, headers, continuation, wan, preparation) : undefined;
-    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(videoCheck ? { revalidateAccount: videoCheck } : tokenPlanCheck ? { revalidateAccount: tokenPlanCheck, revalidateDelivery: tokenPlanCheck } : wanCheck ? { revalidateAccount: wanCheck } : chatCheck ? { revalidateAccount: chatCheck.revalidate, ...(!Array.isArray(selection.body) && selection.body.stream === true ? {} : { revalidateDelivery: chatCheck.revalidate }) } : discoveryCheck ? { revalidateAccount: async (signal: AbortSignal) => { await discoveryCheck(signal); }, ...(isModelDiscovery(selection.endpoint) ? { revalidateDiscovery: discoveryCheck, acquireDiscovery: () => nativeResponseLease(16 * 1024 * 1024) } : {}) } : catalogCheck ? { revalidateAccount: catalogCheck } : musicCheck ? { revalidateAccount: musicCheck.revalidate, revalidateDelivery: musicCheck.revalidate } : pcmCheck ? { revalidateAccount: pcmCheck } : vertexAnthropic ? { revalidateAccount: vertexAnthropic.revalidate } : minimaxAnthropic ? { revalidateAccount: minimaxAnthropic.revalidate } : imageCheck ? { revalidateAccount: imageCheck } : nativeMediaCheck ? { revalidateMedia: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
+    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(videoCheck ? { revalidateAccount: videoCheck } : tokenPlanCheck ? { revalidateAccount: tokenPlanCheck, revalidateDelivery: tokenPlanCheck } : wanCheck ? { revalidateAccount: wanCheck } : chatCheck ? { revalidateAccount: chatCheck.revalidate, ...(!Array.isArray(selection.body) && selection.body.stream === true ? {} : { revalidateDelivery: chatCheck.revalidate }) } : ownedGmiCheck ? { revalidateAccount: ownedGmiCheck } : discoveryCheck ? { revalidateAccount: async (signal: AbortSignal) => { await discoveryCheck(signal); }, ...(isModelDiscovery(selection.endpoint) ? { revalidateDiscovery: discoveryCheck, acquireDiscovery: () => nativeResponseLease(16 * 1024 * 1024) } : {}) } : catalogCheck ? { revalidateAccount: catalogCheck } : musicCheck ? { revalidateAccount: musicCheck.revalidate, revalidateDelivery: musicCheck.revalidate } : pcmCheck ? { revalidateAccount: pcmCheck } : vertexAnthropic ? { revalidateAccount: vertexAnthropic.revalidate } : minimaxAnthropic ? { revalidateAccount: minimaxAnthropic.revalidate } : imageCheck ? { revalidateAccount: imageCheck } : nativeMediaCheck ? { revalidateMedia: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
   } catch (error) {
     throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
   }

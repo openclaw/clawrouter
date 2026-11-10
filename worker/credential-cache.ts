@@ -329,6 +329,11 @@ let ownedHttpCredentialOwners: WeakMap<OwnedHttpCredential, OwnedHttpCredentialR
 export function ownsOwnedHttpCredentialPermit(permit: object, cap: OwnedHttpCredential): boolean {
   return ownedHttpCredentialPermits?.get(permit)?.cap === cap;
 }
+export function hasJoinedOwnedHttpCredentialValue(permit: object, cap: OwnedHttpCredential, value: UpstreamGrant | null): boolean {
+  const run = ownedHttpCredentialPermits?.get(permit);
+  return !!run && run.cap === cap && run.claimed && run.original === undefined
+    && (value === null ? run.value === undefined : run.value === value);
+}
 export function acceptOwnedHttpCredentialMaterialization(permit: object, cap: OwnedHttpCredential, value: UpstreamGrant): void {
   const run = ownedHttpCredentialPermits?.get(permit);
   if (!run || run.cap !== cap || run.value) throw identityFailure("protocol");

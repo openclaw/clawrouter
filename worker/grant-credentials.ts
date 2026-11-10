@@ -1,5 +1,5 @@
 import { admitIdentityText, identityUtf8, admitIdentity, identityHeader, identityJson, identitySourceBudget, identityFailure, isIdentityFailure, parseIdentity, readIdentityKv, readIdentityRaw, readIdentityRequest, readIdentityResponse, type IdentitySourceBudget } from "./identity-admission.ts";
-import { checkOwnedHttpSinkOwner, ownedHttpGrantMaterializeFetch, type OwnedHttpSinkOwner } from "./http-identity-owner.ts";
+import { checkOwnedHttpSinkOwner, ownedHttpGrantMaterializeFetch, consumeOwnedHttpGrantInspection, type OwnedHttpRevalidation, type OwnedHttpSinkOwner } from "./http-identity-owner.ts";
 import { videoControlHeader, videoControlVersion, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { miniMaxApiKeySecret, miniMaxMusicCoverProjection, miniMaxMusicCoverIdentity } from "./native-media-credential.ts";
 import { musicCoverControlHeader, musicCoverControlVersion, musicCoverUnavailable, isMusicCoverControl, readCoverControlRequest, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
@@ -1420,6 +1420,11 @@ function due(value: string | null | undefined, now: number): boolean {
 
 function assertCredentialEnabled(record: CredentialRecord): void {
   if (record.enabled !== true) throw new HttpError(409, "grant_disabled", "upstream grant is disabled");
+}
+
+export function inspectOwnedHttpGrantCredentials(cap: OwnedHttpRevalidation, env: Env, signal: AbortSignal): Promise<void> {
+  // Exact ordinary {} body and actual selected binding/key, no special producer.
+  return consumeOwnedHttpGrantInspection(cap, env, signal);
 }
 
 export async function inspectGrantCredentials(env: Env, key: string, signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, cover?: MiniMaxMusicCoverControl): Promise<UpstreamGrant> {

@@ -1,5 +1,5 @@
 import { selectOwnedHttpIdentity, prepareOwnedHttpCredential, reserveOwnedHttpForeground, type OwnedHttpCredential, type GenerationSelectionHandle } from "./credential-preflight.ts";
-import { checkOwnedHttpRequest, growOwnedHttpRequest, type OwnedHttpRequest } from "./http-identity-owner.ts";
+import { checkOwnedHttpRequest, growOwnedHttpRequest, reserveOwnedHttpRevalidationOrigins, type OwnedHttpRequest } from "./http-identity-owner.ts";
 import { identityFailure as ownedHttpIdentityFailure } from "./identity-admission.ts";
 import { checkOwnedHttpProviderInput, acceptOwnedHttpConfiguredProvider } from "./proxy.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
@@ -641,6 +641,7 @@ export function reserveOwnedHttpProviderPreparation(cap: OwnedHttpRequest, reque
   if (ownedHttpPreparationCredits?.has(cap)) throw ownedHttpIdentityFailure("protocol");
   reserveOwnedHttpSerialization(cap, selection.body as Record<string, unknown>);
   growOwnedHttpRequest(cap, ownedHttpPreparationBytes(selection) + 8192);
+  reserveOwnedHttpRevalidationOrigins(cap, selection.provider.id);
   (ownedHttpPreparationCredits ??= new WeakSet()).add(cap); ownedHttpPreparationCreditCount++;
 }
 
@@ -661,6 +662,7 @@ export async function prepareOwnedHttpProvider(cap: OwnedHttpRequest, request: R
   if (!retireOwnedHttpProviderPreparation(cap)) {
     reserveOwnedHttpSerialization(cap, selection.body as Record<string, unknown>);
     growOwnedHttpRequest(cap, ownedHttpPreparationBytes(selection) + 8192);
+    reserveOwnedHttpRevalidationOrigins(cap, selection.provider.id);
   }
   const permit = Object.freeze({}), command: OwnedHttpProviderCommand = { cap, request, env, selection, query };
   (ownedHttpSelectionPermits ??= new WeakMap()).set(permit, cap); ownedHttpSelectionPermitCount++;

@@ -401,3 +401,65 @@ common arena can still initiate its original cancellation and unlock. New Node
 and actual Workerd pressure witnesses exercise that condition; they remain
 unrun. This table covers the new origin products only. Complete simultaneous
 HTTP/generation DATA and CONTROL qualification is still open.
+
+### Private provider revalidation checkpoint
+
+The private Venice and GMI guards now use a request/attempt/verifier-bound
+capability. It is checked before their header/hash work and before either
+original namespace acquisition. The Worker snapshot helper and selected-grant
+inspect helper return only void completion; neither exposes a graph-valued
+promise. Fixed internal receivers accept only the exact parsed graph currently
+owned by that capability. The ordinary helpers and DO producer paths stay
+unchanged. Inspect sends the ordinary empty JSON object, with no specialized
+producer marker.
+
+Snapshot consumption maps the RAW root credential and nested policy record to
+the existing record profile. The original complete envelope, unknown fields,
+duplicates and discarded occurrences are metered before JSON.parse. Limits
+remain 2 MiB complete, 1 MiB per record, 16 KiB whole read backing, 8192 reads
+including EOF, and 32 headers/4 KiB. Each fresh RPC has its original response
+allowance; this does not reset or refund the inherited admission ledger.
+
+The first non-async observers classify acquisition, fetch, read, FIRSTcancel
+and unlock before arbitrary rejection values can reach shared consumers.
+Independent cleanup origins remain separate, including rejected undefined.
+Native propagated cancellation is distinguished from a post-native wrapper
+failure by the original reader/cancel provenance, not reason equality.
+Unknown body or lock custody keeps the request and foreground backing held.
+Only a consumed owner error response can carry selected-key retry provenance.
+
+The existing full foreground 32 MiB charge also backs these phases. It was
+reserved before selection effects. There is no release/reacquire transition or
+second revalidation arena. Original materialization and preparation joins
+precede reuse of their transient component; the full grant and all unknown
+fields remain funded. The policy and derived routing remain additive across
+inspect. The implementation checks:
+
+| Component | Prospective logical bytes / lifetime |
+| --- | --- |
+| Retained grant | Conservative D from admitted containers, members, entries, values and string units, plus foreground ID/command occurrences |
+| Persistent guard | Measured identity JSON, verifier/binding strings, environment copies and fixed metadata; retained through last delivery consumer |
+| Original response source | 16,793,600 + 4,194,304 + 32,768 = 21,020,672; through read/FIRSTcancel/unlock and source alias clearing |
+| Snapshot request | Exact planned JSON text times two plus encoded bytes; through original response cleanup |
+| Policy/routing | Separate retained D vectors; routing prefix workspace admitted before construction |
+| Revalidation execution metadata | 65,536 logical-byte component; CONTROL classification remains explicit |
+| Terminal origins | Nine per snapshot/inspect RPC, prepaid before each attempt's selection: 36 for Venice, 18 for GMI |
+
+The grant, persistent guard and active phase must fit the SAME 33,554,432-byte
+foreground backing. These component checks are not a completed simultaneous
+HTTP/generation DATA or 1024-CONTROL proof. The final inventory must also count
+the backing capability, registries, preparation frames, both hash roots,
+caller/follower tails, provider validators, routing visitors and cleanup.
+
+Venice preserves dispatch and its existing JSON-delivery or pre-first-data SSE
+check. GMI preserves dispatch-only checking and its private variant returns
+void. A covered generation hit still performs these fresh provider RPCs.
+Environment routing performs no invented inspect. No selection, refresh or
+environment rescue is added.
+
+New authored witnesses cover the exact raw record boundary, discarded
+oversized duplicates, unknown complete fields, forged-cap zero acquisition,
+native cold/HIT RPC counts and ordinary inspect body, fresh canonical changes,
+and opaque/oversized/undefined/forged acquisition rejection before effects.
+They remain unrun under CODE_ONLY_HOSTED; no native resolution or full numeric
+qualification is claimed by this checkpoint.

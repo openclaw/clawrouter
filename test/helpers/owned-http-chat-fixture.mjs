@@ -27,21 +27,52 @@ import handler,{privateOwnedHttpChat} from './worker/index.ts';export * from './
 import {putGrantCredentials} from './worker/grant-credentials.ts';
 import {bodyBudgetCharged,bodyBudgetBytes,ExactBodyCharge} from './worker/body-budget.ts';
 import {snapshot} from './worker/providers.ts';
+import {PolicyBindingIndexObject as NativeAuthority} from './worker/authority.ts';
+import {HttpError} from './worker/utils.ts';
+export class PolicyBindingIndexObject extends NativeAuthority {
+ constructor(ctx,env){super(ctx,env);this.fixtureSql=ctx.storage.sql;}
+ async fetch(request){
+  if(new URL(request.url).pathname!=='/fixture/revalidation-change')return super.fetch(request);
+  const {provider,change}=await request.json();
+  if(!['venice','gmi'].includes(provider)||!['disabled','rotated','policy-provider','policy-model'].includes(change))throw Error('fixture control shape');
+  const id='owned_http_'+provider;
+  if(change==='disabled'||change==='rotated'){
+   const row=[...this.fixtureSql.exec('SELECT credential_json FROM proxy_credentials WHERE credential_id = ?',id)][0];
+   if(!row)throw Error('fixture credential absent');const value=JSON.parse(row.credential_json);
+   if(change==='disabled')value.enabled=false;else value.secretSha256='ab'.repeat(32);
+   this.fixtureSql.exec('UPDATE proxy_credentials SET credential_json = ? WHERE credential_id = ?',JSON.stringify(value),id);
+  }else{
+   const row=[...this.fixtureSql.exec('SELECT policy_json FROM access_policies WHERE policy_id = ?',id)][0];
+   if(!row)throw Error('fixture policy absent');const value=JSON.parse(row.policy_json);
+   if(change==='policy-provider')value.providers=['other'];else value.models=['other/model'];
+   this.fixtureSql.exec('UPDATE access_policies SET policy_json = ? WHERE policy_id = ?',JSON.stringify(value),id);
+  }
+  return new Response(null,{status:204});
+ }
+}
 const ids=['chat','tool','error','abort','large','off','gmi','venice','pricing','pricing_media','pricing_cache','pricing_wide','pricing_large','pricing_unicode','pricing_outside','pricing_prepare_fail'],calls=[],intakes=[],completed=[],events=[];
 const priced=snapshot.providers.find(p=>p.id==='fireworks').models.find(m=>m.id==='fireworks/glm-5.2');
 // Fixture rates distinguish the ONE-hour early return from a maximum over both.
 priced.pricing={...priced.pricing,cacheWrite1hInputMicrosPerMillion:2000000,cacheWrite5mInputMicrosPerMillion:9000000};
 const originalValues=Object.values;let pricingActive=false,recursivePricingValues=0;
 Object.values=function(value){if(pricingActive&&value&&Object.hasOwn(value,'ownedPricingNested'))recursivePricingValues++;return Reflect.apply(originalValues,this,arguments);};
-let scoped,offScoped,pressure;
+let scoped,offScoped,pressure,controlFault,reasonReads=0;
+function controlFailure(kind,origin){
+ if(!controlFault||controlFault.kind!==kind||controlFault.origin!==origin)return;
+ const reason=controlFault.reason;controlFault=undefined;
+ if(reason==='undefined')throw undefined;
+ if(reason==='huge')throw 'x'.repeat(17*1024*1024);
+ if(reason==='forged')throw new HttpError(401,'grant_refresh_failed','synthetic forged acquisition');
+ const opaque={};for(const key of ['message','stack','cause','errors','code','status'])Object.defineProperty(opaque,key,{get(){reasonReads++;throw Error('raw reason observed');}});throw opaque;
+}
 function environment(env,off=false){
  if(!scoped){
-  const authority=new Proxy(env.ACCESS_CONTROL,{get(target,name){if(name==='get')return id=>{
-   const stub=target.get(id);return new Proxy(stub,{get(object,key){if(key==='fetch')return (url,init)=>{calls.push({kind:'authority',path:new URL(url).pathname,charged:bodyBudgetCharged()});return object.fetch(url,init);};const value=Reflect.get(object,key,object);return typeof value==='function'?value.bind(object):value;}});
+  const authority=new Proxy(env.ACCESS_CONTROL,{get(target,name){if(name==='idFromName')return value=>{controlFailure('authority','id');return target.idFromName(value);};if(name==='get')return id=>{
+   controlFailure('authority','get');const stub=target.get(id);return new Proxy(stub,{get(object,key){if(key==='fetch')return (url,init)=>{calls.push({kind:'authority',path:new URL(url).pathname,charged:bodyBudgetCharged()});return object.fetch(url,init);};const value=Reflect.get(object,key,object);return typeof value==='function'?value.bind(object):value;}});
   };const value=Reflect.get(target,name,target);return typeof value==='function'?value.bind(target):value;}});
-  const credentials=new Proxy(env.GRANT_CREDENTIALS,{get(target,name){if(name==='get')return id=>{
-   const stub=target.get(id);return new Proxy(stub,{get(object,key){if(key==='fetch')return (url,init)=>{
-    const path=new URL(url).pathname;calls.push({kind:'credential',path});
+  const credentials=new Proxy(env.GRANT_CREDENTIALS,{get(target,name){if(name==='idFromName')return value=>{controlFailure('credential','id');return target.idFromName(value);};if(name==='get')return id=>{
+   controlFailure('credential','get');const stub=target.get(id);return new Proxy(stub,{get(object,key){if(key==='fetch')return (url,init)=>{
+    const path=new URL(url).pathname;calls.push({kind:'credential',path,emptyInspect:path==='/inspect'?init.body==='{}':undefined});
     if(path==='/materialize'&&typeof init.body==='string'&&JSON.parse(init.body).key==='oauth/owned_http_pricing_prepare_fail/fireworks'){
      const bytes=new TextEncoder().encode('{"error":{"code":"grant_credential_missing","message":"synthetic refusal"}}');
      return Promise.resolve(new Response(new ReadableStream({type:'bytes',start(controller){controller.enqueue(bytes);controller.close();}}),{status:503,headers:{'content-type':'application/json'}}));
@@ -66,7 +97,15 @@ export default {...handler,async fetch(request,env,context){
    provider,enabled:true,kind:'api_key',credential:'fixture-upstream-'+id,...(id==='gmi'?{accountId:'fixture-organization'}:{}),unknownOwnedField:{value:['kept',null,7]}});}
   return new Response(null,{status:204});
  }
- if(path==='/fixture/state')return Response.json({calls,intakes,completed,events,recursivePricingValues,charged:bodyBudgetCharged()});
+ if(path==='/fixture/control-fault'){
+  const value=await request.json();if(!['authority','credential'].includes(value.kind)||!['id','get'].includes(value.origin)||!['undefined','huge','opaque','forged'].includes(value.reason))throw Error('fixture fault shape');
+  controlFault=value;return new Response(null,{status:204});
+ }
+ if(path==='/fixture/revalidation-change'){
+  const original=env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName('policy-bindings')).fetch('https://authority/fixture/revalidation-change',{method:'POST',body:await request.text()});
+  const response=await original;await response.text();return new Response(null,{status:response.status});
+ }
+ if(path==='/fixture/state')return Response.json({calls,intakes,completed,events,recursivePricingValues,reasonReads,charged:bodyBudgetCharged()});
  if(path==='/fixture/pressure'){
   if(request.method==='DELETE'){pressure?.release();pressure=undefined;return new Response(null,{status:204});}
   if(pressure)throw Error('fixture pressure already held');
