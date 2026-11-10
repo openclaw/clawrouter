@@ -73,8 +73,10 @@ for (const failed of [false, true]) test(`private preparation accounting ${faile
     const completion = ownedHttpCompletion(f.cap), gate = deferred();
     f.releases.push(() => gate.resolve());
     f.own(completion.start(() => gate.promise));
+    const accountingCompletion = completion.fork();
+    f.releases.push(() => accountingCompletion.seal());
     const options = { env, request: f.request, context: { waitUntil: value => { f.own(value); } },
-      completion, ownedHttp: f.sink,
+      completion: accountingCompletion, ownedHttp: f.sink,
       auth: { ...auth, authType: 'proxy_key', policy: { ...auth.policy, requestCostMicros: 1 } },
       selection: { provider, endpoint, model: null, capability: 'llm.chat', method: 'POST', body: { messages: [] } } };
     const before = bodyBudgetCharged();
@@ -92,7 +94,7 @@ for (const failed of [false, true]) test(`private preparation accounting ${faile
         assert.equal(events.length, 0, 'unused preparation creates no usage event');
         assert.throws(() => command.fail(403, 'denied'), /consumed/);
       }
-    } finally { command.close(); }
+    } finally { command.close(); accountingCompletion.seal(); }
     gate.resolve();
     // The early-failure original is owned by waitUntil above. Its observer is
     // joined by fixture cleanup; no second settlement or plan is reconstructed.

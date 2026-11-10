@@ -702,8 +702,9 @@ expose its cost, reserve a budget or fork an accounting graph. Therefore this
 particular command creates no reservation-plan WeakMap entry. Ordinary
 `createProxyAccounting` still creates its original binding and command.
 
-The request and environment, genuine sink and encompassing completion must
-match before the private facade factory. A positive 512-byte metadata component
+The request and environment and genuine sink must match before the private
+facade factory. Its completion is the existing private caller's child scope,
+not the encompassing request scope. A positive 512-byte metadata component
 is admitted first and stays charged until request retirement. This is a logical
 component, not an object-size or complete CONTROL claim. The temporary context
 and owner parameter aliases clear before the facade is returned.
@@ -737,3 +738,64 @@ JSON/SSE source observer now counts actual preparation construction and alias
 clear, rejecting codec entry while a preparation command is still retained.
 The original operations and held accounting/archive joins remain in place.
 The new witnesses are authored, not locally executed.
+
+
+### Later-SSE CONTROL counterexample after compact parsing
+
+This is a source-counted lower bound, not a runtime result or a complete upper
+bound. Use one successfully promoted, covered generation with positive cache
+configuration and one selected Venice grant. Deliver a small first SSE event,
+then an accepted depth-128 object in a later event after the public response
+exists. A one-MiB request can keep its upload ownership record present. The
+later event fits the unchanged 128-KiB frame profile. No failed operation,
+second generation, cache pressure or large result graph is needed.
+
+At that later event, both `ownHttpResponse` instances exist: the inner original
+response boundary and the public cancellation boundary. Their original reads
+are pending through the codec pull. The generic usage observer also exists.
+The earlier JSON-only lower bound preceded these constructions.
+
+| Distinct live subset | Products |
+| --- | ---: |
+| Compact consumer/tokenizer parents, accepted depth 128 | 259 |
+| Earlier HTTP-owner subset 403, minus unused accounting command 26, its completion 7, and two removed facade fields | 368 |
+| Seven additional live codec origins beyond the two already in that subset | 49 |
+| Eight response-wrapper origin capabilities, three-field failure owners and six-field origin records: `8 * (1 + 4 + 7)` | 96 |
+| Two response-wrapper scopes/reader owners: each completion 7, input facade 4, read/retire functions 2, reader 1, stream source record 3, pull/cancel functions 2, stream 1, response 1 | 42 |
+| Promoted-generation ownership subset below | 199 |
+| Generic usage subset: returned record 4, stream 1, response 1, source record 4, three source callbacks, result/retired promises 2, reader 1, decoder 1; input facade/functions/promise 7 | 24 |
+| **Lower bound before remaining parser, promise and sink products** | **1037** |
+
+The generation row is: registry plus three WeakMaps 10; partition plus entries
+Map 6; stable entry 9; one ready slot 16; admission owner 8; seven-counter source
+record 8; zeroed temporary ticket/windows/charge 13; coverage holder 5; one
+borrower and capability 6; six metadata owners and their exact charges 36;
+seven shared-vector receipts 42; graph retained owner/charge 5; metadata
+ownership WeakMap and six key/value pairs 13; partition/entry/borrower index
+pairs 6; authentication and selection registries/index pairs/registry leases
+16. Total 199. This counts graph ownership machinery, not business DATA or a
+second copy of a shared graph. It excludes advisory state, runtime maps,
+additional borrowers and slot history.
+
+The 1037 subset excludes the tokenizer's fixed captured state, eleven parser
+functions, active call frames, dynamic token batches, descriptors, regex
+results, promises/reactions beyond those explicitly listed, normalization
+replay state, and concurrent upload/account/archive work. It is consequently
+not repaired by calling depth 259/260 or batch nine a complete parser ceiling.
+The private preparation lifetime repair does not close this overlap.
+
+One candidate reduction is to reuse the genuine codec's custody rather than
+construct a second inner response owner. That is not implemented or claimed
+safe: `normalizeFirstSseEvent` and `replayResponse` currently discard their
+original reader-cancellation promises and release the reader immediately.
+The codec's source receipt is a different promise; it does not establish that
+all of those downstream native API roots and callbacks have settled. Removing
+the wrapper without a closed original-operation handoff would replace the
+CONTROL gap with a custody gap. A private normalization/replay receipt in
+`proxy-response.ts` is a proposed additional boundary, outside the current
+21-file production authorization. Ordinary behavior, public cancellation
+protection and accepted profiles must remain unchanged in any such proposal.
+
+The candidate remains incomplete and unpublished. The lower bound establishes
+one concrete overlap to repair; it does not certify a replacement layout or
+request a higher quota. No semantics or heap measurements were run locally.

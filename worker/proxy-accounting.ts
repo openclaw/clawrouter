@@ -1,5 +1,5 @@
 import type { MiniMaxSearchOperation } from "./minimax-search-operation.ts";
-import { checkOwnedHttpRequest, ownedHttpSinkOwner, ownedHttpCompletion, growOwnedHttpRequest, checkOwnedHttpSinkOwner, beginOwnedHttpSinkRegistration, completeOwnedHttpSinkRegistration, abandonUnstartedOwnedHttpRegistration, type OwnedHttpRequest, type OwnedHttpSinkOwner } from "./http-identity-owner.ts";
+import { checkOwnedHttpRequest, ownedHttpSinkOwner, growOwnedHttpRequest, checkOwnedHttpSinkOwner, beginOwnedHttpSinkRegistration, completeOwnedHttpSinkRegistration, abandonUnstartedOwnedHttpRegistration, type OwnedHttpRequest, type OwnedHttpSinkOwner } from "./http-identity-owner.ts";
 import { vertexAnthropicRoute } from "./vertex-anthropic-dispatch.ts";
 import { upstreamGenerationMayBeCharged } from "./upstream-billing-outcome.ts";
 import { googleAudioRequest } from "./google-audio-classification.ts";
@@ -280,7 +280,7 @@ export interface OwnedHttpPreparationAccounting {
 // failure receipt retain the ordinary ordering, but need no plan-map binding.
 export function createOwnedHttpPreparationAccounting(owner: OwnedHttpRequest, options: AccountingContext): OwnedHttpPreparationAccounting {
   checkOwnedHttpRequest(owner, options.request, options.env);
-  if (options.ownedHttp !== ownedHttpSinkOwner(owner) || options.completion !== ownedHttpCompletion(owner)
+  if (options.ownedHttp !== ownedHttpSinkOwner(owner) || !options.completion
     || options.cost !== undefined || options.search !== undefined)
     throw new TypeError("owned preparation accounting unavailable");
   growOwnedHttpRequest(owner, 512); // Closed facade, captured cells and empty-child join products.
