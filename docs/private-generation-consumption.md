@@ -1,11 +1,11 @@
-# Private generation consumption — local implementation checkpoint
+# Private generation consumption — local source candidate
 
 This inactive slice starts at PR976's qualified retained-generation foundation.
 It does not activate ordinary proxy, HTTP, Access, direct, provider or credential
-cache callers. The ordinary entrypoints remain unchanged. This checkpoint is
-**not a publication candidate**: the complete CONTROL/factory closure below remains open. The own-request fixed-
-cohort contract is adopted and implemented; its authored semantics remain UNRUN. Local semantics are
-`UNRUN_CODE_ONLY_HOSTED`.
+cache callers. The ordinary entrypoints remain unchanged. Publication is held
+for source qualification of the DATA/CONTROL inventory below. The own-request
+fixed-cohort contract is adopted and implemented. Authored semantics remain
+`UNRUN_CODE_ONLY_HOSTED`; static arithmetic is not a runtime result.
 
 ## Closed ownership
 
@@ -74,9 +74,10 @@ The DO arena remains independent. A lease replacement admits the complete next
 amount before changing its debit; failure preserves the old debit. These are
 normative application charges, not object sizes or physical-heap guarantees.
 
-The implementation currently uses the following prospective expressions. Their
-complete simultaneous overlap and every fixed metadata coefficient still require
-source closure; these expressions alone are **not** a fit certificate.
+Every independent lease is a positive exact charge against the same 96 MiB
+counter. These prospective expressions describe application components, not all
+concurrent native invocations, caller-owned inputs or engine internals. Source
+qualification must verify the ceilings against the actual call paths.
 
 | Component | Actual input to prospective reservation | Lifetime |
 | --- | --- | --- |
@@ -87,7 +88,7 @@ source closure; these expressions alone are **not** a fit certificate.
 | Configuration | Existing `privatePreparationScratch` vector, acquired before the preparation owner | Last configuration consumer |
 | Detached selection | `4096 + 8(C + 2M + E + V) + 2U` from its admitted record | Last selection/hint child |
 | Overlay update | Complete retained rows plus old/new overlap before replacement | Slot retirement, shrink only after replaced aliases clear |
-| Runtime merge | Four simultaneous record-vector allowances for the two actual inputs | Detached output admission |
+| Runtime merge | `4096 + 4*(D(previous)+D(incoming)) + generatedObservedAt`; every input window contributes its prospective timestamp member BEFORE the unchanged merge | Detached output admission |
 | Runtime/pending copies | Independent merge-sized backing and key/owner cells | Replacement or original flush settlement |
 | Pending count | `4096 + 8*poolKeyUnits + 6*grantKeyUnits + 2*cursorUnits` | Original flush settlement |
 | Fixed cohort | `32768 + 512*4 + 2*T` bytes, with `T` the maximum prospectively planned escaped outbound text of the fixed rows; owner/claims/ACK/terminal products are distinct from retained records; factory closure still required | Original ACK acquisition/read/cancel/unlock settlement |
@@ -96,30 +97,104 @@ source closure; these expressions alone are **not** a fit certificate.
 `C`, `M`, `E`, `V`, and `U` above are the actual admitted container, member, array
 entry, value and string-unit counts. No source-counter credit funds new copies.
 
-## CONTROL/factory closure still required
+## CONTROL and phase inventory
 
-The prior 715-slot table is not spare credit. This checkpoint has not claimed a
-complete replacement table. The remaining audit must include, by actual phase:
+`generationConsumptionFactoryCharges` names the product families. Its closed
+entry guard runs before consuming factories. It neither reuses a promoted
+ticket's zero balance nor treats the prior 715-slot table as spare credit.
+All four 128-slot windows remain reserved. The synchronous peak is 478, giving
+`512 + 478 = 990 <= 1024`. These are conservative application product/field
+ceilings, not JS sizes. The table is submitted for source qualification.
 
-- Existing retained index/slot/proof metadata while the new coverage owner lives
-  across original hydration and promotion.
-- Coverage planning/copy/freeze visitors and receipt rollback products.
-- Authentication registry, parent borrower, lease, identity/effective-policy
-  factories, business-error products, and cleanup frames.
-- Selection planner closures and nested complete-profile visitors; passive
-  vectors are DATA but their guards and execution frames are CONTROL.
-- Selection/hint capabilities, WeakMap entries, parent/child ownership fields and
-  final retirement frames.
-- Mutable overlay ownership indexes; pending count/runtime execution records and
-  latest-cursor indexes. Execution records are not passive DATA by relabeling.
-- Original flush promises, immediate observers, bounded cohort claim lists/cursor flags, original per-record ACK
-  acquisition/read/FIRSTcancel/unlock products, conditional deletion and terminal
-  failure handling.
-- Accepted background registration, the closed prefetch permit, original load,
-  scalar publication polling, and void completion settlement. Rejected registration must start nothing.
+| Window | Ceiling | Included original products |
+| --- | ---: | --- |
+| Operation | 99 / 128 | Entry/run/followers, registration, own publication polling, actual load/materialize/fetch, receipt and failure products |
+| Source | 125 / 128 | Acquisition, response/reader, InputRetirement, headers, wire/decoder, 24 parser frames and 48 descriptors |
+| Read | 32 / 128 | Original read, input promise/finally, pull/await, whole backings/views, wire copy and ACK propagation |
+| Terminal | 101 / 128 | FIRSTcancel/read/allSettled, unlock/UNKNOWN, publication-finally, child/ancestor cleanup and independent origins |
 
-No pending/hint callback, arbitrary reason graph or native controller is charged
-as passive collection data. No quota/profile change is authorized by this table.
+Each synchronous phase includes 132 persistent products: foundation roots 35,
+coverage/slot/receipt fields 11, authentication owner/lease/parent/capability 53,
+selection 21 and hint 12. These remain included across original awaits; they are
+not another grant of slots.
+
+| Synchronous phase | Additional | Including persistent roots |
+| --- | ---: | ---: |
+| Coverage prevalidation/copy/hydration boundary | 132 | 264 |
+| Authentication/effective policy/refresh rollback | 172 | 304 |
+| Selection/configuration/copy/overlay planning | 280 | 412 |
+| Runtime merge/generated timestamps/copy/replacement | 292 | 424 |
+| Fixed cohort claim/commit/terminal inventory | 346 | 478 |
+| Hint-prefetch permit/ID/loader boundary | 208 | 340 |
+
+The four claimed records are execution owners:
+`4 * (12 record/fields + 5 lease/charge + 28 borrower/funding + 4 ownership Map
+cells + 1 claim cell) = 200`. They are not passive DATA. The remaining 146 cover
+cohort owner/parent/lease 46, arrays/receipt 6, caller plan/overlay/commit frames
+30, scan/cursor/validation frames 12, failure/aggregate/unwind products 28 and
+prospective envelope planning 24. Borrower terms include optional metadata
+receipts. The immutable graph remains under its original owner, not a new clone.
+
+Rows outside the cohort remain independent funded pending owners. Four bounds
+the originals THIS operation starts and joins, not accepted observations.
+Concurrent operations retain separate real common-arena charges. This is not a
+global 1024-object or whole-isolate heap claim.
+
+Original parsing and terminal joins retain their windows until completion.
+Sequential rows reuse reader products only after actual ACK retirement. Plans,
+scratch callbacks and traversals return before the next phase. Completed record
+aliases clear immediately; there is no retained read/promise history. Pending
+values, hints and accepted children retain parents until their last consumers.
+
+### DATA overlaps and admission order
+
+For a closed JSON tree, `D = 8*(C + 2*M + E + V) + 2*U`, conservatively counting
+all values as primitive occurrences. Each reservation uses actual counts. New
+strings count at every retained occurrence; no interning discount. Execution
+indexes/records stay CONTROL even when they also require payload bytes.
+
+- Hydration keeps its full original owner and separately funds explicit coverage.
+  Coverage survives promotion/eviction with its own metadata receipt.
+- Authentication funds effective policy separately from the original generation.
+  Refresh funds the successor before replacement; old children retain the old
+  owner and its debit.
+- Selection funds working vectors and the largest sequential inspection/config
+  vector, then admits/funds the full selected copy, overlay, pending record and
+  cohort before counters, cursors, hints or scheduling effects.
+- Runtime separately owns work, local copy and pending copy. Added timestamp
+  members are counted before merge, including overwritten candidates. Old local
+  aliases clear before release; replaced inflight feedback stays with its original.
+- Flush funds `34816 + 2*T`, with `T <= 2097152` the largest prospectively planned
+  escaped envelope, at most 4229120 bytes. One row is in transport at a time.
+  The fixed portion includes two 4 KiB header sets, 128-byte ACK backings/text,
+  parser and terminal metadata. Request records retain their separate funding.
+
+Owned prefetch reserves its complete 32 MiB component before starting a loader:
+
+| Conservative simultaneous component | Bytes |
+| --- | ---: |
+| Complete 2 MiB outbound escaped request text | 4194304 |
+| Retained original reply wire | 2097152 |
+| 8192 copied views/entries and offset/length allowance | 327680 |
+| Decoded text plus simultaneous flatten/append text | 8388608 |
+| Current decoded chunk | 32768 |
+| Two whole 16 KiB backings | 32768 |
+| Complete-profile parsed graph `D` | 6815744 |
+| Two header sets | 16384 |
+| Fixed metadata, keys and traversal scratch | 262144 |
+| Descriptor string-value occurrences during subsequent validation | 4194304 |
+| **Base** | **26361856** |
+
+Fixed metadata exceeds `1024*192 + 24*2*1024 + 2*64*2 = 246016` logical bytes:
+bounded control cells/field names, traversal keys and numeric conversions. This
+is a normative allowance, not sizeof. Descriptor values are separately funded.
+Legacy array-ID conversion uses JSON text length, including numeric text, plus
+16 units per container for ordinary object tags. Before conversion/factories:
+`max(26361856, 2*rawConfigUnits) + 6*idUnits + 32768 <= 33554432`.
+This includes retained ID occurrences and terminal metadata. No cache allowance
+or source-counter credit funds it. Once accepted, the full component stays until
+actual load cleanup. The independently parsed new cache/DO reply has its existing
+owner; this receipt retires only the OLD hint alias.
 
 ## Closed owned prefetch receipt
 
@@ -155,9 +230,9 @@ retirement, a physical ACK or a heap bound.
 The current implementation reserves a 32 MiB temporary component for the new
 materialization chain, plus separately backed lazy registries. ID conversion,
 configuration normalization and retained ID occurrences are checked before their
-factories. This reservation is **not yet a complete numerical fit proof**: the
-full materialization/loader/source/terminal overlap must be reconciled with the
-complete operation table. No unused slots from PR976 are treated as credit.
+factories. The numerical rows above include the original materialization, loader,
+source and terminal overlap. They are submitted for source qualification; actual
+hosted semantics remain UNRUN. No unused PR976 slots are treated as credit.
 
 ## Originating-request fixed cohorts
 
@@ -219,5 +294,6 @@ materialization with original BYOB/EOF/unlock and explicitly labelled post-nativ
 read/FIRSTcancel holds and an injected post-unlock failure. These fixture holds are not new native ACK claims.
 
 Only syntax, embedded syntax, diff formatting and source/privacy inspection have
-run locally. Full source/factory closure, and all authored native semantics remain pending. Nothing here claims
-publication readiness, default activation, deployment or a heap bound.
+run locally. Independent source qualification and all authored native semantics
+remain pending. Nothing here claims runtime success, publication readiness,
+default activation, deployment or a heap bound.

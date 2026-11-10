@@ -126,6 +126,127 @@ export function admitGenerationFactories(): void {
     || persistent + Math.max(sum(generationFactoryCharges.handoff), sum(generationFactoryCharges.hit), sum(generationFactoryCharges.retirement)) > 512) throw identityFailure("protocol");
 }
 
+// New consuming operations have their own inventory. The retained foundation's
+// 715 total is NOT available credit. These are conservative simultaneously-live
+// application factory/field ceilings, not sizeof or a native heap guarantee.
+// A claimed observation includes its independently funded borrower and indexes;
+// no execution record is moved into the passive DATA vector.
+export const generationConsumptionFactoryCharges = Object.freeze({
+  operation: Object.freeze({
+    admissionVisitorAndCallFrames: 6,
+    exactChargeLeaseAndReplacementProducts: 8,
+    entryRunOriginalPromisesAndAwaitContinuations: 12,
+    backgroundStartClosureScalarRegistrationSettlerThenAndCallbacks: 7,
+    completionPromiseExecutorResolversAndImmediateBothOutcomeObserver: 7,
+    originalLoadOrCohortThenCallbacksAndFollower: 4,
+    cacheLoadLoaderClosureAndAsyncPromise: 4,
+    publicationTokenMapAndSetCellsAndFinallyFrame: 5,
+    ownPublicationPollPromisePredicateTimerExecutorResolverAndAwait: 10,
+    materializeOwnerCallAndReadResponseAsyncPromisesAndAwaits: 10,
+    originalFetchPromiseIdStubRequestInitHeaderCarrierAndStartClosure: 9,
+    sourceBudgetWireOwnerAndResponseHandoff: 5,
+    receiptAndFrozenCapabilityProducts: 4,
+    registrationFailureOriginAndCleanupCallFrames: 8,
+  }),
+  source: Object.freeze({
+    originalAcquisitionPromiseExecutorResolversObserverAndFollower: 8,
+    responseBodyReaderInputOwnerAndAdapters: 8,
+    sourceReadRetireClosuresAndApiProducts: 8,
+    inputRetirementOwnerPromiseExecutorResolversCatchAndMethods: 10,
+    headerIteratorCurrentPairAndAdmissionFrames: 5,
+    textAsyncDecoderBackingAppendClosureAndWireOwner: 7,
+    sourceBudgetAndParserBudgetRecords: 2,
+    parserRecursiveFrames: 24,
+    parserVisitorDescriptors: 48,
+    sourceReplyLoadedCarrierAndFinallyFrames: 5,
+  }),
+  read: Object.freeze({
+    originalReadPromiseActualExecutorResolversAndObserver: 7,
+    inputReadPromiseExecutorResolversFinallyAndProduct: 7,
+    pullStartClosureAwaitAndOutcome: 4,
+    wholeBackingViewReturnedViewAndWireSlice: 4,
+    decoderAppendAndWireIteratorFrames: 5,
+    ackReadFailureAndSanitizedPropagation: 5,
+  }),
+  terminal: Object.freeze({
+    finishPromiseExecutorResolversCatchAndAsyncFollower: 9,
+    firstCancelPromiseExecutorResolverOriginalThenAndCallbacks: 8,
+    inputRetirementOriginalReadCancelAllSettledArrayAndResults: 9,
+    unlockListenerAndUnknownPendingProducts: 5,
+    materializeLoadPublicationFinallyAndCompletionContinuations: 8,
+    clearCommandHintSelectionAuthenticationAndBorrowFrames: 12,
+    registryEntryPartitionSlotAndMetadataRetirementFrames: 14,
+    independentFailureListsCellsAndAggregateProducts: 28,
+    receiptResolveRejectCallbacksAndTerminalFrames: 8,
+  }),
+  // The phase rows below replace each other only after their last consumers
+  // return. Persistent is added to EACH row, including across original awaits.
+  persistent: Object.freeze({
+    retainedFoundationRegistryPartitionEntrySlotOwners: 35,
+    coverageOwnerReceiptAndAddedSlotFields: 11,
+    authenticationOwnerCapabilityRegistryLeaseAndParentProducts: 53,
+    selectionOwnerCapabilityRegistryLeaseAndWeakEntry: 21,
+    hintOwnerCapabilityRegistryLeaseAndWeakEntry: 12,
+  }),
+  coverage: Object.freeze({
+    prevalidationFrameLeasePlanAndSerializationGuardProducts: 26,
+    identityPlanRecursiveFramesAndDescriptors: 72,
+    coveragePlannerCopyFreezeIteratorAndReturnFrames: 18,
+    coverageChargeReceiptRollbackAndHydrationCallerFrames: 16,
+  }),
+  authentication: Object.freeze({
+    frameAndResultLeaseAdmissionProducts: 12,
+    identityPlanRecordCounterMethodsClosuresAndRecursiveProducts: 80,
+    effectivePolicyVisitorsAndCopyCallFrames: 30,
+    lifecycleDigestModelVerdictAndHttpErrorProducts: 18,
+    replacementOwnerAndRollbackProducts: 32,
+  }),
+  selection: Object.freeze({
+    workingLeaseScratchGuardAndReplacementProducts: 16,
+    plannerSelectorChooserRevisionCallbacksAndCallFrames: 28,
+    prospectivePlanRecordClosuresFramesAndDescriptors: 80,
+    configurationPreparationOwnerAndTerminalProducts: 38,
+    profileOverlayNestedVisitorsClosuresAndCounterCarriers: 32,
+    copyFreezeTraversalAndEnumerationFrames: 48,
+    newOverlayOwnerMapsAndCommitFrames: 18,
+    pendingRecordPreparationAndParentBorrowFrames: 20,
+  }),
+  runtime: Object.freeze({
+    independentWorkLocalPendingLeasesAndReplacementProducts: 20,
+    copyMeasurementRecursiveFramesAndLookupIntrinsicCalls: 28,
+    ordinaryMergeCallbacksIteratorsAndFrames: 22,
+    generatedTimestampPlannerCallbackIteratorsAndFrames: 6,
+    prospectiveOverlayPlanClosuresFramesAndDescriptors: 104,
+    copyFreezeTraversalAndEnumerationFrames: 48,
+    replacementPendingOwnerParentIndexesAndCleanupFrames: 64,
+  }),
+  cohort: Object.freeze({
+    // 4 * (record+11 fields, lease+exact charge 5, borrower+funding 28,
+    // two ownership Map cells 4, one cohort list cell 1). Feedback is smaller.
+    fourClaimedRecordsTheirParentsLeasesAndOwnershipCells: 200,
+    cohortOwnerFieldsLeaseExactChargeAndParent: 46,
+    twoClaimArraysFailureArrayAndReceipt: 6,
+    simultaneousCallerPlanOverlayAndCommitFrames: 30,
+    claimScanCursorDecisionAndValidationFrames: 12,
+    independentFailureCellsAggregateAndUnwindFrames: 28,
+    prospectiveEnvelopePlanClosuresAndNestedFrames: 24,
+  }),
+  prefetch: Object.freeze({
+    capOwnerFieldsLeaseRegistryWeakEntryAndCapability: 24,
+    permitRunFieldsRegistryWeakEntryAndCommand: 24,
+    idAndConfigurationPlanningFrames: 16,
+    retainedOriginalRequestEnvelopeAndLoaderCarrierFields: 32,
+    prospectivePlanFramesAndDescriptors: 80,
+    parserFreezePublicationAndFailureCallerOverlap: 32,
+  }),
+});
+export function admitGenerationConsumptionFactories(): void {
+  const sum = (table: Readonly<Record<string, number>>) => { let result = 0; for (const key in table) result += table[key]; return result; };
+  const table = generationConsumptionFactoryCharges, persistent = sum(table.persistent);
+  if (sum(table.operation) > 128 || sum(table.source) > 128 || sum(table.read) > 128 || sum(table.terminal) > 128
+    || persistent + Math.max(sum(table.coverage), sum(table.authentication), sum(table.selection), sum(table.runtime), sum(table.cohort), sum(table.prefetch)) > 512) throw identityFailure("protocol");
+}
+
 // Metadata layout is charged independently in the common arena before its
 // factories. Strings count per retained occurrence, including property names.
 // Map key + entry.kid are two occurrences; no string-interning discount.

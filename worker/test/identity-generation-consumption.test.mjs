@@ -10,7 +10,7 @@ const { bodyBudgetCharged, ExactBodyCharge, bodyBudgetBytes } = await import('..
 const { PrivateCacheReservation, privateCacheLimits, privateCacheCharged, setHotCacheClock } = await import('../hot-cache.ts');
 const { generationFactoryCharges, measureGenerationGraph, freezeGenerationGraph } = await import('../identity-generations.ts');
 const { tryRunInBackground, BACKGROUND_WORK_LIMIT, HotCache } = await import('../hot-cache.ts');
-const { identitySourceBudget, isIdentityFailure } = await import('../identity-admission.ts');
+const { identitySourceBudget, isIdentityFailure, admitIdentity } = await import('../identity-admission.ts');
 const digest = 'ab'.repeat(32), rotated = 'cd'.repeat(32);
 const credential = (secretSha256 = digest) => ({ enabled: true, secretSha256, policyId: 'bridge-policy', policyGeneration: 'legacy', principalId: null });
 const denied = error => isIdentityFailure(error) && error.status === 503;
@@ -414,7 +414,7 @@ test('independent load and child-cleanup failures retain shared reason occurrenc
 }));
 
 const { mergeGrantRuntimeState } = await import('../grant-runtime.ts');
-const { detachedGenerationRuntime, detachedGenerationFeedback } = await import('../admission-cache.ts');
+const { detachedGenerationRuntime, detachedGenerationFeedback, generationRuntimeWorkingBytes } = await import('../admission-cache.ts');
 test('owned runtime and pending feedback preserve ordinary merge and detach account/snapshot aliases', () => {
   const previous = { ...runtimeState('2026-01-02T00:00:00.000Z', 8), account: { tier: 'old' }, extraUsage: { used: 3 }, windowSnapshots: { generic: { observedAt: '2026-01-02T00:00:00.000Z', ids: ['generic'] } } };
   const incoming = { ...runtimeState('2026-01-03T00:00:00.000Z', 3), account: { tier: 'new' }, extraUsage: { used: 9 }, windowSnapshots: { generic: { observedAt: '2026-01-03T00:00:00.000Z', ids: ['generic'] } } };
@@ -489,4 +489,39 @@ test('fixed cohort cutoff retains every unclaimed observation and admits claims 
   const calls = f.trace.rpc.filter(path => path === '/grant-pools/record').length;
   await f.take(f.own(flushCredentialGenerationRuntime(auth, f.env))); assert.equal(f.trace.rpc.filter(path => path === '/grant-pools/record').length, calls);
   release.resolve(); for (const root of blockers) await f.take(root);
+}));
+
+// A single admitted source string can expand into many NEW merge occurrences.
+// Planning must refuse before the unchanged helper constructs those windows.
+test('runtime preadmission funds observedAt once per prospective generated window', () => {
+  const previous = runtimeState('2026-01-02T00:00:00.000Z', 8);
+  const incoming = { ...runtimeState('2026-01-03T00:00:00.000Z', 3), observedAt: ' '.repeat(900000) + '2026-01-03T00:00:00.000Z',
+    windows: Array.from({ length: 32 }, (_, i) => ({ id: 'window-' + i, kind: 'generic', remaining: 3, limit: 8 })) };
+  admitIdentity(incoming, 'record');
+  assert.throws(() => generationRuntimeWorkingBytes(previous, incoming), capacity);
+  // No history truncation or new timestamp cap: modest repeated strings remain
+  // admitted and the unchanged merge still decides their ordinary semantics.
+  const normal = { ...incoming, observedAt: '2026-01-03T00:00:00.000Z' };
+  assert.ok(generationRuntimeWorkingBytes(previous, normal) < preflightPayloadBytes);
+  assert.deepEqual(detachedGenerationRuntime(previous, normal), mergeGrantRuntimeState(previous, normal));
+});
+
+test('generated runtime pressure precedes overlay, RPC and pending-feedback effects', async t => fixture(t, async f => {
+  seedPool(f); let borrow, auth;
+  cleanupGenerations(f, [() => borrow?.dispose(), () => auth?.dispose()]);
+  f.releases.push(() => { if (auth) f.own(flushCredentialGenerationRuntime(auth, f.env)); });
+  borrow = await generation(f, poolInput()); auth = authenticateCredentialGeneration(borrow, f.env, { ...poolInput(), allConnections: false });
+  const key = 'oauth/bridge-policy/a';
+  const first = queueOwned(f, auth, key, runtimeState('2026-01-01T00:00:00.000Z', 8));
+  assert.equal(first.accepted, true); await f.take(f.own(first.completed));
+  const state = f.db.prepare('SELECT state_json FROM upstream_grant_runtime WHERE grant_key=?').get(key).state_json;
+  const before = bodyBudgetCharged(), calls = f.trace.rpc.length;
+  const incoming = { ...runtimeState('2026-01-03T00:00:00.000Z', 3), observedAt: ' '.repeat(900000) + '2026-01-03T00:00:00.000Z',
+    windows: Array.from({ length: 32 }, (_, i) => ({ id: 'window-' + i, kind: 'generic', remaining: 3, limit: 8 })) };
+  admitIdentity(incoming, 'record');
+  assert.throws(() => queueOwned(f, auth, key, incoming), capacity);
+  assert.equal(bodyBudgetCharged(), before); assert.equal(f.trace.rpc.length, calls);
+  await f.take(f.own(flushCredentialGenerationRuntime(auth, f.env)));
+  assert.equal(f.trace.rpc.length, calls);
+  assert.equal(f.db.prepare('SELECT state_json FROM upstream_grant_runtime WHERE grant_key=?').get(key).state_json, state);
 }));

@@ -3,7 +3,7 @@ import type { Env } from "./types";
 import { admitAdmission, admitIdentity, copyIdentity, admittedEffectivePolicy, advanceIdentitySource, identityFailure, identityPlan, identitySourceBudget,
   identitySourceSnapshot, type IdentitySourceBudget } from "./identity-admission.ts";
 import { admitBridgeFactories, admitBridgeCopyFactories, admissionBridgePhasePayload, reserveAdmissionScratch, retireAdmissionScratch, PreflightTicket, GenerationMetadataCharge, GenerationConsumptionLease, admissionScratchBytes, type GenerationRetainedCharge } from "./credential-preflight-arena.ts";
-import { admitGenerationFactories, generationMetadata, measureGenerationGraph, freezeGenerationGraph,
+import { admitGenerationFactories, admitGenerationConsumptionFactories, generationMetadata, measureGenerationGraph, freezeGenerationGraph,
   copyGenerationCoverage, generationCoverageLayout, sameGenerationCoverage,
   type GenerationCoverage, type GenerationAuthentication, type IdentityGenerationPreparation, type IdentityGenerationBorrow } from "./identity-generations.ts";
 import { PrivateCacheReservation, hotCacheNow, hotCacheConfig, tryRunInBackground, type HotCacheConfig } from "./hot-cache.ts";
@@ -568,6 +568,7 @@ export function evictCredentialGeneration(env: Pick<Env, "ACCESS_CONTROL">, kid:
 // no inferred coverage. Failed prevalidation leaves its preparation releasable.
 export function completeConsumableCredentialGeneration(preparation: IdentityGenerationPreparation,
   input: Parameters<typeof completeCredentialAdmission>[1], config: HotCacheConfig, signal?: AbortSignal): Promise<IdentityGenerationBorrow> {
+  admitGenerationConsumptionFactories();
   const slot = generationRegistry?.preparations.get(preparation);
   if (!slot || slot.coverage) throw identityFailure("protocol");
   const frame = GenerationConsumptionLease.reserve(4096);
@@ -631,6 +632,7 @@ export function authenticateCredentialGeneration(borrow: IdentityGenerationBorro
 }
 function createGenerationAuthentication(borrow: IdentityGenerationBorrow, env: Pick<Env, "ACCESS_CONTROL">,
   required: GenerationCoverage, refreshFrom?: GenerationAuthenticationOwner): GenerationAuthentication {
+  admitGenerationConsumptionFactories();
   const slot = generationRegistry?.borrowers.get(borrow)?.slot;
   if (!slot?.ready || !slot.coverage || slot.owner.binding !== env.ACCESS_CONTROL) throw identityFailure("protocol");
   const frame = GenerationConsumptionLease.reserve(4096);
@@ -734,6 +736,7 @@ function generationSelectionPayload(value: unknown): number {
 }
 export function selectCredentialGeneration(handle: GenerationAuthentication, env: Env,
   request: import("./authority-admission.ts").AdmissionSelection): GenerationSelectionHandle | undefined {
+  admitGenerationConsumptionFactories();
   const auth = authenticationOwner(handle), slot = auth.slot;
   if (auth.failure) throw auth.failure;
   if (slot.owner.binding !== env.ACCESS_CONTROL || !selectionCovered(slot.coverage!.value, request)) throw identityFailure("protocol");
@@ -810,6 +813,7 @@ function releaseGenerationFeedback(record: GenerationPendingFeedback): void {
 }
 export function queueCredentialGenerationRuntime(handle: GenerationAuthentication, key: string,
   incoming: import("./types").GrantRuntimeState): GenerationFlushReceipt {
+  admitGenerationConsumptionFactories();
   const auth = authenticationOwner(handle), slot = auth.slot;
   if (auth.failure) throw auth.failure;
   let covered = false;
@@ -869,6 +873,7 @@ export function queueCredentialGenerationRuntime(handle: GenerationAuthenticatio
 // This completion joins ONLY this invocation's synchronously claimed cohort.
 // It never awaits a foreign request's original work or promises a global drain.
 export function flushCredentialGenerationRuntime(handle: GenerationAuthentication, env: Env): Promise<void> {
+  admitGenerationConsumptionFactories();
   const auth = authenticationOwner(handle), slot = auth.slot;
   if (auth.failure) throw auth.failure;
   if (slot.owner.binding !== env.ACCESS_CONTROL) throw identityFailure("protocol");
@@ -933,6 +938,7 @@ function disposeGenerationHint(this: GenerationSelectionHint): void {
   if (failures.length) throw new AggregateError(failures, "generation hint retirement");
 }
 export function retainCredentialGenerationHint(selected: GenerationSelectionHandle, previous?: GenerationSelectionHint): GenerationSelectionHint {
+  admitGenerationConsumptionFactories();
   const value = selectedOwner(selected);
   if (previous && !generationHints?.has(previous)) throw identityFailure("protocol");
   const lease = GenerationConsumptionLease.reserve(1024);
@@ -969,6 +975,7 @@ function generationPrefetchOwner(cap: OwnedGenerationPrefetch): GenerationPrefet
   return owner;
 }
 export function checkOwnedGenerationPrefetch(cap: OwnedGenerationPrefetch): void {
+  admitGenerationConsumptionFactories();
   if (generationPrefetchOwner(cap).permit) throw identityFailure("protocol");
 }
 function disposeGenerationPrefetch(this: OwnedGenerationPrefetch): void {
@@ -992,9 +999,10 @@ function generationPrefetchIdUnits(value: unknown): number {
   if (typeof value === "string") return value.length;
   if (!Array.isArray(value)) return 64;
   const plan = identityPlan("record"); plan.item(value, 0);
-  return plan.counts.units + plan.counts.entries + 16 * plan.counts.containers + 64;
+  return plan.counts.text + 16 * plan.counts.containers + 64;
 }
 export function prepareCredentialGenerationPrefetch(hint: GenerationSelectionHint, env: Env): OwnedGenerationPrefetch {
+  admitGenerationConsumptionFactories();
   const selected = generationHints?.get(hint)?.selected;
   if (!selected || selected.auth.slot.owner.binding !== env.ACCESS_CONTROL) throw identityFailure("protocol");
   // This is an independently backed, full temporary component, never scratch
@@ -1011,7 +1019,7 @@ export function prepareCredentialGenerationPrefetch(hint: GenerationSelectionHin
     const revision = grant ? grantRevision(grant.grant) : null;
     const idUnits = grant ? grant.key.length + generationPrefetchIdUnits(grant.grant.credentialGeneration) + generationPrefetchIdUnits(revision) + 2 : 0;
     const retainedIds = 6 * idUnits + 32768;
-    if (Math.max(21020672, 2 * (typeof raw === "string" ? raw.length : 64)) + retainedIds > lease.bytes) throw identityFailure("limit");
+    if (Math.max(26361856, 2 * (typeof raw === "string" ? raw.length : 64)) + retainedIds > lease.bytes) throw identityFailure("limit");
     const currentConfig = hotCacheConfig(env);
     const config = Object.freeze({ maxAgeMs: currentConfig.maxAgeMs, freshMs: currentConfig.freshMs });
     const id = grant ? `${grant.key}\n${grant.grant.credentialGeneration ?? ""}\n${revision ?? ""}` : "";

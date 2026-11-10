@@ -427,7 +427,23 @@ function generationRuntimeCopyBytes(value: unknown, depth = 0): number {
 }
 export function generationRuntimeWorkingBytes(previous: GrantRuntimeState | undefined, incoming: GrantRuntimeState): number {
   admitIdentity(previous ?? null, "record"); admitIdentity(incoming, "record");
-  return 4096 + 4 * (generationRuntimeCopyBytes(previous) + generationRuntimeCopyBytes(incoming));
+  let generated = 0;
+  if (previous && previous.grantRevision === incoming.grantRevision) {
+    // The ordinary merge spreads EACH observed window and adds observedAt.
+    // One source timestamp can therefore occur in many NEW retained records;
+    // source-size multipliers alone cannot fund this generated output. Count
+    // even overwritten candidates before invoking the unchanged merge helper.
+    const windows = (state: GrantRuntimeState): void => {
+      for (const window of state.windows) {
+        const observed = window.observedAt ?? state.observedAt;
+        generated += 8 + 16 + 2 * "observedAt".length
+          + (typeof observed === "string" ? 2 * observed.length : observed === null || typeof observed !== "object" ? 8 : 0);
+        if (!Number.isSafeInteger(generated) || generated > 33554432) throw identityFailure("limit");
+      }
+    };
+    windows(previous); windows(incoming);
+  }
+  return 4096 + 4 * (generationRuntimeCopyBytes(previous) + generationRuntimeCopyBytes(incoming)) + generated;
 }
 export function detachedGenerationRuntime(previous: GrantRuntimeState | undefined, incoming: GrantRuntimeState): GrantRuntimeState {
   const merged = mergeGrantRuntimeState(previous ?? null, incoming);
