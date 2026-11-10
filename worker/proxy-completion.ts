@@ -33,6 +33,37 @@ export class ProxyCompletion {
     return work;
   }
 
+  /** @internal Complete private leaf only; dynamic callers keep fork/start. */
+  startPrivateLeaf<T>(invoke: () => Promise<T>): Promise<T> {
+    if (!this.open) throw new TypeError("HTTP completion enrollment is closed");
+    this.started = true;
+    this.pending++;
+    let work: Promise<T>;
+    try { work = invoke(); }
+    catch (error) { this.failed = true; this.pending--; this.finish(); throw error; }
+    finally { invoke = undefined as never; }
+    this.observePrivateLeaf(work);
+    return work;
+  }
+
+  private observePrivateLeaf(work: Promise<unknown>): void {
+    // This scope holds no invocation callback, fulfilled value or reject reason.
+    let pending = true;
+    try {
+      void work.then(() => {
+        if (!pending) return;
+        pending = false; this.pending--; this.finish();
+      }, () => {
+        if (!pending) return;
+        pending = false; this.failed = true; this.pending--; this.finish();
+      });
+    } catch (error) {
+      // Observation failed after work started. Keep its enrollment UNKNOWN;
+      // even a partially installed observer must not manufacture retirement.
+      pending = false; this.failed = true; throw error;
+    } finally { work = undefined as never; }
+  }
+
   /** A fulfilled false accounting result is a settled failure, not successful accounting. */
   fail(): void { this.failed = true; }
   seal(): void { this.open = false; this.finish(); }

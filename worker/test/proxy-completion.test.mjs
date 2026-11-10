@@ -30,6 +30,63 @@ function ownership(t) {
 }
 const outcome = work => work.then(value => ({ failed: false, value }), error => ({ failed: true, error }));
 
+test("private leaf preserves the original promise across reentrant seal and joins without a child", { timeout: 10_000 }, async t => {
+  const o = ownership(t), owner = new ProxyCompletion(), held = deferred();
+  let finished = false, invoked = 0;
+  o.release(() => { held.resolve(); owner.seal(); }); o.track(owner.completion);
+  await o.run(async () => {
+    const original = owner.startPrivateLeaf(() => { invoked++; owner.seal(); return held.promise; });
+    assert.equal(original, held.promise); assert.equal(invoked, 1);
+    void owner.completion.then(() => { finished = true; });
+    await tick(); assert.equal(finished, false);
+    let forbidden = false;
+    assert.throws(() => owner.startPrivateLeaf(() => { forbidden = true; return Promise.resolve(); }), /enrollment is closed/);
+    assert.equal(forbidden, false);
+    held.resolve({ ignored: true });
+    assert.deepEqual(await owner.completion, { failed: false, unused: false });
+  });
+});
+
+test("private leaves preserve synchronous and independent rejected undefined/shared origins", { timeout: 10_000 }, async t => {
+  const o = ownership(t), owner = new ProxyCompletion(), shared = Error("independent private leaves");
+  o.release(() => owner.seal()); o.track(owner.completion);
+  for (const reason of [undefined, shared]) {
+    let present = false;
+    try { owner.startPrivateLeaf(() => { throw reason; }); } catch (error) { present = true; assert.equal(error, reason); }
+    assert.equal(present, true);
+  }
+  for (const reason of [undefined, shared, shared]) {
+    const original = Promise.reject(reason), observed = outcome(original);
+    assert.equal(owner.startPrivateLeaf(() => original), original);
+    assert.deepEqual(await o.track(observed), { failed: true, error: reason });
+  }
+  owner.seal();
+  assert.deepEqual(await owner.completion, { failed: true, unused: false });
+});
+
+test("private leaf false needs explicit fail and unused completion stays unchanged", async () => {
+  const unused = new ProxyCompletion(); unused.seal();
+  assert.deepEqual(await unused.completion, { failed: false, unused: true });
+  for (const failed of [false, true]) {
+    const owner = new ProxyCompletion();
+    await owner.startPrivateLeaf(() => Promise.resolve(false));
+    if (failed) owner.fail();
+    owner.seal(); assert.deepEqual(await owner.completion, { failed, unused: false });
+  }
+});
+
+test("private leaf observation failure holds enrollment after work starts", async () => {
+  const owner = new ProxyCompletion(), original = Promise.resolve();
+  let invoked = 0, complete = false, present = false;
+  Object.defineProperty(original, "then", { configurable: true, get() { throw undefined; } });
+  try { owner.startPrivateLeaf(() => { invoked++; return original; }); }
+  catch (error) { present = true; assert.equal(error, undefined); }
+  delete original.then;
+  owner.seal(); void owner.completion.then(() => { complete = true; });
+  await original; await tick();
+  assert.equal(present, true); assert.equal(invoked, 1); assert.equal(complete, false);
+});
+
 test("completion enrolls before invocation and preserves original promise, sync throw and undefined", { timeout: 10_000 }, async t => {
   const o = ownership(t), owner = new ProxyCompletion(), graph = { payload: [1] };
   o.release(() => owner.seal());
