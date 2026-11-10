@@ -92,6 +92,17 @@ delivery, accounting and archive roots. The finalizer clears proxy aliases befor
 credential, selected-record and authentication owners. A failed last-consumer
 handoff holds funding instead of releasing a dependent owner.
 
+The preliminary intake authentication exposes only a scalar verdict. If its
+genuine coverage is identity-only, it has no children and no identity has been
+bound to the proxy, the upgrade clears every preliminary capability/coverage
+alias before retiring that owner. The replacement still performs secret
+preverification and full current admission. No stale preliminary identity is a
+fallback. This avoids three simultaneous 32 MiB owners for an OFF large-body
+request, which would exceed the common 96 MiB before counting request data.
+Bound or child-bearing owners keep their original last-consumer lifetime.
+Node and actual-native OFF one-MiB witnesses inspect the two admission RPCs and
+positive funding at the second call; execution remains pending hosted gates.
+
 The two shallow selection carriers prospectively charge every copied string key,
 primitive and string value occurrence, with the existing 16384-unit model bound.
 Nested plain graphs remain borrowed from the intake owner. This component is not

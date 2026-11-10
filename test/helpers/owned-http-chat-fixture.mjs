@@ -37,7 +37,7 @@ let scoped,offScoped,pressure;
 function environment(env,off=false){
  if(!scoped){
   const authority=new Proxy(env.ACCESS_CONTROL,{get(target,name){if(name==='get')return id=>{
-   const stub=target.get(id);return new Proxy(stub,{get(object,key){if(key==='fetch')return (url,init)=>{calls.push({kind:'authority',path:new URL(url).pathname});return object.fetch(url,init);};const value=Reflect.get(object,key,object);return typeof value==='function'?value.bind(object):value;}});
+   const stub=target.get(id);return new Proxy(stub,{get(object,key){if(key==='fetch')return (url,init)=>{calls.push({kind:'authority',path:new URL(url).pathname,charged:bodyBudgetCharged()});return object.fetch(url,init);};const value=Reflect.get(object,key,object);return typeof value==='function'?value.bind(object):value;}});
   };const value=Reflect.get(target,name,target);return typeof value==='function'?value.bind(target):value;}});
   const credentials=new Proxy(env.GRANT_CREDENTIALS,{get(target,name){if(name==='get')return id=>{
    const stub=target.get(id);return new Proxy(stub,{get(object,key){if(key==='fetch')return (url,init)=>{

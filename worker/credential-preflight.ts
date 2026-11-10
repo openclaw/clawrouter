@@ -18,7 +18,7 @@ import { GenerationAdvisoryState, waitGenerationFlushWindow, admitGenerationOver
 import { authorityCall } from "./authority.ts";
 import { recordGrantRuntime } from "./grant-selection.ts";
 import { ownedGenerationCredentialFailure, acceptOwnedHttpControlVerification } from "./proxy-auth.ts";
-import { acceptOwnedHttpAuthentication, hasOwnedHttpProxyInvocation, reserveOwnedHttpInitialPreparation } from "./proxy.ts";
+import { acceptOwnedHttpAuthentication, hasBoundOwnedHttpAuthentication, hasOwnedHttpProxyInvocation, reserveOwnedHttpInitialPreparation } from "./proxy.ts";
 import { credentialExpired } from "./credential-lifecycle.ts";
 import { safeEqual, sha256Hex, HttpError } from "./utils.ts";
 import { errorResponse } from "./utils.ts";
@@ -62,7 +62,7 @@ export async function resolveOwnedHttpAuthentication(cap: OwnedHttpRequest, requ
     owner = { retained: [], selections: [], credentials: [], pending: [], kid, digest, coverageMiss: false, coverageSelections: 0, refreshed: false };
     (httpIdentities ??= new WeakMap()).set(cap, owner); httpIdentityCount++;
   } else if (owner.kid !== kid || owner.digest !== digest) throw identityFailure("protocol");
-  const current = owner.current && authenticationOwner(owner.current);
+  let current = owner.current && authenticationOwner(owner.current);
   const identityOnly = !required.providers.length && !required.allConnections && required.snapshot === undefined && required.selection === undefined;
   // Early intake asks ONLY for credential/policy/owner authentication. A
   // genuinely covered later facet is still checked separately, before use.
@@ -72,6 +72,24 @@ export async function resolveOwnedHttpAuthentication(cap: OwnedHttpRequest, requ
       if (!response && required.selection && hasOwnedHttpProxyInvocation(cap)) reserveOwnedHttpForeground(cap, request, env);
       return response;
     }
+  // Intake's identity-only verdict is a scalar, not a retained provider-facing
+  // identity. Once intake has finished, clear that owner before a new proof/
+  // hydration/foreground reservation can overlap it. Bound identities and any
+  // selected/credential children still require the ordinary last-consumer join.
+  let previousCoverage = current?.slot.coverage?.value;
+  if (freshness === "cached" && !identityOnly && current && !current.children
+    && previousCoverage && !previousCoverage.providers.length && !previousCoverage.allConnections
+    && previousCoverage.snapshot === undefined && previousCoverage.selection === undefined
+    && !hasBoundOwnedHttpAuthentication(cap)) {
+    const previous = owner.current!;
+    const index = owner.retained.indexOf(previous);
+    if (index < 0) throw identityFailure("protocol");
+    owner.current = undefined;
+    for (let next = index + 1; next < owner.retained.length; next++) owner.retained[next - 1] = owner.retained[next];
+    owner.retained.length--; current = undefined; previousCoverage = undefined;
+    previous.dispose();
+  }
+  previousCoverage = undefined;
   const config = hotCacheConfig(env);
   let borrow: IdentityGenerationBorrow | undefined, preparation: IdentityGenerationPreparation | undefined;
   let admittedCoverage = required;

@@ -73,7 +73,7 @@ async function fixture(t, run, retained = false) {
     return stub.fetch(url, init);
   } }; } };
   env.ACCESS_CONTROL = continuationAuthority(resourceOwner, env);
-  env.ACCESS_CONTROL.beforeFetch = (_name, request) => { calls.push({ kind: 'authority', path: new URL(request.url).pathname }); };
+  env.ACCESS_CONTROL.beforeFetch = (_name, request) => { calls.push({ kind: 'authority', path: new URL(request.url).pathname, charged: bodyBudgetCharged() }); };
   attachGrantCredentialNamespace(env, { useExistingAuthority: true, kvValues: values });
   const originalGet = env.GRANT_CREDENTIALS.get;
   env.GRANT_CREDENTIALS.get = function (id) {
@@ -160,6 +160,22 @@ for (const failedPreparation of [false, true]) test(`real owned token-priced dep
       assert.equal(reservations.length, 1); assert.equal(reservations[0].body.costMicros, expected);
       assert.equal(f.events.length, 1); assert.equal(f.events[0].reserved_cost_micros, expected);
     } else assert.equal(f.calls.filter(row => row.kind === 'budget' && row.path === '/reserve').length, 0);
+  });
+});
+
+test('OFF large-body early identity is retired before covered admission reserves its genuine owners', async t => {
+  await fixture(t, async f => {
+    const input = payload({ messages: [{ role: 'user', content: 'x'.repeat(1024 * 1024) }] });
+    const response = await f.request(input); await f.drain();
+    assert.equal(response.status, 200);
+    const admissions = f.calls.filter(row => row.kind === 'authority' && row.path === '/admission/resolve');
+    assert.equal(admissions.length, 2, 'identity-only intake and genuinely covered provider admission');
+    assert.ok(admissions[0].charged >= 32 * 1024 * 1024);
+    assert.ok(admissions[1].charged >= 64 * 1024 * 1024, 'new admission and foreground remain positively funded');
+    assert.ok(admissions[1].charged < bodyBudgetBytes, 'no third unused 32 MiB intake owner');
+    assert.equal(f.sent.length, 1);
+    assert.equal(f.calls.filter(row => row.kind === 'budget' && row.path === '/reserve').length, 1);
+    assert.equal(f.events.length, 1);
   });
 });
 

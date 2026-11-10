@@ -139,6 +139,9 @@ let ownedPreparedSelections: WeakMap<PreparedUpstream, GenerationSelectionHandle
 let ownedPreparedUploads: WeakMap<PreparedUpstream, OwnedHttpUpload> | undefined;
 let ownedProxyCount = 0;
 export function hasOwnedHttpProxyInvocation(cap: OwnedHttpRequest): boolean { return ownedProxyInvocations?.has(cap) === true; }
+export function hasBoundOwnedHttpAuthentication(cap: OwnedHttpRequest): boolean {
+  return ownedProxyInvocations?.get(cap)?.identity !== undefined;
+}
 export function matchesOwnedHttpPricingInput(cap: OwnedHttpRequest, body: Record<string, unknown>): boolean {
   const selection = ownedProxyInvocations?.get(cap)?.selection;
   return !!selection && selection.body === body && selection.capability === "llm.chat"

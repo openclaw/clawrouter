@@ -174,6 +174,14 @@ test('owned OFF revalidates while wrong-secret and malformed-JSON precedence pre
     const after = await state(f);
     assert.ok(count(after, 'authority', '/admission/credential-preflight') > count(before, 'authority', '/admission/credential-preflight'));
     assert.ok(count(after, 'credential', '/materialize') > count(before, 'credential', '/materialize'));
+    const largeBefore = await settledState(f);
+    const large = await f.request('https://fixture/v1/chat/completions', chat('off', { messages: [{ role: 'user', content: 'x'.repeat(1024 * 1024) }] }));
+    assert.equal(large.status, 200, 'OFF intake owner retires before the covered replacement reserves');
+    const largeAfter = await settledState(f);
+    const admissions = largeAfter.calls.slice(largeBefore.calls.length).filter(row => row.kind === 'authority' && row.path === '/admission/resolve');
+    assert.equal(admissions.length, 2);
+    assert.ok(admissions[0].charged >= 32 * 1024 * 1024);
+    assert.ok(admissions[1].charged >= 64 * 1024 * 1024 && admissions[1].charged < 96 * 1024 * 1024);
     const bad = chat('chat'); bad.headers.authorization = 'Bearer clawrouter-live-owned_http_chat-wrong'; bad.body = '{';
     assert.equal((await f.request('https://fixture/v1/chat/completions', bad)).status, 401);
     bad.headers.authorization = `Bearer ${ownedHttpProxyKey('chat')}`;
