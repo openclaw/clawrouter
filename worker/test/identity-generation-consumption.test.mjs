@@ -48,8 +48,11 @@ async function fixture(t, run) {
     return sql.exec(query, ...args);
   } } } }, env);
   trace.writes.length = 0; trace.reads.length = 0;
-  const fetch = async (url, init) => { trace.rpc.push(new URL(url).pathname); const response = await take(own(owner.fetch(new Request(url, { ...init, body: accessBytesResponse(init.body, '').body, duplex: 'half' }))));
-    if (url.endsWith('/grant-pools/record') || url.endsWith('/grant-pools/feedback')) { const text = await take(own(response.text())); return accessBytesResponse(text, '', { status: response.status, headers: response.headers }); }
+  const fetch = async (url, init) => {
+    const path = new URL(url).pathname, ordinary = path === '/grant-pools/record' || path === '/grant-pools/feedback';
+    trace.rpc.push(path);
+    const response = await take(own(owner.fetch(new Request(url, ordinary ? init : { ...init, body: accessBytesResponse(init.body, '').body, duplex: 'half' }))));
+    if (ordinary) { const text = await take(own(response.text())); return accessBytesResponse(text, '', { status: response.status, headers: response.headers }); }
     return response; };
   env.ACCESS_CONTROL = { idFromName(name) { assert.equal(name, 'policy-bindings'); return name; }, get() { return { fetch }; } };
   const call = async (admission, source = identitySourceBudget(), raw) => {
@@ -427,11 +430,15 @@ const { mergeGrantRuntimeState } = await import('../grant-runtime.ts');
 const { detachedGenerationRuntime, detachedGenerationFeedback, generationRuntimeWorkingBytes } = await import('../admission-cache.ts');
 test('owned runtime and pending feedback preserve ordinary merge and detach account/snapshot aliases', () => {
   const previous = { ...runtimeState('2026-01-02T00:00:00.000Z', 8), account: { tier: 'old' }, extraUsage: { used: 3 }, windowSnapshots: { generic: { observedAt: '2026-01-02T00:00:00.000Z', ids: ['generic'] } } };
-  const incoming = { ...runtimeState('2026-01-03T00:00:00.000Z', 3), account: { tier: 'new' }, extraUsage: { used: 9 }, windowSnapshots: { generic: { observedAt: '2026-01-03T00:00:00.000Z', ids: ['generic'] } } };
-  const expected = mergeGrantRuntimeState(previous, incoming);
+  const incoming = { ...runtimeState('2026-01-03T00:00:00.000Z', 3), account: { tier: 'new' }, extraUsage: JSON.parse('{"used":9,"__proto__":{"value":"fixture-data"},"unknown":{"kept":true}}'), windowSnapshots: { generic: { observedAt: '2026-01-03T00:00:00.000Z', ids: ['generic'] } } };
+  const expected = structuredClone(mergeGrantRuntimeState(previous, incoming));
   const actual = detachedGenerationRuntime(previous, incoming), pending = detachedGenerationFeedback(previous, incoming);
   assert.deepEqual(actual, expected); assert.deepEqual(pending, expected);
+  assert.equal(Object.hasOwn(actual.extraUsage, '__proto__'), true);
+  assert.deepEqual(actual.extraUsage.__proto__, { value: 'fixture-data' });
+  incoming.extraUsage.__proto__.value = 'changed';
   incoming.account.tier = 'changed'; incoming.extraUsage.used = 100; incoming.windowSnapshots.generic.ids.length = 0;
+  assert.equal(actual.extraUsage.__proto__.value, 'fixture-data'); assert.equal(pending.extraUsage.__proto__.value, 'fixture-data');
   assert.equal(actual.account.tier, 'new'); assert.equal(pending.extraUsage.used, 9); assert.deepEqual(actual.windowSnapshots.generic.ids, ['generic']);
 });
 

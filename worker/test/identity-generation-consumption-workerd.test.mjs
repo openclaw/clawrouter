@@ -48,7 +48,7 @@ import {isIdentityFailure,admitIdentity} from './worker/identity-admission.ts';
 import {identityJsonProfiles} from './worker/access-json.ts';
 import {measureGenerationGraph,freezeGenerationGraph} from './worker/identity-generations.ts';
 const digest='ab'.repeat(32),rotated='cd'.repeat(32),kid='nativegeneration';
-let cohortBlockersReleased=false,cohortReady=false;
+let cohortBlockersReleased=false,cohortReady=false,lastPrefetchDiagnostic;
 const on={maxAgeMs:60000,freshMs:10000},off={maxAgeMs:0,freshMs:0};
 const check=(ok,label)=>{if(!ok)throw Error(label);};
 const deferred=()=>{let resolve;const promise=new Promise(yes=>{resolve=yes;});void promise.then(()=>{},()=>{});return {promise,resolve};};
@@ -105,7 +105,12 @@ export class PolicyBindingIndexObject extends Base {
  }
 }
 export default {async fetch(request,env){
- const mode=new URL(request.url).pathname.slice(1),stub=env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName('policy-bindings'));
+ const mode=new URL(request.url).pathname.slice(1);
+ // Scalar-only fixture observation AFTER the originating failure and cleanup.
+ if(mode==='prefetch-diagnostic')return Response.json(lastPrefetchDiagnostic??{phase:'unavailable'});
+ const stub=env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName('policy-bindings'));
+ let phase='before-prefetch',failedPhase='none',assertion='none',failedAssertion='none',registration=-1;
+ const check=(ok,label)=>{if(!ok){assertion=label;throw Error(label);}};
  const roots=[],origins=new WeakMap();let proof,prep,borrow,auth,selected,hint,pressure,destinationBorrow,prefetchEnv,secondBorrow,secondAuth,secondSelected,hasPrimary=false,primary,result;const releases=[],deepPending=[];
  const teardownProbe=mode==='prefetch-cleanup-undefined'||mode==='prefetch-cleanup-shared',teardownReason=mode==='prefetch-cleanup-shared'?Error('fixture independent cleanup origins'):undefined;
  let teardownReached=false,nativePrefetchRows;
@@ -145,6 +150,7 @@ export default {async fetch(request,env){
   return Response.json({...answer,charged:bodyBudgetCharged()});
  }
  const baseline=bodyBudgetCharged();
+ if(prefetch)lastPrefetchDiagnostic=undefined;
  try{
   await rpc('/fixture/reset');
   await env.POLICY_KV.put('credentials/'+kid,JSON.stringify({...record(digest),...(mode==='disabled'?{enabled:false}:{})}));
@@ -212,20 +218,22 @@ export default {async fetch(request,env){
    result={mode,deepLevels:levels,feedbackRecords:observed.trace.feedbacks};
   }
   if(prefetch){
+   phase='selection';
    selected=selectCredentialGeneration(auth,env,selection);if(selected?.flush.accepted)await take(own(selected.flush.completed));check(!!selected?.selected(),'native local selection');
+   phase='hint';
    hint=retainCredentialGenerationHint(selected);await take(own(flushCredentialGenerationRuntime(auth,env)));
    const entered=deferred(),release=deferred(),cancelEntered=deferred();releases.push(()=>{release.resolve();if(teardownReached)throw teardownReason;});
    const native=env.GRANT_CREDENTIALS,rows=[];let calls=0,first=true;
    nativePrefetchRows=rows;
    const wrapped=new Proxy(native,{get(target,name){if(name==='get')return id=>{const object=target.get(id);return new Proxy(object,{get(stub,name){if(name==='fetch')return async(...args)=>{
-    calls++;const response=await stub.fetch(...args),body=response.body;check(!!body,'materialization body');
+    phase='materialize-fetch';calls++;const response=await stub.fetch(...args),body=response.body;check(!!body,'materialization body');
     const row={byob:false,read:0,eof:false,cancel:0,unlock:false,backing:0},acquire=body.getReader.bind(body);rows.push(row);
-    body.getReader=options=>{row.byob=options?.mode==='byob';const reader=acquire(options),read=reader.read.bind(reader),cancel=reader.cancel.bind(reader),unlock=reader.releaseLock.bind(reader);
-     reader.read=(...args)=>{const original=read(...args);row.read++;return original.then(async value=>{if(value.done)row.eof=true;if(value.value)row.backing=Math.max(row.backing,value.value.buffer.byteLength);if(first){first=false;entered.resolve();if(mode==='prefetch-held-read'||mode==='prefetch-joined'||teardownProbe)await release.promise;if(mode==='prefetch-held-cancel')throw undefined;}return value;});};
-     reader.cancel=(...args)=>{row.cancel++;const original=cancel(...args);void original.then(()=>{},()=>{});return (async()=>{let failed=false,reason;try{await original;}catch(error){failed=true;reason=error;}cancelEntered.resolve();if(mode==='prefetch-held-cancel')await release.promise;if(failed)throw reason;})();};
-     reader.releaseLock=()=>{unlock();row.unlock=!body.locked;if(mode==='prefetch-unlock-failure')throw Error('fixture post-native unlock failure');};return reader;};return response;
+    body.getReader=options=>{phase='reader-acquire';row.byob=options?.mode==='byob';const reader=acquire(options),read=reader.read.bind(reader),cancel=reader.cancel.bind(reader),unlock=reader.releaseLock.bind(reader);
+     reader.read=(...args)=>{phase='original-read';const original=read(...args);row.read++;return original.then(async value=>{if(value.done)row.eof=true;if(value.value)row.backing=Math.max(row.backing,value.value.buffer.byteLength);if(first){first=false;entered.resolve();if(mode==='prefetch-held-read'||mode==='prefetch-joined'||teardownProbe)await release.promise;if(mode==='prefetch-held-cancel')throw undefined;}return value;});};
+     reader.cancel=(...args)=>{phase='original-cancel';row.cancel++;const original=cancel(...args);void original.then(()=>{},()=>{});return (async()=>{let failed=false,reason;try{await original;}catch(error){failed=true;reason=error;}cancelEntered.resolve();if(mode==='prefetch-held-cancel')await release.promise;if(failed)throw reason;})();};
+     reader.releaseLock=()=>{phase='original-unlock';unlock();row.unlock=!body.locked;if(mode==='prefetch-unlock-failure')throw Error('fixture post-native unlock failure');};return reader;};return response;
    };const value=Reflect.get(stub,name,stub);return typeof value==='function'?value.bind(stub):value;}});};const value=Reflect.get(target,name,target);return typeof value==='function'?value.bind(target):value;}});
-   const prefEnv=new Proxy(env,{get(target,name,receiver){return name==='GRANT_CREDENTIALS'?wrapped:Reflect.get(target,name,receiver);}});
+   const prefEnv=new Proxy(env,{get(target,name,receiver){return name==='GRANT_CREDENTIALS'?wrapped:name==='CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS'?(mode==='prefetch-off'?'0':'60'):Reflect.get(target,name,receiver);}});
    prefetchEnv=prefEnv;const beforePrefetch=bodyBudgetCharged();
    if(mode==='prefetch-admission-pressure'){
     const vector=JSON.stringify(privateCacheCharged());pressure=ExactBodyCharge.reserve(bodyBudgetBytes-beforePrefetch-preflightPayloadBytes+1);check(!!pressure,'temporary pressure');
@@ -233,7 +241,14 @@ export default {async fetch(request,env){
     check(refused&&calls===0&&JSON.stringify(privateCacheCharged())===vector,'capacity before traversal/index/materialization');pressure.release();pressure=undefined;
     check(bodyBudgetCharged()===beforePrefetch,'temporary refusal preserves debit');
    }
-   const receipt=prefetchOwnedGrantCredentials(prepareCredentialGenerationPrefetch(hint,prefEnv));check(receipt.accepted,'accepted native prefetch');const root=own(receipt.completed);
+   phase='prefetch-prepare';const cap=prepareCredentialGenerationPrefetch(hint,prefEnv);
+   phase='prefetch-register';const receipt=prefetchOwnedGrantCredentials(cap);registration=receipt.accepted?1:0;
+   if(mode==='prefetch-off'){
+    check(!receipt.accepted&&calls===0,'OFF starts no materialization');
+    check(bodyBudgetCharged()===beforePrefetch,'OFF retires provisional funding');
+    result={mode,materializations:calls,materializationReads:0,postNativeHold:false};
+   }else{
+   check(receipt.accepted,'accepted native prefetch');const root=own(receipt.completed);
    if(teardownProbe){
     const arrival=await Promise.race([entered.promise.then(()=>true),root.outcome.then(()=>false)]);
     if(!arrival){await take(root);throw Error('native prefetch settled before cleanup hold');}
@@ -258,12 +273,12 @@ export default {async fetch(request,env){
    }
    release.resolve();let failed=false,reason;try{await take(root);}catch(error){failed=true;reason=error;}
    if(mode==='prefetch-held-cancel'||mode==='prefetch-unlock-failure')check(failed&&isIdentityFailure(reason),'injected post-native read/unlock failure');else if(failed)throw reason;
-   check(calls===1,'one original materialization');
+   phase='materialization-joined';check(calls===1,'one original materialization');
    if(mode==='prefetch-healthy'||mode==='prefetch-joined'||mode==='prefetch-admission-pressure'||mode==='prefetch-payload-pressure'||mode==='prefetch-structure-pressure'||mode==='prefetch-replace'||mode==='prefetch-expiry'){
-    check(bodyBudgetCharged()>beforePrefetch&&bodyBudgetCharged()<beforePrefetch+preflightPayloadBytes,'positive private destination after temporary retirement');
-    destinationBorrow=borrowOwnedGrantCredentials(prepareCredentialGenerationPrefetch(hint,prefEnv));check(!!destinationBorrow,'genuine private borrower');
+    phase='destination-publication';check(bodyBudgetCharged()>beforePrefetch&&bodyBudgetCharged()<beforePrefetch+preflightPayloadBytes,'positive private destination after temporary retirement');
+    phase='destination-borrow';destinationBorrow=borrowOwnedGrantCredentials(prepareCredentialGenerationPrefetch(hint,prefEnv));check(!!destinationBorrow,'genuine private borrower');
     check(Object.keys(destinationBorrow).join(',')==='dispose'&&JSON.stringify(destinationBorrow)==='{}','no public graph alias');
-    check(!prefetchOwnedGrantCredentials(prepareCredentialGenerationPrefetch(hint,prefEnv)).accepted&&calls===1,'private HIT zero RPC');
+    phase='destination-hit';check(!prefetchOwnedGrantCredentials(prepareCredentialGenerationPrefetch(hint,prefEnv)).accepted&&calls===1,'private HIT zero RPC');
     if(mode==='prefetch-admission-pressure'){
      const charged=bodyBudgetCharged(),vector=JSON.stringify(privateCacheCharged());pressure=ExactBodyCharge.reserve(bodyBudgetBytes-charged-preflightPayloadBytes-4095);check(!!pressure,'borrower metadata pressure');
      const held=bodyBudgetCharged();let refused=false;try{borrowOwnedGrantCredentials(prepareCredentialGenerationPrefetch(hint,prefEnv));}catch(error){refused=isIdentityFailure(error);}
@@ -279,12 +294,13 @@ export default {async fetch(request,env){
      else check(bodyBudgetCharged()>held,'old borrower and new destination both funded');
     }
     if(mode==='prefetch-expiry'){setHotCacheClock(()=>Date.now()+60001);releases.push(()=>setHotCacheClock());check(borrowOwnedGrantCredentials(prepareCredentialGenerationPrefetch(hint,prefEnv))===undefined,'expiry removes publication only');}
-    adoptCredentialGenerationDestination(selected,prefEnv,destinationBorrow);const consumed=destinationBorrow;destinationBorrow=undefined;
+    phase='destination-adopt';adoptCredentialGenerationDestination(selected,prefEnv,destinationBorrow);const consumed=destinationBorrow;destinationBorrow=undefined;
     let denied=false;try{consumed.dispose();}catch(error){denied=isIdentityFailure(error);}check(denied,'single-use adoption');
-    evictOwnedGrantCredentials(prepareCredentialGenerationPrefetch(hint,prefEnv));check(bodyBudgetCharged()>beforePrefetch,'selected child retains detached destination');
+    phase='destination-evict';evictOwnedGrantCredentials(prepareCredentialGenerationPrefetch(hint,prefEnv));check(bodyBudgetCharged()>beforePrefetch,'selected child retains detached destination');
    }
-   for(const row of rows)check(row.byob&&row.read>0&&row.backing<=16384&&row.unlock&&(mode==='prefetch-held-cancel'?row.cancel===1:row.eof),'original native response reader custody');
+   phase='reader-oracles';for(const row of rows)check(row.byob&&row.read>0&&row.backing<=16384&&row.unlock&&(mode==='prefetch-held-cancel'?row.cancel===1:row.eof),'original native response reader custody');
    result={mode,materializations:calls,materializationReads:rows[0].read,postNativeHold:mode==='prefetch-held-read'||mode==='prefetch-held-cancel'};
+   }
   }
   if(cohortPrepare){
    // ALL blockers originate and settle in THIS still-live native request. Other
@@ -298,21 +314,25 @@ export default {async fetch(request,env){
    cohortReady=true;
    for(const root of blockers)await take(root);
   }
-  if(borrow){borrow.dispose();borrow=undefined;}if(!cohortPrepare)evictCredentialGeneration(env,kid);
+  phase='postconditions';if(borrow){borrow.dispose();borrow=undefined;}if(!cohortPrepare)evictCredentialGeneration(env,kid);
   if(auth)check(bodyBudgetCharged()>baseline,'derived owner retains generation after eviction');
   const observed=JSON.parse(await rpc('/fixture/result'));
   check(observed.trace.intakes===(mode==='shared-runtime'?2:1),'auth is RPC free');check(observed.trace.kv.length>0,'actual cold KV');
   for(const row of observed.trace.kv)check(row.byob&&row.reads>0&&row.eof&&row.unlocked&&row.backing<=16384,'original native KV custody');
   result={...result,mode,intakes:observed.trace.intakes,nativeReads:observed.trace.kv.length};
- }catch(error){hasPrimary=true;primary=error;}
+ }catch(error){hasPrimary=true;primary=error;failedPhase=phase;failedAssertion=assertion;}
  if(cohortPrepare&&hasPrimary)cohortBlockersReleased=true;
  const joinRoots=async()=>{const errors=[];for(let i=0;i<roots.length;i++){const outcome=await roots[i].outcome;if(outcome.failed&&!roots[i].used){roots[i].used=true;errors.push(outcome.error);}}return errors;};
- const failures=await cleanupNativeInvocation({releases,
+ phase='cleanup';const failures=await cleanupNativeInvocation({releases,
   releasePressure(){const original=pressure;pressure=undefined;original?.release();},joinRoots,
   flush(){if((prefetch||deep)&&auth)own(flushCredentialGenerationRuntime(auth,env));},
   evictions:[()=>{if(teardownReached)check(nativePrefetchRows.every(row=>row.eof&&row.unlock),'original joins BEFORE eviction cap');if(hint&&prefetchEnv)evictOwnedGrantCredentials(prepareCredentialGenerationPrefetch(hint,prefetchEnv));},()=>{if(!cohortPrepare||hasPrimary)evictCredentialGeneration(env,kid);},()=>evictGrantCredentials(key)],
   disposals:[...deepPending.map(cap=>()=>cap.dispose()),()=>destinationBorrow?.dispose(),()=>secondSelected?.dispose(),()=>secondAuth?.dispose(),()=>secondBorrow?.dispose(),()=>hint?.dispose(),()=>{if(selected&&!selected.flush.accepted)selected.flush.pending?.dispose();},()=>selected?.dispose(),()=>auth?.dispose(),()=>borrow?.dispose(),()=>prep?.dispose(),()=>{if(proof)releaseCredentialPreflight(proof);}]
  });
+ if(prefetch)try{
+  const vector=privateCacheCharged();
+  lastPrefetchDiagnostic={phase:hasPrimary?failedPhase:phase,assertion:hasPrimary?failedAssertion:assertion,hasPrimary,primaryIsUndefined:hasPrimary&&primary===undefined,category:hasPrimary?(primary===undefined?'undefined':isIdentityFailure(primary)?'identity':'other'):'none',cleanupFailures:failures.length,registration,charged:bodyBudgetCharged(),cachePayload:vector.payloadBytes,cacheStructure:vector.structure};
+ }catch{}
  if(teardownProbe){
   const charged=bodyBudgetCharged();
   validateNativeTeardown({teardownReached,hasPrimary,primary,teardownReason,failures,nativePrefetchRows,charged,baseline});
@@ -426,15 +446,34 @@ test('inactive owned generation consumption uses actual native KV/SQLite, prefet
   try {
     directory = await mkdtemp(join(tmpdir(), 'identity-generations-'));
     runtime = await take(own(startWorkerdFixture(directory, router, upstream, { preventEviction: true })));
-    for (const mode of ['owned-auth', 'coverage-denied', 'disabled', 'pressure', 'origin-select', 'shared-runtime', 'deep-feedback', 'prefetch-healthy', 'prefetch-joined', 'prefetch-admission-pressure', 'prefetch-payload-pressure', 'prefetch-structure-pressure', 'prefetch-replace', 'prefetch-expiry', 'prefetch-held-read', 'prefetch-held-cancel', 'prefetch-unlock-failure', 'prefetch-cleanup-undefined', 'prefetch-cleanup-shared']) {
+    for (const mode of ['owned-auth', 'coverage-denied', 'disabled', 'pressure', 'origin-select', 'shared-runtime', 'deep-feedback', 'prefetch-off', 'prefetch-healthy', 'prefetch-joined', 'prefetch-admission-pressure', 'prefetch-payload-pressure', 'prefetch-structure-pressure', 'prefetch-replace', 'prefetch-expiry', 'prefetch-held-read', 'prefetch-held-cancel', 'prefetch-unlock-failure', 'prefetch-cleanup-undefined', 'prefetch-cleanup-shared']) {
       const response = await take(dispatch('https://fixture/' + mode));
-      const body = await take(readBody(response)); assert.equal(response.status, 200, mode);
+      const body = await take(readBody(response));
+      let diagnostic = '', diagnosticFailed = false, diagnosticFailure;
+      if (response.status !== 200 && mode.startsWith('prefetch-')) {
+        try {
+          const report = await take(dispatch('https://fixture/prefetch-diagnostic'));
+          const value = JSON.parse(await take(readBody(report))); assert.equal(report.status, 200, 'scalar diagnostic response');
+          // Select only allowlisted enums and numeric/boolean scalars. Never
+          // serialize an exception, arbitrary message or the failed body.
+          const phase = ['unavailable', 'before-prefetch', 'selection', 'hint', 'prefetch-prepare', 'prefetch-register', 'materialize-fetch', 'reader-acquire', 'original-read', 'original-cancel', 'original-unlock', 'materialization-joined', 'destination-publication', 'destination-borrow', 'destination-hit', 'destination-adopt', 'destination-evict', 'reader-oracles', 'postconditions', 'cleanup'].includes(value.phase) ? value.phase : 'unavailable';
+          const label = ['none', 'native local selection', 'accepted native prefetch', 'OFF starts no materialization', 'OFF retires provisional funding', 'materialization body', 'one original materialization', 'positive private destination after temporary retirement', 'genuine private borrower', 'no public graph alias', 'private HIT zero RPC', 'single-use adoption', 'selected child retains detached destination', 'original native response reader custody'].includes(value.assertion) ? value.assertion : 'other-fixed-assertion';
+          const count = value => Number.isSafeInteger(value) && value >= 0 ? value : -1;
+          diagnostic = JSON.stringify({ phase, assertion: label, hasPrimary: value.hasPrimary === true, primaryIsUndefined: value.primaryIsUndefined === true, category: ['none', 'undefined', 'identity', 'other'].includes(value.category) ? value.category : 'unavailable', cleanupFailures: count(value.cleanupFailures), registration: count(value.registration), charged: count(value.charged), cachePayload: count(value.cachePayload), cacheStructure: count(value.cacheStructure) });
+          const log = typeof t.log === 'function' ? t.log : t.diagnostic;
+          try { if (typeof log === 'function') Reflect.apply(log, t, ['owned-prefetch-diagnostic ' + diagnostic]); } catch {}
+        } catch (error) { diagnosticFailed = true; diagnosticFailure = error; }
+      }
+      try { assert.equal(response.status, 200, mode + (diagnostic ? '; ' + diagnostic : '')); }
+      catch (error) { if (diagnosticFailed) throw new AggregateError([error, diagnosticFailure], 'native assertion and diagnostic outcomes'); throw error; }
       const result = JSON.parse(body);
       const log = typeof t.log === 'function' ? t.log : t.diagnostic;
       try { if (typeof log === 'function') Reflect.apply(log, t, [JSON.stringify({ fixture: 'identity-generations', case: mode, status: response.status, nativeReads: result.nativeReads ?? 0, intakes: result.intakes ?? 0 })]); } catch {}
       if (mode === 'deep-feedback') { assert.equal(result.deepLevels, 15); assert.equal(result.feedbackRecords, 4); }
       if (mode.startsWith('prefetch-cleanup-')) { assert.equal(result.charged, 0); assert.equal(result.cleanupFailures, 2); assert.equal(result.originalJoined, true); assert.equal(result.primaryIsUndefined, mode.endsWith('undefined')); continue; }
-      assert.equal(result.charged, 0); assert.ok(result.nativeReads > 0); assert.equal(result.intakes, mode === 'shared-runtime' ? 2 : 1); if (mode.startsWith('prefetch-')) { assert.equal(result.materializations, ['prefetch-payload-pressure', 'prefetch-structure-pressure', 'prefetch-replace'].includes(mode) ? 2 : 1); assert.ok(result.materializationReads > 0); }
+      assert.equal(result.charged, 0); assert.ok(result.nativeReads > 0); assert.equal(result.intakes, mode === 'shared-runtime' ? 2 : 1);
+      if (mode === 'prefetch-off') { assert.equal(result.materializations, 0); assert.equal(result.materializationReads, 0); }
+      else if (mode.startsWith('prefetch-')) { assert.equal(result.materializations, ['prefetch-payload-pressure', 'prefetch-structure-pressure', 'prefetch-replace'].includes(mode) ? 2 : 1); assert.ok(result.materializationReads > 0); }
     }
     let cohortOpen = true;
     const releaseCohort = async () => { if (!cohortOpen) return; cohortOpen = false; const response = await take(dispatch('https://fixture/cohort-release')); await take(readBody(response)); assert.equal(response.status, 200); };

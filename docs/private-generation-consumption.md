@@ -425,7 +425,7 @@ requests, response bodies and release-first fixture control are joined.
 
 ## Authored qualification
 
-The source declares 48 focused Node cases, 19 named native modes plus one
+The source declares 47 focused Node cases, 20 named native modes plus one
 cross-request cohort scenario, and eight host late-body/cleanup consumer cases. These are
 authored counts, not executed results.
 
