@@ -130,9 +130,7 @@ test('both controls and the pair account for real roles without persisting conte
     } });
     assert.equal(state.complete, true);
     assert.deepEqual(state.records.map(row => row.score), [1, 1, 1]);
-    assert.deepEqual(state.calls.map(call => call.model), policy === 'matched-handoff'
-      ? [config.cheap, config.strong, config.strong, config.strong, config.cheap]
-      : [config.cheap, config.strong, config.strong, config.cheap]);
+    assert.deepEqual(state.calls.map(call => call.model), [config.cheap, config.strong, config.strong, config.cheap]);
     assert.equal(state.spentOrReservedMicros, config.priorCostMicros + state.calls.reduce((sum, call) => sum + call.costMicros, 0));
     assert.ok(seen.filter(call => call.model === 'gpt-6-luna').every(call => call.reasoning_effort === 'none'));
     const saved = await readFile(join(options.out, 'pair.json'), 'utf8');
@@ -340,9 +338,7 @@ test('contract policy meters the test author and worker inside the same trial', 
         return { ...repaired(), contractQualified: true, contractPassed: true };
       } });
     assert.deepEqual(state.strategies, ['cheap', 'strong', 'contract']);
-    assert.deepEqual(state.calls.map(call => call.model), policy === 'matched-handoff'
-      ? [config.cheap, config.strong, config.strong, config.strong, config.cheap]
-      : [config.cheap, config.strong, config.strong, config.cheap]);
+    assert.deepEqual(state.calls.map(call => call.model), [config.cheap, config.strong, config.strong, config.cheap]);
     assert.equal(state.records[2].calls, 2);
     assert.equal(state.records[2].contractQualified, true);
     assert.ok(state.records.every(row => row.score === 1));
@@ -397,9 +393,7 @@ test('private contract policy preserves fixed controls and mixed role accounting
         return repaired();
       } });
     assert.deepEqual(state.strategies, ['cheap', 'strong', 'contract-private']);
-    assert.deepEqual(state.calls.map(call => call.model), policy === 'matched-handoff'
-      ? [config.cheap, config.strong, config.strong, config.strong, config.cheap]
-      : [config.cheap, config.strong, config.strong, config.cheap]);
+    assert.deepEqual(state.calls.map(call => call.model), [config.cheap, config.strong, config.strong, config.cheap]);
     assert.equal(state.records[2].calls, 2);
     assert.equal(state.spentOrReservedMicros,
       config.priorCostMicros + state.calls.reduce((sum, call) => sum + call.costMicros, 0));
