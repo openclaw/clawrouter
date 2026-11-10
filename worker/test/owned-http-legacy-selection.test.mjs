@@ -22,8 +22,8 @@ const deferred = () => { let resolve, reject; const promise = new Promise((yes, 
 async function fixture(t, run) {
   const resources = [];
   const { sql, transactionSync } = sqliteFixture({ after: close => resources.push(close) }), baseline = bodyBudgetCharged();
-  const roots = [], origins = new WeakMap(), releases = [], requests = [], stored = new Map(), trace = { rpc: [], kv: [] };
-  let cleanupPromise, finished = false, hasPrimary = false, primary, kvOverride, selectionReply;
+  const roots = [], origins = new WeakMap(), releases = [], requests = [], stored = new Map(), trace = { rpc: [], kv: [], admissions: [] };
+  let cleanupPromise, finished = false, hasPrimary = false, primary, kvOverride, selectionReply, admissionReply;
   const own = promise => {
     if (origins.has(promise)) return origins.get(promise);
     const root = { taken: false, outcome: promise.then(value => ({ failed: false, value }), error => ({ failed: true, error })) };
@@ -48,6 +48,11 @@ async function fixture(t, run) {
     // The synthetic owner reply is still OUR original body. Its one consumption
     // is joined even when a deliberate post-commit transport failure is injected.
     const text = await take(own(response.text()));
+    if (path === '/admission/resolve' && response.ok) {
+      const result = JSON.parse(text).admission;
+      trace.admissions.push({ selection: Object.hasOwn(result, 'selection'), snapshots: Object.hasOwn(result, 'snapshots') });
+      if (admissionReply) return admissionReply(text);
+    }
     if (path === '/grant-pools/select' && selectionReply) return selectionReply(text);
     return accessBytesResponse(text, '', { status: response.status, headers: response.headers });
   } }; } };
@@ -68,16 +73,21 @@ async function fixture(t, run) {
     return failures;
   })();
   t.after(async () => { if (!finished) { const failures = await cleanup(); if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, 'legacy fixture teardown'); } });
-  const open = async (signal, snapshotMode) => {
+  const open = async (signal, snapshotMode, deniedStatus) => {
     const request = new Request('https://router.example/v1/chat/completions', { signal }), cap = beginOwnedHttpRequest(request, env);
     requests.push({ cap, request }); const required = selection();
     const error = await take(own(resolveOwnedHttpAuthentication(cap, request, env, kid, digest, coverage(required, snapshotMode))));
-    if (error) { await take(own(error.text())); assert.fail(`authentication status ${error.status}`); }
+    if (error) {
+      const text = await take(own(error.text()));
+      if (deniedStatus !== undefined) { assert.equal(error.status, deniedStatus); return { request, cap, required, denied: JSON.parse(text) }; }
+      assert.fail(`authentication status ${error.status}`);
+    }
+    assert.equal(deniedStatus, undefined, 'expected authentication denial');
     return { request, cap, required };
   };
   const count = () => [...sql.exec('SELECT COALESCE(SUM(selected_count),0) AS n FROM upstream_grant_selection')][0].n;
   try { await run({ env, owner, sql, stored, trace, open, count, own, take, finish, releases,
-    overrideKv(value) { kvOverride = value; }, selectionReply(value) { selectionReply = value; } }); }
+    overrideKv(value) { kvOverride = value; }, selectionReply(value) { selectionReply = value; }, admissionReply(value) { admissionReply = value; } }); }
   catch (error) { hasPrimary = true; primary = error; }
   const failures = await cleanup(); finished = true;
   if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, 'legacy fixture outcomes');
@@ -106,6 +116,65 @@ test('nonrecording legacy choice returns first active candidate without an SQL s
   });
 });
 
+test('successful final unselected-projection omission acquires current KV once and counts exactly one new choice', async t => {
+  await fixture(t, async f => {
+    f.stored.delete(key); // Do not contaminate this projected pool with the legacy default.
+    f.stored.set('connections/openai', { providerId: 'openai', enabled: true });
+    const a = `oauth/${policyId}/a`, b = `oauth/${policyId}/b`;
+    const grant = priority => ({ provider: 'openai', kind: 'api_key', enabled: true, priority,
+      credentialStore: 'durable_object', credentialStatus: 'active', credentialGeneration: 1,
+      credentialLineage: 'fixture-generation', hasCredential: true, unknown: { preserved: ['current', null, 7] } });
+    for (const [name, token, value] of [[a, 'a', grant(2)], [b, 'b', grant(5)]]) {
+      f.stored.set(name, value);
+      f.sql.exec('INSERT INTO upstream_grant_pool_versions(grant_key,generation,revision) VALUES(?,?,?)', name, 1, 7);
+      f.sql.exec('INSERT INTO upstream_grant_pool_members(scope,scope_id,provider_id,token_ref,status) VALUES(?,?,?,?,?)', 'policies', policyId, 'openai', token, 'active');
+      f.sql.exec('INSERT INTO upstream_grant_projections(grant_key,projection_json,legacy) VALUES(?,?,0)', name, JSON.stringify(value));
+    }
+    const admitted = f.owner.admitGrantAttachment({ key: b, generation: 1, revision: 7, provider: 'openai', status: 'active' });
+    assert.equal(admitted.revision, 8);
+    let observed = 0;
+    const originalStore = f.owner.admissionStore;
+    t.mock.method(f.owner, 'admissionStore', function (...args) {
+      const store = Reflect.apply(originalStore, this, args), finish = store.finishSelection;
+      store.finishSelection = (...selectionArgs) => {
+        const original = Reflect.apply(finish, store, selectionArgs);
+        f.own(original.then(prior => {
+          observed++; assert.equal(prior.selection.selected.key, a);
+          const current = grant(0);
+          const published = f.owner.publishGrantAttachment({ key: b, generation: 1, revision: 8, admissionRevision: 8,
+            provider: 'openai', status: 'active', projection: current });
+          assert.equal(published.revision, 8); assert.equal(published.pending, false);
+          f.stored.set(b, current);
+        }, () => undefined));
+        return original;
+      };
+      return store;
+    });
+    const current = await f.open();
+    assert.equal(observed, 1); assert.deepEqual(f.trace.admissions, [{ selection: false, snapshots: false }]);
+    assert.equal(f.count(), 0, 'final authority guard removed the first planned selection');
+    const picked = await f.take(f.own(selectOwnedHttpProvider(current.cap, current.request, f.env, current.required)));
+    assert.equal(picked.matchesKey(b), true, 'fresh candidate priority, not the discarded choice');
+    assert.equal(f.count(), 1); assert.equal(f.trace.rpc.filter(path => path === '/grant-pools/select').length, 1);
+    assert.equal(f.trace.rpc.includes('/grant-pools/record'), false);
+    assert.equal([...f.sql.exec('SELECT count(*) n FROM proxy_credentials')][0].n, 1);
+    assert.equal([...f.sql.exec('SELECT count(*) n FROM access_policies')][0].n, 1, 'seed effects were never claimed rolled back');
+  });
+});
+
+test('complete empty projected coverage is authoritative and never reacquires KV or counts a fallback', async t => {
+  await fixture(t, async f => {
+    f.stored.delete(key);
+    const current = await f.open();
+    assert.deepEqual(f.trace.admissions, [{ selection: true, snapshots: true }]);
+    const reads = f.trace.kv.length;
+    const picked = await f.take(f.own(selectOwnedHttpProvider(current.cap, current.request, f.env, current.required)));
+    assert.equal(picked.selected(), false); assert.equal(picked.hasConfiguredGrant(), false);
+    assert.equal(f.trace.kv.length, reads); assert.equal(f.count(), 0);
+    assert.equal(f.trace.rpc.includes('/grant-pools/select'), false);
+  });
+});
+
 test('lost selection reply remains uncertain and is never replayed', async t => {
   await fixture(t, async f => {
     const current = await f.open(); f.selectionReply(() => { throw undefined; });
@@ -114,6 +183,42 @@ test('lost selection reply remains uncertain and is never replayed', async t => 
     assert.equal(f.trace.rpc.includes('/grant-pools/record'), false);
   });
 });
+
+test('lost full admission reply cannot be reclassified as successful missing coverage', async t => {
+  await fixture(t, async f => {
+    f.admissionReply(() => { throw undefined; });
+    await assert.rejects(f.open(), isIdentityFailure);
+    assert.equal(f.trace.rpc.filter(path => path === '/admission/resolve').length, 1);
+    assert.equal(f.trace.rpc.includes('/grant-pools/resolve'), false);
+    assert.equal(f.trace.rpc.includes('/grant-pools/select'), false); assert.equal(f.count(), 0);
+  });
+});
+
+test('revoked current credential preserves authentication denial before coverage acquisition', async t => {
+  await fixture(t, async f => {
+    f.stored.get(`credentials/${kid}`).enabled = false;
+    const denied = await f.open(undefined, undefined, 403);
+    assert.equal(denied.denied.error.code, 'proxy_key_revoked');
+    assert.equal(f.trace.rpc.includes('/grant-pools/select'), false); assert.equal(f.count(), 0);
+  });
+});
+
+for (const condition of ['provider-policy', 'disabled-connection', 'incompatible-facet']) {
+  test(`${condition} is not permission for missing-coverage acquisition`, async t => {
+    await fixture(t, async f => {
+      if (condition === 'provider-policy') f.stored.get(`policies/${policyId}`).providers = ['anthropic'];
+      if (condition === 'disabled-connection') f.stored.set('connections/openai', { providerId: 'openai', enabled: false });
+      const current = await f.open(), before = f.trace.kv.length;
+      const required = condition === 'incompatible-facet' ? { ...current.required, endpointId: 'not-the-covered-endpoint' } : current.required;
+      await assert.rejects(f.take(f.own(selectOwnedHttpProvider(current.cap, current.request, f.env, required))), error => {
+        if (condition === 'incompatible-facet') return isIdentityFailure(error);
+        return error.code === (condition === 'provider-policy' ? 'provider_not_allowed' : 'provider_disabled')
+          && error.status === (condition === 'provider-policy' ? 403 : 503);
+      });
+      assert.equal(f.trace.kv.length, before); assert.equal(f.trace.rpc.includes('/grant-pools/select'), false); assert.equal(f.count(), 0);
+    });
+  });
+}
 
 test('configured but unusable legacy credentials cannot become environment authentication', async t => {
   await fixture(t, async f => {

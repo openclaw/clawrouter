@@ -40,14 +40,20 @@ and delivery still requires an actual prospective inventory under the existing
 ceilings. This checkpoint grants no new arena, control slots, physical-heap
 bound, or default-route coverage.
 
-The full-admission bridge intentionally omits snapshots when a candidate is a
-legacy KV grant. The private provider command classifies that selection-coverage
-miss only after genuine authentication, requested-facet, policy, connection and
-unavailability checks. It owns ordered default-key and KV reads, reuses the pure
+The full-admission bridge can omit selection coverage for legacy completeness
+or a final stale-plan drop. The private provider command permits reacquisition
+only after a successful reply has BOTH selection and snapshots absent, and after
+genuine current authentication, requested-facet, policy, model, connection and
+unavailability checks. It does not infer the omission's cause. It owns ordered
+default-key and KV reads, reuses the pure
 candidate planner, and reserves result storage before one `/grant-pools/select`.
 Nonrecording selection makes no counting RPC; a lost selection reply is uncertain
 and is not replayed. It never writes a second `/grant-pools/record` for that choice.
-The immutable generation and its missing snapshot are unchanged.
+The immutable generation is unchanged. A complete empty/unusable selection and
+its requested snapshot are authoritative; they do not trigger fallback. A lost
+admission reply or failed read/cleanup is terminal, never a successful omission.
+The no-prior-selection proof covers selection journal entries only: earlier
+credential/policy seeds and projection publication can still have committed.
 
 The Worker candidate phase keeps its own cumulative seven-counter allowance
 across optional pool resolution and every original KV record. It does not reset
@@ -130,8 +136,9 @@ capabilities independently retain their parent generation. This avoids starting
 feedback while full HTTP consumer graphs are still retained; it is not a claim
 that the complete simultaneous CONTROL inventory is closed.
 
-One source ambiguity remains open: the authority's final dependency check can
-remove selection and snapshots, producing the same missing-snapshot shape as
-legacy completeness fallback. The existing reply has no scalar reason. The
-owned caller must distinguish those paths before claiming legacy coverage;
-authority source remains unchanged pending a scoped protocol disposition.
+The authority's final dependency check can remove selection and snapshots,
+producing the same both-absent shape as legacy completeness fallback. The owned
+command deliberately relies on their shared successful-omission contract, not
+an invented reason marker. It uses final returned policy/tenant/pool fields and
+never replays full admission to classify the omission. Authority source remains
+unchanged. Whole-vertical numerical funding and CONTROL closure remain open.

@@ -18,15 +18,44 @@ const kid='native-http-legacy',policyId='native-http-policy',digest='ab'.repeat(
 const provider=snapshot.providers.find(value=>value.id==='openai'),endpoint=provider.endpoints.find(value=>value.request_format==='openai.chat_completions');
 const tokenRef=provider.auth.schemes.find(value=>value.type==='oauth')?.tokenRef??provider.id;
 const key='oauth/'+policyId+'/'+tokenRef,tenant='oauth/tenants/default/'+tokenRef;
+const staleA='oauth/'+policyId+'/a',staleB='oauth/'+policyId+'/b';
 const modern=()=>({provider:provider.id,kind:'api_key',enabled:true,credentialStore:'durable_object',credentialStatus:'active',credentialGeneration:1,credentialLineage:'fixture-native-tenant',hasCredential:true,unknown:{retained:['native',null,11]}});
 const check=(value,label)=>{if(!value)throw Error(label);};
 export class PolicyBindingIndexObject extends Base {
- constructor(state,env){super(state,env);this.fixtureSql=state.storage.sql;}
+ constructor(state,env){super(state,env);this.fixtureSql=state.storage.sql;this.fixtureRoots=[];
+  const originalStore=this.admissionStore,originalFinal=this.finalPrivateAdmission;
+  this.admissionStore=(...args)=>{
+   const store=Reflect.apply(originalStore,this,args),finish=store.finishSelection;
+   if(this.fixtureMode==='stale')store.finishSelection=(...items)=>{
+    const original=Reflect.apply(finish,store,items);
+    const observed=original.then(prior=>{
+     this.fixturePriorA=prior.selection?.selected?.key===staleA;
+     const published=this.publishGrantAttachment({key:staleB,generation:1,revision:8,admissionRevision:8,provider:'openai',status:'active',projection:{...modern(),priority:0}});
+     check(published.revision===8&&!published.pending,'same-generation publication');
+    });
+    this.fixtureRoots.push(observed.then(()=>({failed:false}),error=>({failed:true,error})));return original;
+   };
+   return store;
+  };
+  this.finalPrivateAdmission=(...args)=>{
+   const value=Reflect.apply(originalFinal,this,args);
+   this.fixtureOmitted=!Object.hasOwn(value,'selection')&&!Object.hasOwn(value,'snapshots');return value;
+  };
+ }
  async fetch(request){
   const path=new URL(request.url).pathname;
   if(path==='/fixture/reset'){
-   for(const table of ['proxy_credentials','access_policies','policy_binding_meta','upstream_grant_pool_versions','upstream_grant_pool_members','upstream_grant_projections','upstream_grant_selection','upstream_grant_runtime'])this.fixtureSql.exec('DELETE FROM '+table);
+   for(const table of ['proxy_credentials','access_policies','policy_binding_meta','upstream_grant_pool_versions','upstream_grant_pool_members','upstream_grant_projections','upstream_grant_selection','upstream_grant_pool_cursors','upstream_grant_runtime'])this.fixtureSql.exec('DELETE FROM '+table);
    const mode=new URL(request.url).searchParams.get('mode');
+   this.fixtureMode=mode;this.fixturePriorA=false;this.fixtureOmitted=false;
+   if(mode==='stale'){
+    for(const [name,token,priority]of[[staleA,'a',2],[staleB,'b',5]]){
+     this.fixtureSql.exec('INSERT INTO upstream_grant_pool_versions(grant_key,generation,revision) VALUES(?,?,?)',name,1,7);
+     this.fixtureSql.exec('INSERT INTO upstream_grant_pool_members(scope,scope_id,provider_id,token_ref,status) VALUES(?,?,?,?,?)','policies',policyId,'openai',token,'active');
+     this.fixtureSql.exec('INSERT INTO upstream_grant_projections(grant_key,projection_json,legacy) VALUES(?,?,0)',name,JSON.stringify({...modern(),priority}));
+    }
+    check(this.admitGrantAttachment({key:staleB,generation:1,revision:7,provider:'openai',status:'active'}).revision===8,'native publication admission');
+   }
    if(mode==='mixed'||mode==='covered-nonrecord'){
     const selected=mode==='mixed'?tenant:key;
     this.fixtureSql.exec('INSERT INTO upstream_grant_pool_versions(grant_key,generation,revision) VALUES(?,?,?)',selected,1,7);
@@ -34,8 +63,12 @@ export class PolicyBindingIndexObject extends Base {
    }
    return new Response('reset');
   }
-  if(path==='/fixture/state')return Response.json({count:[...this.fixtureSql.exec('SELECT COALESCE(SUM(selected_count),0) AS n FROM upstream_grant_selection')][0].n,runtimes:[...this.fixtureSql.exec('SELECT grant_key FROM upstream_grant_runtime')].length});
-  return super.fetch(request);
+  if(path==='/fixture/state')return Response.json({count:[...this.fixtureSql.exec('SELECT COALESCE(SUM(selected_count),0) AS n FROM upstream_grant_selection')][0].n,runtimes:[...this.fixtureSql.exec('SELECT grant_key FROM upstream_grant_runtime')].length,priorA:this.fixturePriorA,omitted:this.fixtureOmitted});
+  const response=await super.fetch(request),failures=[];
+  for(let i=0;i<this.fixtureRoots.length;i++){const outcome=await this.fixtureRoots[i];if(outcome.failed)failures.push(outcome.error);}
+  this.fixtureRoots.length=0;
+  if(failures.length){try{await response.body?.cancel();}catch(error){failures.push(error);}throw new AggregateError(failures,'native publication fixture roots');}
+  return response;
  }
 }
 export default {async fetch(request,env){
@@ -70,22 +103,29 @@ export default {async fetch(request,env){
   return failures;
  })();
  try{
-  check(['record','nonrecord','mixed','covered-nonrecord','runtime'].includes(mode),'fixed mode');
+  check(['record','nonrecord','mixed','covered-nonrecord','runtime','stale','empty'].includes(mode),'fixed mode');
   await metadata('/fixture/reset?mode='+mode);
   await take(own(env.POLICY_KV.put('credentials/'+kid,JSON.stringify({enabled:true,secretSha256:digest,policyId,policyGeneration:'legacy',principalId:null}))));
   await take(own(env.POLICY_KV.put('policies/'+policyId,JSON.stringify({enabled:true,generation:'legacy',providers:['openai'],tenantId:'default',grantRouting:{strategy:'round_robin',stickiness:'none',environmentFallback:false}}))));
-  await take(own(env.POLICY_KV.put(key,JSON.stringify(mode==='covered-nonrecord'?modern():{provider:'openai',kind:'api_key',credential:'fixture-native-legacy',enabled:true,updatedAt:revision,unknown:{retained:['complete',null,7]}}))));
+  if(mode==='stale'||mode==='empty')await take(own(env.POLICY_KV.delete(key)));
+  else await take(own(env.POLICY_KV.put(key,JSON.stringify(mode==='covered-nonrecord'?modern():{provider:'openai',kind:'api_key',credential:'fixture-native-legacy',enabled:true,updatedAt:revision,unknown:{retained:['complete',null,7]}}))));
+  for(const [name,priority]of[[staleA,2],[staleB,0]]){
+   if(mode==='stale')await take(own(env.POLICY_KV.put(name,JSON.stringify({...modern(),priority}))));
+   else await take(own(env.POLICY_KV.delete(name)));
+  }
   if(mode==='mixed')await take(own(env.POLICY_KV.put(tenant,JSON.stringify(modern()))));else await take(own(env.POLICY_KV.delete(tenant)));
   const required={providerId:provider.id,endpointId:endpoint.id,mode:'http',capability:'llm.chat',model:'gpt-fixture',catalogModelId:null};
   const open=async()=>{const cap=beginOwnedHttpRequest(request,scoped),item={cap};owners.push(item);
    const response=await take(own(resolveOwnedHttpAuthentication(cap,request,scoped,kid,digest,{providers:[{id:provider.id,tokenRef}],allConnections:false,snapshot:mode==='covered-nonrecord'?'only':'select',selection:required})));
    if(response){await take(body(response));check(false,'native authentication failed');}return item;};
   const first=await open(),before=calls.length;
+  if(mode==='stale'){const state=JSON.parse(await metadata('/fixture/state'));check(state.priorA&&state.omitted&&state.count===0,'native final stale selection drop');}
   const chosen=await take(own(selectOwnedHttpProvider(first.cap,request,scoped,required,mode!=='nonrecord'&&mode!=='covered-nonrecord')));
-  check(chosen.selected()&&chosen.matchesKey(key),'first ordered key');
+  check(mode==='empty'?!chosen.selected()&&!chosen.hasConfiguredGrant():chosen.selected()&&chosen.matchesKey(mode==='stale'?staleB:key),'current ordered choice');
   const after=JSON.parse(await metadata('/fixture/state'));
-  check(after.count===(mode==='nonrecord'||mode==='covered-nonrecord'?0:1),'exact initial count');
-  if(mode==='covered-nonrecord')check(calls.length===before,'covered zero RPC');
+  check(after.count===(mode==='nonrecord'||mode==='covered-nonrecord'||mode==='empty'?0:1),'exact initial count');
+  if(mode==='covered-nonrecord'||mode==='empty')check(calls.length===before,'covered zero RPC');
+  if(mode==='stale')check(calls.filter(path=>path==='/grant-pools/select').length===1,'one post-omission selection');
   if(mode==='mixed'){
    const next=await take(own(selectOwnedHttpProvider(first.cap,request,scoped,required)));
    check(next.matchesKey(tenant),'second mixed key');check(JSON.parse(await metadata('/fixture/state')).count===2,'second count');
@@ -97,7 +137,7 @@ export default {async fetch(request,env){
    check(JSON.parse(await metadata('/fixture/state')).count===1,'no blocked count');
   }
   check(!calls.includes('/grant-pools/record'),'no duplicate record');
-  if(mode!=='covered-nonrecord')check(rows.some(row=>row.kind==='selected'&&row.byob&&row.reads>0&&row.eof&&row.unlock&&row.backing<=16384),'original worker KV BYOB EOF unlock');
+  if(mode!=='covered-nonrecord'&&mode!=='empty')check(rows.some(row=>(mode==='stale'?row.kind==='other':row.kind==='selected')&&row.byob&&row.reads>0&&row.eof&&row.unlock&&row.backing<=16384),'original worker KV BYOB EOF unlock');
  }catch(error){hasPrimary=true;primary=error;}
  const failures=await cleanup();finished=true;
  if(failures.length)throw new AggregateError(hasPrimary?[primary,...failures]:failures,'native legacy outcomes');
@@ -125,7 +165,7 @@ test('owned legacy selection uses actual native KV bodies and SQLite counters', 
   try {
     directory = await mkdtemp(join(tmpdir(), 'owned-http-legacy-'));
     runtime = await take(own(startWorkerdFixture(directory, router, upstream, { preventEviction: true })));
-    for (const mode of ['record', 'nonrecord', 'mixed', 'covered-nonrecord', 'runtime']) {
+    for (const mode of ['record', 'nonrecord', 'mixed', 'covered-nonrecord', 'runtime', 'stale', 'empty']) {
       const response = await take(dispatch('https://fixture/' + mode)), text = await take(body(response));
       assert.equal(response.status, 200, 'native legacy mode ' + mode);
       const report = JSON.parse(text); assert.equal(report.ok, true); assert.equal(report.charged, report.baseline);

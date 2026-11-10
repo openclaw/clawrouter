@@ -44,7 +44,8 @@ interface HttpIdentityOwner {
   digest: string;
   sessionHash?: string;
   coverageMiss: boolean;
-  legacySelections: number;
+  coverageSelections: number;
+  refreshed: boolean;
 }
 let httpIdentities: WeakMap<OwnedHttpRequest, HttpIdentityOwner> | undefined;
 let httpIdentityCount = 0;
@@ -58,7 +59,7 @@ export async function resolveOwnedHttpAuthentication(cap: OwnedHttpRequest, requ
   growOwnedHttpRequest(cap, 8192 + 2 * (kid.length + digest.length));
   let owner = httpIdentities?.get(cap);
   if (!owner) {
-    owner = { retained: [], selections: [], credentials: [], pending: [], kid, digest, coverageMiss: false, legacySelections: 0 };
+    owner = { retained: [], selections: [], credentials: [], pending: [], kid, digest, coverageMiss: false, coverageSelections: 0, refreshed: false };
     (httpIdentities ??= new WeakMap()).set(cap, owner); httpIdentityCount++;
   } else if (owner.kid !== kid || owner.digest !== digest) throw identityFailure("protocol");
   const current = owner.current && authenticationOwner(owner.current);
@@ -104,11 +105,13 @@ export async function resolveOwnedHttpAuthentication(cap: OwnedHttpRequest, requ
       preparation = undefined;
       borrow = await original;
     }
-    next = authenticateCredentialGeneration(borrow, env, admittedCoverage);
+    const refreshFrom = freshness === "authoritative" && current && required.selection ? current : undefined;
+    next = createGenerationAuthentication(borrow, env, admittedCoverage, refreshFrom);
     response = ownedHttpAuthenticationResponse(authenticationOwner(next));
     if (!response && required.selection && hasOwnedHttpProxyInvocation(cap)) reserveOwnedHttpForeground(cap, request, env);
     const previous = owner.current;
     owner.current = next; owner.retained.push(next); next = undefined;
+    owner.refreshed = refreshFrom !== undefined;
     owner.sessionHash = required.selection?.sessionHash;
     // Early intake authentication has no selected children. Retire it after the
     // later, genuinely covered authentication has taken custody, not beforehand.
@@ -173,6 +176,8 @@ export function selectOwnedHttpIdentity(cap: OwnedHttpRequest, request: Request,
   if (!http || !auth || auth.slot.owner.binding !== env.ACCESS_CONTROL || !auth.identity) throw identityFailure("protocol");
   if (auth.failure) throw auth.failure;
   const admitted = auth.slot.owner.admission!, coverage = auth.slot.coverage!.value;
+  const currentFailure = ownedGenerationCredentialFailure(admitted, auth.slot.owner.digest, http.refreshed ? selection : undefined);
+  if (currentFailure) throw currentFailure;
   const provider = providerSnapshot.providers.find(item => item.id === selection.providerId);
   const endpoint = provider?.endpoints.find(item => item.id === selection.endpointId);
   const tokenRef = provider?.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? provider?.id;
@@ -187,24 +192,26 @@ export function selectOwnedHttpIdentity(cap: OwnedHttpRequest, request: Request,
   const pool = admitted.pools[provider.id];
   if (admitted.connectionsUnavailable || pool?.unavailable)
     throw new HttpError(503, "provider_unavailable", "provider authorization failed");
-  if (!pool || !admitted.policy) throw identityFailure("protocol");
   if (admitted.connections.find(item => item.providerId === provider.id)?.enabled === false)
     throw new HttpError(503, "provider_disabled", `provider ${provider.id} is disabled`);
+  if (!pool || !admitted.policy) throw identityFailure("protocol");
   // Registry/list cells and failure/continuation products precede both paths.
   growOwnedHttpRequest(cap, 4096);
   return ownedHttpCompletion(cap).start(async () => {
     let selected: GenerationSelectionHandle | undefined;
     if (admitted.snapshots?.[provider.id]) {
-      // A real empty snapshot is covered and must NOT invoke the legacy reader.
+      // A real empty snapshot is covered and must NOT reacquire candidates.
       selected = recordSelection ? selectGenerationForConsumer(http.current!, env, selection, true)
         : selectOwnedHttpSnapshotUnrecorded(auth, env, selection);
       if (!selected) throw identityFailure("protocol");
     } else {
-      // The authority's completeness boundary returned authenticated admission
-      // WITHOUT selecting. Own the ordinary legacy source phase explicitly;
-      // never fill a fake snapshot or infer environment auth from undefined.
-      http.coverageMiss = true; http.legacySelections++;
-      selected = await selectOwnedHttpLegacy(cap, request, env, auth, provider, endpoint, selection, recordSelection);
+      // Only a SUCCESSFULLY consumed BOTH-ABSENT reply proves no selection
+      // journal entry committed. Legacy completeness and a final stale-plan
+      // drop share this contract; neither is inferred as the omission reason.
+      // Seeds/projections may have committed. Failed/lost replies never get here.
+      if (Object.hasOwn(admitted, "selection") || Object.hasOwn(admitted, "snapshots")) throw identityFailure("protocol");
+      http.coverageMiss = true; http.coverageSelections++;
+      selected = await selectOwnedHttpCoverageMiss(cap, request, env, auth, provider, endpoint, selection, recordSelection);
     }
     selectedOwner(selected).httpProvider = provider;
     http.selections.push(selected);
@@ -279,14 +286,14 @@ export function queueOwnedHttpSelectionRuntime(cap: OwnedHttpRequest, request: R
 // The existing complete/record source profiles bound the retained KV graph.
 // A complete original response can overlap two UTF-16 source-text occurrences.
 // This is normative application payload, not engine/native allocation sizeof.
-const legacySourceGraphBytes = 8 * (32768 + 2 * 65536 + 32768 + 131072) + 2 * 2097152;
-const legacySourcePhaseBytes = legacySourceGraphBytes + 4 * 2097152 + 65536 + 4096;
+const coverageSourceGraphBytes = 8 * (32768 + 2 * 65536 + 32768 + 131072) + 2 * 2097152;
+const coverageSourcePhaseBytes = coverageSourceGraphBytes + 4 * 2097152 + 65536 + 4096;
 
-async function selectOwnedHttpLegacy(cap: OwnedHttpRequest, request: Request, env: Env,
+async function selectOwnedHttpCoverageMiss(cap: OwnedHttpRequest, request: Request, env: Env,
   auth: GenerationAuthenticationOwner, provider: import("./types").CompiledProvider,
   endpoint: import("./types").CompiledEndpoint, selection: import("./authority-admission.ts").AdmissionSelection,
   recordSelection: boolean): Promise<GenerationSelectionHandle> {
-  const lease = GenerationConsumptionLease.reserve(legacySourcePhaseBytes);
+  const lease = GenerationConsumptionLease.reserve(coverageSourcePhaseBytes);
   const capture: { choice?: import("./grant-selection-strategies.ts").GrantChoiceInput & { poolKey: string } } = {};
   let resultLease: GenerationConsumptionLease | undefined, unpublished: GenerationSelectionHandle | undefined;
   let hasPrimary = false, primary: unknown;
@@ -302,7 +309,7 @@ async function selectOwnedHttpLegacy(cap: OwnedHttpRequest, request: Request, en
   let complete: import("./grant-eligibility.ts").GrantSelectionResult | undefined;
   let identityHash: string | undefined, fallbackSessionHash: string | undefined;
   let key: string | undefined, choiceReply: { selectedKey: string } | undefined;
-  let retained = legacySourcePhaseBytes, runtimeBytes = 0;
+  let retained = coverageSourcePhaseBytes, runtimeBytes = 0;
   try {
     request.signal.throwIfAborted();
     const identity = auth.identity!, admitted = auth.slot.owner.admission!;
@@ -419,7 +426,7 @@ async function selectOwnedHttpLegacy(cap: OwnedHttpRequest, request: Request, en
     try { unpublished?.dispose(); } catch (error) { failures.push(error); }
     try { resultLease?.release(); } catch (error) { failures.push(error); }
     try { lease.release(); } catch (error) { failures.push(error); }
-    if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "owned HTTP legacy selection cleanup");
+    if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "owned HTTP coverage-miss selection cleanup");
   }
 }
 
