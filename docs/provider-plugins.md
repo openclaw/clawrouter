@@ -379,6 +379,37 @@ make network requests. The existing loader still accepts arbitrary JSON fixture
 resources; it does not require this schema. Use synthetic content and synthetic
 header values only. Do not copy live credentials into examples.
 
+### Validate a package's scenario declarations
+
+```sh
+node scripts/validate-provider-conformance.mjs \
+  --plugin examples/provider-plugin/clawrouter.plugin.json
+```
+
+Repeat `--plugin` to validate several selected packages together. The command
+requires at least one scenario per package and validates every declared fixture
+against the scenario schema. Existing arbitrary JSON fixtures still load and
+compile normally; migrate them before opting into this command.
+
+The command compiles each captured manifest and checks provider identity, unique
+scenario IDs within each package, endpoint/capability bindings, and the declared
+upstream method. Optional model references must match an exact declared router
+model ID with the selected capability. An upstream alias or a matching suffix
+is not a substitute for that ID. The client method can differ from the upstream
+method; this step does not qualify the client route or its mapping.
+
+The loader captures fixture text from the same bytes it hashes, without reopening
+package files for validation. Output is a deterministic
+`clawrouter.provider-conformance-validation.v1` report with `scope: declarations`.
+It includes package content digests and scenario references, not fixture bodies,
+headers, credential configuration, upstream URLs, or absolute paths. The report
+type is exported by the plugin contract. Invalid packages produce no report.
+
+This check does not execute an adapter, compare expected HTTP messages, authorize
+an account, check runtime availability, or prove fixture coverage. A declared
+reference does not establish model availability. The future host runner must separately
+qualify routes, configuration, and supported scenario kinds before execution.
+
 Streaming, binary bodies, auth setup, local rejection without an upstream call,
 multi-call lifecycle operations, usage assertions, and retry timing need separate
 scenario kinds and host support. They are not represented by `json-exchange`.

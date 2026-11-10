@@ -1,5 +1,18 @@
 /** Data-only HTTP JSON examples. Validation is not execution or provider qualification. */
 export const PROVIDER_CONFORMANCE_SCHEMA = "clawrouter.provider-conformance.v1";
+export const PROVIDER_CONFORMANCE_VALIDATION_SCHEMA = "clawrouter.provider-conformance-validation.v1";
+
+/** Authored-reference validation only; never an adapter execution attestation. */
+export interface ProviderConformanceValidation {
+  schema: typeof PROVIDER_CONFORMANCE_VALIDATION_SCHEMA;
+  scope: "declarations";
+  packages: {
+    id: string;
+    version: string;
+    digest: string;
+    scenarios: { id: string; fixture: string; endpoint: string; capability: string; model?: string }[];
+  }[];
+}
 
 export type ProviderFixtureJson = null | boolean | number | string | ProviderFixtureJson[] | { [key: string]: ProviderFixtureJson };
 

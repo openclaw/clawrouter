@@ -13,5 +13,13 @@ one synthetic JSON exchange: client request, expected upstream request, supplied
 upstream response, and expected client response. The contract parser validates
 its shape; a host conformance runner is not implemented yet.
 
+From a ClawRouter checkout, validate this package's fixture declarations with:
+
+```sh
+node scripts/validate-provider-conformance.mjs --plugin <package-dir>/clawrouter.plugin.json
+```
+
+This checks schema and manifest references; it does not execute the integration.
+
 See [the plugin contract](../../docs/provider-plugins.md) in the source tree.
 When distributing a standalone copy, include your own setup and support docs.
