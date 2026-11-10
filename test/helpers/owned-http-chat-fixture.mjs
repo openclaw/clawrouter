@@ -1,26 +1,30 @@
 import { createHash } from 'node:crypto';
 
 export const ownedHttpModel = 'volcengine/doubao-seed-2-1-pro-260915';
-export const ownedHttpCases = ['chat', 'tool', 'error', 'abort', 'large', 'off'];
+export const ownedHttpControlModels = { gmi: 'gmi/deepseek-ai/DeepSeek-V4-Pro', venice: 'venice/zai-org-glm-5-2' };
+export const ownedHttpCases = ['chat', 'tool', 'error', 'abort', 'large', 'off', 'gmi', 'venice'];
 export const ownedHttpProxyKey = id => `clawrouter-live-owned_http_${id}-fixture-secret`;
 export async function seedOwnedHttpChat(runtime) {
   const kv = await runtime.getKVNamespace('POLICY_KV', 'router');
   for (const id of ownedHttpCases) {
+    const provider = Object.hasOwn(ownedHttpControlModels, id) ? id : 'volcengine';
+    const model = ownedHttpControlModels[id] ?? ownedHttpModel;
     await kv.put(`policies/owned_http_${id}`, JSON.stringify({ enabled: true, generation: 'fixture', tenantId: 'fixture',
-      providers: ['volcengine'], models: [ownedHttpModel], monthlyBudgetMicros: 1000000, requestCostMicros: 7,
+      providers: [provider], models: [model], monthlyBudgetMicros: 1000000, requestCostMicros: 7,
       budgetMode: 'reserve', retainRequestContent: false,
-      grantRouting: { strategy: 'round_robin', environmentFallback: false, eligibleGrants: { volcengine: ['volcengine'] } } }));
+      grantRouting: { strategy: 'round_robin', environmentFallback: false, eligibleGrants: { [provider]: [provider] } } }));
     await kv.put(`credentials/owned_http_${id}`, JSON.stringify({ enabled: true,
       secretSha256: createHash('sha256').update('fixture-secret').digest('hex'), policyId: `owned_http_${id}`, policyGeneration: 'fixture' }));
   }
-  await kv.put('connections/volcengine', JSON.stringify({ providerId: 'volcengine', enabled: true }));
+  for (const provider of ['volcengine', 'gmi', 'venice'])
+    await kv.put(`connections/${provider}`, JSON.stringify({ providerId: provider, enabled: true }));
 }
 
 export const ownedHttpRouter = String.raw`
 import handler,{privateOwnedHttpChat} from './worker/index.ts';export * from './worker/index.ts';
 import {putGrantCredentials} from './worker/grant-credentials.ts';
 import {bodyBudgetCharged,bodyBudgetBytes,ExactBodyCharge} from './worker/body-budget.ts';
-const ids=['chat','tool','error','abort','large','off'],calls=[],intakes=[],completed=[];
+const ids=['chat','tool','error','abort','large','off','gmi','venice'],calls=[],intakes=[],completed=[];
 let scoped,offScoped,pressure;
 function environment(env,off=false){
  if(!scoped){
@@ -39,8 +43,8 @@ function environment(env,off=false){
 export default {...handler,async fetch(request,env,context){
  const path=new URL(request.url).pathname;
  if(path==='/fixture/grants'){
-  for(const id of ids)await putGrantCredentials(env,'oauth/owned_http_'+id+'/volcengine',{
-   provider:'volcengine',enabled:true,kind:'api_key',credential:'fixture-upstream-'+id,unknownOwnedField:{value:['kept',null,7]}});
+  for(const id of ids){const provider=id==='gmi'||id==='venice'?id:'volcengine';await putGrantCredentials(env,'oauth/owned_http_'+id+'/'+provider,{
+   provider,enabled:true,kind:'api_key',credential:'fixture-upstream-'+id,...(id==='gmi'?{accountId:'fixture-organization'}:{}),unknownOwnedField:{value:['kept',null,7]}});}
   return new Response(null,{status:204});
  }
  if(path==='/fixture/state')return Response.json({calls,intakes,completed,charged:bodyBudgetCharged()});
@@ -73,9 +77,10 @@ export const ownedHttpUpstream = String.raw`
 const calls=[];
 export default {async fetch(request){
  if(request.url==='https://fixture.example/state')return Response.json(calls);
- if(request.url!=='https://ark.cn-beijing.volces.com/api/v3/chat/completions')throw Error('unexpected owned HTTP destination');
+ if(!['https://ark.cn-beijing.volces.com/api/v3/chat/completions','https://api.gmi-serving.com/v1/chat/completions','https://api.venice.ai/api/v1/chat/completions'].includes(request.url))throw Error('unexpected owned HTTP destination');
  const header=request.headers.get('authorization')??'',id=header.startsWith('Bearer fixture-upstream-')?header.slice('Bearer fixture-upstream-'.length):'invalid';
- const body=await request.json(),row={id,method:request.method,model:body.model,stream:body.stream===true,bytes:JSON.stringify(body).length,canceled:false};calls.push(row);
+ const body=await request.json(),row={id,method:request.method,model:body.model,stream:body.stream===true,bytes:JSON.stringify(body).length,canceled:false,organization:request.headers.get('x-organization-id')};calls.push(row);
+ if(id==='gmi'&&row.organization!=='fixture-organization')throw Error('original organization missing');
  if(id==='invalid')return Response.json({error:{type:'invalid_request_error',message:'fixture credential rejected'}},{status:401});
  if(id==='error')return Response.json({error:{type:'invalid_request_error',message:'synthetic rejection'}},{status:400});
  const usage={prompt_tokens:4,completion_tokens:3,total_tokens:7};

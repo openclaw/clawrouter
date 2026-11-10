@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startWorkerdFixture } from '../../test/helpers/workerd.mjs';
-import { ownedHttpModel, ownedHttpProxyKey, ownedHttpRouter, ownedHttpUpstream, seedOwnedHttpChat } from '../../test/helpers/owned-http-chat-fixture.mjs';
+import { ownedHttpModel, ownedHttpControlModels, ownedHttpProxyKey, ownedHttpRouter, ownedHttpUpstream, seedOwnedHttpChat } from '../../test/helpers/owned-http-chat-fixture.mjs';
 
 // One memoized ORIGINAL body root is enrolled as soon as each dispatch resolves,
 // including a late response after an earlier assertion has already failed.
@@ -49,6 +49,25 @@ const chat = (id, extra = {}) => ({ method: 'POST', headers: { authorization: `B
   body: JSON.stringify({ model: ownedHttpModel, messages: [{ role: 'user', content: 'synthetic input' }], ...extra }) });
 const count = (state, kind, path) => state.calls.filter(row => row.kind === kind && row.path === path).length;
 const state = async f => JSON.parse((await f.request('https://fixture/fixture/state')).text);
+
+for (const provider of ['gmi', 'venice']) test(`owned unified ${provider} keeps genuine proof and fresh provider control on a covered hit`, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const request = () => chat(provider, { model: ownedHttpControlModels[provider] });
+    const first = await f.request('https://fixture/v1/chat/completions', request());
+    assert.equal(first.status, 200, 'genuine generation proof reaches original provider authority');
+    assert.equal(JSON.parse(first.text).model, ownedHttpControlModels[provider].slice(provider.length + 1));
+    const before = await state(f);
+    assert.ok(count(before, 'authority', '/authorization/snapshot') > 0, 'provider freshness was not bypassed');
+    const hit = await f.request('https://fixture/v1/chat/completions', request());
+    assert.equal(hit.status, 200);
+    const after = await state(f);
+    assert.equal(count(after, 'authority', '/admission/resolve'), count(before, 'authority', '/admission/resolve'), 'covered generation hit');
+    assert.equal(count(after, 'credential', '/materialize'), count(before, 'credential', '/materialize'), 'covered private credential hit');
+    assert.ok(count(after, 'authority', '/authorization/snapshot') > count(before, 'authority', '/authorization/snapshot'), 'mandatory provider revalidation still executes');
+    const rows = JSON.parse((await f.request('https://fixture/fixture/upstream')).text).filter(row => row.id === provider);
+    assert.equal(rows.length, 2); assert.ok(rows.every(row => row.organization === (provider === 'gmi' ? 'fixture-organization' : null)));
+  });
+});
 
 test('compiled owned HTTP Chat preserves JSON and covered-hit zero foreground authority/materialization RPCs', { timeout: 120000 }, async t => {
   await fixture(t, async f => {

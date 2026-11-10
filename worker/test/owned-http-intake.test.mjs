@@ -3,6 +3,28 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { privateOwnedHttpChat } from '../index.ts';
 import { bodyBudgetCharged } from '../body-budget.ts';
+import { beginOwnedHttpRequest, finishOwnedHttpRequest } from '../http-identity-owner.ts';
+import { acceptOwnedHttpControlVerification, proxyKeyVerification } from '../proxy-auth.ts';
+import { isIdentityFailure } from '../identity-admission.ts';
+
+test('HTTP control proof cannot be installed from a caller-supplied identity graph', async () => {
+  const baseline = bodyBudgetCharged(), request = new Request('https://router.example/v1/chat/completions');
+  const cap = beginOwnedHttpRequest(request, {}), before = bodyBudgetCharged();
+  const identity = { authType: 'proxy_key', credentialId: 'fixture', principalId: null };
+  let hasPrimary = false, primary;
+  try {
+    for (const candidate of [cap, Object.freeze({})]) {
+      assert.throws(() => acceptOwnedHttpControlVerification(candidate, identity, 'fixture', null, 'ab'.repeat(32), undefined), isIdentityFailure);
+      assert.equal(proxyKeyVerification(identity), undefined);
+      assert.equal(bodyBudgetCharged(), before, 'forged proof denied before allocation');
+    }
+  } catch (error) { hasPrimary = true; primary = error; }
+  const failures = [];
+  try { await finishOwnedHttpRequest(cap); } catch (error) { failures.push(error); }
+  try { assert.equal(bodyBudgetCharged(), baseline); } catch (error) { failures.push(error); }
+  if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures);
+  if (hasPrimary) throw primary;
+});
 
 // Real compiled intake. Missing credentials terminate after parsing/selection;
 // these witnesses do not need an authority, provider or a synthetic auth result.

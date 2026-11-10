@@ -74,7 +74,7 @@ import { grantStickyInput } from "./grant-sticky.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import { assessModelRequest } from "../shared/model-request-parameters.ts";
 import { admitAccountingFacts, createProxyAccounting, estimateCost, type CompoundRequestContext } from "./proxy-accounting";
-import { authenticateProxyKey, authenticateOwnedHttp, proxySessionHash } from "./proxy-auth";
+import { authenticateProxyKey, authenticateOwnedHttp, proxySessionHash, retireOwnedHttpControlVerification } from "./proxy-auth";
 import { queueGrantRuntime } from "./admission-cache.ts";
 import { evictGrantCredentials } from "./credential-cache.ts";
 import { admissionCacheState, admissionDuration, credentialWait } from "./admission-timing.ts";
@@ -206,6 +206,7 @@ export function retireOwnedHttpProxy(cap: OwnedHttpRequest): void {
   // Its body lease is released only after all prepared/body callback aliases.
   invocation.admission?.checkOwnedRetirement();
   retireOwnedHttpProviderPreparation(cap);
+  retireOwnedHttpControlVerification(cap);
   const admission = invocation.admission;
   invocation.prepared = undefined; invocation.identity = undefined; invocation.selection = undefined;
   invocation.admission = undefined; invocation.upload = undefined; invocation.attempts.length = 0;

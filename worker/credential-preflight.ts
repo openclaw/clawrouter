@@ -17,7 +17,7 @@ import { assertPolicyModel } from "./policy-models.ts";
 import { GenerationAdvisoryState, waitGenerationFlushWindow, admitGenerationOverlay, generationSelectionWorkingBytes, planGenerationSelection, generationRuntimeWorkingBytes, detachedGenerationRuntime, detachedGenerationFeedback } from "./admission-cache.ts";
 import { authorityCall } from "./authority.ts";
 import { recordGrantRuntime } from "./grant-selection.ts";
-import { ownedGenerationCredentialFailure } from "./proxy-auth.ts";
+import { ownedGenerationCredentialFailure, acceptOwnedHttpControlVerification } from "./proxy-auth.ts";
 import { acceptOwnedHttpAuthentication, hasOwnedHttpProxyInvocation, reserveOwnedHttpInitialPreparation } from "./proxy.ts";
 import { credentialExpired } from "./credential-lifecycle.ts";
 import { safeEqual, sha256Hex, HttpError } from "./utils.ts";
@@ -143,10 +143,22 @@ export function matchesOwnedHttpAuthentication(cap: OwnedHttpRequest, identity: 
   const owner = httpIdentities?.get(cap), current = owner?.current && authenticationOwner(owner.current);
   return !!current && !current.failure && current.identity === identity;
 }
+export function matchesOwnedHttpControlVerification(cap: OwnedHttpRequest, identity: import("./types").AuthorizedIdentity,
+  kid: string, principalId: string | null, digest: string, expiresAt: string | null | undefined): boolean {
+  const owner = httpIdentities?.get(cap), current = owner?.current && authenticationOwner(owner.current);
+  if (!current || current.failure || current.identity !== identity) return false;
+  const credential = current.slot.owner.admission?.credential?.credential;
+  return !!credential && current.slot.owner.kid === kid && current.slot.owner.digest === digest
+    && (credential.principalId ?? null) === principalId && credential.expiresAt === expiresAt;
+}
 export function bindOwnedHttpAuthentication(cap: OwnedHttpRequest, request: Request, env: Env): void {
   checkOwnedHttpRequest(cap, request, env);
   const owner = httpIdentities?.get(cap), current = owner?.current && authenticationOwner(owner.current);
   if (!current || current.failure || !current.identity || current.slot.owner.binding !== env.ACCESS_CONTROL) throw identityFailure("protocol");
+  const credential = current.slot.owner.admission?.credential?.credential;
+  if (!credential || !hasOwnedHttpProxyInvocation(cap)) throw identityFailure("protocol");
+  acceptOwnedHttpControlVerification(cap, current.identity, current.slot.owner.kid, credential.principalId ?? null,
+    current.slot.owner.digest, credential.expiresAt);
   acceptOwnedHttpAuthentication(cap, current.identity);
 }
 export function invalidateOwnedHttpSelectionCredentials(cap: OwnedHttpRequest, selected: GenerationSelectionHandle): void {

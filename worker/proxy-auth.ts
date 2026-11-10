@@ -20,13 +20,39 @@ import type { AdmissionProvider, AdmissionResult } from "./authority.ts";
 import { resolveAdmission } from "./admission-cache.ts";
 import { errorResponse, HttpError, parseProxyKey, safeEqual, sha256Hex } from "./utils.ts";
 import { checkOwnedHttpRequest, growOwnedHttpRequest, ownedHttpCompletion, type OwnedHttpRequest } from "./http-identity-owner.ts";
-import { resolveOwnedHttpAuthentication } from "./credential-preflight.ts";
+import { resolveOwnedHttpAuthentication, matchesOwnedHttpControlVerification } from "./credential-preflight.ts";
 
 export interface ProxyKeyVerification { readonly kind: "proxy_key"; readonly credentialId: string; readonly principalId: string | null; readonly secretSha256: string; readonly expiresAt?: string | null }
 const verifiedKeys = new WeakMap<AuthorizedIdentity, ProxyKeyVerification>();
 // Scoped to this authenticated operation. Cross-request reuse happens only in
 // admission-cache.ts, bounded by the hot-cache max age.
 const admissions = new WeakMap<AuthorizedIdentity, AdmissionResult>();
+let ownedControlVerifications: WeakMap<OwnedHttpRequest, AuthorizedIdentity[]> | undefined;
+let ownedControlVerificationCount = 0;
+
+// Fixed receiver from the genuine generation owner. Only scalars cross this
+// seam; no caller-supplied proof/identity graph or callback acquires authority.
+// Existing provider controls keep their current-verification and native I/O.
+export function acceptOwnedHttpControlVerification(cap: OwnedHttpRequest, identity: AuthorizedIdentity,
+  kid: string, principalId: string | null, digest: string, expiresAt: string | null | undefined): void {
+  if (!matchesOwnedHttpControlVerification(cap, identity, kid, principalId, digest, expiresAt)) throw identityFailure("protocol");
+  const existing = ownedControlVerifications?.get(cap);
+  if (existing?.includes(identity)) return;
+  growOwnedHttpRequest(cap, 2048 + 2 * (kid.length + (principalId?.length ?? 0) + digest.length + (expiresAt?.length ?? 0)));
+  const proof: ProxyKeyVerification = Object.freeze({ kind: "proxy_key", credentialId: kid, principalId, secretSha256: digest, expiresAt });
+  if (!ownedControlVerifications) ownedControlVerifications = new WeakMap();
+  if (existing) existing.push(identity);
+  else { ownedControlVerifications.set(cap, [identity]); ownedControlVerificationCount++; }
+  verifiedKeys.set(identity, proof);
+}
+
+export function retireOwnedHttpControlVerification(cap: OwnedHttpRequest): void {
+  const identities = ownedControlVerifications?.get(cap);
+  if (!identities) return;
+  for (const identity of identities) verifiedKeys.delete(identity);
+  identities.length = 0; ownedControlVerifications!.delete(cap);
+  if (!--ownedControlVerificationCount) ownedControlVerifications = undefined;
+}
 
 /** Private HTTP entry only; no identity or admission graph leaves its owner. */
 export function authenticateOwnedHttp(cap: OwnedHttpRequest, request: Request, env: Env,

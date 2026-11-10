@@ -142,3 +142,12 @@ command deliberately relies on their shared successful-omission contract, not
 an invented reason marker. It uses final returned policy/tenant/pool fields and
 never replays full admission to classify the omission. Authority source remains
 unchanged. Whole-vertical numerical funding and CONTROL closure remain open.
+
+The generation owner registers fixed verifier scalars for the unchanged GMI and
+Venice control consumers. The receiving command checks the exact genuine owner,
+identity and digest before funding or constructing a proof; public caller graphs
+cannot supply that provenance. The request retains every accepted identity proof
+through delivery and other original roots, then clears those map entries before
+the authentication owners retire. Existing provider-specific authorization and
+credential inspections still execute. A covered generation/credential hit does
+not waive those mandatory fresh provider controls.
