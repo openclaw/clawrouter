@@ -109,7 +109,7 @@ const upstream = `
       return Response.json({ access_token: "fixture-rotated", refresh_token: "fixture-next-refresh", expires_in: 3600 });
     }
     const credential = request.headers.get("authorization"); dispatches.push(credential);
-    if (config.dispatchStatus) return Response.json({ error: { message: "fixture rejection" } }, { status: config.dispatchStatus });
+    if (config.dispatchStatus && credential !== config.healthy) return Response.json({ error: { message: "fixture rejection" } }, { status: config.dispatchStatus });
     return Response.json({ id: "resp_fixture_" + dispatches.length, object: "response", status: "completed", output: [], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 }, servedBy: credential });
   }};
 `;
@@ -170,11 +170,11 @@ for (const routing of [{}, { failover: false }]) test(`pre-dispatch failure pres
   assert.deepEqual((await f.stats()).dispatches, []);
 });
 
-test("pre-dispatch retry consumes the same single failover allowance as post-dispatch rejection", { timeout: 60000 }, async t => {
+test("pre-dispatch and response rejections share a bounded no-repeat grant budget", { timeout: 60000 }, async t => {
   const f = await fixture(t); await f.configure({ status: 503, dispatchStatus: 429 });
   assert.equal((await f.request(f.base + "c", "PUT", { ...f.grant, accessToken: "fixture-c", refreshToken: "fixture-refresh-c", expiresAt: new Date(now + 7200000).toISOString() })).status, 200);
   assert.equal((await f.proxy()).status, 429);
-  assert.deepEqual((await f.stats()).dispatches, ["Bearer fixture-b"]);
+  assert.deepEqual((await f.stats()).dispatches, ["Bearer fixture-b", "Bearer fixture-c"]);
   assert.equal((await f.row()).selectedCount, 1);
 });
 
@@ -232,7 +232,7 @@ test("fusion reservation carries consumed preflight failover into synthesizer di
   assert.equal((await f.request("/v1/admin/fusion", "PUT", { enabled: true, adviserModels: ["local/qwen3:8b"], aggregatorModel: "openai/gpt-4.1-mini" })).status, 200);
   const response = await f.request("/v1/chat/completions", "POST", { model: "clawrouter/fusion", messages: [{ role: "user", content: "synthetic fixture" }], max_tokens: 16 }, true);
   assert.equal(response.status, 429, await response.clone().text());
-  assert.deepEqual((await f.stats()).dispatches, ["Bearer fixture-b"]);
+  assert.deepEqual((await f.stats()).dispatches, ["Bearer fixture-b", "Bearer fixture-c"]);
 });
 
 for (const failure of ["ambiguous", "persist", "transient"]) test(`upgrade republishes previously settled ${failure} routing blocks even with failover disabled`, { timeout: 60000 }, async t => {
@@ -321,4 +321,25 @@ for (const failure of ["ambiguous", "permanent"]) test(`${failure} removal prese
   const updated = await f.request(f.base + "a", "PUT", { provider: "openai", kind: "oauth", accessToken: "fixture-fresh-incremental", expiresAt: new Date(now + 7200000).toISOString() });
   assert.equal(updated.status, 200); const recovered = await updated.json(); assert.equal(recovered.usable, true); assert.equal(recovered.credentialStatus, "active"); assert.equal(recovered.refreshDiagnosis, null);
   await served(await f.proxy(), "fixture-fresh-incremental");
+});
+
+for (const phase of ["preparation", "response", "mixed"]) test(`bounded pool traversal reaches the fourth eligible account after ${phase} failures`, { timeout: 60000 }, async t => {
+  const f = await fixture(t, { routing: { strategy: "priority" }, expiresAt: phase === "response" ? now + 7200000 : now - 1000 });
+  for (const [index, name] of ["b", "c", "d"].entries()) {
+    const expiresAt = phase === "preparation" && name !== "d" ? now - 1000 : now + 7200000;
+    assert.equal((await f.request(f.base + name, "PUT", { ...f.grant, accessToken: "fixture-" + name, refreshToken: "fixture-refresh-" + name, priority: 101 + index, expiresAt: new Date(expiresAt).toISOString() })).status, 200);
+  }
+  await f.configure({ status: 503, dispatchStatus: 429, healthy: "Bearer fixture-d" });
+  await served(await f.proxy(), "fixture-d");
+  const stats = await f.stats();
+  assert.equal(stats.refreshes, phase === "preparation" ? 3 : phase === "mixed" ? 1 : 0);
+  assert.deepEqual(stats.dispatches, (phase === "preparation" ? ["d"] : phase === "mixed" ? ["b", "c", "d"] : ["a", "b", "c", "d"]).map(name => "Bearer fixture-" + name));
+});
+
+test("pool traversal stops after four distinct failed accounts without enabling environment fallback", { timeout: 60000 }, async t => {
+  const f = await fixture(t, { routing: { strategy: "priority" }, expiresAt: now + 7200000 });
+  for (const [index, name] of ["b", "c", "d", "e"].entries()) assert.equal((await f.request(f.base + name, "PUT", { ...f.grant, accessToken: "fixture-" + name, refreshToken: "fixture-refresh-" + name, priority: 101 + index, expiresAt: new Date(now + 7200000).toISOString() })).status, 200);
+  await f.configure({ dispatchStatus: 429, healthy: "Bearer fixture-e" });
+  const response = await f.proxy(); assert.equal(response.status, 429); assert.match(await response.text(), /fixture rejection/);
+  assert.deepEqual((await f.stats()).dispatches, ["a", "b", "c", "d"].map(name => "Bearer fixture-" + name));
 });

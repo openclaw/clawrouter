@@ -22,22 +22,43 @@ const router = `
   export class GrantCredentialObject extends Owner {
     constructor(state, env) {
       const storage = new Proxy(state.storage, { get(target, name) {
+        if (name === "get") return async key => {
+          if (key === "credential" && await env.POLICY_KV.get("fixture/read-armed")) {
+            await env.POLICY_KV.delete("fixture/read-armed"); throw Error("fixture-private read failure");
+          }
+          return target.get(key);
+        };
         if (name === "put") return async (key, value) => {
           if (key === "credential" && value?.accessToken === "fixture-rotated" && await env.POLICY_KV.get("fixture/fail-write") === "yes") throw new Error("fixture write failure");
-          return target.put(key, value);
+          const failure = await env.POLICY_KV.get("fixture/failure");
+          if (key === "refresh-result" && failure === "result_store") throw Error("fixture-private result write failure");
+          if (key === "credential" && value?.accessToken === "fixture-rotated" && ["credential_write", "diagnosis_write"].includes(failure)) throw Error("fixture-private credential write failure");
+          if (key === "credential" && value?.refreshDiagnosis?.failure?.failureClass === "provider_ok_persist_failed" && failure === "diagnosis_write") throw Error("fixture-private diagnostic write failure");
+          const result = await target.put(key, value);
+          if (key === "refresh-result" && failure === "credential_read_before_claim") await env.POLICY_KV.put("fixture/read-armed", "yes");
+          return result;
         };
         const value = target[name]; return typeof value === "function" ? value.bind(target) : value;
       }});
       super(new Proxy(state, { get(target, name) { if (name === "storage") return storage; const value = target[name]; return typeof value === "function" ? value.bind(target) : value; }}), env);
-      this.fixtureStorage = state.storage;
+      this.fixtureStorage = state.storage; this.fixtureEnv = env;
     }
     async fetch(request) {
       const path = new URL(request.url).pathname;
+      if (path === "/refresh-ownership/claim") {
+        const input = await request.clone().json();
+        if (input.token === "fixture-rotated-refresh") {
+          const failure = await this.fixtureEnv.POLICY_KV.get("fixture/failure");
+          if (failure === "ownership_claim") return new Response(null, { status: 503 });
+          if (failure === "credential_read") await this.fixtureEnv.POLICY_KV.put("fixture/read-armed", "yes");
+        }
+      }
       if (path === "/fixture/clear-index") { await this.fixtureStorage.deleteAll(); return new Response("ok"); }
       if (path === "/fixture/pending") { const record = await this.fixtureStorage.get("credential"); await this.fixtureStorage.put("credential", { ...record, refreshAttempt: { id: "fixture-abandoned", generation: record.generation } }); return new Response("ok"); }
+      if (path === "/fixture/stale-attempt") { const record = await this.fixtureStorage.get("credential"); await this.fixtureStorage.put("credential", { ...record, refreshAttempt: { ...record.refreshAttempt, id: "fixture-different-attempt" } }); return new Response("ok"); }
       if (path === "/fixture/state") {
         const record = await this.fixtureStorage.get("credential");
-        return Response.json({ alarm: await this.fixtureStorage.getAlarm(), generation: record?.generation, accessToken: record?.accessToken, nextRefreshAttemptAt: record?.nextRefreshAttemptAt });
+        return Response.json({ alarm: await this.fixtureStorage.getAlarm(), generation: record?.generation, accessToken: record?.accessToken, nextRefreshAttemptAt: record?.nextRefreshAttemptAt, pending: !!(await this.fixtureStorage.get("refresh-result")) });
       }
       if (path === "/fixture/alarm") { await this.alarm(); return new Response("ok"); }
       // Simulates a separately committed newer generation at the durable boundary.
@@ -55,9 +76,10 @@ const router = `
     if (path === "/fixture/reconnect-started") return Response.json(reconnectStarted);
     if (path === "/v1/admin/upstream-grants/policies/pool/claude" && request.method === "PUT" && new URL(request.url).searchParams.get("mode") === "replace") reconnectStarted = true;
     if (path === "/fixture/clock") { clock = (await request.json()).now; return new Response("ok"); }
+    if (path === "/fixture/failure") { const { stage } = await request.json(); if (stage) await env.POLICY_KV.put("fixture/failure", stage); else await env.POLICY_KV.delete("fixture/failure"); return new Response("ok"); }
     if (path === "/fixture/fail-write") { await env.POLICY_KV.put("fixture/fail-write", "yes"); return new Response("ok"); }
     if (path === "/fixture/clear-index") return env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName("clawrouter:refresh-ownership:v1")).fetch(request);
-    if (["/fixture/state", "/fixture/alarm", "/fixture/newer", "/fixture/pending"].includes(path)) return env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName("oauth/pool/claude")).fetch(request);
+    if (["/fixture/state", "/fixture/alarm", "/fixture/newer", "/fixture/pending", "/fixture/stale-attempt"].includes(path)) return env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName("oauth/pool/claude")).fetch(request);
     return handler.fetch(request, env, ctx);
   }};
 `;
@@ -238,7 +260,8 @@ test("workerd provider success followed by a persistence failure is durable, sec
   const row = await f.row();
   assert.equal(row.refreshDiagnosis.failure.failureClass, "provider_ok_persist_failed");
   assert.equal(row.refreshDiagnosis.lastSuccessfulRefreshAt, null);
-  assert.equal(row.refreshDiagnosis.failure.nextRetryAt, null);
+  assert.ok(Date.parse(row.refreshDiagnosis.failure.nextRetryAt) > now);
+  assert.equal(row.refreshDiagnosis.failure.settlement.stage, "credential_write");
   await f.rotate(); assert.equal(await f.calls(), 1);
   await f.restart(); await f.rotate(); assert.equal(await f.calls(), 0);
   assert.deepEqual((await f.row()).refreshDiagnosis, row.refreshDiagnosis);
@@ -323,4 +346,105 @@ for (const corrupt of [false, true]) test(`workerd KV-only legacy ${corrupt ? "c
   assert.equal(response.status, corrupt ? 503 : 409);
   assert.doesNotMatch(await response.text(), /fixture-|fingerprint|[a-f0-9]{64}/);
   assert.equal(await f.calls(), 0);
+});
+
+for (const stage of ["ownership_claim", "credential_read_before_claim", "credential_read", "credential_write"]) test("workerd local settlement recovers " + stage + " after owner reopen without another token exchange", { timeout: 60000 }, async t => {
+  const f = await fixture(t); await f.configure({}); await f.request("/fixture/failure", "POST", { stage });
+  assert.equal((await f.rotate()).status, 502);
+  const row = await f.row();
+  assert.equal(row.usable, false);
+  assert.equal(row.refreshDiagnosis.failure.failureClass, "provider_ok_persist_failed");
+  assert.equal(row.refreshDiagnosis.failure.settlement.stage, stage === "credential_read_before_claim" ? "credential_read" : stage);
+  assert.match(row.refreshDiagnosis.failure.settlement.correlationId, /^[0-9a-f-]{36}$/);
+  assert.ok(Date.parse(row.refreshDiagnosis.failure.nextRetryAt) > now);
+  assert.equal((await f.state()).pending, true);
+  await f.rotate(); assert.equal(await f.calls(), 1, "retry hold cannot send another upstream refresh");
+  await f.request("/fixture/failure", "POST", {}); await f.restart();
+  await f.request("/fixture/clock", "POST", { now: Date.parse(row.refreshDiagnosis.failure.nextRetryAt) });
+  await f.request("/fixture/alarm", "POST");
+  assert.equal((await f.state()).accessToken, "fixture-rotated");
+  assert.equal((await f.state()).pending, false);
+  assert.equal((await f.row()).refreshDiagnosis.failure, null);
+  assert.equal((await f.row()).usable, true);
+  assert.equal(await f.calls(), 0, "reopened owner settles locally, with zero token egress");
+});
+
+for (const reopen of [false, true]) test("workerd first result-retention write failure " + (reopen ? "stays fenced when the result is truly lost" : "recovers from owner memory without upstream replay"), { timeout: 60000 }, async t => {
+  const f = await fixture(t); await f.request("/fixture/failure", "POST", { stage: "result_store" });
+  assert.equal((await f.rotate()).status, 502);
+  const failed = await f.row();
+  assert.equal(failed.refreshDiagnosis.failure.settlement.stage, "result_store");
+  assert.equal((await f.state()).pending, false);
+  await f.request("/fixture/failure", "POST", {});
+  if (reopen) await f.restart();
+  await f.request("/fixture/clock", "POST", { now: Date.parse(failed.refreshDiagnosis.failure.nextRetryAt) });
+  await f.request("/fixture/alarm", "POST");
+  const row = await f.row();
+  assert.equal(await f.calls(), reopen ? 0 : 1);
+  assert.equal(row.usable, !reopen);
+  assert.equal((await f.state()).accessToken, reopen ? "fixture-access" : "fixture-rotated");
+  assert.equal(row.refreshDiagnosis.failure?.nextRetryAt ?? null, null);
+  if (reopen) {
+    assert.equal((await f.state()).alarm, null);
+    assert.equal((await f.rotate()).status, 502);
+    assert.equal(await f.calls(), 0);
+  }
+});
+
+for (const mutation of ["replace", "revoke", "stale-attempt"]) test("workerd retained result cannot resurrect " + mutation, { timeout: 60000 }, async t => {
+  const f = await fixture(t); await f.request("/fixture/failure", "POST", { stage: "credential_write" });
+  assert.equal((await f.rotate()).status, 502);
+  const retry = Date.parse((await f.row()).refreshDiagnosis.failure.nextRetryAt);
+  await f.request("/fixture/failure", "POST", {});
+  const response = mutation === "replace"
+    ? await f.request(f.base + "?mode=replace", "PUT", { ...f.grant, accessToken: "fixture-new-access", refreshToken: "fixture-new-login", expiresAt: new Date(now + 86400000).toISOString() })
+    : mutation === "revoke" ? await f.request(f.base + "/revoke", "POST") : await f.request("/fixture/stale-attempt", "POST");
+  assert.equal(response.status, 200, await response.clone().text());
+  await f.restart(); await f.request("/fixture/clock", "POST", { now: retry }); await f.request("/fixture/alarm", "POST");
+  const state = await f.state();
+  assert.equal(state.pending, false);
+  assert.notEqual(state.accessToken, "fixture-rotated");
+  assert.equal(await f.calls(), 0);
+  if (mutation === "replace") assert.equal(state.accessToken, "fixture-new-access");
+  else assert.equal((await f.row()).usable, false);
+});
+
+for (const stage of ["result_store", "ownership_claim", "credential_write"]) test("workerd pending replacement ownership rejects copies after " + stage, { timeout: 60000 }, async t => {
+  const f = await fixture(t); await f.request("/fixture/failure", "POST", { stage });
+  assert.equal((await f.rotate()).status, 502);
+  await f.request("/fixture/failure", "POST", {});
+  const copy = await f.request("/v1/admin/upstream-grants/tenants/copy/login", "PUT", { ...f.grant, refreshToken: "fixture-rotated-refresh" });
+  assert.equal(copy.status, 409);
+  assert.doesNotMatch(await copy.text(), /fixture-|fingerprint|[a-f0-9]{64}/);
+  assert.equal(await f.calls(), 1);
+});
+
+test("workerd interrupted diagnosis recovers the retained result after reopen", { timeout: 60000 }, async t => {
+  const f = await fixture(t); await f.request("/fixture/failure", "POST", { stage: "diagnosis_write" });
+  assert.equal((await f.rotate()).status, 502);
+  assert.equal((await f.state()).pending, true);
+  await f.request("/fixture/failure", "POST", {}); await f.restart();
+  const row = await f.row();
+  assert.equal(row.refreshDiagnosis.failure.settlement.stage, "settlement_resume");
+  await f.request("/fixture/clock", "POST", { now: Date.parse(row.refreshDiagnosis.failure.nextRetryAt) });
+  assert.equal((await f.rotate()).status, 200);
+  assert.equal(await f.calls(), 0);
+  assert.equal((await f.state()).pending, false);
+  assert.equal((await f.row()).usable, true);
+});
+
+test("workerd replacement-token collision remains blocked and reports only the safe ownership code", { timeout: 60000 }, async t => {
+  const f = await fixture(t);
+  const other = await f.request("/v1/admin/upstream-grants/tenants/other/login", "PUT", { ...f.grant, refreshToken: "fixture-rotated-refresh" });
+  assert.equal(other.status, 200);
+  assert.equal((await f.rotate()).status, 502);
+  const row = await f.row();
+  assert.equal(row.refreshDiagnosis.failure.settlement.stage, "ownership_claim");
+  assert.equal(row.refreshDiagnosis.failure.settlement.code, "refresh_token_already_owned");
+  assert.equal(row.refreshDiagnosis.failure.nextRetryAt, null);
+  assert.equal((await f.state()).alarm, null);
+  assert.equal((await f.rotate()).status, 502);
+  assert.equal(await f.calls(), 1);
+  assert.equal((await f.row()).usable, false);
+  assert.equal((await f.state()).accessToken, "fixture-access");
 });
