@@ -608,6 +608,8 @@ interface OwnedHttpProviderCommand {
   preparation?: PreparationAdmission; selected?: GenerationSelectionHandle;
 }
 let ownedHttpProviderCommands: WeakMap<object, OwnedHttpProviderCommand> | undefined;
+let ownedHttpPreparationCredits: WeakSet<OwnedHttpRequest> | undefined;
+let ownedHttpPreparationCreditCount = 0;
 
 // Manifest-derived cells plus the existing bounded preparation profile. This
 // component remains under the HTTP request after copies become prepared fields.
@@ -629,12 +631,32 @@ function ownedHttpPreparationBytes(selection: ProxySelection): number {
     + 2 * (65536 + 2 * 32768 + 256 * 16384 + 4 * units + 4 * 8192 + 4 * 16384);
 }
 
+// Full admission can commit the initial selection. Its known HTTP preparation
+// component must therefore be admitted BEFORE that RPC, not on its return.
+// The genuine proxy invocation validates this exact borrowed selection.
+export function reserveOwnedHttpProviderPreparation(cap: OwnedHttpRequest, request: Request, env: Env,
+  selection: ProxySelection): void {
+  checkOwnedHttpRequest(cap, request, env); checkOwnedHttpProviderInput(cap, request, env, selection);
+  if (ownedHttpPreparationCredits?.has(cap)) throw ownedHttpIdentityFailure("protocol");
+  growOwnedHttpRequest(cap, ownedHttpPreparationBytes(selection) + 8192);
+  (ownedHttpPreparationCredits ??= new WeakSet()).add(cap); ownedHttpPreparationCreditCount++;
+}
+
+export function retireOwnedHttpProviderPreparation(cap: OwnedHttpRequest): boolean {
+  if (!ownedHttpPreparationCredits?.delete(cap)) return false;
+  if (!--ownedHttpPreparationCreditCount) ownedHttpPreparationCredits = undefined;
+  // Metadata/copies remain backed by the HTTP owner until its actual retirement.
+  return true;
+}
+
 /** Closed private attempt: selection -> foreground credential -> preparation. */
 export async function prepareOwnedHttpProvider(cap: OwnedHttpRequest, request: Request, env: Env,
   input: import("./authority-admission.ts").AdmissionSelection, selection: ProxySelection, query: ProxyQuery,
   recordSelection = true, force = false): Promise<void> {
   checkOwnedHttpRequest(cap, request, env); checkOwnedHttpProviderInput(cap, request, env, selection);
-  growOwnedHttpRequest(cap, ownedHttpPreparationBytes(selection) + 8192);
+  // Initial preparation consumes its pre-admission receipt. An alternate owns
+  // a new complete component before its own selection/effects can start.
+  if (!retireOwnedHttpProviderPreparation(cap)) growOwnedHttpRequest(cap, ownedHttpPreparationBytes(selection) + 8192);
   const permit = Object.freeze({}), command: OwnedHttpProviderCommand = { cap, request, env, selection, query };
   (ownedHttpSelectionPermits ??= new WeakMap()).set(permit, cap); ownedHttpSelectionPermitCount++;
   (ownedHttpProviderCommands ??= new WeakMap()).set(permit, command);

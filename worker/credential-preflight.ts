@@ -18,7 +18,7 @@ import { GenerationAdvisoryState, waitGenerationFlushWindow, admitGenerationOver
 import { authorityCall } from "./authority.ts";
 import { recordGrantRuntime } from "./grant-selection.ts";
 import { ownedGenerationCredentialFailure } from "./proxy-auth.ts";
-import { acceptOwnedHttpAuthentication, hasOwnedHttpProxyInvocation } from "./proxy.ts";
+import { acceptOwnedHttpAuthentication, hasOwnedHttpProxyInvocation, reserveOwnedHttpInitialPreparation } from "./proxy.ts";
 import { credentialExpired } from "./credential-lifecycle.ts";
 import { safeEqual, sha256Hex, HttpError } from "./utils.ts";
 import { errorResponse } from "./utils.ts";
@@ -515,6 +515,7 @@ function retireHttpCredential(cap: OwnedHttpCredential): void {
 export function reserveOwnedHttpForeground(http: OwnedHttpRequest, request: Request, env: Env): void {
   checkOwnedHttpRequest(http, request, env);
   if (httpForegroundReservations?.has(http)) return;
+  if (hasOwnedHttpProxyInvocation(http)) reserveOwnedHttpInitialPreparation(http, request, env);
   const lease = GenerationConsumptionLease.reserve(32 * 1024 * 1024);
   let adopted = false;
   try {

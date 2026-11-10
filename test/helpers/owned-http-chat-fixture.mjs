@@ -19,9 +19,9 @@ export async function seedOwnedHttpChat(runtime) {
 export const ownedHttpRouter = String.raw`
 import handler,{privateOwnedHttpChat} from './worker/index.ts';export * from './worker/index.ts';
 import {putGrantCredentials} from './worker/grant-credentials.ts';
-import {bodyBudgetCharged} from './worker/body-budget.ts';
+import {bodyBudgetCharged,bodyBudgetBytes,ExactBodyCharge} from './worker/body-budget.ts';
 const ids=['chat','tool','error','abort','large','off'],calls=[],intakes=[],completed=[];
-let scoped,offScoped;
+let scoped,offScoped,pressure;
 function environment(env,off=false){
  if(!scoped){
   const authority=new Proxy(env.ACCESS_CONTROL,{get(target,name){if(name==='get')return id=>{
@@ -44,6 +44,13 @@ export default {...handler,async fetch(request,env,context){
   return new Response(null,{status:204});
  }
  if(path==='/fixture/state')return Response.json({calls,intakes,completed,charged:bodyBudgetCharged()});
+ if(path==='/fixture/pressure'){
+  if(request.method==='DELETE'){pressure?.release();pressure=undefined;return new Response(null,{status:204});}
+  if(pressure)throw Error('fixture pressure already held');
+  pressure=ExactBodyCharge.reserve(bodyBudgetBytes-bodyBudgetCharged()-40*1024*1024);
+  if(!pressure)throw Error('fixture pressure reserve failed');
+  return new Response(null,{status:204});
+ }
  if(path==='/fixture/upstream')return fetch('https://fixture.example/state');
  if(path==='/v1/catalog')return handler.fetch(request,environment(env),context);
  const id=ids.find(value=>request.headers.get('authorization')==='Bearer clawrouter-live-owned_http_'+value+'-fixture-secret')??'unknown';

@@ -77,7 +77,9 @@ catalog. One client matrix row is added; all prior rows remain.
 Foreground credentials have a separate, genuine capability. The request reserves
 its 32 MiB temporary component after successful secret preverification and before
 full admission can count a choice. A covered generation reserves before local
-selection. A private destination hit borrows the same immutable credential graph;
+selection. The known manifest/preparation component is reserved at that same
+preverification boundary and consumed once by the initial attempt. Alternates
+fund their own component before their new selection effect. A private destination hit borrows the same immutable credential graph;
 misses use original materialization. Optional destination refusal leaves the
 temporary owner usable. Prepared callbacks retain that owner through actual
 delivery, accounting and archive roots. The finalizer clears proxy aliases before

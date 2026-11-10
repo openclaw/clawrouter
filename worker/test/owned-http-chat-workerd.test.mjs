@@ -18,7 +18,7 @@ async function fixture(t, run) {
   const request = async (url, init) => { const response = await take(dispatch(url, init)); return { status: response.status, headers: response.headers, text: await take(body(response)) }; };
   const cleanup = () => cleanupPromise ??= (async () => {
     const failures = [];
-    for (const release of releases) try { release(); } catch (error) { failures.push(error); }
+    for (const release of releases) try { await release(); } catch (error) { failures.push(error); }
     for (let i = 0; i < roots.length; i++) await roots[i].outcome;
     if (runtime) try {
       while (true) {
@@ -94,5 +94,23 @@ test('owned OFF revalidates while wrong-secret and malformed-JSON precedence pre
     assert.equal(rejected.status, 400);
     const upstream = JSON.parse((await f.request('https://fixture/fixture/upstream')).text);
     assert.equal(upstream.filter(row => row.id === 'error').length, 1, 'no replay of rejected original');
+  });
+});
+
+test('known HTTP preparation pressure denies BEFORE full admission can count or dispatch', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    // Cleanup is registered before acquiring pressure. This is common-arena
+    // pressure, not optional-cache pressure or a new request/profile limit.
+    f.releases.push(async () => { assert.equal((await f.request('https://fixture/fixture/pressure', { method: 'DELETE' })).status, 204); });
+    assert.equal((await f.request('https://fixture/fixture/pressure', { method: 'POST' })).status, 204);
+    const response = await f.request('https://fixture/v1/chat/completions', chat('chat'));
+    assert.equal(response.status, 503);
+    assert.equal(response.headers.get('x-clawrouter-error-code'), 'identity_admission_unavailable');
+    const report = await state(f);
+    assert.equal(count(report, 'authority', '/admission/credential-preflight'), 1, 'correct secret was preverified');
+    assert.equal(count(report, 'authority', '/admission/resolve'), 0, 'no full admission or initial choice');
+    assert.equal(count(report, 'authority', '/grant-pools/select'), 0);
+    assert.equal(count(report, 'authority', '/grant-pools/record'), 0);
+    assert.deepEqual(JSON.parse((await f.request('https://fixture/fixture/upstream')).text), []);
   });
 });

@@ -4,7 +4,7 @@ import { beginOwnedHttpUpload, checkOwnedHttpRequest, checkOwnedHttpUpload, aban
   ownedHttpCompletion, holdOwnedHttpRequest, dispatchOwnedHttpUpload, ownOwnedHttpResponse,
   type OwnedHttpRequest, type OwnedHttpUpload } from "./http-identity-owner.ts";
 import { providerConfigurationList } from "./provider-connections.ts";
-import { ownsOwnedHttpSelectionPermit, prepareOwnedHttpProvider } from "./providers.ts";
+import { ownsOwnedHttpSelectionPermit, prepareOwnedHttpProvider, reserveOwnedHttpProviderPreparation, retireOwnedHttpProviderPreparation } from "./providers.ts";
 import { createJsonBodyParser, JsonBodyStructureLimit } from "./json-body.ts";
 import { bindOwnedHttpAuthentication, matchesOwnedHttpAuthentication, queueOwnedHttpSelectionRuntime,
   invalidateOwnedHttpSelectionCredentials, type GenerationSelectionHandle } from "./credential-preflight.ts";
@@ -127,6 +127,7 @@ interface OwnedProxyInvocation {
   identity?: AuthorizedIdentity;
   required?: import("./authority-admission.ts").AdmissionSelection;
   prepared?: PreparedUpstream;
+  preparationAdmitted?: true;
   upload?: OwnedHttpUpload;
   attempts: OwnedHttpUpload[];
 }
@@ -137,6 +138,13 @@ let ownedPreparedSelections: WeakMap<PreparedUpstream, GenerationSelectionHandle
 let ownedPreparedUploads: WeakMap<PreparedUpstream, OwnedHttpUpload> | undefined;
 let ownedProxyCount = 0;
 export function hasOwnedHttpProxyInvocation(cap: OwnedHttpRequest): boolean { return ownedProxyInvocations?.has(cap) === true; }
+export function reserveOwnedHttpInitialPreparation(cap: OwnedHttpRequest, request: Request, env: Env): void {
+  const invocation = ownedProxyInvocations?.get(cap);
+  if (!invocation?.selection) throw identityFailure("protocol");
+  if (invocation.preparationAdmitted) return;
+  reserveOwnedHttpProviderPreparation(cap, request, env, invocation.selection);
+  invocation.preparationAdmitted = true;
+}
 export function acceptOwnedHttpAuthentication(cap: OwnedHttpRequest, identity: AuthorizedIdentity): void {
   const invocation = ownedProxyInvocations?.get(cap);
   if (!invocation || !matchesOwnedHttpAuthentication(cap, identity)) throw identityFailure("protocol");
@@ -197,6 +205,7 @@ export function retireOwnedHttpProxy(cap: OwnedHttpRequest): void {
   // Validate the intake handoff before deleting this owner's last lookup.
   // Its body lease is released only after all prepared/body callback aliases.
   invocation.admission?.checkOwnedRetirement();
+  retireOwnedHttpProviderPreparation(cap);
   const admission = invocation.admission;
   invocation.prepared = undefined; invocation.identity = undefined; invocation.selection = undefined;
   invocation.admission = undefined; invocation.upload = undefined; invocation.attempts.length = 0;
