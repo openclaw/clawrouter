@@ -5,7 +5,7 @@ import { sqliteFixture } from './sqlite-storage.mjs';
 import { accessBytesResponse } from './access-byte-fixture.mjs';
 const { PolicyBindingIndexObject } = await import('../authority.ts');
 const { preflightCredential, consumeCredentialPreflight, completeCredentialAdmission, releaseCredentialPreflight, releaseCredentialPreflightContinuation } = await import('../credential-preflight.ts');
-const { PreflightTicket, PreflightInstanceArena, admissionScratchBytes, reserveAdmissionScratch, retireAdmissionScratch, transferAdmissionScratch, preflightPayloadBytes, admissionBridgeFactoryCharges, admissionBridgeChoiceFactoryCharges, admissionBridgePassiveExamples, admissionBridgePhasePayload, preflightControlSlots } = await import('../credential-preflight-arena.ts');
+const { PreflightTicket, PreflightInstanceArena, admissionScratchBytes, reserveAdmissionScratch, retireAdmissionScratch, transferAdmissionScratch, preflightPayloadBytes, admissionBridgeFactoryCharges, admissionBridgeChoiceFactoryCharges, admissionBridgeCopyFactoryCharges, admissionBridgePassiveExamples, admissionBridgePhasePayload, preflightControlSlots } = await import('../credential-preflight-arena.ts');
 const { consumeAdmissionBridge, admissionBridgeFailureMetadata } = await import('../credential-preflight-source.ts');
 const { bodyBudgetCharged } = await import('../body-budget.ts');
 const { identitySourceBudget, identityPlan, planPrivateIdentityString, admitGeneratedRuntime, foldIdentitySqlHistory, isIdentityFailure } = await import('../identity-admission.ts');
@@ -294,6 +294,28 @@ test('complete wrapper is prospectively admitted before request copying/RPC; ori
   assert.equal(result.failed, true); assert.ok(denied(result.error)); assert.equal(f.trace.kv.length, before);
 }));
 
+test('JSON-omitted enumerable keys exceed private COPY capacity before the destination factory or RPC', async t => fixture(t, async f => {
+  seed(f); const baseline = bodyBudgetCharged(); let proof, continuation;
+  f.resources.push(() => { if (continuation) releaseCredentialPreflightContinuation(continuation); else if (proof) releaseCredentialPreflight(proof); });
+  const preflight = await f.take(f.own(preflightCredential(f.env, 'bridgekid', digest))); proof = preflight.proof;
+  continuation = consumeCredentialPreflight(proof, f.env, 'bridgekid', digest); proof = undefined;
+  // This existing borrowed allocation is not the new copy being budgeted.
+  const borrowed = { providers: [] };
+  for (let index = 0; index < 16384; index++) borrowed[String(index).padStart(5, '0') + 'x'.repeat(1019)] = undefined;
+  const plan = identityPlan(); plan.item(borrowed, 0); assert.deepEqual(plan.counts, (() => { const p = identityPlan(); p.item({ providers: [] }, 0); return p.counts; })());
+  assert.equal(admissionScratchBytes({ C: 1, P: 32768, N: 16384, U: 16777216, B: 0 }), 33947656);
+  let copyFactories = 0, rpcOwners = 0;
+  const create = Object.create;
+  t.mock.method(Object, 'create', function (prototype, ...args) { if (prototype === null) copyFactories++; return Reflect.apply(create, this, [prototype, ...args]); });
+  const get = f.env.ACCESS_CONTROL.get;
+  t.mock.method(f.env.ACCESS_CONTROL, 'get', function (...args) { rpcOwners++; return Reflect.apply(get, this, args); });
+  const original = completeCredentialAdmission(continuation, borrowed); continuation = undefined;
+  const root = f.own(original), outcome = await root.outcome; root.used = true;
+  assert.equal(outcome.failed, true); assert.ok(denied(outcome.error));
+  assert.equal(copyFactories, 0); assert.equal(rpcOwners, 0);
+  assert.equal(bodyBudgetCharged(), baseline);
+}));
+
 test('private envelope preserves own __proto__, unknown fields and owner replacement or append positions', async t => fixture(t, async f => {
   seed(f); const captured = [], get = f.env.ACCESS_CONTROL.get;
   t.mock.method(f.env.ACCESS_CONTROL, 'get', function (...args) {
@@ -306,6 +328,12 @@ test('private envelope preserves own __proto__, unknown fields and owner replace
   const existing = JSON.parse('{"__proto__":{"kept":true},"credentialId":"bridgekid","providers":[],"secretSha256":"' + digest + '","unknown":{"kept":7}}');
   const appended = JSON.parse('{"providers":[],"__proto__":{"kept":true},"unknown":{"kept":7}}');
   Object.defineProperty(appended, 'credentialId', { value: 'bridgekid', enumerable: false });
+  appended.omitted = undefined; appended.symbolValue = Symbol('omitted-value'); // copied, still omitted from JSON
+  const ignored = Symbol('fixture-only'), symbolValue = { large: 'x'.repeat(4 * 1048576) };
+  symbolValue.self = symbolValue; // not JSON data; must never be traversed for a Symbol key
+  let symbolReads = 0;
+  Object.defineProperty(existing, ignored, { enumerable: true, get() { symbolReads++; throw undefined; } });
+  appended[ignored] = symbolValue;
   for (const borrowed of [existing, appended]) {
     let proof, continuation, handle;
     f.resources.push(() => { if (handle) handle.dispose(); else if (continuation) releaseCredentialPreflightContinuation(continuation); else if (proof) releaseCredentialPreflight(proof); });
@@ -315,6 +343,8 @@ test('private envelope preserves own __proto__, unknown fields and owner replace
     handle = await f.take(f.own(operation)); handle.dispose(); handle = undefined;
   }
   assert.equal(captured.length, 2);
+  assert.equal(symbolReads, 0); assert.equal(appended[ignored], symbolValue); assert.equal(Object.getOwnPropertyDescriptor(existing, ignored).enumerable, true);
+  assert.equal(appended.omitted, undefined); assert.ok(Object.hasOwn(appended, 'omitted'));
   assert.deepEqual(Object.keys(captured[0]), ['__proto__', 'credentialId', 'providers', 'secretSha256', 'unknown']);
   assert.deepEqual(Object.keys(captured[1]), ['providers', '__proto__', 'unknown', 'credentialId', 'secretSha256']);
   for (const admission of captured) {
@@ -598,7 +628,7 @@ test('passive vector examples do not reclassify journal ownership, guards or nat
   assert.equal(admissionBridgeFactoryCharges.synchronous.journalIndexSlots, 231);
   assert.ok(admissionBridgeChoiceFactoryCharges.source.preparationOwnerAndScalarState >= 14);
   assert.ok(admissionBridgeChoiceFactoryCharges.source.scratchVectorGuardWeakOwnerLeaseCloseAndMethods > 0);
-  for (const table of [admissionBridgeFactoryCharges, admissionBridgeChoiceFactoryCharges]) for (const [window, entries] of Object.entries(table)) {
+  for (const table of [admissionBridgeFactoryCharges, admissionBridgeChoiceFactoryCharges, admissionBridgeCopyFactoryCharges]) for (const [window, entries] of Object.entries(table)) {
     assert.ok(Object.values(entries).reduce((total, value) => total + value, 0) <= preflightControlSlots[window], window);
   }
   assert.equal(Object.values(admissionBridgePhasePayload.workerReply).reduce((total, value) => total + value, 0), 21020672);

@@ -68,8 +68,41 @@ from PR974's opaque proof. The WeakMap owner supplies the actual binding,
 `policy-bindings`, stable credential id, digest and inherited source owner.
 Conflicting supplied identity and specialized selectors fail. Input admission
 and the complete prospective envelope plan precede shallow copying. Existing
-field positions, unknown fields and own `__proto__` data survive the spread;
+field positions, unknown fields and own `__proto__` data survive the string-keyed copy;
 owner replacements keep their positions and absent owner fields append.
+
+JSON planning alone does not fund object spread. The private Worker now performs
+a separate allocation-free own-property pass over enumerable string properties
+before the source snapshot, inner carrier or outer carrier. It counts keys and value cells
+even for undefined values that JSON omits. String key/value occurrences add U;
+number/boolean/null/undefined values add N; property references add their P cells.
+Owner replacements and both carriers are included conservatively, including the
+seven-counter snapshot. The existing phase lease grows before each factory and
+stays live through original transport/cleanup; clearing request aliases never
+releases credit while they are live.
+
+The reported 16384-key/1024-unit undefined-value input needs 33947656 bytes for
+its new inner copy alone, before the 21020672-byte Worker base. Authored Node and
+Workerd witnesses require private capacity with zero destination-copy factories and zero
+full-admission RPC. A smaller undefined property remains omitted from JSON, and
+existing order/own-`__proto__`/replacement and append witnesses remain intact.
+
+This copy phase uses the otherwise idle prepaid source window: vector (1),
+enumeration iterator (1), copy-loop frame (1), helper/admission/arithmetic frames
+(3), failure/unwind products (2), total 8 CONTROL slots. It creates no
+key-vector array and does not alter ordinary `identityPlan`.
+
+The temporary inner carrier has a null prototype. A second own `for-in` pass
+assigns all enumerable string fields, then replaces/appends owner fields. This
+preserves own `__proto__` as data without per-property descriptors. The carrier
+is immediately JSON-serialized and never exposed. Per the adopted private
+representation, own Symbol keys are not enumerated, copied or read: their
+payloads, descriptions and getters have no JSON-wire representation. Symbol
+values at string keys retain ordinary JSON-plan type/omission behavior. The
+original input stays untouched; no Symbol-key vector or new Symbol policy is
+introduced. Node and native Workerd witnesses include a large cyclic Symbol
+payload and a throwing Symbol getter, plus wire-order and unknown-field checks.
+
 
 A distinct `x-clawrouter-private-admission: v1` selector chooses the new private
 `/admission/resolve` branch after specialized selectors. Nothing forwards this

@@ -309,6 +309,13 @@ export const admissionBridgeChoiceFactoryCharges = Object.freeze({
     dependencyCaptureCallAndFinalProbeFrame: 2,
   }),
 });
+// Worker pre-copy string-field pass, BEFORE source acquisition. It borrows the
+// otherwise idle prepaid source window and clears all metadata before the string-keyed carrier.
+// The original copy lease remains active until all request aliases clear.
+export const admissionBridgeCopyFactoryCharges = Object.freeze({
+  source: Object.freeze({ copyVector: 1, enumerationIterator: 1, copyLoopFrame: 1,
+    helperAdmissionAndArithmeticFrames: 3, failureAndUnwindProducts: 2 }),
+});
 // Passive examples are explicit occurrence vectors, not a hidden control
 // exemption. Guard/lease products above remain CONTROL. The selector funds the
 // simultaneous sum; MAX reuse is allowed only after its actual last consumer.
@@ -331,6 +338,13 @@ export function admitBridgeFactories(): void {
     let count = 0; for (const name in table) count += table[name];
     if (count > preflightControlSlots[window]) throw identityFailure("limit");
   }
+}
+
+export function admitBridgeCopyFactories(): void {
+  let count = 0;
+  const table: Readonly<Record<string, number>> = admissionBridgeCopyFactoryCharges.source;
+  for (const key in table) count += table[key];
+  if (count > preflightControlSlots.source) throw identityFailure("limit");
 }
 
 // Named component bounds. These are NOT an aggregate fit declaration. Each

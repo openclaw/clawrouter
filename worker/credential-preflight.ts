@@ -1,7 +1,7 @@
 import type { Env } from "./types";
 import { admitAdmission, admitIdentity, advanceIdentitySource, identityFailure, identityPlan, identitySourceBudget,
   identitySourceSnapshot, type IdentitySourceBudget } from "./identity-admission.ts";
-import { admitBridgeFactories, admissionBridgePhasePayload, reserveAdmissionScratch, retireAdmissionScratch, PreflightTicket } from "./credential-preflight-arena.ts";
+import { admitBridgeFactories, admitBridgeCopyFactories, admissionBridgePhasePayload, reserveAdmissionScratch, retireAdmissionScratch, PreflightTicket } from "./credential-preflight-arena.ts";
 import { admissionContinuationHeader, admissionContinuationVersion, admissionContinuationPath, closeAdmissionEnvelope, type AdmissionContinuationEnvelope, checkPreflightIdentity, credentialPreflightHeader, credentialPreflightNamespace,
   credentialPreflightPath, credentialPreflightVersion } from "./credential-preflight-protocol.ts";
 import { consumeAdmissionBridge, consumePreflightReply } from "./credential-preflight-source.ts";
@@ -122,8 +122,38 @@ export function completeCredentialAdmission(continuation: CredentialPreflightCon
   void operation.then(() => undefined, () => undefined);
   return operation;
 }
+// Private copy admission is distinct from JSON planning: enumerable own string
+// properties with undefined values still create key/value cells in the temporary copy.
+// No key vector or Symbol enumeration. The earlier JSON admission checked
+// enumerable string descriptors; Symbol getters/payloads are never examined.
+function fundAdmissionCopy(owner: AdmissionOwner, input: Record<string, unknown>,
+  phase: ReturnType<typeof reserveAdmissionScratch>): void {
+  admitBridgeCopyFactories();
+  owner.ticket.enter("source");
+  try {
+    // Inner/outer carriers plus the seven-counter snapshot. Count BOTH owner
+    // assignments conservatively even when they replace an existing input key.
+    const vector = { C: 3, P: 22, N: 7,
+      U: "admission".length + "source".length + "credentialId".length + owner.kid.length
+        + "secretSha256".length + owner.digest.length
+        + "bytes".length + "text".length + "values".length + "containers".length
+        + "members".length + "entries".length + "units".length, B: 0 };
+    phase.admit(vector);
+    for (const key in input) if (Object.hasOwn(input, key)) {
+      const value: unknown = input[key];
+      vector.P += 2; vector.U += key.length;
+      if (typeof value === "string") vector.U += value.length;
+      else if (value == null || typeof value === "number" || typeof value === "boolean") vector.N++;
+      // Reference cells keep their already-admitted borrowed graphs under the
+      // full ticket. No equality/interning credit is taken for string values.
+      phase.admit(vector);
+    }
+  } finally { owner.ticket.leave("source"); }
+}
+
 async function runAdmission(owner: AdmissionOwner, input: Record<string, unknown>, signal?: AbortSignal): Promise<PrivateAdmissionHandle> {
   let body: string | undefined, init: RequestInit | undefined, request: unknown;
+  let copied: Record<string, unknown> | undefined;
   let sent: IdentitySourceBudget | undefined, replySource: IdentitySourceBudget | undefined;
   let reply: AdmissionContinuationEnvelope<import("./authority-admission.ts").AdmissionResult> | null | undefined;
   let stub: DurableObjectStub | undefined, retained = false;
@@ -135,9 +165,10 @@ async function runAdmission(owner: AdmissionOwner, input: Record<string, unknown
   try {
     phase = reserveAdmissionScratch(owner.ticket, worker.admittedRepresentations + worker.flatten + worker.decodedChunk,
       { C: 0, P: 0, N: 0, U: 0, B: 0 });
+    fundAdmissionCopy(owner, input, phase);
     sent = identitySourceSnapshot(owner.source);
     // Visit original borrowed fields and the exact owner replacements BEFORE
-    // constructing the inner spread or either outer carrier. Replacement keys
+    // constructing the inner copy or either outer carrier. Replacement keys
     // keep their original position; new keys append in object-literal order.
     const plan = identityPlan();
     plan.object(0, field => {
@@ -149,8 +180,17 @@ async function runAdmission(owner: AdmissionOwner, input: Record<string, unknown
       }));
       field("source", sent);
     });
-    request = { admission: { ...input, credentialId: owner.kid, secretSha256: owner.digest }, source: sent };
-    body = JSON.stringify(request); request = undefined; input = undefined as never;
+    owner.ticket.enter("source");
+    try {
+      // Ephemeral JSON staging only: preserve every enumerable own STRING field.
+      // Null prototype keeps __proto__ as data without per-field descriptors.
+      // Symbol keys have no JSON representation and are never enumerated/read.
+      copied = Object.create(null) as Record<string, unknown>;
+      for (const key in input) if (Object.hasOwn(input, key)) copied[key] = input[key];
+      copied.credentialId = owner.kid; copied.secretSha256 = owner.digest;
+      request = { admission: copied, source: sent };
+    } finally { owner.ticket.leave("source"); }
+    body = JSON.stringify(request); request = undefined; copied = undefined; input = undefined as never;
     init = { method: "POST", headers: { "content-type": "application/json", [admissionContinuationHeader]: admissionContinuationVersion }, body, signal, redirect: "manual" };
     stub = owner.binding.get(owner.binding.idFromName(owner.namespace));
     replySource = identitySourceBudget();
@@ -171,13 +211,13 @@ async function runAdmission(owner: AdmissionOwner, input: Record<string, unknown
     if (signal?.aborted) throw identityFailure("transport");
     advanceIdentitySource(owner.source, sent, reply.source, replySource);
     owner.admission = reply.admission;
-    body = undefined; init = undefined; request = undefined; reply = undefined; sent = undefined; replySource = undefined; stub = undefined; signal = undefined;
+    body = undefined; init = undefined; request = undefined; copied = undefined; reply = undefined; sent = undefined; replySource = undefined; stub = undefined; signal = undefined;
     // Full graph remains under the SAME 32 MiB ticket. No scalar shrink/GC credit.
     const handle = Object.freeze({ dispose: disposeAdmission });
     admissions.set(handle, owner); retained = true;
     return handle;
   } finally {
-    body = undefined; init = undefined; request = undefined; reply = undefined; sent = undefined; replySource = undefined; stub = undefined; signal = undefined; input = undefined as never;
+    body = undefined; init = undefined; request = undefined; copied = undefined; reply = undefined; sent = undefined; replySource = undefined; stub = undefined; signal = undefined; input = undefined as never;
     phase?.retire();
     if (!retained) { owner.admission = undefined; retireOwner(owner); }
   }
