@@ -32,10 +32,10 @@ export function validateProviderConformance(pluginPaths) {
         ids.add(scenario.id);
         const endpoint = provider.endpoints.find(endpoint => endpoint.id === scenario.endpoint);
         if (!endpoint) fail("endpoint is not declared by the provider");
-        const capability = provider.capabilities.find(capability => capability.id === scenario.capability && capability.endpoint === endpoint.id);
-        if (!capability) fail("capability is not declared for this endpoint");
+        const capabilities = provider.capabilities.filter(capability => capability.id === scenario.capability && capability.endpoint === endpoint.id);
+        if (!capabilities.length) fail("capability is not declared for this endpoint");
         const method = scenario.upstream.request.method;
-        if (!endpoint.methods.includes(method) || !capability.methods.includes(method)) fail("upstream method is not declared for this endpoint and capability");
+        if (!endpoint.methods.includes(method) || !capabilities.some(capability => capability.methods.includes(method))) fail("upstream method is not declared for this endpoint and capability");
         if (scenario.model !== undefined) {
           const model = provider.models.find(model => model.id === scenario.model);
           if (!model) fail("model must reference an exact declared router model ID");

@@ -406,8 +406,8 @@ headers, credential configuration, upstream URLs, or absolute paths. The report
 type is exported by the plugin contract. Invalid packages produce no report.
 
 This check does not execute an adapter, compare expected HTTP messages, authorize
-an account, check runtime availability, or prove fixture coverage. It validates
-authored references even for stopped models. The future host runner must separately
+an account, check runtime availability, or prove fixture coverage. A declared
+reference does not establish model availability. The future host runner must separately
 qualify routes, configuration, and supported scenario kinds before execution.
 
 Streaming, binary bodies, auth setup, local rejection without an upstream call,

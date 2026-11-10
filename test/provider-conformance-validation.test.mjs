@@ -70,6 +70,16 @@ test("model references are exact opaque IDs with the selected capability", t => 
   assert.throws(() => validateProviderConformance([f.descriptor]), /model does not declare this capability/);
 });
 
+test("split capability method declarations are independent of declaration order", t => {
+  const f = fixture(t);
+  f.manifest(m => { m.capabilities.unshift({ id: "tool.invoke", endpoint: "invoke", methods: ["GET"] }); });
+  assert.equal(validateProviderConformance([f.descriptor]).packages[0].scenarios.length, 1);
+  f.manifest(m => { m.capabilities.reverse(); });
+  assert.equal(validateProviderConformance([f.descriptor]).packages[0].scenarios.length, 1);
+  f.scenario(s => { s.upstream.request.method = "GET"; });
+  assert.equal(validateProviderConformance([f.descriptor]).packages[0].scenarios.length, 1);
+});
+
 test("selected packages need unique scenarios, while empty and legacy fixture packages still load", t => {
   assert.throws(() => validateProviderConformance([]), /at least one provider plugin/);
   const empty = fixture(t);
