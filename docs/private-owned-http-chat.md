@@ -1630,3 +1630,201 @@ include the lower module and assert the permanent claim before the first base
 field initializer. Updated debit checks observe the actual singleton publication
 and retain its exact65536 baseline. All semantics are UNRUN_CODE_ONLY_HOSTED;
 raw/generated syntax, whitespace and privacy checks are not runtime evidence.
+
+
+### Flat private census and native construction checkpoint
+
+This draft replaces only the private codec tokenizer validator. The ordinary
+and expanded-ingress factories and their shared materializer remain byte-identical.
+`measurePrivateJsonBody` is one allocation/limit scanner used by the private
+codec and accepted-usage owner. Its only result is `{ upper, exact, limited }`.
+Each fixed caller consumes and clears that receipt before native construction.
+The scanner clears its text parameter and exits completely. It constructs no
+parent vector, token vector, decoded string, callback, facade or Promise.
+
+The allocation expression is always `16*(C+S+A)+2*Uraw`, including partial atoms,
+unfinished strings, apparent keys and discarded duplicates. K is never subtracted
+before grammar succeeds. Allocation atom separators preserve the former private
+usage scanner's broad whitespace set, including VT/FF, NBSP, Unicode spaces and
+BOM. Key lookahead uses only JSON's four whitespace characters. Neither rule
+accepts grammar: native `JSON.parse` receives the exact original text.
+
+The separate valid-only expression is `8*(2V-1+K)+2*Udecoded`, with
+`V=C+S-K+A`. The codec uses it only after successful native parsing. Quoted keys
+are classified before the value limit verdict, so a valid final key cannot
+provisionally push the value count above65536. Container depth is checked before
+its value count. Short escapes and valid Unicode escapes each contribute one
+decoded UTF-16 unit; surrogate pairs contribute two. Keys and number spellings
+retain4096; ordinary value strings have no such cap. Usage ignores `limited`,
+retaining its existing broader native-JSON profile and accumulator semantics.
+
+#### Actual component DATA schedule
+
+| Codec phase | Retained parsing component | Backing component | Valid upper | Backing plus upper |
+| --- | ---: | ---: | ---: | ---: |
+| JSON |22609920|12648448|6291440|18939888|
+| SSE |7667712|6094848|1310728|7405576|
+
+Header funding is additive to each row. The full parsing component remains
+paid through the census and native constructor; there is no shrink/reacquire
+window. A limited verdict or an actual `backing+upper` exceeding that already-paid
+component rejects locally before native construction. The valid-profile bounds
+exclude valid admitted wire from this latter branch. No upper is clamped and
+then used to parse larger input. After native success, the codec replaces its
+component with `backing+exact` before fresh authorization or later usage work.
+Independent usage and consumer debits remain untouched. These are component
+bounds, not the whole foreground32MiB or COMMON96MiB proof.
+
+Only the native constructor is inside its syntax catch. A native SyntaxError
+alias clears synchronously before creating the fixed local `Error("invalid owned
+JSON")`; native input/message/cause/stack is not carried into cleanup. Capability
+and genuine capacity failures remain outside that catch. The adopted malformed
+priority change allows flat limits before native grammar, and allows malformed
+input within those limits to reach the funded native constructor. Existing
+phase-specific abort, capacity and soft-denial precedence remains. Prepublication
+upstream-format failure remains502/provider_unavailable; published SSE keeps its
+status and fails its body. No universal503 claim follows. Original cleanup,
+actual failure ordinals, reservation/event IDs and fresh-RPC ordering remain.
+
+#### Fixed shared target
+
+The same permanent65536 COMMON reservation remains; no new claim or release
+exists. The named fixed target ceiling is390: prior384, replacing its three
+validator products with three measurement-kernel products, plus the allocation
+whitespace function/binding/module-link3, the token-usage import reference1 and
+its participating module scope/outer-link2. The last two are charged once here,
+not again in a per-request scope or another shared-owner column. This target
+extension grants no ownership of unrelated token-usage implementations. The old
+usage census's removed function is not used as a credit against this target.
+The loaded pinned281 products remain in custody even though this codec no longer
+constructs a tokenizer.
+
+The added fixed payload profile contains the scanner's fixed identifier/property
+names and numeric whitespace/limit constants, one import name, and two occurrences
+of the18-unit fixed syntax message. The measurement block has1684 identifier-
+occurrence units and3511 total source units; counting even erased/repeated source
+occurrences is a conservative fixed-name envelope, not a claim that source text
+is retained. It adds no input-dependent payload to the shared owner.65536 remains
+the explicitly adopted normative reservation, not390 converted to bytes or a
+native-heap certificate. All calls, receipt fields, scalar locals, errors and
+native operands stay on the requesting ticket.
+
+The ordinary completion/private-leaf prefix remains2931 bytes with SHA256
+`54d815cdf65b28efc425a9692c974ca8522687a843af7f42b432e3034614640b`.
+The new measurement block SHA256 is
+`086e64378caea26aaab1b1ea1c72e07a309a9b8d62de68cefc31cb2de402705b`.
+
+#### Remaining actual CONTROL counterexample
+
+The selected scalar representation is implemented, but a larger source-backed
+subset still exceeds the aggregate necessary ceiling. Use a later valid depth128
+SSE object containing a Unicode escape, four healthy pending soft-status reads,
+and a streamed request whose original upload pipe remains held while the provider
+has already returned its response. Source, consumer and public pulls remain live.
+The earlier frame has completed first-data authorization. This schedule requires
+no failed-origin histories, terminal recovery or deferred cohort transport.
+
+| Disjoint simultaneous products | Lower count | Actual producer/lifetime |
+| --- | ---: | --- |
+| Surviving AF6A subset excluding its175 validator row |913|Unchanged385, source41, consumer55, public37, usage35, status224, proxy25, reads30, three closed36, three pulls36 and public lifetime leaf9. |
+| Scalar census plus its immediate codec caller |24|Scanner text and ten persistent scalar bindings11, code1, string length/closed2, Unicode/look/digit3, scanner activation1; codec state/text/backing/parsing/census5 and activation1. This is the active Unicode-digit branch, before receipt construction. |
+| Four independent status closed observations |32|Each retains actual closed and following Promises2, two handlers/receiver links4 and two reactions2. The carried status224 row counts read observations, not these closed originals. |
+| Source, consumer and status retirement leaves |27|Three distinct `observePrivateLeaf` instances: two handlers/links4, follower1, reactions2, retained scope/pending2 each. Their input retirement Promises are already in their owner rows. |
+| Dynamic codec completion child |9|Object/six fields7, completion Promise and resolver2; excluded from the initial revalidation row. |
+| That child's parent follower |4|Handler/link2, following Promise1 and reaction1, retained until source retirement. |
+| Held upload and sink custody leaves |18|Two different terminal consumers enrolled at `pipeOwnedHttpUpload` and `sinkOriginal`;9 each, excluding their original/outcome/void input Promises. |
+| Active enclosing SSE command |7|Activation and controller/boundary/text/value/payload/hasData bindings. No decoder, operand, block-scope or additional `this` slot is included. |
+| **Actual disjoint lower** |**1034**|**10 over1024 before remaining omissions.** |
+
+The leaves above do not disappear when the codec's public Response resolves.
+`ownOwnedHttpVeniceRetirement`, `ownOwnedCodecConsumerRetirement` and
+`prepareOwnedHttpSoftStatus` enroll separate pending retirement promises. The
+upload scope and sink scope have distinct consumers even when they observe the
+same pipe outcome. Their observers stay live under the held-original schedule.
+No field assigned undefined is subtracted, and no shared390 target is added to
+this per-request sum.
+
+Removing the unused serial operand from the three one-shot closed roles would
+remove only six products from this schedule, leaving1028 before omissions.
+Cancel/unlock specialization supplies no saving while those roles have not
+started. No isolated packing patch is presented as a repair. The next minimal
+source surface remains the fixed private reader/status observation layout in
+`proxy-completion.ts` and `http-identity-owner.ts`; all distinct sink/upload
+custody consumers must remain represented. This evidence does not justify a26th
+source, quota increase, scope deletion or early retirement.
+
+| Required phase/window | Current disposition |
+| --- | --- |
+| Hydration/authorization | Request/generation/intake/source overlaps and first shared-claim active operands still require a complete upper. |
+| Sniff/crossing/first authorization | Actual native boundaries, capture/source/output backings and authorization originals unchanged; upper open. |
+| Later scalar scan |1034 disjoint lower blocks every possible four-window-plus-sync certificate. |
+| Native construction/accepted usage | Scalar receipt cleared; component DATA schedule above closed, whole additive graph/text/usage/capture sum open. |
+| Replacement plus abandoned reader | Both original reader owners and cleanup tails stay funded; upper open. |
+| Terminal/recovery and cohort drain | Original terminal engine and deferred generation unchanged; their actual phase inventories remain open. |
+| UNKNOWN | Applicable pending owners, histories and debits remain; no window reuse. |
+| Operation128/source128/read128/terminal128 | No fungible reassignment or migration is claimed; their complete individual maxima remain open. |
+| Synchronous512 | Census calls, receipt construction, native operands and unwind must be added to all actually retained async products assigned here; not a residual pool. |
+
+New authored cases cover decoded key boundaries, duplicate node ceilings,
+malformed apparent keys/unfinished strings, broad allocation-whitespace parity,
+usage's broader profile, escaped near-limit JSON/SSE, first/later syntax failure,
+fixed syntax projection before held unlock, and a real configured OpenClaw
+UNIFIED escaped frame. Existing materializer stack witnesses remain; codec
+witnesses now observe zero tokenizer products and actual receipt/debit ordering.
+All semantics are UNRUN_CODE_ONLY_HOSTED. This is an immutable blocker checkpoint,
+not a complete source-qualified candidate. No hosted run or publication is allowed.
+
+#### Checkpoint path inventory
+
+Production boundary remains the following25 paths:
+
+- `worker/access-json.ts`
+- `worker/accounting.ts`
+- `worker/authority.ts`
+- `worker/content-retention.ts`
+- `worker/credential-cache.ts`
+- `worker/credential-preflight.ts`
+- `worker/gmi-organization-binding.ts`
+- `worker/grant-credentials.ts`
+- `worker/http-identity-owner.ts`
+- `worker/index.ts`
+- `worker/json-body.ts`
+- `worker/ledgers.ts`
+- `worker/pricing.ts`
+- `worker/providers.ts`
+- `worker/proxy-accounting.ts`
+- `worker/proxy-auth.ts`
+- `worker/proxy-completion.ts`
+- `worker/proxy-response.ts`
+- `worker/proxy-upstream-request.ts`
+- `worker/proxy.ts`
+- `worker/response-control-authorization.ts`
+- `worker/soft-budget.ts`
+- `worker/token-usage.ts`
+- `worker/venice-chat-authority.ts`
+- `worker/venice-chat-runtime.ts`
+
+Tests, fixtures and the existing client registration are separate:
+
+- `.github/workflows/openclaw-contract.yml`
+- `test/fixtures/openclaw-owned-http-chat-contract.test.ts`
+- `test/helpers/owned-http-chat-fixture.mjs`
+- `test/helpers/owned-json-parser-cases.mjs`
+- `test/helpers/owned-json-parser-observer.mjs`
+- `test/helpers/owned-static-custody-observer.mjs`
+- `test/openclaw-owned-http-chat.test.mjs`
+- `worker/test/json-body.test.mjs`
+- `worker/test/owned-http-chat-workerd.test.mjs`
+- `worker/test/owned-http-intake.test.mjs`
+- `worker/test/owned-http-legacy-selection-workerd.test.mjs`
+- `worker/test/owned-http-legacy-selection.test.mjs`
+- `worker/test/owned-http-pricing.test.mjs`
+- `worker/test/owned-http-revalidation.test.mjs`
+- `worker/test/owned-http-sinks.test.mjs`
+- `worker/test/owned-http-upload-workerd.test.mjs`
+- `worker/test/owned-http-upload.test.mjs`
+- `worker/test/owned-json-parser.test.mjs`
+- `worker/test/owned-reader-driver.test.mjs`
+- `worker/test/proxy-completion.test.mjs`
+
+Documentation/release entry: `docs/private-owned-http-chat.md` and `CHANGELOG.md`.

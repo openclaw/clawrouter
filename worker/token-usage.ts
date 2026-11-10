@@ -1,3 +1,4 @@
+import { measurePrivateJsonBody } from "./json-body.ts";
 import type { HttpOperation } from "./http-operation.ts";
 import type { ValidatedNativeUsage } from "./native-response.ts";
 import { googleField, googleInt32, googleServiceTier } from "./google-protocol.ts";
@@ -317,28 +318,6 @@ const ownedUsageMetadata = 65536;
 let ownedAcceptedUsage: WeakMap<OwnedHttpRevalidation, OwnedAcceptedUsage> | undefined;
 let ownedFrameConsumers: WeakMap<(frame: string | null) => void, OwnedAcceptedUsage> | undefined;
 
-// Scalar census only. Native JSON.parse remains the sole grammar and value
-// constructor. Every quoted token and partial atom contributes, even when a
-// later duplicate discards it or malformed input makes parsing throw.
-function ownedJsonGraphUpper(text: string): number {
-  let containers = 0, strings = 0, atoms = 0, units = 0;
-  let quoted = false, escaped = false, atom = false;
-  for (let index = 0; index < text.length; index++) {
-    const code = text.charCodeAt(index);
-    if (quoted) {
-      if (escaped) { units++; escaped = false; }
-      else if (code === 92) { units++; escaped = true; }
-      else if (code === 34) quoted = false;
-      else units++;
-      continue;
-    }
-    if (code === 34) { strings++; quoted = true; atom = false; }
-    else if (code === 123 || code === 91) { containers++; atom = false; }
-    else if (code === 125 || code === 93 || code === 44 || code === 58 || trimCode(code)) atom = false;
-    else if (!atom) { atoms++; atom = true; }
-  }
-  return 16 * (containers + strings + atoms) + 2 * units;
-}
 function trimCode(code: number): boolean {
   return code >= 9 && code <= 13 || code === 32 || code === 160 || code === 5760
     || code >= 8192 && code <= 8202 || code === 8232 || code === 8233 || code === 8239 || code === 8287 || code === 12288 || code === 65279;
@@ -391,7 +370,11 @@ class OwnedAcceptedUsage {
     // The caller retains this exact text until evidence/extraction has ended.
     // The fixed metadata also backs the finite counter projections, old/new
     // summary and extraction/update/entries/filter/fromEntries intermediates.
-    this.reserve((retainedText ? 0 : 2 * data.length) + ownedJsonGraphUpper(data));
+    // Retain every already-paid temporary while admitting the receipt factory.
+    this.reserve(Math.max(this.temporaryBytes, retainedText ? 0 : 2 * data.length));
+    let census: ReturnType<typeof measurePrivateJsonBody> | undefined = measurePrivateJsonBody(data);
+    const upper = census.upper; census = undefined;
+    this.reserve((retainedText ? 0 : 2 * data.length) + upper);
   }
   private revoke(): void { revokeOwnedUsageRejection(this.cap); }
   private fold(frame: string): string {

@@ -64,6 +64,11 @@ export function ownedJsonCodecWire(mode, model) {
   else if (mode === 'compact-numeric') extra = '{"negativeZero":-0,"large":1e309,"rounded":9007199254740993,"duplicate":1,"duplicate":2}';
   else if (mode === 'compact-strict-space') extra = '[\u00a00]';
   else if (mode === 'compact-invalid-eof') return prefix + '"unfinished\\u';
+  else if (mode === 'compact-flat-invalid') return prefix + '["x":0]}';
+  else if (mode === 'compact-flat-escaped-json' || mode === 'compact-flat-escaped-sse') {
+    const maximum = mode.endsWith('json') ? 2097152 : 131000;
+    extra = '"' + '\\u0061'.repeat(Math.floor((maximum - prefix.length - 160) / 6)) + '"';
+  }
   else if (mode === 'compact-bom') return '\ufeff' + ownedJsonCodecWire('compact-mixed', model);
   else throw new Error('unknown compact parser fixture case');
   return prefix + extra + ',"usage":{"prompt_tokens":4,"completion_tokens":3,"total_tokens":7}}';

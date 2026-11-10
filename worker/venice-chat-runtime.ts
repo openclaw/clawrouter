@@ -1,5 +1,5 @@
 import { OwnedReaderDriver, claimOwnedHttpStaticCustody } from "./proxy-completion.ts";
-import { validatePrivateJsonBody, parseBoundedJson } from "./json-body.ts";
+import { measurePrivateJsonBody, parseBoundedJson } from "./json-body.ts";
 import { inputRetirement } from "./input-retirement.ts";
 import { nativeResponseLease, type NativeResponse } from "./native-response.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
@@ -261,18 +261,29 @@ export function retireOwnedVeniceChatCodec(cap: OwnedHttpRevalidation): void {
   if (!--ownedCodecCount) ownedCodecs = undefined;
 }
 
-// One code point is passed to the unchanged tokenizer at a time. Validation
-// returns through its complete scope before native graph construction starts.
+// Retain the already-admitted parsing component through census and native
+// construction. Only a successful parse permits the exact valid-graph debit.
 function parseOwnedVeniceJson(state: OwnedVeniceCodec, text: string): unknown {
   if (codecOwner(state.cap) !== state || !state.started || !state.source) throw identityFailure("protocol");
   const backing = (state.streaming ? 2 * limit + 14 * frameLimit : 6 * limit) + ownedCodecMetadata;
-  codecPhase(state, backing);
+  const parsing = state.streaming ? ownedSseParsing : ownedJsonSource;
+  codecPhase(state, parsing);
   if (!claimOwnedHttpStaticCustody()) throw identityFailure("limit");
-  const graph = validatePrivateJsonBody(text);
-  // Validation has returned through its unconditional alias clear. The native
-  // constructor sees the EXACT text only after its separate graph admission.
-  codecPhase(state, backing + graph);
-  return JSON.parse(text);
+  let census: ReturnType<typeof measurePrivateJsonBody> | undefined = measurePrivateJsonBody(text);
+  const upper = census.upper, exact = census.exact, limited = census.limited;
+  census = undefined;
+  if (limited || backing + upper > parsing) throw new Error("invalid owned JSON");
+  let value: unknown;
+  try {
+    try { value = JSON.parse(text); }
+    catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      error = undefined;
+      throw new Error("invalid owned JSON");
+    }
+    codecPhase(state, backing + exact);
+    return value;
+  } finally { value = undefined; text = ""; }
 }
 
 const ownedDefaultClosed = Object.getOwnPropertyDescriptor(ReadableStreamDefaultReader.prototype, "closed")!.get;

@@ -6,7 +6,7 @@ import { ownedUsageWire } from './owned-json-parser-cases.mjs';
 // These observers are NOT production factories or a complete CONTROL inventory.
 export function createOwnedJsonObservation() {
   const rows = [], readers = new WeakSet();
-  let current, preparations = 0;
+  let current, censusUsage = false, preparations = 0;
   const consumers = { created: 0, acquired: 0, retired: 0, live: 0, inner: 0, outer: 0,
     read: 0, cancel: 0, unlock: 0, nativeUnlocked: 0, unlockSettled: 0, thenCalls: 0, closed: 0, closedSettled: 0, replay: 0, transferred: 0, pricing: 0, enqueued: 0, oversizedOutput: 0, mutations: 0, held: false, released: false, reasonReads: 0 };
   const usage = { census: 0, parsed: 0, maxGraph: 0, maxContainers: 0, maxStrings: 0, maxAtoms: 0, maxUnits: 0, summaries: 0, cleared: 0 };
@@ -211,11 +211,33 @@ export function createOwnedJsonObservation() {
     capturedIntake(length) { intakeReaders.captures = (intakeReaders.captures ?? 0) + 1; intakeReaders.capturedBytes = (intakeReaders.capturedBytes ?? 0) + length; },
     intakeGraph(bytes) { intakeReaders.graphBytes = bytes; },
     mutateIntake() { mutateIntake?.(); },
-    census(c, s, a, u, graph) {
-      usage.census++; usage.maxGraph = Math.max(usage.maxGraph, graph);
-      usage.maxContainers = Math.max(usage.maxContainers, c); usage.maxStrings = Math.max(usage.maxStrings, s);
-      usage.maxAtoms = Math.max(usage.maxAtoms, a); usage.maxUnits = Math.max(usage.maxUnits, u);
+    startCensus(usageOnly = false) {
+      if (current || censusUsage) throw new Error('overlapping scalar census');
+      if (usageOnly) censusUsage = true;
+      else { const row = this.begin('validator'); this.enter(row); }
     },
+    censusDepth(depth) { if (current) current.peakDepth = Math.max(current.peakDepth, depth); },
+    census(c, s, a, u, upper, exact, limited) {
+      if (censusUsage) {
+        usage.census++; usage.maxGraph = Math.max(usage.maxGraph, upper);
+        usage.maxContainers = Math.max(usage.maxContainers, c); usage.maxStrings = Math.max(usage.maxStrings, s);
+        usage.maxAtoms = Math.max(usage.maxAtoms, a); usage.maxUnits = Math.max(usage.maxUnits, u);
+      } else if (current) { current.graph = upper; current.exact = exact; current.limited = limited; }
+    },
+    censusCleared(clear) {
+      if (!clear) throw new Error('scalar census retained text');
+      if (current) { const row = current; this.leave(row); row.cleared = true; }
+      censusUsage = false;
+    },
+    censusReceipt(clear, upper, exact, limited, backing, parsing) {
+      const row = rows.at(-1);
+      if (!clear || current || !row?.cleared) throw new Error('census receipt overlaps native parse');
+      row.receiptCleared = true; row.paid = parsing; row.required = backing + upper;
+      row.exactDebit = backing + exact; row.limited = limited;
+    },
+    exactRestored(bytes) { const row = rows.at(-1); if (!row?.nativeParses || bytes !== row.exactDebit) throw new Error('exact debit restored before native success'); row.restored = true; },
+    fixedSyntax(error) { if (error.message !== 'invalid owned JSON') throw new Error('unbounded local syntax projection'); rows.at(-1).fixedSyntax = true; return error; },
+    syntaxCleared(clear) { if (!clear) throw new Error('native SyntaxError retained'); rows.at(-1).syntaxCleared = true; },
     beforeUsageParse() { if (usage.parsed >= usage.census) throw new Error('native usage parse before census'); usage.parsed++; },
     summary(value) { if (value !== undefined && value !== 'refusal') throw new Error('private summary retained a stop-reason subtree'); usage.summaries++; },
     usageCleared() { usage.cleared++; },
@@ -267,7 +289,7 @@ export function createOwnedJsonObservation() {
     },
     nativeParse() {
       const row = rows.at(-1);
-      if (current || !row || row.kind !== 'validator' || !row.cleared || row.graph <= 0 || row.nativeParses)
+      if (current || !row || row.kind !== 'validator' || !row.cleared || !row.receiptCleared || row.required > row.paid || row.limited || row.nativeParses)
         throw new Error('native graph constructor overlaps validator or lacks admission');
       row.nativeParses++;
     },
@@ -310,7 +332,15 @@ function replace(source, anchor, replacement, count = 1) {
 
 export function observeOwnedJsonSource(path, source) {
   if (/[\\/]worker[\\/]venice-chat-runtime\.ts$/.test(path)) {
-    source = replace(source, 'return JSON.parse(text);', probe + '.nativeParse(); return JSON.parse(text);');
+    source = replace(source, 'let census: ReturnType<typeof measurePrivateJsonBody> | undefined = measurePrivateJsonBody(text);',
+      probe + '.startCensus(); let census: ReturnType<typeof measurePrivateJsonBody> | undefined = measurePrivateJsonBody(text);');
+    source = replace(source, '  census = undefined;',
+      '  census = undefined; ' + probe + '.censusReceipt(census === undefined, upper, exact, limited, backing, parsing);');
+    source = replace(source, 'try { value = JSON.parse(text); }', 'try { ' + probe + '.nativeParse(); value = JSON.parse(text); }');
+    source = replace(source, '    codecPhase(state, backing + exact);',
+      '    codecPhase(state, backing + exact); ' + probe + '.exactRestored(backing + exact);');
+    source = replace(source, '      error = undefined;', '      error = undefined; ' + probe + '.syntaxCleared(error === undefined);');
+    source = replace(source, 'new Error("invalid owned JSON")', probe + '.fixedSyntax(new Error("invalid owned JSON"))', 2);
     source = replace(source, 'this.reader = (this.flags & 8) ? this.body.getReader({ mode: "byob" }) : this.body.getReader();',
       'this.reader = (this.flags & 8) ? this.body.getReader({ mode: "byob" }) : this.body.getReader(); ' + probe + '.sourceReader(this.reader);');
   } else if (/[\\/]worker[\\/]proxy-completion\.ts$/.test(path)) {
@@ -326,8 +356,8 @@ export function observeOwnedJsonSource(path, source) {
     source = replace(source, '    this.pending |= 1; this.seen &= ~1; this.serial++; this.readFailure = undefined;',
       '    ' + probe + '.driverRead(); this.pending |= 1; this.seen &= ~1; this.serial++; this.readFailure = undefined;');
   } else if (/[\\/]worker[\\/]token-usage\.ts$/.test(path)) {
-    source = replace(source, 'return 16 * (containers + strings + atoms) + 2 * units;',
-      probe + '.census(containers, strings, atoms, units, 16 * (containers + strings + atoms) + 2 * units); return 16 * (containers + strings + atoms) + 2 * units;');
+    source = replace(source, 'let census: ReturnType<typeof measurePrivateJsonBody> | undefined = measurePrivateJsonBody(data);',
+      probe + '.startCensus(true); let census: ReturnType<typeof measurePrivateJsonBody> | undefined = measurePrivateJsonBody(data);');
     source = replace(source, 'owned?.admitJson(data);', 'owned?.admitJson(data); if (owned) ' + probe + '.beforeUsageParse();');
     source = replace(source, 'this.admitJson(this.text, true);', 'this.admitJson(this.text, true); ' + probe + '.beforeUsageParse();');
     source = replace(source, 'messageUsage = messageCounters(usageRecord(root));',
@@ -338,17 +368,11 @@ export function observeOwnedJsonSource(path, source) {
     source = replace(source, 'if (!this.finished) controller.enqueue(bytes!);',
       'if (!this.finished) { controller.enqueue(bytes!); ' + probe + '.enqueued(bytes!); }');
   } else if (/[\\/]worker[\\/]json-body\.ts$/.test(path)) {
-    source = replace(source, 'export function validatePrivateJsonBody(text: string): number {',
-      'export function validatePrivateJsonBody(text: string): number { const __validatorProbe = ' + probe + '.begin("validator");');
-    source = replace(source, 'if (++depth > 128) throw new JsonBodyStructureLimit();',
-      'depth++; ' + probe + '.validating(__validatorProbe, depth); if (depth > 128) throw new JsonBodyStructureLimit();');
-    source = replace(source, 'consume.push(text.slice(offset, end)); offset = end;',
-      probe + '.enter(__validatorProbe); try { consume.push(text.slice(offset, end)); } catch (error) { ' + probe + '.rejected(__validatorProbe); throw error; } finally { ' + probe + '.leave(__validatorProbe); } offset = end;');
-    source = replace(source, 'consume.end();\n    return 8 * (2 * values - 1 + keys) + 2 * units;',
-      probe + '.enter(__validatorProbe); try { consume.end(); } finally { ' + probe + '.leave(__validatorProbe); } '
-      + probe + '.validated(__validatorProbe, 8 * (2 * values - 1 + keys) + 2 * units); return 8 * (2 * values - 1 + keys) + 2 * units;');
-    source = replace(source, 'consume = undefined; accept = undefined; text = "";',
-      'consume = undefined; accept = undefined; text = ""; ' + probe + '.validatorCleared(__validatorProbe, consume === undefined && accept === undefined && text === "");');
+    source = replace(source, 'if (++depth > 128) limited = true;',
+      'depth++; ' + probe + '.censusDepth(depth); if (depth > 128) limited = true;');
+    source = replace(source, '    return { upper: 16 * (containers + strings + atoms) + 2 * rawUnits,',
+      '    ' + probe + '.census(containers, strings, atoms, rawUnits, 16 * (containers + strings + atoms) + 2 * rawUnits, 8 * (2 * (containers + strings - keys + atoms) - 1 + keys) + 2 * decodedUnits, limited); return { upper: 16 * (containers + strings + atoms) + 2 * rawUnits,');
+    source = replace(source, '  } finally { text = ""; }', '  } finally { text = ""; ' + probe + '.censusCleared(text === ""); }');
     source = replace(source, 'let pendingKey: string | undefined;',
       'let pendingKey: string | undefined; const __parserProbe = privateParents ? ' + probe + '.begin() : undefined;');
     source = replace(source, 'parent = parents.at(-1); member = pendingKey;',

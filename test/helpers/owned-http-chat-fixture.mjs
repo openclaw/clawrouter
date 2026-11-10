@@ -289,9 +289,10 @@ export default {async fetch(request){
  if(id==='invalid')return Response.json({error:{type:'invalid_request_error',message:'fixture credential rejected'}},{status:401});
  if(id==='error')return Response.json({error:{type:'invalid_request_error',message:'synthetic rejection'}},{status:400});
  const usage={prompt_tokens:4,completion_tokens:3,total_tokens:7};
+ if(id==='venice'&&body.messages?.some(message=>message.role==='user'&&message.content==='fixture-owned-flat-escaped'))return new Response('data: '+JSON.stringify({model:body.model,choices:[{index:0,delta:{content:'synthetic-answer'},finish_reason:'stop'}],usage}).slice(0,-1)+',\"extra\":\"'+'\\u0061'.repeat(21000)+'\"}\n\ndata: [DONE]\n\n',{headers:{'content-type':'text/event-stream'}});
  if((id==='venice'||id==='soft_venice')&&body.ownedVeniceCase?.startsWith('line-'))return new Response(ownedCodecSseLines(body.model,body.ownedVeniceCase),{headers:{'content-type':'text/event-stream'}});
  if((id==='venice'||id==='soft_venice')&&body.ownedVeniceCase?.startsWith('compact-')){
-  const later=body.ownedVeniceCase==='compact-later-object128'||body.ownedVeniceCase==='compact-later-object129',comments=body.ownedVeniceCase==='compact-comment-prefix',wire=ownedJsonCodecWire(later?(body.ownedVeniceCase==='compact-later-object129'?'compact-object129':'compact-object-string128'):comments?'compact-object128':body.ownedVeniceCase,body.model);
+  const later=body.ownedVeniceCase==='compact-later-object128'||body.ownedVeniceCase==='compact-later-object129'||body.ownedVeniceCase==='compact-later-flat-invalid',comments=body.ownedVeniceCase==='compact-comment-prefix',wire=ownedJsonCodecWire(later?(body.ownedVeniceCase==='compact-later-flat-invalid'?'compact-flat-invalid':body.ownedVeniceCase==='compact-later-object129'?'compact-object129':'compact-object-string128'):comments?'compact-object128':body.ownedVeniceCase,body.model);
   const prefix=later?'data: '+JSON.stringify({model:body.model,choices:[]})+'\n\n':comments?':'+ 'x'.repeat(8192)+'\n\n':'';
   return new Response(body.stream===true?prefix+'data: '+wire+'\n\ndata: [DONE]\n\n':wire,{headers:{'content-type':body.stream===true?'text/event-stream':'application/json'}});
  }

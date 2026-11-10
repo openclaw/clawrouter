@@ -47,10 +47,11 @@ test('actual pinned OpenClaw UNIFIED Chat consumes the compiled owned HTTP entry
       fixture: new URL('./fixtures/openclaw-owned-http-chat-contract.test.ts', import.meta.url),
       env: { CLAWROUTER_CONTRACT_ORIGIN: origin } })));
     const observed = JSON.parse((await request('/fixture/state')).text);
-    assert.equal(observed.intakes.length, 6);
+    assert.equal(observed.intakes.length, 9);
     assert.ok(observed.intakes.every(row => row.path === '/v1/chat/completions'), 'all inference uses actual UNIFIED Chat');
     const calls = JSON.parse((await request('/fixture/upstream')).text);
     assert.equal(calls.filter(row => row.id === 'chat').length, 2);
+    assert.equal(calls.filter(row => row.id === 'venice').length, 3);
     assert.equal(calls.filter(row => row.id === 'error').length, 1);
     assert.equal(calls.filter(row => row.id === 'tool').length, 1);
     assert.equal(calls.filter(row => row.id === 'abort').length, 1);

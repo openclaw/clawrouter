@@ -41,8 +41,10 @@ for (const [mode, valid] of ownedJsonCodecCases) test('private compact consumer 
       assert.equal(row.parentPushes, row.parentPops, 'every actual consumer push has its original pop');
       assert.equal(row.tokenPushes, row.tokenPops, 'every actual pinned-tokenizer push has its original pop');
     } else {
-      assert.throws(() => { feed(parser, wire); parser.take(); }, JsonBodyStructureLimit);
-      assert.throws(() => { feed(ordinary, wire); ordinary.take(); }, JsonBodyStructureLimit);
+      const expected = mode === 'compact-strict-space' || mode === 'compact-invalid-eof'
+        ? error => error instanceof Error && !(error instanceof JsonBodyStructureLimit) : JsonBodyStructureLimit;
+      assert.throws(() => { feed(parser, wire); parser.take(); }, expected);
+      assert.throws(() => { feed(ordinary, wire); ordinary.take(); }, expected);
     }
   } finally { parser.discard(); ordinary.discard(); }
   assert.equal(row.cleared, true); assert.equal(row.parents, 0); assert.equal(row.tokens, 0); assert.equal(row.pending, false); assert.equal(row.member, false);

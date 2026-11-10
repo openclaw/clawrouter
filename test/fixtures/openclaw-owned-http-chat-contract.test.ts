@@ -38,7 +38,7 @@ async function configured(id: string, selectedModel = modelId) {
 }
 
 function start(selected: Awaited<ReturnType<typeof configured>>, id: string,
-  options: { apiKey?: string; signal?: AbortSignal; tools?: boolean } = {}) {
+  options: { apiKey?: string; signal?: AbortSignal; tools?: boolean; flatEscaped?: boolean } = {}) {
   const { provider, model } = selected;
   const apiKey = options.apiKey ?? key(id);
   const host = selectEmbeddedAgentStream({ llmRuntime: defaultLlmRuntime, currentStreamFn: streamSimple,
@@ -47,7 +47,7 @@ function start(selected: Awaited<ReturnType<typeof configured>>, id: string,
   const wrapped = provider.wrapStreamFn?.({ provider: "clawrouter", modelId: model.id, model, streamFn: host.streamFn });
   expect(wrapped).toBeDefined();
   const context: Context = { systemPrompt: "Synthetic instructions",
-    messages: [{ role: "user", content: `fixture owned_http_${id}`, timestamp: 1 }],
+    messages: [{ role: "user", content: options.flatEscaped ? "fixture-owned-flat-escaped" : `fixture owned_http_${id}`, timestamp: 1 }],
     ...(options.tools ? { tools: [{ name: "lookup", description: "Synthetic lookup",
       parameters: { type: "object", properties: { value: { type: "string" } }, required: ["value"] } }] } : {}) };
   return host.wrapApiKey(wrapped!)(model, context, { apiKey, maxTokens: 128, signal: options.signal });
@@ -62,6 +62,12 @@ describe("actual registered OpenClaw unified Chat through the private owned HTTP
       expect(result.content).toContainEqual({ type: "text", text: "synthetic-answer" });
       expect(result.usage).toMatchObject({ input: 4, output: 3, totalTokens: 7 });
     }
+  });
+  it("consumes a near-limit escaped Venice frame through the real unified client", async () => {
+    const result = await start(await configured("venice", "venice/zai-org-glm-5-2"), "venice", { flatEscaped: true }).result();
+    expect(result.stopReason, result.errorMessage).toBe("stop");
+    expect(result.content).toContainEqual({ type: "text", text: "synthetic-answer" });
+    expect(result.usage).toMatchObject({ input: 4, output: 3, totalTokens: 7 });
   });
   it("delivers cold and covered-hit requests through the same configured unified route", async () => {
     const selected = await configured("chat");

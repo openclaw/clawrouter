@@ -557,44 +557,75 @@ export function createPrivateJsonBodyParser(): PrivateJsonBodyParser {
   return createBodyParser(true, true);
 }
 
-// Only the genuine private codec calls this after funding its synchronous
-// validator. No container, key, scalar value or facade leaves this scope.
-export function validatePrivateJsonBody(text: string): number {
-  let depth = 0, values = 0, keys = 0, units = 0, length = 0, mode = 0;
-  let consume: ReturnType<typeof createJsonTokenizer> | undefined;
-  let accept: ((token: Token) => void) | undefined;
+// Allocation census preserves the private usage scanner's legacy separators.
+// This is not JSON grammar; key lookahead below still uses only JSON's four.
+function privateJsonAtomSpace(code: number): boolean {
+  return code >= 9 && code <= 13 || code === 32 || code === 160 || code === 5760
+    || code >= 8192 && code <= 8202 || code === 8232 || code === 8233 || code === 8239 || code === 8287 || code === 12288 || code === 65279;
+}
+
+// Fixed private callers prepay the scalar workspace and this three-field
+// receipt. Native JSON.parse alone decides grammar; exact is usable ONLY after
+// it succeeds. The codec consumes limited; accepted usage deliberately does not.
+export function measurePrivateJsonBody(text: string): { upper: number; exact: number; limited: boolean } {
+  let containers = 0, strings = 0, atoms = 0, keys = 0, rawUnits = 0, decodedUnits = 0;
+  let depth = 0, values = 0, limited = false, index = 0;
   try {
-    accept = (token: Token): void => {
-      switch (token.name) {
-        case "startObject": case "startArray":
-          if (++depth > 128) throw new JsonBodyStructureLimit();
-          break;
-        case "endObject": case "endArray": depth--; return;
-        case "startKey": mode = 1; length = 0; return;
-        case "startNumber": mode = 2; length = 0; return;
-        case "startString": mode = 3; return;
-        case "stringChunk": case "numberChunk":
-          if (token.name === "stringChunk") units += token.value.length;
-          if ((mode === 1 || mode === 2) && (length += token.value.length) > 4096) throw new JsonBodyStructureLimit();
-          return;
-        case "endKey": keys++; mode = 0; return;
-        case "endString": case "endNumber": mode = 0; break;
-        case "nullValue": case "trueValue": case "falseValue": break;
-        default: return;
+    while (index < text.length) {
+      let code = text.charCodeAt(index++);
+      if (code === 34) {
+        strings++;
+        let length = 0, closed = false;
+        while (index < text.length) {
+          code = text.charCodeAt(index++);
+          if (code === 34) { closed = true; break; }
+          rawUnits++;
+          if (code !== 92 || index === text.length) { length++; decodedUnits++; continue; }
+          code = text.charCodeAt(index++); rawUnits++;
+          if (code === 117 && index + 4 <= text.length) {
+            let unicode = true;
+            for (let look = index; look < index + 4; look++) {
+              const digit = text.charCodeAt(look);
+              if (!(digit >= 48 && digit <= 57 || digit >= 65 && digit <= 70 || digit >= 97 && digit <= 102)) unicode = false;
+            }
+            if (unicode) { index += 4; rawUnits += 4; length++; decodedUnits++; continue; }
+          }
+          // Invalid escapes remain input to native grammar. Their raw spelling
+          // is conservatively counted; no decoded key/value is constructed.
+          const width = code === 34 || code === 92 || code === 47 || code === 98 || code === 102 || code === 110 || code === 114 || code === 116 ? 1 : 2;
+          length += width; decodedUnits += width;
+        }
+        let look = index;
+        while (look < text.length) {
+          code = text.charCodeAt(look);
+          if (code !== 32 && code !== 9 && code !== 10 && code !== 13) break;
+          look++;
+        }
+        if (closed && text.charCodeAt(look) === 58) { keys++; if (length > 4096) limited = true; }
+        // Never count a provisional quoted key as a value before classification.
+        else if (closed && ++values > 65536) limited = true;
+      } else if (code === 123 || code === 91) {
+        if (++depth > 128) limited = true;
+        containers++;
+        if (++values > 65536) limited = true;
+      } else if (code === 125 || code === 93) depth--;
+      else if (code !== 44 && code !== 58 && !privateJsonAtomSpace(code)) {
+        atoms++;
+        const numeric = code === 45 || code >= 48 && code <= 57;
+        let length = 1;
+        while (index < text.length) {
+          code = text.charCodeAt(index);
+          if (code === 34 || code === 123 || code === 91 || code === 125 || code === 93 || code === 44 || code === 58
+            || privateJsonAtomSpace(code)) break;
+          index++; length++;
+        }
+        if (numeric && length > 4096) limited = true;
+        if (++values > 65536) limited = true;
       }
-      if (++values > 65_536) throw new JsonBodyStructureLimit();
-    };
-    consume = createJsonTokenizer(accept);
-    for (let offset = 0; offset < text.length;) {
-      const high = text.charCodeAt(offset), low = text.charCodeAt(offset + 1);
-      const end = offset + (high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff ? 2 : 1);
-      consume.push(text.slice(offset, end)); offset = end;
     }
-    consume.end();
-    return 8 * (2 * values - 1 + keys) + 2 * units;
-  } finally {
-    consume = undefined; accept = undefined; text = "";
-  }
+    return { upper: 16 * (containers + strings + atoms) + 2 * rawUnits,
+      exact: 8 * (2 * (containers + strings - keys + atoms) - 1 + keys) + 2 * decodedUnits, limited };
+  } finally { text = ""; }
 }
 
 function createBodyParser(enforceStructure: boolean, privateParents: false): JsonBodyParser;

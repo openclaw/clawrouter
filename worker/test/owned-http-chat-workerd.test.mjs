@@ -191,20 +191,19 @@ for (const streaming of [false, true]) test('native owned Venice ' + (streaming 
       }
       const after = await settledState(f), rows = after.parsers.slice(before.parsers.length);
       assert.equal(rows.length, 1, mode + ' actual private parser invocation');
-      const row = rows[0]; assert.equal(row.kind, 'validator'); assert.equal(row.nativeParses, valid ? 1 : 0); assert.equal(row.cleared, true); assert.equal(row.parents, 0); assert.equal(row.tokens, 0); assert.equal(row.pending, false); assert.equal(row.member, false);
+      const row = rows[0]; assert.equal(row.kind, 'validator'); assert.equal(row.nativeParses, valid || mode === 'compact-strict-space' || mode === 'compact-invalid-eof' ? 1 : 0); assert.equal(row.cleared, true); assert.equal(row.parents, 0); assert.equal(row.tokens, 0); assert.equal(row.pending, false); assert.equal(row.member, false);
       if (valid) {
         assert.equal(row.parentPushes, row.parentPops); assert.equal(row.tokenPushes, row.tokenPops);
       }
       if (mode === 'compact-object128') {
-        assert.equal(row.peakParents, 0); assert.equal(row.peakDepth, 128); assert.equal(row.peakTokens, 128); assert.equal(row.peakStored, 129);
+        assert.equal(row.peakParents, 0); assert.equal(row.peakDepth, 128); assert.equal(row.peakTokens, 0); assert.equal(row.tokenPushes, 0); assert.equal(row.receiptCleared, true);
       } else if (mode === 'compact-object-string128') {
-        assert.equal(row.peakParents, 0); assert.equal(row.peakDepth, 128); assert.equal(row.peakTokens, 128); assert.equal(row.peakStored, 129);
+        assert.equal(row.peakParents, 0); assert.equal(row.peakDepth, 128); assert.equal(row.peakTokens, 0); assert.equal(row.tokenPushes, 0); assert.equal(row.receiptCleared, true);
         assert.equal(row.objectAttachments, 0, 'validation creates no graph properties');
       } else if (mode === 'compact-object129' || mode === 'compact-open2048') {
-        assert.equal(row.peakParents, 0); assert.equal(row.peakDepth, 129); assert.equal(row.peakTokens, 129); assert.equal(row.peakStored, 130);
-        assert.equal(row.parents, 0); assert.equal(row.abandonedTokens, 129);
-        assert.equal(row.peakActive, 130); assert.equal(row.peakRejected, 130);
-        assert.equal(row.peakBetween, 129, 'only the tokenizer retains accepted ancestors between feeds');
+        assert.equal(row.peakParents, 0); assert.equal(row.peakDepth, mode === 'compact-object129' ? 129 : 2049);
+        assert.equal(row.peakTokens, 0); assert.equal(row.tokenPushes, 0); assert.equal(row.limited, true);
+        assert.equal(row.receiptCleared, true);
       }
       assert.equal(count(after, 'authority', '/authorization/snapshot') - count(before, 'authority', '/authorization/snapshot'), valid ? 2 : 1);
       assert.equal(after.events.length - before.events.length, 1, mode + ' original native accounting event');
@@ -227,8 +226,8 @@ test('native later object-128 SSE transfers one original sniff reader into usage
     assert.equal(response.status, 200); assert.equal(response.text, wire);
     const after = await settledState(f), rows = after.parsers.slice(before.parsers.length);
     assert.equal(rows.length, 2);
-    assert.equal(rows[1].peakParents, 0); assert.equal(rows[1].peakTokens, 128); assert.equal(rows[1].peakStored, 129);
-    assert.equal(rows[1].peakActive, 129); assert.equal(rows[1].peakBetween, 129); assert.equal(rows[1].peakRejected, 0);
+    assert.equal(rows[1].peakParents, 0); assert.equal(rows[1].peakTokens, 0); assert.equal(rows[1].tokenPushes, 0);
+    assert.equal(rows[1].peakDepth, 128); assert.equal(rows[1].receiptCleared, true); assert.equal(rows[1].restored, true);
     assert.equal(rows[1].consumerReaders, 1, 'the SAME original sniff reader owns the later parser peak');
     assert.equal(rows[1].pricingOwners, 0, 'pricing metadata cleared after its final consumer');
     assert.equal(rows[1].innerWrappers, 0); assert.equal(rows[1].outerWrappers, before.consumers.outer + 1);
@@ -255,8 +254,8 @@ test('native later rejected depth-129 frame preserves published status and the s
     await assert.rejects(f.take(f.body(response)));
     const after = await settledState(f), rows = after.parsers.slice(before.parsers.length);
     assert.equal(rows.length, 2); assert.equal(rows[1].consumerReaders, 1);
-    assert.equal(rows[1].peakParents, 0); assert.equal(rows[1].peakTokens, 129);
-    assert.equal(rows[1].peakActive, 130); assert.equal(rows[1].peakRejected, 130); assert.equal(rows[1].cleared, true);
+    assert.equal(rows[1].peakParents, 0); assert.equal(rows[1].peakTokens, 0); assert.equal(rows[1].peakDepth, 129);
+    assert.equal(rows[1].limited, true); assert.equal(rows[1].nativeParses, 0); assert.equal(rows[1].cleared, true);
     assert.equal(after.consumers.acquired - before.consumers.acquired, 1);
     assert.equal(after.consumers.retired - before.consumers.retired, 1); assert.equal(after.consumers.live, 0);
     assert.equal(after.consumers.replay, before.consumers.replay);
@@ -373,7 +372,7 @@ for (const phase of ['delivery', 'accounting']) test('native compact parser alia
       await new Promise(resolve => setTimeout(resolve, 10));
     }
     const parser = held.parsers.at(-1);
-    assert.equal(parser.peakParents, 0); assert.equal(parser.peakDepth, 128); assert.equal(parser.nativeParses, 1); assert.equal(parser.peakTokens, 128); assert.equal(parser.cleared, true);
+    assert.equal(parser.peakParents, 0); assert.equal(parser.peakDepth, 128); assert.equal(parser.nativeParses, 1); assert.equal(parser.peakTokens, 0); assert.equal(parser.tokenPushes, 0); assert.equal(parser.restored, true); assert.equal(parser.cleared, true);
     assert.equal(parser.parents, 0); assert.equal(parser.tokens, 0); assert.equal(parser.pending, false);
     assert.ok(held.charged >= before.charged + 32 * 1024 * 1024, 'parser discard is not request/foreground credit retirement');
     assert.equal(held.completed.length, before.completed.length, 'original request retirement remains held');
@@ -1162,5 +1161,77 @@ test('native fixed handoff preserves ' + role + ' getters and original callbacks
     assert.equal(after.events.length, 1);
     await f.request('https://fixture/fixture/evict', { method: 'POST', body: 'venice' });
     assert.equal((await state(f)).charged, 65536, 'only the explicit module claim remains');
+  }, true);
+});
+
+
+for (const streaming of [false, true]) test('native flat preflight retains paid upper through two escaped near-limit graphs: ' + streaming, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const before = await settledState(f), mode = streaming ? 'compact-flat-escaped-sse' : 'compact-flat-escaped-json';
+    const wire = ownedJsonCodecWire(mode, 'zai-org-glm-5-2');
+    for (let index = 0; index < 2; index++) {
+      const response = await f.request('https://fixture/v1/chat/completions', chat('venice', {
+        model: ownedHttpControlModels.venice, ownedVeniceCase: mode, ...(streaming ? { stream: true } : {}),
+      }));
+      assert.equal(response.status, 200);
+      assert.equal(response.text, streaming ? 'data: ' + wire + '\n\ndata: [DONE]\n\n' : wire);
+      const after = await settledState(f), row = after.parsers.at(-1);
+      assert.equal(row.nativeParses, 1); assert.equal(row.receiptCleared, true); assert.equal(row.cleared, true);
+      assert.ok(row.required <= row.paid); assert.ok(row.exactDebit < row.required); assert.equal(row.restored, true);
+      assert.equal(row.tokenPushes, 0); assert.equal(after.consumers.live, 0);
+
+    }
+    const after = await settledState(f);
+    assert.equal(after.events.length - before.events.length, 2);
+    assert.equal(count(after, 'authority', '/authorization/snapshot') - count(before, 'authority', '/authorization/snapshot'), 4);
+    assert.equal((await f.request('https://fixture/fixture/evict', { method: 'POST', body: 'venice' })).status, 204);
+    assert.equal((await state(f)).charged, before.charged + 65536, 'exact own retirement after genuine cache eviction, permanent claim retained');
+  }, true);
+});
+
+for (const later of [false, true]) test('native flat syntax projection preserves first/later SSE publication: ' + later, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const before = await settledState(f);
+    const response = await f.take(f.dispatch('https://fixture/v1/chat/completions', chat('venice', {
+      model: ownedHttpControlModels.venice, stream: true,
+      ownedVeniceCase: later ? 'compact-later-flat-invalid' : 'compact-flat-invalid',
+    })));
+    assert.equal(response.status, later ? 200 : 502);
+    if (later) await assert.rejects(f.take(f.body(response)));
+    else assert.equal(JSON.parse(await f.take(f.body(response))).error.code, 'provider_unavailable');
+    const after = await settledState(f), row = after.parsers.at(-1);
+    assert.equal(row.nativeParses, 1); assert.equal(row.syntaxCleared, true); assert.equal(row.restored, undefined);
+    assert.equal(row.receiptCleared, true); assert.equal(row.cleared, true); assert.ok(row.required <= row.paid);
+    assert.equal(after.events.length - before.events.length, 1);
+    assert.equal(count(after, 'authority', '/authorization/snapshot') - count(before, 'authority', '/authorization/snapshot'), later ? 2 : 1);
+    assert.equal(after.consumers.live, 0); assert.equal(after.consumers.source.cancel, 0, 'no injected source replay');
+  }, true);
+});
+
+
+test('native syntax reason is cleared before held original source unlock', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const before = await settledState(f);
+    const release = async () => { assert.equal((await f.request('https://fixture/fixture/consumer-mode', { method: 'DELETE' })).status, 204); };
+    f.releases.push(release);
+    assert.equal((await f.request('https://fixture/fixture/consumer-mode', { method: 'POST', body: 'source-unlock-before-success' })).status, 204);
+    const dispatch = f.dispatch('https://fixture/v1/chat/completions', chat('venice', {
+      model: ownedHttpControlModels.venice, stream: true, ownedVeniceCase: 'compact-flat-invalid',
+    }));
+    let held;
+    for (;;) {
+      held = await state(f);
+      if (held.consumers.source.held) break;
+      if (held.completed.length > before.completed.length) { await f.take(dispatch); assert.fail('cleanup finished before the registered hold'); }
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(held.parsers.at(-1).syntaxCleared, true); assert.equal(held.parsers.at(-1).fixedSyntax, true);
+    assert.equal(held.consumers.source.unlock, 1); assert.equal(held.consumers.source.unlockSettled, 0);
+    assert.equal(held.completed.length, before.completed.length); assert.ok(held.charged >= before.charged + 32 * 1024 * 1024);
+    await release();
+    const response = await f.take(dispatch); assert.equal(response.status, 502);
+    assert.equal(JSON.parse(await f.take(f.body(response))).error.code, 'provider_unavailable');
+    const after = await settledState(f); assert.equal(after.consumers.source.unlockSettled, 1);
+    assert.equal(after.events.length - before.events.length, 1);
   }, true);
 });
