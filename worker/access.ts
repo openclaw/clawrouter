@@ -28,6 +28,15 @@ interface AccessJwtPayload {
 export type AccessVerification = LocalSessionVerification | { readonly kind: "cloudflare_access"; readonly email: string; readonly expiresAtMs: number };
 const verifiedSessions = new WeakMap<AccessSession, AccessVerification>();
 const verifiedIdentities = new WeakMap<AuthorizedIdentity, AccessVerification>();
+// Reporting capabilities retain only digests, never cookies/assertions. This is
+// provenance from the existing successful verifier, not a second auth policy.
+const usageBindings = new WeakMap<AccessSession, string>();
+export async function verifiedUsageBinding(session: AccessSession): Promise<{actor:string;sessionBinding:string}|null> {
+  const local = localSessionVerification(session);
+  const sessionBinding = local ? await sha256Hex(JSON.stringify([session.auth,session.email,session.subject,session.role,local.sessionSha256])) : usageBindings.get(session);
+  if (!sessionBinding) return null;
+  return {actor:await sha256Hex(JSON.stringify([session.auth,session.email,session.subject,session.role])),sessionBinding};
+}
 export function accessIdentityVerification(identity: AuthorizedIdentity): AccessVerification | undefined { return verifiedIdentities.get(identity); }
 
 export async function verifiedAccessSession(request: Request, env: Env): Promise<AccessSession | null> {
@@ -75,6 +84,8 @@ async function cloudflareAccessSession(request: Request, env: Env): Promise<Acce
   };
   currentCaller(request);
   verifiedSessions.set(session, Object.freeze({ kind: "cloudflare_access", email, expiresAtMs: payload.exp! * 1000 }));
+  usageBindings.set(session, await sha256Hex(JSON.stringify([session.auth,email,session.subject,role,assertion])));
+  currentCaller(request);
   return session;
 }
 
@@ -148,7 +159,7 @@ export async function authorizeAdmin(request: Request, env: Env): Promise<Access
   const actual = token && expected ? await sha256Hex(token) : null;
   currentCaller(request);
   if (!actual || !expected || !safeEqual(actual, expected)) return errorResponse("admin_unauthorized", "administrator authentication required", 401);
-  return {
+  const tokenSession: AccessSession = {
     authenticated: true,
     auth: "admin_token",
     role: "admin",
@@ -158,6 +169,10 @@ export async function authorizeAdmin(request: Request, env: Env): Promise<Access
     groups: [],
     contentRetentionDisabled: true,
   };
+  // Deliberately credential-wide: admin tokens have no finer human session.
+  usageBindings.set(tokenSession, await sha256Hex(JSON.stringify(['admin_token','admin',actual])));
+  currentCaller(request);
+  return tokenSession;
 }
 
 export function publicSession(session: AccessSession): Omit<AccessSession, "contentRetentionDisabled"> {

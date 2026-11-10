@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { eventsCsv, reportCsv } from "../../admin/src/personal-usage.ts";
+import { completeQueryString, exportRefreshedUsage, prepareUsageGroupsFile } from "../../admin/src/complete-usage.ts";
 
 // Test-only setup/inspection. Actual proxy, accounting, queue and ledgers stay shipped.
 export const costPolicies = {
@@ -65,7 +65,7 @@ export const costUpstream = `
 
 function records(csv) {
  // Fixture fields contain no embedded newline; retain blank cells as strings.
- const rows = csv.split(String.fromCharCode(13, 10)).map(line => [...line.matchAll(/"((?:[^"]|"")*)"(?:,|$)/g)].map(m => m[1].replaceAll('""', '"')));
+ const rows = csv.split(String.fromCharCode(13, 10)).filter(Boolean).slice(1).map(line => [...line.matchAll(/"((?:[^"]|"")*)"(?:,|$)/g)].map(m => m[1].replaceAll('""', '"')));
  return rows.slice(1).map(values => Object.fromEntries(rows[0].map((key, i) => [key, values[i]])));
 }
 
@@ -103,10 +103,20 @@ export async function exercisePersonalUsageCosts({ read, json, until, restart })
  const check = async () => {
   const result = {};
   for (const [key, expected, costClass] of [["proof_hard_cost", h, "unknown"], ["proof_soft_cost", s, "partial"]]) {
-   const report = await json("/v1/session/usage/report?days=7&key=" + key);
-   const range = new URLSearchParams({ from: new Date(report.range.from).toISOString(), to: new Date(report.range.to).toISOString(), timezone: report.range.timezone, key });
-   const page = await json("/v1/session/usage/events?" + range);
-   assert.equal(report.metrics.calls, 1); assert.equal(report.historyComplete, true); assert.equal(report.historySource, "projection");
+   const outcome = await json("/v1/session/usage/report?days=7&intent=browse&key=" + key);
+   assert.equal(outcome.kind, "complete", JSON.stringify(outcome));
+   const report = outcome.value, range = completeQueryString(report.query, "personal");
+   range.set("cut", report.cut);
+   let page;
+   try {
+    const pageOutcome = await json("/v1/session/usage/events?" + range);
+    assert.equal(pageOutcome.kind, "complete", JSON.stringify(pageOutcome)); page = pageOutcome.value;
+   } finally {
+    const release = await read("/v1/session/usage/report?" + new URLSearchParams({ cut: report.cut }), { method: "DELETE", headers: { origin: "https://router.example" } });
+    assert.equal(release.status, 200, await release.clone().text());
+   }
+   assert.equal(report.metrics.calls, 1); assert.equal(report.coverage.allDiscoveredSourcesAnswered, true);
+   assert.equal(report.coverage.historicalLocations, "not_exhaustively_assessed");
    assert.equal(page.events.length, 1); const event = page.events[0];
    assert.equal(event.keyId, key); assert.equal(event.provider, expected.provider); assert.equal(event.model, expected.model);
    assert.equal(event.costBasis, "unpriced_usage"); assert.equal(event.costClass, costClass);
@@ -115,17 +125,23 @@ export async function exercisePersonalUsageCosts({ read, json, until, restart })
    assert.equal(cost.calls, 1); assert.equal(cost.lane, "api");
    // Report summaries use 0 as an additive UNKNOWN sentinel, not a price.
    assert.equal(cost.amountMicros, costClass === "unknown" ? 0 : expected.reporting_known_cost_micros);
-   const eventExport = records(eventsCsv(page.events))[0], reportExport = records(reportCsv(report))[0];
+   const request = async (_origin, path, init = {}) => {
+    const response = await read(path, { ...init, headers: { ...init.headers, origin: "https://router.example" } });
+    assert.equal(response.status, 200, await response.clone().text()); return response.json();
+   };
+   const file = await exportRefreshedUsage({ request, origin: "https://router.example", audience: "personal", query: report.query, signal: new AbortController().signal, isCurrent: () => true }, "csv");
+   const exported = records(file.content); assert.equal(exported.length, 1);
+   const eventExport = exported[0], reportExport = records(prepareUsageGroupsFile(report, "personal").content)[0];
    assert.equal(eventExport.reportingCostMicros, costClass === "unknown" ? "" : String(expected.reporting_known_cost_micros));
    assert.equal(eventExport.recordedChargeMicros, String(expected.actual_cost_micros));
    assert.equal(eventExport.costClass, costClass); assert.equal(eventExport.costBasis, "unpriced_usage");
    assert.equal(reportExport["api_" + costClass + "_calls"], "1");
-   assert.equal(reportExport["api_" + costClass + "_reporting_amount_usd"], costClass === "unknown" ? "" : String(expected.reporting_known_cost_micros / 1000000));
+   assert.equal(reportExport["api_" + costClass + "_amountMicros"], costClass === "unknown" ? "" : String(expected.reporting_known_cost_micros));
    result[key] = { endpoint: key === "proof_hard_cost" ? "/v1/messages" : "/v1/responses", provider: event.provider, model: event.model, httpStatus: event.statusCode, status: event.status,
     reservationMicros: expected.reserved_cost_micros, recordedChargeMicros: event.recordedChargeMicros, reportingKnownComponentMicros: expected.reporting_known_cost_micros,
     costBasis: event.costBasis, costClass: event.costClass, reportingAmountMicros: event.reportingCostMicros, reportSummaryAmountMicros: cost.amountMicros,
     budgetSpentMicros: settled.state[key].budget.spentMicros, eventCsvReportingAmount: eventExport.reportingCostMicros, eventCsvRecordedCharge: eventExport.recordedChargeMicros,
-    reportCsvReportingAmountUsd: reportExport["api_" + costClass + "_reporting_amount_usd"],
+    rankCsvReportingAmountMicros: reportExport["api_" + costClass + "_amountMicros"],
     ...(key === "proof_soft_cost" ? { hostedToolCallsComplete: expected.hosted_tool_calls_complete, hostedToolCostMicros: expected.hosted_tool_cost_micros } : { servedTier: expected.served_service_tier }) };
   }
   return result;

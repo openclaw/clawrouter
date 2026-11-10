@@ -1,3 +1,4 @@
+import { CompleteUsageScreen } from "./complete-usage";
 import { CapsView } from "./caps";
 import React, { type FormEvent, useEffect, useRef, useState } from "react";
 import { Activity, CalendarDays, KeyRound, Plus, Search, ServerCog, ShieldCheck, Users } from "lucide-react";
@@ -96,6 +97,8 @@ export function UsersScreen({ users, selected, policies, bindings, services, for
     </div>
   );
 }
+
+export function CompleteAdminUsageScreen() { const {adminUsage}=useConsole(); return <CompleteUsageScreen data={adminUsage}/>; }
 
 export function UsageScreen({ keys, credentials, services, overview, tenants, usageRows, usage, usageLoaded, usageStale, usageError, usageUpdatedAt }: { keys: AccessPolicy[]; credentials: ProxyCredential[]; services: ServiceItem[]; overview: AdminOverview | null; tenants: AdminTenantSummary[]; usageRows: AdminUsageRow[]; usage: UsageSnapshot; usageLoaded: boolean; usageStale: boolean; usageError: string; usageUpdatedAt: number | null }) {
   const { request } = useConsole();

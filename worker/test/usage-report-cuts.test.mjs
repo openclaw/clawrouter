@@ -43,10 +43,10 @@ test('finalize observed/idempotent only for same capture and binding; memory own
  assert.throws(()=>new UsageReportCuts().dispatch('read',{binding:binding(),cut:a.cut,query:base},rev),error('restart'));
  assert.equal(Buffer.from(a.cut,'base64url').length,32);assert.match(a.cut,/^[A-Za-z0-9_-]{43}$/);
 });
-test('binding/session/authority changes and discovery revision reject both purposes; foreign release unrevealing',t=>{
+test('binding/session/authority changes and discovery revision reject both purposes; foreign release denied',t=>{
  const f=fixture(t);for(const purpose of ['browse','export']){const a=f.open(purpose);
  for(const key of ['actor','session','authority'])assert.throws(()=>f.read(a.cut,{...binding(),[key]:'d'.repeat(64)}),error('restart'));
- assert.deepEqual(f.call('release',{cut:a.cut},binding(2)),{released:true});assert.ok(f.read(a.cut));
+ assert.throws(()=>f.call('release',{cut:a.cut},binding(2)),error('restart'));assert.ok(f.read(a.cut));
  assert.throws(()=>f.call('read',{cut:a.cut,query:base},binding(),'b'.repeat(32)),error('restart'));
  }
 });

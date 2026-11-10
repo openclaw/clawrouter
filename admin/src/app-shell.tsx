@@ -8,7 +8,7 @@ import { ThemeToggle, viewIcon, viewSubtitle, viewTitle } from "./components";
 import { DashboardScreen, CatalogScreen, UserAvatar } from "./screens/dashboard-catalog";
 import { PlaygroundScreen } from "./screens/playground";
 import { PoliciesScreen } from "./screens/access";
-import { UsageScreen, UsersScreen } from "./screens/users-usage";
+import { CompleteAdminUsageScreen, UsageScreen, UsersScreen } from "./screens/users-usage";
 import { applyTheme, navItems, readTheme } from "./ui-config";
 import { formatTimestamp } from "./ui-helpers";
 import { useConsole } from "./console-controller-context";
@@ -304,7 +304,7 @@ export function AppShell() {
 
         {view === "subscriptions" && session.role === "admin" ? <SubscriptionsScreen data={subscriptions} policies={keys} grants={upstreamGrants} providers={providers} refreshQuota={refreshUpstreamGrantQuota} busy={upstream.busy} actionError={upstream.error} /> : null}
 
-        {view === "usage" && session.role === "admin" ? <><div className="personalActions"><button type="button" className="buttonSecondary" onClick={() => navigateTo("my-usage")}>My usage</button></div><UsageScreen keys={keys} credentials={credentials} services={services} overview={adminOverview} tenants={tenantSummaries} usageRows={usageRows} usage={usageSnapshot} usageLoaded={usageLoaded} usageStale={usage.stale} usageError={usage.error} usageUpdatedAt={usage.updatedAt} /></> : null}
+        {view === "usage" && session.role === "admin" ? <><div className="personalActions"><button type="button" className="buttonSecondary" onClick={() => navigateTo("my-usage")}>My usage</button></div><CompleteAdminUsageScreen/><details><summary>Authoritative allowances and legacy diagnostics</summary><UsageScreen keys={keys} credentials={credentials} services={services} overview={adminOverview} tenants={tenantSummaries} usageRows={usageRows} usage={usageSnapshot} usageLoaded={usageLoaded} usageStale={usage.stale} usageError={usage.error} usageUpdatedAt={usage.updatedAt} /></details></> : null}
       </section>
     </main>
   );

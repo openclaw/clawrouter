@@ -123,8 +123,8 @@ export class UsageReportCuts {
   }
   if(action==='release'){
    const handle=x.cut??x.operation;if(typeof handle!=='string'||!opaque.test(handle)||(x.cut!==undefined&&x.operation!==undefined))fail('invalid');
-   // Uniform success for missing/foreign; only the matching binding is removed.
-   for(const [op,r] of this.roots)if((x.cut!==undefined?r.handle===handle:r.operation===handle)&&equal(r.binding,b))this.drop(op);
+   // Missing is idempotent; a known foreign binding is denied, never removed.
+   for(const [op,r] of this.roots)if(x.cut!==undefined?r.handle===handle:r.operation===handle){if(!equal(r.binding,b))fail('restart');this.drop(op)}
    return {released:true};
   }
   const root=this.match(action==='finalize'||action==='observe'?x.operation:x.cut,b,revision,action==='finalize'||action==='observe');

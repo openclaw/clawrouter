@@ -1,3 +1,4 @@
+import { completeDisplayOutcome, completeDisplayReport } from './fixtures/complete-usage';
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page, type Route } from '@playwright/test';
 import { fixtureEvents, fixtureMetrics, fixtureNow, fixtureReport, fixtureResponses } from './fixtures/personal-usage';
@@ -8,8 +9,13 @@ test.beforeEach(async ({ page }) => {
 });
 async function mockUsage(page: Page, override?: (route: Route, url: URL) => Promise<boolean>) {
   const queries: URL[] = [];
-  await page.route('**/v1/**', async route => {
-    const url = new URL(route.request().url()); queries.push(url);
+  await page.route('**/v1/**', async raw => {
+    const route = new Proxy(raw, { get(target, key) {
+      if (key === 'fulfill') return (options: Parameters<Route['fulfill']>[0]) => target.fulfill({ ...options, ...(options?.json ? { json: completeDisplayOutcome(options.json, new URL(target.request().url())) } : {}) });
+      const value = Reflect.get(target, key); return typeof value === 'function' ? value.bind(target) : value;
+    }});
+    const url = new URL(route.request().url()); if(raw.request().method()==='GET')queries.push(url);
+    if(route.request().method()==='DELETE'){await raw.fulfill({json:{kind:'complete',value:{released:true}}});return;}
     if (await override?.(route, url)) return;
     const body = url.pathname === '/v1/session/usage/report' ? fixtureReport(url.searchParams) : url.pathname === '/v1/session/usage/events' ? fixtureEvents(url.searchParams) : fixtureResponses[url.pathname];
     await route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
@@ -31,9 +37,9 @@ test('personal report is accessible, price-safe and responsive with independent 
   await expect(summary(page).locator('.personalGlance > div:nth-child(3) > dd:not(.personalGlanceMeta)')).toHaveText('42');
   const reportReadyMs = Date.now() - openedAt;
   await expect(page.getByRole('tab', { name: 'Overview', exact: true })).toHaveAttribute('aria-selected', 'true');
-  const trend = page.getByRole('region', { name: 'Daily usage trend', exact: true });
+  const trend = page.getByRole('region', { name: 'Usage trend', exact: true });
   await expect(trend).toBeVisible();
-  await expect(trend.getByRole('img', { name: /^Tokens by day in UTC/ })).toBeVisible();
+  await expect(trend.getByRole('img', { name: /^Tokens by bucket in UTC/ })).toBeVisible();
   await expect(trend.locator('.personalChartPoint')).not.toHaveCount(0);
   const ranks = page.getByRole('region', { name: 'Usage breakdown', exact: true });
   await expect(ranks.getByRole('heading', { name: 'Top models', exact: true })).toBeVisible();
@@ -53,11 +59,11 @@ test('personal report is accessible, price-safe and responsive with independent 
   await expect(summary(page)).toContainText('38 generation · 4 utility');
   await summary(page).getByLabel('Model-call accounting and outcomes', { exact: true }).click();
   await details(page);
-  await expect(page.locator('.personalTokenStats')).toContainText('40/42 calls reported');
+  await expect(page.locator('.personalTokenStats').first()).toContainText('40/42 calls reported');
   const costs = page.getByRole('region', { name: 'Costs by billing lane' });
   await expect(costs.getByRole('row', { name: /Calculated \+ fixed subtotal/ })).toContainText('$1.39 · 20 calls');
   await expect(costs.getByRole('row', { name: /Unknown price/ })).toContainText('3 calls · price unknown');
-  const daily = page.getByRole('region', { name: 'Daily usage data', exact: true });
+  const daily = page.getByRole('region', { name: 'Time bucket data', exact: true });
   await expect(daily.getByRole('columnheader', { name: 'Reporting costs by lane & quality', exact: true })).toBeVisible();
   await expect(daily).toContainText('API · Calculated:');
   await expect(daily).toContainText('Subscription · Calculated:');
@@ -73,7 +79,7 @@ test('personal report is accessible, price-safe and responsive with independent 
   await expect(detail).toContainText('Estimate reason');
   await expect(detail).toContainText('max_declared_rate');
   await expect(detail).toContainText('not a guaranteed upper bound');
-  await expect(detail.locator('.personalEventDetails > div').filter({ has: page.getByText('Recorded budget charge', { exact: true }) })).toContainText('$0.00');
+  await expect(detail.locator('.personalEventDetails > div').filter({ has: page.getByText('Recorded accounting amount', { exact: true }) })).toContainText('$0.00');
   await expect(detail.locator('.personalEventDetails > div').filter({ has: page.getByText('Reporting-only price', { exact: true }) })).toContainText('$0.018');
   expect((await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21aa']).analyze()).violations).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -83,12 +89,12 @@ test('personal report is accessible, price-safe and responsive with independent 
   await expect(page.locator('.personalActivityTable tbody > tr')).toHaveCount(2);
   await expect(summary(page).locator('.personalGlance > div:nth-child(3) > dd:not(.personalGlanceMeta)')).toHaveText('42');
   expect(queries.filter(url => url.pathname.endsWith('/report'))).toHaveLength(1);
-  expect(queries.filter(url => url.pathname.endsWith('/events')).every(url => url.searchParams.get('limit') === '25')).toBe(true);
+  expect(queries.filter(url => url.pathname.endsWith('/events')).every(url => url.searchParams.get('limit') === '100')).toBe(true);
   await details(page);
   await expect(page.getByRole('button', { name: 'Export activity page 2 CSV', exact: true })).toBeEnabled();
   const download = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Export breakdown CSV' }).click();
-  expect((await download).suggestedFilename()).toBe('my-usage-breakdown.csv');
+  await page.getByRole('button', { name: 'Export current rank page CSV' }).click();
+  expect((await download).suggestedFilename()).toBe('usage-current-rank-page.csv');
 });
 
 test('filters, grouping and 30d range use exact bounded query parameters', async ({ page }) => {
@@ -124,7 +130,7 @@ test('loading, report error, retry and empty coverage never imply zero price', a
     if (!url.pathname.endsWith('/report')) return false;
     attempt++;
     if (attempt === 1) { await gate; await route.fulfill({ status: 503, json: { error: { message: 'Report temporarily unavailable' } } }); }
-    else { const value = fixtureReport(url.searchParams); value.metrics = Object.fromEntries(Object.keys(fixtureMetrics).map(key => [key, 0])) as typeof fixtureMetrics; value.groups = []; value.costs = []; value.buckets = []; value.historyComplete = false; await route.fulfill({ json: value }); }
+    else { const value = fixtureReport(url.searchParams); value.metrics = Object.fromEntries(Object.keys(fixtureMetrics).map(key => [key, 0])) as unknown as typeof fixtureMetrics; value.groups = []; value.costs = []; value.buckets = []; value.historyComplete = false; await route.fulfill({ json: value }); }
     return true;
   });
   await page.goto('/dashboard/my-usage');
@@ -133,8 +139,8 @@ test('loading, report error, retry and empty coverage never imply zero price', a
   release();
   await expect(page.getByRole('alert')).toContainText('Report temporarily unavailable');
   await page.getByRole('button', { name: 'Retry report', exact: true }).click();
-  await expect(page.getByText('No model calls in this period for these filters.')).toBeVisible();
-  await expect(summary(page)).toContainText('Incomplete history');
+  await expect(page.getByText('No calls in discovered locations for this range for your current access.')).toBeVisible();
+  await expect(summary(page)).toContainText('Not all historical locations have been assessed.');
   await expect(summary(page)).not.toContainText('$0.00');
   await expect(summary(page)).toContainText('Not reported');
 });
@@ -150,7 +156,7 @@ test('slow event reads never block reports, exports or navigation and cannot res
   await activity(page);
   await expect(page.getByText('Loading recent model calls…', { exact: true })).toBeVisible();
   await details(page);
-  await expect(page.getByRole('button', { name: 'Export breakdown CSV' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Export current rank page CSV' })).toBeEnabled();
   await page.getByRole('tab', { name: 'Overview', exact: true }).click();
   await page.getByRole('button', { name: 'openai/gpt-5-mini', exact: true }).click();
   await activity(page);
@@ -201,7 +207,7 @@ test('event errors retry independently without removing the report or its export
   await expect(page.getByRole('alert')).toContainText('Recent calls unavailable');
   await expect(summary(page).locator('.personalGlance > div:nth-child(3) > dd:not(.personalGlanceMeta)').first()).toHaveText('42');
   await details(page);
-  await expect(page.getByRole('button', { name: 'Export breakdown CSV' })).toBeEnabled();
+  await expect(page.getByRole('button', { name: 'Export current rank page CSV' })).toBeEnabled();
   await activity(page);
   await page.getByRole('button', { name: 'Retry recent calls' }).click();
   await expect(page.getByText('No recent model calls for these filters.')).toBeVisible();
@@ -252,10 +258,10 @@ test('null credential groups and event details say Dashboard session, never a po
   await expect(sessionEvent.locator('.personalEventDetails > div').filter({ has: page.getByText('Key ID', { exact: true }) })).toContainText('Dashboard session');
   await page.getByRole('combobox', { name: 'Group by', exact: true }).selectOption('key');
   await details(page);
-  const groups = page.getByRole('region', { name: 'Grouped model calls', exact: true });
-  await expect(groups.getByRole('rowheader', { name: 'Dashboard session', exact: true })).toBeVisible();
+  const groups = page.getByRole('region', { name: 'Retained usage ranking', exact: true });
+  await expect(groups.getByRole('rowheader', { name: /Dashboard session/ })).toBeVisible();
   await expect(groups.getByRole('rowheader', { name: 'Unattributed', exact: true })).toHaveCount(0);
-  await expect(groups.getByRole('button', { name: 'studio-key', exact: true })).toBeVisible();
+  await expect(groups.getByRole('button', { name: /member@example.com · studio-key/ })).toBeVisible();
 });
 
 test('available key names retain their actual ID and filters; missing key metadata falls back to ID', async ({ page }) => {
@@ -274,15 +280,16 @@ test('available key names retain their actual ID and filters; missing key metada
   await expect(page.locator('.personalActivityTable tbody > tr')).toHaveCount(3);
   const detail = page.locator('.personalActivityTable tbody > tr').first();
   await detail.getByText('Call details', { exact: true }).click();
-  await expect(detail.locator('.personalEventDetails > div').filter({ has: page.getByText('Key ID', { exact: true }) })).toContainText('Studio laptop · studio-key');
+  await expect(detail.locator('.personalEventDetails > div').filter({ has: page.getByText('Key ID', { exact: true }) })).toContainText('studio-key');
   const missing = page.locator('.personalActivityTable tbody > tr').last();
   await missing.getByText('Call details', { exact: true }).click();
   await expect(missing.locator('.personalEventDetails > div').filter({ has: page.getByText('Key ID', { exact: true }) })).toHaveText('Key IDremoved-key');
   await page.getByRole('combobox', { name: 'Group by', exact: true }).selectOption('key');
   await details(page);
-  await page.getByRole('button', { name: 'Studio laptop · studio-key', exact: true }).click();
+  await page.getByRole('button', { name: /member@example.com · studio-key/ }).click();
   await expect.poll(() => queries.filter(url => url.pathname.endsWith('/report')).at(-1)?.searchParams.get('key')).toBe('studio-key');
-  await expect(summary(page)).toContainText('key = Studio laptop · studio-key');
+  await expect(summary(page)).toContainText('key = studio-key');
+  await expect(page.getByRole('combobox',{name:'Current own-key selector'})).toContainText('Current name: Studio laptop — studio-key');
   expect(queries.filter(url => url.pathname === '/v1/session/credentials')).toHaveLength(1);
 });
 
@@ -302,17 +309,17 @@ test('refresh advances rolling presets but preserves an explicit custom range', 
   const preset = queries.filter(url => url.pathname.endsWith('/report')).at(-1)!.searchParams;
   expect(preset.get('days')).toBe('7'); expect(preset.has('from')).toBe(false); expect(preset.has('to')).toBe(false);
   await advanced(page);
-  await page.getByLabel('Start', { exact: true }).fill('2026-10-28');
-  await page.getByLabel('End (exclusive)', { exact: true }).fill('2026-10-29');
+  await page.getByLabel('Start', { exact: true }).fill('2026-10-28T00:00:00.000Z');
+  await page.getByLabel('End (exclusive)', { exact: true }).fill('2026-10-29T00:00:00.000Z');
   await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
-  await expect.poll(() => queries.filter(url => url.pathname.endsWith('/report')).at(-1)!.searchParams.get('from')).toBe('2026-10-28');
+  await expect.poll(() => queries.filter(url => url.pathname.endsWith('/report')).at(-1)!.searchParams.get('from')).toBe('2026-10-28T00:00:00.000Z');
   await expect(summary(page).locator('.personalGlance > div:nth-child(3) > dd:not(.personalGlanceMeta)').first()).toHaveText('42');
   await page.clock.setFixedTime(new Date(fixtureNow + 7200000));
   await page.getByRole('button', { name: 'Refresh report', exact: true }).click();
   await expect(summary(page).locator('.personalGlance > div:nth-child(3) > dd:not(.personalGlanceMeta)').first()).toHaveText('42');
   const last = queries.filter(url => url.pathname.endsWith('/report')).at(-1)!;
-  expect(last.searchParams.get('from')).toBe('2026-10-28');
-  expect(last.searchParams.get('to')).toBe('2026-10-29');
+  expect(last.searchParams.get('from')).toBe('2026-10-28T00:00:00.000Z');
+  expect(last.searchParams.get('to')).toBe('2026-10-29T00:00:00.000Z');
 });
 
 
@@ -399,13 +406,13 @@ for (const offset of [-60000, 60000]) test('server-time presets survive browser 
   await page.getByLabel('Start', { exact: true }).fill('2026-10-28T00:00:00Z');
   await page.getByLabel('End (exclusive)', { exact: true }).fill('2026-10-29T00:00:00Z');
   await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
-  await expect(page.getByLabel('End (exclusive)', { exact: true })).toHaveValue('2026-10-29T00:00:00Z');
-  const customParams = queries.filter(url => url.pathname.endsWith('/report')).at(-1)!.searchParams.toString();
+  await expect(page.getByLabel('End (exclusive)', { exact: true })).toHaveValue('2026-10-29T00:00:00.000Z');
+  const customQuery = new URLSearchParams(queries.filter(url => url.pathname.endsWith('/report')).at(-1)!.searchParams);customQuery.delete('cut');const customParams=customQuery.toString();
   expect(new URLSearchParams(customParams).has('days')).toBe(false);
   serverNow += 30000; await page.clock.setFixedTime(new Date(fixtureNow + offset + 3600000));
   await page.getByRole('button', { name: 'Refresh report', exact: true }).click();
   await expect(summary(page).locator('.personalGlance > div:nth-child(3) > dd:not(.personalGlanceMeta)').first()).toHaveText('42');
-  expect(queries.filter(url => url.pathname.endsWith('/report')).at(-1)!.searchParams.toString()).toBe(customParams);
+  const refreshed=new URLSearchParams(queries.filter(url => url.pathname.endsWith('/report')).at(-1)!.searchParams);refreshed.delete('cut');expect(refreshed.toString()).toBe(customParams);
   await page.getByLabel('End (exclusive)', { exact: true }).fill(new Date(serverNow + 60000).toISOString());
   await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
   await expect(page.getByRole('alert')).toContainText('to must not be in the future');
@@ -415,28 +422,17 @@ for (const offset of [-60000, 60000]) test('server-time presets survive browser 
   await expect(page.getByRole('alert')).toHaveCount(0);
 });
 
-test('projection transition clearly uses retained personal history without claiming data loss', async ({ page }) => {
-  let reportTransition = true;
-  await mockUsage(page, async (route, url) => {
-    if (url.pathname.endsWith('/events')) {
-      await route.fulfill({ json: { ...fixtureEvents(url.searchParams), historySource: 'retained_ledger', projectionComplete: false, historyComplete: true } }); return true;
-    }
-    if (!url.pathname.endsWith('/report')) return false;
-    await route.fulfill({ json: { ...fixtureReport(url.searchParams), historySource: reportTransition ? 'retained_ledger' : 'projection', projectionComplete: !reportTransition, historyComplete: true } }); return true;
-  });
-  await page.goto('/dashboard/my-usage');
-  await expect(summary(page)).toContainText('Reporting projection is transitioning.');
-  await expect(summary(page)).toContainText('reads retained personal history directly');
-  await expect(summary(page)).toContainText('coverage reflects recorded fields');
-  await expect(summary(page)).not.toContainText('Incomplete history');
-  await expect(summary(page)).not.toContainText('legacy usage may not be represented');
-  await expect(summary(page).locator('.personalGlance > div:nth-child(3) > dd:not(.personalGlanceMeta)').first()).toHaveText('42');
-  await details(page);
-  await expect(page.locator('.personalTokenStats')).toContainText('40/42 calls reported');
-  reportTransition = false;
-  await page.getByRole('button', { name: 'Refresh report', exact: true }).click();
-  await activity(page);
-  const recent = page.getByRole('region', { name: 'Recent model calls', exact: true });
-  await expect(recent).toContainText('Recent calls read retained personal history during the reporting projection transition');
-  await expect(recent).not.toContainText('Event history is incomplete');
+test('capture gaps and pre-tracking history are disclosed without inventing missing usage', async ({page})=>{
+ let gap=true;
+ await mockUsage(page,async(route,url)=>{if(!url.pathname.endsWith('/report'))return false;const value=completeDisplayReport(fixtureReport(url.searchParams),url.searchParams);value.coverage.captureAudit.captureGapObserved=gap;await route.fulfill({json:{kind:'complete',value}});return true;});
+ await page.goto('/dashboard/my-usage');
+ await expect(summary(page)).toContainText('Not all historical locations have been assessed.');
+ await page.getByText('Report scope and capture dates',{exact:true}).click();
+ await expect(summary(page)).toContainText('Location tracking had a gap or incomplete capture; affected usage is unknown.');
+ await expect(summary(page)).toContainText('the audit does not quantify missing usage');
+ await expect(summary(page).locator('.personalGlance > div:nth-child(3) > dd:not(.personalGlanceMeta)').first()).toHaveText('42');
+ await details(page);await expect(page.locator('.personalTokenStats').first()).toContainText('40/42 calls reported');
+ gap=false;await page.getByRole('button',{name:'Refresh report',exact:true}).click();
+ await expect(summary(page)).not.toContainText('Location tracking had a gap');
+ await expect(summary(page)).toContainText('Not all historical locations have been assessed.');
 });

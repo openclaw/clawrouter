@@ -72,6 +72,10 @@ const handler: ExportedHandler<Env, QueueMessage> = {
     response = withBackgroundRecovery(withRequestId(response, correlated.requestId), request);
     // The correlation wrapper makes a mutable copy without buffering streams.
     if (env.CF_VERSION_METADATA?.id) response.headers.set("x-clawrouter-version-id", env.CF_VERSION_METADATA.id);
+    if (/^\/v1\/(?:admin|session)\/usage\/(?:report|events|validate)$/.test(path)) {
+      response.headers.set("cache-control", "no-store");
+      response.headers.set("x-content-type-options", "nosniff");
+    }
     return corsEnabled(path) ? withCors(response) : response;
   },
   queue,
@@ -82,6 +86,7 @@ export default handler;
 
 function mutatesHotState(method: string, path: string): boolean {
   if (path === "/v1/oauth/callback") return true;
+  if (method === "DELETE" && path === "/v1/admin/usage/report") return false;
   if (method === "GET" || method === "HEAD" || method === "OPTIONS") return false;
   return path.startsWith("/v1/admin/") || path.startsWith("/v1/session/credentials") || path.startsWith("/v1/pool-submissions/");
 }
@@ -107,8 +112,9 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
   if (request.method === "POST" && path === "/v1/session/logout") return localLogout(request, env);
   if (request.method === "GET" && path === "/v1/session/avatar") return avatarResponse(request, env);
   if (request.method === "GET" && path === "/v1/entitlements") return entitlementResponse(request, env);
-  if (request.method === "GET" && path === "/v1/session/usage/report") return sessionUsageReport(request, env);
-  if (request.method === "GET" && path === "/v1/session/usage/events") return sessionUsageReport(request, env, true);
+  if (["GET","DELETE"].includes(request.method) && path === "/v1/session/usage/report") return sessionUsageReport(request, env, request.method === "DELETE" ? "release" : "report");
+  if (request.method === "GET" && path === "/v1/session/usage/events") return sessionUsageReport(request, env, "events");
+  if (request.method === "GET" && path === "/v1/session/usage/validate") return sessionUsageReport(request, env, "validate");
   if (request.method === "GET" && path === "/v1/session/usage") return sessionUsage(request, env);
   if (path === "/v1/session/credentials" || path.startsWith("/v1/session/credentials/")) return sessionCredentialsApi(request, env, path);
   if (request.method === "GET" && path === "/v1/me") return meResponse(request, env);
