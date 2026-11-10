@@ -124,22 +124,39 @@ No scalar shrink or GC release is used while the full graph is held.
 The adopted PRIVATE input contract is passive JSON data, not arbitrary
 serialization-hook execution. Before consuming the continuation, a private walk
 checks every reached function, including nested object members and array slots.
-A callable or accessor `toJSON` descriptor anywhere on that function's prototype
-chain is a protocol failure, with zero hook invocation/serialization/RPC. Inert
-data descriptors shadow inherited hooks normally. No `Get` invokes a getter.
-Ordinary `identityPlan` and public callers are unchanged. Plain functions retain
-object omission/array-null behavior; root carrier fields still stage undefined.
+An active getter, setter or callable data `toJSON` on that function is a
+protocol failure, with zero hook invocation/serialization/RPC. Inert own data
+shadows inherited hooks normally. An own accessor whose getter AND setter are
+undefined is also inert and shadows inherited hooks. Ordinary `identityPlan`
+and public callers are unchanged. Plain functions retain object omission and
+array-null behavior; root carrier fields still stage undefined.
 
-The walk uses no whole-key vector or Symbol enumeration. It admits the existing
-24-level profile's descriptor string references and active key path before each
-data descriptor: N=25, U=2097152+256+activeKeyUnits, no passive containers. The
-otherwise idle source window lists 106 CONTROL products: scratch guard/lease24,
-visitor/call frames26, active data/prototype descriptors25, iterators24, prototype
-lookup frame1, failure/unwind/window products6. Prototype walking is iterative
-with one current descriptor, no retained history or new arbitrary depth cap.
-Only descriptor type/presence is classified; ignored descriptor values and
-callback graphs are not copied, traversed or retained beyond synchronous
-inspection. Visitor/input/descriptor/lease aliases clear before window reuse.
+The guard captures native `Object.prototype.__lookupGetter__`,
+`__lookupSetter__` and `Reflect.apply` before input inspection. The two native
+lookups return only an accessor or undefined, respecting own inert shadowing;
+they construct no JavaScript descriptor carrying a data value. An active
+accessor rejects before the final immediate `typeof fn.toJSON` expression.
+That expression only borrows its operand: an inert value is never assigned to
+an application descriptor, field or array and undergoes no string operation.
+Thus even a 16777217-unit inert string stays with its original caller owner;
+there is no new payload exemption or length/profile restriction. Missing lookup
+intrinsics disable this private operation with the existing protocol category.
+Their actual availability and semantics remain hosted witness requirements.
+
+The walk uses no whole-key vector or Symbol enumeration. It prospectively funds
+the existing 24-level profile's data-descriptor string references, active key
+path and one fixed intrinsic argument array before those factories:
+`C=1, P=1, N=25, U=2097152+256+6+activeKeyUnits, B=0`. Each lookup's argument
+array has finished its last consumer before the next is created. Its exact
+increment is `8*(1+1)+2*6 = 28` logical bytes; no inert-value occurrence is
+retained. Including the unchanged Worker base, the guarded component is
+`25215716 + 2*activeKeyUnits` bytes and must fit the same 33554432-byte ticket.
+The otherwise idle source window lists 109 CONTROL products: scratch
+guard/lease24, visitor/call frames26, active data descriptors24, iterators24,
+three captured intrinsic references, two active call/predicate frames and
+failure/unwind/window products6. No JavaScript prototype-descriptor factory or
+history remains. Callback results are only classified, never retained or
+traversed. Visitor/input/descriptor/lease aliases clear before window reuse.
 Failure leaves the SAME continuation/ticket owned, and the guard lease retires.
 A later release or a clean retry through that same owner follows existing API
 semantics; it is not an automatic authentication retry.
@@ -304,10 +321,18 @@ frames; read has 16 plan products, 72 descriptors/frames, 24 parse frames and fo
 final dependency iterator/outcome products. These reuse idle source/read windows,
 not extra windows. Snapshot admission occurs before selector factories; principal
 normalization finishes before cold acquisition; final comparison follows all
-hydration/hash awaits. Final source/read enter/leave is explicit. Persistent
-operation128/synchronous503 and selector source123/read128 remain unchanged;
-terminal79 remains prepaid. The maximum named combination remains 961, NOT a
-whole-phase source proof. All actual overlaps still require immutable closure.
+hydration/hash awaits. Final canonical validation explicitly enters and leaves
+source/read for credential, policy, owner and connection work; BOTH windows
+are idle before calling the pool helper, which already owns its windows.
+Pool comparison and final projection/dependency comparison then use separate
+synchronous segments. No await or effect is inserted between those segments.
+The final frame/provider iterator/loop/unwind remain live across the nested
+pool call and add FOUR synchronous CONTROL slots: synchronous507, not a new
+window or permissive/refcounted enter. Operation128, selector source123/read128
+and prepaid terminal79 are unchanged. The maximum named combination is
+`128+123+128+79+507 = 965`, with every individual window within its existing
+limit. This arithmetic is NOT itself whole-phase source qualification; actual
+factory/lifetime coverage still requires immutable source closure.
 
 The selector admits their simultaneous sum; a phase MAX is valid only after its
 last consumer has cleared. Routing, history, policy, user and selection returns
@@ -405,8 +430,12 @@ replaced. All finite fixture roots are observed immediately and joined, with
 release-first cleanup and explicit primary presence. These success witnesses
 remain requirements; local runtime execution is prohibited. New fixtures require 1025 callables to remain uninvoked and stage only undefined,
 including pressure before copy/RPC; top/nested/array own/inherited callable and
-accessor serializers with protocol denial, zero invocation/RPC and retained
-continuation custody; plain-function omission/null parity; snapshot pressure before candidate values or
+active getter/setter serializers with protocol denial, zero invocation/RPC and retained
+continuation custody; plain-function omission/null parity; huge inert shadows
+at root/object/array positions with normal RPC, no JavaScript value-descriptor
+factory and no hook invocation; empty-accessor inert shadows and native lookup
+availability/identity semantics; a nonempty permitted provider WITHOUT selection
+through sequential final windows; snapshot pressure before candidate values or
 effects; long rejected and valid-padded principal guards; and maximum ASCII plus
 Unicode model-scoped quota pressure before the shared helper. Configuration tests
 also exercise the actual bounded preparation owner, prospective scratch pressure

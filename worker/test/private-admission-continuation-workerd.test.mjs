@@ -37,6 +37,7 @@ export class PolicyBindingIndexObject extends Base {
   super({storage},new Proxy(env,{get(target,key,receiver){if(key==='CLAWROUTER_OPTIONAL_CONFIG_KEYS'&&mode==='configuration'){trace.configurationReads=(trace.configurationReads??0)+1;return 'A,'.repeat(1677721)+'A';}return key==='POLICY_KV'?kv:Reflect.get(target,key,receiver);}}));
   const intake=this.completePrivateAdmission;this.completePrivateAdmission=(...args)=>{trace.intakes++;return Reflect.apply(intake,this,args);};
   const finalize=this.finalPrivateAdmission;this.finalPrivateAdmission=(...args)=>{
+   if(mode.startsWith('inert-')){const input=args[0];check(mode==='inert-top'?!Object.hasOwn(input,'extra'):mode==='inert-array'?input.extra.length===1&&input.extra[0]===null:Object.keys(input.extra).length===0,'inert wire omission/null');trace.inertWire=true;}
    if(mode==='symbols'){const input=args[0];check(Object.keys(input).join(',')==='providers,__proto__,unknown,credentialId,secretSha256'&&Object.hasOwn(input,'__proto__')&&input.__proto__.kept===true&&input.unknown.kept===7,'unchanged string wire');trace.stringWire=true;}
    if(mode.startsWith('dependency-')){
     const prior=args[1];
@@ -58,7 +59,7 @@ export class PolicyBindingIndexObject extends Base {
    }
    check(this.admitGrantAttachment({key:dependencyB,generation:1,revision:7,provider:'anthropic',status:'active'}).revision===8,'pending reservation');
   }
-  trace.kv=[];trace.writes=0;trace.intakes=0;trace.configurationReads=0;trace.dependencyObserved=false;trace.publishedRevision=0;trace.stringWire=false;};
+  trace.kv=[];trace.writes=0;trace.intakes=0;trace.configurationReads=0;trace.dependencyObserved=false;trace.publishedRevision=0;trace.stringWire=false;trace.inertWire=false;};
  }
  async fetch(request){
   const path=new URL(request.url).pathname;
@@ -69,7 +70,7 @@ export class PolicyBindingIndexObject extends Base {
 }
 export default {async fetch(request,env){
  const mode=new URL(request.url).pathname.slice(1),dependency=mode.startsWith('dependency-'),stub=env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName('policy-bindings'));
- const roots=[];let proof,continuation,handle,restoreCopy,hasPrimary=false,primary;
+ const roots=[];let proof,continuation,handle,restoreCopy,restoreDescriptor,hasPrimary=false,primary;
  const own=promise=>{const root={outcome:promise.then(value=>({failed:false,value}),error=>({failed:true,error})),used:false};roots.push(root);return root;};
  const take=async root=>{const result=await root.outcome;root.used=true;if(result.failed)throw result.error;return result.value;};
  const rpc=async(path,body,headers)=>{const response=await take(own(stub.fetch('https://authority'+path,{method:'POST',body,headers})));const text=await take(own(response.text()));return {status:response.status,body:text?JSON.parse(text):null};};
@@ -79,15 +80,31 @@ export default {async fetch(request,env){
   await env.POLICY_KV.put('credentials/nativebridge',JSON.stringify({...record(digest),...(mode==='principal'?{principalId:' '.repeat(4096)+'FIXTURE@EXAMPLE.COM'+' '.repeat(4096)}:{})}));
   if(mode==='principal')await env.POLICY_KV.put('access/users/fixture@example.com',JSON.stringify({enabled:true,groups:[]}));
   await env.POLICY_KV.put('policies/native-bridge-policy',JSON.stringify({enabled:true,generation:'legacy',providers:[],requestCostMicros:7}));
+  if(mode==='provider-only')await env.POLICY_KV.put('connections/anthropic',JSON.stringify({providerId:'anthropic',enabled:true}));
   if(mode==='selection'||mode==='snapshot-only'||mode==='snapshot-select'||mode==='configuration'||dependency){
    await env.POLICY_KV.put('connections/anthropic',JSON.stringify({providerId:'anthropic',enabled:true}));
    await env.POLICY_KV.put(selectedKey,JSON.stringify({provider:'anthropic',kind:'api_key',enabled:true,credentialStore:'durable_object',credentialGeneration:1,credentialLineage:'synthetic',credentialStatus:'active',hasCredential:true}));
   }
-  if(mode==='healthy'||mode==='selection'||mode==='copy-pressure'||mode==='callable-pressure'||mode==='callables'||mode.startsWith('hook-')||mode==='symbols'){
+  if(mode==='healthy'||mode==='selection'||mode==='copy-pressure'||mode==='callable-pressure'||mode==='callables'||mode.startsWith('hook-')||mode.startsWith('inert-')||mode==='symbols'){
    const preflight=await take(own(preflightCredential(env,'nativebridge',digest)));check(preflight.outcome==='matched','preflight');proof=preflight.proof;
    continuation=consumeCredentialPreflight(proof,env,'nativebridge',digest);proof=undefined;
    let admission=mode==='selection'?{providers:[{id:'anthropic',tokenRef:'anthropic'}],selection:{providerId:'anthropic',endpointId:'messages',mode:'http',capability:'llm.messages'}}:{providers:[]};
-   let copyFactories=0,symbolReads=0,callableReads=0;
+   let copyFactories=0,symbolReads=0,callableReads=0,inertDescriptors=0,inertInvoked=0,lookupQualified=false;
+   if(mode.startsWith('inert-')){
+    const lookupGetter=Object.prototype.__lookupGetter__,lookupSetter=Object.prototype.__lookupSetter__;
+    check(typeof lookupGetter==='function'&&typeof lookupSetter==='function','native accessor lookup availability');
+    const parent=Object.create(Function.prototype),fn=()=>{inertInvoked++;throw undefined;};
+    const getter=()=>{inertInvoked++;throw undefined;},setter=()=>{inertInvoked++;throw undefined;};
+    Object.defineProperty(parent,'toJSON',{get:getter,set:setter,configurable:true});Object.setPrototypeOf(fn,parent);
+    check(Reflect.apply(lookupGetter,parent,['toJSON'])===getter&&Reflect.apply(lookupSetter,parent,['toJSON'])===setter,'native active accessor identities');
+    if(mode==='inert-object'||mode==='inert-empty')Object.defineProperty(parent,'toJSON',{value:getter});
+    Object.defineProperty(fn,'toJSON',mode==='inert-empty'?{get:undefined,set:undefined}:{value:'x'.repeat(16777217)});
+    check(Reflect.apply(lookupGetter,fn,['toJSON'])===undefined&&Reflect.apply(lookupSetter,fn,['toJSON'])===undefined,'native inert shadow semantics');lookupQualified=true;
+    const saved=Object.getOwnPropertyDescriptor(Object,'getOwnPropertyDescriptor'),original=saved.value;
+    restoreDescriptor=()=>Object.defineProperty(Object,'getOwnPropertyDescriptor',saved);
+    Object.defineProperty(Object,'getOwnPropertyDescriptor',{...saved,value:function(target,key){if((target===fn||target===parent)&&key==='toJSON')inertDescriptors++;return Reflect.apply(original,this,[target,key]);}});
+    admission.extra=mode==='inert-top'?fn:mode==='inert-array'?[fn]:{fn};
+   }
    if(mode==='callables')for(let index=0;index<1025;index++)admission['callable'+index]=()=>{callableReads++;throw undefined;};
    if(mode==='copy-pressure'||mode==='callable-pressure'){
     if(mode==='copy-pressure')for(let index=0;index<16384;index++)admission[String(index).padStart(5,'0')+'x'.repeat(1019)]=undefined;
@@ -118,14 +135,15 @@ export default {async fetch(request,env){
    }else{
     handle=await take(own(operation));
     check(bodyBudgetCharged()-baseline===32*1024*1024,'full result remains funded');check(Object.keys(handle).join(',')==='dispose'&&JSON.stringify(handle)==='{}','opaque');
-    handle.dispose();handle=undefined;check(symbolReads===0,'no Symbol getter read');check(callableReads===0,'callables never invoked');result={status:200,opaque:true,symbolReads,callableReads};
+    handle.dispose();handle=undefined;check(symbolReads===0,'no Symbol getter read');check(callableReads===0,'callables never invoked');check(inertDescriptors===0&&inertInvoked===0,'no inert descriptor carrier or callback');result={status:200,opaque:true,symbolReads,callableReads,inertDescriptors,inertInvoked,lookupQualified};
    }
    }
    admission=undefined;
   }else{
    const source=identitySourceBudget();if(mode==='limited')source.values=131050;
-   const reply=await rpc('/admission/resolve',JSON.stringify({admission:{credentialId:'nativebridge',secretSha256:digest,providers:mode==='configuration'||mode==='snapshot-only'||mode==='snapshot-select'||dependency?[{id:'anthropic',tokenRef:dependency?'a':'anthropic'}]:[],...(mode==='configuration'||mode==='snapshot-only'||mode==='snapshot-select'||dependency?{selection:{providerId:'anthropic',endpointId:'messages',mode:'http',capability:'llm.messages'}}:{}),...(mode.endsWith('snapshot')||mode==='snapshot-only'?{snapshot:'only'}:mode==='snapshot-select'?{snapshot:'select'}:{})},source}),{'content-type':'application/json','x-clawrouter-private-admission':'v1'});
+   const reply=await rpc('/admission/resolve',JSON.stringify({admission:{credentialId:'nativebridge',secretSha256:digest,providers:mode==='provider-only'||mode==='configuration'||mode==='snapshot-only'||mode==='snapshot-select'||dependency?[{id:'anthropic',tokenRef:dependency?'a':'anthropic'}]:[],...(mode==='configuration'||mode==='snapshot-only'||mode==='snapshot-select'||dependency?{selection:{providerId:'anthropic',endpointId:'messages',mode:'http',capability:'llm.messages'}}:{}),...(mode.endsWith('snapshot')||mode==='snapshot-only'?{snapshot:'only'}:mode==='snapshot-select'?{snapshot:'select'}:{})},source}),{'content-type':'application/json','x-clawrouter-private-admission':'v1'});
    check(reply.status===(mode==='limited'||mode==='configuration'?503:200),'private status');
+   if(mode==='provider-only')check(!reply.body.admission.selection&&reply.body.admission.connections[0]?.providerId==='anthropic'&&reply.body.admission.pools.anthropic.keys.length>0,'nonempty provider no selection');
    if(mode==='principal')check(reply.body.admission.owner?.email==='fixture@example.com','padded principal');
    if(mode==='snapshot-only'||mode==='snapshot-select')check(reply.body.admission.snapshots?.anthropic?.candidates.length===2,'funded snapshot output');
    if(mode==='rotation')check(reply.body.admission.credential.credential.secretSha256===rotated&&!reply.body.admission.selection,'final canonical winner');
@@ -138,6 +156,7 @@ export default {async fetch(request,env){
  for(let i=0;i<roots.length;i++){const outcome=await roots[i].outcome;if(outcome.failed&&!roots[i].used){roots[i].used=true;failures.push(outcome.error);}}
  try{if(handle)handle.dispose();else if(continuation)releaseCredentialPreflightContinuation(continuation);else if(proof)releaseCredentialPreflight(proof);}catch(error){failures.push(error);}
  try{restoreCopy?.();}catch(error){failures.push(error);}finally{restoreCopy=undefined;}
+ try{restoreDescriptor?.();}catch(error){failures.push(error);}finally{restoreDescriptor=undefined;}
  if(failures.length)throw new AggregateError(hasPrimary?[primary,...failures]:failures,'native bridge cleanup');if(hasPrimary)throw primary;
  const snapshot=await rpc('/fixture/result','');check(bodyBudgetCharged()===baseline,'worker charge retired');
  check(snapshot.body.charged===0,'DO original producer retired');
@@ -167,7 +186,7 @@ test('inactive private continuation through actual Workerd KV/RPC/SQLite and opa
   try {
     directory = await mkdtemp(join(tmpdir(), 'private-admission-workerd-'));
     runtime = await take(own(startWorkerdFixture(directory, router, upstream, { preventEviction: true })));
-    for (const mode of ['healthy', 'rotation', 'limited', 'selection', 'configuration', 'dependency-choice', 'dependency-snapshot', 'dependency-same-choice', 'dependency-same-snapshot', 'snapshot-only', 'snapshot-select', 'principal', 'copy-pressure', 'callable-pressure', 'callables', 'hook-top', 'hook-object', 'hook-array', 'symbols']) {
+    for (const mode of ['healthy', 'provider-only', 'rotation', 'limited', 'selection', 'configuration', 'dependency-choice', 'dependency-snapshot', 'dependency-same-choice', 'dependency-same-snapshot', 'snapshot-only', 'snapshot-select', 'principal', 'copy-pressure', 'callable-pressure', 'callables', 'hook-top', 'hook-object', 'hook-array', 'inert-top', 'inert-object', 'inert-array', 'inert-empty', 'symbols']) {
       const response = await take(own(runtime.dispatchFetch('https://fixture/' + mode)));
       const text = await take(own(response.text())); assert.equal(response.status, 200);
       const result = JSON.parse(text); assert.equal(result.charged, 0); assert.equal(result.sql.charged, 0);
@@ -178,6 +197,7 @@ test('inactive private continuation through actual Workerd KV/RPC/SQLite and opa
       if (mode === 'copy-pressure' || mode === 'callable-pressure') assert.equal(result.copyFactories, 0);
       if (mode.startsWith('hook-')) assert.equal(result.invoked, 0);
       if (mode === 'callables') assert.equal(result.callableReads, 0);
+      if (mode.startsWith('inert-')) { assert.equal(result.lookupQualified, true); assert.equal(result.inertDescriptors, 0); assert.equal(result.inertInvoked, 0); assert.equal(result.sql.trace.inertWire, true); }
       if (mode === 'symbols') { assert.equal(result.symbolReads, 0); assert.equal(result.sql.trace.stringWire, true); }
       if (mode === 'rotation') assert.equal(result.rotation, true);
       if (mode === 'limited') assert.equal(result.sql.trace.writes, 0);

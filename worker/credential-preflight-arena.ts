@@ -279,6 +279,7 @@ export const admissionBridgeFactoryCharges = Object.freeze({
     seedAndProjectionScratch: 6, selectionPlanChoiceCursorTimeAttempted: 8,
     historyFoldCursorRowAndAccumulator: 4, markerAndExecutorIterators: 4,
     dependencyReceiptReplacementAndFinalProbe: 2,
+    finalSegmentFrameProviderIteratorLoopAndUnwind: 4,
 
   }),
 });
@@ -323,12 +324,13 @@ export const admissionBridgeBoundaryFactoryCharges = Object.freeze({
     finalDependencyIteratorAndOutcome: 4 }),
 });
 // Prevalidation completes before copy/RPC and before the continuation transfers.
-// One current prototype descriptor is inspected and cleared; no descriptor/key
-// history, callback graph or Symbol vector is retained. These are CONTROL.
+// Native accessor lookups construct no JS data-value descriptor. Three captured
+// intrinsic references/call operands stay CONTROL; the fixed argument array and
+// string occurrence are separately funded DATA. No callback graph is retained.
 export const admissionBridgeSerializationFactoryCharges = Object.freeze({
   source: Object.freeze({ scratchVectorGuardOwnerLeaseCloseAndMethods: 24,
-    visitorAndRecursiveCallFrames: 26, activeDataAndPrototypeDescriptors: 25,
-    ownPropertyIterators: 24, prototypeLookupFrame: 1, failureUnwindAndWindowProducts: 6 }),
+    visitorAndRecursiveCallFrames: 26, activeDataDescriptors: 24,
+    ownPropertyIterators: 24, capturedIntrinsicReferences: 3, intrinsicCallAndPredicateFrames: 2, failureUnwindAndWindowProducts: 6 }),
 });
 // Worker pre-copy string-field pass, BEFORE source acquisition. It borrows the
 // otherwise idle prepaid source window and clears all metadata before the string-keyed carrier.

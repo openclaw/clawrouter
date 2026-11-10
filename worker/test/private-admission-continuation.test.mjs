@@ -912,14 +912,14 @@ test('final projection receipt distinguishes present-null, legacy, text and abse
 }));
 
 
-for (const location of ['top', 'object', 'array']) for (const inherited of [false, true]) for (const accessor of [false, true])
-test('private callable serializer rejects before invocation/RPC and retains continuation: ' + [location, inherited, accessor].join('/'), async t => fixture(t, async f => {
+for (const location of ['top', 'object', 'array']) for (const inherited of [false, true]) for (const hook of ['getter', 'setter', 'data'])
+test('private callable serializer rejects before invocation/RPC and retains continuation: ' + [location, inherited, hook].join('/'), async t => fixture(t, async f => {
   seed(f); const baseline = bodyBudgetCharged(); let proof, continuation, handle, invoked = 0, rpc = 0;
   f.resources.push(() => { if (handle) handle.dispose(); else if (continuation) releaseCredentialPreflightContinuation(continuation); else if (proof) releaseCredentialPreflight(proof); });
   const preflight = await f.take(f.own(preflightCredential(f.env, 'bridgekid', digest))); proof = preflight.proof;
   continuation = consumeCredentialPreflight(proof, f.env, 'bridgekid', digest); proof = undefined;
   const fn = () => { invoked++; throw undefined; }, holder = inherited ? Object.create(Function.prototype) : fn;
-  Object.defineProperty(holder, 'toJSON', accessor ? { get() { invoked++; throw undefined; } } : { value() { invoked++; return 'X'.repeat(20000000); } });
+  Object.defineProperty(holder, 'toJSON', hook === 'getter' ? { get() { invoked++; throw undefined; } } : hook === 'setter' ? { set(_value) { invoked++; throw undefined; } } : { value() { invoked++; return 'X'.repeat(20000000); } });
   if (inherited) Object.setPrototypeOf(fn, holder);
   const admission = { providers: [], extra: location === 'top' ? fn : location === 'object' ? { fn } : [fn] };
   const get = f.env.ACCESS_CONTROL.get;
@@ -948,4 +948,54 @@ test('plain nested functions retain omission/array-null wire, including inert se
   const operation = completeCredentialAdmission(continuation, admission); continuation = undefined;
   handle = await f.take(f.own(operation)); handle.dispose(); handle = undefined;
   assert.deepEqual(wire.extra, { array: [null, null, null], kept: 7 }); assert.equal(invoked, 0);
+}));
+
+
+test('private nonempty permitted provider without selection finishes sequential final windows', async t => fixture(t, async f => {
+  seed(f); f.stored.set('connections/anthropic', { providerId: 'anthropic', enabled: true });
+  const entered = [], enter = PreflightTicket.prototype.enter;
+  t.mock.method(PreflightTicket.prototype, 'enter', function (window) {
+    assert.equal(this.windows[window], false, 'no overlapping ' + window + ' owner');
+    entered.push(window); return Reflect.apply(enter, this, [window]);
+  });
+  const response = await f.call({ ...input(), providers: [{ id: 'anthropic', tokenRef: 'anthropic' }] });
+  assert.equal(response.status, 200); assert.equal(response.body.admission.selection, undefined);
+  assert.equal(response.body.admission.connections[0].providerId, 'anthropic');
+  assert.ok(response.body.admission.pools.anthropic.keys.includes('oauth/bridge-policy/anthropic'));
+  assert.equal(f.db.prepare('SELECT count(*) n FROM upstream_grant_selection').get().n, 0);
+  assert.equal(f.db.prepare('SELECT count(*) n FROM upstream_grant_pool_cursors').get().n, 0);
+  assert.ok(entered.filter(window => window === 'source').length > 1); assert.ok(entered.includes('read'));
+}));
+
+for (const location of ['top', 'object', 'array']) for (const inert of ['large', 'number', 'null', 'undefined', 'object', 'empty-accessor']) for (const ancestor of ['accessors', 'callable'])
+test('inert callable serializer shadow has no JS value descriptor: ' + location + '/' + inert + '/' + ancestor, async t => fixture(t, async f => {
+  seed(f); const baseline = bodyBudgetCharged(); let proof, continuation, handle, invoked = 0, descriptors = 0, rpc = 0, wire;
+  f.resources.push(() => { if (handle) handle.dispose(); else if (continuation) releaseCredentialPreflightContinuation(continuation); else if (proof) releaseCredentialPreflight(proof); });
+  const preflight = await f.take(f.own(preflightCredential(f.env, 'bridgekid', digest))); proof = preflight.proof;
+  continuation = consumeCredentialPreflight(proof, f.env, 'bridgekid', digest); proof = undefined;
+  const inherited = Object.create(Function.prototype), fn = () => { invoked++; throw undefined; };
+  Object.defineProperty(inherited, 'toJSON', ancestor === 'callable' ? { value() { invoked++; throw undefined; } } : { get() { invoked++; throw undefined; }, set(_value) { invoked++; throw undefined; } });
+  Object.setPrototypeOf(fn, inherited);
+  const value = inert === 'large' ? 'x'.repeat(16777217) : inert === 'number' ? 7 : inert === 'null' ? null : inert === 'object' ? { get ignored() { invoked++; throw undefined; } } : undefined;
+  Object.defineProperty(fn, 'toJSON', inert === 'empty-accessor' ? { get: undefined, set: undefined } : { value });
+  assert.equal(typeof Object.prototype.__lookupGetter__, 'function'); assert.equal(typeof Object.prototype.__lookupSetter__, 'function');
+  assert.equal(Reflect.apply(Object.prototype.__lookupGetter__, fn, ['toJSON']), undefined);
+  assert.equal(Reflect.apply(Object.prototype.__lookupSetter__, fn, ['toJSON']), undefined);
+  const descriptor = Object.getOwnPropertyDescriptor, get = f.env.ACCESS_CONTROL.get;
+  t.mock.method(Object, 'getOwnPropertyDescriptor', function (target, key) {
+    if ((target === fn || target === inherited) && key === 'toJSON') descriptors++;
+    return Reflect.apply(descriptor, this, [target, key]);
+  });
+  t.mock.method(f.env.ACCESS_CONTROL, 'get', function (...args) {
+    const stub = Reflect.apply(get, this, args), original = stub.fetch;
+    return { fetch(url, init) { if (url.endsWith('/admission/resolve')) { rpc++; wire = JSON.parse(init.body).admission; } return Reflect.apply(original, stub, [url, init]); } };
+  });
+  const admission = { providers: [], extra: location === 'top' ? fn : location === 'object' ? { fn } : [fn] };
+  const operation = completeCredentialAdmission(continuation, admission); continuation = undefined;
+  handle = await f.take(f.own(operation));
+  assert.equal(rpc, 1); assert.equal(descriptors, 0); assert.equal(invoked, 0);
+  if (location === 'top') assert.equal(Object.hasOwn(wire, 'extra'), false);
+  else assert.deepEqual(wire.extra, location === 'array' ? [null] : {});
+  assert.equal(bodyBudgetCharged() - baseline, preflightPayloadBytes);
+  handle.dispose(); handle = undefined; assert.equal(bodyBudgetCharged(), baseline);
 }));

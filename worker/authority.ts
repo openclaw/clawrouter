@@ -739,48 +739,65 @@ export class PolicyBindingIndexObject implements DurableObject {
   }
 
   private finalPrivateAdmission(input: AdmissionRequest, prior: AdmissionResult, bound: AuthorityReadBound): AdmissionResult {
-    // AFTER the last hydration/hash await, including every early/no-selection
-    // return. The final decision, outbound plan and journal execution have no await.
-    const credential = this.getCredential(input.credentialId, bound);
-    const secretMatches = !!credential && !!input.secretSha256 && safeEqual(input.secretSha256.toLowerCase(), credential.credential.secretSha256.toLowerCase());
-    const policy = secretMatches ? this.getPolicy(credential!.credential.policyId, bound) : null;
-    const principal = policy && credential?.credential.enabled && !credentialExpired(credential.credential) && policy.policy.enabled && credential.credential.policyGeneration === policy.policy.generation ? credential.credential.principalId : null;
-    const owner = principal ? this.getUser(principal, bound) : null;
-    const fresh: AdmissionResult = { ...prior, credential, policy, owner };
-    bound.bridge!.prior = prior; bound.bridge!.result = fresh;
-    const same = equalAdmissionJson;
-    let routingCurrent = same(credential, prior.credential) && same(policy, prior.policy) && same(owner, prior.owner);
-    if (policy && credential && input.secretSha256 && safeEqual(input.secretSha256, credential.credential.secretSha256)
-      && credential.credential.enabled && !credentialExpired(credential.credential) && policy.policy.enabled
-      && credential.credential.policyGeneration === policy.policy.generation && owner?.record.enabled !== false) {
-      fresh.connections = this.resolvePrivateProviderConnections(input.providers ?? [], bound,
-        input.allConnections ? undefined : policy.policy.providers);
-      routingCurrent &&= same(fresh.connections, prior.connections);
-      fresh.pools = {};
-      for (const provider of input.providers ?? []) {
-        if (policy.policy.providers.length && !policy.policy.providers.includes(provider.id)) continue;
-        const pool = this.resolveGrantPool({ providerId: provider.id, policyId: policy.policyId, tenantId: policy.policy.tenantId ?? "default",
-          }, bound, { tokenRef: provider.tokenRef });
+    // AFTER the last await. The canonical, pool and projection segments are
+    // synchronous and sequential; resolveGrantPool owns its own windows.
+    const ticket = bound.bridge!.ticket, same = equalAdmissionJson;
+    let credential: ProxyCredentialEntry | null = null, policy: AccessPolicyEntry | null = null;
+    let owner: AccessControlUser | null = null, fresh: AdmissionResult;
+    let routingCurrent = false, permitted = false;
+    ticket.enter("source");
+    try { ticket.enter("read"); try {
+      credential = this.getCredential(input.credentialId, bound);
+      const secretMatches = !!credential && !!input.secretSha256 && safeEqual(input.secretSha256.toLowerCase(), credential.credential.secretSha256.toLowerCase());
+      policy = secretMatches ? this.getPolicy(credential!.credential.policyId, bound) : null;
+      const principal = policy && credential?.credential.enabled && !credentialExpired(credential.credential) && policy.policy.enabled && credential.credential.policyGeneration === policy.policy.generation ? credential.credential.principalId : null;
+      owner = principal ? this.getUser(principal, bound) : null;
+      fresh = { ...prior, credential, policy, owner };
+      bound.bridge!.prior = prior; bound.bridge!.result = fresh;
+      routingCurrent = same(credential, prior.credential) && same(policy, prior.policy) && same(owner, prior.owner);
+      permitted = !!(policy && credential && input.secretSha256 && safeEqual(input.secretSha256, credential.credential.secretSha256)
+        && credential.credential.enabled && !credentialExpired(credential.credential) && policy.policy.enabled
+        && credential.credential.policyGeneration === policy.policy.generation && owner?.record.enabled !== false);
+      if (permitted) {
+        fresh.connections = this.resolvePrivateProviderConnections(input.providers ?? [], bound,
+          input.allConnections ? undefined : policy!.policy.providers);
+        routingCurrent &&= same(fresh.connections, prior.connections);
+        fresh.pools = {};
+      } else { fresh.connections = []; fresh.pools = {}; routingCurrent = false; }
+    } finally { ticket.leave("read"); } }
+    finally { ticket.leave("source"); }
+
+    if (permitted && policy) for (const provider of input.providers ?? []) {
+      if (policy.policy.providers.length && !policy.policy.providers.includes(provider.id)) continue;
+      // Outer function/loop frames stay charged; their windows are idle here.
+      const pool = this.resolveGrantPool({ providerId: provider.id, policyId: policy.policyId, tenantId: policy.policy.tenantId ?? "default" },
+        bound, { tokenRef: provider.tokenRef });
+      ticket.enter("source");
+      try { ticket.enter("read"); try {
         fresh.pools[provider.id] = pool;
         routingCurrent &&= same(pool, prior.pools[provider.id]);
+      } finally { ticket.leave("read"); } }
+      finally { ticket.leave("source"); }
+    }
+
+    ticket.enter("source");
+    try { ticket.enter("read"); try {
+      // Every observed projection, including unselected/snapshot-only, is
+      // compared at this final synchronous boundary before any journal effect.
+      for (const entry of bound.bridge!.entries) if (entry.kind === "dependency" || entry.kind === "projection" && entry.eligible) {
+        const current = this.grantAttachment(entry.key, true);
+        if (current.revision !== entry.revision || !this.privateProjectionCurrent(bound, entry)) routingCurrent = false;
       }
-    } else { fresh.connections = []; fresh.pools = {}; routingCurrent = false; }
-    // EVERY observed candidate matters: an unselected projection can change the
-    // choice, and snapshot-only has no selected key. No await occurs between
-    // these original canonical probes and serialization/journal effects.
-    for (const entry of bound.bridge!.entries) if (entry.kind === "dependency" || entry.kind === "projection" && entry.eligible) {
-      const current = this.grantAttachment(entry.key, true);
-      if (current.revision !== entry.revision || !this.privateProjectionCurrent(bound, entry)) routingCurrent = false;
-    }
-    if (prior.selection?.selected) {
-      const selected = prior.selection.selected;
-      routingCurrent &&= this.grantAttachment(selected.key, true).revision === selected.authorityRevision;
-    }
-    if (!routingCurrent) {
-      // Never publish or commit a stale choice after a canonical winner changes.
-      delete fresh.selection; delete fresh.snapshots;
-      for (let i = bound.bridge!.entries.length - 1; i >= 0; i--) if (bound.bridge!.entries[i].kind === "selection") bound.bridge!.entries.splice(i, 1);
-    }
+      if (prior.selection?.selected) {
+        const selected = prior.selection.selected;
+        routingCurrent &&= this.grantAttachment(selected.key, true).revision === selected.authorityRevision;
+      }
+      if (!routingCurrent) {
+        delete fresh.selection; delete fresh.snapshots;
+        for (let i = bound.bridge!.entries.length - 1; i >= 0; i--) if (bound.bridge!.entries[i].kind === "selection") bound.bridge!.entries.splice(i, 1);
+      }
+    } finally { ticket.leave("read"); } }
+    finally { ticket.leave("source"); }
     return fresh;
   }
 
@@ -804,10 +821,7 @@ export class PolicyBindingIndexObject implements DurableObject {
       bound.bridge!.prior = undefined; bound.bridge!.result = result;
       if (signal?.aborted) throw identityFailure("transport");
       text = this.storage.transactionSync(() => {
-        ticket.enter("source");
-        try { ticket.enter("read"); try { result = this.finalPrivateAdmission(envelope!.admission, result!, bound!); }
-          finally { ticket.leave("read"); } }
-        finally { ticket.leave("source"); }
+        result = this.finalPrivateAdmission(envelope!.admission, result!, bound!);
         admitAdmission(result);
         const reply = { admission: result, source: envelope!.source };
         const plan = identityPlan(); plan.item(reply, 0);

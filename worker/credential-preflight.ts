@@ -7,6 +7,12 @@ import { admissionContinuationHeader, admissionContinuationVersion, admissionCon
   credentialPreflightPath, credentialPreflightVersion } from "./credential-preflight-protocol.ts";
 import { consumeAdmissionBridge, consumePreflightReply } from "./credential-preflight-source.ts";
 
+// Capture the native Annex B lookups and apply before any input inspection.
+// Availability is qualified by hosted Node/Workerd witnesses, never assumed.
+const serializationLookupGetter = (Object.prototype as { __lookupGetter__?: unknown }).__lookupGetter__;
+const serializationLookupSetter = (Object.prototype as { __lookupSetter__?: unknown }).__lookupSetter__;
+const serializationApply = Reflect.apply;
+
 // Deliberately no caller from ordinary admission/preverification. These empty
 // carriers grant neither identity nor authentication and have no wire encoding.
 export interface CredentialPreflightProof { readonly kind?: never }
@@ -126,7 +132,7 @@ export function completeCredentialAdmission(continuation: CredentialPreflightCon
 }
 // PRIVATE passive-data prevalidation. The ordinary planner intentionally skips
 // callable members; JSON serialization would consult their toJSON FIRST. Inspect
-// descriptors/prototypes without Get, hook invocation, Symbol enumeration or a
+// native accessor lookup before a type-only Get: no hook invocation, Symbol enumeration or a
 // retained key vector. Failed prevalidation leaves the continuation owned.
 function guardAdmissionSerialization(owner: AdmissionOwner, input: Record<string, unknown>): void {
   const worker = admissionBridgePhasePayload.workerReply, ticket = owner.ticket;
@@ -137,30 +143,29 @@ function guardAdmissionSerialization(owner: AdmissionOwner, input: Record<string
     // Parent data descriptors can coexist along the existing 24-level JSON
     // profile. Fund their admitted string references plus active key occurrences;
     // omitted callable-member keys are measured before their descriptor factory.
+    if (typeof serializationLookupGetter !== "function" || typeof serializationLookupSetter !== "function") throw identityFailure("protocol");
     lease = reserveAdmissionScratch(ticket, worker.admittedRepresentations + worker.flatten + worker.decodedChunk,
-      { C: 0, P: 0, N: 25, U: identityJsonProfiles.complete.units + 256, B: 0 });
+      { C: 1, P: 1, N: 25, U: identityJsonProfiles.complete.units + 256 + 6, B: 0 });
     visit = (value: unknown, depth: number, keyUnits: number): void => {
       if (typeof value === "function") {
-        let current: object | null = value;
-        while (current) {
-          let descriptor = Object.getOwnPropertyDescriptor(current, "toJSON");
-          if (descriptor) {
-            const unsupported = !Object.hasOwn(descriptor, "value") || typeof descriptor.value === "function";
-            // No descriptor value/callback graph survives classification.
-            descriptor = undefined; current = null; value = undefined;
-            if (unsupported) throw identityFailure("protocol");
-            return;
-          }
-          current = Object.getPrototypeOf(current);
-        }
-        value = undefined; return;
+        // Native internal descriptor lookup returns ONLY an accessor or undefined,
+        // never a JS descriptor carrying an arbitrarily large inert data value.
+        // Each fixed argument array's last consumer finishes before the next one.
+        const unsupported = serializationApply(serializationLookupGetter, value, ["toJSON"]) !== undefined
+          || serializationApply(serializationLookupSetter, value, ["toJSON"]) !== undefined
+          || typeof (value as Function & { toJSON?: unknown }).toJSON === "function";
+        // The final typeof borrows only its operand. No inert value is assigned
+        // to an application field/array/descriptor or used in a string operation.
+        value = undefined;
+        if (unsupported) throw identityFailure("protocol");
+        return;
       }
       if (value === null || typeof value !== "object") return;
       if (depth >= identityJsonProfiles.complete.depth) throw identityFailure("limit");
       if (Array.isArray(value)) {
         for (let index = 0; index < value.length; index++) {
           const key = String(index);
-          lease!.admit({ C: 0, P: 0, N: 25, U: identityJsonProfiles.complete.units + 256 + keyUnits + key.length, B: 0 });
+          lease!.admit({ C: 1, P: 1, N: 25, U: identityJsonProfiles.complete.units + 256 + 6 + keyUnits + key.length, B: 0 });
           let descriptor = Object.getOwnPropertyDescriptor(value, key);
           try {
             if (descriptor && !Object.hasOwn(descriptor, "value")) throw identityFailure("protocol");
@@ -168,7 +173,7 @@ function guardAdmissionSerialization(owner: AdmissionOwner, input: Record<string
           } finally { descriptor = undefined; }
         }
       } else for (const key in value) if (Object.hasOwn(value, key)) {
-        lease!.admit({ C: 0, P: 0, N: 25, U: identityJsonProfiles.complete.units + 256 + keyUnits + key.length, B: 0 });
+        lease!.admit({ C: 1, P: 1, N: 25, U: identityJsonProfiles.complete.units + 256 + 6 + keyUnits + key.length, B: 0 });
         let descriptor = Object.getOwnPropertyDescriptor(value, key);
         try {
           if (!descriptor || !Object.hasOwn(descriptor, "value")) throw identityFailure("protocol");
