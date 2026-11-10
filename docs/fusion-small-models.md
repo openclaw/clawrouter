@@ -424,6 +424,11 @@ campaign's accumulated spend and unresolved reservations before starting.
 `pair.json` records exact source and dataset digests, declared splits, model
 pins, both controls, action metadata, acceptance counts, elapsed time and actual
 usage-based charges. It excludes prompts, completions and generated source.
+Each call saves `requestDigest` (SHA-256 of the exact serialized provider body),
+UTF-8 `requestBytes`, and the input-message `promptDigest` before dispatch.
+These fields remain available on HTTP or transport failures without retaining
+request content or credentials. They identify a prepared request, not proof of
+provider receipt or billing; unresolved charges remain reserved.
 Single-block analysis reports cost savings versus strong, summed elapsed time,
 latency ratio, and whether cheap dominates the candidate on observed quality,
 cost and time. Missing or invalid time leaves latency and dominance unknown.

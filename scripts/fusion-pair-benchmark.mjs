@@ -90,13 +90,17 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
     const model = pairModel(strategy, role, config);
     const request = nativeRequest(model, body, env);
     if (model === config.cheap && model === 'openai/gpt-6-luna') request.body.reasoning_effort = cheapReasoning;
+    const requestBody = JSON.stringify(request.body);
     const attempt = await ledger.reserve(trialId, model, priceBound(request.body, pins[model].price));
+    attempt.requestDigest = hash(requestBody);
+    attempt.requestBytes = Buffer.byteLength(requestBody);
+    attempt.promptDigest = hash(JSON.stringify(body.messages));
     // The attempt exists before dispatch; all transport/parse failures leave it reserved.
     await save();
     let normalized;
     try {
       const response = await fetcher(request.url, { method: 'POST', headers: request.headers,
-        body: JSON.stringify(request.body), signal: AbortSignal.any([signal, AbortSignal.timeout(90000)]) });
+        body: requestBody, signal: AbortSignal.any([signal, AbortSignal.timeout(90000)]) });
       attempt.httpStatus = response.status;
       const raw = await response.json();
       if (!response.ok) {
@@ -111,7 +115,6 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
       attempt.inputTokens = usage.prompt_tokens ?? usage.input_tokens;
       attempt.outputTokens = usage.completion_tokens ?? usage.output_tokens;
       attempt.usageBreakdown = normalized.usageBreakdown;
-      attempt.promptDigest = hash(JSON.stringify(body.messages));
       attempt.responseDigest = hash(normalized.result.choices?.[0]?.message?.content ?? '');
       await ledger.settle(attempt, normalized.costMicros, response.status);
     } catch {

@@ -13,6 +13,7 @@
 - Add an opt-in provider fixture validation command that checks captured scenarios against compiled manifest declarations and reports package digests without exposing fixture contents. This validates references without executing providers.
 
 - Preserve native cache-read and cache-write token buckets in Fusion benchmark receipts so recorded tariff estimates can be reconstructed.
+- Retain content-free Fusion request fingerprints before dispatch so failed requests can be compared without storing prompts or releasing uncertain charges.
 
 - Recover once from a truncated Fusion benchmark action within the existing call, time and spending limits, without applying partial output.
 
