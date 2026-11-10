@@ -84,6 +84,44 @@ test('edit handoff waits for passing visible checks and transfers current source
   assert.deepEqual(result.actions.map(action => action.action), ['edit', 'edit', 'handoff', 'finish']);
 });
 
+for (const oversized of [false, true]) test(`edit handoff carries only the latest bounded executed probe: oversized=${oversized}`, {
+  skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+}, async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { execFileSync } = await import('node:child_process');
+  const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+  const task = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+    .find(task => task.id === 'provided-responses-path');
+  const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+    .receipts.find(receipt => receipt.taskId === task.id);
+  const original = execFileSync('git', ['show', `${task.base}:${task.editPaths[0]}`], { encoding: 'utf8' });
+  const query = `${oversized ? `/*${'界'.repeat(3000)}*/` : ''}throw new Error('latest-probe-sentinel');`;
+  assert.equal(Buffer.byteLength(query) > 8192, oversized);
+  assert.ok(query.length < 8192);
+  const roles = [];
+  const result = await runAgent(task, receipt.image, 'handoff', 'probe-handoff-fixture',
+    { maxTurns: 6, deadlineMs: 120000, outputTokens: 8192 }, async (_id, role, body) => {
+      const turn = roles.length; roles.push(role);
+      if (turn === 3) {
+        const context = body.messages.at(-1).content;
+        assert.equal(context.includes('Previously executed probe'), !oversized);
+        assert.equal(context.includes('latest-probe-sentinel'), !oversized);
+        assert.equal(context.includes('old-probe-sentinel'), false);
+        if (!oversized) {
+          assert.match(context, /untrusted; may predate the latest edit/);
+          assert.match(context, /"passed":false/);
+        }
+      }
+      const action = turn < 2 ? { action: 'probe', query: turn ? query : "throw new Error('old-probe-sentinel');", edits: [] }
+        : turn === 2 ? { action: 'edit', query: '', edits: [{ path: task.editPaths[0], search: original, replace: original + '\n// handoff fixture\n' }] }
+          : { action: 'finish', query: '', edits: [] };
+      return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ paths: [], memory: '', ...action }) } }] };
+    }, undefined, { handoffAfterEdit: true });
+  assert.deepEqual(roles, ['openai/gpt-6.1-sol', 'openai/gpt-6.1-sol', 'openai/gpt-6.1-sol', 'anthropic/claude-sonnet-5.5']);
+  assert.equal(result.outcome, 'submitted');
+  assert.equal(JSON.stringify(result).includes('probe-sentinel'), false);
+});
+
 test('edit handoff does not switch merely because the ordinary handoff turn was reached', {
   skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
 }, async () => {

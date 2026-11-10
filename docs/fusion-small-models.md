@@ -407,6 +407,13 @@ tests selects a handoff point; it does not certify correctness. Independent
 acceptance still scores the final patch. This policy is experimental and needs
 matched quality, cost and latency measurements; the default remains `architect`.
 
+The handoff also includes the latest executed behavior probe and its pass/fail
+result when the source is at most 8 KiB. This is untrusted context that may
+predate the last edit, not acceptance evidence. The successor must inspect its
+coverage and rerun it against current source. An oversized latest probe is
+omitted in full; an older probe is not substituted. Raw probe source and output
+are not added to benchmark receipts.
+
 Run from a committed task checkout with qualified workload receipts and an
 explicit JSON configuration. Only credentials for the selected models are
 required. Supply credentials through the existing secret injector; do not put

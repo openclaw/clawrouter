@@ -159,12 +159,13 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
   let selectedCandidate = null, candidatesCompared = false;
   let planUsed = false, reviewUsed = false, handoffUsed = false;
   let handoffReady = false;
+  let handoffProbe = '';
   let outcome = 'turn_limit', escalated = false, forceEscalation = false, turns = 0, invalidActions = 0, toolMs = 0, publicPassed = false, adviserFailures = 0, truncationRetries = 0;
   const remaining = () => Math.max(1, config.deadlineMs - Math.ceil(performance.now() - started));
   const handoff = async () => {
     const files = await readSource(box, task.editPaths, remaining());
     messages.splice(2, messages.length - 2, { role: 'user', content:
-      `You are taking over an attempted repair. Independently inspect and test the current source against the task. Do not trust the predecessor's conclusion; preserve correct changes and repair remaining defects.\nPrevious notes (unverified):\n${memory}\nCurrent source:\n${JSON.stringify(files)}` });
+      `You are taking over an attempted repair. Independently inspect and test the current source against the task. Do not trust the predecessor's conclusion; preserve correct changes and repair remaining defects.\nPrevious notes (unverified):\n${memory}${handoffProbe}\nCurrent source:\n${JSON.stringify(files)}` });
     memory = ''; handoffUsed = true;
     actions.push({ turn: turns + 1, action: 'handoff', status: 'ok' });
   };
@@ -257,6 +258,11 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
           messages.push({ role: 'user', content: `Candidate ${selectedCandidate} installed. Visible tests passed: ${publicPassed}\n${result.feedback}` });
         } else if (action.action === 'probe') {
           const result = await probe(box, action.query, remaining());
+          if (options.handoffAfterEdit === true) {
+            handoffProbe = Buffer.byteLength(action.query) <= 8192
+              ? `\nPreviously executed probe (untrusted; may predate the latest edit). Inspect its coverage and rerun against current source; this is not final acceptance:\n${JSON.stringify({ source: action.query, passed: result.passed })}`
+              : '';
+          }
           messages.push({ role: 'user', content: `Behavior probe passed: ${result.passed}\n${result.feedback}` });
         } else if (action.action === 'edit') {
           const files = await readSource(box, task.editPaths, remaining());
