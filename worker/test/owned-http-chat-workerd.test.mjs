@@ -192,12 +192,15 @@ for (const streaming of [false, true]) test('native owned Venice ' + (streaming 
       }
       const after = await settledState(f), rows = after.parsers.slice(before.parsers.length);
       assert.equal(rows.length, 1, mode + ' actual private parser invocation');
-      const row = rows[0]; assert.equal(row.cleared, true); assert.equal(row.parents, 0); assert.equal(row.tokens, 0); assert.equal(row.pending, false);
+      const row = rows[0]; assert.equal(row.cleared, true); assert.equal(row.parents, 0); assert.equal(row.tokens, 0); assert.equal(row.pending, false); assert.equal(row.member, false);
       if (valid) {
         assert.equal(row.parentPushes, row.parentPops); assert.equal(row.tokenPushes, row.tokenPops);
       }
       if (mode === 'compact-object128') {
         assert.equal(row.peakParents, 128); assert.equal(row.peakTokens, 128); assert.equal(row.peakStored, 259);
+      } else if (mode === 'compact-object-string128') {
+        assert.equal(row.peakParents, 128); assert.equal(row.peakTokens, 128); assert.equal(row.peakStored, 260);
+        assert.ok(row.objectAttachments >= 128, 'actual child properties existed before both temporary key aliases cleared');
       } else if (mode === 'compact-object129' || mode === 'compact-open2048') {
         assert.equal(row.peakParents, 128); assert.equal(row.peakTokens, 129); assert.equal(row.peakStored, 260);
         assert.equal(row.abandonedParents, 128); assert.equal(row.abandonedTokens, 129);

@@ -561,7 +561,7 @@ predicate frames belong to CONTROL, not passive DATA. Their aliases clear at
 actual request retirement; the complete overlap is still unqualified.
 
 Additional authored witnesses use the real compiled entry and SQLite authority:
-32 Node cases, 23 native cases, and one Venice invocation in the existing pinned
+35 Node cases, 23 native cases, and one Venice invocation in the existing pinned
 OpenClaw UNIFIED client fixture. They include accepted/rejected structural and
 wire edges, escaped Unicode, raw duplicate/unknown preservation, more than 2 MiB
 of SSE, JSON delivery while archive work is held, and post-native held
@@ -632,7 +632,8 @@ records and both `ownedProxyAccounting` results. The existing 128-slot windows
 cannot be relabeled to make a simultaneous 1045-product subset fit 1024.
 
 The private consumer now has one direct parent-reference stack and one pending
-key. It attaches a child before descent and clears that key immediately; the
+key. It attaches a child before descent and clears both the pending key and
+its temporary member alias only AFTER the actual property/element attachment; the
 parent's next member supplies its next key after ascent. It retains the same
 own-property definition, duplicate last-wins behavior, tokenizer, token switch
 and structural limits. Ordinary callers keep their original frame layout.
@@ -648,7 +649,12 @@ aliases. They do not retire grant, policy, fresh authority, upload or sink owner
 | Pinned tokenizer array and actual parent cells | 129 | 130 |
 | **Parent subtotal** | **259** | **260** |
 
-These are parent subtotals, not a full parser or vertical fit. The 383-product
+These are parent subtotals, not a full parser or vertical fit. During actual
+attachment the temporary `member` reference also remains live. An accepted
+depth-128 string leaf reaches 260 parent/key products before both key aliases
+clear, as does the rejected 129th-container prefix through a different path.
+The descriptor and its four fields remain separate live products during the
+original property definition. The 383-product
 reduction does not grant new CONTROL credit. Shared factory state, active
 consumer/attach/check frames, descriptor object plus its four fields, callback
 products, token batches and wrapper state remain additive. Ordinary mode adds
@@ -666,7 +672,9 @@ are absent. It does not create a promise or an extra default write wrapper.
 These source facts bound specific products; they do not certify a total.
 
 Fixture-only source observers wrap the original parent pushes/pops, pending-key
-assignment/clear and discard boundary. They retain only scalar counts. The
+assignment/clear and discard boundary. The post-attachment observer first
+checks that the actual child property/array element exists, then checks both
+key aliases after their clear. It retains only scalar counts. The
 Node and real Workerd witnesses assert 128/128 accepted stack peaks, the actual
 129th tokenizer parent before consumer rejection, and complete alias clearing.
 No instrumentation is present in production. JSON and SSE cases cover object

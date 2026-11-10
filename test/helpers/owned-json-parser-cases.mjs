@@ -1,5 +1,5 @@
 export const ownedJsonCodecCases = [
-  ['compact-object128', true], ['compact-object129', false], ['compact-open2048', false],
+  ['compact-object128', true], ['compact-object-string128', true], ['compact-object129', false], ['compact-open2048', false],
   ['compact-mixed', true], ['compact-wide', true], ['compact-key4096', true], ['compact-key4097', false],
   ['compact-number4096', true], ['compact-number4097', false], ['compact-string8192', true],
 ];
@@ -9,9 +9,9 @@ export const ownedJsonCodecCases = [
 export function ownedJsonCodecWire(mode, model) {
   const prefix = '{"model":' + JSON.stringify(model) + ',"extra":';
   let extra;
-  if (mode === 'compact-object128' || mode === 'compact-object129') {
-    const depth = mode === 'compact-object128' ? 127 : 128;
-    extra = '{"child":'.repeat(depth) + '0' + '}'.repeat(depth);
+  if (mode === 'compact-object128' || mode === 'compact-object-string128' || mode === 'compact-object129') {
+    const depth = mode === 'compact-object129' ? 128 : 127;
+    extra = '{"child":'.repeat(depth) + (mode === 'compact-object-string128' ? '"leaf"' : '0') + '}'.repeat(depth);
   } else if (mode === 'compact-open2048') return prefix + '{"child":'.repeat(2048);
   else if (mode === 'compact-mixed') extra = '{"":{"child":[{"leaf":1},[2,3]],"sibling":4},"after":5,"\\ud800":{"\\udfff":6},"\\\"\\\\\\n":7,"__proto__":{"first":1},"__proto__":{"last":2},"text":"é😀\\ud800x\\udfff"}';
   else if (mode === 'compact-wide') extra = '[' + '{"a":[{"b":1},2],"after":3},'.repeat(1023) + '{"last":4}]';

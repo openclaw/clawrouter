@@ -9,13 +9,13 @@ export function createOwnedJsonObservation() {
   const peak = row => {
     row.peakParents = Math.max(row.peakParents, row.parents);
     row.peakTokens = Math.max(row.peakTokens, row.tokens);
-    row.peakStored = Math.max(row.peakStored, 2 + row.parents + row.tokens + Number(row.pending));
+    row.peakStored = Math.max(row.peakStored, 2 + row.parents + row.tokens + Number(row.pending) + Number(row.member));
   };
   return {
     rows,
     begin() {
-      const row = { parents: 0, tokens: 0, pending: false, peakParents: 0, peakTokens: 0, peakStored: 2,
-        parentPushes: 0, parentPops: 0, tokenPushes: 0, tokenPops: 0, cleared: false };
+      const row = { parents: 0, tokens: 0, pending: false, member: false, peakParents: 0, peakTokens: 0, peakStored: 2,
+        parentPushes: 0, parentPops: 0, tokenPushes: 0, tokenPops: 0, attachments: 0, objectAttachments: 0, cleared: false };
       rows.push(row); return row;
     },
     enter(row) { if (row) { if (current) throw new Error('nested fixture parser observation'); current = row; } },
@@ -25,6 +25,13 @@ export function createOwnedJsonObservation() {
       if (parents > row.parents) row.parentPushes += parents - row.parents;
       else row.parentPops += row.parents - parents;
       row.parents = parents; row.pending = pending; peak(row);
+    },
+    attaching(row, member) { if (row) { row.member = member; peak(row); } },
+    attached(row, kind, exists, emptyPending, emptyMember) {
+      if (!row) return;
+      if (!(exists && emptyPending && emptyMember)) throw new Error('key cleared before actual attachment or retained afterward');
+      row.attachments++; if (kind === 2) row.objectAttachments++;
+      row.pending = false; row.member = false;
     },
     tokenizer(depth) {
       if (!current) return;
@@ -36,7 +43,7 @@ export function createOwnedJsonObservation() {
       if (!row || row.cleared) return;
       if (!(emptyParents && emptyKey && emptyScalar && emptyRoot && detachedTokenizer)) throw new Error('private parser retained an application alias');
       row.abandonedParents = row.parents; row.abandonedTokens = row.tokens;
-      row.parents = 0; row.tokens = 0; row.pending = false; row.cleared = true;
+      row.parents = 0; row.tokens = 0; row.pending = false; row.member = false; row.cleared = true;
     },
   };
 }
@@ -51,8 +58,11 @@ export function observeOwnedJsonSource(path, source) {
   if (/[\\/]worker[\\/]json-body\.ts$/.test(path)) {
     source = replace(source, 'let pendingKey: string | undefined;',
       'let pendingKey: string | undefined; const __parserProbe = privateParents ? ' + probe + '.begin() : undefined;');
-    source = replace(source, 'member = pendingKey; pendingKey = undefined;',
-      'member = pendingKey; pendingKey = undefined; ' + probe + '.consumer(__parserProbe, parents.length, false);');
+    source = replace(source, 'parent = parents.at(-1); member = pendingKey;',
+      'parent = parents.at(-1); member = pendingKey; ' + probe + '.attaching(__parserProbe, member !== undefined);');
+    source = replace(source, 'if (parents) { pendingKey = undefined; member = undefined; }',
+      'if (parents) { const __attached = !parent ? root === value : Array.isArray(parent) ? parent.at(-1) === value : Object.hasOwn(parent, member!) && parent[member!] === value; '
+      + 'pendingKey = undefined; member = undefined; ' + probe + '.attached(__parserProbe, !parent ? 0 : Array.isArray(parent) ? 1 : 2, __attached, pendingKey === undefined, member === undefined); }');
     source = replace(source, 'if (parents) parents.push(value);',
       'if (parents) { parents.push(value); ' + probe + '.consumer(__parserProbe, parents.length, pendingKey !== undefined); }');
     source = replace(source, '(parents ?? stack!).pop();',

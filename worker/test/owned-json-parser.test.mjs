@@ -45,13 +45,42 @@ for (const [mode, valid] of ownedJsonCodecCases) test('private compact consumer 
       assert.throws(() => { feed(ordinary, wire); ordinary.take(); }, JsonBodyStructureLimit);
     }
   } finally { parser.discard(); ordinary.discard(); }
-  assert.equal(row.cleared, true); assert.equal(row.parents, 0); assert.equal(row.tokens, 0); assert.equal(row.pending, false);
+  assert.equal(row.cleared, true); assert.equal(row.parents, 0); assert.equal(row.tokens, 0); assert.equal(row.pending, false); assert.equal(row.member, false);
   if (mode === 'compact-object128') {
     assert.equal(row.peakParents, 128); assert.equal(row.peakTokens, 128); assert.equal(row.peakStored, 259);
     assert.equal(row.abandonedParents, 0); assert.equal(row.abandonedTokens, 0);
+  } else if (mode === 'compact-object-string128') {
+    assert.equal(row.peakParents, 128); assert.equal(row.peakTokens, 128); assert.equal(row.peakStored, 260, 'pending and attachment-member aliases coexist until defineProperty returns');
   } else if (mode === 'compact-object129' || mode === 'compact-open2048') {
     assert.equal(row.peakParents, 128); assert.equal(row.peakTokens, 129, 'tokenizer creates the rejection parent before consumer admission');
     assert.equal(row.peakStored, 260); assert.equal(row.abandonedParents, 128); assert.equal(row.abandonedTokens, 129);
   }
   assert.throws(() => parser.push('{}'), TypeError); assert.throws(() => parser.take(), TypeError);
+});
+
+test('private child attachment exists before pending and temporary member keys clear', () => {
+  const parser = createPrivateJsonBodyParser(), row = observation.rows.at(-1);
+  try {
+    feed(parser, '{"child":{');
+    assert.equal(row.attachments, 2); assert.equal(row.objectAttachments, 1, 'observer checked the actual own child property');
+    assert.equal(row.parents, 2); assert.equal(row.pending, false); assert.equal(row.member, false);
+    feed(parser, '},"after":1}');
+    assert.deepEqual(parser.take(), { child: {}, after: 1 });
+    assert.equal(row.objectAttachments, 2, 'parent sibling attaches with its new key');
+  } finally { parser.discard(); }
+  assert.equal(row.cleared, true);
+});
+
+test('failed original attachment still discards private state and preserves rejected undefined', t => {
+  const define = Object.defineProperty, parser = createPrivateJsonBodyParser(), row = observation.rows.at(-1);
+  t.mock.method(Object, 'defineProperty', function (target, key, descriptor) {
+    if (key === 'child') throw undefined;
+    return Reflect.apply(define, this, [target, key, descriptor]);
+  });
+  let hasPrimary = false, primary;
+  try { feed(parser, '{"child":{}}'); } catch (error) { hasPrimary = true; primary = error; }
+  finally { parser.discard(); }
+  assert.equal(hasPrimary, true); assert.equal(primary, undefined);
+  assert.equal(row.attachments, 1, 'no false successful child-attachment report');
+  assert.equal(row.cleared, true); assert.equal(row.parents, 0); assert.equal(row.pending, false); assert.equal(row.member, false);
 });

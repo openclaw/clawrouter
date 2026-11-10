@@ -573,7 +573,7 @@ function createBodyParser(enforceStructure: boolean, privateParents: boolean): J
     nodes++; checkStructure();
     let parent: JsonBodyContainer | undefined, member: string | undefined;
     if (parents) {
-      parent = parents.at(-1); member = pendingKey; pendingKey = undefined;
+      parent = parents.at(-1); member = pendingKey;
     } else {
       const frame = stack!.at(-1); parent = frame?.value; member = frame?.key;
     }
@@ -582,6 +582,7 @@ function createBodyParser(enforceStructure: boolean, privateParents: boolean): J
     // Define an own property, as JSON.parse does, including __proto__. Repeated
     // keys replace the previous value instead of altering object prototypes.
     else Object.defineProperty(parent, member!, { value, writable: true, enumerable: true, configurable: true });
+    if (parents) { pendingKey = undefined; member = undefined; }
   }
   function accept(token: Token) {
     switch (token.name) {
