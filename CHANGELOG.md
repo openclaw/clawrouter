@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Run Fusion native fixture dependencies from the read-only image and include public CA roots for workerd startup, retaining the isolated noexec workspace.
+- Add Fusion follow-up workloads for bounded grant-usage reports and MiniMax Music credential admission, with resource and runtime acceptance checks.
+
 - Add sandbox-qualified Fusion lifecycle repairs for cold-import settlement and assignment revision publication, with independent acceptance checks before model results are scored.
 - Add a versioned data-only JSON exchange contract for provider conformance fixtures, with a strict parser and provider-specific generated examples. Runtime conformance execution remains separate.
 - Add an opt-in, network-intercepted Worker runner for model-free native REST JSON plugin fixtures, with synthetic API-key auth and bounded exchange assertions.
