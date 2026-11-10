@@ -1,7 +1,8 @@
-import { admitAdmission, admitIdentity, copyIdentity, identityPlan, identitySourceBudget, type IdentitySourceBudget } from "./identity-admission.ts";
+import { GenerationConsumptionLease, type AdmissionScratchVector } from "./credential-preflight-arena.ts";
+import { admitAdmission, admitIdentity, copyIdentity, identityPlan, identityUtf8, identityFailure, identitySourceBudget, type IdentitySourceBudget } from "./identity-admission.ts";
 import { authorityCall, type AdmissionResult } from "./authority.ts";
 import type { AdmissionPoolSnapshot, AdmissionRequest, AdmissionSelection } from "./authority-admission.ts";
-import { selectAdmissionCandidate } from "./authority-grant-selection.ts";
+import { selectAdmissionCandidate, selectGenerationAdmissionCandidate } from "./authority-grant-selection.ts";
 import { credentialExpired } from "./credential-lifecycle.ts";
 import { currentGrantRuntime, type GrantSelectionResult } from "./grant-eligibility.ts";
 import { chooseGrantKey, normalizedChoiceCandidates, type GrantChoiceInput } from "./grant-selection-strategies.ts";
@@ -310,4 +311,228 @@ export function invalidateAdmissions(predicate: (admission: AdmissionResult) => 
   admissions.deleteWhere((_key, admission) => predicate(admission));
   selectionHints.clear();
   fenceSharedHotCache();
+}
+
+// Inactive generation-only sidecar. Its immutable admission is never installed
+// in the ordinary cache above. A successor creates an EMPTY overlay and reads
+// untouched authoritative counts/cursors from its own snapshot.
+export interface GenerationSelectionPlan {
+  result: GrantSelectionResult; providerId: string; poolKey: string;
+  selectedKey?: string; cursorKey?: string; count?: number; lastMs?: number;
+}
+export interface GenerationSelectionDebit { previous: number; next: number; committed: boolean }
+export class GenerationAdvisoryState {
+  readonly counts = new Map<string, { providerId: string; key: string; count: number; lastMs: number }>();
+  readonly cursors = new Map<string, string>();
+  readonly runtime = new Map<string, GrantRuntimeState>();
+  readonly runtimeCharges = new Map<string, GenerationConsumptionLease>();
+  private constructor(privateLease: GenerationConsumptionLease) { this.lease = privateLease; }
+  private lease: GenerationConsumptionLease;
+  static create(): GenerationAdvisoryState { return new GenerationAdvisoryState(GenerationConsumptionLease.reserve(4096)); }
+  // All retained values are detached JSON copies or belong to the still-funded
+  // generation. Read-only inspection does not publish an AuthorizedIdentity.
+  dispose(): void { this.counts.clear(); this.cursors.clear(); this.runtime.clear(); for (const charge of this.runtimeCharges.values()) charge.release(); this.runtimeCharges.clear(); this.lease.release(); }
+  admitSelection(plan: GenerationSelectionPlan): GenerationSelectionDebit {
+    let units = 0, rows = 0;
+    for (const item of this.counts.values()) {
+      if (item.providerId === plan.providerId && item.key === plan.selectedKey) continue;
+      units += 2 * item.providerId.length + 2 * item.key.length + 1; rows++;
+    }
+    for (const [provider, cursor] of this.cursors) if (provider !== plan.providerId || !plan.cursorKey) { units += provider.length + cursor.length; rows++; }
+    if (plan.selectedKey) { units += 2 * plan.providerId.length + 2 * plan.selectedKey.length + 1; rows++; }
+    if (plan.cursorKey) { units += plan.providerId.length + plan.cursorKey.length; rows++; }
+    // Each row's Map cells, object fields, numeric cells and fixed field names.
+    const debit = { previous: this.lease.bytes, next: 4096 + 256 * rows + 2 * units, committed: false };
+    this.lease.replace(Math.max(debit.previous, debit.next) + 512 + 4 * (plan.providerId.length + (plan.selectedKey?.length ?? 0) + (plan.cursorKey?.length ?? 0)));
+    return debit;
+  }
+  rollbackSelection(debit: GenerationSelectionDebit): void {
+    if (!debit.committed) this.lease.replace(debit.previous);
+  }
+  commitSelection(plan: GenerationSelectionPlan, debit: GenerationSelectionDebit): void {
+    if (!plan.selectedKey) { this.lease.replace(debit.previous); debit.committed = true; return; }
+    const id = `${plan.providerId}\n${plan.selectedKey}`;
+    this.counts.set(id, { providerId: plan.providerId, key: plan.selectedKey, count: plan.count!, lastMs: plan.lastMs! });
+    if (plan.cursorKey) this.cursors.set(plan.providerId, plan.cursorKey);
+    this.lease.replace(debit.next); debit.committed = true;
+  }
+}
+
+// Counts are actual admitted input lengths. This is a prospective simultaneous
+// passive working-vector allowance, distinct from the immutable owner graph.
+export function generationSelectionWorkingBytes(admission: AdmissionResult, request: AdmissionSelection): number {
+  const snap = admission.snapshots?.[request.providerId];
+  if (!snap) return 4096;
+  let units = 0, countRows = 0, stateRows = 0, excludedUnits = 0;
+  for (const candidate of snap.candidates) units += candidate.key.length;
+  for (const key in snap.counts) if (Object.hasOwn(snap.counts, key)) { units += key.length; countRows++; }
+  for (const key in admission.pools[request.providerId]?.states) if (Object.hasOwn(admission.pools[request.providerId].states, key)) { units += key.length; stateRows++; }
+  for (const key of request.excludedKeys ?? []) excludedUnits += key.length;
+  const plan = identityPlan("record"); plan.item(admission.policy!.policy.grantRouting ?? null, 0);
+  const routing = plan.counts;
+  const originalSelection = identityPlan(); originalSelection.item(admission.selection ?? null, 0);
+  const selected = originalSelection.counts;
+  const modelUnits = typeof request.model === "string" ? request.model.length + identityUtf8(request.model) : 0;
+  // candidate/configured/available/active/recovering/choice + normalize Map,
+  // pair and sorted/filter vectors; per-candidate quota scratch is sequential.
+  return 4096 + 8 * (32 + 62 * snap.candidates.length + 7 * countRows + 2 * stateRows + 2 * (request.excludedKeys?.length ?? 0)
+    + routing.containers + 2 * routing.members + routing.entries + routing.values
+    + selected.containers + 2 * selected.members + selected.entries + selected.values + 1024)
+    + 2 * (8 * units + 80 * snap.candidates.length + 2 * routing.units + 2 * selected.units + modelUnits + excludedUnits + 32768);
+}
+
+export function planGenerationSelection(env: Env, admission: AdmissionResult, overlay: GenerationAdvisoryState,
+  request: AdmissionSelection, scratch: <T>(vector: AdmissionScratchVector, run: () => T) => T,
+  alreadySelected?: GrantSelectionResult, runtime?: Readonly<Record<string, GrantRuntimeState>>): GenerationSelectionPlan | undefined {
+  const pool = admission.pools[request.providerId], snap = admission.snapshots?.[request.providerId], policy = admission.policy;
+  if (!pool || !snap || !policy) return undefined;
+  const provider = snapshot.providers.find(item => item.id === request.providerId), endpoint = provider?.endpoints.find(item => item.id === request.endpointId);
+  if (!provider || !endpoint) return undefined;
+  if (policy.policy.providers.length && !policy.policy.providers.includes(provider.id)
+    || admission.connections.find(item => item.providerId === provider.id)?.enabled === false) return undefined;
+  try { assertPolicyModel(policy.policy, { model: request.catalogModelId ? { id: request.catalogModelId } : null, endpoint, capability: request.capability }); } catch { return undefined; }
+  const states: Record<string, GrantRuntimeState> = Object.create(null);
+  for (const key in pool.states) if (Object.hasOwn(pool.states, key)) states[key] = runtime?.[key] ?? overlay.runtime.get(key) ?? pool.states[key];
+  for (const key of pool.keys) if (runtime?.[key] || overlay.runtime.has(key)) states[key] = runtime?.[key] ?? overlay.runtime.get(key)!;
+  let selectedKey: string | undefined, cursorKey: string | undefined, count: number | undefined, lastMs: number | undefined;
+  const result = selectGenerationAdmissionCandidate(env, { provider, endpoint, request, policy, poolKey: snap.poolKey,
+    candidates: snap.candidates, states, identityHash: snap.identityHash, fallbackSessionHash: snap.fallbackSessionHash }, input => {
+      const original = alreadySelected?.selected?.key;
+      if (original && input.candidates.some(candidate => candidate.key === original)) return { selectedKey: original };
+      const counts = new Map<string, { count: number; lastMs: number }>();
+      for (const key in snap.counts) if (Object.hasOwn(snap.counts, key)) counts.set(key, snap.counts[key]);
+      for (const value of overlay.counts.values()) if (value.providerId === request.providerId) counts.set(value.key, value);
+      const choice = chooseGrantKey(input, normalizedChoiceCandidates(input.candidates), { cursorKey: overlay.cursors.get(request.providerId) ?? snap.cursorKey, counts });
+      selectedKey = choice.selectedKey; cursorKey = choice.cursorKey;
+      count = (counts.get(selectedKey)?.count ?? 0) + 1; lastMs = Date.now();
+      return choice;
+    }, key => snap.revisions[key], scratch);
+  // The closed owner admits and detaches result.selected, and funds its pending
+  // record/hint, BEFORE invoking commitSelection. Planning has no side effects.
+  // A genuine originating receipt revalidates the authority choice. If it is
+  // still eligible, keep it without another advisory count/cursor increment.
+  const complete = alreadySelected ? { ...alreadySelected, ...result,
+    selected: result.selected && alreadySelected.selected?.key === result.selected.key
+      ? { ...alreadySelected.selected, ...result.selected } : result.selected } : result;
+  return { result: complete, providerId: request.providerId, poolKey: snap.poolKey, selectedKey, cursorKey, count, lastMs };
+}
+
+// A detached runtime delta has its own positive common-arena owner. BOTH merge
+// inputs stay owned until the detached output is admitted; account/extraUsage
+// and snapshot aliases never escape under an already-released input lease.
+const generationLookupGetter = (Object.prototype as { __lookupGetter__?: (key: string) => unknown }).__lookupGetter__;
+const generationLookupSetter = (Object.prototype as { __lookupSetter__?: (key: string) => unknown }).__lookupSetter__;
+function generationRuntimeCopyBytes(value: unknown, depth = 0): number {
+  if (value == null || typeof value === "boolean" || typeof value === "number") return 8;
+  if (typeof value === "string") return 2 * value.length;
+  if (typeof value !== "object" || depth >= 24) throw identityFailure("protocol");
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== null && prototype !== Object.prototype && prototype !== Array.prototype) throw identityFailure("protocol");
+  if (typeof generationLookupGetter !== "function" || typeof generationLookupSetter !== "function") throw identityFailure("protocol");
+  let bytes = 8;
+  // Unlike JSON planning, structuredClone copies every enumerable own STRING
+  // property, including undefined and array extras. Borrow one key at a time;
+  // no descriptor-value carrier or whole key vector is constructed.
+  for (const key in value) if (Object.hasOwn(value, key)) {
+    if (generationLookupGetter.call(value, key) !== undefined || generationLookupSetter.call(value, key) !== undefined) throw identityFailure("protocol");
+    bytes += 16 + 2 * key.length + generationRuntimeCopyBytes((value as Record<string, unknown>)[key], depth + 1);
+    if (!Number.isSafeInteger(bytes) || bytes > 33554432) throw identityFailure("limit");
+  }
+  return bytes;
+}
+export function generationRuntimeWorkingBytes(previous: GrantRuntimeState | undefined, incoming: GrantRuntimeState): number {
+  admitIdentity(previous ?? null, "record"); admitIdentity(incoming, "record");
+  let generated = 0;
+  if (previous && previous.grantRevision === incoming.grantRevision) {
+    // The ordinary merge spreads EACH observed window and adds observedAt.
+    // One source timestamp can therefore occur in many NEW retained records;
+    // source-size multipliers alone cannot fund this generated output. Count
+    // even overwritten candidates before invoking the unchanged merge helper.
+    const windows = (state: GrantRuntimeState): void => {
+      for (const window of state.windows) {
+        const observed = window.observedAt ?? state.observedAt;
+        generated += 8 + 16 + 2 * "observedAt".length
+          + (typeof observed === "string" ? 2 * observed.length : observed === null || typeof observed !== "object" ? 8 : 0);
+        if (!Number.isSafeInteger(generated) || generated > 33554432) throw identityFailure("limit");
+      }
+    };
+    windows(previous); windows(incoming);
+  }
+  return 4096 + 4 * (generationRuntimeCopyBytes(previous) + generationRuntimeCopyBytes(incoming)) + generated;
+}
+export function detachedGenerationRuntime(previous: GrantRuntimeState | undefined, incoming: GrantRuntimeState): GrantRuntimeState {
+  const merged = mergeGrantRuntimeState(previous ?? null, incoming);
+  return copyIdentity(merged);
+}
+export function detachedGenerationFeedback(previous: GrantRuntimeState | undefined, incoming: GrantRuntimeState): GrantRuntimeState {
+  let merged = incoming;
+  // Ordinary pending feedback falls back to the new observation if merging
+  // previous pending observations fails. Copy/profile failures still propagate.
+  if (previous) try { merged = mergeGrantRuntimeState(previous, incoming); } catch { merged = incoming; }
+  return copyIdentity(merged);
+}
+
+// Prospectively visit the logical ordinary admission view, without cloning its
+// frozen graph. Overlay representation does not weaken the complete profile.
+export function admitGenerationOverlay(admission: AdmissionResult, overlay: GenerationAdvisoryState,
+  selection?: GenerationSelectionPlan, runtime?: { key: string; value: GrantRuntimeState },
+  runtimeView?: Readonly<Record<string, GrantRuntimeState>>): void {
+  const plan = identityPlan();
+  plan.object(0, root => {
+    for (const field in admission) if (Object.hasOwn(admission, field)) {
+      if (field === "selection" && selection) root(field, selection.result);
+      else if (field === "pools") root(field, undefined, () => plan.object(1, pools => {
+        for (const provider in admission.pools) if (Object.hasOwn(admission.pools, provider)) {
+          const pool = admission.pools[provider];
+          pools(provider, undefined, () => plan.object(2, member => {
+            for (const name in pool) if (Object.hasOwn(pool, name)) {
+              if (name !== "states") member(name, pool[name as keyof typeof pool]);
+              else member(name, undefined, () => plan.object(3, state => {
+                for (const key in pool.states) if (Object.hasOwn(pool.states, key)) state(key,
+                  runtime?.key === key ? runtime.value : runtimeView?.[key] ?? overlay.runtime.get(key) ?? pool.states[key]);
+                for (const key of pool.keys) if (!Object.hasOwn(pool.states, key)) {
+                  const value = runtime?.key === key ? runtime.value : runtimeView?.[key] ?? overlay.runtime.get(key);
+                  if (value) state(key, value);
+                }
+              }));
+            }
+          }));
+        }
+      }));
+      else if (field === "snapshots") root(field, undefined, () => plan.object(1, snapshots => {
+        for (const provider in admission.snapshots) if (Object.hasOwn(admission.snapshots, provider)) {
+          const snap = admission.snapshots[provider];
+          snapshots(provider, undefined, () => plan.object(2, member => {
+            for (const name in snap) if (Object.hasOwn(snap, name)) {
+              if (name === "cursorKey") member(name, selection?.providerId === provider && selection.cursorKey
+                ? selection.cursorKey : overlay.cursors.get(provider) ?? snap.cursorKey);
+              else if (name !== "counts") member(name, snap[name as keyof typeof snap]);
+              else member(name, undefined, () => plan.object(3, counts => {
+                const emit = (key: string, value: { count: number; lastMs: number }) => counts(key, undefined,
+                  () => plan.object(4, counter => { counter("count", value.count); counter("lastMs", value.lastMs); }));
+                for (const key in snap.counts) if (Object.hasOwn(snap.counts, key)) {
+                  if (selection?.providerId === provider && selection.selectedKey === key) emit(key, { count: selection.count!, lastMs: selection.lastMs! });
+                  else emit(key, overlay.counts.get(`${provider}\n${key}`) ?? snap.counts[key]);
+                }
+                for (const value of overlay.counts.values()) if (value.providerId === provider && !Object.hasOwn(snap.counts, value.key)) {
+                  emit(value.key, selection?.providerId === provider && selection.selectedKey === value.key ? { count: selection.count!, lastMs: selection.lastMs! } : value);
+                }
+                if (selection?.providerId === provider && selection.selectedKey && !Object.hasOwn(snap.counts, selection.selectedKey)
+                  && !overlay.counts.has(`${provider}\n${selection.selectedKey}`)) emit(selection.selectedKey, { count: selection.count!, lastMs: selection.lastMs! });
+              }));
+            }
+          }));
+        }
+      }));
+      else root(field, admission[field as keyof AdmissionResult]);
+    }
+    if (selection && !Object.hasOwn(admission, "selection")) root("selection", selection.result);
+  });
+}
+
+
+// Same ordinary coalescing interval; no new deadline or retirement credit.
+// Called only after the owned background registration has accepted the start.
+export function waitGenerationFlushWindow(): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, flushWindowMs));
 }

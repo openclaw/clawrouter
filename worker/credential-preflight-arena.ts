@@ -214,6 +214,32 @@ export class GenerationMetadataCharge {
   release(): void { this.charge.release(); }
 }
 
+// A promoted ticket has zero payload credit. Every new consuming operation
+// therefore acquires independent, positive COMMON Worker backing. Neither the
+// DO arena nor an optional cache-coordinate receipt can create this lease.
+export class GenerationConsumptionLease {
+  private charge: ExactBodyCharge;
+  private unknown = false;
+  private constructor(charge: ExactBodyCharge) { this.charge = charge; }
+  static reserve(bytes: number): GenerationConsumptionLease {
+    if (!Number.isSafeInteger(bytes) || bytes <= 0 || bytes > preflightPayloadBytes) throw identityFailure("limit");
+    const charge = ExactBodyCharge.reserve(bytes);
+    if (!charge) throw identityFailure("limit");
+    return new GenerationConsumptionLease(charge);
+  }
+  get bytes(): number { return this.charge.bytes; }
+  // Absolute complete simultaneous payload. Caller clears aliases before any
+  // shrink; failed growth preserves this owner's exact debit and obligations.
+  replace(bytes: number): void {
+    if (this.unknown || !this.charge.bytes || !Number.isSafeInteger(bytes) || bytes <= 0 || bytes > preflightPayloadBytes) throw identityFailure("limit");
+    const successor = this.charge.replace(bytes);
+    if (!successor) throw identityFailure("limit");
+    this.charge = successor;
+  }
+  holdUnknown(): void { this.unknown = true; }
+  release(): void { if (!this.unknown) this.charge.release(); }
+}
+
 // NEW private bridge policy only. Existing PR974 factory/data accounting above
 // does not use this map or acquire scratch leases. These are normative logical
 // cells/units, never sizeof, native allocation or source-budget credit.
