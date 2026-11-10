@@ -135,6 +135,7 @@ function trace(t, name, responses, upstream) {
 test('real workerd credit failover serves one alternate, then pinned hot hits avoid authority and bill once', { timeout: 60000 }, async t => {
   const f = await fixture(t);
   const first = await f.send(); assert.equal(first.status, 200);
+  assert.deepEqual(first.body.trim().split('\n\n').map(event => JSON.parse(event.split('\ndata: ')[1]).type), ['message_start', 'message_delta', 'message_stop'], 'fixture emits actual SSE frames, not escaped newline text');
   const rotated = await f.send('router', 'deplete');
   assert.equal(rotated.status, 200); assert.equal(rotated.failover, '1'); assert.notEqual(rotated.label, first.label);
   assert.ok(!rotated.body.includes('"id":"' + first.label + '"'));

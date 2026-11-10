@@ -195,6 +195,11 @@ export interface GrantRefreshDiagnosis {
     lastFailureAt: string;
     attemptCount: number;
     nextRetryAt: string | null;
+    settlement?: {
+      stage: "result_store" | "ownership_claim" | "credential_read" | "credential_write" | "settlement_resume";
+      code: string;
+      correlationId: string;
+    };
   } | null;
 }
 

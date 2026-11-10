@@ -428,7 +428,7 @@ async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, en
   if (requirement?.endpoint.request_format === "minimax.search" && (!search || excludedKeys.size || !recordSelection)) miniMaxSearchDenied();
   if (wan && (excludedKeys.size || !requirement || provider.id !== "alibaba" || requirement.endpoint.lifecycle?.protocol !== "dashscope.video"))
     throw new HttpError(503, "prediction_owner_unavailable", "Wan cannot reselect an original owner");
-  const admitted = recordSelection && requirement ? await admittedGrantSelection(auth, env, requirement, excludedKeys, pinned?.key) : undefined;
+  const admitted = requirement && (recordSelection || pinned && excludedKeys.size) ? await admittedGrantSelection(auth, env, requirement, excludedKeys, pinned?.key, recordSelection) : undefined;
   if (video && !admitted) miniMaxVideoDenied();
   if (search && !admitted) miniMaxSearchDenied();
   if (wan && !admitted) throw new HttpError(503, "prediction_owner_unavailable", "Wan requires its original admitted selection");

@@ -63,7 +63,7 @@ test('all depleted grants stop dispatching and return a timed pool error', async
   const f = await fixture(t); f.reject(() => true);
   const first = await f.send();
   assert.equal(first.status, 400); assert.equal(first.body, creditBody);
-  assert.equal(f.calls.length, 2, 'at most one alternate');
+  assert.equal(f.calls.length, 2, 'each of the two eligible owners is tried once');
   const next = await f.send();
   assert.equal(next.status, 429); assert.equal(next.retryAfter, '300');
   assert.match(next.body, /no available scoped upstream grant/);
