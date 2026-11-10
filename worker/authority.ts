@@ -1,4 +1,4 @@
-import { admitGeneratedRuntime, planPrivateIdentityString, planPrivateRuntime, equalAdmissionJson, admitIdentityHeaders, foldIdentitySqlHistory, addIdentitySources, checkIdentitySourceAddition, canonicalFreshIdentityRouting, admitAdmission, admitIdentity, admitIdentityBytes, admitIdentityCount, identityFailure, identityHeader, identityVersion, identityJson, identityPlan, identitySourceBudget, identitySqlRows, parseIdentity, readIdentityRequest, readIdentityResponse, type IdentitySourceBudget } from "./identity-admission.ts";
+import { admitGeneratedRuntime, planPrivateIdentityString, planPrivateRuntime, equalAdmissionJson, admitIdentityHeaders, foldIdentitySqlHistory, addIdentitySources, checkIdentitySourceAddition, canonicalFreshIdentityRouting, admitAdmission, admitIdentity, admitIdentityBytes, admitIdentityCount, identityFailure, identityHeader, identityVersion, identityJson, identityPlan, identitySourceBudget, identityUtf8, identitySqlRows, parseIdentity, readIdentityRequest, readIdentityResponse, type IdentitySourceBudget } from "./identity-admission.ts";
 import { PolicyCollection, admitPolicyBindings, admitPolicyBytes, admitPolicyCall, admitPolicyIds, admitPolicyJson, admitPolicyPrincipals, isPolicyCollectionFailure, isPolicyCollectionPath, parsePolicyRecord, policyCandidatePlan, policyCollectionFailure, policyCollectionHeader, policyCollectionVersion, policyId, policyJsonText, policySequencePlan, policySourceBudget, readPolicyRequest, readPolicyResponse, type PolicySourceBudget } from "./policy-collection.ts";
 import { videoControlVersion, videoControlHeader, videoControlBytes, videoJsonBytes, inspectVideoJson, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { effectiveBudgetPolicy } from "./budget-overrides.ts";
@@ -57,7 +57,7 @@ export const selfServiceCredentialLimit = 10;
 const selfServiceCredentialRetentionLimit = 100;
 
 export type { AdmissionProvider, AdmissionPool, AdmissionResult } from "./authority-admission.ts";
-import { privateDefaultKeyParts, genuineLegacyKey, prepareCredentialPreflight, resolveAdmission, type AdmissionRequest, type AdmissionStore, type AdmissionResult } from "./authority-admission.ts";
+import { privateDefaultKeyParts, genuineLegacyKey, prepareCredentialPreflight, resolveAdmission, type AdmissionRequest, type AdmissionStore, type AdmissionResult, type AdmissionPool } from "./authority-admission.ts";
 
 import { admitBridgeFactories, admissionGraphPayload, reserveAdmissionScratch, retireAdmissionScratch,
   type AdmissionScratchVector, PreflightInstanceArena, PreflightTicket } from "./credential-preflight-arena.ts";

@@ -85,7 +85,7 @@ export function normalizePrivatePolicyRecord(value: Record<string, unknown>, ret
     limitHint: typeof value.limitHint === "string" ? value.limitHint : null,
     requestCostMicros: typeof value.requestCostMicros === "number" ? value.requestCostMicros : null, requestCostsMicros,
     budgetScope: value.budgetScope === "principal" ? "principal" as const : "policy" as const,
-    ...(value.budgetMode === "soft" || value.budgetMode === "reserve" ? { budgetMode: value.budgetMode } : {}),
+    ...(value.budgetMode === "soft" || value.budgetMode === "reserve" ? { budgetMode: value.budgetMode as "soft" | "reserve" } : {}),
     ...(upstreamRetention ? { upstreamRetention } : {}), ...(inputPublication ? { inputPublication } : {}),
     retainRequestContent: typeof value.retainRequestContent === "boolean" ? value.retainRequestContent : retainRequestContentDefault,
   };
