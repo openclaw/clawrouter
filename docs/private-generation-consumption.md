@@ -4,7 +4,10 @@ This inactive slice starts at PR976's qualified retained-generation foundation.
 It does not activate ordinary proxy, HTTP, Access, direct, provider or credential
 cache callers. The ordinary entrypoints remain unchanged. Publication is held
 for source qualification of the DATA/CONTROL inventory below. The own-request
-fixed-cohort contract is adopted and implemented. Authored semantics remain
+fixed-cohort contract is adopted and implemented. The six scoped repairs below are
+a new source candidate; the retained-publication design for private prefetch is
+still held. Neither the old inventory nor the arithmetic below closes that
+separate destination-owner gap. Authored semantics remain
 `UNRUN_CODE_ONLY_HOSTED`; static arithmetic is not a runtime result.
 
 ## Closed ownership
@@ -38,14 +41,22 @@ publication eviction has no authority to release these children.
 ## Local planning and advisory state
 
 The base admission stays frozen. A separate owned overlay stores mutable counts,
-cursors and runtime observations. A successor starts with an empty overlay and
-its own authoritative snapshot. There is no full-admission clone.
+cursors. Authority-bound runtime observations have their own detached, positively
+funded owners, indexed by grant key and ordinary grant revision. A successor starts
+with empty local counts/cursor and its own authoritative snapshot. There is no full-admission clone.
 
 The new selector uses the ordinary accepted candidate range and existing strategy
 helpers, including random draws, ordering, priorities, pin/exclusion, retry and
 configured-pool behavior. It does not call the private bridge's 98-choice-limited
 selector. Configuration probes acquire the existing bounded preparation owner;
 capacity escapes ordinary configuration-error suppression.
+
+A snapshot-select hydration returns a genuine single-use originating selection
+receipt. The first authentication consumes that receipt; revalidation preserves
+the authority choice without a second count/cursor effect. Later cache borrowers
+choose locally. If matching pending runtime exists during hydration, the private
+request defers selection using snapshot-only, as the ordinary admission cache
+does. Requested coverage remains explicit; no receipt is invented.
 
 Selection first plans a complete result, validates the logical whole admission
 with overlay substitutions, funds and copies the complete selected record, and
@@ -87,9 +98,10 @@ qualification must verify the ceilings against the actual call paths.
 | Per-candidate inspection | Maximum complete grant inspection vector, reserved before filtering | Last filter consumer |
 | Configuration | Existing `privatePreparationScratch` vector, acquired before the preparation owner | Last configuration consumer |
 | Detached selection | `4096 + 8(C + 2M + E + V) + 2U` from its admitted record | Last selection/hint child |
-| Overlay update | Complete retained rows plus old/new overlap before replacement | Slot retirement, shrink only after replaced aliases clear |
+| Overlay update | Complete retained rows plus old/new overlap before replacement; an explicit prior-debit receipt restores after failed new aliases clear | Slot retirement, shrink only after replaced aliases clear |
 | Runtime merge | `4096 + 4*(D(previous)+D(incoming)) + generatedObservedAt`; every input window contributes its prospective timestamp member BEFORE the unchanged merge | Detached output admission |
-| Runtime/pending copies | Independent merge-sized backing and key/owner cells | Replacement or original flush settlement |
+| Runtime/pending copies | Independent merge-sized backing and key/owner cells; shared observation `W + 4K + 4R + 1024`, pending `W + 4K + 512` | Shared replacement/authority-partition retirement or pending original flush settlement |
+| Matching runtime view | `4096 + sum(W(candidate, observation) + 4K + 128)` reserved before each copied value/key | Last synchronous selection/profile consumer |
 | Pending count | `4096 + 8*poolKeyUnits + 6*grantKeyUnits + 2*cursorUnits` | Original flush settlement |
 | Fixed cohort | `32768 + 512*4 + 2*T` bytes, with `T` the maximum prospectively planned escaped outbound text of the fixed rows; owner/claims/ACK/terminal products are distinct from retained records; factory closure still required | Original ACK acquisition/read/cancel/unlock settlement |
 | Hint | 1024 bytes plus a lazy 512-byte registry owner | Replacement/disposal |
@@ -102,37 +114,43 @@ entry, value and string-unit counts. No source-counter credit funds new copies.
 `generationConsumptionFactoryCharges` names the product families. Its closed
 entry guard runs before consuming factories. It neither reuses a promoted
 ticket's zero balance nor treats the prior 715-slot table as spare credit.
-All four 128-slot windows remain reserved. The synchronous peak is 478, giving
-`512 + 478 = 990 <= 1024`. These are conservative application product/field
+All four 128-slot windows remain reserved. The repaired source inventory has a
+synchronous peak of 502, giving `512 + 502 = 1014 <= 1024`. This is a new
+candidate inventory, not carried source qualification or a proof that the held
+prefetch destination fits. These are conservative application product/field
 ceilings, not JS sizes. The table is submitted for source qualification.
 
 | Window | Ceiling | Included original products |
 | --- | ---: | --- |
-| Operation | 99 / 128 | Entry/run/followers, registration, own publication polling, actual load/materialize/fetch, receipt and failure products |
+| Operation | 107 / 128 | Entry/run/followers, registration, own publication polling, actual load/materialize/fetch, receipt and failure products |
 | Source | 125 / 128 | Acquisition, response/reader, InputRetirement, headers, wire/decoder, 24 parser frames and 48 descriptors |
 | Read | 32 / 128 | Original read, input promise/finally, pull/await, whole backings/views, wire copy and ACK propagation |
-| Terminal | 101 / 128 | FIRSTcancel/read/allSettled, unlock/UNKNOWN, publication-finally, child/ancestor cleanup and independent origins |
+| Terminal | 111 / 128 | FIRSTcancel/read/allSettled, unlock/UNKNOWN, publication-finally, child/ancestor cleanup and independent origins |
 
-Each synchronous phase includes 132 persistent products: foundation roots 35,
+Each synchronous phase includes 144 persistent products: foundation roots 35,
 coverage/slot/receipt fields 11, authentication owner/lease/parent/capability 53,
-selection 21 and hint 12. These remain included across original awaits; they are
+selection 21, hint 12, originating/runtime fields/registry backing 8 and the pending-cap registry
+owner/charge/counter 4. These remain included across original awaits; they are
 not another grant of slots.
 
 | Synchronous phase | Additional | Including persistent roots |
 | --- | ---: | ---: |
-| Coverage prevalidation/copy/hydration boundary | 132 | 264 |
-| Authentication/effective policy/refresh rollback | 172 | 304 |
-| Selection/configuration/copy/overlay planning | 280 | 412 |
-| Runtime merge/generated timestamps/copy/replacement | 292 | 424 |
-| Fixed cohort claim/commit/terminal inventory | 346 | 478 |
-| Hint-prefetch permit/ID/loader boundary | 208 | 340 |
+| Coverage prevalidation/copy/hydration boundary | 132 | 276 |
+| Authentication/effective policy/refresh rollback | 172 | 316 |
+| Selection/configuration/copy/overlay planning | 294 | 438 |
+| Matching runtime view before selection | 120 | 264 |
+| Runtime merge/generated timestamps/copy/replacement | 306 | 450 |
+| Fixed cohort claim/commit/terminal inventory | 358 | 502 |
+| Hint-prefetch permit/ID/loader boundary | 208 | 352 |
 
 The four claimed records are execution owners:
 `4 * (12 record/fields + 5 lease/charge + 28 borrower/funding + 4 ownership Map
-cells + 1 claim cell) = 200`. They are not passive DATA. The remaining 146 cover
+cells + 1 claim cell) = 200`. They are not passive DATA. The remaining 158 cover
 cohort owner/parent/lease 46, arrays/receipt 6, caller plan/overlay/commit frames
 30, scan/cursor/validation frames 12, failure/aggregate/unwind products 28 and
-prospective envelope planning 24. Borrower terms include optional metadata
+prospective envelope planning 24, and pending-cap/claim/rollback products 12.
+The cap reuses the same owner/arrays/parent at drain; it does not allocate an
+overlapping second 46-product cohort owner. Borrower terms include optional metadata
 receipts. The immutable graph remains under its original owner, not a new clone.
 
 Rows outside the cohort remain independent funded pending owners. Four bounds
@@ -246,7 +264,12 @@ The complete outbound envelope is planned before claims/effects; its escaped
 text is independently funded, not borrowed from pending-record credit. Each
 cohort owns its claim lists, fixed cursor flags, parent, original work,
 followers and failure cleanup. Unstarted registration rejection restores only
-that cohort's provisional claims. Accepted work starts in the accepting request;
+that cohort's provisional claims and returns a genuine funded `pending` cap.
+The cap survives public auth/selection/borrower disposal and eviction. Its
+single-use `drain()` prospectively claims a fixed cohort in the invoking request
+and consumes its existing owner; it never awaits or starts work in a foreign
+request. Explicit `dispose()` is allowed only after all unattempted rows have
+transferred to other started owners. It cannot discard unattempted obligations. Accepted work starts in the accepting request;
 no shared slot contains a scheduled completion or queued successor. No foreign
 completion is awaited, and no successor is launched from another request's
 continuation. A new count after an in-flight claim starts with its own delta,
@@ -297,3 +320,53 @@ Only syntax, embedded syntax, diff formatting and source/privacy inspection have
 run locally. Independent source qualification and all authored native semantics
 remain pending. Nothing here claims runtime success, publication readiness,
 default activation, deployment or a heap bound.
+
+
+## Six-repair custody and funding delta
+
+Shared runtime observations copy the ordinary merged value before publication.
+The old observation stays funded until its last synchronous view has copied it;
+replacement clears the old alias before release. Matching views use actual
+binding identity plus the ordinary grant revision, merge with each live slot's
+own authoritative state and enter complete-overlay profile admission. ACK clears
+only the exact pending value. It does not clear the shared observation needed by
+an older live owner. Empty authority partitions clear every observation before
+retiring its debit. No predecessor counts, foreign promises or caller graphs are
+stored in this view.
+
+The private runtime index has a separate 512-byte owner before its first factory;
+its fields clear before that owner releases. Ordinary foundation metadata,
+including its exact 230-byte borrower debit, is unchanged. The new originating
+receipt is bound by identity inside the separately funded coverage owner.
+Each detached observation has an independent positive owner. Its nested-map key
+and revision occurrences, observation/lease/charge and ownership cells use the
+explicit `4K + 4R + 1024` component in addition to the full merge-sized component.
+Those are CONTROL owners with logical payload backing, not passive data credit.
+A cohort claims pending records, not the authority's entire detached observation
+history. The active replacement has its own 14-product row; the lookup/copy phase
+has 120 additional products. Other retained observations keep their independent
+owners and debits. This is not a whole-isolate 1024-object guarantee.
+
+Overlay preparation records the exact prior debit before prospective expansion.
+All result, pending, parent and cohort products must succeed before counters or
+cursors change. Failure clears transient result/runtime-view aliases, restores
+claims, then restores the exact old overlay debit. Repeated late refusal cannot
+accumulate the provisional component. The original-selection receipt field is
+funded before hydration/borrow factories and moves once into authentication.
+
+The native saturation invocation now stays alive and joins all 64 original
+blockers and its observers; other requests expose only readiness/release scalars.
+A and B dispose their public capabilities before draining genuine refused-work
+caps in their own native contexts. Host dispatch immediately enrolls a memoized
+body root for every actual Response, including a late A after assertion failure.
+Release-first teardown joins the dynamically growing fetch/body roster before
+fixture disposal. Separate body/control failures preserve their occurrences even
+when their reasons are the same object or literal undefined.
+
+The new authored cases cover originating A then later B/count parity, repeated
+late-debit refusal, live/fresh/revised/foreign-authority runtime observations,
+refused work after all public owners disappear, native originating receipts and
+pending runtime, native own-request blockers, and host late-body failure origins.
+No dependency-backed local semantics ran. The private prefetch retained graph's
+destination transition remains an explicit held design item; no claim here
+credits the legacy credential-cache publication as a funded receipt.

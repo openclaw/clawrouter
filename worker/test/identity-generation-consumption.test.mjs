@@ -18,15 +18,18 @@ const capacity = error => denied(error) && error.message === 'Identity admission
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); void promise.then(() => undefined, () => undefined); return { promise, resolve, reject }; };
 const on = { maxAgeMs: 60000, freshMs: 10000 }, off = { maxAgeMs: 0, freshMs: 0 };
 async function fixture(t, run) {
-  const roots = [], releases = [], resources = [], flushes = [], origins = new WeakMap();
+  const roots = [], releases = [], resources = [], flushes = [], origins = new WeakMap(), pendingCaps = new Set();
   let cleanupPromise, finished = false, hasPrimary = false, primary;
   const own = promise => { const existing = origins.get(promise); if (existing) return existing; const root = { outcome: Promise.resolve(promise).then(value => ({ failed: false, value }), error => ({ failed: true, error })), used: false }; roots.push(root); origins.set(promise, root); return root; };
   const take = async root => { const result = await root.outcome; root.used = true; if (result.failed) throw result.error; return result.value; };
   const cleanup = () => cleanupPromise ??= (async () => {
     const failures = [];
     for (const release of releases) try { release(); } catch (error) { failures.push(error); }
+    for (const cap of pendingCaps) try { own(cap.drain()); pendingCaps.delete(cap); } catch (error) { failures.push(error); }
     for (let i = 0; i < roots.length; i++) await roots[i].outcome;
     for (const root of roots) { const result = await root.outcome; if (result.failed && !root.used) { root.used = true; failures.push(result.error); } }
+    for (const cap of pendingCaps) try { cap.dispose(); } catch (error) { failures.push(error); }
+    pendingCaps.clear();
     for (const release of resources.reverse()) try { release(); } catch (error) { failures.push(error); }
     return failures;
   })();
@@ -52,7 +55,7 @@ async function fixture(t, run) {
     const response = await fetch('https://authority/admission/resolve', { method: 'POST', headers: { 'x-clawrouter-private-admission': 'v1' }, body: raw ?? JSON.stringify({ admission, source }) });
     const text = await take(own(response.text())); return { status: response.status, body: JSON.parse(text) };
   };
-  try { await run({ db, sql, env, owner, stored, trace, call, own, take, releases, resources, flushes, beforeKv(fn) { beforeKv = fn; } }); }
+  try { await run({ db, sql, env, owner, stored, trace, call, own, take, releases, resources, flushes, pendingCaps, beforeKv(fn) { beforeKv = fn; } }); }
   catch (error) { hasPrimary = true; primary = error; }
   const failures = await cleanup(); finished = true;
   if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, 'generation fixture outcomes');
@@ -79,11 +82,13 @@ function cleanupGenerations(f, resources) {
 function selectOwned(f, auth, env, request) {
   const handle = selectCredentialGeneration(auth, env, request);
   if (handle?.flush.accepted) { const root = f.own(handle.flush.completed); f.flushes.push(root); }
+  else if (handle?.flush.pending) f.pendingCaps.add(handle.flush.pending);
   return handle;
 }
 function queueOwned(f, auth, key, value) {
   const receipt = queueCredentialGenerationRuntime(auth, key, value);
   if (receipt.accepted) { const root = f.own(receipt.completed); f.flushes.push(root); }
+  else if (receipt.pending) f.pendingCaps.add(receipt.pending);
   return receipt;
 }
 async function joinOwnFlushes(f, auth, env) {
@@ -151,6 +156,7 @@ const { selectAdmissionCandidate, selectGenerationAdmissionCandidate } = await i
 const { chooseGrantKey, normalizedChoiceCandidates } = await import('../grant-selection-strategies.ts');
 const { normalizePolicyRecord } = await import('../authority-policy.ts');
 const { snapshot: providerSnapshot } = await import('../providers.ts');
+const { GenerationAdvisoryState } = await import('../admission-cache.ts');
 const { admissionScratchBytes, GenerationConsumptionLease } = await import('../credential-preflight-arena.ts');
 for (const strategy of ['priority', 'round_robin', 'least_used', 'most_remaining', 'threshold', 'weighted_random']) {
   test('owned local accepted-range parity: ' + strategy + ' with 129 complete candidates', t => {
@@ -524,4 +530,112 @@ test('generated runtime pressure precedes overlay, RPC and pending-feedback effe
   await f.take(f.own(flushCredentialGenerationRuntime(auth, f.env)));
   assert.equal(f.trace.rpc.length, calls);
   assert.equal(f.db.prepare('SELECT state_json FROM upstream_grant_runtime WHERE grant_key=?').get(key).state_json, state);
+}));
+
+
+test('origin snapshot-select receipt preserves A and its single authority count; later borrower selects B', async t => fixture(t, async f => {
+  seedPool(f); let borrow, auth, first, cached, laterAuth, second;
+  cleanupGenerations(f, [() => borrow?.dispose(), () => auth?.dispose(), () => first?.dispose(), () => cached?.dispose(), () => laterAuth?.dispose(), () => second?.dispose()]);
+  const request = { ...poolInput(), snapshot: 'select' }, coverage = { ...request, allConnections: false };
+  borrow = await generation(f, request);
+  assert.equal(f.db.prepare('SELECT SUM(selected_count) AS n FROM upstream_grant_selection').get().n, 1);
+  auth = authenticateCredentialGeneration(borrow, f.env, coverage);
+  const rpc = f.trace.rpc.length;
+  first = selectOwned(f, auth, f.env, selectionRequest()); assert.ok(first.matchesKey('oauth/bridge-policy/a'));
+  assert.equal(first.flush.accepted, false); assert.equal(first.flush.pending, undefined);
+  assert.equal(f.trace.rpc.length, rpc);
+  assert.equal(f.db.prepare('SELECT SUM(selected_count) AS n FROM upstream_grant_selection').get().n, 1);
+  cached = borrowCredentialGeneration(f.env, 'bridgekid', digest, on); assert.ok(cached);
+  laterAuth = authenticateCredentialGeneration(cached, f.env, coverage);
+  second = selectOwned(f, laterAuth, f.env, selectionRequest()); assert.ok(second.matchesKey('oauth/bridge-policy/b'));
+  await joinOwnFlushes(f, laterAuth, f.env);
+  assert.equal(f.db.prepare('SELECT SUM(selected_count) AS n FROM upstream_grant_selection').get().n, 2);
+}));
+
+test('late selection funding failure rolls back the old overlay debit on every attempt', async t => fixture(t, async f => {
+  seedPool(f); let borrow, auth, first, next, pressure;
+  f.releases.push(() => { pressure?.release(); pressure = undefined; });
+  cleanupGenerations(f, [() => borrow?.dispose(), () => auth?.dispose(), () => first?.dispose(), () => next?.dispose()]);
+  borrow = await generation(f, poolInput()); auth = authenticateCredentialGeneration(borrow, f.env, { ...poolInput(), allConnections: false });
+  first = selectOwned(f, auth, f.env, selectionRequest()); await joinOwnFlushes(f, auth, f.env);
+  const original = GenerationAdvisoryState.prototype.admitSelection; let deny = true, admitted = 0;
+  t.mock.method(GenerationAdvisoryState.prototype, 'admitSelection', function(plan) {
+    const debit = Reflect.apply(original, this, [plan]);
+    if (deny) { admitted++; pressure = ExactBodyCharge.reserve(bodyBudgetBytes - bodyBudgetCharged()); assert.ok(pressure); }
+    return debit;
+  });
+  const charged = bodyBudgetCharged(), rpc = f.trace.rpc.length, writes = f.trace.writes.length;
+  for (let i = 0; i < 3; i++) {
+    assert.throws(() => selectOwned(f, auth, f.env, selectionRequest()), capacity);
+    pressure.release(); pressure = undefined;
+    assert.equal(bodyBudgetCharged(), charged); assert.equal(f.trace.rpc.length, rpc); assert.equal(f.trace.writes.length, writes);
+  }
+  assert.equal(admitted, 3); deny = false;
+  next = selectOwned(f, auth, f.env, selectionRequest()); assert.ok(next.matchesKey('oauth/bridge-policy/b'));
+  await joinOwnFlushes(f, auth, f.env);
+  assert.equal(f.db.prepare('SELECT SUM(selected_count) AS n FROM upstream_grant_selection').get().n, 2);
+}));
+
+for (const revised of [false, true]) test('pending runtime crosses live successors only for matching authority and revision: ' + revised, async t => fixture(t, async f => {
+  seedPool(f); let a, authA, b, authB, choice, later, laterAuth, laterChoice, oldChoice;
+  cleanupGenerations(f, [() => a?.dispose(), () => authA?.dispose(), () => b?.dispose(), () => authB?.dispose(), () => choice?.dispose(), () => later?.dispose(), () => laterAuth?.dispose(), () => laterChoice?.dispose(), () => oldChoice?.dispose()]);
+  const entered = deferred(), release = deferred(); f.releases.push(() => release.resolve());
+  a = await generation(f, poolInput()); authA = authenticateCredentialGeneration(a, f.env, { ...poolInput(), allConnections: false });
+  const fetch = f.owner.fetch;
+  t.mock.method(f.owner, 'fetch', async function(request) {
+    if (new URL(request.url).pathname === '/grant-pools/feedback') { entered.resolve(); await release.promise; }
+    return Reflect.apply(fetch, this, [request]);
+  });
+  const receipt = queueOwned(f, authA, 'oauth/bridge-policy/a', { ...runtimeState(new Date().toISOString(), 10),
+    status: 'cooldown', lastSignal: 'rate_limited', cooldownUntil: new Date(Date.now() + 60000).toISOString() });
+  assert.equal(receipt.accepted, true); const held = f.own(receipt.completed);
+  const arrived = await Promise.race([entered.promise.then(() => true), held.outcome.then(() => false)]);
+  if (!arrived) { await f.take(held); assert.fail('feedback completed before its original hold'); }
+  if (revised) {
+    const key = 'oauth/bridge-policy/a', row = f.db.prepare('SELECT projection_json FROM upstream_grant_projections WHERE grant_key=?').get(key);
+    f.sql.exec('UPDATE upstream_grant_projections SET projection_json=? WHERE grant_key=?', JSON.stringify({ ...JSON.parse(row.projection_json), updatedAt: '2026-02-01T00:00:00.000Z' }), key);
+  }
+  const request = { ...poolInput(), snapshot: 'select' };
+  b = await generation(f, request); authB = authenticateCredentialGeneration(b, f.env, { ...request, allConnections: false });
+  // Pending feedback prevents authority-side selection, then the owned local
+  // view applies the matching observation without copying predecessor counts.
+  assert.equal(f.db.prepare('SELECT COUNT(*) AS n FROM upstream_grant_selection').get().n, 0);
+  choice = selectOwned(f, authB, f.env, selectionRequest()); assert.ok(choice.matchesKey('oauth/bridge-policy/' + (revised ? 'a' : 'b')));
+  if (choice.flush.accepted) await f.take(f.own(choice.flush.completed));
+  await fixture(t, async other => {
+    seedPool(other); let foreign, foreignAuth, selected;
+    cleanupGenerations(other, [() => foreign?.dispose(), () => foreignAuth?.dispose(), () => selected?.dispose()]);
+    foreign = await generation(other, poolInput()); foreignAuth = authenticateCredentialGeneration(foreign, other.env, { ...poolInput(), allConnections: false });
+    selected = selectOwned(other, foreignAuth, other.env, selectionRequest()); assert.ok(selected.matchesKey('oauth/bridge-policy/a'));
+    await joinOwnFlushes(other, foreignAuth, other.env);
+  });
+  release.resolve(); await f.take(held);
+  oldChoice = selectOwned(f, authA, f.env, selectionRequest()); assert.ok(oldChoice.matchesKey('oauth/bridge-policy/b'));
+  if (oldChoice.flush.accepted) await f.take(f.own(oldChoice.flush.completed));
+  choice.dispose(); choice = undefined; authB.dispose(); authB = undefined; b.dispose(); b = undefined; evictCredentialGeneration(f.env, 'bridgekid');
+  later = await generation(f, poolInput()); laterAuth = authenticateCredentialGeneration(later, f.env, { ...poolInput(), allConnections: false });
+  laterChoice = selectOwned(f, laterAuth, f.env, selectionRequest()); assert.ok(laterChoice.matchesKey('oauth/bridge-policy/' + (revised ? 'a' : 'b')));
+  await joinOwnFlushes(f, laterAuth, f.env);
+}));
+
+test('refused pending cap drains after all public owners and publication are disposed, releasing both slots', async t => fixture(t, async f => {
+  seedPool(f); const baseline = bodyBudgetCharged(), release = deferred(), blockers = [], caps = [];
+  let borrow, auth, selected, next;
+  f.releases.push(() => release.resolve());
+  cleanupGenerations(f, [() => borrow?.dispose(), () => auth?.dispose(), () => selected?.dispose(), () => next?.dispose()]);
+  for (let i = 0; i < BACKGROUND_WORK_LIMIT; i++) { const root = f.own(release.promise.then(() => undefined)); blockers.push(root); assert.equal(tryRunInBackground(() => root.outcome), true); }
+  for (let i = 0; i < 2; i++) {
+    borrow = await generation(f, poolInput()); auth = authenticateCredentialGeneration(borrow, f.env, { ...poolInput(), allConnections: false });
+    selected = selectOwned(f, auth, f.env, selectionRequest()); assert.equal(selected.flush.accepted, false); assert.ok(selected.flush.pending);
+    caps.push(selected.flush.pending);
+    selected.dispose(); selected = undefined; auth.dispose(); auth = undefined; borrow.dispose(); borrow = undefined; evictCredentialGeneration(f.env, 'bridgekid');
+  }
+  assert.ok(bodyBudgetCharged() > baseline);
+  assert.equal(f.trace.rpc.filter(path => path === '/grant-pools/record').length, 0);
+  for (const cap of caps) { const original = cap.drain(); f.pendingCaps.delete(cap); await f.take(f.own(original)); assert.throws(() => cap.drain(), denied); }
+  assert.equal(f.trace.rpc.filter(path => path === '/grant-pools/record').length, 2);
+  assert.equal(bodyBudgetCharged(), baseline);
+  next = await generation(f, poolInput()); next.dispose(); next = undefined; evictCredentialGeneration(f.env, 'bridgekid');
+  release.resolve(); for (const root of blockers) await f.take(root);
+  assert.equal(bodyBudgetCharged(), baseline);
 }));

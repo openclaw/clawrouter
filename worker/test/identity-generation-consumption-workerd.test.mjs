@@ -8,7 +8,7 @@ import { startWorkerdFixture } from '../../test/helpers/workerd.mjs';
 const router = String.raw`
 import {PolicyBindingIndexObject as Base} from './worker/authority.ts';
 export {BudgetLedgerObject,UsageLedgerObject,GrantCredentialObject} from './worker/index.ts';
-import {preflightCredential,releaseCredentialPreflight,prepareCredentialGeneration,completeCredentialGeneration,completeConsumableCredentialGeneration,authenticateCredentialGeneration,selectCredentialGeneration,flushCredentialGenerationRuntime,retainCredentialGenerationHint,prepareCredentialGenerationPrefetch,borrowCredentialGeneration,evictCredentialGeneration} from './worker/credential-preflight.ts';
+import {preflightCredential,releaseCredentialPreflight,prepareCredentialGeneration,completeCredentialGeneration,completeConsumableCredentialGeneration,authenticateCredentialGeneration,selectCredentialGeneration,flushCredentialGenerationRuntime,queueCredentialGenerationRuntime,retainCredentialGenerationHint,prepareCredentialGenerationPrefetch,borrowCredentialGeneration,evictCredentialGeneration} from './worker/credential-preflight.ts';
 import {prefetchOwnedGrantCredentials,evictGrantCredentials} from './worker/credential-cache.ts';
 import {putGrantCredentials} from './worker/grant-credentials.ts';
 import {ExactBodyCharge,bodyBudgetCharged,bodyBudgetBytes} from './worker/body-budget.ts';
@@ -17,7 +17,7 @@ import {PrivateCacheReservation,privateCacheCharged,privateCacheLimits,setHotCac
 import {isIdentityFailure} from './worker/identity-admission.ts';
 import {measureGenerationGraph,freezeGenerationGraph} from './worker/identity-generations.ts';
 const digest='ab'.repeat(32),rotated='cd'.repeat(32),kid='nativegeneration';
-let releaseCohortBlockers;
+let cohortBlockersReleased=false,cohortReady=false;
 const on={maxAgeMs:60000,freshMs:10000},off={maxAgeMs:0,freshMs:0};
 const check=(ok,label)=>{if(!ok)throw Error(label);};
 const deferred=()=>{let resolve;const promise=new Promise(yes=>{resolve=yes;});void promise.then(()=>{},()=>{});return {promise,resolve};};
@@ -35,18 +35,30 @@ export class PolicyBindingIndexObject extends Base {
   };const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;}});
   super(state,new Proxy(env,{get(target,key,receiver){return key==='POLICY_KV'?kv:Reflect.get(target,key,receiver);}}));
   const sql=state.storage.sql;
-  this.reset=()=>{for(const table of ['proxy_credentials','access_policies','policy_binding_meta','upstream_grant_pool_versions','upstream_grant_pool_members','upstream_grant_projections'])sql.exec('DELETE FROM '+table);trace.intakes=0;trace.preflights=0;trace.kv=[];};
+  this.reset=()=>{for(const table of ['proxy_credentials','access_policies','policy_binding_meta','upstream_grant_pool_versions','upstream_grant_pool_members','upstream_grant_projections','upstream_grant_selection','upstream_grant_runtime'])sql.exec('DELETE FROM '+table);trace.intakes=0;trace.preflights=0;trace.kv=[];};
   this.rotate=()=>sql.exec('UPDATE proxy_credentials SET credential_json=? WHERE credential_id=?',JSON.stringify(record(rotated)),kid);
   this.snapshot=()=>({trace,charged:this.preflightArena?.charged??0,credentials:[...sql.exec('SELECT credential_json FROM proxy_credentials')].length,policies:[...sql.exec('SELECT policy_json FROM access_policies')].length});
   this.cohortHeld=false;this.cohortArrived=false;this.holdRecord=false;trace.records=0;
   this.armCohort=()=>{this.cohortHeld=true;this.cohortArrived=false;this.holdRecord=true;trace.records=0;sql.exec('DELETE FROM upstream_grant_selection');};
   this.selectedCount=()=>[...sql.exec('SELECT COALESCE(SUM(selected_count),0) AS n FROM upstream_grant_selection')][0].n;
+  this.selectionPair=()=>{for(const token of ['a','b']){const key='oauth/native-generation-policy/'+token;
+   const grant={provider:'anthropic',kind:'api_key',enabled:true,priority:4,credentialStore:'durable_object',credentialStatus:'active',credentialGeneration:1,credentialLineage:'fixture_generation',hasCredential:true,unknownGenerationField:{token}};
+   sql.exec('INSERT INTO upstream_grant_pool_versions(grant_key,generation,revision) VALUES(?,?,?)',key,1,7);
+   sql.exec('INSERT INTO upstream_grant_pool_members(scope,scope_id,provider_id,token_ref,status) VALUES(?,?,?,?,?)','policies','native-generation-policy','anthropic',token,'active');
+   sql.exec('INSERT INTO upstream_grant_projections(grant_key,projection_json,legacy) VALUES(?,?,0)',key,JSON.stringify(grant));
+  }};
+  this.feedbackHeld=false;this.feedbackArrived=false;
   this.trace=trace;
  }
  async fetch(request){
   const path=new URL(request.url).pathname;
   if(path==='/fixture/reset'){this.reset();return new Response('reset');}
   if(path==='/fixture/rotate'){this.rotate();return new Response('rotated');}
+  if(path==='/fixture/selection-pair'){this.selectionPair();return new Response('seeded');}
+  if(path==='/fixture/feedback-arm'){this.feedbackHeld=true;this.feedbackArrived=false;return new Response('armed');}
+  if(path==='/fixture/feedback-release'){this.feedbackHeld=false;return new Response('released');}
+  if(path==='/fixture/feedback-arrival'){while(!this.feedbackArrived&&this.feedbackHeld)await new Promise(resolve=>setTimeout(resolve,1));return new Response('entered');}
+  if(path==='/grant-pools/feedback'&&this.feedbackHeld){this.feedbackArrived=true;while(this.feedbackHeld)await new Promise(resolve=>setTimeout(resolve,1));}
   if(path==='/fixture/cohort-arm'){this.armCohort();return new Response('armed');}
   // Fixture gates share ONLY scalars. Each request creates and awaits its OWN
   // timer roots; a foreign request never resolves the ORIGINAL I/O continuation.
@@ -61,34 +73,39 @@ export class PolicyBindingIndexObject extends Base {
 }
 export default {async fetch(request,env){
  const mode=new URL(request.url).pathname.slice(1),stub=env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName('policy-bindings'));
- const roots=[],origins=new WeakMap();let proof,prep,borrow,auth,selected,hint,pressure,hasPrimary=false,primary,result;const releases=[];
- const cohortPrepare=mode==='cohort-prepare',prefetch=mode.startsWith('prefetch-'),poolMode=prefetch||cohortPrepare,key='oauth/native-generation-policy/prefetch';
+ const roots=[],origins=new WeakMap();let proof,prep,borrow,auth,selected,hint,pressure,secondBorrow,secondAuth,secondSelected,hasPrimary=false,primary,result;const releases=[];
+ const cohortPrepare=mode==='cohort-prepare',prefetch=mode.startsWith('prefetch-'),pairMode=mode==='origin-select'||mode==='shared-runtime',poolMode=prefetch||cohortPrepare||pairMode,key='oauth/native-generation-policy/prefetch';
  const selection={providerId:'anthropic',endpointId:'messages',mode:'http',capability:'llm.messages'};
- const input=poolMode?{providers:[{id:'anthropic',tokenRef:'anthropic'}],snapshot:'only',selection}:{providers:[]};
+ const input=poolMode?{providers:[{id:'anthropic',tokenRef:'anthropic'}],snapshot:mode==='origin-select'?'select':'only',selection}:{providers:[]};
  const coverage={...input,allConnections:false};
  const own=promise=>{const existing=origins.get(promise);if(existing)return existing;const root={outcome:promise.then(value=>({failed:false,value}),error=>({failed:true,error})),used:false};roots.push(root);origins.set(promise,root);return root;};
  const take=async root=>{const outcome=await root.outcome;root.used=true;if(outcome.failed)throw outcome.error;return outcome.value;};
  const rpc=async(path,init)=>{const response=await take(own(stub.fetch('https://authority'+path,init))),body=await take(own(response.text()));check(response.status===200,'fixture RPC');return body;};
 
  if(mode==='cohort-arrival'){await rpc('/fixture/cohort-arrival');return new Response('entered');}
- if(mode==='cohort-release'){await rpc('/fixture/cohort-release');releaseCohortBlockers?.();releaseCohortBlockers=undefined;evictCredentialGeneration(env,kid);return new Response('released');}
+ if(mode==='cohort-ready'){while(!cohortReady&&!cohortBlockersReleased)await new Promise(resolve=>setTimeout(resolve,1));return new Response(cohortReady?'ready':'released');}
+ if(mode==='cohort-finished')return Response.json({charged:bodyBudgetCharged()});
+ if(mode==='cohort-release'){cohortBlockersReleased=true;await rpc('/fixture/cohort-release');evictCredentialGeneration(env,kid);return new Response('released');}
  if(mode==='cohort-a'||mode==='cohort-b'){
-  let hasFailure=false,failure,answer;
+  let hasFailure=false,failure,answer,pending;
   try{
    const request={providers:[{id:'anthropic',tokenRef:'anthropic'}],snapshot:'only',selection};
    borrow=borrowCredentialGeneration(env,kid,digest,on);check(!!borrow,'genuine cohort generation hit');
    auth=authenticateCredentialGeneration(borrow,env,{...request,allConnections:false});
    selected=selectCredentialGeneration(auth,env,selection);check(selected?.selected()&&selected.flush.accepted===false,'saturated automatic registration starts nothing');
-   // The explicit receipt is this request's fixed claimed cohort. B must finish
-   // while A's original transport is still held inside the native authority.
-   await take(own(flushCredentialGenerationRuntime(auth,env)));
+   pending=selected.flush.pending;check(!!pending,'refused registration transfers pending ownership');
+   selected.dispose();selected=undefined;auth.dispose();auth=undefined;borrow.dispose();borrow=undefined;
+   if(mode==='cohort-b')evictCredentialGeneration(env,kid);
+   // No public auth survives. This request's genuine cap owns its fixed cohort;
+   // B still finishes while A's original native transport remains held.
+   const drain=pending.drain();pending=undefined;await take(own(drain));
    const observed=JSON.parse(await rpc('/fixture/result'));
    answer={mode,selectedCount:observed.selectedCount,records:observed.trace.records};
    if(mode==='cohort-b')evictCredentialGeneration(env,kid);
   }catch(error){hasFailure=true;failure=error;}
   const errors=[];
   for(let i=0;i<roots.length;i++){const outcome=await roots[i].outcome;if(outcome.failed&&!roots[i].used){roots[i].used=true;errors.push(outcome.error);}}
-  for(const release of [()=>selected?.dispose(),()=>auth?.dispose(),()=>borrow?.dispose()])try{release();}catch(error){errors.push(error);}
+  for(const release of [()=>pending?.dispose(),()=>{if(selected&&!selected.flush.accepted)selected.flush.pending?.dispose();},()=>selected?.dispose(),()=>auth?.dispose(),()=>borrow?.dispose()])try{release();}catch(error){errors.push(error);}
   if(errors.length)throw new AggregateError(hasFailure?[failure,...errors]:errors,'cohort request cleanup');if(hasFailure)throw failure;
   return Response.json({...answer,charged:bodyBudgetCharged()});
  }
@@ -96,8 +113,9 @@ export default {async fetch(request,env){
  try{
   await rpc('/fixture/reset');
   await env.POLICY_KV.put('credentials/'+kid,JSON.stringify({...record(digest),...(mode==='disabled'?{enabled:false}:{})}));
-  await env.POLICY_KV.put('policies/native-generation-policy',JSON.stringify({enabled:true,generation:'legacy',providers:[],requestCostMicros:7}));
-  if(poolMode){await take(own(putGrantCredentials(env,key,{provider:'anthropic',kind:'api_key',enabled:true,credential:'fixture-native-only'})));evictGrantCredentials(key);}
+  await env.POLICY_KV.put('policies/native-generation-policy',JSON.stringify({enabled:true,generation:'legacy',providers:[],requestCostMicros:7,...(pairMode?{grantRouting:{strategy:'round_robin'}}:{})}));
+  if(pairMode){await env.POLICY_KV.delete(key);await rpc('/fixture/selection-pair');}
+  if(poolMode&&!pairMode){await take(own(putGrantCredentials(env,key,{provider:'anthropic',kind:'api_key',enabled:true,credential:'fixture-native-only'})));evictGrantCredentials(key);}
   if(cohortPrepare)await rpc('/fixture/cohort-arm');
   const preflight=await take(own(preflightCredential(env,kid,digest)));if(preflight.outcome==='matched')proof=preflight.proof;
   check(!!proof,'correct secret is preliminary match even when disabled');
@@ -118,6 +136,33 @@ export default {async fetch(request,env){
   auth=authenticateCredentialGeneration(borrow,env,coverage);
   check(auth.status()===(mode==='disabled'?403:200),'ordinary lifecycle verdict');
   check(auth.code()===(mode==='disabled'?'proxy_key_revoked':undefined),'ordinary lifecycle classification');
+  if(mode==='origin-select'){
+   check(JSON.parse(await rpc('/fixture/result')).selectedCount===1,'authority counted original A once');
+   selected=selectCredentialGeneration(auth,env,selection);check(selected?.matchesKey('oauth/native-generation-policy/a'),'origin keeps authority A');
+   check(!selected.flush.accepted&&!selected.flush.pending,'origin adds no advisory count');
+   secondBorrow=borrowCredentialGeneration(env,kid,digest,on);check(!!secondBorrow,'later native genuine hit');
+   secondAuth=authenticateCredentialGeneration(secondBorrow,env,coverage);
+   secondSelected=selectCredentialGeneration(secondAuth,env,selection);check(secondSelected?.matchesKey('oauth/native-generation-policy/b'),'later native borrower B');
+   if(secondSelected.flush.accepted)await take(own(secondSelected.flush.completed));
+   check(JSON.parse(await rpc('/fixture/result')).selectedCount===2,'two selections exactly two counts');
+  }
+  if(mode==='shared-runtime'){
+   releases.push(()=>rpc('/fixture/feedback-release'));await rpc('/fixture/feedback-arm');
+   const receipt=queueCredentialGenerationRuntime(auth,'oauth/native-generation-policy/a',{status:'cooldown',observedAt:new Date().toISOString(),source:'provider_response',cooldownUntil:new Date(Date.now()+60000).toISOString(),lastSignal:'rate_limited',grantRevision:null,windows:[]});
+   check(receipt.accepted,'native pending runtime registered');const feedback=own(receipt.completed),arrival=own(rpc('/fixture/feedback-arrival'));
+   const reached=await Promise.race([arrival.outcome.then(()=>true),feedback.outcome.then(()=>false)]);
+   if(!reached){await take(feedback);throw Error('native feedback completed before hold');}await take(arrival);
+   const nextRequest={...input,snapshot:'select'},nextCoverage={...nextRequest,allConnections:false};
+   const nextProof=await take(own(preflightCredential(env,kid,digest)));check(nextProof.outcome==='matched','successor preverify');proof=nextProof.proof;
+   prep=prepareCredentialGeneration(proof);proof=undefined;const next=completeConsumableCredentialGeneration(prep,nextRequest,on);prep=undefined;secondBorrow=await take(own(next));
+   secondAuth=authenticateCredentialGeneration(secondBorrow,env,nextCoverage);
+   check(JSON.parse(await rpc('/fixture/result')).selectedCount===0,'pending runtime defers authority choice');
+   secondSelected=selectCredentialGeneration(secondAuth,env,selection);check(secondSelected?.matchesKey('oauth/native-generation-policy/b'),'successor sees pending cooldown');
+   if(secondSelected.flush.accepted)await take(own(secondSelected.flush.completed));
+   await rpc('/fixture/feedback-release');await take(feedback);
+   selected=selectCredentialGeneration(auth,env,selection);check(selected?.matchesKey('oauth/native-generation-policy/b'),'old owner retains cooldown after ACK');
+   if(selected.flush.accepted)await take(own(selected.flush.completed));
+  }
   if(prefetch){
    selected=selectCredentialGeneration(auth,env,selection);if(selected?.flush.accepted)await take(own(selected.flush.completed));check(!!selected?.selected(),'native local selection');
    hint=retainCredentialGenerationHint(selected);await take(own(flushCredentialGenerationRuntime(auth,env)));
@@ -147,37 +192,72 @@ export default {async fetch(request,env){
    result={mode,materializations:calls,materializationReads:rows[0].read,postNativeHold:mode==='prefetch-held-read'||mode==='prefetch-held-cancel'};
   }
   if(cohortPrepare){
-   const release=deferred();releaseCohortBlockers=release.resolve;
-   for(let i=0;i<BACKGROUND_WORK_LIMIT;i++){const original=release.promise.then(()=>undefined);void original.then(()=>{},()=>{});check(tryRunInBackground(()=>original),'fixture background saturation');}
+   // ALL blockers originate and settle in THIS still-live native request. Other
+   // requests mutate readiness/release SCALARS only; no foreign resolver exists.
+   cohortReady=false;releases.push(()=>{cohortBlockersReleased=true;});
+   const blockers=[];
+   for(let i=0;i<BACKGROUND_WORK_LIMIT;i++){
+    const original=(async()=>{while(!cohortBlockersReleased)await new Promise(resolve=>setTimeout(resolve,1));})();
+    const root=own(original);blockers.push(root);check(tryRunInBackground(()=>original),'fixture background saturation');
+   }
+   cohortReady=true;
+   for(const root of blockers)await take(root);
   }
   if(borrow){borrow.dispose();borrow=undefined;}if(!cohortPrepare)evictCredentialGeneration(env,kid);
   if(auth)check(bodyBudgetCharged()>baseline,'derived owner retains generation after eviction');
   const observed=JSON.parse(await rpc('/fixture/result'));
-  check(observed.trace.intakes===1,'auth is RPC free');check(observed.trace.kv.length>0,'actual cold KV');
+  check(observed.trace.intakes===(mode==='shared-runtime'?2:1),'auth is RPC free');check(observed.trace.kv.length>0,'actual cold KV');
   for(const row of observed.trace.kv)check(row.byob&&row.reads>0&&row.eof&&row.unlocked&&row.backing<=16384,'original native KV custody');
   result={...result,mode,intakes:observed.trace.intakes,nativeReads:observed.trace.kv.length};
  }catch(error){hasPrimary=true;primary=error;}
  const failures=[];
- for(const release of releases)try{release();}catch(error){failures.push(error);}
+ if(cohortPrepare&&hasPrimary)cohortBlockersReleased=true;
+ for(const release of releases)try{await release();}catch(error){failures.push(error);}
  pressure?.release();if(!cohortPrepare||hasPrimary)evictCredentialGeneration(env,kid);evictGrantCredentials(key);
  if(prefetch&&auth)try{own(flushCredentialGenerationRuntime(auth,env));}catch(error){failures.push(error);}
  for(let i=0;i<roots.length;i++){const outcome=await roots[i].outcome;if(outcome.failed&&!roots[i].used){roots[i].used=true;failures.push(outcome.error);}}
- for(const release of [()=>hint?.dispose(),()=>selected?.dispose(),()=>auth?.dispose(),()=>borrow?.dispose(),()=>prep?.dispose(),()=>{if(proof)releaseCredentialPreflight(proof);}])try{release();}catch(error){failures.push(error);}
+ for(const release of [()=>secondSelected?.dispose(),()=>secondAuth?.dispose(),()=>secondBorrow?.dispose(),()=>hint?.dispose(),()=>{if(selected&&!selected.flush.accepted)selected.flush.pending?.dispose();},()=>selected?.dispose(),()=>auth?.dispose(),()=>borrow?.dispose(),()=>prep?.dispose(),()=>{if(proof)releaseCredentialPreflight(proof);}])try{release();}catch(error){failures.push(error);}
  if(failures.length)throw new AggregateError(hasPrimary?[primary,...failures]:failures,'owned native roots');if(hasPrimary)throw primary;
- check(cohortPrepare?bodyBudgetCharged()>baseline:bodyBudgetCharged()===baseline,'last actual consumer or retained publication funding');
+ if(!cohortPrepare)check(bodyBudgetCharged()===baseline,'last actual consumer funding');
  return Response.json({...result,charged:bodyBudgetCharged()});
 }};
 `;
 const upstream = `export default {fetch(){throw Error('unexpected provider dispatch')}}`;
 
-test('inactive owned generation consumption uses actual native KV/SQLite, prefetch cleanup and foreign-request cohorts', { timeout: 120000 }, async t => {
-  const roots = [], releases = []; let directory, runtime, cleanupPromise, finished = false, hasPrimary = false, primary;
-  const own = promise => { const root = { outcome: promise.then(value => ({ failed: false, value }), error => ({ failed: true, error })), used: false }; roots.push(root); return root; };
+// Host-owned originals: one Response body root is enrolled even if its fetch
+// settles after the assertion path has failed. No native retirement is inferred.
+function nativeFixtureRoots(dispatchOriginal) {
+  const roots = [], origins = new WeakMap(), bodies = new WeakMap();
+  const own = promise => { const prior = origins.get(promise); if (prior) return prior; const root = { outcome: promise.then(value => ({ failed: false, value }), error => ({ failed: true, error })), used: false }; roots.push(root); origins.set(promise, root); return root; };
+  const readBody = response => { let root = bodies.get(response); if (!root) { let original; try { original = response.text(); } catch (error) { original = Promise.reject(error); } root = own(original); bodies.set(response, root); } return root; };
+  const dispatch = url => { let original; try { original = dispatchOriginal(url); } catch (error) { original = Promise.reject(error); } const root = own(original); own(root.outcome.then(outcome => { if (!outcome.failed) readBody(outcome.value); })); return root; };
   const take = async root => { const value = await root.outcome; root.used = true; if (value.failed) throw value.error; return value.value; };
+  const join = async () => { const failures = []; for (let i = 0; i < roots.length; i++) { const outcome = await roots[i].outcome; if (outcome.failed && !roots[i].used) { roots[i].used = true; failures.push(outcome.error); } } return failures; };
+  return { own, readBody, dispatch, take, join };
+}
+
+for (const primary of [undefined, new Error('fixture shared failure')]) test('host late Response body joins after early primary, retaining independent failure origins: ' + (primary === undefined ? 'undefined' : 'shared'), async () => {
+  let resolveFetch, bodyReads = 0;
+  const fetch = new Promise(resolve => { resolveFetch = resolve; });
+  const owned = nativeFixtureRoots(() => fetch), response = new Response('late fixture body');
+  response.text = () => { bodyReads++; return Promise.reject(primary); };
+  owned.dispatch('https://fixture/late');
+  // Control release fails independently AFTER it releases the original fetch.
+  const failures = []; try { resolveFetch(response); throw primary; } catch (error) { failures.push(error); }
+  failures.push(...await owned.join());
+  assert.equal(bodyReads, 1); assert.equal(owned.readBody(response), owned.readBody(response));
+  const outcome = new AggregateError([primary, ...failures], 'fixture primary and independent cleanup');
+  assert.equal(outcome.errors.length, 3); for (const error of outcome.errors) assert.equal(error, primary);
+  assert.deepEqual(await owned.join(), []);
+});
+
+test('inactive owned generation consumption uses actual native KV/SQLite, prefetch cleanup and foreign-request cohorts', { timeout: 120000 }, async t => {
+  const releases = []; let directory, runtime, cleanupPromise, finished = false, hasPrimary = false, primary;
+  const { own, readBody, dispatch, take, join: joinRoots } = nativeFixtureRoots(url => runtime.dispatchFetch(url));
   const cleanup = () => cleanupPromise ??= (async () => {
     const failures = [];
     for (const release of releases) try { await release(); } catch (error) { failures.push(error); }
-    for (let i = 0; i < roots.length; i++) { const outcome = await roots[i].outcome; if (outcome.failed && !roots[i].used) { roots[i].used = true; failures.push(outcome.error); } }
+    failures.push(...await joinRoots());
     if (runtime) try { await runtime.dispose(); } catch (error) { failures.push(error); }
     if (directory) try { await rm(directory, { recursive: true, force: true }); } catch (error) { failures.push(error); }
     return failures;
@@ -186,30 +266,37 @@ test('inactive owned generation consumption uses actual native KV/SQLite, prefet
   try {
     directory = await mkdtemp(join(tmpdir(), 'identity-generations-'));
     runtime = await take(own(startWorkerdFixture(directory, router, upstream, { preventEviction: true })));
-    for (const mode of ['owned-auth', 'coverage-denied', 'disabled', 'pressure', 'prefetch-healthy', 'prefetch-held-read', 'prefetch-held-cancel', 'prefetch-unlock-failure']) {
-      const response = await take(own(runtime.dispatchFetch('https://fixture/' + mode)));
-      const body = await take(own(response.text())); assert.equal(response.status, 200, mode);
+    for (const mode of ['owned-auth', 'coverage-denied', 'disabled', 'pressure', 'origin-select', 'shared-runtime', 'prefetch-healthy', 'prefetch-held-read', 'prefetch-held-cancel', 'prefetch-unlock-failure']) {
+      const response = await take(dispatch('https://fixture/' + mode));
+      const body = await take(readBody(response)); assert.equal(response.status, 200, mode);
       const result = JSON.parse(body);
       const log = typeof t.log === 'function' ? t.log : t.diagnostic;
       try { if (typeof log === 'function') Reflect.apply(log, t, [JSON.stringify({ fixture: 'identity-generations', case: mode, status: response.status, nativeReads: result.nativeReads ?? 0, intakes: result.intakes ?? 0 })]); } catch {}
-      assert.equal(result.charged, 0); assert.ok(result.nativeReads > 0); assert.equal(result.intakes, 1); if (mode.startsWith('prefetch-')) { assert.equal(result.materializations, 1); assert.ok(result.materializationReads > 0); }
+      assert.equal(result.charged, 0); assert.ok(result.nativeReads > 0); assert.equal(result.intakes, mode === 'shared-runtime' ? 2 : 1); if (mode.startsWith('prefetch-')) { assert.equal(result.materializations, 1); assert.ok(result.materializationReads > 0); }
     }
     let cohortOpen = true;
-    const releaseCohort = async () => { if (!cohortOpen) return; cohortOpen = false; const response = await take(own(runtime.dispatchFetch('https://fixture/cohort-release'))); await take(own(response.text())); assert.equal(response.status, 200); };
+    const releaseCohort = async () => { if (!cohortOpen) return; cohortOpen = false; const response = await take(dispatch('https://fixture/cohort-release')); await take(readBody(response)); assert.equal(response.status, 200); };
     releases.push(releaseCohort);
-    const prepared = await take(own(runtime.dispatchFetch('https://fixture/cohort-prepare'))); await take(own(prepared.text())); assert.equal(prepared.status, 200);
-    const first = own(runtime.dispatchFetch('https://fixture/cohort-a'));
-    const barrier = own(runtime.dispatchFetch('https://fixture/cohort-arrival'));
+    const prepareRoot = dispatch('https://fixture/cohort-prepare');
+    const readyRoot = dispatch('https://fixture/cohort-ready');
+    const readiness = await Promise.race([readyRoot.outcome.then(outcome => ({ ready: true, outcome })), prepareRoot.outcome.then(outcome => ({ ready: false, outcome }))]);
+    if (!readiness.ready) { const early = await take(prepareRoot); await take(readBody(early)); assert.fail('saturation origin completed before readiness: ' + early.status); }
+    const readyResponse = await take(readyRoot); assert.equal(await take(readBody(readyResponse)), 'ready'); assert.equal(readyResponse.status, 200);
+    const first = dispatch('https://fixture/cohort-a');
+    const barrier = dispatch('https://fixture/cohort-arrival');
     const arrived = await Promise.race([barrier.outcome.then(outcome => ({ entered: true, outcome })), first.outcome.then(outcome => ({ entered: false, outcome }))]);
-    if (!arrived.entered) { const response = await take(first); const body = await take(own(response.text())); assert.fail('cohort A returned before hold: ' + response.status); }
-    const arrivalResponse = await take(barrier); await take(own(arrivalResponse.text())); assert.equal(arrivalResponse.status, 200);
-    const secondResponse = await take(own(runtime.dispatchFetch('https://fixture/cohort-b'))), secondBody = await take(own(secondResponse.text()));
+    if (!arrived.entered) { const response = await take(first); const body = await take(readBody(response)); assert.fail('cohort A returned before hold: ' + response.status); }
+    const arrivalResponse = await take(barrier); await take(readBody(arrivalResponse)); assert.equal(arrivalResponse.status, 200);
+    const secondResponse = await take(dispatch('https://fixture/cohort-b')), secondBody = await take(readBody(secondResponse));
     assert.equal(secondResponse.status, 200); const second = JSON.parse(secondBody); assert.equal(second.selectedCount, 2); assert.equal(second.records, 2); assert.ok(second.charged > 0);
     await releaseCohort();
-    const firstResponse = await take(first), firstBody = await take(own(firstResponse.text())); assert.equal(firstResponse.status, 200);
-    const final = JSON.parse(firstBody); assert.equal(final.selectedCount, 2); assert.equal(final.records, 2); assert.equal(final.charged, 0);
+    const firstResponse = await take(first), firstBody = await take(readBody(firstResponse)); assert.equal(firstResponse.status, 200);
+    const final = JSON.parse(firstBody); assert.equal(final.selectedCount, 2); assert.equal(final.records, 2);
+    const prepared = await take(prepareRoot); await take(readBody(prepared)); assert.equal(prepared.status, 200);
+    const completedResponse = await take(dispatch('https://fixture/cohort-finished'));
+    const completed = JSON.parse(await take(readBody(completedResponse))); assert.equal(completedResponse.status, 200); assert.equal(completed.charged, 0);
     const log = typeof t.log === 'function' ? t.log : t.diagnostic;
-    try { if (typeof log === 'function') Reflect.apply(log, t, [JSON.stringify({ fixture: 'identity-generations', case: 'foreign-cohorts', status: 200, records: final.records, selectedCount: final.selectedCount, charged: final.charged })]); } catch {}
+    try { if (typeof log === 'function') Reflect.apply(log, t, [JSON.stringify({ fixture: 'identity-generations', case: 'foreign-cohorts', status: 200, records: final.records, selectedCount: final.selectedCount, charged: completed.charged })]); } catch {}
   } catch (error) { hasPrimary = true; primary = error; }
   const failures = await cleanup(); finished = true;
   if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, 'native generation roots');

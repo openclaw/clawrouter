@@ -45,8 +45,8 @@ export function sameGenerationCoverage(owned: GenerationCoverage, required: Gene
 export function generationCoverageLayout(input: GenerationCoverage): { bytes: number; fields: number } {
   if (!Array.isArray(input.providers) || typeof input.allConnections !== "boolean"
     || input.snapshot !== undefined && input.snapshot !== "only" && input.snapshot !== "select") throw identityFailure("protocol");
-  let bytes = 2 * "value,funding,cache,providers,allConnections,snapshot,selection".replaceAll(",", "").length + 1;
-  let fields = 12;
+  let bytes = 2 * "value,funding,cache,initialBorrow,generationSnapshotOnly,providers,allConnections,snapshot,selection".replaceAll(",", "").length + 1;
+  let fields = 15;
   const scalar = (value: unknown): void => {
     if (typeof value === "string") bytes += 2 * value.length;
     else if (value === undefined || value === null) bytes++;
@@ -147,6 +147,7 @@ export const generationConsumptionFactoryCharges = Object.freeze({
     sourceBudgetWireOwnerAndResponseHandoff: 5,
     receiptAndFrozenCapabilityProducts: 4,
     registrationFailureOriginAndCleanupCallFrames: 8,
+    pendingCapTransferClaimAndRollbackCallProducts: 8,
   }),
   source: Object.freeze({
     originalAcquisitionPromiseExecutorResolversObserverAndFollower: 8,
@@ -178,6 +179,7 @@ export const generationConsumptionFactoryCharges = Object.freeze({
     registryEntryPartitionSlotAndMetadataRetirementFrames: 14,
     independentFailureListsCellsAndAggregateProducts: 28,
     receiptResolveRejectCallbacksAndTerminalFrames: 8,
+    pendingCapAndAuthorityObservationRetirementFrames: 10,
   }),
   // The phase rows below replace each other only after their last consumers
   // return. Persistent is added to EACH row, including across original awaits.
@@ -187,6 +189,8 @@ export const generationConsumptionFactoryCharges = Object.freeze({
     authenticationOwnerCapabilityRegistryLeaseAndParentProducts: 53,
     selectionOwnerCapabilityRegistryLeaseAndWeakEntry: 21,
     hintOwnerCapabilityRegistryLeaseAndWeakEntry: 12,
+    originatingReceiptAndAuthorityRuntimeFields: 8,
+    pendingCapabilityRegistryChargeAndCounter: 4,
   }),
   coverage: Object.freeze({
     prevalidationFrameLeasePlanAndSerializationGuardProducts: 26,
@@ -210,6 +214,7 @@ export const generationConsumptionFactoryCharges = Object.freeze({
     copyFreezeTraversalAndEnumerationFrames: 48,
     newOverlayOwnerMapsAndCommitFrames: 18,
     pendingRecordPreparationAndParentBorrowFrames: 20,
+    initialChoicePredicateDebitReceiptAndRuntimeViewOwner: 14,
   }),
   runtime: Object.freeze({
     independentWorkLocalPendingLeasesAndReplacementProducts: 20,
@@ -219,6 +224,12 @@ export const generationConsumptionFactoryCharges = Object.freeze({
     prospectiveOverlayPlanClosuresFramesAndDescriptors: 104,
     copyFreezeTraversalAndEnumerationFrames: 48,
     replacementPendingOwnerParentIndexesAndCleanupFrames: 64,
+    sharedObservationReplacementOwnershipAndUnwindFrames: 14,
+  }),
+  runtimeView: Object.freeze({
+    outerFrameLeaseAndLookupProducts: 16,
+    prospectiveProfileFramesAndDescriptors: 80,
+    sequentialMergeCopyAndReturnProducts: 24,
   }),
   cohort: Object.freeze({
     // 4 * (record+11 fields, lease+exact charge 5, borrower+funding 28,
@@ -230,6 +241,7 @@ export const generationConsumptionFactoryCharges = Object.freeze({
     claimScanCursorDecisionAndValidationFrames: 12,
     independentFailureCellsAggregateAndUnwindFrames: 28,
     prospectiveEnvelopePlanClosuresAndNestedFrames: 24,
+    pendingCapFieldCapabilityWeakEntryClaimAndRollback: 12,
   }),
   prefetch: Object.freeze({
     capOwnerFieldsLeaseRegistryWeakEntryAndCapability: 24,
@@ -244,7 +256,7 @@ export function admitGenerationConsumptionFactories(): void {
   const sum = (table: Readonly<Record<string, number>>) => { let result = 0; for (const key in table) result += table[key]; return result; };
   const table = generationConsumptionFactoryCharges, persistent = sum(table.persistent);
   if (sum(table.operation) > 128 || sum(table.source) > 128 || sum(table.read) > 128 || sum(table.terminal) > 128
-    || persistent + Math.max(sum(table.coverage), sum(table.authentication), sum(table.selection), sum(table.runtime), sum(table.cohort), sum(table.prefetch)) > 512) throw identityFailure("protocol");
+    || persistent + Math.max(sum(table.coverage), sum(table.authentication), sum(table.selection), sum(table.runtime), sum(table.runtimeView), sum(table.cohort), sum(table.prefetch)) > 512) throw identityFailure("protocol");
 }
 
 // Metadata layout is charged independently in the common arena before its
