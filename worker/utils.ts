@@ -1,10 +1,5 @@
-import { isPreparationLimit } from "./provider-templates.ts";
-import { beginOwnedHttpError, finishOwnedHttpError, finishOwnedHttpFailure, failOwnedHttpError, isOwnedHttpLocalFailure, beginOwnedHttpMetadataStage, admitOwnedHttpMetadata, finishOwnedHttpMetadataStage, type OwnedHttpLocalFailure, type OwnedHttpRequest } from "./http-identity-owner.ts";
-import { newOwnedHeaders, newOwnedResponse, captureOwnedResponseMetadata, cloneOwnedMetadataResponse, measureOwnedHeaders, setOwnedHeader } from "./proxy-completion.ts";
-import { markOwnedLocalError, inheritOwnedLocalError } from "./native-errors.ts";
-import { isIdentityFailure, identityFailure } from "./identity-admission.ts";
 import { logCorrelationError } from "./correlation.ts";
-import { createJsonBodyParser, JsonBodyStructureLimit, isAccountingAdmissionFailure } from "./json-body.ts";
+import { createJsonBodyParser, JsonBodyStructureLimit } from "./json-body.ts";
 import { markLocalError } from "./native-errors.ts";
 
 const corsHeaders = {
@@ -254,103 +249,8 @@ export function caughtResponse(error: unknown, requestId: string): Response {
 
 // References to the existing module's initial constants, not duplicate values.
 // Ordinary helpers keep their original object and property-read behavior.
-const ownedCorsOrigin = corsHeaders["access-control-allow-origin"];
-const ownedCorsMethods = corsHeaders["access-control-allow-methods"];
-const ownedCorsAllow = corsHeaders["access-control-allow-headers"];
-const ownedCorsBase = corsHeaders["access-control-expose-headers"];
-const ownedCorsAge = corsHeaders["access-control-max-age"];
-const ownedCorsForEach = Headers.prototype.forEach;
-const ownedCorsApply = Reflect.apply;
-const ownedCorsStartsWith = String.prototype.startsWith;
-interface OwnedCorsScan { count: number; units: number; exposed: string | undefined }
-function collectOwnedCors(this: OwnedCorsScan, _value: string, name: string): void {
-  if (!ownedCorsApply(ownedCorsStartsWith, name, ["x-ratelimit-"])
-    && !ownedCorsApply(ownedCorsStartsWith, name, ["anthropic-ratelimit-"])) return;
-  this.count++; this.units += name.length;
-  if (this.exposed !== undefined) this.exposed += "," + name;
-}
-function scanOwnedCors(headers: Headers): OwnedCorsScan {
-  const state: OwnedCorsScan = { count: 0, units: 0, exposed: undefined };
-  ownedCorsApply(ownedCorsForEach, headers, [collectOwnedCors, state]);
-  return state;
-}
-export function withOwnedCors(cap: OwnedHttpRequest, response: Response, path: string): Response {
-  beginOwnedHttpMetadataStage(cap, response, 5, undefined, path);
-  if (path !== "/v1" && !ownedCorsApply(ownedCorsStartsWith, path, ["/v1/"])
-    && !ownedCorsApply(ownedCorsStartsWith, path, ["/api/"])) return finishOwnedHttpMetadataStage(cap, response, 5, response);
-  const source = captureOwnedResponseMetadata(response), measured = measureOwnedHeaders(source.headers);
-  const scan = scanOwnedCors(source.headers), base = ownedCorsBase;
-  const exposed = base.length + scan.count + scan.units;
-  const constants = ownedCorsOrigin.length + ownedCorsMethods.length
-    + ownedCorsAllow.length + ownedCorsAge.length;
-  // Both fold operands/result, native header copies, fixed names/init and source
-  // stay additive. Native header names are unique; no rate name is in the base
-  // expose list, so the fixed fold reproduces Set order without APP pair history.
-  admitOwnedHttpMetadata(cap, response, 5, 8192 + 3 * measured + 4 * source.statusText.length + 12 * exposed + 8 * (constants + 192));
-  const final = scanOwnedCors(source.headers);
-  if (measureOwnedHeaders(source.headers) > measured || final.count > scan.count || final.units > scan.units)
-    throw identityFailure("protocol");
-  const copy = cloneOwnedMetadataResponse(source), headers = captureOwnedResponseMetadata(copy).headers;
-  setOwnedHeader(headers, "access-control-allow-origin", ownedCorsOrigin);
-  setOwnedHeader(headers, "access-control-allow-methods", ownedCorsMethods);
-  setOwnedHeader(headers, "access-control-allow-headers", ownedCorsAllow);
-  setOwnedHeader(headers, "access-control-expose-headers", base);
-  setOwnedHeader(headers, "access-control-max-age", ownedCorsAge);
-  final.exposed = base;
-  ownedCorsApply(ownedCorsForEach, source.headers, [collectOwnedCors, final]);
-  setOwnedHeader(headers, "access-control-expose-headers", final.exposed!);
-  inheritOwnedLocalError(response, copy);
-  return finishOwnedHttpMetadataStage(cap, response, 5, copy);
-}
-
-// Initial private errors never reach ordinary json()/Response.json(). Every
-// serialized record has own data properties and no inherited serialization hook.
-const ownedErrorStringify = JSON.stringify;
-const ownedErrorFreeze = Object.freeze;
-function ownedErrorBytes(code: string, message: string, retryAfter: string | undefined, expiresAt: string | null | undefined): number {
-  const units = code.length + message.length + (retryAfter?.length ?? 0) + (expiresAt?.length ?? 0);
-  return 8192 + 14 * (6 * units + 128) + 8 * units;
-}
-function createOwnedErrorResponse(cap: OwnedHttpRequest, code: string, message: string, status: number,
-  retryAfter: string | undefined, expiry: boolean, expiresAt: string | null | undefined): Response {
-  if (typeof code !== "string" || typeof message !== "string" || typeof status !== "number"
-    || retryAfter !== undefined && typeof retryAfter !== "string"
-    || expiresAt !== undefined && expiresAt !== null && typeof expiresAt !== "string") return failOwnedHttpError(cap);
-  beginOwnedHttpError(cap, ownedErrorBytes(code, message, retryAfter, expiresAt));
-  try {
-    const error = { __proto__: null, code, message };
-    const envelope = expiry ? { __proto__: null, error, expiresAt, expired: true, active: false } : { __proto__: null, error };
-    const text = ownedErrorStringify(envelope);
-    const headers = newOwnedHeaders();
-    setOwnedHeader(headers, "content-type", "application/json; charset=utf-8");
-    if (retryAfter !== undefined) setOwnedHeader(headers, "retry-after", retryAfter);
-    const response = markOwnedLocalError(newOwnedResponse(text, status, "", headers), code, message);
-    finishOwnedHttpError(cap, response);
-    return response;
-  } catch { return failOwnedHttpError(cap); }
-}
-export function ownedErrorResponse(cap: OwnedHttpRequest, code: string, message: string, status: number, retryAfter?: string): Response {
-  return createOwnedErrorResponse(cap, code, message, status, retryAfter, false, undefined);
-}
-export function ownedExpiryResponse(cap: OwnedHttpRequest, code: string, message: string, expiresAt: string | null | undefined): Response {
-  return createOwnedErrorResponse(cap, code, message, 401, undefined, true, expiresAt);
-}
-export function ownedHttpError(cap: OwnedHttpRequest, status: number, code: string, message: string, retryAfter?: string): OwnedHttpLocalFailure {
-  if (typeof code !== "string" || typeof message !== "string" || typeof status !== "number"
-    || retryAfter !== undefined && typeof retryAfter !== "string") return failOwnedHttpError(cap);
-  beginOwnedHttpError(cap, 4096 + 8 * (code.length + message.length + (retryAfter?.length ?? 0)));
-  try {
-    const headers = retryAfter === undefined ? undefined : ownedErrorFreeze({ __proto__: null, "retry-after": retryAfter } as { "retry-after": string });
-    const failure = ownedErrorFreeze({ __proto__: null, status, code, message, headers });
-    finishOwnedHttpFailure(cap, failure);
-    return failure;
-  } catch { return failOwnedHttpError(cap); }
-}
-export function caughtOwnedResponse(cap: OwnedHttpRequest, error: unknown, requestId?: string): Response {
-  // Transport rejection values do not acquire authority through instanceof.
-  if (isOwnedHttpLocalFailure(cap, error) || isIdentityFailure(error) || isPreparationLimit(error) || isAccountingAdmissionFailure(error))
-    return ownedErrorResponse(cap, error.code, error.message, error.status, error.headers?.["retry-after"]);
-  const response = ownedErrorResponse(cap, "internal_error", "internal server error", 500);
-  if (typeof requestId === "string") logCorrelationError("unhandled request error", requestId);
-  return response;
-}
+export const ownedCorsOrigin = corsHeaders["access-control-allow-origin"];
+export const ownedCorsMethods = corsHeaders["access-control-allow-methods"];
+export const ownedCorsAllow = corsHeaders["access-control-allow-headers"];
+export const ownedCorsBase = corsHeaders["access-control-expose-headers"];
+export const ownedCorsAge = corsHeaders["access-control-max-age"];

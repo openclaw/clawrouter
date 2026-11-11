@@ -1,3 +1,5 @@
+import { ownedHttpRequestReceiver } from "./proxy-completion.ts";
+
 import { admitAdmission, admitIdentity, admittedEffectivePolicy, identityFailure, identityPlan } from "./identity-admission.ts";
 import { videoControlVersion, videoUnavailable, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { authorityCall } from "./authority.ts";
@@ -18,8 +20,8 @@ import type { GrantSelectionResult } from "./grant-eligibility.ts";
 import type { AccessPolicyEntry, AuthorizedIdentity, Env, ProxyCredential } from "./types";
 import type { AdmissionProvider, AdmissionResult } from "./authority.ts";
 import { resolveAdmission } from "./admission-cache.ts";
-import { ownedErrorResponse, errorResponse, HttpError, parseProxyKey, safeEqual, sha256Hex } from "./utils.ts";
-import { checkOwnedHttpRequest, growOwnedHttpRequest, ownedHttpCompletion, type OwnedHttpRequest } from "./http-identity-owner.ts";
+import { errorResponse, HttpError, parseProxyKey, safeEqual, sha256Hex } from "./utils.ts";
+import type { OwnedHttpRequest } from "./http-identity-owner.ts";
 import { resolveOwnedHttpAuthentication, matchesOwnedHttpControlVerification } from "./credential-preflight.ts";
 
 export interface ProxyKeyVerification { readonly kind: "proxy_key"; readonly credentialId: string; readonly principalId: string | null; readonly secretSha256: string; readonly expiresAt?: string | null }
@@ -254,4 +256,28 @@ function proxyKeyIngress(headers: Headers) {
     if (raw.includes("clawrouter-") || raw.includes("ocpk_")) intent = true;
   }
   return { parsed: null, intent };
+}
+
+function ownedErrorResponse(cap: Parameters<typeof import("./http-identity-owner.ts").ownedErrorResponse>[0], code: Parameters<typeof import("./http-identity-owner.ts").ownedErrorResponse>[1], message: Parameters<typeof import("./http-identity-owner.ts").ownedErrorResponse>[2], status: Parameters<typeof import("./http-identity-owner.ts").ownedErrorResponse>[3], retryAfter?: Parameters<typeof import("./http-identity-owner.ts").ownedErrorResponse>[4]): ReturnType<typeof import("./http-identity-owner.ts").ownedErrorResponse> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.ownedErrorResponse(cap, code, message, status, retryAfter);
+}
+
+function checkOwnedHttpRequest(cap: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpRequest>[0], request: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpRequest>[1], env: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpRequest>[2]): ReturnType<typeof import("./http-identity-owner.ts").checkOwnedHttpRequest> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.checkOwnedHttpRequest(cap, request, env);
+}
+
+function growOwnedHttpRequest(cap: Parameters<typeof import("./http-identity-owner.ts").growOwnedHttpRequest>[0], bytes: Parameters<typeof import("./http-identity-owner.ts").growOwnedHttpRequest>[1]): ReturnType<typeof import("./http-identity-owner.ts").growOwnedHttpRequest> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.growOwnedHttpRequest(cap, bytes);
+}
+
+function ownedHttpCompletion(cap: Parameters<typeof import("./http-identity-owner.ts").ownedHttpCompletion>[0]): ReturnType<typeof import("./http-identity-owner.ts").ownedHttpCompletion> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.ownedHttpCompletion(cap);
 }

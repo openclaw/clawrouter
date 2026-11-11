@@ -594,3 +594,23 @@ export abstract class OwnedReaderDriver {
     } catch (reason) { this.recordDriverFailure("retire", reason); reason = undefined; this.uncertain(); }
   }
 }
+
+
+// Canonical registrations are written only by the fixed funded owner factories.
+// The leaf never imports, constructs or selects an HTTP implementation.
+export class OwnedHttpRegistrations {
+  declare static requests: WeakMap<import("./http-identity-owner.ts").OwnedHttpRequest, import("./http-identity-owner.ts").OwnedHttpRequestReceiver> | undefined;
+  declare static sinkOwners: WeakMap<import("./http-identity-owner.ts").OwnedHttpSinkOwner, import("./http-identity-owner.ts").OwnedHttpRequestReceiver> | undefined;
+  declare static revalidations: WeakMap<import("./http-identity-owner.ts").OwnedHttpRevalidation, import("./http-identity-owner.ts").OwnedHttpRevalidationReceiver> | undefined;
+  declare static registryFunding: ExactBodyCharge | undefined;
+  static requestCount = 0;
+}
+export function ownedHttpRequestReceiver(cap: import("./http-identity-owner.ts").OwnedHttpRequest) {
+  return OwnedHttpRegistrations.requests?.get(cap);
+}
+export function ownedHttpSinkReceiver(cap: import("./http-identity-owner.ts").OwnedHttpSinkOwner) {
+  return OwnedHttpRegistrations.sinkOwners?.get(cap);
+}
+export function ownedHttpRevalidationReceiver(cap: import("./http-identity-owner.ts").OwnedHttpRevalidation) {
+  return OwnedHttpRegistrations.revalidations?.get(cap);
+}

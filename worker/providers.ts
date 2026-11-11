@@ -1,10 +1,11 @@
+import { ownedHttpRequestReceiver } from "./proxy-completion.ts";
 import { selectOwnedHttpIdentity, prepareOwnedHttpCredential, reserveOwnedHttpForeground, type OwnedHttpCredential, type GenerationSelectionHandle } from "./credential-preflight.ts";
-import { beginOwnedHttpError, finishOwnedHttpFailure, checkOwnedHttpRequest, growOwnedHttpRequest, reserveOwnedHttpRevalidationOrigins, type OwnedHttpRequest } from "./http-identity-owner.ts";
+import type { OwnedHttpRequest } from "./http-identity-owner.ts";
 import { identityFailure as ownedHttpIdentityFailure } from "./identity-admission.ts";
-import { checkOwnedHttpProviderInput, acceptOwnedHttpConfiguredProvider, matchesOwnedHttpAttemptInput, bindOwnedHttpAttemptPermit, bindOwnedHttpAttemptCredential, completeOwnedHttpAttemptProvider } from "./proxy.ts";
+
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { ProxyQuery } from "./proxy-query.ts";
-import { reserveOwnedHttpSerialization } from "./pricing.ts";
+
 
 import { admitIdentity, isIdentityFailure } from "./identity-admission.ts";
 import type { MiniMaxVideoOperation } from "./minimax-video-operation.ts";
@@ -30,10 +31,7 @@ import { hotCacheConfig, registerHotCache, tryRunInBackground } from "./hot-cach
 import { cachedGrantCredentials, evictGrantCredentials, prepareOwnedHttpGrantCredentials } from "./credential-cache.ts";
 import { recordCredentialWait } from "./admission-timing.ts";
 import { applyProviderCredential, applyTransportHeaders, assertOperationConfiguration, grantSupports, providerConfigPresent, providerSecretConfigKey, transportForGrant, type GrantRequirement } from "./provider-auth.ts";
-import type {
-  AccessPolicyEntry, AuthorizedIdentity, CompiledEndpoint, CompiledGrantTransport, CompiledModel, CompiledProvider, Env,
-  ProviderConnection, ProviderHealth, ProviderSnapshot, UpstreamGrant,
-} from "./types.ts";
+import type { AccessPolicyEntry, AuthorizedIdentity, CompiledEndpoint, CompiledGrantTransport, CompiledModel, CompiledProvider, Env, ProviderConnection, ProviderHealth, ProviderSnapshot, UpstreamGrant,  } from "./types.ts";
 import { envValue, HttpError, sha256Hex } from "./utils.ts";
 import { providerConfigurationList } from "./provider-connections.ts";
 import { beginPrivateConfiguration, consumePrivateConfiguration, endPrivateConfiguration, applyTemplateHeaders, optionalConfigKeys, resolveHeaderTemplate, resolveTemplate, templateCandidates, PreparationAdmission, isPreparationLimit, preparationValue, preparationHeader, preparationBytes, preparationEncodedBytes } from "./provider-templates.ts";
@@ -747,4 +745,76 @@ export async function consumeOwnedHttpProviderCredential(permit: object, cap: Ow
 function selectionUpstreamModelForOwned(selection: ProxySelection): string | null {
   return !Array.isArray(selection.body) && typeof selection.body.model === "string" ? selection.body.model
     : selection.pathParams.model ?? selection.pathParams.deployment ?? selection.pathParams.model_id ?? null;
+}
+
+function beginOwnedHttpError(cap: Parameters<typeof import("./http-identity-owner.ts").beginOwnedHttpError>[0], bytes: Parameters<typeof import("./http-identity-owner.ts").beginOwnedHttpError>[1]): ReturnType<typeof import("./http-identity-owner.ts").beginOwnedHttpError> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.beginOwnedHttpError(cap, bytes);
+}
+
+function finishOwnedHttpFailure(cap: Parameters<typeof import("./http-identity-owner.ts").finishOwnedHttpFailure>[0], failure: Parameters<typeof import("./http-identity-owner.ts").finishOwnedHttpFailure>[1]): ReturnType<typeof import("./http-identity-owner.ts").finishOwnedHttpFailure> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.finishOwnedHttpFailure(cap, failure);
+}
+
+function checkOwnedHttpRequest(cap: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpRequest>[0], request: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpRequest>[1], env: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpRequest>[2]): ReturnType<typeof import("./http-identity-owner.ts").checkOwnedHttpRequest> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.checkOwnedHttpRequest(cap, request, env);
+}
+
+function growOwnedHttpRequest(cap: Parameters<typeof import("./http-identity-owner.ts").growOwnedHttpRequest>[0], bytes: Parameters<typeof import("./http-identity-owner.ts").growOwnedHttpRequest>[1]): ReturnType<typeof import("./http-identity-owner.ts").growOwnedHttpRequest> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.growOwnedHttpRequest(cap, bytes);
+}
+
+function reserveOwnedHttpRevalidationOrigins(http: Parameters<typeof import("./http-identity-owner.ts").reserveOwnedHttpRevalidationOrigins>[0], providerId: Parameters<typeof import("./http-identity-owner.ts").reserveOwnedHttpRevalidationOrigins>[1]): ReturnType<typeof import("./http-identity-owner.ts").reserveOwnedHttpRevalidationOrigins> {
+  const receiver = ownedHttpRequestReceiver(http);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.reserveOwnedHttpRevalidationOrigins(http, providerId);
+}
+
+function checkOwnedHttpProviderInput(cap: Parameters<typeof import("./proxy.ts").checkOwnedHttpProviderInput>[0], request: Parameters<typeof import("./proxy.ts").checkOwnedHttpProviderInput>[1], env: Parameters<typeof import("./proxy.ts").checkOwnedHttpProviderInput>[2], selection: Parameters<typeof import("./proxy.ts").checkOwnedHttpProviderInput>[3]): ReturnType<typeof import("./proxy.ts").checkOwnedHttpProviderInput> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.checkOwnedHttpProviderInput(cap, request, env, selection);
+}
+
+function acceptOwnedHttpConfiguredProvider(cap: Parameters<typeof import("./proxy.ts").acceptOwnedHttpConfiguredProvider>[0], request: Parameters<typeof import("./proxy.ts").acceptOwnedHttpConfiguredProvider>[1], env: Parameters<typeof import("./proxy.ts").acceptOwnedHttpConfiguredProvider>[2], selection: Parameters<typeof import("./proxy.ts").acceptOwnedHttpConfiguredProvider>[3], query: Parameters<typeof import("./proxy.ts").acceptOwnedHttpConfiguredProvider>[4], identity: Parameters<typeof import("./proxy.ts").acceptOwnedHttpConfiguredProvider>[5], connection: Parameters<typeof import("./proxy.ts").acceptOwnedHttpConfiguredProvider>[6], upstream: Parameters<typeof import("./proxy.ts").acceptOwnedHttpConfiguredProvider>[7], preparation: Parameters<typeof import("./proxy.ts").acceptOwnedHttpConfiguredProvider>[8], permit: Parameters<typeof import("./proxy.ts").acceptOwnedHttpConfiguredProvider>[9], selected: Parameters<typeof import("./proxy.ts").acceptOwnedHttpConfiguredProvider>[10]): ReturnType<typeof import("./proxy.ts").acceptOwnedHttpConfiguredProvider> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.acceptOwnedHttpConfiguredProvider(cap, request, env, selection, query, identity, connection, upstream, preparation, permit, selected);
+}
+
+function matchesOwnedHttpAttemptInput(cap: Parameters<typeof import("./proxy.ts").matchesOwnedHttpAttemptInput>[0], request: Parameters<typeof import("./proxy.ts").matchesOwnedHttpAttemptInput>[1], env: Parameters<typeof import("./proxy.ts").matchesOwnedHttpAttemptInput>[2], input: Parameters<typeof import("./proxy.ts").matchesOwnedHttpAttemptInput>[3], selection: Parameters<typeof import("./proxy.ts").matchesOwnedHttpAttemptInput>[4], signal: Parameters<typeof import("./proxy.ts").matchesOwnedHttpAttemptInput>[5], permit?: Parameters<typeof import("./proxy.ts").matchesOwnedHttpAttemptInput>[6]): ReturnType<typeof import("./proxy.ts").matchesOwnedHttpAttemptInput> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.matchesOwnedHttpAttemptInput(cap, request, env, input, selection, signal, permit);
+}
+
+function bindOwnedHttpAttemptPermit(cap: Parameters<typeof import("./proxy.ts").bindOwnedHttpAttemptPermit>[0], request: Parameters<typeof import("./proxy.ts").bindOwnedHttpAttemptPermit>[1], env: Parameters<typeof import("./proxy.ts").bindOwnedHttpAttemptPermit>[2], input: Parameters<typeof import("./proxy.ts").bindOwnedHttpAttemptPermit>[3], selection: Parameters<typeof import("./proxy.ts").bindOwnedHttpAttemptPermit>[4], signal: Parameters<typeof import("./proxy.ts").bindOwnedHttpAttemptPermit>[5], permit: Parameters<typeof import("./proxy.ts").bindOwnedHttpAttemptPermit>[6]): ReturnType<typeof import("./proxy.ts").bindOwnedHttpAttemptPermit> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.bindOwnedHttpAttemptPermit(cap, request, env, input, selection, signal, permit);
+}
+
+function bindOwnedHttpAttemptCredential(cap: Parameters<typeof import("./proxy.ts").bindOwnedHttpAttemptCredential>[0], permit: Parameters<typeof import("./proxy.ts").bindOwnedHttpAttemptCredential>[1], credential: Parameters<typeof import("./proxy.ts").bindOwnedHttpAttemptCredential>[2]): ReturnType<typeof import("./proxy.ts").bindOwnedHttpAttemptCredential> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.bindOwnedHttpAttemptCredential(cap, permit, credential);
+}
+
+function completeOwnedHttpAttemptProvider(cap: Parameters<typeof import("./proxy.ts").completeOwnedHttpAttemptProvider>[0], permit: Parameters<typeof import("./proxy.ts").completeOwnedHttpAttemptProvider>[1]): ReturnType<typeof import("./proxy.ts").completeOwnedHttpAttemptProvider> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.completeOwnedHttpAttemptProvider(cap, permit);
+}
+
+function reserveOwnedHttpSerialization(cap: Parameters<typeof import("./pricing.ts").reserveOwnedHttpSerialization>[0], body: Parameters<typeof import("./pricing.ts").reserveOwnedHttpSerialization>[1]): ReturnType<typeof import("./pricing.ts").reserveOwnedHttpSerialization> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.reserveOwnedHttpSerialization(cap, body);
 }

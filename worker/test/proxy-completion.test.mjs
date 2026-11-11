@@ -344,3 +344,43 @@ for (const mode of ["sse-replay", "sse-normalization", "json-normalization"]) fo
     });
   });
 }
+
+// UNRUN_CODE_ONLY_HOSTED. The same native setup loads ordinary helpers in a
+// fresh process; no application loader or dependency repair is substituted.
+test("ordinary ledger and usage imports do not activate private HTTP orchestration", async () => {
+  const { execFile } = await import("node:child_process"), { promisify } = await import("node:util");
+  const setup = new URL("./typescript-setup.mjs", import.meta.url).href;
+  const modules = ["../utils.ts", "../ledgers.ts", "../token-usage.ts"].map(name => new URL(name, import.meta.url).href);
+  const script = `import { registerHooks } from 'node:module';
+    const seen=[]; const hooks=registerHooks({load(url,context,next){
+      if(/\\/(?:http-identity-owner|proxy-response|proxy)\\.ts$/.test(url))seen.push(url);
+      return next(url,context);
+    }});
+    await import(${JSON.stringify(setup)});
+    for(const url of ${JSON.stringify(modules)})await import(url);
+    hooks.deregister(); if(seen.length)throw Error('ordinary import activated private HTTP: '+seen.join(','));`;
+  await promisify(execFile)(process.execPath, ["--input-type=module", "-e", script], { maxBuffer: 1024 * 1024 });
+});
+
+test("named request receivers require canonical membership and the exact tuple", async () => {
+  const owner = await import("../http-identity-owner.ts"), leaf = await import("../proxy-completion.ts");
+  const { bodyBudgetCharged } = await import("../body-budget.ts");
+  let effects = 0;
+  const env = { get ACCESS_CONTROL() { effects++; throw Error("foreign binding getter"); } };
+  const request = new Request("https://fixture.example/v1/chat/completions");
+  const cap = owner.beginOwnedHttpRequest(request, env), sink = owner.ownedHttpSinkOwner(cap);
+  const receiver = leaf.ownedHttpRequestReceiver(cap), before = bodyBudgetCharged();
+  try {
+    assert.equal(receiver, leaf.ownedHttpSinkReceiver(sink));
+    assert.equal(leaf.ownedHttpRequestReceiver({}), undefined);
+    assert.equal(leaf.ownedHttpRevalidationReceiver({}), undefined);
+    receiver.checkOwnedHttpRequest(cap, request, env);
+    assert.throws(() => receiver.checkOwnedHttpRequest(cap, new Request(request), env));
+    assert.throws(() => receiver.checkOwnedHttpRequest({}, request, env));
+    assert.throws(() => receiver.growOwnedHttpRequest.call(new owner.OwnedHttpRequestReceiver(), cap, 1024));
+    assert.equal(effects, 0); assert.equal(bodyBudgetCharged(), before);
+  } finally { await owner.finishOwnedHttpRequest(cap); }
+  assert.equal(leaf.ownedHttpRequestReceiver(cap), undefined);
+  assert.equal(leaf.ownedHttpSinkReceiver(sink), undefined);
+  assert.equal(effects, 0);
+});

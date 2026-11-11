@@ -1,6 +1,7 @@
+import { ownedErrorResponse } from "./http-identity-owner.ts";
 import { checkOwnedHttpInitialSelection, admitOwnedHttpErrorText, type OwnedHttpRequest } from "./http-identity-owner.ts";
 import { beginPrivateConfiguration, consumePrivateConfiguration, endPrivateConfiguration } from "./provider-templates.ts";
-import { ownedErrorResponse } from "./utils.ts";
+
 import { prepareMiniMaxSearch } from "./minimax-search.ts";
 import { miniMaxSearchRequirement, miniMaxSearchDenied } from "./minimax-search-credential.ts";
 import { prepareVeniceChatBinding } from "./venice-chat-binding.ts";

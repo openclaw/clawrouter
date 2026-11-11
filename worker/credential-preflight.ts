@@ -1,12 +1,12 @@
+import { ownedHttpRequestReceiver } from "./proxy-completion.ts";
+import type { CredentialPreflightReply } from "./credential-preflight-protocol.ts";
+
 import { sealPrivatePreflightRequest, privatePreflightJson, privateAdmissionJson } from "./json-body.ts";
 import { identityJsonProfiles } from "./access-json.ts";
 import type { Env } from "./types";
-import { admitAdmission, admitIdentity, copyIdentity, admittedEffectivePolicy, advanceIdentitySource, identityFailure, identityPlan, identitySourceBudget,
-  identitySourceSnapshot, admitIdentityCount, readIdentityKv, identityUtf8, type IdentitySourceBudget } from "./identity-admission.ts";
+import { admitAdmission, admitIdentity, copyIdentity, admittedEffectivePolicy, advanceIdentitySource, identityFailure, identityPlan, identitySourceBudget, identitySourceSnapshot, admitIdentityCount, readIdentityKv, identityUtf8, type IdentitySourceBudget } from "./identity-admission.ts";
 import { admitBridgeFactories, admitBridgeCopyFactories, admissionBridgePhasePayload, reserveAdmissionScratch, retireAdmissionScratch, PreflightTicket, GenerationMetadataCharge, GenerationConsumptionLease, admissionScratchBytes, type GenerationRetainedCharge } from "./credential-preflight-arena.ts";
-import { admitGenerationFactories, admitGenerationConsumptionFactories, generationMetadata, measureGenerationGraph, freezeGenerationGraph,
-  copyGenerationCoverage, generationCoverageLayout, sameGenerationCoverage,
-  type GenerationCoverage, type GenerationAuthentication, type IdentityGenerationPreparation, type IdentityGenerationBorrow } from "./identity-generations.ts";
+import { admitGenerationFactories, admitGenerationConsumptionFactories, generationMetadata, measureGenerationGraph, freezeGenerationGraph, copyGenerationCoverage, generationCoverageLayout, sameGenerationCoverage, type GenerationCoverage, type GenerationAuthentication, type IdentityGenerationPreparation, type IdentityGenerationBorrow } from "./identity-generations.ts";
 import { PrivateCacheReservation, hotCacheNow, hotCacheConfig, tryRunInBackground, type HotCacheConfig } from "./hot-cache.ts";
 import { ownedHttpCredentialCensusEnvelope, measureOwnedHttpRetainedCredential, hasJoinedOwnedHttpCredentialValue, ownsCredentialPrefetchPermit, ownsOwnedHttpCredentialPermit, retireOwnedHttpGrantCredentials, invalidateOwnedHttpGrantCredentials, finishOwnedHttpGrantCredentialCommand, moveOwnedCredentialBorrow, type OwnedCredentialBorrow } from "./credential-cache.ts";
 import { materializeGrantCredentials, materializePrivateOwnedHttpGrantCredentials } from "./grant-credentials.ts";
@@ -19,15 +19,12 @@ import { GenerationAdvisoryState, waitGenerationFlushWindow, admitGenerationOver
 import { authorityCall } from "./authority.ts";
 import { recordGrantRuntime } from "./grant-selection.ts";
 import { ownedGenerationCredentialFailure, acceptOwnedHttpControlVerification } from "./proxy-auth.ts";
-import { acceptOwnedHttpAuthentication, hasBoundOwnedHttpAuthentication, hasOwnedHttpProxyInvocation, reserveOwnedHttpInitialPreparation, matchesOwnedHttpForegroundCommandRetirement, matchesOwnedHttpCompletedPreparation } from "./proxy.ts";
+
 import { credentialExpired } from "./credential-lifecycle.ts";
 import { safeEqual, sha256Hex, HttpError } from "./utils.ts";
-import { ownedErrorResponse, ownedExpiryResponse } from "./utils.ts";
-import { checkOwnedHttpRequest, growOwnedHttpRequest, holdOwnedHttpRequest, ownedHttpCompletion, ownedHttpSinkOwner, admitOwnedHttpPreflightSerialization, consumeOwnedHttpPreflight,
-  prepareOwnedHttpContinuation, consumeOwnedHttpContinuation, abandonOwnedHttpContinuation,
-  type OwnedHttpRequest, type OwnedHttpSinkOwner } from "./http-identity-owner.ts";
-import { admissionContinuationHeader, admissionContinuationVersion, admissionContinuationPath, closeAdmissionEnvelope, type AdmissionContinuationEnvelope, checkPreflightIdentity, credentialPreflightHeader, credentialPreflightNamespace,
-  credentialPreflightPath, credentialPreflightVersion } from "./credential-preflight-protocol.ts";
+
+import type { OwnedHttpRequest, OwnedHttpSinkOwner } from "./http-identity-owner.ts";
+import { admissionContinuationHeader, admissionContinuationVersion, admissionContinuationPath, closeAdmissionEnvelope, type AdmissionContinuationEnvelope, checkPreflightIdentity, credentialPreflightHeader, credentialPreflightNamespace, credentialPreflightPath, credentialPreflightVersion } from "./credential-preflight-protocol.ts";
 import { consumeAdmissionBridge, consumePreflightReply, type PrivateContinuationDestination } from "./credential-preflight-source.ts";
 
 // Capture the native Annex B lookups and apply before any input inspection.
@@ -748,7 +745,7 @@ export interface CredentialPreflightProof { readonly kind?: never }
 export interface CredentialPreflightContinuation { readonly kind?: never }
 type Authority = NonNullable<Env["ACCESS_CONTROL"]>;
 type Owner = { binding: Authority; namespace: typeof credentialPreflightNamespace; kid: string;
-  digest: string; source: IdentitySourceBudget; ticket: PreflightTicket; http?: OwnedHttpRequest };
+  digest: string; source: IdentitySourceBudget; ticket: PreflightTicket; http?: OwnedHttpRequest; stagedPreflight?: CredentialPreflightReply; preflightDelivered?: boolean };
 const proofs = new WeakMap<CredentialPreflightProof, Owner>();
 const continuations = new WeakMap<CredentialPreflightContinuation, AdmissionOwner>();
 export type CredentialPreflightResult = { outcome: "unknown" | "invalid" } | { outcome: "matched"; proof: CredentialPreflightProof };
@@ -760,18 +757,32 @@ function preflightOwnedHttpCredential(cap: OwnedHttpRequest, request: Request, e
   checkOwnedHttpRequest(cap, request, env);
   return beginCredentialPreflight(env, kid, digest, request.signal, ownedHttpSinkOwner(cap), cap);
 }
+export function acceptOwnedHttpPreflightReply(http: OwnedHttpRequest, permit: object, reply: CredentialPreflightReply): void {
+  const owner = httpIdentities?.get(http)?.preflight;
+  if (!owner || owner !== permit || owner.http !== http || owner.preflightDelivered !== false || owner.stagedPreflight)
+    throw identityFailure("protocol");
+  owner.stagedPreflight = reply; owner.preflightDelivered = true;
+}
+function takeOwnedHttpPreflightReply(http: OwnedHttpRequest, owner: Owner): CredentialPreflightReply | undefined {
+  if (httpIdentities?.get(http)?.preflight !== owner || owner.http !== http || owner.preflightDelivered !== true)
+    throw identityFailure("protocol");
+  const reply = owner.stagedPreflight;
+  owner.stagedPreflight = undefined;
+  return reply;
+}
 function beginCredentialPreflight(env: Pick<Env, "ACCESS_CONTROL">, kid: string, digest: string, signal?: AbortSignal, ownedHttp?: OwnedHttpSinkOwner, http?: OwnedHttpRequest): Promise<CredentialPreflightResult> {
   // The common Worker body arena funds every new operation factory first.
   const ticket = PreflightTicket.reserve(); ticket.enter("operation");
   try {
     checkPreflightIdentity(kid, digest);
     if (!env.ACCESS_CONTROL) throw identityFailure("protocol");
+    if (http) growOwnedHttpRequest(http, 256); // Staged reply link, once field and fixed transfer operands.
     const owner: Owner = { binding: env.ACCESS_CONTROL, namespace: credentialPreflightNamespace,
       kid, digest, source: identitySourceBudget(), ticket };
     if (http) {
       const identity = httpIdentities?.get(http);
       if (!identity || identity.preflight) throw identityFailure("protocol");
-      identity.preflight = owner; owner.http = http;
+      identity.preflight = owner; owner.http = http; owner.stagedPreflight = undefined; owner.preflightDelivered = false;
     }
     const operation = run(owner, signal, ownedHttp, http);
     // Observe immediately without retaining fulfilled graphs or changing the
@@ -801,7 +812,8 @@ async function run(owner: Owner, signal?: AbortSignal, ownedHttp?: OwnedHttpSink
     replySource = identitySourceBudget();
     if (ownedHttp !== undefined) {
       if (!http) throw identityFailure("protocol");
-      reply = await consumeOwnedHttpPreflight(http, ownedHttp, owner, owner.ticket, owner.binding, body!, replySource, signal);
+      await consumeOwnedHttpPreflight(http, ownedHttp, owner, owner.ticket, owner.binding, body!, replySource, signal);
+      reply = takeOwnedHttpPreflightReply(http, owner);
       if (!reply) throw identityFailure("protocol");
     } else {
       stub = owner.binding.get(owner.binding.idFromName(owner.namespace));
@@ -2230,4 +2242,112 @@ export function adoptCredentialGenerationDestination(handle: GenerationSelection
   const adopted = moveOwnedCredentialBorrow(borrowed, handle, env), previous = owner.destination;
   owner.destination = adopted;
   previous?.dispose();
+}
+
+function ownedErrorResponse(cap: Parameters<typeof import("./http-identity-owner.ts").ownedErrorResponse>[0], code: Parameters<typeof import("./http-identity-owner.ts").ownedErrorResponse>[1], message: Parameters<typeof import("./http-identity-owner.ts").ownedErrorResponse>[2], status: Parameters<typeof import("./http-identity-owner.ts").ownedErrorResponse>[3], retryAfter?: Parameters<typeof import("./http-identity-owner.ts").ownedErrorResponse>[4]): ReturnType<typeof import("./http-identity-owner.ts").ownedErrorResponse> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.ownedErrorResponse(cap, code, message, status, retryAfter);
+}
+
+function ownedExpiryResponse(cap: Parameters<typeof import("./http-identity-owner.ts").ownedExpiryResponse>[0], code: Parameters<typeof import("./http-identity-owner.ts").ownedExpiryResponse>[1], message: Parameters<typeof import("./http-identity-owner.ts").ownedExpiryResponse>[2], expiresAt: Parameters<typeof import("./http-identity-owner.ts").ownedExpiryResponse>[3]): ReturnType<typeof import("./http-identity-owner.ts").ownedExpiryResponse> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.ownedExpiryResponse(cap, code, message, expiresAt);
+}
+
+function acceptOwnedHttpAuthentication(cap: Parameters<typeof import("./proxy.ts").acceptOwnedHttpAuthentication>[0], identity: Parameters<typeof import("./proxy.ts").acceptOwnedHttpAuthentication>[1]): ReturnType<typeof import("./proxy.ts").acceptOwnedHttpAuthentication> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.acceptOwnedHttpAuthentication(cap, identity);
+}
+
+function hasBoundOwnedHttpAuthentication(cap: Parameters<typeof import("./proxy.ts").hasBoundOwnedHttpAuthentication>[0]): ReturnType<typeof import("./proxy.ts").hasBoundOwnedHttpAuthentication> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.hasBoundOwnedHttpAuthentication(cap);
+}
+
+function hasOwnedHttpProxyInvocation(cap: Parameters<typeof import("./proxy.ts").hasOwnedHttpProxyInvocation>[0]): ReturnType<typeof import("./proxy.ts").hasOwnedHttpProxyInvocation> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.hasOwnedHttpProxyInvocation(cap);
+}
+
+function reserveOwnedHttpInitialPreparation(cap: Parameters<typeof import("./proxy.ts").reserveOwnedHttpInitialPreparation>[0], request: Parameters<typeof import("./proxy.ts").reserveOwnedHttpInitialPreparation>[1], env: Parameters<typeof import("./proxy.ts").reserveOwnedHttpInitialPreparation>[2]): ReturnType<typeof import("./proxy.ts").reserveOwnedHttpInitialPreparation> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.reserveOwnedHttpInitialPreparation(cap, request, env);
+}
+
+function matchesOwnedHttpForegroundCommandRetirement(cap: Parameters<typeof import("./proxy.ts").matchesOwnedHttpForegroundCommandRetirement>[0]): ReturnType<typeof import("./proxy.ts").matchesOwnedHttpForegroundCommandRetirement> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.matchesOwnedHttpForegroundCommandRetirement(cap);
+}
+
+function matchesOwnedHttpCompletedPreparation(cap: Parameters<typeof import("./proxy.ts").matchesOwnedHttpCompletedPreparation>[0], request: Parameters<typeof import("./proxy.ts").matchesOwnedHttpCompletedPreparation>[1], credential: Parameters<typeof import("./proxy.ts").matchesOwnedHttpCompletedPreparation>[2], permit: Parameters<typeof import("./proxy.ts").matchesOwnedHttpCompletedPreparation>[3]): ReturnType<typeof import("./proxy.ts").matchesOwnedHttpCompletedPreparation> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.matchesOwnedHttpCompletedPreparation(cap, request, credential, permit);
+}
+
+function checkOwnedHttpRequest(cap: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpRequest>[0], request: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpRequest>[1], env: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpRequest>[2]): ReturnType<typeof import("./http-identity-owner.ts").checkOwnedHttpRequest> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.checkOwnedHttpRequest(cap, request, env);
+}
+
+function growOwnedHttpRequest(cap: Parameters<typeof import("./http-identity-owner.ts").growOwnedHttpRequest>[0], bytes: Parameters<typeof import("./http-identity-owner.ts").growOwnedHttpRequest>[1]): ReturnType<typeof import("./http-identity-owner.ts").growOwnedHttpRequest> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.growOwnedHttpRequest(cap, bytes);
+}
+
+function holdOwnedHttpRequest(cap: Parameters<typeof import("./http-identity-owner.ts").holdOwnedHttpRequest>[0]): ReturnType<typeof import("./http-identity-owner.ts").holdOwnedHttpRequest> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.holdOwnedHttpRequest(cap);
+}
+
+function ownedHttpCompletion(cap: Parameters<typeof import("./http-identity-owner.ts").ownedHttpCompletion>[0]): ReturnType<typeof import("./http-identity-owner.ts").ownedHttpCompletion> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.ownedHttpCompletion(cap);
+}
+
+function ownedHttpSinkOwner(cap: Parameters<typeof import("./http-identity-owner.ts").ownedHttpSinkOwner>[0]): ReturnType<typeof import("./http-identity-owner.ts").ownedHttpSinkOwner> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.ownedHttpSinkOwner(cap);
+}
+
+function admitOwnedHttpPreflightSerialization(http: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpPreflightSerialization>[0], sink: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpPreflightSerialization>[1], permit: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpPreflightSerialization>[2], ticket: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpPreflightSerialization>[3]): ReturnType<typeof import("./http-identity-owner.ts").admitOwnedHttpPreflightSerialization> {
+  const receiver = ownedHttpRequestReceiver(http);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.admitOwnedHttpPreflightSerialization(http, sink, permit, ticket);
+}
+
+function consumeOwnedHttpPreflight(http: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpPreflight>[0], sink: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpPreflight>[1], permit: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpPreflight>[2], ticket: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpPreflight>[3], binding: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpPreflight>[4], body: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpPreflight>[5], budget: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpPreflight>[6], signal?: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpPreflight>[7]): ReturnType<typeof import("./http-identity-owner.ts").consumeOwnedHttpPreflight> {
+  const receiver = ownedHttpRequestReceiver(http);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.consumeOwnedHttpPreflight(http, sink, permit, ticket, binding, body, budget, signal);
+}
+
+function prepareOwnedHttpContinuation(http: Parameters<typeof import("./http-identity-owner.ts").prepareOwnedHttpContinuation>[0], permit: Parameters<typeof import("./http-identity-owner.ts").prepareOwnedHttpContinuation>[1], destination: Parameters<typeof import("./http-identity-owner.ts").prepareOwnedHttpContinuation>[2], ticket: Parameters<typeof import("./http-identity-owner.ts").prepareOwnedHttpContinuation>[3], binding: Parameters<typeof import("./http-identity-owner.ts").prepareOwnedHttpContinuation>[4], namespace: Parameters<typeof import("./http-identity-owner.ts").prepareOwnedHttpContinuation>[5], signal?: Parameters<typeof import("./http-identity-owner.ts").prepareOwnedHttpContinuation>[6]): ReturnType<typeof import("./http-identity-owner.ts").prepareOwnedHttpContinuation> {
+  const receiver = ownedHttpRequestReceiver(http);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.prepareOwnedHttpContinuation(http, permit, destination, ticket, binding, namespace, signal);
+}
+
+function consumeOwnedHttpContinuation(http: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpContinuation>[0], permit: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpContinuation>[1], destination: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpContinuation>[2], body: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpContinuation>[3], signal?: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpContinuation>[4]): ReturnType<typeof import("./http-identity-owner.ts").consumeOwnedHttpContinuation> {
+  const receiver = ownedHttpRequestReceiver(http);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.consumeOwnedHttpContinuation(http, permit, destination, body, signal);
+}
+
+function abandonOwnedHttpContinuation(http: Parameters<typeof import("./http-identity-owner.ts").abandonOwnedHttpContinuation>[0], permit: Parameters<typeof import("./http-identity-owner.ts").abandonOwnedHttpContinuation>[1], destination: Parameters<typeof import("./http-identity-owner.ts").abandonOwnedHttpContinuation>[2]): ReturnType<typeof import("./http-identity-owner.ts").abandonOwnedHttpContinuation> {
+  const receiver = ownedHttpRequestReceiver(http);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.abandonOwnedHttpContinuation(http, permit, destination);
 }

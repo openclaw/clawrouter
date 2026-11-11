@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Cut private HTTP orchestration out of ordinary ledger, utility, provider and usage import closures. Keep canonical request/sink/revalidation registrations in the completion leaf with fixed named receivers; move metadata and private usage execution to their owners and deliver preflight replies through VOID readiness and the existing destination. Source-only partial; reached subject/installation repairs and complete accounting qualification remain open.
+
 - Preserve separate prepaid failure origins for private HTTP observer installation, provider fetch/disposal cancellation, and upload/archive pipe commands. Keep FIRST outcome selection, UNKNOWN funding and same-ID recovery; cover equal and undefined reasons in Node and Workerd fixtures. Source-only partial; import-cycle and complete accounting qualification remain open.
 
 - Await the pinned OpenClaw credential wrapper's stream result before inspecting completion or iterating abort output in private HTTP Chat contract fixtures. Preserve the real registered client, routing/auth and accounting assertions. Source-only partial; runtime-import, CONTROL and provenance qualification remain open.

@@ -1,6 +1,51 @@
 # Private owned HTTP Chat staging
 
 
+### Native import boundary and preflight handoff — source-only partial
+
+Private error/metadata orchestration now lives with the HTTP owner. Ordinary
+utilities keep the same CORS constants, ordinary correlation keeps its one
+background registry, and native errors keep their one brand registry and shared
+envelope algorithm. The fixed background lookup still follows header deletion.
+Ledger private dispatch/receipt interpretation moved to its accounting callers;
+`ledgers.ts` is byte-identical to the exact main task baseline. Private usage
+execution moved beside the response drivers; the shared framer, parser and
+accumulator remain single implementations in `token-usage.ts`.
+
+The existing request, sink and revalidation WeakMaps and their shared funding /
+request-count state now reside in the completion leaf. Its only runtime import
+remains body-budget. Existing funded factories construct the two fixed receiver
+classes and register them in those canonical maps. Forty-two source-defined
+prototype methods forward to the existing HTTP/proxy/pricing implementations.
+Each method checks its exact registered receiver before the implementation's
+existing tuple/phase checks. Lower callers perform named lookup and fail their
+existing identity protocol path when registration is absent. No constructor
+accepts callbacks, a receiver target, or a dispatch table. No graph-valued Promise
+was added. Receiver locals end when the named synchronous forwarding call returns.
+
+A separate 2,048-byte request component prepays the added fixed receiver/lookup
+construction and forwarding operands; definitions/import bindings and all live
+call products still require the actual static/fixed-window inventory. This is
+not a complete storage bound or permission to transfer arbitrary subjects.
+The additional 0600 subject/phase binding repairs remain a separate open task.
+
+Preflight acquisition now returns `Promise<void>`. After the actual receipt's
+cleanup and the acquisition's physical handoff, its fixed command delivers the
+reply to the existing `httpIdentities[http].preflight === permit` owner exactly
+once. The caller takes and clears that staged alias synchronously before the
+unchanged source advance. The private owner alone receives the staged-link and
+once fields; its additional 256-byte component precedes construction/effects.
+Ordinary preflight continues using its existing reply API.
+
+Source-only dependency traversal finds no path from ledgers, utilities, ordinary
+usage, authority or providers into HTTP owner/proxy/response orchestration. The
+raw/generated syntax checks do not link or execute application modules. Authored
+fresh-process Node import, genuine/foreign/stale receiver and Node/Workerd
+preflight transfer witnesses remain UNRUN. The fixed CONTROL counterexample,
+paid ASYNC proposal, reached driver/RPC provenance and named-subject gates remain
+NEEDSWORK/OPEN. No CODE_COMPLETE or runtime qualification follows.
+
+
 ### Independent observer installation provenance — source-only partial
 
 Original rejection and observer installation are separate occurrences. The

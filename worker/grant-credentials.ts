@@ -1,5 +1,6 @@
+import { ownedHttpSinkReceiver, ownedHttpRevalidationReceiver } from "./proxy-completion.ts";
 import { admitIdentityText, identityUtf8, admitIdentity, identityPlan, identityHeader, identityJson, identitySourceBudget, identityFailure, isIdentityFailure, parseIdentity, readIdentityKv, readIdentityRaw, readIdentityRequest, readIdentityResponse, type IdentitySourceBudget } from "./identity-admission.ts";
-import { checkOwnedHttpMaterializationInputs, admitOwnedHttpMaterializationPayload, consumeOwnedHttpGrantMaterialization, consumeOwnedHttpGrantInspection, type OwnedHttpRevalidation, type OwnedHttpSinkOwner } from "./http-identity-owner.ts";
+import type { OwnedHttpRevalidation, OwnedHttpSinkOwner } from "./http-identity-owner.ts";
 import { privateMaterializationJson } from "./json-body.ts";
 import type { OwnedHttpCredential } from "./credential-preflight.ts";
 import { videoControlHeader, videoControlVersion, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
@@ -1815,4 +1816,28 @@ function validAuthorizationTimestamp(value: unknown): string | null {
   const timestamp = authorizationTimestamp(value);
   if (value != null && timestamp === null) throw new HttpError(400, "invalid_upstream_grant", "authorization timestamp must be ISO-8601 or epoch milliseconds");
   return timestamp;
+}
+
+function checkOwnedHttpMaterializationInputs(sink: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpMaterializationInputs>[0], cap: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpMaterializationInputs>[1], permit: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpMaterializationInputs>[2], env: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpMaterializationInputs>[3], key: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpMaterializationInputs>[4], grant: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpMaterializationInputs>[5]): ReturnType<typeof import("./http-identity-owner.ts").checkOwnedHttpMaterializationInputs> {
+  const receiver = ownedHttpSinkReceiver(sink);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.checkOwnedHttpMaterializationInputs(sink, cap, permit, env, key, grant);
+}
+
+function admitOwnedHttpMaterializationPayload(sink: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpMaterializationPayload>[0], cap: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpMaterializationPayload>[1], permit: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpMaterializationPayload>[2], env: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpMaterializationPayload>[3], key: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpMaterializationPayload>[4], grant: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpMaterializationPayload>[5], bytes: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpMaterializationPayload>[6]): ReturnType<typeof import("./http-identity-owner.ts").admitOwnedHttpMaterializationPayload> {
+  const receiver = ownedHttpSinkReceiver(sink);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.admitOwnedHttpMaterializationPayload(sink, cap, permit, env, key, grant, bytes);
+}
+
+function consumeOwnedHttpGrantMaterialization(sink: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantMaterialization>[0], cap: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantMaterialization>[1], permit: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantMaterialization>[2], binding: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantMaterialization>[3], key: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantMaterialization>[4], body: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantMaterialization>[5], signal?: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantMaterialization>[6]): ReturnType<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantMaterialization> {
+  const receiver = ownedHttpSinkReceiver(sink);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.consumeOwnedHttpGrantMaterialization(sink, cap, permit, binding, key, body, signal);
+}
+
+function consumeOwnedHttpGrantInspection(cap: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantInspection>[0], env: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantInspection>[1], signal: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantInspection>[2]): ReturnType<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantInspection> {
+  const receiver = ownedHttpRevalidationReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.consumeOwnedHttpGrantInspection(cap, env, signal);
 }

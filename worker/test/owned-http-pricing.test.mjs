@@ -1378,3 +1378,11 @@ for (const reasonKind of ['distinct', 'equal', 'undefined']) {
     assertOwnedSinkInstallation(assert, row, outcome, reasonKind);
   });
 }
+
+test('private preflight stages and clears the reply before the one source advance', async t => {
+  const before = { ...observation.preflightTransfers };
+  await fixture(t, async f => {
+    const response = await f.request(payload({})); assert.equal(response.status, 200); await f.drain();
+    for (const stage of ['staged', 'taken', 'advanced']) assert.equal(observation.preflightTransfers[stage] - before[stage], 1);
+  });
+});

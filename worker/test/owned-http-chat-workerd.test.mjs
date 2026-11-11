@@ -2562,3 +2562,11 @@ test(`native independent installation ${kind} ${outcome} ${reasonKind}`, { timeo
     assertOwnedSinkInstallation(assert, JSON.parse(response.text), outcome, reasonKind);
   }, true);
 });
+
+test('native preflight VOID handoff clears its fixed reply before source advance', async t => {
+  await fixture(t, async f => {
+    const response = await f.request('https://fixture/v1/chat/completions', chat('chat')); assert.equal(response.status, 200);
+    const report = JSON.parse((await f.request('https://fixture/fixture/state')).text);
+    assert.deepEqual(report.preflightTransfers, { staged: 1, taken: 1, advanced: 1 });
+  }, true);
+});

@@ -1,19 +1,15 @@
+import { usageShardName } from "./usage-sharding.ts";
 import { isMusicCoverControl, musicCoverUnavailable, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
 import { searchJsonBytes, type MiniMaxSearchOperation } from "./minimax-search-operation.ts";
 import { dailyBudgetMessage, weeklyBudgetMessage, withLimitHint } from "./policy-limits.ts";
 import type { AuthorizedIdentity, BudgetChargeRequest, BudgetReserveRequest, BudgetSettleRequest, Env, ProviderConnection, UsageEvent } from "./types";
 import { budgetLedgerAddress, dailyBudgetLedgerAddress, weeklyBudgetLedgerAddress, budgetPrincipal, providerBudgetLedgerAddress } from "./budget-scope.ts";
 import { logCorrelationError } from "./correlation.ts";
-import { chargeLedgerNamespace, ingestUsageNamespace, settleLedgerNamespace, musicCoverLedgerControl } from "./ledgers.ts";
+import { chargeLedgerNamespace, ingestUsageNamespace, settleLedgerNamespace, musicCoverLedgerControl, BudgetSettlementError } from "./ledgers.ts";
 import { HttpError, randomId } from "./utils.ts";
 import { accountingAdmissionFailure, accountingIdentity, admitAccountingJson, accountingNumberCapacity, copyAccountingJson } from "./json-body.ts";
 import type { PricingGap } from "./pricing.ts";
-import { checkOwnedHttpSinkOwner, ownedHttpReserveAcknowledgment, ownedHttpDispatchAcknowledgment,
-  beginOwnedHttpBudgetReserves, claimOwnedHttpBudgetReserve, acceptOwnedHttpBudgetReservation,
-  selectOwnedHttpBudgetRollback, selectOwnedHttpBudgetDispatch, finishOwnedHttpBudgetBranch,
-  checkOwnedHttpBudgetDispatch, claimOwnedHttpBudgetDispatch, claimOwnedHttpBudgetRollback,
-  bindOwnedHttpBudgetRollbackRequest, failedOwnedHttpBudgetRollback, claimOwnedHttpBudgetQueue,
-  bindOwnedHttpBudgetRollbackSinks, ownedHttpQueueSend, recordOwnedHttpBudgetDenial, isOwnedHttpBudgetDenial, type OwnedHttpSinkOwner } from "./http-identity-owner.ts";
+import { checkOwnedHttpSinkOwner, ownedHttpReserveAcknowledgment, ownedHttpDispatchAcknowledgment, ownedHttpChargeAcknowledgment, ownedHttpSettleAcknowledgment, ownedHttpIngestAcknowledgment, beginOwnedHttpBudgetReserves, claimOwnedHttpBudgetReserve, acceptOwnedHttpBudgetReservation, selectOwnedHttpBudgetRollback, selectOwnedHttpBudgetDispatch, finishOwnedHttpBudgetBranch, checkOwnedHttpBudgetDispatch, claimOwnedHttpBudgetDispatch, claimOwnedHttpBudgetRollback, bindOwnedHttpBudgetRollbackRequest, failedOwnedHttpBudgetRollback, claimOwnedHttpBudgetQueue, bindOwnedHttpBudgetRollbackSinks, ownedHttpQueueSend, recordOwnedHttpBudgetDenial, isOwnedHttpBudgetDenial, type OwnedHttpSinkOwner } from "./http-identity-owner.ts";
 
 export interface AccountingSinks {
   readonly budget: Env["BUDGET_LEDGER"];
@@ -278,7 +274,15 @@ async function publishUsage(sinks: AccountingSinks, event: UsageEvent, search?: 
   catch {
     // A rejected send can still have been accepted. Reuse the event ID so
     // direct recovery and later queue delivery converge on one stored row.
-    await ingestUsageNamespace(sinks.usage, event, undefined, search, undefined, sinks.ownedHttp);
+    if (sinks.ownedHttp !== undefined) {
+      checkOwnedHttpSinkOwner(sinks.ownedHttp);
+      const receipt = await ownedHttpIngestAcknowledgment(sinks.ownedHttp, sinks.usage, usageShardName(event.tenant_id, event.policy_id), event);
+      if (receipt && !receipt.ok) throw new Error(`usage ledger write returned ${receipt.status}`);
+      if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)
+        || !("eventId" in receipt) || typeof receipt.eventId !== "string" || receipt.eventId !== event.id
+        || !("outcome" in receipt) || (receipt.outcome !== "stored" && receipt.outcome !== "duplicate" && receipt.outcome !== "expired_by_retention"))
+        throw new Error("usage ledger did not acknowledge ingestion");
+    } else await ingestUsageNamespace(sinks.usage, event, undefined, search);
   }
 }
 
@@ -315,7 +319,12 @@ async function settleReservation(sinks: AccountingSinks, reservation: LedgerBudg
   const objectName = reservation.objectName;
   let ledgerReason: unknown;
   try {
-    await settleLedgerNamespace(sinks.budget, objectName, body, undefined, search, undefined, sinks.ownedHttp, recovery);
+    if (sinks.ownedHttp !== undefined) {
+      checkOwnedHttpSinkOwner(sinks.ownedHttp);
+      const response = await ownedHttpSettleAcknowledgment(sinks.ownedHttp, sinks.budget, objectName, body, undefined, recovery);
+      if (!response?.ok) throw new BudgetSettlementError(response?.status === 404 ? "missing" : response?.status === 409 ? "conflict" : "unavailable");
+      if (response.settled !== true) throw new BudgetSettlementError("unavailable");
+    } else await settleLedgerNamespace(sinks.budget, objectName, body, undefined, search);
     return;
   } catch (error) {
     ledgerReason = error;
@@ -349,7 +358,13 @@ async function chargeBudget(sinks: AccountingSinks, reservation: BudgetReservati
   }
   const results = await Promise.allSettled((reservation.charges ?? []).map(async item => {
     const request = { ...item.request, amountMicros };
-    try { await chargeLedgerNamespace(sinks.budget, item.objectName, request, undefined, undefined, sinks.ownedHttp); }
+    try {
+      if (sinks.ownedHttp !== undefined) {
+        checkOwnedHttpSinkOwner(sinks.ownedHttp);
+        const receipt = await ownedHttpChargeAcknowledgment(sinks.ownedHttp, sinks.budget, item.objectName, request);
+        if (!receipt?.ok || receipt.charged !== true || receipt.chargeId !== request.chargeId) throw new Error("budget charge was not acknowledged");
+      } else await chargeLedgerNamespace(sinks.budget, item.objectName, request);
+    }
     catch {
       const message = { kind: "budget_charge" as const, ledger: { objectName: item.objectName }, request };
       if (sinks.ownedHttp !== undefined) await ownedHttpQueueSend(sinks.ownedHttp, sinks.queue, message); else await sinks.queue.send(message);

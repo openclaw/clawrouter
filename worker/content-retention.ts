@@ -1,8 +1,9 @@
+import { identityFailure } from "./identity-admission.ts";
+import { ownedHttpSinkReceiver, ownedHttpRequestReceiver } from "./proxy-completion.ts";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledModel, ContentRecord, Env, ProxyRequestBody } from "./types";
 import { maxJsonBodyBytes, randomId } from "./utils.ts";
 import { accountingArchive, privateAccountingArchive, accountingIdentity, admitAccountingJson, jsonBodyTransport } from "./json-body.ts";
-import { checkOwnedHttpSinkOwner, ownedHttpSinkOwner, checkOwnedHttpArchivePreparation, prepareOwnedHttpArchive, ownedHttpArchivePut, ownedHttpArchivePipe, ownedHttpArchiveAbort,
-  ownedHttpArchiveCancel, type OwnedHttpSinkOwner, type OwnedHttpRequest } from "./http-identity-owner.ts";
+import type { OwnedHttpSinkOwner, OwnedHttpRequest } from "./http-identity-owner.ts";
 
 const retentionPeriodMs = 30 * 86_400_000;
 
@@ -203,4 +204,52 @@ export function retainedContentDeadline(object: Pick<R2Object, "uploaded" | "cus
 
 export function contentKey(tenant: string, ref: string): string {
   return `v1/${encodeURIComponent(tenant)}/${encodeURIComponent(ref)}.json`;
+}
+
+function checkOwnedHttpSinkOwner(sink: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpSinkOwner>[0]): ReturnType<typeof import("./http-identity-owner.ts").checkOwnedHttpSinkOwner> {
+  const receiver = ownedHttpSinkReceiver(sink);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.checkOwnedHttpSinkOwner(sink);
+}
+
+function ownedHttpSinkOwner(cap: Parameters<typeof import("./http-identity-owner.ts").ownedHttpSinkOwner>[0]): ReturnType<typeof import("./http-identity-owner.ts").ownedHttpSinkOwner> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.ownedHttpSinkOwner(cap);
+}
+
+function checkOwnedHttpArchivePreparation(cap: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpArchivePreparation>[0], sink: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpArchivePreparation>[1], env: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpArchivePreparation>[2], auth: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpArchivePreparation>[3], selection: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpArchivePreparation>[4], requestId: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpArchivePreparation>[5]): ReturnType<typeof import("./http-identity-owner.ts").checkOwnedHttpArchivePreparation> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.checkOwnedHttpArchivePreparation(cap, sink, env, auth, selection, requestId);
+}
+
+function prepareOwnedHttpArchive(cap: Parameters<typeof import("./http-identity-owner.ts").prepareOwnedHttpArchive>[0], sink: Parameters<typeof import("./http-identity-owner.ts").prepareOwnedHttpArchive>[1], env: Parameters<typeof import("./http-identity-owner.ts").prepareOwnedHttpArchive>[2], auth: Parameters<typeof import("./http-identity-owner.ts").prepareOwnedHttpArchive>[3], selection: Parameters<typeof import("./http-identity-owner.ts").prepareOwnedHttpArchive>[4], requestId: Parameters<typeof import("./http-identity-owner.ts").prepareOwnedHttpArchive>[5]): ReturnType<typeof import("./http-identity-owner.ts").prepareOwnedHttpArchive> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.prepareOwnedHttpArchive(cap, sink, env, auth, selection, requestId);
+}
+
+function ownedHttpArchivePut(sink: Parameters<typeof import("./http-identity-owner.ts").ownedHttpArchivePut>[0], bucket: Parameters<typeof import("./http-identity-owner.ts").ownedHttpArchivePut>[1], key: Parameters<typeof import("./http-identity-owner.ts").ownedHttpArchivePut>[2], value: Parameters<typeof import("./http-identity-owner.ts").ownedHttpArchivePut>[3], expiresAt: Parameters<typeof import("./http-identity-owner.ts").ownedHttpArchivePut>[4]): ReturnType<typeof import("./http-identity-owner.ts").ownedHttpArchivePut> {
+  const receiver = ownedHttpSinkReceiver(sink);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.ownedHttpArchivePut(sink, bucket, key, value, expiresAt);
+}
+
+function ownedHttpArchivePipe(sink: Parameters<typeof import("./http-identity-owner.ts").ownedHttpArchivePipe>[0], source: Parameters<typeof import("./http-identity-owner.ts").ownedHttpArchivePipe>[1], writable: Parameters<typeof import("./http-identity-owner.ts").ownedHttpArchivePipe>[2], signal: Parameters<typeof import("./http-identity-owner.ts").ownedHttpArchivePipe>[3]): ReturnType<typeof import("./http-identity-owner.ts").ownedHttpArchivePipe> {
+  const receiver = ownedHttpSinkReceiver(sink);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.ownedHttpArchivePipe(sink, source, writable, signal);
+}
+
+function ownedHttpArchiveAbort(sink: Parameters<typeof import("./http-identity-owner.ts").ownedHttpArchiveAbort>[0], controller: Parameters<typeof import("./http-identity-owner.ts").ownedHttpArchiveAbort>[1]): ReturnType<typeof import("./http-identity-owner.ts").ownedHttpArchiveAbort> {
+  const receiver = ownedHttpSinkReceiver(sink);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.ownedHttpArchiveAbort(sink, controller);
+}
+
+function ownedHttpArchiveCancel(sink: Parameters<typeof import("./http-identity-owner.ts").ownedHttpArchiveCancel>[0], readable: Parameters<typeof import("./http-identity-owner.ts").ownedHttpArchiveCancel>[1]): ReturnType<typeof import("./http-identity-owner.ts").ownedHttpArchiveCancel> {
+  const receiver = ownedHttpSinkReceiver(sink);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.ownedHttpArchiveCancel(sink, readable);
 }

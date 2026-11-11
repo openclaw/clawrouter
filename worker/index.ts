@@ -1,19 +1,18 @@
-import { withOwnedRequestId, withOwnedBackgroundRecovery } from "./correlation.ts";
-import { withOwnedCors } from "./utils.ts";
+import { withOwnedRequestId, withOwnedBackgroundRecovery, withOwnedCors, withOwnedNativeLocalError } from "./http-identity-owner.ts";
+
+
 import { beginOwnedHttpFinalMetadata, ownOwnedHttpMetadataPublicResponse, withOwnedHttpVersion } from "./http-identity-owner.ts";
 import { measureOwnedHeaderUnits } from "./proxy-completion.ts";
 import { emptyUsageSnapshot } from "./usage-sharding.ts";
 import { sessionUsageReport } from "./usage-report-session.ts";
 import { consoleAsset } from "./console-assets.ts";
 import { proxyTranscription, transcriptionPath } from "./transcription.ts";
-import { withOwnedNativeLocalError, withNativeLocalError } from "./native-errors.ts";
+import { withNativeLocalError } from "./native-errors.ts";
 import { poolResponse } from "./pool";
 import packageMetadata from "../package.json" with { type: "json" };
 import { publicSession, sessionPolicies, verifiedAccessSession } from "./access";
 import { adminApi } from "./admin";
-import {
-  avatarResponse, catalogResponse, entitlementResponse, meResponse, modelsResponse, sessionResponse,
-} from "./discovery";
+import { avatarResponse, catalogResponse, entitlementResponse, meResponse, modelsResponse, sessionResponse,  } from "./discovery";
 import { budgetStatus, BudgetLedgerObject, queue, UsageLedgerObject, usageSnapshot, usageSnapshots } from "./ledgers";
 import { GrantCredentialObject } from "./grant-credentials";
 import { budgetPrincipal } from "./budget-scope.ts";
@@ -36,12 +35,8 @@ import { proxyResponseControl } from "./response-controls.ts";
 import { requireEmptyResponseControlBody } from "./responses-lifecycle.ts";
 import { backgroundMark as currentBackgroundMark, clearHotCaches, fenceSharedHotCache, pendingBackgroundWork } from "./hot-cache.ts";
 import type { Env, QueueMessage } from "./types";
-import { tryBeginOwnedHttpRequest, ownedHttpPlatformFailure, growOwnedHttpRequest, finishOwnedHttpRequest, holdOwnedHttpRequest, ownedHttpCompletion,
-  ownedHttpSinkOwner, retireOwnedHttpAssociatedResponse, cancelOwnedHttpResponse, registerOwnedHttpRetirement } from "./http-identity-owner.ts";
-import {
-  canonicalPath, caughtOwnedResponse, ownedErrorResponse, caughtResponse, corsEnabled, corsPreflight, decodePathSegment, errorResponse, legacyRedirect,
-  privateJson, redirect, withCors,
-} from "./utils";
+import { tryBeginOwnedHttpRequest, ownedHttpPlatformFailure, growOwnedHttpRequest, finishOwnedHttpRequest, holdOwnedHttpRequest, ownedHttpCompletion, ownedHttpSinkOwner, retireOwnedHttpAssociatedResponse, cancelOwnedHttpResponse, registerOwnedHttpRetirement } from "./http-identity-owner.ts";
+import { canonicalPath, caughtOwnedResponse, ownedErrorResponse, caughtResponse, corsEnabled, corsPreflight, decodePathSegment, errorResponse, legacyRedirect, privateJson, redirect, withCors,  } from "./utils";
 
 export { PolicyBindingIndexObject } from "./authority";
 export { ContentArchiveCleanupObject } from "./content-cleanup.ts";

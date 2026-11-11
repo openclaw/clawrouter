@@ -1,4 +1,5 @@
-import { admitOwnedHttpConfigurationCommand, admitOwnedHttpErrorText, type OwnedHttpRequest } from "./http-identity-owner.ts";
+import { ownedHttpRequestReceiver } from "./proxy-completion.ts";
+import type { OwnedHttpRequest } from "./http-identity-owner.ts";
 import { identityFailure } from "./identity-admission.ts";
 import type { CompiledProvider, Env } from "./types.ts";
 import { envValue, HttpError } from "./utils.ts";
@@ -495,4 +496,16 @@ export function endPrivateConfiguration(preparation: PreparationAdmission, nonce
   if (!slot || slot.nonce !== nonce) throw identityFailure("protocol");
   slot.error = undefined; slot.http = undefined as never; slot.nonce = undefined as never;
   configurationApply(configurationDelete, privateConfigurations!, [preparation]);
+}
+
+function admitOwnedHttpConfigurationCommand(cap: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpConfigurationCommand>[0], preparation: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpConfigurationCommand>[1], providerPermit?: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpConfigurationCommand>[2]): ReturnType<typeof import("./http-identity-owner.ts").admitOwnedHttpConfigurationCommand> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.admitOwnedHttpConfigurationCommand(cap, preparation, providerPermit);
+}
+
+function admitOwnedHttpErrorText(cap: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpErrorText>[0], units: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpErrorText>[1]): ReturnType<typeof import("./http-identity-owner.ts").admitOwnedHttpErrorText> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.admitOwnedHttpErrorText(cap, units);
 }

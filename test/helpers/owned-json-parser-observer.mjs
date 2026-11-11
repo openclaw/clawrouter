@@ -351,6 +351,7 @@ export function createOwnedJsonObservation() {
     foreground(owner) { if (this.retainedStatus) foregroundOwners.push(owner); },
     foregroundState() { return foregroundOwners.map(owner => ({ bytes: owner.lease.bytes, reduction: owner.reduction ?? 0, retained: owner.retained })); },
     reductionBlocked: [],
+    preflightTransfers: { staged: 0, taken: 0, advanced: 0 },
     driverReads: 0, driverFactories: 0, intakeFactories: 0, retryPorts: [], credentialReductions: [], credentialCensuses: [], originalObservers: [],
     retainOriginalHandlers(cell, fulfilled, rejected) {
       this.originalObservers.push({ cell, fulfilled, rejected, role: cell.owner.constructor.name });
@@ -912,6 +913,12 @@ export function observeOwnedJsonSource(path, source) {
     source = replace(source, '    return 8 * (containers + 2 * members + entries + values) + 2 * units + 6 * run.command.key.length;',
       '    ' + probe + '.credentialCensuses.push({ containers, members, entries, values, units, keyUnits: run.command.key.length, completion: run.completion, originalCleared: run.original === undefined, retained: run.retained, borrowed: !!run.borrowed }); return 8 * (containers + 2 * members + entries + values) + 2 * units + 6 * run.command.key.length;');
   } else if (/[\\/]worker[\\/]credential-preflight\.ts$/.test(path)) {
+    source = replace(source, '  owner.stagedPreflight = reply; owner.preflightDelivered = true;',
+      '  owner.stagedPreflight = reply; owner.preflightDelivered = true; ' + probe + '.preflightTransfers.staged++;');
+    source = replace(source, '  owner.stagedPreflight = undefined;\n  return reply;',
+      '  owner.stagedPreflight = undefined; ' + probe + '.preflightTransfers.taken++; return reply;');
+    source = replace(source, '    advanceIdentitySource(owner.source, sent, reply.source, replySource);',
+      '    if (http) { if (owner.stagedPreflight !== undefined || owner.preflightDelivered !== true) throw Error("preflight staged alias not consumed"); ' + probe + '.preflightTransfers.advanced++; } advanceIdentitySource(owner.source, sent, reply.source, replySource);');
     source = replace(source, '    httpCredentials.set(cap, owner); (httpForegroundReservations ??= new WeakMap()).set(http, cap);',
       '    httpCredentials.set(cap, owner); (httpForegroundReservations ??= new WeakMap()).set(http, cap); ' + probe + '.foreground(owner);');
     source = replace(source, '    owner.lease.replace(bytes); owner.reduction = 2;',
@@ -952,21 +959,6 @@ export function observeOwnedJsonSource(path, source) {
     source = replace(source, '  body?: ReadableStream<Uint8Array>;', '  body: ReadableStream<Uint8Array> | undefined = (' + probe + '.driverFactory(), undefined);');
     source = replace(source, '    this.pending |= 1; this.seen &= ~1; this.readDelivered = false; this.readFailure = undefined;',
       '    ' + probe + '.driverRead(); this.pending |= 1; this.seen &= ~1; this.readDelivered = false; this.readFailure = undefined;');
-  } else if (/[\\/]worker[\\/]token-usage\.ts$/.test(path)) {
-    source = replace(source, 'const status = response.status, statusText = response.statusText, headers = response.headers;',
-      probe + '.publicationEnter(response); const status = response.status, statusText = response.statusText, headers = response.headers;', 2);
-
-    source = replace(source, 'let census: ReturnType<typeof measurePrivateJsonBody> | undefined = measurePrivateJsonBody(data);',
-      probe + '.startCensus(true); let census: ReturnType<typeof measurePrivateJsonBody> | undefined = measurePrivateJsonBody(data);');
-    source = replace(source, 'owned?.admitJson(data);', 'owned?.admitJson(data); if (owned) ' + probe + '.beforeUsageParse();');
-    source = replace(source, 'this.admitJson(this.text, true);', 'this.admitJson(this.text, true); ' + probe + '.beforeUsageParse();');
-    source = replace(source, 'messageUsage = messageCounters(usageRecord(root));',
-      'if (privateUsageAccumulators?.has(accept)) ' + probe + '.summary(message.stop_reason); messageUsage = messageCounters(usageRecord(root));');
-    source = replace(source, 'const delta = messageCounters(usageRecord(root));',
-      'if (privateUsageAccumulators?.has(accept)) ' + probe + '.summary(message?.stop_reason); const delta = messageCounters(usageRecord(root));');
-    source = replace(source, 'ownedAcceptedUsage?.delete(this.cap);', 'ownedAcceptedUsage?.delete(this.cap); ' + probe + '.usageCleared();');
-    source = replace(source, 'if (!this.finished) enqueueOwnedBytes(controller, bytes!);',
-      'if (!this.finished) { enqueueOwnedBytes(controller, bytes!); ' + probe + '.enqueued(bytes!); }');
   } else if (/[\\/]worker[\\/]json-body\.ts$/.test(path)) {
     source = replace(source, 'const backing = ownedBytes ? newOwnedBytes(32768) : new Uint8Array(32768);',
       'if (ownedBytes) ' + probe + '.archiveEnter(); const backing = ownedBytes ? newOwnedBytes(32768) : new Uint8Array(32768);');
@@ -1018,12 +1010,11 @@ export function observeOwnedJsonSource(path, source) {
       '    records.push(cap); if (preparation) ' + probe + '.accounting(1);');
     source = replace(source, '  unbindOwnedAccountingPlan(state.factsCell.current.cost);',
       '  if (state.state & 1) ' + probe + '.accounting(-1); unbindOwnedAccountingPlan(state.factsCell.current.cost);');
-  } else if (/[\\/]worker[\\/]utils\.ts$/.test(path)) {
+  } else if (/[\\/]worker[\\/]http-identity-owner\.ts$/.test(path)) {
     source = replace(source, '    const error = { __proto__: null, code, message };',
       '    ' + probe + '.initialErrors.renderings++; ' + probe + '.initialErrorHooks(); const error = { __proto__: null, code, message };');
     source = replace(source, '    const text = ownedErrorStringify(envelope);',
       '    let text; try { text = ownedErrorStringify(envelope); } finally { ' + probe + '.initialErrorDone(); }');
-  } else if (/[\\/]worker[\\/]http-identity-owner\.ts$/.test(path)) {
     source = replace(source, '  try { installOwnedOriginalMethod(cell, original, original.then); }',
       '  globalThis.__ownedProvenanceFixture?.capture(cell); try { installOwnedOriginalMethod(cell, original, original.then); }');
     source = replace(source, '  if (root.unknown) return false;\n  const funding = root.funding.replace(root.funding.bytes - bytes);',
@@ -1101,8 +1092,8 @@ export function observeOwnedJsonSource(path, source) {
       '  if (' + probe + '.consumerMode === "bootstrap-refuse" && !' + probe + '.initialErrors.bootstrapRefused) ' + probe + '.entryPressure(ExactBodyCharge.reserve(__publicLimit - __publicCharged() - requestMetadataBytes + 1)); try { funding = ExactBodyCharge.reserve(requestMetadataBytes); }');
     source = replace(source, '  if (!funding) return undefined;',
       '  if (!funding) { ' + probe + '.initialErrors.bootstrapRefused++; return undefined; }');
-    source = replace(source, '    const owner: RequestOwner = { request, env, funding,',
-      '    ' + probe + '.initialErrors.owners++; const owner: RequestOwner = { request, env, funding,');
+    source = replace(source, '    const owner = new OwnedHttpRequestReceiver();',
+      '    ' + probe + '.initialErrors.owners++; const owner = new OwnedHttpRequestReceiver();');
     source = replace(source, '  owner.errorState = 1;',
       '  owner.errorState = 1; if (' + probe + '.consumerMode === "initial-error-refuse" && !' + probe + '.initialErrors.refusals) { ' + probe + '.initialErrors.refusals++; ' + probe + '.entryPressure(ExactBodyCharge.reserve(__publicLimit - __publicCharged())); }');
     source = 'import { markLocalError as __metadataMark } from "./native-errors.ts";\nimport { setBackgroundRecovery as __metadataBackground } from "./correlation.ts";\n' + source;
@@ -1134,8 +1125,8 @@ export function observeOwnedJsonSource(path, source) {
       'try { this.reader = this.body!.getReader(); this.__probeAcquired = true; ' + probe + '.publicReader(this.reader); }');
     source = replace(source, '    this.original = undefined; this.clearCapture();',
       '    this.original = undefined; this.clearCapture(); if (this.__probeAcquired) ' + probe + '.publicRetiredReader();');
-    source = replace(source, 'export function canCompleteOwnedHttpPreparation(cap: OwnedHttpRequest, request?: Request): boolean {\n  const owner = requests?.get(cap);',
-      'export function canCompleteOwnedHttpPreparation(cap: OwnedHttpRequest, request?: Request): boolean {\n  const owner = requests?.get(cap); if (owner?.unknown) ' + probe + '.reductionBlocked.push({ unknown: owner.unknown, aborted: owner.abortController?.signal.aborted, funding: owner.funding.bytes });');
+    source = replace(source, 'export function canCompleteOwnedHttpPreparation(cap: OwnedHttpRequest, request?: Request): boolean {\n  const owner = OwnedHttpRegistrations.requests?.get(cap);',
+      'export function canCompleteOwnedHttpPreparation(cap: OwnedHttpRequest, request?: Request): boolean {\n  const owner = OwnedHttpRegistrations.requests?.get(cap); if (owner?.unknown) ' + probe + '.reductionBlocked.push({ unknown: owner.unknown, aborted: owner.abortController?.signal.aborted, funding: owner.funding.bytes });');
     source = replace(source, '    this.observeClosed();', '    ' + probe + '.statusReader(this.reader, this.index); this.observeClosed();');
     source = replace(source, 'this.owner.retire(this.index, this);', probe + '.statusRetired(this.index); this.owner.retire(this.index, this);');
     source = replace(source, 'this.owner.decide(this.index, !!(this.flags & 64) && !(this.flags & 16), this.spent);',
@@ -1175,7 +1166,24 @@ export function observeOwnedJsonSource(path, source) {
       'parsed = ownedIntakeJsonParse(text); text = ""; ' + probe + '.intakeConstructed();');
     source = replace(source, 'const graph = ownedHttpJsonDataBytes(text);',
       'const graph = ownedHttpJsonDataBytes(text); ' + probe + '.intakeGraph(graph);');
+  } else if (/[\\/]worker[\\/]token-usage\.ts$/.test(path)) {
+    source = replace(source, 'owned?.admitJson(data);', 'owned?.admitJson(data); if (owned) ' + probe + '.beforeUsageParse();');
+    source = replace(source, 'messageUsage = messageCounters(usageRecord(root));',
+      'if (OwnedUsageRegistrations.privateUsageAccumulators?.has(accept)) ' + probe + '.summary(message.stop_reason); messageUsage = messageCounters(usageRecord(root));');
+    source = replace(source, 'const delta = messageCounters(usageRecord(root));',
+      'if (OwnedUsageRegistrations.privateUsageAccumulators?.has(accept)) ' + probe + '.summary(message?.stop_reason); const delta = messageCounters(usageRecord(root));');
   } else if (/[\\/]worker[\\/]proxy-response\.ts$/.test(path)) {
+    source = replace(source, '      const status = response.status, statusText = response.statusText, headers = response.headers;',
+      '      ' + probe + '.publicationEnter(response); const status = response.status, statusText = response.statusText, headers = response.headers;');
+    source = replace(source, '    const status = response.status, statusText = response.statusText, headers = response.headers;',
+      '    ' + probe + '.publicationEnter(response); const status = response.status, statusText = response.statusText, headers = response.headers;');
+
+    source = replace(source, 'let census: ReturnType<typeof measurePrivateJsonBody> | undefined = measurePrivateJsonBody(data);',
+      probe + '.startCensus(true); let census: ReturnType<typeof measurePrivateJsonBody> | undefined = measurePrivateJsonBody(data);');
+    source = replace(source, 'this.admitJson(this.text, true);', 'this.admitJson(this.text, true); ' + probe + '.beforeUsageParse();');
+    source = replace(source, 'ownedAcceptedUsage?.delete(this.cap);', 'ownedAcceptedUsage?.delete(this.cap); ' + probe + '.usageCleared();');
+    source = replace(source, 'if (!this.finished) enqueueOwnedBytes(controller, bytes!);',
+      'if (!this.finished) { enqueueOwnedBytes(controller, bytes!); ' + probe + '.enqueued(bytes!); }');
     source = replace(source, 'checkOwnedHttpCodecConsumer(http, codec, response, operation, streaming, requestId, usageContext);',
       'if (' + probe + '.consumerMode === "forged") codec = Object.freeze({}); '
       + 'else if (' + probe + '.consumerMode === "stale") codec = ' + probe + '.previousCodec; '
