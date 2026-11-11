@@ -371,7 +371,7 @@ class AdmissionBridgeSource {
   async read<T>(budget: IdentitySourceBudget, profile: IdentityProfile, envelope: import("./access-json.ts").IdentityEnvelope,
     close: (value: unknown) => T): Promise<T | undefined> {
     const owned = privatePreflightReaders?.get(this);
-    let text = "", parsed: unknown, result: T | undefined, backing: Uint8Array<ArrayBuffer> | undefined;
+    let text = "", parsed: unknown, result: T | undefined, backing: Uint8Array | undefined;
     let decoder: TextDecoder | undefined, wire: IdentityWire | undefined;
     try {
       if (this.signal?.aborted) { this.failure("transport", 128); throw identityFailure("transport"); }
@@ -411,7 +411,7 @@ class AdmissionBridgeSource {
         const done = (owned ? owned.done : part!.done); part = undefined as never; this.pending = undefined; if (owned) owned.clearRead();
         this.ticket.leave("read");
         if (done) { this.eof = true; break; }
-        if (!(owned ? ownedByteLength(backing) : backing.byteLength)) throw identityFailure("transport");
+        if (!(owned ? ownedByteLength(backing!) : backing!.byteLength)) throw identityFailure("transport");
       }
       parsed = parseIdentity(text, budget, profile, envelope, wire.span);
       if (owned) owned.acceptParsed(parsed); else result = close(parsed);
@@ -556,9 +556,17 @@ class PrivatePreflightState {
   value?: Uint8Array<ArrayBuffer>;
   returnedBacking?: Uint8Array<ArrayBuffer>;
   done = false;
-  constructor(public ticket: PreflightTicket, public parent: PrivateIdentityParent, public permit: object,
-    public budget: IdentitySourceBudget, public signal?: AbortSignal,
-    readonly kind: "preflight" | "continuation" = "preflight", private destination?: PrivateContinuationDestination) {
+  declare public ticket: PreflightTicket;
+  declare public parent: PrivateIdentityParent;
+  declare public permit: object;
+  declare public budget: IdentitySourceBudget;
+  declare public signal?: AbortSignal;
+  declare readonly kind: "preflight" | "continuation";
+  declare private destination?: PrivateContinuationDestination;
+  constructor(ticket: PreflightTicket, parent: PrivateIdentityParent, permit: object,
+    budget: IdentitySourceBudget, signal?: AbortSignal,
+    kind: "preflight" | "continuation" = "preflight", destination?: PrivateContinuationDestination) {
+    this.ticket = ticket; this.parent = parent; this.permit = permit; this.budget = budget; this.signal = signal; this.kind = kind; this.destination = destination;
     this.source = new AdmissionBridgeSource(ticket);
   }
   holdUnknown(): void { this.flags |= 8; this.parent.unknown = true; this.ticket.holdUnknown(); }

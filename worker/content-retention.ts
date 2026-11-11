@@ -131,7 +131,7 @@ function createContentRetention(env: Env, auth: AuthorizedIdentity, selection: R
   const gateway = selection.endpoint.request_format === "cloudflare_ai_gateway.universal" && Array.isArray(selection.body) ? selection.body : undefined;
   // Admission traverses the privacy-filtered view BEFORE the first map/copy.
   const archive = ownedHttp === undefined ? accountingArchive(record, gateway) : privateAccountingArchive(record, gateway);
-  return ownedContentRetention(ownedHttp === undefined ? env.CONTENT_ARCHIVE : privateBucket, contentKey(tenant, contentRef), expiresAt, contentRef, archive, ownedHttp);
+  return ownedContentRetention(ownedHttp === undefined ? env.CONTENT_ARCHIVE : privateBucket!, contentKey(tenant, contentRef), expiresAt, contentRef, archive, ownedHttp);
 }
 
 function ownedContentRetention(bucket: Env["CONTENT_ARCHIVE"], key: string, expiresAt: string,

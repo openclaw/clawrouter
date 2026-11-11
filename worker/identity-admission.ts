@@ -570,8 +570,15 @@ class PrivateMaterializationState {
   value?: Uint8Array<ArrayBuffer>;
   returnedBacking?: Uint8Array<ArrayBuffer>;
   done = false;
-  constructor(public parent: PrivateIdentityParent, public permit: object, public destination: PrivateMaterializationDestination,
-    public budget: IdentitySourceBudget, public signal?: AbortSignal) {}
+  declare public parent: PrivateIdentityParent;
+  declare public permit: object;
+  declare public destination: PrivateMaterializationDestination;
+  declare public budget: IdentitySourceBudget;
+  declare public signal?: AbortSignal;
+  constructor(parent: PrivateIdentityParent, permit: object, destination: PrivateMaterializationDestination,
+    budget: IdentitySourceBudget, signal?: AbortSignal) {
+    this.parent = parent; this.permit = permit; this.destination = destination; this.budget = budget; this.signal = signal;
+  }
   holdUnknown(): void { this.flags |= 8; this.parent.unknown = true; }
   origin(kind: 0 | 3 | 4 | 5 | 6 | 12 | 15 | 16): number { return privateIdentityOrigin(this.parent, kind); }
   diagnostic(origin: number, reason: unknown, primary = true): void {

@@ -338,8 +338,14 @@ class OwnedAcceptedUsage<T extends CodecReader | GenericUsageReader = CodecReade
   temporaryBytes = 0;
   frame?: string | null;
   result?: UsageInspection;
-  constructor(protected state: T, protected mode: OwnedUsageMode,
-    protected context: Readonly<UsageTokenContext> | undefined, protected provisional: boolean) {}
+  declare protected state: T;
+  declare protected mode: OwnedUsageMode;
+  declare protected context: Readonly<UsageTokenContext> | undefined;
+  declare protected provisional: boolean;
+  constructor(state: T, mode: OwnedUsageMode,
+    context: Readonly<UsageTokenContext> | undefined, provisional: boolean) {
+    this.state = state; this.mode = mode; this.context = context; this.provisional = provisional;
+  }
   private get cap(): OwnedHttpRevalidation | OwnedHttpUsage {
     return this.state instanceof GenericUsageReader ? this.state.usageCap : (this.state as CodecReader).owner.codec;
   }
@@ -514,9 +520,12 @@ export class OwnedChatUsage extends OwnedAcceptedUsage {
   private downstream!: ReadableStreamDefaultController<Uint8Array>;
   private listener: () => void;
   private publishingBody?: ReadableStream<Uint8Array>;
-  constructor(owner: CodecConsumer, reader: CodecReader, private operation: HttpOperation,
-    private validated?: ValidatedNativeUsage, usageContext?: Readonly<UsageTokenContext>) {
+  declare private operation: HttpOperation;
+  declare private validated?: ValidatedNativeUsage;
+  constructor(owner: CodecConsumer, reader: CodecReader, operation: HttpOperation,
+    validated?: ValidatedNativeUsage, usageContext?: Readonly<UsageTokenContext>) {
     super(reader, "none", usageContext, false);
+    this.operation = operation; this.validated = validated;
     this.signal = operation.signal;
     this.ready = new Promise<void>(done => { this.resolve = done; });
     this.listener = this.aborted.bind(this);
@@ -695,10 +704,14 @@ export class OwnedGenericChatUsage extends OwnedAcceptedUsage<GenericUsageReader
   private listener: () => void;
   private listening = false;
   private delivering?: ObservedUsage;
-  constructor(reader: GenericUsageReader, private operation: HttpOperation, private signal: AbortSignal,
-    private validated?: ValidatedNativeUsage, context?: Readonly<UsageTokenContext>) {
+  declare private operation: HttpOperation;
+  declare private signal: AbortSignal;
+  declare private validated?: ValidatedNativeUsage;
+  constructor(reader: GenericUsageReader, operation: HttpOperation, signal: AbortSignal,
+    validated?: ValidatedNativeUsage, context?: Readonly<UsageTokenContext>) {
     GenericUsageReader.checkInspection(reader);
     super(reader, "none", context, false);
+    this.operation = operation; this.signal = signal; this.validated = validated;
     this.ready = new Promise<void>(resolve => { this.resolve = resolve; }); this.listener = this.aborted.bind(this);
   }
   get finished(): number { return this.flags >>> 8 & 3; }

@@ -1,7 +1,7 @@
 import './typescript-setup.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { OwnedReaderDriver, ProxyCompletion, inspectOwnedBytes, newOwnedBytes, ownedByteSubarray, ownedByteSlice, copyOwnedBytes, newOwnedDecoder, decodeOwnedBytes, encodeOwnedTextInto, newOwnedEncoder, enqueueOwnedBytes } from '../proxy-completion.ts';
+import { OwnedReaderDriver, ProxyCompletion, inspectOwnedBytes, newOwnedBytes, ownedByteSubarray, ownedByteSlice, copyOwnedBytes, newOwnedDecoder, decodeOwnedBytes, encodeOwnedTextInto, newOwnedEncoder, enqueueOwnedBytes, captureOwnedResponseMetadata } from '../proxy-completion.ts';
 
 // Mechanical driver witnesses complement the actual private Workerd route.
 // This fixture receiver is never exported by the Worker or counted as an additional
@@ -466,4 +466,18 @@ test(`returned unlock direct FIRST ignores foreign fulfillment; install throw=${
   if (throwAfter) assert.ok(owner.failures.some(row => row.kind === 'unlock' && row.undefined));
   else { await ending; assert.equal(owner.unlockObservation, undefined); }
   accepted = undefined; rejected = undefined;
+});
+
+// Clean Node regression only; hostile Headers history remains Workerd-scoped.
+test('captured native Response metadata ignores own shadows and rejects foreign receivers', async () => {
+  const response = new Response('native body', { status: 201, statusText: 'Created', headers: { 'x-fixture': 'native' } });
+  const body = response.body; let hooks = 0;
+  for (const name of ['body', 'status', 'statusText', 'headers'])
+    Object.defineProperty(response, name, { get() { hooks++; throw new Error('metadata shadow'); } });
+  const captured = captureOwnedResponseMetadata(response);
+  assert.equal(captured.body, body); assert.equal(captured.status, 201); assert.equal(captured.statusText, 'Created');
+  assert.equal(captured.headers.get('x-fixture'), 'native'); assert.equal(hooks, 0);
+  for (const value of [{}, Object.create(Response.prototype), new Proxy(response, {})])
+    assert.throws(() => captureOwnedResponseMetadata(value));
+  assert.equal(await new Response(captured.body).text(), 'native body');
 });

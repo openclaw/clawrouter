@@ -79,6 +79,42 @@ const settledState = async f => {
   }
 };
 
+// Authored after the first hosted module-load failure; execution awaits a new
+// exact-HEAD lease. Exercise Workerd's inherited Body getter with real objects.
+test('native Response metadata capture uses the trusted inherited body getter', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const response = await f.request('https://fixture/fixture/native-metadata');
+    assert.equal(response.status, 200);
+    assert.deepEqual(JSON.parse(response.text), { sameBody: true, status: 201, statusText: 'Created',
+      header: 'native', text: 'native body', hooks: 0, rejected: 3 });
+  });
+});
+
+test('native soft-status FIRST body failure retains full alternate credential backing under HTTP UNKNOWN', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    f.expectUnknownRetirement();
+    f.releases.push(() => f.request('https://fixture/fixture/retained-status', { method: 'DELETE' }));
+    f.releases.push(() => f.request('https://fixture/fixture/terminal', { method: 'DELETE' }));
+    assert.equal((await f.request('https://fixture/fixture/terminal', { method: 'POST', body: '{}' })).status, 204);
+    assert.equal((await f.request('https://fixture/fixture/retry?retained-status=1', { method: 'POST', body: 'response' })).status, 204);
+    const response = await f.request('https://fixture/v1/chat/completions', chat('pricing', { model: ownedHttpPricingModel, ownedRetryCase: 'response' }));
+    assert.notEqual(response.status, 200);
+    const race = JSON.parse((await f.request('https://fixture/fixture/retained-status')).text), report = await state(f);
+    assert.ok(race.arrived >= 1 && race.bodyGets >= 1); assert.equal(race.completedPreparations, 2);
+    assert.equal(race.before.length, 2); assert.equal(race.after.length, 2); assert.equal(race.current.length, 2);
+    for (const tickets of [race.before, race.after, race.current]) {
+      assert.equal(tickets[1].bytes, 33554432); assert.equal(tickets[1].reduction, 0);
+    }
+    assert.ok(race.blocked.some(row => row.unknown && row.aborted === false), 'HTTP UNKNOWN is independent of the live operation signal');
+    assert.equal(report.credentialReductions.length, 1, 'only the first clean preparation reduced');
+    assert.equal(report.credentialCensuses.length, 1, 'the UNKNOWN alternate never enters retained census');
+    const sent = JSON.parse((await f.request('https://fixture/fixture/upstream')).text);
+    assert.deepEqual(sent.map(row => row.id), ['retry-a']);
+    assert.equal(count(report, 'credential', '/materialize'), 2);
+    assert.ok(report.completed.length < report.intakes.length); assert.ok(report.charged >= 33554432);
+  }, true);
+});
+
 for (const mode of ['preparation', 'response', 'mixed', 'exhausted', 'failed-alternate'])
 test(`native cumulative four-port generic grant policy ${mode}`, { timeout: 120000 }, async t => {
   await fixture(t, async f => {

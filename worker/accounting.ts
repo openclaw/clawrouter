@@ -207,7 +207,7 @@ export async function reserveLedgerIntent(env: Env, intent: BudgetReservationInt
         withLimitHint(intent.kind === "weekly" ? weeklyBudgetMessage(intent.request.limitMicros) : intent.kind === "daily" ? dailyBudgetMessage(intent.request.limitMicros) : intent.kind === "policy" ? "proxy key budget is exhausted" : `provider ${intent.request.policyId.slice("provider/".length)} monthly budget is exhausted`, intent));
       recordOwnedHttpBudgetDenial(ownedHttp, denial); throw denial;
     }
-    const reservation = { reservationId: intent.request.reservationId, objectName: intent.objectName, ...(result.dispatched === true ? { dispatched: true } : {}) };
+    const reservation: LedgerBudgetReservation = { reservationId: intent.request.reservationId, objectName: intent.objectName, ...(result.dispatched === true ? { dispatched: true } : {}) };
     acceptOwnedHttpBudgetReservation(ownedHttp, right, reservation); return reservation;
   }
   const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(intent.objectName));

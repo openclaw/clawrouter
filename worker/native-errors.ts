@@ -142,7 +142,7 @@ export function withOwnedNativeLocalError(cap: OwnedHttpRequest, response: Respo
   // Only these newly constructed private records lose their prototype; the
   // shared envelope algorithm and all ordinary objects remain unchanged.
   ownedErrorPrototype(envelope, null); ownedErrorPrototype(envelope.error, null);
-  const text = ownedErrorStringify(envelope), bytes = ownedErrorApply(ownedErrorEncode, new ownedErrorEncoder(), [text]) as Uint8Array;
+  const text = ownedErrorStringify(envelope), bytes = ownedErrorApply(ownedErrorEncode, new ownedErrorEncoder(), [text]) as ReturnType<typeof ownedErrorEncode>;
   const copy = newOwnedResponse(bytes, source.status, "", headers);
   inheritOwnedLocalError(response, copy);
   return finishOwnedHttpMetadataStage(cap, response, 0, copy);

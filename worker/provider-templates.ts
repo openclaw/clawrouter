@@ -439,7 +439,7 @@ export function beginPrivateConfiguration(http: OwnedHttpRequest, preparation: P
   configurationApply(configurationSet, privateConfigurations ??= new configurationMap(), [preparation, slot]);
   return nonce;
 }
-export function isPrivateConfiguration(preparation: PreparationAdmission | undefined): preparation is PreparationAdmission {
+export function isPrivateConfiguration(preparation: PreparationAdmission | undefined): boolean {
   return !!preparation && !!privateConfigurations && !!configurationApply(configurationGet, privateConfigurations, [preparation]);
 }
 export function matchesPrivateConfigurationError(preparation: PreparationAdmission, error: unknown): boolean {

@@ -1,16 +1,55 @@
 # Private owned HTTP Chat staging
 
-This is an inactive CODE_COMPLETE33 source repair against exact main
-`7b87537df59c39ae1bae0cfa748208572fa4d19f`, preserving the previously published
-`236366c0a7209b8c71b325051d935bb7820bb667` ancestry. The default Worker export and
-ordinary HTTP authentication, selection and credential-cache entrypoints remain
-unchanged. The named compiled HTTP entry and pinned UNIFIED client witness are
-implemented and registered, but the complete vertical is not qualified.
-There is no deployment or public header/Env activation. CODE_COMPLETE describes
-implemented source and authored witnesses only. Whole DATA/COMMON, each fixed
-CONTROL window, variable traversal workspace and shared65536 inventories remain
-OPEN; all semantics remain UNRUN_CODE_ONLY_HOSTED. Historical blockers and lower
-component counts below are not current qualification certificates.
+The current work is SOURCE_ONLY_PARTIAL repair of published candidate
+`bbfda9f1e2e4535436a5f4a4b142adaaefb9e1bc`, against exact main
+`7b87537df59c39ae1bae0cfa748208572fa4d19f`. That candidate preserved the
+`236366c0a7209b8c71b325051d935bb7820bb667` ancestry and was code complete for its
+then-current source contract; its first hosted qualification failed. It is not
+runtime-qualified or numerically qualified. No deployment or default activation
+has occurred. The named private entry remains inactive.
+
+Hosted CI run42958696054 exposed Node strip-only constructor parameter
+properties, 30 Worker typecheck errors, and a Workerd module-initialization
+failure. Consumer run42958695886 also failed during Workerd startup. The Worker
+test command stops on typecheck failure, so its Node/Workerd witness files did
+not run. Earlier UNRUN statements below describe their original source-only
+checkpoints; they do not erase these actual hosted failures.
+
+The partial repair replaces25 constructor parameter-property declarations with
+erasable declarations and explicit assignments at the same constructor/super
+boundary. It preserves own-field creation order and presence, including
+undefined optional fields. Queue originals keep their actual send return type;
+void observers still discard successful values. The cost wrapper's ToolKnowledge
+parameter now uses argument index5, matching the existing runtime call order
+(parent tools, then prepared tariff); no ordinary pricing argument order changed.
+
+Workerd1.20261021.1 declares the native body getter on Body and makes Response
+inherit Body. The configured2026-06-05 date enables prototype getters. The old
+own-only Response.prototype lookup therefore returned undefined. The capture
+now checks Response.prototype and its immediate native parent at trusted module
+initialization, retaining the native getter and Response status/header branding.
+It never obtains a getter from a request-time instance or accepts a spoofed
+receiver. Byte backing, fixed-buffer and controller checks remain unchanged.
+See the pinned [Body/Response definitions](https://github.com/cloudflare/workerd/blob/v1.20261021.1/src/workerd/api/http.h#L96)
+and [prototype-getter compatibility flag](https://github.com/cloudflare/workerd/blob/v1.20261021.1/src/workerd/io/compatibility-date.capnp#L111).
+
+Generic foreground reduction now requires the current HTTP owner to remain
+live before census and immediately before atomic replacement, in addition to
+its existing credential/port/source/finally proofs. HTTP UNKNOWN, cancellation,
+retirement or a mismatched current association retains the full32MiB ticket and
+blocks alternate commit/forward work. The authored soft-status race releases an
+actual pending status response after alternate provider cleanup and final funding,
+while the caller still awaits preparation; its body getter throws with an
+un-aborted operation signal. The witness checks unchanged ticket
+bytes, no second census/reduction, no alternate provider fetch, and retained
+physical custody. Fixture gates release before teardown. New native-metadata
+and strip-only source witnesses supplement the existing clean four-attempt tests.
+All repaired runtime behavior remains UNRUN_CODE_ONLY_HOSTED.
+
+Whole DATA/COMMON, fixed operation/source/read/terminal128 and sync512, paid
+traversal CONTROL and permanent65536 inventories remain OPEN. The independently
+reported ACK-overlap CONTROL obstruction is not repaired or relabeled here.
+Earlier lower component counts are historical evidence, not fit certificates.
 
 
 Current accounting contract: fixed execution products remain subject to each

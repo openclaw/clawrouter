@@ -197,7 +197,7 @@ export function measureOwnedHeaderUnits(headers: Headers): number {
   ownedByteApply(ownedHeaderForEach, headers, [countOwnedHeader, counter]);
   return counter.units;
 }
-export function newOwnedResponse(body: ReadableStream<Uint8Array> | Uint8Array | string | null, status: number, statusText: string, headers: Headers): Response {
+export function newOwnedResponse(body: ReadableStream<Uint8Array> | Uint8Array<ArrayBuffer> | string | null, status: number, statusText: string, headers: Headers): Response {
   return new ownedResponseConstructor(body, { __proto__: null, status, statusText, headers } as ResponseInit);
 }
 
@@ -226,7 +226,10 @@ export function ownedMetadataString(value: string | number | boolean | null | un
   return ownedPrimitiveString(value);
 }
 
-const ownedResponseBody = ownedByteDescriptor(ownedResponseConstructor.prototype, "body")!.get!;
+// Workerd inherits the native body getter from Body.prototype; Node owns it
+// on Response.prototype. Capture only that trusted native prototype layout.
+const ownedResponseBody = (ownedByteDescriptor(ownedResponseConstructor.prototype, "body")
+  ?? ownedByteDescriptor(ownedBytePrototype(ownedResponseConstructor.prototype), "body"))!.get!;
 const ownedResponseStatus = ownedByteDescriptor(ownedResponseConstructor.prototype, "status")!.get!;
 const ownedResponseStatusText = ownedByteDescriptor(ownedResponseConstructor.prototype, "statusText")!.get!;
 const ownedResponseHeaders = ownedByteDescriptor(ownedResponseConstructor.prototype, "headers")!.get!;
@@ -544,7 +547,7 @@ export abstract class OwnedReaderDriver {
       this.driverCleanupFailure("cancel", started ? this.recordDriverInstallationFailure("cancel", reason) : this.recordDriverFailure("cancel", reason)); reason = undefined;
     } finally { original = undefined; reason = undefined; operation = undefined; this.installing--; this.schedule(); }
   }
-  private unlockDriver(normalizer = false): void {
+  private unlockDriver(_normalizer = false): void {
     if (this.driverFlags & 8) return;
     this.driverFlags |= 8; this.pending |= 4; this.installing++;
     let original: unknown, started = false;

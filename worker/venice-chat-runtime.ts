@@ -298,8 +298,10 @@ class OwnedVeniceSource extends OwnedReaderDriver {
   abortFailure?: object;
   outputAbort?: () => void;
   done = false;
-  constructor(readonly state: OwnedVeniceCodec, response: Response, body: ReadableStream<Uint8Array>) {
-    super(); this.response = response; this.body = body;
+  declare readonly state: OwnedVeniceCodec;
+  constructor(state: OwnedVeniceCodec, response: Response, body: ReadableStream<Uint8Array>) {
+    super();
+    this.state = state; this.response = response; this.body = body;
     state.source = this; ownOwnedHttpVeniceRetirement(state.cap, this.retired);
   }
   open(response: Response, signal: AbortSignal): void {
@@ -448,7 +450,7 @@ async function ownedVeniceJson(state: OwnedVeniceCodec, source: OwnedVeniceSourc
     state.outputRetired = new Promise(resolve => { resolveOutput = resolve; });
     ownOwnedHttpVeniceRetirement(state.cap, state.outputRetired);
     const finishOutput = () => { outputWire = undefined; state.outputDone = true; codecPhase(state, ownedCodecMetadata); resolveOutput(); };
-    const stream = new ReadableStream<Uint8Array>({
+    const stream = new ReadableStream({
       type: "bytes",
       pull(controller) {
         if (!sent) { sent = true; const bytes = ownedByteSubarray(outputWire!, 0, size); outputWire = undefined; enqueueOwnedBytes(controller, bytes); }
@@ -494,7 +496,11 @@ class OwnedVeniceEvents {
   // upstream EOF=16, public cancellation=32.
   private flags = 0;
   private output!: ReadableStreamDefaultController<Uint8Array>;
-  constructor(private source: OwnedVeniceSource, private length: string | null) {}
+  declare private source: OwnedVeniceSource;
+  declare private length: string | null;
+  constructor(source: OwnedVeniceSource, length: string | null) {
+    this.source = source; this.length = length;
+  }
   publish(response: Response): Response {
     const body = new ReadableStream<Uint8Array>(this, { highWaterMark: 0 });
     const headers = new Headers(response.headers);

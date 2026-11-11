@@ -150,7 +150,10 @@ class OwnedSoftBudget {
   private resolve!: () => void;
   private reject!: (reason: unknown) => void;
   readonly check = new Promise<void>((yes, no) => { this.resolve = yes; this.reject = no; });
-  constructor(readonly http: OwnedHttpRequest, readonly prepared: PreparedSoftBudget) {
+  declare readonly http: OwnedHttpRequest;
+  declare readonly prepared: PreparedSoftBudget;
+  constructor(http: OwnedHttpRequest, prepared: PreparedSoftBudget) {
+    this.http = http; this.prepared = prepared;
     this.remaining = prepared.descriptors.length;
     if (ownedSoftBudgets?.has(http)) throw new TypeError("owned soft budget already prepared");
     (ownedSoftBudgets ??= new WeakMap()).set(http, this);

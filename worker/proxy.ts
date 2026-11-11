@@ -1,6 +1,6 @@
 import { setOwnedHeader, ProxyCompletion, inspectOwnedBytes, newOwnedBytes, ownedByteLength, ownedByteSubarray, copyOwnedBytes, newOwnedDecoder, decodeOwnedBytes } from "./proxy-completion.ts";
 import { isIdentityFailure, identityFailure } from "./identity-admission.ts";
-import { beginOwnedHttpProxyPublicationHeaders, checkOwnedHttpProxyPublicationBody, finishOwnedHttpProxyPublication, beginOwnedHttpUpload, beginOwnedHttpRevalidation, prepareOwnedHttpAccounting, finishOwnedHttpRevalidationPreparation, discardOwnedHttpInitialError, admitOwnedHttpErrorText, isOwnedHttpLocalFailure, checkOwnedHttpRequest, matchesOwnedHttpRequestInputs, checkOwnedHttpUpload, holdOwnedHttpUploadSerialization, abandonOwnedHttpUpload, growOwnedHttpRequest, ownedHttpSinkOwner, startOwnedHttpProviderFetch, consumeOwnedHttpProviderResponse, disposeOwnedHttpProviderResponse, matchesOwnedHttpProviderHandoff, ownedHttpSignal, cancelOwnedHttpResponse,
+import { beginOwnedHttpProxyPublicationHeaders, checkOwnedHttpProxyPublicationBody, finishOwnedHttpProxyPublication, beginOwnedHttpUpload, beginOwnedHttpRevalidation, prepareOwnedHttpAccounting, finishOwnedHttpRevalidationPreparation, discardOwnedHttpInitialError, admitOwnedHttpErrorText, isOwnedHttpLocalFailure, checkOwnedHttpRequest, matchesOwnedHttpRequestInputs, canCompleteOwnedHttpPreparation, checkOwnedHttpUpload, holdOwnedHttpUploadSerialization, abandonOwnedHttpUpload, growOwnedHttpRequest, ownedHttpSinkOwner, startOwnedHttpProviderFetch, consumeOwnedHttpProviderResponse, disposeOwnedHttpProviderResponse, matchesOwnedHttpProviderHandoff, ownedHttpSignal, cancelOwnedHttpResponse,
   beginOwnedHttpIntakeDiagnostics, ownedHttpIntakeFailure, finishOwnedHttpIntakeDiagnostics,
   beginOwnedHttpSinkRegistration, completeOwnedHttpSinkRegistration, abandonUnstartedOwnedHttpRegistration,
   ownedHttpCompletion, holdOwnedHttpRequest, dispatchOwnedHttpUpload, ownOwnedHttpResponse,
@@ -930,8 +930,13 @@ class OwnedHttpIntakeIo {
   private stopped: object | undefined = Object.freeze({ kind: "owned-http-intake-stopped" });
   private abortCell: OwnedIntakeAbort | undefined = { owner: this };
   readonly abort = abortOwnedIntake.bind(this.abortCell!);
-  constructor(private cap: OwnedHttpRequest, private diagnostics: ReturnType<typeof beginOwnedHttpIntakeDiagnostics>,
-    private body: ReadableStream<Uint8Array> | undefined) {}
+  declare private cap: OwnedHttpRequest;
+  declare private diagnostics: ReturnType<typeof beginOwnedHttpIntakeDiagnostics>;
+  declare private body: ReadableStream<Uint8Array> | undefined;
+  constructor(cap: OwnedHttpRequest, diagnostics: ReturnType<typeof beginOwnedHttpIntakeDiagnostics>,
+    body: ReadableStream<Uint8Array> | undefined) {
+    this.cap = cap; this.diagnostics = diagnostics; this.body = body;
+  }
   private unknown(): void {
     this.flags |= 2;
     try { holdOwnedHttpRequest(this.cap); } catch { /* A lost parent remains UNKNOWN here. */ }
@@ -1926,7 +1931,7 @@ function createOwnedHttpAccounting(cap: OwnedHttpRequest, options: Parameters<ty
   return result!;
 }
 function estimateOwnedHttpCost(cap: OwnedHttpRequest, selection: ProxySelection, auth: AuthorizedIdentity,
-  parentTools: Parameters<typeof estimateCost>[6]): EstimatedCost {
+  parentTools: Parameters<typeof estimateCost>[5]): EstimatedCost {
   const body = selection.body as Record<string, unknown>;
   enterOwnedHttpPricing(cap, body);
   let result: EstimatedCost | undefined, hasPrimary = false, primary: unknown;
@@ -2510,7 +2515,7 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     // retire only the timer and keep caller cancellation connected through EOF.
     if (!searchOwner) operation.retireDeadline();
     if (selection.capability === "llm.messages" && selection.endpoint.request_format === "anthropic.messages" && reservation?.reservations.length && policyRequestCost(auth.policy, selection.capability) == null) {
-      priceGuard = await guardAnthropicPrice(response, tokens => tokens?.billable === false || !!anthropicPricing(selection.model?.pricing, selection.model?.upstream, accounting!.facts.anthropicRequest ?? {}, tokens?.anthropic ?? {}), operation, requestId);
+      priceGuard = await guardAnthropicPrice(response, tokens => tokens?.billable === false || !!anthropicPricing(selection.model?.pricing, selection.model?.upstream, (accounting as ReturnType<typeof createProxyAccounting>).facts.anthropicRequest ?? {}, tokens?.anthropic ?? {}), operation, requestId);
       response = priceGuard.response;
     }
   } catch (error) {
@@ -2806,7 +2811,8 @@ export function matchesOwnedHttpCompletedPreparation(cap: OwnedHttpRequest, requ
     && !!prepared && !prepared.ownedVenice && !prepared.revalidateAccount && !prepared.revalidateMedia
     && !prepared.revalidateDiscovery && !prepared.revalidateDelivery && !prepared.acquireDiscovery && !prepared.continuation
     && owner.selection?.provider.id !== "venice" && owner.selection?.provider.id !== "gmi"
-    && !owner.preparingIdentity && !owner.preparingUpstream && !owner.preparingFields && !owner.preparingAdmission;
+    && !owner.preparingIdentity && !owner.preparingUpstream && !owner.preparingFields && !owner.preparingAdmission
+    && !!port.signal && !port.signal.aborted && canCompleteOwnedHttpPreparation(cap, request);
 }
 function excludeOwnedHttpGrant(cap: OwnedHttpRequest, key: string): void {
   const retry = ownedProxyInvocations?.get(cap)?.retry;
@@ -2815,7 +2821,8 @@ function excludeOwnedHttpGrant(cap: OwnedHttpRequest, key: string): void {
 }
 function commitOwnedHttpAttempt(cap: OwnedHttpRequest): PreparedUpstream {
   const owner = ownedProxyInvocations?.get(cap), port = owner?.retry?.pending;
-  if (!owner || !port || (port.phase & ~8) !== 2 || !port.prepared || !port.upload) throw identityFailure("protocol");
+  if (!owner || !port || (port.phase & ~8) !== 2 || !port.prepared || !port.upload
+    || !canCompleteOwnedHttpPreparation(cap)) throw identityFailure("protocol");
   port.signal!.throwIfAborted(); ownedHttpSignal(cap).throwIfAborted();
   owner.prepared = port.prepared; owner.upload = port.upload; owner.identity = port.identity; owner.archivePrepared = undefined;
   port.phase = 3 | (port.phase & 8); owner.retry!.pending = undefined;
@@ -2846,7 +2853,7 @@ async function prepareOwnedHttpAttempt(cap: OwnedHttpRequest, request: Request, 
     try {
       await prepareOwnedHttpProvider(cap, request, env, port.input, selection, query, true, false, signal);
       signal.throwIfAborted();
-      if (!port.prepared || port.phase !== 2) throw identityFailure("protocol");
+      if (!port.prepared || port.phase !== 2 || !canCompleteOwnedHttpPreparation(cap, request)) throw identityFailure("protocol");
       if (matchesOwnedHttpCompletedPreparation(cap, request, port.credential!, port.permit!)) {
         reduceOwnedHttpPreparedCredential(cap, request, port.credential!, port.permit!); port.phase |= 8;
       }

@@ -131,7 +131,12 @@ class UploadOwner {
   private pipeOrigin = 0;
   private observation?: OwnedOriginalObservation;
   readonly failures: unknown[] = [];
-  constructor(readonly cap: OwnedHttpUpload, readonly request: RequestOwner, readonly listenerRemoval: SinkOriginOwner) {}
+  declare readonly cap: OwnedHttpUpload;
+  declare readonly request: RequestOwner;
+  declare readonly listenerRemoval: SinkOriginOwner;
+  constructor(cap: OwnedHttpUpload, request: RequestOwner, listenerRemoval: SinkOriginOwner) {
+    this.cap = cap; this.request = request; this.listenerRemoval = listenerRemoval;
+  }
   get started(): boolean { return !!(this.flags & 1); }
   get settled(): boolean { return !!(this.flags & 2); }
   get dispatched(): boolean { return !!(this.flags & 4); }
@@ -375,7 +380,11 @@ class OwnedSinkVoidCommand {
   private resolve!: () => void;
   private reject!: (failure: object) => void;
   readonly ready = new Promise<void>((resolve, reject) => { this.resolve = resolve; this.reject = reject; });
-  constructor(readonly owner: RequestOwner, readonly origin: SinkOriginOwner, readonly budget?: OwnedBudgetSequence) {
+  declare readonly owner: RequestOwner;
+  declare readonly origin: SinkOriginOwner;
+  declare readonly budget?: OwnedBudgetSequence;
+  constructor(owner: RequestOwner, origin: SinkOriginOwner, budget?: OwnedBudgetSequence) {
+    this.owner = owner; this.origin = origin; this.budget = budget;
     // Suppression belongs to our genuine void receipt, never the discarded
     // return of an external observer method.
     void this.ready.then(ignoreOwnedVoidOutcome, ignoreOwnedVoidOutcome);
@@ -1001,7 +1010,8 @@ export function ownedHttpCodecFailure(cap: OwnedHttpRevalidation, role: OwnedCod
   const base = role === 0 ? owner.sourceBase! : role === 1 ? owner.consumerBase! : owner.replacementBase!;
   const offset = phase === "acquire" ? 0 : phase === "read" ? 1 : phase === "cancel" ? 2 : phase === "unlock" ? 3
     : phase === "listenerAdd" ? 4 : phase === "listenerRemove" ? 5 : phase === "abort" ? 6 : phase === "closed" ? role === 0 ? 9 : 6 : phase === "pull" ? 7 : phase === "retire" ? 8 : -1;
-  if (offset < 0) throw identityFailure("protocol");
+  if (offset < 0 || phase === "readObserver" || phase === "closedObserver" || phase === "cancelObserver" || phase === "unlockObserver")
+    throw identityFailure("protocol");
   const ordinal = base + offset, known = root.sinkOrigins!.has(ordinal);
   const kind: SinkOrigin = phase === "listenerAdd" ? "listener-add" : phase === "listenerRemove" ? "listener-remove" : phase;
   const record = failedSinkOrigin(root, 32 * ordinal + sinkKinds.indexOf(kind), reason);
@@ -1190,9 +1200,15 @@ class OwnedRevalidationRpc extends OwnedReaderDriver {
   private wireBytes = 0;
   private readonly budget = identitySourceBudget();
   private readonly base: number;
-  constructor(private cap: OwnedHttpRevalidation, private owner: RevalidationOwner, private root: RequestOwner,
-    private signal: AbortSignal, private kind: "snapshot" | "inspect") {
+  declare private cap: OwnedHttpRevalidation;
+  declare private owner: RevalidationOwner;
+  declare private root: RequestOwner;
+  declare private signal: AbortSignal;
+  declare private kind: "snapshot" | "inspect";
+  constructor(cap: OwnedHttpRevalidation, owner: RevalidationOwner, root: RequestOwner,
+    signal: AbortSignal, kind: "snapshot" | "inspect") {
     super();
+    this.cap = cap; this.owner = owner; this.root = root; this.signal = signal; this.kind = kind;
     this.base = root.nextSinkOrigin; root.nextSinkOrigin += 10; root.sinkCredits -= 10;
     this.fetchCell = { owner: this, flags: 0 };
   }
@@ -1267,7 +1283,7 @@ class OwnedRevalidationRpc extends OwnedReaderDriver {
         { method: "POST", body: this.requestBody, signal: this.signal });
       started = !!original;
       const then = original.then;
-      void Reflect.apply(then, original, [ownedRpcFetchAccepted.bind(this.fetchCell), ownedRpcFetchRejected.bind(this.fetchCell)]);
+      void Reflect.apply(then, original, [ownedRpcFetchAccepted.bind(this.fetchCell!), ownedRpcFetchRejected.bind(this.fetchCell!)]);
       this.fetchFlags |= 4;
     } catch (reason) {
       try {
@@ -1466,7 +1482,11 @@ export function ownedHttpArchiveAbort(sink: OwnedHttpSinkOwner, controller: Abor
 class OwnedSinkRegistration {
   private flags = 1; // installation/registration, seen, UNKNOWN, queued, closed, retired
   private observation?: OwnedOriginalObservation;
-  constructor(readonly owner: RequestOwner, public origin: SinkOriginOwner) {}
+  declare readonly owner: RequestOwner;
+  declare public origin: SinkOriginOwner;
+  constructor(owner: RequestOwner, origin: SinkOriginOwner) {
+    this.owner = owner; this.origin = origin;
+  }
   private unknown(): void { this.flags |= 4; this.owner.unknown = true; }
   private observed(): void {
     if (this.flags & 2) return;
@@ -1486,8 +1506,8 @@ class OwnedSinkRegistration {
     this.observation = undefined; this.flags |= 32;
     retireOwnedSinkChild(this.owner);
   }
-  dispatchOriginal(cell: OwnedOriginalObservation, _failed: boolean, value: unknown): void {
-    value = undefined;
+  dispatchOriginal(cell: OwnedOriginalObservation, _failed: boolean, _value: unknown): void {
+    _value = undefined;
     if (cell === this.observation && !(this.flags & 32)) this.observed();
   }
   complete(context?: Pick<ExecutionContext, "waitUntil">, work?: Promise<void | boolean>): void {
@@ -1553,7 +1573,7 @@ export function ownedHttpQueueSend(sink: OwnedHttpSinkOwner, queue: Env["USAGE_Q
   const command = createOwnedSinkVoidCommand(owner, record);
   try { if (usage) copyPrivateQueueCapsule(message, command); else copyPrivateQueueIntent(message, command); }
   catch (reason) { command.abandonUnstarted(); throw reason; }
-  let original: Promise<void>;
+  let original: ReturnType<Env["USAGE_QUEUE"]["send"]>;
   try { original = queue.send(command.subject as QueueMessage); }
   catch (reason) { command.invokedFailure(reason); return command.ready; }
   finally { message = undefined as never; }
@@ -1572,7 +1592,11 @@ class OwnedProviderFetch {
   private resolveRetired!: () => void;
   readonly retired = new Promise<void>(resolve => { this.resolveRetired = resolve; });
   private cancelOrigin = 0;
-  constructor(readonly http: OwnedHttpRequest, readonly upload: UploadOwner, readonly origin: number) {
+  declare readonly http: OwnedHttpRequest;
+  declare readonly upload: UploadOwner;
+  declare readonly origin: number;
+  constructor(http: OwnedHttpRequest, upload: UploadOwner, origin: number) {
+    this.http = http; this.upload = upload; this.origin = origin;
     void this.ready.then(ignoreOwnedVoidOutcome, ignoreOwnedVoidOutcome);
   }
   private unknown(): void { this.flags |= 8; this.upload.request.unknown = true; }
@@ -1732,7 +1756,11 @@ class OwnedPreflightAcquisition {
   private fetching = 0;
   private seen = false;
   private observation?: OwnedOriginalObservation;
-  constructor(private root: RequestOwner, private receipt: PrivatePreflightReceipt, private permit: object) {
+  declare private root: RequestOwner;
+  declare private receipt: PrivatePreflightReceipt;
+  declare private permit: object;
+  constructor(root: RequestOwner, receipt: PrivatePreflightReceipt, permit: object) {
+    this.root = root; this.receipt = receipt; this.permit = permit;
     this.acquisition = sinkOrigin(root.sink!, "acquire"); this.fetching = sinkOrigin(root.sink!, "fetch");
   }
   private accepted(response: Response): void {
@@ -1827,10 +1855,21 @@ class OwnedContinuationAcquisition {
   started = false;
   private receipt?: PrivateContinuationReceipt;
   private init?: RequestInit;
-  constructor(private root: RequestOwner, public permit: object, public destination: PrivateContinuationDestination,
-    private ticket: PreflightTicket, private budget: IdentitySourceBudget, private request: Request, private attempt: UploadOwner | undefined,
-    private binding: NonNullable<Env["ACCESS_CONTROL"]>, private namespace: typeof credentialPreflightNamespace,
-    private signal: AbortSignal | undefined) {
+  declare private root: RequestOwner;
+  declare public permit: object;
+  declare public destination: PrivateContinuationDestination;
+  declare private ticket: PreflightTicket;
+  declare private budget: IdentitySourceBudget;
+  declare private request: Request;
+  declare private attempt: UploadOwner | undefined;
+  declare private binding: NonNullable<Env["ACCESS_CONTROL"]>;
+  declare private namespace: typeof credentialPreflightNamespace;
+  declare private signal: AbortSignal | undefined;
+  constructor(root: RequestOwner, permit: object, destination: PrivateContinuationDestination,
+    ticket: PreflightTicket, budget: IdentitySourceBudget, request: Request, attempt: UploadOwner | undefined,
+    binding: NonNullable<Env["ACCESS_CONTROL"]>, namespace: typeof credentialPreflightNamespace,
+    signal: AbortSignal | undefined) {
+    this.root = root; this.permit = permit; this.destination = destination; this.ticket = ticket; this.budget = budget; this.request = request; this.attempt = attempt; this.binding = binding; this.namespace = namespace; this.signal = signal;
     this.acquisition = sinkOrigin(root.sink!, "acquire"); this.fetching = sinkOrigin(root.sink!, "fetch");
   }
   private accepted(response: Response): void {
@@ -1952,7 +1991,11 @@ class OwnedMaterializationAcquisition {
   private fetching = 0;
   private seen = false;
   private observation?: OwnedOriginalObservation;
-  constructor(private root: RequestOwner, private receipt: PrivateMaterializationReceipt, private permit: object) {
+  declare private root: RequestOwner;
+  declare private receipt: PrivateMaterializationReceipt;
+  declare private permit: object;
+  constructor(root: RequestOwner, receipt: PrivateMaterializationReceipt, permit: object) {
+    this.root = root; this.receipt = receipt; this.permit = permit;
     this.acquisition = sinkOrigin(root.sink!, "acquire"); this.fetching = sinkOrigin(root.sink!, "fetch");
   }
   private accepted(response: Response): void {
@@ -2079,7 +2122,12 @@ class OwnedLedgerCommand {
   private fetchInstallation: number;
   private cancelInstallation: number;
   private processing: number;
-  constructor(readonly root: RequestOwner, readonly path: "/reserve" | "/dispatch" | "/charge" | "/settle" | "/ingest", readonly expectedId?: string, readonly budget?: OwnedBudgetSequence) {
+  declare readonly root: RequestOwner;
+  declare readonly path: "/reserve" | "/dispatch" | "/charge" | "/settle" | "/ingest";
+  declare readonly expectedId?: string;
+  declare readonly budget?: OwnedBudgetSequence;
+  constructor(root: RequestOwner, path: "/reserve" | "/dispatch" | "/charge" | "/settle" | "/ingest", expectedId?: string, budget?: OwnedBudgetSequence) {
+    this.root = root; this.path = path; this.expectedId = expectedId; this.budget = budget;
     this.fetchInstallation = sinkOrigin(root.sink!, "retire");
     this.cancelInstallation = sinkOrigin(root.sink!, "retire");
     this.processing = sinkOrigin(root.sink!, "body");
@@ -2251,8 +2299,15 @@ class OwnedBudgetSequence {
   physical = 1; // Logical plan sentinel, independent of every original tail.
   result: BudgetReservation | undefined;
   sinks: AccountingSinks | undefined;
-  constructor(public root: RequestOwner, public http: OwnedHttpRequest, public accounting: OwnedHttpAccountingCommand,
-    public plan: BudgetReservationPlan, public attempt: OwnedHttpUpload) {}
+  declare public root: RequestOwner;
+  declare public http: OwnedHttpRequest;
+  declare public accounting: OwnedHttpAccountingCommand;
+  declare public plan: BudgetReservationPlan;
+  declare public attempt: OwnedHttpUpload;
+  constructor(root: RequestOwner, http: OwnedHttpRequest, accounting: OwnedHttpAccountingCommand,
+    plan: BudgetReservationPlan, attempt: OwnedHttpUpload) {
+    this.root = root; this.http = http; this.accounting = accounting; this.plan = plan; this.attempt = attempt;
+  }
   prepare(): void {
     for (let ordinal = 0; ordinal < this.plan.legs.length; ordinal++) {
       const intent = this.plan.legs[ordinal], cap = Object.freeze({});
@@ -2443,14 +2498,14 @@ function ownedBudgetRecoveryQueue(sink: OwnedHttpSinkOwner, queue: Env["USAGE_QU
   const leg = ownedBudgetLeg(cap, sink), sequence = leg.sequence;
   const settlement = message as Extract<QueueMessage, { kind: "budget_settlement" }>;
   if (sequence.phase !== 3 || !(leg.flags & 32) || leg.flags & 512 || settlement.kind !== "budget_settlement"
-    || queue !== sequence.sinks?.queue || settlement.request !== leg.request || settlement.ledger.objectName !== leg.name)
+    || queue !== sequence.sinks?.queue || settlement.request !== leg.request || !("ledger" in settlement) || settlement.ledger.objectName !== leg.name)
     throw identityFailure("protocol");
   leg.flags |= 512;
   const command = new OwnedSinkVoidCommand(sequence.root, sinkOrigin(sink, "queue"), sequence);
   sequence.physical++;
   try { copyPrivateQueueIntent(message, command); }
   catch (reason) { command.abandonUnstarted(); throw reason; }
-  let original: Promise<void>;
+  let original: ReturnType<Env["USAGE_QUEUE"]["send"]>;
   try { original = queue.send(command.subject as QueueMessage); }
   catch (reason) { command.invokedFailure(reason); return command.ready; }
   command.observe(original); original = undefined as never; return command.ready;
@@ -2512,7 +2567,11 @@ class OwnedLedgerAck {
   private closedOrigin = 0;
   private primaryOrigin = 0;
   private nativeFailure?: SinkOriginRecord;
-  constructor(readonly parent: OwnedTerminalOperation | OwnedLedgerCommand, private response: Response | undefined) {}
+  declare readonly parent: OwnedTerminalOperation | OwnedLedgerCommand;
+  declare private response: Response | undefined;
+  constructor(parent: OwnedTerminalOperation | OwnedLedgerCommand, response: Response | undefined) {
+    this.parent = parent; this.response = response;
+  }
   dispatchOriginal(cell: OwnedOriginalObservation, failed: boolean, value: unknown): void {
     if (this.flags & 16384) { value = undefined; return; }
     try {
@@ -2806,7 +2865,12 @@ class OwnedTerminalOperation {
   private installationOrigin: number;
   private processingOrigin: number;
   private dispositionOrigin: number;
-  constructor(readonly owner: OwnedAccountingTerminal, readonly code: number, readonly origin: number, public subject?: unknown) {
+  declare readonly owner: OwnedAccountingTerminal;
+  declare readonly code: number;
+  declare readonly origin: number;
+  declare public subject?: unknown;
+  constructor(owner: OwnedAccountingTerminal, code: number, origin: number, subject?: unknown) {
+    this.owner = owner; this.code = code; this.origin = origin; this.subject = subject;
     this.installationOrigin = sinkOrigin(owner.sink, "retire");
     this.processingOrigin = sinkOrigin(owner.sink, "body");
     this.dispositionOrigin = sinkOrigin(owner.sink, "cancel");
@@ -2952,7 +3016,11 @@ class OwnedAccountingTerminal {
   reservation!: BudgetReservation;
   event!: UsageEvent;
   custody!: ProxyCompletion;
-  constructor(readonly cap: OwnedHttpRequest, readonly root: RequestOwner, readonly sink: OwnedHttpSinkOwner) {
+  declare readonly cap: OwnedHttpRequest;
+  declare readonly root: RequestOwner;
+  declare readonly sink: OwnedHttpSinkOwner;
+  constructor(cap: OwnedHttpRequest, root: RequestOwner, sink: OwnedHttpSinkOwner) {
+    this.cap = cap; this.root = root; this.sink = sink;
     this.result = new Promise<boolean>(done => { this.resolve = done; });
     this.retired = new Promise<void>(done => { this.resolveRetired = done; });
   }
@@ -3028,7 +3096,7 @@ class OwnedAccountingTerminal {
       finally { operation.abandonUnstarted(); }
       throw reason;
     }
-    let original: Promise<void>;
+    let original: ReturnType<Env["USAGE_QUEUE"]["send"]>;
     try { original = this.sinks.queue.send(operation.subject as QueueMessage); }
     catch (reason) { operation.syncFailure(reason); return; }
     operation.observe(original); original = undefined as never;
@@ -3420,6 +3488,15 @@ export function checkOwnedHttpRequest(cap: OwnedHttpRequest, request: Request, e
   const owner = requestOwner(cap);
   if (owner.sealed || owner.request !== request || owner.env !== env) throw identityFailure("protocol");
 }
+// A completed preparation may reduce its foreground ticket only while its
+// already-registered HTTP owner still permits forward work. No new signal or
+// resource is created here; the preparation path already installed this signal.
+export function canCompleteOwnedHttpPreparation(cap: OwnedHttpRequest, request?: Request): boolean {
+  const owner = requests?.get(cap);
+  return !!owner && !owner.sealed && !owner.unknown && !owner.retirement
+    && owner.request !== undefined && (request === undefined || owner.request === request)
+    && !!owner.abortController && !owner.abortController.signal.aborted;
+}
 export function matchesOwnedHttpRequestInputs(cap: OwnedHttpRequest, env: Env, request?: Request): boolean {
   const owner = requests?.get(cap);
   return !!owner && owner.env === env && (request === undefined || owner.request === request);
@@ -3514,9 +3591,15 @@ class OwnedPublicReader extends OwnedReaderDriver {
   publishOutput(output: ReadableStream<Uint8Array>): void { this.output = output; this.owner.publicOutputs!.set(output, this); }
   private captureLiveBytes = 0;
   private handedOff = false;
-  constructor(private cap: OwnedHttpRequest, private owner: RequestOwner,
-    private original: Response | undefined, body: ReadableStream<Uint8Array> | undefined,
-    private base: number, private publicBoundary: boolean) { super(); this.body = body; }
+  declare private cap: OwnedHttpRequest;
+  declare private owner: RequestOwner;
+  declare private original: Response | undefined;
+  declare private base: number;
+  declare private publicBoundary: boolean;
+  constructor(cap: OwnedHttpRequest, owner: RequestOwner,
+    original: Response | undefined, body: ReadableStream<Uint8Array> | undefined,
+    base: number, publicBoundary: boolean) { super();
+    this.cap = cap; this.owner = owner; this.original = original; this.base = base; this.publicBoundary = publicBoundary; this.body = body; }
   private failure(offset: number, kind: SinkOrigin, reason: unknown): SinkOriginRecord {
     const ordinal = this.base + offset, known = this.owner.sinkOrigins!.has(ordinal);
     const failure = failedSinkOrigin(this.owner, 32 * ordinal + sinkKinds.indexOf(kind), reason);
@@ -3706,7 +3789,11 @@ export class OwnedStatusReader {
   private cancelObservation?: OwnedOriginalObservation;
   private unlockObservation?: OwnedOriginalObservation;
   private spent: number | null = null;
-  constructor(private owner: OwnedStatusController, private index: number) {}
+  declare private owner: OwnedStatusController;
+  declare private index: number;
+  constructor(owner: OwnedStatusController, index: number) {
+    this.owner = owner; this.index = index;
+  }
   dispatchOriginal(cell: OwnedOriginalObservation, failed: boolean, value: unknown): void {
     if (this.phase === 6) { value = undefined; return; }
     try {

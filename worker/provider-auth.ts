@@ -93,7 +93,7 @@ export function grantSupports(requirement: GrantRequirement, grant: UpstreamGran
 export function assertOperationConfiguration(requirement: GrantRequirement, grant: UpstreamGrant | null, env: Env, owner?: PreparationAdmission): void {
   const { provider, endpoint } = requirement;
   if (!grantSupports(requirement, grant)) {
-    if (isPrivateConfiguration(owner)) throw privateGrantTransportFailure(owner);
+    if (owner && isPrivateConfiguration(owner)) throw privateGrantTransportFailure(owner);
     throw new HttpError(400, "grant_transport_unavailable", "upstream authorization does not support this operation");
   }
   if (requirement.responsesLifecycle || requirement.managedLifecycle) {
@@ -122,7 +122,7 @@ export function assertOperationConfiguration(requirement: GrantRequirement, gran
       const value = resolveTemplate(provider, values[name], env, owner, 4096); owner?.query(name, value);
     }
   } catch (error) {
-    if (isPrivateConfiguration(owner)) {
+    if (owner && isPrivateConfiguration(owner)) {
       if (isPreparationLimit(error) || isIdentityFailure(error) || matchesPrivateConfigurationError(owner, error)) throw error;
       throw privateProviderConfigurationFailure(owner);
     }
@@ -155,7 +155,7 @@ export function applyProviderCredential(
   else if (scheme.type === "query_api_key" && secret) { owner?.query(scheme.param, secret); query.set(scheme.param, secret); }
   else if (scheme.type === "sig_v4") { /* signed after the final URL and request body are known */ }
   else if (!secret && !(scheme.type === "bearer" && "required" in scheme && scheme.required === false)) {
-    if (isPrivateConfiguration(owner)) throw privateMissingCredentialFailure(owner, provider);
+    if (owner && isPrivateConfiguration(owner)) throw privateMissingCredentialFailure(owner, provider);
     throw new HttpError(503, "provider_not_configured", `provider ${provider.id} has no usable upstream credential`);
   }
 }
@@ -167,7 +167,7 @@ function assertProviderCredential(provider: CompiledProvider, grant: UpstreamGra
       ? !!grant.credentials?.[field] || (grant.credentialStore === "durable_object" && grant.credentialFields?.includes(field))
       : !!preparationValue(env, key, owner);
     if (!present("accessKeyId", "AWS_ACCESS_KEY_ID") || !present("secretAccessKey", "AWS_SECRET_ACCESS_KEY") || !preparationValue(env, "AWS_REGION", owner)) {
-      if (isPrivateConfiguration(owner)) throw privateAwsCredentialFailure(owner);
+      if (owner && isPrivateConfiguration(owner)) throw privateAwsCredentialFailure(owner);
       throw new HttpError(503, "provider_not_configured", "AWS access key, secret key, and region are required");
     }
     return;
@@ -176,7 +176,7 @@ function assertProviderCredential(provider: CompiledProvider, grant: UpstreamGra
     ? grant.credentialStatus !== "reauth_required" && (grant.hasCredential || grant.hasAccessToken || vertexAnthropicProjection(grant)?.source === "service_account")
     : !!providerSecret(provider, scheme, grant, env, owner);
   if (!available && !(scheme.type === "bearer" && "required" in scheme && scheme.required === false)) {
-    if (isPrivateConfiguration(owner)) throw privateMissingCredentialFailure(owner, provider);
+    if (owner && isPrivateConfiguration(owner)) throw privateMissingCredentialFailure(owner, provider);
     throw new HttpError(503, "provider_not_configured", `provider ${provider.id} has no usable upstream credential`);
   }
 }
@@ -212,7 +212,7 @@ function transformBody(transport: CompiledGrantTransport | null, body: ProxyRequ
   const prepend = transport?.requestTransforms.prependSystem ?? [];
   if (!prepend.length) return body;
   if (Array.isArray(body)) {
-    if (isPrivateConfiguration(preparation)) throw privateTransportBodyFailure(preparation);
+    if (preparation && isPrivateConfiguration(preparation)) throw privateTransportBodyFailure(preparation);
     throw new HttpError(400, "provider_request_invalid", "system instruction transforms require a JSON object body");
   }
   const existing = Array.isArray(body.system)
@@ -228,7 +228,7 @@ export function requiredGrantTemplate(value: string, grant: UpstreamGrant, error
     const resolved = grant[name as keyof UpstreamGrant];
     owner?.primitive(name, resolved);
     if (typeof resolved !== "string" || !resolved.trim()) {
-      if (isPrivateConfiguration(owner)) {
+      if (owner && isPrivateConfiguration(owner)) {
         if (errorCode !== "grant_transport_unavailable") throw identityFailure("protocol");
         throw privateGrantTemplateFailure(owner, name);
       }

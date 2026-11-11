@@ -340,7 +340,7 @@ export function ownedHttpError(cap: OwnedHttpRequest, status: number, code: stri
     || retryAfter !== undefined && typeof retryAfter !== "string") return failOwnedHttpError(cap);
   beginOwnedHttpError(cap, 4096 + 8 * (code.length + message.length + (retryAfter?.length ?? 0)));
   try {
-    const headers = retryAfter === undefined ? undefined : ownedErrorFreeze({ __proto__: null, "retry-after": retryAfter } as Record<string, string>);
+    const headers = retryAfter === undefined ? undefined : ownedErrorFreeze({ __proto__: null, "retry-after": retryAfter } as { "retry-after": string });
     const failure = ownedErrorFreeze({ __proto__: null, status, code, message, headers });
     finishOwnedHttpFailure(cap, failure);
     return failure;

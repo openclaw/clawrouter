@@ -12,13 +12,13 @@ import { extractImageUsageTokens } from "./image-generation.ts";
 import { extractCompactUsageTokens } from "./responses-compact.ts";
 import { createResponsesUsageInspector, type ResponsesInspectionTools } from "./responses-usage.ts";
 import { createSseUsageInspector, extractUsageTokens, responseOutcome, usageInspectionLimit, type ResponsesObservation, type UsageInspection, type UsageTokenContext } from "./token-usage.ts";
-import { OwnedChatUsage, OwnedGenericChatUsage, matchesOwnedUsageInspection } from "./token-usage.ts";
+import { OwnedChatUsage, OwnedGenericChatUsage } from "./token-usage.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { nativeErrorEnvelope, type NativeErrorContext, type NativeErrorDetails } from "./native-errors.ts";
 
 import type { HostedSearchUsage } from "./responses-hosted-usage.ts";
 import { identityFailure, isIdentityFailure } from "./identity-admission.ts";
-import { checkOwnedHttpCodecConsumer, checkOwnedHttpCodecNormalization, checkOwnedHttpCodecUsage, forwardOwnedHttpCodecUsage, fundOwnedHttpCodecConsumerHeaders, fundOwnedHttpCodecConsumerCapture, beginOwnedHttpNormalization, bindOwnedHttpNormalizationReplay, checkOwnedHttpNormalizationReaderCreation, fundOwnedHttpNormalization, fundOwnedHttpNormalizationCapture, ownOwnedHttpNormalizationReader, ownedHttpNormalizationFailure, holdOwnedHttpNormalization, publishOwnedHttpNormalizationOutput, clearOwnedHttpNormalizationOutput, finishOwnedHttpNormalizationReader, endOwnedHttpNormalization, fundOwnedHttpCodecNormalization, settleOwnedHttpCodecConsumerCapture, beginOwnedCodecConsumerDiagnostics,
+import { checkOwnedHttpCodecConsumer, checkOwnedHttpCodecNormalization, checkOwnedHttpCodecUsage, fundOwnedHttpCodecConsumerHeaders, fundOwnedHttpCodecConsumerCapture, beginOwnedHttpNormalization, bindOwnedHttpNormalizationReplay, checkOwnedHttpNormalizationReaderCreation, fundOwnedHttpNormalization, fundOwnedHttpNormalizationCapture, ownOwnedHttpNormalizationReader, ownedHttpNormalizationFailure, holdOwnedHttpNormalization, publishOwnedHttpNormalizationOutput, clearOwnedHttpNormalizationOutput, finishOwnedHttpNormalizationReader, endOwnedHttpNormalization, fundOwnedHttpCodecNormalization, beginOwnedCodecConsumerDiagnostics,
   ownedHttpCodecFailure, finishOwnedCodecDiagnostics, ownOwnedCodecConsumerRetirement, holdOwnedHttpVeniceSource, fundOwnedHttpAcceptedUsage,
   checkOwnedHttpGenericUsage, checkOwnedHttpGenericUsageInspection, ownOwnedHttpGenericUsageReader, bindOwnedHttpGenericUsageBody, fundOwnedHttpGenericUsageCapture, ownedHttpGenericUsageFailure, ownedHttpGenericUsageInstallationFailure, holdOwnedHttpGenericUsage, acceptOwnedHttpNormalizerIntoUsage, offerOwnedHttpGenericUsageOutput, clearOwnedHttpGenericUsageOutput, finishOwnedHttpGenericUsageReader, ownedHttpGenericUsageRetirement, type OwnedHttpUsage, type OwnedHttpRequest, type OwnedHttpUpload, type OwnedHttpNormalization, type OwnedHttpRevalidation } from "./http-identity-owner.ts";
 import { matchesOwnedVeniceOutputBody, matchesOwnedVeniceOutputFailure, matchesOwnedVeniceUsage } from "./venice-chat-runtime.ts";
@@ -46,7 +46,10 @@ export class CodecReader extends OwnedReaderDriver {
   prefixWire?: Uint8Array; prefixUsed?: number; prefixRead?: number;
   crossingWire?: Uint8Array; crossingRead?: number;
   retirement?: Promise<void>;
-  constructor(public owner: CodecConsumer, readonly role: 1 | 2) { super(); }
+  declare public owner: CodecConsumer;
+  declare readonly role: 1 | 2;
+  constructor(owner: CodecConsumer, role: 1 | 2) { super();
+    this.owner = owner; this.role = role; }
   protected holdDriver(): void { holdOwnedHttpVeniceSource(this.owner.codec); }
   protected driverProtocolFailure(): Error { return identityFailure("protocol"); }
   protected recordDriverFailure(kind: "read" | "closed" | "cancel" | "unlock" | "pull" | "retire", reason: unknown): object { return consumerFailure(this, kind, reason); }

@@ -37,7 +37,7 @@ import { requireEmptyResponseControlBody } from "./responses-lifecycle.ts";
 import { backgroundMark as currentBackgroundMark, clearHotCaches, fenceSharedHotCache, pendingBackgroundWork } from "./hot-cache.ts";
 import type { Env, QueueMessage } from "./types";
 import { tryBeginOwnedHttpRequest, ownedHttpPlatformFailure, growOwnedHttpRequest, finishOwnedHttpRequest, holdOwnedHttpRequest, ownedHttpCompletion,
-  ownedHttpSinkOwner, ownOwnedHttpPublicResponse, retireOwnedHttpAssociatedResponse, cancelOwnedHttpResponse, registerOwnedHttpRetirement } from "./http-identity-owner.ts";
+  ownedHttpSinkOwner, retireOwnedHttpAssociatedResponse, cancelOwnedHttpResponse, registerOwnedHttpRetirement } from "./http-identity-owner.ts";
 import {
   canonicalPath, caughtOwnedResponse, ownedErrorResponse, caughtResponse, corsEnabled, corsPreflight, decodePathSegment, errorResponse, legacyRedirect,
   privateJson, redirect, withCors,

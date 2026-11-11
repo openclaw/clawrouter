@@ -27,7 +27,7 @@ import { checkOwnedHttpRequest, growOwnedHttpRequest, holdOwnedHttpRequest, owne
   prepareOwnedHttpContinuation, consumeOwnedHttpContinuation, abandonOwnedHttpContinuation,
   type OwnedHttpRequest, type OwnedHttpSinkOwner } from "./http-identity-owner.ts";
 import { admissionContinuationHeader, admissionContinuationVersion, admissionContinuationPath, closeAdmissionEnvelope, type AdmissionContinuationEnvelope, checkPreflightIdentity, credentialPreflightHeader, credentialPreflightNamespace,
-  credentialPreflightPath, credentialPreflightVersion, closePreflightReply } from "./credential-preflight-protocol.ts";
+  credentialPreflightPath, credentialPreflightVersion } from "./credential-preflight-protocol.ts";
 import { consumeAdmissionBridge, consumePreflightReply, type PrivateContinuationDestination } from "./credential-preflight-source.ts";
 
 // Capture the native Annex B lookups and apply before any input inspection.
@@ -330,7 +330,7 @@ export function queueOwnedHttpSelectionRuntime(cap: OwnedHttpRequest, request: R
 const coverageSourceGraphBytes = 8 * (32768 + 2 * 65536 + 32768 + 131072) + 2 * 2097152;
 const coverageSourcePhaseBytes = coverageSourceGraphBytes + 4 * 2097152 + 65536 + 4096;
 
-async function selectOwnedHttpCoverageMiss(cap: OwnedHttpRequest, request: Request, env: Env,
+async function selectOwnedHttpCoverageMiss(_cap: OwnedHttpRequest, _request: Request, env: Env,
   auth: GenerationAuthenticationOwner, provider: import("./types").CompiledProvider,
   endpoint: import("./types").CompiledEndpoint, selection: import("./authority-admission.ts").AdmissionSelection,
   recordSelection: boolean, signal: AbortSignal): Promise<GenerationSelectionHandle> {

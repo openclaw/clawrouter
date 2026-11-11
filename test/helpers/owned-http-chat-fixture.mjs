@@ -263,6 +263,7 @@ import {PolicyBindingIndexObject as NativeAuthority} from './worker/authority.ts
 import {HttpError} from './worker/utils.ts';
 import {evictCredentialGeneration} from './worker/credential-preflight.ts';
 import * as budgetCommands from './worker/http-identity-owner.ts';
+import {captureOwnedResponseMetadata} from './worker/proxy-completion.ts';
 const createOwnedBudgetSequenceFixture = ${createOwnedBudgetSequenceFixture.toString()};
 const createOwnedTerminalFixture = ${createOwnedTerminalFixture.toString()};
 import {createSseUsageInspector,extractUsageTokens,responseOutcome} from './worker/token-usage.ts';
@@ -508,7 +509,10 @@ function environment(env,off=false){
    };const value=Reflect.get(object,key,object);return typeof value==='function'?value.bind(object):value;}});
   };const value=Reflect.get(target,name,target);return typeof value==='function'?value.bind(target):value;}});
   const budget=new Proxy(env.BUDGET_LEDGER,{get(target,name){if(name==='get')return id=>{const stub=target.get(id);return new Proxy(stub,{get(object,key){if(key==='fetch')return(url,init)=>{
-   const value=typeof init?.body==='string'?JSON.parse(init.body):{};calls.push({kind:'budget',path:new URL(url).pathname,charged:bodyBudgetCharged(),reservationId:value.reservationId,chargeId:value.chargeId,costMicros:value.costMicros,actualCostMicros:value.actualCostMicros});const original=globalThis.__ownedBudgetSequenceFixture?globalThis.__ownedBudgetSequenceFixture.fetch(object,url,init):object.fetch(url,init);return new URL(url).pathname==='/status'?holdParserPhase('status',original):original;
+   const value=typeof init?.body==='string'?JSON.parse(init.body):{};calls.push({kind:'budget',path:new URL(url).pathname,charged:bodyBudgetCharged(),reservationId:value.reservationId,chargeId:value.chargeId,costMicros:value.costMicros,actualCostMicros:value.actualCostMicros});const original=globalThis.__ownedBudgetSequenceFixture?globalThis.__ownedBudgetSequenceFixture.fetch(object,url,init):object.fetch(url,init);if(retainedRace&&new URL(url).pathname==='/status'){
+     const race=retainedRace;return original.then(async response=>{race.arrived++;await race.gate;
+      Object.defineProperty(response,'body',{configurable:true,get(){race.bodyGets++;throw undefined;}});return response;});
+    }return new URL(url).pathname==='/status'?holdParserPhase('status',original):original;
   };const value=Reflect.get(object,key,object);return typeof value==='function'?value.bind(object):value;}});};const value=Reflect.get(target,name,target);return typeof value==='function'?value.bind(target):value;}});
   const queue=new Proxy(env.USAGE_QUEUE,{get(target,name){if(name==='send')return (...args)=>{
    const value=args[0];if(value.type==='clawrouter.usage.v1')events.push({id:value.id,requestId:value.request_id,reserved:value.reserved_cost_micros,status:value.status_code,input:value.input_tokens,output:value.output_tokens});
@@ -529,9 +533,21 @@ function environment(env,off=false){
  }
  return off?offScoped:scoped;
 }
-let queueHandoff;
+let queueHandoff,retainedRace;
 export default {...handler,async fetch(request,env,context){
  const path=new URL(request.url).pathname;
+ if(path==='/fixture/retained-status'){
+  if(request.method==='DELETE'){if(retainedRace){retainedRace.disposed=true;retainedRace.release();}return new Response(null,{status:204});}
+  return Response.json(retainedRace?{arrived:retainedRace.arrived,bodyGets:retainedRace.bodyGets,completedPreparations:retainedRace.completedPreparations,before:retainedRace.before,after:retainedRace.after,current:globalThis.__ownedJsonObservation.foregroundState(),blocked:globalThis.__ownedJsonObservation.reductionBlocked}:null);
+ }
+ if(path==='/fixture/native-metadata'){
+  const response=new Response('native body',{status:201,statusText:'Created',headers:{'x-fixture':'native'}}),body=response.body;
+  let hooks=0,rejected=0;for(const name of ['body','status','statusText','headers'])Object.defineProperty(response,name,{get(){hooks++;throw Error('shadowed native metadata');}});
+  const captured=captureOwnedResponseMetadata(response);
+  for(const value of [{},Object.create(Response.prototype),new Proxy(response,{})])try{captureOwnedResponseMetadata(value);}catch{rejected++;}
+  const text=await new Response(captured.body).text();
+  return Response.json({sameBody:captured.body===body,status:captured.status,statusText:captured.statusText,header:captured.headers.get('x-fixture'),text,hooks,rejected});
+ }
  if(path==='/fixture/terminal'){
   if(request.method==='DELETE'){globalThis.__ownedTerminalFixture?.release();return new Response(null,{status:204});}
   if(request.method==='POST'){
@@ -580,6 +596,15 @@ export default {...handler,async fetch(request,env,context){
   const unknownUnits=new URL(request.url).searchParams.get('unknown')==='large'?16384:4;
   const id=provider==='fireworks'?'pricing':provider,policy=JSON.parse(await env.POLICY_KV.get('policies/owned_http_'+id));
   policy.grantRouting={strategy:'priority',environmentFallback:false,eligibleGrants:{[provider]:['a','b','c','d','e'].map(name=>provider+'-'+name)}};
+  if(new URL(request.url).searchParams.get('retained-status')==='1'){
+   let release;const gate=new Promise(resolve=>{release=resolve;});retainedRace={gate,release,arrived:0,bodyGets:0,completedPreparations:0,disposed:false};globalThis.__ownedJsonObservation.retainedStatus=true;policy.budgetMode='soft';
+   globalThis.__ownedJsonObservation.retainedStatusPrepared=async()=>{
+    const race=retainedRace;if(++race.completedPreparations!==2)return;
+    race.before=globalThis.__ownedJsonObservation.foregroundState();race.release();
+    while(!race.bodyGets&&!race.disposed)await new Promise(resolve=>setTimeout(resolve,0));
+    race.after=globalThis.__ownedJsonObservation.foregroundState();
+   };
+  }
   await env.POLICY_KV.put('policies/owned_http_'+id,JSON.stringify(policy));
   for(const [index,name] of ['a','b','c','d','e'].entries())await putGrantCredentials(env,'oauth/owned_http_'+id+'/'+provider+'-'+name,{provider,enabled:true,kind:'api_key',credential:'fixture-upstream-retry-'+name,priority:100+index,...(provider==='gmi'?{accountId:'fixture-organization'}:{}),unknownOwnedField:{value:['x'.repeat(unknownUnits),null,7]}});
   return new Response(null,{status:204});

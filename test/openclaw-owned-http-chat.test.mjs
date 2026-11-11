@@ -1,10 +1,19 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { stripTypeScriptTypes } from 'node:module';
 import { runOpenClawConsumer } from './helpers/openclaw-consumer.mjs';
 import { ownedHttpRouter, ownedHttpUpstream, seedOwnedHttpChat } from './helpers/owned-http-chat-fixture.mjs';
+
+test('private HTTP modules remain loadable by Node strip-only TypeScript grammar', async () => {
+  for (const name of ['credential-preflight-source', 'http-identity-owner', 'identity-admission', 'proxy-response',
+    'proxy', 'soft-budget', 'token-usage', 'venice-chat-runtime']) {
+    const source = await readFile(new URL('../worker/' + name + '.ts', import.meta.url), 'utf8');
+    assert.doesNotThrow(() => stripTypeScriptTypes(source, { mode: 'strip' }), name);
+  }
+});
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = 'd8bb939408aa4d2be7df0161748edb52ebf3b1fb';
