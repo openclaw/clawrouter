@@ -30,9 +30,14 @@ export function selectThresholdGrantKey(
   const cutoffRemaining = 1 - boundedPercent(switchAtUsedPercent, 90) / 100;
   if (current.remainingRatio > cutoffRemaining + 1e-9) return current.key;
   const hysteresis = boundedPercent(hysteresisPercent, 10) / 100;
-  return [...candidates]
-    .filter((candidate) => candidate.key !== current.key && candidate.remainingRatio !== null && candidate.remainingRatio > cutoffRemaining + 1e-9 && candidate.remainingRatio + 1e-9 >= current.remainingRatio! + hysteresis)
-    .sort((a, b) => b.remainingRatio! - a.remainingRatio! || a.key.localeCompare(b.key))[0]?.key ?? current.key;
+  const others = candidates.filter((candidate) => candidate.key !== current.key);
+  const measured = others
+    .filter((candidate) => candidate.remainingRatio !== null && candidate.remainingRatio > cutoffRemaining + 1e-9 && candidate.remainingRatio + 1e-9 >= current.remainingRatio! + hysteresis)
+    .sort((a, b) => b.remainingRatio! - a.remainingRatio! || a.key.localeCompare(b.key))[0];
+  // No reading in an open window means unused or reset since last seen. Such a
+  // grant beats one known to be at the cutoff; measured headroom still wins.
+  const unmeasured = others.filter((candidate) => candidate.remainingRatio === null).sort((a, b) => a.key.localeCompare(b.key))[0];
+  return (measured ?? unmeasured ?? current).key;
 }
 
 export const GRANT_SELECTION_STRATEGIES = ["priority", "round_robin", "least_used", "most_remaining", "threshold", "weighted_random"] as const;
@@ -133,10 +138,14 @@ export function chooseOwnedGrantKey(input: GrantChoiceInput, candidates: GrantCh
         const cutoff = 1 - boundedPercent(input.switchAtUsedPercent, 90) / 100;
         if (current.remainingRatio !== null && current.remainingRatio <= cutoff + 1e-9) {
           const hysteresis = boundedPercent(input.hysteresisPercent, 10) / 100;
-          let replacement: GrantChoiceCandidate | undefined;
-          for (const next of candidates) if (next.key !== current.key && next.remainingRatio !== null && next.remainingRatio > cutoff + 1e-9 && next.remainingRatio + 1e-9 >= current.remainingRatio + hysteresis
-            && (!replacement || (replacement.remainingRatio! - next.remainingRatio || next.key.localeCompare(replacement.key)) < 0)) replacement = next;
-          selected = replacement ?? current;
+          let replacement: GrantChoiceCandidate | undefined, unmeasured: GrantChoiceCandidate | undefined;
+          for (const next of candidates) {
+            if (next.key === current.key) continue;
+            if (next.remainingRatio === null) { if (!unmeasured || next.key.localeCompare(unmeasured.key) < 0) unmeasured = next; }
+            else if (next.remainingRatio > cutoff + 1e-9 && next.remainingRatio + 1e-9 >= current.remainingRatio + hysteresis
+              && (!replacement || (replacement.remainingRatio! - next.remainingRatio || next.key.localeCompare(replacement.key)) < 0)) replacement = next;
+          }
+          selected = replacement ?? unmeasured ?? current;
         }
       }
       return { selectedKey: selected.key, cursorKey: selected.key };
