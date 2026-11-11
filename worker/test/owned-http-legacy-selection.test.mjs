@@ -1,5 +1,6 @@
 import './typescript-setup.mjs';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { sqliteFixture } from './sqlite-storage.mjs';
 import { accessBytesResponse } from './access-byte-fixture.mjs';
@@ -9,6 +10,27 @@ import { beginOwnedHttpRequest, finishOwnedHttpRequest, ownedHttpCompletion } fr
 import { selectOwnedHttpProvider, snapshot } from '../providers.ts';
 import { bodyBudgetCharged } from '../body-budget.ts';
 import { isIdentityFailure } from '../identity-admission.ts';
+
+test('private provider receiver guards use the imported identity failure producer', () => {
+  const source = readFileSync(new URL('../providers.ts', import.meta.url), 'utf8');
+  assert.ok(source.includes('import { identityFailure as ownedHttpIdentityFailure } from "./identity-admission.ts";'));
+  assert.doesNotMatch(source, /\bthrow identityFailure\(/);
+  const commands = [
+    'beginOwnedHttpError', 'finishOwnedHttpFailure', 'checkOwnedHttpRequest', 'growOwnedHttpRequest',
+    'reserveOwnedHttpRevalidationOrigins', 'checkOwnedHttpProviderInput', 'acceptOwnedHttpConfiguredProvider',
+    'matchesOwnedHttpAttemptInput', 'bindOwnedHttpAttemptPermit', 'bindOwnedHttpAttemptCredential',
+    'completeOwnedHttpAttemptProvider', 'reserveOwnedHttpSerialization',
+  ];
+  for (const command of commands) {
+    const start = source.indexOf(`function ${command}(`);
+    assert.notEqual(start, -1, command);
+    const end = source.indexOf('\n}', start);
+    assert.notEqual(end, -1, command);
+    const body = source.slice(start, end);
+    assert.match(body, /const receiver = ownedHttpRequestReceiver\((?:cap|http)\);\n  if \(!receiver\) throw ownedHttpIdentityFailure\("protocol"\);\n  return receiver\./, command);
+    assert.ok(body.includes(`return receiver.${command}(`), command);
+  }
+});
 
 const digest = 'ab'.repeat(32), kid = 'owned-http-legacy';
 const provider = snapshot.providers.find(value => value.id === 'openai');

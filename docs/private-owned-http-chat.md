@@ -1,5 +1,22 @@
 # Private owned HTTP Chat staging
 
+### Private provider receiver guard name repair — source-only partial
+
+Twelve missing-receiver guards in `providers.ts` now call the already imported
+`ownedHttpIdentityFailure("protocol")`. Their previous bare `identityFailure`
+name had no binding in that module. The receiver lookup, arguments, throw,
+following named call and return are unchanged. The genuine helper remains the
+existing `identity-admission.ts` export; no new target, import, module edge or
+runtime protocol is introduced. The source fixture names all twelve wrappers
+and requires the imported producer before each named receiver call.
+
+The global STATIC source-operand census removes twelve unresolved global-name
+operands (`N=12`, `U=180`); each replacement resolves the existing local import.
+No definition/import/name-target credit is claimed. Raw/generated grammar and
+source-resolution checks are separate from behavioral execution. Runtime and
+typecheck remain UNRUN; the numeric static operand and family admissions remain
+unchanged pending their separate complete manifests and adoption.
+
 ### Exact28 fixed-protocol consolidation — source-only partial
 
 The reviewed28-target change is implemented after the `7038f4f9` inventory
