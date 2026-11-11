@@ -1,5 +1,28 @@
 # Private owned HTTP Chat staging
 
+
+### Diagnostic unused-import repair — deletion-only STATIC delta
+
+The first hosted worker-package diagnostic at published4e8c68a failed
+worker:check on the unused identityPlan import in grant-credentials.ts.
+The repair removes only that named import specifier. It changes no function
+body, export, module edge, ordinary binding or side-effect order. No source-text
+mirror fixture is added; local runtime/typecheck remain UNRUN.
+
+identityPlan has12 UTF16 name units. It was one newly introduced import
+reference in the reviewed definition roster and had no executable reference
+operand in this module. Removing it subtracts P1/U12,32 bytes. Runtime import
+references become667; definition products become5682 and name units49460,
+for144376 bytes. The complete current census becomes
+C4104/P13051/N32999/U272933/B0, or947098 bytes. All other categories, including
+the694 prototype roster and pinned57268 component, are unchanged.
+
+The approved permanent reserve remains947130 bytes, a valid upper after this
+deletion. The32-byte difference supplies no authority for future definitions,
+I/O instances or window borrowing. No gratuitous debit shrink, new binding or
+family admission is introduced. The immutable successor/source hashes are
+recorded after the scoped implementation checkpoint.
+
 ### Adopted global STATIC debit — census source 123d79c
 
 **ROOT adopted S=947130 bytes at 09:44Z. The singleton now reserves that
