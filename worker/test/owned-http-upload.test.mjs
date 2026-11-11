@@ -69,6 +69,38 @@ test('owned upload sends the complete 1 MiB ASCII Chat body through its ORIGINAL
   });
 });
 
+// UNRUN_CODE_ONLY_HOSTED. The external observer's return is deliberately not
+// an upload result, a physical join, or a value we inspect for thenability.
+for (const returned of ['undefined', 'held', 'hostile']) {
+  test(`upload retains the actual pipe and ignores its ${returned} observer return`, async t => {
+    await fixture(t, async f => {
+      const actual = deferred(), external = deferred();
+      f.releases.push(actual.resolve, external.resolve);
+      const then = Promise.prototype.then;
+      let pipes = 0, observations = 0, touched = 0;
+      const hostile = Object.defineProperty({}, 'then', { get() { touched++; throw Error('ignored pipe observer product'); } });
+      actual.promise.then = function (yes, no) {
+        observations++; assert.equal(this, actual.promise); assert.equal(arguments.length, 2);
+        void Reflect.apply(then, this, [yes, no]);
+        return returned === 'held' ? external.promise : returned === 'hostile' ? hostile : undefined;
+      };
+      const source = new ReadableStream(), fixed = new FixedLengthStream(0), upload = beginOwnedHttpUpload(f.cap);
+      source.pipeTo = function (writable, options) {
+        pipes++; assert.equal(this, source); assert.equal(writable, fixed.writable);
+        assert.ok(options.signal instanceof AbortSignal); return actual.promise;
+      };
+      adoptOwnedHttpUploadSource(upload, source);
+      assert.equal(pipeOwnedHttpUpload(upload, source, fixed), fixed.readable);
+      dispatchOwnedHttpUpload(upload);
+      let retired = false;
+      const terminal = f.finish(); void terminal.outcome.then(() => { retired = true; });
+      await Promise.resolve(); await Promise.resolve(); assert.equal(retired, false);
+      actual.resolve(); await f.take(terminal);
+      assert.equal(pipes, 1); assert.equal(observations, 1); assert.equal(touched, 0);
+    });
+  });
+}
+
 for (const label of ['post-preparation budget denial', 'unused alternate']) {
   test(`${label} cancels BEFORE joining an unconsumed backpressured upload`, async t => {
     await fixture(t, async f => {

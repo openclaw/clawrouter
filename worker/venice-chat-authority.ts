@@ -1,3 +1,4 @@
+import { privateVeniceRouteJson } from "./json-body.ts";
 import { inspectGrantCredentials } from "./grant-credentials.ts";
 import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts";
 import { assertPolicyModel } from "./policy-models.ts";
@@ -5,7 +6,7 @@ import { applyProviderCredential } from "./provider-auth.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { UpstreamAuth } from "./providers.ts";
 import { assertControlCallerLive, authorizeResponseControl, publicControlAuthorization, bindOwnedResponseControl, revalidateOwnedResponseControl, type ResponseControlAuthorization } from "./response-control-authorization.ts";
-import { applyOwnedHttpRevalidationCredential, checkOwnedHttpRevalidation, matchesOwnedHttpRevalidationGraph, admitOwnedHttpRevalidationRouting, fundOwnedHttpRevalidationEnvironment, type OwnedHttpRevalidation } from "./http-identity-owner.ts";
+import { ownedHttpRevalidationFingerprint, applyOwnedHttpRevalidationCredential, checkOwnedHttpRevalidation, matchesOwnedHttpRevalidationGraph, admitOwnedHttpRevalidationRouting, fundOwnedHttpRevalidationEnvironment, type OwnedHttpRevalidation } from "./http-identity-owner.ts";
 import { privateGrantRoutingPolicy } from "./grant-routing.ts";
 import { identityPlan, identityFailure } from "./identity-admission.ts";
 import type { AccessPolicy, GrantRoutingPolicy, AuthorizedIdentity, Env, UpstreamGrant } from "./types.ts";
@@ -34,26 +35,26 @@ async function prepareVeniceAuthority(env: Env, auth: AuthorizedIdentity, select
     || upstream.baseUrl !== "https://api.venice.ai/api/v1" || url.href !== "https://api.venice.ai/api/v1/chat/completions"
     || !authorization || upstream.headers.get("authorization") !== authorization
     || headers.get("authorization") !== authorization || upstream.query.size) unavailable();
-  const original = grantKey && qualified(grant) ? identity(grant) : null;
+  const original = grantKey && qualified(grant) ? owned !== undefined ? ownedHttpRevalidationFingerprint(owned, grant) : identity(grant) : null;
   const environment = !grantKey && !grant ? envValue(env, "VENICE_API_KEY") : null;
   if (grantKey ? !original
     : !environment || authorization !== `Bearer ${environment}`) unavailable();
   const caller = publicControlAuthorization(auth);
   const owner = { providerId: "venice", endpointId: selection.endpoint.id, grantKey,
     lineage: grant?.credentialLineage ?? null, policyGeneration: auth.policy.generation,
-    routeSha256: await sha256Hex(JSON.stringify([url.href, selection.endpoint.id, selection.model.upstream])) };
-  const assertLive = () => {
-    assertControlCallerLive(caller);
-    if (owned !== undefined) fundOwnedHttpRevalidationEnvironment(owned);
-    if (grant && (!qualified(grant) || identity(grant) !== original)
-      || environment && !safeEqual(envValue(env, "VENICE_API_KEY") ?? "", environment)) unavailable();
-  };
+    routeSha256: await sha256Hex(owned !== undefined ? privateVeniceRouteJson(url.href, selection.endpoint.id, selection.model.upstream)
+      : JSON.stringify([url.href, selection.endpoint.id, selection.model.upstream])) };
   if (owned !== undefined) {
     bindOwnedResponseControl(owned, env, caller, owner);
     (ownedVenice ??= new WeakMap()).set(owned, { env, selection, grant, grantKey, original, environment, caller });
     ownedVeniceCount++;
-    return { assertLive, revalidate: signal => revalidateOwnedResponseControl(owned, signal) };
+    return { assertLive: assertOwnedVeniceChatLive.bind(undefined, owned), revalidate: revalidateOwnedResponseControl.bind(undefined, owned) };
   }
+  const assertLive = () => {
+    assertControlCallerLive(caller);
+    if (grant && (!qualified(grant) || identity(grant) !== original)
+      || environment && !safeEqual(envValue(env, "VENICE_API_KEY") ?? "", environment)) unavailable();
+  };
   return { assertLive, async revalidate(signal) {
     const policy = await authorizeResponseControl(env, caller, owner, signal);
     if (!policy) unavailable();
@@ -93,7 +94,7 @@ export function acceptOwnedVeniceInspection(cap: OwnedHttpRevalidation, value: u
   const state = ownedVenice?.get(cap);
   if (!state?.policy || !state.routing || !state.grantKey || !matchesOwnedHttpRevalidationGraph(cap, value, "inspect")) throw identityFailure("protocol");
   const current = (value as { grant: UpstreamGrant | null }).grant;
-  if (!qualified(current) || identity(current) !== state.original
+  if (!qualified(current) || ownedHttpRevalidationFingerprint(cap, current) !== state.original
     || !filterGrantCandidates("venice", [{ key: state.grantKey, grant: current, runtimeState: null }], new Set(),
       state.routing, state.grantKey, undefined, Date.now()).available.length) unavailable();
   state.inspected = true;
@@ -106,7 +107,7 @@ export function finishOwnedVeniceRevalidation(cap: OwnedHttpRevalidation): void 
   else if (Object.hasOwn(state.routing.eligibleGrants, "venice") && !state.routing.environmentFallback
     || !safeEqual(envValue(state.env, "VENICE_API_KEY") ?? "", state.environment!)) unavailable();
   assertControlCallerLive(state.caller);
-  if (state.grant && (!qualified(state.grant) || identity(state.grant) !== state.original)
+  if (state.grant && (!qualified(state.grant) || ownedHttpRevalidationFingerprint(cap, state.grant) !== state.original)
     || state.environment && !safeEqual(envValue(state.env, "VENICE_API_KEY") ?? "", state.environment)) unavailable();
 }
 export function clearOwnedVeniceRevalidation(cap: OwnedHttpRevalidation): void {
@@ -129,7 +130,7 @@ export function assertOwnedVeniceChatLive(cap: OwnedHttpRevalidation): void {
   const state = ownedVenice?.get(cap);
   if (!state) throw identityFailure("protocol");
   assertControlCallerLive(state.caller); fundOwnedHttpRevalidationEnvironment(cap);
-  if (state.grant && (!qualified(state.grant) || identity(state.grant) !== state.original)
+  if (state.grant && (!qualified(state.grant) || ownedHttpRevalidationFingerprint(cap, state.grant) !== state.original)
     || state.environment && !safeEqual(envValue(state.env, "VENICE_API_KEY") ?? "", state.environment)) unavailable();
 }
 

@@ -18,7 +18,7 @@ import type { GrantSelectionResult } from "./grant-eligibility.ts";
 import type { AccessPolicyEntry, AuthorizedIdentity, Env, ProxyCredential } from "./types";
 import type { AdmissionProvider, AdmissionResult } from "./authority.ts";
 import { resolveAdmission } from "./admission-cache.ts";
-import { errorResponse, HttpError, parseProxyKey, safeEqual, sha256Hex } from "./utils.ts";
+import { ownedErrorResponse, errorResponse, HttpError, parseProxyKey, safeEqual, sha256Hex } from "./utils.ts";
 import { checkOwnedHttpRequest, growOwnedHttpRequest, ownedHttpCompletion, type OwnedHttpRequest } from "./http-identity-owner.ts";
 import { resolveOwnedHttpAuthentication, matchesOwnedHttpControlVerification } from "./credential-preflight.ts";
 
@@ -65,7 +65,7 @@ export function authenticateOwnedHttp(cap: OwnedHttpRequest, request: Request, e
   growOwnedHttpRequest(cap, 131072 + (sessionId ? 8 * sessionId.length + 256 : 0));
   return ownedHttpCompletion(cap).start(async () => {
     const { parsed } = proxyKeyIngress(request.headers);
-    if (!parsed) return errorResponse("invalid_proxy_key", "a valid ClawRouter proxy key is required", 401);
+    if (!parsed) return ownedErrorResponse(cap, "invalid_proxy_key", "a valid ClawRouter proxy key is required", 401);
     if (parsed.secret.length > 4096) throw identityFailure("limit");
     const digest = await sha256Hex(parsed.secret);
     const sessionHash = sessionId ? await sha256Hex(`session:${sessionId}`) : undefined;

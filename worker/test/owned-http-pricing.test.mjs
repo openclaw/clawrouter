@@ -2,14 +2,17 @@ import assert from 'node:assert/strict';
 import { test, after } from 'node:test';
 import { registerHooks } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { createOwnedJsonObservation, observeOwnedJsonSource } from '../../test/helpers/owned-json-parser-observer.mjs';
 import { ownedJsonCodecCases, ownedJsonCodecWire, ownedUsageCases, ownedUsageWire, ownedCodecSseLines } from '../../test/helpers/owned-json-parser-cases.mjs';
+import { createOwnedBudgetSequenceFixture, createOwnedTerminalFixture } from '../../test/helpers/owned-http-chat-fixture.mjs';
 
 const observation = globalThis.__ownedJsonObservation = createOwnedJsonObservation();
 globalThis.__ownedUsageWire = ownedUsageWire;
 const sourceHooks = registerHooks({ load(url, context, nextLoad) {
   const result = nextLoad(url, context);
-  if (!url.startsWith('file:') || !/(?:json-body|proxy-response|proxy-completion|token-usage|http-identity-owner|venice-chat-runtime)\.ts$/.test(url)) return result;
+  if (!url.startsWith('file:') || !/(?:json-body|proxy|proxy-accounting|proxy-response|proxy-completion|token-usage|http-identity-owner|venice-chat-runtime)\.ts$/.test(url)) return result;
   const source = typeof result.source === 'string' ? result.source : Buffer.from(result.source).toString('utf8');
   return { ...result, source: observeOwnedJsonSource(fileURLToPath(url), source) };
 } });
@@ -24,10 +27,11 @@ const { putGrantCredentials } = await import('../grant-credentials.ts');
 const { snapshot } = await import('../providers.ts');
 const { estimateCost, OwnedHttpAccountingCommand } = await import('../proxy-accounting.ts');
 const { bodyBudgetCharged, bodyBudgetBytes, ExactBodyCharge } = await import('../body-budget.ts');
-const { sha256Hex } = await import('../utils.ts');
+const { sha256Hex, HttpError } = await import('../utils.ts');
 const { evictCredentialGeneration } = await import('../credential-preflight.ts');
 const { prepareOwnedHttpPricing, enterOwnedHttpPricing } = await import('../pricing.ts');
 const { beginOwnedHttpRequest, finishOwnedHttpRequest } = await import('../http-identity-owner.ts');
+const budgetCommands = await import('../http-identity-owner.ts');
 const { isIdentityFailure } = await import('../identity-admission.ts');
 const { beginOwnedCodecConsumer, normalizeOwnedCodecPreStreamError, observeOwnedCodecUsage, ownedCodecUsageCompletion, checkOwnedAcceptedUsageReceiver, matchesOwnedAcceptedUsageSnapshot, checkOwnedAcceptedUsageTerminal } = await import('../proxy-response.ts');
 const { HttpOperation } = await import('../http-operation.ts');
@@ -133,7 +137,7 @@ async function fixture(t, run, retained = false, variant = 'fireworks') {
   const activeGrantKey = 'oauth/' + policyId + '/' + variant;
   const baseline = bodyBudgetCharged(), sharedBaseline = observation.shared.held, roots = [], origins = new WeakMap(), bodies = new WeakMap();
   const resources = [], releases = [], values = new Map(), calls = [], sent = [], events = [], retirements = [];
-  let done = false, cleanupPromise, hasPrimary = false, primary, rejectMaterialize = false, pressure, archiveGate;
+  let done = false, cleanupPromise, hasPrimary = false, primary, rejectMaterialize = false, pressure, archiveGate, requestEnv, unknownRetirement = false;
   const own = promise => {
     if (origins.has(promise)) return origins.get(promise);
     const root = { used: false, outcome: promise.then(value => ({ failed: false, value }), error => ({ failed: true, error })) };
@@ -147,10 +151,10 @@ async function fixture(t, run, retained = false, variant = 'fireworks') {
     const failures = [];
     for (const release of releases) try { release(); } catch (error) { failures.push(error); }
     try { pressure?.release(); pressure = undefined; } catch (error) { failures.push(error); }
-    for (let i = 0; i < roots.length; i++) await roots[i].outcome;
-    for (const root of roots) { const value = await root.outcome; if (value.failed && !root.used) { root.used = true; failures.push(value.error); } }
-    try { evictCredentialGeneration(env, kid); } catch (error) { failures.push(error); }
-    try { assert.equal(bodyBudgetCharged(), baseline + observation.shared.held - sharedBaseline, 'exact request retirement plus permanent shared custody'); } catch (error) { failures.push(error); }
+    for (let i = 0; i < roots.length; i++) if (!unknownRetirement || !retirements.includes(roots[i])) await roots[i].outcome;
+    for (const root of roots) { if (unknownRetirement && retirements.includes(root)) continue; const value = await root.outcome; if (value.failed && !root.used) { root.used = true; failures.push(value.error); } }
+    try { evictCredentialGeneration(requestEnv ?? env, kid); } catch (error) { failures.push(error); }
+    if (!unknownRetirement) try { assert.equal(bodyBudgetCharged(), baseline + observation.shared.held - sharedBaseline, 'exact request retirement plus permanent shared custody'); } catch (error) { failures.push(error); }
     for (const release of resources) try { release(); } catch (error) { failures.push(error); }
     return failures;
   })();
@@ -255,15 +259,16 @@ async function fixture(t, run, retained = false, variant = 'fireworks') {
     return Response.json({ id: 'synthetic-priced-chat', model: model.upstream, choices: [{ message: { role: 'assistant', content: 'synthetic answer' }, finish_reason: 'stop' }],
       usage: { prompt_tokens: 4, completion_tokens: 3, total_tokens: 7 } });
   });
+  requestEnv = env;
   const dispatch = input => {
     const original = privateOwnedHttpChat.fetch(new Request('https://router.example/v1/chat/completions', {
       method: 'POST', headers: { authorization: 'Bearer clawrouter-live-' + kid + '-fixture-secret', 'content-type': 'application/json' },
       body: accessBytesResponse(typeof input === 'string' ? input : JSON.stringify(input)).body, duplex: 'half',
-    }), env, { waitUntil: promise => { retirements.push(own(promise)); } });
+    }), requestEnv, { waitUntil: promise => { retirements.push(own(promise)); } });
     const root = own(original); own(original.then(response => { bodyRoot(response); }, () => {})); return root;
   };
   const request = async input => { const response = await take(dispatch(input)); return { status: response.status, text: await take(bodyRoot(response)), headers: response.headers }; };
-  const drain = async () => { for (let i = 0; i < roots.length; i++) await roots[i].outcome; };
+  const drain = async () => { for (let i = 0; i < roots.length; i++) if (!unknownRetirement || !retirements.includes(roots[i])) await roots[i].outcome; };
   try {
     values.set('credentials/' + kid, { enabled: true, secretSha256: await take(own(sha256Hex('fixture-secret'))), policyId, policyGeneration: 'pricing' });
     values.set('policies/' + policyId, { enabled: true, generation: 'pricing', providers: [variant], models: [activeModel.id], tenantId: 'pricing',
@@ -273,6 +278,11 @@ async function fixture(t, run, retained = false, variant = 'fireworks') {
     await take(own(putGrantCredentials(env, activeGrantKey, { provider: variant, enabled: true, kind: 'api_key', credential: 'fixture-upstream-key' })));
     calls.length = 0;
     await run({ env, calls, sent, events, own, take, request, dispatch, drain, releases, bodyRoot, retirements,
+      requestEnvironment(value) { requestEnv = value; },
+      expectUnknownRetirement() {
+        assert.ok(process.env.CLAWROUTER_TERMINAL_UNKNOWN, 'UNKNOWN fixtures run in a separate process; no funding is refunded');
+        unknownRetirement = true;
+      },
       veniceResponse(wire, streaming = false) { assert.equal(variant, 'venice'); veniceWire = wire; veniceStreaming = streaming; },
       failVeniceSource(reason, afterReads = 0) {
         assert.equal(variant, 'venice'); assert.equal(veniceFault, undefined);
@@ -302,6 +312,207 @@ async function fixture(t, run, retained = false, variant = 'fireworks') {
   if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, 'owned pricing fixture outcomes');
   if (hasPrimary) throw primary;
 }
+
+async function budgetSequence(f, options) {
+  const legs = options.legs ?? 4;
+  const policy = await f.env.POLICY_KV.get('policies/' + policyId, 'json');
+  policy.monthlyBudgetMicros = legs ? 1000000000000 : null;
+  policy.dailyBudgetMicros = legs >= 2 ? 1000000000000 : null;
+  policy.weeklyBudgetMicros = legs >= 3 ? 1000000000000 : null;
+  await f.env.POLICY_KV.put('policies/' + policyId, JSON.stringify(policy));
+  await f.env.POLICY_KV.put('connections/fireworks', JSON.stringify({ providerId: 'fireworks', enabled: true, monthlyBudgetMicros: legs >= 4 ? 1000000000000 : null }));
+  const control = createOwnedBudgetSequenceFixture({ legs, ...options }, ExactBodyCharge, bodyBudgetBytes, bodyBudgetCharged, HttpError, budgetCommands);
+  assert.equal(globalThis.__ownedBudgetSequenceFixture, undefined);
+  globalThis.__ownedBudgetSequenceFixture = control;
+  f.releases.push(() => { control.release(); delete globalThis.__ownedBudgetSequenceFixture; });
+  const namespace = f.env.BUDGET_LEDGER, queue = f.env.USAGE_QUEUE;
+  f.env.BUDGET_LEDGER = {
+    idFromName(name) { return Reflect.apply(namespace.idFromName, namespace, [name]); },
+    get(name) { const stub = Reflect.apply(namespace.get, namespace, [name]); return { fetch(url, init) { return control.fetch(stub, url, init); } }; },
+  };
+  f.env.USAGE_QUEUE = { send(...args) { return control.send(queue, args); } };
+  return control;
+}
+
+function terminalScenario(f, options) {
+  const control = createOwnedTerminalFixture(options, budgetCommands);
+  assert.equal(globalThis.__ownedTerminalFixture, undefined);
+  globalThis.__ownedTerminalFixture = control;
+  f.releases.push(() => { control.release(); delete globalThis.__ownedTerminalFixture; });
+  f.requestEnvironment(control.env(f.env)); return control;
+}
+
+for (const options of [{ late: 'throw' }, { late: 'other', wrong: true }, { receipt: 'first' }, { receipt: 'both' },
+  { shellFailure: true }, ...['BUDGET_LEDGER', 'USAGE_LEDGER', 'USAGE_QUEUE'].map(factoryThrow => ({ factoryThrow })),
+  { startFailure: true }])
+test(`private prepaid terminal adoption ${JSON.stringify(options)}`, async t => {
+  await fixture(t, async f => {
+    const control = terminalScenario(f, options), response = await f.request(payload({}));
+    await f.drain(); const row = control.row;
+    assert.equal(row.shellAttempts, 1); assert.equal(row.lateGets, 0); assert.equal(row.methodsB, 0);
+    assert.equal(row.foreignReads, 0); assert.equal(row.pending, 0);
+    const usage = f.events.filter(value => value.type === 'clawrouter.usage.v1');
+    if (options.shellFailure || options.factoryThrow) {
+      assert.ok(response.status >= 400); assert.equal(row.adopted, 0); assert.equal(row.launches, 0);
+      assert.equal(f.calls.filter(value => value.kind === 'budget').length, 0); assert.equal(f.sent.length, 0);
+      assert.equal(usage.length, 0);
+      if (options.factoryThrow) {
+        const names = ['BUDGET_LEDGER', 'USAGE_LEDGER', 'USAGE_QUEUE'];
+        assert.ok(row.factories.length > 0);
+        for (const trace of row.factories) assert.deepEqual(trace, names.slice(0, names.indexOf(options.factoryThrow) + 1));
+      } else assert.equal(row.shells, 0);
+    } else {
+      assert.equal(response.status, 200); assert.equal(row.shells, 1); assert.equal(row.primary, 1);
+      assert.equal(row.fallback, options.receipt ? 1 : 0);
+      if (options.receipt === 'both') {
+        assert.equal(row.failed, 1); assert.equal(row.adopted, 0); assert.equal(row.launches, 0);
+        assert.deepEqual(row.logical, [false]); assert.equal(row.retainedFailure, true); assert.equal(usage.length, 0);
+        assert.equal(f.calls.filter(value => value.kind === 'budget' && value.path === '/settle').length, 0);
+        assert.deepEqual(row.diagnostics, [{ origin: 'terminal-prepare', undefined: true }, { origin: 'terminal-fallback', undefined: true }]);
+      } else {
+        assert.equal(row.adopted, 1); assert.equal(row.launches, 1); assert.equal(usage.length, 1);
+        assert.deepEqual(row.order, ['adopt', 'close', 'install', 'launch']);
+        assert.deepEqual(row.logical, [!options.startFailure]);
+        assert.equal(f.calls.filter(value => value.kind === 'budget' && value.path === '/settle').length, 1);
+      }
+      if (options.wrong) assert.equal(row.rejected, 6);
+      for (const trace of row.factories) assert.deepEqual(trace, ['BUDGET_LEDGER', 'USAGE_LEDGER', 'USAGE_QUEUE']);
+    }
+  });
+});
+
+for (const mode of ['close', 'install', 'diagnostic']) {
+  const name = `private terminal isolated ${mode} UNKNOWN retains one adopted launch`;
+  test(name, { timeout: 120000 }, async t => {
+    if (process.env.CLAWROUTER_TERMINAL_UNKNOWN !== mode) {
+      await promisify(execFile)(process.execPath, ['--test', '--test-name-pattern', '^' + name + '$', fileURLToPath(import.meta.url)], {
+        env: { ...process.env, CLAWROUTER_TERMINAL_UNKNOWN: mode }, maxBuffer: 4 * 1024 * 1024,
+      });
+      return;
+    }
+    await fixture(t, async f => {
+      f.expectUnknownRetirement();
+      const control = terminalScenario(f, { closeFailure: mode !== 'install', installFailure: mode === 'install', diagnosticFailure: mode === 'diagnostic', wrong: true });
+      const response = await f.request(payload({})); assert.equal(response.status, 200);
+      while (!control.row.logical.length || control.row.pending) await new Promise(resolve => setImmediate(resolve));
+      assert.equal(control.row.adopted, 1); assert.equal(control.row.launches, 1); assert.equal(control.row.installs, 1);
+      assert.deepEqual(control.row.order, ['adopt', 'close', 'install', 'launch']);
+      assert.equal(control.row.rejected, 6); assert.equal(control.row.logical.length, 1);
+      assert.equal(f.events.filter(value => value.type === 'clawrouter.usage.v1').length, 1);
+      assert.equal(f.calls.filter(value => value.kind === 'budget' && value.path === '/settle').length, 1);
+      assert.ok(bodyBudgetCharged() > 0, 'UNKNOWN remains funded until this isolated process ends, not credited as retirement');
+      await f.drain();
+    });
+  });
+}
+
+// UNRUN_CODE_ONLY_HOSTED. These use the actual registered private invocation,
+// not a fabricated plan/right. Capacity is filled after FIRST accepted reserve.
+for (const failureOrdinal of [0, 1, 2, 3])
+test(`four-leg private rollback preserves ordinal ${failureOrdinal} denial with prepaid recovery`, async t => {
+  await fixture(t, async f => {
+    const held = failureOrdinal === 3;
+    const control = await budgetSequence(f, { failureOrdinal, reserveFailure: 'denied', settleFailure: '503',
+      pressure: held, holdSend: held, holdCancel: held });
+    const original = f.dispatch(payload({}));
+    if (held) {
+      while (control.row.queue.length !== 3) await Promise.race([
+        new Promise(resolve => setImmediate(resolve)),
+        original.outcome.then(outcome => { throw outcome.failed ? outcome.error : Error('rollback ended before recovery handoff'); }),
+      ]);
+      assert.equal(control.row.accepted, 3); assert.equal(control.row.pressure, true);
+      assert.equal(control.row.grows, 0, 'reserve/rollback/queue consume only pre-obligation funding');
+      assert.equal(control.row.cancel, 3); assert.equal(control.row.cancelSettled, 0);
+      assert.equal(control.row.sendSettled, 0);
+      control.releaseSend();
+    }
+    const response = await f.take(original); await f.take(f.bodyRoot(response));
+    assert.equal(response.status, 402);
+    assert.deepEqual(control.row.branches, ['rollback']); assert.equal(control.row.dispatch.length, 0);
+    const ids = control.row.reserve.filter(row => row.ordinal !== failureOrdinal).map(row => row.id).sort();
+    assert.equal(control.row.reserve.length, 4);
+    assert.deepEqual(control.row.settle.map(row => row.id).sort(), ids);
+    assert.deepEqual(control.row.queue.map(row => row.id).sort(), ids);
+    for (const row of control.row.settle) assert.equal(row.cost, 0);
+    for (const row of control.row.queue) {
+      assert.equal(row.cost, 0); assert.equal(row.args, 1);
+      assert.ok(row.root && row.request && row.ledger && row.hookBlocked);
+      assert.equal(row.after, row.before, 'deferred actual send keeps its sealed graph');
+    }
+    if (held) assert.equal(control.row.cancelSettled, 0, 'logical denial and accounting need not join ledger cancel');
+    control.release(); await f.drain();
+    const usage = f.events.filter(row => row.type === 'clawrouter.usage.v1');
+    assert.equal(usage.length, 1); assert.equal(f.sent.length, 0);
+    assert.ok(control.row.prepayBytes >= 10489728, 'reserve + exclusive branch subtotal; metadata remains additive');
+  });
+});
+
+for (const [reserveFailure, settleFailure, queueFailure] of [
+  ['malformed', '404', undefined], ['lost', '409', undefined],
+  ['undefined', 'undefined', undefined], ['shared', 'shared', 'shared'], ['denied', '503', 'undefined'], ['forged', '503', undefined],
+]) test(`private recovery keeps ${reserveFailure}/${settleFailure}/${queueFailure ?? 'success'} originals and IDs distinct`, async t => {
+  await fixture(t, async f => {
+    const control = await budgetSequence(f, { reserveFailure, settleFailure, queueFailure });
+    const response = await f.request(payload({}));
+    assert.ok(response.status >= 400); assert.equal(control.row.accepted, 3);
+    if (reserveFailure === 'forged') assert.notEqual(response.status, 402, 'transport HttpError cannot mint a reserve denial');
+    assert.deepEqual(control.row.branches, ['rollback']); assert.equal(control.row.dispatch.length, 0);
+    assert.equal(control.row.settle.length, 3); assert.equal(control.row.queue.length, 3);
+    const missing = control.row.reserve[3].id;
+    assert.ok(control.row.settle.every(row => row.id !== missing && row.cost === 0), 'unacknowledged reserve never acquires rollback eligibility');
+    assert.deepEqual(control.row.queue.map(row => row.id), control.row.settle.map(row => row.id));
+    await f.drain(); assert.equal(f.events.filter(row => row.type === 'clawrouter.usage.v1').length, 1);
+    assert.equal(f.sent.length, 0);
+  });
+});
+
+for (const prepayRefusal of [true, false])
+test(`private budget ${prepayRefusal ? 'pre-admission refusal starts no original' : 'dispatch failure uses only the final terminal'}`, async t => {
+  await fixture(t, async f => {
+    const control = await budgetSequence(f, { prepayRefusal, dispatchFailure: !prepayRefusal });
+    const response = await f.request(payload({}));
+    assert.equal(response.status, 503); await f.drain();
+    if (prepayRefusal) {
+      assert.equal(control.row.refused, true); assert.equal(control.row.factories, 0);
+      assert.deepEqual(control.row.branches, []); assert.equal(control.row.reserve.length, 0);
+      assert.equal(control.row.dispatch.length, 0); assert.equal(control.row.settle.length, 0);
+    } else {
+      assert.deepEqual(control.row.branches, ['dispatch']); assert.equal(control.row.reserve.length, 4);
+      assert.equal(control.row.dispatch.length, 4); assert.equal(control.row.settle.length, 4);
+      assert.deepEqual(control.row.settle.map(row => row.id).sort(), control.row.reserve.map(row => row.id).sort());
+    }
+    assert.equal(control.row.queue.length, 0); assert.equal(f.sent.length, 0);
+    assert.equal(f.events.filter(row => row.type === 'clawrouter.usage.v1').length, 1);
+  });
+});
+
+test('private duplicate physical ledger and reservation IDs keep four ordinal rights and reject replays', async t => {
+  await fixture(t, async f => {
+    const control = await budgetSequence(f, { sameIds: true, rights: true, reserveFailure: 'denied', settleFailure: '503' });
+    const response = await f.request(payload({})); assert.equal(response.status, 402);
+    await f.drain();
+    assert.equal(new Set(control.row.reserve.map(row => row.id)).size, 1);
+    assert.equal(control.row.reserve.length, 4); assert.equal(control.row.accepted, 3);
+    assert.equal(control.row.settle.length, 3); assert.equal(control.row.queue.length, 3);
+    assert.equal(control.row.dispatch.length, 0); assert.equal(control.row.rejectedRights, 26);
+    assert.deepEqual(control.row.branches, ['rollback']); assert.equal(f.sent.length, 0);
+  });
+});
+
+for (const legs of [0, 1, 4]) test(`private ${legs}-leg forward plan uses only its prepared sequence`, async t => {
+  await fixture(t, async f => {
+    const control = await budgetSequence(f, { legs, ...(legs === 1 ? { reserveFailure: 'denied' } : {}),
+      pressure: legs === 4, forwardPressure: legs === 4 });
+    const response = await f.request(payload({})); assert.equal(response.status, legs === 1 ? 402 : 200);
+    await f.drain();
+    assert.equal(control.row.reserve.length, legs);
+    assert.equal(control.row.dispatch.length, legs === 1 ? 0 : legs);
+    assert.equal(control.row.settle.length, legs === 1 ? 0 : legs); assert.equal(control.row.queue.length, 0);
+    assert.deepEqual(control.row.branches, [legs === 1 ? 'rollback' : 'dispatch']);
+    assert.equal(control.row.grows, 0); assert.equal(f.sent.length, legs === 1 ? 0 : 1);
+    assert.equal(f.events.filter(row => row.type === 'clawrouter.usage.v1').length, 1);
+  });
+});
 
 test('pricing scope rejects forged and unregistered body provenance before funding', async () => {
   const before = bodyBudgetCharged(), cap = beginOwnedHttpRequest(new Request('https://router.example/v1/chat/completions'), {});
@@ -799,4 +1010,82 @@ test('private reader ignores a premature modified then return: ' + mode, async t
       await f.drain(); assert.equal(f.events.length, 1); assert.equal(f.sent.length, 1);
     }, false, 'venice');
   } finally { observation.consumerMode = 'normal'; observation.releaseConsumer(); }
+});
+
+
+// UNRUN_CODE_ONLY_HOSTED. All delayed work below belongs to the Promise
+// actually returned from send; fixture teardown opens the gate before joins.
+test('private accounting hands one frozen graph to the real held queue sender', async t => {
+  await fixture(t, async f => {
+    const gate = deferred(), entered = deferred(), send = f.env.USAGE_QUEUE.send;
+    let handed, wire, calls = 0, hooks = 0;
+    f.releases.push(gate.resolve, entered.resolve, () => { handed = undefined; });
+    f.env.USAGE_QUEUE.send = function (message) {
+      assert.equal(this, f.env.USAGE_QUEUE); assert.equal(arguments.length, 1); calls++;
+      assert.equal(Object.isFrozen(message), true); assert.equal(Object.getPrototypeOf(message), null);
+      handed = message; wire = JSON.stringify(message); entered.resolve();
+      return gate.promise.then(() => {
+        assert.equal(Reflect.defineProperty(message, 'toJSON', { value() { hooks++; return {}; } }), false);
+        assert.equal(Reflect.set(message, 'id', 'replaced-event'), false);
+        assert.equal(Reflect.setPrototypeOf(message, { toJSON() { hooks++; return {}; } }), false);
+        assert.equal(JSON.stringify(message), wire);
+        return Reflect.apply(send, this, [message]);
+      });
+    };
+    const response = await f.request(payload({})); assert.equal(response.status, 200);
+    await entered.promise; assert.equal(f.events.length, 0);
+    assert.ok(bodyBudgetCharged() > 0, 'held send still owns the graph and original');
+    const id = handed.id, requestId = handed.request_id; gate.resolve(); await f.drain();
+    assert.equal(calls, 1); assert.equal(hooks, 0); assert.equal(f.events.length, 1);
+    assert.equal(f.events[0].id, id); assert.equal(f.events[0].request_id, requestId);
+    assert.equal(JSON.stringify(f.events[0]), wire); handed = undefined;
+  });
+});
+
+for (const failure of ['mutation', 'undefined', 'shared'])
+test('private sealed usage queue keeps same-ID ingest recovery after ' + failure + ' rejection', async t => {
+  t.mock.method(console, 'error', () => {});
+  await fixture(t, async f => {
+    const shared = Object.freeze({ failure: 'same sender reason' });
+    let sends = 0, ingests = 0, id;
+    f.env.USAGE_LEDGER = { idFromName(name) { return name; }, get() { return { async fetch(url, init) {
+      ingests++; assert.equal(new URL(url).pathname, '/ingest'); assert.equal(init.method, 'POST');
+      const value = JSON.parse(init.body); assert.equal(value.id, id);
+      return accessBytesResponse(JSON.stringify({ eventId: id, outcome: 'stored' }));
+    } }; } };
+    f.env.USAGE_QUEUE.send = function (message) {
+      sends++; assert.equal(this, f.env.USAGE_QUEUE); assert.equal(arguments.length, 1);
+      assert.equal(Object.isFrozen(message), true); id = message.id;
+      if (failure === 'mutation') Object.defineProperty(message, 'toJSON', { value() { return {}; } });
+      throw failure === 'undefined' ? undefined : shared;
+    };
+    const response = await f.request(payload({})); assert.equal(response.status, 200); await f.drain();
+    assert.equal(sends, 1); assert.equal(ingests, 1); assert.equal(f.sent.length, 1);
+  });
+});
+
+
+for (const shape of ['wide513', 'deep513'])
+test('private HTTP pays variable traversal CONTROL for native ' + shape + ' without a new JSON cap', async t => {
+  await fixture(t, async f => {
+    let extra = shape === 'wide513' ? Array.from({ length: 513 }, () => ({})) : 0;
+    if (shape === 'deep513') for (let index = 0; index < 513; index++) extra = [extra];
+    const input = payload({ extra }), expected = JSON.stringify(transformed(input));
+    const response = await f.request(input); assert.equal(response.status, 200); await f.drain();
+    assert.equal(f.sent.length, 1); assert.equal(f.sent[0].text, expected); assert.equal(f.events.length, 1);
+    assert.equal(f.calls.filter(row => row.kind === 'budget' && row.path === '/reserve').length, 1);
+  });
+});
+
+test('private pricing retains Infinity ancestry and array-valued tool classification before native serialization', async t => {
+  await fixture(t, async f => {
+    const input = payload({ previous_response_id: Infinity, tools: [{ type: ['browser_search'] }] });
+    const expected = ordinaryCost(input);
+    const wire = JSON.stringify(input).replace('"previous_response_id":null', '"previous_response_id":1e400');
+    const response = await f.request(wire); assert.equal(response.status, 200); await f.drain();
+    const reserve = f.calls.find(row => row.kind === 'budget' && row.path === '/reserve');
+    assert.equal(reserve.body.costMicros, expected.reserveMicros);
+    assert.equal(JSON.parse(f.sent[0].text).previous_response_id, null);
+    assert.deepEqual(JSON.parse(f.sent[0].text).tools, [{ type: ['browser_search'] }]);
+  });
 });

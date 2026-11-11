@@ -1,8 +1,12 @@
+import { withOwnedRequestId, withOwnedBackgroundRecovery } from "./correlation.ts";
+import { withOwnedCors } from "./utils.ts";
+import { beginOwnedHttpFinalMetadata, ownOwnedHttpMetadataPublicResponse, withOwnedHttpVersion } from "./http-identity-owner.ts";
+import { measureOwnedHeaderUnits } from "./proxy-completion.ts";
 import { emptyUsageSnapshot } from "./usage-sharding.ts";
 import { sessionUsageReport } from "./usage-report-session.ts";
 import { consoleAsset } from "./console-assets.ts";
 import { proxyTranscription, transcriptionPath } from "./transcription.ts";
-import { withNativeLocalError } from "./native-errors.ts";
+import { withOwnedNativeLocalError, withNativeLocalError } from "./native-errors.ts";
 import { poolResponse } from "./pool";
 import packageMetadata from "../package.json" with { type: "json" };
 import { publicSession, sessionPolicies, verifiedAccessSession } from "./access";
@@ -32,10 +36,10 @@ import { proxyResponseControl } from "./response-controls.ts";
 import { requireEmptyResponseControlBody } from "./responses-lifecycle.ts";
 import { backgroundMark as currentBackgroundMark, clearHotCaches, fenceSharedHotCache, pendingBackgroundWork } from "./hot-cache.ts";
 import type { Env, QueueMessage } from "./types";
-import { beginOwnedHttpRequest, growOwnedHttpRequest, finishOwnedHttpRequest, holdOwnedHttpRequest, ownedHttpCompletion,
-  ownedHttpSinkOwner, ownOwnedHttpPublicResponse, cancelOwnedHttpResponse, registerOwnedHttpRetirement } from "./http-identity-owner.ts";
+import { tryBeginOwnedHttpRequest, ownedHttpPlatformFailure, growOwnedHttpRequest, finishOwnedHttpRequest, holdOwnedHttpRequest, ownedHttpCompletion,
+  ownedHttpSinkOwner, ownOwnedHttpPublicResponse, retireOwnedHttpAssociatedResponse, cancelOwnedHttpResponse, registerOwnedHttpRetirement } from "./http-identity-owner.ts";
 import {
-  canonicalPath, caughtResponse, corsEnabled, corsPreflight, decodePathSegment, errorResponse, legacyRedirect,
+  canonicalPath, caughtOwnedResponse, ownedErrorResponse, caughtResponse, corsEnabled, corsPreflight, decodePathSegment, errorResponse, legacyRedirect,
   privateJson, redirect, withCors,
 } from "./utils";
 
@@ -234,9 +238,8 @@ function healthStatus(env: Env) {
 /** Compiled private entry only. No header/Env flag changes the default handler. */
 export const privateOwnedHttpChat: ExportedHandler<Env, QueueMessage> = {
   async fetch(request, env, context) {
-    let owner: ReturnType<typeof beginOwnedHttpRequest>;
-    try { owner = beginOwnedHttpRequest(request, env); }
-    catch (error) { return caughtResponse(error); }
+    const owner = tryBeginOwnedHttpRequest(request, env);
+    if (!owner) throw ownedHttpPlatformFailure;
     let response: Response | undefined, requestId: string | undefined;
     try {
       ownedHttpSinkOwner(owner);
@@ -251,25 +254,29 @@ export const privateOwnedHttpChat: ExportedHandler<Env, QueueMessage> = {
       const path = canonicalPath(new URL(request.url).pathname), correlated = correlateIngressRequest(request);
       requestId = correlated.requestId;
       try {
-        response = correlated.error ? errorResponse(correlated.error.code, correlated.error.message, correlated.error.status)
-          : path !== "/v1/chat/completions" || request.method !== "POST" ? errorResponse("not_found", "route not found", 404)
+        response = correlated.error ? ownedErrorResponse(owner, correlated.error.code, correlated.error.message, correlated.error.status)
+          : path !== "/v1/chat/completions" || request.method !== "POST" ? ownedErrorResponse(owner, "not_found", "route not found", 404)
           : await ownedHttpCompletion(owner).start(() => proxyOwnedHttpChat(owner, correlated.request, env, context));
-      } catch (error) { response = caughtResponse(error, requestId); }
-      response = ownOwnedHttpPublicResponse(owner, response);
-      let headerUnits = 0;
-      response.headers.forEach((value, name) => { headerUnits += value.length + name.length; });
+      } catch (error) { response = caughtOwnedResponse(owner, error, requestId); }
+      beginOwnedHttpFinalMetadata(owner, request, env, response, path, requestId);
+      response = withOwnedNativeLocalError(owner, response, path, requestId);
+      response = ownOwnedHttpMetadataPublicResponse(owner, response);
+      const headerUnits = measureOwnedHeaderUnits(response.headers);
       growOwnedHttpRequest(owner, 16384 + 8 * headerUnits);
-      response = withNativeLocalError(response, path, requestId);
-      response = withBackgroundRecovery(withRequestId(response, requestId), request);
-      if (env.CF_VERSION_METADATA?.id) response.headers.set("x-clawrouter-version-id", env.CF_VERSION_METADATA.id);
-      return corsEnabled(path) ? withCors(response) : response;
+      response = withOwnedRequestId(owner, response, requestId);
+      response = withOwnedBackgroundRecovery(owner, response, request);
+      response = withOwnedHttpVersion(owner, response, env);
+      return withOwnedCors(owner, response, path);
     } catch (error) {
       // A failed public-wrapper factory still owns the original delivery body.
-      if (response?.body && !response.body.locked) {
+      if (response && retireOwnedHttpAssociatedResponse(owner, response)) {
+        // Start or reuse the already-enrolled reader retirement. Metadata may
+        // fail before the outer wrapper has started its own cancellation.
+      } else if (response?.body && !response.body.locked) {
         const original = ownedHttpCompletion(owner).start(() => cancelOwnedHttpResponse(ownedHttpSinkOwner(owner), response!));
         void original.then(() => undefined, () => undefined);
       } else if (response?.body?.locked) holdOwnedHttpRequest(owner);
-      return caughtResponse(error, requestId);
+      return caughtOwnedResponse(owner, error, requestId);
     } finally {
       response = undefined;
       const retirement = finishOwnedHttpRequest(owner);

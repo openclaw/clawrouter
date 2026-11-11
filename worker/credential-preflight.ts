@@ -1,3 +1,4 @@
+import { sealPrivatePreflightRequest, privatePreflightJson, privateAdmissionJson } from "./json-body.ts";
 import { identityJsonProfiles } from "./access-json.ts";
 import type { Env } from "./types";
 import { admitAdmission, admitIdentity, copyIdentity, admittedEffectivePolicy, advanceIdentitySource, identityFailure, identityPlan, identitySourceBudget,
@@ -7,8 +8,8 @@ import { admitGenerationFactories, admitGenerationConsumptionFactories, generati
   copyGenerationCoverage, generationCoverageLayout, sameGenerationCoverage,
   type GenerationCoverage, type GenerationAuthentication, type IdentityGenerationPreparation, type IdentityGenerationBorrow } from "./identity-generations.ts";
 import { PrivateCacheReservation, hotCacheNow, hotCacheConfig, tryRunInBackground, type HotCacheConfig } from "./hot-cache.ts";
-import { hasJoinedOwnedHttpCredentialValue, ownsCredentialPrefetchPermit, ownsOwnedHttpCredentialPermit, acceptOwnedHttpCredentialMaterialization, retireOwnedHttpGrantCredentials, invalidateOwnedHttpGrantCredentials, moveOwnedCredentialBorrow, type OwnedCredentialBorrow } from "./credential-cache.ts";
-import { materializeGrantCredentials } from "./grant-credentials.ts";
+import { hasJoinedOwnedHttpCredentialValue, ownsCredentialPrefetchPermit, ownsOwnedHttpCredentialPermit, retireOwnedHttpGrantCredentials, invalidateOwnedHttpGrantCredentials, finishOwnedHttpGrantCredentialCommand, moveOwnedCredentialBorrow, type OwnedCredentialBorrow } from "./credential-cache.ts";
+import { materializeGrantCredentials, materializePrivateOwnedHttpGrantCredentials } from "./grant-credentials.ts";
 import { selectedCredentialFailure } from "./grant-credential-failure.ts";
 import { grantRevision, currentGrantRuntime } from "./grant-eligibility.ts";
 import { snapshot as providerSnapshot, ownsOwnedHttpSelectionPermit, consumeOwnedHttpProviderCredential } from "./providers.ts";
@@ -18,16 +19,16 @@ import { GenerationAdvisoryState, waitGenerationFlushWindow, admitGenerationOver
 import { authorityCall } from "./authority.ts";
 import { recordGrantRuntime } from "./grant-selection.ts";
 import { ownedGenerationCredentialFailure, acceptOwnedHttpControlVerification } from "./proxy-auth.ts";
-import { acceptOwnedHttpAuthentication, hasBoundOwnedHttpAuthentication, hasOwnedHttpProxyInvocation, reserveOwnedHttpInitialPreparation } from "./proxy.ts";
+import { acceptOwnedHttpAuthentication, hasBoundOwnedHttpAuthentication, hasOwnedHttpProxyInvocation, reserveOwnedHttpInitialPreparation, matchesOwnedHttpForegroundCommandRetirement } from "./proxy.ts";
 import { credentialExpired } from "./credential-lifecycle.ts";
 import { safeEqual, sha256Hex, HttpError } from "./utils.ts";
-import { errorResponse } from "./utils.ts";
-import { markLocalError } from "./native-errors.ts";
-import { checkOwnedHttpRequest, growOwnedHttpRequest, holdOwnedHttpRequest, ownedHttpCompletion, ownedHttpSinkOwner, ownedHttpPreflightFetch,
+import { ownedErrorResponse, ownedExpiryResponse } from "./utils.ts";
+import { checkOwnedHttpRequest, growOwnedHttpRequest, holdOwnedHttpRequest, ownedHttpCompletion, ownedHttpSinkOwner, admitOwnedHttpPreflightSerialization, consumeOwnedHttpPreflight,
+  prepareOwnedHttpContinuation, consumeOwnedHttpContinuation, abandonOwnedHttpContinuation,
   type OwnedHttpRequest, type OwnedHttpSinkOwner } from "./http-identity-owner.ts";
 import { admissionContinuationHeader, admissionContinuationVersion, admissionContinuationPath, closeAdmissionEnvelope, type AdmissionContinuationEnvelope, checkPreflightIdentity, credentialPreflightHeader, credentialPreflightNamespace,
   credentialPreflightPath, credentialPreflightVersion, closePreflightReply } from "./credential-preflight-protocol.ts";
-import { consumeAdmissionBridge, consumePreflightReply } from "./credential-preflight-source.ts";
+import { consumeAdmissionBridge, consumePreflightReply, type PrivateContinuationDestination } from "./credential-preflight-source.ts";
 
 // Capture the native Annex B lookups and apply before any input inspection.
 // Availability is qualified by hosted Node/Workerd witnesses, never assumed.
@@ -47,6 +48,7 @@ interface HttpIdentityOwner {
   coverageMiss: boolean;
   coverageSelections: number;
   refreshed: boolean;
+  preflight?: Owner;
 }
 let httpIdentities: WeakMap<OwnedHttpRequest, HttpIdentityOwner> | undefined;
 let httpIdentityCount = 0;
@@ -69,7 +71,7 @@ export async function resolveOwnedHttpAuthentication(cap: OwnedHttpRequest, requ
   // genuinely covered later facet is still checked separately, before use.
   if (freshness === "cached" && current && (identityOnly || sameGenerationCoverage(current.slot.coverage!.value, required)))
     {
-      const response = ownedHttpAuthenticationResponse(current);
+      const response = ownedHttpAuthenticationResponse(cap, current);
       if (!response && required.selection && hasOwnedHttpProxyInvocation(cap)) reserveOwnedHttpForeground(cap, request, env);
       return response;
     }
@@ -109,8 +111,8 @@ export async function resolveOwnedHttpAuthentication(cap: OwnedHttpRequest, requ
     if (!borrow) {
       const result = await preflightOwnedHttpCredential(cap, request, env, kid, digest);
       if (result.outcome !== "matched") return result.outcome === "unknown"
-        ? errorResponse("unknown_proxy_key", "proxy key is not registered", 401)
-        : errorResponse("invalid_proxy_key", "proxy key secret is invalid", 401);
+        ? ownedErrorResponse(cap, "unknown_proxy_key", "proxy key is not registered", 401)
+        : ownedErrorResponse(cap, "invalid_proxy_key", "proxy key secret is invalid", 401);
       proof = result.proof;
       if (required.selection && hasOwnedHttpProxyInvocation(cap)) reserveOwnedHttpForeground(cap, request, env);
       preparation = prepareCredentialGeneration(proof); proof = undefined;
@@ -126,7 +128,7 @@ export async function resolveOwnedHttpAuthentication(cap: OwnedHttpRequest, requ
     }
     const refreshFrom = freshness === "authoritative" && current && required.selection ? current : undefined;
     next = createGenerationAuthentication(borrow, env, admittedCoverage, refreshFrom);
-    response = ownedHttpAuthenticationResponse(authenticationOwner(next));
+    response = ownedHttpAuthenticationResponse(cap, authenticationOwner(next));
     if (!response && required.selection && hasOwnedHttpProxyInvocation(cap)) reserveOwnedHttpForeground(cap, request, env);
     const previous = owner.current;
     owner.current = next; owner.retained.push(next); next = undefined;
@@ -148,14 +150,12 @@ export async function resolveOwnedHttpAuthentication(cap: OwnedHttpRequest, requ
   return response;
 }
 
-function ownedHttpAuthenticationResponse(owner: GenerationAuthenticationOwner): Response | null {
+function ownedHttpAuthenticationResponse(cap: OwnedHttpRequest, owner: GenerationAuthenticationOwner): Response | null {
   const failure = owner.failure;
   if (!failure) return null;
-  if (failure.code === "proxy_key_expired") return markLocalError(Response.json({
-    error: { code: failure.code, message: failure.message },
-    expiresAt: owner.slot.owner.admission!.credential!.credential.expiresAt, expired: true, active: false,
-  }, { status: 401 }), failure.code, failure.message);
-  return errorResponse(failure.code, failure.message, failure.status);
+  if (failure.code === "proxy_key_expired") return ownedExpiryResponse(cap, failure.code, failure.message,
+    owner.slot.owner.admission!.credential!.credential.expiresAt);
+  return ownedErrorResponse(cap, failure.code, failure.message, failure.status);
 }
 
 export function matchesOwnedHttpAuthentication(cap: OwnedHttpRequest, identity: import("./types").AuthorizedIdentity): boolean {
@@ -188,6 +188,16 @@ export function invalidateOwnedHttpSelectionCredentials(cap: OwnedHttpRequest, s
     const candidate = httpCredentialOwner(credential);
     if (candidate.selected?.result?.selected?.key === key) invalidateOwnedHttpGrantCredentials(credential);
   }
+}
+export function finishOwnedHttpForegroundCommands(cap: OwnedHttpRequest): void {
+  const root = httpIdentities?.get(cap);
+  if (!root || !matchesOwnedHttpForegroundCommandRetirement(cap)) throw identityFailure("protocol");
+  for (const credential of root.credentials) {
+    const owner = httpCredentialOwner(credential);
+    if (owner.http !== cap || !owner.retained || !owner.cachePermit
+      || owner.providerPermit && ownsOwnedHttpSelectionPermit(owner.providerPermit, cap)) throw identityFailure("protocol");
+  }
+  for (const credential of root.credentials) finishOwnedHttpGrantCredentialCommand(credential);
 }
 
 export function ownedHttpCoverageMiss(cap: OwnedHttpRequest): boolean {
@@ -672,19 +682,19 @@ export async function materializeOwnedHttpCredential(cap: OwnedHttpCredential, p
   const owner = httpCredentialOwner(cap), selected = owner.selected!.result!.selected, provider = owner.selected!.httpProvider;
   if (owner.cachePermit !== permit || !ownsOwnedHttpCredentialPermit(permit, cap) || owner.started || !selected || !provider) throw identityFailure("protocol");
   owner.started = true;
-  let original: Promise<import("./types").UpstreamGrant> | undefined, value: import("./types").UpstreamGrant | undefined;
   try {
     if (!owner.env!.GRANT_CREDENTIALS) throw new HttpError(503, "provider_not_configured", "provider is not configured");
-    original = materializeGrantCredentials(owner.env!, selected.key, selected.grant, provider.id, provider.auth.refresh, owner.force, owner.request!.signal,
-      undefined, undefined, undefined, undefined, undefined, ownedHttpSinkOwner(owner.http!));
-    void original.then(() => undefined, () => undefined);
-    value = await original;
-    // Actual reader/FIRSTcancel/unlock are joined by the original materializer.
-    // No graph-valued promise escapes this command; the fixed receiver is under
-    // the same full temporary owner until configuration has cleared its aliases.
-    acceptOwnedHttpCredentialMaterialization(permit, cap, value);
+    await materializePrivateOwnedHttpGrantCredentials(cap, permit, ownedHttpSinkOwner(owner.http!), owner.env!,
+      selected.key, selected.grant, provider.id, provider.auth.refresh, owner.force, owner.request!.signal);
   } catch (error) { throw selectedCredentialFailure(error, selected.key); }
-  finally { value = undefined; original = undefined; }
+}
+export function matchesOwnedHttpMaterialization(cap: OwnedHttpCredential, permit: object, sink: OwnedHttpSinkOwner,
+  env?: Env, key?: string, grant?: import("./types").UpstreamGrant): boolean {
+  const owner = httpCredentials?.get(cap);
+  return !!owner?.http && ownedHttpSinkOwner(owner.http) === sink && owner.started && owner.cachePermit === permit
+    && ownsOwnedHttpCredentialPermit(permit, cap) && (!env || owner.env === env)
+    && (key === undefined || owner.selected?.result?.selected?.key === key)
+    && (grant === undefined || owner.selected?.result?.selected?.grant === grant);
 }
 export async function consumeOwnedHttpCredential(cap: OwnedHttpCredential, permit: object,
   materialized: import("./types").UpstreamGrant | null): Promise<void> {
@@ -713,9 +723,9 @@ export interface CredentialPreflightProof { readonly kind?: never }
 export interface CredentialPreflightContinuation { readonly kind?: never }
 type Authority = NonNullable<Env["ACCESS_CONTROL"]>;
 type Owner = { binding: Authority; namespace: typeof credentialPreflightNamespace; kid: string;
-  digest: string; source: IdentitySourceBudget; ticket: PreflightTicket };
+  digest: string; source: IdentitySourceBudget; ticket: PreflightTicket; http?: OwnedHttpRequest };
 const proofs = new WeakMap<CredentialPreflightProof, Owner>();
-const continuations = new WeakMap<CredentialPreflightContinuation, Owner>();
+const continuations = new WeakMap<CredentialPreflightContinuation, AdmissionOwner>();
 export type CredentialPreflightResult = { outcome: "unknown" | "invalid" } | { outcome: "matched"; proof: CredentialPreflightProof };
 
 export function preflightCredential(env: Pick<Env, "ACCESS_CONTROL">, kid: string, digest: string, signal?: AbortSignal): Promise<CredentialPreflightResult> {
@@ -723,23 +733,29 @@ export function preflightCredential(env: Pick<Env, "ACCESS_CONTROL">, kid: strin
 }
 function preflightOwnedHttpCredential(cap: OwnedHttpRequest, request: Request, env: Env, kid: string, digest: string): Promise<CredentialPreflightResult> {
   checkOwnedHttpRequest(cap, request, env);
-  return beginCredentialPreflight(env, kid, digest, request.signal, ownedHttpSinkOwner(cap));
+  return beginCredentialPreflight(env, kid, digest, request.signal, ownedHttpSinkOwner(cap), cap);
 }
-function beginCredentialPreflight(env: Pick<Env, "ACCESS_CONTROL">, kid: string, digest: string, signal?: AbortSignal, ownedHttp?: OwnedHttpSinkOwner): Promise<CredentialPreflightResult> {
+function beginCredentialPreflight(env: Pick<Env, "ACCESS_CONTROL">, kid: string, digest: string, signal?: AbortSignal, ownedHttp?: OwnedHttpSinkOwner, http?: OwnedHttpRequest): Promise<CredentialPreflightResult> {
   // The common Worker body arena funds every new operation factory first.
   const ticket = PreflightTicket.reserve(); ticket.enter("operation");
   try {
     checkPreflightIdentity(kid, digest);
     if (!env.ACCESS_CONTROL) throw identityFailure("protocol");
-    const operation = run({ binding: env.ACCESS_CONTROL, namespace: credentialPreflightNamespace,
-      kid, digest, source: identitySourceBudget(), ticket }, signal, ownedHttp);
+    const owner: Owner = { binding: env.ACCESS_CONTROL, namespace: credentialPreflightNamespace,
+      kid, digest, source: identitySourceBudget(), ticket };
+    if (http) {
+      const identity = httpIdentities?.get(http);
+      if (!identity || identity.preflight) throw identityFailure("protocol");
+      identity.preflight = owner; owner.http = http;
+    }
+    const operation = run(owner, signal, ownedHttp, http);
     // Observe immediately without retaining fulfilled graphs or changing the
     // ORIGINAL operation's fulfillment/rejection delivered to its caller.
     void operation.then(() => undefined, () => undefined);
     return operation;
   } catch (error) { ticket.release(); throw error; }
 }
-async function run(owner: Owner, signal?: AbortSignal, ownedHttp?: OwnedHttpSinkOwner): Promise<CredentialPreflightResult> {
+async function run(owner: Owner, signal?: AbortSignal, ownedHttp?: OwnedHttpSinkOwner, http?: OwnedHttpRequest): Promise<CredentialPreflightResult> {
   let body: string | undefined, init: RequestInit | undefined;
   let sent: IdentitySourceBudget | undefined, replySource: IdentitySourceBudget | undefined;
   let request: { credentialId: string; secretSha256: string; source: IdentitySourceBudget } | undefined;
@@ -747,24 +763,20 @@ async function run(owner: Owner, signal?: AbortSignal, ownedHttp?: OwnedHttpSink
   let reply: Awaited<ReturnType<typeof consumePreflightReply>> | undefined;
   let retained = false;
   try {
+    if (ownedHttp !== undefined) {
+      if (!http) throw identityFailure("protocol");
+      admitOwnedHttpPreflightSerialization(http, ownedHttp, owner, owner.ticket);
+    }
     sent = identitySourceSnapshot(owner.source);
     request = { credentialId: owner.kid, secretSha256: owner.digest, source: sent };
+    if (ownedHttp !== undefined) sealPrivatePreflightRequest(request);
     plan = identityPlan(); plan.item(request, 0);
-    body = JSON.stringify(request);
+    body = ownedHttp !== undefined ? privatePreflightJson(request) : JSON.stringify(request);
     init = { method: "POST", headers: { "content-type": "application/json", [credentialPreflightHeader]: credentialPreflightVersion }, body, signal, redirect: "manual" };
     replySource = identitySourceBudget();
     if (ownedHttp !== undefined) {
-      reply = await consumeAdmissionBridge(owner.ticket, () => ownedHttpPreflightFetch(ownedHttp!, owner.binding, body!, signal), replySource, "complete", (value, response) => {
-        if (!response?.ok) {
-          const error = (value as { error?: { code?: unknown; message?: unknown } })?.error;
-          if (response?.status === 503 && error?.code === "identity_admission_unavailable") {
-            for (const kind of ["limit", "protocol", "transport", "cleanup"] as const)
-              if (error.message === `Identity admission failed (${kind})`) throw identityFailure(kind);
-          }
-          throw identityFailure("transport");
-        }
-        return closePreflightReply(value);
-      }, signal) ?? undefined;
+      if (!http) throw identityFailure("protocol");
+      reply = await consumeOwnedHttpPreflight(http, ownedHttp, owner, owner.ticket, owner.binding, body!, replySource, signal);
       if (!reply) throw identityFailure("protocol");
     } else {
       stub = owner.binding.get(owner.binding.idFromName(owner.namespace));
@@ -786,11 +798,19 @@ async function run(owner: Owner, signal?: AbortSignal, ownedHttp?: OwnedHttpSink
   } finally {
     body = undefined; init = undefined; sent = undefined; replySource = undefined;
     request = undefined; plan = undefined; stub = undefined; reply = undefined; signal = undefined;
+    if (http) {
+      const identity = httpIdentities?.get(http);
+      if (identity?.preflight === owner) identity.preflight = undefined;
+    }
     if (!retained) retireOwner(owner);
   }
 }
+export function matchesOwnedHttpPreflight(cap: OwnedHttpRequest, permit: object, ticket: PreflightTicket, sink: OwnedHttpSinkOwner): boolean {
+  const owner = httpIdentities?.get(cap)?.preflight;
+  return !!owner && owner === permit && owner.ticket === ticket && ownedHttpSinkOwner(cap) === sink;
+}
 function retireOwner(owner: Owner): void {
-  owner.kid = ""; owner.digest = ""; owner.binding = undefined as never;
+  owner.kid = ""; owner.digest = ""; owner.binding = undefined as never; if (owner.http) owner.http = undefined;
   retireAdmissionScratch(owner.ticket); owner.ticket.release();
 }
 function ownerOf(proof: CredentialPreflightProof, env: Pick<Env, "ACCESS_CONTROL">, kid: string, digest: string): Owner {
@@ -822,7 +842,7 @@ export function releaseCredentialPreflightContinuation(continuation: CredentialP
 
 // Inactive continuation: the caller never receives the full admission graph.
 export interface PrivateAdmissionHandle { dispose(): void }
-type AdmissionOwner = Owner & { admission?: import("./authority-admission.ts").AdmissionResult; generationSnapshotOnly?: boolean };
+type AdmissionOwner = Owner & PrivateContinuationDestination & { admission?: import("./authority-admission.ts").AdmissionResult; generationSnapshotOnly?: boolean };
 const admissions = new WeakMap<PrivateAdmissionHandle, AdmissionOwner>();
 function disposeAdmission(this: PrivateAdmissionHandle): void {
   const owner = admissions.get(this);
@@ -841,10 +861,17 @@ export function completeCredentialAdmission(continuation: CredentialPreflightCon
   // Validate the bridge inventory before consuming the single-use owner.
   admitBridgeFactories();
   guardAdmissionSerialization(owner, input);
+  if (owner.http) prepareOwnedHttpContinuation(owner.http, continuation, owner, owner.ticket, owner.binding, owner.namespace, signal);
   continuations.delete(continuation);
-  const operation = runAdmission(owner, input, signal);
+  const operation = owner.http ? runAdmission(owner, input, signal, continuation) : runAdmission(owner, input, signal);
   void operation.then(() => undefined, () => undefined);
   return operation;
+}
+export function matchesOwnedHttpContinuation(http: OwnedHttpRequest, permit: object, destination: object,
+  ticket: PreflightTicket, binding: Authority, namespace: typeof credentialPreflightNamespace): boolean {
+  const owner = continuations.get(permit);
+  return !!owner && owner === destination && owner.http === http && httpIdentities?.has(http) === true
+    && owner.ticket === ticket && owner.binding === binding && owner.namespace === namespace;
 }
 // PRIVATE passive-data prevalidation. The ordinary planner intentionally skips
 // callable members; JSON serialization would consult their toJSON FIRST. Inspect
@@ -931,7 +958,8 @@ function fundAdmissionCopy(owner: AdmissionOwner, input: Record<string, unknown>
   } finally { owner.ticket.leave("source"); }
 }
 
-async function runAdmission(owner: AdmissionOwner, input: Record<string, unknown>, signal?: AbortSignal): Promise<PrivateAdmissionHandle> {
+async function runAdmission(owner: AdmissionOwner, input: Record<string, unknown>, signal?: AbortSignal,
+  continuation?: CredentialPreflightContinuation): Promise<PrivateAdmissionHandle> {
   let body: string | undefined, init: RequestInit | undefined, request: unknown;
   let copied: Record<string, unknown> | undefined;
   let sent: IdentitySourceBudget | undefined, replySource: IdentitySourceBudget | undefined;
@@ -974,7 +1002,22 @@ async function runAdmission(owner: AdmissionOwner, input: Record<string, unknown
       copied.credentialId = owner.kid; copied.secretSha256 = owner.digest;
       request = { admission: copied, source: sent };
     } finally { owner.ticket.leave("source"); }
-    body = JSON.stringify(request); request = undefined; copied = undefined; input = undefined as never; owner.generationSnapshotOnly = undefined;
+    if (owner.http) {
+      // The HTTP association was installed only after genuine request validation
+      // and follows this exact owner through proof/continuation transfer. The
+      // FULL ticket retains the borrowed source; this independent HTTP component
+      // pays for every new copied occurrence plus text and transport backing.
+      const counts = plan.counts;
+      growOwnedHttpRequest(owner.http, 4096 + 8 * (counts.values + 2 * counts.members + counts.entries)
+        + 2 * counts.units + 2 * counts.text + counts.bytes);
+      body = privateAdmissionJson(request);
+    } else body = JSON.stringify(request);
+    request = undefined; copied = undefined; input = undefined as never; owner.generationSnapshotOnly = undefined;
+    if (owner.http) {
+      await consumeOwnedHttpContinuation(owner.http, continuation!, owner, body, signal);
+      reply = owner.continuationReply; replySource = owner.continuationSource;
+      owner.continuationReply = undefined; owner.continuationSource = undefined;
+    } else {
     init = { method: "POST", headers: { "content-type": "application/json", [admissionContinuationHeader]: admissionContinuationVersion }, body, signal, redirect: "manual" };
     stub = owner.binding.get(owner.binding.idFromName(owner.namespace));
     replySource = identitySourceBudget();
@@ -991,9 +1034,10 @@ async function runAdmission(owner: AdmissionOwner, input: Record<string, unknown
       admitAdmission(closed.admission);
       return closed;
     }, signal, undefined, "continuation");
+    }
     if (!reply) throw identityFailure("protocol");
     if (signal?.aborted) throw identityFailure("transport");
-    advanceIdentitySource(owner.source, sent, reply.source, replySource);
+    advanceIdentitySource(owner.source, sent, reply.source, replySource!);
     owner.admission = reply.admission;
     body = undefined; init = undefined; request = undefined; copied = undefined; reply = undefined; sent = undefined; replySource = undefined; stub = undefined; signal = undefined;
     // Full graph remains under the SAME 32 MiB ticket. No scalar shrink/GC credit.
@@ -1001,7 +1045,12 @@ async function runAdmission(owner: AdmissionOwner, input: Record<string, unknown
     admissions.set(handle, owner); retained = true;
     return handle;
   } finally {
+    // A started command only returns after physical retirement. UNKNOWN keeps
+    // this activation, the FULL ticket and its outbound/inbound aliases alive.
+    if (owner.http) abandonOwnedHttpContinuation(owner.http, continuation!, owner);
     body = undefined; init = undefined; request = undefined; copied = undefined; reply = undefined; sent = undefined; replySource = undefined; stub = undefined; signal = undefined; input = undefined as never;
+    if (owner.http) { owner.continuationReply = undefined; owner.continuationSource = undefined; }
+    if (owner.http) owner.http = undefined;
     phase?.retire();
     if (!retained) { owner.admission = undefined; retireOwner(owner); }
   }

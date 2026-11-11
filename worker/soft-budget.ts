@@ -11,7 +11,7 @@ import { HttpError } from "./utils.ts";
 import { admitSoftStatusRequest } from "./soft-budget-json.ts";
 import { accountingAdmissionFailure, accountingIdentity, accountingNumberCapacity, admitAccountingJson, isAccountingAdmissionFailure } from "./json-body.ts";
 import { readSoftStatus } from "./soft-budget-response.ts";
-import { prepareOwnedHttpSoftStatus, startOwnedHttpSoftStatus, bindOwnedHttpSoftStatus, checkOwnedHttpSoftStatusRetirement, type OwnedHttpRequest, type OwnedStatusReader } from "./http-identity-owner.ts";
+import { prepareOwnedHttpSoftStatus, startOwnedHttpSoftStatus, bindOwnedHttpSoftStatus, finishOwnedHttpSoftStatus, checkOwnedHttpSoftStatusRetirement, type OwnedHttpRequest, type OwnedStatusReader } from "./http-identity-owner.ts";
 import type { HttpOperation } from "./http-operation.ts";
 
 // Soft: ledger status runs concurrently with the upstream request and settlement
@@ -133,12 +133,19 @@ class OwnedSoftBudget {
   private config?: ReturnType<typeof hotCacheConfig>;
   private operation?: HttpOperation;
   private failure?: unknown;
-  private hasFailure = false;
-  private delivered = false;
-  private complete = false;
-  private started = false;
-  private remaining: number;
-  private received = 0;
+  protected statusBits = 0;
+  private get hasFailure(): boolean { return !!(this.statusBits & 1); }
+  private set hasFailure(value: boolean) { this.statusBits = value ? this.statusBits | 1 : this.statusBits & ~1; }
+  private get delivered(): boolean { return !!(this.statusBits & 2); }
+  private set delivered(value: boolean) { this.statusBits = value ? this.statusBits | 2 : this.statusBits & ~2; }
+  private get complete(): boolean { return !!(this.statusBits & 4); }
+  private set complete(value: boolean) { this.statusBits = value ? this.statusBits | 4 : this.statusBits & ~4; }
+  private get started(): boolean { return !!(this.statusBits & 8); }
+  private set started(value: boolean) { this.statusBits = value ? this.statusBits | 8 : this.statusBits & ~8; }
+  private get received(): number { return this.statusBits >>> 7 & 15; }
+  private set received(value: number) { this.statusBits = this.statusBits & ~(15 << 7) | (value & 15) << 7; }
+  private get remaining(): number { return this.statusBits >>> 11 & 7; }
+  private set remaining(value: number) { this.statusBits = this.statusBits & ~(7 << 11) | (value & 7) << 11; }
   private denied?: HttpError;
   private resolve!: () => void;
   private reject!: (reason: unknown) => void;
@@ -196,10 +203,14 @@ class OwnedSoftBudget {
 }
 export class OwnedStatusController extends OwnedSoftBudget {
   namespace?: Env["BUDGET_LEDGER"];
-  bound = false;
-  readersStarted = false;
-  settled = false;
-  private physicalRemaining = 0;
+  get bound(): boolean { return !!(this.statusBits & 16); }
+  set bound(value: boolean) { this.statusBits = value ? this.statusBits | 16 : this.statusBits & ~16; }
+  get readersStarted(): boolean { return !!(this.statusBits & 32); }
+  set readersStarted(value: boolean) { this.statusBits = value ? this.statusBits | 32 : this.statusBits & ~32; }
+  get settled(): boolean { return !!(this.statusBits & 64); }
+  set settled(value: boolean) { this.statusBits = value ? this.statusBits | 64 : this.statusBits & ~64; }
+  private get physicalRemaining(): number { return this.statusBits >>> 14 & 7; }
+  private set physicalRemaining(value: number) { this.statusBits = this.statusBits & ~(7 << 14) | (value & 7) << 14; }
   private resolveRetired!: () => void;
   readonly retired = new Promise<void>(done => { this.resolveRetired = done; });
   readonly readers: (OwnedStatusReader | undefined)[] = [];
@@ -221,7 +232,9 @@ export class OwnedStatusController extends OwnedSoftBudget {
   private completeReader(): void { if (!--this.physicalRemaining) this.finish(); }
   private finish(): void {
     if (this.settled) return;
-    this.namespace = undefined; this.settled = true; this.resolveRetired();
+    this.namespace = undefined; this.settled = true;
+    finishOwnedHttpSoftStatus(this.http, this);
+    this.resolveRetired();
   }
   abandonUnstarted(): void {
     if (this.readersStarted) return;

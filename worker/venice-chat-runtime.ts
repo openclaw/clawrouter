@@ -1,4 +1,4 @@
-import { OwnedReaderDriver, claimOwnedHttpStaticCustody } from "./proxy-completion.ts";
+import { OwnedReaderDriver, claimOwnedHttpStaticCustody, inspectOwnedBytes, isLocalOwnedByteView, isLocalOwnedByteBacking, newOwnedBytes, ownedByteLength, ownedByteSubarray, ownedByteSlice, copyOwnedBytes, newOwnedDecoder, decodeOwnedBytes, ownedByteBackingBytes, enqueueOwnedBytes } from "./proxy-completion.ts";
 import { measurePrivateJsonBody, parseBoundedJson } from "./json-body.ts";
 import { inputRetirement } from "./input-retirement.ts";
 import { nativeResponseLease, type NativeResponse } from "./native-response.ts";
@@ -334,10 +334,14 @@ class OwnedVeniceSource extends OwnedReaderDriver {
   protected captureDriverValue(value: ReadableStreamReadResult<Uint8Array>): void {
     const bytes = value.value;
     if (!bytes) this.captured = undefined;
-    else if (!(bytes instanceof Uint8Array) || !(bytes.buffer instanceof ArrayBuffer) || bytes.buffer.byteLength > limit) {
-      this.flags |= 256; this.captured = undefined;
-    } else { const captured = new Uint8Array(bytes.byteLength); captured.set(bytes); this.captured = captured; }
-    this.readDone = value.done;
+    else {
+      let proof: ReturnType<typeof inspectOwnedBytes> | undefined;
+      try { if (isLocalOwnedByteView(bytes)) proof = inspectOwnedBytes(bytes); } catch { /* Invalid private storage still observes DONE below. */ }
+      if (!proof || !isLocalOwnedByteBacking(proof.buffer) || proof.backing > limit) { this.flags |= 256; this.captured = undefined; }
+      else { const captured = newOwnedBytes(proof.length); copyOwnedBytes(captured, bytes); this.captured = captured; }
+      proof = undefined;
+    }
+    this.readDone = !!value.done;
   }
   protected driverCleared(): void {
     if (this.flags & 32) { this.uncertain(); throw identityFailure("protocol"); }
@@ -413,7 +417,7 @@ export async function consumeOwnedVeniceChatResponse(cap: OwnedHttpRevalidation,
 }
 
 async function ownedVeniceJson(state: OwnedVeniceCodec, source: OwnedVeniceSource, response: Response, length: string | null): Promise<Response> {
-  let wire: Uint8Array<ArrayBuffer> | undefined = new Uint8Array(limit), size = 0, eof = false;
+  let wire: Uint8Array<ArrayBuffer> | undefined = newOwnedBytes(limit), size = 0, eof = false;
   let text = "", value: unknown, hasPrimary = false, primary: unknown;
   try {
     for (let reads = 0; ; reads++) {
@@ -422,13 +426,13 @@ async function ownedVeniceJson(state: OwnedVeniceCodec, source: OwnedVeniceSourc
       try {
         source.checkAbort();
         const bytes = source.captured;
-        if (bytes) { if (bytes.byteLength > limit - size) invalid(); wire.set(bytes, size); size += bytes.byteLength; }
+        if (bytes) { if (ownedByteLength(bytes) > limit - size) invalid(); copyOwnedBytes(wire, bytes, size); size += ownedByteLength(bytes); }
         if (source.readDone) { eof = true; break; }
       } finally { source.captured = undefined; }
     }
     if (!size || length !== null && Number(length) !== size) invalid();
     await source.finish("eof"); source.checkCleanup(); source.checkAbort();
-    text = new TextDecoder("utf-8", { fatal: true }).decode(wire.subarray(0, size));
+    text = decodeOwnedBytes(newOwnedDecoder(true), ownedByteSubarray(wire, 0, size));
     value = parseOwnedVeniceJson(state, text); text = "";
     validateVeniceReturnedModel(state.binding!, value);
     if (value && typeof value === "object" && Object.hasOwn(value, "error")) invalid();
@@ -447,7 +451,7 @@ async function ownedVeniceJson(state: OwnedVeniceCodec, source: OwnedVeniceSourc
     const stream = new ReadableStream<Uint8Array>({
       type: "bytes",
       pull(controller) {
-        if (!sent) { sent = true; const bytes = outputWire!.subarray(0, size); outputWire = undefined; controller.enqueue(bytes); }
+        if (!sent) { sent = true; const bytes = ownedByteSubarray(outputWire!, 0, size); outputWire = undefined; enqueueOwnedBytes(controller, bytes); }
         else { controller.close(); controller.byobRequest?.respond(0); finishOutput(); }
       },
       cancel() { finishOutput(); },
@@ -470,7 +474,7 @@ async function ownedVeniceJson(state: OwnedVeniceCodec, source: OwnedVeniceSourc
 }
 
 function ownedVeniceEvents(state: OwnedVeniceCodec, source: OwnedVeniceSource, response: Response, length: string | null): Response {
-  const events = new OwnedVeniceEvents(state, source, length);
+  const events = new OwnedVeniceEvents(source, length);
   state.events = events;
   return events.publish(response);
 }
@@ -479,7 +483,7 @@ function ownedEventSpace(code: number): boolean {
     || code >= 8192 && code <= 8202 || code === 8232 || code === 8233 || code === 8239 || code === 8287 || code === 12288 || code === 65279;
 }
 class OwnedVeniceEvents {
-  private frame: Uint8Array = new Uint8Array(frameLimit);
+  private frame: Uint8Array = newOwnedBytes(frameLimit);
   private cursor: SseBoundaryCursor = { offset: 0, lineStart: 0 };
   private size = 0;
   private pending?: Uint8Array;
@@ -490,13 +494,13 @@ class OwnedVeniceEvents {
   // upstream EOF=16, public cancellation=32.
   private flags = 0;
   private output!: ReadableStreamDefaultController<Uint8Array>;
-  constructor(private state: OwnedVeniceCodec, private source: OwnedVeniceSource, private length: string | null) {}
+  constructor(private source: OwnedVeniceSource, private length: string | null) {}
   publish(response: Response): Response {
     const body = new ReadableStream<Uint8Array>(this, { highWaterMark: 0 });
     const headers = new Headers(response.headers);
     for (const name of ["content-length", "content-encoding", "etag", "digest", "content-md5"]) headers.delete(name);
     headers.set("cache-control", "private, no-store");
-    this.state.outputBody = body;
+    this.source.state.outputBody = body;
     return new Response(body, { status: 200, headers });
   }
   start(controller: ReadableStreamDefaultController<Uint8Array>): void {
@@ -525,11 +529,11 @@ class OwnedVeniceEvents {
         this.source.checkAbort();
         const boundary = sseEventBoundary(this.frame, 0, this.size, this.cursor);
         if (boundary) {
-          codecPhase(this.state, ownedSseParsing);
+          codecPhase(this.source.state, ownedSseParsing);
           let text = "", value = "", payload: unknown;
           let hasData = false;
           try {
-            text = new TextDecoder("utf-8", { fatal: true }).decode(this.frame.subarray(0, boundary.start));
+            text = decodeOwnedBytes(newOwnedDecoder(true), ownedByteSubarray(this.frame, 0, boundary.start));
             let count = 0;
             for (let index = 0; index < text.length; index++)
               if ((text.charCodeAt(index) === 10 || text.charCodeAt(index) === 13) && ++count > 256) invalid();
@@ -557,19 +561,19 @@ class OwnedVeniceEvents {
               if (this.flags & 1) invalid();
               if (value === "[DONE]") { if (!(this.flags & 2)) invalid(); this.flags |= 1; }
               else {
-                payload = parseOwnedVeniceJson(this.state, value); validateVeniceReturnedModel(this.state.binding!, payload);
+                payload = parseOwnedVeniceJson(this.source.state, value); validateVeniceReturnedModel(this.source.state.binding!, payload);
                 if (payload && typeof payload === "object" && Object.hasOwn(payload, "error")) invalid();
                 this.flags |= 2;
               }
             }
           } finally { text = ""; value = ""; payload = undefined; }
-          codecPhase(this.state, ownedSseResting);
-          if (hasData && !(this.flags & 4)) { await revalidateOwnedVeniceChat(this.state.cap, this.source.signal!); this.flags |= 4; }
-          this.source.checkAbort(); assertOwnedVeniceChatLive(this.state.cap); if (this.flags & 8) return;
-          codecPhase(this.state, (this.pending?.buffer.byteLength ?? 0) + this.frame.buffer.byteLength + frameLimit + ownedCodecMetadata);
-          const bytes = this.frame.slice(0, boundary.end);
-          this.frame.copyWithin(0, boundary.end, this.size); this.size -= boundary.end; this.cursor.offset = 0; this.cursor.lineStart = 0;
-          controller.enqueue(bytes); return;
+          codecPhase(this.source.state, ownedSseResting);
+          if (hasData && !(this.flags & 4)) { await revalidateOwnedVeniceChat(this.source.state.cap, this.source.signal!); this.flags |= 4; }
+          this.source.checkAbort(); assertOwnedVeniceChatLive(this.source.state.cap); if (this.flags & 8) return;
+          codecPhase(this.source.state, (this.pending ? ownedByteBackingBytes(this.pending) : 0) + ownedByteBackingBytes(this.frame) + frameLimit + ownedCodecMetadata);
+          const bytes = ownedByteSlice(this.frame, 0, boundary.end);
+          copyOwnedBytes(this.frame, ownedByteSubarray(this.frame, boundary.end, this.size)); this.size -= boundary.end; this.cursor.offset = 0; this.cursor.lineStart = 0;
+          enqueueOwnedBytes(controller, bytes); return;
         }
         if (this.flags & 16) {
           if (this.size || !(this.flags & 1) || !(this.flags & 2) || this.length !== null && Number(this.length) !== this.total) invalid();
@@ -578,29 +582,29 @@ class OwnedVeniceEvents {
           return;
         }
         if (this.size === frameLimit) invalid();
-        if (this.pending && this.offset < this.pending.length) {
-          const count = Math.min(this.pending.length - this.offset, frameLimit - this.size);
-          this.frame.set(this.pending.subarray(this.offset, this.offset + count), this.size); this.size += count; this.offset += count;
-          if (this.offset === this.pending.length) { this.pending = undefined; this.offset = 0; }
+        if (this.pending && this.offset < ownedByteLength(this.pending)) {
+          const count = Math.min(ownedByteLength(this.pending) - this.offset, frameLimit - this.size);
+          copyOwnedBytes(this.frame, ownedByteSubarray(this.pending, this.offset, this.offset + count), this.size); this.size += count; this.offset += count;
+          if (this.offset === ownedByteLength(this.pending)) { this.pending = undefined; this.offset = 0; }
           continue;
         }
-        codecPhase(this.state, ownedSseResting);
+        codecPhase(this.source.state, ownedSseResting);
         await this.source.read();
         try {
           if (this.flags & 8) return; this.source.checkAbort();
           if (this.source.readDone) { this.flags |= 16; this.cursor.eof = true; continue; }
           const bytes = this.source.captured!;
-          if (bytes.byteLength > limit || bytes.buffer.byteLength > limit || !Number.isSafeInteger(this.total += bytes.byteLength)) invalid();
-          if (!bytes.byteLength) { if (++this.emptyReads > 32) invalid(); continue; }
+          if (ownedByteLength(bytes) > limit || ownedByteBackingBytes(bytes) > limit || !Number.isSafeInteger(this.total += ownedByteLength(bytes))) invalid();
+          if (!ownedByteLength(bytes)) { if (++this.emptyReads > 32) invalid(); continue; }
           this.emptyReads = 0; this.pending = bytes; this.offset = 0;
         } finally { this.source.captured = undefined; }
       }
     } catch (error) { this.fail(error); }
   }
   private publishFailure(failure: unknown): void {
-    this.state.outputFailed = true; this.state.outputFailure = failure;
+    this.source.state.outputFailed = true; this.source.state.outputFailure = failure;
     try { this.output.error(failure); }
-    catch (reason) { this.source.failure("pull", reason); holdOwnedHttpVeniceSource(this.state.cap); }
+    catch (reason) { this.source.failure("pull", reason); holdOwnedHttpVeniceSource(this.source.state.cap); }
   }
   private complete(): void {
     this.pending = undefined; this.size = 0;
@@ -619,6 +623,6 @@ class OwnedVeniceEvents {
   clear(): void {
     if (!this.source.done || this.source.pulling) throw identityFailure("protocol");
     this.frame = undefined as never; this.cursor = undefined as never; this.pending = undefined;
-    this.output = undefined as never; this.length = null; this.source = undefined as never; this.state = undefined as never;
+    this.output = undefined as never; this.length = null; this.source = undefined as never;
   }
 }

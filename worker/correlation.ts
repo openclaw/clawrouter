@@ -1,3 +1,7 @@
+import { beginOwnedHttpMetadataStage, admitOwnedHttpMetadata, finishOwnedHttpMetadataStage, type OwnedHttpRequest } from "./http-identity-owner.ts";
+import { captureOwnedResponseMetadata, cloneOwnedMetadataResponse, measureOwnedHeaders, setOwnedHeader, hasOwnedHeader, deleteOwnedHeader } from "./proxy-completion.ts";
+import { inheritOwnedLocalError } from "./native-errors.ts";
+import { identityFailure } from "./identity-admission.ts";
 export const REQUEST_ID_MAX_LENGTH = 128;
 export const ATTRIBUTION_ID_MAX_LENGTH = 256;
 
@@ -181,4 +185,36 @@ function invalidHeader(name: string, maxLength: number, code: string) {
 
 function generatedRequestId(): string {
   return `req_${crypto.randomUUID().replaceAll("-", "")}`;
+}
+
+
+const ownedBackgroundGet = WeakMap.prototype.get;
+const ownedBackgroundApply = Reflect.apply;
+/** Closed private final-response stages; ordinary correlation remains above. */
+export function withOwnedRequestId(cap: OwnedHttpRequest, response: Response, requestId: string): Response {
+  beginOwnedHttpMetadataStage(cap, response, 2, requestId);
+  const source = captureOwnedResponseMetadata(response), measured = measureOwnedHeaders(source.headers);
+  // Source, clone, inserted strings, init and simultaneous getter projections.
+  admitOwnedHttpMetadata(cap, response, 2, 8192 + 3 * measured + 4 * source.statusText.length + 16 * (requestId.length + 48));
+  if (measureOwnedHeaders(source.headers) > measured) throw identityFailure("protocol");
+  const copy = cloneOwnedMetadataResponse(source), headers = captureOwnedResponseMetadata(copy).headers;
+  setOwnedHeader(headers, "x-clawrouter-request-id", requestId);
+  if (!hasOwnedHeader(headers, "x-request-id") && !hasOwnedHeader(headers, "request-id")) setOwnedHeader(headers, "x-request-id", requestId);
+  inheritOwnedLocalError(response, copy);
+  return finishOwnedHttpMetadataStage(cap, response, 2, copy);
+}
+export function withOwnedBackgroundRecovery(cap: OwnedHttpRequest, response: Response, request: Request): Response {
+  beginOwnedHttpMetadataStage(cap, response, 3, undefined, undefined, request);
+  const source = captureOwnedResponseMetadata(response);
+  // Delete before looking up the same ORIGINAL Request's stored locator.
+  deleteOwnedHeader(source.headers, backgroundRecoveryHeader);
+  const locator = ownedBackgroundApply(ownedBackgroundGet, backgroundRecovery, [request]) as string | undefined;
+  if (locator) {
+    if (typeof locator !== "string") throw identityFailure("protocol");
+    const measured = measureOwnedHeaders(source.headers);
+    admitOwnedHttpMetadata(cap, response, 3, 8192 + 2 * measured + 4 * source.statusText.length + 8 * (backgroundRecoveryHeader.length + locator.length));
+    if (measureOwnedHeaders(source.headers) > measured) throw identityFailure("protocol");
+    setOwnedHeader(source.headers, backgroundRecoveryHeader, locator);
+  }
+  return finishOwnedHttpMetadataStage(cap, response, 3, response);
 }

@@ -334,11 +334,6 @@ export function hasJoinedOwnedHttpCredentialValue(permit: object, cap: OwnedHttp
   return !!run && run.cap === cap && run.claimed && run.original === undefined
     && (value === null ? run.value === undefined : run.value === value);
 }
-export function acceptOwnedHttpCredentialMaterialization(permit: object, cap: OwnedHttpCredential, value: UpstreamGrant): void {
-  const run = ownedHttpCredentialPermits?.get(permit);
-  if (!run || run.cap !== cap || run.value) throw identityFailure("protocol");
-  run.value = value;
-}
 export async function prepareOwnedHttpGrantCredentials(cap: OwnedHttpCredential): Promise<void> {
   // cap is already funded before this async invocation/follower/registry phase.
   let run: OwnedHttpCredentialRun | undefined, entry: OwnedDestinationEntry | undefined;
@@ -457,4 +452,12 @@ export function invalidateOwnedHttpGrantCredentials(cap: OwnedHttpCredential): v
   for (const entry of partition.entries.values()) if (entry.id.startsWith(prefix)) {
     entry.publication = undefined; unpublishOwnedValue(entry); retireOwnedEntry(entry);
   }
+}
+
+// The fixed proxy phase has completed header invalidation and the final
+// alternate. The retained run, borrower and lease remain the same owners.
+export function finishOwnedHttpGrantCredentialCommand(cap: OwnedHttpCredential): void {
+  const run = ownedHttpCredentialOwners?.get(cap);
+  if (!run || !run.retained || !run.claimed || run.original || !run.command) throw identityFailure("protocol");
+  run.command = undefined;
 }

@@ -1,6 +1,5 @@
 import { searchJsonBytes } from "./minimax-search-operation.ts";
-import { checkOwnedHttpSinkOwner, ownedHttpLedgerFetch, readOwnedHttpSinkAcknowledgment,
-  discardOwnedHttpSinkResponse, type OwnedHttpSinkOwner } from "./http-identity-owner.ts";
+import { checkOwnedHttpSinkOwner, ownedHttpChargeAcknowledgment, ownedHttpSettleAcknowledgment, ownedHttpIngestAcknowledgment, type OwnedHttpBudgetLeg, type OwnedHttpSinkOwner } from "./http-identity-owner.ts";
 import { musicCoverControlHeader, musicCoverControlVersion, musicCoverUnavailable, readCoverControlRequest, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
 import type { MiniMaxSearchOperation } from "./minimax-search-operation.ts";
 import { ensureUsageReportSchema, insertUsageReportEvent, withUsageReportPair, queryUsageReport, queryUsageEvents, migrateUsageReport, type UsageReportMigrationOptions, type UsageReportQuery, type UsageEventPosition } from "./usage-report-store.ts";
@@ -503,10 +502,8 @@ export function chargeLedger(env: Env, objectName: string, request: BudgetCharge
 export async function chargeLedgerNamespace(namespace: Env["BUDGET_LEDGER"], objectName: string, request: BudgetChargeRequest, search?: MiniMaxSearchOperation, cover?: MiniMaxMusicCoverControl, ownedHttp?: OwnedHttpSinkOwner): Promise<void> {
   if (ownedHttp !== undefined) {
     checkOwnedHttpSinkOwner(ownedHttp);
-    const response = await ownedHttpLedgerFetch(ownedHttp, namespace, objectName, "/charge", JSON.stringify(request));
-    if (!response.ok) { discardOwnedHttpSinkResponse(ownedHttp, response); throw new Error("budget charge was not acknowledged"); }
-    const receipt = await readOwnedHttpSinkAcknowledgment(ownedHttp, response, request.chargeId).catch(() => null);
-    if (receipt?.charged !== true || receipt.chargeId !== request.chargeId) throw new Error("budget charge was not acknowledged");
+    const receipt = await ownedHttpChargeAcknowledgment(ownedHttp, namespace, objectName, request);
+    if (!receipt?.ok || receipt.charged !== true || receipt.chargeId !== request.chargeId) throw new Error("budget charge was not acknowledged");
     return;
   }
   if (cover) {
@@ -529,15 +526,15 @@ export function settleLedger(env: Env, objectName: string, request: BudgetSettle
   return settleLedgerNamespace(env.BUDGET_LEDGER, objectName, request, signal, search, cover);
 }
 
-export async function settleLedgerNamespace(namespace: Env["BUDGET_LEDGER"], objectName: string, request: BudgetSettleRequest, signal?: AbortSignal, search?: MiniMaxSearchOperation, cover?: MiniMaxMusicCoverControl, ownedHttp?: OwnedHttpSinkOwner): Promise<void> {
+export async function settleLedgerNamespace(namespace: Env["BUDGET_LEDGER"], objectName: string, request: BudgetSettleRequest, signal?: AbortSignal, search?: MiniMaxSearchOperation, cover?: MiniMaxMusicCoverControl, ownedHttp?: OwnedHttpSinkOwner, recovery?: OwnedHttpBudgetLeg): Promise<void> {
   if (ownedHttp !== undefined) {
     checkOwnedHttpSinkOwner(ownedHttp);
-    const response = await ownedHttpLedgerFetch(ownedHttp, namespace, objectName, "/settle", JSON.stringify(request), signal);
-    if (!response.ok) {
-      const disposition = response.status === 404 ? "missing" : response.status === 409 ? "conflict" : "unavailable";
-      discardOwnedHttpSinkResponse(ownedHttp, response); throw new BudgetSettlementError(disposition);
+    const response = await ownedHttpSettleAcknowledgment(ownedHttp, namespace, objectName, request, signal, recovery);
+    if (!response?.ok) {
+      const disposition = response?.status === 404 ? "missing" : response?.status === 409 ? "conflict" : "unavailable";
+      throw new BudgetSettlementError(disposition);
     }
-    if ((await readOwnedHttpSinkAcknowledgment(ownedHttp, response).catch(() => null))?.settled !== true) throw new BudgetSettlementError("unavailable");
+    if (response.settled !== true) throw new BudgetSettlementError("unavailable");
     return;
   }
   if (cover) {
@@ -565,9 +562,9 @@ export async function ingestUsageNamespace(namespace: Env["USAGE_LEDGER"], event
   if (ownedHttp !== undefined) checkOwnedHttpSinkOwner(ownedHttp);
   const receipt: unknown = ownedHttp
     ? await (async () => {
-      const response = await ownedHttpLedgerFetch(ownedHttp, namespace, usageShardName(event.tenant_id, event.policy_id), "/ingest", JSON.stringify(event), signal);
-      if (!response.ok) { discardOwnedHttpSinkResponse(ownedHttp, response); throw new Error(`usage ledger write returned ${response.status}`); }
-      return readOwnedHttpSinkAcknowledgment(ownedHttp, response, event.id).catch(() => null);
+      const response = await ownedHttpIngestAcknowledgment(ownedHttp, namespace, usageShardName(event.tenant_id, event.policy_id), event, signal);
+      if (response && !response.ok) throw new Error(`usage ledger write returned ${response.status}`);
+      return response;
     })()
     : cover
     ? await cover.controlJson(event, (body, active) => namespace.get(namespace.idFromName(usageShardName(event.tenant_id, event.policy_id))).fetch("https://clawrouter.internal/ingest", { method: "POST", body, signal: active, redirect: "manual", headers: { "content-type": "application/json", [musicCoverControlHeader]: musicCoverControlVersion } }), true)

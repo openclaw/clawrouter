@@ -1,13 +1,14 @@
+import { newOwnedBytes, inspectOwnedBytes, ownedByteBackingBytes, ownedByteLength, ownedByteSubarray, copyOwnedBytes, newOwnedDecoder, decodeOwnedBytes, enqueueOwnedBytes } from "./proxy-completion.ts";
 import { measurePrivateJsonBody } from "./json-body.ts";
 import type { HttpOperation } from "./http-operation.ts";
 import type { ValidatedNativeUsage } from "./native-response.ts";
 import { googleField, googleInt32, googleServiceTier } from "./google-protocol.ts";
 import { anthropicModifiers, type AnthropicModifiers } from "./anthropic-pricing.ts";
 import { identityFailure, isIdentityFailure } from "./identity-admission.ts";
-import { fundOwnedHttpAcceptedUsage, settleOwnedHttpCodecConsumerCapture, forwardOwnedHttpCodecUsage, holdOwnedHttpVeniceSource, type OwnedHttpRevalidation } from "./http-identity-owner.ts";
+import { fundOwnedHttpAcceptedUsage, settleOwnedHttpCodecConsumerCapture, forwardOwnedHttpCodecUsage, holdOwnedHttpVeniceSource, fundOwnedHttpGenericUsage, createOwnedHttpCodecUsageResponse, createOwnedHttpGenericUsageResponse, bindOwnedHttpGenericBodylessResponse, bindOwnedHttpGenericUsageOutput, forwardOwnedHttpGenericUsage, type OwnedHttpUsage, type OwnedHttpRevalidation } from "./http-identity-owner.ts";
 import { checkOwnedAcceptedUsageReceiver, matchesOwnedAcceptedUsageSnapshot,
   revokeOwnedUsageRejection, checkOwnedUsageRetirement, checkOwnedAcceptedUsageTerminal, consumerFailure, retireConsumerReader, sealConsumer, readConsumer,
-  type CodecReader, type CodecConsumer, type ObservedUsage } from "./proxy-response.ts";
+  GenericUsageReader, type CodecReader, type CodecConsumer, type ObservedUsage } from "./proxy-response.ts";
 
 export interface UsageTokens {
   reasoning?: number | null; // Subset of output, never an additional billable category.
@@ -194,15 +195,15 @@ export function createSseUsageInspector(revokeRejection?: () => void, acceptJson
 
 // One native grammar/value constructor for ordinary and private SSE, and the
 // private JSON body. Admission is deliberately outside its syntax catch.
-function parseSseData(data: string, error: boolean, owned?: OwnedAcceptedUsage): SseUsageEvidence | null {
+function parseSseData(data: string, error: boolean, owned?: OwnedAcceptedUsage<CodecReader | GenericUsageReader>): SseUsageEvidence | null {
   if (!error && !data) return null;
   if (!error && data === "[DONE]") return { kind: "done" };
   owned?.admitJson(data);
   if (error) {
-    try { return { kind: "error", value: JSON.parse(data) }; }
+    try { return { kind: "error", value: owned ? ownedUsageJsonParse(data) : JSON.parse(data) }; }
     catch { return { kind: "error" }; }
   }
-  try { return { kind: "data", value: JSON.parse(data) }; }
+  try { return { kind: "data", value: owned ? ownedUsageJsonParse(data) : JSON.parse(data) }; }
   catch { return { kind: "invalid" }; }
 }
 
@@ -313,17 +314,18 @@ export function createSseUsageAccumulator(revokeRejection?: () => void, context?
   };
 }
 
+const ownedUsageJsonParse = JSON.parse;
 type OwnedUsageMode = "sse" | "json" | "none";
 const ownedUsageMetadata = 65536;
-let ownedAcceptedUsage: WeakMap<OwnedHttpRevalidation, OwnedAcceptedUsage> | undefined;
-let ownedFrameConsumers: WeakMap<(frame: string | null) => void, OwnedAcceptedUsage> | undefined;
+let ownedAcceptedUsage: WeakMap<OwnedHttpRevalidation | OwnedHttpUsage, OwnedAcceptedUsage<CodecReader | GenericUsageReader>> | undefined;
+let ownedFrameConsumers: WeakMap<(frame: string | null) => void, OwnedAcceptedUsage<CodecReader | GenericUsageReader>> | undefined;
 
 function trimCode(code: number): boolean {
   return code >= 9 && code <= 13 || code === 32 || code === 160 || code === 5760
     || code >= 8192 && code <= 8202 || code === 8232 || code === 8233 || code === 8239 || code === 8287 || code === 12288 || code === 65279;
 }
 
-class OwnedAcceptedUsage {
+class OwnedAcceptedUsage<T extends CodecReader | GenericUsageReader = CodecReader> {
   frames?: ReturnType<typeof createSseFrames>;
   accumulator?: ReturnType<typeof createSseUsageAccumulator>;
   consumeFrame?: (frame: string | null) => void;
@@ -336,8 +338,11 @@ class OwnedAcceptedUsage {
   temporaryBytes = 0;
   frame?: string | null;
   result?: UsageInspection;
-  constructor(readonly cap: OwnedHttpRevalidation, protected mode: OwnedUsageMode,
+  constructor(protected state: T, protected mode: OwnedUsageMode,
     protected context: Readonly<UsageTokenContext> | undefined, protected provisional: boolean) {}
+  private get cap(): OwnedHttpRevalidation | OwnedHttpUsage {
+    return this.state instanceof GenericUsageReader ? this.state.usageCap : (this.state as CodecReader).owner.codec;
+  }
   initialize(): void {
     if (ownedAcceptedUsage?.has(this.cap)) throw identityFailure("protocol");
     (ownedAcceptedUsage ??= new WeakMap()).set(this.cap, this);
@@ -350,11 +355,13 @@ class OwnedAcceptedUsage {
       this.consumeFrame = this.consume.bind(this);
       (ownedFrameConsumers ??= new WeakMap()).set(this.consumeFrame, this);
       this.frames = createSseFrames(this.consumeFrame);
-    } else if (this.mode === "json") this.decoder = new TextDecoder();
+    } else if (this.mode === "json") this.decoder = newOwnedDecoder();
   }
   reserve(temporary: number): void {
     if (!Number.isSafeInteger(temporary) || temporary < 0) throw identityFailure("protocol");
-    fundOwnedHttpAcceptedUsage(this.cap, ownedUsageMetadata + this.bufferBytes + 2 * this.text.length + temporary);
+    const bytes = ownedUsageMetadata + this.bufferBytes + 2 * this.text.length + temporary;
+    if (this.state instanceof GenericUsageReader) fundOwnedHttpGenericUsage(this.state.usageCap, this.state, bytes);
+    else fundOwnedHttpAcceptedUsage((this.state as CodecReader).owner.codec, bytes);
     this.temporaryBytes = temporary;
   }
   resize(before: number, after: number): void {
@@ -376,7 +383,10 @@ class OwnedAcceptedUsage {
     const upper = census.upper; census = undefined;
     this.reserve((retainedText ? 0 : 2 * data.length) + upper);
   }
-  private revoke(): void { revokeOwnedUsageRejection(this.cap); }
+  private revoke(): void {
+    if (this.state instanceof GenericUsageReader) this.state.usage!.revokeRejection();
+    else revokeOwnedUsageRejection((this.state as CodecReader).owner.codec);
+  }
   private fold(frame: string): string {
     let units = 0, lines = 0;
     this.flags &= ~4;
@@ -434,22 +444,25 @@ class OwnedAcceptedUsage {
   }
   push(epoch: number, bytes: Uint8Array): void {
     if (this.flags & (1 | 64) || epoch !== this.epoch
-      || !matchesOwnedAcceptedUsageSnapshot(this.cap, epoch, bytes)) throw identityFailure("protocol");
+      || !(this.state instanceof GenericUsageReader ? this.state.usage!.matchesSnapshot(epoch, bytes)
+        : matchesOwnedAcceptedUsageSnapshot((this.state as CodecReader).owner.codec, epoch, bytes))) throw identityFailure("protocol");
     this.flags |= 64;
     if (this.frames) {
       try { this.frames.push(bytes); }
       catch (error) { this.flags |= 32; throw error; }
     }
     else if (this.mode === "json" && !(this.flags & 8)) {
-      this.bytes += bytes.byteLength;
+      this.bytes += ownedByteLength(bytes);
       if (this.bytes > usageInspectionLimit) { this.flags |= 8; this.text = ""; this.reserve(0); return; }
-      this.reserve(2 * this.text.length + 4 * (bytes.byteLength + 2));
-      let chunk = this.decoder!.decode(bytes, { stream: true });
+      this.reserve(2 * this.text.length + 4 * (ownedByteLength(bytes) + 2));
+      let chunk = decodeOwnedBytes(this.decoder!, bytes, true);
       this.text += chunk; chunk = ""; this.reserve(0);
     }
   }
   finishInspection(ended: boolean): void {
-    checkOwnedAcceptedUsageTerminal(this.cap, ended);
+    if (this.state instanceof GenericUsageReader) {
+      if (!this.state.usage!.matchesTerminal(ended)) throw identityFailure("protocol");
+    } else checkOwnedAcceptedUsageTerminal((this.state as CodecReader).owner.codec, ended);
     if (this.flags & 1) return;
     let pending: string | null = null, data = "", evidence: SseUsageEvidence | null = null, value: unknown;
     try {
@@ -467,10 +480,10 @@ class OwnedAcceptedUsage {
         this.result = this.accumulator!.result(ended, this.frames.overflowed());
       } else if (this.mode === "json" && ended && !(this.flags & 8)) {
         this.reserve(2 * this.text.length + 8);
-        let tail = this.decoder!.decode(); this.text += tail; tail = "";
+        let tail = decodeOwnedBytes(this.decoder!); this.text += tail; tail = "";
         this.admitJson(this.text, true);
         let valid = false;
-        try { value = JSON.parse(this.text); valid = true; } catch { /* Native syntax failure only. */ }
+        try { value = ownedUsageJsonParse(this.text); valid = true; } catch { /* Native syntax failure only. */ }
         this.result = valid ? { tokens: extractUsageTokens(value, this.context), outcome: responseOutcome(value) }
           : { tokens: null, outcome: "provider_error" };
       } else this.result = { tokens: null, outcome: null };
@@ -482,27 +495,28 @@ class OwnedAcceptedUsage {
     }
   }
   clearInspection(): void {
-    checkOwnedUsageRetirement(this.cap);
+    if (this.state instanceof GenericUsageReader) {
+      if (!this.state.driverDone) throw identityFailure("protocol");
+    } else checkOwnedUsageRetirement((this.state as CodecReader).owner.codec);
     if (this.consumeFrame) ownedFrameConsumers!.delete(this.consumeFrame);
     if (this.accumulator) privateUsageAccumulators!.delete(this.accumulator.accept);
     this.frames = undefined; this.accumulator = undefined; this.consumeFrame = undefined;
     this.decoder = undefined; this.text = ""; this.frame = undefined; this.result = undefined;
-    ownedAcceptedUsage!.delete(this.cap);
-    fundOwnedHttpAcceptedUsage(this.cap, 0);
+    ownedAcceptedUsage?.delete(this.cap);
+    if (!(this.state instanceof GenericUsageReader)) fundOwnedHttpAcceptedUsage((this.state as CodecReader).owner.codec, 0);
   }
 }
 export class OwnedChatUsage extends OwnedAcceptedUsage {
-  private state: CodecReader;
   private signal: AbortSignal;
   private snapshot?: Uint8Array;
   private resolve!: () => void;
   private ready: Promise<void>;
   private downstream!: ReadableStreamDefaultController<Uint8Array>;
   private listener: () => void;
+  private publishingBody?: ReadableStream<Uint8Array>;
   constructor(owner: CodecConsumer, reader: CodecReader, private operation: HttpOperation,
     private validated?: ValidatedNativeUsage, usageContext?: Readonly<UsageTokenContext>) {
-    super(owner.codec, "none", usageContext, false);
-    this.state = reader;
+    super(reader, "none", usageContext, false);
     this.signal = operation.signal;
     this.ready = new Promise<void>(done => { this.resolve = done; });
     this.listener = this.aborted.bind(this);
@@ -519,20 +533,26 @@ export class OwnedChatUsage extends OwnedAcceptedUsage {
       checkOwnedAcceptedUsageReceiver(owner.codec, response, this.mode, this.context, this.provisional);
       this.initialize();
       const body = new ReadableStream<Uint8Array>(this, { highWaterMark: 0 });
+      this.publishingBody = body;
       if (this.signal.aborted) this.aborted();
       else {
         try { this.signal.addEventListener("abort", this.listener, { once: true }); }
         catch (reason) { throw consumerFailure(this.state, "listenerAdd", reason); }
       }
-      const output = new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+      const status = response.status, statusText = response.statusText, headers = response.headers;
+      const output = createOwnedHttpCodecUsageResponse(owner.codec, this.state, this.operation, response, body, status, statusText, headers);
       owner.current = output;
-      owner.usage = this.ready.then(this.forward.bind(this));
+      owner.usage = this.ready;
       return output;
     } catch (reason) {
       try { this.finish("failed", reason); }
       catch (cleanup) { throw new AggregateError([reason, cleanup], "owned usage publication"); }
       throw reason;
     } finally { response = undefined as never; }
+  }
+  abandon(): void { if (!this.finished) this.finish("failed"); }
+  matchesPublication(body: ReadableStream<Uint8Array>, operation: HttpOperation): boolean {
+    return this.publishingBody === body && this.operation === operation;
   }
   revokeRejection(): void { this.operation.revokeRejection(); }
   matchesReceiver(response: Response, mode: "sse" | "json" | "none", context: Readonly<UsageTokenContext> | undefined, provisional: boolean): boolean {
@@ -544,16 +564,18 @@ export class OwnedChatUsage extends OwnedAcceptedUsage {
   }
   matchesTerminal(ended: boolean): boolean { return this.finished === (ended ? 2 : 1) && this.snapshot === undefined; }
   captureBytes(): number | null {
-    if (this.state.reading || this.state.originalRead || this.state.driverCapturing || this.state.retirement) return null;
+    if (this.state.reading || this.state.driverCapturing || this.state.retirement) return null;
     // One serial highWaterMark:0 usage pull owns the current snapshot. A later
     // pull cannot start before the preceding output handoff has completed.
     // These are actual backing identities, not equality/interning assumptions.
-    const prefix = this.state.prefixWire?.buffer, crossing = this.state.crossingWire?.buffer;
-    const captured = this.state.captured?.buffer, snapshot = this.snapshot?.buffer;
-    let bytes = prefix?.byteLength ?? 0;
-    if (crossing && crossing !== prefix) bytes += crossing.byteLength;
-    if (captured && captured !== prefix && captured !== crossing) bytes += captured.byteLength;
-    if (snapshot && snapshot !== prefix && snapshot !== crossing && snapshot !== captured) bytes += snapshot.byteLength;
+    const prefix = this.state.prefixWire ? inspectOwnedBytes(this.state.prefixWire).buffer : undefined;
+    const crossing = this.state.crossingWire ? inspectOwnedBytes(this.state.crossingWire).buffer : undefined;
+    const captured = this.state.captured ? inspectOwnedBytes(this.state.captured).buffer : undefined;
+    const snapshot = this.snapshot ? inspectOwnedBytes(this.snapshot).buffer : undefined;
+    let bytes = prefix ? ownedByteBackingBytes(this.state.prefixWire!) : 0;
+    if (crossing && crossing !== prefix) bytes += ownedByteBackingBytes(this.state.crossingWire!);
+    if (captured && captured !== prefix && captured !== crossing) bytes += ownedByteBackingBytes(this.state.captured!);
+    if (snapshot && snapshot !== prefix && snapshot !== crossing && snapshot !== captured) bytes += ownedByteBackingBytes(this.snapshot!);
     return bytes;
   }
   private forward(): void {
@@ -565,7 +587,7 @@ export class OwnedChatUsage extends OwnedAcceptedUsage {
     if (!this.state.owner.done) throw identityFailure("protocol");
     // Root retirement already joined the actual consumer and public reader.
     // Empty fields remain fields until this owner itself becomes unreachable.
-    this.snapshot = undefined; this.result = undefined;
+    this.snapshot = undefined; this.result = undefined; this.publishingBody = undefined;
     this.clearInspection();
     this.validated = undefined; this.context = undefined;
     this.downstream = undefined as never; this.ready = undefined as never; this.resolve = undefined as never;
@@ -596,8 +618,9 @@ export class OwnedChatUsage extends OwnedAcceptedUsage {
     else this.operation.stop(delivery === "complete" ? "complete" : "upstream", hasInspectionFailure ? inspectionFailure : reason);
     owner.delivering = { ...this.result!, delivery, ...(this.operation.receivedRejection ? { nonbillable: true as const } : {}),
       ...(this.validated?.requestCostReceipt ? { requestCostReceipt: this.validated.requestCostReceipt } : {}) };
-    this.resolve();
-    // Logical usage can start accounting before physical reader retirement.
+    this.forward(); this.resolve();
+    // Logical usage is already in the funded request handoff. Publication is
+    // its only remaining logical barrier; physical retirement is independent.
     void retireConsumerReader(this.state, delivery === "complete" ? "eof" : "cancel", !!(this.state.flags & 32));
     sealConsumer(owner);
     if (hasInspectionFailure) {
@@ -623,7 +646,7 @@ export class OwnedChatUsage extends OwnedAcceptedUsage {
     try {
       let bytes: Uint8Array | undefined, done = false;
       if (this.state.prefixWire && !this.state.prefixRead && this.state.prefixUsed) {
-        bytes = new Uint8Array(this.state.prefixUsed); bytes.set(this.state.prefixWire.subarray(0, this.state.prefixUsed));
+        bytes = newOwnedBytes(this.state.prefixUsed); copyOwnedBytes(bytes, ownedByteSubarray(this.state.prefixWire, 0, this.state.prefixUsed));
         this.state.prefixRead = this.state.prefixUsed;
       } else if (this.state.crossingWire && !this.state.crossingRead) {
         this.state.crossingRead = 1; bytes = this.state.crossingWire;
@@ -647,7 +670,7 @@ export class OwnedChatUsage extends OwnedAcceptedUsage {
       this.flags &= ~64;
       try { this.push(this.epoch, bytes!); }
       finally { this.snapshot = undefined; }
-      if (!this.finished) controller.enqueue(bytes!);
+      if (!this.finished) enqueueOwnedBytes(controller, bytes!);
       this.state.captured = undefined; bytes = undefined;
     } catch (error) {
       let failure = phase === "usage" && !isIdentityFailure(error) ? consumerFailure(this.state, "pull", error) : error;
@@ -664,6 +687,122 @@ export class OwnedChatUsage extends OwnedAcceptedUsage {
   cancel(reason: unknown): void { this.finish("canceled", reason); }
 }
 
+export class OwnedGenericChatUsage extends OwnedAcceptedUsage<GenericUsageReader> {
+  private snapshot?: Uint8Array;
+  private resolve!: () => void;
+  readonly ready: Promise<void>;
+  private downstream?: ReadableStreamDefaultController<Uint8Array>;
+  private listener: () => void;
+  private listening = false;
+  private delivering?: ObservedUsage;
+  constructor(reader: GenericUsageReader, private operation: HttpOperation, private signal: AbortSignal,
+    private validated?: ValidatedNativeUsage, context?: Readonly<UsageTokenContext>) {
+    GenericUsageReader.checkInspection(reader);
+    super(reader, "none", context, false);
+    this.ready = new Promise<void>(resolve => { this.resolve = resolve; }); this.listener = this.aborted.bind(this);
+  }
+  get finished(): number { return this.flags >>> 8 & 3; }
+  private setFinished(value: number): void { this.flags = this.flags & ~768 | value << 8; }
+  prepare(contentType: string, provisional: boolean): void {
+    this.mode = contentType.includes("text/event-stream") ? "sse" : !this.validated && contentType.includes("json") ? "json" : "none";
+    this.provisional = provisional; this.initialize();
+  }
+  bodyless(response: Response): void {
+    bindOwnedHttpGenericBodylessResponse(this.state.usageCap, this.state, response);
+    this.setFinished(2); this.operation.stop("complete");
+    this.deliver({ tokens: null, outcome: null, delivery: "complete" }); this.state.stop(false);
+  }
+  publish(response: Response): Response {
+    const body = new ReadableStream<Uint8Array>(this, { highWaterMark: 0 });
+    bindOwnedHttpGenericUsageOutput(this.state.usageCap, this.state, body);
+    if (this.signal.aborted) this.aborted();
+    else {
+      try { this.listening = true; this.signal.addEventListener("abort", this.listener, { once: true }); }
+      catch (reason) { this.state.hold(); throw this.state.failure("listener-add", reason); }
+    }
+    const status = response.status, statusText = response.statusText, headers = response.headers;
+    return createOwnedHttpGenericUsageResponse(this.state.usageCap, this.state, response, body, status, statusText, headers);
+  }
+  revokeRejection(): void { this.operation.revokeRejection(); }
+  matchesSnapshot(epoch: number, bytes: Uint8Array): boolean { return !this.finished && epoch === this.epoch && this.snapshot === bytes; }
+  matchesTerminal(ended: boolean): boolean { return this.finished === (ended ? 2 : 1) && !this.snapshot; }
+  matchesDelivery(value: ObservedUsage): boolean { return this.delivering === value; }
+  private deliver(value: ObservedUsage): void {
+    this.delivering = value;
+    try { forwardOwnedHttpGenericUsage(this.state.usageCap, this.state, value); this.resolve(); }
+    finally { this.delivering = undefined; value = undefined as never; }
+  }
+  private finish(delivery: ObservedUsage["delivery"], reason?: unknown): void {
+    if (this.finished) return;
+    this.setFinished(1);
+    let listenerFailure: object | undefined, inspectionFailure: unknown, hasInspectionFailure = false;
+    if (this.listening) {
+      try { this.signal.removeEventListener("abort", this.listener); this.listening = false; }
+      catch (error) { listenerFailure = this.state.failure("listener-remove", error); this.state.hold(); }
+    }
+    // Generic usage stops/cancels BEFORE terminal inspection. Codec ordering is
+    // deliberately separate. A recursive abort observes the finished latch.
+    if (delivery === "canceled") this.operation.cancel(reason);
+    else this.operation.stop(delivery === "complete" ? "complete" : "upstream", reason);
+    delivery = this.operation.delivery ?? delivery;
+    if (delivery === "complete") this.setFinished(2);
+    try {
+      if (this.validated) this.result = this.validated;
+      else if (this.epoch < 0) this.result = { tokens: null, outcome: null };
+      else this.finishInspection(delivery === "complete");
+    } catch (error) {
+      hasInspectionFailure = true; inspectionFailure = error; delivery = "failed";
+      this.result = { tokens: null, outcome: null };
+    }
+    try {
+      this.deliver({ ...this.result!, delivery, ...(this.operation.receivedRejection ? { nonbillable: true as const } : {}),
+        ...(this.validated?.requestCostReceipt ? { requestCostReceipt: this.validated.requestCostReceipt } : {}) });
+    } finally { this.state.stop(delivery !== "complete", reason); reason = undefined; }
+    if (hasInspectionFailure) throw inspectionFailure;
+    if (listenerFailure) throw listenerFailure;
+  }
+  failPublication(reason: unknown): void {
+    try { if (!this.finished) this.finish("failed", reason); }
+    finally { reason = undefined; }
+  }
+  abandon(): void { if (!this.finished) this.finish("failed"); else this.state.stop(true); }
+  private aborted(): void {
+    if (this.finished) return;
+    let reason: unknown = this.signal.reason;
+    try { this.finish("canceled", reason); }
+    catch (error) { reason = isIdentityFailure(error) ? error : this.state.failure("pull", error); }
+    try { this.downstream?.error(reason); } finally { reason = undefined; }
+  }
+  start(controller: ReadableStreamDefaultController<Uint8Array>): void { this.downstream = controller; }
+  pull(controller: ReadableStreamDefaultController<Uint8Array>): Promise<void> {
+    this.state.beginPull(); return this.state.ownPull(this.next(controller));
+  }
+  private async next(controller: ReadableStreamDefaultController<Uint8Array>): Promise<void> {
+    let bytes: Uint8Array | undefined, phase: "read" | "usage" | "finish" = "read";
+    try {
+      await this.state.read();
+      if (this.finished) { this.state.captured = undefined; return; }
+      if (this.state.readDone) { this.state.captured = undefined; phase = "finish"; this.finish("complete"); controller.close(); return; }
+      phase = "usage";
+      bytes = this.state.captured!; this.snapshot = bytes;
+      this.epoch = this.epoch === Number.MAX_SAFE_INTEGER ? 1 : this.epoch + 1; this.flags &= ~64;
+      try { this.push(this.epoch, bytes); } finally { this.snapshot = undefined; }
+      if (!this.finished) this.state.emit(controller, bytes);
+    } catch (error) {
+      let failure = phase === "read" || isIdentityFailure(error) ? error : this.state.failure("pull", error); error = undefined;
+      if (!this.finished) { try { this.finish("failed", failure); } catch (cleanup) { failure = isIdentityFailure(cleanup) ? cleanup : this.state.failure("retire", cleanup); } }
+      controller.error(failure); failure = undefined;
+    } finally { this.snapshot = undefined; this.state.captured = undefined; bytes = undefined; controller = undefined as never; }
+  }
+  cancel(reason: unknown): void { try { this.finish("canceled", reason); } finally { reason = undefined; } }
+  clear(): void {
+    if (!this.state.driverDone) throw identityFailure("protocol");
+    this.clearInspection(); this.snapshot = undefined; this.validated = undefined; this.context = undefined;
+    this.delivering = undefined; this.downstream = undefined; this.resolve = undefined as never; this.listener = undefined as never;
+    this.signal = undefined as never; this.operation = undefined as never; this.state = undefined as never;
+  }
+}
+
 export function matchesOwnedUsageInspection(cap: OwnedHttpRevalidation, value: UsageInspection): boolean {
   const state = ownedAcceptedUsage?.get(cap); return !!state && state.result === value;
 }
@@ -671,42 +810,44 @@ export function retireOwnedAcceptedUsage(cap: OwnedHttpRevalidation): void { own
 
 export function createSseFrames(consume: (frame: string | null) => void, fatalUtf8 = false) {
   ownedFrameConsumers?.get(consume)?.resize(0, 8192);
-  let buffer = new Uint8Array(8192), length = 0, lineLength = 0, overflow = false, skipLf = false;
+  let buffer = ownedFrameConsumers?.has(consume) ? newOwnedBytes(8192) : new Uint8Array(8192), length = 0, lineLength = 0, overflow = false, skipLf = false;
   ownedFrameConsumers?.get(consume)?.resized(8192, 0);
-  const decoder = new TextDecoder("utf-8", { fatal: fatalUtf8 });
+  const decoder = ownedFrameConsumers?.has(consume) ? newOwnedDecoder(fatalUtf8) : new TextDecoder("utf-8", { fatal: fatalUtf8 });
   const decode = () => {
     ownedFrameConsumers?.get(consume)?.reserve(2 * length);
     let text: string | null;
-    try { text = decoder.decode(buffer.subarray(0, length)); } catch { text = null; }
+    try { text = ownedFrameConsumers?.has(consume) ? decodeOwnedBytes(decoder, ownedByteSubarray(buffer, 0, length)) : decoder.decode(buffer.subarray(0, length)); } catch { text = null; }
     const owned = ownedFrameConsumers?.get(consume);
     if (owned && owned.flags & 2) {
-      owned.resize(buffer.byteLength, 8192); buffer = new Uint8Array(8192);
+      owned.resize(ownedByteLength(buffer), 8192); buffer = newOwnedBytes(8192);
       owned.resized(8192, text === null ? 0 : 2 * text.length);
     }
     return text;
   };
   function append(bytes: Uint8Array) {
     if (overflow) return;
-    if (length + bytes.length > usageInspectionLimit) { overflow = true; length = 0; return; }
-    if (length + bytes.length > buffer.length) {
+    if (length + (ownedFrameConsumers?.has(consume) ? ownedByteLength(bytes) : bytes.length) > usageInspectionLimit) { overflow = true; length = 0; return; }
+    if (length + (ownedFrameConsumers?.has(consume) ? ownedByteLength(bytes) : bytes.length) > (ownedFrameConsumers?.has(consume) ? ownedByteLength(buffer) : buffer.length)) {
       const owned = ownedFrameConsumers?.get(consume), temporary = owned?.temporaryBytes ?? 0;
-      owned?.resize(buffer.byteLength, Math.min(usageInspectionLimit, Math.max(buffer.length * 2, length + bytes.length)));
-      const next = new Uint8Array(Math.min(usageInspectionLimit, Math.max(buffer.length * 2, length + bytes.length)));
-      next.set(buffer.subarray(0, length)); buffer = next;
-      owned?.resized(buffer.byteLength, temporary);
+      owned?.resize(ownedByteLength(buffer), Math.min(usageInspectionLimit, Math.max(ownedByteLength(buffer) * 2, length + ownedByteLength(bytes))));
+      const capacity = Math.min(usageInspectionLimit, Math.max((owned ? ownedByteLength(buffer) : buffer.length) * 2, length + (owned ? ownedByteLength(bytes) : bytes.length)));
+      const next = owned ? newOwnedBytes(capacity) : new Uint8Array(capacity);
+      if (owned) copyOwnedBytes(next, ownedByteSubarray(buffer, 0, length)); else next.set(buffer.subarray(0, length)); buffer = next;
+      owned?.resized(ownedByteLength(buffer), temporary);
     }
-    buffer.set(bytes, length); length += bytes.length;
+    if (ownedFrameConsumers?.has(consume)) copyOwnedBytes(buffer, bytes, length); else buffer.set(bytes, length);
+    length += ownedFrameConsumers?.has(consume) ? ownedByteLength(bytes) : bytes.length;
   }
   return {
     overflowed: () => overflow,
     pending: () => overflow ? null : decode(),
     push(bytes: Uint8Array) {
       let start = 0;
-      for (let index = 0; index < bytes.length; index++) {
+      for (let index = 0; index < (ownedFrameConsumers?.has(consume) ? ownedByteLength(bytes) : bytes.length); index++) {
         const byte = bytes[index];
         if (skipLf) { skipLf = false; if (byte === 10) { start = index + 1; continue; } }
         if (byte !== 10 && byte !== 13) continue;
-        append(bytes.subarray(start, index)); lineLength += index - start;
+        append(ownedFrameConsumers?.has(consume) ? ownedByteSubarray(bytes, start, index) : bytes.subarray(start, index)); lineLength += index - start;
         if (lineLength === 0) {
           const owned = ownedFrameConsumers?.get(consume);
           if (owned) {
@@ -716,10 +857,11 @@ export function createSseFrames(consume: (frame: string | null) => void, fatalUt
           } else consume(overflow ? null : decode());
           length = 0; overflow = false;
         }
+        else if (ownedFrameConsumers?.has(consume)) { const newline = newOwnedBytes(1); newline[0] = 10; append(newline); }
         else append(new Uint8Array([10]));
         lineLength = 0; skipLf = byte === 13; start = index + 1;
       }
-      append(bytes.subarray(start)); lineLength += bytes.length - start;
+      append(ownedFrameConsumers?.has(consume) ? ownedByteSubarray(bytes, start) : bytes.subarray(start)); lineLength += (ownedFrameConsumers?.has(consume) ? ownedByteLength(bytes) : bytes.length) - start;
     },
   };
 }

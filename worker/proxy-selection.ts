@@ -1,3 +1,6 @@
+import { checkOwnedHttpInitialSelection, admitOwnedHttpErrorText, type OwnedHttpRequest } from "./http-identity-owner.ts";
+import { beginPrivateConfiguration, consumePrivateConfiguration, endPrivateConfiguration } from "./provider-templates.ts";
+import { ownedErrorResponse } from "./utils.ts";
 import { prepareMiniMaxSearch } from "./minimax-search.ts";
 import { miniMaxSearchRequirement, miniMaxSearchDenied } from "./minimax-search-credential.ts";
 import { prepareVeniceChatBinding } from "./venice-chat-binding.ts";
@@ -138,27 +141,57 @@ interface ProxySelectionFailure {
 }
 
 export function concreteOpenAiSelection(path: string, body: Record<string, unknown>, env: Env, timeoutMs?: number, preparation?: PreparationAdmission): ProxySelection | ProxySelectionFailure {
+  return selectConcreteOpenAi(path, body, env, timeoutMs, preparation);
+}
+export function concreteOwnedOpenAiSelection(http: OwnedHttpRequest, request: Request, body: Record<string, unknown>, env: Env, preparation: PreparationAdmission): ProxySelection | ProxySelectionFailure {
+  checkOwnedHttpInitialSelection(http, request, env, body, preparation);
+  const nonce = beginPrivateConfiguration(http, preparation);
+  try { return selectConcreteOpenAi("/v1/chat/completions", body, env, undefined, preparation, http, nonce); }
+  finally { endPrivateConfiguration(preparation, nonce); }
+}
+function selectConcreteOpenAi(path: string, body: Record<string, unknown>, env: Env, timeoutMs?: number, preparation?: PreparationAdmission,
+  http?: OwnedHttpRequest, nonce?: object): ProxySelection | ProxySelectionFailure {
   // Standalone selection (including WebSocket selection) begins one operation.
   // Proxy entries supply their existing token; returned selections carry it onward.
   preparation ??= new PreparationAdmission();
   const modelId = typeof body.model === "string" ? body.model : "";
   const capability = capabilityForPath(path);
   const route = modelRoute(modelId, capability ?? undefined);
-  if (!route) return selectionFailure(errorResponse("model_not_found", `model ${modelId} is not registered`, 404));
+  if (!route) return selectionFailure(http ? ownedSelectionError(http, 0, modelId, path)
+    : errorResponse("model_not_found", `model ${modelId} is not registered`, 404));
   const endpoint = endpointForPath(route.provider, path);
-  if (!capability || !endpoint || !route.model.capabilities.includes(capability)) return selectionFailure(errorResponse("model_capability_unsupported", `model ${modelId} does not support ${path}`, 400));
-  if (unifiedPathForEndpoint(route.provider, endpoint) !== path) return selectionFailure(errorResponse("model_capability_unsupported", `model ${modelId} requires its provider-native endpoint`, 400));
+  if (!capability || !endpoint || !route.model.capabilities.includes(capability)) return selectionFailure(http ? ownedSelectionError(http, 1, modelId, path)
+    : errorResponse("model_capability_unsupported", `model ${modelId} does not support ${path}`, 400));
+  if (unifiedPathForEndpoint(route.provider, endpoint) !== path) return selectionFailure(http ? ownedSelectionError(http, 2, modelId, path)
+    : errorResponse("model_capability_unsupported", `model ${modelId} requires its provider-native endpoint`, 400));
   try {
     const upstreamModel = resolvedUpstreamModel(route.provider, route.model, env, preparation);
     const transformed = transformRequestBody(route.provider, path, upstreamModel, { ...body, model: upstreamModel }, env, preparation);
     return { preparation, provider: route.provider, endpoint, model: route.model, capability, body: transformed, pathParams: { model: upstreamModel, deployment: upstreamModel }, method: "POST", timeoutMs };
   } catch (error) {
     if (isPreparationLimit(error)) throw error;
+    if (http) {
+      const response = consumePrivateConfiguration(preparation!, nonce!, error)
+        ? ownedErrorResponse(http, error.code, error.message, error.status)
+        : ownedErrorResponse(http, "provider_request_invalid", "provider request configuration is invalid", 503);
+      return selectionFailure(response, {
+        provider: route.provider, endpoint, model: route.model, capability, body, pathParams: { model: modelId, deployment: modelId }, method: "POST", timeoutMs,
+      });
+    }
     const failure = error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
     return selectionFailure(errorResponse(failure.code, failure.message, failure.status), {
       provider: route.provider, endpoint, model: route.model, capability, body, pathParams: { model: modelId, deployment: modelId }, method: "POST", timeoutMs,
     });
   }
+}
+
+function ownedSelectionError(http: OwnedHttpRequest, kind: 0 | 1 | 2, model: string, path: string): Response {
+  // The admission precedes every dynamic interpolation, including missing model.
+  const units = 64 + model.length + (kind === 1 ? path.length : 0);
+  admitOwnedHttpErrorText(http, units);
+  return kind === 0 ? ownedErrorResponse(http, "model_not_found", `model ${model} is not registered`, 404)
+    : kind === 1 ? ownedErrorResponse(http, "model_capability_unsupported", `model ${model} does not support ${path}`, 400)
+    : ownedErrorResponse(http, "model_capability_unsupported", `model ${model} requires its provider-native endpoint`, 400);
 }
 
 function selectionFailure(response: Response, auditSelection: ProxySelection | null = null): ProxySelectionFailure {

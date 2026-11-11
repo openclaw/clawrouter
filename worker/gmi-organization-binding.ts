@@ -1,3 +1,4 @@
+import { privateGmiRouteJson } from "./json-body.ts";
 import { inspectGrantCredentials } from "./grant-credentials.ts";
 import { filterGrantCandidates, grantRoutingPolicy } from "./grant-selection.ts";
 import { assertPolicyModel } from "./policy-models.ts";
@@ -5,7 +6,7 @@ import { applyProviderCredential } from "./provider-auth.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { UpstreamAuth } from "./providers.ts";
 import { assertControlCallerLive, authorizeResponseControl, publicControlAuthorization, bindOwnedResponseControl, revalidateOwnedResponseControl, type ResponseControlAuthorization } from "./response-control-authorization.ts";
-import { applyOwnedHttpRevalidationCredential, checkOwnedHttpRevalidation, matchesOwnedHttpRevalidationGraph, admitOwnedHttpRevalidationRouting, fundOwnedHttpRevalidationEnvironment, type OwnedHttpRevalidation } from "./http-identity-owner.ts";
+import { ownedHttpRevalidationFingerprint, applyOwnedHttpRevalidationCredential, checkOwnedHttpRevalidation, matchesOwnedHttpRevalidationGraph, admitOwnedHttpRevalidationRouting, fundOwnedHttpRevalidationEnvironment, type OwnedHttpRevalidation } from "./http-identity-owner.ts";
 import { privateGrantRoutingPolicy } from "./grant-routing.ts";
 import { identityPlan, identityFailure } from "./identity-admission.ts";
 import type { AccessPolicy, GrantRoutingPolicy, AuthorizedIdentity, Env, UpstreamGrant } from "./types.ts";
@@ -56,7 +57,7 @@ async function prepareGmiBinding(request: Request, env: Env, auth: AuthorizedIde
   if (scheme?.type !== "bearer" || scheme.header.toLowerCase() !== "authorization" || scheme.format !== "Bearer ${secret}"
     || scheme.secretKind !== "api_key" || !authorization || upstream.headers.get("authorization") !== authorization
     || headers.get("authorization") !== authorization) unavailable();
-  const original = grantKey && qualified(grant) ? identity(grant) : null;
+  const original = grantKey && qualified(grant) ? owned !== undefined ? ownedHttpRevalidationFingerprint(owned, grant) : identity(grant) : null;
   const environment = !grantKey && !grant ? envValue(env, "GMI_API_KEY") : null;
   if (grantKey ? !original
     : !environment || authorization !== `Bearer ${environment}`) unavailable();
@@ -64,7 +65,7 @@ async function prepareGmiBinding(request: Request, env: Env, auth: AuthorizedIde
   if (organization !== null) headers.set("x-organization-id", organization);
   const caller = publicControlAuthorization(auth);
   const owner = { providerId: "gmi", endpointId: endpoint.id, grantKey, lineage: grant?.credentialLineage ?? null,
-    policyGeneration: auth.policy.generation, routeSha256: await sha256Hex(JSON.stringify([url.href, organization])) };
+    policyGeneration: auth.policy.generation, routeSha256: await sha256Hex(owned !== undefined ? privateGmiRouteJson(url.href, organization) : JSON.stringify([url.href, organization])) };
   if (owned !== undefined) {
     bindOwnedResponseControl(owned, env, caller, owner);
     (ownedGmi ??= new WeakMap()).set(owned, { env, selection, grant, grantKey, original, environment, organization, caller });
@@ -108,7 +109,7 @@ export function acceptOwnedGmiInspection(cap: OwnedHttpRevalidation, value: unkn
   const state = ownedGmi?.get(cap);
   if (!state?.policy || !state.routing || !state.grantKey || !matchesOwnedHttpRevalidationGraph(cap, value, "inspect")) throw identityFailure("protocol");
   const current = (value as { grant: UpstreamGrant | null }).grant;
-  if (!qualified(current) || identity(current) !== state.original || account(current.accountId) !== state.organization
+  if (!qualified(current) || ownedHttpRevalidationFingerprint(cap, current) !== state.original || account(current.accountId) !== state.organization
     || !filterGrantCandidates("gmi", [{ key: state.grantKey, grant: current, runtimeState: null }], new Set(),
       state.routing, state.grantKey, undefined, Date.now()).available.length) unavailable();
   state.inspected = true;

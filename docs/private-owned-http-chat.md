@@ -1,10 +1,36 @@
 # Private owned HTTP Chat staging
 
-This is an inactive implementation checkpoint. The default Worker export and
+This is an inactive CODE_COMPLETE33 implementation checkpoint. The default Worker export and
 ordinary HTTP authentication, selection and credential-cache entrypoints remain
 unchanged. The named compiled HTTP entry and pinned UNIFIED client witness are
 implemented and registered, but the complete vertical is not qualified.
-There is no deployment or public header/Env activation.
+There is no deployment or public header/Env activation. CODE_COMPLETE describes
+implemented source and authored witnesses only. Whole DATA/COMMON, each fixed
+CONTROL window, variable traversal workspace and shared65536 inventories remain
+OPEN; all semantics remain UNRUN_CODE_ONLY_HOSTED. Historical blockers and lower
+component counts below are not current qualification certificates.
+
+
+Current accounting contract: fixed execution products remain subject to each
+operation/source/read/terminal128 window and sync512 separately. Enumerated
+PAYLOAD_GRAPH_TRAVERSAL_CONTROL workspace is paid separately on the genuine HTTP
+owner's ExactBodyCharge under COMMON96MiB. It is not DATA and has no new arena or
+quota. The foreground credential GenerationConsumptionLease remains32MiB; it is
+neither a whole-HTTP cap nor workspace credit. Source BodyLease, exact JSON
+supplement, foreground credentials, retained generation, HTTP traversal,
+serialization, retention, accounting and permanent65536 static custody remain
+separate simultaneous obligations, counted once each. Earlier1024/512 aggregate
+arguments below are historical checkpoints; their universal coverage claim is
+withdrawn for the explicitly enumerated traversal workspace. They do not become
+proof that the remaining fixed windows fit.
+
+Internal graph-processing/runtime helpers, generated snapshots and the pinned
+tokenizer are trusted except for the specific hardened boundaries documented
+here. Arbitrary unrelated global helper, registry, coercion, cache or tier
+mutation is outside qualification. This does not withdraw the supported hostile
+I/O-original, byte-operand, Headers, constructor, serialization-hook or metadata
+cases. Tenant JSON, inert toJSON, own __proto__, deep/wide native input and the
+existing expanded profile are unchanged. No whole-native-heap bound is claimed.
 
 The request capability owns a positive charge in the existing common Worker
 body arena. Authentication remains inside the genuine generation owner; its
@@ -1037,8 +1063,10 @@ from 1119 to at least 1121. That is still before the deferred/observer/activatio
 and competing-retirement omissions itemized above. Returned unlock can overlap
 another consumer or mapped replacement; failed closed metadata can coexist with
 later successful parsing. No subtraction or combined upper-bound certificate is
-claimed. The proposed frame-evidence handoff remains unimplemented and awaits
-its separate disposition. The current candidate remains nonpublishable.
+claimed. At that historical checkpoint the proposed frame-evidence handoff was
+unimplemented and awaited its separate disposition. Subsequent adopted receiver,
+traversal and custody amendments supersede that implementation status; the old
+counts do not establish current fixed-window fit or publication authority.
 
 Fourteen additional authored Node cases and 25 native cases exercise the actual
 returns: native unlock before the held return, held return before native unlock,
@@ -1828,3 +1856,1493 @@ Tests, fixtures and the existing client registration are separate:
 - `worker/test/proxy-completion.test.mjs`
 
 Documentation/release entry: `docs/private-owned-http-chat.md` and `CHANGELOG.md`.
+
+
+### Scope27 draft: bounded private ledger acknowledgments
+
+This in-progress source-only draft replaces the two private ledger
+`Response.json()` construction paths with one closed byte consumer. The ordinary
+ledger callers and DO response producers retain their existing behavior. The
+expanded boundary also permits narrow private receipt adapters in
+`credential-preflight-source.ts` and `identity-admission.ts`. The draft routes
+private acquisition through those adapters; their complete inventory and source
+qualification remain open. No runtime qualification is claimed.
+
+Each private reserve, dispatch, charge, settle and ingest acknowledgment permits
+32768 complete wire bytes and 32768 decoded UTF-16 units. Each actual read result
+may retain at most a 65536-byte whole ArrayBuffer. BYOB uses a 16384-byte working
+view; a genuine default reader is a parsing fallback. There are no additional
+read-count, empty-read, depth, node, key or number-spelling limits. Unknown fields
+are parsed completely within these bounds. The decoder uses replacement UTF-8,
+consumes an initial BOM, preserves byte-bearing EOF, and flushes once.
+
+The shared flat census supplies only its malformed-inclusive allocation upper,
+`16*(C+S+A)+2*Uraw`. Its codec-specific limit verdict does not restrict ACKs. The
+census receipt and scanner scope end before `JSON.parse` constructs the exact
+decoded text without a reviver or trimming. Native syntax failures become bounded
+local facts; native messages, input, causes and stacks do not cross cleanup waits.
+Genuine admission failures stay outside syntax normalization.
+
+The prospectively reserved reader component is1098240 bytes:65536 returned
+backing,16384 BYOB working backing,65536 private capture,32768 retained wire,
+262144 for up to four UTF-16 text occurrences,589824 malformed-inclusive graph
+upper, and66048 projected-reply allowance. This conservative component is not a
+whole-request bound or a new quota. Metadata, actual execution products and every
+other live ACK, source, upload, parser, usage and accounting owner remain additive.
+The implementation creates no extra header iterator or copied header profile.
+
+After EOF or failed-read disposition, payload credit reduces only after the
+actual read and cancellation callbacks, installation barriers and tails have
+joined and every capture/text/decoder/parsed-value alias has cleared. Independent
+closed and returned-unlock custody remains held. UNKNOWN prevents that reduction.
+A closed reply retained by a nonterminal caller keeps its projected allowance
+through request retirement.
+
+Only a genuine `allowed:false` reserve acknowledgment produces the existing402.
+Oversize, malformed or unsupported reserve replies use failed-reserve rollback;
+dispatch remains unavailable; charge and settle retain their existing recovery
+and IDs; ingest never falsely confirms storage. Non-OK404/409 paths remain
+status-driven and do not parse error bodies. Fetch/acquisition rejection remains
+separate from invalid-ACK normalization. Historical or directly written reserve
+policies whose replies exceed the new private profile intentionally fail ACK.
+
+The authored Node cases cover all five scalar replies, W/W+1 wire, B/B+1 whole
+backing, deep unknown values, long keys/numbers, BOM, duplicates, own `__proto__`,
+lone surrogates and transport-versus-invalid-ACK routing. The old large-array
+counterexample is arithmetic only:2097152 empty objects imply6291483 wire bytes
+and33554514 graph bytes; no large fixture is constructed. These cases remain
+UNRUN_CODE_ONLY_HOSTED. Workerd/client additions and complete phase/window/shared
+inventories remain open. Earlier checkpoint lower bounds are historical, not
+upper bounds for this changed representation.
+
+### Scope27 draft: private callback acceptance
+
+Each genuinely started private original has one callback acceptance right. The
+owner checks its live pending state and operation nonce before inspecting a value
+or reason, then consumes the right before any payload getter, validation, copy,
+diagnostic or scheduling call. A protocol-invalid first value consumes the same
+right. A later callback cannot repair or replace it. Independent originals retain
+independent rights and failure ordinals, even when their reasons are identical or
+undefined.
+
+Logical cancellation and uncertain observer installation do not erase a pending
+original. Its first late Response is still adopted and disposed through the
+original owner's FIRSTcancel and physical joins. A synchronous first callback
+followed by an installation throw records both events and keeps UNKNOWN. Only
+successful installation, the first callback, its tail and all actual child joins
+can permit retirement.
+
+After the first accepted callback, duplicate, stale and post-retirement values
+remain foreign producer payloads. The private callback returns void without
+accessing their body, headers, result getters or reasons. It does not cancel a
+second Response, allocate another child, reopen a registry or alter the outcome.
+This boundary makes no claim that those foreign payloads were cleaned or retired.
+Live saved callback references and their captured state still require explicit
+custody accounting. A harmless stale invocation alone does not establish
+retirement. The separate inert-artifact rule below requires actual detachment.
+
+The separate private observer-return policy discards the actual `.then`
+invocation return without reading, assimilating or observing it. An unrelated
+held Promise, undefined return or hostile returned object supplies neither a
+business result nor retirement evidence. External rejected-return reporting is
+not suppressed. Ordinary APIs retain their existing behavior.
+
+The added authored witnesses exercise duplicate ledger Responses during physical
+cleanup and after request retirement, rejection with undefined followed by a
+foreign fulfillment, and result getters that reenter the same read callback.
+They remain UNRUN_CODE_ONLY_HOSTED. Complete CONTROL closure is still pending;
+these behavioral witnesses do not supply a window or external-retention bound.
+
+### Scope27 draft: retired inert observer artifacts
+
+The private accounting domain explicitly excludes a discharged inert observer
+artifact retained solely by an external observer, and external calls into that
+inert artifact. This is a custody transfer, not garbage-collection evidence or a
+bound on external/native heap use. Active factories and live cells remain on the
+originating ticket's existing windows. No request receives extra capacity.
+
+The reader driver now supplies two fixed functions bound only to a fresh mutable
+cell. The cell has four own fields: owner, token, kind and state. Each operation
+gets a distinct cell; no cell is reused and no historical-cell collection exists.
+The driver has five current-operation positions, including READ and PULL. Each
+cell contributes its object and four fields, two bound functions and their target
+and receiver references, plus the actual reactions, native invocation products
+and active operands. The pre-existing readiness Promise remains one actual
+product, counted at its surviving owner; moving its reference into a cell does
+not erase it. These are component facts, not a complete window upper.
+
+Discharge requires the first eligible callback, successful installation, ended
+callback/installation tails, completed operation bookkeeping, and no UNKNOWN.
+Any captured value or bounded failure has already moved into the still-funded
+reader before the cell loses its owner and nonce links. The cell is marked inert,
+all graph links are cleared, and its private driver position is cleared before
+reuse. A queued driver pump retains the driver, not an earlier cell or nonce; its
+own products stay funded. PULL may complete this same bookkeeping at the next
+native demand boundary before rearming. The cell's old callbacks then return
+without consulting a parent, payload, registry or diagnostics.
+
+The private preflight and materialization adapters, status reader and ledger ACK
+reader use separate narrow READ cells for their reusable observations. They clear
+those cells only after consuming or discarding that read's captured bytes and
+completing its observation barriers. UNKNOWN leaves the cell attached. Shared
+handler definitions belong in the permanent fixed-custody inventory; cell fields,
+bound handlers, state positions, receipts and calls belong to the active ticket.
+The inventory for all other retained observers remains required.
+
+Authored driver witnesses retain 148 and 512 successful READ/PULL callback pairs,
+invoke old callbacks during later reads and after retirement, and inspect the
+cells' cleared owner/nonce links. A separate installation-throw witness requires
+the cell to remain attached. These tests are UNRUN_CODE_ONLY_HOSTED; they neither
+measure garbage collection nor certify the whole DATA/CONTROL bound.
+
+
+### Scope27 intake cells and earlier permanent custody
+
+The private intake now claims the same permanent 65536-byte fixed module slice
+in `beginOwnedHttpIntakeDiagnostics`, after genuine request validation and the
+positive request/origin reservations, before its diagnostic receipt, I/O owner,
+capture backing or observer cells. The prior response-stage claim descriptions
+above are historical checkpoints. Private 401, malformed and declared-size
+failures can now leave this permanent claim. It reduces COMMON headroom for
+later authentication and ordinary traffic; there is no release or reset.
+Ordinary `readJson`, default Worker routes and module imports do not activate it.
+
+A failed first claim constructs no intake owner or reader. It stays inside the
+existing `proxyOwnedHttpChat` intake catch: authentication still runs before the
+intake error is rethrown. Missing credentials can therefore win with 401, and
+authentication capacity failure keeps its own precedence. This is not an
+unconditional new 503 response. Request retirement remains exact, separately
+from the permanent shared claim.
+
+`OwnedHttpIntakeIo` receives only the genuine capability, diagnostics and actual
+body. The async intake driver retains the parser, admission, prefix and parsed
+graph. Native read, FIRSTcancel, returned unlock and independent closed handlers
+bind only fresh, never-reused cells. A read cell remains live through any
+admission/authentication await until its captured bytes are copied or consumed.
+A queued receipt resolves only after the first callback and successful observer
+installation. UNKNOWN retains its attached cell and funding. Normal consumption
+severs the cell's owner, kind, readiness and resolver before the next read; it
+does not claim that externally retained callbacks cease to exist.
+
+Intake observes `!!item.done` first. A truthy result skips VALUE entirely,
+including byte-bearing EOF. Otherwise it preserves the three conditional VALUE
+getter accesses: backing limit, length, then capture copy. The first callback
+right is consumed before any getter can reenter. The same private 16KiB capture
+slab, growing prefix, zero-read skip, parser thresholds and decoder flush remain.
+Cleanup still starts FIRSTcancel before joining read/cancel, removes the abort
+listener, joins returned unlock and independent closed, and checks lock disposition
+before return. Observer-installation failures have independent bounded origins.
+
+Authored actual Workerd witnesses retain more than148 and512 read callback pairs,
+reenter through DONE/VALUE, use truthy DONE with a hostile VALUE getter at EOF,
+and invoke all saved handlers after retirement. They inspect severed cell links
+and exact getter order, not GC. Earlier native mutation/authentication-await,
+late-abort, returned-unlock and independent-closed cases use the new owner hooks.
+New cold-intake 401/malformed/header and failed-claim witnesses check exact permanent
+custody and zero unfunded I/O factories. All remain **UNRUN_CODE_ONLY_HOSTED**.
+The added owner, five-field cell, receipt/resolver, bound handlers, queued advance,
+active installations and fixed definitions require the new actual inventory;
+this section makes no DATA or CONTROL fit claim.
+
+
+#### Current scope27 instance-field census
+
+This is a source census for the unfinished draft, not a phase upper or a window
+assignment. It counts actual own fields, including fields whose value becomes
+undefined, and each instance object. Receipts, bound functions, observers,
+registries, collections, native handles, active scopes and DATA remain additive.
+The earlier385/913/1034 rows do not describe these changed factories.
+
+| Actual factory | Own fields | Instance plus fields | Additional relationship |
+| --- | ---: | ---: | --- |
+| `OwnedReaderDriver` |20|21|Base fields included in source/consumer/public/RPC rows. |
+| `OwnedVeniceSource` |29|30|20 base plus9 concrete; separate cleanup vector and native handles. |
+| `CodecReader` |27|28|20 base plus7 concrete; separate consumer registry owner. |
+| `OwnedPublicReader` |27|28|20 base plus7 concrete; actual parent lifetime leaf remains. |
+| `OwnedRevalidationRpc` |45|46|20 base plus25 concrete; fetch cell, wire/parser, readiness and actual observers remain additive. |
+| `OwnedStatusReader` |19|20|Four actual instances; read cell, bound advance and closed observers are additional. |
+| `OwnedStatusController` |14|15|10 inherited decision fields plus4 concrete; two distinct receipts and reader vector remain. |
+| `OwnedHttpIntakeIo` |20|21|Parser/admission/prefix/parsed graph remain in the separate async driver. |
+| `PrivatePreflightState` |37|38|Own `AdmissionBridgeSource`, receipt registry, gates and observers are additional. |
+| `PrivateMaterializationState` |37|38|Own `IdentitySource`, destination association, gates and observers are additional. |
+| `UploadOwner` |16|17|Distinct pipe-joined and final-retired receipts; actual pipe observer remains. |
+| `OwnedSinkRegistration` |3|4|Actual supplied-work observer and registration invocation remain. |
+| `OwnedProviderFetch` |11|12|Response handoff, logical readiness and physical retirement remain distinct. |
+| `OwnedPreflightAcquisition` / `OwnedMaterializationAcquisition` |6 each|7 each|Actual fetch observer and lower source owner remain separate. |
+| `OwnedLedgerCommand` |11|12|Bound ACK owner and actual fetch/cleanup observers remain. |
+| `OwnedLedgerAck` |22|23|Every simultaneous ACK has its own source/read/cleanup state. |
+| `OwnedTerminalOperation` |5|6|15 fixed positions are not15 free observation bundles. |
+| `OwnedAccountingTerminal` |19|20|Early shell includes its phase and parent fields; operation vector, result/retirement receipts and live ACK owners remain additive. |
+| `OwnedVeniceEvents` |11|12|Source is a borrowed identity, not a second source instance. |
+| `OwnedChatUsage` |24|25|16 inherited accepted-usage fields plus8 delivery fields; framer/accumulator remain separate. |
+
+The driver has38 concrete prototype implementations, excluding its constructor
+and six abstract declarations; the intake owner has17. These fixed definitions
+must replace the old21-member driver row in the static-owner enumeration. They
+are not per-instance fields or execution capacity. Current intake cells have
+five fields plus their object; driver cells have four plus their object; the
+preflight/materialization/status/ACK read cells have three plus their object.
+Each live cell still needs its actual bound handlers, argument/reference cells,
+reactions, original/derived Promises and active installation/queued-tail products.
+Only proven severed external artifacts use the adopted inert-custody boundary.
+
+The named ordinary `readIdentityKv`, `readIdentityRequest`, `readIdentityResponse`
+and `identitySqlRows` function bodies remain byte-identical to36df. The two
+private reader adapters add registered branches within their existing reader
+classes; this function-level check is not a complete ordinary-path inverse proof.
+
+#### Private intake operand admission
+
+The private intake accepts genuine Uint8Array operands over fixed ArrayBuffers,
+with each actual whole backing at most16384 bytes. Cross-realm native views are
+accepted through captured intrinsic accessors. Array-like objects, DataView,
+other typed arrays, shared and resizable buffers are outside this private
+projection. Ordinary intake and provider profiles are unchanged. Rejecting an
+operand does not claim that its external storage never existed or was retired.
+
+DONE remains the first getter and uses truthiness without coercion hooks. A
+truthy DONE does not access VALUE. Otherwise VALUE is evaluated separately at
+each of the original three points. VALUE1 retains the public `buffer.byteLength`
+effects and oversized short circuit, followed by proof of that view's real
+backing. VALUE2 retains its public `byteLength` getter; the result must be a
+number representing an integer from0 through16384 without coercion. Its own real
+view and backing are then proved. VALUE3 supplies the copied bytes and must
+have exactly that native element count. Different same-length bounded views
+remain accepted; mismatched lengths cannot consume stale slab bytes or drop a
+tail. Each operand local is cleared before the next except the final source,
+which remains only through its copy call.
+
+The later private DATA-kernel contract supersedes the descriptor-only copy
+policy. The intake chooses its fixed copy command before VALUE3, then invokes
+the captured standard native set primitive. Mutable `set`, `subarray`, `slice`
+and species hooks do not receive private buffers. This intentionally changes
+modified DATA-hook observability; actual I/O getters/methods and the three VALUE
+accesses retain their required order. Ordinary serializers and reader paths do
+not acquire this private behavior merely by importing the module.
+
+The lower kernel in `proxy-completion.ts` uses captured standard intrinsics at
+module initialization. It checks genuine Uint8Array storage with native brand,
+buffer, offset, count and fixed-ArrayBuffer accessors. Native view constructors
+replace species-dispatching views; decoder/encoder DATA calls retain UTF8 fatal,
+BOM and stream/flush options. The controller handoff checks the actual native
+brand, prototype and DATA descriptor before the supported actual enqueue lookup.
+An unsupported output hook receives no snapshot.
+
+The scope30 byte/header kernel has39 fixed intrinsic/reference bindings and26
+named function definitions, including the header counter and closed metadata
+operations. Under the existing three-product fixed-definition convention, those
+definitions contribute78; the empty argument vector contributes its object and
+length cell2. This **119-product kernel component** is additional to the still-open
+full static inventory. It does not carry the old390 ceiling or certify the65536-byte
+reservation. The runtime-specific scope and remaining initial-error boundary are
+stated below.
+Each `inspectOwnedBytes` result is a separate four-field record plus object on
+the active request. Active calls, reflection descriptors, native argument vectors,
+views and copy aliases remain on the request, never in this fixed component.
+
+The private consumer, Venice source, two registered identity readers, ACK,
+status and public reader now inspect native backing/counts at their first
+accepted callback. The identity readers retain the same proven original backing
+for the next BYOB call, separately from the private snapshot. Status preserves
+its DONE-before-VALUE order and snapshots before its queued decision work.
+Consumer/Venice/identity retain VALUE-before-DONE; public EOF observes VALUE once
+and ignores it without inspecting storage. Existing role-specific bounds remain.
+
+Public capture adds two request fields and two reader fields. Before copying,
+the enrolled reader computes aggregate live source-plus-copy bytes and a
+request high-water amount. A failed replacement changes no bookkeeping. The
+high-water charge remains until actual final request retirement. Live bytes can
+leave this component only after supported native enqueue, cleared private aliases,
+and the read/pull observer tails; UNKNOWN keeps the component. External output
+queue/client retention is a documented custody transfer, not a heap bound.
+
+The new fixed RPC reader keeps25 concrete fields plus the20 inherited driver
+fields, and its object. This is an instance-field census only. Its fetch cell,
+void readiness and driver retirement receipts, observers, constructor/call locals,
+source parser, suspended consumer and queued work remain additive. Ten origins
+include independent closed; attempt reservation is68 for Venice and20 for GMI.
+The fold preserves separate V1–V8/D1–D2 result accesses and uses the intrinsic
+backing at the next-BYOB handoff. Actual fetch/read/FIRSTcancel/unlock/closed methods
+remain actual operations. No Response/read-result graph is carried by a newly
+created forwarding Promise.
+
+Authored Node cases cover actual16KiB operands, unsupported storage, native
+view offsets, mutable DATA hooks/species, and native-versus-unsupported output
+handoff. Workerd intake cases now accept the private kernel's bypass of copy
+hooks, including a hook held through authentication. All remain
+UNRUN_CODE_ONLY_HOSTED. This source migration does not certify complete DATA,
+any128 window, sync512, or the full fixed shared target.
+
+#### Private adapter receipt inventory
+
+The two private adapters reuse their actual module-local readers. Their state
+records do not replace the reader records or suspended consuming functions.
+The following identities must remain separate in the phase ledger:
+
+| Factory/product | Preflight | Materialization |
+| --- | --- | --- |
+| Registered private state |37 own fields plus object |37 own fields plus object |
+| Existing consuming source |`AdmissionBridgeSource`:17 fields plus object |`IdentitySource`:7 fields plus object |
+| Upper acquisition command |6 fields plus object |6 fields plus object |
+| Empty receipt capability and two registry entries |Capability plus four key/value cells |Capability plus four key/value cells |
+| Initial logical and physical gates |Two Promises and two resolvers |Two Promises and two resolvers |
+| Active read observation |Fresh three-field cell; two cell-bound handlers; genuine void gate/resolver; actual native original, derived Promise and reactions |Same distinct products |
+| Independent closed observation |Genuine void gate/resolver; actual closed original; two methods bound to state and kind; derived Promise and reactions |Same distinct products |
+| Pending consumer chain |Upper `consume`, receipt finalizer, state `consume`, source `read`, adapter `read` |Upper `consume`, receipt finalizer, state `consume`, source `text`, adapter `read` |
+| Abort enrollment |Private fixed bound stop method plus kind argument; source signal/listener fields |Private fixed bound abort method; state signal/listener fields |
+
+Each pending consumer-chain entry is its actual async Promise and suspended
+activation; awaited reactions and named bindings remain additive. Clearing a
+binding or resolver field does not delete that binding or field. The
+materialization source's `append` closure and captured text/counter scope remain
+live while reading. The preflight private branch never constructs the ordinary
+`bridgeOriginal`/`InputRetirement` read adapters, but retains the source's declared
+fields even where their values are undefined. Registry container objects and
+module bindings need explicit owner placement apart from their per-receipt
+entries. These identities are not an upper bound or a window-fit certificate.
+
+Cleanup adds actual FIRSTcancel and returned-unlock observations, the `ending`
+gate and its rejection-suppression follower, `finishReaderWork` and its forwarding
+follower, plus the source's existing finish/retire consumers. The preflight
+source also retains its sanitized `ended` follower. None can be subtracted merely
+because two fields refer to the same physical work. Native-void unlock omits
+its original/assimilation observer, but its already-created gate and state fields
+still count. Read cells are reusable only after their actual tail and payload
+consumption; cancellation/closed gates are independent.
+
+Private listener addition and removal now record their own acquisition-order
+origins. A removal throw sets UNKNOWN before error propagation and preserves the
+listener/source association. It cannot resolve private physical retirement or
+clear those aliases. Ordinary listener handling remains on its previous path.
+A read observer installation failure also sets the private logical read failure,
+even if its callback ran synchronously first. The accepted snapshot remains
+owned, but the consuming parser receives no successful read from that attempt.
+The original remains UNKNOWN independently of that logical failure.
+
+Six authored Workerd witnesses cover listener removal and read installation
+throws before/after the first callback for both adapters. They inspect actual
+private read completion, retain funding after fixture release, then terminate
+the isolated Worker before joining the pending test dispatch. They do not treat
+fixture release or isolate disposal as a production retirement receipt. All
+are UNRUN_CODE_ONLY_HOSTED.
+
+#### Current byte-boundary fixtures
+
+The generated private-entry fixture now wraps the actual snapshot/inspect
+read originals and checks their separate VALUE/DONE accesses, original receivers
+and argument counts. It records whether each next BYOB call receives the prior
+actual backing. Duplicate callbacks reenter from the result getter and repeat
+after first acceptance; their hostile payload getters must remain untouched.
+
+Public-reader fixtures shadow `buffer`, `byteLength` and `length`, then mutate
+the retained original view after the first observer returns. Separate EOF input
+observes VALUE once without inspecting its foreign storage. Scalar probes track
+aggregate live capture, post-seal admission, high water and handoff. A failed
+replacement fixture reserves competing COMMON bytes immediately before that
+actual replacement, then verifies zero destination copies and unchanged live/
+high-water fields. Its pressure release is registered before dispatch.
+
+The two listener-removal UNKNOWN cases now terminate their isolated Worker
+after checking the retained debit. They no longer wait for or invent a completed
+retirement report. Fixture release removes only the fixture obstruction; it does
+not acknowledge production UNKNOWN. These cases and the new byte-boundary
+witnesses are authored, **UNRUN_CODE_ONLY_HOSTED**.
+
+#### Private archive path and actual header operand
+
+Private archive preparation now proves the genuine request/sink/Env, current
+selection and accounting request ID before constructing the archive. The
+already-positive serializer reservation supplies its archive right; a distinct
+`archiveCredits` field records unused rights and an `archivePrepared` invocation
+field prevents a second preparation for the same attempt. These are additional
+CONTROL fields, not new funding or an allowance. A disabled-retention verdict
+creates no archive and reads no archive binding. For an enabled private archive,
+the actual bucket is captured once at the newly admitted preparation point;
+its write retains the existing later binding-identity check.
+
+The named lower private entry calls the same archive measurement, copier,
+`accountingChunks`, quoting and text/stream decision. It is called only after
+that fixed upper validation; ordinary `accountingArchive(value, gateway)` has no
+public selector. The private stream creates its native encoder when streaming
+is selected, uses one32768-byte backing per pull, and views that same backing
+for encoding and delivery. Native `encodeInto` returns its own two-field result;
+those fields, pending fragment, generator/next result, both view occurrences,
+encoder, controller, queue, call arguments and active scopes stay on the ticket.
+The private release clears its generator/encoder aliases after their final use;
+it does not retire queued bytes, FixedLengthStream, pipe, R2 put or cancellation.
+
+Removing the private byte branches and shared-helper entry wrappers restores
+the frozen ordinary archive function exactly:2617 bytes, SHA256
+`faa1449833ebe4afed068bd5e54ec2c526ef08deb72279ab747cdea17a1c4175`.
+This is a source inverse, not semantic execution. Four authored Node parity
+cases compare exact chunks across the32768-byte text boundary,4096-unit quoting,
+escaping and surrogate cases. A private Workerd case poisons DATA methods only
+during synchronous archive pulls, holds the actual R2 original observation,
+then verifies the stored content/usage reference after releasing it. All are
+UNRUN_CODE_ONLY_HOSTED.
+
+The public wrapper preserves its body getter/null-body return and both header
+getter positions. It measures the first genuine Headers operand, then captures
+late status, statusText and the exact second Headers operand in that order.
+Only primitive numeric status and primitive string statusText enter the private
+constructor. The current component is `32*displayedPairs + 4*headerUnits +
+4*statusTextUnits`; only the positive difference from the early header component
+is added before cloning. Fixed constructor/init/reader products remain additive.
+No intermediate Headers clone, pair history or header-count cap is introduced.
+
+The header ownership proof is scoped only to Workerd1.20261021.1 with the actual
+`2026-06-05` compatibility date and `enable_request_signal` flag. Both the
+production configuration and the native fixture use these settings. Its genuine
+Headers constructor path copies internal entries; its captured native `forEach`
+uses a fresh internal displayed-header snapshot. That opaque implementation
+temporary is outside the APP-owned logical inventory, not claimed allocation-free
+or physically bounded. The APP counter has two fields plus its object; callback
+arguments, aliases, init records and destination headers still count.
+
+After prospective funding, the same actual second Headers operand is measured
+again when a top-up occurred. Growth beyond the admitted component rejects before
+cloning; there is no retry loop or third response-header getter. Closed primitive
+numeric checks and the captured constructor leave no mutable scalar-helper call
+after that final measurement. Shrink keeps the larger paid component.
+
+Node24.22.1/Undici7.30.1 hostile or previously exposed Headers are unsupported for
+this ownership bound: mutable iterator/next dispatch and a poisoned, retained
+sorted-header cache defeat a universal native-measurement claim. Clean-intrinsic
+Node semantic regressions remain required. The authored hostile-iterator/header
+ownership witnesses target exact Workerd; all remain UNRUN_CODE_ONLY_HOSTED.
+
+The private index now measures header units through the captured native kernel,
+retaining its existing `16384 + 8*units` component. The weighted public clone and
+this unit-only phase use distinct named entries and the same fixed counter;
+neither constructs APP pair history. An already-enrolled response reader also
+has a per-request response association until its actual physical retirement.
+This adds a root field, WeakMap object and two cells per distinct live Response;
+counts preserve multiple readers of one Response. The index failure path uses
+that custody association rather than marking an owned locked body UNKNOWN.
+Foreign locked bodies retain the original UNKNOWN behavior. No cancellation,
+unlock, closed observation or lifetime join is skipped.
+
+Two focused Workerd witnesses are authored and UNRUN_CODE_ONLY_HOSTED: a status
+getter poisons the prototype `forEach` before the private index census, and a
+native constructor failure leaves the original body locked until its held
+returned unlock completes. The latter requires exact request retirement after
+release, including the one permanent shared reservation, with no fabricated
+UNKNOWN from the index catch.
+
+### Scope30 closed final metadata
+
+The three appended private surfaces are `correlation.ts`, `utils.ts` and
+`native-errors.ts`. Their complete original sources remain byte-exact after
+removing the added imports and private tails; the other four frozen production
+files remain outside the changes. Ordinary APIs, CORS constants, the background
+WeakMap and local-error brand map are not replaced.
+
+The private index now runs genuine local-error formatting before acquiring its
+one outer public reader. Same-body private copies inherit the genuine brand
+through captured native WeakMap operations; JSON shape never grants the brand.
+A replaced local body is enrolled for disposition first. The output-body index
+finds an existing inner reader and starts its own retirement; an unowned unlocked
+body instead receives one owned cancellation. Foreign locked bodies stay UNKNOWN.
+The index failure path also starts an enrolled reader's retirement when metadata
+admission fails before the outer wrapper exists. Merely recognizing its custody
+would leave its logical parent waiting for unconsumed input.
+
+The final sequence is native-error, public reader, request ID, background locator,
+version and CORS. A request-bound nine-field state plus its object records the exact
+Response, path, request ID, stage, active-stage flag, replaced-body disposition
+and three fixed metadata-copy slots.
+Wrong owners, mismatched inputs, concurrent stage use and completed-stage replay
+reject before stage factories. No Response-valued Promise, supplied funding
+callback, strategy or new reader implementation is introduced.
+
+Request ID uses native clone/set/has, retaining the provider-ID short circuit.
+Background recovery deletes first, then reads the same original Request's existing
+WeakMap entry with a native lookup. Its actual primitive locator is admitted
+before insertion, without a length cap. Version retains the first truthiness-only
+lookup and the second actual insertion-value lookup; only primitive strings,
+numbers, booleans, null and undefined can be converted. Object/function/symbol/
+bigint values fail before coercion. A string has its actual units;32 units cover
+standard non-string primitive conversion.
+
+CORS holds five references to the existing module's initial constant strings.
+Its ordinary object and helpers remain unchanged. The current allow list has36
+unique entries and712 joined units. The expose list has16 unique entries and399
+joined units; none starts with either eligible rate prefix. Native Headers names
+are unique and enumerated in the same native order. A fixed numeric census and
+string fold therefore preserve the original Set's output without APP pair arrays,
+per-name Set cells, mutable `keys`, or iterator dispatch. Duplicate Set-Cookie
+values remain separate through the pinned Workerd native clone.
+
+Private format selection reuses `nativeErrorFormat` under captured standard
+DATA-dispatch descriptor checks. Private envelope construction reuses
+`nativeErrorEnvelope`, supplies own primitive fields, removes prototypes only
+from its two fresh records, then uses captured native JSON serialization and
+UTF8 encoding. Ordinary envelopes/prototypes remain unchanged. These changes
+protect the final formatting operation; they do not repair the earlier initial
+error producer described below.
+
+#### Actual new component funding
+
+Let H=32P+4Q for displayed header pairs/units, T=statusText units, I=request-ID
+units, L=locator units, and U=error code+message+request-ID units. These are
+implemented additional component charges, not whole-request upper bounds.
+All earlier request/foreground/readers/status/upload/archive/accounting owners
+remain additive. Nothing here converts bytes into CONTROL capacity.
+
+| Component | Additional admitted bytes before destination factories |
+| --- | --- |
+| Metadata association/bootstrap |8192+2*pathUnits+2*I, plus two2048-byte origin reservations |
+| Native error |8192+3H+4T+14E+8U, E=6U+512; graph, escaped text, UTF8 and native body copies overlap |
+| Existing public wrapper/index |Their actual existing reader/header components and16384+8Q remain separate |
+| Request ID |8192+3H+4T+16*(I+48) |
+| Present background locator |8192+2H+4T+8*(headerNameUnits+L) |
+| Present version |8192+2H+4T+8*(N+23), N=string units or32 |
+| CORS |8192+3H+4T+12E+8*(C+192), E=399+n+R; C is the four other existing constant values' units |
+
+The CORS estimate covers both concatenation operands/result and the inserted
+header occurrence; n/R are measured eligible-name count/units, not new caps.
+After allocator calls, the exact same operand receives a final native census;
+growth beyond the admitted component fails before construction/insertion. There
+is no grow/retry loop. Request charges stay held through actual physical request
+retirement; helper return, body enqueue and overwritten variables do not refund
+these components. The initial error source remains a disqualifying omission.
+
+New dynamic CONTROL includes the metadata root field and ten-product state;
+one public-output WeakMap and its root field, two cells per current output,
+and output-stream plus metadata-Response fields per public reader. The private
+copy brand entries are removed only after their reader/request physical joins;
+the ordinary source brand is not deleted. The three fixed metadata-copy slots
+retain their Response/header overlaps until that boundary, without relying on GC. Each native Response projection is a
+five-field record plus object. Header counters are two-field records plus object;
+CORS scan/fold states are three-field records plus object. Descriptor objects,
+argument arrays, native invocation operands, clone initializers, encoder,
+context/details/envelope objects, active scopes and diagnostic failures remain
+on the original request's windows. These are inventory identities, not an
+operation/source/read/terminal128 or sync512 fit certificate.
+
+The static target also grows by the actual appended metadata function definitions,
+map/native-method references, initial CORS string references, format-descriptor
+references and import links. The119-product lower kernel is only one component;
+no old fixed count or unspent65536 allowance supplies execution capacity.
+
+Twenty-one Node cases and seven Workerd cases are authored, all
+UNRUN_CODE_ONLY_HOSTED: genuine/unbranded error parity, native envelopes,
+provider-ID branches, original-request locator ownership, large locators, both
+version accesses and primitive acceptance, replay/forged-owner rejection,
+inherited-toJSON exclusion from the final envelope, poisoned native-header
+methods, separate cookies/rate exposure, old-reader unlock held across replacement
+delivery, and stage-capacity refusal before destination factories. Fixture gates
+are registered before dispatch; injected capacity pressure is released immediately
+after the observed failed admission so it does not manufacture unrelated later
+accounting failures. No semantic runtime or hosted qualification occurred.
+
+#### Initial-error construction boundary at the scope30 checkpoint
+
+The following records the prior blocker. The scope31 amendment below supersedes
+the authority restriction, but does not establish complete error-source closure.
+
+`authenticateOwnedHttp` still constructs its missing-key401 through ordinary
+`errorResponse` in `proxy-auth.ts`. Private index correlation/not-found responses
+and both catch positions also use ordinary `errorResponse`/`caughtResponse`.
+Those call `utils.ts`'s ordinary `json`, which invokes `JSON.stringify` on a fresh
+ordinary error record before any final metadata association or admission.
+
+A modified accepted intake result can install an inherited `Object.prototype.toJSON`
+and still supply a bounded valid request. Missing authentication then reaches that
+ordinary401 producer. If the inherited hook returns an existing ASCII string of
+N units, native stringify constructs a new N+2-unit quoted result. For
+N=16777217, its UTF16 payload alone is33554438 bytes, already above32MiB, before
+Response/body construction and all other owners. This is source arithmetic;
+no huge fixture or semantic execution was performed. The later genuine brand
+and safe final envelope cannot retroactively admit the first serialization.
+
+There is also a pre-owner branch: failed `beginOwnedHttpRequest` admission creates
+its bounded error and the private index calls ordinary `caughtResponse` without
+a genuine request funder. A fix needs an explicit initial-error/catch construction
+contract and a source-supported pre-owner failure disposition. The current lease
+adds final metadata and private CORS, not a replacement ordinary JSON/error
+producer or an unfunded emergency503 arena. No such expansion was inferred.
+Whole DATA, every128 window, sync512 and the complete fixed target remain OPEN.
+
+
+### Scope31 initial errors and bootstrap — partial source construction
+
+The private entry now uses `tryBeginOwnedHttpRequest`. Failure of its first14336
+COMMON reservation returns a scalar before constructing an identity failure,
+application response, error brand, or fixed-custody claim. The private async entry
+throws the fixed `ownedHttpPlatformFailure` primitive to the platform. It promises
+no application503 JSON at this frontier. The platform-facing activation/promise
+and host failure handling are outside successfully admitted request ownership;
+this is not a native-heap or zero-allocation claim. Actual platform wire behavior
+still requires the exact pinned Workerd witness.
+
+A positive entry reservation prospectively adds13204 bytes for one fixed unknown
+error component: `8192 + 14*(6*35+128) + 8*35`. This is a component debit against the
+same COMMON counter, not a new allowance. Complete bootstrap construction is
+published only after its factories finish. Registry refusal and known unstarted
+bootstrap failure dispose the local reservation; uncertain disposal does not
+reset COMMON. No I/O has started at this boundary.
+
+`beginOwnedHttpError` checks the genuine owner, consumes remaining prepaid credit,
+and admits any positive increment before the same permanent65536 static claim
+and error factories. For primitive input units U, the current render component is
+`8192 + 14*(6*U+128) + 8*U`. U includes code, message, Retry-After and optional
+expiry. The escaped output bound is6U+128; envelope/header/brand/result records,
+source strings, serialized text and native byte construction overlap within this
+component. This formula is not a CONTROL certificate or whole-request upper.
+The new sticky terminal-refusal state forbids recursive error rendering after an
+admission/constructor failure. The existing request finalizer still runs.
+
+The named private error renderers use own-data, null-prototype records at every
+serialized level, captured JSON/Response commands, and the existing local-error
+brand. Expiry keeps its initial expiresAt/expired/active fields. Newly created
+private failure records are null-prototype and registered to the actual request; caught unknown reasons
+cannot acquire a status through `instanceof`. Existing genuine identity,
+preparation and accounting-admission brands remain recognized. Initial response
+brand references stay in the actual root inventory until physical retirement.
+Authentication missing-key/unknown-key/wrong-secret/lifecycle responses, private
+index catches, and private intake errors have migrated. Selection/shared
+preparation failure migration is not complete.
+
+The archive still admits its original graph with the ordinary profile before
+copying. Only its fresh private arrays lose their prototype before indexed own
+properties are populated; fresh private objects also have null prototypes. It
+uses the same recursion, gateway filtering, quoted chunks, ordering and text/stream
+threshold. Private text uses captured JSON.stringify. Ordinary copy.push,
+Object.defineProperty and ordinary text serialization remain in their original
+branches. No second admission walk or parser/profile change was introduced.
+
+New dynamic products include two initialized root scalars (error state and
+remaining credit), the lazily installed local-failure WeakSet and response-index
+array plus every actual entry, bootstrap registries/cap/completion/receipts,
+error records/headers/envelopes/brand cells, and all render/projection activations.
+Each is per request; neither null prototypes nor fixed function definitions make
+instances free. The static target must additionally enumerate bootstrap native
+references, the new named error commands/import links, the private local-brand
+entry, and the archive prototype/property/stringify captures. Their merged
+source-derived fixed ceiling and separate payload inventory remain OPEN.
+
+Eleven Node and three Workerd cases are authored for this partial change, all
+UNRUN_CODE_ONLY_HOSTED. They cover inherited Object/Array.toJSON, archive text and
+stream parity,401/403/402/503/Retry-After, expiry, genuine versus forged caught
+errors, scalar first-reservation refusal and nonrecursive terminal refusal.
+Raw grammar and generated fixture grammar are allowed source checks only.
+No complete candidate, semantic qualification or window-fit assertion follows.
+
+The scope32 and scope33 amendments authorize the outbound serialization seams
+and the private template/provider-auth constructor sites. Configuration uses one
+exact PreparationAdmission/current-command nonce/error-identity slot. Initial
+selection validates its existing body/preparation association; provider
+configuration validates its existing foreground command permit. The nonce starts
+before assertOperationConfiguration/configuredUpstream and remains live through
+final preparation. Ordinary preparation instances acquire no fields or entries.
+The lazy empty registry has permanent fixed custody after its first private
+claim; each live entry, four-field slot and nonce remains per request.
+
+The reached private provider-auth sites preserve their distinct400/503 outcomes.
+Missing-template and missing-credential messages read the provider ID once and
+admit text before interpolation and HttpError construction. The fixed AWS,
+unsupported-grant-operation, invalid-configuration, invalid-transform-body and
+missing-grant-template sites share that same slot. Nested configuration catches
+use a nonconsuming exact-match predicate. Only the matching upper command
+consumes the nonce/error identity, once, and finally clears the slot. The two
+MiniMax speech/music constructors and ordinary custom quota code remain outside
+this private activation.
+
+Private PreparationAdmission.read catches only the actual Env property access.
+Name validation precedes it; primitive/admission validation follows outside the
+catch. An opaque getter throw is not inspected or retained and does not acquire
+business provenance from status, code, message, class or identity alone. A new
+fixed configuration failure still requires the current empty slot and prospective
+funding; reentrant slot replacement or terminal refusal cannot overwrite it.
+Successful candidate order, first-truthy retention and AWS short circuits remain
+in the shared algorithm. The broad provider catch does not normalize unrelated
+later preparation failures.
+
+The narrow guarded-native route is implemented for fresh preflight/snapshot
+records, scalar ledger projections and dense primitive Venice/GMI route tuples.
+It checks captured Object/Array prototype own-property PRESENCE and exact parent
+links, then immediately calls captured stringify. It never retrieves a hook
+value. The fresh preflight records are frozen before their existing plan can
+expose them. Funding and binding work precedes this final guard. This guard does
+not establish graph passivity: arbitrary admitted graphs, sparse inherited
+indices, Proxies and non-enumerable own hooks are not covered by these producers.
+Grant fingerprints, complete admission and mapped errors still need their own
+complete source-occurrence proofs or bounded protected routes. Materialization
+now uses the protected route described below.
+
+Private reserve/dispatch/charge/settle now prepare the replacement scalar carrier
+inside the genuine sink command before serialization and namespace acquisition.
+The existing source/copy/text allowance remains charged; no copy-removal refund
+is asserted. Ingest and terminal capsules retain the bounded protected copy.
+Private copied objects and arrays use null prototypes and captured indexed
+properties; sparse holes become null without consulting inherited indices.
+Queues still receive graphs with unchanged one-argument send semantics. Only the
+two named queue-copy entries select the internal sealed-copy mode. Each fresh
+null-prototype child is completed and frozen before attachment; the root freezes
+before the operation's subject handoff. Ordinary, archive and synchronous capsule
+copies remain unsealed. Sender attempts to add hooks, replace values/prototypes
+or change array length are now unsupported mutations; a strict mutation throw
+follows the actual send failure and existing recovery lane. Source graphs remain
+unchanged. Copies stay owned through send, installation and callback tails;
+UNKNOWN holds them. Freeze supplies no DATA discount or external-alias retirement
+proof. Deferred-serialization fixtures keep that work inside the returned send.
+An enrolled operation whose copy fails before send now ends only its unstarted
+physical slot, even when logical failure diagnostics throw. The fixed preparation/
+rollback queue entry uses the same sealed copy commands and retains its subject
+on the void operation through actual observation/tails. Its independent intent or
+capsule copy component is admitted on the HTTP owner before operation/copy
+construction, additive to pending ledger cleanup. The void command now has one
+actual subject field (including its undefined nonqueue instances) and a named
+unstarted-abandon method; these are additional fixed products, not free packing.
+
+Pricing and media pending references remain variable CONTROL. Pricing preserves
+its original graph semantics and pays8 bytes per additional queued reference on
+the HTTP owner before append; its container is prepaid. The final synchronous
+clear ends that workspace phase. A later media queue is separately reserved with
+its actual overlapping locators, saved values, marker strings and output pieces.
+No recursive provider-copy frames, new depth/width cap, first-text pricing,
+replacer stringifier or conservative whole-profile maximum was introduced.
+
+The private marker transaction is restricted by the genuine current upload,
+selection/body and pricing association to ingress-derived roots and their known
+shallow replacements. It counts the next child/locator batch against the paid
+component before construction. Locator own-data writability is checked before
+mutation. UUID/marker construction and all admission precede the final captured
+prototype-hook guard; captured own-property writes and captured no-replacer
+stringify then run without callback, await or new funding. Every attempted write
+is restored in finally, including native construction failure. Uncertain restore
+marks the request UNKNOWN and prevents dispatch. Only output pieces escape into
+the fixed private stream factory. The64KiB/1MiB thresholds, original ordering,
+escaping, native coercions and byte/chunk/FixedLength behavior are retained.
+
+Before selection effects, possible OpenAI service-tier defaulting now funds one
+additional shallow root and the exact bounded serialization increase. The
+unchanged helper still runs at its original preliminary/resolved points. When it
+replaces the root, the genuine pricing association adopts that exact identity and
+increments its revision immediately. The wire-size delta is computed from the
+old null/undefined/auto member; source ancestry, cache context and tool coercions
+remain source based. Old roots retain their original funding. Additional actual
+workspace/root occurrences can affect capacity admission; no previous exact
+capacity-parity claim is made.
+
+The adopted private ingress construction amendment now captures native parse
+for the admitted small-body text. The expanded builder reuses captured array
+classification/property definition and captures Number. Private array attachment
+and parent-vector append define own indices with a null-prototype four-field
+descriptor; parent reads check nonempty length before indexing, and pop/discard
+truncate the genuine own length. Private maximum checks use primitive comparisons.
+Literal tokens select fixed null/true/false values instead of borrowing token.value.
+Ordinary branches and token grammar/profile remain unchanged. The pinned tokenizer
+is still trusted for token names/order/text; these captures do not qualify hostile
+tokenizer mutation as the same grammar.
+
+Private root acceptance and private pricing classification use captured
+array/own-property predicates. Remaining internal graph lookups follow the trusted
+runtime contract above. This is a stated supported-input boundary, not proof
+against arbitrary inherited getter injection or an authority obtained merely by
+passing an admission visitor.
+
+The added fixed construction inputs are native parse and array references in
+proxy, Number in json-body, and array/own-property references plus one fixed
+predicate in pricing. Existing archive array/property captures are reused.
+Per active definition, each null-prototype property descriptor has one container
+and four own fields. Array attachment and parent append descriptors do not
+simultaneously survive their captured native calls. The parent vector and every
+live cell remain CONTROL; this is no reduction of the current128 expanded depth
+or a substitute for a complete window table.
+
+Four additional Node cases and one Workerd case are authored for this amendment,
+UNRUN_CODE_ONLY_HOSTED. Existing parser fixtures now observe the captured sites
+instead of replacing the public constructor as an allocation witness. They cover
+literal-value injection, inherited index setters, mutable Number/graph methods,
+private parse exclusion and unchanged ordinary defineProperty failure. Existing
+duplicate/prototype/scalar/depth/discard witnesses remain. The shared-builder
+private-additions inverse matches the frozen function exactly; json-tokens is
+byte unchanged and the ordinary pricing suffix matches its frozen source.
+
+Authored additions for these seams are eleven configuration Node cases, eight
+immediate-JSON/protected-copy Node cases and five actual Workerd configuration
+cases, all UNRUN_CODE_ONLY_HOSTED. They cover fixed constructor identities,
+nonconsuming nested matching, wrong nonce/consume-twice, opaque Env throws,
+prototype hook presence without invocation/value borrowing, sparse inherited
+indices, fresh preflight sealing, and real configured-template failures with
+zero upstream/reservation effects. They are not complete flow or funding proof.
+Raw grammar passed for30 changed TypeScript files and nine changed JavaScript
+files; generated grammar passed for14 fixture sources. No application semantics
+were executed.
+
+The configuration component adds thirteen named definitions in provider-templates
+(begin/isPrivate/matches, the template wrapper, six provider-site wrappers, the
+closed site constructor, consume and end) and two in provider-auth (the private
+transport entry and shared transform body). Six captured registry/freeze/apply
+bindings and the registry binding/container are separate fixed products. The
+provider-auth private imports add eleven reference cells. All function targets,
+prototype/binding products, other imports and literal payload still require the
+merged fixed ledger; these counts are a source component, not a65536 fit claim.
+Per-call slot/error/message references, property operands, argument arrays,
+reentry guards and upper-consumer overlap remain active request products.
+
+The private flat census uses a trusted-init captured native character read
+through a fixed helper. One invocation-local one-element argument array is
+prepaid with the census activation and reused by updating its existing own index;
+there is no per-character allocation, global pool or cross-reentry sharing. The
+array contributes C=1/P=1/N=1 under the logical schedule, in addition to the fixed
+callee/helper operands and active calls. It ends only when that synchronous
+census returns. Ordinary census/parser code, numeric results, check positions and
+native grammar remain unchanged. An authored small fixture poisons the public
+character reader and verifies the upper/exact counts without invoking it.
+
+Current source component inventory (not a complete window qualification):
+
+| Phase | Actual products and custody |
+| --- | --- |
+| Pricing measurement | Work record21 own fields; temporary retained plan14 own fields at publication; paid pending-vector container and every live reference. Four new plan fields occur in both overlapping records. HTTP ExactBodyCharge grows by8 per additional queue reference before append; no foreground-lease transfer. |
+| Prepared media command | One three-field receipt (workspaceBytes, serializationBytes, restorePending), actual current upload/body/plan references and guard/return operands. Its activation and receipt remain fixed execution CONTROL. |
+| Media discovery/restore | Two variable workspace containers plus queued source references. Each four-field locator plus its slot has C=1/P=9/N=3 and19 field-name units; key/value string occurrences and the admitted marker occurrence are additional U. Native own-data descriptors, loops, calls and arguments stay fixed CONTROL. |
+| Private output construction | Saved source strings, skeleton/slices, marker strings, piece vector cells and entire encoded backings overlap under the existing serialization component. The fixed stream factory retains output pieces only; EOF/cancel does not retire the upload/pipe original. |
+| Tier revision | The possible extra root is funded before selection: container, every copied key/value cell, primitive occurrence and string units, plus default-member and serialization delta. Old roots are not refunded. Current body identity/revision changes in the same synchronous caller interval after the unchanged helper. |
+| Queue sealing | Internal mode reuses the existing copy parameter. At most nine bounded copy activations overlap; one native freeze invocation/callee/argument/returned alias is additional fixed CONTROL. No new intrinsic, graph, walk, registry or DATA reduction. |
+| Census | One fresh one-element invocation-local argument vector (C=1/P=1/N=1); helper/callee/text/index/vector references and native-call operands remain fixed CONTROL. No per-character vector factory. |
+
+New fixed targets include the named tier/media admission commands, private media
+append/locator/transport helpers, native encode and character-read captures and
+helpers, upload restoration refusal and the unstarted terminal command. Existing
+freeze and property-definition captures are reused but their call sites still
+contribute active products. Shared names, literals, imports, scopes, definitions
+and guard declarations must join the actual65536 ledger; this table is not a
+blanket fixed-source allowance or a whole DATA/fixed-window fit claim.
+
+Authored queue fixtures cover sealed root/nested/array mutations, ordinary and
+archive parity, held deferred serialization through the actual sender, unchanged
+one-argument handoff and same-ID ingest recovery for strict/undefined/shared
+failure. A Workerd fixture retains the deferred work inside the returned send.
+Media fixtures cover threshold/wire parity, source restoration on native JSON and
+partial-install failures, preappend refusal and prototype-hook rejection. Native
+wide513/deep513 and Infinity/array-tool fixtures retain the original pricing
+semantics. All remain UNRUN_CODE_ONLY_HOSTED.
+
+The private materialization request now funds its eight-field outer carrier
+before construction, retaining grant/legacy under their existing foreground
+owner. The actual binding lookup keeps its position before the complete-profile
+admission and serialization. Existing identity-plan counts then prospectively
+fund the independent copied graph plus text/native wire:
+`8*(values+2*members+entries)+2*units+2*text+bytes` on the genuine HTTP owner.
+Grant and legacy occurrences count separately in the copy, even when the source
+aliases are identical. No foreground credit is transferred or reused. The plan
+and counters leave scope before protected construction; the request/text locals
+clear at their synchronous last use while command funding continues through the
+original acquisition and source cleanup.
+
+This uses the existing private copy mechanism with complete identity admission,
+not the smaller accounting profile. Callable/symbol object properties are omitted
+and array elements become null at serialization, preserving identity semantics
+without retaining executable leaves. Ordinary copy/identityJson branches stay
+unchanged. The complete profile's existing depth24 bounds these copy activations;
+that bound still needs fixed-window placement with their descriptors/arguments.
+It is not part of the paid variable-workspace exception. Two lower semantic
+fixtures and the genuine wrong-permit admission witness are authored and unrun.
+
+Whole DATA, operation/source/read/terminal128 each, sync512, separately paid
+variable traversal CONTROL and the complete permanent65536 fixed inventory
+remain OPEN. The retained checkout is an active
+dirty source draft, not a qualified immutable candidate.
+
+### Private continuation receipt — source-only partial
+
+Full HTTP admission now has a distinct active continuation registration. The
+existing continuation map must match its permit, destination owner, HTTP cap,
+FULL ticket and captured authority namespace/binding before the permit is
+consumed. The HTTP command binds the current request, current enrolled upload
+attempt (including the pre-upload state), signal and fixed destination. It does
+not reuse the retired secret-preflight registration or read ACCESS_CONTROL again.
+
+The HTTP owner prospectively reserves 4,096 logical bytes for this fixed command
+component and 20 ordered origins, then enrolls its physical child. This is a
+component reservation, not a fixed-window fit certificate. The source budget
+and command are created before permit consumption. The already-paid lower source
+factory runs after outgoing serialization has left the ticket's source window,
+but before namespace/get/fetch effects. This sequencing avoids overlapping the
+serialization and source-window claims. Unstarted failure abandons only this
+prepared child; a started abort cannot use that path.
+
+The actual fetch observer adopts its first eligible Response directly. Its
+invocation return is ignored; duplicate values never inspect the retired parent
+or response. Callback and installation completion precede consumption.
+Installation failure remains UNKNOWN, including after a synchronous callback.
+A first late response remains owned and is disposed through the same registered
+reader. UNKNOWN keeps the HTTP child, credential ticket, outgoing body/init,
+source and staged inbound graph; logical completion is not a retirement receipt.
+
+The existing reader now accepts a closed preflight/continuation kind. Continuation
+uses the complete profile and continuation envelope, preserving native grammar,
+wire/cumulative counters, private503 classification and ordinary authority error.
+Envelope closing and admission happen at the existing pre-cleanup point. Only
+after reader retirement and successful reporting does the fixed destination
+receive the staged envelope and source budget; its completion Promise is VOID.
+The caller then performs the existing missing-reply and abort checks, advances
+all seven counters once, assigns admission and creates the opaque handle. A null
+body reaches the same post-cleanup missing-reply check. No Retry-After read was
+added. Ordinary consumeAdmissionBridge and its callback route remain unchanged.
+
+Returned unlock work is observed directly with void handlers and discarded
+observer return. Non-thenable return values use a native VOID normalization turn;
+no fulfilled Promise adopts their arbitrary payload. Undefined retains the
+existing immediate no-work branch. Independent closed, FIRSTcancel, read,
+installation and callback-tail obligations remain joined.
+
+Inventory additions are explicit: one optional request registration; a
+16-field acquisition command (including its optional receipt/init and
+current request/attempt references); one seven-counter source budget; two
+optional destination fields; two added private reader-state fields for kind and
+destination; receipt/map cells, VOID operations/resolvers, bound handlers,
+installation calls/arguments, active operands and ordered origin records. The
+existing source/read/terminal products remain charged. The result union reuses
+the existing slot; it does not release the staged graph. Shared definitions and
+imports join the permanent65,536 target. Actual fixed-window and COMMON overlap
+tables remain OPEN; no additional arena or foreground credit is available.
+
+Authored Node witnesses use the real authority/SQLite producer through genuine
+HTTP authentication. Workerd witnesses now include full admission for held
+returned unlock, independent closed and read-installation uncertainty; scalar
+observers distinguish staging, delivery, counter advancement and handle creation.
+Held/undefined/hostile observer-return, duplicate-after-retirement and wrong
+permit cases are authored. The late-FIRST-after-abort witness holds the actual
+FIRSTcancel return independently of arrival: no read, one cancel, no unlock or
+logical settlement before its release, then one actual unlock. A hostile second
+Response is ignored both during that cleanup and after retirement without a
+charge change. Fixture releases are registered before dispatch and repeated in
+finally. All semantic execution remains UNRUN_CODE_ONLY_HOSTED.
+
+The latest partial source additionally protects materialization and full
+admission serialization using the existing complete identity profile. The
+HTTP association follows the existing proof/continuation owner and clears after
+its operation. Materialization keeps the binding lookup before serialization.
+Grant fingerprints use the same protected copy mechanism, admitting structured
+identity leaves rather than imposing a new scalar-only profile. One retained
+`fingerprintBytes` high-water and each invocation's plan/tuple/copy/text products
+join the revalidation inventory; no clearing of its slot refunds source graphs.
+
+The private normalizer now captures native parsing and guards its fixed mapped
+error envelope immediately before native serialization. Source representations
+receive a conservative actual-text-length component before parsing: two graph
+uppers of 18L, two split/line carriers each at most18L+24, outer/inner line and
+join string occurrences, and fixed records fit within 128L+8192 logical bytes.
+These are representation bounds, not new input limits or a fixed-window proof.
+Mapped output separately admits32L plus six units per external string unit and
+512 fixed serialized units, together with header/status/text/byte overlap. The
+HTTP-owned normalization high-water remains held through physical retirement.
+Native error text is preserved; admission failures escape the detail fallback.
+The complete per-phase inventory remains OPEN.
+
+Superseded initial selection errors now enroll actual cancellation once, while
+the root retains their Response and brand references through its physical join.
+The new disposal set is a once marker, not evidence of body retirement. Authored
+identity-copy, deep-error, hook and held-disposal witnesses remain UNRUN.
+
+
+### Registered generic normalizer reader — source-only partial
+
+The generic HTTP normalizer now enrolls an opaque child bound to the current
+request, upload attempt, operation and source Response before reader acquisition.
+It captures the body at the existing getReader expression. The child retains
+that association after the temporary normalizingResponse field clears. Its
+existing HTTP ExactBodyCharge may grow after parent seal for this live child;
+new child enrollment remains forbidden. The foreground credential32MiB lease
+is a separate additive owner, never the source of this capture allowance.
+
+The fixed reader uses VOID readiness and the existing fresh observation cells.
+Actual read, FIRSTcancel, returned unlock, independent closed and pull originals
+keep their own installation/tail joins. Observer invocation returns carry no
+meaning. Late first callbacks remain eligible after logical abort or UNKNOWN;
+installation throws remain UNKNOWN even after synchronous acceptance. The
+ordinary completion prefix and ordinary normalizer branches remain unchanged.
+
+Three private projections preserve their distinct EOF semantics:
+
+| Role | Actual result projection | Processing limit |
+|---|---|---|
+| LIMITED | DONE truthiness, VALUE once; EOF VALUE discarded without byte inspection |64KiB cumulative bytes; over-limit returns empty details without snapshot or decoder flush |
+| SNIFF | DONE truthiness, VALUE once; truthy nonempty bytes processed even at EOF |8KiB inspected; the whole accepted crossing chunk is retained |
+| REPLAY | Owned prefix/crossing first, then the same reader; DONE then VALUE once; EOF VALUE ignored |No new chunk, backing, empty-read, read-count or total-byte limit |
+
+Private SNIFF history is one8KiB coalesced prefix plus its full crossing
+snapshot. Replay preserves every byte in order without prefix duplication.
+This intentionally changes private enqueue segmentation/count; it does not
+promise ordinary chunk partitioning. Real source backing and snapshots are
+admitted before copying. Intrinsic fixed-ArrayBuffer/Uint8Array proofs and the
+native byte kernel exclude spoofed public buffer/length properties and mutable
+copy/view methods. Nonfatal UTF8/BOM/flush behavior remains unchanged.
+
+Inner enqueue is not an external custody transfer. The normalizer retains the
+output and an exact snapshot registry association. A same-request public reader
+acknowledges that identity only after it has funded the actual backing plus its
+new snapshot and completed the copy. The normalizer clears its output aliases
+only after original read/pull bookkeeping tails have joined. An unproved output
+handoff prevents reuse and holds UNKNOWN. Component high-waters remain charged
+until final physical request retirement. Source, decoder/text, prefix/crossing,
+header, output and downstream capture obligations remain additive.
+
+Cleanup passes exactly one actual reason argument to FIRSTcancel, then starts
+unlock immediately. The reason is held only for that synchronous invocation.
+Attempting unlock even when cancel invocation/installation throws is an explicit
+private repair. Replay EOF starts unlock only. Mapped status/prefix delivery does
+not wait for physical retirement; known rejection statuses survive bounded
+transport failures, while genuine admission failures escape that fallback.
+
+The added source component includes the empty cap, registry entry, twelve
+prospective child fields plus the replay-Response association, output-map key/value cells, ten role fields, the
+existing driver and VOID retirement promise/resolver, independent observation
+cells/bindings, read readiness, replay stream/controller/pull products and all
+active call operands. The data and capture high-waters are distinct components;
+neither is a fixed-window proof. Fixed definitions/import references join the
+same65536 static target. Complete DATA/COMMON, individual128/sync512 and static
+inventories remain OPEN. The payload-workspace exception does not cover these
+asynchronous products.
+
+Authored Node/base and actual Workerd fixtures cover wrong associations before
+effects, DONE/VALUE truthiness/order, ignored EOF storage,64KiB limit/crossing,
+8KiB comments/cutoff, more than148 tiny/empty reads, whole crossing and backing
+above2MiB, exact replay bytes, first-callback snapshots, nonvoid unlock values,
+one-argument cancel and unlock after synchronous throw, held unlock in both
+orders, independent closed, and prompt delivery while cleanup remains held.
+These fixtures remain UNRUN_CODE_ONLY_HOSTED. Grammar checks are not semantics.
+
+### Registered generic usage receiver — source-only partial
+
+The generic Unified Chat branch now creates its own registered HTTP usage child.
+It binds the current request, upload attempt, operation, exact input Response,
+selected format, tariff, validated usage, usage context and accounting command.
+Validation, fixed funding, origin reservations and the shared claim precede
+reader, decoder, stream, listener and observation factories. The bodyless branch
+performs no actual getReader/read or decoder construction. Ordinary observeUsage
+and InputRetirement remain unchanged; no codec capability authorizes this path.
+
+The private snapshot contract intentionally differs from ordinary repeated VALUE
+reads. FIRST checks the genuine finished state before touching the raw result.
+A finished-late result is discarded without DONE, VALUE or metadata inspection.
+Otherwise DONE is read once and converted to truthiness. Truthy EOF never reads
+VALUE. Non-EOF reads VALUE once, admits its real fixed backing plus a new snapshot,
+and copies synchronously. The same snapshot supplies inspection and delivery.
+After the VOID readiness wait, finished is checked again before usage acceptance.
+Snapshot capture itself is not accounting evidence. Other reader roles retain
+all previously adopted late-FIRST and EOF rules.
+
+The existing accepted-usage framer, census, native grammar, accumulator and token
+extraction are shared through fixed dispatch to the registered generic receiver.
+This is not another parser or a caller-supplied consumer strategy. Generic finish
+cancels/stops the operation before terminal inspection; codec finish retains its
+separate ordering. Validated usage takes precedence. The current Unified Chat
+format gate excludes Responses/Google continuation, message price guards and
+non-Chat receipt inspectors; these ordinary branches are not activated for proof.
+Request-cost receipts already supplied by genuine validated usage are preserved.
+The existing2MiB JSON inspection limit still only stops inspection: a larger
+chunk is delivered with conservative usage. It is not a backing or delivery cap.
+
+Two registered handoffs are distinct. Normalizer offers match exact bytes,
+request, attempt, operation and replay Response, and are acknowledged only after
+the usage reader has funded and copied that actual operand. Usage offers match
+the exact native output stream and snapshot; only the associated outer public
+reader acknowledges them after its own prospective funding and successful copy.
+Equal bytes, replacement views and rechunking are not identity proof. Enqueue,
+EOF and publication do not clear the offers. Read/pull tails and private aliases
+must also end before high-water reuse. Unproved handoffs retain their owners.
+Cancellation with an unacknowledged offer keeps UNKNOWN custody while original
+cleanup proceeds; cancellation cannot supply the missing transfer receipt.
+
+The accepted DTO moves directly to the genuine invocation's accounting slot.
+A VOID readiness promise then permits the fixed accounting command to consume
+that slot once using the existing reservation, event ID, status and close order.
+Accounting starts at logical completion. It does not await physical retirement
+of the usage reader. The reader's physical join stays under the HTTP sink owner.
+
+Generic cleanup is reason-preserving and delayed. FIRSTcancel receives one
+actual argument before waiting; raw reasons are not stored in owner fields.
+Actual read and FIRSTcancel join before one unlock attempt. EOF starts no cancel.
+Returned unlock, independent closed, active pull, observer installation/tails and
+listener removal remain separate obligations. Logical output/accounting can
+finish while those originals remain held. Installation uncertainty remains
+UNKNOWN, including callback-then-throw. The generic receiver reserves separate
+installation-origin cells so an accepted rejection and subsequent installation
+throw cannot overwrite one another. Cleanup does not rewrite a delivered result.
+
+Capture and inspection high-waters, plus the persistent publication header
+component, are separate additive charges on the same HTTP ExactBodyCharge. Header clone bytes cannot be reused
+by later parsing while those headers remain live. The existing live child may
+grow after parent seal; it cannot enroll a new child or use the credential32MiB
+lease. The foreground lease, intake/source, cache/generation, traversal workspace,
+normalizer, public readers, retention/accounting and permanent65536 static claim
+remain separate COMMON96MiB obligations. No numerical fit follows from this layout.
+
+The component inventory must include the child/cap and registry cells, all parent
+and selected-input references, decoder/framer/evidence/result fields, current
+snapshots and offers, VOID readiness and retirement promises/resolvers, original
+observation cells and bindings, active pull/listener/stream/controller products,
+accounting continuations and all active operands. Fixed operation/source/read/
+terminal128 and sync512 checks remain independent. These asynchronous owners do
+not use the variable payload-traversal exception. Complete DATA, fixed execution
+and static-custody inventories remain OPEN.
+
+Authored focused fixtures cover the one-VALUE/EOF rules, finished-late untouched
+results, mutation after capture, larger short-view backings, shared JSON/SSE
+semantics and overflow, exact normalizer/usage/public transfers, wrong receivers,
+logical accounting before held unlock/closed, and delayed unlock after read and
+FIRSTcancel in both unlock orderings. Separate witnesses retain unmatched offers
+after cancellation and distinguish read rejection from installation failure.
+All semantics remain UNRUN_CODE_ONLY_HOSTED.
+
+### Bounded generic delivery I/O inventory
+
+Carry these source blocks and their actual final hashes into the immutable packet.
+This is the reached generic-delivery map, not whole-source or numerical qualification.
+
+| Boundary | Actual owner and original joins | Logical consumer |
+|---|---|---|
+| Inner owned response wrapper | Existing OwnedPublicReader, original read/FIRSTcancel/unlock/closed/pull/install tails | Normalizer or generic usage input |
+| Generic LIMITED/SNIFF/REPLAY | Registered normalization child and OwnedReaderDriver; immediate unlock policy | Bounded details or replay, with no result-valued read Promise |
+| Generic accepted usage | Registered usage child and GenericUsageReader; delayed unlock policy | Shared accepted-byte inspection, then exact output offer |
+| Usage accounting | Existing invocation destination plus fixed usage accounting command | VOID readiness; accepted DTO consumed once at logical completion |
+| Outer metadata/public delivery | Existing registered metadata commands and public reader | Funded snapshot and qualified native public handoff |
+| Owned discard | Existing enrolled disposition commands | Actual cleanup, independently joined |
+
+No private generic call falls through ordinary observeUsage or InputRetirement.
+The ordinary APIs and their source bodies remain available to ordinary callers.
+Publication, hosted semantics and complete fit remain unqualified.
+
+### Closed proxy publication and codec usage construction
+
+Both generic and codec usage now construct their actual delivery Response through
+closed native factory commands. The codec command replaces the formerly global
+Response constructor; the generic bodyless command binds its exact existing
+Response and null body without acquiring a reader. Each command validates the
+current HTTP request, preparation/upload attempt, operation, registered reader
+and fixed usage producer before it creates the publication association. This is
+not a Response-shape registry, arbitrary formatter or accounting-result receipt.
+
+The retained association has nine fields, including undefined fields: source,
+output, body, attempt, operation, phase, admittedBytes, sourceHeaders and
+sourceHeaderBytes. RequestOwner has one publication reference. Codec usage adds
+one publishingBody reference; it clears with the actual usage owner. The record
+holds the produced source and final output through request physical retirement,
+including independently held readers, accounting and upload work. UNKNOWN keeps
+these fields and their funding. Construction or field clearing is not retirement.
+
+The codec constructor preserves content-type/mode/provisional/initialization,
+stream creation and listener order. Both producers read status, statusText and
+headers once at the original constructor argument positions. The exact Headers
+operand is measured with the captured native counter, its persistent component
+is admitted, and the same operand is remeasured immediately before captured
+native construction. Header bytes are not an accepted-frame/inspection component
+that a subsequent parser call can reuse. These changed-body wrappers infer no
+new local-error brand.
+
+The final proxy command reads selection.provider.id once before the source
+headers getter. It funds and clones the actual Headers operand, removes the
+fourteen original names in the same order, then inserts the provider ID. Cache
+state precedes credential timing; timing spelling, numeric formatting, grant
+lane, optional failover and retention decisions retain their original order.
+The pricing diagnostic keeps its conditional status read and remains outside
+the selected Unified Chat gate. Ordinary proxyResponseHeaders and the ordinary
+publication tail are unchanged.
+
+Both final body getters execute. The first result must match the independently
+bound producer body before publicBody is assigned. The second body getter is
+followed by status and statusText; the closed final constructor again requires
+the same bound body. A substituted foreign body is neither adopted nor canceled.
+The constructor receives a null-prototype initializer. Genuine local-error
+inheritance occurs only after successful construction with that same body, using
+the existing WeakMap brand. Output association completes before success is marked.
+
+All source-getter effects and funding calls precede the final native censuses.
+The retained source Headers and private output Headers must still fit their
+admitted components. Growth during a funding call, or late source-header growth
+from status getters, refuses construction without retry. Shrink retains the
+larger debit. No mutable header method, global constructor, extra response getter,
+coercion or callback occurs between final measurement and native construction.
+Failure uses the existing proxy finally to start genuine codec/generic cleanup;
+it neither waits for encompassing completion nor duplicates accounting.
+
+The current conservative DATA schedule is additive on the HTTP ExactBodyCharge:
+
+| Phase | Prospective component, with H = 32P + 4U |
+|---|---|
+| Usage producer | 8192 + 3H + 6×actual statusText units; bodyless uses its fixed8192 association component |
+| Provider input | 8192 + 8×actual provider-ID units, before the headers getter |
+| Header clone and inserted metadata | 2H + 2×(12×238 + 4×32 + 2×6) + 4×(256 + provider-ID units + 238 + 12 + 1 + 21) + 32×6 + 8192 |
+| Final constructor | 2×actual output H + 6×actual final statusText units + 8192 |
+
+The twelve timing occurrences conservatively include prefix, optional-fragment
+and final-string products; numeric and enum occurrences are additional. The256
+units cover the fixed inserted header names, not an input limit. Provider IDs
+and status text have actual-length admission. These rows do not certify complete
+DATA or fixed-window fit. Existing inspection/capture, preparation, source,
+foreground credentials, retained generations, accounting and static custody
+remain separate simultaneous obligations under COMMON96MiB. Extra real metadata
+storage may change capacity admission; no new quota or foreground credit exists.
+
+Fixed inventory additions include the producer factory commands, bodyless bind,
+publication preparation/validation/admission commands, header clone/body-check/
+final-constructor commands, proxy context/publication functions and codec producer
+matchers. Count their import cells, invocation frames, arguments, census records,
+native callback operands, deletion-index operands, timing strings, native header
+calls, Response initializer and brand/output references. The fourteen-name array
+and literal payload join the permanent65536 shared target. Each fixed128 window
+and sync512 remains independently unqualified; this is not payload workspace.
+
+Authored clean Node regressions and exact Workerd witnesses cover wrong owners
+before getters/factories, both producers and bodyless binding, global constructor
+and header-method/iterator poisoning, exact getter order, Unicode/case/duplicate
+headers, all fourteen removals, timing, long status text, growth/shrink refusal,
+foreign second-body substitution, and prompt failure while unlock is held.
+Only the exact pinned Workerd1.20261021.1 configuration qualifies hostile Headers
+history; clean Node tests are semantic regressions. All semantics remain
+UNRUN_CODE_ONLY_HOSTED. Complete DATA, fixed/variable CONTROL and static tables
+remain OPEN for the immutable-candidate source qualification route.
+
+
+### Failed-publication accounting handoff — source-only integration
+
+The current draft prepares one request-owned VOID waiter and registration before
+budget effects. Its explicit PREPARED/ARMED/READY/CLAIMED/TERMINAL_OWNED/SETTLED
+state distinguishes a claim from terminal adoption. Publication has an independent
+settled/failure bit. A bodyless READY result cannot run before publication settles;
+a later metadata failure does not erase its accepted usage. Producer status facts
+are captured at existing source reads, so failure accounting needs neither a new
+Response nor another call to a throwing metadata getter. Codec and generic
+abandonment stop physical delivery without consuming the logical destination.
+
+The terminal ACK and serialization component is now admitted at accounting
+preparation for zero legs, then topped up at pure plan admission for the actual
+leg count. Its existing formula is `(L+1)*(ACK_DATA+4096+12*originBytes) +
+2*L*intentSerializationData + 2*capsuleSerializationData`. Terminal startup consumes
+that request-bound right once, including while an independent reader holds
+UNKNOWN. Preparation, installation and start failures have separate prepaid
+origins. Terminal adoption precedes actual operation startup; started lanes cannot
+be replaced by another settlement. The request-owned waiter, registration,
+readiness/resolver, phase/failure bits, status/dispatched facts and retained
+outcome are additional fixed CONTROL, not traversal workspace. The draft adds
+4096 bytes for this receiver component; this does not establish fixed-window fit.
+All original source, reader, upload, archive, event and terminal overlaps remain
+additive. Detailed merged inventories and all semantics remain OPEN/UNRUN.
+
+### Prepaid reserve, dispatch and rollback sequence — source-only integration
+
+Pure plan admission now binds the complete plan, current request/accounting/upload
+association and each ordinal's original request ID and physical ledger name.
+Distinct ordinals remain distinct even when both strings match. A single physical
+plan child is enrolled before the first reserve; its launch sentinel and every
+started command keep it live through actual observation and cleanup. Partial leg
+registration failure closes only the unstarted child and removes its registrations.
+
+The actual HTTP `ExactBodyCharge` prospectively carries the following existing
+components under COMMON. These are independent of the credential foreground
+32 MiB lease and of final-terminal backing:
+
+| Component | Existing source formula | Logical bytes |
+| --- | --- | ---: |
+| Intent serialization, I | `ownedIntentSerializationData` | 178160 |
+| ACK DATA, A | `ownedLedgerAckData` | 1098240 |
+| One origin, O | `sinkOriginBytes` | 2048 |
+| Ledger command, D | `I + A + 4096 + 15*O` | 1311216 |
+| Queue recovery, Q | `I + O` | 180208 |
+| Reserve plus exclusive future branch | `L*D + max(L*D, max(0,L-1)*(D+Q))` | 10489728 at L=4 |
+
+The four-leg rollback branch alone is 4474272 bytes. Its queue component overlaps
+the failed ledger's independently held cancellation/unlock/closed work. Reserve
+owners and final-terminal owners remain additive. The branch maximum is usable
+only because the irreversible dispatch/rollback latch follows all logical reserve
+results and precedes every branch command. No reserve or terminal component is
+borrowed for that maximum. Closing the plan does not release or reacquire its
+component; existing ACK DATA retirement still requires that ACK's actual joins.
+
+The new fixed plan representation includes ten sequence fields, its leg vector,
+ten fields per leg, an opaque cap and WeakMap association per ordinal, and the
+later four-field sinks carrier. Claim bits are still fixed execution CONTROL;
+they are not payload traversal workspace. The source adds a prospective metadata
+schedule of `8*(26+9+64+32*L)+2*U`, where U includes the named field strings and
+actual retained ledger-name/ID occurrences. The 64-product construction row is a
+local debit, not a proof that the synchronous window fits. Active command frames,
+argument vectors, Promise/reaction products, allSettled carriers, ACK readers and
+all other overlapping owners still need the merged fixed-window inventory.
+
+Reserve attempts claim before serialization/acquisition. Only actual allowed:true
+fulfillments bind a returned reservation carrier to that ordinal. Partial failure
+authorizes zero-cost settlement of those carriers only; a lost or malformed ACK
+creates no rollback eligibility. A logical settlement failure authorizes that
+ordinal's sealed queue copy once. Named reserve/dispatch/rollback/queue commands
+consume these prepaid positions without fresh COMMON admission. Recovery rights
+remain usable under independent UNKNOWN; forward work retains its existing
+guards. Callback failure never restores a spent claim. Successful full reservation
+chooses dispatch; later dispatch failure uses the separate final terminal.
+
+Authored Node-clean and exact-Workerd fixtures cover all four denial ordinals,
+COMMON exhaustion after FIRST accepted reserve, concurrent rollback, held ledger
+cancel and deferred sealed-copy send, malformed/lost/undefined/shared outcomes,
+404/409 recovery, pre-admission refusal, dispatch-only failure, duplicate IDs and
+ordinal replay rejection. Node fixtures also cover zero/single-leg plans and
+forward dispatch under pressure. These fixtures are UNRUN_CODE_ONLY_HOSTED;
+their source checks are not numerical fit or runtime qualification.
+
+### Early terminal shell and atomic adoption
+
+The terminal no longer rereads Env bindings. Each original private accounting
+factory still evaluates `accountingSinks(env)` in BUDGET_LEDGER, USAGE_LEDGER,
+USAGE_QUEUE order, after immutable facts and before context registration/fork
+arguments. Getter failure still short-circuits that factory. Preparation and
+final factories remain separate. The exact registry-held sinks carrier is the
+provenance of the later namespace and queue operations; their actual method
+lookups, receivers, arguments and call counts stay at invocation time.
+
+A single request terminal shell now exists before any budget obligation. The
+15-position operation array, result/retirement Promises, resolvers and fixed
+scalar fields are constructed under the existing initial terminal backing and
+positive fixed funding. Constructor failure leaves zero accounting factory
+credits, so no retry can manufacture another shell. The initial origin admission
+increases from38 to41: primary preparation, fallback, adoption, close, installation
+and start each have distinct prepaid ordinals. The three added origins consume
+6144 bytes through the same HTTP charge, not another ticket or arena.
+
+The shell is unbound until the entire current HTTP/root/sink/accounting/carrier/
+custody/event/reservation/leg-bound tuple and logical claim are validated. Foreign
+carriers and reservations fail identity checks before their properties are read.
+The old preparation branch additionally requires that no final handoff exists.
+Only then does one synchronous internal assignment sequence bind the shell and
+commit root, accounting and handoff adoption. There is no Env getter, factory,
+cleanup, await or external callback in that sequence. Namespace acquisition
+cannot reenter an unclaimed terminal: the irreversible LAUNCHING state precedes
+`start()` itself.
+
+Plan close, retirement registration and terminal start run in that order after
+adoption, under independent guards. A close or registration failure does not
+suppress the same adopted launch. Their diagnostics retain distinct origin and
+undefined-presence facts; diagnostic failure holds UNKNOWN instead of masking
+another required step. A start failure marks the existing terminal unsuccessful
+before its logical result completes, without another event or settlement.
+
+The first accounting receipt calculation retains its original outcome and
+reservation before the existing conservative fallback. A failed fallback has a
+separate origin even when both reasons are undefined or identical. If neither
+calculation succeeds, the prepaid shell resolves false as FAILED_PRE_ADOPTION.
+It is not ADOPTED or CONSUMED, creates no monetary event or ledger operation, and
+retains the original evidence until actual request retirement. A genuine claim
+that fails validation follows the same honest failed-attempt disposition without
+inventing a fallback event. Generic usage has a separate failed disposition:
+its physical reader must still join before its child can retire; the request
+keeps the evidence until the enclosing physical retirement. UNKNOWN keeps all
+remaining custody and funding.
+
+Earlier shell overlap is explicit. It includes19 instance fields (including the
+three parent references), the operation array and its15 slots, two Promises and
+their two executor/resolver pairs, constructor arguments and active frames. The new phase
+field, three request origin fields and retained accounting-outcome field remain
+fixed CONTROL. Fourteen added fixed function/method definitions and ten added
+import references are a source delta, not a complete shared65536 ledger. Calls,
+argument vectors, receipt/fallback carriers, six distinct failure paths and
+post-adoption registration overlap remain part of the independent128/sync512
+windows. None is paid traversal workspace. No whole-fit conclusion follows from
+the finite terminal formula or this component list.
+
+Authored clean-Node and exact-Workerd witnesses cover factory getter order and
+partial failure, bindings A with hostile later getters/B values, wrong tuples
+and reentrant replay, early shell failure, one fallback and two undefined receipt
+failures, source evidence at physical cleanup, close/installation failure followed
+by the same launch, diagnostic failure, and late start failure without replay.
+They run through the actual private entry. UNKNOWN cases use an isolated Node
+process or Workerd isolate: caller/body roots and tracked actual native operations
+join, while the explicitly unresolved retirement stays funded until isolate end.
+Isolate disposal is not reported as private physical retirement or a refund.
+
+This source checkpoint has no remaining known implementation blocker from the
+adopted scope33 amendments. It is eligible only for ROOT's immutable-source review
+and possible candidate-specific test-only draft lease. Whole source inventories,
+exact hosted9CI/bothCodeQL/38-client plus aggregate/new-fixture qualification and
+normal readiness remain outstanding. No runtime, publication, deployment or
+landing authority is implied by CODE_COMPLETE.
+
+### CODE_COMPLETE33 source packet
+
+The source-only gate checks raw syntax in all33 changed production modules and
+all changed fixture sources, plus the14 generated observer/router programs.
+These checks parse source; they do not execute the Worker, Node fixtures or
+Workerd. Frozen4, the unchanged body-budget/json-tokens/service-tiers modules,
+and the exact2931-byte completion prefix remain identical to the retained base.
+Ordinary correlation/native-errors/utils recover their complete original source
+after import/private-tail elision. The accounting receipt, immutable facts,
+pricing receipt, plan admission, reservation mathematics and settlement algorithm
+retain exact original function bodies. Ordinary observeUsage and response header
+stripping also retain exact bodies. Shared private-branch inverses described above
+remain source evidence, not a substitute for hosted ordinary regressions.
+
+The reached original-I/O map remains: intake; preflight and full continuation;
+materialization; provider acquisition/upload; codec and Venice source; generic
+normalization; generic/codec usage; public reader; soft-status and revalidation;
+ledger ACK/standalone rollback; final-terminal ledger/queue; archive put/pipe;
+and enrolled body disposition. Logical READY, accounting adoption and publication
+never discharge those originals. Fresh observer cells, ignored then-call returns,
+independent FIRSTcancel/returned-unlock/closed and UNKNOWN remain the adopted
+custody contract. The two private queue invocation sites keep sealed graph copies.
+
+The merged DATA/COMMON, each fixed128/sync512 window, paid traversal workspace
+and fixed shared65536 tables remain OPEN. The immutable Git commit and full-patch
+hash are supplied with the handoff; no self-referential commit identifier is
+stored here. The following is the complete repository-relative changed-path
+manifest against `cbabe2a2a0e999dea7e02a1d12be1e83c15b260e`:
+
+```text
+.github/workflows/openclaw-contract.yml
+CHANGELOG.md
+docs/private-owned-http-chat.md
+test/fixtures/openclaw-owned-http-chat-contract.test.ts
+test/helpers/owned-http-chat-fixture.mjs
+test/helpers/owned-json-parser-cases.mjs
+test/helpers/owned-json-parser-observer.mjs
+test/helpers/owned-static-custody-observer.mjs
+test/openclaw-owned-http-chat.test.mjs
+worker/access-json.ts
+worker/accounting.ts
+worker/authority.ts
+worker/content-retention.ts
+worker/correlation.ts
+worker/credential-cache.ts
+worker/credential-preflight-source.ts
+worker/credential-preflight.ts
+worker/gmi-organization-binding.ts
+worker/grant-credentials.ts
+worker/http-identity-owner.ts
+worker/identity-admission.ts
+worker/index.ts
+worker/json-body.ts
+worker/ledgers.ts
+worker/native-errors.ts
+worker/pricing.ts
+worker/provider-auth.ts
+worker/provider-templates.ts
+worker/providers.ts
+worker/proxy-accounting.ts
+worker/proxy-auth.ts
+worker/proxy-completion.ts
+worker/proxy-response.ts
+worker/proxy-selection.ts
+worker/proxy-upstream-request.ts
+worker/proxy.ts
+worker/response-control-authorization.ts
+worker/soft-budget.ts
+worker/test/accounting-preflight.test.mjs
+worker/test/json-body.test.mjs
+worker/test/owned-http-chat-workerd.test.mjs
+worker/test/owned-http-intake.test.mjs
+worker/test/owned-http-legacy-selection-workerd.test.mjs
+worker/test/owned-http-legacy-selection.test.mjs
+worker/test/owned-http-pricing.test.mjs
+worker/test/owned-http-revalidation.test.mjs
+worker/test/owned-http-sinks.test.mjs
+worker/test/owned-http-upload-workerd.test.mjs
+worker/test/owned-http-upload.test.mjs
+worker/test/owned-json-parser.test.mjs
+worker/test/owned-reader-driver.test.mjs
+worker/test/proxy-completion.test.mjs
+worker/token-usage.ts
+worker/utils.ts
+worker/venice-chat-authority.ts
+worker/venice-chat-runtime.ts
+```

@@ -12,7 +12,7 @@ import type { ToolPricing } from "./types";
 import type { XaiImageRequest } from "./xai-images.ts";
 import { ExactBodyCharge } from "./body-budget.ts";
 import { growOwnedHttpRequest, type OwnedHttpRequest } from "./http-identity-owner.ts";
-import { matchesOwnedHttpPricingInput, ownedHttpHasToolPriceCard } from "./proxy.ts";
+import { matchesOwnedHttpPricingInput, ownedHttpHasToolPriceCard, ownedHttpMayDefaultServiceTier } from "./proxy.ts";
 import { identityFailure } from "./identity-admission.ts";
 
 interface OwnedHttpPricingPlan {
@@ -22,7 +22,12 @@ interface OwnedHttpPricingPlan {
   hour: boolean;
   cache: boolean;
   serializationBytes: number;
+  mediaWorkspaceBytes: number;
+  serializationCredits: number;
+  mayDefaultTier: boolean;
+  revision: number;
   retentionBytes: number;
+  archiveCredits: number;
   toolScratchBytes: number;
   active: boolean;
 }
@@ -40,6 +45,11 @@ let activeOwnedPricing: WeakMap<object, OwnedHttpPricingPlan> | undefined;
 let ownedPricingRegistry: ExactBodyCharge | undefined;
 let ownedPricingCount = 0;
 const ownedPricingMetadataBytes = 4096;
+const ownedPricingArray = Array.isArray;
+const ownedPricingOwn = Object.hasOwn;
+function ownedPricingObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !ownedPricingArray(value);
+}
 // Existing accounting JSON profiles, expressed with the adopted DATA formula.
 // These fund copies/serialization; accounting API/visitor products are CONTROL.
 const ownedAccountingCapsuleBytes = 8 * (128 + 2 * 512 + 256 + 1024) + 2 * 32768;
@@ -52,14 +62,19 @@ const ownedAccountingBytes = 9 * ownedAccountingCapsuleBytes + 8 * ownedAccounti
 // later covers one existing accounting/pricing call, never an async interval.
 export function prepareOwnedHttpPricing(cap: OwnedHttpRequest, body: Record<string, unknown>): void {
   if (!matchesOwnedHttpPricingInput(cap, body) || ownedPricing?.has(cap)) throw identityFailure("protocol");
-  growOwnedHttpRequest(cap, ownedPricingMetadataBytes + 8); // fixed products + ONE passive queue container
+  growOwnedHttpRequest(cap, ownedPricingMetadataBytes + 8); // Fixed products plus one paid variable-CONTROL queue container.
   const plan: OwnedHttpPricingWork = { body, bytes: 0, media: false, hour: false, cache: false, queueCapacity: 0,
-    keyVectorBytes: 0, slotBytes: 8, mediaUnits: 0, mediaSlots: 0, serializationBytes: 0,
-    graphBytes: 0, maximumScalarUnits: 0, retentionBytes: 0, toolScratchBytes: 0, active: false };
+    keyVectorBytes: 0, slotBytes: 8, mediaUnits: 0, mediaSlots: 0, serializationBytes: 0, mediaWorkspaceBytes: 0,
+    serializationCredits: 0, mayDefaultTier: ownedHttpMayDefaultServiceTier(cap, body), revision: 0,
+    graphBytes: 0, maximumScalarUnits: 0, retentionBytes: 0, archiveCredits: 0, toolScratchBytes: 0, active: false };
   const pending: object[] = [];
   let retained: OwnedHttpPricingPlan | undefined;
   try {
     measureOwnedHttpJson(cap, plan, body, pending);
+    // The marker transaction retains an extra marker field/value per locator.
+    // Its UUID prefix and at most16 decimal index units are admitted per actual
+    // locator, not as a maximum-locator reservation on every request.
+    plan.mediaWorkspaceBytes = 8 * (1 + plan.queueCapacity) + plan.slotBytes;
     const scan = plan.keyVectorBytes + plan.slotBytes;
     // The existing media serializer first scans key vectors/slot records. It
     // either returns null BEFORE whole JSON text, or builds pieces BEFORE a
@@ -74,18 +89,30 @@ export function prepareOwnedHttpPricing(cap: OwnedHttpRequest, body: Record<stri
     // A later retain=false verdict never turns this credit into another owner.
     plan.retentionBytes = plan.graphBytes + 2 * plan.maximumScalarUnits + 81920 + 8192 + 262144;
     plan.toolScratchBytes = ownedToolScratchBytes(body, ownedHttpHasToolPriceCard(cap, body), plan.bytes);
+    if (plan.mayDefaultTier) {
+      // Existing assertServiceTier may create one additional shallow root.
+      // Before selection effects, retain every spread occurrence plus the
+      // temporary replacement value. Nested objects keep their source owner.
+      growOwnedHttpRequest(cap, ownedTierRootBytes(body));
+      // Appending service_tier:"default" adds at most25 wire bytes. Include
+      // the larger five-W serializer branch, the root key-vector increment,
+      // graph/scalar retention delta and the existing two-W tool allowance.
+      plan.serializationBytes += 5 * 25 + 40;
+      plan.retentionBytes += 62 + 14;
+      plan.toolScratchBytes += 2 * 25;
+    }
     plan.media = body.previous_response_id != null || body.conversation != null || body.prompt != null;
     if (!plan.media && body.input != null) plan.media = ownedContentHasMedia(cap, plan, body.input, pending);
-    if (!plan.media && Array.isArray(body.messages)) {
+    if (!plan.media && ownedPricingArray(body.messages)) {
       for (let index = 0; index < body.messages.length && !plan.media; index++) {
         const message = body.messages[index];
-        if (isObject(message)) plan.media = ownedContentHasMedia(cap, plan, message.content, pending);
+        if (ownedPricingObject(message)) plan.media = ownedContentHasMedia(cap, plan, message.content, pending);
       }
     }
-    if (!plan.media && Array.isArray(body.tools)) {
+    if (!plan.media && ownedPricingArray(body.tools)) {
       for (let index = 0; index < body.tools.length && !plan.media; index++) {
         const tool = body.tools[index];
-        if (isObject(tool)) plan.media = providerAddedTool(tool.type);
+        if (ownedPricingObject(tool)) plan.media = providerAddedTool(tool.type);
       }
     }
     if (!ownedPricing) {
@@ -95,7 +122,8 @@ export function prepareOwnedHttpPricing(cap: OwnedHttpRequest, body: Record<stri
       catch (error) { ownedPricing = undefined; activeOwnedPricing = undefined; charge.release(); throw error; }
     }
     retained = { body, bytes: plan.bytes, media: plan.media, hour: plan.hour, cache: plan.cache,
-      serializationBytes: plan.serializationBytes, retentionBytes: plan.retentionBytes, toolScratchBytes: plan.toolScratchBytes, active: false };
+      serializationBytes: plan.serializationBytes, mediaWorkspaceBytes: plan.mediaWorkspaceBytes, serializationCredits: 0,
+      mayDefaultTier: plan.mayDefaultTier, revision: 0, retentionBytes: plan.retentionBytes, archiveCredits: 0, toolScratchBytes: plan.toolScratchBytes, active: false };
     ownedPricing.set(cap, retained); ownedPricingCount++;
   } catch (error) {
     if (retained) retained.body = undefined;
@@ -106,8 +134,8 @@ export function prepareOwnedHttpPricing(cap: OwnedHttpRequest, body: Record<stri
     throw error;
   }
   finally {
-    // No iterator, descriptor, suspended continuation or original-work product
-    // is stored per depth. Only references to the STILL funded input were queued.
+    // Variable traversal CONTROL ends only after all queued source aliases
+    // clear. Its executing frame/locals/arguments remain fixed CONTROL.
     pending.length = 0; plan.body = undefined; retained = undefined;
   }
 }
@@ -118,6 +146,51 @@ export function reserveOwnedHttpSerialization(cap: OwnedHttpRequest, body: Recor
   const plan = ownedPricing?.get(cap);
   if (!plan || plan.body !== body || !matchesOwnedHttpPricingInput(cap, body)) throw identityFailure("protocol");
   growOwnedHttpRequest(cap, plan.serializationBytes + plan.retentionBytes + plan.toolScratchBytes + ownedAccountingBytes);
+  plan.archiveCredits++; plan.serializationCredits++;
+}
+
+function ownedTierRootBytes(body: Record<string, unknown>): number {
+  let members = 0, primitives = 0, units = 0;
+  for (const key in body) if (ownedPricingOwn(body, key)) {
+    members++; units += key.length;
+    const value = body[key];
+    if (value === null || typeof value !== "object") primitives++;
+    if (typeof value === "string") units += value.length;
+  }
+  return 8 * (1 + 2 * members + primitives) + 2 * units
+    + (ownedPricingOwn(body, "service_tier") ? 0 : 16 + 24) + 8 + 14;
+}
+// Called immediately after the unchanged resolved-transport tier helper. The
+// old root is still a caller binding and retains its original funding.
+export function adoptOwnedHttpTierBody(cap: OwnedHttpRequest, before: Record<string, unknown>, after: Record<string, unknown>): void {
+  const plan = ownedPricing?.get(cap);
+  if (!plan || plan.body !== before || plan.active || !plan.mayDefaultTier || plan.revision
+    || !matchesOwnedHttpPricingInput(cap, after) || after.service_tier !== "default") throw identityFailure("protocol");
+  const raw = before.service_tier;
+  if (!(raw == null || typeof raw === "string" && raw.toLowerCase() === "auto")) throw identityFailure("protocol");
+  const previous = ownedPricingOwn(before, "service_tier") ? ownedScalarJsonBytes(raw) : -1;
+  let other = false;
+  for (const key in before) if (key !== "service_tier" && ownedPricingOwn(before, key) && ownedScalarJsonBytes(before[key]) >= 0) { other = true; break; }
+  const delta = previous < 0 ? 24 + (other ? 1 : 0) : 9 - previous;
+  // No await, allocation, reservation or callback separates these publications.
+  // The real extra root and the maximum serialization delta were paid earlier.
+  plan.bytes += delta; plan.body = after; plan.revision = 1;
+}
+export function takeOwnedHttpMediaAdmission(cap: OwnedHttpRequest, body: Record<string, unknown>): import("./json-body.ts").PrivateMediaAdmission {
+  const plan = ownedPricing?.get(cap);
+  if (!plan || plan.body !== body || !plan.serializationCredits || !matchesOwnedHttpPricingInput(cap, body)) throw identityFailure("protocol");
+  plan.serializationCredits--;
+  return { workspaceBytes: plan.mediaWorkspaceBytes, serializationBytes: plan.serializationBytes, restorePending: false };
+}
+
+// No extra debit or new profile: each actual serialization reservation already
+// pays one complete possible archive before selection. The fixed caller consumes
+// that right once; disabled/unused retention never releases it for another owner.
+export function claimOwnedHttpArchiveFunding(cap: OwnedHttpRequest, body: Record<string, unknown>): void {
+  const plan = ownedPricing?.get(cap);
+  if (!plan || !plan.archiveCredits || plan.body !== body || !matchesOwnedHttpPricingInput(cap, body)
+    || !(plan.retentionBytes > 0)) throw identityFailure("protocol");
+  plan.archiveCredits--;
 }
 
 export function enterOwnedHttpPricing(cap: OwnedHttpRequest, body: Record<string, unknown>): void {
@@ -146,26 +219,28 @@ function ownedHttpPricing(body: Record<string, unknown>, format: string | undefi
 }
 function reserveOwnedPricingQueue(cap: OwnedHttpRequest, plan: OwnedHttpPricingWork, count: number): void {
   if (count <= plan.queueCapacity) return;
-  // D = 8*(C+P+N)+2U+B. C=1 was funded before []; every queued
-  // occurrence is one reference cell (P), with NO copied graph/string/primitive.
+  // PAYLOAD_GRAPH_TRAVERSAL_CONTROL: C=1 was prepaid before []; each
+  // pending source reference is one P cell. The source graph remains additive.
+  // This existing debit pays this workspace once, not a fixed-window exemption
+  // for the active frame, operands, iterators or callbacks using it.
   growOwnedHttpRequest(cap, 8 * (count - plan.queueCapacity)); plan.queueCapacity = count;
 }
 function childObjects(value: object): number {
   let count = 0;
-  if (Array.isArray(value)) {
+  if (ownedPricingArray(value)) {
     for (let index = 0; index < value.length; index++) if (value[index] !== null && typeof value[index] === "object") count++;
-  } else for (const key in value) if (Object.hasOwn(value, key)) {
+  } else for (const key in value) if (ownedPricingOwn(value, key)) {
     const item = (value as Record<string, unknown>)[key];
     if (item !== null && typeof item === "object") count++;
   }
   return count;
 }
 function queueOwnedChildren(value: object, pending: object[]): void {
-  if (Array.isArray(value)) {
+  if (ownedPricingArray(value)) {
     for (let index = 0; index < value.length; index++) {
       const item = value[index]; if (item !== null && typeof item === "object") pending.push(item);
     }
-  } else for (const key in value) if (Object.hasOwn(value, key)) {
+  } else for (const key in value) if (ownedPricingOwn(value, key)) {
     const item = (value as Record<string, unknown>)[key];
     if (item !== null && typeof item === "object") pending.push(item);
   }
@@ -176,7 +251,7 @@ function ownedContentHasMedia(cap: OwnedHttpRequest, plan: OwnedHttpPricingWork,
   try {
     while (pending.length) {
       const value = pending.pop()!;
-      if (!Array.isArray(value)) {
+      if (!ownedPricingArray(value)) {
         const item = value as Record<string, unknown>, type = typeof item.type === "string" ? item.type : "";
         if (type === "image" || type === "image_url" || type === "video_url" || type === "document" || type === "file"
           || type === "input_image" || type === "input_file" || type === "item_reference" || type === "computer_screenshot"
@@ -210,18 +285,19 @@ function ownedScalarJsonBytes(value: unknown): number {
   if (typeof value === "number") return Number.isFinite(value) ? String(value).length : 4;
   if (typeof value === "undefined" || typeof value === "function" || typeof value === "symbol") return -1;
   if (typeof value === "bigint") throw new TypeError("BigInt cannot be serialized as JSON");
-  return 0; // A child container is counted when removed from the passive queue.
+  return 0; // A child container is counted when removed from the paid traversal queue.
 }
 function countOwnedMediaSlot(plan: OwnedHttpPricingWork, key: string | number, value: unknown): void {
   if (typeof value !== "string" || value.length < 64 * 1024) return;
-  // One slots-array cell plus {owner,key,value}: C=1, P=7, N=1 for
-  // an array index; U includes ALL field names and retained key/value units.
-  plan.slotBytes += 64 + (typeof key === "number" ? 8 : 2 * key.length) + 26 + 2 * value.length;
+  // Slot entry + {owner,key,value,marker}: C=1, P=9, N=3.
+  // Both string-valued key/value occurrences have primitive cells. Field names
+  // total19 units; the marker has a54-unit UUID prefix plus <=16 index units.
+  plan.slotBytes += 8 * (1 + 9 + 3) + 2 * (19 + 70 + value.length + (typeof key === "string" ? key.length : 0));
   plan.mediaSlots++; plan.mediaUnits += value.length;
 }
 function countOwnedJsonScalar(plan: OwnedHttpPricingWork, value: unknown): void {
   if (typeof value === "string") {
-    plan.graphBytes += 2 * value.length;
+    plan.graphBytes += 8 + 2 * value.length;
     plan.maximumScalarUnits = Math.max(plan.maximumScalarUnits, value.length);
   } else if (value === null || typeof value === "number" || typeof value === "boolean" || value === undefined) plan.graphBytes += 8;
 }
@@ -231,13 +307,13 @@ function ownedToolScratchBytes(body: Record<string, unknown>, card: boolean, byt
   // These are the existing pricing helpers' exact two shallow inventories,
   // not a recursive tool/schema search. No copied array exists during admission.
   for (let phase = 0; phase < (card ? 2 : 1); phase++) {
-    const count = phase === 0 ? 1 : Array.isArray(body.input) ? body.input.length : 0;
+    const count = phase === 0 ? 1 : ownedPricingArray(body.input) ? body.input.length : 0;
     for (let index = 0; index < count; index++) {
       let tools: unknown[] | undefined;
-      if (phase === 0) tools = Array.isArray(body.tools) ? body.tools : undefined;
+      if (phase === 0) tools = ownedPricingArray(body.tools) ? body.tools : undefined;
       else {
         const item = (body.input as unknown[])[index];
-        if (isObject(item) && (item.type === "additional_tools" || item.type === "tool_search_output") && Array.isArray(item.tools)) tools = item.tools;
+        if (ownedPricingObject(item) && (item.type === "additional_tools" || item.type === "tool_search_output") && ownedPricingArray(item.tools)) tools = item.tools;
       }
       if (!tools) continue;
       for (let itemIndex = 0; itemIndex < tools.length; itemIndex++) {
@@ -245,10 +321,10 @@ function ownedToolScratchBytes(body: Record<string, unknown>, card: boolean, byt
         const units = typeof item === "string" ? item.length : 0;
         if (phase === 0) { topCells++; topNumbers += numeric ? 1 : 0; topUnits += units; }
         else { tagCells++; tagNumbers += numeric ? 1 : 0; tagUnits += units; }
-        if (!isObject(item)) continue;
+        if (!ownedPricingObject(item)) continue;
         // Chat's ordinary fee classifier performs String(type). Only a passive
         // array can create a body-sized result; no caller hooks enter this body.
-        if (phase === 0 && Array.isArray(item.type)) coerced = true;
+        if (phase === 0 && ownedPricingArray(item.type)) coerced = true;
         if (card && typeof item.type === "string" && /^web_search(?:_preview)?(?:_\d{4}_\d{2}_\d{2})?$/.test(item.type)) {
           types++; typeUnits += item.type.length; largestType = Math.max(largestType, item.type.length);
         }
@@ -270,7 +346,7 @@ function measureOwnedHttpJson(cap: OwnedHttpRequest, plan: OwnedHttpPricingWork,
     reserveOwnedPricingQueue(cap, plan, pending.length + childObjects(value));
     plan.bytes += 2; // brackets/braces; punctuation needs no continuation frames
     plan.graphBytes += 8;
-    if (Array.isArray(value)) {
+    if (ownedPricingArray(value)) {
       plan.graphBytes += 8 * value.length;
       plan.keyVectorBytes = Math.max(plan.keyVectorBytes, 8 + 16 * value.length);
       if (value.length) plan.bytes += value.length - 1;
@@ -284,9 +360,9 @@ function measureOwnedHttpJson(cap: OwnedHttpRequest, plan: OwnedHttpPricingWork,
     } else {
       const item = value as Record<string, unknown>;
       if ("cache_control" in item) plan.cache = true;
-      if (isObject(item.cache_control) && item.cache_control.ttl === "1h") plan.hour = true;
+      if (ownedPricingObject(item.cache_control) && item.cache_control.ttl === "1h") plan.hour = true;
       let members = 0, keys = 0, keyUnits = 0;
-      for (const key in item) if (Object.hasOwn(item, key)) {
+      for (const key in item) if (ownedPricingOwn(item, key)) {
         keys++; keyUnits += key.length;
         const child = item[key], scalar = ownedScalarJsonBytes(child);
         plan.graphBytes += 16 + 2 * key.length;
@@ -297,7 +373,7 @@ function measureOwnedHttpJson(cap: OwnedHttpRequest, plan: OwnedHttpPricingWork,
         if (members++) plan.bytes++;
         if (child !== null && typeof child === "object") pending.push(child);
       }
-      plan.keyVectorBytes = Math.max(plan.keyVectorBytes, 8 + 8 * keys + 2 * keyUnits);
+      plan.keyVectorBytes = Math.max(plan.keyVectorBytes, 8 + 16 * keys + 2 * keyUnits);
     }
   }
 }

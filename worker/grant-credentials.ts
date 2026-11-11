@@ -1,5 +1,7 @@
-import { admitIdentityText, identityUtf8, admitIdentity, identityHeader, identityJson, identitySourceBudget, identityFailure, isIdentityFailure, parseIdentity, readIdentityKv, readIdentityRaw, readIdentityRequest, readIdentityResponse, type IdentitySourceBudget } from "./identity-admission.ts";
-import { checkOwnedHttpSinkOwner, ownedHttpGrantMaterializeFetch, consumeOwnedHttpGrantInspection, type OwnedHttpRevalidation, type OwnedHttpSinkOwner } from "./http-identity-owner.ts";
+import { admitIdentityText, identityUtf8, admitIdentity, identityPlan, identityHeader, identityJson, identitySourceBudget, identityFailure, isIdentityFailure, parseIdentity, readIdentityKv, readIdentityRaw, readIdentityRequest, readIdentityResponse, type IdentitySourceBudget } from "./identity-admission.ts";
+import { checkOwnedHttpSinkOwner, checkOwnedHttpMaterializationInputs, admitOwnedHttpMaterializationPayload, consumeOwnedHttpGrantMaterialization, consumeOwnedHttpGrantInspection, type OwnedHttpRevalidation, type OwnedHttpSinkOwner } from "./http-identity-owner.ts";
+import { privateMaterializationJson } from "./json-body.ts";
+import type { OwnedHttpCredential } from "./credential-preflight.ts";
 import { videoControlHeader, videoControlVersion, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { miniMaxApiKeySecret, miniMaxMusicCoverProjection, miniMaxMusicCoverIdentity } from "./native-media-credential.ts";
 import { musicCoverControlHeader, musicCoverControlVersion, musicCoverUnavailable, isMusicCoverControl, readCoverControlRequest, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
@@ -1454,10 +1456,9 @@ export async function materializeGrantCredentials(
   cover?: MiniMaxMusicCoverControl,
   ownedHttp?: OwnedHttpSinkOwner,
 ): Promise<UpstreamGrant> {
-  if (ownedHttp !== undefined) {
-    checkOwnedHttpSinkOwner(ownedHttp);
-    if (wan || search || video || cover) throw identityFailure("protocol");
-  }
+  // Private materialization requires the registered foreground permit and its
+  // fixed destination; a sink capability alone cannot mint that association.
+  if (ownedHttp !== undefined) throw identityFailure("protocol");
   if (!cover && !video && !wan && !search) admitIdentity(grant, "record");
   const legacy = !cover && !video && !wan && !search && hasRawCredential(grant) ? grant : null;
   return (await ownerCall<OwnerResponse>(env, key, "/materialize", {
@@ -1472,6 +1473,39 @@ export async function materializeGrantCredentials(
     ...(wan ? { wanOriginal: true } : {}),
     ...(cover ? { coverOriginal: musicCoverControlVersion } : {}),
   }, signal, wan, search, video, cover, ownedHttp)).grant;
+}
+
+export function materializePrivateOwnedHttpGrantCredentials(cap: OwnedHttpCredential, permit: object, sink: OwnedHttpSinkOwner,
+  env: Env, key: string, grant: UpstreamGrant, providerId: string, refresh: RefreshConfig | null, force: boolean, signal?: AbortSignal): Promise<void> {
+  checkOwnedHttpMaterializationInputs(sink, cap, permit, env, key, grant);
+  admitIdentity(grant, "record");
+  const legacy = hasRawCredential(grant) ? grant : null;
+  const expectedGeneration: unknown = grant.credentialGeneration ?? null;
+  if (typeof key !== "string" || typeof providerId !== "string") throw identityFailure("protocol");
+  // Pay the exact outer carrier before construction. Borrowed grant/legacy
+  // graphs keep their foreground owner; serialized occurrences count again in
+  // the independent copied graph below. All eight primitive positions are
+  // conservatively prepaid, including reference-valued positions.
+  admitOwnedHttpMaterializationPayload(sink, cap, permit, env, key, grant,
+    4096 + 200 + 2 * (63 + key.length + providerId.length + (typeof expectedGeneration === "string" ? expectedGeneration.length : 0)));
+  let request: unknown = { key, grant, legacy, providerId, refresh, force, expectedGeneration, operation: undefined };
+  const binding = env.GRANT_CREDENTIALS;
+  if (!binding) throw new HttpError(503, "provider_not_configured", "provider is not configured");
+  admitIdentity(grant, "record");
+  let plan: ReturnType<typeof identityPlan> | undefined, body: string | undefined;
+  try {
+    // Keep the original complete-profile admission after the actual binding
+    // lookup. These fresh counters do not reset the cumulative source budget.
+    plan = identityPlan(); plan.item(request, 0);
+    {
+      const counts = plan.counts;
+      admitOwnedHttpMaterializationPayload(sink, cap, permit, env, key, grant,
+        8 * (counts.values + 2 * counts.members + counts.entries) + 2 * counts.units + 2 * counts.text + counts.bytes);
+    }
+    plan = undefined;
+    body = privateMaterializationJson(request); request = undefined;
+    return consumeOwnedHttpGrantMaterialization(sink, cap, permit, binding, key, body, signal);
+  } finally { plan = undefined; request = undefined; body = undefined; }
 }
 
 export async function revokeGrantCredentials(env: Env, key: string, metadata?: GrantRevokeMetadata, searchActor?: PutRequest["searchActor"], musicActor?: PutRequest["musicActor"], videoActor?: PutRequest["videoActor"]): Promise<UpstreamGrant> {
@@ -1564,30 +1598,7 @@ function updatedCredentialRecord(current: CredentialRecord | undefined, grant: U
 
 
 async function ownerCall<T>(env: Env, key: string, path: string, body: unknown, signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, cover?: MiniMaxMusicCoverControl, ownedHttp?: OwnedHttpSinkOwner): Promise<T> {
-  if (ownedHttp !== undefined) {
-    checkOwnedHttpSinkOwner(ownedHttp);
-    if (path !== "/materialize" || wan || search || video || cover) throw identityFailure("protocol");
-    const binding = env.GRANT_CREDENTIALS;
-    if (!binding) throw new HttpError(503, "provider_not_configured", "provider is not configured");
-    admitIdentity((body as MaterializeRequest).grant, "record");
-    const text = identityJson(body);
-    // Acquisition and fetch are classified before the ordinary bounded reader.
-    // Only its successfully consumed owner response mints a business HttpError;
-    // a forged refresh-shaped transport rejection never reaches that branch.
-    let received: Response | undefined;
-    try {
-      return await readIdentityResponse<T>(() => ownedHttpGrantMaterializeFetch(ownedHttp, binding, key, text, signal)
-        .then(response => { received = response; return response; }), identitySourceBudget(), signal,
-      (status, value) => {
-        // The reader admitted these ORIGINAL headers and the complete body.
-        // Only the protocol Retry-After field is copied, never arbitrary fields.
-        const retryAfter = received!.headers.get("retry-after");
-        const payload = value as { error?: { code?: string; message?: string } };
-        throw new HttpError(status, payload.error?.code ?? "credential_owner_error", payload.error?.message ?? "grant credential operation failed",
-          retryAfter === null ? undefined : { "Retry-After": retryAfter });
-      }, "grant");
-    } finally { received = undefined; }
-  }
+  if (ownedHttp !== undefined) throw identityFailure("protocol");
   if (cover && (!isMusicCoverControl(cover) || wan || search || video || !["/inspect", "/materialize"].includes(path))) musicCoverUnavailable();
   const stub = env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(key));
   if (cover) return cover.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual", headers: { "content-type": "application/json", [musicCoverControlHeader]: musicCoverControlVersion } }), false, signal);

@@ -1,8 +1,8 @@
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledModel, ContentRecord, Env, ProxyRequestBody } from "./types";
 import { maxJsonBodyBytes, randomId } from "./utils.ts";
-import { accountingArchive, accountingIdentity, admitAccountingJson, jsonBodyTransport } from "./json-body.ts";
-import { checkOwnedHttpSinkOwner, ownedHttpArchivePut, ownedHttpArchivePipe, ownedHttpArchiveAbort,
-  ownedHttpArchiveCancel, type OwnedHttpSinkOwner } from "./http-identity-owner.ts";
+import { accountingArchive, privateAccountingArchive, accountingIdentity, admitAccountingJson, jsonBodyTransport } from "./json-body.ts";
+import { checkOwnedHttpSinkOwner, ownedHttpSinkOwner, checkOwnedHttpArchivePreparation, prepareOwnedHttpArchive, ownedHttpArchivePut, ownedHttpArchivePipe, ownedHttpArchiveAbort,
+  ownedHttpArchiveCancel, type OwnedHttpSinkOwner, type OwnedHttpRequest } from "./http-identity-owner.ts";
 
 const retentionPeriodMs = 30 * 86_400_000;
 
@@ -103,8 +103,20 @@ export function prepareInlineMusicRetention(env: Env, auth: AuthorizedIdentity, 
 // Allocates the content ref synchronously so usage events can reference it;
 // the R2 write itself can run after the request is dispatched.
 export function prepareContentRetention(env: Env, auth: AuthorizedIdentity, selection: RetainedSelection, requestId: string, ownedHttp?: OwnedHttpSinkOwner): PreparedContentRetention | null {
+  return createContentRetention(env, auth, selection, requestId, ownedHttp);
+}
+export function prepareOwnedHttpContentRetention(cap: OwnedHttpRequest, env: Env, auth: AuthorizedIdentity,
+  selection: RetainedSelection, requestId: string): PreparedContentRetention | null {
+  const sink = ownedHttpSinkOwner(cap);
+  checkOwnedHttpArchivePreparation(cap, sink, env, auth, selection as import("./proxy-selection.ts").ProxySelection, requestId);
+  return createContentRetention(env, auth, selection, requestId, sink, cap);
+}
+function createContentRetention(env: Env, auth: AuthorizedIdentity, selection: RetainedSelection, requestId: string,
+  ownedHttp?: OwnedHttpSinkOwner, privateRequest?: OwnedHttpRequest): PreparedContentRetention | null {
   if (ownedHttp !== undefined) checkOwnedHttpSinkOwner(ownedHttp);
   if (!retentionRequired(auth, selection.capability)) return null;
+  const privateBucket = ownedHttp === undefined ? undefined
+    : prepareOwnedHttpArchive(privateRequest!, ownedHttp, env, auth, selection as import("./proxy-selection.ts").ProxySelection, requestId);
   for (const value of [requestId, auth.policy.tenantId, auth.policyId, auth.credentialId, auth.principalId,
     selection.provider.id, selection.capability, selection.model?.id]) accountingIdentity(value);
   const contentRef = randomId("content"), occurredAtMs = Date.now();
@@ -118,8 +130,8 @@ export function prepareContentRetention(env: Env, auth: AuthorizedIdentity, sele
   };
   const gateway = selection.endpoint.request_format === "cloudflare_ai_gateway.universal" && Array.isArray(selection.body) ? selection.body : undefined;
   // Admission traverses the privacy-filtered view BEFORE the first map/copy.
-  const archive = accountingArchive(record, gateway);
-  return ownedContentRetention(env.CONTENT_ARCHIVE, contentKey(tenant, contentRef), expiresAt, contentRef, archive, ownedHttp);
+  const archive = ownedHttp === undefined ? accountingArchive(record, gateway) : privateAccountingArchive(record, gateway);
+  return ownedContentRetention(ownedHttp === undefined ? env.CONTENT_ARCHIVE : privateBucket, contentKey(tenant, contentRef), expiresAt, contentRef, archive, ownedHttp);
 }
 
 function ownedContentRetention(bucket: Env["CONTENT_ARCHIVE"], key: string, expiresAt: string,

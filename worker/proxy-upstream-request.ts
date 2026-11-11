@@ -2,14 +2,14 @@ import { jsonBodyBytes, jsonBodyStream, mediaJsonBody } from "./json-body.ts";
 import { prepareNativeRawDispatch } from "./native-raw-input.ts";
 import { inlineMusicInput } from "./openrouter-music-runtime.ts";
 import { applyProxyQuery, applyStreamingQuery, type ProxyQuery } from "./proxy-query.ts";
-import { applyTransportHeaders, transformTransportBody } from "./provider-auth.ts";
+import { applyTransportHeaders, transformTransportBody, transformOwnedTransportBody } from "./provider-auth.ts";
 import { resolveTemplate, PreparationAdmission, preparationHeader } from "./provider-templates.ts";
 import { copyRequestHeaders, upstreamPath, type UpstreamAuth } from "./providers.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { Env } from "./types.ts";
 import { HttpError, maxJsonBodyBytes } from "./utils.ts";
 import { abandonOwnedHttpUpload, adoptOwnedHttpUploadSource, checkOwnedHttpUpload, finishOwnedHttpUploadPreparation, pipeOwnedHttpUpload, type OwnedHttpUpload } from "./http-identity-owner.ts";
-import { acceptOwnedHttpPreparation } from "./proxy.ts";
+import { acceptOwnedHttpPreparation, prepareOwnedHttpUploadJson } from "./proxy.ts";
 
 export function prepareUpstreamRequest(
   request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery,
@@ -69,7 +69,17 @@ function prepareUpstreamFields(
   }
   const raw = prepareNativeRawDispatch(selection, url, headers, transport === "http" && upstream.transport === null);
   if (raw !== undefined) return { headers, url, configuredOwnerUrl, requestBody: raw, streamBody: false };
-  const body = transformTransportBody(upstream.transport, selection.body);
+  const body = upload ? transformOwnedTransportBody(upstream.transport, selection.body, owner!) : transformTransportBody(upstream.transport, selection.body);
+  if (upload) {
+    const serialized = prepareOwnedHttpUploadJson(upload, body);
+    if (serialized !== undefined && typeof serialized !== "string") {
+      const source = serialized.stream();
+      adoptOwnedHttpUploadSource(upload, source);
+      const fixed = new FixedLengthStream(serialized.bytes);
+      return { headers, url, configuredOwnerUrl, requestBody: pipeOwnedHttpUpload(upload, source, fixed), streamBody: true };
+    }
+    return { headers, url, configuredOwnerUrl, requestBody: serialized, streamBody: false };
+  }
   // The 32 MB media envelope must not coexist with whole-document transport
   // copies in the Worker's 128 MB isolate. Unsigned bodies carrying media
   // splice it in as raw chunks; other Claude bodies above 8 MiB use the

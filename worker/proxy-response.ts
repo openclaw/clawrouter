@@ -1,4 +1,5 @@
-import { OwnedReaderDriver, claimOwnedHttpStaticCustody } from "./proxy-completion.ts";
+import { privateMappedErrorJson } from "./json-body.ts";
+import { OwnedReaderDriver, claimOwnedHttpStaticCustody, inspectOwnedBytes, isLocalOwnedByteView, newOwnedBytes, ownedByteBackingBytes, ownedByteLength, ownedByteSubarray, copyOwnedBytes, enqueueOwnedBytes, newOwnedDecoder, decodeOwnedBytes, measureOwnedHeaders, newOwnedHeaders, getOwnedHeader, setOwnedHeader, deleteOwnedHeader, newOwnedResponse } from "./proxy-completion.ts";
 import { inputRetirement } from "./input-retirement.ts";
 import { extractVoyageEmbeddingUsage } from "./voyage-embeddings.ts";
 import type { ValidatedNativeUsage } from "./native-response.ts";
@@ -11,15 +12,15 @@ import { extractImageUsageTokens } from "./image-generation.ts";
 import { extractCompactUsageTokens } from "./responses-compact.ts";
 import { createResponsesUsageInspector, type ResponsesInspectionTools } from "./responses-usage.ts";
 import { createSseUsageInspector, extractUsageTokens, responseOutcome, usageInspectionLimit, type ResponsesObservation, type UsageInspection, type UsageTokenContext } from "./token-usage.ts";
-import { OwnedChatUsage, matchesOwnedUsageInspection } from "./token-usage.ts";
+import { OwnedChatUsage, OwnedGenericChatUsage, matchesOwnedUsageInspection } from "./token-usage.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { nativeErrorEnvelope, type NativeErrorContext, type NativeErrorDetails } from "./native-errors.ts";
 
 import type { HostedSearchUsage } from "./responses-hosted-usage.ts";
 import { identityFailure, isIdentityFailure } from "./identity-admission.ts";
-import { checkOwnedHttpCodecConsumer, checkOwnedHttpCodecNormalization, checkOwnedHttpCodecUsage, forwardOwnedHttpCodecUsage, fundOwnedHttpCodecConsumerHeaders, fundOwnedHttpCodecConsumerCapture, settleOwnedHttpCodecConsumerCapture, beginOwnedCodecConsumerDiagnostics,
+import { checkOwnedHttpCodecConsumer, checkOwnedHttpCodecNormalization, checkOwnedHttpCodecUsage, forwardOwnedHttpCodecUsage, fundOwnedHttpCodecConsumerHeaders, fundOwnedHttpCodecConsumerCapture, beginOwnedHttpNormalization, bindOwnedHttpNormalizationReplay, checkOwnedHttpNormalizationReaderCreation, fundOwnedHttpNormalization, fundOwnedHttpNormalizationCapture, ownOwnedHttpNormalizationReader, ownedHttpNormalizationFailure, holdOwnedHttpNormalization, publishOwnedHttpNormalizationOutput, clearOwnedHttpNormalizationOutput, finishOwnedHttpNormalizationReader, endOwnedHttpNormalization, fundOwnedHttpCodecNormalization, settleOwnedHttpCodecConsumerCapture, beginOwnedCodecConsumerDiagnostics,
   ownedHttpCodecFailure, finishOwnedCodecDiagnostics, ownOwnedCodecConsumerRetirement, holdOwnedHttpVeniceSource, fundOwnedHttpAcceptedUsage,
-  type OwnedHttpRequest, type OwnedHttpRevalidation } from "./http-identity-owner.ts";
+  checkOwnedHttpGenericUsage, checkOwnedHttpGenericUsageInspection, ownOwnedHttpGenericUsageReader, bindOwnedHttpGenericUsageBody, fundOwnedHttpGenericUsageCapture, ownedHttpGenericUsageFailure, ownedHttpGenericUsageInstallationFailure, holdOwnedHttpGenericUsage, acceptOwnedHttpNormalizerIntoUsage, offerOwnedHttpGenericUsageOutput, clearOwnedHttpGenericUsageOutput, finishOwnedHttpGenericUsageReader, ownedHttpGenericUsageRetirement, type OwnedHttpUsage, type OwnedHttpRequest, type OwnedHttpUpload, type OwnedHttpNormalization, type OwnedHttpRevalidation } from "./http-identity-owner.ts";
 import { matchesOwnedVeniceOutputBody, matchesOwnedVeniceOutputFailure, matchesOwnedVeniceUsage } from "./venice-chat-runtime.ts";
 
 export interface ObservedUsage extends UsageInspection { delivery: "complete" | "failed" | "canceled"; binaryComplete?: true; nonbillable?: true; hostedSearch?: HostedSearchUsage; requestTariffOutcome?: import("./request-tariff.ts").RequestTariffOutcome; requestCostReceipt?: import("./pricing.ts").RequestCostReceipt }
@@ -37,7 +38,7 @@ export interface CodecConsumer {
   delivering?: ObservedUsage;
   reader?: CodecReader; replacement?: CodecReader; retired: Promise<void>; resolve: () => void; done: boolean;
   usage?: Promise<void>; usageOwner?: OwnedChatUsage;
-  outputFailed?: true; outputFailure?: object;
+  outputFailed?: true; outputFailure?: object; normalizationUnits?: number;
 }
 export class CodecReader extends OwnedReaderDriver {
   flags = 0;
@@ -58,12 +59,13 @@ export class CodecReader extends OwnedReaderDriver {
     const bytes = value.value;
     if (!bytes) this.captured = undefined;
     else {
-      if (!(bytes instanceof Uint8Array)) throw identityFailure("protocol");
-      fundOwnedHttpCodecConsumerCapture(this.owner.codec, 8192 + bytes.buffer.byteLength + 3 * bytes.byteLength
-        + (this.prefixWire?.buffer.byteLength ?? 0) + (this.crossingWire?.buffer.byteLength ?? 0));
-      const copy = new Uint8Array(bytes.byteLength); copy.set(bytes); this.captured = copy;
+      if (!isLocalOwnedByteView(bytes)) throw identityFailure("protocol");
+      const proof = inspectOwnedBytes(bytes);
+      fundOwnedHttpCodecConsumerCapture(this.owner.codec, 8192 + proof.backing + 3 * proof.length
+        + (this.prefixWire ? ownedByteBackingBytes(this.prefixWire) : 0) + (this.crossingWire ? ownedByteBackingBytes(this.crossingWire) : 0));
+      const copy = newOwnedBytes(proof.length); copyOwnedBytes(copy, bytes); this.captured = copy;
     }
-    this.readDone = value.done;
+    this.readDone = !!value.done;
   }
   open(body: ReadableStream<Uint8Array>): void {
     this.body = body;
@@ -164,7 +166,8 @@ export function sealConsumer(owner: CodecConsumer): void {
 }
 export function abandonOwnedCodecConsumer(cap: OwnedCodecConsumer): void {
   const owner = codecConsumers?.get(cap); if (!owner) throw identityFailure("protocol");
-  if (!owner.done) sealConsumer(owner);
+  try { owner.usageOwner?.abandon(); }
+  finally { if (!owner.done) sealConsumer(owner); }
 }
 export function retireOwnedCodecConsumers(codec: OwnedHttpRevalidation): void {
   const owner = codecConsumers?.get(codec); if (!owner) return;
@@ -188,6 +191,120 @@ export function proxyResponseHeaders(response: Response, providerId: string): He
 // Accounting observes the delivered stream; a tee would drain upstream ahead of
 // the client and buffer arbitrary output. Responses retain only bounded scalar
 // metadata; other formats keep their existing bounded JSON/frame inspection.
+// The generic Chat receiver is a distinct genuine child, never a codec cap.
+export class GenericUsageReader extends OwnedReaderDriver {
+  #cap: OwnedHttpUsage;
+  usage?: OwnedGenericChatUsage;
+  private output?: Uint8Array;
+  private transferred = false;
+  private constructor(cap: OwnedHttpUsage) { super(); this.#cap = cap; }
+  get usageCap(): OwnedHttpUsage { return this.#cap; }
+  static owns(cap: OwnedHttpUsage, reader: unknown): reader is GenericUsageReader {
+    return reader !== null && typeof reader === "object" && #cap in reader && reader.#cap === cap;
+  }
+  static checkInspection(reader: GenericUsageReader): void {
+    if (!reader || typeof reader !== "object" || !(#cap in reader)) throw identityFailure("protocol");
+    checkOwnedHttpGenericUsageInspection(reader.#cap, reader);
+  }
+  static create(cap: OwnedHttpUsage, response: Response, operation: HttpOperation, validated: ValidatedNativeUsage | undefined,
+    context: Readonly<UsageTokenContext> | undefined): GenericUsageReader {
+    checkOwnedHttpGenericUsage(cap, response, operation, validated, context);
+    const reader = new GenericUsageReader(cap); ownOwnedHttpGenericUsageReader(cap, reader); return reader;
+  }
+  protected holdDriver(): void { holdOwnedHttpGenericUsage(this.#cap); }
+  protected driverProtocolFailure(): Error { return new Error("private usage read failed"); }
+  protected recordDriverFailure(kind: "read" | "cancel" | "unlock" | "closed" | "pull" | "retire", reason: unknown): object {
+    return this.failure(kind, reason);
+  }
+  protected recordDriverInstallationFailure(kind: "read" | "cancel" | "unlock" | "closed" | "pull", reason: unknown): object {
+    return ownedHttpGenericUsageInstallationFailure(this.#cap, this, kind, reason);
+  }
+  failure(kind: "acquire" | "read" | "cancel" | "unlock" | "closed" | "pull" | "retire" | "listener-add" | "listener-remove", reason: unknown): object {
+    return ownedHttpGenericUsageFailure(this.#cap, this, kind, reason);
+  }
+  hold(): void { this.uncertain(); }
+  protected propagatedDriverFailure(_reason: unknown): boolean { return false; }
+  protected captureDriverFailure(reason: unknown): object { return isIdentityFailure(reason) ? reason : this.failure("read", reason); }
+  protected driverPullFailure(_failure: object): void { this.uncertain(); }
+  protected captureDriverValue(part: ReadableStreamReadResult<Uint8Array>): void {
+    // FIRST is already consumed by the base. Finished-late results have no
+    // payload projection at all, including DONE and arbitrary extra metadata.
+    if (this.usage!.finished) return;
+    this.readDone = !!part.done;
+    if (this.readDone) { this.captured = undefined; return; }
+    let bytes = part.value;
+    let proof: ReturnType<typeof inspectOwnedBytes>;
+    try { proof = inspectOwnedBytes(bytes); } catch { throw this.driverProtocolFailure(); }
+    fundOwnedHttpGenericUsageCapture(this.#cap, this, 8192 + proof.backing + proof.length
+      + (this.output ? ownedByteBackingBytes(this.output) : 0));
+    const copy = newOwnedBytes(proof.length); copyOwnedBytes(copy, bytes!);
+    acceptOwnedHttpNormalizerIntoUsage(this.#cap, this, bytes!); bytes = undefined;
+    this.captured = copy;
+  }
+  open(body: ReadableStream<Uint8Array>): void {
+    this.body = body; bindOwnedHttpGenericUsageBody(this.#cap, this, body);
+    try {
+      this.reader = body.getReader();
+      const reader = this.reader;
+      this.observeDriverClosed(Object.getPrototypeOf(reader) === ReadableStreamDefaultReader.prototype && !Object.hasOwn(reader, "closed")
+        && typeof consumerLookupGetter === "function" && consumerLookupGetter.call(reader, "closed") === consumerNativeClosed);
+    } catch (reason) { const failure = this.failure(this.reader ? "closed" : "acquire", reason); reason = undefined; throw failure; }
+  }
+  read(): Promise<void> {
+    this.clearOutput();
+    if (this.output || this.driverCapturing) { this.uncertain(); throw this.driverProtocolFailure(); }
+    this.captured = undefined; return this.startDriverRead();
+  }
+  beginPull(): void { this.beginDriverPull(); }
+  ownPull(original: Promise<void>): Promise<void> { return this.ownDriverPull(original); }
+  stop(cancel: boolean, reason?: unknown): void {
+    // A substituted downstream operand cannot discharge an offered snapshot.
+    // Cancellation joins originals but supplies no missing transfer receipt.
+    if (this.output && !this.transferred) this.uncertain();
+    try { void this.stopUsageDriver(cancel, reason); } finally { reason = undefined; }
+  }
+  emit(controller: ReadableStreamDefaultController<Uint8Array>, bytes: Uint8Array): void {
+    if (this.output) { this.uncertain(); throw this.driverProtocolFailure(); }
+    this.output = bytes; this.transferred = false;
+    offerOwnedHttpGenericUsageOutput(this.#cap, this, bytes);
+    try { enqueueOwnedBytes(controller, bytes); }
+    catch (reason) { this.uncertain(); throw reason; }
+    finally { bytes = undefined as never; }
+  }
+  acknowledge(bytes: Uint8Array): void {
+    if (this.output !== bytes || this.driverDone) throw this.driverProtocolFailure();
+    this.transferred = true; this.clearOutput();
+  }
+  private clearOutput(): void {
+    if (!this.output || !this.transferred || this.driverCapturing || this.pulling || this.driverFlags & 32) return;
+    clearOwnedHttpGenericUsageOutput(this.#cap, this, this.output); this.output = undefined; this.transferred = false;
+  }
+  protected driverPullRetired(): void { this.clearOutput(); }
+  protected driverCleared(): void { this.output = undefined; }
+  protected driverRetired(): void { finishOwnedHttpGenericUsageReader(this.#cap, this); }
+  clearUsage(): void { this.usage?.clear(); this.usage = undefined; }
+}
+export function observeOwnedGenericUsage(cap: OwnedHttpUsage, response: Response, operation: HttpOperation,
+  validated?: ValidatedNativeUsage, context?: Readonly<UsageTokenContext>): Response {
+  checkOwnedHttpGenericUsage(cap, response, operation, validated, context);
+  const signal = operation.signal;
+  const reader = GenericUsageReader.create(cap, response, operation, validated, context);
+  try {
+    const usage = new OwnedGenericChatUsage(reader, operation, signal, validated, context); reader.usage = usage;
+    // Preserve the ordinary bodyless early return and actual body/header points.
+    if (!response.body) { usage.bodyless(response); return response; }
+    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+    usage.prepare(contentType, response.ok && operation.receivedRejection);
+    reader.open(response.body!);
+    return usage.publish(response);
+  } catch (reason) {
+    if (reader.usage) reader.usage.failPublication(reason); else reader.stop(true, reason);
+    throw reason;
+  } finally { response = undefined as never; }
+}
+export function ownedGenericUsageRetirement(cap: OwnedHttpUsage): Promise<void> {
+  return ownedHttpGenericUsageRetirement(cap);
+}
 export function observeUsage(response: Response, operation = new HttpOperation(), bodyInspection?: ResponseBodyInspection, responseFormat?: string, tariff?: RequestTariff, validated?: ValidatedNativeUsage, usageContext?: Readonly<UsageTokenContext>): { response: Response; result: Promise<ObservedUsage>; retired: Promise<void> } {
   const signal = operation.signal;
   const speech = responseFormat === "audio.binary";
@@ -331,6 +448,13 @@ export function observeOwnedCodecUsage(cap: OwnedCodecConsumer, response: Respon
   catch (error) { owner.delivering = undefined; sealConsumer(owner); throw error; }
   finally { response = undefined as never; }
 }
+export function matchesOwnedCodecUsagePublication(cap: OwnedCodecConsumer, reader: CodecReader, source: Response,
+  body: ReadableStream<Uint8Array>, operation: HttpOperation): boolean {
+  const owner = codecConsumers?.get(cap);
+  return !!owner && (owner.phase === "usage" || owner.phase === "sealed") && !owner.done && owner.current === source
+    && (owner.reader === reader || owner.replacement === reader) && reader.owner === owner
+    && owner.usageOwner?.matchesPublication(body, operation) === true;
+}
 export function matchesOwnedCodecUsage(cap: OwnedCodecConsumer, response: Response, usage: ObservedUsage): boolean {
   const owner = codecConsumers?.get(cap);
   return !!owner && (owner.phase === "usage" || owner.phase === "sealed")
@@ -373,6 +497,182 @@ function observeOwnedChatUsage(owner: CodecConsumer, response: Response, operati
   return state.publish(response);
 }
 
+interface OwnedHttpNormalizer {
+  receipt: OwnedHttpNormalization; response: Response; operation: HttpOperation; normalizationUnits: number;
+  reader?: OwnedNormalizerReader;
+}
+type OwnedNormalizer = CodecConsumer | OwnedHttpNormalizer;
+function fundNormalizer(owner: OwnedNormalizer, bytes: number): void {
+  if ("receipt" in owner) fundOwnedHttpNormalization(owner.receipt, bytes);
+  else fundOwnedHttpCodecNormalization(owner.codec, bytes);
+}
+
+// The three roles share ORIGINAL operation custody, never their EOF projection.
+// This private reader has no identity/codec authority and no result graph API.
+export class OwnedNormalizerReader extends OwnedReaderDriver {
+  #cap: OwnedHttpNormalization;
+  private mode: "limited" | "sniff" | "replay";
+  limitedBytes = 0;
+  limitedExceeded = false;
+  prefixWire?: Uint8Array;
+  prefixUsed = 0;
+  sniffWire?: Uint8Array;
+  unlockFailure?: object;
+  private output?: Uint8Array;
+  private outputTransferred = false;
+  private constructor(cap: OwnedHttpNormalization, mode: "limited" | "sniff") { super(); this.#cap = cap; this.mode = mode; }
+  static limited(cap: OwnedHttpNormalization): OwnedNormalizerReader { checkOwnedHttpNormalizationReaderCreation(cap); return new OwnedNormalizerReader(cap, "limited"); }
+  static sniff(cap: OwnedHttpNormalization): OwnedNormalizerReader { checkOwnedHttpNormalizationReaderCreation(cap); return new OwnedNormalizerReader(cap, "sniff"); }
+  static owns(cap: OwnedHttpNormalization, reader: unknown): reader is OwnedNormalizerReader {
+    return reader !== null && typeof reader === "object" && #cap in reader && reader.#cap === cap;
+  }
+  protected holdDriver(): void { holdOwnedHttpNormalization(this.#cap); }
+  protected driverProtocolFailure(): Error { return new Error("private normalization read failed"); }
+  protected recordDriverFailure(kind: "read" | "closed" | "cancel" | "unlock" | "pull" | "retire", reason: unknown): object {
+    return ownedHttpNormalizationFailure(this.#cap, this, kind, reason);
+  }
+  protected captureDriverFailure(reason: unknown): object {
+    return isIdentityFailure(reason) ? reason : this.recordDriverFailure("read", reason);
+  }
+  protected propagatedDriverFailure(_reason: unknown): boolean { return false; }
+  protected driverCleanupFailure(kind: "closed" | "cancel" | "unlock", failure: object): void {
+    if (kind === "unlock") this.unlockFailure = failure;
+  }
+  protected driverPullFailure(_failure: object): void { this.uncertain(); }
+  protected captureDriverValue(part: ReadableStreamReadResult<Uint8Array>): void {
+    this.readDone = !!part.done;
+    let bytes = part.value;
+    if (this.readDone && this.mode !== "sniff") { bytes = undefined; this.captured = undefined; return; }
+    if (this.mode === "sniff" && !bytes) { this.captured = undefined; return; }
+    let proof: ReturnType<typeof inspectOwnedBytes>;
+    try {
+      proof = inspectOwnedBytes(bytes);
+    } catch { throw this.driverProtocolFailure(); }
+    if (this.mode === "limited" && proof.length > 65536 - this.limitedBytes) {
+      this.limitedExceeded = true; bytes = undefined; this.captured = undefined; return;
+    }
+    if (this.mode === "sniff" && !proof.length) { bytes = undefined; this.captured = undefined; return; }
+    fundOwnedHttpNormalizationCapture(this.#cap, this, 8192 + proof.backing + proof.length
+      + (this.prefixWire ? ownedByteBackingBytes(this.prefixWire) : 0)
+      + (this.sniffWire ? ownedByteBackingBytes(this.sniffWire) : 0)
+      + (this.output ? ownedByteBackingBytes(this.output) : 0));
+    const copy = newOwnedBytes(proof.length); copyOwnedBytes(copy, bytes!); bytes = undefined;
+    this.captured = copy;
+    if (this.mode === "limited") this.limitedBytes += proof.length;
+  }
+  open(): void {
+    this.reader = this.body!.getReader();
+    const reader = this.reader;
+    this.observeDriverClosed(Object.getPrototypeOf(reader) === ReadableStreamDefaultReader.prototype && !Object.hasOwn(reader, "closed")
+      && typeof consumerLookupGetter === "function" && consumerLookupGetter.call(reader, "closed") === consumerNativeClosed);
+  }
+  prepareSniff(): void {
+    fundOwnedHttpNormalizationCapture(this.#cap, this, 8192 + 2 * FIRST_SSE_EVENT_LIMIT);
+    this.prefixWire = newOwnedBytes(FIRST_SSE_EVENT_LIMIT); this.sniffWire = newOwnedBytes(FIRST_SSE_EVENT_LIMIT);
+  }
+  read(): Promise<void> {
+    this.clearOutput();
+    if (this.output || this.driverCapturing) throw this.driverProtocolFailure();
+    this.captured = undefined;
+    return this.startDriverRead();
+  }
+  coalesce(): void {
+    if (!this.captured) return;
+    copyOwnedBytes(this.prefixWire!, this.captured, this.prefixUsed);
+    this.prefixUsed += ownedByteLength(this.captured); this.captured = undefined;
+  }
+  replay(): ReadableStream<Uint8Array> {
+    if (this.mode !== "sniff" || this.driverCapturing || this.driverFlags & 1) throw this.driverProtocolFailure();
+    this.mode = "replay"; this.sniffWire = undefined;
+    return new ReadableStream<Uint8Array>({ pull: this.pull.bind(this), cancel: this.cancel.bind(this) }, { highWaterMark: 0 });
+  }
+  cancelForOperation(operation: HttpOperation): void {
+    if (this.output && !this.outputTransferred) this.uncertain();
+    void this.stopNormalizerOperationDriver(operation);
+  }
+  cancel(reason: unknown): void {
+    if (this.output && !this.outputTransferred) this.uncertain();
+    try { if (!this.driverDone) void this.stopNormalizerDriver(reason); }
+    finally { reason = undefined; }
+  }
+  private emit(controller: ReadableStreamDefaultController<Uint8Array>, bytes: Uint8Array): void {
+    this.output = bytes; this.outputTransferred = false;
+    publishOwnedHttpNormalizationOutput(this.#cap, this, bytes);
+    try { enqueueOwnedBytes(controller, bytes); }
+    catch (reason) { this.uncertain(); throw reason; }
+    finally { bytes = undefined as never; }
+  }
+  pull(controller: ReadableStreamDefaultController<Uint8Array>): Promise<void> | void {
+    if (this.driverDone) return;
+    this.beginDriverPull();
+    this.clearOutput();
+    return this.ownDriverPull(this.next(controller));
+  }
+  private async next(controller: ReadableStreamDefaultController<Uint8Array>): Promise<void> {
+    try {
+      if (this.driverFlags & 1) return;
+      if (this.output) { this.uncertain(); throw this.driverProtocolFailure(); }
+      if (this.prefixUsed) {
+        this.emit(controller, ownedByteSubarray(this.prefixWire!, 0, this.prefixUsed));
+        this.prefixUsed = 0; this.prefixWire = undefined; return;
+      }
+      if (this.captured) { this.emit(controller, this.captured); this.captured = undefined; return; }
+      if (!this.readDone) await this.read();
+      if (this.driverFlags & 1) return;
+      if (this.readDone) {
+        void this.finishNormalizerDriver(); if (this.unlockFailure) throw this.unlockFailure;
+        controller.close();
+      } else { this.emit(controller, this.captured!); this.captured = undefined; }
+    } catch (reason) {
+      const failure = isIdentityFailure(reason) ? reason : this.recordDriverFailure("pull", reason); reason = undefined;
+      void this.finishNormalizerDriver(); controller.error(failure);
+    } finally { controller = undefined as never; }
+  }
+  acknowledge(cap: OwnedHttpNormalization, bytes: Uint8Array): void {
+    if (this.#cap !== cap || this.output !== bytes || this.driverDone) throw this.driverProtocolFailure();
+    this.outputTransferred = true; this.clearOutput();
+  }
+  private clearOutput(): void {
+    if (!this.output || !this.outputTransferred || this.pulling || this.driverCapturing || this.driverFlags & 32) return;
+    clearOwnedHttpNormalizationOutput(this.#cap, this, this.output);
+    this.output = undefined; this.outputTransferred = false;
+  }
+  protected driverPullRetired(): void { this.clearOutput(); }
+  protected driverCleared(): void {
+    this.prefixWire = undefined; this.sniffWire = undefined; this.output = undefined; this.unlockFailure = undefined;
+  }
+  protected driverRetired(): void { finishOwnedHttpNormalizationReader(this.#cap, this); }
+}
+export function ownsOwnedNormalizerReader(cap: OwnedHttpNormalization, reader: unknown): reader is OwnedNormalizerReader {
+  return OwnedNormalizerReader.owns(cap, reader);
+}
+export function acknowledgeOwnedNormalizerOutput(cap: OwnedHttpNormalization, reader: OwnedNormalizerReader, bytes: Uint8Array): void {
+  if (!OwnedNormalizerReader.owns(cap, reader)) throw identityFailure("protocol");
+  reader.acknowledge(cap, bytes);
+}
+function acquireNormalizer(owner: OwnedHttpNormalizer, response: Response, kind: "limited" | "sniff"): OwnedNormalizerReader {
+  if (owner.response !== response || owner.reader) throw identityFailure("protocol");
+  const body = response.body!;
+  const reader = kind === "limited" ? OwnedNormalizerReader.limited(owner.receipt) : OwnedNormalizerReader.sniff(owner.receipt);
+  reader.body = body; owner.reader = reader;
+  ownOwnedHttpNormalizationReader(owner.receipt, reader, body);
+  try { reader.open(); return reader; }
+  catch (reason) {
+    const failure = ownedHttpNormalizationFailure(owner.receipt, reader, reader.reader ? "closed" : "acquire", reason); reason = undefined;
+    reader.cancelForOperation(owner.operation); throw failure;
+  }
+}
+export async function normalizeOwnedHttpPreStreamError(http: OwnedHttpRequest, attempt: OwnedHttpUpload, response: Response,
+  streamingRequested: boolean, operation: HttpOperation, native?: NativeErrorContext): Promise<Response> {
+  const receipt = beginOwnedHttpNormalization(http, attempt, response, operation);
+  const owner: OwnedHttpNormalizer = { receipt, response, operation, normalizationUnits: 0 };
+  try { return await normalizePreStreamErrorWithOwner(response, streamingRequested, operation, native, undefined, owner); }
+  catch (reason) { owner.reader?.cancelForOperation(operation); throw reason; }
+  finally {
+    endOwnedHttpNormalization(receipt);
+    owner.response = undefined as never; owner.operation = undefined as never; owner.reader = undefined; response = undefined as never;
+  }
+}
 export function normalizePreStreamError(response: Response, streamingRequested: boolean, operation = new HttpOperation(), native?: NativeErrorContext): Promise<Response> {
   return normalizePreStreamErrorWithOwner(response, streamingRequested, operation, native);
 }
@@ -387,38 +687,46 @@ export async function normalizeOwnedCodecPreStreamError(cap: OwnedCodecConsumer,
   } catch (error) { sealConsumer(owner); throw error; }
   finally { response = undefined as never; }
 }
-async function normalizePreStreamErrorWithOwner(response: Response, streamingRequested: boolean, operation: HttpOperation, native?: NativeErrorContext, consumer?: CodecConsumer): Promise<Response> {
+async function normalizePreStreamErrorWithOwner(response: Response, streamingRequested: boolean, operation: HttpOperation, native?: NativeErrorContext, consumer?: CodecConsumer, normalization?: OwnedHttpNormalizer): Promise<Response> {
+  const normalizer = consumer ?? normalization;
   if (!streamingRequested) return response;
   const eventStream = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream") === true;
   if (response.status >= 400) {
     try {
-      if (eventStream && (consumer || response.body)) return await normalizeFirstSseEvent(response, response.status, operation, native, consumer);
-      const body = await readLimited(response, 64 * 1024, operation, consumer);
+      if (eventStream && (consumer || response.body)) return await normalizeFirstSseEvent(response, response.status, operation, native, consumer, normalization);
+      const body = await readLimited(response, 64 * 1024, operation, consumer, normalization);
       // Valid native JSON errors are already the wire contract: preserve even
       // whitespace and extension fields instead of rebuilding their envelope.
-      if (native && nativeJsonError(body, native)) return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
-      return mappedUpstreamError(response, upstreamError(body), response.status, native);
-    } catch {
+      if (native && nativeJsonError(body, native, normalizer)) return normalizer ? preserveOwnedNativeError(normalizer, response, body) : new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+      return mappedUpstreamError(response, upstreamError(body, normalizer), response.status, native, normalizer);
+    } catch (error) {
+      if (normalizer && isIdentityFailure(error)) throw error;
       // Failure to read error details cannot replace an accepted HTTP status.
       // The operation still owns cancellation and the accounting cause.
-      return mappedUpstreamError(response, {}, response.status, native);
+      return mappedUpstreamError(response, {}, response.status, native, normalizer);
     }
   }
   if (!response.ok || !eventStream || !consumer && !response.body) return response;
-  return normalizeFirstSseEvent(response, null, operation, native, consumer);
+  return normalizeFirstSseEvent(response, null, operation, native, consumer, normalization);
 }
 
 const FIRST_SSE_EVENT_LIMIT = 8 * 1024;
 
-async function normalizeFirstSseEvent(response: Response, errorStatus: number | null, operation: HttpOperation, native?: NativeErrorContext, consumer?: CodecConsumer): Promise<Response> {
+async function normalizeFirstSseEvent(response: Response, errorStatus: number | null, operation: HttpOperation, native?: NativeErrorContext, consumer?: CodecConsumer, normalization?: OwnedHttpNormalizer): Promise<Response> {
+  const normalizer = consumer ?? normalization;
   const ownedReader = consumer ? acquireConsumerReader(consumer, response) : undefined;
-  const reader = ownedReader ? undefined : response.body!.getReader();
-  const chunks: Uint8Array[] | undefined = ownedReader ? undefined : [];
+  const httpReader = normalization ? acquireNormalizer(normalization, response, "sniff") : undefined;
+  const reader = ownedReader || httpReader ? undefined : response.body!.getReader();
+  const chunks: Uint8Array[] | undefined = ownedReader || httpReader ? undefined : [];
   if (ownedReader) {
     fundOwnedHttpCodecConsumerCapture(ownedReader.owner.codec, 4 * FIRST_SSE_EVENT_LIMIT);
-    ownedReader.prefixWire = new Uint8Array(FIRST_SSE_EVENT_LIMIT); ownedReader.prefixUsed = 0; ownedReader.prefixRead = 0;
+    ownedReader.prefixWire = newOwnedBytes(FIRST_SSE_EVENT_LIMIT); ownedReader.prefixUsed = 0; ownedReader.prefixRead = 0;
   }
-  let sniffed = new Uint8Array(FIRST_SSE_EVENT_LIMIT);
+  if (httpReader) {
+    try { httpReader.prepareSniff(); }
+    catch (reason) { httpReader.cancelForOperation(operation); throw reason; }
+  }
+  let sniffed = httpReader ? httpReader.sniffWire! : ownedReader ? newOwnedBytes(FIRST_SSE_EVENT_LIMIT) : new Uint8Array(FIRST_SSE_EVENT_LIMIT);
   let sniffedLength = 0;
   let eventStart = 0;
   let transferred = false;
@@ -431,20 +739,27 @@ async function normalizeFirstSseEvent(response: Response, errorStatus: number | 
       if (ownedReader) {
         await operation.wait(readConsumer(ownedReader), errorStatus === null ? "upstream" : undefined);
         done = ownedReader.readDone; value = ownedReader.captured;
+      } else if (httpReader) {
+        await operation.wait(httpReader.read(), errorStatus === null ? "upstream" : undefined);
+        done = httpReader.readDone; value = httpReader.captured;
       } else ({ done, value } = await operation.wait(reader!.read(), errorStatus === null ? "upstream" : undefined));
-      if (value?.byteLength) {
+      if (value && (ownedReader || httpReader ? ownedByteLength(value) : value.byteLength)) {
         if (chunks) chunks.push(value);
-        else ownedReader!.crossingWire = value;
-        const copyLength = Math.min(value.byteLength, FIRST_SSE_EVENT_LIMIT - sniffedLength);
+        else if (ownedReader) ownedReader.crossingWire = value;
+        const copyLength = Math.min(ownedReader || httpReader ? ownedByteLength(value) : value.byteLength, FIRST_SSE_EVENT_LIMIT - sniffedLength);
         if (copyLength > 0) {
-          sniffed.set(value.subarray(0, copyLength), sniffedLength);
+          if (ownedReader || httpReader) copyOwnedBytes(sniffed, ownedByteSubarray(value, 0, copyLength), sniffedLength);
+          else sniffed.set(value.subarray(0, copyLength), sniffedLength);
           sniffedLength += copyLength;
         }
       }
       while (eventStart < sniffedLength) {
         const boundary = sseEventBoundary(sniffed, eventStart, sniffedLength);
         if (!boundary) break;
-        const event = classifySseEvent(sniffed.subarray(eventStart, boundary.start));
+        if (normalization) fundNormalizer(normalization, 8192 + 8 * (boundary.start - eventStart));
+        const event = ownedReader ? classifySseText(decodeOwnedBytes(newOwnedDecoder(), ownedByteSubarray(sniffed, eventStart, boundary.start)), normalizer)
+          : normalizer ? classifySseText(decodeOwnedBytes(newOwnedDecoder(), ownedByteSubarray(sniffed, eventStart, boundary.start)), normalizer)
+          : classifySseEvent(sniffed.subarray(eventStart, boundary.start));
         eventStart = boundary.end;
         if (event.kind === "empty") continue;
         // A native HTTP-200 error event is still SSE, even when it is the
@@ -455,25 +770,33 @@ async function normalizeFirstSseEvent(response: Response, errorStatus: number | 
           // Preserve the pre-output rejection's zero charge independently of
           // native HTTP-200 SSE delivery, including later client cancellation.
           operation.acceptRejection(status);
-          if (errorStatus !== null || !native) return mappedUpstreamError(response, upstream, status, native);
+          if (errorStatus !== null || !native) return mappedUpstreamError(response, upstream, status, native, normalizer);
+        }
+        if (httpReader) {
+          const output = replayNormalizerResponse(normalization!, response, httpReader); transferred = true; return output;
         }
         transferred = true;
         return ownedReader ? transferSniffReader(response, ownedReader, done) : replayResponse(response, reader!, chunks!, done);
       }
       if (done || sniffedLength === FIRST_SSE_EVENT_LIMIT) {
-        if (errorStatus === null) { transferred = true; return ownedReader ? transferSniffReader(response, ownedReader, done) : replayResponse(response, reader!, chunks!, done); }
-        return mappedUpstreamError(response, {}, errorStatus, native);
+        if (errorStatus === null) {
+          if (httpReader) { const output = replayNormalizerResponse(normalization!, response, httpReader); transferred = true; return output; }
+          transferred = true; return ownedReader ? transferSniffReader(response, ownedReader, done) : replayResponse(response, reader!, chunks!, done);
+        }
+        return mappedUpstreamError(response, {}, errorStatus, native, normalizer);
       }
+      if (httpReader) httpReader.coalesce();
       if (ownedReader?.crossingWire) {
         // This read contained no complete nonempty event and did not reach the
         // sniff cutoff. Coalescing it cannot advance accepted usage evidence.
         const bytes = ownedReader.crossingWire;
-        ownedReader.prefixWire!.set(bytes, ownedReader.prefixUsed!);
-        ownedReader.prefixUsed! += bytes.byteLength;
+        copyOwnedBytes(ownedReader.prefixWire!, bytes, ownedReader.prefixUsed!);
+        ownedReader.prefixUsed! += ownedByteLength(bytes);
         ownedReader.crossingWire = undefined; ownedReader.captured = undefined;
       }
+      if (httpReader) value = undefined;
     }
-  } catch (error) { if (ownedReader) { hasPrimary = true; primary = error; } throw error; }
+  } catch (error) { if (ownedReader || httpReader) { hasPrimary = true; primary = error; } throw error; }
   finally {
     try {
       if (!transferred) {
@@ -481,9 +804,12 @@ async function normalizeFirstSseEvent(response: Response, errorStatus: number | 
           void retireConsumerReader(ownedReader, "cancel", true);
           const cleanup = ownedReader.unlockFailure;
           if (cleanup) { if (hasPrimary) throw new AggregateError([primary, cleanup], "owned sniff retirement"); throw cleanup; }
+        } else if (httpReader) {
+          httpReader.cancelForOperation(operation);
+          if (httpReader.unlockFailure) { if (hasPrimary) throw new AggregateError([primary, httpReader.unlockFailure], "owned normalization cleanup"); throw httpReader.unlockFailure; }
         } else { void reader!.cancel(operation.signal.reason).catch(() => undefined); reader!.releaseLock(); }
       }
-    } finally { primary = undefined; if (ownedReader) sniffed = undefined as never; }
+    } finally { primary = undefined; if (ownedReader || httpReader) sniffed = undefined as never; }
   }
 }
 
@@ -504,6 +830,16 @@ function usageConsumerReader(owner: CodecConsumer, response: Response): CodecRea
   // JSON and mapped replacements acquire their own actual body. Any abandoned
   // codec reader remains separately joined; replacement is never its receipt.
   return acquireConsumerReader(owner, response);
+}
+function replayNormalizerResponse(owner: OwnedHttpNormalizer, response: Response, reader: OwnedNormalizerReader): Response {
+  const body = reader.replay();
+  const status = response.status, statusText = response.statusText, headers = response.headers;
+  if (typeof status !== "number" || typeof statusText !== "string") throw identityFailure("protocol");
+  const measured = measureOwnedHeaders(headers);
+  fundNormalizer(owner, 8192 + 128 * owner.normalizationUnits + 3 * measured + 6 * statusText.length);
+  if (measureOwnedHeaders(headers) > measured) throw identityFailure("protocol");
+  const output = newOwnedResponse(body, status, statusText, headers);
+  bindOwnedHttpNormalizationReplay(owner.receipt, reader, output); return output;
 }
 function replayResponse(response: Response, reader: ReadableStreamDefaultReader<Uint8Array>, chunks: Uint8Array[], readerDone: boolean): Response {
   let chunkIndex = 0;
@@ -547,9 +883,13 @@ export function sseEventBoundary(bytes: Uint8Array, start: number, length: numbe
 }
 
 function classifySseEvent(bytes: Uint8Array): { kind: "empty" } | { kind: "healthy" | "error"; upstream: ReturnType<typeof upstreamError> } {
+  return classifySseText(new TextDecoder().decode(bytes));
+}
+function classifySseText(text: string, consumer?: OwnedNormalizer): { kind: "empty" } | { kind: "healthy" | "error"; upstream: ReturnType<typeof upstreamError> } {
+  if (consumer) admitOwnedNormalizerText(consumer, text);
   let eventType = "";
   const dataLines: string[] = [];
-  for (const line of new TextDecoder().decode(bytes).split(/\r\n|\r|\n/)) {
+  for (const line of text.split(/\r\n|\r|\n/)) {
     if (!line || line.startsWith(":")) continue;
     const colon = line.indexOf(":");
     const field = colon < 0 ? line : line.slice(0, colon);
@@ -560,18 +900,20 @@ function classifySseEvent(bytes: Uint8Array): { kind: "empty" } | { kind: "healt
   }
   const data = dataLines.join("\n");
   if (dataLines.length === 0) return { kind: "empty" };
-  const upstream = upstreamError(data);
-  return eventType === "error" || hasTopLevelError(data) ? { kind: "error", upstream } : { kind: "healthy", upstream };
+  const upstream = upstreamError(data, consumer);
+  return eventType === "error" || hasTopLevelError(data, consumer) ? { kind: "error", upstream } : { kind: "healthy", upstream };
 }
 
-function hasTopLevelError(data: string): boolean {
+function hasTopLevelError(data: string, consumer?: OwnedNormalizer): boolean {
+  if (consumer) admitOwnedNormalizerText(consumer, data);
   try {
-    const value: unknown = JSON.parse(data);
+    const value: unknown = consumer ? ownedNormalizerParse(data) : JSON.parse(data);
     return !!value && typeof value === "object" && !Array.isArray(value) && Object.prototype.hasOwnProperty.call(value, "error");
   } catch { return false; }
 }
 
-function mappedUpstreamError(response: Response, upstream: NativeErrorDetails, status: number, native?: NativeErrorContext): Response {
+function mappedUpstreamError(response: Response, upstream: NativeErrorDetails, status: number, native?: NativeErrorContext, consumer?: OwnedNormalizer): Response {
+  if (consumer) return mappedOwnedUpstreamError(consumer, response, upstream, status, native);
   const headers = new Headers(response.headers);
   headers.delete("content-length");
   headers.set("content-type", "application/json; charset=utf-8");
@@ -582,19 +924,68 @@ function mappedUpstreamError(response: Response, upstream: NativeErrorDetails, s
   return Response.json(body, { status, statusText: status === response.status ? response.statusText : "", headers });
 }
 
-function nativeJsonError(body: string, native: NativeErrorContext): boolean {
+const ownedNormalizerParse = JSON.parse;
+function admitOwnedNormalizerText(consumer: OwnedNormalizer, text: string): void {
+  if (!("receipt" in consumer) && consumer.phase !== "normalizing") throw identityFailure("protocol");
+  const units = Math.max(consumer.normalizationUnits ?? 0, text.length);
+  // Two simultaneous parsed graphs (classification plus projected param),
+  // decoded/SSE text occurrences and line/member cells. No depth/node cap is
+  // imposed on this existing bounded source. The complete inventory separates
+  // fixed execution from these representation/workspace products.
+  fundNormalizer(consumer, 8192 + 128 * units);
+  consumer.normalizationUnits = units;
+}
+function preserveOwnedNativeError(consumer: OwnedNormalizer, response: Response, body: string): Response {
+  const status = response.status, statusText = response.statusText, headers = response.headers;
+  if (typeof statusText !== "string") throw identityFailure("protocol");
+  const measured = measureOwnedHeaders(headers);
+  fundNormalizer(consumer, 8192 + 128 * (consumer.normalizationUnits ?? 0)
+    + 3 * measured + 6 * statusText.length + 8 * body.length);
+  if (measureOwnedHeaders(headers) > measured) throw identityFailure("protocol");
+  return newOwnedResponse(body, status, statusText, headers);
+}
+function mappedOwnedUpstreamError(consumer: OwnedNormalizer, response: Response, upstream: NativeErrorDetails,
+  status: number, native?: NativeErrorContext): Response {
+  if (!("receipt" in consumer) && consumer.phase !== "normalizing") throw identityFailure("protocol");
+  const source = response.headers, measured = measureOwnedHeaders(source), sourceUnits = consumer.normalizationUnits ?? 0;
+  fundNormalizer(consumer, 16384 + 128 * sourceUnits + 3 * measured);
+  if (measureOwnedHeaders(source) > measured) throw identityFailure("protocol");
+  const headers = newOwnedHeaders(source);
+  deleteOwnedHeader(headers, "content-length"); setOwnedHeader(headers, "content-type", "application/json; charset=utf-8");
+  const message = upstream.message ?? (response.ok ? "upstream request failed" : response.statusText || "upstream request failed");
+  const requestId = native ? upstream.requestId === undefined ? getOwnedHeader(headers, "request-id") ?? native.requestId : upstream.requestId : undefined;
+  const statusText = status === response.status ? response.statusText : "";
+  if (typeof message !== "string" || typeof statusText !== "string") throw identityFailure("protocol");
+  // JSON number normalization takes at most32 units per source token; quoted
+  // lexemes do not expand. The external fallback/header strings are additional
+  // occurrences, each with the six-unit escape bound, before envelope creation.
+  const external = message.length + (upstream.type?.length ?? 0) + (typeof upstream.code === "string" ? upstream.code.length : 0)
+    + (requestId?.length ?? 0), serialized = 32 * sourceUnits + 6 * external + 512;
+  const finalHeaders = measureOwnedHeaders(headers);
+  fundNormalizer(consumer, 16384 + 128 * sourceUnits + 3 * measured + 3 * finalHeaders
+    + 6 * statusText.length + 8 * external + 14 * serialized);
+  const body = native ? nativeErrorEnvelope(native, status, { ...upstream, message, requestId })
+    : { error: { message, type: upstream.type ?? "upstream_error", code: upstream.code ?? status } };
+  const text = privateMappedErrorJson(body);
+  if (measureOwnedHeaders(headers) > finalHeaders) throw identityFailure("protocol");
+  return newOwnedResponse(text, status, statusText, headers);
+}
+
+function nativeJsonError(body: string, native: NativeErrorContext, consumer?: OwnedNormalizer): boolean {
+  if (consumer) admitOwnedNormalizerText(consumer, body);
   try {
-    const value = JSON.parse(body), error = value?.error;
+    const value = consumer ? ownedNormalizerParse(body) : JSON.parse(body), error = value?.error;
     if (!error || typeof error.message !== "string" || typeof error.type !== "string") return false;
     return native.format === "anthropic" ? value.type === "error" && (typeof value.request_id === "string" || value.request_id === null) : Object.hasOwn(error, "param") && Object.hasOwn(error, "code");
   } catch { return false; }
 }
 
-function upstreamError(body: string): NativeErrorDetails {
+function upstreamError(body: string, consumer?: OwnedNormalizer): NativeErrorDetails {
+  if (consumer) admitOwnedNormalizerText(consumer, body);
   let value: unknown;
   try {
     const eventData = firstSseData(body);
-    value = JSON.parse(eventData || body);
+    value = consumer ? ownedNormalizerParse(eventData || body) : JSON.parse(eventData || body);
   } catch { return {}; }
   if (!value || typeof value !== "object" || Array.isArray(value)) return {};
   const error = "error" in value && value.error && typeof value.error === "object" && !Array.isArray(value.error) ? value.error as Record<string, unknown> : value as Record<string, unknown>;
@@ -626,24 +1017,35 @@ function firstSseData(body: string): string | null {
   return dataLines.length > 0 ? dataLines.join("\n") : null;
 }
 
-async function readLimited(response: Response, limit: number, operation: HttpOperation, consumer?: CodecConsumer): Promise<string> {
+async function readLimited(response: Response, limit: number, operation: HttpOperation, consumer?: CodecConsumer, normalization?: OwnedHttpNormalizer): Promise<string> {
   if (!consumer && !response.body) return "";
   const ownedReader = consumer ? acquireConsumerReader(consumer, response) : undefined;
-  const reader = ownedReader ? undefined : response.body!.getReader(), decoder = new TextDecoder();
+  const httpReader = normalization ? acquireNormalizer(normalization, response, "limited") : undefined;
+  const reader = ownedReader || httpReader ? undefined : response.body!.getReader();
+  let decoder: TextDecoder;
+  if (httpReader) {
+    try { decoder = newOwnedDecoder(); }
+    catch (reason) { httpReader.cancelForOperation(operation); throw reason; }
+  } else decoder = ownedReader ? newOwnedDecoder() : new TextDecoder();
   let size = 0, text = "";
   try {
     while (true) {
       let done: boolean, value: Uint8Array | undefined;
       if (ownedReader) { await operation.wait(readConsumer(ownedReader)); done = ownedReader.readDone; value = ownedReader.captured; }
+      else if (httpReader) { await operation.wait(httpReader.read()); done = httpReader.readDone; value = httpReader.captured; }
       else ({ done, value } = await operation.wait(reader!.read()));
       if (done) break;
-      size += value!.byteLength;
+      if (httpReader?.limitedExceeded) return "";
+      size += ownedReader || httpReader ? ownedByteLength(value!) : value!.byteLength;
       if (size > limit) return "";
-      text += decoder.decode(value, { stream: true });
+      if (normalization) fundNormalizer(normalization, 8192 + 8 * size);
+      text += ownedReader || httpReader ? decodeOwnedBytes(decoder, value, true) : decoder.decode(value, { stream: true });
+      if (httpReader) value = undefined;
     }
-    return text + decoder.decode();
+    return text + (ownedReader || httpReader ? decodeOwnedBytes(decoder) : decoder.decode());
   } finally {
     if (ownedReader) { void retireConsumerReader(ownedReader, "cancel", true); if (ownedReader.unlockFailure) throw ownedReader.unlockFailure; }
+    else if (httpReader) { httpReader.cancelForOperation(operation); if (httpReader.unlockFailure) throw httpReader.unlockFailure; }
     else { void reader!.cancel(operation.signal.reason).catch(() => undefined); reader!.releaseLock(); }
   }
 }
