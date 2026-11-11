@@ -105,8 +105,8 @@ export function createOwnedAckPhaseFixture(options, charged) {
   let released = false, httpRoot;
   const custody = { posts: [], ledger: [], events: [], commits: [], credit: [], cancelCalls: 0, cancelDone: 0, fetchInstalls: 0 };
   function gate() { let release; const promise = new Promise(done => { release = done; }); gates.push(release); if (released) release(); return promise; }
-  const readGate = gate(); let releaseReads = gates[0];
-  const uploadGate = gate(); const uploadWork = [], sharedFailure = {};
+  let readGate, releaseReadGate, readsReleased = false, uploadGate;
+  const uploadWork = [], sharedFailure = {};
   function response(value, path) {
     if (options.failureMode) {
       if (path !== '/reserve') return value;
@@ -140,6 +140,10 @@ export function createOwnedAckPhaseFixture(options, charged) {
       Object.defineProperty(reader, 'read', { value(...readArgs) {
         row.bodyReads++; const original = Reflect.apply(read, this, readArgs);
         const hold = first && (options.pendingRead || options.activeFinal && (path === '/settle' || path === '/ingest')); first = false;
+        if (hold && !readGate) {
+          readGate = gate(); releaseReadGate = gates[gates.length - 1];
+          if (readsReleased) releaseReadGate();
+        }
         const accepted = hold ? original.then(async part => { await readGate; return part; }) : original;
         if (!options.readInstallThrow) return accepted;
         return { then(yes,no) { accepted.then(yes,no); throw undefined; } };
@@ -230,6 +234,7 @@ export function createOwnedAckPhaseFixture(options, charged) {
     upload(init) {
       if (!options.upload || !init?.body || typeof init.body.getReader !== 'function') return;
       row.uploads++;
+      uploadGate ??= gate();
       const body = init.body, original = uploadGate.then(async () => { await new Response(body).arrayBuffer(); row.uploadDone++; });
       uploadWork.push(original);
       return Promise.resolve(new Response('{"id":"fixture","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}', {headers:{'content-type':'application/json'}}));
@@ -253,11 +258,11 @@ export function createOwnedAckPhaseFixture(options, charged) {
     terminal(cell) { terminals.push(cell); },
     budget(cell) { budgets.push(cell); },
     retry(owner, chosen, rejected) { row.retries.push({ closed: owner.retryClosed, retry: Object.hasOwn(owner, 'retry'), required: Object.hasOwn(owner, 'required'), chosen, rejected }); },
-    snapshot() { return { ...row, custody, provenance: options.provenance, origins: [...(httpRoot?.sinkOrigins.values() ?? [])].filter(value => typeof value === "object"), rootFunding: httpRoot?.funding.bytes, unknown: httpRoot?.unknown, charge: charged(), acks: acks.map(cell => ({ keys: Object.keys(cell), terminal: cell.slot !== undefined, state: cell.joinState,
+    snapshot() { return { ...row, custody, budgetAccepted: globalThis.__ownedBudgetSequenceFixture?.row.accepted, provenance: options.provenance, origins: [...(httpRoot?.sinkOrigins.values() ?? [])].filter(value => typeof value === "object"), rootFunding: httpRoot?.funding.bytes, unknown: httpRoot?.unknown, charge: charged(), acks: acks.map(cell => ({ keys: Object.keys(cell), terminal: cell.slot !== undefined, state: cell.joinState,
       closed: cell.closedState, unlock: cell.unlockState, pending:cell.pending, capture: Object.hasOwn(cell, 'capture') })),
       reads: reads.map(({cell}) => ({ state: cell.state, severed: cell.owner === undefined, keys: Object.keys(cell) })),
       retirements, cuts: cuts.map(({cell, ...cut}) => cut), budgets: budgets.map(cell => ({ keys: Object.keys(cell), phase: cell.phase, physical: cell.physical })),
-      terminals: terminals.map(cell => ({ keys: Object.keys(cell), live: Object.keys(cell.operations), pending: cell.pending, physical: cell.physical, ackCredits: cell.ackCredits })) }; },
+      terminals: terminals.map(cell => ({ keys: Object.keys(cell), live: Object.keys(cell.operations), phase: cell.phase, pending: cell.pending, physical: cell.physical, ackCredits: cell.ackCredits })) }; },
     stale() {
       let gets = 0, callbacks = 0;
       const foreign = {}; for (const key of ['then', 'done', 'value', 'body', 'buffer']) Object.defineProperty(foreign, key, { get() { gets++; throw Error('stale ACK handler inspected payload'); } });
@@ -266,7 +271,7 @@ export function createOwnedAckPhaseFixture(options, charged) {
       if (acks.every(cell => cell.joinState & 16384)) for (const role of roles) { role.yes(foreign); role.no(foreign); callbacks += 2; }
       return { gets, callbacks };
     },
-    releaseReads() { releaseReads(); },
+    releaseReads() { readsReleased = true; releaseReadGate?.(); },
     release() { released = true; for (const release of gates) release(); return Promise.all(uploadWork); },
   };
   return api;
@@ -347,8 +352,8 @@ export function createOwnedTerminalFixture(options, commands) {
     closes: 0, installs: 0, launches: 0, logical: [], lateGets: 0, methodsA: 0, methodsB: 0,
     rejected: 0, foreignReads: 0, retainedFailure: false, pending: 0, diagnostics: [], order: [],
     laneFaults: 0, laneInstalls: 0, bodyCancels: 0, bodyCancelSettled: 0, recovery: [] };
-  let factory, terminalEntry = false, releaseLate;
-  const lateGate = new Promise(resolve => { releaseLate = resolve; }), sharedLaneReason = {};
+  let factory, terminalEntry = false, releaseLate, lateGate, lateReleased = false;
+  const sharedLaneReason = {};
   const wrapOriginal = promise => {
     row.pending++;
     return promise.then(value => { row.pending--; return value; }, error => { row.pending--; throw error; });
@@ -377,7 +382,10 @@ export function createOwnedTerminalFixture(options, commands) {
               if (!fault) return wrapOriginal(original);
               row.laneFaults++;
               original = original.then(async response => {
-                if (options.laneFault === 'install-before-late') await lateGate;
+                if (options.laneFault === 'install-before-late') {
+                  lateGate ??= new Promise(resolve => { releaseLate = resolve; if (lateReleased) resolve(); });
+                  await lateGate;
+                }
                 const body = response.body, cancel = body?.cancel;
                 if (body) Object.defineProperty(body, 'cancel', { value(...args) {
                   row.bodyCancels++;
@@ -443,7 +451,7 @@ export function createOwnedTerminalFixture(options, commands) {
     logical(value) { row.logical.push(value); },
     diagnostic(origin, absent) { row.diagnostics.push({ origin, undefined: absent }); if (options.diagnosticFailure) throw undefined; },
     clear(outcome, failed) { if (failed) row.retainedFailure = !!outcome; },
-    release() { factory = undefined; releaseLate(); },
+    release() { factory = undefined; lateReleased = true; releaseLate?.(); },
   };
 }
 // Shared authored Node/Workerd witness. All deferred serialization and cleanup
@@ -452,9 +460,8 @@ export function createOwnedBudgetSequenceFixture(options, ExactBodyCharge, limit
   let pressure, releaseFailure, releaseSend, releaseCancel;
   const bindingRestores = [];
   let bindingSequence;
-  const failureGate = new Promise(resolve => { releaseFailure = resolve; });
-  const sendGate = new Promise(resolve => { releaseSend = resolve; });
-  const cancelGate = new Promise(resolve => { releaseCancel = resolve; });
+  let failureGate, sendGate, cancelGate;
+  let failureReleased = options.legs === 1 && !!options.reserveFailure, sendReleased = false, cancelReleased = false;
   const shared = {}, originalReplace = ExactBodyCharge.prototype.replace;
   let watching = false;
   const row = { accepted: 0, reserve: [], dispatch: [], settle: [], queue: [], branches: [],
@@ -482,7 +489,6 @@ export function createOwnedBudgetSequenceFixture(options, ExactBodyCharge, limit
   }
   function stopWatching() { if (watching) ExactBodyCharge.prototype.replace = originalReplace; watching = false; }
   function freePressure() { pressure?.release(); pressure = undefined; }
-  if (options.legs === 1 && options.reserveFailure) releaseFailure();
   return {
     row,
     beforePlan(value) {
@@ -539,7 +545,7 @@ export function createOwnedBudgetSequenceFixture(options, ExactBodyCharge, limit
           return Reflect.apply(originalReplace, this, [bytes]);
         };
       }
-      if (row.accepted === options.legs - (options.reserveFailure ? 1 : 0)) releaseFailure();
+      if (row.accepted === options.legs - (options.reserveFailure ? 1 : 0)) { failureReleased = true; releaseFailure?.(); }
     },
     reserveClaimed(sink, intent, ordinal, cap) {
       if (!options.rights) return;
@@ -568,6 +574,7 @@ export function createOwnedBudgetSequenceFixture(options, ExactBodyCharge, limit
         const ordinal = row.reserve.length;
         row.reserve.push({ id: body.reservationId, ordinal, dispatched: body.dispatched === true });
         if (ordinal === (options.failureOrdinal ?? options.legs - 1) && options.reserveFailure) {
+          failureGate ??= new Promise(resolve => { releaseFailure = resolve; if (failureReleased) resolve(); });
           await failureGate;
           if (options.reserveFailure === 'denied') return json({ allowed: false });
           if (options.reserveFailure === 'malformed') return json({ ignored: true });
@@ -585,7 +592,11 @@ export function createOwnedBudgetSequenceFixture(options, ExactBodyCharge, limit
           if (options.settleFailure === 'undefined' || options.settleFailure === 'shared') fail(options.settleFailure);
           const status = Number(options.settleFailure);
           if (options.holdCancel) return new Response(new ReadableStream({
-            cancel() { row.cancel++; return cancelGate.then(() => { row.cancelSettled++; }); },
+            cancel() {
+              row.cancel++;
+              cancelGate ??= new Promise(resolve => { releaseCancel = resolve; if (cancelReleased) resolve(); });
+              return cancelGate.then(() => { row.cancelSettled++; });
+            },
           }, { highWaterMark: 0 }), { status });
           return json({}, status);
         }
@@ -599,6 +610,7 @@ export function createOwnedBudgetSequenceFixture(options, ExactBodyCharge, limit
         root: Object.isFrozen(value), request: Object.isFrozen(value.request), ledger: Object.isFrozen(value.ledger),
         before: JSON.stringify(value), after: null, hookBlocked: false };
       row.queue.push(copy);
+      if (options.holdSend) sendGate ??= new Promise(resolve => { releaseSend = resolve; if (sendReleased) resolve(); });
       return (options.holdSend ? sendGate : Promise.resolve()).then(async () => {
         copy.hookBlocked = !Reflect.defineProperty(value.request, 'toJSON', { value() { throw Error('queue hook ran'); } });
         copy.after = JSON.stringify(value);
@@ -606,9 +618,9 @@ export function createOwnedBudgetSequenceFixture(options, ExactBodyCharge, limit
         await Reflect.apply(queue.send, queue, args); row.sendSettled++;
       });
     },
-    release() { for (const restore of bindingRestores) restore(); bindingRestores.length = 0; stopWatching(); freePressure(); releaseFailure(); releaseSend(); releaseCancel(); },
-    releaseSend() { stopWatching(); freePressure(); releaseSend(); },
-    releaseCancel() { releaseCancel(); },
+    release() { for (const restore of bindingRestores) restore(); bindingRestores.length = 0; stopWatching(); freePressure(); failureReleased = true; sendReleased = true; cancelReleased = true; releaseFailure?.(); releaseSend?.(); releaseCancel?.(); },
+    releaseSend() { stopWatching(); freePressure(); sendReleased = true; releaseSend?.(); },
+    releaseCancel() { cancelReleased = true; releaseCancel?.(); },
   };
 }
 export async function seedOwnedHttpChat(runtime) {

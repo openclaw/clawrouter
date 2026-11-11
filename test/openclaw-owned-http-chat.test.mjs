@@ -7,6 +7,19 @@ import { stripTypeScriptTypes } from 'node:module';
 import { runOpenClawConsumer } from './helpers/openclaw-consumer.mjs';
 import { assertOwnedAckCustody, ownedHttpRouter, ownedHttpUpstream, seedOwnedHttpChat } from './helpers/owned-http-chat-fixture.mjs';
 
+function ackFailureState(held, terminal) {
+  return JSON.stringify({ cuts: held?.cuts.length, retirements: held?.retirements.length,
+    logical: terminal?.logical.length, pending: terminal?.pending, unknown: held?.unknown,
+    budgetAccepted: held?.budgetAccepted, posts: held?.custody.posts.length, events: held?.custody.events.length,
+    reserve: held?.custody.ledger.filter(row => row.path === '/reserve').length,
+    dispatch: held?.custody.ledger.filter(row => row.path === '/dispatch').length,
+    settle: held?.custody.ledger.filter(row => row.path === '/settle').length,
+    ingest: held?.custody.ledger.filter(row => row.path === '/ingest').length,
+    acks: held?.acks.map(({ state, closed, unlock, pending }) => ({ state, closed, unlock, pending })),
+    terminals: held?.terminals.map(({ phase, pending, physical, ackCredits }) => ({ phase, pending, physical, ackCredits })),
+    origins: held?.origins.map(({ origin, ordinal, primaryIsUndefined }) => ({ origin, ordinal, undefined: primaryIsUndefined })) });
+}
+
 test('private HTTP modules remain loadable by Node strip-only TypeScript grammar', async () => {
   for (const name of ['credential-preflight-source', 'http-identity-owner', 'identity-admission', 'proxy-response',
     'proxy', 'soft-budget', 'token-usage', 'venice-chat-runtime']) {
@@ -33,7 +46,9 @@ test('actual pinned OpenClaw UNIFIED Chat consumes the compiled owned HTTP entry
       while (true) {
         const report = JSON.parse((await request('/fixture/state')).text);
         if (report.completed.length === report.intakes.length) {
-          assert.ok(report.completed.every(row => !row.failed), 'all accepted native HTTP roots settled successfully'); break;
+          assert.ok(report.completed.every(row => !row.failed), 'all accepted native HTTP roots settled successfully: '
+            + JSON.stringify({ intakes: report.intakes.length, completed: report.completed.length,
+              failures: report.completed.filter(row => row.failed).map(({ id, origins }) => ({ id, origins })) })); break;
         }
         await new Promise(resolve => setTimeout(resolve, 10));
       }
@@ -95,14 +110,14 @@ test(`actual pinned unified Chat preserves accounting custody: ${custodyMode}`, 
       env: { CLAWROUTER_CONTRACT_ORIGIN: origin, CLAWROUTER_CUSTODY_SCENARIO: custodyMode } });
     let held, terminal, deadline = Date.now() + 30000;
     do {
-      assert.ok(Date.now() < deadline, 'logical ACK handoff stalled');
+      assert.ok(Date.now() < deadline, 'logical ACK handoff stalled: ' + ackFailureState(held, terminal));
       held = await inspect(); terminal = JSON.parse((await request('/fixture/terminal')).text);
       if (held.cuts.length < 13 || !terminal.logical.length || terminal.pending) await new Promise(resolve => setTimeout(resolve, 10));
     } while (held.cuts.length < 13 || !terminal.logical.length || terminal.pending);
     assert.equal(terminal.logical.length, 1);
     await request('/fixture/ack-phases', { method: 'DELETE' });
     let ended; deadline = Date.now() + 30000;
-    do { assert.ok(Date.now() < deadline, 'physical ACK retirement stalled'); ended = await inspect(); if (ended.retirements.length < 13) await new Promise(resolve => setTimeout(resolve, 10)); }
+    do { assert.ok(Date.now() < deadline, 'physical ACK retirement stalled: ' + ackFailureState(ended ?? held, terminal)); ended = await inspect(); if (ended.retirements.length < 13) await new Promise(resolve => setTimeout(resolve, 10)); }
     while (ended.retirements.length < 13);
     assertOwnedAckCustody(assert, custodyMode, held, ended, await inspect('?recheck'), await inspect('?stale'));
     const state = JSON.parse((await request('/fixture/state')).text);

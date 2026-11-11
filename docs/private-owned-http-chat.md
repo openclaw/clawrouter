@@ -1,5 +1,77 @@
 # Private owned HTTP Chat staging
 
+### Hosted4e8 consumer diagnosis — fixture gate context, production cause unproved
+
+Exact hosted source: `4e8c68a1f0dda9bdabd2ede26153be7914fb7074`.
+[Consumer run42999415454, job130451631759](https://github.com/openclaw/clawrouter/actions/runs/42999415454/job/130451631759)
+started Workerd successfully. The normal pinned-client suite passed7 tests;
+each of the3 custody client invocations passed its failed-delivery test. The
+outer harness then failed its all-completed-roots-success assertion and the
+provider-install/retry-cancel/new-post-install logical-ACK predicates. These
+client results do not prove accounting or retirement success.
+
+The supplied Workerd stack identifies Object.accepted, injected immediately
+after acceptOwnedHttpBudgetReservation's actual leg acceptance. The fixture
+constructs failureGate/sendGate/cancelGate in createOwnedBudgetSequenceFixture
+during the separate setup POST. accepted() resolves failureGate after the last
+expected accepted leg even when options.reserveFailure is absent. In all three
+reported schedules the options are legs4/providerfireworks, so the only
+`await failureGate` branch is unreachable. The warning therefore has a concrete
+fixture-created Promise and expired setup context; it does not establish that
+a production acquisition or logical ACK was canceled by that particular gate.
+
+The same source-context defect exists in unused setup gates: the terminal's
+lateGate and ACK fixture's readGate/uploadGate are constructed by their setup
+POSTs. DELETE cleanup resolves them along with the budget's three gates.
+Per-reader ACK closed/unlock gates are different: they are constructed when
+the inference reader is acquired and are intentional physical holds. They must
+remain held until the existing release point. The warning on cleanup release
+must not be treated as a genuine application retirement receipt.
+
+This is not an established expected failure of disabled R_failed replacement.
+These cases configure response retry, not the five-code credential-producer
+failure path. No new-family manifest refusal flag is installed in the tested
+control flow. Acceptance reaching the injected budget hook also proves that
+the initial request/plan admission was not uniformly refused. Later admission
+or production failure remains possible; neither is proven by the bare timeout.
+
+**Authorized fixture repair, implemented; runtime UNRUN.** Each existing named
+gate API now represents an unused gate with its release fact only. Its
+Promise/resolver is created lazily in the originating inference operation when
+that operation first needs the hold. A release before first use records that
+fact without constructing/resolving a setup-context Promise; first use observes
+an already released gate consistently. Budget failure awaits stay inside the
+returned fixture fetch Promise, send/cancel holds remain in their returned
+operation chains, terminal late response stays in tracked wrapOriginal work,
+and ACK read/upload holds stay in the accepted read/upload receipts. Per-reader
+closed/unlock gates and their physical release conditions are unchanged.
+Every real hold, original method call, cleanup join and UNKNOWN assertion
+remains. No compatibility flag, timeout, profile, production code or retirement
+rule changes. Only the six named setup gates above receive this repair.
+
+The assertions now include their missing bounded failure evidence. The
+completed-root assertion includes existing id/origin/undefined scalars for
+failed rows. The ACK deadline messages include cuts/retirements, per-ACK state
+bits, terminal logical count/pending/phase bits, budget accepted/reserve/
+dispatch/settle/ingest counts, provider POST count and diagnostic origins.
+They do not dump response bodies, headers,
+authorization, raw reasons, request IDs, URLs or the whole custody snapshot.
+The same exact13-cut/one-logical/no-pending condition and all subsequent
+physical/debit/stale checks remain. This is meaningful observed-state evidence,
+not an implementation-text fixture or permission to accept a failed predicate.
+
+The first test already collects bounded origins per completed request but its
+assertion message does not expose the failing row. The ACK test similarly loses
+which of its three predicate terms failed. Consequently this source/log packet
+proves the setup-gate defect and the diagnostic gap, not a complete causal
+repair for the observed stalls or failed completed root. A new exact-head hosted
+run of this fixture patch must distinguish those remaining cases. No local
+runtime, test execution, rerun, flag change or production patch was performed.
+Source-only raw/generated grammar, privacy and whitespace are the available
+checks; runtime/typecheck remain UNRUN. ROOT owns further hosted polling and
+publication authority. Production source and its reviewed STATIC debit are
+unchanged by this fixture-only repair.
+
 
 ### Diagnostic unused-import repair — deletion-only STATIC delta
 
