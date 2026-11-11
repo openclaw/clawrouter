@@ -624,6 +624,12 @@ export function matchesOwnedHttpProviderCredential(permit: object, cap: OwnedHtt
   const command = ownedHttpProviderCommands?.get(permit);
   return !!command && command.selected === selected && !!command.input && matchesOwnedHttpProviderSelection(permit, cap, command.input, signal);
 }
+export function matchesOwnedHttpMaterializationCommand(permit: object, cap: OwnedHttpRequest,
+  provider: CompiledProvider, signal?: AbortSignal): boolean {
+  const command = ownedHttpProviderCommands?.get(permit);
+  return !!command && !!command.input && !!command.selected && command.selection?.provider === provider
+    && command.signal === signal && matchesOwnedHttpProviderSelection(permit, cap, command.input, signal!);
+}
 let ownedHttpPreparationCredits: WeakSet<OwnedHttpRequest> | undefined;
 let ownedHttpPreparationCreditCount = 0;
 

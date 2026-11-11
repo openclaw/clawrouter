@@ -1484,3 +1484,22 @@ test(`private archive ${target} ${kind} failure is bounded before held cancellat
     }, true);
   } finally { observation.releaseArchiveFault(); observation.consumerMode = 'normal'; }
 });
+
+
+for (const variant of ['fireworks', 'venice', 'gmi'])
+test(`private ${variant} named RPC subjects reject substitutions and replay before effects`, async t => {
+  observation.consumerMode = 'subject-bindings';
+  for (const key of Object.keys(observation.subjectFaults)) observation.subjectFaults[key] = 0;
+  try {
+    await fixture(t, async f => {
+      const input = variant === 'venice' ? { model: 'venice/zai-org-glm-5-2' }
+        : variant === 'gmi' ? { model: 'gmi/deepseek-ai/DeepSeek-V4-Pro' } : {};
+      const response = await f.request(payload(input)); assert.equal(response.status, 200); await f.drain();
+      const row = observation.subjectFaults;
+      for (const kind of ['preflight', 'continuation', 'materialization', 'replay']) assert.ok(row[kind] > 0, kind);
+      assert.equal(row.foreignGets, 0);
+      if (variant !== 'fireworks') { assert.ok(row.snapshot > 0); assert.ok(row.inspect > 0); }
+      assert.equal(f.sent.length, 1); assert.equal(f.events.length, 1);
+    }, false, variant);
+  } finally { observation.consumerMode = 'normal'; }
+});

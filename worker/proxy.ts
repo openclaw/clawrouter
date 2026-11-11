@@ -210,6 +210,14 @@ export function matchesOwnedHttpVeniceResponseInput(cap: OwnedHttpRequest, attem
   return !!owner && owner.nativeResponse === response && owner.nativeSignal === signal && owner.upload === attempt
     && owner.prepared !== undefined && ownedPreparedUploads?.get(owner.prepared) === attempt;
 }
+export function matchesOwnedHttpRevalidationCommand(cap: OwnedHttpRequest, attempt: OwnedHttpUpload,
+  revalidation: OwnedHttpRevalidation, signal: AbortSignal, delivery: boolean): boolean {
+  const owner = ownedProxyInvocations?.get(cap), prepared = owner?.prepared;
+  return !!owner && !!prepared && owner.upload === attempt && ownedPreparedUploads?.get(prepared) === attempt
+    && owner.operation?.signal === signal && (delivery
+      ? prepared.ownedVenice === revalidation && owner.nativeSignal === signal && owner.nativeResponse !== undefined
+      : !!prepared.revalidateAccount && (prepared.ownedVenice === revalidation || owner.selection?.provider.id === "gmi"));
+}
 export function matchesOwnedHttpProviderFetchInput(cap: OwnedHttpRequest, attempt: OwnedHttpUpload, url: URL, init: RequestInit): boolean {
   const owner = ownedProxyInvocations?.get(cap), prepared = owner?.prepared;
   return !!owner && !!prepared && owner.upload === attempt && ownedPreparedUploads?.get(prepared) === attempt

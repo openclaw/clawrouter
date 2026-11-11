@@ -20,6 +20,27 @@ export function createOwnedJsonObservation() {
       || Object.getOwnPropertyDescriptor(handler, 'length').value !== length.value) throw Error('handler descriptor mutation');
   }
 
+  let checkingSubject = false;
+  const subjectFaults = { preflight: 0, continuation: 0, materialization: 0, snapshot: 0, inspect: 0, replay: 0, foreignGets: 0 };
+  function rejectSubjects(root, kind, command, variants, binding) {
+    if (checkingSubject) return;
+    checkingSubject = true;
+    const before = root.funding.bytes, origin = root.nextSinkOrigin, pending = root.sinkPending;
+    const descriptor = binding && Object.getOwnPropertyDescriptor(root.env, binding);
+    try {
+      if (binding) Object.defineProperty(root.env, binding, { configurable: true, get() { subjectFaults.foreignGets++; throw Error('unintended binding getter'); } });
+      for (const operands of variants) {
+        let rejected = false;
+        try { command(...operands); } catch { rejected = true; }
+        if (!rejected || subjectFaults.foreignGets || root.funding.bytes !== before
+          || root.nextSinkOrigin !== origin || root.sinkPending !== pending) throw Error('named subject rejection had effects');
+        subjectFaults[kind]++;
+      }
+    } finally {
+      if (binding) { if (descriptor) Object.defineProperty(root.env, binding, descriptor); else delete root.env[binding]; }
+      checkingSubject = false;
+    }
+  }
   let current, censusUsage = false, preparations = 0;
   let archiveWriter, releaseArchiveFault, archiveRawReason, archiveSubjectChecking = false;
   const archiveFault = { calls: 0, observations: 0, touched: 0, entered: false, released: false,
@@ -543,6 +564,32 @@ export function createOwnedJsonObservation() {
     },
     archiveExit() { restoreArchiveData?.(); },
     archiveChunk(backing) { archive.chunks++; archive.maximumBacking = Math.max(archive.maximumBacking, backing); },
+    subjectFaults,
+    subjectBoundary(kind, root, command, operands, replay = false) {
+      if (this.consumerMode !== 'subject-bindings' || checkingSubject) return;
+      const foreign = new Proxy({}, { get() { subjectFaults.foreignGets++; throw Error('foreign named subject getter'); } });
+      const signal = new AbortController().signal, variants = [];
+      if (replay) variants.push(operands);
+      else if (kind === 'preflight') {
+        for (const [index, value] of [[2, foreign], [4, foreign], [5, '{}'], [6, foreign], [7, signal]]) {
+          const changed = operands.slice(); changed[index] = value; variants.push(changed);
+        }
+      } else if (kind === 'continuation') {
+        for (const [index, value] of [[1, foreign], [2, foreign], [3, '{}'], [4, signal]]) {
+          const changed = operands.slice(); changed[index] = value; variants.push(changed);
+        }
+      } else if (kind === 'materialization') {
+        for (const [index, value] of [[3, foreign], [4, 'foreign'], [5, foreign], [6, 'foreign'], [7, foreign], [8, !operands[8]], [9, signal]]) {
+          const changed = operands.slice(); changed[index] = value; variants.push(changed);
+        }
+      } else {
+        for (const [index, value] of [[1, foreign], [2, signal], [3, kind === 'snapshot' ? 'inspect' : 'snapshot']]) {
+          const changed = operands.slice(); changed[index] = value; variants.push(changed);
+        }
+      }
+      rejectSubjects(root, replay ? 'replay' : kind, command, variants,
+        kind === 'preflight' ? 'ACCESS_CONTROL' : kind === 'materialization' ? 'GRANT_CREDENTIALS' : undefined);
+    },
     archiveFault,
     archivePrepared(writer) {
       archiveWriter = writer;
@@ -1350,6 +1397,16 @@ export function observeOwnedJsonSource(path, source) {
     }
     source = replace(source, '      this.phase = 3;\n    }\n    if (primary) throw primary;',
       '      this.phase = 3; ' + probe + '.archiveClosed(this, ownedHttpArchivePut, ownedHttpArchivePipe, ownedHttpArchiveCancel, ownedHttpArchiveAbort);\n    }\n    if (primary) throw primary;');
+    for (const [marker, kind, root, command, operands, after] of [
+      ['  claimOwnedHttpPreflightRequest(http, permit, ticket, sink, binding, body, budget, signal);', 'preflight', 'root', 'consumeOwnedHttpPreflight', '[http, sink, permit, ticket, binding, body, budget, signal]', true],
+      ['  claimOwnedHttpContinuationRequest(http, permit, destination, body, signal);', 'continuation', 'root', 'consumeOwnedHttpContinuation', '[http, permit, destination, body, signal]', true],
+      ['  claimOwnedHttpMaterializationProducer(cap, permit, sink, env, key, grant, providerId, refresh, force, signal);', 'materialization', 'sinkOwner(sink)', 'consumeOwnedHttpGrantMaterialization', '[sink, cap, permit, env, key, grant, providerId, refresh, force, signal]', true],
+    ]) source = replace(source, marker, '  ' + probe + '.subjectBoundary("' + kind + '", ' + root + ', ' + command + ', ' + operands + ');\n' + marker
+      + (after ? '\n  ' + probe + '.subjectBoundary("' + kind + '", ' + root + ', ' + command + ', ' + operands + ', true);' : ''));
+    source = replace(source, '  if (root.revalidationCredits < 15) throw identityFailure("protocol");',
+      '  if (root.revalidationCredits < 15) throw identityFailure("protocol"); ' + probe + '.subjectBoundary(kind, root, startOwnedRevalidationRpc, [cap, env, signal, kind]);');
+    source = replace(source, '  owner.rpcStage = kind === "snapshot" ? 2 : 4;',
+      '  owner.rpcStage = kind === "snapshot" ? 2 : 4; ' + probe + '.subjectBoundary(kind, root, startOwnedRevalidationRpc, [cap, env, signal, kind], true);');
     source = replace(source, 'writer.phase = 1; return writer;', 'writer.phase = 1; ' + probe + '.archivePrepared(writer); return writer;');
     source = replace(source, '    return this.writing = this.execute();', '    this.writing = this.execute(); ' + probe + '.archiveWriting(this, this.writing, ownedHttpFailureMetadata); return this.writing;');
     source = replace(source, 'if (!this.primary) { this.readable = this.fixed.readable; await ownedHttpArchivePut',

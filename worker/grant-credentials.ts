@@ -1,7 +1,6 @@
 import { ownedHttpSinkReceiver, ownedHttpRevalidationReceiver } from "./proxy-completion.ts";
 import { admitIdentityText, identityUtf8, admitIdentity, identityPlan, identityHeader, identityJson, identitySourceBudget, identityFailure, isIdentityFailure, parseIdentity, readIdentityKv, readIdentityRaw, readIdentityRequest, readIdentityResponse, type IdentitySourceBudget } from "./identity-admission.ts";
 import type { OwnedHttpRevalidation, OwnedHttpSinkOwner } from "./http-identity-owner.ts";
-import { privateMaterializationJson } from "./json-body.ts";
 import type { OwnedHttpCredential } from "./credential-preflight.ts";
 import { videoControlHeader, videoControlVersion, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { miniMaxApiKeySecret, miniMaxMusicCoverProjection, miniMaxMusicCoverIdentity } from "./native-media-credential.ts";
@@ -1601,35 +1600,9 @@ export async function materializeGrantCredentials(
 
 export function materializePrivateOwnedHttpGrantCredentials(cap: OwnedHttpCredential, permit: object, sink: OwnedHttpSinkOwner,
   env: Env, key: string, grant: UpstreamGrant, providerId: string, refresh: RefreshConfig | null, force: boolean, signal?: AbortSignal): Promise<void> {
-  checkOwnedHttpMaterializationInputs(sink, cap, permit, env, key, grant);
-  admitIdentity(grant, "record");
-  const legacy = hasRawCredential(grant) ? grant : null;
-  const expectedGeneration: unknown = grant.credentialGeneration ?? null;
-  if (typeof key !== "string" || typeof providerId !== "string") throw identityFailure("protocol");
-  // Pay the exact outer carrier before construction. Borrowed grant/legacy
-  // graphs keep their foreground owner; serialized occurrences count again in
-  // the independent copied graph below. All eight primitive positions are
-  // conservatively prepaid, including reference-valued positions.
-  admitOwnedHttpMaterializationPayload(sink, cap, permit, env, key, grant,
-    4096 + 200 + 2 * (63 + key.length + providerId.length + (typeof expectedGeneration === "string" ? expectedGeneration.length : 0)));
-  let request: unknown = { key, grant, legacy, providerId, refresh, force, expectedGeneration, operation: undefined };
-  const binding = env.GRANT_CREDENTIALS;
-  if (!binding) throw new HttpError(503, "provider_not_configured", "provider is not configured");
-  admitIdentity(grant, "record");
-  let plan: ReturnType<typeof identityPlan> | undefined, body: string | undefined;
-  try {
-    // Keep the original complete-profile admission after the actual binding
-    // lookup. These fresh counters do not reset the cumulative source budget.
-    plan = identityPlan(); plan.item(request, 0);
-    {
-      const counts = plan.counts;
-      admitOwnedHttpMaterializationPayload(sink, cap, permit, env, key, grant,
-        8 * (counts.values + 2 * counts.members + counts.entries) + 2 * counts.units + 2 * counts.text + counts.bytes);
-    }
-    plan = undefined;
-    body = privateMaterializationJson(request); request = undefined;
-    return consumeOwnedHttpGrantMaterialization(sink, cap, permit, binding, key, body, signal);
-  } finally { plan = undefined; request = undefined; body = undefined; }
+  const receiver = ownedHttpSinkReceiver(sink);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.consumeOwnedHttpGrantMaterialization(sink, cap, permit, env, key, grant, providerId, refresh, force, signal);
 }
 
 export async function revokeGrantCredentials(env: Env, key: string, metadata?: GrantRevokeMetadata, searchActor?: PutRequest["searchActor"], musicActor?: PutRequest["musicActor"], videoActor?: PutRequest["videoActor"]): Promise<UpstreamGrant> {
@@ -1816,24 +1789,6 @@ function validAuthorizationTimestamp(value: unknown): string | null {
   const timestamp = authorizationTimestamp(value);
   if (value != null && timestamp === null) throw new HttpError(400, "invalid_upstream_grant", "authorization timestamp must be ISO-8601 or epoch milliseconds");
   return timestamp;
-}
-
-function checkOwnedHttpMaterializationInputs(sink: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpMaterializationInputs>[0], cap: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpMaterializationInputs>[1], permit: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpMaterializationInputs>[2], env: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpMaterializationInputs>[3], key: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpMaterializationInputs>[4], grant: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpMaterializationInputs>[5]): ReturnType<typeof import("./http-identity-owner.ts").checkOwnedHttpMaterializationInputs> {
-  const receiver = ownedHttpSinkReceiver(sink);
-  if (!receiver) throw identityFailure("protocol");
-  return receiver.checkOwnedHttpMaterializationInputs(sink, cap, permit, env, key, grant);
-}
-
-function admitOwnedHttpMaterializationPayload(sink: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpMaterializationPayload>[0], cap: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpMaterializationPayload>[1], permit: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpMaterializationPayload>[2], env: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpMaterializationPayload>[3], key: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpMaterializationPayload>[4], grant: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpMaterializationPayload>[5], bytes: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpMaterializationPayload>[6]): ReturnType<typeof import("./http-identity-owner.ts").admitOwnedHttpMaterializationPayload> {
-  const receiver = ownedHttpSinkReceiver(sink);
-  if (!receiver) throw identityFailure("protocol");
-  return receiver.admitOwnedHttpMaterializationPayload(sink, cap, permit, env, key, grant, bytes);
-}
-
-function consumeOwnedHttpGrantMaterialization(sink: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantMaterialization>[0], cap: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantMaterialization>[1], permit: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantMaterialization>[2], binding: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantMaterialization>[3], key: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantMaterialization>[4], body: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantMaterialization>[5], signal?: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantMaterialization>[6]): ReturnType<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantMaterialization> {
-  const receiver = ownedHttpSinkReceiver(sink);
-  if (!receiver) throw identityFailure("protocol");
-  return receiver.consumeOwnedHttpGrantMaterialization(sink, cap, permit, binding, key, body, signal);
 }
 
 function consumeOwnedHttpGrantInspection(cap: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantInspection>[0], env: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantInspection>[1], signal: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantInspection>[2]): ReturnType<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantInspection> {

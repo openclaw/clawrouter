@@ -1,6 +1,48 @@
 # Private owned HTTP Chat staging
 
 
+### Current source-only named request subjects
+
+The preflight producer stages its exact serialized body, reply-source budget and
+signal in the already-current owner. A phase claim consumes that association
+before the existing Env lookup, receipt factory or acquisition. VOID completion
+still stages only the genuine reply; the caller takes and clears it before
+`advanceIdentitySource`. Continuation binds its validated input, permit and
+signal at the fixed producer, then its exact serialized body before acquisition.
+The retained command remains authoritative after the continuation registry entry
+is consumed. No exported stream/body-binding setter or new registry is added.
+
+Materialization serialization moves from the lower grant helper into the fixed
+HTTP receiver. The lower helper dispatches the same named operation. The owner
+checks the current provider command, selected grant/key, refresh configuration,
+force flag and signal, claims once, then uses the unchanged payload grammar and
+binding/get/fetch order. The acquisition helper is module-private and receives
+only that producer's wire. The previous exported arbitrary-body consumption and
+caller-byte admission methods are removed from the receiver. Ordinary grant
+materialization and Durable Object producers are unchanged.
+
+Revalidation binds the actual operation signal to its cycle and requires
+snapshot before inspect. Each stage is consumed before its factories. The
+initial cycle requires the chosen upload before provider dispatch; the existing
+Venice delivery cycle requires that same prepared/upload association and its
+started codec source. GMI has only its existing initial cycle. Failed or duplicate
+stages cannot reset a right or use remaining origin credits as authority.
+
+Added own-field components are explicitly prepaid: four preflight subject fields
+`72*4+2*57=402`, five continuation subject fields `72*5+2*86=532`, one
+materialization stage `72+2*20=112`, and three revalidation cycle fields
+`72*3+2*23=262` bytes. Serialized staging adds its actual `2*body.length` string
+occurrence before assignment. These are field/string components only; the full
+family native/caller/transition manifests remain OPEN and are not inferred from
+these deltas. Cleaned fields do not lower COMMON under UNKNOWN.
+
+Real Node and Workerd fixtures exercise generic, Venice and GMI paths while
+trying foreign permits/bindings, changed bodies, budgets, provider/refresh/force
+and signal operands, reordered snapshot/inspect and duplicate claims. Rejection
+must precede actual binding getters, factories, origin changes or debit changes.
+Runtime remains `UNRUN_CODE_ONLY_HOSTED`; this is a source-only partial repair.
+
+
 ### Current source-only archive subject and failure repair
 
 The private writer now lives with the HTTP owner. Its canonical attachment keeps

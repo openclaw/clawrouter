@@ -10,7 +10,7 @@ import test from 'node:test';
 import { discardOwnedHttpInitialError, tryBeginOwnedHttpRequest, ownedHttpPlatformFailure, beginOwnedHttpRequest, finishOwnedHttpRequest, ownedHttpSinkOwner, ownedHttpFailureMetadata,
   ownedHttpQueueSend, ownedHttpArchivePut, ownedHttpArchivePipe, ownedHttpArchiveAbort, ownedHttpArchiveCancel, cancelOwnedHttpResponse, discardOwnedHttpSinkResponse,
   beginOwnedHttpSinkRegistration, completeOwnedHttpSinkRegistration, ownedHttpCompletion, ownedHttpLedgerAcknowledgment,
-  consumeOwnedHttpPreflight, consumeOwnedHttpGrantMaterialization, admitOwnedHttpMaterializationPayload,
+  consumeOwnedHttpPreflight, consumeOwnedHttpGrantMaterialization,
   prepareOwnedHttpContinuation, consumeOwnedHttpContinuation } from '../http-identity-owner.ts';
 import { resolveOwnedHttpAuthentication, evictCredentialGeneration } from '../credential-preflight.ts';
 import { PolicyBindingIndexObject } from '../authority.ts';
@@ -48,9 +48,9 @@ test('private receipt factories reject unregistered and mixed parent permits bef
     for (const permit of [{}, f.cap, f.sink]) {
       assert.throws(() => consumeOwnedHttpPreflight(f.cap, f.sink, permit, ticket, binding, '{}', {}),
         error => error?.code === 'identity_admission_unavailable');
-      assert.throws(() => consumeOwnedHttpGrantMaterialization(f.sink, f.cap, permit, binding, 'fixture', '{}'),
+      assert.throws(() => consumeOwnedHttpGrantMaterialization(f.sink, f.cap, permit, env, 'fixture', {}, 'fixture', null, false),
         error => error?.code === 'identity_admission_unavailable');
-      assert.throws(() => admitOwnedHttpMaterializationPayload(f.sink, f.cap, permit, env, 'fixture', {}, 4096),
+      assert.throws(() => consumeOwnedHttpGrantMaterialization(f.sink, f.cap, permit, new Proxy({}, { get() { effects++; throw Error('foreign Env read'); } }), 'fixture', {}, 'fixture', null, false),
         error => error?.code === 'identity_admission_unavailable');
       assert.throws(() => prepareOwnedHttpContinuation(f.cap, permit, {}, ticket, binding, 'policy-bindings'),
         error => error?.code === 'identity_admission_unavailable');

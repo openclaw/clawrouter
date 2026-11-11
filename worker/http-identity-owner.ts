@@ -5,22 +5,23 @@ import { isPreparationLimit, type PreparationAdmission } from "./provider-templa
 import { inheritOwnedLocalError, clearOwnedLocalError, markOwnedLocalError, ownedLocalErrorDetails, nativeErrorFormat, nativeErrorEnvelope, type NativeErrorContext, type NativeErrorDetails } from "./native-errors.ts";
 import { freezeOwnedObserver, setOwnedHeader, deleteOwnedHeader, newOwnedHeaders, ownedMetadataString, captureOwnedResponseMetadata, ProxyCompletion, OwnedReaderDriver, claimOwnedHttpStaticCustody, inspectOwnedBytes, isLocalOwnedByteView, isLocalOwnedByteBacking, newOwnedBytes, ownedBytesFromBacking, ownedByteLength, ownedByteSubarray, copyOwnedBytes, newOwnedDecoder, decodeOwnedBytes, enqueueOwnedBytes, measureOwnedHeaders, newOwnedResponse, cloneOwnedMetadataResponse, hasOwnedHeader } from "./proxy-completion.ts";
 import { ExactBodyCharge } from "./body-budget.ts";
-import { identityFailure, isIdentityFailure, identityHeader, identitySourceBudget, identityPlan, admitIdentityBytes, admitIdentityHeaders, parseIdentity, IdentityWire, createPrivateMaterializationReceipt, adoptPrivateMaterializationResponse, failPrivateMaterializationAcquisition, beginPrivateMaterializationAcquisition, abandonPrivateMaterializationReceipt, completePrivateMaterializationInstallation, consumePrivateMaterializationReceipt, type PrivateMaterializationReceipt, type PrivateMaterializationDestination, type IdentitySourceBudget } from "./identity-admission.ts";
-import type { Env, QueueMessage, AuthorizedIdentity, UsageEvent, BudgetReserveRequest, BudgetChargeRequest, BudgetSettleRequest, ContentRecord } from "./types.ts";
+import { identityFailure, isIdentityFailure, identityHeader, identitySourceBudget, identityPlan, admitIdentity, admitIdentityBytes, admitIdentityHeaders, parseIdentity, IdentityWire, createPrivateMaterializationReceipt, adoptPrivateMaterializationResponse, failPrivateMaterializationAcquisition, beginPrivateMaterializationAcquisition, abandonPrivateMaterializationReceipt, completePrivateMaterializationInstallation, consumePrivateMaterializationReceipt, type PrivateMaterializationReceipt, type PrivateMaterializationDestination, type IdentitySourceBudget } from "./identity-admission.ts";
+import type { Env, QueueMessage, AuthorizedIdentity, UsageEvent, BudgetReserveRequest, BudgetChargeRequest, BudgetSettleRequest, ContentRecord, UpstreamGrant, RefreshConfig } from "./types.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import { matchesOwnedHttpProviderConfiguration, type UpstreamAuth } from "./providers.ts";
 import type { HttpOperation } from "./http-operation.ts";
 import { applyProviderCredential } from "./provider-auth.ts";
 import { proxyKeyVerification } from "./proxy-auth.ts";
 import { maxJsonBodyBytes, randomId, HttpError, ownedCorsOrigin, ownedCorsMethods, ownedCorsAllow, ownedCorsBase, ownedCorsAge } from "./utils.ts";
+import { hasRawCredential } from "./grant-credentials.ts";
 import { selectedCredentialFailure } from "./grant-credential-failure.ts";
 import { acceptOwnedAuthorizationSnapshot, retireOwnedResponseControl } from "./response-control-authorization.ts";
 import { acceptOwnedVeniceInspection, retireOwnedVeniceRevalidation } from "./venice-chat-authority.ts";
 import { acceptOwnedGmiInspection, retireOwnedGmiRevalidation } from "./gmi-organization-binding.ts";
-import { acceptOwnedHttpPreflightReply, drainOwnedHttpIdentity, retireOwnedHttpConsumers, retireOwnedHttpIdentity, claimOwnedHttpRevalidationBacking, matchesOwnedHttpMaterialization, matchesOwnedHttpPreflight, matchesOwnedHttpContinuation, admitOwnedHttpRevalidationBacking, retireOwnedHttpRevalidationBacking, type OwnedHttpRevalidationBacking, type OwnedHttpCredential, admitOwnedHttpCodecBacking, admitOwnedHttpUsageBacking, retireOwnedHttpCodecBacking, admitOwnedHttpConsumerBacking, retireOwnedHttpConsumerBacking } from "./credential-preflight.ts";
+import { acceptOwnedHttpPreflightReply, claimOwnedHttpMaterializationProducer, claimOwnedHttpMaterializationAcquisition, claimOwnedHttpPreflightRequest, claimOwnedHttpContinuationRequest, drainOwnedHttpIdentity, retireOwnedHttpConsumers, retireOwnedHttpIdentity, claimOwnedHttpRevalidationBacking, matchesOwnedHttpMaterialization, matchesOwnedHttpPreflight, matchesOwnedHttpContinuation, admitOwnedHttpRevalidationBacking, retireOwnedHttpRevalidationBacking, type OwnedHttpRevalidationBacking, type OwnedHttpCredential, admitOwnedHttpCodecBacking, admitOwnedHttpUsageBacking, retireOwnedHttpCodecBacking, admitOwnedHttpConsumerBacking, retireOwnedHttpConsumerBacking } from "./credential-preflight.ts";
 import { claimOwnedHttpArchiveFunding } from "./pricing.ts";
 import { contentKey, retentionRequired, type PreparedContentRetention } from "./content-retention.ts";
-import { matchesOwnedHttpBudgetPlan, ownsConsumedHttpAccountingHandoff, ownsFailedHttpAccountingHandoff, captureOwnedHttpUsageStatus, matchesOwnedHttpPublicationContext, matchesOwnedHttpGenericUsageInput, acceptOwnedGenericUsage, matchesOwnedHttpConfigurationPreparation, matchesOwnedHttpInitialSelection, retireOwnedHttpProxy, matchesOwnedHttpArchiveInput, claimOwnedHttpArchiveInput, matchesOwnedHttpRevalidationInput, matchesOwnedHttpVeniceResponseInput, matchesOwnedHttpPublicBody, matchesOwnedHttpSoftStatusPlan, matchesOwnedHttpCodecConsumerInput, matchesOwnedHttpNormalizationInput, matchesOwnedHttpCodecNormalizationInput, matchesOwnedHttpCodecUsageInput, acceptOwnedCodecUsage, matchesOwnedHttpProviderFetchInput, acceptOwnedHttpProviderResponse } from "./proxy.ts";
+import { matchesOwnedHttpBudgetPlan, ownsConsumedHttpAccountingHandoff, ownsFailedHttpAccountingHandoff, captureOwnedHttpUsageStatus, matchesOwnedHttpPublicationContext, matchesOwnedHttpGenericUsageInput, acceptOwnedGenericUsage, matchesOwnedHttpConfigurationPreparation, matchesOwnedHttpInitialSelection, retireOwnedHttpProxy, matchesOwnedHttpArchiveInput, claimOwnedHttpArchiveInput, matchesOwnedHttpRevalidationInput, matchesOwnedHttpRevalidationCommand, matchesOwnedHttpVeniceResponseInput, matchesOwnedHttpPublicBody, matchesOwnedHttpSoftStatusPlan, matchesOwnedHttpCodecConsumerInput, matchesOwnedHttpNormalizationInput, matchesOwnedHttpCodecNormalizationInput, matchesOwnedHttpCodecUsageInput, acceptOwnedCodecUsage, matchesOwnedHttpProviderFetchInput, acceptOwnedHttpProviderResponse } from "./proxy.ts";
 import { retireOwnedVeniceChatCodec, matchesOwnedVeniceRetirement, consumeOwnedVeniceChatResponse, matchesOwnedVeniceOutputBody, matchesOwnedVeniceOutputFailure, matchesOwnedVeniceConsumerInput } from "./venice-chat-runtime.ts";
 import { matchesOwnedCodecUsagePublication, type CodecReader, ownsOwnedNormalizerReader, acknowledgeOwnedNormalizerOutput, type OwnedNormalizerReader, GenericUsageReader, type ObservedUsage, matchesOwnedCodecOutputFailure, matchesOwnedCodecConsumerRetirement, retireOwnedCodecConsumers, ownedUsageCaptureBytes, type OwnedCodecConsumer } from "./proxy-response.ts";
 import { admissionContinuationHeader, admissionContinuationVersion, admissionContinuationPath, credentialPreflightHeader, credentialPreflightVersion, credentialPreflightPath, credentialPreflightNamespace, type CredentialPreflightReply } from "./credential-preflight-protocol.ts";
@@ -29,7 +30,7 @@ import { logCorrelationError, backgroundRecoveryHeader, ownedBackgroundLocator }
 import type { AccountingSinks, BudgetReservation, BudgetReservationPlan, BudgetReservationIntent } from "./accounting.ts";
 import { matchesOwnedHttpAccountingCommand, matchesOwnedHttpAccountingAdoption, matchesOwnedHttpAccountingFailure, adoptOwnedHttpAccountingTerminal, rejectOwnedHttpAccountingTerminal, retireOwnedHttpAccountingCommands, type OwnedHttpAccountingCommand } from "./proxy-accounting.ts";
 import { parseSoftStatus, softStatusLimits, softStatusError } from "./soft-budget-json.ts";
-import { privateAccountingArchive, accountingIdentity, privateSnapshotJson, privateGrantIdentityJson, privateIntentJson, privateCapsuleJson, copyPrivateQueueIntent, copyPrivateQueueCapsule, measurePrivateJsonBody, isAccountingAdmissionFailure } from "./json-body.ts";
+import { privateAccountingArchive, accountingIdentity, privateMaterializationJson, privateSnapshotJson, privateGrantIdentityJson, privateIntentJson, privateCapsuleJson, copyPrivateQueueIntent, copyPrivateQueueCapsule, measurePrivateJsonBody, isAccountingAdmissionFailure } from "./json-body.ts";
 import { OwnedStatusController, retireOwnedHttpSoftBudget, type PreparedSoftBudget } from "./soft-budget.ts";
 import { createPrivatePreflightReceipt, adoptPrivatePreflightResponse, failPrivatePreflightAcquisition, beginPrivatePreflightAcquisition, abandonPrivatePreflightReceipt, completePrivatePreflightInstallation, consumePrivatePreflightReceipt, type PrivatePreflightReceipt, createPrivateContinuationReceipt, adoptPrivateContinuationResponse, failPrivateContinuationAcquisition, beginPrivateContinuationAcquisition, abandonPrivateContinuationReceipt, completePrivateContinuationInstallation, consumePrivateContinuationReceipt, type PrivateContinuationReceipt, type PrivateContinuationDestination } from "./credential-preflight-source.ts";
 import type { PreflightTicket } from "./credential-preflight-arena.ts";
@@ -470,7 +471,7 @@ interface RevalidationOwner {
   backing: OwnedHttpRevalidationBacking; persistentBytes: number; phaseBytes: number; preparing: boolean;
   active: boolean; graph?: unknown;
   graphKind?: "snapshot" | "inspect"; retainedBytes: number; environmentUnits: number;
-  snapshotRequestBytes: number; requestBytes: number; fingerprintBytes: number;
+  snapshotRequestBytes: number; requestBytes: number; fingerprintBytes: number; rpcStage: number; rpcSignal: AbortSignal | undefined; cycles: number;
   codec?: true; codecSource?: true; codecScope?: ProxyCompletion; consumer?: true;
   consumerHeaderBytes?: number; consumerDataBytes?: number; normalizationBytes?: number;
   codecRoles?: number; sourceBase?: number; consumerBase?: number; replacementBase?: number;
@@ -478,6 +479,7 @@ interface RevalidationOwner {
 // Same original-wire/text/decoded/parsed component as the private full reader.
 // Retained policy/routing occurrences are ADDITIVE during the inspect RPC.
 const revalidationSourceBytes = 16793600 + 2 * 2097152 + 32768;
+const revalidationSubjectBytes = 72 * 3 + 2 * "rpcStagerpcSignalcycles".length;
 const revalidationControlBytes = 65536;
 const originalByobCancel = ReadableStreamBYOBReader.prototype.cancel;
 const originalByobClosed = Object.getOwnPropertyDescriptor(ReadableStreamBYOBReader.prototype, "closed")?.get;
@@ -507,7 +509,7 @@ export function beginOwnedHttpRevalidation(http: OwnedHttpRequest, request: Requ
     || auth.authType !== "proxy_key" || !proxyKeyVerification(auth) || !env.ACCESS_CONTROL) throw identityFailure("protocol");
   // Frame/visitor/registry/cap backing precedes every private guard factory.
   const backing = claimOwnedHttpRevalidationBacking(http, upstream.grant, selection.provider.id as "venice" | "gmi");
-  let persistentBytes = revalidationControlBytes, admitted = false;
+  let persistentBytes = revalidationControlBytes + revalidationSubjectBytes, admitted = false;
   try {
     const secret = selection.provider.id === "venice" ? env.VENICE_API_KEY : env.GMI_API_KEY;
     const units = (upstream.grant?.credential?.length ?? 0) + (upstream.grant?.accessToken?.length ?? 0)
@@ -529,7 +531,7 @@ export function beginOwnedHttpRevalidation(http: OwnedHttpRequest, request: Requ
     const bindingUnits = auth.policyId.length + (auth.credentialId?.length ?? 0) + (auth.principalId?.length ?? 0)
       + 2 * auth.policy.generation.length + (auth.policy.tenantId?.length ?? 7) + (upstream.grantKey?.length ?? 0)
       + selection.endpoint.id.length + (upstream.grant?.credentialLineage?.length ?? 0);
-    persistentBytes = revalidationControlBytes + 4 * original.counts.text + 4 * bindingUnits
+    persistentBytes = revalidationControlBytes + revalidationSubjectBytes + 4 * original.counts.text + 4 * bindingUnits
       + 4 * (typeof secret === "string" ? secret.length : 0) + 1024;
     admitOwnedHttpRevalidationBacking(backing, persistentBytes, 12 * units + revalidationControlBytes); admitted = true;
     claimOwnedSinkFactories();
@@ -543,7 +545,7 @@ export function beginOwnedHttpRevalidation(http: OwnedHttpRequest, request: Requ
     state.url = url;
     state.headers = headers;
     state.preparation = preparation;
-    state.active = false;
+    state.active = false; state.rpcStage = 0; state.rpcSignal = undefined; state.cycles = 0;
     state.backing = backing;
     state.persistentBytes = persistentBytes;
     state.phaseBytes = 12 * units + revalidationControlBytes;
@@ -579,11 +581,15 @@ export function matchesOwnedHttpRevalidationCaller(cap: OwnedHttpRevalidation,
   return proof === proxyKeyVerification(auth) && credentialId === auth.credentialId && principalId === auth.principalId
     && policyId === auth.policyId && providerId === owner.selection.provider.id && grantKey === owner.upstream.grantKey;
 }
-export function beginOwnedHttpRevalidationRead(cap: OwnedHttpRevalidation): void {
-  const owner = revalidationOwner(cap);
-  if (owner.active || owner.preparing || owner.phaseBytes) throw identityFailure("protocol");
+export function beginOwnedHttpRevalidationRead(cap: OwnedHttpRevalidation, signal: AbortSignal): void {
+  const owner = revalidationOwner(cap), upload = uploads?.get(owner.attempt);
+  const delivery = owner.cycles === 1;
+  if (owner.active || owner.preparing || owner.phaseBytes || owner.rpcStage || !upload
+    || owner.cycles > 1 || delivery && (owner.selection.provider.id !== "venice" || !owner.codecSource)
+    || !delivery && upload.providerStarted
+    || !matchesOwnedHttpRevalidationCommand(owner.http, owner.attempt, cap, signal, delivery)) throw identityFailure("protocol");
   setRevalidationPhase(owner, revalidationSourceBytes + revalidationControlBytes);
-  owner.active = true; owner.retainedBytes = 0;
+  owner.active = true; owner.retainedBytes = 0; owner.rpcStage = 1; owner.rpcSignal = signal; owner.cycles++;
 }
 export function finishOwnedHttpRevalidationPreparation(http: OwnedHttpRequest): void {
   const root = requestOwner(http);
@@ -1178,7 +1184,7 @@ export function endOwnedHttpRevalidationRead(cap: OwnedHttpRevalidation): void {
   if (!owner.active || owner.graph !== undefined || owner.requestBytes) throw identityFailure("protocol");
   // Fixed receivers clear policy/routing before this command; the consumed
   // source's read/FIRSTcancel/unlock have already settled.
-  owner.retainedBytes = 0; owner.active = false; setRevalidationPhase(owner, 0);
+  owner.retainedBytes = 0; owner.active = false; owner.rpcSignal = undefined; owner.rpcStage = 0; setRevalidationPhase(owner, 0);
 }
 
 // Named operations only: callers cannot supply a namespace/path/body/graph or
@@ -1192,6 +1198,7 @@ export function consumeOwnedHttpGrantInspection(cap: OwnedHttpRevalidation, env:
 function startOwnedRevalidationRpc(cap: OwnedHttpRevalidation, env: Env, signal: AbortSignal, kind: "snapshot" | "inspect"): Promise<void> {
   const owner = revalidationOwner(cap);
   if (env !== requestOwner(owner.http).env || !owner.active || !owner.phaseBytes || owner.graph !== undefined
+    || owner.rpcSignal !== signal || owner.rpcStage !== (kind === "snapshot" ? 1 : 3)
     || kind === "inspect" && !owner.upstream.grantKey) throw identityFailure("protocol");
   const sink = ownedHttpSinkOwner(owner.http), root = sinkOwner(sink);
   if (root.revalidationCredits < 15) throw identityFailure("protocol");
@@ -1200,6 +1207,7 @@ function startOwnedRevalidationRpc(cap: OwnedHttpRevalidation, env: Env, signal:
   owner.requestBytes = kind === "snapshot" ? owner.snapshotRequestBytes : 6;
   // Stub, fetch, reader acquisition/fallback, read, FIRSTcancel, unlock, and
   // abort listener installation/removal. No fresh charge is needed in cleanup.
+  owner.rpcStage = kind === "snapshot" ? 2 : 4;
   root.revalidationCredits -= 15;
   try {
     claimOwnedSinkFactories();
@@ -1444,6 +1452,7 @@ class OwnedRevalidationRpc extends OwnedReaderDriver {
       if (this.kind === "snapshot") acceptOwnedAuthorizationSnapshot(this.cap, graph);
       else if (this.owner.selection.provider.id === "venice") acceptOwnedVeniceInspection(this.cap, graph);
       else acceptOwnedGmiInspection(this.cap, graph);
+      this.owner.rpcStage = this.kind === "snapshot" ? 3 : 5;
     } catch (error) { hasPrimary = true; primary = error; }
     finally {
       this.fetchFlags |= 32;
@@ -2077,7 +2086,9 @@ export function admitOwnedHttpPreflightSerialization(http: OwnedHttpRequest, sin
 export function consumeOwnedHttpPreflight(http: OwnedHttpRequest, sink: OwnedHttpSinkOwner, permit: object, ticket: PreflightTicket,
   binding: NonNullable<Env["ACCESS_CONTROL"]>, body: string, budget: IdentitySourceBudget, signal?: AbortSignal): Promise<void> {
   const root = sinkOwner(sink);
-  if (binding !== root.env!.ACCESS_CONTROL || !matchesOwnedHttpPreflight(http, permit, ticket, sink)) throw identityFailure("protocol");
+  if (root !== requestOwner(http) || root.sealed || root.unknown || !matchesOwnedHttpPreflight(http, permit, ticket, sink)) throw identityFailure("protocol");
+  claimOwnedHttpPreflightRequest(http, permit, ticket, sink, binding, body, budget, signal);
+  if (binding !== root.env!.ACCESS_CONTROL) throw identityFailure("protocol");
   reserveSinkOrigins(sink, 20); claimOwnedSinkFactories(); enrollOwnedSinkChild(root);
   let receipt: PrivatePreflightReceipt | undefined, command: OwnedPreflightAcquisition;
   try {
@@ -2090,10 +2101,10 @@ export function consumeOwnedHttpPreflight(http: OwnedHttpRequest, sink: OwnedHtt
   command.invoke(binding, body, signal); return command.consume(http);
 }
 
-export function checkOwnedHttpMaterializationInputs(sink: OwnedHttpSinkOwner, cap: OwnedHttpCredential, permit: object,
+function checkOwnedHttpMaterializationInputs(sink: OwnedHttpSinkOwner, cap: OwnedHttpCredential, permit: object,
   env: Env, key: string, grant: import("./types.ts").UpstreamGrant): void {
   const root = sinkOwner(sink);
-  if (root.env !== env || !matchesOwnedHttpMaterialization(cap, permit, sink, env, key, grant)) throw identityFailure("protocol");
+  if (root.sealed || root.unknown || root.env !== env || !matchesOwnedHttpMaterialization(cap, permit, sink, env, key, grant)) throw identityFailure("protocol");
 }
 
 class OwnedContinuationAcquisition {
@@ -2168,7 +2179,7 @@ class OwnedContinuationAcquisition {
     }
   }
   async consume(body: string, signal?: AbortSignal): Promise<void> {
-    if (this.started || this.root.continuation !== this || this.root.request !== this.request
+    if (this.started || this.root.unknown || this.root.sealed || this.root.continuation !== this || this.root.request !== this.request
       || this.root.uploads[this.root.uploads.length - 1] !== this.attempt || this.signal !== signal)
       throw identityFailure("protocol");
     this.receipt = createPrivateContinuationReceipt(this.ticket, this.root, this.permit, this.destination, this.budget, this.signal);
@@ -2217,8 +2228,9 @@ export function prepareOwnedHttpContinuation(http: OwnedHttpRequest, permit: obj
 }
 export function consumeOwnedHttpContinuation(http: OwnedHttpRequest, permit: object, destination: PrivateContinuationDestination,
   body: string, signal?: AbortSignal): Promise<void> {
-  const command = requestOwner(http).continuation;
-  if (!command || command.permit !== permit || command.destination !== destination) throw identityFailure("protocol");
+  const root = requestOwner(http), command = root.continuation;
+  if (root.unknown || root.sealed || !command || command.permit !== permit || command.destination !== destination) throw identityFailure("protocol");
+  claimOwnedHttpContinuationRequest(http, permit, destination, body, signal);
   return command.consume(body, signal);
 }
 export function abandonOwnedHttpContinuation(http: OwnedHttpRequest, permit: object, destination: PrivateContinuationDestination): void {
@@ -2227,7 +2239,7 @@ export function abandonOwnedHttpContinuation(http: OwnedHttpRequest, permit: obj
   if (command.permit !== permit || command.destination !== destination) throw identityFailure("protocol");
   command.abandon();
 }
-export function admitOwnedHttpMaterializationPayload(sink: OwnedHttpSinkOwner, cap: OwnedHttpCredential, permit: object,
+function admitOwnedHttpMaterializationPayload(sink: OwnedHttpSinkOwner, cap: OwnedHttpCredential, permit: object,
   env: Env, key: string, grant: import("./types.ts").UpstreamGrant, bytes: number): void {
   checkOwnedHttpMaterializationInputs(sink, cap, permit, env, key, grant);
   if (!(bytes > 0) || bytes > 9007199254740991 || bytes % 1) throw identityFailure("protocol");
@@ -2301,9 +2313,45 @@ class OwnedMaterializationAcquisition {
   }
 }
 export function consumeOwnedHttpGrantMaterialization(sink: OwnedHttpSinkOwner, cap: OwnedHttpCredential, permit: object,
+  env: Env, key: string, grant: UpstreamGrant, providerId: string, refresh: RefreshConfig | null,
+  force: boolean, signal?: AbortSignal): Promise<void> {
+  checkOwnedHttpMaterializationInputs(sink, cap, permit, env, key, grant);
+  claimOwnedHttpMaterializationProducer(cap, permit, sink, env, key, grant, providerId, refresh, force, signal);
+  admitIdentity(grant, "record");
+  const legacy = hasRawCredential(grant) ? grant : null;
+  const expectedGeneration: unknown = grant.credentialGeneration ?? null;
+  if (typeof key !== "string" || typeof providerId !== "string") throw identityFailure("protocol");
+  // Pay the exact outer carrier before construction. Borrowed grant/legacy
+  // graphs keep their foreground owner; serialized occurrences count again in
+  // the independent copied graph below. All eight primitive positions are
+  // conservatively prepaid, including reference-valued positions.
+  admitOwnedHttpMaterializationPayload(sink, cap, permit, env, key, grant,
+    4096 + 200 + 2 * (63 + key.length + providerId.length + (typeof expectedGeneration === "string" ? expectedGeneration.length : 0)));
+  let request: unknown = { key, grant, legacy, providerId, refresh, force, expectedGeneration, operation: undefined };
+  const binding = env.GRANT_CREDENTIALS;
+  if (!binding) throw new HttpError(503, "provider_not_configured", "provider is not configured");
+  admitIdentity(grant, "record");
+  let plan: ReturnType<typeof identityPlan> | undefined, body: string | undefined;
+  try {
+    // Keep the original complete-profile admission after the actual binding
+    // lookup. These fresh counters do not reset the cumulative source budget.
+    plan = identityPlan(); plan.item(request, 0);
+    {
+      const counts = plan.counts;
+      admitOwnedHttpMaterializationPayload(sink, cap, permit, env, key, grant,
+        8 * (counts.values + 2 * counts.members + counts.entries) + 2 * counts.units + 2 * counts.text + counts.bytes);
+    }
+    plan = undefined;
+    body = privateMaterializationJson(request); request = undefined;
+    return acquireOwnedHttpGrantMaterialization(sink, cap, permit, binding, key, body, signal);
+  } finally { plan = undefined; request = undefined; body = undefined; }
+}
+function acquireOwnedHttpGrantMaterialization(sink: OwnedHttpSinkOwner, cap: OwnedHttpCredential, permit: object,
   binding: NonNullable<Env["GRANT_CREDENTIALS"]>, key: string, body: string, signal?: AbortSignal): Promise<void> {
   const root = sinkOwner(sink);
-  if (binding !== root.env!.GRANT_CREDENTIALS || !matchesOwnedHttpMaterialization(cap, permit, sink, undefined, key)) throw identityFailure("protocol");
+  if (root.sealed || root.unknown) throw identityFailure("protocol");
+  claimOwnedHttpMaterializationAcquisition(cap, permit, sink, key, signal);
+  if (binding !== root.env!.GRANT_CREDENTIALS) throw identityFailure("protocol");
   reserveSinkOrigins(sink, 20); claimOwnedSinkFactories(); enrollOwnedSinkChild(root);
   let receipt: PrivateMaterializationReceipt | undefined, command: OwnedMaterializationAcquisition;
   try {
@@ -5234,6 +5282,10 @@ export class OwnedHttpRequestReceiver {
     if (OwnedHttpRegistrations.requests?.get(http) !== this) throw identityFailure("protocol");
     return prepareOwnedHttpContinuation(http, permit, destination, ticket, binding, namespace, signal);
   }
+  matchesOwnedHttpContinuationDestination(http: OwnedHttpRequest, permit: object, destination: PrivateContinuationDestination): boolean {
+    return OwnedHttpRegistrations.requests?.get(http) === this && this.continuation?.permit === permit
+      && this.continuation.destination === destination;
+  }
   consumeOwnedHttpContinuation(http: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpContinuation>[0], permit: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpContinuation>[1], destination: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpContinuation>[2], body: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpContinuation>[3], signal?: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpContinuation>[4]): ReturnType<typeof import("./http-identity-owner.ts").consumeOwnedHttpContinuation> {
     if (OwnedHttpRegistrations.requests?.get(http) !== this) throw identityFailure("protocol");
     return consumeOwnedHttpContinuation(http, permit, destination, body, signal);
@@ -5242,17 +5294,11 @@ export class OwnedHttpRequestReceiver {
     if (OwnedHttpRegistrations.requests?.get(http) !== this) throw identityFailure("protocol");
     return abandonOwnedHttpContinuation(http, permit, destination);
   }
-  checkOwnedHttpMaterializationInputs(sink: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpMaterializationInputs>[0], cap: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpMaterializationInputs>[1], permit: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpMaterializationInputs>[2], env: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpMaterializationInputs>[3], key: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpMaterializationInputs>[4], grant: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpMaterializationInputs>[5]): ReturnType<typeof import("./http-identity-owner.ts").checkOwnedHttpMaterializationInputs> {
+  consumeOwnedHttpGrantMaterialization(sink: OwnedHttpSinkOwner, cap: OwnedHttpCredential, permit: object,
+    env: Env, key: string, grant: UpstreamGrant, providerId: string, refresh: RefreshConfig | null,
+    force: boolean, signal?: AbortSignal): Promise<void> {
     if (OwnedHttpRegistrations.sinkOwners?.get(sink) !== this) throw identityFailure("protocol");
-    return checkOwnedHttpMaterializationInputs(sink, cap, permit, env, key, grant);
-  }
-  admitOwnedHttpMaterializationPayload(sink: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpMaterializationPayload>[0], cap: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpMaterializationPayload>[1], permit: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpMaterializationPayload>[2], env: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpMaterializationPayload>[3], key: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpMaterializationPayload>[4], grant: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpMaterializationPayload>[5], bytes: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpMaterializationPayload>[6]): ReturnType<typeof import("./http-identity-owner.ts").admitOwnedHttpMaterializationPayload> {
-    if (OwnedHttpRegistrations.sinkOwners?.get(sink) !== this) throw identityFailure("protocol");
-    return admitOwnedHttpMaterializationPayload(sink, cap, permit, env, key, grant, bytes);
-  }
-  consumeOwnedHttpGrantMaterialization(sink: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantMaterialization>[0], cap: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantMaterialization>[1], permit: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantMaterialization>[2], binding: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantMaterialization>[3], key: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantMaterialization>[4], body: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantMaterialization>[5], signal?: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantMaterialization>[6]): ReturnType<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantMaterialization> {
-    if (OwnedHttpRegistrations.sinkOwners?.get(sink) !== this) throw identityFailure("protocol");
-    return consumeOwnedHttpGrantMaterialization(sink, cap, permit, binding, key, body, signal);
+    return consumeOwnedHttpGrantMaterialization(sink, cap, permit, env, key, grant, providerId, refresh, force, signal);
   }
   beginOwnedHttpError(cap: Parameters<typeof import("./http-identity-owner.ts").beginOwnedHttpError>[0], bytes: Parameters<typeof import("./http-identity-owner.ts").beginOwnedHttpError>[1]): ReturnType<typeof import("./http-identity-owner.ts").beginOwnedHttpError> {
     if (OwnedHttpRegistrations.requests?.get(cap) !== this) throw identityFailure("protocol");

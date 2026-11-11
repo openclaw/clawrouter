@@ -161,7 +161,7 @@ export async function revalidateOwnedResponseControl(cap: OwnedHttpRevalidation,
     || !matchesOwnedHttpRevalidationCaller(cap, binding.proof, binding.credentialId, binding.principalId,
       binding.policyId, owner.providerId, owner.grantKey)) throw identityFailure("protocol");
   if (signal.aborted) throw identityFailure("transport");
-  beginOwnedHttpRevalidationRead(cap);
+  beginOwnedHttpRevalidationRead(cap, signal);
   try {
     await ownedHttpAuthorizationSnapshot(cap, env, signal);
     if (owner.grantKey) await inspectOwnedHttpGrantCredentials(cap, env, signal);

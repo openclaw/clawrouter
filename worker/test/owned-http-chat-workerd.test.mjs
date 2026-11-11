@@ -2690,3 +2690,18 @@ test(`native archive ${target} ${kind} failure stays bounded through held cleanu
     assert.equal(final.reasonReads, 0); assert.equal(final.cancelCalls, 1);
   }, true);
 });
+
+
+for (const variant of ['chat', 'venice', 'gmi'])
+test(`native ${variant} named RPC subjects reject substitutions and replay before effects`, async t => {
+  await fixture(t, async f => {
+    await f.request('https://fixture/fixture/consumer-mode', { method: 'POST', body: 'subject-bindings' });
+    const response = await f.request('https://fixture/v1/chat/completions', chat(variant, variant === 'chat' ? {} : { model: ownedHttpControlModels[variant] })); assert.equal(response.status, 200);
+    const report = await settledState(f), row = report.subjectFaults;
+    for (const kind of ['preflight', 'continuation', 'materialization', 'replay']) assert.ok(row[kind] > 0, kind);
+    assert.equal(row.foreignGets, 0);
+    if (variant !== 'chat') { assert.ok(row.snapshot > 0); assert.ok(row.inspect > 0); }
+    const upstream = JSON.parse((await f.request('https://fixture/fixture/upstream')).text);
+    assert.equal(upstream.length, 1); assert.equal(report.events.length, 1);
+  }, true);
+});
