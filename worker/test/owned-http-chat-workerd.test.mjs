@@ -2590,3 +2590,36 @@ test(`native reached driver installation ${driver} ${outcome} ${reasonKind}`, { 
     await release();
   }, true);
 });
+
+
+// UNRUN_CODE_ONLY_HOSTED: status is a separate fixed reader, not a base-driver subclass.
+for (const kind of ['closed', 'unlock']) for (const outcome of ['reject', 'fulfill'])
+for (const reasonKind of ['distinct', 'equal', 'undefined'])
+test(`native private status ${kind} ${outcome} then installation ${reasonKind} keeps independent origins`, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    f.expectUnknownRetirement();
+    const kv = await f.runtime.getKVNamespace('POLICY_KV', 'router');
+    await kv.put('connections/volcengine', JSON.stringify({ providerId: 'volcengine', enabled: true, monthlyBudgetMicros: 1000000 }));
+    await f.request('https://fixture/fixture/consumer-mode', { method: 'POST', body: `status-origin:${kind}:${outcome}:${reasonKind}` });
+    const response = await f.request('https://fixture/v1/chat/completions', chat('soft', { stream: true }));
+    assert.equal(response.status, 200); assert.ok(response.text.includes('[DONE]'));
+    let report;
+    for (;;) {
+      report = await state(f);
+      if (report.statusReaders.length === 4 && report.statusReaders.every(row => row.thenCalls === 1) && report.events.length === 1) break;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    const originalOffset = kind === 'closed' ? 8 : 7, installOffset = kind === 'closed' ? 14 : 15;
+    for (let index = 0; index < 4; index++) {
+      const facts = report.statusOrigins.filter(row => row.index === index);
+      const original = facts.filter(row => row.offset === originalOffset), installation = facts.filter(row => row.offset === installOffset);
+      assert.equal(original.length, outcome === 'reject' ? 1 : 0); assert.equal(installation.length, 1);
+      assert.equal(installation[0].primaryIsUndefined, reasonKind === 'undefined');
+      if (outcome === 'reject') { assert.notEqual(original[0].ordinal, installation[0].ordinal); assert.equal(original[0].primaryIsUndefined, reasonKind === 'undefined'); }
+      assert.equal(report.statusReaders[index].reasonReads, 0); assert.equal(report.statusReaders[index].retired, false);
+    }
+    assert.equal(report.calls.filter(row => row.kind === 'budget' && row.path === '/charge').length, 4);
+    assert.ok(report.charged > 65536); assert.equal(report.events.length, 1);
+    assert.equal(report.completed.length, 0, 'physical UNKNOWN stays independent of logical charging');
+  }, true);
+});

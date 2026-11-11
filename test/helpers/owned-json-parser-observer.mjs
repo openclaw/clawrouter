@@ -574,11 +574,38 @@ export function createOwnedJsonObservation() {
     },
     publicCaptureReleased(live) { publicReaders.liveCapture = live; publicReaders.handoffs++; },
     statusReaders,
+    statusOrigins: [],
+    statusFailure(index, offset, record) {
+      if (this.consumerMode.startsWith('status-origin:')) this.statusOrigins.push({ index, offset, ...record });
+      return record;
+    },
     statusReader(reader, index) {
       const row = { read: 0, cancel: 0, unlock: 0, nativeUnlocked: 0, unlockSettled: 0, thenCalls: 0, closed: 0, closedSettled: 0, reasonReads: 0, held: false, retired: false, decided: false };
       statusReaders[index] = row;
       const previous = releaseConsumer;
-      if (this.consumerMode.startsWith('status-')) faultReader(reader, this.consumerMode.slice(7), row);
+      if (this.consumerMode.startsWith('status-origin:')) {
+        const [, kind, outcome, reasonKind] = this.consumerMode.split(':');
+        const first = reasonKind === 'undefined' ? undefined : Object.freeze({ fixture: 'status-original' });
+        const second = reasonKind === 'undefined' ? undefined : reasonKind === 'equal' ? first : Object.freeze({ fixture: 'status-installation' });
+        const original = { then(yes, no) {
+          if (this !== original || arguments.length !== 2) throw Error('status original observer operands');
+          row.thenCalls++; assertClosedHandler(yes); assertClosedHandler(no);
+          if (outcome === 'reject') no(first); else yes(undefined);
+          const poison = { get then() { row.reasonReads++; throw Error('duplicate status payload'); } };
+          yes(poison); no(poison); throw second;
+        } };
+        if (kind === 'closed') {
+          const native = reader.closed;
+          void Reflect.apply(Promise.prototype.then, native, [() => undefined, () => undefined]);
+          Object.defineProperty(reader, 'closed', { value: original });
+        } else {
+          const unlock = reader.releaseLock;
+          Object.defineProperty(reader, 'releaseLock', { value(...args) {
+            row.unlock++; if (this !== reader || args.length) throw Error('status unlock operands');
+            Reflect.apply(unlock, this, args); row.nativeUnlocked++; return original;
+          } });
+        }
+      } else if (this.consumerMode.startsWith('status-')) faultReader(reader, this.consumerMode.slice(7), row);
       if (releaseConsumer !== previous) statusReleases.push(releaseConsumer);
       releaseConsumer = previous;
     },
@@ -1190,6 +1217,8 @@ export function observeOwnedJsonSource(path, source) {
     source = replace(source, 'export function canCompleteOwnedHttpPreparation(cap: OwnedHttpRequest, request?: Request): boolean {\n  const owner = OwnedHttpRegistrations.requests?.get(cap);',
       'export function canCompleteOwnedHttpPreparation(cap: OwnedHttpRequest, request?: Request): boolean {\n  const owner = OwnedHttpRegistrations.requests?.get(cap); if (owner?.unknown) ' + probe + '.reductionBlocked.push({ unknown: owner.unknown, aborted: owner.abortController?.signal.aborted, funding: owner.funding.bytes });');
     source = replace(source, '    this.observeClosed();', '    ' + probe + '.statusReader(this.reader, this.index); this.observeClosed();');
+    source = replace(source, '    return failedSinkOrigin(requestOwner(this.owner.http), origin, reason);',
+      '    return ' + probe + '.statusFailure(this.index, offset, failedSinkOrigin(requestOwner(this.owner.http), origin, reason));');
     source = replace(source, 'this.owner.retire(this.index, this);', probe + '.statusRetired(this.index); this.owner.retire(this.index, this);');
     source = replace(source, 'this.owner.decide(this.index, !!(this.flags & 64) && !(this.flags & 16), this.spent);',
       probe + '.statusDecision(this.index); this.owner.decide(this.index, !!(this.flags & 64) && !(this.flags & 16), this.spent);');

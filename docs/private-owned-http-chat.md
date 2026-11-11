@@ -1,6 +1,24 @@
 # Private owned HTTP Chat staging
 
 
+### Current source-only status provenance extension
+
+`OwnedStatusReader` is separate from the shared driver. Its original positions
+0..10 remain unchanged. Independent installation positions are fetch11, read12,
+cancel13, closed14 and unlock15. Pure status preparation reserves sixteen
+positions per admitted reader instead of eleven, before controller/reader
+factories. The internal reader block grows from nine to fourteen positions;
+acquisition and fetch original positions remain separately acquired at their old
+points. No installation record enters native read/closed/cancel correlation.
+
+The five added diagnostic positions use the existing origin component and stay
+paid through UNKNOWN. This is an explicit added component, not a complete V2
+reader allowance. Workerd closed/unlock FIRST-then-install-throw cases cover
+rejection/fulfillment and distinct/equal/undefined reasons. Node and remaining
+fetch/read/cancel schedule extensions remain OPEN. All semantics remain
+`UNRUN_CODE_ONLY_HOSTED`; no whole-candidate claim follows this partial commit.
+
+
 ### Current source-only handler and direct-unlock amendment
 
 The twelve actual private observer pair factories freeze both fresh bound

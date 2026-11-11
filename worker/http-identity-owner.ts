@@ -3993,7 +3993,7 @@ export class OwnedStatusReader {
       const root = requestOwner(this.owner.http);
       if (this.acquisition !== undefined) compactRetiredSinkOrigin(root, Math.floor(this.acquisition / 32));
       if (this.fetching !== undefined) compactRetiredSinkOrigin(root, Math.floor(this.fetching / 32));
-      if (this.base !== undefined) for (let index = 0; index < 9; index++) compactRetiredSinkOrigin(root, this.base + index);
+      if (this.base !== undefined) for (let index = 0; index < 14; index++) compactRetiredSinkOrigin(root, this.base + index);
       this.owner.retire(this.index, this); this.owner = undefined as never;
     } catch (reason) { this.unsettled(reason); }
   }
@@ -4006,8 +4006,9 @@ export class OwnedStatusReader {
   private claimReader(): number {
     if (this.base !== undefined) return this.base;
     const root = requestOwner(this.owner.http);
-    if (root.sinkCredits < 9) throw identityFailure("protocol");
-    this.base = root.nextSinkOrigin; root.nextSinkOrigin += 9; root.sinkCredits -= 9;
+    // Existing reader offsets 2..10, then independent fetch/read/cancel/closed/unlock installation offsets 11..15.
+    if (root.sinkCredits < 14) throw identityFailure("protocol");
+    this.base = root.nextSinkOrigin; root.nextSinkOrigin += 14; root.sinkCredits -= 14;
     return this.base;
   }
   failure(offset: number, kind: SinkOrigin, reason: unknown): SinkOriginRecord {
@@ -4030,7 +4031,7 @@ export class OwnedStatusReader {
       this.fetchObservation = { owner: this, kind: 1, state: 0 };
       installOwnedOriginalMethod(this.fetchObservation, original, then);
     } catch (reason) {
-      this.failure(1, "fetch", reason); reason = undefined; this.flags |= 2048;
+      this.failure(started ? 11 : 1, "fetch", reason); reason = undefined; this.flags |= 2048;
       if (observing || started) this.unknown();
       else this.settleRead();
       this.stopReading();
@@ -4081,7 +4082,7 @@ export class OwnedStatusReader {
       installOwnedOriginalMethod(this.closedObservation, original, then);
       original = undefined;
     } catch (reason) {
-      const failure = this.failure(8, "closed", reason); reason = undefined;
+      const failure = this.failure(observing ? 14 : 8, "closed", reason); reason = undefined;
       if (observing) this.unknown(); else this.closedResolved();
       throw failure;
     }
@@ -4118,7 +4119,7 @@ export class OwnedStatusReader {
       observation.state |= 2;
     } catch (reason) {
       if (observation) observation.state |= 4;
-      this.failure(5, "read", reason); reason = undefined; this.flags |= 2048;
+      this.failure(started ? 12 : 5, "read", reason); reason = undefined; this.flags |= 2048;
       if (started) this.unknown(); else this.settleRead();
       this.stopReading();
     } finally { observation = undefined; original = undefined; }
@@ -4212,7 +4213,7 @@ export class OwnedStatusReader {
       installOwnedOriginalMethod(this.cancelObservation, original, then);
       original = undefined;
     } catch (reason) {
-      this.failure(6, "cancel", reason); reason = undefined; this.flags |= 16;
+      this.failure(observing ? 13 : 6, "cancel", reason); reason = undefined; this.flags |= 16;
       if (observing) this.unknown(); else this.cancelResolved();
     }
   }
@@ -4234,7 +4235,7 @@ export class OwnedStatusReader {
       then = undefined;
       original = undefined;
     } catch (reason) {
-      this.failure(7, "unlock", reason); reason = undefined; this.flags |= 16;
+      this.failure(observing ? 15 : 7, "unlock", reason); reason = undefined; this.flags |= 16;
       if (observing) this.unknown(); else this.unlockResolved();
     }
   }
@@ -4328,7 +4329,7 @@ export function prepareOwnedHttpSoftStatus(cap: OwnedHttpRequest, env: Env, plan
     || plan.descriptors.length > 4) throw identityFailure("protocol");
   // Four complete source/read/text/graph overlaps, plus fixed decision metadata.
   growOwnedHttpRequest(cap, 4096 + plan.descriptors.length * ownedStatusData);
-  reserveSinkOrigins(ownedHttpSinkOwner(cap), 1 + 11 * plan.descriptors.length);
+  reserveSinkOrigins(ownedHttpSinkOwner(cap), 1 + 16 * plan.descriptors.length);
   claimOwnedSinkFactories(); enrollOwnedSinkChild(root);
   const state = new OwnedStatusController(cap, plan); root.softStatus = state;
   for (let index = 0; index < plan.descriptors.length; index++) {

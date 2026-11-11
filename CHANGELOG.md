@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Prepay separate installation origins for private soft-status fetch, read, cancel, closed and returned-unlock observations. Preserve original offsets and native correlation, and add Workerd rejection/fulfillment-then-throw witnesses for closed/unlock. Source-only partial; remaining runtime coverage and complete manifests stay open.
+
 - Freeze both private original-observer handlers before actual handoff, keeping their severable cells mutable. Complete returned nonthenable unlocks synchronously without substitute Promises; add handler-mutation and direct-unlock witnesses. Source-only partial; paid async/native and active-window inventories remain open.
 
 - Advance the shared accounting archive serializer with an iterative cursor stack, preserving quoted-string escaping, depth32 acceptance and chunk partitions while removing recursive generator advancement and cancellation. Add Node and Workerd depth32/surrogate/cancellation fixtures. Source-only partial; complete active/native accounting remains open.
