@@ -63,6 +63,248 @@ A bounded source-representation consolidation preserving the fixed named
 protocol, ordinary inverses and65536 ceiling needs closure before a complete
 candidate. No static debit increase or speculative consolidation is implemented.
 
+### Expanded declaration inventory at 0dceed67
+
+The expanded inventory reads the exact `0dceed67c060eef44b27500933d2fb714389b51a`
+source and exact-main baseline, strips only TypeScript syntax with the builtin
+source stripper, and scans balanced executable tokens. It distinguishes comments,
+quoted strings, regex literals and nested template expressions. No application
+module or repository dependency is evaluated.
+
+There are1524 additional explicit callable definitions:749 named functions,
+546 regular methods,39 getters,22 setters and168 arrows. Each source position
+counts separately, even when two bodies are identical. Importing a target adds
+its local reference binding, never another target. An existing declaration in
+the same module/lexical owner remains on its existing owner; changed bodies do
+not create a second definition. Anonymous arrows retain empty names; assignment
+and property-inferred names, including async arrows, are counted. Getter/setter
+function names include their actual `get `/`set ` prefix.
+
+The35 new classes include31 explicit and4 implicit constructors. Their existing
+six-product constructor/binding/prototype group and two-product class-scope
+group count once; explicit constructor bodies are not charged again as ordinary
+methods. Class names plus their `constructor`/`prototype` property names
+contribute1400 units. The table also includes668 new runtime import-reference
+bindings and247 new module variable bindings. Type-only imports are erased.
+Module variable targets and initializer data are additional rows below.
+
+| Source | Explicit callables | Classes | Import bindings | Variable bindings | Name units | Definition/binding bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| accounting |2|0|26|0|769|1794|
+| authority |2|0|1|0|96|248|
+| content-retention |1|0|2|0|71|182|
+| correlation |1|0|0|2|60|160|
+| credential-cache |15|0|7|4|675|1798|
+| credential-preflight-source |63|1|18|3|1438|4620|
+| credential-preflight |113|0|32|10|3194|9436|
+| gmi-organization-binding |11|0|12|2|514|1404|
+| grant-credentials |3|0|4|0|183|470|
+| http-identity-owner |573|18|195|78|18160|53408|
+| identity-admission |61|1|11|12|1443|4598|
+| index |5|0|21|1|497|1290|
+| json-body |56|0|7|16|1295|4118|
+| native-errors |4|0|0|4|160|448|
+| pricing |21|0|7|10|797|2234|
+| provider-auth |4|0|11|0|319|822|
+| provider-templates |15|0|2|7|572|1576|
+| providers |29|0|9|5|1134|3076|
+| proxy-accounting |31|1|27|3|1561|4170|
+| proxy-auth |8|0|3|2|310|852|
+| proxy-completion |85|2|1|48|2290|7140|
+| proxy-response |166|6|77|7|4698|14436|
+| proxy-selection |3|0|6|0|213|546|
+| proxy-upstream-request |4|0|8|0|246|652|
+| proxy |134|1|111|13|5742|15756|
+| response-control-authorization |4|0|14|2|544|1312|
+| soft-budget |44|2|7|1|823|2894|
+| token-usage |1|1|6|1|164|472|
+| utils |0|0|0|5|70|180|
+| venice-chat-authority |12|0|12|2|610|1620|
+| venice-chat-runtime |53|2|31|9|1620|4960|
+| **Component** |**1524**|**35**|**668**|**247**|**50268**|**146672**|
+
+The component is `8*(3*1524+8*35+668+247)+2*50268 = 146672`.
+It exceeds65536 by81136 before the omitted target/data rows. This is a larger
+source component, **not a complete STATIC upper**. The earlier66938 necessary
+subset remains valid; this table does not add that subset again. The sorted
+JSON declaration roster `[path, lexicalOwner, kind, name, sourceLine]` has SHA256
+`11304119e544e042bd4276082ce3b660af997af608d88f5d256eae81c89db32c`.
+
+The class-field source roster adds362 emitted field declarations and148
+initializer expressions. These are distinct from instance property storage.
+A class-field initializer's definition and its per-construction activation must
+not be merged with an arrow nested inside that initializer. Nonemitting
+`declare` fields are excluded from this syntax roster; later materialized
+static registry properties still require their actual ownership row.
+
+| Source | Emitted field declarations | Initializer expressions | Field-name units |
+| --- | ---: | ---: | ---: |
+| credential-preflight-source |35|13|341|
+| http-identity-owner |171|79|1502|
+| identity-admission |35|14|340|
+| proxy-completion |21|5|231|
+| proxy-response |48|13|412|
+| proxy |21|10|215|
+| soft-budget |12|4|93|
+| token-usage |2|0|43|
+| venice-chat-runtime |17|10|115|
+| **Source roster** |**362**|**148**|**3292**|
+
+New definition/initializer scopes contain2157 quoted-string occurrences,
+83 template fragments,4 regex-source occurrences,3762 numeric occurrences
+and2420 primitive-literal/reference occurrences. Decoded string/fragment/regex
+text totals22217 UTF16 units. These are an input roster, not22217 additional
+retained string units by assumption: transient initializer operands, literal
+targets already in fixed tables, native borrowed references and generated
+request strings need their actual owners. Existing modified function bodies
+also contain added constants; they are not silently included in this new-scope
+roster. Comments, TypeScript types and source-code text are not payload.
+
+The remaining full-STATIC rows are explicit:
+
+- 148 class-field initializer definitions and their retained field-definition
+  lists/records, including constructor overlap; arrows nested in initializer
+  expressions are not presumed to be the initializer targets.
+- 32 participating module scope/outer-link pairs; singleton exact-charge object
+  and held field; actual materialized class registry properties.
+- Module initializer targets: the24-entry `sinkKinds` array,14-entry stripped-
+  header array, empty intrinsic-argument array and private entrypoint object;
+  captured native targets are borrowed, while their bindings above remain paid.
+- Actual fixed literal/property/phase tables, including additional constants in
+  pre-existing function bodies, with repeated references distinguished from
+  repeated string targets.
+- The carried281-product pinned tokenizer/adapter/defs slice and its actual fixed
+  payload. The old3360-unit prefix bound includes syntax/comments and cannot be
+  reported as an exact literal payload. The available canonical checkout copy
+  is stream-json3.7.0/stream-chain4.2.6, not the pinned3.8.0/4.4.1. It is excluded
+  from this count; no download, dependency execution or link repair occurred.
+
+Thus the whole inventory remains OPEN on those stated rows. No I/O attributes,
+source-code payload, larger STATIC claim, category transfer or source
+consolidation was introduced.
+
+### Failed-producer Error records and bootstrap components
+
+The private failed-producer record census preserves the actual `HttpError`
+and `SelectedGrantCredentialFailure`, not projected replacements. Let M be
+the constructed message's UTF16 length, C the genuine eligible code length,
+G the selected key length, and H the optional Retry-After length. The five-code
+qualification is required before this scalar form applies; it does not price
+nonretry graph-valued codes.
+
+Under the adopted native Error48-byte node and I/O property convention:
+
+| Actual record | Constructor phase union | Bytes excluding stored strings |
+| --- | --- | ---: |
+| Producer HttpError | Native Error plus message/status/code/headers; headers is emitted undefined before optional assignment |384|
+| Selected wrapper | Same four fields plus emitted grantKey |472|
+| Optional shared header object | One Retry-After own property; shared by both errors |126|
+
+The explicit record/string component is
+`856 + 4M + 4C + 2G + I_header*(126 + 2H)`.
+Both message/code occurrences remain counted. The header target is counted once;
+both reference properties are already in the Error rows. The constructor union
+retains the emitted undefined header phase even on the header-present branch.
+There is no source-created own `cause` or `name` property. This uses the adopted
+standard Error protocol, not a claim about engine-specific stack storage or
+actual hosted own-key qualification. The [ECMA2026 Error constructor](https://tc39.es/ecma262/2026/multipage/fundamental-objects.html#sec-error-constructor)
+supplies the native node/message relationship.
+
+This component excludes constructor/ToString/descriptor/freeze work, producer
+and wrapper transfer references, six async results and their callers, failed
+run/owner/port/cap/lease/registry fields and independent diagnostics. It cannot
+enable R_failed replacement. The actual outer attempt result remains one per
+prepareOwnedHttpAttempt invocation, rather than one per loop iteration.
+
+The request bootstrap currently assigns22 own properties, with255 property-name
+units and12 primitive-valued fields. Its explicit record is
+`32+64*22+8*12+2*255 = 2046` bytes. The RequestOwner interface has50 possible
+fields and713 name units; neither interface presence nor the initial22-field
+record proves a whole root phase union. Optional late fields, their actual
+targets and deletion/undefined transitions remain separate.
+
+The source-defined root record union is50 properties,713 name units and44
+primitive alternatives, or `32+64*50+8*44+2*713 = 5010` bytes. The23 scalar
+fields are always primitive;21 additional reference fields have actual own
+undefined writes during retirement. Funding, completion, uploads, retirement,
+sinkRetired and budgetSequence are the six reference-only positions. This
+conservative per-field phase union replaces the2046 bootstrap snapshot when
+composing the root record; the two are not added. It still excludes referenced
+targets, source environments, indices and followers, so it is not Wroot.
+
+The new ordinary ProxyCompletion instance has six emitted fields and41 name
+units. A conservative constructor union with five primitive positions gives538
+bytes. Its field-initializer executor is698 bytes
+(`412+64+72+94+56`), and its own native Promise is744, giving1442 for that
+receipt construction. The terminal `{failed,unused}` result record is200.
+These are separate from the root sink-retirement Promise, its executor and
+captured bootstrap scope, root capability/index records, containers and later
+retirement/reporting followers. No bootstrap allowance changes follow from
+these components.
+
+The separate sink-retirement executor has the following source environment
+union. Its enclosing ordinary strict function has request/env/funding/registry/
+arguments bindings (34 identifier units; registry has an undefined phase), a
+three-argument object, and one captured try environment with nextRequests,
+nextUploads,nextSinks,nextFailures,terminalRegistration,sink,resolveSink,
+sinkRetired,owner,cap (98 units; two primitive alternatives). Later uninitialized
+bindings are not additional payload graphs. The constructor environment is
+retained during executor invocation; it is not a permanent second HTTP root.
+
+| Sink-retirement executor constituent | Bytes |
+| --- | ---: |
+| Module-scope APP arrow |420|
+| Ordinary strict function environment and five bindings |548|
+| Three-argument object |478|
+| Captured try environment and ten bindings |1028|
+| Arrow invocation environment |72|
+| Actual resolve binding |94|
+| Promise/executor call lists |56|
+| **APP constructor union** |**2696**|
+| Existing P0+R native constructor |744|
+| **Sink receipt construction component** |**3440**|
+
+This captures no earlier registry-allocation branch environment: that branch
+has returned before the executor is constructed. Root capability/sink objects,
+array/container targets, bootstrap descriptor/index temporaries, registry
+allocation failure and later result/retirement followers remain additional.
+
+For composition of diagnostic indices, the adopted semantic record/list tariff
+can enumerate the actual Map/WeakMap relationship directly: an ordinary native
+container and its internal data-list header are64 bytes; an entry has its
+two-field record and one list-reference position. Its extra record/index
+products are16 bytes beyond already-listed key/value occurrences. A scalar
+key/scalar value entry is48 bytes; scalar key/object value is40; object/object
+is32. WeakSet membership uses a direct list value, not another two-field entry
+record. This follows the [ECMA2026 keyed-collection algorithms](https://tc39.es/ecma262/2026/multipage/keyed-collections.html#sec-map-objects).
+Each container is assigned once to its root/registry owner. Entry increments
+must be assigned once to the family funding those insertions, never added again
+where already expanded. This gives32 additional index bytes for the preclaim
+two-scalar-entry component (254 becomes286), without changing its representation
+or enabling an admission. Callback-time insertion grants no new funding.
+
+### Carried fba8 budget caller APP component
+
+The reviewed fba8 caller component uses L<=4, D<=L, K<=L-1, Q<=K,
+c=capability.length, n_i=objectName.length and
+a_i=objectName.length+reservationId.length:
+
+| Caller branch | APP component |
+| --- | --- |
+| Reserve success |3682+6c+2820L+2sum(n_i)|
+| Reserve failure |3958+6c+2862L-42K+2sum(n_i)|
+| Dispatch addition |2944+200L+806D+2sum(a_i)|
+| Nonempty rollback addition |5032+3194K+782Q+2sum(a_i+n_i)|
+| Empty rollback |0|
+
+The L=D=4,c=8 structural subtotal is21978; L=4,K=Q=3,c=8 is32288,
+with identifier occurrences still additional. The old rollback-sink activation
+846 plus accountingSinks766 is1612. That row must be removed and replaced by
+the actual0dce private builder, rather than charging both. K/T/H/S(n), the
+reviewed ECMA2026 direct three-slot ArrayIterator component J, reporting/Error
+products, new helper deltas, ACK/parent/DATA, ACTIVE and STATIC remain separate.
+No guessed J value or completed Wbudget reservation is introduced.
+
 ### Preclaim configuration boundary — source-only repair
 
 The foreground capability is installed in its existing canonical foreground
