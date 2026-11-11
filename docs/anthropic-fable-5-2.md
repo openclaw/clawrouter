@@ -30,8 +30,14 @@ must claim that version in its user-agent or billing system block. The Messages
 identifies the model by `claude-fable-5-2`; it does not prescribe either version
 field as a model-access requirement.
 
-Keep the router's existing subscription user-agent and injected billing prefix
-at 2.1.288. The prefix is part of earlier requests' system content; changing it
+A hosted subscription request on 2026-11-11 was rejected because its
+`claude-cli/2.1.288` HTTP User-Agent was below the upstream minimum of 2.1.290.
+The router now advertises `claude-cli/2.1.322 (external, cli)` for subscription
+requests. This observed HTTP-header requirement is separate from the documented
+Claude Code application requirement above.
+
+Keep the injected billing prefix at `cc_version=2.1.288`. Unlike the HTTP
+User-Agent, that prefix is part of earlier requests' system content; changing it
 would change the prefix preceding preserved thinking even when callers replay
 unchanged tools and history. Regression tests exercise the actual transform for
 Fable 5.1, Sonnet 5.5 and Opus 5.5, both reconstructing the historical prefix and
