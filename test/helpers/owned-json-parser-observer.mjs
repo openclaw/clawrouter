@@ -89,7 +89,7 @@ export function createOwnedJsonObservation() {
   const consumers = { created: 0, acquired: 0, retired: 0, live: 0, inner: 0, outer: 0,
     read: 0, cancel: 0, unlock: 0, nativeUnlocked: 0, unlockSettled: 0, thenCalls: 0, closed: 0, closedSettled: 0, replay: 0, transferred: 0, pricing: 0, enqueued: 0, oversizedOutput: 0, mutations: 0, held: false, released: false, reasonReads: 0 };
   const usage = { census: 0, parsed: 0, maxGraph: 0, maxContainers: 0, maxStrings: 0, maxAtoms: 0, maxUnits: 0, summaries: 0, cleared: 0 };
-  const shared = { claims: 0, held: 0, refused: 0, before: 0, after: 0 };
+  const shared = { claims: 0, held: 0, refused: 0, before: 0, after: 0, foregroundClaims: 0, foregroundHeld: 0, foregroundStatic: 0 };
   let restoreIngressConstruction;
   let releaseConsumer, mutateIntake, restoreArchiveData, restoreHeaderIterator, restoreHeaderForEach, releaseMetadataPressure;
   const headers = { applied: false, body: 0, headers: 0, status: 0, statusText: 0, hooks: 0, coercions: 0, constructors: 0, component: 0, early: 0, indexUnits: 0, unitMeasurements: 0 };
@@ -430,7 +430,7 @@ export function createOwnedJsonObservation() {
   };
   return {
     rows,
-    foreground(owner) { if (this.retainedStatus) foregroundOwners.push(owner); },
+    foreground(owner) { shared.foregroundClaims++; shared.foregroundHeld = owner.lease.bytes; shared.foregroundStatic = shared.held; if (this.retainedStatus) foregroundOwners.push(owner); },
     foregroundState() { return foregroundOwners.map(owner => ({ bytes: owner.lease.bytes, reduction: owner.reduction ?? 0, retained: owner.retained })); },
     reductionBlocked: [],
     preflightTransfers: { staged: 0, taken: 0, advanced: 0 },
@@ -508,14 +508,14 @@ export function createOwnedJsonObservation() {
       for (const row of this.originalObservers) if (row.cell.owner === undefined) { row.fulfilled(foreign); row.rejected(foreign); callbacks += 2; }
       return { reads, callbacks };
     },
-    driverFactory() { if (shared.held !== 65536 || shared.claims !== 1) throw new Error("driver field initializer before shared claim"); this.driverFactories++; },
-    intakeFactory() { if (shared.held !== 65536 || shared.claims !== 1) throw new Error("intake field initializer before shared claim"); this.intakeFactories++; },
+    driverFactory() { if (shared.held !== 947130 || shared.claims !== 1) throw new Error("driver field initializer before shared claim"); this.driverFactories++; },
+    intakeFactory() { if (shared.held !== 947130 || shared.claims !== 1) throw new Error("intake field initializer before shared claim"); this.intakeFactories++; },
     driverRead() { this.driverReads++; },
     consumers,
     usage,
     shared,
     sharedClaim(before, after, held) {
-      if (shared.claims || held !== 65536 || after - before !== held) throw new Error('shared claim is not one exact positive debit');
+      if (shared.claims || held !== 947130 || after - before !== held) throw new Error('shared claim is not one exact positive debit');
       shared.claims++; shared.held = held; shared.before = before; shared.after = after;
     },
     sharedRefused(before, after) { if (before !== after) throw new Error('failed shared claim changed COMMON'); shared.refused++; },
@@ -1380,9 +1380,9 @@ export function observeOwnedJsonSource(path, source) {
     source = replace(source, 'return new ownedResponseConstructor(body, { __proto__: null, status, statusText, headers } as ResponseInit);',
       probe + '.headerConstructor(); ' + probe + '.metadataFactory(); const __response = new ownedResponseConstructor(body, { __proto__: null, status, statusText, headers } as ResponseInit); ' + probe + '.headerConstructed(); return __response;');
     source = 'import { bodyBudgetCharged as __sharedCharged, bodyBudgetBytes as __sharedLimit } from "./body-budget.ts";\n' + source;
-    source = replace(source, 'const charge = ExactBodyCharge.reserve(65536);',
-      'if (' + probe + '.consumerMode === "shared-refusal" && !' + probe + '.shared.refused) ' + probe + '.sharedPressure(ExactBodyCharge.reserve(__sharedLimit - __sharedCharged() - 65535)); '
-      + 'const __beforeShared = __sharedCharged(); const charge = ExactBodyCharge.reserve(65536);');
+    source = replace(source, 'const charge = ExactBodyCharge.reserve(947130);',
+      'if (' + probe + '.consumerMode === "shared-refusal" && !' + probe + '.shared.refused) ' + probe + '.sharedPressure(ExactBodyCharge.reserve(__sharedLimit - __sharedCharged() - 947129)); '
+      + 'const __beforeShared = __sharedCharged(); const charge = ExactBodyCharge.reserve(947130);');
     source = replace(source, 'if (!charge) return false;',
       'if (!charge) { ' + probe + '.sharedRefused(__beforeShared, __sharedCharged()); return false; }');
     source = replace(source, 'ownedHttpStaticCharge = charge;',

@@ -1,24 +1,47 @@
 # Private owned HTTP Chat staging
 
-### Global STATIC census proposal — application source 123d79c
+### Adopted global STATIC debit — census source 123d79c
 
-**The proposed complete fixed-source debit is S=947130 bytes. It is not an
-adopted code operand or a whole-capacity qualification.** Source:
-`123d79c080a8d170704737f3beef8b2caa7d023e`, with the same application bytes as
-`886c4fd9b480ed78312f7a19915231ab6eb105d0`. The latter repairs exactly twelve
-provider receiver-guard references. The successor removes only a mirrored
-source-text test and corrects its documentation.
+**ROOT adopted S=947130 bytes at 09:44Z. The singleton now reserves that
+exact amount once from the existing100663296-byte COMMON counter.** The only
+production change is `ExactBodyCharge.reserve(65536)` to
+`ExactBodyCharge.reserve(947130)` inside `claimOwnedHttpStaticCustody`.
+The reviewed census uses application bytes from
+`123d79c080a8d170704737f3beef8b2caa7d023e` / `886c4fd9b480ed78312f7a19915231ab6eb105d0`
+and the Construct-reference correction in
+`7d881d2329750a1ef3b1429645f30c0de32e9222`. Changing this numeric operand adds no
+product or UTF16 name/string unit. The implementation's source and operand
+roster hashes are recorded below after its immutable checkpoint.
 
-ROOT_OPERATIVE_STATIC_SOURCE_DERIVED_DEBIT_2026_11_11_0905 supersedes the earlier
-coordinator-authored65536 ceiling. The existing code still reserves65536.
-A separately reviewed/adopted S would be a permanent once-only debit on the
-same100663296-byte COMMON counter. It is not another arena or request quota.
-It reduces available shared headroom after activation, including for ordinary
-requests. Ordinary-only preactivation does not activate this charge. No capacity
-parity, admission, failed-ticket reduction, ACTIVE128/SYNC512 or runtime result
-follows. Module initialization/bootstrap is not retroactively prepaid by the
-later claim. Its construction contexts/descriptors and the protected-use
-admission cut remain separate qualification work.
+ROOT_ADOPTED_SOURCE_DERIVED_STATIC_DEBIT_947130_0944 implements the reviewed
+0905 contract amendment. It creates no arena, counter, binding, field, window,
+request profile or forward authority. The additional881594-byte debit reduces
+COMMON headroom: STATIC alone leaves99716166 bytes, before every other live
+owner. Ordinary-only preactivation is unchanged; ordinary allocations after
+private activation share this reduced headroom.
+
+The synchronous singleton refuses without publishing or charging on failure.
+A successful claim is permanent until isolate termination, including through
+request retirement, eviction and UNKNOWN. There is no reset/release/shrink/
+replacement hook. Its protected-use cut is after code loading: initialization
+and bootstrap remain independently owned, not retroactively funded. Any later
+production delta needs a reviewed STATIC adjustment. Full-family admission,
+R_failed replacement, ACTIVE128/SYNC512, simultaneous COMMON and hosted runtime
+qualification remain OPEN.
+
+**Authored behavior witnesses, UNRUN.** A shared actual-command fixture runs in
+fresh Node and Workerd isolates. It fills COMMON leaving S−1, verifies two
+uncharged refusals, transfers the competing charge down one byte, then verifies
+exact-S admission and reuse while COMMON is full. It releases only its own
+competing charge. The actual ordinary BodyLease admits the whole counter before
+activation, refuses that same demand afterward, admits exactly99716166 bytes,
+and leaves the permanent debit intact after release. Existing real HTTP
+fixtures separately observe no private I/O factory/effect on refused first
+claim, one claim before intake/reader construction, and the actual32MiB
+foreground lease alongside STATIC before successful request cleanup. UNKNOWN
+reader fixtures retain the singleton across cleanup. These are distinct unit
+and protected-request witnesses; singleton success alone proves no request fit.
+No application/runtime test or dependency-backed typecheck was run.
 
 The earlier consolidation plans and65536 fit statements below are historical.
 Optional member, field and owner-collocation work is a follow-up only. The
@@ -64,7 +87,7 @@ outside those macros; it applies no I/O48-byte own-attribute supplement or
 
 Thus `8*(4104+13052+32999)+2*272945=947130`. The non-pinned rows are
 889862; the corrected pinned component is57268, including its one P0.
-The proposed increment above the current65536 claim is881594. These are
+The adopted increment above the former65536 claim is881594. These are
 logical application-custody units, not engine heap measurements. The table
 takes no healthy-only disposal, optional redesign, interning, function-name
 shortening or request-lifetime credit.

@@ -15,7 +15,7 @@ const hook = registerHooks({ load(url, context, nextLoad) {
 } });
 export function ownedStaticHeld() {
   assert.ok(observation.claims === 0 || observation.claims === 1);
-  assert.equal(observation.held, observation.claims * 65536);
+  assert.equal(observation.held, observation.claims * 947130);
   return observation.held;
 }
 after(() => { hook.deregister(); delete globalThis.__ownedStaticCustodyFixture; });

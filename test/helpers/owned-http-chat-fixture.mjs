@@ -6,6 +6,49 @@ export const ownedHttpPricingModel = 'fireworks/glm-5.2';
 export const ownedHttpControlModels = { gmi: 'gmi/deepseek-ai/DeepSeek-V4-Pro', venice: 'venice/zai-org-glm-5-2' };
 export const ownedHttpCases = ['soft_venice', 'soft', 'chat', 'tool', 'error', 'abort', 'large', 'off', 'gmi', 'venice', 'pricing', 'pricing_media', 'pricing_cache', 'pricing_wide', 'pricing_large', 'pricing_unicode', 'pricing_outside', 'pricing_prepare_fail'];
 export const ownedHttpProxyKey = id => `clawrouter-live-owned_http_${id}-fixture-secret`;
+// Fresh-isolate singleton/COMMON witness. No production singleton is reset,
+// released or returned; only this witness's competing charges are released.
+export function ownedStaticCustodyWitness(claim, ExactBodyCharge, BodyLease, charged, limit) {
+  if (charged() !== 0) throw Error('static boundary witness requires a fresh COMMON counter');
+  const ordinary = new BodyLease();
+  let pressure;
+  try {
+    const preactivation = ordinary.grow(limit / 2);
+    const preactivationCharged = charged();
+    ordinary.release();
+    pressure = ExactBodyCharge.reserve(limit - 947130 + 1);
+    if (!pressure) throw Error('static boundary pressure was not admitted');
+    const before = charged(), refused = [claim(), claim()], afterRefusal = charged();
+    const next = pressure.replace(pressure.bytes - 1);
+    if (!next) throw Error('static exact-boundary transfer failed');
+    pressure = next;
+    const beforeExact = charged(), admitted = claim(), afterExact = charged();
+    const reusedWhileFull = claim(), afterReuse = charged();
+    pressure.release(); pressure = undefined;
+    const permanent = charged(), ordinaryAfter = ordinary.grow(limit / 2);
+    const afterOrdinaryRefusal = charged();
+    const ordinaryBoundary = ordinary.grow((limit - 947130) / 2);
+    const afterOrdinaryBoundary = charged(), reusedWithOrdinary = claim();
+    const afterOrdinaryReuse = charged();
+    ordinary.release();
+    return { preactivation, preactivationCharged, before, refused, afterRefusal,
+      beforeExact, admitted, afterExact, reusedWhileFull, afterReuse, permanent,
+      ordinaryAfter, afterOrdinaryRefusal, ordinaryBoundary, afterOrdinaryBoundary,
+      reusedWithOrdinary, afterOrdinaryReuse, afterOrdinaryRelease: charged() };
+  } finally { pressure?.release(); ordinary.release(); }
+}
+export function assertOwnedStaticCustody(assert, row, limit) {
+  assert.equal(row.preactivation, true); assert.equal(row.preactivationCharged, limit);
+  assert.equal(row.before, limit - 947129); assert.deepEqual(row.refused, [false, false]);
+  assert.equal(row.afterRefusal, row.before);
+  assert.equal(row.beforeExact, limit - 947130); assert.equal(row.admitted, true);
+  assert.equal(row.afterExact, limit); assert.equal(row.reusedWhileFull, true);
+  assert.equal(row.afterReuse, limit); assert.equal(row.permanent, 947130);
+  assert.equal(row.ordinaryAfter, false); assert.equal(row.afterOrdinaryRefusal, 947130);
+  assert.equal(row.ordinaryBoundary, true); assert.equal(row.afterOrdinaryBoundary, limit);
+  assert.equal(row.reusedWithOrdinary, true); assert.equal(row.afterOrdinaryReuse, limit);
+  assert.equal(row.afterOrdinaryRelease, 947130);
+}
 // Fixture-only observers retain actual records/handlers so own-key cuts and
 // stale FIRST callbacks can be inspected without inventing retirement proof.
 export async function ownedSinkInstallationWitness(commands, kind, outcome, reasonKind, charged) {
@@ -588,14 +631,15 @@ export async function seedOwnedHttpChat(runtime) {
 export const ownedHttpRouter = String.raw`
 import handler,{privateOwnedHttpChat} from './worker/index.ts';export * from './worker/index.ts';
 import {putGrantCredentials} from './worker/grant-credentials.ts';
-import {bodyBudgetCharged,bodyBudgetBytes,ExactBodyCharge} from './worker/body-budget.ts';
+import {bodyBudgetCharged,bodyBudgetBytes,ExactBodyCharge,BodyLease} from './worker/body-budget.ts';
 import {snapshot} from './worker/providers.ts';
 import {PolicyBindingIndexObject as NativeAuthority} from './worker/authority.ts';
 import {HttpError} from './worker/utils.ts';
 import {SelectedGrantCredentialFailure} from './worker/grant-credential-failure.ts';
 import {evictCredentialGeneration} from './worker/credential-preflight.ts';
 import * as budgetCommands from './worker/http-identity-owner.ts';
-import {captureOwnedResponseMetadata} from './worker/proxy-completion.ts';
+import {captureOwnedResponseMetadata,claimOwnedHttpStaticCustody} from './worker/proxy-completion.ts';
+const ownedStaticCustodyWitness = ${ownedStaticCustodyWitness.toString()};
 const createOwnedBudgetSequenceFixture = ${createOwnedBudgetSequenceFixture.toString()};
 const createOwnedTerminalFixture = ${createOwnedTerminalFixture.toString()};
 const createOwnedAckPhaseFixture = ${createOwnedAckPhaseFixture.toString()};
@@ -1012,6 +1056,7 @@ export default {...handler,async fetch(request,env,context){
   globalThis.__ownedUsageWire(value.name,value.format==='sse');
   globalThis.__ownedJsonObservation.consumerMode='usage:'+value.name+':'+value.format;return new Response(null,{status:204});
  }
+ if(path==='/fixture/static-boundary')return Response.json(ownedStaticCustodyWitness(claimOwnedHttpStaticCustody,ExactBodyCharge,BodyLease,bodyBudgetCharged,bodyBudgetBytes));
  if(path==='/fixture/consumer-mode'){
   if(request.method==='DELETE'){globalThis.__ownedJsonObservation?.releaseConsumer();return new Response(null,{status:204});}
   const mode=await request.text();if(![...[7,8,9].flatMap(position=>['undefined','opaque','internal','selected'].map(kind=>'preclaim:'+position+':'+kind)),...['7:mismatch','8:capacity','7:cleanup-undefined','7:cleanup-object','7:report'].map(mode=>'preclaim:'+mode),...['undefined','opaque','forged','cleanup-undefined','cleanup-object','report'].map(kind=>'status-start:'+kind),...['getter','put'].flatMap(target=>['undefined','large-string','opaque-object'].map(kind=>'archive-failure:'+target+':'+kind)),...['put','pipe','cancel'].flatMap(kind=>['reject','fulfill'].flatMap(outcome=>['distinct','equal','undefined'].map(reason=>'archive-install:'+kind+':'+outcome+':'+reason))),...['put','pipe','cancel'].flatMap(kind=>['undefined','held','hostile'].map(value=>'archive-return:'+kind+':'+value)),...['closed','unlock'].flatMap(kind=>['reject','fulfill'].flatMap(outcome=>['distinct','equal','undefined'].map(reason=>'status-origin:'+kind+':'+outcome+':'+reason))),...['OwnedNormalizerReader','CodecReader','OwnedVeniceSource','OwnedPublicReader','OwnedRevalidationRpc','GenericUsageReader'].flatMap(name=>['reject','fulfill'].flatMap(outcome=>['distinct','equal','undefined'].map(reason=>'driver-origin:'+name+':'+outcome+':'+reason))),...['bodyless','constructors','methods','next','trace','long-text','fund-grow','status-grow','final-grow','shrink','body-swap','constructor-fail','producer-fail','fail-held','capacity-held'].map(name=>'publication-'+name),...['snapshot','after','big','late','copy-normalizer','copy-public','install-before','install-after','install-reject','unlock-before-success','unlock-after-success','closed-undefined','read-undefined'].map(name=>'generic-'+name),...['tiny-empty','sniff-eof','replay-eof','trace','eof-value','large-backing','capture-before','capture-after','then-early','unlock-before-success','unlock-after-success','closed-undefined'].map(name=>'normalizer-'+name),'intake-constructor-capture','bootstrap-refuse','initial-error-hooks','initial-error-refuse','metadata-poison','metadata-branded-held','metadata-refuse-0','metadata-refuse-2','metadata-refuse-3','metadata-refuse-4','metadata-refuse-5','headers-prototype-foreach','headers-constructor-held','headers-swap','headers-foreach','headers-iterator','headers-next','headers-late','headers-long-text','headers-status-object','headers-text-object','archive-kernel-held','rpc-trace','rpc-duplicates','public-byte-snapshot','public-eof-foreign','public-capacity-refusal','handoff-getters','handoff-duplicates','public-handoff-getters','public-handoff-duplicates','source-handoff-getters','source-handoff-duplicates','normal','shared-refusal','forged','stale','mode','then-early','public-then-early','source-then-early','intake-request-before','intake-request-after','intake-request-late','intake-cells-148','intake-cells-512',...['third-bytes','shadow-buffer','value1-oversized','value2-oversized','value3-oversized','length-one-to-four','length-four-to-one','length-object','set-accessor','set-replacement','set-shadow','set-persist-through-auth','set-change-in-third-getter'].map(name=>'intake-operand-'+name),'status-pending-success','status-unlock-after-success','status-unlock-before-closed-shared','status-closed-undefined','capture-before','capture-after','read-undefined','read-primitive','read-shared','unlock-before-success','unlock-before-undefined','unlock-before-primitive','unlock-before-shared','unlock-after-success','unlock-after-undefined','unlock-after-primitive','unlock-after-shared','unlock-before-closed-shared','closed-undefined','closed-shared',...['before','after'].flatMap(order=>['success','undefined','primitive','shared'].map(kind=>'public-unlock-'+order+'-'+kind)),'public-closed-undefined','public-closed-shared','public-unlock-before-closed-shared',...['before','after'].flatMap(order=>['success','undefined','primitive','shared'].map(kind=>'intake-unlock-'+order+'-'+kind)),'intake-closed-undefined','intake-closed-shared','intake-unlock-before-closed-shared'].includes(mode)||!globalThis.__ownedJsonObservation)throw Error('fixture consumer mode');

@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { startWorkerdFixture } from '../../test/helpers/workerd.mjs';
 import { startOwnedJsonObservedFixture } from '../../test/helpers/owned-json-parser-observer.mjs';
 import { ownedJsonCodecCases, ownedJsonCodecWire, ownedUsageCases, ownedUsageWire, ownedCodecSseLines } from '../../test/helpers/owned-json-parser-cases.mjs';
-import { assertOwnedDriverOrigins, assertOwnedSinkInstallation, assertOwnedAckCustody, ownedHttpModel, ownedHttpPricingModel, ownedHttpControlModels, ownedHttpProxyKey, ownedHttpRouter, ownedHttpUpstream, seedOwnedHttpChat } from '../../test/helpers/owned-http-chat-fixture.mjs';
+import { assertOwnedStaticCustody, assertOwnedDriverOrigins, assertOwnedSinkInstallation, assertOwnedAckCustody, ownedHttpModel, ownedHttpPricingModel, ownedHttpControlModels, ownedHttpProxyKey, ownedHttpRouter, ownedHttpUpstream, seedOwnedHttpChat } from '../../test/helpers/owned-http-chat-fixture.mjs';
 
 // One memoized ORIGINAL body root is enrolled as soon as each dispatch resolves,
 // including a late response after an earlier assertion has already failed.
@@ -1600,6 +1600,24 @@ test('native private reader joins actual work despite an early then return: ' + 
 });
 
 
+test('native static exact COMMON boundary and ordinary post-activation pressure', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const before = await state(f); assert.equal(before.shared.claims, 0);
+    const response = await f.request('https://fixture/fixture/static-boundary');
+    assert.equal(response.status, 200); assertOwnedStaticCustody(assert, JSON.parse(response.text), 100663296);
+    const boundary = await state(f);
+    assert.equal(boundary.shared.claims, 1); assert.equal(boundary.shared.refused, 2);
+    assert.equal(boundary.intakeFactories, 0); assert.equal(boundary.driverFactories, 0);
+    assert.equal(boundary.calls.length, before.calls.length);
+    assert.equal((await f.request('https://fixture/v1/chat/completions', chat('chat'))).status, 200);
+    const completed = await settledState(f);
+    assert.equal(completed.shared.claims, 1); assert.ok(completed.shared.foregroundClaims > 0);
+    assert.equal(completed.shared.foregroundHeld, 33554432); assert.equal(completed.shared.foregroundStatic, 947130);
+    assert.equal((await f.request('https://fixture/fixture/evict', { method: 'POST', body: 'chat' })).status, 204);
+    assert.equal((await state(f)).charged, 947130);
+  }, true);
+});
+
 for (const instance of [1, 2]) test('native Worker instance ' + instance + ' owns one permanent tokenizer claim', { timeout: 120000 }, async t => {
   await fixture(t, async f => {
     const baseline = await state(f);
@@ -1609,8 +1627,10 @@ for (const instance of [1, 2]) test('native Worker instance ' + instance + ' own
     const request = mode => chat('venice', { model: ownedHttpControlModels.venice, ownedVeniceCase: mode });
     assert.equal((await f.request('https://fixture/v1/chat/completions', request('compact-open2048'))).status, 502);
     let after = await settledState(f);
-    assert.equal(after.shared.claims, 1); assert.equal(after.shared.held, 65536);
-    assert.equal(after.shared.after - after.shared.before, 65536); assert.ok(after.driverFactories > 0);
+    assert.equal(after.shared.claims, 1); assert.equal(after.shared.held, 947130);
+    assert.equal(after.shared.after - after.shared.before, 947130); assert.ok(after.driverFactories > 0);
+    assert.ok(after.shared.foregroundClaims > 0); assert.equal(after.shared.foregroundHeld, 33554432);
+    assert.equal(after.shared.foregroundStatic, 947130);
     assert.equal(after.parsers.at(-1).nativeParses, 0); assert.equal(after.parsers.at(-1).cleared, true);
     const responses = await Promise.all([f.request('https://fixture/v1/chat/completions', request('compact-object128')),
       f.request('https://fixture/v1/chat/completions', request('compact-object-string128'))]);
@@ -1618,7 +1638,7 @@ for (const instance of [1, 2]) test('native Worker instance ' + instance + ' own
     after = await settledState(f); assert.equal(after.shared.claims, 1);
     assert.ok(after.parsers.slice(-2).every(row => row.nativeParses === 1 && row.cleared));
     assert.equal((await f.request('https://fixture/fixture/evict', { method: 'POST', body: 'venice' })).status, 204);
-    assert.equal((await state(f)).charged, baseline.charged + 65536, 'exact request retirement, no shared release');
+    assert.equal((await state(f)).charged, baseline.charged + 947130, 'exact request retirement, no shared release');
   }, true);
 });
 
@@ -1654,9 +1674,9 @@ test('native first intake permanently claims custody before ' + invalid, { timeo
     });
     assert.equal(response.status, 401);
     const after = await settledState(f);
-    assert.equal(after.shared.claims, 1); assert.equal(after.shared.held, 65536);
+    assert.equal(after.shared.claims, 1); assert.equal(after.shared.held, 947130);
     assert.equal(after.intakeFactories, 1); assert.equal(after.driverFactories, 0);
-    assert.equal(after.charged, before.charged + 65536);
+    assert.equal(after.charged, before.charged + 947130);
     assert.equal(after.calls.length, before.calls.length);
   }, true);
 });
@@ -1696,7 +1716,7 @@ test('native private intake proves the actual copy operand: ' + name, { timeout:
     assert.equal(row.copyAccessor, 0); assert.equal(row.customCopy, 0); assert.equal(row.coercions, 0);
     assert.equal(row.captures ?? 0, Number(valid)); assert.equal(row.capturedBytes ?? 0, valid ? 2 : 0);
     assert.equal(row.live, 0); assert.equal(after.events.length, before.events.length); assert.equal(after.calls.length, before.calls.length);
-    assert.equal(after.charged, before.charged + 65536);
+    assert.equal(after.charged, before.charged + 947130);
     if (valid) assert.deepEqual(row.operandOrder, ['done', 'value1', 'buffer1', 'value2', 'length2', 'set', 'value3', 'copy']);
     else if (name === 'value1-oversized') assert.deepEqual(row.operandOrder, ['done', 'value1', 'buffer1']);
     else if (name === 'value2-oversized' || name === 'length-object' || name.startsWith('set-'))
@@ -1739,7 +1759,7 @@ test('native fixed handoff preserves ' + role + ' getters and original callbacks
     assert.equal(after.consumers.replay, 0); assert.equal(after.consumers.live, 0); assert.equal(after.consumers.public.live, 0);
     assert.equal(after.events.length, 1);
     await f.request('https://fixture/fixture/evict', { method: 'POST', body: 'venice' });
-    assert.equal((await state(f)).charged, 65536, 'only the explicit module claim remains');
+    assert.equal((await state(f)).charged, 947130, 'only the explicit module claim remains');
   }, true);
 });
 
@@ -1764,7 +1784,7 @@ for (const streaming of [false, true]) test('native flat preflight retains paid 
     assert.equal(after.events.length - before.events.length, 2);
     assert.equal(count(after, 'authority', '/authorization/snapshot') - count(before, 'authority', '/authorization/snapshot'), 4);
     assert.equal((await f.request('https://fixture/fixture/evict', { method: 'POST', body: 'venice' })).status, 204);
-    assert.equal((await state(f)).charged, before.charged + 65536, 'exact own retirement after genuine cache eviction, permanent claim retained');
+    assert.equal((await state(f)).charged, before.charged + 947130, 'exact own retirement after genuine cache eviction, permanent claim retained');
   }, true);
 });
 
@@ -2177,7 +2197,7 @@ test('native failed public constructor joins its owned locked reader before exac
     const after = await settledState(f);
     assert.equal(after.consumers.public.unlockSettled, 1); assert.equal(after.consumers.public.nativeUnlocked, 1);
     assert.equal(after.consumers.public.live, 0); assert.equal(after.completed.length, before.completed.length + 1);
-    assert.equal(after.charged, before.charged + (before.shared.held ? 0 : 65536));
+    assert.equal(after.charged, before.charged + (before.shared.held ? 0 : 947130));
   }, true);
 });
 
@@ -2216,7 +2236,7 @@ test('native branded replacement delivers while the old inner reader unlock stay
     await release();
     const after = await settledState(f);
     assert.equal(after.consumers.public.live, 0); assert.equal(after.consumers.public.unlockSettled, 1);
-    assert.equal(after.charged, before.charged + (before.shared.held ? 0 : 65536));
+    assert.equal(after.charged, before.charged + (before.shared.held ? 0 : 947130));
   }, true);
 });
 for (const stage of [0, 2, 3, 4, 5]) test(`native metadata stage ${stage} refuses before its first destination factory`, { timeout: 120000 }, async t => {
@@ -2705,8 +2725,11 @@ test(`native reached driver installation ${driver} ${outcome} ${reasonKind}`, { 
     catch { /* The actual reader failure may end the public body. */ }
     const report = await state(f);
     assertOwnedDriverOrigins(assert, report.driverOrigins, outcome, reasonKind);
-    assert.ok(report.charged > 65536, 'UNKNOWN never refunds through healthy siblings');
+    assert.ok(report.charged > 947130, 'UNKNOWN never refunds through healthy siblings');
+    assert.equal(report.shared.claims, 1); assert.equal(report.shared.held, 947130);
     await release();
+    const afterRelease = await state(f);
+    assert.equal(afterRelease.shared.claims, 1); assert.equal(afterRelease.shared.held, 947130);
   }, true);
 });
 
@@ -2738,7 +2761,7 @@ test(`native private status ${kind} ${outcome} then installation ${reasonKind} k
       assert.equal(report.statusReaders[index].reasonReads, 0); assert.equal(report.statusReaders[index].retired, false);
     }
     assert.equal(report.calls.filter(row => row.kind === 'budget' && row.path === '/charge').length, 4);
-    assert.ok(report.charged > 65536); assert.equal(report.events.length, 1);
+    assert.ok(report.charged > 947130); assert.equal(report.events.length, 1);
     assert.equal(report.completed.length, 0, 'physical UNKNOWN stays independent of logical charging');
   }, true);
 });
@@ -2761,7 +2784,7 @@ test(`native admitted archive ${kind} ${outcome} then install ${reasonKind}`, { 
     if (outcome === 'reject') assert.equal(row.original.primaryIsUndefined, reasonKind === 'undefined'); else assert.equal(row.original, null);
     if (kind === 'cancel') { assert.equal(row.thrown.origin, 'put'); assert.notEqual(row.thrown.ordinal, row.installationOrdinal); }
     else assert.equal(row.thrown.ordinal, outcome === 'reject' ? row.originalOrdinal : row.installationOrdinal);
-    assert.ok(row.after >= row.before); assert.ok(report.charged > 65536);
+    assert.ok(row.after >= row.before); assert.ok(report.charged > 947130);
   }, true);
 });
 for (const kind of ['put', 'pipe', 'cancel']) for (const returned of ['undefined', 'held', 'hostile'])
@@ -2776,7 +2799,7 @@ test(`native admitted archive ${kind} ignores ${returned} observer return`, { ti
     const dispatch = f.dispatch('https://fixture/v1/chat/completions', chat('chat', { messages: [{ role: 'user', content: 'x'.repeat(40000) }] }));
     let report; for (;;) { report = await state(f); if (report.archiveFault.entered) break; await new Promise(resolve => setTimeout(resolve, 10)); }
     assert.equal(report.archiveFault.calls, 1); assert.equal(report.archiveFault.observations, 1); assert.equal(report.archiveFault.touched, 0);
-    assert.equal(report.archiveFault.fulfilled, false); assert.equal(report.completed.length, 0); assert.ok(report.charged > 65536);
+    assert.equal(report.archiveFault.fulfilled, false); assert.equal(report.completed.length, 0); assert.ok(report.charged > 947130);
     await release(); const response = await f.take(dispatch); await f.take(f.body(response));
     const after = await settledState(f); assert.equal(after.archiveFault.fulfilled, kind !== 'cancel'); assert.equal(after.archiveFault.touched, 0);
     assert.equal(after.archiveFault.commandRejected, after.archiveFault.nativeFailed); assert.equal(after.archiveFault.commandFulfilled, !after.archiveFault.nativeFailed);
@@ -2800,7 +2823,7 @@ test(`native archive ${target} ${kind} failure stays bounded through held cleanu
     assert.deepEqual(row.layout, { writerFields: 37, writerNameUnits: 324, commands: 3, commandFields: 10, commandNameUnits: 76 });
     assert.equal(row.awaitingBounded, true); assert.equal(row.didThrow, false); assert.equal(row.cancelCalls, 1);
     assert.equal(row.puts, target === 'put' ? 1 : 0); assert.equal(row.envGets, target === 'getter' ? 1 : 0);
-    assert.equal(row.reasonReads, 0); assert.equal(report.completed.length, 0); assert.ok(report.charged > 65536);
+    assert.equal(row.reasonReads, 0); assert.equal(report.completed.length, 0); assert.ok(report.charged > 947130);
     const put = row.failures.find(record => record.origin === 'put'); assert.ok(put); assert.equal(put.primaryIsUndefined, kind === 'undefined');
     await release(); const response = await f.take(dispatch); await f.take(f.body(response));
     const after = await settledState(f), final = after.archiveFault;

@@ -79,7 +79,7 @@ export class ProxyCompletion {
 let ownedHttpStaticCharge: ExactBodyCharge | undefined;
 export function claimOwnedHttpStaticCustody(): boolean {
   if (ownedHttpStaticCharge) return true;
-  const charge = ExactBodyCharge.reserve(65536);
+  const charge = ExactBodyCharge.reserve(947130);
   if (!charge) return false;
   ownedHttpStaticCharge = charge;
   return true;

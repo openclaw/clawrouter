@@ -6,7 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createOwnedJsonObservation, observeOwnedJsonSource } from '../../test/helpers/owned-json-parser-observer.mjs';
 import { ownedJsonCodecCases, ownedJsonCodecWire, ownedUsageCases, ownedUsageWire, ownedCodecSseLines } from '../../test/helpers/owned-json-parser-cases.mjs';
-import { assertOwnedDriverOrigins, ownedSinkInstallationWitness, assertOwnedSinkInstallation, assertOwnedAckCustody, createOwnedAckPhaseFixture, createOwnedBudgetSequenceFixture, createOwnedTerminalFixture } from '../../test/helpers/owned-http-chat-fixture.mjs';
+import { ownedStaticCustodyWitness, assertOwnedStaticCustody, assertOwnedDriverOrigins, ownedSinkInstallationWitness, assertOwnedSinkInstallation, assertOwnedAckCustody, createOwnedAckPhaseFixture, createOwnedBudgetSequenceFixture, createOwnedTerminalFixture } from '../../test/helpers/owned-http-chat-fixture.mjs';
 
 const observation = globalThis.__ownedJsonObservation = createOwnedJsonObservation();
 globalThis.__ownedUsageWire = ownedUsageWire;
@@ -26,7 +26,8 @@ const { accessBytesResponse } = await import('./access-byte-fixture.mjs');
 const { putGrantCredentials } = await import('../grant-credentials.ts');
 const { snapshot } = await import('../providers.ts');
 const { estimateCost, OwnedHttpAccountingCommand } = await import('../proxy-accounting.ts');
-const { bodyBudgetCharged, bodyBudgetBytes, ExactBodyCharge } = await import('../body-budget.ts');
+const { bodyBudgetCharged, bodyBudgetBytes, ExactBodyCharge, BodyLease } = await import('../body-budget.ts');
+const { claimOwnedHttpStaticCustody } = await import('../proxy-completion.ts');
 const { sha256Hex, HttpError } = await import('../utils.ts');
 const { evictCredentialGeneration } = await import('../credential-preflight.ts');
 const { prepareOwnedHttpPricing, enterOwnedHttpPricing } = await import('../pricing.ts');
@@ -50,6 +51,30 @@ const deferred = () => {
   void promise.then(() => undefined, () => undefined); return { promise, resolve, reject };
 };
 
+const staticBoundaryTest = 'private static exact COMMON boundary in a fresh isolate';
+test(staticBoundaryTest, { timeout: 120000 }, async t => {
+  if (process.env.CLAWROUTER_STATIC_BOUNDARY !== '1') {
+    await promisify(execFile)(process.execPath, ['--test', '--test-name-pattern', '^' + staticBoundaryTest + '$', fileURLToPath(import.meta.url)], {
+      env: { ...process.env, CLAWROUTER_STATIC_BOUNDARY: '1' }, maxBuffer: 4 * 1024 * 1024,
+    });
+    return;
+  }
+  assert.equal(observation.shared.claims, 0);
+  const row = ownedStaticCustodyWitness(claimOwnedHttpStaticCustody, ExactBodyCharge, BodyLease, bodyBudgetCharged, bodyBudgetBytes);
+  assertOwnedStaticCustody(assert, row, bodyBudgetBytes);
+  assert.equal(observation.shared.claims, 1); assert.equal(observation.shared.refused, 2);
+  assert.equal(observation.driverFactories, 0); assert.equal(observation.intakeFactories, 0);
+  await fixture(t, async f => {
+    assert.equal((await f.request(payload({}))).status, 200);
+    await f.drain();
+    assert.equal(observation.shared.claims, 1);
+    assert.ok(observation.shared.foregroundClaims > 0);
+    assert.equal(observation.shared.foregroundHeld, 33554432);
+    assert.equal(observation.shared.foregroundStatic, 947130);
+  });
+  assert.equal(bodyBudgetCharged(), 947130, 'request retirement keeps the permanent debit');
+});
+
 test('private codec claims one permanent COMMON baseline before its first validator', async t => {
   const baseline = bodyBudgetCharged();
   assert.equal(observation.shared.claims, 0);
@@ -57,7 +82,9 @@ test('private codec claims one permanent COMMON baseline before its first valida
     f.veniceResponse('{"model":"zai-org-glm-5-2","extra":');
     const failed = await f.request(payload({ model: 'venice/zai-org-glm-5-2' }));
     assert.equal(failed.status, 502);
-    assert.equal(observation.shared.claims, 1); assert.equal(observation.shared.held, 65536);
+    assert.equal(observation.shared.claims, 1); assert.equal(observation.shared.held, 947130);
+    assert.ok(observation.shared.foregroundClaims > 0);
+    assert.equal(observation.shared.foregroundHeld, 33554432); assert.equal(observation.shared.foregroundStatic, 947130);
     assert.equal(observation.rows.at(-1).cleared, true); assert.equal(observation.rows.at(-1).nativeParses, 0);
     f.veniceResponse(ownedJsonCodecWire('compact-object128', 'zai-org-glm-5-2'));
     const responses = await Promise.all([f.request(payload({ model: 'venice/zai-org-glm-5-2' })), f.request(payload({ model: 'venice/zai-org-glm-5-2' }))]);
@@ -65,7 +92,7 @@ test('private codec claims one permanent COMMON baseline before its first valida
     assert.equal(observation.shared.claims, 1);
     assert.ok(observation.rows.slice(-2).every(row => row.cleared && row.nativeParses === 1));
   }, false, 'venice');
-  assert.equal(bodyBudgetCharged(), baseline + 65536, 'all request owners retired; only shared module custody remains');
+  assert.equal(bodyBudgetCharged(), baseline + 947130, 'all request owners retired; only shared module custody remains');
 });
 
 test('owned later object-128 SSE retains raw wire, usage and one selected/accounting outcome', async t => {
@@ -1463,7 +1490,8 @@ for (const outcome of ['reject', 'fulfill']) for (const reasonKind of ['distinct
         const response = await f.take(f.dispatch(payload(codec ? { model: 'venice/zai-org-glm-5-2' } : {})));
         try { await f.take(f.bodyRoot(response)); } catch { /* The installed failure may end delivery. */ }
         assertOwnedDriverOrigins(assert, observation.driverOrigins, outcome, reasonKind);
-        assert.ok(bodyBudgetCharged() > 65536, 'UNKNOWN keeps the request debit');
+        assert.ok(bodyBudgetCharged() > 947130, 'UNKNOWN keeps the request debit');
+        assert.equal(observation.shared.claims, 1); assert.equal(observation.shared.held, 947130);
       }, false, codec ? 'venice' : 'fireworks');
     } finally { observation.consumerMode = 'normal'; observation.releaseConsumer(); }
   });
@@ -1492,7 +1520,7 @@ for (const reasonKind of ['distinct', 'equal', 'undefined']) {
         if (outcome === 'reject') assert.equal(row.original.primaryIsUndefined, reasonKind === 'undefined'); else assert.equal(row.original, null);
         if (kind === 'cancel') { assert.equal(row.thrown.origin, 'put'); assert.notEqual(row.thrown.ordinal, row.installationOrdinal); }
         else assert.equal(row.thrown.ordinal, outcome === 'reject' ? row.originalOrdinal : row.installationOrdinal);
-        assert.ok(row.after >= row.before); assert.ok(bodyBudgetCharged() > 65536);
+        assert.ok(row.after >= row.before); assert.ok(bodyBudgetCharged() > 947130);
       }, true);
     } finally { observation.releaseArchiveFault(); observation.consumerMode = 'normal'; }
   });
@@ -1507,7 +1535,7 @@ test(`private admitted archive ${kind} ignores ${returned} observer return and j
       for (;;) { if (observation.archiveFault.entered) break; await new Promise(resolve => setTimeout(resolve, 0)); }
       const held = observation.archiveFaultState();
       assert.equal(held.calls, 1); assert.equal(held.observations, 1); assert.equal(held.touched, 0); assert.equal(held.fulfilled, false);
-      assert.ok(bodyBudgetCharged() > 65536);
+      assert.ok(bodyBudgetCharged() > 947130);
       observation.releaseArchiveFault(); await f.take(request); await f.drain();
       if (kind === 'cancel') for (const root of f.retirements) if ((await root.outcome).failed) await assert.rejects(f.take(root));
       assert.equal(observation.archiveFault.fulfilled, kind !== 'cancel'); assert.equal(observation.archiveFault.touched, 0);
@@ -1530,7 +1558,7 @@ test(`private archive ${target} ${kind} failure is bounded before held cancellat
       const row = observation.archiveFaultState();
       assert.equal(row.awaitingBounded, true); assert.equal(row.didThrow, false); assert.equal(row.cancelCalls, 1);
       assert.equal(row.puts, target === 'put' ? 1 : 0); assert.equal(row.envGets, target === 'getter' ? 1 : 0);
-      assert.equal(row.reasonReads, 0); assert.ok(bodyBudgetCharged() > 65536);
+      assert.equal(row.reasonReads, 0); assert.ok(bodyBudgetCharged() > 947130);
       const put = row.failures.find(record => record.origin === 'put'); assert.ok(put);
       assert.equal(put.primaryIsUndefined, kind === 'undefined');
       observation.releaseArchiveFault(); await f.take(request); await f.drain();
