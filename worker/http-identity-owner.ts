@@ -6,19 +6,20 @@ import { inheritOwnedLocalError, clearOwnedLocalError, markOwnedLocalError, owne
 import { freezeOwnedObserver, setOwnedHeader, deleteOwnedHeader, newOwnedHeaders, ownedMetadataString, captureOwnedResponseMetadata, ProxyCompletion, OwnedReaderDriver, claimOwnedHttpStaticCustody, inspectOwnedBytes, isLocalOwnedByteView, isLocalOwnedByteBacking, newOwnedBytes, ownedBytesFromBacking, ownedByteLength, ownedByteSubarray, copyOwnedBytes, newOwnedDecoder, decodeOwnedBytes, enqueueOwnedBytes, measureOwnedHeaders, newOwnedResponse, cloneOwnedMetadataResponse, hasOwnedHeader } from "./proxy-completion.ts";
 import { ExactBodyCharge } from "./body-budget.ts";
 import { identityFailure, isIdentityFailure, identityHeader, identitySourceBudget, identityPlan, admitIdentityBytes, admitIdentityHeaders, parseIdentity, IdentityWire, createPrivateMaterializationReceipt, adoptPrivateMaterializationResponse, failPrivateMaterializationAcquisition, beginPrivateMaterializationAcquisition, abandonPrivateMaterializationReceipt, completePrivateMaterializationInstallation, consumePrivateMaterializationReceipt, type PrivateMaterializationReceipt, type PrivateMaterializationDestination, type IdentitySourceBudget } from "./identity-admission.ts";
-import type { Env, QueueMessage, AuthorizedIdentity, UsageEvent, BudgetReserveRequest, BudgetChargeRequest, BudgetSettleRequest } from "./types.ts";
+import type { Env, QueueMessage, AuthorizedIdentity, UsageEvent, BudgetReserveRequest, BudgetChargeRequest, BudgetSettleRequest, ContentRecord } from "./types.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import { matchesOwnedHttpProviderConfiguration, type UpstreamAuth } from "./providers.ts";
 import type { HttpOperation } from "./http-operation.ts";
 import { applyProviderCredential } from "./provider-auth.ts";
 import { proxyKeyVerification } from "./proxy-auth.ts";
-import { HttpError, ownedCorsOrigin, ownedCorsMethods, ownedCorsAllow, ownedCorsBase, ownedCorsAge } from "./utils.ts";
+import { maxJsonBodyBytes, randomId, HttpError, ownedCorsOrigin, ownedCorsMethods, ownedCorsAllow, ownedCorsBase, ownedCorsAge } from "./utils.ts";
 import { selectedCredentialFailure } from "./grant-credential-failure.ts";
 import { acceptOwnedAuthorizationSnapshot, retireOwnedResponseControl } from "./response-control-authorization.ts";
 import { acceptOwnedVeniceInspection, retireOwnedVeniceRevalidation } from "./venice-chat-authority.ts";
 import { acceptOwnedGmiInspection, retireOwnedGmiRevalidation } from "./gmi-organization-binding.ts";
 import { acceptOwnedHttpPreflightReply, drainOwnedHttpIdentity, retireOwnedHttpConsumers, retireOwnedHttpIdentity, claimOwnedHttpRevalidationBacking, matchesOwnedHttpMaterialization, matchesOwnedHttpPreflight, matchesOwnedHttpContinuation, admitOwnedHttpRevalidationBacking, retireOwnedHttpRevalidationBacking, type OwnedHttpRevalidationBacking, type OwnedHttpCredential, admitOwnedHttpCodecBacking, admitOwnedHttpUsageBacking, retireOwnedHttpCodecBacking, admitOwnedHttpConsumerBacking, retireOwnedHttpConsumerBacking } from "./credential-preflight.ts";
 import { claimOwnedHttpArchiveFunding } from "./pricing.ts";
+import { contentKey, retentionRequired, type PreparedContentRetention } from "./content-retention.ts";
 import { matchesOwnedHttpBudgetPlan, ownsConsumedHttpAccountingHandoff, ownsFailedHttpAccountingHandoff, captureOwnedHttpUsageStatus, matchesOwnedHttpPublicationContext, matchesOwnedHttpGenericUsageInput, acceptOwnedGenericUsage, matchesOwnedHttpConfigurationPreparation, matchesOwnedHttpInitialSelection, retireOwnedHttpProxy, matchesOwnedHttpArchiveInput, claimOwnedHttpArchiveInput, matchesOwnedHttpRevalidationInput, matchesOwnedHttpVeniceResponseInput, matchesOwnedHttpPublicBody, matchesOwnedHttpSoftStatusPlan, matchesOwnedHttpCodecConsumerInput, matchesOwnedHttpNormalizationInput, matchesOwnedHttpCodecNormalizationInput, matchesOwnedHttpCodecUsageInput, acceptOwnedCodecUsage, matchesOwnedHttpProviderFetchInput, acceptOwnedHttpProviderResponse } from "./proxy.ts";
 import { retireOwnedVeniceChatCodec, matchesOwnedVeniceRetirement, consumeOwnedVeniceChatResponse, matchesOwnedVeniceOutputBody, matchesOwnedVeniceOutputFailure, matchesOwnedVeniceConsumerInput } from "./venice-chat-runtime.ts";
 import { matchesOwnedCodecUsagePublication, type CodecReader, ownsOwnedNormalizerReader, acknowledgeOwnedNormalizerOutput, type OwnedNormalizerReader, GenericUsageReader, type ObservedUsage, matchesOwnedCodecOutputFailure, matchesOwnedCodecConsumerRetirement, retireOwnedCodecConsumers, ownedUsageCaptureBytes, type OwnedCodecConsumer } from "./proxy-response.ts";
@@ -28,7 +29,7 @@ import { logCorrelationError, backgroundRecoveryHeader, ownedBackgroundLocator }
 import type { AccountingSinks, BudgetReservation, BudgetReservationPlan, BudgetReservationIntent } from "./accounting.ts";
 import { matchesOwnedHttpAccountingCommand, matchesOwnedHttpAccountingAdoption, matchesOwnedHttpAccountingFailure, adoptOwnedHttpAccountingTerminal, rejectOwnedHttpAccountingTerminal, retireOwnedHttpAccountingCommands, type OwnedHttpAccountingCommand } from "./proxy-accounting.ts";
 import { parseSoftStatus, softStatusLimits, softStatusError } from "./soft-budget-json.ts";
-import { privateSnapshotJson, privateGrantIdentityJson, privateIntentJson, privateCapsuleJson, copyPrivateQueueIntent, copyPrivateQueueCapsule, measurePrivateJsonBody, isAccountingAdmissionFailure } from "./json-body.ts";
+import { privateAccountingArchive, accountingIdentity, privateSnapshotJson, privateGrantIdentityJson, privateIntentJson, privateCapsuleJson, copyPrivateQueueIntent, copyPrivateQueueCapsule, measurePrivateJsonBody, isAccountingAdmissionFailure } from "./json-body.ts";
 import { OwnedStatusController, retireOwnedHttpSoftBudget, type PreparedSoftBudget } from "./soft-budget.ts";
 import { createPrivatePreflightReceipt, adoptPrivatePreflightResponse, failPrivatePreflightAcquisition, beginPrivatePreflightAcquisition, abandonPrivatePreflightReceipt, completePrivatePreflightInstallation, consumePrivatePreflightReceipt, type PrivatePreflightReceipt, createPrivateContinuationReceipt, adoptPrivateContinuationResponse, failPrivateContinuationAcquisition, beginPrivateContinuationAcquisition, abandonPrivateContinuationReceipt, completePrivateContinuationInstallation, consumePrivateContinuationReceipt, type PrivateContinuationReceipt, type PrivateContinuationDestination } from "./credential-preflight-source.ts";
 import type { PreflightTicket } from "./credential-preflight-arena.ts";
@@ -106,6 +107,7 @@ interface RequestOwner {
   localFailures?: WeakSet<object>;
   localErrorResponses?: Response[]; localErrorDisposals?: WeakSet<Response>;
   continuation?: OwnedContinuationAcquisition;
+  archive?: OwnedArchiveWrite;
 }
 class UploadOwner {
   controller?: AbortController;
@@ -374,15 +376,22 @@ class OwnedSinkVoidCommand {
   private reject!: (failure: object) => void;
   readonly ready = new Promise<void>((resolve, reject) => { this.resolve = resolve; this.reject = reject; });
   declare readonly owner: RequestOwner;
-  declare readonly origin: SinkOriginOwner;
-  declare readonly installationOrigin: SinkOriginOwner;
+  declare origin: SinkOriginOwner | undefined;
+  declare installationOrigin: SinkOriginOwner | undefined;
   declare readonly budget?: OwnedBudgetSequence;
-  constructor(owner: RequestOwner, origin: SinkOriginOwner, budget?: OwnedBudgetSequence) {
+  constructor(owner: RequestOwner, origin: SinkOriginOwner | undefined, budget?: OwnedBudgetSequence) {
     this.owner = owner; this.origin = origin; this.budget = budget;
-    this.installationOrigin = sinkOrigin(owner.sink!, sinkKinds[origin % 32]);
+    this.installationOrigin = origin === undefined ? undefined : sinkOrigin(owner.sink!, sinkKinds[origin % 32]);
     // Suppression belongs to our genuine void receipt, never the discarded
     // return of an external observer method.
     void this.ready.then(ignoreOwnedVoidOutcome, ignoreOwnedVoidOutcome);
+  }
+  beginArchive(writer: OwnedArchiveWrite): void {
+    if (this.owner.archive !== writer || writer.root !== this.owner || writer.phase !== 2 || this.flags !== 1 || this.origin !== undefined)
+      throw identityFailure("protocol");
+    const kind = writer.putCommand === this ? "put" : writer.pipeCommand === this ? "pipe" : writer.cancelCommand === this ? "cancel" : undefined;
+    if (!kind) throw identityFailure("protocol");
+    this.origin = sinkOrigin(this.owner.sink!, kind); this.installationOrigin = sinkOrigin(this.owner.sink!, kind);
   }
   private unknown(): void { this.flags |= 8; this.owner.unknown = true; }
   private schedule(): void {
@@ -392,7 +401,7 @@ class OwnedSinkVoidCommand {
   }
   private failure(reason: unknown): void {
     this.flags |= 4;
-    try { failedSinkOrigin(this.owner, this.origin, reason); } catch { this.unknown(); }
+    try { failedSinkOrigin(this.owner, this.origin!, reason); } catch { this.unknown(); }
   }
   private accepted(): void {
     if (this.flags & 2) return;
@@ -423,8 +432,8 @@ class OwnedSinkVoidCommand {
     try { installOwnedOriginal(this.observation, original); }
     catch (reason) {
       this.flags |= 4; this.unknown();
-      const installation = failedSinkOrigin(this.owner, this.installationOrigin, reason);
-      throw this.owner.sinkOrigins!.get(Math.floor(this.origin / 32)) ?? installation;
+      const installation = failedSinkOrigin(this.owner, this.installationOrigin!, reason);
+      throw this.owner.sinkOrigins!.get(Math.floor(this.origin! / 32)) ?? installation;
     }
     finally { original = undefined as never; this.flags &= ~1; this.schedule(); }
   }
@@ -434,8 +443,8 @@ class OwnedSinkVoidCommand {
     if (!(this.flags & 32)) {
       this.flags |= 32;
       if (this.flags & 4) {
-        const failure = this.owner.sinkOrigins!.get(Math.floor(this.origin / 32))
-          ?? this.owner.sinkOrigins!.get(Math.floor(this.installationOrigin / 32));
+        const failure = this.owner.sinkOrigins!.get(Math.floor(this.origin! / 32))
+          ?? this.owner.sinkOrigins!.get(Math.floor(this.installationOrigin! / 32));
         if (!failure || typeof failure === "number") { this.unknown(); return; }
         this.reject(failure);
       } else this.resolve();
@@ -448,9 +457,10 @@ class OwnedSinkVoidCommand {
   }
 }
 function ignoreOwnedVoidOutcome(): void {}
-function createOwnedSinkVoidCommand(owner: RequestOwner, origin: SinkOriginOwner): OwnedSinkVoidCommand {
+function createOwnedSinkVoidCommand(owner: RequestOwner, origin: SinkOriginOwner | undefined): OwnedSinkVoidCommand {
   claimOwnedSinkFactories(); enrollOwnedSinkChild(owner);
-  return new OwnedSinkVoidCommand(owner, origin);
+  try { return new OwnedSinkVoidCommand(owner, origin); }
+  catch (reason) { retireOwnedSinkChild(owner); throw reason; }
 }
 
 interface RevalidationOwner {
@@ -1465,60 +1475,245 @@ export function checkOwnedHttpArchivePreparation(cap: OwnedHttpRequest, sink: Ow
   if (sinkOwner(sink) !== owner || owner.env !== env || owner.sealed || owner.unknown
     || !matchesOwnedHttpArchiveInput(cap, env, auth, selection, requestId)) throw identityFailure("protocol");
 }
-export function prepareOwnedHttpArchive(cap: OwnedHttpRequest, sink: OwnedHttpSinkOwner, env: Env,
-  auth: AuthorizedIdentity, selection: ProxySelection, requestId: string): Env["CONTENT_ARCHIVE"] {
-  const owner = requestOwner(cap);
-  if (sinkOwner(sink) !== owner || owner.env !== env || owner.sealed || owner.unknown
-    || !claimOwnedHttpArchiveInput(cap, env, auth, selection, requestId)) throw identityFailure("protocol");
-  claimOwnedHttpArchiveFunding(cap, selection.body as Record<string, unknown>);
-  claimOwnedSinkFactories();
-  // Capture the actual binding once at the newly admitted private preparation
-  // point. The write command keeps its existing later binding-identity check.
-  return owner.env!.CONTENT_ARCHIVE;
+// The one admitted writer retains its original tuple across later retries.
+// All subjects are generated here; there is no public subject-binding command.
+class OwnedArchiveWrite implements PreparedContentRetention {
+  phase = 0; used = 0; primary = false;
+  bucket?: Env["CONTENT_ARCHIVE"];
+  key = ""; expiresAt = ""; contentRef = ""; large = false;
+  archive?: ReturnType<typeof privateAccountingArchive>;
+  text?: string; source?: ReadableStream<Uint8Array>; fixed?: FixedLengthStream;
+  readable?: ReadableStream<Uint8Array>; writable?: WritableStream<Uint8Array>;
+  controller?: AbortController; signal?: AbortSignal; writing?: Promise<void>;
+  putCommand?: OwnedSinkVoidCommand; pipeCommand?: OwnedSinkVoidCommand; cancelCommand?: OwnedSinkVoidCommand;
+  registration?: OwnedHttpSinkRegistration;
+  declare root: RequestOwner; declare cap: OwnedHttpRequest; declare env: Env;
+  declare auth: AuthorizedIdentity; declare selection: ProxySelection; declare requestId: string;
+  declare preparationOrigin: SinkOriginOwner; declare constructionOrigin: SinkOriginOwner;
+  declare abortOrigin: SinkOriginOwner; declare lockOrigin: SinkOriginOwner;
+  declare discardOrigin: SinkOriginOwner; declare followOrigin: SinkOriginOwner;
+  declare deferredOrigin: SinkOriginOwner; declare startOrigin: SinkOriginOwner; declare startCleanupOrigin: SinkOriginOwner; declare reportOrigin: SinkOriginOwner;
+  constructor(root: RequestOwner, cap: OwnedHttpRequest, env: Env, auth: AuthorizedIdentity,
+    selection: ProxySelection, requestId: string, preparationOrigin: SinkOriginOwner) {
+    this.root = root; this.cap = cap; this.env = env; this.auth = auth; this.selection = selection; this.requestId = requestId;
+    this.preparationOrigin = preparationOrigin;
+    this.constructionOrigin = sinkOrigin(root.sink!, "acquire"); this.abortOrigin = sinkOrigin(root.sink!, "abort");
+    this.lockOrigin = sinkOrigin(root.sink!, "body"); this.discardOrigin = sinkOrigin(root.sink!, "retire");
+    this.followOrigin = sinkOrigin(root.sink!, "pipe"); this.deferredOrigin = sinkOrigin(root.sink!, "registration");
+    this.startOrigin = sinkOrigin(root.sink!, "registration"); this.startCleanupOrigin = sinkOrigin(root.sink!, "registration"); this.reportOrigin = sinkOrigin(root.sink!, "registration");
+  }
+  failure(origin: SinkOriginOwner, reason: unknown): object {
+    try {
+      const record = ownedHttpFailureMetadata(reason);
+      if (record && this.root.sinkOrigins?.get(record.ordinal) === reason) return reason as object;
+      return failedSinkOrigin(this.root, origin, reason);
+    } finally { reason = undefined; }
+  }
+  preparePositions(): void {
+    this.putCommand = createOwnedSinkVoidCommand(this.root, undefined);
+    this.pipeCommand = createOwnedSinkVoidCommand(this.root, undefined);
+    this.cancelCommand = createOwnedSinkVoidCommand(this.root, undefined);
+    this.registration = createOwnedSinkRegistration(this.root, undefined);
+  }
+  private abandonUnused(): void {
+    if (this.putCommand && !(this.used & 1)) { this.used |= 1; this.putCommand.abandonUnstarted(); }
+    if (this.pipeCommand && !(this.used & 2)) { this.used |= 2; this.pipeCommand.abandonUnstarted(); }
+    if (this.cancelCommand && !(this.used & 8)) { this.used |= 8; this.cancelCommand.abandonUnstarted(); }
+    if (this.registration) { const cap = this.registration; this.registration = undefined; abandonUnstartedOwnedHttpRegistration(cap); }
+  }
+  discardUnused(): void {
+    if (this.phase >= 2) return;
+    this.phase = 4;
+    try { this.abandonUnused(); this.archive?.discard(); }
+    catch (reason) { throw this.failure(this.discardOrigin, reason); }
+  }
+  takeRegistration(): OwnedHttpSinkRegistration {
+    if (this.phase !== 1 || !this.registration || this.used & 16 || this.root.unknown) throw identityFailure("protocol");
+    const receipt = this.registration, state = sinkRegistrations?.get(receipt);
+    if (!state || state.owner !== this.root || state.origin !== undefined) throw identityFailure("protocol");
+    state.origin = sinkOrigin(this.root.sink!, "registration");
+    this.used |= 16; this.registration = undefined; return receipt;
+  }
+  write(): Promise<void> {
+    if (this.writing) return this.writing;
+    if (this.phase !== 1 || this.root.archive !== this || this.root.unknown) throw this.failure(this.startOrigin, identityFailure("protocol"));
+    this.phase = 2;
+    if (this.registration) { const cap = this.registration; this.registration = undefined; abandonUnstartedOwnedHttpRegistration(cap); }
+    return this.writing = this.execute();
+  }
+  private async execute(): Promise<void> {
+    let primary: object | undefined, pipeOutcome: Promise<void> | undefined;
+    try {
+      try {
+        if (this.archive!.bytes <= 32768) {
+          this.text = this.archive!.text();
+          await ownedHttpArchivePut(this.root.sink!, this.bucket!, this.key, this.text, this.expiresAt);
+        } else {
+          this.fixed = new FixedLengthStream(this.archive!.bytes); this.controller = new AbortController();
+          this.source = this.archive!.stream(); this.writable = this.fixed.writable; this.signal = this.controller.signal;
+          try { ownedHttpArchivePipe(this.root.sink!, this.source, this.writable, this.signal); }
+          catch (reason) { primary = this.failure(this.followOrigin, reason); this.primary = true; }
+          if (this.used & 2) pipeOutcome = this.pipeCommand!.ready.then(undefined, reason => {
+            const failure = this.failure(this.followOrigin, reason); if (!primary) primary = failure;
+          });
+          if (!this.primary) { this.readable = this.fixed.readable; await ownedHttpArchivePut(this.root.sink!, this.bucket!, this.key, this.readable, this.expiresAt); }
+        }
+      } catch (reason) { const failure = this.failure(this.constructionOrigin, reason); if (!primary) primary = failure; this.primary = true; }
+      if (this.primary && this.fixed && this.controller) {
+        try { ownedHttpArchiveAbort(this.root.sink!, this.controller); } catch (reason) { this.failure(this.abortOrigin, reason); }
+        try {
+          const readable = this.fixed.readable;
+          if (this.readable && readable !== this.readable) throw identityFailure("protocol");
+          this.readable = readable;
+          if (!readable.locked) {
+            const operand = this.fixed.readable;
+            if (operand !== this.readable) throw identityFailure("protocol");
+            try { await ownedHttpArchiveCancel(this.root.sink!, operand); } catch (reason) { this.failure(this.lockOrigin, reason); }
+          }
+        } catch (reason) { this.failure(this.lockOrigin, reason); }
+      }
+      if (pipeOutcome) { try { await pipeOutcome; } catch (reason) { const failure = this.failure(this.followOrigin, reason); if (!primary) primary = failure; } }
+    } finally {
+      pipeOutcome = undefined;
+      try { this.abandonUnused(); this.archive!.discard(); } catch (reason) { const failure = this.failure(this.discardOrigin, reason); if (!primary) primary = failure; }
+      this.phase = 3;
+    }
+    if (primary) throw primary;
+  }
+  retire(): void {
+    if (this.root.unknown || !this.root.sinkClosed || this.root.sinkPending || this.phase < 3) throw identityFailure("protocol");
+    this.root = undefined as never; this.cap = undefined as never; this.env = undefined as never;
+    this.auth = undefined as never; this.selection = undefined as never; this.requestId = "";
+    this.bucket = undefined; this.key = ""; this.expiresAt = ""; this.contentRef = "";
+    this.archive = undefined; this.text = undefined; this.source = undefined; this.fixed = undefined;
+    this.readable = undefined; this.writable = undefined; this.controller = undefined; this.signal = undefined;
+    this.writing = undefined; this.putCommand = undefined; this.pipeCommand = undefined; this.cancelCommand = undefined; this.registration = undefined;
+  }
+  async deferred(): Promise<void> {
+    let primary: object | undefined;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        try { setTimeout(resolve, 0); } catch (reason) { reject(this.failure(this.deferredOrigin, reason)); }
+      });
+      await this.write();
+    }
+    catch (reason) { primary = this.failure(this.deferredOrigin, reason); }
+    try { this.discardUnused(); } catch (reason) { const failure = this.failure(this.discardOrigin, reason); if (!primary) primary = failure; }
+    if (primary) throw primary;
+  }
 }
-
+// This is the explicit writer/attachment own-field component, not complete V2
+// native/Promise/follower storage. No IO product is hidden in this expression.
+const archiveWriterFieldNames = "phaseusedprimarybucketkeyexpiresAtcontentReflargearchivetextsourcefixedreadablewritablecontrollersignalwritingputCommandpipeCommandcancelCommandregistrationrootcapenvauthselectionrequestIdpreparationOriginconstructionOriginabortOriginlockOrigindiscardOriginfollowOrigindeferredOriginstartOriginstartCleanupOriginreportOrigin";
+const archiveWriterRecordBytes = 32 + 72 * 37 + 2 * archiveWriterFieldNames.length + 72 + 2 * "archive".length;
+export function prepareOwnedHttpArchive(cap: OwnedHttpRequest, sink: OwnedHttpSinkOwner, env: Env,
+  auth: AuthorizedIdentity, selection: ProxySelection, requestId: string): PreparedContentRetention | null {
+  checkOwnedHttpArchivePreparation(cap, sink, env, auth, selection, requestId);
+  if (!retentionRequired(auth, selection.capability)) return null;
+  const owner = requestOwner(cap);
+  if (owner.archive || !claimOwnedHttpArchiveInput(cap, env, auth, selection, requestId)) throw identityFailure("protocol");
+  claimOwnedHttpArchiveFunding(cap, selection.body as Record<string, unknown>);
+  growOwnedHttpRequest(cap, archiveWriterRecordBytes);
+  reserveSinkOrigins(sink, 17, 3); claimOwnedSinkFactories();
+  const origin = sinkOrigin(sink, "acquire"); let writer: OwnedArchiveWrite | undefined;
+  try {
+    writer = new OwnedArchiveWrite(owner, cap, env, auth, selection, requestId, origin); owner.archive = writer;
+    writer.preparePositions(); writer.bucket = env.CONTENT_ARCHIVE;
+    if (owner.unknown || owner.sealed || owner.env !== env) throw identityFailure("protocol");
+    for (const value of [requestId, auth.policy.tenantId, auth.policyId, auth.credentialId, auth.principalId,
+      selection.provider.id, selection.capability, selection.model?.id]) accountingIdentity(value);
+    writer.contentRef = randomId("content"); const occurredAtMs = Date.now(), tenant = auth.policy.tenantId ?? "default";
+    writer.expiresAt = String(occurredAtMs + 30 * 86_400_000);
+    const record: ContentRecord = { version: "clawrouter.retained-request.v1", contentRef: writer.contentRef,
+      requestId, occurredAtMs, expiresAtMs: occurredAtMs + 30 * 86_400_000, tenantId: tenant, policyId: auth.policyId,
+      credentialId: auth.credentialId, principalId: auth.principalId, provider: selection.provider.id,
+      capability: selection.capability, model: selection.model?.id ?? null, body: selection.body };
+    const gateway = selection.endpoint.request_format === "cloudflare_ai_gateway.universal" && Array.isArray(selection.body) ? selection.body : undefined;
+    writer.archive = privateAccountingArchive(record, gateway);
+    writer.key = contentKey(tenant, writer.contentRef); writer.large = writer.archive.bytes > maxJsonBodyBytes; writer.phase = 1; return writer;
+  } catch (reason) {
+    const failure = isAccountingAdmissionFailure(reason) ? reason : failedSinkOrigin(owner, origin, reason); reason = undefined;
+    try { writer?.discardUnused(); } catch { owner.unknown = true; }
+    throw failure;
+  }
+}
+function archiveWriter(sink: OwnedHttpSinkOwner): OwnedArchiveWrite {
+  const root = sinkOwner(sink), writer = root.archive;
+  if (!writer || writer.root !== root || OwnedHttpRegistrations.requests?.get(writer.cap) !== root) throw identityFailure("protocol");
+  return writer;
+}
 export function ownedHttpArchivePut(sink: OwnedHttpSinkOwner, bucket: Env["CONTENT_ARCHIVE"], key: string,
   value: string | ReadableStream<Uint8Array>, expiresAt: string): Promise<void> {
-  const owner = sinkOwner(sink);
-  if (bucket !== owner.env!.CONTENT_ARCHIVE) throw identityFailure("protocol");
-  reserveSinkOrigins(sink, 2, 1); const record = sinkOrigin(sink, "put");
-  const command = createOwnedSinkVoidCommand(owner, record);
-  let original: Promise<unknown>;
-  try { original = bucket.put(key, value, { httpMetadata: { contentType: "application/json" }, customMetadata: { expiresAt } }); }
-  catch (reason) { command.invokedFailure(reason); return command.ready; }
-  command.observe(original); original = undefined as never;
-  return command.ready;
+  const writer = archiveWriter(sink);
+  if (writer.phase !== 2 || writer.root.unknown || writer.used & 1 || bucket !== writer.bucket || key !== writer.key
+    || expiresAt !== writer.expiresAt || value !== (writer.archive!.bytes <= 32768 ? writer.text : writer.readable)) throw identityFailure("protocol");
+  const command = writer.putCommand!; command.beginArchive(writer); writer.used |= 1; command.subject = value; let original: Promise<unknown>;
+  try {
+    if (bucket !== writer.env.CONTENT_ARCHIVE) throw identityFailure("protocol");
+    original = bucket.put(key, value, { httpMetadata: { contentType: "application/json" }, customMetadata: { expiresAt } });
+  } catch (reason) { command.invokedFailure(reason); return command.ready; }
+  command.observe(original); original = undefined as never; return command.ready;
 }
 export function ownedHttpArchivePipe(sink: OwnedHttpSinkOwner, source: ReadableStream<Uint8Array>, writable: WritableStream<Uint8Array>, signal: AbortSignal): Promise<void> {
-  reserveSinkOrigins(sink, 5, 2); // Pipe/install, owned abort, FIRSTcancel/install.
-  const record = sinkOrigin(sink, "pipe");
-  const command = createOwnedSinkVoidCommand(sinkOwner(sink), record);
-  let original: Promise<void>;
-  try { original = source.pipeTo(writable, { signal }); }
-  catch (reason) { command.invokedFailure(reason); return command.ready; }
-  command.observe(original); original = undefined as never;
-  return command.ready;
+  const writer = archiveWriter(sink);
+  if (writer.phase !== 2 || writer.root.unknown || writer.used & 2 || source !== writer.source || writable !== writer.writable
+    || signal !== writer.signal || !writer.fixed) throw identityFailure("protocol");
+  const command = writer.pipeCommand!; command.beginArchive(writer); writer.used |= 2; command.subject = source; let original: Promise<void>;
+  try { original = source.pipeTo(writable, { signal }); } catch (reason) { command.invokedFailure(reason); return command.ready; }
+  command.observe(original); original = undefined as never; return command.ready;
 }
 export function ownedHttpArchiveCancel(sink: OwnedHttpSinkOwner, readable: ReadableStream<Uint8Array>): Promise<void> {
-  const record = sinkOrigin(sink, "cancel");
-  const command = createOwnedSinkVoidCommand(sinkOwner(sink), record);
-  let original: Promise<void>;
-  try { original = readable.cancel(); }
-  catch (reason) { command.invokedFailure(reason); return command.ready; }
-  command.observe(original); original = undefined as never;
-  return command.ready;
+  const writer = archiveWriter(sink);
+  if (writer.phase !== 2 || !writer.primary || writer.used & 8 || readable !== writer.readable) throw identityFailure("protocol");
+  const command = writer.cancelCommand!; command.beginArchive(writer); writer.used |= 8; command.subject = readable; let original: Promise<void>;
+  try { original = readable.cancel(); } catch (reason) { command.invokedFailure(reason); return command.ready; }
+  command.observe(original); original = undefined as never; return command.ready;
 }
 export function ownedHttpArchiveAbort(sink: OwnedHttpSinkOwner, controller: AbortController): void {
-  const owner = sinkOwner(sink), record = sinkOrigin(sink, "abort");
-  try { controller.abort(); } catch (reason) { throw failedSinkOrigin(owner, record, reason); }
+  const writer = archiveWriter(sink);
+  if (writer.phase !== 2 || !writer.primary || writer.used & 4 || controller !== writer.controller) throw identityFailure("protocol");
+  writer.used |= 4; try { controller.abort(); } catch (reason) { throw writer.failure(writer.abortOrigin, reason); }
+}
+export function takeOwnedHttpArchiveRegistration(cap: OwnedHttpRequest, retention: PreparedContentRetention): OwnedHttpSinkRegistration {
+  const writer = requestOwner(cap).archive;
+  if (!writer || writer !== retention) throw identityFailure("protocol");
+  return writer.takeRegistration();
+}
+export function writeOwnedHttpDeferredArchive(cap: OwnedHttpRequest, retention: PreparedContentRetention): Promise<void> {
+  const writer = requestOwner(cap).archive;
+  if (!writer || writer !== retention || !(writer.used & 16)) throw identityFailure("protocol");
+  return writer.deferred();
+}
+export function ownedHttpArchiveStartFailure(cap: OwnedHttpRequest, retention: PreparedContentRetention, reason: unknown): object {
+  try {
+    const writer = requestOwner(cap).archive;
+    if (!writer || writer !== retention) throw identityFailure("protocol");
+    return writer.failure(writer.startOrigin, reason);
+  } finally { reason = undefined; }
+}
+
+export function ownedHttpArchiveRegistrationFailure(cap: OwnedHttpRequest, retention: PreparedContentRetention, reason: unknown): object {
+  try {
+    const writer = requestOwner(cap).archive;
+    if (!writer || writer !== retention) throw identityFailure("protocol");
+    return writer.failure(writer.startCleanupOrigin, reason);
+  } finally { reason = undefined; }
+}
+
+export function ownedHttpArchiveReportFailure(cap: OwnedHttpRequest, retention: PreparedContentRetention, reason: unknown): object {
+  try {
+    const writer = requestOwner(cap).archive;
+    if (!writer || writer !== retention) throw identityFailure("protocol");
+    return writer.failure(writer.reportOrigin, reason);
+  } finally { reason = undefined; }
 }
 
 class OwnedSinkRegistration {
   private flags = 1; // installation/registration, seen, UNKNOWN, queued, closed, retired
   private observation?: OwnedOriginalObservation;
   declare readonly owner: RequestOwner;
-  declare public origin: SinkOriginOwner;
-  constructor(owner: RequestOwner, origin: SinkOriginOwner) {
+  declare public origin: SinkOriginOwner | undefined;
+  constructor(owner: RequestOwner, origin: SinkOriginOwner | undefined) {
     this.owner = owner; this.origin = origin;
   }
   private unknown(): void { this.flags |= 4; this.owner.unknown = true; }
@@ -1551,14 +1746,14 @@ class OwnedSinkRegistration {
         // Callback acceptance cannot cross the still-open registration barrier.
         this.observation = { owner: this, kind: 0, state: 0 };
         try { installOwnedOriginal(this.observation, work); }
-        catch (reason) { this.unknown(); throw failedSinkOrigin(this.owner, this.origin, reason); }
+        catch (reason) { this.unknown(); throw failedSinkOrigin(this.owner, this.origin!, reason); }
       } else this.flags |= 2;
       if (!context || !work) {
-        this.origin = 32 * Math.floor(this.origin / 32) + sinkKinds.indexOf("registration-missing");
-        throw failedSinkOrigin(this.owner, this.origin, 0);
+        this.origin = 32 * Math.floor(this.origin! / 32) + sinkKinds.indexOf("registration-missing");
+        throw failedSinkOrigin(this.owner, this.origin!, 0);
       }
       try { context.waitUntil(work); }
-      catch (reason) { throw failedSinkOrigin(this.owner, this.origin, reason); }
+      catch (reason) { throw failedSinkOrigin(this.owner, this.origin!, reason); }
     } finally {
       work = undefined; context = undefined;
       this.flags = (this.flags & ~1) | 16;
@@ -1573,10 +1768,14 @@ class OwnedSinkRegistration {
 export function beginOwnedHttpSinkRegistration(sink: OwnedHttpSinkOwner): OwnedHttpSinkRegistration {
   const owner = sinkOwner(sink); reserveSinkOrigins(sink, 1);
   const origin = sinkOrigin(sink, "registration");
+  return createOwnedSinkRegistration(owner, origin);
+}
+function createOwnedSinkRegistration(owner: RequestOwner, origin: SinkOriginOwner | undefined): OwnedHttpSinkRegistration {
   claimOwnedSinkFactories(); enrollOwnedSinkChild(owner);
-  const cap = Object.freeze({}), receipt = new OwnedSinkRegistration(owner, origin);
-  (sinkRegistrations ??= new WeakMap()).set(cap, receipt);
-  return cap;
+  try {
+    const cap = Object.freeze({}), receipt = new OwnedSinkRegistration(owner, origin);
+    (sinkRegistrations ??= new WeakMap()).set(cap, receipt); return cap;
+  } catch (reason) { retireOwnedSinkChild(owner); throw reason; }
 }
 export function completeOwnedHttpSinkRegistration(cap: OwnedHttpSinkRegistration, context?: Pick<ExecutionContext, "waitUntil">, work?: Promise<void | boolean>): void {
   const receipt = sinkRegistrations?.get(cap);
@@ -4434,20 +4633,31 @@ export function adoptOwnedHttpUploadSource(cap: OwnedHttpUpload, source: Readabl
   owner.source = source;
 }
 
+function abortOwnedHttpUpload(owner: UploadOwner): void {
+  const origin = sinkOrigin(owner.request.sink!, "abort");
+  try { owner.controller!.abort(); } catch (reason) { throw failedSinkOrigin(owner.request, origin, reason); }
+}
+function cancelUnstartedOwnedHttpUpload(owner: UploadOwner): Promise<void> {
+  if (owner.started || !owner.source) throw identityFailure("protocol");
+  const command = createOwnedSinkVoidCommand(owner.request, sinkOrigin(owner.request.sink!, "cancel"));
+  let original: Promise<void>;
+  try { original = owner.source.cancel(); } catch (reason) { command.invokedFailure(reason); return command.ready; }
+  command.observe(original); original = undefined as never; return command.ready;
+}
 export function abandonOwnedHttpUpload(cap: OwnedHttpUpload): Promise<void> {
   const owner = uploadOwner(cap);
   if (owner.abandonment) return owner.abandonment;
   let complete!: () => void;
   owner.abandonment = new Promise<void>(resolve => { complete = resolve; });
   // Abort FIRST: waiting for an unconsumed backpressured upload would deadlock.
-  try { if (owner.controller) ownedHttpArchiveAbort(owner.request.sink!, owner.controller); } catch (error) { owner.failures.push(error); }
+  try { if (owner.controller) abortOwnedHttpUpload(owner); } catch (error) { owner.failures.push(error); }
   void (async () => {
     if (owner.started) await owner.joined;
     else if (owner.source) {
       // A lock without our ORIGINAL pipe has no application settlement proof.
       // Preserve the open scope and debit rather than invent cancellation ACK.
       if (owner.source.locked) { owner.request.unknown = true; return; }
-      try { await ownedHttpArchiveCancel(owner.request.sink!, owner.source); } catch (error) { owner.failures.push(error); }
+      try { await cancelUnstartedOwnedHttpUpload(owner); } catch (error) { owner.failures.push(error); }
       owner.unused(); await owner.joined;
     } else { owner.unused(); await owner.joined; }
   })().then(() => { if (owner.settled) complete(); }, error => { owner.request.unknown = true; owner.failures.push(error); complete(); });
@@ -4485,6 +4695,7 @@ export function finishOwnedHttpRequest(cap: OwnedHttpRequest): Promise<void> {
       upload.finish(); await upload.retired;
       uploads!.delete(upload.cap);
     }
+    try { owner.archive?.discardUnused(); } catch (reason) { failures.push(reason); }
     owner.accountingTerminal?.abandonPrepared();
     if (owner.budgetSequence && owner.budgetSequence.phase !== 4) {
       try { owner.budgetSequence.close(); }
@@ -4556,6 +4767,7 @@ export function finishOwnedHttpRequest(cap: OwnedHttpRequest): Promise<void> {
       if (owner.metadata?.cors) clearOwnedLocalError(owner.metadata.cors);
       if (owner.publication?.output) clearOwnedLocalError(owner.publication.output);
       owner.publication = undefined;
+      owner.archive?.retire(); owner.archive = undefined;
       owner.codecOrigins = undefined; owner.publicReaders = undefined; owner.publicOutputs = undefined; owner.metadata = undefined;
       owner.uploads.length = 0; owner.request = undefined; owner.env = undefined;
       if (owner.sink) OwnedHttpRegistrations.sinkOwners!.delete(owner.sink);

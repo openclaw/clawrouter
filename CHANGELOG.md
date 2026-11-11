@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Bind private request archives to their original admitted tuple and generated I/O subjects, preinstall command/registration positions before streaming, and normalize retained failures before cleanup awaits. Preserve the ordinary writer and add real Node/Workerd subject, failure and original-observation fixtures. Source-only partial; complete V2 family reservations and qualification remain open.
+
 - Prepay separate installation origins for private soft-status fetch, read, cancel, closed and returned-unlock observations. Preserve original offsets and native correlation, and add Workerd rejection/fulfillment-then-throw witnesses for closed/unlock. Source-only partial; remaining runtime coverage and complete manifests stay open.
 
 - Freeze both private original-observer handlers before actual handoff, keeping their severable cells mutable. Complete returned nonthenable unlocks synchronously without substitute Promises; add handler-mutation and direct-unlock witnesses. Source-only partial; paid async/native and active-window inventories remain open.

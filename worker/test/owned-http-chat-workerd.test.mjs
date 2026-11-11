@@ -2552,7 +2552,7 @@ test('native bodyless READY survives failed final publication', { timeout: 12000
   }, true);
 });
 
-for (const kind of ['queue', 'put', 'archive-pipe', 'upload-pipe']) for (const outcome of ['reject', 'fulfill'])
+for (const kind of ['queue', 'upload-pipe']) for (const outcome of ['reject', 'fulfill'])
 for (const reasonKind of ['distinct', 'equal', 'undefined'])
 test(`native independent installation ${kind} ${outcome} ${reasonKind}`, { timeout: 120000 }, async t => {
   await fixture(t, async f => {
@@ -2621,5 +2621,72 @@ test(`native private status ${kind} ${outcome} then installation ${reasonKind} k
     assert.equal(report.calls.filter(row => row.kind === 'budget' && row.path === '/charge').length, 4);
     assert.ok(report.charged > 65536); assert.equal(report.events.length, 1);
     assert.equal(report.completed.length, 0, 'physical UNKNOWN stays independent of logical charging');
+  }, true);
+});
+
+
+for (const kind of ['put', 'pipe', 'cancel']) for (const outcome of ['reject', 'fulfill'])
+for (const reasonKind of ['distinct', 'equal', 'undefined'])
+test(`native admitted archive ${kind} ${outcome} then install ${reasonKind}`, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    f.expectUnknownRetirement();
+    const kv = await f.runtime.getKVNamespace('POLICY_KV', 'router');
+    const policy = await kv.get('policies/owned_http_chat', 'json'); policy.retainRequestContent = true;
+    await kv.put('policies/owned_http_chat', JSON.stringify(policy));
+    await f.request('https://fixture/fixture/consumer-mode', { method: 'POST', body: `archive-install:${kind}:${outcome}:${reasonKind}` });
+    try { await f.request('https://fixture/v1/chat/completions', chat('chat', { messages: [{ role: 'user', content: 'x'.repeat(40000) }] })); } catch { /* UNKNOWN may prevent later publication. */ }
+    let report; for (;;) { report = await state(f); if (report.archiveFault.didThrow) break; await new Promise(resolve => setTimeout(resolve, 10)); }
+    const row = report.archiveFault;
+    assert.equal(row.calls, 1); assert.equal(row.observations, 1); assert.equal(row.touched, 0); assert.equal(row.unknown, true); assert.equal(row.phase, 3);
+    assert.notEqual(row.originalOrdinal, row.installationOrdinal); assert.equal(row.installation.primaryIsUndefined, reasonKind === 'undefined');
+    if (outcome === 'reject') assert.equal(row.original.primaryIsUndefined, reasonKind === 'undefined'); else assert.equal(row.original, null);
+    if (kind === 'cancel') { assert.equal(row.thrown.origin, 'put'); assert.notEqual(row.thrown.ordinal, row.installationOrdinal); }
+    else assert.equal(row.thrown.ordinal, outcome === 'reject' ? row.originalOrdinal : row.installationOrdinal);
+    assert.ok(row.after >= row.before); assert.ok(report.charged > 65536);
+  }, true);
+});
+for (const kind of ['put', 'pipe', 'cancel']) for (const returned of ['undefined', 'held', 'hostile'])
+test(`native admitted archive ${kind} ignores ${returned} observer return`, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    if (kind === 'cancel') f.expectFailedRetirement(0);
+    const kv = await f.runtime.getKVNamespace('POLICY_KV', 'router');
+    const policy = await kv.get('policies/owned_http_chat', 'json'); policy.retainRequestContent = true;
+    await kv.put('policies/owned_http_chat', JSON.stringify(policy));
+    await f.request('https://fixture/fixture/consumer-mode', { method: 'POST', body: `archive-return:${kind}:${returned}` });
+    const release = () => f.request('https://fixture/fixture/archive-release', { method: 'POST' }); f.releases.push(release);
+    const dispatch = f.dispatch('https://fixture/v1/chat/completions', chat('chat', { messages: [{ role: 'user', content: 'x'.repeat(40000) }] }));
+    let report; for (;;) { report = await state(f); if (report.archiveFault.entered) break; await new Promise(resolve => setTimeout(resolve, 10)); }
+    assert.equal(report.archiveFault.calls, 1); assert.equal(report.archiveFault.observations, 1); assert.equal(report.archiveFault.touched, 0);
+    assert.equal(report.archiveFault.fulfilled, false); assert.equal(report.completed.length, 0); assert.ok(report.charged > 65536);
+    await release(); const response = await f.take(dispatch); await f.take(f.body(response));
+    const after = await settledState(f); assert.equal(after.archiveFault.fulfilled, kind !== 'cancel'); assert.equal(after.archiveFault.touched, 0);
+    assert.equal(after.archiveFault.commandRejected, after.archiveFault.nativeFailed); assert.equal(after.archiveFault.commandFulfilled, !after.archiveFault.nativeFailed);
+    assert.equal(after.archiveFault.calls, 1); assert.equal(after.archiveFault.observations, 1);
+  }, true);
+});
+
+
+for (const target of ['getter', 'put']) for (const kind of ['undefined', 'large-string', 'opaque-object'])
+test(`native archive ${target} ${kind} failure stays bounded through held cleanup`, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const kv = await f.runtime.getKVNamespace('POLICY_KV', 'router');
+    const policy = await kv.get('policies/owned_http_chat', 'json'); policy.retainRequestContent = true;
+    await kv.put('policies/owned_http_chat', JSON.stringify(policy));
+    f.expectFailedRetirement(0);
+    await f.request('https://fixture/fixture/consumer-mode', { method: 'POST', body: `archive-failure:${target}:${kind}` });
+    const release = () => f.request('https://fixture/fixture/archive-release', { method: 'POST' }); f.releases.push(release);
+    const dispatch = f.dispatch('https://fixture/v1/chat/completions', chat('chat', { messages: [{ role: 'user', content: 'x'.repeat(40000) }] }));
+    let report; for (;;) { report = await state(f); if (report.archiveFault.entered) break; await new Promise(resolve => setTimeout(resolve, 10)); }
+    const row = report.archiveFault;
+    assert.equal(row.awaitingBounded, true); assert.equal(row.didThrow, false); assert.equal(row.cancelCalls, 1);
+    assert.equal(row.puts, target === 'put' ? 1 : 0); assert.equal(row.envGets, target === 'getter' ? 1 : 0);
+    assert.equal(row.reasonReads, 0); assert.equal(report.completed.length, 0); assert.ok(report.charged > 65536);
+    const put = row.failures.find(record => record.origin === 'put'); assert.ok(put); assert.equal(put.primaryIsUndefined, kind === 'undefined');
+    await release(); const response = await f.take(dispatch); await f.take(f.body(response));
+    const after = await settledState(f), final = after.archiveFault;
+    assert.equal(final.didThrow, true); assert.equal(final.thrown.ordinal, put.ordinal);
+    assert.ok(final.failures.some(record => record.origin === 'pipe')); assert.ok(final.failures.some(record => record.origin === 'cancel'));
+    assert.equal(new Set(final.failures.map(record => record.ordinal)).size, final.failures.length);
+    assert.equal(final.reasonReads, 0); assert.equal(final.cancelCalls, 1);
   }, true);
 });

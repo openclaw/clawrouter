@@ -395,7 +395,7 @@ test('registration rejection after start retains the ORIGINAL work and a distinc
 
 // UNRUN_CODE_ONLY_HOSTED: the private observer-return amendment is deliberate.
 // These originals are real Promises; only their actual observer method changes.
-for (const command of ['put', 'pipe', 'cancel', 'queue', 'body-cancel', 'detached-cancel']) {
+for (const command of ['queue', 'body-cancel', 'detached-cancel']) {
   for (const returned of ['undefined', 'held', 'hostile']) {
     test(`private ${command} ignores ${returned} observer return and joins the actual callback`, async t => {
       const env = environment(), actual = deferred(), external = deferred();
@@ -411,26 +411,14 @@ for (const command of ['put', 'pipe', 'cancel', 'queue', 'body-cancel', 'detache
         };
         const invoke = () => { invocations++; return actual.promise; };
         let ready;
-        if (command === 'put') {
-          env.CONTENT_ARCHIVE = { put: invoke };
-          ready = ownedHttpArchivePut(f.sink, env.CONTENT_ARCHIVE, 'fixture', 'wire', '2099-01-01');
-        } else if (command === 'queue') {
+        if (command === 'queue') {
           env.USAGE_QUEUE.send = invoke;
           ready = ownedHttpQueueSend(f.sink, env.USAGE_QUEUE, event);
         } else {
-          const source = new ReadableStream();
-          if (command === 'pipe') {
-            source.pipeTo = invoke;
-            ready = ownedHttpArchivePipe(f.sink, source, new WritableStream(), new AbortController().signal);
-          } else {
-            source.cancel = invoke;
-            if (command === 'cancel') ready = ownedHttpArchiveCancel(f.sink, source);
-            else {
-              const response = new Response(source);
-              if (command === 'body-cancel') ready = cancelOwnedHttpResponse(f.sink, response);
-              else discardOwnedHttpSinkResponse(f.sink, response);
-            }
-          }
+          const source = new ReadableStream(); source.cancel = invoke;
+          const response = new Response(source);
+          if (command === 'body-cancel') ready = cancelOwnedHttpResponse(f.sink, response);
+          else discardOwnedHttpSinkResponse(f.sink, response);
         }
         assert.equal(invocations, 1); assert.equal(observations, 1); assert.equal(touched, 0);
         const root = ready && f.own(ready);
@@ -497,40 +485,25 @@ test('ordinary materialization acquisition keeps its existing outcome; private m
 });
 
 
-for (const kind of ['undefined', 'large-string', 'opaque-object']) test(`archive ${kind} failure does not retain the reason while its original cancellation is held`, async t => {
-  const env = environment(), gate = deferred(), entered = deferred(), guarded = kind === 'opaque-object' ? guardedReason() : undefined;
-  const reason = kind === 'undefined' ? undefined : guarded?.reason ?? 'x'.repeat(17 * 1024 * 1024);
-  let puts = 0, cancels = 0;
-  env.CONTENT_ARCHIVE = { put() { puts++; return Promise.reject(reason); } };
+// Positive archive custody witnesses now enter through the real private Chat
+// producer in owned-http-pricing and owned-http-chat-workerd. A sink alone is
+// deliberately insufficient authority for an archive subject.
+for (const kind of ['put', 'pipe', 'cancel', 'abort'])
+test(`private archive ${kind} rejects a bare genuine sink before foreign method getters`, async t => {
+  const env = environment();
   await fixture(t, env, async f => {
-    f.releases.push(gate.resolve);
-    const source = new ReadableStream({ cancel() { cancels++; entered.resolve(); return gate.promise.then(() => { throw reason; }); } }, { highWaterMark: 0 });
-    const destination = new TransformStream(), abort = new AbortController();
-    const pipe = f.own(ownedHttpArchivePipe(f.sink, source, destination.writable, abort.signal));
-    const put = f.own(ownedHttpArchivePut(f.sink, env.CONTENT_ARCHIVE, 'fixture/archive', destination.readable, '123'));
-    let putFailure, putFailed = false;
-    try { await f.take(put); } catch (error) { putFailed = true; putFailure = error; }
-    assert.equal(putFailed, true); assert.equal(ownedHttpFailureMetadata(putFailure).origin, 'put');
-    ownedHttpArchiveAbort(f.sink, abort);
-    const cancel = f.own(ownedHttpArchiveCancel(f.sink, destination.readable));
-    // The pipe's original cancel is pending. No fulfilled headers/put response
-    // or bounded failure carrier gives the source lease retirement credit.
-    await Promise.race([entered.promise, pipe.outcome.then(outcome => {
-      pipe.used = true;
-      if (outcome.failed) throw outcome.error;
-      throw new Error('original pipe fulfilled before cancel entry');
-    })]);
-    assert.ok(bodyBudgetCharged() > f.baseline);
-    gate.resolve();
-    const failures = [putFailure];
-    for (const root of [pipe, cancel]) try { await f.take(root); } catch (error) { failures.push(error); }
-    assert.ok(failures.every(error => ownedHttpFailureMetadata(error)?.failed));
-    assert.ok(failures.some(error => error.origin === 'pipe'));
-    assert.equal(new Set(failures.map(error => error.ordinal)).size, failures.length);
-    assert.equal(puts, 1); assert.equal(cancels, 1); assert.equal(source.locked, false); assert.equal(guarded?.reads() ?? 0, 0);
+    let reads = 0;
+    const foreign = new Proxy({}, { get() { reads++; throw Error('foreign archive operand'); } });
+    const before = bodyBudgetCharged();
+    assert.throws(() => {
+      if (kind === 'put') ownedHttpArchivePut(f.sink, foreign, 'foreign', foreign, 'foreign');
+      else if (kind === 'pipe') ownedHttpArchivePipe(f.sink, foreign, foreign, foreign);
+      else if (kind === 'cancel') ownedHttpArchiveCancel(f.sink, foreign);
+      else ownedHttpArchiveAbort(f.sink, foreign);
+    }, error => error?.code === 'identity_admission_unavailable');
+    assert.equal(reads, 0); assert.equal(bodyBudgetCharged(), before);
   });
 });
-
 
 test('private archive preparation rejects forged or unrelated owners before input, binding or byte factories', async t => {
   const { prepareOwnedHttpContentRetention } = await import('../content-retention.ts');

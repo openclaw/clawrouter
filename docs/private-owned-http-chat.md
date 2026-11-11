@@ -1,6 +1,83 @@
 # Private owned HTTP Chat staging
 
 
+### Current source-only archive subject and failure repair
+
+The private writer now lives with the HTTP owner. Its canonical attachment keeps
+its admitted request/Env/auth/selection/accounting tuple across later retries.
+It generates and retains its own text, stream, fixed endpoints and controller.
+Put, pipe, abort and cancel validate those exact subjects and once-rights before
+actual method getters. A genuine request or sink alone cannot authorize a
+foreign stream. Supported actual method replacement and receiver/argument order
+remain intact. The ordinary content-retention body is byte-identical to exact
+main; the private path shares the existing archive serializer.
+
+Three VOID command positions and the optional registration receipt are created
+before archive/stream/writer effects. Their original ordinals are claimed at the
+existing invocation points. Put no longer reserves after pipe startup. Seventeen
+prepaid diagnostic positions cover preparation, construction, abort, lock,
+discard, follower, deferred work, start, failed start registration, reporting,
+three original/install pairs and the registration position. This is the known
+origin union, not a complete I/O manifest. The writer has37 own fields; its named
+record/attachment component is `32+72*37+2*fieldNameUnits+72+2*7` under the adopted
+I/O own-property convention. Referenced graphs, native products, closures,
+continuations and reactions remain separate. No complete V2 reservation is
+inferred from this component.
+
+Every retained private writer failure is genuine bounded metadata. The later
+`CONTENT_ARCHIVE` getter is inside the put invocation boundary. Raw construction,
+put/pipe/cancel, timer and reporting failures are normalized before suspension;
+independent cleanup records remain in their prepaid ordinal positions. Cleanup
+uses the original archive association after retry and may continue through
+UNKNOWN. No private aggregate retains raw causes. Unstarted positions close
+without reenrollment; started work keeps its existing physical joins and debit.
+
+Authored Node/Workerd cases exercise real private retention with modified put,
+pipe and cancellation originals; FIRST followed by independent installation
+throw; ignored hostile call returns; and undefined/large-string/opaque-object
+failures before held cancellation. Fixture hooks also reject foreign subjects
+and post-close replay without method access, state changes or debit changes.
+Bare-sink positive fixtures now use the genuine archive producer; bare sinks are
+negative authority cases. All runtime remains `UNRUN_CODE_ONLY_HOSTED`.
+
+### Adopted V2 native accounting terms — reservation gate remains open
+
+Persistent I/O storage stays `PAID_ASYNC_IO_CONTROL` throughout callback execution.
+Additional executing frames, operands, arguments and reentry remain separately
+subject to ACTIVE128/SYNC512. The storage formula is `8(C+P+N)+2U+B`. Only I/O and
+control-native instances receive the24-byte object-header and48-byte-per-own-
+property supplements; established DATA, traversal and static tariffs do not
+change. These are normative application-protocol units, not host heap estimates.
+
+| Native semantic term | Bytes / derivation |
+| --- | ---: |
+| Bound function, object this, no arguments | `244+2*nameUnits` |
+| Empty-name builtin plus one-reference capture | 268 |
+| Promise and reaction-list headers P0 | 160 |
+| Resolving pair / once cell R | 584 |
+| Native capability K | `160+584+32+40+268=1084` |
+| Native direct-then, original and supplied handlers separate | `1084+80+224+16+224=1628` |
+| Queued microtask work | 144 |
+| APP Promise native constructor, APP executor/captures separate | `160+584=744` |
+| Native cancellation follower union | `552+544+1084+2548=4728` |
+| Decoder input/output payload queues, DATA | `16*(32768+32769)=1048592` |
+
+The reviewed24-field ACK union gives31334 standalone /31338 terminal CONTROL
+bytes only when the actual fields, handlers and failure topology match. Its
+composition is APP4742/4746 +metadata4896 +bound functions2876 +Promise union15896
++queued work288 +reader/request494 +views/buffers1100 +witness32 +read result268
++native errors288 +decoder headers326 +construction descriptors128. Parent,
+caller, source/controller, reporting, DATA and decoder payload queues are
+additional. The thirteen-ACK component407362 is not a whole-request upper.
+
+Complete source-derived family manifests must enumerate constructor, transition,
+partial failure, old/new, readiness, retirement, caller/follower, registry and
+native-reaction products before their corresponding V2 reservations are added.
+Global UNKNOWN forbids all smaller shared charges, even after a clean sibling's
+physical once-end. Whole DATA/COMMON/ACTIVE/static inventories and runtime remain
+OPEN. This partial source repair is not CODE_COMPLETE.
+
+
 ### Current source-only status provenance extension
 
 `OwnedStatusReader` is separate from the shared driver. Its original positions

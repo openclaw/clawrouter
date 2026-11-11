@@ -3,6 +3,7 @@ import { isIdentityFailure, identityFailure } from "./identity-admission.ts";
 import { beginOwnedHttpProxyPublicationHeaders, checkOwnedHttpProxyPublicationBody, finishOwnedHttpProxyPublication, beginOwnedHttpUpload, beginOwnedHttpRevalidation, prepareOwnedHttpAccounting, finishOwnedHttpRevalidationPreparation, discardOwnedHttpInitialError, admitOwnedHttpErrorText, isOwnedHttpLocalFailure, checkOwnedHttpRequest, matchesOwnedHttpRequestInputs, canCompleteOwnedHttpPreparation, checkOwnedHttpUpload, holdOwnedHttpUploadSerialization, abandonOwnedHttpUpload, growOwnedHttpRequest, ownedHttpSinkOwner, startOwnedHttpProviderFetch, consumeOwnedHttpProviderResponse, disposeOwnedHttpProviderResponse, matchesOwnedHttpProviderHandoff, ownedHttpSignal, cancelOwnedHttpResponse,
   beginOwnedHttpIntakeDiagnostics, ownedHttpIntakeFailure, finishOwnedHttpIntakeDiagnostics,
   beginOwnedHttpSinkRegistration, completeOwnedHttpSinkRegistration, abandonUnstartedOwnedHttpRegistration,
+  takeOwnedHttpArchiveRegistration, writeOwnedHttpDeferredArchive, ownedHttpArchiveStartFailure, ownedHttpArchiveRegistrationFailure, ownedHttpArchiveReportFailure,
   ownedHttpCompletion, holdOwnedHttpRequest, dispatchOwnedHttpUpload, ownOwnedHttpResponse,
   beginOwnedHttpGenericUsage, consumeOwnedHttpGenericUsage, failOwnedHttpGenericUsage, abandonOwnedHttpGenericUsage, type OwnedHttpUsage,
   type OwnedHttpRequest, type OwnedHttpUpload } from "./http-identity-owner.ts";
@@ -1861,35 +1862,31 @@ function registerProxyBackground(owned: OwnedHttpRequest | undefined, context: E
   }
   completeOwnedHttpSinkRegistration(receipt, context, work);
 }
-async function writeOwnedProxyRetention(retention: PreparedContentRetention): Promise<void> {
-  let hasPrimary = false, primary: unknown;
-  try {
-    await new Promise<void>(resolve => { setTimeout(resolve, 0); });
-    await retention.write();
-  } catch (reason) { hasPrimary = true; primary = reason; }
-  try { retention.discardUnused?.(); }
-  catch (cleanup) { throw new AggregateError(hasPrimary ? [primary, cleanup] : [cleanup], "owned retention close"); }
-  finally { retention = undefined as never; }
-  if (hasPrimary) throw primary;
+function reportOwnedRetentionFailure(http: OwnedHttpRequest, retention: PreparedContentRetention, requestId: string): void {
+  try { logCorrelationError("request content retention failed", requestId); }
+  catch (reason) { throw ownedHttpArchiveReportFailure(http, retention, reason); }
+  finally { http = undefined as never; retention = undefined as never; }
 }
-function reportOwnedRetentionFailure(requestId: string): void { logCorrelationError("request content retention failed", requestId); }
 function startOwnedProxyRetention(http: OwnedHttpRequest, context: ExecutionContext, completion: ProxyCompletion,
   retention: PreparedContentRetention, requestId: string): void {
   const owner = ownedProxyInvocations?.get(http);
   if (!owner || owner.context !== context || owner.accounting?.requestId !== requestId) throw identityFailure("protocol");
-  const receipt = beginOwnedHttpSinkRegistration(ownedHttpSinkOwner(http));
-  let work: Promise<void> | undefined;
-  try { completion.startPrivateLeaf(() => work = writeOwnedProxyRetention(retention)); }
-  catch (primary) {
-    try {
-      if (work) completeOwnedHttpSinkRegistration(receipt, context, work);
-      else abandonUnstartedOwnedHttpRegistration(receipt);
-    } catch (cleanup) { throw new AggregateError([primary, cleanup], "owned retention start cleanup"); }
+  const receipt = takeOwnedHttpArchiveRegistration(http, retention);
+  let work: Promise<void> | undefined, registered = false;
+  try {
+    completion.startPrivateLeaf(() => work = writeOwnedHttpDeferredArchive(http, retention));
+    const reported = work!.catch(reportOwnedRetentionFailure.bind(undefined, http, retention, requestId));
+    registered = true; completeOwnedHttpSinkRegistration(receipt, context, reported);
+  } catch (reason) {
+    const primary = ownedHttpArchiveStartFailure(http, retention, reason); reason = undefined;
+    if (!registered) {
+      try {
+        if (work) { registered = true; completeOwnedHttpSinkRegistration(receipt, context, work); }
+        else abandonUnstartedOwnedHttpRegistration(receipt);
+      } catch (cleanup) { ownedHttpArchiveRegistrationFailure(http, retention, cleanup); }
+    }
     throw primary;
   }
-  // The leaf observes failure before the ordinary best-effort reporting path
-  // consumes it. A recovered diagnostic does not rewrite its custody receipt.
-  completeOwnedHttpSinkRegistration(receipt, context, work!.catch(reportOwnedRetentionFailure.bind(undefined, requestId)));
 }
 function startOwnedProxySoftBudget(http: OwnedHttpRequest, env: Env, context: ExecutionContext, completion: ProxyCompletion,
   plan: ReturnType<typeof prepareSoftBudget>, operation: HttpOperation): void {

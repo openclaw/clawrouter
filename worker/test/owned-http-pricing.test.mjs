@@ -1365,7 +1365,7 @@ test('private pricing retains Infinity ancestry and array-valued tool classifica
   });
 });
 
-for (const kind of ['queue', 'put', 'archive-pipe', 'upload-pipe']) for (const outcome of ['reject', 'fulfill'])
+for (const kind of ['queue', 'upload-pipe']) for (const outcome of ['reject', 'fulfill'])
 for (const reasonKind of ['distinct', 'equal', 'undefined']) {
   const name = `private independent installation ${kind} ${outcome} ${reasonKind}`;
   test(name, { timeout: 120000 }, async () => {
@@ -1410,3 +1410,77 @@ for (const outcome of ['reject', 'fulfill']) for (const reasonKind of ['distinct
     } finally { observation.consumerMode = 'normal'; observation.releaseConsumer(); }
   });
 }
+
+
+for (const kind of ['put', 'pipe', 'cancel']) for (const outcome of ['reject', 'fulfill'])
+for (const reasonKind of ['distinct', 'equal', 'undefined']) {
+  const name = `private admitted archive ${kind} ${outcome} then install ${reasonKind}`;
+  test(name, { timeout: 120000 }, async t => {
+    if (process.env.CLAWROUTER_TERMINAL_UNKNOWN !== name) {
+      await promisify(execFile)(process.execPath, ['--test', '--test-name-pattern', '^' + name + '$', fileURLToPath(import.meta.url)],
+        { env: { ...process.env, CLAWROUTER_TERMINAL_UNKNOWN: name }, maxBuffer: 4 * 1024 * 1024 }); return;
+    }
+    observation.consumerMode = `archive-install:${kind}:${outcome}:${reasonKind}`;
+    try {
+      await fixture(t, async f => {
+        f.expectUnknownRetirement();
+        try { await f.request(payload({ messages: [{ role: 'user', content: 'x'.repeat(40000) }] })); } catch { /* Installation UNKNOWN can prevent later publication. */ }
+        for (;;) { if (observation.archiveFault.didThrow) break; await new Promise(resolve => setTimeout(resolve, 0)); }
+        const row = observation.archiveFaultState();
+        assert.equal(row.calls, 1); assert.equal(row.observations, 1); assert.equal(row.touched, 0);
+        assert.equal(row.unknown, true); assert.equal(row.didThrow, true); assert.equal(row.phase, 3);
+        assert.notEqual(row.originalOrdinal, row.installationOrdinal);
+        assert.equal(row.installation.primaryIsUndefined, reasonKind === 'undefined');
+        if (outcome === 'reject') assert.equal(row.original.primaryIsUndefined, reasonKind === 'undefined'); else assert.equal(row.original, null);
+        if (kind === 'cancel') { assert.equal(row.thrown.origin, 'put'); assert.notEqual(row.thrown.ordinal, row.installationOrdinal); }
+        else assert.equal(row.thrown.ordinal, outcome === 'reject' ? row.originalOrdinal : row.installationOrdinal);
+        assert.ok(row.after >= row.before); assert.ok(bodyBudgetCharged() > 65536);
+      }, true);
+    } finally { observation.releaseArchiveFault(); observation.consumerMode = 'normal'; }
+  });
+}
+for (const kind of ['put', 'pipe', 'cancel']) for (const returned of ['undefined', 'held', 'hostile'])
+test(`private admitted archive ${kind} ignores ${returned} observer return and joins actual callback`, async t => {
+  observation.consumerMode = `archive-return:${kind}:${returned}`;
+  try {
+    await fixture(t, async f => {
+      f.releases.push(() => observation.releaseArchiveFault());
+      const request = f.own(f.request(payload({ messages: [{ role: 'user', content: 'x'.repeat(40000) }] })));
+      for (;;) { if (observation.archiveFault.entered) break; await new Promise(resolve => setTimeout(resolve, 0)); }
+      const held = observation.archiveFaultState();
+      assert.equal(held.calls, 1); assert.equal(held.observations, 1); assert.equal(held.touched, 0); assert.equal(held.fulfilled, false);
+      assert.ok(bodyBudgetCharged() > 65536);
+      observation.releaseArchiveFault(); await f.take(request); await f.drain();
+      if (kind === 'cancel') for (const root of f.retirements) if ((await root.outcome).failed) await assert.rejects(f.take(root));
+      assert.equal(observation.archiveFault.fulfilled, kind !== 'cancel'); assert.equal(observation.archiveFault.touched, 0);
+      assert.equal(observation.archiveFault.commandRejected, observation.archiveFault.nativeFailed);
+      assert.equal(observation.archiveFault.commandFulfilled, !observation.archiveFault.nativeFailed);
+      assert.equal(observation.archiveFault.observations, 1); assert.equal(observation.archiveFault.calls, 1);
+    }, true);
+  } finally { observation.releaseArchiveFault(); observation.consumerMode = 'normal'; }
+});
+
+
+for (const target of ['getter', 'put']) for (const kind of ['undefined', 'large-string', 'opaque-object'])
+test(`private archive ${target} ${kind} failure is bounded before held cancellation`, async t => {
+  observation.consumerMode = `archive-failure:${target}:${kind}`;
+  try {
+    await fixture(t, async f => {
+      f.releases.push(() => observation.releaseArchiveFault());
+      const request = f.own(f.request(payload({ messages: [{ role: 'user', content: 'x'.repeat(40000) }] })));
+      for (;;) { if (observation.archiveFault.entered) break; await new Promise(resolve => setTimeout(resolve, 0)); }
+      const row = observation.archiveFaultState();
+      assert.equal(row.awaitingBounded, true); assert.equal(row.didThrow, false); assert.equal(row.cancelCalls, 1);
+      assert.equal(row.puts, target === 'put' ? 1 : 0); assert.equal(row.envGets, target === 'getter' ? 1 : 0);
+      assert.equal(row.reasonReads, 0); assert.ok(bodyBudgetCharged() > 65536);
+      const put = row.failures.find(record => record.origin === 'put'); assert.ok(put);
+      assert.equal(put.primaryIsUndefined, kind === 'undefined');
+      observation.releaseArchiveFault(); await f.take(request); await f.drain();
+      for (const root of f.retirements) if ((await root.outcome).failed) await assert.rejects(f.take(root));
+      assert.equal(row.didThrow, true); assert.equal(row.thrown.ordinal, put.ordinal);
+      assert.ok(row.failures.some(record => record.origin === 'pipe')); assert.ok(row.failures.some(record => record.origin === 'cancel'));
+      assert.equal(new Set(row.failures.map(record => record.ordinal)).size, row.failures.length);
+      assert.equal(row.reasonReads, 0); assert.equal(row.cancelCalls, 1);
+    }, true);
+  } finally { observation.releaseArchiveFault(); observation.consumerMode = 'normal'; }
+});

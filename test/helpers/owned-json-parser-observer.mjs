@@ -21,6 +21,41 @@ export function createOwnedJsonObservation() {
   }
 
   let current, censusUsage = false, preparations = 0;
+  let archiveWriter, releaseArchiveFault, archiveRawReason, archiveSubjectChecking = false;
+  const archiveFault = { calls: 0, observations: 0, touched: 0, entered: false, released: false,
+    original: null, installation: null, thrown: null, didThrow: false, fulfilled: false, commandFulfilled: false, commandRejected: false, nativeFailed: false, unknown: false, before: 0, after: 0, phase: 0, originalOrdinal: -1, installationOrdinal: -1, reasonReads: 0, puts: 0, envGets: 0, cancelCalls: 0, awaitingBounded: false, failures: [] };
+  function archiveFaultOriginal(original, command, mode, outcome, reasonKind) {
+    archiveFault.calls++;
+    const first = reasonKind === 'undefined' ? undefined : Object.freeze({ fixture: 'archive-original' });
+    const second = reasonKind === 'undefined' ? undefined : reasonKind === 'equal' ? first : Object.freeze({ fixture: 'archive-installation' });
+    const nativeThen = Promise.prototype.then;
+    void Reflect.apply(nativeThen, original, [() => { archiveFault.nativeFailed = false; }, () => { archiveFault.nativeFailed = true; }]);
+    void Reflect.apply(nativeThen, command.ready, [value => {
+      if (value !== undefined) throw Error('archive command transported a graph'); archiveFault.commandFulfilled = true;
+    }, reason => {
+      if (reason !== command.owner.sinkOrigins.get(Math.floor(command.origin / 32))
+        && reason !== command.owner.sinkOrigins.get(Math.floor(command.installationOrigin / 32))) throw Error('unbounded archive command failure');
+      archiveFault.commandRejected = true; reason = undefined;
+    }]);
+    let release; const held = new Promise(resolve => { release = resolve; });
+    releaseArchiveFault = () => { archiveFault.released = true; release(); };
+    const foreign = Object.defineProperty({}, 'then', { get() { archiveFault.touched++; throw Error('foreign archive observer return'); } });
+    Object.defineProperty(original, 'then', { value(yes, no) {
+      archiveFault.observations++; archiveFault.entered = true;
+      if (this !== original || arguments.length !== 2) throw Error('archive actual original operands');
+      assertClosedHandler(yes); assertClosedHandler(no);
+      archiveFault.originalOrdinal = Math.floor(command.origin / 32);
+      archiveFault.installationOrdinal = Math.floor(command.installationOrigin / 32);
+      if (mode === 'install') {
+        if (outcome === 'reject') no(first); else yes(undefined);
+        throw second;
+      }
+      void Reflect.apply(nativeThen, original, [value => { void held.then(() => yes(value)); }, reason => { void held.then(() => no(reason)); }]);
+      return outcome === 'held' ? new Promise(() => {}) : outcome === 'hostile' ? foreign : undefined;
+    } });
+    return original;
+  }
+
   const consumers = { created: 0, acquired: 0, retired: 0, live: 0, inner: 0, outer: 0,
     read: 0, cancel: 0, unlock: 0, nativeUnlocked: 0, unlockSettled: 0, thenCalls: 0, closed: 0, closedSettled: 0, replay: 0, transferred: 0, pricing: 0, enqueued: 0, oversizedOutput: 0, mutations: 0, held: false, released: false, reasonReads: 0 };
   const usage = { census: 0, parsed: 0, maxGraph: 0, maxContainers: 0, maxStrings: 0, maxAtoms: 0, maxUnits: 0, summaries: 0, cleared: 0 };
@@ -508,6 +543,117 @@ export function createOwnedJsonObservation() {
     },
     archiveExit() { restoreArchiveData?.(); },
     archiveChunk(backing) { archive.chunks++; archive.maximumBacking = Math.max(archive.maximumBacking, backing); },
+    archiveFault,
+    archivePrepared(writer) {
+      archiveWriter = writer;
+      Object.assign(archiveFault, { calls: 0, observations: 0, touched: 0, entered: false, released: false,
+        original: null, installation: null, thrown: null, didThrow: false, fulfilled: false, commandFulfilled: false,
+        commandRejected: false, nativeFailed: false, unknown: false, before: writer.root.funding.bytes, after: 0, phase: 0,
+        originalOrdinal: -1, installationOrdinal: -1, reasonReads: 0, puts: 0, envGets: 0, cancelCalls: 0, awaitingBounded: false });
+      archiveFault.failures.length = 0;
+      const [prefix, target, kind] = this.consumerMode.split(':');
+      if (['archive-return', 'archive-install'].includes(prefix) && target === 'cancel') {
+        Object.defineProperty(writer.bucket, 'put', { value() { archiveFault.puts++; throw Error('fixture required cancel'); } }); return;
+      }
+      if (prefix !== 'archive-failure') return;
+      archiveRawReason = kind === 'undefined' ? undefined : kind === 'large-string' ? 'x'.repeat(17 * 1024 * 1024)
+        : { payload: Array.from({ length: 10000 }, () => 'x'.repeat(1024)) };
+      if (kind === 'opaque-object') for (const key of ['message', 'stack', 'cause', 'errors', 'code', 'then'])
+        Object.defineProperty(archiveRawReason, key, { get() { archiveFault.reasonReads++; throw Error('foreign archive reason read'); } });
+      if (target === 'getter') Object.defineProperty(writer.env, 'CONTENT_ARCHIVE', { configurable: true, get() {
+        archiveFault.envGets++; throw archiveRawReason;
+      } });
+      else Object.defineProperty(writer.bucket, 'put', { configurable: true, value(...args) {
+        if (this !== writer.bucket || args.length !== 3) throw Error('archive put operands');
+        archiveFault.puts++; throw archiveRawReason;
+      } });
+    },
+    archiveReadable(writer) {
+      if (!this.consumerMode.startsWith('archive-failure:')) return;
+      const readable = writer.readable, cancel = readable.cancel, nativeThen = Promise.prototype.then;
+      let release; const held = new Promise(resolve => { release = resolve; });
+      releaseArchiveFault = () => { archiveFault.released = true; release(); };
+      Object.defineProperty(readable, 'cancel', { value(...args) {
+        if (this !== readable || args.length) throw Error('archive cancel operands'); archiveFault.cancelCalls++;
+        const original = Reflect.apply(cancel, this, args);
+        Object.defineProperty(original, 'then', { value(yes, no) {
+          if (this !== original || arguments.length !== 2) throw Error('archive cancel observer operands');
+          archiveFault.entered = true; assertClosedHandler(yes); assertClosedHandler(no);
+          void Reflect.apply(nativeThen, original, [() => { void held.then(() => no(archiveRawReason)); }, () => { void held.then(() => no(archiveRawReason)); }]);
+          return undefined;
+        } }); return original;
+      } });
+    },
+    archivePrimary(primary, inspect) {
+      if (!this.consumerMode.startsWith('archive-failure:')) return;
+      const record = inspect(primary);
+      if (!record || archiveWriter.root.sinkOrigins.get(record.ordinal) !== primary) throw Error('raw archive primary crossed await');
+      archiveFault.awaitingBounded = true;
+    },
+    archiveFact(owner, record) {
+      if (!this.consumerMode.startsWith('archive-failure:') || owner !== archiveWriter?.root) return;
+      const ordinals = [archiveWriter.putCommand?.origin, archiveWriter.pipeCommand?.origin, archiveWriter.cancelCommand?.origin,
+        archiveWriter.abortOrigin, archiveWriter.lockOrigin, archiveWriter.discardOrigin, archiveWriter.followOrigin];
+      if (ordinals.some(origin => Math.floor(origin / 32) === record.ordinal)) archiveFault.failures.push({ ...record });
+    },
+    archiveWriting(writer, work, inspect) {
+      if (!this.consumerMode.startsWith('archive-')) return;
+      let root = writer.root;
+      void Reflect.apply(Promise.prototype.then, work, [value => {
+        if (value !== undefined) throw Error('archive work transported a graph'); archiveFault.fulfilled = true; root = undefined;
+      }, reason => {
+        const metadata = inspect(reason);
+        if (!metadata || root.sinkOrigins.get(metadata.ordinal) !== reason) throw Error('archive retained an unbounded failure');
+        archiveFault.didThrow = true; archiveFault.thrown = { ...metadata }; reason = undefined; root = undefined;
+      }]);
+    },
+
+    archiveFaultState() {
+      if (!archiveWriter) return archiveFault;
+      archiveFault.unknown = archiveWriter.root?.unknown ?? false;
+      archiveFault.after = archiveWriter.root?.funding.bytes ?? 0;
+      archiveFault.phase = archiveWriter.phase;
+      const records = archiveWriter.root?.sinkOrigins;
+      archiveFault.original = records?.get(archiveFault.originalOrdinal) ?? null;
+      archiveFault.installation = records?.get(archiveFault.installationOrdinal) ?? null;
+      return archiveFault;
+    },
+    releaseArchiveFault() { releaseArchiveFault?.(); },
+    archiveSubject(kind, writer, command) {
+      if (archiveSubjectChecking) return;
+      archiveSubjectChecking = true;
+      const before = writer.root.funding.bytes, used = writer.used;
+      let reads = 0;
+      const foreign = new Proxy({}, { get() { reads++; throw Error('foreign archive subject getter'); } });
+      const cases = kind === 'put' ? [[foreign, writer.key, writer.text ?? writer.readable, writer.expiresAt],
+        [writer.bucket, 'foreign', foreign, writer.expiresAt], [writer.bucket, writer.key, foreign, writer.expiresAt]]
+        : kind === 'pipe' ? [[foreign, writer.writable, writer.signal], [writer.source, foreign, writer.signal], [writer.source, writer.writable, foreign]]
+        : [[foreign]];
+      try {
+        for (const operands of cases) {
+          let rejected = false;
+          try { command(writer.root.sink, ...operands); } catch { rejected = true; }
+          if (!rejected || reads || writer.used !== used || writer.root.funding.bytes !== before) throw Error('foreign archive subject had effects');
+        }
+      } finally { archiveSubjectChecking = false; }
+    },
+    archiveClosed(writer, put, pipe, cancel, abort) {
+      if (writer.phase !== 3) throw Error('archive phase did not close');
+      const before = writer.root.funding.bytes, used = writer.used;
+      const commands = [[put, writer.bucket, writer.key, writer.text ?? writer.readable, writer.expiresAt],
+        [pipe, writer.source, writer.writable, writer.signal], [cancel, writer.readable], [abort, writer.controller]];
+      for (const [command, ...operands] of commands) {
+        let rejected = false;
+        try { command(writer.root.sink, ...operands); } catch { rejected = true; }
+        if (!rejected || writer.used !== used || writer.root.funding.bytes !== before) throw Error('closed archive command replayed');
+      }
+    },
+    archiveActualOriginal(original, writer, kind) {
+      const [prefix, target, outcome, reasonKind] = this.consumerMode.split(':');
+      if (target !== kind || !['archive-install', 'archive-return'].includes(prefix)) return original;
+      return archiveFaultOriginal(original, kind === 'put' ? writer.putCommand : kind === 'pipe' ? writer.pipeCommand : writer.cancelCommand,
+        prefix === 'archive-install' ? 'install' : 'return', outcome, reasonKind);
+    },
     archivePut(original) {
       if (this.consumerMode !== 'archive-kernel-held') return;
       archive.puts++;
@@ -1180,7 +1326,7 @@ export function observeOwnedJsonSource(path, source) {
       '  if (' + probe + '.consumerMode === "bootstrap-refuse" && !' + probe + '.initialErrors.bootstrapRefused) ' + probe + '.entryPressure(ExactBodyCharge.reserve(__publicLimit - __publicCharged() - requestMetadataBytes + 1)); try { funding = ExactBodyCharge.reserve(requestMetadataBytes); }');
     source = replace(source, '  if (!funding) return undefined;',
       '  if (!funding) { ' + probe + '.initialErrors.bootstrapRefused++; return undefined; }');
-    source = replace(source, '    owner.sinkOrigins!.set(ordinal, record); sinkFailures!.add(record);', '    owner.sinkOrigins!.set(ordinal, record); sinkFailures!.add(record); ' + probe + '.driverOrigin(record);');
+    source = replace(source, '    owner.sinkOrigins!.set(ordinal, record); sinkFailures!.add(record);', '    owner.sinkOrigins!.set(ordinal, record); sinkFailures!.add(record); ' + probe + '.driverOrigin(record); ' + probe + '.archiveFact(owner, record);');
     source = replace(source, '    const owner = new OwnedHttpRequestReceiver();',
       '    ' + probe + '.initialErrors.owners++; const owner = new OwnedHttpRequestReceiver();');
     source = replace(source, '  owner.errorState = 1;',
@@ -1193,8 +1339,31 @@ export function observeOwnedJsonSource(path, source) {
       '  if (' + probe + '.consumerMode === "metadata-refuse-" + stage && ' + probe + '.metadata.refused < 0) ' + probe + '.metadataPressure(stage, ExactBodyCharge.reserve(__publicLimit - __publicCharged() - bytes + 1)); try { growOwnedHttpRequest(cap, bytes); } catch (__refused) { ' + probe + '.metadataRefused(); throw __refused; }');
     source = replace(source, 'const copy = inheritOwnedLocalError(response, newOwnedResponse(stream, status, statusText, headers));',
       probe + '.headerAdmission(component, headerBytes); const copy = inheritOwnedLocalError(response, newOwnedResponse(stream, status, statusText, headers));');
-    source = replace(source, 'try { original = bucket.put(key, value, { httpMetadata: { contentType: "application/json" }, customMetadata: { expiresAt } }); }',
-      'try { original = bucket.put(key, value, { httpMetadata: { contentType: "application/json" }, customMetadata: { expiresAt } }); ' + probe + '.archivePut(original); }');
+    source = replace(source, '    original = bucket.put(key, value, { httpMetadata: { contentType: "application/json" }, customMetadata: { expiresAt } });',
+      '    original = bucket.put(key, value, { httpMetadata: { contentType: "application/json" }, customMetadata: { expiresAt } }); ' + probe + '.archivePut(original);');
+    for (const kind of ['Put', 'Pipe', 'Cancel', 'Abort']) {
+      const start = source.indexOf('export function ownedHttpArchive' + kind + '(');
+      const marker = '  const writer = archiveWriter(sink);';
+      const at = source.indexOf(marker, start);
+      if (start < 0 || at < 0) throw Error('archive subject hook missing: ' + kind);
+      source = source.slice(0, at) + marker + ' ' + probe + '.archiveSubject("' + kind.toLowerCase() + '", writer, ownedHttpArchive' + kind + ');' + source.slice(at + marker.length);
+    }
+    source = replace(source, '      this.phase = 3;\n    }\n    if (primary) throw primary;',
+      '      this.phase = 3; ' + probe + '.archiveClosed(this, ownedHttpArchivePut, ownedHttpArchivePipe, ownedHttpArchiveCancel, ownedHttpArchiveAbort);\n    }\n    if (primary) throw primary;');
+    source = replace(source, 'writer.phase = 1; return writer;', 'writer.phase = 1; ' + probe + '.archivePrepared(writer); return writer;');
+    source = replace(source, '    return this.writing = this.execute();', '    this.writing = this.execute(); ' + probe + '.archiveWriting(this, this.writing, ownedHttpFailureMetadata); return this.writing;');
+    source = replace(source, 'if (!this.primary) { this.readable = this.fixed.readable; await ownedHttpArchivePut',
+      'if (!this.primary) { this.readable = this.fixed.readable; ' + probe + '.archiveReadable(this); await ownedHttpArchivePut');
+    source = replace(source, 'try { await ownedHttpArchiveCancel(this.root.sink!, operand); }',
+      'try { ' + probe + '.archivePrimary(primary, ownedHttpFailureMetadata); await ownedHttpArchiveCancel(this.root.sink!, operand); }');
+
+    source = replace(source, '  command.observe(original); original = undefined as never; return command.ready;\n}\nexport function ownedHttpArchivePipe',
+      '  ' + probe + '.archiveActualOriginal(original, writer, "put"); command.observe(original); original = undefined as never; return command.ready;\n}\nexport function ownedHttpArchivePipe');
+    source = replace(source, '  command.observe(original); original = undefined as never; return command.ready;\n}\nexport function ownedHttpArchiveCancel',
+      '  ' + probe + '.archiveActualOriginal(original, writer, "pipe"); command.observe(original); original = undefined as never; return command.ready;\n}\nexport function ownedHttpArchiveCancel');
+    source = replace(source, '  command.observe(original); original = undefined as never; return command.ready;\n}\nexport function ownedHttpArchiveAbort',
+      '  ' + probe + '.archiveActualOriginal(original, writer, "cancel"); command.observe(original); original = undefined as never; return command.ready;\n}\nexport function ownedHttpArchiveAbort');
+
     source = 'import { bodyBudgetCharged as __publicCharged, bodyBudgetBytes as __publicLimit } from "./body-budget.ts";\n' + source;
     source = replace(source, 'const replacement = this.owner.funding.replace(this.owner.funding.bytes + high - this.owner.publicCaptureHighWater);\n      if (!replacement) throw identityFailure("limit");',
       'if (' + probe + '.consumerMode === "public-capacity-refusal" && !' + probe + '.consumers.public.refusals) '
