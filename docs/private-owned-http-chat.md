@@ -1,5 +1,323 @@
 # Private owned HTTP Chat staging
 
+### Global STATIC census proposal — application source 123d79c
+
+**The proposed complete fixed-source debit is S=941578 bytes. It is not an
+adopted code operand or a whole-capacity qualification.** Source:
+`123d79c080a8d170704737f3beef8b2caa7d023e`, with the same application bytes as
+`886c4fd9b480ed78312f7a19915231ab6eb105d0`. The latter repairs exactly twelve
+provider receiver-guard references. The successor removes only a mirrored
+source-text test and corrects its documentation.
+
+ROOT_OPERATIVE_STATIC_SOURCE_DERIVED_DEBIT_2026_11_11_0905 supersedes the earlier
+coordinator-authored65536 ceiling. The existing code still reserves65536.
+A separately reviewed/adopted S would be a permanent once-only debit on the
+same100663296-byte COMMON counter. It is not another arena or request quota.
+It reduces available shared headroom after activation, including for ordinary
+requests. Ordinary-only preactivation does not activate this charge. No capacity
+parity, admission, failed-ticket reduction, ACTIVE128/SYNC512 or runtime result
+follows. Module initialization/bootstrap is not retroactively prepaid by the
+later claim. Its construction contexts/descriptors and the protected-use
+admission cut remain separate qualification work.
+
+The earlier consolidation plans and65536 fit statements below are historical.
+Optional member, field and owner-collocation work is a follow-up only. The
+bounded screen found168 candidate member fusions (7348 target/name bytes
+before replacements), including39 one-call cases (1638 bytes); no such credit
+or change enters this census. No318-field change or128-byte inheritance
+cleanup is implemented.
+
+**Source and accounting basis.** The32 participating application modules are
+compared with exact main `7b87537df59c39ae1bae0cfa748208572fa4d19f`.
+The SHA256 of ordered `path + NUL + rawSource + NUL` is
+`31594e6cce22154444360360272b63816ece3ffc390ee7decd656bb8543cded5`.
+Builtin TypeScript stripping and balanced executable-token inspection read
+source only. No application module or repository dependency was evaluated.
+The original STATIC three-product callable and eight-product class macros
+remain unchanged. The table expands separately created records/Lists/objects
+outside those macros; it applies no I/O48-byte own-attribute supplement or
+24-byte I/O header. No source-code text is charged as payload.
+
+| Exclusive fixed-source family | C | P | N | U | Bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| definitions |1601|4082|0|49472|144408|
+| module scopes |32|32|0|0|512|
+| ordinary prototypes |1388|4858|694|13880|83280|
+| implicit initializers |148|296|0|0|3552|
+| initializer names |0|148|148|1213|4794|
+| field records |359|718|571|3237|19658|
+| class lists |70|429|0|0|3992|
+| private environments |70|70|35|0|1400|
+| class inner bindings |0|35|0|700|1680|
+| accessor key payloads |0|0|0|337|674|
+| materialized class fields |0|14|7|101|370|
+| module scalar phases |0|0|106|0|848|
+| module string values |0|0|0|366|732|
+| fixed arrays |6|91|44|530|2188|
+| entry object |2|6|1|5|82|
+| registry headers |45|60|15|0|960|
+| static charge |2|5|2|4|80|
+| regex operands |0|0|8|66|196|
+| fixed code operands |0|0|29363|190000|614904|
+| pinned + readiness |381|1514|2005|13034|57268|
+| **Total, B=0** |**4104**|**12358**|**32999**|**272945**|**941578**|
+
+Thus `8*(4104+12358+32999)+2*272945=941578`. The non-pinned rows are
+884310; the corrected pinned component is57268, including its one P0.
+The proposed increment above the current65536 claim is876042. These are
+logical application-custody units, not engine heap measurements. The table
+takes no healthy-only disposal, optional redesign, interning, function-name
+shortening or request-lifetime credit.
+
+**Definition and property containment.** The carried144408 component contains
+1496 callable definitions/templates (721 declarations,546 methods,39 getters,
+22 setters,168 arrows),35 classes,668 runtime import references and247 module
+variables. Its5683 products and49472 name units are unchanged by the guard fix.
+Constructors are inside the class macro; their bodies are not extra callable
+targets. Each import is a reference to its existing target, never another
+function target. Type-only imports are erased.
+
+Of the721 declarations,694 ordinary declarations are module-created,
+25 are async and two ordinary declarations are invocation-local. Each of the
+694 ordinary declarations creates a separate prototype through
+[MakeConstructor](https://tc39.es/ecma262/2026/multipage/ordinary-and-exotic-objects-behaviours.html#sec-makeconstructor).
+Outside the frozen function macro, its prototype object/empty private-elements
+List, Prototype/Extensible/PrivateElements links, and the two constructor/
+prototype key-value relationships give C2/P7/N1/U20=120. This adds83280.
+The two local prototypes are execution-owned; async declarations create no
+ordinary constructor prototype. The35 class prototypes and their constructor/
+prototype relationships are already in the class macro and are not added here.
+The61 accessor functions have39 distinct unprefixed property keys (337 units);
+their prefixed function-name payloads remain in the original callable row.
+Only that additional key payload is added; their macro-owned property
+positions are not charged twice.
+
+The32 participating logical module scopes and outer links are C32/P32.
+The class macro's logical class scope/outer link is distinct from the new
+private environment record and empty Names List created for each of the35
+module-level classes (C2/P2/N1, with null outer private environment).
+Each also has its internal class-name binding, separate from its module
+binding:35 positions and700 name units. Existing shared code/module targets
+outside the covered additions retain their prior owner. This census does not
+clone the Worker realm, intrinsic prototypes, ordinary helper graph or loader.
+
+**Class-field definitions.** The359 new instance declarations have147
+initializers and212 empty initializer values. Their records are C359/P718/
+N571/U3237: two specification fields per record, each name value, and each
+empty initializer value. No object-header/PrivateElements supplement applies
+to these specification Records. Thirty-five new classes retain Fields and
+PrivateMethods Lists plus their constructor links; those Lists have359 added
+field entries across the new classes and the existing JsonAdmission class.
+The existing JsonAdmission List/header is not created again: only its four
+new record/entry positions are counted. The total C70/P429 includes the35
+empty PrivateMethods Lists and their links. There are no new ECMAScript
+private-name entries.
+
+There are148 initializer definitions including the one static initializer.
+Each uses the unchanged three-product definition template (target, lexical
+scope link and home-object link). Its distinct ClassFieldInitializerName
+relationship adds P1/N1 and its actual field-name units; all148 names total1213.
+These synthetic functions have no separately assigned public function name.
+The field record's Initializer reference is a separate retained edge.
+The source retains no static-field definition record after class evaluation;
+the static initializer's fixed definition remains counted, while its
+evaluation objects stay in bootstrap execution.
+[ClassFieldDefinitionEvaluation](https://tc39.es/ecma262/2026/multipage/ecmascript-language-functions-and-classes.html#sec-runtime-semantics-classfielddefinitionevaluation)
+and ClassDefinitionEvaluation specify these records and Lists.
+
+| Class with added instance fields | Fields | Initializers | Field-name units |
+| --- | ---: | ---: | ---: |
+| PrivatePreflightState |35|13|341|
+| UploadOwner |15|6|140|
+| OwnedSinkVoidCommand |6|2|41|
+| OwnedRevalidationRpc |20|10|165|
+| OwnedArchiveWrite |21|7|156|
+| OwnedSinkRegistration |2|1|16|
+| OwnedProviderFetch |11|5|111|
+| OwnedPreflightAcquisition |4|3|34|
+| OwnedContinuationAcquisition |7|4|52|
+| OwnedMaterializationAcquisition |4|3|34|
+| OwnedLedgerCommand |13|4|116|
+| OwnedBudgetSequence |6|4|48|
+| OwnedLedgerAck |20|13|190|
+| OwnedTerminalOperation |5|1|67|
+| OwnedAccountingTerminal |12|8|99|
+| OwnedPublicReader |4|2|45|
+| OwnedStatusReader |21|6|188|
+| PrivateMaterializationState |35|14|340|
+| OwnedReaderDriver |20|4|219|
+| CodecReader |8|1|82|
+| GenericUsageReader |4|1|25|
+| OwnedNormalizerReader |10|4|99|
+| OwnedAcceptedUsage |12|6|91|
+| OwnedChatUsage |7|0|58|
+| OwnedGenericChatUsage |7|1|57|
+| JsonAdmission |4|2|50|
+| OwnedHttpIntakeIo |17|8|165|
+| OwnedSoftBudget |8|2|56|
+| OwnedStatusController |4|2|37|
+| OwnedVeniceSource |8|3|61|
+| OwnedVeniceEvents |9|7|54|
+| **Total** |**359**|**147**|**3237**|
+
+The seven materialized static properties are requests, sinkOwners,
+revalidations, registryFunding, requestCount, privateUsageAccumulators and
+ownedFrameConsumers: P14/N7/U101=370 across their primitive/undefined phases.
+The first four are declared-only fields but their actual later writes create
+properties; they are included. Their registry/charge targets have separate
+owners. The three emitted static declarations add no extra target beyond this
+row and the one initializer definition.
+
+**Fixed data and shared container containment.** The247 module bindings divide
+into150 borrowed values,44 lazy undefined bindings,46 numeric values, three
+arrays, two owned strings, one entry object and one Boolean. The106 primitive
+alternatives are44+46+2+1, five borrowed CORS strings and eight optional native
+getter captures. The two new stored string values have366 units. The existing
+CORS payload and native function/prototype targets are borrowed, not cloned;
+their new reference bindings remain in the definition row. Literal operands
+and initialized binding/field values are separate fixed representations.
+
+The three arrays are sinkKinds (24 entries,228 string units,38 index-name
+units), ownedProxyStrippedHeaders (14 entries,228 string units,18 index-name
+units), and ownedByteNoArguments (empty). Including all three length properties,
+their C6/P91/N44/U530=2188 consists of the three objects and private-element
+Lists, nine internal links,82 own key/value positions, primitive element/
+length/extensibility occurrences and actual index/length/value names.
+The entry object adds C2/P6/N1/U5=82 beyond its fetch method macro: that macro
+already owns one fetch property position and its five-unit name. The queue
+reference does not clone the ordinary queue function.
+
+The following15 containers survive as empty containers after their entries
+retire. Each header is C3/P4/N1=64: object, empty PrivateElements List,
+native data List, Prototype/Extensible/PrivateElements/data links and
+extensibility value. Entries remain with their genuine request/family owner.
+
+| Module | Permanent container | Kind |
+| --- | --- | --- |
+| credential-preflight-source.ts | privatePreflights | WeakMap |
+| credential-preflight-source.ts | privatePreflightReaders | WeakMap |
+| http-identity-owner.ts | normalizations | WeakMap |
+| http-identity-owner.ts | normalizationOutputs | WeakMap |
+| http-identity-owner.ts | genericUsageChildren | WeakMap |
+| http-identity-owner.ts | genericUsageOutputs | WeakMap |
+| http-identity-owner.ts | ownedBudgetLegs | WeakMap |
+| identity-admission.ts | privateIdentityWireLengths | WeakMap |
+| identity-admission.ts | privateMaterializations | WeakMap |
+| identity-admission.ts | privateMaterializationReaders | WeakMap |
+| provider-templates.ts | privateConfigurations | WeakMap |
+| proxy-response.ts | ownedAcceptedUsage | WeakMap |
+| soft-budget.ts | ownedSoftBudgets | WeakMap |
+| token-usage.ts | OwnedUsageRegistrations.ownedFrameConsumers | WeakMap |
+| token-usage.ts | OwnedUsageRegistrations.privateUsageAccumulators | WeakSet |
+
+Refundable root, credential/cache, provider, pricing, codec and cohort
+container groups retain their existing separate registry owners; this row
+does not add their targets. The permanent ExactBodyCharge instance is
+C2/P5/N2/U4=80, including its empty PrivateElements List and held key/value.
+Its singleton binding is already in the247-variable row. The source class
+and COMMON counter remain the existing body-budget targets. The held numeric
+value and direct numeric claim operand have the same tariff if ROOT later
+adopts S; that future substitution creates no extra singleton or code binding.
+
+The outside-macro object census applies the16-byte PrivateElements slot/List
+pair to694 ordinary prototypes, three arrays, the entry object,15 persistent
+registry containers and the permanent charge. It does not add that pair to
+specification Records or reprice frozen function/class/Promise macros.
+The pinned component already includes its own28-object correction.
+
+**Fixed code operands.** ROOT's adopted six-label convention counts decoded
+source-operand occurrences, without interning or comments/types/regex bodies.
+Application template fragments and regex pattern/flag operands are stated
+separately because these sources have them. New definition/initializer scopes
+are unioned with84 changed existing lexical scopes (7593 inserted/replaced
+executable tokens); overlapping class/function spans are counted once.
+Declaration names owned by a definition/import/module-binding macro are not
+again local declaration-name operands. A bound reference resolves its existing
+binding; it is not a new global-name operand or another binding target.
+
+| Application code metadata | N | U | Bytes |
+| --- | ---: | ---: | ---: |
+| Decoded quoted literal operands |2264|22986|64084|
+| Fixed property-key operands |14349|111890|338572|
+| Numeric/Boolean/null operands |4788|0|38304|
+| Parameter/local/catch declaration-name operands |5552|33679|111774|
+| Fixed global-lookup name operands |2317|20565|59666|
+| New export aliases |0|0|0|
+| Untagged template fragments, including empty fragments |93|880|2504|
+| **Code operand subtotal** |**29363**|**190000**|**614904**|
+| Four regex pattern/flag pairs, separately |8|66|196|
+
+The twelve guard substitutions remove N12/U180=456 from the old unresolved
+global-lookup operand row. Their replacements resolve the already-counted
+ownedHttpIdentityFailure import; no import/target credit follows. There are
+no tagged-template caches, new application Symbol.for entries, new namespace
+objects or module-created RegExp objects. The four regex literals create their
+matcher/instance state on invocation; those products remain execution-owned.
+Their fixed pattern/flag source operands are the196-byte row, not an arbitrary
+regex-source-length allowance.
+
+| Application module | Callables | Classes | Imports | Variables | Definition bytes | Code operand bytes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| access-json.ts |0|0|0|0|0|332|
+| accounting.ts |2|0|26|0|1794|4728|
+| authority.ts |1|0|1|0|150|268|
+| content-retention.ts |1|0|2|0|182|242|
+| correlation.ts |1|0|0|2|160|124|
+| credential-cache.ts |15|0|7|4|1798|10658|
+| credential-preflight-source.ts |63|1|18|3|4620|21212|
+| credential-preflight.ts |107|0|32|10|8944|62144|
+| gmi-organization-binding.ts |11|0|12|2|1404|6734|
+| grant-credentials.ts |2|0|4|0|384|720|
+| http-identity-owner.ts |555|18|195|78|51982|223490|
+| identity-admission.ts |61|1|11|12|4598|24416|
+| index.ts |5|0|21|1|1290|1628|
+| json-body.ts |56|0|7|16|4118|19356|
+| native-errors.ts |4|0|0|4|448|468|
+| pricing.ts |21|0|7|10|2234|13228|
+| provider-auth.ts |4|0|11|0|822|1156|
+| provider-templates.ts |13|0|2|7|1414|4030|
+| providers.ts |29|0|9|5|3076|8946|
+| proxy-accounting.ts |31|1|27|3|4170|22070|
+| proxy-auth.ts |8|0|3|2|852|2268|
+| proxy-completion.ts |85|2|1|48|7140|22528|
+| proxy-response.ts |166|6|77|7|14436|51210|
+| proxy-selection.ts |3|0|6|0|546|3208|
+| proxy-upstream-request.ts |4|0|8|0|652|4376|
+| proxy.ts |134|1|111|13|15756|68476|
+| response-control-authorization.ts |4|0|14|2|1312|2954|
+| soft-budget.ts |44|2|7|1|2894|6456|
+| token-usage.ts |1|1|6|1|472|2638|
+| utils.ts |0|0|0|5|180|308|
+| venice-chat-authority.ts |12|0|12|2|1620|5302|
+| venice-chat-runtime.ts |53|2|31|9|4960|19230|
+| **Totals** |**1496**|**35**|**668**|**247**|**144408**|**614904**|
+
+This per-module table decomposes those two global rows; it is not added again
+to S. Structural/table/regex/pinned rows remain in their separately named
+global rows above.
+
+**Pinned closure and exclusions.** The adopted9-module57268 row replaces the
+uncertified legacy281-product row exactly once. Its C378/P1505/N1997/U13034
+gives57108, plus P0=160. Its shared defs namespace, adapter prototype,13 symbol
+registry entries and shared registry header are assigned there once. No
+application module above adds a second copy. The corrected28-object448-byte
+PrivateElements supplement is already inside57268. Pinned parser instances,
+feeds, continuations, results, initialization contexts/descriptors/capability
+and caller reactions remain execution-owned, as do per-invocation application closure instances,
+bound handlers, source controllers, instance properties, argument Lists,
+active frames, resolver/Promise/reaction work and request DATA.
+
+**Review/implementation gate.** S is submitted as a source-derived census
+proposal for independent review. No numeric operand, bootstrap placement,
+family allowance or R_failed replacement has changed. Exact S-1/S refusal,
+single publication, unchanged counter/effects on refusal, permanent retention
+through UNKNOWN and ordinary-after-activation headroom witnesses remain
+required after a separately adopted implementation. Whole DATA/COMMON,
+ACTIVE128/SYNC512, complete runtime-family inventories and hosted qualification
+remain OPEN. The historical527/529 persistent-layout rejection is not revived
+as a current persistent-storage limit.
+
+
 ### Private provider receiver guard name repair — source-only partial
 
 Twelve missing-receiver guards in `providers.ts` now call the already imported
@@ -659,6 +977,36 @@ where already expanded. This gives32 additional index bytes for the preclaim
 two-scalar-entry component (254 becomes286), without changing its representation
 or enabling an admission. Callback-time insertion grants no new funding.
 
+### Failed-producer construction proposal — pending independent closure
+
+The source3 proposal at8608 separates the accepted retained Error component
+from construction. The retained component remains
+`E=856+4M+4C+2G+h*(126+2H)`; it is not a construction bound.
+The eligible code lengths are20,21,28,30,24 (sum123); G<=1048576 and
+H<=4096 follow their existing admission. A string message argument has
+V<=1048576, but the actual admitted argument is not necessarily a string.
+Native Error conversion of an admitted array can produce a larger message:
+
+`M<=2097152+26*32768=2949120`.
+
+The two700000-unit-string array witness produces1400001 units. This is a
+derived conversion ceiling, not a new accepted-shape limit or truncation.
+Nullish input retains the existing33-unit fallback; a conversion failure
+before businessFailure assignment remains a non-business metadata failure.
+
+The proposed four APP environment/arguments/call-List construction union is
+`3892+24*(7+p-2h)+12C+6V+6M+12G`, with p indicating primitive producer input,
+h indicating a shared header, and V the input-string length or zero.
+The source3 eligibility-array target component is748; additional named
+call Lists contribute `176+8p+2*(V+M+C)`. These are proposals pending
+independent review. Descriptor/freeze interfaces belong inside the still-open
+Nnative construction/evaluation row and must not be added again as if that
+row omitted them. The qualified message-array depth is at most22 under the
+existing complete-response depth24 profile. No constructor in this slice
+adds a Promise or timer; existing source, receipt and caller custody remains
+additive. Neither these APP expressions nor the retained E permits R_failed
+replacement or any family reservation change.
+
 ### Carried fba8 budget caller APP component
 
 The reviewed fba8 caller component uses L<=4, D<=L, K<=L-1, Q<=K,
@@ -684,23 +1032,30 @@ The adopted J component follows; no completed Wbudget reservation is introduced.
 #### Adopted ECMA2026 ArrayIterator component J
 
 For the three verified budget sites only, the adopted normative component is
-`J(n)=7394+204*I(n>0)+34*I(n>=2)`,0<=n<=4:
-J(0)=7394, J(1)=7598, J(2..4)=7632.
+`J(n)=7410+204*I(n>0)+34*I(n>=2)`,0<=n<=4:
+J(0)=7410, J(1)=7614, J(2..4)=7648.
 
 | Constituent | Products / condition | Bytes |
 | --- | --- | ---: |
 | Retained iterator custody |S=354+202*I(n>0)|354 or556|
 | Bounded native working state |C52/P499/N264, including106 positions and106 primitive occurrences|6520|
-| Construction/context/List/descriptor/Completion |C9/P30/N26|520|
+| Construction/context/List/descriptor/Completion |C9/P31/N27|536|
 | Numeric representation |2*I(n>0)+34*I(n>=2)|0,2 or36|
 
 The sites are reserve allSettled at length L, its result for-of at length L,
 and the selected dispatch D or nonempty rollback K branch. The rollback source
 anchor is immutable fba8 accounting.ts line309. Keeping all three envelopes
-additive gives at most22896, without reuse credit. Current and next targets
+additive gives at most22944, without reuse credit. Current and next targets
 remain distinct until their actual last use; no cumulative iteration history
 is retained. The published ECMA2026 direct three-slot ArrayIterator protocol
 supplies this row, not a generator or additional APP callbacks/jobs.
+
+ROOT_ADOPTED_HTML_INCUMBENT_COUNTER_COMPONENT_0928 adds P1/N1=16
+for the actual exposed JavaScript context: its56-byte row becomes72, and
+the construction/context component changes520 to536. Count that counter once
+per distinct context, not per semantic activation. No blanket K/T/H repricing
+follows. Any context already expanded by another row keeps its counter there
+once; a timer waiting algorithm is not automatically a JavaScript context.
 
 Retained custody and bounded native working state remain different categories.
 This payment is not an ACTIVE/SYNC exemption or whole-window proof. Input/output
