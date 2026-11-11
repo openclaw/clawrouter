@@ -9,7 +9,7 @@ import { chargeLedgerNamespace, ingestUsageNamespace, settleLedgerNamespace, mus
 import { HttpError, randomId } from "./utils.ts";
 import { accountingAdmissionFailure, accountingIdentity, admitAccountingJson, accountingNumberCapacity, copyAccountingJson } from "./json-body.ts";
 import type { PricingGap } from "./pricing.ts";
-import { checkOwnedHttpSinkOwner, ownedHttpReserveAcknowledgment, ownedHttpDispatchAcknowledgment, ownedHttpChargeAcknowledgment, ownedHttpSettleAcknowledgment, ownedHttpIngestAcknowledgment, beginOwnedHttpBudgetReserves, claimOwnedHttpBudgetReserve, acceptOwnedHttpBudgetReservation, selectOwnedHttpBudgetRollback, selectOwnedHttpBudgetDispatch, finishOwnedHttpBudgetBranch, checkOwnedHttpBudgetDispatch, claimOwnedHttpBudgetDispatch, claimOwnedHttpBudgetRollback, bindOwnedHttpBudgetRollbackRequest, failedOwnedHttpBudgetRollback, claimOwnedHttpBudgetQueue, bindOwnedHttpBudgetRollbackSinks, ownedHttpQueueSend, recordOwnedHttpBudgetDenial, isOwnedHttpBudgetDenial, type OwnedHttpSinkOwner } from "./http-identity-owner.ts";
+import { checkOwnedHttpSinkOwner, ownedHttpReserveAcknowledgment, ownedHttpDispatchAcknowledgment, ownedHttpChargeAcknowledgment, ownedHttpSettleAcknowledgment, ownedHttpIngestAcknowledgment, beginOwnedHttpBudgetReserves, claimOwnedHttpBudgetReserve, acceptOwnedHttpBudgetReservation, selectOwnedHttpBudgetRollback, selectOwnedHttpBudgetDispatch, finishOwnedHttpBudgetBranch, checkOwnedHttpBudgetDispatch, claimOwnedHttpBudgetDispatch, claimOwnedHttpBudgetRollback, bindOwnedHttpBudgetRollbackRequest, failedOwnedHttpBudgetRollback, claimOwnedHttpBudgetQueue, readOwnedHttpBudgetReserveBinding, readOwnedHttpBudgetDispatchBinding, captureOwnedHttpBudgetRollbackSinks, ownedHttpQueueSend, recordOwnedHttpBudgetDenial, isOwnedHttpBudgetDenial, type OwnedHttpSinkOwner } from "./http-identity-owner.ts";
 
 export interface AccountingSinks {
   readonly budget: Env["BUDGET_LEDGER"];
@@ -169,7 +169,7 @@ export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capabili
     try {
     if (reservation.reservations.length) {
       const cleanupFailures: BudgetSettlementFailure[] = [];
-      try { await settleBudgetInternal(options.ownedHttp !== undefined ? ownedBudgetRollbackSinks(env, options.ownedHttp)
+      try { await settleBudgetInternal(options.ownedHttp !== undefined ? ownedBudgetRollbackSinks(env, options.ownedHttp, reservation)
         : accountingSinks(env, options.ownedHttp), reservation, 0, options.search, cleanupFailures); }
       catch {
         const error = new HttpError(503, "accounting_unavailable", "Budget reservation rollback could not finish; retry after accounting recovers.");
@@ -186,16 +186,15 @@ export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capabili
   if (options.ownedHttp !== undefined) selectOwnedHttpBudgetDispatch(options.ownedHttp, plan, reservation);
   return reservation;
 }
-function ownedBudgetRollbackSinks(env: Env, sink: OwnedHttpSinkOwner): AccountingSinks {
-  const sinks = accountingSinks(env, sink);
-  bindOwnedHttpBudgetRollbackSinks(sink, env, sinks); return sinks;
+function ownedBudgetRollbackSinks(env: Env, sink: OwnedHttpSinkOwner, reservation: BudgetReservation): AccountingSinks {
+  return captureOwnedHttpBudgetRollbackSinks(sink, env, reservation);
 }
 
 export async function reserveLedgerIntent(env: Env, intent: BudgetReservationIntent, signal?: AbortSignal, search?: MiniMaxSearchOperation, ownedHttp?: OwnedHttpSinkOwner, ordinal?: number): Promise<LedgerBudgetReservation> {
   if (ownedHttp !== undefined) {
     checkOwnedHttpSinkOwner(ownedHttp);
     const right = claimOwnedHttpBudgetReserve(ownedHttp, intent, ordinal!);
-    const result = await ownedHttpReserveAcknowledgment(ownedHttp, env.BUDGET_LEDGER, intent.objectName, intent.request, signal, right);
+    const result = await ownedHttpReserveAcknowledgment(ownedHttp, readOwnedHttpBudgetReserveBinding(ownedHttp, env, intent, ordinal!, right), intent.objectName, intent.request, signal, right);
     if (!result.ok) throw new Error(`budget reserve returned ${result.status}`);
     if (typeof result.allowed !== "boolean") throw new Error("budget reserve was not acknowledged");
     if (!result.allowed) {
@@ -251,7 +250,7 @@ export async function markBudgetDispatched(env: Env, reservation: BudgetReservat
   const results = await Promise.allSettled(reservation.reservations.filter(item => !item.dispatched).map(async (item) => {
     if (ownedHttp !== undefined) {
       const right = claimOwnedHttpBudgetDispatch(ownedHttp, item);
-      const response = await ownedHttpDispatchAcknowledgment(ownedHttp, env.BUDGET_LEDGER, item.objectName, item.reservationId, signal, right);
+      const response = await ownedHttpDispatchAcknowledgment(ownedHttp, readOwnedHttpBudgetDispatchBinding(ownedHttp, env, item, right), item.objectName, item.reservationId, signal, right);
       if (!response.ok || response.dispatched !== true) throw new Error("budget dispatch was not acknowledged");
       return;
     }

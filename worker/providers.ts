@@ -608,6 +608,7 @@ interface OwnedHttpProviderCommand {
   input?: import("./authority-admission.ts").AdmissionSelection; signal?: AbortSignal;
 }
 let ownedHttpProviderCommands: WeakMap<object, OwnedHttpProviderCommand> | undefined;
+export function hasOwnedHttpProviderCommand(permit: object): boolean { return ownedHttpProviderCommands?.has(permit) === true; }
 export function matchesOwnedHttpProviderConfiguration(cap: OwnedHttpRequest, permit: object, preparation: PreparationAdmission): boolean {
   const command = ownedHttpProviderCommands?.get(permit);
   return !!command && command.cap === cap && command.preparation === preparation && !!command.selected
@@ -709,7 +710,7 @@ export async function prepareOwnedHttpProvider(cap: OwnedHttpRequest, request: R
   ownedHttpProviderCommands!.delete(permit); ownedHttpSelectionPermits!.delete(permit);
   if (!--ownedHttpSelectionPermitCount) { ownedHttpSelectionPermits = undefined; ownedHttpProviderCommands = undefined; }
   if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "owned HTTP provider cleanup");
-  if (hasPrimary) throw primary;
+  if (hasPrimary) { completeOwnedHttpFailedAttemptProvider(cap, request, permit, primary); throw primary; }
   completeOwnedHttpAttemptProvider(cap, permit);
 }
 
@@ -817,6 +818,11 @@ function completeOwnedHttpAttemptProvider(cap: Parameters<typeof import("./proxy
   const receiver = ownedHttpRequestReceiver(cap);
   if (!receiver) throw identityFailure("protocol");
   return receiver.completeOwnedHttpAttemptProvider(cap, permit);
+}
+function completeOwnedHttpFailedAttemptProvider(cap: OwnedHttpRequest, request: Request, permit: object, failure: unknown): void {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw ownedHttpIdentityFailure("protocol");
+  receiver.completeOwnedHttpFailedAttemptProvider(cap, request, permit, failure);
 }
 
 function reserveOwnedHttpSerialization(cap: Parameters<typeof import("./pricing.ts").reserveOwnedHttpSerialization>[0], body: Parameters<typeof import("./pricing.ts").reserveOwnedHttpSerialization>[1]): ReturnType<typeof import("./pricing.ts").reserveOwnedHttpSerialization> {

@@ -323,6 +323,7 @@ interface OwnedHttpCredentialRun {
   cap?: OwnedHttpCredential; command?: ReturnType<typeof claimOwnedHttpCredential>;
   value?: UpstreamGrant; original?: Promise<void>; claimed: boolean; retained: boolean; borrowed?: OwnedDestinationValue; completion: number;
   materializationState?: number; metadataOrigin?: number; businessFailure?: import("./utils.ts").HttpError; fallback?: import("./utils.ts").HttpError;
+  failedCustodyPhase?: number;
 }
 let ownedHttpCredentialPermits: WeakMap<object, OwnedHttpCredentialRun> | undefined;
 let ownedHttpCredentialRegistry: GenerationConsumptionLease | undefined;
@@ -346,6 +347,14 @@ export function ownsOwnedHttpCredentialBusinessFailure(permit: object, cap: Owne
 export function hasRetiredOwnedHttpCredentialSource(permit: object, cap: OwnedHttpCredential): boolean {
   const run = ownedHttpCredentialPermits?.get(permit);
   return !!run && run.cap === cap && (run.materializationState === undefined || run.materializationState === 2);
+}
+export function finishOwnedHttpFailedProviderRun(permit: object, cap: OwnedHttpCredential): void {
+  const run = ownedHttpCredentialPermits?.get(permit);
+  if (!run || run.cap !== cap || ownedHttpCredentialOwners?.get(cap) !== run || !run.claimed || run.retained
+    || run.failedCustodyPhase !== 2 || run.materializationState !== 2 || run.businessFailure === undefined
+    || run.value !== undefined || run.borrowed !== undefined || run.original !== undefined || run.command !== undefined)
+    throw identityFailure("protocol");
+  run.failedCustodyPhase = 3;
 }
 export function hasJoinedOwnedHttpCredentialValue(permit: object, cap: OwnedHttpCredential, value: UpstreamGrant | null): boolean {
   const run = ownedHttpCredentialPermits?.get(permit);
@@ -444,6 +453,9 @@ export async function prepareOwnedHttpGrantCredentials(cap: OwnedHttpCredential)
     // Only successful source/HIT consumption and every cache finally tail may
     // establish completion. Clearing run.original on a failed path never does.
     if (run?.retained && !hasPrimary && !failures.length && run.completion) run.completion |= 4;
+    if (run?.failedCustodyPhase === 1 && hasPrimary && !failures.length && run.claimed && !run.retained
+      && run.businessFailure !== undefined && run.value === undefined && run.borrowed === undefined
+      && run.original === undefined && run.command === undefined) run.failedCustodyPhase = 2;
     run = undefined;
     if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "owned foreground credential cleanup");
   }
@@ -514,6 +526,9 @@ export function retireOwnedHttpGrantCredentials(cap: OwnedHttpCredential): boole
   const borrowed = run.borrowed; run.borrowed = undefined;
   const failures: unknown[] = [];
   if (borrowed) { borrowed.borrowers--; try { retireOwnedValue(borrowed); } catch (error) { failures.push(error); } }
+  if (!failures.length && canFinishOwnedHttpCredential(cap, run)) {
+    run.businessFailure = undefined; run.fallback = undefined;
+  }
   let retired = false;
   try { retired = finishOwnedHttpCredential(cap, run); } catch (error) { failures.push(error); }
   if (!retired) {

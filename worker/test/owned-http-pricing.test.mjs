@@ -12,7 +12,7 @@ const observation = globalThis.__ownedJsonObservation = createOwnedJsonObservati
 globalThis.__ownedUsageWire = ownedUsageWire;
 const sourceHooks = registerHooks({ load(url, context, nextLoad) {
   const result = nextLoad(url, context);
-  if (!url.startsWith('file:') || !/(?:json-body|pricing|credential-preflight|credential-cache|proxy|proxy-accounting|proxy-response|proxy-completion|token-usage|http-identity-owner|venice-chat-runtime)\.ts$/.test(url)) return result;
+  if (!url.startsWith('file:') || !/(?:json-body|pricing|credential-preflight|credential-preflight-source|credential-cache|identity-admission|providers|proxy|proxy-accounting|proxy-response|proxy-completion|token-usage|soft-budget|http-identity-owner|venice-chat-runtime)\.ts$/.test(url)) return result;
   const source = typeof result.source === 'string' ? result.source : Buffer.from(result.source).toString('utf8');
   return { ...result, source: observeOwnedJsonSource(fileURLToPath(url), source) };
 } });
@@ -339,6 +339,64 @@ async function fixture(t, run, retained = false, variant = 'fireworks') {
   if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, 'owned pricing fixture outcomes');
   if (hasPrimary) throw primary;
 }
+
+// SOURCE_ONLY: these enter the real private router and DO-backed accounting.
+for (const position of [7, 8, 9]) for (const kind of ['undefined', 'opaque', 'internal', 'selected'])
+test(`private credential preclaim ${position} normalizes ${kind} before async custody`, async t => {
+  await fixture(t, async f => {
+    observation.consumerMode = `preclaim:${position}:${kind}`;
+    f.releases.push(() => { observation.consumerMode = 'normal'; observation.releasePreclaim(); });
+    const response = await f.request(payload({}));
+    await f.drain();
+    assert.equal(response.status, 503); assert.equal(JSON.parse(response.text).error.code, 'provider_unavailable');
+    const row = observation.preclaimState();
+    assert.deepEqual(row.trace, [7, 8, 9].slice(0, position - 6));
+    assert.equal(row.reasonReads, 0); assert.equal(row.reentries, 3); assert.equal(row.facts.length, 1);
+    assert.equal(row.facts[0].kind, 0); assert.equal(row.facts[0].undefinedReason, kind === 'undefined');
+    assert.equal(row.phase, 4); assert.equal(row.retired, true); assert.equal(row.bytes, 0); assert.equal(row.permitHeld, false);
+    assert.equal(row.selectedHeld, false); assert.equal(row.cacheClaimed, false);
+    assert.equal(f.sent.length, 0); assert.equal(f.calls.filter(item => item.kind === 'credential' && item.path === '/materialize').length, 0);
+    assert.equal(f.events.length, 1);
+  });
+});
+for (const [position, kind] of [[7, 'mismatch'], [8, 'capacity']])
+test(`private credential preclaim keeps genuine ${kind} priority and short circuit`, async t => {
+  await fixture(t, async f => {
+    observation.consumerMode = `preclaim:${position}:${kind}`;
+    f.releases.push(() => { observation.consumerMode = 'normal'; observation.releasePreclaim(); });
+    const response = await f.request(payload({})); await f.drain();
+    assert.equal(response.status, 503); assert.equal(JSON.parse(response.text).error.code, 'identity_admission_unavailable');
+    const row = observation.preclaimState();
+    assert.deepEqual(row.trace, [7, 8, 9].slice(0, position - 6)); assert.equal(row.facts.length, 0);
+    assert.equal(row.retired, true); assert.equal(row.bytes, 0); assert.equal(f.sent.length, 0);
+  });
+});
+for (const target of ['reserve', 'dispatch', 'rollback-budget', 'rollback-usage', 'rollback-queue'])
+for (const reason of ['undefined', 'opaque', 'forged'])
+test(`private budget binding ${target} rejects ${reason} with exact sequence custody`, async t => {
+  await fixture(t, async f => {
+    const control = await budgetSequence(f, { bindingFailure: target, bindingReason: reason });
+    const response = await f.request(payload({})); await f.drain();
+    assert.equal(response.status, 503);
+    assert.equal(JSON.parse(response.text).error.code, target === 'reserve' ? 'budget_store_unavailable' : 'accounting_unavailable');
+    const row = control.row;
+    assert.equal(row.bindingReasonReads, 0); assert.equal(row.bindingFailures.length, 1);
+    assert.equal(row.bindingFailures[0].primaryIsUndefined, reason === 'undefined');
+    assert.ok(row.bindingReentries > 0); assert.ok(row.rejectedRights >= 6 * row.bindingReentries);
+    assert.equal(f.sent.length, 0);
+    if (target === 'reserve') {
+      assert.equal(row.reserve.length, 3); assert.equal(row.settle.length, 3); assert.equal(row.dispatch.length, 0);
+      assert.deepEqual(row.settle.map(item => item.id).sort(), row.reserve.map(item => item.id).sort());
+      assert.ok(row.settle.every(item => item.cost === 0));
+    } else if (target === 'dispatch') { assert.equal(row.reserve.length, 4); assert.equal(row.dispatch.length, 3); }
+    else {
+      const count = { 'rollback-budget': 1, 'rollback-usage': 2, 'rollback-queue': 3 }[target];
+      assert.deepEqual(row.bindingReads.filter(item => item.phase === 'rollback').map(item => item.name),
+        ['BUDGET_LEDGER', 'USAGE_LEDGER', 'USAGE_QUEUE'].slice(0, count));
+      assert.equal(row.settle.length, 0); assert.equal(row.dispatch.length, 0);
+    }
+  });
+});
 
 async function budgetSequence(f, options) {
   const legs = options.legs ?? 4;

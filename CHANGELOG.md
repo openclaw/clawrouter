@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Bind private credential preclaim reads to the current foreground capability and provider tuple, normalize configuration failures to the existing fallback, and retain failed ownership through independent cleanup and UNKNOWN. Author Node/Workerd reentry and getter witnesses. Source-only partial: complete family reservations and a fixed static representation obstruction remain open.
+
+- Capture private reserve/dispatch/rollback bindings through exact sequence and leg rights, reject cross-leg getter reentry before effects, and normalize arbitrary getter throws before async retention. Preserve rollback namespace-mismatch queue recovery and ordinary helpers. Source-layout partial: complete caller/family funding and fifteen authored Workerd cases remain unqualified.
+
+- Normalize private soft-status configuration failures before async retention and record independent registration cleanup without replacing the primary. Reject repeated binding claims before getters and add six source-authored Workerd cases. Source-only partial; complete status I/O accounting and runtime qualification remain open.
+
+- Carry separate failed-credential source, cache and provider cleanup certificates through the existing retry port and clear producer failures at final retirement. Failed-ticket reduction remains gated on its complete numeric lifetime manifest; no early release or runtime qualification is claimed.
+
 - Adopt private credential/cache claims before binding lookup, reject reentrant reads, preserve UNKNOWN custody, and qualify retries through the actual materialization producer and current attempt port. Add 20 source-authored Workerd getter/reentry cases. Source-only partial: business-failure payload ownership across retries still blocks the four-attempt path; complete paid I/O manifests and runtime qualification remain open.
 
 - Bind private preflight, continuation and grant materialization to their exact producer inputs, serialized requests and signals; consume each stage before acquisition. Keep snapshot/inspect ordered within the genuine current operation and preserve ordinary payloads and I/O order. Add source-authored Node/Workerd substitution and replay witnesses. Complete family accounting and runtime qualification remain open.

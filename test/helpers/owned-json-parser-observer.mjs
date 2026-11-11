@@ -89,6 +89,9 @@ export function createOwnedJsonObservation() {
   const metadata = { entered: false, hooks: 0, versionGets: 0, stage: -1, factories: [0, 0, 0, 0, 0, 0], refused: -1, stages: [] };
   const archive = { pulls: 0, chunks: 0, maximumBacking: 0, hookAccesses: 0, puts: 0, nativeSettled: 0, thenCalls: 0, delivered: 0, released: false };
   const statusReaders = [], statusReleases = [];
+  let statusStartRoot, statusStartController, statusStartReason;
+  const statusStart = { trace: '', gets: 0, reasonReads: 0, reentries: 0, cleanup: 0, reports: 0, failures: [] };
+  let preclaim;
   const publicReaders = { ...consumers, captureCount: 0, captureTotal: 0, capturePeak: 0, liveCapture: 0, postSeal: 0, handoffs: 0, copies: 0, refusals: 0, refusedLive: 0, refusedHigh: 0, beforeLive: 0, beforeHigh: 0 }, intakeReaders = { ...consumers }, sourceReaders = { ...consumers };
   const normalizers = { ...consumers, doneGets: 0, valueGets: 0, eofValues: 0, trace: "", captured: 0, transfers: 0, postSeal: 0, maximumBacking: 0 };
   const publication = { active: false, entered: false, trace: "", hooks: 0, produced: 0, published: 0, factories: 0,
@@ -423,6 +426,64 @@ export function createOwnedJsonObservation() {
     reductionBlocked: [],
     preflightTransfers: { staged: 0, taken: 0, advanced: 0 },
     credentialBindingPosition: -1, credentialClaims: [], credentialReentry: undefined,
+    preclaimBegin(owner, cap, env, selected, reenter, rebank, identityFailure, selectedFailure, HttpError) {
+      if (!this.consumerMode.startsWith('preclaim:')) return;
+      if (preclaim) throw Error('preclaim fixture replay');
+      const [, target, kind] = this.consumerMode.split(':');
+      const state = preclaim = { owner, selected, users: selected.users, target: Number(target), kind,
+        trace: [], reasonReads: 0, reentries: 0, facts: [], restores: [], cleanup: 0, reports: 0, retired: false };
+      const reason = kind.includes('undefined') ? undefined : kind === 'internal' ? identityFailure('limit')
+        : kind === 'selected' ? selectedFailure(new HttpError(503, 'grant_refresh_failed', 'fixture foreign producer'), 'fixture')
+        : { payload: 'x'.repeat(2 * 1024 * 1024) };
+      state.reason = reason;
+      if (kind === 'opaque') for (const key of ['status', 'code', 'message', 'stack', 'headers', 'cause', 'then'])
+        Object.defineProperty(reason, key, { get() { state.reasonReads++; throw Error('preclaim reason inspected'); } });
+      let reads = 0;
+      for (const name of ['ACCESS_CONTROL', 'CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS']) {
+        const descriptor = Object.getOwnPropertyDescriptor(env, name);
+        const restore = () => { if (descriptor) Object.defineProperty(env, name, descriptor); else delete env[name]; };
+        state.restores.push(restore);
+        Object.defineProperty(env, name, { configurable: true, get() {
+          const position = name === 'ACCESS_CONTROL' ? 7 : ++reads === 1 ? 8 : 9;
+          state.trace.push(position);
+          if (position === state.target) {
+            for (const restore of state.restores) restore();
+            const before = owner.lease.bytes;
+            for (const action of [reenter, () => cap.dispose(), rebank]) {
+              let refused = false; try { action(); } catch { refused = true; }
+              if (!refused) throw Error('preclaim reentry accepted'); state.reentries++;
+            }
+            if (owner.lease.bytes !== before || selected.users !== state.users || owner.selected || owner.cachePermit)
+              throw Error('preclaim reentry changed custody');
+            if (kind === 'mismatch') return {};
+            if (kind === 'capacity') return ' '.repeat(17 * 1024 * 1024);
+            throw reason;
+          }
+          return descriptor?.get ? Reflect.apply(descriptor.get, env, []) : descriptor?.value;
+        } });
+      }
+    },
+    preclaimFact(parent, origin, undefinedReason) {
+      if (!preclaim || origin < preclaim.owner.failureOrigin + 224 || origin > preclaim.owner.failureOrigin + 332) return;
+      preclaim.root = parent;
+      preclaim.facts.push({ ordinal: Math.floor(origin / 32), kind: origin % 32, undefinedReason });
+      if (preclaim.kind === 'report' && origin % 32 === 0) { preclaim.reports++; throw undefined; }
+    },
+    preclaimRetire(owner) {
+      if (preclaim?.owner !== owner) return;
+      preclaim.cleanup++;
+      if (preclaim.kind.startsWith('cleanup-')) throw preclaim.reason;
+    },
+    preclaimRetired(owner) { if (preclaim?.owner === owner) preclaim.retired = true; },
+    preclaimState() {
+      if (!preclaim) return null;
+      const { owner, selected } = preclaim;
+      return { trace: preclaim.trace, reasonReads: preclaim.reasonReads, reentries: preclaim.reentries, facts: preclaim.facts,
+        cleanup: preclaim.cleanup, retired: preclaim.retired, phase: owner.preclaimPhase, bytes: owner.lease.bytes,
+        permitHeld: !!owner.preclaimPermit, selectedHeld: !!owner.selected, cacheClaimed: !!owner.cachePermit,
+        users: selected.users, initialUsers: preclaim.users, unknown: !!preclaim.root?.unknown, reports: preclaim.reports };
+    },
+    releasePreclaim() { if (preclaim) for (const restore of preclaim.restores) restore(); preclaim = undefined; },
     driverReads: 0, driverFactories: 0, intakeFactories: 0, retryPorts: [], credentialReductions: [], credentialCensuses: [], originalObservers: [],
     retainOriginalHandlers(cell, fulfilled, rejected) {
       this.originalObservers.push({ cell, fulfilled, rejected, role: cell.owner.constructor.name });
@@ -591,13 +652,76 @@ export function createOwnedJsonObservation() {
       rejectSubjects(root, replay ? 'replay' : kind, command, variants,
         kind === 'preflight' ? 'ACCESS_CONTROL' : kind === 'materialization' ? 'GRANT_CREDENTIALS' : undefined);
     },
+    statusStartPrepared(root, controller) {
+      if (!this.consumerMode.startsWith('status-start:')) return;
+      statusStartRoot = root; statusStartController = controller;
+      Object.assign(statusStart, { trace: '', gets: 0, reasonReads: 0, reentries: 0, cleanup: 0, reports: 0, failures: [], entered: false });
+      statusStart.start = Math.floor(controller.startOrigin / 32);
+      statusStart.cleanupOrigin = Math.floor(controller.startCleanupOrigin / 32);
+      if (statusStart.start === statusStart.cleanupOrigin) throw Error('status start origins alias');
+    },
+    statusStartEnter(controller, env, operation, identityFailure) {
+      if (!this.consumerMode.startsWith('status-start:') || statusStart.entered) return;
+      statusStart.entered = true;
+      if (controller !== statusStartController) throw Error('status start controller mismatch');
+      const mode = this.consumerMode.slice(13), budget = Object.getOwnPropertyDescriptor(env, 'BUDGET_LEDGER');
+      const config = Object.getOwnPropertyDescriptor(env, 'CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS');
+      statusStartReason = mode.includes('undefined') ? undefined : mode === 'forged' ? identityFailure('limit') : { payload: 'x'.repeat(2 * 1024 * 1024) };
+      if (mode === 'opaque') for (const key of ['status', 'code', 'message', 'headers', 'stack', 'cause', 'then'])
+        Object.defineProperty(statusStartReason, key, { get() { statusStart.reasonReads++; throw Error('status reason inspected'); } });
+      Object.defineProperty(env, 'BUDGET_LEDGER', { configurable: true, get() {
+        statusStart.trace += 'B';
+        if (budget) Object.defineProperty(env, 'BUDGET_LEDGER', budget); else delete env.BUDGET_LEDGER;
+        return budget?.get ? Reflect.apply(budget.get, env, []) : budget?.value;
+      } });
+      Object.defineProperty(env, 'CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS', { configurable: true, get() {
+        statusStart.trace += 'C'; statusStart.gets++;
+        if (config) Object.defineProperty(env, 'CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS', config); else delete env.CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS;
+        let rejected = false;
+        try { controller.start(env, operation); } catch { rejected = true; }
+        if (!rejected || statusStart.trace !== 'BC') throw Error('reentrant status start had effects');
+        statusStart.reentries++;
+        throw statusStartReason;
+      } });
+    },
+    statusStartAfterAbandon() {
+      if (!this.consumerMode.startsWith('status-start:')) return;
+      statusStart.cleanup++;
+      if (this.consumerMode.includes('cleanup-')) throw statusStartReason;
+    },
+    statusStartFact(root, record) {
+      if (root !== statusStartRoot || record.ordinal !== statusStart.start && record.ordinal !== statusStart.cleanupOrigin) return;
+      statusStart.failures.push({ ...record });
+      if (this.consumerMode === 'status-start:report' && record.ordinal === statusStart.start) { statusStart.reports++; throw undefined; }
+    },
+    statusStartState() {
+      return { ...statusStart, unknown: statusStartRoot?.unknown ?? false, funding: statusStartRoot?.funding.bytes ?? 0 };
+    },
     archiveFault,
     archivePrepared(writer) {
       archiveWriter = writer;
+      const fields = ['phase', 'used', 'primary', 'bucket', 'key', 'expiresAt', 'contentRef', 'large', 'archive',
+        'text', 'source', 'fixed', 'readable', 'writable', 'controller', 'signal', 'writing', 'putCommand',
+        'pipeCommand', 'cancelCommand', 'registration', 'root', 'cap', 'env', 'auth', 'selection', 'requestId',
+        'preparationOrigin', 'constructionOrigin', 'abortOrigin', 'lockOrigin', 'discardOrigin', 'followOrigin',
+        'deferredOrigin', 'startOrigin', 'startCleanupOrigin', 'reportOrigin'];
+      const commandFields = ['flags', 'subject', 'observation', 'resolve', 'reject', 'ready', 'owner', 'origin',
+        'installationOrigin', 'budget'];
+      const actual = Reflect.ownKeys(writer);
+      if (actual.length !== fields.length || actual.some(key => typeof key !== 'string' || !fields.includes(key)))
+        throw Error('archive manifest must cover the actual writer');
+      for (const command of [writer.putCommand, writer.pipeCommand, writer.cancelCommand]) {
+        const actual = Reflect.ownKeys(command);
+        if (actual.length !== commandFields.length || actual.some(key => typeof key !== 'string' || !commandFields.includes(key)))
+          throw Error('archive VOID positions must be preinstalled');
+      }
+      if (Reflect.ownKeys(writer.registration).length) throw Error('registration capability has hidden state fields');
       Object.assign(archiveFault, { calls: 0, observations: 0, touched: 0, entered: false, released: false,
         original: null, installation: null, thrown: null, didThrow: false, fulfilled: false, commandFulfilled: false,
         commandRejected: false, nativeFailed: false, unknown: false, before: writer.root.funding.bytes, after: 0, phase: 0,
-        originalOrdinal: -1, installationOrdinal: -1, reasonReads: 0, puts: 0, envGets: 0, cancelCalls: 0, awaitingBounded: false });
+        originalOrdinal: -1, installationOrdinal: -1, reasonReads: 0, puts: 0, envGets: 0, cancelCalls: 0, awaitingBounded: false,
+        layout: { writerFields: fields.length, writerNameUnits: fields.reduce((sum, name) => sum + name.length, 0),
+          commands: 3, commandFields: commandFields.length, commandNameUnits: commandFields.reduce((sum, name) => sum + name.length, 0) } });
       archiveFault.failures.length = 0;
       const [prefix, target, kind] = this.consumerMode.split(':');
       if (['archive-return', 'archive-install'].includes(prefix) && target === 'cancel') {
@@ -1189,6 +1313,13 @@ export function observeOwnedJsonSource(path, source) {
     source = replace(source, '    return 8 * (containers + 2 * members + entries + values) + 2 * units + 6 * run.command.key.length;',
       '    ' + probe + '.credentialCensuses.push({ containers, members, entries, values, units, keyUnits: run.command.key.length, completion: run.completion, originalCleared: run.original === undefined, retained: run.retained, borrowed: !!run.borrowed }); return 8 * (containers + 2 * members + entries + values) + 2 * units + 6 * run.command.key.length;');
   } else if (/[\\/]worker[\\/]credential-preflight\.ts$/.test(path)) {
+    source = replace(source, '  owner.preclaimPermit = providerPermit; owner.preclaimPhase = 1;',
+      '  owner.preclaimPermit = providerPermit; owner.preclaimPhase = 1; ' + probe + '.preclaimBegin(owner, cap, env, value, () => prepareOwnedHttpCredential(http, request, env, selected, providerPermit, force, signal), () => ownedHttpRequestReceiver(http)!.prepareOwnedHttpCredentialFailures(http, cap, request, env), identityFailure, selectedCredentialFailure, HttpError);');
+    source = replace(source, '    if (selected) releaseGenerationSelection(selected);',
+      '    ' + probe + '.preclaimRetire(owner); if (selected) releaseGenerationSelection(selected);');
+    source = replace(source, '  httpCredentials!.delete(cap); owner.http = undefined;',
+      '  ' + probe + '.preclaimRetired(owner); httpCredentials!.delete(cap); owner.http = undefined;');
+
     source = replace(source, '  try { return owner.env!.GRANT_CREDENTIALS; }',
       '  ' + probe + '.credentialBindingPosition = position; ' + probe + '.credentialClaims.push({ position, phase: owner.claimPhase, adopted: owner.cachePermit === permit && (permit as { claimed: boolean }).claimed, reentries: 0 }); ' + probe + '.credentialReentry = () => { const row = ' + probe + '.credentialClaims.at(-1)!; const before = owner.lease.bytes; for (const action of [() => claimOwnedHttpCredential(cap, permit), () => readOwnedHttpCredentialBinding(cap, permit, position), () => finishOwnedHttpCredential(cap, permit), () => cap.dispose()]) { let refused = false; try { action(); } catch { refused = true; } if (!refused) throw Error("credential getter reentry accepted"); row.reentries++; } if (owner.cachePermit !== permit || owner.lease.bytes !== before || !(permit as { claimed: boolean }).claimed) throw Error("credential reentry changed adoption"); }; try { return owner.env!.GRANT_CREDENTIALS; }');
     source = replace(source, '  finally { owner.bindingStage = position + 1; }',
@@ -1200,8 +1331,8 @@ export function observeOwnedJsonSource(path, source) {
       '  owner.stagedPreflight = undefined; ' + probe + '.preflightTransfers.taken++; return reply;');
     source = replace(source, '    advanceIdentitySource(owner.source, sent, reply.source, replySource);',
       '    if (http) { if (owner.stagedPreflight !== undefined || owner.preflightDelivered !== true) throw Error("preflight staged alias not consumed"); ' + probe + '.preflightTransfers.advanced++; } advanceIdentitySource(owner.source, sent, reply.source, replySource);');
-    source = replace(source, '    httpCredentials.set(cap, owner); (httpForegroundReservations ??= new WeakMap()).set(http, cap);',
-      '    httpCredentials.set(cap, owner); (httpForegroundReservations ??= new WeakMap()).set(http, cap); ' + probe + '.foreground(owner);');
+    source = replace(source, '    httpCredentials.set(cap, owner);',
+      '    httpCredentials.set(cap, owner); ' + probe + '.foreground(owner);');
     source = replace(source, '    owner.lease.replace(bytes); owner.reduction = 2;',
       '    const __before = owner.lease.bytes; let __rejected = 0; for (const __args of [[{}, request, cap, permit], [http, request, {}, permit], [http, request, cap, {}], [http, request, cap, permit]]) { try { reduceOwnedHttpPreparedCredential(...__args as [OwnedHttpRequest, Request, OwnedHttpCredential, object]); } catch { __rejected++; } } if (__rejected !== 4 || owner.lease.bytes !== __before) throw Error("retained transition reentry/foreign changed charge"); owner.lease.replace(bytes); owner.reduction = 2; try { reduceOwnedHttpPreparedCredential(http, request, cap, permit); throw Error("duplicate retained transition accepted"); } catch (__error) { if (!isIdentityFailure(__error) || owner.lease.bytes !== bytes) throw __error; } ' + probe + '.credentialReductions.push({ before: __before, after: owner.lease.bytes, bytes, idUnits: owner.id.length, rejections: __rejected + 1 });');
     source = replace(source, '    advanceIdentitySource(owner.source, sent, reply.source, replySource!);',
@@ -1209,6 +1340,9 @@ export function observeOwnedJsonSource(path, source) {
     source = replace(source, '    admissions.set(handle, owner); retained = true;',
       '    admissions.set(handle, owner); retained = true; if (owner.http) ' + probe + '.continuationStage("handles");');
   } else if (/[\\/]worker[\\/]identity-admission\.ts$/.test(path)) {
+    source = replace(source, '  parent.sinkOrigins.set(ordinal, origin % 32 | (primary ? 32 : 0) | (undefinedReason ? 64 : 0));',
+      '  ' + probe + '.preclaimFact(parent, origin, undefinedReason); parent.sinkOrigins.set(ordinal, origin % 32 | (primary ? 32 : 0) | (undefinedReason ? 64 : 0));');
+
     source = replace(source, 'if (owned) await owned.read(backing);',
       'if (owned) { await owned.read(backing); ' + probe + '.adapterReadCompleted("materialization"); }');
   } else if (/[\\/]worker[\\/]venice-chat-runtime\.ts$/.test(path)) {
@@ -1379,7 +1513,9 @@ export function observeOwnedJsonSource(path, source) {
       '  if (' + probe + '.consumerMode === "bootstrap-refuse" && !' + probe + '.initialErrors.bootstrapRefused) ' + probe + '.entryPressure(ExactBodyCharge.reserve(__publicLimit - __publicCharged() - requestMetadataBytes + 1)); try { funding = ExactBodyCharge.reserve(requestMetadataBytes); }');
     source = replace(source, '  if (!funding) return undefined;',
       '  if (!funding) { ' + probe + '.initialErrors.bootstrapRefused++; return undefined; }');
-    source = replace(source, '    owner.sinkOrigins!.set(ordinal, record); sinkFailures!.add(record);', '    owner.sinkOrigins!.set(ordinal, record); sinkFailures!.add(record); ' + probe + '.driverOrigin(record); ' + probe + '.archiveFact(owner, record);');
+    source = replace(source, '    owner.sinkOrigins!.set(ordinal, record); sinkFailures!.add(record);', '    owner.sinkOrigins!.set(ordinal, record); sinkFailures!.add(record); ' + probe + '.driverOrigin(record); ' + probe + '.archiveFact(owner, record); ' + probe + '.statusStartFact(owner, record); globalThis.__ownedBudgetSequenceFixture?.bindingDiagnostic(owner, record);');
+    source = replace(source, 'const state = new OwnedStatusController(cap, plan, startOrigin, startCleanupOrigin); root.softStatus = state;',
+      'const state = new OwnedStatusController(cap, plan, startOrigin, startCleanupOrigin); root.softStatus = state; ' + probe + '.statusStartPrepared(root, state);');
     source = replace(source, '    const owner = new OwnedHttpRequestReceiver();',
       '    ' + probe + '.initialErrors.owners++; const owner = new OwnedHttpRequestReceiver();');
     source = replace(source, '  owner.errorState = 1;',
@@ -1476,6 +1612,10 @@ export function observeOwnedJsonSource(path, source) {
     source = replace(source, '    if (codecConsumer && !codecPublished) abandonOwnedCodecConsumer(codecConsumer);',
       '    if (owned) ' + probe + '.publicationExit(codecPublished);\n    if (codecConsumer && !codecPublished) abandonOwnedCodecConsumer(codecConsumer);');
 
+    const statusStart = source.indexOf('function startOwnedProxySoftBudget('), statusEnd = source.indexOf('// Fixed named synchronous calls:', statusStart);
+    const statusSource = source.slice(statusStart, statusEnd);
+    source = source.slice(0, statusStart) + replace(statusSource, 'else abandonUnstartedOwnedHttpRegistration(receipt);',
+      'else { abandonUnstartedOwnedHttpRegistration(receipt); ' + probe + '.statusStartAfterAbandon(); }') + source.slice(statusEnd);
     source = replace(source, 'captureWire: Uint8Array | undefined = newOwnedBytes(16384);',
       'captureWire: Uint8Array | undefined = (' + probe + '.intakeFactory(), newOwnedBytes(16384));');
     source = replace(source, 'try { this.reader = this.body!.getReader({ mode: "byob" }); }',
@@ -1534,6 +1674,9 @@ export function observeOwnedJsonSource(path, source) {
       '    ' + probe + '.consumers.normalizer.transfers++; this.outputTransferred = true; this.clearOutput();');
 
 
+  } else if (/[\\/]worker[\\/]soft-budget\.ts$/.test(path)) {
+    source = replace(source, '    bindOwnedHttpSoftStatus(this.http, env, this.prepared, operation);',
+      '    ' + probe + '.statusStartEnter(this, env, operation, identityFailure); bindOwnedHttpSoftStatus(this.http, env, this.prepared, operation);');
   } else if (/[\\/]worker[\\/]pricing\.ts$/.test(path)) {
     source = replace(source, 'plan.toolScratchBytes = ownedToolScratchBytes(body, ownedHttpHasToolPriceCard(cap, body), plan.bytes);',
       'plan.toolScratchBytes = ownedToolScratchBytes(body, ownedHttpHasToolPriceCard(cap, body), plan.bytes); ' + probe + '.toolScratchBytes = plan.toolScratchBytes;');
@@ -1560,7 +1703,7 @@ export async function startOwnedJsonObservedFixture(directory, router, upstream,
     resolveDir: process.cwd(), sourcefile: 'owned-json-fixture.ts', loader: 'ts',
   }, bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2022', logLevel: 'silent',
   plugins: [{ name: 'observe-original-json-stacks', setup(build) {
-    build.onLoad({ filter: /(?:[\\/]worker[\\/](?:credential-preflight-source|credential-preflight|credential-cache|identity-admission|json-body|proxy-accounting|proxy-response|proxy-completion|proxy|providers|utils|http-identity-owner|pricing|token-usage|venice-chat-runtime)\.ts|[\\/]stream-json[\\/](?:src[\\/])?core[\\/]parser\.js)$/ }, async ({ path }) => ({
+    build.onLoad({ filter: /(?:[\\/]worker[\\/](?:credential-preflight-source|credential-preflight|credential-cache|identity-admission|json-body|proxy-accounting|proxy-response|proxy-completion|proxy|providers|utils|soft-budget|http-identity-owner|pricing|token-usage|venice-chat-runtime)\.ts|[\\/]stream-json[\\/](?:src[\\/])?core[\\/]parser\.js)$/ }, async ({ path }) => ({
       contents: observeOwnedJsonSource(path, await readFile(path, 'utf8')),
       loader: path.endsWith('.ts') ? 'ts' : 'js', resolveDir: dirname(path),
     }));

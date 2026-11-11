@@ -473,7 +473,7 @@ export async function readIdentityResponse<T>(start: () => Promise<Response>, bu
 // the actual run/permit/lease and binding before creating this empty receipt.
 // The lower module never imports an HTTP owner or resolves a different run.
 export interface PrivateMaterializationReceipt { readonly materialization?: never }
-export interface PrivateMaterializationDestination { value?: UpstreamGrant; materializationState?: number; metadataOrigin?: number; businessFailure?: HttpError; fallback?: HttpError }
+export interface PrivateMaterializationDestination { value?: UpstreamGrant; materializationState?: number; metadataOrigin?: number; businessFailure?: HttpError; fallback?: HttpError; failedCustodyPhase?: number }
 // Type-only view of the genuine upper owner. No lower module can discover,
 // create or substitute this parent. The upper factory checks its registries.
 export interface PrivateIdentityParent {

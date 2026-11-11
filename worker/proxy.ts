@@ -3,16 +3,17 @@ import { isIdentityFailure, identityFailure } from "./identity-admission.ts";
 import { beginOwnedHttpProxyPublicationHeaders, checkOwnedHttpProxyPublicationBody, finishOwnedHttpProxyPublication, beginOwnedHttpUpload, beginOwnedHttpRevalidation, prepareOwnedHttpAccounting, finishOwnedHttpRevalidationPreparation, discardOwnedHttpInitialError, admitOwnedHttpErrorText, isOwnedHttpLocalFailure, checkOwnedHttpRequest, matchesOwnedHttpRequestInputs, canCompleteOwnedHttpPreparation, checkOwnedHttpUpload, holdOwnedHttpUploadSerialization, abandonOwnedHttpUpload, growOwnedHttpRequest, ownedHttpSinkOwner, startOwnedHttpProviderFetch, consumeOwnedHttpProviderResponse, disposeOwnedHttpProviderResponse, matchesOwnedHttpProviderHandoff, ownedHttpSignal, cancelOwnedHttpResponse,
   beginOwnedHttpIntakeDiagnostics, ownedHttpIntakeFailure, finishOwnedHttpIntakeDiagnostics,
   beginOwnedHttpSinkRegistration, completeOwnedHttpSinkRegistration, abandonUnstartedOwnedHttpRegistration,
+  recordOwnedHttpSoftStatusCleanupFailure,
   takeOwnedHttpArchiveRegistration, writeOwnedHttpDeferredArchive, ownedHttpArchiveStartFailure, ownedHttpArchiveRegistrationFailure, ownedHttpArchiveReportFailure,
   ownedHttpCompletion, holdOwnedHttpRequest, dispatchOwnedHttpUpload, ownOwnedHttpResponse,
   beginOwnedHttpGenericUsage, consumeOwnedHttpGenericUsage, failOwnedHttpGenericUsage, abandonOwnedHttpGenericUsage, type OwnedHttpUsage,
   type OwnedHttpRequest, type OwnedHttpUpload } from "./http-identity-owner.ts";
 import { providerConfigurationList } from "./provider-connections.ts";
 import { prepareOwnedHttpPricing, adoptOwnedHttpTierBody, takeOwnedHttpMediaAdmission, enterOwnedHttpPricing, leaveOwnedHttpPricing, retireOwnedHttpPricing } from "./pricing.ts";
-import { ownsOwnedHttpSelectionPermit, prepareOwnedHttpProvider, reserveOwnedHttpProviderPreparation, retireOwnedHttpProviderPreparation } from "./providers.ts";
+import { hasOwnedHttpProviderCommand, ownsOwnedHttpSelectionPermit, prepareOwnedHttpProvider, reserveOwnedHttpProviderPreparation, retireOwnedHttpProviderPreparation } from "./providers.ts";
 import { createPrivateJsonBodyParser, JsonBodyStructureLimit, privateMediaJsonBody, privateUploadJson, type MediaJsonBody } from "./json-body.ts";
 import { bindOwnedHttpAuthentication, matchesOwnedHttpAuthentication, queueOwnedHttpSelectionRuntime,
-  invalidateOwnedHttpSelectionCredentials, finishOwnedHttpForegroundCommands, matchesOwnedHttpCredentialPreparation, matchesOwnedHttpCredentialFailure, reduceOwnedHttpPreparedCredential, type OwnedHttpCredential, type GenerationSelectionHandle } from "./credential-preflight.ts";
+  invalidateOwnedHttpSelectionCredentials, certifyOwnedHttpFailedCredentialProvider, finishOwnedHttpForegroundCommands, matchesOwnedHttpCredentialPreparation, matchesOwnedHttpCredentialFailure, reduceOwnedHttpPreparedCredential, type OwnedHttpCredential, type GenerationSelectionHandle } from "./credential-preflight.ts";
 import { admitAccountingJson, isAccountingAdmissionFailure } from "./json-body.ts";
 import { PreparationAdmission, isPreparationLimit, preparationHeader, templateCandidates, preparationValue } from "./provider-templates.ts";
 import { readMiniMaxVideoInput, bindMiniMaxVideoInline, hasMiniMaxVideoInline } from "./minimax-video-inline.ts";
@@ -631,7 +632,7 @@ export function retireOwnedHttpProxy(cap: OwnedHttpRequest): void {
   invocation.usageContext = undefined; invocation.requestId = undefined;
   invocation.admission = undefined; invocation.upload = undefined; invocation.attempts.length = 0;
   if (invocation.retry) {
-    for (const port of invocation.retry.ports) { port.input = undefined; port.signal = undefined; port.permit = undefined; port.prepared = undefined; port.upload = undefined; port.identity = undefined; port.credential = undefined; port.phase = 5; }
+    for (const port of invocation.retry.ports) { port.input = undefined; port.signal = undefined; port.permit = undefined; port.prepared = undefined; port.upload = undefined; port.identity = undefined; port.credential = undefined; delete port.credentialFailure; delete port.credentialFailureKind; port.phase = 5; }
     invocation.retry.ports.length = 0; invocation.retry.excluded.clear(); invocation.retry.pending = undefined; invocation.retry = undefined;
   }
   invocation.required = undefined; invocation.context = undefined as never;
@@ -1912,7 +1913,7 @@ function startOwnedProxySoftBudget(http: OwnedHttpRequest, env: Env, context: Ex
     try {
       if (check) completeOwnedHttpSinkRegistration(receipt, context, check);
       else abandonUnstartedOwnedHttpRegistration(receipt);
-    } catch (cleanup) { throw new AggregateError([primary, cleanup], "owned status start cleanup"); }
+    } catch (cleanup) { recordOwnedHttpSoftStatusCleanupFailure(http, env, plan, operation, cleanup); cleanup = undefined; }
     throw primary;
   }
   completeOwnedHttpSinkRegistration(receipt, context, check!);
@@ -2851,6 +2852,18 @@ export function completeOwnedHttpAttemptProvider(cap: OwnedHttpRequest, permit: 
     throw identityFailure("protocol");
   port.phase = 2;
 }
+export function completeOwnedHttpFailedAttemptProvider(cap: OwnedHttpRequest, request: Request, permit: object, failure: unknown): void {
+  const owner = ownedProxyInvocations?.get(cap), port = owner?.retry?.pending;
+  // The producer deposited this identity while both provider registrations and
+  // the exact input/signal/credential tuple were still live.
+  if (!owner || owner.retryClosed || !port || port.credentialFailureKind !== 2 || port.credentialFailure !== failure) return;
+  if (port.phase !== 1 || port.permit !== permit || !port.credential || !port.input || !port.signal || port.prepared || port.upload
+    || ownsOwnedHttpSelectionPermit(permit, cap) || hasOwnedHttpProviderCommand(permit)
+    || owner.preparingIdentity || owner.preparingUpstream || owner.preparingFields || owner.preparingAdmission)
+    throw identityFailure("protocol");
+  if (port.signal.aborted || !canCompleteOwnedHttpPreparation(cap, request)) return;
+  certifyOwnedHttpFailedCredentialProvider(cap, request, port.credential, permit, failure, port.signal);
+}
 export function matchesOwnedHttpCompletedPreparation(cap: OwnedHttpRequest, request: Request, credential: OwnedHttpCredential, permit: object): boolean {
   const owner = ownedProxyInvocations?.get(cap), port = owner?.retry?.pending, prepared = port?.prepared;
   return !!owner && !!port && port.phase === 2 && port.credential === credential && port.permit === permit
@@ -2912,7 +2925,6 @@ async function prepareOwnedHttpAttempt(cap: OwnedHttpRequest, request: Request, 
       port.phase = 4; retry.pending = undefined;
       if (isPreparationLimit(error) || isAccountingAdmissionFailure(error) || isIdentityFailure(error)) throw error;
       signal.throwIfAborted();
-      delete port.credentialFailure; delete port.credentialFailureKind;
       if (!credentialFailure || error !== credentialFailure || selection.provider.id === "anthropic-vertex"
         || miniMaxAnthropicRoute(selection.provider, selection.endpoint) || !routing.failover) throw firstFailure ?? error;
       firstFailure ??= credentialFailure;

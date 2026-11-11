@@ -1,7 +1,204 @@
 # Private owned HTTP Chat staging
 
+### Current source blocker: fixed static representation
 
-### Private credential partial claim — source-only checkpoint
+The existing STATIC tariff already fails on a deliberately incomplete roster of
+new, source-defined function targets. This uses the existing three products per
+function/definition binding or prototype method and one actual function-name
+string occurrence. It does **not** apply the new I/O own-property/attribute
+supplement to STATIC, price source text as payload, or count an imported target
+again merely because another module references it.
+
+The roster contains1027 distinct `(module, owner, name)` targets:494 new exported
+function declarations,443 ordinary methods on new private `Owned*`/`Private*`
+classes,80 module-local helpers in `http-identity-owner`, and10 named leaf-call
+helpers at the end of `credential-preflight`. Existing exact-main function
+names, constructors, getters/setters, arrows, abstract class methods, imports,
+class/prototype objects, literal tables and other local helpers are excluded.
+Comments and quoted text are excluded. Method overload/name duplicates count
+once per class; identical names in different modules/classes are distinct
+source-created targets. The80 HTTP-local declarations also have zero enclosing
+brace depth in the source. This is a necessary source roster, not a complete
+static upper or a compiler/engine heap measurement.
+
+| Source | Exported functions | Private methods | Local helpers | Name units |
+| --- | ---: | ---: | ---: | ---: |
+| accounting |1|0|0|25|
+| authority |1|0|0|30|
+| content-retention |1|0|0|32|
+| correlation |1|0|0|22|
+| credential-cache |12|0|0|396|
+| credential-preflight-source |14|30|0|758|
+| credential-preflight |44|0|10|1561|
+| gmi-organization-binding |6|0|0|155|
+| grant-credentials |2|0|0|75|
+| http-identity-owner |198|240|80|10734|
+| identity-admission |11|31|0|680|
+| json-body |19|0|0|417|
+| native-errors |4|0|0|83|
+| pricing |8|0|0|193|
+| provider-auth |1|0|0|27|
+| provider-templates |11|0|0|304|
+| proxy-accounting |8|13|0|405|
+| proxy-auth |3|0|0|89|
+| proxy-completion |31|0|0|578|
+| proxy-response |28|73|0|1456|
+| proxy-selection |1|0|0|28|
+| proxy-upstream-request |1|0|0|27|
+| proxy |57|17|0|1858|
+| response-control-authorization |4|0|0|112|
+| soft-budget |7|10|0|260|
+| token-usage |1|0|0|12|
+| venice-chat-authority |8|0|0|217|
+| venice-chat-runtime |11|29|0|611|
+| **Subset** |**494**|**443**|**90**|**21145**|
+
+`8*(3*1027)+2*21145 = 66938`, exceeding the unchanged65536 claim by1402
+bytes before all excluded static products. The sorted compact JSON triples
+`[path, owner, name]` have SHA256
+`2df4a730b3830535138323c920e0eeb0e5fcf0d675bcce78a83a3f40bffb9816`.
+The source-only repair checkpoint remains partial. Neither an unfinished I/O
+manifest nor a larger COMMON allowance can make this static representation fit.
+A bounded source-representation consolidation preserving the fixed named
+protocol, ordinary inverses and65536 ceiling needs closure before a complete
+candidate. No static debit increase or speculative consolidation is implemented.
+
+### Preclaim configuration boundary — source-only repair
+
+The foreground capability is installed in its existing canonical foreground
+Map before its origin-bank call. That call verifies the exact current request,
+Env and capability, and requires that the credential owner has not yet been
+constructed. Eleven positions are claimed before the owner factory: existing
+0–6 keep their offsets,7–9 are acquisitions, and10 is an independent retire
+position. Installing the owner closes that bank entry; no external getter or
+callback occurs in between. Failed construction removes only its unadopted
+foreground entry and releases the unused ticket.
+
+The owner has `preclaimPhase` and an optional `preclaimPermit`. Strict current
+provider/selection/input/signal matching precedes exposure, while the genuine
+observable read order remains membership, authority operand/ACCESS comparison,
+existing provider check, direct MAX_AGE, revision/units/capacity, hotCacheConfig,
+config/ID and final tuple adoption. Each of the three narrow catches records
+only scalar undefined-presence through `privateIdentityDiagnostic` and throws
+the existing root-paid fallback. Recording failure holds UNKNOWN without
+replacing that fallback. True mismatch/capacity failures stay outside those
+catches. Every unsuccessful exit after start becomes FAILED.
+
+Active preparation/disposal and repeated origin-bank admission reject before
+mutation. Late failed cleanup validates the retained foreground owner/permit,
+without requiring deleted provider registries. An independent retire fact uses
+position10. A still-registered foreground capability stops the consumer sweep
+and holds the HTTP root before any selected/authentication-parent retirement;
+the sweep latch is never reset. Clean bootstrap disposal and committed but
+cache-unclaimed disposal retain their existing routes.
+
+The actual field union is98+92=190 bytes: `preclaimPhase` is numeric;
+`preclaimPermit` is absent, reference-valued, then deleted, never own undefined.
+Two scalar logical Map entries add64, giving254 as a component only. No six-field
+carrier or WeakSet membership is invented. Native Map indexing, helper/catch/
+constructor overlap, existing provider/caller environments, ACTIVE and static
+products remain separate. The complete credential/V2 admission and R_failed
+replacement are not enabled by this field component. The existing origin bank
+is extended before effects, without claiming its historical per-origin tariff
+as the complete new family manifest.
+
+Fourteen Node and seventeen Workerd cases are authored for these three reads,
+opaque/undefined/internal/selected throws, prepare/dispose/bank reentry, genuine
+mismatch and capacity short circuits, independent cleanup and recording UNKNOWN.
+The Node source observer now includes the reached identity/provider/status
+modules; fifteen real Node budget cases mirror the Workerd binding cases.
+All behavioral execution and typechecking remain UNRUN. Builtin grammar and
+fixture-source generation checks are the only local validation.
+
+
+### Private budget binding boundary — source-layout draft
+
+Reserve and dispatch read the actual BUDGET binding through their named,
+synchronous private producer after the existing leg claim. `bindingPhase` is
+READING before the getter and is never reset to UNUSED. The sequence's bounded
+leg scan rejects competing claims, reads, ACK entry, branch selection and close
+before another right/origin/effect. A known getter throw produces a bounded
+acquisition diagnostic; a recording failure separately holds UNKNOWN. Neither
+case fabricates a POST, fulfilled reservation, rollback obligation or physical
+command increment. Validation and post-getter checks remain outside the narrow
+getter catch. READY distinguishes a captured missing namespace from no read;
+the old command still owns missing-namespace acquisition failure.
+
+Rollback captures BUDGET, USAGE and QUEUE in that order from the genuine existing
+sequence/result and fulfilled subset. It publishes one four-field carrier only
+after all reads and validation. Recovery uses its already-enrolled rights under
+independent UNKNOWN. There is no capture-wide namespace equality check: the
+existing per-leg settle check remains inside its recovery catch and can reach
+the original queue fallback. Ordinary `accountingSinks` and the ordinary reserve,
+dispatch and rollback branches keep their source behavior.
+
+The implemented own positions are `bindingPhase` per leg and
+`rollbackBindingPhase` per sequence:96L+112 bytes. Legal branch execution has at
+most L binding failures, costing L*(606+32) for the record and logical Map/brand
+positions. The reviewed component is therefore734L+112, or3048 at L4. Its
+ordinal capacity is `L+max(L,3*I[L>=2])`, giving0/2/5/6/8 for L0..4. Healthy
+reads consume ordinals without materializing a diagnostic. Neither this
+component nor the old parent583054 component is a complete Wbudget.
+
+The source-layout draft has no replacement V2 admission formula.
+The complete caller/async/allSettled/source/native-index/constructor/helper
+manifest must close before the pure-plan reservation and credit-bank update
+are enabled. The old eighteen-origin command bank is not asserted to cover
+the new binding positions. This draft is not a runnable qualification candidate.
+Fifteen authored Workerd cases cover each binding boundary with undefined,
+opaque and forged402 throws, cross-leg reentry and early close, exact rollback
+read order/short circuit, same-ID rollback and zero provider dispatch. They
+remain UNRUN_CODE_ONLY_HOSTED.
+
+### Status start and failed-producer certificates — source-only continuation
+
+The private status call keeps its namespace/config getter positions. Its binding
+claim now precedes the actual namespace getter, so reentry cannot start another
+lookup. Exceptions from the private `hotCacheConfig` call become the prepared
+start diagnostic without inspecting their fields or granting identity priority.
+Registration abandonment still runs; a separate cleanup diagnostic preserves
+equal/undefined presence without an AggregateError containing the raw primary.
+A reporting failure holds HTTP UNKNOWN and leaves the qualified primary intact.
+The ordinary configuration helper and ordinary status observer are unchanged.
+
+Two status origins are enrolled before controller construction. Their exact new
+persistent component is1488: two own positions202, start record606, cleanup
+record616, two Map entries48 and two WeakSet entries16. This is an increment,
+not the complete Wstatus. The existing constructor2954, source/caller/native
+rows, changed four-argument constructor environments and helper/failure/ACTIVE
+overlap remain separate. SAME4 owns the native status component. No complete V2
+status reservation or capacity certificate is claimed by this draft.
+
+Six authored Workerd cases exercise undefined, opaque and identity-branded
+config throws, reentry, equal/undefined cleanup failures and diagnostic failure.
+They check the actual BUDGET/config getter order, no status RPC, bounded public
+mapping, independent ordinals, prompt accounting and UNKNOWN funding. They are
+UNRUN_CODE_ONLY_HOSTED.
+
+Failed materialization now carries a source-defined certificate in the existing
+run, without another registry: phase1 follows receipt deletion plus acquisition
+observation severing and physical-child end; phase2 follows clean cache finally
+with no value/borrower/consumer/cleanup aggregate; phase3 follows provider alias
+clearance and deletion of both provider registrations. The producer's existing
+exact failure receipt is staged before that deletion. Only its genuine five-code
+selected wrapper can reach phase3. The actual `failedCustodyPhase` position costs
+108 bytes and is prospectively added at foreground admission; the proposed
+second scalar is not implemented or charged merely because a plan named it.
+Every failed credential still retains its full ticket. No `R_failed` replacement
+is enabled until its complete actual source/caller/constructor/error manifest
+closes. The catch retains its port receipt through the current failed phase;
+irreversible retry closure and final proxy retirement clear it. The final
+credential sweep clears the producer/wrapper fields before ticket release and
+keeps the existing UNKNOWN and once-only retirement gates.
+
+The reviewed narrow failed-ticket handoff is now authorized. Its unresolved
+work is numerical and implementation closure, rather than a pending permission
+to design it. The private BUDGET binding repair is also authorized and appears
+as the source-layout draft above. Neither issue authorizes guessed padding or a partial
+component as a family debit.
+
+
+### Historical fba8 private credential partial-claim checkpoint
 
 The claim now installs the genuine owner/run adoption synchronously before the
 first binding read. Holding-list membership is distinct from successful retained
@@ -153,6 +350,39 @@ readiness Promise. Repeated healthy waits end their listener/handler use before
 the next loop iteration; the executing previous reaction/current await overlap
 still belongs in the native/caller envelope.
 
+For the three private sniff/readLimited call sites, `wait` receives a genuine
+VOID readiness Promise and at most the second `"upstream"` argument. The
+optional discard parameter is undefined. Its actual APP function/environment
+component is now explicit:
+
+| Wait occurrence | Derivation | Bytes |
+| --- | --- | ---: |
+| Enclosing method and actual arguments | Environment64; pending/failure/discard/arguments bindings396; two-argument union420 | 880 |
+| Promise executor and environment | Anonymous class arrow412; invocation72; resolve/reject/aborted bindings280; constructor/callback lists56 | 820 |
+| Abort closure and invocation | Inferred-name arrow426; invocation72 | 498 |
+| Fulfillment closure and invocation | Anonymous arrow412; invocation72; value binding98 | 582 |
+| Rejection closure and invocation | Anonymous arrow412; invocation72; error binding98 | 582 |
+| Stored failure-string occurrences | At most eight units in the formal and actual-argument positions | 32 |
+| **APP closure/environment component** | | **3394** |
+| Own Promise native constructor and pending observation | `744+T1628` | 2372 |
+| Listener options own record | `J(1,1,4)` for once:true | 112 |
+
+The three nested handlers share the executor environment once, and all four
+arrows share the same enclosing method environment once. The existing pending
+receipt is borrowed, not another Promise allocation. Current handler arguments
+are bounded VOID/failure operands from the private driver; this table does not
+authorize storing an arbitrary foreign reason graph. The native pending
+installation's dependent capability is already in T; no second K or R is added.
+
+The event-listener callback conversion/registration, abort dispatch, member-call
+construction lists, parent operation/controller and outer await continuation
+remain separate rows. Therefore5878 is a priced component, not Wwait or a
+reservation. Up to two wait generations compose at the read-loop boundary:
+the resumed old await can construct the next wrapper before returning. An
+abort or uncertain read exits that loop, so it cannot accumulate further wait
+generations. Reuse requires the actual prior listener/handler/caller tails;
+the wrapper's logical resolution alone proves none of those cuts.
+
 Likewise the pull async result, base pull observation and native stream-controller
 reaction reference one original target. `beginDriverPull` can rearm only after
 FIRST, returned installation/callback tails and observation discharge. UNKNOWN
@@ -261,6 +491,25 @@ Final private accounting uses the terminal shell rather than activating ordinary
 finalizeOwnedAccounting/publishUsage/charge branches as extra proof work.
 The current owner-error review governs unresolved retained failure targets; no
 arbitrary reason graph receives an invented finite caller allowance here.
+
+The historical fba8e000 caller trace identified the boundary repaired above. In private
+`reserveLedgerIntent`, the exact leg is claimed, then `env.BUDGET_LEDGER` is
+evaluated as an argument to `ownedHttpReserveAcknowledgment`. That evaluation
+precedes entry into the bounded ledger command. A stateful binding getter may
+return normally at the earlier accounting factory and throw an arbitrary graph
+at this later read. The async function rejects with that graph; reserveBudget's
+map callback rethrows it, and allSettled retains it as `reason`. Successful
+sibling legs can then require awaited rollback while that result remains live.
+The rollback diagnostic wrapper can retain the same `failed.reason` again.
+
+Neither the finite leg count nor the closed583054 parent component bounds this
+target. The private command's fetch/installation normalizers have not run on
+this pre-invocation path. That earlier caller family had no finite
+exceptional upper until the exact read was covered by prepaid bounded failure
+provenance before its rejected Promise/settled result retains the value. The
+ordinary getter order and wrappers must remain unchanged. The current named-boundary source repair above closes that raw-reason edge.
+Its complete caller/family reservation is still gated; this historical trace
+is not a claim that the repaired getter remains exposed.
 
 #### Implemented shared serializer and execution boundary
 
@@ -517,6 +766,160 @@ records. Equal reasons and undefined preserve independent entries. The final
 root diagnostic-reporting occurrence belongs to the root family, not a second
 archive occurrence. No raw failure graph appears in these private record slots.
 
+#### Archive constructor and await composition — fba8e000
+
+The following rows use the adopted APP environment expansion, not a new
+overhead allowance. `E(names,q)=sum(80+2*name.length)+8*q`; strict arguments
+storage is `A(n,q)=280+66*n+8*q`. Parameters and implicit `arguments` remain
+present even when a nested function uses only a subset. Referenced source,
+copied graph, strings, cursor arrays and intrinsic targets keep their separate
+owners. These rows do not authorize a reservation before the whole family closes.
+
+| Source occurrence | Explicit constructor constituents | Bytes |
+| --- | --- | ---: |
+| `createAccountingArchive` enclosing environment and arguments | Method environment64; twelve bindings,89 identifier units, nine primitive phase positions:1210; three-argument object502 | 1776 |
+| Its six function objects | Module arrow `release`:434; five concise methods `text/stream/get retired/pull/cancel`:2122 | 2556 |
+| `OwnedArchiveWrite.execute` outer environment and arguments | Method environment64; primary/pipeOutcome/arguments bindings310; zero-argument object280 | 654 |
+| `OwnedArchiveWrite.deferred` outer environment and arguments | Method environment64; primary/arguments bindings200; zero-argument object280 | 544 |
+| `accountingChunks` function environment and arguments | Method environment64; value/stack/input/entering/arguments bindings488; one-argument object354 | 906 |
+| `quoted` function environment and arguments | Method environment64; value/arguments bindings196; one-argument object354 | 614 |
+| Archive `text` invocation environment and arguments | Method environment64; text/arguments bindings194; zero-argument object280 | 538 |
+| Archive `stream` invocation environment and arguments | Method environment64; arguments binding98; zero-argument object280 | 442 |
+| Archive retired getter environment and arguments | Same zero-argument environment shape | 442 |
+| Archive `pull` entry environment and arguments | Method environment64; controller/arguments bindings198; one-reference-argument object346 | 608 |
+| Archive `cancel` entry environment and actual argument | Method environment64; arguments binding98; native source cancellation supplies one reason, argument object354 | 516 |
+| Three preinstalled VOID ready executors/environments | Three distinct field-initializer instances of adopted E_Q790 | 2370 |
+
+The factory's twelve bindings are value, gateway, ownedBytes, measurement,
+owned, used, done, archiveEncoder, chunks, pending, release and arguments.
+Its nine primitive alternatives include the generic value parameter, gateway,
+ownedBytes, owned, used, done, archiveEncoder, chunks and pending. This is a
+conservative function phase union; it does not claim nine primitives after the
+private record has been copied. The retained `arguments[0]` and `[1]` edges
+prevent treating assignments to `owned` as retirement of the original inputs.
+
+The six function names contribute38 UTF16 units. The `release` arrow uses the
+adopted module-arrow420 plus its14 name bytes. Each concise object method has
+the module function's null PrivateEnvironment and a reference-valued HomeObject;
+the latter replaces the arrow's undefined position. Its fixed object component
+is412 before its name. All five methods reference their actual common enclosing
+environment once; the environment is not multiplied by five.
+
+The entry rows intentionally exclude block/loop/catch environments, generator
+contexts and delegation, async contexts, native source wrappers, iterator
+results and body targets. Those are explicit composition rows below, not
+unmentioned spare space. In particular, the pull entry608 is not the entire
+pull activation: its backing/written/eof, next, bytes/encoded, i/code and catch
+bindings still need their block and transition rows. The quoted entry614 does
+not include its offset/end/last/next loop scopes.
+
+The generator's actual lexical-scope union closes independently of native
+delegation and cursor storage. An empty declarative environment costs16; each
+named binding uses E above. A for-let transition includes both old and newly
+created iteration environments before the old reference ends.
+
+| Generator source environment position | Bytes |
+| --- | ---: |
+| accountingChunks function/arguments, carried once from above | 906 |
+| Outer try block | 16 |
+| Current while block: cursor/length/key/item, three primitive alternatives | 398 |
+| Entering block | 16 |
+| Container branch: array Boolean | 114 |
+| String or scalar branch, mutually exclusive for that input | 16 |
+| Closing or quoted-key block, mutually exclusive for that cursor step | 16 |
+| Finally block, two index-loop environments and loop body | 260 |
+| quoted function/arguments, carried once from above | 614 |
+| Old/new offset-loop environments | 232 |
+| Quoted body: end/last/next | 302 |
+| **Generator source-environment phase union** | **2890** |
+
+The906 and614 entries replace their earlier standalone rows when composing this
+union; they are not additional copies. Only the cursor/key-vector term is
+depth-sized. Each completed while step drops its lexical environment before a
+successor can retain a different step. A quoted child captures its own module
+environment, not its caller's cursor environment. Cancellation uses the same
+two generator contexts and the bounded finally loop. No generator object,
+iterator result, delegation record or native continuation target is hidden in
+the2890-byte environment row.
+
+Two additional source closures now have explicit constructor rows:
+
+| Actual closure | Source constituents | Bytes |
+| --- | --- | ---: |
+| execute's pipe rejection handler | Anonymous class arrow412; invocation72; reason100/failure94; three enclosing empty block environments48; two-argument native call list48 | 774 |
+| deferred's timer Promise executor | Anonymous class arrow412; invocation72; resolve/reject186; constructor/callback call lists56; enclosing try16; executor try16; catch environment116 and catch block16 | 890 |
+
+These rows borrow the654/544 outer method environments already listed. The pipe
+handler adds a native T installation; it borrows the pipe command's ready
+Promise. The timer executor adds native744 and the timer task/source machinery;
+it does not add a second native K executor. Catch reason values are transient
+until the existing bounded failure conversion; they are never admitted as
+retained arbitrary graphs by these numeric rows.
+
+For an `await` whose operand is the genuine same-constructor APP Promise,
+the native continuation term is **1096**:
+
+```text
+2 * 268 native continuation functions/one-context captures
++ 2 * 48 reactions with undefined result-capability
++ 2 * 112 JobCallbacks
++ 2 * 8 reaction-list edges
++ 224 selected reaction-job/current-task union
+= 1096
+```
+
+This is not T1628: the direct native Await operation supplies no dependent
+result capability. Each reaction's undefined capability adds a primitive
+occurrence compared with the40-byte capability-reference reaction. The operand
+Promise, async context, source environment, call operands and any outer observer
+remain separate. Native PromiseResolve identity reuse is justified only for the
+actual private receipt/async Promise; this term must not be used for arbitrary
+foreign thenables. See [ECMAScript Await](https://tc39.es/ecma262/2026/multipage/control-abstraction-objects.html#await).
+
+Sequential await sites use at most the executing previous continuation plus
+the next installed pair. Thus the writer and deferred method each require a
+two-generation continuation envelope,2192 bytes, rather than one persistent
+chain per historical chunk or per syntactic await. Their separate async result
+capabilities and retained contexts remain additive. A held current await has
+no successor; synchronous resumption reaches its next await before another
+continuation can resume that same method. UNKNOWN does not discharge either
+generation or the writer's existing physical originals.
+
+The genuine archive fixture now checks the actual37 writer fields and324 name
+units, all three preinstalled ten-field/76-unit VOID commands, and the empty
+registration capability before fault injection. Held-cleanup Workerd cases
+assert those scalar census results. This is an authored layout witness, not
+executed runtime or proof of the remaining native/source/caller components.
+
+The deferred caller's closure rows are also distinct from the writer's timer
+and async result. Let J be the already admitted requestId's UTF16 length:
+
+| Deferred caller occurrence | Actual source expansion | Bytes |
+| --- | --- | ---: |
+| `startOwnedProxyRetention` invocation arrow and captured source | Module arrow420; enclosing environment1036; five-argument object618; captured try environment112; arrow invocation72; call lists56 | `2314+4J` |
+| Bound reporting function | Bound base244; name33 units; undefined-this primitive8; two reference arguments and one string argument32 | `350+2J` |
+| Reporting bind construction list | Four actual arguments, two references and two primitives | `72+2J` |
+| Existing completion-leaf handler environments | Two handlers and their actual shared observer environment, adopted E1690 | 1690 |
+| Completion-leaf native observation | T, source async Promise target separate | 1628 |
+| Reporting catch observation | T, source async Promise target borrowed | 1628 |
+
+The enclosing caller's ten bindings are http, context, completion, retention,
+requestId, owner, receipt, work, registered and arguments. The try environment
+contains reported even when the invocation arrow is created before that binding
+is initialized. Clearing the local work binding does not clear arguments or the
+reporting bound-argument list. J is counted in the formal/actual argument and
+two binding-construction occurrences above; its original request/accounting
+owners are not subtracted.
+
+The completion leaf and reporting observer share the actual deferred source
+Promise. Their dependents and APP callbacks are distinct. The registration
+observer receives the reporting dependent on the normal route, or the actual
+work on the registration-failure fallback; it does not create another copy of
+either Promise target. Its separate cell/handlers/T/jobs and exact once rights
+still compose. No `startPrivateLeaf` invocation frame is silently treated as
+captured by the later completion handlers. Partial invocation and registration
+failure keep every already-started source and its original admission.
+
 #### Archive known observer terms and remaining constructor rows
 
 The three VOID commands each construct one APP `ready` Promise, one suppression
@@ -532,8 +935,9 @@ The fresh external handler names are28 and27 UTF-16 units; `bound advance` is13.
 | Frozen original handler pairs | `3*((244+2*28)+(244+2*27))` | 1794 |
 | Two bound advance functions and queued jobs per position | `3*(2*(244+2*13)+2*144)` | 2484 |
 
-These rows exclude APP Promise executors/environments, source originals and
-writer awaits. The VOID command/cell record rows already include owner resolver
+The APP Promise executors/environments now have the separate2370-byte row
+above. These rows still exclude source originals and writer awaits. The VOID
+command/cell record rows already include owner resolver
 and observation references; do not add those same own fields again. Shared
 static `ignoreOwnedVoidOutcome` targets are not three newly allocated functions.
 Registration has its own observer pair, direct-then, scheduling, capability and

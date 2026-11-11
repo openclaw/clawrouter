@@ -11,7 +11,7 @@ import { HttpError } from "./utils.ts";
 import { admitSoftStatusRequest } from "./soft-budget-json.ts";
 import { accountingAdmissionFailure, accountingIdentity, accountingNumberCapacity, admitAccountingJson, isAccountingAdmissionFailure } from "./json-body.ts";
 import { readSoftStatus } from "./soft-budget-response.ts";
-import { prepareOwnedHttpSoftStatus, startOwnedHttpSoftStatus, bindOwnedHttpSoftStatus, finishOwnedHttpSoftStatus, checkOwnedHttpSoftStatusRetirement, type OwnedHttpRequest, type OwnedStatusReader } from "./http-identity-owner.ts";
+import { prepareOwnedHttpSoftStatus, startOwnedHttpSoftStatus, bindOwnedHttpSoftStatus, ownedHttpSoftStatusStartFailure, finishOwnedHttpSoftStatus, checkOwnedHttpSoftStatusRetirement, type OwnedHttpRequest, type OwnedStatusReader } from "./http-identity-owner.ts";
 import type { HttpOperation } from "./http-operation.ts";
 
 // Soft: ledger status runs concurrently with the upstream request and settlement
@@ -164,7 +164,12 @@ class OwnedSoftBudget {
     bindOwnedHttpSoftStatus(this.http, env, this.prepared, operation);
     this.started = true;
     // Keep the original namespace/config lookup point after provider dispatch.
-    this.config = hotCacheConfig(env); this.operation = operation;
+    try { this.config = hotCacheConfig(env); }
+    catch (reason) {
+      const failure = ownedHttpSoftStatusStartFailure(this.http, env, this.prepared, operation, reason);
+      reason = undefined; throw failure;
+    }
+    this.operation = operation;
     void this.check.then(() => undefined, () => undefined);
     startOwnedHttpSoftStatus(this.http);
     if (!this.remaining) { this.complete = true; this.resolve(); }
@@ -206,6 +211,8 @@ class OwnedSoftBudget {
 }
 export class OwnedStatusController extends OwnedSoftBudget {
   namespace?: Env["BUDGET_LEDGER"];
+  declare startOrigin: number | undefined;
+  declare startCleanupOrigin: number | undefined;
   get bound(): boolean { return !!(this.statusBits & 16); }
   set bound(value: boolean) { this.statusBits = value ? this.statusBits | 16 : this.statusBits & ~16; }
   get readersStarted(): boolean { return !!(this.statusBits & 32); }
@@ -217,7 +224,9 @@ export class OwnedStatusController extends OwnedSoftBudget {
   private resolveRetired!: () => void;
   readonly retired = new Promise<void>(done => { this.resolveRetired = done; });
   readonly readers: (OwnedStatusReader | undefined)[] = [];
-  constructor(cap: OwnedHttpRequest, plan: PreparedSoftBudget) { super(cap, plan); }
+  constructor(cap: OwnedHttpRequest, plan: PreparedSoftBudget, startOrigin: number, startCleanupOrigin: number) {
+    super(cap, plan); this.startOrigin = startOrigin; this.startCleanupOrigin = startCleanupOrigin;
+  }
   startReaders(): void {
     if (this.readersStarted || this.settled || !this.bound) throw identityFailure("protocol");
     this.readersStarted = true; this.physicalRemaining = this.prepared.descriptors.length;

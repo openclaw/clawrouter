@@ -1,5 +1,5 @@
 import { reserveOwnedHttpSerialization } from "./pricing.ts";
-import { acceptOwnedHttpAuthentication, acceptOwnedHttpCredentialFailure, hasBoundOwnedHttpAuthentication, hasOwnedHttpProxyInvocation, reserveOwnedHttpInitialPreparation, matchesOwnedHttpForegroundCommandRetirement, matchesOwnedHttpCompletedPreparation, checkOwnedHttpProviderInput, acceptOwnedHttpConfiguredProvider, matchesOwnedHttpAttemptInput, bindOwnedHttpAttemptPermit, bindOwnedHttpAttemptCredential, completeOwnedHttpAttemptProvider } from "./proxy.ts";
+import { acceptOwnedHttpAuthentication, acceptOwnedHttpCredentialFailure, hasBoundOwnedHttpAuthentication, hasOwnedHttpProxyInvocation, reserveOwnedHttpInitialPreparation, matchesOwnedHttpForegroundCommandRetirement, matchesOwnedHttpCompletedPreparation, checkOwnedHttpProviderInput, acceptOwnedHttpConfiguredProvider, matchesOwnedHttpAttemptInput, bindOwnedHttpAttemptPermit, bindOwnedHttpAttemptCredential, completeOwnedHttpAttemptProvider, completeOwnedHttpFailedAttemptProvider } from "./proxy.ts";
 import { OwnedHttpRegistrations } from "./proxy-completion.ts";
 import { isPreparationLimit, type PreparationAdmission } from "./provider-templates.ts";
 import { inheritOwnedLocalError, clearOwnedLocalError, markOwnedLocalError, ownedLocalErrorDetails, nativeErrorFormat, nativeErrorEnvelope, type NativeErrorContext, type NativeErrorDetails } from "./native-errors.ts";
@@ -2307,6 +2307,11 @@ class OwnedMaterializationAcquisition {
     finally {
       if (!this.root.unknown && severOwnedOriginal(this.observation)) {
       this.observation = undefined; retireOwnedSinkChild(this.root);
+      // The producer registered this exact permit as its destination before
+      // acquisition. Receipt deletion and this physical child join are distinct.
+      const destination = this.permit as PrivateMaterializationDestination;
+      if (destination.businessFailure !== undefined && destination.materializationState === 2
+        && destination.failedCustodyPhase === undefined) destination.failedCustodyPhase = 1;
       this.root = undefined as never; this.receipt = undefined as never; this.permit = undefined as never;
       } else this.root.unknown = true;
     }
@@ -2603,6 +2608,7 @@ interface OwnedBudgetLegRecord {
   name: string; id: string; cap: OwnedHttpBudgetLeg; flags: number;
   reservation: object | undefined; request: BudgetSettleRequest | undefined;
   namespace: Env["BUDGET_LEDGER"] | undefined;
+  bindingPhase: number; // unused, reserve reading/ready, dispatch reading/ready, failed
 }
 let ownedBudgetLegs: WeakMap<OwnedHttpBudgetLeg, OwnedBudgetLegRecord> | undefined;
 class OwnedBudgetSequence {
@@ -2611,6 +2617,7 @@ class OwnedBudgetSequence {
   physical = 1; // Logical plan sentinel, independent of every original tail.
   result: BudgetReservation | undefined;
   sinks: AccountingSinks | undefined;
+  rollbackBindingPhase = 0; // unused, reading, ready, failed
   declare public root: RequestOwner;
   declare public http: OwnedHttpRequest;
   declare public accounting: OwnedHttpAccountingCommand;
@@ -2624,12 +2631,13 @@ class OwnedBudgetSequence {
     for (let ordinal = 0; ordinal < this.plan.legs.length; ordinal++) {
       const intent = this.plan.legs[ordinal], cap = Object.freeze({});
       const leg: OwnedBudgetLegRecord = { sequence: this, ordinal, intent, name: intent.objectName,
-        id: intent.request.reservationId, cap, flags: 0, reservation: undefined, request: undefined, namespace: undefined };
+        id: intent.request.reservationId, cap, flags: 0, reservation: undefined, request: undefined, namespace: undefined, bindingPhase: 0 };
       this.legs.push(leg); (ownedBudgetLegs ??= new WeakMap()).set(cap, leg);
     }
   }
   close(): void {
     if (this.phase === 4) return;
+    this.checkBindingIdle();
     this.phase = 4;
     // Logical branch selection has ended. Existing commands retain this same
     // physical destination; revoked legs cannot create another command.
@@ -2638,13 +2646,17 @@ class OwnedBudgetSequence {
       const ended: Partial<OwnedBudgetLegRecord> = leg;
       delete ended.sequence; delete ended.ordinal; delete ended.intent;
       delete ended.name; delete ended.id; delete ended.cap; delete ended.flags;
-      delete ended.reservation; delete ended.request; delete ended.namespace;
+      delete ended.reservation; delete ended.request; delete ended.namespace; delete ended.bindingPhase;
     }
     this.legs.length = 0;
     const ended: Partial<OwnedBudgetSequence> = this;
-    delete ended.legs; delete ended.result; delete ended.sinks;
+    delete ended.legs; delete ended.result; delete ended.sinks; delete ended.rollbackBindingPhase;
     delete ended.plan; delete ended.attempt; delete ended.accounting; delete ended.http;
     this.retireCommand();
+  }
+  checkBindingIdle(): void {
+    if (this.rollbackBindingPhase === 1) throw identityFailure("protocol");
+    for (const leg of this.legs) if (leg.bindingPhase === 1 || leg.bindingPhase === 3) throw identityFailure("protocol");
   }
   retireCommand(): void {
     if (this.physical <= 0) throw identityFailure("protocol");
@@ -2658,6 +2670,7 @@ class OwnedBudgetSequence {
 function ownedBudgetSequence(sink: OwnedHttpSinkOwner): OwnedBudgetSequence {
   const sequence = sinkOwner(sink).budgetSequence;
   if (!sequence || sequence.phase === 4) throw identityFailure("protocol");
+  sequence.checkBindingIdle();
   return sequence;
 }
 function ownedBudgetLeg(cap: OwnedHttpBudgetLeg, sink: OwnedHttpSinkOwner): OwnedBudgetLegRecord {
@@ -2676,6 +2689,47 @@ export function claimOwnedHttpBudgetReserve(sink: OwnedHttpSinkOwner, intent: Bu
   if (sequence.phase !== 1 || sequence.root.sealed || sequence.root.unknown || !leg || leg.intent !== intent || leg.flags & 1)
     throw identityFailure("protocol");
   leg.flags |= 1; return leg.cap;
+}
+function failedOwnedBudgetBinding(sequence: OwnedBudgetSequence, origin: SinkOriginOwner, reason: unknown): object | string {
+  try { return failedSinkOrigin(sequence.root, origin, reason); }
+  catch { sequence.root.unknown = true; return ownedHttpPlatformFailure; }
+  finally { reason = undefined; }
+}
+export function readOwnedHttpBudgetReserveBinding(sink: OwnedHttpSinkOwner, env: Env,
+  intent: BudgetReservationIntent, ordinal: number, cap: OwnedHttpBudgetLeg): Env["BUDGET_LEDGER"] {
+  const leg = ownedBudgetLeg(cap, sink), sequence = leg.sequence;
+  if (sequence.phase !== 1 || sequence.root.env !== env || sequence.root.sealed || sequence.root.unknown
+    || leg.intent !== intent || leg.ordinal !== ordinal || !(leg.flags & 1) || leg.flags & 64 || leg.bindingPhase !== 0)
+    throw identityFailure("protocol");
+  leg.bindingPhase = 1;
+  let namespace: Env["BUDGET_LEDGER"] | undefined;
+  try {
+    const origin = sinkOrigin(sink, "acquire");
+    try { namespace = env.BUDGET_LEDGER; }
+    catch (reason) { const failure = failedOwnedBudgetBinding(sequence, origin, reason); reason = undefined; throw failure; }
+    if (sequence.root.budgetSequence !== sequence || sequence.root.env !== env || sequence.phase !== 1
+      || sequence.root.sealed || sequence.root.unknown || ownedBudgetLegs?.get(cap) !== leg || leg.bindingPhase !== 1)
+      throw identityFailure("protocol");
+    leg.namespace = namespace; leg.bindingPhase = 2; return namespace;
+  } finally { if (leg.bindingPhase === 1) leg.bindingPhase = 5; namespace = undefined; }
+}
+export function readOwnedHttpBudgetDispatchBinding(sink: OwnedHttpSinkOwner, env: Env,
+  item: object, cap: OwnedHttpBudgetLeg): Env["BUDGET_LEDGER"] {
+  const leg = ownedBudgetLeg(cap, sink), sequence = leg.sequence;
+  if (sequence.phase !== 2 || sequence.root.env !== env || sequence.root.sealed || sequence.root.unknown
+    || leg.reservation !== item || !(leg.flags & 4) || leg.flags & 128 || leg.bindingPhase !== 2)
+    throw identityFailure("protocol");
+  leg.bindingPhase = 3;
+  let namespace: Env["BUDGET_LEDGER"] | undefined;
+  try {
+    const origin = sinkOrigin(sink, "acquire");
+    try { namespace = env.BUDGET_LEDGER; }
+    catch (reason) { const failure = failedOwnedBudgetBinding(sequence, origin, reason); reason = undefined; throw failure; }
+    if (sequence.root.budgetSequence !== sequence || sequence.root.env !== env || sequence.phase !== 2
+      || sequence.root.sealed || sequence.root.unknown || ownedBudgetLegs?.get(cap) !== leg || leg.bindingPhase !== 3
+      || namespace !== leg.namespace) throw identityFailure("protocol");
+    leg.bindingPhase = 4; return namespace;
+  } finally { if (leg.bindingPhase === 3) leg.bindingPhase = 5; namespace = undefined; }
 }
 export function acceptOwnedHttpBudgetReservation(sink: OwnedHttpSinkOwner, cap: OwnedHttpBudgetLeg, reservation: object): void {
   const leg = ownedBudgetLeg(cap, sink);
@@ -2703,11 +2757,34 @@ export function checkOwnedHttpBudgetDispatch(sink: OwnedHttpSinkOwner, result: B
   const sequence = ownedBudgetSequence(sink);
   if (sequence.result !== result || sequence.phase !== 2) throw identityFailure("protocol");
 }
-export function bindOwnedHttpBudgetRollbackSinks(sink: OwnedHttpSinkOwner, env: Env, sinks: AccountingSinks): void {
+export function captureOwnedHttpBudgetRollbackSinks(sink: OwnedHttpSinkOwner, env: Env, result: BudgetReservation): AccountingSinks {
   const sequence = ownedBudgetSequence(sink);
-  if (sequence.phase !== 3 || sequence.root.env !== env || sinks.ownedHttp !== sink || sequence.sinks)
+  if (sequence.phase !== 3 || sequence.root.env !== env || sequence.result !== result || !result.reservations.length
+    || sequence.sinks || sequence.rollbackBindingPhase !== 0)
     throw identityFailure("protocol");
-  sequence.sinks = sinks;
+  let fulfilled = 0;
+  for (const leg of sequence.legs) if (leg.flags & 2 && result.reservations[fulfilled++] !== leg.reservation) throw identityFailure("protocol");
+  if (fulfilled !== result.reservations.length || fulfilled >= sequence.legs.length) throw identityFailure("protocol");
+  sequence.rollbackBindingPhase = 1;
+  let budget: Env["BUDGET_LEDGER"] | undefined, usage: Env["USAGE_LEDGER"] | undefined, queue: Env["USAGE_QUEUE"] | undefined;
+  try {
+    const budgetOrigin = sinkOrigin(sink, "acquire");
+    try { budget = env.BUDGET_LEDGER; }
+    catch (reason) { const failure = failedOwnedBudgetBinding(sequence, budgetOrigin, reason); reason = undefined; throw failure; }
+    const usageOrigin = sinkOrigin(sink, "acquire");
+    try { usage = env.USAGE_LEDGER; }
+    catch (reason) { const failure = failedOwnedBudgetBinding(sequence, usageOrigin, reason); reason = undefined; throw failure; }
+    const queueOrigin = sinkOrigin(sink, "acquire");
+    try { queue = env.USAGE_QUEUE; }
+    catch (reason) { const failure = failedOwnedBudgetBinding(sequence, queueOrigin, reason); reason = undefined; throw failure; }
+    if (sequence.root.budgetSequence !== sequence || sequence.root.env !== env || sequence.phase !== 3
+      || sequence.result !== result || sequence.rollbackBindingPhase !== 1) throw identityFailure("protocol");
+    const sinks: AccountingSinks = { budget, usage, queue, ownedHttp: sink };
+    sequence.sinks = sinks; sequence.rollbackBindingPhase = 2; return sinks;
+  } finally {
+    if (sequence.rollbackBindingPhase === 1) sequence.rollbackBindingPhase = 3;
+    budget = undefined; usage = undefined; queue = undefined;
+  }
 }
 export function finishOwnedHttpBudgetBranch(sink: OwnedHttpSinkOwner, result: BudgetReservation): void {
   const sequence = ownedBudgetSequence(sink);
@@ -2775,8 +2852,8 @@ export function ownedHttpReserveAcknowledgment(sink: OwnedHttpSinkOwner, namespa
   if (!cap) throw identityFailure("protocol");
   const leg = ownedBudgetLeg(cap, sink), sequence = leg.sequence;
   if (sequence.phase !== 1 || sequence.root.sealed || sequence.root.unknown || !(leg.flags & 1) || leg.flags & 64
-    || leg.intent.request !== source || leg.name !== name) throw identityFailure("protocol");
-  leg.flags |= 64; leg.namespace = namespace;
+    || leg.bindingPhase !== 2 || leg.namespace !== namespace || leg.intent.request !== source || leg.name !== name) throw identityFailure("protocol");
+  leg.flags |= 64;
   const request = { policyId: source.policyId, windowKey: source.windowKey, scopeKey: source.scopeKey, limitMicros: source.limitMicros,
     costMicros: source.costMicros, reservationId: source.reservationId, capability: source.capability, dispatched: source.dispatched };
   const body = privateIntentJson(request);
@@ -2787,7 +2864,7 @@ export function ownedHttpDispatchAcknowledgment(sink: OwnedHttpSinkOwner, namesp
   if (!cap) throw identityFailure("protocol");
   const leg = ownedBudgetLeg(cap, sink), sequence = leg.sequence;
   if (sequence.phase !== 2 || sequence.root.sealed || sequence.root.unknown || !(leg.flags & 4) || leg.flags & 128
-    || leg.namespace !== namespace || leg.name !== name || leg.id !== reservationId) throw identityFailure("protocol");
+    || leg.bindingPhase !== 4 || leg.namespace !== namespace || leg.name !== name || leg.id !== reservationId) throw identityFailure("protocol");
   leg.flags |= 128;
   const body = privateIntentJson({ reservationId });
   return admittedOwnedBudgetCommand(leg, namespace, "/dispatch", body, signal);
@@ -4576,9 +4653,10 @@ export function prepareOwnedHttpSoftStatus(cap: OwnedHttpRequest, env: Env, plan
     || plan.descriptors.length > 4) throw identityFailure("protocol");
   // Four complete source/read/text/graph overlaps, plus fixed decision metadata.
   growOwnedHttpRequest(cap, 4096 + plan.descriptors.length * ownedStatusData);
-  reserveSinkOrigins(ownedHttpSinkOwner(cap), 1 + 16 * plan.descriptors.length);
+  reserveSinkOrigins(ownedHttpSinkOwner(cap), 3 + 16 * plan.descriptors.length);
+  const startOrigin = sinkOrigin(root.sink!, "acquire"), startCleanupOrigin = sinkOrigin(root.sink!, "registration");
   claimOwnedSinkFactories(); enrollOwnedSinkChild(root);
-  const state = new OwnedStatusController(cap, plan); root.softStatus = state;
+  const state = new OwnedStatusController(cap, plan, startOrigin, startCleanupOrigin); root.softStatus = state;
   for (let index = 0; index < plan.descriptors.length; index++) {
     state.readers.push(new OwnedStatusReader(state, index));
   }
@@ -4590,15 +4668,34 @@ export function finishOwnedHttpSoftStatus(cap: OwnedHttpRequest, state: OwnedSta
 }
 export function bindOwnedHttpSoftStatus(cap: OwnedHttpRequest, env: Env, plan: PreparedSoftBudget, operation: HttpOperation): void {
   const root = requestOwner(cap), state = root.softStatus;
-  if (!state || state.prepared !== plan || state.readersStarted || state.settled || root.env !== env
+  if (!state || state.prepared !== plan || state.bound || state.readersStarted || state.settled || root.env !== env || root.unknown || root.sealed
     || !matchesOwnedHttpSoftStatusPlan(cap, env, plan, operation)) throw identityFailure("protocol");
   const origin = sinkOrigin(root.sink!, "acquire");
-  try { state.namespace = env.BUDGET_LEDGER; } catch (reason) { throw failedSinkOrigin(root, origin, reason); }
   state.bound = true;
+  try { state.namespace = env.BUDGET_LEDGER; } catch (reason) { throw failedSinkOrigin(root, origin, reason); }
+}
+export function ownedHttpSoftStatusStartFailure(cap: OwnedHttpRequest, env: Env, plan: PreparedSoftBudget,
+  operation: HttpOperation, reason: unknown): object | string {
+  const root = requestOwner(cap), state = root.softStatus;
+  if (!state || state.prepared !== plan || !state.bound || state.readersStarted || state.settled
+    || root.env !== env || state.startOrigin === undefined || !matchesOwnedHttpSoftStatusPlan(cap, env, plan, operation))
+    throw identityFailure("protocol");
+  const origin = state.startOrigin; state.startOrigin = undefined;
+  try { return failedSinkOrigin(root, origin, reason); }
+  catch { root.unknown = true; return ownedHttpPlatformFailure; }
+  finally { reason = undefined; }
+}
+export function recordOwnedHttpSoftStatusCleanupFailure(cap: OwnedHttpRequest, env: Env, plan: PreparedSoftBudget,
+  operation: HttpOperation, reason: unknown): void {
+  const root = requestOwner(cap), state = root.softStatus;
+  if (!state || state.prepared !== plan || root.env !== env || state.startCleanupOrigin === undefined
+    || !matchesOwnedHttpSoftStatusPlan(cap, env, plan, operation)) throw identityFailure("protocol");
+  const origin = state.startCleanupOrigin; state.startCleanupOrigin = undefined;
+  recordOwnedTerminalFailure(root, root.completion, origin, reason); reason = undefined;
 }
 export function startOwnedHttpSoftStatus(cap: OwnedHttpRequest): void {
-  const state = requestOwner(cap).softStatus;
-  if (!state) throw identityFailure("protocol");
+  const root = requestOwner(cap), state = root.softStatus;
+  if (!state || root.unknown || root.sealed) throw identityFailure("protocol");
   state.startReaders();
 }
 export function checkOwnedHttpSoftStatusRetirement(cap: OwnedHttpRequest): void {
@@ -5190,12 +5287,13 @@ export function withOwnedNativeLocalError(cap: OwnedHttpRequest, response: Respo
 
 export interface OwnedHttpRequestReceiver extends RequestOwner {}
 export class OwnedHttpRequestReceiver {
-  prepareOwnedHttpCredentialFailures(cap: OwnedHttpRequest, credential: OwnedHttpCredential): number {
-    if (OwnedHttpRegistrations.requests?.get(cap) !== this || this.unknown || this.sealed
+  prepareOwnedHttpCredentialFailures(cap: OwnedHttpRequest, credential: OwnedHttpCredential, request: Request, env: Env): number {
+    if (OwnedHttpRegistrations.requests?.get(cap) !== this || this.request !== request || this.env !== env || this.unknown || this.sealed
       || !matchesOwnedHttpCredentialFailurePreparation(credential, cap)) throw identityFailure("protocol");
-    reserveSinkOrigins(this.sink!, 7);
+    reserveSinkOrigins(this.sink!, 11);
     const first = sinkOrigin(this.sink!, "acquire");
-    for (let index = 1; index < 7; index++) sinkOrigin(this.sink!, "acquire");
+    for (let index = 1; index < 10; index++) sinkOrigin(this.sink!, "acquire");
+    sinkOrigin(this.sink!, "retire");
     return first;
   }
   recordOwnedHttpCredentialFailure(cap: OwnedHttpRequest, credential: OwnedHttpCredential, permit: object, position: number, undefinedReason: boolean): void {
@@ -5361,6 +5459,10 @@ export class OwnedHttpRequestReceiver {
   completeOwnedHttpAttemptProvider(cap: Parameters<typeof import("./proxy.ts").completeOwnedHttpAttemptProvider>[0], permit: Parameters<typeof import("./proxy.ts").completeOwnedHttpAttemptProvider>[1]): ReturnType<typeof import("./proxy.ts").completeOwnedHttpAttemptProvider> {
     if (OwnedHttpRegistrations.requests?.get(cap) !== this) throw identityFailure("protocol");
     return completeOwnedHttpAttemptProvider(cap, permit);
+  }
+  completeOwnedHttpFailedAttemptProvider(cap: OwnedHttpRequest, request: Request, permit: object, failure: unknown): void {
+    if (OwnedHttpRegistrations.requests?.get(cap) !== this) throw identityFailure("protocol");
+    completeOwnedHttpFailedAttemptProvider(cap, request, permit, failure);
   }
   reserveOwnedHttpSerialization(cap: Parameters<typeof import("./pricing.ts").reserveOwnedHttpSerialization>[0], body: Parameters<typeof import("./pricing.ts").reserveOwnedHttpSerialization>[1]): ReturnType<typeof import("./pricing.ts").reserveOwnedHttpSerialization> {
     if (OwnedHttpRegistrations.requests?.get(cap) !== this) throw identityFailure("protocol");

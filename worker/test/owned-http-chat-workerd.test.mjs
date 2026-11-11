@@ -70,6 +70,73 @@ async function fixture(t, run, observeParsers = false, runtimeOptions = {}) {
 const chat = (id, extra = {}) => ({ method: 'POST', headers: { authorization: `Bearer ${ownedHttpProxyKey(id)}`, 'content-type': 'application/json' },
   body: JSON.stringify({ model: ownedHttpModel, messages: [{ role: 'user', content: 'synthetic input' }], ...extra }) });
 const count = (state, kind, path) => state.calls.filter(row => row.kind === kind && row.path === path).length;
+
+for (const [position, kind] of [...[7, 8, 9].flatMap(position => ['undefined', 'opaque', 'internal', 'selected'].map(kind => [position, kind])),
+  [7, 'mismatch'], [8, 'capacity'], [7, 'cleanup-undefined'], [7, 'cleanup-object'], [7, 'report']])
+test(`native private preclaim ${position} preserves bounded ${kind} custody`, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const unknown = kind.startsWith('cleanup-') || kind === 'report';
+    if (unknown) {
+      f.expectUnknownRetirement();
+      f.releases.push(() => f.request('https://fixture/fixture/terminal', { method: 'DELETE' }));
+      assert.equal((await f.request('https://fixture/fixture/terminal', { method: 'POST', body: '{}' })).status, 204);
+    }
+    assert.equal((await f.request('https://fixture/fixture/consumer-mode', { method: 'POST', body: `preclaim:${position}:${kind}` })).status, 204);
+    const response = await f.request('https://fixture/v1/chat/completions', chat('chat'));
+    assert.equal(response.status, 503);
+    assert.equal(JSON.parse(response.text).error.code, kind === 'mismatch' || kind === 'capacity' ? 'identity_admission_unavailable' : 'provider_unavailable');
+    let report;
+    for (;;) {
+      report = await state(f);
+      if (unknown ? report.preclaim?.unknown && report.events.length === 1 : report.completed.length === report.intakes.length) break;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    const row = report.preclaim;
+    assert.deepEqual(row.trace, [7, 8, 9].slice(0, position - 6));
+    assert.equal(row.reasonReads, 0); assert.equal(row.reentries, 3); assert.equal(row.selectedHeld, false); assert.equal(row.cacheClaimed, false);
+    assert.equal(count(report, 'credential', '/materialize'), 0); assert.equal(report.events.length, 1);
+    assert.equal(JSON.parse((await f.request('https://fixture/fixture/upstream')).text).length, 0);
+    assert.equal(row.facts.length, kind.startsWith('cleanup-') ? 2 : kind === 'mismatch' || kind === 'capacity' ? 0 : 1);
+    if (row.facts.length) { assert.equal(row.facts[0].kind, 0); assert.equal(row.facts[0].undefinedReason, kind.includes('undefined')); }
+    if (kind.startsWith('cleanup-')) {
+      assert.equal(row.facts[1].kind, 12); assert.notEqual(row.facts[0].ordinal, row.facts[1].ordinal);
+      assert.equal(row.facts[1].undefinedReason, kind.includes('undefined')); assert.equal(row.phase, 4);
+    }
+    if (unknown) { assert.equal(row.retired, false); assert.equal(row.permitHeld, true); assert.equal(row.bytes, 33554432); }
+    else { assert.equal(row.retired, true); assert.equal(row.permitHeld, false); assert.equal(row.bytes, 0); }
+  }, true);
+});
+
+for (const mode of ['undefined', 'opaque', 'forged', 'cleanup-undefined', 'cleanup-object', 'report'])
+test('private status start preserves bounded primary and independent cleanup: ' + mode, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    if (mode === 'report') {
+      f.expectUnknownRetirement();
+      f.releases.push(() => f.request('https://fixture/fixture/terminal', { method: 'DELETE' }));
+      assert.equal((await f.request('https://fixture/fixture/terminal', { method: 'POST', body: '{}' })).status, 204);
+    }
+    assert.equal((await f.request('https://fixture/fixture/consumer-mode', { method: 'POST', body: 'status-start:' + mode })).status, 204);
+    const response = await f.request('https://fixture/v1/chat/completions', chat('soft', { stream: true }));
+    assert.equal(response.status, 502);
+    assert.equal(JSON.parse(response.text).error.code, 'provider_unavailable', 'foreign identity-branded throws receive no internal priority');
+    let report;
+    for (;;) { report = await state(f); if (report.events.length === 1) break; await new Promise(resolve => setTimeout(resolve, 10)); }
+    const row = report.statusStart;
+    assert.equal(row.trace, 'BC'); assert.equal(row.gets, 1); assert.equal(row.reasonReads, 0);
+    assert.equal(row.reentries, 1); assert.equal(row.cleanup, 1);
+    assert.equal(count(report, 'budget', '/status'), 0, 'failed configuration starts no status fetch');
+    assert.equal(row.failures.length, mode.startsWith('cleanup-') ? 2 : 1);
+    assert.equal(row.failures[0].origin, 'acquire'); assert.equal(row.failures[0].ordinal, row.start);
+    assert.equal(row.failures[0].primaryIsUndefined, mode.includes('undefined'));
+    if (mode.startsWith('cleanup-')) {
+      assert.equal(row.failures[1].origin, 'registration'); assert.equal(row.failures[1].ordinal, row.cleanupOrigin);
+      assert.notEqual(row.failures[0].ordinal, row.failures[1].ordinal);
+      assert.equal(row.failures[1].primaryIsUndefined, mode.includes('undefined'));
+    }
+    if (mode === 'report') { assert.equal(row.reports, 1); assert.equal(row.unknown, true); assert.ok(row.funding > 0); }
+    assert.equal(report.events.length, 1);
+  }, true);
+});
 const state = async f => JSON.parse((await f.request('https://fixture/fixture/state')).text);
 const settledState = async f => {
   for (;;) {
@@ -291,6 +358,35 @@ async function prepareBudgetSequence(f, options) {
     method: 'POST', body: JSON.stringify({ legs: 4, ...options }),
   })).status, 204);
 }
+
+for (const target of ['reserve', 'dispatch', 'rollback-budget', 'rollback-usage', 'rollback-queue'])
+for (const reason of ['undefined', 'opaque', 'forged'])
+test(`private budget binding ${target} keeps ${reason} outside async failure custody`, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    await prepareBudgetSequence(f, { bindingFailure: target, bindingReason: reason });
+    const response = await f.request('https://fixture/v1/chat/completions', chat('chat'));
+    assert.equal(response.status, 503);
+    assert.equal(JSON.parse(response.text).error.code, target === 'reserve' ? 'budget_store_unavailable' : 'accounting_unavailable', 'foreign 402 is not a genuine budget denial');
+    const row = await budgetState(f);
+    assert.equal(row.bindingReasonReads, 0); assert.equal(row.bindingFailures.length, 1);
+    assert.equal(row.bindingFailures[0].primaryIsUndefined, reason === 'undefined');
+    assert.ok(row.bindingReentries > 0); assert.ok(row.rejectedRights >= 6 * row.bindingReentries);
+    const sent = JSON.parse((await f.request('https://fixture/fixture/upstream')).text);
+    assert.equal(sent.length, 0, 'binding failure cannot dispatch the provider');
+    if (target === 'reserve') {
+      assert.equal(row.reserve.length, 3); assert.equal(row.settle.length, 3); assert.equal(row.dispatch.length, 0);
+      assert.deepEqual(row.settle.map(item => item.id).sort(), row.reserve.map(item => item.id).sort());
+      assert.ok(row.settle.every(item => item.cost === 0));
+    } else if (target === 'dispatch') {
+      assert.equal(row.reserve.length, 4); assert.equal(row.dispatch.length, 3);
+    } else {
+      const count = { 'rollback-budget': 1, 'rollback-usage': 2, 'rollback-queue': 3 }[target];
+      assert.deepEqual(row.bindingReads.filter(item => item.phase === 'rollback').map(item => item.name),
+        ['BUDGET_LEDGER', 'USAGE_LEDGER', 'USAGE_QUEUE'].slice(0, count));
+      assert.equal(row.settle.length, 0); assert.equal(row.dispatch.length, 0);
+    }
+  }, true);
+});
 
 // Same closed command/real I/O topology as Node; no slot-count fit is inferred.
 for (const activeFinal of [false, true])
@@ -2701,6 +2797,7 @@ test(`native archive ${target} ${kind} failure stays bounded through held cleanu
     const dispatch = f.dispatch('https://fixture/v1/chat/completions', chat('chat', { messages: [{ role: 'user', content: 'x'.repeat(40000) }] }));
     let report; for (;;) { report = await state(f); if (report.archiveFault.entered) break; await new Promise(resolve => setTimeout(resolve, 10)); }
     const row = report.archiveFault;
+    assert.deepEqual(row.layout, { writerFields: 37, writerNameUnits: 324, commands: 3, commandFields: 10, commandNameUnits: 76 });
     assert.equal(row.awaitingBounded, true); assert.equal(row.didThrow, false); assert.equal(row.cancelCalls, 1);
     assert.equal(row.puts, target === 'put' ? 1 : 0); assert.equal(row.envGets, target === 'getter' ? 1 : 0);
     assert.equal(row.reasonReads, 0); assert.equal(report.completed.length, 0); assert.ok(report.charged > 65536);
