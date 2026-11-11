@@ -42,6 +42,45 @@ models:
       upstream: openai/gpt-oss-120b:fastest
       capabilities: [llm.chat]
       pricingRef: huggingface-router-dynamic
+    - id: huggingface/deepseek-ai/DeepSeek-R1
+      upstream: deepseek-ai/DeepSeek-R1
+      capabilities: [llm.chat]
+      pricingRef: huggingface-router-dynamic
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            checkedAt: "2026-11-03"
+            sources:
+              - https://huggingface.co/deepseek-ai/DeepSeek-R1
+              - https://huggingface.co/docs/inference-providers/en/index
+            input: [text]
+    - id: huggingface/deepseek-ai/DeepSeek-V3.1
+      upstream: deepseek-ai/DeepSeek-V3.1
+      capabilities: [llm.chat]
+      pricingRef: huggingface-router-dynamic
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            checkedAt: "2026-11-03"
+            sources:
+              - https://huggingface.co/deepseek-ai/DeepSeek-V3.1
+              - https://huggingface.co/docs/inference-providers/en/index
+            input: [text]
+    - id: huggingface/openai/gpt-oss-120b
+      upstream: openai/gpt-oss-120b
+      capabilities: [llm.chat]
+      pricingRef: huggingface-router-dynamic
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            checkedAt: "2026-11-03"
+            sources:
+              - https://huggingface.co/openai/gpt-oss-120b
+              - https://huggingface.co/docs/inference-providers/en/index
+            input: [text]
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
