@@ -1,6 +1,247 @@
 # Private owned HTTP Chat staging
 
 
+### Relayed V2 components and caller composition — source fd8b649
+
+ROOT's0657 relay supplies SAME3's base-driver component and SAME4's budget/
+terminal component against `fd8b6492f7f291e4b564a3e98d2a569467cf50e7`. The
+production files remain identical after the docs-only05f1595 checkpoint.
+These are attributable partial components, not complete family reservations.
+The APP function/environment terms E_L/E_Q/E_T and base executors are assigned
+separately; this checkpoint does not duplicate that source work.
+
+#### Base-driver component carried with its conditions
+
+| SAME3 priced base slice | Bytes |
+| --- | ---: |
+| Twenty-own-property instance phase union,219 name units | 1902 |
+| Four ordinary observation cells plus closed-installation cell | 1884 |
+| Ten frozen exposed bound handlers | 3070 |
+| Shared bound advanceWork | 270 |
+| Current and queued-next jobs | 288 |
+| Retirement and current/next readiness capability positions, `3*K` | 3252 |
+| Five native observer installations, `5*T` | 8140 |
+| Five construction argument-array positions | 1240 |
+| Simultaneous APP executor own-property slice | 196 |
+| **Conditional priced component** | **20242** |
+
+The closed cell's `installationFailure` is present in this source and is already
+included. Its diagnostic target/registry is parent-owned. Do not append that
+property a second time. The source has no V2 counter or next-readiness record.
+Five original Promise targets would add800 bytes only where those same targets
+are not already assigned to their source/controller/subclass; the pull original
+is the same subclass async result returned by `ownDriverPull`.
+
+The adopted definitions are `R=584`, `K=P0+R+32+40+268=1084` and
+`T=K+80+224+16+224=1628`. R is contained in K and therefore T. The carried20242
+calculation receives no additional R. Its receipt-capability/construction
+classification remains conditional on ROOT's pending APP-executor clarification;
+it must not become a reservation merely by adding an executor estimate to K.
+The196 executor slice excludes source environments and callable-code links.
+
+#### Actual caller/readiness lifetime proof
+
+`startDriverRead` first rejects an existing pending read or `readObservation`,
+then constructs the one current readiness receipt. `advance` consumes the
+observed FIRST and attempts cell discharge before resolving/rejecting readiness.
+An installation-uncertain cell cannot discharge, so a caller's next attempt
+fails before another readiness factory. A logical failure without FIRST keeps
+the original nonce/current receipt. No caller may infer physical retirement from
+that prompt logical rejection.
+
+All reached read callers have the following source-defined sequencing:
+
+| Caller / genuine role | Current source sequence | Last-use and successor boundary |
+| --- | --- | --- |
+| CodecReader or OwnedNormalizerReader during `sniffSse` | One `await operation.wait(readConsumer(...))` or `await operation.wait(httpReader.read())` per loop | The returned wrapper is not stored in a collection. Its actual pending-handler path removes the abort listener before resolving/rejecting; the loop then processes capture. Failure exits the loop and starts existing retirement. |
+| Same readers during `readLimited` | The same one-at-a-time wait chain | Decode/accounting happens after await and before the next read. Its finally starts retirement; no detached read retry is added. |
+| OwnedNormalizerReader replay | `pull -> beginDriverPull -> ownDriverPull(next(controller))`; next either emits an existing prefix/capture or awaits one read | Sniffing transfers only after its last wait returned. Prefix/capture branches create no read receipt. A subsequent native pull passes the base's prior-pull discharge barrier. |
+| CodecReader in OwnedChatUsage | One guarded next activation; prefix/crossing branches or one awaited `readConsumer` | The same sniff reader can transfer into usage; the transfer does not reacquire closed or overlap the earlier sniff loop. A replacement uses a distinct genuine reader and remains additive. |
+| GenericUsageReader in OwnedGenericChatUsage | One guarded next activation and one `await state.read()` | Finished checks precede acceptance; capture clears in finally. Stop/UNKNOWN does not authorize another read. |
+| OwnedPublicReader | One guarded next activation and one `await startDriverRead()` | It publishes or closes after await, then returns its pull result. Retirement does not await the enclosing pull from inside that pull. |
+| OwnedVeniceSource JSON | One `await source.read()` per loop, then copy and capture-finally | The loop cannot advance to another await before the previous continuation executes. EOF joins source retirement before subsequent JSON work. |
+| OwnedVeniceSource SSE | One guarded OwnedVeniceEvents next loop; reads are sequential, with optional authority await between accepted frames | No second source read occurs during that authority await. Current pull/revalidation/parent work remain separately live and funded. |
+| OwnedRevalidationRpc | Await fetch-ready, open once, then one `await startDriverRead(backing)` per loop | No driver pull is created. Finally joins retired before releasing RPC aliases; UNKNOWN can hold that whole caller. |
+
+This proves the **current plus immediately preceding readiness-generation**
+allowance for the fixed callers, not an arbitrary exported-reader usage model.
+Native Promise reactions resume a caller in a later job. When that resumed
+caller creates the next readiness Promise, the preceding await/current job may
+still retain its old receipt. The caller's next await yields before a third
+read can resolve and resume it. No loop saves old readiness identities. On the
+failure route the retained observation blocks a successor instead of creating
+an unbounded sequence of uncertain receipts.
+
+For `HttpOperation.wait`, the source adds a real Promise/executor, abort closure
+and signal registration, two pending handlers and their dependent, plus the
+outer caller await. If abort wins, the pending handlers may survive the logical
+wrapper; the read/loop exits and its retained cell still prevents fresh reads.
+Those wrapper products are a **caller component** and are not the base's second
+readiness Promise. Repeated healthy waits end their listener/handler use before
+the next loop iteration; the executing previous reaction/current await overlap
+still belongs in the native/caller envelope.
+
+Likewise the pull async result, base pull observation and native stream-controller
+reaction reference one original target. `beginDriverPull` can rearm only after
+FIRST, returned installation/callback tails and observation discharge. UNKNOWN
+prevents successful rearming. The controller may start a successor while its
+prior fulfillment job is current, so the subclass/source manifest must retain
+current/next pull jobs and contexts; it cannot assume publication ends the prior
+one. This is a finite generation proof, not a native-byte tariff or DATA refund.
+
+Closed acquisition is once per genuine reader: normalizer `owner.reader` claims
+once; codec role/replacement gates admit at most their separate named readers;
+generic usage binds its exact reader/body once; public readers open at their
+fixed constructor path; Venice opens its source once. RPC's opened fetch flag
+blocks a second open in failure cleanup. None obtains a new closed original
+merely because a read completed. Source/controller machinery and cleanup
+followers remain additive to the base fields.
+
+#### Subclass own-field increments, excluding target graphs
+
+The base object/header is already included. Additional ordinary own properties
+therefore cost `64*p+8*q+2*(u+v)`, with p properties, q primitive phase positions,
+u property-name units and v stored enum-string units. These are field increments
+only. Own fields with declared-only references are not assigned an imaginary
+undefined initialization phase.
+
+| Reached subclass | p / q / u / v | Own-property increment |
+| --- | --- | ---: |
+| CodecReader | 10 / 9 / 91 / 0 | 894 |
+| GenericUsageReader | 3 / 3 / 22 / 0 | 260 |
+| OwnedNormalizerReader | 9 / 9 / 96 / 7 | 854 |
+| OwnedVeniceSource | 9 / 7 / 66 / 0 | 764 |
+| OwnedPublicReader | 9 / 7 / 79 / 0 | 790 |
+| OwnedRevalidationRpc | 25 / 18 / 187 / 8 | 2134 |
+
+The generic and normalizer `#cap` entries are **separate private-element storage**,
+not ordinary own properties. Their private-element list/record/initialization
+rows remain explicit unpriced rows here; this table does not erase them. The
+normalizer mode includes the seven-unit limited alternative; RPC kind includes
+the eight-unit snapshot alternative. Text/requestBody payloads, prefix buffers,
+cleanup arrays, receiver targets, RPC fetch-ready/executors, source controllers,
+listeners and retained parent links require their own composition. RPC never
+creates driver pull; specializing that unused role must follow the complete
+RPC roster, rather than blindly adding five original targets to every class.
+
+#### Budget/terminal component carried with its conditions
+
+For L actual legs, let r=max(0,L-1), m=L+1 and
+`a_i=objectName.length+originalReservationId.length`. SAME4's record terms are:
+
+| Record / named branch | Carried numerical term |
+| --- | --- |
+| BudgetSequence | 818 |
+| BudgetLeg | `852+2*a_i`, plus32-byte cap and16-byte registry edge |
+| Sequence and leg vector/associations | `934+966*L+2*sum(a_i)` |
+| Nonempty rollback sinks/spread | 476 |
+| LedgerCommand own record | `1512+2*path.length` |
+| Rollback SinkVoidCommand own record | 880 |
+| AccountingTerminal own record | 1612 |
+| TerminalOperation own record | 850 |
+| OriginalObservation | 276 |
+| Reserve with ACK alternative | `41264+E_L` |
+| Dispatch with ACK alternative | `41266+E_L` |
+| Rollback settle with ACK alternative | `41262+E_L` |
+| Rollback queue | `8010+E_Q` |
+| Terminal fetch/queue operation | 6950 |
+| Terminal cancellation alternative | 12604 |
+| Terminal shell/lane composition | `5272+46076*(L+1)+E_T` |
+
+The full carried expression, still excluding caller/root/DATA terms, is:
+
+```text
+934 + 966L + 2*sum(a_i)
++ L*(41264+E_L)
++ max(L*(41266+E_L), (r>0 ? 476 : 0)+r*(49272+E_L+E_Q))
++ 5272 + 46076*(L+1) + E_T
+```
+
+At L=4 this is
+`405506+2*sum(a_i)+4*E_L+max(165064+4*E_L,148292+3*E_L+3*E_Q)+E_T`.
+The dispatch-arm priced constant570570 is not a chosen upper until the E terms
+close. Reserve owners remain additive. Only the genuine irreversible branch
+choice permits dispatch versus rollback maximum; no prior ACK/source/tail credit
+is reused. ACK CONTROL31334/31338 is already included, while ACK DATA and decoder
+queues are excluded and compose exactly once from the DATA table below.
+
+The rollback VOID record has seven primitive positions because its budget field
+always holds the genuine sequence. The archive constructor emits budget undefined,
+so its ten-field record has eight primitive positions and costs888 bytes. That
+source-specific8-byte difference is preserved; the880-byte rollback slice must
+not silently replace the archive table. Original, installation and failure records
+remain independent in both branches.
+
+E_L and E_Q own distinct ready executors/environments. E_T owns the terminal
+executors, registration arrow and private-leaf handlers/environments. Native
+ready/suppression2372 and terminal receipt1488 terms already contain their P0/R
+machinery; the leaf native follower1628 already contains T. No repeated R, K,
+ACK, source original or shared environment target is appended by this relay.
+
+Remaining **caller** rows are source-specific: reserveBudget's map callback,
+L async reserveLedgerIntent callers, mapped input vector, allSettled capability/
+per-element closures/result records and resumed reserve frame; dispatch's filter,
+map/async callbacks and allSettled; or at most r settleReservation callers,
+settle/cleanup callbacks, rollback allSettled and bounded failure-report records.
+The reserve result vector and resumed reserve frame can remain live while
+rollback is awaited, so their retained storage is additive to rollback callers.
+Final private accounting uses the terminal shell rather than activating ordinary
+finalizeOwnedAccounting/publishUsage/charge branches as extra proof work.
+The current owner-error review governs unresolved retained failure targets; no
+arbitrary reason graph receives an invented finite caller allowance here.
+
+#### Implemented shared serializer and execution boundary
+
+The authorized iterative shared `accountingChunks` change is implemented in
+commit `54900f51c4bc9d3cf99b7b987c3b27b1c0925a0b`. Current `worker/json-body.ts`
+blob is `c9c78bd896b960a19ecc26cd167634dc405a991a`. The function slice SHA256 is
+`c2ed1e4bbbc1bd68867d2a56a0a6987b234c449341c4887fb7a025cf027302c7`.
+There are zero recursive accountingChunks calls and two mutually exclusive
+quoted-delegation sites, with at most one quoted child live. The quoted function
+is byte-identical to its pre-repair implementation. This is the shared serializer,
+not a second private wire algorithm.
+
+The input is the already-admitted private or ordinary copied graph. Enumerating
+its own keys preserves the former own-enumerable for-in order; undefined object
+members remain omitted, and array undefined values still become null. Delimiters,
+number serialization and the quoted4096-unit/surrogate algorithm are unchanged.
+The cursor stack clears value/key aliases in one finally loop; return/cancel
+unwinds only the current quoted delegation, not32 recursive serializer frames.
+
+Paid traversal at depth32 is `G+33*198+482=G+7016`, within the earlier sequential
+admission/copy traversal high water `G+34*224+1024=G+8640` after its actual finally.
+It pays cursor/key vectors, not generator contexts or executing frames. One
+accountingChunks generator and at most one quoted generator remain separate
+PAID_ASYNC_IO_CONTROL products. The retained factory parameters/environments,
+pending fragment, iterator-result/delegation state and native source algorithms
+also remain separate rows. A depth-sized generator/context multiplier is no
+longer justified by this implementation.
+
+| Active serializer phase | Actual APP call chain / additional products to census |
+| --- | --- |
+| Next quoted fragment | pull -> generator.next -> accountingChunks -> quoted.next; quote slicing/stringify/trim operands and delegation/iterator results |
+| Container entry | pull -> accountingChunks -> captured Object.keys / privateAccountingProperty; paid frontier allocation plus descriptor/native-call operands |
+| Member transition | pull -> accountingChunks -> quoted for the current key; cursor/key/item and delimiter state, never recursive child advancement |
+| Slab encoding/publication | pull -> ownedByteLength / ownedByteSubarray / encodeOwnedTextInto / enqueueOwnedBytes; backing/view/proof/results and controller call operands |
+| Return/cancellation | cancel or pull -> release -> chunks.return -> current quoted return, then one cursor-clear loop; no recursive per-depth return chain |
+
+The eighteen initialized/live named bindings previously reported at quoted
+advancement were a necessary subset. Including pull's lexically allocated bytes
+and encoded bindings before their initialization gives at least twenty binding
+positions plus three APP invocations in that phase. This **23-product subset is
+not an ACTIVE upper**. Receivers, argument lists, TDZ/iterator/completion records,
+native-call operands, reentry and partial-failure paths still need the complete
+ACTIVE128/SYNC512 table. Persistent paid environments are not counted again as
+new active objects merely because execution resumes; additional activation
+products are counted. No ACTIVE or native-generator closure is claimed here.
+
+The existing authored Node and exact Workerd fixtures cover all-object depth32,
+40000 ASCII units, a surrogate pair at a4096-unit boundary, lone surrogates,
+full advancement and cancellation. They compare ordinary/private/native JSON
+wire and the historical slab partition `[28929,11361]`. These witnesses are
+present in accounting-preflight.test.mjs and accounting-preflight-workerd.test.mjs;
+all remain `UNRUN_CODE_ONLY_HOSTED`.
+
 ### V2 independent composition checkpoint — source fd8b649
 
 This checkpoint reads production source at
