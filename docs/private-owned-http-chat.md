@@ -1,5 +1,41 @@
 # Private owned HTTP Chat staging
 
+## Source-only partial pinned-client return correction
+
+After published DACD, the checkout contains an independently authorized fixture
+repair only. It is not a new CODE_COMPLETE candidate or runtime qualification.
+The runtime-import architecture, fixed CONTROL529 necessary subset and optimistic
+516 placement, and independent rejection/installation provenance findings remain
+NEEDS_WORK. No production repair or model change follows from this fixture fix.
+
+The exact local Git object `d8bb939408aa4d2be7df0161748edb52ebf3b1fb`
+provides the client contract; no newer client source or dependency was fetched.
+Its `packages/llm-core/src/types.ts:882` defines `StreamFn` as returning
+`AssistantMessageEventStreamLike | Promise<AssistantMessageEventStreamLike>`.
+That stream is async-iterable and has `result(): Promise<AssistantMessage>`.
+The actual `wrapEmbeddedAgentStreamApiKey` implementation in
+`src/agents/embedded-agent-runner/stream-resolution.ts:281` returns an async
+function whenever this fixture supplies its resolved key. The registered
+ClawRouter provider wrapper remains inside that credential wrapper. The SDK
+facade and package exports retain those native implementations; the existing
+consumer helper checks the exact SHA and runs the copied fixture with the
+client's own package manager in ephemeral hosted CI.
+
+Every fixture call now awaits stream creation before invoking `result()`;
+the abort case awaits that same actual stream before event iteration. The
+provider registration, catalog/auth, wrappers, wire path, signal, delivered-
+prefix abort, result inspection and accounting/ID assertions are unchanged.
+No direct-fetch client replacement, timer, skip or assertion weakening is added.
+
+Hosted job130341630661 on DACD reported the baseline API-shape errors and the
+same line120 `.result()` failure in all three custody scenarios. Those child
+processes exited1 with `killed:false` and `signal:null`; their roughly60-second
+runtime was not timeout evidence. This correction is SOURCE_ONLY_PARTIAL:
+changed-fixture syntax and source inverses are checked without importing the
+client runtime or running its dependencies. New semantic execution remains
+UNRUN_CODE_ONLY_HOSTED.
+
+
 The current source candidate repairs published candidate
 `07b75f4523e8024cfba052275a0973a10c0e14be`, against exact main
 `7b87537df59c39ae1bae0cfa748208572fa4d19f`. It preserves the236, bbf and07

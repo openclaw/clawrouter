@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Await the pinned OpenClaw credential wrapper's stream result before inspecting completion or iterating abort output in private HTTP Chat contract fixtures. Preserve the real registered client, routing/auth and accounting assertions. Source-only partial; runtime-import, CONTROL and provenance qualification remain open.
+
 - Keep private HTTP ACK funding held under an independent UNKNOWN original even after clean ACK retirement, and preserve the prior rejection and grant when retry commit fails after old-body cleanup. Correct the hosted BYOB type annotations, align the fixture body-getter capture with Workerd native inheritance, and add held-credit, same-ID recovery, failed-commit and actual-new-POST controls through Node, Workerd and the pinned unified Chat client. Source-only; repaired runtime and whole-owner inventories remain unqualified.
 
 - Compact private HTTP ACK and logical-owner records only after their actual phase joins, preserving independent closed/unlock custody, native failure correlation, chosen upload/codec associations and unchanged funding. Use fresh read identity cells, revoke ended budget/retry rights, and release terminal metadata after logical consumers return. Add held-original, stale-handler, independent-failure and exact-decrement witnesses. Source-only; runtime and complete owner inventories remain unqualified.

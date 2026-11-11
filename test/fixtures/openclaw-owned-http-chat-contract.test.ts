@@ -38,6 +38,8 @@ async function configured(id: string, selectedModel = modelId) {
   return { provider, model };
 }
 
+// The pinned credential wrapper returns a Promise of the actual event stream.
+// Callers await creation before using result() or the async iterator.
 function start(selected: Awaited<ReturnType<typeof configured>>, id: string,
   options: { apiKey?: string; signal?: AbortSignal; tools?: boolean; flatEscaped?: boolean } = {}) {
   const { provider, model } = selected;
@@ -58,14 +60,16 @@ describe.skipIf(!!custodyScenario)("actual registered OpenClaw unified Chat thro
   it("streams Venice through the actual configured UNIFIED boundary on cold and covered requests", async () => {
     const selected = await configured("venice", "venice/zai-org-glm-5-2");
     for (let invocation = 0; invocation < 2; invocation++) {
-      const result = await start(selected, "venice").result();
+      const stream = await start(selected, "venice");
+      const result = await stream.result();
       expect(result.stopReason, result.errorMessage).toBe("stop");
       expect(result.content).toContainEqual({ type: "text", text: "synthetic-answer" });
       expect(result.usage).toMatchObject({ input: 4, output: 3, totalTokens: 7 });
     }
   });
   it("consumes a near-limit escaped Venice frame through the real unified client", async () => {
-    const result = await start(await configured("venice", "venice/zai-org-glm-5-2"), "venice", { flatEscaped: true }).result();
+    const stream = await start(await configured("venice", "venice/zai-org-glm-5-2"), "venice", { flatEscaped: true });
+    const result = await stream.result();
     expect(result.stopReason, result.errorMessage).toBe("stop");
     expect(result.content).toContainEqual({ type: "text", text: "synthetic-answer" });
     expect(result.usage).toMatchObject({ input: 4, output: 3, totalTokens: 7 });
@@ -73,31 +77,35 @@ describe.skipIf(!!custodyScenario)("actual registered OpenClaw unified Chat thro
   it("delivers cold and covered-hit requests through the same configured unified route", async () => {
     const selected = await configured("chat");
     for (let invocation = 0; invocation < 2; invocation++) {
-      const result = await start(selected, "chat").result();
+      const stream = await start(selected, "chat");
+      const result = await stream.result();
       expect(result.stopReason, result.errorMessage).toBe("stop");
       expect(result.content).toContainEqual({ type: "text", text: "synthetic-answer" });
       expect(result.usage).toMatchObject({ input: 4, output: 3, totalTokens: 7 });
     }
   });
   it("preserves streamed tool arguments and actual usage", async () => {
-    const result = await start(await configured("tool"), "tool", { tools: true }).result();
+    const stream = await start(await configured("tool"), "tool", { tools: true });
+    const result = await stream.result();
     expect(result.stopReason, result.errorMessage).toBe("toolUse");
     expect(result.content).toContainEqual(expect.objectContaining({ type: "toolCall", name: "lookup", arguments: { value: "fixture" } }));
     expect(result.usage).toMatchObject({ input: 4, output: 3, totalTokens: 7 });
   });
   it("does not replace a wrong selected proxy secret with ambient credentials", async () => {
-    const result = await start(await configured("chat"), "chat", { apiKey: "clawrouter-live-owned_http_chat-invalid" }).result();
+    const stream = await start(await configured("chat"), "chat", { apiKey: "clawrouter-live-owned_http_chat-invalid" });
+    const result = await stream.result();
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).not.toMatch(/fixture-secret|fixture-upstream|must-not-fallback/);
   });
   it("preserves the upstream rejection without replay", async () => {
-    const result = await start(await configured("error"), "error").result();
+    const stream = await start(await configured("error"), "error");
+    const result = await stream.result();
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).not.toMatch(/fixture-secret|fixture-upstream|must-not-fallback/);
   });
   it("aborts after an actual delivered prefix", async () => {
     const controller = new AbortController();
-    const stream = start(await configured("abort"), "abort", { signal: controller.signal });
+    const stream = await start(await configured("abort"), "abort", { signal: controller.signal });
     let received = false, hasPrimary = false, primary: unknown;
     try {
       for await (const event of stream) if (event.type === "text_delta") { received = true; controller.abort(); break; }
@@ -117,7 +125,8 @@ describe.skipIf(!!custodyScenario)("actual registered OpenClaw unified Chat thro
 // real ledger IDs/debits after the actual registered client request completes.
 describe.skipIf(!custodyScenario)("actual unified Chat custody failures", () => {
   it("reports the failed delivery without a client replay", async () => {
-    const result = await start(await configured("pricing", "fireworks/glm-5.2"), "pricing").result();
+    const stream = await start(await configured("pricing", "fireworks/glm-5.2"), "pricing");
+    const result = await stream.result();
     expect(result.stopReason).toBe("error");
     expect(result.errorMessage).not.toMatch(/fixture-secret|fixture-upstream/);
   });
