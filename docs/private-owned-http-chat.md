@@ -2259,6 +2259,48 @@ standalone payload-retirement subtraction, terminal `ackCredits` and final
 retirement helper, must use that one definition. This checkpoint changes none of
 those paths and assumes no healthy compaction for admission.
 
+
+#### Current status record and constructor deltas — implementation976fa5a
+
+The carried54376 record/index component predates the two start-origin fields.
+The current controller has16 own properties,134 name units and11 primitive
+phase alternatives, giving1412 bytes rather than1210. The declared origin
+properties first receive numbers and later undefined; their202-byte delta
+already belongs inside the adopted1488 start-failure component. Do not add202
+a second time.
+
+Native index reconciliation adds16 for the existing ownedSoftBudgets entry,
+16 for the namespace-binding diagnostic,32 for the two start diagnostics and
+240D for the fifteen diagnostic Map entries per reader. These are entry
+record/list edges beyond the carried logical key/value occurrences, not
+duplicate failure targets or new container instances.
+
+Thus the current record/index slice, including the root-field reference, is
+3624+13316D:56888 at D4. If the complete5010-byte RequestOwner record is also
+composed, its softStatus field already owns92 of that amount; the exclusive
+status record/index slice is3532+13316D, or56796 at D4. The unchanged3548D
+handler/scheduling and699152D DATA rows remain separate. No old reader
+field/diagnostic target, native original, or root Map container is added twice.
+
+The derived controller constructor now takes cap,plan,startOrigin,
+startCleanupOrigin instead of cap,plan. Its exact APP argument/environment
+increment is414:234 for the two numeric bindings and29 identifier units,
+148 for the two additional numeric arguments-object positions, and32 for the
+two numeric entry-call List occurrences. The existing base super(cap,plan)
+call still takes two arguments. The carried2954 constructor component therefore
+becomes3368 for this APP delta only; native binding/construction work is still
+a separate interface. New origin fields and new origin bindings are distinct
+occurrences, so202 and234 are not overlapping charges.
+
+The named synchronous start-failure and cleanup-recorder functions each have
+five formals:cap,env,plan,operation,reason. Their actual caller/catch/reporting
+environments remain separate from this constructor delta. The shared
+parameter-binding kernel must match these arities and the controller's
+four-argument construction; it is not expanded here. Reader/native/source,
+check/retired receipt constructors and observers, actual grace-timer/race work,
+failure publication, partial construction and ACTIVE/SYNC still prevent a
+complete Wstatus reservation. No status allowance changes follow.
+
 #### Independent soft-status field and decoder slices
 
 The soft-status path has its own `OwnedStatusReader`; it does not inherit the
