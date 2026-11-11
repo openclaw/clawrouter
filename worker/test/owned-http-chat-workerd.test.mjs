@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { startWorkerdFixture } from '../../test/helpers/workerd.mjs';
 import { startOwnedJsonObservedFixture } from '../../test/helpers/owned-json-parser-observer.mjs';
 import { ownedJsonCodecCases, ownedJsonCodecWire, ownedUsageCases, ownedUsageWire, ownedCodecSseLines } from '../../test/helpers/owned-json-parser-cases.mjs';
-import { ownedHttpModel, ownedHttpPricingModel, ownedHttpControlModels, ownedHttpProxyKey, ownedHttpRouter, ownedHttpUpstream, seedOwnedHttpChat } from '../../test/helpers/owned-http-chat-fixture.mjs';
+import { assertOwnedAckCustody, ownedHttpModel, ownedHttpPricingModel, ownedHttpControlModels, ownedHttpProxyKey, ownedHttpRouter, ownedHttpUpstream, seedOwnedHttpChat } from '../../test/helpers/owned-http-chat-fixture.mjs';
 
 // One memoized ORIGINAL body root is enrolled as soon as each dispatch resolves,
 // including a late response after an earlier assertion has already failed.
@@ -316,6 +316,36 @@ test(`native thirteen ACK phase cuts preserve held upload and reader custody (${
     assert.equal(ended.retirements.length,13);assert.ok(ended.retirements.every(row=>row.physical-row.after===1));
     assert.equal(JSON.parse((await f.request('https://fixture/fixture/ack-phases?stale')).text).gets,0);
   },true);
+});
+
+for (const custodyMode of ['provider-install', 'retry-cancel', 'new-post-install', 'clean-retry'])
+test(`native ACK credit and retry evidence ${custodyMode}`, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const unknown = custodyMode !== 'clean-retry';
+    if (unknown) f.expectUnknownRetirement();
+    await prepareBudgetSequence(f, { provider: 'fireworks' });
+    f.releases.push(() => f.request('https://fixture/fixture/terminal', { method: 'DELETE' }));
+    f.releases.push(() => f.request('https://fixture/fixture/ack-phases', { method: 'DELETE' }));
+    assert.equal((await f.request('https://fixture/fixture/terminal', { method: 'POST', body: '{}' })).status, 204);
+    assert.equal((await f.request('https://fixture/fixture/retry', { method: 'POST', body: 'response' })).status, 204);
+    assert.equal((await f.request('https://fixture/fixture/ack-phases', { method: 'POST', body: JSON.stringify({ custodyMode }) })).status, 204);
+    let response, failed = false;
+    try { response = await f.request('https://fixture/v1/chat/completions', chat('pricing', { model: ownedHttpPricingModel })); } catch { failed = true; }
+    assert.ok(unknown ? failed || response.status >= 400 : !failed && response.status === 200);
+    const inspect = async query => JSON.parse((await f.request('https://fixture/fixture/ack-phases' + (query ?? ''))).text);
+    let held, terminal, deadline = Date.now() + 30000;
+    do {
+      assert.ok(Date.now() < deadline, 'logical ACK handoff stalled');
+      held = await inspect(); terminal = JSON.parse((await f.request('https://fixture/fixture/terminal')).text);
+      if (held.cuts.length < 13 || !terminal.logical.length || terminal.pending) await new Promise(resolve => setTimeout(resolve, 10));
+    } while (held.cuts.length < 13 || !terminal.logical.length || terminal.pending);
+    assert.equal(terminal.logical.length, 1);
+    await f.request('https://fixture/fixture/ack-phases', { method: 'DELETE' });
+    let ended; deadline = Date.now() + 30000;
+    do { assert.ok(Date.now() < deadline, 'physical ACK retirement stalled'); ended = await inspect(); if (ended.retirements.length < 13) await new Promise(resolve => setTimeout(resolve, 10)); }
+    while (ended.retirements.length < 13);
+    assertOwnedAckCustody(assert, custodyMode, held, ended, unknown ? await inspect('?recheck') : ended, await inspect('?stale'));
+  }, true);
 });
 
 for (const failureMode of ['native', 'independent-shared', 'independent-undefined'])

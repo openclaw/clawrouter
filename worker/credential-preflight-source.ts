@@ -307,7 +307,7 @@ class AdmissionBridgeSource {
   private retirement?: InputRetirement;
   private byob = false;
   private ended?: Promise<void>;
-  private pending?: Promise<ReadableStreamReadResult<Uint8Array>>;
+  private pending?: Promise<ReadableStreamReadResult<Uint8Array<ArrayBuffer>>>;
   private first?: Promise<void>;
   private terminal = false;
   private eof = false;
@@ -371,7 +371,7 @@ class AdmissionBridgeSource {
   async read<T>(budget: IdentitySourceBudget, profile: IdentityProfile, envelope: import("./access-json.ts").IdentityEnvelope,
     close: (value: unknown) => T): Promise<T | undefined> {
     const owned = privatePreflightReaders?.get(this);
-    let text = "", parsed: unknown, result: T | undefined, backing: Uint8Array | undefined;
+    let text = "", parsed: unknown, result: T | undefined, backing: Uint8Array<ArrayBuffer> | undefined;
     let decoder: TextDecoder | undefined, wire: IdentityWire | undefined;
     try {
       if (this.signal?.aborted) { this.failure("transport", 128); throw identityFailure("transport"); }
@@ -390,7 +390,7 @@ class AdmissionBridgeSource {
           return outcome.value;
         }));
         // Immediate rejection observer; no raw or fulfilled graph history.
-        void this.pending.then(() => undefined, () => undefined);
+        void this.pending!.then(() => undefined, () => undefined);
         }
         let part = owned ? undefined : await this.pending!;
         if (this.signal?.aborted) { part = undefined as never; this.failure("transport", 128); throw identityFailure("transport"); }

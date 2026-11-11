@@ -9,6 +9,7 @@ import plugin from "./index.js";
 import { buildClawRouterProviderConfig } from "./provider-catalog.js";
 
 const origin = process.env.CLAWROUTER_CONTRACT_ORIGIN!;
+const custodyScenario = process.env.CLAWROUTER_CUSTODY_SCENARIO;
 const modelId = "volcengine/doubao-seed-2-1-pro-260915";
 const key = (id: string) => `clawrouter-live-owned_http_${id}-fixture-secret`;
 const nativeFetch = globalThis.fetch;
@@ -53,7 +54,7 @@ function start(selected: Awaited<ReturnType<typeof configured>>, id: string,
   return host.wrapApiKey(wrapped!)(model, context, { apiKey, maxTokens: 128, signal: options.signal });
 }
 
-describe("actual registered OpenClaw unified Chat through the private owned HTTP entry", () => {
+describe.skipIf(!!custodyScenario)("actual registered OpenClaw unified Chat through the private owned HTTP entry", () => {
   it("streams Venice through the actual configured UNIFIED boundary on cold and covered requests", async () => {
     const selected = await configured("venice", "venice/zai-org-glm-5-2");
     for (let invocation = 0; invocation < 2; invocation++) {
@@ -109,5 +110,15 @@ describe("actual registered OpenClaw unified Chat through the private owned HTTP
     if (hasPrimary) throw primary;
     expect(received).toBe(true);
     expect(["aborted", "error"]).toContain(result!.stopReason);
+  });
+});
+
+// Each UNKNOWN schedule has a separate Workerd isolate. The host checks the
+// real ledger IDs/debits after the actual registered client request completes.
+describe.skipIf(!custodyScenario)("actual unified Chat custody failures", () => {
+  it("reports the failed delivery without a client replay", async () => {
+    const result = await start(await configured("pricing", "fireworks/glm-5.2"), "pricing").result();
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).not.toMatch(/fixture-secret|fixture-upstream/);
   });
 });

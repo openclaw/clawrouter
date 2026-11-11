@@ -2413,8 +2413,15 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
         signal.throwIfAborted();
         // The alternate may execute without returning headers. Its uncertainty
         // must not inherit the discarded attempt's nonbillable rejection.
-        response = undefined;
-        prepared = owned ? commitOwnedHttpAttempt(owned) : retry;
+        if (owned) {
+          // Discard can make the HTTP owner UNKNOWN without aborting signal.
+          // A refused commit keeps the prior rejection and grant for accounting.
+          prepared = commitOwnedHttpAttempt(owned);
+          response = undefined;
+        } else {
+          response = undefined;
+          prepared = retry;
+        }
         for (const key of prepared.failedGrantKeys ?? []) failedGrantKeys.add(key);
         accounting.setGrant(prepared.grantKey, prepared.grantLane);
         if (owned) {

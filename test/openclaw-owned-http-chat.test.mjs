@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { stripTypeScriptTypes } from 'node:module';
 import { runOpenClawConsumer } from './helpers/openclaw-consumer.mjs';
-import { ownedHttpRouter, ownedHttpUpstream, seedOwnedHttpChat } from './helpers/owned-http-chat-fixture.mjs';
+import { assertOwnedAckCustody, ownedHttpRouter, ownedHttpUpstream, seedOwnedHttpChat } from './helpers/owned-http-chat-fixture.mjs';
 
 test('private HTTP modules remain loadable by Node strip-only TypeScript grammar', async () => {
   for (const name of ['credential-preflight-source', 'http-identity-owner', 'identity-admission', 'proxy-response',
@@ -69,4 +69,54 @@ test('actual pinned OpenClaw UNIFIED Chat consumes the compiled owned HTTP entry
   const failures = await cleanup(); finished = true;
   if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, 'actual owned HTTP client cleanup');
   if (hasPrimary) throw primary;
+});
+
+for (const custodyMode of ['provider-install', 'retry-cancel', 'new-post-install'])
+test(`actual pinned unified Chat preserves accounting custody: ${custodyMode}`, { skip: !source, timeout: 300000 }, async t => {
+  let temporary, runtime, origin, primary, failed = false;
+  const request = async (path, init) => {
+    const response = await runtime.dispatchFetch(origin + path, init);
+    return { status: response.status, text: await response.text() };
+  };
+  const inspect = async query => JSON.parse((await request('/fixture/ack-phases' + (query ?? ''))).text);
+  // Gates are released before any teardown joins. UNKNOWN remains held until
+  // isolate disposal; successful ACK retirement is not HTTP retirement proof.
+  try {
+    const { startOwnedJsonObservedFixture } = await import('./helpers/owned-json-parser-observer.mjs');
+    temporary = await mkdtemp(join(tmpdir(), 'owned-http-client-custody-'));
+    runtime = await startOwnedJsonObservedFixture(temporary, ownedHttpRouter, ownedHttpUpstream, { preventEviction: true, hotCache: true });
+    origin = String(await runtime.ready).replace(/\/$/, '');
+    await seedOwnedHttpChat(runtime);
+    for (const [path, body] of [['grants', undefined], ['budget-sequence', '{"legs":4,"provider":"fireworks"}'], ['terminal', '{}'],
+      ['retry', 'response'], ['ack-phases', JSON.stringify({ custodyMode })]])
+      assert.equal((await request('/fixture/' + path, { method: 'POST', body })).status, 204);
+    await runOpenClawConsumer(t, { source, sourceHead,
+      fixture: new URL('./fixtures/openclaw-owned-http-chat-contract.test.ts', import.meta.url),
+      env: { CLAWROUTER_CONTRACT_ORIGIN: origin, CLAWROUTER_CUSTODY_SCENARIO: custodyMode } });
+    let held, terminal, deadline = Date.now() + 30000;
+    do {
+      assert.ok(Date.now() < deadline, 'logical ACK handoff stalled');
+      held = await inspect(); terminal = JSON.parse((await request('/fixture/terminal')).text);
+      if (held.cuts.length < 13 || !terminal.logical.length || terminal.pending) await new Promise(resolve => setTimeout(resolve, 10));
+    } while (held.cuts.length < 13 || !terminal.logical.length || terminal.pending);
+    assert.equal(terminal.logical.length, 1);
+    await request('/fixture/ack-phases', { method: 'DELETE' });
+    let ended; deadline = Date.now() + 30000;
+    do { assert.ok(Date.now() < deadline, 'physical ACK retirement stalled'); ended = await inspect(); if (ended.retirements.length < 13) await new Promise(resolve => setTimeout(resolve, 10)); }
+    while (ended.retirements.length < 13);
+    assertOwnedAckCustody(assert, custodyMode, held, ended, await inspect('?recheck'), await inspect('?stale'));
+    const state = JSON.parse((await request('/fixture/state')).text);
+    assert.equal(state.intakes.length, 1); assert.equal(state.intakes[0].path, '/v1/chat/completions');
+    assert.equal(state.completed.length, 0, 'UNKNOWN must not be called physically retired');
+  } catch (error) { failed = true; primary = error; }
+  const failures = [];
+  if (runtime && origin) {
+    for (const path of ['ack-phases', 'terminal', 'budget-sequence']) {
+      try { await request('/fixture/' + path, { method: 'DELETE' }); } catch (error) { failures.push(error); }
+    }
+  }
+  if (runtime) try { await runtime.dispose(); } catch (error) { failures.push(error); }
+  if (temporary) try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+  if (failures.length) throw new AggregateError(failed ? [primary, ...failures] : failures, 'client custody fixture cleanup');
+  if (failed) throw primary;
 });

@@ -2101,10 +2101,14 @@ function reserveOwnedLedgerAcknowledgments(root: RequestOwner, count: number): v
   if (!funding) throw identityFailure("limit");
   root.funding = funding; root.sinkCredits += count * 15;
 }
-function retireOwnedLedgerAcknowledgmentData(root: RequestOwner, bytes: number): void {
+function retireOwnedLedgerAcknowledgmentData(root: RequestOwner, bytes: number): boolean {
+  // An independently uncertain original holds the whole HTTP claim. A joined
+  // ACK may end its physical position, but cannot return COMMON credit.
+  if (root.unknown) return false;
   const funding = root.funding.replace(root.funding.bytes - bytes);
   if (!funding) { root.unknown = true; throw identityFailure("protocol"); }
   root.funding = funding;
+  return true;
 }
 
 type OwnedLedgerResult = OwnedLedgerAcknowledgment & { ok: boolean; status?: number };
@@ -2213,6 +2217,7 @@ class OwnedLedgerCommand {
   }
   retireAckPayload(): void {
     if (this.flags & 1024) return;
+    // This once bit closes physical payload custody, not an UNKNOWN debit.
     this.flags |= 1024;
     retireOwnedLedgerAcknowledgmentData(this.root, ownedLedgerAckData - ownedLedgerReceiptData);
   }
@@ -3262,12 +3267,17 @@ class OwnedAccountingTerminal {
   retireOperation(code: number, ackPayloadRetired = false): void {
     if (!Object.hasOwn(this.operations, code)) throw identityFailure("protocol");
     delete this.operations[code];
-    if (code >= 5 && code < 10) { this.ackCredits--; if (!ackPayloadRetired) retireOwnedLedgerAcknowledgmentData(this.root, ownedLedgerAckData); }
+    if (code >= 5 && code < 10 && (ackPayloadRetired || retireOwnedLedgerAcknowledgmentData(this.root, ownedLedgerAckData))) this.ackCredits--;
+    // Held credits include physically ended ACKs under HTTP UNKNOWN. Their
+    // array positions/once rights end independently; the root charge stays.
     this.physical--; this.finishRetirement();
   }
   finishRetirement(): void {
     if (this.physical || this.pending || this.root.unknown || !(this.phase & 64)) return;
-    if (this.ackCredits) { retireOwnedLedgerAcknowledgmentData(this.root, this.ackCredits * ownedLedgerAckData); this.ackCredits = 0; }
+    if (this.ackCredits) {
+      if (!retireOwnedLedgerAcknowledgmentData(this.root, this.ackCredits * ownedLedgerAckData)) return;
+      this.ackCredits = 0;
+    }
     if (this.root.accountingTerminal === this) this.root.accountingTerminal = undefined;
     this.phase = this.phase & ~7 | 4;
     this.operations.length = 0;

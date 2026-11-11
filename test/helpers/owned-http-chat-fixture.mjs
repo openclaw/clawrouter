@@ -11,7 +11,8 @@ export const ownedHttpProxyKey = id => `clawrouter-live-owned_http_${id}-fixture
 export function createOwnedAckPhaseFixture(options, charged) {
   const acks = [], reads = [], roles = [], cuts = [], gates = [], terminals = [], budgets = [], retirements = [];
   const row = { queueFailures: 0, bodyReads: 0, cancels: 0, cancelDone: 0, unlocks: 0, retries: [], wrongRetires: 0, uploads: 0, uploadDone: 0 };
-  let released = false;
+  let released = false, httpRoot;
+  const custody = { posts: [], ledger: [], events: [], commits: [], credit: [], cancelCalls: 0, cancelDone: 0, fetchInstalls: 0 };
   function gate() { let release; const promise = new Promise(done => { release = done; }); gates.push(release); if (released) release(); return promise; }
   const readGate = gate(); let releaseReads = gates[0];
   const uploadGate = gate(); const uploadWork = [], sharedFailure = {};
@@ -73,17 +74,55 @@ export function createOwnedAckPhaseFixture(options, charged) {
       const budget = env.BUDGET_LEDGER, usage = env.USAGE_LEDGER, queue = env.USAGE_QUEUE;
       const wrap = namespace => new Proxy(namespace, { get(target, key) {
         if (key === 'get') return function (...args) { const stub = Reflect.apply(target.get, target, args); return new Proxy(stub, { get(object, field) {
-          if (field === 'fetch') return function (...values) { const path = new URL(values[0]).pathname; return Reflect.apply(object.fetch, object, values).then(value => response(value, path)); };
+          if (field === 'fetch') return function (...values) { const path = new URL(values[0]).pathname;
+            if (options.custodyMode) custody.ledger.push({ path, body: JSON.parse(values[1].body) });
+            return Reflect.apply(object.fetch, object, values).then(value => response(value, path)); };
           const value = Reflect.get(object, field, object); return typeof value === 'function' ? value.bind(object) : value;
         } }); };
         const value = Reflect.get(target, key, target); return typeof value === 'function' ? value.bind(target) : value;
       } });
       const bindings = { BUDGET_LEDGER: wrap(budget), USAGE_LEDGER: wrap(usage), USAGE_QUEUE: { send(...args) {
-        if (args[0]?.type === 'clawrouter.usage.v1') { row.queueFailures++; return Promise.reject(undefined); }
+        if (args[0]?.type === 'clawrouter.usage.v1') {
+          if (options.custodyMode) custody.events.push({ id: args[0].id, grant: args[0].grant_key, cost: args[0].actual_cost_micros });
+          row.queueFailures++; return Promise.reject(undefined);
+        }
         return Reflect.apply(queue.send, queue, args);
       } } };
       return new Proxy(env, { get(target, key, receiver) { return Object.hasOwn(bindings, key) ? bindings[key] : Reflect.get(target, key, receiver); } });
     },
+    fetch(init) {
+      if (!options.custodyMode) return;
+      const ordinal = custody.posts.length, headers = new Headers(init.headers);
+      custody.posts.push({ method: init.method, authorization: headers.get('authorization') });
+      const rejection = options.custodyMode !== 'provider-install' && ordinal === 0;
+      const value = new Response(rejection ? '{"error":{"message":"synthetic retry rejection"}}'
+        : '{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}',
+        { status: rejection ? 429 : 200, headers: { 'content-type': 'application/json' } });
+      if (rejection && options.custodyMode === 'retry-cancel') {
+        const body = value.body, cancel = body.cancel;
+        Object.defineProperty(body, 'cancel', { value(...args) {
+          custody.cancelCalls++; custody.cancelArgs = args.length; custody.cancelAborted = init.signal.aborted;
+          custody.reducedAtCancel = globalThis.__ownedJsonObservation.credentialReductions.length;
+          const original = Reflect.apply(cancel, this, args);
+          original.then(() => { custody.cancelDone++; }, () => { custody.cancelDone++; });
+          return { then(yes) { yes(undefined); throw undefined; } };
+        } });
+      }
+      if (options.custodyMode === 'provider-install' || options.custodyMode === 'new-post-install' && ordinal === 1)
+        return { then(yes) { custody.fetchInstalls++; yes(value); throw undefined; } };
+      return Promise.resolve(value);
+    },
+    beforeCommit(owner) {
+      if (options.custodyMode) custody.commits.push({ unknown: !!httpRoot?.unknown, aborted: owner.operation?.signal.aborted ?? false,
+        prior: owner.prepared?.grantKey, next: owner.retry?.pending?.prepared?.grantKey,
+        reductions: globalThis.__ownedJsonObservation.credentialReductions.length });
+    },
+    beforeCredit(root, bytes) { if (options.custodyMode) custody.credit.push({ bytes, unknown: root.unknown, before: root.funding.bytes, commonBefore: charged() }); },
+    afterCredit(root, released) {
+      if (!options.custodyMode) return;
+      Object.assign(custody.credit.at(-1), { released, after: root.funding.bytes, commonAfter: charged() });
+    },
+    recheck() { for (const terminal of terminals) terminal.finishRetirement(); return api.snapshot(); },
     upload(init) {
       if (!options.upload || !init?.body || typeof init.body.getReader !== 'function') return;
       row.uploads++;
@@ -91,7 +130,7 @@ export function createOwnedAckPhaseFixture(options, charged) {
       uploadWork.push(original);
       return Promise.resolve(new Response('{"id":"fixture","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}', {headers:{'content-type':'application/json'}}));
     },
-    ack(cell) { acks.push(cell); },
+    ack(cell) { acks.push(cell); httpRoot ??= cell.root; },
     read(cell, yes, no) { reads.push({ cell, yes, no }); return [yes, no]; },
     beforeCut(cell) {
       if (cell.slot !== undefined) {
@@ -110,11 +149,11 @@ export function createOwnedAckPhaseFixture(options, charged) {
     terminal(cell) { terminals.push(cell); },
     budget(cell) { budgets.push(cell); },
     retry(owner, chosen, rejected) { row.retries.push({ closed: owner.retryClosed, retry: Object.hasOwn(owner, 'retry'), required: Object.hasOwn(owner, 'required'), chosen, rejected }); },
-    snapshot() { return { ...row, charge: charged(), acks: acks.map(cell => ({ keys: Object.keys(cell), terminal: cell.slot !== undefined, state: cell.joinState,
+    snapshot() { return { ...row, custody, rootFunding: httpRoot?.funding.bytes, unknown: httpRoot?.unknown, charge: charged(), acks: acks.map(cell => ({ keys: Object.keys(cell), terminal: cell.slot !== undefined, state: cell.joinState,
       closed: cell.closedState, unlock: cell.unlockState, pending:cell.pending, capture: Object.hasOwn(cell, 'capture') })),
       reads: reads.map(({cell}) => ({ state: cell.state, severed: cell.owner === undefined, keys: Object.keys(cell) })),
       retirements, cuts: cuts.map(({cell, ...cut}) => cut), budgets: budgets.map(cell => ({ keys: Object.keys(cell), phase: cell.phase, physical: cell.physical })),
-      terminals: terminals.map(cell => ({ keys: Object.keys(cell), live: Object.keys(cell.operations), pending: cell.pending, physical: cell.physical })) }; },
+      terminals: terminals.map(cell => ({ keys: Object.keys(cell), live: Object.keys(cell.operations), pending: cell.pending, physical: cell.physical, ackCredits: cell.ackCredits })) }; },
     stale() {
       let gets = 0, callbacks = 0;
       const foreign = {}; for (const key of ['then', 'done', 'value', 'body', 'buffer']) Object.defineProperty(foreign, key, { get() { gets++; throw Error('stale ACK handler inspected payload'); } });
@@ -127,6 +166,67 @@ export function createOwnedAckPhaseFixture(options, charged) {
     release() { released = true; for (const release of gates) release(); return Promise.all(uploadWork); },
   };
   return api;
+}
+
+// Shared assertions for the actual Node, Workerd and pinned-client schedules.
+// The counts below name this topology, not a complete ownership upper bound.
+export function assertOwnedAckCustody(assert, mode, held, ended, rechecked, stale) {
+  const unknown = mode !== 'clean-retry', row = ended.custody;
+  assert.equal(ended.unknown, unknown);
+  assert.equal(held.cuts.length, 13);
+  assert.equal(held.retirements.length, 0, 'all closed/unlock originals remain held before release');
+  assert.equal(held.terminals[0].pending, 0, 'logical accounting precedes physical ACK retirement');
+  assert.equal(ended.retirements.length, 13);
+  assert.ok(ended.retirements.every(item => item.physical - item.after === 1));
+  assert.equal(ended.terminals[0].physical, 0);
+  assert.deepEqual(ended.terminals[0].live, []);
+  assert.ok(ended.acks.every(cell => cell.state & 16384 && !cell.keys.includes('owner') && !cell.keys.includes('body') && !cell.keys.includes('nativeFailure')));
+  assert.ok(ended.reads.every(cell => cell.severed));
+  assert.equal(stale.gets, 0);
+  assert.ok(stale.callbacks > 0);
+  assert.equal(row.credit.length, 13);
+  assert.equal(row.credit.filter(item => item.bytes === 1032192).length, 8);
+  assert.equal(row.credit.filter(item => item.bytes === 1098240).length, 5);
+  for (const credit of row.credit) {
+    assert.equal(credit.unknown, unknown);
+    assert.equal(credit.released, !unknown);
+    assert.equal(credit.before - credit.after, unknown ? 0 : credit.bytes);
+    assert.equal(credit.commonBefore - credit.commonAfter, unknown ? 0 : credit.bytes);
+  }
+  if (unknown) {
+    assert.equal(ended.rootFunding, held.rootFunding);
+    assert.equal(ended.charge, held.charge);
+    assert.equal(ended.terminals[0].ackCredits, 5, 'physical completion cannot erase held debit bookkeeping');
+    assert.equal(rechecked.rootFunding, ended.rootFunding);
+    assert.equal(rechecked.charge, ended.charge);
+    assert.equal(rechecked.custody.credit.length, row.credit.length);
+  }
+  const reserve = row.ledger.filter(item => item.path === '/reserve');
+  const dispatched = row.ledger.filter(item => item.path === '/dispatch');
+  const settle = row.ledger.filter(item => item.path === '/settle');
+  const ingest = row.ledger.filter(item => item.path === '/ingest');
+  assert.equal(reserve.length, 4); assert.equal(dispatched.length, 4); assert.equal(settle.length, 4);
+  assert.deepEqual(dispatched.map(item => item.body.reservationId).sort(), reserve.map(item => item.body.reservationId).sort());
+  assert.deepEqual(settle.map(item => item.body.reservationId).sort(), reserve.map(item => item.body.reservationId).sort());
+  assert.equal(row.events.length, 1); assert.equal(ingest.length, 1);
+  assert.equal(ingest[0].body.id, row.events[0].id, 'queue failure ingests the same event once');
+  assert.equal(row.posts.length, mode === 'provider-install' || mode === 'retry-cancel' ? 1 : 2);
+  assert.ok(row.posts.every(item => item.method === 'POST'));
+  assert.ok(row.posts[0].authorization.endsWith('fixture-upstream-a'));
+  if (row.posts.length === 2) assert.ok(row.posts[1].authorization.endsWith('fixture-upstream-b'));
+  assert.ok(row.events[0].grant.endsWith(mode === 'provider-install' || mode === 'retry-cancel' ? '/fireworks-a' : '/fireworks-b'));
+  if (mode === 'retry-cancel') {
+    assert.equal(row.cancelCalls, 1); assert.equal(row.cancelArgs, 0); assert.equal(row.cancelDone, 1);
+    assert.equal(row.cancelAborted, false); assert.equal(row.reducedAtCancel, 2);
+    const commit = row.commits.find(item => item.next?.endsWith('/fireworks-b'));
+    assert.ok(commit); assert.equal(commit.unknown, true); assert.equal(commit.aborted, false);
+    assert.ok(commit.prior.endsWith('/fireworks-a')); assert.equal(commit.reductions, 2);
+    assert.equal(row.events[0].cost, 0);
+    assert.ok(settle.every(item => item.body.actualCostMicros === 0));
+  } else {
+    assert.ok(row.events[0].cost > 0, 'an actual new POST keeps conservative or accepted usage billability');
+    assert.ok(settle.every(item => item.body.actualCostMicros > 0));
+  }
 }
 
 export function createOwnedTerminalFixture(options, commands) {
@@ -433,6 +533,7 @@ const originalValues=Object.values;let pricingActive=false,recursivePricingValue
 Object.values=function(value){if(pricingActive&&value&&Object.hasOwn(value,'ownedPricingNested'))recursivePricingValues++;return Reflect.apply(originalValues,this,arguments);};
 const originalFetch=globalThis.fetch;
 globalThis.fetch=function(input,init){
+ const custody=globalThis.__ownedAckPhaseFixture?.fetch(init);if(custody)return custody;
  const held=globalThis.__ownedAckPhaseFixture?.upload(init);if(held)return held;
  const url=typeof input==='string'?input:input instanceof URL?input.href:input.url;
  if(url!=='https://api.venice.ai/api/v1/chat/completions')return Reflect.apply(originalFetch,this,arguments);
@@ -667,6 +768,7 @@ export default {...handler,async fetch(request,env,context){
   if(request.method==='DELETE'){await globalThis.__ownedAckPhaseFixture?.release();return new Response(null,{status:204});}
   if(request.method==='PATCH'){globalThis.__ownedAckPhaseFixture?.releaseReads();return new Response(null,{status:204});}
   if(new URL(request.url).searchParams.has('stale'))return Response.json(globalThis.__ownedAckPhaseFixture.stale());
+  if(new URL(request.url).searchParams.has('recheck'))return Response.json(globalThis.__ownedAckPhaseFixture.recheck());
   return Response.json(globalThis.__ownedAckPhaseFixture?.snapshot()??null);
  }
  if(path==='/fixture/retained-status'){
@@ -696,10 +798,12 @@ export default {...handler,async fetch(request,env,context){
    if(globalThis.__ownedBudgetSequenceFixture)throw Error('budget fixture already configured');
    const options=await request.json();
    if(options.legs!==4)throw Error('budget fixture leg count');
-   const policy=JSON.parse(await env.POLICY_KV.get('policies/owned_http_chat'));
+   const provider=options.provider??'volcengine';if(!['volcengine','fireworks'].includes(provider))throw Error('budget fixture provider');
+   const policyKey='policies/owned_http_'+(provider==='fireworks'?'pricing':'chat');
+   const policy=JSON.parse(await env.POLICY_KV.get(policyKey));
    policy.dailyBudgetMicros=1000000;policy.weeklyBudgetMicros=1000000;
-   await env.POLICY_KV.put('policies/owned_http_chat',JSON.stringify(policy));
-   await env.POLICY_KV.put('connections/volcengine',JSON.stringify({providerId:'volcengine',enabled:true,monthlyBudgetMicros:1000000}));
+   await env.POLICY_KV.put(policyKey,JSON.stringify(policy));
+   await env.POLICY_KV.put('connections/'+provider,JSON.stringify({providerId:provider,enabled:true,monthlyBudgetMicros:1000000}));
    globalThis.__ownedBudgetSequenceFixture=createOwnedBudgetSequenceFixture(options,ExactBodyCharge,bodyBudgetBytes,bodyBudgetCharged,HttpError,budgetCommands);
    return new Response(null,{status:204});
   }

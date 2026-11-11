@@ -6,7 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createOwnedJsonObservation, observeOwnedJsonSource } from '../../test/helpers/owned-json-parser-observer.mjs';
 import { ownedJsonCodecCases, ownedJsonCodecWire, ownedUsageCases, ownedUsageWire, ownedCodecSseLines } from '../../test/helpers/owned-json-parser-cases.mjs';
-import { createOwnedAckPhaseFixture, createOwnedBudgetSequenceFixture, createOwnedTerminalFixture } from '../../test/helpers/owned-http-chat-fixture.mjs';
+import { assertOwnedAckCustody, createOwnedAckPhaseFixture, createOwnedBudgetSequenceFixture, createOwnedTerminalFixture } from '../../test/helpers/owned-http-chat-fixture.mjs';
 
 const observation = globalThis.__ownedJsonObservation = createOwnedJsonObservation();
 globalThis.__ownedUsageWire = ownedUsageWire;
@@ -191,7 +191,9 @@ async function fixture(t, run, retained = false, variant = 'fireworks') {
     } };
   };
   let upstreamGate, veniceWire, veniceFault, veniceStreaming = false, upstreamStatus = 200;
-  t.mock.method(globalThis, 'fetch', async (input, init) => {
+  t.mock.method(globalThis, 'fetch', (input, init) => {
+    const custody = globalThis.__ownedAckPhaseFixture?.fetch(init); if (custody) return custody;
+    return (async () => {
     const held = globalThis.__ownedAckPhaseFixture?.upload(init); if (held) return held;
     const request = new Request(input, init);
     if (upstreamGate) { upstreamGate.entered.resolve(); await take(own(upstreamGate.release.promise)); }
@@ -271,6 +273,7 @@ async function fixture(t, run, retained = false, variant = 'fireworks') {
     }
     return Response.json({ id: 'synthetic-priced-chat', model: activeModel.upstream, choices: [{ message: { role: 'assistant', content: 'synthetic answer' }, finish_reason: 'stop' }],
       usage: { prompt_tokens: 4, completion_tokens: 3, total_tokens: 7 } }, { status: upstreamStatus });
+    })();
   });
   requestEnv = env;
   const dispatch = input => {
@@ -748,6 +751,41 @@ test(`thirteen ACK records compact in place with held originals (active final re
     assert.ok(ended.retirements.every(row => row.physical - row.after === 1));
   });
 });
+
+for (const custodyMode of ['provider-install', 'retry-cancel', 'new-post-install', 'clean-retry']) {
+  const name = `private ACK credit and retry evidence ${custodyMode}`;
+  test(name, { timeout: 120000 }, async t => {
+    const unknown = custodyMode !== 'clean-retry';
+    if (unknown && process.env.CLAWROUTER_TERMINAL_UNKNOWN !== custodyMode) {
+      await promisify(execFile)(process.execPath, ['--test', '--test-name-pattern', '^' + name + '$', fileURLToPath(import.meta.url)],
+        { env: { ...process.env, CLAWROUTER_TERMINAL_UNKNOWN: custodyMode }, maxBuffer: 4 * 1024 * 1024 });
+      return;
+    }
+    await fixture(t, async f => {
+      if (unknown) f.expectUnknownRetirement();
+      await budgetSequence(f, { legs: 4 }); await f.retryPool('response');
+      const terminal = terminalScenario(f, {}), control = createOwnedAckPhaseFixture({ custodyMode }, bodyBudgetCharged);
+      globalThis.__ownedAckPhaseFixture = control;
+      f.releases.push(() => { f.own(control.release()); delete globalThis.__ownedAckPhaseFixture; });
+      f.requestEnvironment(control.env(terminal.env(f.env)));
+      let response, failed = false;
+      try { response = await f.request(payload({})); } catch { failed = true; }
+      assert.ok(unknown ? failed || response.status >= 400 : !failed && response.status === 200);
+      let held, deadline = Date.now() + 30000;
+      do {
+        assert.ok(Date.now() < deadline, 'logical ACK handoff stalled');
+        held = control.snapshot();
+        if (held.cuts.length < 13 || !terminal.row.logical.length || terminal.row.pending) await new Promise(resolve => setImmediate(resolve));
+      } while (held.cuts.length < 13 || !terminal.row.logical.length || terminal.row.pending);
+      assert.equal(terminal.row.logical.length, 1);
+      await f.take(f.own(control.release()));
+      let ended; deadline = Date.now() + 30000;
+      do { assert.ok(Date.now() < deadline, 'physical ACK retirement stalled'); ended = control.snapshot(); if (ended.retirements.length < 13) await new Promise(resolve => setImmediate(resolve)); }
+      while (ended.retirements.length < 13);
+      assertOwnedAckCustody(assert, custodyMode, held, ended, unknown ? control.recheck() : ended, control.stale());
+    });
+  });
+}
 
 for (const failureMode of ['native', 'independent-shared', 'independent-undefined'])
 test(`ACK tail keeps native correlation separate from ${failureMode} failure origins`, async t => {

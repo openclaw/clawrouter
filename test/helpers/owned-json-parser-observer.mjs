@@ -1022,6 +1022,10 @@ export function observeOwnedJsonSource(path, source) {
     source = replace(source, '    const text = ownedErrorStringify(envelope);',
       '    let text; try { text = ownedErrorStringify(envelope); } finally { ' + probe + '.initialErrorDone(); }');
   } else if (/[\\/]worker[\\/]http-identity-owner\.ts$/.test(path)) {
+    source = replace(source, '  if (root.unknown) return false;\n  const funding = root.funding.replace(root.funding.bytes - bytes);',
+      '  globalThis.__ownedAckPhaseFixture?.beforeCredit(root, bytes); if (root.unknown) { globalThis.__ownedAckPhaseFixture?.afterCredit(root, false); return false; }\n  const funding = root.funding.replace(root.funding.bytes - bytes);');
+    source = replace(source, '  root.funding = funding;\n  return true;\n}\n\ntype OwnedLedgerResult',
+      '  root.funding = funding; globalThis.__ownedAckPhaseFixture?.afterCredit(root, true);\n  return true;\n}\n\ntype OwnedLedgerResult');
     source = replace(source, '    this.response = response;\n  }\n  dispatchOriginal(cell: OwnedOriginalObservation, failed: boolean, value: unknown): void {\n    if (cell !== this.cancelObservation',
       '    this.response = response; globalThis.__ownedAckPhaseFixture?.ack(this);\n  }\n  dispatchOriginal(cell: OwnedOriginalObservation, failed: boolean, value: unknown): void {\n    if (cell !== this.cancelObservation');
     source = replace(source, '[ackReadFulfilled.bind(observation), ackReadRejected.bind(observation)]',
@@ -1141,6 +1145,8 @@ export function observeOwnedJsonSource(path, source) {
     source = replace(source, '  completeOwnedHttpAttemptProvider(cap, permit);',
       '  completeOwnedHttpAttemptProvider(cap, permit); if (' + probe + '.retainedStatusPrepared) await ' + probe + '.retainedStatusPrepared();');
   } else if (/[\\/]worker[\\/]proxy\.ts$/.test(path)) {
+    source = replace(source, 'function commitOwnedHttpAttempt(cap: OwnedHttpRequest): PreparedUpstream {\n  const owner = ownedProxyInvocations?.get(cap), port = owner?.retry?.pending;',
+      'function commitOwnedHttpAttempt(cap: OwnedHttpRequest): PreparedUpstream {\n  const owner = ownedProxyInvocations?.get(cap), port = owner?.retry?.pending; if (owner) globalThis.__ownedAckPhaseFixture?.beforeCommit(owner);');
     source = replace(source, '  owner.retryClosed = true; delete owner.required; delete owner.retry;',
       '  owner.retryClosed = true; delete owner.required; delete owner.retry; if (globalThis.__ownedAckPhaseFixture) { let __rejected = 0; try { excludeOwnedHttpGrant(cap, "fixture-stale-key"); } catch { __rejected++; } try { commitOwnedHttpAttempt(cap); } catch { __rejected++; } globalThis.__ownedAckPhaseFixture.retry(owner, !owner.prepared || ownedPreparedUploads?.get(owner.prepared) === owner.upload, __rejected); }');
     source = replace(source, '    retry.pending = port;',

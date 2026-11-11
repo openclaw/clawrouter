@@ -1,12 +1,74 @@
 # Private owned HTTP Chat staging
 
 The current source candidate repairs published candidate
-`bbfda9f1e2e4535436a5f4a4b142adaaefb9e1bc`, against exact main
-`7b87537df59c39ae1bae0cfa748208572fa4d19f`. That candidate preserved the
-`236366c0a7209b8c71b325051d935bb7820bb667` ancestry and was code complete for its
-then-current source contract; its first hosted qualification failed. It is not
-runtime-qualified or numerically qualified. No deployment or default activation
-has occurred. The named private entry remains inactive.
+`07b75f4523e8024cfba052275a0973a10c0e14be`, against exact main
+`7b87537df59c39ae1bae0cfa748208572fa4d19f`. It preserves the236, bbf and07
+ancestry. Those immutable checkpoints are historical source candidates, not
+runtime or numerical qualifications. No deployment or default activation has
+occurred. The named private entry remains inactive.
+
+### UNKNOWN credit and failed retry commit
+
+The shared ACK debit reducer checks the actual HTTP owner's UNKNOWN state
+before computing or replacing a smaller charge. A clean ACK may discharge its
+own physical position once and sever its retired handlers while another
+uncertain original holds the HTTP claim. In that case the root's full charge
+stays intact. Terminal ACK credit bookkeeping also stays held, including after
+all five ACK positions end; later finish helpers cannot refund it. Healthy
+owners retain their existing exact per-component reductions. This introduces
+no funding, child, retry or forward-work right.
+
+Private retry commit now precedes clearing the prior Response. The existing
+old-body cancellation can accept FIRST and then throw during observer
+installation, making the HTTP owner UNKNOWN without aborting the operation
+signal. A refused commit leaves the old rejection, prepared grant and
+accounting attribution available to the existing catch. No extra Response
+getter or early billability projection is added. A successful commit still
+clears the old Response before a new POST can introduce fresh uncertainty.
+The ordinary branch retains its existing clear-then-assign order.
+
+Authored Node and exact Workerd schedules hold eight standalone and five final
+ACK closed/unlock originals after an independent provider-installation failure.
+They check prompt same-ID logical settlement and queue-to-ingest recovery,
+unchanged root/COMMON charges through physical retirement and repeated finish
+helpers, retained debit counters, one physical decrement and inert old
+handlers. A second schedule places the old429 cancellation-installation throw
+after alternate retained reduction but before commit: one POST, old grant,
+zero settlement cost and a live operation signal. Clean retry and actual
+second-POST uncertainty are paired controls. The pinned OpenClaw client uses
+isolated versions of all three UNKNOWN schedules through its real unified Chat
+entry. Fixture holds release before teardown; UNKNOWN is never called retired.
+All new behavior and fixtures are UNRUN_CODE_ONLY_HOSTED.
+
+[CI run42963832713, worker-package job130336342456](https://github.com/openclaw/clawrouter/actions/runs/42963832713/job/130336342456) passed provider compilation
+and both snapshot steps, then failed Worker typecheck with four diagnostics in
+`credential-preflight-source.ts`. The precise BYOB backing and read-result
+annotations now retain `ArrayBuffer`, and the immediately assigned pending
+observer uses its established non-optional value. These are type-only fixes;
+no cast widens accepted input. That compiler log reported no mapped-private-
+field deletion errors. Worker tests and the strict smoke plan were skipped;
+source grammar checks do not supply their missing runtime or typecheck credit.
+The current repair has not been pushed or executed.
+
+This repair adds no production registry, persistent field, function definition,
+child or Promise. The shared debit guard, boolean return and conditional credit
+bookkeeping add executing operands and branches; the complete fixed-window
+inventory must still include them. Existing ACK funding is retained under
+UNKNOWN, not transferred to a new component. Retry uses the existing prepared
+and Response locals. The BYOB annotation change emits no new runtime product.
+The previous structural subset counts remain lower components only.
+
+Source checks for this repair cover54 raw files and17 generated observer/router
+programs without linking or evaluating application code. The57-path/33-production
+manifest is unchanged against exact main7b875. Thirty production modules carry
+exact07 bytes; the three changed modules are the private HTTP owner, private
+retry block and source adapter's type annotations. Explicit inverse edits recover
+exact07 proxy/source-adapter text. Frozen4 plus body-budget/json-tokens/service-
+tiers match both main7b875 and cbabe, and the approved2931-byte completion
+fragment remains exact. The five deployment/CI workflows match main; the client
+workflow remains the approved three-line task addition. Additions-only bounded
+privacy and full-diff whitespace checks pass. These checks do not qualify
+runtime, hosted typechecking, strict provider plans or whole-owner capacity.
 
 Hosted CI run42958696054 exposed Node strip-only constructor parameter
 properties, 30 Worker typecheck errors, and a Workerd module-initialization
@@ -97,7 +159,7 @@ correlation. No unknown installation is compacted into a healthy tail.
 Retirement requires both independent roles and the post-unlock body-lock check.
 A throwing/locked body check retains UNKNOWN ownership. The same physical
 position is discharged once; payload and native-failure aliases clear before
-its existing DATA debit ends. External callbacks check inert state before any
+its existing DATA debit ends when the HTTP owner is known; UNKNOWN retains the debit. External callbacks check inert state before any
 owner lookup or payload inspection. A failed retirement cannot replay the
 physical decrement. Source/fetch/read/cancel/unlock/closed originals and their
 observer tails remain independent; logical receipt completion never joins an
