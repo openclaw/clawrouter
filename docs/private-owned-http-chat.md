@@ -1470,6 +1470,47 @@ where already expanded. This gives32 additional index bytes for the preclaim
 two-scalar-entry component (254 becomes286), without changing its representation
 or enabling an admission. Callback-time insertion grants no new funding.
 
+
+#### Root retirement tail — source-derived lifetime obstruction
+
+The current source has an explicit last-consumer boundary still to close.
+In finishOwnedHttpRequest, the clean path deletes its request registry entry
+and calls owner.funding.release(), then may construct and throw
+AggregateError(failures,"owned HTTP request retirement"). Its async result also
+has the separately installed suppression pair:
+void owner.retirement.then(() => undefined, () => undefined).
+
+A clean physical upload rejection is a concrete path: UploadOwner.rejected
+records bounded metadata without setting UNKNOWN when recording succeeds;
+retirement copies that record into failures, joins upload/sink cleanup and
+can reach the clean release with failures nonempty. Thus UNKNOWN retention
+does not make the post-release aggregate path unreachable.
+
+The retained failures vector/metadata, aggregate construction/result, root
+async result, dependent and queued suppression work are real custody products.
+The two APP arrows also share finishOwnedHttpRequest's lexical owner/cap/
+arguments environment; an unused lexical reference is not a source-level
+severance proof. Even the successful undefined-result path has the suppression
+tail. The later waitUntil registration is not a separate prepaid APP owner:
+registerOwnedHttpRetirement checks the same root and same retirement Promise.
+
+Consequently a larger initial Wroot alone does not repair this release point.
+The complete manifest needs a genuine prepaid post-retirement ownership and
+last-consumer cut, preserving logical accounting, physical joins, inert-cell
+trust and UNKNOWN. No lifetime/category transfer, late reserve, new registry
+or permanent per-request leak is assumed. This packet makes no source change
+and supplies no release authority.
+
+Separate shared-kernel interfaces are explicit: createOwnedHttpRequest has
+three actual/formal arguments; tryBeginOwnedHttpRequest has two;
+finishOwnedHttpRequest has one; the retirement async arrow has zero; both
+new-Promise executors have one formal but receive two native resolver
+arguments; each zero-formal suppression arrow receives one reaction argument.
+The existing constructors' APP/P0/R components are retained, not replaced by
+another K executor or repriced by an unreviewed kernel. Root diagnostic
+collection, AggregateError/error-native construction, source suspension,
+callback/caller overlap and ACTIVE/SYNC remain OPEN.
+
 ### Failed-producer construction proposal — pending independent closure
 
 The source3 proposal at8608 separates the accepted retained Error component
@@ -1559,6 +1600,113 @@ caller-owned failure. These assumptions apply to the ordinary trusted array
 intrinsics at these three source sites; any successor iterator site needs its
 own manifest. Closing J enables no incomplete family admission or failed-ticket
 replacement.
+
+
+#### Current budget composition interfaces — implementation976fa5a
+
+This extends the carried fba8 components to the actual current representation.
+It enables no reservation and takes no refund for deletion or UNKNOWN.
+
+| Current storage occurrence | Closed record/index slice |
+| --- | ---: |
+| Sequence:11 properties,5 primitive alternatives,77 name units |930|
+| Leg:11 properties,8 primitive alternatives,74 name units plus a_i |948+2a_i|
+| Existing opaque leg cap |32 per leg|
+| Leg-vector array |116+66L|
+| Native WeakMap entry: record, two references and list edge |32 per leg|
+| Sequence/vector/leg/cap/index union |1046+1078L+2sum(a_i)|
+| Direct rollback carrier:budget,usage,queue,ownedHttp |362|
+| New binding diagnostic:606 record+32 logical indices/brand+16 native entry |654 per materialized diagnostic|
+
+The sequence/leg field deltas are112+96L. The native leg-index expansion adds
+16L beyond the prior logical key/value component. Thus the current sequence
+slice is5358+2sum(a_i) at L4, versus4798+2sum(a_i) in the carried packet.
+The existing global WeakMap container is not cloned per leg. The diagnostic
+Map container remains root-owned; its entry target is not another diagnostic.
+
+At most L new binding diagnostics coexist under the reviewed once/branch
+conditions. Their field/diagnostic/index increment is750L+112, or3112 at L4.
+That expression includes the sequence/leg phase fields: do not add it in full
+on top of the current sequence record above. After those fields are assigned
+there, the remaining diagnostic/index increment is654L.
+
+The current private rollback builder directly creates its four-field carrier.
+The old one-property conditional-spread temporary is absent. Replace the carried
+476-byte carrier/spread row with362 on the nonempty rollback branch, without
+changing ordinary accountingSinks. Separately remove the old caller-activation
+pair846+766=1612 and compose the current wrapper and builder environments;
+the114-byte target difference is not their environment credit.
+
+For clarity, applying only those record/carrier/native-leg-index corrections
+to the carried parent expression gives:
+
+`1046+1078L+2sum(a_i)+42054L+max(42056L,I[r>0]*362+50852r)+11436+46076(L+1)`.
+
+Its L4 value is583614+2sum(a_i), before the new654L diagnostics, any other
+unexpanded native indices, helper/caller/source work and DATA. This remains a
+component, not Wbudget. The old command/ACK diagnostic index representations
+must each reconcile their own native entry nodes exactly once; this correction
+does not silently declare them included.
+
+**Shared parameter-binding kernel interfaces.** The kernel is separately
+assigned; no expansion of it is made here. These are actual source arities and
+declaration occurrences, including lexically distinct mutually exclusive
+catches. Each ordinary function additionally has its own arguments binding.
+The declaration totals are a reproducible roster, not a simultaneous ACTIVE
+upper or permission to sum mutually exclusive environments as a tight peak.
+
+| Actual function | Formal arity | Explicit binding occurrences / name units |
+| --- | ---: | ---: |
+| failedOwnedBudgetBinding |3|3 /20|
+| readOwnedHttpBudgetReserveBinding |5|11 /62|
+| readOwnedHttpBudgetDispatchBinding |4|10 /53|
+| captureOwnedHttpBudgetRollbackSinks |3|19 /127|
+| ownedBudgetSequence |1|2 /12|
+| ownedBudgetLeg |2|4 /18|
+| selectOwnedBudgetBranch |4|7 /42|
+| ownedBudgetReservationLeg |3|5 /24|
+| prepareOwnedHttpAccountingTerminalPlan |4|16 /96|
+| accounting.ownedBudgetRollbackSinks |3|3 /18|
+
+The reserve and dispatch catch scopes each contain reason and failure.
+Rollback has three separate such scopes; a failed read exits the function, so
+they are not three simultaneous catch activations. Its later origin bindings
+and sinks binding still require their actual uninitialized/initialized phases.
+All helpers remain synchronous and introduce zero Promise targets or then
+installations. Their argument Lists, environments, descriptors, scalar/string
+occurrences, native binding kernel and existing async callers remain additive.
+
+The adopted22944 ArrayIterator component covers only its three accounting.ts
+sites. Six further current HTTP-owner sites need a matched lifetime/native/
+active row: OwnedBudgetSequence.close, checkBindingIdle,
+selectOwnedBudgetBranch, captureOwnedHttpBudgetRollbackSinks,
+ownedBudgetReservationLeg and prepareOwnedHttpAccountingTerminalPlan.
+Their input vectors have at most four entries. None of these six loops awaits
+or stores its iterator in a private owner. That is not yet a reusable-capacity
+or whole ACTIVE proof; neither22944 nor an elapsed-call multiplier prices them.
+
+**Carried serialization and ACK DATA composition.** Let I=178160 and
+C=700400 be the current intent/capsule serialization components, and A=2146832
+the reconciled ACK DATA component above. The known payload schedule is:
+
+`L*(I+A)+max(L*(I+A),max(0,L-1)*(2I+A))+(L+1)*A+2L*I+2C`.
+
+It gives3547632,10700768,17853904,25007040,32160176 for L0..4. At L4 the
+terminal term is13560240 and each reserve/dispatch arm is9299968; the rollback
+alternative is7509456. Reserve payloads remain additive. Decoder queues are
+included once through A, and ACK CONTROL is included only in the parent term.
+
+This carries the existing serialization definitions; their4096 fixed pieces
+are not new I/O/environment padding. At L4 the expression carries eighteen
+such pieces,73728 bytes, whose actual constructor/control representation must
+remain explicit in the full family inventory. No reduction or tariff change
+to those existing components is implemented.
+
+STATIC947130+foreground33554432+this32160176 schedule is66661738, leaving
+34001558 before parent I/O, callers, request/bootstrap, intake, credentials
+retained from earlier attempts, response/status/archive and other shared
+owners. This is a partial arithmetic reconciliation, not usable-headroom or
+small-four-attempt proof. Whole COMMON, ACTIVE128/SYNC512 and Wbudget stay OPEN.
 
 ### Preclaim configuration boundary — source-only repair
 
