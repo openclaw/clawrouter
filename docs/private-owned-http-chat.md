@@ -1677,7 +1677,11 @@ silently count ten occurrences as one, add a new debit, or enable R_failed.
 The Error constructor proposal similarly requires joint producer/wrapper/
 cleanup phases rather than summing all four invocation unions as simultaneous.
 
-#### ROOT_RETIREMENT_TAIL_REPAIR_PLAN — exact custody edge, not code authority
+#### ROOT_RETIREMENT_TAIL_REPAIR_PLAN — historical pre1020 boundary
+
+The preventing contract below was superseded by ROOT's1020 terminal-return
+linearization amendment. The successor plan follows this historical packet;
+neither packet is implementation or numeric admission authority.
 
 Source: `8abfe6e4b1aa676d2725db9323aa551750a8e4e8`. The root retirement source
 is unchanged from the published diagnostic. This plan chooses the existing
@@ -1794,6 +1798,272 @@ finish before retirement. They must observe a positive debit through every
 owned constructor/handler/postlude, exact once release only at the reviewed cut,
 and unchanged outcome identities/order. These are plan requirements, not new
 authored runtime assertions or executed tests.
+
+#### ROOT_RETIREMENT_TAIL_REPAIR_PLAN_V2 — proposed source layout
+
+Application source is unchanged at293d4459, with production bytes from8abfe6e.
+ROOT1020 permits one terminal debit cut at the actual fixed APP handler's
+return, following its proved nonreentrant counter-write suffix. ROOT1023 gives
+the remaining native target/activation roster. Neither grants tail code or a
+numeric Wroot. The plan below replaces the existing suppression pair, uses the
+existing request owner and registries, and creates no second observer chain.
+
+**Failure positions, before choosing an eligible outcome.** Let u be actual
+upload enrollments and c the distinct entries appended to codecOrigins. The
+genuine four-port preparation sequence bounds u by4. Transport preparation is
+the sole production caller of beginOwnedHttpUpload; each entry belongs to the
+current preparation port. Its original abandonment receipt is once-only.
+
+| Root failures-vector input | Position union | Source / eligibility |
+| --- | ---: | --- |
+| Each UploadOwner.failures |4u| One pipe rejection, abort catch, unstarted cancellation catch and abandonment async rejection. The pipe and unstarted-cancel branches are exclusive. The async rejection sets UNKNOWN. |
+| Upload listener removal |u| A failed removal sets UNKNOWN before appending. |
+| Archive discardUnused |1| The admitted writer normalizes through its genuine discard origin. A failure of that normalization is ineligible. |
+| codecOrigins |c| Fixed origin records, inserted only on the first record for that ordinal. |
+| Request abort-listener removal |1| Sets UNKNOWN. |
+| Consumer/revalidation sweep or credential sweep |1| The first catch sets UNKNOWN and skips the second sweep. Two source catches are one exclusive position. |
+| Identity pending drain |1| One nested AggregateError returned by drainOwnedHttpIdentity, not its member count. Ineligible for this handoff. |
+| Identity retirement |1| Sets UNKNOWN. |
+| Diagnostic reporting catch |1| A real reporting failure sets UNKNOWN; an unrelated exception here is ineligible. |
+| **Outer-vector union** |**5u+c+6**| No assertion that all positions coexist. Uncaught failures outside these pushes reject P directly and never certify a transferable outcome. |
+
+The c roster is smaller than the complete root diagnostic Map. RPC, budget,
+status, archive and registration diagnostics that only remain in that Map do
+not become codecOrigins merely because they have the same record type.
+
+| Actual codecOrigins producer | Distinct positions / multiplicity |
+| --- | --- |
+| Private intake |11: seven original positions and four installation positions. |
+| Generic normalization |12: seven original and five installation positions; the13-slot reservation is not13 reached failures. One final-response normalization. |
+| Generic usage |14: nine original and five installation positions; the16-slot reservation is not16 reached failures. One final usage consumer. |
+| Public reader |13: offsets0 through7 and9 through13; offset8 is unused. One inner original-response wrapper on the generic branch and one final metadata wrapper. |
+| Venice source and consumers |15+14+14=43, on the final selected codec only. The three role bits prevent reenrollment. This branch has the final public metadata reader, not the generic inner reader/normalizer/usage trio. |
+
+The retry loop finishes before either final response-processing branch starts
+(proxy.ts:2457,2491,2518). Its earlier responses use provider-disposal owners;
+they do not instantiate these public/normalization readers. The sole generic
+usage site is proxy.ts:2654; final metadata wrapping is the once-staged command
+at http-identity-owner.ts:4915. Therefore:
+
+```text
+c_generic <= 11+12+14+2*13 = 63
+c_Venice  <= 11+15+14+14+13 = 67
+f_construct <= 5*4+67+6 = 93 outer entries
+```
+
+This is a source-position construction union, not an Error byte allowance.
+The transfer candidate is narrower: upload abort plus pipe-or-cancel gives at
+most2u; codec-origin members give c; archive discard gives one. Hence
+`f_transfer<=2u+c+1<=76`. Conservatively retaining all67 codec positions in
+that expression takes no credit for installation failures that force UNKNOWN.
+Duplicate identities in different vector positions stay different entries;
+their shared metadata target is counted once. Equal/undefined source reasons
+remain distinct origin facts. The incoming failure graph is never projected,
+reordered, deduplicated or reconstructed.
+
+**Eligible member union.** A member must be the exact frozen six-field record
+created by failedSinkOrigin, still branded in sinkFailures and still identical
+to its ordinal's entry in this root's sinkOrigins. Its own fields contain only
+the fixed origin/disposition strings, ordinal and Boolean facts. No raw cause,
+message/header/prompt/completion graph, owner, cap, Env or callback is reachable
+through those fields. Qualification uses genuine registry identity before
+brand deletion; it does not read properties of an unqualified thrown value.
+An identity-error class, an arbitrary Error, or a nested cohort AggregateError
+does not qualify. Such an outcome preserves the original rejection while
+holding the root; there is no recursive general-purpose graph qualification.
+The nested cohort's internal failure count is consequently not f_transfer.
+Its construction and continued ownership remain in the existing source family.
+
+**Concrete replacement in http-identity-owner.ts only.**
+
+1. Replace the inline async IIFE with the module-fixed async function
+   runOwnedHttpRetirement. It owns the same body, awaits and one original result
+   Promise P. It receives `(owner, cap, cell)`, rather than capturing the
+   finishOwnedHttpRequest invocation. No async forwarding function is inserted.
+   finishOwnedHttpRequest remains synchronous, caches P and returns that exact P.
+2. Prepay and create one seven-field cell: owner, cap, outcome, state, funding,
+   registryFunding, installationOrigin. Initial funding/outcome positions are
+   own undefined fields. One optional RequestOwner.retirementCell reference
+   locates that exact cell; deleting that field does not release any debit.
+   The state word records installation, registration, source-ready, FIRST,
+   failed/held and spent phases. No new registry is introduced.
+3. Replace the two arrows with fresh frozen bindings of module-fixed
+   ownedHttpRetirementFulfilled and ownedHttpRetirementRejected, both bound
+   only to that cell. Freeze both before either reaches the actual then call.
+   Keep one property lookup, one call with P as receiver and two arguments,
+   and an ignored call return. No handler observes/adopts that return.
+   Claim a separately prepaid installation origin before P's factory; failure
+   during binding/freezing/lookup/installation holds UNKNOWN independently of
+   P's outcome. A callback during installation consumes FIRST and holds UNKNOWN;
+   it cannot release, replay, or acquire new authority after installation ends.
+4. The privately created P has not escaped before this installation. Qualify
+   its native Promise/constructor/species provenance under the existing trusted
+   intrinsic boundary, not from instanceof or the then function alone. A custom
+   dependent capability or uncertain installation is a hold. This proof must
+   explicitly cover SpeciesConstructor; the plan does not price an arbitrary
+   custom resolver as the intrinsic dependent. No external original receives a
+   new native-only eligibility restriction.
+5. Keep registerOwnedHttpRetirement's actual waitUntil call on P. Use the cell's
+   once/installation/registration phases to reject duplicate or reentrant
+   registration before another call; certify registration only after the actual
+   call returns. Its existing independent origin handles failure. The fixed
+   handlers require both source-ready and successful registration. No extra
+   receipt Promise, timer, microtask or registration API is added.
+6. In the async body, leave all current physical joins, reporting order,
+   original failure order and spent retiringConsumers latch in place. Construct
+   the one AggregateError, when needed, while the root remains funded. Qualify
+   its complete member union before deleting the corresponding origin brands.
+   Store the exact E in cell.outcome; success stores undefined with a separate
+   source-ready outcome bit. A source abrupt completion outside this certified
+   exit has no release authority. Never infer eligibility from settlement alone.
+7. Move request-map deletion, the final requestCount transition and the two
+   charge releases out of the async body. All fallible cleanup/qualification
+   finishes first. The source clears its owner/cap/cell/failures aliases and all
+   three strict-arguments entries before throwing the same E or returning
+   undefined. Loop/catch bindings that can survive an await become explicitly
+   clearable locals; each actual saved context must point only to cleared
+   bindings or the qualified outgoing outcome. This is a required source edit
+   and manifest delta, not an optimized-capture assumption.
+8. A selected fixed handler first consumes FIRST, checks exact cell/root/cap/P
+   association, certified outcome identity, registration, joins and global
+   UNKNOWN. Complete remaining trusted registry removals and root field cuts
+   while funded. No error path may enter the release suffix. Validate the
+   requestCount/last-registry case synchronously; another request cannot enter
+   between that check and the suffix. Sever owner/cap/outcome/installation
+   authority from the cell, all local aliases and the rejection argument plus
+   its strict arguments entry. Only genuine charge references and inert state
+   may remain. An unmatched/duplicate callback returns before any charge access.
+9. The suffix uses the existing ExactBodyCharge.release implementation, whose
+   complete body is `charged -= this.held; this.held = 0`. Capture its fixed
+   target and the empty argument vector before the protected phase. The plan
+   uses existing bootstrapApply, with no release property lookup in the suffix.
+   Its closed call path, implicit arguments/context/Completion products, optional
+   last-registry release and immediate handler return are one explicitly
+   manifested counter-write suffix. There is no surrounding finally, callback,
+   getter, diagnostic, constructor, admission, await or later APP consumer.
+   ROOT's linearization must cover this exact known call/return path, not an
+   arbitrary replaceable release method. A source proof of that path is required
+   before code adoption. Both fixed handlers end directly at that suffix; no
+   forwarding helper can return into further handler work after releasing.
+
+The handlers' registry cuts may not run on an unqualified outcome, unsettled
+physical child, installation/registration uncertainty or UNKNOWN. Existing
+earlier successfully completed child cuts are not rolled back or replayed;
+the amendment supplies no new child retirement. The outstanding root/cell,
+request association and all still-held debits remain on the failed path.
+No constructor failure or rejection is turned into a successful receipt.
+
+**Actual caller and transfer boundaries.** The index.fetch finally remains
+unchanged: it receives P and registers P before returning. The retirement body
+starts with the existing completion await; it cannot use registration absence
+as success. Its caller/native contexts must have ended their APP use before the
+terminal callback qualifies. Closed module handlers do not capture those caller
+environments. Current and copied async contexts, strict arguments objects and
+earlier Await/reaction tails need explicit last-use/clearing entries; extraction
+alone is not that proof. A residual context retaining owner/cap is a hold.
+
+At the adopted return cut, the outgoing roster is P with E, E's exact errors
+array and member graph, both conservatively retained frozen handlers, their
+inert cell, one or two spent ExactBodyCharge instances, selected reaction/job
+including its incoming E, dependent capability, handler-result Completion and
+the finite native/host return state. Returning undefined changes only D, not P
+or E. D has no APP reactions; its intrinsic resolution of undefined creates no
+thenable adoption or successor APP work. The actual arguments containing E
+remain paid through the native postlude. Transfer is not an ACTIVE exemption.
+
+**Closed components and open interfaces.** For the specified prospective cell,
+`m=7,q=7,Ukeys=60` gives656 bytes under ROOT1023's cell formula; the new root
+reference costs92 while reference-valued and deleted, not own undefined.
+The bound names have34/33 units, giving312+310=622 bytes. One or two spent
+ExactBodyCharge instances contribute112 each as a retained-target row, not a
+second charge on targets already owned by the root/registry components.
+K_retirement1084 plus T_suppression1628 remains2712, containing their existing
+Promise/resolver/reaction targets. The postlude's inherited P0+T=1788 is a
+contained subset, not another addition. No R is added again.
+
+```text
+W_root_tail(u,c) = existing one-result/one-observation native union
+  + cell/root-link/frozen-handler/installation-origin actual phase union
+  + fixed-handler and extracted-source APP environments, strict arguments,
+    source/caller contexts, entry/await/resume and alias-clearing work
+  + failures-vector and AggregateError construction for f_construct<=93
+  + exact eligible member targets not already paid by their owning families
+  + registration, registry-cut and known counter-write suffix working state
+  + FinalOutcomeAndNativeReturn(f_transfer<=76), with K/T containment removed
+```
+
+The actual source has no new tail allowance installed. ROOT1023's112/1788,
+the656/92/622 rows and this formula are components only. Source4 owns the
+AggregateError/native-postlude expansion; ordinary HttpError construction does
+not substitute for it. The current and replacement async/source/handler
+environments are alternatives, not simultaneously retained copies.
+Holding an ineligible outcome is not a finite-size proof for an arbitrary raw
+reason. Its source family's original bound remains mandatory; the root plan
+does not absorb an unknown graph into the93-position reference-vector tariff.
+
+The proposed STATIC change is explicit but not adopted: replacing three empty-
+name templates with fixed names of28,27,22 units adds154 target-tariff bytes;
+the two ordinary module handlers require their constructible-function
+relationships (256 under the current128-per-prototype row). Three named module
+bindings add178; the two proposed captured bindings ownedRetirementRelease and
+ownedRetirementArguments add108. These give a696-byte named component before
+the actual new literal/field/operand occurrences, empty argument-vector target,
+module links and removed/moved operands are reconciled. It is not the complete
+STATIC delta. No existing target is duplicated for the captured release alias,
+and the current32-byte difference below947130 is not financing authority.
+
+Required actual-request witnesses retain all earlier assertions and add:
+positive debit through aggregate construction and the selected handler; exact
+P/E/member identity and order; genuine undefined/equal-reason origin facts;
+zero release on unqualified nested aggregate or any held/UNKNOWN phase;
+duplicate/reentrant callback and registration refusal before effects; native
+dependent undefined with no APP follow-up; concurrent-root last-registry case;
+and the terminal counter cut exactly once. Runtime/typecheck remain UNRUN.
+
+#### Adopted1015 kernels — current caller composition
+
+These are applications of the independently adopted components, not another
+kernel expansion. Promise K=1084 is distinct from the parameter-binding kernel.
+Actual argument Lists remain borrowed from their existing caller rows.
+
+| Source entry group | Parameter-kernel union |
+| --- | ---: |
+| State consume0/0 and acquisition consume0/0 |2*1256=2512|
+| Receipt2/2, credential materialization2/2, cache preparation1/1; reference arguments |3*5522=16566|
+| Provider preparation9/9; two primitive arguments, no string arguments |5554|
+| **Six actual async entries** |**24632**|
+| Two executed suppression arrows,1 actual/0 formals |2512|
+| Outer prepareOwnedHttpAttempt6/6 |5522 per actual invocation|
+| Optional current/next helper2/2, Promise executor2/1, predicate0/0 |2*(5554+5522+1256)=24664|
+
+The primitive rows use q*=qe=1 conservatively; repeated primitive arguments do
+not create repeated kernel instances. Four suppression functions still exist,
+although only two callbacks execute on the failed path. Their APP targets are
+separate. Default-parameter grammar, FDI, bindings, arguments objects, bodies
+and caller continuations remain separate; none is silently included by these
+entry totals. This does not adopt the still-proposed1004 source/timer rows.
+
+There are six additional HTTP-owner ArrayIterator source sites: sequence.close,
+sequence.checkBindingIdle, selectOwnedBudgetBranch, rollback-sink capture,
+ownedBudgetReservationLeg and accounting-terminal-plan admission. Each iterates
+the existing at-most-four-leg array. Sequence.prepare uses a numeric loop and
+does not add a seventh iterator. Early return from leg lookup retains J's
+absent-return close disposition; caller failure remains caller-owned.
+
+With corrected J(n)=7410+204I(n>0)+34I(n>=2), the six-site conservative factory
+union is44460 at L0,45684 at L1 and45888 at L2..4. Together with the three
+previously verified accounting sites, the nine-site component is at most68832.
+This is no iteration-history multiplier or whole ACTIVE/SYNC bound; actual
+nonoverlap may be credited only after complete last-use mapping. APP loop
+bindings, array targets, elements and native caller operands remain separate.
+
+The adopted3184-byte ASCII one-digit ToUint32 kernel applies only to an actual
+successful conversion of the string keys "0" through "4". It can compose with
+the sequence/result-vector indexed-property constructors and matching terminal
+indices after their constructor containment is checked. It is not added to
+read-only for-of traversal. Terminal indices5..14 and numeric length writes
+are outside this kernel's domain. No family admission or R_failed replacement
+is enabled by these applications.
 
 ### Failed-producer construction proposal — pending independent closure
 
