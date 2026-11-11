@@ -88,6 +88,43 @@ models:
             inputMicrosPerMillion: 180000
             cachedInputMicrosPerMillion: 18000
             outputMicrosPerMillion: 720000
+    - id: fireworks/glm-5.3-fast
+      upstream: accounts/fireworks/routers/glm-5p3-fast
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            checkedAt: "2026-11-03"
+            sources:
+              - https://app.fireworks.ai/models/fireworks/glm-5p3
+              - https://docs.fireworks.ai/serverless/serverless-modes
+            input: [text]
+            contextWindow: 1048576
+      requestParameters:
+        chat_completions:
+          checkedAt: "2026-11-03"
+          sources:
+            - https://app.fireworks.ai/models/fireworks/glm-5p3
+          toolCalling: supported
+      pricingRef: fireworks-glm-5p3-fast-2026-11-03
+      pricing:
+        effectiveAt: "2026-11-03"
+        checkedAt: "2026-11-03"
+        source: https://docs.fireworks.ai/serverless/pricing
+        inputMicrosPerMillion: 2100000
+        cachedInputMicrosPerMillion: 390000
+        outputMicrosPerMillion: 6600000
+        # Full-context reservation ceiling, not a claimed output maximum/default.
+        maxInputTokens: 1048576
+        defaultMaxOutputTokens: 1048576
+        serviceTiers:
+          - id: default
+            # Flex uses default processing; auto selects the only qualified card.
+            aliases: [flex]
+            inputMicrosPerMillion: 2100000
+            cachedInputMicrosPerMillion: 390000
+            outputMicrosPerMillion: 6600000
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
