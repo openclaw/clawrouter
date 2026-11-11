@@ -129,6 +129,7 @@ class UploadOwner {
   provider?: OwnedProviderFetch;
   private flags = 0;
   private pipeOrigin = 0;
+  private installationOrigin = 0;
   private observation?: OwnedOriginalObservation;
   readonly failures: unknown[] = [];
   declare readonly cap: OwnedHttpUpload;
@@ -175,6 +176,7 @@ class UploadOwner {
   pipe(source: ReadableStream<Uint8Array>, fixed: FixedLengthStream): void {
     this.source = source; this.fixed = fixed; this.flags |= 1 | 8;
     this.pipeOrigin = sinkOrigin(this.request.sink!, "pipe");
+    this.installationOrigin = sinkOrigin(this.request.sink!, "pipe");
     let original: Promise<void> | undefined;
     try {
       try { original = source.pipeTo(fixed.writable, { signal: this.controller!.signal }); }
@@ -183,7 +185,8 @@ class UploadOwner {
       try { installOwnedOriginal(this.observation, original); }
       catch (reason) {
         this.unknown();
-        throw failedSinkOrigin(this.request, this.pipeOrigin, reason);
+        const installation = failedSinkOrigin(this.request, this.installationOrigin, reason);
+        throw this.request.sinkOrigins!.get(Math.floor(this.pipeOrigin / 32)) ?? installation;
       }
     } finally { original = undefined; this.flags &= ~8; this.schedule(); }
   }
@@ -207,7 +210,10 @@ const sinkOriginBytes = 2048;
 const ownedOriginalCellBytes = 8 * (1 + 6 + 2 + 6 + 3 + 2 + 20)
   + 2 * "ownerkindstateobservationcancellation".length;
 const ownedSinkOriginBytes = sinkOriginBytes + ownedOriginalCellBytes;
-const requestMetadataBytes = 4096 + 4096 + 3 * sinkOriginBytes;
+// Each independent installation also adds its ordinal field, primitive value,
+// constructor operands and retained lookup operands to the command component.
+const sinkInstallationFieldBytes = 8 * 8 + 2 * "installationOrigincancelInstallationOrigin".length;
+const requestMetadataBytes = 4096 + 4096 + 4 * sinkOriginBytes + sinkInstallationFieldBytes;
 const uploadMetadataBytes = 4096;
 const originalReaderCancel = ReadableStreamDefaultReader.prototype.cancel;
 const ownedBoundaryThen = Promise.prototype.then;
@@ -271,11 +277,11 @@ function claimOwnedSinkFactories(): void {
 export function ownedHttpFailureMetadata(value: unknown): OwnedHttpFailureMetadata | undefined {
   return value !== null && (typeof value === "object" || typeof value === "function") && sinkFailures?.has(value) ? value as OwnedHttpFailureMetadata : undefined;
 }
-function reserveSinkOrigins(sink: OwnedHttpSinkOwner, count: number): void {
+function reserveSinkOrigins(sink: OwnedHttpSinkOwner, count: number, installations = 0): void {
   const owner = sinkOwner(sink);
   // Operation-local terminal origins are prepaid before acquisition/start.
   // Cancellation never has to compete for a new common-arena reservation.
-  const charge = owner.funding.replace(owner.funding.bytes + count * ownedSinkOriginBytes);
+  const charge = owner.funding.replace(owner.funding.bytes + count * ownedSinkOriginBytes + installations * sinkInstallationFieldBytes);
   if (!charge) throw identityFailure("limit");
   owner.funding = charge; owner.sinkCredits += count;
 }
@@ -382,9 +388,11 @@ class OwnedSinkVoidCommand {
   readonly ready = new Promise<void>((resolve, reject) => { this.resolve = resolve; this.reject = reject; });
   declare readonly owner: RequestOwner;
   declare readonly origin: SinkOriginOwner;
+  declare readonly installationOrigin: SinkOriginOwner;
   declare readonly budget?: OwnedBudgetSequence;
   constructor(owner: RequestOwner, origin: SinkOriginOwner, budget?: OwnedBudgetSequence) {
     this.owner = owner; this.origin = origin; this.budget = budget;
+    this.installationOrigin = sinkOrigin(owner.sink!, sinkKinds[origin % 32]);
     // Suppression belongs to our genuine void receipt, never the discarded
     // return of an external observer method.
     void this.ready.then(ignoreOwnedVoidOutcome, ignoreOwnedVoidOutcome);
@@ -427,8 +435,9 @@ class OwnedSinkVoidCommand {
     this.observation = { owner: this, kind: 0, state: 0 };
     try { installOwnedOriginal(this.observation, original); }
     catch (reason) {
-      this.failure(reason); this.unknown();
-      throw failedSinkOrigin(this.owner, this.origin, reason);
+      this.flags |= 4; this.unknown();
+      const installation = failedSinkOrigin(this.owner, this.installationOrigin, reason);
+      throw this.owner.sinkOrigins!.get(Math.floor(this.origin / 32)) ?? installation;
     }
     finally { original = undefined as never; this.flags &= ~1; this.schedule(); }
   }
@@ -438,7 +447,8 @@ class OwnedSinkVoidCommand {
     if (!(this.flags & 32)) {
       this.flags |= 32;
       if (this.flags & 4) {
-        const failure = this.owner.sinkOrigins!.get(Math.floor(this.origin / 32));
+        const failure = this.owner.sinkOrigins!.get(Math.floor(this.origin / 32))
+          ?? this.owner.sinkOrigins!.get(Math.floor(this.installationOrigin / 32));
         if (!failure || typeof failure === "number") { this.unknown(); return; }
         this.reject(failure);
       } else this.resolve();
@@ -1447,7 +1457,7 @@ export function ownedHttpArchivePut(sink: OwnedHttpSinkOwner, bucket: Env["CONTE
   value: string | ReadableStream<Uint8Array>, expiresAt: string): Promise<void> {
   const owner = sinkOwner(sink);
   if (bucket !== owner.env!.CONTENT_ARCHIVE) throw identityFailure("protocol");
-  reserveSinkOrigins(sink, 1); const record = sinkOrigin(sink, "put");
+  reserveSinkOrigins(sink, 2, 1); const record = sinkOrigin(sink, "put");
   const command = createOwnedSinkVoidCommand(owner, record);
   let original: Promise<unknown>;
   try { original = bucket.put(key, value, { httpMetadata: { contentType: "application/json" }, customMetadata: { expiresAt } }); }
@@ -1456,7 +1466,7 @@ export function ownedHttpArchivePut(sink: OwnedHttpSinkOwner, bucket: Env["CONTE
   return command.ready;
 }
 export function ownedHttpArchivePipe(sink: OwnedHttpSinkOwner, source: ReadableStream<Uint8Array>, writable: WritableStream<Uint8Array>, signal: AbortSignal): Promise<void> {
-  reserveSinkOrigins(sink, 3); // ORIGINAL pipe, owned abort, original FIRSTcancel.
+  reserveSinkOrigins(sink, 5, 2); // Pipe/install, owned abort, FIRSTcancel/install.
   const record = sinkOrigin(sink, "pipe");
   const command = createOwnedSinkVoidCommand(sinkOwner(sink), record);
   let original: Promise<void>;
@@ -1569,7 +1579,7 @@ export function ownedHttpQueueSend(sink: OwnedHttpSinkOwner, queue: Env["USAGE_Q
   const funding = owner.funding.replace(owner.funding.bytes + (usage ? ownedCapsuleSerializationData : ownedIntentSerializationData));
   if (!funding) throw identityFailure("limit");
   owner.funding = funding;
-  reserveSinkOrigins(sink, 1); const record = sinkOrigin(sink, "queue");
+  reserveSinkOrigins(sink, 2, 1); const record = sinkOrigin(sink, "queue");
   const command = createOwnedSinkVoidCommand(owner, record);
   try { if (usage) copyPrivateQueueCapsule(message, command); else copyPrivateQueueIntent(message, command); }
   catch (reason) { command.abandonUnstarted(); throw reason; }
@@ -1592,11 +1602,14 @@ class OwnedProviderFetch {
   private resolveRetired!: () => void;
   readonly retired = new Promise<void>(resolve => { this.resolveRetired = resolve; });
   private cancelOrigin = 0;
+  private cancelInstallationOrigin = 0;
+  declare readonly installationOrigin: SinkOriginOwner;
   declare readonly http: OwnedHttpRequest;
   declare readonly upload: UploadOwner;
   declare readonly origin: number;
   constructor(http: OwnedHttpRequest, upload: UploadOwner, origin: number) {
     this.http = http; this.upload = upload; this.origin = origin;
+    this.installationOrigin = sinkOrigin(upload.request.sink!, "fetch");
     void this.ready.then(ignoreOwnedVoidOutcome, ignoreOwnedVoidOutcome);
   }
   private unknown(): void { this.flags |= 8; this.upload.request.unknown = true; }
@@ -1637,8 +1650,9 @@ class OwnedProviderFetch {
       this.observation = { owner: this, kind: 0, state: 0 };
       try { installOwnedOriginal(this.observation, original); }
       catch (reason) {
-        this.failed(reason); this.unknown();
-        throw failedSinkOrigin(this.upload.request, this.origin, reason);
+        this.flags |= 4; this.unknown();
+        const installation = failedSinkOrigin(this.upload.request, this.installationOrigin, reason);
+        throw this.upload.request.sinkOrigins!.get(Math.floor(this.origin / 32)) ?? installation;
       }
     } finally { original = undefined; url = undefined as never; init = undefined as never; this.flags &= ~1; this.schedule(); }
   }
@@ -1669,6 +1683,7 @@ class OwnedProviderFetch {
     let original: Promise<void> | undefined, started = false;
     try {
       this.cancelOrigin = sinkOrigin(this.upload.request.sink!, "cancel");
+      this.cancelInstallationOrigin = sinkOrigin(this.upload.request.sink!, "cancel");
       if (!this.response!.body) { this.cancelled(); return; }
       if (this.response!.body!.locked) { this.unknown(); return; }
       try { original = this.response!.body!.cancel(); started = true; }
@@ -1676,8 +1691,14 @@ class OwnedProviderFetch {
       this.cancellation = { owner: this, kind: 1, state: 0 };
       installOwnedOriginal(this.cancellation, original);
     } catch (reason) {
-      if (started) this.unknown();
-      this.cancelFailed(reason);
+      if (started) {
+        this.unknown();
+        // Installation is independent of the FIRST cancellation callback.
+        // Even fulfillment followed by throw(undefined) retains this origin.
+        try { failedSinkOrigin(this.upload.request, this.cancelInstallationOrigin, reason); }
+        catch { this.unknown(); }
+        finally { reason = undefined; }
+      } else this.cancelFailed(reason);
     } finally { original = undefined; this.flags &= ~1; this.schedule(); }
   }
   private advance(): void {
@@ -1687,7 +1708,8 @@ class OwnedProviderFetch {
       if (!(this.flags & 32) && this.flags & (2 | 8)) {
         this.flags |= 32;
         if (this.flags & 4) {
-          const failure = this.upload.request.sinkOrigins!.get(Math.floor(this.origin / 32));
+          const failure = this.upload.request.sinkOrigins!.get(Math.floor(this.origin / 32))
+            ?? this.upload.request.sinkOrigins!.get(Math.floor(this.installationOrigin / 32));
           if (!failure || typeof failure === "number") { this.unknown(); return; }
           this.reject(failure);
         } else this.resolve();
@@ -1707,7 +1729,7 @@ class OwnedProviderFetch {
 export function startOwnedHttpProviderFetch(http: OwnedHttpRequest, attempt: OwnedHttpUpload, url: URL, init: RequestInit): Promise<void> {
   const owner = uploadOwner(attempt), root = requestOwner(http);
   if (owner.request !== root || owner.providerStarted || !owner.dispatched || !matchesOwnedHttpProviderFetchInput(http, attempt, url, init)) throw identityFailure("protocol");
-  reserveSinkOrigins(root.sink!, 2);
+  reserveSinkOrigins(root.sink!, 4, 2);
   const record = sinkOrigin(root.sink!, "fetch");
   claimOwnedSinkFactories(); enrollOwnedSinkChild(root);
   const command = new OwnedProviderFetch(http, owner, record);
@@ -3318,7 +3340,7 @@ export function prepareOwnedHttpAccountingTerminalPlan(cap: OwnedHttpRequest, ac
   if (!admitted?.legs) return; // Soft charges use the separate final terminal.
   const rollback = Math.max(0, legs - 1);
   const ledger = ownedIntentSerializationData + ownedLedgerAckData + 4096 + 18 * ownedSinkOriginBytes;
-  const queue = ownedIntentSerializationData + ownedSinkOriginBytes;
+  const queue = ownedIntentSerializationData + 2 * ownedSinkOriginBytes + sinkInstallationFieldBytes;
   let units = "roothttpaccountingplanattemptlegsphasephysicalresultsinks".length + "budgetusagequeueownedHttp".length;
   for (const leg of admitted.legs) units += "sequenceordinalintentnameidcapflagsreservationrequestnamespace".length
     + leg.objectName.length + leg.request.reservationId.length;
@@ -3329,7 +3351,7 @@ export function prepareOwnedHttpAccountingTerminalPlan(cap: OwnedHttpRequest, ac
     + Math.max(legs * ledger, rollback * (ledger + queue)) + metadata);
   if (!funding) throw identityFailure("limit");
   root.funding = funding;
-  root.sinkCredits += 18 * legs + Math.max(18 * legs, 19 * rollback);
+  root.sinkCredits += 18 * legs + Math.max(18 * legs, 20 * rollback);
   claimOwnedSinkFactories();
   const sequence = new OwnedBudgetSequence(root, cap, accounting, admitted, attempt);
   enrollOwnedSinkChild(root); root.budgetSequence = sequence;
@@ -3465,7 +3487,7 @@ function createOwnedHttpRequest(request: Request, env: Env, funding: ExactBodyCh
     let resolveSink!: () => void;
     const sinkRetired = new bootstrapPromise<void>(resolve => { resolveSink = resolve; });
     const owner: RequestOwner = { request, env, funding, completion: new ProxyCompletion(), uploads: [],
-      sealed: false, unknown: false, sink, sinkPending: 0, sinkClosed: false, sinkRetired, resolveSink, sinkOrigins: new bootstrapMap(), nextSinkOrigin: 1, sinkCredits: 2, revalidationCredits: 0,
+      sealed: false, unknown: false, sink, sinkPending: 0, sinkClosed: false, sinkRetired, resolveSink, sinkOrigins: new bootstrapMap(), nextSinkOrigin: 1, sinkCredits: 3, revalidationCredits: 0,
       terminalRegistration, budgetDenials: new bootstrapWeakSet(), publicCaptureLiveBytes: 0, publicCaptureHighWater: 0, errorState: 0, terminalErrorCredit: terminalErrorBytes };
     const cap = bootstrapFreeze({});
     bootstrapApply(bootstrapMapSet, nextSinks, [sink, owner]);
@@ -3484,7 +3506,7 @@ export function tryBeginOwnedHttpRequest(request: Request, env: Env): OwnedHttpR
   if (!funding) return undefined;
   let transferred = false;
   try {
-    const terminal = funding.replace(requestMetadataBytes + terminalErrorBytes + 3 * ownedOriginalCellBytes);
+    const terminal = funding.replace(requestMetadataBytes + terminalErrorBytes + 4 * ownedOriginalCellBytes);
     if (!terminal) return undefined;
     funding = terminal;
     const cap = createOwnedHttpRequest(request, env, funding);
@@ -3560,7 +3582,7 @@ export function discardOwnedHttpInitialError(cap: OwnedHttpRequest, response: Re
   const owner = requestOwner(cap);
   if (owner.sealed || !owner.localErrorResponses?.includes(response)) throw identityFailure("protocol");
   if (owner.localErrorDisposals && bootstrapApply(bootstrapSetHas, owner.localErrorDisposals, [response])) return;
-  growOwnedHttpRequest(cap, 4096); reserveSinkOrigins(owner.sink!, 1);
+  growOwnedHttpRequest(cap, 4096); reserveSinkOrigins(owner.sink!, 2, 1);
   bootstrapApply(bootstrapSetAdd, owner.localErrorDisposals ??= new bootstrapWeakSet(), [response]);
   try { discardOwnedHttpSinkResponse(owner.sink!, response); }
   catch (reason) { owner.unknown = true; throw reason; }
@@ -4302,7 +4324,7 @@ export function beginOwnedHttpUpload(cap: OwnedHttpRequest): OwnedHttpUpload {
   // Upload completion is a separate original-root join. Enrolling it in the
   // logical delivery/accounting completion would prevent that boundary from
   // ever initiating cancellation of a dispatched, backpressured upload.
-  const sink = ownedHttpSinkOwner(cap); reserveSinkOrigins(sink, 5);
+  const sink = ownedHttpSinkOwner(cap); reserveSinkOrigins(sink, 7, 2);
   const adding = sinkOrigin(sink, "listener-add"), listenerRemoval = sinkOrigin(sink, "listener-remove");
   claimOwnedSinkFactories(); enrollOwnedSinkChild(request);
   const upload = Object.freeze({});
@@ -4589,7 +4611,7 @@ export function beginOwnedHttpFinalMetadata(cap: OwnedHttpRequest, request: Requ
   if (owner.sealed || owner.metadata || owner.request !== request || owner.env !== env
     || typeof path !== "string" || typeof requestId !== "string") throw identityFailure("protocol");
   growOwnedHttpRequest(cap, 8192 + 2 * path.length + 2 * requestId.length);
-  reserveSinkOrigins(owner.sink!, 2); claimOwnedSinkFactories();
+  reserveSinkOrigins(owner.sink!, 3, 1); claimOwnedSinkFactories();
   owner.metadata = { response, path, requestId, stage: 0, busy: false, discarded: undefined, formatted: undefined, correlated: undefined, cors: undefined };
 }
 export function beginOwnedHttpMetadataStage(cap: OwnedHttpRequest, response: Response, stage: number,

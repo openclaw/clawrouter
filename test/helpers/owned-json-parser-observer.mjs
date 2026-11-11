@@ -1024,6 +1024,8 @@ export function observeOwnedJsonSource(path, source) {
     source = replace(source, '    const text = ownedErrorStringify(envelope);',
       '    let text; try { text = ownedErrorStringify(envelope); } finally { ' + probe + '.initialErrorDone(); }');
   } else if (/[\\/]worker[\\/]http-identity-owner\.ts$/.test(path)) {
+    source = replace(source, '  try { installOwnedOriginalMethod(cell, original, original.then); }',
+      '  globalThis.__ownedProvenanceFixture?.capture(cell); try { installOwnedOriginalMethod(cell, original, original.then); }');
     source = replace(source, '  if (root.unknown) return false;\n  const funding = root.funding.replace(root.funding.bytes - bytes);',
       '  globalThis.__ownedAckPhaseFixture?.beforeCredit(root, bytes); if (root.unknown) { globalThis.__ownedAckPhaseFixture?.afterCredit(root, false); return false; }\n  const funding = root.funding.replace(root.funding.bytes - bytes);');
     source = replace(source, '  root.funding = funding;\n  return true;\n}\n\ntype OwnedLedgerResult',

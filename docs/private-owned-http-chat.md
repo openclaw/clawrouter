@@ -1,5 +1,37 @@
 # Private owned HTTP Chat staging
 
+
+### Independent observer installation provenance — source-only partial
+
+Original rejection and observer installation are separate occurrences. The
+private queue/put/pipe command, provider fetch and provider disposal cancellation
+now claim separate ordinals before their actual effects. Installation records
+survive a FIRST callback, including fulfillment followed by `throw undefined`.
+A rejected FIRST remains the logical rejection; its record is not overwritten
+by a later installation record. Both records remain funded under UNKNOWN.
+
+Each newly admitted installation position includes the existing origin/cell
+component plus `8*8 + 2*"installationOrigincancelInstallationOrigin".length`
+bytes for its ordinal field, primitive occurrence and fixed transition operands.
+This is an additive component, not a whole-window fit certificate. Rollback Q
+now includes two origins and that field component; the branch credit count is
+updated from19 to20 per rollback leg. Provider fetch/disposal admits four origins
+instead of two. Archive pipe/cancel admits five instead of three, upload
+preparation seven instead of five, and queue/put two instead of one. Bootstrap
+untouched-body cancellation and final metadata disposition include their extra
+installation origin. The existing41-origin accounting-shell slice and terminal
+installation/processing/disposition positions remain unchanged; rollback Q is
+separately prepaid at the pure-plan boundary.
+
+Authored Node and Workerd cases retain original/install records for distinct,
+equal and undefined reasons; provider disposal also covers fulfilled FIRST then
+installation throw. Actual queue, archive and upload command methods and the
+real private Chat provider path remain under test. UNKNOWN retains COMMON and
+same-ID terminal recovery remains independent. These fixtures are UNRUN locally.
+Native startup import cycles and the failed fixed CONTROL inventory remain
+NEEDSWORK. The paid ASYNC proposal, optional credential retirement and diagnostic
+representation changes are not implemented by this repair.
+
 ## Source-only partial pinned-client return correction
 
 After published DACD, the checkout contains an independently authorized fixture

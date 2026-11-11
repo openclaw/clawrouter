@@ -6,7 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createOwnedJsonObservation, observeOwnedJsonSource } from '../../test/helpers/owned-json-parser-observer.mjs';
 import { ownedJsonCodecCases, ownedJsonCodecWire, ownedUsageCases, ownedUsageWire, ownedCodecSseLines } from '../../test/helpers/owned-json-parser-cases.mjs';
-import { assertOwnedAckCustody, createOwnedAckPhaseFixture, createOwnedBudgetSequenceFixture, createOwnedTerminalFixture } from '../../test/helpers/owned-http-chat-fixture.mjs';
+import { ownedSinkInstallationWitness, assertOwnedSinkInstallation, assertOwnedAckCustody, createOwnedAckPhaseFixture, createOwnedBudgetSequenceFixture, createOwnedTerminalFixture } from '../../test/helpers/owned-http-chat-fixture.mjs';
 
 const observation = globalThis.__ownedJsonObservation = createOwnedJsonObservation();
 globalThis.__ownedUsageWire = ownedUsageWire;
@@ -752,19 +752,22 @@ test(`thirteen ACK records compact in place with held originals (active final re
   });
 });
 
-for (const custodyMode of ['provider-install', 'retry-cancel', 'new-post-install', 'clean-retry']) {
-  const name = `private ACK credit and retry evidence ${custodyMode}`;
+for (const [custodyMode, provenance] of [
+  ...['provider-install', 'retry-cancel', 'new-post-install', 'clean-retry'].map(mode => [mode, '']),
+  ...['distinct', 'equal', 'undefined'].flatMap(reason => ['fetch:reject:', 'cancel:reject:', 'cancel:fulfill:'].map(phase => ['provider-install', phase + reason]))
+]) {
+  const name = `private ACK credit and retry evidence ${custodyMode} ${provenance}`;
   test(name, { timeout: 120000 }, async t => {
     const unknown = custodyMode !== 'clean-retry';
-    if (unknown && process.env.CLAWROUTER_TERMINAL_UNKNOWN !== custodyMode) {
+    if (unknown && process.env.CLAWROUTER_TERMINAL_UNKNOWN !== name) {
       await promisify(execFile)(process.execPath, ['--test', '--test-name-pattern', '^' + name + '$', fileURLToPath(import.meta.url)],
-        { env: { ...process.env, CLAWROUTER_TERMINAL_UNKNOWN: custodyMode }, maxBuffer: 4 * 1024 * 1024 });
+        { env: { ...process.env, CLAWROUTER_TERMINAL_UNKNOWN: name }, maxBuffer: 4 * 1024 * 1024 });
       return;
     }
     await fixture(t, async f => {
       if (unknown) f.expectUnknownRetirement();
       await budgetSequence(f, { legs: 4 }); await f.retryPool('response');
-      const terminal = terminalScenario(f, {}), control = createOwnedAckPhaseFixture({ custodyMode }, bodyBudgetCharged);
+      const terminal = terminalScenario(f, {}), control = createOwnedAckPhaseFixture({ custodyMode, provenance }, bodyBudgetCharged);
       globalThis.__ownedAckPhaseFixture = control;
       f.releases.push(() => { f.own(control.release()); delete globalThis.__ownedAckPhaseFixture; });
       f.requestEnvironment(control.env(terminal.env(f.env)));
@@ -1361,3 +1364,17 @@ test('private pricing retains Infinity ancestry and array-valued tool classifica
     assert.deepEqual(JSON.parse(f.sent[0].text).tools, [{ type: ['browser_search'] }]);
   });
 });
+
+for (const kind of ['queue', 'put', 'archive-pipe', 'upload-pipe']) for (const outcome of ['reject', 'fulfill'])
+for (const reasonKind of ['distinct', 'equal', 'undefined']) {
+  const name = `private independent installation ${kind} ${outcome} ${reasonKind}`;
+  test(name, { timeout: 120000 }, async () => {
+    if (process.env.CLAWROUTER_TERMINAL_UNKNOWN !== name) {
+      await promisify(execFile)(process.execPath, ['--test', '--test-name-pattern', '^' + name + '$', fileURLToPath(import.meta.url)],
+        { env: { ...process.env, CLAWROUTER_TERMINAL_UNKNOWN: name }, maxBuffer: 4 * 1024 * 1024 }); return;
+    }
+    const commands = await import('../http-identity-owner.ts');
+    const row = await ownedSinkInstallationWitness(commands, kind, outcome, reasonKind, bodyBudgetCharged);
+    assertOwnedSinkInstallation(assert, row, outcome, reasonKind);
+  });
+}

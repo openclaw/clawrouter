@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { startWorkerdFixture } from '../../test/helpers/workerd.mjs';
 import { startOwnedJsonObservedFixture } from '../../test/helpers/owned-json-parser-observer.mjs';
 import { ownedJsonCodecCases, ownedJsonCodecWire, ownedUsageCases, ownedUsageWire, ownedCodecSseLines } from '../../test/helpers/owned-json-parser-cases.mjs';
-import { assertOwnedAckCustody, ownedHttpModel, ownedHttpPricingModel, ownedHttpControlModels, ownedHttpProxyKey, ownedHttpRouter, ownedHttpUpstream, seedOwnedHttpChat } from '../../test/helpers/owned-http-chat-fixture.mjs';
+import { assertOwnedSinkInstallation, assertOwnedAckCustody, ownedHttpModel, ownedHttpPricingModel, ownedHttpControlModels, ownedHttpProxyKey, ownedHttpRouter, ownedHttpUpstream, seedOwnedHttpChat } from '../../test/helpers/owned-http-chat-fixture.mjs';
 
 // One memoized ORIGINAL body root is enrolled as soon as each dispatch resolves,
 // including a late response after an earlier assertion has already failed.
@@ -318,8 +318,11 @@ test(`native thirteen ACK phase cuts preserve held upload and reader custody (${
   },true);
 });
 
-for (const custodyMode of ['provider-install', 'retry-cancel', 'new-post-install', 'clean-retry'])
-test(`native ACK credit and retry evidence ${custodyMode}`, { timeout: 120000 }, async t => {
+for (const [custodyMode, provenance] of [
+  ...['provider-install', 'retry-cancel', 'new-post-install', 'clean-retry'].map(mode => [mode, '']),
+  ...['distinct', 'equal', 'undefined'].flatMap(reason => ['fetch:reject:', 'cancel:reject:', 'cancel:fulfill:'].map(phase => ['provider-install', phase + reason]))
+])
+test(`native ACK credit and retry evidence ${custodyMode} ${provenance}`, { timeout: 120000 }, async t => {
   await fixture(t, async f => {
     const unknown = custodyMode !== 'clean-retry';
     if (unknown) f.expectUnknownRetirement();
@@ -328,7 +331,7 @@ test(`native ACK credit and retry evidence ${custodyMode}`, { timeout: 120000 },
     f.releases.push(() => f.request('https://fixture/fixture/ack-phases', { method: 'DELETE' }));
     assert.equal((await f.request('https://fixture/fixture/terminal', { method: 'POST', body: '{}' })).status, 204);
     assert.equal((await f.request('https://fixture/fixture/retry', { method: 'POST', body: 'response' })).status, 204);
-    assert.equal((await f.request('https://fixture/fixture/ack-phases', { method: 'POST', body: JSON.stringify({ custodyMode }) })).status, 204);
+    assert.equal((await f.request('https://fixture/fixture/ack-phases', { method: 'POST', body: JSON.stringify({ custodyMode, provenance }) })).status, 204);
     let response, failed = false;
     try { response = await f.request('https://fixture/v1/chat/completions', chat('pricing', { model: ownedHttpPricingModel })); } catch { failed = true; }
     assert.ok(unknown ? failed || response.status >= 400 : !failed && response.status === 200);
@@ -2546,5 +2549,16 @@ test('native bodyless READY survives failed final publication', { timeout: 12000
       assert.equal(after.events.at(-1).status, 204);
       assert.equal(new Set(after.events.map(event => event.id)).size, after.events.length);
     } finally { await release(); }
+  }, true);
+});
+
+for (const kind of ['queue', 'put', 'archive-pipe', 'upload-pipe']) for (const outcome of ['reject', 'fulfill'])
+for (const reasonKind of ['distinct', 'equal', 'undefined'])
+test(`native independent installation ${kind} ${outcome} ${reasonKind}`, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    f.expectUnknownRetirement();
+    const response = await f.request('https://fixture/fixture/sink-installation', { method: 'POST', body: JSON.stringify({kind,outcome,reasonKind}) });
+    assert.equal(response.status, 200);
+    assertOwnedSinkInstallation(assert, JSON.parse(response.text), outcome, reasonKind);
   }, true);
 });

@@ -8,6 +8,56 @@ export const ownedHttpCases = ['soft_venice', 'soft', 'chat', 'tool', 'error', '
 export const ownedHttpProxyKey = id => `clawrouter-live-owned_http_${id}-fixture-secret`;
 // Fixture-only observers retain actual records/handlers so own-key cuts and
 // stale FIRST callbacks can be inspected without inventing retirement proof.
+export async function ownedSinkInstallationWitness(commands, kind, outcome, reasonKind, charged) {
+  const first = reasonKind === 'undefined' ? undefined : Object.freeze({ fixture: 'original' });
+  const second = reasonKind === 'undefined' ? undefined : reasonKind === 'equal' ? first : Object.freeze({ fixture: 'installation' });
+  let calls = 0, observations = 0, root, originalOrdinal, installationOrdinal;
+  const original = { then(yes, no) {
+    observations++; if (this !== original || arguments.length !== 2) throw Error('actual observer receiver/arguments');
+    if (outcome === 'reject') no(first); else yes(undefined);
+    throw second;
+  } };
+  const invoke = () => { calls++; return original; };
+  const env = { USAGE_QUEUE: { send: invoke }, CONTENT_ARCHIVE: { put: invoke } };
+  const cap = commands.beginOwnedHttpRequest(new Request('https://fixture.example/v1/chat/completions'), env);
+  const sink = commands.ownedHttpSinkOwner(cap);
+  globalThis.__ownedProvenanceFixture = { capture(cell) {
+    const owner = cell.owner; root = owner.request ?? owner.owner;
+    originalOrdinal = Math.floor((owner.pipeOrigin ?? owner.origin) / 32);
+    installationOrdinal = Math.floor(owner.installationOrigin / 32);
+  } };
+  let thrown, didThrow = false;
+  try {
+    if (kind === 'queue') commands.ownedHttpQueueSend(sink, env.USAGE_QUEUE,
+      { kind: 'budget_settlement', ledger: { objectName: 'fixture' }, request: { reservationId: 'same-id', actualCostMicros: 0 } });
+    else if (kind === 'put') commands.ownedHttpArchivePut(sink, env.CONTENT_ARCHIVE, 'fixture', '{}', '2099-01-01');
+    else {
+      const source = new ReadableStream({ start(controller) { controller.close(); } });
+      Object.defineProperty(source, 'pipeTo', { value: invoke });
+      if (kind === 'upload-pipe') commands.pipeOwnedHttpUpload(commands.beginOwnedHttpUpload(cap), source, new FixedLengthStream(0));
+      else commands.ownedHttpArchivePipe(sink, source, new WritableStream(), new AbortController().signal);
+    }
+  } catch (reason) { didThrow = true; thrown = commands.ownedHttpFailureMetadata(reason); }
+  finally { delete globalThis.__ownedProvenanceFixture; }
+  await Promise.resolve();
+  const funding = root?.funding.bytes, common = charged();
+  void commands.finishOwnedHttpRequest(cap);
+  await Promise.resolve();
+  return { calls, observations, didThrow, thrown, originalOrdinal, installationOrdinal,
+    original: root?.sinkOrigins.get(originalOrdinal), installation: root?.sinkOrigins.get(installationOrdinal),
+    unknown: root?.unknown, funding, fundingAfter: root?.funding.bytes, common, commonAfter: charged() };
+}
+export function assertOwnedSinkInstallation(assert, row, outcome, reasonKind) {
+  assert.equal(row.calls, 1); assert.equal(row.observations, 1); assert.equal(row.didThrow, true);
+  assert.notEqual(row.originalOrdinal, row.installationOrdinal);
+  assert.equal(row.installation.primaryIsUndefined, reasonKind === 'undefined');
+  assert.equal(row.thrown.ordinal, outcome === 'reject' ? row.originalOrdinal : row.installationOrdinal);
+  if (outcome === 'reject') {
+    assert.equal(row.original.primaryIsUndefined, reasonKind === 'undefined');
+    assert.notEqual(row.original.ordinal, row.installation.ordinal);
+  } else assert.equal(row.original, undefined);
+  assert.equal(row.unknown, true); assert.equal(row.fundingAfter, row.funding); assert.equal(row.commonAfter, row.common);
+}
 export function createOwnedAckPhaseFixture(options, charged) {
   const acks = [], reads = [], roles = [], cuts = [], gates = [], terminals = [], budgets = [], retirements = [];
   const row = { queueFailures: 0, bodyReads: 0, cancels: 0, cancelDone: 0, unlocks: 0, retries: [], wrongRetires: 0, uploads: 0, uploadDone: 0 };
@@ -108,6 +158,19 @@ export function createOwnedAckPhaseFixture(options, charged) {
           return { then(yes) { yes(undefined); throw undefined; } };
         } });
       }
+      if (options.provenance) {
+        const [target, outcome, reasonKind] = options.provenance.split(':');
+        const first = reasonKind === 'undefined' ? undefined : sharedFailure;
+        const second = reasonKind === 'undefined' ? undefined : reasonKind === 'equal' ? first : {};
+        if (target === 'cancel') {
+          const body = value.body, cancel = body.cancel;
+          Object.defineProperty(body, 'cancel', { value(...args) {
+            custody.cancelCalls++; custody.cancelArgs = args.length;
+            Reflect.apply(cancel, this, args).then(() => { custody.cancelDone++; }, () => { custody.cancelDone++; });
+            return { then(yes, no) { if (outcome === 'reject') no(first); else yes(undefined); throw second; } };
+          } });
+        } else return { then(_yes, no) { custody.fetchInstalls++; no(first); throw second; } };
+      }
       if (options.custodyMode === 'provider-install' || options.custodyMode === 'new-post-install' && ordinal === 1)
         return { then(yes) { custody.fetchInstalls++; yes(value); throw undefined; } };
       return Promise.resolve(value);
@@ -149,7 +212,7 @@ export function createOwnedAckPhaseFixture(options, charged) {
     terminal(cell) { terminals.push(cell); },
     budget(cell) { budgets.push(cell); },
     retry(owner, chosen, rejected) { row.retries.push({ closed: owner.retryClosed, retry: Object.hasOwn(owner, 'retry'), required: Object.hasOwn(owner, 'required'), chosen, rejected }); },
-    snapshot() { return { ...row, custody, rootFunding: httpRoot?.funding.bytes, unknown: httpRoot?.unknown, charge: charged(), acks: acks.map(cell => ({ keys: Object.keys(cell), terminal: cell.slot !== undefined, state: cell.joinState,
+    snapshot() { return { ...row, custody, provenance: options.provenance, origins: [...(httpRoot?.sinkOrigins.values() ?? [])].filter(value => typeof value === "object"), rootFunding: httpRoot?.funding.bytes, unknown: httpRoot?.unknown, charge: charged(), acks: acks.map(cell => ({ keys: Object.keys(cell), terminal: cell.slot !== undefined, state: cell.joinState,
       closed: cell.closedState, unlock: cell.unlockState, pending:cell.pending, capture: Object.hasOwn(cell, 'capture') })),
       reads: reads.map(({cell}) => ({ state: cell.state, severed: cell.owner === undefined, keys: Object.keys(cell) })),
       retirements, cuts: cuts.map(({cell, ...cut}) => cut), budgets: budgets.map(cell => ({ keys: Object.keys(cell), phase: cell.phase, physical: cell.physical })),
@@ -172,6 +235,15 @@ export function createOwnedAckPhaseFixture(options, charged) {
 // The counts below name this topology, not a complete ownership upper bound.
 export function assertOwnedAckCustody(assert, mode, held, ended, rechecked, stale) {
   const unknown = mode !== 'clean-retry', row = ended.custody;
+  if (ended.provenance) {
+    const [target, outcome, reasonKind] = ended.provenance.split(':');
+    const records = ended.origins.filter(record => record.origin === target);
+    assert.equal(records.length, outcome === 'reject' ? 2 : 1);
+    assert.ok(records.every(record => record.primaryIsUndefined === (reasonKind === 'undefined')));
+    assert.equal(new Set(records.map(record => record.ordinal)).size, records.length);
+    if (target === 'cancel') { assert.equal(row.cancelCalls, 1); assert.equal(row.cancelArgs, 0); }
+  }
+
   assert.equal(ended.unknown, unknown);
   assert.equal(held.cuts.length, 13);
   assert.equal(held.retirements.length, 0, 'all closed/unlock originals remain held before release');
@@ -490,6 +562,7 @@ import {captureOwnedResponseMetadata} from './worker/proxy-completion.ts';
 const createOwnedBudgetSequenceFixture = ${createOwnedBudgetSequenceFixture.toString()};
 const createOwnedTerminalFixture = ${createOwnedTerminalFixture.toString()};
 const createOwnedAckPhaseFixture = ${createOwnedAckPhaseFixture.toString()};
+const ownedSinkInstallationWitness = ${ownedSinkInstallationWitness.toString()};
 import {createSseUsageInspector,extractUsageTokens,responseOutcome} from './worker/token-usage.ts';
 export class PolicyBindingIndexObject extends NativeAuthority {
  constructor(ctx,env){super(ctx,env);this.fixtureSql=ctx.storage.sql;}
@@ -763,6 +836,7 @@ function environment(env,off=false){
 let queueHandoff,retainedRace;
 export default {...handler,async fetch(request,env,context){
  const path=new URL(request.url).pathname;
+ if(path==='/fixture/sink-installation'){const {kind,outcome,reasonKind}=await request.json();return Response.json(await ownedSinkInstallationWitness(budgetCommands,kind,outcome,reasonKind,bodyBudgetCharged));}
  if(path==='/fixture/ack-phases'){
   if(request.method==='POST'){if(scoped)throw Error('ACK fixture must precede request');globalThis.__ownedAckPhaseFixture=createOwnedAckPhaseFixture(await request.json(),bodyBudgetCharged);return new Response(null,{status:204});}
   if(request.method==='DELETE'){await globalThis.__ownedAckPhaseFixture?.release();return new Response(null,{status:204});}
