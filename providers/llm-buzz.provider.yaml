@@ -1,0 +1,52 @@
+# OpenAI-compatible chat with a live model catalog. One key, models addressed
+# by vendor/model ids. Catalog and ids checked 2026-11-09 against
+# https://llm.buzz/models.
+schema: clawrouter.service-provider.v1
+id: llm-buzz
+displayName: llm.buzz
+description: One key for models from many labs, addressed as vendor/model, billed per token.
+status: experimental
+class: openai_compatible
+service:
+  platform: llm-buzz
+  kind: model_provider
+  upstreamService: llm-buzz
+  configKeys: [LLM_BUZZ_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.llm.buzz/api/v1
+routing:
+  nativePrefixes: [clawrouter-llm-buzz, llm-buzz]
+  modelPrefixes: [llm-buzz/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - { id: models.list, endpoint: models_list, methods: [GET] }
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  models_list:
+    method: GET
+    path: /models
+    requestFormat: openai.models
+    responseFormat: openai.models
+    timeoutMs: 5000
+  chat_completions:
+    modelPassthrough: {}
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
