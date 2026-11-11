@@ -423,3 +423,47 @@ test('generic usage delays unlock until original read and FIRSTcancel join: ' + 
     unlockGate.resolve(); await physical; assert.equal(nativeUnlocked, 1);
   } finally { readGate.resolve(); cancelGate.resolve(); unlockGate.resolve(); await readWork; await owner.stopUsage(reason); }
 });
+
+// UNRUN_CODE_ONLY_HOSTED: observe the returned unlock itself, never a Promise
+// resolution that would assimilate its fulfillment or erase an install throw.
+for (const returned of [null, false, 0, 1, 'done', {}])
+test(`returned nonthenable unlock completes without inventing a failure (${String(returned)})`, async () => {
+  const owner = new FixtureReader('public'); let calls = 0;
+  owner.open(stream(), reader => {
+    const unlock = reader.releaseLock;
+    reader.releaseLock = function (...args) { calls++; Reflect.apply(unlock, this, args); return returned; };
+  });
+  await owner.read(); await owner.stop();
+  assert.equal(calls, 1); assert.equal(owner.unknown, false); assert.deepEqual(owner.failures, []);
+});
+
+for (const throwAfter of [false, true])
+test(`returned unlock direct FIRST ignores foreign fulfillment; install throw=${throwAfter}`, async () => {
+  const owner = new FixtureReader('public');
+  let gets = 0, calls = 0, foreignGets = 0, accepted, rejected, retired = false;
+  const foreign = Object.defineProperty({}, 'then', { get() { foreignGets++; throw Error('foreign fulfillment assimilation'); } });
+  const callReturn = Object.defineProperty({}, 'then', { get() { foreignGets++; throw Error('observer-return assimilation'); } });
+  const original = Object.defineProperty({}, 'then', { get() {
+    gets++;
+    return function (yes, no) {
+      assert.equal(this, original); assert.equal(arguments.length, 2); calls++;
+      accepted = yes; rejected = no; yes(foreign);
+      if (throwAfter) throw undefined;
+      return callReturn;
+    };
+  } });
+  owner.open(stream(), reader => {
+    const unlock = reader.releaseLock;
+    reader.releaseLock = function (...args) { Reflect.apply(unlock, this, args); return original; };
+  });
+  await owner.read(); const ending = owner.stop(); ending.then(() => { retired = true; });
+  await ticks();
+  assert.equal(gets, 1); assert.equal(calls, 1); assert.equal(foreignGets, 0);
+  assert.equal(owner.unknown, throwAfter); assert.equal(retired, !throwAfter);
+  assert.equal(owner.body?.locked ?? false, false, 'actual unlock ran even while UNKNOWN stays held');
+  accepted(foreign); rejected(undefined); await ticks();
+  assert.equal(foreignGets, 0); assert.equal(calls, 1);
+  if (throwAfter) assert.ok(owner.failures.some(row => row.kind === 'unlock' && row.undefined));
+  else { await ending; assert.equal(owner.unlockObservation, undefined); }
+  accepted = undefined; rejected = undefined;
+});

@@ -95,7 +95,7 @@ export function sandboxArgs(image) {
     '--user=1000:1000', '--memory=2g', '--cpus=2', '--pids-limit=128',
     '--tmpfs=/tmp:rw,nosuid,nodev,size=256m,uid=1000,gid=1000',
     '--tmpfs=/work:rw,nosuid,nodev,size=1024m,uid=1000,gid=1000', '--workdir=/work', image,
-    'sh', '-c', 'cp -a --no-preserve=ownership /seed/. /work/ && touch /work/.ready && exec sleep 3600'];
+    'sh', '-c', 'cp -a --no-preserve=ownership /seed/. /work/ && rm -rf /work/node_modules && ln -s /seed/node_modules /work/node_modules && touch /work/.ready && exec sleep 3600'];
 }
 
 // No bind mounts, Docker socket, secrets, network, or caller-selected shell command.
@@ -146,13 +146,33 @@ export async function readTaskContext(box, task, timeout = 120000, read = readSo
   if (Buffer.byteLength(JSON.stringify(views)) > 24000) throw new Error('source_context_too_large');
   return views;
 }
+function failureFingerprints(text) {
+  const scopes = [], digests = new Set();
+  let truncated = false;
+  for (const line of text.split('\n')) {
+    const subtest = /^( *)# Subtest: (.+)\r?$/.exec(line);
+    if (subtest) {
+      const depth = subtest[1].length;
+      while (scopes.length && scopes.at(-1).depth >= depth) scopes.pop();
+      scopes.push({ depth, name: subtest[2].trimEnd() });
+    }
+    const failed = /^( *)not ok ([1-9][0-9]*) - (.+)\r?$/.exec(line);
+    if (!failed) continue;
+    const parents = scopes.filter(scope => scope.depth < failed[1].length).map(scope => scope.name);
+    const digest = hash(JSON.stringify([...parents, `${failed[2]}:${failed[3].trimEnd()}`]));
+    if (digests.size === 128 && !digests.has(digest)) { truncated = true; break; }
+    digests.add(digest);
+  }
+  return { version: 1, kind: 'tap-label-path-sha256', digests: [...digests], truncated };
+}
+
 export function testResult(result) {
   const text = result.stdout.toString();
   const count = key => Number(text.match(new RegExp(`^# ${key} (\\d+)$`, 'm'))?.[1] ?? -1);
   const tests = count('tests'), failed = count('fail'), passed = count('pass'), skipped = count('skipped'), cancelled = count('cancelled');
   const valid = tests > 0 && failed >= 0 && passed >= 0 && skipped >= 0 && cancelled === 0 && failed + passed + skipped === tests;
   return { valid, passed: valid && passed > 0 && result.code === 0 && failed === 0, tests, failures: failed, skipped,
-    digest: hash(Buffer.concat([result.stdout, result.stderr])) };
+    digest: hash(Buffer.concat([result.stdout, result.stderr])), failureFingerprints: failureFingerprints(text) };
 }
 
 export async function check(box, paths, timeout = 120000) {
@@ -189,7 +209,7 @@ export async function buildTask(task, { repo, nodeImage, run = command }) {
     for (const [i, file] of inputs.entries()) await writeFile(join(temp, `input${i}`), await git(repo, ['show', `${task.base}:${file}`]));
     // Trusted frozen dependencies are installed during image construction only.
     // Source remains outside /work until each unprivileged isolated trial starts.
-    await writeFile(join(temp, 'Dockerfile'), `FROM ${nodeImage}\nWORKDIR /seed\nCOPY input0 package.json\nCOPY input1 pnpm-lock.yaml\nCOPY input2 pnpm-workspace.yaml\nCOPY input3 admin/package.json\nRUN corepack enable && corepack prepare pnpm@11.28.4 --activate && pnpm install --frozen-lockfile\nCOPY source.tar /tmp/source.tar\nRUN tar -xf /tmp/source.tar -C /seed && rm /tmp/source.tar && chmod -R a+rX /seed\n`);
+    await writeFile(join(temp, 'Dockerfile'), `FROM ${nodeImage}\nWORKDIR /seed\nCOPY input0 package.json\nCOPY input1 pnpm-lock.yaml\nCOPY input2 pnpm-workspace.yaml\nCOPY input3 admin/package.json\nRUN corepack enable && corepack prepare pnpm@11.28.4 --activate && pnpm install --frozen-lockfile\nRUN node -e \"require('node:fs').writeFileSync('/seed/.fixture-ca.pem', require('node:tls').rootCertificates.join('\\n'))\"\nENV SSL_CERT_FILE=/seed/.fixture-ca.pem\nCOPY source.tar /tmp/source.tar\nRUN tar -xf /tmp/source.tar -C /seed && rm /tmp/source.tar && chmod -R a+rX /seed\n`);
     await run('docker', ['build', '--quiet', '--tag', tag, temp], { timeout: 600000, maxBytes: 4 * 1024 * 1024 });
     const image = (await run('docker', ['image', 'inspect', '--format={{.Id}}', tag])).stdout.toString().trim();
     if (!/^sha256:[a-f0-9]{64}$/.test(image)) throw new Error('invalid_image_id');

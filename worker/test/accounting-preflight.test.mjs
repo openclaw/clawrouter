@@ -425,6 +425,38 @@ for (const [profile, depth] of [["intent", 8], ["capsule", 8], ["archive", 32]])
   assert.throws(() => admitAccountingJson(nest(depth + 1), profile), denied);
 });
 
+// UNRUN_CODE_ONLY_HOSTED. This component witness checks the unchanged archive
+// profile and serializer output; genuine request workspace admission is tested
+// separately through the compiled private HTTP route.
+for (const large of [false, true]) test(`private archive iterative depth32 and wide-key parity ${large}`, async () => {
+  let nested = large ? ('"\\\n😀\ud800').repeat(7000) : 'leaf';
+  for (let index = 0; index < 31; index++) nested = index % 2 ? { next: nested } : [nested];
+  const gateway = [{ name: 'kept', headers: { authorization: 'synthetic' }, authorization: 'synthetic' }];
+  const source = { nested, gateway, toJSON: 'inert', missing: undefined };
+  Object.defineProperty(source, '__proto__', { value: { safe: true }, enumerable: true });
+  for (let index = 0; index < 513; index++) source['field' + index] = '';
+  const original = JSON.stringify(source), expected = accountingArchive(source, gateway);
+  const actual = privateAccountingArchive(source, gateway);
+  const collect = async archive => {
+    if (archive.bytes <= 32768) return [new TextEncoder().encode(archive.text())];
+    const reader = archive.stream().getReader(), chunks = []; let eof = false;
+    try { for (;;) { const part = await reader.read(); if (part.done) { eof = true; break; } chunks.push(part.value); } }
+    finally { try { if (!eof) await reader.cancel(); } finally { reader.releaseLock(); archive.discard(); } }
+    return chunks;
+  };
+  const expectedChunks = await collect(expected), actualChunks = await collect(actual);
+  assert.equal(actual.bytes, expected.bytes);
+  assert.deepEqual(actualChunks.map(value => value.length), expectedChunks.map(value => value.length));
+  assert.deepEqual(Buffer.concat(actualChunks), Buffer.concat(expectedChunks));
+  const saved = JSON.parse(Buffer.concat(actualChunks).toString());
+  assert.deepEqual(saved.gateway, [{ name: 'kept' }]);
+  assert.equal(Object.hasOwn(saved, '__proto__'), true); assert.equal(saved.toJSON, 'inert');
+  assert.equal(Object.hasOwn(saved, 'missing'), false);
+  assert.equal(JSON.stringify(source), original); assert.equal(Object.isFrozen(source), false);
+  assert.equal(actual.retired, true); assert.equal(expected.retired, true);
+  assert.throws(() => privateAccountingArchive({ extra: source }, gateway), denied);
+});
+
 test("capsule container and archive combined-occurrence boundaries", () => {
   assert.doesNotThrow(() => admitAccountingJson(Array.from({ length: 127 }, () => ({})), "capsule"));
   assert.throws(() => admitAccountingJson(Array.from({ length: 128 }, () => ({})), "capsule"), denied);

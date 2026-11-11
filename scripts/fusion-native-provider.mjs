@@ -50,7 +50,9 @@ export function nativeResult(model, result) {
     const write = integer(u.prompt_tokens_details?.cache_write_tokens, true);
     if (input > 200000 || cached + write > input) throw new Error('native_usage_invalid');
     if (integer(u.prompt_tokens_details?.audio_tokens, true) || integer(u.completion_tokens_details?.audio_tokens, true)) throw new Error('native_usage_unqualified');
-    return { result, costMicros: costMicros([[input - cached - write, price.input], [cached, price.cached], [write, price.write], [output, price.output]]), provider };
+    return { result, costMicros: costMicros([[input - cached - write, price.input], [cached, price.cached], [write, price.write], [output, price.output]]), provider,
+      usageBreakdown: { uncachedInputTokens: input - cached - write, cacheReadInputTokens: cached,
+        cacheWriteInputTokens: write, cacheWrite1hInputTokens: 0, outputTokens: output } };
   }
   if (u.service_tier && u.service_tier !== 'standard') throw new Error('native_tier_unqualified');
   if (u.speed && u.speed !== 'standard') throw new Error('native_tier_unqualified');
@@ -63,7 +65,9 @@ export function nativeResult(model, result) {
   if (short + hour !== write || input + cached + write > 200000) throw new Error('native_usage_invalid');
   const content = (result.content ?? []).filter(part => part.type === 'text').map(part => part.text).join('');
   return { result: { model: result.model, choices: [{ message: { content }, finish_reason: result.stop_reason }], usage: u },
-    costMicros: costMicros([[input, price.input], [cached, price.cached], [short, price.write], [hour, price.input * 2], [output, price.output]]), provider };
+    costMicros: costMicros([[input, price.input], [cached, price.cached], [short, price.write], [hour, price.input * 2], [output, price.output]]), provider,
+    usageBreakdown: { uncachedInputTokens: input, cacheReadInputTokens: cached,
+      cacheWriteInputTokens: short, cacheWrite1hInputTokens: hour, outputTokens: output } };
 }
 
 // Classify normalized responses before treating their text as an action.

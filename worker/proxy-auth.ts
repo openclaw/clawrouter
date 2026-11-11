@@ -151,13 +151,15 @@ async function authenticateParsedProxyKey(parsed: NonNullable<ReturnType<typeof 
 const admissionRequests = new WeakMap<AuthorizedIdentity, AdmissionSelection>();
 const selections = new WeakMap<AuthorizedIdentity, { request: AdmissionSelection; result: GrantSelectionResult }>();
 
-export async function admittedGrantSelection(auth: AuthorizedIdentity, env: Env, requirement: GrantRequirement, excludedKeys: ReadonlySet<string>, pinnedKey?: string | null): Promise<GrantSelectionResult | undefined> {
+export async function admittedGrantSelection(auth: AuthorizedIdentity, env: Env, requirement: GrantRequirement, excludedKeys: ReadonlySet<string>, pinnedKey?: string | null, recordSelection = true): Promise<GrantSelectionResult | undefined> {
   const initial = selections.get(auth);
   if (!excludedKeys.size) { selections.delete(auth); return initial && initial.request.providerId === requirement.provider.id && initial.request.endpointId === requirement.endpoint.id && initial.request.mode === requirement.mode && initial.request.model === requirement.model && initial.request.pinnedKey === pinnedKey ? initial.result : undefined; }
   const verified = verifiedKeys.get(auth);
   if (!verified) return undefined;
   const request: AdmissionSelection = { providerId: requirement.provider.id, endpointId: requirement.endpoint.id, mode: requirement.mode, model: requirement.model, capability: requirement.provider.capabilities.find(item => item.endpoint === requirement.endpoint.id)?.id ?? requirement.endpoint.id, catalogModelId: admissionRequests.get(auth)?.catalogModelId ?? requirement.provider.models.find(item => item.upstream === requirement.model || item.id === requirement.model)?.id ?? null, excludedKeys: [...excludedKeys], sessionHash: sessionHashes.get(auth), pinnedKey };
-  const { admission } = await resolveAdmission(env, { credentialId: verified.credentialId, secretSha256: verified.secretSha256, providers: [{ id: requirement.provider.id, tokenRef: requirement.provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? requirement.provider.id }], selection: request });
+  // A reserved choice is only revalidated, not selected/counted again. Keep the
+  // failover path's fresh caller/policy/pool checks even for that nonselecting read.
+  const { admission } = await resolveAdmission(env, { credentialId: verified.credentialId, secretSha256: verified.secretSha256, providers: [{ id: requirement.provider.id, tokenRef: requirement.provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? requirement.provider.id }], selection: recordSelection ? request : undefined }, recordSelection ? "cached" : "authoritative");
   if (!admission.credential || !safeEqual(verified.secretSha256, admission.credential.credential.secretSha256)) throw new HttpError(401, "invalid_proxy_key", "proxy key is no longer valid");
   if (admission.policyUnavailable || admission.ownerUnavailable || admission.connectionsUnavailable) throw new Error("admission unavailable");
   const failure = proxyCredentialFailure(admission.credential.credential, admission.policy, admission.owner?.record.enabled);

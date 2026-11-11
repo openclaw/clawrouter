@@ -346,7 +346,21 @@ export function createOwnedJsonObservation() {
   };
   return {
     rows,
-    driverReads: 0, driverFactories: 0, intakeFactories: 0,
+    driverReads: 0, driverFactories: 0, intakeFactories: 0, retryPorts: [], credentialReductions: [], credentialCensuses: [], originalObservers: [],
+    retainOriginalHandlers(cell, fulfilled, rejected) {
+      this.originalObservers.push({ cell, fulfilled, rejected, role: cell.owner.constructor.name });
+      return [fulfilled, rejected];
+    },
+    originalObserverState() {
+      return this.originalObservers.map(row => ({ role: row.role, state: row.cell.state, severed: row.cell.owner === undefined }));
+    },
+    replayRetiredOriginals() {
+      let reads = 0, callbacks = 0;
+      const foreign = {};
+      for (const key of ['then', 'body', 'ok', 'done', 'value', 'buffer']) Object.defineProperty(foreign, key, { get() { reads++; throw Error('retired callback inspected payload'); } });
+      for (const row of this.originalObservers) if (row.cell.owner === undefined) { row.fulfilled(foreign); row.rejected(foreign); callbacks += 2; }
+      return { reads, callbacks };
+    },
     driverFactory() { if (shared.held !== 65536 || shared.claims !== 1) throw new Error("driver field initializer before shared claim"); this.driverFactories++; },
     intakeFactory() { if (shared.held !== 65536 || shared.claims !== 1) throw new Error("intake field initializer before shared claim"); this.intakeFactories++; },
     driverRead() { this.driverReads++; },
@@ -889,7 +903,12 @@ export function observeOwnedJsonSource(path, source) {
     source = replace(source, '      this.result = closed;', '      this.result = closed; ' + probe + '.continuationStage("staged");');
     source = replace(source, '      this.destination!.continuationSource = this.budget;',
       '      this.destination!.continuationSource = this.budget; ' + probe + '.continuationStage("delivered");');
+  } else if (/[\\/]worker[\\/]credential-cache\.ts$/.test(path)) {
+    source = replace(source, '    return 8 * (containers + 2 * members + entries + values) + 2 * units + 6 * run.command.key.length;',
+      '    ' + probe + '.credentialCensuses.push({ containers, members, entries, values, units, keyUnits: run.command.key.length, completion: run.completion, originalCleared: run.original === undefined, retained: run.retained, borrowed: !!run.borrowed }); return 8 * (containers + 2 * members + entries + values) + 2 * units + 6 * run.command.key.length;');
   } else if (/[\\/]worker[\\/]credential-preflight\.ts$/.test(path)) {
+    source = replace(source, '    owner.lease.replace(bytes); owner.reduction = 2;',
+      '    const __before = owner.lease.bytes; let __rejected = 0; for (const __args of [[{}, request, cap, permit], [http, request, {}, permit], [http, request, cap, {}], [http, request, cap, permit]]) { try { reduceOwnedHttpPreparedCredential(...__args as [OwnedHttpRequest, Request, OwnedHttpCredential, object]); } catch { __rejected++; } } if (__rejected !== 4 || owner.lease.bytes !== __before) throw Error("retained transition reentry/foreign changed charge"); owner.lease.replace(bytes); owner.reduction = 2; try { reduceOwnedHttpPreparedCredential(http, request, cap, permit); throw Error("duplicate retained transition accepted"); } catch (__error) { if (!isIdentityFailure(__error) || owner.lease.bytes !== bytes) throw __error; } ' + probe + '.credentialReductions.push({ before: __before, after: owner.lease.bytes, bytes, idUnits: owner.id.length, rejections: __rejected + 1 });');
     source = replace(source, '    advanceIdentitySource(owner.source, sent, reply.source, replySource!);',
       '    advanceIdentitySource(owner.source, sent, reply.source, replySource!); if (owner.http) ' + probe + '.continuationStage("advanced");');
     source = replace(source, '    admissions.set(handle, owner); retained = true;',
@@ -998,6 +1017,8 @@ export function observeOwnedJsonSource(path, source) {
     source = replace(source, '    const text = ownedErrorStringify(envelope);',
       '    let text; try { text = ownedErrorStringify(envelope); } finally { ' + probe + '.initialErrorDone(); }');
   } else if (/[\\/]worker[\\/]http-identity-owner\.ts$/.test(path)) {
+    source = replace(source, '[ownedOriginalFulfilled.bind(cell), ownedOriginalRejected.bind(cell)]',
+      probe + '.retainOriginalHandlers(cell, ownedOriginalFulfilled.bind(cell), ownedOriginalRejected.bind(cell))');
     source = replace(source, '  constructor(readonly cap: OwnedHttpRequest, readonly root: RequestOwner, readonly sink: OwnedHttpSinkOwner) {\n    this.result',
       '  constructor(readonly cap: OwnedHttpRequest, readonly root: RequestOwner, readonly sink: OwnedHttpSinkOwner) {\n    globalThis.__ownedTerminalFixture?.shell(); this.result');
     source = replace(source, '  root.accountingTerminal = new OwnedAccountingTerminal(cap, root, root.sink!);',
@@ -1096,6 +1117,8 @@ export function observeOwnedJsonSource(path, source) {
     source = replace(source, 'acceptOwnedGenericUsage(child.http, cap, result); child.delivered = true;',
       'acceptOwnedGenericUsage(child.http, cap, result); child.delivered = true; ' + probe + '.consumers.generic.logical++;');
   } else if (/[\\/]worker[\\/]proxy\.ts$/.test(path)) {
+    source = replace(source, '    retry.pending = port;',
+      '    retry.pending = port; ' + probe + '.retryPorts.push({ keys: [...port.input.excludedKeys!], signal: port.signal, input: port.input });');
     source = replace(source, '  try { return await original; }\n  finally {',
       '  try { const __logical = await original; globalThis.__ownedTerminalFixture?.logical(__logical); return __logical; }\n  finally {');
     source = replace(source, 'beginOwnedHttpProxyPublicationHeaders(http, response, selection.provider.id)',
@@ -1145,6 +1168,8 @@ export function observeOwnedJsonSource(path, source) {
 
 
   } else if (/[\\/]worker[\\/]pricing\.ts$/.test(path)) {
+    source = replace(source, 'plan.toolScratchBytes = ownedToolScratchBytes(body, ownedHttpHasToolPriceCard(cap, body), plan.bytes);',
+      'plan.toolScratchBytes = ownedToolScratchBytes(body, ownedHttpHasToolPriceCard(cap, body), plan.bytes); ' + probe + '.toolScratchBytes = plan.toolScratchBytes;');
     source = replace(source, 'ownedPricing.set(cap, retained); ownedPricingCount++;',
       'ownedPricing.set(cap, retained); ownedPricingCount++; ' + probe + '.pricing(1);');
     source = replace(source, 'plan.body = undefined; ownedPricing!.delete(cap);',
@@ -1168,7 +1193,7 @@ export async function startOwnedJsonObservedFixture(directory, router, upstream,
     resolveDir: process.cwd(), sourcefile: 'owned-json-fixture.ts', loader: 'ts',
   }, bundle: true, write: false, format: 'esm', platform: 'browser', target: 'es2022', logLevel: 'silent',
   plugins: [{ name: 'observe-original-json-stacks', setup(build) {
-    build.onLoad({ filter: /(?:[\\/]worker[\\/](?:credential-preflight-source|credential-preflight|identity-admission|json-body|proxy-accounting|proxy-response|proxy-completion|proxy|utils|http-identity-owner|pricing|token-usage|venice-chat-runtime)\.ts|[\\/]stream-json[\\/](?:src[\\/])?core[\\/]parser\.js)$/ }, async ({ path }) => ({
+    build.onLoad({ filter: /(?:[\\/]worker[\\/](?:credential-preflight-source|credential-preflight|credential-cache|identity-admission|json-body|proxy-accounting|proxy-response|proxy-completion|proxy|utils|http-identity-owner|pricing|token-usage|venice-chat-runtime)\.ts|[\\/]stream-json[\\/](?:src[\\/])?core[\\/]parser\.js)$/ }, async ({ path }) => ({
       contents: observeOwnedJsonSource(path, await readFile(path, 'utf8')),
       loader: path.endsWith('.ts') ? 'ts' : 'js', resolveDir: dirname(path),
     }));

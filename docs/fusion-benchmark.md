@@ -77,6 +77,13 @@ repair comparison. It checks that each qualified task has every arm and that
 row costs and call counts reconcile with settled attempts. Incomplete runs,
 unknown charges and duplicate or missing outcomes are rejected.
 
+New test receipts include up to 128 SHA-256 fingerprints of failing TAP label
+paths, with a truncation flag. Compare them with qualification receipts to help
+distinguish an existing failure from a new regression. The fingerprints retain
+no test titles, source or error text. They identify reported label paths, not
+authenticated tests, and do not alter acceptance or replace test-count checks.
+Older receipts without fingerprints remain readable.
+
 The summary reports per-task wins and losses against each fixed control, total
 cost, and the number of extra repairs available from choosing correctly between
 the controls. It also compares the candidate with a task-independent random
@@ -89,6 +96,24 @@ cost-saving flag therefore requires no lost strong-model repair. These are
 observations from the supplied run, not statistical significance, a signed
 attestation, or approval to change production routing. Prior campaign expenses
 remain in the spending ledger but are excluded from per-arm comparisons.
+
+Pass two or more report paths in execution order to analyze repeated blocks:
+`node scripts/fusion-pair-analysis.mjs <block-a.json> <block-b.json>`.
+Every block must be complete and settled, use the same source, task and
+qualification digests, model pins, settings and receipts, and continue the
+previous block's spending ledger. Duplicate reports and missing elapsed times
+are rejected. The output distinguishes distinct tasks from repeated attempts,
+sums costs and elapsed times, and reports false accepts and cheap-model dominance.
+It also reports which candidate attempts actually used both models. An observed
+win from a cheap-only or strong-only candidate is another sample from that model,
+not evidence of model mixing. Even mixed-model wins need matched retry controls
+before attributing a benefit to collaboration.
+
+The repeat summary applies a fixed exploratory screen: at least 75% solved,
+no lost strong-control attempt, at least 20% savings, at most twice strong-control
+elapsed time, and at least one rescue beyond cheap-only. All conditions must
+pass. This screen does not establish significance or authorize production changes;
+it also cannot detect experiments omitted from the supplied report list.
 
 ### Declared-scope routing experiment
 
@@ -337,6 +362,12 @@ cascade cost 18.27% more than strong; clearer tools did not produce an
 economic gain. Summed elapsed was 140.495s, 102.845s and 174.969s, with
 Docker qualification overlapping part of this run. These timings are
 descriptive and are not isolated performance measurements.
+
+The cheap stage must explicitly submit a completed repair before it can end the
+contract cascade. A partial patch from a turn-limited, budget-limited or unfinished
+executor cannot bypass strong fallback merely by passing the supplied check and
+visible tests. Fallback still uses the remaining shared time, call and spend limits.
+This does not establish that a submitted patch satisfies every requirement.
 
 `FUSION_CHEAP_MAX_CALLS` sets the contract workflow's cheap-stage allowance
 (integer 1–59, default 10). The runner records it as `cheapMaxCalls`. The stage

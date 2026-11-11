@@ -190,6 +190,129 @@ const privateJsonObjectPrototype = Object.prototype;
 const privateJsonArrayPrototype = Array.prototype;
 const privateJsonPrototype = Object.getPrototypeOf;
 const privateJsonFreeze = Object.freeze;
+const privateAccountingKeys = Object.keys;
+// Parked archive cursor: six own fields, four primitive-value occurrences,
+// its container and stack reference. Key vectors are paid separately.
+const privateArchiveCursorBytes = 8 * (1 + 12 + 4 + 1)
+  + 2 * "sourcetargetkeysindexemittedgatewayEntry".length;
+export function privateArchiveWorkspaceBytes(graphBytes: number, maximumDepth: number): number {
+  // Every body key-vector cell/string is bounded by the already measured graph
+  // component; the fixed retained-record keys add one separately paid vector.
+  const reachedDepth = maximumDepth < accountingProfiles.archive.depth ? maximumDepth : accountingProfiles.archive.depth;
+  return graphBytes + (reachedDepth + 2) * privateArchiveCursorBytes + 1024;
+}
+function privateAccountingContainer(array: boolean): unknown[] | Record<string, unknown> {
+  if (!array) return { __proto__: null };
+  const value: unknown[] = []; ownedArchivePrototype(value, null); return value;
+}
+function privateAccountingProperty(target: object, key: string | number, value: unknown): void {
+  ownedArchiveProperty(target, key, { __proto__: null, value, enumerable: true, writable: true, configurable: true } as PropertyDescriptor);
+}
+interface PrivateArchiveCursor {
+  source: object; target: object | undefined; keys: string[] | undefined;
+  index: number; emitted: number; gatewayEntry: boolean;
+}
+// The checked retention caller owns the complete source/copy/workspace debit.
+// This is the same admitted private representation used by accounting copies;
+// only the archive's traversal replaces recursive APP execution frames.
+function walkPrivateAccountingArchive(value: unknown, gateway: readonly unknown[] | undefined, copying: boolean): { bytes: number; text: number; value: unknown } {
+  const limits = accountingProfiles.archive;
+  let bytes = 0, text = 0, values = 0, containers = 0, members = 0, entries = 0, strings = 0;
+  const stack: PrivateArchiveCursor[] = [], argument = [0];
+  let root: unknown, input = value, gatewayEntry = false, entering = true;
+  const add = (wire: number, units = wire) => {
+    bytes += wire; text += units;
+    if (bytes > limits.wire || text > limits.wire) accountingAdmissionFailure();
+  };
+  const string = (input: string, key: boolean) => {
+    if (input.length > (key ? limits.key : limits.scalar) || (strings += input.length) > limits.strings) accountingAdmissionFailure();
+    add(2);
+    for (let index = 0; index < input.length; index++) {
+      const code = privateJsonCodeAt(input, index, argument);
+      if (code === 34 || code === 92 || code === 8 || code === 9 || code === 10 || code === 12 || code === 13) add(2);
+      else if (code < 32) add(6);
+      else if (code < 128) add(1);
+      else if (code < 2048) add(2, 1);
+      else if (code >= 0xd800 && code <= 0xdbff && privateJsonCodeAt(input, index + 1, argument) >= 0xdc00
+        && privateJsonCodeAt(input, index + 1, argument) <= 0xdfff) { add(4, 2); index++; }
+      else if (code >= 0xd800 && code <= 0xdfff) add(6);
+      else add(3, 1);
+    }
+  };
+  try {
+    while (entering || stack.length) {
+      if (entering) {
+        entering = false;
+        if (++values > limits.values || stack.length > limits.depth) accountingAdmissionFailure();
+        if (typeof input === "string") string(input, false);
+        else if (input === null || input === undefined) add(4);
+        else if (typeof input === "boolean") add(input ? 4 : 5);
+        else if (typeof input === "number") {
+          const token = Number.isFinite(input) ? String(input) : "null";
+          if (token.length > 64) accountingAdmissionFailure();
+          add(token.length);
+        } else if (typeof input !== "object") accountingAdmissionFailure();
+        else {
+          // Prospective wrappers were never accepted by the private copier.
+          if (ownedArchiveApply(ownedArchiveMapHas, accountingRanges, [input]) || ownedArchiveApply(ownedArchiveMapHas, accountingObjects, [input])
+            || ownedArchiveApply(ownedArchiveMapHas, accountingArrays, [input]) || ownedArchiveApply(ownedArchiveMapHas, accountingSequences, [input])) accountingAdmissionFailure();
+          const array = ownedArchiveArray(input), prototype = privateJsonPrototype(input);
+          if (array ? prototype !== privateJsonArrayPrototype : prototype !== privateJsonObjectPrototype && prototype !== null) accountingAdmissionFailure();
+          if (++containers > limits.containers) accountingAdmissionFailure();
+          for (let index = 0; index < stack.length; index++) if (stack[index].source === input) accountingAdmissionFailure();
+          add(2);
+          if (array && ((entries += (input as unknown[]).length) > limits.entries || entries + members > limits.combined)) accountingAdmissionFailure();
+          // Keys/cursors were counted in pricing before retention effects. A
+          // second walk may reuse that workspace only after this walk's finally.
+          const target = copying ? privateAccountingContainer(array) : undefined;
+          if (copying) {
+            if (!stack.length) root = target;
+            else {
+              const parent = stack[stack.length - 1];
+              privateAccountingProperty(parent.target!, parent.keys ? parent.keys[parent.index - 1] : parent.index - 1, target);
+            }
+          }
+          const cursor: PrivateArchiveCursor = { source: input, target, keys: array ? undefined : privateAccountingKeys(input), index: 0, emitted: 0, gatewayEntry };
+          privateAccountingProperty(stack, stack.length, cursor);
+          input = undefined;
+          continue;
+        }
+        if (copying) {
+          if (!stack.length) root = input;
+          else {
+            const parent = stack[stack.length - 1];
+            privateAccountingProperty(parent.target!, parent.keys ? parent.keys[parent.index - 1] : parent.index - 1, input ?? null);
+          }
+        }
+        input = undefined;
+      }
+      if (!stack.length) break;
+      const cursor = stack[stack.length - 1], length = cursor.keys ? cursor.keys.length : (cursor.source as unknown[]).length;
+      if (cursor.index === length) {
+        cursor.source = undefined as never; cursor.target = undefined; cursor.keys = undefined;
+        stack.length--; continue;
+      }
+      const key = cursor.keys ? cursor.keys[cursor.index++] : cursor.index++;
+      if (cursor.keys && cursor.gatewayEntry && (key === "headers" || key === "authorization")) continue;
+      const descriptor = ownedArchiveDescriptor(cursor.source, key);
+      if (descriptor && !ownedArchiveOwn(descriptor, "value")) accountingAdmissionFailure();
+      input = descriptor?.value;
+      if (cursor.keys) {
+        if (input === undefined) continue;
+        if (++members > limits.members || entries + members > limits.combined) accountingAdmissionFailure();
+        if (cursor.emitted++) add(1);
+        string(key as string, true); add(1);
+        gatewayEntry = false;
+      } else {
+        if (cursor.emitted++) add(1);
+        gatewayEntry = cursor.source === gateway;
+      }
+      entering = true;
+    }
+    return { bytes, text, value: root };
+  } finally { stack.length = 0; input = undefined; root = undefined; value = undefined; gateway = undefined; }
+}
+
 // A guard is not input admission. Only the named current passive producers
 // below may reach this constructor; queue/archive retain their separate copies.
 function assertPrivateJsonPrototypes(): void {
@@ -211,8 +334,7 @@ function copyAdmittedAccountingJson(value: unknown, gateway?: readonly unknown[]
     || ownedArchiveApply(ownedArchiveMapHas, accountingArrays, [value]) || ownedArchiveApply(ownedArchiveMapHas, accountingSequences, [value])
     : accountingRanges.has(value) || accountingObjects.has(value) || accountingArrays.has(value) || accountingSequences.has(value)) accountingAdmissionFailure();
   if (owned ? ownedArchiveArray(value) : Array.isArray(value)) {
-    const copy: unknown[] = [];
-    if (owned) ownedArchivePrototype(copy, null);
+    const copy: unknown[] = owned ? privateAccountingContainer(true) as unknown[] : [];
     for (let i = 0; i < (value as unknown[]).length; i++) {
       if (owned) {
         const descriptor = ownedArchiveDescriptor(value, i);
@@ -224,7 +346,7 @@ function copyAdmittedAccountingJson(value: unknown, gateway?: readonly unknown[]
     if (owned === 2) privateJsonFreeze(copy);
     return copy;
   }
-  const copy: Record<string, unknown> = owned ? { __proto__: null } : {};
+  const copy: Record<string, unknown> = owned ? privateAccountingContainer(false) as Record<string, unknown> : {};
   for (const key in value) {
     if (!(owned ? ownedArchiveOwn(value, key) : Object.hasOwn(value, key)) || gatewayEntry && (key === "headers" || key === "authorization")) continue;
     const descriptor = owned ? ownedArchiveDescriptor(value, key)! : undefined;
@@ -336,8 +458,8 @@ export function privateAccountingArchive(value: unknown, gateway?: readonly unkn
   return createAccountingArchive(value, gateway, true);
 }
 function createAccountingArchive(value: unknown, gateway: readonly unknown[] | undefined, ownedBytes: boolean) {
-  const measurement = admitAccountingJson(value, "archive", gateway);
-  let owned: unknown = copyAdmittedAccountingJson(value, gateway, false, ownedBytes ? 1 : 0);
+  const measurement = ownedBytes ? walkPrivateAccountingArchive(value, gateway, false) : admitAccountingJson(value, "archive", gateway);
+  let owned: unknown = ownedBytes ? walkPrivateAccountingArchive(value, gateway, true).value : copyAdmittedAccountingJson(value, gateway);
   let used = false, done = false;
   let archiveEncoder: TextEncoder | undefined;
   let chunks: Generator<string> | undefined;

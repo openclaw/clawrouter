@@ -9,8 +9,10 @@ export const ownedHttpProxyKey = id => `clawrouter-live-owned_http_${id}-fixture
 export function createOwnedTerminalFixture(options, commands) {
   const row = { factories: [], shellAttempts: 0, shells: 0, primary: 0, fallback: 0, adopted: 0, failed: 0,
     closes: 0, installs: 0, launches: 0, logical: [], lateGets: 0, methodsA: 0, methodsB: 0,
-    rejected: 0, foreignReads: 0, retainedFailure: false, pending: 0, diagnostics: [], order: [] };
-  let factory, terminalEntry = false;
+    rejected: 0, foreignReads: 0, retainedFailure: false, pending: 0, diagnostics: [], order: [],
+    laneFaults: 0, laneInstalls: 0, bodyCancels: 0, bodyCancelSettled: 0, recovery: [] };
+  let factory, terminalEntry = false, releaseLate;
+  const lateGate = new Promise(resolve => { releaseLate = resolve; }), sharedLaneReason = {};
   const wrapOriginal = promise => {
     row.pending++;
     return promise.then(value => { row.pending--; return value; }, error => { row.pending--; throw error; });
@@ -31,9 +33,37 @@ export function createOwnedTerminalFixture(options, commands) {
           if (key === 'idFromName') return function (...args) { row.methodsA++; return Reflect.apply(target.idFromName, target, args); };
           if (key === 'get') return function (...args) {
             row.methodsA++; const stub = Reflect.apply(target.get, target, args);
-            return { fetch(...values) { row.methodsA++; return wrapOriginal(Reflect.apply(stub.fetch, stub, values)); } };
+            return { fetch(...values) {
+              row.methodsA++;
+              const path = new URL(String(values[0])).pathname;
+              const fault = terminalEntry && name === 'BUDGET_LEDGER' && options.laneFault && !row.laneFaults && (path === '/settle' || path === '/charge');
+              let original = Reflect.apply(stub.fetch, stub, values);
+              if (!fault) return wrapOriginal(original);
+              row.laneFaults++;
+              original = original.then(async response => {
+                if (options.laneFault === 'install-before-late') await lateGate;
+                const body = response.body, cancel = body?.cancel;
+                if (body) Object.defineProperty(body, 'cancel', { value(...args) {
+                  row.bodyCancels++;
+                  return wrapOriginal(Reflect.apply(cancel, this, args).then(() => { row.bodyCancelSettled++; }));
+                } });
+                if (options.laneFault === 'ok-getter') Object.defineProperty(response, 'ok', { get() { throw options.laneReason === 'shared' ? sharedLaneReason : undefined; } });
+                return response;
+              });
+              const tracked = wrapOriginal(original);
+              if (options.laneFault !== 'install-before-late') return tracked;
+              return { then(fulfilled, rejected) {
+                row.laneInstalls++; tracked.then(fulfilled, rejected);
+                throw options.laneReason === 'shared' ? sharedLaneReason : undefined;
+              } };
+            } };
           };
-          if (key === 'send') return function (...args) { row.methodsA++; return wrapOriginal(Reflect.apply(target.send, target, args)); };
+          if (key === 'send') return function (...args) {
+            row.methodsA++;
+            if (args[0]?.request) row.recovery.push({ id: args[0].request.reservationId ?? args[0].request.chargeId,
+              cost: args[0].request.actualCostMicros ?? args[0].request.costMicros, args: args.length });
+            return wrapOriginal(Reflect.apply(target.send, target, args));
+          };
           return Reflect.get(target, key, target);
         } });
       }
@@ -77,7 +107,7 @@ export function createOwnedTerminalFixture(options, commands) {
     logical(value) { row.logical.push(value); },
     diagnostic(origin, absent) { row.diagnostics.push({ origin, undefined: absent }); if (options.diagnosticFailure) throw undefined; },
     clear(outcome, failed) { if (failed) row.retainedFailure = !!outcome; },
-    release() { factory = undefined; },
+    release() { factory = undefined; releaseLate(); },
   };
 }
 // Shared authored Node/Workerd witness. All deferred serialization and cleanup
@@ -283,7 +313,7 @@ globalThis.fetch=function(input,init){
  calls.push({kind:'provider',path:'/chat/completions',charged:bodyBudgetCharged()});
  return observeControlRead('provider','/chat/completions',Reflect.apply(originalFetch,this,arguments),init.signal);
 };
-let scoped,offScoped,pressure,controlFault,controlReadFault,controlReply,reasonReads=0;
+let scoped,offScoped,pressure,controlFault,controlReadFault,controlReply,retryMode,reasonReads=0;
 let configurationFault,configurationGets=0,configurationReasonReads=0;
 function clearConfigurationFault(){
  if(!configurationFault)return;
@@ -398,6 +428,15 @@ function observeControlRead(kind,path,original,signal){
      Object.defineProperty(reader,'releaseLock',{value(...args){
       row.unlock++;
       const native=()=>{Reflect.apply(unlock,this,args);row.nativeUnlocked++;};
+      if(fault.mode==='unlock-void'||fault.mode==='unlock-install'){
+       native();row.unlockSettled++;row.foreignGets=0;row.thenGets=0;
+       const foreign=Object.defineProperty({},'then',{get(){row.foreignGets++;throw Error('foreign unlock value inspected');}});
+       const returned={};Object.defineProperty(returned,'then',{get(){row.thenGets++;return function(yes,no){
+        if(this!==returned||arguments.length!==2)throw Error('unlock observer boundary');row.thenCalls++;yes(foreign);
+        if(fault.mode==='unlock-install'){row.installFailed=true;throw undefined;}return foreign;
+       };}});return returned;
+      }
+
       if(fault.mode.startsWith('closed')){native();row.unlockSettled++;return;}
       if(fault.mode.startsWith('unlock-before'))native();
       row.held=true;
@@ -444,7 +483,11 @@ function environment(env,off=false){
   };const value=Reflect.get(target,name,target);return typeof value==='function'?value.bind(target):value;}});
   const credentials=new Proxy(env.GRANT_CREDENTIALS,{get(target,name){if(name==='idFromName')return value=>{controlFailure('credential','id');return target.idFromName(value);};if(name==='get')return id=>{
    controlFailure('credential','get');const stub=target.get(id);return new Proxy(stub,{get(object,key){if(key==='fetch')return (url,init)=>{
-    const path=new URL(url).pathname;calls.push({kind:'credential',path,emptyInspect:path==='/inspect'?init.body==='{}':undefined});
+    const path=new URL(url).pathname,grantKey=typeof init?.body==='string'?JSON.parse(init.body).key:undefined;
+    calls.push({kind:'credential',path,key:grantKey,emptyInspect:path==='/inspect'?init.body==='{}':undefined});
+    if(retryMode&&path==='/materialize'&&(retryMode==='preparation'&&!grantKey.endsWith('-d')&&!grantKey.endsWith('-e')||retryMode==='mixed'&&(grantKey.endsWith('-a')||grantKey.endsWith('-c'))||retryMode==='failed-alternate'&&!grantKey.endsWith('-a'))){
+     return Promise.resolve(new Response(new ReadableStream({type:'bytes',start(controller){controller.enqueue(new TextEncoder().encode('{"error":{"code":"grant_credential_missing","message":"synthetic refusal"}}'));controller.close();}}),{status:503,headers:{'content-type':'application/json'}}));
+    }
     if(path==='/materialize'&&controlReply){
      const fault=controlReply;controlReply=undefined;
      const original=object.fetch(url,init).then(async response=>{
@@ -529,6 +572,18 @@ export default {...handler,async fetch(request,env,context){
    provider,enabled:true,kind:'api_key',credential:'fixture-upstream-'+id,...(id==='gmi'?{accountId:'fixture-organization'}:{}),unknownOwnedField:{value:['kept',null,7]}});}
   return new Response(null,{status:204});
  }
+ if(path==='/fixture/retry'){
+  if(scoped||retryMode)throw Error('retry fixture must precede request bindings');
+  retryMode=await request.text();if(!['preparation','response','mixed','exhausted','failed-alternate'].includes(retryMode))throw Error('retry fixture mode');
+  const provider=new URL(request.url).searchParams.get('provider')??'fireworks';
+  if(!['fireworks','venice','gmi'].includes(provider))throw Error('fixture retry provider');
+  const unknownUnits=new URL(request.url).searchParams.get('unknown')==='large'?16384:4;
+  const id=provider==='fireworks'?'pricing':provider,policy=JSON.parse(await env.POLICY_KV.get('policies/owned_http_'+id));
+  policy.grantRouting={strategy:'priority',environmentFallback:false,eligibleGrants:{[provider]:['a','b','c','d','e'].map(name=>provider+'-'+name)}};
+  await env.POLICY_KV.put('policies/owned_http_'+id,JSON.stringify(policy));
+  for(const [index,name] of ['a','b','c','d','e'].entries())await putGrantCredentials(env,'oauth/owned_http_'+id+'/'+provider+'-'+name,{provider,enabled:true,kind:'api_key',credential:'fixture-upstream-retry-'+name,priority:100+index,...(provider==='gmi'?{accountId:'fixture-organization'}:{}),unknownOwnedField:{value:['x'.repeat(unknownUnits),null,7]}});
+  return new Response(null,{status:204});
+ }
  if(path==='/fixture/configuration'){
   if(request.method==='DELETE'){clearConfigurationFault();return new Response(null,{status:204});}
   const mode=await request.text();if(!['missing','undefined','forged','opaque','invalid-url'].includes(mode)||configurationFault)throw Error('fixture configuration mode');
@@ -548,7 +603,7 @@ export default {...handler,async fetch(request,env,context){
   const value=await request.json();if(!['authority','credential','provider'].includes(value.kind)||!['undefined','shared','huge','listener','success'].includes(value.reason))throw Error('fixture read shape');
   if(value.afterReads!==undefined&&(value.kind!=='provider'||value.afterReads!==1||value.reason==='listener'))throw Error('fixture read phase');
   if(value.path!==undefined&&!(value.kind==='authority'?['/admission/credential-preflight','/admission/resolve'].includes(value.path):value.kind==='credential'&&value.path==='/materialize'))throw Error('fixture private receipt path');
-  if(value.mode!==undefined&&(!['unlock-before','unlock-after','closed','closed-getter','unlock-before-closed','body-cancel','read-install-before','read-install-after','fetch-return-held','fetch-return-undefined','fetch-install-before','fetch-install-after'].includes(value.mode)||value.reason==='listener'||value.afterReads!==undefined))throw Error('fixture returned work shape');
+  if(value.mode!==undefined&&(!['unlock-before','unlock-after','unlock-void','unlock-install','closed','closed-getter','unlock-before-closed','body-cancel','read-install-before','read-install-after','fetch-return-held','fetch-return-undefined','fetch-install-before','fetch-install-after'].includes(value.mode)||value.reason==='listener'||value.afterReads!==undefined))throw Error('fixture returned work shape');
   if(value.reason==='success'&&value.mode===undefined)throw Error('fixture success shape');
   controlReadFault=value;return new Response(null,{status:204});
  }
@@ -586,7 +641,8 @@ export default {...handler,async fetch(request,env,context){
   const mode=await request.text();if(![...['bodyless','constructors','methods','next','trace','long-text','fund-grow','status-grow','final-grow','shrink','body-swap','constructor-fail','producer-fail','fail-held','capacity-held'].map(name=>'publication-'+name),...['snapshot','after','big','late','copy-normalizer','copy-public','install-before','install-after','install-reject','unlock-before-success','unlock-after-success','closed-undefined','read-undefined'].map(name=>'generic-'+name),...['tiny-empty','sniff-eof','replay-eof','trace','eof-value','large-backing','capture-before','capture-after','then-early','unlock-before-success','unlock-after-success','closed-undefined'].map(name=>'normalizer-'+name),'intake-constructor-capture','bootstrap-refuse','initial-error-hooks','initial-error-refuse','metadata-poison','metadata-branded-held','metadata-refuse-0','metadata-refuse-2','metadata-refuse-3','metadata-refuse-4','metadata-refuse-5','headers-prototype-foreach','headers-constructor-held','headers-swap','headers-foreach','headers-iterator','headers-next','headers-late','headers-long-text','headers-status-object','headers-text-object','archive-kernel-held','rpc-trace','rpc-duplicates','public-byte-snapshot','public-eof-foreign','public-capacity-refusal','handoff-getters','handoff-duplicates','public-handoff-getters','public-handoff-duplicates','source-handoff-getters','source-handoff-duplicates','normal','shared-refusal','forged','stale','mode','then-early','public-then-early','source-then-early','intake-request-before','intake-request-after','intake-request-late','intake-cells-148','intake-cells-512',...['third-bytes','shadow-buffer','value1-oversized','value2-oversized','value3-oversized','length-one-to-four','length-four-to-one','length-object','set-accessor','set-replacement','set-shadow','set-persist-through-auth','set-change-in-third-getter'].map(name=>'intake-operand-'+name),'status-pending-success','status-unlock-after-success','status-unlock-before-closed-shared','status-closed-undefined','capture-before','capture-after','read-undefined','read-primitive','read-shared','unlock-before-success','unlock-before-undefined','unlock-before-primitive','unlock-before-shared','unlock-after-success','unlock-after-undefined','unlock-after-primitive','unlock-after-shared','unlock-before-closed-shared','closed-undefined','closed-shared',...['before','after'].flatMap(order=>['success','undefined','primitive','shared'].map(kind=>'public-unlock-'+order+'-'+kind)),'public-closed-undefined','public-closed-shared','public-unlock-before-closed-shared',...['before','after'].flatMap(order=>['success','undefined','primitive','shared'].map(kind=>'intake-unlock-'+order+'-'+kind)),'intake-closed-undefined','intake-closed-shared','intake-unlock-before-closed-shared'].includes(mode)||!globalThis.__ownedJsonObservation)throw Error('fixture consumer mode');
   globalThis.__ownedJsonObservation.consumerMode=mode;return new Response(null,{status:204});
  }
- if(path==='/fixture/state')return Response.json({configurationGets,configurationReasonReads,driverReads:globalThis.__ownedJsonObservation?.driverReads??0,driverFactories:globalThis.__ownedJsonObservation?.driverFactories??0,intakeFactories:globalThis.__ownedJsonObservation?.intakeFactories??0,shared:globalThis.__ownedJsonObservation?.shared??null,consumers:globalThis.__ownedJsonObservation?.consumers??null,usage:globalThis.__ownedJsonObservation?.usage??null,statusReaders:globalThis.__ownedJsonObservation?.statusReaders??[],rpcReaders:globalThis.__ownedJsonObservation?.rpcReaders??[],archive:globalThis.__ownedJsonObservation?.archive??null,headerClone:globalThis.__ownedJsonObservation?.headers??null,initialErrors:globalThis.__ownedJsonObservation?.initialErrors,metadata:globalThis.__ownedJsonObservation?.metadata??null,continuationStages:globalThis.__ownedJsonObservation?.continuationStages,adapterReads:globalThis.__ownedJsonObservation?.adapterReads??null,parsers:globalThis.__ownedJsonObservation?.rows??[],parserHold:parserHold?{arrived:parserHold.arrived,released:parserHold.released}:null,calls,intakes,completed,events,recursivePricingValues,reasonReads,materializationReplies,controlReads:controlReads.map(({kind,read,readSettled,cancel,cancelSettled,unlock,released,removalFailed,held,nativeUnlocked,unlockSettled,thenCalls,closedNative,closedSettled,closedGetter,installFailed,lateCallbacks})=>({kind,read,readSettled,cancel,cancelSettled,unlock,released,...(removalFailed?{removalFailed:true}:{}),...(installFailed===undefined?{}:{installFailed,lateCallbacks}),...(held===undefined?{}:{held,nativeUnlocked,unlockSettled,thenCalls,closedNative,closedSettled,closedGetter})})),charged:bodyBudgetCharged()});
+ if(path==='/fixture/observer-replay')return Response.json(globalThis.__ownedJsonObservation.replayRetiredOriginals());
+ if(path==='/fixture/state')return Response.json({configurationGets,configurationReasonReads,originalObservers:globalThis.__ownedJsonObservation?.originalObserverState(),toolScratchBytes:globalThis.__ownedJsonObservation?.toolScratchBytes,retryPorts:globalThis.__ownedJsonObservation?.retryPorts.map(port=>({keys:port.keys})),credentialCensuses:globalThis.__ownedJsonObservation?.credentialCensuses,credentialReductions:globalThis.__ownedJsonObservation?.credentialReductions,driverReads:globalThis.__ownedJsonObservation?.driverReads??0,driverFactories:globalThis.__ownedJsonObservation?.driverFactories??0,intakeFactories:globalThis.__ownedJsonObservation?.intakeFactories??0,shared:globalThis.__ownedJsonObservation?.shared??null,consumers:globalThis.__ownedJsonObservation?.consumers??null,usage:globalThis.__ownedJsonObservation?.usage??null,statusReaders:globalThis.__ownedJsonObservation?.statusReaders??[],rpcReaders:globalThis.__ownedJsonObservation?.rpcReaders??[],archive:globalThis.__ownedJsonObservation?.archive??null,headerClone:globalThis.__ownedJsonObservation?.headers??null,initialErrors:globalThis.__ownedJsonObservation?.initialErrors,metadata:globalThis.__ownedJsonObservation?.metadata??null,continuationStages:globalThis.__ownedJsonObservation?.continuationStages,adapterReads:globalThis.__ownedJsonObservation?.adapterReads??null,parsers:globalThis.__ownedJsonObservation?.rows??[],parserHold:parserHold?{arrived:parserHold.arrived,released:parserHold.released}:null,calls,intakes,completed,events,recursivePricingValues,reasonReads,materializationReplies,controlReads:controlReads.map(({kind,read,readSettled,cancel,cancelSettled,unlock,released,removalFailed,held,nativeUnlocked,unlockSettled,thenCalls,closedNative,closedSettled,closedGetter,installFailed,lateCallbacks,foreignGets,thenGets})=>({kind,read,readSettled,cancel,cancelSettled,unlock,released,foreignGets,thenGets,...(removalFailed?{removalFailed:true}:{}),...(installFailed===undefined?{}:{installFailed,lateCallbacks}),...(held===undefined?{}:{held,nativeUnlocked,unlockSettled,thenCalls,closedNative,closedSettled,closedGetter})})),charged:bodyBudgetCharged()});
  if(path==='/fixture/pressure'){
   if(request.method==='DELETE'){pressure?.release();pressure=undefined;return new Response(null,{status:204});}
   if(pressure)throw Error('fixture pressure already held');
@@ -634,8 +690,12 @@ export default {async fetch(request){
  if(!['https://ark.cn-beijing.volces.com/api/v3/chat/completions','https://api.gmi-serving.com/v1/chat/completions','https://api.venice.ai/api/v1/chat/completions','https://api.fireworks.ai/inference/v1/chat/completions'].includes(request.url))throw Error('unexpected owned HTTP destination');
  const header=request.headers.get('authorization')??'',id=header.startsWith('Bearer fixture-upstream-')?header.slice('Bearer fixture-upstream-'.length):'invalid';
  const body=await request.json(),row={id,requestMarker:typeof body.messages?.[0]?.content==='string'?(body.messages[0].content.startsWith('snapA')?'snapA':body.messages[0].content.startsWith('snapB')?'snapB':null):null,method:request.method,model:body.model,stream:body.stream===true,bytes:new TextEncoder().encode(JSON.stringify(body)).byteLength,canceled:false,organization:request.headers.get('x-organization-id')};calls.push(row);
+ if(id.startsWith('retry-')&&body.ownedRetryCase){const name=id.slice(-1),mode=body.ownedRetryCase;
+  if(mode==='exhausted'||name!=='d')return Response.json({error:{message:'synthetic rejection '+name,type:'rate_limit_error'}},{status:mode==='response'?({a:401,b:403,c:429}[name]??429):429});
+ }
  if(id==='gmi'&&row.organization!=='fixture-organization')throw Error('original organization missing');
  if(id==='invalid')return Response.json({error:{type:'invalid_request_error',message:'fixture credential rejected'}},{status:401});
+ if(body.ownedCodecStatus){const wire=JSON.stringify({error:{message:'synthetic rejection'}});return new Response(body.stream===true?'data: '+wire+'\n\n':wire,{status:body.ownedCodecStatus,headers:{'content-type':body.stream===true?'text/event-stream':'application/json'}});}
  if(body.ownedPublicationCase==='bodyless')return new Response(null,{status:204});
  if(body.ownedGenericUsageCase)return new Response(ownedUsageWire(body.ownedGenericUsageCase,body.stream===true),{headers:{'content-type':body.stream===true?'text/event-stream':'application/json'}});
  if(body.ownedNormalizerCase){

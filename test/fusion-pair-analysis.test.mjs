@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { analyzePairRun } from '../scripts/fusion-pair-analysis.mjs';
+import { analyzePairRun, analyzePairRepeats } from '../scripts/fusion-pair-analysis.mjs';
 
 function fixture(outcomes = [[1, 1, 1], [0, 1, 1]], costs = [10, 100, 40]) {
   const strategies = ['cheap', 'strong', 'scope'];
@@ -81,6 +81,14 @@ test('known-cost failed trials remain scored failures and never become successes
   assert.throws(() => analyzePairRun(run), /invalid_or_duplicate/);
 });
 
+test('fixed-control calls cannot use the other registered model', () => {
+  for (const [strategy, model] of [['cheap', 'strong-model'], ['strong', 'cheap-model']]) {
+    const run = fixture();
+    run.calls.find(call => call.trialId.endsWith(`:${strategy}`)).model = model;
+    assert.throws(() => analyzePairRun(run), /mismatched_pair_control_model/);
+  }
+});
+
 test('mixture does not extrapolate outside control costs or divide by equal prices', () => {
   for (const costs of [[10, 100, 5], [10, 100, 110], [10, 10, 10]]) {
     assert.equal(analyzePairRun(fixture(undefined, costs)).matchedCostRandomMixture, null);
@@ -98,4 +106,139 @@ test('unsafe provenance is not copied into the summary', () => {
   assert.throws(() => analyzePairRun(run), /invalid_pair_run/);
   run.sourceSha = 'a'.repeat(40); run.receipts[0].taskId = '../private';
   assert.throws(() => analyzePairRun(run), /invalid_pair_receipt/);
+});
+
+function repeats(outcomes, costs) {
+  const first = fixture(outcomes, costs);
+  first.records.forEach(row => { row.elapsedMs = 100; });
+  const second = structuredClone(first);
+  second.config.priorCostMicros = first.spentOrReservedMicros;
+  second.spentOrReservedMicros = second.config.priorCostMicros + second.calls.reduce((sum, call) => sum + call.costMicros, 0);
+  return [first, second];
+}
+
+test('repeat analysis counts distinct tasks, preserves rescues and applies every pilot criterion', () => {
+  const report = analyzePairRepeats(repeats());
+  assert.equal(report.blocks, 2);
+  assert.equal(report.distinctTasks, 2);
+  assert.equal(report.attemptsPerStrategy, 4);
+  assert.equal(report.pilotScreen.passed, true);
+  assert.equal(report.comparisons[0].wins, 2);
+  assert.equal(report.latencyRatioVersusStrong, 1);
+  assert.equal(report.cheapDominatesCandidate, false);
+  assert.ok(!JSON.stringify(report).includes('sentinel'));
+});
+
+test('same total score cannot conceal a regression in a repeated block', () => {
+  const report = analyzePairRepeats(repeats([[0, 1, 0], [1, 0, 1]]));
+  assert.equal(report.comparisons[1].losses, 2);
+  assert.equal(report.pilotScreen.passed, false);
+  assert.equal(report.pilotScreen.noStrongRegressions, false);
+});
+
+test('cheap dominance and latency failures prevent a positive repeat screen', () => {
+  const runs = repeats([[1, 1, 1]]);
+  assert.equal(analyzePairRepeats(runs).cheapDominatesCandidate, true);
+  assert.equal(analyzePairRepeats(runs).pilotScreen.passed, false);
+  for (const run of runs) run.records.find(row => row.strategy === 'scope').elapsedMs = 201;
+  assert.equal(analyzePairRepeats(runs).pilotScreen.withinLatencyLimit, false);
+});
+
+test('repeat analysis rejects changed protocols, duplicate blocks, missing time and broken ledgers', () => {
+  for (const mutate of [
+    runs => { runs[1] = structuredClone(runs[0]); },
+    runs => { runs[1].sourceSha = 'd'.repeat(40); },
+    runs => { runs[1].config.maxCalls = 20; },
+    runs => { runs[1].cheapReasoning = 'high'; },
+    runs => { runs[1].pins = { changed: true }; },
+    runs => { runs[1].receipts[0].taskDigest = 'e'.repeat(64); },
+    runs => { delete runs[1].records[0].elapsedMs; },
+    runs => { runs[1].records[0].elapsedMs = -1; },
+    runs => { runs[1].config.priorCostMicros++; runs[1].spentOrReservedMicros++; },
+    runs => { runs[1].calls[0].costMicros = null; },
+  ]) {
+    const runs = repeats(); mutate(runs);
+    assert.throws(() => analyzePairRepeats(runs));
+  }
+});
+
+test('repeat protocol comparisons ignore object and receipt ordering', () => {
+  const runs = repeats();
+  runs[1].config = Object.fromEntries(Object.entries(runs[1].config).reverse());
+  runs[1].receipts.reverse(); runs[1].strategies.reverse();
+  assert.equal(analyzePairRepeats(runs).pilotScreen.passed, true);
+});
+
+test('exactly twenty percent saving meets the cost threshold without rounding drift', () => {
+  const report = analyzePairRepeats(repeats(undefined, [10, 100, 80]));
+  assert.equal(report.pilotScreen.enoughCostSaving, true);
+  assert.equal(report.pilotScreen.passed, true);
+});
+
+test('false accepts include a passing verdict with mismatched qualified test counts', () => {
+  const runs = repeats();
+  const rejected = runs[1].records.find(row => row.strategy === 'scope');
+  rejected.score = 0;
+  rejected.verdict.tests = 1;
+  const report = analyzePairRepeats(runs);
+  assert.equal(report.totals.find(row => row.strategy === 'scope').falseAccepts, 1);
+  assert.equal(report.pilotScreen.passed, false);
+});
+
+test('an arm win from another single-model sample is not counted as a mixed-model win', () => {
+  const runs = repeats();
+  const first = analyzePairRepeats(runs);
+  assert.equal(first.comparisons[0].wins, 2);
+  assert.deepEqual(first.candidateModelUse, { cheapOnlyAttempts: 0, strongOnlyAttempts: 4,
+    mixedAttempts: 0, noCallAttempts: 0, mixedWinsOverCheap: 0 });
+  const call = runs[0].calls.find(call => call.trialId === 'case-1:scope');
+  call.costMicros -= 10;
+  runs[0].calls.push({ ...call, model: 'cheap-model', costMicros: 10 });
+  runs[0].records.find(row => row.taskId === 'case-1' && row.strategy === 'scope').calls++;
+  const mixed = analyzePairRepeats(runs);
+  assert.equal(mixed.candidateModelUse.mixedAttempts, 1);
+  assert.equal(mixed.candidateModelUse.mixedWinsOverCheap, 1);
+  assert.equal(mixed.candidateModelUse.strongOnlyAttempts, 3);
+});
+
+
+test('single-block savings expose cheap dominance and summed latency', () => {
+  const run = fixture([[1, 1, 1]]);
+  for (const row of run.records) row.elapsedMs = row.strategy === 'scope' ? 250 : 100;
+  const report = analyzePairRun(run);
+  assert.equal(report.observedCostSavingWithoutStrongRegressions, true);
+  assert.equal(report.costSavingVersusStrong, 0.6);
+  assert.equal(report.latencyRatioVersusStrong, 2.5);
+  assert.equal(report.cheapDominatesCandidate, true);
+  assert.equal(report.totals[2].elapsedMs, 250);
+});
+
+test('single-block missing or invalid time cannot establish latency or cheap dominance', () => {
+  for (const elapsed of [undefined, null, -1, NaN, '100']) {
+    const run = fixture([[1, 1, 1]]);
+    for (const row of run.records) row.elapsedMs = 100;
+    run.records[2].elapsedMs = elapsed;
+    const report = analyzePairRun(run);
+    assert.equal(report.totals[2].elapsedMs, null);
+    assert.equal(report.latencyRatioVersusStrong, null);
+    assert.equal(report.cheapDominatesCandidate, null);
+  }
+  const run = fixture([[1, 1, 1]]);
+  for (const row of run.records) row.elapsedMs = 0;
+  assert.equal(analyzePairRun(run).latencyRatioVersusStrong, null);
+});
+
+test('single-block model use distinguishes rescues, single-model samples and no-call attempts', () => {
+  const run = fixture([[0, 1, 1], [1, 1, 1], [0, 0, 0], [0, 1, 1]]);
+  const mixed = run.calls.find(call => call.trialId === 'case-0:scope');
+  mixed.costMicros -= 10;
+  run.calls.push({ ...mixed, model: 'cheap-model', costMicros: 10 });
+  run.records.find(row => row.taskId === 'case-0' && row.strategy === 'scope').calls++;
+  run.calls.find(call => call.trialId === 'case-1:scope').model = 'cheap-model';
+  run.calls = run.calls.filter(call => call.trialId !== 'case-2:scope');
+  const empty = run.records.find(row => row.taskId === 'case-2' && row.strategy === 'scope');
+  empty.calls = 0; empty.costMicros = 0;
+  run.spentOrReservedMicros -= 40;
+  assert.deepEqual(analyzePairRun(run).candidateModelUse, { cheapOnlyAttempts: 1, strongOnlyAttempts: 1,
+    mixedAttempts: 1, noCallAttempts: 1, mixedWinsOverCheap: 1 });
 });

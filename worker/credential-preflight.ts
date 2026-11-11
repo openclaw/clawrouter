@@ -8,18 +8,18 @@ import { admitGenerationFactories, admitGenerationConsumptionFactories, generati
   copyGenerationCoverage, generationCoverageLayout, sameGenerationCoverage,
   type GenerationCoverage, type GenerationAuthentication, type IdentityGenerationPreparation, type IdentityGenerationBorrow } from "./identity-generations.ts";
 import { PrivateCacheReservation, hotCacheNow, hotCacheConfig, tryRunInBackground, type HotCacheConfig } from "./hot-cache.ts";
-import { hasJoinedOwnedHttpCredentialValue, ownsCredentialPrefetchPermit, ownsOwnedHttpCredentialPermit, retireOwnedHttpGrantCredentials, invalidateOwnedHttpGrantCredentials, finishOwnedHttpGrantCredentialCommand, moveOwnedCredentialBorrow, type OwnedCredentialBorrow } from "./credential-cache.ts";
+import { ownedHttpCredentialCensusEnvelope, measureOwnedHttpRetainedCredential, hasJoinedOwnedHttpCredentialValue, ownsCredentialPrefetchPermit, ownsOwnedHttpCredentialPermit, retireOwnedHttpGrantCredentials, invalidateOwnedHttpGrantCredentials, finishOwnedHttpGrantCredentialCommand, moveOwnedCredentialBorrow, type OwnedCredentialBorrow } from "./credential-cache.ts";
 import { materializeGrantCredentials, materializePrivateOwnedHttpGrantCredentials } from "./grant-credentials.ts";
 import { selectedCredentialFailure } from "./grant-credential-failure.ts";
 import { grantRevision, currentGrantRuntime } from "./grant-eligibility.ts";
-import { snapshot as providerSnapshot, ownsOwnedHttpSelectionPermit, consumeOwnedHttpProviderCredential } from "./providers.ts";
+import { snapshot as providerSnapshot, ownsOwnedHttpSelectionPermit, matchesOwnedHttpProviderSelection, matchesOwnedHttpProviderCredential, consumeOwnedHttpProviderCredential } from "./providers.ts";
 import { selectGenerationAdmissionCandidate } from "./authority-grant-selection.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import { GenerationAdvisoryState, waitGenerationFlushWindow, admitGenerationOverlay, generationSelectionWorkingBytes, planGenerationSelection, generationRuntimeWorkingBytes, detachedGenerationRuntime, detachedGenerationFeedback } from "./admission-cache.ts";
 import { authorityCall } from "./authority.ts";
 import { recordGrantRuntime } from "./grant-selection.ts";
 import { ownedGenerationCredentialFailure, acceptOwnedHttpControlVerification } from "./proxy-auth.ts";
-import { acceptOwnedHttpAuthentication, hasBoundOwnedHttpAuthentication, hasOwnedHttpProxyInvocation, reserveOwnedHttpInitialPreparation, matchesOwnedHttpForegroundCommandRetirement } from "./proxy.ts";
+import { acceptOwnedHttpAuthentication, hasBoundOwnedHttpAuthentication, hasOwnedHttpProxyInvocation, reserveOwnedHttpInitialPreparation, matchesOwnedHttpForegroundCommandRetirement, matchesOwnedHttpCompletedPreparation } from "./proxy.ts";
 import { credentialExpired } from "./credential-lifecycle.ts";
 import { safeEqual, sha256Hex, HttpError } from "./utils.ts";
 import { ownedErrorResponse, ownedExpiryResponse } from "./utils.ts";
@@ -210,9 +210,9 @@ export function ownedHttpCoverageMiss(cap: OwnedHttpRequest): boolean {
 // never supplied by a public request or obtained from an admission graph.
 export function selectOwnedHttpIdentity(cap: OwnedHttpRequest, request: Request, env: Env,
   selection: import("./authority-admission.ts").AdmissionSelection, recordSelection: boolean,
-  permit: object): Promise<GenerationSelectionHandle> {
+  permit: object, signal = request.signal): Promise<GenerationSelectionHandle> {
   checkOwnedHttpRequest(cap, request, env);
-  if (!ownsOwnedHttpSelectionPermit(permit, cap)) throw identityFailure("protocol");
+  if (!matchesOwnedHttpProviderSelection(permit, cap, selection, signal)) throw identityFailure("protocol");
   const http = httpIdentities?.get(cap), auth = http?.current && authenticationOwner(http.current);
   if (!http || !auth || auth.slot.owner.binding !== env.ACCESS_CONTROL || !auth.identity) throw identityFailure("protocol");
   if (auth.failure) throw auth.failure;
@@ -252,7 +252,7 @@ export function selectOwnedHttpIdentity(cap: OwnedHttpRequest, request: Request,
       // Seeds/projections may have committed. Failed/lost replies never get here.
       if (Object.hasOwn(admitted, "selection") || Object.hasOwn(admitted, "snapshots")) throw identityFailure("protocol");
       http.coverageMiss = true; http.coverageSelections++;
-      selected = await selectOwnedHttpCoverageMiss(cap, request, env, auth, provider, endpoint, selection, recordSelection);
+      selected = await selectOwnedHttpCoverageMiss(cap, request, env, auth, provider, endpoint, selection, recordSelection, signal);
     }
     selectedOwner(selected).httpProvider = provider;
     http.selections.push(selected);
@@ -333,7 +333,7 @@ const coverageSourcePhaseBytes = coverageSourceGraphBytes + 4 * 2097152 + 65536 
 async function selectOwnedHttpCoverageMiss(cap: OwnedHttpRequest, request: Request, env: Env,
   auth: GenerationAuthenticationOwner, provider: import("./types").CompiledProvider,
   endpoint: import("./types").CompiledEndpoint, selection: import("./authority-admission.ts").AdmissionSelection,
-  recordSelection: boolean): Promise<GenerationSelectionHandle> {
+  recordSelection: boolean, signal: AbortSignal): Promise<GenerationSelectionHandle> {
   const lease = GenerationConsumptionLease.reserve(coverageSourcePhaseBytes);
   const capture: { choice?: import("./grant-selection-strategies.ts").GrantChoiceInput & { poolKey: string } } = {};
   let resultLease: GenerationConsumptionLease | undefined, unpublished: GenerationSelectionHandle | undefined;
@@ -352,7 +352,7 @@ async function selectOwnedHttpCoverageMiss(cap: OwnedHttpRequest, request: Reque
   let key: string | undefined, choiceReply: { selectedKey: string } | undefined;
   let retained = coverageSourcePhaseBytes, runtimeBytes = 0;
   try {
-    request.signal.throwIfAborted();
+    signal.throwIfAborted();
     const identity = auth.identity!, admitted = auth.slot.owner.admission!;
     const policyId = identity.policyId, tenantId = identity.policy.tenantId ?? "default";
     const tokenRef = provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? provider.id;
@@ -367,12 +367,12 @@ async function selectOwnedHttpCoverageMiss(cap: OwnedHttpRequest, request: Reque
     pool = selection.excludedKeys?.length ? undefined : admitted.pools[provider.id];
     if (!pool) {
       original = authorityCall<import("./authority-admission.ts").AdmissionPool>(env, "/grant-pools/resolve",
-        { providerId: provider.id, policyId, tenantId, defaultKeys: defaults }, "policy-bindings", request.signal,
+        { providerId: provider.id, policyId, tenantId, defaultKeys: defaults }, "policy-bindings", signal,
         undefined, undefined, undefined, undefined, source);
       void original.then(() => undefined, () => undefined);
       pool = await original as import("./authority-admission.ts").AdmissionPool; original = undefined;
     }
-    request.signal.throwIfAborted();
+    signal.throwIfAborted();
     if (pool.unavailable) throw new HttpError(503, "provider_unavailable", "provider authorization failed");
     admitIdentity(pool); admitIdentityCount(defaults.length + pool.keys.length, 256);
     let keyUnits = defaultUnits; for (const key of pool.keys) keyUnits += key.length;
@@ -384,11 +384,11 @@ async function selectOwnedHttpCoverageMiss(cap: OwnedHttpRequest, request: Reque
     for (const key of pool.keys) if (!keys.includes(key)) keys.push(key);
     candidates = []; states = Object.create(null);
     for (const key of keys) {
-      request.signal.throwIfAborted();
+      signal.throwIfAborted();
       original = readIdentityKv<import("./types").UpstreamGrant>(() => env.POLICY_KV.get(key, "stream"), source);
       void original.then(() => undefined, () => undefined);
       const grant = await original as import("./types").UpstreamGrant | null; original = undefined;
-      request.signal.throwIfAborted();
+      signal.throwIfAborted();
       // The shared registry is authority- AND actual grantRevision-bound. Copy
       // now, before the next await can replace an independently owned value.
       const pending = grant && auth.slot.entry.partition.runtime?.get(key)?.get(grantRevision(grant));
@@ -407,7 +407,7 @@ async function selectOwnedHttpCoverageMiss(cap: OwnedHttpRequest, request: Reque
     identityHash = await original as string; original = undefined;
     original = sha256Hex(`session:${identityKey}`); void original.then(() => undefined, () => undefined);
     fallbackSessionHash = await original as string; original = undefined;
-    request.signal.throwIfAborted();
+    signal.throwIfAborted();
     const poolKeyUnits = 3 * (identityUtf8(policyId) + identityUtf8(tenantId) + identityUtf8(provider.id)) + 2;
     retained += 8 * poolKeyUnits + 512;
     lease.replace(retained + runtimeBytes);
@@ -440,16 +440,16 @@ async function selectOwnedHttpCoverageMiss(cap: OwnedHttpRequest, request: Reque
       matchesKey: generationSelectedKey, hasConfiguredGrant: generationConfigured, flush: generationFlushRejected });
     generationSelections.set(handle, selectedOwner); generationSelectionCount++; auth.children++;
     unpublished = handle; resultLease = undefined;
-    request.signal.throwIfAborted();
+    signal.throwIfAborted();
     if (choice?.candidates.length) {
       if (!recordSelection) key = choice.candidates[0].key;
       else {
-        original = authorityCall<{ selectedKey: string }>(env, "/grant-pools/select", choice, "policy-bindings", request.signal);
+        original = authorityCall<{ selectedKey: string }>(env, "/grant-pools/select", choice, "policy-bindings", signal);
         void original.then(() => undefined, () => undefined);
         choiceReply = await original as { selectedKey: string }; original = undefined; key = choiceReply.selectedKey;
       }
     }
-    request.signal.throwIfAborted();
+    signal.throwIfAborted();
     picked = key !== undefined && choice?.candidates.some(item => item.key === key) ? candidates.find(candidate => candidate.key === key) : undefined;
     selected = picked?.grant ? { key: picked.key, grant: picked.grant, runtimeState: currentGrantRuntime(picked.grant, states![picked.key]) } : null;
     if (selected) admitIdentity(selected, "record");
@@ -531,9 +531,9 @@ export function retireOwnedHttpIdentity(cap: OwnedHttpRequest): void {
 export interface OwnedHttpCredential { dispose(): void }
 interface HttpCredentialOwner {
   http?: OwnedHttpRequest; request?: Request; env?: Env; selected?: GenerationSelectionOwner;
-  providerPermit?: object; cachePermit?: object; lease: GenerationConsumptionLease;
+  providerPermit?: object; cachePermit?: object; lease: GenerationConsumptionLease; signal?: AbortSignal;
   id: string; config?: HotCacheConfig; force: boolean; started: boolean; retained: boolean;
-  revalidation?: OwnedHttpRevalidationBacking;
+  revalidation?: OwnedHttpRevalidationBacking; reduction?: number;
 }
 export interface OwnedHttpRevalidationBacking { readonly revalidationBacking?: never }
 interface HttpRevalidationBacking {
@@ -629,7 +629,7 @@ function retireHttpCredential(cap: OwnedHttpCredential): void {
   if (owner.revalidation) throw identityFailure("protocol");
   if (owner.http && httpForegroundReservations?.get(owner.http) === cap) httpForegroundReservations.delete(owner.http);
   httpCredentials!.delete(cap); owner.http = undefined; owner.request = undefined; owner.env = undefined; owner.selected = undefined;
-  owner.providerPermit = undefined; owner.cachePermit = undefined; owner.config = undefined; owner.id = "";
+  owner.providerPermit = undefined; owner.cachePermit = undefined; owner.signal = undefined; owner.config = undefined; owner.id = "";
   const failures: unknown[] = [];
   try { if (selected) releaseGenerationSelection(selected); } catch (error) { failures.push(error); }
   try { owner.lease.release(); } catch (error) { failures.push(error); }
@@ -654,18 +654,18 @@ export function reserveOwnedHttpForeground(http: OwnedHttpRequest, request: Requ
   } finally { if (!adopted) lease.release(); }
 }
 export function prepareOwnedHttpCredential(http: OwnedHttpRequest, request: Request, env: Env,
-  selected: GenerationSelectionHandle, providerPermit: object, force: boolean): OwnedHttpCredential {
+  selected: GenerationSelectionHandle, providerPermit: object, force: boolean, signal = request.signal): OwnedHttpCredential {
   checkOwnedHttpRequest(http, request, env);
   const root = httpIdentities?.get(http), value = selectedOwner(selected), cap = httpForegroundReservations?.get(http);
   if (!root?.selections.includes(selected) || value.auth.slot.owner.binding !== env.ACCESS_CONTROL || !cap
-    || !ownsOwnedHttpSelectionPermit(providerPermit, http)) throw identityFailure("protocol");
+    || !matchesOwnedHttpProviderCredential(providerPermit, http, selected, signal)) throw identityFailure("protocol");
   const owner = httpCredentialOwner(cap), grant = value.result!.selected, raw = env.CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS;
   const revision = grant ? grantRevision(grant.grant) : null;
   const units = grant ? grant.key.length + generationPrefetchIdUnits(grant.grant.credentialGeneration) + generationPrefetchIdUnits(revision) + 2 : 0;
   if (Math.max(26361856, 2 * (typeof raw === "string" ? raw.length : 64)) + 6 * units + 65536 > owner.lease.bytes) throw identityFailure("limit");
   const source = hotCacheConfig(env), config = Object.freeze({ maxAgeMs: source.maxAgeMs, freshMs: source.freshMs });
   const id = grant ? `${grant.key}\n${grant.grant.credentialGeneration ?? ""}\n${revision ?? ""}` : "";
-  owner.selected = value; owner.providerPermit = providerPermit; owner.id = id; owner.config = config; owner.force = force;
+  owner.selected = value; owner.providerPermit = providerPermit; owner.id = id; owner.config = config; owner.force = force; owner.signal = signal;
   value.users++; httpForegroundReservations!.delete(http); return cap;
 }
 
@@ -685,7 +685,7 @@ export async function materializeOwnedHttpCredential(cap: OwnedHttpCredential, p
   try {
     if (!owner.env!.GRANT_CREDENTIALS) throw new HttpError(503, "provider_not_configured", "provider is not configured");
     await materializePrivateOwnedHttpGrantCredentials(cap, permit, ownedHttpSinkOwner(owner.http!), owner.env!,
-      selected.key, selected.grant, provider.id, provider.auth.refresh, owner.force, owner.request!.signal);
+      selected.key, selected.grant, provider.id, provider.auth.refresh, owner.force, owner.signal!);
   } catch (error) { throw selectedCredentialFailure(error, selected.key); }
 }
 export function matchesOwnedHttpMaterialization(cap: OwnedHttpCredential, permit: object, sink: OwnedHttpSinkOwner,
@@ -710,6 +710,31 @@ export function retainOwnedHttpCredential(cap: OwnedHttpCredential, permit: obje
   const owner = httpCredentialOwner(cap), root = owner.http && httpIdentities?.get(owner.http);
   if (!root || owner.retained || owner.cachePermit !== permit || !ownsOwnedHttpCredentialPermit(permit, cap)) throw identityFailure("protocol");
   root.credentials.push(cap); owner.retained = true;
+}
+export function matchesOwnedHttpCredentialPreparation(cap: OwnedHttpCredential, http: OwnedHttpRequest, permit: object, request?: Request): boolean {
+  const owner = httpCredentials?.get(cap);
+  return !!owner && owner.http === http && owner.providerPermit === permit && owner.lease.bytes === 33554432
+    && (request === undefined || owner.request === request);
+}
+// Only the fixed completed generic provider port can consume this transition.
+// Full source/HIT and cache/provider finally evidence precedes the census; the
+// grant, borrower, command, selected parent and independent HTTP owners stay live.
+export function reduceOwnedHttpPreparedCredential(http: OwnedHttpRequest, request: Request, cap: OwnedHttpCredential, permit: object): void {
+  const owner = httpCredentialOwner(cap);
+  if (owner.http !== http || owner.request !== request || owner.providerPermit !== permit || !owner.cachePermit || !owner.retained
+    || owner.revalidation || owner.reduction || owner.lease.bytes !== 33554432
+    || !matchesOwnedHttpCompletedPreparation(http, request, cap, permit)) throw identityFailure("protocol");
+  const idBytes = 6 * owner.id.length;
+  // The admitted record ceiling and actual ID allowance name every census
+  // workspace product before its factories, while the full lease is held.
+  if (ownedHttpCredentialCensusEnvelope() + 4096 + idBytes + 6 * (owner.selected!.result!.selected?.key.length ?? 0) > owner.lease.bytes)
+    throw identityFailure("protocol");
+  owner.reduction = 1;
+  try {
+    const bytes = measureOwnedHttpRetainedCredential(cap, owner.cachePermit) + 4096 + idBytes;
+    if (bytes > owner.lease.bytes || !matchesOwnedHttpCompletedPreparation(http, request, cap, permit)) throw identityFailure("protocol");
+    owner.lease.replace(bytes); owner.reduction = 2;
+  } catch (error) { owner.reduction = 0; throw error; }
 }
 export function finishOwnedHttpCredential(cap: OwnedHttpCredential, permit: object): void {
   const owner = httpCredentialOwner(cap);

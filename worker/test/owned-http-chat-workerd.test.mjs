@@ -79,8 +79,130 @@ const settledState = async f => {
   }
 };
 
+for (const mode of ['preparation', 'response', 'mixed', 'exhausted', 'failed-alternate'])
+test(`native cumulative four-port generic grant policy ${mode}`, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    assert.equal((await f.request('https://fixture/fixture/retry', { method: 'POST', body: mode })).status, 204);
+    const response = await f.request('https://fixture/v1/chat/completions', chat('pricing', { model: ownedHttpPricingModel, ownedRetryCase: mode }));
+    assert.equal(response.status, mode === 'exhausted' || mode === 'failed-alternate' ? 429 : 200);
+    const report = await settledState(f), keys = ['a', 'b', 'c', 'd'].map(name => 'oauth/owned_http_pricing/fireworks-' + name);
+    assert.deepEqual(report.retryPorts.map(port => port.keys), [[], keys.slice(0, 1), keys.slice(0, 2), keys.slice(0, 3)]);
+    assert.deepEqual(report.calls.filter(row => row.kind === 'credential' && row.path === '/materialize').map(row => row.key), keys);
+    const sent = JSON.parse((await f.request('https://fixture/fixture/upstream')).text);
+    const expected = mode === 'preparation' ? ['d'] : mode === 'mixed' ? ['b', 'd'] : mode === 'failed-alternate' ? ['a'] : ['a', 'b', 'c', 'd'];
+    assert.deepEqual(sent.map(row => row.id), expected.map(name => 'retry-' + name));
+    assert.ok(report.credentialReductions.length >= expected.length);
+    assert.ok(report.credentialReductions.every(row => row.before === 33554432 && row.after === row.bytes && row.bytes >= 4096 && row.bytes < 33554432));
+    for (const [index, row] of report.credentialReductions.entries()) {
+      const census = report.credentialCensuses[index];
+      assert.ok(census.originalCleared && census.retained && (census.completion & 4)); assert.equal(row.rejections, 5);
+      assert.equal(row.bytes, 8 * (census.containers + 2 * census.members + census.entries + census.values) + 2 * census.units + 4096 + 6 * (row.idUnits + census.keyUnits));
+    }
+    assert.equal(report.events.length, 1); assert.equal(count(report, 'budget', '/reserve'), 1); assert.equal(count(report, 'budget', '/settle'), 1);
+    if (mode === 'failed-alternate') assert.match(response.text, /synthetic rejection a/);
+    if (mode === 'exhausted') assert.match(response.text, /synthetic rejection d/);
+  }, true);
+});
+
+// Venice's native descriptor and GMI's existing main conjunction exclude only
+// response-driven retries. Materialization failures precede either future right.
+for (const provider of ['venice', 'gmi']) for (const status of [401, 403, 429]) for (const streaming of provider === 'venice' ? [false, true] : [false])
+test(`native ${provider} prepared ${status} does not create an alternate (stream=${streaming})`, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const response = await f.request('https://fixture/v1/chat/completions', chat(provider, { model: ownedHttpControlModels[provider], stream: streaming, ownedCodecStatus: status }));
+    assert.equal(response.status, status);
+    const report = await settledState(f), sent = JSON.parse((await f.request('https://fixture/fixture/upstream')).text);
+    assert.equal(sent.length, 1); assert.equal(count(report, 'credential', '/materialize'), 1);
+    assert.equal(report.retryPorts.length, 1); assert.equal(report.credentialReductions.length, 0);
+    assert.equal(report.events.length, 1);
+  }, true);
+});
+test('native invalid canonical Venice preparation has no fetch, retry or retained reduction', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const response = await f.request('https://fixture/v1/chat/completions', chat('venice', { model: ownedHttpControlModels.venice, stream: 'invalid' }));
+    assert.equal(response.status, 400); assert.equal(JSON.parse(response.text).error.code, 'invalid_venice_chat_request');
+    const report = await settledState(f);
+    assert.equal(JSON.parse((await f.request('https://fixture/fixture/upstream')).text).length, 0);
+    assert.equal(report.retryPorts.length, 1); assert.equal(report.credentialReductions.length, 0);
+    assert.equal(count(report, 'credential', '/materialize'), 1);
+  }, true);
+});
+
+for (const provider of ['venice', 'gmi']) test(`native ${provider} materialization A/B/C failures leave only D's future owner`, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    assert.equal((await f.request('https://fixture/fixture/retry?provider=' + provider, { method: 'POST', body: 'preparation' })).status, 204);
+    const response = await f.request('https://fixture/v1/chat/completions', chat(provider, { model: ownedHttpControlModels[provider], ownedRetryCase: 'preparation' }));
+    assert.equal(response.status, 200);
+    const report = await settledState(f), sent = JSON.parse((await f.request('https://fixture/fixture/upstream')).text);
+    const keys = ['a', 'b', 'c', 'd'].map(name => 'oauth/owned_http_' + provider + '/' + provider + '-' + name);
+    assert.deepEqual(report.calls.filter(row => row.kind === 'credential' && row.path === '/materialize').map(row => row.key), keys);
+    assert.deepEqual(report.retryPorts.map(port => port.keys), [[], keys.slice(0, 1), keys.slice(0, 2), keys.slice(0, 3)]);
+    assert.deepEqual(sent.map(row => row.id), ['retry-d']); assert.equal(report.credentialReductions.length, 0);
+    assert.equal(report.events.length, 1);
+  }, true);
+});
+
+test('native generic retained reduction covers unknown grant fields and a completed cache HIT', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    await f.request('https://fixture/fixture/retry?unknown=large', { method: 'POST', body: 'response' });
+    const first = await f.request('https://fixture/v1/chat/completions', chat('pricing', { model: ownedHttpPricingModel, ownedRetryCase: 'response' }));
+    assert.equal(first.status, 200);
+    const before = await settledState(f);
+    assert.equal(before.credentialReductions.length, 4);
+    assert.ok(before.credentialCensuses.every(row => row.units >= 16384 && row.originalCleared));
+    assert.ok(before.credentialReductions.every(row => row.bytes > 2 * 16384 + 4096));
+    const second = await f.request('https://fixture/v1/chat/completions', chat('pricing', { model: ownedHttpPricingModel, ownedRetryCase: 'response' }));
+    assert.equal(second.status, 200);
+    const after = await settledState(f);
+    assert.ok(after.credentialCensuses.slice(before.credentialCensuses.length).some(row => row.completion === 6 && row.borrowed));
+    assert.equal(after.events.length, 2);
+  }, true);
+});
+
+test('native retained private callbacks become inert after physical retirement', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const response = await f.request('https://fixture/v1/chat/completions', chat('chat')); assert.equal(response.status, 200);
+    const report = await settledState(f), rows = report.originalObservers, roles = new Set(rows.map(row => row.role));
+    for (const role of ['OwnedProviderFetch', 'OwnedLedgerCommand', 'OwnedTerminalOperation']) assert.ok(roles.has(role), role);
+    assert.ok(rows.every(row => row.severed && row.state === 8));
+    const replay = JSON.parse((await f.request('https://fixture/fixture/observer-replay')).text);
+    assert.equal(replay.reads, 0); assert.equal(replay.callbacks, 2 * rows.length);
+  }, true);
+});
+
+test('native 513 empty string tools fund every string primitive occurrence', { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    const response = await f.request('https://fixture/v1/chat/completions', chat('chat', { tools: Array(513).fill('') }));
+    assert.equal(response.status, 200);
+    const report = await settledState(f);
+    assert.ok(report.toolScratchBytes >= 8224);
+    assert.equal(report.events.length, 1);
+    assert.equal(count(report, 'budget', '/reserve'), 1);
+    assert.equal(count(report, 'budget', '/settle'), 1);
+  }, true);
+});
+
 const budgetState = async f => JSON.parse((await f.request('https://fixture/fixture/budget-sequence')).text);
 const terminalState = async f => JSON.parse((await f.request('https://fixture/fixture/terminal')).text);
+for (const laneFault of ['ok-getter', 'install-before-late']) for (const laneReason of ['undefined', 'shared'])
+test(`native terminal failure keeps recovery live and late FIRST cleanup ${laneFault}/${laneReason}`, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    f.expectUnknownRetirement();
+    f.releases.push(() => f.request('https://fixture/fixture/terminal', { method: 'DELETE' }));
+    assert.equal((await f.request('https://fixture/fixture/terminal', { method: 'POST', body: JSON.stringify({ laneFault, laneReason }) })).status, 204);
+    const response = await f.request('https://fixture/v1/chat/completions', chat('chat')); assert.equal(response.status, 200);
+    let row; do { row = await terminalState(f); if (!row.logical.length) await new Promise(resolve => setTimeout(resolve, 10)); } while (!row.logical.length);
+    assert.deepEqual(row.logical, [true]); assert.equal(row.recovery.length, 1); assert.equal(row.recovery[0].args, 1);
+    const report = await state(f), settled = report.calls.filter(value => value.kind === 'budget' && value.path === '/settle');
+    assert.equal(settled.length, 1); assert.equal(row.recovery[0].id, settled[0].reservationId);
+    if (laneFault === 'install-before-late') { assert.equal(row.laneInstalls, 1); assert.equal(row.bodyCancels, 0); }
+    assert.equal((await f.request('https://fixture/fixture/terminal', { method: 'DELETE' })).status, 204);
+    do { row = await terminalState(f); if (row.pending || row.bodyCancelSettled !== 1) await new Promise(resolve => setTimeout(resolve, 10)); } while (row.pending || row.bodyCancelSettled !== 1);
+    assert.equal(row.bodyCancels, 1); assert.equal(row.launches, 1); assert.equal((await state(f)).events.length, 1);
+    assert.ok((await state(f)).originalObservers.some(value => value.role === 'OwnedTerminalOperation' && !value.severed));
+  }, true);
+});
+
 for (const options of [{ late: 'throw' }, { late: 'other', wrong: true }, { receipt: 'first' }, { receipt: 'both' },
   { shellFailure: true }, ...['BUDGET_LEDGER', 'USAGE_LEDGER', 'USAGE_QUEUE'].map(factoryThrow => ({ factoryThrow })),
   { startFailure: true }, { closeFailure: true }, { installFailure: true }, { closeFailure: true, diagnosticFailure: true }])
@@ -832,16 +954,17 @@ test('known HTTP preparation pressure denies BEFORE full admission can count or 
     // pressure, not optional-cache pressure or a new request/profile limit.
     f.releases.push(async () => { assert.equal((await f.request('https://fixture/fixture/pressure', { method: 'DELETE' })).status, 204); });
     assert.equal((await f.request('https://fixture/fixture/pressure', { method: 'POST' })).status, 204);
-    const response = await f.request('https://fixture/v1/chat/completions', chat('chat'));
+    const response = await f.request('https://fixture/v1/chat/completions', chat('chat', { tools: Array(513).fill('') }));
     assert.equal(response.status, 503);
     assert.equal(response.headers.get('x-clawrouter-error-code'), 'identity_admission_unavailable');
     const report = await state(f);
+    assert.ok(report.toolScratchBytes >= 8224);
     assert.equal(count(report, 'authority', '/admission/credential-preflight'), 1, 'correct secret was preverified');
     assert.equal(count(report, 'authority', '/admission/resolve'), 0, 'no full admission or initial choice');
     assert.equal(count(report, 'authority', '/grant-pools/select'), 0);
     assert.equal(count(report, 'authority', '/grant-pools/record'), 0);
     assert.deepEqual(JSON.parse((await f.request('https://fixture/fixture/upstream')).text), []);
-  });
+  }, true);
 });
 
 
@@ -1445,7 +1568,7 @@ test('native syntax reason is cleared before held original source unlock', { tim
 // UNRUN_CODE_ONLY_HOSTED: registered private preflight/materialization receipts
 // consume actual Workerd DO replies and retain actual returned cleanup work.
 for (const [kind, path] of [['authority', '/admission/credential-preflight'], ['authority', '/admission/resolve'], ['credential', '/materialize']])
-for (const cause of ['listener', 'read-install-before', 'read-install-after', 'fetch-install-before', 'fetch-install-after'])
+for (const cause of ['listener', 'read-install-before', 'read-install-after', 'fetch-install-before', 'fetch-install-after', 'unlock-install'])
 test(`native private ${kind}${path}/${cause} uncertainty survives fixture release until isolate termination`, { timeout: 120000 }, async () => {
   // This owner is intentionally UNKNOWN. The ordinary fixture waits for every
   // retirement and therefore cannot be used to pretend this case has retired.
@@ -1482,10 +1605,11 @@ test(`native private ${kind}${path}/${cause} uncertainty survives fixture releas
     assert.equal(held.completed.length, before.completed.length);
     assert.equal(held.reasonReads, 0);
     if (cause !== 'listener') {
-      if (!cause.startsWith('fetch-')) assert.equal(held.controlReads.at(-1).read, 1);
+      if (cause.startsWith('read-')) assert.equal(held.controlReads.at(-1).read, 1);
       assert.equal(held.controlReads.at(-1).thenCalls, 1);
       const reader = kind === 'authority' ? path === '/admission/resolve' ? 'continuation' : 'preflight' : 'materialization';
-      assert.equal(held.adapterReads[reader], before.adapterReads[reader], 'callback-then-throw cannot publish a successful private read');
+      if (cause !== 'unlock-install') assert.equal(held.adapterReads[reader], before.adapterReads[reader], 'callback-then-throw cannot publish a successful private read');
+      else { assert.equal(held.controlReads.at(-1).foreignGets, 0); assert.equal(held.controlReads.at(-1).thenGets, 1); }
     }
     assert.equal(JSON.parse((await request('https://fixture/fixture/upstream')).text).length, 0);
     await release();
@@ -1495,6 +1619,7 @@ test(`native private ${kind}${path}/${cause} uncertainty survives fixture releas
       await new Promise(resolve => setTimeout(resolve, 10));
     }
     const after = await state();
+    assert.equal(after.credentialReductions.length, before.credentialReductions.length, 'UNKNOWN source is never clean preparation');
     assert.equal(after.controlReads.at(-1).released, true);
     if (path === '/admission/resolve') for (const stage of ['delivered', 'advanced', 'handles'])
       assert.equal(after.continuationStages[stage], before.continuationStages[stage], stage);
@@ -1514,6 +1639,21 @@ test(`native private ${kind}${path}/${cause} uncertainty survives fixture releas
   if (hasPrimary) throw primary;
 });
 
+for (const [kind, path] of [['authority', '/admission/credential-preflight'], ['authority', '/admission/resolve'], ['credential', '/materialize'], ['provider', undefined]])
+test(`native ${kind}${path ?? ''} observes returned unlock directly and ignores both foreign values`, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    f.releases.push(() => f.request('https://fixture/fixture/control-read', { method: 'DELETE' }));
+    await f.request('https://fixture/fixture/control-read', { method: 'POST', body: JSON.stringify({ kind, path, mode: 'unlock-void', reason: 'success' }) });
+    const id = kind === 'provider' ? 'venice' : 'chat';
+    const response = await f.request('https://fixture/v1/chat/completions', chat(id, kind === 'provider' ? { model: ownedHttpControlModels.venice } : {}));
+    assert.equal(response.status, 200);
+    const report = await settledState(f), rows = report.controlReads;
+    assert.ok(rows.length > 0);
+    for (const row of rows) { assert.equal(row.unlock, 1); assert.equal(row.thenGets, 1); assert.equal(row.thenCalls, 1); assert.equal(row.foreignGets, 0); }
+    assert.equal(report.events.length, 1);
+  }, true);
+});
+
 for (const [kind, path] of [['authority', '/admission/credential-preflight'], ['authority', '/admission/resolve'], ['credential', '/materialize']])
 for (const mode of ['unlock-before', 'unlock-after', 'closed']) test(`native private ${kind}${path} receipt joins ${mode} before delivery`, { timeout: 120000 }, async t => {
   await fixture(t, async f => {
@@ -1531,6 +1671,7 @@ for (const mode of ['unlock-before', 'unlock-after', 'closed']) test(`native pri
     assert.ok(held.charged > before.charged);
     assert.equal(held.completed.length, before.completed.length);
     assert.equal(JSON.parse((await f.request('https://fixture/fixture/upstream')).text).length, 0);
+    assert.equal(held.credentialReductions.length, before.credentialReductions.length, 'a held source cannot reduce its full foreground ticket');
     assert.equal(held.controlReads.at(-1).unlock, 1);
     assert.equal(held.controlReads.at(-1).nativeUnlocked, mode === 'unlock-after' ? 0 : 1);
     if (path === '/admission/resolve') {

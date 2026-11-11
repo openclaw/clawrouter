@@ -79,6 +79,35 @@ test('fixed controls receive identical supplied context without invoking or budg
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+for (const policy of ['edit-handoff', 'matched-handoff']) test(`${policy} keeps the same allowance and routes both handoff phases explicitly`, async () => {
+  const { root, options } = await fixture();
+  try {
+    const seen = [];
+    const state = await runPairBenchmark({ ...options, policy, grade, fetcher: success,
+      agent: async (_task, _image, strategy, id, settings, invoke, _engine, agentOptions) => {
+        seen.push({ strategy, settings, agentOptions });
+        await invoke(id, roles.strong, body, signal);
+        if (strategy === 'handoff') await invoke(id, roles.critic, body, signal);
+        return { ...repaired(), handoffUsed: strategy === 'handoff' };
+      },
+    });
+    assert.deepEqual(state.calls.map(call => call.model), policy === 'matched-handoff'
+      ? [config.cheap, config.strong, config.strong, config.strong, config.cheap]
+      : [config.cheap, config.strong, config.strong, config.cheap]);
+    assert.equal(seen[2].strategy, 'handoff');
+    assert.equal(seen[2].settings.maxTurns, config.maxCalls);
+    assert.deepEqual(seen[2].agentOptions, { preloadSource: true, handoffAfterEdit: true });
+    assert.deepEqual(seen[0].agentOptions, { preloadSource: true });
+    assert.deepEqual(seen[1].agentOptions, { preloadSource: true, ...(policy === 'matched-handoff' ? { handoffAfterEdit: true } : {}) });
+    assert.equal(seen[1].strategy, policy === 'matched-handoff' ? 'handoff' : 'strong');
+    assert.equal(seen[1].settings.maxTurns, config.maxCalls);
+    assert.equal(state.records[1].handoffUsed, policy === 'matched-handoff');
+    assert.equal(state.policy, policy);
+    assert.equal(state.records[2].handoffUsed, true);
+    assert.equal(analyzePairRun(state).candidateModelUse.mixedAttempts, 1);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('fixed-controls selection rejects ambiguous or invalid options before provider access', async () => {
   for (const controlsOnly of ['true', null, 1]) {
     await assert.rejects(runPairBenchmark({ sourceSha: 'e'.repeat(40), controlsOnly }), /invalid_control_selection/);
@@ -109,22 +138,62 @@ test('both controls and the pair account for real roles without persisting conte
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test('unknown charges stop the campaign once and retain the reservation', async () => {
+test('saved paired calls retain disjoint usage buckets used for native pricing', async () => {
   const { root, options } = await fixture();
   try {
-    let dispatched = 0;
+    await runPairBenchmark({ ...options, grade,
+      fetcher: async (url, request) => {
+        if (url.includes('/v1/models/')) return success(url, request);
+        return Response.json({ model: JSON.parse(request.body).model,
+          usage: { prompt_tokens: 20, completion_tokens: 30,
+            prompt_tokens_details: { cached_tokens: 10, cache_write_tokens: 5 } },
+          choices: [{ finish_reason: 'stop', message: { content: 'private completion sentinel' } }] });
+      },
+      agent: async (_task, _image, _strategy, id, _settings, invoke) => {
+        await invoke(id, roles.strong, body, signal); return repaired();
+      },
+    });
+    const saved = JSON.parse(await readFile(join(options.out, 'pair.json'), 'utf8'));
+    for (const call of saved.calls) {
+      assert.deepEqual(call.usageBreakdown, { uncachedInputTokens: 5, cacheReadInputTokens: 10,
+        cacheWriteInputTokens: 5, cacheWrite1hInputTokens: 0, outputTokens: 30 });
+      const price = saved.pins[call.model].usagePrice;
+      assert.equal(call.costMicros, Math.ceil((5 * Math.round(price.input * 1e9)
+        + 10 * Math.round(price.cached * 1e9) + 5 * Math.round(price.write * 1e9)
+        + 30 * Math.round(price.output * 1e9)) / 1000));
+    }
+    assert.equal(saved.spentOrReservedMicros, config.priorCostMicros + saved.calls.reduce((sum, call) => sum + call.costMicros, 0));
+    assert.ok(!JSON.stringify(saved).includes('sentinel'));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+for (const failure of ['http', 'transport']) test(`${failure} failures retain request fingerprints before dispatch and stop once`, async () => {
+  const { root, options } = await fixture();
+  const input = { ...body, messages: [{ role: 'user', content: 'private prompt sentinel λ' }] };
+  try {
+    let dispatched = 0, checkpoint, serializedBody;
     await assert.rejects(runPairBenchmark({ ...options, grade,
       fetcher: async (url, request) => {
         if (url.includes('/v1/models/')) return success(url, request);
         dispatched++;
+        checkpoint = JSON.parse(await readFile(join(options.out, 'pair.json'), 'utf8'));
+        serializedBody = request.body;
+        if (failure === 'transport') throw new Error('synthetic transport failure');
         return Response.json({ error: { type: 'rate_limit_error', message: 'private prompt sentinel' } }, { status: 429 });
       }, agent: async (_task, _image, _strategy, id, _settings, invoke) => {
-        await invoke(id, roles.strong, body, signal); return repaired();
+        await invoke(id, roles.strong, input, signal); return repaired();
       } }), /pair_benchmark_incomplete/);
     const state = JSON.parse(await readFile(join(options.out, 'pair.json'), 'utf8'));
+    assert.equal(checkpoint.calls[0].requestDigest, hash(serializedBody));
+    assert.equal(checkpoint.calls[0].requestBytes, Buffer.byteLength(serializedBody));
+    assert.notEqual(checkpoint.calls[0].requestBytes, serializedBody.length);
+    assert.equal(checkpoint.calls[0].promptDigest, hash(JSON.stringify(input.messages)));
+    assert.equal(state.calls[0].requestDigest, checkpoint.calls[0].requestDigest);
     assert.equal(dispatched, 1); assert.equal(state.complete, false); assert.equal(state.failure, 'unknown_cost');
     assert.equal(state.records[0].errorCode, 'unknown_cost');
     assert.equal(state.calls[0].costMicros, null);
+    assert.match(state.calls[0].requestDigest, /^[a-f0-9]{64}$/);
+    assert.equal(state.calls[0].promptDigest, hash(JSON.stringify(input.messages)));
     assert.equal(state.spentOrReservedMicros, config.priorCostMicros + state.calls[0].reservationMicros);
     assert.ok(!JSON.stringify(state).includes('sentinel'));
   } finally { await rm(root, { recursive: true, force: true }); }

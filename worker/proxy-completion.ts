@@ -554,8 +554,7 @@ export abstract class OwnedReaderDriver {
       original = Reflect.apply(method, reader, []);
       started = original !== undefined;
       if (!started) this.seen |= 4;
-      else if (normalizer) this.observe(4, original as Promise<unknown>, undefined, true);
-      else this.observe(4, Promise.resolve(original));
+      else this.observe(4, original as Promise<unknown>, undefined, true);
     } catch (reason) {
       if (started) this.uncertain(); else this.seen |= 4;
       this.driverCleanupFailure("unlock", started ? this.recordDriverInstallationFailure("unlock", reason) : this.recordDriverFailure("unlock", reason)); reason = undefined;

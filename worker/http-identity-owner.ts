@@ -129,6 +129,7 @@ class UploadOwner {
   provider?: OwnedProviderFetch;
   private flags = 0;
   private pipeOrigin = 0;
+  private observation?: OwnedOriginalObservation;
   readonly failures: unknown[] = [];
   constructor(readonly cap: OwnedHttpUpload, readonly request: RequestOwner, readonly listenerRemoval: SinkOriginOwner) {}
   get started(): boolean { return !!(this.flags & 1); }
@@ -161,6 +162,11 @@ class UploadOwner {
     catch { this.unknown(); }
     finally { reason = undefined; this.schedule(); }
   }
+  dispatchOriginal(cell: OwnedOriginalObservation, failed: boolean, value: unknown): void {
+    if (cell !== this.observation || this.flags & 256) { value = undefined; return; }
+    try { if (failed) this.rejected(value); else this.accepted(); }
+    finally { value = undefined; }
+  }
   pipe(source: ReadableStream<Uint8Array>, fixed: FixedLengthStream): void {
     this.source = source; this.fixed = fixed; this.flags |= 1 | 8;
     this.pipeOrigin = sinkOrigin(this.request.sink!, "pipe");
@@ -168,7 +174,8 @@ class UploadOwner {
     try {
       try { original = source.pipeTo(fixed.writable, { signal: this.controller!.signal }); }
       catch (reason) { this.rejected(reason); return; }
-      try { void original.then(this.accepted.bind(this), this.rejected.bind(this)); }
+      this.observation = { owner: this, kind: 0, state: 0 };
+      try { installOwnedOriginal(this.observation, original); }
       catch (reason) {
         this.unknown();
         throw failedSinkOrigin(this.request, this.pipeOrigin, reason);
@@ -178,7 +185,8 @@ class UploadOwner {
   unused(): void { this.flags |= 2; this.accepted(); }
   finish(): void {
     if (!this.settled || this.flags & (32 | 256)) return;
-    this.flags |= 256;
+    if (!severOwnedOriginal(this.observation)) { this.unknown(); return; }
+    this.observation = undefined; this.flags |= 256;
     retireOwnedSinkChild(this.request);
     this.resolveRetired(); this.resolveRetired = undefined as never;
   }
@@ -188,6 +196,12 @@ class UploadOwner {
 // These components are logical allowances, never JavaScript object sizes.
 // Entry owns terminal registration plus one untouched-response cancellation.
 const sinkOriginBytes = 2048;
+// Cell C=1, P=6, two scalar values; two bound handlers; argument vector,
+// owner slot and fixed installation/dispatch operands. This is an added
+// prospective component, not a claim that the complete fixed windows fit.
+const ownedOriginalCellBytes = 8 * (1 + 6 + 2 + 6 + 3 + 2 + 20)
+  + 2 * "ownerkindstateobservationcancellation".length;
+const ownedSinkOriginBytes = sinkOriginBytes + ownedOriginalCellBytes;
 const requestMetadataBytes = 4096 + 4096 + 3 * sinkOriginBytes;
 const uploadMetadataBytes = 4096;
 const originalReaderCancel = ReadableStreamDefaultReader.prototype.cancel;
@@ -256,7 +270,7 @@ function reserveSinkOrigins(sink: OwnedHttpSinkOwner, count: number): void {
   const owner = sinkOwner(sink);
   // Operation-local terminal origins are prepaid before acquisition/start.
   // Cancellation never has to compete for a new common-arena reservation.
-  const charge = owner.funding.replace(owner.funding.bytes + count * sinkOriginBytes);
+  const charge = owner.funding.replace(owner.funding.bytes + count * ownedSinkOriginBytes);
   if (!charge) throw identityFailure("limit");
   owner.funding = charge; owner.sinkCredits += count;
 }
@@ -314,11 +328,50 @@ function reportOwnedSinkDiagnostics(owner: RequestOwner, terminal: readonly unkn
 
 
 
+// Only these fixed original-operation owners can install this observer. Each
+// escaping handler binds the fresh cell, never an owner or a payload. The cell
+// remains live on UNKNOWN and is severed only at its owner's physical end.
+type OwnedOriginalTarget = OwnedSinkVoidCommand | OwnedProviderFetch | OwnedLedgerCommand | OwnedTerminalOperation
+  | UploadOwner | OwnedSinkRegistration | OwnedPreflightAcquisition | OwnedContinuationAcquisition | OwnedMaterializationAcquisition
+  | OwnedLedgerAck | OwnedStatusReader;
+interface OwnedOriginalObservation { owner: OwnedOriginalTarget | undefined; kind: number; state: number }
+function ownedOriginalFulfilled(this: OwnedOriginalObservation, value: unknown): void {
+  if (!this.owner || this.state & (1 | 8)) { value = undefined; return; }
+  this.state |= 1 | 16;
+  try { this.owner.dispatchOriginal(this, false, value); }
+  finally { value = undefined; this.state &= ~16; }
+}
+function ownedOriginalRejected(this: OwnedOriginalObservation, reason: unknown): void {
+  if (!this.owner || this.state & (1 | 8)) { reason = undefined; return; }
+  this.state |= 1 | 16;
+  try { this.owner.dispatchOriginal(this, true, reason); }
+  finally { reason = undefined; this.state &= ~16; }
+}
+function installOwnedOriginal(cell: OwnedOriginalObservation, original: Promise<unknown>): void {
+  try { installOwnedOriginalMethod(cell, original, original.then); }
+  catch (reason) { cell.state |= 4; throw reason; }
+  finally { original = undefined as never; cell = undefined as never; }
+}
+function installOwnedOriginalMethod(cell: OwnedOriginalObservation, original: unknown, then: unknown): void {
+  try {
+    void Reflect.apply(then as Function, original, [ownedOriginalFulfilled.bind(cell), ownedOriginalRejected.bind(cell)]);
+    cell.state |= 2;
+  } catch (reason) { cell.state |= 4; throw reason; }
+  finally { original = undefined; then = undefined; cell = undefined as never; }
+}
+function severOwnedOriginal(cell: OwnedOriginalObservation | undefined): boolean {
+  if (!cell) return true;
+  if (cell.state !== 3) return false;
+  cell.state = 8; cell.owner = undefined; cell.kind = 0;
+  return true;
+}
+
 // Only the named void commands below construct this state. It accepts no
 // callable producer/consumer and never stores a successful native value.
 class OwnedSinkVoidCommand {
   private flags = 1; // installing, callback, failed, UNKNOWN, queued, delivered
   subject?: unknown;
+  private observation?: OwnedOriginalObservation;
   private resolve!: () => void;
   private reject!: (failure: object) => void;
   readonly ready = new Promise<void>((resolve, reject) => { this.resolve = resolve; this.reject = reject; });
@@ -356,8 +409,14 @@ class OwnedSinkVoidCommand {
     this.resolve(); this.resolve = undefined as never; this.reject = undefined as never;
     if (this.budget) this.budget.retireCommand(); else retireOwnedSinkChild(this.owner);
   }
+  dispatchOriginal(cell: OwnedOriginalObservation, failed: boolean, value: unknown): void {
+    if (cell !== this.observation || this.flags & 64) { value = undefined; return; }
+    try { if (failed) this.rejected(value); else this.accepted(); }
+    finally { value = undefined; }
+  }
   observe(original: Promise<unknown>): void {
-    try { void original.then(this.accepted.bind(this), this.rejected.bind(this)); }
+    this.observation = { owner: this, kind: 0, state: 0 };
+    try { installOwnedOriginal(this.observation, original); }
     catch (reason) {
       this.failure(reason); this.unknown();
       throw failedSinkOrigin(this.owner, this.origin, reason);
@@ -377,7 +436,8 @@ class OwnedSinkVoidCommand {
       this.resolve = undefined as never; this.reject = undefined as never;
     }
     if (this.flags & (8 | 64)) return;
-    this.flags |= 64; this.subject = undefined;
+    if (!severOwnedOriginal(this.observation)) { this.unknown(); return; }
+    this.observation = undefined; this.flags |= 64; this.subject = undefined;
     if (this.budget) this.budget.retireCommand(); else retireOwnedSinkChild(this.owner);
   }
 }
@@ -1405,6 +1465,7 @@ export function ownedHttpArchiveAbort(sink: OwnedHttpSinkOwner, controller: Abor
 
 class OwnedSinkRegistration {
   private flags = 1; // installation/registration, seen, UNKNOWN, queued, closed, retired
+  private observation?: OwnedOriginalObservation;
   constructor(readonly owner: RequestOwner, public origin: SinkOriginOwner) {}
   private unknown(): void { this.flags |= 4; this.owner.unknown = true; }
   private observed(): void {
@@ -1421,15 +1482,21 @@ class OwnedSinkRegistration {
   private advance(): void {
     this.flags &= ~8;
     if (this.flags & (1 | 4 | 32) || (this.flags & (2 | 16)) !== (2 | 16)) return;
-    this.flags |= 32;
+    if (!severOwnedOriginal(this.observation)) { this.unknown(); return; }
+    this.observation = undefined; this.flags |= 32;
     retireOwnedSinkChild(this.owner);
+  }
+  dispatchOriginal(cell: OwnedOriginalObservation, _failed: boolean, value: unknown): void {
+    value = undefined;
+    if (cell === this.observation && !(this.flags & 32)) this.observed();
   }
   complete(context?: Pick<ExecutionContext, "waitUntil">, work?: Promise<void | boolean>): void {
     try {
       if (work) {
         // The actual observer return has no private business or custody role.
         // Callback acceptance cannot cross the still-open registration barrier.
-        try { void work.then(this.observed.bind(this), this.observed.bind(this)); }
+        this.observation = { owner: this, kind: 0, state: 0 };
+        try { installOwnedOriginal(this.observation, work); }
         catch (reason) { this.unknown(); throw failedSinkOrigin(this.owner, this.origin, reason); }
       } else this.flags |= 2;
       if (!context || !work) {
@@ -1497,6 +1564,8 @@ export function ownedHttpQueueSend(sink: OwnedHttpSinkOwner, queue: Env["USAGE_Q
 class OwnedProviderFetch {
   private flags = 1; // installation, accepted callback, failure, UNKNOWN, queued, delivered, disposal, transferred, cancel started, cancelled, retired
   private response?: Response;
+  private observation?: OwnedOriginalObservation;
+  private cancellation?: OwnedOriginalObservation;
   private resolve!: () => void;
   private reject!: (failure: object) => void;
   readonly ready = new Promise<void>((resolve, reject) => { this.resolve = resolve; this.reject = reject; });
@@ -1529,12 +1598,20 @@ class OwnedProviderFetch {
     if (this.flags & 2) { reason = undefined; return; }
     this.flags |= 2; this.failed(reason); reason = undefined; this.schedule();
   }
+  dispatchOriginal(cell: OwnedOriginalObservation, failed: boolean, value: unknown): void {
+    if (this.flags & 1024) { value = undefined; return; }
+    try {
+      if (cell === this.observation) { if (failed) this.rejected(value); else this.accepted(value as Response); }
+      else if (cell === this.cancellation) { if (failed) this.cancelFailed(value); else this.cancelled(); }
+    } finally { value = undefined; }
+  }
   invoke(url: URL, init: RequestInit): void {
     let original: Promise<Response> | undefined;
     try {
       try { original = fetch(url, init); }
       catch (reason) { this.rejected(reason); return; }
-      try { void original.then(this.accepted.bind(this), this.rejected.bind(this)); }
+      this.observation = { owner: this, kind: 0, state: 0 };
+      try { installOwnedOriginal(this.observation, original); }
       catch (reason) {
         this.failed(reason); this.unknown();
         throw failedSinkOrigin(this.upload.request, this.origin, reason);
@@ -1572,7 +1649,8 @@ class OwnedProviderFetch {
       if (this.response!.body!.locked) { this.unknown(); return; }
       try { original = this.response!.body!.cancel(); started = true; }
       catch (reason) { this.cancelFailed(reason); return; }
-      void original.then(this.cancelled.bind(this), this.cancelFailed.bind(this));
+      this.cancellation = { owner: this, kind: 1, state: 0 };
+      installOwnedOriginal(this.cancellation, original);
     } catch (reason) {
       if (started) this.unknown();
       this.cancelFailed(reason);
@@ -1593,6 +1671,8 @@ class OwnedProviderFetch {
       }
       if (this.flags & 64 && this.response && !(this.flags & 256)) { this.cancel(); return; }
       if (this.flags & 8 || !(this.flags & 2) || this.response && !(this.flags & 512)) return;
+      if (!severOwnedOriginal(this.observation) || !severOwnedOriginal(this.cancellation)) { this.unknown(); return; }
+      this.observation = undefined; this.cancellation = undefined;
       this.response = undefined; this.flags |= 1024;
       retireOwnedSinkChild(this.upload.request);
       if (this.upload.provider === this) this.upload.provider = undefined;
@@ -1651,6 +1731,7 @@ class OwnedPreflightAcquisition {
   private acquisition = 0;
   private fetching = 0;
   private seen = false;
+  private observation?: OwnedOriginalObservation;
   constructor(private root: RequestOwner, private receipt: PrivatePreflightReceipt, private permit: object) {
     this.acquisition = sinkOrigin(root.sink!, "acquire"); this.fetching = sinkOrigin(root.sink!, "fetch");
   }
@@ -1668,6 +1749,11 @@ class OwnedPreflightAcquisition {
     catch { this.root.unknown = true; }
     finally { reason = undefined; }
   }
+  dispatchOriginal(cell: OwnedOriginalObservation, failed: boolean, value: unknown): void {
+    if (cell !== this.observation || !this.root) { value = undefined; return; }
+    try { if (failed) this.rejected(value); else this.accepted(value as Response); }
+    finally { value = undefined; }
+  }
   invoke(binding: NonNullable<Env["ACCESS_CONTROL"]>, body: string, signal?: AbortSignal): void {
     beginPrivatePreflightAcquisition(this.receipt, this.permit);
     let stub: DurableObjectStub | undefined, original: Promise<Response> | undefined, uncertain = false;
@@ -1680,7 +1766,8 @@ class OwnedPreflightAcquisition {
       try { original = stub.fetch(`https://authority${credentialPreflightPath}`, {
         method: "POST", headers: { "content-type": "application/json", [credentialPreflightHeader]: credentialPreflightVersion }, body, signal, redirect: "manual",
       }); } catch (reason) { this.rejected(reason); return; }
-      try { void original.then(this.accepted.bind(this), this.rejected.bind(this)); }
+      this.observation = { owner: this, kind: 0, state: 0 };
+      try { installOwnedOriginal(this.observation, original); }
       catch (reason) {
         uncertain = true; this.root.unknown = true;
         try { failedSinkOrigin(this.root, sinkOrigin(this.root.sink!, "retire"), reason); }
@@ -1695,8 +1782,10 @@ class OwnedPreflightAcquisition {
   async consume(): Promise<CredentialPreflightReply> {
     try { return await consumePrivatePreflightReceipt(this.receipt, this.permit); }
     finally {
-      retireOwnedSinkChild(this.root);
+      if (!this.root.unknown && severOwnedOriginal(this.observation)) {
+      this.observation = undefined; retireOwnedSinkChild(this.root);
       this.root = undefined as never; this.receipt = undefined as never; this.permit = undefined as never;
+      } else this.root.unknown = true;
     }
   }
 }
@@ -1734,6 +1823,7 @@ class OwnedContinuationAcquisition {
   private acquisition = 0;
   private fetching = 0;
   private seen = false;
+  private observation?: OwnedOriginalObservation;
   started = false;
   private receipt?: PrivateContinuationReceipt;
   private init?: RequestInit;
@@ -1757,6 +1847,11 @@ class OwnedContinuationAcquisition {
     catch { this.root.unknown = true; }
     finally { reason = undefined; }
   }
+  dispatchOriginal(cell: OwnedOriginalObservation, failed: boolean, value: unknown): void {
+    if (cell !== this.observation || !this.root) { value = undefined; return; }
+    try { if (failed) this.rejected(value); else this.accepted(value as Response); }
+    finally { value = undefined; }
+  }
   private invoke(): void {
     beginPrivateContinuationAcquisition(this.receipt!, this.permit); this.started = true;
     let stub: DurableObjectStub | undefined, original: Promise<Response> | undefined, uncertain = false;
@@ -1769,7 +1864,8 @@ class OwnedContinuationAcquisition {
       }
       try { original = stub.fetch(`https://authority${admissionContinuationPath}`, this.init); }
       catch (reason) { this.rejected(reason); return; }
-      try { void original.then(this.accepted.bind(this), this.rejected.bind(this)); }
+      this.observation = { owner: this, kind: 0, state: 0 };
+      try { installOwnedOriginal(this.observation, original); }
       catch (reason) {
         uncertain = true; this.root.unknown = true;
         try { failedSinkOrigin(this.root, sinkOrigin(this.root.sink!, "retire"), reason); }
@@ -1802,6 +1898,8 @@ class OwnedContinuationAcquisition {
   private retire(): void {
     // The lower consume joins physical retirement even when its report rejects.
     // It never waits on this HTTP parent. UNKNOWN cannot reach this handoff.
+    if (this.root.unknown || !severOwnedOriginal(this.observation)) { this.root.unknown = true; return; }
+    this.observation = undefined;
     this.root.continuation = undefined;
     retireOwnedSinkChild(this.root);
     this.root = undefined as never; this.receipt = undefined; this.ticket = undefined as never; this.budget = undefined as never;
@@ -1853,6 +1951,7 @@ class OwnedMaterializationAcquisition {
   private acquisition = 0;
   private fetching = 0;
   private seen = false;
+  private observation?: OwnedOriginalObservation;
   constructor(private root: RequestOwner, private receipt: PrivateMaterializationReceipt, private permit: object) {
     this.acquisition = sinkOrigin(root.sink!, "acquire"); this.fetching = sinkOrigin(root.sink!, "fetch");
   }
@@ -1870,6 +1969,11 @@ class OwnedMaterializationAcquisition {
     catch { this.root.unknown = true; }
     finally { reason = undefined; }
   }
+  dispatchOriginal(cell: OwnedOriginalObservation, failed: boolean, value: unknown): void {
+    if (cell !== this.observation || !this.root) { value = undefined; return; }
+    try { if (failed) this.rejected(value); else this.accepted(value as Response); }
+    finally { value = undefined; }
+  }
   invoke(binding: NonNullable<Env["GRANT_CREDENTIALS"]>, key: string, body: string, signal?: AbortSignal): void {
     beginPrivateMaterializationAcquisition(this.receipt, this.permit);
     let stub: DurableObjectStub | undefined, original: Promise<Response> | undefined, uncertain = false;
@@ -1881,7 +1985,8 @@ class OwnedMaterializationAcquisition {
       }
       try { original = stub.fetch("https://clawrouter.internal/materialize", { method: "POST", body, signal, headers: { [identityHeader]: "v1" } }); }
       catch (reason) { this.rejected(reason); return; }
-      try { void original.then(this.accepted.bind(this), this.rejected.bind(this)); }
+      this.observation = { owner: this, kind: 0, state: 0 };
+      try { installOwnedOriginal(this.observation, original); }
       catch (reason) {
         uncertain = true; this.root.unknown = true;
         try { failedSinkOrigin(this.root, sinkOrigin(this.root.sink!, "retire"), reason); }
@@ -1896,8 +2001,10 @@ class OwnedMaterializationAcquisition {
   async consume(): Promise<void> {
     try { await consumePrivateMaterializationReceipt(this.receipt, this.permit); }
     finally {
-      retireOwnedSinkChild(this.root);
+      if (!this.root.unknown && severOwnedOriginal(this.observation)) {
+      this.observation = undefined; retireOwnedSinkChild(this.root);
       this.root = undefined as never; this.receipt = undefined as never; this.permit = undefined as never;
+      } else this.root.unknown = true;
     }
   }
 }
@@ -1947,9 +2054,9 @@ function ownedLedgerGraphUpper(text: string): number {
   finally { census = undefined; text = ""; }
 }
 function reserveOwnedLedgerAcknowledgments(root: RequestOwner, count: number): void {
-  const funding = root.funding.replace(root.funding.bytes + count * (ownedLedgerAckData + 4096 + 12 * sinkOriginBytes));
+  const funding = root.funding.replace(root.funding.bytes + count * (ownedLedgerAckData + 4096 + 15 * ownedSinkOriginBytes));
   if (!funding) throw identityFailure("limit");
-  root.funding = funding; root.sinkCredits += count * 12;
+  root.funding = funding; root.sinkCredits += count * 15;
 }
 function retireOwnedLedgerAcknowledgmentData(root: RequestOwner, bytes: number): void {
   const funding = root.funding.replace(root.funding.bytes - bytes);
@@ -1961,13 +2068,21 @@ type OwnedLedgerResult = OwnedLedgerAcknowledgment & { ok: boolean; status?: num
 class OwnedLedgerCommand {
   private flags = 1;
   private response?: Response;
+  private observation?: OwnedOriginalObservation;
+  private cancellation?: OwnedOriginalObservation;
   private ack?: OwnedLedgerAck;
   private resolve!: (value: OwnedLedgerResult) => void;
   private reject!: (reason: object) => void;
   readonly ready = new Promise<OwnedLedgerResult>((resolve, reject) => { this.resolve = resolve; this.reject = reject; });
   origin = 0;
   private fetching = 0;
+  private fetchInstallation: number;
+  private cancelInstallation: number;
+  private processing: number;
   constructor(readonly root: RequestOwner, readonly path: "/reserve" | "/dispatch" | "/charge" | "/settle" | "/ingest", readonly expectedId?: string, readonly budget?: OwnedBudgetSequence) {
+    this.fetchInstallation = sinkOrigin(root.sink!, "retire");
+    this.cancelInstallation = sinkOrigin(root.sink!, "retire");
+    this.processing = sinkOrigin(root.sink!, "body");
     void this.ready.then(ignoreOwnedVoidOutcome, ignoreOwnedVoidOutcome);
   }
   private unknown(): void { this.flags |= 8; this.root.unknown = true; }
@@ -1996,6 +2111,13 @@ class OwnedLedgerCommand {
     try { failedSinkOrigin(this.root, this.fetching, reason); } catch { this.unknown(); }
     finally { reason = undefined; this.schedule(); }
   }
+  dispatchOriginal(cell: OwnedOriginalObservation, failed: boolean, value: unknown): void {
+    if (this.flags & 512) { value = undefined; return; }
+    try {
+      if (cell === this.observation) { if (failed) this.rejected(value); else this.accepted(value as Response); }
+      else if (cell === this.cancellation) { if (failed) this.cancelFailed(value); else this.cancelled(); }
+    } finally { value = undefined; }
+  }
   invoke(namespace: Env["BUDGET_LEDGER"] | Env["USAGE_LEDGER"], name: string, body: string, signal?: AbortSignal): void {
     let original: Promise<Response> | undefined, stub: DurableObjectStub | undefined;
     const acquiring = sinkOrigin(this.root.sink!, "acquire");
@@ -2005,8 +2127,9 @@ class OwnedLedgerCommand {
       catch (reason) { this.flags |= 2 | 4; this.fail(acquiring, reason); return; }
       try { original = stub.fetch(`https://clawrouter.internal${this.path}`, { method: "POST", body, signal }); }
       catch (reason) { this.rejected(reason); return; }
-      try { void original.then(this.accepted.bind(this), this.rejected.bind(this)); }
-      catch (reason) { this.unknown(); this.fail(this.fetching, reason); }
+      this.observation = { owner: this, kind: 0, state: 0 };
+      try { installOwnedOriginal(this.observation, original); }
+      catch (reason) { this.unknown(); this.fail(this.fetchInstallation, reason); }
     } finally {
       original = undefined; stub = undefined; body = ""; namespace = undefined as never;
       this.flags &= ~1; this.schedule();
@@ -2048,6 +2171,8 @@ class OwnedLedgerCommand {
   retireAck(): void { this.ack = undefined; this.retire(); }
   private retire(): void {
     if (this.flags & (8 | 512)) return;
+    if (!severOwnedOriginal(this.observation) || !severOwnedOriginal(this.cancellation)) { this.unknown(); return; }
+    this.observation = undefined; this.cancellation = undefined;
     this.flags |= 512; this.response = undefined;
     // The closed reply may still be held by its real caller. Only the reader's
     // graph/text/backing overlap has joined and cleared at this boundary.
@@ -2069,9 +2194,10 @@ class OwnedLedgerCommand {
       if (!this.response!.body) { this.cancelled(); return; }
       if (this.response!.body!.locked) { this.unknown(); return; }
       original = this.response!.body!.cancel(); started = true;
-      void original.then(this.cancelled.bind(this), this.cancelFailed.bind(this));
+      this.cancellation = { owner: this, kind: 1, state: 0 };
+      installOwnedOriginal(this.cancellation, original);
     } catch (reason) {
-      if (started) { this.unknown(); this.fail(this.origin, reason); }
+      if (started) { this.unknown(); this.fail(this.cancelInstallation, reason); }
       else this.cancelFailed(reason);
     } finally { original = undefined; this.flags &= ~1; this.schedule(); }
   }
@@ -2083,7 +2209,13 @@ class OwnedLedgerCommand {
         if (!(this.flags & 32)) this.fail(this.fetching, 0);
         this.retire(); return;
       }
-      if (!(this.flags & 2) || this.flags & 8) return;
+      // Installation uncertainty ends logical success, not the FIRST late
+      // capture/disposition right. Cleanup uses the already enrolled position.
+      if (this.flags & 8) {
+        if (this.response && !(this.flags & (64 | 128))) this.discard();
+        return;
+      }
+      if (!(this.flags & 2)) return;
       if (!(this.flags & (64 | 128))) {
         if (!this.response!.ok) {
           const status = this.path === "/settle" ? this.response!.status === 404 ? 404 : this.response!.status === 409 ? 409 : 0
@@ -2096,7 +2228,12 @@ class OwnedLedgerCommand {
         }
       }
       if (this.flags & 64 && this.flags & 256) this.retire();
-    } catch (reason) { this.fail(this.origin || this.fetching, reason); this.unknown(); }
+    } catch (reason) {
+      this.fail(this.processing, reason); this.unknown();
+      if (this.response && !(this.flags & (64 | 128))) {
+        try { this.discard(); } catch { this.unknown(); }
+      }
+    }
   }
 }
 // One plan owns all future positions before the first reserve. The branch
@@ -2365,6 +2502,9 @@ class OwnedLedgerAck {
   private installing = 0;
   private reading?: Promise<void>;
   private readObservation?: OwnedHttpReadObservation;
+  private closedObservation?: OwnedOriginalObservation;
+  private cancelObservation?: OwnedOriginalObservation;
+  private unlockObservation?: OwnedOriginalObservation;
   private resolveRead?: () => void;
   private readOrigin = 0;
   private cancelOrigin = 0;
@@ -2373,6 +2513,14 @@ class OwnedLedgerAck {
   private primaryOrigin = 0;
   private nativeFailure?: SinkOriginRecord;
   constructor(readonly parent: OwnedTerminalOperation | OwnedLedgerCommand, private response: Response | undefined) {}
+  dispatchOriginal(cell: OwnedOriginalObservation, failed: boolean, value: unknown): void {
+    if (this.flags & 16384) { value = undefined; return; }
+    try {
+      if (cell === this.closedObservation) { if (failed) this.closedFailed(value); else this.closed(); }
+      else if (cell === this.cancelObservation) { if (failed) this.cancelFailed(value); else this.cancelled(); }
+      else if (cell === this.unlockObservation) { if (failed) this.unlockFailed(value); else this.unlocked(); }
+    } finally { value = undefined; }
+  }
   private get root(): RequestOwner { return this.parent instanceof OwnedTerminalOperation ? this.parent.owner.root : this.parent.root; }
   private get origin(): number { return this.parent.origin; }
   private unknown(): void { this.flags |= 4; this.root.unknown = true; }
@@ -2420,7 +2568,8 @@ class OwnedLedgerAck {
         closed = this.reader.closed; started = !!closed;
         const then = closed.then;
         if (then !== ownedBoundaryThen) this.flags &= ~32768;
-        void Reflect.apply(then, closed, [this.closed.bind(this), this.closedFailed.bind(this)]);
+        this.closedObservation = { owner: this, kind: 8, state: 0 };
+        installOwnedOriginalMethod(this.closedObservation, closed, then);
       } catch (reason) {
         if (started) this.observationFailure(reason);
         else this.failure(this.closedOrigin, reason);
@@ -2540,7 +2689,8 @@ class OwnedLedgerAck {
       original = Reflect.apply(method, reader, []); started = !!original;
       const then = original!.then;
       if (then !== ownedBoundaryThen) this.flags &= ~131072;
-      void Reflect.apply(then, original, [this.cancelled.bind(this), this.cancelFailed.bind(this)]);
+      this.cancelObservation = { owner: this, kind: 2, state: 0 };
+      installOwnedOriginalMethod(this.cancelObservation, original, then);
     } catch (reason) {
       if (started) this.observationFailure(reason);
       else this.cancelFailed(reason);
@@ -2561,7 +2711,12 @@ class OwnedLedgerAck {
       this.unlockOrigin = sinkOrigin(this.root.sink!, "unlock");
       original = this.reader.releaseLock(); started = original !== undefined;
       if (!started) { this.unlocked(); return; }
-      void Promise.resolve(original).then(this.unlocked.bind(this), this.unlockFailed.bind(this));
+      let then: unknown;
+      if (original !== null && (typeof original === "object" || typeof original === "function")) then = (original as { then?: unknown }).then;
+      if (typeof then !== "function") { original = Promise.resolve(); then = ownedBoundaryThen; }
+      this.unlockObservation = { owner: this, kind: 4, state: 0 };
+      installOwnedOriginalMethod(this.unlockObservation, original, then);
+      then = undefined;
     } catch (reason) {
       if (started) this.observationFailure(reason);
       else this.unlockFailed(reason);
@@ -2630,6 +2785,9 @@ class OwnedLedgerAck {
         if (!(this.flags & 2048)) { this.unlock(); return; }
         if (this.pending || this.flags & 4) return;
         if (this.body?.locked) { this.unknown(); return; }
+        if (!severOwnedOriginal(this.closedObservation) || !severOwnedOriginal(this.cancelObservation)
+          || !severOwnedOriginal(this.unlockObservation)) { this.unknown(); return; }
+        this.closedObservation = undefined; this.cancelObservation = undefined; this.unlockObservation = undefined;
         this.reader = undefined; this.body = undefined; this.decoder = undefined;
         this.capture = undefined; this.backing = undefined; this.text = ""; this.nativeFailure = undefined;
         this.flags |= 16384; this.parent.retireAck(); return;
@@ -2643,8 +2801,16 @@ class OwnedLedgerAck {
 // five body reads/cancellations, and five queue sends. Recovery does not await
 // an unused body's cancellation. Ordinary finalization keeps its existing path.
 class OwnedTerminalOperation {
-  flags = 16; // retired, UNKNOWN, callback, rejected, installation, queued, cancel-only
-  constructor(readonly owner: OwnedAccountingTerminal, readonly code: number, readonly origin: number, public subject?: unknown) {}
+  flags = 16; // retired, UNKNOWN, FIRST, rejected, installing, queued, cancel-only
+  private observation?: OwnedOriginalObservation;
+  private installationOrigin: number;
+  private processingOrigin: number;
+  private dispositionOrigin: number;
+  constructor(readonly owner: OwnedAccountingTerminal, readonly code: number, readonly origin: number, public subject?: unknown) {
+    this.installationOrigin = sinkOrigin(owner.sink, "retire");
+    this.processingOrigin = sinkOrigin(owner.sink, "body");
+    this.dispositionOrigin = sinkOrigin(owner.sink, "cancel");
+  }
   acceptAck(value: unknown): void {
     if (!(this.flags & 128)) throw identityFailure("protocol");
     try { this.owner.accept(this.code, value); } finally { value = undefined; }
@@ -2658,44 +2824,69 @@ class OwnedTerminalOperation {
     this.flags |= 256; retireOwnedLedgerAcknowledgmentData(this.owner.root, ownedLedgerAckData);
   }
   retireAck(): void { this.flags &= ~16; this.retire(); }
+  dispatchOriginal(cell: OwnedOriginalObservation, failed: boolean, value: unknown): void {
+    if (cell !== this.observation || this.flags & 1) { value = undefined; return; }
+    try { if (failed) this.reject(value); else this.accept(value); }
+    finally { value = undefined; }
+  }
   observe(original: Promise<unknown>): void {
-    try {
-      void original.then(this.accept.bind(this), this.reject.bind(this));
-    } catch (reason) { this.unknown(reason); }
+    this.observation = { owner: this, kind: 0, state: 0 };
+    try { installOwnedOriginal(this.observation, original); }
+    catch (reason) { this.unknown(reason); }
     finally { original = undefined as never; this.flags &= ~16; this.schedule(); }
   }
   accept(value: unknown): void {
-    if (this.flags & 4) { value = undefined; return; }
+    if (this.flags & (1 | 4)) { value = undefined; return; }
     this.flags |= 4;
-    try { if (this.code < 10 && !(this.flags & 64)) this.subject = value; }
-    catch (reason) { this.unknown(reason); }
+    try {
+      if (this.code < 5 && !(value instanceof Response)) { this.flags |= 8; this.unknown(0, 1); }
+      else if (this.code < 10 && !(this.flags & 64)) this.subject = value;
+    } catch (reason) { this.flags |= 8; this.unknown(reason, 1); }
     finally { value = undefined; this.schedule(); }
   }
   reject(reason: unknown): void {
-    if (this.flags & 4) return;
+    if (this.flags & (1 | 4)) { reason = undefined; return; }
     this.flags |= 4 | 8;
-    try {
-      failedSinkOrigin(this.owner.root, this.origin, reason); reason = undefined;
-    } catch (failure) { this.unknown(failure); }
+    try { failedSinkOrigin(this.owner.root, this.origin, reason); }
+    catch (failure) { this.unknown(failure, 1); }
     finally { reason = undefined; this.schedule(); }
   }
   private schedule(): void {
     if (this.flags & (1 | 32)) return;
     this.flags |= 32;
     try { ownedBoundaryQueue(this.settleObservation.bind(this)); }
-    catch (reason) { this.unknown(reason); }
+    catch (reason) { this.unknown(reason, 1); }
   }
   private settleObservation(): void {
     this.flags &= ~32;
-    if (this.flags & (1 | 2 | 16) || !(this.flags & 4)) return;
+    if (this.flags & (1 | 16)) return;
+    // Installation completes before ACK processing. UNKNOWN preserves physical
+    // ownership but must not strand the lane's already funded logical recovery.
+    if (this.flags & 2) {
+      if (this.code < 5 && this.flags & 4 && !(this.flags & (8 | 1024))) {
+        this.flags |= 1024;
+        try { this.owner.discardFailedResponse(this.code, this.subject); }
+        catch (reason) { this.unknown(reason, 2); }
+      }
+      if (!(this.flags & 512)) {
+        this.flags |= 512;
+        try { this.owner.reject(this.code); } catch (reason) { this.unknown(reason, 1); }
+      }
+      return;
+    }
+    if (!(this.flags & 4) || this.flags & 512) return;
+    this.flags |= 512;
     try {
-      // Consumer effects begin only after observer installation and callback
-      // scope exit. A synchronous callback followed by an installation throw
-      // cannot acquire a body reader or launch a recovery from this slot.
       if (this.flags & 8) this.owner.reject(this.code);
       else this.owner.accept(this.code, this.subject);
       this.subject = undefined; this.retire();
-    } catch (reason) { this.unknown(reason); }
+    } catch (reason) {
+      this.unknown(reason, 1);
+      try { this.owner.discardFailedResponse(this.code, this.subject); }
+      catch (failure) { this.unknown(failure, 2); }
+      try { this.owner.reject(this.code); }
+      catch (failure) { this.unknown(failure, 1); }
+    }
   }
   abandonUnstarted(): void {
     if (this.flags !== 16) throw identityFailure("protocol");
@@ -2703,26 +2894,27 @@ class OwnedTerminalOperation {
   }
   syncFailure(reason: unknown): void {
     try { this.reject(reason); }
-    catch (failure) { this.unknown(failure); }
+    catch (failure) { this.unknown(failure, 1); }
     finally { reason = undefined; this.flags &= ~16; this.schedule(); }
   }
   retire(): void {
     if (this.flags & 3) return;
-    this.flags |= 1; this.subject = undefined;
-    // reject() exposes no carrier. Its first observer and this separate tail
-    // have now cleared every payload alias; UNKNOWN never reaches this point.
-    // Preserve ordinal/flags in CONTROL, without releasing funding.
+    if (!severOwnedOriginal(this.observation)) { this.unknown(undefined, 1); return; }
+    this.observation = undefined; this.flags |= 1; this.subject = undefined;
     compactRetiredSinkOrigin(this.owner.root, Math.floor(this.origin / 32));
+    compactRetiredSinkOrigin(this.owner.root, Math.floor(this.installationOrigin / 32));
+    compactRetiredSinkOrigin(this.owner.root, Math.floor(this.processingOrigin / 32));
+    compactRetiredSinkOrigin(this.owner.root, Math.floor(this.dispositionOrigin / 32));
     this.owner.retireOperation(this.code, !!(this.flags & 256));
   }
-  unknown(reason: unknown): void {
-    if (this.flags & 2) return;
-    this.flags |= 2;
-    this.owner.root.unknown = true;
-    try { failedSinkOrigin(this.owner.root, sinkOrigin(this.owner.sink, "retire"), reason); }
-    catch { /* Observer bookkeeping itself failed; UNKNOWN preserves every slot. */ }
+  unknown(reason: unknown, kind: 0 | 1 | 2 = 0): void {
+    this.flags |= 2; this.owner.root.unknown = true;
+    const recorded = kind === 2 ? 16384 : kind === 1 ? 8192 : 4096;
+    if (this.flags & recorded) { reason = undefined; return; }
+    this.flags |= recorded;
+    try { failedSinkOrigin(this.owner.root, kind === 2 ? this.dispositionOrigin : kind === 1 ? this.processingOrigin : this.installationOrigin, reason); }
+    catch { /* Independent UNKNOWN origins stay owned even if reporting fails. */ }
     finally { reason = undefined; }
-    // Started work whose observer/consumer failed is still owned. No decrement.
   }
 }
 // Fixed intent/capsule profiles supply V, K, U and W. Two graph occurrences
@@ -2731,7 +2923,7 @@ class OwnedTerminalOperation {
 const ownedIntentSerializationData = 4096 + 2 * (8 * (2 * 256 - 1 + 128) + 2 * 8192) + 8 * 16384;
 const ownedCapsuleSerializationData = 4096 + 2 * (8 * (2 * 1024 - 1 + 512) + 2 * 32768) + 8 * 65536;
 function ownedTerminalBacking(legs: number): number {
-  return (legs + 1) * (ownedLedgerAckData + 4096 + 12 * sinkOriginBytes)
+  return (legs + 1) * (ownedLedgerAckData + 4096 + 21 * ownedSinkOriginBytes)
     + 2 * legs * ownedIntentSerializationData + 2 * ownedCapsuleSerializationData;
 }
 function reserveOwnedTerminalBacking(root: RequestOwner, legs: number): void {
@@ -2741,7 +2933,7 @@ function reserveOwnedTerminalBacking(root: RequestOwner, legs: number): void {
     - (previous === undefined ? 0 : ownedTerminalBacking(previous)));
   if (!next) throw identityFailure("limit");
   root.funding = next; root.accountingTerminalLegs = legs;
-  root.sinkCredits += 12 * (legs - (previous ?? -1));
+  root.sinkCredits += 21 * (legs - (previous ?? -1));
 }
 class OwnedAccountingTerminal {
   readonly operations: (OwnedTerminalOperation | undefined)[] = new Array(15);
@@ -2877,13 +3069,29 @@ class OwnedAccountingTerminal {
       if (valid || index === 4) this.complete(index, !!valid); else this.queue(index);
     } else this.complete(code - 10, true);
   }
+  discardFailedResponse(code: number, value: unknown): void {
+    if (code >= 5 || this.launched & (1 << (5 + code))) { value = undefined; return; }
+    // Only an actual FIRST Response reaches a body-disposition position. An
+    // unrelated payload is neither inspected nor adopted as a body owner.
+    try { if (value instanceof Response) this.body(code, value, true); }
+    finally { value = undefined; }
+  }
   reject(code: number): void {
-    if (code < 5) { if (code === 4) this.complete(4, false); else this.queue(code); }
-    else if (code < 10) {
-      if (this.operations[code]!.flags & 64) return; // Diagnostic cleanup, not a new recovery.
-      if (code === 9) this.complete(4, false); else this.queue(code - 5);
-    } else if (code === 14) this.ledger(4);
-    else this.complete(code - 10, false);
+    const index = code < 5 ? code : code < 10 ? code - 5 : code - 10;
+    if (this.completed & (1 << index)) return;
+    try { if (code < 10) {
+      if (code >= 5 && this.operations[code]!.flags & 64) return;
+      if (index === 4) this.complete(4, false);
+      else if (!(this.launched & (1 << (10 + index)))) this.queue(index);
+    } else if (code === 14) {
+      if (!(this.launched & 16)) this.ledger(4);
+    } else this.complete(index, false);
+    } catch (reason) {
+      // A failed recovery preparation cannot strand its logical lane. Started
+      // operation positions remain owned and cannot be reset or replayed.
+      if (!(this.completed & (1 << index))) this.complete(index, false);
+      throw reason;
+    }
   }
   complete(index: number, ok: boolean): void {
     if (this.completed & (1 << index)) throw identityFailure("protocol");
@@ -2948,8 +3156,8 @@ export function prepareOwnedHttpAccountingTerminalPlan(cap: OwnedHttpRequest, ac
   reserveOwnedTerminalBacking(root, legs);
   if (!admitted?.legs) return; // Soft charges use the separate final terminal.
   const rollback = Math.max(0, legs - 1);
-  const ledger = ownedIntentSerializationData + ownedLedgerAckData + 4096 + 15 * sinkOriginBytes;
-  const queue = ownedIntentSerializationData + sinkOriginBytes;
+  const ledger = ownedIntentSerializationData + ownedLedgerAckData + 4096 + 18 * ownedSinkOriginBytes;
+  const queue = ownedIntentSerializationData + ownedSinkOriginBytes;
   let units = "roothttpaccountingplanattemptlegsphasephysicalresultsinks".length + "budgetusagequeueownedHttp".length;
   for (const leg of admitted.legs) units += "sequenceordinalintentnameidcapflagsreservationrequestnamespace".length
     + leg.objectName.length + leg.request.reservationId.length;
@@ -2960,7 +3168,7 @@ export function prepareOwnedHttpAccountingTerminalPlan(cap: OwnedHttpRequest, ac
     + Math.max(legs * ledger, rollback * (ledger + queue)) + metadata);
   if (!funding) throw identityFailure("limit");
   root.funding = funding;
-  root.sinkCredits += 15 * legs + Math.max(15 * legs, 16 * rollback);
+  root.sinkCredits += 18 * legs + Math.max(18 * legs, 19 * rollback);
   claimOwnedSinkFactories();
   const sequence = new OwnedBudgetSequence(root, cap, accounting, admitted, attempt);
   enrollOwnedSinkChild(root); root.budgetSequence = sequence;
@@ -3114,7 +3322,7 @@ export function tryBeginOwnedHttpRequest(request: Request, env: Env): OwnedHttpR
   if (!funding) return undefined;
   let transferred = false;
   try {
-    const terminal = funding.replace(requestMetadataBytes + terminalErrorBytes);
+    const terminal = funding.replace(requestMetadataBytes + terminalErrorBytes + 3 * ownedOriginalCellBytes);
     if (!terminal) return undefined;
     funding = terminal;
     const cap = createOwnedHttpRequest(request, env, funding);
@@ -3493,8 +3701,21 @@ export class OwnedStatusReader {
   private wire = 0;
   private reads = 0;
   private readObservation?: OwnedHttpReadObservation;
+  private fetchObservation?: OwnedOriginalObservation;
+  private closedObservation?: OwnedOriginalObservation;
+  private cancelObservation?: OwnedOriginalObservation;
+  private unlockObservation?: OwnedOriginalObservation;
   private spent: number | null = null;
   constructor(private owner: OwnedStatusController, private index: number) {}
+  dispatchOriginal(cell: OwnedOriginalObservation, failed: boolean, value: unknown): void {
+    if (this.phase === 6) { value = undefined; return; }
+    try {
+      if (cell === this.fetchObservation) { if (failed) this.fetchRejected(value); else this.fetchResolved(value as Response); }
+      else if (cell === this.closedObservation) { if (failed) this.closedRejected(value); else this.closedResolved(); }
+      else if (cell === this.cancelObservation) { if (failed) this.cancelRejected(value); else this.cancelResolved(); }
+      else if (cell === this.unlockObservation) { if (failed) this.unlockRejected(value); else this.unlockResolved(); }
+    } finally { value = undefined; }
+  }
   start(): void {
     if (this.phase) throw identityFailure("protocol");
     this.phase = 1;
@@ -3552,7 +3773,8 @@ export class OwnedStatusReader {
       original = stub.fetch(descriptor.url); started = !!original;
       const then = original.then;
       observing = true;
-      void Reflect.apply(then, original, [this.fetchResolved.bind(this), this.fetchRejected.bind(this)]);
+      this.fetchObservation = { owner: this, kind: 1, state: 0 };
+      installOwnedOriginalMethod(this.fetchObservation, original, then);
     } catch (reason) {
       this.failure(1, "fetch", reason); reason = undefined; this.flags |= 2048;
       if (observing || started) this.unknown();
@@ -3601,7 +3823,8 @@ export class OwnedStatusReader {
       }
       observing = true;
       const then = original.then; if (then !== ownedBoundaryThen) this.flags &= ~2;
-      void Reflect.apply(then, original, [this.closedResolved.bind(this), this.closedRejected.bind(this)]);
+      this.closedObservation = { owner: this, kind: 8, state: 0 };
+      installOwnedOriginalMethod(this.closedObservation, original, then);
       original = undefined;
     } catch (reason) {
       const failure = this.failure(8, "closed", reason); reason = undefined;
@@ -3731,7 +3954,8 @@ export class OwnedStatusReader {
       observing = true;
       const then = original!.then;
       if (native && then === ownedBoundaryThen) this.flags |= 4096; else this.flags &= ~4096;
-      void Reflect.apply(then, original, [this.cancelResolved.bind(this), this.cancelRejected.bind(this)]);
+      this.cancelObservation = { owner: this, kind: 2, state: 0 };
+      installOwnedOriginalMethod(this.cancelObservation, original, then);
       original = undefined;
     } catch (reason) {
       this.failure(6, "cancel", reason); reason = undefined; this.flags |= 16;
@@ -3748,7 +3972,12 @@ export class OwnedStatusReader {
       { const reader = this.reader, method = reader.releaseLock; original = Reflect.apply(method, reader, []); }
       if (original === undefined) { this.unlockResolved(); return; }
       observing = true;
-      void Promise.resolve(original).then(this.unlockResolved.bind(this), this.unlockRejected.bind(this));
+      let then: unknown;
+      if (original !== null && (typeof original === "object" || typeof original === "function")) then = (original as { then?: unknown }).then;
+      if (typeof then !== "function") { original = Promise.resolve(); then = ownedBoundaryThen; }
+      this.unlockObservation = { owner: this, kind: 4, state: 0 };
+      installOwnedOriginalMethod(this.unlockObservation, original, then);
+      then = undefined;
       original = undefined;
     } catch (reason) {
       this.failure(7, "unlock", reason); reason = undefined; this.flags |= 16;
@@ -3823,6 +4052,9 @@ export class OwnedStatusReader {
       }
       if (this.phase !== 5 || this.pending || this.flags & (256 | 8192)) return;
       if (this.body?.locked) { this.unknown(); return; }
+      if (!severOwnedOriginal(this.fetchObservation) || !severOwnedOriginal(this.closedObservation)
+        || !severOwnedOriginal(this.cancelObservation) || !severOwnedOriginal(this.unlockObservation)) { this.unknown(); return; }
+      this.fetchObservation = undefined; this.closedObservation = undefined; this.cancelObservation = undefined; this.unlockObservation = undefined;
       this.reader = undefined; this.body = undefined; this.response = undefined;
       this.advanceWork = undefined as never; this.nativeFailure = undefined; this.decoder = undefined;
       this.text = ""; this.backing = undefined; this.value = undefined;

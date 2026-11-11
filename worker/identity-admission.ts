@@ -523,6 +523,17 @@ function materializationReadRejected(this: MaterializationReadObservation, reaso
   if (this.state & (1 | 8)) { reason = undefined; return; }
   try { this.owner?.dispatchRead(this, true, reason); } finally { reason = undefined; }
 }
+interface MaterializationVoidObservation { owner: PrivateMaterializationState | undefined; kind: 2 | 4 | 8; state: number }
+function materializationVoidFulfilled(this: MaterializationVoidObservation): void {
+  if (!this.owner || this.state & (1 | 8)) return;
+  this.state |= 1 | 16;
+  try { this.owner.dispatchVoid(this, false, undefined); } finally { this.state &= ~16; }
+}
+function materializationVoidRejected(this: MaterializationVoidObservation, reason: unknown): void {
+  if (!this.owner || this.state & (1 | 8)) { reason = undefined; return; }
+  this.state |= 1 | 16;
+  try { this.owner.dispatchVoid(this, true, reason); } finally { reason = undefined; this.state &= ~16; }
+}
 class PrivateMaterializationState {
   source = new IdentitySource(null);
   response?: Response;
@@ -536,6 +547,9 @@ class PrivateMaterializationState {
   private pending = 0;
   private seen = 0;
   private installing = 0;
+  private closedObservation?: MaterializationVoidObservation;
+  private cancelObservation?: MaterializationVoidObservation;
+  private unlockObservation?: MaterializationVoidObservation;
   private readReady?: Promise<void>;
   private readObservation?: MaterializationReadObservation;
   private resolveRead?: () => void;
@@ -565,6 +579,28 @@ class PrivateMaterializationState {
     catch { this.holdUnknown(); }
     finally { reason = undefined; }
   }
+  dispatchVoid(cell: MaterializationVoidObservation, failed: boolean, reason: unknown): void {
+    if (this.flags & 64 || (cell.kind === 8 ? this.closedObservation : cell.kind === 2 ? this.cancelObservation : this.unlockObservation) !== cell) { reason = undefined; return; }
+    try { if (failed) this.rejected(cell.kind, reason); else this.observed(cell.kind); }
+    finally { reason = undefined; }
+  }
+  private observeVoid(kind: 2 | 4 | 8, original: unknown, then: unknown): void {
+    let cell: MaterializationVoidObservation | undefined = { owner: this, kind, state: 0 };
+    if (kind === 8) this.closedObservation = cell;
+    else if (kind === 2) this.cancelObservation = cell;
+    else this.unlockObservation = cell;
+    try {
+      void Reflect.apply(then as Function, original, [materializationVoidFulfilled.bind(cell), materializationVoidRejected.bind(cell)]);
+      cell.state |= 2;
+    } catch (reason) { cell.state |= 4; throw reason; }
+    finally { cell = undefined; original = undefined; then = undefined; }
+  }
+  private severVoid(cell: MaterializationVoidObservation | undefined): boolean {
+    if (!cell) return true;
+    if (cell.state !== 3) return false;
+    cell.state = 8; cell.owner = undefined;
+    return true;
+  }
   private installedFailure(reason: unknown): void {
     this.holdUnknown();
     try { this.diagnostic(this.origin(12), reason); } catch { this.holdUnknown(); }
@@ -581,7 +617,7 @@ class PrivateMaterializationState {
       if (privateIdentityNativeClosed(reader)) this.native |= 1;
       original = reader.closed; started = !!original;
       const then = original.then; if (then !== privateIdentityNativeThen) this.native &= ~1;
-      void Reflect.apply(then, original, [this.observed.bind(this, 8), this.rejected.bind(this, 8)]);
+      this.observeVoid(8, original, then);
     }
     catch (error) { if (started) this.installedFailure(error); else { this.diagnostic(this.closedOrigin, error); this.flags |= 128; this.observed(8); } }
     finally { original = undefined; this.installing--; this.schedule(); }
@@ -705,7 +741,7 @@ class PrivateMaterializationState {
       if (this.native & 1 && privateIdentityNativeReaderOperation(reader, method, "cancel")) this.native |= 4; else this.native &= ~4;
       original = Reflect.apply(method, reader, ["identity admission stopped"]); started = !!original;
       const then = original!.then; if (then !== privateIdentityNativeThen) this.native &= ~4;
-      void Reflect.apply(then, original, [this.observed.bind(this, 2), this.rejected.bind(this, 2)]);
+      this.observeVoid(2, original, then);
     }
     catch (error) { if (started) this.installedFailure(error); else this.rejected(2, error); }
     finally { original = undefined; this.installing--; this.schedule(); }
@@ -715,13 +751,17 @@ class PrivateMaterializationState {
     this.pending |= 4; this.unlockOrigin = this.origin(6);
     this.unlocking = new Promise<void>(resolve => { this.resolveUnlock = resolve; });
     this.installing++;
-    let original: unknown, started = false;
+    let original: unknown, then: unknown, started = false;
     try {
       original = this.source.reader.releaseLock(); started = original !== undefined;
-      if (started) void Promise.resolve(original).then(this.observed.bind(this, 4), this.rejected.bind(this, 4));
-      else this.observed(4);
+      if (!started) this.observed(4);
+      else {
+        if (original !== null && (typeof original === "object" || typeof original === "function")) then = (original as { then?: unknown }).then;
+        if (typeof then !== "function") { original = Promise.resolve(); then = privateIdentityNativeThen; }
+        this.observeVoid(4, original, then);
+      }
     } catch (error) { if (started) this.installedFailure(error); else this.rejected(4, error); }
-    finally { original = undefined; this.installing--; this.schedule(); }
+    finally { original = undefined; then = undefined; this.installing--; this.schedule(); }
   }
   finishReader(kind: "eof" | "cancel"): Promise<void> {
     if (this.ending) return this.ending;
@@ -747,6 +787,10 @@ class PrivateMaterializationState {
         this.diagnostic(origin, error); error = undefined; fail("cleanup");
       }
     }
+    if (!this.severVoid(this.closedObservation) || !this.severVoid(this.cancelObservation) || !this.severVoid(this.unlockObservation)) {
+      this.holdUnknown(); await new Promise<never>(() => {});
+    }
+    this.closedObservation = undefined; this.cancelObservation = undefined; this.unlockObservation = undefined;
     this.abort = undefined; this.source.reader = undefined; this.source.body = null;
     this.clearRead(); this.capture = undefined; this.first = undefined; this.closed = undefined; this.unlocking = undefined;
     if (this.flags & 128) fail("cleanup");

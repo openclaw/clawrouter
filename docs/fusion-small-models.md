@@ -3,6 +3,11 @@
 Research reviewed on 2026-11-05. Keep production Fusion opt-in. This plan tests
 the mechanism before paying for another frontier-model comparison.
 
+Draft refinement skips verification when a response applies no patch. It tells
+the next attempt whether to shorten truncated output or repair invalid edit
+anchors, while retaining the current source and the same three-attempt ceiling.
+Applied drafts still require the visible tests and supplied reproducer to pass.
+
 ## What the evidence supports
 
 | Primary source | Relevant result | Engineering consequence |
@@ -396,6 +401,39 @@ same total calls available to each control. All calls and failed attempts count
 against the trial and campaign budgets. This is an experimental policy, not a
 claim of improvement.
 
+Set `FUSION_PAIR_POLICY=edit-handoff` to test an execution handoff instead of
+an up-front plan. The strong model starts the repair. After its first edit
+passes the visible tests, the cheap model receives the current source and
+working notes and continues verification or repair. A submission before that
+point also requires a successor turn. Failed edits do not trigger a handoff,
+and the ordinary turn-based handoff threshold is disabled for this policy.
+Both workers share the same total call, time and spend limits. Passing visible
+tests selects a handoff point; it does not certify correctness. Independent
+acceptance still scores the final patch. This policy is experimental and needs
+matched quality, cost and latency measurements; the default remains `architect`.
+
+The handoff also includes the latest executed behavior probe and its pass/fail
+result when the source is at most 8 KiB. This is untrusted context that may
+predate the last edit, not acceptance evidence. The successor must inspect its
+coverage and rerun it against current source. An oversized latest probe is
+omitted in full; an older probe is not substituted. Raw probe source and output
+are not added to benchmark receipts.
+
+The successor receives verification-specific instructions and the current source
+snapshot. Its task context retains the read-only repository context but omits the
+initial editable-source preload. It must check task invariants and repair concrete
+failures, then submit when verification is complete. It keeps the full remaining
+allowance; there is no forced early submission. Probe-use receipts require a
+successful model response to context that includes the transferred probe.
+
+Set `FUSION_PAIR_POLICY=matched-handoff` to compare the cheap successor against
+a strong successor using the same handoff point, verification instructions,
+current-source context and shared limits. The cheap-only arm stays unchanged.
+The report records `matched-handoff` as its policy, `strong` for the unmixed
+control and `edit-handoff` for the mixed candidate. This control separates model
+selection from the effect of changing the execution protocol. Do not pool it
+with ordinary `edit-handoff` blocks as one repeated protocol.
+
 Run from a committed task checkout with qualified workload receipts and an
 explicit JSON configuration. Only credentials for the selected models are
 required. Supply credentials through the existing secret injector; do not put
@@ -424,6 +462,26 @@ campaign's accumulated spend and unresolved reservations before starting.
 `pair.json` records exact source and dataset digests, declared splits, model
 pins, both controls, action metadata, acceptance counts, elapsed time and actual
 usage-based charges. It excludes prompts, completions and generated source.
+Each call saves `requestDigest` (SHA-256 of the exact serialized provider body),
+UTF-8 `requestBytes`, and the input-message `promptDigest` before dispatch.
+These fields remain available on HTTP or transport failures without retaining
+request content or credentials. They identify a prepared request, not proof of
+provider receipt or billing; unresolved charges remain reserved.
+Single-block analysis reports cost savings versus strong, summed elapsed time,
+latency ratio, and whether cheap dominates the candidate on observed quality,
+cost and time. Missing or invalid time leaves latency and dominance unknown.
+Actual call identities distinguish mixed attempts and rescues from single-model
+resampling; neither savings nor a passing public check establishes a fusion gain.
+
+New paired-call receipts include `usageBreakdown`: disjoint uncached input,
+cache-read input, ordinary cache-write input, one-hour cache-write input, and
+output token counts. Use each model pin's `usagePrice` tariff for these buckets;
+`price` is the conservative reservation tariff. One-hour writes use twice the uncached input rate. Output counts already include
+reasoning tokens. The existing top-level input count retains its provider's
+semantics. Older receipts without a breakdown cannot reconstruct cache discounts;
+missing cache counts must not be interpreted as zero. These are tariff estimates,
+not provider invoices.
+
 An unknown charge retains its reservation and stops the campaign. Provider
 refusal also stops the campaign, without retry or model fallback.
 
@@ -458,3 +516,46 @@ and report incomplete attempts and transport reservations. Do not tune against
 acceptance failures and then describe the same tasks as held out.
 
 Literal source inspection reports `queryMatched: false` with no replacement source when a query has no match. Search text is literal; use a shorter query or an explicit line number after a miss.
+
+
+## Accounting cleanup evaluation task
+
+`benchmarks/fusion/cleanup-error-workloads.json` adds a pinned real repair for
+reservation rollback diagnostics. Only `worker/accounting.ts` is editable.
+The original accounting tests are visible; final verification replaces that
+same test path with the repaired revision's extended suite in a fresh sandbox.
+Qualification must show the original tests pass both source revisions, the
+extended suite rejects the original, and the repaired source passes it.
+
+This task has not been used for model inference at introduction. It remains a
+development task; once used for tuning it cannot support an unseen validation
+claim. The supplied instruction is the behavioral contract, not access to the
+reference source or final tests. No model call belongs to fixture qualification.
+
+
+## Lifecycle validation tasks
+
+`benchmarks/fusion/lifecycle-holdout-workloads.json` adds two development
+tasks from merged source fixes: credential cold-import settlement and
+assignment revision publication. The first joins concurrent imports without
+changing failure identity; the second combines compact revisions with ordered
+reconciliation and current-owner reads.
+
+Qualify the manifest with `scripts/qualify-fusion-workloads.mjs` before any
+model calls. Qualification must show the known source repair passes both the
+original visible tests and the independent acceptance tests, while the original
+source fails acceptance. Initial sandbox qualification passed:
+
+| Task | Original visible | Reference visible | Original acceptance | Reference acceptance |
+| --- | --- | --- | --- | --- |
+| Cold imports | 40/40 | 40/40 | 42/51 | 51/51 |
+| Assignment revisions | 11/11 | 11/11 | 5/12 | 22/22 |
+
+The original assignment implementation lacks the newly exported preparation
+functions, so its new API test module cannot load and its executed count is lower. No model result or gain is claimed
+by qualification; changed manifests or source pins require fresh qualification.
+
+The acceptance runner replaces the listed test files from the pinned reference
+only after repair. Those test bodies and the reference source must remain
+unavailable to model planning, editing and routing. Once used for inference,
+these cases are exposed and cannot remain an unseen validation set.

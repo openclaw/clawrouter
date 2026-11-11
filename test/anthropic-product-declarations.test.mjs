@@ -31,7 +31,7 @@ test("Anthropic product declarations preserve the entire legacy execution snapsh
   delete legacy.products;
   const { products, offer_definitions, ...execution } = compiled.providers[0];
   assert.equal(products.length, 2);
-  assert.equal(offer_definitions.length, 42);
+  assert.equal(offer_definitions.length, 46);
   assert.deepEqual({ ...compiled, providers: [execution] }, compileProviderSnapshot([legacy]));
   const bundled = JSON.parse(readFileSync(new URL("../worker/generated/provider-snapshot.json", import.meta.url), "utf8"));
   assert.deepEqual(compiled.providers[0], bundled.providers.find(provider => provider.id === "anthropic"));

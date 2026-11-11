@@ -71,6 +71,7 @@ products:
           - anthropic/claude-opus-5-5
           - anthropic/claude-opus-5
           - anthropic/claude-sonnet-5
+          - anthropic/claude-fable-5-2
           - anthropic/claude-fable-5-1
           - anthropic/claude-fable-5
           - anthropic/claude-opus-4-8
@@ -387,6 +388,45 @@ models:
         cacheWrite5mInputMicrosPerMillion: 2500000
         cacheWrite1hInputMicrosPerMillion: 4000000
         outputMicrosPerMillion: 10000000
+        maxInputTokens: 1000000
+        defaultMaxOutputTokens: 128000
+    - id: anthropic/claude-fable-5-2
+      upstream: claude-fable-5-2
+      capabilities: [llm.messages, llm.count_tokens]
+      supportedReasoningEfforts: [low, medium, high, xhigh, max]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          messages:
+            sources: [https://platform.claude.com/docs/en/models/fable-5-2/overview]
+            checkedAt: "2026-11-10"
+            input: [text, image]
+            contextWindow: 1000000
+            maxOutputTokens: 128000
+            inference: {chat: true}
+          count_tokens:
+            sources: [https://platform.claude.com/docs/en/models/fable-5-2/overview, https://platform.claude.com/docs/en/build-with-claude/token-counting]
+            checkedAt: "2026-11-10"
+            input: [text, image]
+            contextWindow: 1000000
+      pricingRef: anthropic-claude-fable-5-2-standard-2026-11-09
+      pricing:
+        effectiveAt: "2026-11-09"
+        source: https://platform.claude.com/docs/en/models/fable-5-2/overview
+        anthropicModifiers:
+          checkedAt: "2026-11-10"
+          sources:
+            - https://platform.claude.com/docs/en/build-with-claude/fast-mode#pricing
+            - https://platform.claude.com/docs/en/manage-claude/data-residency#pricing
+            - https://platform.claude.com/docs/en/models/fable-5-2/migration-guide
+          fastMultiplier: 2
+          usMultiplier: 1.1
+          serviceTiers: [standard]
+        inputMicrosPerMillion: 8000000
+        cachedInputMicrosPerMillion: 200000
+        cacheWrite5mInputMicrosPerMillion: 10000000
+        cacheWrite1hInputMicrosPerMillion: 16000000
+        outputMicrosPerMillion: 40000000
         maxInputTokens: 1000000
         defaultMaxOutputTokens: 128000
     - id: anthropic/claude-fable-5-1

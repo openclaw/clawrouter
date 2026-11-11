@@ -1,6 +1,8 @@
 # Private owned HTTP Chat staging
 
-This is an inactive CODE_COMPLETE33 implementation checkpoint. The default Worker export and
+This is an inactive CODE_COMPLETE33 source repair against exact main
+`7b87537df59c39ae1bae0cfa748208572fa4d19f`, preserving the previously published
+`236366c0a7209b8c71b325051d935bb7820bb667` ancestry. The default Worker export and
 ordinary HTTP authentication, selection and credential-cache entrypoints remain
 unchanged. The named compiled HTTP entry and pinned UNIFIED client witness are
 implemented and registered, but the complete vertical is not qualified.
@@ -3252,17 +3254,17 @@ process or Workerd isolate: caller/body roots and tracked actual native operatio
 join, while the explicitly unresolved retirement stays funded until isolate end.
 Isolate disposal is not reported as private physical retirement or a refund.
 
-This source checkpoint has no remaining known implementation blocker from the
-adopted scope33 amendments. It is eligible only for ROOT's immutable-source review
-and possible candidate-specific test-only draft lease. Whole source inventories,
+The historical236 source checkpoint was subsequently found to need the
+repairs listed below. Its earlier no-known-blocker statement is superseded. The revised source requires a new immutable-source review and a new
+candidate-specific test-only draft lease. Whole source inventories,
 exact hosted9CI/bothCodeQL/38-client plus aggregate/new-fixture qualification and
 normal readiness remain outstanding. No runtime, publication, deployment or
 landing authority is implied by CODE_COMPLETE.
 
-### CODE_COMPLETE33 source packet
+### Historical236 CODE_COMPLETE33 source packet
 
-The source-only gate checks raw syntax in all33 changed production modules and
-all changed fixture sources, plus the14 generated observer/router programs.
+The historical source-only gate checked raw syntax in all33 changed production
+modules and changed fixture sources, plus14 generated observer/router programs.
 These checks parse source; they do not execute the Worker, Node fixtures or
 Workerd. Frozen4, the unchanged body-budget/json-tokens/service-tiers modules,
 and the exact2931-byte completion prefix remain identical to the retained base.
@@ -3346,3 +3348,240 @@ worker/utils.ts
 worker/venice-chat-authority.ts
 worker/venice-chat-runtime.ts
 ```
+
+
+### Exact-main repair: four grant attempts and retained generic credentials
+
+The merge target is frozen at `7b87537df59c39ae1bae0cfa748208572fa4d19f`.
+The previous236 candidate remains an ancestor. Main's refresh ownership,
+`pendingRefreshToken`, Durable Object producer/schema changes, provider contracts,
+model split and ordinary Anthropic credit inspection are inherited main changes.
+They do not enlarge the33-file task scope. The old `cbabe` manifests and counts
+above are historical frozen references, not the new task-delta baseline.
+
+Private Chat now shares main's four-distinct-grant policy. Four fixed ports are
+funded before initial selection/count effects. Each port binds the exact input,
+signal, permit, credential and prepared/upload result; it has eight fields,
+including explicit undefined fields. The ordered cumulative exclusion Set and
+immutable per-attempt snapshots remain fixed retry authority, never paid payload
+workspace. Preparation failures and upstream rejections spend one shared budget.
+The initial call uses the caller signal; response-driven alternatives use the
+active operation signal, including their internal preparation retries. A pending
+alternative does not replace the last deliverable prepared/upload association.
+Only complete preparation plus abort checks commits it. A failed alternative
+keeps the old response and accounting grant; there is no fifth attempt or new
+reservation/event ID.
+
+The main response-retry conjunction is preserved. Successful Venice Chat
+preparation assigns a truthy `selection.nativeResponse` for JSON and SSE; the
+conjunction already excludes that descriptor. GMI is excluded by the existing
+provider condition. Neither receives a new exclusion or lifetime mechanism.
+Their full32MiB future revalidation/codec backing remains unchanged. Retryable
+materialization failure occurs before either future owner is created. Its
+nonretained cleanup must join before another preparation can proceed; UNKNOWN
+never qualifies as clean retirement.
+
+A completed eligible generic preparation can atomically reduce its foreground
+credential lease, after the actual provider await and all source/cache/provider
+finally tails. The cache run records successful original completion or a genuine
+HIT, then records completion of its cleanup. Clearing `run.original` alone is
+insufficient. The completed port, exact credential/request/permit, deleted
+provider registrations and absence of future credential callbacks are checked.
+The complete frozen grant remains retained, including unknown fields. A fixed
+iterative record census returns only a scalar:
+
+```text
+G = 8 × (containers + 2 × members + entries + values) + 2 × units
+R = G + 4096 + 6 × (owner.id.length + run.command.key.length)
+```
+
+The record ceiling gives `G <= 3407872` bytes. Its census source plus parked
+cursor/key-vector envelope is6031624 bytes before actual ID allowances. It is
+checked while the full32MiB ticket remains held, before traversal factories.
+The cursor has four fields; all key cells, string primitive occurrences and
+units are paid variable CONTROL. Active descriptors, calls and local operands
+remain fixed CONTROL. The census clears its workspace before returning. No
+recursive execution, extra quota or COMMON release/reacquire is introduced.
+
+The4096 component names this retained slice and its small replacement transition:
+
+| Retained structure | Containers | Own fields | Field-name units | Conservative bytes including a scalar cell for every field |
+|---|---:|---:|---:|---:|
+| Credential owner, including signal/reduction |1|15|107|582|
+| Cache run, including completion |1|8|56|312|
+| Complete credential command |1|7|40|256|
+| Hot-cache configuration |1|2|15|86|
+| Consumption lease |1|2|13|82|
+| Old and successor exact charge overlap |2|2|8|80|
+| Credential capability |1|1|7|46|
+
+The table totals1444 bytes before dynamic ID/key occurrences. A further64 fixed
+product component covers the local replacement activations, arguments, callee
+references, primitive checks and return aliases; current registry association
+cells remain independently backed. This is a slice bound, not a proof that the
+complete128 windows fit. New port/owner links and earlier HTTP overlap remain
+in the separate merged fixed-window inventory. `GenerationConsumptionLease.replace`
+performs the existing atomic COMMON transfer; the port is marked retained only
+after success. The borrower, complete command, selected owner and generation
+parents remain live for invalidation and final retirement. Cache publication,
+eviction, body EOF and cancellation initiation do not release them.
+
+At attempt j, the credential contribution is32MiB plus prior retained R values,
+plus every independent HTTP/source/cache/retention/accounting obligation. Four
+maximum-size grants are not promised to fit COMMON96MiB. Actual capacity refusal
+before the next effect remains required. Generic reduction is neither physical
+retirement nor permission to reclaim an old response, upload or UNKNOWN owner.
+
+### Exact-main repair: actual observers, recovery and archive execution
+
+Private returned unlock work is observed directly. A plain nonthenable completes
+without a synthetic failure. For a thenable, its actual `then` getter/call runs
+once with the original receiver. Both callback fulfillment values and the call
+return are discarded without assimilation. FIRST precedes reentry; a callback
+followed by an installation throw, including undefined, records a distinct
+installation failure and retains UNKNOWN. Independent closed/read/cancel/tails
+remain required. Ordinary InputRetirement and ordinary bridge helpers are unchanged.
+
+The provider-fetch, upload-pipe, sink-void, registration, acquisition, standalone
+ledger and terminal originals now use fresh severable cells. ACK/status closed,
+cancel and returned-unlock observers and lower private admission/materialization
+observers use the same discipline. Escaping handlers bind only their cell.
+FIRST, successful installation, returned callback tails, payload disposition and
+actual physical end precede severing. A retained retired handler has no owner or
+payload link; pending or UNKNOWN cells keep their funding. Captured internal
+microtask scheduling is not an external original. No garbage-collection or
+native-heap claim follows from severing.
+
+Terminal FIRST is staged until installation returns. An accepted Response's
+throwing `ok` getter, observer installation failure or processing failure drives
+its existing once-only logical recovery or honest false result. Installation,
+processing and body-disposition failures have independent prepaid origins.
+UNKNOWN does not strand logical accounting and does not discard the late FIRST
+Response cleanup right. A late genuine response starts its enrolled disposition,
+without ACK rescue, replay, new IDs or refund. Duplicate/stale/post-retirement
+payloads remain untouched. Ledger cleanup, queue recovery and final accounting
+can overlap; all underlying owners remain additive.
+
+Observer-cell products are added to the existing origin components. Current
+forward/rollback ledger command admission uses18 composite origins, queue uses
+one, and final-terminal lane admission uses21; these are source components, not
+whole DATA or fixed-window certificates. Initial14336 refusal behavior remains
+unchanged. New independent diagnostics and observer fields are not free credit.
+
+Private archive admission/copy uses an iterative traversal instead of the
+previous depth32 recursive execution. The same accepted profile, descriptors,
+gateway header filtering, own-property order, inert toJSON, undefined omission,
+array nulls and depth32 acceptance remain. Every fresh container is null-prototype;
+ordinary admission/copy and the existing chunk/quote/byte algorithms are unchanged.
+Six-field parked cursors, key vectors and source/destination aliases are paid
+variable CONTROL before factories. Active descriptors/calls remain fixed512.
+The archive workspace depth derives from the unchanged archive32 profile, not
+from a new intake depth cap. Copied graph, source, slab/output, R2 and pipe/cancel
+originals retain their separate overlap and physical joins.
+
+Tool pricing now counts a primitive-value cell for every string occurrence in
+the top/tag arrays and their actual concat/inputTools copies. In particular513
+empty strings with no card require at least8224 bytes. Business classification,
+array-valued type coercion, Infinity ancestry, cache one-hour precedence and
+serialization/media thresholds remain unchanged. Real added workspace and
+observer components can reduce COMMON headroom; old exact capacity parity is
+not claimed.
+
+### Revised candidate evidence and remaining qualification
+
+Authored Node and exact Workerd witnesses cover generic prep/response/mixed
+four-attempt schedules, no fifth attempt, preserved old responses, cumulative
+snapshots/signals, complete retained-record census and wrong/reentrant/duplicate
+reduction, unknown fields and cache HIT, codec retry exclusions, direct returned
+unlock values and callback-then-throw, late terminal Response cleanup and same-ID
+recovery, retained inert callbacks, archive depth32/wide keys and stream bytes,
+and empty-string tool workspace. Existing held-source and UNKNOWN witnesses
+assert no credential reduction. All remain UNRUN_CODE_ONLY_HOSTED.
+
+Production native Headers ownership remains limited to Workerd1.20261021.1 with
+compatibility_date2026-06-05 and enable_request_signal. Node clean-intrinsic tests
+are semantic regressions only; hostile or previously exposed Undici Headers are
+unsupported. The trust, narrow marker transaction, sealed queue handoff and
+explicit private usage/normalizer getter rules above remain in force.
+
+The new task delta is against exact main7b875. Frozen4, body-budget, json-tokens
+and service-tiers remain exact against both main7b875 and cbabe. The approved
+2931-byte ProxyCompletion/private-leaf fragment has SHA256
+`54d815cdf65b28efc425a9692c974ca8522687a843af7f42b432e3034614640b`.
+The complete DATA/COMMON, each operation/source/read/terminal128 and sync512,
+paid traversal workspace and permanent65536 inventories remain OPEN. Code/source
+syntax is not runtime qualification, and no new publication or landing authority
+follows from this repair.
+
+The revised task manifest contains33 production modules and57 total paths.
+The source grammar packet contains54 raw files plus16 generated programs
+(70 syntax checks); no dependency-backed check or semantic test was executed.
+Main's `captureResponse`, `inspectJsonError`, ordinary `observeUsage`, header
+stripper, accounting receipt/mathematics and full Durable Object producer classes
+remain exact. `prepareSelected` recovers exact main after removal of the private
+undefined argument; metadata prefix inverses and frozen references remain exact.
+
+```text
+.github/workflows/openclaw-contract.yml
+CHANGELOG.md
+docs/private-owned-http-chat.md
+test/fixtures/openclaw-owned-http-chat-contract.test.ts
+test/helpers/owned-http-chat-fixture.mjs
+test/helpers/owned-json-parser-cases.mjs
+test/helpers/owned-json-parser-observer.mjs
+test/helpers/owned-static-custody-observer.mjs
+test/openclaw-owned-http-chat.test.mjs
+worker/access-json.ts
+worker/accounting.ts
+worker/authority.ts
+worker/content-retention.ts
+worker/correlation.ts
+worker/credential-cache.ts
+worker/credential-preflight-source.ts
+worker/credential-preflight.ts
+worker/gmi-organization-binding.ts
+worker/grant-credentials.ts
+worker/http-identity-owner.ts
+worker/identity-admission.ts
+worker/index.ts
+worker/json-body.ts
+worker/ledgers.ts
+worker/native-errors.ts
+worker/pricing.ts
+worker/provider-auth.ts
+worker/provider-templates.ts
+worker/providers.ts
+worker/proxy-accounting.ts
+worker/proxy-auth.ts
+worker/proxy-completion.ts
+worker/proxy-response.ts
+worker/proxy-selection.ts
+worker/proxy-upstream-request.ts
+worker/proxy.ts
+worker/response-control-authorization.ts
+worker/soft-budget.ts
+worker/test/accounting-preflight-workerd.test.mjs
+worker/test/accounting-preflight.test.mjs
+worker/test/json-body.test.mjs
+worker/test/owned-http-chat-workerd.test.mjs
+worker/test/owned-http-intake.test.mjs
+worker/test/owned-http-legacy-selection-workerd.test.mjs
+worker/test/owned-http-legacy-selection.test.mjs
+worker/test/owned-http-pricing.test.mjs
+worker/test/owned-http-revalidation.test.mjs
+worker/test/owned-http-sinks.test.mjs
+worker/test/owned-http-upload-workerd.test.mjs
+worker/test/owned-http-upload.test.mjs
+worker/test/owned-json-parser.test.mjs
+worker/test/owned-reader-driver.test.mjs
+worker/test/proxy-completion.test.mjs
+worker/token-usage.ts
+worker/utils.ts
+worker/venice-chat-authority.ts
+worker/venice-chat-runtime.ts
+```
+
+The repaired implementation and scoped authored fixtures are code-complete.
+This status does not close any of the OPEN inventories or authorize runtime,
+publication, readiness or landing. The exact immutable commit/tree/patch hashes
+are supplied in the accompanying handoff.

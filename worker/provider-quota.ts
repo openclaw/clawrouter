@@ -3,8 +3,11 @@ import type { CompiledQuotaConfig, CompiledQuotaWindow, GrantRuntimeState } from
 
 // Anthropic's unified rejection can describe a model/overage claim while the
 // account-wide windows remain allowed. Keep that signal out of account cooldown.
-// No plan-name inference, paid fallback or response-body consumption.
-export function observeProviderGrantQuota(providerId: string | undefined, response: Pick<Response, "status" | "headers">, quota: CompiledQuotaConfig, model?: string | null, nowMs = Date.now()): GrantRuntimeState | null {
+// No plan-name inference or paid fallback.
+export function observeProviderGrantQuota(providerId: string | undefined, response: Pick<Response, "status" | "headers">, quota: CompiledQuotaConfig, model?: string | null, nowMs = Date.now(), creditExhausted = false): GrantRuntimeState | null {
+  // A rejected prepaid balance has no published reset. Recheck after five
+  // minutes through normal selection; no probe or permanent credential disable.
+  if (creditExhausted) return quotaRuntime([{ id: "credit-balance", kind: "credits", remaining: 0, limit: null, unit: null, window: null, resetAt: new Date(nowMs + 300_000).toISOString() }], "provider_response", nowMs);
   if (providerId !== "anthropic" || ![200, 429].includes(response.status)) return observeGrantQuota(response, quota, nowMs);
   const headers = new Headers(response.headers), prefix = "anthropic-ratelimit-unified-";
   const value = (name: string) => headers.get(prefix + name)?.trim().toLowerCase() ?? "";
@@ -32,4 +35,13 @@ export function observeProviderGrantQuota(providerId: string | undefined, respon
   if (!resets.length) return generic; // Unknown recovery: retain the bounded conservative cooldown.
   const windows = [...(generic?.windows ?? []), { ...parsed, models: [model], resetAt: new Date(Math.max(...resets)).toISOString() }];
   return quotaRuntime(windows, "provider_response", nowMs);
+}
+
+export function providerCreditExhausted(providerId: string, status: number, body: string | undefined): boolean {
+  if (providerId !== "anthropic" || status !== 400 || body === undefined) return false;
+  try {
+    const payload = JSON.parse(body);
+    return payload?.type === "error" && payload.error?.type === "invalid_request_error"
+      && typeof payload.error.message === "string" && /^Your credit balance is too low to access the Anthropic API\b/i.test(payload.error.message);
+  } catch { return false; }
 }

@@ -148,6 +148,7 @@ export function actionFeedback(code, action, task) {
 }
 
 export async function runAgent(task, image, strategy, trialId, config, invoke, engine, options = {}) {
+  if (options.handoffAfterEdit !== undefined && (strategy !== 'handoff' || typeof options.handoffAfterEdit !== 'boolean')) throw new Error('invalid_edit_handoff');
   const box = await sandbox(image), started = performance.now();
   const actions = [];
   let memory = '';
@@ -157,18 +158,33 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
   messages[0].content += ' read and search accept existing FILE paths only: no directories, globs or shell commands. Leave search paths empty to search editable files. Search query is literal text, at most 200 characters. An edit action accepts 1–8 edits; each search must match exactly once in current source.';
   let selectedCandidate = null, candidatesCompared = false;
   let planUsed = false, reviewUsed = false, handoffUsed = false;
+  let handoffReady = false;
+  let handoffProbe = '';
+  let handoffProbeUsed = false;
+  let handoffMessage;
+  let handoffHasProbe = false;
+  let taskContext;
   let outcome = 'turn_limit', escalated = false, forceEscalation = false, turns = 0, invalidActions = 0, toolMs = 0, publicPassed = false, adviserFailures = 0, truncationRetries = 0;
   const remaining = () => Math.max(1, config.deadlineMs - Math.ceil(performance.now() - started));
   const handoff = async () => {
     const files = await readSource(box, task.editPaths, remaining());
-    messages.splice(2, messages.length - 2, { role: 'user', content:
-      `You are taking over an attempted repair. Independently inspect and test the current source against the task. Do not trust the predecessor's conclusion; preserve correct changes and repair remaining defects.\nPrevious notes (unverified):\n${memory}\nCurrent source:\n${JSON.stringify(files)}` });
+    if (options.handoffAfterEdit === true) {
+      messages[0].content = messages[0].content.replace(
+        'Write a probe of the reported invariant and check that it fails before your repair and passes afterward.',
+        'You are now verifying an existing candidate repair. Inspect the current source and the task invariants. Rerun the transferred probe after checking its coverage, or write a focused probe if none is suitable. You do not need to reconstruct the earlier broken tree. If a concrete defect remains, repair and verify it. Once the task invariants pass and no concrete defect remains, use finish to submit; avoid repeating already completed checks or speculative exploration.');
+      messages[1].content = taskContext;
+    }
+    handoffMessage = { role: 'user', content:
+      `You are taking over an attempted repair. Independently inspect and test the current source against the task. Do not trust the predecessor's conclusion; preserve correct changes and repair remaining defects.\nPrevious notes (unverified):\n${memory}${handoffProbe}\nCurrent source:\n${JSON.stringify(files)}` };
+    messages.splice(2, messages.length - 2, handoffMessage);
+    handoffHasProbe = Boolean(handoffProbe);
     memory = ''; handoffUsed = true;
     actions.push({ turn: turns + 1, action: 'handoff', status: 'ok' });
   };
   try {
     const context = await readTaskContext(box, task, remaining());
     if (context.length) messages[1].content += `\nOriginal read-only repository context (verify current source with tools if needed):\n${JSON.stringify(context)}`;
+    taskContext = messages[1].content;
     if (options.preloadSource === true) {
       const files = await readSource(box, task.editPaths);
       messages[1].content += `\nInitial editable source (use tools for current source after edits):\n${JSON.stringify(sourceView(files, task.editPaths))}`;
@@ -194,7 +210,8 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
     }
     for (; outcome !== 'budget' && turns < config.maxTurns; turns++) {
       if (deadline.aborted) { outcome = 'deadline'; break; }
-      if (strategy === 'handoff' && !handoffUsed && turns >= Math.max(1, Math.floor(config.maxTurns * 2 / 3))) await handoff();
+      if (strategy === 'handoff' && !handoffUsed && (options.handoffAfterEdit === true
+        ? handoffReady : turns >= Math.max(1, Math.floor(config.maxTurns * 2 / 3)))) await handoff();
       const model = strategy === 'handoff' && handoffUsed ? models.critic : executorModel(strategy, turns, forceEscalation);
       if (strategy === 'cascade' && model === models.strong) escalated = true;
       // Bound retained context consistently for every strategy; keep the task and latest tool feedback.
@@ -213,6 +230,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
         }
         response = await invoke(trialId, model, request, deadline);
         requireCompleteResponse(response);
+        if (handoffUsed && handoffHasProbe && context.includes(handoffMessage)) handoffProbeUsed = true;
       } catch (error) {
         if (error.message === 'provider_truncated' && truncationRetries === 0
           && turns + 1 < config.maxTurns && !deadline.aborted) {
@@ -254,11 +272,17 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
           messages.push({ role: 'user', content: `Candidate ${selectedCandidate} installed. Visible tests passed: ${publicPassed}\n${result.feedback}` });
         } else if (action.action === 'probe') {
           const result = await probe(box, action.query, remaining());
+          if (options.handoffAfterEdit === true) {
+            handoffProbe = Buffer.byteLength(action.query) <= 8192
+              ? `\nPreviously executed probe (untrusted; may predate the latest edit). Inspect its coverage and rerun against current source; this is not final acceptance:\n${JSON.stringify({ source: action.query, passed: result.passed })}`
+              : '';
+          }
           messages.push({ role: 'user', content: `Behavior probe passed: ${result.passed}\n${result.feedback}` });
         } else if (action.action === 'edit') {
           const files = await readSource(box, task.editPaths, remaining());
           await writeFiles(box, replaceEdits(task, files, action.edits), remaining());
           const result = await check(box, task.visibleTests, remaining()); publicPassed = result.passed;
+          if (publicPassed) handoffReady = true;
           messages.push({ role: 'user', content: `Visible tests passed: ${publicPassed}\n${result.feedback}` });
         } else if (action.action === 'test' || action.action === 'finish') {
           const result = await check(box, task.visibleTests, remaining()); publicPassed = result.passed;
@@ -291,7 +315,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
       if (strategy === 'cascade' && !escalated && publicPassed && turns === 1) { outcome = 'public_test_accept'; turns++; break; }
     }
     const files = await readSource(box, task.editPaths);
-    return { files, actions, selectedCandidate, candidatesCompared, planUsed, reviewUsed, handoffUsed, patchDigest: hash(JSON.stringify(files)), outcome, escalated, turns, invalidActions, adviserFailures,
+    return { files, actions, selectedCandidate, candidatesCompared, planUsed, reviewUsed, handoffUsed, handoffProbeUsed, patchDigest: hash(JSON.stringify(files)), outcome, escalated, turns, invalidActions, adviserFailures,
       publicPassed, truncationRetries, toolMs: Math.round(toolMs), agentMs: Math.round(performance.now() - started) };
   } finally { await box.close(); }
 }

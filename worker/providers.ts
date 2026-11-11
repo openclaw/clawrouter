@@ -1,7 +1,7 @@
 import { selectOwnedHttpIdentity, prepareOwnedHttpCredential, reserveOwnedHttpForeground, type OwnedHttpCredential, type GenerationSelectionHandle } from "./credential-preflight.ts";
 import { beginOwnedHttpError, finishOwnedHttpFailure, checkOwnedHttpRequest, growOwnedHttpRequest, reserveOwnedHttpRevalidationOrigins, type OwnedHttpRequest } from "./http-identity-owner.ts";
 import { identityFailure as ownedHttpIdentityFailure } from "./identity-admission.ts";
-import { checkOwnedHttpProviderInput, acceptOwnedHttpConfiguredProvider } from "./proxy.ts";
+import { checkOwnedHttpProviderInput, acceptOwnedHttpConfiguredProvider, matchesOwnedHttpAttemptInput, bindOwnedHttpAttemptPermit, bindOwnedHttpAttemptCredential, completeOwnedHttpAttemptProvider } from "./proxy.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { ProxyQuery } from "./proxy-query.ts";
 import { reserveOwnedHttpSerialization } from "./pricing.ts";
@@ -436,7 +436,7 @@ async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, en
   if (requirement?.endpoint.request_format === "minimax.search" && (!search || excludedKeys.size || !recordSelection)) miniMaxSearchDenied();
   if (wan && (excludedKeys.size || !requirement || provider.id !== "alibaba" || requirement.endpoint.lifecycle?.protocol !== "dashscope.video"))
     throw new HttpError(503, "prediction_owner_unavailable", "Wan cannot reselect an original owner");
-  const admitted = recordSelection && requirement ? await admittedGrantSelection(auth, env, requirement, excludedKeys, pinned?.key) : undefined;
+  const admitted = requirement && (recordSelection || pinned && excludedKeys.size) ? await admittedGrantSelection(auth, env, requirement, excludedKeys, pinned?.key, recordSelection) : undefined;
   if (video && !admitted) miniMaxVideoDenied();
   if (search && !admitted) miniMaxSearchDenied();
   if (wan && !admitted) throw new HttpError(503, "prediction_owner_unavailable", "Wan requires its original admitted selection");
@@ -607,12 +607,24 @@ export async function selectOwnedHttpProvider(cap: OwnedHttpRequest, request: Re
 interface OwnedHttpProviderCommand {
   cap?: OwnedHttpRequest; request?: Request; env?: Env; selection?: ProxySelection; query?: ProxyQuery;
   preparation?: PreparationAdmission; selected?: GenerationSelectionHandle;
+  input?: import("./authority-admission.ts").AdmissionSelection; signal?: AbortSignal;
 }
 let ownedHttpProviderCommands: WeakMap<object, OwnedHttpProviderCommand> | undefined;
 export function matchesOwnedHttpProviderConfiguration(cap: OwnedHttpRequest, permit: object, preparation: PreparationAdmission): boolean {
   const command = ownedHttpProviderCommands?.get(permit);
   return !!command && command.cap === cap && command.preparation === preparation && !!command.selected
     && ownsOwnedHttpSelectionPermit(permit, cap);
+}
+export function matchesOwnedHttpProviderSelection(permit: object, cap: OwnedHttpRequest,
+  input: import("./authority-admission.ts").AdmissionSelection, signal: AbortSignal): boolean {
+  const command = ownedHttpProviderCommands?.get(permit);
+  if (!command) return ownsOwnedHttpSelectionPermit(permit, cap);
+  return command.cap === cap && command.input === input && command.signal === signal
+    && matchesOwnedHttpAttemptInput(cap, command.request!, command.env!, input, command.selection!, signal, permit);
+}
+export function matchesOwnedHttpProviderCredential(permit: object, cap: OwnedHttpRequest, selected: GenerationSelectionHandle, signal: AbortSignal): boolean {
+  const command = ownedHttpProviderCommands?.get(permit);
+  return !!command && command.selected === selected && !!command.input && matchesOwnedHttpProviderSelection(permit, cap, command.input, signal);
 }
 let ownedHttpPreparationCredits: WeakSet<OwnedHttpRequest> | undefined;
 let ownedHttpPreparationCreditCount = 0;
@@ -660,8 +672,9 @@ export function retireOwnedHttpProviderPreparation(cap: OwnedHttpRequest): boole
 /** Closed private attempt: selection -> foreground credential -> preparation. */
 export async function prepareOwnedHttpProvider(cap: OwnedHttpRequest, request: Request, env: Env,
   input: import("./authority-admission.ts").AdmissionSelection, selection: ProxySelection, query: ProxyQuery,
-  recordSelection = true, force = false): Promise<void> {
+  recordSelection = true, force = false, signal = request.signal): Promise<void> {
   checkOwnedHttpRequest(cap, request, env); checkOwnedHttpProviderInput(cap, request, env, selection);
+  if (!matchesOwnedHttpAttemptInput(cap, request, env, input, selection, signal)) throw ownedHttpIdentityFailure("protocol");
   // Initial preparation consumes its pre-admission receipt. An alternate owns
   // a new complete component before its own selection/effects can start.
   if (!retireOwnedHttpProviderPreparation(cap)) {
@@ -669,28 +682,31 @@ export async function prepareOwnedHttpProvider(cap: OwnedHttpRequest, request: R
     growOwnedHttpRequest(cap, ownedHttpPreparationBytes(selection) + 8192);
     reserveOwnedHttpRevalidationOrigins(cap, selection.provider.id);
   }
-  const permit = Object.freeze({}), command: OwnedHttpProviderCommand = { cap, request, env, selection, query };
+  const permit = Object.freeze({}), command: OwnedHttpProviderCommand = { cap, request, env, selection, query, input, signal };
   (ownedHttpSelectionPermits ??= new WeakMap()).set(permit, cap); ownedHttpSelectionPermitCount++;
   (ownedHttpProviderCommands ??= new WeakMap()).set(permit, command);
   let credential: OwnedHttpCredential | undefined, hasPrimary = false, primary: unknown;
   try {
+    bindOwnedHttpAttemptPermit(cap, request, env, input, selection, signal, permit);
     const preparation = selection.preparation ??= new PreparationAdmission(); command.preparation = preparation;
     preparation.paths(selection.pathParams, selection.endpoint.path_param_styles);
     reserveOwnedHttpForeground(cap, request, env);
-    command.selected = await selectOwnedHttpIdentity(cap, request, env, input, recordSelection, permit);
+    command.selected = await selectOwnedHttpIdentity(cap, request, env, input, recordSelection, permit, signal);
     credential = prepareOwnedHttpCredential(cap, request, env, command.selected, permit,
-      force || selection.provider.id === "anthropic-vertex");
+      force || selection.provider.id === "anthropic-vertex", signal);
+    bindOwnedHttpAttemptCredential(cap, permit, credential);
     const original = prepareOwnedHttpGrantCredentials(credential); credential = undefined;
     void original.then(() => undefined, () => undefined); await original;
   } catch (error) { hasPrimary = true; primary = error; }
   const failures: unknown[] = [];
   try { credential?.dispose(); } catch (error) { failures.push(error); }
   command.selected = undefined; command.preparation = undefined; command.query = undefined; command.selection = undefined;
-  command.request = undefined; command.env = undefined; command.cap = undefined;
+  command.request = undefined; command.env = undefined; command.cap = undefined; command.input = undefined; command.signal = undefined;
   ownedHttpProviderCommands!.delete(permit); ownedHttpSelectionPermits!.delete(permit);
   if (!--ownedHttpSelectionPermitCount) { ownedHttpSelectionPermits = undefined; ownedHttpProviderCommands = undefined; }
   if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "owned HTTP provider cleanup");
   if (hasPrimary) throw primary;
+  completeOwnedHttpAttemptProvider(cap, permit);
 }
 
 // Only a genuine provider permit receives this fixed message from the selected

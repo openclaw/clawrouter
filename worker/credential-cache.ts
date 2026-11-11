@@ -6,6 +6,7 @@ import { checkOwnedGenerationPrefetch, claimOwnedGenerationPrefetch, finishOwned
   claimOwnedHttpCredential, materializeOwnedHttpCredential, consumeOwnedHttpCredential, retainOwnedHttpCredential, finishOwnedHttpCredential, type OwnedHttpCredential,
   materializeOwnedGenerationPrefetch, checkCredentialGenerationDestination, type GenerationSelectionHandle, type OwnedGenerationPrefetch } from "./credential-preflight.ts";
 import { GenerationConsumptionLease } from "./credential-preflight-arena.ts";
+import { identityJsonProfiles } from "./access-json.ts";
 import { measureGenerationGraph, freezeGenerationGraph } from "./identity-generations.ts";
 
 // Materialized upstream credentials, isolate memory only: never persisted,
@@ -320,7 +321,7 @@ export function evictOwnedGrantCredentials(cap: OwnedGenerationPrefetch): void {
 // products. Cache-coordinate refusal leaves that owner and graph usable.
 interface OwnedHttpCredentialRun {
   cap?: OwnedHttpCredential; command?: ReturnType<typeof claimOwnedHttpCredential>;
-  value?: UpstreamGrant; original?: Promise<void>; claimed: boolean; retained: boolean; borrowed?: OwnedDestinationValue;
+  value?: UpstreamGrant; original?: Promise<void>; claimed: boolean; retained: boolean; borrowed?: OwnedDestinationValue; completion: number;
 }
 let ownedHttpCredentialPermits: WeakMap<object, OwnedHttpCredentialRun> | undefined;
 let ownedHttpCredentialRegistry: GenerationConsumptionLease | undefined;
@@ -342,16 +343,16 @@ export async function prepareOwnedHttpGrantCredentials(cap: OwnedHttpCredential)
   let hasPrimary = false, primary: unknown;
   try {
     if (!ownedHttpCredentialPermits) { ownedHttpCredentialRegistry = GenerationConsumptionLease.reserve(512); ownedHttpCredentialPermits = new WeakMap(); }
-    run = { cap, claimed: false, retained: false }; ownedHttpCredentialPermits.set(run, run);
+    run = { cap, claimed: false, retained: false, completion: 0 }; ownedHttpCredentialPermits.set(run, run);
     (ownedHttpCredentialOwners ??= new WeakMap()).set(cap, run); ownedHttpCredentialRuns++;
     run.command = claimOwnedHttpCredential(cap, run); run.claimed = true;
     const command = run.command;
-    if (!command.eligible) { retainOwnedHttpCredential(cap, run); run.retained = true; await consumeOwnedHttpCredential(cap, run, null); return; }
+    if (!command.eligible) { run.completion = 2; retainOwnedHttpCredential(cap, run); run.retained = true; await consumeOwnedHttpCredential(cap, run, null); return; }
     if (!command.force) borrowed = peekOwnedValue(lookupOwnedEntry(command), command.config);
     if (borrowed) {
       // SAME immutable graph; the new borrower has positive temporary metadata
       // funding even when the shared optional vector has no coordinate left.
-      borrowed.borrowers++; run.value = borrowed.grant;
+      borrowed.borrowers++; run.value = borrowed.grant; run.completion = 2;
     } else {
       // A missing binding reaches the existing materializer error, not an
       // environment fallback or a new cache-specific mandatory binding rule.
@@ -364,13 +365,13 @@ export async function prepareOwnedHttpGrantCredentials(cap: OwnedHttpCredential)
           await waitForOtherRequest(() => entry!.publication !== pending, remaining); pending = undefined;
           if (!command.force && (borrowed = peekOwnedValue(entry, command.config))) break;
         }
-        if (borrowed) { borrowed.borrowers++; run.value = borrowed.grant; }
+        if (borrowed) { borrowed.borrowers++; run.value = borrowed.grant; run.completion = 2; }
         else { publication = Object.freeze({}); entry.publication = publication; }
       }
       if (!borrowed) {
         run.original = materializeOwnedHttpCredential(cap, run);
         void run.original.then(() => undefined, () => undefined);
-        await run.original; run.original = undefined;
+        await run.original; run.original = undefined; run.completion = 1;
         if (!run.value) throw identityFailure("protocol");
         admitIdentity(run.value, "record");
         // Full original source/temporary credit remains through traversal,
@@ -420,10 +421,67 @@ export async function prepareOwnedHttpGrantCredentials(cap: OwnedHttpCredential)
         if (!--ownedHttpCredentialRuns) { ownedHttpCredentialPermits = undefined; ownedHttpCredentialOwners = undefined; const charge = ownedHttpCredentialRegistry; ownedHttpCredentialRegistry = undefined; try { charge?.release(); } catch (error) { failures.push(error); } }
       }
     }
+    // Only successful source/HIT consumption and every cache finally tail may
+    // establish completion. Clearing run.original on a failed path never does.
+    if (run?.retained && !hasPrimary && !failures.length && run.completion) run.completion |= 4;
     run = undefined;
     if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "owned foreground credential cleanup");
   }
   if (hasPrimary) throw primary;
+}
+
+// The record's existing full ticket prepays this iterative census. No graph,
+// descriptor vector or visitor escapes; only the scalar retained byte count.
+// Each parked cursor has four fields. Materialized key vectors include both
+// their reference cells and string-value primitive cells, plus complete units.
+export function ownedHttpCredentialCensusEnvelope(): number {
+  const p = identityJsonProfiles.record;
+  return 8 * (p.containers + 2 * p.members + p.entries + p.values) + 2 * p.units
+    + 8 + p.depth * (8 * (1 + 8 + 2 + 1 + 1) + 2 * "sourcekeysindexdepth".length)
+    + 16 * p.members + 2 * p.units;
+}
+export function measureOwnedHttpRetainedCredential(cap: OwnedHttpCredential, permit: object): number {
+  const run = ownedHttpCredentialOwners?.get(cap);
+  if (!run || permit !== run || !run.retained || !run.claimed || run.original || !run.command
+    || !(run.completion & 4) || !(run.completion & 3) || ownedHttpCredentialPermits?.get(permit) !== run) throw identityFailure("protocol");
+  if (run.completion & 2 && run.command.eligible && (!run.borrowed || run.borrowed.grant !== run.value)) throw identityFailure("protocol");
+  const p = identityJsonProfiles.record;
+  const stack: { source: object; keys: string[] | undefined; index: number; depth: number }[] = [];
+  let value: unknown = run.value, depth = 0, entering = value !== undefined;
+  let containers = 0, members = 0, entries = 0, values = 0, units = 0;
+  try {
+    while (entering || stack.length) {
+      if (entering) {
+        entering = false; values++;
+        if (typeof value === "string") units += value.length;
+        else if (value !== null && typeof value === "object") {
+          if (depth >= p.depth || !Object.isFrozen(value)) throw identityFailure("protocol");
+          containers++;
+          const array = Array.isArray(value);
+          // Count before Object.keys creates a vector. The source is the same
+          // frozen record admitted after its actual source retired, or the HIT.
+          let keys = 0, keyUnits = 0;
+          if (!array) for (const key in value) if (Object.hasOwn(value, key)) { keys++; keyUnits += key.length; }
+          if (members + keys > p.members || units + keyUnits > p.units) throw identityFailure("protocol");
+          members += keys; units += keyUnits;
+          if (array) entries += (value as unknown[]).length;
+          if (entries > p.entries || members + entries > p.combined || containers > p.containers) throw identityFailure("protocol");
+          stack.push({ source: value, keys: array ? undefined : Object.keys(value), index: 0, depth });
+          value = undefined; continue;
+        } else if (value !== undefined && value !== null && typeof value !== "number" && typeof value !== "boolean") throw identityFailure("protocol");
+        value = undefined;
+      }
+      if (values > p.values || units > p.units) throw identityFailure("protocol");
+      if (!stack.length) break;
+      const cursor = stack[stack.length - 1], length = cursor.keys ? cursor.keys.length : (cursor.source as unknown[]).length;
+      if (cursor.index === length) { cursor.source = undefined as never; cursor.keys = undefined; stack.length--; continue; }
+      const key = cursor.keys ? cursor.keys[cursor.index++] : cursor.index++;
+      const descriptor = Object.getOwnPropertyDescriptor(cursor.source, key);
+      if (descriptor && !Object.hasOwn(descriptor, "value")) throw identityFailure("protocol");
+      value = descriptor?.value; depth = cursor.depth + 1; entering = true;
+    }
+    return 8 * (containers + 2 * members + entries + values) + 2 * units + 6 * run.command.key.length;
+  } finally { stack.length = 0; value = undefined; }
 }
 
 // Named last-consumer command, invoked only after the proxy cleared prepared

@@ -3,7 +3,7 @@ import type { ValidatedNativeUsage } from "./native-response.ts";
 import { actualImageCost, estimateImageCost } from "./image-generation.ts";
 import { googleImageRequest } from "./google-image-classification.ts";
 import { googleAudioRequest } from "./google-audio-classification.ts";
-import { jsonBodyBytes } from "./json-body.ts";
+import { jsonBodyBytes, privateArchiveWorkspaceBytes } from "./json-body.ts";
 import { claudeImageBlockBound, type InlineImageBound } from "./image-input-bound.ts";
 import type { CharacterPricing, CompiledEndpoint, ModelPricing, ServiceTierPricing, TokenPricing, TokenRates } from "./types";
 import { googleField, googleInt32, googleRequestServiceTier, googleServiceTier } from "./google-protocol.ts";
@@ -38,6 +38,7 @@ interface OwnedHttpPricingWork extends OwnedHttpPricingPlan {
   mediaUnits: number;
   mediaSlots: number;
   graphBytes: number;
+  maximumDepth: number;
   maximumScalarUnits: number;
 }
 let ownedPricing: WeakMap<OwnedHttpRequest, OwnedHttpPricingPlan> | undefined;
@@ -66,7 +67,7 @@ export function prepareOwnedHttpPricing(cap: OwnedHttpRequest, body: Record<stri
   const plan: OwnedHttpPricingWork = { body, bytes: 0, media: false, hour: false, cache: false, queueCapacity: 0,
     keyVectorBytes: 0, slotBytes: 8, mediaUnits: 0, mediaSlots: 0, serializationBytes: 0, mediaWorkspaceBytes: 0,
     serializationCredits: 0, mayDefaultTier: ownedHttpMayDefaultServiceTier(cap, body), revision: 0,
-    graphBytes: 0, maximumScalarUnits: 0, retentionBytes: 0, archiveCredits: 0, toolScratchBytes: 0, active: false };
+    graphBytes: 0, maximumDepth: 0, maximumScalarUnits: 0, retentionBytes: 0, archiveCredits: 0, toolScratchBytes: 0, active: false };
   const pending: object[] = [];
   let retained: OwnedHttpPricingPlan | undefined;
   try {
@@ -87,7 +88,8 @@ export function prepareOwnedHttpPricing(cap: OwnedHttpRequest, body: Record<stri
     // before admission's initial choice: full body graph, one live scalar
     // descriptor, bounded record/key metadata, and the 32 KiB streaming path.
     // A later retain=false verdict never turns this credit into another owner.
-    plan.retentionBytes = plan.graphBytes + 2 * plan.maximumScalarUnits + 81920 + 8192 + 262144;
+    plan.retentionBytes = plan.graphBytes + privateArchiveWorkspaceBytes(plan.graphBytes, plan.maximumDepth)
+      + 2 * plan.maximumScalarUnits + 81920 + 8192 + 262144;
     plan.toolScratchBytes = ownedToolScratchBytes(body, ownedHttpHasToolPriceCard(cap, body), plan.bytes);
     if (plan.mayDefaultTier) {
       // Existing assertServiceTier may create one additional shallow root.
@@ -302,7 +304,7 @@ function countOwnedJsonScalar(plan: OwnedHttpPricingWork, value: unknown): void 
   } else if (value === null || typeof value === "number" || typeof value === "boolean" || value === undefined) plan.graphBytes += 8;
 }
 function ownedToolScratchBytes(body: Record<string, unknown>, card: boolean, bytes: number): number {
-  let topCells = 0, topNumbers = 0, topUnits = 0, tagCells = 0, tagNumbers = 0, tagUnits = 0;
+  let topCells = 0, topPrimitives = 0, topUnits = 0, tagCells = 0, tagPrimitives = 0, tagUnits = 0;
   let types = 0, typeUnits = 0, largestType = 0, coerced = false;
   // These are the existing pricing helpers' exact two shallow inventories,
   // not a recursive tool/schema search. No copied array exists during admission.
@@ -317,10 +319,10 @@ function ownedToolScratchBytes(body: Record<string, unknown>, card: boolean, byt
       }
       if (!tools) continue;
       for (let itemIndex = 0; itemIndex < tools.length; itemIndex++) {
-        const item = tools[itemIndex], numeric = item === null || typeof item === "number" || typeof item === "boolean" || item === undefined;
+        const item = tools[itemIndex], primitive = typeof item === "string" || item === null || typeof item === "number" || typeof item === "boolean" || item === undefined;
         const units = typeof item === "string" ? item.length : 0;
-        if (phase === 0) { topCells++; topNumbers += numeric ? 1 : 0; topUnits += units; }
-        else { tagCells++; tagNumbers += numeric ? 1 : 0; tagUnits += units; }
+        if (phase === 0) { topCells++; topPrimitives += primitive ? 1 : 0; topUnits += units; }
+        else { tagCells++; tagPrimitives += primitive ? 1 : 0; tagUnits += units; }
         if (!ownedPricingObject(item)) continue;
         // Chat's ordinary fee classifier performs String(type). Only a passive
         // array can create a body-sized result; no caller hooks enter this body.
@@ -331,19 +333,28 @@ function ownedToolScratchBytes(body: Record<string, unknown>, card: boolean, byt
       }
     }
   }
-  const top = 8 * (1 + topCells + topNumbers) + 2 * topUnits;
+  // Copied string values need their own primitive cells even when empty.
+  const top = 8 * (1 + topCells + topPrimitives) + 2 * topUnits;
   if (!card) return top + 8 + (coerced ? 2 * bytes : 0);
-  const tagged = 8 * (1 + tagCells + tagNumbers) + 2 * tagUnits;
+  const tagged = 8 * (1 + tagCells + tagPrimitives) + 2 * tagUnits;
   const combined = top + tagged - 8;
-  const typed = 8 * (1 + types) + 2 * typeUnits;
-  const singleton = 16 + 2 * largestType, rates = 8 + 16 * types;
+  const typed = 8 * (1 + 2 * types) + 2 * typeUnits;
+  const singleton = 24 + 2 * largestType, rates = 8 + 16 * types;
   return Math.max(top + 8 + (coerced ? 2 * bytes : 0), tagged + typed + Math.max(combined + singleton, rates));
 }
 function measureOwnedHttpJson(cap: OwnedHttpRequest, plan: OwnedHttpPricingWork, root: object, pending: object[]): void {
-  reserveOwnedPricingQueue(cap, plan, 1); pending.push(root);
-  while (pending.length) {
-    const value = pending.pop()!;
-    reserveOwnedPricingQueue(cap, plan, pending.length + childObjects(value));
+  reserveOwnedPricingQueue(cap, plan, 1);
+  // A parallel numeric depth vector is paid variable traversal CONTROL. Each
+  // occupied index has both an entry cell and a number-value cell.
+  growOwnedHttpRequest(cap, 24);
+  const depths = [0]; let depthCapacity = 1;
+  pending.push(root);
+  try { while (pending.length) {
+    const value = pending.pop()!, depth = depths.pop()!;
+    if (depth > plan.maximumDepth) plan.maximumDepth = depth;
+    const count = pending.length + childObjects(value);
+    reserveOwnedPricingQueue(cap, plan, count);
+    if (count > depthCapacity) { growOwnedHttpRequest(cap, 16 * (count - depthCapacity)); depthCapacity = count; }
     plan.bytes += 2; // brackets/braces; punctuation needs no continuation frames
     plan.graphBytes += 8;
     if (ownedPricingArray(value)) {
@@ -354,7 +365,7 @@ function measureOwnedHttpJson(cap: OwnedHttpRequest, plan: OwnedHttpPricingWork,
         const item = value[index], scalar = ownedScalarJsonBytes(item);
         countOwnedJsonScalar(plan, item);
         countOwnedMediaSlot(plan, index, item);
-        if (item !== null && typeof item === "object") pending.push(item);
+        if (item !== null && typeof item === "object") { pending.push(item); depths.push(depth + 1); }
         else plan.bytes += scalar < 0 ? 4 : scalar; // array omission is null
       }
     } else {
@@ -371,11 +382,11 @@ function measureOwnedHttpJson(cap: OwnedHttpRequest, plan: OwnedHttpPricingWork,
         if (scalar < 0) continue;
         plan.bytes += quotedOwnedJsonBytes(key) + 1 + scalar;
         if (members++) plan.bytes++;
-        if (child !== null && typeof child === "object") pending.push(child);
+        if (child !== null && typeof child === "object") { pending.push(child); depths.push(depth + 1); }
       }
       plan.keyVectorBytes = Math.max(plan.keyVectorBytes, 8 + 16 * keys + 2 * keyUnits);
     }
-  }
+  } } finally { depths.length = 0; }
 }
 
 export interface HostedSearchPrice { version: string; microsPerCall: number | null }

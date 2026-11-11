@@ -12,7 +12,7 @@ const observation = globalThis.__ownedJsonObservation = createOwnedJsonObservati
 globalThis.__ownedUsageWire = ownedUsageWire;
 const sourceHooks = registerHooks({ load(url, context, nextLoad) {
   const result = nextLoad(url, context);
-  if (!url.startsWith('file:') || !/(?:json-body|proxy|proxy-accounting|proxy-response|proxy-completion|token-usage|http-identity-owner|venice-chat-runtime)\.ts$/.test(url)) return result;
+  if (!url.startsWith('file:') || !/(?:json-body|pricing|credential-preflight|credential-cache|proxy|proxy-accounting|proxy-response|proxy-completion|token-usage|http-identity-owner|venice-chat-runtime)\.ts$/.test(url)) return result;
   const source = typeof result.source === 'string' ? result.source : Buffer.from(result.source).toString('utf8');
   return { ...result, source: observeOwnedJsonSource(fileURLToPath(url), source) };
 } });
@@ -133,11 +133,12 @@ test('private codec consumer rejects fabricated owners before original reader ac
 // generation publication and fixture resources. Mocks stay installed until joins.
 async function fixture(t, run, retained = false, variant = 'fireworks') {
   const activeProvider = snapshot.providers.find(item => item.id === variant);
-  const activeModel = variant === 'venice' ? activeProvider.models.find(item => item.id === 'venice/zai-org-glm-5-2') : model;
+  const activeModel = variant === 'venice' ? activeProvider.models.find(item => item.id === 'venice/zai-org-glm-5-2')
+    : variant === 'gmi' ? activeProvider.models.find(item => item.id === 'gmi/deepseek-ai/DeepSeek-V4-Pro') : model;
   const activeGrantKey = 'oauth/' + policyId + '/' + variant;
   const baseline = bodyBudgetCharged(), sharedBaseline = observation.shared.held, roots = [], origins = new WeakMap(), bodies = new WeakMap();
   const resources = [], releases = [], values = new Map(), calls = [], sent = [], events = [], retirements = [];
-  let done = false, cleanupPromise, hasPrimary = false, primary, rejectMaterialize = false, pressure, archiveGate, requestEnv, unknownRetirement = false;
+  let done = false, cleanupPromise, hasPrimary = false, primary, rejectMaterialize = false, retryMode, pressure, archiveGate, requestEnv, unknownRetirement = false;
   const own = promise => {
     if (origins.has(promise)) return origins.get(promise);
     const root = { used: false, outcome: promise.then(value => ({ failed: false, value }), error => ({ failed: true, error })) };
@@ -180,16 +181,27 @@ async function fixture(t, run, retained = false, variant = 'fireworks') {
   const originalGet = env.GRANT_CREDENTIALS.get;
   env.GRANT_CREDENTIALS.get = function (id) {
     const stub = Reflect.apply(originalGet, this, [id]); return { fetch(url, init) {
-      const path = new URL(url).pathname; calls.push({ kind: 'credential', path });
+      const path = new URL(url).pathname, key = typeof init?.body === 'string' ? JSON.parse(init.body).key : undefined;
+      calls.push({ kind: 'credential', path, key, signal: init?.signal, charged: bodyBudgetCharged() });
+      if (retryMode && path === '/materialize' && (retryMode === 'preparation' && !key.endsWith('-d') && !key.endsWith('-e')
+        || retryMode === 'mixed' && (key.endsWith('-a') || key.endsWith('-c'))
+        || retryMode === 'failed-alternate' && !key.endsWith('-a'))) return Promise.resolve(accessBytesResponse('{"error":{"code":"grant_credential_missing","message":"synthetic refusal"}}', '', { status: 503 }));
       if (rejectMaterialize && path === '/materialize') return Promise.resolve(accessBytesResponse('{"error":{"code":"grant_credential_missing","message":"synthetic refusal"}}', '', { status: 503 }));
       return stub.fetch(url, init);
     } };
   };
-  let upstreamGate, veniceWire, veniceFault, veniceStreaming = false;
+  let upstreamGate, veniceWire, veniceFault, veniceStreaming = false, upstreamStatus = 200;
   t.mock.method(globalThis, 'fetch', async (input, init) => {
     const request = new Request(input, init);
     if (upstreamGate) { upstreamGate.entered.resolve(); await take(own(upstreamGate.release.promise)); }
-    const text = await take(own(request.text())); sent.push({ text, method: request.method, url: request.url });
+    const text = await take(own(request.text())); sent.push({ text, method: request.method, url: request.url, authorization: request.headers.get('authorization') });
+    if (retryMode) {
+      const authorization = request.headers.get('authorization'), name = authorization?.slice(-1);
+      if (retryMode === 'exhausted' || name !== 'd') {
+        const status = retryMode === 'response' ? { a: 401, b: 403, c: 429 }[name] ?? 429 : 429;
+        return accessBytesResponse(JSON.stringify({ error: { message: 'synthetic rejection ' + name, type: 'rate_limit_error' } }), '', { status });
+      }
+    }
     if (variant === 'venice') {
       const headers = {
         'content-type': veniceStreaming ? 'text/event-stream' : 'application/json', 'content-length': String(Buffer.byteLength(veniceWire)),
@@ -197,7 +209,7 @@ async function fixture(t, run, retained = false, variant = 'fireworks') {
       };
       const response = veniceStreaming ? new Response(new ReadableStream({ type: 'bytes', start(controller) {
         controller.enqueue(new TextEncoder().encode(veniceWire)); controller.close();
-      } }), { headers }) : accessBytesResponse(veniceWire, '', { headers });
+      } }), { status: upstreamStatus, headers }) : accessBytesResponse(veniceWire, '', { status: upstreamStatus, headers });
       if (!veniceFault) return response;
       const fault = veniceFault, body = response.body;
       const observed = new Proxy(body, { get(target, key) {
@@ -256,8 +268,8 @@ async function fixture(t, run, retained = false, variant = 'fireworks') {
         const value = Reflect.get(target, key, target); return typeof value === 'function' ? value.bind(target) : value;
       } });
     }
-    return Response.json({ id: 'synthetic-priced-chat', model: model.upstream, choices: [{ message: { role: 'assistant', content: 'synthetic answer' }, finish_reason: 'stop' }],
-      usage: { prompt_tokens: 4, completion_tokens: 3, total_tokens: 7 } });
+    return Response.json({ id: 'synthetic-priced-chat', model: activeModel.upstream, choices: [{ message: { role: 'assistant', content: 'synthetic answer' }, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 4, completion_tokens: 3, total_tokens: 7 } }, { status: upstreamStatus });
   });
   requestEnv = env;
   const dispatch = input => {
@@ -275,7 +287,7 @@ async function fixture(t, run, retained = false, variant = 'fireworks') {
       monthlyBudgetMicros: 1000000000000, requestCostMicros: null, budgetMode: 'reserve', retainRequestContent: retained,
       grantRouting: { strategy: 'round_robin', environmentFallback: false, eligibleGrants: { [variant]: [variant] } } });
     values.set('connections/' + variant, { providerId: variant, enabled: true });
-    await take(own(putGrantCredentials(env, activeGrantKey, { provider: variant, enabled: true, kind: 'api_key', credential: 'fixture-upstream-key' })));
+    await take(own(putGrantCredentials(env, activeGrantKey, { provider: variant, enabled: true, kind: 'api_key', credential: 'fixture-upstream-key', ...(variant === 'gmi' ? { accountId: 'fixture-organization' } : {}) })));
     calls.length = 0;
     await run({ env, calls, sent, events, own, take, request, dispatch, drain, releases, bodyRoot, retirements,
       requestEnvironment(value) { requestEnv = value; },
@@ -296,6 +308,17 @@ async function fixture(t, run, retained = false, variant = 'fireworks') {
         // Unconditionally release before any dispatch, even on setup/assertion failure.
         releases.push(() => veniceFault.release.resolve()); return veniceFault;
       },
+      async retryPool(mode, unknownUnits = 4) {
+        retryMode = mode;
+        observation.retryPorts.length = 0; observation.credentialReductions.length = 0; observation.credentialCensuses.length = 0;
+        const policy = values.get('policies/' + policyId);
+        policy.grantRouting = { strategy: 'priority', environmentFallback: false, eligibleGrants: { [variant]: ['a', 'b', 'c', 'd', 'e'].map(name => variant + '-' + name) } };
+        for (const [index, name] of ['a', 'b', 'c', 'd', 'e'].entries()) await take(own(putGrantCredentials(env, 'oauth/' + policyId + '/' + variant + '-' + name,
+          { provider: variant, enabled: true, kind: 'api_key', credential: 'fixture-upstream-' + name, priority: 100 + index, ...(variant === 'gmi' ? { accountId: 'fixture-organization' } : {}),
+            unknownOwnedField: { value: ['x'.repeat(unknownUnits), null, 7] } })));
+        calls.length = 0;
+      },
+      upstreamStatus(status) { upstreamStatus = status; },
       failMaterialization() { rejectMaterialize = true; },
       holdUpload() { upstreamGate = { entered: deferred(), release: deferred() }; releases.push(() => upstreamGate.release.resolve()); return upstreamGate; },
       holdArchive() { archiveGate = { entered: deferred(), release: deferred() }; releases.push(() => archiveGate.release.resolve()); return archiveGate; },
@@ -402,6 +425,34 @@ for (const mode of ['close', 'install', 'diagnostic']) {
       assert.equal(f.calls.filter(value => value.kind === 'budget' && value.path === '/settle').length, 1);
       assert.ok(bodyBudgetCharged() > 0, 'UNKNOWN remains funded until this isolated process ends, not credited as retirement');
       await f.drain();
+    });
+  });
+}
+
+for (const fault of ['ok-getter', 'install-before-late']) for (const reason of ['undefined', 'shared']) {
+  const mode = fault + '-' + reason, name = 'private terminal lane failure ' + mode;
+  test(name, { timeout: 120000 }, async t => {
+    if (process.env.CLAWROUTER_TERMINAL_UNKNOWN !== mode) {
+      await promisify(execFile)(process.execPath, ['--test', '--test-name-pattern', '^' + name + '$', fileURLToPath(import.meta.url)], {
+        env: { ...process.env, CLAWROUTER_TERMINAL_UNKNOWN: mode }, maxBuffer: 4 * 1024 * 1024,
+      }); return;
+    }
+    await fixture(t, async f => {
+      f.expectUnknownRetirement();
+      const control = terminalScenario(f, { laneFault: fault, laneReason: reason });
+      const response = await f.request(payload({})); assert.equal(response.status, 200);
+      while (!control.row.logical.length) await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual(control.row.logical, [true]);
+      assert.equal(control.row.recovery.length, 1); assert.equal(control.row.recovery[0].args, 1);
+      const settled = f.calls.filter(row => row.kind === 'budget' && row.path === '/settle');
+      assert.equal(settled.length, 1); assert.equal(control.row.recovery[0].id, settled[0].body.reservationId);
+      if (fault === 'install-before-late') { assert.equal(control.row.laneInstalls, 1); assert.equal(control.row.bodyCancels, 0); }
+      control.release();
+      while (control.row.pending || control.row.bodyCancelSettled !== 1) await new Promise(resolve => setImmediate(resolve));
+      assert.equal(control.row.bodyCancels, 1); assert.equal(control.row.launches, 1);
+      assert.ok(observation.originalObserverState().some(row => row.role === 'OwnedTerminalOperation' && !row.severed));
+      assert.equal(f.events.filter(event => event.type === 'clawrouter.usage.v1').length, 1);
+      assert.ok(bodyBudgetCharged() > 0); await f.drain();
     });
   });
 }
@@ -611,6 +662,109 @@ test('OFF large-body early identity is retired before covered admission reserves
   });
 });
 
+// UNRUN_CODE_ONLY_HOSTED. Actual private Unified Chat: genuine selection,
+// materialization and provider originals, one final accounting invocation.
+for (const variant of ['venice', 'gmi']) for (const status of [401, 403, 429]) for (const streaming of variant === 'venice' ? [false, true] : [false])
+test(`private ${variant} prepared ${status} keeps the main retry exclusion (stream=${streaming})`, async t => {
+  await fixture(t, async f => {
+    const before = observation.credentialReductions.length, portsBefore = observation.retryPorts.length;
+    f.upstreamStatus(status);
+    if (variant === 'venice') f.veniceResponse(streaming ? 'data: {"error":{"message":"synthetic rejection"}}\n\n' : '{"error":{"message":"synthetic rejection"}}', streaming);
+    const response = await f.request({ model: variant === 'venice' ? 'venice/zai-org-glm-5-2' : 'gmi/deepseek-ai/DeepSeek-V4-Pro', stream: streaming, messages: [] });
+    await f.drain(); assert.equal(response.status, status);
+    assert.equal(f.sent.length, 1); assert.equal(f.calls.filter(row => row.kind === 'credential' && row.path === '/materialize').length, 1);
+    assert.equal(observation.credentialReductions.length, before, 'future revalidation/codec backing remains full');
+    assert.equal(observation.retryPorts.length - portsBefore, 1, 'no alternate preparation port');
+    assert.equal(f.events.length, 1);
+  }, false, variant);
+});
+
+test('private Venice invalid canonical stream starts no provider fetch or credential reduction', async t => {
+  await fixture(t, async f => {
+    const before = observation.credentialReductions.length;
+    const response = await f.request({ model: 'venice/zai-org-glm-5-2', stream: 'invalid', messages: [] });
+    assert.equal(response.status, 400); assert.equal(JSON.parse(response.text).error.code, 'invalid_venice_chat_request');
+    await f.drain(); assert.equal(f.sent.length, 0); assert.equal(observation.credentialReductions.length, before);
+    assert.equal(f.calls.filter(row => row.kind === 'credential' && row.path === '/materialize').length, 1);
+  }, false, 'venice');
+});
+
+for (const variant of ['venice', 'gmi']) test(`private ${variant} materialization failures precede the sole D future-right owner`, async t => {
+  await fixture(t, async f => {
+    await f.retryPool('preparation');
+    if (variant === 'venice') f.veniceResponse('{"model":"zai-org-glm-5-2","choices":[],"usage":{"prompt_tokens":4,"completion_tokens":3,"total_tokens":7}}');
+    const response = await f.request({ model: variant === 'venice' ? 'venice/zai-org-glm-5-2' : 'gmi/deepseek-ai/DeepSeek-V4-Pro', messages: [] });
+    await f.drain(); assert.equal(response.status, 200);
+    assert.equal(f.sent.length, 1); assert.equal(f.sent[0].authorization, 'Bearer fixture-upstream-d');
+    assert.equal(f.calls.filter(row => row.kind === 'credential' && row.path === '/materialize').length, 4);
+    assert.equal(observation.retryPorts.length, 4); assert.equal(observation.credentialReductions.length, 0); assert.equal(f.events.length, 1);
+  }, false, variant);
+});
+
+test('generic retained census includes large unknown grant fields in every attempted record', async t => {
+  await fixture(t, async f => {
+    await f.retryPool('response', 16384);
+    const response = await f.request(payload({})); assert.equal(response.status, 200); await f.drain();
+    assert.equal(f.sent.length, 4); assert.equal(observation.credentialReductions.length, 4);
+    assert.ok(observation.credentialCensuses.every(row => row.units >= 16384 && row.values >= 4 && row.originalCleared));
+    assert.ok(observation.credentialReductions.every(row => row.bytes > 2 * 16384 + 4096));
+    assert.equal(f.events.length, 1);
+  });
+});
+
+test('retained private provider, ledger, terminal and void callbacks sever their owner cells', async t => {
+  await fixture(t, async f => {
+    const start = observation.originalObservers.length;
+    const response = await f.request(payload({})); assert.equal(response.status, 200); await f.drain();
+    const rows = observation.originalObserverState().slice(start), roles = new Set(rows.map(row => row.role));
+    for (const role of ['OwnedProviderFetch', 'OwnedSinkVoidCommand', 'OwnedLedgerCommand', 'OwnedTerminalOperation']) assert.ok(roles.has(role), role);
+    assert.ok(rows.every(row => row.severed && row.state === 8));
+    const replay = observation.replayRetiredOriginals(); assert.equal(replay.reads, 0); assert.ok(replay.callbacks >= 2 * rows.length);
+  }, true);
+});
+
+for (const mode of ['preparation', 'response', 'mixed', 'exhausted', 'failed-alternate'])
+test(`private cumulative four-port grant policy ${mode}`, async t => {
+  await fixture(t, async f => {
+    await f.retryPool(mode);
+    const response = await f.request(payload({})); await f.drain();
+    const keys = ['a', 'b', 'c', 'd'].map(name => 'oauth/' + policyId + '/fireworks-' + name);
+    assert.equal(response.status, mode === 'exhausted' || mode === 'failed-alternate' ? 429 : 200);
+    assert.deepEqual(observation.retryPorts.map(port => port.keys), [[], keys.slice(0, 1), keys.slice(0, 2), keys.slice(0, 3)]);
+    assert.equal(new Set(observation.retryPorts.map(port => port.input)).size, 4);
+    const expected = mode === 'preparation' ? ['d'] : mode === 'mixed' ? ['b', 'd'] : mode === 'failed-alternate' ? ['a'] : ['a', 'b', 'c', 'd'];
+    assert.deepEqual(f.sent.map(row => row.authorization), expected.map(name => 'Bearer fixture-upstream-' + name));
+    const materializations = f.calls.filter(row => row.kind === 'credential' && row.path === '/materialize');
+    assert.deepEqual(materializations.map(row => row.key), keys);
+    for (let index = 0; index < materializations.length; index++) assert.equal(materializations[index].signal, observation.retryPorts[index].signal);
+    assert.ok(observation.credentialReductions.length >= expected.length);
+    assert.ok(observation.credentialReductions.every(row => row.before === 33554432 && row.after === row.bytes && row.bytes >= 4096 && row.bytes < 33554432));
+    for (const [index, row] of observation.credentialReductions.entries()) {
+      const census = observation.credentialCensuses[index];
+      assert.ok(census.originalCleared && census.retained && (census.completion & 4));
+      assert.equal(row.rejections, 5);
+      assert.equal(row.bytes, 8 * (census.containers + 2 * census.members + census.entries + census.values) + 2 * census.units + 4096 + 6 * (row.idUnits + census.keyUnits));
+    }
+    assert.equal(f.events.length, 1);
+    assert.equal(f.calls.filter(row => row.kind === 'budget' && row.path === '/reserve').length, 1);
+    assert.equal(f.calls.filter(row => row.kind === 'budget' && row.path === '/settle').length, 1);
+    if (mode === 'failed-alternate') assert.match(response.text, /synthetic rejection a/);
+    if (mode === 'exhausted') assert.match(response.text, /synthetic rejection d/);
+  });
+});
+
+test('513 empty string tools pay each copied string-value cell before dispatch', async t => {
+  await fixture(t, async f => {
+    const input = payload({ tools: Array(513).fill('') });
+    const response = await f.request(input); await f.drain();
+    assert.equal(response.status, 200);
+    assert.ok(observation.toolScratchBytes >= 8224, 'two array containers + 513 entry cells + 513 string primitive cells');
+    assert.equal(f.sent.length, 1);
+    assert.equal(f.sent[0].text, JSON.stringify(transformed(input)));
+    assert.equal(f.events.length, 1);
+  });
+});
+
 const pricingCases = [
   ['escaped Unicode/numbers/own proto', () => { const extra = JSON.parse('{"__proto__":{"kept":true}}'); extra.quoted = 'a"\\\n\u0001'; extra.unicode = 'é😀\ud800x\udfff'; extra.numbers = [-0, 1e21, 1e-7, Infinity]; return { extra }; }],
   ['wide content and cache fields', () => ({ messages: [{ role: 'user', content: Array.from({ length: 4096 }, (_, index) => ({ type: 'text', text: String(index), extra: { cache_control: null } })) }] })],
@@ -671,8 +825,9 @@ test('late token pricing overlaps the held ORIGINAL one-MiB upload without waiti
 test('pricing/common preparation pressure fails before full admission count or budget effects', async t => {
   await fixture(t, async f => {
     f.pressure(40 * 1024 * 1024);
-    const response = await f.request(payload({ extra: Array.from({ length: 8192 }, () => ({ value: null })) }));
+    const response = await f.request(payload({ tools: Array(513).fill(''), extra: Array.from({ length: 8192 }, () => ({ value: null })) }));
     assert.equal(response.status, 503); assert.equal(response.headers.get('x-clawrouter-error-code'), 'identity_admission_unavailable');
+    assert.ok(observation.toolScratchBytes >= 8224);
     assert.equal(f.calls.filter(row => row.kind === 'authority' && row.path === '/admission/resolve').length, 0);
     assert.equal(f.calls.filter(row => row.kind === 'budget').length, 0); assert.equal(f.sent.length, 0);
   });

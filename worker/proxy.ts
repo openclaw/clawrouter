@@ -11,7 +11,7 @@ import { prepareOwnedHttpPricing, adoptOwnedHttpTierBody, takeOwnedHttpMediaAdmi
 import { ownsOwnedHttpSelectionPermit, prepareOwnedHttpProvider, reserveOwnedHttpProviderPreparation, retireOwnedHttpProviderPreparation } from "./providers.ts";
 import { createPrivateJsonBodyParser, JsonBodyStructureLimit, privateMediaJsonBody, privateUploadJson, type MediaJsonBody } from "./json-body.ts";
 import { bindOwnedHttpAuthentication, matchesOwnedHttpAuthentication, queueOwnedHttpSelectionRuntime,
-  invalidateOwnedHttpSelectionCredentials, finishOwnedHttpForegroundCommands, type GenerationSelectionHandle } from "./credential-preflight.ts";
+  invalidateOwnedHttpSelectionCredentials, finishOwnedHttpForegroundCommands, matchesOwnedHttpCredentialPreparation, reduceOwnedHttpPreparedCredential, type OwnedHttpCredential, type GenerationSelectionHandle } from "./credential-preflight.ts";
 import { admitAccountingJson, isAccountingAdmissionFailure } from "./json-body.ts";
 import { PreparationAdmission, isPreparationLimit, preparationHeader, templateCandidates, preparationValue } from "./provider-templates.ts";
 import { readMiniMaxVideoInput, bindMiniMaxVideoInline, hasMiniMaxVideoInline } from "./minimax-video-inline.ts";
@@ -98,7 +98,7 @@ import {
 } from "./fusion";
 import { loadFusionConfig } from "./fusion-config";
 import { shouldFailoverGrant } from "./grant-quota";
-import { observeProviderGrantQuota } from "./provider-quota.ts";
+import { observeProviderGrantQuota, providerCreditExhausted } from "./provider-quota.ts";
 import { grantRoutingPolicy, type PinnedGrant } from "./grant-selection";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { assertSingleOpenAiAccount } from "./openai-public-account.ts";
@@ -114,7 +114,7 @@ import {
   signSigV4, upstreamAuth, upstreamPath, type UpstreamAuth,
 } from "./providers";
 import { assertOperationConfiguration, grantSupports, openRouterPcmRequirement } from "./provider-auth.ts";
-import { normalizePreStreamError, observeUsage, proxyResponseHeaders, beginOwnedCodecConsumer,
+import { inspectJsonError, normalizePreStreamError, observeUsage, proxyResponseHeaders, beginOwnedCodecConsumer,
   normalizeOwnedCodecPreStreamError, normalizeOwnedHttpPreStreamError, observeOwnedCodecUsage, ownedCodecConsumerRetirement,
   observeOwnedGenericUsage, ownedGenericUsageRetirement, matchesOwnedCodecUsage, abandonOwnedCodecConsumer, type OwnedCodecConsumer, type ObservedUsage } from "./proxy-response";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledProvider, CompiledQuotaConfig, Env, ProviderConnection } from "./types";
@@ -123,9 +123,16 @@ import {
   ownedErrorResponse, ownedHttpError, errorResponse, HttpError, json, maxJsonBodyBytes, maxMediaJsonBodyBytes, randomId, readJson, type JsonIntake,
 } from "./utils";
 
+const MAX_GRANT_ATTEMPTS = 4;
+
 type AuthMode = "proxy_key" | "access";
 
 type OwnedPreparedFields = ReturnType<typeof prepareUpstreamRequest>;
+interface OwnedRetryPort {
+  phase: number; input?: import("./authority-admission.ts").AdmissionSelection;
+  signal?: AbortSignal; permit?: object; prepared?: PreparedUpstream; upload?: OwnedHttpUpload; identity?: AuthorizedIdentity; credential?: OwnedHttpCredential;
+}
+interface OwnedRetryAuthority { ports: OwnedRetryPort[]; excluded: Set<string>; next: number; pending?: OwnedRetryPort }
 interface OwnedProxyInvocation {
   context: ExecutionContext;
   admission?: JsonAdmission;
@@ -140,6 +147,7 @@ interface OwnedProxyInvocation {
   foregroundCommandsClosed?: true;
   upload?: OwnedHttpUpload;
   attempts: OwnedHttpUpload[];
+  retry?: OwnedRetryAuthority;
   preparingIdentity?: AuthorizedIdentity;
   preparingUpstream?: UpstreamAuth;
   preparingFields?: OwnedPreparedFields;
@@ -468,7 +476,7 @@ export function matchesOwnedHttpRevalidationInput(cap: OwnedHttpRequest, request
   url: URL, headers: Headers, preparation: PreparationAdmission): boolean {
   const invocation = ownedProxyInvocations?.get(cap);
   return !!invocation && matchesOwnedHttpRequestInputs(cap, env, request) && invocation.selection === selection
-    && invocation.preparingIdentity === auth && invocation.preparingUpstream === upstream && invocation.upload === attempt
+    && invocation.preparingIdentity === auth && invocation.preparingUpstream === upstream && invocation.retry?.pending?.upload === attempt
     && invocation.preparingFields?.url === url && invocation.preparingFields.headers === headers
     && invocation.preparingAdmission === preparation;
 }
@@ -490,6 +498,16 @@ export function reserveOwnedHttpInitialPreparation(cap: OwnedHttpRequest, reques
   const invocation = ownedProxyInvocations?.get(cap);
   if (!invocation?.selection) throw identityFailure("protocol");
   if (invocation.preparationAdmitted) return;
+  // Four fixed ports exist before initial selection/count effects. They share
+  // the request's existing physical custody; no per-port completion Promise.
+  growOwnedHttpRequest(cap, 8 * (1 + 8 + 2 + 1 + 1 + 4 + 4 * (1 + 16 + 8) + 64)
+    + 2 * ("portsexcludednextpending".length + 4 * "phaseinputsignalpermitprepareduploadidentitycredential".length));
+  invocation.retry = { ports: [
+    { phase: 0, input: undefined, signal: undefined, permit: undefined, prepared: undefined, upload: undefined, identity: undefined, credential: undefined },
+    { phase: 0, input: undefined, signal: undefined, permit: undefined, prepared: undefined, upload: undefined, identity: undefined, credential: undefined },
+    { phase: 0, input: undefined, signal: undefined, permit: undefined, prepared: undefined, upload: undefined, identity: undefined, credential: undefined },
+    { phase: 0, input: undefined, signal: undefined, permit: undefined, prepared: undefined, upload: undefined, identity: undefined, credential: undefined },
+  ], excluded: new Set(), next: 0, pending: undefined };
   prepareOwnedHttpPricing(cap, invocation.selection.body as Record<string, unknown>);
   reserveOwnedHttpProviderPreparation(cap, request, env, invocation.selection);
   prepareOwnedHttpAccounting(cap);
@@ -519,19 +537,21 @@ export async function acceptOwnedHttpConfiguredProvider(cap: OwnedHttpRequest, r
   upstream: UpstreamAuth, preparation: PreparationAdmission, permit: object, selected: GenerationSelectionHandle): Promise<void> {
   checkOwnedHttpProviderInput(cap, request, env, selection);
   if (!ownsOwnedHttpSelectionPermit(permit, cap)) throw identityFailure("protocol");
-  const invocation = ownedProxyInvocations!.get(cap)!;
+  const invocation = ownedProxyInvocations!.get(cap)!, port = invocation.retry?.pending;
+  if (!port || port.phase !== 1 || port.permit !== permit || !port.signal) throw identityFailure("protocol");
   let original: Promise<PreparedUpstream> | undefined, prepared: PreparedUpstream | undefined;
   invocation.preparingIdentity = identity; invocation.preparingUpstream = upstream;
   invocation.preparingAdmission = preparation;
   try {
     original = prepareSingleSelected(request, env, selection, query, identity, new Set(), false, connection,
-      undefined, "http", false, undefined, undefined, undefined, preparation, { cap, upstream });
+      undefined, "http", false, undefined, undefined, undefined, preparation, { cap, upstream }, port.signal);
     void original.then(() => undefined, () => undefined);
     prepared = await original;
     original = undefined; finishOwnedHttpRevalidationPreparation(cap);
-    ownedHttpSignal(cap).throwIfAborted(); invocation.identity = identity; invocation.prepared = prepared; invocation.archivePrepared = undefined;
+    ownedHttpSignal(cap).throwIfAborted(); port.signal.throwIfAborted();
     (ownedPreparedSelections ??= new WeakMap()).set(prepared, selected);
-    if (invocation.upload) (ownedPreparedUploads ??= new WeakMap()).set(prepared, invocation.upload);
+    if (port.upload) (ownedPreparedUploads ??= new WeakMap()).set(prepared, port.upload);
+    port.prepared = prepared; port.identity = identity;
   } finally {
     invocation.preparingIdentity = undefined; invocation.preparingUpstream = undefined; invocation.preparingFields = undefined;
     invocation.preparingAdmission = undefined;
@@ -545,7 +565,7 @@ export function prepareOwnedHttpUploadJson(upload: OwnedHttpUpload, body: unknow
   checkOwnedHttpUpload(upload);
   const receiver = ownedPreparationReceivers?.get(upload), invocation = receiver && ownedProxyInvocations?.get(receiver.owner);
   const selection = invocation?.selection;
-  if (!receiver || !invocation || invocation.upload !== upload || !selection || selection.body !== body
+  if (!receiver || !invocation || invocation.retry?.pending?.upload !== upload || !selection || selection.body !== body
     || !invocation.preparingAdmission || !invocation.preparingUpstream || !matchesOwnedHttpPricingInput(receiver.owner, body as Record<string, unknown>))
     throw identityFailure("protocol");
   const admission = takeOwnedHttpMediaAdmission(receiver.owner, body as Record<string, unknown>);
@@ -563,7 +583,8 @@ function prepareOwnedHttpTransport(cap: OwnedHttpRequest, request: Request, env:
   const invocation = ownedProxyInvocations?.get(cap);
   if (!invocation || invocation.selection !== selection) throw identityFailure("protocol");
   const upload = beginOwnedHttpUpload(cap);
-  invocation.upload = upload; invocation.attempts.push(upload);
+  if (!invocation.retry?.pending || invocation.retry.pending.phase !== 1) throw identityFailure("protocol");
+  invocation.retry.pending.upload = upload; invocation.attempts.push(upload);
   const receiver: OwnedPreparationReceiver = { owner: cap };
   (ownedPreparationReceivers ??= new WeakMap()).set(upload, receiver);
   try {
@@ -597,6 +618,10 @@ export function retireOwnedHttpProxy(cap: OwnedHttpRequest): void {
   invocation.consumer = undefined; invocation.genericUsage = undefined; invocation.usageInput = undefined; invocation.observedUsage = undefined;
   invocation.usageContext = undefined; invocation.requestId = undefined;
   invocation.admission = undefined; invocation.upload = undefined; invocation.attempts.length = 0;
+  if (invocation.retry) {
+    for (const port of invocation.retry.ports) { port.input = undefined; port.signal = undefined; port.permit = undefined; port.prepared = undefined; port.upload = undefined; port.identity = undefined; port.credential = undefined; port.phase = 5; }
+    invocation.retry.ports.length = 0; invocation.retry.excluded.clear(); invocation.retry.pending = undefined; invocation.retry = undefined;
+  }
   invocation.required = undefined; invocation.context = undefined as never;
   admission?.retireOwned();
   ownedProxyInvocations!.delete(cap);
@@ -791,7 +816,7 @@ interface PreparedUpstream {
   connection: ProviderConnection;
   websocket: boolean;
   backgroundRecovery: boolean;
-  failedGrantKey?: string;
+  failedGrantKeys?: string[];
   continuation?: ContinuationOwner;
   managedBaseUrl?: string;
   revalidateAccount?: (signal: AbortSignal) => Promise<void>;
@@ -804,7 +829,8 @@ interface PreparedUpstream {
 }
 
 interface ReservedProxyBudget {
-  failedGrantKey?: string;
+  failedGrantKeys?: string[];
+  grant: PinnedGrant;
   auth: AuthorizedIdentity;
   reservation: BudgetReservation;
   cost: EstimatedCost;
@@ -934,9 +960,13 @@ class OwnedHttpIntakeIo {
     }
   }
   private observe(cell: OwnedIntakeObservation, original: Promise<unknown>): void {
-    const then = original.then;
+    let then: unknown;
+    if (cell.kind === 4) {
+      if (original !== null && (typeof original === "object" || typeof original === "function")) then = original.then;
+      if (typeof then !== "function") { original = Promise.resolve(); then = ownedIntakeThen; }
+    } else then = original.then;
     if (then !== ownedIntakeThen) { cell.flags &= ~64; if (cell.kind === 8) this.flags &= ~8; }
-    void Reflect.apply(then, original, [intakeObservationFulfilled.bind(cell), intakeObservationRejected.bind(cell)]);
+    void Reflect.apply(then as Function, original, [intakeObservationFulfilled.bind(cell), intakeObservationRejected.bind(cell)]);
     cell.flags |= 2;
   }
   private observationFailure(cell: OwnedIntakeObservation, reason: unknown): object {
@@ -1061,7 +1091,7 @@ class OwnedHttpIntakeIo {
       const reader = this.reader, method = reader.releaseLock;
       original = Reflect.apply(method, reader, []); started = original !== undefined;
       if (!started) { cell.flags |= 1 | 2; return; }
-      this.observe(cell, Promise.resolve(original));
+      this.observe(cell, original as Promise<unknown>);
     } catch (reason) {
       try { if (started) this.observationFailure(cell, reason); else { this.receive(cell, true, reason); cell.flags |= 2; } }
       catch { cell.flags |= 4; this.unknown(); }
@@ -1979,6 +2009,7 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
   let googleContinuation: GoogleContinuation | undefined;
   let search: SearchSession | undefined;
   let grantFailover = false;
+  const failedGrantKeys = owned ? ownedProxyInvocations!.get(owned)!.retry!.excluded : new Set(reservedBudget?.failedGrantKeys ?? []);
   try {
     // Published assets require an acknowledged reservation before their sole
     // destination claim. A soft-budget request cannot supply that authority.
@@ -1989,13 +2020,15 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     if (googleContinuationRoute(selection)) googleContinuation = await GoogleContinuation.resolve(request, selection, auth, env);
     const uploadGrant = nativeUploadGrants.get(selection);
     if (owned) {
-      await run(() => prepareOwnedHttpAttempt(owned, request, env, selection, queryInput));
+      await run(() => prepareOwnedHttpAttempt(owned, request, env, selection, queryInput, request.signal));
+      commitOwnedHttpAttempt(owned);
       prepared = ownedProxyInvocations!.get(owned)!.prepared!;
       if (!prepared) throw identityFailure("protocol");
-    } else prepared = await run(() => prepareSelected(request, env, selection, queryInput, auth, new Set(reservedBudget?.failedGrantKey ? [reservedBudget.failedGrantKey] : []), !uploadGrant && !published, reservedBudget?.connection, publishedPin ?? search?.pinned ?? continuation?.pinned ?? googleContinuation?.pinned ?? uploadGrant, "http", true, undefined, searchOwner));
+    } else prepared = await run(() => prepareSelected(request, env, selection, queryInput, auth, failedGrantKeys, !uploadGrant && !published, reservedBudget?.connection, publishedPin ?? search?.pinned ?? continuation?.pinned ?? googleContinuation?.pinned ?? uploadGrant, "http", true, undefined, searchOwner, undefined, request.signal, reservedBudget?.grant));
     assertRequestTariffDestination(selection.endpoint, prepared.url);
     assertNativeResponseDestination(selection.nativeResponse, prepared.url);
-    grantFailover = !!(reservedBudget?.failedGrantKey || prepared.failedGrantKey);
+    for (const key of prepared.failedGrantKeys ?? []) failedGrantKeys.add(key);
+    grantFailover = failedGrantKeys.size > 0;
     if (prepared.continuation) continuation?.bind(prepared.continuation);
     if (prepared.continuation && googleContinuation) await googleContinuation.bind(prepared.continuation);
     if (search) {
@@ -2322,25 +2355,42 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       const receiver = ownedProxyInvocations!.get(owned)!;
       response = receiver.incomingResponse!; receiver.incomingResponse = undefined;
     } else response = await operation.wait(pending!, "upstream", discard);
+    if (completion && !owned) response = ownOrdinaryResponse(response, completion);
     if (music) {
       await music.completeUpload();
       prepared.requestBody = undefined;
     }
+    let creditExhausted = false;
+    const captureResponse = async (upstream: Response) => {
+      creditExhausted = false;
+      if (selection.provider.id === "anthropic" && upstream.status === 400 && prepared.grantKey) {
+        const inspected = await inspectJsonError(upstream, operation);
+        upstream = inspected.response;
+        creditExhausted = providerCreditExhausted(selection.provider.id, upstream.status, inspected.body);
+      }
+      if (!searchOwner && !isModelDiscovery(selection.endpoint)) captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, upstream, selection.provider.id, selectionUpstreamModel(selection), creditExhausted);
+      return upstream;
+    };
     accounting.observeUpstreamResponse(response, prepared.url);
     // Metadata permissions and rate limits do not establish inference health.
-    if (!searchOwner && !isModelDiscovery(selection.endpoint)) owned ? captureOwnedHttpRuntime(owned, request, env, prepared, selection, response)
-      : captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response, selection.provider.id, selectionUpstreamModel(selection));
-    if (!accounting.upstreamChargePossible && !miniMaxAnthropicRoute(selection.provider, selection.endpoint) && selection.provider.id !== "anthropic-vertex" && selection.provider.id !== "gmi" && !selection.nativeResponse && !selection.endpoint.requestPricing && !grantFailover && !isModelDiscovery(selection.endpoint) && !background && !search && !continuation?.requested && !googleContinuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
+    if (owned) captureOwnedHttpRuntime(owned, request, env, prepared, selection, response);
+    else response = await captureResponse(response);
+    while (!accounting.upstreamChargePossible && !miniMaxAnthropicRoute(selection.provider, selection.endpoint) && selection.provider.id !== "anthropic-vertex" && selection.provider.id !== "gmi" && !selection.nativeResponse && !selection.endpoint.requestPricing && failedGrantKeys.size < MAX_GRANT_ATTEMPTS - 1 && !isModelDiscovery(selection.endpoint) && !background && !search && !continuation?.requested && !googleContinuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover, creditExhausted)) {
       let retry: PreparedUpstream | undefined;
       let capacityFailure: HttpError | undefined;
-      const preparation = run(async () => {
-        if (!owned) return prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection);
-        await prepareOwnedHttpAttempt(owned, request, env, selection, queryInput, prepared.grantKey!);
-        return ownedProxyInvocations!.get(owned)!.prepared!;
-      });
+      signal.throwIfAborted();
+      if (owned) {
+        if (failedGrantKeys.has(prepared.grantKey!)) break;
+        excludeOwnedHttpGrant(owned, prepared.grantKey!);
+      } else failedGrantKeys.add(prepared.grantKey!);
+      const preparation = owned ? run(() => prepareOwnedHttpAttempt(owned, request, env, selection, queryInput, signal))
+        : run(() => prepareSelected(request, env, selection, queryInput, auth, failedGrantKeys, true, prepared.connection, undefined, "http", false, undefined, undefined, undefined, signal));
       const preparationSettled = preparation.then(() => {}, () => {});
       try {
-        retry = await operation.wait(preparation);
+        if (owned) {
+          await operation.wait(preparation as Promise<void>);
+          retry = ownedProxyInvocations!.get(owned)!.retry?.pending?.prepared;
+        } else retry = await operation.wait(preparation as Promise<PreparedUpstream>);
       } catch (error) {
         if (isPreparationLimit(error) || isAccountingAdmissionFailure(error) || isIdentityFailure(error)) capacityFailure = error;
         // Ordinary selection failure leaves the original rejection available to the caller.
@@ -2358,7 +2408,8 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
         // The alternate may execute without returning headers. Its uncertainty
         // must not inherit the discarded attempt's nonbillable rejection.
         response = undefined;
-        prepared = retry;
+        prepared = owned ? commitOwnedHttpAttempt(owned) : retry;
+        for (const key of prepared.failedGrantKeys ?? []) failedGrantKeys.add(key);
         accounting.setGrant(prepared.grantKey, prepared.grantLane);
         if (owned) {
           ownedFetch = ownedPreparedUploads?.get(prepared); ownedFetchPending = undefined;
@@ -2370,13 +2421,15 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
           const receiver = ownedProxyInvocations!.get(owned)!;
           response = receiver.incomingResponse!; receiver.incomingResponse = undefined;
         } else response = await operation.wait(ordinaryFetch(() => fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" })), "upstream", discard);
+        if (completion && !owned) response = ownOrdinaryResponse(response, completion);
         accounting.observeUpstreamResponse(response, prepared.url);
-        owned ? captureOwnedHttpRuntime(owned, request, env, prepared, selection, response)
-      : captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response, selection.provider.id, selectionUpstreamModel(selection));
+        if (owned) captureOwnedHttpRuntime(owned, request, env, prepared, selection, response);
+        else response = await captureResponse(response);
+
         if (prepared.continuation) continuation?.bind(prepared.continuation);
         if (prepared.continuation && googleContinuation) await googleContinuation.bind(prepared.continuation);
         grantFailover = true;
-      }
+      } else break;
     }
     // Redirects cannot select a new destination or replay a credentialed body.
     // Do not pass Location downstream for the client to replay either.
@@ -2681,7 +2734,7 @@ async function reserveSelected(request: Request, env: Env, context: ExecutionCon
   const failureAccounting = createProxyAccounting({ context, env, auth, selection, request, compound });
   let prepared: PreparedUpstream;
   try {
-    prepared = await prepareSelected(request, env, selection, {}, auth, new Set(), false);
+    prepared = await prepareSelected(request, env, selection, {}, auth);
   } catch (error) {
     if (isAccountingAdmissionFailure(error)) throw error;
     const failure = selectedFailure(error);
@@ -2696,7 +2749,7 @@ async function reserveSelected(request: Request, env: Env, context: ExecutionCon
   try {
     const reservation = await reserveBudget(env, auth, selection.capability, cost, prepared.connection);
     let claimed = false, cleanup: Promise<void> | undefined;
-    return { auth, reservation, cost, failedGrantKey: prepared.failedGrantKey, providerId: selection.provider.id, modelId: selection.model?.id ?? null, capability: selection.capability, connection: prepared.connection,
+    return { auth, reservation, cost, grant: { key: prepared.grantKey, revision: prepared.grantRevision }, failedGrantKeys: prepared.failedGrantKeys, providerId: selection.provider.id, modelId: selection.model?.id ?? null, capability: selection.capability, connection: prepared.connection,
       claim() { claimed = true; },
       finishUnclaimed() {
         if (claimed) return Promise.resolve();
@@ -2722,23 +2775,94 @@ async function selectedAuth(request: Request, env: Env, mode: AuthMode, selectio
   return (await preauthenticate(request, env, mode, selection.provider.id))!;
 }
 
+export function matchesOwnedHttpAttemptInput(cap: OwnedHttpRequest, request: Request, env: Env,
+  input: import("./authority-admission.ts").AdmissionSelection, selection: ProxySelection, signal: AbortSignal, permit?: object): boolean {
+  const owner = ownedProxyInvocations?.get(cap), port = owner?.retry?.pending;
+  return !!owner && !!port && port.phase === 1 && owner.selection === selection && port.input === input && port.signal === signal
+    && matchesOwnedHttpRequestInputs(cap, env, request) && (permit === undefined ? port.permit === undefined : port.permit === permit);
+}
+export function bindOwnedHttpAttemptPermit(cap: OwnedHttpRequest, request: Request, env: Env,
+  input: import("./authority-admission.ts").AdmissionSelection, selection: ProxySelection, signal: AbortSignal, permit: object): void {
+  if (!matchesOwnedHttpAttemptInput(cap, request, env, input, selection, signal) || !ownsOwnedHttpSelectionPermit(permit, cap)) throw identityFailure("protocol");
+  ownedProxyInvocations!.get(cap)!.retry!.pending!.permit = permit;
+}
+export function bindOwnedHttpAttemptCredential(cap: OwnedHttpRequest, permit: object, credential: OwnedHttpCredential): void {
+  const port = ownedProxyInvocations?.get(cap)?.retry?.pending;
+  if (!port || port.phase !== 1 || port.permit !== permit || port.credential
+    || !matchesOwnedHttpCredentialPreparation(credential, cap, permit)) throw identityFailure("protocol");
+  port.credential = credential;
+}
+export function completeOwnedHttpAttemptProvider(cap: OwnedHttpRequest, permit: object): void {
+  const owner = ownedProxyInvocations?.get(cap), port = owner?.retry?.pending;
+  if (!owner || !port || port.phase !== 1 || port.permit !== permit || !port.credential || !port.prepared
+    || ownsOwnedHttpSelectionPermit(permit, cap) || owner.preparingIdentity || owner.preparingUpstream || owner.preparingFields || owner.preparingAdmission)
+    throw identityFailure("protocol");
+  port.phase = 2;
+}
+export function matchesOwnedHttpCompletedPreparation(cap: OwnedHttpRequest, request: Request, credential: OwnedHttpCredential, permit: object): boolean {
+  const owner = ownedProxyInvocations?.get(cap), port = owner?.retry?.pending, prepared = port?.prepared;
+  return !!owner && !!port && port.phase === 2 && port.credential === credential && port.permit === permit
+    && !ownsOwnedHttpSelectionPermit(permit, cap) && matchesOwnedHttpCredentialPreparation(credential, cap, permit, request)
+    && !!prepared && !prepared.ownedVenice && !prepared.revalidateAccount && !prepared.revalidateMedia
+    && !prepared.revalidateDiscovery && !prepared.revalidateDelivery && !prepared.acquireDiscovery && !prepared.continuation
+    && owner.selection?.provider.id !== "venice" && owner.selection?.provider.id !== "gmi"
+    && !owner.preparingIdentity && !owner.preparingUpstream && !owner.preparingFields && !owner.preparingAdmission;
+}
+function excludeOwnedHttpGrant(cap: OwnedHttpRequest, key: string): void {
+  const retry = ownedProxyInvocations?.get(cap)?.retry;
+  if (!retry || typeof key !== "string" || retry.excluded.has(key) || retry.excluded.size >= MAX_GRANT_ATTEMPTS - 1) throw identityFailure("protocol");
+  growOwnedHttpRequest(cap, 16 + 2 * key.length); retry.excluded.add(key);
+}
+function commitOwnedHttpAttempt(cap: OwnedHttpRequest): PreparedUpstream {
+  const owner = ownedProxyInvocations?.get(cap), port = owner?.retry?.pending;
+  if (!owner || !port || (port.phase & ~8) !== 2 || !port.prepared || !port.upload) throw identityFailure("protocol");
+  port.signal!.throwIfAborted(); ownedHttpSignal(cap).throwIfAborted();
+  owner.prepared = port.prepared; owner.upload = port.upload; owner.identity = port.identity; owner.archivePrepared = undefined;
+  port.phase = 3 | (port.phase & 8); owner.retry!.pending = undefined;
+  return port.prepared;
+}
 async function prepareOwnedHttpAttempt(cap: OwnedHttpRequest, request: Request, env: Env,
-  selection: ProxySelection, query: ProxyQuery, excluded?: string): Promise<void> {
-  const invocation = ownedProxyInvocations?.get(cap);
-  if (!invocation?.required || !invocation.identity) throw identityFailure("protocol");
-  growOwnedHttpRequest(cap, 8192 + 8 * (excluded?.length ?? 0));
-  const input = excluded ? { ...invocation.required, excludedKeys: [excluded] } : invocation.required;
-  try { await prepareOwnedHttpProvider(cap, request, env, input, selection, query); }
-  catch (error) {
-    if (!(error instanceof SelectedGrantCredentialFailure) || excluded || selection.provider.id === "anthropic-vertex"
-      || miniMaxAnthropicRoute(selection.provider, selection.endpoint) || !grantRoutingPolicy(invocation.identity.policy.grantRouting).failover) throw error;
-    growOwnedHttpRequest(cap, 8192 + 8 * error.grantKey.length);
+  selection: ProxySelection, query: ProxyQuery, signal: AbortSignal): Promise<void> {
+  const invocation = ownedProxyInvocations?.get(cap), retry = invocation?.retry;
+  if (!invocation?.required || !invocation.identity || !retry || retry.pending) throw identityFailure("protocol");
+  const routing = grantRoutingPolicy(invocation.identity.policy.grantRouting);
+  let firstFailure: SelectedGrantCredentialFailure | undefined;
+  for (;;) {
+    if (retry.next >= MAX_GRANT_ATTEMPTS) throw firstFailure ?? identityFailure("protocol");
+    if (retry.excluded.size) signal.throwIfAborted();
+    let units = 0, members = 0, primitives = 0;
+    for (const key in invocation.required) if (Object.hasOwn(invocation.required, key)) {
+      members++; units += key.length;
+      const value = (invocation.required as unknown as Record<string, unknown>)[key];
+      if (typeof value === "string") { primitives++; units += value.length; }
+      else if (value === null || typeof value !== "object") primitives++;
+    }
+    for (const key of retry.excluded) units += key.length;
+    growOwnedHttpRequest(cap, 8 * (2 + 2 * members + primitives + 2 * retry.excluded.size + 4) + 2 * (units + "excludedKeys".length));
+    const port = retry.ports[retry.next++];
+    port.phase = 1; port.signal = signal;
+    port.input = { ...invocation.required, excludedKeys: Object.freeze([...retry.excluded]) as unknown as string[] };
+    retry.pending = port;
     try {
-      await prepareOwnedHttpProvider(cap, request, env, { ...invocation.required, excludedKeys: [error.grantKey] }, selection, query);
-      const prepared = invocation.prepared!;
-      if (!prepared.grantKey && !grantRoutingPolicy(invocation.identity.policy.grantRouting).environmentFallback) throw error;
-      prepared.failedGrantKey = error.grantKey;
-    } catch (alternateError) { if (isPreparationLimit(alternateError) || isAccountingAdmissionFailure(alternateError) || isIdentityFailure(alternateError)) throw alternateError; throw error; }
+      await prepareOwnedHttpProvider(cap, request, env, port.input, selection, query, true, false, signal);
+      signal.throwIfAborted();
+      if (!port.prepared || port.phase !== 2) throw identityFailure("protocol");
+      if (matchesOwnedHttpCompletedPreparation(cap, request, port.credential!, port.permit!)) {
+        reduceOwnedHttpPreparedCredential(cap, request, port.credential!, port.permit!); port.phase |= 8;
+      }
+      if (!port.prepared.grantKey && retry.excluded.size && !routing.environmentFallback) throw firstFailure ?? ownedHttpError(cap, 503, "upstream_grant_pool_unavailable", "no eligible alternate grant");
+      port.prepared.failedGrantKeys = port.input.excludedKeys;
+      return;
+    } catch (error) {
+      port.phase = 4; retry.pending = undefined;
+      if (isPreparationLimit(error) || isAccountingAdmissionFailure(error) || isIdentityFailure(error)) throw error;
+      signal.throwIfAborted();
+      if (!(error instanceof SelectedGrantCredentialFailure) || selection.provider.id === "anthropic-vertex"
+        || miniMaxAnthropicRoute(selection.provider, selection.endpoint) || !routing.failover) throw firstFailure ?? error;
+      firstFailure ??= error;
+      if (retry.excluded.has(error.grantKey) || retry.excluded.size >= MAX_GRANT_ATTEMPTS - 1 || retry.next >= MAX_GRANT_ATTEMPTS) throw firstFailure;
+      excludeOwnedHttpGrant(cap, error.grantKey);
+    }
   }
 }
 function captureOwnedHttpRuntime(cap: OwnedHttpRequest, request: Request, env: Env,
@@ -2751,26 +2875,45 @@ function captureOwnedHttpRuntime(cap: OwnedHttpRequest, request: Request, env: E
   if (state) queueOwnedHttpSelectionRuntime(cap, request, env, selected, { ...state, grantRevision: prepared.grantRevision });
 }
 
-export async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation, searchOwner?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation): Promise<PreparedUpstream> {
+export async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation, searchOwner?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, signal = request.signal, reservedGrant?: PinnedGrant): Promise<PreparedUpstream> {
   // Direct prepareSelected callers are standalone preparation entries. Retain
   // the token on their selection for internal retries and subsequent calls.
   const preparation = selection.preparation ??= new PreparationAdmission();
   preparation.paths(selection.pathParams, selection.endpoint.path_param_styles);
   assertMultipartIntake(selection);
-  const prepare = (excluded: ReadonlySet<string>) => prepareSingleSelected(request, env, selection, queryInput, auth, excluded, recordSelection, resolvedConnection, pinned, transport, recoverBackground, wan, searchOwner, video, preparation);
-  try { return await prepare(excludedGrantKeys); }
-  catch (error) {
-    const routing = grantRoutingPolicy(auth.policy.grantRouting);
-    if (!(error instanceof SelectedGrantCredentialFailure) || video || searchOwner || wan || wanCreate(selection.endpoint) || pinned || selection.provider.id === "anthropic-vertex" || inlineMusicInput(selection) || publishedMusicInput(selection) || openRouterPcmRequirement({ ...selection, model: selection.model?.upstream }) || isModelDiscovery(selection.endpoint) || nativeRawFormat(selection.endpoint.request_format) || isStandaloneSearch(selection.endpoint) || ["minimax.speech", "minimax.images", "minimax.music"].includes(selection.endpoint.request_format) || miniMaxAnthropicRoute(selection.provider, selection.endpoint) || excludedGrantKeys.size || !routing.failover) throw error;
+  // Fusion already materialized this owner for its reservation. Revalidate the
+  // same authority first, rather than spending an uncounted fifth pool slot.
+  // This preference is not a continuation pin: an ordinary credential failure
+  // may still exclude it and use the remaining shared failover budget.
+  const prepare = (excluded: ReadonlySet<string>) => {
+    const reuseReserved = !pinned && reservedGrant && !(reservedGrant.key && excluded.has(reservedGrant.key));
+    // Reservation already applied the routing policy and recorded its choice.
+    // Revalidation must not advance routing again; a failed owner still allows
+    // the next loop to choose and record a policy-driven alternate normally.
+    return prepareSingleSelected(request, env, selection, queryInput, auth, excluded, recordSelection && !reuseReserved, resolvedConnection,
+      pinned ?? (reuseReserved ? reservedGrant : undefined), transport, recoverBackground, wan, searchOwner, video, preparation, undefined, signal);
+  };
+  const excluded = new Set(excludedGrantKeys);
+  const routing = grantRoutingPolicy(auth.policy.grantRouting);
+  let firstFailure: SelectedGrantCredentialFailure | undefined;
+  while (true) {
+    if (excluded.size) signal.throwIfAborted();
     try {
-      const retry = await prepare(new Set([error.grantKey]));
-      if (!retry.grantKey && !grantRoutingPolicy(auth.policy.grantRouting).environmentFallback) throw error;
-      return { ...retry, failedGrantKey: error.grantKey };
-    } catch (alternateError) { if (isPreparationLimit(alternateError) || isAccountingAdmissionFailure(alternateError)) throw alternateError; throw error; } // No usable alternate: preserve the original credential failure.
+      const prepared = await prepare(excluded);
+      if (!prepared.grantKey && excluded.size && !routing.environmentFallback) throw firstFailure ?? new HttpError(503, "upstream_grant_pool_unavailable", "no eligible alternate grant");
+      return excluded.size ? { ...prepared, failedGrantKeys: [...excluded] } : prepared;
+    } catch (error) {
+      if (isPreparationLimit(error) || isAccountingAdmissionFailure(error) || isIdentityFailure(error)) throw error;
+      signal.throwIfAborted();
+      if (!(error instanceof SelectedGrantCredentialFailure) || video || searchOwner || wan || wanCreate(selection.endpoint) || pinned || selection.provider.id === "anthropic-vertex" || inlineMusicInput(selection) || publishedMusicInput(selection) || openRouterPcmRequirement({ ...selection, model: selection.model?.upstream }) || isModelDiscovery(selection.endpoint) || nativeRawFormat(selection.endpoint.request_format) || isStandaloneSearch(selection.endpoint) || ["minimax.speech", "minimax.images", "minimax.music"].includes(selection.endpoint.request_format) || miniMaxAnthropicRoute(selection.provider, selection.endpoint) || !routing.failover) throw firstFailure ?? error;
+      firstFailure ??= error;
+      if (excluded.has(error.grantKey) || excluded.size >= MAX_GRANT_ATTEMPTS - 1) throw firstFailure;
+      excluded.add(error.grantKey);
+    }
   }
 }
 
-async function prepareSingleSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation, searchOwner?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, preparation?: PreparationAdmission, owned?: { cap: OwnedHttpRequest; upstream: UpstreamAuth }): Promise<PreparedUpstream> {
+async function prepareSingleSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation, searchOwner?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, preparation?: PreparationAdmission, owned?: { cap: OwnedHttpRequest; upstream: UpstreamAuth }, signal = request.signal): Promise<PreparedUpstream> {
   assertPolicyModel(auth.policy, selection);
   if (isModelDiscovery(selection.endpoint)) {
     queryInput = discoveryQuery(queryInput);
@@ -2802,7 +2945,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
   let upstream: UpstreamAuth;
   if (video) videoJsonBytes(selection.body, "input");
   const stickyHash = owned ? null : await grantStickyHash(request, auth);
-  try { upstream = owned ? owned.upstream : await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport, model: selectionUpstreamModel(selection), managedLifecycle: !!selection.endpoint.lifecycle }, video?.controlSignal ?? searchOwner?.operation.signal ?? request.signal, wan, searchOwner, video, preparation); }
+  try { upstream = owned ? owned.upstream : await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport, model: selectionUpstreamModel(selection), managedLifecycle: !!selection.endpoint.lifecycle }, video?.controlSignal ?? searchOwner?.operation.signal ?? signal, wan, searchOwner, video, preparation); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_not_configured", "provider is not configured"); }
   try {
     if (compact) await assertCompactAccount(auth, env, upstream);
@@ -2858,7 +3001,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     minimaxAnthropic?.apply(url, headers);
     preparation?.headers(headers); preparation?.text(url.href, 16384);
     const revalidation = owned && (selection.provider.id === "gmi" || veniceChat(selection))
-      ? beginOwnedHttpRevalidation(owned.cap, request, env, auth, selection, upstream, ownedProxyInvocations!.get(owned.cap)!.upload!, url, headers, preparation!) : undefined;
+      ? beginOwnedHttpRevalidation(owned.cap, request, env, auth, selection, upstream, ownedProxyInvocations!.get(owned.cap)!.retry!.pending!.upload!, url, headers, preparation!) : undefined;
     const ownedGmiCheck = selection.provider.id === "gmi" && revalidation
       ? await prepareOwnedGmiOrganizationBinding(revalidation, request, env, auth, selection, upstream, url, headers) : undefined;
     const gmiCheck = selection.provider.id === "gmi" && !owned
@@ -2982,11 +3125,11 @@ function wanCreateAuthority(env: Env, auth: AuthorizedIdentity, selection: Proxy
   };
 }
 
-export function captureGrantRuntime(context: ExecutionContext, env: Env, key: string | null, revision: string | null, quota: CompiledQuotaConfig, response: Pick<Response, "status" | "headers">, providerId?: string, model?: string | null): void {
+export function captureGrantRuntime(context: ExecutionContext, env: Env, key: string | null, revision: string | null, quota: CompiledQuotaConfig, response: Pick<Response, "status" | "headers">, providerId?: string, model?: string | null, creditExhausted = false): void {
   if (!key) return;
   // A rejected credential must not keep serving from this isolate's cache.
   if (response.status === 401 || response.status === 403) evictGrantCredentials(key);
-  const state = observeProviderGrantQuota(providerId, response, quota, model);
+  const state = observeProviderGrantQuota(providerId, response, quota, model, Date.now(), creditExhausted);
   if (!state) return;
   const direct = queueGrantRuntime(env, key, { ...state, grantRevision: revision });
   if (direct) context.waitUntil(direct);
