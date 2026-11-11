@@ -778,7 +778,7 @@ function growOwnedHttpRequest(cap: Parameters<typeof import("./http-identity-own
   return receiver.growOwnedHttpRequest(cap, bytes);
 }
 
-function reserveOwnedHttpRevalidationOrigins(http: Parameters<typeof import("./http-identity-owner.ts").reserveOwnedHttpRevalidationOrigins>[0], providerId: Parameters<typeof import("./http-identity-owner.ts").reserveOwnedHttpRevalidationOrigins>[1]): ReturnType<typeof import("./http-identity-owner.ts").reserveOwnedHttpRevalidationOrigins> {
+function reserveOwnedHttpRevalidationOrigins(http: Parameters<import("./http-identity-owner.ts").OwnedHttpRequestReceiver["reserveOwnedHttpRevalidationOrigins"]>[0], providerId: Parameters<import("./http-identity-owner.ts").OwnedHttpRequestReceiver["reserveOwnedHttpRevalidationOrigins"]>[1]): ReturnType<import("./http-identity-owner.ts").OwnedHttpRequestReceiver["reserveOwnedHttpRevalidationOrigins"]> {
   const receiver = ownedHttpRequestReceiver(http);
   if (!receiver) throw identityFailure("protocol");
   return receiver.reserveOwnedHttpRevalidationOrigins(http, providerId);

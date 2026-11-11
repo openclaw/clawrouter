@@ -1,6 +1,132 @@
 # Private owned HTTP Chat staging
 
-### Current source blocker: fixed static representation
+### Exact28 fixed-protocol consolidation — source-only partial
+
+The reviewed28-target change is implemented after the `7038f4f9` inventory
+checkpoint. Twelve HTTP implementations now live directly in their existing
+named receiver methods; six sole-use HTTP helpers and ten leaf forwarding
+wrappers are inlined at their original call sites. The canonical guards remain
+before all moved bodies. Token comparison confirms each of the twelve original
+implementation bodies is unchanged after that guard. All twelve methods remain
+synchronous, returning the same result/Promise without an adoption wrapper.
+
+| Removed source targets | Targets | Function-name units | STATIC target credit |
+| --- | ---: | ---: | ---: |
+| Separate HTTP implementations |12|360|1008|
+| HTTP-local helpers |6|137|418|
+| Leaf forwarding wrappers |10|299|838|
+| **Exact change** |**28**|**796**|**2264**|
+
+The successor listed component has1496 explicit callable definitions,35 classes,
+668 runtime import-reference bindings and247 module-variable bindings. Its name
+units are26387 callable,1400 class/property,16941 import and4744 variable units:
+`8*5683+2*49472=144408`. Its sorted
+`[path, lexicalOwner, kind, name, line]` definition roster has SHA256
+`d788e05b05e76b6be62c02d8854a99372ca6f107654656784a3f4ded10c2a18c`.
+No new production function target, class, runtime import, registry, callback,
+Promise, reaction or literal occurrence is introduced. Bodies/literals move
+once. Type-only references now name receiver methods; they create no runtime
+binding. This is2264 less than the historical146672 component below, **not a
+complete STATIC upper**. Even this component exceeds65536 by78872; its98944
+name-payload bytes alone exceed that ceiling. Further small trimming is not a
+closing architecture.
+
+The following source-environment slices make the changed local storage explicit.
+They are per-invocation structural differences, not a sum of simultaneously live
+storage, a debit refund, or an ACTIVE128/SYNC512 upper. For a removed strict
+module-function layer with n parameters, u parameter-name units and q primitive
+parameter alternatives, the enumerated slice is:
+
+`72 function environment +98 arguments binding +(80n+2u+8q) parameter bindings
+ +(280+66n+8q) arguments object +(24+8n+8q) forwarding call List
+ =474+154n+2u+24q`.
+
+It excludes evaluator/Completion/native call work. Existing receiver parameters,
+arguments, guard and the actual method invocation remain. Implementation locals
+move once into that existing method; their targets and failure paths remain paid.
+
+| Removed implementation layer | n | u | q | Removed environment/arguments/List slice |
+| --- | ---: | ---: | ---: | ---: |
+|reserveOwnedHttpRevalidationOrigins|2|14|1|834|
+|consumeOwnedHttpAuthorizationSnapshot|3|12|0|960|
+|consumeOwnedHttpGrantInspection|3|12|0|960|
+|prepareOwnedHttpArchive|6|32|1|1486|
+|admitOwnedHttpPreflightSerialization|4|20|0|1130|
+|consumeOwnedHttpPreflight|8|43|2|1840|
+|prepareOwnedHttpContinuation|7|49|2|1698|
+|consumeOwnedHttpContinuation|5|31|2|1354|
+|abandonOwnedHttpContinuation|3|21|0|978|
+|consumeOwnedHttpGrantMaterialization|10|52|5|2238|
+|admitOwnedHttpConfigurationCommand|3|28|1|1016|
+|ownedExpiryResponse|4|23|3|1208|
+
+The15702 sum is a roster sum over twelve different call sites, not a live-window
+credit. No moved body introduces an await or closure. The receiver's existing
+`this` guard remains; none of the removed functions used its own `this`,
+`arguments` or `new.target`.
+
+| Inlined HTTP helper | Removed slice | New local/block increment | Difference in this slice |
+| --- | ---: | ---: | ---: |
+| finishOwnedSinkChildren |638|0|638|
+| reportOwnedSinkDiagnostics |808|16 conditional block|792|
+| acceptFundedNormalizationOutput |802|52 renamed binding-name units in bytes|750|
+| ownedErrorBytes |1246|16 bounded block|1230|
+| assertOwnedErrorFormat |474|0|474|
+| abortOwnedHttpUpload |638|16 conditional block|622|
+
+Normalization uses `normalizationCap/normalizationChild` and still compares
+against the original usage `child`; the two renamed bindings add26 UTF16 units.
+Diagnostic reporting uses a conditional block inside the existing retirement
+try, preserving ordinal order and the outer cleanup continuation. Upload abort
+keeps origin acquisition before the inner invocation catch. The error-size
+`units` binding now overlaps the call to `beginOwnedHttpError` until its block
+ends; that extra live local must appear in the successor active call table.
+It does not survive into an error factory.
+
+Each leaf call evaluates its old operands, left to right, into bounded local
+bindings before the existing receiver lookup. The added operand slice is
+`80n+2u_new+8q`, plus16 for each of the eight introduced bounded scopes.
+The existing receiver binding moves rather than being allocated twice.
+
+| Leaf site | n | Old name units | Snapshot name units | q | Removed layer slice | Added snapshot/block slice | Difference |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+|credential expiry|4|23|30|3|1208|420|788|
+|authentication|2|11|18|0|804|212|592|
+|initial preparation|3|13|35|0|962|326|636|
+|preflight serialization|4|20|34|0|1130|404|726|
+|continuation preparation|7|49|63|2|1698|718|980|
+|continuation abandonment|3|21|28|0|978|312|666|
+|configuration admission|3|28|42|1|1016|348|668|
+|error text admission|2|8|23|1|822|230|592|
+|authorization snapshot|3|12|33|0|960|306|654|
+|grant inspection|3|12|33|0|960|306|654|
+
+There are34 operand snapshot bindings across these ten sites and eight bounded
+blocks:3582 added bytes in this named slice against10538 removed. Each site has
+its own at-most-seven operand snapshots plus the receiver binding. The expiry,
+authorization-snapshot and grant-inspection callers return directly; the other
+seven calls remain statements. In particular, continuation abandonment does
+not return from its finally block. All new receiver/snapshot aliases end at
+synchronous block exit or direct return, before later awaits. This removes one
+nested APP callee activation per affected call but does not establish the
+remaining active frame/operand/argument/evaluator peak.
+
+Generated subject probes invoke the moved methods with their genuine registered
+receiver, retaining the inner foreign permit/body/Env/signal tests. Separate
+undefined/foreign-`this` cases assert no getter, origin, physical or funding
+effects. Source grammar, unlinked generated-module grammar and declaration/body
+checks are source evidence only. The incremental check parsed10 raw modules,
+three modified observer-generated modules and two generated router/upstream
+programs without linking or evaluating application code. All202 existing-main
+function definitions in the touched production modules are unchanged from the
+prior checkpoint, or have the same token inverse after removing their private
+branch: only run, completeCredentialAdmission and runAdmission need that inverse.
+Runtime/typecheck, complete family admissions,
+failed-ticket replacement, ACTIVE/SYNC, whole DATA/COMMON and full STATIC remain
+unqualified. The next architecture work is a reviewed canonical-owner redesign
+plan; no further consolidation or new reservation is enabled here.
+
+### Historical 0dceed67 lower subset: fixed static representation
 
 The existing STATIC tariff already fails on a deliberately incomplete roster of
 new, source-defined function targets. This uses the existing three products per
@@ -303,7 +429,38 @@ with identifier occurrences still additional. The old rollback-sink activation
 the actual0dce private builder, rather than charging both. K/T/H/S(n), the
 reviewed ECMA2026 direct three-slot ArrayIterator component J, reporting/Error
 products, new helper deltas, ACK/parent/DATA, ACTIVE and STATIC remain separate.
-No guessed J value or completed Wbudget reservation is introduced.
+The adopted J component follows; no completed Wbudget reservation is introduced.
+
+#### Adopted ECMA2026 ArrayIterator component J
+
+For the three verified budget sites only, the adopted normative component is
+`J(n)=7394+204*I(n>0)+34*I(n>=2)`,0<=n<=4:
+J(0)=7394, J(1)=7598, J(2..4)=7632.
+
+| Constituent | Products / condition | Bytes |
+| --- | --- | ---: |
+| Retained iterator custody |S=354+202*I(n>0)|354 or556|
+| Bounded native working state |C52/P499/N264, including106 positions and106 primitive occurrences|6520|
+| Construction/context/List/descriptor/Completion |C9/P30/N26|520|
+| Numeric representation |2*I(n>0)+34*I(n>=2)|0,2 or36|
+
+The sites are reserve allSettled at length L, its result for-of at length L,
+and the selected dispatch D or nonempty rollback K branch. The rollback source
+anchor is immutable fba8 accounting.ts line309. Keeping all three envelopes
+additive gives at most22896, without reuse credit. Current and next targets
+remain distinct until their actual last use; no cumulative iteration history
+is retained. The published ECMA2026 direct three-slot ArrayIterator protocol
+supplies this row, not a generator or additional APP callbacks/jobs.
+
+Retained custody and bounded native working state remain different categories.
+This payment is not an ACTIVE/SYNC exemption or whole-window proof. Input/output
+arrays and elements, allSettled handlers, reports, APP caller environments,
+K/T/H, caller contexts, Error/construction, ACK/parent/DATA and STATIC stay
+separately composed. An absent return during close preserves the incoming
+caller-owned failure. These assumptions apply to the ordinary trusted array
+intrinsics at these three source sites; any successor iterator site needs its
+own manifest. Closing J enables no incomplete family admission or failed-ticket
+replacement.
 
 ### Preclaim configuration boundary — source-only repair
 

@@ -1,4 +1,5 @@
-import { withOwnedNativeLocalError, withOwnedRequestId, withOwnedBackgroundRecovery, ownedErrorResponse, ownedExpiryResponse, ownedHttpError, caughtOwnedResponse, withOwnedCors } from "../http-identity-owner.ts";
+import { withOwnedNativeLocalError, withOwnedRequestId, withOwnedBackgroundRecovery, ownedErrorResponse, ownedHttpError, caughtOwnedResponse, withOwnedCors } from "../http-identity-owner.ts";
+import { ownedHttpRequestReceiver } from '../proxy-completion.ts';
 import { createOwnedHttpCodecUsageResponse, createOwnedHttpGenericUsageResponse, bindOwnedHttpGenericBodylessResponse, beginOwnedHttpProxyPublicationHeaders, checkOwnedHttpProxyPublicationBody, finishOwnedHttpProxyPublication, beginOwnedHttpFinalMetadata, ownOwnedHttpMetadataPublicResponse, withOwnedHttpVersion } from '../http-identity-owner.ts';
 import { markLocalError } from '../native-errors.ts';
 import { setBackgroundRecovery } from '../correlation.ts';
@@ -9,9 +10,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { discardOwnedHttpInitialError, tryBeginOwnedHttpRequest, ownedHttpPlatformFailure, beginOwnedHttpRequest, finishOwnedHttpRequest, ownedHttpSinkOwner, ownedHttpFailureMetadata,
   ownedHttpQueueSend, ownedHttpArchivePut, ownedHttpArchivePipe, ownedHttpArchiveAbort, ownedHttpArchiveCancel, cancelOwnedHttpResponse, discardOwnedHttpSinkResponse,
-  beginOwnedHttpSinkRegistration, completeOwnedHttpSinkRegistration, ownedHttpCompletion, ownedHttpLedgerAcknowledgment,
-  consumeOwnedHttpPreflight, consumeOwnedHttpGrantMaterialization,
-  prepareOwnedHttpContinuation, consumeOwnedHttpContinuation } from '../http-identity-owner.ts';
+  beginOwnedHttpSinkRegistration, completeOwnedHttpSinkRegistration, ownedHttpCompletion, ownedHttpLedgerAcknowledgment } from '../http-identity-owner.ts';
 import { resolveOwnedHttpAuthentication, evictCredentialGeneration } from '../credential-preflight.ts';
 import { PolicyBindingIndexObject } from '../authority.ts';
 import { sqliteFixture } from './sqlite-storage.mjs';
@@ -45,17 +44,25 @@ test('private receipt factories reject unregistered and mixed parent permits bef
   env.ACCESS_CONTROL = binding; env.GRANT_CREDENTIALS = binding;
   const ticket = { get bytes() { ticketReads++; throw Error('duck-typed funding'); }, enter() { ticketReads++; throw Error('unregistered source factory'); } };
   await fixture(t, env, async f => {
+    const receiver = ownedHttpRequestReceiver(f.cap);
+    assert.ok(receiver);
     for (const permit of [{}, f.cap, f.sink]) {
-      assert.throws(() => consumeOwnedHttpPreflight(f.cap, f.sink, permit, ticket, binding, '{}', {}),
+      assert.throws(() => receiver.consumeOwnedHttpPreflight(f.cap, f.sink, permit, ticket, binding, '{}', {}),
         error => error?.code === 'identity_admission_unavailable');
-      assert.throws(() => consumeOwnedHttpGrantMaterialization(f.sink, f.cap, permit, env, 'fixture', {}, 'fixture', null, false),
+      assert.throws(() => receiver.consumeOwnedHttpGrantMaterialization(f.sink, f.cap, permit, env, 'fixture', {}, 'fixture', null, false),
         error => error?.code === 'identity_admission_unavailable');
-      assert.throws(() => consumeOwnedHttpGrantMaterialization(f.sink, f.cap, permit, new Proxy({}, { get() { effects++; throw Error('foreign Env read'); } }), 'fixture', {}, 'fixture', null, false),
+      assert.throws(() => receiver.consumeOwnedHttpGrantMaterialization(f.sink, f.cap, permit, new Proxy({}, { get() { effects++; throw Error('foreign Env read'); } }), 'fixture', {}, 'fixture', null, false),
         error => error?.code === 'identity_admission_unavailable');
-      assert.throws(() => prepareOwnedHttpContinuation(f.cap, permit, {}, ticket, binding, 'policy-bindings'),
+      assert.throws(() => receiver.prepareOwnedHttpContinuation(f.cap, permit, {}, ticket, binding, 'policy-bindings'),
         error => error?.code === 'identity_admission_unavailable');
-      assert.throws(() => consumeOwnedHttpContinuation(f.cap, permit, {}, '{}'),
+      assert.throws(() => receiver.consumeOwnedHttpContinuation(f.cap, permit, {}, '{}'),
         error => error?.code === 'identity_admission_unavailable');
+    }
+    const before = bodyBudgetCharged();
+    for (const wrong of [undefined, Object.freeze({})]) {
+      assert.throws(() => Reflect.apply(receiver.consumeOwnedHttpPreflight, wrong, [f.cap, f.sink, {}, ticket, binding, '{}', {}]),
+        error => error?.code === 'identity_admission_unavailable');
+      assert.equal(bodyBudgetCharged(), before);
     }
     assert.equal(effects, 0); assert.equal(ticketReads, 0);
   });
@@ -639,7 +646,7 @@ for (const status of [401, 403, 402, 503]) test('funded private initial error ha
 });
 test('private expiry keeps its initial fields and only genuine caught failures retain status', async t => {
   await fixture(t, {}, async f => {
-    const expiry = ownedExpiryResponse(f.cap, 'proxy_key_expired', 'expired', '2026-01-01T00:00:00Z');
+    const expiry = ownedHttpRequestReceiver(f.cap).ownedExpiryResponse(f.cap, 'proxy_key_expired', 'expired', '2026-01-01T00:00:00Z');
     assert.deepEqual(JSON.parse(await f.take(f.own(expiry.text()))), { error: { code: 'proxy_key_expired', message: 'expired' }, expiresAt: '2026-01-01T00:00:00Z', expired: true, active: false });
     const genuine = ownedHttpError(f.cap, 403, 'denied', 'denied');
     const accepted = caughtOwnedResponse(f.cap, genuine);

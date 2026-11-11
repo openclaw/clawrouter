@@ -433,7 +433,12 @@ const configurationDelete = WeakMap.prototype.delete;
 const configurationApply = Reflect.apply;
 const configurationFreeze = Object.freeze;
 export function beginPrivateConfiguration(http: OwnedHttpRequest, preparation: PreparationAdmission, providerPermit?: object): object {
-  admitOwnedHttpConfigurationCommand(http, preparation, providerPermit);
+  {
+    const commandHttp = http, commandPreparation = preparation, commandPermit = providerPermit;
+    const receiver = ownedHttpRequestReceiver(commandHttp);
+    if (!receiver) throw identityFailure("protocol");
+    receiver.admitOwnedHttpConfigurationCommand(commandHttp, commandPreparation, commandPermit);
+  }
   if (privateConfigurations && configurationApply(configurationGet, privateConfigurations, [preparation])) throw identityFailure("protocol");
   const nonce = configurationFreeze({});
   const slot: PrivateConfigurationSlot = { __proto__: null, http, nonce, error: undefined, consumed: false } as PrivateConfigurationSlot;
@@ -470,7 +475,12 @@ function configurationFailure(preparation: PreparationAdmission, site: 0 | 1 | 2
     : site === 1 || site === 6 ? "grant_transport_unavailable" : "provider_request_invalid";
   const units = site === 0 ? 46 + name!.length + providerId!.length : site === 1 ? 54 : site === 2 ? 41
     : site === 3 ? 43 + providerId!.length : site === 4 ? 51 : site === 5 ? 56 : 25 + name!.length;
-  admitOwnedHttpErrorText(slot.http, units + code.length);
+  {
+    const commandHttp = slot.http, commandUnits = units + code.length;
+    const receiver = ownedHttpRequestReceiver(commandHttp);
+    if (!receiver) throw identityFailure("protocol");
+    receiver.admitOwnedHttpErrorText(commandHttp, commandUnits);
+  }
   if (!privateConfigurations || configurationApply(configurationGet, privateConfigurations, [preparation]) !== slot
     || slot.nonce !== nonce || slot.error || slot.consumed) throw identityFailure("protocol");
   const message = site === 0 ? `missing Cloudflare config value ${name} for provider ${providerId}`
@@ -496,16 +506,4 @@ export function endPrivateConfiguration(preparation: PreparationAdmission, nonce
   if (!slot || slot.nonce !== nonce) throw identityFailure("protocol");
   slot.error = undefined; slot.http = undefined as never; slot.nonce = undefined as never;
   configurationApply(configurationDelete, privateConfigurations!, [preparation]);
-}
-
-function admitOwnedHttpConfigurationCommand(cap: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpConfigurationCommand>[0], preparation: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpConfigurationCommand>[1], providerPermit?: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpConfigurationCommand>[2]): ReturnType<typeof import("./http-identity-owner.ts").admitOwnedHttpConfigurationCommand> {
-  const receiver = ownedHttpRequestReceiver(cap);
-  if (!receiver) throw identityFailure("protocol");
-  return receiver.admitOwnedHttpConfigurationCommand(cap, preparation, providerPermit);
-}
-
-function admitOwnedHttpErrorText(cap: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpErrorText>[0], units: Parameters<typeof import("./http-identity-owner.ts").admitOwnedHttpErrorText>[1]): ReturnType<typeof import("./http-identity-owner.ts").admitOwnedHttpErrorText> {
-  const receiver = ownedHttpRequestReceiver(cap);
-  if (!receiver) throw identityFailure("protocol");
-  return receiver.admitOwnedHttpErrorText(cap, units);
 }

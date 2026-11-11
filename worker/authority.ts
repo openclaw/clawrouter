@@ -1952,7 +1952,10 @@ function invalidAuthorityValue(message: string): never {
 
 
 export function ownedHttpAuthorizationSnapshot(cap: OwnedHttpRevalidation, env: Env, signal: AbortSignal): Promise<void> {
-  return consumeOwnedHttpAuthorizationSnapshot(cap, env, signal);
+  const commandCap = cap, commandEnv = env, commandSignal = signal;
+  const receiver = ownedHttpRevalidationReceiver(commandCap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.consumeOwnedHttpAuthorizationSnapshot(commandCap, commandEnv, commandSignal);
 }
 
 export async function authorityCall<T>(env: Env, path: string, body: unknown, objectName = "policy-bindings", signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, cover?: MiniMaxMusicCoverControl, identityBudget?: IdentitySourceBudget): Promise<T> {
@@ -2202,10 +2205,4 @@ function sortBindings(values: PolicyBinding[]): PolicyBinding[] {
 
 function invalidAuthorityRequest(message: string): never {
   throw new HttpError(400, "authority_error", message);
-}
-
-function consumeOwnedHttpAuthorizationSnapshot(cap: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpAuthorizationSnapshot>[0], env: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpAuthorizationSnapshot>[1], signal: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpAuthorizationSnapshot>[2]): ReturnType<typeof import("./http-identity-owner.ts").consumeOwnedHttpAuthorizationSnapshot> {
-  const receiver = ownedHttpRevalidationReceiver(cap);
-  if (!receiver) throw identityFailure("protocol");
-  return receiver.consumeOwnedHttpAuthorizationSnapshot(cap, env, signal);
 }

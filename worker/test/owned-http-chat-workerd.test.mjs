@@ -2819,6 +2819,7 @@ test(`native ${variant} named RPC subjects reject substitutions and replay befor
     const response = await f.request('https://fixture/v1/chat/completions', chat(variant, variant === 'chat' ? {} : { model: ownedHttpControlModels[variant] })); assert.equal(response.status, 200);
     const report = await settledState(f), row = report.subjectFaults;
     for (const kind of ['preflight', 'continuation', 'materialization', 'replay']) assert.ok(row[kind] > 0, kind);
+    assert.ok(row.wrongThis >= 6);
     assert.equal(row.foreignGets, 0);
     if (variant !== 'chat') { assert.ok(row.snapshot > 0); assert.ok(row.inspect > 0); }
     const upstream = JSON.parse((await f.request('https://fixture/fixture/upstream')).text);

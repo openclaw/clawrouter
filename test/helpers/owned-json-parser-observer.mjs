@@ -21,8 +21,8 @@ export function createOwnedJsonObservation() {
   }
 
   let checkingSubject = false;
-  const subjectFaults = { preflight: 0, continuation: 0, materialization: 0, snapshot: 0, inspect: 0, replay: 0, foreignGets: 0 };
-  function rejectSubjects(root, kind, command, variants, binding) {
+  const subjectFaults = { preflight: 0, continuation: 0, materialization: 0, snapshot: 0, inspect: 0, replay: 0, wrongThis: 0, foreignGets: 0 };
+  function rejectSubjects(root, kind, command, variants, binding, receiver, genuineOperands) {
     if (checkingSubject) return;
     checkingSubject = true;
     const before = root.funding.bytes, origin = root.nextSinkOrigin, pending = root.sinkPending;
@@ -31,10 +31,19 @@ export function createOwnedJsonObservation() {
       if (binding) Object.defineProperty(root.env, binding, { configurable: true, get() { subjectFaults.foreignGets++; throw Error('unintended binding getter'); } });
       for (const operands of variants) {
         let rejected = false;
-        try { command(...operands); } catch { rejected = true; }
+        try { Reflect.apply(command, receiver, operands); } catch { rejected = true; }
         if (!rejected || subjectFaults.foreignGets || root.funding.bytes !== before
           || root.nextSinkOrigin !== origin || root.sinkPending !== pending) throw Error('named subject rejection had effects');
         subjectFaults[kind]++;
+      }
+      if (receiver) {
+        for (const wrong of [undefined, Object.freeze({})]) {
+          let rejected = false;
+          try { Reflect.apply(command, wrong, genuineOperands); } catch { rejected = true; }
+          if (!rejected || subjectFaults.foreignGets || root.funding.bytes !== before
+            || root.nextSinkOrigin !== origin || root.sinkPending !== pending) throw Error('wrong receiver had effects');
+          subjectFaults.wrongThis++;
+        }
       }
     } finally {
       if (binding) { if (descriptor) Object.defineProperty(root.env, binding, descriptor); else delete root.env[binding]; }
@@ -650,7 +659,8 @@ export function createOwnedJsonObservation() {
         }
       }
       rejectSubjects(root, replay ? 'replay' : kind, command, variants,
-        kind === 'preflight' ? 'ACCESS_CONTROL' : kind === 'materialization' ? 'GRANT_CREDENTIALS' : undefined);
+        kind === 'preflight' ? 'ACCESS_CONTROL' : kind === 'materialization' ? 'GRANT_CREDENTIALS' : undefined,
+        kind === 'preflight' || kind === 'continuation' || kind === 'materialization' ? root : undefined, operands);
     },
     statusStartPrepared(root, controller) {
       if (!this.consumerMode.startsWith('status-start:')) return;
@@ -1540,9 +1550,9 @@ export function observeOwnedJsonSource(path, source) {
     source = replace(source, '      this.phase = 3;\n    }\n    if (primary) throw primary;',
       '      this.phase = 3; ' + probe + '.archiveClosed(this, ownedHttpArchivePut, ownedHttpArchivePipe, ownedHttpArchiveCancel, ownedHttpArchiveAbort);\n    }\n    if (primary) throw primary;');
     for (const [marker, kind, root, command, operands, after] of [
-      ['  claimOwnedHttpPreflightRequest(http, permit, ticket, sink, binding, body, budget, signal);', 'preflight', 'root', 'consumeOwnedHttpPreflight', '[http, sink, permit, ticket, binding, body, budget, signal]', true],
-      ['  claimOwnedHttpContinuationRequest(http, permit, destination, body, signal);', 'continuation', 'root', 'consumeOwnedHttpContinuation', '[http, permit, destination, body, signal]', true],
-      ['  claimOwnedHttpMaterializationProducer(cap, permit, sink, env, key, grant, providerId, refresh, force, signal);', 'materialization', 'sinkOwner(sink)', 'consumeOwnedHttpGrantMaterialization', '[sink, cap, permit, env, key, grant, providerId, refresh, force, signal]', true],
+      ['  claimOwnedHttpPreflightRequest(http, permit, ticket, sink, binding, body, budget, signal);', 'preflight', 'root', 'this.consumeOwnedHttpPreflight', '[http, sink, permit, ticket, binding, body, budget, signal]', true],
+      ['  claimOwnedHttpContinuationRequest(http, permit, destination, body, signal);', 'continuation', 'root', 'this.consumeOwnedHttpContinuation', '[http, permit, destination, body, signal]', true],
+      ['  claimOwnedHttpMaterializationProducer(cap, permit, sink, env, key, grant, providerId, refresh, force, signal);', 'materialization', 'sinkOwner(sink)', 'this.consumeOwnedHttpGrantMaterialization', '[sink, cap, permit, env, key, grant, providerId, refresh, force, signal]', true],
     ]) source = replace(source, marker, '  ' + probe + '.subjectBoundary("' + kind + '", ' + root + ', ' + command + ', ' + operands + ');\n' + marker
       + (after ? '\n  ' + probe + '.subjectBoundary("' + kind + '", ' + root + ', ' + command + ', ' + operands + ', true);' : ''));
     source = replace(source, '  if (root.revalidationCredits < 15) throw identityFailure("protocol");',

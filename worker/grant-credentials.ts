@@ -1549,7 +1549,10 @@ function assertCredentialEnabled(record: CredentialRecord): void {
 
 export function inspectOwnedHttpGrantCredentials(cap: OwnedHttpRevalidation, env: Env, signal: AbortSignal): Promise<void> {
   // Exact ordinary {} body and actual selected binding/key, no special producer.
-  return consumeOwnedHttpGrantInspection(cap, env, signal);
+  const commandCap = cap, commandEnv = env, commandSignal = signal;
+  const receiver = ownedHttpRevalidationReceiver(commandCap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.consumeOwnedHttpGrantInspection(commandCap, commandEnv, commandSignal);
 }
 
 export async function inspectGrantCredentials(env: Env, key: string, signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, cover?: MiniMaxMusicCoverControl): Promise<UpstreamGrant> {
@@ -1789,10 +1792,4 @@ function validAuthorizationTimestamp(value: unknown): string | null {
   const timestamp = authorizationTimestamp(value);
   if (value != null && timestamp === null) throw new HttpError(400, "invalid_upstream_grant", "authorization timestamp must be ISO-8601 or epoch milliseconds");
   return timestamp;
-}
-
-function consumeOwnedHttpGrantInspection(cap: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantInspection>[0], env: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantInspection>[1], signal: Parameters<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantInspection>[2]): ReturnType<typeof import("./http-identity-owner.ts").consumeOwnedHttpGrantInspection> {
-  const receiver = ownedHttpRevalidationReceiver(cap);
-  if (!receiver) throw identityFailure("protocol");
-  return receiver.consumeOwnedHttpGrantInspection(cap, env, signal);
 }

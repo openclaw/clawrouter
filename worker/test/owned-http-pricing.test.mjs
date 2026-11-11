@@ -1555,6 +1555,7 @@ test(`private ${variant} named RPC subjects reject substitutions and replay befo
       const response = await f.request(payload(input)); assert.equal(response.status, 200); await f.drain();
       const row = observation.subjectFaults;
       for (const kind of ['preflight', 'continuation', 'materialization', 'replay']) assert.ok(row[kind] > 0, kind);
+      assert.ok(row.wrongThis >= 6);
       assert.equal(row.foreignGets, 0);
       if (variant !== 'fireworks') { assert.ok(row.snapshot > 0); assert.ok(row.inspect > 0); }
       assert.equal(f.sent.length, 1); assert.equal(f.events.length, 1);
