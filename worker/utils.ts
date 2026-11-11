@@ -245,3 +245,12 @@ export function caughtResponse(error: unknown, requestId: string): Response {
   logCorrelationError("unhandled request error", requestId);
   return errorResponse("internal_error", "internal server error", 500);
 }
+
+
+// References to the existing module's initial constants, not duplicate values.
+// Ordinary helpers keep their original object and property-read behavior.
+export const ownedCorsOrigin = corsHeaders["access-control-allow-origin"];
+export const ownedCorsMethods = corsHeaders["access-control-allow-methods"];
+export const ownedCorsAllow = corsHeaders["access-control-allow-headers"];
+export const ownedCorsBase = corsHeaders["access-control-expose-headers"];
+export const ownedCorsAge = corsHeaders["access-control-max-age"];

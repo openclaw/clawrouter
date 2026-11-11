@@ -1,3 +1,8 @@
+import { withOwnedRequestId, withOwnedBackgroundRecovery, withOwnedCors, withOwnedNativeLocalError } from "./http-identity-owner.ts";
+
+
+import { beginOwnedHttpFinalMetadata, ownOwnedHttpMetadataPublicResponse, withOwnedHttpVersion } from "./http-identity-owner.ts";
+import { measureOwnedHeaderUnits } from "./proxy-completion.ts";
 import { emptyUsageSnapshot } from "./usage-sharding.ts";
 import { sessionUsageReport } from "./usage-report-session.ts";
 import { consoleAsset } from "./console-assets.ts";
@@ -7,9 +12,7 @@ import { poolResponse } from "./pool";
 import packageMetadata from "../package.json" with { type: "json" };
 import { publicSession, sessionPolicies, verifiedAccessSession } from "./access";
 import { adminApi } from "./admin";
-import {
-  avatarResponse, catalogResponse, entitlementResponse, meResponse, modelsResponse, sessionResponse,
-} from "./discovery";
+import { avatarResponse, catalogResponse, entitlementResponse, meResponse, modelsResponse, sessionResponse,  } from "./discovery";
 import { budgetStatus, BudgetLedgerObject, queue, UsageLedgerObject, usageSnapshot, usageSnapshots } from "./ledgers";
 import { GrantCredentialObject } from "./grant-credentials";
 import { budgetPrincipal } from "./budget-scope.ts";
@@ -25,17 +28,15 @@ import { routeCatalog, snapshot } from "./providers";
 import { sameOrigin } from "./request-origin";
 import { sessionCredentialsApi } from "./session-credentials";
 import { authenticateProxyKey, inspectKey } from "./proxy-auth";
-import { proxyManifest, proxyNative, proxyOpenAi } from "./proxy";
+import { proxyManifest, proxyNative, proxyOpenAi, proxyOwnedHttpChat } from "./proxy";
 import { proxyRealtimeWebSocket } from "./realtime-websocket";
 import { proxyResponsesWebSocket } from "./responses-websocket";
 import { proxyResponseControl } from "./response-controls.ts";
 import { requireEmptyResponseControlBody } from "./responses-lifecycle.ts";
 import { backgroundMark as currentBackgroundMark, clearHotCaches, fenceSharedHotCache, pendingBackgroundWork } from "./hot-cache.ts";
 import type { Env, QueueMessage } from "./types";
-import {
-  canonicalPath, caughtResponse, corsEnabled, corsPreflight, decodePathSegment, errorResponse, legacyRedirect,
-  privateJson, redirect, withCors,
-} from "./utils";
+import { tryBeginOwnedHttpRequest, ownedHttpPlatformFailure, growOwnedHttpRequest, finishOwnedHttpRequest, holdOwnedHttpRequest, ownedHttpCompletion, ownedHttpSinkOwner, retireOwnedHttpAssociatedResponse, cancelOwnedHttpResponse, registerOwnedHttpRetirement, caughtOwnedResponse, ownedErrorResponse } from "./http-identity-owner.ts";
+import { canonicalPath, caughtResponse, corsEnabled, corsPreflight, decodePathSegment, errorResponse, legacyRedirect, privateJson, redirect, withCors,  } from "./utils";
 
 export { PolicyBindingIndexObject } from "./authority";
 export { ContentArchiveCleanupObject } from "./content-cleanup.ts";
@@ -227,3 +228,57 @@ function healthStatus(env: Env) {
     },
   };
 }
+
+
+/** Compiled private entry only. No header/Env flag changes the default handler. */
+export const privateOwnedHttpChat: ExportedHandler<Env, QueueMessage> = {
+  async fetch(request, env, context) {
+    const owner = tryBeginOwnedHttpRequest(request, env);
+    if (!owner) throw ownedHttpPlatformFailure;
+    let response: Response | undefined, requestId: string | undefined;
+    try {
+      ownedHttpSinkOwner(owner);
+      // Only correlation's own fields are examined here. In particular this
+      // does not eagerly enumerate the four credential candidates or a lower
+      // credential header after first-valid selection.
+      let units = request.url.length;
+      for (const name of ["x-request-id", "traceparent", "x-clawrouter-session-id", "x-claude-code-session-id", "session-id",
+        "x-clawrouter-agent-id", "x-claude-code-agent-id", "x-clawrouter-parent-agent-id", "x-claude-code-parent-agent-id",
+        "x-clawrouter-project-id", "x-clawrouter-client"]) units += request.headers.get(name)?.length ?? 0;
+      growOwnedHttpRequest(owner, 16384 + 8 * units);
+      const path = canonicalPath(new URL(request.url).pathname), correlated = correlateIngressRequest(request);
+      requestId = correlated.requestId;
+      try {
+        response = correlated.error ? ownedErrorResponse(owner, correlated.error.code, correlated.error.message, correlated.error.status)
+          : path !== "/v1/chat/completions" || request.method !== "POST" ? ownedErrorResponse(owner, "not_found", "route not found", 404)
+          : await ownedHttpCompletion(owner).start(() => proxyOwnedHttpChat(owner, correlated.request, env, context));
+      } catch (error) { response = caughtOwnedResponse(owner, error, requestId); }
+      beginOwnedHttpFinalMetadata(owner, request, env, response, path, requestId);
+      response = withOwnedNativeLocalError(owner, response, path, requestId);
+      response = ownOwnedHttpMetadataPublicResponse(owner, response);
+      const headerUnits = measureOwnedHeaderUnits(response.headers);
+      growOwnedHttpRequest(owner, 16384 + 8 * headerUnits);
+      response = withOwnedRequestId(owner, response, requestId);
+      response = withOwnedBackgroundRecovery(owner, response, request);
+      response = withOwnedHttpVersion(owner, response, env);
+      return withOwnedCors(owner, response, path);
+    } catch (error) {
+      // A failed public-wrapper factory still owns the original delivery body.
+      if (response && retireOwnedHttpAssociatedResponse(owner, response)) {
+        // Start or reuse the already-enrolled reader retirement. Metadata may
+        // fail before the outer wrapper has started its own cancellation.
+      } else if (response?.body && !response.body.locked) {
+        const original = ownedHttpCompletion(owner).start(() => cancelOwnedHttpResponse(ownedHttpSinkOwner(owner), response!));
+        void original.then(() => undefined, () => undefined);
+      } else if (response?.body?.locked) holdOwnedHttpRequest(owner);
+      return caughtOwnedResponse(owner, error, requestId);
+    } finally {
+      response = undefined;
+      const retirement = finishOwnedHttpRequest(owner);
+      // This finalizer is OUTSIDE the encompassing delivery/accounting scope.
+      // Returning a prefix does not await its own reader/late upload tail.
+      registerOwnedHttpRetirement(owner, context, retirement);
+    }
+  },
+  queue,
+};

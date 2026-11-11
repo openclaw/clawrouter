@@ -182,3 +182,10 @@ function invalidHeader(name: string, maxLength: number, code: string) {
 function generatedRequestId(): string {
   return `req_${crypto.randomUUID().replaceAll("-", "")}`;
 }
+
+
+const ownedBackgroundGet = WeakMap.prototype.get;
+const ownedBackgroundApply = Reflect.apply;
+export function ownedBackgroundLocator(request: Request): string | undefined {
+  return ownedBackgroundApply(ownedBackgroundGet, backgroundRecovery, [request]) as string | undefined;
+}

@@ -56,3 +56,28 @@ export function withNativeLocalError(response: Response, path: string, requestId
   if (format === "anthropic") headers.set("request-id", requestId);
   return Response.json(nativeErrorEnvelope({ format, requestId }, response.status, error), { status: response.status, headers });
 }
+
+
+const ownedLocalErrorGet = WeakMap.prototype.get;
+const ownedLocalErrorSet = WeakMap.prototype.set;
+const ownedLocalErrorDelete = WeakMap.prototype.delete;
+const ownedLocalErrorApply = Reflect.apply;
+export function inheritOwnedLocalError(source: Response, copy: Response): Response {
+  const error = ownedLocalErrorApply(ownedLocalErrorGet, localErrors, [source]);
+  if (error) ownedLocalErrorApply(ownedLocalErrorSet, localErrors, [copy, error]);
+  return copy;
+}
+export function clearOwnedLocalError(response: Response): void {
+  // Called only by the admitted private copy's physical owner, after its last
+  // formatter/metadata consumer. Original ordinary source brands are untouched.
+  ownedLocalErrorApply(ownedLocalErrorDelete, localErrors, [response]);
+}
+/** @internal Called only after the genuine owner's initial-error admission. */
+export function markOwnedLocalError(response: Response, code: string, message: string): Response {
+  ownedLocalErrorApply(ownedLocalErrorSet, localErrors, [response, { __proto__: null, code, message }]);
+  return response;
+}
+
+export function ownedLocalErrorDetails(response: Response): Readonly<{ code: string; message: string }> | undefined {
+  return ownedLocalErrorApply(ownedLocalErrorGet, localErrors, [response]) as Readonly<{ code: string; message: string }> | undefined;
+}

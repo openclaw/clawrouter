@@ -1,7 +1,7 @@
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
-const { admitAccountingJson, accountingArchive, accountingIdentity, isAccountingAdmissionFailure } = await import("../json-body.ts");
+const { admitAccountingJson, accountingArchive, privateAccountingArchive, accountingIdentity, isAccountingAdmissionFailure } = await import("../json-body.ts");
 const { createProxyAccounting, accountingReceipt, admitAccountingFacts } = await import("../proxy-accounting.ts");
 const { planBudgetReservation, reserveBudget } = await import("../accounting.ts");
 const { prepareSoftBudget } = await import("../soft-budget.ts");
@@ -425,6 +425,38 @@ for (const [profile, depth] of [["intent", 8], ["capsule", 8], ["archive", 32]])
   assert.throws(() => admitAccountingJson(nest(depth + 1), profile), denied);
 });
 
+// UNRUN_CODE_ONLY_HOSTED. This component witness checks the unchanged archive
+// profile and serializer output; genuine request workspace admission is tested
+// separately through the compiled private HTTP route.
+for (const large of [false, true]) test(`private archive iterative depth32 and wide-key parity ${large}`, async () => {
+  let nested = large ? ('"\\\n😀\ud800').repeat(7000) : 'leaf';
+  for (let index = 0; index < 31; index++) nested = index % 2 ? { next: nested } : [nested];
+  const gateway = [{ name: 'kept', headers: { authorization: 'synthetic' }, authorization: 'synthetic' }];
+  const source = { nested, gateway, toJSON: 'inert', missing: undefined };
+  Object.defineProperty(source, '__proto__', { value: { safe: true }, enumerable: true });
+  for (let index = 0; index < 513; index++) source['field' + index] = '';
+  const original = JSON.stringify(source), expected = accountingArchive(source, gateway);
+  const actual = privateAccountingArchive(source, gateway);
+  const collect = async archive => {
+    if (archive.bytes <= 32768) return [new TextEncoder().encode(archive.text())];
+    const reader = archive.stream().getReader(), chunks = []; let eof = false;
+    try { for (;;) { const part = await reader.read(); if (part.done) { eof = true; break; } chunks.push(part.value); } }
+    finally { try { if (!eof) await reader.cancel(); } finally { reader.releaseLock(); archive.discard(); } }
+    return chunks;
+  };
+  const expectedChunks = await collect(expected), actualChunks = await collect(actual);
+  assert.equal(actual.bytes, expected.bytes);
+  assert.deepEqual(actualChunks.map(value => value.length), expectedChunks.map(value => value.length));
+  assert.deepEqual(Buffer.concat(actualChunks), Buffer.concat(expectedChunks));
+  const saved = JSON.parse(Buffer.concat(actualChunks).toString());
+  assert.deepEqual(saved.gateway, [{ name: 'kept' }]);
+  assert.equal(Object.hasOwn(saved, '__proto__'), true); assert.equal(saved.toJSON, 'inert');
+  assert.equal(Object.hasOwn(saved, 'missing'), false);
+  assert.equal(JSON.stringify(source), original); assert.equal(Object.isFrozen(source), false);
+  assert.equal(actual.retired, true); assert.equal(expected.retired, true);
+  assert.throws(() => privateAccountingArchive({ extra: source }, gateway), denied);
+});
+
 test("capsule container and archive combined-occurrence boundaries", () => {
   assert.doesNotThrow(() => admitAccountingJson(Array.from({ length: 127 }, () => ({})), "capsule"));
   assert.throws(() => admitAccountingJson(Array.from({ length: 128 }, () => ({})), "capsule"), denied);
@@ -444,4 +476,150 @@ test("archive exact wire/text cap differs from decoded-string cap", () => {
   // IEEE number serialization is <=24 units. The closed 64-token ceiling and
   // values ceilings dominated by member/entry ceilings are not fake +1 proofs.
   assert.doesNotThrow(() => admitAccountingJson(-Number.MAX_VALUE, "intent"));
+});
+
+
+// UNRUN_CODE_ONLY_HOSTED. The shared serializer is the parity oracle; only the
+// genuine private entry uses the captured byte primitives. No JSON copy/parser
+// algorithm is substituted by this test.
+for (const text of ['a'.repeat(32750), 'a'.repeat(32769), ('"\\\n😀\ud800').repeat(5000), 'x'.repeat(4095) + '😀' + 'y'.repeat(32769)])
+test('private archive keeps ordinary byte chunks while bypassing mutable DATA hooks: ' + text.length, async t => {
+  const input = { message: text }, typed = Object.getPrototypeOf(Uint8Array.prototype);
+  const subarray = Object.getOwnPropertyDescriptor(typed, 'subarray');
+  const encode = Object.getOwnPropertyDescriptor(TextEncoder.prototype, 'encodeInto');
+  const species = Object.getOwnPropertyDescriptor(Uint8Array, Symbol.species);
+  const read = async archive => {
+    if (archive.bytes <= 32768) return { chunks: [Buffer.from(archive.text())], retired: archive.retired };
+    const reader = archive.stream().getReader(), chunks = [];
+    try { for (;;) { const part = await reader.read(); if (part.done) break; chunks.push(part.value); } }
+    finally { reader.releaseLock(); archive.discard(); }
+    return { chunks, retired: archive.retired };
+  };
+  const expected = await read(accountingArchive(input));
+  let calls = 0;
+  const restore = () => {
+    Object.defineProperty(typed, 'subarray', subarray); Object.defineProperty(TextEncoder.prototype, 'encodeInto', encode);
+    if (species) Object.defineProperty(Uint8Array, Symbol.species, species); else delete Uint8Array[Symbol.species];
+  };
+  t.after(restore);
+  let actual;
+  try {
+    Object.defineProperty(typed, 'subarray', { configurable: true, get() { calls++; throw Error('private archive view escaped'); } });
+    Object.defineProperty(TextEncoder.prototype, 'encodeInto', { configurable: true, get() { calls++; throw Error('private archive encoder escaped'); } });
+    Object.defineProperty(Uint8Array, Symbol.species, { configurable: true, get() { calls++; throw Error('private archive species escaped'); } });
+    actual = await read(privateAccountingArchive(input));
+    assert.equal(calls, 0);
+  } finally { restore(); }
+  assert.equal(actual.retired, true); assert.equal(expected.retired, true);
+  assert.deepEqual(actual.chunks.map(bytes => bytes.length), expected.chunks.map(bytes => bytes.length));
+  assert.deepEqual(Buffer.concat(actual.chunks), Buffer.concat(expected.chunks));
+  assert.deepEqual(JSON.parse(Buffer.concat(actual.chunks).toString()), input);
+  if (Buffer.byteLength(JSON.stringify(input)) > 32768) {
+    try {
+      Object.defineProperty(TextEncoder.prototype, 'encodeInto', { configurable: true, value(...args) {
+        calls++; return Reflect.apply(encode.value, this, args);
+      } });
+      await read(accountingArchive(input));
+      assert.ok(calls > 0, 'ordinary serializer retains its actual DATA-method lookup');
+    } finally { restore(); }
+  }
+});
+
+for (const size of [16, 32740, 32768, 65536]) test('private archive excludes inherited serialization hooks at ' + size, async t => {
+  const source = JSON.parse('{"toJSON":"inert","__proto__":{"safe":true},"items":[null,"x",{"message":"ok"}]}');
+  source.items.push('😀\ud800\n'.repeat(Math.ceil(size / 4)).slice(0, size));
+  source.omitted = undefined;
+  const expected = JSON.stringify(source);
+  const objectHook = Object.getOwnPropertyDescriptor(Object.prototype, 'toJSON');
+  const arrayHook = Object.getOwnPropertyDescriptor(Array.prototype, 'toJSON');
+  let calls = 0;
+  const restore = () => {
+    if (objectHook) Object.defineProperty(Object.prototype, 'toJSON', objectHook); else delete Object.prototype.toJSON;
+    if (arrayHook) Object.defineProperty(Array.prototype, 'toJSON', arrayHook); else delete Array.prototype.toJSON;
+  };
+  t.after(restore);
+  let text, archive;
+  try {
+    Object.defineProperty(Object.prototype, 'toJSON', { configurable: true, value() { calls++; throw Error('inherited object serialization'); } });
+    Object.defineProperty(Array.prototype, 'toJSON', { configurable: true, value() { calls++; return 'unexpected array expansion'; } });
+    archive = privateAccountingArchive(source);
+    if (archive.bytes <= 32768) text = archive.text();
+    else {
+      const reader = archive.stream().getReader(), parts = [];
+      try { for (;;) { const part = await reader.read(); if (part.done) break; parts.push(part.value); } }
+      finally { reader.releaseLock(); archive.discard(); }
+      text = Buffer.concat(parts).toString();
+    }
+  } finally { archive?.discard(); restore(); }
+  assert.equal(calls, 0);
+  assert.equal(text, expected);
+  assert.equal(archive.retired, true);
+});
+
+
+// UNRUN_CODE_ONLY_HOSTED. These are synchronous constructor/guard semantics;
+// the production owner supplies the separate funding and source-provenance gate.
+for (const prototype of ['object', 'array']) for (const kind of ['accessor', 'callable', 'opaque'])
+test(`private immediate JSON rejects ${prototype} ${kind} hook presence without borrowing it`, async () => {
+  const { privateSnapshotJson } = await import('../json-body.ts');
+  const target = prototype === 'object' ? Object.prototype : Array.prototype;
+  const prior = Object.getOwnPropertyDescriptor(target, 'toJSON');
+  const request = { credentialId: 'credential', principalId: null, policyId: 'policy' };
+  let reads = 0, calls = 0, caught;
+  const opaque = new Proxy({}, { get() { reads++; throw Error('hook payload read'); } });
+  const descriptor = kind === 'accessor' ? { configurable: true, get() { reads++; throw Error('hook getter read'); } }
+    : { configurable: true, value: kind === 'callable' ? function () { calls++; throw Error('hook invoked'); } : opaque };
+  Object.defineProperty(target, 'toJSON', descriptor);
+  try { privateSnapshotJson(request); }
+  catch (error) { caught = error; }
+  finally { if (prior) Object.defineProperty(target, 'toJSON', prior); else delete target.toJSON; }
+  assert.equal(caught, 'private JSON prototype is unsupported'); assert.equal(reads, 0); assert.equal(calls, 0);
+});
+
+test('private preflight seals both fresh scalar records before plan exposure and preserves wire', async () => {
+  const { sealPrivatePreflightRequest, privatePreflightJson } = await import('../json-body.ts');
+  const request = { credentialId: 'fixture', secretSha256: 'ab'.repeat(32),
+    source: { bytes: 0, text: 0, values: 0, containers: 0, members: 0, entries: 0, units: 0 } };
+  const expected = JSON.stringify(request);
+  sealPrivatePreflightRequest(request);
+  assert.equal(Object.isFrozen(request), true); assert.equal(Object.isFrozen(request.source), true);
+  assert.equal(Reflect.set(request, 'toJSON', () => 'forged'), false);
+  assert.equal(Reflect.set(request.source, 'values', 7), false);
+  assert.equal(privatePreflightJson(request), expected);
+});
+
+test('private protected capsule keeps sparse inherited indices out of delayed copies', async () => {
+  const { privateCapsuleJson, copyPrivateQueueCapsule } = await import('../json-body.ts');
+  const source = { items: new Array(1) }, destination = {};
+  const prior = Object.getOwnPropertyDescriptor(Array.prototype, '0'); let reads = 0, text, copied;
+  Object.defineProperty(Array.prototype, '0', { configurable: true, get() { reads++; throw Error('inherited index'); } });
+  try { text = privateCapsuleJson(source); copyPrivateQueueCapsule(source, destination); copied = JSON.stringify(destination.subject); }
+  finally { if (prior) Object.defineProperty(Array.prototype, '0', prior); else delete Array.prototype[0]; }
+  assert.equal(text, '{"items":[null]}'); assert.equal(copied, text); assert.equal(reads, 0);
+});
+
+for (const surrogate of [false, true]) for (const cancel of [false, true])
+test(`shared archive cursor depth32 advancement and cancel ${surrogate}/${cancel}`, async () => {
+  const scalar = surrogate ? 'x'.repeat(4095) + '😀' + 'y'.repeat(35903) + '\ud800\udfff' : 'x'.repeat(40000);
+  let source = scalar; for (let depth = 0; depth < 32; depth++) source = { next: source };
+  const expected = Buffer.from(JSON.stringify(source)), lengths = [];
+  for (const make of [accountingArchive, privateAccountingArchive]) {
+    const archive = make(source), body = archive.stream(), reader = body.getReader(), chunks = [];
+    let eof = false;
+    try {
+      for (;;) {
+        const part = await reader.read();
+        if (part.done) { eof = true; break; }
+        chunks.push(Buffer.from(part.value));
+        if (cancel) { await reader.cancel(); break; }
+      }
+    } finally { try { if (!eof) await reader.cancel(); } finally { reader.releaseLock(); archive.discard(); } }
+    const actual = Buffer.concat(chunks);
+    assert.deepEqual(actual, expected.subarray(0, actual.length));
+    if (!cancel) assert.deepEqual(actual, expected);
+    assert.equal(archive.retired, true); assert.equal(body.locked, false);
+    const sizes = chunks.map(chunk => chunk.length); lengths.push(sizes);
+    if (!surrogate) assert.deepEqual(sizes, cancel ? [28929] : [28929, 11361], 'historical 4096-unit fragments keep exact slab partition');
+  }
+  assert.deepEqual(lengths[0], lengths[1]);
 });

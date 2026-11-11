@@ -1,3 +1,5 @@
+import { ownedHttpRevalidationReceiver } from "./proxy-completion.ts";
+import type { OwnedHttpRevalidation } from "./http-identity-owner.ts";
 import { admitGeneratedRuntime, planPrivateIdentityString, planPrivateRuntime, equalAdmissionJson, admitIdentityHeaders, foldIdentitySqlHistory, addIdentitySources, checkIdentitySourceAddition, canonicalFreshIdentityRouting, admitAdmission, admitIdentity, admitIdentityBytes, admitIdentityCount, identityFailure, identityHeader, identityVersion, identityJson, identityPlan, identitySourceBudget, identityUtf8, identitySqlRows, parseIdentity, readIdentityRequest, readIdentityResponse, type IdentitySourceBudget } from "./identity-admission.ts";
 import { PolicyCollection, admitPolicyBindings, admitPolicyBytes, admitPolicyCall, admitPolicyIds, admitPolicyJson, admitPolicyPrincipals, isPolicyCollectionFailure, isPolicyCollectionPath, parsePolicyRecord, policyCandidatePlan, policyCollectionFailure, policyCollectionHeader, policyCollectionVersion, policyId, policyJsonText, policySequencePlan, policySourceBudget, readPolicyRequest, readPolicyResponse, type PolicySourceBudget } from "./policy-collection.ts";
 import { videoControlVersion, videoControlHeader, videoControlBytes, videoJsonBytes, inspectVideoJson, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
@@ -16,10 +18,7 @@ import { nextCredential } from "./credential-mutation.ts";
 import { storedCredentialName } from "./credential-name.ts";
 import { finishAdmissionSelection, privateAdmissionHashes, privateHashScratch } from "./authority-grant-selection.ts";
 import { mergeGrantRuntimeState, normalizeGrantRuntimeState, normalizePrivateGrantRuntimeState } from "./grant-runtime.ts";
-import type {
-  AccessControlUser, AccessPolicy, AccessPolicyEntry, AccessUserRecord, Env, OAuthState, PolicyBinding,
-  UpstreamGrant, AssignmentState, GrantRuntimeState, ProviderConnection, ProxyCredential, ProxyCredentialEntry,
-} from "./types";
+import type { AccessControlUser, AccessPolicy, AccessPolicyEntry, AccessUserRecord, Env, OAuthState, PolicyBinding, UpstreamGrant, AssignmentState, GrantRuntimeState, ProviderConnection, ProxyCredential, ProxyCredentialEntry,  } from "./types";
 import { captureAssignmentRules, captureAdmittedAssignmentRules, prepareAssignmentRules, evaluatePreparedUserAssignments, withLegacyAssignmentState, withAdmittedLegacyAssignmentState, type AssignmentEvidence, type AssignmentRuleEntry } from "./assignment-evaluator.ts";
 import type { AuthorizationSnapshot, AuthorizationSnapshotRequest, CredentialMutation, CredentialMutationResult } from "./authority-contracts.ts";
 import { contentRetentionDefault } from "./content-retention.ts";
@@ -59,10 +58,8 @@ const selfServiceCredentialRetentionLimit = 100;
 export type { AdmissionProvider, AdmissionPool, AdmissionResult } from "./authority-admission.ts";
 import { privateDefaultKeyParts, genuineLegacyKey, prepareCredentialPreflight, resolveAdmission, type AdmissionRequest, type AdmissionStore, type AdmissionResult, type AdmissionPool } from "./authority-admission.ts";
 
-import { admitBridgeFactories, admissionGraphPayload, reserveAdmissionScratch, retireAdmissionScratch,
-  type AdmissionScratchVector, PreflightInstanceArena, PreflightTicket } from "./credential-preflight-arena.ts";
-import { checkPreflightIdentity, admissionContinuationHeader, admissionContinuationVersion, admissionContinuationPath, closeAdmissionEnvelope, credentialPreflightPath, type CredentialPreflightRequest,
-  type CredentialPreflightReply } from "./credential-preflight-protocol.ts";
+import { admitBridgeFactories, admissionGraphPayload, reserveAdmissionScratch, retireAdmissionScratch, type AdmissionScratchVector, PreflightInstanceArena, PreflightTicket } from "./credential-preflight-arena.ts";
+import { checkPreflightIdentity, admissionContinuationHeader, admissionContinuationVersion, admissionContinuationPath, closeAdmissionEnvelope, credentialPreflightPath, type CredentialPreflightRequest, type CredentialPreflightReply } from "./credential-preflight-protocol.ts";
 import { admissionBridgeReplyResponse, consumeAdmissionBridge, consumePreflightRequest, consumePreflightCredential, preflightReplyResponse } from "./credential-preflight-source.ts";
 
 export class PolicyBindingIndexObject implements DurableObject {
@@ -1953,6 +1950,13 @@ function invalidAuthorityValue(message: string): never {
   invalidAuthorityRequest(message);
 }
 
+
+export function ownedHttpAuthorizationSnapshot(cap: OwnedHttpRevalidation, env: Env, signal: AbortSignal): Promise<void> {
+  const commandCap = cap, commandEnv = env, commandSignal = signal;
+  const receiver = ownedHttpRevalidationReceiver(commandCap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.consumeOwnedHttpAuthorizationSnapshot(commandCap, commandEnv, commandSignal);
+}
 
 export async function authorityCall<T>(env: Env, path: string, body: unknown, objectName = "policy-bindings", signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, cover?: MiniMaxMusicCoverControl, identityBudget?: IdentitySourceBudget): Promise<T> {
   const stub = env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName(objectName));

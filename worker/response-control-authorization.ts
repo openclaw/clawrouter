@@ -8,7 +8,13 @@ import type { WanManagedOperation } from "./managed-media-json.ts";
 import { requireManagedCreateAdmission } from "./upstream-retention-admission.ts";
 import { credentialExpired, credentialExpiryError } from "./credential-lifecycle.ts";
 import { accessIdentityVerification, type AccessVerification } from "./access.ts";
-import { authorityCall } from "./authority.ts";
+import { authorityCall, ownedHttpAuthorizationSnapshot } from "./authority.ts";
+import { inspectOwnedHttpGrantCredentials } from "./grant-credentials.ts";
+import { beginOwnedHttpRevalidationRead, endOwnedHttpRevalidationRead, matchesOwnedHttpRevalidationCaller,
+  matchesOwnedHttpRevalidationGraph, retainOwnedHttpRevalidationPolicy, type OwnedHttpRevalidation } from "./http-identity-owner.ts";
+import { acceptOwnedVenicePolicy, finishOwnedVeniceRevalidation, clearOwnedVeniceRevalidation } from "./venice-chat-authority.ts";
+import { acceptOwnedGmiPolicy, finishOwnedGmiRevalidation, clearOwnedGmiRevalidation } from "./gmi-organization-binding.ts";
+import { identityFailure } from "./identity-admission.ts";
 import type { AuthorizationSnapshot } from "./authority-contracts.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { currentLocalSession } from "./local-auth.ts";
@@ -132,6 +138,71 @@ export function assertIssuedControlLive(binding: PublicControlBinding): void {
   if (proof.kind !== "proxy_key" && (!Number.isSafeInteger(proof.expiresAtMs) || Date.now() >= proof.expiresAtMs)) denied();
 }
 function denied(): never { throw new HttpError(403, "response_caller_unavailable", "the original response caller is no longer authorized"); }
+
+interface OwnedResponseControl { env: Env; binding: PublicControlBinding; owner: ContinuationOwner }
+let ownedResponseControls: WeakMap<OwnedHttpRevalidation, OwnedResponseControl> | undefined;
+let ownedResponseControlCount = 0;
+export function bindOwnedResponseControl(cap: OwnedHttpRevalidation, env: Env,
+  authorization: ResponseControlAuthorization, owner: ContinuationOwner): void {
+  if (authorization.kind !== "public" || authorization.binding.proof.kind !== "proxy_key"
+    || ownedResponseControls?.has(cap)) throw identityFailure("protocol");
+  const binding = authorization.binding;
+  if (!matchesOwnedHttpRevalidationCaller(cap, binding.proof, binding.credentialId, binding.principalId,
+    binding.policyId, owner.providerId, owner.grantKey) || binding.policyGeneration !== owner.policyGeneration) throw identityFailure("protocol");
+  (ownedResponseControls ??= new WeakMap()).set(cap, { env, binding, owner });
+  ownedResponseControlCount++;
+}
+export async function revalidateOwnedResponseControl(cap: OwnedHttpRevalidation, signal: AbortSignal): Promise<void> {
+  const state = ownedResponseControls?.get(cap);
+  if (!state) throw identityFailure("protocol");
+  const { binding, owner, env } = state;
+  assertIssuedControlLive(binding);
+  if (binding.proof.kind !== "proxy_key" || binding.policyGeneration !== owner.policyGeneration
+    || !matchesOwnedHttpRevalidationCaller(cap, binding.proof, binding.credentialId, binding.principalId,
+      binding.policyId, owner.providerId, owner.grantKey)) throw identityFailure("protocol");
+  if (signal.aborted) throw identityFailure("transport");
+  beginOwnedHttpRevalidationRead(cap, signal);
+  try {
+    await ownedHttpAuthorizationSnapshot(cap, env, signal);
+    if (owner.grantKey) await inspectOwnedHttpGrantCredentials(cap, env, signal);
+    if (signal.aborted) throw identityFailure("transport");
+    if (owner.providerId === "venice") finishOwnedVeniceRevalidation(cap);
+    else if (owner.providerId === "gmi") finishOwnedGmiRevalidation(cap);
+    else throw identityFailure("protocol");
+  } finally {
+    if (owner.providerId === "venice") clearOwnedVeniceRevalidation(cap);
+    else clearOwnedGmiRevalidation(cap);
+    endOwnedHttpRevalidationRead(cap);
+  }
+}
+// Only the closed original consumer can nominate this exact parsed object.
+// No policy/credential graph is returned to a caller or fulfilled promise.
+export function acceptOwnedAuthorizationSnapshot(cap: OwnedHttpRevalidation, value: unknown): void {
+  const state = ownedResponseControls?.get(cap);
+  if (!state || !matchesOwnedHttpRevalidationGraph(cap, value, "snapshot")) throw identityFailure("protocol");
+  const { binding, owner } = state, proof = binding.proof;
+  if (proof.kind !== "proxy_key") throw identityFailure("protocol");
+  const snapshot = value as AuthorizationSnapshot, policy = snapshot.policy;
+  if (!policy || policy.policyId !== binding.policyId || !policy.policy.enabled || policy.policy.generation !== binding.policyGeneration
+    || (policy.policy.tenantId ?? "default") !== binding.tenantId
+    || policy.policy.providers.length && !policy.policy.providers.includes(owner.providerId)) denied();
+  const credential = snapshot.credential;
+  if (!credential || credential.policyId !== binding.policyId || (credential.principalId ?? null) !== binding.principalId
+    || !safeEqual(credential.secretSha256.toLowerCase(), proof.secretSha256)) denied();
+  const failure = proxyCredentialFailure(credential, policy, snapshot.principalEnabled);
+  if (failure) throw failure;
+  retainOwnedHttpRevalidationPolicy(cap, policy.policy);
+  if (owner.providerId === "venice") acceptOwnedVenicePolicy(cap, policy.policy);
+  else if (owner.providerId === "gmi") acceptOwnedGmiPolicy(cap, policy.policy);
+  else throw identityFailure("protocol");
+}
+export function retireOwnedResponseControl(cap: OwnedHttpRevalidation): void {
+  const state = ownedResponseControls?.get(cap);
+  if (!state) return;
+  state.env = undefined as never; state.binding = undefined as never; state.owner = undefined as never;
+  ownedResponseControls!.delete(cap);
+  if (!--ownedResponseControlCount) ownedResponseControls = undefined;
+}
 
 // Public proof is revalidated by authorizeResponseControl before using this
 // scope. Collection authority must never authorize a new input upload/create.

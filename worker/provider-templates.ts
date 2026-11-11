@@ -1,3 +1,6 @@
+import { ownedHttpRequestReceiver } from "./proxy-completion.ts";
+import type { OwnedHttpRequest } from "./http-identity-owner.ts";
+import { identityFailure } from "./identity-admission.ts";
 import type { CompiledProvider, Env } from "./types.ts";
 import { envValue, HttpError } from "./utils.ts";
 import { providerConfigurationList } from "./provider-connections.ts";
@@ -53,6 +56,15 @@ export class PreparationAdmission {
     return typeof value === "string" && /\S/u.test(value) ? value : null;
   }
   read(env: Env, name: string, csv = false): string | null {
+    if (isPrivateConfiguration(this)) {
+      this.text(name, 256);
+      let value: unknown;
+      // Only the actual getter is opaque. Name/primitive/admission failures
+      // remain outside this catch, including a reentrant terminal refusal.
+      try { value = env[name]; }
+      catch { throw privateProviderConfigurationFailure(this); }
+      return this.primitive(name, value, csv);
+    }
     this.text(name, 256); return this.primitive(name, env[name], csv);
   }
   csv(value: string): void {
@@ -400,9 +412,98 @@ function renderTemplate(provider: CompiledProvider, value: string, env: Env, opt
       omit = true;
       return "";
     }
+    if (owner && privateConfigurations && configurationApply(configurationGet, privateConfigurations, [owner]))
+      throw privateConfigurationFailure(owner, name, provider);
     throw new HttpError(503, "provider_not_configured", `missing Cloudflare config value ${name} for provider ${provider.id}`);
   }, owner, limit);
   // Resolve every binding before omitting a header: an optional field must not
   // hide a missing required field in the same template.
   return omit ? null : resolved;
+}
+
+// Private command state is lazy and external to ordinary preparation instances.
+// The one empty registry container stays in the permanent fixed slice after its
+// first private claim; every live entry/slot/nonce remains charged to its request.
+interface PrivateConfigurationSlot { http: OwnedHttpRequest; nonce: object; error?: HttpError; consumed: boolean }
+let privateConfigurations: WeakMap<PreparationAdmission, PrivateConfigurationSlot> | undefined;
+const configurationMap = WeakMap;
+const configurationGet = WeakMap.prototype.get;
+const configurationSet = WeakMap.prototype.set;
+const configurationDelete = WeakMap.prototype.delete;
+const configurationApply = Reflect.apply;
+const configurationFreeze = Object.freeze;
+export function beginPrivateConfiguration(http: OwnedHttpRequest, preparation: PreparationAdmission, providerPermit?: object): object {
+  {
+    const commandHttp = http, commandPreparation = preparation, commandPermit = providerPermit;
+    const receiver = ownedHttpRequestReceiver(commandHttp);
+    if (!receiver) throw identityFailure("protocol");
+    receiver.admitOwnedHttpConfigurationCommand(commandHttp, commandPreparation, commandPermit);
+  }
+  if (privateConfigurations && configurationApply(configurationGet, privateConfigurations, [preparation])) throw identityFailure("protocol");
+  const nonce = configurationFreeze({});
+  const slot: PrivateConfigurationSlot = { __proto__: null, http, nonce, error: undefined, consumed: false } as PrivateConfigurationSlot;
+  configurationApply(configurationSet, privateConfigurations ??= new configurationMap(), [preparation, slot]);
+  return nonce;
+}
+export function isPrivateConfiguration(preparation: PreparationAdmission | undefined): boolean {
+  return !!preparation && !!privateConfigurations && !!configurationApply(configurationGet, privateConfigurations, [preparation]);
+}
+export function matchesPrivateConfigurationError(preparation: PreparationAdmission, error: unknown): boolean {
+  const slot = privateConfigurations && configurationApply(configurationGet, privateConfigurations, [preparation]) as PrivateConfigurationSlot | undefined;
+  return !!slot && !slot.consumed && slot.error !== undefined && slot.error === error;
+}
+function privateConfigurationFailure(preparation: PreparationAdmission, name: string, provider: CompiledProvider): HttpError {
+  return configurationFailure(preparation, 0, name, provider);
+}
+export function privateGrantTransportFailure(preparation: PreparationAdmission): HttpError { return configurationFailure(preparation, 1); }
+export function privateProviderConfigurationFailure(preparation: PreparationAdmission): HttpError { return configurationFailure(preparation, 2); }
+export function privateMissingCredentialFailure(preparation: PreparationAdmission, provider: CompiledProvider): HttpError { return configurationFailure(preparation, 3, undefined, provider); }
+export function privateAwsCredentialFailure(preparation: PreparationAdmission): HttpError { return configurationFailure(preparation, 4); }
+export function privateTransportBodyFailure(preparation: PreparationAdmission): HttpError { return configurationFailure(preparation, 5); }
+export function privateGrantTemplateFailure(preparation: PreparationAdmission, name: string): HttpError { return configurationFailure(preparation, 6, name); }
+// Site is module-owned, never a caller-supplied status/code/message or formatter.
+function configurationFailure(preparation: PreparationAdmission, site: 0 | 1 | 2 | 3 | 4 | 5 | 6, name?: string, provider?: CompiledProvider): HttpError {
+  const slot = privateConfigurations && configurationApply(configurationGet, privateConfigurations, [preparation]) as PrivateConfigurationSlot | undefined;
+  if (!slot || slot.error || slot.consumed) throw identityFailure("protocol");
+  const nonce = slot.nonce;
+  // Keep the provider.id read at the original message-evaluation point, once.
+  const providerId = site === 0 || site === 3 ? provider!.id : undefined;
+  if ((site === 0 || site === 3) && typeof providerId !== "string" || (site === 0 || site === 6) && typeof name !== "string") throw identityFailure("protocol");
+  if (!privateConfigurations || configurationApply(configurationGet, privateConfigurations, [preparation]) !== slot
+    || slot.nonce !== nonce || slot.error || slot.consumed) throw identityFailure("protocol");
+  const code = site === 0 || site === 3 || site === 4 ? "provider_not_configured"
+    : site === 1 || site === 6 ? "grant_transport_unavailable" : "provider_request_invalid";
+  const units = site === 0 ? 46 + name!.length + providerId!.length : site === 1 ? 54 : site === 2 ? 41
+    : site === 3 ? 43 + providerId!.length : site === 4 ? 51 : site === 5 ? 56 : 25 + name!.length;
+  {
+    const commandHttp = slot.http, commandUnits = units + code.length;
+    const receiver = ownedHttpRequestReceiver(commandHttp);
+    if (!receiver) throw identityFailure("protocol");
+    receiver.admitOwnedHttpErrorText(commandHttp, commandUnits);
+  }
+  if (!privateConfigurations || configurationApply(configurationGet, privateConfigurations, [preparation]) !== slot
+    || slot.nonce !== nonce || slot.error || slot.consumed) throw identityFailure("protocol");
+  const message = site === 0 ? `missing Cloudflare config value ${name} for provider ${providerId}`
+    : site === 1 ? "upstream authorization does not support this operation"
+    : site === 2 ? "provider request configuration is invalid"
+    : site === 3 ? `provider ${providerId} has no usable upstream credential`
+    : site === 4 ? "AWS access key, secret key, and region are required"
+    : site === 5 ? "system instruction transforms require a JSON object body" : `grant transport requires ${name}`;
+  const error = configurationFreeze(new HttpError(site === 1 || site === 5 || site === 6 ? 400 : 503, code, message));
+  if (configurationApply(configurationGet, privateConfigurations, [preparation]) !== slot
+    || slot.nonce !== nonce || slot.error || slot.consumed) throw identityFailure("protocol");
+  slot.error = error;
+  return error;
+}
+export function consumePrivateConfiguration(preparation: PreparationAdmission, nonce: object, error: unknown): error is HttpError {
+  const slot = privateConfigurations && configurationApply(configurationGet, privateConfigurations, [preparation]) as PrivateConfigurationSlot | undefined;
+  if (!slot || slot.nonce !== nonce || slot.consumed || slot.error === undefined || slot.error !== error) return false;
+  slot.consumed = true;
+  return true;
+}
+export function endPrivateConfiguration(preparation: PreparationAdmission, nonce: object): void {
+  const slot = privateConfigurations && configurationApply(configurationGet, privateConfigurations, [preparation]) as PrivateConfigurationSlot | undefined;
+  if (!slot || slot.nonce !== nonce) throw identityFailure("protocol");
+  slot.error = undefined; slot.http = undefined as never; slot.nonce = undefined as never;
+  configurationApply(configurationDelete, privateConfigurations!, [preparation]);
 }

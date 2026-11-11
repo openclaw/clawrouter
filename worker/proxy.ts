@@ -1,6 +1,20 @@
-import { ProxyCompletion } from "./proxy-completion.ts";
-import { isIdentityFailure } from "./identity-admission.ts";
+import { freezeOwnedObserver, setOwnedHeader, ProxyCompletion, inspectOwnedBytes, newOwnedBytes, ownedByteLength, ownedByteSubarray, copyOwnedBytes, newOwnedDecoder, decodeOwnedBytes } from "./proxy-completion.ts";
+import { isIdentityFailure, identityFailure } from "./identity-admission.ts";
+import { beginOwnedHttpProxyPublicationHeaders, checkOwnedHttpProxyPublicationBody, finishOwnedHttpProxyPublication, beginOwnedHttpUpload, beginOwnedHttpRevalidation, prepareOwnedHttpAccounting, finishOwnedHttpRevalidationPreparation, discardOwnedHttpInitialError, admitOwnedHttpErrorText, isOwnedHttpLocalFailure, checkOwnedHttpRequest, matchesOwnedHttpRequestInputs, canCompleteOwnedHttpPreparation, checkOwnedHttpUpload, holdOwnedHttpUploadSerialization, abandonOwnedHttpUpload, growOwnedHttpRequest, ownedHttpSinkOwner, startOwnedHttpProviderFetch, consumeOwnedHttpProviderResponse, disposeOwnedHttpProviderResponse, matchesOwnedHttpProviderHandoff, ownedHttpSignal, cancelOwnedHttpResponse,
+  beginOwnedHttpIntakeDiagnostics, ownedHttpIntakeFailure, finishOwnedHttpIntakeDiagnostics,
+  beginOwnedHttpSinkRegistration, completeOwnedHttpSinkRegistration, abandonUnstartedOwnedHttpRegistration,
+  recordOwnedHttpSoftStatusCleanupFailure,
+  takeOwnedHttpArchiveRegistration, writeOwnedHttpDeferredArchive, ownedHttpArchiveStartFailure, ownedHttpArchiveRegistrationFailure, ownedHttpArchiveReportFailure,
+  ownedHttpCompletion, holdOwnedHttpRequest, dispatchOwnedHttpUpload, ownOwnedHttpResponse,
+  beginOwnedHttpGenericUsage, consumeOwnedHttpGenericUsage, failOwnedHttpGenericUsage, abandonOwnedHttpGenericUsage, type OwnedHttpUsage,
+  ownedErrorResponse, ownedHttpError,
+  type OwnedHttpRequest, type OwnedHttpUpload } from "./http-identity-owner.ts";
 import { providerConfigurationList } from "./provider-connections.ts";
+import { prepareOwnedHttpPricing, adoptOwnedHttpTierBody, takeOwnedHttpMediaAdmission, enterOwnedHttpPricing, leaveOwnedHttpPricing, retireOwnedHttpPricing } from "./pricing.ts";
+import { hasOwnedHttpProviderCommand, ownsOwnedHttpSelectionPermit, prepareOwnedHttpProvider, reserveOwnedHttpProviderPreparation, retireOwnedHttpProviderPreparation } from "./providers.ts";
+import { createPrivateJsonBodyParser, JsonBodyStructureLimit, privateMediaJsonBody, privateUploadJson, type MediaJsonBody } from "./json-body.ts";
+import { bindOwnedHttpAuthentication, matchesOwnedHttpAuthentication, queueOwnedHttpSelectionRuntime,
+  invalidateOwnedHttpSelectionCredentials, certifyOwnedHttpFailedCredentialProvider, finishOwnedHttpForegroundCommands, matchesOwnedHttpCredentialPreparation, matchesOwnedHttpCredentialFailure, reduceOwnedHttpPreparedCredential, type OwnedHttpCredential, type GenerationSelectionHandle } from "./credential-preflight.ts";
 import { admitAccountingJson, isAccountingAdmissionFailure } from "./json-body.ts";
 import { PreparationAdmission, isPreparationLimit, preparationHeader, templateCandidates, preparationValue } from "./provider-templates.ts";
 import { readMiniMaxVideoInput, bindMiniMaxVideoInline, hasMiniMaxVideoInline } from "./minimax-video-inline.ts";
@@ -24,11 +38,13 @@ import { inputRetirement, type InputRetirement } from "./input-retirement.ts";
 import { prepareModelDiscoveryOwner } from "./model-discovery-owner.ts";
 import { REQUESTY_MODELS_FORMAT } from "./requesty-model-catalog.ts";
 import { assertMultipartIntake } from "./transcription-protocol.ts";
-import { prepareVeniceChatAuthority } from "./venice-chat-authority.ts";
-import { prepareVeniceChatResponse, veniceChat } from "./venice-chat-runtime.ts";
+import { prepareVeniceChatAuthority, prepareOwnedVeniceChatAuthority } from "./venice-chat-authority.ts";
+import { prepareVeniceChatResponse, veniceChat, prepareOwnedVeniceChatCodec, checkOwnedVeniceChatCodec,
+  readOwnedVeniceChatResponse, forwardOwnedVeniceUsage, matchesOwnedVeniceUsage } from "./venice-chat-runtime.ts";
+import type { OwnedHttpRevalidation } from "./http-identity-owner.ts";
 import { acquireFeatherlessCatalog, featherlessCatalogResponse, prepareFeatherlessCatalogOwner } from "./featherless-catalog-runtime.ts";
 import { isKeyedModelDiscovery, prepareKeyedModelDiscovery } from "./keyed-model-discovery.ts";
-import { prepareGmiOrganizationBinding } from "./gmi-organization-binding.ts";
+import { prepareGmiOrganizationBinding, prepareOwnedGmiOrganizationBinding } from "./gmi-organization-binding.ts";
 import { fetchPublicModelDiscovery } from "./public-model-discovery.ts";
 import { assertPublicDiscoveryEnvelope, preparePublicDiscoveryOwner } from "./public-model-discovery-owner.ts";
 import { manifestOnlyPublicCatalog, publicCatalogProvider } from "./public-model-discovery-formats.ts";
@@ -54,9 +70,9 @@ import { discoveryQuery, isModelDiscovery, modelDiscoveryResponse, validateDisco
 import { anthropicPricing } from "./anthropic-pricing.ts";
 import { guardAnthropicPrice, type AnthropicPriceGuard } from "./anthropic-price-response.ts";
 import { assertInputTokensRequest } from "./responses-input-tokens.ts";
-import { softBudget, prepareSoftBudget, startSoftBudget, softBudgetPolicy, softBudgetPreflight } from "./soft-budget.ts";
-import { prepareUpstreamRequest } from "./proxy-upstream-request.ts";
-import { BodyLease, bodyLeaseMinimum } from "./body-budget.ts";
+import { softBudget, prepareSoftBudget, startSoftBudget, softBudgetPolicy, softBudgetPreflight, prepareOwnedHttpSoftBudget, startOwnedHttpSoftBudget, ownedHttpSoftBudgetCheck, beforeOwnedHttpSoftDelivery, ownedHttpSoftDenial, closeOwnedHttpSoftBudget } from "./soft-budget.ts";
+import { prepareUpstreamRequest, prepareOwnedUpstreamRequest } from "./proxy-upstream-request.ts";
+import { BodyLease, ExactBodyCharge, bodyLeaseMinimum } from "./body-budget.ts";
 import { WanManagedOperation, readWanJson, wanRequestBytes, preflightWanJson, assertWanHeaders } from "./managed-media-json.ts";
 import { hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
 import { inheritLocalError } from "./native-errors.ts";
@@ -66,18 +82,18 @@ import { assertServiceTier } from "./service-tiers.ts";
 import { grantStickyInput } from "./grant-sticky.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import { assessModelRequest } from "../shared/model-request-parameters.ts";
-import { admitAccountingFacts, createProxyAccounting, estimateCost, type CompoundRequestContext } from "./proxy-accounting";
-import { authenticateProxyKey, proxySessionHash } from "./proxy-auth";
+import { admitAccountingFacts, createProxyAccounting, createOwnedHttpPreparationAccounting, createOwnedHttpAccountingCommand, matchesOwnedHttpAccountingCommand, estimateCost, type AccountingOutcome, type OwnedHttpAccountingCommand, type OwnedHttpPreparationAccounting, type CompoundRequestContext } from "./proxy-accounting";
+import { authenticateProxyKey, authenticateOwnedHttp, proxySessionHash, retireOwnedHttpControlVerification } from "./proxy-auth";
 import { queueGrantRuntime } from "./admission-cache.ts";
 import { evictGrantCredentials } from "./credential-cache.ts";
 import { admissionCacheState, admissionDuration, credentialWait } from "./admission-timing.ts";
 import {
-  concreteOpenAiSelection, directManifestEnvelope, isSelectionFailure, manifestEnvelope, nativeMatch, nativeModelEndpoint, nativeParams,
+  concreteOwnedOpenAiSelection, concreteOpenAiSelection, directManifestEnvelope, isSelectionFailure, manifestEnvelope, nativeMatch, nativeModelEndpoint, nativeParams,
   prepareManifestRequest, prepareNativeRequest, requestObject, validateSelectedInput, type ProxySelection,
 } from "./proxy-selection";
 import { accessIdentity, accessSessionIdentity, verifiedAccessSession } from "./access";
 import { planBudgetReservation, markBudgetDispatched, reserveBudget, validateBudgetReservation, type BudgetReservation, type EstimatedCost } from "./accounting";
-import { admitProspectiveContentRetention, prepareContentRetention, prepareInlineMusicRetention, retentionRequired, type PreparedContentRetention } from "./content-retention";
+import { admitProspectiveContentRetention, prepareContentRetention, prepareOwnedHttpContentRetention, prepareInlineMusicRetention, retentionRequired, type PreparedContentRetention } from "./content-retention";
 import { correlationMetadata, logCorrelationError } from "./correlation.ts";
 import {
   FUSION_MODEL_ID, prepareFusionAccounting, buildFusionReservationProposals, collectFusionProposals,
@@ -101,7 +117,9 @@ import {
   signSigV4, upstreamAuth, upstreamPath, type UpstreamAuth,
 } from "./providers";
 import { assertOperationConfiguration, grantSupports, openRouterPcmRequirement } from "./provider-auth.ts";
-import { inspectJsonError, normalizePreStreamError, observeUsage, proxyResponseHeaders } from "./proxy-response";
+import { inspectJsonError, normalizePreStreamError, observeUsage, proxyResponseHeaders, beginOwnedCodecConsumer,
+  normalizeOwnedCodecPreStreamError, normalizeOwnedHttpPreStreamError, observeOwnedCodecUsage, ownedCodecConsumerRetirement,
+  observeOwnedGenericUsage, ownedGenericUsageRetirement, matchesOwnedCodecUsage, abandonOwnedCodecConsumer, type OwnedCodecConsumer, type ObservedUsage } from "./proxy-response";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledProvider, CompiledQuotaConfig, Env, ProviderConnection } from "./types";
 import {
   decodePathSegment,
@@ -111,6 +129,518 @@ import {
 const MAX_GRANT_ATTEMPTS = 4;
 
 type AuthMode = "proxy_key" | "access";
+
+type OwnedPreparedFields = ReturnType<typeof prepareUpstreamRequest>;
+interface OwnedRetryPort {
+  credentialFailure?: HttpError; credentialFailureKind?: 1 | 2;
+  phase: number; input?: import("./authority-admission.ts").AdmissionSelection;
+  signal?: AbortSignal; permit?: object; prepared?: PreparedUpstream; upload?: OwnedHttpUpload; identity?: AuthorizedIdentity; credential?: OwnedHttpCredential;
+}
+interface OwnedRetryAuthority { ports: OwnedRetryPort[]; excluded: Set<string>; next: number; pending?: OwnedRetryPort }
+interface OwnedProxyInvocation {
+  context: ExecutionContext;
+  admission?: JsonAdmission;
+  selection?: ProxySelection;
+  initialSelectionBody?: Record<string, unknown>;
+  normalizingResponse?: Response;
+  identity?: AuthorizedIdentity;
+  required?: import("./authority-admission.ts").AdmissionSelection;
+  prepared?: PreparedUpstream;
+  preparationAdmitted?: true;
+  archivePrepared?: true;
+  foregroundCommandsClosed?: true;
+  upload?: OwnedHttpUpload;
+  attempts: OwnedHttpUpload[];
+  retry?: OwnedRetryAuthority;
+  retryClosed?: true;
+  preparingIdentity?: AuthorizedIdentity;
+  preparingUpstream?: UpstreamAuth;
+  preparingFields?: OwnedPreparedFields;
+  preparingAdmission?: PreparationAdmission;
+  nativeResponse?: Response;
+  incomingResponse?: Response;
+  nativeSignal?: AbortSignal;
+  nativeUsage?: import("./native-response.ts").ValidatedNativeUsage;
+  publicBody?: ReadableStream<Uint8Array> | null;
+  operation?: HttpOperation;
+  consumer?: OwnedCodecConsumer;
+  genericUsage?: OwnedHttpUsage;
+  usageInput?: Response;
+  observedUsage?: ObservedUsage;
+  usageContext?: Readonly<import("./token-usage.ts").UsageTokenContext>;
+  requestId?: string;
+  softPlan?: ReturnType<typeof prepareSoftBudget>;
+  softAttempt?: OwnedHttpUpload;
+  accounting?: OwnedHttpAccountingCommand;
+  accountingCost?: EstimatedCost;
+  accountingPlan?: unknown;
+  terminalResponse?: Response;
+  terminalReservation?: BudgetReservation;
+  terminalContent?: string | null;
+  accountingHandoff?: number;
+  accountingReady?: Promise<void>;
+  resolveAccounting?: () => void;
+  accountingWork?: Promise<boolean>;
+  accountingRegistration?: ReturnType<typeof beginOwnedHttpSinkRegistration>;
+  accountingOutcome?: AccountingOutcome;
+  accountingStatus?: number;
+  accountingDispatched?: boolean;
+}
+interface OwnedPreparationReceiver { owner: OwnedHttpRequest; fields?: OwnedPreparedFields }
+let ownedProxyInvocations: WeakMap<OwnedHttpRequest, OwnedProxyInvocation> | undefined;
+let ownedPreparationReceivers: WeakMap<OwnedHttpUpload, OwnedPreparationReceiver> | undefined;
+let ownedPreparedSelections: WeakMap<PreparedUpstream, GenerationSelectionHandle> | undefined;
+let ownedPreparedUploads: WeakMap<PreparedUpstream, OwnedHttpUpload> | undefined;
+let ownedProxyCount = 0;
+export function matchesOwnedHttpConfigurationPreparation(cap: OwnedHttpRequest, preparation: PreparationAdmission): boolean {
+  const invocation = ownedProxyInvocations?.get(cap);
+  return !!invocation && invocation.preparingAdmission === preparation
+    && (invocation.initialSelectionBody !== undefined || invocation.preparingIdentity !== undefined);
+}
+export function matchesOwnedHttpInitialSelection(cap: OwnedHttpRequest, body: Record<string, unknown>, preparation: PreparationAdmission): boolean {
+  const invocation = ownedProxyInvocations?.get(cap);
+  return !!invocation && invocation.initialSelectionBody === body && invocation.preparingAdmission === preparation
+    && invocation.selection === undefined;
+}
+export function hasOwnedHttpProxyInvocation(cap: OwnedHttpRequest): boolean { return ownedProxyInvocations?.has(cap) === true; }
+export function matchesOwnedHttpForegroundCommandRetirement(cap: OwnedHttpRequest): boolean {
+  const owner = ownedProxyInvocations?.get(cap);
+  return !!owner?.foregroundCommandsClosed && !!owner.prepared && !!owner.operation
+    && !owner.preparingIdentity && !owner.preparingFields && !owner.preparingAdmission;
+}
+export function matchesOwnedHttpVeniceResponseInput(cap: OwnedHttpRequest, attempt: OwnedHttpUpload, response: Response, signal: AbortSignal): boolean {
+  const owner = ownedProxyInvocations?.get(cap);
+  return !!owner && owner.nativeResponse === response && owner.nativeSignal === signal && owner.upload === attempt
+    && owner.prepared !== undefined && ownedPreparedUploads?.get(owner.prepared) === attempt;
+}
+export function matchesOwnedHttpRevalidationCommand(cap: OwnedHttpRequest, attempt: OwnedHttpUpload,
+  revalidation: OwnedHttpRevalidation, signal: AbortSignal, delivery: boolean): boolean {
+  const owner = ownedProxyInvocations?.get(cap), prepared = owner?.prepared;
+  return !!owner && !!prepared && owner.upload === attempt && ownedPreparedUploads?.get(prepared) === attempt
+    && owner.operation?.signal === signal && (delivery
+      ? prepared.ownedVenice === revalidation && owner.nativeSignal === signal && owner.nativeResponse !== undefined
+      : !!prepared.revalidateAccount && (prepared.ownedVenice === revalidation || owner.selection?.provider.id === "gmi"));
+}
+export function matchesOwnedHttpProviderFetchInput(cap: OwnedHttpRequest, attempt: OwnedHttpUpload, url: URL, init: RequestInit): boolean {
+  const owner = ownedProxyInvocations?.get(cap), prepared = owner?.prepared;
+  return !!owner && !!prepared && owner.upload === attempt && ownedPreparedUploads?.get(prepared) === attempt
+    && prepared.url === url && init.headers === prepared.headers && init.body === prepared.requestBody
+    && init.signal === owner.operation?.signal && init.method === owner.selection?.method && init.redirect === "manual";
+}
+export function acceptOwnedHttpProviderResponse(cap: OwnedHttpRequest, attempt: OwnedHttpUpload, response: Response): void {
+  const owner = ownedProxyInvocations?.get(cap);
+  if (!owner || owner.upload !== attempt || owner.incomingResponse || !matchesOwnedHttpProviderHandoff(cap, attempt, response)) throw identityFailure("protocol");
+  owner.incomingResponse = response;
+}
+export function matchesOwnedHttpAccountingInput(http: OwnedHttpRequest, request: Request, env: Env, auth: AuthorizedIdentity, selection: ProxySelection): boolean {
+  const owner = ownedProxyInvocations?.get(http);
+  return !!owner && matchesOwnedHttpRequestInputs(http, env, request) && owner.identity === auth && owner.selection === selection;
+}
+export function matchesOwnedHttpArchiveInput(http: OwnedHttpRequest, env: Env, auth: AuthorizedIdentity,
+  selection: ProxySelection, requestId: string): boolean {
+  const owner = ownedProxyInvocations?.get(http);
+  return !!owner && !owner.archivePrepared && matchesOwnedHttpRequestInputs(http, env) && owner.identity === auth && owner.selection === selection
+    && !!owner.accounting && owner.accounting.requestId === requestId && owner.prepared !== undefined;
+}
+export function claimOwnedHttpArchiveInput(http: OwnedHttpRequest, env: Env, auth: AuthorizedIdentity,
+  selection: ProxySelection, requestId: string): boolean {
+  if (!matchesOwnedHttpArchiveInput(http, env, auth, selection, requestId)) return false;
+  ownedProxyInvocations!.get(http)!.archivePrepared = true; return true;
+}
+export function acceptOwnedHttpAccountingCost(http: OwnedHttpRequest, accounting: OwnedHttpAccountingCommand, cost: EstimatedCost): void {
+  const owner = ownedProxyInvocations?.get(http);
+  if (!owner || owner.accounting || !matchesOwnedHttpAccountingCommand(http, accounting)) throw identityFailure("protocol");
+  // The fixed waiter and registration exist before any budget obligation.
+  growOwnedHttpRequest(http, 4096);
+  const registration = beginOwnedHttpSinkRegistration(ownedHttpSinkOwner(http));
+  owner.accounting = accounting; owner.accountingCost = cost;
+  owner.accountingRegistration = registration; owner.accountingHandoff = 1;
+  owner.accountingReady = new Promise<void>(resolve => { owner.resolveAccounting = resolve; });
+  try { ownedHttpCompletion(http).startPrivateLeaf(() => owner.accountingWork = runOwnedUsageAccounting(http)); }
+  catch (reason) {
+    if (!owner.accountingWork) {
+      abandonUnstartedOwnedHttpRegistration(registration);
+      owner.accountingRegistration = undefined; owner.resolveAccounting!();
+      owner.accountingReady = undefined; owner.resolveAccounting = undefined; owner.accountingHandoff = undefined;
+      owner.accounting = undefined; owner.accountingCost = undefined;
+    }
+    throw reason;
+  }
+}
+export function matchesOwnedHttpSoftStatusPlan(cap: OwnedHttpRequest, env: Env, plan: ReturnType<typeof prepareSoftBudget>, operation?: HttpOperation): boolean {
+  const owner = ownedProxyInvocations?.get(cap);
+  return !!owner && matchesOwnedHttpRequestInputs(cap, env) && owner.softPlan === plan && !!owner.softAttempt
+    && (operation === undefined || owner.operation === operation && owner.upload === owner.softAttempt);
+}
+export function matchesOwnedHttpPublicBody(cap: OwnedHttpRequest, body: ReadableStream<Uint8Array> | null): boolean {
+  return !!body && ownedProxyInvocations?.get(cap)?.publicBody === body;
+}
+export function matchesOwnedHttpCodecConsumerInput(http: OwnedHttpRequest, codec: OwnedHttpRevalidation,
+  attempt: OwnedHttpUpload, operation: HttpOperation, streaming: boolean, requestId: string,
+  usageContext?: Readonly<import("./token-usage.ts").UsageTokenContext>): boolean {
+  const owner = ownedProxyInvocations?.get(http), selection = owner?.selection;
+  return !!owner && owner.operation === operation && owner.upload === attempt && owner.requestId === requestId && owner.usageContext === usageContext
+    && owner.prepared?.ownedVenice === codec && ownedPreparedUploads?.get(owner.prepared) === attempt
+    && !!selection && !Array.isArray(selection.body) && (selection.body.stream === true) === streaming
+    && selection.endpoint.request_format === "openai.chat_completions" && selection.endpoint.response_format === "openai.chat_completions";
+}
+export function matchesOwnedHttpNormalizationInput(http: OwnedHttpRequest, attempt: OwnedHttpUpload, response: Response, operation: HttpOperation): boolean {
+  const owner = ownedProxyInvocations?.get(http);
+  return !!owner && owner.normalizingResponse === response && owner.operation === operation && owner.upload === attempt
+    && !!owner.prepared && ownedPreparedUploads?.get(owner.prepared) === owner.upload;
+}
+export function matchesOwnedHttpCodecNormalizationInput(http: OwnedHttpRequest, codec: OwnedHttpRevalidation,
+  attempt: OwnedHttpUpload, operation: HttpOperation, requestId: string): boolean {
+  const owner = ownedProxyInvocations?.get(http);
+  return !!owner && owner.operation === operation && owner.upload === attempt && owner.requestId === requestId
+    && owner.prepared?.ownedVenice === codec && ownedPreparedUploads?.get(owner.prepared) === attempt;
+}
+export function matchesOwnedHttpPublicationContext(http: OwnedHttpRequest, attempt: OwnedHttpUpload, operation: HttpOperation): boolean {
+  const owner = ownedProxyInvocations?.get(http), selection = owner?.selection;
+  return !!owner && owner.upload === attempt && owner.operation === operation && !!owner.prepared
+    && ownedPreparedUploads?.get(owner.prepared) === attempt && selection?.capability === "llm.chat"
+    && selection.endpoint.request_format === "openai.chat_completions" && selection.endpoint.response_format === "openai.chat_completions";
+}
+export function matchesOwnedHttpGenericUsageInput(http: OwnedHttpRequest, attempt: OwnedHttpUpload, response: Response,
+  operation: HttpOperation, format: string, tariff: import("./request-tariff.ts").RequestTariff | undefined,
+  validated: import("./native-response.ts").ValidatedNativeUsage | undefined, usageContext: Readonly<import("./token-usage.ts").UsageTokenContext> | undefined,
+  accounting: OwnedHttpAccountingCommand): boolean {
+  const owner = ownedProxyInvocations?.get(http), selection = owner?.selection;
+  return !!owner && !owner.consumer && !owner.genericUsage && owner.usageInput === response && owner.operation === operation
+    && owner.upload === attempt && !!owner.prepared && ownedPreparedUploads?.get(owner.prepared) === attempt
+    && selection?.capability === "llm.chat" && selection.endpoint.request_format === "openai.chat_completions"
+    && selection.endpoint.response_format === "openai.chat_completions" && format === selection.endpoint.response_format
+    && owner.accounting === accounting && matchesOwnedHttpAccountingCommand(http, accounting)
+    && owner.accountingCost?.requestTariff === tariff && owner.nativeUsage === validated && owner.usageContext === usageContext;
+}
+export function acceptOwnedGenericUsage(http: OwnedHttpRequest, cap: OwnedHttpUsage, usage: ObservedUsage): void {
+  const owner = ownedProxyInvocations?.get(http);
+  if (!owner || owner.genericUsage !== cap || owner.observedUsage !== undefined) throw identityFailure("protocol");
+  if (((owner.accountingHandoff ?? 0) & 7) >= 3) return;
+  owner.observedUsage = usage;
+  owner.accountingHandoff = owner.accountingHandoff! & ~7 | 3;
+  wakeOwnedAccounting(owner);
+}
+export function matchesOwnedHttpCodecUsageInput(http: OwnedHttpRequest, codec: OwnedHttpRevalidation,
+  attempt: OwnedHttpUpload, operation: HttpOperation, validated: import("./native-response.ts").ValidatedNativeUsage | undefined,
+  usageContext: Readonly<import("./token-usage.ts").UsageTokenContext> | undefined): boolean {
+  const owner = ownedProxyInvocations?.get(http);
+  return !!owner && owner.operation === operation && owner.upload === attempt && owner.consumer === codec
+    && owner.prepared?.ownedVenice === codec && ownedPreparedUploads?.get(owner.prepared) === attempt
+    && owner.nativeUsage === validated && owner.usageContext === usageContext;
+}
+export function acceptOwnedHttpVeniceUsage(http: OwnedHttpRequest, codec: OwnedHttpRevalidation,
+  response: Response, usage: import("./native-response.ts").ValidatedNativeUsage | undefined): void {
+  const owner = ownedProxyInvocations?.get(http);
+  if (!owner || owner.prepared?.ownedVenice !== codec || !matchesOwnedVeniceUsage(codec, response, usage)) throw identityFailure("protocol");
+  owner.nativeUsage = usage;
+}
+export function acceptOwnedCodecUsage(http: OwnedHttpRequest, consumer: OwnedCodecConsumer, response: Response, usage: ObservedUsage): void {
+  const owner = ownedProxyInvocations?.get(http);
+  if (!owner || owner.consumer !== consumer || owner.observedUsage !== undefined || !matchesOwnedCodecUsage(consumer, response, usage))
+    throw identityFailure("protocol");
+  if (((owner.accountingHandoff ?? 0) & 7) >= 3) return;
+  owner.observedUsage = usage;
+  owner.accountingHandoff = owner.accountingHandoff! & ~7 | 3;
+  wakeOwnedAccounting(owner);
+}
+// Low three bits: PREPARED, ARMED, READY, CLAIMED, TERMINAL_OWNED, SETTLED.
+// Bits 8/16/32: publication settled / actual work registered / publication failed. Readiness is VOID.
+function wakeOwnedAccounting(owner: OwnedProxyInvocation): void {
+  if ((owner.accountingHandoff! & 15) === 11) owner.resolveAccounting!();
+}
+export function offerOwnedHttpAccountingOutcome(http: OwnedHttpRequest, accounting: OwnedHttpAccountingCommand,
+  outcome: AccountingOutcome): Promise<boolean> {
+  const owner = ownedProxyInvocations?.get(http), phase = (owner?.accountingHandoff ?? 0) & 7;
+  if (!owner || owner.accounting !== accounting || !owner.accountingWork || phase < 1 || phase > 3
+    || !matchesOwnedHttpAccountingCommand(http, accounting)) throw identityFailure("protocol");
+  if (phase !== 3) {
+    owner.accountingOutcome = outcome;
+    owner.accountingHandoff = owner.accountingHandoff! & ~7 | 3;
+    wakeOwnedAccounting(owner);
+  }
+  return owner.accountingWork;
+}
+export function matchesOwnedHttpBudgetPlan(http: OwnedHttpRequest, accounting: OwnedHttpAccountingCommand,
+  plan: unknown, attempt: OwnedHttpUpload): boolean {
+  const owner = ownedProxyInvocations?.get(http);
+  return !!owner && owner.accounting === accounting && owner.accountingPlan === plan && owner.upload === attempt
+    && !!owner.prepared && ownedPreparedUploads?.get(owner.prepared) === attempt && (owner.accountingHandoff! & 7) === 1;
+}
+export function matchesOwnedHttpPreparationAccountingRoute(http: OwnedHttpRequest): boolean {
+  const owner = ownedProxyInvocations?.get(http);
+  return !!owner && !owner.accounting && !owner.accountingHandoff;
+}
+export function matchesOwnedHttpAccountingClaim(http: OwnedHttpRequest, accounting: OwnedHttpAccountingCommand,
+  outcome?: AccountingOutcome): boolean {
+  const owner = ownedProxyInvocations?.get(http);
+  return !!owner && owner.accounting === accounting && (owner.accountingHandoff! & 7) === 4
+    && (outcome === undefined || owner.accountingOutcome === outcome);
+}
+export function matchesOwnedHttpAccountingUsage(http: OwnedHttpRequest, accounting: OwnedHttpAccountingCommand,
+  status: number, usage: ObservedUsage, reservation: BudgetReservation, content: string | null): boolean {
+  const owner = ownedProxyInvocations?.get(http);
+  return !!owner && matchesOwnedHttpAccountingClaim(http, accounting) && owner.observedUsage === usage
+    && (owner.accountingStatus ?? 502) === status && owner.terminalReservation === reservation && (owner.terminalContent ?? null) === content;
+}
+export function adoptedOwnedHttpAccountingOutcome(http: OwnedHttpRequest, accounting: OwnedHttpAccountingCommand): void {
+  const owner = ownedProxyInvocations?.get(http);
+  if (!owner || owner.accounting !== accounting || (owner.accountingHandoff! & 7) !== 4) throw identityFailure("protocol");
+  owner.accountingHandoff = owner.accountingHandoff! & ~7 | 5;
+}
+export function failedOwnedHttpAccountingOutcome(http: OwnedHttpRequest, accounting: OwnedHttpAccountingCommand): void {
+  const owner = ownedProxyInvocations?.get(http);
+  if (!owner || owner.accounting !== accounting || (owner.accountingHandoff! & 7) !== 4) throw identityFailure("protocol");
+  owner.accountingHandoff = owner.accountingHandoff! & ~7 | 7; // FAILED_PRE_ADOPTION, never consumed.
+}
+export function captureOwnedHttpAccountingStatus(http: OwnedHttpRequest, accounting: OwnedHttpAccountingCommand, status: number): void {
+  const owner = ownedProxyInvocations?.get(http);
+  if (!owner || owner.accounting !== accounting || !matchesOwnedHttpAccountingCommand(http, accounting)) throw identityFailure("protocol");
+  if (typeof status === "number" && Number.isInteger(status) && status >= 200 && status <= 599) owner.accountingStatus = status;
+}
+export function ownedHttpAccountingStatus(http: OwnedHttpRequest, accounting: OwnedHttpAccountingCommand): number | undefined {
+  const owner = ownedProxyInvocations?.get(http);
+  if (!owner || owner.accounting !== accounting) throw identityFailure("protocol");
+  return owner.accountingStatus;
+}
+export function ownsConsumedHttpAccountingHandoff(http: OwnedHttpRequest, producer: OwnedHttpUsage): boolean {
+  const owner = ownedProxyInvocations?.get(http);
+  return !!owner && owner.genericUsage === producer && (owner.accountingHandoff! & 7) === 5;
+}
+export function ownsFailedHttpAccountingHandoff(http: OwnedHttpRequest, producer: OwnedHttpUsage): boolean {
+  const owner = ownedProxyInvocations?.get(http);
+  return !!owner && owner.genericUsage === producer && (owner.accountingHandoff! & 7) === 7;
+}
+export function captureOwnedHttpUsageStatus(http: OwnedHttpRequest, producer: OwnedHttpUsage | OwnedCodecConsumer,
+  response: Response, status: number): void {
+  const owner = ownedProxyInvocations?.get(http);
+  if (!owner || owner.consumer !== producer && owner.genericUsage !== producer || !owner.accounting
+    || owner.usageInput !== response && owner.terminalResponse !== response) throw identityFailure("protocol");
+  captureOwnedHttpAccountingStatus(http, owner.accounting, status);
+}
+export function registerOwnedHttpAccountingWork(http: OwnedHttpRequest, accounting: OwnedHttpAccountingCommand): void {
+  const owner = ownedProxyInvocations?.get(http);
+  if (!owner || owner.accounting !== accounting || !owner.accountingWork || !owner.accountingHandoff) throw identityFailure("protocol");
+  if (owner.accountingHandoff & 16) return;
+  const receipt = owner.accountingRegistration;
+  if (!receipt) throw identityFailure("protocol");
+  // A throw after waitUntil starts never creates a replacement work item.
+  owner.accountingHandoff |= 16; owner.accountingRegistration = undefined;
+  completeOwnedHttpSinkRegistration(receipt, owner.context, owner.accountingWork);
+}
+async function runOwnedUsageAccounting(http: OwnedHttpRequest): Promise<boolean> {
+  const owner = ownedProxyInvocations!.get(http)!;
+  await owner.accountingReady;
+  if (!owner.accounting || (owner.accountingHandoff! & 15) !== 11) throw identityFailure("protocol");
+  owner.accountingHandoff = owner.accountingHandoff! & ~7 | 4;
+  let original: Promise<boolean>;
+  try {
+    original = owner.accountingOutcome ? owner.accounting.consume(owner.accountingOutcome)
+      : owner.accounting.completeCaptured(owner.accountingStatus ?? 502, owner.observedUsage!, owner.terminalReservation!,
+        owner.terminalContent ?? null, owner.operation?.status);
+  } catch (reason) {
+    original = owner.accounting.failClaim(reason); reason = undefined;
+  }
+  const adopted = (owner.accountingHandoff! & 7) === 5;
+  if (!adopted && (owner.accountingHandoff! & 7) !== 7) throw identityFailure("protocol");
+  if (adopted) {
+    delete owner.accountingOutcome; delete owner.observedUsage;
+    if (owner.genericUsage) { consumeOwnedHttpGenericUsage(owner.genericUsage); delete owner.genericUsage; }
+    delete owner.terminalResponse; delete owner.terminalReservation; delete owner.terminalContent;
+  } else if (owner.genericUsage) failOwnedHttpGenericUsage(owner.genericUsage);
+  try { return await original; }
+  finally {
+    if (adopted) owner.accountingHandoff = owner.accountingHandoff! & ~7 | 6;
+    owner.accounting.close(); owner.accountingReady = undefined; owner.resolveAccounting = undefined;
+  }
+}
+function settleOwnedAccountingPublication(http: OwnedHttpRequest, published: boolean): void {
+  const owner = ownedProxyInvocations!.get(http)!, accounting = owner.accounting;
+  if (!accounting || !owner.accountingHandoff) return;
+  const phase = owner.accountingHandoff & 7;
+  if (phase < 3 && !published) accounting.publicationFailure(owner.terminalReservation, owner.terminalContent ?? null,
+    !!owner.accountingDispatched, owner.operation?.status, owner.nativeUsage, owner.operation?.receivedRejection === true);
+  owner.accountingHandoff! |= 8 | (published ? 0 : 32);
+  wakeOwnedAccounting(owner);
+  registerOwnedHttpAccountingWork(http, accounting);
+}
+export function closeOwnedHttpAccountingHandoff(http: OwnedHttpRequest, accounting: OwnedHttpAccountingCommand): boolean {
+  const owner = ownedProxyInvocations?.get(http);
+  if (!owner || owner.accounting !== accounting || !owner.accountingHandoff) return true;
+  if ((owner.accountingHandoff & 7) === 6 || (owner.accountingHandoff & 7) === 7) return true;
+  if (!(owner.accountingHandoff & 8)) settleOwnedAccountingPublication(http, false);
+  return false;
+}
+function startOwnedUsageAccounting(http: OwnedHttpRequest, context: ExecutionContext, _completion: ProxyCompletion,
+  consumer: OwnedCodecConsumer | OwnedHttpUsage, accounting: OwnedHttpAccountingCommand, response: Response,
+  reservation: BudgetReservation, content: string | null): void {
+  const owner = ownedProxyInvocations?.get(http);
+  if (!owner || owner.context !== context || owner.consumer !== consumer && owner.genericUsage !== consumer || owner.accounting !== accounting)
+    throw identityFailure("protocol");
+  owner.terminalResponse = response; owner.terminalReservation = reservation; owner.terminalContent = content;
+  registerOwnedHttpAccountingWork(http, accounting);
+}
+
+export function hasBoundOwnedHttpAuthentication(cap: OwnedHttpRequest): boolean {
+  return ownedProxyInvocations?.get(cap)?.identity !== undefined;
+}
+export function matchesOwnedHttpRevalidationInput(cap: OwnedHttpRequest, request: Request, env: Env,
+  auth: AuthorizedIdentity, selection: ProxySelection, upstream: UpstreamAuth, attempt: OwnedHttpUpload,
+  url: URL, headers: Headers, preparation: PreparationAdmission): boolean {
+  const invocation = ownedProxyInvocations?.get(cap);
+  return !!invocation && matchesOwnedHttpRequestInputs(cap, env, request) && invocation.selection === selection
+    && invocation.preparingIdentity === auth && invocation.preparingUpstream === upstream && invocation.retry?.pending?.upload === attempt
+    && invocation.preparingFields?.url === url && invocation.preparingFields.headers === headers
+    && invocation.preparingAdmission === preparation;
+}
+export function matchesOwnedHttpPricingInput(cap: OwnedHttpRequest, body: Record<string, unknown>): boolean {
+  const selection = ownedProxyInvocations?.get(cap)?.selection;
+  return !!selection && selection.body === body && selection.capability === "llm.chat"
+    && selection.endpoint.request_format === "openai.chat_completions"
+    && selection.endpoint.response_format === "openai.chat_completions";
+}
+export function ownedHttpMayDefaultServiceTier(cap: OwnedHttpRequest, body: Record<string, unknown>): boolean {
+  if (!matchesOwnedHttpPricingInput(cap, body)) throw identityFailure("protocol");
+  return ownedProxyInvocations!.get(cap)!.selection!.provider.id === "openai";
+}
+export function ownedHttpHasToolPriceCard(cap: OwnedHttpRequest, body: Record<string, unknown>): boolean {
+  if (!matchesOwnedHttpPricingInput(cap, body)) throw identityFailure("protocol");
+  return !!ownedProxyInvocations!.get(cap)!.selection!.endpoint.toolPricing;
+}
+export function reserveOwnedHttpInitialPreparation(cap: OwnedHttpRequest, request: Request, env: Env): void {
+  const invocation = ownedProxyInvocations?.get(cap);
+  if (!invocation?.selection) throw identityFailure("protocol");
+  if (invocation.preparationAdmitted) return;
+  // Four fixed ports exist before initial selection/count effects. They share
+  // the request's existing physical custody; no per-port completion Promise.
+  growOwnedHttpRequest(cap, 8 * (1 + 8 + 2 + 1 + 1 + 4 + 4 * (1 + 16 + 8) + 64)
+    + 2 * ("portsexcludednextpending".length + 4 * "phaseinputsignalpermitprepareduploadidentitycredential".length)
+    + 4 * (64 + 2 * "credentialFailure".length + 72 + 2 * "credentialFailureKind".length));
+  invocation.retry = { ports: [
+    { phase: 0, input: undefined, signal: undefined, permit: undefined, prepared: undefined, upload: undefined, identity: undefined, credential: undefined },
+    { phase: 0, input: undefined, signal: undefined, permit: undefined, prepared: undefined, upload: undefined, identity: undefined, credential: undefined },
+    { phase: 0, input: undefined, signal: undefined, permit: undefined, prepared: undefined, upload: undefined, identity: undefined, credential: undefined },
+    { phase: 0, input: undefined, signal: undefined, permit: undefined, prepared: undefined, upload: undefined, identity: undefined, credential: undefined },
+  ], excluded: new Set(), next: 0, pending: undefined };
+  prepareOwnedHttpPricing(cap, invocation.selection.body as Record<string, unknown>);
+  reserveOwnedHttpProviderPreparation(cap, request, env, invocation.selection);
+  prepareOwnedHttpAccounting(cap);
+  invocation.preparationAdmitted = true;
+}
+export function acceptOwnedHttpAuthentication(cap: OwnedHttpRequest, identity: AuthorizedIdentity): void {
+  const invocation = ownedProxyInvocations?.get(cap);
+  if (!invocation || !matchesOwnedHttpAuthentication(cap, identity)) throw identityFailure("protocol");
+  invocation.identity = identity;
+}
+
+// Fixed synchronous receiver only. There is no public preparation getter and
+// no callback supplied by the caller; the actual attempt installs this slot.
+export function acceptOwnedHttpPreparation(upload: OwnedHttpUpload, fields: OwnedPreparedFields): void {
+  const receiver = ownedPreparationReceivers?.get(upload);
+  if (!receiver || receiver.fields) throw identityFailure("protocol");
+  receiver.fields = fields;
+}
+
+export function checkOwnedHttpProviderInput(cap: OwnedHttpRequest, request: Request, env: Env, selection: ProxySelection): void {
+  checkOwnedHttpRequest(cap, request, env);
+  const invocation = ownedProxyInvocations?.get(cap);
+  if (!invocation || !matchesOwnedHttpRequestInputs(cap, env, request) || invocation.selection !== selection) throw identityFailure("protocol");
+}
+export async function acceptOwnedHttpConfiguredProvider(cap: OwnedHttpRequest, request: Request, env: Env,
+  selection: ProxySelection, query: ProxyQuery, identity: AuthorizedIdentity, connection: ProviderConnection,
+  upstream: UpstreamAuth, preparation: PreparationAdmission, permit: object, selected: GenerationSelectionHandle): Promise<void> {
+  checkOwnedHttpProviderInput(cap, request, env, selection);
+  if (!ownsOwnedHttpSelectionPermit(permit, cap)) throw identityFailure("protocol");
+  const invocation = ownedProxyInvocations!.get(cap)!, port = invocation.retry?.pending;
+  if (!port || port.phase !== 1 || port.permit !== permit || !port.signal) throw identityFailure("protocol");
+  let original: Promise<PreparedUpstream> | undefined, prepared: PreparedUpstream | undefined;
+  invocation.preparingIdentity = identity; invocation.preparingUpstream = upstream;
+  invocation.preparingAdmission = preparation;
+  try {
+    original = prepareSingleSelected(request, env, selection, query, identity, new Set(), false, connection,
+      undefined, "http", false, undefined, undefined, undefined, preparation, { cap, upstream }, port.signal);
+    void original.then(() => undefined, () => undefined);
+    prepared = await original;
+    original = undefined; finishOwnedHttpRevalidationPreparation(cap);
+    ownedHttpSignal(cap).throwIfAborted(); port.signal.throwIfAborted();
+    (ownedPreparedSelections ??= new WeakMap()).set(prepared, selected);
+    if (port.upload) (ownedPreparedUploads ??= new WeakMap()).set(prepared, port.upload);
+    port.prepared = prepared; port.identity = identity;
+  } finally {
+    invocation.preparingIdentity = undefined; invocation.preparingUpstream = undefined; invocation.preparingFields = undefined;
+    invocation.preparingAdmission = undefined;
+    original = undefined; prepared = undefined; upstream = undefined as never; identity = undefined as never;
+  }
+}
+
+// Closed producer gate: only the current genuine Unified Chat preparation and
+// its ingress-derived body revision may enter the synchronous marker phase.
+export function prepareOwnedHttpUploadJson(upload: OwnedHttpUpload, body: unknown): string | MediaJsonBody | undefined {
+  checkOwnedHttpUpload(upload);
+  const receiver = ownedPreparationReceivers?.get(upload), invocation = receiver && ownedProxyInvocations?.get(receiver.owner);
+  const selection = invocation?.selection;
+  if (!receiver || !invocation || invocation.retry?.pending?.upload !== upload || !selection || selection.body !== body
+    || !invocation.preparingAdmission || !invocation.preparingUpstream || !matchesOwnedHttpPricingInput(receiver.owner, body as Record<string, unknown>))
+    throw identityFailure("protocol");
+  const admission = takeOwnedHttpMediaAdmission(receiver.owner, body as Record<string, unknown>);
+  const signed = selection.provider.auth.schemes.some(scheme => scheme.type === "sig_v4");
+  const bodyless = ["GET", "HEAD"].includes(selection.method);
+  if (bodyless) return undefined;
+  if (signed) return privateUploadJson(body);
+  try { return privateMediaJsonBody(body, admission) ?? privateUploadJson(body); }
+  finally { if (admission.restorePending) holdOwnedHttpUploadSerialization(upload); }
+}
+
+function prepareOwnedHttpTransport(cap: OwnedHttpRequest, request: Request, env: Env,
+  selection: ProxySelection, query: ProxyQuery, upstream: UpstreamAuth, preparation: PreparationAdmission): OwnedPreparedFields {
+  checkOwnedHttpRequest(cap, request, env);
+  const invocation = ownedProxyInvocations?.get(cap);
+  if (!invocation || invocation.selection !== selection) throw identityFailure("protocol");
+  const upload = beginOwnedHttpUpload(cap);
+  if (!invocation.retry?.pending || invocation.retry.pending.phase !== 1) throw identityFailure("protocol");
+  invocation.retry.pending.upload = upload; invocation.attempts.push(upload);
+  const receiver: OwnedPreparationReceiver = { owner: cap };
+  (ownedPreparationReceivers ??= new WeakMap()).set(upload, receiver);
+  try {
+    prepareOwnedUpstreamRequest(upload, request, env, selection, query, upstream, preparation);
+    if (!receiver.fields) throw identityFailure("protocol");
+    invocation.preparingFields = receiver.fields;
+    return receiver.fields;
+  } catch (error) { void abandonOwnedHttpUpload(upload); throw error; }
+  finally { receiver.fields = undefined; ownedPreparationReceivers!.delete(upload); }
+}
+
+export function retireOwnedHttpProxy(cap: OwnedHttpRequest): void {
+  const invocation = ownedProxyInvocations?.get(cap);
+  if (!invocation) return;
+  // Validate the intake handoff before deleting this owner's last lookup.
+  // Its body lease is released only after all prepared/body callback aliases.
+  invocation.admission?.checkOwnedRetirement();
+  retireOwnedHttpPricing(cap);
+  retireOwnedHttpProviderPreparation(cap);
+  retireOwnedHttpControlVerification(cap);
+  const admission = invocation.admission;
+  invocation.prepared = undefined; invocation.archivePrepared = undefined; invocation.identity = undefined; invocation.selection = undefined;
+  invocation.nativeResponse = undefined; invocation.incomingResponse = undefined; invocation.nativeSignal = undefined; invocation.nativeUsage = undefined;
+  invocation.publicBody = undefined;
+  invocation.operation = undefined;
+  invocation.softPlan = undefined; invocation.softAttempt = undefined; invocation.accounting = undefined; invocation.accountingCost = undefined; invocation.accountingPlan = undefined;
+  invocation.terminalResponse = undefined; invocation.terminalReservation = undefined; invocation.terminalContent = undefined;
+  invocation.genericUsage = undefined; invocation.observedUsage = undefined;
+  invocation.accountingReady = undefined; invocation.resolveAccounting = undefined; invocation.accountingWork = undefined;
+  invocation.accountingRegistration = undefined; invocation.accountingOutcome = undefined;
+  invocation.consumer = undefined; invocation.genericUsage = undefined; invocation.usageInput = undefined; invocation.observedUsage = undefined;
+  invocation.usageContext = undefined; invocation.requestId = undefined;
+  invocation.admission = undefined; invocation.upload = undefined; invocation.attempts.length = 0;
+  if (invocation.retry) {
+    for (const port of invocation.retry.ports) { port.input = undefined; port.signal = undefined; port.permit = undefined; port.prepared = undefined; port.upload = undefined; port.identity = undefined; port.credential = undefined; delete port.credentialFailure; delete port.credentialFailureKind; port.phase = 5; }
+    invocation.retry.ports.length = 0; invocation.retry.excluded.clear(); invocation.retry.pending = undefined; invocation.retry = undefined;
+  }
+  invocation.required = undefined; invocation.context = undefined as never;
+  admission?.retireOwned();
+  ownedProxyInvocations!.delete(cap);
+  if (!--ownedProxyCount) { ownedProxyInvocations = undefined; ownedPreparationReceivers = undefined; ownedPreparedSelections = undefined; ownedPreparedUploads = undefined; }
+}
 
 // Media-bearing generation formats take the 32 MB envelope on every route form.
 const mediaFormats = new Set(["anthropic.messages", "openai.responses", "openai.responses_compact", "openai.responses_input_tokens", "openai.chat_completions", "google.embed_content", "google.batch_embed_contents", "xai.images_generations", "xai.images_edits", "openrouter.audio_transcription"]);
@@ -138,16 +668,51 @@ class JsonAdmission implements JsonIntake {
   private intakeOperation?: HttpOperation;
   private intakeStartedAt = 0;
   private intakeBytes = 0;
+  private ownedInputBytes = 0;
+  private ownedBodyCharge = 0;
+  private ownedDataCharge?: ExactBodyCharge;
   private readonly request: Request;
   private readonly env: Env;
   private readonly mode: AuthMode;
   private readonly providerId: string | undefined;
-  constructor(request: Request, env: Env, mode: AuthMode, providerId?: string) {
-    this.request = request; this.env = env; this.mode = mode; this.providerId = providerId;
+  private readonly owned?: OwnedHttpRequest;
+  constructor(request: Request, env: Env, mode: AuthMode, providerId?: string, owned?: OwnedHttpRequest) {
+    this.request = request; this.env = env; this.mode = mode; this.providerId = providerId; this.owned = owned;
+  }
+  checkOwnedRetirement(): void {
+    if (!this.owned || this.input || this.wan || this.search || this.intakeOperation) throw identityFailure("protocol");
+  }
+  retireOwned(): void {
+    this.checkOwnedRetirement();
+    const failures: unknown[] = [];
+    try { this.ownedDataCharge?.release(); this.ownedDataCharge = undefined; } catch (error) { failures.push(error); }
+    try { this.lease.release(); this.ownedBodyCharge = 0; } catch (error) { failures.push(error); }
+    if (failures.length) throw new AggregateError(failures, "owned HTTP body funding retirement");
+  }
+  noteOwnedInputBytes(bytes: number): void {
+    if (!this.owned || !Number.isSafeInteger(bytes) || bytes < this.ownedInputBytes) throw identityFailure("protocol");
+    this.ownedInputBytes = bytes;
+  }
+  get ownedWireBytes(): number { return this.ownedInputBytes; }
+  admitOwnedData(bytes: number, cleared = false): void {
+    if (!this.owned || !Number.isSafeInteger(bytes) || bytes < 0) throw identityFailure("protocol");
+    // One body component: existing positive BodyLease credit is counted ONCE.
+    // Supplement with exact COMMON credit; never convert source counters into
+    // funding. Only an explicit alias-clear boundary may shrink this supplement.
+    const extra = Math.max(0, bytes - this.ownedBodyCharge), held = this.ownedDataCharge?.bytes ?? 0;
+    if (extra === held || extra < held && !cleared) return;
+    if (!extra) { this.ownedDataCharge?.release(); this.ownedDataCharge = undefined; return; }
+    const next = this.ownedDataCharge ? this.ownedDataCharge.replace(extra) : ExactBodyCharge.reserve(extra);
+    if (!next) throw identityFailure("limit");
+    this.ownedDataCharge = next;
   }
   reserve = async (bytes: number): Promise<void> => {
     if (bytes >= bodyLeaseMinimum) await this.authenticate();
-    if (this.lease.grow(bytes)) return;
+    if (this.lease.grow(bytes)) {
+      if (this.owned && bytes >= bodyLeaseMinimum) this.ownedBodyCharge = Math.max(this.ownedBodyCharge, 2 * bytes);
+      return;
+    }
+    if (this.owned) throw ownedErrorResponse(this.owned, "server_overloaded", "Large request capacity is busy; retry shortly.", 503, "1");
     throw this.providerId === "anthropic"
       ? json({ type: "error", error: { type: "overloaded_error", message: "Large request capacity is busy; retry shortly." } }, 503, { "retry-after": "1" })
       : errorResponse("server_overloaded", "Large request capacity is busy; retry shortly.", 503, undefined, { "retry-after": "1" });
@@ -217,7 +782,8 @@ class JsonAdmission implements JsonIntake {
   }
   private async authenticate(): Promise<void> {
     if (!this.authenticated) {
-      const auth = await preauthenticate(this.request, this.env, this.mode, this.providerId);
+      const auth = this.owned ? await authenticateOwnedHttp(this.owned, this.request, this.env)
+        : await preauthenticate(this.request, this.env, this.mode, this.providerId);
       if (auth instanceof Response) throw auth;
       this.authenticated = true;
     }
@@ -254,6 +820,7 @@ function openRouterMusicCandidate(provider: CompiledProvider, endpoint: Compiled
 }
 
 interface PreparedUpstream {
+  ownedVenice?: OwnedHttpRevalidation;
   headers: Headers;
   url: URL;
   requestBody: string | ReadableStream<Uint8Array> | undefined;
@@ -288,6 +855,468 @@ interface ReservedProxyBudget {
   fusion?: ReturnType<typeof prepareFusionAccounting>;
   claim(): void;
   finishUnclaimed(): Promise<void>;
+}
+
+// Prospective DATA only. Native JSON.parse remains the grammar/last-wins owner.
+// For valid JSON, commas + nonempty containers = members + array entries.
+// Count every source occurrence (including overwritten members), without a
+// visitor stack, key array, substring, decoded-string copy or graph factory.
+function ownedHttpJsonDataBytes(text: string): number {
+  let containers = 0, members = 0, commas = 0, nonempty = 0, primitives = 0, units = 0;
+  let string = false, scalar = false, previous = 0;
+  for (let index = 0; index < text.length; index++) {
+    const code = text.charCodeAt(index);
+    if (string) {
+      if (code === 34) string = false;
+      else { units++; if (code === 92) { index++; if (text.charCodeAt(index) === 117) index += 4; } }
+      continue;
+    }
+    if (code === 32 || code === 9 || code === 10 || code === 13) { scalar = false; continue; }
+    if (previous === 123 && code !== 125 || previous === 91 && code !== 93) nonempty++;
+    if (code === 34) { primitives++; string = true; scalar = false; }
+    else if (code === 123 || code === 91) { containers++; scalar = false; }
+    else if (code === 58) { members++; scalar = false; }
+    else if (code === 44) { commas++; scalar = false; }
+    else if (code === 125 || code === 93) scalar = false;
+    else if (!scalar) { primitives++; scalar = true; }
+    previous = code;
+  }
+  const entries = Math.max(0, commas + nonempty - members);
+  // Quoted keys contribute their member cells, not a primitive value cell.
+  // Every quoted value (including an empty or root string) contributes one.
+  return 8 * (containers + 2 * members + entries + Math.max(0, primitives - members)) + 2 * units;
+}
+
+// Same public JSON grammar/thresholds as readJson, with explicit ORIGINAL
+// request read/FIRSTcancel/unlock ownership instead of fire-and-forget cleanup.
+const ownedIntakeJsonParse = JSON.parse;
+const ownedIntakeArray = Array.isArray;
+const ownedIntakeNativeCancel = ReadableStreamBYOBReader.prototype.cancel;
+const ownedIntakeThen = Promise.prototype.then;
+const ownedIntakeNativeRead = ReadableStreamBYOBReader.prototype.read;
+const ownedIntakeNativeClosed = Object.getOwnPropertyDescriptor(ReadableStreamBYOBReader.prototype, "closed")?.get;
+const ownedIntakeLookupGetter = (Object.prototype as { __lookupGetter__?: unknown }).__lookupGetter__;
+const ownedIntakeQueue = queueMicrotask;
+function ownedIntakeViewLength(view: unknown): number {
+  const proof = inspectOwnedBytes(view);
+  return proof.backing > 16384 ? -1 : proof.length;
+}
+interface OwnedIntakeObservation {
+  owner: OwnedHttpIntakeIo | undefined;
+  kind: number;
+  flags: number; // accepted, installed, UNKNOWN, inert, queued, installing, native
+  ready: Promise<void> | undefined;
+  resolve: (() => void) | undefined;
+}
+function intakeObservationFulfilled(this: OwnedIntakeObservation, value: unknown): void {
+  if (this.flags & (1 | 8)) { value = undefined; return; }
+  try { this.owner?.receive(this, false, value); } finally { value = undefined; }
+}
+function intakeObservationRejected(this: OwnedIntakeObservation, reason: unknown): void {
+  if (this.flags & (1 | 8)) { reason = undefined; return; }
+  try { this.owner?.receive(this, true, reason); } finally { reason = undefined; }
+}
+function advanceIntakeObservation(this: OwnedIntakeObservation): void {
+  this.flags &= ~16;
+  if (this.flags & (4 | 8 | 32) || (this.flags & 3) !== 3) return;
+  this.resolve?.(); this.resolve = undefined;
+}
+interface OwnedIntakeAbort { owner: OwnedHttpIntakeIo | undefined }
+function abortOwnedIntake(this: OwnedIntakeAbort): void { this.owner?.cancel(); }
+
+// This owner never receives the parser, admission object, request or parsed
+// graph. External native observers bind only their own severable cell.
+class OwnedHttpIntakeIo {
+  reader?: ReadableStreamBYOBReader;
+  captureWire: Uint8Array | undefined = newOwnedBytes(16384);
+  captureLength = 0;
+  captureDone = false;
+  captureOversized = false;
+  readFailure?: object;
+  cancelFailure?: object;
+  unlockFailure?: object;
+  reading?: OwnedIntakeObservation;
+  cancelling?: OwnedIntakeObservation;
+  unlocking?: OwnedIntakeObservation;
+  closed?: OwnedIntakeObservation;
+  private flags = 0; // eof, UNKNOWN, retired, native closed, native errored
+  private nativeFailure?: object;
+  private stopped: object | undefined = Object.freeze({ kind: "owned-http-intake-stopped" });
+  private abortCell: OwnedIntakeAbort | undefined = { owner: this };
+  readonly abort = abortOwnedIntake.bind(this.abortCell!);
+  declare private cap: OwnedHttpRequest;
+  declare private diagnostics: ReturnType<typeof beginOwnedHttpIntakeDiagnostics>;
+  declare private body: ReadableStream<Uint8Array> | undefined;
+  constructor(cap: OwnedHttpRequest, diagnostics: ReturnType<typeof beginOwnedHttpIntakeDiagnostics>,
+    body: ReadableStream<Uint8Array> | undefined) {
+    this.cap = cap; this.diagnostics = diagnostics; this.body = body;
+  }
+  private unknown(): void {
+    this.flags |= 2;
+    try { holdOwnedHttpRequest(this.cap); } catch { /* A lost parent remains UNKNOWN here. */ }
+  }
+  hold(): void { this.unknown(); }
+  private failure(kind: number, reason: unknown, observing = false): object {
+    return ownedHttpIntakeFailure(this.diagnostics, kind === 1 ? observing ? "readObserver" : "read"
+      : kind === 2 ? observing ? "cancelObserver" : "cancel"
+      : kind === 4 ? observing ? "unlockObserver" : "unlock" : observing ? "closedObserver" : "closed", reason);
+  }
+  private make(kind: number): OwnedIntakeObservation {
+    const cell: OwnedIntakeObservation = { owner: this, kind, flags: 32, ready: undefined, resolve: undefined };
+    cell.ready = new Promise<void>(resolve => { cell.resolve = resolve; });
+    if (kind === 1) this.reading = cell; else if (kind === 2) this.cancelling = cell;
+    else if (kind === 4) this.unlocking = cell; else this.closed = cell;
+    return cell;
+  }
+  private schedule(cell: OwnedIntakeObservation): void {
+    if (cell.flags & (8 | 16)) return;
+    cell.flags |= 16;
+    try { ownedIntakeQueue(advanceIntakeObservation.bind(cell)); }
+    catch (reason) {
+      cell.flags |= 4; this.unknown();
+      try { this.failure(cell.kind, reason, true); } catch { /* UNKNOWN keeps the cell and parent. */ }
+      finally { reason = undefined; }
+    }
+  }
+  private observe(cell: OwnedIntakeObservation, original: Promise<unknown>): void {
+    let then: unknown;
+    if (cell.kind === 4) {
+      if (original !== null && (typeof original === "object" || typeof original === "function")) then = original.then;
+      if (typeof then !== "function") { cell.flags |= 1 | 2; return; }
+    } else then = original.then;
+    if (then !== ownedIntakeThen) { cell.flags &= ~64; if (cell.kind === 8) this.flags &= ~8; }
+    void Reflect.apply(then as Function, original, [freezeOwnedObserver(intakeObservationFulfilled.bind(cell)), freezeOwnedObserver(intakeObservationRejected.bind(cell))]);
+    cell.flags |= 2;
+  }
+  private observationFailure(cell: OwnedIntakeObservation, reason: unknown): object {
+    cell.flags |= 4; this.unknown();
+    const failure = this.failure(cell.kind, reason, true);
+    if (cell.kind === 1) this.readFailure = failure;
+    else if (cell.kind === 2) this.cancelFailure = failure;
+    else if (cell.kind === 4) this.unlockFailure = failure;
+    return failure;
+  }
+  private capture(item: ReadableStreamReadResult<Uint8Array>): void {
+    let operand: unknown, length: unknown, destination: Uint8Array | undefined;
+    let method: typeof copyOwnedBytes | undefined;
+    try {
+      this.captureDone = !!item.done;
+      if (this.captureDone) return;
+      operand = item.value;
+      this.captureOversized = (operand as Uint8Array).buffer.byteLength > 16384;
+      if (!this.captureOversized) this.captureOversized = ownedIntakeViewLength(operand) < 0;
+      operand = undefined;
+      if (this.captureOversized) return;
+      operand = item.value;
+      length = (operand as Uint8Array).byteLength;
+      if (typeof length !== "number" || length < 0 || length > 16384 || length % 1 !== 0) throw identityFailure("protocol");
+      this.captureOversized = ownedIntakeViewLength(operand) < 0;
+      operand = undefined;
+      if (this.captureOversized) return;
+      this.captureLength = length; length = undefined;
+      destination = this.captureWire!;
+      // The held private DATA command is selected before the third VALUE get.
+      // Mutable set/subarray/species hooks never receive the private snapshot.
+      method = copyOwnedBytes;
+      operand = item.value;
+      const actualLength = ownedIntakeViewLength(operand);
+      if (actualLength < 0) { this.captureOversized = true; return; }
+      if (actualLength !== this.captureLength) throw identityFailure("protocol");
+      method(destination, operand as Uint8Array);
+    } finally { item = undefined as never; operand = undefined; length = undefined; destination = undefined; method = undefined; }
+  }
+  receive(cell: OwnedIntakeObservation, rejected: boolean, value: unknown): void {
+    if (cell.owner !== this || cell.flags & (1 | 8) || this.flags & 4
+      || cell !== (cell.kind === 1 ? this.reading : cell.kind === 2 ? this.cancelling : cell.kind === 4 ? this.unlocking : this.closed)) { value = undefined; return; }
+    cell.flags |= 1;
+    try {
+      if (!rejected && cell.kind === 1) {
+        // Intake's existing order is deliberately different: DONE first,
+        // truthy EOF ignores VALUE, otherwise the three conditional VALUE gets.
+        this.capture(value as ReadableStreamReadResult<Uint8Array>);
+      } else if (rejected) {
+        if (cell.kind === 1) {
+          this.readFailure = cell.flags & 64 && this.nativeFailure ? this.nativeFailure : this.failure(1, value);
+          if (cell.flags & 64) this.nativeFailure = this.readFailure;
+        } else if (cell.kind === 8) {
+          this.flags |= 16;
+          if (!(this.flags & 8 && this.nativeFailure)) {
+            const failure = this.failure(8, value); if (this.flags & 8) this.nativeFailure = failure;
+          }
+        } else if (cell.kind === 2) { if (!(cell.flags & 64)) this.cancelFailure = this.failure(2, value); }
+        else this.unlockFailure = this.failure(4, value);
+      }
+    } catch (reason) {
+      try { if (cell.kind === 1) this.readFailure = this.failure(1, reason); else { cell.flags |= 4; this.unknown(); } }
+      catch { cell.flags |= 4; this.unknown(); }
+      finally { reason = undefined; }
+    } finally { value = undefined; this.schedule(cell); }
+  }
+  open(): void {
+    try { this.reader = this.body!.getReader({ mode: "byob" }); }
+    catch (reason) { throw ownedHttpIntakeFailure(this.diagnostics, "acquire", reason); }
+    const cell = this.make(8);
+    let original: Promise<void> | undefined, started = false;
+    try {
+      if (Object.getPrototypeOf(this.reader) === ReadableStreamBYOBReader.prototype && !Object.hasOwn(this.reader, "closed")
+        && typeof ownedIntakeLookupGetter === "function" && ownedIntakeLookupGetter.call(this.reader, "closed") === ownedIntakeNativeClosed) this.flags |= 8;
+      original = this.reader.closed; started = true;
+      if (this.flags & 8) cell.flags |= 64;
+      this.observe(cell, original);
+    } catch (reason) {
+      if (started) throw this.observationFailure(cell, reason);
+      const failure = this.failure(8, reason); cell.flags |= 1 | 2; reason = undefined; throw failure;
+    } finally { original = undefined; cell.flags &= ~32; this.schedule(cell); }
+  }
+  read(): Promise<void> {
+    if (this.reading || this.flags & (1 | 2 | 4) || !this.reader) throw identityFailure("protocol");
+    this.captureLength = 0; this.captureDone = false; this.captureOversized = false; this.readFailure = undefined;
+    const cell = this.make(1);
+    let original: Promise<ReadableStreamReadResult<Uint8Array>> | undefined, started = false;
+    try {
+      const reader = this.reader, method = reader.read;
+      if (this.flags & 8 && Object.getPrototypeOf(reader) === ReadableStreamBYOBReader.prototype && !Object.hasOwn(reader, "closed")
+        && method === ownedIntakeNativeRead) cell.flags |= 64;
+      original = Reflect.apply(method, reader, [newOwnedBytes(16384)]); started = true;
+      this.observe(cell, original!);
+    } catch (reason) {
+      if (started) throw this.observationFailure(cell, reason);
+      this.receive(cell, true, reason); cell.flags |= 2;
+    } finally { original = undefined; cell.flags &= ~32; this.schedule(cell); }
+    return cell.ready!;
+  }
+  cancel(): void {
+    if (this.cancelling || this.flags & (1 | 4)) return;
+    const cell = this.make(2);
+    let original: Promise<void> | undefined, started = false;
+    try {
+      const reader = this.reader, receiver = reader ?? this.body!, method = receiver.cancel;
+      if (reader && this.nativeFailure && this.flags & 8 && this.flags & 16 && Object.getPrototypeOf(reader) === ReadableStreamBYOBReader.prototype
+        && !Object.hasOwn(reader, "closed") && method === ownedIntakeNativeCancel) cell.flags |= 64;
+      original = Reflect.apply(method, receiver, [this.stopped]); started = true;
+      this.observe(cell, original!);
+    } catch (reason) {
+      try { if (started) this.observationFailure(cell, reason); else { this.receive(cell, true, reason); cell.flags |= 2; } }
+      catch { cell.flags |= 4; this.unknown(); }
+      finally { reason = undefined; }
+    } finally { original = undefined; cell.flags &= ~32; this.schedule(cell); }
+  }
+  unlock(): void {
+    if (this.unlocking || this.flags & 4) return;
+    const cell = this.make(4);
+    let original: unknown, started = false;
+    try {
+      if (!this.reader) { cell.flags |= 1 | 2; return; }
+      const reader = this.reader, method = reader.releaseLock;
+      original = Reflect.apply(method, reader, []); started = original !== undefined;
+      if (!started) { cell.flags |= 1 | 2; return; }
+      this.observe(cell, original as Promise<unknown>);
+    } catch (reason) {
+      try { if (started) this.observationFailure(cell, reason); else { this.receive(cell, true, reason); cell.flags |= 2; } }
+      catch { cell.flags |= 4; this.unknown(); }
+      finally { reason = undefined; }
+    } finally { original = undefined; cell.flags &= ~32; this.schedule(cell); }
+  }
+  private discharge(kind: number): void {
+    let cell = kind === 1 ? this.reading : kind === 2 ? this.cancelling : kind === 4 ? this.unlocking : this.closed;
+    if (!cell || this.flags & 2 || cell.flags & (4 | 16 | 32) || (cell.flags & 3) !== 3 || cell.resolve) { cell = undefined; return; }
+    cell.flags = 8; cell.owner = undefined; cell.ready = undefined; cell.resolve = undefined; cell.kind = 0;
+    if (kind === 1) this.reading = undefined; else if (kind === 2) this.cancelling = undefined;
+    else if (kind === 4) this.unlocking = undefined; else this.closed = undefined;
+    cell = undefined;
+  }
+  consumedRead(): void { this.discharge(1); }
+  end(): void { this.flags |= 1; }
+  clear(): boolean {
+    if (this.flags & 2) return false;
+    this.discharge(1); this.discharge(2); this.discharge(4); this.discharge(8);
+    if (this.reading || this.cancelling || this.unlocking || this.closed) { this.unknown(); return false; }
+    this.flags |= 4; this.abortCell!.owner = undefined; this.abortCell = undefined;
+    this.reader = undefined; this.body = undefined; this.captureWire = undefined; this.nativeFailure = undefined;
+    this.cap = undefined as never; this.diagnostics = undefined as never; this.stopped = undefined;
+    return true;
+  }
+}
+async function readOwnedHttpJson(cap: OwnedHttpRequest, request: Request, admission: JsonAdmission): Promise<unknown> {
+  // Original BYOB request/backing, returned view, decoder slice and copying
+  // overlap are funded before the first reader/read or authentication await.
+  growOwnedHttpRequest(cap, 131072 + 16384 + 256);
+  const diagnostics = beginOwnedHttpIntakeDiagnostics(cap);
+  return ownedHttpCompletion(cap).start(async () => {
+    const tooLarge = () => ownedHttpError(cap, 413, "request_too_large", `JSON request body exceeds the ${maxMediaJsonBodyBytes} byte limit`);
+    const body = request.body;
+    if (!body) { finishOwnedHttpIntakeDiagnostics(diagnostics); throw ownedHttpError(cap, 400, "invalid_json", "request body must be valid JSON"); }
+    const io = new OwnedHttpIntakeIo(cap, diagnostics, body);
+    let hasPrimary = false, primary: unknown, publicFailure: unknown;
+    let prefixWire: Uint8Array | undefined, prefixUsed = 0, parser: ReturnType<typeof createPrivateJsonBodyParser> | undefined;
+    let decoder: TextDecoder | undefined, parsed: unknown, size = 0;
+    // Existing expanded-parser bound, including its current scalar before
+    // concatenation. It is a component of the SAME body debit, not a new cap.
+    const parserData = () => 8 * 3 * 65536 + 4 * size + 131072 + 524288;
+    const feedText = (text: string) => {
+      for (let offset = 0; offset < text.length;) {
+        const first = text.charCodeAt(offset), second = text.charCodeAt(offset + 1);
+        const end = offset + (first >= 0xd800 && first <= 0xdbff && second >= 0xdc00 && second <= 0xdfff ? 2 : 1);
+        parser!.push(text.slice(offset, end)); offset = end;
+      }
+    };
+    const feed = (bytes: Uint8Array) => {
+      for (let offset = 0; offset < ownedByteLength(bytes); offset += 4096) feedText(decodeOwnedBytes(decoder!, ownedByteSubarray(bytes, offset, offset + 4096), true));
+    };
+    try {
+      const declared = Number(request.headers.get("content-length"));
+      if (Number.isFinite(declared) && declared > maxMediaJsonBodyBytes) throw tooLarge();
+      if (Number.isFinite(declared) && declared > 0) await admission.reserve(declared);
+      io.open();
+      decoder = newOwnedDecoder();
+      try { request.signal.addEventListener("abort", io.abort, { once: true }); }
+      catch (error) { throw ownedHttpIntakeFailure(diagnostics, "listenerAdd", error); }
+      while (true) {
+        if (request.signal.aborted) throw ownedHttpError(cap, 499, "request_canceled", "request was canceled");
+        await io.read();
+        if (io.readFailure) throw io.readFailure;
+        if (request.signal.aborted) throw ownedHttpError(cap, 499, "request_canceled", "request was canceled");
+        if (io.captureDone) { io.end(); io.consumedRead(); break; }
+        if (io.captureOversized) throw identityFailure("limit");
+        if (!io.captureLength) { io.consumedRead(); continue; }
+        size += io.captureLength;
+        if (size > maxMediaJsonBodyBytes) throw tooLarge();
+        admission.noteOwnedInputBytes(size);
+        // A short native read must not retain a whole 16 KiB backing for one
+        // byte. The exact copy is admitted before its factory; the original
+        // whole backing stays covered by the fixed read component until clear.
+        await admission.reserve(Math.max(size, parser ? ownedByteLength(io.captureWire!) : prefixUsed + io.captureLength));
+        if (!parser && size > maxJsonBodyBytes) {
+          await admission.expand();
+          admission.admitOwnedData(((prefixWire ? ownedByteLength(prefixWire) : 0)) + ownedByteLength(io.captureWire!) + parserData());
+          parser = createPrivateJsonBodyParser();
+          if (prefixWire) feed(ownedByteSubarray(prefixWire, 0, prefixUsed));
+          prefixWire = undefined; prefixUsed = 0;
+        }
+        if (parser) {
+          admission.admitOwnedData(ownedByteLength(io.captureWire!) + parserData(), true);
+          feed(ownedByteSubarray(io.captureWire!, 0, io.captureLength));
+        } else {
+          if (!prefixWire || prefixUsed + io.captureLength > ownedByteLength(prefixWire)) {
+            let next = (prefixWire ? ownedByteLength(prefixWire) : 16384);
+            while (next < prefixUsed + io.captureLength) next = Math.min(maxJsonBodyBytes, 2 * next);
+            admission.admitOwnedData(((prefixWire ? ownedByteLength(prefixWire) : 0)) + next + 4 * size);
+            let previous = prefixWire;
+            const replacement = newOwnedBytes(next);
+            if (previous) copyOwnedBytes(replacement, ownedByteSubarray(previous, 0, prefixUsed));
+            prefixWire = replacement; previous = undefined;
+          }
+          admission.admitOwnedData(ownedByteLength(prefixWire) + 4 * size, true);
+          copyOwnedBytes(prefixWire, ownedByteSubarray(io.captureWire!, 0, io.captureLength), prefixUsed); prefixUsed += io.captureLength;
+        }
+        io.consumedRead();
+      }
+      if (parser) { feedText(decodeOwnedBytes(decoder)); parsed = parser.take(); }
+      else {
+        let text = "";
+        for (let offset = 0; offset < prefixUsed; offset += 4096) text += decodeOwnedBytes(decoder, ownedByteSubarray(prefixWire!, offset, Math.min(offset + 4096, prefixUsed)), true);
+        text += decodeOwnedBytes(decoder);
+        prefixWire = undefined; prefixUsed = 0;
+        const graph = ownedHttpJsonDataBytes(text);
+        admission.admitOwnedData(2 * text.length + graph, true);
+        parsed = ownedIntakeJsonParse(text); text = "";
+        admission.admitOwnedData(graph, true);
+      }
+    } catch (error) {
+      hasPrimary = true; primary = error;
+      try { publicFailure = error instanceof JsonBodyStructureLimit ? ownedHttpError(cap, 413, "request_too_large", "JSON request exceeds Worker structure limits (65536 values, 128 nesting levels, 4096-character keys/numbers)")
+        : isIdentityFailure(error) || isOwnedHttpLocalFailure(cap, error) || error instanceof Response ? error : ownedHttpError(cap, 400, "invalid_json", "request body must be valid JSON"); }
+      catch (failure) { publicFailure = failure; }
+      io.cancel();
+    }
+    const failures: unknown[] = [];
+    // A read installation failure can throw before returning its logical
+    // receipt. Its already-published cell still owns the actual late outcome.
+    await io.reading?.ready;
+    await io.cancelling?.ready;
+    if (io.cancelFailure) failures.push(io.cancelFailure);
+    try { request.signal.removeEventListener("abort", io.abort); }
+    catch (error) { io.hold(); failures.push(ownedHttpIntakeFailure(diagnostics, "listenerRemove", error)); }
+    io.unlock(); await io.unlocking?.ready;
+    if (io.unlockFailure) failures.push(io.unlockFailure);
+    await io.closed?.ready;
+    if (body.locked) { io.hold(); failures.push(identityFailure("cleanup")); }
+    decoder = undefined;
+    parser?.discard(); parser = undefined; prefixWire = undefined;
+    if (io.clear()) finishOwnedHttpIntakeDiagnostics(diagnostics);
+    if (failures.length) throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "owned HTTP intake cleanup");
+    if (hasPrimary) throw publicFailure;
+    return parsed;
+  });
+}
+
+// concreteOpenAiSelection retains the original input while constructing two
+// shallow string-key carriers. Borrowing a nested object does not copy its graph;
+// each copied string/primitive occurrence and each carrier cell still costs DATA.
+// JSON intake supplies ordinary own data properties, including own __proto__.
+function admitOwnedHttpSelectionCopies(cap: OwnedHttpRequest, body: Record<string, unknown>): void {
+  let members = 0, primitives = 0, units = 0;
+  for (const key in body) if (Object.prototype.hasOwnProperty.call(body, key)) {
+    members++; units += key.length;
+    const value = body[key];
+    if (key === "model") continue; // Both carriers install the admitted upstream id.
+    if (typeof value === "string") units += value.length;
+    else if (value === null || typeof value !== "object") primitives++;
+  }
+  // Missing model is appended. The existing preparation profile admits the
+  // resolved model before copies; reserve its full 16384-unit output here.
+  if (!Object.prototype.hasOwnProperty.call(body, "model")) { members++; units += 5; }
+  units += 16384;
+  growOwnedHttpRequest(cap, 2 * (8 * (1 + 2 * members + primitives) + 2 * units));
+}
+
+/** Inactive compiled UNIFIED Chat entry. The index owns correlation/retirement. */
+export async function proxyOwnedHttpChat(cap: OwnedHttpRequest, request: Request, env: Env, context: ExecutionContext): Promise<Response> {
+  checkOwnedHttpRequest(cap, request, env); growOwnedHttpRequest(cap, 32768);
+  const admission = new JsonAdmission(request, env, "proxy_key", undefined, cap);
+  const invocation: OwnedProxyInvocation = { context, admission, attempts: [] };
+  (ownedProxyInvocations ??= new WeakMap()).set(cap, invocation); ownedProxyCount++;
+  let body: Record<string, unknown> | undefined;
+  try {
+    try {
+      const parsed = await readOwnedHttpJson(cap, request, admission);
+      if (!parsed || typeof parsed !== "object" || ownedIntakeArray(parsed)) throw ownedHttpError(cap, 400, "invalid_request_body", "request body must be a JSON object");
+      body = parsed as Record<string, unknown>;
+    }
+    catch (error) {
+      if (error instanceof Response) return error;
+      const denied = await authenticateOwnedHttp(cap, request, env); if (denied) return denied;
+      throw error;
+    }
+    admitOwnedHttpSelectionCopies(cap, body);
+    const preparation = new PreparationAdmission();
+    invocation.initialSelectionBody = body; invocation.preparingAdmission = preparation;
+    let selection: ReturnType<typeof concreteOpenAiSelection>;
+    try { selection = concreteOwnedOpenAiSelection(cap, request, body, env, preparation); }
+    finally { invocation.initialSelectionBody = undefined; invocation.preparingAdmission = undefined; }
+    const modelId = typeof body.model === "string" ? body.model : "";
+    if (isSelectionFailure(selection)) {
+      let delivered = false;
+      try {
+        const denied = await authenticateOwnedHttp(cap, request, env); if (denied) return denied;
+        if (!modelId) return ownedErrorResponse(cap, "model_required", "model is required", 400);
+        delivered = true; return selection.response;
+      } finally { if (!delivered) discardOwnedHttpInitialError(cap, selection.response); }
+    }
+    if (selection.capability !== "llm.chat" || selection.endpoint.lifecycle || inlineMusicInput(selection) || publishedMusicInput(selection))
+      throw ownedHttpError(cap, 400, "owned_chat_required", "private owned entry accepts unified Chat only");
+    invocation.selection = selection;
+    const provider = selection.provider, required = { providerId: provider.id, endpointId: selection.endpoint.id,
+      mode: "http" as const, model: selectionUpstreamModel(selection), catalogModelId: selection.model?.id ?? null,
+      capability: selection.capability };
+    const denied = await authenticateOwnedHttp(cap, request, env, [{ id: provider.id,
+      tokenRef: provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? provider.id }], required, correlationMetadata(request).sessionId);
+    if (denied) return denied;
+    invocation.required = required; bindOwnedHttpAuthentication(cap, request, env);
+    if (!invocation.identity) throw identityFailure("protocol");
+    return proxySelected(request, env, context, "proxy_key", selection, new URL(request.url).searchParams,
+      invocation.identity, undefined, undefined, undefined, admission, cap);
+  } finally { body = undefined; }
 }
 
 export async function proxyOpenAi(request: Request, env: Env, context: ExecutionContext, path: string, mode: AuthMode): Promise<Response> {
@@ -792,7 +1821,8 @@ async function proxyMiniMaxSearch(request: Request, env: Env, context: Execution
 
 // Normalization may replay a body or detach its reader cancellation. Keep an
 // independent receipt for the ORIGINAL source before giving it to those wrappers.
-function ownOrdinaryResponse(response: Response, completion: ProxyCompletion): Response {
+function ownOrdinaryResponse(response: Response, completion: ProxyCompletion, owned?: OwnedHttpRequest): Response {
+  if (owned) return ownOwnedHttpResponse(owned, response);
   if (!response.body) return response;
   let forwarded!: Response;
   completion.start(source => {
@@ -830,7 +1860,103 @@ function ownOrdinaryResponse(response: Response, completion: ProxyCompletion): R
   return forwarded;
 }
 
-async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: ProxyQuery = {}, preauthenticated: AuthorizedIdentity | null = null, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, auditAuth?: AuthorizedIdentity, admission?: JsonAdmission): Promise<Response> {
+// Internal fixed call sites return only terminal scalars. The private receipt
+// exists BEFORE work starts; registration failure cannot detach started work.
+function registerProxyBackground(owned: OwnedHttpRequest | undefined, context: ExecutionContext, start: () => Promise<void | boolean>): void {
+  if (!owned) { context.waitUntil(start()); return; }
+  const receipt = beginOwnedHttpSinkRegistration(ownedHttpSinkOwner(owned));
+  let work: Promise<void | boolean>;
+  try { work = start(); }
+  catch (primary) {
+    try { abandonUnstartedOwnedHttpRegistration(receipt); }
+    catch (cleanup) { throw new AggregateError([primary, cleanup], "owned background start cleanup"); }
+    throw primary;
+  }
+  completeOwnedHttpSinkRegistration(receipt, context, work);
+}
+function reportOwnedRetentionFailure(http: OwnedHttpRequest, retention: PreparedContentRetention, requestId: string): void {
+  try { logCorrelationError("request content retention failed", requestId); }
+  catch (reason) { throw ownedHttpArchiveReportFailure(http, retention, reason); }
+  finally { http = undefined as never; retention = undefined as never; }
+}
+function startOwnedProxyRetention(http: OwnedHttpRequest, context: ExecutionContext, completion: ProxyCompletion,
+  retention: PreparedContentRetention, requestId: string): void {
+  const owner = ownedProxyInvocations?.get(http);
+  if (!owner || owner.context !== context || owner.accounting?.requestId !== requestId) throw identityFailure("protocol");
+  const receipt = takeOwnedHttpArchiveRegistration(http, retention);
+  let work: Promise<void> | undefined, registered = false;
+  try {
+    completion.startPrivateLeaf(() => work = writeOwnedHttpDeferredArchive(http, retention));
+    const reported = work!.catch(reportOwnedRetentionFailure.bind(undefined, http, retention, requestId));
+    registered = true; completeOwnedHttpSinkRegistration(receipt, context, reported);
+  } catch (reason) {
+    const primary = ownedHttpArchiveStartFailure(http, retention, reason); reason = undefined;
+    if (!registered) {
+      try {
+        if (work) { registered = true; completeOwnedHttpSinkRegistration(receipt, context, work); }
+        else abandonUnstartedOwnedHttpRegistration(receipt);
+      } catch (cleanup) { ownedHttpArchiveRegistrationFailure(http, retention, cleanup); }
+    }
+    throw primary;
+  }
+}
+function startOwnedProxySoftBudget(http: OwnedHttpRequest, env: Env, context: ExecutionContext, completion: ProxyCompletion,
+  plan: ReturnType<typeof prepareSoftBudget>, operation: HttpOperation): void {
+  const owner = ownedProxyInvocations?.get(http);
+  if (!owner || owner.context !== context || !matchesOwnedHttpRequestInputs(http, env) || owner.softPlan !== plan || owner.operation !== operation)
+    throw identityFailure("protocol");
+  const receipt = beginOwnedHttpSinkRegistration(ownedHttpSinkOwner(http));
+  let check: Promise<void> | undefined;
+  try { completion.startPrivateLeaf(() => {
+    startOwnedHttpSoftBudget(http, env, plan, operation);
+    check = ownedHttpSoftBudgetCheck(http); return check;
+  }); } catch (primary) {
+    try {
+      if (check) completeOwnedHttpSinkRegistration(receipt, context, check);
+      else abandonUnstartedOwnedHttpRegistration(receipt);
+    } catch (cleanup) { recordOwnedHttpSoftStatusCleanupFailure(http, env, plan, operation, cleanup); cleanup = undefined; }
+    throw primary;
+  }
+  completeOwnedHttpSinkRegistration(receipt, context, check!);
+}
+
+// Fixed named synchronous calls: no arbitrary graph callback or async scope.
+// The plan was funded before full admission could commit its initial choice.
+function createOwnedHttpAccounting(cap: OwnedHttpRequest, options: Parameters<typeof createProxyAccounting>[0]): OwnedHttpAccountingCommand;
+function createOwnedHttpAccounting(cap: OwnedHttpRequest, options: Parameters<typeof createProxyAccounting>[0], preparation: true): OwnedHttpPreparationAccounting;
+function createOwnedHttpAccounting(cap: OwnedHttpRequest, options: Parameters<typeof createProxyAccounting>[0], preparation = false): OwnedHttpAccountingCommand | OwnedHttpPreparationAccounting {
+  options.ownedHttp = ownedHttpSinkOwner(cap);
+  const body = options.selection.body as Record<string, unknown>;
+  enterOwnedHttpPricing(cap, body);
+  let result: OwnedHttpAccountingCommand | OwnedHttpPreparationAccounting | undefined, hasPrimary = false, primary: unknown;
+  try { result = preparation ? createOwnedHttpPreparationAccounting(cap, options) : createOwnedHttpAccountingCommand(cap, options); } catch (error) { hasPrimary = true; primary = error; }
+  const failures: unknown[] = [];
+  try { leaveOwnedHttpPricing(cap, body); } catch (error) { failures.push(error); }
+  if (failures.length) {
+    try { result?.close(); } catch (error) { failures.push(error); }
+    result = undefined;
+    throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "owned HTTP accounting pricing scope");
+  }
+  if (hasPrimary) throw primary;
+  return result!;
+}
+function estimateOwnedHttpCost(cap: OwnedHttpRequest, selection: ProxySelection, auth: AuthorizedIdentity,
+  parentTools: Parameters<typeof estimateCost>[5]): EstimatedCost {
+  const body = selection.body as Record<string, unknown>;
+  enterOwnedHttpPricing(cap, body);
+  let result: EstimatedCost | undefined, hasPrimary = false, primary: unknown;
+  try {
+    result = estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability),
+      selection.capability, selection.endpoint, parentTools, selection.nativeResponse?.tariff, selection.provider.id);
+  } catch (error) { hasPrimary = true; primary = error; }
+  const failures: unknown[] = [];
+  try { leaveOwnedHttpPricing(cap, body); } catch (error) { failures.push(error); }
+  if (failures.length) { result = undefined; throw new AggregateError(hasPrimary ? [primary, ...failures] : failures, "owned HTTP cost pricing scope"); }
+  if (hasPrimary) throw primary;
+  return result!;
+}
+
+async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: ProxyQuery = {}, preauthenticated: AuthorizedIdentity | null = null, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, auditAuth?: AuthorizedIdentity, admission?: JsonAdmission, owned?: OwnedHttpRequest): Promise<Response> {
   // Invoke only at the authenticated, validated boundary (or the earlier
   // identity-denial receipt). Never reconstruct the selection or reauthenticate.
   const complete = async (start: (scope?: ProxyCompletion) => Promise<Response>): Promise<Response> => {
@@ -838,12 +1964,12 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       && !selection.endpoint.lifecycle && !backgroundResponse(selection.endpoint, selection.body) && !isModelDiscovery(selection.endpoint) && selection.capability.startsWith("llm.")
       && !["minimax", "anthropic-vertex", "gmi"].includes(selection.provider.id)
       && ["openai.chat_completions", "openai.responses", "openai.responses_compact", "openai.responses_input_tokens", "anthropic.messages"].includes(selection.endpoint.request_format);
-    const completion = ordinary ? new ProxyCompletion() : undefined;
+    const completion = owned ? ownedHttpCompletion(owned) : ordinary ? new ProxyCompletion() : undefined;
     if (completion) admission!.completion = completion.completion;
     try {
-      if (completion) context.waitUntil(completion.completion);
+      if (completion && !owned) context.waitUntil(completion.completion);
       return await (completion ? completion.start(start) : start());
-    } finally { completion?.seal(); }
+    } finally { if (!owned) completion?.seal(); }
   };
   const auth = reservedBudget?.auth ?? await selectedAuth(request, env, mode, selection, preauthenticated);
   if (auth instanceof Response) {
@@ -856,7 +1982,8 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   const identityDenial = identitySelectionDenied(request, selection.provider.id);
   if (identityDenial) {
     return complete(async completion => {
-      const accounting = createProxyAccounting({ context, env, auth, selection, request, compound, completion, cost: { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 } });
+      const options = { context, env, auth, selection, request, compound, completion, cost: { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 } };
+      const accounting = owned ? createOwnedHttpAccounting(owned, options) : createProxyAccounting(options);
       try { accounting.fail(identityDenial.status, "denied"); return identityDenial; }
       finally { accounting.close(); }
     });
@@ -869,14 +1996,16 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   if (selection.endpoint.inputProfile !== undefined)
     throw new HttpError(400, "managed_input_profile_required", "this endpoint requires its registered native multipart input profile");
   validateSelectedInput(selection);
-  return complete(completion => proxySelectedOwned(request, env, context, auth, selection, queryInput, reservedBudget, compound, admission, completion));
+  return complete(completion => proxySelectedOwned(request, env, context, auth, selection, queryInput, reservedBudget, compound, admission, completion, owned));
 }
 
-async function proxySelectedOwned(request: Request, env: Env, context: ExecutionContext, auth: AuthorizedIdentity, selection: ProxySelection, queryInput: ProxyQuery, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, admission?: JsonAdmission, completion?: ProxyCompletion): Promise<Response> {
-  let failureAccounting: ReturnType<typeof createProxyAccounting> | undefined;
-  let accounting: ReturnType<typeof createProxyAccounting> | undefined;
+async function proxySelectedOwned(request: Request, env: Env, context: ExecutionContext, auth: AuthorizedIdentity, selection: ProxySelection, queryInput: ProxyQuery, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, admission?: JsonAdmission, completion?: ProxyCompletion, owned?: OwnedHttpRequest): Promise<Response> {
+  let failureAccounting: ReturnType<typeof createProxyAccounting> | OwnedHttpPreparationAccounting | undefined;
+  let accounting: ReturnType<typeof createProxyAccounting> | OwnedHttpAccountingCommand | undefined;
   let retention: PreparedContentRetention | null | undefined;
   let accountingDeferred = false, retentionDeferred = false;
+  let codecConsumer: OwnedCodecConsumer | undefined;
+  let codecPublished = false;
   const run = <T>(start: () => Promise<T>): Promise<T> => completion ? completion.start(start) : start();
   try {
   const searchOwner = admission?.search;
@@ -888,14 +2017,14 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     return proxyManagedPrediction(request, env, context, auth, selection, queryInput, admission?.wan);
   }
   const accountingContext = { context, env, auth, selection, request, compound, completion, search: searchOwner, startedAtMs: Date.now() };
-  failureAccounting = createProxyAccounting(accountingContext);
+  failureAccounting = owned ? createOwnedHttpAccounting(owned, accountingContext, true) : createProxyAccounting(accountingContext);
   let background: HttpBackground | undefined;
   let prepared: PreparedUpstream;
   let continuation: HttpContinuation | undefined;
   let googleContinuation: GoogleContinuation | undefined;
   let search: SearchSession | undefined;
   let grantFailover = false;
-  const failedGrantKeys = new Set(reservedBudget?.failedGrantKeys ?? []);
+  let failedGrantKeys = owned ? ownedProxyInvocations!.get(owned)!.retry!.excluded : new Set(reservedBudget?.failedGrantKeys ?? []);
   try {
     // Published assets require an acknowledged reservation before their sole
     // destination claim. A soft-budget request cannot supply that authority.
@@ -905,7 +2034,12 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     continuation = await HttpContinuation.resolve(request, selection, auth, env);
     if (googleContinuationRoute(selection)) googleContinuation = await GoogleContinuation.resolve(request, selection, auth, env);
     const uploadGrant = nativeUploadGrants.get(selection);
-    prepared = await run(() => prepareSelected(request, env, selection, queryInput, auth, failedGrantKeys, !uploadGrant && !published, reservedBudget?.connection, publishedPin ?? search?.pinned ?? continuation?.pinned ?? googleContinuation?.pinned ?? uploadGrant, "http", true, undefined, searchOwner, undefined, request.signal, reservedBudget?.grant));
+    if (owned) {
+      await run(() => prepareOwnedHttpAttempt(owned, request, env, selection, queryInput, request.signal));
+      commitOwnedHttpAttempt(owned);
+      prepared = ownedProxyInvocations!.get(owned)!.prepared!;
+      if (!prepared) throw identityFailure("protocol");
+    } else prepared = await run(() => prepareSelected(request, env, selection, queryInput, auth, failedGrantKeys, !uploadGrant && !published, reservedBudget?.connection, publishedPin ?? search?.pinned ?? continuation?.pinned ?? googleContinuation?.pinned ?? uploadGrant, "http", true, undefined, searchOwner, undefined, request.signal, reservedBudget?.grant));
     assertRequestTariffDestination(selection.endpoint, prepared.url);
     assertNativeResponseDestination(selection.nativeResponse, prepared.url);
     for (const key of prepared.failedGrantKeys ?? []) failedGrantKeys.add(key);
@@ -916,12 +2050,19 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       if (!prepared.continuation) throw new HttpError(503, "search_state_unavailable", "search owner is unavailable");
       prepared.requestBody = JSON.stringify({ ...selection.body, id: await search.bind(prepared.continuation) });
     }
-    const cost = estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, continuation?.parentTools, selection.nativeResponse?.tariff, selection.provider.id);
-    accounting = createProxyAccounting({ ...accountingContext, cost, grantKey: prepared.grantKey, grantLane: prepared.grantLane });
+    const cost = owned ? estimateOwnedHttpCost(owned, selection, auth, continuation?.parentTools)
+      : estimateCost(selection.model, selection.body, policyRequestCost(auth.policy, selection.capability), selection.capability, selection.endpoint, continuation?.parentTools, selection.nativeResponse?.tariff, selection.provider.id);
+    const options = { ...accountingContext, cost, grantKey: prepared.grantKey, grantLane: prepared.grantLane };
+    accounting = owned ? createOwnedHttpAccounting(owned, options) : createProxyAccounting(options);
+    if ("retireUnused" in failureAccounting) {
+      await failureAccounting.retireUnused();
+      failureAccounting = undefined;
+    }
     if (reservedBudget && (reservedBudget.providerId !== selection.provider.id || reservedBudget.modelId !== selection.model?.id || reservedBudget.capability !== selection.capability || cost.reserveMicros > reservedBudget.cost.reserveMicros)) {
       reservedBudget.claim();
       accounting.fail(500, "provider_error", reservedBudget.reservation);
-      return errorResponse("fusion_reservation_invalid", "fusion synthesizer reservation does not cover the final request", 500);
+      return owned ? ownedErrorResponse(owned, "fusion_reservation_invalid", "fusion synthesizer reservation does not cover the final request", 500)
+        : errorResponse("fusion_reservation_invalid", "fusion synthesizer reservation does not cover the final request", 500);
     }
     // Monetary coverage alone cannot prove that the final request remains priced.
     if (reservedBudget) validateBudgetReservation(selection.capability, cost, auth.policy.monthlyBudgetMicros, reservedBudget.connection, auth.policy.dailyBudgetMicros, auth.policy.limitHint, auth.policy.weeklyBudgetMicros);
@@ -933,17 +2074,26 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       failure = new HttpError(503, "upstream_grant_pool_unavailable", `provider ${selection.provider.id} has no available scoped upstream grant`);
     const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
     reservedBudget?.claim();
-    (accounting ?? failureAccounting).fail(failure.status, status, reservedBudget?.reservation);
-    return errorResponse(failure.code, failure.message, failure.status, undefined, failure.headers);
+    const failureOwner = accounting ?? (owned ? ownedProxyInvocations!.get(owned)!.accounting : undefined) ?? failureAccounting;
+    if (!failureOwner) throw identityFailure("protocol");
+    failureOwner.fail(failure.status, status, reservedBudget?.reservation);
+    return owned ? ownedErrorResponse(owned, failure.code, failure.message, failure.status, failure.headers?.["Retry-After"] ?? failure.headers?.["retry-after"])
+      : errorResponse(failure.code, failure.message, failure.status, undefined, failure.headers);
   }
-  const { cost, requestId } = accounting;
+  const cost = owned ? ownedProxyInvocations!.get(owned)!.accountingCost! : (accounting as ReturnType<typeof createProxyAccounting>).cost;
+  const requestId = accounting.requestId;
   const useSoft = !isModelDiscovery(selection.endpoint) && softBudgetPolicy(auth.policy) && !prepared.backgroundRecovery && !reservedBudget && compound?.stage !== "fusion_synthesizer";
   let softPlan: ReturnType<typeof prepareSoftBudget> | undefined;
   let reservePlan: ReturnType<typeof planBudgetReservation> | undefined;
   try {
-    softPlan = useSoft ? prepareSoftBudget(auth, selection.capability, prepared.connection, accounting.facts.event.id, !!searchOwner) : undefined;
+    softPlan = useSoft ? prepareSoftBudget(auth, selection.capability, prepared.connection, owned ? (accounting as OwnedHttpAccountingCommand).eventId : (accounting as ReturnType<typeof createProxyAccounting>).facts.event.id, !!searchOwner) : undefined;
     reservePlan = !useSoft && !reservedBudget ? planBudgetReservation(auth, selection.capability, cost, prepared.connection) : undefined;
-    admitAccountingFacts(accounting.facts, softPlan?.reservation ?? reservePlan ?? reservedBudget?.reservation);
+    if (owned) {
+      const owner = ownedProxyInvocations!.get(owned)!;
+      owner.accountingPlan = softPlan?.reservation ?? reservePlan ?? reservedBudget?.reservation;
+      (accounting as OwnedHttpAccountingCommand).admitPlan(owner.accountingPlan, owner.upload!);
+    }
+    else admitAccountingFacts((accounting as ReturnType<typeof createProxyAccounting>).facts, softPlan?.reservation ?? reservePlan ?? reservedBudget?.reservation);
   } catch (error) {
     if (isAccountingAdmissionFailure(error)) throw error;
     // Pure planning moved before effects; ordinary monetary denials still own
@@ -951,9 +2101,11 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     const failure = error instanceof HttpError ? error : new HttpError(503, "budget_store_unavailable", "budget ledger is unavailable");
     reservedBudget?.claim();
     accounting.fail(failure.status, failure.status === 402 ? "denied" : failure.status < 500 ? "client_error" : "provider_error", reservedBudget?.reservation);
-    return errorResponse(failure.code, failure.message, failure.status);
+    return owned ? ownedErrorResponse(owned, failure.code, failure.message, failure.status)
+      : errorResponse(failure.code, failure.message, failure.status);
   }
   let soft: ReturnType<typeof softBudget> | undefined;
+  let ownedSoft = false;
   let budgetMs = 0;
   let upstreamMs = 0;
   const budgetStart = performance.now();
@@ -967,13 +2119,15 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       const pending = prepareContentRetention(env, auth, selection, requestId);
       await pending?.write(); return pending;
     });
-    else retention = prepareContentRetention(env, auth, selection, requestId);
+    else retention = owned ? prepareOwnedHttpContentRetention(owned, env, auth, selection, requestId)
+      : prepareContentRetention(env, auth, selection, requestId);
   }
   catch (error) {
     if (isAccountingAdmissionFailure(error)) throw error;
     reservedBudget?.claim();
     accounting.fail(503, "provider_error", reservation);
-    return errorResponse("content_retention_unavailable", "required request-content retention is temporarily unavailable", 503);
+    return owned ? ownedErrorResponse(owned, "content_retention_unavailable", "required request-content retention is temporarily unavailable", 503)
+      : errorResponse("content_retention_unavailable", "required request-content retention is temporarily unavailable", 503);
   }
   const content = retention?.contentRef ?? null;
   reservedBudget?.claim();
@@ -981,32 +2135,41 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     try {
       if (!prepared.continuation || !continuation || reservedBudget) throw new HttpError(400, "background_unsupported", "this route cannot own background recovery");
       const pathParams = Object.fromEntries(selection.endpoint.path_params.map(name => [name, selection.pathParams[name]]));
-      background = await HttpBackground.prepare(request, env, auth, prepared.continuation, accounting.facts, prepared.connection, pathParams, prepared.headers, !Array.isArray(selection.body) && selection.body.stream === true);
+      background = await HttpBackground.prepare(request, env, auth, prepared.continuation, (accounting as ReturnType<typeof createProxyAccounting>).facts, prepared.connection, pathParams, prepared.headers, !Array.isArray(selection.body) && selection.body.stream === true);
       await background.admit();
       continuation.background(background.admission.id);
     } catch (error) {
       const failure = selectedFailure(error);
       // Once a durable admission was attempted, only that owner may account it.
       if (!background) accounting.fail(failure.status, failure.status === 402 ? "denied" : "provider_error");
-      return errorResponse(failure.code, failure.message, failure.status);
+      return owned ? ownedErrorResponse(owned, failure.code, failure.message, failure.status)
+      : errorResponse(failure.code, failure.message, failure.status);
     }
   } else if (!reservation && !useSoft) {
     try { reservation = await reserveBudget(env, auth, selection.capability, cost, prepared.connection, undefined, {
       // Fail-closed retention and stateful revalidation must finish before the
       // separate dispatch transition. Durable owners keep their own protocol.
       dispatched: !retention?.large && !prepared.revalidateAccount && !prepared.revalidateMedia, search: searchOwner, preparedPlan: reservePlan,
+      ...(owned ? { ownedHttp: ownedHttpSinkOwner(owned) } : {}),
     }); }
     catch (error) {
       const failure = error instanceof HttpError ? error : new HttpError(503, "budget_store_unavailable", "budget ledger is unavailable");
       accounting.fail(failure.status, failure.status === 402 ? "denied" : failure.status < 500 ? "client_error" : "provider_error");
-      return errorResponse(failure.code, failure.message, failure.status);
+      return owned ? ownedErrorResponse(owned, failure.code, failure.message, failure.status)
+      : errorResponse(failure.code, failure.message, failure.status);
     }
   }
   if (useSoft) {
     const denial = softBudgetPreflight(env, auth, selection.capability, prepared.connection);
     if (denial) {
       accounting.fail(402, "denied");
-      return errorResponse(denial.code, denial.message, 402);
+      return owned ? ownedErrorResponse(owned, denial.code, denial.message, 402) : errorResponse(denial.code, denial.message, 402);
+    }
+    if (owned) {
+      growOwnedHttpRequest(owned, 256);
+      const invocation = ownedProxyInvocations!.get(owned)!;
+      invocation.softPlan = softPlan; invocation.softAttempt = invocation.upload;
+      prepareOwnedHttpSoftBudget(owned, env, softPlan!);
     }
   }
   budgetMs = useSoft || !background && !reservation?.reservations.length ? 0 : performance.now() - budgetStart;
@@ -1018,39 +2181,59 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
   catch {
     if (background) context.waitUntil(background.unsent(503, "provider_error", null));
     else accounting.fail(503, "provider_error", reservation);
-    return errorResponse("content_retention_unavailable", "required request-content retention is temporarily unavailable", 503);
+    return owned ? ownedErrorResponse(owned, "content_retention_unavailable", "required request-content retention is temporarily unavailable", 503)
+      : errorResponse("content_retention_unavailable", "required request-content retention is temporarily unavailable", 503);
   }
   if (retention && !searchOwner && !background && !retention.large) {
     // Best-effort and off the critical path: the timer lets dispatch start first,
     // so serialization and the R2 put overlap the upstream request.
     const pendingRetention = retention;
     retentionDeferred = true;
-    context.waitUntil(run(() => new Promise(resolve => setTimeout(resolve, 0)).then(() => pendingRetention.write()).finally(() => { if (completion) pendingRetention.discardUnused?.(); })).catch(() => logCorrelationError("request content retention failed", requestId)));
+    if (owned) startOwnedProxyRetention(owned, context, completion!, pendingRetention, requestId);
+    else registerProxyBackground(owned, context, () => run(() => new Promise(resolve => setTimeout(resolve, 0)).then(() => pendingRetention.write()).finally(() => { if (completion) pendingRetention.discardUnused?.(); })).catch(() => logCorrelationError("request content retention failed", requestId)));
+  }
+  if (owned) {
+    const handoff = ownedProxyInvocations!.get(owned)!;
+    handoff.terminalReservation = reservation ?? softPlan?.reservation;
+    handoff.terminalContent = content;
+    if ((handoff.accountingHandoff! & 7) === 1) handoff.accountingHandoff = handoff.accountingHandoff! & ~7 | 2;
   }
   try {
     const dispatchStart = performance.now();
     if (background) await background.dispatch(content);
-    else if (!useSoft) await markBudgetDispatched(env, reservation!, undefined, searchOwner);
+    else if (!useSoft) await markBudgetDispatched(env, reservation!, undefined, searchOwner, owned ? ownedHttpSinkOwner(owned) : undefined);
     if (background || reservation?.reservations.length) budgetMs += performance.now() - dispatchStart;
   }
   catch {
     if (background) context.waitUntil(background.unsent(503, "provider_error", content));
     else accounting.fail(503, "provider_error", reservation, content);
-    return errorResponse("accounting_unavailable", "Budget dispatch could not be recorded; no upstream request was sent.", 503);
+    return owned ? ownedErrorResponse(owned, "accounting_unavailable", "Budget dispatch could not be recorded; no upstream request was sent.", 503)
+      : errorResponse("accounting_unavailable", "Budget dispatch could not be recorded; no upstream request was sent.", 503);
   }
   const endpointTimeout = selection.endpoint.timeout_ms ?? 120_000;
-  const operation = searchOwner?.operation ?? music?.operation ?? new HttpOperation(request.signal, Math.min(selection.timeoutMs ?? endpointTimeout, endpointTimeout));
+  const operation = searchOwner?.operation ?? music?.operation ?? new HttpOperation(owned ? ownedHttpSignal(owned) : request.signal, Math.min(selection.timeoutMs ?? endpointTimeout, endpointTimeout));
+  if (owned) {
+    const invocation = ownedProxyInvocations!.get(owned)!;
+    invocation.operation = operation; invocation.usageContext = usageContext; invocation.requestId = requestId;
+  }
   const signal = operation.signal;
   // Stateful auxiliary operations requalify after budget/retention awaits, under the same
   // cancellation/deadline owner as transport. Interrupted reads are known-unsent.
   if ((prepared.revalidateAccount || prepared.revalidateMedia) && !searchOwner) {
     try { signal.throwIfAborted(); await operation.wait(run(() => prepared.revalidateMedia ? prepared.revalidateMedia(env, signal) : prepared.revalidateAccount!(signal))); }
     catch (error) {
-      const failure = signal.aborted ? new HttpError(502, "provider_unavailable", `upstream request to provider ${selection.provider.id} failed`) : selectedFailure(error);
+      let failure;
+      if (signal.aborted && owned) {
+        const providerId = selection.provider.id;
+        if (typeof providerId !== "string") throw identityFailure("protocol");
+        admitOwnedHttpErrorText(owned, 36 + providerId.length);
+        failure = ownedHttpError(owned, 502, "provider_unavailable", `upstream request to provider ${providerId} failed`);
+      } else failure = signal.aborted ? new HttpError(502, "provider_unavailable", `upstream request to provider ${selection.provider.id} failed`) : selectedFailure(error);
       const status = operation.status ?? (failure.status < 500 ? "client_error" : "provider_error");
       operation.stop("upstream", error);
       accounting.fail(failure.status, status, reservation, content);
-      return errorResponse(failure.code, failure.message, failure.status);
+      return owned ? ownedErrorResponse(owned, failure.code, failure.message, failure.status)
+      : errorResponse(failure.code, failure.message, failure.status);
     }
   }
   const catalogInputs = prepared.featherlessCatalog || prepared.acquireDiscovery
@@ -1075,7 +2258,8 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     if (!pending) {
       const dispose = async () => {
         if (!catalogInputs) {
-          if (owner) await response.body?.cancel(signal.reason);
+          if (owned) await cancelOwnedHttpResponse(ownedHttpSinkOwner(owned), response);
+          else if (owner) await response.body?.cancel(signal.reason);
           else await response.body?.cancel(signal.reason).catch(() => undefined);
           return;
         }
@@ -1089,7 +2273,11 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
         }
         await input.retire("cancel", signal.reason);
       };
-      pending = owner ? owner.start(dispose) : dispose();
+      // The private native codec may publish a late public Response after the
+      // logical attempt sealed. Its prepaid sink custody remains open until
+      // that codec's original output receipt settles; never reenter a sealed
+      // logical completion merely to initiate its original cancellation.
+      pending = owned ? dispose() : owner ? owner.start(dispose) : dispose();
       void pending.catch(() => undefined);
       (discarded ??= new WeakMap()).set(response, pending);
     }
@@ -1117,7 +2305,10 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
   let nativeLease: BodyLease | undefined;
   let nativeUsage: import("./native-response.ts").ValidatedNativeUsage | undefined;
   let nativeRead: ReturnType<NonNullable<ProxySelection["nativeResponse"]>["read"]> | undefined;
-  let nativeFetch: Promise<Response> | undefined;
+  let ownedNativeRead: Promise<Response> | undefined;
+  let nativeFetch: Promise<Response> | Promise<void> | undefined;
+  let ownedFetch: OwnedHttpUpload | undefined;
+  let ownedFetchPending: Promise<void> | undefined;
   let musicRead: Promise<unknown> | undefined;
   let imageRead: Promise<unknown> | undefined;
   let imageInput: ReturnType<typeof ownMiniMaxImageInput> | undefined;
@@ -1125,11 +2316,19 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
   try {
     // A canceled preflight is known-unsent even if the ledger marks already landed.
     signal.throwIfAborted();
-    nativeLease = searchOwner ? undefined : music ? music.acquireResponse() : prepared.featherlessCatalog ? acquireFeatherlessCatalog() : selection.nativeResponse?.acquire() ?? prepared.acquireDiscovery?.();
+    if (owned && prepared.ownedVenice) checkOwnedVeniceChatCodec(prepared.ownedVenice, selection.nativeResponse!);
+    else nativeLease = searchOwner ? undefined : music ? music.acquireResponse() : prepared.featherlessCatalog ? acquireFeatherlessCatalog() : selection.nativeResponse?.acquire() ?? prepared.acquireDiscovery?.();
     if (!nativeModelEligible(selection.endpoint.request_format, selection.model?.upstream)) throw new HttpError(400, "model_capability_unsupported", "selected model qualification expired before dispatch");
     dispatched = !searchOwner;
+    if (owned) ownedProxyInvocations!.get(owned)!.accountingDispatched = dispatched;
     const upstreamStart = performance.now();
-    const pending = published ? published.dispatch(env, prepared.requestBody, { requestId, eventId: accounting.facts.event.id,
+    if (owned) {
+      ownedFetch = ownedPreparedUploads?.get(prepared);
+      if (!ownedFetch) throw identityFailure("protocol");
+      dispatchOwnedHttpUpload(ownedFetch);
+      ownedFetchPending = startOwnedHttpProviderFetch(owned, ownedFetch, prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" });
+    }
+    const pending = owned ? undefined : published ? published.dispatch(env, prepared.requestBody, { requestId, eventId: (accounting as ReturnType<typeof createProxyAccounting>).facts.event.id,
       reservedMicros: cost.reserveMicros, reservations: (reservation?.reservations ?? []).map(({ objectName, reservationId }) => ({ objectName, reservationId })) }) : prepared.featherlessCatalog
       ? featherlessCatalogResponse({ ...prepared.featherlessCatalog, registerInput: registerCatalogInput, registerFetch: registerCatalogFetch }, operation)
       : prepared.publicCatalog
@@ -1142,22 +2341,36 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
         active.throwIfAborted();
         dispatched = true;
         return fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal: active, redirect: "manual" });
-      }) : ordinaryFetch(() => fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" }));
-    if (selection.nativeResponse) nativeFetch = pending;
+      }) : ordinaryFetch(() => {
+        return fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" });
+      });
+    if (selection.nativeResponse) nativeFetch = owned ? ownedFetchPending : pending;
     if (prepared.featherlessCatalog) catalogWork = pending;
-    else if (catalogInputs) registerCatalogFetch(pending);
+    else if (catalogInputs) registerCatalogFetch(pending!);
     if (useSoft) {
+      if (owned) {
+        startOwnedProxySoftBudget(owned, env, context, completion!, softPlan!, operation);
+        ownedSoft = true; reservation = softPlan!.reservation;
+      } else {
       const checking = completion?.fork();
       try {
-        soft = startSoftBudget(env, softPlan!, error => operation.stop("upstream", error), searchOwner);
-        reservation = soft.reservation;
-        if (checking) checking.start(() => soft!.check);
-        context.waitUntil(soft.check);
+        registerProxyBackground(owned, context, () => {
+          soft = startSoftBudget(env, softPlan!, error => operation.stop("upstream", error), searchOwner);
+          reservation = soft.reservation;
+          if (checking) checking.start(() => soft!.check);
+          return soft.check;
+        });
       } catch (error) { checking?.fail(); throw error; }
       finally { checking?.seal(); }
+      }
     }
-    response = await operation.wait(pending, "upstream", discard);
-    if (completion) response = ownOrdinaryResponse(response, completion);
+    if (owned) {
+      await operation.wait(ownedFetchPending!, "upstream");
+      consumeOwnedHttpProviderResponse(ownedFetch!);
+      const receiver = ownedProxyInvocations!.get(owned)!;
+      response = receiver.incomingResponse!; receiver.incomingResponse = undefined;
+    } else response = await operation.wait(pending!, "upstream", discard);
+    if (completion && !owned) response = ownOrdinaryResponse(response, completion);
     if (music) {
       await music.completeUpload();
       prepared.requestBody = undefined;
@@ -1175,16 +2388,24 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     };
     accounting.observeUpstreamResponse(response, prepared.url);
     // Metadata permissions and rate limits do not establish inference health.
-    response = await captureResponse(response);
+    if (owned) captureOwnedHttpRuntime(owned, request, env, prepared, selection, response);
+    else response = await captureResponse(response);
     while (!accounting.upstreamChargePossible && !miniMaxAnthropicRoute(selection.provider, selection.endpoint) && selection.provider.id !== "anthropic-vertex" && selection.provider.id !== "gmi" && !selection.nativeResponse && !selection.endpoint.requestPricing && failedGrantKeys.size < MAX_GRANT_ATTEMPTS - 1 && !isModelDiscovery(selection.endpoint) && !background && !search && !continuation?.requested && !googleContinuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover, creditExhausted)) {
       let retry: PreparedUpstream | undefined;
       let capacityFailure: HttpError | undefined;
       signal.throwIfAborted();
-      failedGrantKeys.add(prepared.grantKey!);
-      const preparation = run(() => prepareSelected(request, env, selection, queryInput, auth, failedGrantKeys, true, prepared.connection, undefined, "http", false, undefined, undefined, undefined, signal));
+      if (owned) {
+        if (failedGrantKeys.has(prepared.grantKey!)) break;
+        excludeOwnedHttpGrant(owned, prepared.grantKey!);
+      } else failedGrantKeys.add(prepared.grantKey!);
+      const preparation = owned ? run(() => prepareOwnedHttpAttempt(owned, request, env, selection, queryInput, signal))
+        : run(() => prepareSelected(request, env, selection, queryInput, auth, failedGrantKeys, true, prepared.connection, undefined, "http", false, undefined, undefined, undefined, signal));
       const preparationSettled = preparation.then(() => {}, () => {});
       try {
-        retry = await operation.wait(preparation);
+        if (owned) {
+          await operation.wait(preparation as Promise<void>);
+          retry = ownedProxyInvocations!.get(owned)!.retry?.pending?.prepared;
+        } else retry = await operation.wait(preparation as Promise<PreparedUpstream>);
       } catch (error) {
         if (isPreparationLimit(error) || isAccountingAdmissionFailure(error) || isIdentityFailure(error)) capacityFailure = error;
         // Ordinary selection failure leaves the original rejection available to the caller.
@@ -1201,19 +2422,38 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
         signal.throwIfAborted();
         // The alternate may execute without returning headers. Its uncertainty
         // must not inherit the discarded attempt's nonbillable rejection.
-        response = undefined;
-        prepared = retry;
+        if (owned) {
+          // Discard can make the HTTP owner UNKNOWN without aborting signal.
+          // A refused commit keeps the prior rejection and grant for accounting.
+          prepared = commitOwnedHttpAttempt(owned);
+          response = undefined;
+        } else {
+          response = undefined;
+          prepared = retry;
+        }
         for (const key of prepared.failedGrantKeys ?? []) failedGrantKeys.add(key);
         accounting.setGrant(prepared.grantKey, prepared.grantLane);
-        response = await operation.wait(ordinaryFetch(() => fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" })), "upstream", discard);
-        if (completion) response = ownOrdinaryResponse(response, completion);
+        if (owned) {
+          ownedFetch = ownedPreparedUploads?.get(prepared); ownedFetchPending = undefined;
+          if (!ownedFetch) throw identityFailure("protocol");
+          dispatchOwnedHttpUpload(ownedFetch);
+          ownedFetchPending = startOwnedHttpProviderFetch(owned, ownedFetch, prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" });
+          await operation.wait(ownedFetchPending, "upstream");
+          consumeOwnedHttpProviderResponse(ownedFetch);
+          const receiver = ownedProxyInvocations!.get(owned)!;
+          response = receiver.incomingResponse!; receiver.incomingResponse = undefined;
+        } else response = await operation.wait(ordinaryFetch(() => fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" })), "upstream", discard);
+        if (completion && !owned) response = ownOrdinaryResponse(response, completion);
         accounting.observeUpstreamResponse(response, prepared.url);
-        response = await captureResponse(response);
+        if (owned) captureOwnedHttpRuntime(owned, request, env, prepared, selection, response);
+        else response = await captureResponse(response);
+
         if (prepared.continuation) continuation?.bind(prepared.continuation);
         if (prepared.continuation && googleContinuation) await googleContinuation.bind(prepared.continuation);
         grantFailover = true;
       } else break;
     }
+    if (owned) { closeOwnedHttpRetry(owned); failedGrantKeys = undefined as never; }
     // Redirects cannot select a new destination or replay a credentialed body.
     // Do not pass Location downstream for the client to replay either.
     if (response.status >= 300 && response.status < 400) throw new Error("upstream redirect refused");
@@ -1231,7 +2471,24 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       if (catalogInputs) catalogWork = reading;
       response = catalogInputs ? await operation.wait(reading, "upstream", discard) : await reading;
     }
-    if (selection.nativeResponse) {
+    // Final alternate selection and every synchronous pricing/serialization
+    // consumer have finished. Facts, uploads and accounting keep their owners.
+    if (owned) {
+      retireOwnedHttpPricing(owned);
+      ownedProxyInvocations!.get(owned)!.foregroundCommandsClosed = true;
+      finishOwnedHttpForegroundCommands(owned);
+    }
+    if (owned && prepared.ownedVenice) {
+      const receiver = ownedProxyInvocations!.get(owned)!;
+      receiver.nativeResponse = response;
+      receiver.nativeSignal = signal;
+      ownedNativeRead = readOwnedVeniceChatResponse(prepared.ownedVenice, response, signal);
+      response = await operation.wait(ownedNativeRead, "upstream", discard);
+      forwardOwnedVeniceUsage(prepared.ownedVenice, owned, response);
+      nativeUsage = receiver.nativeUsage;
+      try { if (prepared.revalidateDelivery) await operation.wait(prepared.revalidateDelivery(signal), "publication"); }
+      catch (error) { void discard(response); throw error; }
+    } else if (selection.nativeResponse) {
       if (selection.endpoint.request_format === "minimax.images") imageInput = ownMiniMaxImageInput(response);
       const reading = selection.nativeResponse.read(imageInput?.response ?? response, signal);
       nativeRead = searchOwner ? searchOwner.track(reading) : reading;
@@ -1245,7 +2502,10 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       nativeUsage = "usage" in validated ? validated.usage : undefined;
     }
     upstreamMs = performance.now() - upstreamStart;
-    if (soft) {
+    if (ownedSoft) {
+      budgetMs = await beforeOwnedHttpSoftDelivery(owned!);
+      const denial = ownedHttpSoftDenial(owned!); if (denial) throw denial;
+    } else if (soft) {
       budgetMs = await soft.beforeDelivery();
       if (soft.denial) throw soft.denial;
     }
@@ -1254,16 +2514,32 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       ? selection.body.some(({ query }) => !!query && typeof query === "object" && "stream" in query && query.stream === true)
       : selection.body.stream === true;
     const errorFormat = selection.endpoint.request_format.startsWith("anthropic.") ? "anthropic" : selection.endpoint.request_format.startsWith("openai.") ? "openai" : undefined;
-    response = await normalizePreStreamError(response, !cost.requestTariff && streaming && !["audio.binary", "ollama.chat", "radius.messages"].includes(selection.endpoint.response_format), operation, errorFormat ? { format: errorFormat, requestId } : undefined);
+    const normalizeStreaming = !cost.requestTariff && streaming && !["audio.binary", "ollama.chat", "radius.messages"].includes(selection.endpoint.response_format);
+    if (owned && prepared.ownedVenice) {
+      codecConsumer = beginOwnedCodecConsumer(owned, prepared.ownedVenice, response, operation, streaming, requestId, nativeUsage, usageContext);
+      ownedProxyInvocations!.get(owned)!.consumer = codecConsumer;
+      response = await normalizeOwnedCodecPreStreamError(codecConsumer, response, normalizeStreaming, operation, errorFormat ? { format: errorFormat, requestId } : undefined);
+    } else {
+      if (completion) response = ownOrdinaryResponse(response, completion, owned);
+      if (owned) {
+        const invocation = ownedProxyInvocations!.get(owned)!;
+        invocation.normalizingResponse = response;
+        try { response = await normalizeOwnedHttpPreStreamError(owned, invocation.upload!, response, normalizeStreaming, operation, errorFormat ? { format: errorFormat, requestId } : undefined); }
+        finally { invocation.normalizingResponse = undefined; }
+      } else response = await normalizePreStreamError(response, normalizeStreaming, operation, errorFormat ? { format: errorFormat, requestId } : undefined);
+    }
     // Price inspection reads delivery bytes, not initial-response headers.
     // Search retains its original deadline through delivery; other native paths
     // retire only the timer and keep caller cancellation connected through EOF.
     if (!searchOwner) operation.retireDeadline();
     if (selection.capability === "llm.messages" && selection.endpoint.request_format === "anthropic.messages" && reservation?.reservations.length && policyRequestCost(auth.policy, selection.capability) == null) {
-      priceGuard = await guardAnthropicPrice(response, tokens => tokens?.billable === false || !!anthropicPricing(selection.model?.pricing, selection.model?.upstream, accounting!.facts.anthropicRequest ?? {}, tokens?.anthropic ?? {}), operation, requestId);
+      priceGuard = await guardAnthropicPrice(response, tokens => tokens?.billable === false || !!anthropicPricing(selection.model?.pricing, selection.model?.upstream, (accounting as ReturnType<typeof createProxyAccounting>).facts.anthropicRequest ?? {}, tokens?.anthropic ?? {}), operation, requestId);
       response = priceGuard.response;
     }
   } catch (error) {
+    if (owned) { closeOwnedHttpRetry(owned); failedGrantKeys = undefined as never; }
+    const ownedFetchRetirement = ownedFetch ? disposeOwnedHttpProviderResponse(ownedFetch) : undefined;
+    if (codecConsumer) abandonOwnedCodecConsumer(codecConsumer);
     if (error instanceof PublishedMusicUnsent) dispatched = false;
     if (music) {
       operation.stop("upstream", error);
@@ -1296,22 +2572,25 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
         if (failed?.status === "rejected") throw failed.reason;
       })();
       context.waitUntil(retirement.then(() => failedLease?.release()));
-    } else if (nativeRead || nativeFetch) {
+    } else if (nativeRead || ownedNativeRead || nativeFetch) {
       // Cancellation/accounting can finish now. A qualified reader settles only
       // after input retirement; late fetch/results also retain their first cleanup.
       const retirement = (async () => {
         await nativeRead?.then(discardNative, () => undefined);
-        await nativeFetch?.then(discard, () => undefined);
+        await ownedNativeRead?.then(discard, () => undefined);
+        if (owned) await ownedFetchRetirement;
+        else await (nativeFetch as Promise<Response> | undefined)?.then(discard, () => undefined);
       })();
       context.waitUntil(retirement.then(() => failedLease?.release()));
     } else failedLease?.release();
-    soft?.close();
-    if (soft?.denial) {
-      operation.stop("upstream", soft.denial);
+    if (ownedSoft) closeOwnedHttpSoftBudget(owned!); else soft?.close();
+    const softDenial = ownedSoft ? ownedHttpSoftDenial(owned!) : soft?.denial;
+    if (softDenial) {
+      operation.stop("upstream", softDenial);
       if (response) void discard(response);
       if (nativeUsage?.requestCostReceipt && cost.requestTariff) context.waitUntil(accounting.settle(402, "denied", true, null, reservation!, content, null, undefined, "unknown", nativeUsage.requestCostReceipt));
       else accounting.fail(402, "denied", (cost.requestTariff || selection.nativeResponse) ? reservation : undefined, content, !!(cost.requestTariff || selection.nativeResponse) && dispatched);
-      return errorResponse(soft.denial.code, soft.denial.message, 402);
+      return owned ? ownedErrorResponse(owned, softDenial.code, softDenial.message, 402) : errorResponse(softDenial.code, softDenial.message, 402);
     }
     if ((isPreparationLimit(error) || isAccountingAdmissionFailure(error) || isIdentityFailure(error)) && !signal.aborted) {
       operation.stop("upstream", error);
@@ -1319,13 +2598,13 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       // Alternate preparation never dispatched. The original received rejection
       // remains known nonbillable; capacity is not a credential rescue signal.
       accounting.fail(error.status, "provider_error", reservation, content, dispatched && response?.ok !== false);
-      return errorResponse(error.code, error.message, error.status);
+      return owned ? ownedErrorResponse(owned, error.code, error.message, error.status) : errorResponse(error.code, error.message, error.status);
     }
     operation.stop("upstream", error);
     if (response) void discard(response);
     if (!dispatched && error instanceof HttpError) {
       accounting.fail(error.status, "provider_error", reservation, content);
-      return errorResponse(error.code, error.message, error.status);
+      return owned ? ownedErrorResponse(owned, error.code, error.message, error.status) : errorResponse(error.code, error.message, error.status);
     }
     // A fetch failure can incur cost; a received rejection stays nonbillable
     // even if reading its SSE error body failed.
@@ -1334,6 +2613,12 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       // Unknown dispatched delivery remains collectible; it is not a terminal.
     } else accounting.fail(isModelDiscovery(selection.endpoint) && error instanceof HttpError ? error.status : 502, isModelDiscovery(selection.endpoint) && error instanceof HttpError && error.status === 403 ? "denied" : operation.status ?? "provider_error", reservation, content, dispatched && (!!cost.requestTariff || !!selection.nativeResponse || response?.ok !== false));
     if (isModelDiscovery(selection.endpoint) && error instanceof HttpError) return errorResponse(error.code, error.message, error.status, undefined, error.headers);
+    if (owned) {
+      const providerId = selection.provider.id;
+      if (typeof providerId !== "string") throw identityFailure("protocol");
+      admitOwnedHttpErrorText(owned, 36 + providerId.length);
+      return ownedErrorResponse(owned, "provider_unavailable", `upstream request to provider ${providerId} failed`, 502);
+    }
     return errorResponse("provider_unavailable", `upstream request to provider ${selection.provider.id} failed`, 502, undefined);
   }
   // Existing endpoint timers cover fetch and normalization. Search instead
@@ -1346,7 +2631,8 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       discard(response);
       const failure = selectedFailure(error);
       if (!background) context.waitUntil(accounting.settle(failure.status, operation.status ?? "provider_error", true, null, reservation!, content));
-      return errorResponse(failure.code, failure.message, failure.status);
+      return owned ? ownedErrorResponse(owned, failure.code, failure.message, failure.status)
+      : errorResponse(failure.code, failure.message, failure.status);
     }
   }
   const inspection = response.ok && !operation.receivedRejection ? continuation?.inspect(response, selection.capability === "llm.responses.compact") ?? googleContinuation?.inspect(response) : undefined;
@@ -1354,38 +2640,64 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     const job = background;
     Object.assign(inspection, { observe: async (fact: import("./token-usage.ts").ResponsesObservation) => { await job.observe(fact, response!.status); } });
   }
-  let observed!: ReturnType<typeof observeUsage>;
-  const observe = () => observeUsage(response!, operation, inspection, selection.endpoint.response_format, cost.requestTariff, nativeUsage, usageContext);
-  if (completion) completion.start(() => { observed = observe(); return observed.retired; });
-  else observed = observe();
+  let observed: ReturnType<typeof observeUsage> | undefined;
+  let delivered: Response, retired: Promise<void>;
+  if (codecConsumer) {
+    if (owned) ownedProxyInvocations!.get(owned)!.terminalResponse = response;
+    delivered = observeOwnedCodecUsage(codecConsumer, response, operation, nativeUsage, usageContext);
+    retired = ownedCodecConsumerRetirement(codecConsumer);
+  } else if (owned) {
+    const owner = ownedProxyInvocations!.get(owned)!;
+    if (inspection || background || priceGuard) throw identityFailure("protocol");
+    owner.usageInput = response;
+    try {
+      owner.genericUsage = beginOwnedHttpGenericUsage(owned, owner.upload!, response, operation,
+        selection.endpoint.response_format, cost.requestTariff, nativeUsage, usageContext, accounting as OwnedHttpAccountingCommand);
+      delivered = observeOwnedGenericUsage(owner.genericUsage, response, operation, nativeUsage, usageContext);
+      retired = ownedGenericUsageRetirement(owner.genericUsage);
+    } finally { owner.usageInput = undefined; }
+  } else {
+    const observe = () => observeUsage(response!, operation, inspection, selection.endpoint.response_format, cost.requestTariff, nativeUsage, usageContext);
+    if (completion) completion.start(() => { observed = observe(); return observed.retired; });
+    else observed = observe();
+    delivered = observed!.response; retired = observed!.retired;
+  }
   if (nativeLease) {
     const deliveryLease = nativeLease;
-    context.waitUntil(observed.retired.then(() => deliveryLease.release()));
+    context.waitUntil(retired.then(() => deliveryLease.release()));
   }
-  if (!completion && admission) admission.completion = observed.result;
-  if (searchOwner) searchOwner.track(observed.retired);
+  if (!completion && admission) admission.completion = observed!.result;
+  if (searchOwner) searchOwner.track(retired);
   if (background) {
     if (!response.ok) context.waitUntil(background.unsent(response.status, operation.status ?? "provider_error", content));
     else if (operation.receivedRejection) {
       // Native HTTP-200 rejection evidence remains provisional until delivery:
       // a misbehaving upstream may send billable work after its error event.
       const job = background, statusCode = response.status;
-      context.waitUntil(observed.result.then(result => job.finishRejectedDelivery({
+      context.waitUntil(observed!.result.then(result => job.finishRejectedDelivery({
         statusCode, status: operation.status ?? "provider_error", billable: !result.nonbillable, tokens: result.tokens, contentRef: content,
       })));
     }
   } else {
     accountingDeferred = true;
     const terminalAccounting = accounting;
-    context.waitUntil(run(() => observed.result.then(result => {
+    if (owned && (codecConsumer || ownedProxyInvocations!.get(owned)!.genericUsage)) {
+      startOwnedUsageAccounting(owned, context, completion!, codecConsumer ?? ownedProxyInvocations!.get(owned)!.genericUsage!,
+        terminalAccounting as OwnedHttpAccountingCommand, delivered, reservation!, content);
+    } else registerProxyBackground(owned, context, () => run(() => observed!.result.then(result => {
     const failure = priceGuard?.failure();
     // Replacing an unpriced response doesn't undo the dispatched work. Retain
     // the hard reservation and record the original usage, not a free rejection.
     return failure ? terminalAccounting.pricingFailure(failure.tokens, reservation!, content)
-      : terminalAccounting.complete(observed.response, result, reservation!, content, operation.status);
+      : terminalAccounting.complete(observed!.response, result, reservation!, content, operation.status);
     }).finally(() => { if (completion) terminalAccounting.close(); })));
   }
-  response = observed.response;
+  response = delivered;
+  if (owned) {
+    const publishedResponse = publishOwnedProxyResponse(owned, response, selection, auth, prepared, operation,
+      budgetMs, upstreamMs, grantFailover, content, priceGuard, !!music);
+    codecPublished = true; return publishedResponse;
+  }
   const outputHeaders = proxyResponseHeaders(response, selection.provider.id);
   // Header sanitization strips upstream router-code spoofing. Only a verified
   // local JSON replacement may restore this diagnostic; SSE fails after headers.
@@ -1395,14 +2707,50 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
   outputHeaders.set("x-clawrouter-grant-lane", prepared.grantLane);
   if (grantFailover) outputHeaders.set("x-clawrouter-grant-failover", "1");
   outputHeaders.set("x-clawrouter-content-retention", music ? content ? "on; retention-days=30" : "off" : retentionRequired(auth, selection.capability) ? "on; retention-days=30" : "off");
-  return new Response(response.body, { status: response.status, statusText: response.statusText, headers: outputHeaders });
+  if (owned) ownedProxyInvocations!.get(owned)!.publicBody = response.body;
+  const publishedResponse = new Response(response.body, { status: response.status, statusText: response.statusText, headers: outputHeaders });
+  codecPublished = true;
+  return publishedResponse;
   } finally {
+    if (owned) closeOwnedHttpRetry(owned);
+    // Settle the logical publication barrier even when physical abandonment
+    // throws; accounting never waits for its reader/upload/archive originals.
+    try {
+    if (codecConsumer && !codecPublished) abandonOwnedCodecConsumer(codecConsumer);
+    if (owned && !codecPublished) {
+      const owner = ownedProxyInvocations!.get(owned)!, usage = owner.genericUsage;
+      if (usage) {
+        abandonOwnedHttpGenericUsage(usage);
+      }
+    }
+    } finally { if (owned) settleOwnedAccountingPublication(owned, codecPublished); }
     if (completion) {
       failureAccounting?.close();
-      if (!accountingDeferred) accounting?.close();
+      if (!accountingDeferred && !owned) accounting?.close();
       if (!retentionDeferred) retention?.discardUnused?.();
     }
   }
+}
+
+// Closed private publication uses the producer-bound Response/body, never an
+// accounting result or a newly assigned publicBody as its authority.
+function publishOwnedProxyResponse(http: OwnedHttpRequest, response: Response, selection: ProxySelection,
+  auth: AuthorizedIdentity, prepared: PreparedUpstream, operation: HttpOperation, budgetMs: number, upstreamMs: number,
+  grantFailover: boolean, content: string | null, priceGuard: AnthropicPriceGuard | undefined, music: boolean): Response {
+  const owner = ownedProxyInvocations?.get(http);
+  if (!owner || owner.selection !== selection || owner.identity !== auth || owner.prepared !== prepared || !owner.upload
+    || !matchesOwnedHttpPublicationContext(http, owner.upload, operation)) throw identityFailure("protocol");
+  const outputHeaders = beginOwnedHttpProxyPublicationHeaders(http, response, selection.provider.id);
+  if (priceGuard?.failure() && response.status === 502) setOwnedHeader(outputHeaders, "x-clawrouter-error-code", "pricing_required");
+  const cacheState = admissionCacheState(auth), credential = credentialWait(auth);
+  setOwnedHeader(outputHeaders, "server-timing", `cr-admission;dur=${admissionDuration(auth).toFixed(1)}, cr-budget;dur=${budgetMs.toFixed(1)}, cr-upstream-ttfb;dur=${upstreamMs.toFixed(1)}${cacheState ? `, cr-cache;desc=${cacheState}` : ""}${credential ? `, cr-credential;dur=${credential.ms.toFixed(1)};desc=${credential.cache}` : ""}`);
+  setOwnedHeader(outputHeaders, "x-clawrouter-grant-lane", prepared.grantLane);
+  if (grantFailover) setOwnedHeader(outputHeaders, "x-clawrouter-grant-failover", "1");
+  setOwnedHeader(outputHeaders, "x-clawrouter-content-retention", music ? content ? "on; retention-days=30" : "off" : retentionRequired(auth, selection.capability) ? "on; retention-days=30" : "off");
+  const firstBody = response.body;
+  checkOwnedHttpProxyPublicationBody(http, response, firstBody); owner.publicBody = firstBody;
+  const body = response.body, status = response.status, statusText = response.statusText;
+  return finishOwnedHttpProxyPublication(http, response, body, status, statusText, outputHeaders);
 }
 
 async function reserveSelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, preauthenticated: AuthorizedIdentity | null, compound?: CompoundRequestContext): Promise<ReservedProxyBudget | Response> {
@@ -1452,6 +2800,150 @@ async function selectedAuth(request: Request, env: Env, mode: AuthMode, selectio
   return (await preauthenticate(request, env, mode, selection.provider.id))!;
 }
 
+// This closes retry authority, not credential/upload/codec custody. The chosen
+// prepared-to-upload association remains available to delivery and publication.
+function closeOwnedHttpRetry(cap: OwnedHttpRequest): void {
+  const owner = ownedProxyInvocations?.get(cap), retry = owner?.retry;
+  if (!owner || !retry) return;
+  if (retry.pending?.phase === 1) throw identityFailure("protocol");
+  for (const port of retry.ports) {
+    if (port.prepared) {
+      ownedPreparedSelections?.delete(port.prepared);
+      if (port.prepared !== owner.prepared) ownedPreparedUploads?.delete(port.prepared);
+      delete port.prepared.failedGrantKeys;
+    }
+    delete port.input; delete port.signal; delete port.permit; delete port.prepared;
+    delete port.upload; delete port.identity; delete port.credential; delete port.credentialFailure; delete port.credentialFailureKind; port.phase = 5;
+  }
+  retry.ports.length = 0; retry.excluded.clear(); delete retry.pending;
+  owner.retryClosed = true; delete owner.required; delete owner.retry;
+}
+
+export function matchesOwnedHttpAttemptInput(cap: OwnedHttpRequest, request: Request, env: Env,
+  input: import("./authority-admission.ts").AdmissionSelection, selection: ProxySelection, signal: AbortSignal, permit?: object): boolean {
+  const owner = ownedProxyInvocations?.get(cap), port = owner?.retry?.pending;
+  return !!owner && !owner.retryClosed && !!port && port.phase === 1 && owner.selection === selection && port.input === input && port.signal === signal
+    && matchesOwnedHttpRequestInputs(cap, env, request) && (permit === undefined ? port.permit === undefined : port.permit === permit);
+}
+export function bindOwnedHttpAttemptPermit(cap: OwnedHttpRequest, request: Request, env: Env,
+  input: import("./authority-admission.ts").AdmissionSelection, selection: ProxySelection, signal: AbortSignal, permit: object): void {
+  if (!matchesOwnedHttpAttemptInput(cap, request, env, input, selection, signal) || !ownsOwnedHttpSelectionPermit(permit, cap)) throw identityFailure("protocol");
+  ownedProxyInvocations!.get(cap)!.retry!.pending!.permit = permit;
+}
+export function bindOwnedHttpAttemptCredential(cap: OwnedHttpRequest, permit: object, credential: OwnedHttpCredential): void {
+  const port = ownedProxyInvocations?.get(cap)?.retry?.pending;
+  if (!port || port.phase !== 1 || port.permit !== permit || port.credential
+    || !matchesOwnedHttpCredentialPreparation(credential, cap, permit)) throw identityFailure("protocol");
+  port.credential = credential;
+}
+export function acceptOwnedHttpCredentialFailure(cap: OwnedHttpRequest, credential: OwnedHttpCredential, permit: object, failure: unknown, key: string): void {
+  const invocation = ownedProxyInvocations?.get(cap), port = invocation?.retry?.pending;
+  if (!invocation || invocation.retryClosed || !port || port.phase !== 1 || port.credential !== credential
+    || port.permit !== permit || port.credentialFailure || !port.input || !port.signal) throw identityFailure("protocol");
+  const kind = matchesOwnedHttpCredentialFailure(credential, cap, permit, failure, key);
+  if (!kind) throw identityFailure("protocol");
+  // The registered producer created this exact selected wrapper. No property or
+  // class check on a caller-supplied exception grants retry authority.
+  port.credentialFailure = failure as HttpError; port.credentialFailureKind = kind;
+}
+export function completeOwnedHttpAttemptProvider(cap: OwnedHttpRequest, permit: object): void {
+  const owner = ownedProxyInvocations?.get(cap), port = owner?.retry?.pending;
+  if (!owner || !port || port.phase !== 1 || port.permit !== permit || !port.credential || !port.prepared
+    || ownsOwnedHttpSelectionPermit(permit, cap) || owner.preparingIdentity || owner.preparingUpstream || owner.preparingFields || owner.preparingAdmission)
+    throw identityFailure("protocol");
+  port.phase = 2;
+}
+export function completeOwnedHttpFailedAttemptProvider(cap: OwnedHttpRequest, request: Request, permit: object, failure: unknown): void {
+  const owner = ownedProxyInvocations?.get(cap), port = owner?.retry?.pending;
+  // The producer deposited this identity while both provider registrations and
+  // the exact input/signal/credential tuple were still live.
+  if (!owner || owner.retryClosed || !port || port.credentialFailureKind !== 2 || port.credentialFailure !== failure) return;
+  if (port.phase !== 1 || port.permit !== permit || !port.credential || !port.input || !port.signal || port.prepared || port.upload
+    || ownsOwnedHttpSelectionPermit(permit, cap) || hasOwnedHttpProviderCommand(permit)
+    || owner.preparingIdentity || owner.preparingUpstream || owner.preparingFields || owner.preparingAdmission)
+    throw identityFailure("protocol");
+  if (port.signal.aborted || !canCompleteOwnedHttpPreparation(cap, request)) return;
+  certifyOwnedHttpFailedCredentialProvider(cap, request, port.credential, permit, failure, port.signal);
+}
+export function matchesOwnedHttpCompletedPreparation(cap: OwnedHttpRequest, request: Request, credential: OwnedHttpCredential, permit: object): boolean {
+  const owner = ownedProxyInvocations?.get(cap), port = owner?.retry?.pending, prepared = port?.prepared;
+  return !!owner && !!port && port.phase === 2 && port.credential === credential && port.permit === permit
+    && !ownsOwnedHttpSelectionPermit(permit, cap) && matchesOwnedHttpCredentialPreparation(credential, cap, permit, request)
+    && !!prepared && !prepared.ownedVenice && !prepared.revalidateAccount && !prepared.revalidateMedia
+    && !prepared.revalidateDiscovery && !prepared.revalidateDelivery && !prepared.acquireDiscovery && !prepared.continuation
+    && owner.selection?.provider.id !== "venice" && owner.selection?.provider.id !== "gmi"
+    && !owner.preparingIdentity && !owner.preparingUpstream && !owner.preparingFields && !owner.preparingAdmission
+    && !!port.signal && !port.signal.aborted && canCompleteOwnedHttpPreparation(cap, request);
+}
+function excludeOwnedHttpGrant(cap: OwnedHttpRequest, key: string): void {
+  const retry = ownedProxyInvocations?.get(cap)?.retry;
+  if (!retry || typeof key !== "string" || retry.excluded.has(key) || retry.excluded.size >= MAX_GRANT_ATTEMPTS - 1) throw identityFailure("protocol");
+  growOwnedHttpRequest(cap, 16 + 2 * key.length); retry.excluded.add(key);
+}
+function commitOwnedHttpAttempt(cap: OwnedHttpRequest): PreparedUpstream {
+  const owner = ownedProxyInvocations?.get(cap), port = owner?.retry?.pending;
+  if (!owner || !port || (port.phase & ~8) !== 2 || !port.prepared || !port.upload
+    || !canCompleteOwnedHttpPreparation(cap)) throw identityFailure("protocol");
+  port.signal!.throwIfAborted(); ownedHttpSignal(cap).throwIfAborted();
+  owner.prepared = port.prepared; owner.upload = port.upload; owner.identity = port.identity; owner.archivePrepared = undefined;
+  port.phase = 3 | (port.phase & 8); owner.retry!.pending = undefined;
+  return port.prepared;
+}
+async function prepareOwnedHttpAttempt(cap: OwnedHttpRequest, request: Request, env: Env,
+  selection: ProxySelection, query: ProxyQuery, signal: AbortSignal): Promise<void> {
+  const invocation = ownedProxyInvocations?.get(cap), retry = invocation?.retry;
+  if (!invocation?.required || invocation.retryClosed || !invocation.identity || !retry || retry.pending) throw identityFailure("protocol");
+  const routing = grantRoutingPolicy(invocation.identity.policy.grantRouting);
+  let firstFailure: SelectedGrantCredentialFailure | undefined;
+  for (;;) {
+    if (retry.next >= MAX_GRANT_ATTEMPTS) throw firstFailure ?? identityFailure("protocol");
+    if (retry.excluded.size) signal.throwIfAborted();
+    let units = 0, members = 0, primitives = 0;
+    for (const key in invocation.required) if (Object.hasOwn(invocation.required, key)) {
+      members++; units += key.length;
+      const value = (invocation.required as unknown as Record<string, unknown>)[key];
+      if (typeof value === "string") { primitives++; units += value.length; }
+      else if (value === null || typeof value !== "object") primitives++;
+    }
+    for (const key of retry.excluded) units += key.length;
+    growOwnedHttpRequest(cap, 8 * (2 + 2 * members + primitives + 2 * retry.excluded.size + 4) + 2 * (units + "excludedKeys".length));
+    const port = retry.ports[retry.next++];
+    port.phase = 1; port.signal = signal;
+    port.input = { ...invocation.required, excludedKeys: Object.freeze([...retry.excluded]) as unknown as string[] };
+    retry.pending = port;
+    try {
+      await prepareOwnedHttpProvider(cap, request, env, port.input, selection, query, true, false, signal);
+      signal.throwIfAborted();
+      if (!port.prepared || port.phase !== 2 || !canCompleteOwnedHttpPreparation(cap, request)) throw identityFailure("protocol");
+      if (matchesOwnedHttpCompletedPreparation(cap, request, port.credential!, port.permit!)) {
+        reduceOwnedHttpPreparedCredential(cap, request, port.credential!, port.permit!); port.phase |= 8;
+      }
+      if (!port.prepared.grantKey && retry.excluded.size && !routing.environmentFallback) throw firstFailure ?? ownedHttpError(cap, 503, "upstream_grant_pool_unavailable", "no eligible alternate grant");
+      port.prepared.failedGrantKeys = port.input.excludedKeys;
+      return;
+    } catch (error) {
+      const credentialFailure = port.credentialFailureKind === 2 ? port.credentialFailure as SelectedGrantCredentialFailure : undefined;
+      port.phase = 4; retry.pending = undefined;
+      if (isPreparationLimit(error) || isAccountingAdmissionFailure(error) || isIdentityFailure(error)) throw error;
+      signal.throwIfAborted();
+      if (!credentialFailure || error !== credentialFailure || selection.provider.id === "anthropic-vertex"
+        || miniMaxAnthropicRoute(selection.provider, selection.endpoint) || !routing.failover) throw firstFailure ?? error;
+      firstFailure ??= credentialFailure;
+      if (retry.excluded.has(credentialFailure.grantKey) || retry.excluded.size >= MAX_GRANT_ATTEMPTS - 1 || retry.next >= MAX_GRANT_ATTEMPTS) throw firstFailure;
+      excludeOwnedHttpGrant(cap, credentialFailure.grantKey);
+    }
+  }
+}
+function captureOwnedHttpRuntime(cap: OwnedHttpRequest, request: Request, env: Env,
+  prepared: PreparedUpstream, selection: ProxySelection, response: Response): void {
+  if (!prepared.grantKey) return;
+  const selected = ownedPreparedSelections?.get(prepared); if (!selected) throw identityFailure("protocol");
+  growOwnedHttpRequest(cap, 65536);
+  if (response.status === 401 || response.status === 403) invalidateOwnedHttpSelectionCredentials(cap, selected);
+  const state = observeProviderGrantQuota(selection.provider.id, response, selection.provider.quota, selectionUpstreamModel(selection));
+  if (state) queueOwnedHttpSelectionRuntime(cap, request, env, selected, { ...state, grantRevision: prepared.grantRevision });
+}
+
 export async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation, searchOwner?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, signal = request.signal, reservedGrant?: PinnedGrant): Promise<PreparedUpstream> {
   // Direct prepareSelected callers are standalone preparation entries. Retain
   // the token on their selection for internal retries and subsequent calls.
@@ -1468,7 +2960,7 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
     // Revalidation must not advance routing again; a failed owner still allows
     // the next loop to choose and record a policy-driven alternate normally.
     return prepareSingleSelected(request, env, selection, queryInput, auth, excluded, recordSelection && !reuseReserved, resolvedConnection,
-      pinned ?? (reuseReserved ? reservedGrant : undefined), transport, recoverBackground, wan, searchOwner, video, preparation, signal);
+      pinned ?? (reuseReserved ? reservedGrant : undefined), transport, recoverBackground, wan, searchOwner, video, preparation, undefined, signal);
   };
   const excluded = new Set(excludedGrantKeys);
   const routing = grantRoutingPolicy(auth.policy.grantRouting);
@@ -1490,7 +2982,7 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
   }
 }
 
-async function prepareSingleSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation, searchOwner?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, preparation?: PreparationAdmission, signal = request.signal): Promise<PreparedUpstream> {
+async function prepareSingleSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation, searchOwner?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, preparation?: PreparationAdmission, owned?: { cap: OwnedHttpRequest; upstream: UpstreamAuth }, signal = request.signal): Promise<PreparedUpstream> {
   assertPolicyModel(auth.policy, selection);
   if (isModelDiscovery(selection.endpoint)) {
     queryInput = discoveryQuery(queryInput);
@@ -1521,14 +3013,17 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
   }
   let upstream: UpstreamAuth;
   if (video) videoJsonBytes(selection.body, "input");
-  const stickyHash = await grantStickyHash(request, auth);
-  try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport, model: selectionUpstreamModel(selection), managedLifecycle: !!selection.endpoint.lifecycle }, video?.controlSignal ?? searchOwner?.operation.signal ?? signal, wan, searchOwner, video, preparation); }
+  const stickyHash = owned ? null : await grantStickyHash(request, auth);
+  try { upstream = owned ? owned.upstream : await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport, model: selectionUpstreamModel(selection), managedLifecycle: !!selection.endpoint.lifecycle }, video?.controlSignal ?? searchOwner?.operation.signal ?? signal, wan, searchOwner, video, preparation); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_not_configured", "provider is not configured"); }
   try {
     if (compact) await assertCompactAccount(auth, env, upstream);
     if (search) await assertSingleOpenAiAccount(auth, env, upstream, "search");
     assertPolicyModel(auth.policy, selection);
+    let priorTierBody = owned ? selection.body as Record<string, unknown> : undefined;
     assertServiceTier(auth, selection, upstream.transport);
+    if (owned && selection.body !== priorTierBody) adoptOwnedHttpTierBody(owned.cap, priorTierBody!, selection.body as Record<string, unknown>);
+    priorTierBody = undefined;
     if (publicCatalogProvider(selection.endpoint.request_format)) {
       if (transport !== "http") throw new HttpError(400, "invalid_model_discovery", "public model catalogs require HTTP");
       const publicCatalog = await preparePublicDiscoveryOwner(request, env, auth, selection, upstream);
@@ -1569,11 +3064,16 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     const vertexAnthropic = vertexAnthropicRoute(selection.provider, selection.endpoint)
       ? await prepareVertexAnthropicDispatch(request, env, auth, selection, upstream, hasProxyQuery(queryInput), transport) : undefined;
     if (wanCreate(selection.endpoint)) { preflightWanJson(selection.body); assertWanHeaders(request.headers); assertWanHeaders(upstream.headers); }
-    const { headers, url, configuredOwnerUrl, requestBody, streamBody } = vertexAnthropic?.prepared ?? prepareUpstreamRequest(request, env, selection, queryInput, upstream, transport, preparation);
+    const { headers, url, configuredOwnerUrl, requestBody, streamBody } = vertexAnthropic?.prepared ?? (owned ? prepareOwnedHttpTransport(owned.cap, request, env, selection, queryInput, upstream, preparation!)
+      : prepareUpstreamRequest(request, env, selection, queryInput, upstream, transport, preparation));
     if (minimaxAnthropic) preparation?.headers(upstream.headers, true);
     minimaxAnthropic?.apply(url, headers);
     preparation?.headers(headers); preparation?.text(url.href, 16384);
-    const gmiCheck = selection.provider.id === "gmi"
+    const revalidation = owned && (selection.provider.id === "gmi" || veniceChat(selection))
+      ? beginOwnedHttpRevalidation(owned.cap, request, env, auth, selection, upstream, ownedProxyInvocations!.get(owned.cap)!.retry!.pending!.upload!, url, headers, preparation!) : undefined;
+    const ownedGmiCheck = selection.provider.id === "gmi" && revalidation
+      ? await prepareOwnedGmiOrganizationBinding(revalidation, request, env, auth, selection, upstream, url, headers) : undefined;
+    const gmiCheck = selection.provider.id === "gmi" && !owned
       ? await prepareGmiOrganizationBinding(request, env, auth, selection, upstream, url, headers) : undefined;
     const discoveryCheck = gmiCheck ?? (["openai.models", REQUESTY_MODELS_FORMAT].includes(selection.endpoint.request_format) && selection.capability === "models.list"
       ? await prepareModelDiscoveryOwner(request, env, auth, selection, upstream, url, headers) : undefined);
@@ -1595,8 +3095,12 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
       assertNativeResponseDestination(selection.nativeResponse, url);
     }
     const chatCheck = veniceChat(selection)
-      ? await prepareVeniceChatAuthority(env, auth, selection, upstream, url, headers) : undefined;
-    if (chatCheck) selection.nativeResponse = prepareVeniceChatResponse(selection, chatCheck);
+      ? await (revalidation ? prepareOwnedVeniceChatAuthority(revalidation, env, auth, selection, upstream, url, headers)
+        : prepareVeniceChatAuthority(env, auth, selection, upstream, url, headers)) : undefined;
+    if (chatCheck) {
+      selection.nativeResponse = prepareVeniceChatResponse(selection, chatCheck);
+      if (revalidation) prepareOwnedVeniceChatCodec(revalidation, selection, selection.nativeResponse!);
+    }
     const catalogCheck = isKeyedModelDiscovery(selection.endpoint.request_format)
       ? await prepareKeyedModelDiscovery(request, env, auth, selection, upstream, url, headers) : undefined;
     const pcmCheck = openRouterPcmRequirement({ ...selection, model: selection.model?.upstream })
@@ -1638,7 +3142,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
     }
     const wanCheck = wanCreate(selection.endpoint) && continuation
       ? wanCreateAuthority(env, auth, selection, upstream, configuredOwnerUrl, headers, continuation, wan, preparation) : undefined;
-    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(videoCheck ? { revalidateAccount: videoCheck } : tokenPlanCheck ? { revalidateAccount: tokenPlanCheck, revalidateDelivery: tokenPlanCheck } : wanCheck ? { revalidateAccount: wanCheck } : chatCheck ? { revalidateAccount: chatCheck.revalidate, ...(!Array.isArray(selection.body) && selection.body.stream === true ? {} : { revalidateDelivery: chatCheck.revalidate }) } : discoveryCheck ? { revalidateAccount: async (signal: AbortSignal) => { await discoveryCheck(signal); }, ...(isModelDiscovery(selection.endpoint) ? { revalidateDiscovery: discoveryCheck, acquireDiscovery: () => nativeResponseLease(16 * 1024 * 1024) } : {}) } : catalogCheck ? { revalidateAccount: catalogCheck } : musicCheck ? { revalidateAccount: musicCheck.revalidate, revalidateDelivery: musicCheck.revalidate } : pcmCheck ? { revalidateAccount: pcmCheck } : vertexAnthropic ? { revalidateAccount: vertexAnthropic.revalidate } : minimaxAnthropic ? { revalidateAccount: minimaxAnthropic.revalidate } : imageCheck ? { revalidateAccount: imageCheck } : nativeMediaCheck ? { revalidateMedia: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
+    return { ...(chatCheck && revalidation ? { ownedVenice: revalidation } : {}), headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(selection.endpoint.lifecycle ? { managedBaseUrl: upstream.baseUrl } : {}), ...(videoCheck ? { revalidateAccount: videoCheck } : tokenPlanCheck ? { revalidateAccount: tokenPlanCheck, revalidateDelivery: tokenPlanCheck } : wanCheck ? { revalidateAccount: wanCheck } : chatCheck ? { revalidateAccount: chatCheck.revalidate, ...(!Array.isArray(selection.body) && selection.body.stream === true ? {} : { revalidateDelivery: chatCheck.revalidate }) } : ownedGmiCheck ? { revalidateAccount: ownedGmiCheck } : discoveryCheck ? { revalidateAccount: async (signal: AbortSignal) => { await discoveryCheck(signal); }, ...(isModelDiscovery(selection.endpoint) ? { revalidateDiscovery: discoveryCheck, acquireDiscovery: () => nativeResponseLease(16 * 1024 * 1024) } : {}) } : catalogCheck ? { revalidateAccount: catalogCheck } : musicCheck ? { revalidateAccount: musicCheck.revalidate, revalidateDelivery: musicCheck.revalidate } : pcmCheck ? { revalidateAccount: pcmCheck } : vertexAnthropic ? { revalidateAccount: vertexAnthropic.revalidate } : minimaxAnthropic ? { revalidateAccount: minimaxAnthropic.revalidate } : imageCheck ? { revalidateAccount: imageCheck } : nativeMediaCheck ? { revalidateMedia: nativeMediaCheck } : compact || search ? { revalidateAccount: () => assertSingleOpenAiAccount(auth, env, upstream, search ? "search" : "compact") } : {}) };
   } catch (error) {
     throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
   }

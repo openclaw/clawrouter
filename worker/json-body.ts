@@ -1,3 +1,4 @@
+import { newOwnedBytes, ownedByteSubarray, ownedByteLength, encodeOwnedTextInto, encodeOwnedText, newOwnedEncoder, enqueueOwnedBytes } from "./proxy-completion.ts";
 import type { Token } from "stream-json/core/parser.js";
 import { createJsonTokenizer } from "./json-tokens.ts";
 import { HttpError } from "./utils.ts";
@@ -172,20 +173,191 @@ export function admitAccountingJson(value: unknown, profile: AccountingJsonProfi
   return { bytes, text };
 }
 
-function copyAdmittedAccountingJson(value: unknown, gateway?: readonly unknown[], gatewayEntry = false): unknown {
+const ownedArchivePrototype = Object.setPrototypeOf;
+const ownedArchiveProperty = Object.defineProperty;
+const ownedArchiveStringify = JSON.stringify;
+const ownedArchiveArray = Array.isArray;
+const privateJsonNumber = Number;
+const privateJsonCharacter = String.prototype.charCodeAt;
+function privateJsonCodeAt(text: string, index: number, argument: number[]): number {
+  argument[0] = index; return ownedArchiveApply(privateJsonCharacter, text, argument);
+}
+const ownedArchiveOwn = Object.hasOwn;
+const ownedArchiveDescriptor = Object.getOwnPropertyDescriptor;
+const ownedArchiveMapHas = WeakMap.prototype.has;
+const ownedArchiveApply = Reflect.apply;
+const privateJsonObjectPrototype = Object.prototype;
+const privateJsonArrayPrototype = Array.prototype;
+const privateJsonPrototype = Object.getPrototypeOf;
+const privateJsonFreeze = Object.freeze;
+const privateAccountingKeys = Object.keys;
+// Parked archive cursor: six own fields, four primitive-value occurrences,
+// its container and stack reference. Key vectors are paid separately.
+const privateArchiveCursorBytes = 8 * (1 + 12 + 4 + 1)
+  + 2 * "sourcetargetkeysindexemittedgatewayEntry".length;
+export function privateArchiveWorkspaceBytes(graphBytes: number, maximumDepth: number): number {
+  // Every body key-vector cell/string is bounded by the already measured graph
+  // component; the fixed retained-record keys add one separately paid vector.
+  const reachedDepth = maximumDepth < accountingProfiles.archive.depth ? maximumDepth : accountingProfiles.archive.depth;
+  return graphBytes + (reachedDepth + 2) * privateArchiveCursorBytes + 1024;
+}
+function privateAccountingContainer(array: boolean): unknown[] | Record<string, unknown> {
+  if (!array) return { __proto__: null };
+  const value: unknown[] = []; ownedArchivePrototype(value, null); return value;
+}
+function privateAccountingProperty(target: object, key: string | number, value: unknown): void {
+  ownedArchiveProperty(target, key, { __proto__: null, value, enumerable: true, writable: true, configurable: true } as PropertyDescriptor);
+}
+interface PrivateArchiveCursor {
+  source: object; target: object | undefined; keys: string[] | undefined;
+  index: number; emitted: number; gatewayEntry: boolean;
+}
+// The checked retention caller owns the complete source/copy/workspace debit.
+// This is the same admitted private representation used by accounting copies;
+// only the archive's traversal replaces recursive APP execution frames.
+function walkPrivateAccountingArchive(value: unknown, gateway: readonly unknown[] | undefined, copying: boolean): { bytes: number; text: number; value: unknown } {
+  const limits = accountingProfiles.archive;
+  let bytes = 0, text = 0, values = 0, containers = 0, members = 0, entries = 0, strings = 0;
+  const stack: PrivateArchiveCursor[] = [], argument = [0];
+  let root: unknown, input = value, gatewayEntry = false, entering = true;
+  const add = (wire: number, units = wire) => {
+    bytes += wire; text += units;
+    if (bytes > limits.wire || text > limits.wire) accountingAdmissionFailure();
+  };
+  const string = (input: string, key: boolean) => {
+    if (input.length > (key ? limits.key : limits.scalar) || (strings += input.length) > limits.strings) accountingAdmissionFailure();
+    add(2);
+    for (let index = 0; index < input.length; index++) {
+      const code = privateJsonCodeAt(input, index, argument);
+      if (code === 34 || code === 92 || code === 8 || code === 9 || code === 10 || code === 12 || code === 13) add(2);
+      else if (code < 32) add(6);
+      else if (code < 128) add(1);
+      else if (code < 2048) add(2, 1);
+      else if (code >= 0xd800 && code <= 0xdbff && privateJsonCodeAt(input, index + 1, argument) >= 0xdc00
+        && privateJsonCodeAt(input, index + 1, argument) <= 0xdfff) { add(4, 2); index++; }
+      else if (code >= 0xd800 && code <= 0xdfff) add(6);
+      else add(3, 1);
+    }
+  };
+  try {
+    while (entering || stack.length) {
+      if (entering) {
+        entering = false;
+        if (++values > limits.values || stack.length > limits.depth) accountingAdmissionFailure();
+        if (typeof input === "string") string(input, false);
+        else if (input === null || input === undefined) add(4);
+        else if (typeof input === "boolean") add(input ? 4 : 5);
+        else if (typeof input === "number") {
+          const token = Number.isFinite(input) ? String(input) : "null";
+          if (token.length > 64) accountingAdmissionFailure();
+          add(token.length);
+        } else if (typeof input !== "object") accountingAdmissionFailure();
+        else {
+          // Prospective wrappers were never accepted by the private copier.
+          if (ownedArchiveApply(ownedArchiveMapHas, accountingRanges, [input]) || ownedArchiveApply(ownedArchiveMapHas, accountingObjects, [input])
+            || ownedArchiveApply(ownedArchiveMapHas, accountingArrays, [input]) || ownedArchiveApply(ownedArchiveMapHas, accountingSequences, [input])) accountingAdmissionFailure();
+          const array = ownedArchiveArray(input), prototype = privateJsonPrototype(input);
+          if (array ? prototype !== privateJsonArrayPrototype : prototype !== privateJsonObjectPrototype && prototype !== null) accountingAdmissionFailure();
+          if (++containers > limits.containers) accountingAdmissionFailure();
+          for (let index = 0; index < stack.length; index++) if (stack[index].source === input) accountingAdmissionFailure();
+          add(2);
+          if (array && ((entries += (input as unknown[]).length) > limits.entries || entries + members > limits.combined)) accountingAdmissionFailure();
+          // Keys/cursors were counted in pricing before retention effects. A
+          // second walk may reuse that workspace only after this walk's finally.
+          const target = copying ? privateAccountingContainer(array) : undefined;
+          if (copying) {
+            if (!stack.length) root = target;
+            else {
+              const parent = stack[stack.length - 1];
+              privateAccountingProperty(parent.target!, parent.keys ? parent.keys[parent.index - 1] : parent.index - 1, target);
+            }
+          }
+          const cursor: PrivateArchiveCursor = { source: input, target, keys: array ? undefined : privateAccountingKeys(input), index: 0, emitted: 0, gatewayEntry };
+          privateAccountingProperty(stack, stack.length, cursor);
+          input = undefined;
+          continue;
+        }
+        if (copying) {
+          if (!stack.length) root = input;
+          else {
+            const parent = stack[stack.length - 1];
+            privateAccountingProperty(parent.target!, parent.keys ? parent.keys[parent.index - 1] : parent.index - 1, input ?? null);
+          }
+        }
+        input = undefined;
+      }
+      if (!stack.length) break;
+      const cursor = stack[stack.length - 1], length = cursor.keys ? cursor.keys.length : (cursor.source as unknown[]).length;
+      if (cursor.index === length) {
+        cursor.source = undefined as never; cursor.target = undefined; cursor.keys = undefined;
+        stack.length--; continue;
+      }
+      const key = cursor.keys ? cursor.keys[cursor.index++] : cursor.index++;
+      if (cursor.keys && cursor.gatewayEntry && (key === "headers" || key === "authorization")) continue;
+      const descriptor = ownedArchiveDescriptor(cursor.source, key);
+      if (descriptor && !ownedArchiveOwn(descriptor, "value")) accountingAdmissionFailure();
+      input = descriptor?.value;
+      if (cursor.keys) {
+        if (input === undefined) continue;
+        if (++members > limits.members || entries + members > limits.combined) accountingAdmissionFailure();
+        if (cursor.emitted++) add(1);
+        string(key as string, true); add(1);
+        gatewayEntry = false;
+      } else {
+        if (cursor.emitted++) add(1);
+        gatewayEntry = cursor.source === gateway;
+      }
+      entering = true;
+    }
+    return { bytes, text, value: root };
+  } finally { stack.length = 0; input = undefined; root = undefined; value = undefined; gateway = undefined; }
+}
+
+// A guard is not input admission. Only the named current passive producers
+// below may reach this constructor; queue/archive retain their separate copies.
+function assertPrivateJsonPrototypes(): void {
+  if (ownedArchiveOwn(privateJsonObjectPrototype, "toJSON") || ownedArchiveOwn(privateJsonArrayPrototype, "toJSON")
+    || privateJsonPrototype(privateJsonObjectPrototype) !== null || privateJsonPrototype(privateJsonArrayPrototype) !== privateJsonObjectPrototype)
+    throw "private JSON prototype is unsupported";
+}
+function stringifyPrivatePassiveRoot(value: unknown): string {
+  assertPrivateJsonPrototypes();
+  return ownedArchiveStringify(value)!;
+}
+
+// The queue-only mode completes and freezes children before attachment. The
+// same bounded copy frames serve ordinary, private-unsealed and sealed copies.
+function copyAdmittedAccountingJson(value: unknown, gateway?: readonly unknown[], gatewayEntry = false, owned: 0 | 1 | 2 = 0): unknown {
+  if (owned && (typeof value === "function" || typeof value === "symbol")) return undefined;
   if (value === null || typeof value !== "object") return value;
-  if (accountingRanges.has(value) || accountingObjects.has(value) || accountingArrays.has(value) || accountingSequences.has(value)) accountingAdmissionFailure();
-  if (Array.isArray(value)) {
-    const copy: unknown[] = [];
-    for (let i = 0; i < value.length; i++) copy.push(copyAdmittedAccountingJson(value[i] ?? null, gateway, value === gateway));
+  if (owned ? ownedArchiveApply(ownedArchiveMapHas, accountingRanges, [value]) || ownedArchiveApply(ownedArchiveMapHas, accountingObjects, [value])
+    || ownedArchiveApply(ownedArchiveMapHas, accountingArrays, [value]) || ownedArchiveApply(ownedArchiveMapHas, accountingSequences, [value])
+    : accountingRanges.has(value) || accountingObjects.has(value) || accountingArrays.has(value) || accountingSequences.has(value)) accountingAdmissionFailure();
+  if (owned ? ownedArchiveArray(value) : Array.isArray(value)) {
+    const copy: unknown[] = owned ? privateAccountingContainer(true) as unknown[] : [];
+    for (let i = 0; i < (value as unknown[]).length; i++) {
+      if (owned) {
+        const descriptor = ownedArchiveDescriptor(value, i);
+        if (descriptor && !ownedArchiveOwn(descriptor, "value")) accountingAdmissionFailure();
+        ownedArchiveProperty(copy, i, { __proto__: null, value: copyAdmittedAccountingJson(descriptor?.value ?? null, gateway, value === gateway, owned), enumerable: true, writable: true, configurable: true } as PropertyDescriptor);
+      }
+      else copy.push(copyAdmittedAccountingJson((value as unknown[])[i] ?? null, gateway, value === gateway));
+    }
+    if (owned === 2) privateJsonFreeze(copy);
     return copy;
   }
-  const copy: Record<string, unknown> = {};
+  const copy: Record<string, unknown> = owned ? privateAccountingContainer(false) as Record<string, unknown> : {};
   for (const key in value) {
-    if (!Object.hasOwn(value, key) || gatewayEntry && (key === "headers" || key === "authorization")) continue;
-    const item = (value as Record<string, unknown>)[key];
-    if (item !== undefined) Object.defineProperty(copy, key, { value: copyAdmittedAccountingJson(item, gateway), enumerable: true, writable: true, configurable: true });
+    if (!(owned ? ownedArchiveOwn(value, key) : Object.hasOwn(value, key)) || gatewayEntry && (key === "headers" || key === "authorization")) continue;
+    const descriptor = owned ? ownedArchiveDescriptor(value, key)! : undefined;
+    if (owned && !ownedArchiveOwn(descriptor!, "value")) accountingAdmissionFailure();
+    const item = owned ? descriptor!.value : (value as Record<string, unknown>)[key];
+    if (item !== undefined && (!owned || typeof item !== "function" && typeof item !== "symbol")) {
+      if (owned) ownedArchiveProperty(copy, key, { __proto__: null, value: copyAdmittedAccountingJson(item, gateway, false, owned), enumerable: true, writable: true, configurable: true } as PropertyDescriptor);
+      else Object.defineProperty(copy, key, { value: copyAdmittedAccountingJson(item, gateway), enumerable: true, writable: true, configurable: true });
+    }
   }
+  if (owned === 2) privateJsonFreeze(copy);
   return copy;
 }
 
@@ -194,50 +366,148 @@ export function copyAccountingJson<T>(value: T, profile: AccountingJsonProfile):
   return copyAdmittedAccountingJson(value) as T;
 }
 
+// Closed private accounting destinations. The upper named operation has already
+// admitted the complete source/copy/text component and its genuine sink binding.
+// Existing producer admission remains authoritative; do not re-admit a private
+// null-prototype copy or increment an identity source counter here.
+export function privateIntentJson(value: unknown): string {
+  // Actual terminal charge/settle DTOs have only admitted primitive own fields.
+  // Keep their previously reserved copy/text overlap until the complete ledger.
+  return stringifyPrivatePassiveRoot(value);
+}
+type PrivatePreflightRequest = { credentialId: string; secretSha256: string; source: import("./identity-admission.ts").IdentitySourceBudget };
+export function sealPrivatePreflightRequest(value: PrivatePreflightRequest): void {
+  // Both records are freshly constructed by the genuine preflight command.
+  // Freeze before the existing plan can expose either record to a method hook.
+  privateJsonFreeze(value.source); privateJsonFreeze(value);
+}
+export function privatePreflightJson(value: PrivatePreflightRequest): string { return stringifyPrivatePassiveRoot(value); }
+export function privateSnapshotJson(value: { credentialId: string | null; principalId: string | null; policyId: string }): string {
+  return stringifyPrivatePassiveRoot(value);
+}
+export function privateVeniceRouteJson(url: string, endpoint: string, model: string): string {
+  if (typeof url !== "string" || typeof endpoint !== "string" || typeof model !== "string") throw "private route identity is invalid";
+  return stringifyPrivatePassiveRoot([url, endpoint, model]);
+}
+export function privateGmiRouteJson(url: string, organization: string | null): string {
+  if (typeof url !== "string" || organization !== null && typeof organization !== "string") throw "private route identity is invalid";
+  return stringifyPrivatePassiveRoot([url, organization]);
+}
+export function privateCapsuleJson(value: unknown): string {
+  let copy: unknown;
+  try { copy = copyAdmittedAccountingJson(value, undefined, false, 1); return ownedArchiveStringify(copy)!; }
+  finally { copy = undefined; value = undefined; }
+}
+// The genuine materialization command has separately admitted its complete
+// identity profile and the simultaneous copy/text/wire component. Reuse only
+// the copy mechanism here, never the accounting capsule's smaller profile.
+export function privateMaterializationJson(value: unknown): string {
+  let copy: unknown;
+  try { copy = copyAdmittedAccountingJson(value, undefined, false, 1); return ownedArchiveStringify(copy)!; }
+  finally { copy = undefined; value = undefined; }
+}
+// Only the HTTP-associated admission continuation selects this entry. Its
+// existing complete plan funds the copy without changing cumulative counters.
+export function privateAdmissionJson(value: unknown): string {
+  let copy: unknown;
+  try { copy = copyAdmittedAccountingJson(value, undefined, false, 1); return ownedArchiveStringify(copy)!; }
+  finally { copy = undefined; value = undefined; }
+}
+// The fixed normalizer alone constructs this envelope from a freshly parsed
+// private response subtree. No graph is exposed between capture and this guard.
+export function privateMappedErrorJson(value: unknown): string { return stringifyPrivatePassiveRoot(value); }
+export function privateGrantIdentityJson(value: unknown): string {
+  let copy: unknown;
+  try { copy = copyAdmittedAccountingJson(value, undefined, false, 1); return ownedArchiveStringify(copy)!; }
+  finally { copy = undefined; value = undefined; }
+}
+export function copyPrivateQueueIntent(value: unknown, destination: { subject?: unknown }): void {
+  destination.subject = copyAdmittedAccountingJson(value, undefined, false, 2);
+}
+export function copyPrivateQueueCapsule(value: unknown, destination: { subject?: unknown }): void {
+  destination.subject = copyAdmittedAccountingJson(value, undefined, false, 2);
+}
+
+interface AccountingChunkCursor {
+  value: unknown[] | Record<string, unknown>;
+  keys: string[] | undefined;
+  index: number;
+  emitted: number;
+}
 function* accountingChunks(value: unknown): Generator<string> {
-  if (typeof value === "string") { yield* quoted(value); return; }
-  if (Array.isArray(value)) {
-    yield "[";
-    for (let i = 0; i < value.length; i++) { if (i) yield ","; yield* accountingChunks(value[i] ?? null); }
-    yield "]"; return;
-  }
-  if (value !== null && typeof value === "object") {
-    yield "{"; let first = true;
-    for (const key in value) {
-      if (!Object.hasOwn(value, key)) continue;
-      const item = (value as Record<string, unknown>)[key];
-      if (item === undefined) continue;
-      if (!first) yield ","; first = false;
-      yield* quoted(key); yield ":"; yield* accountingChunks(item);
+  // Admission/copy has completed and cleared its cursors before this generator
+  // starts. The private caller prepays this stack and every key occurrence in
+  // the same traversal high-water component; ordinary serialization is shared.
+  const stack: AccountingChunkCursor[] = [];
+  let input = value, entering = true;
+  try {
+    while (entering || stack.length) {
+      if (entering) {
+        entering = false;
+        if (typeof input === "string") { yield* quoted(input); input = undefined; }
+        else if (input !== null && typeof input === "object") {
+          const array = Array.isArray(input);
+          privateAccountingProperty(stack, stack.length, { value: input as unknown[] | Record<string, unknown>,
+            keys: array ? undefined : privateAccountingKeys(input), index: 0, emitted: 0 });
+          input = undefined;
+          yield array ? "[" : "{";
+        } else { yield JSON.stringify(input); input = undefined; }
+      }
+      if (!stack.length) break;
+      const cursor = stack[stack.length - 1];
+      const length = cursor.keys ? cursor.keys.length : (cursor.value as unknown[]).length;
+      if (cursor.index === length) {
+        yield cursor.keys ? "}" : "]";
+        cursor.value = undefined as never; cursor.keys = undefined;
+        stack.length--; continue;
+      }
+      const key = cursor.keys ? cursor.keys[cursor.index++] : cursor.index++;
+      const item = (cursor.value as Record<string | number, unknown>)[key];
+      if (cursor.keys && item === undefined) continue;
+      if (cursor.emitted++) yield ",";
+      if (cursor.keys) { yield* quoted(key as string); yield ":"; }
+      input = item ?? null; entering = true;
     }
-    yield "}"; return;
+  } finally {
+    for (let index = 0; index < stack.length; index++) {
+      stack[index].value = undefined as never; stack[index].keys = undefined;
+    }
+    stack.length = 0; input = undefined; value = undefined;
   }
-  yield JSON.stringify(value);
 }
 
 /** Privately copied TEXT archive; one synchronous pull and at most one queued chunk. */
 export function accountingArchive(value: unknown, gateway?: readonly unknown[]) {
-  const measurement = admitAccountingJson(value, "archive", gateway);
-  let owned: unknown = copyAdmittedAccountingJson(value, gateway);
+  return createAccountingArchive(value, gateway, false);
+}
+/** @internal Only the checked private content-retention preparation calls this. */
+export function privateAccountingArchive(value: unknown, gateway?: readonly unknown[]) {
+  return createAccountingArchive(value, gateway, true);
+}
+function createAccountingArchive(value: unknown, gateway: readonly unknown[] | undefined, ownedBytes: boolean) {
+  const measurement = ownedBytes ? walkPrivateAccountingArchive(value, gateway, false) : admitAccountingJson(value, "archive", gateway);
+  let owned: unknown = ownedBytes ? walkPrivateAccountingArchive(value, gateway, true).value : copyAdmittedAccountingJson(value, gateway);
   let used = false, done = false;
+  let archiveEncoder: TextEncoder | undefined;
   let chunks: Generator<string> | undefined;
   let pending: string | undefined;
-  const release = () => { if (done) return; done = true; owned = undefined; pending = undefined; chunks?.return(undefined); };
+  const release = () => { if (done) return; done = true; owned = undefined; pending = undefined; chunks?.return(undefined); if (ownedBytes) { chunks = undefined; archiveEncoder = undefined; } };
   return {
     bytes: measurement.bytes,
     text(): string {
       if (used || measurement.bytes > 32768) throw new Error("accounting archive requires streaming");
       used = true;
-      const text = JSON.stringify(owned);
+      const text = ownedBytes ? ownedArchiveStringify(owned) : JSON.stringify(owned);
       release(); return text;
     },
     stream(): ReadableStream<Uint8Array> {
       if (used) throw new Error("accounting archive already consumed");
       used = true; chunks = accountingChunks(owned);
+      if (ownedBytes) archiveEncoder = newOwnedEncoder();
       return new ReadableStream<Uint8Array>({
         pull(controller) {
           try {
-            const backing = new Uint8Array(32768);
+            const backing = ownedBytes ? newOwnedBytes(32768) : new Uint8Array(32768);
             let written = 0, eof = false;
             while (true) {
               if (pending === undefined) {
@@ -256,12 +526,17 @@ export function accountingArchive(value: unknown, gateway?: readonly unknown[]) 
                 else if (code >= 0xd800 && code <= 0xdbff && pending.charCodeAt(i + 1) >= 0xdc00 && pending.charCodeAt(i + 1) <= 0xdfff) { bytes += 4; i++; }
                 else bytes += 3;
               }
-              if (bytes > backing.byteLength - written) break;
-              const encoded = encoder.encodeInto(pending, backing.subarray(written));
+              if (bytes > (ownedBytes ? ownedByteLength(backing) : backing.byteLength) - written) break;
+              const encoded = ownedBytes
+                ? encodeOwnedTextInto(archiveEncoder!, pending, ownedByteSubarray(backing, written))
+                : encoder.encodeInto(pending, backing.subarray(written));
               if (encoded.read !== pending.length) accountingAdmissionFailure();
               written += encoded.written; pending = undefined;
             }
-            if (written) controller.enqueue(backing.subarray(0, written));
+            if (written) {
+              if (ownedBytes) enqueueOwnedBytes(controller, ownedByteSubarray(backing, 0, written));
+              else controller.enqueue(backing.subarray(0, written));
+            }
             if (eof) { release(); controller.close(); }
           } catch (error) { release(); controller.error(error); }
         },
@@ -470,14 +745,53 @@ const unplain = /[^\x20\x21\x23-\x5b\x5d-\x7e]/;
 export interface MediaJsonBody { bytes: number; stream(): ReadableStream<Uint8Array> }
 
 // Null when large strings total under 1 MiB; JSON.stringify is cheaper then.
-export function mediaJsonBody(value: unknown): MediaJsonBody | null {
-  const slots: Array<{ owner: Record<string, unknown> | unknown[]; key: string | number; value: string }> = [];
+export interface PrivateMediaAdmission { workspaceBytes: number; serializationBytes: number; restorePending: boolean }
+export function privateMediaJsonBody(value: unknown, admission: PrivateMediaAdmission): MediaJsonBody | null {
+  return mediaBody(value, admission);
+}
+export function privateUploadJson(value: unknown): string { return stringifyPrivatePassiveRoot(value); }
+export function mediaJsonBody(value: unknown): MediaJsonBody | null { return mediaBody(value); }
+function mediaBody(value: unknown, owned?: PrivateMediaAdmission): MediaJsonBody | null {
+  if (owned && owned.workspaceBytes < 24) throw new Error("private media workspace is unavailable");
+  const slots: Array<{ owner: Record<string, unknown> | unknown[]; key: string | number; value: string; marker?: string }> = [];
   // Iterative: an 8 MiB JSON.parse body can nest far deeper than the call stack.
   const pending: unknown[] = [value];
-  let total = 0;
+  let total = 0, locatorBytes = 8;
   while (pending.length) {
     const owner = pending.pop();
     if (!owner || typeof owner !== "object") continue;
+    if (owned) {
+      // Count the next batch before appending any child or locator. This is
+      // paid variable traversal CONTROL; the current loop/descriptor/calls are
+      // still fixed execution CONTROL. No late COMMON reservation is made.
+      let children = 0, additions = 0;
+      if (ownedArchiveArray(owner)) {
+        for (let key = 0; key < owner.length; key++) {
+          const item = owner[key];
+          if (item !== null && typeof item === "object") children++;
+          else if (typeof item === "string" && item.length >= mediaChars) additions += privateMediaLocatorBytes(key, item);
+        }
+      } else for (const key in owner) if (ownedArchiveOwn(owner, key)) {
+        const item = (owner as Record<string, unknown>)[key];
+        if (item !== null && typeof item === "object") children++;
+        else if (typeof item === "string" && item.length >= mediaChars) additions += privateMediaLocatorBytes(key, item);
+      }
+      if (8 * (1 + pending.length + children) + locatorBytes + additions > owned.workspaceBytes)
+        throw new Error("private media workspace changed");
+      locatorBytes += additions;
+      if (ownedArchiveArray(owner)) {
+        for (let key = 0; key < owner.length; key++) {
+          const item = owner[key];
+          if (typeof item === "string" && item.length >= mediaChars) { privateMediaLocator(slots, owner, key, item); total += item.length; }
+          else if (item !== null && typeof item === "object") privateMediaAppend(pending, item);
+        }
+      } else for (const key in owner) if (ownedArchiveOwn(owner, key)) {
+        const item = (owner as Record<string, unknown>)[key];
+        if (typeof item === "string" && item.length >= mediaChars) { privateMediaLocator(slots, owner as Record<string, unknown>, key, item); total += item.length; }
+        else if (item !== null && typeof item === "object") privateMediaAppend(pending, item);
+      }
+      continue;
+    }
     const keys: Array<string | number> = Array.isArray(owner) ? Array.from(owner.keys()) : Object.keys(owner);
     for (const key of keys) {
       const item = (owner as Record<string | number, unknown>)[key];
@@ -485,30 +799,60 @@ export function mediaJsonBody(value: unknown): MediaJsonBody | null {
       else if (item && typeof item === "object") pending.push(item);
     }
   }
-  if (total < mediaMinimum) return null;
+  if (total < mediaMinimum) { if (owned) { slots.length = 0; pending.length = 0; value = undefined; } return null; }
   const marker = `\u0000clawrouter-media-${crypto.randomUUID()}-`;
   let skeleton: string;
+  if (owned) {
+    // UUID and marker construction finish before the final prototype guard.
+    // All marker strings were prepaid per locator, including primitive cells.
+    for (let index = 0; index < slots.length; index++) slots[index].marker = marker + index;
+    assertPrivateJsonPrototypes();
+    let installed = 0, restored = true;
+    owned.restorePending = true;
+    try {
+      for (let index = 0; index < slots.length; index++) {
+        const slot = slots[index]; installed = index + 1;
+        ownedArchiveProperty(slot.owner, slot.key,
+          { __proto__: null, value: slot.marker, writable: true, enumerable: true, configurable: true } as PropertyDescriptor);
+      }
+      skeleton = ownedArchiveStringify(value)!;
+    } finally {
+      for (let index = 0; index < installed; index++) {
+        const slot = slots[index];
+        try { ownedArchiveProperty(slot.owner, slot.key,
+          { __proto__: null, value: slot.value, writable: true, enumerable: true, configurable: true } as PropertyDescriptor); }
+        catch { restored = false; }
+      }
+      if (restored) owned.restorePending = false;
+    }
+    if (owned.restorePending) throw new Error("private media restoration is unknown");
+  } else {
   try {
     slots.forEach((slot, index) => { (slot.owner as Record<string | number, unknown>)[slot.key] = marker + index; });
     skeleton = JSON.stringify(value);
   } finally {
     for (const slot of slots) (slot.owner as Record<string | number, unknown>)[slot.key] = slot.value;
   }
+  }
   // The marker's control character is always escaped, and its UUID is fresh,
   // so caller text cannot produce this serialized form.
-  const needle = `"${JSON.stringify(marker).slice(1, -1)}`;
+  const needle = `"${(owned ? ownedArchiveStringify(marker)! : JSON.stringify(marker)).slice(1, -1)}`;
   const pieces: Array<Uint8Array | string> = [];
   let bytes = 0, offset = 0;
   for (let at = skeleton.indexOf(needle); at >= 0; at = skeleton.indexOf(needle, offset)) {
     const end = skeleton.indexOf('"', at + needle.length);
-    const piece = encoder.encode(skeleton.slice(offset, at)), media = slots[Number(skeleton.slice(at + needle.length, end))].value;
+    const piece = owned ? encodeOwnedText(encoder, skeleton.slice(offset, at)) : encoder.encode(skeleton.slice(offset, at)), media = slots[Number(skeleton.slice(at + needle.length, end))].value;
     pieces.push(piece, media);
     bytes += piece.byteLength + (unplain.test(media) ? quotedBytes(media) : media.length + 2);
     offset = end + 1;
   }
-  const tail = encoder.encode(skeleton.slice(offset));
+  const tail = owned ? encodeOwnedText(encoder, skeleton.slice(offset)) : encoder.encode(skeleton.slice(offset));
   pieces.push(tail);
   bytes += tail.byteLength;
+  if (owned) {
+    slots.length = 0; pending.length = 0; value = undefined; skeleton = "";
+    return privateMediaTransport(pieces, bytes);
+  }
   return {
     bytes,
     stream() {
@@ -531,6 +875,45 @@ export function mediaJsonBody(value: unknown): MediaJsonBody | null {
   };
 }
 
+function privateMediaLocatorBytes(key: string | number, value: string): number {
+  return 8 * (1 + 9 + 3) + 2 * (19 + 70 + value.length + (typeof key === "string" ? key.length : 0));
+}
+function privateMediaAppend<T>(target: T[], value: T): void {
+  ownedArchiveProperty(target, target.length, { __proto__: null, value, writable: true, enumerable: true, configurable: true } as PropertyDescriptor);
+}
+function privateMediaLocator(slots: Array<{ owner: Record<string, unknown> | unknown[]; key: string | number; value: string; marker?: string }>,
+  owner: Record<string, unknown> | unknown[], key: string | number, value: string): void {
+  const descriptor = ownedArchiveDescriptor(owner, key);
+  if (!descriptor || !ownedArchiveOwn(descriptor, "value") || descriptor.value !== value
+    || descriptor.writable !== true || descriptor.enumerable !== true || descriptor.configurable !== true)
+    throw new Error("private media source is not writable own data");
+  privateMediaAppend(slots, { owner, key, value, marker: "" });
+}
+// Only output pieces escape this fixed factory; no parent, locator, source-root
+// or restoration environment is captured by the stream's closures.
+function privateMediaTransport(pieces: Array<Uint8Array | string>, bytes: number): MediaJsonBody {
+  return {
+    bytes,
+    stream() {
+      let index = 0, chunks: Iterator<string> | null = null;
+      return new ReadableStream<Uint8Array>({
+        pull(controller) {
+          while (index < pieces.length) {
+            const piece = pieces[index];
+            if (typeof piece !== "string") { index++; if (ownedByteLength(piece)) { enqueueOwnedBytes(controller, piece); return; } continue; }
+            chunks ??= unplain.test(piece) ? quoted(piece) : plainChunks(piece);
+            const next = chunks.next();
+            if (!next.done) { enqueueOwnedBytes(controller, encodeOwnedText(encoder, next.value)); return; }
+            chunks = null; index++;
+          }
+          pieces.length = 0; controller.close();
+        },
+        cancel() { index = pieces.length; chunks = null; pieces.length = 0; },
+      }, { highWaterMark: 0 });
+    },
+  };
+}
+
 function* plainChunks(value: string): Generator<string> {
   yield '"';
   for (let offset = 0; offset < value.length; offset += mediaChunk) yield value.slice(offset, offset + mediaChunk);
@@ -539,52 +922,169 @@ function* plainChunks(value: string): Generator<string> {
 
 export class JsonBodyStructureLimit extends Error {}
 
+interface PrivateJsonBodyParser { push(text: string): void; take(): unknown; discard(): void }
+interface JsonBodyParser extends PrivateJsonBodyParser { end(): unknown; enforceStructureLimits(): void }
+type JsonBodyContainer = Record<string, unknown> | unknown[];
+
 // The larger envelope is for media, not unbounded object expansion. A byte cap
 // alone lets millions of tiny arrays/objects exhaust the 128 MB isolate. Parse
 // in bounded feeds directly into the value instead of retaining a second full
 // decoded document for JSON.parse. Limits apply only to bodies above 8 MiB.
-export function createJsonBodyParser(enforceStructure = true) {
-  const stack: Array<{ value: Record<string, unknown> | unknown[]; key?: string }> = [];
+export function createJsonBodyParser(enforceStructure = true): JsonBodyParser {
+  return createBodyParser(enforceStructure, false);
+}
+
+// The genuine private codec prepays this synchronous factory. Its completed
+// graph transfers directly to that codec; no end/getter or callback escapes.
+export function createPrivateJsonBodyParser(): PrivateJsonBodyParser {
+  return createBodyParser(true, true);
+}
+
+// Allocation census preserves the private usage scanner's legacy separators.
+// This is not JSON grammar; key lookahead below still uses only JSON's four.
+function privateJsonAtomSpace(code: number): boolean {
+  return code >= 9 && code <= 13 || code === 32 || code === 160 || code === 5760
+    || code >= 8192 && code <= 8202 || code === 8232 || code === 8233 || code === 8239 || code === 8287 || code === 12288 || code === 65279;
+}
+
+// Fixed private callers prepay the scalar workspace and this three-field
+// receipt. Native JSON.parse alone decides grammar; exact is usable ONLY after
+// it succeeds. The codec consumes limited; accepted usage deliberately does not.
+export function measurePrivateJsonBody(text: string): { upper: number; exact: number; limited: boolean } {
+  let containers = 0, strings = 0, atoms = 0, keys = 0, rawUnits = 0, decodedUnits = 0;
+  let depth = 0, values = 0, limited = false, index = 0;
+  // One invocation-local native-call vector, prepaid with the census activation.
+  // Reentrant censuses have distinct vectors; no per-character array factory.
+  const characterIndex = [0];
+  try {
+    while (index < text.length) {
+      let code = privateJsonCodeAt(text, index++, characterIndex);
+      if (code === 34) {
+        strings++;
+        let length = 0, closed = false;
+        while (index < text.length) {
+          code = privateJsonCodeAt(text, index++, characterIndex);
+          if (code === 34) { closed = true; break; }
+          rawUnits++;
+          if (code !== 92 || index === text.length) { length++; decodedUnits++; continue; }
+          code = privateJsonCodeAt(text, index++, characterIndex); rawUnits++;
+          if (code === 117 && index + 4 <= text.length) {
+            let unicode = true;
+            for (let look = index; look < index + 4; look++) {
+              const digit = privateJsonCodeAt(text, look, characterIndex);
+              if (!(digit >= 48 && digit <= 57 || digit >= 65 && digit <= 70 || digit >= 97 && digit <= 102)) unicode = false;
+            }
+            if (unicode) { index += 4; rawUnits += 4; length++; decodedUnits++; continue; }
+          }
+          // Invalid escapes remain input to native grammar. Their raw spelling
+          // is conservatively counted; no decoded key/value is constructed.
+          const width = code === 34 || code === 92 || code === 47 || code === 98 || code === 102 || code === 110 || code === 114 || code === 116 ? 1 : 2;
+          length += width; decodedUnits += width;
+        }
+        let look = index;
+        while (look < text.length) {
+          code = privateJsonCodeAt(text, look, characterIndex);
+          if (code !== 32 && code !== 9 && code !== 10 && code !== 13) break;
+          look++;
+        }
+        if (closed && privateJsonCodeAt(text, look, characterIndex) === 58) { keys++; if (length > 4096) limited = true; }
+        // Never count a provisional quoted key as a value before classification.
+        else if (closed && ++values > 65536) limited = true;
+      } else if (code === 123 || code === 91) {
+        if (++depth > 128) limited = true;
+        containers++;
+        if (++values > 65536) limited = true;
+      } else if (code === 125 || code === 93) depth--;
+      else if (code !== 44 && code !== 58 && !privateJsonAtomSpace(code)) {
+        atoms++;
+        const numeric = code === 45 || code >= 48 && code <= 57;
+        let length = 1;
+        while (index < text.length) {
+          code = privateJsonCodeAt(text, index, characterIndex);
+          if (code === 34 || code === 123 || code === 91 || code === 125 || code === 93 || code === 44 || code === 58
+            || privateJsonAtomSpace(code)) break;
+          index++; length++;
+        }
+        if (numeric && length > 4096) limited = true;
+        if (++values > 65536) limited = true;
+      }
+    }
+    return { upper: 16 * (containers + strings + atoms) + 2 * rawUnits,
+      exact: 8 * (2 * (containers + strings - keys + atoms) - 1 + keys) + 2 * decodedUnits, limited };
+  } finally { text = ""; characterIndex[0] = 0; }
+}
+
+function createBodyParser(enforceStructure: boolean, privateParents: false): JsonBodyParser;
+function createBodyParser(enforceStructure: boolean, privateParents: true): PrivateJsonBodyParser;
+function createBodyParser(enforceStructure: boolean, privateParents: boolean): JsonBodyParser | PrivateJsonBodyParser {
+  // Exactly one stack is constructed. Ordinary callers retain their existing
+  // frame representation; the private path has direct parent references only.
+  const stack: Array<{ value: JsonBodyContainer; key?: string }> | undefined = privateParents ? undefined : [];
+  const parents: JsonBodyContainer[] | undefined = privateParents ? [] : undefined;
+  let pendingKey: string | undefined;
   let root: unknown, scalar = "", key = false, nodes = 0, maximumDepth = 0, maximumScalar = 0;
   const checkStructure = () => {
     if (enforceStructure && (nodes > 65_536 || maximumDepth > 128 || maximumScalar > 4096)) throw new JsonBodyStructureLimit();
   };
   function attach(value: unknown) {
     nodes++; checkStructure();
-    const frame = stack.at(-1);
-    if (!frame) root = value;
-    else if (Array.isArray(frame.value)) frame.value.push(value);
+    let parent: JsonBodyContainer | undefined, member: string | undefined;
+    if (parents) {
+      parent = parents.length ? parents[parents.length - 1] : undefined; member = pendingKey;
+    } else {
+      const frame = stack!.at(-1); parent = frame?.value; member = frame?.key;
+    }
+    if (!parent) root = value;
+    else if (parents) ownedArchiveProperty(parent, ownedArchiveArray(parent) ? parent.length : member!,
+      { __proto__: null, value, writable: true, enumerable: true, configurable: true } as PropertyDescriptor);
+    else if (Array.isArray(parent)) parent.push(value);
     // Define an own property, as JSON.parse does, including __proto__. Repeated
     // keys replace the previous value instead of altering object prototypes.
-    else Object.defineProperty(frame.value, frame.key!, { value, writable: true, enumerable: true, configurable: true });
+    else Object.defineProperty(parent, member!, { value, writable: true, enumerable: true, configurable: true });
+    if (parents) { pendingKey = undefined; member = undefined; }
   }
   function accept(token: Token) {
     switch (token.name) {
       case "startObject": case "startArray": {
-        maximumDepth = Math.max(maximumDepth, stack.length + 1); checkStructure();
+        maximumDepth = parents ? (maximumDepth < parents.length + 1 ? parents.length + 1 : maximumDepth)
+          : Math.max(maximumDepth, (parents ?? stack!).length + 1); checkStructure();
         const value = token.name === "startArray" ? [] : {};
-        attach(value); stack.push({ value }); break;
+        // A child attaches BEFORE descent, so its parent's key is no longer
+        // needed. The next sibling supplies a new key after ascent.
+        attach(value); if (parents) ownedArchiveProperty(parents, parents.length,
+          { __proto__: null, value, writable: true, enumerable: true, configurable: true } as PropertyDescriptor);
+        else stack!.push({ value }); break;
       }
-      case "endObject": case "endArray": stack.pop(); break;
+      case "endObject": case "endArray":
+        if (parents) { if (parents.length) parents.length--; } else (parents ?? stack!).pop(); break;
       case "startKey": key = true; scalar = ""; break;
       case "startString": case "startNumber": key = false; scalar = ""; break;
       case "stringChunk": case "numberChunk":
         scalar += token.value;
-        if (key || token.name === "numberChunk") { maximumScalar = Math.max(maximumScalar, scalar.length); checkStructure(); }
+        if (key || token.name === "numberChunk") { maximumScalar = parents ? (maximumScalar < scalar.length ? scalar.length : maximumScalar) : Math.max(maximumScalar, scalar.length); checkStructure(); }
         break;
-      case "endKey": stack.at(-1)!.key = scalar; scalar = ""; break;
+      case "endKey": if (parents) pendingKey = scalar; else stack!.at(-1)!.key = scalar; scalar = ""; break;
       case "endString": attach(scalar); scalar = ""; break;
-      case "endNumber": attach(Number(scalar)); scalar = ""; break;
-      case "nullValue": case "trueValue": case "falseValue": attach(token.value); break;
+      case "endNumber": attach(privateParents ? privateJsonNumber(scalar) : Number(scalar)); scalar = ""; break;
+      case "nullValue": case "trueValue": case "falseValue":
+        if (privateParents) attach(token.name === "nullValue" ? null : token.name === "trueValue");
+        else attach(token.value); break;
     }
   }
   let consume: ReturnType<typeof createJsonTokenizer> | undefined = createJsonTokenizer(accept);
-  const discard = () => { consume = undefined; root = undefined; scalar = ""; stack.length = 0; };
+  const discard = () => { consume = undefined; root = undefined; scalar = ""; pendingKey = undefined; (parents ?? stack!).length = 0; };
+  const push = (text: string): void => {
+    if (!consume) throw new TypeError("JSON parser is retired");
+    for (let offset = 0; offset < text.length; offset += 4096) consume.push(text.slice(offset, offset + 4096));
+  };
+  const take = (): unknown => {
+    if (!consume) throw new TypeError("JSON parser is retired");
+    try { consume.end(); return root; }
+    finally { discard(); }
+  };
+  if (privateParents) return { push, take, discard };
   return {
-    push(text: string): void {
-      if (!consume) throw new TypeError("JSON parser is retired");
-      for (let offset = 0; offset < text.length; offset += 4096) consume.push(text.slice(offset, offset + 4096));
-    },
+    push,
     end(): unknown {
       if (!consume) throw new TypeError("JSON parser is retired");
       consume.end(); return root;
@@ -594,11 +1094,7 @@ export function createJsonBodyParser(enforceStructure = true) {
     enforceStructureLimits(): void { enforceStructure = true; checkStructure(); },
     // Move the completed graph to one caller and drop all parser/tokenizer
     // references. Existing end() callers retain their original behavior.
-    take(): unknown {
-      if (!consume) throw new TypeError("JSON parser is retired");
-      try { consume.end(); return root; }
-      finally { discard(); }
-    },
+    take,
     discard,
   };
 }

@@ -1,3 +1,6 @@
+import { ownedHttpRequestReceiver } from "./proxy-completion.ts";
+import { identityFailure } from "./identity-admission.ts";
+import type { OwnedHttpRequest } from "./http-identity-owner.ts";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledModel, ContentRecord, Env, ProxyRequestBody } from "./types";
 import { maxJsonBodyBytes, randomId } from "./utils.ts";
 import { accountingArchive, accountingIdentity, admitAccountingJson, jsonBodyTransport } from "./json-body.ts";
@@ -184,4 +187,13 @@ export function retainedContentDeadline(object: Pick<R2Object, "uploaded" | "cus
 
 export function contentKey(tenant: string, ref: string): string {
   return `v1/${encodeURIComponent(tenant)}/${encodeURIComponent(ref)}.json`;
+}
+
+
+export function prepareOwnedHttpContentRetention(cap: OwnedHttpRequest, env: Env, auth: AuthorizedIdentity,
+  selection: RetainedSelection, requestId: string): PreparedContentRetention | null {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.prepareOwnedHttpArchive(cap, receiver.ownedHttpSinkOwner(cap), env, auth,
+    selection as import("./proxy-selection.ts").ProxySelection, requestId);
 }

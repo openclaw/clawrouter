@@ -1,9 +1,11 @@
+import { freezeOwnedObserver, inspectOwnedBytes, isLocalOwnedByteView, isLocalOwnedByteBacking, newOwnedBytes, ownedBytesFromBacking, ownedByteLength, ownedByteSubarray, copyOwnedBytes, newOwnedDecoder, decodeOwnedBytes } from "./proxy-completion.ts";
 import { inputRetirement, type InputRetirement } from "./input-retirement.ts";
-import { IdentityWire, isIdentityFailure, addIdentitySources, admitIdentityBytes, admitIdentityHeaders, identityFailure, identitySourceBudget, identityUtf8, parseIdentity,
+import { privateIdentityNativeThen, privateIdentityNativeClosed, privateIdentityNativeReaderOperation, privateIdentityOrigin, privateIdentityDiagnostic, type PrivateIdentityParent, IdentityWire, isIdentityFailure, addIdentitySources, admitAdmission, admitIdentityBytes, admitIdentityHeaders, identityFailure, identitySourceBudget, identityUtf8, parseIdentity,
   type IdentityProfile, type IdentitySourceBudget } from "./identity-admission.ts";
 import { PreflightTicket, transferAdmissionScratch, retireAdmissionScratch } from "./credential-preflight-arena.ts";
-import { closePreflightReply, closePreflightRequest, credentialPreflightHeader, credentialPreflightPath,
-  credentialPreflightVersion, type CredentialPreflightReply, type CredentialPreflightRequest } from "./credential-preflight-protocol.ts";
+import { closeAdmissionEnvelope, closePreflightReply, closePreflightRequest, credentialPreflightHeader, credentialPreflightPath,
+  credentialPreflightVersion, type AdmissionContinuationEnvelope, type CredentialPreflightReply, type CredentialPreflightRequest } from "./credential-preflight-protocol.ts";
+import type { AdmissionResult } from "./authority-admission.ts";
 
 type Outcome<T> = { failed: false; value?: T } | { failed: true; error: unknown };
 type Root<T> = { original?: Promise<T>; outcome?: Promise<Outcome<T>>; result?: Outcome<T> };
@@ -300,12 +302,12 @@ function bridgeOriginal<T>(start: () => Promise<T>): Promise<BridgeOutcome<T>> {
 
 class AdmissionBridgeSource {
   private ticket: PreflightTicket;
-  private body?: ReadableStream<Uint8Array> | null;
-  private reader?: ReadableStreamBYOBReader | ReadableStreamDefaultReader<Uint8Array>;
+  body?: ReadableStream<Uint8Array> | null;
+  reader?: ReadableStreamBYOBReader | ReadableStreamDefaultReader<Uint8Array>;
   private retirement?: InputRetirement;
   private byob = false;
   private ended?: Promise<void>;
-  private pending?: Promise<ReadableStreamReadResult<Uint8Array>>;
+  private pending?: Promise<ReadableStreamReadResult<Uint8Array<ArrayBuffer>>>;
   private first?: Promise<void>;
   private terminal = false;
   private eof = false;
@@ -327,13 +329,18 @@ class AdmissionBridgeSource {
   own(body: ReadableStream<Uint8Array> | null, signal?: AbortSignal): void {
     this.body = body; this.signal = signal;
     if (!body) return;
+    const owned = privatePreflightReaders?.get(this);
+    let acquisition = owned?.origin(0);
     try { this.reader = body.getReader({ mode: "byob" }); this.byob = true; }
     catch (error) {
+      if (owned) owned.diagnostic(acquisition!, error);
       this.failure("transport", 256, error === undefined); error = undefined;
+      acquisition = owned?.origin(0);
       try { this.reader = body.getReader(); }
-      catch (fallback) { this.failure("transport", 512, fallback === undefined); fallback = undefined; /* UNKNOWN holds all funding. */ }
+      catch (fallback) { if (owned) { owned.diagnostic(acquisition!, fallback); owned.holdUnknown(); } this.failure("transport", 512, fallback === undefined); fallback = undefined; /* UNKNOWN holds all funding. */ }
     }
-    if (this.reader) this.retirement = inputRetirement({
+    if (owned) owned.ownReader(this.reader, body);
+    else if (this.reader) this.retirement = inputRetirement({
       cancel: () => this.first ??= bridgeOriginal(() => this.reader!.cancel("private admission stopped")).then(outcome => {
         if (outcome.failed) this.failure("cleanup", 4, outcome.undefinedReason);
       }),
@@ -342,59 +349,72 @@ class AdmissionBridgeSource {
         catch (error) { this.failure("cleanup", 8, error === undefined); error = undefined; }
       },
     });
-    this.abort = () => { this.stop("cancel"); };
+    this.abort = owned ? this.stop.bind(this, "cancel") : () => { this.stop("cancel"); };
     if (signal?.aborted) this.abort();
-    else try { signal?.addEventListener("abort", this.abort, { once: true }); }
-    catch (error) { this.failure("transport", 1024, error === undefined); error = undefined; this.stop("cancel"); }
+    else {
+      const origin = signal ? owned?.origin(15) : undefined;
+      try { signal?.addEventListener("abort", this.abort, { once: true }); }
+      catch (error) {
+        if (owned && origin !== undefined) owned.diagnostic(origin, error);
+        this.failure("transport", 1024, error === undefined); error = undefined; this.stop("cancel");
+      }
+    }
   }
   private stop(kind: "cancel" | "eof"): void {
     if (this.terminal) return;
     this.terminal = true; this.ticket.enter("terminal");
-    this.ended = this.retirement?.retire(kind);
+    const owned = privatePreflightReaders?.get(this);
+    this.ended = owned ? owned.finishReader(kind) : this.retirement?.retire(kind);
     // Only sanitized followers reach generic retirement. Observe its own outcome.
     if (this.ended) this.ended = this.ended.then(() => undefined, () => { this.failure("cleanup", 16); });
   }
   async read<T>(budget: IdentitySourceBudget, profile: IdentityProfile, envelope: import("./access-json.ts").IdentityEnvelope,
     close: (value: unknown) => T): Promise<T | undefined> {
+    const owned = privatePreflightReaders?.get(this);
     let text = "", parsed: unknown, result: T | undefined, backing: Uint8Array<ArrayBuffer> | undefined;
     let decoder: TextDecoder | undefined, wire: IdentityWire | undefined;
     try {
       if (this.signal?.aborted) { this.failure("transport", 128); throw identityFailure("transport"); }
-      if (!this.body || !this.byob || !this.retirement) throw identityFailure("transport");
+      if (!this.body || !this.byob || !(owned || this.retirement)) throw identityFailure("transport");
       const maximum = profile === "record" ? 1048576 : 2097152;
       let reads = 0, bytes = 0;
-      backing = new Uint8Array(16384); decoder = new TextDecoder(); wire = new IdentityWire();
+      backing = owned ? newOwnedBytes(16384) : new Uint8Array(16384); decoder = owned ? newOwnedDecoder() : new TextDecoder(); wire = new IdentityWire();
       for (;;) {
         if (this.signal?.aborted) { this.failure("transport", 128); throw identityFailure("transport"); }
         if (reads++ >= 8192) throw identityFailure("limit");
         this.ticket.enter("read");
-        this.pending = this.retirement.read(() => bridgeOriginal(() => (this.reader as ReadableStreamBYOBReader).read(backing!)).then(outcome => {
+        if (owned) await owned.read(backing!);
+        else {
+        this.pending = this.retirement!.read(() => bridgeOriginal(() => (this.reader as ReadableStreamBYOBReader).read(backing!)).then(outcome => {
           if (outcome.failed) { this.failure("transport", 2, outcome.undefinedReason); throw identityFailure("transport"); }
           return outcome.value;
         }));
         // Immediate rejection observer; no raw or fulfilled graph history.
-        void this.pending.then(() => undefined, () => undefined);
-        let part = await this.pending;
+        void this.pending!.then(() => undefined, () => undefined);
+        }
+        let part = owned ? undefined : await this.pending!;
         if (this.signal?.aborted) { part = undefined as never; this.failure("transport", 128); throw identityFailure("transport"); }
-        if (part.value) {
-          if (!(part.value.buffer instanceof ArrayBuffer) || part.value.buffer.byteLength > 16384 || part.value.byteLength > maximum - bytes) throw identityFailure("limit");
-          bytes += part.value.byteLength; admitIdentityBytes(budget, part.value.byteLength, maximum);
-          wire.add(part.value);
-          const decoded = decoder.decode(part.value, { stream: !part.done });
+        if ((owned ? owned.value : part!.value)) {
+          if (owned ? ownedByteLength(owned.value!) > maximum - bytes
+            : !(part!.value!.buffer instanceof ArrayBuffer) || part!.value!.buffer.byteLength > 16384 || part!.value!.byteLength > maximum - bytes) throw identityFailure("limit");
+          bytes += owned ? ownedByteLength(owned.value!) : part!.value!.byteLength;
+          admitIdentityBytes(budget, owned ? ownedByteLength(owned.value!) : part!.value!.byteLength, maximum);
+          if (owned) wire.addPrivate(owned.value!); else wire.add(part!.value!);
+          const decoded = owned ? decodeOwnedBytes(decoder, owned.value!, !owned.done) : decoder.decode(part!.value!, { stream: !part!.done });
           if (decoded.length > maximum - text.length || decoded.length > 2097152 - budget.text - text.length) throw identityFailure("limit");
-          text += decoded; backing = new Uint8Array(part.value.buffer);
-        } else if (part.done) {
-          const decoded = decoder.decode();
+          text += decoded; backing = owned ? owned.returnedBacking! : new Uint8Array(part!.value!.buffer);
+        } else if ((owned ? owned.done : part!.done)) {
+          const decoded = owned ? decodeOwnedBytes(decoder) : decoder.decode();
           if (decoded.length > maximum - text.length || decoded.length > 2097152 - budget.text - text.length) throw identityFailure("limit");
           text += decoded;
         }
-        const done = part.done; part = undefined as never; this.pending = undefined;
+        const done = (owned ? owned.done : part!.done); part = undefined as never; this.pending = undefined; if (owned) owned.clearRead();
         this.ticket.leave("read");
         if (done) { this.eof = true; break; }
-        if (!backing.byteLength) throw identityFailure("transport");
+        if (!(owned ? ownedByteLength(backing!) : backing!.byteLength)) throw identityFailure("transport");
       }
       parsed = parseIdentity(text, budget, profile, envelope, wire.span);
-      result = close(parsed);
+      if (owned) owned.acceptParsed(parsed); else result = close(parsed);
     } catch (error) {
       if (!this.primary) this.failure(bridgeCategory(error), 32, error === undefined);
       error = undefined;
@@ -408,8 +428,18 @@ class AdmissionBridgeSource {
     try { await this.pending; } catch { /* already classified ORIGINAL read */ }
     await this.first; await this.ended;
     if (this.body && (!this.reader || this.body.locked)) { this.ticket.holdUnknown(); await new Promise<never>(() => {}); }
+    const owned = privatePreflightReaders?.get(this);
+    const origin = this.abort && this.signal ? owned?.origin(16) : undefined;
     try { if (this.abort) this.signal?.removeEventListener("abort", this.abort); }
-    catch (error) { this.failure("cleanup", 64, error === undefined); error = undefined; }
+    catch (error) {
+      this.failure("cleanup", 64, error === undefined);
+      if (owned) {
+        owned.holdUnknown();
+        if (origin !== undefined) owned.diagnostic(origin, error);
+        error = undefined; throw identityFailure("cleanup");
+      }
+      error = undefined;
+    }
     this.body = undefined; this.reader = undefined; this.retirement = undefined; this.signal = undefined; this.abort = undefined;
     this.pending = undefined; this.first = undefined; this.ended = undefined;
     this.ticket.leave("read"); this.ticket.leave("terminal");
@@ -457,4 +487,473 @@ export async function consumeAdmissionBridge<T>(ticket: PreflightTicket,
   response = undefined; body = undefined; acquisition = undefined; close = undefined as never; validate = undefined; signal = undefined;
   ticket.leave("source"); owner.report();
   return result!;
+}
+
+// Only the registered compiled HTTP preflight path creates these receipts.
+// The ordinary bridge and its general callback API retain their original path.
+export interface PrivatePreflightReceipt { readonly preflight?: never }
+export interface PrivateContinuationReceipt { readonly continuation?: never }
+export interface PrivateContinuationDestination {
+  continuationReply?: AdmissionContinuationEnvelope<AdmissionResult>;
+  continuationSource?: IdentitySourceBudget;
+}
+let privatePreflights: WeakMap<PrivatePreflightReceipt | PrivateContinuationReceipt, PrivatePreflightState> | undefined;
+let privatePreflightReaders: WeakMap<AdmissionBridgeSource, PrivatePreflightState> | undefined;
+const privatePreflightQueue = queueMicrotask;
+interface PreflightReadObservation { owner: PrivatePreflightState | undefined; nonce: Promise<void> | undefined; state: number }
+function preflightReadFulfilled(this: PreflightReadObservation, value: unknown): void {
+  if (this.state & (1 | 8)) { value = undefined; return; }
+  try { this.owner?.dispatchRead(this, false, value); } finally { value = undefined; }
+}
+function preflightReadRejected(this: PreflightReadObservation, reason: unknown): void {
+  if (this.state & (1 | 8)) { reason = undefined; return; }
+  try { this.owner?.dispatchRead(this, true, reason); } finally { reason = undefined; }
+}
+interface PreflightVoidObservation { owner: PrivatePreflightState | undefined; kind: 2 | 4 | 8; state: number }
+function preflightVoidFulfilled(this: PreflightVoidObservation): void {
+  if (!this.owner || this.state & (1 | 8)) return;
+  this.state |= 1 | 16;
+  try { this.owner.dispatchVoid(this, false, undefined); } finally { this.state &= ~16; }
+}
+function preflightVoidRejected(this: PreflightVoidObservation, reason: unknown): void {
+  if (!this.owner || this.state & (1 | 8)) { reason = undefined; return; }
+  this.state |= 1 | 16;
+  try { this.owner.dispatchVoid(this, true, reason); } finally { reason = undefined; this.state &= ~16; }
+}
+class PrivatePreflightState {
+  source: AdmissionBridgeSource;
+  response?: Response;
+  result?: CredentialPreflightReply | AdmissionContinuationEnvelope<AdmissionResult>;
+  private flags = 1;
+  private resolveReady!: () => void;
+  readonly ready = new Promise<void>(resolve => { this.resolveReady = resolve; });
+  private resolveRetired!: () => void;
+  readonly retired = new Promise<void>(resolve => { this.resolveRetired = resolve; });
+  private native = 0;
+  private nativeOrigin = 0;
+  private pending = 0;
+  private seen = 0;
+  private installing = 0;
+  private closedObservation?: PreflightVoidObservation;
+  private cancelObservation?: PreflightVoidObservation;
+  private unlockObservation?: PreflightVoidObservation;
+  private readReady?: Promise<void>;
+  private readObservation?: PreflightReadObservation;
+  private resolveRead?: () => void;
+  private first?: Promise<void>;
+  private resolveCancel?: () => void;
+  private unlocking?: Promise<void>;
+  private resolveUnlock?: () => void;
+  private closed?: Promise<void>;
+  private resolveClosed?: () => void;
+  private ending?: Promise<void>;
+  private capture?: Uint8Array<ArrayBuffer>;
+  private readFailure?: "limit" | "protocol" | "transport" | "cleanup";
+  private readOrigin = 0;
+  private cancelOrigin = 0;
+  private unlockOrigin = 0;
+  private closedOrigin = 0;
+  value?: Uint8Array<ArrayBuffer>;
+  returnedBacking?: Uint8Array<ArrayBuffer>;
+  done = false;
+  declare public ticket: PreflightTicket;
+  declare public parent: PrivateIdentityParent;
+  declare public permit: object;
+  declare public budget: IdentitySourceBudget;
+  declare public signal?: AbortSignal;
+  declare readonly kind: "preflight" | "continuation";
+  declare private destination?: PrivateContinuationDestination;
+  constructor(ticket: PreflightTicket, parent: PrivateIdentityParent, permit: object,
+    budget: IdentitySourceBudget, signal?: AbortSignal,
+    kind: "preflight" | "continuation" = "preflight", destination?: PrivateContinuationDestination) {
+    this.ticket = ticket; this.parent = parent; this.permit = permit; this.budget = budget; this.signal = signal; this.kind = kind; this.destination = destination;
+    this.source = new AdmissionBridgeSource(ticket);
+  }
+  holdUnknown(): void { this.flags |= 8; this.parent.unknown = true; this.ticket.holdUnknown(); }
+  origin(kind: 0 | 3 | 4 | 5 | 6 | 12 | 15 | 16): number { return privateIdentityOrigin(this.parent, kind); }
+  diagnostic(origin: number, reason: unknown, primary = true): void {
+    try { privateIdentityDiagnostic(this.parent, origin, reason === undefined, primary); }
+    catch { this.holdUnknown(); }
+    finally { reason = undefined; }
+  }
+  dispatchVoid(cell: PreflightVoidObservation, failed: boolean, reason: unknown): void {
+    if (this.flags & 64 || (cell.kind === 8 ? this.closedObservation : cell.kind === 2 ? this.cancelObservation : this.unlockObservation) !== cell) { reason = undefined; return; }
+    try { if (failed) this.rejected(cell.kind, reason); else this.observed(cell.kind); }
+    finally { reason = undefined; }
+  }
+  private observeVoid(kind: 2 | 4 | 8, original: unknown, then: unknown): void {
+    let cell: PreflightVoidObservation | undefined = { owner: this, kind, state: 0 };
+    if (kind === 8) this.closedObservation = cell;
+    else if (kind === 2) this.cancelObservation = cell;
+    else this.unlockObservation = cell;
+    try {
+      void Reflect.apply(then as Function, original, [freezeOwnedObserver(preflightVoidFulfilled.bind(cell)), freezeOwnedObserver(preflightVoidRejected.bind(cell))]);
+      cell.state |= 2;
+    } catch (reason) { cell.state |= 4; throw reason; }
+    finally { cell = undefined; original = undefined; then = undefined; }
+  }
+  private severVoid(cell: PreflightVoidObservation | undefined): boolean {
+    if (!cell) return true;
+    if (cell.state !== 3) return false;
+    cell.state = 8; cell.owner = undefined;
+    return true;
+  }
+  private installedFailure(reason: unknown): void {
+    this.holdUnknown();
+    try { this.diagnostic(this.origin(12), reason); } catch { this.holdUnknown(); }
+    finally { reason = undefined; }
+  }
+  ownReader(reader: ReadableStreamBYOBReader | ReadableStreamDefaultReader<Uint8Array> | undefined, body: ReadableStream<Uint8Array>): void {
+    if (reader !== this.source.reader || body !== this.source.body) throw identityFailure("protocol");
+    if (!reader) { this.holdUnknown(); return; }
+    this.pending |= 8; this.closedOrigin = this.origin(4);
+    this.closed = new Promise<void>(resolve => { this.resolveClosed = resolve; });
+    this.installing++;
+    let original: Promise<void> | undefined, started = false;
+    try {
+      if (privateIdentityNativeClosed(reader)) this.native |= 1;
+      original = reader.closed; started = true;
+      const then = original.then; if (then !== privateIdentityNativeThen) this.native &= ~1;
+      this.observeVoid(8, original, then);
+    }
+    catch (error) { if (started) this.installedFailure(error); else { this.diagnostic(this.closedOrigin, error); this.flags |= 128; this.observed(8); } }
+    finally { original = undefined; this.installing--; this.schedule(); }
+  }
+  private observed(kind: number): void {
+    if (!(this.pending & kind) || this.seen & kind) return;
+    this.seen |= kind; this.schedule();
+  }
+  private rejected(kind: number, reason: unknown): void {
+    if (!(this.pending & kind) || this.seen & kind || this.flags & 64) { reason = undefined; return; }
+    this.seen |= kind;
+    try {
+      if (kind === 8) {
+        this.native |= 8;
+        if (!(this.native & 1 && this.nativeOrigin)) {
+          this.diagnostic(this.closedOrigin, reason, false);
+          if (this.native & 1) this.nativeOrigin = this.closedOrigin;
+        }
+      } else if (!(kind === 2 && this.native & 4 && this.native & 8 && this.nativeOrigin)) {
+        this.diagnostic(kind === 2 ? this.cancelOrigin : this.unlockOrigin, reason);
+        this.flags |= 128;
+      }
+    } catch { this.holdUnknown(); }
+    finally { reason = undefined; this.schedule(); }
+  }
+  async read(backing: Uint8Array<ArrayBuffer>): Promise<void> {
+    if (this.flags & 128) throw identityFailure("cleanup");
+    if (this.pending & 1 || this.readObservation || this.flags & 256) throw identityFailure("transport");
+    if (!this.capture) this.capture = newOwnedBytes(16384);
+    this.pending |= 1; this.seen &= ~1; this.readFailure = undefined;
+    this.readReady = new Promise<void>(resolve => { this.resolveRead = resolve; });
+    const nonce = this.readReady;
+    this.readOrigin ||= this.origin(3); this.installing++;
+    let original: Promise<ReadableStreamReadResult<Uint8Array>> | undefined, started = false;
+    let observation: PreflightReadObservation | undefined;
+    try {
+      const reader = this.source.reader as ReadableStreamBYOBReader, method = reader.read;
+      if (this.native & 1 && privateIdentityNativeReaderOperation(reader, method, "read")) this.native |= 2; else this.native &= ~2;
+      original = Reflect.apply(method, reader, [backing]); started = true;
+      const then = original!.then; if (then !== privateIdentityNativeThen) this.native &= ~2;
+      observation = { owner: this, nonce, state: 0 }; this.readObservation = observation;
+      void Reflect.apply(then, original, [freezeOwnedObserver(preflightReadFulfilled.bind(observation)), freezeOwnedObserver(preflightReadRejected.bind(observation))]);
+      observation.state |= 2;
+    } catch (error) {
+      if (observation) observation.state |= 4;
+      this.readFailure = "transport";
+      if (started) this.installedFailure(error);
+      else { this.diagnostic(this.readOrigin, error); this.observed(1); }
+    } finally { observation = undefined; original = undefined; backing = undefined as never; this.installing--; this.schedule(); }
+    await nonce;
+    if (this.readFailure) throw identityFailure(this.readFailure);
+    if (this.signal?.aborted) throw identityFailure("transport");
+  }
+  dispatchRead(cell: PreflightReadObservation, failed: boolean, value: unknown): void {
+    if (cell.owner !== this || cell.state & (1 | 8) || cell.nonce !== this.readReady
+      || !(this.pending & 1) || this.seen & 1 || this.flags & 64) { value = undefined; return; }
+    cell.state |= 1;
+    try {
+      if (failed) this.readRejected(cell.nonce!, value);
+      else this.readAccepted(cell.nonce!, value as ReadableStreamReadResult<Uint8Array>);
+    } catch { this.holdUnknown(); }
+    finally { value = undefined; }
+  }
+  private readAccepted(nonce: Promise<void>, part: ReadableStreamReadResult<Uint8Array>): void {
+    if (this.readReady !== nonce || !(this.pending & 1) || this.seen & 1 || this.flags & 64) { part = undefined as never; return; }
+    this.seen |= 1;
+    try {
+      let value = part.value;
+      if (value) {
+        let proof: ReturnType<typeof inspectOwnedBytes> | undefined;
+        try { if (isLocalOwnedByteView(value)) proof = inspectOwnedBytes(value); } catch { /* The invalid branch still observes DONE. */ }
+        if (!proof || !isLocalOwnedByteBacking(proof.buffer) || proof.backing > 16384) this.readFailure = "limit";
+        else {
+          copyOwnedBytes(this.capture!, value); this.value = ownedByteSubarray(this.capture!, 0, proof.length);
+          this.returnedBacking = ownedBytesFromBacking(proof.buffer);
+        }
+      } else this.value = undefined;
+      value = undefined; this.done = !!part.done;
+    } catch (error) { this.readFailure = "transport"; this.diagnostic(this.readOrigin, error); error = undefined; }
+    finally { part = undefined as never; this.schedule(); }
+  }
+  private readRejected(nonce: Promise<void>, reason: unknown): void {
+    if (this.readReady !== nonce || !(this.pending & 1) || this.seen & 1 || this.flags & 64) { reason = undefined; return; }
+    this.seen |= 1;
+    this.readFailure = "transport";
+    try {
+      if (this.native & 2 && this.nativeOrigin) {
+        const ordinal = Math.floor(this.nativeOrigin / 32), prior = this.parent.sinkOrigins!.get(ordinal);
+        if (typeof prior === "number") this.parent.sinkOrigins!.set(ordinal, prior | 32);
+      } else {
+        this.diagnostic(this.readOrigin, reason);
+        if (this.native & 2) this.nativeOrigin = this.readOrigin;
+      }
+    } finally { reason = undefined; this.schedule(); }
+  }
+  clearRead(): void {
+    this.value = undefined; this.returnedBacking = undefined;
+    let cell = this.readObservation;
+    if (cell && !this.installing && !(this.pending & 1) && !(this.flags & 8) && (cell.state & 7) === 3) {
+      cell.state = 8; cell.owner = undefined; cell.nonce = undefined; this.readObservation = undefined;
+    }
+    cell = undefined;
+    if (!(this.pending & 1)) { this.readReady = undefined; this.resolveRead = undefined; }
+  }
+  private cancel(): void {
+    if (this.first || !this.source.reader) return;
+    this.pending |= 2; this.cancelOrigin = this.origin(5);
+    this.first = new Promise<void>(resolve => { this.resolveCancel = resolve; });
+    this.installing++;
+    let original: Promise<void> | undefined, started = false;
+    try {
+      const reader = this.source.reader, method = reader.cancel;
+      if (this.native & 1 && privateIdentityNativeReaderOperation(reader, method, "cancel")) this.native |= 4; else this.native &= ~4;
+      original = Reflect.apply(method, reader, ["private admission stopped"]); started = true;
+      const then = original!.then; if (then !== privateIdentityNativeThen) this.native &= ~4;
+      this.observeVoid(2, original, then);
+    }
+    catch (error) { if (started) this.installedFailure(error); else this.rejected(2, error); }
+    finally { original = undefined; this.installing--; this.schedule(); }
+  }
+  private unlock(): void {
+    if (this.unlocking || !this.source.reader) return;
+    this.pending |= 4; this.unlockOrigin = this.origin(6);
+    this.unlocking = new Promise<void>(resolve => { this.resolveUnlock = resolve; });
+    this.installing++;
+    let original: unknown, then: unknown, started = false;
+    try {
+      original = this.source.reader.releaseLock(); started = original !== undefined;
+      if (!started) this.observed(4);
+      else {
+        if (original !== null && (typeof original === "object" || typeof original === "function"))
+          then = (original as { then?: unknown }).then;
+        if (typeof then !== "function") this.observed(4);
+        else this.observeVoid(4, original, then);
+      }
+    } catch (error) { if (started) this.installedFailure(error); else this.rejected(4, error); }
+    finally { original = undefined; then = undefined; this.installing--; this.schedule(); }
+  }
+  finishReader(kind: "eof" | "cancel"): Promise<void> {
+    if (this.ending) return this.ending;
+    this.flags |= 256;
+    let resolve!: () => void, reject!: (reason: unknown) => void;
+    this.ending = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+    void this.ending.then(privatePreflightIgnore, privatePreflightIgnore);
+    if (kind === "cancel") this.cancel();
+    void this.finishReaderWork().then(resolve, reject);
+    return this.ending;
+  }
+  private async finishReaderWork(): Promise<void> {
+    await this.readReady; await this.first;
+    this.unlock(); await this.unlocking; await this.closed;
+    if (this.flags & 8 || this.source.body && (!this.source.reader || this.source.body.locked)) {
+      this.holdUnknown(); await new Promise<never>(() => {});
+    }
+    if (!this.severVoid(this.closedObservation) || !this.severVoid(this.cancelObservation) || !this.severVoid(this.unlockObservation)) {
+      this.holdUnknown(); await new Promise<never>(() => {});
+    }
+    this.closedObservation = undefined; this.cancelObservation = undefined; this.unlockObservation = undefined;
+    this.source.reader = undefined; this.source.body = undefined;
+    this.clearRead(); this.capture = undefined; this.first = undefined; this.closed = undefined; this.unlocking = undefined;
+    if (this.flags & 128) throw identityFailure("cleanup");
+  }
+
+  adopt(response: Response): void {
+    if (!(this.flags & 1024) || this.flags & (2 | 64)) { response = undefined as never; return; }
+    this.flags |= 2;
+    try { if (!(response instanceof Response)) { this.flags |= 4; this.holdUnknown(); } else this.response = response; }
+    catch { this.flags |= 4; this.holdUnknown(); }
+    finally { response = undefined as never; this.schedule(); }
+  }
+  failed(undefinedReason: boolean): void {
+    if (!(this.flags & 1024) || this.flags & (2 | 64)) return;
+    this.flags |= 2 | 4; this.source.failure("transport", 1, undefinedReason); this.schedule();
+  }
+  beginAcquisition(): void {
+    if (this.flags !== 1) throw identityFailure("protocol");
+    this.flags |= 1024;
+  }
+  abandonUnstarted(): void {
+    if (this.flags !== 1) throw identityFailure("protocol");
+    this.flags = 64;
+    this.resolveReady(); this.resolveReady = undefined as never;
+    this.resolveRetired(); this.resolveRetired = undefined as never;
+  }
+  installed(uncertain: boolean): void {
+    if (!(this.flags & 1024) || this.flags & 64) throw identityFailure("protocol");
+    if (uncertain) this.holdUnknown(); this.flags &= ~1; this.schedule();
+  }
+  private schedule(): void {
+    if (this.flags & (16 | 64)) return;
+    this.flags |= 16;
+    try { privatePreflightQueue(this.advance.bind(this)); } catch { this.holdUnknown(); }
+  }
+  private advance(): void {
+    this.flags &= ~16;
+    if (this.installing) return;
+    if (this.pending & this.seen & 1) { this.pending &= ~1; this.resolveRead?.(); this.resolveRead = undefined; }
+    if (this.pending & this.seen & 2) { this.pending &= ~2; this.resolveCancel?.(); this.resolveCancel = undefined; }
+    if (this.pending & this.seen & 4) { this.pending &= ~4; this.resolveUnlock?.(); this.resolveUnlock = undefined; }
+    if (this.pending & this.seen & 8) { this.pending &= ~8; this.resolveClosed?.(); this.resolveClosed = undefined; }
+    if (this.flags & (1 | 512) || !(this.flags & 2)) return;
+    if (this.flags & 8) {
+      if (this.response) {
+        this.flags |= 512;
+        try { this.source.own(this.response.body, this.signal); } catch { this.holdUnknown(); }
+        this.response = undefined;
+        void this.source.finish().then(privatePreflightIgnore, privatePreflightIgnore);
+      }
+      return;
+    }
+    this.flags |= 512; this.resolveReady(); this.resolveReady = undefined as never;
+  }
+  acceptParsed(value: unknown): void {
+    if (!this.response?.ok) {
+      const error = (value as { error?: { code?: unknown; message?: unknown } })?.error;
+      if (this.response?.status === 503 && error?.code === "identity_admission_unavailable") {
+        for (const kind of ["limit", "protocol", "transport", "cleanup"] as const)
+          if (error.message === `Identity admission failed (${kind})`) throw identityFailure(kind);
+        if (this.kind === "continuation") throw identityFailure("protocol");
+      }
+      if (this.kind === "continuation") throw new Error("Authority identity query failed");
+      throw identityFailure("transport");
+    }
+    if (this.kind === "continuation") {
+      const closed = closeAdmissionEnvelope<AdmissionResult>(value);
+      admitAdmission(closed.admission);
+      this.result = closed;
+    } else this.result = closePreflightReply(value);
+  }
+  beginConsumption(): void {
+    if (this.flags & 32) throw identityFailure("protocol");
+    this.flags |= 32;
+  }
+  clearAliases(): void {
+    this.source = undefined as never; this.parent = undefined as never; this.permit = undefined as never;
+    this.budget = undefined as never; this.signal = undefined; this.ending = undefined;
+    this.result = undefined; this.destination = undefined; this.ticket = undefined as never;
+  }
+  async consume(): Promise<void> {
+    try {
+      await this.ready;
+      if (!(this.flags & 4) && this.response) {
+        this.source.own(this.response.body, this.signal);
+        admitIdentityHeaders(this.response.headers);
+        if (this.kind !== "continuation" || this.source.body !== null)
+          await this.source.read(this.budget, "complete", this.kind === "continuation" ? "continuation" : "generic", undefined as never);
+      }
+    } catch (error) { this.source.failure(bridgeCategory(error), 32, error === undefined); error = undefined; }
+    finally {
+      try { await this.source.finish(); }
+      finally {
+        this.response = undefined;
+        if (!(this.flags & 8)) { this.flags |= 64; this.resolveRetired(); this.resolveRetired = undefined as never; }
+      }
+    }
+    if (this.signal?.aborted) this.source.failure("transport", 128);
+    this.source.report();
+    if (this.kind === "continuation") {
+      // Parsing/admission precede cleanup; only this closed handoff follows the
+      // physical receipt and its report. No fulfilled graph Promise is created.
+      this.destination!.continuationReply = this.result as AdmissionContinuationEnvelope<AdmissionResult> | undefined;
+      this.destination!.continuationSource = this.budget;
+      this.result = undefined;
+    } else if (!this.result) throw identityFailure("protocol");
+  }
+}
+function privatePreflightIgnore(): void {}
+function privatePreflight(cap: PrivatePreflightReceipt, permit: object): PrivatePreflightState {
+  const state = privatePreflights?.get(cap);
+  if (!state || state.kind !== "preflight" || state.permit !== permit) throw identityFailure("protocol");
+  return state;
+}
+export function createPrivatePreflightReceipt(ticket: PreflightTicket, parent: PrivateIdentityParent, permit: object,
+  budget: IdentitySourceBudget, signal?: AbortSignal): PrivatePreflightReceipt {
+  ticket.enter("source");
+  try {
+    const cap = Object.freeze({}), state = new PrivatePreflightState(ticket, parent, permit, budget, signal);
+    (privatePreflights ??= new WeakMap()).set(cap, state);
+    (privatePreflightReaders ??= new WeakMap()).set(state.source, state);
+    return cap;
+  } catch (error) { ticket.leave("source"); throw error; }
+}
+export function adoptPrivatePreflightResponse(cap: PrivatePreflightReceipt, permit: object, response: Response): void { privatePreflight(cap, permit).adopt(response); }
+export function beginPrivatePreflightAcquisition(cap: PrivatePreflightReceipt, permit: object): void { privatePreflight(cap, permit).beginAcquisition(); }
+export function abandonPrivatePreflightReceipt(cap: PrivatePreflightReceipt, permit: object): void {
+  const state = privatePreflight(cap, permit);
+  state.abandonUnstarted(); state.ticket.leave("source");
+  privatePreflightReaders!.delete(state.source); privatePreflights!.delete(cap); state.clearAliases();
+}
+export function failPrivatePreflightAcquisition(cap: PrivatePreflightReceipt, permit: object, undefinedReason: boolean): void { privatePreflight(cap, permit).failed(undefinedReason); }
+export function completePrivatePreflightInstallation(cap: PrivatePreflightReceipt, permit: object, uncertain: boolean): void { privatePreflight(cap, permit).installed(uncertain); }
+export function consumePrivatePreflightReceipt(cap: PrivatePreflightReceipt, permit: object): Promise<CredentialPreflightReply> {
+  const state = privatePreflight(cap, permit);
+  state.beginConsumption();
+  return finishConsumePrivatePreflightReceipt(cap, state);
+}
+async function finishConsumePrivatePreflightReceipt(cap: PrivatePreflightReceipt, state: PrivatePreflightState): Promise<CredentialPreflightReply> {
+  try { await state.consume(); return state.result as CredentialPreflightReply; }
+  finally {
+    await state.retired;
+    state.ticket.leave("source");
+    privatePreflightReaders!.delete(state.source); privatePreflights!.delete(cap); state.clearAliases();
+  }
+}
+
+function privateContinuation(cap: PrivateContinuationReceipt, permit: object): PrivatePreflightState {
+  const state = privatePreflights?.get(cap);
+  if (!state || state.kind !== "continuation" || state.permit !== permit) throw identityFailure("protocol");
+  return state;
+}
+export function createPrivateContinuationReceipt(ticket: PreflightTicket, parent: PrivateIdentityParent, permit: object,
+  destination: PrivateContinuationDestination, budget: IdentitySourceBudget, signal?: AbortSignal): PrivateContinuationReceipt {
+  ticket.enter("source");
+  try {
+    const cap = Object.freeze({}), state = new PrivatePreflightState(ticket, parent, permit, budget, signal, "continuation", destination);
+    (privatePreflights ??= new WeakMap()).set(cap, state);
+    (privatePreflightReaders ??= new WeakMap()).set(state.source, state);
+    return cap;
+  } catch (error) { ticket.leave("source"); throw error; }
+}
+export function adoptPrivateContinuationResponse(cap: PrivateContinuationReceipt, permit: object, response: Response): void { privateContinuation(cap, permit).adopt(response); }
+export function beginPrivateContinuationAcquisition(cap: PrivateContinuationReceipt, permit: object): void { privateContinuation(cap, permit).beginAcquisition(); }
+export function failPrivateContinuationAcquisition(cap: PrivateContinuationReceipt, permit: object, undefinedReason: boolean): void { privateContinuation(cap, permit).failed(undefinedReason); }
+export function completePrivateContinuationInstallation(cap: PrivateContinuationReceipt, permit: object, uncertain: boolean): void { privateContinuation(cap, permit).installed(uncertain); }
+export function abandonPrivateContinuationReceipt(cap: PrivateContinuationReceipt, permit: object): void {
+  const state = privateContinuation(cap, permit);
+  state.abandonUnstarted(); state.ticket.leave("source");
+  privatePreflightReaders!.delete(state.source); privatePreflights!.delete(cap); state.clearAliases();
+}
+export function consumePrivateContinuationReceipt(cap: PrivateContinuationReceipt, permit: object): Promise<void> {
+  const state = privateContinuation(cap, permit);
+  state.beginConsumption();
+  return finishConsumePrivateContinuationReceipt(cap, state);
+}
+async function finishConsumePrivateContinuationReceipt(cap: PrivateContinuationReceipt, state: PrivatePreflightState): Promise<void> {
+  try { await state.consume(); }
+  finally {
+    await state.retired;
+    state.ticket.leave("source");
+    privatePreflightReaders!.delete(state.source); privatePreflights!.delete(cap); state.clearAliases();
+  }
 }

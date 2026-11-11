@@ -1,3 +1,5 @@
+import type { OwnedAcceptedUsage, CodecReader, GenericUsageReader } from "./proxy-response.ts";
+import { newOwnedBytes, ownedByteLength, ownedByteSubarray, copyOwnedBytes, newOwnedDecoder, decodeOwnedBytes } from "./proxy-completion.ts";
 import { googleField, googleInt32, googleServiceTier } from "./google-protocol.ts";
 import { anthropicModifiers, type AnthropicModifiers } from "./anthropic-pricing.ts";
 
@@ -163,14 +165,7 @@ export function createSseUsageInspector(revokeRejection?: () => void, acceptJson
     const lines = frame.split("\n");
     const data = lines.filter(line => line.startsWith("data:")).map(line => line.slice(5).trim()).join("\n");
     const error = lines.some(line => /^event:\s*error\s*$/.test(line));
-    if (error) {
-      try { return { kind: "error", value: JSON.parse(data) }; }
-      catch { return { kind: "error" }; }
-    }
-    if (!data) return null;
-    if (data === "[DONE]") return { kind: "done" };
-    try { return { kind: "data", value: JSON.parse(data) }; }
-    catch { return { kind: "invalid" }; }
+    return parseSseData(data, error);
   }
   const frames = createSseFrames(frame => {
     const next = evidence(frame);
@@ -189,6 +184,30 @@ export function createSseUsageInspector(revokeRejection?: () => void, acceptJson
       return accumulator.result(ended, frames.overflowed());
     },
   };
+}
+
+// One native grammar/value constructor for ordinary and private SSE, and the
+// private JSON body. Admission is deliberately outside its syntax catch.
+export function parseSseData(data: string, error: boolean, owned?: OwnedAcceptedUsage<CodecReader | GenericUsageReader>): SseUsageEvidence | null {
+  if (!error && !data) return null;
+  if (!error && data === "[DONE]") return { kind: "done" };
+  owned?.admitJson(data);
+  if (error) {
+    try { return { kind: "error", value: owned ? ownedUsageJsonParse(data) : JSON.parse(data) }; }
+    catch { return { kind: "error" }; }
+  }
+  try { return { kind: "data", value: owned ? ownedUsageJsonParse(data) : JSON.parse(data) }; }
+  catch { return { kind: "invalid" }; }
+}
+
+// The set is private and populated only after genuine consumer validation.
+// Ordinary accumulator fields, arbitrary-JS inputs and returned layout stay
+// unchanged. Only the private retained message summary projects stop_reason.
+// The existing private consumer registrations stay canonical. Only the fixed
+// private initialize/retirement commands mutate these fields after admission.
+export class OwnedUsageRegistrations {
+  static privateUsageAccumulators: WeakSet<ReturnType<typeof createSseUsageAccumulator>["accept"]> | undefined;
+  static ownedFrameConsumers: WeakMap<(frame: string | null) => void, OwnedAcceptedUsage<CodecReader | GenericUsageReader>> | undefined;
 }
 
 // Both bounded frame parsing and the Responses scalar projection feed one
@@ -243,13 +262,16 @@ export function createSseUsageAccumulator(revokeRejection?: () => void, context?
     if (root.type === "message_start") {
       protocol = "message";
       const initial = record(root.message);
-      message = { type: "message", stop_reason: initial?.stop_reason, content: Array.isArray(initial?.content) && initial.content.length === 0 ? [] : undefined };
+      message = { type: "message", stop_reason: OwnedUsageRegistrations.privateUsageAccumulators?.has(accept)
+        ? initial?.stop_reason === "refusal" ? "refusal" : undefined : initial?.stop_reason,
+        content: Array.isArray(initial?.content) && initial.content.length === 0 ? [] : undefined };
       messageUsage = messageCounters(usageRecord(root));
       messageDeltaSeen = false;
     } else if (root.type === "message_delta") {
       if (!messageUsage) return;
       const messageDelta = record(root.delta);
-      if (message && messageDelta && "stop_reason" in messageDelta) message.stop_reason = messageDelta.stop_reason;
+      if (message && messageDelta && "stop_reason" in messageDelta) message.stop_reason = OwnedUsageRegistrations.privateUsageAccumulators?.has(accept)
+        ? messageDelta.stop_reason === "refusal" ? "refusal" : undefined : messageDelta.stop_reason;
       const delta = messageCounters(usageRecord(root));
       messageDeltaSeen = delta != null && pickNumber(delta, "output_tokens") != null;
       if (delta) {
@@ -290,34 +312,61 @@ export function createSseUsageAccumulator(revokeRejection?: () => void, context?
   };
 }
 
+export const ownedUsageJsonParse = JSON.parse;
 export function createSseFrames(consume: (frame: string | null) => void, fatalUtf8 = false) {
-  let buffer = new Uint8Array(8192), length = 0, lineLength = 0, overflow = false, skipLf = false;
-  const decoder = new TextDecoder("utf-8", { fatal: fatalUtf8 });
-  const decode = () => { try { return decoder.decode(buffer.subarray(0, length)); } catch { return null; } };
+  OwnedUsageRegistrations.ownedFrameConsumers?.get(consume)?.resize(0, 8192);
+  let buffer = OwnedUsageRegistrations.ownedFrameConsumers?.has(consume) ? newOwnedBytes(8192) : new Uint8Array(8192), length = 0, lineLength = 0, overflow = false, skipLf = false;
+  OwnedUsageRegistrations.ownedFrameConsumers?.get(consume)?.resized(8192, 0);
+  const decoder = OwnedUsageRegistrations.ownedFrameConsumers?.has(consume) ? newOwnedDecoder(fatalUtf8) : new TextDecoder("utf-8", { fatal: fatalUtf8 });
+  const decode = () => {
+    OwnedUsageRegistrations.ownedFrameConsumers?.get(consume)?.reserve(2 * length);
+    let text: string | null;
+    try { text = OwnedUsageRegistrations.ownedFrameConsumers?.has(consume) ? decodeOwnedBytes(decoder, ownedByteSubarray(buffer, 0, length)) : decoder.decode(buffer.subarray(0, length)); } catch { text = null; }
+    const owned = OwnedUsageRegistrations.ownedFrameConsumers?.get(consume);
+    if (owned && owned.flags & 2) {
+      owned.resize(ownedByteLength(buffer), 8192); buffer = newOwnedBytes(8192);
+      owned.resized(8192, text === null ? 0 : 2 * text.length);
+    }
+    return text;
+  };
   function append(bytes: Uint8Array) {
     if (overflow) return;
-    if (length + bytes.length > usageInspectionLimit) { overflow = true; length = 0; return; }
-    if (length + bytes.length > buffer.length) {
-      const next = new Uint8Array(Math.min(usageInspectionLimit, Math.max(buffer.length * 2, length + bytes.length)));
-      next.set(buffer.subarray(0, length)); buffer = next;
+    if (length + (OwnedUsageRegistrations.ownedFrameConsumers?.has(consume) ? ownedByteLength(bytes) : bytes.length) > usageInspectionLimit) { overflow = true; length = 0; return; }
+    if (length + (OwnedUsageRegistrations.ownedFrameConsumers?.has(consume) ? ownedByteLength(bytes) : bytes.length) > (OwnedUsageRegistrations.ownedFrameConsumers?.has(consume) ? ownedByteLength(buffer) : buffer.length)) {
+      const owned = OwnedUsageRegistrations.ownedFrameConsumers?.get(consume), temporary = owned?.temporaryBytes ?? 0;
+      owned?.resize(ownedByteLength(buffer), Math.min(usageInspectionLimit, Math.max(ownedByteLength(buffer) * 2, length + ownedByteLength(bytes))));
+      const capacity = Math.min(usageInspectionLimit, Math.max((owned ? ownedByteLength(buffer) : buffer.length) * 2, length + (owned ? ownedByteLength(bytes) : bytes.length)));
+      const next = owned ? newOwnedBytes(capacity) : new Uint8Array(capacity);
+      if (owned) copyOwnedBytes(next, ownedByteSubarray(buffer, 0, length)); else next.set(buffer.subarray(0, length)); buffer = next;
+      owned?.resized(ownedByteLength(buffer), temporary);
     }
-    buffer.set(bytes, length); length += bytes.length;
+    if (OwnedUsageRegistrations.ownedFrameConsumers?.has(consume)) copyOwnedBytes(buffer, bytes, length); else buffer.set(bytes, length);
+    length += OwnedUsageRegistrations.ownedFrameConsumers?.has(consume) ? ownedByteLength(bytes) : bytes.length;
   }
   return {
     overflowed: () => overflow,
     pending: () => overflow ? null : decode(),
     push(bytes: Uint8Array) {
       let start = 0;
-      for (let index = 0; index < bytes.length; index++) {
+      for (let index = 0; index < (OwnedUsageRegistrations.ownedFrameConsumers?.has(consume) ? ownedByteLength(bytes) : bytes.length); index++) {
         const byte = bytes[index];
         if (skipLf) { skipLf = false; if (byte === 10) { start = index + 1; continue; } }
         if (byte !== 10 && byte !== 13) continue;
-        append(bytes.subarray(start, index)); lineLength += index - start;
-        if (lineLength === 0) { consume(overflow ? null : decode()); length = 0; overflow = false; }
+        append(OwnedUsageRegistrations.ownedFrameConsumers?.has(consume) ? ownedByteSubarray(bytes, start, index) : bytes.subarray(start, index)); lineLength += index - start;
+        if (lineLength === 0) {
+          const owned = OwnedUsageRegistrations.ownedFrameConsumers?.get(consume);
+          if (owned) {
+            owned.flags |= 2;
+            try { owned.stageFrame(overflow ? null : decode()); consume(null); }
+            finally { owned.flags &= ~2; }
+          } else consume(overflow ? null : decode());
+          length = 0; overflow = false;
+        }
+        else if (OwnedUsageRegistrations.ownedFrameConsumers?.has(consume)) { const newline = newOwnedBytes(1); newline[0] = 10; append(newline); }
         else append(new Uint8Array([10]));
         lineLength = 0; skipLf = byte === 13; start = index + 1;
       }
-      append(bytes.subarray(start)); lineLength += bytes.length - start;
+      append(OwnedUsageRegistrations.ownedFrameConsumers?.has(consume) ? ownedByteSubarray(bytes, start) : bytes.subarray(start)); lineLength += (OwnedUsageRegistrations.ownedFrameConsumers?.has(consume) ? ownedByteLength(bytes) : bytes.length) - start;
     },
   };
 }

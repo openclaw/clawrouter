@@ -57,7 +57,7 @@ export function accessBase64Bytes(value: string, maximum: number): Uint8Array<Ar
 
 type Profile = "identity_record" | "identity_complete" | "header" | "payload" | "jwks" | "evidence" | "authority_user" | "user_record" | "user_query" | "user_init" | "assignment_source" | "policy_collection" | "policy_principals" | "policy_bindings" | "policy_ids" | "policy_seeds" | "policy_binding_reply" | "policy_binding_record" | "policy_reply";
 export const authorityUserJsonLimits = Object.freeze({ wire: 1048576, text: 1048576 });
-export type IdentityEnvelope = "identity" | "colo" | "grant" | "generic" | "continuation";
+export type IdentityEnvelope = "identity" | "colo" | "grant" | "generic" | "continuation" | "authorization-snapshot";
 export type UserSourceCounts = { values: number; containers: number; members: number; entries: number; units: number };
 const userSourceProfile = { wire: 2097152, depth: 16, values: 16384, containers: 4096, members: 8192, entries: 8192, units: 2097152, string: 2097152 } as const;
 const assignmentSourceProfile = { wire: 2097152, depth: 16, values: 65536, containers: 16384, members: 32768, entries: 32768, units: 2097152, string: 1048576 } as const;
@@ -166,6 +166,8 @@ export function parseAccessJson(text: string, profile: Profile, source?: UserSou
           space(); const child = string(user ? 1024 : 64, true); space(); if (text[at++] !== ":") invalid();
           const identityNext = position === "identity-continuation" && child === "admission" ? "identity-root"
             : position === "identity-colo" && child === "value" ? "identity-root"
+            : position === "identity-authorization" && child === "credential" ? "identity-record"
+            : position === "identity-authorization" && child === "policy" ? "identity-policy"
             : position === "identity-root" && (child === "credential" || child === "policy" || child === "owner") ? "identity-" + child
             : position === "identity-credential" && child === "credential" || position === "identity-policy" && child === "policy" || position === "identity-owner" && child === "record"
               || (position === "identity-grant" || position === "identity-selected" || position === "identity-candidate") && child === "grant" || position === "identity-grant" && child === "legacy" ? "identity-record"
@@ -225,7 +227,7 @@ export function parseAccessJson(text: string, profile: Profile, source?: UserSou
     }
     if (jwkRow && utf8Length(text, start, at) > accessLimits.jwk) limit();
   };
-  const rootPosition = identity && identityEnvelope ? identityEnvelope === "continuation" ? "identity-continuation" : identityEnvelope === "colo" ? "identity-colo" : identityEnvelope === "grant" ? "identity-grant" : identityEnvelope === "identity" ? "identity-root" : "" : profile === "policy_principals" ? "principals-query" : profile === "policy_bindings" ? "seeds" : profile === "policy_ids" ? "policies-query"
+  const rootPosition = identity && identityEnvelope ? identityEnvelope === "continuation" ? "identity-continuation" : identityEnvelope === "authorization-snapshot" ? "identity-authorization" : identityEnvelope === "colo" ? "identity-colo" : identityEnvelope === "grant" ? "identity-grant" : identityEnvelope === "identity" ? "identity-root" : "" : profile === "policy_principals" ? "principals-query" : profile === "policy_bindings" ? "seeds" : profile === "policy_ids" ? "policies-query"
     : profile === "policy_seeds" ? "policy-init" : profile === "policy_binding_reply" ? "binding-reply" : profile === "policy_binding_record" ? "binding" : profile === "policy_reply" ? "policy-reply" : "";
   try {
     value(0, "", false, false, false, false, false, rootPosition); space(); if (at !== text.length) invalid();

@@ -1,3 +1,5 @@
+import { ownedHttpRequestReceiver } from "./proxy-completion.ts";
+
 import { admitAdmission, admitIdentity, admittedEffectivePolicy, identityFailure, identityPlan } from "./identity-admission.ts";
 import { videoControlVersion, videoUnavailable, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { authorityCall } from "./authority.ts";
@@ -19,12 +21,61 @@ import type { AccessPolicyEntry, AuthorizedIdentity, Env, ProxyCredential } from
 import type { AdmissionProvider, AdmissionResult } from "./authority.ts";
 import { resolveAdmission } from "./admission-cache.ts";
 import { errorResponse, HttpError, parseProxyKey, safeEqual, sha256Hex } from "./utils.ts";
+import type { OwnedHttpRequest } from "./http-identity-owner.ts";
+import { resolveOwnedHttpAuthentication, matchesOwnedHttpControlVerification } from "./credential-preflight.ts";
 
 export interface ProxyKeyVerification { readonly kind: "proxy_key"; readonly credentialId: string; readonly principalId: string | null; readonly secretSha256: string; readonly expiresAt?: string | null }
 const verifiedKeys = new WeakMap<AuthorizedIdentity, ProxyKeyVerification>();
 // Scoped to this authenticated operation. Cross-request reuse happens only in
 // admission-cache.ts, bounded by the hot-cache max age.
 const admissions = new WeakMap<AuthorizedIdentity, AdmissionResult>();
+let ownedControlVerifications: WeakMap<OwnedHttpRequest, AuthorizedIdentity[]> | undefined;
+let ownedControlVerificationCount = 0;
+
+// Fixed receiver from the genuine generation owner. Only scalars cross this
+// seam; no caller-supplied proof/identity graph or callback acquires authority.
+// Existing provider controls keep their current-verification and native I/O.
+export function acceptOwnedHttpControlVerification(cap: OwnedHttpRequest, identity: AuthorizedIdentity,
+  kid: string, principalId: string | null, digest: string, expiresAt: string | null | undefined): void {
+  if (!matchesOwnedHttpControlVerification(cap, identity, kid, principalId, digest, expiresAt)) throw identityFailure("protocol");
+  const existing = ownedControlVerifications?.get(cap);
+  if (existing?.includes(identity)) return;
+  growOwnedHttpRequest(cap, 2048 + 2 * (kid.length + (principalId?.length ?? 0) + digest.length + (expiresAt?.length ?? 0)));
+  const proof: ProxyKeyVerification = Object.freeze({ kind: "proxy_key", credentialId: kid, principalId, secretSha256: digest, expiresAt });
+  if (!ownedControlVerifications) ownedControlVerifications = new WeakMap();
+  if (existing) existing.push(identity);
+  else { ownedControlVerifications.set(cap, [identity]); ownedControlVerificationCount++; }
+  verifiedKeys.set(identity, proof);
+}
+
+export function retireOwnedHttpControlVerification(cap: OwnedHttpRequest): void {
+  const identities = ownedControlVerifications?.get(cap);
+  if (!identities) return;
+  for (const identity of identities) verifiedKeys.delete(identity);
+  identities.length = 0; ownedControlVerifications!.delete(cap);
+  if (!--ownedControlVerificationCount) ownedControlVerifications = undefined;
+}
+
+/** Private HTTP entry only; no identity or admission graph leaves its owner. */
+export function authenticateOwnedHttp(cap: OwnedHttpRequest, request: Request, env: Env,
+  providers: AdmissionProvider[] = [], selection?: AdmissionSelection, sessionId?: string | null,
+  freshness: "cached" | "authoritative" = "cached"): Promise<Response | null> {
+  checkOwnedHttpRequest(cap, request, env);
+  // Four examined RAW headers (4096 units each), replacement/parser strings,
+  // ASCII hash bytes and two digest products. Native header allocation is not
+  // included. The session input is separately admitted before prefix/encoding.
+  growOwnedHttpRequest(cap, 131072 + (sessionId ? 8 * sessionId.length + 256 : 0));
+  return ownedHttpCompletion(cap).start(async () => {
+    const { parsed } = proxyKeyIngress(request.headers);
+    if (!parsed) return ownedErrorResponse(cap, "invalid_proxy_key", "a valid ClawRouter proxy key is required", 401);
+    if (parsed.secret.length > 4096) throw identityFailure("limit");
+    const digest = await sha256Hex(parsed.secret);
+    const sessionHash = sessionId ? await sha256Hex(`session:${sessionId}`) : undefined;
+    const required = { providers, allConnections: false, snapshot: selection ? "select" as const : undefined,
+      selection: selection ? { ...selection, sessionHash } : undefined };
+    return resolveOwnedHttpAuthentication(cap, request, env, parsed.kid, digest, required, freshness);
+  });
+}
 const coverIdentities = new WeakMap<MiniMaxMusicCoverControl, AuthorizedIdentity>();
 export function musicCoverVerification(owner: MiniMaxMusicCoverControl): AuthorizedIdentity | undefined { return coverIdentities.get(owner); }
 export function retireMusicCoverVerification(owner: MiniMaxMusicCoverControl): void {
@@ -205,4 +256,28 @@ function proxyKeyIngress(headers: Headers) {
     if (raw.includes("clawrouter-") || raw.includes("ocpk_")) intent = true;
   }
   return { parsed: null, intent };
+}
+
+function ownedErrorResponse(cap: Parameters<typeof import("./http-identity-owner.ts").ownedErrorResponse>[0], code: Parameters<typeof import("./http-identity-owner.ts").ownedErrorResponse>[1], message: Parameters<typeof import("./http-identity-owner.ts").ownedErrorResponse>[2], status: Parameters<typeof import("./http-identity-owner.ts").ownedErrorResponse>[3], retryAfter?: Parameters<typeof import("./http-identity-owner.ts").ownedErrorResponse>[4]): ReturnType<typeof import("./http-identity-owner.ts").ownedErrorResponse> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.ownedErrorResponse(cap, code, message, status, retryAfter);
+}
+
+function checkOwnedHttpRequest(cap: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpRequest>[0], request: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpRequest>[1], env: Parameters<typeof import("./http-identity-owner.ts").checkOwnedHttpRequest>[2]): ReturnType<typeof import("./http-identity-owner.ts").checkOwnedHttpRequest> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.checkOwnedHttpRequest(cap, request, env);
+}
+
+function growOwnedHttpRequest(cap: Parameters<typeof import("./http-identity-owner.ts").growOwnedHttpRequest>[0], bytes: Parameters<typeof import("./http-identity-owner.ts").growOwnedHttpRequest>[1]): ReturnType<typeof import("./http-identity-owner.ts").growOwnedHttpRequest> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.growOwnedHttpRequest(cap, bytes);
+}
+
+function ownedHttpCompletion(cap: Parameters<typeof import("./http-identity-owner.ts").ownedHttpCompletion>[0]): ReturnType<typeof import("./http-identity-owner.ts").ownedHttpCompletion> {
+  const receiver = ownedHttpRequestReceiver(cap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.ownedHttpCompletion(cap);
 }

@@ -1,3 +1,4 @@
+import { identityFailure } from "./identity-admission.ts";
 import { searchJsonBytes } from "./minimax-search-operation.ts";
 import { musicCoverControlHeader, musicCoverControlVersion, musicCoverUnavailable, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
 import type { BudgetReservationPlan } from "./accounting.ts";
@@ -10,6 +11,8 @@ import { HttpError } from "./utils.ts";
 import { admitSoftStatusRequest } from "./soft-budget-json.ts";
 import { accountingAdmissionFailure, accountingIdentity, accountingNumberCapacity, admitAccountingJson, isAccountingAdmissionFailure } from "./json-body.ts";
 import { readSoftStatus } from "./soft-budget-response.ts";
+import { prepareOwnedHttpSoftStatus, startOwnedHttpSoftStatus, bindOwnedHttpSoftStatus, ownedHttpSoftStatusStartFailure, finishOwnedHttpSoftStatus, checkOwnedHttpSoftStatusRetirement, type OwnedHttpRequest, type OwnedStatusReader } from "./http-identity-owner.ts";
+import type { HttpOperation } from "./http-operation.ts";
 
 // Soft: ledger status runs concurrently with the upstream request and settlement
 // is asynchronous. Stored policies without a mode keep reserve (hard caps); new
@@ -124,6 +127,153 @@ function observeSoftBudget(namespace: Env["BUDGET_LEDGER"], config: ReturnType<t
     close() { delivered = true; },
   };
 }
+
+// Closed private entry. Ordinary observers and readSoftStatus remain unchanged.
+class OwnedSoftBudget {
+  private config?: ReturnType<typeof hotCacheConfig>;
+  private operation?: HttpOperation;
+  private failure?: unknown;
+  protected statusBits = 0;
+  private get hasFailure(): boolean { return !!(this.statusBits & 1); }
+  private set hasFailure(value: boolean) { this.statusBits = value ? this.statusBits | 1 : this.statusBits & ~1; }
+  private get delivered(): boolean { return !!(this.statusBits & 2); }
+  private set delivered(value: boolean) { this.statusBits = value ? this.statusBits | 2 : this.statusBits & ~2; }
+  private get complete(): boolean { return !!(this.statusBits & 4); }
+  private set complete(value: boolean) { this.statusBits = value ? this.statusBits | 4 : this.statusBits & ~4; }
+  private get started(): boolean { return !!(this.statusBits & 8); }
+  private set started(value: boolean) { this.statusBits = value ? this.statusBits | 8 : this.statusBits & ~8; }
+  private get received(): number { return this.statusBits >>> 7 & 15; }
+  private set received(value: number) { this.statusBits = this.statusBits & ~(15 << 7) | (value & 15) << 7; }
+  private get remaining(): number { return this.statusBits >>> 11 & 7; }
+  private set remaining(value: number) { this.statusBits = this.statusBits & ~(7 << 11) | (value & 7) << 11; }
+  private denied?: HttpError;
+  private resolve!: () => void;
+  private reject!: (reason: unknown) => void;
+  readonly check = new Promise<void>((yes, no) => { this.resolve = yes; this.reject = no; });
+  declare readonly http: OwnedHttpRequest;
+  declare readonly prepared: PreparedSoftBudget;
+  constructor(http: OwnedHttpRequest, prepared: PreparedSoftBudget) {
+    this.http = http; this.prepared = prepared;
+    this.remaining = prepared.descriptors.length;
+    if (ownedSoftBudgets?.has(http)) throw new TypeError("owned soft budget already prepared");
+    (ownedSoftBudgets ??= new WeakMap()).set(http, this);
+  }
+  get denial(): HttpError | undefined { return this.denied; }
+  start(env: Env, operation: HttpOperation): void {
+    if (this.started) throw new TypeError("owned soft budget already started");
+    bindOwnedHttpSoftStatus(this.http, env, this.prepared, operation);
+    this.started = true;
+    // Keep the original namespace/config lookup point after provider dispatch.
+    try { this.config = hotCacheConfig(env); }
+    catch (reason) {
+      const failure = ownedHttpSoftStatusStartFailure(this.http, env, this.prepared, operation, reason);
+      reason = undefined; throw failure;
+    }
+    this.operation = operation;
+    void this.check.then(() => undefined, () => undefined);
+    startOwnedHttpSoftStatus(this.http);
+    if (!this.remaining) { this.complete = true; this.resolve(); }
+  }
+  receive(index: number, succeeded: boolean, spent: number | null): void {
+    if (!this.started || !Number.isInteger(index) || index < 0 || index >= this.prepared.descriptors.length || this.received & 1 << index)
+      throw new TypeError("owned soft budget result is not current");
+    this.received |= 1 << index;
+    try {
+      if (succeeded) {
+        const leg = this.prepared.descriptors[index].leg;
+        if (leg.request.limitMicros !== 0 && (spent === null || !Number.isSafeInteger(spent) || spent < leg.request.limitMicros)) exhausted.delete(legId(leg));
+        else {
+          exhausted.set(legId(leg), true, this.config!, hotCacheNow() + this.config!.freshMs);
+          if (!this.delivered && !this.denied) {
+            this.denied = softDenial(leg, { providerId: this.prepared.providerId });
+            this.operation!.stop("upstream", this.denied);
+          }
+        }
+      }
+    } catch (error) {
+      if (isAccountingAdmissionFailure(error)) { this.failure = error; this.hasFailure = true; }
+      // The ordinary observer swallows other cache/denial observation failures.
+    }
+    if (!--this.remaining) {
+      this.complete = true;
+      if (this.hasFailure) this.reject(this.failure); else this.resolve();
+    }
+  }
+  async beforeDelivery(): Promise<number> {
+    if (this.hasFailure) throw this.failure;
+    if (this.complete || this.denied) { this.delivered = true; return 0; }
+    const start = performance.now(); let timer: ReturnType<typeof setTimeout> | undefined;
+    try { await Promise.race([this.check, new Promise<void>(resolve => { timer = setTimeout(resolve, softBudgetGraceMs); })]); }
+    finally { clearTimeout(timer); }
+    this.delivered = true; return performance.now() - start;
+  }
+  close(): void { this.delivered = true; }
+}
+export class OwnedStatusController extends OwnedSoftBudget {
+  namespace?: Env["BUDGET_LEDGER"];
+  declare startOrigin: number | undefined;
+  declare startCleanupOrigin: number | undefined;
+  get bound(): boolean { return !!(this.statusBits & 16); }
+  set bound(value: boolean) { this.statusBits = value ? this.statusBits | 16 : this.statusBits & ~16; }
+  get readersStarted(): boolean { return !!(this.statusBits & 32); }
+  set readersStarted(value: boolean) { this.statusBits = value ? this.statusBits | 32 : this.statusBits & ~32; }
+  get settled(): boolean { return !!(this.statusBits & 64); }
+  set settled(value: boolean) { this.statusBits = value ? this.statusBits | 64 : this.statusBits & ~64; }
+  private get physicalRemaining(): number { return this.statusBits >>> 14 & 7; }
+  private set physicalRemaining(value: number) { this.statusBits = this.statusBits & ~(7 << 14) | (value & 7) << 14; }
+  private resolveRetired!: () => void;
+  readonly retired = new Promise<void>(done => { this.resolveRetired = done; });
+  readonly readers: (OwnedStatusReader | undefined)[] = [];
+  constructor(cap: OwnedHttpRequest, plan: PreparedSoftBudget, startOrigin: number, startCleanupOrigin: number) {
+    super(cap, plan); this.startOrigin = startOrigin; this.startCleanupOrigin = startCleanupOrigin;
+  }
+  startReaders(): void {
+    if (this.readersStarted || this.settled || !this.bound) throw identityFailure("protocol");
+    this.readersStarted = true; this.physicalRemaining = this.prepared.descriptors.length;
+    for (let index = 0; index < this.prepared.descriptors.length; index++) {
+      if (this.prepared.descriptors[index].leg.request.limitMicros === 0) { this.decide(index, true, null); this.readers[index] = undefined; this.completeReader(); continue; }
+      this.readers[index]!.start();
+    }
+    if (!this.physicalRemaining) this.finish();
+  }
+  decide(index: number, succeeded: boolean, spent: number | null): void { this.receive(index, succeeded, spent); }
+  retire(index: number, reader: OwnedStatusReader): void {
+    if (this.readers[index] !== reader) throw identityFailure("protocol");
+    this.readers[index] = undefined; this.completeReader();
+  }
+  private completeReader(): void { if (!--this.physicalRemaining) this.finish(); }
+  private finish(): void {
+    if (this.settled) return;
+    this.namespace = undefined; this.settled = true;
+    finishOwnedHttpSoftStatus(this.http, this);
+    this.resolveRetired();
+  }
+  abandonUnstarted(): void {
+    if (this.readersStarted) return;
+    this.readers.length = 0; this.finish();
+  }
+}
+
+let ownedSoftBudgets: WeakMap<OwnedHttpRequest, OwnedSoftBudget> | undefined;
+export function prepareOwnedHttpSoftBudget(http: OwnedHttpRequest, env: Env, prepared: PreparedSoftBudget): void {
+  if (ownedSoftBudgets?.has(http)) throw new TypeError("owned soft budget already prepared");
+  prepareOwnedHttpSoftStatus(http, env, prepared);
+}
+export function startOwnedHttpSoftBudget(http: OwnedHttpRequest, env: Env, prepared: PreparedSoftBudget, operation: HttpOperation): void {
+  const owner = ownedSoftBudgets?.get(http);
+  if (!owner || owner.prepared !== prepared) throw new TypeError("owned soft budget plan is not registered");
+  owner.start(env, operation);
+}
+function ownedSoftBudget(http: OwnedHttpRequest): OwnedSoftBudget {
+  const owner = ownedSoftBudgets?.get(http);
+  if (!owner) throw identityFailure("protocol");
+  return owner;
+}
+export function ownedHttpSoftBudgetCheck(http: OwnedHttpRequest): Promise<void> { return ownedSoftBudget(http).check; }
+export function beforeOwnedHttpSoftDelivery(http: OwnedHttpRequest): Promise<number> { return ownedSoftBudget(http).beforeDelivery(); }
+export function ownedHttpSoftDenial(http: OwnedHttpRequest): HttpError | undefined { return ownedSoftBudget(http).denial; }
+export function closeOwnedHttpSoftBudget(http: OwnedHttpRequest): void { ownedSoftBudget(http).close(); }
+export function retireOwnedHttpSoftBudget(http: OwnedHttpRequest): void { checkOwnedHttpSoftStatusRetirement(http); ownedSoftBudgets?.delete(http); }
 
 // Cover completes and physically retires every observation BEFORE its final
 // authority tail. No grace-period, cache or post-dispatch background work.

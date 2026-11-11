@@ -2,16 +2,44 @@ import { jsonBodyBytes, jsonBodyStream, mediaJsonBody } from "./json-body.ts";
 import { prepareNativeRawDispatch } from "./native-raw-input.ts";
 import { inlineMusicInput } from "./openrouter-music-runtime.ts";
 import { applyProxyQuery, applyStreamingQuery, type ProxyQuery } from "./proxy-query.ts";
-import { applyTransportHeaders, transformTransportBody } from "./provider-auth.ts";
+import { applyTransportHeaders, transformTransportBody, transformOwnedTransportBody } from "./provider-auth.ts";
 import { resolveTemplate, PreparationAdmission, preparationHeader } from "./provider-templates.ts";
 import { copyRequestHeaders, upstreamPath, type UpstreamAuth } from "./providers.ts";
 import type { ProxySelection } from "./proxy-selection.ts";
 import type { Env } from "./types.ts";
 import { HttpError, maxJsonBodyBytes } from "./utils.ts";
+import { abandonOwnedHttpUpload, adoptOwnedHttpUploadSource, checkOwnedHttpUpload, finishOwnedHttpUploadPreparation, pipeOwnedHttpUpload, type OwnedHttpUpload } from "./http-identity-owner.ts";
+import { acceptOwnedHttpPreparation, prepareOwnedHttpUploadJson } from "./proxy.ts";
 
 export function prepareUpstreamRequest(
   request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery,
   upstream: UpstreamAuth, transport: "http" | "websocket", owner?: PreparationAdmission,
+) {
+  return prepareUpstreamFields(request, env, selection, queryInput, upstream, transport, owner);
+}
+
+// The only receiver is the named private attempt command in proxy.ts. Neither
+// an async graph result nor a caller-supplied graph callback crosses this seam.
+export function prepareOwnedUpstreamRequest(
+  upload: OwnedHttpUpload, request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery,
+  upstream: UpstreamAuth, owner: PreparationAdmission,
+): void {
+  checkOwnedHttpUpload(upload);
+  try {
+    const prepared = prepareUpstreamFields(request, env, selection, queryInput, upstream, "http", owner, upload);
+    acceptOwnedHttpPreparation(upload, prepared);
+    finishOwnedHttpUploadPreparation(upload);
+  } catch (error) {
+    // Initiate cancellation before leaving preparation. The encompassing owner
+    // joins the ORIGINAL pipe even when a later header/signing check throws.
+    void abandonOwnedHttpUpload(upload);
+    throw error;
+  }
+}
+
+function prepareUpstreamFields(
+  request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery,
+  upstream: UpstreamAuth, transport: "http" | "websocket", owner?: PreparationAdmission, upload?: OwnedHttpUpload,
 ) {
   owner?.headers(upstream.headers, true);
   const headers = new Headers(upstream.headers);
@@ -41,7 +69,17 @@ export function prepareUpstreamRequest(
   }
   const raw = prepareNativeRawDispatch(selection, url, headers, transport === "http" && upstream.transport === null);
   if (raw !== undefined) return { headers, url, configuredOwnerUrl, requestBody: raw, streamBody: false };
-  const body = transformTransportBody(upstream.transport, selection.body);
+  const body = upload ? transformOwnedTransportBody(upstream.transport, selection.body, owner!) : transformTransportBody(upstream.transport, selection.body);
+  if (upload) {
+    const serialized = prepareOwnedHttpUploadJson(upload, body);
+    if (serialized !== undefined && typeof serialized !== "string") {
+      const source = serialized.stream();
+      adoptOwnedHttpUploadSource(upload, source);
+      const fixed = new FixedLengthStream(serialized.bytes);
+      return { headers, url, configuredOwnerUrl, requestBody: pipeOwnedHttpUpload(upload, source, fixed), streamBody: true };
+    }
+    return { headers, url, configuredOwnerUrl, requestBody: serialized, streamBody: false };
+  }
   // The 32 MB media envelope must not coexist with whole-document transport
   // copies in the Worker's 128 MB isolate. Unsigned bodies carrying media
   // splice it in as raw chunks; other Claude bodies above 8 MiB use the
@@ -51,6 +89,12 @@ export function prepareUpstreamRequest(
   const media = bodyless || signed ? null : mediaJsonBody(body);
   const bytes = media ? media.bytes : !bodyless && !signed && selection.endpoint.request_format === "anthropic.messages" ? jsonBodyBytes(body) : 0;
   const streamBody = media !== null || bytes > maxJsonBodyBytes;
-  const requestBody = bodyless ? undefined : media ? media.stream().pipeThrough(new FixedLengthStream(bytes)) : streamBody ? jsonBodyStream(body).pipeThrough(new FixedLengthStream(bytes)) : JSON.stringify(body);
+  let requestBody: string | ReadableStream<Uint8Array> | undefined;
+  if (upload && streamBody && !bodyless) {
+    const source = media ? media.stream() : jsonBodyStream(body);
+    adoptOwnedHttpUploadSource(upload, source);
+    const fixed = new FixedLengthStream(bytes);
+    requestBody = pipeOwnedHttpUpload(upload, source, fixed);
+  } else requestBody = bodyless ? undefined : media ? media.stream().pipeThrough(new FixedLengthStream(bytes)) : streamBody ? jsonBodyStream(body).pipeThrough(new FixedLengthStream(bytes)) : JSON.stringify(body);
   return { headers, url, configuredOwnerUrl, requestBody, streamBody };
 }

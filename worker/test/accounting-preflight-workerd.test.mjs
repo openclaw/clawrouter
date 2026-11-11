@@ -10,7 +10,7 @@ import worker,{BudgetLedgerObject as Ledger} from './worker/index.ts';
 export {PolicyBindingIndexObject,UsageLedgerObject,GrantCredentialObject} from './worker/index.ts';
 import {authorityCall} from './worker/authority.ts';
 import {ingestUsage} from './worker/ledgers.ts';
-import {accountingArchive} from './worker/json-body.ts';
+import {accountingArchive,privateAccountingArchive,isAccountingAdmissionFailure} from './worker/json-body.ts';
 import {prepareContentRetention} from './worker/content-retention.ts';
 const check=(value,message)=>{if(!value)throw Error(message);};
 export class BudgetLedgerObject extends Ledger {
@@ -22,7 +22,41 @@ export default {async fetch(request,bindings,ctx){
  const mode=new URL(request.url).pathname.slice(1),roots=[];let hasPrimary=false,primary,result;
  const track=work=>{const outcome=Promise.resolve(work).then(value=>({failed:false,value}),error=>({failed:true,error}));roots.push(outcome);return work;};
  try{
- if(mode==='archive'){
+ if(mode==='archive-cursor'){
+  let cases=0;
+  for(const surrogate of [false,true])for(const cancel of [false,true]){
+   const scalar=surrogate?'x'.repeat(4095)+'😀'+'y'.repeat(35903)+'\ud800\udfff':'x'.repeat(40000);
+   let source=scalar;for(let depth=0;depth<32;depth++)source={next:source};
+   const expected=new TextEncoder().encode(JSON.stringify(source)),sizes=[];
+   for(const make of [accountingArchive,privateAccountingArchive]){
+    const archive=make(source),body=archive.stream(),reader=body.getReader(),chunks=[];let offset=0,eof=false;
+    try{for(;;){const part=await track(reader.read());if(part.done){eof=true;break;}chunks.push(part.value.length);
+     for(let i=0;i<part.value.length;i++)check(part.value[i]===expected[offset+i],'cursor exact native bytes');offset+=part.value.length;
+     if(cancel){await track(reader.cancel());break;}}}
+    finally{try{if(!eof)await track(reader.cancel());}finally{reader.releaseLock();archive.discard();}}
+    if(!cancel)check(offset===expected.length,'cursor complete wire');
+    check(archive.retired&&!body.locked,'cursor bounded return/unlock');
+    if(!surrogate)check(JSON.stringify(chunks)===JSON.stringify(cancel?[28929]:[28929,11361]),'historical fragment partition');
+    sizes.push(chunks);cases++;
+   }
+   check(JSON.stringify(sizes[0])===JSON.stringify(sizes[1]),'ordinary/private chunk parity');
+  }
+  result={cases,depth:32};
+ }else if(mode==='archive-private-depth'){
+  let nested='x'.repeat(32769)+'😀\ud800';for(let i=0;i<31;i++)nested=i%2?{next:nested}:[nested];
+  const gateway=[{name:'kept',headers:{authorization:'synthetic'},authorization:'synthetic'}],source={nested,gateway,toJSON:'inert',missing:undefined};
+  Object.defineProperty(source,'__proto__',{value:{safe:true},enumerable:true});for(let i=0;i<513;i++)source['field'+i]='';
+  const original=JSON.stringify(source),ordinary=accountingArchive(source,gateway),privateArchive=privateAccountingArchive(source,gateway);
+  const collect=async archive=>{const reader=archive.stream().getReader(),chunks=[];let text='',eof=false;const decoder=new TextDecoder();
+   try{for(;;){const part=await reader.read();if(part.done){eof=true;break;}chunks.push(part.value.length);text+=decoder.decode(part.value,{stream:true});}text+=decoder.decode();}
+   finally{try{if(!eof)await reader.cancel();}finally{reader.releaseLock();archive.discard();}}return{chunks,text};};
+  const expected=await track(collect(ordinary)),actual=await track(collect(privateArchive));
+  check(actual.text===expected.text&&JSON.stringify(actual.chunks)===JSON.stringify(expected.chunks),'private depth32 original byte/chunk parity');
+  const saved=JSON.parse(actual.text);check(JSON.stringify(saved.gateway)==='[{"name":"kept"}]'&&Object.hasOwn(saved,'__proto__')&&!Object.hasOwn(saved,'missing'),'private copy field/filter parity');
+  let rejected=false;try{privateAccountingArchive({extra:source},gateway);}catch(error){rejected=isAccountingAdmissionFailure(error);}
+  check(rejected&&JSON.stringify(source)===original&&!Object.isFrozen(source),'depth33 rejects without changing source');
+  result={privateDepth:32,rejectedDepth:33,bytes:privateArchive.bytes,chunks:actual.chunks,retired:privateArchive.retired&&ordinary.retired};
+ }else if(mode==='archive'){
   const source=JSON.parse('{"__proto__":{"owned":true},"first":1}');
   Object.assign(source,{data:'x'.repeat(100000),unicode:'\ud800😀\udfff',missing:undefined,array:[undefined,-0,NaN,Infinity]});
   const oracle=JSON.stringify(source),archive=accountingArchive(source),stream=archive.stream(),reader=stream.getReader();
@@ -120,11 +154,13 @@ test("actual Worker accounting admission, original serializer backings and real 
   });
   try {
     runtime = await startWorkerdFixture(directory, router, upstream, { r2Buckets: ["CONTENT_ARCHIVE"], preventEviction: true });
-    for (const mode of ["archive", "hard", "soft", "identity", "archive-limit"]) {
+    for (const mode of ["archive-cursor", "archive-private-depth", "archive", "hard", "soft", "identity", "archive-limit"]) {
       const result = await observe(runtime.dispatchFetch("https://router.example/" + mode).then(async response => {
         const body = await response.json(); assert.equal(response.status, 200); return body;
       }));
-      if (mode === "archive") { assert.equal(result.stored, true); assert.ok(result.maximum <= 32768); assert.equal(result.eof, true); }
+      if (mode === "archive-cursor") { assert.equal(result.cases, 8); assert.equal(result.depth, 32); }
+      else if (mode === "archive-private-depth") { assert.equal(result.privateDepth, 32); assert.equal(result.rejectedDepth, 33); assert.equal(result.retired, true); assert.ok(result.bytes > 32768); }
+      else if (mode === "archive") { assert.equal(result.stored, true); assert.ok(result.maximum <= 32768); assert.equal(result.eof, true); }
       else if (mode === "identity" || mode === "archive-limit") { assert.equal(result.status, 503); assert.equal(result.provider, 0); assert.equal(result.reserve, 0); assert.equal(result.r2, 0); }
       else { assert.equal(result.status, 200); assert.equal(result.provider, 1); assert.equal(result.events, 1); }
     }

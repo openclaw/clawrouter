@@ -1,4 +1,7 @@
-import { admitIdentityText, identityUtf8, admitIdentity, identityHeader, identityJson, identitySourceBudget, isIdentityFailure, parseIdentity, readIdentityKv, readIdentityRaw, readIdentityRequest, readIdentityResponse, type IdentitySourceBudget } from "./identity-admission.ts";
+import { ownedHttpSinkReceiver, ownedHttpRevalidationReceiver } from "./proxy-completion.ts";
+import { admitIdentityText, identityUtf8, admitIdentity, identityHeader, identityJson, identitySourceBudget, identityFailure, isIdentityFailure, parseIdentity, readIdentityKv, readIdentityRaw, readIdentityRequest, readIdentityResponse, type IdentitySourceBudget } from "./identity-admission.ts";
+import type { OwnedHttpRevalidation, OwnedHttpSinkOwner } from "./http-identity-owner.ts";
+import type { OwnedHttpCredential } from "./credential-preflight.ts";
 import { videoControlHeader, videoControlVersion, type MiniMaxVideoOperation } from "./minimax-video-operation.ts";
 import { miniMaxApiKeySecret, miniMaxMusicCoverProjection, miniMaxMusicCoverIdentity } from "./native-media-credential.ts";
 import { musicCoverControlHeader, musicCoverControlVersion, musicCoverUnavailable, isMusicCoverControl, readCoverControlRequest, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
@@ -1544,6 +1547,14 @@ function assertCredentialEnabled(record: CredentialRecord): void {
   if (record.enabled !== true) throw new HttpError(409, "grant_disabled", "upstream grant is disabled");
 }
 
+export function inspectOwnedHttpGrantCredentials(cap: OwnedHttpRevalidation, env: Env, signal: AbortSignal): Promise<void> {
+  // Exact ordinary {} body and actual selected binding/key, no special producer.
+  const commandCap = cap, commandEnv = env, commandSignal = signal;
+  const receiver = ownedHttpRevalidationReceiver(commandCap);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.consumeOwnedHttpGrantInspection(commandCap, commandEnv, commandSignal);
+}
+
 export async function inspectGrantCredentials(env: Env, key: string, signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, cover?: MiniMaxMusicCoverControl): Promise<UpstreamGrant> {
   return (await ownerCall<OwnerResponse>(env, key, "/inspect", cover ? { coverOriginal: musicCoverControlVersion, key } : video ? { videoOriginal: true } : search ? { searchOriginal: true } : wan ? { wanOriginal: true } : {}, signal, wan, search, video, cover)).grant;
 }
@@ -1569,7 +1580,11 @@ export async function materializeGrantCredentials(
   search?: MiniMaxSearchOperation,
   video?: MiniMaxVideoOperation,
   cover?: MiniMaxMusicCoverControl,
+  ownedHttp?: OwnedHttpSinkOwner,
 ): Promise<UpstreamGrant> {
+  // Private materialization requires the registered foreground permit and its
+  // fixed destination; a sink capability alone cannot mint that association.
+  if (ownedHttp !== undefined) throw identityFailure("protocol");
   if (!cover && !video && !wan && !search) admitIdentity(grant, "record");
   const legacy = !cover && !video && !wan && !search && hasRawCredential(grant) ? grant : null;
   return (await ownerCall<OwnerResponse>(env, key, "/materialize", {
@@ -1583,7 +1598,14 @@ export async function materializeGrantCredentials(
     operation,
     ...(wan ? { wanOriginal: true } : {}),
     ...(cover ? { coverOriginal: musicCoverControlVersion } : {}),
-  }, signal, wan, search, video, cover)).grant;
+  }, signal, wan, search, video, cover, ownedHttp)).grant;
+}
+
+export function materializePrivateOwnedHttpGrantCredentials(cap: OwnedHttpCredential, permit: object, sink: OwnedHttpSinkOwner,
+  env: Env, key: string, grant: UpstreamGrant, providerId: string, refresh: RefreshConfig | null, force: boolean, signal?: AbortSignal): Promise<void> {
+  const receiver = ownedHttpSinkReceiver(sink);
+  if (!receiver) throw identityFailure("protocol");
+  return receiver.consumeOwnedHttpGrantMaterialization(sink, cap, permit, env, key, grant, providerId, refresh, force, signal);
 }
 
 export async function revokeGrantCredentials(env: Env, key: string, metadata?: GrantRevokeMetadata, searchActor?: PutRequest["searchActor"], musicActor?: PutRequest["musicActor"], videoActor?: PutRequest["videoActor"]): Promise<UpstreamGrant> {
@@ -1675,7 +1697,8 @@ function updatedCredentialRecord(current: CredentialRecord | undefined, grant: U
 
 
 
-async function ownerCall<T>(env: Env, key: string, path: string, body: unknown, signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, cover?: MiniMaxMusicCoverControl): Promise<T> {
+async function ownerCall<T>(env: Env, key: string, path: string, body: unknown, signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, cover?: MiniMaxMusicCoverControl, ownedHttp?: OwnedHttpSinkOwner): Promise<T> {
+  if (ownedHttp !== undefined) throw identityFailure("protocol");
   if (cover && (!isMusicCoverControl(cover) || wan || search || video || !["/inspect", "/materialize"].includes(path))) musicCoverUnavailable();
   const stub = env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(key));
   if (cover) return cover.controlJson<T>(body, (text, active) => stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: text, signal: active, redirect: "manual", headers: { "content-type": "application/json", [musicCoverControlHeader]: musicCoverControlVersion } }), false, signal);
