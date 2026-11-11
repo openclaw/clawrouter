@@ -126,6 +126,236 @@ failed-ticket replacement, ACTIVE/SYNC, whole DATA/COMMON and full STATIC remain
 unqualified. The next architecture work is a reviewed canonical-owner redesign
 plan; no further consolidation or new reservation is enabled here.
 
+### STATIC_CANONICAL_OWNER_REDESIGN_PLAN — unimplemented, not closed
+
+Source anchor: code checkpoint `d11be558307c7ce6171bebcb249e434f9e8d158f`.
+The exact28 work is complete. This section proposes a replacement ownership
+layout and records why its currently attributable reductions do not close the
+fixed65536 gate. It authorizes no implementation, new admission or retirement.
+It is not a claim that all possible implementations are impossible.
+
+**Proposed canonical layout.** Keep the existing `proxy-completion` runtime
+leaf, its2931-byte prefix, body-budget-only runtime dependency, three canonical
+registration maps and fixed receiver lookups. Keep the existing named request
+and revalidation receiver methods; their guards are an authority boundary, not
+duplicate targets to erase. Place the private HTTP-operation implementation
+closure in the existing `http-identity-owner.ts`, alongside its request, upload,
+sink, budget, terminal, archive, normalization and publication state. Move the
+following private state and its implementation together, retaining each current
+registry identity and each current counter/once field:
+
+| Source private owner | State moved with its private operations | Canonical association retained |
+| --- | --- | --- |
+| proxy | invocation, preparation receiver, prepared selection/upload and retry ports | ownedProxyInvocations, ownedPreparationReceivers, ownedPreparedSelections, ownedPreparedUploads, ownedProxyCount |
+| proxy-accounting | private accounting command/physical/logical state | ownedAccountingStates, ownedAccountingRequests, ownedAccountingRequestCount |
+| proxy-response | codec consumers, private accepted usage and their concrete readers | codecConsumers, codecConsumerCount, ownedAcceptedUsage; exact child/Response/output associations |
+| soft-budget | prepared private controller and status lifecycle | ownedSoftBudgets; exact plan, operation, attempt and independent start/cleanup positions |
+| venice-chat-runtime | private codec/source role and retirement | ownedCodecs, ownedCodecCount; existing revalidation and role identities |
+
+These are proposed moves of the private additions, not copies, new registries,
+request-only replacements or a common opcode owner. Ordinary exports, common
+parsing/framing algorithms and their existing state remain in their current
+modules. The four frozen files, DO producers/schema, all profiles and default
+activation stay outside the move. Shared ordinary lexical helpers cannot be
+copied into this unit: their existing callable boundary must remain or its
+additional export/import reference must appear on the replacement side.
+A moved function or class earns **zero target credit**.
+
+The private credential/preflight/cache/source owners remain separate canonical
+domains in this first candidate. In particular, the existing foreground map,
+selected/authentication parents, cache-run registry and actual source receipt
+remain authoritative. Moving HTTP operations does not turn a current request
+into authority to claim a foreign credential or replace the four actual grant
+binding reads. The preclaim, truthful partial adoption, failed-producer
+certificates, five-code receipt, status-start and sequence-wide budget repairs
+remain part of the replacement contract.
+
+**Concrete fusion rule.** Delete an internal checker/funder/forwarder only by
+placing its statements in a particular existing producer command at the old
+call position. Preserve lookup count, argument evaluation, short circuits,
+funding before factories, and the command's own return/throw kind. Examples
+which define this boundary, not yet credited deletions, are:
+
+| Existing internal layer | Existing command where its exact checks belong |
+| --- | --- |
+| matchesOwnedHttpConfigurationPreparation | request receiver admitOwnedHttpConfigurationCommand, retaining its provider-permit alternative |
+| matchesOwnedHttpInitialSelection | checkOwnedHttpInitialSelection, after its existing request check |
+| matchesOwnedHttpProviderFetchInput | startOwnedHttpProviderFetch, before the actual provider command factory/method |
+| matchesOwnedHttpBudgetPlan | prepareOwnedHttpAccountingTerminalPlan, retaining exact accounting, plan, upload, prepared mapping and handoff phase |
+| matchesOwnedHttpArchiveInput / claimOwnedHttpArchiveInput | archive preparation checks and the existing once claim; preserve both current checks at their existing positions |
+
+Archive validation still needs the admitted tuple after retry. The public
+archive-preparation command and later put/pipe/cancel/abort commands remain
+distinct. A predicate shared by both validation and claiming cannot be counted
+as removed until both uses are replaced and duplicated literal/definition
+products are counted. The same applies to public-body and revalidation
+matchers used by more than one physical owner. A membership check cannot
+replace their Response/body/signal/attempt/plan comparisons.
+
+**Import and target ledger for this layout.** The current six-module private
+closure has222 new internal runtime import-reference bindings whose targets
+are themselves private additions in that closure. Source resolution identifies
+them by module, original exported name and local name, not by matching names
+alone. Their total is6499 name units and14774 bytes:
+
+| Importing module | Internal private bindings | Local name units | Binding/name bytes |
+| --- | ---: | ---: | ---: |
+| http-identity-owner |60|1820|4120|
+| proxy-accounting |26|830|1868|
+| proxy-response |50|1529|3458|
+| proxy |67|1811|4158|
+| soft-budget |6|163|374|
+| venice-chat-runtime |13|346|796|
+| **Candidate internal edges** |**222**|**6499**|**14774**|
+
+The complete replacement must also enumerate imports newly required for
+ordinary shared lexical helpers and surviving external private callers.
+Therefore14774 is a **maximum attributable binding removal**, not a net
+implemented credit. Namespace imports, export aliases or new facade functions
+cannot make those replacement references free.
+
+| Listed component | Exact d11be55 | Candidate pure move, before any additional replacement bindings |
+| --- | ---: | ---: |
+| Explicit callable targets |1496|1496|
+| Classes |35|35|
+| Runtime import-reference bindings |668|446|
+| Module variable bindings |247|247|
+| Callable name units |26387|26387|
+| Class/property name units |1400|1400|
+| Import name units |16941|10442|
+| Module-variable name units |4744|4744|
+| Definition/binding products |5683|5461|
+| Name units |49472|42973|
+| Listed bytes |144408|129634|
+
+No implicit functions, instances, fields, arrows or literals disappear through
+that move. The current source roster still contains362 emitted class fields,
+148 initializer expressions,2157 quoted-string occurrences,83 template
+fragments,4 regex-source occurrences,3762 numeric and2420 primitive/reference
+occurrences in the previously enumerated new scopes, with22217 decoded literal
+units. These lexical literal counts are not a retained-payload upper; copied
+bodies require a new occurrence/owner ledger. The pure move copies none.
+
+The flat synchronous module-function pool in those six modules has379 targets,
+10122 name units and29340 bytes. This pool includes necessary genuine commands
+and shared kernels; it is **not** an approved deletion roster. Giving the
+candidate even the impossible advantage of deleting every one, without a
+replacement or duplicated literal, leaves:
+
+`144408 -14774 -29340 =100294`, still34758 above65536 before omissions.
+
+| Module | Flat module targets in this optimistic pool | Name units | Target bytes |
+| --- | ---: | ---: | ---: |
+| http-identity-owner |234|6297|18210|
+| proxy-accounting |13|376|1064|
+| proxy-response |40|911|2782|
+| proxy |69|2013|5682|
+| soft-budget |8|184|560|
+| venice-chat-runtime |15|341|1042|
+
+“Flat” here is a source filter: no async/generator declaration, nested callable,
+or lexical this/arguments/await/yield/super use. It is not proof that inlining
+preserves completion or authority. Actual escaping functions, public named
+boundaries and multiple-call semantics impose further retention.
+
+**A stronger structural obstruction.** Across every participating module,
+all630 flat synchronous module targets account for48470 bytes. All668 new
+runtime imports account for39226 bytes. Removing both entire sets for free
+would still retain this exact listed subtotal:
+
+| Remaining listed family in that optimistic subtraction | Count | Bytes |
+| --- | ---: | ---: |
+| Other named functions, including async/nested/special uses |91|6470|
+| Regular methods |546|26462|
+| Getters and setters |61|2982|
+| Arrows |168|4294|
+| Class constructor/prototype/scope groups |35|5040|
+| Module variable bindings/names |247|11464|
+| **Remaining listed component** | |**56712**|
+
+The previously omitted field roster supplies an additional necessary slice.
+There are359 instance fields:147 initialized (1201 name units) and212 without
+an initializer (2036 units). The other three fields are static: requestCount
+has an initializer, and privateUsageAccumulators/ownedFrameConsumers do not.
+Those three static fields and their construction overlap are excluded from the
+following necessary slice. ECMA2026 creates a separate initializer function
+for each present instance initializer and retains the field name/initializer
+record with the class. That function is separate from any arrow inside the
+initializer. [Class field definition evaluation](https://tc39.es/ecma262/2026/multipage/ecmascript-language-functions-and-classes.html#sec-runtime-semantics-classfielddefinitionevaluation).
+
+Under the existing three-product definition/reference/scope rule, the147
+initializer definitions contribute3528 bytes; the359 retained field-name
+occurrences contribute6474 bytes. This **10002-byte slice excludes** field
+records/list entries, home-object/other links, static-field materialization,
+all remaining literal/table payload and pinned dependencies. It applies no
+I/O property attributes to STATIC and counts no source-text payload.
+
+Thus even the universal flat-helper/import deletion fantasy leaves
+`56712+10002=66714`: **1178 over65536 before every remaining omitted row and
+before retaining any mandatory helper/import**. For the actual unchanged
+layout, the listed component plus this field slice is154410; the necessary
+reduction is now at least88874 plus the still-unpriced rows. Neither figure
+is a complete STATIC upper.
+
+The pinned source is a separate reviewed input. ROOT reports the exact locked
+3.8.0/4.4.1 tarballs recovered and the safeed37 parser blob matched at
+SHA256 `5d3530c56a44b2877be1430846e6ae792eb2a86eaf7f7730d858cf7fbfbc1465`.
+The nine-module closure is exclusively with role4. This plan gives the old281
+products **no certified credit**, does not recount the cache, and does not
+substitute the mismatched local versions. Its before/after pinned row is
+unchanged and numerically pending that exclusive handoff.
+
+**Required semantic and execution accounting.** Any implementation of this
+layout must keep source-specific original handlers, their frozen shape,
+FIRST-before-payload behavior, native correlation and independent installation
+origins. Keep codec VALUE-before-DONE, generic finished/EOF skipping, normalizer
+DONE-before-VALUE and intake's three VALUE observations as separate algorithms.
+No mode selector, callback bag or merged receipt protocol replaces them.
+The three acquisition owners keep their different started gates, undefined
+facts, VOID delivery and failed-source certificates.
+
+Synchronous fusion must snapshot each old operand before its old callee would
+run; a receiver/registry lookup cannot move ahead of those operands. Internal
+early returns must become local control flow without returning from an outer
+finally or changing a pending throw. A class method's this, arguments and
+super/new.target context cannot be substituted for a removed ordinary function
+without an explicit equivalence and environment row. Keep every async result,
+await and caller alias until its actual original consumer; moving an async body
+into a caller would change Promise identity/adoption and is not a free fusion.
+Do not move declaration evaluation across captured intrinsics, class heritage,
+module initialization or the shared parser; those changes can recreate startup
+cycles and hoist/TDZ failures. Ordinary low-level modules still reach private
+commands only through the existing runtime leaf.
+
+Every changed method/callee frame, operand snapshot, arguments object, block,
+capture and reentrant overlap needs a successor ACTIVE128/SYNC512 table.
+Persistent receipts, source/caller contexts and native products keep their V2
+owners; no STATIC-to-I/O transfer or UNKNOWN refund is implied. Genuine subject
+probes must keep their current inner-check reach and separate wrong-this cases.
+All existing failed/preclaim/status/budget and observer/archive fixtures carry
+forward; relocation is not permission to weaken their hooks or assertions.
+
+**Disposition and minimum next design boundary.** This concrete canonical-unit
+candidate is rejected as a closing plan before implementation. Co-location plus
+module-level checker/funder/forwarder fusion cannot supply a closed replacement
+roster on its own. The minimum additional structural boundary is the actual
+internal class-member/initializer/closure layer, not another import spelling
+or shared three-method base: existing named producer methods would have to own
+more of their internal phase/check/funding statements while deleting their old
+method/initializer/function products. Externally retained handler targets and
+semantically distinct capture/receipt protocols remain protected.
+
+No such complete deletion-and-replacement roster has been established here.
+Its numeric requirement is explicit: at least1178 plus all other omitted
+STATIC and every mandatory helper/import retained even after the deliberately
+unattainable universal subtraction above; the realizable deficit is larger.
+A successor must name those actual member products and every replacement,
+including literals, rather than apply the630/668 maxima as credits. This is
+the current precise plan obstruction, not an unimplemented fit certificate.
+No further code consolidation, family admission or failed-ticket replacement
+is enabled. Runtime/typecheck and whole STATIC/ACTIVE/SYNC/DATA/COMMON remain
+OPEN.
+
 ### Historical 0dceed67 lower subset: fixed static representation
 
 The existing STATIC tariff already fails on a deliberately incomplete roster of
