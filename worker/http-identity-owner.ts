@@ -2114,8 +2114,8 @@ class OwnedLedgerCommand {
   private observation?: OwnedOriginalObservation;
   private cancellation?: OwnedOriginalObservation;
   private ack?: OwnedLedgerAck;
-  private resolve!: (value: OwnedLedgerResult) => void;
-  private reject!: (reason: object) => void;
+  private resolve?: (value: OwnedLedgerResult) => void;
+  private reject?: (reason: object) => void;
   readonly ready = new Promise<OwnedLedgerResult>((resolve, reject) => { this.resolve = resolve; this.reject = reject; });
   origin = 0;
   private fetching = 0;
@@ -2142,7 +2142,7 @@ class OwnedLedgerCommand {
   private fail(origin: number, reason: unknown): void {
     try {
       const failure = failedSinkOrigin(this.root, origin, reason);
-      if (!(this.flags & 32)) { this.flags |= 32; this.reject(failure); this.resolve = undefined as never; this.reject = undefined as never; }
+      if (!(this.flags & 32)) { this.flags |= 32; this.reject!(failure); delete this.resolve; delete this.reject; }
     } catch { this.unknown(); }
     finally { reason = undefined; }
   }
@@ -2201,7 +2201,7 @@ class OwnedLedgerCommand {
       };
     }
     value = undefined; this.flags |= 32;
-    this.resolve(projected); this.resolve = undefined as never; this.reject = undefined as never;
+    this.resolve!(projected); delete this.resolve; delete this.reject;
   }
   rejectAck(failure: object): void {
     if (this.flags & 32) return;
@@ -2209,14 +2209,23 @@ class OwnedLedgerCommand {
     // Acquisition/transport and genuine admission failures keep rejection.
     if (this.path === "/charge" || this.path === "/settle" || this.path === "/ingest") { this.acceptAck(undefined); return; }
     this.flags |= 32;
-    this.reject(failure); this.resolve = undefined as never; this.reject = undefined as never;
+    this.reject!(failure); delete this.resolve; delete this.reject;
   }
   retireAckPayload(): void {
     if (this.flags & 1024) return;
     this.flags |= 1024;
     retireOwnedLedgerAcknowledgmentData(this.root, ownedLedgerAckData - ownedLedgerReceiptData);
   }
-  retireAck(): void { this.ack = undefined; this.retire(); }
+  handoffAck(ack: OwnedLedgerAck): boolean {
+    if (this.ack !== ack || this.flags & (1 | 8 | 16 | 512) || !(this.flags & 32) || !(this.flags & 128)) return false;
+    if (!severOwnedOriginal(this.observation)) return false;
+    delete this.observation; delete this.ack;
+    // admittedOwned*Command returned ready before this queued processing.
+    // No caller retains the adapter: the projected receipt/Promise has no link
+    // back to it. Neither resolving that receipt nor this cut retires a child.
+    this.flags |= 512;
+    return true;
+  }
   private retire(): void {
     if (this.flags & (8 | 512)) return;
     if (!severOwnedOriginal(this.observation) || !severOwnedOriginal(this.cancellation)) { this.unknown(); return; }
@@ -2269,10 +2278,11 @@ class OwnedLedgerCommand {
           const status = this.path === "/settle" ? this.response!.status === 404 ? 404 : this.response!.status === 409 ? 409 : 0
             : this.path === "/reserve" || this.path === "/ingest" ? this.response!.status : undefined;
           this.discard();
-          if (!(this.flags & 32)) { this.flags |= 32; this.resolve({ ok: false, status }); this.resolve = undefined as never; this.reject = undefined as never; }
+          if (!(this.flags & 32)) { this.flags |= 32; this.resolve!({ ok: false, status }); delete this.resolve; delete this.reject; }
         } else {
           this.flags |= 128; this.origin = sinkOrigin(this.root.sink!, "body");
           this.ack = new OwnedLedgerAck(this, this.response); this.response = undefined; this.ack.open();
+          if (!(this.flags & 8) && severOwnedOriginal(this.observation)) delete this.observation;
         }
       }
       if (this.flags & 64 && this.flags & 256) this.retire();
@@ -2294,7 +2304,7 @@ interface OwnedBudgetLegRecord {
 }
 let ownedBudgetLegs: WeakMap<OwnedHttpBudgetLeg, OwnedBudgetLegRecord> | undefined;
 class OwnedBudgetSequence {
-  readonly legs: OwnedBudgetLegRecord[] = [];
+  legs: OwnedBudgetLegRecord[] = [];
   phase = 0; // prepared, reserving, dispatch, rollback, closed
   physical = 1; // Logical plan sentinel, independent of every original tail.
   result: BudgetReservation | undefined;
@@ -2318,21 +2328,27 @@ class OwnedBudgetSequence {
   }
   close(): void {
     if (this.phase === 4) return;
-    this.phase = 4; this.retireCommand();
+    this.phase = 4;
+    // Logical branch selection has ended. Existing commands retain this same
+    // physical destination; revoked legs cannot create another command.
+    for (const leg of this.legs) {
+      ownedBudgetLegs!.delete(leg.cap);
+      const ended: Partial<OwnedBudgetLegRecord> = leg;
+      delete ended.sequence; delete ended.ordinal; delete ended.intent;
+      delete ended.name; delete ended.id; delete ended.cap; delete ended.flags;
+      delete ended.reservation; delete ended.request; delete ended.namespace;
+    }
+    this.legs.length = 0;
+    const ended: Partial<OwnedBudgetSequence> = this;
+    delete ended.legs; delete ended.result; delete ended.sinks;
+    delete ended.plan; delete ended.attempt; delete ended.accounting; delete ended.http;
+    this.retireCommand();
   }
   retireCommand(): void {
     if (this.physical <= 0) throw identityFailure("protocol");
     if (--this.physical || this.phase !== 4) return;
-    for (const leg of this.legs) {
-      ownedBudgetLegs!.delete(leg.cap);
-      leg.reservation = undefined; leg.request = undefined; leg.namespace = undefined;
-      leg.intent = undefined as never; leg.sequence = undefined as never; leg.cap = undefined as never;
-      leg.name = ""; leg.id = "";
-    }
     const root = this.root;
-    this.legs.length = 0; this.result = undefined; this.sinks = undefined;
-    this.plan = undefined as never; this.attempt = undefined as never; this.accounting = undefined as never;
-    this.http = undefined as never; this.root = undefined as never;
+    delete (this as Partial<OwnedBudgetSequence>).root;
     // No debit is recycled: other request aliases still have their own owners.
     retireOwnedSinkChild(root);
   }
@@ -2528,8 +2544,8 @@ export function ownedHttpLedgerAcknowledgment(sink: OwnedHttpSinkOwner, namespac
 }
 
 interface OwnedHttpReadObservation {
-  owner: OwnedLedgerAck | OwnedStatusReader | undefined;
-  nonce: Promise<void> | number | undefined;
+  owner: OwnedStatusReader | undefined;
+  nonce: number | undefined;
   state: number;
 }
 function ownedHttpReadFulfilled(this: OwnedHttpReadObservation, value: unknown): void {
@@ -2543,49 +2559,84 @@ function ownedHttpReadRejected(this: OwnedHttpReadObservation, reason: unknown):
 
 // This reader has one closed destination: its genuine ledger command/terminal
 // slot. Successful values never enter a Promise or a caller-supplied callback.
+// Fixed placement is source-defined, never selected from spare capacity:
+// OPERATION: genuine destination/terminal slot and logical handoff rights.
+// SOURCE: ACK instance/body plus acquisition-installed closed handlers/links.
+// READ: active capture/read cells, native qualification and correlation record.
+// TERMINAL: closed/unlock rights/origins, unlock handlers and physical join state.
+// SYNC: only live activations/arguments/proofs and the in-place transition.
+// The same nativeFailure target/map record is still separately owned/counted;
+// deleting this reference later supplies neither a record nor DATA refund.
+interface AckReadCell { owner: OwnedLedgerAck | undefined; state: number }
+function ackReadFulfilled(this: AckReadCell, value: unknown): void {
+  if (this.state & (1 | 8)) { value = undefined; return; }
+  this.state |= 16;
+  try { this.owner?.dispatchReadObservation(this, false, value); }
+  finally { value = undefined; this.state &= ~16; }
+}
+function ackReadRejected(this: AckReadCell, reason: unknown): void {
+  if (this.state & (1 | 8)) { reason = undefined; return; }
+  this.state |= 16;
+  try { this.owner?.dispatchReadObservation(this, true, reason); }
+  finally { reason = undefined; this.state &= ~16; }
+}
+function ackClosedFulfilled(this: OwnedLedgerAck, _value: unknown): void {
+  _value = undefined; if (this.closedState & (1 | 8)) return; this.acceptClosed(false, undefined);
+}
+function ackClosedRejected(this: OwnedLedgerAck, reason: unknown): void {
+  if (this.closedState & (1 | 8)) { reason = undefined; return; }
+  try { this.acceptClosed(true, reason); } finally { reason = undefined; }
+}
+function ackUnlockFulfilled(this: OwnedLedgerAck, _value: unknown): void {
+  _value = undefined; if (this.unlockState & (1 | 8)) return; this.acceptUnlock(false, undefined);
+}
+function ackUnlockRejected(this: OwnedLedgerAck, reason: unknown): void {
+  if (this.unlockState & (1 | 8)) { reason = undefined; return; }
+  try { this.acceptUnlock(true, reason); } finally { reason = undefined; }
+}
+
 class OwnedLedgerAck {
-  private reader?: ReadableStreamBYOBReader | ReadableStreamDefaultReader<Uint8Array>;
-  private body?: ReadableStream<Uint8Array> | null;
-  private decoder?: TextDecoder;
-  private capture?: Uint8Array;
-  private backing?: Uint8Array<ArrayBuffer>;
-  private text = "";
-  private wire = 0;
-  private length = 0;
-  private flags = 0;
-  private pending = 0;
-  private installing = 0;
-  private reading?: Promise<void>;
-  private readObservation?: OwnedHttpReadObservation;
-  private closedObservation?: OwnedOriginalObservation;
-  private cancelObservation?: OwnedOriginalObservation;
-  private unlockObservation?: OwnedOriginalObservation;
-  private resolveRead?: () => void;
-  private readOrigin = 0;
-  private cancelOrigin = 0;
-  private unlockOrigin = 0;
-  private closedOrigin = 0;
-  private primaryOrigin = 0;
-  private nativeFailure?: SinkOriginRecord;
-  declare readonly parent: OwnedTerminalOperation | OwnedLedgerCommand;
-  declare private response: Response | undefined;
-  constructor(parent: OwnedTerminalOperation | OwnedLedgerCommand, response: Response | undefined) {
-    this.parent = parent; this.response = response;
+  declare owner?: RequestOwner | OwnedBudgetSequence | OwnedAccountingTerminal;
+  body?: ReadableStream<Uint8Array> | null;
+  closedState = 3;
+  closedOrigin = 0;
+  unlockState = 0;
+  unlockOrigin = 0;
+  joinState = 0;
+  nativeFailure?: SinkOriginRecord;
+  declare slot?: number;
+  reader?: ReadableStreamBYOBReader | ReadableStreamDefaultReader<Uint8Array>;
+  decoder?: TextDecoder;
+  capture?: Uint8Array;
+  text = "";
+  wire = 0;
+  length = 0;
+  pending = 0;
+  installing = 0;
+  readObservation?: AckReadCell;
+  cancelObservation?: OwnedOriginalObservation;
+  readOrigin = 0;
+  cancelOrigin = 0;
+  primaryOrigin = 0;
+  declare parent?: OwnedLedgerCommand;
+  declare response?: Response;
+  declare origin: number;
+  constructor(parent: OwnedLedgerCommand | OwnedAccountingTerminal, response: Response | undefined, slot?: number, origin?: number) {
+    if (parent instanceof OwnedLedgerCommand) {
+      this.parent = parent; this.owner = parent.budget ?? parent.root; this.origin = parent.origin;
+    } else { this.owner = parent; this.slot = slot!; this.origin = origin!; }
+    this.response = response;
   }
   dispatchOriginal(cell: OwnedOriginalObservation, failed: boolean, value: unknown): void {
-    if (this.flags & 16384) { value = undefined; return; }
-    try {
-      if (cell === this.closedObservation) { if (failed) this.closedFailed(value); else this.closed(); }
-      else if (cell === this.cancelObservation) { if (failed) this.cancelFailed(value); else this.cancelled(); }
-      else if (cell === this.unlockObservation) { if (failed) this.unlockFailed(value); else this.unlocked(); }
-    } finally { value = undefined; }
+    if (cell !== this.cancelObservation || this.joinState & 16384) { value = undefined; return; }
+    try { if (failed) this.cancelFailed(value); else this.cancelled(); }
+    finally { value = undefined; }
   }
-  private get root(): RequestOwner { return this.parent instanceof OwnedTerminalOperation ? this.parent.owner.root : this.parent.root; }
-  private get origin(): number { return this.parent.origin; }
-  private unknown(): void { this.flags |= 4; this.root.unknown = true; }
+  private get root(): RequestOwner { return this.owner instanceof OwnedBudgetSequence || this.owner instanceof OwnedAccountingTerminal ? this.owner.root : this.owner!; }
+  private unknown(): void { this.joinState |= 4; this.root.unknown = true; }
   private schedule(): void {
-    if (this.flags & (2 | 16384)) return;
-    this.flags |= 2;
+    if (this.joinState & (2 | 16384)) return;
+    this.joinState |= 2;
     try { ownedBoundaryQueue(this.advance.bind(this)); } catch { this.unknown(); }
   }
   private failure(origin: number, reason: unknown): void {
@@ -2593,7 +2644,7 @@ class OwnedLedgerAck {
       failedSinkOrigin(this.root, origin, reason);
       this.primaryOrigin ||= origin;
     } catch { this.unknown(); }
-    finally { reason = undefined; this.flags |= 8; this.schedule(); }
+    finally { reason = undefined; this.joinState |= 8; this.schedule(); }
   }
   private observationFailure(reason: unknown): void {
     this.unknown();
@@ -2607,7 +2658,7 @@ class OwnedLedgerAck {
       this.body = this.response!.body;
       if (!this.body) { this.failure(this.origin, 0); return; }
       let acquire = sinkOrigin(this.root.sink!, "acquire");
-      try { this.reader = this.body.getReader({ mode: "byob" }); this.flags |= 1; }
+      try { this.reader = this.body.getReader({ mode: "byob" }); this.joinState |= 1; }
       catch (reason) {
         failedSinkOrigin(this.root, acquire, reason); reason = undefined;
         // The default reader is a real parsing fallback for the amended ACK
@@ -2617,92 +2668,86 @@ class OwnedLedgerAck {
         catch (fallback) { this.failure(acquire, fallback); this.unknown(); return; }
         reason = undefined;
       }
-      this.closedOrigin = sinkOrigin(this.root.sink!, "closed"); this.pending |= 1;
+      this.closedOrigin = sinkOrigin(this.root.sink!, "closed"); this.closedState = 16;
       let closed: Promise<void> | undefined, started = false;
       try {
-        const prototype = this.flags & 1 ? ReadableStreamBYOBReader.prototype : ReadableStreamDefaultReader.prototype;
-        const getter = this.flags & 1 ? ownedStatusNativeClosed : originalReaderClosed;
+        const prototype = this.joinState & 1 ? ReadableStreamBYOBReader.prototype : ReadableStreamDefaultReader.prototype;
+        const getter = this.joinState & 1 ? ownedStatusNativeClosed : originalReaderClosed;
         if (Object.getPrototypeOf(this.reader) === prototype && !Object.hasOwn(this.reader, "closed")
-          && typeof originalLookupGetter === "function" && originalLookupGetter.call(this.reader, "closed") === getter) this.flags |= 32768;
+          && typeof originalLookupGetter === "function" && originalLookupGetter.call(this.reader, "closed") === getter) this.closedState |= 32;
         closed = this.reader.closed; started = !!closed;
         const then = closed.then;
-        if (then !== ownedBoundaryThen) this.flags &= ~32768;
-        this.closedObservation = { owner: this, kind: 8, state: 0 };
-        installOwnedOriginalMethod(this.closedObservation, closed, then);
+        if (then !== ownedBoundaryThen) this.closedState &= ~32;
+        void Reflect.apply(then, closed, [ackClosedFulfilled.bind(this), ackClosedRejected.bind(this)]);
+        this.closedState |= 2;
       } catch (reason) {
-        if (started) this.observationFailure(reason);
-        else this.failure(this.closedOrigin, reason);
-        if (!started) this.pending &= ~1;
-      } finally { closed = undefined; }
-      if (this.flags & 8) return;
+        if (started) { this.closedState |= 4; this.observationFailure(reason); }
+        else { this.closedState |= 3; this.failure(this.closedOrigin, reason); }
+      } finally { closed = undefined; this.closedState &= ~16; }
+      if (this.joinState & 8) return;
       this.decoder = newOwnedDecoder(); this.capture = newOwnedBytes(ownedLedgerAckBacking);
     } catch (reason) { this.failure(this.origin, reason); }
     finally { this.response = undefined; this.installing--; this.schedule(); }
   }
-  private closed(): void { if (this.flags & 256) return; this.flags |= 256; this.schedule(); }
-  private closedFailed(reason: unknown): void {
-    if (!(this.pending & 1) || this.flags & (256 | 16384)) { reason = undefined; return; }
-    this.flags |= 256;
-    // Independent closed is diagnostic; it never rewrites an accepted ACK.
+  acceptClosed(failed: boolean, reason: unknown): void {
+    if (this.closedState & (1 | 8) || this.joinState & 16384) { reason = undefined; return; }
+    this.closedState |= 1 | 64;
     try {
-      if (!(this.flags & 32768) || !this.nativeFailure) {
+      if (failed && (!(this.closedState & 32) || !this.nativeFailure)) {
         const failure = failedSinkOrigin(this.root, this.closedOrigin, reason);
-        if (this.flags & 32768) this.nativeFailure = failure;
+        if (this.closedState & 32) this.nativeFailure = failure;
       }
     } catch { this.unknown(); }
-    finally { reason = undefined; this.schedule(); }
+    finally { reason = undefined; this.closedState &= ~64; this.schedule(); }
   }
   private read(): void {
     if (this.readObservation) throw identityFailure("protocol");
-    this.pending |= 2; this.flags &= ~(16 | 32);
-    this.reading = new Promise<void>(resolve => { this.resolveRead = resolve; });
-    const nonce = this.reading;
-    this.readOrigin ||= sinkOrigin(this.root.sink!, "read");
-    this.installing++;
+    let observation: AckReadCell | undefined = { owner: this, state: 0 };
+    this.readObservation = observation;
+    this.pending |= 2; this.joinState &= ~(16 | 32); this.installing++;
     let original: Promise<ReadableStreamReadResult<Uint8Array>> | undefined, started = false;
-    let observation: OwnedHttpReadObservation | undefined;
     try {
+      this.readOrigin ||= sinkOrigin(this.root.sink!, "read");
       const reader = this.reader!, method = reader.read;
-      const prototype = this.flags & 1 ? ReadableStreamBYOBReader.prototype : ReadableStreamDefaultReader.prototype;
-      if (Object.getPrototypeOf(reader) === prototype && method === (this.flags & 1 ? ownedStatusNativeRead : originalReaderRead)) this.flags |= 65536;
-      else this.flags &= ~65536;
-      if (this.flags & 1) {
-        this.backing = newOwnedBytes(16384);
-        original = Reflect.apply(method, reader, [this.backing]);
+      const prototype = this.joinState & 1 ? ReadableStreamBYOBReader.prototype : ReadableStreamDefaultReader.prototype;
+      if (Object.getPrototypeOf(reader) === prototype && method === (this.joinState & 1 ? ownedStatusNativeRead : originalReaderRead)) this.joinState |= 65536;
+      else this.joinState &= ~65536;
+      if (this.joinState & 1) {
+        const backing = newOwnedBytes(16384);
+        original = Reflect.apply(method, reader, [backing]);
       } else original = Reflect.apply(method, reader, []);
       started = !!original;
       const then = original!.then;
-      if (then !== ownedBoundaryThen) this.flags &= ~65536;
-      observation = { owner: this, nonce, state: 0 }; this.readObservation = observation;
-      void Reflect.apply(then, original, [ownedHttpReadFulfilled.bind(observation), ownedHttpReadRejected.bind(observation)]);
+      if (then !== ownedBoundaryThen) this.joinState &= ~65536;
+      void Reflect.apply(then, original, [ackReadFulfilled.bind(observation), ackReadRejected.bind(observation)]);
       observation.state |= 2;
     } catch (reason) {
-      if (observation) observation.state |= 4;
+      observation.state |= started ? 4 : 3;
       if (started) this.observationFailure(reason);
-      else this.failure(this.readOrigin, reason);
-      if (!started) this.flags |= 16;
+      else this.failure(this.readOrigin || this.origin, reason);
+      if (!started) this.joinState |= 16;
     } finally { observation = undefined; original = undefined; this.installing--; this.schedule(); }
   }
-  dispatchReadObservation(cell: OwnedHttpReadObservation, failed: boolean, value: unknown): void {
-    if (this.readObservation !== cell || cell.state & (1 | 8) || cell.nonce !== this.reading
-      || !(this.pending & 2) || this.flags & (16 | 16384)) { value = undefined; return; }
+  dispatchReadObservation(cell: AckReadCell, failed: boolean, value: unknown): void {
+    if (this.readObservation !== cell || cell.state & (1 | 8)
+      || !(this.pending & 2) || this.joinState & (16 | 16384)) { value = undefined; return; }
     cell.state |= 1;
     try {
-      if (failed) this.readRejected(cell.nonce as Promise<void>, value);
-      else this.readAccepted(cell.nonce as Promise<void>, value as ReadableStreamReadResult<Uint8Array>);
+      if (failed) this.readRejected(value);
+      else this.readAccepted(value as ReadableStreamReadResult<Uint8Array>);
     } catch { this.unknown(); }
     finally { value = undefined; }
   }
   private dischargeReadObservation(): void {
     let cell = this.readObservation;
-    if (cell && !this.installing && !(this.pending & 2) && !(this.flags & 4) && (cell.state & 7) === 3) {
-      cell.state = 8; cell.owner = undefined; cell.nonce = undefined; this.readObservation = undefined;
+    if (cell && !this.installing && !(this.pending & 2) && !(this.joinState & 4) && cell.state === 3) {
+      cell.state = 8; cell.owner = undefined; delete this.readObservation;
     }
     cell = undefined;
   }
-  private readAccepted(nonce: Promise<void>, result: ReadableStreamReadResult<Uint8Array>): void {
-    if (this.reading !== nonce || !(this.pending & 2) || this.flags & (16 | 16384)) { result = undefined as never; return; }
-    this.flags |= 16;
+  private readAccepted(result: ReadableStreamReadResult<Uint8Array>): void {
+    if (!(this.pending & 2) || this.joinState & (16 | 16384)) { result = undefined as never; return; }
+    this.joinState |= 16;
     try {
       const done = !!result.done;
       let value = result.value;
@@ -2715,20 +2760,20 @@ class OwnedLedgerAck {
         this.length = proof.length;
         copyOwnedBytes(this.capture!, value); value = undefined;
       } else this.length = 0;
-      if (done) this.flags |= 32;
+      if (done) this.joinState |= 32;
     } catch (reason) { this.failure(this.origin, reason); }
     finally { result = undefined as never; this.schedule(); }
   }
-  private readRejected(nonce: Promise<void>, reason: unknown): void {
-    if (this.reading !== nonce || !(this.pending & 2) || this.flags & (16 | 16384)) { reason = undefined; return; }
-    this.flags |= 16;
+  private readRejected(reason: unknown): void {
+    if (!(this.pending & 2) || this.joinState & (16 | 16384)) { reason = undefined; return; }
+    this.joinState |= 16;
     try {
-      if (this.flags & 65536 && this.nativeFailure) {
+      if (this.joinState & 65536 && this.nativeFailure) {
         this.primaryOrigin ||= 32 * this.nativeFailure.ordinal + sinkKinds.indexOf(this.nativeFailure.origin);
-        this.flags |= 8; this.schedule();
+        this.joinState |= 8; this.schedule();
       } else {
         this.failure(this.readOrigin, reason);
-        if (this.flags & 65536) {
+        if (this.joinState & 65536) {
           const failure = this.root.sinkOrigins!.get(Math.floor(this.readOrigin / 32));
           if (failure && typeof failure !== "number") this.nativeFailure = failure;
         }
@@ -2737,17 +2782,17 @@ class OwnedLedgerAck {
     finally { reason = undefined; }
   }
   private cancel(): void {
-    this.flags |= 512; this.pending |= 4; this.installing++;
+    this.joinState |= 512; this.pending |= 4; this.installing++;
     let original: Promise<void> | undefined, started = false;
     try {
       if (!this.reader) { if (this.body) this.unknown(); this.cancelled(); return; }
       this.cancelOrigin = sinkOrigin(this.root.sink!, "cancel");
       const reader = this.reader, method = reader.cancel;
-      const prototype = this.flags & 1 ? ReadableStreamBYOBReader.prototype : ReadableStreamDefaultReader.prototype;
-      if (Object.getPrototypeOf(reader) === prototype && method === (this.flags & 1 ? originalByobCancel : originalReaderCancel)) this.flags |= 131072;
+      const prototype = this.joinState & 1 ? ReadableStreamBYOBReader.prototype : ReadableStreamDefaultReader.prototype;
+      if (Object.getPrototypeOf(reader) === prototype && method === (this.joinState & 1 ? originalByobCancel : originalReaderCancel)) this.joinState |= 131072;
       original = Reflect.apply(method, reader, []); started = !!original;
       const then = original!.then;
-      if (then !== ownedBoundaryThen) this.flags &= ~131072;
+      if (then !== ownedBoundaryThen) this.joinState &= ~131072;
       this.cancelObservation = { owner: this, kind: 2, state: 0 };
       installOwnedOriginalMethod(this.cancelObservation, original, then);
     } catch (reason) {
@@ -2755,39 +2800,80 @@ class OwnedLedgerAck {
       else this.cancelFailed(reason);
     } finally { original = undefined; this.installing--; this.schedule(); }
   }
-  private cancelled(): void { if (this.flags & 1024) return; this.flags |= 1024; this.schedule(); }
+  private cancelled(): void { if (this.joinState & 1024) return; this.joinState |= 1024; this.schedule(); }
   private cancelFailed(reason: unknown): void {
-    if (!(this.pending & 4) || this.flags & (1024 | 16384)) { reason = undefined; return; }
-    this.flags |= 1024;
-    try { if (!(this.flags & 131072) || !this.nativeFailure) failedSinkOrigin(this.root, this.cancelOrigin, reason); } catch { this.unknown(); }
+    if (!(this.pending & 4) || this.joinState & (1024 | 16384)) { reason = undefined; return; }
+    this.joinState |= 1024;
+    try {
+      if (!(this.joinState & 131072) || !this.nativeFailure) {
+        const failure = failedSinkOrigin(this.root, this.cancelOrigin, reason);
+        if (this.joinState & 131072) this.nativeFailure = failure;
+      }
+    } catch { this.unknown(); }
     finally { reason = undefined; this.schedule(); }
   }
   private unlock(): void {
-    this.flags |= 2048; this.pending |= 8; this.installing++;
+    this.joinState |= 2048; this.installing++; this.unlockState = 16;
     let original: unknown, started = false;
     try {
-      if (!this.reader) { this.unlocked(); return; }
+      if (!this.reader) { this.unlockState |= 3; return; }
       this.unlockOrigin = sinkOrigin(this.root.sink!, "unlock");
       original = this.reader.releaseLock(); started = original !== undefined;
-      if (!started) { this.unlocked(); return; }
+      if (!started) { this.unlockState |= 3; return; }
       let then: unknown;
       if (original !== null && (typeof original === "object" || typeof original === "function")) then = (original as { then?: unknown }).then;
-      if (typeof then !== "function") { original = Promise.resolve(); then = ownedBoundaryThen; }
-      this.unlockObservation = { owner: this, kind: 4, state: 0 };
-      installOwnedOriginalMethod(this.unlockObservation, original, then);
+      if (typeof then !== "function") { this.unlockState |= 3; return; }
+      void Reflect.apply(then, original, [ackUnlockFulfilled.bind(this), ackUnlockRejected.bind(this)]);
+      this.unlockState |= 2;
       then = undefined;
     } catch (reason) {
-      if (started) this.observationFailure(reason);
-      else this.unlockFailed(reason);
-    } finally { original = undefined; this.installing--; this.schedule(); }
+      if (started) { this.unlockState |= 4; this.observationFailure(reason); }
+      else { this.unlockState |= 3; this.failure(this.unlockOrigin, reason); }
+    } finally { original = undefined; this.unlockState &= ~16; this.installing--; this.schedule(); }
   }
-  private unlocked(): void { if (this.flags & 4096) return; this.flags |= 4096; this.schedule(); }
-  private unlockFailed(reason: unknown): void {
-    if (!(this.pending & 8) || this.flags & (4096 | 16384)) { reason = undefined; return; }
-    this.flags |= 4096;
-    try { failedSinkOrigin(this.root, this.unlockOrigin, reason); } catch { this.unknown(); }
-    finally { reason = undefined; this.schedule(); }
+  acceptUnlock(failed: boolean, reason: unknown): void {
+    if (this.unlockState & (1 | 8) || this.joinState & 16384) { reason = undefined; return; }
+    this.unlockState |= 1 | 64;
+    try { if (failed) failedSinkOrigin(this.root, this.unlockOrigin, reason); }
+    catch { this.unknown(); }
+    finally { reason = undefined; this.unlockState &= ~64; this.schedule(); }
   }
+  private compact(): void {
+    if (this.joinState & 4 || this.closedState & (4 | 16 | 64) || this.unlockState & (4 | 16 | 64)
+      || !(this.unlockState & 2) || this.installing || this.pending || this.readObservation) return;
+    if (!severOwnedOriginal(this.cancelObservation)) { this.unknown(); return; }
+    if (this.parent && !this.parent.handoffAck(this)) return;
+    // Same physical instance, same destination and charge. Queued execution
+    // enters tail mode only after read/cancel/unlock-install frames returned.
+    delete this.readObservation; delete this.cancelObservation; delete this.parent; delete this.response;
+    delete this.reader; delete this.capture; delete this.decoder;
+    const ended: Partial<OwnedLedgerAck> = this;
+    delete ended.text; delete ended.wire; delete ended.length; delete ended.pending;
+    delete ended.installing; delete ended.readOrigin; delete ended.cancelOrigin;
+    delete ended.primaryOrigin; delete ended.origin;
+    this.joinState = 262144; this.schedule();
+  }
+  private retireTail(): void {
+    if (this.joinState & 16384) return;
+    if (this.joinState & 4 || (this.closedState & (7 | 16 | 64)) !== 3 || (this.unlockState & (7 | 16 | 64)) !== 3) return;
+    try { if (this.body?.locked) { this.unknown(); return; } }
+    catch { this.unknown(); return; }
+    const owner = this.owner!, slot = this.slot, root = this.root;
+    if (owner instanceof OwnedAccountingTerminal && owner.operations[slot!] !== this) { this.unknown(); return; }
+    // End external handler rights and payload aliases before the same physical
+    // destination discharges its existing component. Failure cannot retry it.
+    this.closedState |= 8; this.unlockState |= 8; this.joinState |= 16384;
+    delete this.body; delete this.nativeFailure;
+    try {
+      if (owner instanceof OwnedAccountingTerminal) owner.retireAckTail(slot!, this);
+      else {
+        retireOwnedLedgerAcknowledgmentData(root, ownedLedgerAckData - ownedLedgerReceiptData);
+        if (owner instanceof OwnedBudgetSequence) owner.retireCommand(); else retireOwnedSinkChild(root);
+      }
+    } catch { this.joinState |= 4; root.unknown = true; return; }
+    delete this.owner; delete this.slot;
+  }
+
   private parse(): void {
     // Whole malformed-inclusive native construction stays inside the prepaid
     // component. The scanner's limited bit is deliberately irrelevant here.
@@ -2799,57 +2885,43 @@ class OwnedLedgerAck {
         if (!(error instanceof SyntaxError)) throw error;
         error = undefined; this.failure(this.origin, 0); return;
       }
-      this.flags |= 128;
-      this.parent.acceptAck(value);
+      this.joinState |= 128;
+      if (this.parent) this.parent.acceptAck(value); else (this.owner as OwnedAccountingTerminal).accept(this.slot!, value);
     } finally { value = undefined; this.text = ""; }
   }
   private advance(): void {
-    this.flags &= ~2;
-    if (this.installing || this.flags & 16384) return;
+    this.joinState &= ~2;
+    if (this.joinState & 16384) return;
+    if (this.joinState & 262144) { this.retireTail(); return; }
+    if (this.installing) return;
     try {
-      if (this.primaryOrigin && !(this.flags & 128)) {
+      if (this.primaryOrigin && !(this.joinState & 128)) {
         const failure = this.root.sinkOrigins!.get(Math.floor(this.primaryOrigin / 32));
         if (!failure || typeof failure === "number") { this.unknown(); return; }
-        this.flags |= 128; this.parent.rejectAck(failure);
+        this.joinState |= 128; if (this.parent) this.parent.rejectAck(failure); else (this.owner as OwnedAccountingTerminal).reject(this.slot!);
       }
-      if (this.flags & 256) this.pending &= ~1;
-      if (this.flags & 1024) this.pending &= ~4;
-      if (this.flags & 4096) this.pending &= ~8;
-      if (this.pending & 2 && this.flags & 16) {
+      if (this.joinState & 1024) this.pending &= ~4;
+      if (this.pending & 2 && this.joinState & 16) {
         this.pending &= ~2;
-        this.resolveRead?.(); this.resolveRead = undefined; this.reading = undefined; this.backing = undefined;
-        if (!(this.flags & 8)) {
+        if (!(this.joinState & 8)) {
           this.wire += this.length;
-          let decoded = this.length ? decodeOwnedBytes(this.decoder!, ownedByteSubarray(this.capture!, 0, this.length), !(this.flags & 32))
-            : this.flags & 32 ? decodeOwnedBytes(this.decoder!) : "";
+          let decoded = this.length ? decodeOwnedBytes(this.decoder!, ownedByteSubarray(this.capture!, 0, this.length), !(this.joinState & 32))
+            : this.joinState & 32 ? decodeOwnedBytes(this.decoder!) : "";
           if (decoded.length > ownedLedgerAckWire - this.text.length) this.failure(this.origin, 0);
           else this.text += decoded;
           this.length = 0;
           decoded = "";
           this.dischargeReadObservation();
-          if (!(this.flags & 8) && this.flags & 32) { this.flags |= 64 | 8; this.parse(); }
+          if (!(this.joinState & 8) && this.joinState & 32) { this.joinState |= 64 | 8; this.parse(); }
         }
         else this.dischargeReadObservation();
+        if (!(this.joinState & 8)) { this.schedule(); return; }
       }
-      if (this.flags & 8) {
-        if (!(this.flags & (64 | 512))) { this.cancel(); return; }
+      if (this.joinState & 8) {
+        if (!(this.joinState & (64 | 512))) { this.cancel(); return; }
         if (this.pending & (2 | 4)) return;
-        if (!(this.flags & (4 | 8192))) {
-          // No future read/parse right remains; the actual read callback and
-          // its installation/tail have joined. Keep physical reader/closed
-          // custody, but clear every payload alias before returning its DATA.
-          this.capture = undefined; this.backing = undefined; this.decoder = undefined; this.text = "";
-          this.flags |= 8192; this.parent.retireAckPayload();
-        }
-        if (!(this.flags & 2048)) { this.unlock(); return; }
-        if (this.pending || this.flags & 4) return;
-        if (this.body?.locked) { this.unknown(); return; }
-        if (!severOwnedOriginal(this.closedObservation) || !severOwnedOriginal(this.cancelObservation)
-          || !severOwnedOriginal(this.unlockObservation)) { this.unknown(); return; }
-        this.closedObservation = undefined; this.cancelObservation = undefined; this.unlockObservation = undefined;
-        this.reader = undefined; this.body = undefined; this.decoder = undefined;
-        this.capture = undefined; this.backing = undefined; this.text = ""; this.nativeFailure = undefined;
-        this.flags |= 16384; this.parent.retireAck(); return;
+        if (!(this.joinState & 2048)) { this.unlock(); return; }
+        this.compact(); return;
       }
       if (!(this.pending & 2)) this.read();
     } catch (reason) { this.failure(this.origin, reason); }
@@ -2875,19 +2947,6 @@ class OwnedTerminalOperation {
     this.processingOrigin = sinkOrigin(owner.sink, "body");
     this.dispositionOrigin = sinkOrigin(owner.sink, "cancel");
   }
-  acceptAck(value: unknown): void {
-    if (!(this.flags & 128)) throw identityFailure("protocol");
-    try { this.owner.accept(this.code, value); } finally { value = undefined; }
-  }
-  rejectAck(_failure: object): void {
-    if (!(this.flags & 128)) throw identityFailure("protocol");
-    this.owner.reject(this.code);
-  }
-  retireAckPayload(): void {
-    if (this.flags & 256) return;
-    this.flags |= 256; retireOwnedLedgerAcknowledgmentData(this.owner.root, ownedLedgerAckData);
-  }
-  retireAck(): void { this.flags &= ~16; this.retire(); }
   dispatchOriginal(cell: OwnedOriginalObservation, failed: boolean, value: unknown): void {
     if (cell !== this.observation || this.flags & 1) { value = undefined; return; }
     try { if (failed) this.reject(value); else this.accept(value); }
@@ -3000,7 +3059,7 @@ function reserveOwnedTerminalBacking(root: RequestOwner, legs: number): void {
   root.sinkCredits += 21 * (legs - (previous ?? -1));
 }
 class OwnedAccountingTerminal {
-  readonly operations: (OwnedTerminalOperation | undefined)[] = new Array(15);
+  readonly operations: (OwnedTerminalOperation | OwnedLedgerAck | undefined)[] = new Array(15);
   readonly result: Promise<boolean>;
   readonly retired: Promise<void>;
   resolve!: (ok: boolean) => void;
@@ -3012,10 +3071,10 @@ class OwnedAccountingTerminal {
   failures = 0;
   ackCredits = 0;
   phase = 0; // prepared, adopted, launching, failed-before-adoption, retired
-  sinks!: AccountingSinks;
-  reservation!: BudgetReservation;
-  event!: UsageEvent;
-  custody!: ProxyCompletion;
+  declare sinks: AccountingSinks;
+  declare reservation: BudgetReservation;
+  declare event: UsageEvent;
+  declare custody: ProxyCompletion;
   declare readonly cap: OwnedHttpRequest;
   declare readonly root: RequestOwner;
   declare readonly sink: OwnedHttpSinkOwner;
@@ -3102,12 +3161,15 @@ class OwnedAccountingTerminal {
     operation.observe(original); original = undefined as never;
   }
   body(index: number, response: Response, cancel: boolean): void {
-    const operation = this.operation(5 + index, cancel ? "cancel" : "body", response);
     if (!cancel) {
-      operation.flags |= 128;
-      const reader = new OwnedLedgerAck(operation, response);
-      operation.subject = reader; response = undefined as never; reader.open(); return;
+      const code = 5 + index;
+      if (this.launched & (1 << code)) throw identityFailure("protocol");
+      const origin = sinkOrigin(this.sink, "body");
+      const reader = new OwnedLedgerAck(this, response, code, origin);
+      this.launched |= 1 << code; this.operations[code] = reader; this.physical++;
+      response = undefined as never; reader.open(); return;
     }
+    const operation = this.operation(5 + index, "cancel", response);
     if (cancel) operation.flags |= 64;
     let original: Promise<unknown>;
     try {
@@ -3130,7 +3192,7 @@ class OwnedAccountingTerminal {
       } else this.body(index, response, false);
     } else if (code < 10) {
       const index = code - 5;
-      if (this.operations[code]!.flags & 64) return;
+      if (this.operations[code] instanceof OwnedTerminalOperation && this.operations[code].flags & 64) return;
       const item = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
       const valid = index === 4 ? item?.eventId === this.event.id && (item.outcome === "stored" || item.outcome === "duplicate" || item.outcome === "expired_by_retention")
         : this.reservation.charges ? item?.charged === true && item.chargeId === this.reservation.charges[index].request.chargeId : item?.settled === true;
@@ -3148,7 +3210,7 @@ class OwnedAccountingTerminal {
     const index = code < 5 ? code : code < 10 ? code - 5 : code - 10;
     if (this.completed & (1 << index)) return;
     try { if (code < 10) {
-      if (code >= 5 && this.operations[code]!.flags & 64) return;
+      if (code >= 5 && this.operations[code] instanceof OwnedTerminalOperation && this.operations[code].flags & 64) return;
       if (index === 4) this.complete(4, false);
       else if (!(this.launched & (1 << (10 + index)))) this.queue(index);
     } else if (code === 14) {
@@ -3176,18 +3238,39 @@ class OwnedAccountingTerminal {
       }
     }
     this.resolve(!this.failures);
+    this.phase |= 16; this.scheduleLogicalCut();
+  }
+  launchReturned(): void { this.phase |= 8; this.scheduleLogicalCut(); }
+  private scheduleLogicalCut(): void {
+    if ((this.phase & 24) !== 24 || this.phase & (32 | 64) || this.pending) return;
+    this.phase |= 32;
+    try { ownedBoundaryQueue(this.compactLogical.bind(this)); }
+    catch { this.root.unknown = true; }
+  }
+  private compactLogical(): void {
+    this.phase &= ~32;
+    if ((this.phase & 24) !== 24 || this.phase & 64 || this.pending) return;
+    const ended: Partial<OwnedAccountingTerminal> = this;
+    delete ended.event; delete ended.reservation; delete ended.sinks; delete ended.custody;
+    this.phase |= 64;
+    this.finishRetirement();
+  }
+  retireAckTail(code: number, tail: OwnedLedgerAck): void {
+    if (code < 5 || code >= 10 || this.operations[code] !== tail) throw identityFailure("protocol");
+    this.retireOperation(code);
   }
   retireOperation(code: number, ackPayloadRetired = false): void {
-    this.operations[code] = undefined;
+    if (!Object.hasOwn(this.operations, code)) throw identityFailure("protocol");
+    delete this.operations[code];
     if (code >= 5 && code < 10) { this.ackCredits--; if (!ackPayloadRetired) retireOwnedLedgerAcknowledgmentData(this.root, ownedLedgerAckData); }
     this.physical--; this.finishRetirement();
   }
   finishRetirement(): void {
-    if (this.physical || this.pending || this.root.unknown) return;
+    if (this.physical || this.pending || this.root.unknown || !(this.phase & 64)) return;
     if (this.ackCredits) { retireOwnedLedgerAcknowledgmentData(this.root, this.ackCredits * ownedLedgerAckData); this.ackCredits = 0; }
     if (this.root.accountingTerminal === this) this.root.accountingTerminal = undefined;
-    this.phase = 4;
-    this.operations.length = 0; this.sinks = undefined as never; this.reservation = undefined as never; this.event = undefined as never;
+    this.phase = this.phase & ~7 | 4;
+    this.operations.length = 0;
     this.resolve = undefined as never; this.resolveRetired(); this.resolveRetired = undefined as never;
   }
 }
@@ -3320,6 +3403,7 @@ export function startOwnedHttpAccountingTerminal(cap: OwnedHttpRequest, accounti
     terminal.failures |= 4;
     recordOwnedTerminalFailure(root, custody, root.accountingStartOrigin!, reason); reason = undefined;
   }
+  terminal.launchReturned();
   return terminal.result;
 }
 

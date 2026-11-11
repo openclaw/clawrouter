@@ -6,6 +6,129 @@ export const ownedHttpPricingModel = 'fireworks/glm-5.2';
 export const ownedHttpControlModels = { gmi: 'gmi/deepseek-ai/DeepSeek-V4-Pro', venice: 'venice/zai-org-glm-5-2' };
 export const ownedHttpCases = ['soft_venice', 'soft', 'chat', 'tool', 'error', 'abort', 'large', 'off', 'gmi', 'venice', 'pricing', 'pricing_media', 'pricing_cache', 'pricing_wide', 'pricing_large', 'pricing_unicode', 'pricing_outside', 'pricing_prepare_fail'];
 export const ownedHttpProxyKey = id => `clawrouter-live-owned_http_${id}-fixture-secret`;
+// Fixture-only observers retain actual records/handlers so own-key cuts and
+// stale FIRST callbacks can be inspected without inventing retirement proof.
+export function createOwnedAckPhaseFixture(options, charged) {
+  const acks = [], reads = [], roles = [], cuts = [], gates = [], terminals = [], budgets = [], retirements = [];
+  const row = { queueFailures: 0, bodyReads: 0, cancels: 0, cancelDone: 0, unlocks: 0, retries: [], wrongRetires: 0, uploads: 0, uploadDone: 0 };
+  let released = false;
+  function gate() { let release; const promise = new Promise(done => { release = done; }); gates.push(release); if (released) release(); return promise; }
+  const readGate = gate(); let releaseReads = gates[0];
+  const uploadGate = gate(); const uploadWork = [], sharedFailure = {};
+  function response(value, path) {
+    if (options.failureMode) {
+      if (path !== '/reserve') return value;
+      const reason = options.failureMode === 'independent-undefined' ? undefined : sharedFailure;
+      value = new Response(new ReadableStream({ type: 'bytes', pull(controller) { controller.error(reason); } }));
+      if (options.failureMode === 'native') return value;
+      const body = value.body, getReader = body.getReader;
+      Object.defineProperty(body, 'getReader', { value(...args) {
+        const reader = Reflect.apply(getReader, this, args), read = reader.read, cancel = reader.cancel, unlock = reader.releaseLock;
+        const closed = reader.closed;
+        Object.defineProperty(reader, 'closed', { value: { then(yes, no) { closed.then(yes, no); } } });
+        Object.defineProperty(reader, 'read', { value(...args) { return Reflect.apply(read, this, args); } });
+        Object.defineProperty(reader, 'cancel', { value(...args) { return Reflect.apply(cancel, this, args); } });
+        Object.defineProperty(reader, 'releaseLock', { value(...args) { Reflect.apply(unlock, this, args); return { then(_yes, no) { no(reason); } }; } });
+        return reader;
+      } });
+      return value;
+    }
+    const body = value.body;
+    if (!body) return value;
+    const getReader = body.getReader;
+    Object.defineProperty(body, 'getReader', { value(...args) {
+      const reader = Reflect.apply(getReader, this, args), read = reader.read, cancel = reader.cancel, unlock = reader.releaseLock, closed = reader.closed;
+      const closedGate = gate(), unlockGate = gate(); let first = true;
+      Object.defineProperty(reader, 'closed', { value: { then(yes, no) {
+        roles.push({ role:'closed', yes, no });
+        Promise.all([closed, closedGate]).then(() => yes(undefined), no);
+        if (options.closedInstallThrow) { yes(undefined); throw undefined; }
+        return Object.defineProperty({}, 'then', { get() { throw Error('closed observer return inspected'); } });
+      } } });
+      Object.defineProperty(reader, 'read', { value(...readArgs) {
+        row.bodyReads++; const original = Reflect.apply(read, this, readArgs);
+        const hold = first && (options.pendingRead || options.activeFinal && (path === '/settle' || path === '/ingest')); first = false;
+        const accepted = hold ? original.then(async part => { await readGate; return part; }) : original;
+        if (!options.readInstallThrow) return accepted;
+        return { then(yes,no) { accepted.then(yes,no); throw undefined; } };
+      } });
+      if(options.pendingCancel)Object.defineProperty(reader,'cancel',{value(...args){
+        row.cancels++;const original=Reflect.apply(cancel,this,args),held=gate();
+        return original.then(()=>held).then(()=>{row.cancelDone++;});
+      }});
+      Object.defineProperty(reader, 'releaseLock', { value(...unlockArgs) {
+        row.unlocks++; const original = Reflect.apply(unlock, this, unlockArgs);
+        return { then(yes, no) {
+          roles.push({ role:'unlock', yes, no });
+          Promise.resolve(original).then(() => unlockGate).then(() => yes(Object.defineProperty({}, 'then', { get() { throw Error('unlock fulfillment inspected'); } })), no);
+          if (options.unlockInstallThrow) { yes(undefined); throw undefined; }
+        } };
+      } });
+      return reader;
+    } });
+    return value;
+  }
+  const api = {
+    env(env) {
+      const budget = env.BUDGET_LEDGER, usage = env.USAGE_LEDGER, queue = env.USAGE_QUEUE;
+      const wrap = namespace => new Proxy(namespace, { get(target, key) {
+        if (key === 'get') return function (...args) { const stub = Reflect.apply(target.get, target, args); return new Proxy(stub, { get(object, field) {
+          if (field === 'fetch') return function (...values) { const path = new URL(values[0]).pathname; return Reflect.apply(object.fetch, object, values).then(value => response(value, path)); };
+          const value = Reflect.get(object, field, object); return typeof value === 'function' ? value.bind(object) : value;
+        } }); };
+        const value = Reflect.get(target, key, target); return typeof value === 'function' ? value.bind(target) : value;
+      } });
+      const bindings = { BUDGET_LEDGER: wrap(budget), USAGE_LEDGER: wrap(usage), USAGE_QUEUE: { send(...args) {
+        if (args[0]?.type === 'clawrouter.usage.v1') { row.queueFailures++; return Promise.reject(undefined); }
+        return Reflect.apply(queue.send, queue, args);
+      } } };
+      return new Proxy(env, { get(target, key, receiver) { return Object.hasOwn(bindings, key) ? bindings[key] : Reflect.get(target, key, receiver); } });
+    },
+    upload(init) {
+      if (!options.upload || !init?.body || typeof init.body.getReader !== 'function') return;
+      row.uploads++;
+      const body = init.body, original = uploadGate.then(async () => { await new Response(body).arrayBuffer(); row.uploadDone++; });
+      uploadWork.push(original);
+      return Promise.resolve(new Response('{"id":"fixture","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}', {headers:{'content-type':'application/json'}}));
+    },
+    ack(cell) { acks.push(cell); },
+    read(cell, yes, no) { reads.push({ cell, yes, no }); return [yes, no]; },
+    beforeCut(cell) {
+      if (cell.slot !== undefined) {
+        const before = cell.owner.physical; let rejected = false;
+        try { cell.owner.retireAckTail(cell.slot, {}); } catch { rejected = true; }
+        if (!rejected || cell.owner.physical !== before) throw Error('wrong ACK destination changed custody'); row.wrongRetires++;
+      }
+      const root = cell.root, origins = [cell.closedOrigin, cell.readOrigin, cell.cancelOrigin, cell.unlockOrigin];
+      const failures = origins.filter(origin => origin && root.sinkOrigins.has(Math.floor(origin / 32)));
+      cuts.push({ cell, before: charged(), physical: cell.owner.physical, keysBefore: Object.keys(cell),
+        failures: failures.length, correlated: !!cell.nativeFailure,
+        undefinedFailures: failures.filter(origin => root.sinkOrigins.get(Math.floor(origin / 32))?.primaryIsUndefined).length });
+    },
+    afterCut(cell) { const cut = cuts.findLast(item => item.cell === cell); cut.after = charged(); cut.physicalAfter = cell.owner.physical; cut.keys = Object.keys(cell); },
+    retired(cell, owner, physical) { retirements.push({ physical, after: owner.physical, keys: Object.keys(cell), state: cell.joinState }); },
+    terminal(cell) { terminals.push(cell); },
+    budget(cell) { budgets.push(cell); },
+    retry(owner, chosen, rejected) { row.retries.push({ closed: owner.retryClosed, retry: Object.hasOwn(owner, 'retry'), required: Object.hasOwn(owner, 'required'), chosen, rejected }); },
+    snapshot() { return { ...row, charge: charged(), acks: acks.map(cell => ({ keys: Object.keys(cell), terminal: cell.slot !== undefined, state: cell.joinState,
+      closed: cell.closedState, unlock: cell.unlockState, pending:cell.pending, capture: Object.hasOwn(cell, 'capture') })),
+      reads: reads.map(({cell}) => ({ state: cell.state, severed: cell.owner === undefined, keys: Object.keys(cell) })),
+      retirements, cuts: cuts.map(({cell, ...cut}) => cut), budgets: budgets.map(cell => ({ keys: Object.keys(cell), phase: cell.phase, physical: cell.physical })),
+      terminals: terminals.map(cell => ({ keys: Object.keys(cell), live: Object.keys(cell.operations), pending: cell.pending, physical: cell.physical })) }; },
+    stale() {
+      let gets = 0, callbacks = 0;
+      const foreign = {}; for (const key of ['then', 'done', 'value', 'body', 'buffer']) Object.defineProperty(foreign, key, { get() { gets++; throw Error('stale ACK handler inspected payload'); } });
+      for (const item of reads) if (item.cell.owner === undefined) { item.yes(foreign); item.no(foreign); callbacks += 2; }
+      for (const cell of acks) if (cell.joinState & 16384) cell.retireTail();
+      if (acks.every(cell => cell.joinState & 16384)) for (const role of roles) { role.yes(foreign); role.no(foreign); callbacks += 2; }
+      return { gets, callbacks };
+    },
+    releaseReads() { releaseReads(); },
+    release() { released = true; for (const release of gates) release(); return Promise.all(uploadWork); },
+  };
+  return api;
+}
+
 export function createOwnedTerminalFixture(options, commands) {
   const row = { factories: [], shellAttempts: 0, shells: 0, primary: 0, fallback: 0, adopted: 0, failed: 0,
     closes: 0, installs: 0, launches: 0, logical: [], lateGets: 0, methodsA: 0, methodsB: 0,
@@ -266,6 +389,7 @@ import * as budgetCommands from './worker/http-identity-owner.ts';
 import {captureOwnedResponseMetadata} from './worker/proxy-completion.ts';
 const createOwnedBudgetSequenceFixture = ${createOwnedBudgetSequenceFixture.toString()};
 const createOwnedTerminalFixture = ${createOwnedTerminalFixture.toString()};
+const createOwnedAckPhaseFixture = ${createOwnedAckPhaseFixture.toString()};
 import {createSseUsageInspector,extractUsageTokens,responseOutcome} from './worker/token-usage.ts';
 export class PolicyBindingIndexObject extends NativeAuthority {
  constructor(ctx,env){super(ctx,env);this.fixtureSql=ctx.storage.sql;}
@@ -309,6 +433,7 @@ const originalValues=Object.values;let pricingActive=false,recursivePricingValue
 Object.values=function(value){if(pricingActive&&value&&Object.hasOwn(value,'ownedPricingNested'))recursivePricingValues++;return Reflect.apply(originalValues,this,arguments);};
 const originalFetch=globalThis.fetch;
 globalThis.fetch=function(input,init){
+ const held=globalThis.__ownedAckPhaseFixture?.upload(init);if(held)return held;
  const url=typeof input==='string'?input:input instanceof URL?input.href:input.url;
  if(url!=='https://api.venice.ai/api/v1/chat/completions')return Reflect.apply(originalFetch,this,arguments);
  calls.push({kind:'provider',path:'/chat/completions',charged:bodyBudgetCharged()});
@@ -529,6 +654,7 @@ function environment(env,off=false){
   const values={ACCESS_CONTROL:authority,GRANT_CREDENTIALS:credentials,BUDGET_LEDGER:budget,USAGE_QUEUE:queue,CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS:'60',VOLCANO_ENGINE_API_KEY:'must-not-fallback',ARK_API_KEY:'must-not-fallback'};
   scoped=new Proxy(env,{get(target,name,receiver){if(name==='OWNED_CONFIG_FIXTURE'&&configurationFault)return configurationValue();return Object.hasOwn(values,name)?values[name]:Reflect.get(target,name,receiver);}});
   if(globalThis.__ownedTerminalFixture)scoped=globalThis.__ownedTerminalFixture.env(scoped);
+  if(globalThis.__ownedAckPhaseFixture)scoped=globalThis.__ownedAckPhaseFixture.env(scoped);
   offScoped=new Proxy(scoped,{get(target,name,receiver){return name==='CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS'?'0':Reflect.get(target,name,receiver);}});
  }
  return off?offScoped:scoped;
@@ -536,6 +662,13 @@ function environment(env,off=false){
 let queueHandoff,retainedRace;
 export default {...handler,async fetch(request,env,context){
  const path=new URL(request.url).pathname;
+ if(path==='/fixture/ack-phases'){
+  if(request.method==='POST'){if(scoped)throw Error('ACK fixture must precede request');globalThis.__ownedAckPhaseFixture=createOwnedAckPhaseFixture(await request.json(),bodyBudgetCharged);return new Response(null,{status:204});}
+  if(request.method==='DELETE'){await globalThis.__ownedAckPhaseFixture?.release();return new Response(null,{status:204});}
+  if(request.method==='PATCH'){globalThis.__ownedAckPhaseFixture?.releaseReads();return new Response(null,{status:204});}
+  if(new URL(request.url).searchParams.has('stale'))return Response.json(globalThis.__ownedAckPhaseFixture.stale());
+  return Response.json(globalThis.__ownedAckPhaseFixture?.snapshot()??null);
+ }
  if(path==='/fixture/retained-status'){
   if(request.method==='DELETE'){if(retainedRace){retainedRace.disposed=true;retainedRace.release();}return new Response(null,{status:204});}
   return Response.json(retainedRace?{arrived:retainedRace.arrived,bodyGets:retainedRace.bodyGets,completedPreparations:retainedRace.completedPreparations,before:retainedRace.before,after:retainedRace.after,current:globalThis.__ownedJsonObservation.foregroundState(),blocked:globalThis.__ownedJsonObservation.reductionBlocked}:null);

@@ -1,6 +1,6 @@
 # Private owned HTTP Chat staging
 
-The current work is SOURCE_ONLY_PARTIAL repair of published candidate
+The current source candidate repairs published candidate
 `bbfda9f1e2e4535436a5f4a4b142adaaefb9e1bc`, against exact main
 `7b87537df59c39ae1bae0cfa748208572fa4d19f`. That candidate preserved the
 `236366c0a7209b8c71b325051d935bb7820bb667` ancestry and was code complete for its
@@ -15,7 +15,7 @@ test command stops on typecheck failure, so its Node/Workerd witness files did
 not run. Earlier UNRUN statements below describe their original source-only
 checkpoints; they do not erase these actual hosted failures.
 
-The partial repair replaces25 constructor parameter-property declarations with
+The loading repair replaces25 constructor parameter-property declarations with
 erasable declarations and explicit assignments at the same constructor/super
 boundary. It preserves own-field creation order and presence, including
 undefined optional fields. Queue originals keep their actual send return type;
@@ -47,9 +47,112 @@ and strip-only source witnesses supplement the existing clean four-attempt tests
 All repaired runtime behavior remains UNRUN_CODE_ONLY_HOSTED.
 
 Whole DATA/COMMON, fixed operation/source/read/terminal128 and sync512, paid
-traversal CONTROL and permanent65536 inventories remain OPEN. The independently
-reported ACK-overlap CONTROL obstruction is not repaired or relabeled here.
-Earlier lower component counts are historical evidence, not fit certificates.
+traversal CONTROL and permanent65536 inventories remain OPEN. The cohesive
+representation repair below removes proven-dead logical state from the held-ACK
+schedule. It does not establish a complete fixed-window upper bound. Earlier
+lower component counts are historical evidence, not fit certificates.
+
+### In-place ACK and logical-owner phase cuts
+
+This source repair follows local partial commit
+`321e1ed0636c4df2c83a7a34b30ca7c5e0dc9275`. It changes only the already-private
+HTTP-owner/proxy implementation and focused fixtures. No new tail object,
+registry, terminal shell, Promise, physical child, arena or funding allowance is
+introduced by compaction. Every ACK record is fresh, enrolled at the existing
+command/terminal position before `getReader`, and remains that same physical
+record until retirement. ACK/data charges do not change at a phase cut.
+
+The ACK's initial physical destination is the actual request/budget sequence or
+exact terminal slot. A standalone logical adapter remains linked only through
+its receipt projection and fetch handoff. `admittedOwnedBudgetCommand` and
+`admittedOwnedLedgerCommand` synchronously return `command.ready`; their frames
+have ended before queued ACK processing. The result Promise and projected
+receipt retain no adapter link. Once logical projection, successful fetch
+installation and callback/processing tails have ended, the fetch observation
+severs and the ACK can delete its parent link. Receipt storage remains paid;
+this is not a Promise-settlement retirement claim.
+
+`AckReadCell` replaces the unused ACK read-ready Promise/executor/resolver nonce.
+Each actual read gets a fresh two-field identity cell before invocation. The
+current-cell/pending/FIRST checks precede DONE/VALUE access. Callback-active and
+installation state remain distinct. Read processing clears the cell only after
+the immutable capture's consumers have returned; the next queued processing
+turn starts any successor. Old externally retained handlers then refer only to
+an inert cell. An installation throw, including after FIRST or `throw undefined`,
+keeps the cell and complete future capture state funded. Actual observer call
+returns and unlock fulfillment values are ignored.
+
+After read and FIRSTcancel have joined, unlock has been invoked and its
+installation/receiver frames have returned, the same ACK deletes active
+reader/decoder/capture/text/counter/origin/adapter fields. It retains these own
+fields: `owner`, `body`, `closedState`, `closedOrigin`, `unlockState`,
+`unlockOrigin`, `joinState`, `nativeFailure`; a terminal ACK also retains `slot`.
+Closed and unlock each keep FIRST, installation, callback-tail and inert state.
+Their four handlers bind only this never-reused ACK. Native closed qualification
+and the shared read/cancel/closed failure record remain explicit; the referenced
+record and registry products are additional to this field list. Independent
+failures, even equal or undefined reasons, remain separate from native
+correlation. No unknown installation is compacted into a healthy tail.
+
+Retirement requires both independent roles and the post-unlock body-lock check.
+A throwing/locked body check retains UNKNOWN ownership. The same physical
+position is discharged once; payload and native-failure aliases clear before
+its existing DATA debit ends. External callbacks check inert state before any
+owner lookup or payload inspection. A failed retirement cannot replay the
+physical decrement. Source/fetch/read/cancel/unlock/closed originals and their
+observer tails remain independent; logical receipt completion never joins an
+unrelated original.
+
+Other cuts occur at their existing irreversible boundaries:
+
+- Budget phase4 revokes every leg registry entry, deletes the leg/plan/binding
+  fields, and leaves the same sequence with `root`, `phase`, `physical` until its
+  remaining commands retire. It ends only the logical sentinel, not an ACK.
+- Retry closure runs after final feedback/invalidation and joined preparation,
+  before delivery. It deletes ports, exclusions and obsolete prepared mappings,
+  ends the local failed-key alias, and leaves an explicit closed latch. The
+  chosen prepared-to-upload mapping survives for generic/codec/publication
+  matchers. Full grants, cache borrowers, selected parents, generic retained
+  funding and Venice/GMI32MiB future backing are unchanged.
+- The terminal deletes physically retired operation-array properties. Event,
+  reservation, sinks and custody are deleted only on a queued turn after launch
+  and receipt-return frames, all logical lanes, diagnostics and logical
+  resolution have finished. The physical shell, live positions, once guards,
+  result/retirement Promises and required resolvers remain. UNKNOWN late-FIRST
+  response disposition uses the same prepaid position. Successful accounting
+  adoption clears request handoff aliases after producer acknowledgement;
+  FAILED_PRE_ADOPTION keeps its evidence.
+
+Fixed placement is prescribed before effects; it is not an overflow allocator:
+
+| Window | Source-defined responsibility |
+|---|---|
+| OPERATION | Current request/attempt, logical claim/adoption, budget/retry rights before their cuts; physical destination/terminal-slot association |
+| SOURCE | Acquisition/fetch/queue/pipe and handoff records; ACK instance/body and acquisition-installed closed handlers/receiver links |
+| READ | Fresh read identity/callbacks, capture/decoder state, native qualification and shared correlation target; active read operands |
+| TERMINAL | Cancel/unlock/closed rights and origins, unlock handlers/receiver links, same-position physical join and live terminal positions |
+| SYNC | Actual current activations, call arguments, descriptors, reentry and old/new transition overlap only |
+
+Persistent async products never move into SYNC or paid payload traversal.
+Shared failure records, map/registry targets, native originals/reactions,
+retained ready Promises, active cells, transition overlap, invocation,
+credential, usage, publication and accounting owners must be added to this
+placement. The eight/nine own-field lists and the reviewed333-product healthy
+structural subset are not a window or combined upper bound. There is no new
+1024-product certificate, enlarged window, debit refund or early upload cut.
+The complete per-window, DATA/COMMON, paid-workspace and static65536 proofs
+remain OPEN for the new immutable candidate.
+
+Authored Node and exact-Workerd witnesses hold thirteen ACK closed/unlock
+originals plus upload work while accounting completes promptly; another variant
+holds five active final reads. They inspect actual own keys, unchanged charge
+and physical counts at each cut, exactly one final decrement, stale external
+handlers and wrong destinations. Separate cases cover pending read+cancel,
+FIRST then installation throw/late FIRST, native correlation versus independent
+shared/undefined failures, and UNKNOWN retaining active fields. Existing
+four-attempt/fallback, Venice/GMI JSON/SSE, prepaid-refusal, terminal recovery and
+late-response fixtures remain separate. These semantic witnesses are
+UNRUN_CODE_ONLY_HOSTED; syntax and source anchors are not execution evidence.
 
 
 Current accounting contract: fixed execution products remain subject to each
@@ -3553,8 +3656,8 @@ syntax is not runtime qualification, and no new publication or landing authority
 follows from this repair.
 
 The revised task manifest contains33 production modules and57 total paths.
-The source grammar packet contains54 raw files plus16 generated programs
-(70 syntax checks); no dependency-backed check or semantic test was executed.
+The source grammar packet contains54 raw files plus17 generated programs
+(71 syntax checks); no dependency-backed check or semantic test was executed.
 Main's `captureResponse`, `inspectJsonError`, ordinary `observeUsage`, header
 stripper, accounting receipt/mathematics and full Durable Object producer classes
 remain exact. `prepareSelected` recovers exact main after removal of the private

@@ -1022,12 +1022,26 @@ export function observeOwnedJsonSource(path, source) {
     source = replace(source, '    const text = ownedErrorStringify(envelope);',
       '    let text; try { text = ownedErrorStringify(envelope); } finally { ' + probe + '.initialErrorDone(); }');
   } else if (/[\\/]worker[\\/]http-identity-owner\.ts$/.test(path)) {
+    source = replace(source, '    this.response = response;\n  }\n  dispatchOriginal(cell: OwnedOriginalObservation, failed: boolean, value: unknown): void {\n    if (cell !== this.cancelObservation',
+      '    this.response = response; globalThis.__ownedAckPhaseFixture?.ack(this);\n  }\n  dispatchOriginal(cell: OwnedOriginalObservation, failed: boolean, value: unknown): void {\n    if (cell !== this.cancelObservation');
+    source = replace(source, '[ackReadFulfilled.bind(observation), ackReadRejected.bind(observation)]',
+      '(globalThis.__ownedAckPhaseFixture ? globalThis.__ownedAckPhaseFixture.read(observation, ackReadFulfilled.bind(observation), ackReadRejected.bind(observation)) : [ackReadFulfilled.bind(observation), ackReadRejected.bind(observation)])');
+    source = replace(source, '    if (this.parent && !this.parent.handoffAck(this)) return;',
+      '    globalThis.__ownedAckPhaseFixture?.beforeCut(this); if (this.parent && !this.parent.handoffAck(this)) return;');
+    source = replace(source, '    const owner = this.owner!, slot = this.slot, root = this.root;',
+      '    const owner = this.owner!, slot = this.slot, root = this.root; const __ackPhysical = owner.physical;');
+    source = replace(source, '    delete this.owner; delete this.slot;',
+      '    delete this.owner; delete this.slot; globalThis.__ownedAckPhaseFixture?.retired(this, owner, __ackPhysical);');
+    source = replace(source, '    this.joinState = 262144; this.schedule();',
+      '    this.joinState = 262144; globalThis.__ownedAckPhaseFixture?.afterCut(this); this.schedule();');
+    source = replace(source, '    delete ended.plan; delete ended.attempt; delete ended.accounting; delete ended.http;',
+      '    delete ended.plan; delete ended.attempt; delete ended.accounting; delete ended.http; globalThis.__ownedAckPhaseFixture?.budget(this);');
     source = replace(source, '[ownedOriginalFulfilled.bind(cell), ownedOriginalRejected.bind(cell)]',
       probe + '.retainOriginalHandlers(cell, ownedOriginalFulfilled.bind(cell), ownedOriginalRejected.bind(cell))');
     source = replace(source, '  constructor(cap: OwnedHttpRequest, root: RequestOwner, sink: OwnedHttpSinkOwner) {\n    this.cap = cap; this.root = root; this.sink = sink;\n    this.result',
       '  constructor(cap: OwnedHttpRequest, root: RequestOwner, sink: OwnedHttpSinkOwner) {\n    this.cap = cap; this.root = root; this.sink = sink;\n    globalThis.__ownedTerminalFixture?.shell(); this.result');
     source = replace(source, '  root.accountingTerminal = new OwnedAccountingTerminal(cap, root, root.sink!);',
-      '  root.accountingTerminal = new OwnedAccountingTerminal(cap, root, root.sink!); globalThis.__ownedTerminalFixture?.prepared();');
+      '  root.accountingTerminal = new OwnedAccountingTerminal(cap, root, root.sink!); globalThis.__ownedTerminalFixture?.prepared(); globalThis.__ownedAckPhaseFixture?.terminal(root.accountingTerminal);');
     source = replace(source, '  const root = requestOwner(cap), sink = root.sink!, terminal = root.accountingTerminal;',
       '  globalThis.__ownedTerminalFixture?.enter(); const root = requestOwner(cap), sink = root.sink!, terminal = root.accountingTerminal;');
     source = replace(source, '  adoptOwnedHttpAccountingTerminal(cap, accounting, event, reservation);',
@@ -1127,6 +1141,8 @@ export function observeOwnedJsonSource(path, source) {
     source = replace(source, '  completeOwnedHttpAttemptProvider(cap, permit);',
       '  completeOwnedHttpAttemptProvider(cap, permit); if (' + probe + '.retainedStatusPrepared) await ' + probe + '.retainedStatusPrepared();');
   } else if (/[\\/]worker[\\/]proxy\.ts$/.test(path)) {
+    source = replace(source, '  owner.retryClosed = true; delete owner.required; delete owner.retry;',
+      '  owner.retryClosed = true; delete owner.required; delete owner.retry; if (globalThis.__ownedAckPhaseFixture) { let __rejected = 0; try { excludeOwnedHttpGrant(cap, "fixture-stale-key"); } catch { __rejected++; } try { commitOwnedHttpAttempt(cap); } catch { __rejected++; } globalThis.__ownedAckPhaseFixture.retry(owner, !owner.prepared || ownedPreparedUploads?.get(owner.prepared) === owner.upload, __rejected); }');
     source = replace(source, '    retry.pending = port;',
       '    retry.pending = port; ' + probe + '.retryPorts.push({ keys: [...port.input.excludedKeys!], signal: port.signal, input: port.input });');
     source = replace(source, '  try { return await original; }\n  finally {',

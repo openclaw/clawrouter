@@ -292,6 +292,69 @@ async function prepareBudgetSequence(f, options) {
   })).status, 204);
 }
 
+// Same closed command/real I/O topology as Node; no slot-count fit is inferred.
+for (const activeFinal of [false, true])
+test(`native thirteen ACK phase cuts preserve held upload and reader custody (${activeFinal})`, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    await prepareBudgetSequence(f, { rights: true });
+    f.releases.push(() => f.request('https://fixture/fixture/ack-phases', { method:'DELETE' }));
+    assert.equal((await f.request('https://fixture/fixture/ack-phases', {method:'POST',body:JSON.stringify({activeFinal,upload:true})})).status,204);
+    const response = await f.request('https://fixture/v1/chat/completions', chat('chat', {extra:'x'.repeat(1048576)})); assert.equal(response.status,200);
+    const inspect = async () => JSON.parse((await f.request('https://fixture/fixture/ack-phases')).text);
+    let held;
+    do { held=await inspect(); if(held.acks.length<13)await new Promise(resolve=>setTimeout(resolve,10)); } while(held.acks.length<13);
+    if(activeFinal){assert.equal(held.acks.filter(cell=>cell.terminal&&cell.capture).length,5);assert.equal(held.terminals[0].pending,5);await f.request('https://fixture/fixture/ack-phases',{method:'PATCH'});}
+    do { held=await inspect(); if(held.cuts.length<13||held.terminals[0].keys.includes('event'))await new Promise(resolve=>setTimeout(resolve,10)); } while(held.cuts.length<13||held.terminals[0].keys.includes('event'));
+    assert.equal(held.uploads,1);assert.equal(held.uploadDone,0);
+    assert.equal(held.acks.filter(cell=>!cell.terminal&&cell.keys.length===8).length,8);assert.equal(held.acks.filter(cell=>cell.terminal&&cell.keys.length===9).length,5);
+    assert.ok(held.cuts.every(cut=>cut.before===cut.after&&cut.physical===cut.physicalAfter));
+    assert.deepEqual(held.budgets[0].keys.slice().sort(),['phase','physical','root']);assert.deepEqual(held.terminals[0].live,['5','6','7','8','9']);
+    assert.ok(held.retries.every(cut=>cut.closed&&!cut.retry&&!cut.required&&cut.chosen&&cut.rejected===2));
+    assert.equal(JSON.parse((await f.request('https://fixture/fixture/ack-phases?stale')).text).gets,0);
+    await f.request('https://fixture/fixture/ack-phases',{method:'DELETE'});await settledState(f);
+    const ended=await inspect();assert.equal(ended.uploadDone,1);assert.ok(ended.acks.every(cell=>cell.state&16384&&!cell.keys.includes('owner')&&!cell.keys.includes('body')&&!cell.keys.includes('nativeFailure')));
+    assert.equal(ended.retirements.length,13);assert.ok(ended.retirements.every(row=>row.physical-row.after===1));
+    assert.equal(JSON.parse((await f.request('https://fixture/fixture/ack-phases?stale')).text).gets,0);
+  },true);
+});
+
+for (const failureMode of ['native', 'independent-shared', 'independent-undefined'])
+test(`native ACK correlation and independent failure origins ${failureMode}`, {timeout:120000}, async t => {
+  await fixture(t, async f => {
+    await prepareBudgetSequence(f, {});
+    f.releases.push(() => f.request('https://fixture/fixture/ack-phases', {method:'DELETE'}));
+    await f.request('https://fixture/fixture/ack-phases', {method:'POST',body:JSON.stringify({failureMode})});
+    const response = await f.request('https://fixture/v1/chat/completions',chat('chat'));
+    assert.ok(response.status >= 400); await settledState(f);
+    const snapshot = JSON.parse((await f.request('https://fixture/fixture/ack-phases')).text);
+    const cuts = snapshot.cuts.filter(row => row.failures);
+    assert.equal(cuts.length,4);
+    assert.ok(cuts.every(row => row.failures === (failureMode === 'native' ? 1 : 4)));
+    assert.ok(cuts.every(row => row.correlated === (failureMode === 'native')));
+    if(failureMode === 'independent-undefined')assert.ok(cuts.every(row=>row.undefinedFailures===4));
+    assert.equal(JSON.parse((await f.request('https://fixture/fixture/ack-phases?stale')).text).gets,0);
+  },true);
+});
+
+for (const fault of ['closedInstallThrow', 'unlockInstallThrow', 'readInstallThrow'])
+test(`native uncertain ACK ${fault} keeps active fields and independent prepaid recovery`, {timeout:120000}, async t => {
+  await fixture(t,async f=>{
+    f.expectUnknownRetirement();
+    f.releases.push(()=>f.request('https://fixture/fixture/terminal',{method:'DELETE'}));
+    f.releases.push(()=>f.request('https://fixture/fixture/ack-phases',{method:'DELETE'}));
+    await f.request('https://fixture/fixture/terminal',{method:'POST',body:'{}'});
+    await prepareBudgetSequence(f,{});
+    await f.request('https://fixture/fixture/ack-phases',{method:'POST',body:JSON.stringify({[fault]:true,pendingRead:fault==='readInstallThrow',pendingCancel:fault==='readInstallThrow'})});
+    await f.request('https://fixture/v1/chat/completions',chat('chat'));
+    if(fault==='readInstallThrow'){const pending=JSON.parse((await f.request('https://fixture/fixture/ack-phases')).text);assert.ok(pending.acks.some(cell=>(cell.pending&6)===6));assert.equal(pending.cuts.length,0);}
+    await f.request('https://fixture/fixture/ack-phases',{method:'DELETE'});
+    let terminal;do{terminal=JSON.parse((await f.request('https://fixture/fixture/terminal')).text);if(!terminal.logical.length||terminal.pending)await new Promise(resolve=>setTimeout(resolve,10));}while(!terminal.logical.length||terminal.pending);
+    const held=JSON.parse((await f.request('https://fixture/fixture/ack-phases')).text);
+    assert.ok(held.acks.length>0);assert.equal(held.cuts.length,0);assert.ok(held.acks.every(cell=>cell.state&4&&cell.capture&&cell.keys.includes('owner')));
+    assert.ok(held.charge>0);assert.equal(terminal.logical.length,1);
+  },true);
+});
+
 // UNRUN_CODE_ONLY_HOSTED: exact configured Workerd, real private Chat pipeline.
 for (const failureOrdinal of [0, 1, 2, 3])
 test(`native four-leg reserve ordinal ${failureOrdinal} denial retains prepaid rollback and queue custody`, { timeout: 120000 }, async t => {

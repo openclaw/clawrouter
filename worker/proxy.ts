@@ -148,6 +148,7 @@ interface OwnedProxyInvocation {
   upload?: OwnedHttpUpload;
   attempts: OwnedHttpUpload[];
   retry?: OwnedRetryAuthority;
+  retryClosed?: true;
   preparingIdentity?: AuthorizedIdentity;
   preparingUpstream?: UpstreamAuth;
   preparingFields?: OwnedPreparedFields;
@@ -431,9 +432,9 @@ async function runOwnedUsageAccounting(http: OwnedHttpRequest): Promise<boolean>
   const adopted = (owner.accountingHandoff! & 7) === 5;
   if (!adopted && (owner.accountingHandoff! & 7) !== 7) throw identityFailure("protocol");
   if (adopted) {
-    owner.accountingOutcome = undefined; owner.observedUsage = undefined;
-    if (owner.genericUsage) { consumeOwnedHttpGenericUsage(owner.genericUsage); owner.genericUsage = undefined; }
-    owner.terminalResponse = undefined; owner.terminalReservation = undefined; owner.terminalContent = undefined;
+    delete owner.accountingOutcome; delete owner.observedUsage;
+    if (owner.genericUsage) { consumeOwnedHttpGenericUsage(owner.genericUsage); delete owner.genericUsage; }
+    delete owner.terminalResponse; delete owner.terminalReservation; delete owner.terminalContent;
   } else if (owner.genericUsage) failOwnedHttpGenericUsage(owner.genericUsage);
   try { return await original; }
   finally {
@@ -2014,7 +2015,7 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
   let googleContinuation: GoogleContinuation | undefined;
   let search: SearchSession | undefined;
   let grantFailover = false;
-  const failedGrantKeys = owned ? ownedProxyInvocations!.get(owned)!.retry!.excluded : new Set(reservedBudget?.failedGrantKeys ?? []);
+  let failedGrantKeys = owned ? ownedProxyInvocations!.get(owned)!.retry!.excluded : new Set(reservedBudget?.failedGrantKeys ?? []);
   try {
     // Published assets require an acknowledged reservation before their sole
     // destination claim. A soft-budget request cannot supply that authority.
@@ -2436,6 +2437,7 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
         grantFailover = true;
       } else break;
     }
+    if (owned) { closeOwnedHttpRetry(owned); failedGrantKeys = undefined as never; }
     // Redirects cannot select a new destination or replay a credentialed body.
     // Do not pass Location downstream for the client to replay either.
     if (response.status >= 300 && response.status < 400) throw new Error("upstream redirect refused");
@@ -2519,6 +2521,7 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       response = priceGuard.response;
     }
   } catch (error) {
+    if (owned) { closeOwnedHttpRetry(owned); failedGrantKeys = undefined as never; }
     const ownedFetchRetirement = ownedFetch ? disposeOwnedHttpProviderResponse(ownedFetch) : undefined;
     if (codecConsumer) abandonOwnedCodecConsumer(codecConsumer);
     if (error instanceof PublishedMusicUnsent) dispatched = false;
@@ -2693,6 +2696,7 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
   codecPublished = true;
   return publishedResponse;
   } finally {
+    if (owned) closeOwnedHttpRetry(owned);
     // Settle the logical publication barrier even when physical abandonment
     // throws; accounting never waits for its reader/upload/archive originals.
     try {
@@ -2780,10 +2784,29 @@ async function selectedAuth(request: Request, env: Env, mode: AuthMode, selectio
   return (await preauthenticate(request, env, mode, selection.provider.id))!;
 }
 
+// This closes retry authority, not credential/upload/codec custody. The chosen
+// prepared-to-upload association remains available to delivery and publication.
+function closeOwnedHttpRetry(cap: OwnedHttpRequest): void {
+  const owner = ownedProxyInvocations?.get(cap), retry = owner?.retry;
+  if (!owner || !retry) return;
+  if (retry.pending?.phase === 1) throw identityFailure("protocol");
+  for (const port of retry.ports) {
+    if (port.prepared) {
+      ownedPreparedSelections?.delete(port.prepared);
+      if (port.prepared !== owner.prepared) ownedPreparedUploads?.delete(port.prepared);
+      delete port.prepared.failedGrantKeys;
+    }
+    delete port.input; delete port.signal; delete port.permit; delete port.prepared;
+    delete port.upload; delete port.identity; delete port.credential; port.phase = 5;
+  }
+  retry.ports.length = 0; retry.excluded.clear(); delete retry.pending;
+  owner.retryClosed = true; delete owner.required; delete owner.retry;
+}
+
 export function matchesOwnedHttpAttemptInput(cap: OwnedHttpRequest, request: Request, env: Env,
   input: import("./authority-admission.ts").AdmissionSelection, selection: ProxySelection, signal: AbortSignal, permit?: object): boolean {
   const owner = ownedProxyInvocations?.get(cap), port = owner?.retry?.pending;
-  return !!owner && !!port && port.phase === 1 && owner.selection === selection && port.input === input && port.signal === signal
+  return !!owner && !owner.retryClosed && !!port && port.phase === 1 && owner.selection === selection && port.input === input && port.signal === signal
     && matchesOwnedHttpRequestInputs(cap, env, request) && (permit === undefined ? port.permit === undefined : port.permit === permit);
 }
 export function bindOwnedHttpAttemptPermit(cap: OwnedHttpRequest, request: Request, env: Env,
@@ -2831,7 +2854,7 @@ function commitOwnedHttpAttempt(cap: OwnedHttpRequest): PreparedUpstream {
 async function prepareOwnedHttpAttempt(cap: OwnedHttpRequest, request: Request, env: Env,
   selection: ProxySelection, query: ProxyQuery, signal: AbortSignal): Promise<void> {
   const invocation = ownedProxyInvocations?.get(cap), retry = invocation?.retry;
-  if (!invocation?.required || !invocation.identity || !retry || retry.pending) throw identityFailure("protocol");
+  if (!invocation?.required || invocation.retryClosed || !invocation.identity || !retry || retry.pending) throw identityFailure("protocol");
   const routing = grantRoutingPolicy(invocation.identity.policy.grantRouting);
   let firstFailure: SelectedGrantCredentialFailure | undefined;
   for (;;) {

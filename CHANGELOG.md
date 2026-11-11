@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Compact private HTTP ACK and logical-owner records only after their actual phase joins, preserving independent closed/unlock custody, native failure correlation, chosen upload/codec associations and unchanged funding. Use fresh read identity cells, revoke ended budget/retry rights, and release terminal metadata after logical consumers return. Add held-original, stale-handler, independent-failure and exact-decrement witnesses. Source-only; runtime and complete owner inventories remain unqualified.
+
 - Repair private HTTP Chat module loading for Node strip-only syntax and Workerd's inherited native Response body getter, correct hosted typecheck failures, and retain full credential funding when the HTTP owner becomes UNKNOWN during an alternate preparation. Add source/native-metadata and real soft-status race witnesses. Source-only partial; repaired runtime and complete CONTROL/DATA inventories remain unqualified.
 
 - Repair the inactive private HTTP Chat path against the current four-grant retry policy, with cumulative exclusions, bound attempt signals and atomic retained credential funding after completed generic preparation. Keep Venice/GMI future backing and retry gates unchanged. Observe returned unlock work without assimilation, sever retired original-observer cells, preserve logical ledger recovery and late-response cleanup under UNKNOWN, replace private archive recursion with paid iterative workspace, and count all tool string occurrences. Source and authored fixtures only; default activation, hosted runtime and whole-owner inventories remain unqualified.

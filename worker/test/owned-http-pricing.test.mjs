@@ -6,7 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createOwnedJsonObservation, observeOwnedJsonSource } from '../../test/helpers/owned-json-parser-observer.mjs';
 import { ownedJsonCodecCases, ownedJsonCodecWire, ownedUsageCases, ownedUsageWire, ownedCodecSseLines } from '../../test/helpers/owned-json-parser-cases.mjs';
-import { createOwnedBudgetSequenceFixture, createOwnedTerminalFixture } from '../../test/helpers/owned-http-chat-fixture.mjs';
+import { createOwnedAckPhaseFixture, createOwnedBudgetSequenceFixture, createOwnedTerminalFixture } from '../../test/helpers/owned-http-chat-fixture.mjs';
 
 const observation = globalThis.__ownedJsonObservation = createOwnedJsonObservation();
 globalThis.__ownedUsageWire = ownedUsageWire;
@@ -192,6 +192,7 @@ async function fixture(t, run, retained = false, variant = 'fireworks') {
   };
   let upstreamGate, veniceWire, veniceFault, veniceStreaming = false, upstreamStatus = 200;
   t.mock.method(globalThis, 'fetch', async (input, init) => {
+    const held = globalThis.__ownedAckPhaseFixture?.upload(init); if (held) return held;
     const request = new Request(input, init);
     if (upstreamGate) { upstreamGate.entered.resolve(); await take(own(upstreamGate.release.promise)); }
     const text = await take(own(request.text())); sent.push({ text, method: request.method, url: request.url, authorization: request.headers.get('authorization') });
@@ -711,6 +712,84 @@ test('generic retained census includes large unknown grant fields in every attem
     assert.equal(f.events.length, 1);
   });
 });
+
+// SOURCE_ONLY: hosted execution must establish these source-defined cuts.
+for (const activeFinal of [false, true])
+test(`thirteen ACK records compact in place with held originals (active final reads: ${activeFinal})`, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    await budgetSequence(f, { legs: 4, rights: true });
+    const control = createOwnedAckPhaseFixture({ activeFinal, upload: true }, bodyBudgetCharged);
+    globalThis.__ownedAckPhaseFixture = control;
+    f.releases.push(() => { const work = control.release(); f.own(work); delete globalThis.__ownedAckPhaseFixture; });
+    f.requestEnvironment(control.env(f.env));
+    const response = await f.request(payload({ extra: 'x'.repeat(1048576) })); assert.equal(response.status, 200);
+    let held;
+    do { held = control.snapshot(); if (held.acks.length < 13) await new Promise(resolve => setImmediate(resolve)); } while (held.acks.length < 13);
+    if (activeFinal) {
+      assert.equal(held.acks.filter(cell => cell.terminal && cell.capture).length, 5);
+      assert.equal(held.terminals[0].pending, 5);
+      control.releaseReads();
+    }
+    do { held = control.snapshot(); if (held.cuts.length < 13 || held.terminals[0].keys.includes('event')) await new Promise(resolve => setImmediate(resolve)); }
+    while (held.cuts.length < 13 || held.terminals[0].keys.includes('event'));
+    assert.equal(held.uploads, 1); assert.equal(held.uploadDone, 0);
+    assert.equal(held.acks.filter(cell => !cell.terminal && cell.keys.length === 8).length, 8);
+    assert.equal(held.acks.filter(cell => cell.terminal && cell.keys.length === 9).length, 5);
+    assert.ok(held.cuts.every(cut => cut.before === cut.after && cut.physical === cut.physicalAfter));
+    assert.deepEqual(held.budgets[0].keys.slice().sort(), ['phase','physical','root']);
+    assert.deepEqual(held.terminals[0].live, ['5','6','7','8','9']);
+    assert.ok(held.retries.every(cut => cut.closed && !cut.retry && !cut.required && cut.chosen && cut.rejected === 2));
+    assert.equal(control.stale().gets, 0);
+    await f.take(f.own(control.release())); await f.drain();
+    const ended = control.snapshot(); assert.equal(ended.uploadDone, 1);
+    assert.ok(ended.acks.every(cell => cell.state & 16384 && !cell.keys.includes('owner') && !cell.keys.includes('body') && !cell.keys.includes('nativeFailure')));
+    assert.ok(ended.reads.every(cell => cell.severed)); assert.equal(control.stale().gets, 0);
+    assert.equal(ended.retirements.length, 13);
+    assert.ok(ended.retirements.every(row => row.physical - row.after === 1));
+  });
+});
+
+for (const failureMode of ['native', 'independent-shared', 'independent-undefined'])
+test(`ACK tail keeps native correlation separate from ${failureMode} failure origins`, async t => {
+  await fixture(t, async f => {
+    await budgetSequence(f, { legs: 4 });
+    const control = createOwnedAckPhaseFixture({ failureMode }, bodyBudgetCharged);
+    globalThis.__ownedAckPhaseFixture = control;
+    f.releases.push(() => { f.own(control.release()); delete globalThis.__ownedAckPhaseFixture; });
+    f.requestEnvironment(control.env(f.env));
+    const response = await f.request(payload({})); assert.ok(response.status >= 400);
+    await f.drain();
+    const cuts = control.snapshot().cuts.filter(row => row.failures);
+    assert.equal(cuts.length, 4);
+    assert.ok(cuts.every(row => row.failures === (failureMode === 'native' ? 1 : 4)));
+    assert.ok(cuts.every(row => row.correlated === (failureMode === 'native')));
+    if (failureMode === 'independent-undefined') assert.ok(cuts.every(row => row.undefinedFailures === 4));
+    assert.equal(control.stale().gets, 0);
+  });
+});
+
+for (const fault of ['closedInstallThrow', 'unlockInstallThrow', 'readInstallThrow']) {
+  const name = `private ACK phase uncertainty ${fault} retains active capture`;
+  test(name,{timeout:120000},async t=>{
+    if(process.env.CLAWROUTER_TERMINAL_UNKNOWN!==fault){
+      await promisify(execFile)(process.execPath,['--test','--test-name-pattern','^'+name+'$',fileURLToPath(import.meta.url)],{env:{...process.env,CLAWROUTER_TERMINAL_UNKNOWN:fault},maxBuffer:4*1024*1024});return;
+    }
+    await fixture(t,async f=>{
+      f.expectUnknownRetirement();await budgetSequence(f,{legs:4});const terminal=terminalScenario(f,{});
+      const control=createOwnedAckPhaseFixture({[fault]:true,pendingRead:fault==='readInstallThrow',pendingCancel:fault==='readInstallThrow'},bodyBudgetCharged);globalThis.__ownedAckPhaseFixture=control;
+      f.releases.push(()=>{const work=control.release();f.own(work);delete globalThis.__ownedAckPhaseFixture;});f.requestEnvironment(control.env(f.env));
+      let response, failed = false;
+      try {
+        try { response = await f.request(payload({})); } catch { failed = true; }
+        assert.ok(failed || response.status >= 400);
+        if (fault === 'readInstallThrow') assert.ok(control.snapshot().acks.some(cell => (cell.pending & 6) === 6));
+      } finally { await f.take(f.own(control.release())); }
+      while(!terminal.row.logical.length||terminal.row.pending)await new Promise(resolve=>setImmediate(resolve));
+      const held=control.snapshot();assert.ok(held.acks.length>0);assert.equal(held.cuts.length,0);assert.ok(held.acks.every(cell=>cell.state&4&&cell.capture&&cell.keys.includes('owner')));
+      assert.ok(held.charge>0);assert.equal(terminal.row.logical.length,1);
+    });
+  });
+}
 
 test('retained private provider, ledger, terminal and void callbacks sever their owner cells', async t => {
   await fixture(t, async f => {
