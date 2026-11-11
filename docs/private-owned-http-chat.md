@@ -1,6 +1,294 @@
 # Private owned HTTP Chat staging
 
 
+### V2 independent composition checkpoint — source fd8b649
+
+This checkpoint reads production source at
+`fd8b6492f7f291e4b564a3e98d2a569467cf50e7`. The base-driver and budget/terminal
+I/O manifests are separate assigned components. The following archive APP and
+ACK DATA slices do not replace them. No production reservation changes follow
+from an incomplete family. Runtime remains `UNRUN_CODE_ONLY_HOSTED`.
+
+#### ACK decoder DATA reconciliation
+
+`OwnedLedgerAck.readAccepted` admits an actual view only when its whole backing
+is at most65536 bytes and its length fits the remaining32768-byte wire profile.
+`advance` passes only that captured length to `decodeOwnedBytes`; the EOF flush
+uses the same decoder. Therefore the adopted queue union applies once to the
+live decoder cycle, not once per cumulative read or once per installed handler.
+
+| Existing named DATA representation | Bytes |
+| --- | ---: |
+| Actual returned whole backing | 65536 |
+| BYOB working backing | 16384 |
+| Private snapshot backing | 65536 |
+| Retained wire component | 32768 |
+| Four UTF-16 text occurrences | 262144 |
+| Malformed-inclusive JSON graph | 589824 |
+| Projected reply | 66048 |
+| Existing `ownedLedgerAckData` | **1098240** |
+| Distinct decoder byte/scalar queue union | **1048592** |
+| Composed ACK DATA component | **2146832** |
+
+The32768-byte retained-wire row is a byte representation. It does not pay the
+adopted item-wise input/output queue positions and primitive occurrences,
+`16*(32768+32769)=1048592`. Decoded strings remain in the separate text row;
+queue headers and the decoder instance remain in I/O CONTROL. This composition
+neither duplicates an ArrayBuffer backing nor silently reprices the JSON graph.
+The conservative union deliberately sums queue maxima, as adopted by ROOT.
+
+Thirteen ACKs therefore require27908816 bytes for this DATA component, an added
+13631696 bytes over the previous literal. These numbers exclude all ACK CONTROL,
+source/parent/caller owners, serialization and every other request component.
+For a healthy standalone ACK, retaining the66048-byte reply would leave2080784
+bytes eligible for the existing post-alias/join reduction. This is a proposed
+component amount, not permission to move that cut: global HTTP UNKNOWN must
+leave both the actual charge and component bookkeeping unchanged.
+
+When the complete budget/terminal families close, the same composed DATA term
+must enter reserve/dispatch/rollback and final-terminal prepayment before their
+first obligation. Every existing use of `ownedLedgerAckData`, including the
+standalone payload-retirement subtraction, terminal `ackCredits` and final
+retirement helper, must use that one definition. This checkpoint changes none of
+those paths and assumes no healthy compaction for admission.
+
+#### Independent soft-status field and decoder slices
+
+The soft-status path has its own `OwnedStatusReader`; it does not inherit the
+base driver and cannot reuse an ACK or response-chain reader's paid component.
+`prepareOwnedHttpSoftStatus` constructs one controller and every reader for the
+actual admitted descriptor count D, `0 <= D <= 4`, before dispatch. A zero-limit
+leg still has its already-constructed reader until `startReaders` closes it.
+
+The reader has23 own fields,198 name units and a23-primitive phase union:
+response/body/reader/bits/nativeFailure/acquisition/fetching/base/advanceWork/
+decoder/text/backing/value/wire/reads/readObservation/fetchObservation/
+closedObservation/cancelObservation/unlockObservation/spent/owner/index.
+Its `flags`, `pending`, `phase` and `done` accessors are prototype definitions,
+not additional own fields. No new bit representation or compaction is assumed.
+
+The controller's inherited and own fields together are14 fields,105 name units
+and a9-primitive union: config/operation/failure/statusBits/denied/resolve/reject/
+check/http/prepared/namespace/resolveRetired/retired/readers. The two receipt
+Promises, their executors and dependent work are targets separate from these
+field positions.
+
+| Soft-status APP record/index slice | Multiplicity | Bytes |
+| --- | ---: | ---: |
+| Reader, `J(23,23,198)` | D | `2084*D` |
+| Fetch/closed/cancel/unlock cells, `J(3,3,14)` | 4D | `1104*D` |
+| Current fresh read cell, `J(3,3,15)` | D | `278*D` |
+| Fifteen reached failure positions below | D | `9536*D` |
+| Complete controller own record, `J(14,9,105)` | 1 | 1210 |
+| Reader array, length plus D indices including retired undefined values | 1 | `116+74*D` |
+| Root softStatus field delta | 1 | 92 |
+| Existing ownedSoftBudgets key/value edges | 1 | 16 |
+| Namespace binding acquisition failure position | 1 | 638 |
+| **Named APP record/index component** | | **`2072+13076*D`**, at D=4 **54376** |
+
+The array expression uses its actual length property and one-character indices
+0..3 under the I/O own-property convention. It charges every retired undefined
+entry until the array's actual last consumer. Shared registry containers and
+prepared-plan graphs remain separate owners.
+
+The reader's original offsets are acquisition0, fetch1, reader acquisition2/3,
+header/status processing4, read5, cancel6, unlock7, closed8 and retirement10.
+Independent installation offsets are fetch11/read12/cancel13/closed14/unlock15.
+Offset9 has no reached failure writer in this source. The existing sixteen-slot
+origin bank is unchanged; the unused position supplies no discretionary credit.
+The actual fifteen-record union is four acquisition records, two each of fetch,
+read, cancel, unlock and closed, plus retirement:9536 bytes per reader under the
+same diagnostic record tariff. Native correlation is not used to shrink it.
+
+One persistent `advanceWork` binding is created per reader; it is not a fresh
+binding per schedule. Its name costs270 bytes under the adopted bound-function
+tariff. Two overlapping queue/current-work positions add288 bytes. Five frozen
+observation handler pairs have28/27-unit names and cost2990 bytes per reader.
+The combined **3548-byte handler/scheduling component per reader** excludes
+originals, reactions/dependents, reader/native state, source and caller storage.
+There is one current private read cell; successful discharge precedes reuse of
+the next generation envelope. UNKNOWN prevents severing/reuse. The existing
+8192-read inspection bound does not multiply simultaneously live storage by8192.
+
+The DATA formula currently pays `3*16384 + 6*16384 + 11008 + 2*4096 + 8192`,
+which equals174848 bytes per reader. The11008 graph term comes directly from
+`8*(32+2*64+64+128)+2*4096`; the wire/backing/text/graph profile is unchanged.
+Neither that graph nor the three byte backings or six text occurrences pay the
+adopted item-wise decoder queues. The16384-byte decode window adds
+`16*(16384+16385)=524304` bytes, giving a **699152-byte composed DATA component**
+per reader and2796608 bytes for four readers. The added four-reader queue term
+is2097216 bytes. Decoder headers and native byte-view metadata remain I/O.
+
+Complete Wstatus still needs the actual fetch source/Response, reader native
+union, source cancellation, check/retired Promise constructors and observers,
+cache/denial objects, header-census callback, start/registration and encompassing
+completion work. The grace path additionally constructs an async result, timer
+Promise/executor/task, two-entry race input and race reactions/capability,
+await continuation and timer cleanup. A settled logical check is not retirement
+of any outstanding reader or those followers. The controller's physical receipt
+must remain independent from delivery grace and accounting completion.
+
+The complete amount belongs at `prepareOwnedHttpSoftStatus`, before the
+controller or reader constructors; `start`, `read`, cancellation and callback
+entry may not grow it. The present4096 controller allowance is not a closed
+manifest. This checkpoint records components only and makes no reservation or
+physical-retirement change.
+
+The source-bound thirteen-ACK plus four-status composition has a30705424-byte
+DATA component after these two queue additions. The distinct added queue debit
+is15728912 bytes. This excludes native CONTROL, foreground/retained credentials,
+intake, usage, codec, archive and all other owners. It is an admission input, not
+available-headroom or whole COMMON fit proof; no old allowance is released to
+make room. Both decoder additions must be prospective at their existing family
+admission points, never a decode-time or callback-time top-up.
+
+#### Archive APP own-record union
+
+For an ordinary I/O record with `m` own properties, at most `q` primitive value
+occurrences and `u` property-name units, the adopted supplement gives
+`J(m,q,u)=32+64*m+8*q+2*u`. The32 includes the object and its header;64 per
+property includes key/value, three attributes and their three primitives.
+Stored string values and referenced targets remain separate. A primitive-union
+entry includes a field that becomes undefined at its actual severing point.
+The archive handle's getter has the same position count: its absent setter
+replaces the data property's writable primitive; the getter function is separate.
+
+| Record or association | Multiplicity | m / q / u per record | Bytes |
+| --- | ---: | --- | ---: |
+| `OwnedArchiveWrite` | 1 | 37 / 37 / 324 | 3344 |
+| Existing root's `archive` property | 1 | own-field delta, including undefined phase | 86 |
+| `OwnedSinkVoidCommand` for put/pipe/cancel | 3 | 10 / 8 / 76 | 2664 |
+| Fresh original-observation cells, including registration | 4 | 3 / 3 / 14 | 1104 |
+| `OwnedSinkRegistration` | 1 | 4 / 3 / 27 | 366 |
+| Empty registration capability | 1 | 0 / 0 / 0 | 32 |
+| Existing registration WeakMap key/value edges | 1 | two reference positions | 16 |
+| Retained archive measurement | 1 | 3 / 3 / 14 | 276 |
+| Archive handle | 1 | 5 / 1 / 29 | 418 |
+| Underlying source | 1 | 2 / 0 / 10 | 180 |
+| HWM strategy | 1 | 1 / 1 / 13 | 130 |
+| Seventeen diagnostic record/index positions below | 17 | source-defined origin union | 10862 |
+| **Named APP record/association component** | | | **19478** |
+
+The writer's ten origin fields are ordinal primitives, not references to ten
+additional origin-owner objects. Its other fields include initially undefined
+subjects and graph links that become undefined only at actual retirement. The
+three VOID commands and registration capability are created by `preparePositions`
+even when a later small or direct write leaves positions unused. They must not
+be omitted on an assumed successful streaming route. The copied walk's temporary
+measurement result is separate construction execution, not a second retained
+archive measurement. Shared Map/WeakSet containers belong to the root/static
+owners; the per-occurrence edges above remain charged.
+
+Every diagnostic has the six existing scalar fields, its Map key/value and
+ordinal occurrence, and failure-WeakSet edge. With the adopted own-property
+supplement its transport variant costs `624+2*origin.length` bytes. The record
+identity and all six values remain unchanged; no prototype or Boolean-history
+optimization is assumed.
+
+| Pre-enrolled archive diagnostic | Count | Bytes |
+| --- | ---: | ---: |
+| Preparation and construction acquisition | 2 | 1276 |
+| Abort | 1 | 634 |
+| Readable/lock check, origin body | 1 | 632 |
+| Discard, origin retire | 1 | 636 |
+| Pipe follower | 1 | 632 |
+| Deferred/start/start-cleanup/report registration | 4 | 2592 |
+| Put original and installation | 2 | 1260 |
+| Pipe original and installation | 2 | 1264 |
+| Cancel original and installation | 2 | 1272 |
+| Registration receipt, including registration-missing variant | 1 | 664 |
+| **Union** | **17** | **10862** |
+
+These are occurrence bounds, not an assumption that native correlation removes
+records. Equal reasons and undefined preserve independent entries. The final
+root diagnostic-reporting occurrence belongs to the root family, not a second
+archive occurrence. No raw failure graph appears in these private record slots.
+
+#### Archive known observer terms and remaining constructor rows
+
+The three VOID commands each construct one APP `ready` Promise, one suppression
+`.then`, one possible actual-original installation, and at most two simultaneous
+`advance` scheduling positions. Two positions cover executing work plus its next
+queued successor; unbounded cumulative invocations are not reserved as history.
+The fresh external handler names are28 and27 UTF-16 units; `bound advance` is13.
+
+| Closed native/bound-function slice for three VOID positions | Derivation | Bytes |
+| --- | --- | ---: |
+| Ready native constructors plus suppression reactions/dependents | `3*(744+1628)` | 7116 |
+| Actual-original direct-then machinery, original separate | `3*1628` | 4884 |
+| Frozen original handler pairs | `3*((244+2*28)+(244+2*27))` | 1794 |
+| Two bound advance functions and queued jobs per position | `3*(2*(244+2*13)+2*144)` | 2484 |
+
+These rows exclude APP Promise executors/environments, source originals and
+writer awaits. The VOID command/cell record rows already include owner resolver
+and observation references; do not add those same own fields again. Shared
+static `ignoreOwnedVoidOutcome` targets are not three newly allocated functions.
+Registration has its own observer pair, direct-then, scheduling, capability and
+caller work; it is not included in these three-command rows.
+
+The complete archive family still needs the following separate rows. Listing
+these products does not assign zero bytes or claim a complete numeric Warchive.
+
+| Source constructor / continuation | Actual remaining constituent roster |
+| --- | --- |
+| `createAccountingArchive` | Eleven declared factory bindings: value, gateway, ownedBytes, measurement, owned, used, done, archiveEncoder, chunks, pending, release; the receiver is an additional position. Six function objects: release/text/stream/retired getter/pull/cancel. Preserve original parameter/environment aliases; no compiler capture-elision assumption. |
+| Iterative `accountingChunks` | One generator and context, at most one live quoted child/delegation context, their iterator results, execution/environment links and old/new advancement overlap. Cursor/key vectors are the separate paid traversal component below. |
+| `OwnedArchiveWrite.execute` | One async result/context; retained primary and pipeOutcome bindings; this link; pipe rejection closure and its capture of primary; native pipeOutcome dependent; small-put or large-put await, optional cancel await, then pipeOutcome await. Sequential await sites do not mean three concurrent executing writer resumptions. |
+| `OwnedArchiveWrite.deferred` | Async result/context, primary and this; timer Promise/executor with resolve/reject/this, timer task and resolve callback; timer await followed by write await; discard failure path. |
+| `startOwnedProxyRetention` | Existing completion leaf invocation closure and its completion observer pair/environment; work/reporting dependent; bound reporting function with three actual arguments (http, retention, requestId) and undefined bound this; registration's actual work and context call; pre-start and throw-after-start unwind. The no-bound-argument tariff cannot price the reporting binding unchanged. |
+| Native serializer/transport | Encoder; stream/controller and pull/cancel algorithms; fixed-length stream and endpoints; AbortController/signal; pipe reader/writer, requests, followers, abort algorithm, queued work and R2 original. Include partial construction before any subject assignment. |
+| Admission/retirement/reporting | Writer/command/receipt constructor operands and partial escape; exact existing root/pricing/registry links; source record and key/expiry operands; late reporting origin and last caller work; final alias clearing and UNKNOWN retention. |
+
+`prepareOwnedHttpArchive` is the complete-family admission point: after genuine
+archive/pricing validation, before writer, three command, registration, archive
+or stream factories. The proposed V2 amount must replace/reconcile the actual
+existing writer/origin components, not add the same records twice. No put-time
+funding is permitted after pipe starts. Registry membership and exact admitted
+subjects remain independent authority checks even when bytes are prepaid.
+
+#### Archive traversal and DATA composition
+
+The shared iterative serializer has one `accountingChunks` invocation rather
+than a depth-sized generator chain. Its traversal records keep the established
+DATA/traversal tariff, without the new I/O own-property supplement. At depth32,
+`G + 33*198 + 482 = G + 7016` pays the cursor/key-vector component; the earlier
+admission/copy traversal is `G + 34*224 + 1024 = G + 8640`. Their reuse requires
+`walkPrivateAccountingArchive`'s actual finally clearance before serialization.
+Neither expression pays generator continuations, native pipe custody or ACTIVE
+frames. Additional variable-frontier allocation must remain prospective.
+
+The existing pricing expression at maximum reached depth is
+`2*G + 2*S + 360896`, where G is the body graph census and S the largest source
+string. It is not yet a complete archive DATA upper. The source/copy of the
+13-field retained wrapper, key/expiry/intermediate strings, quote temporaries,
+slabs and transport custody need explicit assignment within that expression or
+a separately derived addition. Do not label an unexplained constant as coverage.
+
+Two closed scalar components help that assignment:
+
+- Each full retained wrapper has13 properties,115 key units and at most12
+  primitive values. Its established DATA slice is `542+2*V`, with V the actual
+  stored string-value units. Two distinct wrapper constructions cost
+  `1084+4*V` before their body targets and construction operands. The eight
+  identity strings are individually admitted at1024 units; the version has30
+  units and the generated content reference40, giving V at most8262 and this
+  two-wrapper component at most34132 bytes. Undefined omissions can only reduce
+  the copied wrapper. Borrowed body/cache/auth graphs keep their own owners.
+- `quoted` uses a source slice at most4096 units, stringified slice at most24578
+  units and trimmed fragment at most24576 units. All three distinct temporary
+  strings together require106500 bytes; the original source string is separate.
+  Each slab keeps its complete32768-byte backing regardless of yielded view
+  length. Fixed-stream/R2 retention is not discharged by enqueue or EOF.
+
+The remaining transport/data overlap, generator contexts, APP function shapes
+and suspended caller/follower rows remain OPEN. Accordingly19478,7116 and the
+other slices above are not summed into a guessed Warchive, and no V2 archive
+reservation is implemented at this checkpoint. The separately reported raw
+credential-binding getter failure remains a credential-family closure blocker;
+it does not prevent these independent source-derived components from being
+recorded. Whole COMMON96, ACTIVE128/SYNC512, static65536 and hosted qualification
+remain OPEN.
+
 ### Current source-only named request subjects
 
 The preflight producer stages its exact serialized body, reply-source budget and
