@@ -10,8 +10,9 @@ The reviewed census uses application bytes from
 `123d79c080a8d170704737f3beef8b2caa7d023e` / `886c4fd9b480ed78312f7a19915231ab6eb105d0`
 and the Construct-reference correction in
 `7d881d2329750a1ef3b1429645f30c0de32e9222`. Changing this numeric operand adds no
-product or UTF16 name/string unit. The implementation's source and operand
-roster hashes are recorded below after its immutable checkpoint.
+product or UTF16 name/string unit. Implementation commit: `976fa5a614f66a77e82dcfe5ba6e74497c143e04`.
+Its source and operand roster hashes below replace the reviewed pre-operand
+hashes; all C/P/N/U counts and the694-prototype roster are unchanged.
 
 ROOT_ADOPTED_SOURCE_DERIVED_STATIC_DEBIT_947130_0944 implements the reviewed
 0905 contract amendment. It creates no arena, counter, binding, field, window,
@@ -50,10 +51,10 @@ before replacements), including39 one-call cases (1638 bytes); no such credit
 or change enters this census. No318-field change or128-byte inheritance
 cleanup is implemented.
 
-**Source and accounting basis.** The32 participating application modules are
+**Source and accounting basis.** The32 participating application modules at implementation976fa5a are
 compared with exact main `7b87537df59c39ae1bae0cfa748208572fa4d19f`.
 The SHA256 of ordered `path + NUL + rawSource + NUL` is
-`31594e6cce22154444360360272b63816ece3ffc390ee7decd656bb8543cded5`.
+`bae05f8b9c675105ee92d9fa4de2759c33f142df13386de3929aae28c3e7f73d`.
 Builtin TypeScript stripping and balanced executable-token inspection read
 source only. No application module or repository dependency was evaluated.
 The original STATIC three-product callable and eight-product class macros
@@ -375,11 +376,11 @@ JSON result. Optional `CENSUS_MODULE=worker/providers.ts`, `CENSUS_OFFSET=0`
 and `CENSUS_LIMIT=100` select up to200 local roster rows per page.
 
 Expected evidence:
-- Input SHA256: `31594e6cce22154444360360272b63816ece3ffc390ee7decd656bb8543cded5`.
+- Input SHA256: `bae05f8b9c675105ee92d9fa4de2759c33f142df13386de3929aae28c3e7f73d`.
 - Prototype roster694, sorted JSON `[path,name,line]):
   `0df61dc38950002b55cf65ed40a3b1ba62b68ccee5f362e3757503d54012b7de`.
 - Operand roster29363, sorted JSON `[path,family,strippedSourceOffset,value]`:
-  `081a7ccd5dcee1cf124a54a30ccafcbe3c9629feff1f4ce3cefc7793c15af2aa`.
+  `dd8512c387747aeb7e57e57c3c7db0d04b189affe2f6f71aade2a2654d83f08f`.
 - Operand U190000; `8*29363+2*190000=614904`.
 - Existing-scope additions:84 scopes,7593 executable tokens.
 - Sorting compares JSON strings by code-unit order; no locale or identifier
@@ -408,7 +409,7 @@ Expected evidence:
 | providers.ts |23|406|17b961a49bfe5a55ffd33908d0741197944273f3a885288c7ea119b0600ec051|
 | proxy-accounting.ts |14|936|f8c59af3520a3f57445cc943665456612a5da26c7f0c23cdbce30fdbe3ed096b|
 | proxy-auth.ts |7|105|c5f39cf8ec7286c1d73116b82597a8f209dd9047a563b52829fb4e4107781d9d|
-| proxy-completion.ts |34|1053|c68a52b7e1a77113ff5457848a49929b6eeee5a019eae732fd4f425e547b57fc|
+| proxy-completion.ts |34|1053|2f96db2e37374cf17cc0e2b3bf0ddbf957369c5a053774f00dd2ccc632a119cf|
 | proxy-response.ts |41|2404|ea7b922ff7a75e2dc32fa6ceb93fc3232fba6bf28452d9751646481b0c6ca3a0|
 | proxy-selection.ts |3|131|1cfda4d7cb260372a8ed5fb7442c4173d374ee582b6bc8cbb41b48a5f49fde55|
 | proxy-upstream-request.ts |2|188|e85f8ca526219edc3a706bb05fe8e830e4e95d5d5615575de44bc7d728746896|
@@ -424,7 +425,7 @@ Expected evidence:
 ```javascript
 import { execFileSync } from 'node:child_process';
 import { stripTypeScriptTypes } from 'node:module';
-const head='123d79c080a8d170704737f3beef8b2caa7d023e';
+const head='976fa5a614f66a77e82dcfe5ba6e74497c143e04';
 const base='7b87537df59c39ae1bae0cfa748208572fa4d19f';
 const paths=execFileSync('git',['diff','--name-only',base,head,'--','worker'],{encoding:'utf8'}).trim().split('\n').filter(x=>x.endsWith('.ts')&&!x.includes('/test/'));
 const files=[];
