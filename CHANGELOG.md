@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Freeze both private original-observer handlers before actual handoff, keeping their severable cells mutable. Complete returned nonthenable unlocks synchronously without substitute Promises; add handler-mutation and direct-unlock witnesses. Source-only partial; paid async/native and active-window inventories remain open.
+
 - Advance the shared accounting archive serializer with an iterative cursor stack, preserving quoted-string escaping, depth32 acceptance and chunk partitions while removing recursive generator advancement and cancellation. Add Node and Workerd depth32/surrogate/cancellation fixtures. Source-only partial; complete active/native accounting remains open.
 
 - Separate private reader and revalidation RPC installation failures from original outcomes; preserve exact closed-carrier provenance and UNKNOWN custody when an actual invocation returns an invalid falsy observer operand. Add Node and Workerd source fixtures. Source-only partial; exact subject binding and complete paid async I/O manifests remain open.

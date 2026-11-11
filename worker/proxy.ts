@@ -1,4 +1,4 @@
-import { setOwnedHeader, ProxyCompletion, inspectOwnedBytes, newOwnedBytes, ownedByteLength, ownedByteSubarray, copyOwnedBytes, newOwnedDecoder, decodeOwnedBytes } from "./proxy-completion.ts";
+import { freezeOwnedObserver, setOwnedHeader, ProxyCompletion, inspectOwnedBytes, newOwnedBytes, ownedByteLength, ownedByteSubarray, copyOwnedBytes, newOwnedDecoder, decodeOwnedBytes } from "./proxy-completion.ts";
 import { isIdentityFailure, identityFailure } from "./identity-admission.ts";
 import { beginOwnedHttpProxyPublicationHeaders, checkOwnedHttpProxyPublicationBody, finishOwnedHttpProxyPublication, beginOwnedHttpUpload, beginOwnedHttpRevalidation, prepareOwnedHttpAccounting, finishOwnedHttpRevalidationPreparation, discardOwnedHttpInitialError, admitOwnedHttpErrorText, isOwnedHttpLocalFailure, checkOwnedHttpRequest, matchesOwnedHttpRequestInputs, canCompleteOwnedHttpPreparation, checkOwnedHttpUpload, holdOwnedHttpUploadSerialization, abandonOwnedHttpUpload, growOwnedHttpRequest, ownedHttpSinkOwner, startOwnedHttpProviderFetch, consumeOwnedHttpProviderResponse, disposeOwnedHttpProviderResponse, matchesOwnedHttpProviderHandoff, ownedHttpSignal, cancelOwnedHttpResponse,
   beginOwnedHttpIntakeDiagnostics, ownedHttpIntakeFailure, finishOwnedHttpIntakeDiagnostics,
@@ -969,10 +969,10 @@ class OwnedHttpIntakeIo {
     let then: unknown;
     if (cell.kind === 4) {
       if (original !== null && (typeof original === "object" || typeof original === "function")) then = original.then;
-      if (typeof then !== "function") { original = Promise.resolve(); then = ownedIntakeThen; }
+      if (typeof then !== "function") { cell.flags |= 1 | 2; return; }
     } else then = original.then;
     if (then !== ownedIntakeThen) { cell.flags &= ~64; if (cell.kind === 8) this.flags &= ~8; }
-    void Reflect.apply(then as Function, original, [intakeObservationFulfilled.bind(cell), intakeObservationRejected.bind(cell)]);
+    void Reflect.apply(then as Function, original, [freezeOwnedObserver(intakeObservationFulfilled.bind(cell)), freezeOwnedObserver(intakeObservationRejected.bind(cell))]);
     cell.flags |= 2;
   }
   private observationFailure(cell: OwnedIntakeObservation, reason: unknown): object {

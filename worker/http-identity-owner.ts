@@ -3,7 +3,7 @@ import { acceptOwnedHttpAuthentication, hasBoundOwnedHttpAuthentication, hasOwne
 import { OwnedHttpRegistrations } from "./proxy-completion.ts";
 import { isPreparationLimit, type PreparationAdmission } from "./provider-templates.ts";
 import { inheritOwnedLocalError, clearOwnedLocalError, markOwnedLocalError, ownedLocalErrorDetails, nativeErrorFormat, nativeErrorEnvelope, type NativeErrorContext, type NativeErrorDetails } from "./native-errors.ts";
-import { setOwnedHeader, deleteOwnedHeader, newOwnedHeaders, ownedMetadataString, captureOwnedResponseMetadata, ProxyCompletion, OwnedReaderDriver, claimOwnedHttpStaticCustody, inspectOwnedBytes, isLocalOwnedByteView, isLocalOwnedByteBacking, newOwnedBytes, ownedBytesFromBacking, ownedByteLength, ownedByteSubarray, copyOwnedBytes, newOwnedDecoder, decodeOwnedBytes, enqueueOwnedBytes, measureOwnedHeaders, newOwnedResponse, cloneOwnedMetadataResponse, hasOwnedHeader } from "./proxy-completion.ts";
+import { freezeOwnedObserver, setOwnedHeader, deleteOwnedHeader, newOwnedHeaders, ownedMetadataString, captureOwnedResponseMetadata, ProxyCompletion, OwnedReaderDriver, claimOwnedHttpStaticCustody, inspectOwnedBytes, isLocalOwnedByteView, isLocalOwnedByteBacking, newOwnedBytes, ownedBytesFromBacking, ownedByteLength, ownedByteSubarray, copyOwnedBytes, newOwnedDecoder, decodeOwnedBytes, enqueueOwnedBytes, measureOwnedHeaders, newOwnedResponse, cloneOwnedMetadataResponse, hasOwnedHeader } from "./proxy-completion.ts";
 import { ExactBodyCharge } from "./body-budget.ts";
 import { identityFailure, isIdentityFailure, identityHeader, identitySourceBudget, identityPlan, admitIdentityBytes, admitIdentityHeaders, parseIdentity, IdentityWire, createPrivateMaterializationReceipt, adoptPrivateMaterializationResponse, failPrivateMaterializationAcquisition, beginPrivateMaterializationAcquisition, abandonPrivateMaterializationReceipt, completePrivateMaterializationInstallation, consumePrivateMaterializationReceipt, type PrivateMaterializationReceipt, type PrivateMaterializationDestination, type IdentitySourceBudget } from "./identity-admission.ts";
 import type { Env, QueueMessage, AuthorizedIdentity, UsageEvent, BudgetReserveRequest, BudgetChargeRequest, BudgetSettleRequest } from "./types.ts";
@@ -352,7 +352,7 @@ function installOwnedOriginal(cell: OwnedOriginalObservation, original: Promise<
 }
 function installOwnedOriginalMethod(cell: OwnedOriginalObservation, original: unknown, then: unknown): void {
   try {
-    void Reflect.apply(then as Function, original, [ownedOriginalFulfilled.bind(cell), ownedOriginalRejected.bind(cell)]);
+    void Reflect.apply(then as Function, original, [freezeOwnedObserver(ownedOriginalFulfilled.bind(cell)), freezeOwnedObserver(ownedOriginalRejected.bind(cell))]);
     cell.state |= 2;
   } catch (reason) { cell.state |= 4; throw reason; }
   finally { original = undefined; then = undefined; cell = undefined as never; }
@@ -1316,7 +1316,7 @@ class OwnedRevalidationRpc extends OwnedReaderDriver {
         { method: "POST", body: this.requestBody, signal: this.signal });
       started = true;
       const then = original.then;
-      void Reflect.apply(then, original, [ownedRpcFetchAccepted.bind(this.fetchCell!), ownedRpcFetchRejected.bind(this.fetchCell!)]);
+      void Reflect.apply(then, original, [freezeOwnedObserver(ownedRpcFetchAccepted.bind(this.fetchCell!)), freezeOwnedObserver(ownedRpcFetchRejected.bind(this.fetchCell!))]);
       this.fetchFlags |= 4;
     } catch (reason) {
       try {
@@ -2733,7 +2733,7 @@ class OwnedLedgerAck {
         closed = this.reader.closed; started = true;
         const then = closed.then;
         if (then !== ownedBoundaryThen) this.closedState &= ~32;
-        void Reflect.apply(then, closed, [ackClosedFulfilled.bind(this), ackClosedRejected.bind(this)]);
+        void Reflect.apply(then, closed, [freezeOwnedObserver(ackClosedFulfilled.bind(this)), freezeOwnedObserver(ackClosedRejected.bind(this))]);
         this.closedState |= 2;
       } catch (reason) {
         if (started) { this.closedState |= 4; this.observationFailure(reason); }
@@ -2774,7 +2774,7 @@ class OwnedLedgerAck {
       started = true;
       const then = original!.then;
       if (then !== ownedBoundaryThen) this.joinState &= ~65536;
-      void Reflect.apply(then, original, [ackReadFulfilled.bind(observation), ackReadRejected.bind(observation)]);
+      void Reflect.apply(then, original, [freezeOwnedObserver(ackReadFulfilled.bind(observation)), freezeOwnedObserver(ackReadRejected.bind(observation))]);
       observation.state |= 2;
     } catch (reason) {
       observation.state |= started ? 4 : 3;
@@ -2878,7 +2878,7 @@ class OwnedLedgerAck {
       let then: unknown;
       if (original !== null && (typeof original === "object" || typeof original === "function")) then = (original as { then?: unknown }).then;
       if (typeof then !== "function") { this.unlockState |= 3; return; }
-      void Reflect.apply(then, original, [ackUnlockFulfilled.bind(this), ackUnlockRejected.bind(this)]);
+      void Reflect.apply(then, original, [freezeOwnedObserver(ackUnlockFulfilled.bind(this)), freezeOwnedObserver(ackUnlockRejected.bind(this))]);
       this.unlockState |= 2;
       then = undefined;
     } catch (reason) {
@@ -4114,7 +4114,7 @@ export class OwnedStatusReader {
       // pending bit clears only at its first actual callback; the fixed driver
       // runs after that callback and the synchronous installation have returned.
       observation = { owner: this, nonce: this.reads, state: 0 }; this.readObservation = observation;
-      void Reflect.apply(then, original, [ownedHttpReadFulfilled.bind(observation), ownedHttpReadRejected.bind(observation)]);
+      void Reflect.apply(then, original, [freezeOwnedObserver(ownedHttpReadFulfilled.bind(observation)), freezeOwnedObserver(ownedHttpReadRejected.bind(observation))]);
       observation.state |= 2;
     } catch (reason) {
       if (observation) observation.state |= 4;
@@ -4228,7 +4228,7 @@ export class OwnedStatusReader {
       observing = true;
       let then: unknown;
       if (original !== null && (typeof original === "object" || typeof original === "function")) then = (original as { then?: unknown }).then;
-      if (typeof then !== "function") { original = Promise.resolve(); then = ownedBoundaryThen; }
+      if (typeof then !== "function") { this.unlockResolved(); return; }
       this.unlockObservation = { owner: this, kind: 4, state: 0 };
       installOwnedOriginalMethod(this.unlockObservation, original, then);
       then = undefined;

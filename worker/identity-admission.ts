@@ -1,4 +1,4 @@
-import { inspectOwnedBytes, isLocalOwnedByteView, isLocalOwnedByteBacking, newOwnedBytes, ownedBytesFromBacking, ownedByteLength, ownedByteSubarray, copyOwnedBytes, newOwnedDecoder, decodeOwnedBytes } from "./proxy-completion.ts";
+import { freezeOwnedObserver, inspectOwnedBytes, isLocalOwnedByteView, isLocalOwnedByteBacking, newOwnedBytes, ownedBytesFromBacking, ownedByteLength, ownedByteSubarray, copyOwnedBytes, newOwnedDecoder, decodeOwnedBytes } from "./proxy-completion.ts";
 import { identityJsonProfiles, isAccessDenial, parseAccessJson, type UserSourceCounts, type IdentityEnvelope } from "./access-json.ts";
 import { inputRetirement, type InputRetirement } from "./input-retirement.ts";
 import { budgetFields, effectiveBudgetPolicy } from "./budget-overrides.ts";
@@ -597,7 +597,7 @@ class PrivateMaterializationState {
     else if (kind === 2) this.cancelObservation = cell;
     else this.unlockObservation = cell;
     try {
-      void Reflect.apply(then as Function, original, [materializationVoidFulfilled.bind(cell), materializationVoidRejected.bind(cell)]);
+      void Reflect.apply(then as Function, original, [freezeOwnedObserver(materializationVoidFulfilled.bind(cell)), freezeOwnedObserver(materializationVoidRejected.bind(cell))]);
       cell.state |= 2;
     } catch (reason) { cell.state |= 4; throw reason; }
     finally { cell = undefined; original = undefined; then = undefined; }
@@ -674,7 +674,7 @@ class PrivateMaterializationState {
       original = Reflect.apply(method, reader, [backing]); started = true;
       const then = original!.then; if (then !== privateIdentityNativeThen) this.native &= ~2;
       observation = { owner: this, nonce, state: 0 }; this.readObservation = observation;
-      void Reflect.apply(then, original, [materializationReadFulfilled.bind(observation), materializationReadRejected.bind(observation)]);
+      void Reflect.apply(then, original, [freezeOwnedObserver(materializationReadFulfilled.bind(observation)), freezeOwnedObserver(materializationReadRejected.bind(observation))]);
       observation.state |= 2;
     } catch (error) {
       if (observation) observation.state |= 4;
@@ -764,8 +764,8 @@ class PrivateMaterializationState {
       if (!started) this.observed(4);
       else {
         if (original !== null && (typeof original === "object" || typeof original === "function")) then = (original as { then?: unknown }).then;
-        if (typeof then !== "function") { original = Promise.resolve(); then = privateIdentityNativeThen; }
-        this.observeVoid(4, original, then);
+        if (typeof then !== "function") this.observed(4);
+        else this.observeVoid(4, original, then);
       }
     } catch (error) { if (started) this.installedFailure(error); else this.rejected(4, error); }
     finally { original = undefined; then = undefined; this.installing--; this.schedule(); }

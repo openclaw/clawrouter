@@ -1,4 +1,4 @@
-import { inspectOwnedBytes, isLocalOwnedByteView, isLocalOwnedByteBacking, newOwnedBytes, ownedBytesFromBacking, ownedByteLength, ownedByteSubarray, copyOwnedBytes, newOwnedDecoder, decodeOwnedBytes } from "./proxy-completion.ts";
+import { freezeOwnedObserver, inspectOwnedBytes, isLocalOwnedByteView, isLocalOwnedByteBacking, newOwnedBytes, ownedBytesFromBacking, ownedByteLength, ownedByteSubarray, copyOwnedBytes, newOwnedDecoder, decodeOwnedBytes } from "./proxy-completion.ts";
 import { inputRetirement, type InputRetirement } from "./input-retirement.ts";
 import { privateIdentityNativeThen, privateIdentityNativeClosed, privateIdentityNativeReaderOperation, privateIdentityOrigin, privateIdentityDiagnostic, type PrivateIdentityParent, IdentityWire, isIdentityFailure, addIdentitySources, admitAdmission, admitIdentityBytes, admitIdentityHeaders, identityFailure, identitySourceBudget, identityUtf8, parseIdentity,
   type IdentityProfile, type IdentitySourceBudget } from "./identity-admission.ts";
@@ -587,7 +587,7 @@ class PrivatePreflightState {
     else if (kind === 2) this.cancelObservation = cell;
     else this.unlockObservation = cell;
     try {
-      void Reflect.apply(then as Function, original, [preflightVoidFulfilled.bind(cell), preflightVoidRejected.bind(cell)]);
+      void Reflect.apply(then as Function, original, [freezeOwnedObserver(preflightVoidFulfilled.bind(cell)), freezeOwnedObserver(preflightVoidRejected.bind(cell))]);
       cell.state |= 2;
     } catch (reason) { cell.state |= 4; throw reason; }
     finally { cell = undefined; original = undefined; then = undefined; }
@@ -656,7 +656,7 @@ class PrivatePreflightState {
       original = Reflect.apply(method, reader, [backing]); started = true;
       const then = original!.then; if (then !== privateIdentityNativeThen) this.native &= ~2;
       observation = { owner: this, nonce, state: 0 }; this.readObservation = observation;
-      void Reflect.apply(then, original, [preflightReadFulfilled.bind(observation), preflightReadRejected.bind(observation)]);
+      void Reflect.apply(then, original, [freezeOwnedObserver(preflightReadFulfilled.bind(observation)), freezeOwnedObserver(preflightReadRejected.bind(observation))]);
       observation.state |= 2;
     } catch (error) {
       if (observation) observation.state |= 4;
@@ -747,8 +747,8 @@ class PrivatePreflightState {
       else {
         if (original !== null && (typeof original === "object" || typeof original === "function"))
           then = (original as { then?: unknown }).then;
-        if (typeof then !== "function") { original = Promise.resolve(); then = privateIdentityNativeThen; }
-        this.observeVoid(4, original, then);
+        if (typeof then !== "function") this.observed(4);
+        else this.observeVoid(4, original, then);
       }
     } catch (error) { if (started) this.installedFailure(error); else this.rejected(4, error); }
     finally { original = undefined; then = undefined; this.installing--; this.schedule(); }

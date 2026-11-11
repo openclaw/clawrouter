@@ -246,6 +246,8 @@ export function cloneOwnedMetadataResponse(source: ReturnType<typeof captureOwne
     headers: source.headers, ...(source.webSocket ? { webSocket: source.webSocket } : {}) } as ResponseInit);
 }
 
+// Actual observers receive shape-closed APP handlers; their bound cells stay mutable.
+export const freezeOwnedObserver = Object.freeze;
 const driverNativeThen = Promise.prototype.then;
 const driverDefaultRead = ReadableStreamDefaultReader.prototype.read;
 const driverByobRead = ReadableStreamBYOBReader.prototype.read;
@@ -358,10 +360,10 @@ export abstract class OwnedReaderDriver {
       let then: unknown;
       if (normalizeVoid) {
         if (original !== null && (typeof original === "object" || typeof original === "function")) then = original.then;
-        if (typeof then !== "function") { original = Promise.resolve(); then = driverNativeThen; }
+        if (typeof then !== "function") { cell.state |= 2; this.dispatchDriverObservation(cell, false, undefined); return; }
       } else then = original.then;
       if (then !== driverNativeThen) this.native &= ~(kind === 8 ? 1 : kind === 1 ? 2 : kind === 2 ? 4 : 0);
-      void Reflect.apply(then as Function, original, [driverObservationFulfilled.bind(cell), driverObservationRejected.bind(cell)]);
+      void Reflect.apply(then as Function, original, [freezeOwnedObserver(driverObservationFulfilled.bind(cell)), freezeOwnedObserver(driverObservationRejected.bind(cell))]);
       cell.state |= 2;
     } catch (reason) { if (cell) cell.state |= 4; throw reason; }
     finally { cell = undefined; original = undefined as never; token = undefined; this.installing--; this.schedule(); }

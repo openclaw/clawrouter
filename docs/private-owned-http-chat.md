@@ -1,5 +1,38 @@
 # Private owned HTTP Chat staging
 
+
+### Current source-only handler and direct-unlock amendment
+
+The twelve actual private observer pair factories freeze both fresh bound
+functions through one captured `Object.freeze` before either reaches the actual
+`.then` method. Their mutable observation cells and in-place ACK records remain
+mutable. The original getter position, receiver, two arguments, FIRST selection,
+ignored call return and independent installation UNKNOWN behavior remain intact.
+The private boundary now rejects handler property, descriptor and prototype
+mutation; it does not promise the former extensible-function behavior.
+
+Five private unlock paths no longer substitute `Promise.resolve()` for a
+nonthenable actual return. Primitives complete synchronously without boxing;
+objects/functions get one actual `then` lookup, and only a callable result is
+observed. Genuine logical VOID readiness receipts remain. A callable observer's
+fulfillment value and call return are still ignored. A getter or installation
+throw remains a separate failure and UNKNOWN, including after FIRST.
+
+The capture adds one static binding plus four importing bindings. Per pair,
+freezing runs sequentially; the live bound functions and argument array already
+belong to that observation. Each freeze adds its executing callee, argument,
+activation and returned-alias operands. These rows must be included in the
+active and static tables; no numeric whole-window or native tariff is inferred.
+The existing admission precedes the original and handler factories. Complete V2
+family manifests and reservations remain OPEN; this is not a V2 fit claim.
+
+Authored Node witnesses cover native undefined, falsy primitives, nonthenable
+objects/functions, synchronous FIRST, exact callable lookup/invocation, hostile
+fulfillment/call return, held closed custody and installation UNKNOWN. The real
+Node/Workerd fixture source checks every one of the twelve pair sites and tries
+string/symbol/name/length/prototype mutations inside the modified closed method.
+Runtime remains `UNRUN_CODE_ONLY_HOSTED`.
+
 ### Shared archive generator cursor — source-only partial
 
 The one shared `accountingChunks` now uses an iterative cursor stack. It retains

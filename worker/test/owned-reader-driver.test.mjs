@@ -427,14 +427,25 @@ test('generic usage delays unlock until original read and FIRSTcancel join: ' + 
 
 // UNRUN_CODE_ONLY_HOSTED: observe the returned unlock itself, never a Promise
 // resolution that would assimilate its fulfillment or erase an install throw.
-for (const returned of [null, false, 0, 1, 'done', {}])
+for (const returned of [undefined, null, false, 0, '', 1, 'done', {}, Object.assign(function nonthenable() {}, { then: false })])
 test(`returned nonthenable unlock completes without inventing a failure (${String(returned)})`, async () => {
-  const owner = new FixtureReader('public'); let calls = 0;
+  const owner = new FixtureReader('public'); let calls = 0, unlockObservations = 0;
+  const observe = owner.observe;
+  owner.observe = function (...args) {
+    const result = Reflect.apply(observe, this, args);
+    if (args[0] === 4) {
+      unlockObservations++;
+      assert.equal(this.unlockObservation.state, 3, 'actual nonthenable completed synchronously');
+      assert.ok(this.bits >>> 11 & 4, 'FIRST accepted before observe returned');
+    }
+    return result;
+  };
   owner.open(stream(), reader => {
     const unlock = reader.releaseLock;
     reader.releaseLock = function (...args) { calls++; Reflect.apply(unlock, this, args); return returned; };
   });
   await owner.read(); await owner.stop();
+  assert.equal(unlockObservations, returned === undefined ? 0 : 1);
   assert.equal(calls, 1); assert.equal(owner.unknown, false); assert.deepEqual(owner.failures, []);
 });
 
@@ -448,6 +459,18 @@ test(`returned unlock direct FIRST ignores foreign fulfillment; install throw=${
     gets++;
     return function (yes, no) {
       assert.equal(this, original); assert.equal(arguments.length, 2); calls++;
+      for (const handler of [yes, no]) {
+        assert.ok(Object.isFrozen(handler));
+        const names = Reflect.ownKeys(handler), prototype = Object.getPrototypeOf(handler);
+        const name = handler.name, length = handler.length;
+        assert.equal(Reflect.set(handler, 'foreign', foreign), false);
+        assert.equal(Reflect.set(handler, Symbol('foreign'), foreign), false);
+        assert.equal(Reflect.defineProperty(handler, 'name', { value: 'x'.repeat(40000) }), false);
+        assert.equal(Reflect.defineProperty(handler, 'length', { value: foreign }), false);
+        assert.equal(Reflect.setPrototypeOf(handler, foreign), false);
+        assert.deepEqual(Reflect.ownKeys(handler), names); assert.equal(Object.getPrototypeOf(handler), prototype);
+        assert.equal(handler.name, name); assert.equal(handler.length, length);
+      }
       accepted = yes; rejected = no; yes(foreign);
       if (throwAfter) throw undefined;
       return callReturn;

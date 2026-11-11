@@ -1081,6 +1081,7 @@ export default {async fetch(request){
 `.replace('__COMPACT_JSON_WIRE__', () => ownedJsonCodecWire.toString()).replace('__OWNED_SSE_LINES__', () => ownedCodecSseLines.toString()).replace('__OWNED_USAGE_WIRE__', () => ownedUsageWire.toString());
 
 export function assertOwnedDriverOrigins(assert, row, outcome, reasonKind) {
+  assert.equal(row.handlerChecks, 2, 'both frozen handlers resisted mutation inside actual then');
   assert.equal(row.entered, 1); assert.equal(row.calls, 1); assert.equal(row.foreignGets, 0);
   assert.equal(row.installation.origin, 'closed');
   assert.equal(row.installation.primaryIsUndefined, reasonKind === 'undefined');

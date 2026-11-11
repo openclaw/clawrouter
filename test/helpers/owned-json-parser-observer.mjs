@@ -6,6 +6,20 @@ import { ownedUsageWire } from './owned-json-parser-cases.mjs';
 // These observers are NOT production factories or a complete CONTROL inventory.
 export function createOwnedJsonObservation() {
   const rows = [], readers = new WeakSet(), driverOriginOwners = new WeakSet(), foregroundOwners = [];
+  function assertClosedHandler(handler) {
+    if (!Object.isFrozen(handler)) throw Error('actual observer handler is extensible');
+    const names = Reflect.ownKeys(handler), prototype = Object.getPrototypeOf(handler);
+    const name = Object.getOwnPropertyDescriptor(handler, 'name'), length = Object.getOwnPropertyDescriptor(handler, 'length');
+    const foreign = { marker: 'foreign-handler-graph' }, symbol = Symbol('foreign-handler');
+    if (Reflect.set(handler, 'foreign', foreign) || Reflect.set(handler, symbol, foreign)
+      || Reflect.defineProperty(handler, 'name', { value: 'x'.repeat(40000) })
+      || Reflect.defineProperty(handler, 'length', { value: foreign })
+      || Reflect.setPrototypeOf(handler, foreign)) throw Error('actual observer handler shape changed');
+    if (Reflect.ownKeys(handler).length !== names.length || Object.getPrototypeOf(handler) !== prototype
+      || Object.getOwnPropertyDescriptor(handler, 'name').value !== name.value
+      || Object.getOwnPropertyDescriptor(handler, 'length').value !== length.value) throw Error('handler descriptor mutation');
+  }
+
   let current, censusUsage = false, preparations = 0;
   const consumers = { created: 0, acquired: 0, retired: 0, live: 0, inner: 0, outer: 0,
     read: 0, cancel: 0, unlock: 0, nativeUnlocked: 0, unlockSettled: 0, thenCalls: 0, closed: 0, closedSettled: 0, replay: 0, transferred: 0, pricing: 0, enqueued: 0, oversizedOutput: 0, mutations: 0, held: false, released: false, reasonReads: 0 };
@@ -609,7 +623,8 @@ export function createOwnedJsonObservation() {
     beforeUsageParse() { if (usage.parsed >= usage.census) throw new Error('native usage parse before census'); usage.parsed++; },
     summary(value) { if (value !== undefined && value !== 'refusal') throw new Error('private summary retained a stop-reason subtree'); usage.summaries++; },
     usageCleared() { usage.cleared++; },
-    driverOrigins: { entered: 0, calls: 0, foreignGets: 0, records: [], original: null, installation: null },
+    frozenHandlers(pair) { for (const handler of pair) assertClosedHandler(handler); return pair; },
+    driverOrigins: { entered: 0, calls: 0, foreignGets: 0, handlerChecks: 0, records: [], original: null, installation: null },
     driverClosed(native, reader, driver) {
       const name = driver.constructor.name;
       const [prefix, target, outcome, reasonKind] = this.consumerMode.split(':');
@@ -623,6 +638,7 @@ export function createOwnedJsonObservation() {
       const original = { then(yes, no) {
         if (this !== original || arguments.length !== 2) throw Error('driver closed observer boundary');
         row.calls++;
+        assertClosedHandler(yes); assertClosedHandler(no); row.handlerChecks += 2;
         if (outcome === 'reject') no(originalReason); else yes(undefined);
         const poison = { get then() { row.foreignGets++; throw Error('duplicate payload inspected'); } };
         yes(poison); no(poison);
@@ -933,6 +949,15 @@ function replace(source, anchor, replacement, count = 1) {
 }
 
 export function observeOwnedJsonSource(path, source) {
+  const handlerSites = { 'proxy-completion.ts': 1, 'http-identity-owner.ts': 6, 'credential-preflight-source.ts': 2,
+    'identity-admission.ts': 2, 'proxy.ts': 1 }[path.split(/[\\/]/).at(-1)];
+  if (handlerSites) {
+    let sites = 0;
+    source = source.replace(/\[freezeOwnedObserver\([^\n]+?, freezeOwnedObserver\([^\n]+?\)\]/g,
+      pair => { sites++; return probe + '.frozenHandlers(' + pair + ')'; });
+    assert.equal(sites, handlerSites, 'exact exposed observer pair inventory');
+  }
+
   if (/[\\/]worker[\\/]credential-preflight-source\.ts$/.test(path)) {
     source = replace(source, 'if (owned) await owned.read(backing!);',
       'if (owned) { await owned.read(backing!); ' + probe + '.adapterReadCompleted(owned.kind); }');
@@ -1059,8 +1084,8 @@ export function observeOwnedJsonSource(path, source) {
       '  root.funding = funding; globalThis.__ownedAckPhaseFixture?.afterCredit(root, true);\n  return true;\n}\n\ntype OwnedLedgerResult');
     source = replace(source, '    this.response = response;\n  }\n  dispatchOriginal(cell: OwnedOriginalObservation, failed: boolean, value: unknown): void {\n    if (cell !== this.cancelObservation',
       '    this.response = response; globalThis.__ownedAckPhaseFixture?.ack(this);\n  }\n  dispatchOriginal(cell: OwnedOriginalObservation, failed: boolean, value: unknown): void {\n    if (cell !== this.cancelObservation');
-    source = replace(source, '[ackReadFulfilled.bind(observation), ackReadRejected.bind(observation)]',
-      '(globalThis.__ownedAckPhaseFixture ? globalThis.__ownedAckPhaseFixture.read(observation, ackReadFulfilled.bind(observation), ackReadRejected.bind(observation)) : [ackReadFulfilled.bind(observation), ackReadRejected.bind(observation)])');
+    source = replace(source, '[freezeOwnedObserver(ackReadFulfilled.bind(observation)), freezeOwnedObserver(ackReadRejected.bind(observation))]',
+      '(globalThis.__ownedAckPhaseFixture ? globalThis.__ownedAckPhaseFixture.read(observation, freezeOwnedObserver(ackReadFulfilled.bind(observation)), freezeOwnedObserver(ackReadRejected.bind(observation))) : [freezeOwnedObserver(ackReadFulfilled.bind(observation)), freezeOwnedObserver(ackReadRejected.bind(observation))])');
     source = replace(source, '    if (this.parent && !this.parent.handoffAck(this)) return;',
       '    globalThis.__ownedAckPhaseFixture?.beforeCut(this); if (this.parent && !this.parent.handoffAck(this)) return;');
     source = replace(source, '    const owner = this.owner!, slot = this.slot, root = this.root;',
@@ -1071,8 +1096,8 @@ export function observeOwnedJsonSource(path, source) {
       '    this.joinState = 262144; globalThis.__ownedAckPhaseFixture?.afterCut(this); this.schedule();');
     source = replace(source, '    delete ended.plan; delete ended.attempt; delete ended.accounting; delete ended.http;',
       '    delete ended.plan; delete ended.attempt; delete ended.accounting; delete ended.http; globalThis.__ownedAckPhaseFixture?.budget(this);');
-    source = replace(source, '[ownedOriginalFulfilled.bind(cell), ownedOriginalRejected.bind(cell)]',
-      probe + '.retainOriginalHandlers(cell, ownedOriginalFulfilled.bind(cell), ownedOriginalRejected.bind(cell))');
+    source = replace(source, '[freezeOwnedObserver(ownedOriginalFulfilled.bind(cell)), freezeOwnedObserver(ownedOriginalRejected.bind(cell))]',
+      probe + '.retainOriginalHandlers(cell, freezeOwnedObserver(ownedOriginalFulfilled.bind(cell)), freezeOwnedObserver(ownedOriginalRejected.bind(cell)))');
     source = replace(source, '  constructor(cap: OwnedHttpRequest, root: RequestOwner, sink: OwnedHttpSinkOwner) {\n    this.cap = cap; this.root = root; this.sink = sink;\n    this.result',
       '  constructor(cap: OwnedHttpRequest, root: RequestOwner, sink: OwnedHttpSinkOwner) {\n    this.cap = cap; this.root = root; this.sink = sink;\n    globalThis.__ownedTerminalFixture?.shell(); this.result');
     source = replace(source, '  root.accountingTerminal = new OwnedAccountingTerminal(cap, root, root.sink!);',
