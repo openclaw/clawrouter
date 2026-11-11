@@ -597,3 +597,29 @@ test('private protected capsule keeps sparse inherited indices out of delayed co
   finally { if (prior) Object.defineProperty(Array.prototype, '0', prior); else delete Array.prototype[0]; }
   assert.equal(text, '{"items":[null]}'); assert.equal(copied, text); assert.equal(reads, 0);
 });
+
+for (const surrogate of [false, true]) for (const cancel of [false, true])
+test(`shared archive cursor depth32 advancement and cancel ${surrogate}/${cancel}`, async () => {
+  const scalar = surrogate ? 'x'.repeat(4095) + '😀' + 'y'.repeat(35903) + '\ud800\udfff' : 'x'.repeat(40000);
+  let source = scalar; for (let depth = 0; depth < 32; depth++) source = { next: source };
+  const expected = Buffer.from(JSON.stringify(source)), lengths = [];
+  for (const make of [accountingArchive, privateAccountingArchive]) {
+    const archive = make(source), body = archive.stream(), reader = body.getReader(), chunks = [];
+    let eof = false;
+    try {
+      for (;;) {
+        const part = await reader.read();
+        if (part.done) { eof = true; break; }
+        chunks.push(Buffer.from(part.value));
+        if (cancel) { await reader.cancel(); break; }
+      }
+    } finally { try { if (!eof) await reader.cancel(); } finally { reader.releaseLock(); archive.discard(); } }
+    const actual = Buffer.concat(chunks);
+    assert.deepEqual(actual, expected.subarray(0, actual.length));
+    if (!cancel) assert.deepEqual(actual, expected);
+    assert.equal(archive.retired, true); assert.equal(body.locked, false);
+    const sizes = chunks.map(chunk => chunk.length); lengths.push(sizes);
+    if (!surrogate) assert.deepEqual(sizes, cancel ? [28929] : [28929, 11361], 'historical 4096-unit fragments keep exact slab partition');
+  }
+  assert.deepEqual(lengths[0], lengths[1]);
+});

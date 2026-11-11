@@ -428,25 +428,52 @@ export function copyPrivateQueueCapsule(value: unknown, destination: { subject?:
   destination.subject = copyAdmittedAccountingJson(value, undefined, false, 2);
 }
 
+interface AccountingChunkCursor {
+  value: unknown[] | Record<string, unknown>;
+  keys: string[] | undefined;
+  index: number;
+  emitted: number;
+}
 function* accountingChunks(value: unknown): Generator<string> {
-  if (typeof value === "string") { yield* quoted(value); return; }
-  if (Array.isArray(value)) {
-    yield "[";
-    for (let i = 0; i < value.length; i++) { if (i) yield ","; yield* accountingChunks(value[i] ?? null); }
-    yield "]"; return;
-  }
-  if (value !== null && typeof value === "object") {
-    yield "{"; let first = true;
-    for (const key in value) {
-      if (!Object.hasOwn(value, key)) continue;
-      const item = (value as Record<string, unknown>)[key];
-      if (item === undefined) continue;
-      if (!first) yield ","; first = false;
-      yield* quoted(key); yield ":"; yield* accountingChunks(item);
+  // Admission/copy has completed and cleared its cursors before this generator
+  // starts. The private caller prepays this stack and every key occurrence in
+  // the same traversal high-water component; ordinary serialization is shared.
+  const stack: AccountingChunkCursor[] = [];
+  let input = value, entering = true;
+  try {
+    while (entering || stack.length) {
+      if (entering) {
+        entering = false;
+        if (typeof input === "string") { yield* quoted(input); input = undefined; }
+        else if (input !== null && typeof input === "object") {
+          const array = Array.isArray(input);
+          privateAccountingProperty(stack, stack.length, { value: input as unknown[] | Record<string, unknown>,
+            keys: array ? undefined : privateAccountingKeys(input), index: 0, emitted: 0 });
+          input = undefined;
+          yield array ? "[" : "{";
+        } else { yield JSON.stringify(input); input = undefined; }
+      }
+      if (!stack.length) break;
+      const cursor = stack[stack.length - 1];
+      const length = cursor.keys ? cursor.keys.length : (cursor.value as unknown[]).length;
+      if (cursor.index === length) {
+        yield cursor.keys ? "}" : "]";
+        cursor.value = undefined as never; cursor.keys = undefined;
+        stack.length--; continue;
+      }
+      const key = cursor.keys ? cursor.keys[cursor.index++] : cursor.index++;
+      const item = (cursor.value as Record<string | number, unknown>)[key];
+      if (cursor.keys && item === undefined) continue;
+      if (cursor.emitted++) yield ",";
+      if (cursor.keys) { yield* quoted(key as string); yield ":"; }
+      input = item ?? null; entering = true;
     }
-    yield "}"; return;
+  } finally {
+    for (let index = 0; index < stack.length; index++) {
+      stack[index].value = undefined as never; stack[index].keys = undefined;
+    }
+    stack.length = 0; input = undefined; value = undefined;
   }
-  yield JSON.stringify(value);
 }
 
 /** Privately copied TEXT archive; one synchronous pull and at most one queued chunk. */

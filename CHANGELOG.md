@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Advance the shared accounting archive serializer with an iterative cursor stack, preserving quoted-string escaping, depth32 acceptance and chunk partitions while removing recursive generator advancement and cancellation. Add Node and Workerd depth32/surrogate/cancellation fixtures. Source-only partial; complete active/native accounting remains open.
+
 - Separate private reader and revalidation RPC installation failures from original outcomes; preserve exact closed-carrier provenance and UNKNOWN custody when an actual invocation returns an invalid falsy observer operand. Add Node and Workerd source fixtures. Source-only partial; exact subject binding and complete paid async I/O manifests remain open.
 
 - Cut private HTTP orchestration out of ordinary ledger, utility, provider and usage import closures. Keep canonical request/sink/revalidation registrations in the completion leaf with fixed named receivers; move metadata and private usage execution to their owners and deliver preflight replies through VOID readiness and the existing destination. Source-only partial; reached subject/installation repairs and complete accounting qualification remain open.

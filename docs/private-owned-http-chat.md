@@ -1,5 +1,50 @@
 # Private owned HTTP Chat staging
 
+### Shared archive generator cursor — source-only partial
+
+The one shared `accountingChunks` now uses an iterative cursor stack. It retains
+one generator continuation and at most one executing `quoted` child. The quoted
+surrogate/escaping algorithm and yielded token order remain unchanged. Returning
+or cancelling clears cursor graph/key aliases in one index loop, with no nested
+`accountingChunks.return()` chain. Ordinary and private archive paths use this
+same serializer; depth32 and all other accepted profiles remain unchanged.
+
+The new traversal records are a closed APP component, separate from generator
+continuations and native transport storage. For `Q(m,n,u)=8(1+2m+n)+2u`:
+
+| Traversal product | Source-derived bound | Bytes |
+| --- | --- | ---: |
+| Cursor `value,keys,index,emitted` plus stack reference | `Q(4,4,21)+8` | 154 each |
+| Key-vector fixed array/length slice | `Q(1,1,6)` | 44 each |
+| Key-vector entries and string occurrences | `16K+2Ukeys`, bounded by the measured body graph component `G` | actual `K,Ukeys` |
+| Retained-record fixed key entries | 13 keys, 115 UTF16 name units: `16*13+2*115` | 438 |
+| Stack fixed array/length slice | `Q(1,1,6)` | 44 |
+
+There are at most33 live container cursors, including an empty container at
+depth32. Quoted leaves at depth32 retain at most32 container cursors. The complete
+serializer traversal component is bounded by `G + 33*198 + 482` at that profile
+maximum; pricing uses the reached body depth, not a per-request maximum graph.
+Its existing `G + (min(depth,32)+2)*224 + 1024` traversal high water already pays
+this specific phase: each former six-field admission/copy cursor paid224 bytes,
+and its aliases are cleared in `walkPrivateAccountingArchive`'s `finally`
+before serialization starts. No debit is reduced, and this reuse provides no
+I/O or active-execution credit. Key counts and units come from the earlier paid
+pricing census, before vectors or cursor records are constructed.
+
+During quoted advancement the recursion-derived138-binding obstruction is gone:
+there is one serializer invocation, one quoted invocation and one pull invocation.
+The serializer has at most eight parked/active named bindings at a quoted yield;
+quoted has five and pull has five including its pending `next` binding. Eighteen
+bindings plus three invocations are a **necessary21-product subset**, not a
+complete ACTIVE128/SYNC512 upper. Call operands, native descriptors, reentry and
+transition tables remain open; suspended generator/native tariffs remain open.
+
+Node and exact Workerd fixtures now cover all-object depth32 with40,000 ASCII
+characters, a surrogate pair crossing a4096-unit boundary, lone surrogates,
+full advancement and cancellation after the first slab. They compare native
+JSON bytes, ordinary/private partitions and the historical ASCII partition
+`[28929,11361]`. Runtime remains **UNRUN_CODE_ONLY_HOSTED**.
+
 ### Reached driver installation provenance — source-only partial
 
 Normalization, public delivery, codec source and both codec consumers now reserve
