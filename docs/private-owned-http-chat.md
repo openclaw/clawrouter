@@ -20,8 +20,21 @@ the694 prototype roster and pinned57268 component, are unchanged.
 The approved permanent reserve remains947130 bytes, a valid upper after this
 deletion. The32-byte difference supplies no authority for future definitions,
 I/O instances or window borrowing. No gratuitous debit shrink, new binding or
-family admission is introduced. The immutable successor/source hashes are
-recorded after the scoped implementation checkpoint.
+family admission is introduced. Implementation checkpoint:
+`8abfe6e4b1aa676d2725db9323aa551750a8e4e8`. Its ordered32-module source SHA256 is
+`cdd68eb36ef57e09f280fd04105f8fcfd99bd0c5c889f7d1777087a61ad382bc`.
+The fixed-operand roster is
+`ec6dda76fc459c6f2996d4682f9e0061abb1400e3465dbfb89ebf6d3172fb601`;
+its N29363/U190000/614904-byte counts are unchanged. The grant module's
+28-operand roster is
+`16bbf31d2d05b28548eb517aed4f173660d4d3ce2bb4e27b1567f0e64d3a651e`.
+Source positions changed after the import deletion; this does not create
+metadata operands. The694-prototype roster remains
+`0df61dc38950002b55cf65ed40a3b1ba62b68ccee5f362e3757503d54012b7de`.
+The bounded census recipe below reproduces this successor by changing only
+its immutable head to the implementation checkpoint. Raw/generated unlinked
+grammar, exact one-specifier source delta, unchanged module edges, added-text
+privacy and whitespace checks passed. No application module was evaluated.
 
 ### Adopted global STATIC debit — census source 123d79c
 
@@ -1533,6 +1546,182 @@ The existing constructors' APP/P0/R components are retained, not replaced by
 another K executor or repriced by an unreviewed kernel. Root diagnostic
 collection, AggregateError/error-native construction, source suspension,
 callback/caller overlap and ACTIVE/SYNC remain OPEN.
+
+#### Pending1004 source/timer interface — successor composition only
+
+ROOT's1004 packet is a proposal on immutablefba8e000, awaiting its independent
+review and the shared parameter-binding kernel. No proposed subtotal below is
+adopted as a family upper or installed as a reservation. In particular the
+proposed parameter kernel is distinct from Promise K=1084.
+
+| Proposed interface | Containment required before composition |
+| --- | --- |
+| Six entry additions4400 and FDI3990 | Keep earlier entry chain2912, completion1248 and interface304 separately identified. Match native invocation contexts to actual uncovered contexts, not each algorithm activation. |
+| Ten Await resumes17008 | Existing H targets remain counted once; the48-byte propagated receipt throw is already removed for overlap with saved completions. |
+| Optional helper resumes6880 | Current/next helper generations only. No polling-history multiplier. |
+| Timer7536 per generation,15072 current/next | Replaces prior incomplete timer rows. Its652 structural and1448 named-activation pieces are contained, not additions again. |
+| Source construction/evaluation26032 | Replaces the six13728 snapshot union. The optional6960/3232/4432 rows likewise replace their snapshots. |
+| Source contexts1216 and saved completions168 | Their original/copy contexts already include incumbent counters. No blanket K/T/H repricing. |
+| Text assignment10 value occurrences | Assign each primitive position and each2t string occurrence once;80+20t is a complete occurrence row, not a blanket increment. |
+
+The baseline32324, optional13472 and outer6190+2298a components keep their
+existing ownership labels. Outer resumes1696a are per entered iteration of the
+same invocation, not another outer result capability per iteration. The
+current/next timer executors have2 actual arguments and1 formal; executed
+suppression handlers have1 actual argument and0 formals. Two such handlers run
+on the failed path although four functions exist. Provider preparation remains
+9 actual/formal arguments. These are inputs to the separately reviewed kernel,
+not locally expanded replacement arithmetic.
+
+On current8abfe6e, identity-admission's change fromfba8 is the erased destination
+interface field only. The materialization consume/text assignment and its
+receipt consumption therefore retain their source shapes. Successor runtime
+deltas still include acquisition's failedCustodyPhase certification after real
+source retirement/severance, cache's clean-finally certificate, provider's
+post-registry-deletion certificate call, their actual helpers/receiver guards,
+and preclaim/failed-owner retained fields. The cache and provider certificates
+add no Promise or await, but add synchronous environments, argument/operand
+work and retained completion possibilities. The scalar field is counted on
+its actual run target, not again as a new destination object. Current source
+must price those deltas before the old six-function packet can be a full upper.
+
+The proposed text row has the following exclusive occurrence assignment:
+one source Promise result; one reaction argument capture; one native handler
+argument-List element; one handler formal; one resume Completion value; two
+assignment operands; one PutValue argument; one SetMutableBinding argument;
+and the destination text binding. P0/H/source/environment/native-operation
+rows already price some primitive cells. Existing DATA must identify the
+specific string occurrences it covers; a32MiB lease or the single sourceText
+limit is not that identification. Parser formal/arguments occurrences belong
+to its later phase and cannot be blindly added to this assignment peak.
+
+Current source gives t<=min(2097152,2097152-budget.text), with the actual wire
+and cumulative byte constraints also enforced. At the raw complete-profile
+ceiling,20t alone is41943040 bytes. This is a proposal-composition warning,
+not an assertion that all independent maxima are jointly attainable or a new
+profile cap. The exact source/foreground/HTTP-paid assignment and joint phase
+maximum remain OPEN. Do not call an unproved excess ordinary COMMON pressure,
+silently count ten occurrences as one, add a new debit, or enable R_failed.
+The Error constructor proposal similarly requires joint producer/wrapper/
+cleanup phases rather than summing all four invocation unions as simultaneous.
+
+#### ROOT_RETIREMENT_TAIL_REPAIR_PLAN — exact custody edge, not code authority
+
+Source: `8abfe6e4b1aa676d2725db9323aa551750a8e4e8`. The root retirement source
+is unchanged from the published diagnostic. This plan chooses the existing
+HTTP owner as the payer through all retirement work. It does not borrow the
+terminal, caller or shared registry debit. A final native-tail custody boundary
+is required before a refundable implementation can be specified completely.
+
+**Actual phases and products.** The suppression installation at source line4778
+runs when finishOwnedHttpRequest first returns, before its async body resumes
+past the completion await. Thus the dependent/reactions are already allocated
+before the later release at4773; they are not factories sequenced after that
+release merely because their source line is later. The AggregateError factory
+at4776 actually executes after release on the clean physical-failure path.
+
+| Phase | Still-owned products and required cut |
+| --- | --- |
+| Entry and registration | One retirement async result; one async APP function and its source environment; the two suppression APP arrows sharing finishOwnedHttpRequest's environment; the suppression dependent/reactions/job; the exact index-local retirement reference and registerOwnedHttpRetirement argument. Register the same Promise once through the existing actual waitUntil call. |
+| Joins and cleanup | Completion, upload joined/retired and sink receipts; root continuation/await work; failures array and each referenced failure; diagnostic/reporting operands; existing consumers and parents until their actual joins. UNKNOWN preserves every existing debit and ownership association. |
+| Outcome construction | On failure, one AggregateError and its distinct errors array, constructor iterable/descriptor work, the input failures vector and referenced failure targets, source throw Completion, and the async Promise rejection value. On success the result is undefined, but source/native result work remains. |
+| Suppression dispatch | Exactly one selected handler executes. The other handler still exists until its actual reaction ownership ends. The selected job retains the incoming aggregate or undefined, the handler/environment and dependent capability. A cleared request registry does not clear those references. |
+| Native postlude | After the handler returns, NewPromiseReactionJob still invokes the dependent capability's Resolve/Reject and returns through the job/host invocation. These products are included by the existing paid-I/O lifetime rule. |
+
+The last row follows the ordering in
+[ECMA2026 NewPromiseReactionJob](https://tc39.es/ecma262/2026/multipage/control-abstraction-objects.html#sec-newpromisereactionjob).
+This is an ownership inference from those steps, not a claim about host heap
+collection. The root's release runs before even its own async outcome has
+settled; neither settlement nor an empty suppression body proves that postlude
+has ended.
+
+**Existing payer candidates.** RequestOwner.funding is the only current
+prospective owner of this whole tail and must remain positive. The accounting
+terminal and ProxyCompletion have already delivered the joins that let the root
+continue; transferring the tail backward would create an unproved second
+lifetime. index.fetch can return the response while the root is pending; its
+local retirement reference has no independent tail lease. Shared registryFunding
+is released when requestCount reaches zero and has no independently admitted
+tail membership. Keeping it alive would require a real additional association
+and its own last-consumer proof, not a reference to the existing1024 allowance.
+The existing waitUntil registration supplies no APP completion receipt after
+its argument's final job. Its documented role is keeping the invocation alive
+for supplied work, not acknowledging memory retirement.
+[Workers context API](https://developers.cloudflare.com/workers/runtime-apis/context/#waituntil).
+
+**Prospective manifest interface.** Before the first root/receipt factory, the
+existing request admission must cover the following disjoint ownership rows:
+
+```text
+W_root_tail(f) =
+    K_retirement + T_suppression
+  + E_retirement_function_and_source_contexts
+  + E_two_handlers_and_shared_finish_environment
+  + W_root_awaits_and_resume_work
+  + W_failures_vector(f) + W_failure_targets_not_paid_elsewhere(f)
+  + W_aggregate_target_and_errors_vector(f)
+  + W_aggregate_constructor_and_outcome_overlap(f)
+  + W_registration_and_actual_caller_reference_positions
+  + W_uncovered_source_entry_and_final_native_postlude
+```
+
+K_retirement=1084 and T_suppression=1628 give a2712-byte native component,
+not a tail upper. K already contains its result/resolvers; T already contains
+its dependent capability/reactions/job target. Add neither R nor another P0 to
+those same products. The source async function, APP arrows/environments,
+executing operands, aggregate and caller edges are additional. Shared finish
+environment targets are counted once, with every actual capture/reference edge
+counted. f is the complete root failure-position union, not elapsed history;
+its current complete census is still OPEN. The ordinary HttpError construction
+proposal does not price AggregateError's iterable/errors-array constructor.
+No Error48, requestMetadataBytes or other component supplies these missing rows.
+
+Kernel interfaces remain finish(1/1), async arrow(0/0), selected suppression
+handler(1/0), registration(3/3), actual waitUntil(1 argument), and
+AggregateError(2 arguments: failures array and the29-unit fixed message).
+Native result/capability targets stay in K/T; parameter binding, APP contexts,
+aggregate construction, source/await execution and postlude operands must be
+matched against the reviewed kernels without adding their contained targets.
+ACTIVE128/SYNC512 and any source/static delta remain separate. This formula is
+an explicit OPEN admission interface, not an implemented or numeric upper.
+
+**Precise preventing constraint.** Delaying release until a newly added
+then/finally handler runs only moves the same problem: that handler and its
+dependent/native job still outlive the release instruction. A queueMicrotask
+cleanup also owns a callback/job while it releases. The current API has no
+trusted after-final-job release notification, and a permanent per-request
+residual debit would accumulate instead of retiring. Moving AggregateError
+construction earlier repairs only its constructor ordering. It does not close
+the native postlude or retained result.
+
+The smallest required contract boundary is a specifically reviewed
+**root final inert-receipt/native-postlude handoff**. It must identify the exact
+finished Promise/result and remaining dependent/job objects eligible for
+external custody, after all application owner/parent/registry/payload edges and
+rights have been severed, with no further APP access, callback, allocation or
+effect authorized by those artifacts. It must also state how the last release
+activation and its remaining references are paid; naming only a post-handler
+cut cannot implement that cut from inside the handler. The existing discharged
+external-observer-cell rule does not already grant this root-result exception.
+Any retained outcome must have a proved bounded graph and actual alias cuts;
+calling it a receipt does not establish either. A new host acknowledgement
+would be an alternative runtime interface, outside the current source lease.
+
+No such handoff is adopted here. Until an exact contract is reviewed, retain the
+current code for audit and keep W_root_tail/admission/whole-fit OPEN. Do not
+implement an early release, new observer chain, fresh registry, permanent
+per-request charge, reduced failure projection, or caller/STATIC/ACTIVE loan.
+The allowed future implementation must preserve the same retirement Promise,
+failure order and presence, original waitUntil order, logical accounting,
+physical joins, spent retirement latch and unconditional UNKNOWN hold.
+
+Required eventual witnesses use the actual request: clean success; clean
+bounded upload rejection with nonempty aggregate; held completion/upload/sink;
+registration failure; reporting failure; unrelated global UNKNOWN; and repeated
+finish before retirement. They must observe a positive debit through every
+owned constructor/handler/postlude, exact once release only at the reviewed cut,
+and unchanged outcome identities/order. These are plan requirements, not new
+authored runtime assertions or executed tests.
 
 ### Failed-producer construction proposal — pending independent closure
 
