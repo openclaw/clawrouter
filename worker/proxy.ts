@@ -7,6 +7,7 @@ import { beginOwnedHttpProxyPublicationHeaders, checkOwnedHttpProxyPublicationBo
   takeOwnedHttpArchiveRegistration, writeOwnedHttpDeferredArchive, ownedHttpArchiveStartFailure, ownedHttpArchiveRegistrationFailure, ownedHttpArchiveReportFailure,
   ownedHttpCompletion, holdOwnedHttpRequest, dispatchOwnedHttpUpload, ownOwnedHttpResponse,
   beginOwnedHttpGenericUsage, consumeOwnedHttpGenericUsage, failOwnedHttpGenericUsage, abandonOwnedHttpGenericUsage, type OwnedHttpUsage,
+  ownedErrorResponse, ownedHttpError,
   type OwnedHttpRequest, type OwnedHttpUpload } from "./http-identity-owner.ts";
 import { providerConfigurationList } from "./provider-connections.ts";
 import { prepareOwnedHttpPricing, adoptOwnedHttpTierBody, takeOwnedHttpMediaAdmission, enterOwnedHttpPricing, leaveOwnedHttpPricing, retireOwnedHttpPricing } from "./pricing.ts";
@@ -122,7 +123,7 @@ import { inspectJsonError, normalizePreStreamError, observeUsage, proxyResponseH
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledProvider, CompiledQuotaConfig, Env, ProviderConnection } from "./types";
 import {
   decodePathSegment,
-  ownedErrorResponse, ownedHttpError, errorResponse, HttpError, json, maxJsonBodyBytes, maxMediaJsonBodyBytes, randomId, readJson, type JsonIntake,
+  errorResponse, HttpError, json, maxJsonBodyBytes, maxMediaJsonBodyBytes, randomId, readJson, type JsonIntake,
 } from "./utils";
 
 const MAX_GRANT_ATTEMPTS = 4;

@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Fuse 28 private HTTP implementation and forwarding targets into their existing guarded commands and call sites. Preserve operand order, Promise identity and cleanup completion; keep generated subject probes on genuine receivers with separate wrong-receiver cases. Source-only partial: the reduced static component still exceeds its fixed ceiling; runtime and complete accounting remain unqualified.
+- Fuse 28 private HTTP implementation and forwarding targets into their existing guarded commands and call sites. Preserve operand order, Promise identity and cleanup completion; keep generated subject probes on genuine receivers with separate wrong-receiver cases. Correct four private error-builder imports to their existing HTTP owner exports without adding module edges or targets. Source-only partial: the reduced static component still exceeds its fixed ceiling; runtime and complete accounting remain unqualified.
 
 - Bind private credential preclaim reads to the current foreground capability and provider tuple, normalize configuration failures to the existing fallback, and retain failed ownership through independent cleanup and UNKNOWN. Author Node/Workerd reentry and getter witnesses. Source-only partial: complete family reservations and a fixed static representation obstruction remain open.
 

@@ -35,8 +35,8 @@ import { proxyResponseControl } from "./response-controls.ts";
 import { requireEmptyResponseControlBody } from "./responses-lifecycle.ts";
 import { backgroundMark as currentBackgroundMark, clearHotCaches, fenceSharedHotCache, pendingBackgroundWork } from "./hot-cache.ts";
 import type { Env, QueueMessage } from "./types";
-import { tryBeginOwnedHttpRequest, ownedHttpPlatformFailure, growOwnedHttpRequest, finishOwnedHttpRequest, holdOwnedHttpRequest, ownedHttpCompletion, ownedHttpSinkOwner, retireOwnedHttpAssociatedResponse, cancelOwnedHttpResponse, registerOwnedHttpRetirement } from "./http-identity-owner.ts";
-import { canonicalPath, caughtOwnedResponse, ownedErrorResponse, caughtResponse, corsEnabled, corsPreflight, decodePathSegment, errorResponse, legacyRedirect, privateJson, redirect, withCors,  } from "./utils";
+import { tryBeginOwnedHttpRequest, ownedHttpPlatformFailure, growOwnedHttpRequest, finishOwnedHttpRequest, holdOwnedHttpRequest, ownedHttpCompletion, ownedHttpSinkOwner, retireOwnedHttpAssociatedResponse, cancelOwnedHttpResponse, registerOwnedHttpRetirement, caughtOwnedResponse, ownedErrorResponse } from "./http-identity-owner.ts";
+import { canonicalPath, caughtResponse, corsEnabled, corsPreflight, decodePathSegment, errorResponse, legacyRedirect, privateJson, redirect, withCors,  } from "./utils";
 
 export { PolicyBindingIndexObject } from "./authority";
 export { ContentArchiveCleanupObject } from "./content-cleanup.ts";
