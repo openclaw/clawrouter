@@ -38,6 +38,10 @@ zero settlement cost and a live operation signal. Clean retry and actual
 second-POST uncertainty are paired controls. The pinned OpenClaw client uses
 isolated versions of all three UNKNOWN schedules through its real unified Chat
 entry. Fixture holds release before teardown; UNKNOWN is never called retired.
+The fixture observer's trusted-init body-getter capture uses the same own-or-
+immediate-native-parent lookup as the existing production repair, so Workerd's
+Body declaration does not fail before the witnesses start. This fixture-only
+correction introduces no production capture or supported-profile change.
 All new behavior and fixtures are UNRUN_CODE_ONLY_HOSTED.
 
 [CI run42963832713, worker-package job130336342456](https://github.com/openclaw/clawrouter/actions/runs/42963832713/job/130336342456) passed provider compilation

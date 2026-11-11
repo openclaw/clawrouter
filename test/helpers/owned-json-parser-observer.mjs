@@ -25,7 +25,9 @@ export function createOwnedJsonObservation() {
     headerFactories: 0, growCalls: 0, refused: false, foreignCancels: 0, cleanups: 0, bytes: 0, retired: 0 };
   const publicationResponse = Response, publicationHeaders = Headers, publicationApply = Reflect.apply;
   const publicationResponsePrototype = Response.prototype, publicationHeaderPrototype = Headers.prototype;
-  const publicationBody = Object.getOwnPropertyDescriptor(publicationResponsePrototype, "body").get;
+  // Match the production trusted-init capture: Workerd declares body on Body.
+  const publicationBody = (Object.getOwnPropertyDescriptor(publicationResponsePrototype, "body")
+    ?? Object.getOwnPropertyDescriptor(Object.getPrototypeOf(publicationResponsePrototype), "body")).get;
   const publicationStatus = Object.getOwnPropertyDescriptor(publicationResponsePrototype, "status").get;
   const publicationStatusText = Object.getOwnPropertyDescriptor(publicationResponsePrototype, "statusText").get;
   const publicationHeader = Object.getOwnPropertyDescriptor(publicationResponsePrototype, "headers").get;
