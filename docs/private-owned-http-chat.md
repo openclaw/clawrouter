@@ -1937,14 +1937,24 @@ Its construction and continued ownership remain in the existing source family.
    complete body is `charged -= this.held; this.held = 0`. Capture its fixed
    target and the empty argument vector before the protected phase. The plan
    uses existing bootstrapApply, with no release property lookup in the suffix.
-   Its closed call path, implicit arguments/context/Completion products, optional
-   last-registry release and immediate handler return are one explicitly
-   manifested counter-write suffix. There is no surrounding finally, callback,
-   getter, diagnostic, constructor, admission, await or later APP consumer.
-   ROOT's linearization must cover this exact known call/return path, not an
-   arbitrary replaceable release method. A source proof of that path is required
-   before code adoption. Both fixed handlers end directly at that suffix; no
-   forwarding helper can return into further handler work after releasing.
+   The last-registry case needs an explicit two-charge transition: all emptied
+   registry targets must first lose their actual aliases, then their genuine
+   charge may be released while the request charge still pays the spent112-byte
+   instance and that call's return work. This is a prospectively enumerated
+   request-tail overlap, not borrowing the old1024 registry allowance. It is a
+   required plan-review condition, not existing implementation authority.
+   Only then enter the final request-charge release call. Its function
+   environment, strict arguments object and invocation operands are constructed
+   before its first counter write; they cannot be hidden as allocation-free
+   calls. The atomic suffix starts at those final two writes and includes only
+   their known immediate call/handler returns, with their Completion/native
+   return products manifested. No second release call or its FDI factories may
+   occur after that first request-debit write. There is no surrounding finally,
+   callback, getter, diagnostic, APP constructor, admission, await or later APP
+   consumer. ROOT's linearization must cover this exact known call/return path,
+   not an arbitrary replaceable release method. A source proof of that path is
+   required before code adoption. Both fixed handlers end directly at that
+   suffix; no forwarding helper can return into further handler work afterward.
 
 The handlers' registry cuts may not run on an unqualified outcome, unsettled
 physical child, installation/registration uncertainty or UNKNOWN. Existing
