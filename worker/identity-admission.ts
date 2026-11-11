@@ -473,7 +473,7 @@ export async function readIdentityResponse<T>(start: () => Promise<Response>, bu
 // the actual run/permit/lease and binding before creating this empty receipt.
 // The lower module never imports an HTTP owner or resolves a different run.
 export interface PrivateMaterializationReceipt { readonly materialization?: never }
-export interface PrivateMaterializationDestination { value?: UpstreamGrant }
+export interface PrivateMaterializationDestination { value?: UpstreamGrant; materializationState?: number; metadataOrigin?: number; businessFailure?: HttpError; fallback?: HttpError }
 // Type-only view of the genuine upper owner. No lower module can discover,
 // create or substitute this parent. The upper factory checks its registries.
 export interface PrivateIdentityParent {
@@ -575,9 +575,15 @@ class PrivateMaterializationState {
   declare public destination: PrivateMaterializationDestination;
   declare public budget: IdentitySourceBudget;
   declare public signal?: AbortSignal;
+  declare private metadataOrigin: number;
   constructor(parent: PrivateIdentityParent, permit: object, destination: PrivateMaterializationDestination,
     budget: IdentitySourceBudget, signal?: AbortSignal) {
     this.parent = parent; this.permit = permit; this.destination = destination; this.budget = budget; this.signal = signal;
+    this.metadataOrigin = destination.metadataOrigin!;
+  }
+  private metadataFailed(reason: unknown): HttpError {
+    this.diagnostic(this.metadataOrigin, reason);
+    return this.destination.fallback!;
   }
   holdUnknown(): void { this.flags |= 8; this.parent.unknown = true; }
   origin(kind: 0 | 3 | 4 | 5 | 6 | 12 | 15 | 16): number { return privateIdentityOrigin(this.parent, kind); }
@@ -867,28 +873,45 @@ class PrivateMaterializationState {
     try {
       await this.ready;
       if (this.flags & 4 || !this.response) fail("transport");
-      this.source.adoptPrivateBody(this, this.response.body);
+      let body: ReadableStream<Uint8Array> | null;
+      try { body = this.response.body; } catch (reason) { reason = this.metadataFailed(reason); throw reason; }
+      try { this.source.adoptPrivateBody(this, body); } finally { body = null; }
       if (this.signal?.aborted) fail("transport");
-      admitIdentityHeaders(this.response.headers);
+      let headers: Headers;
+      try { headers = this.response.headers; } catch (reason) { reason = this.metadataFailed(reason); throw reason; }
+      try { admitIdentityHeaders(headers); } finally { headers = undefined as never; }
       wire = new IdentityWire();
       text = await this.source.text(this.budget, this.signal, "complete", wire);
       result = parseIdentity(text, this.budget, "complete", "grant", wire.span);
       text = ""; wire.clear(); wire = undefined;
-      if (!this.response.ok) {
+      let ok: boolean;
+      try { ok = !!this.response.ok; } catch (reason) { reason = this.metadataFailed(reason); throw reason; }
+      if (!ok) {
         const error = (result as { error?: { code?: unknown; message?: unknown } })?.error;
-        if (this.response.status === 503 && error?.code === "identity_admission_unavailable") {
+        let admissionStatus: number;
+        try { admissionStatus = this.response.status; if (typeof admissionStatus !== "number") { admissionStatus = 0; fail("protocol"); } } catch (reason) { reason = this.metadataFailed(reason); throw reason; }
+        if (admissionStatus === 503 && error?.code === "identity_admission_unavailable") {
           const kind = (["limit", "protocol", "transport", "cleanup"] as const).find(kind => error.message === `Identity admission failed (${kind})`);
           fail(kind ?? "protocol");
         }
-        const status = this.response.status, retryAfter = this.response.headers.get("retry-after");
+        let status: number, retryAfter: string | null;
+        try { status = this.response.status; if (typeof status !== "number") { status = 0; fail("protocol"); } retryAfter = this.response.headers.get("retry-after"); }
+        catch (reason) { reason = this.metadataFailed(reason); throw reason; }
+        if (retryAfter !== null && (typeof retryAfter !== "string" || identityUtf8(retryAfter) > 4096)) { retryAfter = null; fail("limit"); }
         const payload = result as { error?: { code?: string; message?: string } };
-        throw new HttpError(status, payload.error?.code ?? "credential_owner_error", payload.error?.message ?? "grant credential operation failed",
+        const failure = new HttpError(status, payload.error?.code ?? "credential_owner_error", payload.error?.message ?? "grant credential operation failed",
           retryAfter === null ? undefined : { "Retry-After": retryAfter });
+        if (this.destination.businessFailure !== undefined) fail("protocol");
+        this.destination.businessFailure = failure;
+        throw failure;
       }
       await this.source.retire("cancel");
       if (this.signal?.aborted) fail("transport");
       if (this.destination.value !== undefined) fail("protocol");
       this.destination.value = (result as { grant: UpstreamGrant }).grant;
+    } catch (reason) {
+      if (reason === this.destination.businessFailure || reason === this.destination.fallback || isIdentityFailure(reason)) throw reason;
+      reason = this.metadataFailed(reason); throw reason;
     } finally {
       text = ""; wire?.clear(); wire = undefined;
       try { await this.source.retire("cancel"); }
@@ -907,10 +930,11 @@ function materializationReceipt(cap: PrivateMaterializationReceipt, permit: obje
 }
 export function createPrivateMaterializationReceipt(parent: PrivateIdentityParent, permit: object, destination: PrivateMaterializationDestination,
   budget: IdentitySourceBudget, signal?: AbortSignal): PrivateMaterializationReceipt {
-  if (destination !== permit) fail("protocol");
+  if (destination !== permit || !destination.fallback || !Number.isSafeInteger(destination.metadataOrigin) || destination.materializationState !== undefined) fail("protocol");
   const cap = Object.freeze({}), state = new PrivateMaterializationState(parent, permit, destination, budget, signal);
   (privateMaterializations ??= new WeakMap()).set(cap, state);
   (privateMaterializationReaders ??= new WeakMap()).set(state.source, state);
+  destination.materializationState = 1;
   return cap;
 }
 export function adoptPrivateMaterializationResponse(cap: PrivateMaterializationReceipt, permit: object, response: Response): void {
@@ -922,7 +946,8 @@ export function beginPrivateMaterializationAcquisition(cap: PrivateMaterializati
 export function abandonPrivateMaterializationReceipt(cap: PrivateMaterializationReceipt, permit: object): void {
   const state = materializationReceipt(cap, permit);
   state.abandonUnstarted();
-  privateMaterializationReaders!.delete(state.source); privateMaterializations!.delete(cap); state.clearAliases();
+  privateMaterializationReaders!.delete(state.source); privateMaterializations!.delete(cap);
+  state.destination.materializationState = 2; state.clearAliases();
 }
 export function failPrivateMaterializationAcquisition(cap: PrivateMaterializationReceipt, permit: object): void { materializationReceipt(cap, permit).failed(); }
 export function completePrivateMaterializationInstallation(cap: PrivateMaterializationReceipt, permit: object, uncertain: boolean): void {
@@ -937,7 +962,8 @@ async function finishConsumePrivateMaterializationReceipt(cap: PrivateMaterializ
   try { await state.consume(); }
   finally {
     await state.retired;
-    privateMaterializationReaders!.delete(state.source); privateMaterializations!.delete(cap); state.clearAliases();
+    privateMaterializationReaders!.delete(state.source); privateMaterializations!.delete(cap);
+    state.destination.materializationState = 2; state.clearAliases();
   }
 }
 

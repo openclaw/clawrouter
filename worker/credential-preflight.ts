@@ -4,11 +4,11 @@ import type { CredentialPreflightReply } from "./credential-preflight-protocol.t
 import { sealPrivatePreflightRequest, privatePreflightJson, privateAdmissionJson } from "./json-body.ts";
 import { identityJsonProfiles } from "./access-json.ts";
 import type { Env } from "./types";
-import { admitAdmission, admitIdentity, copyIdentity, admittedEffectivePolicy, advanceIdentitySource, identityFailure, identityPlan, identitySourceBudget, identitySourceSnapshot, admitIdentityCount, readIdentityKv, identityUtf8, type IdentitySourceBudget } from "./identity-admission.ts";
+import { admitAdmission, admitIdentity, copyIdentity, isIdentityFailure, admittedEffectivePolicy, advanceIdentitySource, identityFailure, identityPlan, identitySourceBudget, identitySourceSnapshot, admitIdentityCount, readIdentityKv, identityUtf8, type IdentitySourceBudget } from "./identity-admission.ts";
 import { admitBridgeFactories, admitBridgeCopyFactories, admissionBridgePhasePayload, reserveAdmissionScratch, retireAdmissionScratch, PreflightTicket, GenerationMetadataCharge, GenerationConsumptionLease, admissionScratchBytes, type GenerationRetainedCharge } from "./credential-preflight-arena.ts";
 import { admitGenerationFactories, admitGenerationConsumptionFactories, generationMetadata, measureGenerationGraph, freezeGenerationGraph, copyGenerationCoverage, generationCoverageLayout, sameGenerationCoverage, type GenerationCoverage, type GenerationAuthentication, type IdentityGenerationPreparation, type IdentityGenerationBorrow } from "./identity-generations.ts";
 import { PrivateCacheReservation, hotCacheNow, hotCacheConfig, tryRunInBackground, type HotCacheConfig } from "./hot-cache.ts";
-import { ownedHttpCredentialCensusEnvelope, measureOwnedHttpRetainedCredential, hasJoinedOwnedHttpCredentialValue, ownsCredentialPrefetchPermit, ownsOwnedHttpCredentialPermit, retireOwnedHttpGrantCredentials, invalidateOwnedHttpGrantCredentials, finishOwnedHttpGrantCredentialCommand, moveOwnedCredentialBorrow, type OwnedCredentialBorrow } from "./credential-cache.ts";
+import { ownedHttpCredentialCensusEnvelope, measureOwnedHttpRetainedCredential, hasJoinedOwnedHttpCredentialValue, ownedHttpCredentialClaimRun, ownsOwnedHttpCredentialBusinessFailure, hasRetiredOwnedHttpCredentialSource, ownsCredentialPrefetchPermit, ownsOwnedHttpCredentialPermit, retireOwnedHttpGrantCredentials, invalidateOwnedHttpGrantCredentials, finishOwnedHttpGrantCredentialCommand, moveOwnedCredentialBorrow, type OwnedCredentialBorrow } from "./credential-cache.ts";
 import { materializeGrantCredentials, materializePrivateOwnedHttpGrantCredentials } from "./grant-credentials.ts";
 import { selectedCredentialFailure } from "./grant-credential-failure.ts";
 import { grantRevision, currentGrantRuntime } from "./grant-eligibility.ts";
@@ -183,7 +183,7 @@ export function invalidateOwnedHttpSelectionCredentials(cap: OwnedHttpRequest, s
   if (!key) return;
   for (const credential of root.credentials) {
     const candidate = httpCredentialOwner(credential);
-    if (candidate.selected?.result?.selected?.key === key) invalidateOwnedHttpGrantCredentials(credential);
+    if (candidate.retained && candidate.selected?.result?.selected?.key === key) invalidateOwnedHttpGrantCredentials(credential);
   }
 }
 export function finishOwnedHttpForegroundCommands(cap: OwnedHttpRequest): void {
@@ -191,10 +191,12 @@ export function finishOwnedHttpForegroundCommands(cap: OwnedHttpRequest): void {
   if (!root || !matchesOwnedHttpForegroundCommandRetirement(cap)) throw identityFailure("protocol");
   for (const credential of root.credentials) {
     const owner = httpCredentialOwner(credential);
-    if (owner.http !== cap || !owner.retained || !owner.cachePermit
+    if (owner.http !== cap || !owner.cachePermit
       || owner.providerPermit && ownsOwnedHttpSelectionPermit(owner.providerPermit, cap)) throw identityFailure("protocol");
+    if (!owner.retained && (owner.failureKind === undefined || owner.claimPhase !== 3
+      || !hasRetiredOwnedHttpCredentialSource(owner.cachePermit, credential))) throw identityFailure("protocol");
   }
-  for (const credential of root.credentials) finishOwnedHttpGrantCredentialCommand(credential);
+  for (const credential of root.credentials) if (httpCredentialOwner(credential).retained) finishOwnedHttpGrantCredentialCommand(credential);
 }
 
 export function ownedHttpCoverageMiss(cap: OwnedHttpRequest): boolean {
@@ -503,8 +505,18 @@ export function retireOwnedHttpConsumers(cap: OwnedHttpRequest): void {
   if (!owner) { reserved?.dispose(); return; }
   const failures: unknown[] = [];
   try { reserved?.dispose(); } catch (error) { failures.push(error); }
-  for (const credential of owner.credentials) try { retireOwnedHttpGrantCredentials(credential); } catch (error) { failures.push(error); }
-  owner.credentials.length = 0;
+  for (let index = 0; index < owner.credentials.length;) {
+    const credential = owner.credentials[index];
+    let retired = false;
+    try { retired = retireOwnedHttpGrantCredentials(credential); } catch (error) { failures.push(error); }
+    // Successful finish removes exactly this entry. Uncertain entries survive
+    // this once-only sweep, together with their selected/authentication parents.
+    if (!retired) index++;
+  }
+  if (owner.credentials.length) {
+    if (failures.length) throw new AggregateError(failures, "owned HTTP consumer retirement");
+    return;
+  }
   for (const selected of owner.selections) try { selected.dispose(); } catch (error) { failures.push(error); }
   owner.selections.length = 0; owner.current = undefined;
   for (const authentication of owner.retained) try { authentication.dispose(); } catch (error) { failures.push(error); }
@@ -531,6 +543,7 @@ interface HttpCredentialOwner {
   providerPermit?: object; cachePermit?: object; lease: GenerationConsumptionLease; signal?: AbortSignal;
   id: string; config?: HotCacheConfig; force: boolean; started: boolean; retained: boolean;
   revalidation?: OwnedHttpRevalidationBacking; reduction?: number; materializationStage?: number;
+  claimPhase?: number; bindingStage: number; retryFailure?: HttpError; failureKind?: 1 | 2; failureOrigin?: number; fallback: HttpError;
 }
 export interface OwnedHttpRevalidationBacking { readonly revalidationBacking?: never }
 interface HttpRevalidationBacking {
@@ -624,14 +637,25 @@ function disposeHttpCredential(this: OwnedHttpCredential): void {
 function retireHttpCredential(cap: OwnedHttpCredential): void {
   const owner = httpCredentialOwner(cap), selected = owner.selected;
   if (owner.revalidation) throw identityFailure("protocol");
+  // A claimed failure may reach this cut before the HTTP last-consumer sweep.
+  // Its existing once-only phase is already FINISHING; no failure resets it.
+  try {
+    if (selected) releaseGenerationSelection(selected);
+    owner.lease.release();
+  } catch (reason) {
+    if (owner.http && owner.cachePermit) {
+      holdOwnedHttpRequest(owner.http);
+      reason = failOwnedHttpCredentialBoundary(cap, owner.cachePermit, 5, reason);
+    }
+    throw reason;
+  }
   if (owner.http && httpForegroundReservations?.get(owner.http) === cap) httpForegroundReservations.delete(owner.http);
   httpCredentials!.delete(cap); owner.http = undefined; owner.request = undefined; owner.env = undefined; owner.selected = undefined;
   owner.providerPermit = undefined; owner.cachePermit = undefined; owner.signal = undefined; owner.config = undefined; owner.id = "";
-  const failures: unknown[] = [];
-  try { if (selected) releaseGenerationSelection(selected); } catch (error) { failures.push(error); }
-  try { owner.lease.release(); } catch (error) { failures.push(error); }
-  if (!--httpCredentialCount) { httpCredentials = undefined; httpForegroundReservations = undefined; const charge = httpCredentialRegistry; httpCredentialRegistry = undefined; try { charge?.release(); } catch (error) { failures.push(error); } }
-  if (failures.length) throw new AggregateError(failures, "owned HTTP credential retirement");
+  if (!--httpCredentialCount) {
+    httpCredentials = undefined; httpForegroundReservations = undefined;
+    const charge = httpCredentialRegistry; httpCredentialRegistry = undefined; charge?.release();
+  }
 }
 // Reserve after secret preverification, BEFORE full admission can count its
 // initial choice. Covered hits reserve before their later local count. A failed
@@ -640,16 +664,33 @@ export function reserveOwnedHttpForeground(http: OwnedHttpRequest, request: Requ
   checkOwnedHttpRequest(http, request, env);
   if (httpForegroundReservations?.has(http)) return;
   if (hasOwnedHttpProxyInvocation(http)) reserveOwnedHttpInitialPreparation(http, request, env);
-  growOwnedHttpRequest(http, 72 + 2 * "materializationStage".length);
+  // New own positions remain root-held through failed/UNKNOWN claims and are
+  // separate from the unchanged full-grant/generic-R payload ownership.
+  growOwnedHttpRequest(http, 72 + 2 * "materializationStage".length
+    + 4 * 72 + 2 * "claimPhasebindingStagefailureKindfailureOrigin".length
+    + 2 * 64 + 2 * "retryFailurefallback".length
+    + 2 * 72 + 2 * "materializationStatemetadataOrigin".length
+    + 2 * 64 + 2 * "businessFailurefallback".length
+    + 72 + 2 * "metadataOrigin".length
+    + 48 + 64 * 4 + 8 * 4
+    + 2 * "messagestatuscodeheadersprovider_unavailableprovider request preflight failed".length);
   const lease = GenerationConsumptionLease.reserve(32 * 1024 * 1024);
   let adopted = false;
   try {
     if (!httpCredentials) { httpCredentialRegistry = GenerationConsumptionLease.reserve(512); httpCredentials = new WeakMap(); }
-    const owner: HttpCredentialOwner = { http, request, env, lease, id: "", force: false, started: false, retained: false };
+    const fallback = Object.freeze(new HttpError(503, "provider_unavailable", "provider request preflight failed"));
+    const owner: HttpCredentialOwner = { http, request, env, lease, id: "", force: false, started: false, retained: false, bindingStage: 0, failureOrigin: undefined, fallback };
     const cap = Object.freeze({ dispose: disposeHttpCredential });
     httpCredentials.set(cap, owner); (httpForegroundReservations ??= new WeakMap()).set(http, cap);
     httpCredentialCount++; adopted = true;
+    try { owner.failureOrigin = ownedHttpRequestReceiver(http)!.prepareOwnedHttpCredentialFailures(http, cap); }
+    catch (reason) { cap.dispose(); throw reason; }
   } finally { if (!adopted) lease.release(); }
+}
+export function matchesOwnedHttpCredentialFailurePreparation(cap: OwnedHttpCredential, http: OwnedHttpRequest): boolean {
+  const owner = httpCredentials?.get(cap);
+  return !!owner && owner.http === http && httpForegroundReservations?.get(http) === cap && owner.failureOrigin === undefined
+    && owner.bindingStage === 0 && owner.claimPhase === undefined && owner.cachePermit === undefined;
 }
 export function prepareOwnedHttpCredential(http: OwnedHttpRequest, request: Request, env: Env,
   selected: GenerationSelectionHandle, providerPermit: object, force: boolean, signal = request.signal): OwnedHttpCredential {
@@ -671,25 +712,82 @@ export function claimOwnedHttpCredential(cap: OwnedHttpCredential, permit: objec
   eligible: boolean; id: string; config: HotCacheConfig; authority: Authority; binding: Env["GRANT_CREDENTIALS"] | undefined; force: boolean; key: string;
 } {
   const owner = httpCredentialOwner(cap), authority = owner.selected?.auth.slot.owner.binding;
-  if (!authority || owner.cachePermit || !ownsOwnedHttpCredentialPermit(permit, cap)) throw identityFailure("protocol");
-  owner.cachePermit = permit;
-  return { eligible: !!owner.selected!.result!.selected, id: owner.id, config: owner.config!, authority,
-    binding: owner.env!.GRANT_CREDENTIALS, force: owner.force, key: owner.selected!.result!.selected?.key ?? "" };
+  const root = owner.http && httpIdentities?.get(owner.http);
+  if (!authority || !root || owner.cachePermit || owner.claimPhase || !owner.providerPermit || !owner.signal
+    || !matchesOwnedHttpMaterializationCommand(owner.providerPermit, owner.http!, owner.selected!.httpProvider!, owner.signal)) throw identityFailure("protocol");
+  const run = ownedHttpCredentialClaimRun(permit, cap);
+  // Holding membership precedes adoption and never means successful consumption.
+  root.credentials.push(cap);
+  owner.cachePermit = permit; run.claimed = true; owner.claimPhase = 1; run.fallback = owner.fallback; run.metadataOrigin = owner.failureOrigin! + 192;
+  try {
+    const command = { eligible: !!owner.selected!.result!.selected, id: owner.id, config: owner.config!, authority,
+      binding: readOwnedHttpCredentialBinding(cap, permit, 0), force: owner.force, key: owner.selected!.result!.selected?.key ?? "" };
+    if (owner.cachePermit !== permit || owner.claimPhase !== 1 || !ownsOwnedHttpCredentialPermit(permit, cap)
+      || ownedHttpRequestReceiver(owner.http!)?.canRetireOwnedHttpCredential(owner.http!) !== true) throw identityFailure("protocol");
+    owner.claimPhase = 2; return command;
+  } catch (error) {
+    owner.claimPhase = 3;
+    if (error === owner.fallback || isIdentityFailure(error)) throw error;
+    throw failOwnedHttpCredentialBoundary(cap, permit, 4, error);
+  }
+}
+// Four actual binding reads keep their old order and short circuits. The fixed
+// position belongs to this genuine claim; a thrown getter never supplies retry
+// authority or an async-retained reason graph.
+export function readOwnedHttpCredentialBinding(cap: OwnedHttpCredential, permit: object, position: 0 | 1 | 2 | 3): Env["GRANT_CREDENTIALS"] | undefined {
+  const owner = httpCredentialOwner(cap);
+  if (owner.cachePermit !== permit || !ownsOwnedHttpCredentialPermit(permit, cap) || owner.bindingStage !== position || !Number.isInteger(position) || position < 0 || position > 3
+    || (position === 0 ? owner.claimPhase !== 1 : owner.claimPhase !== 2)
+    || (position === 2 && owner.materializationStage !== 1) || (position === 3 && owner.materializationStage !== 2)) throw identityFailure("protocol");
+  owner.bindingStage = -position - 1;
+  try { return owner.env!.GRANT_CREDENTIALS; }
+  catch (reason) { reason = failOwnedHttpCredentialBoundary(cap, permit, position, reason); throw reason; }
+  finally { owner.bindingStage = position + 1; }
+}
+export function failOwnedHttpCredentialBoundary(cap: OwnedHttpCredential, permit: object, position: 0 | 1 | 2 | 3 | 4 | 5, reason: unknown): HttpError {
+  const owner = httpCredentialOwner(cap);
+  if (owner.cachePermit !== permit || !ownsOwnedHttpCredentialPermit(permit, cap) || !owner.http) throw identityFailure("protocol");
+  const receiver = ownedHttpRequestReceiver(owner.http);
+  if (!receiver) throw identityFailure("protocol");
+  try { receiver.recordOwnedHttpCredentialFailure(owner.http, cap, permit, position, reason === undefined); }
+  finally { reason = undefined; }
+  return owner.fallback;
+}
+export function ownedHttpCredentialFailureOrigin(cap: OwnedHttpCredential, http: OwnedHttpRequest, permit: object, position: number): number {
+  const owner = httpCredentialOwner(cap);
+  if (owner.http !== http || owner.cachePermit !== permit || !ownsOwnedHttpCredentialPermit(permit, cap)
+    || !Number.isInteger(position) || position < 0 || position > 5) throw identityFailure("protocol");
+  return owner.failureOrigin! + 32 * position;
 }
 export async function materializeOwnedHttpCredential(cap: OwnedHttpCredential, permit: object): Promise<void> {
   const owner = httpCredentialOwner(cap), selected = owner.selected!.result!.selected, provider = owner.selected!.httpProvider;
-  if (owner.cachePermit !== permit || !ownsOwnedHttpCredentialPermit(permit, cap) || owner.started || !selected || !provider) throw identityFailure("protocol");
+  if (owner.claimPhase !== 2 || owner.cachePermit !== permit || !ownsOwnedHttpCredentialPermit(permit, cap) || owner.started || !selected || !provider) throw identityFailure("protocol");
   owner.started = true;
   try {
-    if (!owner.env!.GRANT_CREDENTIALS) throw new HttpError(503, "provider_not_configured", "provider is not configured");
+    if (!readOwnedHttpCredentialBinding(cap, permit, 1)) throw new HttpError(503, "provider_not_configured", "provider is not configured");
     await materializePrivateOwnedHttpGrantCredentials(cap, permit, ownedHttpSinkOwner(owner.http!), owner.env!,
       selected.key, selected.grant, provider.id, provider.auth.refresh, owner.force, owner.signal!);
-  } catch (error) { throw selectedCredentialFailure(error, selected.key); }
+  } catch (error) {
+    if (!ownsOwnedHttpCredentialBusinessFailure(permit, cap, error)) throw error;
+    const failure = selectedCredentialFailure(error, selected.key) as HttpError;
+    owner.retryFailure = Object.freeze(failure); owner.failureKind = failure === error ? 1 : 2;
+    ownedHttpRequestReceiver(owner.http!)!.acceptOwnedHttpCredentialFailure(owner.http!, cap, owner.providerPermit!, failure, selected.key);
+    owner.claimPhase = 3;
+    throw failure;
+  }
+}
+export function matchesOwnedHttpCredentialFailure(cap: OwnedHttpCredential, http: OwnedHttpRequest, providerPermit: object,
+  failure: unknown, key: string): 0 | 1 | 2 {
+  const owner = httpCredentials?.get(cap);
+  return owner && owner.http === http && owner.providerPermit === providerPermit && owner.claimPhase === 2
+    && owner.retryFailure !== undefined && owner.retryFailure === failure && owner.selected?.result?.selected?.key === key
+    && owner.cachePermit && ownsOwnedHttpCredentialPermit(owner.cachePermit, cap)
+    && matchesOwnedHttpMaterializationCommand(providerPermit, http, owner.selected.httpProvider!, owner.signal) ? owner.failureKind ?? 0 : 0;
 }
 export function matchesOwnedHttpMaterialization(cap: OwnedHttpCredential, permit: object, sink: OwnedHttpSinkOwner,
   env?: Env, key?: string, grant?: import("./types").UpstreamGrant): boolean {
   const owner = httpCredentials?.get(cap);
-  return !!owner?.http && ownedHttpSinkOwner(owner.http) === sink && owner.started && owner.cachePermit === permit
+  return !!owner?.http && owner.claimPhase === 2 && owner.bindingStage >= 0 && ownedHttpSinkOwner(owner.http) === sink && owner.started && owner.cachePermit === permit
     && ownsOwnedHttpCredentialPermit(permit, cap) && (!env || owner.env === env)
     && (key === undefined || owner.selected?.result?.selected?.key === key)
     && (grant === undefined || owner.selected?.result?.selected?.grant === grant);
@@ -714,7 +812,7 @@ export function claimOwnedHttpMaterializationAcquisition(cap: OwnedHttpCredentia
 export async function consumeOwnedHttpCredential(cap: OwnedHttpCredential, permit: object,
   materialized: import("./types").UpstreamGrant | null): Promise<void> {
   const owner = httpCredentialOwner(cap), selected = owner.selected!, result = selected.result!;
-  if (owner.cachePermit !== permit || !ownsOwnedHttpCredentialPermit(permit, cap)
+  if (owner.claimPhase !== 2 || owner.bindingStage < 0 || owner.cachePermit !== permit || !ownsOwnedHttpCredentialPermit(permit, cap)
     || !ownsOwnedHttpSelectionPermit(owner.providerPermit!, owner.http!)) throw identityFailure("protocol");
   if (!!result.selected !== !!materialized) throw identityFailure("protocol");
   const providerId = selected.httpProvider?.id;
@@ -723,8 +821,9 @@ export async function consumeOwnedHttpCredential(cap: OwnedHttpCredential, permi
 }
 export function retainOwnedHttpCredential(cap: OwnedHttpCredential, permit: object): void {
   const owner = httpCredentialOwner(cap), root = owner.http && httpIdentities?.get(owner.http);
-  if (!root || owner.retained || owner.cachePermit !== permit || !ownsOwnedHttpCredentialPermit(permit, cap)) throw identityFailure("protocol");
-  root.credentials.push(cap); owner.retained = true;
+  if (!root || owner.claimPhase !== 2 || owner.retained || owner.cachePermit !== permit
+    || !ownsOwnedHttpCredentialPermit(permit, cap) || !root.credentials.includes(cap)) throw identityFailure("protocol");
+  owner.retained = true;
 }
 export function matchesOwnedHttpCredentialPreparation(cap: OwnedHttpCredential, http: OwnedHttpRequest, permit: object, request?: Request): boolean {
   const owner = httpCredentials?.get(cap);
@@ -751,10 +850,24 @@ export function reduceOwnedHttpPreparedCredential(http: OwnedHttpRequest, reques
     owner.lease.replace(bytes); owner.reduction = 2;
   } catch (error) { owner.reduction = 0; throw error; }
 }
-export function finishOwnedHttpCredential(cap: OwnedHttpCredential, permit: object): void {
+export function canFinishOwnedHttpCredential(cap: OwnedHttpCredential, permit: object): boolean {
   const owner = httpCredentialOwner(cap);
-  if (owner.cachePermit !== permit || !ownsOwnedHttpCredentialPermit(permit, cap)) throw identityFailure("protocol");
+  if (owner.cachePermit !== permit || !ownsOwnedHttpCredentialPermit(permit, cap)
+    || (owner.claimPhase !== 2 && owner.claimPhase !== 3) || owner.bindingStage < 0 || !owner.http) throw identityFailure("protocol");
+  return hasRetiredOwnedHttpCredentialSource(permit, cap)
+    && (owner.failureKind === undefined ? ownedHttpRequestReceiver(owner.http)?.canRetireOwnedHttpCredential(owner.http) === true
+      : ownedHttpRequestReceiver(owner.http)?.canFinishOwnedHttpFailedCredential(owner.http) === true);
+}
+export function finishOwnedHttpCredential(cap: OwnedHttpCredential, permit: object): boolean {
+  if (!canFinishOwnedHttpCredential(cap, permit)) return false;
+  const owner = httpCredentialOwner(cap), root = httpIdentities?.get(owner.http!);
+  owner.claimPhase = 4;
   retireHttpCredential(cap);
+  if (root) {
+    const index = root.credentials.indexOf(cap);
+    if (index >= 0) root.credentials.splice(index, 1);
+  }
+  return true;
 }
 
 // Deliberately no caller from ordinary admission/preverification. These empty

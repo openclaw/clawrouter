@@ -422,6 +422,7 @@ export function createOwnedJsonObservation() {
     foregroundState() { return foregroundOwners.map(owner => ({ bytes: owner.lease.bytes, reduction: owner.reduction ?? 0, retained: owner.retained })); },
     reductionBlocked: [],
     preflightTransfers: { staged: 0, taken: 0, advanced: 0 },
+    credentialBindingPosition: -1, credentialClaims: [], credentialReentry: undefined,
     driverReads: 0, driverFactories: 0, intakeFactories: 0, retryPorts: [], credentialReductions: [], credentialCensuses: [], originalObservers: [],
     retainOriginalHandlers(cell, fulfilled, rejected) {
       this.originalObservers.push({ cell, fulfilled, rejected, role: cell.owner.constructor.name });
@@ -1188,6 +1189,11 @@ export function observeOwnedJsonSource(path, source) {
     source = replace(source, '    return 8 * (containers + 2 * members + entries + values) + 2 * units + 6 * run.command.key.length;',
       '    ' + probe + '.credentialCensuses.push({ containers, members, entries, values, units, keyUnits: run.command.key.length, completion: run.completion, originalCleared: run.original === undefined, retained: run.retained, borrowed: !!run.borrowed }); return 8 * (containers + 2 * members + entries + values) + 2 * units + 6 * run.command.key.length;');
   } else if (/[\\/]worker[\\/]credential-preflight\.ts$/.test(path)) {
+    source = replace(source, '  try { return owner.env!.GRANT_CREDENTIALS; }',
+      '  ' + probe + '.credentialBindingPosition = position; ' + probe + '.credentialClaims.push({ position, phase: owner.claimPhase, adopted: owner.cachePermit === permit && (permit as { claimed: boolean }).claimed, reentries: 0 }); ' + probe + '.credentialReentry = () => { const row = ' + probe + '.credentialClaims.at(-1)!; const before = owner.lease.bytes; for (const action of [() => claimOwnedHttpCredential(cap, permit), () => readOwnedHttpCredentialBinding(cap, permit, position), () => finishOwnedHttpCredential(cap, permit), () => cap.dispose()]) { let refused = false; try { action(); } catch { refused = true; } if (!refused) throw Error("credential getter reentry accepted"); row.reentries++; } if (owner.cachePermit !== permit || owner.lease.bytes !== before || !(permit as { claimed: boolean }).claimed) throw Error("credential reentry changed adoption"); }; try { return owner.env!.GRANT_CREDENTIALS; }');
+    source = replace(source, '  finally { owner.bindingStage = position + 1; }',
+      '  finally { ' + probe + '.credentialBindingPosition = -1; ' + probe + '.credentialReentry = undefined; owner.bindingStage = position + 1; }');
+
     source = replace(source, '  owner.stagedPreflight = reply; owner.preflightDelivered = true;',
       '  owner.stagedPreflight = reply; owner.preflightDelivered = true; ' + probe + '.preflightTransfers.staged++;');
     source = replace(source, '  owner.stagedPreflight = undefined;\n  return reply;',

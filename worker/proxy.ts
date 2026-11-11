@@ -12,7 +12,7 @@ import { prepareOwnedHttpPricing, adoptOwnedHttpTierBody, takeOwnedHttpMediaAdmi
 import { ownsOwnedHttpSelectionPermit, prepareOwnedHttpProvider, reserveOwnedHttpProviderPreparation, retireOwnedHttpProviderPreparation } from "./providers.ts";
 import { createPrivateJsonBodyParser, JsonBodyStructureLimit, privateMediaJsonBody, privateUploadJson, type MediaJsonBody } from "./json-body.ts";
 import { bindOwnedHttpAuthentication, matchesOwnedHttpAuthentication, queueOwnedHttpSelectionRuntime,
-  invalidateOwnedHttpSelectionCredentials, finishOwnedHttpForegroundCommands, matchesOwnedHttpCredentialPreparation, reduceOwnedHttpPreparedCredential, type OwnedHttpCredential, type GenerationSelectionHandle } from "./credential-preflight.ts";
+  invalidateOwnedHttpSelectionCredentials, finishOwnedHttpForegroundCommands, matchesOwnedHttpCredentialPreparation, matchesOwnedHttpCredentialFailure, reduceOwnedHttpPreparedCredential, type OwnedHttpCredential, type GenerationSelectionHandle } from "./credential-preflight.ts";
 import { admitAccountingJson, isAccountingAdmissionFailure } from "./json-body.ts";
 import { PreparationAdmission, isPreparationLimit, preparationHeader, templateCandidates, preparationValue } from "./provider-templates.ts";
 import { readMiniMaxVideoInput, bindMiniMaxVideoInline, hasMiniMaxVideoInline } from "./minimax-video-inline.ts";
@@ -130,6 +130,7 @@ type AuthMode = "proxy_key" | "access";
 
 type OwnedPreparedFields = ReturnType<typeof prepareUpstreamRequest>;
 interface OwnedRetryPort {
+  credentialFailure?: HttpError; credentialFailureKind?: 1 | 2;
   phase: number; input?: import("./authority-admission.ts").AdmissionSelection;
   signal?: AbortSignal; permit?: object; prepared?: PreparedUpstream; upload?: OwnedHttpUpload; identity?: AuthorizedIdentity; credential?: OwnedHttpCredential;
 }
@@ -511,7 +512,8 @@ export function reserveOwnedHttpInitialPreparation(cap: OwnedHttpRequest, reques
   // Four fixed ports exist before initial selection/count effects. They share
   // the request's existing physical custody; no per-port completion Promise.
   growOwnedHttpRequest(cap, 8 * (1 + 8 + 2 + 1 + 1 + 4 + 4 * (1 + 16 + 8) + 64)
-    + 2 * ("portsexcludednextpending".length + 4 * "phaseinputsignalpermitprepareduploadidentitycredential".length));
+    + 2 * ("portsexcludednextpending".length + 4 * "phaseinputsignalpermitprepareduploadidentitycredential".length)
+    + 4 * (64 + 2 * "credentialFailure".length + 72 + 2 * "credentialFailureKind".length));
   invocation.retry = { ports: [
     { phase: 0, input: undefined, signal: undefined, permit: undefined, prepared: undefined, upload: undefined, identity: undefined, credential: undefined },
     { phase: 0, input: undefined, signal: undefined, permit: undefined, prepared: undefined, upload: undefined, identity: undefined, credential: undefined },
@@ -2809,7 +2811,7 @@ function closeOwnedHttpRetry(cap: OwnedHttpRequest): void {
       delete port.prepared.failedGrantKeys;
     }
     delete port.input; delete port.signal; delete port.permit; delete port.prepared;
-    delete port.upload; delete port.identity; delete port.credential; port.phase = 5;
+    delete port.upload; delete port.identity; delete port.credential; delete port.credentialFailure; delete port.credentialFailureKind; port.phase = 5;
   }
   retry.ports.length = 0; retry.excluded.clear(); delete retry.pending;
   owner.retryClosed = true; delete owner.required; delete owner.retry;
@@ -2831,6 +2833,16 @@ export function bindOwnedHttpAttemptCredential(cap: OwnedHttpRequest, permit: ob
   if (!port || port.phase !== 1 || port.permit !== permit || port.credential
     || !matchesOwnedHttpCredentialPreparation(credential, cap, permit)) throw identityFailure("protocol");
   port.credential = credential;
+}
+export function acceptOwnedHttpCredentialFailure(cap: OwnedHttpRequest, credential: OwnedHttpCredential, permit: object, failure: unknown, key: string): void {
+  const invocation = ownedProxyInvocations?.get(cap), port = invocation?.retry?.pending;
+  if (!invocation || invocation.retryClosed || !port || port.phase !== 1 || port.credential !== credential
+    || port.permit !== permit || port.credentialFailure || !port.input || !port.signal) throw identityFailure("protocol");
+  const kind = matchesOwnedHttpCredentialFailure(credential, cap, permit, failure, key);
+  if (!kind) throw identityFailure("protocol");
+  // The registered producer created this exact selected wrapper. No property or
+  // class check on a caller-supplied exception grants retry authority.
+  port.credentialFailure = failure as HttpError; port.credentialFailureKind = kind;
 }
 export function completeOwnedHttpAttemptProvider(cap: OwnedHttpRequest, permit: object): void {
   const owner = ownedProxyInvocations?.get(cap), port = owner?.retry?.pending;
@@ -2896,14 +2908,16 @@ async function prepareOwnedHttpAttempt(cap: OwnedHttpRequest, request: Request, 
       port.prepared.failedGrantKeys = port.input.excludedKeys;
       return;
     } catch (error) {
+      const credentialFailure = port.credentialFailureKind === 2 ? port.credentialFailure as SelectedGrantCredentialFailure : undefined;
       port.phase = 4; retry.pending = undefined;
       if (isPreparationLimit(error) || isAccountingAdmissionFailure(error) || isIdentityFailure(error)) throw error;
       signal.throwIfAborted();
-      if (!(error instanceof SelectedGrantCredentialFailure) || selection.provider.id === "anthropic-vertex"
+      delete port.credentialFailure; delete port.credentialFailureKind;
+      if (!credentialFailure || error !== credentialFailure || selection.provider.id === "anthropic-vertex"
         || miniMaxAnthropicRoute(selection.provider, selection.endpoint) || !routing.failover) throw firstFailure ?? error;
-      firstFailure ??= error;
-      if (retry.excluded.has(error.grantKey) || retry.excluded.size >= MAX_GRANT_ATTEMPTS - 1 || retry.next >= MAX_GRANT_ATTEMPTS) throw firstFailure;
-      excludeOwnedHttpGrant(cap, error.grantKey);
+      firstFailure ??= credentialFailure;
+      if (retry.excluded.has(credentialFailure.grantKey) || retry.excluded.size >= MAX_GRANT_ATTEMPTS - 1 || retry.next >= MAX_GRANT_ATTEMPTS) throw firstFailure;
+      excludeOwnedHttpGrant(cap, credentialFailure.grantKey);
     }
   }
 }

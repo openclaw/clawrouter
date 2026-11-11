@@ -1,14 +1,64 @@
 # Private owned HTTP Chat staging
 
 
+### Private credential partial claim — source-only checkpoint
+
+The claim now installs the genuine owner/run adoption synchronously before the
+first binding read. Holding-list membership is distinct from successful retained
+consumption. CLAIMING and the per-read stage reject reentry before another getter,
+materialization or finish. The four original binding reads keep their positions.
+Their exceptions become the precreated provider_unavailable fallback without
+reading the thrown value. Seven separate origins cover the four reads, command
+construction, retirement and materialization metadata. The fixed fallback record
+has 490 bytes of independent root backing before construction; it can outlive a
+clean failed claim. The added own-position components are owner 548, cache
+run 386, materialization metadata-origin field 100 bytes per credential,
+and 848 bytes for both receipt fields across four ports. These root-held
+components remain separate from the unchanged generic-R payload slice. The
+existing materializationStage position remains separately charged. These exact
+increments do not price the complete credential family.
+
+The actual non-OK materialization producer records its business-failure identity
+before asynchronous cleanup. A selected wrapper can be created only from that
+registered outcome. The existing attempt port receives its exact identity and
+producer-qualified kind before credential/provider registry cleanup; the private
+retry catch no longer accepts an exception by class alone. Ordinary selection
+helpers and DO payloads are unchanged.
+
+The source-only draft preserves owner/run/list/counters/debit on UNKNOWN and
+requires an explicit successful retirement before deleting registrations. Genuine
+business errors remain held through the HTTP last consumer: their error payload
+can still be referenced by the retry receipt, the preparation call's firstFailure,
+and native caller reactions after cache cleanup. Releasing their 32 MiB ticket at
+cache finally would leave those actual aliases without their payload backing.
+
+**Current-route obstruction:** the approved cleanup plan does not yet identify a
+funded last-consumer transfer for those business-error payloads. Keeping each
+failed credential on the existing HTTP holding list preserves custody, but three
+32 MiB tickets would require 100,663,296 bytes before any request/root/terminal
+storage. After A and B fail, C's ticket therefore refuses before its effect;
+the required fourth attempt D cannot be reached. A failure-only payload carry/retirement boundary is necessary. The existing generic
+prepared-grant R reduction does not authorize applying a new reduction to failed
+materialization. No failed-credential reduction, generic error pool, new registry,
+or alternative quota is implemented in this checkpoint.
+
+The twenty authored Workerd cases cover each actual binding position with
+undefined, huge, opaque, forged-selected and reentrant throws. They assert truthful
+adoption, exact getter order, generic 503 semantics, untouched foreign fields,
+zero materialization/upstream/budget effects, and one accounting event. All remain
+UNRUN_CODE_ONLY_HOSTED. Full credential constructor/producer/header/transfer
+manifests and initial V2 reservations remain OPEN; this is not CODE_COMPLETE.
+
 ### Relayed V2 components and caller composition — source fd8b649
 
 ROOT's0657 relay supplies SAME3's base-driver component and SAME4's budget/
 terminal component against `fd8b6492f7f291e4b564a3e98d2a569467cf50e7`. The
-production files remain identical after the docs-only05f1595 checkpoint.
-These are attributable partial components, not complete family reservations.
-The APP function/environment terms E_L/E_Q/E_T and base executors are assigned
-separately; this checkpoint does not duplicate that source work.
+production files were identical at the docs-only 05f1595 checkpoint. The later
+credential partial claim above changes its own family; these relayed components
+remain attributable slices, not complete family reservations.
+ROOT's0701 APP_ENV closure supplies E_L/E_Q/E_T and the actual base
+executors. The corrected composition below replaces the earlier K surrogates;
+source/caller targets and active execution remain separate.
 
 #### Base-driver component carried with its conditions
 
@@ -19,11 +69,11 @@ separately; this checkpoint does not duplicate that source work.
 | Ten frozen exposed bound handlers | 3070 |
 | Shared bound advanceWork | 270 |
 | Current and queued-next jobs | 288 |
-| Retirement and current/next readiness capability positions, `3*K` | 3252 |
+| Actual retirement receipt, `744+1068` | 1812 |
+| Current/next readiness receipts, `2*(744+1642)` | 4772 |
 | Five native observer installations, `5*T` | 8140 |
 | Five construction argument-array positions | 1240 |
-| Simultaneous APP executor own-property slice | 196 |
-| **Conditional priced component** | **20242** |
+| **Base record/observation/receipt component** | **23378** |
 
 The closed cell's `installationFailure` is present in this source and is already
 included. Its diagnostic target/registry is parent-owned. Do not append that
@@ -32,12 +82,34 @@ Five original Promise targets would add800 bytes only where those same targets
 are not already assigned to their source/controller/subclass; the pull original
 is the same subclass async result returned by `ownDriverPull`.
 
-The adopted definitions are `R=584`, `K=P0+R+32+40+268=1084` and
-`T=K+80+224+16+224=1628`. R is contained in K and therefore T. The carried20242
-calculation receives no additional R. Its receipt-capability/construction
-classification remains conditional on ROOT's pending APP-executor clarification;
-it must not become a reservation merely by adding an executor estimate to K.
-The196 executor slice excludes source environments and callable-code links.
+The adopted definitions are `P0=160`, `R=584`, `K=P0+R+340=1084` and
+`T=K+544=1628`. K and T already contain R. Actual source `new Promise(APPexecutor)`
+uses744 plus its actual APP function/environment, not K plus another executor.
+The historical20242 subtotal included three K surrogates and an incomplete196
+executor slice. Replacing those with1812+2*2386 gives23378. The two-readiness
+composition still requires the caller lifetime proof below; this is not a
+complete driver/source family or a debit constant.
+
+| Adopted APP source family | Bytes | Source-defined union |
+| --- | ---: | --- |
+| Ledger and VOID ready executor, each | 790 | 412 arrow +64 initializer environment +72 invocation environment +186 resolve/reject bindings +56 call lists |
+| Terminal executor pair | 2150 | 2*412 +894 shared constructor environment/arguments +2*(72+88+56) |
+| Terminal registration closure | 2324 | 420 module arrow +1100 enclosing environment +676 arguments +16 try environment +72 invocation environment +40 call lists |
+| Private-leaf retirement handler pair | 1690 | 2*412 +360 shared enclosing environment +346 arguments +16 shared try environment +2*72 invocation environments |
+| Base retirement executor | 1068 | 412+56+98+280+72+94+56 |
+| Base readiness executor | 1642 | 412+564+354+72+184+56 |
+
+Thus E_L=E_Q=790 and E_T=2150+2324+1690=6164. Field initializers do not
+instantiate an arguments object. The terminal registration captures all eleven
+source bindings; private-leaf handlers share their work/pending/arguments
+context once. Clearing work does not clear arguments[0]. Readiness captures
+byobBytes/ready/original/started/arguments, not the later try-block's reader,
+method or prototype bindings. Their executing products remain in ACTIVE.
+
+These rows use the adopted binding tariff80+2*identifierUnits+8*primitivePhase,
+constructor/method/arrow environment skeletons56/64/72, and strict unmapped
+arguments280+66*actualCount+8*primitiveCount. Shared static targets are references,
+not cloned definitions. No parent/caller/source original is included twice.
 
 #### Actual caller/readiness lifetime proof
 
@@ -140,27 +212,27 @@ For L actual legs, let r=max(0,L-1), m=L+1 and
 | AccountingTerminal own record | 1612 |
 | TerminalOperation own record | 850 |
 | OriginalObservation | 276 |
-| Reserve with ACK alternative | `41264+E_L` |
-| Dispatch with ACK alternative | `41266+E_L` |
-| Rollback settle with ACK alternative | `41262+E_L` |
-| Rollback queue | `8010+E_Q` |
+| Reserve with ACK alternative | 42054 |
+| Dispatch with ACK alternative | 42056 |
+| Rollback settle with ACK alternative | 42052 |
+| Rollback queue | 8800 |
 | Terminal fetch/queue operation | 6950 |
 | Terminal cancellation alternative | 12604 |
-| Terminal shell/lane composition | `5272+46076*(L+1)+E_T` |
+| Terminal shell/lane composition | `11436+46076*(L+1)` |
 
 The full carried expression, still excluding caller/root/DATA terms, is:
 
 ```text
 934 + 966L + 2*sum(a_i)
-+ L*(41264+E_L)
-+ max(L*(41266+E_L), (r>0 ? 476 : 0)+r*(49272+E_L+E_Q))
-+ 5272 + 46076*(L+1) + E_T
++ 42054L
++ max(42056L, (r>0 ? 476 : 0)+50852r)
++ 11436 + 46076*(L+1)
 ```
 
-At L=4 this is
-`405506+2*sum(a_i)+4*E_L+max(165064+4*E_L,148292+3*E_L+3*E_Q)+E_T`.
-The dispatch-arm priced constant570570 is not a chosen upper until the E terms
-close. Reserve owners remain additive. Only the genuine irreversible branch
+At L=4 the dispatch branch168224 exceeds the rollback branch153032, yielding
+**583054+2*sum(a_i)** for this exclusive parent component. The historical570570
+constant lacked APP functions/environments and is superseded by this expression.
+Reserve owners remain additive. Only the genuine irreversible branch
 choice permits dispatch versus rollback maximum; no prior ACK/source/tail credit
 is reused. ACK CONTROL31334/31338 is already included, while ACK DATA and decoder
 queues are excluded and compose exactly once from the DATA table below.
@@ -524,10 +596,10 @@ Two closed scalar components help that assignment:
 The remaining transport/data overlap, generator contexts, APP function shapes
 and suspended caller/follower rows remain OPEN. Accordingly19478,7116 and the
 other slices above are not summed into a guessed Warchive, and no V2 archive
-reservation is implemented at this checkpoint. The separately reported raw
-credential-binding getter failure remains a credential-family closure blocker;
-it does not prevent these independent source-derived components from being
-recorded. Whole COMMON96, ACTIVE128/SYNC512, static65536 and hosted qualification
+reservation is implemented at this checkpoint. The raw credential-binding
+getter failure recorded at that checkpoint is addressed by the later partial
+claim above. Its business-failure payload lifetime remains the current credential
+closure blocker. Whole COMMON96, ACTIVE128/SYNC512, static65536 and hosted qualification
 remain OPEN.
 
 ### Current source-only named request subjects

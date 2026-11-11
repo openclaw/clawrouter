@@ -553,6 +553,29 @@ for (const provider of ['gmi', 'venice']) test(`owned unified ${provider} keeps 
   });
 });
 
+// Source-only authored witness: four actual getters retain their original
+// ordering, but no foreign thrown graph or selected-error class gains custody.
+for (const position of [0, 1, 2, 3]) for (const reason of ['undefined', 'huge', 'opaque', 'selected', 'reentry'])
+test(`native private credential binding ${position}/${reason} preserves partial adoption`, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    assert.equal((await f.request('https://fixture/fixture/control-fault', { method: 'POST', body: JSON.stringify({ kind: 'credential', origin: 'binding', position, reason }) })).status, 204);
+    const before = await state(f), response = await f.request('https://fixture/v1/chat/completions', chat('chat'));
+    assert.equal(response.status, 503);
+    assert.equal(JSON.parse(response.text).error.code, 'provider_unavailable');
+    assert.equal(JSON.parse(response.text).error.message, 'provider request preflight failed');
+    const after = await settledState(f), claims = after.credentialClaims.slice(before.credentialClaims.length);
+    assert.deepEqual(claims.map(row => row.position), Array.from({ length: position + 1 }, (_, index) => index));
+    assert.ok(claims.every(row => row.adopted));
+    assert.equal(claims[0].phase, 1);
+    assert.equal(claims.at(-1).reentries, reason === 'reentry' ? 4 : 0);
+    assert.equal(count(after, 'credential', '/materialize'), count(before, 'credential', '/materialize'));
+    assert.equal(count(after, 'budget', '/reserve'), count(before, 'budget', '/reserve'));
+    assert.equal(after.reasonReads, 0);
+    assert.equal(JSON.parse((await f.request('https://fixture/fixture/upstream')).text).length, 0);
+    assert.equal(after.events.length - before.events.length, 1);
+  }, true);
+});
+
 for (const kind of ['authority', 'credential']) for (const origin of ['id', 'get'])
 for (const reason of ['undefined', 'huge', 'opaque', 'forged']) test('native covered control ' + kind + '/' + origin + '/' + reason + ' fails before acquisition effects', { timeout: 120000 }, async t => {
   await fixture(t, async f => {

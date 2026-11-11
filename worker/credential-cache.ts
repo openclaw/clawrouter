@@ -3,7 +3,7 @@ import { grantRevision, grantUsable, REFRESH_MARGIN_MS } from "./grant-eligibili
 import { HotCache, hotCacheConfig, registerHotCache, tryRunInBackground, type HotCacheState, type HotCacheConfig, PrivateCacheReservation, hotCacheNow, waitForOtherRequest, JOIN_WAIT_MS } from "./hot-cache.ts";
 import type { Env, UpstreamGrant } from "./types";
 import { checkOwnedGenerationPrefetch, claimOwnedGenerationPrefetch, finishOwnedGenerationPrefetch,
-  claimOwnedHttpCredential, materializeOwnedHttpCredential, consumeOwnedHttpCredential, retainOwnedHttpCredential, finishOwnedHttpCredential, type OwnedHttpCredential,
+  claimOwnedHttpCredential, materializeOwnedHttpCredential, consumeOwnedHttpCredential, retainOwnedHttpCredential, canFinishOwnedHttpCredential, finishOwnedHttpCredential, type OwnedHttpCredential,
   materializeOwnedGenerationPrefetch, checkCredentialGenerationDestination, type GenerationSelectionHandle, type OwnedGenerationPrefetch } from "./credential-preflight.ts";
 import { GenerationConsumptionLease } from "./credential-preflight-arena.ts";
 import { identityJsonProfiles } from "./access-json.ts";
@@ -322,6 +322,7 @@ export function evictOwnedGrantCredentials(cap: OwnedGenerationPrefetch): void {
 interface OwnedHttpCredentialRun {
   cap?: OwnedHttpCredential; command?: ReturnType<typeof claimOwnedHttpCredential>;
   value?: UpstreamGrant; original?: Promise<void>; claimed: boolean; retained: boolean; borrowed?: OwnedDestinationValue; completion: number;
+  materializationState?: number; metadataOrigin?: number; businessFailure?: import("./utils.ts").HttpError; fallback?: import("./utils.ts").HttpError;
 }
 let ownedHttpCredentialPermits: WeakMap<object, OwnedHttpCredentialRun> | undefined;
 let ownedHttpCredentialRegistry: GenerationConsumptionLease | undefined;
@@ -330,12 +331,29 @@ let ownedHttpCredentialOwners: WeakMap<OwnedHttpCredential, OwnedHttpCredentialR
 export function ownsOwnedHttpCredentialPermit(permit: object, cap: OwnedHttpCredential): boolean {
   return ownedHttpCredentialPermits?.get(permit)?.cap === cap;
 }
+// This resolves the already registered run. The credential owner prevalidates
+// its side before committing both adoption writes without an external call.
+export function ownedHttpCredentialClaimRun(permit: object, cap: OwnedHttpCredential): OwnedHttpCredentialRun {
+  const run = ownedHttpCredentialPermits?.get(permit);
+  if (!run || run.cap !== cap || ownedHttpCredentialOwners?.get(cap) !== run || run.claimed) throw identityFailure("protocol");
+  return run;
+}
+export function ownsOwnedHttpCredentialBusinessFailure(permit: object, cap: OwnedHttpCredential, failure: unknown): boolean {
+  const run = ownedHttpCredentialPermits?.get(permit);
+  return !!run && run.cap === cap && run.claimed && run.materializationState === 2
+    && run.businessFailure !== undefined && run.businessFailure === failure;
+}
+export function hasRetiredOwnedHttpCredentialSource(permit: object, cap: OwnedHttpCredential): boolean {
+  const run = ownedHttpCredentialPermits?.get(permit);
+  return !!run && run.cap === cap && (run.materializationState === undefined || run.materializationState === 2);
+}
 export function hasJoinedOwnedHttpCredentialValue(permit: object, cap: OwnedHttpCredential, value: UpstreamGrant | null): boolean {
   const run = ownedHttpCredentialPermits?.get(permit);
-  return !!run && run.cap === cap && run.claimed && run.original === undefined
+  return !!run && run.cap === cap && run.claimed && run.retained && run.original === undefined
     && (value === null ? run.value === undefined : run.value === value);
 }
 export async function prepareOwnedHttpGrantCredentials(cap: OwnedHttpCredential): Promise<void> {
+  if (ownedHttpCredentialOwners?.has(cap)) throw identityFailure("protocol");
   // cap is already funded before this async invocation/follower/registry phase.
   let run: OwnedHttpCredentialRun | undefined, entry: OwnedDestinationEntry | undefined;
   let borrowed: OwnedDestinationValue | undefined, publication: object | undefined;
@@ -345,7 +363,7 @@ export async function prepareOwnedHttpGrantCredentials(cap: OwnedHttpCredential)
     if (!ownedHttpCredentialPermits) { ownedHttpCredentialRegistry = GenerationConsumptionLease.reserve(512); ownedHttpCredentialPermits = new WeakMap(); }
     run = { cap, claimed: false, retained: false, completion: 0 }; ownedHttpCredentialPermits.set(run, run);
     (ownedHttpCredentialOwners ??= new WeakMap()).set(cap, run); ownedHttpCredentialRuns++;
-    run.command = claimOwnedHttpCredential(cap, run); run.claimed = true;
+    run.command = claimOwnedHttpCredential(cap, run);
     const command = run.command;
     if (!command.eligible) { run.completion = 2; retainOwnedHttpCredential(cap, run); run.retained = true; await consumeOwnedHttpCredential(cap, run, null); return; }
     if (!command.force) borrowed = peekOwnedValue(lookupOwnedEntry(command), command.config);
@@ -415,8 +433,10 @@ export async function prepareOwnedHttpGrantCredentials(cap: OwnedHttpCredential)
       try { retireOwnedEntry(entry); } catch (error) { failures.push(error); } entry = undefined;
     }
     if (!run?.retained) {
-      try { if (run?.claimed) finishOwnedHttpCredential(cap, run); else cap.dispose(); } catch (error) { failures.push(error); }
-      if (run) {
+      let retired = false;
+      try { if (run?.claimed) retired = finishOwnedHttpCredential(cap, run); else { cap.dispose(); retired = true; } }
+      catch (error) { failures.push(error); }
+      if (run && retired) {
         ownedHttpCredentialPermits!.delete(run); ownedHttpCredentialOwners!.delete(cap); run.cap = undefined;
         if (!--ownedHttpCredentialRuns) { ownedHttpCredentialPermits = undefined; ownedHttpCredentialOwners = undefined; const charge = ownedHttpCredentialRegistry; ownedHttpCredentialRegistry = undefined; try { charge?.release(); } catch (error) { failures.push(error); } }
       }
@@ -486,17 +506,24 @@ export function measureOwnedHttpRetainedCredential(cap: OwnedHttpCredential, per
 
 // Named last-consumer command, invoked only after the proxy cleared prepared
 // callbacks/identity/selection aliases and all original request roots settled.
-export function retireOwnedHttpGrantCredentials(cap: OwnedHttpCredential): void {
+export function retireOwnedHttpGrantCredentials(cap: OwnedHttpCredential): boolean {
   const run = ownedHttpCredentialOwners?.get(cap);
-  if (!run || !run.retained || run.original || !run.claimed) throw identityFailure("protocol");
+  if (!run || run.original || !run.claimed) throw identityFailure("protocol");
+  if (!canFinishOwnedHttpCredential(cap, run)) return false;
   run.value = undefined; run.command = undefined;
   const borrowed = run.borrowed; run.borrowed = undefined;
   const failures: unknown[] = [];
   if (borrowed) { borrowed.borrowers--; try { retireOwnedValue(borrowed); } catch (error) { failures.push(error); } }
-  try { finishOwnedHttpCredential(cap, run); } catch (error) { failures.push(error); }
+  let retired = false;
+  try { retired = finishOwnedHttpCredential(cap, run); } catch (error) { failures.push(error); }
+  if (!retired) {
+    if (failures.length) throw new AggregateError(failures, "owned HTTP foreground last consumer");
+    return false;
+  }
   ownedHttpCredentialPermits!.delete(run); ownedHttpCredentialOwners!.delete(cap); run.cap = undefined;
   if (!--ownedHttpCredentialRuns) { ownedHttpCredentialPermits = undefined; ownedHttpCredentialOwners = undefined; const charge = ownedHttpCredentialRegistry; ownedHttpCredentialRegistry = undefined; try { charge?.release(); } catch (error) { failures.push(error); } }
   if (failures.length) throw new AggregateError(failures, "owned HTTP foreground last consumer");
+  return true;
 }
 
 export function invalidateOwnedHttpGrantCredentials(cap: OwnedHttpCredential): void {

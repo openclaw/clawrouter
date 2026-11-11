@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Adopt private credential/cache claims before binding lookup, reject reentrant reads, preserve UNKNOWN custody, and qualify retries through the actual materialization producer and current attempt port. Add 20 source-authored Workerd getter/reentry cases. Source-only partial: business-failure payload ownership across retries still blocks the four-attempt path; complete paid I/O manifests and runtime qualification remain open.
+
 - Bind private preflight, continuation and grant materialization to their exact producer inputs, serialized requests and signals; consume each stage before acquisition. Keep snapshot/inspect ordered within the genuine current operation and preserve ordinary payloads and I/O order. Add source-authored Node/Workerd substitution and replay witnesses. Complete family accounting and runtime qualification remain open.
 
 - Bind private request archives to their original admitted tuple and generated I/O subjects, preinstall command/registration positions before streaming, and normalize retained failures before cleanup awaits. Preserve the ordinary writer and add real Node/Workerd subject, failure and original-observation fixtures. Source-only partial; complete V2 family reservations and qualification remain open.

@@ -554,6 +554,7 @@ import {bodyBudgetCharged,bodyBudgetBytes,ExactBodyCharge} from './worker/body-b
 import {snapshot} from './worker/providers.ts';
 import {PolicyBindingIndexObject as NativeAuthority} from './worker/authority.ts';
 import {HttpError} from './worker/utils.ts';
+import {SelectedGrantCredentialFailure} from './worker/grant-credential-failure.ts';
 import {evictCredentialGeneration} from './worker/credential-preflight.ts';
 import * as budgetCommands from './worker/http-identity-owner.ts';
 import {captureOwnedResponseMetadata} from './worker/proxy-completion.ts';
@@ -768,10 +769,13 @@ function observeControlRead(kind,path,original,signal){
 }
 function controlFailure(kind,origin){
  if(!controlFault||controlFault.kind!==kind||controlFault.origin!==origin)return;
+ if(origin==='binding'&&globalThis.__ownedJsonObservation?.credentialBindingPosition!==controlFault.position)return;
  const reason=controlFault.reason;controlFault=undefined;
+ if(reason==='reentry')globalThis.__ownedJsonObservation.credentialReentry();
  if(reason==='undefined')throw undefined;
  if(reason==='huge')throw 'x'.repeat(17*1024*1024);
  if(reason==='forged')throw new HttpError(401,'grant_refresh_failed','synthetic forged acquisition');
+ if(reason==='selected')throw new SelectedGrantCredentialFailure(new HttpError(401,'grant_refresh_failed','synthetic forged selected'),'fixture-foreign-grant');
  const opaque={};for(const key of ['message','stack','cause','errors','code','status'])Object.defineProperty(opaque,key,{get(){reasonReads++;throw Error('raw reason observed');}});throw opaque;
 }
 function environment(env,off=false){
@@ -824,7 +828,7 @@ function environment(env,off=false){
    const original=globalThis.__ownedBudgetSequenceFixture?globalThis.__ownedBudgetSequenceFixture.send(target,args):Reflect.apply(target.send,target,args);return value.type==='clawrouter.usage.v1'?holdParserPhase('accounting',original):original;
   };const value=Reflect.get(target,name,target);return typeof value==='function'?value.bind(target):value;}});
   const values={ACCESS_CONTROL:authority,GRANT_CREDENTIALS:credentials,BUDGET_LEDGER:budget,USAGE_QUEUE:queue,CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS:'60',VOLCANO_ENGINE_API_KEY:'must-not-fallback',ARK_API_KEY:'must-not-fallback'};
-  scoped=new Proxy(env,{get(target,name,receiver){if(name==='OWNED_CONFIG_FIXTURE'&&configurationFault)return configurationValue();return Object.hasOwn(values,name)?values[name]:Reflect.get(target,name,receiver);}});
+  scoped=new Proxy(env,{get(target,name,receiver){if(name==='GRANT_CREDENTIALS'&&globalThis.__ownedJsonObservation?.credentialBindingPosition>=0)controlFailure('credential','binding');if(name==='OWNED_CONFIG_FIXTURE'&&configurationFault)return configurationValue();return Object.hasOwn(values,name)?values[name]:Reflect.get(target,name,receiver);}});
   if(globalThis.__ownedTerminalFixture)scoped=globalThis.__ownedTerminalFixture.env(scoped);
   if(globalThis.__ownedAckPhaseFixture)scoped=globalThis.__ownedAckPhaseFixture.env(scoped);
   offScoped=new Proxy(scoped,{get(target,name,receiver){return name==='CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS'?'0':Reflect.get(target,name,receiver);}});
@@ -929,7 +933,7 @@ export default {...handler,async fetch(request,env,context){
   return new Response(null,{status:204});
  }
  if(path==='/fixture/control-fault'){
-  const value=await request.json();if(!['authority','credential'].includes(value.kind)||!['id','get'].includes(value.origin)||!['undefined','huge','opaque','forged'].includes(value.reason))throw Error('fixture fault shape');
+  const value=await request.json();if(!['authority','credential'].includes(value.kind)||!['id','get','binding'].includes(value.origin)||!['undefined','huge','opaque','forged','selected','reentry'].includes(value.reason)||(value.origin==='binding'&&(!Number.isInteger(value.position)||value.position<0||value.position>3)))throw Error('fixture fault shape');
   controlFault=value;return new Response(null,{status:204});
  }
  if(path==='/fixture/control-read'){
@@ -977,7 +981,7 @@ export default {...handler,async fetch(request,env,context){
  }
  if(path==='/fixture/archive-release'){globalThis.__ownedJsonObservation.releaseArchiveFault();return new Response(null,{status:204});}
  if(path==='/fixture/observer-replay')return Response.json(globalThis.__ownedJsonObservation.replayRetiredOriginals());
- if(path==='/fixture/state')return Response.json({subjectFaults:globalThis.__ownedJsonObservation?.subjectFaults,archiveFault:globalThis.__ownedJsonObservation?.archiveFaultState(),statusOrigins:globalThis.__ownedJsonObservation?.statusOrigins,driverOrigins:globalThis.__ownedJsonObservation?.driverOrigins,preflightTransfers:globalThis.__ownedJsonObservation?.preflightTransfers,configurationGets,configurationReasonReads,originalObservers:globalThis.__ownedJsonObservation?.originalObserverState(),toolScratchBytes:globalThis.__ownedJsonObservation?.toolScratchBytes,retryPorts:globalThis.__ownedJsonObservation?.retryPorts.map(port=>({keys:port.keys})),credentialCensuses:globalThis.__ownedJsonObservation?.credentialCensuses,credentialReductions:globalThis.__ownedJsonObservation?.credentialReductions,driverReads:globalThis.__ownedJsonObservation?.driverReads??0,driverFactories:globalThis.__ownedJsonObservation?.driverFactories??0,intakeFactories:globalThis.__ownedJsonObservation?.intakeFactories??0,shared:globalThis.__ownedJsonObservation?.shared??null,consumers:globalThis.__ownedJsonObservation?.consumers??null,usage:globalThis.__ownedJsonObservation?.usage??null,statusReaders:globalThis.__ownedJsonObservation?.statusReaders??[],rpcReaders:globalThis.__ownedJsonObservation?.rpcReaders??[],archive:globalThis.__ownedJsonObservation?.archive??null,headerClone:globalThis.__ownedJsonObservation?.headers??null,initialErrors:globalThis.__ownedJsonObservation?.initialErrors,metadata:globalThis.__ownedJsonObservation?.metadata??null,continuationStages:globalThis.__ownedJsonObservation?.continuationStages,adapterReads:globalThis.__ownedJsonObservation?.adapterReads??null,parsers:globalThis.__ownedJsonObservation?.rows??[],parserHold:parserHold?{arrived:parserHold.arrived,released:parserHold.released}:null,calls,intakes,completed,events,recursivePricingValues,reasonReads,materializationReplies,controlReads:controlReads.map(({kind,read,readSettled,cancel,cancelSettled,unlock,released,removalFailed,held,nativeUnlocked,unlockSettled,thenCalls,closedNative,closedSettled,closedGetter,installFailed,lateCallbacks,foreignGets,thenGets})=>({kind,read,readSettled,cancel,cancelSettled,unlock,released,foreignGets,thenGets,...(removalFailed?{removalFailed:true}:{}),...(installFailed===undefined?{}:{installFailed,lateCallbacks}),...(held===undefined?{}:{held,nativeUnlocked,unlockSettled,thenCalls,closedNative,closedSettled,closedGetter})})),charged:bodyBudgetCharged()});
+ if(path==='/fixture/state')return Response.json({credentialClaims:globalThis.__ownedJsonObservation?.credentialClaims,subjectFaults:globalThis.__ownedJsonObservation?.subjectFaults,archiveFault:globalThis.__ownedJsonObservation?.archiveFaultState(),statusOrigins:globalThis.__ownedJsonObservation?.statusOrigins,driverOrigins:globalThis.__ownedJsonObservation?.driverOrigins,preflightTransfers:globalThis.__ownedJsonObservation?.preflightTransfers,configurationGets,configurationReasonReads,originalObservers:globalThis.__ownedJsonObservation?.originalObserverState(),toolScratchBytes:globalThis.__ownedJsonObservation?.toolScratchBytes,retryPorts:globalThis.__ownedJsonObservation?.retryPorts.map(port=>({keys:port.keys})),credentialCensuses:globalThis.__ownedJsonObservation?.credentialCensuses,credentialReductions:globalThis.__ownedJsonObservation?.credentialReductions,driverReads:globalThis.__ownedJsonObservation?.driverReads??0,driverFactories:globalThis.__ownedJsonObservation?.driverFactories??0,intakeFactories:globalThis.__ownedJsonObservation?.intakeFactories??0,shared:globalThis.__ownedJsonObservation?.shared??null,consumers:globalThis.__ownedJsonObservation?.consumers??null,usage:globalThis.__ownedJsonObservation?.usage??null,statusReaders:globalThis.__ownedJsonObservation?.statusReaders??[],rpcReaders:globalThis.__ownedJsonObservation?.rpcReaders??[],archive:globalThis.__ownedJsonObservation?.archive??null,headerClone:globalThis.__ownedJsonObservation?.headers??null,initialErrors:globalThis.__ownedJsonObservation?.initialErrors,metadata:globalThis.__ownedJsonObservation?.metadata??null,continuationStages:globalThis.__ownedJsonObservation?.continuationStages,adapterReads:globalThis.__ownedJsonObservation?.adapterReads??null,parsers:globalThis.__ownedJsonObservation?.rows??[],parserHold:parserHold?{arrived:parserHold.arrived,released:parserHold.released}:null,calls,intakes,completed,events,recursivePricingValues,reasonReads,materializationReplies,controlReads:controlReads.map(({kind,read,readSettled,cancel,cancelSettled,unlock,released,removalFailed,held,nativeUnlocked,unlockSettled,thenCalls,closedNative,closedSettled,closedGetter,installFailed,lateCallbacks,foreignGets,thenGets})=>({kind,read,readSettled,cancel,cancelSettled,unlock,released,foreignGets,thenGets,...(removalFailed?{removalFailed:true}:{}),...(installFailed===undefined?{}:{installFailed,lateCallbacks}),...(held===undefined?{}:{held,nativeUnlocked,unlockSettled,thenCalls,closedNative,closedSettled,closedGetter})})),charged:bodyBudgetCharged()});
  if(path==='/fixture/pressure'){
   if(request.method==='DELETE'){pressure?.release();pressure=undefined;return new Response(null,{status:204});}
   if(pressure)throw Error('fixture pressure already held');
