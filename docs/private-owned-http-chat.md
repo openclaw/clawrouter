@@ -2,7 +2,7 @@
 
 ### Global STATIC census proposal — application source 123d79c
 
-**The proposed complete fixed-source debit is S=941578 bytes. It is not an
+**The proposed complete fixed-source debit is S=947130 bytes. It is not an
 adopted code operand or a whole-capacity qualification.** Source:
 `123d79c080a8d170704737f3beef8b2caa7d023e`, with the same application bytes as
 `886c4fd9b480ed78312f7a19915231ab6eb105d0`. The latter repairs exactly twelve
@@ -42,7 +42,7 @@ outside those macros; it applies no I/O48-byte own-attribute supplement or
 | --- | ---: | ---: | ---: | ---: | ---: |
 | definitions |1601|4082|0|49472|144408|
 | module scopes |32|32|0|0|512|
-| ordinary prototypes |1388|4858|694|13880|83280|
+| ordinary prototypes |1388|5552|694|13880|88832|
 | implicit initializers |148|296|0|0|3552|
 | initializer names |0|148|148|1213|4794|
 | field records |359|718|571|3237|19658|
@@ -60,11 +60,11 @@ outside those macros; it applies no I/O48-byte own-attribute supplement or
 | regex operands |0|0|8|66|196|
 | fixed code operands |0|0|29363|190000|614904|
 | pinned + readiness |381|1514|2005|13034|57268|
-| **Total, B=0** |**4104**|**12358**|**32999**|**272945**|**941578**|
+| **Total, B=0** |**4104**|**13052**|**32999**|**272945**|**947130**|
 
-Thus `8*(4104+12358+32999)+2*272945=941578`. The non-pinned rows are
-884310; the corrected pinned component is57268, including its one P0.
-The proposed increment above the current65536 claim is876042. These are
+Thus `8*(4104+13052+32999)+2*272945=947130`. The non-pinned rows are
+889862; the corrected pinned component is57268, including its one P0.
+The proposed increment above the current65536 claim is881594. These are
 logical application-custody units, not engine heap measurements. The table
 takes no healthy-only disposal, optional redesign, interning, function-name
 shortening or request-lifetime credit.
@@ -83,7 +83,8 @@ Of the721 declarations,694 ordinary declarations are module-created,
 [MakeConstructor](https://tc39.es/ecma262/2026/multipage/ordinary-and-exotic-objects-behaviours.html#sec-makeconstructor).
 Outside the frozen function macro, its prototype object/empty private-elements
 List, Prototype/Extensible/PrivateElements links, and the two constructor/
-prototype key-value relationships give C2/P7/N1/U20=120. This adds83280.
+prototype key-value relationships plus the Construct-code reference give
+C2/P8/N1/U20=128. This adds88832.
 The two local prototypes are execution-owned; async declarations create no
 ordinary constructor prototype. The35 class prototypes and their constructor/
 prototype relationships are already in the class macro and are not added here.
@@ -317,6 +318,474 @@ ACTIVE128/SYNC512, complete runtime-family inventories and hosted qualification
 remain OPEN. The historical527/529 persistent-layout rejection is not revived
 as a current persistent-storage limit.
 
+
+#### Construct-reference reconciliation and reproducible census
+
+The941578 proposal omitted one separately charged Construct-code reference for
+each of the694 ordinary module declarations. This is the same relationship
+already included in the adopted pinned adapter row. The original function
+macro owns its fixed target, declaration binding and captured scope link; it
+does not substitute for this additional MakeConstructor-installed code
+reference. Add P694=5552 bytes, with no new definition target, string name or
+primitive occurrence: **S becomes947130**, and the ordinary-prototype row is
+694*(C2/P8/N1/U20)=88832.
+
+MakeConstructor also sets ConstructorKind to base. That existing ordinary
+function slot belongs to the frozen function-target macro (Table25);
+MakeConstructor changes its value rather than creating a second slot. This
+correction does not reprice that macro's ordinary slots, attributes or
+prototype metadata already assigned elsewhere. In contrast, OrdinaryFunctionCreate
+explicitly creates no Construct internal method; MakeConstructor installs its
+code reference. The pinned adapter's112-byte row plus its16-byte outside-macro
+PrivateElements correction gives the same128-byte relationship envelope.
+No second pinned correction is added. The shared Construct algorithm target
+is borrowed; only its extra reference is charged here.
+[ECMA2026 OrdinaryFunctionCreate and MakeConstructor](https://tc39.es/ecma262/2026/multipage/ordinary-and-exotic-objects-behaviours.html#sec-makeconstructor).
+
+The bounded recipe below is the exact source-only reproduction of the694
+declaration roster and614904 operand row. It reads the immutable32-module
+Git input, uses only Node builtins and Python stdlib, and neither links nor
+evaluates any application/dependency module. It writes no file. Run the
+JavaScript block on Node stdin with `NODE_NO_WARNINGS=1 node --input-type=module`
+from the retained checkout. Default output is one bounded aggregate/per-module
+JSON result. Optional `CENSUS_MODULE=worker/providers.ts`, `CENSUS_OFFSET=0`
+and `CENSUS_LIMIT=100` select up to200 local roster rows per page.
+
+Expected evidence:
+- Input SHA256: `31594e6cce22154444360360272b63816ece3ffc390ee7decd656bb8543cded5`.
+- Prototype roster694, sorted JSON `[path,name,line]):
+  `0df61dc38950002b55cf65ed40a3b1ba62b68ccee5f362e3757503d54012b7de`.
+- Operand roster29363, sorted JSON `[path,family,strippedSourceOffset,value]`:
+  `081a7ccd5dcee1cf124a54a30ccafcbe3c9629feff1f4ce3cefc7793c15af2aa`.
+- Operand U190000; `8*29363+2*190000=614904`.
+- Existing-scope additions:84 scopes,7593 executable tokens.
+- Sorting compares JSON strings by code-unit order; no locale or identifier
+  interning participates. Source positions distinguish repeated occurrences.
+
+| Module | Ordinary module prototypes | Operand occurrences | Operand-roster SHA256 |
+| --- | ---: | ---: | --- |
+| access-json.ts |0|8|69f4b8134b02e1bb9ca46c64fd69eb2880f9acf1bccfe329bfba38dba8abd738|
+| accounting.ts |2|188|a59843c8aa106949255b6f5d7bc1b949876ad14e83668f2e95881a5d560674d7|
+| authority.ts |1|9|b75194727d06803988386198910347188251aca6d2f0665a2371eeb9ef44e01b|
+| content-retention.ts |1|9|b24c26d71230ac9658ee6fc21c9135a750417482043c380c2fc66c3f09adba1f|
+| correlation.ts |1|6|d481290e4a49135321a3475d91eeb5beb41849feeb148781f877dd49bd3bf7ea|
+| credential-cache.ts |11|520|3b9c233d9c80025f01abeab6f9d363ba4e89d6c33b26edeeb60394a1370e95ec|
+| credential-preflight-source.ts |21|1047|444bfca921ad33c16eb9453fc532d47803847b9dc3fabcdc40925ee1223d5503|
+| credential-preflight.ts |63|2815|a8af0fcb6f44e258bed5b0ef38defa5ef90f69296f8201d911924c74125e7c9b|
+| gmi-organization-binding.ts |6|308|1f5497f7535c2b4b421162e6e5000627cb1bf1e650d94d598a06f509831b0819|
+| grant-credentials.ts |2|28|7614b0ed2211c81bfb65e30a3789bc25649ab5014404adf4cf7d0ae765178bef|
+| http-identity-owner.ts |260|11023|0656da503760e2a8a42249be4cc52db3f22f1c56fcacac27e1046f471495240e|
+| identity-admission.ts |17|1171|fd4352c390628b9356a9d09b775caae983957ad7c706c7056578974e308ebd37|
+| index.ts |0|67|9ccf806635cd6334d4391ea291ba193b2d21f2465c69a29fd3d968e6339ee3e7|
+| json-body.ts |33|1112|b5ad7c1fa9c4d46f0deee1a97357363130fccc6d3a93beb7f175e802007448f6|
+| native-errors.ts |4|23|26afd98ef7ba428ce579c7cec40b2be06db212a34b759895969670698952212c|
+| pricing.ts |21|745|1f330d78655e2e6f1cac353bb666d64a24689d74fc4c729183fb6b1173548eea|
+| provider-auth.ts |2|47|9621059e66952098671761e313c3c4d2d4bd642c1e196568b47f336c2e4cf389|
+| provider-templates.ts |13|182|17508ce253022c58a50b03f2b519ec6891c6ba19d03e8a507bc3241a1d2b9dc9|
+| providers.ts |23|406|17b961a49bfe5a55ffd33908d0741197944273f3a885288c7ea119b0600ec051|
+| proxy-accounting.ts |14|936|f8c59af3520a3f57445cc943665456612a5da26c7f0c23cdbce30fdbe3ed096b|
+| proxy-auth.ts |7|105|c5f39cf8ec7286c1d73116b82597a8f209dd9047a563b52829fb4e4107781d9d|
+| proxy-completion.ts |34|1053|c68a52b7e1a77113ff5457848a49929b6eeee5a019eae732fd4f425e547b57fc|
+| proxy-response.ts |41|2404|ea7b922ff7a75e2dc32fa6ceb93fc3232fba6bf28452d9751646481b0c6ca3a0|
+| proxy-selection.ts |3|131|1cfda4d7cb260372a8ed5fb7442c4173d374ee582b6bc8cbb41b48a5f49fde55|
+| proxy-upstream-request.ts |2|188|e85f8ca526219edc3a706bb05fe8e830e4e95d5d5615575de44bc7d728746896|
+| proxy.ts |77|3057|b0b8cc37f037b7331fa976c64ceafa5983656e01ce050f5b9f3a2d175c16a4f9|
+| response-control-authorization.ts |3|131|f3c85dab9359642ada5c1d31ac571d31b72cb603dd5eef5b9b4b6f82686c2e5b|
+| soft-budget.ts |8|304|e289138ae1613f0ad8f082e1efadddb02c2f32c20f1a8697c1e14fb842ab7b16|
+| token-usage.ts |1|125|4b893d7c19a4d5bb34ae736ba574b6866dd0a918b7455e489a89ce6d4fa68f22|
+| utils.ts |0|5|8f52081a0e83fff38cc21c14b237eb565e49824d2fb9939b1128d4521eee7a00|
+| venice-chat-authority.ts |8|244|261460c44d0a155b18e251a934e26a8f36da4c3b6553b33513623f11061680a1|
+| venice-chat-runtime.ts |15|966|03e372382c62fd5f27b5dbfc6a03ff8c813b6ba6a6d73b9a6551ee4b14e4682c|
+
+<!-- STATIC_CENSUS_RECIPE_BEGIN -->
+```javascript
+import { execFileSync } from 'node:child_process';
+import { stripTypeScriptTypes } from 'node:module';
+const head='123d79c080a8d170704737f3beef8b2caa7d023e';
+const base='7b87537df59c39ae1bae0cfa748208572fa4d19f';
+const paths=execFileSync('git',['diff','--name-only',base,head,'--','worker'],{encoding:'utf8'}).trim().split('\n').filter(x=>x.endsWith('.ts')&&!x.includes('/test/'));
+const files=[];
+for(const path of paths){
+let old='';try{old=execFileSync('git',['show',base+':'+path],{encoding:'utf8',stdio:['ignore','pipe','ignore']});}catch(e){if(e.status!==128)throw e;}
+const cur=execFileSync('git',['show',head+':'+path],{encoding:'utf8'});
+files.push({path,raw:cur,old:stripTypeScriptTypes(old,{mode:'strip'}),cur:stripTypeScriptTypes(cur,{mode:'strip'})});
+}
+
+
+function decode(s) {
+ return s.replace(/\\(?:u\{([0-9a-fA-F]+)\}|u([0-9a-fA-F]{4})|x([0-9a-fA-F]{2})|(\r\n|\n|\r)|(.))/gs,(_,a,b,c,n,d)=>{
+ if(a||b||c)return String.fromCodePoint(parseInt(a||b||c,16));
+ if(n)return '';
+ return ({n:'\n',r:'\r',t:'\t',b:'\b',f:'\f',v:'\v','0':'\0'})[d]??d;
+ });
+}
+function lex(s) {
+ const t=[];let i=0;
+ const add=(k,v,a,b)=>t.push({k,v,s:a,e:b});
+ function scan(endTemplate=false){
+ let curly=0;
+ while(i<s.length){
+ let c=s[i],a=i;
+ if(/\s/.test(c)){i++;continue;}
+ if(s.startsWith('//',i)){i=s.indexOf('\n',i);if(i<0)i=s.length;continue;}
+ if(s.startsWith('/*',i)){i=s.indexOf('*/',i+2);if(i<0)throw Error('comment');i+=2;continue;}
+ if(c==="'"||c==='"'){
+ const q=c;i++;const b=i;while(i<s.length&&s[i]!==q){if(s[i]==='\\')i++;i++;}
+ add('str',decode(s.slice(b,i)),a,++i);continue;
+ }
+ if(c==='\x60'){
+ add('pun','template',i,i+1);i++;
+ while(i<s.length){
+ const b=i;while(i<s.length&&s[i]!=='\x60'&&!s.startsWith('$'+'{',i)){if(s[i]==='\\')i++;i++;}
+ add('quasi',decode(s.slice(b,i)),b,i);
+ if(s[i]==='\x60'){add('pun','templateEnd',i,++i);break;}
+ if(s.startsWith('$'+'{',i)){add('pun','{',i,i+2);i+=2;scan(true);}else throw Error('template');
+ }
+ continue;
+ }
+ if(/[a-zA-Z_$]/.test(c)){i++;while(i<s.length&&/[\w$]/.test(s[i]))i++;add('id',s.slice(a,i),a,i);continue;}
+ if(/[0-9]/.test(c)){i++;while(i<s.length&&/[\w.]/.test(s[i]))i++;add('num',s.slice(a,i),a,i);continue;}
+ if(c==='/'){
+ const p=t.at(-1);
+ const prefix=!p||['return','throw','case','else','yield','await','void','typeof','delete','in','of','instanceof'].includes(p.v)||(
+ p.k==='pun'&&![')',']','}','++','--','templateEnd'].includes(p.v));
+ if(prefix){
+ i++;let cls=false;while(i<s.length){if(s[i]==='\\'){i+=2;continue;}
+ if(s[i]==='[')cls=true;if(s[i]===']')cls=false;
+ if(s[i]==='/'&&!cls)break;if(s[i]==='\n')throw Error('regex line '+a);i++;}
+ if(i===s.length)throw Error('regex eof');i++;while(i<s.length&&/[a-z]/i.test(s[i]))i++;
+ add('regex',s.slice(a,i),a,i);continue;
+ }
+ }
+ const op=['===','!==','>>>','**=','&&=','||=','??=','...','=>','==','!=','<=','>=','++','--','&&','||','??','?.','+=','-=','*=','/=','%=','<<','>>','**','&=','|=','^='].find(x=>s.startsWith(x,i));
+ if(op){i+=op.length;add('pun',op,a,i);continue;}
+ i++;add('pun',c,a,i);
+ if(c==='{')curly++;
+ if(c==='}'){if(endTemplate&&curly===0)return;curly--;}
+ }
+ if(endTemplate)throw Error('unclosed template');
+ }
+ scan();
+ const stack=[],pairs=new Map(),parent=[];
+ for(let x=0;x<t.length;x++){
+ parent[x]=stack.at(-1)??-1;
+ if(['{','(','['].includes(t[x].v)&&t[x].k==='pun')stack.push(x);
+ else if(['}',')',']'].includes(t[x].v)&&t[x].k==='pun'){
+ const start=stack.pop();if(start===undefined||'({['.indexOf(t[start].v)!==')}]'.indexOf(t[x].v))
+ throw Error('mismatched '+t[x].v+' offset '+t[x].s+' start '+t[start]?.v);
+ pairs.set(start,x);pairs.set(x,start);
+ }
+ }
+ if(stack.length)throw Error('unclosed '+stack.map(x=>t[x].s));
+ return {t,pairs,parent};
+}
+function defs(s) {
+ const {t,pairs,parent}=lex(s), ds=[], bodies=new Set(), classes=[];
+ const val=i=>t[i]?.v;
+ for(let i=0;i<t.length;i++)if(val(i)==='class'&&t[i].k==='id'&&val(i-1)!=='.'){
+ let name=t[i+1]?.k==='id'?val(i+1):'<anonymous>';
+ let b=i+1;while(b<t.length&&val(b)!=='{')b++;
+ if(b===t.length)throw Error('class body');
+ const d={kind:'class',name,start:i,body:b,end:pairs.get(b)};ds.push(d);classes.push(d);bodies.add(b);
+ }
+ for(let i=0;i<t.length;i++)if(val(i)==='function'&&t[i].k==='id'&&val(i-1)!=='.'){
+ let n=i+1;if(val(n)==='*')n++;
+ const name=t[n]?.k==='id'?val(n++):'<anonymous>';
+ if(val(n)!=='(')throw Error('function params '+t[i].s);
+ const b=pairs.get(n)+1;
+ if(val(b)!=='{')throw Error('function body '+t[i].s);
+ ds.push({kind:'function',name,start:i,body:b,end:pairs.get(b)});bodies.add(b);
+ }
+ for(let i=0;i<t.length;i++)if(val(i)==='{'&&val(i-1)===')'&&!bodies.has(i)){
+ const p=pairs.get(i-1),n=p-1,v=val(n);
+ if(['if','for','while','switch','catch','with'].includes(v))continue;
+ if(t[n]?.k!=='id'&&t[n]?.k!=='str'&&v!==']')throw Error('method name '+v+' '+t[i].s);
+ let name=v;
+ if(v===']')name=t.slice(pairs.get(n)+1,n).map(x=>x.v).join('');
+ const accessor=['get','set'].includes(val(n-1))?val(n-1):'';
+ const kind=name==='constructor'?'constructor':accessor||'method';
+ ds.push({kind,name,start:n,body:i,end:pairs.get(i)});bodies.add(i);
+ }
+ for(let i=0;i<t.length;i++)if(val(i)==='=>'){
+ let start=i-1;if(val(start)===')')start=pairs.get(start);
+ let end=i+1,b=i+1;
+ if(val(b)==='{')end=pairs.get(b);
+ else {const par=parent[i];while(end<t.length){if(parent[end]===par&&[';',','].includes(val(end)))break;
+ if([')',']','}'].includes(val(end))&&(pairs.get(end)??end)<i)break;end++;}end--;}
+ if(val(start-1)==='async')start--;
+ let name='';
+ if(val(start-1)==='='&&t[start-2]?.k==='id')name=val(start-2);
+ else if(val(start-1)===':'&&['id','str'].includes(t[start-2]?.k))name=val(start-2);
+ ds.push({kind:'arrow',name,start,body:b,end});
+ }
+ ds.sort((a,b)=>a.start-b.start||b.end-a.end);
+ for(const d of ds){
+ const parents=ds.filter(p=>p!==d&&p.start<d.start&&p.end>=d.end).sort((a,b)=>b.start-a.start);
+ const p=parents[0];d.parent=p;
+ d.scope=p?p.scope+'/'+p.kind+':'+p.name:'module';
+ d.line=s.slice(0,t[d.start].s).split('\n').length;
+ d.code=t.slice(d.start,d.end+1).map(x=>x.k+':'+x.v).join('\0');
+ d.context=t.slice(Math.max(0,d.start-8),d.start).map(x=>x.v).join(' ');
+ }
+ return {t,pairs,parent,ds};
+}
+
+const parsed=files.map(f=>({...f,curD:defs(f.cur),oldD:defs(f.old)}));
+const globalOld=new Map();
+for(const f of parsed)for(const d of f.oldD.ds){
+ const h=d.kind+'\0'+d.name+'\0'+d.code;
+ if(!globalOld.has(h))globalOld.set(h,[]);globalOld.get(h).push([f.path,d]);
+}
+for(const f of parsed){
+ const available=[...f.oldD.ds];
+ f.add=[];f.reused=[];
+ for(const d of f.curD.ds){
+ let index=available.findIndex(o=>o.kind===d.kind&&o.name===d.name&&o.scope===d.scope&&o.code===d.code);
+ if(index<0&&d.kind!=='arrow'&&d.name!=='<anonymous>')index=available.findIndex(o=>o.kind===d.kind&&o.name===d.name&&o.scope===d.scope);
+ if(index<0&&d.kind==='arrow'&&d.name)index=available.findIndex(o=>o.kind==='arrow'&&o.name===d.name&&o.scope===d.scope);
+ if(index<0&&d.kind==='arrow')index=available.findIndex(o=>o.kind==='arrow'&&o.scope===d.scope&&o.context===d.context);
+ if(index>=0){f.reused.push([d,available.splice(index,1)[0]]);continue;}
+
+ f.add.push(d);
+ }
+ f.removed=available;
+}
+
+function moduleItems(s,d) {
+ const {t,pairs,parent,ds}=d,vars=[],imports=[];
+ for(let i=0;i<t.length;i++){
+ if(parent[i]!==-1)continue;
+ if(t[i].v==='import'){
+ if(t[i+1]?.v==='(')continue;
+ let j=i+1;while(j<t.length&&t[j].v!==';')j++;
+ const z=t.slice(i+1,j),from=z.findLast(x=>x.k==='str')?.v;
+ let k=0;if(z[0]?.k==='id'){imports.push({name:z[0].v,from});k=1;if(z[k]?.v===',')k++;}
+ if(z[k]?.v==='*')imports.push({name:z[k+2].v,from});
+ if(z[k]?.v==='{'){k++;while(z[k]?.v!=='}'){
+ if(z[k]?.v===','){k++;continue;}
+ const orig=z[k++].v;let name=orig;
+ if(z[k]?.v==='as'){k++;name=z[k++].v;}
+ imports.push({name,from,orig});
+ }}
+ i=j;continue;
+ }
+ if(['const','let','var'].includes(t[i].v)){
+ let j=i+1;
+ while(j<t.length){
+ if(t[j]?.k!=='id')throw Error('module destructuring '+t[j]?.s);
+ const name=t[j++].v,start=j;
+ if(t[j]?.v==='='){j++;const b=j;
+ while(j<t.length){
+ if(parent[j]===-1&&[';',','].includes(t[j].v))break;
+ j++;}
+ vars.push({name,start:b,end:j,line:s.slice(0,t[b].s).split('\n').length,init:t.slice(b,j)});
+ }else vars.push({name,start,end:j,init:[]});
+ if(t[j]?.v===','){j++;continue;}
+ break;
+ }
+ i=j;
+ }
+ }
+ return {vars,imports};
+}
+for(const f of parsed){
+ f.curM=moduleItems(f.cur,f.curD);f.oldM=moduleItems(f.old,f.oldD);
+ f.newVars=f.curM.vars.filter(v=>!f.oldM.vars.some(o=>o.name===v.name));
+ f.newImports=f.curM.imports.filter(v=>!f.oldM.imports.some(o=>o.name===v.name&&o.from===v.from&&o.orig===v.orig));
+}
+
+
+
+function classFields(d) {
+ const {t,pairs,parent,ds}=d,out=[];
+ for(const c of ds.filter(x=>x.kind==='class')){
+ for(let i=c.body+1;i<c.end;i++){
+ if(parent[i]!==c.body)continue;
+ const a=i,st=t[i].v==='static';if(st)i++;
+ if(t[i]?.k!=='id'||![';','='].includes(t[i+1]?.v))continue;
+ const name=t[i].v,init=t[i+1].v==='=';
+ let e=i+1;while(e<c.end&&!(parent[e]===c.body&&t[e].v===';'))e++;
+ out.push({class:c.name,name,static:st,init,start:a,end:e});i=e;
+ }
+ }
+ return out;
+}
+for(const f of parsed){
+ const a=classFields(f.curD),b=classFields(f.oldD);
+ f.newFields=a.filter(x=>!b.some(y=>y.class===x.class&&y.name===x.name&&y.static===x.static));
+}
+
+
+function bindingCensus(d){
+ const {t,pairs,parent,ds}=d,binding=new Set(),patternKeys=new Set();
+ function bnd(i,end){
+  while(i<end&&t[i].v==='...')i++;
+  if(i>=end)return i;
+  if(t[i].k==='id'){binding.add(i);return i+1;}
+  if(t[i].v==='['){
+   const e=pairs.get(i);i++;
+   while(i<e){if(t[i].v===','){i++;continue;}i=bnd(i,e);if(t[i]?.v==='=')i=skip(i+1,e);if(t[i]?.v===',')i++;}
+   return e+1;
+  }
+  if(t[i].v==='{'){
+   const e=pairs.get(i);i++;
+   while(i<e){
+    if(t[i].v===','){i++;continue;}
+    if(t[i].v==='...'){i=bnd(i+1,e);}
+    else{
+     let key=i;if(t[i].v==='[')i=pairs.get(i)+1;else {patternKeys.add(i);i++;}
+     if(t[i]?.v===':')i=bnd(i+1,e);else if(t[key].k==='id')binding.add(key);
+    }
+    if(t[i]?.v==='=')i=skip(i+1,e);
+    if(t[i]?.v===',')i++;
+   }
+   return e+1;
+  }
+  throw Error('binding '+t[i].v+' @'+t[i].s);
+ }
+ function skip(i,end){
+  while(i<end){
+   if([',',';', 'of','in'].includes(t[i].v))break;
+   if(['(','[','{'].includes(t[i].v))i=pairs.get(i)+1;
+   else i++;
+  }return i;
+ }
+ function params(a,e){while(a<e){if(t[a].v===','){a++;continue;}a=bnd(a,e);if(t[a]?.v==='=')a=skip(a+1,e);if(t[a]?.v===',')a++;}}
+ for(const fn of ds.filter(x=>x.kind!=='class')){
+  if(fn.kind==='arrow'){
+   let a=fn.start;if(t[a].v==='async')a++;
+   if(t[a].v==='(')params(a+1,pairs.get(a));else if(t[a].k==='id')binding.add(a);
+  }else{
+   let a=fn.start;while(a<fn.body&&t[a].v!=='(')a++;
+   if(a<fn.body)params(a+1,pairs.get(a));
+  }
+ }
+ for(let i=0;i<t.length;i++){
+  if(['const','let','var'].includes(t[i].v)&&!['.','?.'].includes(t[i-1]?.v)){
+   let j=i+1;
+   while(j<t.length){
+    j=bnd(j,t.length);
+    if(t[j]?.v==='=')j=skip(j+1,t.length);
+    if(t[j]?.v!==',')break;j++;
+   }
+  } else if(t[i].v==='catch'&&!['.','?.'].includes(t[i-1]?.v)&&t[i+1]?.v==='(')params(i+2,pairs.get(i+1));
+ }
+ return {binding,patternKeys};
+}
+
+const input=[];
+function ownedTokens(d,defs,t){
+ const children=defs.filter(x=>x!==d&&x.start>d.start&&x.end<d.end&&!defs.some(y=>y!==d&&y!==x&&y.start>d.start&&y.end<d.end&&y.start<x.start&&y.end>x.end));
+ const out=[];
+ for(let j=d.start;j<=d.end;j++){const c=children.find(x=>x.start===j);if(c){j=c.end;continue;}out.push([t[j].k,t[j].v,j]);}
+ return out;
+}
+for(const f of parsed){
+ for(const [c,o]of f.reused)if(c.code!==o.code)
+ input.push({path:f.path,scope:c.scope,kind:c.kind,name:c.name,line:c.line,cur:ownedTokens(c,f.curD.ds,f.curD.t),old:ownedTokens(o,f.oldD.ds,f.oldD.t)});
+}
+const py=`import json,sys,difflib
+a=json.load(sys.stdin)
+out=[]
+for r in a:
+ c=r.pop('cur');o=r.pop('old')
+ sm=difflib.SequenceMatcher(None,[(x[0],x[1]) for x in o],[(x[0],x[1]) for x in c],autojunk=False)
+ ids=[]
+ for tag,oa,ob,ca,cb in sm.get_opcodes():
+  if tag in ('insert','replace'):ids.extend(x[2] for x in c[ca:cb])
+ ranges=[]
+ for i in ids:
+  if ranges and ranges[-1][1]==i-1:ranges[-1][1]=i
+  else:ranges.append([i,i])
+ if ranges:r['ranges']=ranges;out.append(r)
+print(json.dumps(out))
+`;
+const result=execFileSync('python3',['-c',py],{input:JSON.stringify(input),encoding:'utf8',maxBuffer:16*1024*1024});
+const priorDelta=JSON.parse(result);
+
+const keywords=new Set("async await break case catch class const continue debugger default delete do else export extends finally for function if import in instanceof let new of return super switch this throw try typeof var void while with yield get set static".split(" "));
+const scalar=new Set(["true","false","null","undefined","NaN","Infinity"]);
+const global=[],details=[];
+for(const f of parsed){
+ const t=f.curD.t,mask=new Set(),macro=new Set(),bc=(()=>{try{return bindingCensus(f.curD);}catch(e){throw Error(f.path+' '+e.message);}})();
+ for(const d of f.add){for(let j=d.start;j<=d.end;j++)mask.add(j);if(d.kind==='function')macro.add(d.start+1);else if(d.kind==='class')macro.add(d.start+1);else if(d.kind!=='arrow')macro.add(d.start);}
+ for(const v of f.newVars){for(let j=v.start;j<v.end;j++)mask.add(j);}
+ for(const field of f.newFields){for(let j=field.start;j<=field.end;j++)mask.add(j);macro.add(field.start+(field.static?1:0));}
+ for(const r of priorDelta.filter(r=>r.path===f.path))for(const [a,b]of r.ranges)for(let j=a;j<=b;j++)mask.add(j);
+ for(const v of f.newVars){const i=f.curD.t.findIndex((x,i)=>x.v===v.name&&f.curD.parent[i]===-1&&['let','const','var'].includes(f.curD.t[i-1]?.v));macro.add(i);}
+
+ const codeBodies=new Set(f.curD.ds.map(d=>d.body).filter(i=>t[i]?.v==='{'));
+ const objectBodies=new Set();
+ for(let i=0;i<t.length;i++)if(t[i].v==='{'&&!codeBodies.has(i)&&!bc.patternKeys.has(i)&&['=','return','(', '[', ',',':','?','||','&&','??'].includes(t[i-1]?.v))objectBodies.add(i);
+
+ const bound=new Set([...bc.binding].map(i=>t[i].v));
+ for(const d of f.curD.ds)if(['function','class'].includes(d.kind))bound.add(d.name);
+ for(const i of f.curM.imports)bound.add(i.name);
+ for(const v of f.curM.vars)bound.add(v.name);
+ bound.add('arguments');
+ const globals=Object.create(null);
+ const groups=Object.create(null),items=[];
+ function add(k,j){const q=groups[k]??={n:0,u:0};q.n++;if(['quoted','template','property','identifier','binding','reference','global','regex'].includes(k))q.u+=t[j].v.length;items.push([k,j,t[j].v]);}
+ for(const j of [...mask].sort((a,b)=>a-b)){
+ const x=t[j];if(macro.has(j))continue;
+ if(x.k==='str')add('quoted',j);
+ else if(x.k==='quasi')add('template',j);
+ else if(x.k==='regex')add('regex',j);
+ else if(x.k==='num')add('number',j);
+ else if(x.k==='id'){
+ const prop=['.','?.'].includes(t[j-1]?.v)||(t[j+1]?.v===':'&&['{',','].includes(t[j-1]?.v))||bc.patternKeys.has(j)||(objectBodies.has(f.curD.parent[j])&&['{',','].includes(t[j-1]?.v)&&[',','}'].includes(t[j+1]?.v));
+ if(prop)add('property',j);
+ if(bc.binding.has(j))add('binding',j);
+ else if(!prop&&['true','false','null'].includes(x.v))add('scalar',j);
+ else if(!prop&&!keywords.has(x.v)){if(!bound.has(x.v)){add('global',j);globals[x.v]=(globals[x.v]??0)+1;}else add('reference',j);}
+ }
+ }
+ global.push({path:f.path,groups,globals,tokens:mask.size});
+ details.push({path:f.path,items});
+}
+
+
+import {createHash} from 'node:crypto';
+const codeSort=(a,b)=>JSON.stringify(a)<JSON.stringify(b)?-1:JSON.stringify(a)>JSON.stringify(b)?1:0;
+const digest=items=>createHash('sha256').update(JSON.stringify([...items].sort(codeSort))).digest('hex');
+const inputHash=createHash('sha256');
+for(const f of parsed) inputHash.update(f.path+'\0'+f.raw+'\0');
+const prototypes=[];
+for(const f of parsed) for(const d of f.add)
+ if(d.kind==='function'&&!d.parent&&f.curD.t[d.start-1]?.v!=='async'&&f.curD.t[d.start+1]?.v!=='*')
+  prototypes.push([f.path,d.name,d.line]);
+const groups=Object.create(null),metadata=[];
+for(const f of details)for(const[k,j,v]of f.items)if(!['reference','regex'].includes(k)){
+ const file=parsed.find(x=>x.path===f.path),token=file.curD.t[j];
+ metadata.push([f.path,k,token.s,v]);
+ const g=groups[k]??={N:0,U:0};g.N++;if(!['number','scalar'].includes(k))g.U+=v.length;
+}
+let N=0,U=0;for(const g of Object.values(groups)){N+=g.N;U+=g.U;}
+const perModule=parsed.map(f=>({path:f.path,
+ prototypes:prototypes.filter(x=>x[0]===f.path).length,
+ operands:metadata.filter(x=>x[0]===f.path).length,
+ metadataHash:digest(metadata.filter(x=>x[0]===f.path))
+}));
+console.log(JSON.stringify({
+ head,base,files:parsed.length,inputHash:inputHash.digest('hex'),
+ prototypes:{count:prototypes.length,rosterHash:digest(prototypes)},
+ metadata:{N,U,bytes:8*N+2*U,rosterHash:digest(metadata),groups},
+ delta:{scopes:priorDelta.length,tokens:priorDelta.reduce((s,r)=>s+r.ranges.reduce((n,[a,b])=>n+b-a+1,0),0)},
+ perModule
+}));
+// Optional, bounded module-local evidence; no artifact is written.
+// CENSUS_MODULE must be one exact path in the 32-module input list.
+if(process.env.CENSUS_MODULE){
+ const path=process.env.CENSUS_MODULE;
+ if(!parsed.some(f=>f.path===path))throw Error('not a census module');
+ const offset=Number(process.env.CENSUS_OFFSET??0), limit=Number(process.env.CENSUS_LIMIT??100);
+ if(!Number.isSafeInteger(offset)||offset<0||!Number.isSafeInteger(limit)||limit<1||limit>200)throw Error('invalid page');
+ const rows=metadata.filter(x=>x[0]===path), proto=prototypes.filter(x=>x[0]===path);
+ console.log(JSON.stringify({path,offset,limit,prototypeCount:proto.length,operandCount:rows.length,
+  prototypes:proto.slice(offset,offset+limit),operands:rows.slice(offset,offset+limit)}));
+}
+```
+<!-- STATIC_CENSUS_RECIPE_END -->
 
 ### Private provider receiver guard name repair — source-only partial
 
