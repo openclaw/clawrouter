@@ -7,8 +7,11 @@ Twelve missing-receiver guards in `providers.ts` now call the already imported
 name had no binding in that module. The receiver lookup, arguments, throw,
 following named call and return are unchanged. The genuine helper remains the
 existing `identity-admission.ts` export; no new target, import, module edge or
-runtime protocol is introduced. The source fixture names all twelve wrappers
-and requires the imported producer before each named receiver call.
+runtime protocol is introduced. Existing generated/source-resolution checks
+verify the imported name; no implementation-mirroring source fixture is retained.
+A direct behavioral witness for each of the twelve missing-receiver failures
+(protocol failure before any named receiver call) remains unqualified; source
+resolution is not that behavioral proof.
 
 The global STATIC source-operand census removes twelve unresolved global-name
 operands (`N=12`, `U=180`); each replacement resolves the existing local import.
