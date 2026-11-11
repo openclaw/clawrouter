@@ -22,7 +22,7 @@ test("Claude subscription transport uses OAuth identity without changing API-key
   assert.equal(oauthHeaders.has("x-api-key"), false);
   assert.equal(oauthHeaders.get("anthropic-beta"), "interleaved-thinking-2025-05-14,claude-code-20250219,oauth-2025-04-20");
   assert.equal(oauthHeaders.get("x-app"), "cli");
-  assert.equal(oauthHeaders.get("user-agent"), "claude-cli/2.1.288 (external, cli)");
+  assert.equal(oauthHeaders.get("user-agent"), "claude-cli/2.1.322 (external, cli)");
 
   const body = transformTransportBody(transport, { model: "claude-sonnet-5", messages: [{ role: "user", content: "fixture" }], system: "operator system" });
   assert.deepEqual(body.system.map((block) => block.text), [
