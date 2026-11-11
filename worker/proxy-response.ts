@@ -1,5 +1,5 @@
 import { OwnedUsageRegistrations, createSseUsageAccumulator, createSseFrames, parseSseData, ownedUsageJsonParse, type SseUsageEvidence, createSseUsageInspector, extractUsageTokens, responseOutcome, usageInspectionLimit, type ResponsesObservation, type UsageInspection, type UsageTokenContext } from "./token-usage.ts";
-import { fundOwnedHttpAcceptedUsage, settleOwnedHttpCodecConsumerCapture, forwardOwnedHttpCodecUsage, holdOwnedHttpVeniceSource, fundOwnedHttpGenericUsage, createOwnedHttpCodecUsageResponse, createOwnedHttpGenericUsageResponse, bindOwnedHttpGenericBodylessResponse, bindOwnedHttpGenericUsageOutput, forwardOwnedHttpGenericUsage, type OwnedHttpUsage, type OwnedHttpRevalidation, checkOwnedHttpCodecConsumer, checkOwnedHttpCodecNormalization, checkOwnedHttpCodecUsage, fundOwnedHttpCodecConsumerHeaders, fundOwnedHttpCodecConsumerCapture, beginOwnedHttpNormalization, bindOwnedHttpNormalizationReplay, checkOwnedHttpNormalizationReaderCreation, fundOwnedHttpNormalization, fundOwnedHttpNormalizationCapture, ownOwnedHttpNormalizationReader, ownedHttpNormalizationFailure, holdOwnedHttpNormalization, publishOwnedHttpNormalizationOutput, clearOwnedHttpNormalizationOutput, finishOwnedHttpNormalizationReader, endOwnedHttpNormalization, fundOwnedHttpCodecNormalization, beginOwnedCodecConsumerDiagnostics, ownedHttpCodecFailure, finishOwnedCodecDiagnostics, ownOwnedCodecConsumerRetirement, checkOwnedHttpGenericUsage, checkOwnedHttpGenericUsageInspection, ownOwnedHttpGenericUsageReader, bindOwnedHttpGenericUsageBody, fundOwnedHttpGenericUsageCapture, ownedHttpGenericUsageFailure, ownedHttpGenericUsageInstallationFailure, holdOwnedHttpGenericUsage, acceptOwnedHttpNormalizerIntoUsage, offerOwnedHttpGenericUsageOutput, clearOwnedHttpGenericUsageOutput, finishOwnedHttpGenericUsageReader, ownedHttpGenericUsageRetirement, type OwnedHttpRequest, type OwnedHttpUpload, type OwnedHttpNormalization } from "./http-identity-owner.ts";
+import { ownedHttpCodecInstallationFailure, ownedHttpNormalizationInstallationFailure, fundOwnedHttpAcceptedUsage, settleOwnedHttpCodecConsumerCapture, forwardOwnedHttpCodecUsage, holdOwnedHttpVeniceSource, fundOwnedHttpGenericUsage, createOwnedHttpCodecUsageResponse, createOwnedHttpGenericUsageResponse, bindOwnedHttpGenericBodylessResponse, bindOwnedHttpGenericUsageOutput, forwardOwnedHttpGenericUsage, type OwnedHttpUsage, type OwnedHttpRevalidation, checkOwnedHttpCodecConsumer, checkOwnedHttpCodecNormalization, checkOwnedHttpCodecUsage, fundOwnedHttpCodecConsumerHeaders, fundOwnedHttpCodecConsumerCapture, beginOwnedHttpNormalization, bindOwnedHttpNormalizationReplay, checkOwnedHttpNormalizationReaderCreation, fundOwnedHttpNormalization, fundOwnedHttpNormalizationCapture, ownOwnedHttpNormalizationReader, ownedHttpNormalizationFailure, holdOwnedHttpNormalization, publishOwnedHttpNormalizationOutput, clearOwnedHttpNormalizationOutput, finishOwnedHttpNormalizationReader, endOwnedHttpNormalization, fundOwnedHttpCodecNormalization, beginOwnedCodecConsumerDiagnostics, ownedHttpCodecFailure, finishOwnedCodecDiagnostics, ownOwnedCodecConsumerRetirement, checkOwnedHttpGenericUsage, checkOwnedHttpGenericUsageInspection, ownOwnedHttpGenericUsageReader, bindOwnedHttpGenericUsageBody, fundOwnedHttpGenericUsageCapture, ownedHttpGenericUsageFailure, ownedHttpGenericUsageInstallationFailure, holdOwnedHttpGenericUsage, acceptOwnedHttpNormalizerIntoUsage, offerOwnedHttpGenericUsageOutput, clearOwnedHttpGenericUsageOutput, finishOwnedHttpGenericUsageReader, ownedHttpGenericUsageRetirement, type OwnedHttpRequest, type OwnedHttpUpload, type OwnedHttpNormalization } from "./http-identity-owner.ts";
 import { identityFailure, isIdentityFailure } from "./identity-admission.ts";
 import { measurePrivateJsonBody, privateMappedErrorJson } from "./json-body.ts";
 import { OwnedReaderDriver, claimOwnedHttpStaticCustody, inspectOwnedBytes, isLocalOwnedByteView, newOwnedBytes, ownedByteBackingBytes, ownedByteLength, ownedByteSubarray, copyOwnedBytes, enqueueOwnedBytes, newOwnedDecoder, decodeOwnedBytes, measureOwnedHeaders, newOwnedHeaders, getOwnedHeader, setOwnedHeader, deleteOwnedHeader, newOwnedResponse } from "./proxy-completion.ts";
@@ -50,6 +50,7 @@ export class CodecReader extends OwnedReaderDriver {
   protected holdDriver(): void { holdOwnedHttpVeniceSource(this.owner.codec); }
   protected driverProtocolFailure(): Error { return identityFailure("protocol"); }
   protected recordDriverFailure(kind: "read" | "closed" | "cancel" | "unlock" | "pull" | "retire", reason: unknown): object { return consumerFailure(this, kind, reason); }
+  protected recordDriverInstallationFailure(kind: "read" | "closed" | "cancel" | "unlock" | "pull", reason: unknown): object { return ownedHttpCodecInstallationFailure(this.owner.codec, this.role, kind, reason); }
   protected captureDriverFailure(reason: unknown): object { return isIdentityFailure(reason) ? reason : consumerFailure(this, "read", reason); }
   protected propagatedDriverFailure(reason: unknown): boolean { return publishedConsumerFailure(this, reason); }
   protected driverCleanupFailure(kind: "closed" | "cancel" | "unlock", failure: object): void { if (kind === "unlock") this.unlockFailure = failure; }
@@ -147,7 +148,7 @@ function acquireConsumerReader(owner: CodecConsumer, response: Response): CodecR
   if (owner.reader) owner.replacement = state; else owner.reader = state;
   try { state.open(body); body = null; return state; }
   catch (reason) {
-    const failure = consumerFailure(state, state.reader ? "closed" : "acquire", reason); reason = undefined;
+    const failure = state.matchesClosedInstallationFailure(reason) ? reason : consumerFailure(state, state.reader ? "closed" : "acquire", reason); reason = undefined;
     void state.retire("cancel", false); throw failure;
   }
 }
@@ -248,7 +249,7 @@ export class GenericUsageReader extends OwnedReaderDriver {
       const reader = this.reader;
       this.observeDriverClosed(Object.getPrototypeOf(reader) === ReadableStreamDefaultReader.prototype && !Object.hasOwn(reader, "closed")
         && typeof consumerLookupGetter === "function" && consumerLookupGetter.call(reader, "closed") === consumerNativeClosed);
-    } catch (reason) { const failure = this.failure(this.reader ? "closed" : "acquire", reason); reason = undefined; throw failure; }
+    } catch (reason) { const failure = this.matchesClosedInstallationFailure(reason) ? reason : this.failure(this.reader ? "closed" : "acquire", reason); reason = undefined; throw failure; }
   }
   read(): Promise<void> {
     this.clearOutput();
@@ -557,6 +558,9 @@ export class OwnedNormalizerReader extends OwnedReaderDriver {
   protected recordDriverFailure(kind: "read" | "closed" | "cancel" | "unlock" | "pull" | "retire", reason: unknown): object {
     return ownedHttpNormalizationFailure(this.#cap, this, kind, reason);
   }
+  protected recordDriverInstallationFailure(kind: "read" | "closed" | "cancel" | "unlock" | "pull", reason: unknown): object {
+    return ownedHttpNormalizationInstallationFailure(this.#cap, this, kind, reason);
+  }
   protected captureDriverFailure(reason: unknown): object {
     return isIdentityFailure(reason) ? reason : this.recordDriverFailure("read", reason);
   }
@@ -684,7 +688,7 @@ function acquireNormalizer(owner: OwnedHttpNormalizer, response: Response, kind:
   ownOwnedHttpNormalizationReader(owner.receipt, reader, body);
   try { reader.open(); return reader; }
   catch (reason) {
-    const failure = ownedHttpNormalizationFailure(owner.receipt, reader, reader.reader ? "closed" : "acquire", reason); reason = undefined;
+    const failure = reader.matchesClosedInstallationFailure(reason) ? reason : ownedHttpNormalizationFailure(owner.receipt, reader, reader.reader ? "closed" : "acquire", reason); reason = undefined;
     reader.cancelForOperation(owner.operation); throw failure;
   }
 }

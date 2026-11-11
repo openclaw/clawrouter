@@ -10,7 +10,7 @@ import { HttpError } from "./utils.ts";
 import { identityFailure } from "./identity-admission.ts";
 import { checkOwnedHttpVeniceCodec, checkOwnedHttpVeniceResponse, fundOwnedHttpVeniceCodec, prepareOwnedHttpCodecConsumers,
   beginOwnedHttpVeniceSource, ownOwnedHttpVeniceRetirement, startOwnedHttpVeniceCodec, holdOwnedHttpVeniceSource,
-  retireOwnedHttpVeniceBacking, ownedHttpCodecFailure, finishOwnedCodecDiagnostics,
+  retireOwnedHttpVeniceBacking, ownedHttpCodecFailure, ownedHttpCodecInstallationFailure, finishOwnedCodecDiagnostics,
   type OwnedHttpRevalidation, type OwnedHttpRequest } from "./http-identity-owner.ts";
 import { revalidateOwnedVeniceChat, assertOwnedVeniceChatLive } from "./venice-chat-authority.ts";
 import { acceptOwnedHttpVeniceUsage } from "./proxy.ts";
@@ -327,6 +327,7 @@ class OwnedVeniceSource extends OwnedReaderDriver {
   protected holdDriver(): void { holdOwnedHttpVeniceSource(this.state.cap); }
   protected driverProtocolFailure(): Error { return identityFailure("protocol"); }
   protected recordDriverFailure(kind: "read" | "closed" | "cancel" | "unlock" | "pull" | "retire", reason: unknown): object { return this.failure(kind, reason); }
+  protected recordDriverInstallationFailure(kind: "read" | "closed" | "cancel" | "unlock" | "pull", reason: unknown): object { return ownedHttpCodecInstallationFailure(this.state.cap, 0, kind, reason); }
   protected propagatedDriverFailure(_reason: unknown): boolean { return false; }
   protected driverCleanupFailure(kind: "closed" | "cancel" | "unlock", failure: object): void { if (kind !== "closed") this.cleanup.push(failure); }
   protected driverPullFailure(failure: object): void {

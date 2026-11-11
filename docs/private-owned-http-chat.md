@@ -1,5 +1,49 @@
 # Private owned HTTP Chat staging
 
+### Reached driver installation provenance — source-only partial
+
+Normalization, public delivery, codec source and both codec consumers now reserve
+separate installation origins for read, cancel, unlock, closed and pull. The RPC
+driver reserves four driver-installation origins plus its separate fetch-install
+origin. Original offsets and acquisition order remain unchanged. Generic usage
+keeps its existing original 1–5 and installation 10–14 blocks. Components are
+13 normalization, 14 public, 15 codec source, 14 per codec consumer, and 15 per
+RPC; Venice/GMI preparation banks become 103/30. These are origin components,
+not complete storage or active-window bounds.
+
+A closed installation carrier is stored only on that driver's exact fresh
+closed observation. The three acquisition wrappers pass through only that same
+carrier. A fulfilled closed original followed by installation throw therefore
+cannot manufacture a closed rejection. The observation retains the extra link
+through UNKNOWN; the generic child prospectively funds its added property/key
+cells and name, without changing its sixteen-origin bank.
+
+The reached private reader, ACK, status, intake, materialization, preflight and
+RPC paths mark an original started when the actual invocation/getter returns,
+before observer lookup. A falsy returned cancel/read/fetch/closed operand is not
+proof that no invocation occurred. Failed observation retains UNKNOWN and its
+independent installation origin. Native synchronous undefined-returning unlock
+keeps its separate valid completion rule. Ordinary paths are unchanged.
+
+Focused Node and exact Workerd fixtures exercise the five delivery drivers' closed
+rejection/fulfillment followed by distinct/equal/undefined installation throw,
+untouched duplicate payloads and exact carrier provenance. Mechanical driver
+fixtures cover null/false/0/undefined cancel returns and the independent native
+unlock path. All are **UNRUN_CODE_ONLY_HOSTED**. Exact subject binding, remaining
+RPC observation witnesses, complete V2 family manifests and numeric reservations
+remain open; this partial is not a complete candidate or fit proof.
+
+### Current accounting amendment
+
+`PAID_ASYNC_IO_CONTROL_V2` prospectively funds persistent I/O storage using
+`8(C + P + N) + 2U + B` inside the existing COMMON counter. Persistent storage
+stays in that category during callbacks; additional running frames, arguments,
+operands and reentry still have independent active 128 windows and sync512.
+Complete source-derived family manifests and numeric amounts must precede their
+reservation implementation. Historical persistent-512 claims are superseded;
+old component constants and structural subsets are not replacement bounds.
+No V2 reservation implementation or complete family manifest is claimed here.
+
 
 ### Native import boundary and preflight handoff — source-only partial
 

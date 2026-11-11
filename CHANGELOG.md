@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Separate private reader and revalidation RPC installation failures from original outcomes; preserve exact closed-carrier provenance and UNKNOWN custody when an actual invocation returns an invalid falsy observer operand. Add Node and Workerd source fixtures. Source-only partial; exact subject binding and complete paid async I/O manifests remain open.
+
 - Cut private HTTP orchestration out of ordinary ledger, utility, provider and usage import closures. Keep canonical request/sink/revalidation registrations in the completion leaf with fixed named receivers; move metadata and private usage execution to their owners and deliver preflight replies through VOID readiness and the existing destination. Source-only partial; reached subject/installation repairs and complete accounting qualification remain open.
 
 - Preserve separate prepaid failure origins for private HTTP observer installation, provider fetch/disposal cancellation, and upload/archive pipe commands. Keep FIRST outcome selection, UNKNOWN funding and same-ID recovery; cover equal and undefined reasons in Node and Workerd fixtures. Source-only partial; import-cycle and complete accounting qualification remain open.

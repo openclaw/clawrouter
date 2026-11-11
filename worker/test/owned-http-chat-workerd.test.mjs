@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { startWorkerdFixture } from '../../test/helpers/workerd.mjs';
 import { startOwnedJsonObservedFixture } from '../../test/helpers/owned-json-parser-observer.mjs';
 import { ownedJsonCodecCases, ownedJsonCodecWire, ownedUsageCases, ownedUsageWire, ownedCodecSseLines } from '../../test/helpers/owned-json-parser-cases.mjs';
-import { assertOwnedSinkInstallation, assertOwnedAckCustody, ownedHttpModel, ownedHttpPricingModel, ownedHttpControlModels, ownedHttpProxyKey, ownedHttpRouter, ownedHttpUpstream, seedOwnedHttpChat } from '../../test/helpers/owned-http-chat-fixture.mjs';
+import { assertOwnedDriverOrigins, assertOwnedSinkInstallation, assertOwnedAckCustody, ownedHttpModel, ownedHttpPricingModel, ownedHttpControlModels, ownedHttpProxyKey, ownedHttpRouter, ownedHttpUpstream, seedOwnedHttpChat } from '../../test/helpers/owned-http-chat-fixture.mjs';
 
 // One memoized ORIGINAL body root is enrolled as soon as each dispatch resolves,
 // including a late response after an earlier assertion has already failed.
@@ -2568,5 +2568,25 @@ test('native preflight VOID handoff clears its fixed reply before source advance
     const response = await f.request('https://fixture/v1/chat/completions', chat('chat')); assert.equal(response.status, 200);
     const report = JSON.parse((await f.request('https://fixture/fixture/state')).text);
     assert.deepEqual(report.preflightTransfers, { staged: 1, taken: 1, advanced: 1 });
+  }, true);
+});
+
+for (const driver of ['OwnedNormalizerReader', 'CodecReader', 'OwnedVeniceSource', 'OwnedPublicReader', 'GenericUsageReader'])
+for (const outcome of ['reject', 'fulfill']) for (const reasonKind of ['distinct', 'equal', 'undefined'])
+test(`native reached driver installation ${driver} ${outcome} ${reasonKind}`, { timeout: 120000 }, async t => {
+  await fixture(t, async f => {
+    f.expectUnknownRetirement();
+    const release = () => f.request('https://fixture/fixture/consumer-mode', { method: 'DELETE' });
+    f.releases.push(release);
+    await f.request('https://fixture/fixture/consumer-mode', { method: 'POST', body: `driver-origin:${driver}:${outcome}:${reasonKind}` });
+    const codec = ['CodecReader', 'OwnedVeniceSource', 'OwnedRevalidationRpc'].includes(driver);
+    const extra = codec ? { model: ownedHttpControlModels.venice, ownedVeniceCase: 'compact-object128' }
+      : driver === 'OwnedNormalizerReader' ? { stream: true, ownedNormalizerCase: 'comments' } : {};
+    try { await f.request('https://fixture/v1/chat/completions', chat(codec ? 'venice' : 'chat', extra)); }
+    catch { /* The actual reader failure may end the public body. */ }
+    const report = await state(f);
+    assertOwnedDriverOrigins(assert, report.driverOrigins, outcome, reasonKind);
+    assert.ok(report.charged > 65536, 'UNKNOWN never refunds through healthy siblings');
+    await release();
   }, true);
 });

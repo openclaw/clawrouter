@@ -612,7 +612,7 @@ class PrivatePreflightState {
     let original: Promise<void> | undefined, started = false;
     try {
       if (privateIdentityNativeClosed(reader)) this.native |= 1;
-      original = reader.closed; started = !!original;
+      original = reader.closed; started = true;
       const then = original.then; if (then !== privateIdentityNativeThen) this.native &= ~1;
       this.observeVoid(8, original, then);
     }
@@ -653,7 +653,7 @@ class PrivatePreflightState {
     try {
       const reader = this.source.reader as ReadableStreamBYOBReader, method = reader.read;
       if (this.native & 1 && privateIdentityNativeReaderOperation(reader, method, "read")) this.native |= 2; else this.native &= ~2;
-      original = Reflect.apply(method, reader, [backing]); started = !!original;
+      original = Reflect.apply(method, reader, [backing]); started = true;
       const then = original!.then; if (then !== privateIdentityNativeThen) this.native &= ~2;
       observation = { owner: this, nonce, state: 0 }; this.readObservation = observation;
       void Reflect.apply(then, original, [preflightReadFulfilled.bind(observation), preflightReadRejected.bind(observation)]);
@@ -728,7 +728,7 @@ class PrivatePreflightState {
     try {
       const reader = this.source.reader, method = reader.cancel;
       if (this.native & 1 && privateIdentityNativeReaderOperation(reader, method, "cancel")) this.native |= 4; else this.native &= ~4;
-      original = Reflect.apply(method, reader, ["private admission stopped"]); started = !!original;
+      original = Reflect.apply(method, reader, ["private admission stopped"]); started = true;
       const then = original!.then; if (then !== privateIdentityNativeThen) this.native &= ~4;
       this.observeVoid(2, original, then);
     }

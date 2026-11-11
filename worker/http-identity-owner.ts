@@ -478,10 +478,11 @@ export function reserveOwnedHttpRevalidationOrigins(http: OwnedHttpRequest, prov
   // Before this attempt's selection effects: snapshot + inspect at dispatch,
   // and Venice's one existing delivery check. Environment routes leave the
   // unused inspect credits held, never invent a new operation. The source has
-  // ten distinct origins (including closed); each consumer has nine. This
-  // extra origin uses positive SAME-common backing before selection effects.
-  const count = providerId === "venice" ? 68 : 20;
-  reserveSinkOrigins(ownedHttpSinkOwner(http), count);
+  // ten original source origins and nine per consumer retain their offsets.
+  // Four RPCs, the source and two consumers each append installation blocks.
+  // GMI reserves its two RPC blocks only; no inactive pull is acquired.
+  const count = providerId === "venice" ? 103 : 30;
+  reserveSinkOrigins(ownedHttpSinkOwner(http), count, providerId === "venice" ? 35 : 10);
   owner.revalidationCredits += count;
 }
 
@@ -688,11 +689,11 @@ export function beginOwnedHttpNormalization(http: OwnedHttpRequest, attempt: Own
   const root = requestOwner(http), upload = uploadOwner(attempt);
   if (root.sealed || root.unknown || upload.request !== root || !root.request
     || !matchesOwnedHttpNormalizationInput(http, attempt, response, operation)) throw identityFailure("protocol");
-  growOwnedHttpRequest(http, 8192); reserveSinkOrigins(root.sink!, 8); claimOwnedSinkFactories();
+  growOwnedHttpRequest(http, 8192); reserveSinkOrigins(root.sink!, 13, 5); claimOwnedSinkFactories();
   if (root.sealed || root.unknown || root.sinkClosed || !root.request || upload.request !== root
     || !matchesOwnedHttpNormalizationInput(http, attempt, response, operation)
     || !Number.isSafeInteger(root.sinkPending + 1)) throw identityFailure("protocol");
-  const base = root.nextSinkOrigin; root.nextSinkOrigin += 8; root.sinkCredits -= 8;
+  const base = root.nextSinkOrigin; root.nextSinkOrigin += 13; root.sinkCredits -= 13;
   const cap = Object.freeze({});
   const child: NormalizationChild = { root, request: root.request, attempt: upload, operation, response,
     base, dataBytes: 0, captureBytes: 0, closed: false };
@@ -740,11 +741,19 @@ export function fundOwnedHttpNormalizationCapture(cap: OwnedHttpNormalization, d
 }
 export function ownedHttpNormalizationFailure(cap: OwnedHttpNormalization, driver: OwnedNormalizerReader,
   kind: "acquire" | "read" | "closed" | "cancel" | "unlock" | "pull" | "retire", reason: unknown): object {
+  return recordOwnedNormalizationFailure(cap, driver, kind, reason, false);
+}
+export function ownedHttpNormalizationInstallationFailure(cap: OwnedHttpNormalization, driver: OwnedNormalizerReader,
+  kind: "read" | "cancel" | "unlock" | "closed" | "pull", reason: unknown): object {
+  return recordOwnedNormalizationFailure(cap, driver, kind, reason, true);
+}
+function recordOwnedNormalizationFailure(cap: OwnedHttpNormalization, driver: OwnedNormalizerReader,
+  kind: "acquire" | "read" | "closed" | "cancel" | "unlock" | "pull" | "retire", reason: unknown, installation: boolean): object {
   const child = normalizationChild(cap);
   if (child.driver !== driver) throw identityFailure("protocol");
   const offset = kind === "acquire" ? 0 : kind === "read" ? 1 : kind === "cancel" ? 2 : kind === "unlock" ? 3
     : kind === "closed" ? 4 : kind === "pull" ? 5 : 6;
-  const ordinal = child.base + offset, known = child.root.sinkOrigins!.has(ordinal);
+  const ordinal = child.base + offset + (installation ? 7 : 0), known = child.root.sinkOrigins!.has(ordinal);
   const failure = failedSinkOrigin(child.root, 32 * ordinal + sinkKinds.indexOf(kind), reason);
   if (!known) retainOwnedDiagnostic(child.root, failure);
   return failure;
@@ -811,7 +820,7 @@ export function beginOwnedHttpGenericUsage(http: OwnedHttpRequest, attempt: Owne
   if (root.sealed || root.unknown || upload.request !== root || !root.request
     || !matchesOwnedHttpGenericUsageInput(http, attempt, response, operation, format, tariff, validated, context, accounting))
     throw identityFailure("protocol");
-  growOwnedHttpRequest(http, 65536); reserveSinkOrigins(root.sink!, 16); claimOwnedSinkFactories();
+  growOwnedHttpRequest(http, 65536 + 8 * 2 + 2 * "installationFailure".length); reserveSinkOrigins(root.sink!, 16); claimOwnedSinkFactories();
   if (root.sealed || root.unknown || root.sinkClosed || !root.request || upload.request !== root
     || !matchesOwnedHttpGenericUsageInput(http, attempt, response, operation, format, tariff, validated, context, accounting)
     || !Number.isSafeInteger(root.sinkPending + 1))
@@ -997,7 +1006,7 @@ export function beginOwnedCodecConsumerDiagnostics(cap: OwnedHttpRevalidation): 
   return role;
 }
 function claimCodecRole(owner: RevalidationOwner, role: OwnedCodecRole): void {
-  const root = requestOwner(owner.http), bit = 1 << role, width = role === 0 ? 10 : 9;
+  const root = requestOwner(owner.http), bit = 1 << role, width = role === 0 ? 15 : 14;
   if ((owner.codecRoles ?? 0) & bit || root.revalidationCredits < width || root.sinkCredits < width) throw identityFailure("protocol");
   root.revalidationCredits -= width; root.sinkCredits -= width;
   // Claim at ACTUAL acquisition, preserving order against fresh revalidation.
@@ -1015,12 +1024,20 @@ function codecCustodyOwner(cap: OwnedHttpRevalidation): RevalidationOwner {
   return owner;
 }
 export function ownedHttpCodecFailure(cap: OwnedHttpRevalidation, role: OwnedCodecRole, phase: IntakePhase, reason: unknown): object {
+  return recordOwnedCodecFailure(cap, role, phase, reason, false);
+}
+export function ownedHttpCodecInstallationFailure(cap: OwnedHttpRevalidation, role: OwnedCodecRole,
+  phase: "read" | "cancel" | "unlock" | "closed" | "pull", reason: unknown): object {
+  return recordOwnedCodecFailure(cap, role, phase, reason, true);
+}
+function recordOwnedCodecFailure(cap: OwnedHttpRevalidation, role: OwnedCodecRole, phase: IntakePhase, reason: unknown, installation: boolean): object {
   const owner = codecCustodyOwner(cap), roles = owner.codecRoles ?? 0;
   if (role !== 0 && role !== 1 && role !== 2 || !(roles & 1 << role) || roles & 1 << (role + 3) || (role !== 0 && phase === "abort"))
     throw identityFailure("protocol");
   const root = requestOwner(owner.http);
   const base = role === 0 ? owner.sourceBase! : role === 1 ? owner.consumerBase! : owner.replacementBase!;
-  const offset = phase === "acquire" ? 0 : phase === "read" ? 1 : phase === "cancel" ? 2 : phase === "unlock" ? 3
+  const offset = installation ? (role === 0 ? 10 : 9) + (phase === "read" ? 0 : phase === "cancel" ? 1 : phase === "unlock" ? 2 : phase === "closed" ? 3 : 4)
+    : phase === "acquire" ? 0 : phase === "read" ? 1 : phase === "cancel" ? 2 : phase === "unlock" ? 3
     : phase === "listenerAdd" ? 4 : phase === "listenerRemove" ? 5 : phase === "abort" ? 6 : phase === "closed" ? role === 0 ? 9 : 6 : phase === "pull" ? 7 : phase === "retire" ? 8 : -1;
   if (offset < 0 || phase === "readObserver" || phase === "closedObserver" || phase === "cancelObserver" || phase === "unlockObserver")
     throw identityFailure("protocol");
@@ -1167,20 +1184,20 @@ function startOwnedRevalidationRpc(cap: OwnedHttpRevalidation, env: Env, signal:
   if (env !== requestOwner(owner.http).env || !owner.active || !owner.phaseBytes || owner.graph !== undefined
     || kind === "inspect" && !owner.upstream.grantKey) throw identityFailure("protocol");
   const sink = ownedHttpSinkOwner(owner.http), root = sinkOwner(sink);
-  if (root.revalidationCredits < 10) throw identityFailure("protocol");
+  if (root.revalidationCredits < 15) throw identityFailure("protocol");
   setRevalidationPhase(owner, revalidationSourceBytes + owner.retainedBytes + revalidationControlBytes
     + (kind === "snapshot" ? owner.snapshotRequestBytes : 6));
   owner.requestBytes = kind === "snapshot" ? owner.snapshotRequestBytes : 6;
   // Stub, fetch, reader acquisition/fallback, read, FIRSTcancel, unlock, and
   // abort listener installation/removal. No fresh charge is needed in cleanup.
-  root.revalidationCredits -= 10;
+  root.revalidationCredits -= 15;
   try {
     claimOwnedSinkFactories();
     enrollOwnedSinkChild(root);
     const rpc = new OwnedRevalidationRpc(cap, owner, root, signal, kind);
     return rpc.consume();
   }
-  catch (error) { owner.requestBytes = 0; root.revalidationCredits += 10; throw error; }
+  catch (error) { owner.requestBytes = 0; root.revalidationCredits += 15; throw error; }
 }
 interface OwnedRpcFetchObservation { owner: OwnedRevalidationRpc | undefined; flags: number }
 function ownedRpcFetchAccepted(this: OwnedRpcFetchObservation, value: Response): void {
@@ -1221,7 +1238,7 @@ class OwnedRevalidationRpc extends OwnedReaderDriver {
     signal: AbortSignal, kind: "snapshot" | "inspect") {
     super();
     this.cap = cap; this.owner = owner; this.root = root; this.signal = signal; this.kind = kind;
-    this.base = root.nextSinkOrigin; root.nextSinkOrigin += 10; root.sinkCredits -= 10;
+    this.base = root.nextSinkOrigin; root.nextSinkOrigin += 15; root.sinkCredits -= 15;
     this.fetchCell = { owner: this, flags: 0 };
   }
   private failure(offset: number, kind: SinkOrigin, reason: unknown, primary = true): object {
@@ -1232,6 +1249,10 @@ class OwnedRevalidationRpc extends OwnedReaderDriver {
   protected propagatedDriverFailure(_reason: unknown): boolean { return false; }
   protected recordDriverFailure(kind: "read" | "closed" | "cancel" | "unlock" | "pull" | "retire", reason: unknown): object {
     return this.failure(kind === "read" ? 4 : kind === "cancel" ? 5 : kind === "unlock" ? 6 : kind === "closed" ? 9 : 2, kind, reason);
+  }
+  protected recordDriverInstallationFailure(kind: "read" | "closed" | "cancel" | "unlock" | "pull", reason: unknown): object {
+    if (kind === "pull") throw identityFailure("protocol");
+    return this.failure(kind === "read" ? 10 : kind === "cancel" ? 11 : kind === "unlock" ? 12 : 13, kind, reason);
   }
   protected captureDriverFailure(reason: unknown): object { return isIdentityFailure(reason) ? reason : this.recordDriverFailure("read", reason); }
   protected driverCleanupFailure(kind: "closed" | "cancel" | "unlock", _failure: object): void { if (kind !== "closed") this.cleanupFailed = true; }
@@ -1293,13 +1314,14 @@ class OwnedRevalidationRpc extends OwnedReaderDriver {
       this.fetchFlags |= 1;
       original = stub.fetch(this.kind === "snapshot" ? "https://clawrouter.internal/authorization/snapshot" : "https://clawrouter.internal/inspect",
         { method: "POST", body: this.requestBody, signal: this.signal });
-      started = !!original;
+      started = true;
       const then = original.then;
       void Reflect.apply(then, original, [ownedRpcFetchAccepted.bind(this.fetchCell!), ownedRpcFetchRejected.bind(this.fetchCell!)]);
       this.fetchFlags |= 4;
     } catch (reason) {
       try {
-        this.fetchFailure = this.failure(1, "fetch", reason);
+        const failure = this.failure(started ? 14 : 1, "fetch", reason);
+        this.fetchFailure ??= failure;
         if (started) { this.uncertain(); this.deliverFetch(this.fetchFailure); }
         else { this.fetchFlags |= 2 | 4; if (this.fetchCell) this.fetchCell.flags |= 1; }
       } catch { this.uncertain(); }
@@ -2708,7 +2730,7 @@ class OwnedLedgerAck {
         const getter = this.joinState & 1 ? ownedStatusNativeClosed : originalReaderClosed;
         if (Object.getPrototypeOf(this.reader) === prototype && !Object.hasOwn(this.reader, "closed")
           && typeof originalLookupGetter === "function" && originalLookupGetter.call(this.reader, "closed") === getter) this.closedState |= 32;
-        closed = this.reader.closed; started = !!closed;
+        closed = this.reader.closed; started = true;
         const then = closed.then;
         if (then !== ownedBoundaryThen) this.closedState &= ~32;
         void Reflect.apply(then, closed, [ackClosedFulfilled.bind(this), ackClosedRejected.bind(this)]);
@@ -2749,7 +2771,7 @@ class OwnedLedgerAck {
         const backing = newOwnedBytes(16384);
         original = Reflect.apply(method, reader, [backing]);
       } else original = Reflect.apply(method, reader, []);
-      started = !!original;
+      started = true;
       const then = original!.then;
       if (then !== ownedBoundaryThen) this.joinState &= ~65536;
       void Reflect.apply(then, original, [ackReadFulfilled.bind(observation), ackReadRejected.bind(observation)]);
@@ -2823,7 +2845,7 @@ class OwnedLedgerAck {
       const reader = this.reader, method = reader.cancel;
       const prototype = this.joinState & 1 ? ReadableStreamBYOBReader.prototype : ReadableStreamDefaultReader.prototype;
       if (Object.getPrototypeOf(reader) === prototype && method === (this.joinState & 1 ? originalByobCancel : originalReaderCancel)) this.joinState |= 131072;
-      original = Reflect.apply(method, reader, []); started = !!original;
+      original = Reflect.apply(method, reader, []); started = true;
       const then = original!.then;
       if (then !== ownedBoundaryThen) this.joinState &= ~131072;
       this.cancelObservation = { owner: this, kind: 2, state: 0 };
@@ -3753,6 +3775,9 @@ class OwnedPublicReader extends OwnedReaderDriver {
   protected recordDriverFailure(kind: "read" | "closed" | "cancel" | "unlock" | "pull" | "retire", reason: unknown): object {
     return this.failure(kind === "read" ? 1 : kind === "cancel" ? 2 : kind === "unlock" ? 3 : kind === "closed" ? 4 : kind === "pull" ? 5 : 7, kind, reason);
   }
+  protected recordDriverInstallationFailure(kind: "read" | "closed" | "cancel" | "unlock" | "pull", reason: unknown): object {
+    return this.failure(kind === "read" ? 9 : kind === "cancel" ? 10 : kind === "unlock" ? 11 : kind === "closed" ? 12 : 13, kind, reason);
+  }
   protected driverCleanupFailure(kind: "closed" | "cancel" | "unlock", _failure: object): void { if (kind !== "closed") this.owner.completion.fail(); }
   protected driverPullFailure(_failure: object): void { this.owner.completion.fail(); void this.retire(true); }
   protected propagatedDriverFailure(reason: unknown): boolean {
@@ -3841,8 +3866,8 @@ class OwnedPublicReader extends OwnedReaderDriver {
 function ownHttpResponse(cap: OwnedHttpRequest, response: Response, publicBoundary: boolean): Response {
   const owner = requestOwner(cap);
   if (owner.sealed) throw identityFailure("protocol");
-  growOwnedHttpRequest(cap, 8192); reserveSinkOrigins(ownedHttpSinkOwner(cap), 9);
-  const base = owner.nextSinkOrigin; owner.nextSinkOrigin += 9; owner.sinkCredits -= 9;
+  growOwnedHttpRequest(cap, 8192); reserveSinkOrigins(ownedHttpSinkOwner(cap), 14, 5);
+  const base = owner.nextSinkOrigin; owner.nextSinkOrigin += 14; owner.sinkCredits -= 14;
   let headerBytes = 0;
   let body: ReadableStream<Uint8Array>;
   try {
@@ -3999,7 +4024,7 @@ export class OwnedStatusReader {
     this.fetching = sinkOrigin(requestOwner(this.owner.http).sink!, "fetch");
     let observing = false, started = false, original: Promise<Response> | undefined;
     try {
-      original = stub.fetch(descriptor.url); started = !!original;
+      original = stub.fetch(descriptor.url); started = true;
       const then = original.then;
       observing = true;
       this.fetchObservation = { owner: this, kind: 1, state: 0 };
@@ -4083,7 +4108,7 @@ export class OwnedStatusReader {
     try {
       const reader = this.reader as ReadableStreamBYOBReader, method = reader.read;
       if ((this.flags & 2) && Object.getPrototypeOf(reader) === ReadableStreamBYOBReader.prototype && method === ownedStatusNativeRead) this.flags |= 32;
-      original = Reflect.apply(method, reader, [this.backing]); started = !!original;
+      original = Reflect.apply(method, reader, [this.backing]); started = true;
       const then = original!.then; if (then !== ownedBoundaryThen) this.flags &= ~32;
       // The actual observer's return value is not a settlement receipt. Our
       // pending bit clears only at its first actual callback; the fixed driver

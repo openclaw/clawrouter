@@ -12,6 +12,7 @@ class FixtureReader extends OwnedReaderDriver {
   holdDriver() { this.unknown = true; }
   driverProtocolFailure() { return new Error('driver protocol'); }
   recordDriverFailure(kind, reason) { const fact = { kind, ordinal: this.failures.length, undefined: reason === undefined }; this.failures.push(fact); return fact; }
+  recordDriverInstallationFailure(kind, reason) { const fact = this.recordDriverFailure(kind, reason); fact.installation = true; return fact; }
   propagatedDriverFailure() { return false; }
   captureDriverValue(value) {
     this.captures++;
@@ -480,4 +481,39 @@ test('captured native Response metadata ignores own shadows and rejects foreign 
   for (const value of [{}, Object.create(Response.prototype), new Proxy(response, {})])
     assert.throws(() => captureOwnedResponseMetadata(value));
   assert.equal(await new Response(captured.body).text(), 'native body');
+});
+
+// A returned invocation is an original even when its result is not observable.
+for (const immediate of [false, true]) for (const value of [null, false, 0, undefined]) test('falsy actual cancel return stays UNKNOWN: ' + immediate + '/' + String(value), async () => {
+  const owner = new FixtureReader('public'); let calls = 0, unlocks = 0, retired = false;
+  owner.open(stream(), reader => {
+    const cancel = reader.cancel, unlock = reader.releaseLock;
+    reader.cancel = function () {
+      assert.equal(this, reader); assert.equal(arguments.length, immediate ? 1 : 0); calls++;
+      void Reflect.apply(cancel, reader, []).then(() => undefined, () => undefined);
+      return value;
+    };
+    reader.releaseLock = function () {
+      assert.equal(this, reader); assert.equal(arguments.length, 0); unlocks++;
+      return Reflect.apply(unlock, reader, []);
+    };
+  });
+  (immediate ? owner.stopNormalizer(undefined) : owner.stop()).then(() => { retired = true; }); await ticks();
+  assert.equal(calls, 1); assert.equal(owner.unknown, true); assert.equal(retired, false);
+  assert.ok(owner.failures.some(f => f.kind === 'cancel' && f.installation));
+  assert.equal(owner.failures.some(f => f.kind === 'unlock'), false);
+  assert.equal(unlocks, immediate ? 1 : 0, 'immediate cleanup attempts unlock; delayed cleanup has no cancel settlement proof');
+});
+
+test('closed installation carrier is exact to its driver and observation', async () => {
+  const one = new FixtureReader('public'), two = new FixtureReader('public');
+  let failure;
+  assert.equal(one.matchesClosedInstallationFailure(undefined), false);
+  try {
+    one.open(stream(), reader => Object.defineProperty(reader, 'closed', { value: { then(yes) { yes(undefined); throw undefined; } } }));
+  } catch (reason) { failure = reason; }
+  assert.ok(failure); assert.equal(one.matchesClosedInstallationFailure(failure), true);
+  assert.equal(two.matchesClosedInstallationFailure(failure), false);
+  assert.equal(one.matchesClosedInstallationFailure({ ...failure }), false);
+  one.stop(); await ticks(); assert.equal(one.unknown, true);
 });

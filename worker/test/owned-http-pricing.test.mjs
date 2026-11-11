@@ -6,7 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createOwnedJsonObservation, observeOwnedJsonSource } from '../../test/helpers/owned-json-parser-observer.mjs';
 import { ownedJsonCodecCases, ownedJsonCodecWire, ownedUsageCases, ownedUsageWire, ownedCodecSseLines } from '../../test/helpers/owned-json-parser-cases.mjs';
-import { ownedSinkInstallationWitness, assertOwnedSinkInstallation, assertOwnedAckCustody, createOwnedAckPhaseFixture, createOwnedBudgetSequenceFixture, createOwnedTerminalFixture } from '../../test/helpers/owned-http-chat-fixture.mjs';
+import { assertOwnedDriverOrigins, ownedSinkInstallationWitness, assertOwnedSinkInstallation, assertOwnedAckCustody, createOwnedAckPhaseFixture, createOwnedBudgetSequenceFixture, createOwnedTerminalFixture } from '../../test/helpers/owned-http-chat-fixture.mjs';
 
 const observation = globalThis.__ownedJsonObservation = createOwnedJsonObservation();
 globalThis.__ownedUsageWire = ownedUsageWire;
@@ -1386,3 +1386,27 @@ test('private preflight stages and clears the reply before the one source advanc
     for (const stage of ['staged', 'taken', 'advanced']) assert.equal(observation.preflightTransfers[stage] - before[stage], 1);
   });
 });
+
+for (const driver of ['OwnedNormalizerReader', 'CodecReader', 'OwnedVeniceSource', 'OwnedPublicReader', 'GenericUsageReader'])
+for (const outcome of ['reject', 'fulfill']) for (const reasonKind of ['distinct', 'equal', 'undefined']) {
+  const name = `private reached driver installation ${driver} ${outcome} ${reasonKind}`;
+  test(name, { timeout: 120000 }, async t => {
+    if (process.env.CLAWROUTER_TERMINAL_UNKNOWN !== name) {
+      await promisify(execFile)(process.execPath, ['--test', '--test-name-pattern', '^' + name + '$', fileURLToPath(import.meta.url)],
+        { env: { ...process.env, CLAWROUTER_TERMINAL_UNKNOWN: name }, maxBuffer: 4 * 1024 * 1024 }); return;
+    }
+    const codec = ['CodecReader', 'OwnedVeniceSource', 'OwnedRevalidationRpc'].includes(driver);
+    observation.consumerMode = `driver-origin:${driver}:${outcome}:${reasonKind}`;
+    try {
+      await fixture(t, async f => {
+        f.expectUnknownRetirement();
+        if (codec) f.veniceResponse('{"model":"zai-org-glm-5-2","choices":[]}');
+        if (driver === 'OwnedNormalizerReader') f.upstreamStatus(500);
+        const response = await f.take(f.dispatch(payload(codec ? { model: 'venice/zai-org-glm-5-2' } : {})));
+        try { await f.take(f.bodyRoot(response)); } catch { /* The installed failure may end delivery. */ }
+        assertOwnedDriverOrigins(assert, observation.driverOrigins, outcome, reasonKind);
+        assert.ok(bodyBudgetCharged() > 65536, 'UNKNOWN keeps the request debit');
+      }, false, codec ? 'venice' : 'fireworks');
+    } finally { observation.consumerMode = 'normal'; observation.releaseConsumer(); }
+  });
+}

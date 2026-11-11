@@ -5,7 +5,7 @@ import { ownedUsageWire } from './owned-json-parser-cases.mjs';
 // retain scalar counts, never parser input, keys, values, containers or tokens.
 // These observers are NOT production factories or a complete CONTROL inventory.
 export function createOwnedJsonObservation() {
-  const rows = [], readers = new WeakSet(), foregroundOwners = [];
+  const rows = [], readers = new WeakSet(), driverOriginOwners = new WeakSet(), foregroundOwners = [];
   let current, censusUsage = false, preparations = 0;
   const consumers = { created: 0, acquired: 0, retired: 0, live: 0, inner: 0, outer: 0,
     read: 0, cancel: 0, unlock: 0, nativeUnlocked: 0, unlockSettled: 0, thenCalls: 0, closed: 0, closedSettled: 0, replay: 0, transferred: 0, pricing: 0, enqueued: 0, oversizedOutput: 0, mutations: 0, held: false, released: false, reasonReads: 0 };
@@ -609,6 +609,36 @@ export function createOwnedJsonObservation() {
     beforeUsageParse() { if (usage.parsed >= usage.census) throw new Error('native usage parse before census'); usage.parsed++; },
     summary(value) { if (value !== undefined && value !== 'refusal') throw new Error('private summary retained a stop-reason subtree'); usage.summaries++; },
     usageCleared() { usage.cleared++; },
+    driverOrigins: { entered: 0, calls: 0, foreignGets: 0, records: [], original: null, installation: null },
+    driverClosed(native, reader, driver) {
+      const name = driver.constructor.name;
+      const [prefix, target, outcome, reasonKind] = this.consumerMode.split(':');
+      const row = this.driverOrigins;
+      if (prefix !== 'driver-origin' || target !== name || row.entered) return native;
+      row.entered++; row.driver = name; driverOriginOwners.add(driver);
+      const originalReason = reasonKind === 'undefined' ? undefined : Object.freeze({ fixture: 'closed-original' });
+      const installationReason = reasonKind === 'undefined' ? undefined : reasonKind === 'equal' ? originalReason : Object.freeze({ fixture: 'closed-installation' });
+      const nativeClosed = reader.closed, then = Promise.prototype.then;
+      void Reflect.apply(then, nativeClosed, [() => undefined, () => undefined]);
+      const original = { then(yes, no) {
+        if (this !== original || arguments.length !== 2) throw Error('driver closed observer boundary');
+        row.calls++;
+        if (outcome === 'reject') no(originalReason); else yes(undefined);
+        const poison = { get then() { row.foreignGets++; throw Error('duplicate payload inspected'); } };
+        yes(poison); no(poison);
+        throw installationReason;
+      } };
+      Object.defineProperty(reader, 'closed', { configurable: true, value: original });
+      return false;
+    },
+    driverOrigin(record) {
+      if (!this.consumerMode.startsWith('driver-origin:') || !this.driverOrigins.entered) return;
+      this.driverOrigins.records.push({ ...record });
+    },
+    driverClosedFact(driver, installation, record) {
+      if (!driverOriginOwners.has(driver)) return;
+      this.driverOrigins[installation ? 'installation' : 'original'] = { ...record };
+    },
     consumerMode: 'normal',
     previousCodec: undefined,
     consumerCreated() { consumers.created++; },
@@ -943,6 +973,12 @@ export function observeOwnedJsonSource(path, source) {
     source = replace(source, 'this.reader = (this.flags & 8) ? this.body.getReader({ mode: "byob" }) : this.body.getReader();',
       'this.reader = (this.flags & 8) ? this.body.getReader({ mode: "byob" }) : this.body.getReader(); ' + probe + '.sourceReader(this.reader);');
   } else if (/[\\/]worker[\\/]proxy-completion\.ts$/.test(path)) {
+    source = replace(source, '  protected observeDriverClosed(native: boolean): void {',
+      '  protected observeDriverClosed(native: boolean): void { native = ' + probe + '.driverClosed(native, this.reader, this);');
+    source = replace(source, 'const failure = this.recordDriverFailure("closed", reason);',
+      'const failure = this.recordDriverFailure("closed", reason); ' + probe + '.driverClosedFact(this, false, failure);');
+    source = replace(source, 'if (started && this.closedObservation?.owner === this) this.closedObservation.installationFailure = failure;',
+      'if (started && this.closedObservation?.owner === this) { this.closedObservation.installationFailure = failure; ' + probe + '.driverClosedFact(this, true, failure); }');
     source = replace(source, 'return counter.units;', probe + '.headerUnits(counter.units); return counter.units;');
     source = replace(source, 'return new ownedHeadersConstructor(headers);', probe + '.metadataFactory(); return new ownedHeadersConstructor(headers);');
     source = replace(source, 'return new ownedResponseConstructor(source.body,', probe + '.metadataFactory(); return new ownedResponseConstructor(source.body,');
@@ -1092,6 +1128,7 @@ export function observeOwnedJsonSource(path, source) {
       '  if (' + probe + '.consumerMode === "bootstrap-refuse" && !' + probe + '.initialErrors.bootstrapRefused) ' + probe + '.entryPressure(ExactBodyCharge.reserve(__publicLimit - __publicCharged() - requestMetadataBytes + 1)); try { funding = ExactBodyCharge.reserve(requestMetadataBytes); }');
     source = replace(source, '  if (!funding) return undefined;',
       '  if (!funding) { ' + probe + '.initialErrors.bootstrapRefused++; return undefined; }');
+    source = replace(source, '    owner.sinkOrigins!.set(ordinal, record); sinkFailures!.add(record);', '    owner.sinkOrigins!.set(ordinal, record); sinkFailures!.add(record); ' + probe + '.driverOrigin(record);');
     source = replace(source, '    const owner = new OwnedHttpRequestReceiver();',
       '    ' + probe + '.initialErrors.owners++; const owner = new OwnedHttpRequestReceiver();');
     source = replace(source, '  owner.errorState = 1;',

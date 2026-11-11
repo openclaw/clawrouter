@@ -1047,7 +1047,7 @@ class OwnedHttpIntakeIo {
     try {
       if (Object.getPrototypeOf(this.reader) === ReadableStreamBYOBReader.prototype && !Object.hasOwn(this.reader, "closed")
         && typeof ownedIntakeLookupGetter === "function" && ownedIntakeLookupGetter.call(this.reader, "closed") === ownedIntakeNativeClosed) this.flags |= 8;
-      original = this.reader.closed; started = !!original;
+      original = this.reader.closed; started = true;
       if (this.flags & 8) cell.flags |= 64;
       this.observe(cell, original);
     } catch (reason) {
@@ -1064,7 +1064,7 @@ class OwnedHttpIntakeIo {
       const reader = this.reader, method = reader.read;
       if (this.flags & 8 && Object.getPrototypeOf(reader) === ReadableStreamBYOBReader.prototype && !Object.hasOwn(reader, "closed")
         && method === ownedIntakeNativeRead) cell.flags |= 64;
-      original = Reflect.apply(method, reader, [newOwnedBytes(16384)]); started = !!original;
+      original = Reflect.apply(method, reader, [newOwnedBytes(16384)]); started = true;
       this.observe(cell, original!);
     } catch (reason) {
       if (started) throw this.observationFailure(cell, reason);
@@ -1080,7 +1080,7 @@ class OwnedHttpIntakeIo {
       const reader = this.reader, receiver = reader ?? this.body!, method = receiver.cancel;
       if (reader && this.nativeFailure && this.flags & 8 && this.flags & 16 && Object.getPrototypeOf(reader) === ReadableStreamBYOBReader.prototype
         && !Object.hasOwn(reader, "closed") && method === ownedIntakeNativeCancel) cell.flags |= 64;
-      original = Reflect.apply(method, receiver, [this.stopped]); started = !!original;
+      original = Reflect.apply(method, receiver, [this.stopped]); started = true;
       this.observe(cell, original!);
     } catch (reason) {
       try { if (started) this.observationFailure(cell, reason); else { this.receive(cell, true, reason); cell.flags |= 2; } }

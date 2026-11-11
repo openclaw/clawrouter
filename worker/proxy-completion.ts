@@ -260,6 +260,7 @@ interface DriverObservation {
   token: Promise<void> | undefined;
   kind: number;
   state: number; // accepted, installed, uncertain, inert
+  installationFailure?: object;
 }
 function driverObservationFulfilled(this: DriverObservation, value: unknown): void {
   if (this.state & (1 | 8)) { value = undefined; return; }
@@ -387,7 +388,7 @@ export abstract class OwnedReaderDriver {
     if (this.installing || this.activeTails || this.driverFlags & 32 || (cell.state & 7) !== 3) { cell = undefined; return; }
     // Acceptance already transferred any captured bytes/failure to the still
     // funded driver. No queued command retains this cell or its nonce directly.
-    cell.state = 8; cell.owner = undefined; cell.token = undefined; cell.kind = 0;
+    cell.state = 8; cell.owner = undefined; cell.token = undefined; cell.kind = 0; delete cell.installationFailure;
     if (kind === 1) this.readObservation = undefined;
     else if (kind === 16) this.pullObservation = undefined;
     else if (kind === 8) this.closedObservation = undefined;
@@ -434,12 +435,17 @@ export abstract class OwnedReaderDriver {
     this.pending |= 8; this.installing++;
     if (native) this.native |= 1;
     let original: Promise<unknown> | undefined, started = false;
-    try { original = this.reader!.closed; started = !!original; this.observe(8, original); }
+    try { original = this.reader!.closed; started = true; this.observe(8, original); }
     catch (reason) {
       if (started) this.uncertain(); else this.seen |= 8;
       const failure = started ? this.recordDriverInstallationFailure("closed", reason) : this.recordDriverFailure("closed", reason); reason = undefined;
+      if (started && this.closedObservation?.owner === this) this.closedObservation.installationFailure = failure;
       throw failure;
     } finally { original = undefined; this.installing--; this.schedule(); }
+  }
+  matchesClosedInstallationFailure(reason: unknown): boolean {
+    const cell = this.closedObservation;
+    return !!cell && cell.owner === this && cell.kind === 8 && !!(cell.state & 4) && cell.installationFailure !== undefined && cell.installationFailure === reason;
   }
   protected startDriverRead(byobBytes?: number | Uint8Array<ArrayBuffer>): Promise<void> {
     if (this.driverFlags & 1 || this.pending & 1 || this.readObservation || !this.reader) throw this.driverProtocolFailure();
@@ -452,7 +458,7 @@ export abstract class OwnedReaderDriver {
       const prototype = byobBytes === undefined ? ReadableStreamDefaultReader.prototype : ReadableStreamBYOBReader.prototype;
       if (this.native & 1 && Object.getPrototypeOf(reader) === prototype && method === (byobBytes === undefined ? driverDefaultRead : driverByobRead)) this.native |= 2; else this.native &= ~2;
       original = Reflect.apply(method, reader, byobBytes === undefined ? [] : [typeof byobBytes === "number" ? newOwnedBytes(byobBytes) : byobBytes]);
-      started = !!original;
+      started = true;
       this.observe(1, original!, ready);
     } catch (reason) {
       if (started) this.uncertain(); else this.seen |= 1;
@@ -540,7 +546,7 @@ export abstract class OwnedReaderDriver {
       else if (this.body.locked) { this.uncertain(); return; }
       else original = normalizer ? this.body.cancel(operation ? operation.signal.reason : reason) : this.body.cancel();
       reason = undefined; operation = undefined;
-      started = !!original;
+      started = true;
       this.observe(2, original!);
     } catch (reason) {
       if (started) this.uncertain(); else this.seen |= 2;
