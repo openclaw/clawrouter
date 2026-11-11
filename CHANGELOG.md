@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Let threshold grant routing leave a grant at its switch point for a grant that has never reported quota or whose window has reset, and compare idle grants by their last reading in an open window so a pool cannot flap to one already past the cutoff.
 - Exclude Anthropic grants with exhausted prepaid credit for five minutes and retry eligible same-provider grants before delivery within the shared four-distinct-grant budget, preserving healthy session stickiness and scoped quota state.
 - Run Fusion native fixture dependencies from the read-only image and include public CA roots for workerd startup, retaining the isolated noexec workspace.
 - Add Fusion follow-up workloads for bounded grant-usage reports and MiniMax Music credential admission, with resource and runtime acceptance checks.

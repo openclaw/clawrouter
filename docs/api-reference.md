@@ -741,7 +741,7 @@ Scoped quota windows in `GET /v1/admin/upstream-grants` optionally carry
 occurs in the requested upstream model ID; an absent scope applies to all
 models. Exhausted unscoped windows cool down the whole grant. Scoped exhaustion
 excludes only matching models. `most_remaining` and `threshold` compare only
-applicable live windows. Freshness uses each applicable window's own timestamp, so partial header updates cannot refresh an older model window. Concurrent feedback merges by window observation time and preserves active inference cooldowns. Reset-passed readings are unknown. A reserve protects
+applicable live windows. `threshold` keeps the last reading of each open window regardless of `staleAfterSeconds`; a grant with no open-window reading is an unmeasured replacement of last resort. Freshness uses each applicable window's own timestamp, so partial header updates cannot refresh an older model window. Concurrent feedback merges by window observation time and preserves active inference cooldowns. Reset-passed readings are unknown. A reserve protects
 against extra-usage billing but cannot prevent one in-flight request crossing the
 boundary. It does not turn polling into an atomic upstream quota reservation.
 

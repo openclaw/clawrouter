@@ -887,9 +887,16 @@ for five minutes, and no explicit grant restriction:
 
 `strategy` may be `priority`, `round_robin`, `least_used`, `most_remaining`,
 `threshold`, or `weighted_random`. `threshold` keeps the pool's current grant
-until its most constrained fresh quota window reaches `switchAtUsedPercent`,
+until its most constrained open quota window reaches `switchAtUsedPercent`,
 then selects the healthiest candidate below that cutoff only when it improves
-remaining capacity by at least `hysteresisPercent`. It requires
+remaining capacity by at least `hysteresisPercent`. If no measured candidate
+qualifies, it moves to a grant with no reading in an open window: one that has
+never reported quota, or whose window has reset since it was last used.
+Threshold routing compares the last reading of every open window, however old,
+because remaining quota only falls until reset; a grant last seen at or past the
+cutoff is therefore never a replacement until its window resets.
+`staleAfterSeconds` still bounds the readings `most_remaining` ranks and the
+evidence `staleState: "deny"` requires. Threshold routing requires
 `stickiness: "none"`; the pool cursor supplies affinity. `stickiness` may otherwise be
 `none`, `identity`, or `session`;
 identity and session values are hashed before selection and are not persisted as

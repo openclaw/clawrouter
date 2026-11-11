@@ -14,6 +14,14 @@ export const DEFAULT_GRANT_ROUTING: GrantRoutingPolicy = {
   eligibleGrants: {},
 };
 
+/** Age limit for the quota readings a strategy ranks. Remaining quota only
+ * falls until its window resets, so threshold routing keeps the last reading
+ * of every open window: an idle grant seen past the cutoff stays excluded and
+ * only a grant with no open-window reading counts as unmeasured. */
+export function rankingStaleAfterMs(routing: Pick<GrantRoutingPolicy, "strategy" | "staleAfterSeconds">): number {
+  return routing.strategy === "threshold" ? Number.MAX_SAFE_INTEGER : routing.staleAfterSeconds * 1_000;
+}
+
 export function grantRoutingPolicy(input: unknown): GrantRoutingPolicy {
   const value = input && typeof input === "object" && !Array.isArray(input) ? input as Partial<GrantRoutingPolicy> : {};
   const eligibleGrants: Record<string, string[]> = {};

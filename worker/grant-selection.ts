@@ -3,6 +3,7 @@ import { grantSupports, type GrantRequirement } from "./provider-auth.ts";
 import { HttpError } from "./utils.ts";
 import { authorityCall, type AdmissionPool } from "./authority.ts";
 import { grantQuotaRatio } from "./grant-quota.ts";
+import { rankingStaleAfterMs } from "./grant-routing.ts";
 export * from "./grant-eligibility.ts";
 import { DEFAULT_GRANT_ROUTING, grantRoutingPolicy, activeOperationCandidates, filterGrantCandidates, currentGrantRuntime, grantWeight, grantPriority, poolRetryAt, type SelectedGrant, type GrantCandidates, type GrantSelectionResult } from "./grant-eligibility.ts";
 import type { AccessPolicyEntry, Env, GrantRoutingPolicy, GrantRuntimeState, UpstreamGrant } from "./types";
@@ -75,7 +76,7 @@ export async function resolveGrantSelection(
       stickyHash,
       switchAtUsedPercent: routing.switchAtUsedPercent,
       hysteresisPercent: routing.hysteresisPercent,
-      candidates: active.map((entry) => ({ key: entry.key, weight: grantWeight(entry.grant), remainingRatio: grantQuotaRatio(entry.runtimeState, nowMs, routing.staleAfterSeconds * 1_000, requirement?.model) })),
+      candidates: active.map((entry) => ({ key: entry.key, weight: grantWeight(entry.grant), remainingRatio: grantQuotaRatio(entry.runtimeState, nowMs, rankingStaleAfterMs(routing), requirement?.model) })),
     });
     selected = active.find((entry) => entry.key === choice.selectedKey) ?? null;
   }
@@ -137,7 +138,7 @@ export async function selectCopilotPublicGrant(policyId: string, policy: import(
   const choice = await authorityCall<{ selectedKey: string }>(env, "/grant-pools/select", {
     poolKey: `${encodeURIComponent("github-copilot")}/${encodeURIComponent(policyId)}/${encodeURIComponent(tenant)}`,
     strategy: routing.strategy, stickyHash, switchAtUsedPercent: routing.switchAtUsedPercent, hysteresisPercent: routing.hysteresisPercent,
-    candidates: available.map(entry => ({ key: entry.key, weight: grantWeight(entry.grant), remainingRatio: grantQuotaRatio(entry.runtimeState, Date.now(), routing.staleAfterSeconds * 1_000) })),
+    candidates: available.map(entry => ({ key: entry.key, weight: grantWeight(entry.grant), remainingRatio: grantQuotaRatio(entry.runtimeState, Date.now(), rankingStaleAfterMs(routing)) })),
   });
   const selected = available.find(entry => entry.key === choice.selectedKey);
   if (!selected) throw new HttpError(503, "copilot_owner_unavailable", "Original Copilot owner unavailable");
