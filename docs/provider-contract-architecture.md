@@ -63,6 +63,14 @@ pricing types. `CompiledModel` refers to that definition directly. The client
 `ClientCatalogModel` projection currently extends the same fields, preserving the
 v1 response shape and existing type imports from `shared/contracts.ts`.
 
+Build-time model handling lives in `scripts/provider-models.mjs`; price
+normalization and tariff checks live in `scripts/provider-pricing.mjs`. The
+provider compiler validates the manifest schema before calling their semantic
+checks. These modules preserve the existing routing qualifications and local
+price authority. They do not fetch a catalogue, trust remote prices, or infer
+endpoint support. A future catalogue importer can supply neutral facts without
+owning these provider-specific checks.
+
 This separation gives future catalogue import and client presentation changes
 an explicit boundary. It does not turn router price qualification into a public
 catalogue fact, change price units, or establish execution eligibility. The
