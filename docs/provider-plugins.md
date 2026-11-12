@@ -478,11 +478,13 @@ proof that an account is entitled to upstream access.
 | Generated package asset index and setup metadata | Landed | Do not render untrusted SVG or add auth capabilities. |
 | Complete-package scaffold command | Landed | Create only a new directory; never register or deploy a provider. |
 | Fixture declaration validator and native REST JSON host runner | Landed | Opt-in development commands; no live probes or Worker changes. |
-| Product and offer normalization behind compatibility layer | Separate future draft | Shadow-check existing discovery and dispatch; preserve public aliases. |
+| Product and offer declarations, compatibility resolver, and catalog references | Landed | Additive metadata; credentials and runtime admission retain authority. |
 | Shared model-catalog import and provenance | Separate future draft | Pin supported core release; qualify prices separately. |
 | Credential/connection and accounting migration | Separate future drafts | Preserve refresh ownership, reservations, and delayed execution settlement. |
 
 Do not move all existing provider files into package folders in the same PR.
 The Fusion and provider-parity work can continue against their current paths.
-Migrate one package only after the loader/compiler contract is accepted. Keep
-the initial refactor PRs unmerged until the owner explicitly releases that hold.
+Migrate one package only after its loader/compiler and execution contracts are
+qualified. The owner has released the initial core-refactor hold. Land narrow
+changes after review and required validation; release and deployment remain
+separate actions.
