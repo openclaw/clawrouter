@@ -121,10 +121,11 @@ export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOut
   }
   // Token totals and a served tier cannot resolve omitted fees or hosted work.
   const soft = reservation.charges !== undefined;
-  const audioUnbounded = cost.pricingGap === "audio_upload_bound";
+  // A missing input ceiling blocks hard-budget admission, not measured billing.
+  const inputUnbounded = cost.pricingGap === "audio_upload_bound" || requestFormat === "openai.images_edits" && cost.pricingGap === "opaque_input_bound";
   const anthropicUnpriced = outcome.pricingUnavailable || tokens?.billable !== false && fixed == null && requestFormat === "anthropic.messages" && event.capability !== "llm.count_tokens" && !anthropicPricing(model?.pricing?.unit == null ? model?.pricing : null, model?.upstream, facts.anthropicRequest ?? {}, tokens?.anthropic ?? {});
   const claudeWeb = requestFormat === "anthropic.messages" ? facts.anthropicWebPrice : undefined;
-  const measured = anthropicUnpriced ? null : cost.pricingGap && !soft && !audioUnbounded && !claudeWeb ? null : tokens ? ((soft || claudeWeb) && !model?.pricing && fixed == null ? null : actualCost(model, tokens, fixed, requestFormat, facts.anthropicRequest))
+  const measured = anthropicUnpriced ? null : cost.pricingGap && !soft && !inputUnbounded && !claudeWeb ? null : tokens ? ((soft || claudeWeb) && !model?.pricing && fixed == null ? null : actualCost(model, tokens, fixed, requestFormat, facts.anthropicRequest))
     : characterEstimate === null ? null : fixed ?? characterEstimate;
   const image = model?.pricing?.unit === "image_token";
   const searchCount = tokens?.webSearchRequests ?? null;
@@ -136,11 +137,11 @@ export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOut
   // Per-search fees are not token categories: speed/geo multipliers do not apply.
   const toolFee = billable && (claudeWeb || soft && !!reservation.charges?.length) && fixed == null && tokens && tokens.billable !== false && hosted?.complete
     ? hostedSearchCost(searchPrice, hosted.webSearch) : null;
-  const actual = Math.min(Number.MAX_SAFE_INTEGER, (billable ? measured ?? (anthropicUnpriced ? reservation.reservedMicros : audioUnbounded || claudeWeb ? fixed ?? 0 : soft && !image ? fixed ?? 0 : fixed ?? cost.reserveMicros) : 0) + (toolFee ?? 0));
+  const actual = Math.min(Number.MAX_SAFE_INTEGER, (billable ? measured ?? (anthropicUnpriced ? reservation.reservedMicros : inputUnbounded || claudeWeb ? fixed ?? 0 : soft && !image ? fixed ?? 0 : fixed ?? cost.reserveMicros) : 0) + (toolFee ?? 0));
   const knownNoCharge = !billable || (tokens?.billable === false && actual === 0 && cost.basis !== "policy_fixed");
   const measuredBasis = characterEstimate !== null ? "request_character_estimate"
     : model?.pricing?.unit == null && model?.pricing?.settlementBasis === "published_upper_bound" ? "manifest_rate_upper_bound" : "manifest_pricing";
-  const basis = anthropicUnpriced && billable ? "unpriced_usage" : audioUnbounded && billable ? measured === null ? "unpriced_usage" : measuredBasis : soft && !image && billable && measured == null && fixed == null ? "unpriced_usage" : knownNoCharge ? "none" : cost.pricingGap ? "unpriced_usage" : (cost.basis === "unpriced_service_tier" || cost.basis === "unpriced_modifier")
+  const basis = anthropicUnpriced && billable ? "unpriced_usage" : inputUnbounded && billable ? measured === null ? "unpriced_usage" : measuredBasis : soft && !image && billable && measured == null && fixed == null ? "unpriced_usage" : knownNoCharge ? "none" : cost.pricingGap ? "unpriced_usage" : (cost.basis === "unpriced_service_tier" || cost.basis === "unpriced_modifier")
     ? measured == null ? "unpriced_usage" : measuredBasis
     : cost.basis === "manifest_pricing" ? measured == null ? "manifest_reservation" : measuredBasis : cost.basis;
   // An unproven reservation bound does not make a published tariff unknown.
@@ -479,7 +480,7 @@ function actualCost(model: AccountingFacts["model"], tokens: UsageTokens, fixed:
   if (!pricing) return 1;
   if (pricing.unit === "image_token") {
     const image = tokens.image;
-    return requestFormat === "openai.images_generations" && image ? Math.ceil((image.textInput * pricing.textInputMicrosPerMillion
+    return (requestFormat === "openai.images_generations" || requestFormat === "openai.images_edits") && image ? Math.ceil((image.textInput * pricing.textInputMicrosPerMillion
       + image.imageInput * pricing.imageInputMicrosPerMillion + image.imageOutput * pricing.imageOutputMicrosPerMillion) / 1_000_000) : null;
   }
   return actualModelCost(pricing, tokens, requestFormat);

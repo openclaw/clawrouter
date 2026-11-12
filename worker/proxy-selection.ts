@@ -37,6 +37,7 @@ import { prepareOllamaChatRequest } from "./provider-ollama.ts";
 import { isStandaloneSearch, validateStandaloneSearch } from "./standalone-search.ts";
 import { discoveryQuery, isModelDiscovery, prepareModelDiscovery } from "./model-discovery.ts";
 import { validateResponsesInputTokens } from "./responses-input-tokens.ts";
+import { validateImageEdit } from "./image-edits.ts";
 import { validateImageGeneration } from "./image-generation.ts";
 import { resolveTemplate, PreparationAdmission, isPreparationLimit } from "./provider-templates.ts";
 import type { CompiledEndpoint, CompiledModel, CompiledProvider, Env, ProxyRequestBody } from "./types";
@@ -122,10 +123,11 @@ export function validateSelectedInput(selection: ProxySelection): void {
     validateCompactRequest(requestObject(selection.body), selection.model);
     return;
   }
-  if (selection.endpoint.request_format === "openai.images_generations") {
+  if (["openai.images_generations", "openai.images_edits"].includes(selection.endpoint.request_format)) {
     const pricing = selection.model?.pricing;
     if (pricing?.unit !== "image_token") throw new HttpError(400, "image_model_unqualified", "a registered image generation tariff is required");
-    validateImageGeneration(requestObject(selection.body), pricing);
+    if (selection.endpoint.request_format === "openai.images_edits") validateImageEdit(requestObject(selection.body), pricing);
+    else validateImageGeneration(requestObject(selection.body), pricing);
     return;
   }
   if (selection.endpoint.request_format !== "openai.audio_speech") return;

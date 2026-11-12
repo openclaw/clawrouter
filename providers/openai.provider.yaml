@@ -30,7 +30,7 @@ products:
     commercialModel: metered
     authenticationMethod: api-key
     binding: { type: provider-default }
-    endpoints: [chat_completions, decisions, embeddings, images_generations, models_list, models_retrieve, moderations, realtime, responses, responses_cancel, responses_compact, responses_input_tokens, responses_retrieve, speech, standalone_search, transcriptions]
+    endpoints: [chat_completions, decisions, embeddings, images_generations, images_edits, models_list, models_retrieve, moderations, realtime, responses, responses_cancel, responses_compact, responses_input_tokens, responses_retrieve, speech, standalone_search, transcriptions]
     offers:
       - endpoint: moderations
         capability: llm.moderations
@@ -73,6 +73,9 @@ products:
         models: [openai/tts-1]
       - endpoint: images_generations
         capability: image.generation
+        models: [openai/gpt-image-2.5-sunburst, openai/gpt-image-2.5-sunburst-2026-09-08, openai/gpt-image-2.5-flare, openai/gpt-image-2.5-flare-2026-09-08]
+      - endpoint: images_edits
+        capability: image.edit
         models: [openai/gpt-image-2.5-sunburst, openai/gpt-image-2.5-sunburst-2026-09-08, openai/gpt-image-2.5-flare, openai/gpt-image-2.5-flare-2026-09-08]
   - id: chatgpt-subscription
     displayName: ChatGPT subscription
@@ -175,6 +178,7 @@ capabilities:
   - {id: audio.transcription, endpoint: transcriptions, methods: [POST]}
   - {id: audio.speech, endpoint: speech, methods: [POST]}
   - {id: image.generation, endpoint: images_generations, methods: [POST]}
+  - {id: image.edit, endpoint: images_edits, methods: [POST]}
 endpoints:
   standalone_search: { path: /v1/alpha/search, requestHeaders: [originator, x-codex-turn-metadata, X-Client-Request-Id], requestFormat: openai.standalone_search, responseFormat: openai.standalone_search, timeoutMs: 120000 }
   moderations: {path: /v1/moderations, requestHeaders: [X-Client-Request-Id], requestFormat: openai.moderations, responseFormat: openai.moderations, timeoutMs: 120000}
@@ -237,6 +241,12 @@ endpoints:
     responseFormat: audio.binary
     streaming: audio
     timeoutMs: 120000
+  images_edits:
+    path: /v1/images/edits
+    requestHeaders: [X-Client-Request-Id]
+    requestFormat: openai.images_edits
+    responseFormat: openai.images_generations
+    timeoutMs: 600000
   images_generations:
     path: /v1/images/generations
     requestHeaders: [X-Client-Request-Id]
@@ -254,7 +264,7 @@ models:
     - id: openai/gpt-image-2.5-sunburst
       displayName: "GPT Image 2.5 Sunburst"
       upstream: gpt-image-2.5-sunburst
-      capabilities: [image.generation]
+      capabilities: [image.generation, image.edit]
       pricingRef: openai-gpt-image-2.5-sunburst-2026-10-20
       pricing: &openaiImage25GenerationPricing
         unit: image_token
@@ -280,19 +290,19 @@ models:
     - id: openai/gpt-image-2.5-sunburst-2026-09-08
       displayName: "GPT Image 2.5 Sunburst (2026-09-08)"
       upstream: gpt-image-2.5-sunburst-2026-09-08
-      capabilities: [image.generation]
+      capabilities: [image.generation, image.edit]
       pricingRef: openai-gpt-image-2.5-sunburst-2026-09-08-2026-10-20
       pricing: *openaiImage25GenerationPricing
     - id: openai/gpt-image-2.5-flare
       displayName: "GPT Image 2.5 Flare"
       upstream: gpt-image-2.5-flare
-      capabilities: [image.generation]
+      capabilities: [image.generation, image.edit]
       pricingRef: openai-gpt-image-2.5-flare-2026-10-20
       pricing: *openaiImage25GenerationPricing
     - id: openai/gpt-image-2.5-flare-2026-09-08
       displayName: "GPT Image 2.5 Flare (2026-09-08)"
       upstream: gpt-image-2.5-flare-2026-09-08
-      capabilities: [image.generation]
+      capabilities: [image.generation, image.edit]
       pricingRef: openai-gpt-image-2.5-flare-2026-09-08-2026-10-20
       pricing: *openaiImage25GenerationPricing
     - id: openai/gpt-5.6
