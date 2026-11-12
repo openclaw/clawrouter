@@ -53,199 +53,178 @@ There is no waiting-body queue or inference replay. Uncertain delivery returns
 nonretryable 424. Disabling `LARGE_HTTP_ENABLED` restores the Worker envelope;
 operator rollback must first preserve/drain outstanding owners.
 
-## Integrated qualification status
+## Qualification against pinned main
 
-This branch integrates pinned main
-`17cb1a003efa00e572f2c88f227517c5bd9008f3`. Integrated functional validation,
-review, and direct performance comparison are in progress. The historical
-measurements below describe an earlier source pair and do not qualify this
-integrated candidate against the new baseline. Main remains pinned during this
-cycle; production is unchanged and the PR remains unpublished.
+The sole main baseline is `17cb1a003efa00e572f2c88f227517c5bd9008f3`;
+the measured runtime candidate is `e508e10a606a74d625fb197b601a2a7c8c903c92`.
+Later documentation changes do not alter measured runtime inputs. Older-main
+measurements remain archived and do not qualify this pair.
 
-## Historical qualification (previous baseline)
+**Verdict: controlled runtime evidence supports no material regression; full
+current-plan deployment qualification has an unresolved measurement gap.**
+The patch is not presented as fully performance-qualified or ready for production.
+No reproducible material product regression or repair mechanism was established.
 
-Sole pinned main is `4333686cf27ff5ab99c09aa7dcb0634038232e8f`; measured
-runtime candidate is `b835c9a7982086572a2ef9a52d1f5e07f006afa6`. Later branch
-changes are documentation only. Neither runtime pin advanced during this cycle.
-**Verdict: evidence supports no material performance regression within the tested
-overall client profile.** This is an engineering assessment, not a guarantee
-that every diagnostic interval excludes 5% or that resource performance is equal.
-The unary first-byte limitation and other uncertainty below remain explicit.
+The standard changed on 2026-11-11: 5% is contextual relative materiality guidance.
+Absolute latency, throughput and resource consequences inform the engineering
+verdict; there is no universal millisecond veto and no requirement to distinguish
+zero from an immaterial change. Important material harm cannot be offset by
+improvements elsewhere. Original results and policy changes remain preserved.
 
-The standard changed on 2026-11-11: 5% is contextual relative materiality
-guidance; absolute latency and operational consequences provide context rather
-than a universal +5/+10 ms veto. We need not distinguish zero from an immaterial
-change. Important material harm cannot be offset by faster unrelated cases.
-Original observations, intervals and historical numerical gates remain preserved.
+The controlled AWS comparison used eight independent Crabbox AWS c7i.2xlarge
+hosts in eu-west-1, Node 24.22.1 and the same attested workerd executable for
+both arms. Each host ran six independent runtime pairs and eight alternating
+paired blocks per case. Creation order and physical-core assignment alternated.
+Separate source-owned runtime modules, assets, compatibility flags, actors and
+storage remained in place. Normal pools, natural reconnections and full drains
+were measured, with no timing or candidate-cost subtraction. Native containers
+and Cloudflare cron are not emulated by this controlled environment.
 
-The complete hosted evidence comprises three ordinary-configuration current-plan
-Cloudflare studies: 16, 16 and 24 immutable main/candidate deployment pairs on
-eight independent Crabbox AWS c7i.2xlarge hosts per study. Independent canonical
-backends and disjoint equal-length credentials preserve product caching without
-cross-arm reuse. Both physical path assignments occur within each AWS host;
-execution order alternates. Normal connection pools, natural reconnections,
-full drains and candidate maintenance remain included. The upstream is synthetic;
-no timing or candidate-cost subtraction is applied.
+All 835,584 measured responses, 135,168 warmups and 1,056 gates completed with
+zero errors. Every input was unchanged; all eight leases are verified absent.
+Hosted execution and cleanup took 18 minutes 33 seconds, below the 30-minute
+campaign/lease caps. The exact packaged one-host full-workload execution smoke
+passed before fleet admission and is not used to qualify performance. A separate
+pre-allocation coordinator inventory timeout is preserved as a setup failure;
+it produced no product measurements or lease. No failed host was discarded or
+replaced. No sustained unrelated-interference stop occurred; candidate costs
+remain included. Provisioning concurrency was two, independently of client count.
 
-All studies execute the same four 32-client cases, with 32 warmup and 32 measured
-requests per arm/context/case. The first two use 64 contexts per deployment;
-the targeted study uses 32. Overall: **1,441,792 client observations across
-56 deployment pairs and 24 independent AWS hosts**, plus 448 strict functional
-gates. The legacy small-H1 case identifier says c1; actual concurrency here is 32.
-Every case's standalone first/total p50/p95, full-lifecycle rates and errors are
-preserved. Targets were known 16 KiB H1 and native API H1 streaming before launch;
-only those add combined inference over all three complete corpora. Previously
-resolved H2/small-H1 inference remains the original two-study comparison.
+| Controlled AWS workload | n/arm | Total p95 main → candidate, ms | Difference [95% interval] | Fixed-batch rate difference [95% interval] |
+| --- | ---: | ---: | ---: | ---: |
+| Small H1 reused, c1 | 24,576 | 11.352 → 11.182 | -1.50% [-5.50%, +3.29%] | +2.07% [+1.00%, +3.18%] |
+| Native API H1 stream, c32 | 49,152 | 179.413 → 168.152 | -6.28% [-12.11%, +0.56%] | +5.70% [+4.29%, +7.14%] |
+| Native API WS, c32 | 49,152 | 140.702 → 134.416 | -4.47% [-9.34%, +1.88%] | +3.36% [+1.74%, +4.97%] |
+| H2 unary, c32 | 49,152 | 152.606 → 147.753 | -3.18% [-8.90%, +2.38%] | +2.68% [+1.67%, +3.68%] |
+| H2 stream, c32 | 49,152 | 180.070 → 168.033 | -6.68% [-16.05%, +5.05%] | +2.80% [+1.27%, +4.35%] |
+| H1 stream known, c1 | 24,576 | 23.987 → 23.733 | -1.06% [-5.46%, +3.26%] | +0.90% [+0.30%, +1.49%] |
+| H1 stream chunked, c1 | 24,576 | 23.751 → 24.358 | +2.56% [-1.40%, +7.43%] | +0.13% [-0.40%, +0.70%] |
+| Small H1 fresh, c1 | 24,576 | 16.765 → 16.663 | -0.61% [-5.02%, +3.42%] | +0.77% [-1.02%, +2.63%] |
+| WS reused, c1 | 24,576 | 23.587 → 23.088 | -2.12% [-5.85%, +1.48%] | +0.69% [+0.04%, +1.36%] |
+| Known 16 KiB H1, c32 | 49,152 | 174.942 → 171.545 | -1.94% [-6.69%, +3.65%] | +2.48% [+1.44%, +3.52%] |
+| Chunked 16 KiB H1, c32 | 49,152 | 189.733 → 184.471 | -2.77% [-8.36%, +3.02%] | +3.69% [+2.24%, +5.22%] |
 
-| Hosted case, c32 | Measured requests/arm | Total p95 main → candidate, ms | Relative difference [95% envelope] |
+Intervals are descriptive 95% paired hierarchical host/runtime/block bootstrap
+intervals (19,999 draws), not simultaneous guarantees. Forty-eight runtime pairs
+are nested within eight hosts. Each c1 case has approximately 1,229 observations
+in its upper 5% tail per arm; each c32 case has approximately 2,458. All case-level
+first/total p50/p95, counts, differences and intervals are preserved separately.
+Fixed-batch rates include final drain and natural reconnections; they measure
+validated finite-batch goodput, not saturation capacity. Initialization and
+warmup costs are preserved separately.
+
+The mildly worse controlled chunked-stream total p95 is +0.608 ms (+2.56%);
+its absolute interval permits +1.682 ms; the relative upper endpoint is +7.43%. Its median improves slightly and its
+rate interval is -0.40% to +0.70%. This isolated small-tail uncertainty does not
+establish a material operational regression under the revised standard. H2
+stream total p95 improves 6.68%; its upper endpoint is +5.05%, only about 0.09 ms
+beyond the contextual guide. Native WS first-event median is +0.965 ms (+1.87%),
+interval -2.24% to +5.87%; its completion tail and goodput improve. These are
+contextual assessments, not independent per-metric equivalence guarantees.
+No product change was made to chase these immaterial or near-guide differences.
+
+Whole-workerd resource observations across the 48 pairs show mean work-window
+CPU -2.85%, lifetime CPU -2.83%, initial CPU +0.87% (about 2.1 ms), and peak process
+RSS +0.52% (about 3.75 MiB). Final process RSS is +0.98%. These are descriptive
+aggregates, including canonical actors, fixture work, warmups, queues and a fixed
+five-second post-work window. They are not per-case/per-request CPU, formal
+resource equivalence, or native/Cloudflare billing estimates; deferred settlement
+may remain. Candidate-owned costs are never classified as environmental noise.
+
+## Actual Cloudflare deployment evidence and remaining gap
+
+Two completed comparisons used the current plan, immutable main/candidate root
+deployments with source-owned configuration, ordinary pools and natural
+reconnections. Both static equal-length path assignments occur within each AWS
+host. No forwarding Worker, route changes during measurement or version override
+was used. Native capacity and scheduled maintenance remained enabled. Independent
+canonical backends and disjoint equal-length credentials retain real product
+caching and settlement. The upstream is synthetic; no provider-inference
+latency claim is made.
+
+The original thirteen-case burst study used eight independent AWS hosts, sixteen
+deployment pairs and eight credential contexts per pair: 83,968 measured and
+74,240 warm responses, plus 416 gates. It included fresh/chunked small requests,
+H1/H2/WS, native paths and ordinary/native unknown-length 1 MiB at c32. It showed
+known-16-KiB total p50/p95 +10.59%/+11.57%, chunked-16-KiB total p95 +15.11%, and
+native-WS first-event p95 +40.08% (+7.66 ms), with wide uncertainty. Its complete
+profile, lifecycle costs and contrary signals remain preserved separately.
+
+The longer-reuse six-case study used eight independent AWS hosts, sixteen
+deployment pairs and four credential contexts per pair: 335,872 measured and
+21,504 warm responses, plus 192 gates. Its complete results are:
+
+| Longer-reuse Cloudflare workload | n/arm | Total p95 main → candidate, ms | Difference [95% envelope] |
 | --- | ---: | ---: | ---: |
-| H2 unary, original 32 pairs | 65,536 | 234.814 → 232.712 | −0.90% [−7.07%, +5.54%] |
-| Known 16 KiB H1, all 56 pairs | 90,112 | 256.088 → 251.066 | −1.96% [−6.04%, +3.36%] |
-| Small H1 unary, original 32 pairs | 65,536 | 232.179 → 231.399 | −0.34% [−5.71%, +4.71%] |
-| Native API H1 stream, all 56 pairs | 90,112 | 254.228 → 250.659 | −1.40% [−6.61%, +5.97%] |
+| Small H1 reused, c1 | 4,096 | 119.265 → 114.776 | -3.76% [-13.22%, +11.37%] |
+| Native API WS, c32 | 32,768 | 344.436 → 349.404 | +1.44% [-6.50%, +17.32%] |
+| H2 unary, c32 | 32,768 | 274.221 → 269.031 | -1.89% [-10.66%, +11.86%] |
+| H2 stream, c32 | 32,768 | 262.738 → 260.667 | -0.79% [-9.57%, +5.12%] |
+| Known 16 KiB H1, c32 | 32,768 | 265.162 → 266.560 | +0.53% [-10.49%, +8.82%] |
+| Chunked 16 KiB H1, c32 | 32,768 | 265.420 → 266.976 | +0.59% [-13.22%, +20.97%] |
 
-| Complete client lifecycle | Requests/arm | Total p95 main → candidate, ms | Relative difference [95% envelope] |
-| --- | ---: | ---: | ---: |
-| H2 unary, original 32 pairs | 131,072 | 654.591 → 650.859 | −0.57% [−5.15%, +4.98%] |
-| Known 16 KiB H1, all 56 pairs | 180,224 | 650.074 → 649.414 | −0.10% [−4.52%, +4.61%] |
-| Small H1 unary, original 32 pairs | 131,072 | 645.014 → 629.710 | −2.37% [−6.89%, +2.21%] |
-| Native API H1 stream, all 56 pairs | 180,224 | 661.467 → 654.082 | −1.12% [−5.57%, +4.32%] |
+Both studies had zero request failures, no sustained-interference stop and
+unchanged inputs. All owned AWS/Cloudflare resources are verified absent within
+the original bounds (25 minutes 35 seconds and 23 minutes 9 seconds respectively).
+Production and root-route fingerprints remained unchanged. Neither study is
+retrospectively rewritten or pooled with a different workload profile.
 
-Lifecycle includes warmups, initialization and drain costs. These are descriptive
-95% envelopes over 9,999-draw hierarchical circular-four-context,
-campaign-stratified, deployment-only and whole-AWS-host sensitivities, not
-simultaneous or fixed-horizon guarantees. Earlier repeated studies and contrary
-results remain visible; this is an engineering reading of the full evidence.
-Known-16-KiB total medians add 1.941 ms (+1.38%) measured and 1.071 ms (+0.69%)
-over the full lifecycle. Their upper endpoints are +3.80% and +3.12%.
-Target measured/lifecycle fixed-batch rates change +0.22%/+0.84% (known) and
-+0.78%/+1.60% (stream), with all lower endpoints above −2.71%. Rates include full
-drains and are distinct from timed-capacity measurements. Current standalone
-H2/small-H1 control total-p95 point changes are −2.26%/−3.46% measured and
-−0.47%/−2.29% lifecycle; no material control regression reproduces.
+The remaining gap is deployed behavior, particularly native WebSocket c32.
+In the longer-reuse study, first-event median is 63.120 → 74.726 ms:
++11.607 ms (+18.39%), envelope -8.15% to +39.43%. First-event p95 improves 4.50%,
+completion p95 is +1.44% (envelope -6.50% to +17.32%), and measured goodput is
+-3.32% (envelope -9.77% to +2.16%). Full-lifecycle goodput is -3.72%
+[-9.12%, +0.84%]. Host directions are heterogeneous. Original burst first-event
+p95 harm did not repeat in the longer-use study, but that difference in conditioning
+does not erase it. Other deployed tails and H2 goodput also retain wider uncertainty
+than their minor point differences.
 
-The earlier startup-tail gap is now sufficiently resolved for the overall client
-profile: both targeted lifecycle total-p95 upper endpoints are below 5%, and
-streaming lifecycle first-byte p95 changes −0.57%, upper +4.61%. The retained
-measured-stream total-p95 upper endpoint is +5.97% despite a −1.40% point change;
-its extension beyond the contextual 5% guide is about 2.47 ms at this baseline.
-It remains uncertainty, rather than an independently demonstrated regression.
-Streaming measured first-byte p95 changes −4.28%, upper +3.23%; the complete
-streaming profile and independently measured direct-AWS stream comparison
-support acceptable behavior. No universal 5% exclusion is claimed.
+Those ranges still permit operationally meaningful harm; this is not merely
+failure to distinguish zero from a 0.5% change. Controlled AWS improvements do
+not prove that a deployment-only cost is absent. There is no demonstrated source
+mechanism to justify a speculative product repair. Repeating the whole matrix
+or optimizing toward noisy favorable subsets is not a substitute for resolving
+this specific deployment-level gap. No additional campaign has been launched
+after the completed controlled comparison.
 
-One diagnostic remains wider: known-16-KiB measured unary first-byte p95 is
-165.786 → 165.411 ms (−0.23%, −0.375 ms), envelope [−7.07%, +7.09%], allowing
-about +11.75 ms at its upper endpoint. All sensitivity families remain reported;
-none is selected for its favorable bound. Separate study point changes are
-+0.88%, −4.89% and −1.33%. A tight independent unary first-byte equivalence claim
-is **unestablished**. For the tested unary JSON operation, the validated complete
-response is the usable result; its end-to-end profile supports qualification.
-First-byte timing remains a diagnostic, not a separately qualified unary TTFB
-SLA. This limitation is retained, not called a numerical pass or hidden by faster
-unrelated workloads. Known-16-KiB lifecycle first-byte upper +5.48% and older mild
-measured control upper endpoints remain contextual, not automatic vetoes.
-Further campaigns solely to sharpen these isolated diagnostic or near-guide
-endpoints would not currently change the material client-performance decision.
-
-The latest study contains 32 failed responses: one main H2 warmup batch returned
-empty HTTP 200 bodies. None occurred on candidate or in the two preselected
-targets. Failed responses retain their complete elapsed costs, lost validated
-goodput and failure-aware standalone latency profile. Saved Cloudflare logs show
-32 continuation-authority errors on the same main version and time window;
-request-level correlation and the underlying cause remain unestablished. The
-campaign is not called zero-error, and neither environmental noise nor candidate
-causation is inferred. All prior smoke and historical failures remain preserved.
-
-The original cross-study reporter requires zero failures in every complete
-corpus and therefore cannot admit the latest study. An explicit retrospective
-analysis amendment combines only the two previously selected cases, requiring
-zero failures within them and retaining all 56 deployments, every response,
-all four standalone case profiles and the complete failure census. Estimators,
-weights and uncertainty formulas are unchanged. The amendment passed independent
-P2 review and complete-corpus loading checks; it is not an originally predeclared
-whole-corpus-zero-error result. The second study's original campaign remains
-failed after initial cleanup checks; separately reviewed read-only administrative
-admission verifies its complete immutable measurement and resource absence within
-the original bounds. No failed status or result is rewritten. A separate earlier
-Cloudflare setup failure supplies no performance estimate.
-
-All 56 owned deployment pairs and 24 AWS leases are verified absent. Campaigns
-ended within 22, 24 and 27 minutes respectively; production and route fingerprints
-stayed unchanged. Full source/configuration/credential/version checks passed.
-Complete original reports, current per-case tables, amendments, review results
-and cleanup receipts are indexed in the local qualification packet.
-
-Direct AWS evidence separately supports no material regression across 19 latency
-and three timed-capacity workloads. Small reused H1 total p50/p95 is
-5.190/11.667 → 5.067/11.300 ms (24,576 requests/arm; p95 relative upper bound
-+2.31%). Known 16 KiB H1 at 32 clients has total p95 178.430 → 175.539 ms
-(49,152/arm; upper +4.36%). Native API streaming total p95 changes −2.71%, upper
-+3.20%. Unknown 1 MiB H1 has total p95 567.437 → 511.163 ms
-(32,768/arm; upper −8.63%). Retained late-Unicode 1 MiB total p95 is
-1979.615 → 1957.393 ms (245,760/arm; upper +0.99%). Original per-criterion
-confidence levels are 97.5%, 98.75% or 99.375%, depending on declaration.
-AWS timed throughput improves 3.43–4.85%. Separate workerd instances and storage
-paths per arm isolate these comparisons from hosted fixture-cache concerns.
-The old absolute-cap Unicode result remains historically inconclusive;
-revised materiality changes no observation or original interval.
-
-Retained hosted evidence separately supports fresh/chunked small H1, unknown
-1 MiB and native WebSocket profiles. Unknown 1 MiB total p95 changes −0.23%
-[−4.61%, +5.07%]; WebSocket total p95 changes −1.92% [−6.16%, +3.15%] and
-full drained goodput −1.83% [−4.42%, +0.79%]. Original first-byte/p50 uncertainty
-and counts remain available. These supporting cases do not offset harm elsewhere.
-Earlier fixed-assignment studies repeated unfavorable completion-tail points
-around +8–12% with wide intervals; later balanced studies did not establish source
-causation. Incompatible assignments, durations, shared credentials, stopped and
-failed studies remain separately preserved rather than pooled or subset-selected.
-Earlier empty-response errors correlated with shared continuation publication
-failures on both pins; their underlying cause and any indirect candidate
-contribution remain unknown. Current candidate zero-errors do not prove absence
-of historical failure risk.
-
-Hosted per-case/per-request and native CPU/memory performance remains
-unestablished. Mixed-workload aggregates include controls, warmups and candidate
-cron and do not cover all later settlement/retirement. They are diagnostic,
-not resource equivalence or a reason to exclude candidate costs. Functional
-resource-limit proof is separate from resource performance.
-
-The latency driver measures the first response body byte for HTTP and the
-`response.created` event for WebSockets; total latency ends at the complete
-response body or completion event. Fresh HTTP includes connection establishment;
-reused pools retain natural reconnections. Public transport names describe
-client framing through Cloudflare ingress normalization. A service-binding
-fixture separately guarantees genuinely unknown-length Worker entry; its
-forwarding overhead is not separately timed.
+Thirty-six read-only aggregate analytics responses returned empty invocation
+arrays. They are missing data, not zero CPU usage. Hosted per-case CPU/RSS
+comparison remains unestablished. First latency means the first HTTP body byte
+or WebSocket response.created event; total means the complete response body or
+completion event. All original initialization, warmup and lifecycle measurements,
+first/total p50/p95, rates, errors and sensitivity intervals remain available.
 
 ## Functional proof and limits
 
-Deployed proof for the measured runtime passed 216 required offers: 180
-successes, 30 expected size refusals, four authentication refusals and two tenant
-capacity refusals. It covered create/compact aliases, exact transformed bytes
-and digests, once-only dispatch/accounting, known bodies through 64 MiB,
-genuine unknown-length ingress, and a held large request alongside 32 ordinary
-1 MiB clients. All eight native slots retired body leases, spool and background
-resources; observed peak native RSS was 499,507,200 bytes. A separate 16-offer
-proof passed unknown-length 64 MiB maximum/overflow for create/compact on both
-managed and native provider routes. Eight separately declared ingress diagnostics,
-including four fixture-path 522s, remain recorded separately.
+Current-pin isolated Cloudflare proof passed all 232 required offers. It covered
+create/compact aliases, transformed byte counts and digests, canonical dispatch /
+accounting, known and genuinely unknown bodies through 64 MiB, 64 MiB+1 refusal,
+authentication and tenant-capacity refusal, cancellation and resource retirement.
+Eight ingress diagnostics remain separate. The broad attempt's original
+production-fingerprint guard failure is preserved and attributed to an independent
+scheduled production deployment; all of its owned resources are independently
+verified absent. The separate sixteen-offer unknown-maximum proof passed its
+original guards and cleanup. No production change was made by this work.
 
-Proof used isolated current-plan Cloudflare deployments and Crabbox AWS
-c7i.2xlarge leases `cbx_9c74d59e97b7` and `cbx_1fdc52b41c3f`. All required
-statuses, byte/digest, dispatch/accounting and retirement checks passed;
-resources were removed and read-only production fingerprints stayed unchanged.
-Supporting Node 24 validation passed 11,455 Worker, 308 admin, 1,310 script and
-130 focused tests, with 67 script skips and one focused skip. Full runtime
-Codex review was clean through P2. Source and proof hashes were reverified for
-reuse; only documentation changed after the runtime pin.
+Proof used Crabbox AWS c7i.2xlarge leases `cbx_27b017e2d49c` and
+`cbx_f59f95f6edb9`. Node 24.22.1 full validation on AWS lease
+`cbx_086087e40151` passed 11,772 Worker, 312 admin and 1,377 script tests,
+with 74 script skips; focused validation passed 332 tests with one skip and
+21 grant-credit tests passed separately. Precommit and committed runtime Codex
+reviews were clean through P2. Source/configuration receipts bind the proofs to
+the current pair. All validation and functional leases are verified absent.
 
-These synthetic-upstream proofs establish router behavior, not real provider
-latency or untested placement performance. Main rejects bodies above 32,000,000
-bytes, so new larger-body capabilities have no successful-main latency baseline.
-The 64 MiB successes disable request retention; retention-enabled performance
-comparisons extend through 1 MiB. Default native limits are eight slots and two
-simultaneous requests per tenant, not throughput for dozens of large clients.
+Observed peak native RSS ranged from 331,603,968 to 485,822,464 bytes across
+eight slots in the functional fixtures. Every slot retired body/spool/background
+resources. These are candidate-only observations, not CPU/RSS or billing
+equivalence. Logical retirement does not promise RSS shrinkage. Hosted per-case
+resource equivalence and sustainable large-body capacity remain unestablished.
 
-This qualification made no production deployment, resource, configuration or
-traffic changes. No plan upgrade, soak, PR publication or merge occurred.
+Main rejects bodies above 32,000,000 bytes, so larger-body successes have no
+successful-main latency baseline. Maximum-body proofs disable request retention;
+64 MiB retained-request support is not established. Native slots and maintenance
+add real operational costs. Default capacity is eight slots and two simultaneous
+requests per tenant, not throughput for dozens of large clients.
+
+No production deployment, resource, configuration or traffic was changed by
+this work. No plan upgrade, soak, PR publication, push or merge occurred.
