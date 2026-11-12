@@ -41,6 +41,17 @@ test('public requests cannot inject runtime credentials, grants, trace or force-
  const f=fixture();const r=await largeHttp(request('32000001',{'x-canary-openai-key':'untrusted','x-canary-trace-id':'prf_'+'b'.repeat(32),'x-canary-pool-grant':'untrusted','x-container-token':'untrusted','x-large-http-control':'untrusted'}),f.env);assert.equal(r.status,200);assert.deepEqual(f.calls.map(x=>x.kind),['admit','forward']);const h=f.calls[1].headers;assert.equal(h.get('x-canary-openai-key'),null);assert.notEqual(h.get('x-canary-trace-id'),'prf_'+'b'.repeat(32));assert.equal(h.get('x-container-token'),token);assert.equal(h.get('x-large-http-control'),null);
  assert.equal(await largeHttp(request('1024',{'x-canary-force-container':'1'}),f.env),undefined);
 });
+test('ingress-only release gate restores the Worker envelope without touching native bindings or bodies',async()=>{
+ for(const length of [null,'1024','32000001','67108864']){
+  const env={LARGE_HTTP_ENABLED:'1',LARGE_HTTP_INGRESS_ENABLED:'0'};
+  for(const key of ['LARGE_HTTP_POOL','LARGE_HTTP_SLOTS','LARGE_HTTP_TOKEN'])Object.defineProperty(env,key,{get(){assert.fail('closed ingress accessed '+key);}});
+  let pulls=0;const body=new ReadableStream({pull(){pulls++;}},{highWaterMark:0});
+  const r=new Request('https://router.example/v1/responses',{method:'POST',headers:length?{'content-length':length}:{},body,duplex:'half'});
+  assert.equal(largeHttp(r,env,{reserve(){assert.fail('closed ingress probed body');}}),undefined);
+  assert.equal(r.bodyUsed,false);assert.equal(pulls,0);
+ }
+ const f=fixture();f.env.LARGE_HTTP_INGRESS_ENABLED='1';assert.equal((await largeHttp(request(),f.env)).status,200);
+});
 for(const status of [429,503,409])test('admission refusal never forwards: '+status,async()=>{const f=fixture(status),r=await largeHttp(request(),f.env);assert.equal(r.status,status);assert.equal(f.calls.length,1);assert.equal(r.headers.get('x-should-retry'),status===409?'false':'true');});
 test('unknown admission and canceled request never forward or retry',async()=>{
  const f=fixture();f.env.LARGE_HTTP_POOL.getByName=()=>({fetch(){throw Error('ack lost');}});const r=await largeHttp(request(),f.env);assert.equal(r.status,424);assert.equal(r.headers.get('x-should-retry'),'false');assert.equal(f.calls.length,0);

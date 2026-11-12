@@ -22,3 +22,10 @@ test('provider configuration changes retire the native epoch without persisting 
  }
  assert.equal((await runtimeConfig({...env,ANTHROPIC_API_KEY:'fixture-unrelated'})).fingerprint,first.fingerprint);
 });
+test('ingress-only release versions have identical native settings and fingerprints',async()=>{
+ const env={LARGE_HTTP_ORIGIN:'https://router.example',LARGE_HTTP_TOKEN:'a'.repeat(64),LARGE_HTTP_RUNTIME_SHA:'b'.repeat(64),LARGE_HTTP_RUNTIME_BYTES:'100'};
+ const normal=await runtimeConfig(env);
+ for(const flag of ['0','1'])assert.deepEqual(await runtimeConfig({...env,LARGE_HTTP_INGRESS_ENABLED:flag}),normal);
+ assert.equal(normal.enabled,true);assert.equal(runtimeFields.includes('LARGE_HTTP_INGRESS_ENABLED'),false);
+ assert.equal((await runtimeConfig({...env,LARGE_HTTP_ENABLED:'0'})).enabled,false);
+});

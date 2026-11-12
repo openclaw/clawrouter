@@ -10,6 +10,8 @@ import {lifecycleCall} from './lifecycle-client.ts';
 
 export interface LargeHttpEnv {
  LARGE_HTTP_ENABLED?: string;
+ /** Deployment/recovery gate only; never changes shared native lifecycle. */
+ LARGE_HTTP_INGRESS_ENABLED?: string;
  LARGE_HTTP_CAPACITY?: string;
  LARGE_HTTP_TENANT_LIMIT?: string;
  LARGE_HTTP_SLOT_STARTS_PER_HOUR?: string;
@@ -28,7 +30,7 @@ function refusal(code:string,status:number,retry=true):Response {
 }
 /** No reads, admission, body buffering or new starts for ordinary requests. */
 export function largeHttp(request:Request,env:Env,intake?:ProbeIntake):Response|Promise<Response|Request>|undefined{
- if(mediaJsonBytes!==32_000_000||env.LARGE_HTTP_ENABLED==='0'||request.method!=='POST'||!largeCreatePath(new URL(request.url).pathname))return;
+ if(mediaJsonBytes!==32_000_000||env.LARGE_HTTP_ENABLED==='0'||env.LARGE_HTTP_INGRESS_ENABLED==='0'||request.method!=='POST'||!largeCreatePath(new URL(request.url).pathname))return;
  const known=request.headers.has('content-length'),raw=request.headers.get('content-length');
  if(known&&!/^(?:0|[1-9]\d*)$/.test(raw!))return refusal('invalid_content_length',400,false);
  const length=known?Number(raw):null,testing=env.LARGE_HTTP_TESTING==='1';

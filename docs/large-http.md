@@ -50,8 +50,12 @@ incarnation. Replacement is serial, normally beginning at 48 admissions while
 spare capacity is available. These limits can cause pre-dispatch 429/503
 responses. They do not guarantee throughput for dozens of large-body clients.
 There is no waiting-body queue or inference replay. Uncertain delivery returns
-nonretryable 424. Disabling `LARGE_HTTP_ENABLED` restores the Worker envelope;
-operator rollback must first preserve/drain outstanding owners.
+nonretryable 424. `LARGE_HTTP_INGRESS_ENABLED=0` restores the Worker envelope
+while keeping native lifecycle, private callbacks and warm capacity unchanged.
+It defaults to `1` and is a release/recovery control, not a customer opt-in.
+Disabling `LARGE_HTTP_ENABLED` also drains native capacity. Do not mix lifecycle
+enabled/disabled versions during a traffic split; preserve outstanding owners.
+See [staged release preparation](deploy-cloudflare.md#large-http-staged-release).
 
 ## Qualification against pinned main
 

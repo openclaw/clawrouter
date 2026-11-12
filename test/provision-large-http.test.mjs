@@ -13,3 +13,9 @@ test('inspection failure never creates or rotates a secret',async()=>{
 test('ambiguous creation is not retried',async()=>{
  let writes=0;await assert.rejects(provisionLargeHttp({env,fetchImpl:async(_url,init)=>{if(init.method==='PUT'){writes++;return Response.json({success:false},{status:500});}return Response.json({success:true,result:[]});}}),/unknown_do_not_retry/);assert.equal(writes,1);
 });
+test('creation ACK without a visible secret fails closed and never repeats the write',async()=>{
+ let writes=0;await assert.rejects(provisionLargeHttp({env,fetchImpl:async(_url,init)=>{assert.equal(init.redirect,'error');if(init.method==='PUT'){writes++;return Response.json({success:true});}return Response.json({success:true,result:[]});}}),/unknown_do_not_retry/);assert.equal(writes,1);
+});
+test('lost secret creation response is sanitized and not retried',async()=>{
+ let writes=0;await assert.rejects(provisionLargeHttp({env,fetchImpl:async(_url,init)=>{if(init.method==='PUT'){writes++;throw Error('private transport detail');}return Response.json({success:true,result:[]});}}),e=>e.message==='large_http_secret_creation_unknown_do_not_retry');assert.equal(writes,1);
+});

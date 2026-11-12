@@ -10,6 +10,61 @@ For the isolated non-production profile used by AWS FakeCo clients, follow
 [FakeCo staging](fakeco.md). Its locked resource names and dedicated workflow
 must be used instead of overriding the production deployment ad hoc.
 
+## Large HTTP staged release
+
+`config/deployment-hold.json` currently holds this source out of the production
+train. Scheduled selection exits without deploying; manual selection and
+`pnpm cf:deploy` refuse. The hold is read from the selected commit, so an
+environment variable or a different control checkout cannot release it. Remove
+the hold only in a reviewed follow-up after separately authorized infrastructure
+preparation and a compatible recovery version exist. This does not disable the
+workflow or change an already deployed Worker.
+
+The new `v6-large-http` Durable Object classes and cron configuration require
+an additive deployment before any percentage rollout. Do not bypass the train's
+non-versioned configuration or secret-lineage checks. Ordinary rollback across
+class creation is unavailable; recovery must retain the new classes, private
+native assets, control token, callbacks and outstanding accounting owners.
+
+After building and rendering the exact reviewed release, prepare three local
+configurations sharing the same immutable Worker, native and dashboard assets:
+
+```sh
+pnpm cf:large-http:release prepare .wrangler.generated.toml .wrangler/release
+pnpm cf:large-http:release verify .wrangler/release/manifest.json
+```
+
+Packaging does not deploy. It removes build hooks, hashes every asset and config,
+and refuses artifact/configuration drift. Bootstrap stops both large ingress and
+native starts. Compatible blue enables native lifecycle while keeping large
+ingress closed. Green opens ingress. Both controls default to enabled outside
+these explicit release artifacts. Blue and green have identical native settings
+and fingerprints, including the content-addressed private runtime.
+
+The reviewed execution sequence is bootstrap, idempotent control-secret
+provisioning, compatible blue, warm/readiness proof, then upload green and advance
+through the approved traffic stages. `cf:large-http:provision` only creates a
+missing secret, verifies its presence and never rotates an existing value or
+retries an ambiguous write. Secret creation is its own version/lineage boundary;
+attest the resulting version and establish blue afterward. Do not put it inside
+the train's preserved-secret upload sequence.
+
+Before production authorization, rehearse that sequence and recovery using
+separate Cloudflare resources and synthetic credentials/upstream. Verify
+mixed-version private callbacks, normal connection reuse/reconnects, bounded
+maximum/overflow behavior, once-only accounting, admission stop and exact
+retirement/absence. Keep native lifecycle enabled during a traffic split.
+Closing ingress preserves capacity; `/v1/admin/large-http` with
+`{"accepting":false}` stops new admission and drains it. Retain uncertain
+nonretryable deliveries and debt for reconciliation; never replay inference.
+Recovery selects the compatible post-migration blue, not pre-migration main.
+
+These artifacts do not supply production authorization or an executable launch
+manifest. Record exact source/config/version identities, live preflight,
+observations, stop conditions, cost decisions and recovery receipts separately.
+Existing performance results still apply only to their measured inputs; this
+release-control change requires its own behavior proof and affected validation.
+
 ## Required Bindings
 
 - `POLICY_KV`: one-time migration seeds for access policies, issued credential

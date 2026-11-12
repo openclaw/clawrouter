@@ -21,6 +21,7 @@ const omitRoutes = process.env.CLAWROUTER_OMIT_ROUTES === "1";
 const workerVars = {
   LARGE_HTTP_ORIGIN: deployment.baseUrl,
   LARGE_HTTP_ENABLED: process.env.LARGE_HTTP_ENABLED ?? "1",
+  LARGE_HTTP_INGRESS_ENABLED: process.env.LARGE_HTTP_INGRESS_ENABLED ?? "1",
   LARGE_HTTP_CAPACITY: process.env.LARGE_HTTP_CAPACITY ?? "8",
   LARGE_HTTP_TENANT_LIMIT: process.env.LARGE_HTTP_TENANT_LIMIT ?? String(Math.min(2, Number(process.env.LARGE_HTTP_CAPACITY ?? 8))),
   LARGE_HTTP_SLOT_STARTS_PER_HOUR: process.env.LARGE_HTTP_SLOT_STARTS_PER_HOUR ?? "24",
