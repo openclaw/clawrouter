@@ -41,6 +41,7 @@ endpoints:
 models:
   entries:
     - id: zai/glm-5.3
+      displayName: "GLM-5.3"
       upstream: glm-5.3
       capabilities: [llm.chat]
       nativeCapabilities:
@@ -51,6 +52,7 @@ models:
             checkedAt: "2026-11-04"
             input: [text]
     - id: zai/glm-5.3-flash
+      displayName: "GLM-5.3 Flash"
       upstream: glm-5.3-flash
       capabilities: [llm.chat]
       nativeCapabilities:
@@ -61,6 +63,7 @@ models:
             checkedAt: "2026-11-04"
             input: [text, image]
     - id: zai/glm-5.2
+      displayName: "GLM-5.2"
       upstream: glm-5.2
       capabilities: [llm.chat]
       nativeCapabilities:
@@ -71,6 +74,7 @@ models:
             checkedAt: "2026-11-04"
             input: [text]
     - id: zai/glm-5-turbo
+      displayName: "GLM-5 Turbo"
       upstream: glm-5-turbo
       capabilities: [llm.chat]
       nativeCapabilities:
@@ -81,6 +85,7 @@ models:
             checkedAt: "2026-11-04"
             input: [text]
     - id: zai/glm-5v-turbo
+      displayName: "GLM-5v Turbo"
       upstream: glm-5v-turbo
       capabilities: [llm.chat]
       nativeCapabilities:
@@ -92,6 +97,7 @@ models:
             input: [text, image]
     # Global standard API still documents this identity; no retirement or alias inferred.
     - id: zai/glm-5.1
+      displayName: "GLM-5.1"
       upstream: glm-5.1
       capabilities: [llm.chat]
       nativeCapabilities:

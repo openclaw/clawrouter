@@ -60,6 +60,7 @@ endpoints:
 models:
   entries:
     - id: cohere/command-a-plus-05-2026
+      displayName: "Command A+ (05-2026)"
       upstream: command-a-plus-05-2026
       capabilities: [llm.chat]
       supportedReasoningEfforts: [none, high]
@@ -89,6 +90,7 @@ models:
             maxOutputTokens: 64000
       pricingRef: cohere-command-a-plus-05-2026
     - id: cohere/embed-v4.0
+      displayName: "Embed v4.0"
       upstream: embed-v4.0
       capabilities: [llm.embeddings]
       pricingRef: cohere-embed-v4-0

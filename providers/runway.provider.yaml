@@ -54,12 +54,15 @@ endpoints:
 models:
   entries:
     - id: runway/gen4.5
+      displayName: "Gen-4.5"
       upstream: gen4.5
       capabilities: [media.predict]
     - id: runway/veo3.1
+      displayName: "Veo 3.1"
       upstream: veo3.1
       capabilities: [media.predict]
     - id: runway/veo3.1_fast
+      displayName: "Veo 3.1 Fast"
       upstream: veo3.1_fast
       capabilities: [media.predict]
 billing:

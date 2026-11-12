@@ -77,6 +77,7 @@ endpoints:
 models:
   entries:
     - id: bedrock/amazon.nova-lite-v1:0
+      displayName: "Amazon Nova Lite v1"
       upstream: amazon.nova-lite-v1:0
       capabilities: [llm.invoke, llm.stream]
       pricingRef: aws-bedrock-model

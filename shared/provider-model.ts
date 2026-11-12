@@ -22,4 +22,4 @@ export interface ImageTokenPricing {
 export type ModelPricing = TokenPricing | CharacterPricing | ImageTokenPricing;
 
 /** Compiled provider model facts, independent of their client API projection. */
-export interface ProviderModelDefinition { id: string; upstream: string; codexModel?: string; availability?: ModelAvailability; capabilities: string[]; supportedReasoningEfforts?: ProviderReasoningEffort[]; requestParameters?: Record<string, ModelRequestParameters>; nativeCapabilities?: NativeModelCapabilities; endpointPricing?: Record<string, { pricing_ref: string; pricing: ModelPricing }>; pricing_ref: string | null; pricing: ModelPricing | null }
+export interface ProviderModelDefinition { id: string; upstream: string; displayName?: string; codexModel?: string; availability?: ModelAvailability; capabilities: string[]; supportedReasoningEfforts?: ProviderReasoningEffort[]; requestParameters?: Record<string, ModelRequestParameters>; nativeCapabilities?: NativeModelCapabilities; endpointPricing?: Record<string, { pricing_ref: string; pricing: ModelPricing }>; pricing_ref: string | null; pricing: ModelPricing | null }

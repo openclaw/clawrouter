@@ -28,6 +28,27 @@ test("imported compiler matches CLI stdout and output-file snapshots", t => {
   assert.deepEqual(JSON.parse(readFileSync(output, "utf8")), expected);
 });
 
+test("model display names round-trip without changing model identity or execution metadata", () => {
+  const manifest = structuredClone(manifests.find(provider => provider.id === "anthropic"));
+  for (const model of manifest.models.entries) delete model.displayName;
+  const baseline = compileProviderSnapshot([manifest]);
+  const entry = manifest.models.entries.find(model => model.id === "anthropic/claude-opus-5-5");
+  entry.displayName = "Claude Opus 5.5";
+  const named = compileProviderSnapshot([manifest]);
+  assert.equal(named.providers[0].models.find(model => model.id === entry.id).displayName, entry.displayName);
+  assert.equal(named.model_index[entry.id].displayName, entry.displayName);
+  delete named.providers[0].models.find(model => model.id === entry.id).displayName;
+  delete named.model_index[entry.id].displayName;
+  assert.deepEqual(named, baseline, "labels must not affect routing, prices, or other metadata");
+  assert.equal("displayName" in baseline.model_index[entry.id], false, "unnamed models remain supported");
+});
+
+for (const displayName of ["", " \t\n", null, 123]) test(`compiler rejects invalid model display name ${JSON.stringify(displayName)}`, () => {
+  const manifest = structuredClone(manifests.find(provider => provider.id === "anthropic"));
+  manifest.models.entries[0].displayName = displayName;
+  assert.throws(() => compileProviderSnapshot([manifest]), /invalid manifest/);
+});
+
 test("CLI still rejects missing manifests and invalid inputs without output", () => {
   const missing = spawnSync(process.execPath, ["scripts/compile-providers.mjs"], { encoding: "utf8" });
   assert.notEqual(missing.status, 0);

@@ -263,6 +263,7 @@ endpoints:
 models:
   entries:
     - id: anthropic/claude-sonnet-5-5
+      displayName: "Claude Sonnet 5.5"
       upstream: claude-sonnet-5-5
       capabilities: [llm.messages, llm.count_tokens]
       nativeCapabilities:
@@ -303,6 +304,7 @@ models:
         maxInputTokens: 1000000
         defaultMaxOutputTokens: 128000
     - id: anthropic/claude-haiku-5-5
+      displayName: "Claude Haiku 5.5"
       upstream: claude-haiku-5-5
       capabilities: [llm.messages, llm.count_tokens]
       nativeCapabilities:
@@ -351,6 +353,7 @@ models:
           cacheWrite1hInputMicrosPerMillion: 1000000
           outputMicrosPerMillion: 2500000
     - id: anthropic/claude-opus-5-5
+      displayName: "Claude Opus 5.5"
       upstream: claude-opus-5-5
       capabilities: [llm.messages, llm.count_tokens]
       pricingRef: anthropic-claude-opus-5-5-standard-2026-10-11
@@ -365,6 +368,7 @@ models:
         maxInputTokens: 1000000
         defaultMaxOutputTokens: 128000
     - id: anthropic/claude-opus-5
+      displayName: "Claude Opus 5"
       upstream: claude-opus-5
       capabilities: [llm.messages, llm.count_tokens]
       pricingRef: anthropic-claude-opus-5-standard-2026-08-27
@@ -379,6 +383,7 @@ models:
         maxInputTokens: 1000000
         defaultMaxOutputTokens: 128000
     - id: anthropic/claude-sonnet-5
+      displayName: "Claude Sonnet 5"
       upstream: claude-sonnet-5
       capabilities: [llm.messages, llm.count_tokens]
       pricingRef: anthropic-claude-sonnet-5-standard-2026-08-27
@@ -393,6 +398,7 @@ models:
         maxInputTokens: 1000000
         defaultMaxOutputTokens: 128000
     - id: anthropic/claude-fable-5-2
+      displayName: "Claude Fable 5.2"
       upstream: claude-fable-5-2
       capabilities: [llm.messages, llm.count_tokens]
       supportedReasoningEfforts: [low, medium, high, xhigh, max]
@@ -432,6 +438,7 @@ models:
         maxInputTokens: 1000000
         defaultMaxOutputTokens: 128000
     - id: anthropic/claude-fable-5-1
+      displayName: "Claude Fable 5.1"
       upstream: claude-fable-5-1
       capabilities: [llm.messages, llm.count_tokens]
       pricingRef: anthropic-claude-fable-5-1-standard-2026-09-01
@@ -446,6 +453,7 @@ models:
         maxInputTokens: 1000000
         defaultMaxOutputTokens: 128000
     - id: anthropic/claude-fable-5
+      displayName: "Claude Fable 5"
       upstream: claude-fable-5
       capabilities: [llm.messages, llm.count_tokens]
       pricingRef: anthropic-claude-fable-5-standard-2026-08-28
@@ -460,6 +468,7 @@ models:
         maxInputTokens: 1000000
         defaultMaxOutputTokens: 128000
     - id: anthropic/claude-opus-4-8
+      displayName: "Claude Opus 4.8"
       upstream: claude-opus-4-8
       capabilities: [llm.messages, llm.count_tokens]
       pricingRef: anthropic-claude-opus-4-8-standard-2026-06-22
@@ -474,6 +483,7 @@ models:
         maxInputTokens: 1000000
         defaultMaxOutputTokens: 128000
     - id: anthropic/claude-sonnet-4-6
+      displayName: "Claude Sonnet 4.6"
       upstream: claude-sonnet-4-6
       capabilities: [llm.messages, llm.count_tokens]
       pricingRef: anthropic-claude-sonnet-4-6-standard-2026-06-22
@@ -488,6 +498,7 @@ models:
         maxInputTokens: 1000000
         defaultMaxOutputTokens: 64000
     - id: anthropic/claude-haiku-4-5
+      displayName: "Claude Haiku 4.5"
       upstream: claude-haiku-4-5
       capabilities: [llm.messages, llm.count_tokens]
       pricingRef: anthropic-claude-haiku-4-5-standard-2026-06-22
