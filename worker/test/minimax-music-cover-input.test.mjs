@@ -147,6 +147,7 @@ test("oversized returned backing, malformed UTF8 and successful completion keep 
   const utf = begin(malformed); await assert.rejects(utf.result); await utf.retired;
   t.mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1000 });
   const op = begin(body(document()), { deadlineAt: Date.now() + 30 }); await op.result;
+  assert.equal(bodyBudgetCharged(), 96 * MiB);
   t.mock.timers.tick(30); await op.retired;
   assert.equal(bodyBudgetCharged(), 0); assert.equal(op.snapshot().phase, "retired");
   assert.equal(musicCoverInputLimits.hashPhase + musicCoverInputLimits.slack, 96 * MiB);

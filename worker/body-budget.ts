@@ -3,7 +3,8 @@
 // bytes (parsed value plus one transport copy) until their response completes;
 // past the budget a request is refused before it can take the isolate down.
 export const bodyLeaseMinimum = 1024 * 1024;
-export const bodyBudgetBytes = 96 * 1024 * 1024;
+export {bodyBudgetBytes} from './large-http/runtime-limits.ts';
+import {bodyBudgetBytes} from './large-http/runtime-limits.ts';
 let charged = 0;
 
 // Exact logical charges share the body arena. Unlike grow(), this API has no

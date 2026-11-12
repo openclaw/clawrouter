@@ -11,6 +11,7 @@ import { mergeGrantRuntimeState } from '../grant-runtime.ts';
 import { providerById } from '../providers.ts';
 import { grantQuotaExhausted } from '../grant-quota.ts';
 import { bodyBudgetCharged } from '../body-budget.ts';
+import { bindSingleDispatchTransport } from '../upstream-transport.ts';
 const { default: worker } = await import('../index.ts');
 
 const creditBody = JSON.stringify({ type: 'error', error: { type: 'invalid_request_error', message: 'Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.' } });
@@ -57,6 +58,17 @@ for (const stream of [false, true]) test(`credit rejection reselects before deli
   await f.send(); assert.equal(f.calls.at(-1), alternate, 'authority retains exclusion across cold admission');
   f.advance(300_000); f.reject(() => false);
   await f.send(); assert.equal(f.calls.at(-1), original, 'bounded exclusion expires and restores deterministic stickiness');
+});
+
+test('single-dispatch transport preserves an exhausted-credit response without replaying its body', async t => {
+  const f = await fixture(t);
+  bindSingleDispatchTransport(f.env, () => true);
+  f.reject(() => true);
+  const result = await f.send();
+  assert.equal(result.status, 400);
+  assert.equal(result.body, creditBody);
+  assert.equal(result.failover, null);
+  assert.equal(f.calls.length, 1, 'the original rejection must not be discarded for an unsendable alternate');
 });
 
 test('all depleted grants stop dispatching and return a timed pool error', async t => {

@@ -12,6 +12,19 @@ const { fundRealtimeUnit } = await import("../realtime-accounting.ts");
 const { accessBytesResponse } = await import("./access-byte-fixture.mjs");
 
 const denied = error => error?.status === 503 && error.code === "accounting_preflight_unavailable" && isAccountingAdmissionFailure(error);
+
+test("accounting string admission matches JSON bytes and text across ASCII boundaries and escapes", () => {
+  const plain = Array.from({ length: 95 }, (_, i) => String.fromCharCode(i + 32)).filter(c => c !== '"' && c !== "\\").join("");
+  for (const text of ["", plain, "\x7f", "\x80", "é", "🦊", "\uD800", "\uDC00", "\uD800x\uDC00", '"\\\b\t\n\f\r\0', ...Array.from({length: 256}, (_, i) => String.fromCharCode(i))]) {
+    for (const value of [text, { [text]: text }, [text, true, 0, null]]) {
+      const wire = JSON.stringify(value);
+      assert.deepEqual(admitAccountingJson(value, "archive"), { bytes: Buffer.byteLength(wire), text: wire.length });
+    }
+  }
+  // Cumulative ASCII byte/string admission must retain exact-limit refusals.
+  assert.doesNotThrow(() => admitAccountingJson(Array(4).fill("x".repeat(2048)), "intent"));
+  assert.throws(() => admitAccountingJson([...Array(4).fill("x".repeat(2048)), "x"], "intent"), denied);
+});
 const auth = () => ({ policyId: "fixture", credentialId: "key", principalId: "member", authType: "proxy_key",
   policy: { tenantId: "tenant", monthlyBudgetMicros: 1000, dailyBudgetMicros: 1000, weeklyBudgetMicros: 1000, retainRequestContent: true } });
 const connection = { providerId: "fixture", monthlyBudgetMicros: 1000 };
