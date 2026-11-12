@@ -39,8 +39,8 @@ export async function prepareLargeHttpRelease({ configPath, directory }) {
   await mkdir(directory, { mode: 0o700 });
   const sha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 30000 }).trim();
   const manifest = { schema: 1, sha, account: config.account_id, worker: config.name, origin: origin.origin, files, stages: {},
-    order: ['bootstrap', 'provision-secret-once', 'blue', 'green-upload', '0', '10', '50', '100'],
-    recovery: 'post-migration blue; preserve native assets, token and owners; stop admission then drain',
+    order: ['bootstrap', 'provision-secret-once', 'blue', 'green-upload', 'approved-activation'],
+    recovery: 'post-migration compatible version; preserve the admitted request envelope, native assets, token and owners; never replay uncertain inference',
     limits: { automaticRetries: false, maximumMinutes: 30, cleanupReserveMinutes: 10 } };
   for (const [stage, flags] of Object.entries(releaseStages)) {
     const vars = { ...config.vars, LARGE_HTTP_ENABLED: flags.enabled, LARGE_HTTP_INGRESS_ENABLED: flags.ingress };

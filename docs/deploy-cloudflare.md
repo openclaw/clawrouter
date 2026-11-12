@@ -43,7 +43,9 @@ and fingerprints, including the content-addressed private runtime.
 
 The reviewed execution sequence is bootstrap, idempotent control-secret
 provisioning, compatible blue, warm/readiness proof, then upload green and advance
-through the approved traffic stages. `cf:large-http:provision` only creates a
+through the approved activation. A single cutover after readiness is sufficient
+when the session-continuity rehearsal supports it; gradual percentages are not a
+requirement. `cf:large-http:provision` only creates a
 missing secret, verifies its presence and never rotates an existing value or
 retries an ambiguous write. Secret creation is its own version/lineage boundary;
 attest the resulting version and establish blue afterward. Do not put it inside
@@ -57,7 +59,21 @@ retirement/absence. Keep native lifecycle enabled during a traffic split.
 Closing ingress preserves capacity; `/v1/admin/large-http` with
 `{"accepting":false}` stops new admission and drains it. Retain uncertain
 nonretryable deliveries and debt for reconciliation; never replay inference.
-Recovery selects the compatible post-migration blue, not pre-migration main.
+Recovery selects a compatible post-migration version, not pre-migration main.
+Once large traffic has been admitted, that version must preserve the supported
+large-body envelope. An ingress-closed staging blue cannot restore those large
+conversations; it is a temporary fail-closed control until compatible service
+returns.
+
+The deployment requirement is session continuity, not uninterrupted execution.
+An active request, stream or Codex turn may fail briefly. An isolated rehearsal
+must deploy during a real Codex turn, then complete a subsequent turn in the same
+saved session using prior conversation context. Record the session ID, active
+request/turn and deployment timestamps, recovery duration and any scripted or
+human intervention. Reconnection alone is insufficient. Do not add socket handoff
+or live request migration solely to prevent a temporary failure. Never blindly
+replay uncertain upstream inference; preserve its continuation/accounting owner
+and use an assessed resume or a distinct follow-up question.
 
 These artifacts do not supply production authorization or an executable launch
 manifest. Record exact source/config/version identities, live preflight,
