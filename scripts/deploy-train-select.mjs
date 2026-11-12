@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { appendFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createApi } from './deploy-train-api.mjs';
+import { deploymentHold } from './deploy-release-hold.mjs';
 import { fullSha, greenPushRun, LEGACY_DEPLOYMENT, stableVersion, verifyDispatch, versionSha, deploymentState } from './deploy-train-policy.mjs';
 
 export function git(...args) { return execFileSync('git', args, { encoding: 'utf8', timeout: 30_000 }).trim(); }
@@ -55,6 +56,14 @@ export function candidateCommits(deployedSha, head, runGit = git) {
 }
 export async function main(env = process.env) {
   verifyDispatch({ event: env.GITHUB_EVENT_NAME, expected: env.EXPECTED_SHA, sha: env.GITHUB_SHA, ref: env.GITHUB_REF });
+  const hold = deploymentHold(env.GITHUB_SHA);
+  if (hold) {
+    if (env.GITHUB_EVENT_NAME !== 'schedule') throw new Error('Selected source is held for a separately authorized staged release');
+    writeFileSync(env.TRAIN_PLAN_PATH, JSON.stringify({ noop: true, reason: hold }, null, 2));
+    appendFileSync(env.GITHUB_OUTPUT, 'noop=true\nsha=\nblue=\ndeployed_sha=\n');
+    appendFileSync(env.GITHUB_STEP_SUMMARY, '## Production train\nSuccessful no-op: source deployment hold.\n');
+    return;
+  }
   const api = createApi({ env });
   const deployment = await api.latest();
   const source = await deployedSource(api, deployment);

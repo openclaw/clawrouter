@@ -57,6 +57,9 @@ import { assertInputTokensRequest } from "./responses-input-tokens.ts";
 import { softBudget, prepareSoftBudget, startSoftBudget, softBudgetPolicy, softBudgetPreflight } from "./soft-budget.ts";
 import { prepareUpstreamRequest } from "./proxy-upstream-request.ts";
 import { BodyLease, bodyLeaseMinimum } from "./body-budget.ts";
+import { largeHttp } from "./large-http/admission.ts";
+import { releaseProbe } from "./large-http/probe.ts";
+import { transferRequestContext } from "./correlation.ts";
 import { WanManagedOperation, readWanJson, wanRequestBytes, preflightWanJson, assertWanHeaders } from "./managed-media-json.ts";
 import { hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
 import { inheritLocalError } from "./native-errors.ts";
@@ -93,6 +96,7 @@ import { isStandaloneSearch, SearchSession } from "./standalone-search.ts";
 import { HttpContinuation } from "./http-continuation.ts";
 import { HttpBackground } from "./http-background.ts";
 import { HttpOperation } from "./http-operation.ts";
+import { permitsGrantFailover, transportDispatchStarted } from "./upstream-transport.ts";
 import { backgroundResponse, requireEmptyResponseControlBody, responsesControls, responsesFileControls } from "./responses-lifecycle.ts";
 import { proxyResponseControl } from "./response-controls.ts";
 import { responseRouteDigest } from "./responses-control-dispatch.ts";
@@ -138,12 +142,34 @@ class JsonAdmission implements JsonIntake {
   private intakeOperation?: HttpOperation;
   private intakeStartedAt = 0;
   private intakeBytes = 0;
-  private readonly request: Request;
+  private request: Request;
+  private classifiedRequest?: Request;
+  private completeClassification?: () => void;
+  private retainedPrefix?: { request: Request; prefix: import('./utils.ts').JsonReadPrefix };
   private readonly env: Env;
   private readonly mode: AuthMode;
   private readonly providerId: string | undefined;
   constructor(request: Request, env: Env, mode: AuthMode, providerId?: string) {
     this.request = request; this.env = env; this.mode = mode; this.providerId = providerId;
+  }
+  // Classify only at the canonical JSON admission boundary. Known supported
+  // bodies return synchronously; unrelated routes and WebSockets add no layer.
+  classify(): Response | Promise<Response | Request> | undefined {
+    const pending = largeHttp(this.request, this.env, this);
+    if (pending === undefined) return;
+    return Promise.resolve(pending).then(result => {
+      if (result instanceof Request) {
+        if (result !== this.request) this.completeClassification = transferRequestContext(this.request, result);
+        this.classifiedRequest = result;
+        this.request = result;
+      }
+      return result;
+    }, error => {
+      // Admission refusals have protocol status and retry headers. Preserve
+      // them just as the canonical JSON reader does inside its proxy path.
+      if (error instanceof Response) return error;
+      throw error;
+    });
   }
   reserve = async (bytes: number): Promise<void> => {
     if (bytes >= bodyLeaseMinimum) await this.authenticate();
@@ -152,6 +178,20 @@ class JsonAdmission implements JsonIntake {
       ? json({ type: "error", error: { type: "overloaded_error", message: "Large request capacity is busy; retry shortly." } }, 503, { "retry-after": "1" })
       : errorResponse("server_overloaded", "Large request capacity is busy; retry shortly.", 503, undefined, { "retry-after": "1" });
   };
+  // Large native handoffs never parse or retain a Worker JSON body. The
+  // classifier calls this only after its physical prefix has retired;
+  // provider latency must not keep that memory charged to ordinary requests.
+  retirePrefix(): void { this.lease.release(); }
+  retainPrefix(request: Request, prefix: import('./utils.ts').JsonReadPrefix): void {
+    if (this.retainedPrefix) throw new Error('JSON prefix already owned');
+    this.retainedPrefix = { request, prefix };
+  }
+  takePrefix(request: Request): import('./utils.ts').JsonReadPrefix | undefined {
+    if (this.retainedPrefix?.request !== request) return;
+    const { prefix } = this.retainedPrefix;
+    this.retainedPrefix = undefined;
+    return prefix;
+  }
   expand = async (): Promise<void> => {
     await this.authenticate();
     this.expanded = true;
@@ -225,6 +265,10 @@ class JsonAdmission implements JsonIntake {
   }
   ordinaryCompletion(): boolean { return !this.search && !this.wan && !this.input && !this.intakeOperation; }
   finish(context: ExecutionContext): void {
+    this.retainedPrefix?.prefix.finish();
+    this.retainedPrefix = undefined;
+    this.completeClassification?.();
+    if (this.classifiedRequest) releaseProbe(this.classifiedRequest);
     if (this.search) { context.waitUntil(this.search.finish()); return; }
     if (this.wanRefusal) context.waitUntil(this.wanRefusal);
     if (this.wan) {
@@ -292,7 +336,15 @@ interface ReservedProxyBudget {
 
 export async function proxyOpenAi(request: Request, env: Env, context: ExecutionContext, path: string, mode: AuthMode): Promise<Response> {
   const admission = new JsonAdmission(request, env, mode);
-  try { return await proxyUnifiedOpenAi(request, env, context, path, mode, admission); }
+  try {
+    const pending = admission.classify();
+    if (pending !== undefined) {
+      const classified = await pending;
+      if (classified instanceof Response) return classified;
+      request = classified;
+    }
+    return await proxyUnifiedOpenAi(request, env, context, path, mode, admission);
+  }
   finally { admission.finish(context); }
 }
 
@@ -533,6 +585,12 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
   }
   const admission = new JsonAdmission(request, env, mode, provider.id);
   try {
+    const pending = admission.classify();
+    if (pending !== undefined) {
+      const classified = await pending;
+      if (classified instanceof Response) return classified;
+      request = classified;
+    }
     let envelope, prepared;
     try {
       if (request.method === "GET" || request.method === "HEAD") envelope = directManifestEnvelope(request, endpoint);
@@ -640,6 +698,12 @@ export async function proxyNative(request: Request, env: Env, context: Execution
   }
   const admission = new JsonAdmission(request, env, "proxy_key", provider.id);
   try {
+    const pending = admission.classify();
+    if (pending !== undefined) {
+      const classified = await pending;
+      if (classified instanceof Response) return classified;
+      request = classified;
+    }
     let prepared;
     try {
       let body = request.method === "GET" || request.method === "HEAD" ? {} : wanCreate(endpoint) ? await admission.wanCandidate(endpoint) : openRouterMusicCandidate(provider, endpoint)
@@ -1175,8 +1239,10 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     };
     accounting.observeUpstreamResponse(response, prepared.url);
     // Metadata permissions and rate limits do not establish inference health.
+    // A single-dispatch transport must retain the original rejection rather
+    // than discard it for an alternate that its transport cannot send.
     response = await captureResponse(response);
-    while (!accounting.upstreamChargePossible && !miniMaxAnthropicRoute(selection.provider, selection.endpoint) && selection.provider.id !== "anthropic-vertex" && selection.provider.id !== "gmi" && !selection.nativeResponse && !selection.endpoint.requestPricing && failedGrantKeys.size < MAX_GRANT_ATTEMPTS - 1 && !isModelDiscovery(selection.endpoint) && !background && !search && !continuation?.requested && !googleContinuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover, creditExhausted)) {
+    while (!accounting.upstreamChargePossible && !miniMaxAnthropicRoute(selection.provider, selection.endpoint) && selection.provider.id !== "anthropic-vertex" && selection.provider.id !== "gmi" && !selection.nativeResponse && !selection.endpoint.requestPricing && failedGrantKeys.size < MAX_GRANT_ATTEMPTS - 1 && !isModelDiscovery(selection.endpoint) && !background && !search && !continuation?.requested && !googleContinuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover, creditExhausted) && permitsGrantFailover(env)) {
       let retry: PreparedUpstream | undefined;
       let capacityFailure: HttpError | undefined;
       signal.throwIfAborted();
@@ -1264,7 +1330,9 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       response = priceGuard.response;
     }
   } catch (error) {
-    if (error instanceof PublishedMusicUnsent) dispatched = false;
+    // A transport-local dispatch witness also covers a deadline/caller abort
+    // winning while native dispatch authorization is still pending.
+    if (error instanceof PublishedMusicUnsent || transportDispatchStarted(env) === false) dispatched = false;
     if (music) {
       operation.stop("upstream", error);
       // The operation's rejection may win before a physical quarantined read

@@ -13,6 +13,7 @@ import { verifyObservability } from './deploy-train-observability.mjs';
 import { startQueueObservation } from './deploy-queue-observation.mjs';
 import { assertAssetBootstrap, publishConsoleAssets, verifyConsoleAssets } from './deploy-console-assets.mjs';
 import { assertSecretLineage, uploadMessage } from './deploy-train-secrets.mjs';
+import { assertNoDeploymentHold } from './deploy-release-hold.mjs';
 
 export function command(args, { env = process.env, timeout = 10 * 60_000 } = {}) {
   return new Promise((resolve, reject) => {
@@ -160,6 +161,7 @@ function saveState(path, state) {
 export async function main(env = process.env) {
   const state = JSON.parse(readFileSync(env.TRAIN_PLAN_PATH, 'utf8'));
   if (state.noop) return;
+  assertNoDeploymentHold(state.sha);
   Object.assign(state, inspectSource({ blueSha: state.deployedSha, greenSha: state.sha }));
   assertAssetBootstrap(state.deployedSha);
   const save = (value) => saveState(env.TRAIN_STATE_PATH, value);

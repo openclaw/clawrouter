@@ -8,7 +8,7 @@ import type { UsageTokens } from "./token-usage.ts";
  * most expensive disjoint allocation. Missing served tier uses the most expensive
  * DECLARED tier, not a guarantee about an unknown provider invoice. */
 export function reportingEstimate(pricing: ModelPricing | null | undefined, tokens: UsageTokens | null, format: string): { micros: number; reason: string } | null {
-  if (!pricing || pricing.unit != null || !["openai.responses", "openai.chat_completions"].includes(format) || !tokens
+  if (!pricing || pricing.unit != null || !["openai.responses", "openai.responses_compact", "openai.chat_completions"].includes(format) || !tokens
     || tokens.billable === false || tokens.input == null || tokens.output == null
     || !Number.isSafeInteger(tokens.input) || !Number.isSafeInteger(tokens.output) || tokens.input < 0 || tokens.output < 0) return null;
   // An explicitly unknown tier is not bounded by the known cards.
