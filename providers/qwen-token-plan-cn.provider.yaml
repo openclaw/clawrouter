@@ -41,24 +41,31 @@ endpoints:
 models:
   entries:
     - id: qwen-token-plan-cn/qwen3.7-plus
+      displayName: "Qwen3.7 Plus"
       upstream: qwen3.7-plus
       capabilities: [llm.chat]
     - id: qwen-token-plan-cn/qwen3.8-max
+      displayName: "Qwen3.8 Max"
       upstream: qwen3.8-max
       capabilities: [llm.chat]
     - id: qwen-token-plan-cn/qwen3.8-flash
+      displayName: "Qwen3.8 Flash"
       upstream: qwen3.8-flash
       capabilities: [llm.chat]
     - id: qwen-token-plan-cn/qwen3.6-plus
+      displayName: "Qwen3.6 Plus"
       upstream: qwen3.6-plus
       capabilities: [llm.chat]
     - id: qwen-token-plan-cn/kimi-k2.5
+      displayName: "Kimi K2.5"
       upstream: kimi-k2.5
       capabilities: [llm.chat]
     - id: qwen-token-plan-cn/glm-5
+      displayName: "GLM-5"
       upstream: glm-5
       capabilities: [llm.chat]
     - id: qwen-token-plan-cn/MiniMax-M2.5
+      displayName: "MiniMax M2.5"
       upstream: MiniMax-M2.5
       capabilities: [llm.chat]
 billing:

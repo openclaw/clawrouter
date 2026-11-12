@@ -55,6 +55,7 @@ export function compileProviderSnapshot(manifests) {
       model_index[model.id] = {
         provider: provider.id,
         upstream: model.upstream,
+        ...(model.displayName ? { displayName: model.displayName } : {}),
         capabilities: model.capabilities,
         ...(model.availability ? { availability: structuredClone(model.availability) } : {}),
         ...(model.codexModel ? { codexModel: model.codexModel } : {}),
@@ -142,6 +143,7 @@ function compileProvider(manifest, ids) {
   const models = (manifest.models?.entries ?? []).map((model) => ({
     id: model.id,
     upstream: model.upstream,
+    ...(model.displayName ? { displayName: model.displayName } : {}),
     capabilities: model.capabilities ?? [],
     ...(model.availability ? { availability: structuredClone(model.availability) } : {}),
     ...(model.codexModel ? { codexModel: model.codexModel } : {}),

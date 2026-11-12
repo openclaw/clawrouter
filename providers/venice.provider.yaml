@@ -41,6 +41,7 @@ endpoints:
 models:
   entries:
     - id: venice/zai-org-glm-5-2
+      displayName: "GLM-5.2"
       upstream: zai-org-glm-5-2
       capabilities: [llm.chat]
       supportedReasoningEfforts: [none, high, max]
@@ -60,6 +61,7 @@ models:
             contextWindow: 1000000
             maxOutputTokens: 131072
     - id: venice/zai-org-glm-4.7
+      displayName: "GLM-4.7"
       upstream: zai-org-glm-4.7
       capabilities: [llm.chat]
       supportedReasoningEfforts: [low, medium, high]
@@ -79,6 +81,7 @@ models:
             contextWindow: 198000
             maxOutputTokens: 16384
     - id: venice/venice-uncensored-1-2
+      displayName: "Venice Uncensored 1.2"
       upstream: venice-uncensored-1-2
       capabilities: [llm.chat]
       requestParameters:
@@ -96,6 +99,7 @@ models:
             contextWindow: 128000
             maxOutputTokens: 8192
     - id: venice/google-gemma-4-31b-it
+      displayName: "Gemma 4 31B IT"
       upstream: google-gemma-4-31b-it
       capabilities: [llm.chat]
       supportedReasoningEfforts: [none, low, medium, high]
@@ -115,6 +119,7 @@ models:
             contextWindow: 256000
             maxOutputTokens: 16384
     - id: venice/kimi-k2-6
+      displayName: "Kimi K2.6"
       upstream: kimi-k2-6
       capabilities: [llm.chat]
       supportedReasoningEfforts: [none, low, medium, high]
@@ -134,6 +139,7 @@ models:
             contextWindow: 256000
             maxOutputTokens: 65536
     - id: venice/deepseek-v3.2
+      displayName: "DeepSeek V3.2"
       upstream: deepseek-v3.2
       capabilities: [llm.chat]
       supportedReasoningEfforts: [none, low, medium, high]
@@ -153,6 +159,7 @@ models:
             contextWindow: 160000
             maxOutputTokens: 32768
     - id: venice/qwen3-235b-a22b-thinking-2507
+      displayName: "Qwen3 235B A22B Thinking 2507"
       upstream: qwen3-235b-a22b-thinking-2507
       capabilities: [llm.chat]
       supportedReasoningEfforts: [low, medium, high]
@@ -172,6 +179,7 @@ models:
             contextWindow: 128000
             maxOutputTokens: 16384
     - id: venice/qwen3-coder-480b-a35b-instruct-turbo
+      displayName: "Qwen3 Coder 480B A35B Instruct Turbo"
       upstream: qwen3-coder-480b-a35b-instruct-turbo
       capabilities: [llm.chat]
       requestParameters:
@@ -189,6 +197,7 @@ models:
             contextWindow: 256000
             maxOutputTokens: 65536
     - id: venice/qwen3-vl-235b-a22b
+      displayName: "Qwen3 VL 235B A22B"
       upstream: qwen3-vl-235b-a22b
       capabilities: [llm.chat]
       requestParameters:
@@ -206,6 +215,7 @@ models:
             contextWindow: 128000
             maxOutputTokens: 16384
     - id: venice/grok-4-5
+      displayName: "Grok 4.5"
       upstream: grok-4-5
       capabilities: [llm.chat]
       supportedReasoningEfforts: [low, medium, high]
@@ -225,6 +235,7 @@ models:
             contextWindow: 500000
             maxOutputTokens: 32000
     - id: venice/qwen-3-7-max
+      displayName: "Qwen3.7 Max"
       upstream: qwen-3-7-max
       capabilities: [llm.chat]
       requestParameters:
@@ -242,6 +253,7 @@ models:
             contextWindow: 1000000
             maxOutputTokens: 65536
     - id: venice/qwen-3-7-plus
+      displayName: "Qwen3.7 Plus"
       upstream: qwen-3-7-plus
       capabilities: [llm.chat]
       requestParameters:
@@ -259,6 +271,7 @@ models:
             contextWindow: 1000000
             maxOutputTokens: 65536
     - id: venice/claude-fable-5
+      displayName: "Claude Fable 5"
       upstream: claude-fable-5
       capabilities: [llm.chat]
       supportedReasoningEfforts: [low, medium, high, xhigh, max]
@@ -278,6 +291,7 @@ models:
             contextWindow: 1000000
             maxOutputTokens: 128000
     - id: venice/claude-opus-5
+      displayName: "Claude Opus 5"
       upstream: claude-opus-5
       capabilities: [llm.chat]
       supportedReasoningEfforts: [low, medium, high, xhigh, max]
@@ -297,6 +311,7 @@ models:
             contextWindow: 1000000
             maxOutputTokens: 128000
     - id: venice/claude-sonnet-4-6
+      displayName: "Claude Sonnet 4.6"
       upstream: claude-sonnet-4-6
       capabilities: [llm.chat]
       supportedReasoningEfforts: [low, medium, high, max]
@@ -316,6 +331,7 @@ models:
             contextWindow: 1000000
             maxOutputTokens: 64000
     - id: venice/openai-gpt-56-sol
+      displayName: "GPT-5.6 Sol"
       upstream: openai-gpt-56-sol
       capabilities: [llm.chat]
       supportedReasoningEfforts: [none, low, medium, high, xhigh, max]
@@ -335,6 +351,7 @@ models:
             contextWindow: 1000000
             maxOutputTokens: 128000
     - id: venice/zai-org-glm-4.6
+      displayName: "GLM-4.6"
       upstream: zai-org-glm-4.6
       capabilities: [llm.chat]
       supportedReasoningEfforts: [low, medium, high]
@@ -354,6 +371,7 @@ models:
             contextWindow: 198000
             maxOutputTokens: 16384
     - id: venice/google-gemma-3-27b-it
+      displayName: "Gemma 3 27B IT"
       upstream: google-gemma-3-27b-it
       capabilities: [llm.chat]
       requestParameters:
@@ -371,6 +389,7 @@ models:
             contextWindow: 198000
             maxOutputTokens: 16384
     - id: venice/kimi-k2-5
+      displayName: "Kimi K2.5"
       upstream: kimi-k2-5
       capabilities: [llm.chat]
       supportedReasoningEfforts: [none, low, medium, high]

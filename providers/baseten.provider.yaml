@@ -42,9 +42,11 @@ endpoints:
 models:
   entries:
     - id: baseten/zai-org/GLM-5.3
+      displayName: "GLM-5.3"
       upstream: zai-org/GLM-5.3
       capabilities: [llm.chat]
     - id: baseten/deepseek-ai/DeepSeek-V4.1-Flash
+      displayName: "DeepSeek V4.1 Flash"
       upstream: deepseek-ai/DeepSeek-V4.1-Flash
       capabilities: [llm.chat]
       supportedReasoningEfforts: [none, low, high, max]
@@ -62,6 +64,7 @@ models:
             checkedAt: "2026-11-03"
             input: [text, image]
     - id: baseten/deepseek-ai/DeepSeek-V4-Pro-0813
+      displayName: "DeepSeek V4 Pro (0813)"
       upstream: deepseek-ai/DeepSeek-V4-Pro-0813
       capabilities: [llm.chat]
       supportedReasoningEfforts: [none, low, high, max]
@@ -78,6 +81,7 @@ models:
             checkedAt: "2026-11-03"
             input: [text]
     - id: baseten/zai-org/GLM-5.2
+      displayName: "GLM-5.2"
       upstream: zai-org/GLM-5.2
       capabilities: [llm.chat]
       supportedReasoningEfforts: [none, low, high, max]
@@ -95,6 +99,7 @@ models:
             checkedAt: "2026-11-03"
             input: [text, image]
     - id: baseten/zai-org/GLM-5.2-Fast
+      displayName: "GLM-5.2 Fast"
       upstream: zai-org/GLM-5.2-Fast
       capabilities: [llm.chat]
       supportedReasoningEfforts: [none, low, high, max]
@@ -111,6 +116,7 @@ models:
             checkedAt: "2026-11-03"
             input: [text, image]
     - id: baseten/nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B
+      displayName: "NVIDIA Nemotron 3 Ultra 550B A55B"
       upstream: nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B
       capabilities: [llm.chat]
       supportedReasoningEfforts: [none, high]
@@ -128,6 +134,7 @@ models:
             checkedAt: "2026-11-03"
             input: [text]
     - id: baseten/openai/gpt-oss-120b
+      displayName: "GPT-OSS 120B"
       upstream: openai/gpt-oss-120b
       capabilities: [llm.chat]
       supportedReasoningEfforts: [none, minimal, low, medium, high, xhigh, max]
@@ -146,12 +153,15 @@ models:
             input: [text]
     # Known decision-only models must not fall through the opaque Chat route.
     - id: baseten/decision-models/baseten-elephant-9b-latest
+      displayName: "Baseten Elephant 9B Latest"
       upstream: decision-models/baseten-elephant-9b-latest
       capabilities: []
     - id: baseten/decision-models/baseten-mammoth-27b-latest
+      displayName: "Baseten Mammoth 27B Latest"
       upstream: decision-models/baseten-mammoth-27b-latest
       capabilities: []
     - id: baseten/decision-models/baseten-joey-2b-latest
+      displayName: "Baseten Joey 2B Latest"
       upstream: decision-models/baseten-joey-2b-latest
       capabilities: []
 billing:

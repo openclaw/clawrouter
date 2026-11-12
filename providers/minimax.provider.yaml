@@ -39,6 +39,7 @@ endpoints:
 models:
   entries:
     - id: minimax/MiniMax-M2.7
+      displayName: "MiniMax M2.7"
       upstream: MiniMax-M2.7
       capabilities: [llm.chat]
       availability:
@@ -58,6 +59,7 @@ models:
         maxInputTokens: 204800
         defaultMaxOutputTokens: 131072
     - id: minimax/MiniMax-M3
+      displayName: "MiniMax M3"
       upstream: MiniMax-M3
       capabilities: [llm.chat]
       nativeCapabilities:
@@ -73,6 +75,7 @@ models:
             inference:
               chat: true
     - id: minimax/MiniMax-M2.7-highspeed
+      displayName: "MiniMax M2.7 Highspeed"
       upstream: MiniMax-M2.7-highspeed
       capabilities: [llm.chat]
       availability:

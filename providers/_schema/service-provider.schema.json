@@ -1404,6 +1404,7 @@
       "properties": {
         "id": { "type": "string" },
         "upstream": { "type": "string" },
+        "displayName": { "type": "string", "minLength": 1, "pattern": "\\S" },
         "availability": { "$ref": "#/$defs/modelAvailability" },
         "codexModel": { "type": "string", "minLength": 1 },
         "capabilities": { "type": "array", "items": { "type": "string" } },
