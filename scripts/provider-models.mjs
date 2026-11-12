@@ -44,11 +44,11 @@ export function validateProviderModels(manifest) {
       if (manifest.id !== "anthropic" || !manifest.capabilities.some(capability => model.capabilities?.includes(capability.id) && manifest.endpoints[capability.endpoint]?.requestFormat === "anthropic.messages" && manifest.endpoints[capability.endpoint]?.responseFormat === "anthropic.messages")) throw new Error(`model ${model.id} anthropicModifiers requires first-party Anthropic Messages`);
     }
     validatePricing(model.pricing, model.id);
-    if (model.capabilities?.includes("image.generation") && model.pricing?.unit !== "image_token") throw new Error("image generation requires a qualified image pricing contract");
+    if (model.capabilities?.some(id => id === "image.generation" || id === "image.edit") && model.pricing?.unit !== "image_token") throw new Error("image pricing requires a qualified modality tariff");
     if (model.pricing?.unit === "image_token" && (!model.capabilities?.length || model.capabilities.some((id) => {
       const endpoint = manifest.endpoints[manifest.capabilities.find((capability) => capability.id === id)?.endpoint];
-      return id !== "image.generation" || endpoint?.requestFormat !== "openai.images_generations" || endpoint.responseFormat !== "openai.images_generations" || endpoint.streaming;
-    }))) throw new Error("image pricing requires the JSON image generation contract");
+      return !["image.generation", "image.edit"].includes(id) || endpoint?.requestFormat !== (id === "image.edit" ? "openai.images_edits" : "openai.images_generations") || endpoint.responseFormat !== "openai.images_generations" || endpoint.streaming;
+    }))) throw new Error("image pricing requires the JSON image generation or edit contract");
     for (const [id, card] of Object.entries(model.endpointPricing ?? {})) {
       if (!Object.hasOwn(manifest.endpoints, id) || !manifest.capabilities.some(capability => capability.endpoint === id && model.capabilities?.includes(capability.id))) throw new Error(`model ${model.id} endpointPricing must reference a supported endpoint`);
       validatePricing(card.pricing, `${model.id}/${id}`);
