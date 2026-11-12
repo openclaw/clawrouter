@@ -1,3 +1,5 @@
+import type { GrantAccount, GrantExtraUsage } from "./provider-observations.ts";
+export type { GrantAccount, GrantExtraUsage } from "./provider-observations.ts";
 import type { ProviderModelDefinition } from "./provider-model.ts";
 import type { ModelAvailability } from "./model-availability";
 export type { ModelAvailability } from "./model-availability";
@@ -428,8 +430,6 @@ export interface AdminBootstrapResponse {
   tenants: AdminTenantSummary[];
 }
 
-export interface GrantAccount { email?: string; displayName?: string; rateLimitTier?: string; subscriptionStatus?: string; extraUsageEnabled?: boolean }
-export interface GrantExtraUsage { enabled?: boolean; usedCredits?: number; monthlyLimit?: number; utilization?: number; currency?: string; spendLimitReached?: boolean }
 export type GrantLane = "subscription" | "api_key" | "environment";
 export interface GrantUsageTotals { requests: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; costMicros: number }
 export interface GrantUsageRow extends GrantUsageTotals { day: string; provider: string; grantKey: string | null; grantLane: GrantLane | null; model: string | null }

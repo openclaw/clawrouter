@@ -66,8 +66,14 @@ v1 response shape and existing type imports from `shared/contracts.ts`.
 This separation gives future catalogue import and client presentation changes
 an explicit boundary. It does not turn router price qualification into a public
 catalogue fact, change price units, or establish execution eligibility. The
-provider snapshot still imports account observation types from the existing
-contracts module; that remaining boundary is separate work.
+provider snapshot imports account observations from
+`shared/provider-observations.ts`. Existing account type imports from
+`shared/contracts.ts` remain available.
+
+The compiled snapshot's declaration dependency graph is independent of the client
+API and Worker environment. `test/provider-snapshot-contract.test.mjs` emits that
+graph and typechecks a consumer using only the emitted declarations. This is an
+internal build boundary, not a published package or a new runtime validator.
 
 ## 3. Vocabulary and identities
 

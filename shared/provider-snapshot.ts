@@ -1,4 +1,4 @@
-import type { GrantAccount, GrantExtraUsage } from "./contracts";
+import type { GrantAccount, GrantExtraUsage } from "./provider-observations.ts";
 import type { ProviderModelDefinition, ModelPricing } from "./provider-model.ts";
 import type { ProviderOfferDefinition, ProviderProduct } from "./provider-products.ts";
 
