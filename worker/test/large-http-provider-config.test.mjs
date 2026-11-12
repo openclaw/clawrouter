@@ -8,10 +8,11 @@ test('native configuration contains only Responses provider declarations and rou
  for(const field of ['OPENAI_API_KEY','OPENROUTER_API_KEY','OPENROUTER_SITE_URL','AZURE_OPENAI_ENDPOINT','AZURE_OPENAI_API_KEY','MODEL_API_KEY'])assert.ok(runtimeFields.includes(field));
  for(const field of ['ANTHROPIC_API_KEY','CLOUDFLARE_API_TOKEN','GITHUB_CLIENT_SECRET','LARGE_HTTP_TOKEN'])assert.equal(runtimeFields.includes(field),false);
  assert.equal(new Set(runtimeFields).size,runtimeFields.length);
+ const defaults=['https://api.meta.ai','https://api.openai.com','https://chatgpt.com','https://openrouter.ai'].sort();
  const origins=runtimeProviderOrigins({AZURE_OPENAI_ENDPOINT:'https://fixture.openai.azure.com/'});
- assert.deepEqual(origins.sort(),['https://api.meta.ai','https://api.openai.com','https://chatgpt.com','https://fixture.openai.azure.com','https://openrouter.ai'].sort());
- for(const endpoint of [undefined,'bad-origin','file:///private/example','https://user:secret@fixture.openai.azure.com'])assert.equal(runtimeProviderOrigins({AZURE_OPENAI_ENDPOINT:endpoint}).includes('https://fixture.openai.azure.com'),false);
- assert.equal(runtimeProviderOrigins({UNRELATED_ENDPOINT:'https://arbitrary.example'}).includes('https://arbitrary.example'),false);
+ assert.deepEqual(origins.sort(),[...defaults,'https://fixture.openai.azure.com'].sort());
+ for(const endpoint of [undefined,'bad-origin','file:///private/example','https://user:secret@fixture.openai.azure.com'])assert.deepEqual(runtimeProviderOrigins({AZURE_OPENAI_ENDPOINT:endpoint}).sort(),defaults);
+ assert.deepEqual(runtimeProviderOrigins({UNRELATED_ENDPOINT:'https://arbitrary.example'}).sort(),defaults);
 });
 
 test('provider configuration changes retire the native epoch without persisting secret values',async()=>{
