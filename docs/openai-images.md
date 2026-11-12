@@ -1,6 +1,10 @@
-# OpenAI image generation
+# OpenAI image generation and edits
 
-ClawRouter supports **JSON Images API generation**, not edits or variations.
+ClawRouter supports **JSON Images API generation and inline-reference edits**, not variations.
+**Edit budget limitation:** enforced hard monetary budgets require an explicit
+fixed policy tariff; no source-qualified GPT Image 2.5 reference-input token
+ceiling is published. Existing soft-budget and unmetered policies can use edits
+and settle measured modality usage. No policy is changed automatically.
 It uses normal proxy-key authentication, revocation, model allowlists,
 Default-tier eligibility, grant selection, hard/soft policy and provider budgets,
 fixed request tariff overrides, usage ledger and request-retention policy.
@@ -12,7 +16,13 @@ ChatGPT/Codex subscription grants remain Responses-only and cannot serve images.
 - `POST /v1/native/openai/v1/images/generations`: native upstream model slugs.
 - `POST /v1/proxy/openai/images_generations`: manifest envelope with `body`.
 
-The model/route/provider catalogs expose `image.generation` and four models:
+Edit routes are `POST /v1/images/edits`,
+`POST /v1/native/openai/v1/images/edits`, and
+`POST /v1/proxy/openai/images_edits`. The manifest endpoint is `images_edits`,
+request format `openai.images_edits`, response format `openai.images_generations`
+(the same image JSON and usage shape).
+
+The model/route/provider catalogs expose `image.generation` and `image.edit` for four models:
 
 - `openai/gpt-image-2.5-sunburst`
 - `openai/gpt-image-2.5-sunburst-2026-09-08`
@@ -55,7 +65,21 @@ values rather than sending null. stream:false is accepted; stream:true,
 partial_images (even zero), legacy response_format, service tiers, unknown
 options, caller query parameters and multipart bodies are rejected before any paid dispatch.
 
-**Not supported:** Images SSE/partial-image streaming, edits, variations, Batch,
+### Uploaded-reference edits
+
+Send JSON, not multipart. In addition to the options above, edits require
+`images: [{ image_url: "data:image/png;base64,..." }]`. Each object must contain
+only `image_url`. References must be canonical standard-base64 PNG, JPEG, or
+WebP data URLs with matching file signatures. Limits: **1–16 references, 4 MiB
+decoded per reference, 8 MiB total UTF-8 JSON request** (including all options
+and any manifest envelope). Pixel decoding remains upstream; these transport
+limits do not establish billable-token bounds.
+
+HTTP(S) URLs, File IDs, masks, markup, `input_fidelity`, and unknown fields are
+rejected before dispatch. The router never fetches a reference URL. Generation
+still rejects references and uses its unchanged generation route.
+
+**Not supported:** Images SSE/partial-image streaming, variations, Batch,
 or the Responses API image_generation tool. The latter has a distinct billing
 contract and remains subject to the existing unpriced-hosted-tool guards.
 
@@ -74,7 +98,7 @@ only to the Responses image tool, **not direct Images requests**. Direct Images
 receives no cache discount, even if a cached counter appears. Published cached
 text/image prices ($1.25/M and $2/M) are not misapplied to this endpoint.
 
-Before hard-budget dispatch, reserve UTF-8 prompt bytes plus 1024 framing tokens
+For **generation**, before hard-budget dispatch, reserve UTF-8 prompt bytes plus 1024 framing tokens
 per image and a conservative output envelope for every requested image. The
 current official guide embeds a calculator with an **explicit GPT Image 2.5
 (Sunburst and Flare) mode**. Its quality factors are 16/24/48/64/96, not the older
@@ -87,7 +111,22 @@ the difference. These are admission envelopes, never synthetic actual counts
 or a promise about cost per image. The model-page warning about the older GPT
 Image 2 calculator is not permission to reuse that model's coefficients.
 
-Fixed policy tariffs (including zero) retain precedence. Known HTTP rejections
+For **edits**, `opaque_input_bound` prevents the generation-only reservation
+from being mistaken for a complete edit price. Hard policy monthly/daily/weekly
+and provider monthly budgets fail closed with `pricing_required` unless a fixed
+policy tariff is already configured. A fixed tariff (including zero) remains a
+policy charge, not a measured provider cost. Soft budgets retain their existing
+balance checks; unmetered admission remains unchanged. Complete, consistent
+edit usage settles text input, reference-image input, and image output separately
+at the rates above in both modes, with no direct-Images cache discount. Missing
+or inconsistent usage is `unpriced_usage`, not evidence of free provider work;
+no synthetic reference count or generation-only dollar bound is substituted.
+
+The current vision guide explicitly excludes GPT Image from its vision
+calculator; its 65/129 tile formula and 4160/6240 additions are historical
+GPT Image 1 rules, not a qualified bound for 2.5.
+
+For **generation**, fixed policy tariffs (including zero) retain precedence. Known HTTP rejections
 settle at zero. Ambiguous dispatched failures, incomplete delivery and missing
 usage keep the image reservation estimate, including soft-budget settlement;
 soft budgets still dispatch/check with their existing fail-open semantics.
@@ -95,14 +134,19 @@ soft budgets still dispatch/check with their existing fail-open semantics.
 The demand-driven JSON inspector parses bounded feeds and retains only bounded
 scalar usage metadata, even after multi-megabyte base64 strings. It never
 buffers/tees/drains an entire image for accounting. Original bytes, backpressure
-and caller cancellation are preserved. Only input JSON is archived when request
-retention is on; generated images are **never** archived. Prompts/images are not
+and caller cancellation are preserved. Edits keep the 600-second upstream
+operation deadline through response EOF/cancellation and never retry a paid POST
+or follow redirects. Edit input (including references and prompt) is not archived.
+For generation, input JSON is archived when request retention is on; generated images are **never** archived. Prompts/images are not
 added to usage events or logs. See [Content retention](content-retention.md).
 
 ## Official sources
 
-Checked **2026-10-20**; no paid image call was made for qualification/tests:
+Generation checked **2026-10-20**; edits rechecked **2026-11-12**.
+No paid image call was made for qualification/tests:
 
+- https://developers.openai.com/api/reference/resources/images/methods/edit
+- https://developers.openai.com/api/docs/guides/images-vision#gpt-image-model-inputs
 - https://developers.openai.com/api/docs/guides/image-generation
 - https://developers.openai.com/api/reference/resources/images/methods/generate
 - https://developers.openai.com/api/docs/models/gpt-image-2.5-sunburst
@@ -111,6 +155,6 @@ Checked **2026-10-20**; no paid image call was made for qualification/tests:
 - Guide's explicit 2.5 calculator bundle:
   https://developers.openai.com/_astro/GptImageTokenCalculator.react.BLizhTXM.js
 
-The guide and live calculator qualify reservation; actual usage remains the
-settlement authority. Upstream changes require requalification before extending
+The guide and live calculator qualify generation reservation, not reference-input
+reservation for edits; actual usage remains the settlement authority. Upstream changes require requalification before extending
 this contract.

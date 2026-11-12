@@ -122,7 +122,7 @@ export function endpointForPath(provider: CompiledProvider, path: string): Compi
 export function unifiedPathForEndpoint(provider: CompiledProvider, endpoint: CompiledEndpoint): string | null {
   const format = endpoint.request_format;
   const path = unifiedPathForRequestFormat(format);
-  const responseFormat = format === "openai.audio_speech" ? "audio.binary" : format;
+  const responseFormat = format === "openai.audio_speech" ? "audio.binary" : format === "openai.images_edits" ? "openai.images_generations" : format;
   return path && endpoint.response_format === responseFormat && endpointForPath(provider, path)?.id === endpoint.id ? path : null;
 }
 
