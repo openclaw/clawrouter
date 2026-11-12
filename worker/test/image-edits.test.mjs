@@ -26,21 +26,29 @@ function fixture(t, options = {}) {
   };
   return { env, events, pending, retained, call };
 }
-for (const path of routes) test("uploaded PNG reaches OpenAI edits through " + path, async t => {
-  const f = fixture(t);
+// The same request boundary covers each route, supported media and fixed tariff.
+// Complete JPEG/WebP fixtures from pixverse-image-multipart.test.mjs; no pixel decoding here.
+for (const [name, path, body, fixedCost] of [
+  ["unified PNG / fixed zero", routes[0], input, 0],
+  ["native JPEG", routes[1], { ...input, images: [{ image_url: "data:image/jpeg;base64,/9j//gAPTGF2YzYzLjEuMTAyAP/bAEMACAQEBAQEBQUFBQUFBgYGBgYGBgYGBgYGBgcHBwgICAcHBwYGBwcICAgICQkJCAgICAkJCgoKDAwLCw4ODhERFP/EAGcAAQEAAAAAAAAAAAAAAAAAAAMHAQEBAQAAAAAAAAAAAAAAAAACBAcQAAICAgIDAQAAAAAAAAAAAAIBAwUGBAARdrQ3BxEAAgICAgEFAQEAAAAAAAAAAwIBBAUGAAcRtXaycyI3NP/AABEIAAIAAgMBEgACEgADEgD/2gAMAwEAAhEDEQA/AKFgFVVz4JiksujpyySUNOckh68RmZlowsiIiBsiJvttvtvj/nfz/EfHqX0IOZD2eYtLsrdqtUj1gA2bPBAALSIIRDyVhUGMaTCIiLEKiLEQsR4iOHtj+p757q2H1Szxrr+ByCxcuYnG27VmIsWbNinXMewYv7IYxSDZyEI8yzu8yzNMzM+eWUf8Vb6BfCOf/9k=" }] }, 7],
+  ["manifest WebP", routes[2], { ...input, images: [{ image_url: "data:image/webp;base64,UklGRmgAAABXRUJQVlA4WAoAAAAQAAAAAQAAAQAAQUxQSAUAAAAA/4D//wBWUDggPAAAAPABAJ0BKgIAAgABQCYlkAJ0ugADCPePcAD+68fy0Z8T/GL/+rQ3mHY2QAs0MmFD/FtI6FMh+1MEkZOQAA==" }] }, 7],
+  ["maximum reference/output counts / fixed tariff", routes[0], { ...input, images: Array(16).fill(input.images[0]), n: 10 }, 17],
+]) test("edit transport " + name, async t => {
+  const f = fixture(t, { fixedCost });
   const upstream = t.mock.method(globalThis, "fetch", async (url, init) => {
     assert.equal(String(url), "https://api.openai.com/v1/images/edits");
     assert.equal(init.redirect, "manual");
     assert.equal(init.headers.get("authorization"), "Bearer fixture-upstream-key");
-    assert.deepEqual(JSON.parse(init.body), { model: model.slice(7), ...input });
+    assert.deepEqual(JSON.parse(init.body), { model: model.slice(7), ...body });
     return Response.json({ data: [{ b64_json: "fixture-output" }], usage });
   });
-  const response = await f.call(path);
+  const response = await f.call(path, body);
   assert.equal(response.status, 200, await response.clone().text());
   assert.equal((await response.json()).data[0].b64_json, "fixture-output");
   await Promise.all(f.pending);
   assert.equal(upstream.mock.callCount(), 1);
-  assert.equal(f.events[0].actual_cost_micros, 7);
+  assert.equal(f.events[0].actual_cost_micros, fixedCost);
+  assert.equal(f.events[0].cost_basis, "policy_fixed");
   assert.deepEqual(f.events[0].image_usage, { text_input_tokens: 12, image_input_tokens: 100, image_output_tokens: 100 });
   assert.equal(f.retained.length, 0, "uploaded images are not retained by the edit route");
 });
@@ -122,21 +130,6 @@ for (const mode of ["soft", "unmetered"]) for (const terminal of ["measured", "m
   }
 });
 
-for (const patch of [
-  { images: Array(16).fill(input.images[0]), n: 10 },
-  { images: [{ image_url: "data:image/jpeg;base64,/9j//gAPTGF2YzYzLjEuMTAyAP/bAEMACAQEBAQEBQUFBQUFBgYGBgYGBgYGBgYGBgcHBwgICAcHBwYGBwcICAgICQkJCAgICAkJCgoKDAwLCw4ODhERFP/EAGcAAQEAAAAAAAAAAAAAAAAAAAMHAQEBAQAAAAAAAAAAAAAAAAACBAcQAAICAgIDAQAAAAAAAAAAAAIBAwUGBAARdrQ3BxEAAgICAgEFAQEAAAAAAAAAAwIBBAUGAAcRtXaycyI3NP/AABEIAAIAAgMBEgACEgADEgD/2gAMAwEAAhEDEQA/AKFgFVVz4JiksujpyySUNOckh68RmZlowsiIiBsiJvttvtvj/nfz/EfHqX0IOZD2eYtLsrdqtUj1gA2bPBAALSIIRDyVhUGMaTCIiLEKiLEQsR4iOHtj+p757q2H1Szxrr+ByCxcuYnG27VmIsWbNinXMewYv7IYxSDZyEI8yzu8yzNMzM+eWUf8Vb6BfCOf/9k=" }] },
-  { images: [{ image_url: "data:image/webp;base64,UklGRmgAAABXRUJQVlA4WAoAAAAQAAAAAQAAAQAAQUxQSAUAAAAA/4D//wBWUDggPAAAAPABAJ0BKgIAAgABQCYlkAJ0ugADCPePcAD+68fy0Z8T/GL/+rQ3mHY2QAs0MmFD/FtI6FMh+1MEkZOQAA==" }] },
-]) test("bounded reference transport preserves admitted bytes and counts", async t => {
-  // Complete 2x2 fixtures from pixverse-image-multipart.test.mjs; transport does not decode pixels.
-  const f = fixture(t), body = { ...input, ...patch };
-  const upstream = t.mock.method(globalThis, "fetch", async (_url, init) => {
-    assert.deepEqual(JSON.parse(init.body), { model: model.slice(7), ...body });
-    return Response.json({ data: [], usage });
-  });
-  const response = await f.call(routes[0], body); assert.equal(response.status, 200); await response.text(); await Promise.all(f.pending);
-  assert.equal(upstream.mock.callCount(), 1);
-});
-
 for (const scenario of ["revoked", "model-policy", "provider-policy", "tier-policy", "exhausted", "fixed-budget"]) test("edit preserves " + scenario + " admission", async t => {
   const f = fixture(t, { ...(scenario === "tier-policy" ? { serviceTiers: { allowed: ["flex"] } } : {}),
     ...(scenario === "exhausted" ? { limit: 0 } : {}), ...(scenario === "fixed-budget" ? { limit: 6 } : {}),
@@ -184,15 +177,6 @@ for (const path of routes) test("edit rejects query and oversized JSON on " + pa
   const response = await handler.fetch(new Request("https://router.example" + path, { method: "POST",
     headers: { authorization: "Bearer " + proxyKey(), "content-type": "application/json", "content-length": String(8 * 1024 * 1024 + 1) }, body: "{}" }), f.env, { waitUntil: promise => f.pending.push(promise) });
   assert.equal(response.status, 413); await response.text(); await Promise.all(f.pending); assert.equal(upstream.mock.callCount(), 0);
-});
-
-for (const fixedCost of [0, 17]) test("edit explicit fixed tariff " + fixedCost + " remains policy pricing", async t => {
-  const f = fixture(t, { fixedCost });
-  t.mock.method(globalThis, "fetch", async () => Response.json({ data: [], usage }));
-  const response = await f.call(); assert.equal(response.status, 200); await response.text(); await Promise.all(f.pending);
-  assert.equal(f.events[0].actual_cost_micros, fixedCost);
-  assert.equal(f.events[0].cost_basis, "policy_fixed");
-  assert.equal(f.events[0].image_usage.image_input_tokens, 100);
 });
 
 test("combined inline references cannot exceed the actual JSON intake bound without Content-Length", async t => {

@@ -1,10 +1,8 @@
 # OpenAI image generation and edits
 
 ClawRouter supports **JSON Images API generation and inline-reference edits**, not variations.
-**Edit budget limitation:** enforced hard monetary budgets require an explicit
-fixed policy tariff; no source-qualified GPT Image 2.5 reference-input token
-ceiling is published. Existing soft-budget and unmetered policies can use edits
-and settle measured modality usage. No policy is changed automatically.
+**Edit budget limitation:** hard-budget edits require an existing fixed policy
+tariff; see [accounting](#accounting-and-bounded-delivery). No policy changes automatically.
 It uses normal proxy-key authentication, revocation, model allowlists,
 Default-tier eligibility, grant selection, hard/soft policy and provider budgets,
 fixed request tariff overrides, usage ledger and request-retention policy.
@@ -12,15 +10,16 @@ ChatGPT/Codex subscription grants remain Responses-only and cannot serve images.
 
 ## Routes and models
 
-- `POST /v1/images/generations`: standard OpenAI `images.generate` SDK route.
-- `POST /v1/native/openai/v1/images/generations`: native upstream model slugs.
-- `POST /v1/proxy/openai/images_generations`: manifest envelope with `body`.
+All routes use POST; the manifest route wraps input in `body`.
 
-Edit routes are `POST /v1/images/edits`,
-`POST /v1/native/openai/v1/images/edits`, and
-`POST /v1/proxy/openai/images_edits`. The manifest endpoint is `images_edits`,
-request format `openai.images_edits`, response format `openai.images_generations`
-(the same image JSON and usage shape).
+| Route | Generation | Edits |
+| --- | --- | --- |
+| Unified | `/v1/images/generations` | `/v1/images/edits` |
+| Native | `/v1/native/openai/v1/images/generations` | `/v1/native/openai/v1/images/edits` |
+| Manifest | `/v1/proxy/openai/images_generations` | `/v1/proxy/openai/images_edits` |
+
+Edits use request format `openai.images_edits` and the existing
+`openai.images_generations` response format (image JSON and modality usage).
 
 The model/route/provider catalogs expose `image.generation` and `image.edit` for four models:
 
@@ -111,20 +110,15 @@ the difference. These are admission envelopes, never synthetic actual counts
 or a promise about cost per image. The model-page warning about the older GPT
 Image 2 calculator is not permission to reuse that model's coefficients.
 
-For **edits**, `opaque_input_bound` prevents the generation-only reservation
-from being mistaken for a complete edit price. Hard policy monthly/daily/weekly
-and provider monthly budgets fail closed with `pricing_required` unless a fixed
-policy tariff is already configured. A fixed tariff (including zero) remains a
-policy charge, not a measured provider cost. Soft budgets retain their existing
-balance checks; unmetered admission remains unchanged. Complete, consistent
-edit usage settles text input, reference-image input, and image output separately
-at the rates above in both modes, with no direct-Images cache discount. Missing
-or inconsistent usage is `unpriced_usage`, not evidence of free provider work;
-no synthetic reference count or generation-only dollar bound is substituted.
-
-The current vision guide explicitly excludes GPT Image from its vision
-calculator; its 65/129 tile formula and 4160/6240 additions are historical
-GPT Image 1 rules, not a qualified bound for 2.5.
+For **edits**, no source-qualified GPT Image 2.5 reference-input ceiling is
+published. `opaque_input_bound` makes hard policy monthly/daily/weekly and
+provider monthly budgets fail closed with `pricing_required` unless a fixed
+policy tariff already applies. Fixed tariffs, including zero, are policy charges,
+not measured provider costs. Soft/unmetered policies retain existing admission
+and settle consistent usage at the modality rates above; missing/inconsistent
+usage remains `unpriced_usage`, not free work or a generation-only reservation.
+The vision calculator excludes GPT Image; its historical GPT Image 1 input
+rules do not qualify a 2.5 bound.
 
 For **generation**, fixed policy tariffs (including zero) retain precedence. Known HTTP rejections
 settle at zero. Ambiguous dispatched failures, incomplete delivery and missing
