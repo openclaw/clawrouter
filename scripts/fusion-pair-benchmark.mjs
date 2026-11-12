@@ -59,7 +59,8 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
   if (!['interactive', 'single-draft'].includes(executor) || (executor === 'single-draft' && !providedPolicies.includes(policy))) throw new Error('invalid_pair_executor');
   agent ??= executor === 'single-draft' ? runSingleDraft : runAgent;
   if (typeof includeControls !== 'boolean' || typeof controlsOnly !== 'boolean'
-    || (controlsOnly && !includeControls) || (!includeControls && !contractPolicies.includes(policy))) throw new Error('invalid_control_selection');
+    || (controlsOnly && !includeControls)
+    || (!includeControls && policy !== 'edit-handoff' && !contractPolicies.includes(policy))) throw new Error('invalid_control_selection');
   if (policy !== 'architect') preloadSource = true;
   if (!controlsOnly && contractPolicies.includes(policy) && config.maxCalls < 4) throw new Error('contract_requires_four_calls');
   const candidateStrategy = policy === 'matched-handoff' ? 'edit-handoff' : policy;
@@ -78,6 +79,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
     cheapReasoning, cheapMaxCalls, executor, preloadSource, datasetDigest: hash(JSON.stringify(tasks)), qualificationDigest: hash(rawQualification), receipts, pins,
     strategies: trialStrategies, policy, complete: false, records: [], calls: [], spentOrReservedMicros: config.priorCostMicros,
     limitations: ['One trial per task; report the declared task split and do not infer general superiority.',
+      ...(!includeControls ? ['No fixed-model controls ran; this report cannot establish comparative quality, cost or latency.'] : []),
       'Visible tests already pass on broken source. Only isolated final acceptance determines correctness.',
       'Published tariffs applied to reported usage; unknown charges retain their full reservation.'] };
   const save = async () => {

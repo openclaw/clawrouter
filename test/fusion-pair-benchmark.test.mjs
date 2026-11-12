@@ -114,6 +114,74 @@ test('fixed-controls selection rejects ambiguous or invalid options before provi
   }
   await assert.rejects(runPairBenchmark({ sourceSha: 'e'.repeat(40), controlsOnly: true,
     includeControls: false, policy: 'contract-provided' }), /invalid_control_selection/);
+  await assert.rejects(runPairBenchmark({ sourceSha: 'e'.repeat(40),
+    includeControls: false, policy: 'matched-handoff' }), /invalid_control_selection/);
+});
+
+for (const accepted of [true, false]) test(`handoff-only runs one budgeted policy and retains acceptance=${accepted}`, async () => {
+  const { root, options } = await fixture();
+  try {
+    let executions = 0, verifications = 0;
+    const state = await runPairBenchmark({ ...options, policy: 'edit-handoff', includeControls: false,
+      config: { ...config, campaignBudgetMicros: config.priorCostMicros + config.trialBudgetMicros },
+      fetcher: success,
+      agent: async (_task, _image, strategy, id, settings, invoke, _engine, agentOptions) => {
+        executions++;
+        assert.equal(strategy, 'handoff');
+        assert.equal(settings.maxTurns, config.maxCalls);
+        assert.deepEqual(agentOptions, { preloadSource: true, handoffAfterEdit: true });
+        await invoke(id, roles.strong, body, signal);
+        await invoke(id, roles.critic, body, signal);
+        return { ...repaired(), handoffUsed: true };
+      },
+      grade: async (_task, _image, files) => {
+        verifications++;
+        assert.deepEqual(files, repaired().files);
+        return { passed: accepted, tests: 3, skipped: 0 };
+      },
+    });
+    assert.equal(executions, 1);
+    assert.equal(verifications, 1);
+    assert.equal(state.complete, true);
+    assert.equal(state.kind, 'native-policy-repository');
+    assert.deepEqual(state.strategies, ['edit-handoff']);
+    assert.equal(state.records.length, 1);
+    assert.equal(state.records[0].score, Number(accepted));
+    assert.deepEqual(state.calls.map(call => call.model), [config.strong, config.cheap]);
+    assert.equal(state.spentOrReservedMicros, config.priorCostMicros + state.records[0].costMicros);
+    assert(state.limitations.some(message => message.includes('No fixed-model controls ran')));
+    assert.throws(() => analyzePairRun(state), /incomplete_pair_run/);
+    const saved = await readFile(join(options.out, 'pair.json'), 'utf8');
+    assert.deepEqual(JSON.parse(saved), state);
+    assert(!saved.includes('private prompt sentinel'));
+    assert(!saved.includes('private generated source sentinel'));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('handoff-only keeps an unknown charge reserved and stops before its successor', async () => {
+  const { root, options } = await fixture();
+  try {
+    let dispatches = 0;
+    await assert.rejects(runPairBenchmark({ ...options, policy: 'edit-handoff', includeControls: false,
+      fetcher: async (url, request) => {
+        if (url.includes('/v1/models/')) return success(url, request);
+        dispatches++;
+        throw new Error('transport failed');
+      }, grade,
+      agent: async (_task, _image, _strategy, id, _settings, invoke) => {
+        await invoke(id, roles.strong, body, signal);
+        assert.fail('unknown charge must stop execution');
+      },
+    }), /pair_benchmark_incomplete/);
+    const saved = JSON.parse(await readFile(join(options.out, 'pair.json')));
+    assert.equal(dispatches, 1);
+    assert.equal(saved.complete, false);
+    assert.equal(saved.failure, 'unknown_cost');
+    assert.equal(saved.calls.length, 1);
+    assert.equal(saved.calls[0].costMicros, null);
+    assert(saved.calls[0].reservationMicros > 0);
+    assert.equal(saved.spentOrReservedMicros, config.priorCostMicros + saved.calls[0].reservationMicros);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test('both controls and the pair account for real roles without persisting content', async () => {

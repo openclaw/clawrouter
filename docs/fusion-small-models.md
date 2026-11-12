@@ -434,6 +434,22 @@ control and `edit-handoff` for the mixed candidate. This control separates model
 selection from the effect of changing the execution protocol. Do not pool it
 with ordinary `edit-handoff` blocks as one repeated protocol.
 
+To run only the qualified handoff policy after evaluating it, set
+`FUSION_PAIR_POLICY=edit-handoff` and `FUSION_PAIR_CONTROLS=0`:
+
+```sh
+FUSION_PAIR_POLICY=edit-handoff FUSION_PAIR_CONTROLS=0 \
+  FUSION_CHEAP_REASONING=medium \
+  node scripts/fusion-pair-benchmark.mjs qualification.json tasks.json pair-config.json output-directory
+```
+
+This mode runs one repair per task, without paid baseline calls. It still requires
+qualified tasks, preserves the shared call/time/spend limits, and scores each
+repair with independent acceptance. Its `pair.json` has kind
+`native-policy-repository`; the paired analyzer rejects it because it contains no
+comparison. Keep controls enabled when measuring a gain. This is a sandboxed
+repository experiment, not a policy for the public `clawrouter/fusion` chat model.
+
 Run from a committed task checkout with qualified workload receipts and an
 explicit JSON configuration. Only credentials for the selected models are
 required. Supply credentials through the existing secret injector; do not put
