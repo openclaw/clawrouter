@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an opt-in Fusion benchmark policy that hands a submitted candidate to a cheap verifier within the existing shared limits.
+
 - Verify exported Fusion repairs against their task and digests, then rerun visible and independent acceptance checks without model calls or applying source to the caller's checkout.
 - Add Fusion validation workloads for threshold grant routing and cross-platform native snapshot compression, with pinned source revisions and independent acceptance tests.
 - Add private, opt-in source bundles for accepted Fusion handoff repairs, with provenance and content-free export receipts; failed delivery stops the run without overwriting existing files.

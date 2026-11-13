@@ -426,6 +426,19 @@ failures, then submit when verification is complete. It keeps the full remaining
 allowance; there is no forced early submission. Probe-use receipts require a
 successful model response to context that includes the transferred probe.
 
+Set `FUSION_PAIR_POLICY=completion-handoff` to keep the strong model until it
+calls `finish`, then transfer its current candidate, notes and latest bounded
+probe to the cheap verifier. Passing edits and the ordinary turn threshold do
+not trigger this transfer. `finish` is a submission signal, not proof that the
+repair is complete: even a candidate with failing visible tests goes to the
+successor for repair. The successor receives the same verification instructions
+as `edit-handoff` and uses only the calls, time and spend still available. If the
+primary exhausts the allowance, there may be no successor call; inspect recorded
+model calls before claiming a mixed run. Controls remain uninterrupted cheap and
+strong runs, and the report records this as a separate policy. This experimental
+comparison requires controls; repair export and control-free execution remain
+limited to the existing qualified `edit-handoff` mode. Do not pool the policies.
+
 Set `FUSION_PAIR_POLICY=matched-handoff` to compare the cheap successor against
 a strong successor using the same handoff point, verification instructions,
 current-source context and shared limits. The cheap-only arm stays unchanged.

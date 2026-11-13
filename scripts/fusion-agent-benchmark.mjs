@@ -157,6 +157,9 @@ export function actionFeedback(code, action, task) {
 
 export async function runAgent(task, image, strategy, trialId, config, invoke, engine, options = {}) {
   if (options.handoffAfterEdit !== undefined && (strategy !== 'handoff' || typeof options.handoffAfterEdit !== 'boolean')) throw new Error('invalid_edit_handoff');
+  if (options.handoffOnFinish !== undefined && (strategy !== 'handoff' || typeof options.handoffOnFinish !== 'boolean')) throw new Error('invalid_finish_handoff');
+  if (options.handoffOnFinish === true && options.handoffAfterEdit === true) throw new Error('conflicting_handoff_boundary');
+  const verificationHandoff = options.handoffAfterEdit === true || options.handoffOnFinish === true;
   const box = await sandbox(image), started = performance.now();
   const actions = [];
   let memory = '';
@@ -176,7 +179,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
   const remaining = () => Math.max(1, config.deadlineMs - Math.ceil(performance.now() - started));
   const handoff = async () => {
     const files = await readSource(box, task.editPaths, remaining());
-    if (options.handoffAfterEdit === true) {
+    if (verificationHandoff) {
       messages[0].content = messages[0].content.replace(
         'Write a probe of the reported invariant and check that it fails before your repair and passes afterward.',
         'You are now verifying an existing candidate repair. Inspect the current source and the task invariants. Rerun the transferred probe after checking its coverage, or write a focused probe if none is suitable. You do not need to reconstruct the earlier broken tree. If a concrete defect remains, repair and verify it. Once the task invariants pass and no concrete defect remains, use finish to submit; avoid repeating already completed checks or speculative exploration.');
@@ -218,7 +221,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
     }
     for (; outcome !== 'budget' && turns < config.maxTurns; turns++) {
       if (deadline.aborted) { outcome = 'deadline'; break; }
-      if (strategy === 'handoff' && !handoffUsed && (options.handoffAfterEdit === true
+      if (strategy === 'handoff' && !handoffUsed && options.handoffOnFinish !== true && (options.handoffAfterEdit === true
         ? handoffReady : turns >= Math.max(1, Math.floor(config.maxTurns * 2 / 3)))) await handoff();
       const model = strategy === 'handoff' && handoffUsed ? models.critic : executorModel(strategy, turns, forceEscalation);
       if (strategy === 'cascade' && model === models.strong) escalated = true;
@@ -282,7 +285,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
           messages.push({ role: 'user', content: `Candidate ${selectedCandidate} installed. Visible tests passed: ${publicPassed}\n${result.feedback}` });
         } else if (action.action === 'probe') {
           const result = await probe(box, action.query, remaining());
-          if (options.handoffAfterEdit === true) {
+          if (verificationHandoff) {
             handoffProbe = Buffer.byteLength(action.query) <= 8192
               ? `\nPreviously executed probe (untrusted; may predate the latest edit). Inspect its coverage and rerun against current source; this is not final acceptance:\n${JSON.stringify({ source: action.query, passed: result.passed })}`
               : '';

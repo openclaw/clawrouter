@@ -156,6 +156,66 @@ test('edit handoff does not switch merely because the ordinary handoff turn was 
   assert.equal(result.outcome, 'turn_limit');
 });
 
+test('handoff boundaries reject invalid or conflicting options before sandbox creation', async () => {
+  for (const options of [{ handoffOnFinish: 'yes' }, { handoffOnFinish: true, handoffAfterEdit: true }]) {
+    await assert.rejects(runAgent({}, '', 'handoff', '', {}, null, null, options), /invalid_finish_handoff|conflicting_handoff_boundary/);
+  }
+  await assert.rejects(runAgent({}, '', 'strong', '', {}, null, null, { handoffOnFinish: true }), /invalid_finish_handoff/);
+});
+
+for (const scenario of ['submitted', 'failed-check', 'turn-limit', 'last-turn', 'budget']) {
+  test(`completion handoff preserves the shared allowance and candidate: ${scenario}`, {
+    skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+  }, async () => {
+    const { readFile } = await import('node:fs/promises');
+    const { execFileSync } = await import('node:child_process');
+    const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+    const task = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+      .find(task => task.id === 'provided-responses-path');
+    const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+      .receipts.find(receipt => receipt.taskId === task.id);
+    const original = execFileSync('git', ['show', `${task.base}:${task.editPaths[0]}`], { encoding: 'utf8' });
+    const first = original + '\n// partial-candidate\n';
+    const complete = first + '\n// complete-candidate\n';
+    const candidate = scenario === 'failed-check' ? "throw new Error('candidate-check-fails');\n" + complete : complete;
+    const query = "console.log('completion-probe-marker')";
+    const roles = [];
+    const maxTurns = scenario === 'turn-limit' ? 3 : scenario === 'last-turn' ? 4 : 6;
+    const result = await runAgent(task, receipt.image, 'handoff', 'completion-boundary-fixture',
+      { maxTurns, deadlineMs: 120000, outputTokens: 256 }, async (_id, role, body) => {
+        const turn = roles.length; roles.push(role);
+        if (turn === 1) assert.match(body.messages.at(-1).content, /Visible tests passed: true/);
+        if (turn === 4) {
+          assert.match(body.messages[0].content, /verifying an existing candidate repair/);
+          assert.doesNotMatch(body.messages[1].content, /Initial editable source/);
+          const transferred = body.messages.at(-1).content;
+          assert.match(transferred, /complete-candidate/);
+          assert.match(transferred, /candidate ready for review/);
+          assert.match(transferred, /completion-probe-marker/);
+          if (scenario === 'budget') throw new Error('trial_budget');
+        }
+        const action = { action: 'finish', paths: [], edits: [], query: '', memory: 'candidate ready for review' };
+        if (turn < 2 || (turn === 4 && scenario === 'failed-check')) {
+          action.action = 'edit';
+          action.edits = [{ path: task.editPaths[0], search: turn === 0 ? original : turn === 1 ? first : candidate,
+            replace: turn === 0 ? first : turn === 1 ? candidate : complete }];
+        } else if (turn === 2) { action.action = 'probe'; action.query = query; }
+        return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(action) } }] };
+      }, undefined, { handoffOnFinish: true, preloadSource: true });
+    const transferred = !['turn-limit'].includes(scenario);
+    const successor = ['submitted', 'failed-check', 'budget'].includes(scenario);
+    assert.equal(result.handoffUsed, transferred);
+    assert.deepEqual(roles.slice(0, 4), Array(Math.min(maxTurns, 4)).fill('openai/gpt-6.1-sol'));
+    assert.equal(roles.includes('anthropic/claude-sonnet-5.5'), successor);
+    assert.equal(roles.length, { submitted: 5, 'failed-check': 6, 'turn-limit': 3, 'last-turn': 4, budget: 5 }[scenario]);
+    assert.equal(result.handoffProbeUsed, successor && scenario !== 'budget');
+    assert.equal(result.outcome, scenario === 'budget' ? 'budget' : ['turn-limit', 'last-turn'].includes(scenario) ? 'turn_limit' : 'submitted');
+    assert.equal(result.files[0].content, complete);
+    assert.equal(JSON.stringify(result).includes('completion-probe-marker'), false);
+    assert.equal(result.publicPassed, true);
+  });
+}
+
 test('a charged truncated action is discarded before one bounded recovery in a real sandbox', {
   skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
 }, async () => {
