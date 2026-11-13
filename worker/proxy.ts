@@ -1229,12 +1229,16 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     let creditExhausted = false;
     const captureResponse = async (upstream: Response) => {
       creditExhausted = false;
-      if (selection.provider.id === "anthropic" && upstream.status === 400 && prepared.grantKey) {
+      let errorBody: string | undefined;
+      if (selection.provider.id === "anthropic" && prepared.grantKey
+        && (upstream.status === 400 || upstream.status === 429 && prepared.grantLane === "subscription"
+          && selectionUpstreamModel(selection)?.startsWith("claude-fable-"))) {
         const inspected = await inspectJsonError(upstream, operation);
         upstream = inspected.response;
+        errorBody = inspected.body;
         creditExhausted = providerCreditExhausted(selection.provider.id, upstream.status, inspected.body);
       }
-      if (!searchOwner && !isModelDiscovery(selection.endpoint)) captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, upstream, selection.provider.id, selectionUpstreamModel(selection), creditExhausted);
+      if (!searchOwner && !isModelDiscovery(selection.endpoint)) captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, upstream, selection.provider.id, selectionUpstreamModel(selection), creditExhausted, errorBody);
       return upstream;
     };
     accounting.observeUpstreamResponse(response, prepared.url);
@@ -1759,11 +1763,11 @@ function wanCreateAuthority(env: Env, auth: AuthorizedIdentity, selection: Proxy
   };
 }
 
-export function captureGrantRuntime(context: ExecutionContext, env: Env, key: string | null, revision: string | null, quota: CompiledQuotaConfig, response: Pick<Response, "status" | "headers">, providerId?: string, model?: string | null, creditExhausted = false): void {
+export function captureGrantRuntime(context: ExecutionContext, env: Env, key: string | null, revision: string | null, quota: CompiledQuotaConfig, response: Pick<Response, "status" | "headers">, providerId?: string, model?: string | null, creditExhausted = false, errorBody?: string): void {
   if (!key) return;
   // A rejected credential must not keep serving from this isolate's cache.
   if (response.status === 401 || response.status === 403) evictGrantCredentials(key);
-  const state = observeProviderGrantQuota(providerId, response, quota, model, Date.now(), creditExhausted);
+  const state = observeProviderGrantQuota(providerId, response, quota, model, Date.now(), creditExhausted, errorBody);
   if (!state) return;
   const direct = queueGrantRuntime(env, key, { ...state, grantRevision: revision });
   if (direct) context.waitUntil(direct);
