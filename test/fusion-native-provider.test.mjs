@@ -224,3 +224,29 @@ for (const [name, mutate, disposition] of [
   assert.throws(() => requireCompleteResponse(normalized.result), new RegExp(`provider_${disposition}`));
   assert.equal(normalized.result.choices[0].message.content, '');
 });
+
+for (const phase of [undefined, null, 'final_answer']) test(`Responses excludes commentary from the structured action: ${phase}`, () => {
+  const raw = responsesFixture();
+  raw.output[1].phase = phase;
+  raw.output.unshift({ type: 'message', role: 'assistant', status: 'completed', phase: 'commentary',
+    content: [{ type: 'output_text', text: 'private commentary sentinel' }] });
+  const normalized = nativeResult('openai/gpt-6.1-sol', raw, 'responses');
+  assert.equal(normalized.result.choices[0].message.content, '{"answer":"ok"}');
+  assert.equal(responseDisposition(normalized.result), 'complete');
+  assert.ok(!JSON.stringify(normalized).includes('sentinel'));
+  raw.output[2].content = [{ type: 'refusal', refusal: 'no' }];
+  assert.equal(responseDisposition(nativeResult('openai/gpt-6.1-sol', raw, 'responses').result), 'refused');
+});
+
+for (const [name, mutate] of [
+  ['commentary only', r => r.output[1].phase = 'commentary'],
+  ['unknown phase', r => r.output[1].phase = 'new_phase'],
+  ['unfinished commentary', r => r.output.unshift({ type: 'message', role: 'assistant', status: 'in_progress', phase: 'commentary', content: [] })],
+  ['multiple final answers', r => { r.output[1].phase = 'final_answer'; r.output.push(structuredClone(r.output[1])); }],
+]) test(`Responses does not guess the final answer: ${name}`, () => {
+  const raw = responsesFixture(); mutate(raw);
+  const normalized = nativeResult('openai/gpt-6.1-sol', raw, 'responses');
+  assert.equal(responseDisposition(normalized.result), 'unknown_stop');
+  assert.equal(normalized.result.choices[0].message.content, '');
+  assert.equal(normalized.costMicros, 6670);
+});

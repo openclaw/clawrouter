@@ -93,14 +93,16 @@ function responsesResult(result) {
   }
   const items = Array.isArray(result.output) ? result.output : [];
   const messages = items.filter(item => item?.type === 'message');
-  const message = messages[0];
+  const answers = messages.filter(message => message.phase == null || message.phase === 'final_answer');
+  const message = answers[0];
   let content = '', finish_reason = 'unknown';
   if (result.status === 'incomplete') {
     finish_reason = { max_output_tokens: 'length', content_filter: 'content_filter' }[result.incomplete_details?.reason] ?? 'unknown';
   } else if (result.status === 'completed') {
     if (items.some(item => item?.type === 'function_call')) finish_reason = 'tool_calls';
-    else if (messages.length === 1 && message.role === 'assistant' && message.status === 'completed'
-      && Array.isArray(message.content) && items.every(item => ['message', 'reasoning'].includes(item?.type))) {
+    else if (answers.length === 1 && messages.every(item => item.role === 'assistant' && item.status === 'completed'
+      && Array.isArray(item.content) && (item.phase == null || ['commentary', 'final_answer'].includes(item.phase)))
+      && items.every(item => ['message', 'reasoning'].includes(item?.type))) {
       if (message.content.some(part => part?.type === 'refusal')) finish_reason = 'refusal';
       else if (message.content.every(part => part?.type === 'output_text' && typeof part.text === 'string')) {
         content = message.content.map(part => part.text).join('');

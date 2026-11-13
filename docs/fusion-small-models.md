@@ -1352,7 +1352,9 @@ uses `max_output_tokens` for both dispatch and conservative budget reservations.
 It settles qualified usage even when an answer is truncated or refused.
 Truncation fails the arm; refusal stops the campaign, matching the existing rules. Invalid usage, HTTP failures, and unpriced tool or long-cache
 charges preserve the unknown-charge reservation. Reasoning text is not passed to
-the executor or retained in the receipt. No automatic retry or API fallback runs.
+the executor or retained in the receipt. Commentary messages are excluded from
+structured actions; one completed final-answer message (or legacy message with
+no phase) is required. Ambiguous final answers are rejected. No automatic retry or API fallback runs.
 
 This option enables a separately declared transport experiment. It does not
 establish that Responses fixes earlier Chat Completions errors, and results from

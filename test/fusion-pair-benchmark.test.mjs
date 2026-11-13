@@ -1088,7 +1088,8 @@ test('Responses selection reaches each arm and records the route without losing 
         if (url.includes('/v1/models/')) return Response.json({ id: url.split('/').at(-1) });
         const sent = JSON.parse(request.body); requests.push({ url, sent });
         return Response.json({ model: sent.model, status: 'completed', service_tier: 'default',
-          output: [{ type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'ok' }] }],
+          output: [{ type: 'message', role: 'assistant', status: 'completed', phase: 'commentary', content: [{ type: 'output_text', text: 'private commentary sentinel' }] },
+            { type: 'message', role: 'assistant', status: 'completed', phase: 'final_answer', content: [{ type: 'output_text', text: 'ok' }] }],
           usage: { input_tokens: 20, output_tokens: 30, total_tokens: 50 } });
       },
       agent: async (_task, _image, _strategy, id, _settings, invoke) => {
@@ -1106,6 +1107,7 @@ test('Responses selection reaches each arm and records the route without losing 
     }
     assert.ok(state.calls.every(call => call.inputTokens === 20 && call.outputTokens === 30 && call.costMicros > 0));
     assert.equal(JSON.parse(await readFile(join(options.out, 'pair.json'))).openAiApi, 'responses');
+    assert.ok(!JSON.stringify(state).includes('private commentary sentinel'));
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
