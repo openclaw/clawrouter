@@ -172,7 +172,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
         const strategy = trialStrategies[(index + offset) % trialStrategies.length], trialId = `${task.id}:${strategy}`;
         const selectedStrategy = strategy === 'scope' ? scopeStrategy(task) : contractPolicies.includes(strategy) ? 'strong' : strategy;
         const start = performance.now(), execution = pairExecution(selectedStrategy, config);
-        let diagnosticMs = 0;
+        let diagnosticMs = 0, agentElapsedMs = null, gradingElapsedMs = null;
         const matchedStrong = policy === 'matched-handoff' && strategy === 'strong';
         if (matchedStrong) execution.strategy = 'handoff';
         const row = { taskId: task.id, split: task.split, strategy, score: 0, status: 'running',
@@ -180,18 +180,25 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
         state.records.push(row);
         await save();
         try {
-          const result = strategy === 'draft-sampling'
-            ? await samplingAgent(task, receipt.image, trialId, execution.settings, invoke(strategy), { agent })
-            : strategy === 'probe-selection'
-            ? await probeAgent(task, receipt.image, trialId, execution.settings, invoke(strategy), { agent })
-            : contractPolicies.includes(strategy)
-            ? await contractAgent(task, receipt.image, trialId, execution.settings, invoke(strategy),
-              { agent, ...(['contract-draft', 'contract-refine'].includes(policy) ? { cheapAgent: policy === 'contract-refine' ? runRefinedDraft : runSingleDraft } : {}), cheapMaxCalls, exposeProbe: policy !== 'contract-private', providedProbe: providedPolicies.includes(policy) ? task.reproducer : null })
-            : await agent(providedPolicies.includes(policy) ? withReproducer(task, task.reproducer) : task,
-              receipt.image, execution.strategy, trialId, execution.settings, invoke(selectedStrategy), undefined,
-              { preloadSource, ...(probeRegressionGate ? { probeRegressionGate: true } : {}), ...(handoffEvidence && execution.strategy === 'handoff' ? { handoffEvidence: true } : {}), ...(strategy === 'completion-handoff' ? { handoffOnFinish: true }
-                : strategy === 'edit-handoff' || matchedStrong ? { handoffAfterEdit: true } : {}) });
-          const verdict = await grade(task, receipt.image, result.files, repo);
+          let result;
+          const agentStarted = performance.now();
+          try {
+            result = strategy === 'draft-sampling'
+              ? await samplingAgent(task, receipt.image, trialId, execution.settings, invoke(strategy), { agent })
+              : strategy === 'probe-selection'
+              ? await probeAgent(task, receipt.image, trialId, execution.settings, invoke(strategy), { agent })
+              : contractPolicies.includes(strategy)
+              ? await contractAgent(task, receipt.image, trialId, execution.settings, invoke(strategy),
+                { agent, ...(['contract-draft', 'contract-refine'].includes(policy) ? { cheapAgent: policy === 'contract-refine' ? runRefinedDraft : runSingleDraft } : {}), cheapMaxCalls, exposeProbe: policy !== 'contract-private', providedProbe: providedPolicies.includes(policy) ? task.reproducer : null })
+              : await agent(providedPolicies.includes(policy) ? withReproducer(task, task.reproducer) : task,
+                receipt.image, execution.strategy, trialId, execution.settings, invoke(selectedStrategy), undefined,
+                { preloadSource, ...(probeRegressionGate ? { probeRegressionGate: true } : {}), ...(handoffEvidence && execution.strategy === 'handoff' ? { handoffEvidence: true } : {}), ...(strategy === 'completion-handoff' ? { handoffOnFinish: true }
+                  : strategy === 'edit-handoff' || matchedStrong ? { handoffAfterEdit: true } : {}) });
+          } finally { agentElapsedMs = Math.round(performance.now() - agentStarted); }
+          let verdict;
+          const gradingStarted = performance.now();
+          try { verdict = await grade(task, receipt.image, result.files, repo); }
+          finally { gradingElapsedMs = Math.round(performance.now() - gradingStarted); }
           const { files, ...trace } = result;
           Object.assign(row, { ...trace, verdict, score: Number(verdict.passed && verdict.tests === receipt.oracleTests
             && verdict.skipped === receipt.oracleSkipped && result.publicPassed && (!probeRegressionGate || result.probeRegressionPassed === true)), status: 'complete' });
@@ -212,6 +219,8 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
         } finally {
           row.costMicros = ledger.total(trialId);
           row.calls = ledger.attempts.filter(call => call.trialId === trialId).length;
+          row.agentElapsedMs = agentElapsedMs;
+          row.gradingElapsedMs = gradingElapsedMs;
           row.elapsedMs = Math.round(performance.now() - start - diagnosticMs);
           await save();
         }

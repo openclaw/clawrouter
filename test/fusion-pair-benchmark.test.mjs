@@ -33,6 +33,36 @@ const success = async (url, request) => url.includes('/v1/models/') ? Response.j
   : Response.json({ model: JSON.parse(request.body).model, service_tier: 'default', usage: { prompt_tokens: 20, completion_tokens: 30 },
     choices: [{ finish_reason: 'stop', message: { content: 'private completion sentinel' } }] });
 
+for (const failure of ['none', 'agent', 'grade']) test(`execution timing excludes slow acceptance grading: ${failure}`, async t => {
+  const { root, options } = await fixture();
+  let clock = 1000;
+  t.mock.method(performance, 'now', () => clock);
+  try {
+    const state = await runPairBenchmark({ ...options, policy: 'edit-handoff', includeControls: false,
+      fetcher: success,
+      agent: async () => {
+        clock += 17;
+        if (failure === 'agent') throw new Error('agent failed');
+        return { ...repaired(), agentElapsedMs: 999, gradingElapsedMs: 999 };
+      },
+      grade: async () => {
+        clock += 30000;
+        if (failure === 'grade') throw new Error('grader failed');
+        return grade();
+      },
+    });
+    const [row] = state.records;
+    assert.equal(row.agentElapsedMs, 17);
+    assert.equal(row.gradingElapsedMs, failure === 'agent' ? null : 30000);
+    assert.equal(row.elapsedMs, failure === 'agent' ? 17 : 30017);
+    assert.equal(row.score, Number(failure === 'none'));
+    assert.equal(row.status, failure === 'none' ? 'complete' : 'error');
+    const saved = JSON.parse(await readFile(join(options.out, 'pair.json'), 'utf8')).records[0];
+    assert.equal(saved.agentElapsedMs, row.agentElapsedMs);
+    assert.equal(saved.gradingElapsedMs, row.gradingElapsedMs);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('architect spends one of the shared calls on the strong planner', () => {
   validatePair(config, 1);
   assert.equal(pairModel('architect', roles.cheap, config), config.strong);
