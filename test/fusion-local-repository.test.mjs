@@ -319,3 +319,70 @@ test('supplied preservation checks require exact baseline and reference receipts
   receipt.preservation.reference[0].probeDigest = 'stale';
   assert.throws(() => validateLocalQualification([task], q), /unqualified_local_task/);
 });
+
+test('request deadlines retain profile defaults and allow independent overrides', async t => {
+  const deadlines = [];
+  t.mock.method(AbortSignal, 'timeout', ms => {
+    deadlines.push(ms);
+    return new AbortController().signal;
+  });
+  for (const [profile, requestTimeoutMs] of [['legacy', undefined], ['grounded', undefined], ['checked', undefined], ['legacy', 180000]]) {
+    await localActionRequest({ endpoint: 'http://127.0.0.1:11435', model: pins[0].model, pin: pins[0], body,
+      signal: new AbortController().signal, seed: 1, profile, requestTimeoutMs,
+      fetcher: async (_url, request) => {
+        assert.equal(JSON.parse(request.body).options.temperature, profile === 'legacy' ? 0 : groundedSampling.temperature);
+        return response(pins[0].model);
+      } });
+  }
+  assert.deepEqual(deadlines, [60000, 120000, 120000, 180000]);
+});
+
+test('invalid request deadlines fail before dispatch', async () => {
+  let dispatches = 0;
+  for (const requestTimeoutMs of [0, -1, 1.5, NaN, Infinity, 300001, '180000', null]) {
+    await assert.rejects(localActionRequest({ endpoint: 'http://127.0.0.1:11435', model: pins[0].model, pin: pins[0], body,
+      signal: new AbortController().signal, requestTimeoutMs,
+      onDispatch: async () => { dispatches++; }, fetcher: async () => { throw new Error('unexpected_fetch'); } }), /invalid_local_request_timeout/);
+  }
+  assert.equal(dispatches, 0);
+});
+
+test('a longer request deadline still honors caller cancellation', async () => {
+  const caller = new AbortController();
+  await assert.rejects(localActionRequest({ endpoint: 'http://127.0.0.1:11435', model: pins[0].model, pin: pins[0], body,
+    signal: caller.signal, requestTimeoutMs: 180000,
+    fetcher: async (_url, request) => {
+      caller.abort();
+      assert.equal(request.signal.aborted, true);
+      throw new Error('request_aborted');
+    } }), /provider_local_deadline/);
+});
+
+test('campaigns record and use their explicit request deadline', async t => {
+  const { root, options } = await fixture(), deadlines = [];
+  t.mock.method(AbortSignal, 'timeout', ms => {
+    deadlines.push(ms);
+    return new AbortController().signal;
+  });
+  try {
+    const result = await runLocalRepository({ ...options, requestTimeoutMs: 180000,
+      fetcher: async (_url, request) => response(JSON.parse(request.body).model),
+      agent: async (_task, _image, _strategy, id, _config, invoke) => {
+        await invoke(id, roles.strong, body, new AbortController().signal);
+        return { files: [], outcome: 'submitted' };
+      }, grade: async () => ({ valid: true, passed: true, tests: 3, skipped: 0 }) });
+    assert.equal(result.settings.requestTimeoutMs, 180000);
+    assert.deepEqual(deadlines, [180000, 180000, 180000]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('invalid campaign request deadlines fail before preflight or output creation', async () => {
+  const { root, options } = await fixture();
+  let preflights = 0;
+  try {
+    await assert.rejects(runLocalRepository({ ...options, requestTimeoutMs: 300001,
+      preflight: async () => { preflights++; } }), /invalid_local_request_timeout/);
+    assert.equal(preflights, 0);
+    await assert.rejects(readFile(join(options.out, 'local-repository.json')), { code: 'ENOENT' });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

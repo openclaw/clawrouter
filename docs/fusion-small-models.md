@@ -318,6 +318,14 @@ Programmatic callers use `runLocalRepository({ outputTokens })`; direct transpor
 callers set `localActionRequest({ maxOutputTokens })` and request no more than that
 allowance in `body.max_tokens`.
 
+Set `FUSION_LOCAL_REQUEST_TIMEOUT_MS` to an integer from 1 through 300,000 to
+change the per-request deadline independently of sampling. Defaults remain
+60,000 ms for legacy and 120,000 ms for grounded/checked profiles. The campaign
+records the effective value in `settings.requestTimeoutMs`; its trial and
+campaign deadlines still apply. Programmatic callers pass `requestTimeoutMs`
+to `runLocalRepository` or `localActionRequest`. Declare a changed deadline as
+part of the experiment protocol.
+
 A conservative input-byte bound rejects oversized contexts before dispatch.
 Truncation, context limits and trial deadlines produce unsuccessful trial rows;
 transport, identity, usage and infrastructure failures stop the campaign. There
