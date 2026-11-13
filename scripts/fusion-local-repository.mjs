@@ -167,7 +167,8 @@ export async function runLocalRepository({ repo, qualificationPath, out, sourceS
         if (!['provider_context_limit', 'provider_truncated', 'provider_local_deadline'].includes(error.message)) throw error;
         outcome = { provider_context_limit: 'context_limit', provider_truncated: 'truncated', provider_local_deadline: 'deadline' }[error.message];
       }
-      const passed = graded?.passed === true && graded.tests === receipt.oracleTests && graded.skipped === receipt.oracleSkipped
+      const passed = outcome === (profile === 'checked' ? 'verified' : 'submitted')
+        && graded?.passed === true && graded.tests === receipt.oracleTests && graded.skipped === receipt.oracleSkipped
         && (profile !== 'checked' || (result?.reproducerQualified === true && result.probePassed === true && result.publicPassed === true));
       state.records.push({ caseId: task.id, strategy, score: passed ? 1 : 0, outcome,
         calls: trialCalls.filter(row => row.dispatched).length, attempts: trialCalls.length,

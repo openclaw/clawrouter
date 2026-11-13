@@ -190,6 +190,24 @@ test('passing grades require the qualified test and skipped counts', async () =>
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+for (const [profile, outcomes] of [
+  ['legacy', ['turn_limit', 'verified', 'submitted']],
+  ['grounded', ['deadline', undefined, 'submitted']],
+  ['checked', ['turn_limit', 'submitted', 'verified']],
+]) test(`${profile} scores only a completed submission even when every patch passes acceptance`, async () => {
+  const { root, options } = await fixture(); let calls = 0;
+  try {
+    const result = await runLocalRepository({ ...options, profile,
+      agent: async () => ({ files: [], outcome: outcomes[calls++], publicPassed: true,
+        reproducerQualified: true, probePassed: true }),
+      grade: async () => ({ valid: true, passed: true, tests: 3, skipped: 0 }) });
+    assert.deepEqual(result.records.map(row => row.score), [0, 0, 1]);
+    assert.deepEqual(result.records.map(row => row.outcome), outcomes);
+    assert.ok(result.records.every(row => row.graderTests === 3));
+    assert.equal(result.summary.reduce((sum, row) => sum + row.solved, 0), 1);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('transport failure checkpoints once and does not silently try another model', async () => {
   const { root, options } = await fixture(); let calls = 0;
   try {
