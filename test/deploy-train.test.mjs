@@ -341,11 +341,17 @@ test('native source rejects lifecycle, container, actor and fingerprint-owner ch
   for (const changed of [config.replace('durable_object', 'other'), config.replace('name="LARGE_HTTP_POOL"', 'name="OTHER"'), config.replace('v6-large-http', 'v7')]) {
     writeFileSync(join(directory, 'wrangler.toml'), changed);
     const head = commit();
-    assert.throws(() => inspectSource({ blueSha: base, greenSha: head, cwd: directory }), /Non-versioned|Native lifecycle/);
+    for (const nativeCutover of [false,true]) assert.throws(() => inspectSource({ blueSha: base, greenSha: head, cwd: directory, nativeCutover }), /Non-versioned|Native lifecycle/);
   }
   writeFileSync(join(directory, 'wrangler.toml'), config);
   writeFileSync(join(directory, 'worker/large-http/config.ts'), '// changed fingerprint protocol\n');
-  assert.throws(() => inspectSource({ blueSha: base, greenSha: commit(), cwd: directory }), /fingerprint protocol/);
+  const incompatible = commit();
+  for (const nativeCutover of [false,true]) assert.throws(() => inspectSource({ blueSha: base, greenSha: incompatible, cwd: directory, nativeCutover }), /fingerprint protocol/);
+  writeFileSync(join(directory, 'worker/large-http/config.ts'), '// fingerprint protocol\n');
+  writeFileSync(join(directory, 'worker/large-http/continuous.ts'), '// additive control fence\n');
+  const control = commit();
+  assert.throws(() => inspectSource({ blueSha: base, greenSha: control, cwd: directory }), /fingerprint protocol/);
+  assert.deepEqual(inspectSource({ blueSha: base, greenSha: control, cwd: directory, nativeCutover:true }), { migration:false,unsafe:false });
 });
 
 test('failure notification reopens and updates one issue without mentions or extra comments', async () => {

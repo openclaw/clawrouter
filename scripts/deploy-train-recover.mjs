@@ -5,8 +5,9 @@ import { pathToFileURL } from 'node:url';
 import { createApi } from './deploy-train-api.mjs';
 import { deploymentMessage, deploymentState, recoveryDecision } from './deploy-train-policy.mjs';
 import { verifyRuntimeRecovery } from './deploy-train-runtime.mjs';
+import { recoverNativeCutover, createNativeControl } from './deploy-native-cutover.mjs';
 
-export async function recoverRemote(api, run) {
+export async function recoverRemote(api, run, { control, now, wait } = {}) {
   const latest = await api.latest();
   const state = deploymentState(latest);
   if (state && state.run !== String(run)) return 'no owned deployment to recover';
@@ -21,10 +22,14 @@ export async function recoverRemote(api, run) {
   }
   const action = recoveryDecision(state);
   if (state.status === 'rolled-back') {
-    if (latest.versions.length !== 1 || latest.versions[0].version_id !== state.blue || latest.versions[0].percentage !== 100) throw new Error('Rollback receipt differs from live distribution');
-    return 'rollback: blue restored to 100%';
+    if (latest.versions.length !== 1 || latest.versions[0].version_id !== (state.cutover?.recovery ?? state.blue) || latest.versions[0].percentage !== 100) throw new Error('Rollback receipt differs from live distribution');
+    return state.cutover ? 'recovery: compatible native payload restored with fenced control at 100%' : 'rollback: blue restored to 100%';
   }
   if (action !== 'rollback') return action;
+  if (state.cutover) {
+    await recoverNativeCutover({ api, state, control: control ?? createNativeControl(), now, wait });
+    return 'recovery: compatible native payload restored with fenced control at 100%';
+  }
   await verifyRuntimeRecovery(api, state);
   await api.deploy([{ version_id: state.blue, percentage: 100 }], deploymentMessage({ ...state, status: 'rolled-back' }), latest.id);
   return 'rollback: blue restored to 100%';
@@ -41,7 +46,7 @@ export async function failureIssue(api, { run, sha, result }) {
   // Only fixed diagnostics and validated identifiers enter a public issue; no
   // provider bodies, arbitrary error strings, identities, mentions or assignments.
   if (!/^\d+$/.test(String(run)) || !/^[a-f0-9]{40}$/i.test(sha)) throw new Error('Invalid failure receipt identity');
-  const allowed = ['none', 'freeze', 'freeze: lifecycle migration', 'rollback: blue restored to 100%', 'no owned deployment to recover', 'recovery failed; inspect run logs'];
+  const allowed = ['none', 'freeze', 'freeze: lifecycle migration', 'rollback: blue restored to 100%', 'recovery: compatible native payload restored with fenced control at 100%', 'no owned deployment to recover', 'recovery failed; inspect run logs'];
   if (!allowed.includes(result)) throw new Error('Invalid recovery result');
   const receipt = `Run: https://github.com/openclaw/clawrouter/actions/runs/${run}\nCommit: \`${sha}\`\nRecovery: **${result}**.\nSee the run summary and logs. A frozen rollout requires a forward fix; do not blindly roll back storage.`;
   const body = `${marker}\n${receipt}\n\nThis single issue tracks train failures. Successful trains do not post notifications. No people are mentioned or assigned.`;
@@ -51,7 +56,7 @@ export async function failureIssue(api, { run, sha, result }) {
 export async function main(env = process.env) {
   const api = createApi({ env });
   let result;
-  try { result = await recoverRemote(api, env.GITHUB_RUN_ID); }
+  try { result = await recoverRemote(api, env.GITHUB_RUN_ID, { control: env.CLAWROUTER_NATIVE_ADMIN_TOKEN ? createNativeControl({ env }) : undefined }); }
   catch { result = 'recovery failed; inspect run logs'; }
   console.log(result);
   appendFileSync(env.GITHUB_STEP_SUMMARY, `## Failure recovery\n${result}\n`);

@@ -53,6 +53,16 @@ test('frozen native config cannot select a different account', async t => {
   const f = await fixture(t); await prepareNativeUpload(f);
   await assert.rejects(nativeUploadConfig(f.state, { account: 'b'.repeat(32) }), /target mismatch/);
 });
+test('explicit native cutover freezes a different digest without weakening normal rollout', async t => {
+  const f = await fixture(t);
+  f.blue.annotations['workers/message'] = f.blue.annotations['workers/message'].replace(/:native-v1:[a-f0-9]{64}$/, ':native-v1:' + 'f'.repeat(64));
+  let recoveryPrepared = false;
+  await prepareNativeUpload({ ...f, mode: 'native-cutover', prepareRecovery: async ({state}) => { assert.equal(state.cutover.blueRuntimeSha,'f'.repeat(64)); recoveryPrepared = true; } });
+  assert.equal(recoveryPrepared,true);
+  assert.equal(f.state.cutover.blueRuntimeSha, 'f'.repeat(64));
+  assert.notEqual(f.state.native.runtimeSha, f.state.cutover.blueRuntimeSha);
+  assert.ok((await nativeUploadConfig(f.state, { account: 'a'.repeat(32) })).endsWith('/green.toml'));
+});
 for (const [name, mutate] of Object.entries({
   'disabled ingress': async f => writeFile(f.configPath, (await readFile(f.configPath, 'utf8')).replace('LARGE_HTTP_INGRESS_ENABLED = "1"', 'LARGE_HTTP_INGRESS_ENABLED = "0"')),
   'changed capacity': async f => writeFile(f.configPath, (await readFile(f.configPath, 'utf8')).replace('LARGE_HTTP_CAPACITY = "8"', 'LARGE_HTTP_CAPACITY = "7"')),
