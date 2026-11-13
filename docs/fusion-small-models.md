@@ -1086,6 +1086,24 @@ Any changed stop rule or verification policy needs fresh matched controls;
 rescoring these attempts as successes would invalidate this comparison.
 
 
+### Native named-limit scope confirmation task
+
+`benchmarks/fusion/named-limit-workloads.json` pins the Anthropic named-limit
+repair to parent `05b50e0d7bc996d38d5c825d0db4358200e315f3` and reference
+`43d978e80dfaad08d33f2b763f92ac0b4fb12001`. Only `worker/provider-quota.ts` and
+`worker/proxy.ts` are editable. An explicit native Fable limit must preserve
+sibling eligibility while retaining the family-specific rejection deadline.
+The task also requires unchanged response forwarding, bounded inspection,
+existing grant failover limits, and one usage settlement.
+
+The original visible quota tests pass 10/10 on both revisions. Independent
+acceptance adds the historical named-limit tests: the original source fails
+4 assertions across 28 tests; the reference passes all 28. No tests
+are skipped. The new test file exists only in acceptance sandboxes. It is not
+provided to the repair agent. No model has attempted this task in this campaign;
+qualification alone establishes no model capability or fusion gain.
+
+
 ### Native Azure speech retirement confirmation task
 
 `benchmarks/fusion/azure-retirement-workloads.json` pins one historical repair

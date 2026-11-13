@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "anthropic-named-limit-scope",
+      "split": "development",
+      "base": "05b50e0d7bc996d38d5c825d0db4358200e315f3",
+      "oracle": "43d978e80dfaad08d33f2b763f92ac0b4fb12001",
+      "editPaths": [
+        "worker/provider-quota.ts",
+        "worker/proxy.ts"
+      ],
+      "visibleTests": [
+        "worker/test/provider-quota.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/claude-named-limit.test.mjs"
+      ],
+      "instruction": "Repair native Anthropic subscription rejection accounting. An HTTP 429 native rate_limit_error that explicitly says the requested Claude Fable family has reached its Fable limit, while shared usage is healthy, must block that credential's Fable family until the rejection deadline without blocking eligible sibling models. Propagate the inspected body through the existing response capture path without changing the response returned to the caller. Preserve bounded body inspection, existing shared-window and explicit scoped-header handling, four-distinct-grant failover, one usage settlement, normal credit/authentication rejection behavior, and conservative handling of generic, malformed or contradictory errors. Fable versions share the explicit named-limit scope; a later healthy usage snapshot cannot erase the independent rejection deadline. Inspect bodies only on the relevant native error paths and retain the current hot-cache behavior. Change only worker/provider-quota.ts and worker/proxy.ts; do not add provider calls, retries, credential changes, or test edits."
+    }
+  ]
+}
