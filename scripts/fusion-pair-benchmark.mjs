@@ -2,7 +2,7 @@ import { readFile, mkdir, writeFile, rename, rm, open, link } from 'node:fs/prom
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runAgent, SpendLedger, toolErrorCode, finishReason, agentFailureTrace } from './fusion-agent-benchmark.mjs';
-import { nativeModels, nativePins, nativeRequest, nativeResult, nativeErrorMetadata, requireCompleteResponse, responseDisposition } from './fusion-native-provider.mjs';
+import { nativeModels, nativePins, nativeRequest, nativeResult, attachNativeRequestId, nativeResponseMetadata, nativeErrorMetadata, requireCompleteResponse, responseDisposition } from './fusion-native-provider.mjs';
 import { models as roles, priceBound } from './fusion-benchmark-accounting.mjs';
 import { validateLocalQualification } from './fusion-local-repository.mjs';
 import { loadTasks, verify, hash, command, withReproducer, validateEdits } from './fusion-workloads.mjs';
@@ -131,6 +131,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
     if (model === config.cheap && model === 'openai/gpt-6-luna') request.body.reasoning_effort = cheapReasoning;
     const requestBody = JSON.stringify(request.body);
     const attempt = await ledger.reserve(trialId, model, priceBound(request.body, pins[model].price));
+    Object.assign(attempt, attachNativeRequestId(model, request));
     attempt.requestDigest = hash(requestBody);
     attempt.requestBytes = Buffer.byteLength(requestBody);
     attempt.promptDigest = hash(JSON.stringify(body.messages));
@@ -141,6 +142,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
       const response = await fetcher(request.url, { method: 'POST', headers: request.headers,
         body: requestBody, signal: AbortSignal.any([signal, AbortSignal.timeout(90000)]) });
       attempt.httpStatus = response.status;
+      Object.assign(attempt, nativeResponseMetadata(model, response));
       const raw = await response.json();
       if (!response.ok) {
         Object.assign(attempt, nativeErrorMetadata(raw));

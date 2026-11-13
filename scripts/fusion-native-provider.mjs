@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 // Native transports for the opt-in benchmark, not production gateway adapters.
 const rate = (input, cached, write, output) => ({ input: input / 1e6, cached: cached / 1e6, write: write / 1e6, output: output / 1e6, request: 0, tiers: [] });
 export const nativeModels = {
@@ -36,6 +38,21 @@ export function nativeRequest(model, body, env) {
       output_config: { effort: 'medium', ...(body.response_format ? { format: { type: 'json_schema',
         schema: body.response_format.type === 'json_schema' ? body.response_format.json_schema.schema : answerSchema } } : {}) } },
   };
+}
+
+// Correlation only: never retain arbitrary response headers or error text.
+export function attachNativeRequestId(model, request) {
+  if (nativeModels[model]?.provider !== 'openai') return {};
+  const clientRequestId = randomUUID();
+  request.headers['X-Client-Request-Id'] = clientRequestId;
+  return { clientRequestId };
+}
+
+export function nativeResponseMetadata(model, response) {
+  if (nativeModels[model]?.provider !== 'openai') return {};
+  const id = response.headers?.get('x-request-id');
+  return typeof id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(id)
+    ? { providerRequestId: id } : {};
 }
 
 export function nativeResult(model, result) {

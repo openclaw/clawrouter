@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Retain bounded OpenAI request IDs in native Fusion benchmark receipts, including failed calls, without saving response bodies or changing retry and budget rules.
+
 - Add an opt-in Fusion handoff gate that requires an original-failing, candidate-passing assertion and current regression checks before normal transfer.
 
 - Distinguish submitted Fusion benchmark failures from budget stops and passing unsubmitted patches without changing scores or pilot gates.

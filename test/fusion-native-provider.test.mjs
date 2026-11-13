@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { nativeRequest, nativeResult, nativePins, responseDisposition, requireCompleteResponse, nativeErrorMetadata } from '../scripts/fusion-native-provider.mjs';
+import { nativeRequest, nativeResult, nativePins, responseDisposition, requireCompleteResponse, nativeErrorMetadata, attachNativeRequestId, nativeResponseMetadata } from '../scripts/fusion-native-provider.mjs';
 
 const body = { messages: [{ role: 'system', content: 'format instruction' }, { role: 'user', content: 'task' }], max_tokens: 4096, response_format: { type: 'json_object' } };
 const env = { OPENAI_API_KEY: 'synthetic-openai', ANTHROPIC_API_KEY: 'synthetic-anthropic' };
@@ -120,4 +120,32 @@ test('structured error diagnostics admit known labels and discard arbitrary prov
     assert.ok(!JSON.stringify(result).includes('sentinel'));
   }
   assert.equal(nativeErrorMetadata({ error: { code: 'context_length_exceeded', param: 'max_tokens' } }).providerCode, 'context_length_exceeded');
+});
+
+
+test('OpenAI correlation IDs are unique and leave bodies and other providers unchanged', () => {
+  const first = nativeRequest('openai/gpt-6-luna', body, env);
+  const before = JSON.stringify(first.body);
+  const one = attachNativeRequestId('openai/gpt-6-luna', first);
+  const second = nativeRequest('openai/gpt-6-luna', body, env);
+  const two = attachNativeRequestId('openai/gpt-6-luna', second);
+  assert.match(one.clientRequestId, /^[0-9a-f-]{36}$/);
+  assert.equal(first.headers['X-Client-Request-Id'], one.clientRequestId);
+  assert.notEqual(one.clientRequestId, two.clientRequestId);
+  assert.equal(JSON.stringify(first.body), before);
+  const anthropic = nativeRequest('anthropic/claude-sonnet-5.5', body, env);
+  const unchanged = JSON.stringify(anthropic);
+  assert.deepEqual(attachNativeRequestId('anthropic/claude-sonnet-5.5', anthropic), {});
+  assert.equal(JSON.stringify(anthropic), unchanged);
+});
+
+test('response metadata accepts only bounded opaque OpenAI request IDs', () => {
+  for (const id of ['req_abc-123', 'a'.repeat(128)]) {
+    assert.deepEqual(nativeResponseMetadata('openai/gpt-6-luna', { headers: new Headers({ 'x-request-id': id }) }), { providerRequestId: id });
+  }
+  for (const id of ['', 'a'.repeat(129), 'private prompt sentinel', 'req_1,req_2', 'req_1\nsecret', 'req_1\n', 'req_1\r', null, 12]) {
+    assert.deepEqual(nativeResponseMetadata('openai/gpt-6-luna', { headers: { get: () => id } }), {});
+  }
+  assert.deepEqual(nativeResponseMetadata('openai/gpt-6-luna', {}), {});
+  assert.deepEqual(nativeResponseMetadata('anthropic/claude-sonnet-5.5', { headers: new Headers({ 'x-request-id': 'req_abc' }) }), {});
 });

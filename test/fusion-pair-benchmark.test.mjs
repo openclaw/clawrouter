@@ -972,3 +972,51 @@ for (const policy of ['edit-handoff', 'matched-handoff']) test(`probe-qualified 
     assert.equal(analyzePairRun(state).handoffProbeGate, true);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+
+for (const failure of ['none', 'http', 'json', 'transport']) test(`native correlation survives ${failure} and is saved before dispatch`, async () => {
+  const { root, options } = await fixture();
+  const ids = [];
+  let paidCalls = 0;
+  try {
+    const running = runPairBenchmark({ ...options, policy: 'edit-handoff', includeControls: false, grade,
+      fetcher: async (url, request) => {
+        if (url.includes('/v1/models/')) return success(url, request);
+        paidCalls++;
+        const saved = JSON.parse(await readFile(join(options.out, 'pair.json'), 'utf8'));
+        const attempt = saved.calls.at(-1);
+        const id = request.headers['X-Client-Request-Id'];
+        assert.equal(attempt.clientRequestId, id);
+        assert.equal(attempt.costMicros, null);
+        assert.ok(attempt.reservationMicros > 0);
+        assert.ok(!ids.includes(id));
+        ids.push(id);
+        if (failure === 'transport') throw new Error('private transport sentinel');
+        const headers = { 'x-request-id': 'req_test-123', 'x-private': 'private header sentinel' };
+        if (failure === 'http') return Response.json({ error: { type: 'invalid_request_error', message: 'private error sentinel' } }, { status: 400, headers });
+        if (failure === 'json') return new Response('private invalid json sentinel', { headers });
+        const response = await success(url, request);
+        response.headers.set('x-request-id', headers['x-request-id']);
+        return response;
+      },
+      agent: async (_task, _image, _strategy, id, _settings, invoke) => {
+        await invoke(id, roles.strong, body, signal);
+        await invoke(id, roles.cheap, body, signal);
+        return repaired();
+      },
+    });
+    if (failure === 'none') await running;
+    else await assert.rejects(running, /pair_benchmark_incomplete/);
+    const saved = JSON.parse(await readFile(join(options.out, 'pair.json'), 'utf8'));
+    assert.equal(saved.failure, failure === 'none' ? undefined : 'unknown_cost');
+    assert.equal(paidCalls, failure === 'none' ? 2 : 1);
+    assert.equal(saved.complete, failure === 'none');
+    for (const call of saved.calls) {
+      assert.match(call.clientRequestId, /^[0-9a-f-]{36}$/);
+      assert.equal(call.providerRequestId, failure === 'transport' ? undefined : 'req_test-123');
+      if (failure === 'none') assert.ok(Number.isSafeInteger(call.costMicros));
+      else assert.equal(call.costMicros, null);
+    }
+    assert.ok(!JSON.stringify(saved).includes('sentinel'));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

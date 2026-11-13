@@ -2,7 +2,7 @@ import { readFile, writeFile, mkdir, rename } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { loadTasks, hash, validatePreservationProbes, sandbox, readSource, readTaskContext, writeFiles, validateEdits, check, probe, verify } from './fusion-workloads.mjs';
-import { nativePins, nativeRequest, nativeResult, responseDisposition, requireCompleteResponse, nativeErrorMetadata } from './fusion-native-provider.mjs';
+import { nativePins, nativeRequest, nativeResult, attachNativeRequestId, nativeResponseMetadata, responseDisposition, requireCompleteResponse, nativeErrorMetadata } from './fusion-native-provider.mjs';
 import { priceBound, models } from './fusion-benchmark-accounting.mjs';
 import { runCandidateEnsemble, compareCandidates, candidateSummaries } from './fusion-candidate-ensemble.mjs';
 
@@ -501,11 +501,14 @@ export async function runExperiment({ qualificationPath, out, repo, config = def
     if (stoppedTrials.has(trialId)) throw new Error(stoppedTrials.get(trialId));
     const request = nativeRequest(model, body, env);
     const attempt = await ledger.reserve(trialId, model, priceBound(request.body, pins[model].price));
+    Object.assign(attempt, attachNativeRequestId(model, request));
+    await snapshot();
     let result;
     try {
       const response = await fetch(request.url, { method: 'POST', headers: request.headers, body: JSON.stringify(request.body),
         signal: AbortSignal.any([signal, AbortSignal.timeout(90000)]) });
       attempt.httpStatus = response.status;
+      Object.assign(attempt, nativeResponseMetadata(model, response));
       if (!response.ok) {
         Object.assign(attempt, nativeErrorMetadata(await response.json().catch(() => null)));
         if (attempt.errorHint === 'safety_notice') console.log("Provider safety notice: This content can't be shown. The campaign stopped without retry or fallback.");
