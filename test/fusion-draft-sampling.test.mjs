@@ -114,3 +114,42 @@ test('native sampling preserves a wrong first draft even when the second passes 
   assert.equal((await verify(task, receipt.image, result.files, process.cwd())).passed, false);
   assert.equal((await verify(task, receipt.image, repaired, process.cwd())).passed, true);
 });
+
+
+test('native sampling continues after a hanging first draft and selects a working second draft', {
+  skip: !process.env.FUSION_NATIVE_IMAGE,
+}, async () => {
+  const { sandbox, check } = await import('../scripts/fusion-workloads.mjs');
+  const { runSingleDraft } = await import('../scripts/fusion-contract-agent.mjs');
+  const source = 'export const answer = 0;';
+  const input = { editPaths: ['worker/example.ts'], visibleTests: ['worker/test/watchdog.test.mjs'],
+    instruction: 'Export answer = 42 without hanging.' };
+  let calls = 0;
+  const result = await runDraftSampling(input, process.env.FUSION_NATIVE_IMAGE, 'watchdog',
+    { ...config, deadlineMs: 15000 }, async () => ({ choices: [{ finish_reason: 'stop', message: {
+      content: JSON.stringify({ edits: [{ path: input.editPaths[0], search: source,
+        replace: ++calls === 1 ? 'while (true) {}' : 'export const answer = 42;' }] }),
+    } }] }), {
+      draft: (...args) => runSingleDraft(...args.slice(0, 7), { ...args[7],
+        makeSandbox: async image => {
+          const box = await sandbox(image);
+          try {
+            await box.exec(['node', '-e', `const fs = require('node:fs');
+              for (const file of JSON.parse(process.argv[1])) fs.writeFileSync('/work/' + file.path, file.content);`,
+              JSON.stringify([{ path: input.editPaths[0], content: source },
+              { path: input.visibleTests[0], content: `import test from 'node:test';
+                import assert from 'node:assert/strict';
+                test('answer', async () => assert.equal((await import('../example.ts')).answer, 42));` }])]);
+            return box;
+          } catch (error) { await box.close(); throw error; }
+        },
+        // Exercise the same process watchdog with a short fixture allowance.
+        test: (box, paths, timeout) => check(box, paths, Math.min(2000, timeout)),
+      }),
+      agent: async () => { throw Error('unexpected fallback'); },
+    });
+  assert.equal(calls, 2);
+  assert.equal(result.draftSampling.selectedCandidate, 2);
+  assert.deepEqual(result.draftSampling.candidates.map(candidate => candidate.publicPassed), [false, true]);
+  assert.equal(result.files[0].content, 'export const answer = 42;');
+});

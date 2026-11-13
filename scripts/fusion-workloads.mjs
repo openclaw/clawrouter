@@ -176,7 +176,12 @@ export function testResult(result) {
 }
 
 export async function check(box, paths, timeout = 120000) {
-  const result = await box.exec(['node', '--test-reporter=tap', '--test', ...paths], { allowFailure: true, timeout });
+  if (!Number.isSafeInteger(timeout) || timeout < 1) throw new Error('invalid_test_timeout');
+  // Kill the in-container process group before the Docker client deadline.
+  // A killed client alone leaves the test runner and its children alive.
+  const limit = timeout - Math.min(2000, Math.ceil(timeout / 10));
+  const result = await box.exec(['timeout', '--signal=KILL', `${Math.max(1, limit) / 1000}s`,
+    'node', '--test-reporter=tap', '--test', ...paths], { allowFailure: true, timeout });
   return { ...testResult(result), feedback: Buffer.concat([result.stdout, result.stderr]).toString().slice(-12000) };
 }
 

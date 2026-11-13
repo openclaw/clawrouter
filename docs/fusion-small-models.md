@@ -409,6 +409,11 @@ declared candidate arms; do not pool distinct policies as repeated blocks.
 This control measures whether executable selection adds value beyond two
 cheap drafts. It does not establish mixed-model benefit by itself.
 
+Single-draft visible tests get at most 30 seconds within the remaining trial
+deadline. Test execution uses an in-container watchdog that kills the process
+group before the Docker client deadline. A killed or incomplete test run never
+counts as a visible pass; infrastructure errors still stop execution.
+
 Set `FUSION_PAIR_POLICY=probe-selection` for an experimental executable
 comparison. Two independent one-call cheap drafts start from the same source.
 If both submit, pass visible tests, and differ, one cheap call writes a behavioral
