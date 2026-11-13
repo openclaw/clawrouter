@@ -224,3 +224,100 @@ for (const status of [200, 503]) {
 function encodedBytes(value) {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
+for (const failure of ["deadline", "oversized"]) for (const rejected of [false, true]) {
+  test(`fusion retains its reader until ${failure} cancellation settles: rejected=${rejected}`, async () => {
+    const config = { ...normalizeFusionConfig({ adviserModels: ["local/retirement"], maxProposalChars: 256 }), adviserTimeoutMs: 25 };
+    const cleanup = Promise.withResolvers();
+    let cancellations = 0;
+    const response = new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(failure === "oversized" ? "x".repeat(32_000) : '{"choices":['));
+      },
+      cancel() { cancellations++; return cleanup.promise; },
+    }));
+    const retained = [];
+    const result = await collectFusionProposals(config, { messages: [] }, async () => response, work => {
+      const record = { done: false, work };
+      retained.push(record);
+      void work.then(() => { record.done = true; }, () => { record.done = true; });
+    });
+    try {
+      assert.deepEqual(result.failedModels, ["local/retirement"]);
+      assert.equal(cancellations, 1);
+      assert.equal(response.body.locked, true, "pending cleanup must keep the original reader locked");
+      await new Promise(resolve => setImmediate(resolve));
+      assert.ok(retained.some(record => !record.done), "cleanup must remain owned after collection returns");
+    } finally {
+      if (rejected) cleanup.reject(new Error("synthetic cleanup rejection")); else cleanup.resolve();
+      await Promise.allSettled(retained.map(record => record.work));
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    assert.equal(cancellations, 1);
+    assert.equal(response.body.locked, false);
+  });
+}
+
+test("fusion retains HTTP-error body cleanup without delaying collection", async () => {
+  const config = normalizeFusionConfig({ adviserModels: ["local/rejected"] });
+  const cleanup = Promise.withResolvers();
+  let cancellations = 0;
+  const response = new Response(new ReadableStream({ cancel() { cancellations++; return cleanup.promise; } }), { status: 503 });
+  const retained = [];
+  const result = await collectFusionProposals(config, { messages: [] }, async () => response, work => {
+    const record = { done: false, work };
+    retained.push(record);
+    void work.then(() => { record.done = true; }, () => { record.done = true; });
+  });
+  try {
+    assert.deepEqual(result.failedModels, ["local/rejected"]);
+    assert.equal(cancellations, 1);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.ok(retained.some(record => !record.done), "HTTP error cleanup must remain owned");
+  } finally {
+    cleanup.resolve();
+    await Promise.allSettled(retained.map(record => record.work));
+  }
+});
+
+test("fusion retains cleanup for a response arriving after its deadline", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const config = normalizeFusionConfig({ adviserModels: ["local/late"], adviserTimeoutMs: 1_000 });
+  const arrival = Promise.withResolvers();
+  const cleanup = Promise.withResolvers();
+  const retained = [];
+  const pending = collectFusionProposals(config, { messages: [] }, () => arrival.promise, work => {
+    const record = { done: false, work };
+    retained.push(record);
+    void work.then(() => { record.done = true; }, () => { record.done = true; });
+  });
+  t.mock.timers.tick(1_000);
+  assert.deepEqual((await pending).failedModels, ["local/late"]);
+  let cancellations = 0;
+  arrival.resolve(new Response(new ReadableStream({ cancel() { cancellations++; return cleanup.promise; } })));
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(cancellations, 1);
+    assert.ok(retained.some(record => !record.done), "late response cleanup must remain owned");
+  } finally {
+    cleanup.resolve();
+    await Promise.allSettled(retained.map(record => record.work));
+  }
+});
+
+test("fusion retires a successful reader without cancelling its source", async () => {
+  const config = normalizeFusionConfig({ adviserModels: ["local/success"] });
+  let cancellations = 0;
+  const response = new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "proposal" } }] })));
+      controller.close();
+    },
+    cancel() { cancellations++; },
+  }));
+  const retained = [];
+  const result = await collectFusionProposals(config, { messages: [] }, async () => response, work => retained.push(work));
+  await Promise.all(retained);
+  assert.deepEqual(result.proposals, [{ model: "local/success", content: "proposal" }]);
+  assert.equal(cancellations, 0);
+  assert.equal(response.body.locked, false);
+});
