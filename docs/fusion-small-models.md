@@ -1339,3 +1339,24 @@ exact edits: all six rejected searches included line-number prefixes. This
 supports using plain source for this executor, but plain source still failed
 the five-of-six, zero-difference qualification rule. Neither result establishes
 a capable repository editor or a Fusion gain. No production executor changed.
+
+### Adviser retirement transfer task
+
+`benchmarks/fusion/adviser-retirement-workloads.json` pins the one-file repair
+from [PR #1051](https://github.com/openclaw/clawrouter/pull/1051). It exercises
+Fusion's own adviser collection: fallback must return without waiting for slow
+cleanup, while the existing retention callback owns cancellation until it settles.
+Reader locks must remain held through pending reads and cancellation, including
+rejected cancellation. Successful readers must release without cancellation.
+
+The supplied reproducer checks retained HTTP-error cancellation. Original
+strategy tests remain visible; independent acceptance uses the historical
+collector regressions for deadlines, byte limits, late responses and success.
+The existing input-retirement interface is source context, not editable output.
+Qualification must establish passing original and repaired visible tests, a
+failing original reproducer, a passing repaired reproducer, original acceptance
+failures and a complete passing repaired acceptance suite before inference.
+
+This is a development transfer case for an already studied cleanup pattern.
+It does not establish independent generalization or a Fusion quality gain.
+The workload adds no provider calls and changes no production strategy.
