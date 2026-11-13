@@ -1086,6 +1086,40 @@ Any changed stop rule or verification policy needs fresh matched controls;
 rescoring these attempts as successes would invalidate this comparison.
 
 
+### Native named-limit scope confirmation task
+
+`benchmarks/fusion/named-limit-workloads.json` pins the Anthropic named-limit
+repair to parent `05b50e0d7bc996d38d5c825d0db4358200e315f3` and reference
+`43d978e80dfaad08d33f2b763f92ac0b4fb12001`. Only `worker/provider-quota.ts` and
+`worker/proxy.ts` are editable. An explicit native Fable limit must preserve
+sibling eligibility while retaining the family-specific rejection deadline.
+The task also requires unchanged response forwarding, bounded inspection,
+existing grant failover limits, and one usage settlement.
+
+The original visible quota tests pass 10/10 on both revisions. Independent
+acceptance adds the historical named-limit tests: the original source fails
+4 assertions across 28 tests; the reference passes all 28. No tests
+are skipped. The new test file exists only in acceptance sandboxes. It is not
+provided to the repair agent. Qualification alone establishes no model capability
+or fusion gain.
+
+A later three-block, order-balanced comparison on frozen source
+`4ae7a16ea1ce92b2ab63b0adf9f4ff15e4bca89b` stopped during the final arm on an
+HTTP 400 reported as a token-limit error. The eight preceding attempts produced
+no accepted repair or actual handoff: the cheap model reached its turn limit or
+failed, and the strong-model arms exhausted their conservative budget allowance.
+All arms used full-source preloading and the same probe-qualified handoff rules
+as the Azure comparison. Each allowed 24 calls, 4,096 output tokens, 480 seconds,
+and $0.75. The large editable proxy file exposed a source-context limitation.
+
+Retain all 90 attempted calls: 89 settled at an estimated $0.804082, with $0.419508
+still reserved for the rejected request. There was no retry. The incomplete
+comparison has no aggregate efficacy result; cheaper failed work is not a gain.
+The rejected request body has the same digest as two earlier successful initial
+calls. The terminal response does not establish a deterministic request-size
+ceiling.
+
+
 ### Native Azure speech retirement confirmation task
 
 `benchmarks/fusion/azure-retirement-workloads.json` pins one historical repair
