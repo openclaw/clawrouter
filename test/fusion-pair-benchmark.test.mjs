@@ -120,6 +120,29 @@ test('pair persists post-selection diagnostics after final grading without addit
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test('sampling preserves fixed controls and routes every candidate phase to cheap', async () => {
+  const { root, options } = await fixture();
+  try {
+    await assert.rejects(runPairBenchmark({ ...options, policy: 'draft-sampling', config: { ...config, maxCalls: 2 } }), /three_calls/);
+    const state = await runPairBenchmark({ ...options, policy: 'draft-sampling', grade, fetcher: success,
+      agent: async (_task, _image, _strategy, id, _settings, invoke) => {
+        await invoke(id, roles.strong, body, signal);
+        return repaired();
+      },
+      samplingAgent: async (_task, _image, id, settings, invoke) => {
+        assert.equal(settings.maxTurns, 3);
+        for (let i = 0; i < 3; i++) await invoke(id, roles.strong, body, signal);
+        return { ...repaired(), draftSampling: { selectedCandidate: null } };
+      },
+    });
+    assert.deepEqual(state.strategies, ['cheap', 'strong', 'draft-sampling']);
+    assert.deepEqual(state.calls.map(call => call.model), [config.cheap, config.strong, config.cheap, config.cheap, config.cheap]);
+    assert.equal(state.records[2].calls, 3);
+    assert.equal(state.records[2].draftSampling.selectedCandidate, null);
+    assert.equal(analyzePairRun(state).candidate, 'draft-sampling');
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('fixed controls receive identical supplied context without invoking or budgeting a candidate', async () => {
   const { root, options } = await fixture();
   try {
