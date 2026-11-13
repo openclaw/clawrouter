@@ -275,3 +275,18 @@ test('probe-gated success requires observed gate passage and preserves legacy re
     assert.throws(() => analyzePairRun(runs[0]), /invalid_pair_run/);
   }
 });
+
+
+test('handoff turn limits are validated and separate repeat protocols', () => {
+  const runs = repeats();
+  runs[1].handoffMaxTurns = null;
+  assert.equal(analyzePairRepeats(runs).handoffMaxTurns, null);
+  for (const run of runs) { run.policy = 'edit-handoff'; run.config.maxCalls = 4; run.handoffMaxTurns = 2; }
+  assert.equal(analyzePairRepeats(runs).handoffMaxTurns, 2);
+  runs[1].handoffMaxTurns = 1;
+  assert.throws(() => analyzePairRepeats(runs), /mismatched_pair_protocol/);
+  for (const invalid of [0, -1, 4, 1.5, '2']) {
+    runs[0].handoffMaxTurns = invalid;
+    assert.throws(() => analyzePairRun(runs[0]), /invalid_pair_run/);
+  }
+});
