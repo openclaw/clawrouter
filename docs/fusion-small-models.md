@@ -17,6 +17,11 @@ the next attempt whether to shorten truncated output or repair invalid edit
 anchors, while retaining the current source and the same three-attempt ceiling.
 Applied drafts still require the visible tests and supplied reproducer to pass.
 
+Visible checks must produce a complete test summary. An incomplete run, including
+a test watchdog termination, stops that agent with `incomplete_test_run` before
+another model call or final grading. Complete assertion failures remain repairable.
+The failure trace retains action metadata without raw test output.
+
 ## What the evidence supports
 
 | Primary source | Relevant result | Engineering consequence |

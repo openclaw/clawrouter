@@ -73,7 +73,7 @@ export function replaceEdits(task, files, edits) {
 const toolErrorCodes = new Set(['unknown_cost', 'invalid_source_view', 'missing_source', 'invalid_line_range', 'source_view_too_large',
   'invalid_read_paths', 'invalid_edits', 'invalid_edit', 'search_must_match_once', 'invalid_edit_path_or_size',
   'missing_query', 'invalid_probe', 'invalid_action', 'command_timeout', 'command_output_limit',
-  'command_failed', 'context_header_too_large', 'ensemble_deadline',
+  'command_failed', 'incomplete_test_run', 'context_header_too_large', 'ensemble_deadline',
   'provider_refused', 'provider_context_limit', 'provider_truncated', 'provider_empty', 'provider_paused', 'provider_unknown_stop']);
 export const toolErrorCode = error => toolErrorCodes.has(error?.message) ? error.message : 'execution_failed';
 // Only traces produced by this executor can enter receipts; never trust error properties.
@@ -221,6 +221,12 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
       toolMs: Math.round(toolMs), agentMs: Math.round(performance.now() - started) }));
   };
   const remaining = () => Math.max(1, config.deadlineMs - Math.ceil(performance.now() - started));
+  const checkVisible = async () => {
+    const result = await check(box, task.visibleTests, remaining());
+    publicPassed = result.passed;
+    if (!result.valid) throw new Error('incomplete_test_run');
+    return result;
+  };
   const verifyRegressionProbes = async () => {
     if (!options.probeRegressionGate) return true;
     probeRegressionPassed = false;
@@ -353,7 +359,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
           if (!options.candidates || !['1', '2'].includes(action.query)) throw new Error('invalid_action');
           await writeFiles(box, validateEdits(task, options.candidates[Number(action.query) - 1]), remaining());
           selectedCandidate = Number(action.query);
-          const result = await check(box, task.visibleTests, remaining()); publicPassed = result.passed;
+          const result = await checkVisible();
           observe('candidate', result);
           messages.push({ role: 'user', content: `Candidate ${selectedCandidate} installed. Visible tests passed: ${publicPassed}\n${result.feedback}` });
         } else if (action.action === 'probe') {
@@ -372,12 +378,12 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
         } else if (action.action === 'edit') {
           const files = await readSource(box, task.editPaths, remaining());
           await writeFiles(box, replaceEdits(task, files, action.edits), remaining());
-          const result = await check(box, task.visibleTests, remaining()); publicPassed = result.passed;
+          const result = await checkVisible();
           observe('edit', result);
           if (publicPassed) handoffReady = true;
           messages.push({ role: 'user', content: `Visible tests passed: ${publicPassed}\n${result.feedback}` });
         } else if (action.action === 'test' || action.action === 'finish') {
-          const result = await check(box, task.visibleTests, remaining()); publicPassed = result.passed;
+          const result = await checkVisible();
           observe(action.action, result);
           messages.push({ role: 'user', content: `Visible tests passed: ${publicPassed}\n${result.feedback}` });
           if (action.action === 'finish') {
@@ -400,7 +406,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
           }
         } else throw new Error('invalid_action');
       } catch (error) {
-        if (error === regressionFailure || error.message === 'unknown_cost' || error.message.startsWith('provider_')) {
+        if (error === regressionFailure || error.message === 'incomplete_test_run' || error.message === 'unknown_cost' || error.message.startsWith('provider_')) {
           event.status = toolErrorCode(error); throw error;
         }
         if (['trial_budget', 'campaign_budget'].includes(error.message)) { outcome = 'budget'; break; }
