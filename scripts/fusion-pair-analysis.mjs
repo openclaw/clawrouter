@@ -76,6 +76,9 @@ export function analyzePairRun(run) {
       || (row.status === 'error' && row.score !== 0) || !money(row.costMicros) || !money(row.calls)) {
       throw new Error('invalid_or_duplicate_pair_row');
     }
+    if ((row.status === 'complete' || row.verdict !== undefined) && row.verdict?.valid !== true) {
+      throw new Error('incomplete_pair_grade');
+    }
     if (row.score === 1 && ((run.probeRegressionGate === true && row.probeRegressionPassed !== true) || row.publicPassed !== true || row.verdict?.passed !== true
       || row.verdict.tests !== entry.receipt.oracleTests || row.verdict.skipped !== entry.receipt.oracleSkipped)) {
       throw new Error('unverified_pair_score');

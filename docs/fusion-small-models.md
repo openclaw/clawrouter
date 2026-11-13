@@ -21,6 +21,9 @@ Visible checks must produce a complete test summary. An incomplete run, includin
 a test watchdog termination, stops that agent with `incomplete_test_run` before
 another model call or final grading. Complete assertion failures remain repairable.
 The general agent failure trace retains action metadata without raw test output.
+Pair analysis also requires complete acceptance verdicts before reporting quality
+or cost gains, including zero-score rows. Known-cost execution errors with no
+grading attempt remain failures; a supplied incomplete grade invalidates the run.
 Grounded and checked repair profiles also stop on incomplete visible checks,
 including checks after an edit or a review submission.
 
