@@ -1260,3 +1260,19 @@ At least five exact edits out of six, with no wrong applied edit, qualifies an
 interface only for a separate confirmation set. It does not establish repository
 repair quality or a Fusion gain. Compare actual acceptance on disjoint repository
 tasks before changing production behavior.
+
+The first local calibration used cached Qwen3-4B, greedy decoding, a 32,768-token
+context and the fixed 1,024-token output limit. All 12 calls completed normally:
+
+| Format | Exact edits | Rejected anchors | Applied but different from reference | Input / output tokens |
+| --- | ---: | ---: | ---: | ---: |
+| Search/replace | 0/6 | 5 | 1 | 2,200 / 702 |
+| Line range | 1/6 | 0 | 5 | 2,302 / 291 |
+
+Neither format qualified for confirmation. This is a negative result for this
+model and prompt, not evidence of a general format ranking. Both received
+numbered source; other representations were not tested. Exact-byte mismatches
+can include formatting differences and do not by themselves prove semantic
+incorrectness. Content-free receipts cannot diagnose those differences after
+the run. No repository acceptance or Fusion gain follows from this screen.
+API spend was zero; local compute remains a resource cost.
