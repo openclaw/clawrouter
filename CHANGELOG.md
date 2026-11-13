@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Allow Fusion pair analysis to compare agent execution time explicitly, keeping independent grading out of latency ratios and dominance checks.
+
 - Exclude incomplete, filtered, refused, or tool-calling Fusion adviser responses from synthesis while retaining their usage accounting.
 
 - Record content-free rejection reasons for invalid local Fusion benchmark responses while preserving the campaign stop and unknown usage.

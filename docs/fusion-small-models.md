@@ -7,10 +7,20 @@ Pair receipts separate `agentElapsedMs` from `gradingElapsedMs`. Agent time
 includes its tools, visible checks and sandbox cleanup. Grading time measures
 the independent final acceptance suite, including its cleanup, and is `null`
 when grading never starts. Both durations survive phase failures. Existing
-`elapsedMs` retains its end-to-end meaning and the current analyzer still uses
-that field. Predeclare the metric before a latency comparison; slow hidden
-timeout tests must not be treated as agent execution. Older receipts lack the
-phase measurements and cannot reconstruct them from total elapsed time.
+`elapsedMs` retains its end-to-end meaning and remains the analyzer's default.
+Select agent time explicitly for both single-run and repeated comparisons:
+
+```sh
+node scripts/fusion-pair-analysis.mjs --latency-metric=agentElapsedMs /path/to/pair.json
+```
+
+The report names the selected `latencyMetric` and retains both time totals.
+Latency ratios, cheap dominance and the repeated pilot screen use that same
+metric. Missing agent measurements never fall back to total time: single-run
+comparisons become unknown and repeated analysis rejects incomplete times.
+Predeclare the metric before a comparison; slow hidden timeout tests must not
+be treated as agent execution. Older receipts lack the phase measurements and
+cannot reconstruct them from total elapsed time.
 
 Draft refinement skips verification when a response applies no patch. It tells
 the next attempt whether to shorten truncated output or repair invalid edit
