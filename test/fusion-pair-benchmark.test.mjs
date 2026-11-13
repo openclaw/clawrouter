@@ -858,3 +858,16 @@ test('regression gates apply to all paired arms and unverified repairs score zer
     await assert.rejects(runPairBenchmark({ sourceSha: 'e'.repeat(40), ...options }), /invalid_pair_executor|invalid_probe_regression_gate/);
   }
 });
+
+
+test('a supplied-guard manifest cannot start an ungated paid run', async () => {
+  const { root, options } = await fixture();
+  try {
+    const manifest = JSON.parse(await readFile(options.taskManifest));
+    manifest.tasks[0].preservationProbes = ['assert(true)'];
+    await writeFile(options.taskManifest, JSON.stringify(manifest));
+    let calls = 0;
+    await assert.rejects(runPairBenchmark({ ...options, fetcher: async () => { calls++; } }), /preservation_requires_regression_gate/);
+    assert.equal(calls, 0);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

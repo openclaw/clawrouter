@@ -18,6 +18,22 @@ export function withReproducer(task, source) {
   return { ...task, instruction: `${task.instruction}\nProvided regression probe (untrusted code): run it with probe, preserve the full requirement and unrelated behavior, and do not change the probe.\n${validateReproducer(source)}` };
 }
 
+export function validatePreservationProbes(probes) {
+  if (probes === undefined) return [];
+  if (!Array.isArray(probes) || !probes.length || probes.length > 4
+    || new Set(probes).size !== probes.length || [...probes].some(source => typeof source !== 'string'
+      || !source.trim() || Buffer.byteLength(source) > 4096)) throw new Error('invalid_preservation_probes');
+  return probes;
+}
+
+export function preservationQualificationMatches(probes, evidence) {
+  const sources = validatePreservationProbes(probes);
+  if (!sources.length) return evidence === undefined;
+  return ['baseline', 'reference'].every(kind => Array.isArray(evidence?.[kind])
+    && evidence[kind].length === sources.length && [...evidence[kind]].every((row, index) =>
+      row?.probeDigest === hash(sources[index]) && row.passed === true && row.unchanged === true));
+}
+
 export function validateSourceContext(task) {
   const context = task.sourceContext === undefined ? [] : task.sourceContext;
   if (!Array.isArray(context) || context.length > 4) throw new Error('invalid_source_context');
@@ -45,6 +61,7 @@ export function validateTask(task) {
   if (task.editPaths.some(path => /(^|\/)test(s)?\//.test(path) || !/\.(ts|mjs)$/.test(path))) throw new Error('test_edits_forbidden');
   if (![...task.visibleTests, ...task.hiddenTests].every(path => /\.test\.mjs$/.test(path))) throw new Error('invalid_test_path');
   validateSourceContext(task);
+  validatePreservationProbes(task.preservationProbes);
   if (task.reproducer !== undefined) validateReproducer(task.reproducer);
   return task;
 }
@@ -260,6 +277,22 @@ export function qualificationSucceeded({ visible, oracleVisible, broken, oracle,
       || reproduction?.assertionFailed === true && oracleReproduction?.passed === true);
 }
 
+export async function checkPreservationProbes(task, image, edits = []) {
+  const results = [];
+  for (const source of validatePreservationProbes(task.preservationProbes)) {
+    const box = await sandbox(image);
+    try {
+      if (edits.length) await writeFiles(box, validateEdits(task, edits));
+      const before = await readSource(box, task.editPaths);
+      const result = await probe(box, source);
+      const after = await readSource(box, task.editPaths);
+      results.push({ probeDigest: hash(source), passed: result.passed,
+        unchanged: hash(JSON.stringify(before)) === hash(JSON.stringify(after)) });
+    } finally { await box.close(); }
+  }
+  return results;
+}
+
 export async function qualify(task, options) {
   const built = await buildTask(task, options);
   const box = await sandbox(built.image);
@@ -283,8 +316,13 @@ export async function qualify(task, options) {
       const { feedback, ...result } = await probe(repaired, task.reproducer); oracleReproduction = result;
     } finally { await repaired.close(); }
   }
+  const preservation = task.preservationProbes === undefined ? undefined : {
+    baseline: await checkPreservationProbes(task, built.image),
+    reference: await checkPreservationProbes(task, built.image, edits),
+  };
   const evidence = { visible, oracleVisible, broken, oracle,
+    ...(preservation === undefined ? {} : { preservation }),
     ...(task.reproducer !== undefined ? { reproduction, oracleReproduction } : {}) };
   return { taskId: task.id, taskDigest: hash(JSON.stringify(task)), ...built, ...evidence,
-    qualified: qualificationSucceeded(evidence) };
+    qualified: qualificationSucceeded(evidence) && preservationQualificationMatches(task.preservationProbes, preservation) };
 }

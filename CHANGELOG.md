@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Qualify supplied Fusion preservation checks against original and reference source, then pin them before paired execution without spending model calls.
+
 - Add an opt-in Fusion benchmark regression gate that pins passing probes across handoffs and replays them in isolated candidate snapshots before scoring.
 
 - Add an opt-in Fusion benchmark handoff that transfers bounded observed test and probe results separately from model-written notes, with matched strong-successor controls.

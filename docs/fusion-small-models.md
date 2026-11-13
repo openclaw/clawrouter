@@ -801,3 +801,25 @@ They can miss behavior, encode a wrong assumption or be trivial. Independent
 acceptance tests still determine task correctness. Raw probe source and output
 remain in memory; reports contain only counts and the gate result. Repeat
 analysis rejects runs that change the gate setting.
+
+
+### Supplied preservation checks
+
+A workload may supply `preservationProbes`: one to four distinct Node ES modules,
+up to 4096 UTF-8 bytes each. Qualification runs each probe in a fresh sandbox on
+both the original source and the reference repair. Each must pass without
+changing an editable source file. Receipts bind these outcomes to each probe's
+digest; stale, missing or failed checks reject the workload before paid calls.
+This checks compatibility with two implementations, not general soundness.
+
+Use `FUSION_PROBE_REGRESSION_GATE=1` with these manifests. The probes occupy
+pinned slots before the first model call and remain visible to every arm.
+They do not consume model calls. Later generated probes can fill remaining slots
+but cannot replace supplied ones. Final replay and independent acceptance both
+remain mandatory.
+
+`benchmarks/fusion/preservation-workloads.json` is an exposed development variant
+of the existing music delivery task. It adds a small destination/header/byte-replay
+check. It is not a new holdout and must not be pooled with the original variant
+as an independent task. The original native test file cannot simply become a
+visible suite: some of its old fixtures and limits reject the required repair.

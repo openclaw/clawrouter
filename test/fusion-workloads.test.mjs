@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
-import { loadTasks, validateTask, validateEdits, sandboxArgs, sandbox, testResult, check, checkOracleVisible, qualificationSucceeded } from '../scripts/fusion-workloads.mjs';
+import { loadTasks, validateTask, validateEdits, sandboxArgs, sandbox, testResult, check, checkOracleVisible, qualificationSucceeded, validatePreservationProbes, preservationQualificationMatches, checkPreservationProbes, hash } from '../scripts/fusion-workloads.mjs';
 
 const task = (await loadTasks())[0];
 test('historical tasks have pinned distinct parents, source-only edits and development labels', async () => {
@@ -252,4 +252,39 @@ test('test watchdog preserves infrastructure errors and rejects invalid timeouts
   assert.equal(calls, 0);
   await assert.rejects(check(box, ['test.mjs'], 1000), error => error === failure);
   assert.equal(calls, 1);
+});
+
+
+test('preservation qualification requires each exact bounded probe on both revisions', () => {
+  const sources = ['assert(true)'];
+  const row = { probeDigest: hash(sources[0]), passed: true, unchanged: true };
+  const evidence = { baseline: [row], reference: [row] };
+  assert.deepEqual(validatePreservationProbes(undefined), []);
+  assert.equal(preservationQualificationMatches(sources, evidence), true);
+  assert.equal(preservationQualificationMatches(sources, undefined), false);
+  for (const probes of [[], Array(1), [''], ['x', 'x'], Array(5).fill('x'), ['界'.repeat(1366)], 'x'])
+    assert.throws(() => validatePreservationProbes(probes), /invalid_preservation_probes/);
+  for (const change of [{ passed: false }, { unchanged: false }, { probeDigest: 'wrong' }]) {
+    assert.equal(preservationQualificationMatches(sources, { ...evidence, reference: [{ ...row, ...change }] }), false);
+  }
+  assert.equal(preservationQualificationMatches(sources, { ...evidence, baseline: [] }), false);
+  assert.equal(preservationQualificationMatches(sources, { ...evidence, baseline: Array(1) }), false);
+});
+
+test('preservation qualification rejects source-mutating checks and isolates the next probe', {
+  skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+}, async () => {
+  const { readFile } = await import('node:fs/promises');
+  const task = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+    .find(task => task.id === 'provided-responses-path');
+  const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+    .receipts.find(row => row.taskId === task.id);
+  const path = JSON.stringify(task.editPaths[0]);
+  task.preservationProbes = [
+    `import {appendFileSync} from 'node:fs'; appendFileSync(${path}, '// guard-mutation');`,
+    `import {readFileSync} from 'node:fs'; import assert from 'node:assert/strict'; assert.ok(!readFileSync(${path},'utf8').includes('// guard-mutation'));`,
+  ];
+  const results = await checkPreservationProbes(task, receipt.image);
+  assert.deepEqual(results.map(row => [row.passed, row.unchanged]), [[true, false], [true, true]]);
+  assert.equal(JSON.stringify(results).includes('guard-mutation'), false);
 });

@@ -162,3 +162,18 @@ test('checked scoring requires both the public gate and hidden acceptance', asyn
     assert.ok(result.records.every(row => row.graderPassed));
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+
+test('supplied preservation checks require exact baseline and reference receipts before inference', () => {
+  const task = { id: 'example', preservationProbes: ['assert(true)'] };
+  const receipt = { taskId: task.id, taskDigest: hash(JSON.stringify(task)), image: 'sha256:' + 'a'.repeat(64),
+    qualified: true, visible: { passed: true }, oracleVisible: { valid: true, passed: true },
+    oracle: { valid: true, passed: true, tests: 3, skipped: 0 }, broken: { valid: true, passed: false } };
+  const q = { nodeImage: 'node@sha256:' + 'b'.repeat(64), receipts: [receipt] };
+  assert.throws(() => validateLocalQualification([task], q), /unqualified_local_task/);
+  const result = { probeDigest: hash(task.preservationProbes[0]), passed: true, unchanged: true };
+  receipt.preservation = { baseline: [{ ...result }], reference: [{ ...result }] };
+  assert.equal(validateLocalQualification([task], q).length, 1);
+  receipt.preservation.reference[0].probeDigest = 'stale';
+  assert.throws(() => validateLocalQualification([task], q), /unqualified_local_task/);
+});
