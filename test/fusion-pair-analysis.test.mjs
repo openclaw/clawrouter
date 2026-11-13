@@ -267,6 +267,52 @@ test('single-block missing or invalid time cannot establish latency or cheap dom
   assert.equal(analyzePairRun(run).latencyRatioVersusStrong, null);
 });
 
+test('agent-time analysis excludes cold grading without changing the legacy default', () => {
+  const run = fixture([[1, 1, 1]]);
+  for (const row of run.records) {
+    row.agentElapsedMs = { cheap: 36, strong: 69, scope: 55 }[row.strategy];
+    row.elapsedMs = row.agentElapsedMs + (row.strategy === 'cheap' ? 46 : 1);
+  }
+  assert.equal(analyzePairRun(run).latencyMetric, 'elapsedMs');
+  assert.equal(analyzePairRun(run).cheapDominatesCandidate, false);
+  const report = analyzePairRun(run, { latencyMetric: 'agentElapsedMs' });
+  assert.equal(report.latencyMetric, 'agentElapsedMs');
+  assert.equal(report.cheapDominatesCandidate, true);
+  assert.equal(report.latencyRatioVersusStrong, 55 / 69);
+  assert.equal(report.totals[0].elapsedMs, 82);
+  assert.equal(report.totals[0].agentElapsedMs, 36);
+});
+
+test('selected agent time never falls back to total time for missing or invalid measurements', () => {
+  for (const value of [undefined, null, -1, NaN, '100']) {
+    const run = fixture([[1, 1, 1]]);
+    for (const row of run.records) { row.elapsedMs = 100; row.agentElapsedMs = 100; }
+    run.records[2].agentElapsedMs = value;
+    const report = analyzePairRun(run, { latencyMetric: 'agentElapsedMs' });
+    assert.equal(report.totals[2].agentElapsedMs, null);
+    assert.equal(report.latencyRatioVersusStrong, null);
+    assert.equal(report.cheapDominatesCandidate, null);
+  }
+  assert.throws(() => analyzePairRun(fixture(), { latencyMetric: 'gradingElapsedMs' }), /invalid_pair_latency_metric/);
+});
+
+test('repeated blocks apply the same selected metric to dominance and the pilot screen', () => {
+  const runs = repeats([[1, 1, 1]]);
+  for (const run of runs) for (const row of run.records) {
+    row.agentElapsedMs = row.strategy === 'scope' ? 250 : 100;
+    row.elapsedMs = row.strategy === 'cheap' ? 1000 : 100;
+  }
+  assert.equal(analyzePairRepeats(runs).cheapDominatesCandidate, false);
+  const report = analyzePairRepeats(runs, { latencyMetric: 'agentElapsedMs' });
+  assert.equal(report.latencyMetric, 'agentElapsedMs');
+  assert.equal(report.latencyRatioVersusStrong, 2.5);
+  assert.equal(report.cheapDominatesCandidate, true);
+  assert.equal(report.pilotScreen.withinLatencyLimit, false);
+  assert.equal(report.totals[2].agentElapsedMs, 500);
+  delete runs[1].records[0].agentElapsedMs;
+  assert.throws(() => analyzePairRepeats(runs, { latencyMetric: 'agentElapsedMs' }), /invalid_pair_elapsed/);
+});
+
 test('single-block model use distinguishes rescues, single-model samples and no-call attempts', () => {
   const run = fixture([[0, 1, 1], [1, 1, 1], [0, 0, 0], [0, 1, 1]]);
   const mixed = run.calls.find(call => call.trialId === 'case-0:scope');

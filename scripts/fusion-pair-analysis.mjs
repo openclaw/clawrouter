@@ -12,6 +12,13 @@ const sum = values => {
   return value;
 };
 
+function analysisMetric({ latencyMetric = 'elapsedMs' } = {}) {
+  if (!['elapsedMs', 'agentElapsedMs'].includes(latencyMetric)) throw new Error('invalid_pair_latency_metric');
+  return latencyMetric;
+}
+
+const duration = (rows, metric) => rows.every(row => money(row[metric])) ? sum(rows.map(row => row[metric])) : null;
+
 
 function modelUse(runs, candidate) {
   const result = { cheapOnlyAttempts: 0, strongOnlyAttempts: 0, mixedAttempts: 0,
@@ -32,7 +39,8 @@ function modelUse(runs, candidate) {
 }
 
 /** Observed paired outcomes, not a significance test or a production approval. */
-export function analyzePairRun(run) {
+export function analyzePairRun(run, options) {
+  const latencyMetric = analysisMetric(options);
   if (run?.version !== 1 || run.kind !== 'native-pair-repository' || run.complete !== true || run.failure) {
     throw new Error('incomplete_pair_run');
   }
@@ -94,7 +102,7 @@ export function analyzePairRun(run) {
     const rows = [...cases.values()].map(entry => entry.rows.get(strategy));
     return { strategy, solved: rows.reduce((total, row) => total + row.score, 0),
       costMicros: sum(rows.map(row => row.costMicros)), calls: sum(rows.map(row => row.calls)),
-      elapsedMs: rows.every(row => money(row.elapsedMs)) ? sum(rows.map(row => row.elapsedMs)) : null };
+      elapsedMs: duration(rows, 'elapsedMs'), agentElapsedMs: duration(rows, 'agentElapsedMs') };
   });
   const cheap = totals.find(row => row.strategy === 'cheap'), strong = totals.find(row => row.strategy === 'strong');
   const selected = totals.find(row => row.strategy === candidate);
@@ -123,13 +131,13 @@ export function analyzePairRun(run) {
     handoffMaxTurns: run.handoffMaxTurns ?? null, handoffEvidence: run.handoffEvidence ?? false, probeRegressionGate: run.probeRegressionGate ?? false,
     datasetDigest: run.datasetDigest, qualificationDigest: run.qualificationDigest,
     inputDigest: createHash('sha256').update(JSON.stringify(run)).digest('hex'),
-    cases: cases.size, candidate, totals, comparisons: [versusCheap, versusStrong],
+    cases: cases.size, candidate, latencyMetric, totals, comparisons: [versusCheap, versusStrong],
     candidateModelUse: modelUse([run], candidate),
     costSavingVersusStrong: strong.costMicros ? 1 - selected.costMicros / strong.costMicros : null,
-    latencyRatioVersusStrong: strong.elapsedMs > 0 && selected.elapsedMs !== null ? selected.elapsedMs / strong.elapsedMs : null,
-    cheapDominatesCandidate: cheap.elapsedMs === null || selected.elapsedMs === null ? null
+    latencyRatioVersusStrong: strong[latencyMetric] > 0 && selected[latencyMetric] !== null ? selected[latencyMetric] / strong[latencyMetric] : null,
+    cheapDominatesCandidate: cheap[latencyMetric] === null || selected[latencyMetric] === null ? null
       : cheap.solved >= selected.solved && versusCheap.wins === 0
-        && cheap.costMicros <= selected.costMicros && cheap.elapsedMs <= selected.elapsedMs,
+        && cheap.costMicros <= selected.costMicros && cheap[latencyMetric] <= selected[latencyMetric],
     controlOracleSolved: oracleSolved, controlComplementarity: oracleSolved - Math.max(cheap.solved, strong.solved),
     matchedCostRandomMixture: mixture,
     observedCostSavingWithoutStrongRegressions: versusStrong.losses === 0 && selected.costMicros < strong.costMicros,
@@ -146,9 +154,10 @@ const canonical = value => JSON.stringify(value, (_key, entry) => entry && typeo
   ? Object.fromEntries(Object.entries(entry).sort(([a], [b]) => a.localeCompare(b))) : entry);
 
 /** Aggregate consecutive matched blocks without treating repeats as distinct tasks. */
-export function analyzePairRepeats(runs) {
+export function analyzePairRepeats(runs, options) {
+  const latencyMetric = analysisMetric(options);
   if (!Array.isArray(runs) || runs.length < 2) throw new Error('missing_pair_repeats');
-  const reports = runs.map(analyzePairRun);
+  const reports = runs.map(run => analyzePairRun(run, { latencyMetric }));
   if (new Set(reports.map(report => report.inputDigest)).size !== runs.length) throw new Error('duplicate_pair_repeat');
   const protocol = run => {
     const { priorCostMicros: _prior, ...config } = run.config;
@@ -163,14 +172,15 @@ export function analyzePairRepeats(runs) {
   for (let i = 0; i < runs.length; i++) {
     if (protocol(runs[i]) !== expected) throw new Error('mismatched_pair_protocol');
     if (i && runs[i].config.priorCostMicros !== runs[i - 1].spentOrReservedMicros) throw new Error('discontinuous_pair_ledger');
-    if (runs[i].records.some(row => !money(row.elapsedMs))) throw new Error('invalid_pair_elapsed');
+    if (runs[i].records.some(row => !money(row[latencyMetric]))) throw new Error('invalid_pair_elapsed');
   }
   const candidate = reports[0].candidate;
   const candidateModelUse = modelUse(runs, candidate);
   const totals = runs[0].strategies.map(strategy => {
     const rows = runs.flatMap(run => run.records.filter(row => row.strategy === strategy));
     return { strategy, solved: sum(rows.map(row => row.score)), attempts: rows.length,
-      costMicros: sum(rows.map(row => row.costMicros)), elapsedMs: sum(rows.map(row => row.elapsedMs)),
+      costMicros: sum(rows.map(row => row.costMicros)), elapsedMs: duration(rows, 'elapsedMs'),
+      agentElapsedMs: duration(rows, 'agentElapsedMs'),
       falseAccepts: rows.filter(row => row.publicPassed === true && row.score === 0).length };
   });
   const comparisons = ['cheap', 'strong'].map(reference => {
@@ -182,7 +192,7 @@ export function analyzePairRepeats(runs) {
   const strong = totals.find(row => row.strategy === 'strong');
   const cheap = totals.find(row => row.strategy === 'cheap');
   const saving = strong.costMicros ? 1 - selected.costMicros / strong.costMicros : null;
-  const latencyRatio = strong.elapsedMs ? selected.elapsedMs / strong.elapsedMs : null;
+  const latencyRatio = strong[latencyMetric] ? selected[latencyMetric] / strong[latencyMetric] : null;
   const screen = { minimumSolvedFraction: 0.75, minimumCostSaving: 0.2, maximumLatencyRatio: 2,
     enoughSolved: selected.solved >= selected.attempts * 0.75,
     noStrongRegressions: comparisons[1].losses === 0,
@@ -191,11 +201,11 @@ export function analyzePairRepeats(runs) {
     rescuedBeyondCheap: comparisons[0].wins > 0 };
   return { version: 1, kind: 'observed-pair-repeat-analysis', sourceSha: runs[0].sourceSha,
     handoffMaxTurns: runs[0].handoffMaxTurns ?? null, handoffEvidence: runs[0].handoffEvidence ?? false, probeRegressionGate: runs[0].probeRegressionGate ?? false,
-    blocks: runs.length, distinctTasks: reports[0].cases, attemptsPerStrategy: selected.attempts,
+    blocks: runs.length, distinctTasks: reports[0].cases, attemptsPerStrategy: selected.attempts, latencyMetric,
     inputDigests: reports.map(report => report.inputDigest), totals, comparisons, candidateModelUse,
     costSavingVersusStrong: saving, latencyRatioVersusStrong: latencyRatio,
     cheapDominatesCandidate: cheap.solved >= selected.solved && comparisons[0].wins === 0
-      && cheap.costMicros <= selected.costMicros && cheap.elapsedMs <= selected.elapsedMs,
+      && cheap.costMicros <= selected.costMicros && cheap[latencyMetric] <= selected[latencyMetric],
     pilotScreen: { ...screen, passed: screen.enoughSolved && screen.noStrongRegressions
       && screen.enoughCostSaving && screen.withinLatencyLimit && screen.rescuedBeyondCheap },
     spentOrReservedMicros: runs.at(-1).spentOrReservedMicros,
@@ -209,13 +219,15 @@ export function analyzePairRepeats(runs) {
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   try {
     const files = process.argv.slice(2);
+    const options = files[0]?.startsWith('--latency-metric=') ? { latencyMetric: files.shift().slice('--latency-metric='.length) } : undefined;
+    analysisMetric(options);
     if (!files.length || files.length > 32) throw new Error('invalid_pair_file');
     const runs = [];
     for (const file of files) {
       if ((await stat(file)).size > 16 * 1024 * 1024) throw new Error('invalid_pair_file');
       runs.push(JSON.parse(await readFile(file, 'utf8')));
     }
-    console.log(JSON.stringify(runs.length === 1 ? analyzePairRun(runs[0]) : analyzePairRepeats(runs), null, 2));
+    console.log(JSON.stringify(runs.length === 1 ? analyzePairRun(runs[0], options) : analyzePairRepeats(runs, options), null, 2));
   } catch {
     console.error('Pair analysis requires complete, settled reports; repeated blocks must share a protocol and consecutive ledgers.'); process.exitCode = 1;
   }
