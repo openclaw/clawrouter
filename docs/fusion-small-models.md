@@ -823,3 +823,21 @@ of the existing music delivery task. It adds a small destination/header/byte-rep
 check. It is not a new holdout and must not be pooled with the original variant
 as an independent task. The original native test file cannot simply become a
 visible suite: some of its old fixtures and limits reject the required repair.
+
+### Bounded credential-ingress repair
+
+`benchmarks/fusion/raw-ingress-workloads.json` adds a historical repair
+across proxy authentication, discovery and pool selection. It requires bounded,
+sequential header inspection before parsing and preserves selection order,
+Access fallback and authentication failures. Credentials and authorities are
+synthetic fixtures; this benchmark does not use live accounts.
+
+Original identity, discovery and pool tests must pass on both source revisions.
+Independent acceptance checks the raw limits, early selection and terminal
+failure behavior. The original must fail and the reference must pass with no
+skipped tests before inference. The first exposure can serve as fresh
+validation; later runs are development repetitions.
+
+Initial Linux qualification passed without skips: both source revisions pass
+102 visible tests; the original fails 20 of 143 acceptance tests, and the
+reference passes all 143. This qualifies the task, not a model or fusion policy.
