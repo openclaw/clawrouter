@@ -150,6 +150,7 @@ test('repeat analysis rejects changed protocols, duplicate blocks, missing time 
     runs => { runs[1].sourceSha = 'd'.repeat(40); },
     runs => { runs[1].config.maxCalls = 20; },
     runs => { runs[1].cheapReasoning = 'high'; },
+    runs => { runs[1].handoffEvidence = true; },
     runs => { runs[1].pins = { changed: true }; },
     runs => { runs[1].receipts[0].taskDigest = 'e'.repeat(64); },
     runs => { delete runs[1].records[0].elapsedMs; },
@@ -159,6 +160,19 @@ test('repeat analysis rejects changed protocols, duplicate blocks, missing time 
   ]) {
     const runs = repeats(); mutate(runs);
     assert.throws(() => analyzePairRepeats(runs));
+  }
+});
+
+test('handoff evidence protocols stay distinct while older notes-only receipts remain compatible', () => {
+  const runs = repeats();
+  runs[1].handoffEvidence = false;
+  assert.equal(analyzePairRepeats(runs).handoffEvidence, false);
+  for (const run of runs) run.handoffEvidence = true;
+  assert.equal(analyzePairRepeats(runs).handoffEvidence, true);
+  assert.equal(analyzePairRun(runs[0]).handoffEvidence, true);
+  for (const invalid of [null, 'true', 1]) {
+    runs[1].handoffEvidence = invalid;
+    assert.throws(() => analyzePairRepeats(runs), /invalid_pair_run/);
   }
 });
 

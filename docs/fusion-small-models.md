@@ -508,6 +508,21 @@ control and `edit-handoff` for the mixed candidate. This control separates model
 selection from the effect of changing the execution protocol. Do not pool it
 with ordinary `edit-handoff` blocks as one repeated protocol.
 
+Set `FUSION_HANDOFF_EVIDENCE=1` with `edit-handoff`, `completion-handoff` or
+`matched-handoff` to also transfer recent test and probe results. The default
+keeps the existing notes-and-probe interface. The opt-in retains at most eight
+results and 16 KiB of serialized history, with each feedback excerpt capped at
+2 KiB of UTF-8. Records preserve execution order and pass/fail outcomes, separate
+from model-written notes. Program output remains untrusted, and old results may
+precede later edits; the successor must verify the current source.
+
+For `matched-handoff`, both the strong successor and mixed-model candidate get
+the same interface. Calls, output limits, deadlines and spend limits stay shared.
+Receipts record the option, transferred record count and whether a completed
+successor call received those records; they never retain the feedback text.
+Keep this interface as a separate experimental condition. Its implementation
+does not establish a quality or cost improvement.
+
 To run only the qualified handoff policy after evaluating it, set
 `FUSION_PAIR_POLICY=edit-handoff` and `FUSION_PAIR_CONTROLS=0`:
 
