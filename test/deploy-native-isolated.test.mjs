@@ -124,6 +124,9 @@ test('dispatch and workflow keep exact source and distinct recovery runner witho
   assert.equal(workflow.jobs.exercise.environment,'native-qualification');assert.equal(workflow.jobs.recover.needs,'exercise');
   for(const job of Object.values(workflow.jobs)){
     assert.equal(job['runs-on'],'ubuntu-latest');
+    // runner is available to steps, not jobs.<id>.env (GitHub rejects the workflow).
+    assert.ok(Object.values(job.env).every(value=>!String(value).includes('runner.')));
+    assert.match(job.steps.find(s=>s.run === 'node scripts/qualify-native-cutover.mjs').env.QUALIFICATION_RECEIPT,/runner.temp/);
     for(const value of Object.values(job.env).filter(x=>String(x).includes('secrets.')))assert.match(value,/secrets.NATIVE_QUALIFICATION_/);
     assert.equal(job.steps.some(s=>s.run?.includes('pnpm')),false);
   }

@@ -57,7 +57,6 @@ jobs:
       CF_ACCESS_CLIENT_SECRET: ${{ secrets.NATIVE_QUALIFICATION_ACCESS_CLIENT_SECRET }}
       GH_TOKEN: ${{ github.token }}
       QUALIFICATION_MODE: ${{ inputs.mode }}
-      QUALIFICATION_RECEIPT: ${{ runner.temp }}/native-controller.json
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -66,6 +65,8 @@ jobs:
         with:
           node-version: 24.22.1
       - name: Exercise exact hosted isolated controller
+        env:
+          QUALIFICATION_RECEIPT: ${{ runner.temp }}/native-controller.json
         run: node scripts/qualify-native-cutover.mjs
       - name: Retain controller observations, never a qualification verdict
         if: always()
@@ -89,7 +90,6 @@ jobs:
       CF_ACCESS_CLIENT_SECRET: ${{ secrets.NATIVE_QUALIFICATION_ACCESS_CLIENT_SECRET }}
       GH_TOKEN: ${{ github.token }}
       QUALIFICATION_MODE: recover
-      QUALIFICATION_RECEIPT: ${{ runner.temp }}/native-recovery.json
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -98,6 +98,8 @@ jobs:
         with:
           node-version: 24.22.1
       - name: Recover only the exact remote journal on a fresh runner
+        env:
+          QUALIFICATION_RECEIPT: ${{ runner.temp }}/native-recovery.json
         run: node scripts/qualify-native-cutover.mjs
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
