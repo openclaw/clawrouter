@@ -185,6 +185,10 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
   if (options.handoffAfterEdit !== undefined && (strategy !== 'handoff' || typeof options.handoffAfterEdit !== 'boolean')) throw new Error('invalid_edit_handoff');
   if (options.handoffOnFinish !== undefined && (strategy !== 'handoff' || typeof options.handoffOnFinish !== 'boolean')) throw new Error('invalid_finish_handoff');
   if (options.handoffOnFinish === true && options.handoffAfterEdit === true) throw new Error('conflicting_handoff_boundary');
+  if (options.handoffProbeGate !== undefined && (typeof options.handoffProbeGate !== 'boolean'
+    || strategy !== 'handoff' || options.handoffAfterEdit !== true || options.probeRegressionGate !== true)) {
+    throw new Error('invalid_handoff_probe_gate');
+  }
   if (options.handoffMaxTurns !== undefined && (strategy !== 'handoff' || options.handoffAfterEdit !== true
     || !Number.isSafeInteger(options.handoffMaxTurns) || options.handoffMaxTurns < 1
     || !Number.isSafeInteger(config.maxTurns) || options.handoffMaxTurns >= config.maxTurns)) throw new Error('invalid_handoff_turn_limit');
@@ -199,10 +203,12 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
     { role: 'user', content: `${task.instruction}\nEditable source: ${task.editPaths.join(', ')}\nVisible tests: ${task.visibleTests.join(', ')}` }];
   if (preservationProbes.length) messages[1].content += `\nSupplied preservation probes are already pinned for final replay; no model call is needed to register them. Keep their behavior while fixing the task. These checks are incomplete, and independent acceptance still applies:\n${JSON.stringify(preservationProbes)}`;
   if (options.probeRegressionGate) messages[0].content += ' Before submission, at least one passing behavior probe is required. The first four distinct passing probes of at most 4096 UTF-8 bytes are pinned and replayed against the final source in fresh sandboxes. Preserve their behavior across edits; passing probes are regression checks, not proof of task correctness.';
+  if (options.handoffProbeGate) messages[0].content += ' Before a normal handoff, run a behavior probe of at most 4096 UTF-8 bytes that fails with an assertion on original source and passes on your current repair. Passing existing tests or a probe that also passes on the original source is insufficient. An explicitly configured turn limit can still transfer incomplete work.';
   messages[0].content += ' read and search accept existing FILE paths only: no directories, globs or shell commands. Leave search paths empty to search editable files. Search query is literal text, at most 200 characters. An edit action accepts 1–8 edits; each search must match exactly once in current source.';
   let selectedCandidate = null, candidatesCompared = false;
   let planUsed = false, reviewUsed = false, handoffUsed = false;
   let handoffReady = false;
+  let handoffProbeQualified = false, handoffProbeChecks = 0, originalFiles;
   let handoffProbe = '';
   let handoffProbeUsed = false;
   let handoffMessage;
@@ -219,7 +225,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
     failureTraces.set(error, Object.freeze({ version: 1,
       actions: Object.freeze(actions.slice(-120).map(({ turn, action, status }) => Object.freeze({ turn, action, status }))),
       actionsTruncated: actions.length > 120, handoffUsed, handoffProbeUsed, turns, invalidActions,
-      publicPassed, truncationRetries, handoffEvidenceRecords, handoffEvidenceUsed,
+      publicPassed, truncationRetries, handoffEvidenceRecords, handoffEvidenceUsed, handoffProbeQualified, handoffProbeChecks,
       probeRegressionProbes: regressionProbes.length, providedRegressionProbes: preservationProbes.length, probeRegressionChecks, probeRegressionPassed,
       toolMs: Math.round(toolMs), agentMs: Math.round(performance.now() - started) }));
   };
@@ -273,6 +279,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
     actions.push({ turn: turns + 1, action: 'handoff', status: 'ok', ...(reason ? { reason } : {}) });
   };
   try {
+    if (options.handoffProbeGate) originalFiles = await readSource(box, task.editPaths, remaining());
     const context = await readTaskContext(box, task, remaining());
     if (context.length) messages[1].content += `\nOriginal read-only repository context (verify current source with tools if needed):\n${JSON.stringify(context)}`;
     taskContext = messages[1].content;
@@ -303,8 +310,10 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
       if (deadline.aborted) { outcome = 'deadline'; break; }
       if (strategy === 'handoff' && !handoffUsed && options.handoffOnFinish !== true) {
         const limitReached = options.handoffMaxTurns !== undefined && turns >= options.handoffMaxTurns;
-        if (options.handoffAfterEdit === true ? handoffReady || limitReached : turns >= Math.max(1, Math.floor(config.maxTurns * 2 / 3))) {
-          await handoff(options.handoffMaxTurns === undefined ? undefined : handoffReady ? 'visible_pass' : 'turn_limit');
+        const ready = handoffReady && (!options.handoffProbeGate || (publicPassed && handoffProbeQualified));
+        if (options.handoffAfterEdit === true ? ready || limitReached : turns >= Math.max(1, Math.floor(config.maxTurns * 2 / 3))) {
+          await handoff(ready && options.handoffProbeGate ? 'qualified_probe'
+            : options.handoffMaxTurns === undefined ? undefined : ready ? 'visible_pass' : 'turn_limit');
         }
       }
       const model = strategy === 'handoff' && handoffUsed ? models.critic : executorModel(strategy, turns, forceEscalation);
@@ -365,6 +374,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
         } else if (action.action === 'candidate') {
           if (!options.candidates || !['1', '2'].includes(action.query)) throw new Error('invalid_action');
           await writeFiles(box, validateEdits(task, options.candidates[Number(action.query) - 1]), remaining());
+          if (!handoffUsed) handoffProbeQualified = false;
           selectedCandidate = Number(action.query);
           const result = await checkVisible();
           observe('candidate', result);
@@ -376,6 +386,21 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
             regressionProbes = retainRegressionProbe(regressionProbes, action.query);
             messages.push({ role: 'user', content: `Pinned regression probes: ${regressionProbes.length}/4. Only distinct passing probes of at most 4096 UTF-8 bytes are retained; existing probes cannot be evicted.` });
           }
+          if (options.handoffProbeGate && !handoffUsed && handoffReady && publicPassed && result.passed
+            && Buffer.byteLength(action.query) <= 4096) {
+            const files = await readSource(box, task.editPaths, remaining());
+            handoffProbeChecks++;
+            const [baseline, candidate] = await compareCandidates(task, image, [originalFiles, files],
+              action.query, remaining(), { includeAssertionFailure: true }).catch(error => {
+              regressionFailure = error; throw error;
+            });
+            if (baseline.assertionFailed === true && candidate.passed) {
+              const visible = await checkVisible();
+              observe('test', visible);
+              handoffProbeQualified = visible.passed && await verifyRegressionProbes();
+            }
+            messages.push({ role: 'user', content: `Handoff probe qualified: ${handoffProbeQualified}. The same probe must fail with an assertion on original source and pass on current source; pinned regression probes must also pass. This does not establish complete task correctness.` });
+          }
           if (verificationHandoff) {
             handoffProbe = Buffer.byteLength(action.query) <= 8192
               ? `\nPreviously executed probe (untrusted; may predate the latest edit). Inspect its coverage and rerun against current source; this is not final acceptance:\n${JSON.stringify({ source: action.query, passed: result.passed })}`
@@ -385,6 +410,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
         } else if (action.action === 'edit') {
           const files = await readSource(box, task.editPaths, remaining());
           await writeFiles(box, replaceEdits(task, files, action.edits), remaining());
+          if (!handoffUsed) handoffProbeQualified = false;
           const result = await checkVisible();
           observe('edit', result);
           if (publicPassed) handoffReady = true;
@@ -396,6 +422,8 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
           if (action.action === 'finish') {
             if (!await verifyRegressionProbes()) {
               messages.push({ role: 'user', content: 'Submission blocked: register a passing behavior probe and repair any pinned regression failures before finishing.' });
+            } else if (options.handoffProbeGate && !handoffUsed && !handoffProbeQualified) {
+              messages.push({ role: 'user', content: 'Handoff blocked: run a behavior probe that fails with an assertion on original source and passes on the current repair. A visible-test pass alone is insufficient.' });
             } else if (options.candidates && !candidatesCompared) {
               messages.push({ role: 'user', content: 'Before submitting, use compare to run the same task-invariant assertion against both candidate snapshots. Investigate the outputs and repair any remaining failures.' });
             } else if (strategy === 'handoff' && !handoffUsed) {
@@ -430,7 +458,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
       finally { toolMs += performance.now() - started; }
     }
     const files = await readSource(box, task.editPaths);
-    return { files, actions, probeRegressionProbes: regressionProbes.length, providedRegressionProbes: preservationProbes.length, probeRegressionChecks, probeRegressionPassed, selectedCandidate, candidatesCompared, planUsed, reviewUsed, handoffUsed, handoffProbeUsed, handoffEvidenceRecords, handoffEvidenceUsed, patchDigest: hash(JSON.stringify(files)), outcome, escalated, turns, invalidActions, adviserFailures,
+    return { files, actions, probeRegressionProbes: regressionProbes.length, providedRegressionProbes: preservationProbes.length, probeRegressionChecks, probeRegressionPassed, selectedCandidate, candidatesCompared, planUsed, reviewUsed, handoffUsed, handoffProbeUsed, handoffEvidenceRecords, handoffEvidenceUsed, handoffProbeQualified, handoffProbeChecks, patchDigest: hash(JSON.stringify(files)), outcome, escalated, turns, invalidActions, adviserFailures,
       publicPassed, truncationRetries, toolMs: Math.round(toolMs), agentMs: Math.round(performance.now() - started) };
   } catch (error) { recordFailure(error); throw error; }
   finally {

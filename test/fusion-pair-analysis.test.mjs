@@ -188,6 +188,25 @@ test('repeat analysis rejects changed protocols, duplicate blocks, missing time 
   }
 });
 
+test('probe-qualified handoff is a distinct validated repeat protocol', () => {
+  const runs = repeats();
+  for (const run of runs) {
+    run.policy = 'edit-handoff'; run.probeRegressionGate = true;
+    for (const row of run.records) row.probeRegressionPassed = true;
+  }
+  runs[0].handoffProbeGate = true;
+  assert.throws(() => analyzePairRepeats(runs), /mismatched_pair_protocol/);
+  runs[1].handoffProbeGate = true;
+  assert.equal(analyzePairRepeats(runs).handoffProbeGate, true);
+  for (const value of [null, 1, 'true']) {
+    runs[0].handoffProbeGate = value;
+    assert.throws(() => analyzePairRun(runs[0]), /invalid_pair_run/);
+  }
+  runs[0].handoffProbeGate = true;
+  runs[0].probeRegressionGate = false;
+  assert.throws(() => analyzePairRun(runs[0]), /invalid_pair_run/);
+});
+
 test('handoff evidence protocols stay distinct while older notes-only receipts remain compatible', () => {
   const runs = repeats();
   runs[1].handoffEvidence = false;

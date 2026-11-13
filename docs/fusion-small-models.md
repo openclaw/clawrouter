@@ -938,6 +938,24 @@ defaults change.
 
 ### Bounded edit handoff
 
+Set `FUSION_HANDOFF_PROBE_GATE=1` together with `FUSION_PROBE_REGRESSION_GATE=1`
+to delay an `edit-handoff` until a behavior probe distinguishes the original
+source from the current repair. The probe must fit in 4096 UTF-8 bytes, fail
+with an assertion on the frozen original source, and pass on the candidate in
+fresh isolated sandboxes. Current visible tests and pinned regression probes
+must also pass. A runtime/import error on the original is insufficient.
+
+Each edit invalidates earlier qualification. Calling `finish` cannot bypass
+the gate. An explicit `FUSION_HANDOFF_MAX_TURNS` still transfers unfinished
+work when its limit arrives; receipts distinguish `qualified_probe` from
+`turn_limit` transfers and record the comparison count. No hidden acceptance
+tests enter this decision, and the extra checks use the existing deadline.
+
+Use `matched-handoff` to apply the same gate to a strong-successor control.
+The option is off by default. Reports retain `handoffProbeGate`; repeated
+analysis rejects mixed settings. This gate proves only that one probe detects
+a source difference, not full contract coverage or a model-quality gain.
+
 Set `FUSION_HANDOFF_MAX_TURNS` to reserve successor calls in an `edit-handoff`
 comparison. The first worker hands off after its first passing edit or the
 specified number of turns, whichever comes first. The limit must be at least

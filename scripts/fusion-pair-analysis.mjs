@@ -67,6 +67,8 @@ export function analyzePairRun(run, options) {
     || typeof run.config?.cheap !== 'string' || typeof run.config?.strong !== 'string'
     || run.config.cheap === run.config.strong
     || (run.probeRegressionGate !== undefined && typeof run.probeRegressionGate !== 'boolean')
+    || (run.handoffProbeGate !== undefined && (typeof run.handoffProbeGate !== 'boolean'
+      || (run.handoffProbeGate && (run.probeRegressionGate !== true || !['edit-handoff', 'matched-handoff'].includes(run.policy)))))
     || (run.handoffEvidence !== undefined && typeof run.handoffEvidence !== 'boolean')) throw new Error('invalid_pair_run');
   if (run.handoffMaxTurns != null && (!Number.isSafeInteger(run.handoffMaxTurns) || run.handoffMaxTurns < 1
     || !Number.isSafeInteger(run.config.maxCalls) || run.handoffMaxTurns >= run.config.maxCalls
@@ -143,7 +145,7 @@ export function analyzePairRun(run, options) {
   }
   const oracleSolved = [...cases.values()].filter(({ rows }) => rows.get('cheap').score || rows.get('strong').score).length;
   return { version: 1, kind: 'observed-pair-analysis', sourceSha: run.sourceSha,
-    handoffMaxTurns: run.handoffMaxTurns ?? null, handoffEvidence: run.handoffEvidence ?? false, probeRegressionGate: run.probeRegressionGate ?? false,
+    handoffMaxTurns: run.handoffMaxTurns ?? null, handoffEvidence: run.handoffEvidence ?? false, probeRegressionGate: run.probeRegressionGate ?? false, handoffProbeGate: run.handoffProbeGate ?? false,
     datasetDigest: run.datasetDigest, qualificationDigest: run.qualificationDigest,
     inputDigest: createHash('sha256').update(JSON.stringify(run)).digest('hex'),
     cases: cases.size, candidate, latencyMetric, totals, comparisons: [versusCheap, versusStrong],
@@ -180,7 +182,7 @@ export function analyzePairRepeats(runs, options) {
       qualificationDigest: run.qualificationDigest, config, pins: run.pins, policy: run.policy,
       executor: run.executor, cheapReasoning: run.cheapReasoning, cheapMaxCalls: run.cheapMaxCalls,
       preloadSource: run.preloadSource, includeControls: run.includeControls, controlsOnly: run.controlsOnly,
-      handoffMaxTurns: run.handoffMaxTurns ?? null, handoffEvidence: run.handoffEvidence ?? false, probeRegressionGate: run.probeRegressionGate ?? false,
+      handoffMaxTurns: run.handoffMaxTurns ?? null, handoffEvidence: run.handoffEvidence ?? false, probeRegressionGate: run.probeRegressionGate ?? false, handoffProbeGate: run.handoffProbeGate ?? false,
       strategies: [...run.strategies].sort(), receipts: [...run.receipts].sort((a, b) => a.taskId.localeCompare(b.taskId)) });
   };
   const expected = protocol(runs[0]);
@@ -215,7 +217,7 @@ export function analyzePairRepeats(runs, options) {
     withinLatencyLimit: latencyRatio !== null && latencyRatio <= 2,
     rescuedBeyondCheap: comparisons[0].wins > 0 };
   return { version: 1, kind: 'observed-pair-repeat-analysis', sourceSha: runs[0].sourceSha,
-    handoffMaxTurns: runs[0].handoffMaxTurns ?? null, handoffEvidence: runs[0].handoffEvidence ?? false, probeRegressionGate: runs[0].probeRegressionGate ?? false,
+    handoffMaxTurns: runs[0].handoffMaxTurns ?? null, handoffEvidence: runs[0].handoffEvidence ?? false, probeRegressionGate: runs[0].probeRegressionGate ?? false, handoffProbeGate: runs[0].handoffProbeGate ?? false,
     blocks: runs.length, distinctTasks: reports[0].cases, attemptsPerStrategy: selected.attempts, latencyMetric,
     inputDigests: reports.map(report => report.inputDigest), totals, comparisons, candidateModelUse,
     costSavingVersusStrong: saving, latencyRatioVersusStrong: latencyRatio,
