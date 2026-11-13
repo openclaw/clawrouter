@@ -2,7 +2,7 @@
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { deploymentMessage, deploymentState, stableVersion } from './deploy-train-policy.mjs';
-import { verifyCutoverRecovery } from './deploy-train-runtime.mjs';
+import { verifyCutoverRecovery, nativeReceipt, assertNativeOwners } from './deploy-train-runtime.mjs';
 import { verifyObservability } from './deploy-train-observability.mjs';
 
 export const NATIVE_PHASE_TIMEOUT_MS = 10 * 60_000; // includes the existing 460s native drain
@@ -103,7 +103,18 @@ async function converge({api,state,control,version,kind,now,wait,timeoutMs}) {
 export async function runNativeCutover({api,state,control,smoke,save=()=>{},now=Date.now,wait=sleep,timeoutMs=NATIVE_PHASE_TIMEOUT_MS}) {
   await verifyCutoverRecovery(api,state);
   const latest = await api.latest();
-  if (latest.id !== state.deploymentId || latest.versions?.length !== 1 || stableVersion(latest) !== state.blue) throw new Error('Native cutover requires unchanged blue-only deployment');
+  if (latest.id !== state.deploymentId || stableVersion(latest) !== state.blue ||
+      new Set(latest.versions.map(v=>v.version_id)).size !== latest.versions.length ||
+      latest.versions.some(v=>v.percentage !== (v.version_id===state.blue?100:0))) throw new Error('Native cutover requires unchanged stable blue deployment');
+  // Ordinary completion retains its former blue at 0%. Prove those existing
+  // entries share the selected payload/owners, then the first owned journal
+  // removes them before admission closes. Never add the incompatible candidate.
+  const blue = await api.version(state.blue);
+  for (const entry of latest.versions.filter(v=>v.version_id!==state.blue)) {
+    const previous = await api.version(entry.version_id);
+    if (nativeReceipt(previous).runtimeSha !== state.cutover.blueRuntimeSha) throw new Error('Existing zero-percent version has an incompatible native runtime');
+    assertNativeOwners(blue,previous);
+  }
   if (!nativeWarm(await control.snapshot(state.blue))) throw new Error('Native cutover requires healthy accepting blue capacity');
   // Journal BEFORE the admission write. A runner lost at any subsequent point
   // leaves enough remote custody for recovery without its filesystem/artifacts.

@@ -209,3 +209,35 @@ test('a train after compatible recovery reaches upload without trusting unrelate
  assert.throws(()=>assertSecretLineage(cyclic,recovery),/Unproven/);
  assert.throws(()=>assertSecretLineage([history[0],...history],recovery),/Duplicate/);
 });
+
+
+test('native cutover follows the actual ordinary terminal distribution and removes compatible zero-percent history first',async()=>{
+ const f=fixture(),prior='99999999-9999-9999-9999-999999999999';
+ const getVersion=f.api.version,getVersions=f.api.versions,deploy=f.api.deploy;
+ const priorVersion=nativeVersion(prior,'9'.repeat(40));
+ f.api.version=async id=>id===prior?priorVersion:getVersion(id);
+ let uploaded=false,sequence=0;
+ f.api.versions=async()=>uploaded?[await getVersion(blue),priorVersion]:[priorVersion];
+ f.latest.versions=[{version_id:prior,percentage:100}];
+ f.api.deploy=async(versions,message,expected)=>{
+  assert.equal(expected,f.latest.id);Object.assign(f.latest,{id:'ordinary'+(++sequence),versions,annotations:{'workers/message':message}});return structuredClone(f.latest);
+ };
+ const ordinary={run:'123',sha:'b'.repeat(40),blue:prior,deploymentId:f.latest.id,unsafe:false,migration:false,native:{schema:1,runtimeSha:oldRuntime}};
+ await runTrain({state:ordinary,api:f.api,upload:async()=>{uploaded=true;return blue;},smoke:async()=>{},now:f.now,wait:f.wait,analytics:async()=>({disabled:'fixture'})});
+ assert.deepEqual(f.latest.versions,[{version_id:blue,percentage:100},{version_id:prior,percentage:0}]);
+ f.api.deploy=deploy;f.api.versions=async()=>[...await getVersions(),priorVersion];f.state.deploymentId=f.latest.id;
+ await runNativeCutover(f);
+ assert.equal(f.events[0][0],'deploy');assert.equal(f.events[0][1],blue);assert.equal(f.events[1][0],'admission');assert.equal(f.state.status,'done');
+});
+
+test('unproven zero-percent runtime or owner changes refuse normalization before admission writes',async()=>{
+ const prior='99999999-9999-9999-9999-999999999999';
+ for(const kind of ['runtime','owners','percentage','duplicate']){
+  const f=fixture(),original=f.api.version,old=nativeVersion(prior,'9'.repeat(40));
+  f.latest.versions.push({version_id:kind==='duplicate'?blue:prior,percentage:kind==='percentage'?-1:0});
+  if(kind==='runtime')old.annotations['workers/message']=uploadMessage({run:'1',blue,sha:'9'.repeat(40),native:{schema:1,runtimeSha:runtime}});
+  if(kind==='owners')old.resources.bindings.find(b=>b.name==='POLICY_KV').namespace_id='foreign';
+  f.api.version=async id=>id===prior?old:original(id);
+  await assert.rejects(runNativeCutover(f));assert.deepEqual(f.events,[]);
+ }
+});

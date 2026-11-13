@@ -88,7 +88,9 @@ Two ingress-enabled immutable versions are uploaded without secret changes:
   consumption. No historical dependency install is attempted.
 
 The coordinator journals its recovery version and identities remotely before the
-first admission write. It closes admission on original blue, waits for all eight
+first admission write. An ordinary completed rollout may retain an older version
+at 0%; the coordinator first verifies its identical native digest and owners, then
+removes it in that blue-only journal before draining. It closes admission on original blue, waits for all eight
 slots to be idle after exact-generation destruction acknowledgement and observed
 absence, with no grants/members/replay history, then selects **only** candidate at
 100%. The drained switch requests Cloudflare's immediate DO code-update strategy;
