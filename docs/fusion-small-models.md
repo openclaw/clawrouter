@@ -3,6 +3,15 @@
 Research reviewed on 2026-11-05. Keep production Fusion opt-in. This plan tests
 the mechanism before paying for another frontier-model comparison.
 
+Pair receipts separate `agentElapsedMs` from `gradingElapsedMs`. Agent time
+includes its tools, visible checks and sandbox cleanup. Grading time measures
+the independent final acceptance suite, including its cleanup, and is `null`
+when grading never starts. Both durations survive phase failures. Existing
+`elapsedMs` retains its end-to-end meaning and the current analyzer still uses
+that field. Predeclare the metric before a latency comparison; slow hidden
+timeout tests must not be treated as agent execution. Older receipts lack the
+phase measurements and cannot reconstruct them from total elapsed time.
+
 Draft refinement skips verification when a response applies no patch. It tells
 the next attempt whether to shorten truncated output or repair invalid edit
 anchors, while retaining the current source and the same three-attempt ceiling.
