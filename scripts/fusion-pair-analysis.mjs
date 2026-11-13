@@ -70,6 +70,8 @@ export function analyzePairRun(run, options) {
     || (run.handoffProbeGate !== undefined && (typeof run.handoffProbeGate !== 'boolean'
       || (run.handoffProbeGate && (run.probeRegressionGate !== true || !['edit-handoff', 'matched-handoff'].includes(run.policy)))))
     || (run.handoffEvidence !== undefined && typeof run.handoffEvidence !== 'boolean')) throw new Error('invalid_pair_run');
+  if (run.armOffset !== undefined && (!Number.isSafeInteger(run.armOffset) || run.armOffset < 0
+    || run.armOffset >= run.strategies.length)) throw new Error('invalid_pair_run');
   if (run.handoffMaxTurns != null && (!Number.isSafeInteger(run.handoffMaxTurns) || run.handoffMaxTurns < 1
     || !Number.isSafeInteger(run.config.maxCalls) || run.handoffMaxTurns >= run.config.maxCalls
     || !['edit-handoff', 'matched-handoff'].includes(run.policy))) throw new Error('invalid_pair_run');
@@ -144,7 +146,7 @@ export function analyzePairRun(run, options) {
       candidateSolvedMinusExpected: selected.solved - expectedSolved };
   }
   const oracleSolved = [...cases.values()].filter(({ rows }) => rows.get('cheap').score || rows.get('strong').score).length;
-  return { version: 1, kind: 'observed-pair-analysis', sourceSha: run.sourceSha,
+  return { version: 1, kind: 'observed-pair-analysis', sourceSha: run.sourceSha, armOffset: run.armOffset ?? 0,
     handoffMaxTurns: run.handoffMaxTurns ?? null, handoffEvidence: run.handoffEvidence ?? false, probeRegressionGate: run.probeRegressionGate ?? false, handoffProbeGate: run.handoffProbeGate ?? false,
     datasetDigest: run.datasetDigest, qualificationDigest: run.qualificationDigest,
     inputDigest: createHash('sha256').update(JSON.stringify(run)).digest('hex'),
@@ -176,6 +178,7 @@ export function analyzePairRepeats(runs, options) {
   if (!Array.isArray(runs) || runs.length < 2) throw new Error('missing_pair_repeats');
   const reports = runs.map(run => analyzePairRun(run, { latencyMetric }));
   if (new Set(reports.map(report => report.inputDigest)).size !== runs.length) throw new Error('duplicate_pair_repeat');
+  // Arm offsets vary across counterbalanced blocks, not model or scoring policy.
   const protocol = run => {
     const { priorCostMicros: _prior, ...config } = run.config;
     return canonical({ sourceSha: run.sourceSha, datasetDigest: run.datasetDigest,
@@ -216,7 +219,7 @@ export function analyzePairRepeats(runs, options) {
     enoughCostSaving: saving !== null && BigInt(selected.costMicros) * 5n <= BigInt(strong.costMicros) * 4n,
     withinLatencyLimit: latencyRatio !== null && latencyRatio <= 2,
     rescuedBeyondCheap: comparisons[0].wins > 0 };
-  return { version: 1, kind: 'observed-pair-repeat-analysis', sourceSha: runs[0].sourceSha,
+  return { version: 1, kind: 'observed-pair-repeat-analysis', armOffsets: runs.map(run => run.armOffset ?? 0), sourceSha: runs[0].sourceSha,
     handoffMaxTurns: runs[0].handoffMaxTurns ?? null, handoffEvidence: runs[0].handoffEvidence ?? false, probeRegressionGate: runs[0].probeRegressionGate ?? false, handoffProbeGate: runs[0].handoffProbeGate ?? false,
     blocks: runs.length, distinctTasks: reports[0].cases, attemptsPerStrategy: selected.attempts, latencyMetric,
     inputDigests: reports.map(report => report.inputDigest), totals, comparisons, candidateModelUse,

@@ -97,6 +97,43 @@ for (const failure of ['none', 'agent', 'grade']) test(`execution timing exclude
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+for (const armOffset of [0, 1, 2]) test(`pair arm offset ${armOffset} rotates actual execution and retains canonical strategy labels`, async () => {
+  const { root, options } = await fixture();
+  try {
+    const order = ['cheap', 'strong', 'edit-handoff'];
+    const expected = [...order.slice(armOffset), ...order.slice(0, armOffset)];
+    const state = await runPairBenchmark({ ...options, policy: 'matched-handoff', armOffset,
+      grade, fetcher: success,
+      agent: async (_task, _image, _strategy, id, _settings, invoke) => {
+        await invoke(id, roles.strong, body, signal); return repaired();
+      },
+    });
+    assert.deepEqual(state.strategies, order);
+    assert.deepEqual(state.records.map(row => row.strategy), expected);
+    assert.deepEqual(state.calls.map(call => call.trialId.split(':')[1]), expected);
+    assert.equal(state.armOffset, armOffset);
+    const saved = JSON.parse(await readFile(join(options.out, 'pair.json'), 'utf8'));
+    assert.equal(saved.armOffset, armOffset);
+    assert.deepEqual(analyzePairRun(state).totals.map(row => row.solved), [1, 1, 1]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('invalid arm offsets stop before provider preflight or output creation', async () => {
+  const { root, options } = await fixture();
+  let preflights = 0;
+  try {
+    for (const armOffset of [-1, 3, 1.5, null, '1', NaN, Infinity]) {
+      await assert.rejects(runPairBenchmark({ ...options, armOffset,
+        preflight: async () => { preflights++; },
+      }), /invalid_arm_offset/);
+    }
+    await assert.rejects(runPairBenchmark({ ...options, policy: 'edit-handoff', includeControls: false, armOffset: 1 }), /invalid_arm_offset/);
+    await assert.rejects(runPairBenchmark({ ...options, controlsOnly: true, armOffset: 2 }), /invalid_arm_offset/);
+    assert.equal(preflights, 0);
+    assert.ok(!(await readdir(root)).includes('result'));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('architect spends one of the shared calls on the strong planner', () => {
   validatePair(config, 1);
   assert.equal(pairModel('architect', roles.cheap, config), config.strong);

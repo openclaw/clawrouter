@@ -400,3 +400,20 @@ test('handoff turn limits are validated and separate repeat protocols', () => {
     assert.throws(() => analyzePairRun(runs[0]), /invalid_pair_run/);
   }
 });
+
+
+test('analysis retains per-block arm offsets without changing matched protocol or results', () => {
+  const runs = repeats();
+  const original = analyzePairRepeats(runs);
+  runs[0].armOffset = 1; runs[1].armOffset = 2;
+  const rotated = analyzePairRepeats(runs);
+  assert.deepEqual(rotated.armOffsets, [1, 2]);
+  assert.deepEqual(rotated.totals, original.totals);
+  assert.equal(analyzePairRun(runs[0]).armOffset, 1);
+  delete runs[0].armOffset;
+  assert.deepEqual(analyzePairRepeats(runs).armOffsets, [0, 2]);
+  for (const value of [-1, 3, 1.5, null, '1', NaN, Infinity]) {
+    runs[0].armOffset = value;
+    assert.throws(() => analyzePairRun(runs[0]), /invalid_pair_run/);
+  }
+});

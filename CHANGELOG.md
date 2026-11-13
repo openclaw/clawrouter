@@ -26,6 +26,8 @@
 
 - Add an opt-in Fusion benchmark regression gate that pins passing probes across handoffs and replays them in isolated candidate snapshots before scoring.
 
+- Allow Fusion paired benchmark blocks to rotate their starting arm explicitly and retain the offset in analysis, reducing fixed-order comparisons.
+
 - Add an opt-in Fusion benchmark handoff that transfers bounded observed test and probe results separately from model-written notes, with matched strong-successor controls.
 
 - Stop Fusion benchmark agents after incomplete visible tests, recording a bounded failure before another model call.

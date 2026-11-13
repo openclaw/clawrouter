@@ -652,6 +652,14 @@ campaign's accumulated spend and unresolved reservations before starting.
 `pair.json` records exact source and dataset digests, declared splits, model
 pins, both controls, action metadata, acceptance counts, elapsed time and actual
 usage-based charges. It excludes prompts, completions and generated source.
+Set `FUSION_PAIR_ARM_OFFSET` to a zero-based arm index to change the starting
+arm for a repeated block. The default is `0`; a three-arm comparison accepts
+`0`, `1` or `2`. Execution rotates by this offset plus the task index while
+strategy labels and scoring stay fixed. Predeclare offsets before inference;
+receipts and analysis retain them, and repeated analysis allows different
+offsets under the same model/scoring protocol. Two blocks cannot fully balance
+three arms, so rotation alone does not remove all order or cache effects.
+
 Each call saves `requestDigest` (SHA-256 of the exact serialized provider body),
 UTF-8 `requestBytes`, and the input-message `promptDigest` before dispatch.
 These fields remain available on HTTP or transport failures without retaining
