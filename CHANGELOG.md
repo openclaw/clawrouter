@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reject incomplete acceptance verdicts in Fusion pair analysis before reporting quality, cost savings, or repeated pilot results.
+
 - Stop paired Fusion benchmark campaigns after incomplete agent tests or acceptance grading, preserving settled usage without calling later arms.
 
 - Stop one-shot and refined Fusion drafts after incomplete visible tests, before probing, another draft, or fallback inference.

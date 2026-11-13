@@ -13,7 +13,7 @@ function fixture(outcomes = [[1, 1, 1], [0, 1, 1]], costs = [10, 100, 40]) {
     run.receipts.push({ taskId, oracleTests: 2, oracleSkipped: 0 });
     strategies.forEach((strategy, j) => {
       run.records.push({ taskId, strategy, status: 'complete', score: scores[j], calls: 1,
-        costMicros: costs[j], publicPassed: true, verdict: { passed: Boolean(scores[j]), tests: 2, skipped: 0 },
+        costMicros: costs[j], publicPassed: true, verdict: { valid: true, passed: Boolean(scores[j]), tests: 2, skipped: 0 },
         privateSource: 'do not copy this sentinel' });
       run.calls.push({ trialId: `${taskId}:${strategy}`, model: j === 0 ? 'cheap-model' : 'strong-model', costMicros: costs[j] });
     });
@@ -56,6 +56,30 @@ test('incomplete, missing, duplicate and unverified outcomes cannot yield a gain
   ]) {
     const run = fixture(); mutate(run); assert.throws(() => analyzePairRun(run));
   }
+});
+
+for (const score of [0, 1]) {
+  for (const valid of [false, undefined]) {
+    test(`incomplete grade cannot enter pair analysis (score=${score}, valid=${valid})`, () => {
+      const run = fixture([[1, 1, score]]);
+      if (valid === undefined) delete run.records[2].verdict.valid;
+      else run.records[2].verdict.valid = valid;
+      assert.throws(() => analyzePairRun(run), /incomplete_pair_grade/);
+    });
+  }
+}
+
+test('an error row cannot hide an incomplete grading attempt', () => {
+  const run = fixture([[1, 1, 0]]);
+  run.records[2].status = 'error';
+  run.records[2].verdict.valid = false;
+  assert.throws(() => analyzePairRun(run), /incomplete_pair_grade/);
+});
+
+test('repeat analysis rejects an incomplete grade before reporting a pilot gain', () => {
+  const runs = repeats();
+  runs[1].records[2].verdict.valid = false;
+  assert.throws(() => analyzePairRepeats(runs), /incomplete_pair_grade/);
 });
 
 test('unknown charges and dropped or altered ledger entries fail closed', () => {
