@@ -609,3 +609,23 @@ The acceptance runner replaces the listed test files from the pinned reference
 only after repair. Those test bodies and the reference source must remain
 unavailable to model planning, editing and routing. Once used for inference,
 these cases are exposed and cannot remain an unseen validation set.
+
+## Routing and platform validation tasks
+
+`benchmarks/fusion/routing-platform-workloads.json` adds two historical repairs
+for testing a frozen policy on different work: threshold grant replacement and
+cross-platform native snapshot compression. The first allows four routing
+source files and checks real Worker behavior. The second allows only the
+snapshot plugin and checks the gzip header alongside the existing catalogue
+content, module identity and build determinism requirements.
+
+Qualify this manifest with `scripts/qualify-fusion-workloads.mjs` before model
+inference. The original visible tests must pass both revisions; the extended
+acceptance tests must reject the original source and pass the reference repair.
+Use Linux qualification for the gzip task so the original platform difference
+is exercised. Reference source and extended tests stay outside agent context.
+
+These tasks have no model results at introduction. Keep them separate from
+previously exposed workloads, freeze policy and comparison settings before
+inference, and retain unsuccessful attempts. Repeated draws become exposed-task
+replications; they do not add independent unseen tasks.

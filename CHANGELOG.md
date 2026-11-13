@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Verify exported Fusion repairs against their task and digests, then rerun visible and independent acceptance checks without model calls or applying source to the caller's checkout.
+- Add Fusion validation workloads for threshold grant routing and cross-platform native snapshot compression, with pinned source revisions and independent acceptance tests.
 - Add private, opt-in source bundles for accepted Fusion handoff repairs, with provenance and content-free export receipts; failed delivery stops the run without overwriting existing files.
 - Allow qualified Fusion execution handoffs to run without paid baseline calls, retaining independent acceptance and explicit non-comparative reports.
 - Let threshold grant routing leave a grant at its switch point for a grant that has never reported quota or whose window has reset, and compare idle grants by their last reading in an open window so a pool cannot flap to one already past the cutoff.
