@@ -108,11 +108,11 @@ export async function provePersonalUsageUpgrade({ eventsPerOwner = 12, artifactP
   const after = await json("/_proof/state");
   assert.equal(after.rawDigest, before.rawDigest); assert.deepEqual(after.config, before.config); assert.equal(after.settingsDigest,before.settingsDigest); assert.equal(after.budget.spentMicros, before.budget.spentMicros); assert.equal(after.projection, 0);
   assert.equal((await worker.dispatchFetch("https://router.example/v1/session/usage/report")).status, 401);
-  const transition = await samples("/v1/session/usage/report?days=7"), report = transition.body;
+  const transition = await samples("/v1/session/usage/report?days=7&intent=summary"), report = transition.body;
   assert.equal(report.metrics.calls, eventsPerOwner); assert.equal(report.metrics.inputTokens, eventsPerOwner*100);
   assert.equal(report.coverage.allDiscoveredSourcesAnswered, true); assert.equal(report.coverage.historicalLocations, "not_exhaustively_assessed"); assert.equal(after.projectionComplete, false);
   assert.equal(report.costs.find(c=>c.costClass==="fixed").amountMicros, eventsPerOwner*17);
-  const futureCustom = new URLSearchParams({ from: new Date(report.query.from).toISOString(), to: new Date(report.query.to + 60000).toISOString() });
+  const futureCustom = new URLSearchParams({ intent: "summary", from: new Date(report.query.from).toISOString(), to: new Date(report.query.to + 60000).toISOString() });
   assert.equal((await read("/v1/session/usage/report?" + futureCustom)).status, 400);
   const anchored = new URLSearchParams({ from: new Date(report.query.from).toISOString(), to: new Date(report.query.to).toISOString(), timezone: report.query.timezone, limit: "100" });
   const browse = await complete("/v1/session/usage/report?" + new URLSearchParams({ from: new Date(report.query.from).toISOString(), to: new Date(report.query.to).toISOString(), timezone: report.query.timezone, intent: "browse" }));
@@ -123,14 +123,14 @@ export async function provePersonalUsageUpgrade({ eventsPerOwner = 12, artifactP
   await send("owner"); await send("other");
   const withNew = await until(()=>json("/_proof/state"),s=>s.rawCount===(eventsPerOwner+1)*2 && s.budget.spentMicros===(eventsPerOwner+1)*17);
   assert.equal(withNew.projection,2);
-  const beforeProjection = await samples("/v1/session/usage/report?days=7"), mixed = beforeProjection.body; assert.equal(mixed.metrics.calls,eventsPerOwner+1); assert.equal(mixed.metrics.reasoningReportedCalls,1); assert.equal(mixed.metrics.reasoningOutputTokens,10);
+  const beforeProjection = await samples("/v1/session/usage/report?days=7&intent=summary"), mixed = beforeProjection.body; assert.equal(mixed.metrics.calls,eventsPerOwner+1); assert.equal(mixed.metrics.reasoningReportedCalls,1); assert.equal(mixed.metrics.reasoningOutputTokens,10);
   await read("/_proof/binding",{method:"POST",body:JSON.stringify({enabled:false})});
-  const revoked = await json("/v1/session/usage/report?days=7"); assert.equal(revoked.kind,"no_access");
+  const revoked = await json("/v1/session/usage/report?days=7&intent=summary"); assert.equal(revoked.kind,"no_access");
   assert.equal((await json("/v1/session/usage/events?"+anchored)).kind,"no_access");
   if(events.nextCursor) assert.equal((await json("/v1/session/usage/events?"+anchored+"&cursor="+encodeURIComponent(events.nextCursor))).kind,"no_access");
   await read("/_proof/binding",{method:"POST",body:JSON.stringify({enabled:true})});
   await read("/_proof/policy",{method:"POST",body:JSON.stringify({enabled:false})});
-  assert.equal((await json("/v1/session/usage/report?days=7")).kind,"no_access");
+  assert.equal((await json("/v1/session/usage/report?days=7&intent=summary")).kind,"no_access");
   assert.equal((await json("/v1/session/usage/events?"+anchored)).kind,"no_access");
   const denied=await read("/v1/responses",{method:"POST",headers:{authorization:"Bearer clawrouter-live-owner-synthetic-key","content-type":"application/json"},body:JSON.stringify({model:"openai/gpt-6.1-sol",input:"synthetic fixture"})});
   assert.equal(denied.status,403);
@@ -140,7 +140,7 @@ export async function provePersonalUsageUpgrade({ eventsPerOwner = 12, artifactP
   const migrate = async opts => {const r=await read("/_proof/migrate",{method:"POST",body:JSON.stringify(opts)});assert.equal(r.status,200,await r.clone().text());return r.json();};
   const dry = await migrate({}); assert.equal(dry.dryRun,true); assert.equal((await json("/_proof/state")).projection,2);
   let applied; do { applied=await migrate({apply:true,batchSize:200}); } while(!applied.complete);
-  const indexed=await samples("/v1/session/usage/report?days=7"), final=await json("/_proof/state");
+  const indexed=await samples("/v1/session/usage/report?days=7&intent=summary"), final=await json("/_proof/state");
   assert.equal(indexed.body.metrics.calls,eventsPerOwner+1); assert.equal(final.projectionComplete,true); assert.equal(indexed.body.coverage.allDiscoveredSourcesAnswered,true); assert.equal(final.rawDigest,withNew.rawDigest); assert.equal(final.budget.spentMicros,withNew.budget.spentMicros); assert.deepEqual(final.config,before.config);
   const candidateCostRuntime = await exercisePersonalUsageCosts({ read, json, until, restart: async () => {
    await worker.dispose(); worker = null;

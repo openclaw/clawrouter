@@ -20,6 +20,37 @@ async function fixture(t){
 }
 async function value(response){assert.equal(response.status,200,await response.clone().text());assert.match(response.headers.get('cache-control'),/no-store/);const o=await response.json();assert.equal(o.kind,'complete',JSON.stringify(o));return o.value;}
 const params=(f,report,extra={})=>{const p=new URLSearchParams({from:new Date(report.query.from).toISOString(),to:new Date(report.query.to).toISOString(),groupBy:report.query.groupBy,cut:report.cut,...extra});return p;};
+test('legacy first page and baseline-issued cursor work without a cut',async t=>{
+ t.mock.timers.enable({apis:['Date'],now:Date.parse('2026-11-13T12:00:00Z')});
+ const f=await fixture(t);await f.ingest(0,f.event('z'));await f.ingest(0,f.event('a'));
+ const p=new URLSearchParams({from:'2026-11-13T11:00:00.000Z',to:'2026-11-13T12:00:00.000Z',groupBy:'model',limit:'1'});
+ // Emitted by personalUsage at baseline 2d5762efdcb8 for this exact query/scope.
+ const cursor='eyJ2IjoxLCJiaW5kaW5nIjoiOGQxYzA1MmYzNjRlNTBmMzdkZDMxODhiNTQwODJhNjdjZWM2OGY1ZWIyMDZiYTgzNjlkOTUzMDk5YWMyYWVkMiIsIm5vdyI6MTc5NDU3MTIwMDAwMCwicG9zaXRpb24iOnsiYXQiOjE3OTQ1NzExOTkwMDAsImlkIjoieiIsInNoYXJkIjoiW1widGVuYW50XCIsXCJwMFwiXSJ9fQ';
+ const first=await f.http('/v1/session/usage/events?'+p,f.headers);assert.equal(first.status,200,await first.clone().text());
+ const firstBody=await first.json();assert.deepEqual(firstBody.events.map(e=>e.id),['z']);assert.equal(firstBody.nextCursor,cursor);
+ p.set('cursor',cursor);const next=await f.http('/v1/session/usage/events?'+p,f.headers);assert.equal(next.status,200,await next.clone().text());
+ const body=await next.json();assert.deepEqual(body.events.map(e=>e.id),['a']);assert.equal(body.nextCursor,null);assert.equal('kind' in body,false);
+});
+test('legacy bare session report and cursor pages coexist with explicit complete protocol',async t=>{
+ t.mock.timers.enable({apis:['Date'],now:Date.parse('2026-11-13T12:00:00Z')});
+ const f=await fixture(t);await f.ingest(0,f.event('z'));await f.ingest(0,f.event('a'));await f.ingest(0,f.event('foreign',{principal_id:'bob@example.com'}));
+ const p=new URLSearchParams({from:new Date(f.query.from).toISOString(),to:new Date(f.query.to).toISOString(),groupBy:'model'});
+ const bare=async path=>{const r=await f.http(path,f.headers);assert.equal(r.status,200,await r.clone().text());const body=await r.json();assert.equal('kind' in body,false);assert.equal('value' in body,false);return body;};
+ const report=await bare('/v1/session/usage/report?'+p);assert.equal(report.metrics.calls,2);assert.equal(report.groupBy,'model');assert.equal(report.groups[0].value,'model');assert.equal(report.historySource,'projection');assert.equal(report.range.from,f.query.from);
+ p.set('limit','1');const first=await bare('/v1/session/usage/events?'+p);assert.deepEqual(first.events.map(e=>e.id),['z']);assert.ok(first.nextCursor);
+ p.set('cursor',first.nextCursor);const second=await bare('/v1/session/usage/events?'+p);assert.deepEqual(second.events.map(e=>e.id),['a']);assert.equal(second.nextCursor,null);
+ assert.equal(f.owner.usageCuts?.roots.size??0,0,'legacy reads allocate no complete-protocol roots');
+ assert.ok(f.calls.some(c=>c.path==='/personal-report'));assert.ok(f.calls.some(c=>c.path==='/personal-events'));
+ for(const extra of ['&model=other','&user=bob@example.com','&tenantId=other','&policyId=p1','&cut=','&intent=browse'])assert.equal((await f.http('/v1/session/usage/events?'+p+extra,f.headers)).status,400);
+ for(const headers of [{},f.bearer])assert.equal((await f.http('/v1/session/usage/events?'+p,headers)).status,401);
+ const summary=await value(await f.http('/v1/session/usage/report?days=7&intent=summary',f.headers));assert.equal(summary.metrics.calls,2);assert.equal(summary.cut,null);
+ const richer=await value(await f.http('/v1/session/usage/report?'+f.p,f.headers));assert.ok(richer.cut);
+ assert.deepEqual((await value(await f.http('/v1/session/usage/events?'+params(f,richer),f.headers))).events.map(e=>e.id),['z','a']);
+ assert.equal((await f.direct('/mutate',{seed:{principal:{principalType:'user',principalId:'alice@example.com'},bindings:[]},binding:{principalType:'user',principalId:'alice@example.com',policyId:'p0',enabled:false,priority:0}})).status,200);
+ assert.equal((await f.http('/v1/session/usage/events?'+p,f.headers)).status,400,'legacy cursor cannot restore revoked policy scope');
+ const empty=await bare('/v1/session/usage/events?days=7');assert.deepEqual(empty.events,[]);assert.equal(empty.nextCursor,null);
+ assert.equal((await (await f.http('/v1/session/usage/report?days=7&intent=summary',f.headers)).json()).kind,'no_access');
+});
 test('real local login, personal authority, owner predicates and private report/events/validation',async t=>{
  const f=await fixture(t);await f.ingest(0,f.event('mine'));await f.ingest(0,f.event('other',{principal_id:'bob@example.com'}));
  const report=await value(await f.http('/v1/session/usage/report?'+f.p,f.headers));assert.equal(report.metrics.calls,1);assert.equal(report.query.filters.user,'alice@example.com');assert.match(report.cut,/^[A-Za-z0-9_-]{43}$/);
@@ -44,7 +75,7 @@ test('admin token sees retained owners without impersonation; rotation invalidat
  f.env.CLAWROUTER_ADMIN_TOKEN_SHA256=hash('rotated');assert.equal((await f.http('/v1/admin/usage/events?'+params(f,r),f.bearer)).status,401);
  assert.equal((await f.http('/v1/admin/usage/events?'+params(f,r),{authorization:'Bearer rotated'})).status,410);
  assert.equal((await f.direct('/mutate',{seed:{principal:{principalType:'user',principalId:'alice@example.com'},bindings:[]},binding:{principalType:'user',principalId:'alice@example.com',policyId:'p0',enabled:false,priority:0}})).status,200);
- assert.equal((await (await f.http('/v1/session/usage/report?days=7',f.headers)).json()).kind,'no_access');
+ assert.equal((await (await f.http('/v1/session/usage/report?days=7&intent=summary',f.headers)).json()).kind,'no_access');
 });
 test('admin usage cuts coexist with authenticated large HTTP lifecycle controls',async t=>{
  const f=await fixture(t),path='/v1/admin/large-http',calls=[];await f.ingest(0,f.event('coexisting'));
@@ -74,11 +105,12 @@ test('admin usage cuts coexist with authenticated large HTTP lifecycle controls'
 });
 test('HTTP parser rejects malformed capabilities and unknown/private selectors without shard work',async t=>{
  const f=await fixture(t);for(const query of ['intent=invalid','intent=summary&cut='+ 'a'.repeat(43),'intent=export&cut='+'a'.repeat(43),'days=7&days=7','tenantId=other','policyId=p0','grain=minute&days=7','keyKind=session&key=forbidden','cut=','model='+ 'é'.repeat(257),'limit=3','cursor='+'a'.repeat(43)]){
-  const before=f.calls.filter(c=>c.kind==='shard').length;assert.equal((await f.http('/v1/session/usage/report?'+query,f.headers)).status,400,query.slice(0,80));assert.equal(f.calls.filter(c=>c.kind==='shard').length,before);
+  const selected=new URLSearchParams(query);if(!selected.has('intent'))selected.set('intent','summary');
+  const before=f.calls.filter(c=>c.kind==='shard').length;assert.equal((await f.http('/v1/session/usage/report?'+selected,f.headers)).status,400,query.slice(0,80));assert.equal(f.calls.filter(c=>c.kind==='shard').length,before);
  }
 });
 test('forty summary HTTP refreshes allocate zero roots; browse replacement and protected export coexist',async t=>{
- const f=await fixture(t);for(let i=0;i<40;i++)assert.equal((await value(await f.http('/v1/session/usage/report?days=7',f.headers))).cut,null);
+ const f=await fixture(t);for(let i=0;i<40;i++)assert.equal((await value(await f.http('/v1/session/usage/report?days=7&intent=summary',f.headers))).cut,null);
  assert.equal(f.owner.usageCuts?.roots.size??0,0);
  const a=await value(await f.http('/v1/session/usage/report?'+f.p,f.headers));const ep=new URLSearchParams(f.p);ep.set('intent','export');
  const e=await value(await f.http('/v1/session/usage/report?'+ep,f.headers));await value(await f.http('/v1/session/usage/report?'+ep,f.headers));assert.equal((await f.http('/v1/session/usage/report?'+ep,f.headers)).status,422);
@@ -126,7 +158,7 @@ for(const audience of ['personal','admin'])test(audience+' autumn calendar range
  const requestedFrom=Date.parse('2026-10-10T04:00:00Z'),to=Date.parse('2026-11-09T05:00:00Z'),floor=f.now-30*86400000+15*60000; // Existing cut TTL safety margin.
  await f.ingest(0,f.event('boundary',{occurred_at_ms:floor+1}));await f.ingest(0,f.event('recent',{occurred_at_ms:to-1000}));
  const selection=new URLSearchParams({from:'2026-10-10',to:'2026-11-09',timezone:'America/New_York',model:'model'});
- const summary=await value(await f.http(endpoint+'/report?'+selection,headers));
+ const summary=await value(await f.http(endpoint+'/report?'+selection+'&intent=summary',headers));
  assert.equal(summary.cut,null);assert.equal(f.owner.usageCuts?.roots.size??0,0);assert.equal(summary.metrics.calls,2);
  assert.equal(summary.query.from,floor);assert.equal(summary.coverage.clippedFrom,requestedFrom);assert.equal(summary.coverage.effectiveFrom,floor);
  const browse=await value(await f.http(endpoint+'/report?'+selection+'&intent=browse',headers));assert.equal(browse.metrics.calls,2);
@@ -167,7 +199,7 @@ for(const audience of ['personal','admin'])test(audience+' calendar allowance do
   {from:'2026-02-30',to:'2026-03-01'},
   {from:'2026-11-08',to:'2026-11-09',requestedFrom:'0'},
   {from:'2026-11-08',to:'2026-11-09',tenantId:'other'},
- ]){const usageCalls=()=>f.calls.filter(c=>c.kind==='shard'||c.path.startsWith('/usage-')).length,before=usageCalls(),p=new URLSearchParams({timezone:'America/New_York',...fields});assert.equal((await f.http(endpoint+'/report?'+p,headers)).status,400,p.toString());assert.equal(usageCalls(),before,'reject before usage service calls');}
+ ]){const usageCalls=()=>f.calls.filter(c=>c.kind==='shard'||c.path.startsWith('/usage-')).length,before=usageCalls(),p=new URLSearchParams({timezone:'America/New_York',intent:'summary',...fields});assert.equal((await f.http(endpoint+'/report?'+p,headers)).status,400,p.toString());assert.equal(usageCalls(),before,'reject before usage service calls');}
 });
 
 test('calendar provenance is private disclosure, never authority to broaden effective reads',async t=>{

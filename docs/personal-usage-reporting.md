@@ -7,6 +7,8 @@ Quota refreshes may use `GET /v1/session/usage?budgets_only=true`. The existing 
 - `GET /v1/session/usage/report` → `PersonalUsageReport`.
 - `GET /v1/session/usage/events` → `PersonalUsageEvents`.
 
+These unmarked requests retain the legacy bare responses and v1 cursor continuation contract. The complete dashboard protocol opts in on the same report route with `intent=summary|browse|export`; complete events supply the returned `cut` (plus their opaque cursor when paging). `GET /v1/session/usage/validate` and `DELETE /v1/session/usage/report` are complete-protocol operations. Invalid explicit intents/cuts are rejected, never retried as legacy requests. The console supplies these markers for both home summaries and full reports.
+
 See `shared/usage-report.ts` for the response allowlist. Existing usage APIs are unchanged. Neither endpoint accepts an owner, tenant, credential owner, or policy selector. The verified browser session supplies the principal and currently held enabled policies; SQL also requires the exact event tenant and policy. A proxy key alone cannot authenticate these endpoints. Responses are private/no-store. Reporting reads never contact providers or fetch retained content.
 
 ## Query and bounds
@@ -55,7 +57,9 @@ After separate operator approval of the exact database and write operation:
 
     node scripts/usage-report-migrate.mjs --database <offline-ledger.sqlite> --batch-size 500 --apply
 
-Run another explicit apply batch until `complete=true`. Apply resumes the saved watermark, never accepts a caller override for it, and atomically inserts reporting rows plus progress. A crash/failure rolls both back. It writes **only** `usage_report_events`, its reporting indexes and `usage_report_migration`. It never changes original event JSON, actual cost, budgets or pricing metadata. Only retained metadata is eligible. Recovery/import to a running service is intentionally not automated by this tool; follow that service's approved maintenance/restore procedure. Production migration requires separately authorized private in-runtime tooling using `migrateUsageReportShard(env, { tenantId, policyId }, options)` (private Durable Object binding transport) or the underlying `migrateUsageReport(sql, transaction, options)` helper, not a new public route. The private binding operation also defaults to dry-run; no public Worker path forwards to it.
+A completed projection from an older report format is not a current-format completion. Dry-run previews a bounded rebuild without changing schema or watermarks; explicit apply reopens the existing migration at the start and resumes bounded batches. Reads keep using retained-ledger fallback until the rebuilt projection qualifies. Canonical history and accounting remain unchanged.
+
+Run another explicit apply batch until `complete=true`. Apply resumes the saved watermark, never accepts a caller override for it, and atomically inserts reporting rows plus progress. A crash/failure rolls both back. It writes only reporting metadata, reporting indexes/triggers and migration/coverage state. It never changes original event JSON, actual cost, budgets or pricing metadata. Only retained metadata is eligible. Recovery/import to a running service is intentionally not automated by this tool; follow that service's approved maintenance/restore procedure. Production migration requires separately authorized private in-runtime tooling using `migrateUsageReportShard(env, { tenantId, policyId }, options)` (private Durable Object binding transport) or the underlying `migrateUsageReport(sql, transaction, options)` helper, not a new public route. The private binding operation also defaults to dry-run; no public Worker path forwards to it.
 
 ## Local verification and benchmark hooks
 

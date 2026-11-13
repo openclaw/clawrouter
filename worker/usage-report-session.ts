@@ -1,5 +1,5 @@
-import { authorizeAdmin, verifiedAccessSession, verifiedUsageBinding } from "./access.ts";
-import { readCompleteUsage } from "./usage-report.ts";
+import { authorizeAdmin, verifiedAccessSession, verifiedUsageBinding, sessionPolicies } from "./access.ts";
+import { readCompleteUsage, personalUsage } from "./usage-report.ts";
 import { parseUsageReportRange, usageDateTools, reportRetentionMs } from "./usage-report-range.ts";
 import { sameOrigin } from "./request-origin.ts";
 import { privateJson, errorResponse, HttpError } from "./utils.ts";
@@ -64,5 +64,13 @@ export async function completeUsageResponse(request: Request, env: Env, audience
 export async function sessionUsageReport(request: Request, env: Env, kind: Kind = 'report'): Promise<Response> {
   const session = await verifiedAccessSession(request, env);
   if (!session || session.auth === 'admin_token') return errorResponse('access_session_required','a verified session is required',401);
+  const params = new URL(request.url).searchParams;
+  // Existing callers keep their bare report/event and v1 cursor ABI. Complete
+  // reports opt in with intent; their continuations carry a cut. Never retry a
+  // malformed explicit complete request through the legacy parser.
+  if ((kind === 'report' || kind === 'events') && !params.has('intent') && !params.has('cut')) {
+    const policies = await sessionPolicies(session, env);
+    return privateJson(await personalUsage(env, policies.map(p => ({ tenantId: p.policy.tenantId ?? 'default', policyId: p.policyId })), session.email, params, kind === 'events'));
+  }
   return completeUsageResponse(request,env,'personal',kind,session);
 }
