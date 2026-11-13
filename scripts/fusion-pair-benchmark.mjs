@@ -1,7 +1,7 @@
 import { readFile, mkdir, writeFile, rename, rm, open, link } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { runAgent, SpendLedger, toolErrorCode, finishReason } from './fusion-agent-benchmark.mjs';
+import { runAgent, SpendLedger, toolErrorCode, finishReason, agentFailureTrace } from './fusion-agent-benchmark.mjs';
 import { nativeModels, nativePins, nativeRequest, nativeResult, nativeErrorMetadata, requireCompleteResponse, responseDisposition } from './fusion-native-provider.mjs';
 import { models as roles, priceBound } from './fusion-benchmark-accounting.mjs';
 import { validateLocalQualification } from './fusion-local-repository.mjs';
@@ -187,7 +187,8 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
           }
         } catch (error) {
           if (error.message === 'repair_export_failed') throw error;
-          Object.assign(row, { status: 'error', errorCode: toolErrorCode(error) });
+          Object.assign(row, { status: 'error', errorCode: toolErrorCode(error),
+            ...(agentFailureTrace(error) ? { failureTrace: agentFailureTrace(error) } : {}) });
           if (ledger.blocked || error.message === 'provider_refused' || error.message === 'provider_safety_notice') throw error;
         } finally {
           row.costMicros = ledger.total(trialId);

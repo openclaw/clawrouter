@@ -109,6 +109,58 @@ for (const policy of ['edit-handoff', 'matched-handoff', 'completion-handoff']) 
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test('forged error traces never enter pair receipts', async () => {
+  const { root, options } = await fixture();
+  try {
+    const error = new Error('private-error-message');
+    error.failureTrace = { messages: ['private-prompt'], files: ['private-source'] };
+    const state = await runPairBenchmark({ ...options, grade, fetcher: success, agent: async () => { throw error; } });
+    assert(state.records.every(row => row.status === 'error' && row.score === 0 && !Object.hasOwn(row, 'failureTrace')));
+    assert.doesNotMatch(await readFile(join(options.out, 'pair.json'), 'utf8'), /private-/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('an uncertain native call retains prior actions without resuming or accepting the trial', {
+  skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+}, async () => {
+  const { runAgent } = await import('../scripts/fusion-agent-benchmark.mjs');
+  const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+  const { root, options } = await fixture();
+  try {
+    const task = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+      .find(task => task.id === 'provided-responses-path');
+    await writeFile(options.taskManifest, JSON.stringify({ version: 1, tasks: [task] }));
+    await writeFile(options.qualificationPath, await readFile(process.env.FUSION_PROVIDED_QUALIFICATION));
+    let posts = 0, grades = 0;
+    await assert.rejects(runPairBenchmark({ ...options, agent: runAgent, grade: async () => { grades++; },
+      fetcher: async (url, request) => {
+        if (url.includes('/v1/models/')) return success(url, request);
+        if (posts++ > 0) throw new Error('private-transport-error');
+        return Response.json({ model: JSON.parse(request.body).model, service_tier: 'default',
+          usage: { prompt_tokens: 20, completion_tokens: 30 }, choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
+            action: 'read', paths: task.editPaths, query: '', edits: [], memory: 'private-working-notes',
+          }) } }] });
+      },
+    }), /pair_benchmark_incomplete/);
+    const state = JSON.parse(await readFile(join(options.out, 'pair.json'), 'utf8'));
+    assert.equal(posts, 2);
+    assert.equal(grades, 0);
+    assert.equal(state.complete, false);
+    assert.equal(state.failure, 'unknown_cost');
+    assert.equal(state.records.length, 1);
+    const row = state.records[0];
+    assert.equal(row.status, 'error');
+    assert.equal(row.score, 0);
+    assert.deepEqual(row.failureTrace.actions, [{ turn: 1, action: 'read', status: 'ok' }]);
+    assert.equal(row.failureTrace.turns, 1);
+    assert.equal(row.calls, 2);
+    assert.equal(state.calls[1].costMicros, null);
+    assert.equal(row.costMicros, state.calls[0].costMicros + state.calls[1].reservationMicros);
+    assert.equal(state.spentOrReservedMicros, config.priorCostMicros + row.costMicros);
+    assert.doesNotMatch(JSON.stringify(state), /private-working-notes|private-transport-error/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('fixed-controls selection rejects ambiguous or invalid options before provider access', async () => {
   for (const controlsOnly of ['true', null, 1]) {
     await assert.rejects(runPairBenchmark({ sourceSha: 'e'.repeat(40), controlsOnly }), /invalid_control_selection/);

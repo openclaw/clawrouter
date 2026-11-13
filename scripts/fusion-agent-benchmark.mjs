@@ -76,6 +76,10 @@ const toolErrorCodes = new Set(['unknown_cost', 'invalid_source_view', 'missing_
   'command_failed', 'context_header_too_large', 'ensemble_deadline',
   'provider_refused', 'provider_context_limit', 'provider_truncated', 'provider_empty', 'provider_paused', 'provider_unknown_stop']);
 export const toolErrorCode = error => toolErrorCodes.has(error?.message) ? error.message : 'execution_failed';
+// Only traces produced by this executor can enter receipts; never trust error properties.
+const failureTraces = new WeakMap();
+export const agentFailureTrace = error => failureTraces.get(error);
+
 export const finishReason = value => ['stop', 'length', 'tool_calls', 'end_turn', 'max_tokens', 'stop_sequence', 'pause_turn', 'refusal', 'content_filter', 'model_context_window_exceeded'].includes(value) ? value : 'other';
 
 export const executorModel = (strategy, turn, forced = false) => ['claude', 'planned'].includes(strategy) ? models.critic
@@ -176,6 +180,13 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
   let handoffHasProbe = false;
   let taskContext;
   let outcome = 'turn_limit', escalated = false, forceEscalation = false, turns = 0, invalidActions = 0, toolMs = 0, publicPassed = false, adviserFailures = 0, truncationRetries = 0;
+  const recordFailure = error => {
+    if ((typeof error !== 'object' || error === null) && typeof error !== 'function') return;
+    failureTraces.set(error, Object.freeze({ version: 1,
+      actions: Object.freeze(actions.slice(-120).map(({ turn, action, status }) => Object.freeze({ turn, action, status }))),
+      actionsTruncated: actions.length > 120, handoffUsed, handoffProbeUsed, turns, invalidActions,
+      publicPassed, truncationRetries, toolMs: Math.round(toolMs), agentMs: Math.round(performance.now() - started) }));
+  };
   const remaining = () => Math.max(1, config.deadlineMs - Math.ceil(performance.now() - started));
   const handoff = async () => {
     const files = await readSource(box, task.editPaths, remaining());
@@ -318,7 +329,9 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
           }
         } else throw new Error('invalid_action');
       } catch (error) {
-        if (error.message === 'unknown_cost' || error.message.startsWith('provider_')) throw error;
+        if (error.message === 'unknown_cost' || error.message.startsWith('provider_')) {
+          event.status = toolErrorCode(error); throw error;
+        }
         if (['trial_budget', 'campaign_budget'].includes(error.message)) { outcome = 'budget'; break; }
         event.status = toolErrorCode(error);
         if (deadline.aborted) { outcome = 'deadline'; break; }
@@ -330,7 +343,11 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
     const files = await readSource(box, task.editPaths);
     return { files, actions, selectedCandidate, candidatesCompared, planUsed, reviewUsed, handoffUsed, handoffProbeUsed, patchDigest: hash(JSON.stringify(files)), outcome, escalated, turns, invalidActions, adviserFailures,
       publicPassed, truncationRetries, toolMs: Math.round(toolMs), agentMs: Math.round(performance.now() - started) };
-  } finally { await box.close(); }
+  } catch (error) { recordFailure(error); throw error; }
+  finally {
+    try { await box.close(); }
+    catch (error) { recordFailure(error); throw error; }
+  }
 }
 
 export async function runExperiment({ qualificationPath, out, repo, config = defaultExperiment, env = process.env, taskManifest }) {
@@ -404,6 +421,7 @@ export async function runExperiment({ qualificationPath, out, repo, config = def
         } catch (error) {
           details.push({ trialId, outcome: 'interrupted', errorClass: ledger.blocked ? 'unknown_cost' : 'execution_failure',
             failureCode: toolErrorCode(error),
+            ...(agentFailureTrace(error) ? { failureTrace: agentFailureTrace(error) } : {}),
             costIncludesReservation: ledger.attempts.some(attempt => attempt.trialId === trialId && attempt.costMicros === null) });
           records.push({ caseId: task.id, domain: 'repository-regression-development', trial, strategy,
             configurationId: hash(JSON.stringify({ strategy, config })), score: 0, costMicros: ledger.total(trialId),
