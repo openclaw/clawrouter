@@ -850,3 +850,18 @@ validation; later runs are development repetitions.
 Initial Linux qualification passed without skips: both source revisions pass
 102 visible tests; the original fails 20 of 143 acceptance tests, and the
 reference passes all 143. This qualifies the task, not a model or fusion policy.
+
+
+### GitHub evidence validation workload
+
+`benchmarks/fusion/access-evidence-workloads.json` defines a historical
+three-file repair of GitHub identity evidence admission and response retirement.
+The original Access and assignment tests must pass before and after the repair.
+Independent unit and real-Worker tests cover bounded parsing, UNKNOWN versus
+terminal outcomes, assignment preservation and cancellation ownership. All
+accounts, signed assertions and HTTP fixtures are synthetic.
+
+Qualify the task before inference. The `development` label is required by the
+current harness; report initial exposure separately from any later tuning or
+repetition. This task shares the authentication domain with the raw-ingress
+workload and does not establish cross-domain generalization.
