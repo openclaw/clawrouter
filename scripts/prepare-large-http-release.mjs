@@ -5,10 +5,13 @@ import { execFileSync } from 'node:child_process';
 import { mkdir, readFile, readdir, realpath, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { getStaticTOMLValue, parseTOML } from 'toml-eslint-parser';
+import { createRequire } from 'node:module';
 
 const digest = b => createHash('sha256').update(b).digest('hex');
-const parse = text => getStaticTOMLValue(parseTOML(text));
+const parse = text => {
+  const { getStaticTOMLValue, parseTOML } = createRequire(resolve('package.json'))('toml-eslint-parser');
+  return getStaticTOMLValue(parseTOML(text));
+};
 export const releaseStages = Object.freeze({
   bootstrap: { enabled: '0', ingress: '0' },
   blue: { enabled: '1', ingress: '0' },

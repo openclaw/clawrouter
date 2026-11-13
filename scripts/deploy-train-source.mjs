@@ -14,10 +14,19 @@ export function inspectSource({ blueSha, greenSha, cwd = process.cwd() }) {
   const config = (sha) => getStaticTOMLValue(parseTOML(git('show', `${sha}:wrangler.toml`)));
   const old = config(blueSha), candidate = config(greenSha);
   const lifecycle = (c) => ({ migrations: c.migrations ?? [], exports: c.exports ?? null });
-  const nonVersioned = (c) => ({ logpush: c.logpush ?? null, tails: c.tail_consumers ?? [], streamingTails: c.streaming_tail_consumers ?? [], triggers: c.triggers ?? null, consumers: c.queues?.consumers ?? [], routes: c.routes ?? [], workersDev: c.workers_dev ?? null, previewUrls: c.preview_urls ?? null });
+  const nonVersioned = (c) => ({ containers: c.containers ?? [], logpush: c.logpush ?? null, tails: c.tail_consumers ?? [], streamingTails: c.streaming_tail_consumers ?? [], triggers: c.triggers ?? null, consumers: c.queues?.consumers ?? [], routes: c.routes ?? [], workersDev: c.workers_dev ?? null, previewUrls: c.preview_urls ?? null });
   if (!isDeepStrictEqual(nonVersioned(old), nonVersioned(candidate))) throw new Error('Non-versioned Worker settings changed; use a separately authorized configuration deployment, not the version train');
   const reconciliation = observabilityReconciliation(old.observability ?? null, candidate.observability ?? null);
   const migration = !isDeepStrictEqual(lifecycle(old), lifecycle(candidate));
+  if (old.migrations?.some(m => m.tag === 'v6-large-http')) {
+    const native = c => ({ main: c.main, no_bundle: c.no_bundle, keep_vars: c.keep_vars, assets: c.assets, actors: c.durable_objects });
+    if (migration || !isDeepStrictEqual(native(old), native(candidate))) throw new Error('Native lifecycle, assets or actor contract changed; use a separately rehearsed compatible release');
+    // Changes to persistent owners or fingerprint construction need a reviewed
+    // compatibility release, not an implicit protocol-version assertion.
+    const owners = ['config', 'provider-config', 'continuous', 'epoch', 'pool-state', 'native-slot', 'lifecycle', 'lifecycle-client', 'service'];
+    if (git('diff', '--name-only', `${blueSha}..${greenSha}`, '--', ...owners.map(name => `worker/large-http/${name}.ts`)))
+      throw new Error('Native owner or fingerprint protocol changed; use a separately rehearsed compatible release');
+  }
   if (reconciliation && migration) throw new Error('Observability reconciliation requires a version-only candidate; apply lifecycle changes separately');
   const messages = git('log', '--format=%B%x00', `${blueSha}..${greenSha}`).split('\0');
   // The attachment-status migration predates this policy. Its exact original
