@@ -10,7 +10,7 @@ import { createApi } from '../scripts/deploy-train-api.mjs';
 import { runTrain } from '../scripts/deploy-train.mjs';
 import { recoverRemote } from '../scripts/deploy-train-recover.mjs';
 import { assertNativeQualification, nativeControlDigest, nativeControlFiles } from '../scripts/deploy-native-qualification.mjs';
-import { uploadMessage } from '../scripts/deploy-train-secrets.mjs';
+import { uploadMessage, assertSecretLineage } from '../scripts/deploy-train-secrets.mjs';
 
 const blue = '11111111-1111-1111-1111-111111111111', green = '22222222-2222-2222-2222-222222222222';
 const recovery = '33333333-3333-3333-3333-333333333333';
@@ -139,6 +139,7 @@ test('qualification requires reviewed exact bytes and a real tested ancestor; of
   assert.throws(()=>assertNativeQualification(f.state,{schema:1,qualified:[{...row,source:'1'.repeat(40)}]},{cwd}),/tested ancestor/);
   writeFileSync(resolve(cwd,'scripts/deploy-native-cutover.mjs'),'changed controller');git('add','.');git('commit','-qm','drift');
   const drift=git('rev-parse','HEAD');f.state.sha=drift;
+  assert.throws(()=>assertNativeQualification(f.state,{schema:1,qualified:[row]},{cwd}),/tested ancestor/,'a drifted candidate cannot reuse an unchanged qualified ancestor from the controller checkout');
   assert.throws(()=>assertNativeQualification(f.state,{schema:1,qualified:[{...row,source:drift}]},{cwd}),/tested ancestor/);
   for(const receipt of [{schema:1,qualified:[row,row]},{schema:1,qualified:[{...row,greenRuntimeSha:'0'.repeat(64)}]},{schema:1,qualified:[{...row,evidence:'https://example.com/123'}]}])
     assert.throws(()=>assertNativeQualification(f.state,receipt));
@@ -189,4 +190,22 @@ test('logging drift after drain blocks native candidate exposure without undoing
  assert.equal(deploymentState(f.latest).cutover.phase,'draining');
  assert.equal((await f.control.snapshot(blue)).accepting,false);
  assert.equal(f.events.some(e=>e[0]==='deploy'&&e[1]===green),false);
+});
+
+
+test('a train after compatible recovery reaches upload without trusting unrelated or incomplete secret history',async()=>{
+ const f=fixture();await runNativeCutover(f);f.state.status='rolling';
+ await f.api.deploy([{version_id:green,percentage:100}],deploymentMessage(f.state),f.latest.id);
+ await recoverNativeCutover(f);
+ const history=await f.api.versions();assert.equal(assertSecretLineage(history,recovery),green);
+ const next={run:'124',sha:'d'.repeat(40),blue:recovery,deploymentId:f.latest.id,native:{schema:1,runtimeSha:oldRuntime},unsafe:false,migration:false};
+ let uploads=0;
+ await assert.rejects(runTrain({api:f.api,state:next,upload:async()=>{uploads++;throw Error('synthetic upload boundary');},smoke:async()=>{},now:f.now,wait:f.wait}),/synthetic upload boundary/);
+ assert.equal(uploads,1);assert.equal(f.latest.versions[0].version_id,recovery);
+ const foreign={id:'44444444-4444-4444-4444-444444444444',annotations:{'workers/message':'secret bulk'}};
+ for(const bad of [[history[0],foreign,...history.slice(1)],[...history.slice(0,2),foreign,history[2]],history.slice(0,2)])
+  assert.throws(()=>assertSecretLineage(bad,recovery),/Unproven/);
+ const cyclic=structuredClone(history);cyclic[1].annotations['workers/message']=uploadMessage({...f.state,blue:green,nativeSource:f.state.cutover.nativeSource});
+ assert.throws(()=>assertSecretLineage(cyclic,recovery),/Unproven/);
+ assert.throws(()=>assertSecretLineage([history[0],...history],recovery),/Duplicate/);
 });

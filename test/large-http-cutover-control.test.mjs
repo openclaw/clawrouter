@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {registerHooks} from 'node:module';
+import {createHash} from 'node:crypto';
 import {runtimeConfig} from '../worker/large-http/config.ts';
 import {createNativeControl,runNativeCutover,nativeDrained,nativeWarm} from '../scripts/deploy-native-cutover.mjs';
 import {recoverRemote} from '../scripts/deploy-train-recover.mjs';
@@ -249,6 +250,11 @@ test('fenced stops preserve uncertain owners and native replay history; reopenin
 test('HTTP coordinator replaces and recovers real native journals with fenced admission and no owner replay',async t=>{
  t.mock.timers.enable({apis:['Date'],now:1_800_000_000_000});
  const f=await fixture(t);await f.warm();
+ await import('./helpers/typescript-resolver.mjs');
+ const {adminApi}=await import('../worker/admin.ts');
+ f.env.CLAWROUTER_ADMIN_TOKEN_SHA256=createHash('sha256').update('synthetic').digest('hex');
+ const refused=await adminApi(new Request('https://clawrouter.openclaw.ai/v1/admin/large-http',{method:'POST',headers:{authorization:'Bearer wrong','content-type':'application/json'},body:JSON.stringify(managed(false,0,'unauthorized'))}),f.env,'/v1/admin/large-http');
+ assert.equal(refused.status,401);assert.equal((await f.snapshot()).control.revision,0);
  const blue='11111111-1111-1111-1111-111111111111',green='22222222-2222-2222-2222-222222222222',recovery='33333333-3333-3333-3333-333333333333';
  const source='b'.repeat(40),sha='c'.repeat(40),oldRuntime=hash(10),runtime=hash(11);
  const state={run:'123',sha,blue,green,status:'rolling',unsafe:false,exposed:false,deploymentId:'initial',native:{schema:1,runtimeSha:runtime},cutover:{schema:1,blueRuntimeSha:oldRuntime,nativeSource:source,recovery,phase:'prepared'}};
@@ -279,9 +285,9 @@ test('HTTP coordinator replaces and recovers real native journals with fenced ad
    latest={id:'d'+(++sequence),versions:distribution,annotations:{'workers/message':message}};
    deploymentState(latest);return structuredClone(latest);
   }};
- const control=createNativeControl({env:{CLAWROUTER_NATIVE_ADMIN_TOKEN:'synthetic'},wait:async()=>{},fetchImpl:async(_url,init)=>{
+ const control=createNativeControl({env:{CLAWROUTER_NATIVE_ADMIN_TOKEN:'synthetic'},wait:async()=>{},fetchImpl:async(url,init)=>{
   const body=init.method==='POST'?JSON.parse(init.body):{};
-  const response=await f.pool.fetch(f.request(init.method==='POST'?'admission':'snapshot',body));
+  const response=await adminApi(new Request(url,init),f.env,'/v1/admin/large-http');
   response.headers.set('x-clawrouter-version-id',active);
   if(init.method==='POST'){
    posts.push(body);

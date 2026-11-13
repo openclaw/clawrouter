@@ -31,7 +31,8 @@ export function assertNativeQualification(state, receipt = JSON.parse(readFileSy
   // and byte-identical determining code instead; native bytes are pinned above.
   try {
     execFileSync('git',['merge-base','--is-ancestor',qualified.source,state.sha],{cwd,timeout:30_000,stdio:'ignore'});
-    if (nativeControlDigest({source:qualified.source,cwd}) !== qualified.controlSha256) throw new Error('source drift');
+    if (nativeControlDigest({source:qualified.source,cwd}) !== qualified.controlSha256 ||
+        nativeControlDigest({source:state.sha,cwd}) !== qualified.controlSha256) throw new Error('source drift');
   } catch { throw new Error('Native qualification source is not an unchanged tested ancestor'); }
   return qualified;
 }
