@@ -128,6 +128,35 @@ retain only finite labels, correctness, counts, timings and hashes. Never execut
 model-generated code on the host. Repository execution still requires the
 qualified isolated runner.
 
+## Compact repository actions
+
+Local repository runs with the `legacy` execution profile can opt into a compact
+action schema with `FUSION_LOCAL_ACTION_SCHEMA_PROFILE=compact`. The default
+schema profile remains `legacy`; `grounded` and `checked` execution reject the
+compact option because they use a different action protocol.
+
+The compact schema puts `action` before the other fields and `memory` last. It
+limits working notes to 512 characters, paths to three, edits to eight and query
+text to 4,096 characters. The prompt also names the shorter memory limit. These
+are generation constraints; existing tool validation, deadlines, accounting and
+final acceptance still apply. Shorter notes and probes may reduce repair quality,
+so compare profiles as separate protocols. Receipts record
+`settings.actionSchemaProfile`.
+
+An initial diagnostic with one pinned local Qwen3.5-9B prompt exhausted 1,024
+output tokens inside the original schema's first `memory` field. Reordering and
+bounding the fields produced a complete edit action in 213 output tokens. This
+is evidence about that request's output format, not a repository repair or Fusion
+quality result. Both generation order and field limits changed together.
+
+```sh
+FUSION_LOCAL_ACTION_SCHEMA_PROFILE=compact \
+GITHUB_SHA=$(git rev-parse HEAD) \
+node scripts/fusion-local-repository.mjs \
+  /path/to/qualification.json /path/to/results \
+  local-general-model local-coder-model legacy /path/to/workloads.json
+```
+
 ## Local selector smoke
 
 Start a task-owned Ollama server on a free loopback port. Load local models

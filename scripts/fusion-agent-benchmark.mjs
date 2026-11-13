@@ -13,6 +13,22 @@ const actionSchema = { type: 'object', additionalProperties: false, required: ['
   edits: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['path', 'search', 'replace'],
     properties: { path: { type: 'string' }, search: { type: 'string' }, replace: { type: 'string' } } } },
 } };
+
+export function repositoryActionSchema(profile = 'legacy') {
+  if (!['legacy', 'compact'].includes(profile)) throw new Error('invalid_action_schema_profile');
+  const schema = structuredClone(actionSchema);
+  if (profile === 'legacy') return schema;
+  const p = schema.properties;
+  schema.required = ['action', 'paths', 'edits', 'query', 'memory'];
+  schema.properties = {
+    action: p.action,
+    paths: { ...p.paths, maxItems: 3 },
+    edits: { ...p.edits, maxItems: 8 },
+    query: { ...p.query, maxLength: 4096 },
+    memory: { ...p.memory, maxLength: 512 },
+  };
+  return schema;
+}
 export const defaultExperiment = Object.freeze({ strategies: ['cheap', 'strong', 'panel', 'cascade'], trials: 1,
   maxTurns: 10, outputTokens: 2048, deadlineMs: 180000, trialBudgetMicros: 200000,
   campaignBudgetMicros: 5000000, priorCostMicros: 190914 });
@@ -164,9 +180,9 @@ export function advisoryBody(task, files, role, config) {
   ] };
 }
 
-function bodyFor(messages, config) {
+function bodyFor(messages, config, actionSchemaProfile) {
   return { messages, max_tokens: config.outputTokens, response_format: { type: 'json_schema',
-    json_schema: { name: 'repository_action', strict: true, schema: actionSchema } } };
+    json_schema: { name: 'repository_action', strict: true, schema: repositoryActionSchema(actionSchemaProfile) } } };
 }
 
 export function actionFeedback(code, action, task) {
@@ -180,6 +196,8 @@ export function actionFeedback(code, action, task) {
 }
 
 export async function runAgent(task, image, strategy, trialId, config, invoke, engine, options = {}) {
+  const actionSchemaProfile = options.actionSchemaProfile ?? 'legacy';
+  repositoryActionSchema(actionSchemaProfile);
   const sourcePageLines = options.sourcePageLines ?? null;
   if (sourcePageLines !== null && (!Number.isSafeInteger(sourcePageLines) || sourcePageLines < 1 || sourcePageLines > 400)) throw new Error('invalid_source_page_lines');
   if (sourcePageLines !== null && !['cheap', 'strong', 'handoff', 'claude', 'cascade'].includes(strategy)) throw new Error('unsupported_source_paging');
@@ -206,6 +224,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
   const deadline = AbortSignal.any([AbortSignal.timeout(config.deadlineMs), ...(options.signal ? [options.signal] : [])]);
   const messages = [{ role: 'system', content: 'Repair the repository task. Return one JSON action. read requests up to three repository paths, optionally file.ts:100-200 line ranges. Without a range it returns the complete file; explicit ranges are capped at 400 lines. search uses a literal query and paths to find source locations. edit applies exact unique search/replace strings to allowed source files; test runs fixed visible tests; probe runs a Node ES module supplied in query for at most 15 seconds inside the isolated repository; finish submits. Supply empty paths/edits/query when unused. Include memory in every action: concise working notes with discovered source locations, verified facts and the current repair plan, at most 6,000 characters. Preserve useful notes across actions. The visible tests already pass on the broken code: passing them does not prove this task is fixed. Read their test helpers to learn how to load project modules. Write a probe of the reported invariant and check that it fails before your repair and passes afterward. Preserve unrelated behavior. Investigate failures and revise within the shared budget. You cannot see final acceptance tests.' },
     { role: 'user', content: `${task.instruction}\nEditable source: ${task.editPaths.join(', ')}\nVisible tests: ${task.visibleTests.join(', ')}` }];
+  if (actionSchemaProfile === 'compact') messages[0].content = messages[0].content.replace('at most 6,000 characters', 'at most 512 characters');
   if (sourcePageLines !== null) messages[0].content = messages[0].content.replace(
     'Without a range it returns the complete file; explicit ranges are capped at 400 lines.',
     `Initial source, handoff source and read results contain at most ${sourcePageLines} lines per file. Without a range, read starts at line 1. Use totalLines, startLine and truncated to request later ranges; search finds literal source locations across the complete file.`);
@@ -330,7 +349,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
       const context = agentContext(messages, memory);
       let response;
       try {
-        let request = bodyFor(context, config);
+        let request = bodyFor(context, config, actionSchemaProfile);
         if (strategy === 'panel') {
           const fusion = engine.normalizeFusionConfig({ enabled: true, strategy: 'ensemble', aggregatorModel: model,
             adviserModels: [models.strong, models.critic], maxOutputTokens: config.outputTokens, maxInputChars: 40000,

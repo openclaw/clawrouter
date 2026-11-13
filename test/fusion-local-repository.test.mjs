@@ -158,6 +158,31 @@ test('invalid campaign output allowances fail before preflight or output creatio
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test('compact action profiles reach every arm and are recorded for replay', async () => {
+  const { root, options } = await fixture();
+  try {
+    let arms = 0;
+    const result = await runLocalRepository({ ...options, actionSchemaProfile: 'compact',
+      agent: async (_task, _image, _strategy, _id, _config, _invoke, _engine, agentOptions) => {
+        assert.equal(agentOptions.actionSchemaProfile, 'compact'); arms++;
+        return { files: [], outcome: 'submitted', actions: [] };
+      }, grade: async () => ({ valid: true, passed: true, tests: 3, skipped: 0 }) });
+    assert.equal(arms, 3);
+    assert.equal(result.settings.actionSchemaProfile, 'compact');
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('unsupported action profiles stop before preflight or output creation', async () => {
+  const { root, options } = await fixture();
+  try {
+    for (const [profile, actionSchemaProfile] of [['legacy', 'unknown'], ['checked', 'compact'], ['grounded', 'compact']]) {
+      await assert.rejects(runLocalRepository({ ...options, profile, actionSchemaProfile,
+        preflight: async () => assert.fail('must not preflight') }), /invalid_local_action_schema_profile/);
+    }
+    await assert.rejects(readFile(join(options.out, 'local-repository.json')), { code: 'ENOENT' });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('complete campaign attributes real models and retains no generated source or messages', async () => {
   const { root, options } = await fixture();
   try {
