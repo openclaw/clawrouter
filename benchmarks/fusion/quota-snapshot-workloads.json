@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "quota-snapshot-watermarks",
+      "split": "development",
+      "base": "79d6e7002bd17ba93d9f9c577b666b5d3318bc0f",
+      "oracle": "626ee0f79d8d983f99c4ee3ce4c57f29885b9ddd",
+      "editPaths": [
+        "worker/grant-runtime.ts",
+        "worker/types.ts"
+      ],
+      "visibleTests": [
+        "worker/test/grant-quota.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/grant-runtime.test.mjs"
+      ],
+      "instruction": "Preserve successful quota-probe replacement snapshots across runtime normalization and merging. A snapshot names its own exact scope or trailing-* prefix, observation time, and reported window IDs. Remove omitted windows in that scope only when their observations are no newer than the snapshot, and retain scope watermarks so delayed observations cannot resurrect them in either arrival order. Preserve unrelated windows, newer observations, partial response updates, independent rejection cooldowns and credential-revision fences. Validate bounded snapshot metadata and reject malformed scope, timestamp and member IDs. Do not change provider parsing, network behavior or request routing."
+    }
+  ]
+}

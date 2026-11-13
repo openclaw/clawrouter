@@ -881,6 +881,21 @@ current harness; report initial exposure separately from any later tuning or
 repetition. This task shares the authentication domain with the raw-ingress
 workload and does not establish cross-domain generalization.
 
+### Quota snapshot repair workload
+
+`benchmarks/fusion/quota-snapshot-workloads.json` isolates a historical
+two-file quota-state repair. Successful probe snapshots must retire omitted
+windows within their own scope, retain watermarks against delayed observations,
+and preserve newer windows, other scopes, active rejection cooldowns and
+credential-revision boundaries. It does not exercise provider parsing or
+end-to-end grant failover.
+
+Both source revisions pass the original 10 quota tests. The original fails
+three assertions in the combined 18-test acceptance suite; the reference
+passes all 18, with no skipped or cancelled tests. The failures cover omitted
+windows, delayed observations and malformed snapshot metadata. Qualification
+establishes a usable development task, not a model-quality or fusion gain.
+
 ### Bounded edit handoff
 
 Set `FUSION_HANDOFF_MAX_TURNS` to reserve successor calls in an `edit-handoff`
