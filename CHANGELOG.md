@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Measure Fusion probe selection against independent candidate acceptance and reference behavior after repair execution, keeping private source and test output out of result traces.
+
 - Add an opt-in Fusion benchmark that compares two cheap repair drafts with one executable probe, abstaining on ambiguous evidence before strong fallback.
 
 - Preserve bounded, content-free Fusion agent traces when benchmark execution fails, without changing failure scores or budget stops.

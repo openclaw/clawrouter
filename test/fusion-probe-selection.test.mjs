@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { runProbeSelection, probeSelectionRequest } from '../scripts/fusion-probe-selection.mjs';
+import { runProbeSelection, probeSelectionRequest, diagnoseProbeSelection } from '../scripts/fusion-probe-selection.mjs';
 import { models } from '../scripts/fusion-benchmark-accounting.mjs';
 
 const task = { instruction: 'Repair behavior.', editPaths: ['worker/a.ts'], visibleTests: [] };
@@ -56,6 +56,64 @@ test('unique behavioral witness selects a draft without a judge or fallback', as
   assert.deepEqual(result.probeSelection.observations.map(item => item.status), ['assertion_failed', 'assertion_failed', 'passed']);
   const { files, ...trace } = result;
   for (const value of ['private probe', 'private output', 'private assertion', 'private candidate source']) assert.ok(!JSON.stringify(trace).includes(value));
+});
+
+test('post-run diagnostics expose a wrong selection without changing it or making calls', async () => {
+  const f = fixture();
+  const result = await runProbeSelection(task, 'image', 'trial', config, f.invoke, f.dependencies);
+  const before = JSON.stringify(result), calls = f.calls.length, graded = [];
+  const diagnostic = await diagnoseProbeSelection(result, task, 'image', 'repo', { oracleTests: 4, oracleSkipped: 0 }, {
+    ...f.dependencies,
+    grade: async (_task, _image, files) => {
+      graded.push(files[0].content);
+      return { passed: graded.length === 1, tests: 4, skipped: 0, feedback: 'private hidden test sentinel' };
+    },
+    reference: async () => source('private reference sentinel'),
+    runProbe: async box => {
+      assert.equal(box.files[0].content, 'private reference sentinel');
+      return failed;
+    },
+  });
+  assert.deepEqual(diagnostic.candidates, [
+    { candidate: 1, status: 'complete', accepted: true },
+    { candidate: 2, status: 'complete', accepted: false },
+  ]);
+  assert.equal(diagnostic.referenceProbe, 'assertion_failed');
+  assert.equal(result.probeSelection.selectedCandidate, 2);
+  assert.equal(JSON.stringify(result), before);
+  assert.equal(f.calls.length, calls);
+  assert.equal(graded.length, 2);
+  assert.ok(!JSON.stringify(diagnostic).includes('private'));
+  assert.ok(f.boxes.every(box => box.closed));
+  assert.equal(await diagnoseProbeSelection(result, task), undefined);
+  assert.equal(await diagnoseProbeSelection({ ...result }, task), undefined);
+});
+
+test('diagnostic errors stay unknown and a damaged reference cannot pass', async () => {
+  const f = fixture();
+  const result = await runProbeSelection(task, 'image', 'trial', config, f.invoke, f.dependencies);
+  const diagnostic = await diagnoseProbeSelection(result, task, 'image', 'repo', { oracleTests: 4, oracleSkipped: 0 }, {
+    ...f.dependencies,
+    grade: async () => { throw new Error('private infrastructure error'); },
+    reference: async () => source('reference'),
+    runProbe: async box => { box.files = source('damaged'); return passed; },
+  });
+  assert.ok(diagnostic.candidates.every(row => row.status === 'error' && row.accepted === null));
+  assert.equal(diagnostic.referenceProbe, 'source_changed');
+  assert.equal(result.probeSelection.selectedCandidate, 2);
+});
+
+test('diagnostics require exact acceptance counts and skip a missing probe', async () => {
+  const f = fixture(), draft = f.dependencies.draft;
+  f.dependencies.draft = async (...args) => ({ ...await draft(...args), files: source('same') });
+  const result = await runProbeSelection(task, 'image', 'trial', config, f.invoke, f.dependencies);
+  let grades = 0;
+  const diagnostic = await diagnoseProbeSelection(result, task, 'image', 'repo', { oracleTests: 4, oracleSkipped: 0 }, {
+    grade: async () => ({ passed: true, tests: ++grades === 1 ? 3 : 4, skipped: grades === 1 ? 0 : 1 }),
+    reference: async () => { assert.fail('no probe was generated'); },
+  });
+  assert.ok(diagnostic.candidates.every(row => row.accepted === false));
+  assert.equal(diagnostic.referenceProbe, 'not_generated');
 });
 
 for (const [name, outcomes, reason] of [
@@ -201,6 +259,12 @@ test('native sandbox selects the independently accepted repair with the supplied
   const verdict = await verify(task, receipt.image, result.files, process.cwd());
   assert.equal(verdict.passed, true);
   assert.equal(verdict.tests, receipt.oracle.tests);
+  const diagnostic = await diagnoseProbeSelection(result, task, receipt.image, process.cwd(), {
+    oracleTests: receipt.oracle.tests, oracleSkipped: receipt.oracle.skipped,
+  });
+  assert.deepEqual(diagnostic.candidates.map(row => row.accepted), [false, true]);
+  assert.equal(diagnostic.referenceProbe, 'passed');
+  assert.equal(calls, 3);
 
   let maliciousDraft = 0;
   const damaged = await runProbeSelection(task, receipt.image, 'native-source-damage',

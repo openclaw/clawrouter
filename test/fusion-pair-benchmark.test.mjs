@@ -7,6 +7,7 @@ import { hash } from '../scripts/fusion-workloads.mjs';
 import { models as roles } from '../scripts/fusion-benchmark-accounting.mjs';
 import { pairDefaults, validatePair, pairModel, pairExecution, scopeStrategy, runPairBenchmark } from '../scripts/fusion-pair-benchmark.mjs';
 import { analyzePairRun } from '../scripts/fusion-pair-analysis.mjs';
+import { runProbeSelection } from '../scripts/fusion-probe-selection.mjs';
 
 const body = { messages: [{ role: 'user', content: 'private prompt sentinel' }], max_tokens: 256 };
 const signal = new AbortController().signal;
@@ -65,6 +66,57 @@ test('probe selection meters cheap proposals and author before a strong fallback
     assert.equal(state.records[2].calls, 4);
     assert.equal(state.records[2].probeSelection.outcome, 'ambiguous');
     assert.ok(state.records.every(row => row.score === 1));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('pair persists post-selection diagnostics after final grading without additional inference', async () => {
+  const { root, options } = await fixture();
+  let drafts = 0, requests = 0;
+  const grades = [];
+  try {
+    const state = await runPairBenchmark({ ...options, policy: 'probe-selection',
+      config: { ...config, maxCalls: 4 },
+      fetcher: async (url, request) => {
+        const response = await success(url, request);
+        if (url.includes('/v1/models/')) return response;
+        requests++;
+        const data = await response.json();
+        data.choices[0].message.content = JSON.stringify({ probe: 'private probe sentinel' });
+        return Response.json(data);
+      },
+      agent: async (_task, _image, _strategy, id, _settings, invoke) => {
+        await invoke(id, roles.strong, body, signal);
+        return repaired();
+      },
+      probeAgent: (...args) => runProbeSelection(...args.slice(0, 5), {
+        draft: async (_task, _image, _strategy, id, _settings, invoke, _engine, opts) => {
+          await invoke(id, roles.cheap, body, opts.signal);
+          return { ...repaired(), files: [{ path: 'worker/example.ts', content: `candidate ${++drafts}` }],
+            outcome: 'draft_submitted', toolMs: 0 };
+        },
+        makeSandbox: async () => ({ files: [], close: async () => {} }),
+        read: async () => [{ path: 'worker/example.ts', content: 'original' }],
+        write: async (box, files) => { box.files = files; },
+        intact: async () => true,
+        runProbe: async box => ({ passed: box.files[0].content === 'candidate 2', assertionFailed: true }),
+      }),
+      grade: async (_task, _image, files) => {
+        grades.push({ source: files[0].content, requests });
+        return { passed: files[0].content !== 'candidate 1', tests: 3, skipped: 0 };
+      },
+    });
+    const row = state.records[2];
+    assert.equal(row.score, 1);
+    assert.equal(row.calls, 3);
+    assert.equal(row.probeDiagnostics.referenceProbe, 'error'); // Fixture has no Git reference.
+    assert.deepEqual(row.probeDiagnostics.candidates.map(candidate => candidate.accepted), [false, true]);
+    assert.deepEqual(grades.slice(-3).map(item => item.source), ['candidate 2', 'candidate 1', 'candidate 2']);
+    assert.ok(grades.slice(-3).every(item => item.requests === 5));
+    const saved = JSON.parse(await readFile(join(options.out, 'pair.json')));
+    assert.deepEqual(saved.records[2].probeDiagnostics, row.probeDiagnostics);
+    for (const text of ['candidate 1', 'candidate 2', 'private probe sentinel']) {
+      assert.ok(!JSON.stringify(saved).includes(text));
+    }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

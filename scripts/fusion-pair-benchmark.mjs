@@ -7,7 +7,7 @@ import { models as roles, priceBound } from './fusion-benchmark-accounting.mjs';
 import { validateLocalQualification } from './fusion-local-repository.mjs';
 import { loadTasks, verify, hash, command, withReproducer, validateEdits } from './fusion-workloads.mjs';
 import { runContractAgent, runSingleDraft, runRefinedDraft } from './fusion-contract-agent.mjs';
-import { runProbeSelection } from './fusion-probe-selection.mjs';
+import { runProbeSelection, diagnoseProbeSelection } from './fusion-probe-selection.mjs';
 
 export const pairDefaults = Object.freeze({ cheap: 'openai/gpt-6-luna', strong: 'openai/gpt-6.1-sol',
   maxCalls: 12, outputTokens: 8192, deadlineMs: 300000, trialBudgetMicros: 1000000,
@@ -166,6 +166,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
         const strategy = trialStrategies[(index + offset) % trialStrategies.length], trialId = `${task.id}:${strategy}`;
         const selectedStrategy = strategy === 'scope' ? scopeStrategy(task) : contractPolicies.includes(strategy) ? 'strong' : strategy;
         const start = performance.now(), execution = pairExecution(selectedStrategy, config);
+        let diagnosticMs = 0;
         const matchedStrong = policy === 'matched-handoff' && strategy === 'strong';
         if (matchedStrong) execution.strategy = 'handoff';
         const row = { taskId: task.id, split: task.split, strategy, score: 0, status: 'running',
@@ -186,6 +187,11 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
           const { files, ...trace } = result;
           Object.assign(row, { ...trace, verdict, score: Number(verdict.passed && verdict.tests === receipt.oracleTests
             && verdict.skipped === receipt.oracleSkipped && result.publicPassed), status: 'complete' });
+          if (strategy === 'probe-selection') {
+            const diagnosticStart = performance.now();
+            row.probeDiagnostics = await diagnoseProbeSelection(result, task, receipt.image, repo, receipt, { grade });
+            diagnosticMs = performance.now() - diagnosticStart;
+          }
           if (exportRepairs && row.score === 1) {
             try { row.repairExport = await exportAcceptedRepair(out, task, files, sourceSha, state.qualificationDigest); }
             catch { row.repairExportFailed = true; throw new Error('repair_export_failed'); }
@@ -198,7 +204,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
         } finally {
           row.costMicros = ledger.total(trialId);
           row.calls = ledger.attempts.filter(call => call.trialId === trialId).length;
-          row.elapsedMs = Math.round(performance.now() - start);
+          row.elapsedMs = Math.round(performance.now() - start - diagnosticMs);
           await save();
         }
         console.log(JSON.stringify({ taskId: task.id, strategy, score: row.score, calls: row.calls }));

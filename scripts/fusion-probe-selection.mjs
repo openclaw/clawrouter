@@ -3,7 +3,9 @@ import { runSingleDraft } from './fusion-contract-agent.mjs';
 import { models } from './fusion-benchmark-accounting.mjs';
 import { requireCompleteResponse } from './fusion-native-provider.mjs';
 import { candidateSummaries } from './fusion-candidate-ensemble.mjs';
-import { sandbox, readSource, readTaskContext, writeFiles, validateEdits, probe, hash } from './fusion-workloads.mjs';
+import { sandbox, readSource, readTaskContext, writeFiles, validateEdits, probe, hash, verify, command } from './fusion-workloads.mjs';
+
+const diagnosticEvidence = new WeakMap();
 
 const digest = files => hash(JSON.stringify([...files].sort((a, b) => a.path.localeCompare(b.path))));
 const status = result => result.passed === true ? 'passed' : result.assertionFailed === true ? 'assertion_failed' : 'invalid';
@@ -35,7 +37,7 @@ export async function runProbeSelection(task, image, trialId, config, invoke, {
 } = {}) {
   if (!Number.isSafeInteger(config.maxTurns) || config.maxTurns < 4) throw new Error('probe_selection_requires_four_calls');
   const started = performance.now(), signal = AbortSignal.timeout(config.deadlineMs);
-  let calls = 0, toolMs = 0, selection = 'incomplete_candidates', selected = null, probeDigest = null;
+  let calls = 0, toolMs = 0, selection = 'incomplete_candidates', selected = null, probeDigest = null, probeSource = null;
   const actions = [], candidates = [], observations = [];
   const remaining = () => {
     const ms = config.deadlineMs - Math.ceil(performance.now() - started);
@@ -82,6 +84,7 @@ export async function runProbeSelection(task, image, trialId, config, invoke, {
         selection = error.message;
       }
       if (selection === 'pending') {
+        probeSource = source;
         probeDigest = hash(source);
         for (const [index, files] of [original, ...candidates.map(candidate => candidate.files)].entries()) {
           const start = performance.now(), box = await makeSandbox(image);
@@ -115,8 +118,44 @@ export async function runProbeSelection(task, image, trialId, config, invoke, {
     actions.push(...result.actions.map(action => ({ ...action, phase: 'fallback' })));
     toolMs += result.toolMs;
   }
-  return { ...result, actions, turns: calls, toolMs: Math.round(toolMs), agentMs: Math.round(performance.now() - started),
+  const final = { ...result, actions, turns: calls, toolMs: Math.round(toolMs), agentMs: Math.round(performance.now() - started),
     invalidActions: candidates.reduce((sum, candidate) => sum + (candidate.invalidActions ?? 0), 0)
       + (selected === null ? result.invalidActions ?? 0 : 0),
     escalated: selected === null, probeSelection: evidence };
+  diagnosticEvidence.set(final, { probeSource, candidates: candidates.map(candidate => ({
+    files: candidate.files.map(file => ({ ...file })), publicPassed: candidate.publicPassed === true,
+  })) });
+  return final;
+}
+
+// Consume private evidence only after repair execution. No inference callback is available here.
+export async function diagnoseProbeSelection(result, task, image, repo, receipt, {
+  grade = verify, reference = async () => Promise.all(task.editPaths.map(async path => ({ path,
+    content: (await command('git', ['show', `${task.oracle}:${path}`], { cwd: repo })).stdout.toString(),
+  }))), makeSandbox = sandbox, write = writeFiles, runProbe = probe, intact = sourceUnchanged,
+} = {}) {
+  const evidence = diagnosticEvidence.get(result);
+  if (!evidence) return undefined;
+  diagnosticEvidence.delete(result);
+  const started = performance.now(), candidates = [];
+  for (const [index, candidate] of evidence.candidates.entries()) {
+    try {
+      const verdict = await grade(task, image, candidate.files, repo);
+      candidates.push({ candidate: index + 1, status: 'complete', accepted: candidate.publicPassed
+        && verdict.passed === true && verdict.tests === receipt.oracleTests && verdict.skipped === receipt.oracleSkipped });
+    } catch { candidates.push({ candidate: index + 1, status: 'error', accepted: null }); }
+  }
+  let referenceProbe = 'not_generated';
+  if (evidence.probeSource !== null) {
+    let box;
+    try {
+      const files = validateEdits(task, await reference());
+      box = await makeSandbox(image);
+      await write(box, files, 120000);
+      const verdict = await runProbe(box, evidence.probeSource, 120000);
+      referenceProbe = await intact(box, files, 120000) ? status(verdict) : 'source_changed';
+    } catch { referenceProbe = 'error'; }
+    finally { if (box) { try { await box.close(); } catch { referenceProbe = 'error'; } } }
+  }
+  return { candidates, referenceProbe, elapsedMs: Math.round(performance.now() - started) };
 }
