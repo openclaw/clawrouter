@@ -74,14 +74,16 @@ export function nativeResponseMetadata(model, response) {
 
 // Keep usage settlement independent of whether generated text is usable. Never
 // forward reasoning items or the convenience output_text field to the executor.
+const zeroToolUsage = value => value === 0 || (value !== null && typeof value === 'object'
+  && !Array.isArray(value) && Object.values(value).every(zeroToolUsage));
+
 function responsesResult(result) {
   const u = result.usage;
   if (!u) throw new Error('native_usage_or_identity_missing');
   const input = integer(u.input_tokens), output = integer(u.output_tokens);
   if (integer(u.total_tokens) !== input + output
     || integer(u.output_tokens_details?.reasoning_tokens, true) > output) throw new Error('native_usage_invalid');
-  if (u.tool_usage !== undefined && (u.tool_usage === null || typeof u.tool_usage !== 'object'
-    || Object.values(u.tool_usage).some(n => n !== 0))) throw new Error('native_usage_unqualified');
+  if (result.tool_usage !== undefined && !zeroToolUsage(result.tool_usage)) throw new Error('native_usage_unqualified');
   const writes = u.input_tokens_details?.cache_write_tokens_details;
   if (writes !== undefined) {
     if (writes === null || typeof writes !== 'object') throw new Error('native_usage_invalid');

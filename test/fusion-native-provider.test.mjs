@@ -150,7 +150,7 @@ test('response metadata accepts only bounded opaque OpenAI request IDs', () => {
   assert.deepEqual(nativeResponseMetadata('anthropic/claude-sonnet-5.5', { headers: new Headers({ 'x-request-id': 'req_abc' }) }), {});
 });
 
-const responsesFixture = () => ({ model: 'gpt-6.1-sol', service_tier: 'default', status: 'completed',
+const responsesFixture = () => ({ tool_usage: { web_search: { num_requests: 0 }, image_gen: { input_tokens: 0, input_tokens_details: { image_tokens: 0, text_tokens: 0 } } }, model: 'gpt-6.1-sol', service_tier: 'default', status: 'completed',
   output: [{ type: 'reasoning', summary: [{ text: 'private reasoning sentinel' }] },
     { type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: '{"answer":"ok"}' }] }],
   usage: { input_tokens: 1000, output_tokens: 500, total_tokens: 1500,
@@ -190,7 +190,11 @@ for (const [name, mutate] of [
   ['excess reasoning', r => r.usage.output_tokens_details.reasoning_tokens = 501],
   ['negative input', r => r.usage.input_tokens = -1],
   ['overlapping cache', r => r.usage.input_tokens_details.cached_tokens = 1000],
-  ['unpriced tools', r => r.usage.tool_usage = { web_search: 1 }],
+  ['unpriced tools', r => r.tool_usage.web_search.num_requests = 1],
+  ['unpriced image tokens', r => r.tool_usage.image_gen.input_tokens_details.image_tokens = 1],
+  ['malformed tool usage', r => r.tool_usage.web_search.num_requests = '0'],
+  ['null tool usage', r => r.tool_usage = null],
+  ['array tool usage', r => r.tool_usage = [0]],
   ['unpriced audio', r => r.usage.output_tokens_details.audio_tokens = 1],
   ['unpriced long cache', r => r.usage.input_tokens_details.cache_write_tokens_details.ttl_12h_tokens = 1],
   ['inconsistent cache', r => r.usage.input_tokens_details.cache_write_tokens_details.ttl_30m_tokens = 99],

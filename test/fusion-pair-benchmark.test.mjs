@@ -1115,7 +1115,7 @@ test('invalid OpenAI API selection fails before qualification or provider calls'
   assert.equal(called, false);
 });
 
-for (const failure of ['truncated', 'invalid-usage', 'http']) test(`Responses ${failure} preserves accounting and existing stop rules`, async () => {
+for (const failure of ['truncated', 'invalid-usage', 'unpriced-tools', 'http']) test(`Responses ${failure} preserves accounting and existing stop rules`, async () => {
   const { root, options } = await fixture();
   let calls = 0;
   try {
@@ -1125,6 +1125,7 @@ for (const failure of ['truncated', 'invalid-usage', 'http']) test(`Responses ${
         calls++;
         if (failure === 'http') return Response.json({ error: { type: 'invalid_request_error' } }, { status: 400 });
         return Response.json({ model: JSON.parse(request.body).model, status: 'incomplete',
+          ...(failure === 'unpriced-tools' ? { tool_usage: { web_search: { num_requests: 1 } } } : {}),
           incomplete_details: { reason: 'max_output_tokens' }, output: [],
           usage: { input_tokens: 20, output_tokens: 30, total_tokens: failure === 'invalid-usage' ? 49 : 50 } });
       },
