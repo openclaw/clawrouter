@@ -6,12 +6,40 @@ import { normalizeFusionConfig } from "../fusion.ts";
 import { sha256Hex } from "../utils.ts";
 const { default: worker } = await import("../index.ts");
 
+for (const reason of ["length", "content_filter"]) for (const keepGoodAdviser of [false, true]) {
+  test(`Fusion omits ${reason} advice and accounts for every call (good adviser=${keepGoodAdviser})`, async t => {
+    const advisers = ["local/rejected", ...(keepGoodAdviser ? ["local/complete"] : [])];
+    const f = await fixture("openai/gpt-4.1-mini", advisers), sent = [];
+    t.mock.method(globalThis, "fetch", async (_url, init) => {
+      const body = JSON.parse(init.body); sent.push(body);
+      const rejected = body.model === "rejected";
+      return Response.json({ choices: [{ finish_reason: rejected ? reason : "stop",
+        message: { content: rejected ? "discarded draft" : "complete draft" } }],
+        usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 } });
+    });
+    const response = await f.call({});
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("x-clawrouter-fusion"), keepGoodAdviser ? "advisers" : "aggregator-only");
+    assert.equal(response.headers.get("x-clawrouter-fusion-adviser-count"), String(Number(keepGoodAdviser)));
+    assert.equal(response.headers.get("x-clawrouter-fusion-failed-count"), "1");
+    await response.text(); await f.drain();
+    assert.equal(sent.length, advisers.length + 1);
+    const synthesizer = sent.find(body => body.model === "gpt-4.1-mini");
+    assert.doesNotMatch(JSON.stringify(synthesizer.messages), /discarded draft/);
+    if (keepGoodAdviser) assert.match(JSON.stringify(synthesizer.messages), /complete draft/);
+    const adviserEvents = f.events.filter(event => event.compound_request_stage === "fusion_adviser");
+    assert.equal(adviserEvents.length, advisers.length);
+    assert.ok(adviserEvents.every(event => event.input_tokens === 7 && event.output_tokens === 3 && event.total_tokens === 10));
+    assert.equal(f.events.filter(event => event.compound_request_stage === "fusion_synthesizer").length, 1);
+  });
+}
+
 test("single Fusion dispatches only the final model with one-call accounting", async (t) => {
   const f = await fixture("openai/gpt-4.1-mini", ["retired/unregistered"], "single");
   const sent = [];
   t.mock.method(globalThis, "fetch", async (_url, init) => {
     sent.push(JSON.parse(init.body));
-    return Response.json({ choices: [{ message: { content: "fixture answer" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+    return Response.json({ choices: [{ finish_reason: "stop", message: { content: "fixture answer" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
   });
   const response = await f.call({ temperature: 0.7 });
   assert.equal(response.status, 200);
@@ -67,7 +95,7 @@ test("Astra and opaque local advisers omit speculative sampling and reasoning", 
   const sent = [];
   t.mock.method(globalThis, "fetch", async (_url, init) => {
     sent.push(JSON.parse(init.body));
-    return Response.json({ choices: [{ message: { content: "fixture answer" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+    return Response.json({ choices: [{ finish_reason: "stop", message: { content: "fixture answer" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
   });
   const response = await f.call({ temperature: 0.8 });
   assert.equal(response.status, 200);
@@ -86,7 +114,7 @@ test("GPT-5.4 preserves explicit none and sampling, and rejects high before fano
   const f = await fixture("openai/gpt-5.4", ["openai/gpt-4.1-mini"]), sent = [];
   t.mock.method(globalThis, "fetch", async (_url, init) => {
     sent.push(JSON.parse(init.body));
-    return Response.json({ choices: [{ message: { content: "fixture answer" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+    return Response.json({ choices: [{ finish_reason: "stop", message: { content: "fixture answer" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
   });
   for (const input of [{ temperature: 0.7 }, { temperature: 0.7, reasoning_effort: "none" }]) {
     const response = await f.call(input);
@@ -124,7 +152,7 @@ test("compiled OpenAI parameter facts govern the actual Fusion handler", async (
   const openai = providerById("openai"), sent = [];
   t.mock.method(globalThis, "fetch", async (_url, init) => {
     sent.push(JSON.parse(init.body));
-    return Response.json({ choices: [{ message: { content: "fixture answer" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+    return Response.json({ choices: [{ finish_reason: "stop", message: { content: "fixture answer" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
   });
   const tools = [{ type: "function", function: { name: "lookup" } }];
   for (const [id, conflict, accepted, adviserTemperature] of [
@@ -192,7 +220,7 @@ test("compiled hosted contracts preserve accepted aliases and unqualified values
   const sent = [];
   t.mock.method(globalThis, "fetch", async (_url, init) => {
     sent.push(JSON.parse(init.body));
-    return Response.json({ choices: [{ message: { content: "fixture answer" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+    return Response.json({ choices: [{ finish_reason: "stop", message: { content: "fixture answer" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
   });
   for (const [provider, id, upstream, efforts] of hostedModels) {
     // The fixture's explicit fixed-zero tariff admits the unpriced Fireworks

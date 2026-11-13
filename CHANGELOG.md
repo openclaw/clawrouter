@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Exclude incomplete, filtered, refused, or tool-calling Fusion adviser responses from synthesis while retaining their usage accounting.
+
 - Record content-free rejection reasons for invalid local Fusion benchmark responses while preserving the campaign stop and unknown usage.
 
 - Reject incomplete acceptance verdicts in Fusion pair analysis before reporting quality, cost savings, or repeated pilot results.
