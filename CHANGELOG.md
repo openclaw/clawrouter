@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Record content-free rejection reasons for invalid local Fusion benchmark responses while preserving the campaign stop and unknown usage.
+
 - Reject incomplete acceptance verdicts in Fusion pair analysis before reporting quality, cost savings, or repeated pilot results.
 
 - Stop paired Fusion benchmark campaigns after incomplete agent tests or acceptance grading, preserving settled usage without calling later arms.

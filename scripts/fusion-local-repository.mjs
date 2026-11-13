@@ -11,6 +11,12 @@ import { localGenerator } from './fusion-execution-smoke.mjs';
 export const localRepositorySettings = Object.freeze({ maxTurns: 8, outputTokens: 1536,
   contextTokens: 32768, deadlineMs: 180000, campaignDeadlineMs: 1200000, temperature: 0, seed: 42000 });
 const strategies = ['general', 'coder', 'handoff'];
+const responseFailures = new WeakMap();
+function invalidLocalResponse(reason) {
+  const error = new Error('invalid_local_response');
+  responseFailures.set(error, reason);
+  return error;
+}
 export const groundedSampling = Object.freeze({ temperature: 0.7, top_p: 0.8, top_k: 20,
   min_p: 0, presence_penalty: 1.5, repeat_penalty: 1 });
 
@@ -61,12 +67,18 @@ export async function localActionRequest({ endpoint, model, pin, body, signal, s
         ...(profile !== 'legacy' ? groundedSampling : { temperature: localRepositorySettings.temperature }), seed } }) }); }
   catch (error) { if (signal.aborted) throw new Error('provider_local_deadline'); throw error; }
   if (!response.ok) throw new Error('local_transport_failed');
-  const value = await response.json(), content = value.message?.content;
+  let value;
+  try { value = await response.json(); } catch { throw invalidLocalResponse('unreadable_body'); }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw invalidLocalResponse('invalid_envelope');
+  const content = value.message?.content;
   if (typeof content === 'string' && /this content can[’']t be shown|safety refusal/i.test(content)) throw new Error('provider_safety_notice');
-  if (value.model !== model || value.done !== true || typeof content !== 'string'
-    || ![value.prompt_eval_count, value.eval_count].every(n => Number.isSafeInteger(n) && n >= 0)
-    || value.eval_count > body.max_tokens || value.prompt_eval_count + value.eval_count > localRepositorySettings.contextTokens
-    || !['stop', 'length'].includes(value.done_reason)) throw new Error('invalid_local_response');
+  if (value.model !== model) throw invalidLocalResponse('model_mismatch');
+  if (value.done !== true) throw invalidLocalResponse('incomplete');
+  if (typeof content !== 'string') throw invalidLocalResponse('missing_content');
+  if (![value.prompt_eval_count, value.eval_count].every(n => Number.isSafeInteger(n) && n >= 0)) throw invalidLocalResponse('invalid_usage');
+  if (value.eval_count > body.max_tokens) throw invalidLocalResponse('output_limit');
+  if (value.prompt_eval_count + value.eval_count > localRepositorySettings.contextTokens) throw invalidLocalResponse('context_limit');
+  if (!['stop', 'length'].includes(value.done_reason)) throw invalidLocalResponse('invalid_stop_reason');
   return { result: { model, choices: [{ message: { content }, finish_reason: value.done_reason }] },
     inputTokens: value.prompt_eval_count, outputTokens: value.eval_count,
     promptDigest: hash(JSON.stringify(body.messages)), responseDigest: hash(content), stopReason: value.done_reason };
@@ -128,6 +140,8 @@ export async function runLocalRepository({ repo, qualificationPath, out, sourceS
           await checkpoint(); return result;
         } catch (error) {
           call.status = error.message === 'provider_context_limit' ? 'context_limit' : 'failed';
+          const responseFailure = responseFailures.get(error);
+          if (responseFailure) call.responseFailure = responseFailure;
           if (!call.dispatched) { call.inputTokens = 0; call.outputTokens = 0; }
           call.elapsedMs = Math.round(performance.now() - callStarted);
           await checkpoint(); throw error;
