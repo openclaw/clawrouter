@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { SpendLedger, defaultExperiment, validateExperiment, replaceEdits, sourceView, escalateSubmission, toolErrorCode, finishReason, agentContext, executorModel, advisoryBody, actionFeedback, runAgent } from '../scripts/fusion-agent-benchmark.mjs';
+import { SpendLedger, defaultExperiment, validateExperiment, replaceEdits, sourceView, editableSourceView, escalateSubmission, toolErrorCode, finishReason, agentContext, executorModel, advisoryBody, actionFeedback, runAgent } from '../scripts/fusion-agent-benchmark.mjs';
 import { nativeRequest } from '../scripts/fusion-native-provider.mjs';
 
 test('tool feedback explains recovery without revealing final acceptance paths', () => {
@@ -259,6 +259,22 @@ test('large-file source navigation preserves line locations and literal search',
   assert.equal(sourceView(files, ['scripts/compile.mjs:1-1000'])[0].truncated, true);
   assert.equal(sourceView(files, ['scripts/compile.mjs'])[0].content, files[0].content);
   assert.throws(() => sourceView(files, ['scripts/compile.mjs:0-1000']), /line_range/);
+});
+
+test('source preload includes every editable file without widening action reads', () => {
+  const files = Array.from({ length: 4 }, (_, i) => ({ path: `worker/source-${i}.ts`, content: `source ${i}\n` }));
+  const views = editableSourceView(files);
+  assert.deepEqual(views.map(({ path, content }) => ({ path, content })), files);
+  assert.ok(views.every(view => view.startLine === 1 && view.totalLines === 2 && !view.truncated));
+  assert.deepEqual(editableSourceView(files, 'source').map(view => view.matches[0].content), files.map(file => file.content));
+  assert.throws(() => editableSourceView(files, 'x'.repeat(201)), /invalid_source_view/);
+  assert.throws(() => sourceView(files, files.map(file => file.path)), /invalid_source_view/);
+});
+
+test('source preload retains the aggregate byte bound across separate files', () => {
+  const files = Array.from({ length: 4 }, (_, i) => ({ path: `worker/source-${i}.ts`, content: 'x'.repeat(81000) }));
+  for (const file of files) assert.equal(sourceView([file], [file.path]).length, 1);
+  assert.throws(() => editableSourceView(files), /source_view_too_large/);
 });
 
 test('failed cheap submissions escalate; accepted or already-strong submissions can finish', () => {

@@ -104,8 +104,16 @@ export function sourceView(files, selectors, query = '') {
     const end = values ? Math.min(requestedEnd, start + 399) : requestedEnd;
     return { path, totalLines: lines.length, startLine: start, truncated: end < requestedEnd, content: lines.slice(start - 1, end).join('\n') };
   });
+  return boundedSourceView(views);
+}
+
+function boundedSourceView(views) {
   if (Buffer.byteLength(JSON.stringify(views)) > 320000) throw new Error('source_view_too_large');
   return views;
+}
+
+export function editableSourceView(files, query = '') {
+  return boundedSourceView(files.flatMap(file => sourceView([file], [file.path], query)));
 }
 
 export function agentContext(messages, memory = '') {
@@ -187,7 +195,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
     taskContext = messages[1].content;
     if (options.preloadSource === true) {
       const files = await readSource(box, task.editPaths);
-      messages[1].content += `\nInitial editable source (use tools for current source after edits):\n${JSON.stringify(sourceView(files, task.editPaths))}`;
+      messages[1].content += `\nInitial editable source (use tools for current source after edits):\n${JSON.stringify(editableSourceView(files))}`;
     }
     if (options.candidates) {
       for (const candidate of options.candidates) validateEdits(task, candidate);
@@ -254,10 +262,12 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
       const toolStarted = performance.now();
       try {
         if (action.action === 'read' || action.action === 'search') {
+          const implicitPaths = !action.paths?.length;
           const paths = action.paths?.length ? action.paths : task.editPaths;
           const files = await readSource(box, paths.map(path => path.split(':')[0]), remaining());
           if (action.action === 'search' && !action.query) throw new Error('missing_query');
-          messages.push({ role: 'user', content: JSON.stringify(sourceView(files, paths, action.action === 'search' ? action.query : '')) });
+          const query = action.action === 'search' ? action.query : '';
+          messages.push({ role: 'user', content: JSON.stringify(implicitPaths ? editableSourceView(files, query) : sourceView(files, paths, query)) });
         } else if (action.action === 'compare') {
           if (!options.candidates) throw new Error('invalid_action');
           const results = await compareCandidates(task, image, options.candidates, action.query, remaining());
