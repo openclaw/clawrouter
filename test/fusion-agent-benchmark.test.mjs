@@ -165,6 +165,62 @@ test('handoff boundaries reject invalid or conflicting options before sandbox cr
   await assert.rejects(runAgent({}, '', 'handoff', '', {}, null, null, { handoffEvidence: 'true' }), /invalid_handoff_evidence/);
 });
 
+test('probe-qualified handoff rejects unsupported gate combinations before sandbox creation', async () => {
+  for (const [strategy, options] of [
+    ['strong', { handoffProbeGate: true }],
+    ['handoff', { handoffProbeGate: true, probeRegressionGate: true }],
+    ['handoff', { handoffProbeGate: true, handoffAfterEdit: true }],
+    ['handoff', { handoffProbeGate: 'true', handoffAfterEdit: true, probeRegressionGate: true }],
+  ]) await assert.rejects(runAgent({}, '', strategy, '', {}, null, null, options), /invalid_handoff_probe_gate/);
+});
+
+for (const mode of ['qualified', 'unchanged', 'runtime-failure', 'visible-regression', 'forced']) {
+  test(`probe-qualified handoff requires a discriminating assertion: ${mode}`, {
+    skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+  }, async () => {
+    const { readFile } = await import('node:fs/promises');
+    const { execFileSync } = await import('node:child_process');
+    const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+    const task = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+      .find(task => task.id === 'provided-responses-path');
+    const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+      .receipts.find(receipt => receipt.taskId === task.id);
+    const path = task.editPaths[0];
+    const original = execFileSync('git', ['show', `${task.base}:${path}`], { encoding: 'utf8' });
+    const marker = 'probe-qualified-repair';
+    const query = mode === 'unchanged' ? 'console.log(1)' :
+      `import assert from 'node:assert/strict'; import {readFileSync, writeFileSync} from 'node:fs';
+       const source = readFileSync(${JSON.stringify(path)}, 'utf8');
+       ${mode === 'runtime-failure' ? `if (!source.includes('${marker}')) throw new Error('baseline load failure');`
+         : `assert.ok(source.includes('${marker}'));`}
+       ${mode === 'visible-regression' ? `writeFileSync(${JSON.stringify(path)}, "throw new Error('visible regression');\\n" + source);` : ''}`;
+    const roles = [];
+    const result = await runAgent(task, receipt.image, 'handoff', 'probe-qualified-fixture',
+      { maxTurns: 3, deadlineMs: 120000, outputTokens: 256 }, async (_id, role, body) => {
+        const turn = roles.length; roles.push(role);
+        if (turn === 1 && mode !== 'forced') assert.equal(role, roles[0]);
+        if (turn === 2 && mode !== 'forced') {
+          assert.equal(role === roles[0], mode !== 'qualified');
+          assert.ok(body.messages.some(message => message.content.includes(`Handoff probe qualified: ${mode === 'qualified'}`))
+            || mode === 'qualified');
+        }
+        const action = turn === 0
+          ? { action: 'edit', edits: [{ path, search: original, replace: original + `\n// ${marker}\n` }], query: '' }
+          : { action: turn === 1 ? 'probe' : 'finish', edits: [], query: turn === 1 ? query : '' };
+        return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ paths: [], memory: '', ...action }) } }] };
+      }, undefined, { handoffAfterEdit: true, probeRegressionGate: true, handoffProbeGate: true,
+        ...(mode === 'forced' ? { handoffMaxTurns: 1 } : {}) });
+    assert.equal(result.handoffUsed, ['qualified', 'forced'].includes(mode));
+    assert.equal(result.handoffProbeQualified, mode === 'qualified');
+    assert.equal(result.handoffProbeChecks, mode === 'forced' ? 0 : 1);
+    assert.equal(result.outcome, ['qualified', 'forced'].includes(mode) ? 'submitted' : 'turn_limit');
+    if (mode === 'visible-regression') assert.equal(result.publicPassed, false);
+    if (result.handoffUsed) assert.equal(result.actions.find(row => row.action === 'handoff').reason,
+      mode === 'qualified' ? 'qualified_probe' : 'turn_limit');
+    assert.ok(!JSON.stringify({ ...result, files: [] }).includes(marker));
+  });
+}
+
 test('handoff evidence bounds UTF-8 feedback, JSON size and recent record count', () => {
   let records = [];
   for (let turn = 1; turn <= 20; turn++) records = appendHandoffEvidence(records,

@@ -946,3 +946,29 @@ test('handoff turn limits reject invalid policies and allowances before provider
     await assert.rejects(runPairBenchmark({ sourceSha: 'e'.repeat(40), config, ...options }), /invalid_handoff_turn_limit/);
   }
 });
+
+test('probe-qualified handoff requires a regression-gated handoff policy before provider access', async () => {
+  for (const extra of [{}, { policy: 'completion-handoff', probeRegressionGate: true },
+    { policy: 'edit-handoff' }, { policy: 'edit-handoff', probeRegressionGate: true, controlsOnly: true },
+    { policy: 'matched-handoff', probeRegressionGate: true, handoffProbeGate: 'true' }]) {
+    await assert.rejects(runPairBenchmark({ sourceSha: 'e'.repeat(40), config,
+      handoffProbeGate: true, ...extra }), /invalid_handoff_probe_gate/);
+  }
+});
+
+for (const policy of ['edit-handoff', 'matched-handoff']) test(`probe-qualified handoff reaches only handoff workers: ${policy}`, async () => {
+  const { root, options } = await fixture();
+  try {
+    const seen = [];
+    const state = await runPairBenchmark({ ...options, policy, handoffProbeGate: true, probeRegressionGate: true,
+      grade, fetcher: success, agent: async (_task, _image, strategy, id, _settings, invoke, _engine, agentOptions) => {
+        seen.push({ strategy, agentOptions });
+        await invoke(id, roles.strong, body, signal);
+        return { ...repaired(), probeRegressionPassed: true };
+      } });
+    assert.equal(state.handoffProbeGate, true);
+    assert.deepEqual(seen.map(row => row.agentOptions.handoffProbeGate),
+      [undefined, policy === 'matched-handoff' ? true : undefined, true]);
+    assert.equal(analyzePairRun(state).handoffProbeGate, true);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

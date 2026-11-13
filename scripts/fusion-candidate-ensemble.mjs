@@ -31,7 +31,7 @@ export async function runCandidateEnsemble(task, image, trialId, config, invoke,
 
 // Each probe starts from a fresh candidate snapshot, never the final agent's edits.
 export async function compareCandidates(task, image, candidates, script, timeout,
-  { run = command, now = () => performance.now() } = {}) {
+  { run = command, now = () => performance.now(), includeAssertionFailure = false } = {}) {
   if (!Number.isSafeInteger(timeout) || timeout < 1) throw new Error('command_timeout');
   const started = now(), results = [];
   const cleanupReserve = Math.min(2000, Math.floor(timeout / 4));
@@ -54,7 +54,8 @@ export async function compareCandidates(task, image, candidates, script, timeout
     try {
       await writeFiles(box, files, remaining());
       const result = await probe(box, script, remaining());
-      results.push({ candidate: index + 1, passed: result.passed, feedback: result.feedback });
+      results.push({ candidate: index + 1, passed: result.passed, feedback: result.feedback,
+        ...(includeAssertionFailure ? { assertionFailed: result.assertionFailed } : {}) });
     } finally { await box.close(); }
     remaining();
   }
