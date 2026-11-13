@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Stop paired Fusion benchmark campaigns after incomplete agent tests or acceptance grading, preserving settled usage without calling later arms.
+
 - Stop one-shot and refined Fusion drafts after incomplete visible tests, before probing, another draft, or fallback inference.
 
 - Separate Fusion benchmark agent time from independent acceptance grading, including failed phases, so slow hidden tests do not obscure execution latency.
