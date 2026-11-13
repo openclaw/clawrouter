@@ -657,3 +657,36 @@ test('a timed-out regression replay terminates the trial before another model ca
   });
   assert.equal(calls, 3);
 });
+
+
+test('supplied guards are pinned without a model call and survive a final source change', {
+  skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+}, async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { execFileSync } = await import('node:child_process');
+  const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+  const task = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+    .find(task => task.id === 'provided-responses-path');
+  const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+    .receipts.find(row => row.taskId === task.id);
+  const path = task.editPaths[0];
+  const original = execFileSync('git', ['show', `${task.base}:${path}`], { encoding: 'utf8' });
+  task.preservationProbes = [`import {readFileSync} from 'node:fs'; import assert from 'node:assert/strict'; assert.ok(!readFileSync(${JSON.stringify(path)},'utf8').includes('// supplied-guard-regression'));`];
+  await assert.rejects(runAgent(task, '', 'strong', '', {}, null), /preservation_requires_regression_gate/);
+  for (const regress of [false, true]) {
+    let calls = 0;
+    const result = await runAgent(task, receipt.image, 'strong', 'supplied-guard-fixture',
+      { maxTurns: 1, deadlineMs: 120000, outputTokens: 256 }, async (_id, _role, body) => {
+        calls++;
+        assert.match(body.messages[1].content, /already pinned/);
+        const action = { action: regress ? 'edit' : 'finish', paths: [], query: '', memory: '',
+          edits: regress ? [{ path, search: original, replace: original + '\n// supplied-guard-regression\n' }] : [] };
+        return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(action) } }] };
+      }, undefined, { probeRegressionGate: true });
+    assert.equal(calls, 1);
+    assert.equal(result.providedRegressionProbes, 1);
+    assert.equal(result.probeRegressionChecks, 1);
+    assert.equal(result.probeRegressionPassed, !regress);
+    assert.equal(JSON.stringify({ ...result, files: [] }).includes('supplied-guard-regression'), false);
+  }
+});

@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { loadTasks, hash, command, verify } from './fusion-workloads.mjs';
+import { loadTasks, hash, command, verify, preservationQualificationMatches } from './fusion-workloads.mjs';
 import { runAgent } from './fusion-agent-benchmark.mjs';
 import { runGroundedAgent } from './fusion-grounded-agent.mjs';
 import { models as roles } from './fusion-benchmark-accounting.mjs';
@@ -26,7 +26,7 @@ export function validateLocalQualification(tasks, qualification) {
   if (!/^node@sha256:[a-f0-9]{64}$/.test(qualification?.nodeImage ?? '')) throw new Error('unqualified_node_image');
   return tasks.map(task => {
     const matches = qualification.receipts?.filter(row => row.taskId === task.id), receipt = matches?.[0];
-    if (matches?.length !== 1 || receipt.taskDigest !== hash(JSON.stringify(task)) || receipt.qualified !== true
+    if (matches?.length !== 1 || !preservationQualificationMatches(task.preservationProbes, receipt?.preservation) || receipt.taskDigest !== hash(JSON.stringify(task)) || receipt.qualified !== true
       || receipt.visible?.passed !== true || receipt.oracleVisible?.valid !== true || receipt.oracleVisible?.passed !== true
       || receipt.oracle?.passed !== true || receipt.oracle.valid !== true
       || !Number.isSafeInteger(receipt.oracle.tests) || receipt.oracle.tests < 1

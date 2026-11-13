@@ -95,6 +95,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
   const candidateStrategy = policy === 'matched-handoff' ? 'edit-handoff' : policy;
   const trialStrategies = controlsOnly ? ['cheap', 'strong'] : includeControls ? ['cheap', 'strong', candidateStrategy] : [candidateStrategy];
   const tasks = await loadTasks(taskManifest);
+  if (tasks.some(task => task.preservationProbes !== undefined) && !probeRegressionGate) throw new Error('preservation_requires_regression_gate');
   if (providedPolicies.includes(policy) && tasks.some(task => task.reproducer === undefined)) throw new Error('missing_reproducer');
   validatePair(config, tasks.length, trialStrategies.length);
   if (!['none', 'medium'].includes(cheapReasoning)) throw new Error('invalid_cheap_reasoning');
