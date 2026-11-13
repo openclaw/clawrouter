@@ -870,3 +870,18 @@ Qualify the task before inference. The `development` label is required by the
 current harness; report initial exposure separately from any later tuning or
 repetition. This task shares the authentication domain with the raw-ingress
 workload and does not establish cross-domain generalization.
+
+### Bounded edit handoff
+
+Set `FUSION_HANDOFF_MAX_TURNS` to reserve successor calls in an `edit-handoff`
+comparison. The first worker hands off after its first passing edit or the
+specified number of turns, whichever comes first. The limit must be at least
+one and smaller than the shared call limit. The default remains uncapped.
+A handoff at the limit transfers the current attempt even if visible tests fail;
+the successor must repair and verify it. Refusals, uncertain charges and incomplete
+test execution still stop their existing paths rather than triggering this limit.
+
+Receipts record `handoffMaxTurns` and a bounded handoff reason. Repeated blocks
+must use the same limit. Fixed cheap/strong controls retain their entire allowance;
+`matched-handoff` applies the same boundary to its all-strong handoff control.
+This option is an experimental allocation rule, not evidence of a quality gain.

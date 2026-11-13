@@ -726,3 +726,63 @@ for (const actionKind of ['edit', 'candidate']) {
     assert.equal(calls, 1);
   });
 }
+
+
+test('edit-handoff turn limits reject invalid scope and reserve a successor turn', async () => {
+  for (const handoffMaxTurns of [null, 0, -1, 1.5, '2', NaN, 4]) {
+    await assert.rejects(runAgent({}, '', 'handoff', '', { maxTurns: 4 }, null, null,
+      { handoffAfterEdit: true, handoffMaxTurns }), /invalid_handoff_turn_limit/);
+  }
+  for (const [strategy, options] of [['strong', { handoffAfterEdit: true }], ['handoff', {}],
+    ['handoff', { handoffOnFinish: true }]]) {
+    await assert.rejects(runAgent({}, '', strategy, '', { maxTurns: 4 }, null, null,
+      { ...options, handoffMaxTurns: 2 }), strategy === 'strong' ? /invalid_edit_handoff/ : /invalid_handoff_turn_limit/);
+  }
+});
+
+for (const mode of ['read', 'invalid', 'failed-edit', 'passing-edit', 'submission']) {
+  test(`bounded edit handoff preserves successor calls after ${mode}`, {
+    skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+  }, async () => {
+    const { readFile } = await import('node:fs/promises');
+    const { execFileSync } = await import('node:child_process');
+    const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+    const task = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+      .find(task => task.id === 'provided-responses-path');
+    const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+      .receipts.find(receipt => receipt.taskId === task.id);
+    const path = task.editPaths[0];
+    const original = execFileSync('git', ['show', `${task.base}:${path}`], { encoding: 'utf8' });
+    const repaired = execFileSync('git', ['show', `${task.oracle}:${path}`], { encoding: 'utf8' });
+    const broken = `throw new Error('synthetic unfinished edit');\n${original}`;
+    const observed = [];
+    const result = await runAgent(task, receipt.image, 'handoff', 'bounded-handoff-fixture',
+      { maxTurns: 4, deadlineMs: 120000, outputTokens: 256 }, async (_id, role, body) => {
+        observed.push(role);
+        let action = { action: 'read', paths: task.editPaths, edits: [], query: '', memory: 'unverified notes' };
+        if (role === 'openai/gpt-6.1-sol') {
+          if (mode === 'invalid') action.action = 'unknown';
+          if (mode === 'submission') action.action = 'finish';
+          if (observed.length === 1 && ['failed-edit', 'passing-edit'].includes(mode)) {
+            action = { ...action, action: 'edit', edits: [{ path, search: original,
+              replace: mode === 'failed-edit' ? broken : repaired }] };
+          }
+        } else if (observed.filter(role => role === 'anthropic/claude-sonnet-5.5').length === 1) {
+          assert.match(body.messages.at(-1).content, /taking over an attempted repair/);
+          assert.ok(body.messages.at(-1).content.includes(mode === 'failed-edit' ? 'synthetic unfinished edit' : 'Current source:'));
+          action = mode === 'passing-edit' ? { ...action, action: 'finish' }
+            : { ...action, action: 'edit', edits: [{ path, search: mode === 'failed-edit' ? broken : original, replace: repaired }] };
+        } else action.action = 'finish';
+        return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(action) } }] };
+      }, undefined, { handoffAfterEdit: true, handoffMaxTurns: 2, handoffEvidence: true });
+    assert.deepEqual(observed, mode === 'passing-edit'
+      ? ['openai/gpt-6.1-sol', 'anthropic/claude-sonnet-5.5']
+      : mode === 'submission' ? ['openai/gpt-6.1-sol', 'anthropic/claude-sonnet-5.5', 'anthropic/claude-sonnet-5.5']
+      : ['openai/gpt-6.1-sol', 'openai/gpt-6.1-sol', 'anthropic/claude-sonnet-5.5', 'anthropic/claude-sonnet-5.5']);
+    assert.equal(result.actions.find(action => action.action === 'handoff').reason,
+      mode === 'passing-edit' ? 'visible_pass' : mode === 'submission' ? 'submission' : 'turn_limit');
+    assert.equal(result.outcome, 'submitted');
+    assert.equal(result.publicPassed, true);
+    assert.equal(result.files[0].content, repaired);
+  });
+}

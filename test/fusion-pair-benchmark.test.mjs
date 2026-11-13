@@ -209,11 +209,11 @@ test('fixed controls receive identical supplied context without invoking or budg
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-for (const policy of ['edit-handoff', 'matched-handoff', 'completion-handoff']) for (const handoffEvidence of [false, true]) test(`${policy} keeps the same allowance and routes both handoff phases explicitly: evidence=${handoffEvidence}`, async () => {
+for (const policy of ['edit-handoff', 'matched-handoff', 'completion-handoff']) for (const handoffEvidence of [false, true]) for (const handoffMaxTurns of policy === 'completion-handoff' ? [null] : [null, 1]) test(`${policy} keeps the same allowance and routes both handoff phases explicitly: evidence=${handoffEvidence}, cap=${handoffMaxTurns}`, async () => {
   const { root, options } = await fixture();
   try {
     const seen = [];
-    const state = await runPairBenchmark({ ...options, policy, handoffEvidence, grade, fetcher: success,
+    const state = await runPairBenchmark({ ...options, policy, handoffEvidence, handoffMaxTurns, grade, fetcher: success,
       agent: async (_task, _image, strategy, id, settings, invoke, _engine, agentOptions) => {
         seen.push({ strategy, settings, agentOptions });
         await invoke(id, roles.strong, body, signal);
@@ -228,15 +228,16 @@ for (const policy of ['edit-handoff', 'matched-handoff', 'completion-handoff']) 
     assert.equal(seen[2].settings.maxTurns, config.maxCalls);
     assert.deepEqual(seen[2].agentOptions, { preloadSource: true,
       ...(handoffEvidence ? { handoffEvidence: true } : {}),
-      ...(policy === 'completion-handoff' ? { handoffOnFinish: true } : { handoffAfterEdit: true }) });
+      ...(policy === 'completion-handoff' ? { handoffOnFinish: true } : { handoffAfterEdit: true, ...(handoffMaxTurns === null ? {} : { handoffMaxTurns }) }) });
     assert.deepEqual(seen[0].agentOptions, { preloadSource: true });
-    assert.deepEqual(seen[1].agentOptions, { preloadSource: true, ...(policy === 'matched-handoff' ? { handoffAfterEdit: true,
+    assert.deepEqual(seen[1].agentOptions, { preloadSource: true, ...(policy === 'matched-handoff' ? { handoffAfterEdit: true, ...(handoffMaxTurns === null ? {} : { handoffMaxTurns }),
       ...(handoffEvidence ? { handoffEvidence: true } : {}) } : {}) });
     assert.equal(seen[1].strategy, policy === 'matched-handoff' ? 'handoff' : 'strong');
     assert.equal(seen[1].settings.maxTurns, config.maxCalls);
     assert.equal(state.records[1].handoffUsed, policy === 'matched-handoff');
     assert.equal(state.policy, policy);
     assert.equal(state.handoffEvidence, handoffEvidence);
+    assert.equal(state.handoffMaxTurns, handoffMaxTurns);
     assert.equal(state.records[2].handoffUsed, true);
     assert.equal(analyzePairRun(state).candidateModelUse.mixedAttempts, 1);
   } finally { await rm(root, { recursive: true, force: true }); }
@@ -900,4 +901,14 @@ test('a supplied-guard manifest cannot start an ungated paid run', async () => {
     await assert.rejects(runPairBenchmark({ ...options, fetcher: async () => { calls++; } }), /preservation_requires_regression_gate/);
     assert.equal(calls, 0);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+
+test('handoff turn limits reject invalid policies and allowances before provider access', async () => {
+  for (const options of [{ policy: 'architect', handoffMaxTurns: 1 },
+    { policy: 'completion-handoff', handoffMaxTurns: 1 },
+    { policy: 'edit-handoff', controlsOnly: true, handoffMaxTurns: 1 },
+    ...[0, -1, 1.5, '1', NaN, 3].map(handoffMaxTurns => ({ policy: 'edit-handoff', handoffMaxTurns }))]) {
+    await assert.rejects(runPairBenchmark({ sourceSha: 'e'.repeat(40), config, ...options }), /invalid_handoff_turn_limit/);
+  }
 });
