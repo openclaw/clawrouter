@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
-import { loadTasks, validateTask, validateEdits, sandboxArgs, sandbox, testResult, checkOracleVisible, qualificationSucceeded } from '../scripts/fusion-workloads.mjs';
+import { loadTasks, validateTask, validateEdits, sandboxArgs, sandbox, testResult, check, checkOracleVisible, qualificationSucceeded } from '../scripts/fusion-workloads.mjs';
 
 const task = (await loadTasks())[0];
 test('historical tasks have pinned distinct parents, source-only edits and development labels', async () => {
@@ -208,4 +208,48 @@ test('sandbox supports native fixtures without making edited source executable',
       finally { await runtime.dispose(); }
     `], { timeout: 30000 });
   } finally { await box.close(); }
+});
+
+
+test('test watchdog rejects incomplete TAP and kills descendant processes inside the sandbox', {
+  skip: !process.env.FUSION_NATIVE_IMAGE,
+}, async () => {
+  const box = await sandbox(process.env.FUSION_NATIVE_IMAGE);
+  try {
+    const source = `import test from 'node:test';
+      import { spawn } from 'node:child_process';
+      import { writeFileSync } from 'node:fs';
+      const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+      writeFileSync('/tmp/watchdog-child.pid', String(child.pid));
+      test('never finishes', () => new Promise(() => {}));
+      setInterval(() => {}, 1000);`;
+    await box.exec(['node', '-e', "require('node:fs').writeFileSync('/work/watchdog.test.mjs', process.argv[1])", source]);
+    const result = await check(box, ['watchdog.test.mjs'], 2000);
+    assert.equal(result.passed, false);
+    assert.equal(result.valid, false);
+    await box.exec(['node', '-e', `
+      const fs = require('node:fs');
+      const pid = fs.readFileSync('/tmp/watchdog-child.pid', 'utf8');
+      try {
+        const state = fs.readFileSync('/proc/' + pid + '/stat', 'utf8').split(') ')[1][0];
+        if (state !== 'Z') throw Error('test descendant survived watchdog');
+      } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    `]);
+    await box.exec(['node', '-e', "require('node:fs').writeFileSync('/work/clean.test.mjs', \"import test from 'node:test'; test('clean', () => {});\")"]);
+    const clean = await check(box, ['clean.test.mjs'], 10000);
+    assert.equal(clean.passed, true);
+  } finally { await box.close(); }
+});
+
+
+test('test watchdog preserves infrastructure errors and rejects invalid timeouts before execution', async () => {
+  let calls = 0;
+  const failure = new Error('command_failed');
+  const box = { exec: async () => { calls++; throw failure; } };
+  for (const timeout of [0, -1, 1.5, Infinity, NaN, '1000']) {
+    await assert.rejects(check(box, ['test.mjs'], timeout), /invalid_test_timeout/);
+  }
+  assert.equal(calls, 0);
+  await assert.rejects(check(box, ['test.mjs'], 1000), error => error === failure);
+  assert.equal(calls, 1);
 });

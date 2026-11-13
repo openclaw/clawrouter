@@ -340,3 +340,22 @@ test('draft refinement stops on uncertain charges and rejects an escaped candida
     async () => {}, undefined, { draft: async () => ({ ...result(), files: [{ path: 'worker/test/a.test.mjs', content: 'escape' }] }),
       makeSandbox: async () => { throw Error('must_not_allocate'); } }), /invalid_edit_path/);
 });
+
+
+test('single drafts cap public validation without treating a failed check as a provider failure', async () => {
+  for (const deadlineMs of [10000, 300000]) {
+    const f = fixture([]);
+    let limit;
+    const output = await runSingleDraft(task, 'image', 'strong', 'draft', { ...config, deadlineMs },
+      async () => ({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
+        edits: [{ path: 'worker/a.ts', search: 'original', replace: 'fixed' }],
+      }) } }] }), undefined, { ...f.dependencies,
+        test: async (_box, paths, timeout) => { limit = timeout; assert.deepEqual(paths, task.visibleTests); return failed; } });
+    assert.ok(limit > 0 && limit <= Math.min(30000, deadlineMs));
+    if (deadlineMs > 30000) assert.equal(limit, 30000);
+    assert.equal(output.outcome, 'draft_submitted');
+    assert.equal(output.publicPassed, false);
+    assert.equal(output.files[0].content, 'fixed');
+    assert.ok(f.boxes.every(box => box.closed));
+  }
+});

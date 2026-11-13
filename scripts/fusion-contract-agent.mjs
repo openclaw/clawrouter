@@ -149,7 +149,7 @@ export async function runSingleDraft(task, image, _strategy, trialId, config, in
     if (patched) {
       const start = performance.now();
       await write(box, patched, remaining());
-      publicPassed = (await test(box, task.visibleTests, remaining())).passed;
+      publicPassed = (await test(box, task.visibleTests, Math.min(30000, remaining()))).passed;
       toolMs += performance.now() - start;
       files = patched; outcome = 'draft_submitted'; actions.push({ action: 'draft', status: 'ok' });
     }
