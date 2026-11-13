@@ -706,3 +706,20 @@ discovery visible 35/35 on both revisions and acceptance 43/55 before repair,
 context. The manifest is development data; subsequent draws on either task are
 replications, not additional unseen tasks. It does not alter the public Fusion
 policy or establish a new quality result.
+
+
+## Base64 inspection workload
+
+`benchmarks/fusion/base64-inspection-workloads.json` adds a historical MiniMax
+cover-reference repair. The task requires canonical base64 validation with
+bounded scalar inspection, exact 8-MiB size handling and preserved request
+identity. The public instruction declares the required exported inspector,
+frozen `{ decodedBytes }` result and rejection/error behavior. Acceptance-test
+bodies and reference source remain outside model context.
+
+Initial isolated qualification passed: original and reference each pass four
+visible tests; the reference passes all 28 acceptance tests with no skips. The
+original fails acceptance because it lacks the explicitly required export.
+These are harness checks, not model results. Treat this public historical task
+as development data; qualify its pinned revisions before inference and do not
+claim that repeated draws are new unseen tasks.
