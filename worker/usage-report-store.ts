@@ -120,7 +120,13 @@ export function migrateUsageReport(sql: ReportSql, transaction: (fn: () => void)
       ? "SELECT 1 FROM usage_report_events INDEXED BY usage_report_old_format WHERE report_format_version IS NULL OR report_format_version != 2 LIMIT 1"
       : "SELECT 1 FROM usage_report_events LIMIT 1")].length > 0;
     const previouslyComplete = saved?.complete === 1 && coverage !== undefined && coverage.verified_generation === coverage.generation && !obsoleteFormat;
-    const freshRound = !previouslyComplete && (!coverage || coverage.round_generation !== coverage.generation || saved?.complete === 1 && obsoleteFormat);
+    // Old writers may have acknowledged a prefix (or paired rows beyond the
+    // pinned upper bound) in the old format. Reopen those, not obsolete rows
+    // still ahead inside a current round: resetting those would never finish.
+    const obsoleteOutsideRound = obsoleteFormat && saved !== undefined && [...sql.exec(
+      "SELECT 1 FROM usage_report_events AS report" + (hasFormat ? " INDEXED BY usage_report_old_format" : "") + " JOIN usage_events AS ledger ON ledger.id = report.id WHERE " +
+      (hasFormat ? "(report.report_format_version IS NULL OR report.report_format_version != 2) AND " : "") + "(ledger.rowid <= ? OR ledger.rowid > ?) LIMIT 1", Number(saved.last_rowid), Number(saved.upper_rowid))].length > 0;
+    const freshRound = !previouslyComplete && (!coverage || coverage.round_generation !== coverage.generation || saved?.complete === 1 && obsoleteFormat || obsoleteOutsideRound);
     const upper = Number(freshRound || !saved ? [...sql.exec("SELECT COALESCE(MAX(rowid), 0) AS upper_rowid FROM usage_events")][0].upper_rowid : saved.upper_rowid);
     const last = Number(options.afterRowid ?? (freshRound ? 0 : saved?.last_rowid ?? 0));
     if (!Number.isSafeInteger(last) || last < 0 || last > upper || !Number.isSafeInteger(upper)) throw new Error("invalid migration watermark");
