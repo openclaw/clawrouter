@@ -151,6 +151,7 @@ test('repeat analysis rejects changed protocols, duplicate blocks, missing time 
     runs => { runs[1].config.maxCalls = 20; },
     runs => { runs[1].cheapReasoning = 'high'; },
     runs => { runs[1].handoffEvidence = true; },
+    runs => { runs[1].probeRegressionGate = true; },
     runs => { runs[1].pins = { changed: true }; },
     runs => { runs[1].receipts[0].taskDigest = 'e'.repeat(64); },
     runs => { delete runs[1].records[0].elapsedMs; },
@@ -255,4 +256,22 @@ test('single-block model use distinguishes rescues, single-model samples and no-
   run.spentOrReservedMicros -= 40;
   assert.deepEqual(analyzePairRun(run).candidateModelUse, { cheapOnlyAttempts: 1, strongOnlyAttempts: 1,
     mixedAttempts: 1, noCallAttempts: 1, mixedWinsOverCheap: 1 });
+});
+
+
+test('probe-gated success requires observed gate passage and preserves legacy repeat compatibility', () => {
+  const runs = repeats();
+  runs[1].probeRegressionGate = false;
+  assert.equal(analyzePairRepeats(runs).probeRegressionGate, false);
+  for (const run of runs) {
+    run.probeRegressionGate = true;
+    for (const row of run.records) row.probeRegressionPassed = true;
+  }
+  assert.equal(analyzePairRepeats(runs).probeRegressionGate, true);
+  runs[0].records[0].probeRegressionPassed = false;
+  assert.throws(() => analyzePairRun(runs[0]), /unverified_pair_score/);
+  for (const invalid of [null, 1, 'true']) {
+    runs[0].probeRegressionGate = invalid;
+    assert.throws(() => analyzePairRun(runs[0]), /invalid_pair_run/);
+  }
 });

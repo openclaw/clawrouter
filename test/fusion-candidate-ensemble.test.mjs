@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { runCandidateEnsemble, candidateSummaries } from '../scripts/fusion-candidate-ensemble.mjs';
+import { runCandidateEnsemble, candidateSummaries, compareCandidates } from '../scripts/fusion-candidate-ensemble.mjs';
 import { defaultExperiment, validateExperiment } from '../scripts/fusion-agent-benchmark.mjs';
 
 test('independent candidates and synthesis share the trial budget and total turn cap', async () => {
@@ -107,4 +107,28 @@ test('a refused executor stops before handing the same task to another model', {
       return { choices: [{ finish_reason: 'refusal', message: { content: '' } }] };
     }, {}), /provider_refused/);
   assert.equal(calls, 1);
+});
+
+
+for (const timeout of [200, 100, 10]) test(`candidate replay bounds setup, work and cleanup with one budget: ${timeout}`, async () => {
+  let elapsed = 0;
+  const calls = [];
+  const run = async (_program, args, options) => {
+    calls.push({ operation: args[0], timeout: options.timeout });
+    assert.ok(options.timeout > 0 && options.timeout <= Math.max(1, timeout - elapsed));
+    elapsed += 20;
+    return { code: 0, stdout: Buffer.from(args[0] === 'create' ? 'a'.repeat(64) : ''), stderr: Buffer.alloc(0) };
+  };
+  const replay = compareCandidates({ editPaths: ['worker/a.ts'] }, 'sha256:' + 'b'.repeat(64),
+    [[{ path: 'worker/a.ts', content: 'export const a = 1;' }]], 'console.log(1)', timeout,
+    { run, now: () => elapsed });
+  if (timeout === 200) {
+    const result = await replay;
+    assert.equal(result[0].passed, true);
+    assert.deepEqual(calls.map(row => row.timeout), [150, 130, 110, 90, 70, 100]);
+  } else {
+    await assert.rejects(replay, /command_timeout/);
+    assert.equal(calls.at(-1).timeout, timeout === 100 ? 20 : 1);
+  }
+  assert.equal(calls.at(-1).operation, 'rm');
 });

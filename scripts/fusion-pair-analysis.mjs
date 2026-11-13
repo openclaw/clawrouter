@@ -44,6 +44,7 @@ export function analyzePairRun(run) {
     || !Array.isArray(run.calls) || !money(run.config?.priorCostMicros) || !money(run.spentOrReservedMicros)
     || typeof run.config?.cheap !== 'string' || typeof run.config?.strong !== 'string'
     || run.config.cheap === run.config.strong
+    || (run.probeRegressionGate !== undefined && typeof run.probeRegressionGate !== 'boolean')
     || (run.handoffEvidence !== undefined && typeof run.handoffEvidence !== 'boolean')) throw new Error('invalid_pair_run');
   const candidate = run.strategies.find(strategy => !['cheap', 'strong'].includes(strategy));
   const cases = new Map();
@@ -72,7 +73,7 @@ export function analyzePairRun(run) {
       || (row.status === 'error' && row.score !== 0) || !money(row.costMicros) || !money(row.calls)) {
       throw new Error('invalid_or_duplicate_pair_row');
     }
-    if (row.score === 1 && (row.publicPassed !== true || row.verdict?.passed !== true
+    if (row.score === 1 && ((run.probeRegressionGate === true && row.probeRegressionPassed !== true) || row.publicPassed !== true || row.verdict?.passed !== true
       || row.verdict.tests !== entry.receipt.oracleTests || row.verdict.skipped !== entry.receipt.oracleSkipped)) {
       throw new Error('unverified_pair_score');
     }
@@ -113,7 +114,7 @@ export function analyzePairRun(run) {
   }
   const oracleSolved = [...cases.values()].filter(({ rows }) => rows.get('cheap').score || rows.get('strong').score).length;
   return { version: 1, kind: 'observed-pair-analysis', sourceSha: run.sourceSha,
-    handoffEvidence: run.handoffEvidence ?? false,
+    handoffEvidence: run.handoffEvidence ?? false, probeRegressionGate: run.probeRegressionGate ?? false,
     datasetDigest: run.datasetDigest, qualificationDigest: run.qualificationDigest,
     inputDigest: createHash('sha256').update(JSON.stringify(run)).digest('hex'),
     cases: cases.size, candidate, totals, comparisons: [versusCheap, versusStrong],
@@ -149,7 +150,7 @@ export function analyzePairRepeats(runs) {
       qualificationDigest: run.qualificationDigest, config, pins: run.pins, policy: run.policy,
       executor: run.executor, cheapReasoning: run.cheapReasoning, cheapMaxCalls: run.cheapMaxCalls,
       preloadSource: run.preloadSource, includeControls: run.includeControls, controlsOnly: run.controlsOnly,
-      handoffEvidence: run.handoffEvidence ?? false,
+      handoffEvidence: run.handoffEvidence ?? false, probeRegressionGate: run.probeRegressionGate ?? false,
       strategies: [...run.strategies].sort(), receipts: [...run.receipts].sort((a, b) => a.taskId.localeCompare(b.taskId)) });
   };
   const expected = protocol(runs[0]);
@@ -183,7 +184,7 @@ export function analyzePairRepeats(runs) {
     withinLatencyLimit: latencyRatio !== null && latencyRatio <= 2,
     rescuedBeyondCheap: comparisons[0].wins > 0 };
   return { version: 1, kind: 'observed-pair-repeat-analysis', sourceSha: runs[0].sourceSha,
-    handoffEvidence: runs[0].handoffEvidence ?? false,
+    handoffEvidence: runs[0].handoffEvidence ?? false, probeRegressionGate: runs[0].probeRegressionGate ?? false,
     blocks: runs.length, distinctTasks: reports[0].cases, attemptsPerStrategy: selected.attempts,
     inputDigests: reports.map(report => report.inputDigest), totals, comparisons, candidateModelUse,
     costSavingVersusStrong: saving, latencyRatioVersusStrong: latencyRatio,

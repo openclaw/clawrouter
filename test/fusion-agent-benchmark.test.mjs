@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { SpendLedger, defaultExperiment, validateExperiment, replaceEdits, sourceView, editableSourceView, escalateSubmission, toolErrorCode, finishReason, agentContext, appendHandoffEvidence, executorModel, advisoryBody, actionFeedback, runAgent, agentFailureTrace } from '../scripts/fusion-agent-benchmark.mjs';
+import { SpendLedger, defaultExperiment, validateExperiment, replaceEdits, sourceView, editableSourceView, escalateSubmission, toolErrorCode, finishReason, agentContext, appendHandoffEvidence, retainRegressionProbe, executorModel, advisoryBody, actionFeedback, runAgent, agentFailureTrace } from '../scripts/fusion-agent-benchmark.mjs';
 import { nativeRequest } from '../scripts/fusion-native-provider.mjs';
 
 test('tool feedback explains recovery without revealing final acceptance paths', () => {
@@ -544,4 +544,116 @@ test('handoff requires room for both executors within the same turn budget', () 
   assert.throws(() => validateExperiment({...defaultExperiment, strategies:['handoff'], maxTurns:1}, 4), /two_turns/);
   assert.doesNotThrow(() => validateExperiment({...defaultExperiment, strategies:['handoff'], maxTurns:2}, 4));
   assert.equal(executorModel('handoff', 0), 'openai/gpt-6.1-sol');
+});
+
+
+test('regression probes stay bounded, deduplicated and pinned against later eviction', () => {
+  let probes = [];
+  for (const source of ['界'.repeat(1365), 'second', 'third', 'fourth']) probes = retainRegressionProbe(probes, source);
+  assert.equal(probes.length, 4);
+  assert.equal(retainRegressionProbe(probes, 'fifth'), probes);
+  assert.equal(retainRegressionProbe([], 'a'.repeat(4096)).length, 1);
+  assert.equal(retainRegressionProbe([], '界'.repeat(1366)).length, 0);
+  const duplicate = ['same'];
+  assert.equal(retainRegressionProbe(duplicate, 'same'), duplicate);
+  assert.equal(retainRegressionProbe([], ' ').length, 0);
+  assert.equal(retainRegressionProbe(probes, probes[0]), probes);
+});
+
+for (const mode of ['off', 'recover', 'turn-limit']) test(`pinned probes detect a successor regression without mutating the live repair: ${mode}`, {
+  skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+}, async () => {
+  const enabled = mode !== 'off';
+  const { readFile } = await import('node:fs/promises');
+  const { execFileSync } = await import('node:child_process');
+  const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+  const task = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+    .find(task => task.id === 'provided-responses-path');
+  const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+    .receipts.find(receipt => receipt.taskId === task.id);
+  const path = task.editPaths[0];
+  const original = execFileSync('git', ['show', `${task.base}:${path}`], { encoding: 'utf8' });
+  const ready = original + '\n// ready-marker\n';
+  const bad = ready + '// regression-marker\n';
+  const query = `import { readFileSync, appendFileSync } from 'node:fs';
+    import assert from 'node:assert/strict';
+    const path = ${JSON.stringify(path)}, source = readFileSync(path, 'utf8');
+    if (source.includes('ready-marker')) appendFileSync(path, '// replay-mutation\\n');
+    assert.ok(!source.includes('regression-marker'));`;
+  let calls = 0;
+  const roles = [];
+  const result = await runAgent(task, receipt.image, 'handoff', 'regression-fixture',
+    { maxTurns: mode === 'turn-limit' ? 3 : 6, deadlineMs: 120000, outputTokens: 256 }, async (_id, role, body) => {
+      roles.push(role);
+      const turn = calls++;
+      if (enabled && turn === 4) assert.match(JSON.stringify(body.messages), /Submission blocked/);
+      const action = { action: 'finish', paths: [], edits: [], query: '', memory: '' };
+      if (turn === 0) { action.action = 'probe'; action.query = query; }
+      if ([1, 2, 4].includes(turn)) {
+        action.action = 'edit';
+        action.edits = [{ path, search: turn === 1 ? original : turn === 2 ? ready : bad,
+          replace: turn === 1 ? ready : turn === 2 ? bad : ready }];
+      }
+      return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(action) } }] };
+    }, undefined, { handoffAfterEdit: true, probeRegressionGate: enabled });
+  assert.equal(result.outcome, mode === 'turn-limit' ? 'turn_limit' : 'submitted');
+  assert.equal(result.files[0].content, mode === 'recover' ? ready : bad);
+  assert.equal(result.probeRegressionChecks, mode === 'recover' ? 2 : mode === 'turn-limit' ? 1 : 0);
+  assert.equal(result.probeRegressionPassed, enabled ? mode === 'recover' : null);
+  assert.equal(result.probeRegressionProbes, enabled ? 1 : 0);
+  assert.equal(roles.length, mode === 'recover' ? 6 : mode === 'turn-limit' ? 3 : 4);
+  assert.notEqual(roles[1], roles[2]);
+  assert.equal(JSON.stringify({ ...result, files: [] }).includes('replay-mutation'), false);
+});
+
+test('a regression gate without a passing probe cannot submit at the turn limit', {
+  skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+}, async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+  const task = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))[0];
+  const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+    .receipts.find(receipt => receipt.taskId === task.id);
+  const result = await runAgent(task, receipt.image, 'strong', 'missing-probe-fixture',
+    { maxTurns: 1, deadlineMs: 120000, outputTokens: 256 }, async () => ({ choices: [{ finish_reason: 'stop', message: {
+      content: JSON.stringify({ action: 'finish', paths: [], edits: [], query: '', memory: '' }),
+    } }] }), undefined, { probeRegressionGate: true });
+  assert.equal(result.outcome, 'turn_limit');
+  assert.equal(result.probeRegressionPassed, false);
+  assert.equal(result.probeRegressionChecks, 0);
+  await assert.rejects(runAgent({}, '', 'strong', '', {}, null, null, { probeRegressionGate: 'true' }), /invalid_probe_regression_gate/);
+});
+
+test('a timed-out regression replay terminates the trial before another model call', {
+  skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+}, async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { execFileSync } = await import('node:child_process');
+  const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+  const task = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+    .find(task => task.id === 'provided-responses-path');
+  const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+    .receipts.find(receipt => receipt.taskId === task.id);
+  const path = task.editPaths[0];
+  const original = execFileSync('git', ['show', `${task.base}:${path}`], { encoding: 'utf8' });
+  const query = `import { readFileSync } from 'node:fs';
+    if (readFileSync(${JSON.stringify(path)}, 'utf8').includes('// stall-replay'))
+      await new Promise(() => setInterval(() => {}, 1000));`;
+  let calls = 0;
+  await assert.rejects(runAgent(task, receipt.image, 'strong', 'replay-timeout-fixture',
+    { maxTurns: 5, deadlineMs: 6000, outputTokens: 256 }, async () => {
+      const turn = calls++;
+      const action = { action: turn === 0 ? 'probe' : turn === 1 ? 'edit' : 'finish',
+        paths: [], query: turn === 0 ? query : '', memory: '',
+        edits: turn === 1 ? [{ path, search: original, replace: original + '\n// stall-replay\n' }] : [] };
+      return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(action) } }] };
+    }, undefined, { probeRegressionGate: true }), error => {
+    assert.equal(error.message, 'command_timeout');
+    const trace = agentFailureTrace(error);
+    assert.equal(trace.probeRegressionChecks, 1);
+    assert.equal(trace.probeRegressionPassed, false);
+    assert.equal(JSON.stringify(trace).includes('stall-replay'), false);
+    return true;
+  });
+  assert.equal(calls, 3);
 });
