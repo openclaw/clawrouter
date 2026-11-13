@@ -1195,3 +1195,39 @@ times, not three independent tasks or a significance test. Rotating order does
 not remove every provider-cache or time effect. Keep it separate from earlier
 cohorts with different protocols. It does not establish an endpoint-wide or
 production gain, and no routing defaults, release, or deployment change.
+
+### Diagnostic-plan development screen, 2026-11-14
+
+A local comparison tested a Qwen3 0.6B planner with a Qwen3 4B Instruct repair
+worker on two previously exposed tasks: GMI selectors and literal Responses
+paths. It compared worker-only repair, a free-form plan, and a structured
+diagnosis requiring unique exact source quotes. Source quotes establish a
+location, not whether the proposed diagnosis is correct.
+
+Each arm received at most two calls: two worker attempts, or one planner call
+and one worker attempt. All calls allowed 4,096 output tokens within the fixed
+32,768-token context. The worker used the existing one-shot edit interface.
+Every arm saw the same first 80 lines of visible test examples and the supplied
+reproducer; execution still ran the complete tests. Task order rotated the arms.
+Independent acceptance ran only after all six arms finished.
+
+| Policy | Accepted repairs | Calls | Input tokens | Output tokens |
+| --- | ---: | ---: | ---: | ---: |
+| Worker only | 0/2 | 4 | 12,924 | 7,391 |
+| Free-form plan → worker | 0/2 | 4 | 9,271 | 3,394 |
+| Validated diagnosis → worker | 0/2 | 4 | 9,097 | 3,595 |
+
+All 12 responses completed normally. Every candidate failed independent
+acceptance with the original failure counts: 26 of 75 tests for GMI and 17 of
+28 for Responses, with none skipped. The structured plans failed source-anchor
+validation on both tasks, so their advice was omitted. Free-form plans were
+well-formed but did not improve repair correctness. This pool does not justify
+adding a diagnostic-planner feature. Lower token use on failed work is not a win.
+
+Two earlier screens stopped before any planner call because worker output
+reached the old 1,536-token limit. Their three settled calls are excluded from
+the comparison. Across all three screens, 15 local calls used 42,188 input and
+18,390 output tokens, with zero API spend. Local compute is not free. Timing is
+not compared because the recorded worker duration excludes planner execution.
+These exposed development cases do not establish generalization or production
+quality; the larger output allowance enabled evaluation, not better answers.
