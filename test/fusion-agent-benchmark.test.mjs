@@ -690,3 +690,39 @@ test('supplied guards are pinned without a model call and survive a final source
     assert.equal(JSON.stringify({ ...result, files: [] }).includes('supplied-guard-regression'), false);
   }
 });
+
+for (const actionKind of ['edit', 'candidate']) {
+  test(`${actionKind} stops after incomplete visible tests without another model call`, {
+    skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+  }, async () => {
+    const { readFile } = await import('node:fs/promises');
+    const { execFileSync } = await import('node:child_process');
+    const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+    const task = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+      .find(task => task.id === 'provided-responses-path');
+    const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+      .receipts.find(receipt => receipt.taskId === task.id);
+    const path = task.editPaths[0];
+    const original = execFileSync('git', ['show', `${task.base}:${path}`], { encoding: 'utf8' });
+    const content = `while (true) {}\n${original}`;
+    let calls = 0;
+    await assert.rejects(runAgent(task, receipt.image, 'strong', 'incomplete-tests-fixture',
+      { maxTurns: 3, deadlineMs: 8000, outputTokens: 256 }, async () => {
+        calls++;
+        return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
+          action: actionKind, query: '1', paths: [], memory: '',
+          edits: actionKind === 'edit' ? [{ path, search: original, replace: content }] : [],
+        }) } }] };
+      }, undefined, actionKind === 'candidate' ? { candidates: [[{ path, content }]] } : {}), error => {
+      assert.equal(error.message, 'incomplete_test_run');
+      assert.equal(toolErrorCode(error), 'incomplete_test_run');
+      const trace = agentFailureTrace(error);
+      assert.deepEqual(trace.actions, [{ turn: 1, action: actionKind, status: 'incomplete_test_run' }]);
+      assert.equal(trace.publicPassed, false);
+      assert.equal(trace.invalidActions, 0);
+      assert.equal(JSON.stringify(trace).includes('while (true)'), false);
+      return true;
+    });
+    assert.equal(calls, 1);
+  });
+}
