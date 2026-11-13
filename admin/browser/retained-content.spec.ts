@@ -1,3 +1,4 @@
+import { openLegacyUsage } from "./fixtures/legacy-usage";
 import { expect, test, type Page } from "@playwright/test";
 
 interface PendingContent {
@@ -113,6 +114,7 @@ test("content authentication loss still clears the protected console without rep
 });
 
 async function inspect(page: Page, id: string, count: number) {
+  await openLegacyUsage(page);
   await page.locator(".usageTablePanel .tableRow").filter({ hasText: id }).getByRole("button", { name: "View", exact: true }).click();
   await expect.poll(() => requestCount(page)).toBe(count);
 }
@@ -179,6 +181,7 @@ async function open(page: Page) {
     await route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
   });
   await page.goto("/dashboard/usage");
+  await openLegacyUsage(page);
   await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
   await expect(page.locator(".usageTablePanel .tableRow").filter({ hasText: "ordinary-a" })).toBeVisible();
   return state;

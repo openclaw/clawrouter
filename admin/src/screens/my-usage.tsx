@@ -115,7 +115,7 @@ export function PersonalUsageSummary({ data, onOpen, keys = [] }: { data: Person
   const filters = Object.entries(data.query.filters).filter(([, filter]) => filter);
   return <section className="dashboardPanel personalUsageSummary" aria-label="Your personal usage">
     <header className="personalSectionHeader">
-      <div>
+      <div className="personalSummaryHeading">
         <h2>For your current access</h2>
         {value ? <ReportRange value={value} complete={data.complete?.report.value} /> : <p>Only your signed-in identity</p>}
       </div>
@@ -172,13 +172,13 @@ export function PersonalUsageSummary({ data, onOpen, keys = [] }: { data: Person
           </dd>
         </div> : null}
       </dl>
-      {data.complete?.report.value ? <div><h3>Recorded accounting amount</h3><p>{data.complete.report.value.chargeReportedCalls ? usageMoney(data.complete.report.value.recordedChargeMicros) : 'Not reported'} · {data.complete.report.value.chargeReportedCalls}/{value.metrics.calls} rows with a valid recorded accounting field</p><p>{usageCaveats.accounting}</p></div> : null}
+      {data.complete?.report.value ? <details className="personalAccounting personalNote"><summary>Recorded accounting amount: {data.complete.report.value.chargeReportedCalls ? usageMoney(data.complete.report.value.recordedChargeMicros) : 'Not reported'} · not a price or confirmed settlement</summary><p>{data.complete.report.value.chargeReportedCalls}/{value.metrics.calls} rows with a valid recorded accounting field.</p><p>{usageCaveats.accounting}</p></details> : null}
       {!value.metrics.calls ? <p className="personalEmpty">No calls in discovered locations for this range for your current access.</p> : null}
     </> : null}
   </section>;
 }
 
-function UsageControls({ query, onChange, onRefresh, onClear, onPreset, loading }: { query: PersonalUsageQuery; onChange: (query: PersonalUsageQuery) => void; onRefresh: () => void; onClear: () => void; onPreset:(days:7|30,draft:PersonalUsageQuery)=>void; loading: boolean }) {
+function UsageControls({ query, onChange, onRefresh, onClear, onPreset, loading, children }: { children?: ReactNode; query: PersonalUsageQuery; onChange: (query: PersonalUsageQuery) => void; onRefresh: () => void; onClear: () => void; onPreset:(days:7|30,draft:PersonalUsageQuery)=>void; loading: boolean }) {
   const [draft, setDraft] = useState(query);
   useEffect(() => setDraft(query), [query]);
   const apply = (next: PersonalUsageQuery) => { setDraft(next); onChange(next); };
@@ -187,17 +187,18 @@ function UsageControls({ query, onChange, onRefresh, onClear, onPreset, loading 
     event.preventDefault();
     onChange(draft);
   }
-  return <form className="dashboardPanel personalControls" aria-label="Usage filters" onSubmit={submit}>
-    <div className="personalSectionHeader">
+  return <form className="dashboardPanel personalControls personalCompactControls" aria-label="Usage filters" onSubmit={submit}>
+    <div className="personalControlRow">
       <h2 className="srOnly">Report controls</h2>
       <div className="personalActions">
         {([7, 30] as const).map(days => <button key={days} type="button" className="buttonSecondary" aria-pressed={query.rollingDays === days} onClick={() => onPreset(days,draft)}>Last {days} days</button>)}
         <button type="button" className="buttonSecondary" disabled={loading} onClick={onRefresh}>Refresh report</button>
       </div>
-    </div>
-    <label>Group by<select value={draft.groupBy} onChange={event => apply({ ...draft, groupBy: event.target.value as PersonalUsageQuery['groupBy'] })}>
+      <label>Group by<select value={draft.groupBy} onChange={event => apply({ ...draft, groupBy: event.target.value as PersonalUsageQuery['groupBy'] })}>
       <option value="model">Model</option><option value="provider">Provider</option><option value="key">Key</option>
     </select></label>
+      {children}
+    </div>
     <details className="personalAdvanced">
       <summary>Custom dates & exact filters</summary>
       <p className="personalNote">Start/end accept YYYY-MM-DD in the chosen IANA timezone, or RFC3339 instants with Z or an explicit UTC offset. End is exclusive. Maximum 30 days; server-confirmed boundaries appear below.</p>
@@ -433,9 +434,10 @@ export function MyUsageScreen({ data, keys: currentKeys = [] }: { data: Personal
     return <UsageDetails value={value} query={query} setQuery={setQuery} keys={keys} data={data} />;
   }
   return <div className="personalUsageCanvas">
-    <UsageControls query={query} onChange={setQuery} onRefresh={data.reload} onPreset={data.choosePreset} onClear={data.clearFilters} loading={report.loading} />
+    <UsageControls query={query} onChange={setQuery} onRefresh={data.reload} onPreset={data.choosePreset} onClear={data.clearFilters} loading={report.loading}>
+    {data.complete?.query ? <><button type="button" onClick={data.back}>Back to base</button><label>Grain<select value={data.complete.query.grain} onChange={event=>data.refine({...data.complete.query!,grain:event.target.value as 'day'|'minute',rankOffset:0})}><option value="day">Day</option><option value="minute">Minute (up to 24 hours)</option></select></label><label>Current own-key selector<select value={data.complete.query.filters.key?.kind === 'session' ? 'session' : data.complete.query.filters.key?.kind === 'credential' ? 'key:'+data.complete.query.filters.key.id : ''} onChange={event=>{const q=data.complete.query!,filters={...q.filters};delete filters.key;if(event.target.value==='session')filters.key={kind:'session'};else if(event.target.value)filters.key={kind:'credential',id:event.target.value.slice(4)};data.refine({...q,filters,rankOffset:0});}}><option value="">All keys in base</option><option value="session">Dashboard session</option>{data.complete.query.filters.key?.kind==='credential'&&!currentKeys.some(k=>k.credentialId===(data.complete.query!.filters.key as {id:string}).id)?<option value={'key:'+data.complete.query.filters.key.id}>Retained key: {data.complete.query.filters.key.id} (not in current own-key list)</option>:null}{currentKeys.map(key=><option key={key.credentialId} value={'key:'+key.credentialId}>{key.name?'Current name: '+key.name+' — ':''}{key.credentialId}</option>)}</select></label></> : null}
+    </UsageControls>
     <PersonalUsageSummary data={data} keys={keys} />
-    {data.complete?.query ? <div className="personalActions"><button type="button" onClick={data.back}>Back to base</button><label>Grain<select value={data.complete.query.grain} onChange={event=>data.refine({...data.complete.query!,grain:event.target.value as 'day'|'minute',rankOffset:0})}><option value="day">Day</option><option value="minute">Minute (up to 24 hours)</option></select></label><label>Current own-key selector<select value={data.complete.query.filters.key?.kind === 'session' ? 'session' : data.complete.query.filters.key?.kind === 'credential' ? 'key:'+data.complete.query.filters.key.id : ''} onChange={event=>{const q=data.complete.query!,filters={...q.filters};delete filters.key;if(event.target.value==='session')filters.key={kind:'session'};else if(event.target.value)filters.key={kind:'credential',id:event.target.value.slice(4)};data.refine({...q,filters,rankOffset:0});}}><option value="">All keys in base</option><option value="session">Dashboard session</option>{data.complete.query.filters.key?.kind==='credential'&&!currentKeys.some(k=>k.credentialId===(data.complete.query!.filters.key as {id:string}).id)?<option value={'key:'+data.complete.query.filters.key.id}>Retained key: {data.complete.query.filters.key.id} (not in current own-key list)</option>:null}{currentKeys.map(key=><option key={key.credentialId} value={'key:'+key.credentialId}>{key.name?'Current name: '+key.name+' — ':''}{key.credentialId}</option>)}</select></label></div> : null}
     <div className="personalTabList" role="tablist" aria-label="Personal usage views" onKeyDown={moveFocus}>
       {panels.map((name, index) => <button type="button" role="tab" key={name} id={id + '-tab-' + name} aria-controls={id + '-panel-' + name} aria-selected={panel === name} tabIndex={panel === name ? 0 : -1} ref={element => { tabs.current[index] = element; }} onClick={() => setPanel(name)}>
         {name[0].toUpperCase() + name.slice(1)}{name === 'activity' && data.events.error ? ' · unavailable' : ''}
