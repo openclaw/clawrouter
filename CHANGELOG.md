@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Match Fusion edit calibration source views to each executor and record an explicit legacy numbered-source mode for reproducibility.
+
 - Add a bounded edit-interface calibration for Fusion experiments, separating exact edits, rejected edits, and wrong applied changes before repository benchmarks.
 
 - Allow an explicit, recorded output-token budget for local Fusion repository experiments while preserving existing defaults and context admission.

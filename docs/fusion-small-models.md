@@ -1238,14 +1238,23 @@ quality; the larger output allowance enabled evaluation, not better answers.
 `scripts/fusion-edit-calibration.mjs` compares the existing exact search/replace
 and guarded line-range executors on six synthetic TypeScript edits. Each task
 specifies the requested change; this measures edit execution, not diagnosis.
-Both formats receive the same numbered source and instruction. Expected output
-stays in the grader. Exact byte equality preserves unrelated text and formatting.
+Both formats receive the same source bytes and instruction. Search/replace gets
+plain source, as in the repository executor; line-range gets numbered source.
+Expected output stays in the grader. Exact byte equality preserves unrelated
+text and formatting.
 
 Call `runCalibration(invoke, { checkpoint, signal })` with a qualified transport.
 The injected `invoke(request, { signal, seed, caseId, format })` returns the
 `{ result, inputTokens, outputTokens }` shape from `localActionRequest`. The
 caller owns model pinning, transport admission, and checkpoint persistence.
 The module starts no service and selects no provider.
+
+The default `sourcePresentation: 'format-native'` is recorded in `state.settings`.
+Use `runCalibration(invoke, { sourcePresentation: 'numbered' })` to reproduce the
+original presentation, which numbered source for both formats. Direct
+`calibrationRequest` callers can pass the same option as the third argument.
+Compare these presentations as separate protocols; reports from the original
+implementation used numbered source even though they lack this setting.
 
 The fixed protocol allows 12 calls, 1,024 output tokens per call, 60 seconds per
 request and 15 minutes total. It rotates format order across tasks and pairs
@@ -1271,8 +1280,16 @@ context and the fixed 1,024-token output limit. All 12 calls completed normally:
 
 Neither format qualified for confirmation. This is a negative result for this
 model and prompt, not evidence of a general format ranking. Both received
-numbered source; other representations were not tested. Exact-byte mismatches
+numbered source in that run. Exact-byte mismatches
 can include formatting differences and do not by themselves prove semantic
 incorrectness. Content-free receipts cannot diagnose those differences after
 the run. No repository acceptance or Fusion gain follows from this screen.
 API spend was zero; local compute remains a resource cost.
+
+A subsequent paired presentation check used six new, fully specified edits and
+the same local 4B model. Plain search/replace source produced three exact edits,
+two applied differences and one unchanged result. Numbered source produced no
+exact edits: all six rejected searches included line-number prefixes. This
+supports using plain source for this executor, but plain source still failed
+the five-of-six, zero-difference qualification rule. Neither result establishes
+a capable repository editor or a Fusion gain. No production executor changed.
