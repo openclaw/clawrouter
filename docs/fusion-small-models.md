@@ -541,6 +541,15 @@ verify actual model mixing. Trace retention does not accept the candidate or
 resume execution. Failed rows stay failed, unknown charges keep their full
 reservation, and budget/refusal stop behavior is unchanged.
 
+Native OpenAI benchmark calls also save a unique `clientRequestId` before
+sending `X-Client-Request-Id`. Receipts retain `providerRequestId` from
+`x-request-id` when it contains only letters, digits, underscores or hyphens
+and is at most 128 characters. Other values are discarded. The response ID is
+captured before body parsing, including HTTP failures. A transport failure
+retains the client ID and unresolved cost reservation. No other headers or raw
+error bodies are retained, and correlation does not enable retries or settle
+unknown charges. See [OpenAI request debugging](https://developers.openai.com/api/reference/overview#debugging-requests).
+
 Set `FUSION_PAIR_POLICY=matched-handoff` to compare the cheap successor against
 a strong successor using the same handoff point, verification instructions,
 current-source context and shared limits. The cheap-only arm stays unchanged.
