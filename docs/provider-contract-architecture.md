@@ -56,6 +56,16 @@ This is not a proposal to replace tested protocol or accounting code wholesale.
 It moves facts to their owners and puts a compiler between declarations and the
 hot path.
 
+### Auth declaration ownership
+
+`scripts/provider-auth.mjs` compiles auth schemes, OAuth authorization and
+refresh metadata, and grant transport declarations. It checks grant transport
+references and maintenance prerequisites after manifest schema validation. The
+provider compiler retains validation order and uses the same compiled scheme
+identifiers. This build-time module does not resolve credentials, refresh tokens,
+execute transports, or establish account eligibility; those runtime owners stay
+unchanged.
+
 ### Model contract ownership
 
 `shared/provider-model.ts` owns `ProviderModelDefinition` and the router-qualified
