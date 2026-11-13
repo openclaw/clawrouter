@@ -394,6 +394,28 @@ repair. Earlier scores involving those tasks are not reliable comparisons.
 
 ## Native planner/editor comparison
 
+Set `FUSION_PAIR_POLICY=probe-selection` for an experimental executable
+comparison. Two independent one-call cheap drafts start from the same source.
+If both submit, pass visible tests, and differ, one cheap call writes a behavioral
+probe from the requirements, original source, declared context and bounded
+candidate previews. The same probe runs on three fresh sandboxes. Selection
+requires an assertion failure on the original, exactly one passing candidate,
+an assertion failure on the other, and unchanged editable source after execution.
+Import/runtime failures, ambiguous outcomes, invalid probes, duplicate drafts
+and incomplete drafts abstain. Strong repair then starts from the original
+source with the remaining allowance.
+
+This policy requires at least four shared calls and retains both fixed-model
+controls. All draft, author and fallback calls share the existing time and spend
+caps; uncertain charges and provider refusals stop the run. Receipts contain
+probe digests, snapshot outcomes and candidate digests, not generated source or
+probe text. Final acceptance remains independent. A generated probe can still
+test the wrong property or reject a correct repair; these guards do not certify
+test quality. No quality, cost or latency improvement is established. Before a
+gain claim, compare against equal-call sampling/retry and measure generated
+probes against accepted and rejected repairs without feeding grading results
+back into inference.
+
 Use the existing repository agent with two fixed-model controls and one
 architect policy. The architect spends one call on a strong-model source plan;
 the cheap model executes the remaining actions. The plan consumes one of the

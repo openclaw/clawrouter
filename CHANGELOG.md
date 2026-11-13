@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an opt-in Fusion benchmark that compares two cheap repair drafts with one executable probe, abstaining on ambiguous evidence before strong fallback.
+
 - Preserve bounded, content-free Fusion agent traces when benchmark execution fails, without changing failure scores or budget stops.
 
 - Add an opt-in Fusion benchmark policy that hands a submitted candidate to a cheap verifier within the existing shared limits.

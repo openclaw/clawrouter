@@ -43,6 +43,31 @@ test('architect spends one of the shared calls on the strong planner', () => {
   for (const count of [0, 4, 1.5, '2']) assert.throws(() => validatePair(config, 1, count), /campaign_budget/);
 });
 
+test('probe selection meters cheap proposals and author before a strong fallback', async () => {
+  const { root, options } = await fixture();
+  try {
+    await assert.rejects(runPairBenchmark({ ...options, policy: 'probe-selection' }), /four_calls/);
+    const state = await runPairBenchmark({ ...options, policy: 'probe-selection',
+      config: { ...config, maxCalls: 4 }, grade, fetcher: success,
+      agent: async (_task, _image, _strategy, id, _settings, invoke) => {
+        await invoke(id, roles.strong, body, signal); return repaired();
+      },
+      probeAgent: async (_task, _image, id, settings, invoke, dependencies) => {
+        assert.equal(settings.maxTurns, 4);
+        assert.equal(typeof dependencies.agent, 'function');
+        for (const role of [roles.cheap, roles.cheap, roles.cheap, roles.strong]) await invoke(id, role, body, signal);
+        return { ...repaired(), probeSelection: { outcome: 'ambiguous', selectedCandidate: null } };
+      },
+    });
+    assert.deepEqual(state.strategies, ['cheap', 'strong', 'probe-selection']);
+    assert.deepEqual(state.calls.map(call => call.model), [config.cheap, config.strong,
+      config.cheap, config.cheap, config.cheap, config.strong]);
+    assert.equal(state.records[2].calls, 4);
+    assert.equal(state.records[2].probeSelection.outcome, 'ambiguous');
+    assert.ok(state.records.every(row => row.score === 1));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('fixed controls receive identical supplied context without invoking or budgeting a candidate', async () => {
   const { root, options } = await fixture();
   try {
