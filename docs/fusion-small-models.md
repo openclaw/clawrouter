@@ -1231,3 +1231,48 @@ the comparison. Across all three screens, 15 local calls used 42,188 input and
 not compared because the recorded worker duration excludes planner execution.
 These exposed development cases do not establish generalization or production
 quality; the larger output allowance enabled evaluation, not better answers.
+
+
+### Edit-interface calibration
+
+`scripts/fusion-edit-calibration.mjs` compares the existing exact search/replace
+and guarded line-range executors on six synthetic TypeScript edits. Each task
+specifies the requested change; this measures edit execution, not diagnosis.
+Both formats receive the same numbered source and instruction. Expected output
+stays in the grader. Exact byte equality preserves unrelated text and formatting.
+
+Call `runCalibration(invoke, { checkpoint, signal })` with a qualified transport.
+The injected `invoke(request, { signal, seed, caseId, format })` returns the
+`{ result, inputTokens, outputTokens }` shape from `localActionRequest`. The
+caller owns model pinning, transport admission, and checkpoint persistence.
+The module starts no service and selects no provider.
+
+The fixed protocol allows 12 calls, 1,024 output tokens per call, 60 seconds per
+request and 15 minutes total. It rotates format order across tasks and pairs
+seeds. Truncation, transport failure and incomplete usage stop the run without
+retry. Records contain digests and outcome categories, not generated source.
+Malformed output, invalid anchors, invalid ranges, unchanged output, and wrong
+applied edits remain distinct from exact edits. Range deletion must include
+sufficient surrounding lines to remove a newline; an empty replacement leaves
+an empty line under the existing executor contract.
+
+At least five exact edits out of six, with no wrong applied edit, qualifies an
+interface only for a separate confirmation set. It does not establish repository
+repair quality or a Fusion gain. Compare actual acceptance on disjoint repository
+tasks before changing production behavior.
+
+The first local calibration used cached Qwen3-4B, greedy decoding, a 32,768-token
+context and the fixed 1,024-token output limit. All 12 calls completed normally:
+
+| Format | Exact edits | Rejected anchors | Applied but different from reference | Input / output tokens |
+| --- | ---: | ---: | ---: | ---: |
+| Search/replace | 0/6 | 5 | 1 | 2,200 / 702 |
+| Line range | 1/6 | 0 | 5 | 2,302 / 291 |
+
+Neither format qualified for confirmation. This is a negative result for this
+model and prompt, not evidence of a general format ranking. Both received
+numbered source; other representations were not tested. Exact-byte mismatches
+can include formatting differences and do not by themselves prove semantic
+incorrectness. Content-free receipts cannot diagnose those differences after
+the run. No repository acceptance or Fusion gain follows from this screen.
+API spend was zero; local compute remains a resource cost.

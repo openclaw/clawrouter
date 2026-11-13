@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a bounded edit-interface calibration for Fusion experiments, separating exact edits, rejected edits, and wrong applied changes before repository benchmarks.
+
 - Allow an explicit, recorded output-token budget for local Fusion repository experiments while preserving existing defaults and context admission.
 
 - Retain Fusion adviser response cleanup through cancellation settlement without delaying timeout or error fallback.
