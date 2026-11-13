@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an opt-in Fusion benchmark handoff that transfers bounded observed test and probe results separately from model-written notes, with matched strong-successor controls.
+
 - Add qualified Fusion delivery workloads covering alternate preparation settlement and bounded full-size native OpenRouter music responses.
 
 - Bound Fusion draft test validation and terminate timed-out test process groups inside their sandbox so stalled candidates leave room for fallback.
