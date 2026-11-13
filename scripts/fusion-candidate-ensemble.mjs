@@ -1,4 +1,4 @@
-import { sandbox, validateEdits, writeFiles, probe, hash } from './fusion-workloads.mjs';
+import { sandbox, validateEdits, writeFiles, probe, hash, command } from './fusion-workloads.mjs';
 
 // Candidate source stays in memory; every phase charges the same trial ledger.
 export async function runCandidateEnsemble(task, image, trialId, config, invoke, engine, runAgent) {
@@ -30,22 +30,33 @@ export async function runCandidateEnsemble(task, image, trialId, config, invoke,
 }
 
 // Each probe starts from a fresh candidate snapshot, never the final agent's edits.
-export async function compareCandidates(task, image, candidates, script, timeout) {
-  const started = performance.now(), results = [];
+export async function compareCandidates(task, image, candidates, script, timeout,
+  { run = command, now = () => performance.now() } = {}) {
+  if (!Number.isSafeInteger(timeout) || timeout < 1) throw new Error('command_timeout');
+  const started = now(), results = [];
+  const cleanupReserve = Math.min(2000, Math.floor(timeout / 4));
+  const remaining = () => {
+    const ms = timeout - Math.ceil(now() - started);
+    if (ms <= 0) throw new Error('command_timeout');
+    return ms;
+  };
+  const boundedRun = (program, args, options = {}) => {
+    // Always attempt owned-container cleanup, even after the budget expires.
+    const cleanup = args[0] === 'rm';
+    const budget = cleanup ? Math.max(1, timeout - Math.ceil(now() - started)) : remaining() - cleanupReserve;
+    if (budget <= 0) throw new Error('command_timeout');
+    return run(program, args, { ...options, timeout: Math.min(options.timeout ?? budget, budget) });
+  };
   for (const [index, files] of candidates.entries()) {
     validateEdits(task, files);
-    const remaining = () => {
-      const ms = timeout - Math.ceil(performance.now() - started);
-      if (ms <= 0) throw new Error('command_timeout');
-      return ms;
-    };
     remaining();
-    const box = await sandbox(image);
+    const box = await sandbox(image, boundedRun);
     try {
       await writeFiles(box, files, remaining());
       const result = await probe(box, script, remaining());
       results.push({ candidate: index + 1, passed: result.passed, feedback: result.feedback });
     } finally { await box.close(); }
+    remaining();
   }
   return results;
 }
