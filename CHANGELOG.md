@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Allow an explicit, recorded output-token budget for local Fusion repository experiments while preserving existing defaults and context admission.
+
 - Retain Fusion adviser response cleanup through cancellation settlement without delaying timeout or error fallback.
 
 - Add opt-in source paging to interactive Fusion benchmarks so large files remain navigable without sending every line in initial and handoff context.

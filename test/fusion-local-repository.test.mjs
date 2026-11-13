@@ -44,6 +44,40 @@ test('grounded sampling is explicit and does not change legacy requests', async 
   assert.equal(options.seed, 4); assert.equal(options.num_predict, 1536);
 });
 
+test('an explicit output allowance reaches generation without weakening response limits', async () => {
+  const options = { endpoint: 'http://127.0.0.1:11435', model: pins[0].model, pin: pins[0],
+    body: { ...body, max_tokens: 4096 }, signal: new AbortController().signal, seed: 1 };
+  let calls = 0;
+  const fetcher = async (_url, request) => {
+    calls++;
+    assert.equal(JSON.parse(request.body).options.num_predict, 4096);
+    assert.equal(JSON.parse(request.body).options.num_ctx, 32768);
+    return response(pins[0].model, 'complete', { eval_count: 2000 });
+  };
+  await assert.rejects(localActionRequest({ ...options, fetcher }), /invalid_local_action_request/);
+  assert.equal(calls, 0);
+  const result = await localActionRequest({ ...options, maxOutputTokens: 4096, fetcher });
+  assert.equal(result.outputTokens, 2000);
+  await assert.rejects(localActionRequest({ ...options, maxOutputTokens: 4096,
+    fetcher: async () => response(pins[0].model, 'oversized', { eval_count: 4097 }) }), /invalid_local_response/);
+});
+
+test('invalid output allowances and oversized requests fail before dispatch', async () => {
+  let dispatches = 0, calls = 0;
+  const options = { endpoint: 'http://127.0.0.1:11435', model: pins[0].model, pin: pins[0], body,
+    signal: new AbortController().signal, seed: 1, onDispatch: async () => { dispatches++; },
+    fetcher: async () => { calls++; return response(pins[0].model); } };
+  for (const maxOutputTokens of [0, -1, 1.5, NaN, Infinity, 8193, '4096', null]) {
+    await assert.rejects(localActionRequest({ ...options, maxOutputTokens }), /invalid_local_output_tokens/);
+  }
+  await assert.rejects(localActionRequest({ ...options, maxOutputTokens: 4096,
+    body: { ...body, max_tokens: 4097 } }), /invalid_local_action_request/);
+  await assert.rejects(localActionRequest({ ...options, maxOutputTokens: 4096,
+    body: { ...body, max_tokens: 4096, messages: [{ role: 'user', content: 'x'.repeat(27000) }] } }), /provider_context_limit/);
+  assert.equal(dispatches, 0);
+  assert.equal(calls, 0);
+});
+
 test('context overflow is rejected before fetch and identity/usage errors stop the route', async () => {
   const options = { endpoint: 'http://127.0.0.1:11435', model: pins[0].model, pin: pins[0], body, signal: new AbortController().signal, seed: 1 };
   let calls = 0;
@@ -92,6 +126,37 @@ async function fixture() {
   return { root, options: { repo: root, qualificationPath, out: join(root, 'result'), sourceSha: 'e'.repeat(40),
     models: pins.map(row => row.model), inspectImage: async () => {}, preflight: async () => ({ pins, verifyPins: async () => {} }) } };
 }
+
+test('campaigns record and enforce an explicit output allowance', async () => {
+  const { root, options } = await fixture();
+  try {
+    const result = await runLocalRepository({ ...options, outputTokens: 4096,
+      fetcher: async (_url, request) => {
+        const sent = JSON.parse(request.body);
+        assert.equal(sent.options.num_predict, 4096);
+        return response(sent.model, 'complete', { eval_count: 2000 });
+      },
+      agent: async (_task, _image, _strategy, id, config, invoke) => {
+        assert.equal(config.outputTokens, 4096);
+        await invoke(id, roles.strong, { ...body, max_tokens: config.outputTokens }, new AbortController().signal);
+        return { files: [], outcome: 'submitted' };
+      }, grade: async () => ({ valid: true, passed: true, tests: 3, skipped: 0 }) });
+    assert.equal(result.settings.outputTokens, 4096);
+    assert.ok(result.calls.every(call => call.outputTokens === 2000));
+    assert.equal(result.summary.reduce((sum, row) => sum + row.outputTokens, 0), 6000);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('invalid campaign output allowances fail before preflight or output creation', async () => {
+  const { root, options } = await fixture();
+  let preflights = 0;
+  try {
+    await assert.rejects(runLocalRepository({ ...options, outputTokens: 8193,
+      preflight: async () => { preflights++; } }), /invalid_local_output_tokens/);
+    assert.equal(preflights, 0);
+    await assert.rejects(readFile(join(options.out, 'local-repository.json')), { code: 'ENOENT' });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 test('complete campaign attributes real models and retains no generated source or messages', async () => {
   const { root, options } = await fixture();

@@ -272,6 +272,15 @@ The local transport validates both model identities before execution and checks
 their digests again afterward. It never invokes a paid provider. Role labels
 inside the reused harness map explicitly to these local model pins.
 
+Set `FUSION_LOCAL_OUTPUT_TOKENS` to an integer from 1 through 8,192 to change the
+per-call output allowance. The default remains 1,536. The campaign passes this
+allowance to its agents and transport and records it in `settings.outputTokens`.
+The 32,768-token context limit stays fixed; admission reserves the requested output
+before dispatch. Compare runs with different allowances as separate protocols.
+Programmatic callers use `runLocalRepository({ outputTokens })`; direct transport
+callers set `localActionRequest({ maxOutputTokens })` and request no more than that
+allowance in `body.max_tokens`.
+
 A conservative input-byte bound rejects oversized contexts before dispatch.
 Truncation, context limits and trial deadlines produce unsuccessful trial rows;
 transport, identity, usage and infrastructure failures stop the campaign. There
