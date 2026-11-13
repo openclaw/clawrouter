@@ -238,6 +238,10 @@ jobs:
           test -n "$baseline"
           git fetch --no-tags --depth=1 origin "$baseline"
           git cat-file -e "$baseline^{commit}"
+      - name: Fetch pinned inventory upgrade baseline
+        run: |
+          git -c maintenance.auto=false -c gc.auto=0 fetch --no-tags --depth=1 origin df8c3800fbb413fbe7db6833387a1e885d1379cb
+          git cat-file -e df8c3800fbb413fbe7db6833387a1e885d1379cb^{commit}
       - run: pnpm worker:check
       - run: pnpm worker:e2e
       - run: pnpm provider:smoke-plan
