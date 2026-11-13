@@ -1,11 +1,11 @@
-import { readFile, mkdir, writeFile, rename } from 'node:fs/promises';
+import { readFile, mkdir, writeFile, rename, rm, open, link } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runAgent, SpendLedger, toolErrorCode, finishReason } from './fusion-agent-benchmark.mjs';
 import { nativeModels, nativePins, nativeRequest, nativeResult, nativeErrorMetadata, requireCompleteResponse, responseDisposition } from './fusion-native-provider.mjs';
 import { models as roles, priceBound } from './fusion-benchmark-accounting.mjs';
 import { validateLocalQualification } from './fusion-local-repository.mjs';
-import { loadTasks, verify, hash, command, withReproducer } from './fusion-workloads.mjs';
+import { loadTasks, verify, hash, command, withReproducer, validateEdits } from './fusion-workloads.mjs';
 import { runContractAgent, runSingleDraft, runRefinedDraft } from './fusion-contract-agent.mjs';
 
 export const pairDefaults = Object.freeze({ cheap: 'openai/gpt-6-luna', strong: 'openai/gpt-6.1-sol',
@@ -52,8 +52,26 @@ export function pairExecution(strategy, config) {
       outputTokens: config.outputTokens, deadlineMs: config.deadlineMs } };
 }
 
+async function exportAcceptedRepair(out, task, files, sourceSha, qualificationDigest) {
+  const contents = validateEdits(task, files).map(({ path, content }) => ({ path, content }));
+  if (!contents.length || contents.length > 32) throw new Error('repair_export_failed');
+  const payload = JSON.stringify({ version: 1, kind: 'accepted-repository-repair', taskId: task.id,
+    base: task.base, sourceSha, taskDigest: hash(JSON.stringify(task)), qualificationDigest,
+    filesDigest: hash(JSON.stringify(contents)), files: contents }, null, 2) + '\n';
+  const bytes = Buffer.byteLength(payload);
+  if (bytes > 4 * 1024 * 1024) throw new Error('repair_export_failed');
+  const file = `${task.id}.repair.json`, temporary = resolve(out, file + '.tmp');
+  const handle = await open(temporary, 'wx', 0o600);
+  try {
+    await handle.writeFile(payload);
+    await handle.close();
+    await link(temporary, resolve(out, file));
+  } finally { await handle.close(); await rm(temporary, { force: true }); }
+  return { file, sha256: hash(payload), bytes };
+}
+
 export async function runPairBenchmark({ repo, qualificationPath, taskManifest, out, sourceSha, config,
-  cheapReasoning = 'none', cheapMaxCalls = 10, executor = 'interactive', preloadSource = false, policy = 'architect', includeControls = true, controlsOnly = false, env = process.env, fetcher = fetch, agent, contractAgent = runContractAgent, grade = verify, preflight = nativePins }) {
+  cheapReasoning = 'none', cheapMaxCalls = 10, executor = 'interactive', preloadSource = false, policy = 'architect', includeControls = true, controlsOnly = false, exportRepairs = false, env = process.env, fetcher = fetch, agent, contractAgent = runContractAgent, grade = verify, preflight = nativePins }) {
   if (!/^[a-f0-9]{40}$/.test(sourceSha ?? '')) throw new Error('exact_source_required');
   if (!['architect', 'edit-handoff', 'matched-handoff', 'scope', ...contractPolicies].includes(policy)) throw new Error('invalid_pair_policy');
   if (!['interactive', 'single-draft'].includes(executor) || (executor === 'single-draft' && !providedPolicies.includes(policy))) throw new Error('invalid_pair_executor');
@@ -61,6 +79,9 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
   if (typeof includeControls !== 'boolean' || typeof controlsOnly !== 'boolean'
     || (controlsOnly && !includeControls)
     || (!includeControls && policy !== 'edit-handoff' && !contractPolicies.includes(policy))) throw new Error('invalid_control_selection');
+  if (typeof exportRepairs !== 'boolean' || (exportRepairs && (includeControls || policy !== 'edit-handoff'))) {
+    throw new Error('invalid_repair_export');
+  }
   if (policy !== 'architect') preloadSource = true;
   if (!controlsOnly && contractPolicies.includes(policy) && config.maxCalls < 4) throw new Error('contract_requires_four_calls');
   const candidateStrategy = policy === 'matched-handoff' ? 'edit-handoff' : policy;
@@ -76,7 +97,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
   const pins = await preflight(env, fetcher, [config.cheap, config.strong]);
   await mkdir(out, { mode: 0o700 });
   const state = { version: 1, kind: controlsOnly ? 'native-controls-repository' : includeControls ? 'native-pair-repository' : 'native-policy-repository', sourceSha, config, includeControls, controlsOnly,
-    cheapReasoning, cheapMaxCalls, executor, preloadSource, datasetDigest: hash(JSON.stringify(tasks)), qualificationDigest: hash(rawQualification), receipts, pins,
+    cheapReasoning, cheapMaxCalls, executor, preloadSource, exportRepairs, datasetDigest: hash(JSON.stringify(tasks)), qualificationDigest: hash(rawQualification), receipts, pins,
     strategies: trialStrategies, policy, complete: false, records: [], calls: [], spentOrReservedMicros: config.priorCostMicros,
     limitations: ['One trial per task; report the declared task split and do not infer general superiority.',
       ...(!includeControls ? ['No fixed-model controls ran; this report cannot establish comparative quality, cost or latency.'] : []),
@@ -159,7 +180,12 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
           const { files, ...trace } = result;
           Object.assign(row, { ...trace, verdict, score: Number(verdict.passed && verdict.tests === receipt.oracleTests
             && verdict.skipped === receipt.oracleSkipped && result.publicPassed), status: 'complete' });
+          if (exportRepairs && row.score === 1) {
+            try { row.repairExport = await exportAcceptedRepair(out, task, files, sourceSha, state.qualificationDigest); }
+            catch { row.repairExportFailed = true; throw new Error('repair_export_failed'); }
+          }
         } catch (error) {
+          if (error.message === 'repair_export_failed') throw error;
           Object.assign(row, { status: 'error', errorCode: toolErrorCode(error) });
           if (ledger.blocked || error.message === 'provider_refused' || error.message === 'provider_safety_notice') throw error;
         } finally {
@@ -175,7 +201,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
     await save();
     return state;
   } catch (error) {
-    state.failure = ledger.blocked ? 'unknown_cost' : toolErrorCode(error);
+    state.failure = ledger.blocked ? 'unknown_cost' : error.message === 'repair_export_failed' ? 'repair_export_failed' : toolErrorCode(error);
     await save();
     throw new Error('pair_benchmark_incomplete');
   }
@@ -186,7 +212,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   if (!out) throw new Error('qualification, task manifest, explicit config and fresh output directory required');
   const config = JSON.parse(await readFile(configPath, 'utf8'));
   const sourceSha = (await command('git', ['rev-parse', 'HEAD'])).stdout.toString().trim();
-  runPairBenchmark({ repo: process.cwd(), qualificationPath, taskManifest, config, out, sourceSha, policy: process.env.FUSION_PAIR_POLICY ?? 'architect', cheapReasoning: process.env.FUSION_CHEAP_REASONING ?? 'none', cheapMaxCalls: Number(process.env.FUSION_CHEAP_MAX_CALLS ?? 10), executor: process.env.FUSION_PAIR_EXECUTOR ?? 'interactive', preloadSource: process.env.FUSION_PRELOAD_SOURCE === '1', includeControls: process.env.FUSION_PAIR_CONTROLS !== '0', controlsOnly: process.env.FUSION_PAIR_CONTROLS_ONLY === '1' }).catch(() => {
+  runPairBenchmark({ repo: process.cwd(), qualificationPath, taskManifest, config, out, sourceSha, policy: process.env.FUSION_PAIR_POLICY ?? 'architect', cheapReasoning: process.env.FUSION_CHEAP_REASONING ?? 'none', cheapMaxCalls: Number(process.env.FUSION_CHEAP_MAX_CALLS ?? 10), executor: process.env.FUSION_PAIR_EXECUTOR ?? 'interactive', preloadSource: process.env.FUSION_PRELOAD_SOURCE === '1', includeControls: process.env.FUSION_PAIR_CONTROLS !== '0', controlsOnly: process.env.FUSION_PAIR_CONTROLS_ONLY === '1', exportRepairs: process.env.FUSION_EXPORT_REPAIRS === '1' }).catch(() => {
     console.error('Pair benchmark incomplete; inspect the content-free checkpoint.'); process.exitCode = 1;
   });
 }

@@ -450,6 +450,22 @@ repair with independent acceptance. Its `pair.json` has kind
 comparison. Keep controls enabled when measuring a gain. This is a sandboxed
 repository experiment, not a policy for the public `clawrouter/fusion` chat model.
 
+Add `FUSION_EXPORT_REPAIRS=1` to that handoff-only command to retain each accepted
+repair as `<task-id>.repair.json` in the private output directory. Export is off
+by default. These files contain generated source: keep them private and review
+them before applying changes. Nothing is applied to the caller's checkout.
+Each bundle records the task's base commit, executor source commit, task and
+qualification digests, generated files and their digest. The content-free run
+receipt records the bundle filename, byte count and SHA-256 digest.
+
+Export requires passing visible and independent acceptance checks. Failed
+repairs are not exported. Bundles contain at most 32 allowed editable files,
+256 KiB per file and 4 MiB total. On POSIX, files use mode `0600` in the run
+directory created with mode `0700`. An existing export is never replaced. A write failure
+stops the run as `repair_export_failed`, while retaining its acceptance result
+and accounting. This option does not turn the historical repair fixture into
+a general-purpose coding agent or establish additional quality evidence.
+
 Run from a committed task checkout with qualified workload receipts and an
 explicit JSON configuration. Only credentials for the selected models are
 required. Supply credentials through the existing secret injector; do not put

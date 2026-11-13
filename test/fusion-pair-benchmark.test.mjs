@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, rm, readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { hash } from '../scripts/fusion-workloads.mjs';
@@ -155,14 +155,114 @@ for (const accepted of [true, false]) test(`handoff-only runs one budgeted polic
     assert.deepEqual(JSON.parse(saved), state);
     assert(!saved.includes('private prompt sentinel'));
     assert(!saved.includes('private generated source sentinel'));
+    assert.deepEqual((await readdir(options.out)).sort(), ['pair.json']);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test('repair export requires explicit handoff-only execution before provider access', async () => {
+  for (const exportRepairs of ['true', null, 1]) {
+    await assert.rejects(runPairBenchmark({ sourceSha: 'e'.repeat(40), exportRepairs }), /invalid_repair_export/);
+  }
+  for (const settings of [{ policy: 'edit-handoff' }, { policy: 'contract', includeControls: false }]) {
+    await assert.rejects(runPairBenchmark({ sourceSha: 'e'.repeat(40), ...settings, exportRepairs: true }), /invalid_repair_export/);
+  }
+});
+
+for (const accepted of [true, false]) test(`repair export retains source only when acceptance=${accepted}`, async () => {
+  const { root, options } = await fixture();
+  try {
+    const state = await runPairBenchmark({ ...options, policy: 'edit-handoff', includeControls: false,
+      exportRepairs: true, fetcher: success,
+      agent: async () => repaired(), grade: async () => ({ passed: accepted, tests: 3, skipped: 0 }),
+    });
+    assert.equal(state.exportRepairs, true);
+    assert.equal(state.records[0].score, Number(accepted));
+    assert(!JSON.stringify(state).includes('private generated source sentinel'));
+    if (!accepted) {
+      assert.deepEqual(await readdir(options.out), ['pair.json']);
+      assert.equal(state.records[0].repairExport, undefined);
+      return;
+    }
+    const receipt = state.records[0].repairExport;
+    assert.equal(receipt.file, 'pair-example.repair.json');
+    const path = join(options.out, receipt.file), raw = await readFile(path, 'utf8'), bundle = JSON.parse(raw);
+    assert.equal(receipt.sha256, hash(raw));
+    assert.equal(receipt.bytes, Buffer.byteLength(raw));
+    assert.deepEqual(bundle, { version: 1, kind: 'accepted-repository-repair', taskId: 'pair-example',
+      base: 'a'.repeat(40), sourceSha: options.sourceSha,
+      taskDigest: state.receipts[0].taskDigest, qualificationDigest: state.qualificationDigest,
+      filesDigest: hash(JSON.stringify(repaired().files)), files: repaired().files });
+    assert.deepEqual((await readdir(options.out)).sort(), ['pair-example.repair.json', 'pair.json']);
+    if (process.platform !== 'win32') {
+      assert.equal((await stat(path)).mode & 0o777, 0o600);
+      assert.equal((await stat(options.out)).mode & 0o777, 0o700);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('repair export failure stops the run without overwriting an existing file or hiding acceptance', async () => {
+  const { root, options } = await fixture();
+  try {
+    await assert.rejects(runPairBenchmark({ ...options, policy: 'edit-handoff', includeControls: false,
+      exportRepairs: true, fetcher: success, grade,
+      agent: async () => {
+        await writeFile(join(options.out, 'pair-example.repair.json'), 'existing file');
+        return repaired();
+      },
+    }), /pair_benchmark_incomplete/);
+    const saved = JSON.parse(await readFile(join(options.out, 'pair.json')));
+    assert.equal(saved.complete, false);
+    assert.equal(saved.failure, 'repair_export_failed');
+    assert.equal(saved.records[0].score, 1);
+    assert.equal(saved.records[0].status, 'complete');
+    assert.equal(saved.records[0].repairExportFailed, true);
+    assert.equal(saved.records[0].repairExport, undefined);
+    assert.equal(await readFile(join(options.out, 'pair-example.repair.json'), 'utf8'), 'existing file');
+    assert.deepEqual((await readdir(options.out)).sort(), ['pair-example.repair.json', 'pair.json']);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+for (const [name, files] of [['empty', []], ['unsafe', [{ path: '../escape.ts', content: 'bad path' }]],
+  ['oversized', [{ path: 'worker/example.ts', content: 'x'.repeat(256 * 1024 + 1) }]]]) {
+  test(`repair export rejects ${name} generated files`, async () => {
+    const { root, options } = await fixture();
+    try {
+      await assert.rejects(runPairBenchmark({ ...options, policy: 'edit-handoff', includeControls: false,
+        exportRepairs: true, fetcher: success, grade, agent: async () => ({ ...repaired(), files }),
+      }), /pair_benchmark_incomplete/);
+      const saved = JSON.parse(await readFile(join(options.out, 'pair.json')));
+      assert.equal(saved.failure, 'repair_export_failed');
+      assert.deepEqual(await readdir(options.out), ['pair.json']);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+}
+
+for (const [name, count, size] of [['file count', 33, 1], ['bundle bytes', 32, 140 * 1024]]) {
+  test(`repair export bounds ${name} across individually allowed files`, async () => {
+    const { root, options } = await fixture();
+    try {
+      const manifest = JSON.parse(await readFile(options.taskManifest));
+      const files = Array.from({ length: count }, (_, i) => ({ path: `worker/file-${i}.ts`, content: 'x'.repeat(size) }));
+      manifest.tasks[0].editPaths = files.map(file => file.path);
+      await writeFile(options.taskManifest, JSON.stringify(manifest));
+      const qualification = JSON.parse(await readFile(options.qualificationPath));
+      qualification.receipts[0].taskDigest = hash(JSON.stringify(manifest.tasks[0]));
+      await writeFile(options.qualificationPath, JSON.stringify(qualification));
+      await assert.rejects(runPairBenchmark({ ...options, policy: 'edit-handoff', includeControls: false,
+        exportRepairs: true, fetcher: success, grade, agent: async () => ({ ...repaired(), files }),
+      }), /pair_benchmark_incomplete/);
+      const saved = JSON.parse(await readFile(join(options.out, 'pair.json')));
+      assert.equal(saved.failure, 'repair_export_failed');
+      assert.deepEqual(await readdir(options.out), ['pair.json']);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+}
 
 test('handoff-only keeps an unknown charge reserved and stops before its successor', async () => {
   const { root, options } = await fixture();
   try {
     let dispatches = 0;
-    await assert.rejects(runPairBenchmark({ ...options, policy: 'edit-handoff', includeControls: false,
+    await assert.rejects(runPairBenchmark({ ...options, policy: 'edit-handoff', includeControls: false, exportRepairs: true,
       fetcher: async (url, request) => {
         if (url.includes('/v1/models/')) return success(url, request);
         dispatches++;
@@ -181,6 +281,7 @@ test('handoff-only keeps an unknown charge reserved and stops before its success
     assert.equal(saved.calls[0].costMicros, null);
     assert(saved.calls[0].reservationMicros > 0);
     assert.equal(saved.spentOrReservedMicros, config.priorCostMicros + saved.calls[0].reservationMicros);
+    assert.deepEqual(await readdir(options.out), ['pair.json']);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
