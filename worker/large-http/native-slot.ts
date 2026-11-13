@@ -3,10 +3,10 @@ import {attempt} from './pool-state.ts';
 import {bounded} from './capacity.ts';
 export type NativePhase='idle'|'starting'|'ready'|'failed'|'destroying'|'destroyed'|'stopped'|'blocked';
 export interface NativeJournal {
- schema:1;generation:number;phase:NativePhase;fingerprint:string;token:string;
+ schema:1;generation:number;phase:NativePhase;fingerprint:string;runtimeSha?:string;token:string;
  boot:string;until:number;ids:string[];reason:string;
 }
-export interface SlotConfig {fingerprint:string;enabled:boolean;deadline:number}
+export interface SlotConfig {fingerprint:string;runtimeSha?:string;enabled:boolean;deadline:number}
 export interface NativePorts {
  absent():Promise<boolean>;
  start(generation:number,token:string):void;
@@ -18,7 +18,7 @@ export interface NativePorts {
 const digest=/^[a-f0-9]{64}$/,uuid=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const phases:NativePhase[]=['idle','starting','ready','failed','destroying','destroyed','stopped','blocked'];
 export function validateNativeJournal(s:NativeJournal):void {
- if(!s||s.schema!==1||!Number.isSafeInteger(s.generation)||s.generation<0||!phases.includes(s.phase)||!digest.test(s.fingerprint)||!digest.test(s.token)||
+ if(!s||s.schema!==1||!Number.isSafeInteger(s.generation)||s.generation<0||!phases.includes(s.phase)||!digest.test(s.fingerprint)||s.runtimeSha!==undefined&&!digest.test(s.runtimeSha)||!digest.test(s.token)||
  !Number.isSafeInteger(s.until)||s.until<0||!(s.boot===''||uuid.test(s.boot))||s.phase==='ready'&&!uuid.test(s.boot)||
  typeof s.reason!=='string'||!/^none$|^reconstructed$|^start_or_keepalive$|^readiness(?:_(?:health_deadline|effect_deadline|boot_changed|boot_invalid|runtime_identity|native_identity|native_image|keepalive_rejected|startup_expired))?$|^native_exit(?:_(?:engine|timeout|resource|start|unknown))?$|^destroy_unknown$/.test(s.reason)||
  !Array.isArray(s.ids)||s.ids.length>64||new Set(s.ids).size!==s.ids.length||s.ids.some(x=>!attempt.test(x)))throw Error('slot_journal_invalid');
@@ -33,7 +33,7 @@ export class NativeSlot {
  private store:AtomicStore<NativeJournal>;private native:NativePorts;private config:()=>SlotConfig;private clock:()=>number;
  constructor(store:AtomicStore<NativeJournal>,native:NativePorts,config:()=>SlotConfig,clock=Date.now){this.store=store;this.native=native;this.config=config;this.clock=clock;}
  private async update<T>(fn:(s:NativeJournal)=>T):Promise<T>{
-  const c=this.config();if(!digest.test(c.fingerprint)||!Number.isSafeInteger(c.deadline))throw Error('slot_config_invalid');
+  const c=this.config();if(!digest.test(c.fingerprint)||c.runtimeSha!==undefined&&!digest.test(c.runtimeSha)||!Number.isSafeInteger(c.deadline))throw Error('slot_config_invalid');
   const operation=this.tail.then(()=>this.store.update(s=>{
    if(s)validateNativeJournal(s);
    s??={schema:1,generation:0,phase:'idle',fingerprint:c.fingerprint,token:'0'.repeat(64),boot:'',until:0,ids:[],reason:'none'};
@@ -65,7 +65,9 @@ export class NativeSlot {
   const start=await this.update(s=>{
    if(!c.enabled||now>=c.deadline||!Number.isSafeInteger(generation)||generation<1)return null;
    if(generation!==s.generation+1||!['idle','stopped'].includes(s.phase))return null;
-   Object.assign(s,{generation,phase:'starting',fingerprint:c.fingerprint,token:crypto.randomUUID().replaceAll('-','')+crypto.randomUUID().replaceAll('-',''),boot:'',until:Math.min(c.deadline,now+30000),ids:[],reason:'none'});
+   // Bind the digest to this start intent, never to a later worker's config.
+   // Old journals without it remain unqualified until an acknowledged rotation.
+   Object.assign(s,{generation,phase:'starting',fingerprint:c.fingerprint,runtimeSha:c.runtimeSha,token:crypto.randomUUID().replaceAll('-','')+crypto.randomUUID().replaceAll('-',''),boot:'',until:Math.min(c.deadline,now+30000),ids:[],reason:'none'});
    return s.token;
   });
   if(start!==null){

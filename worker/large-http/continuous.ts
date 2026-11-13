@@ -6,7 +6,14 @@ export interface ContinuousConfig extends EpochConfig {capacity:number;tenantLim
 type Phase='idle'|'starting'|'ready'|'draining'|'stopping'|'blocked';
 interface Member {generation:number;phase:Phase;fingerprint:string;until:number;drainUntil:number;nextAt:number;windowAt:number;starts:number;ids:string[]}
 interface Observation {kind:'admitted'|'claimed'|'dispatch'|'released'|'quarantined'|'retired'|'refused';at:number;id:string;tenant:string;slot:number|null;generation:number|null;holdMs:number|null;status:number}
-export interface ContinuousState {schema:2;generation:0;phase:'serving'|'draining'|'closed';accepting:boolean;observations:Observation[];pool:PoolState;slots:Member[]}
+export interface ContinuousState {schema:2;generation:0;phase:'serving'|'draining'|'closed';accepting:boolean;control?:{revision:number};observations:Observation[];pool:PoolState;slots:Member[]}
+export interface AdmissionReceipt {status:200;operationId:string;expectedRevision:number;revision:number;accepting:boolean}
+// Receipts live in separate durable keys, not the bounded inference journal.
+// They must commit atomically with the revision and must never be evicted: even
+// a much later retry observes its original receipt, not a second transition.
+export interface ContinuousStore extends AtomicStore<ContinuousState> {
+ admission?(operationId:string,fn:(state:ContinuousState|undefined,receipt:AdmissionReceipt|undefined)=>{state:ContinuousState;value:any;receipt?:AdmissionReceipt}):Promise<any>;
+}
 const safe=(n:number)=>Number.isSafeInteger(n)&&n>=0;
 // Leave a quarter of each incarnation's replay history for traffic while the
 // first replacement is prepared. Serial maintenance then staggers histories.
@@ -22,6 +29,7 @@ export function continuousAlarmDelay(s:ContinuousState,c:Pick<ContinuousConfig,'
 }
 export function validateContinuous(s:ContinuousState){
  const p=s?.pool;
+ if(s?.control!==undefined&&(!s.control||!safe(s.control.revision)||s.control.revision<1))throw Error('continuous_control_invalid');
  if(s?.schema!==2||!Array.isArray(s.observations)||s.observations.length>128||s.observations.some(o=>!['admitted','claimed','dispatch','released','quarantined','retired','refused'].includes(o.kind)||!safe(o.at)||!attempt.test(o.id)||!/^[a-f0-9]{64}$/.test(o.tenant)||o.slot!==null&&(!safe(o.slot)||o.slot>=8)||o.generation!==null&&!safe(o.generation)||o.holdMs!==null&&!safe(o.holdMs)||![200,409,429,503].includes(o.status))||typeof s.accepting!=='boolean'||s.generation!==0||!['serving','draining','closed'].includes(s.phase)||!p||p.schema!==1||!safe(p.fence)||!safe(p.next)||p.next>=8||
  !Array.isArray(s.slots)||s.slots.length!==8||!Array.isArray(p.members)||p.members.length!==8||!Array.isArray(p.grants)||p.grants.length>8||
  new Set(p.grants.map(g=>g.slot)).size!==p.grants.length||!p.seen||!safe(p.issued)||p.issued>512||Object.keys(p.seen).length!==p.issued||
@@ -32,12 +40,11 @@ export function validateContinuous(s:ContinuousState){
 }
 export class ContinuousController {
  private ticking=false;
- private store:AtomicStore<ContinuousState>;private ports:EpochPorts;private config:()=>ContinuousConfig;private clock:()=>number;
- constructor(store:AtomicStore<ContinuousState>,ports:EpochPorts,config:()=>ContinuousConfig,clock=Date.now){this.store=store;this.ports=ports;this.config=config;this.clock=clock;}
- private update<T>(fn:(s:ContinuousState,c:ContinuousConfig,now:number)=>T){
+ private store:ContinuousStore;private ports:EpochPorts;private config:()=>ContinuousConfig;private clock:()=>number;
+ constructor(store:ContinuousStore,ports:EpochPorts,config:()=>ContinuousConfig,clock=Date.now){this.store=store;this.ports=ports;this.config=config;this.clock=clock;}
+ private transition<T>(state:ContinuousState|undefined,fn:(s:ContinuousState,c:ContinuousConfig,now:number)=>T){
   const c=this.config(),now=this.clock();
   if(![c.capacity,c.tenantLimit,c.slotStartsPerHour].every(Number.isInteger)||c.capacity<1||c.capacity>8||c.tenantLimit<1||c.tenantLimit>c.capacity||c.slotStartsPerHour<1||c.slotStartsPerHour>60)throw Error('continuous_config_invalid');
-  return this.store.update(state=>{
    if(state)validateContinuous(state);
    const s=state??{schema:2,generation:0,phase:'closed',accepting:true,observations:[],pool:initialPool(),slots:Array.from({length:8},()=>({generation:0,phase:'idle',fingerprint:c.fingerprint,until:0,drainUntil:0,nextAt:now,windowAt:now,starts:0,ids:[]}))} as ContinuousState;
    poolTransition(s.pool,'snapshot',{},now);
@@ -48,6 +55,29 @@ export class ContinuousController {
    }
    s.phase=enabled?'serving':s.slots.some(m=>!['idle','blocked'].includes(m.phase))?'draining':'closed';
    const value=fn(s,c,now);validateContinuous(s);return {state:s,value};
+ }
+ private update<T>(fn:(s:ContinuousState,c:ContinuousConfig,now:number)=>T){return this.store.update(state=>this.transition(state,fn));}
+ private async admission(v:any){
+  if(typeof v?.accepting!=='boolean')return {status:400};
+  if(v.expectedRevision===undefined&&v.operationId===undefined)return this.update(s=>{
+   if(s.control)return {status:409,revision:s.control.revision,accepting:s.accepting};
+   s.accepting=v.accepting;return {status:200,accepting:s.accepting};
+  });
+  if(!safe(v.expectedRevision)||typeof v.operationId!=='string'||!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(v.operationId))return {status:400};
+  if(!this.store.admission)return {status:503};
+  return this.store.admission(v.operationId,(state,prior)=>{
+   const result=this.transition(state,s=>{
+    const revision=s.control?.revision??0;
+    if(prior){
+     if(prior.status!==200||!safe(prior.expectedRevision)||!safe(prior.revision)||prior.revision!==prior.expectedRevision+1||prior.revision>revision||typeof prior.accepting!=='boolean')throw Error('continuous_receipt_invalid');
+     if(prior.operationId===v.operationId&&prior.expectedRevision===v.expectedRevision&&prior.accepting===v.accepting)return prior;
+     return {status:409,revision,accepting:s.accepting};
+    }
+    if(v.expectedRevision!==revision||revision===Number.MAX_SAFE_INTEGER)return {status:409,revision,accepting:s.accepting};
+    s.accepting=v.accepting;s.control={revision:revision+1};
+    return {status:200 as const,operationId:v.operationId,expectedRevision:v.expectedRevision,revision:revision+1,accepting:s.accepting};
+   });
+   return {...result,...(result.value.status===200?{receipt:result.value as AdmissionReceipt}:{})};
   });
  }
  private observe(s:ContinuousState,c:ContinuousConfig,kind:Observation['kind'],g:any,now:number,status=200){
@@ -55,8 +85,9 @@ export class ContinuousController {
   s.observations.push({kind,at:now,id:g.id,tenant:g.tenant,slot:g.slot??null,generation:g.generation??null,holdMs:g.claimedAt===undefined?null:Math.max(0,now-g.claimedAt),status});s.observations=s.observations.slice(-128);
  }
  private drain(m:Member,now:number){m.phase='draining';m.drainUntil=now+epochDrainMs;}
- async command(op:string,v:any):Promise<any>{return this.update((s,c,now)=>{
-  if(op==='admission'){if(typeof v?.accepting!=='boolean')return {status:400};s.accepting=v.accepting;return {status:200,accepting:s.accepting};}
+ async command(op:string,v:any):Promise<any>{
+  if(op==='admission')return this.admission(v);
+  return this.update((s,c,now)=>{
   if(op==='snapshot')return {status:200,state:structuredClone(s)};
   if(!v||!attempt.test(v.id??''))return {status:400};
   if(op==='admit'){

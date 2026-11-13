@@ -33,15 +33,16 @@ export function createApi({ env = process.env, fetchImpl = fetch, wait = sleep }
     latest: async () => (await cloudflare(`${workerPath}/deployments`)).deployments[0],
     versions: async () => (await cloudflare(`${workerPath}/versions?per_page=100`)).items,
     version: (id) => cloudflare(`${workerPath}/versions/${id}`),
-    async deploy(versions, message, expectedId) {
+    async deploy(versions, message, expectedId, { immediate = false } = {}) {
       const before = await this.latest();
       if (before?.id !== expectedId) throw new Error('Deployment changed outside this train; refusing mutation');
+      if (immediate && (versions.length !== 1 || versions[0].percentage !== 100)) throw new Error('Immediate native cutover requires one full-traffic version');
       let error;
       try {
-        await cloudflare(`${workerPath}/deployments`, { method: 'POST', body: { strategy: 'percentage', versions, annotations: { 'workers/message': message } } });
+        await cloudflare(`${workerPath}/deployments`, { method: 'POST', body: { strategy: 'percentage', versions, annotations: { 'workers/message': message }, ...(immediate ? { code_update_strategy: { mode: 'immediate' } } : {}) } });
       } catch (cause) { error = cause; }
       // A lost mutation response is ambiguous. Read back, never blindly retry POST.
-      const matches = (deployment) => deployment?.annotations?.['workers/message'] === message && deployment?.versions?.length === versions.length && deployment.versions.every((v, i) => v.version_id === versions[i].version_id && v.percentage === versions[i].percentage);
+      const matches = (deployment) => deployment?.annotations?.['workers/message'] === message && (!immediate || deployment?.code_update_strategy?.mode === 'immediate') && deployment?.versions?.length === versions.length && deployment.versions.every((v, i) => v.version_id === versions[i].version_id && v.percentage === versions[i].percentage);
       let actual = await this.latest();
       // The deployments list can trail an accepted POST. Re-read only while it
       // still shows the deployment that existed before; any other split fails now.
