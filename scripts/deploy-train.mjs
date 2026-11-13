@@ -14,6 +14,8 @@ import { startQueueObservation } from './deploy-queue-observation.mjs';
 import { assertAssetBootstrap, publishConsoleAssets, verifyConsoleAssets } from './deploy-console-assets.mjs';
 import { assertSecretLineage, uploadMessage } from './deploy-train-secrets.mjs';
 import { assertNoDeploymentHold } from './deploy-release-hold.mjs';
+import { nativeReceipt, assertRuntimePair, verifyRuntimeRecovery } from './deploy-train-runtime.mjs';
+import { prepareNativeUpload, nativeUploadConfig } from './deploy-train-artifacts.mjs';
 
 export function command(args, { env = process.env, timeout = 10 * 60_000 } = {}) {
   return new Promise((resolve, reject) => {
@@ -45,7 +47,9 @@ export function command(args, { env = process.env, timeout = 10 * 60_000 } = {})
 }
 export async function uploadVersion(state, env = process.env) {
   if (env.CONFIGURE_PROVIDER_SECRETS === 'true') throw new Error('Secret changes are excluded from the unattended train');
-  const args = ['exec', 'wrangler', ...(state.migration ? ['deploy'] : ['versions', 'upload']), '--config', '.wrangler.generated.toml', '--tag', state.sha, '--message', uploadMessage(state)];
+  if (state.migration) throw new Error('Native lifecycle migrations require a separately authorized release');
+  const config = await nativeUploadConfig(state, { account: env.CLOUDFLARE_ACCOUNT_ID });
+  const args = ['exec', 'wrangler', 'versions', 'upload', '--config', config, '--tag', state.sha, '--message', uploadMessage(state)];
   const output = await command(args, { env, timeout: 12 * 60_000 });
   const matches = [...output.matchAll(/(?:Worker|Current) Version ID:\s*([a-f0-9-]{36})/gi)];
   if (matches.length !== 1) throw new Error('Upload did not return one unambiguous version ID');
@@ -64,6 +68,7 @@ export async function recoverTrain({ api, state, save = () => {} }) {
   }
   if (recoveryDecision(remote) === 'freeze') { state.recovery = 'freeze'; save(state); return 'freeze'; }
   if (recoveryDecision(remote) === 'none') return 'none';
+  await verifyRuntimeRecovery(api, remote);
   const rolledBack = { ...state, status: 'rolled-back' };
   const restored = await api.deploy([{ version_id: state.blue, percentage: 100 }], deploymentMessage(rolledBack), latest.id);
   state.deploymentId = restored.id; state.status = 'rolled-back'; state.recovery = 'rollback'; save(state);
@@ -80,6 +85,10 @@ export async function runTrain({ state, api, upload, smoke, save = () => {}, now
     if (state.migration) { state.exposed = true; save(state); }
     const beforeUpload = await api.latest();
     if (beforeUpload.id !== state.deploymentId) throw new Error('Deployment changed since preflight');
+    const blueVersion = await api.version(state.blue);
+    const native = nativeReceipt(blueVersion);
+    if (state.native && state.native.runtimeSha !== native.runtimeSha) throw new Error('Native preflight receipt differs from deployed blue');
+    state.native = native; save(state);
     assertSecretLineage(await api.versions(), state.blue);
     state.green = await upload(state); save(state);
     // Cloudflare's version list can trail a just-completed upload. Re-read only
@@ -101,6 +110,7 @@ export async function runTrain({ state, api, upload, smoke, save = () => {}, now
       }
     }
     if (version.annotations?.['workers/tag'] !== state.sha) throw new Error('Uploaded version does not attest candidate SHA');
+    assertRuntimePair(blueVersion, version, state);
     if (state.migration) {
       const deployed = await api.latest();
       if (stableVersion(deployed) !== state.green) throw new Error('Migration deploy did not activate expected version');
@@ -139,6 +149,7 @@ export async function runTrain({ state, api, upload, smoke, save = () => {}, now
         await wait(Math.min(POLL_MS, deadline - now()));
       } while (true);
       if (mode === 'zero-smoke') {
+        await verifyRuntimeRecovery(api, state);
         const restored = await api.deploy([{ version_id: state.blue, percentage: 100 }], deploymentMessage({ ...state, status: 'rehearsed' }), state.deploymentId);
         state.deploymentId = restored.id; state.status = 'rehearsed'; save(state); return state;
       }
@@ -167,6 +178,10 @@ export async function main(env = process.env) {
   const save = (value) => saveState(env.TRAIN_STATE_PATH, value);
   const api = createApi({ env });
   await verifyObservability(api, state);
+  // Build once, verify against deployed blue, then upload a build-hook-free
+  // immutable config. This precedes even console publication and queue tails.
+  await command(['exec', 'node', 'scripts/build-default-worker.mjs'], { env });
+  await prepareNativeUpload({ state, blue: await api.version(state.blue), directory: `.wrangler/train-release-${state.run}` });
   save(state);
   appendFileSync(env.GITHUB_OUTPUT, `migration=${state.migration}\n`);
   const ready = (green) => waitForHealth({

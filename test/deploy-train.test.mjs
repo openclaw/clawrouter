@@ -13,16 +13,17 @@ import { assertSecretLineage, uploadMessage } from '../scripts/deploy-train-secr
 import { recoverRemote, failureIssue } from '../scripts/deploy-train-recover.mjs';
 import { createHash } from 'node:crypto';
 import { verifyConsoleAssets } from '../scripts/deploy-console-assets.mjs';
+import { native, nativeVersion } from './helpers/deploy-native-fixture.mjs';
 
 const blue = '11111111-1111-1111-1111-111111111111';
 const green = '22222222-2222-2222-2222-222222222222';
 const sha = 'a'.repeat(40), oldSha = 'b'.repeat(40);
 function fixture({ unsafe = false, migration = false, failSmokeAt, failSmokePercentage, lostPost = false, analyticsRows = [], listLag = 0, foreignUpload = false, versionLag = 0, deploymentLag = 0, scriptSettings } = {}) {
   let deployment = { id: 'd0', versions: [{ version_id: blue, percentage: 100 }], annotations: {} };
-  let versions = [{ id: blue }];
+  let versions = [nativeVersion(blue, oldSha)];
   let time = 1_000_000, smokes = 0, uploads = 0;
   const calls = [], receipts = [], smokeObservations = [];
-  const state = { blue, sha, deployedSha: oldSha, run: '123', deploymentId: 'd0', unsafe, migration };
+  const state = { blue, sha, deployedSha: oldSha, run: '123', deploymentId: 'd0', unsafe, migration, native };
   let stale = 0, previous;
   const api = createApi({ env: { CLOUDFLARE_API_TOKEN: 'fixture-token', CLOUDFLARE_ACCOUNT_ID: 'fixture-account' }, wait: async (ms) => { time += ms; }, fetchImpl: async (url, init) => {
     calls.push({ url, method: init.method, body: init.body && JSON.parse(init.body), time });
@@ -42,8 +43,10 @@ function fixture({ unsafe = false, migration = false, failSmokeAt, failSmokePerc
     }
     else if (path.endsWith(`/versions/${green}`)) {
       if (versionLag-- > 0) return Response.json({ success: false, errors: [{ message: 'version not found' }] }, { status: 404 });
-      result = { id: green, annotations: { 'workers/tag': sha } };
+      result = nativeVersion(green, sha, blue);
+      result.annotations['workers/message'] = uploadMessage(state);
     }
+    else if (path.endsWith(`/versions/${blue}`)) result = nativeVersion(blue, oldSha);
     else if (path.endsWith('/script-settings')) result = scriptSettings();
     else if (path.endsWith('/graphql')) return Response.json({ data: { viewer: { accounts: [{ workersInvocationsAdaptive: analyticsRows }] } } });
     else throw new Error(`Unexpected API path: ${path}`);
@@ -322,6 +325,27 @@ test('real git range detects TOML lifecycle changes and rollback-unsafe commit t
   assert.deepEqual(candidateCommits(a, c, git), [c, b]);
   const d = commit('name="fixture"\n[[migrations]]\ntag="v2"\nnew_sqlite_classes=["SecondLedger"]\n[observability]\nenabled=false\n', 'non-versioned change');
   assert.throws(() => inspectSource({ blueSha: c, greenSha: d, cwd: directory }), /Non-versioned Worker settings/);
+});
+
+test('native source rejects lifecycle, container, actor and fingerprint-owner changes', t => {
+  mkdirSync('.artifacts', { recursive: true });
+  const directory = mkdtempSync(join(process.cwd(), '.artifacts/train-native-source-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const git = (...args) => execFileSync('git', ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', ...args], { cwd: directory, encoding: 'utf8' }).trim();
+  git('init', '-q'); mkdirSync(join(directory, 'worker/large-http'), { recursive: true });
+  const config = 'name="fixture"\nmain="worker.mjs"\nkeep_vars=true\nno_bundle=true\n[[migrations]]\ntag="v6-large-http"\nnew_sqlite_classes=["LargeHttpPool","LargeHttpSlot"]\n[[containers]]\nclass_name="LargeHttpSlot"\nscheduling_policy="durable_object"\n[[durable_objects.bindings]]\nname="LARGE_HTTP_POOL"\nclass_name="LargeHttpPool"\n';
+  writeFileSync(join(directory, 'wrangler.toml'), config);
+  writeFileSync(join(directory, 'worker/large-http/config.ts'), '// fingerprint protocol\n');
+  const commit = () => { git('add', '.'); git('commit', '-qm', 'fixture'); return git('rev-parse', 'HEAD'); };
+  const base = commit();
+  for (const changed of [config.replace('durable_object', 'other'), config.replace('name="LARGE_HTTP_POOL"', 'name="OTHER"'), config.replace('v6-large-http', 'v7')]) {
+    writeFileSync(join(directory, 'wrangler.toml'), changed);
+    const head = commit();
+    assert.throws(() => inspectSource({ blueSha: base, greenSha: head, cwd: directory }), /Non-versioned|Native lifecycle/);
+  }
+  writeFileSync(join(directory, 'wrangler.toml'), config);
+  writeFileSync(join(directory, 'worker/large-http/config.ts'), '// changed fingerprint protocol\n');
+  assert.throws(() => inspectSource({ blueSha: base, greenSha: commit(), cwd: directory }), /fingerprint protocol/);
 });
 
 test('failure notification reopens and updates one issue without mentions or extra comments', async () => {
