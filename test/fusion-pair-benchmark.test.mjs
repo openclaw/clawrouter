@@ -1078,3 +1078,75 @@ test('source paging reaches every matched arm and rejects unsupported modes befo
     assert.equal(state.sourcePageLines, 200);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test('Responses selection reaches each arm and records the route without losing settlement', async () => {
+  const { root, options } = await fixture();
+  const requests = [];
+  try {
+    const state = await runPairBenchmark({ ...options, openAiApi: 'responses',
+      fetcher: async (url, request) => {
+        if (url.includes('/v1/models/')) return Response.json({ id: url.split('/').at(-1) });
+        const sent = JSON.parse(request.body); requests.push({ url, sent });
+        return Response.json({ model: sent.model, status: 'completed', service_tier: 'default',
+          output: [{ type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'ok' }] }],
+          usage: { input_tokens: 20, output_tokens: 30, total_tokens: 50 } });
+      },
+      agent: async (_task, _image, _strategy, id, _settings, invoke) => {
+        await invoke(id, roles.cheap, body, signal); return repaired();
+      }, grade,
+    });
+    assert.equal(state.openAiApi, 'responses');
+    assert.equal(analyzePairRun(state).openAiApi, 'responses');
+    assert.equal(requests.length, 3);
+    for (const { url, sent } of requests) {
+      assert.equal(url, 'https://api.openai.com/v1/responses');
+      assert.equal(sent.reasoning.effort, sent.model === 'gpt-6-luna' ? 'none' : 'medium');
+      assert.equal(sent.max_output_tokens, 256);
+      assert.equal(sent.reasoning_effort, undefined);
+    }
+    assert.ok(state.calls.every(call => call.inputTokens === 20 && call.outputTokens === 30 && call.costMicros > 0));
+    assert.equal(JSON.parse(await readFile(join(options.out, 'pair.json'))).openAiApi, 'responses');
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('invalid OpenAI API selection fails before qualification or provider calls', async () => {
+  let called = false;
+  await assert.rejects(runPairBenchmark({ openAiApi: 'unknown', preflight: async () => { called = true; } }), /invalid_openai_api/);
+  assert.equal(called, false);
+});
+
+for (const failure of ['truncated', 'invalid-usage', 'http']) test(`Responses ${failure} preserves accounting and existing stop rules`, async () => {
+  const { root, options } = await fixture();
+  let calls = 0;
+  try {
+    const run = runPairBenchmark({ ...options, openAiApi: 'responses',
+      fetcher: async (url, request) => {
+        if (url.includes('/v1/models/')) return Response.json({ id: url.split('/').at(-1) });
+        calls++;
+        if (failure === 'http') return Response.json({ error: { type: 'invalid_request_error' } }, { status: 400 });
+        return Response.json({ model: JSON.parse(request.body).model, status: 'incomplete',
+          incomplete_details: { reason: 'max_output_tokens' }, output: [],
+          usage: { input_tokens: 20, output_tokens: 30, total_tokens: failure === 'invalid-usage' ? 49 : 50 } });
+      },
+      agent: async (_task, _image, _strategy, id, _settings, invoke) => {
+        await invoke(id, roles.cheap, body, signal); return repaired();
+      }, grade,
+    });
+    if (failure === 'truncated') await run;
+    else await assert.rejects(run, /pair_benchmark_incomplete/);
+    const saved = JSON.parse(await readFile(join(options.out, 'pair.json')));
+    assert.equal(calls, failure === 'truncated' ? 3 : 1);
+    assert.equal(saved.complete, failure === 'truncated');
+    assert.equal(saved.openAiApi, 'responses');
+    assert.equal(saved.calls.length, failure === 'truncated' ? 3 : 1);
+    if (failure === 'truncated') {
+      assert.ok(saved.calls[0].costMicros > 0);
+      assert.equal(saved.calls[0].responseDisposition, 'truncated');
+      assert.ok(saved.records.every(row => row.score === 0 && row.errorCode === 'provider_truncated'));
+    } else {
+      assert.equal(saved.failure, 'unknown_cost');
+      assert.equal(saved.calls[0].costMicros, null);
+      assert.ok(saved.spentOrReservedMicros > config.priorCostMicros);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an opt-in Responses API transport for native Fusion pair benchmarks, with route-bound comparisons and conservative usage accounting.
+
 - Match Fusion edit calibration source views to each executor and record an explicit legacy numbered-source mode for reproducibility.
 
 - Add a bounded edit-interface calibration for Fusion experiments, separating exact edits, rejected edits, and wrong applied changes before repository benchmarks.
