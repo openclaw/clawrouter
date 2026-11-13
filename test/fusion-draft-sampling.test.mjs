@@ -116,7 +116,7 @@ test('native sampling preserves a wrong first draft even when the second passes 
 });
 
 
-test('native sampling continues after a hanging first draft and selects a working second draft', {
+test('native sampling stops after a hanging first draft without another model call', {
   skip: !process.env.FUSION_NATIVE_IMAGE,
 }, async () => {
   const { sandbox, check } = await import('../scripts/fusion-workloads.mjs');
@@ -125,7 +125,7 @@ test('native sampling continues after a hanging first draft and selects a workin
   const input = { editPaths: ['worker/example.ts'], visibleTests: ['worker/test/watchdog.test.mjs'],
     instruction: 'Export answer = 42 without hanging.' };
   let calls = 0;
-  const result = await runDraftSampling(input, process.env.FUSION_NATIVE_IMAGE, 'watchdog',
+  await assert.rejects(runDraftSampling(input, process.env.FUSION_NATIVE_IMAGE, 'watchdog',
     { ...config, deadlineMs: 15000 }, async () => ({ choices: [{ finish_reason: 'stop', message: {
       content: JSON.stringify({ edits: [{ path: input.editPaths[0], search: source,
         replace: ++calls === 1 ? 'while (true) {}' : 'export const answer = 42;' }] }),
@@ -147,9 +147,6 @@ test('native sampling continues after a hanging first draft and selects a workin
         test: (box, paths, timeout) => check(box, paths, Math.min(2000, timeout)),
       }),
       agent: async () => { throw Error('unexpected fallback'); },
-    });
-  assert.equal(calls, 2);
-  assert.equal(result.draftSampling.selectedCandidate, 2);
-  assert.deepEqual(result.draftSampling.candidates.map(candidate => candidate.publicPassed), [false, true]);
-  assert.equal(result.files[0].content, 'export const answer = 42;');
+    }), /incomplete_test_run/);
+  assert.equal(calls, 1);
 });
