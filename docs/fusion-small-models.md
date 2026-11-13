@@ -484,6 +484,16 @@ This checks consistency of supplied provenance, not its authenticity or cost
 accounting. Passing applies to the pinned task base; it does not establish that
 the repair works on a different checkout. The command does not apply files.
 
+Add `--patch review.patch` to export a private unified Git patch only after
+both verification phases pass. It uses the verified source snapshot and the
+pinned base, preserves executable bits and end-of-file newlines, and does not
+overwrite an existing output. The patch can contain up to 16 MiB of source;
+keep it private, inspect it, and run `git apply --check /path/to/review.patch`
+from the intended target checkout before deciding whether to apply it.
+The command does not apply the patch. Its JSON receipt contains only the
+patch filename, size and digest. A delivery failure sets `patchExportFailed`
+and exits nonzero while preserving the separate acceptance result.
+
 Run from a committed task checkout with qualified workload receipts and an
 explicit JSON configuration. Only credentials for the selected models are
 required. Supply credentials through the existing secret injector; do not put
