@@ -136,6 +136,40 @@ test('transport failure checkpoints once and does not silently try another model
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test('rejected local responses checkpoint a bounded reason without response content or another call', async () => {
+  const cases = [
+    ['unreadable_body', { json: async () => { throw new Error('private parse failure sentinel'); } }],
+    ['invalid_envelope', { json: async () => null }],
+    ['model_mismatch', response('private model sentinel')],
+    ['incomplete', response(pins[0].model, undefined, { done: false })],
+    ['missing_content', response(pins[0].model, undefined, { message: {} })],
+    ['invalid_usage', response(pins[0].model, undefined, { eval_count: -1 })],
+    ['output_limit', response(pins[0].model, undefined, { eval_count: 1537 })],
+    ['context_limit', response(pins[0].model, undefined, { prompt_eval_count: 32768 })],
+    ['invalid_stop_reason', response(pins[0].model, undefined, { done_reason: 'private stop sentinel' })],
+  ];
+  for (const [reason, invalid] of cases) {
+    const { root, options } = await fixture(); let calls = 0;
+    try {
+      await assert.rejects(runLocalRepository({ ...options,
+        fetcher: async () => { calls++; return { ok: true, ...invalid }; },
+        agent: async (_t, _i, _s, id, _c, invoke) => invoke(id, roles.strong, body, new AbortController().signal),
+        grade: async () => assert.fail('must not grade a rejected response'),
+      }), /local_repository_incomplete/);
+      const raw = await readFile(join(options.out, 'local-repository.json'), 'utf8'), state = JSON.parse(raw);
+      assert.equal(state.failureCode, 'invalid_local_response', reason);
+      assert.equal(state.calls[0].responseFailure, reason);
+      assert.equal(state.calls[0].status, 'failed');
+      assert.equal(state.calls[0].dispatched, true);
+      assert.equal(state.calls[0].inputTokens, null);
+      assert.equal(state.calls[0].outputTokens, null);
+      assert.equal(state.records.length, 0); assert.equal(calls, 1);
+      for (const sentinel of ['private prompt sentinel', 'private response sentinel', 'private model sentinel',
+        'private parse failure sentinel', 'private stop sentinel']) assert.ok(!raw.includes(sentinel), reason);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
+});
+
 test('context-limited trials are recorded without pretending that a request was dispatched', async () => {
   const { root, options } = await fixture(); let dispatched = 0;
   try {
