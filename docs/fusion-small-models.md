@@ -1099,7 +1099,39 @@ input-retirement helper is available as context.
 Original visible tests pass 9/9 on both revisions. Independent acceptance
 replaces the test file with its historical fixed revision: the original source
 fails three assertions across 12 tests; the reference passes all 12. No skipped
-or cancelled tests contribute to qualification. The task has no model results
-yet. Use it for a prospective comparison only while it remains unexposed; a
-qualified fixture alone demonstrates neither a handoff gain nor production
-readiness.
+or cancelled tests contribute to qualification.
+
+#### Three-block matched confirmation
+
+Frozen source `2d5762efdcb80616869724dfbba034061838e6d9` ran three blocks on this
+previously unexposed task. Arm offsets 0, 1, and 2 placed each strategy in each
+ordinal position once. Both handoff arms used the same source evidence, pinned
+regression probes, and probe-qualified transfer gate. The strong control handed
+from Sol to Sol; the mixed candidate handed from Sol to Luna. Sol used medium
+reasoning and Luna used none. Each attempt allowed 24 calls, 4,096 output tokens
+per call, 480 seconds, and $0.75. Independent acceptance stayed hidden from the
+agents.
+
+| Strategy | Accepted repairs | Calls | Estimated cost | Agent time |
+| --- | ---: | ---: | ---: | ---: |
+| Luna only | 3/3 | 59 | $0.059006 | 240.012 s |
+| Matched Sol → Sol | 3/3 | 24 | $0.546852 | 205.015 s |
+| Sol → Luna | 3/3 | 20 | $0.228175 | 155.950 s |
+
+Costs and times are totals across the three blocks. Agent time excludes final
+independent grading and includes agent execution and tool work. Costs use pinned
+tariffs and reported usage, rather than a billing statement. All 103 calls
+settled, for a total estimated cost of $0.834033. Each submitted repair passed
+all 12 independent acceptance tests, with none skipped. Every mixed attempt
+called both models and passed the transfer gate.
+
+The mixed candidate cost 58.27% less and used 23.93% less agent time than the
+matched Sol control. Luna alone remained cheapest; the mixed candidate was
+faster. There were no quality wins over either control. The predeclared pilot
+screen **failed** because the candidate rescued no tasks beyond Luna alone.
+
+This is a cost/latency observation on one historical task, repeated three
+times, not three independent tasks or a significance test. Rotating order does
+not remove every provider-cache or time effect. Keep it separate from earlier
+cohorts with different protocols. It does not establish an endpoint-wide or
+production gain, and no routing defaults, release, or deployment change.
