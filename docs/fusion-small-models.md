@@ -639,3 +639,22 @@ These tasks have no model results at introduction. Keep them separate from
 previously exposed workloads, freeze policy and comparison settings before
 inference, and retain unsuccessful attempts. Repeated draws become exposed-task
 replications; they do not add independent unseen tasks.
+
+
+## Discovery and stream validation tasks
+
+`benchmarks/fusion/discovery-stream-workloads.json` adds two historical repairs:
+manifest-only catalog route metadata and streamed terminal accounting. The
+first changes one discovery module. The second spans four source modules to
+inspect bounded SSE frames, preserve authoritative terminal usage, and settle
+protocol failures and caller cancellation without changing the HTTP status.
+
+Qualify this manifest before inference. The reference repair must pass the
+original visible tests and independent acceptance, and the broken base must
+fail acceptance. Initial Linux sandbox qualification passed with no skips:
+discovery visible 35/35 on both revisions and acceptance 43/55 before repair,
+55/55 after; streaming visible 9/9 on both and acceptance 41/59 before repair,
+59/59 after. These are harness checks, not model results. Keep reference source and acceptance-test bodies outside model
+context. The manifest is development data; subsequent draws on either task are
+replications, not additional unseen tasks. It does not alter the public Fusion
+policy or establish a new quality result.

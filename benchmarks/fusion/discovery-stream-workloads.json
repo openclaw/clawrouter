@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "manifest-route-metadata",
+      "split": "development",
+      "base": "d86df686d4c6fb8dca359c4b8b39d08f35293dfb",
+      "oracle": "d05f5f092803dbedb661384eebf6101b9090f939",
+      "editPaths": [
+        "worker/discovery.ts"
+      ],
+      "visibleTests": [
+        "worker/test/discovery.test.mjs",
+        "worker/test/discovery-grant-eligibility.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/manifest-route-format-discovery.test.mjs"
+      ],
+      "instruction": "Preserve exact payload-format metadata for every eligible catalog route, including manifest-only embedding endpoints. Cache the declared route projection independently of native-proxy eligibility, and expose routes only when the current entitlement inventory offers the endpoint or websocket. Preserve request and response formats, methods, path, streaming, and request pricing. Metadata must not enable disabled native endpoints, broaden policy eligibility, fetch upstream, reserve budget, or expose credentials. Keep existing native routes, catalog model projections, and scoped offers unchanged."
+    },
+    {
+      "id": "stream-terminal-accounting",
+      "split": "development",
+      "base": "42157a0a2b311589bafd7478c1c5b0f53c3048f6",
+      "oracle": "3315cf1468f14aefb3a6bbf3c696e8d584756ae8",
+      "editPaths": [
+        "worker/token-usage.ts",
+        "worker/proxy-response.ts",
+        "worker/proxy-accounting.ts",
+        "worker/proxy.ts"
+      ],
+      "visibleTests": [
+        "worker/test/proxy-usage.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/proxy-response.test.mjs",
+        "worker/test/usage-budget.test.mjs"
+      ],
+      "instruction": "Account for actual streamed terminal and delivery outcomes without changing the delivered HTTP status or draining upstream ahead of the caller. Incrementally inspect bounded SSE frames so long streams can retain late authoritative usage; support Chat DONE, Responses completed/incomplete/failed, Anthropic message_start/delta/stop, CR/LF boundaries, split UTF-8, malformed or oversized frames, and cumulative cache counters without double-counting. Distinguish complete, failed, and canceled delivery; treat ingress abort as caller cancellation even while a read is pending, settle once, and release abort listeners. Protocol or delivery errors must not erase dispatched billable work or authoritative terminal usage. Preserve bounded JSON inspection and existing pre-stream normalization. Feed the observed usage, protocol outcome, and delivery state through proxy accounting while retaining conservative unknown-usage reservations."
+    }
+  ]
+}
