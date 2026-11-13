@@ -378,5 +378,5 @@ test("administrators open personal usage from Usage without changing the overvie
   await page.getByRole("button", { name: "Usage", exact: true }).click();
   await page.getByRole("button", { name: "My usage", exact: true }).click();
   await expect(page.getByRole("heading", { name: "My usage", exact: true })).toBeVisible();
-  await expect(page.getByText("Personal reporting is not connected in local demo mode. No live usage is shown.")).toBeVisible();
+  await expect(page.getByText("Usage reporting is not connected in demo mode. No live usage is shown.")).toBeVisible();
 });

@@ -322,12 +322,13 @@ test('refresh advances rolling presets but preserves an explicit custom range', 
   await page.getByLabel('Start', { exact: true }).fill('2026-10-28');
   await page.getByLabel('End (exclusive)', { exact: true }).fill('2026-10-29');
   await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
-  await expect.poll(() => queries.filter(url => url.pathname.endsWith('/report')).at(-1)!.searchParams.get('from')).toBe('2026-10-28');
+  await expect.poll(() => queries.filter(url => url.pathname.endsWith('/report')).at(-1)!.searchParams.get('from')).toBe('2026-10-27T18:15:00.000Z');
   await expect(summary(page).locator('.personalRange')).toContainText('2026-10-28T18:15:00.000Z');
   await expect(page.getByLabel('Start', { exact: true })).toHaveValue('2026-10-28');
   await expect(page.getByLabel('End (exclusive)', { exact: true })).toHaveValue('2026-10-29');
   const custom = queries.filter(url => url.pathname.endsWith('/report')).at(-1)!.searchParams;
-  expect(custom.get('to')).toBe('2026-10-29');
+  expect(custom.get('to')).toBe('2026-10-28T18:15:00.000Z');
+  expect(custom.get('cut')).toBeTruthy(); // Same-cut refinement uses normalized instants, not calendar syntax.
   expect(custom.get('timezone')).toBe('Asia/Kathmandu'); expect(custom.has('days')).toBe(false);
   await expect(summary(page).locator('.personalGlance > div:nth-child(3) > dd:not(.personalGlanceMeta)').first()).toHaveText('42');
   const beforeRefresh = queries.filter(url => url.pathname.endsWith('/report')).length;

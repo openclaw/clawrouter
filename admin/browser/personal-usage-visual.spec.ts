@@ -23,11 +23,17 @@ test('overview foregrounds honest cards, trend and ranked models without account
  await expect(page.getByRole('region',{name:'Usage trend',exact:true})).toBeVisible();await expect(page.getByRole('heading',{name:'Top models',exact:true})).toBeVisible();
  await expect(page.getByRole('tab',{name:'Overview',exact:true})).toHaveAttribute('aria-selected','true');await expect(page.locator('.personalActivityTable')).toHaveCount(0);await expect(page.locator('.personalCosts')).toHaveCount(0);await expect(page.locator('.personalAdvanced')).not.toHaveAttribute('open');
  await afterPaint(page);expect(eventReads(q),'Overview must not read event pages').toBe(0);
- const axis=await page.locator('.personalChartViewport .chartAxisLabel').evaluateAll(nodes=>nodes.map(node=>{const e=node as SVGTextElement;return{font:parseFloat(getComputedStyle(e).fontSize)*(e.getScreenCTM()?.a??1),text:e.textContent};}));expect(axis.every(v=>v.font>=10)).toBe(true);
- const geometry=await page.evaluate(()=>{const b=(s:string)=>{const r=document.querySelector(s)!.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom};};return{viewport:{width:innerWidth,height:innerHeight},documentWidth:document.documentElement.scrollWidth,documentHeight:document.documentElement.scrollHeight,nodes:document.querySelectorAll('*').length,glance:b('.personalGlance'),trend:b('.personalTrendPanel'),ranking:b('.personalRanksPanel')};});
- expect(geometry.documentWidth).toBeLessThanOrEqual(geometry.viewport.width);expect(geometry.trend.right).toBeLessThanOrEqual(geometry.viewport.width);expect(geometry.ranking.right).toBeLessThanOrEqual(geometry.viewport.width);if(info.project.name==='desktop')expect(geometry.trend.bottom).toBeLessThanOrEqual(geometry.viewport.height+20);
- const axe=await new AxeBuilder({page}).withTags(['wcag2a','wcag2aa','wcag21aa']).analyze();expect(axe.violations).toEqual([]);
+ const axis=await page.locator('.personalChartViewport .chartAxisLabel').evaluateAll(nodes=>nodes.map(node=>{const e=node as SVGTextElement;return{font:parseFloat(getComputedStyle(e).fontSize)*(e.getScreenCTM()?.a??1),text:e.textContent};}));expect(axis.length).toBeGreaterThan(0);expect(axis.every(v=>v.font>=10)).toBe(true);
+ const geometry=await page.evaluate(()=>{const b=(s:string)=>{const r=document.querySelector(s)!.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom};};return{viewport:{width:innerWidth,height:innerHeight},documentWidth:document.documentElement.scrollWidth,documentHeight:document.documentElement.scrollHeight,nodes:document.querySelectorAll('*').length,controls:b('.personalControls'),summary:b('.personalUsageSummary'),glance:b('.personalGlance'),trend:b('.personalTrendPanel'),ranking:b('.personalRanksPanel')};});
  await info.attach('overview-geometry',{body:JSON.stringify({geometry,axis,reportReads:reports(q),eventReads:eventReads(q)}),contentType:'application/json'});
+ expect(geometry.documentWidth).toBeLessThanOrEqual(geometry.viewport.width);expect(geometry.trend.right).toBeLessThanOrEqual(geometry.viewport.width);expect(geometry.ranking.right).toBeLessThanOrEqual(geometry.viewport.width);if(info.project.name==='desktop')expect(geometry.trend.bottom).toBeLessThanOrEqual(geometry.viewport.height+20);
+ await expect(summary(page).getByText('For your current access. Earlier access and locations are not claimed covered.',{exact:false})).toBeVisible();
+ const accounting=summary(page).locator('.personalAccounting');
+ await expect(accounting.locator('summary')).toBeVisible();await expect(accounting.locator('summary')).toContainText('not a price or confirmed settlement');
+ await accounting.locator('summary').focus();await page.keyboard.press('Enter');
+ await expect(accounting.getByText(/rows with a valid recorded accounting field/)).toBeVisible();
+ await expect(accounting.getByText(/Settlement-confirmation evidence is unavailable/)).toBeVisible();
+ const axe=await new AxeBuilder({page}).withTags(['wcag2a','wcag2aa','wcag21aa']).analyze();expect(axe.violations).toEqual([]);
 });
 
 test('metric switches remain client-only, preserve selection across periods and expose real gap/keyboard values',async({page},info)=>{
@@ -56,7 +62,7 @@ for(const prices of ['unknown','free'] as const)test('cost chart distinguishes '
  await story(page,prices);await page.goto('/dashboard/my-usage');await expect(page.getByRole('heading',{name:'Tokens over time',exact:true})).toBeVisible();await metric(page).getByRole('button',{name:'API cost',exact:true}).click();
  const card=summary(page).locator('.personalGlance > div').filter({hasText:'Known API cost'});
  if(prices==='unknown'){await expect(card).toContainText('Unavailable');await expect(card).not.toContainText('$0.00');await expect(page.locator('.personalChartEmpty')).toContainText('No reported values');expect((await page.locator('.personalChartViewport .chartLine').getAttribute('d'))?.trim()).toBe('');}
- else{await expect(card).toContainText('$0.00');await expect(page.locator('.personalChartEmpty')).toHaveCount(0);expect((await page.locator('.personalChartViewport .chartLine').getAttribute('d'))?.trim()).not.toBe('');}
+ else{await expect(card).toContainText('$0.00');await expect(page.locator('.personalChartEmpty')).toHaveCount(0);expect((await page.locator('.personalChartViewport .chartLine').getAttribute('d') ?? '').trim()).not.toBe('');}
 });
 
 test('dark narrow overview keeps contextual help accessible and contained',async({page})=>{

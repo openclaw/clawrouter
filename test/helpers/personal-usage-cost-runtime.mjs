@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { completeQueryString, exportRefreshedUsage, prepareUsageGroupsFile } from "../../admin/src/complete-usage.ts";
+import "./typescript-resolver.mjs";
+
+// Register the shared extensionless-TS resolver before loading the browser helper.
+const { completeQueryString, exportRefreshedUsage, prepareUsageGroupsFile } = await import("../../admin/src/complete-usage.ts");
 
 // Test-only setup/inspection. Actual proxy, accounting, queue and ledgers stay shipped.
 export const costPolicies = {

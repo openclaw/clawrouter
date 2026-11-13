@@ -1,3 +1,4 @@
+import { openLegacyUsage } from "./fixtures/legacy-usage";
 import { expect, test, type Page, type Route } from "@playwright/test";
 import type { AccessPolicy, AdminBootstrapResponse, AdminUsageRow, PolicyBinding, UsageSnapshot } from "../src/ui-types";
 
@@ -529,6 +530,7 @@ for (const action of ["Save", "Disable"] as const) {
       await expect.poll(() => state.writes.length).toBe(1);
       state.holdUsage = true;
       await page.getByRole("button", { name: action === "Save" ? "Usage" : "Dashboard", exact: true }).click();
+      if (action === "Save") await openLegacyUsage(page);
       await expect.poll(() => state.ledgers.length).toBe(1);
       expect(state.ledgers[0].body.policies[0]).toMatchObject({ enabled: true, monthlyBudgetMicros: 10_000_000 });
       await page.clock.setFixedTime(new Date("2026-09-01T00:02:00.000Z"));
@@ -557,6 +559,7 @@ for (const action of ["Save", "Disable"] as const) {
       } else {
         await expect(page.locator(".quotaRow").filter({ has: page.getByText("policy_a", { exact: true }) })).toHaveCount(0);
         await page.getByRole("button", { name: "Usage", exact: true }).click();
+        await openLegacyUsage(page);
         await expect(row(page, "policy_a").locator('[data-label="health"]')).toHaveText("revoked");
       }
       expect(state.usageReads).toBe(2);
@@ -574,6 +577,7 @@ for (const outcome of ["success", "bootstrap failure"] as const) {
     await save(page).click();
     await expect.poll(() => state.writes.length).toBe(1);
     await page.getByRole("button", { name: "Usage", exact: true }).click();
+    await openLegacyUsage(page);
     await expect(row(page, "policy_a").locator(".budgetUsage > span > small")).toHaveText(/^\$10\.00(?:\s|$)/);
     await expect(page.locator(".usageFreshness")).toHaveCount(0);
     state.holdUsage = true;
@@ -614,6 +618,7 @@ test("a rejected policy write keeps the pending ledger read and its successful f
   await expect.poll(() => state.writes.length).toBe(1);
   state.holdUsage = true;
   await page.getByRole("button", { name: "Usage", exact: true }).click();
+  await openLegacyUsage(page);
   await expect.poll(() => state.ledgers.length).toBe(1);
   await state.writes[0].fulfill({ status: 503, body: "policy unavailable" });
   await expect(page.locator(".statusBar")).toContainText("policy save failed");
