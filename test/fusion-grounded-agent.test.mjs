@@ -54,7 +54,7 @@ test('handoff sees actual edited source and never acceptance files', async () =>
       makeSandbox: async () => ({ close: async () => { closed = true; } }),
       read: async (_box, paths) => paths.map(path => { assert.ok(!task.hiddenTests.includes(path)); return { path, content: path === task.editPaths[0] ? source : 'import "../example.ts";' }; }),
       write: async (_box, files) => { source = files[0].content; },
-      test: async () => ({ passed: true, feedback: 'visible checks passed' }),
+      test: async () => ({ valid: true, passed: true, feedback: 'visible checks passed' }),
     });
   assert.equal(invocation, 3); assert.equal(result.handoffUsed, true); assert.equal(result.outcome, 'submitted');
   assert.equal(result.invalidActions, 0); assert.equal(result.files[0].content, 'export const enabled = true;');
@@ -97,7 +97,7 @@ test('checked handoff isolates probes and repairs against the same failing repro
       makeSandbox: async () => { const box = { source: 'export const enabled = false;', closed: false, close: async () => { box.closed = true; } }; boxes.push(box); return box; },
       read: async (box, paths) => paths.map(path => ({ path, content: path === task.editPaths[0] ? box.source : 'test example' })),
       write: async (box, files) => { box.source = files[0].content; },
-      test: async () => ({ passed: true, feedback: '' }),
+      test: async () => ({ valid: true, passed: true, feedback: '' }),
       runProbe: async (box, source) => {
         assert.notEqual(box, boxes[0]); seenProbes.push(source);
         const module = source.replaceAll(JSON.stringify('./worker/example.ts'),
@@ -166,7 +166,7 @@ for (const repair of [false, true]) test(`independent review ${repair ? 'repairs
       },
       read: async (box, paths) => paths.map(path => ({ path, content: path === task.editPaths[0] ? box.source : 'visible test' })),
       write: async (box, files) => { box.source = files[0].content; },
-      test: async () => ({ passed: true, feedback: '' }),
+      test: async () => ({ valid: true, passed: true, feedback: '' }),
       runProbe: async box => ({ passed: box.source.includes('enabled = true'),
         assertionFailed: !box.source.includes('enabled = true'), feedback: '' }),
     });
@@ -199,7 +199,7 @@ test('independent reviewer rescues a three-action author failure within the shar
       makeSandbox: async () => { const box = { source: 'export const enabled = false;', close: async () => {} }; return box; },
       read: async (box, paths) => paths.map(path => ({ path, content: path === task.editPaths[0] ? box.source : '' })),
       write: async (box, files) => { box.source = files[0].content; },
-      test: async () => ({ passed: true, feedback: '' }),
+      test: async () => ({ valid: true, passed: true, feedback: '' }),
       runProbe: async box => { probes++; return { passed: probes < 4 || box.source.includes('enabled = true'), assertionFailed: probes === 4, feedback: '' }; },
     });
   assert.deepEqual(roles, [models.strong, models.strong, models.strong, models.critic, models.critic]);
@@ -242,7 +242,7 @@ test('workers can inspect declared source dependencies but cannot edit them', as
     }, undefined, {
       makeSandbox: async () => ({ close: async () => {} }),
       read: async (_box, paths) => paths.map(path => ({ path, content: sources[path] ?? '' })),
-      write: async () => { writes++; }, test: async () => ({ passed: true, feedback: '' }),
+      write: async () => { writes++; }, test: async () => ({ valid: true, passed: true, feedback: '' }),
     });
   assert.equal(writes, 0); assert.equal(result.invalidActions, 1); assert.equal(result.actions[1].status, 'unseen_edit');
   assert.ok(!JSON.stringify(result).includes('helper inspection requested'));
@@ -260,7 +260,70 @@ for (const invalidMemory of ['', ' ', 'x'.repeat(2001)]) test(`invalid working m
     }, undefined, {
       makeSandbox: async () => ({ close: async () => {} }),
       read: async (_box, paths) => paths.map(path => ({ path, content: 'export const x = 1;' })),
-      test: async () => ({ passed: true, feedback: '' }),
+      test: async () => ({ valid: true, passed: true, feedback: '' }),
     });
   assert.equal(result.invalidActions, 1); assert.equal(result.actions[0].action, 'invalid_memory');
+});
+
+for (const action of ['edit', 'finish']) {
+  test(`grounded ${action} stops on incomplete visible tests before another model call`, async () => {
+    const task = { instruction: 'Set enabled to true.', editPaths: ['worker/example.ts'], visibleTests: ['worker/test/example.test.mjs'] };
+    let calls = 0, closed = false;
+    await assert.rejects(runGroundedAgent(task, 'unused', 'handoff', 'trial',
+      { maxTurns: 3, outputTokens: 1536, deadlineMs: 10000 }, async () => {
+        calls++;
+        return { choices: [{ message: { content: JSON.stringify({ action, path: task.editPaths[0],
+          line: 1, endLine: 1, replace: 'export const enabled = true;', query: '' }) }, finish_reason: 'stop' }] };
+      }, undefined, {
+        makeSandbox: async () => ({ close: async () => { closed = true; } }),
+        read: async (_box, paths) => paths.map(path => ({ path, content: 'export const enabled = false;' })),
+        write: async () => {},
+        test: async () => ({ valid: false, passed: false, feedback: 'watchdog terminated test runner' }),
+      }), { message: 'incomplete_test_run' });
+    assert.equal(calls, 1);
+    assert.equal(closed, true);
+  });
+}
+
+test('complete failing grounded checks remain repairable', async () => {
+  const task = { instruction: 'Set enabled to true.', editPaths: ['worker/example.ts'], visibleTests: ['worker/test/example.test.mjs'] };
+  let calls = 0, checks = 0;
+  const result = await runGroundedAgent(task, 'unused', 'strong', 'trial',
+    { maxTurns: 2, outputTokens: 1536, deadlineMs: 10000 }, async () => {
+      const action = calls++ === 0 ? 'edit' : 'finish';
+      return { choices: [{ message: { content: JSON.stringify({ action, path: task.editPaths[0],
+        line: 1, endLine: 1, replace: 'export const enabled = true;', query: '' }) }, finish_reason: 'stop' }] };
+    }, undefined, {
+      makeSandbox: async () => ({ close: async () => {} }),
+      read: async (_box, paths) => paths.map(path => ({ path, content: 'export const enabled = false;' })),
+      write: async () => {},
+      test: async () => ({ valid: true, passed: ++checks === 2, feedback: 'complete assertions' }),
+    });
+  assert.equal(calls, 2);
+  assert.equal(result.publicPassed, true);
+  assert.equal(result.outcome, 'submitted');
+});
+
+
+test('grounded edits stop when native visible-test execution is terminated', {
+  skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+}, async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { execFileSync } = await import('node:child_process');
+  const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+  const task = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+    .find(task => task.id === 'provided-responses-path');
+  const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+    .receipts.find(receipt => receipt.taskId === task.id);
+  const path = task.editPaths[0];
+  const firstLine = execFileSync('git', ['show', `${task.base}:${path}`], { encoding: 'utf8' }).split('\n')[0];
+  let calls = 0;
+  await assert.rejects(runGroundedAgent(task, receipt.image, 'strong', 'incomplete-grounded-fixture',
+    { maxTurns: 3, deadlineMs: 8000, outputTokens: 256 }, async () => {
+      calls++;
+      return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
+        action: 'edit', path, line: 1, endLine: 1, replace: `while (true) {}\n${firstLine}`, query: '',
+      }) } }] };
+    }), { message: 'incomplete_test_run' });
+  assert.equal(calls, 1);
 });
