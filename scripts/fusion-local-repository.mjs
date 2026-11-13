@@ -93,6 +93,7 @@ export async function localActionRequest({ endpoint, model, pin, body, signal, s
 
 export async function runLocalRepository({ repo, qualificationPath, out, sourceSha,
   models, endpoint = 'http://127.0.0.1:11435', fetcher = fetch, profile = 'legacy', taskManifest,
+  actionSchemaProfile = 'legacy',
   outputTokens = localRepositorySettings.outputTokens,
   agent, grade = verify, inspectImage = async image => {
     const result = await command('docker', ['image', 'inspect', '--format={{.Id}}', image]);
@@ -101,6 +102,9 @@ export async function runLocalRepository({ repo, qualificationPath, out, sourceS
   const settings = { ...localRepositorySettings, outputTokens: validateOutputTokens(outputTokens) };
   localEndpoint(endpoint);
   if (!['legacy', 'grounded', 'checked'].includes(profile)) throw new Error('invalid_local_profile');
+  if (!['legacy', 'compact'].includes(actionSchemaProfile) || actionSchemaProfile !== 'legacy' && profile !== 'legacy') {
+    throw new Error('invalid_local_action_schema_profile');
+  }
   const execute = agent ?? (profile !== 'legacy' ? runGroundedAgent : runAgent);
   if (!/^[a-f0-9]{40}$/.test(sourceSha ?? '')) throw new Error('exact_source_required');
   const tasks = await loadTasks(taskManifest ?? resolve(repo, 'benchmarks/fusion/validation-workloads.json'));
@@ -112,7 +116,7 @@ export async function runLocalRepository({ repo, qualificationPath, out, sourceS
   await mkdir(out, { mode: 0o700 });
   const state = { version: 1, kind: 'local-repository-development', sourceSha, profile,
     datasetDigest: hash(JSON.stringify(tasks)), qualificationDigest: hash(rawQualification), receipts,
-    modelPins: local.pins, settings: { ...settings,
+    modelPins: local.pins, settings: { ...settings, actionSchemaProfile,
       ...(profile !== 'legacy' ? groundedSampling : {}), requestTimeoutMs: profile !== 'legacy' ? 120000 : 60000 }, apiSpendMicros: 0,
     maxCalls: tasks.length * strategies.length * settings.maxTurns,
     complete: false, calls: [], records: [],
@@ -159,7 +163,8 @@ export async function runLocalRepository({ repo, qualificationPath, out, sourceS
       let result, graded, outcome;
       try {
         result = await execute(task, receipt.image, strategy === 'handoff' ? 'handoff' : 'strong', trialId,
-          { ...settings, requireReproducer: profile === 'checked', deadlineMs: Math.min(settings.deadlineMs, Math.max(1, Math.floor(campaignDeadline - performance.now()))) }, invoke, undefined);
+          { ...settings, requireReproducer: profile === 'checked', deadlineMs: Math.min(settings.deadlineMs, Math.max(1, Math.floor(campaignDeadline - performance.now()))) }, invoke, undefined,
+          profile === 'legacy' ? { actionSchemaProfile } : undefined);
         graded = await grade(task, receipt.image, result.files, repo);
         if (graded.valid !== true || typeof graded.passed !== 'boolean') throw new Error('invalid_local_grade');
         outcome = result.outcome;
@@ -209,6 +214,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     if (process.env.GITHUB_SHA !== sourceSha || (await command('git', ['status', '--porcelain'])).stdout.length) throw new Error('clean_exact_source_required');
     await runLocalRepository({ repo: process.cwd(), qualificationPath, out, sourceSha, models: [general, coder],
       endpoint: process.env.FUSION_OLLAMA_URL, profile, taskManifest,
+      actionSchemaProfile: process.env.FUSION_LOCAL_ACTION_SCHEMA_PROFILE,
       outputTokens: process.env.FUSION_LOCAL_OUTPUT_TOKENS === undefined ? undefined : Number(process.env.FUSION_LOCAL_OUTPUT_TOKENS) });
   }).catch(() => { console.error('Local repository campaign incomplete; inspect its content-free checkpoint.'); process.exitCode = 1; });
 }

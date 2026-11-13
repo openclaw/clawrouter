@@ -12,6 +12,8 @@
 
 - Add opt-in source paging to interactive Fusion benchmarks so large files remain navigable without sending every line in initial and handoff context.
 
+- Add an opt-in compact action schema to local Fusion repository benchmarks, putting actions before bounded working notes and recording the selected profile.
+
 - Retain bounded OpenAI request IDs in native Fusion benchmark receipts, including failed calls, without saving response bodies or changing retry and budget rules.
 
 - Add an opt-in Fusion handoff gate that requires an original-failing, candidate-passing assertion and current regression checks before normal transfer.

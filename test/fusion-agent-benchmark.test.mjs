@@ -1,7 +1,50 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { SpendLedger, defaultExperiment, validateExperiment, replaceEdits, sourceView, editableSourceView, escalateSubmission, toolErrorCode, finishReason, agentContext, appendHandoffEvidence, retainRegressionProbe, executorModel, advisoryBody, actionFeedback, runAgent, agentFailureTrace } from '../scripts/fusion-agent-benchmark.mjs';
+import { SpendLedger, defaultExperiment, validateExperiment, replaceEdits, sourceView, editableSourceView, escalateSubmission, toolErrorCode, finishReason, agentContext, appendHandoffEvidence, retainRegressionProbe, executorModel, advisoryBody, actionFeedback, repositoryActionSchema, runAgent, agentFailureTrace } from '../scripts/fusion-agent-benchmark.mjs';
 import { nativeRequest } from '../scripts/fusion-native-provider.mjs';
+
+test('compact actions put the decision before bounded notes without mutating legacy requests', () => {
+  const legacy = repositoryActionSchema(), compact = repositoryActionSchema('compact');
+  assert.equal(Object.keys(legacy.properties)[0], 'memory');
+  assert.equal(legacy.properties.memory.maxLength, undefined);
+  assert.deepEqual(Object.keys(compact.properties), ['action', 'paths', 'edits', 'query', 'memory']);
+  assert.deepEqual(compact.required, Object.keys(compact.properties));
+  assert.equal(compact.properties.memory.maxLength, 512);
+  assert.equal(compact.properties.paths.maxItems, 3);
+  assert.equal(compact.properties.edits.maxItems, 8);
+  assert.equal(compact.properties.query.maxLength, 4096);
+  compact.properties.edits.items.properties.path.type = 'number';
+  assert.equal(repositoryActionSchema('compact').properties.edits.items.properties.path.type, 'string');
+  assert.deepEqual(repositoryActionSchema('legacy'), legacy);
+});
+
+test('unknown action schemas fail before sandbox creation or model dispatch', async () => {
+  assert.throws(() => repositoryActionSchema('unknown'), /invalid_action_schema_profile/);
+  await assert.rejects(runAgent(null, null, 'strong', 'invalid-schema', {},
+    async () => assert.fail('must not dispatch'), undefined, { actionSchemaProfile: 'unknown' }), /invalid_action_schema_profile/);
+});
+
+for (const profile of ['legacy', 'compact']) test(`action schema reaches repository requests: ${profile}`, {
+  skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+}, async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+  const task = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+    .find(task => task.id === 'provided-responses-path');
+  const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+    .receipts.find(receipt => receipt.taskId === task.id);
+  let calls = 0;
+  await runAgent(task, receipt.image, 'strong', 'schema-fixture',
+    { maxTurns: 1, deadlineMs: 120000, outputTokens: 256 }, async (_id, _role, body) => {
+      calls++;
+      assert.deepEqual(body.response_format.json_schema.schema, repositoryActionSchema(profile));
+      assert.ok(body.messages[0].content.includes(`at most ${profile === 'compact' ? '512' : '6,000'} characters`));
+      return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
+        action: 'read', paths: task.editPaths, edits: [], query: '', memory: '',
+      }) } }] };
+    }, undefined, { actionSchemaProfile: profile });
+  assert.equal(calls, 1);
+});
 
 test('tool feedback explains recovery without revealing final acceptance paths', () => {
   const task = { editPaths: ['worker/a.ts'], visibleTests: ['worker/test/a.test.mjs'], hiddenTests: ['worker/test/private.test.mjs'] };
