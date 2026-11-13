@@ -40,6 +40,12 @@ export default { async fetch(request, env, context) {
     assert.equal((await read("/v1/session/usage/events", { authorization: "Bearer fixture-key" })).status, 401);
     assert.equal((await read("/fixture/setup")).status, 200);
     const headers = { cookie: "clawrouter_session=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" };
+    const legacyResponse = await read("/v1/session/usage/report", headers); assert.equal(legacyResponse.status, 200); assert.match(legacyResponse.headers.get("cache-control"), /no-store/);
+    const legacy = await legacyResponse.json(); assert.equal(legacy.metrics.calls, 4); assert.equal("kind" in legacy, false);
+    const legacyRange = new URLSearchParams({ from: new Date(legacy.range.from).toISOString(), to: new Date(legacy.range.to).toISOString(), limit: "1" });
+    const legacyIds = []; let legacyCursor;
+    do { const response = await read("/v1/session/usage/events?" + legacyRange + (legacyCursor ? "&cursor=" + encodeURIComponent(legacyCursor) : ""), headers); assert.equal(response.status, 200); assert.match(response.headers.get("cache-control"), /no-store/); const page = await response.json(); legacyIds.push(...page.events.map(e => e.id)); assert.equal("kind" in page, false); assert.ok(!JSON.stringify(page.events).includes("private")); legacyCursor = page.nextCursor; } while (legacyCursor && legacyIds.length < 10);
+    assert.deepEqual(legacyIds, ["same-id", "same-id", "last", "astral-😀"]); assert.equal(legacyCursor, null);
     const response = await read("/v1/session/usage/report?intent=browse&timezone=Asia%2FKathmandu", headers);
     assert.equal(response.status, 200); assert.match(response.headers.get("cache-control"), /no-store/);
     const outcome = await response.json(); assert.equal(outcome.kind,"complete",JSON.stringify(outcome)); const report=outcome.value; assert.equal(report.metrics.calls, 4); assert.equal(report.metrics.inputTokens, 400); assert.equal(report.metrics.reasoningOutputTokens, 40);
@@ -49,16 +55,16 @@ export default { async fetch(request, env, context) {
     do { const pageResponse = await read("/v1/session/usage/events?limit=1&" + selected + (cursor ? "&cursor=" + encodeURIComponent(cursor) : ""), headers); assert.equal(pageResponse.status, 200); const pageOutcome = await pageResponse.json(); assert.equal(pageOutcome.kind,"complete"); const page=pageOutcome.value; ids.push(...page.events.map(e => e.id)); assert.ok(!JSON.stringify(page.events).includes("private")); cursor = page.nextCursor; } while (cursor && ids.length < 10);
     assert.deepEqual(ids, ["same-id", "same-id", "last", "astral-😀"]);
     for (const suffix of ["principal=bob%40example.com", "tenant=other", "policy=p2", "events=admin"]) assert.equal((await read("/v1/session/usage/report?" + suffix, headers)).status, 400);
-    assert.equal((await read("/v1/session/usage/report?key=key-b", headers)).status, 200);
-    assert.equal((await (await read("/v1/session/usage/report?key=key-b", headers)).json()).value.metrics.calls, 0);
+    assert.equal((await read("/v1/session/usage/report?intent=summary&key=key-b", headers)).status, 200);
+    assert.equal((await (await read("/v1/session/usage/report?intent=summary&key=key-b", headers)).json()).value.metrics.calls, 0);
     const dates = await (await read("/fixture/dates")).json();
     assert.equal(dates.kathmandu, Date.parse("2026-10-31T18:15:00Z")); assert.deepEqual(dates.ny.buckets.map(b => (b.end - b.start) / 3600000), [24, 25]); assert.equal(dates.spring / 3600000, 23); assert.equal(dates.halfHour / 3600000, 23.5);
     assert.equal((await worker.dispatchFetch("https://router.example/v1/session/usage/report", { method: "POST", headers })).status, 404);
     assert.equal((await worker.dispatchFetch("https://router.example/reporting-migration", { method: "POST", headers, body: "{}" })).status, 404);
     const migrate = options => worker.dispatchFetch("https://router.example/fixture/migrate", { method: "POST", body: JSON.stringify(options) });
     const dry = await (await migrate({})).json(); assert.ok(dry.every(r => r.dryRun));
-    assert.equal((await (await read("/v1/session/usage/report", headers)).json()).value.coverage.allDiscoveredSourcesAnswered, true);
+    assert.equal((await (await read("/v1/session/usage/report?intent=summary", headers)).json()).value.coverage.allDiscoveredSourcesAnswered, true);
     const applied = await (await migrate({ apply: true, batchSize: 1 })).json(); assert.ok(applied.every(r => !r.dryRun && r.complete));
-    const completed = (await (await read("/v1/session/usage/report", headers)).json()).value; assert.equal(completed.coverage.historicalLocations,"not_exhaustively_assessed"); assert.equal(completed.metrics.calls, 4);
+    const completed = (await (await read("/v1/session/usage/report?intent=summary", headers)).json()).value; assert.equal(completed.coverage.historicalLocations,"not_exhaustively_assessed"); assert.equal(completed.metrics.calls, 4);
   } finally { await worker?.dispose(); await rm(temporary, { recursive: true, force: true }); }
 });

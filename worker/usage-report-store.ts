@@ -113,8 +113,14 @@ export function migrateUsageReport(sql: ReportSql, transaction: (fn: () => void)
     const tables = new Set([...sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('usage_report_migration', 'usage_report_coverage', 'usage_report_events')")].map(row => row.name));
     const saved = tables.has("usage_report_migration") ? [...sql.exec("SELECT last_rowid, upper_rowid, complete FROM usage_report_migration WHERE id = 1")][0] : undefined;
     const coverage = tables.has("usage_report_coverage") ? [...sql.exec("SELECT generation, verified_generation, round_generation FROM usage_report_coverage WHERE id = 1")][0] : undefined;
-    const previouslyComplete = saved?.complete === 1 && coverage !== undefined && coverage.verified_generation === coverage.generation;
-    const freshRound = !previouslyComplete && (!coverage || coverage.round_generation !== coverage.generation);
+    // Dry-run also accepts the pre-format schema without altering it. A saved
+    // completion/coverage pair cannot certify obsolete projected metadata.
+    const hasFormat = tables.has("usage_report_events") && [...sql.exec("PRAGMA table_info(usage_report_events)")].some(row => row.name === "report_format_version");
+    const obsoleteFormat = tables.has("usage_report_events") && [...sql.exec(hasFormat
+      ? "SELECT 1 FROM usage_report_events INDEXED BY usage_report_old_format WHERE report_format_version IS NULL OR report_format_version != 2 LIMIT 1"
+      : "SELECT 1 FROM usage_report_events LIMIT 1")].length > 0;
+    const previouslyComplete = saved?.complete === 1 && coverage !== undefined && coverage.verified_generation === coverage.generation && !obsoleteFormat;
+    const freshRound = !previouslyComplete && (!coverage || coverage.round_generation !== coverage.generation || saved?.complete === 1 && obsoleteFormat);
     const upper = Number(freshRound || !saved ? [...sql.exec("SELECT COALESCE(MAX(rowid), 0) AS upper_rowid FROM usage_events")][0].upper_rowid : saved.upper_rowid);
     const last = Number(options.afterRowid ?? (freshRound ? 0 : saved?.last_rowid ?? 0));
     if (!Number.isSafeInteger(last) || last < 0 || last > upper || !Number.isSafeInteger(upper)) throw new Error("invalid migration watermark");
