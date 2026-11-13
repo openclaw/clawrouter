@@ -648,6 +648,8 @@ manifest-only catalog route metadata and streamed terminal accounting. The
 first changes one discovery module. The second spans four source modules to
 inspect bounded SSE frames, preserve authoritative terminal usage, and settle
 protocol failures and caller cancellation without changing the HTTP status.
+The task explicitly specifies the `observeUsage().result` report shape required
+by acceptance tests; internal API requirements must be visible to the agent.
 
 Qualify this manifest before inference. The reference repair must pass the
 original visible tests and independent acceptance, and the broken base must
