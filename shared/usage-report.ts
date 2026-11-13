@@ -81,7 +81,7 @@ export interface PersonalUsageEvent {
   costClass: UsageCostClass;
   reportingCostMicros: number | null;
   estimateReason?: string | null;
-  recordedChargeMicros: number;
+  recordedChargeMicros: number | null;
   costBasis: string | null;
   pricingRef: string | null;
   requestedTier: string | null;
@@ -103,3 +103,37 @@ export interface PersonalUsageEvents {
 // groupBy = model|provider|key; provider/model/key/status/costClass/lane are optional exact filters.
 // /v1/session/usage/report: at most 100 groups, no events.
 // /v1/session/usage/events: limit 1..100 (default 25), opaque cursor, same filters/range.
+
+/** Complete reporting: no private addresses, fences or digests. Existing endpoints
+ * retain their compatibility contract until the separately gated adapters switch. */
+export interface CompleteUsageQuery {
+  from: number; to: number; timezone: string; grain: 'day' | 'minute';
+  groupBy: UsageGroupBy | 'user'; rankBy: 'calls' | 'tokens' | 'recordedAmount'; rankOffset?: number;
+  filters: { user?: string; key?: { kind: 'session' } | { kind: 'credential'; id: string };
+    model?: string; provider?: string; status?: string; lane?: string; costClass?: string };
+}
+export interface UsageAdditives {
+  metrics: UsageMetrics; recordedChargeMicros: number; chargeReportedCalls: number; costs: UsageCostSummary[];
+}
+export interface UsageGroupIdentity { owner: string | null; value: string | null }
+export interface CompleteUsageGroup extends UsageAdditives { identity: UsageGroupIdentity }
+export interface UsageCoverage {
+  authority: 'current_access' | 'admin_retained';
+  scope: 'admin_current_plus_tracked_retired' | 'personal_current_access';
+  discoveredScopeEnumeration: 'complete'; allDiscoveredSourcesAnswered: true; retainedAttributionComplete: true;
+  historicalLocations: 'not_exhaustively_assessed'; formerLocationLateWrites: 'not_bounded';
+  captureAudit: { startedAt: number; verifiedSince: number; captureGapObserved: boolean };
+  effectiveFrom: number; clippedFrom: number | null; capturedBetween: { from: number; to: number };
+}
+export interface CompleteUsageReport extends UsageAdditives {
+  query: CompleteUsageQuery; cut: string | null; coverage: UsageCoverage;
+  buckets: Array<{ start: number; end: number; label: string } & UsageAdditives>;
+  groups: CompleteUsageGroup[]; remainder: UsageAdditives;
+  rank: { exact: true; distinctGroups: number; offset: number; hasMore: boolean };
+}
+export interface CompleteUsageEvent extends PersonalUsageEvent { user: string | null }
+export interface CompleteUsageEvents { events: CompleteUsageEvent[]; nextCursor: string | null; coverage: UsageCoverage }
+export type CompleteUsageOutcome<T> = { kind: 'complete'; value: T } | { kind: 'no_access' }
+  | { kind: 'outside_retained_range'; effectiveFrom: number; requestedTo: number }
+  | { kind: 'restart'; reason: 'authority' | 'mutation' | 'source' | 'expired' | 'evicted' }
+  | { kind: 'unavailable'; reason: 'capacity' | 'source' | 'migration' | 'cancelled' };

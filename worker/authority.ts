@@ -33,6 +33,9 @@ import { admitUserJson, admitUserRecordBytes, parseUserRecord, readUserKvRecord,
 import { readAuthorityUserResponse } from "./authority-user-response.ts";
 import { admitAssignmentBytes, assignmentJsonText, assignmentSourceBudget, assignmentSourceFailure, assignmentSourceHeader, assignmentSourceVersion, isAssignmentSourceFailure, parseAssignmentSource, readAssignmentRequest, readAssignmentResponse } from "./assignment-source.ts";
 
+import { UsageReportCuts } from "./usage-report-cuts.ts";
+import { reportRetentionMs } from "./usage-report-range.ts";
+
 type Principal = { principalType: "user" | "group"; principalId: string };
 type Seed = { principal: Principal; bindings: PolicyBinding[] };
 export type AdmissionJournalEntry =
@@ -71,6 +74,8 @@ export class PolicyBindingIndexObject implements DurableObject {
   private responses?: Promise<ResponsesScopeStore>;
   private preflightArena?: PreflightInstanceArena;
   private env: Env;
+  private readonly usageOwner: boolean;
+  private usageCuts?: UsageReportCuts;
   // Reconciliation entry order only; unrelated owner routes remain concurrent.
   private assignmentTail: Promise<void> = Promise.resolve();
   private assignmentAdmissions = 0;
@@ -79,13 +84,29 @@ export class PolicyBindingIndexObject implements DurableObject {
     this.env = env;
     this.storage = state.storage;
     this.sql = state.storage.sql;
+    this.usageOwner = !!state.id && !!env?.ACCESS_CONTROL && state.id.toString() === env.ACCESS_CONTROL.idFromName("policy-bindings").toString();
     this.ensureSchema();
+    if (this.usageOwner) this.storage.transactionSync(() => ensureUsageInventory(this.sql));
   }
 
   async fetch(request: Request): Promise<Response> {
     const path = new URL(request.url).pathname;
     if (request.method !== "POST" && !request.headers.has(userMaterializationHeader) && !request.headers.has(assignmentSourceHeader) && !request.headers.has(policyCollectionHeader)) return errorResponse("route_not_found", "route not found", 404);
     try {
+      if (path.startsWith("/usage-cuts/")) {
+        if (!this.usageOwner || request.method !== "POST") return errorResponse("route_not_found", "route not found", 404);
+        const input = await readJson<unknown>(request, undefined, 1024 * 1024);
+        const revision = this.storage.transactionSync(() => maintainUsageInventory(this.sql));
+        return json((this.usageCuts ??= new UsageReportCuts()).dispatch(path.slice("/usage-cuts/".length), input, revision));
+      }
+      if (path === "/usage-inventory" || path === "/usage-inventory-evidence") {
+        if (!this.usageOwner || request.method !== "POST") return errorResponse("route_not_found", "route not found", 404);
+        const input = await readJson<Record<string, unknown>>(request, undefined, 64);
+        if (!input || Array.isArray(input) || Object.keys(input).length) invalidAuthorityRequest("invalid inventory request");
+        return json(this.storage.transactionSync(() => path === "/usage-inventory-evidence"
+          ? (maintainUsageInventory(this.sql), usageInventoryEvidence(this.sql))
+          : readUsageInventory(this.sql, this.hasMeta("policies_global_initialized"))));
+      }
       if (request.headers.has(policyCollectionHeader)) {
         // A private protocol selector, not authority or a public caller header.
         const input = await readPolicyRequest(request, path);
@@ -2201,4 +2222,99 @@ function sortBindings(values: PolicyBinding[]): PolicyBinding[] {
 
 function invalidAuthorityRequest(message: string): never {
   throw new HttpError(400, "authority_error", message);
+}
+
+
+// Mutation metadata, not authority or proof of exhaustive historical discovery.
+// Uniquely named triggers survive old writers; metadata caps never reject policy writes.
+const inventoryRetention = reportRetentionMs, inventoryRows = 8192, inventoryBytes = 8 * 1024 * 1024;
+const inventoryClock = "CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER)";
+const inventoryBump = "revision = lower(hex(randomblob(16)))";
+function inventoryTenant(column: string): string {
+  return "CASE WHEN json_valid(" + column + ") THEN CASE WHEN json_type(" + column + ") = 'object' THEN CASE " +
+    "WHEN json_type(" + column + ", '$.tenantId') IS NULL OR json_type(" + column + ", '$.tenantId') = 'null' THEN 'default' " +
+    "WHEN json_type(" + column + ", '$.tenantId') = 'text' THEN json_extract(" + column + ", '$.tenantId') END END END";
+}
+const inventoryRecount = "UPDATE usage_inventory_state SET retired_rows = (SELECT count(*) FROM usage_shard_retired), retired_bytes = (SELECT coalesce(sum(length(CAST(policy_id AS BLOB)) + length(CAST(tenant_id AS BLOB))),0) FROM usage_shard_retired) WHERE id = 1;";
+const inventoryPrune = "UPDATE usage_inventory_state SET " + inventoryBump + " WHERE id = 1 AND EXISTS (SELECT 1 FROM usage_shard_retired WHERE retired_at_ms <= observed_clock - " + inventoryRetention + "); " +
+  "DELETE FROM usage_shard_retired WHERE retired_at_ms <= (SELECT observed_clock FROM usage_inventory_state WHERE id = 1) - " + inventoryRetention + "; " + inventoryRecount;
+function inventoryAddressValid(id: string, tenant: string): string {
+  return "typeof(" + id + ") = 'text' AND typeof(" + tenant + ") = 'text' AND length(CAST(" + id + " AS BLOB)) + length(CAST(" + tenant + " AS BLOB)) <= 2048";
+}
+function inventoryRetire(candidate: string): string {
+  const valid = inventoryAddressValid('p', 't');
+  const exists = 'EXISTS (SELECT 1 FROM usage_shard_retired WHERE policy_id = p AND tenant_id = t)';
+  const fits = 'retired_rows BETWEEN 0 AND ' + (inventoryRows - 1) + ' AND retired_bytes BETWEEN 0 AND ' + inventoryBytes + ' AND length(CAST(p AS BLOB)) + length(CAST(t AS BLOB)) <= ' + inventoryBytes + ' - retired_bytes';
+  return 'UPDATE usage_inventory_state SET capture_gap = 1, verified_since = observed_clock, ' + inventoryBump + ' WHERE id = 1 AND EXISTS (SELECT 1 FROM (' + candidate + ') WHERE NOT coalesce((' + valid + '),0) OR NOT ' + exists + ' AND NOT coalesce((' + fits + '),0)); ' +
+    'UPDATE usage_shard_retired SET retired_at_ms = (SELECT observed_clock FROM usage_inventory_state WHERE id = 1) WHERE (policy_id,tenant_id) IN (SELECT p,t FROM (' + candidate + ') WHERE ' + valid + '); ' +
+    'INSERT INTO usage_shard_retired (policy_id,tenant_id,retired_at_ms) SELECT p,t,observed_clock FROM (' + candidate + '), usage_inventory_state WHERE id = 1 AND ' + valid + ' AND NOT ' + exists + ' AND ' + fits + '; ' + inventoryRecount;
+}
+function inventoryTriggerDefinitions(): Array<{name: string; sql: string}> {
+  const previous = inventoryTenant('policy_json'), old = inventoryTenant('OLD.policy_json'), next = inventoryTenant('NEW.policy_json');
+  return ['INSERT','UPDATE','DELETE'].map(operation => {
+    const name = 'usage_inventory_' + operation.toLowerCase() + '_v1';
+    const changed = operation === 'DELETE' ? '1' : operation === 'INSERT'
+      ? 'NOT EXISTS (SELECT 1 FROM access_policies WHERE policy_id = NEW.policy_id AND (' + previous + ') IS (' + next + '))'
+      : 'OLD.policy_id IS NOT NEW.policy_id OR (' + old + ') IS NOT (' + next + ')';
+    let retire = operation === 'INSERT'
+      ? inventoryRetire('SELECT policy_id AS p, (' + previous + ') AS t FROM access_policies WHERE policy_id = NEW.policy_id AND (' + previous + ') IS NOT (' + next + ')')
+      : inventoryRetire('SELECT OLD.policy_id AS p, (' + old + ') AS t WHERE ' + changed);
+    // UPDATE OR REPLACE may also replace a target row without recursive DELETE.
+    if (operation === 'UPDATE') retire += inventoryRetire('SELECT policy_id AS p, (' + previous + ') AS t FROM access_policies WHERE policy_id = NEW.policy_id AND policy_id IS NOT OLD.policy_id AND (' + previous + ') IS NOT (' + next + ')');
+    const gap = operation === 'DELETE' ? '' : 'UPDATE usage_inventory_state SET capture_gap = 1, verified_since = observed_clock, ' + inventoryBump + ' WHERE id = 1 AND NOT coalesce((' + inventoryAddressValid('NEW.policy_id',next) + '),0); ';
+    return {name, sql: 'CREATE TRIGGER ' + name + ' BEFORE ' + operation + ' ON access_policies BEGIN ' +
+      'UPDATE usage_inventory_state SET observed_clock = MAX(observed_clock, ' + inventoryClock + ') WHERE id = 1; ' + inventoryPrune +
+      'UPDATE usage_inventory_state SET ' + inventoryBump + ' WHERE id = 1 AND (' + changed + '); ' + gap + retire + ' END'};
+  });
+}
+function ensureUsageInventory(sql: SqlStorage): void {
+  sql.exec('CREATE TABLE IF NOT EXISTS usage_inventory_state (id INTEGER PRIMARY KEY, version INTEGER, started_at INTEGER, verified_since INTEGER, capture_gap INTEGER, observed_clock INTEGER, retired_rows INTEGER, retired_bytes INTEGER, revision TEXT)');
+  sql.exec('CREATE TABLE IF NOT EXISTS usage_shard_retired (policy_id TEXT, tenant_id TEXT, retired_at_ms INTEGER, PRIMARY KEY(policy_id,tenant_id))');
+  sql.exec('CREATE INDEX IF NOT EXISTS usage_retired_time ON usage_shard_retired(retired_at_ms)');
+  const existing = rows(sql.exec('SELECT id FROM usage_inventory_state WHERE id = 1')).length > 0;
+  if (!existing) sql.exec('INSERT INTO usage_inventory_state VALUES (1,1,' + inventoryClock + ',' + inventoryClock + ',0,' + inventoryClock + ',0,0,lower(hex(randomblob(16))))');
+  const definitions = inventoryTriggerDefinitions();
+  if (definitions.some(def => rows<{sql: string}>(sql.exec("SELECT sql FROM sqlite_master WHERE type='trigger' AND name=?",def.name))[0]?.sql !== def.sql)) {
+    if (existing) sql.exec('UPDATE usage_inventory_state SET capture_gap = 1, observed_clock = MAX(observed_clock, ' + inventoryClock + '), verified_since = MAX(observed_clock, ' + inventoryClock + '), ' + inventoryBump + ' WHERE id = 1');
+    for (const def of definitions) { sql.exec('DROP TRIGGER IF EXISTS ' + def.name); sql.exec(def.sql); }
+  }
+}
+interface UsageInventory {
+  addresses: Array<{policyId: string; tenantId: string}>; revision: string;
+  historicalLocations: 'not_exhaustively_assessed'; formerLocationLateWrites: 'not_bounded';
+  captureAudit: {startedAt: number; verifiedSince: number; captureGapObserved: boolean};
+}
+function usageInventoryEvidence(sql: SqlStorage): Omit<UsageInventory, 'addresses'> {
+  const state = rows<{revision:string;started_at:number;verified_since:number;capture_gap:number;version:number}>(sql.exec('SELECT * FROM usage_inventory_state WHERE id = 1'))[0];
+  if (state.version !== 1) inventoryUnavailable('version');
+  return {revision:state.revision,historicalLocations:'not_exhaustively_assessed',formerLocationLateWrites:'not_bounded',
+    captureAudit:{startedAt:state.started_at,verifiedSince:state.verified_since,captureGapObserved:state.capture_gap === 1}};
+}
+function inventoryUnavailable(reason: string): never { throw new HttpError(503, 'usage_inventory_unavailable', 'Usage inventory unavailable (' + reason + ')'); }
+function maintainUsageInventory(sql: SqlStorage, now = Date.now()): string {
+  ensureUsageInventory(sql);
+  if (!Number.isSafeInteger(now) || now < 0) inventoryUnavailable('clock');
+  sql.exec('UPDATE usage_inventory_state SET observed_clock = MAX(observed_clock, ?) WHERE id = 1',now);
+  // Logical expiry changes revision BEFORE root validation. No shard-floor or
+  // clock-skew inference; equality expires, without extending address retention.
+  for (const statement of inventoryPrune.split(';').filter(text => text.trim())) sql.exec(statement);
+  const state = rows<{revision:string;version:number}>(sql.exec('SELECT revision,version FROM usage_inventory_state WHERE id = 1'))[0];
+  if (state.version !== 1 || !/^[a-f0-9]{32}$/.test(state.revision)) inventoryUnavailable('version');
+  return state.revision;
+}
+function readUsageInventory(sql: SqlStorage, initialized: boolean): UsageInventory {
+  maintainUsageInventory(sql);
+  if (!initialized) inventoryUnavailable('initialization'); // Never initialize/list KV for reports.
+  const bounded = 'SELECT policy_id,policy_json FROM access_policies LIMIT 2049';
+  const size = rows<{count:number; bytes:number; max_id:number}>(sql.exec('SELECT count(*) AS count, coalesce(sum(length(CAST(policy_json AS BLOB))),0) AS bytes, coalesce(max(length(CAST(policy_id AS BLOB))),0) AS max_id FROM (' + bounded + ')'))[0];
+  if (size.count > 2048 || size.bytes > 4 * 1024 * 1024 || size.max_id > 2048) inventoryUnavailable('capacity');
+  const union = 'SELECT policy_id, (' + inventoryTenant('policy_json') + ') AS tenant_id FROM access_policies UNION SELECT policy_id,tenant_id FROM usage_shard_retired';
+  const output = rows<{bytes:number}>(sql.exec("SELECT coalesce(sum(length(CAST(json_object('policyId',policy_id,'tenantId',tenant_id) AS BLOB)) + 1),0) AS bytes FROM (" + union + ')'))[0];
+  if (output.bytes > 1024 * 1024 - 1024) inventoryUnavailable('capacity');
+  const current = rows<{policy_id:string; tenant_id:string | null}>(sql.exec('SELECT policy_id, (' + inventoryTenant('policy_json') + ') AS tenant_id FROM access_policies'));
+  if (current.some(row => typeof row.policy_id !== 'string' || typeof row.tenant_id !== 'string' || new TextEncoder().encode(row.policy_id + row.tenant_id).length > 2048)) inventoryUnavailable('address');
+  const addresses = rows<{policy_id:string;tenant_id:string}>(sql.exec(union + ' ORDER BY tenant_id COLLATE BINARY, policy_id COLLATE BINARY')).map(row => ({policyId:row.policy_id,tenantId:row.tenant_id}));
+  const state = rows<{revision:string;started_at:number;verified_since:number;capture_gap:number;version:number}>(sql.exec('SELECT * FROM usage_inventory_state WHERE id = 1'))[0];
+  if (state.version !== 1) inventoryUnavailable('version');
+  return {addresses,...usageInventoryEvidence(sql)};
 }

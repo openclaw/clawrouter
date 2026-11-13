@@ -15,6 +15,7 @@ import { normalizePolicyTiers } from "./service-tiers.ts";
 import { normalizeLimitHint } from "./policy-limits.ts";
 import { validGrantKey } from "./grant-routing.ts";
 import { authorizeAdmin } from "./access";
+import { completeUsageResponse } from "./usage-report-session.ts";
 import { minimaxMusicBinding, minimaxMusicCoverBinding, minimaxSpeechBinding, readNativeMediaBinding } from "../shared/native-media-binding.ts";
 import { backgroundRecovery } from "./background-recovery.ts";
 import {
@@ -50,6 +51,9 @@ export async function adminApi(request: Request, env: Env, path: string): Promis
   const authorization = await authorizeAdmin(request, env);
   if (authorization instanceof Response) return authorization;
   try {
+    if (path === "/v1/admin/usage/report" && ["GET","DELETE"].includes(request.method)) return await completeUsageResponse(request,env,"admin",request.method === "DELETE" ? "release" : "report",authorization);
+    if (request.method === "GET" && path === "/v1/admin/usage/events") return await completeUsageResponse(request,env,"admin","events",authorization);
+    if (request.method === "GET" && path === "/v1/admin/usage/validate") return await completeUsageResponse(request,env,"admin","validate",authorization);
     if (path === "/v1/admin/large-http") {
       if (!env.LARGE_HTTP_POOL || !env.LARGE_HTTP_TOKEN) return errorResponse("large_runtime_unavailable", "large HTTP runtime is not configured", 503);
       if (request.method === "GET") return privateJson(await lifecycleCall(env, "snapshot", {}));

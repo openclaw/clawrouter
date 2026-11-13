@@ -1,3 +1,4 @@
+import { useAdminUsage } from "./hooks/use-admin-usage";
 import { usePersonalUsage } from "./hooks/use-personal-usage";
 import { useSubscriptions } from "./hooks/use-subscriptions";
 import { useCallback, useEffect, useRef } from "react";
@@ -39,6 +40,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
   const catalog = useCatalog(session.demoMode);
   const usage = useUsage(session.demoMode, request);
   const personalUsage = usePersonalUsage({ request, scope, active: session.view === "my-usage" || (session.view === "home" && session.value.role !== "admin"), full: session.view === "my-usage" });
+  const adminUsage = useAdminUsage({request,scope,active: session.view === "usage" && session.value.role === "admin",full:true});
   const memberQuotaRead = useRef<{ generation: number; controller?: AbortController }>({ generation: 0 });
   useEffect(() => () => memberQuotaRead.current.controller?.abort(), []);
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
@@ -330,7 +332,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     session.navigateTo(...args);
   }
 
-  return { session: { ...session, navigateTo }, catalog, access, usage, personalUsage, subscriptions, selfServiceKeys, credentialOwner, playground, request, refresh, refreshMetadataAfterMutation };
+  return { session: { ...session, navigateTo }, catalog, access, usage, personalUsage, adminUsage, subscriptions, selfServiceKeys, credentialOwner, playground, request, refresh, refreshMetadataAfterMutation };
 }
 
 export type ConsoleController = ReturnType<typeof useConsoleController>;

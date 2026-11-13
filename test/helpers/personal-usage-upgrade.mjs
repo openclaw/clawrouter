@@ -16,7 +16,7 @@ export function router(source, candidate, proofOffset) { return `
  import { UsageLedgerObject as Ledger, budgetStatus, usageStub } from "${source}/worker/ledgers.ts";
  import { authorityCall } from "${source}/worker/authority.ts";
  import { sha256Hex } from "${source}/worker/utils.ts";
- ${candidate ? 'import { migrateUsageReportShard } from "' + source + '/worker/usage-report.ts";' : ''}
+ ${candidate ? 'import { migrateUsageReportShard } from "' + source + '/worker/usage-report.ts"; import { usageReportProjectionComplete } from "' + source + '/worker/usage-report-store.ts";' : ''}
  const policy = ${JSON.stringify(policy)};
  // A fixed offset keeps the fixture near UTC noon across restart while time
  // continues advancing, preserving half-open report boundary semantics.
@@ -29,7 +29,7 @@ export function router(source, candidate, proofOffset) { return `
    const rows = [...this.sql.exec("SELECT id, event_json FROM usage_events ORDER BY id")];
    const exists = [...this.sql.exec("SELECT name FROM sqlite_master WHERE type='table' AND name='usage_report_events'")].length > 0;
    const projection = exists ? [...this.sql.exec("SELECT COUNT(*) AS n FROM usage_report_events")][0].n : 0;
-   return Response.json({ rawCount: rows.length, rawDigest: await sha256Hex(JSON.stringify(rows)), projection });
+   return Response.json({ rawCount: rows.length, rawDigest: await sha256Hex(JSON.stringify(rows)), projection, ${candidate ? 'projectionComplete: usageReportProjectionComplete(this.sql)' : 'projectionComplete: false'} });
   }
  }
  const proofHandler = { ...handler, async fetch(request, env, context) {
@@ -91,9 +91,10 @@ export async function provePersonalUsageUpgrade({ eventsPerOwner = 12, artifactP
  let worker;
  const read = async (path, init = {}) => worker.dispatchFetch("https://router.example" + path, { ...init, headers: { cookie: sessionCookie, ...init.headers } });
  const json = async path => { const response = await read(path); assert.equal(response.status, 200, await response.clone().text()); return response.json(); };
+ const complete = async path => { const outcome = await json(path); assert.equal(outcome.kind, "complete", JSON.stringify(outcome)); return outcome.value; };
  const until = async (fn, predicate) => { const end = Date.now() + 20000; for (;;) { const value = await fn(); if (predicate(value)) return value; if (Date.now() > end) throw new Error("accounting ingestion did not converge"); await new Promise(r => setTimeout(r, 20)); } };
  const send = async owner => { const response = await read("/v1/responses", { method: "POST", headers: { authorization: "Bearer clawrouter-live-" + owner + "-synthetic-key", "content-type": "application/json" }, body: JSON.stringify({ model: "openai/gpt-6.1-sol", input: "synthetic fixture", max_output_tokens: 32 }) }); assert.equal(response.status, 200, await response.clone().text()); await response.text(); };
- const samples = async path => { const times=[]; let body; for(let i=0;i<12;i++){const start=performance.now();body=await json(path);times.push(performance.now()-start);} return { ...summarize(times), payloadBytes: new TextEncoder().encode(JSON.stringify(body)).length, body }; };
+ const samples = async path => { const times=[]; let body; for(let i=0;i<12;i++){const start=performance.now();body=await complete(path);times.push(performance.now()-start);} return { ...summarize(times), payloadBytes: new TextEncoder().encode(JSON.stringify(body)).length, body }; };
  try {
   worker = await startWorkerdFixture(temporary, router(baseline, false, proofOffset), upstream, options);
   assert.equal((await read("/_proof/setup")).status, 200);
@@ -107,36 +108,40 @@ export async function provePersonalUsageUpgrade({ eventsPerOwner = 12, artifactP
   const after = await json("/_proof/state");
   assert.equal(after.rawDigest, before.rawDigest); assert.deepEqual(after.config, before.config); assert.equal(after.settingsDigest,before.settingsDigest); assert.equal(after.budget.spentMicros, before.budget.spentMicros); assert.equal(after.projection, 0);
   assert.equal((await worker.dispatchFetch("https://router.example/v1/session/usage/report")).status, 401);
-  const transition = await samples("/v1/session/usage/report?days=7"), report = transition.body;
+  const transition = await samples("/v1/session/usage/report?days=7&intent=summary"), report = transition.body;
   assert.equal(report.metrics.calls, eventsPerOwner); assert.equal(report.metrics.inputTokens, eventsPerOwner*100);
-  assert.equal(report.historyComplete, true); assert.equal(report.projectionComplete, false); assert.equal(report.historySource, "retained_ledger");
+  assert.equal(report.coverage.allDiscoveredSourcesAnswered, true); assert.equal(report.coverage.historicalLocations, "not_exhaustively_assessed"); assert.equal(after.projectionComplete, false);
   assert.equal(report.costs.find(c=>c.costClass==="fixed").amountMicros, eventsPerOwner*17);
-  const futureCustom = new URLSearchParams({ from: new Date(report.range.from).toISOString(), to: new Date(report.range.to + 60000).toISOString() });
+  const futureCustom = new URLSearchParams({ intent: "summary", from: new Date(report.query.from).toISOString(), to: new Date(report.query.to + 60000).toISOString() });
   assert.equal((await read("/v1/session/usage/report?" + futureCustom)).status, 400);
-  const anchored = new URLSearchParams({ from: new Date(report.range.from).toISOString(), to: new Date(report.range.to).toISOString(), timezone: report.range.timezone, limit: "100" });
-  const events = await json("/v1/session/usage/events?" + anchored);
-  assert.ok(events.events.every(e=>e.keyId==="owner")); assert.equal(events.historySource,"retained_ledger");
+  const anchored = new URLSearchParams({ from: new Date(report.query.from).toISOString(), to: new Date(report.query.to).toISOString(), timezone: report.query.timezone, limit: "100" });
+  const browse = await complete("/v1/session/usage/report?" + new URLSearchParams({ from: new Date(report.query.from).toISOString(), to: new Date(report.query.to).toISOString(), timezone: report.query.timezone, intent: "browse" }));
+  anchored.set("cut", browse.cut);
+  const events = await complete("/v1/session/usage/events?" + anchored);
+  assert.ok(events.events.every(e=>e.keyId==="owner")); assert.equal(events.coverage.retainedAttributionComplete,true);
   const afterRead = await json("/_proof/state"); assert.equal(afterRead.rawDigest,before.rawDigest); assert.equal(afterRead.projection,0); assert.deepEqual(afterRead.config,before.config); assert.equal(afterRead.settingsDigest,before.settingsDigest); assert.equal(afterRead.budget.spentMicros,before.budget.spentMicros);
   await send("owner"); await send("other");
   const withNew = await until(()=>json("/_proof/state"),s=>s.rawCount===(eventsPerOwner+1)*2 && s.budget.spentMicros===(eventsPerOwner+1)*17);
   assert.equal(withNew.projection,2);
-  const beforeProjection = await samples("/v1/session/usage/report?days=7"), mixed = beforeProjection.body; assert.equal(mixed.metrics.calls,eventsPerOwner+1); assert.equal(mixed.metrics.reasoningReportedCalls,1); assert.equal(mixed.metrics.reasoningOutputTokens,10);
+  const beforeProjection = await samples("/v1/session/usage/report?days=7&intent=summary"), mixed = beforeProjection.body; assert.equal(mixed.metrics.calls,eventsPerOwner+1); assert.equal(mixed.metrics.reasoningReportedCalls,1); assert.equal(mixed.metrics.reasoningOutputTokens,10);
   await read("/_proof/binding",{method:"POST",body:JSON.stringify({enabled:false})});
-  const revoked = await json("/v1/session/usage/report?days=7"); assert.equal(revoked.metrics.calls,0);
-  assert.deepEqual((await json("/v1/session/usage/events?"+anchored)).events,[]);
-  if(events.nextCursor) assert.equal((await read("/v1/session/usage/events?"+anchored+"&cursor="+encodeURIComponent(events.nextCursor))).status,400);
+  const revoked = await json("/v1/session/usage/report?days=7&intent=summary"); assert.equal(revoked.kind,"no_access");
+  assert.equal((await json("/v1/session/usage/events?"+anchored)).kind,"no_access");
+  if(events.nextCursor) assert.equal((await json("/v1/session/usage/events?"+anchored+"&cursor="+encodeURIComponent(events.nextCursor))).kind,"no_access");
   await read("/_proof/binding",{method:"POST",body:JSON.stringify({enabled:true})});
   await read("/_proof/policy",{method:"POST",body:JSON.stringify({enabled:false})});
-  assert.equal((await json("/v1/session/usage/report?days=7")).metrics.calls,0);
-  assert.deepEqual((await json("/v1/session/usage/events?"+anchored)).events,[]);
+  assert.equal((await json("/v1/session/usage/report?days=7&intent=summary")).kind,"no_access");
+  assert.equal((await json("/v1/session/usage/events?"+anchored)).kind,"no_access");
   const denied=await read("/v1/responses",{method:"POST",headers:{authorization:"Bearer clawrouter-live-owner-synthetic-key","content-type":"application/json"},body:JSON.stringify({model:"openai/gpt-6.1-sol",input:"synthetic fixture"})});
   assert.equal(denied.status,403);
   await read("/_proof/policy",{method:"POST",body:JSON.stringify({enabled:true})});
+  const release = await read("/v1/session/usage/report?" + new URLSearchParams({ cut: browse.cut }), { method: "DELETE", headers: { origin: "https://router.example" } });
+  assert.equal(release.status,200,await release.clone().text());
   const migrate = async opts => {const r=await read("/_proof/migrate",{method:"POST",body:JSON.stringify(opts)});assert.equal(r.status,200,await r.clone().text());return r.json();};
   const dry = await migrate({}); assert.equal(dry.dryRun,true); assert.equal((await json("/_proof/state")).projection,2);
   let applied; do { applied=await migrate({apply:true,batchSize:200}); } while(!applied.complete);
-  const indexed=await samples("/v1/session/usage/report?days=7"), final=await json("/_proof/state");
-  assert.equal(indexed.body.metrics.calls,eventsPerOwner+1); assert.equal(indexed.body.projectionComplete,true); assert.equal(indexed.body.historySource,"projection"); assert.equal(final.rawDigest,withNew.rawDigest); assert.equal(final.budget.spentMicros,withNew.budget.spentMicros); assert.deepEqual(final.config,before.config);
+  const indexed=await samples("/v1/session/usage/report?days=7&intent=summary"), final=await json("/_proof/state");
+  assert.equal(indexed.body.metrics.calls,eventsPerOwner+1); assert.equal(final.projectionComplete,true); assert.equal(indexed.body.coverage.allDiscoveredSourcesAnswered,true); assert.equal(final.rawDigest,withNew.rawDigest); assert.equal(final.budget.spentMicros,withNew.budget.spentMicros); assert.deepEqual(final.config,before.config);
   const candidateCostRuntime = await exercisePersonalUsageCosts({ read, json, until, restart: async () => {
    await worker.dispose(); worker = null;
    worker = await startWorkerdFixture(temporary, router(resolve("."), true, proofOffset), upstream, options);

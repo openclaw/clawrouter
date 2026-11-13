@@ -3,6 +3,7 @@ import { HttpError } from "./utils.ts";
 
 export const reportDayMs = 86_400_000;
 export const reportRetentionMs = 30 * reportDayMs;
+export const reportCutTtlMs = 15 * 60_000;
 function invalid(message: string): never { throw new HttpError(400, "invalid_usage_range", message); }
 
 /** Date-only Intl conversion: bounded binary search, no whole-hour offset assumptions.

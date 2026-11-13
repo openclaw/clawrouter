@@ -13,10 +13,10 @@ test("workerd baseline upgrade preserves authenticated personal history, setting
  assert.equal(hard.httpStatus,502);assert.ok(hard.reservationMicros>0);assert.equal(hard.costClass,"unknown");
  assert.equal(hard.reportingKnownComponentMicros,null);assert.equal(hard.reportingAmountMicros,null);
  assert.equal(hard.recordedChargeMicros,hard.reservationMicros);assert.equal(hard.budgetSpentMicros,hard.recordedChargeMicros);
- assert.equal(hard.eventCsvReportingAmount,"");assert.equal(hard.reportCsvReportingAmountUsd,"");
+ assert.equal(hard.eventCsvReportingAmount,"");assert.equal(hard.rankCsvReportingAmountMicros,"");
  assert.equal(soft.httpStatus,200);assert.equal(soft.costClass,"partial");assert.equal(soft.reportingKnownComponentMicros,56);
  assert.equal(soft.reportingAmountMicros,soft.reportingKnownComponentMicros);assert.equal(soft.budgetSpentMicros,soft.recordedChargeMicros);
  assert.equal(soft.hostedToolCallsComplete,false);assert.equal(soft.hostedToolCostMicros,null);
- assert.equal(soft.eventCsvReportingAmount,"56");assert.equal(soft.reportCsvReportingAmountUsd,"0.000056");
+ assert.equal(soft.eventCsvReportingAmount,"56");assert.equal(soft.rankCsvReportingAmountMicros,"56");
  for(const path of ["worker/index.ts","worker/proxy.ts","worker/anthropic-price-response.ts","worker/proxy-accounting.ts","worker/accounting.ts","worker/ledgers.ts","worker/usage-report-store.ts","worker/usage-report.ts","admin/src/personal-usage.ts","test/helpers/personal-usage-cost-runtime.mjs"]) assert.match(proof.candidateSourceHashes[path],/^[a-f0-9]{64}$/);
 });

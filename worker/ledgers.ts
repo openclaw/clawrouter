@@ -1,3 +1,5 @@
+import { withUsageRetention, maintainUsageVisibility } from "./usage-report-visibility.ts";
+import { reportRetentionMs } from "./usage-report-range.ts";
 import { searchJsonBytes } from "./minimax-search-operation.ts";
 import { musicCoverControlHeader, musicCoverControlVersion, musicCoverUnavailable, readCoverControlRequest, type MiniMaxMusicCoverControl } from "./minimax-music-cover-control.ts";
 import type { MiniMaxSearchOperation } from "./minimax-search-operation.ts";
@@ -7,7 +9,8 @@ import type { GrantUsageSnapshot, GrantUsageRow, GrantUsageTotals } from "../sha
 import type { BudgetChargeRequest, BudgetReserveRequest, BudgetSettleRequest, Env, QueueMessage, UsageEvent } from "./types";
 import { budgetLedgerAddress, dailyBudgetLedgerAddress, weeklyBudgetLedgerAddress, providerBudgetLedgerAddress } from "./budget-scope.ts";
 import { mergePrincipalUsage, mergeUsageSnapshots, usageCutoffs, usageDayMs, usageShardName, type PrincipalUsage, type UsageSnapshot, type UsageTotals } from "./usage-sharding.ts";
-import { errorResponse, HttpError, json, normalizeEmail } from "./utils.ts";
+import { errorResponse, HttpError, json, normalizeEmail, readJson } from "./utils.ts";
+import { dispatchCompleteUsageShard } from "./usage-report-store.ts";
 import { backfillUsageRollups, ensureUsageRollups, rollupOwnerCondition, rollupSummaryColumns, rollupTotalColumns, usageRollupAlarmMs, usageRollupProgress } from "./usage-rollups.ts";
 
 export type UsageEventScope = { kind: "admin" } | { kind: "principal" | "credential"; id: string };
@@ -18,8 +21,8 @@ export interface UsageIngestReceipt {
 
 const reservationLeaseMs = 15 * 60 * 1_000;
 const chargeRetentionMs = 45 * 86_400_000;
-const usageWindowDays = 30;
-const usageRetentionMs = usageWindowDays * usageDayMs;
+const usageRetentionMs = reportRetentionMs;
+const usageWindowDays = usageRetentionMs / usageDayMs;
 const usageAttributionBatchSize = 250;
 
 export class BudgetLedgerObject implements DurableObject {
@@ -185,6 +188,14 @@ export class UsageLedgerObject implements DurableObject {
       return json(receipt);
     }
     // Internal DO transport only; never forwarded from a public mutation route.
+    if (request.method === "POST" && url.pathname === "/complete-usage") {
+      try {
+        const input = await readJson<unknown>(request, undefined, 1024 * 1024);
+        return json(this.state.storage.transactionSync(() => dispatchCompleteUsageShard(this.sql, input)));
+      } catch {
+        return json({ kind: "unavailable", reason: "source" });
+      }
+    }
     if (request.method === "POST" && (url.pathname === "/personal-report" || url.pathname === "/personal-events")) {
       const body = await request.json<{ query: UsageReportQuery; limit: number; before?: UsageEventPosition; includeEqualId?: boolean }>();
       return json(url.pathname === "/personal-report" ? queryUsageReport(this.sql, body.query) : queryUsageEvents(this.sql, body.query, body.limit, body.before, body.includeEqualId));
@@ -214,6 +225,7 @@ export class UsageLedgerObject implements DurableObject {
 
   async alarm(): Promise<void> {
     this.cleanup();
+    this.state.storage.transactionSync(() => maintainUsageVisibility(this.sql));
     const attributionPending = this.backfillAttribution();
     const before = usageRollupProgress(this.sql).last_rowid;
     backfillUsageRollups(this.sql, fn => this.state.storage.transactionSync(fn));
@@ -420,10 +432,10 @@ export class UsageLedgerObject implements DurableObject {
   }
 
   private cleanup(cutoff = Date.now() - usageRetentionMs): void {
-    this.state.storage.transactionSync(() => withUsageReportPair(this.sql, () => {
+    this.state.storage.transactionSync(() => withUsageReportPair(this.sql, () => withUsageRetention(this.sql, cutoff, () => {
       this.sql.exec("DELETE FROM usage_events WHERE occurred_at_ms < ?", cutoff);
       this.sql.exec("DELETE FROM usage_report_events WHERE occurred_at_ms < ?", cutoff);
-    }));
+    })));
   }
   private ensureSchema(): void {
     this.sql.exec("CREATE TABLE IF NOT EXISTS usage_events (id TEXT PRIMARY KEY, occurred_at_ms INTEGER NOT NULL, tenant_id TEXT NOT NULL, policy_id TEXT NOT NULL, provider TEXT NOT NULL, status TEXT NOT NULL, status_code INTEGER, input_tokens INTEGER, output_tokens INTEGER, total_tokens INTEGER, actual_cost_micros INTEGER NOT NULL, event_json TEXT NOT NULL)");
