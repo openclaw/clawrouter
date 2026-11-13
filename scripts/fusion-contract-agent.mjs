@@ -149,7 +149,9 @@ export async function runSingleDraft(task, image, _strategy, trialId, config, in
     if (patched) {
       const start = performance.now();
       await write(box, patched, remaining());
-      publicPassed = (await test(box, task.visibleTests, Math.min(30000, remaining()))).passed;
+      const visible = await test(box, task.visibleTests, Math.min(30000, remaining()));
+      if (visible.valid !== true) throw new Error('incomplete_test_run');
+      publicPassed = visible.passed;
       toolMs += performance.now() - start;
       files = patched; outcome = 'draft_submitted'; actions.push({ action: 'draft', status: 'ok' });
     }
@@ -195,6 +197,7 @@ export async function runRefinedDraft(task, image, strategy, trialId, config, in
     try {
       await write(box, files, remaining());
       visible = await test(box, task.visibleTests, remaining());
+      if (visible.valid !== true) throw new Error('incomplete_test_run');
       reproduced = await runProbe(box, task.reproducer, remaining());
     } finally { await box.close(); toolMs += performance.now() - gateStarted; }
     result = { ...result, publicPassed: visible.passed };

@@ -26,8 +26,8 @@ function fixture(probes, responses = [{ probe: 'private probe sentinel' }]) {
     return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(generated.shift() ?? {}) } }] };
   } };
 }
-const failed = { passed: false, assertionFailed: true, feedback: 'invariant failed' };
-const passed = { passed: true, assertionFailed: false, feedback: '' };
+const failed = { valid: true, passed: false, assertionFailed: true, feedback: 'invariant failed' };
+const passed = { valid: true, passed: true, assertionFailed: false, feedback: '' };
 
 test('a reproduced frozen check accepts the cheap candidate without strong repair', async () => {
   const f = fixture([failed, passed]);
@@ -242,6 +242,36 @@ test('single drafts propagate uncertain charges and refusals; settled truncation
     if (['unknown_cost', 'provider_refused'].includes(reason)) await assert.rejects(run, new RegExp(reason));
     else assert.equal((await run).publicPassed, false);
     assert.equal(writes, 0); assert.ok(f.boxes.every(box => box.closed));
+  }
+});
+
+test('single drafts stop on incomplete visible checks and close their sandbox', async () => {
+  for (const visible of [{ ...passed, valid: false }, { ...failed, valid: false }, { passed: true }]) {
+    const f = fixture([]); let calls = 0;
+    await assert.rejects(runSingleDraft(task, 'image', 'strong', 'draft', config,
+      async () => { calls++; return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
+        edits: [{ path: 'worker/a.ts', search: 'original', replace: 'fixed' }],
+      }) } }] }; }, undefined, { ...f.dependencies, test: async () => visible }), /incomplete_test_run/);
+    assert.equal(calls, 1);
+    assert.ok(f.boxes.every(box => box.closed));
+  }
+});
+
+test('refined drafts stop incomplete checks before probing, another draft or fallback', async () => {
+  for (const visible of [{ ...passed, valid: false }, { ...failed, valid: false }, { passed: true }]) {
+    const f = fixture([failed]); let drafts = 0, probes = 0, fallback = 0;
+    await assert.rejects(runContractAgent({ ...task, reproducer: 'supplied' }, 'image', 'refine', config, f.invoke, {
+      ...f.dependencies, providedProbe: 'supplied',
+      cheapAgent: (...args) => runRefinedDraft(...args.slice(0, 7), {
+        ...f.dependencies,
+        draft: async () => { drafts++; return { ...result(), outcome: 'draft_submitted' }; },
+        test: async () => visible,
+        runProbe: async () => { probes++; return passed; },
+      }),
+      agent: async () => { fallback++; return result(); },
+    }), /incomplete_test_run/);
+    assert.equal(drafts, 1); assert.equal(probes, 0); assert.equal(fallback, 0);
+    assert.ok(f.boxes.every(box => box.closed));
   }
 });
 

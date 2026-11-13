@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Stop one-shot and refined Fusion drafts after incomplete visible tests, before probing, another draft, or fallback inference.
+
 - Separate Fusion benchmark agent time from independent acceptance grading, including failed phases, so slow hidden tests do not obscure execution latency.
 
 - Stop grounded Fusion repair workers when visible test execution is incomplete, before another model call or grading.

@@ -396,6 +396,10 @@ with the remaining shared call and time budget. Unknown charges and refusals
 stop execution. A settled empty or truncated draft consumes its call and falls
 back without applying partial output.
 
+An incomplete visible-test run stops one-shot and refined drafts with
+`incomplete_test_run`. It does not trigger another draft, a probe, or strong
+fallback. Complete assertion failures remain eligible for correction or fallback.
+
 Both fixed controls receive the same supplied reproducer and shared ceiling.
 The cheap-stage allowance does not add draft calls: this policy always makes
 one draft attempt. This is an opt-in benchmark policy with no demonstrated
