@@ -135,3 +135,53 @@ test('bad input cannot start either sandbox phase', () => withInputs(async paths
   await rm(paths.repairPath); await mkdir(paths.repairPath);
   await assert.rejects(verifyRepair({ ...paths, visible: async () => assert.fail('must not run') }), /invalid_repair_input/);
 }));
+
+test('patch export uses the verified snapshot after acceptance without rereading the bundle', () => withInputs(async (paths, data) => {
+  const order = [], patchPath = join(paths.repo, 'review.patch');
+  const result = await verifyRepair({ ...paths, patchPath,
+    visible: async () => { order.push('visible'); return { valid: true, passed: true }; },
+    acceptance: async () => {
+      order.push('acceptance');
+      await writeFile(paths.repairPath, 'changed after snapshot');
+      return { valid: true, passed: true, tests: 2, skipped: 0 };
+    },
+    patchWriter: async options => {
+      order.push('patch');
+      assert.equal(options.patchPath, patchPath);
+      assert.deepEqual(options.files, data.repair.files);
+      assert.equal(options.task.base, data.repair.base);
+      return { file: 'review.patch', bytes: 12, sha256: 'f'.repeat(64) };
+    },
+  });
+  assert.deepEqual(order, ['visible', 'acceptance', 'patch']);
+  assert.equal(result.passed, true);
+  assert.equal(result.patchExport.file, 'review.patch');
+  assert.ok(!JSON.stringify(result).includes('private source'));
+}));
+
+test('patch export is opt-in and never runs for a rejected repair', () => withInputs(async paths => {
+  const passing = { valid: true, passed: true, tests: 2, skipped: 0 };
+  const patchWriter = async () => assert.fail('no patch expected');
+  const defaultResult = await verifyRepair({ ...paths, visible: async () => passing,
+    acceptance: async () => passing, patchWriter });
+  assert.equal(defaultResult.passed, true);
+  assert.equal(defaultResult.patchExport, undefined);
+  for (const failedVisible of [true, false]) {
+    const result = await verifyRepair({ ...paths, patchPath: join(paths.repo, 'review.patch'), patchWriter,
+      visible: async () => ({ ...passing, passed: !failedVisible }),
+      acceptance: async () => ({ ...passing, passed: false }) });
+    assert.equal(result.passed, false);
+    assert.equal(result.patchExport, undefined);
+  }
+}));
+
+test('failed patch delivery preserves acceptance and reports no source or error contents', () => withInputs(async paths => {
+  const passing = { valid: true, passed: true, tests: 2, skipped: 0 };
+  const result = await verifyRepair({ ...paths, patchPath: join(paths.repo, 'review.patch'),
+    visible: async () => passing, acceptance: async () => passing,
+    patchWriter: async () => { throw new Error('private source error'); } });
+  assert.equal(result.passed, true);
+  assert.equal(result.patchExportFailed, true);
+  assert.equal(result.patchExport, undefined);
+  assert.ok(!JSON.stringify(result).includes('private'));
+}));

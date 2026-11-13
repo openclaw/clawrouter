@@ -19,6 +19,8 @@
 - Fix Fusion source preloading for repairs spanning more than three editable files while retaining bounded source context and three-path action reads.
 
 - Retain bounded, content-free failed-test fingerprints in Fusion benchmark receipts to compare regressions with qualified baselines.
+
+- Export a private reviewable Git patch from an independently reverified Fusion repair, without applying changes or overwriting an existing file.
 - Add an experimental Fusion benchmark handoff from strong execution to a cheap worker after an edit passes visible checks, retaining a bounded executed probe, phase-specific verification instructions, independent final acceptance and shared limits.
 
 - Validate repeated Fusion benchmark blocks against one protocol and a consecutive spend ledger, with joint quality, cost and latency reporting.

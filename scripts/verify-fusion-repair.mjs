@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { hash, validateTask, validateEdits, checkOracleVisible, verify } from './fusion-workloads.mjs';
 import { validateLocalQualification } from './fusion-local-repository.mjs';
+import { writeRepairPatch } from './fusion-repair-patch.mjs';
 
 async function readBounded(path, limit) {
   const file = await open(path, 'r');
@@ -58,7 +59,7 @@ export function validateRepairInputs({ manifest, qualificationRaw, report, repai
 }
 
 export async function verifyRepair({ repo, qualificationPath, taskManifest, reportPath, repairPath,
-  visible = checkOracleVisible, acceptance = verify }) {
+  visible = checkOracleVisible, acceptance = verify, patchPath, patchWriter = writeRepairPatch }) {
   const [qualificationRaw, manifestRaw, reportRaw, repairRaw] = await Promise.all([
     readBounded(qualificationPath, 16 * 1024 * 1024), readBounded(taskManifest, 4 * 1024 * 1024),
     readBounded(reportPath, 16 * 1024 * 1024), readBounded(repairPath, 4 * 1024 * 1024),
@@ -69,23 +70,28 @@ export async function verifyRepair({ repo, qualificationPath, taskManifest, repo
   const publicResult = await visible(task, receipt.image, files);
   const publicPassed = publicResult?.valid === true && publicResult.passed === true;
   const finalResult = publicPassed ? await acceptance(task, receipt.image, files, repo) : null;
-  return { version: 1, kind: 'reverified-repository-repair', taskId: task.id, base: task.base,
+  const result = { version: 1, kind: 'reverified-repository-repair', taskId: task.id, base: task.base,
     sourceSha, repairDigest, fileCount: files.length, passed: publicPassed && matches(finalResult, receipt),
     visible: { valid: publicResult?.valid === true, passed: publicPassed },
     acceptance: finalResult ? { valid: finalResult.valid === true, passed: matches(finalResult, receipt),
       tests: finalResult.tests, skipped: finalResult.skipped } : null,
     limitations: ['Checks supplied provenance for consistency, not authenticity or cost accounting.',
       'Acceptance applies to the pinned task base, not an arbitrary current checkout. No files are applied.'] };
+  if (patchPath !== undefined && result.passed) {
+    try { result.patchExport = await patchWriter({ repo, task, files, patchPath }); }
+    catch { result.patchExportFailed = true; }
+  }
+  return result;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const args = process.argv.slice(2);
   try {
-    if (args.length !== 4) throw new Error('invalid_arguments');
+    if (args.length !== 4 && !(args.length === 6 && args[4] === '--patch' && args[5])) throw new Error('invalid_arguments');
     const [qualificationPath, taskManifest, reportPath, repairPath] = args;
-    const result = await verifyRepair({ repo: process.cwd(), qualificationPath, taskManifest, reportPath, repairPath });
+    const result = await verifyRepair({ repo: process.cwd(), qualificationPath, taskManifest, reportPath, repairPath, patchPath: args[5] });
     console.log(JSON.stringify(result, null, 2));
-    if (!result.passed) process.exitCode = 1;
+    if (!result.passed || result.patchExportFailed) process.exitCode = 1;
   } catch {
     console.error('Repair verification failed; check the four input files, pinned history and local sandbox image.');
     process.exitCode = 1;
