@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve bounded, content-free Fusion agent traces when benchmark execution fails, without changing failure scores or budget stops.
+
 - Add an opt-in Fusion benchmark policy that hands a submitted candidate to a cheap verifier within the existing shared limits.
 
 - Verify exported Fusion repairs against their task and digests, then rerun visible and independent acceptance checks without model calls or applying source to the caller's checkout.

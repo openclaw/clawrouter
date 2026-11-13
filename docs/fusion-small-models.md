@@ -439,6 +439,17 @@ strong runs, and the report records this as a separate policy. This experimental
 comparison requires controls; repair export and control-free execution remain
 limited to the existing qualified `edit-handoff` mode. Do not pool the policies.
 
+Interrupted native pair and workload benchmark receipts retain a bounded
+`failureTrace` for the failing agent: the last 120
+completed action labels/statuses, timing/counters and handoff/probe-use flags.
+It excludes source, notes, prompts, completions, probe text/output and exception
+messages. The executor supplies this trace through an internal identity map;
+properties supplied by an arbitrary thrown error are ignored. A handoff flag
+records a transfer event, not proof of a successor call: use the call ledger to
+verify actual model mixing. Trace retention does not accept the candidate or
+resume execution. Failed rows stay failed, unknown charges keep their full
+reservation, and budget/refusal stop behavior is unchanged.
+
 Set `FUSION_PAIR_POLICY=matched-handoff` to compare the cheap successor against
 a strong successor using the same handoff point, verification instructions,
 current-source context and shared limits. The cheap-only arm stays unchanged.

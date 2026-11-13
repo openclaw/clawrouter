@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { SpendLedger, defaultExperiment, validateExperiment, replaceEdits, sourceView, editableSourceView, escalateSubmission, toolErrorCode, finishReason, agentContext, executorModel, advisoryBody, actionFeedback, runAgent } from '../scripts/fusion-agent-benchmark.mjs';
+import { SpendLedger, defaultExperiment, validateExperiment, replaceEdits, sourceView, editableSourceView, escalateSubmission, toolErrorCode, finishReason, agentContext, executorModel, advisoryBody, actionFeedback, runAgent, agentFailureTrace } from '../scripts/fusion-agent-benchmark.mjs';
 import { nativeRequest } from '../scripts/fusion-native-provider.mjs';
 
 test('tool feedback explains recovery without revealing final acceptance paths', () => {
@@ -215,6 +215,84 @@ for (const scenario of ['submitted', 'failed-check', 'turn-limit', 'last-turn', 
     assert.equal(result.publicPassed, true);
   });
 }
+
+test('arbitrary thrown values cannot supply an executor failure trace', () => {
+  for (const error of [null, undefined, 'private error', 1, { failureTrace: { source: 'private' } }]) {
+    assert.equal(agentFailureTrace(error), undefined);
+  }
+});
+
+for (const mode of ['before-handoff', 'after-handoff', 'after-successor', 'bounded']) {
+  test(`provider failure retains bounded executor metadata: ${mode}`, {
+    skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+  }, async () => {
+    const { readFile } = await import('node:fs/promises');
+    const { execFileSync } = await import('node:child_process');
+    const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+    const task = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+      .find(task => task.id === 'provided-responses-path');
+    const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+      .receipts.find(receipt => receipt.taskId === task.id);
+    const original = execFileSync('git', ['show', `${task.base}:${task.editPaths[0]}`], { encoding: 'utf8' });
+    const failureTurn = { 'before-handoff': 2, 'after-handoff': 3, 'after-successor': 4, bounded: 121 }[mode];
+    const failure = new Error('unknown_cost');
+    Object.defineProperty(failure, 'failureTrace', { get: () => assert.fail('untrusted error properties must not be read') });
+    Object.freeze(failure);
+    let calls = 0;
+    await assert.rejects(runAgent(task, receipt.image, 'handoff', 'failure-trace-fixture',
+      { maxTurns: failureTurn + 1, deadlineMs: 120000, outputTokens: 256 }, async () => {
+        const turn = calls++;
+        if (turn === failureTurn) throw failure;
+        if (mode === 'bounded') return { choices: [{ finish_reason: 'stop', message: { content: 'private-invalid-output' } }] };
+        const action = { action: ['probe', 'edit', 'finish', 'read'][turn], paths: [], edits: [], query: '', memory: 'private-working-notes' };
+        if (turn === 0) action.query = "console.log('private-probe-output')";
+        if (turn === 1) action.edits = [{ path: task.editPaths[0], search: original, replace: original + '\n// private-generated-source\n' }];
+        if (turn === 3) action.paths = task.editPaths;
+        return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(action) } }] };
+      }, undefined, { handoffOnFinish: true }), error => error === failure);
+    const trace = agentFailureTrace(failure);
+    assert.equal(calls, failureTurn + 1);
+    assert.equal(trace.version, 1);
+    assert.equal(trace.turns, failureTurn);
+    assert.equal(trace.handoffUsed, ['after-handoff', 'after-successor'].includes(mode));
+    assert.equal(trace.handoffProbeUsed, mode === 'after-successor');
+    assert.equal(trace.actionsTruncated, mode === 'bounded');
+    assert.equal(trace.actions.length, mode === 'bounded' ? 120 : failureTurn + Number(trace.handoffUsed));
+    if (mode === 'bounded') {
+      assert.equal(trace.actions[0].turn, 2);
+      assert.equal(trace.actions.at(-1).turn, 121);
+    } else assert.deepEqual(trace.actions.map(event => event.action),
+      ['probe', 'edit', ...(trace.handoffUsed ? ['finish', 'handoff'] : []), ...(mode === 'after-successor' ? ['read'] : [])]);
+    assert.equal(trace.publicPassed, mode !== 'bounded');
+    assert(trace.agentMs >= trace.toolMs);
+    assert(Object.isFrozen(trace) && Object.isFrozen(trace.actions) && trace.actions.every(Object.isFrozen));
+    assert.throws(() => { trace.actions[0].status = 'forged'; }, TypeError);
+    assert.doesNotMatch(JSON.stringify(trace), /private-|unknown_cost|worker\//);
+    assert.equal(Object.hasOwn(trace, 'files'), false);
+  });
+}
+
+test('a provider failure inside a finish action marks that action as interrupted', {
+  skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+}, async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+  const task = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+    .find(task => task.id === 'provided-responses-path');
+  const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+    .receipts.find(receipt => receipt.taskId === task.id);
+  const failure = new Error('unknown_cost');
+  let calls = 0;
+  await assert.rejects(runAgent(task, receipt.image, 'critique', 'interrupted-action-fixture',
+    { maxTurns: 2, deadlineMs: 120000, outputTokens: 256 }, async () => {
+      if (calls++) throw failure;
+      return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({
+        action: 'finish', paths: [], edits: [], query: '', memory: 'private-notes',
+      }) } }] };
+    }), error => error === failure);
+  assert.equal(calls, 2);
+  assert.deepEqual(agentFailureTrace(failure).actions, [{ turn: 1, action: 'finish', status: 'unknown_cost' }]);
+});
 
 test('a charged truncated action is discarded before one bounded recovery in a real sandbox', {
   skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
