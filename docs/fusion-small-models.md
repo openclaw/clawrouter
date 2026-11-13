@@ -58,6 +58,11 @@ less validation than a reproduced, held-out result in this workload.
    then compare on new tasks with the same budget and tools. Pay for frontier
    workers only after earlier stages expose a plausible benefit.
 
+Paired benchmark campaigns stop after incomplete agent tests or acceptance grading.
+The checkpoint retains settled usage and the incomplete-run reason; later arms and
+tasks do not consume more model calls. Complete assertion failures remain scored
+results.
+
 For each stage, predeclare the cases, models, sample count, token limit and stop
 conditions. Count failed calls, discarded candidates, selection and verification.
 Treat local runtime and energy as real costs; report zero API spend rather than

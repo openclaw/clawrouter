@@ -202,6 +202,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
           const gradingStarted = performance.now();
           try { verdict = await grade(task, receipt.image, result.files, repo); }
           finally { gradingElapsedMs = Math.round(performance.now() - gradingStarted); }
+          if (verdict.valid !== true) throw new Error('incomplete_test_run');
           const { files, ...trace } = result;
           Object.assign(row, { ...trace, verdict, score: Number(verdict.passed && verdict.tests === receipt.oracleTests
             && verdict.skipped === receipt.oracleSkipped && result.publicPassed && (!probeRegressionGate || result.probeRegressionPassed === true)), status: 'complete' });
@@ -218,7 +219,8 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
           if (error.message === 'repair_export_failed') throw error;
           Object.assign(row, { status: 'error', errorCode: toolErrorCode(error),
             ...(agentFailureTrace(error) ? { failureTrace: agentFailureTrace(error) } : {}) });
-          if (ledger.blocked || error.message === 'provider_refused' || error.message === 'provider_safety_notice') throw error;
+          if (ledger.blocked || error.message === 'provider_refused' || error.message === 'provider_safety_notice'
+            || error.message === 'incomplete_test_run') throw error;
         } finally {
           row.costMicros = ledger.total(trialId);
           row.calls = ledger.attempts.filter(call => call.trialId === trialId).length;

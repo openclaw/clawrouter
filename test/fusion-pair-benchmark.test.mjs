@@ -28,10 +28,44 @@ async function fixture() {
 }
 const repaired = () => ({ files: [{ path: 'worker/example.ts', content: 'private generated source sentinel' }],
   actions: [], publicPassed: true, patchDigest: 'f'.repeat(64), outcome: 'submitted' });
-const grade = async () => ({ passed: true, tests: 3, skipped: 0 });
+const grade = async () => ({ valid: true, passed: true, tests: 3, skipped: 0 });
 const success = async (url, request) => url.includes('/v1/models/') ? Response.json({ id: url.split('/').at(-1) })
   : Response.json({ model: JSON.parse(request.body).model, service_tier: 'default', usage: { prompt_tokens: 20, completion_tokens: 30 },
     choices: [{ finish_reason: 'stop', message: { content: 'private completion sentinel' } }] });
+
+for (const phase of ['agent', 'grade-failed', 'grade-passed', 'grade-missing-valid']) {
+  test(`incomplete ${phase} stops the campaign before another paid arm`, async () => {
+    const { root, options } = await fixture();
+    let agents = 0, grades = 0;
+    try {
+      await assert.rejects(runPairBenchmark({ ...options, policy: 'edit-handoff', fetcher: success,
+        agent: async (_task, _image, _strategy, id, _settings, invoke) => {
+          agents++;
+          await invoke(id, roles.strong, body, signal);
+          if (phase === 'agent') throw new Error('incomplete_test_run');
+          return repaired();
+        },
+        grade: async () => {
+          grades++;
+          return { ...(phase === 'grade-missing-valid' ? {} : { valid: false }),
+            passed: phase !== 'grade-failed', tests: 3, skipped: 0 };
+        },
+      }), /pair_benchmark_incomplete/);
+      const saved = JSON.parse(await readFile(join(options.out, 'pair.json'), 'utf8'));
+      assert.equal(agents, 1);
+      assert.equal(grades, Number(phase !== 'agent'));
+      assert.equal(saved.complete, false);
+      assert.equal(saved.failure, 'incomplete_test_run');
+      assert.equal(saved.records.length, 1);
+      assert.equal(saved.records[0].status, 'error');
+      assert.equal(saved.records[0].errorCode, 'incomplete_test_run');
+      assert.equal(saved.records[0].score, 0);
+      assert.equal(saved.calls.length, 1);
+      assert.ok(Number.isSafeInteger(saved.calls[0].costMicros));
+      assert.ok(!JSON.stringify(saved).includes('sentinel'));
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+}
 
 for (const failure of ['none', 'agent', 'grade']) test(`execution timing excludes slow acceptance grading: ${failure}`, async t => {
   const { root, options } = await fixture();
@@ -132,7 +166,7 @@ test('pair persists post-selection diagnostics after final grading without addit
       }),
       grade: async (_task, _image, files) => {
         grades.push({ source: files[0].content, requests });
-        return { passed: files[0].content !== 'candidate 1', tests: 3, skipped: 0 };
+        return { valid: true, passed: files[0].content !== 'candidate 1', tests: 3, skipped: 0 };
       },
     });
     const row = state.records[2];
@@ -332,7 +366,7 @@ for (const accepted of [true, false]) test(`handoff-only runs one budgeted polic
       grade: async (_task, _image, files) => {
         verifications++;
         assert.deepEqual(files, repaired().files);
-        return { passed: accepted, tests: 3, skipped: 0 };
+        return { valid: true, passed: accepted, tests: 3, skipped: 0 };
       },
     });
     assert.equal(executions, 1);
@@ -368,7 +402,7 @@ for (const accepted of [true, false]) test(`repair export retains source only wh
   try {
     const state = await runPairBenchmark({ ...options, policy: 'edit-handoff', includeControls: false,
       exportRepairs: true, fetcher: success,
-      agent: async () => repaired(), grade: async () => ({ passed: accepted, tests: 3, skipped: 0 }),
+      agent: async () => repaired(), grade: async () => ({ valid: true, passed: accepted, tests: 3, skipped: 0 }),
     });
     assert.equal(state.exportRepairs, true);
     assert.equal(state.records[0].score, Number(accepted));
@@ -567,7 +601,7 @@ test('qualified acceptance counts and call limits cannot be bypassed', async () 
   const { root, options } = await fixture();
   try {
     const state = await runPairBenchmark({ ...options, fetcher: success,
-      grade: async () => ({ passed: true, tests: 2, skipped: 0 }),
+      grade: async () => ({ valid: true, passed: true, tests: 2, skipped: 0 }),
       agent: async (_task, _image, _strategy, id, _settings, invoke) => {
         for (let i = 0; i < config.maxCalls; i++) await invoke(id, roles.strong, body, signal);
         await assert.rejects(invoke(id, roles.strong, body, signal), /trial_budget/);
