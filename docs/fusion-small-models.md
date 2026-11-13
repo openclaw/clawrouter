@@ -1049,3 +1049,22 @@ verification and bounded-completion problem: visible probes can miss contract
 requirements, and a correct partial patch still needs to finish within budget.
 Any changed stop rule or verification policy needs fresh matched controls;
 rescoring these attempts as successes would invalidate this comparison.
+
+
+### Native Azure speech retirement confirmation task
+
+`benchmarks/fusion/azure-retirement-workloads.json` pins one historical repair
+to `655990cdb4c33a148b03425fd6a2c8831c6766ef`, with reference fix
+`80ecc42d40619894b10924c772a07a625996029e`. Only
+`worker/native-azure-speech.ts` is editable. The task requires a failed or aborted
+response to retain its reader and existing memory lease until cancellation
+settles, including reentrant abort and cancellation rejection. The original
+input-retirement helper is available as context.
+
+Original visible tests pass 9/9 on both revisions. Independent acceptance
+replaces the test file with its historical fixed revision: the original source
+fails three assertions across 12 tests; the reference passes all 12. No skipped
+or cancelled tests contribute to qualification. The task has no model results
+yet. Use it for a prospective comparison only while it remains unexposed; a
+qualified fixture alone demonstrates neither a handoff gain nor production
+readiness.
