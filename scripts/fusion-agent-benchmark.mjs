@@ -120,12 +120,20 @@ export function editableSourceView(files, query = '') {
   return boundedSourceView(files.flatMap(file => sourceView([file], [file.path], query)));
 }
 
-export function agentContext(messages, memory = '') {
+export function agentContext(messages, memory = '', pinnedMessage) {
   const header = [...messages.slice(0, 2), ...(memory ? [{ role: 'user', content: `Your working notes from earlier actions:\n${memory}` }] : [])];
   let bytes = Buffer.byteLength(JSON.stringify(header));
   if (bytes > 384000) throw new Error('context_header_too_large');
+  const tail = messages.slice(2);
+  const latest = tail.at(-1);
+  // Keep the handoff snapshot without displacing the newest tool feedback.
+  const pinBytes = pinnedMessage && tail.includes(pinnedMessage)
+    ? Buffer.byteLength(JSON.stringify(pinnedMessage)) + 1 : 0;
+  const latestBytes = latest && latest !== pinnedMessage ? Buffer.byteLength(JSON.stringify(latest)) + 1 : 0;
+  const pinned = pinBytes > 0 && bytes + pinBytes + latestBytes <= 384000 ? pinnedMessage : null;
+  if (pinned) { header.push(pinned); bytes += pinBytes; }
   const recent = [];
-  for (const message of messages.slice(2).slice(-10).reverse()) {
+  for (const message of tail.filter(message => message !== pinned).slice(-10).reverse()) {
     const size = Buffer.byteLength(JSON.stringify(message)) + 1;
     if (bytes + size > 384000) break;
     recent.unshift(message); bytes += size;
@@ -297,7 +305,8 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
       const model = strategy === 'handoff' && handoffUsed ? models.critic : executorModel(strategy, turns, forceEscalation);
       if (strategy === 'cascade' && model === models.strong) escalated = true;
       // Bound retained context consistently for every strategy; keep the task and latest tool feedback.
-      const context = agentContext(messages, memory);
+      const context = agentContext(messages, memory,
+        options.handoffEvidence && verificationHandoff ? handoffMessage : undefined);
       let response;
       try {
         let request = bodyFor(context, config);

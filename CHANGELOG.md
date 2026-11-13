@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep bounded source and verification evidence available across longer Fusion benchmark handoffs, without displacing the latest tool feedback or changing acceptance checks.
+
 - Qualify supplied Fusion preservation checks against original and reference source, then pin them before paired execution without spending model calls.
 
 - Add an opt-in Fusion benchmark regression gate that pins passing probes across handoffs and replays them in isolated candidate snapshots before scoring.

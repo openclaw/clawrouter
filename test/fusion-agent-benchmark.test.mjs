@@ -514,6 +514,63 @@ test('working notes survive bounded context eviction without unbounded repeated 
   assert.equal(context.some(m => m.content.startsWith('old source')), false);
 });
 
+test('handoff snapshot survives history eviction once, with current notes and newest feedback', () => {
+  const fixed = [{ role: 'system', content: 'repair' }, { role: 'user', content: 'task' }];
+  const snapshot = { role: 'user', content: 'untrusted source at handoff' };
+  const history = Array.from({ length: 20 }, (_, n) => ({ role: 'user', content: `feedback ${n}` }));
+  const messages = [...fixed, snapshot, ...history];
+  const context = agentContext(messages, 'current plan', snapshot);
+  assert.equal(context.filter(message => message === snapshot).length, 1);
+  assert.equal(context.at(-1), history.at(-1));
+  assert.match(context[2].content, /current plan/);
+  assert.ok(!agentContext(messages).includes(snapshot));
+  assert.ok(Buffer.byteLength(JSON.stringify(context)) <= 384000);
+});
+
+test('handoff retention yields to newest feedback when both cannot fit the byte limit', () => {
+  const fixed = [{ role: 'system', content: 'repair' }, { role: 'user', content: 'task' }];
+  const snapshot = { role: 'user', content: '界'.repeat(70000) };
+  const latest = { role: 'user', content: '界'.repeat(70000) };
+  const context = agentContext([...fixed, snapshot, latest], 'current plan', snapshot);
+  assert.ok(!context.includes(snapshot));
+  assert.equal(context.at(-1), latest);
+  assert.ok(Buffer.byteLength(JSON.stringify(context)) <= 384000);
+  assert.ok(!agentContext([...fixed, latest], '', snapshot).includes(snapshot));
+});
+
+for (const enabled of [false, true]) test(`verification handoff retains its source through repeated tool calls: enabled=${enabled}`, {
+  skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+}, async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { execFileSync } = await import('node:child_process');
+  const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+  const task = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+    .find(task => task.id === 'provided-responses-path');
+  const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+    .receipts.find(receipt => receipt.taskId === task.id);
+  const original = execFileSync('git', ['show', `${task.base}:${task.editPaths[0]}`], { encoding: 'utf8' });
+  let calls = 0;
+  const result = await runAgent(task, receipt.image, 'handoff', 'source-retention-fixture',
+    { maxTurns: 13, deadlineMs: 120000, outputTokens: 256 }, async (_id, _role, body) => {
+      const turn = calls++;
+      if (turn === 11) {
+        assert.equal(body.messages.some(message => message.content.includes('synthetic persistent snapshot')), enabled);
+        assert.match(body.messages.at(-1).content, /totalLines/);
+        if (enabled) assert.match(body.messages.find(message => message.content.includes('synthetic persistent snapshot')).content,
+          /Independently inspect and test/);
+      }
+      const action = turn === 0 ? { action: 'edit', paths: [],
+        edits: [{ path: task.editPaths[0], search: original, replace: original + '\n// synthetic persistent snapshot\n' }] }
+        : turn === 12 ? { action: 'finish', paths: [], edits: [] }
+          : { action: 'read', paths: [task.visibleTests[0]], edits: [] };
+      return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ query: '', memory: '', ...action }) } }] };
+    }, undefined, { handoffAfterEdit: true, handoffEvidence: enabled });
+  assert.equal(calls, 13);
+  assert.equal(result.outcome, 'submitted');
+  assert.equal(result.publicPassed, true);
+  assert.equal(result.files[0].content, original + '\n// synthetic persistent snapshot\n');
+});
+
 
 test('independent Claude baseline uses the same loop without changing cascade selection', () => {
   assert.equal(executorModel('claude', 0), 'anthropic/claude-sonnet-5.5');

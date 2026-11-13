@@ -3,6 +3,14 @@
 Research reviewed on 2026-11-05. Keep production Fusion opt-in. This plan tests
 the mechanism before paying for another frontier-model comparison.
 
+With handoff evidence enabled, verification handoffs retain their source snapshot,
+probe and recorded results beyond the rolling tool history. The snapshot remains
+untrusted and can become stale after later edits; current tool feedback and working
+notes take precedence. Retention stays within the existing 384,000-byte context
+limit and falls back to ordinary history when the snapshot and newest feedback
+cannot fit together. This reduces lost context; it does not establish a latency
+gain or replace independent acceptance.
+
 Draft refinement skips verification when a response applies no patch. It tells
 the next attempt whether to shorten truncated output or repair invalid edit
 anchors, while retaining the current source and the same three-attempt ceiling.
