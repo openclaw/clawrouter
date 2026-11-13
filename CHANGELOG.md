@@ -4,6 +4,8 @@
 
 - Separate Fusion benchmark agent time from independent acceptance grading, including failed phases, so slow hidden tests do not obscure execution latency.
 
+- Stop grounded Fusion repair workers when visible test execution is incomplete, before another model call or grading.
+
 - Qualify supplied Fusion preservation checks against original and reference source, then pin them before paired execution without spending model calls.
 
 - Add an opt-in Fusion benchmark regression gate that pins passing probes across handoffs and replays them in isolated candidate snapshots before scoring.

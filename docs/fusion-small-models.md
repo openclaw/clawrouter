@@ -20,7 +20,9 @@ Applied drafts still require the visible tests and supplied reproducer to pass.
 Visible checks must produce a complete test summary. An incomplete run, including
 a test watchdog termination, stops that agent with `incomplete_test_run` before
 another model call or final grading. Complete assertion failures remain repairable.
-The failure trace retains action metadata without raw test output.
+The general agent failure trace retains action metadata without raw test output.
+Grounded and checked repair profiles also stop on incomplete visible checks,
+including checks after an edit or a review submission.
 
 ## What the evidence supports
 
