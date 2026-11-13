@@ -836,3 +836,25 @@ test('single-draft executor is explicit, restricted to supplied checks, and pers
     assert.equal(pairModel('contract-provided-cheap', roles.strong, config), config.cheap);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+
+test('regression gates apply to all paired arms and unverified repairs score zero', async () => {
+  const { root, options } = await fixture();
+  try {
+    const seen = [];
+    const state = await runPairBenchmark({ ...options, policy: 'matched-handoff', probeRegressionGate: true, grade, fetcher: success,
+      agent: async (_task, _image, _strategy, id, _settings, invoke, _engine, agentOptions) => {
+        seen.push(agentOptions.probeRegressionGate);
+        await invoke(id, roles.strong, body, signal);
+        return { ...repaired(), probeRegressionPassed: seen.length === 1 };
+      } });
+    assert.deepEqual(seen, [true, true, true]);
+    assert.deepEqual(state.records.map(row => row.score), [1, 0, 0]);
+    assert.equal(analyzePairRun(state).probeRegressionGate, true);
+  } finally { await rm(root, { recursive: true, force: true }); }
+  for (const options of [{ policy: 'probe-selection', probeRegressionGate: true },
+    { policy: 'matched-handoff', executor: 'single-draft', probeRegressionGate: true },
+    { probeRegressionGate: 'true' }]) {
+    await assert.rejects(runPairBenchmark({ sourceSha: 'e'.repeat(40), ...options }), /invalid_pair_executor|invalid_probe_regression_gate/);
+  }
+});

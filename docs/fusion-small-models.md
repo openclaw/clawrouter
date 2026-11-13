@@ -779,3 +779,25 @@ The music task exposes the original scalar-inspector interface as read-only
 context. These are development tasks, not an unseen public-endpoint benchmark.
 Qualify both original and repaired revisions before using them in a comparison;
 include fixed-model controls and keep acceptance tests out of model context.
+
+
+## Pinned probe regression gate
+
+Set `FUSION_PROBE_REGRESSION_GATE=1` for an interactive paired `architect`,
+`edit-handoff`, `completion-handoff` or `matched-handoff` run. The same gate
+applies to cheap-only, strong-only and mixed arms. Defaults stay unchanged.
+
+The executor retains the first four distinct passing probes of at most 4096
+UTF-8 bytes each. Later probes cannot evict them. Before submission and at the
+end of a trial, it replays those probes against the current source in separate,
+fresh sandboxes. Replays cannot mutate the live repair or each other's state.
+At least one retained probe and successful replay are required for a gated
+score. Unchanged source and probe sets reuse their result within the trial.
+Probe execution, sandbox setup and cleanup count toward elapsed time; replays
+use the existing trial deadline and do not invoke a model.
+
+These are model-written regression checks, not trusted correctness oracles.
+They can miss behavior, encode a wrong assumption or be trivial. Independent
+acceptance tests still determine task correctness. Raw probe source and output
+remain in memory; reports contain only counts and the gate result. Repeat
+analysis rejects runs that change the gate setting.
