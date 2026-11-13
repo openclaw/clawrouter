@@ -45,11 +45,18 @@ export function validateLocalQualification(tasks, qualification) {
   });
 }
 
-export async function localActionRequest({ endpoint, model, pin, body, signal, seed, profile = 'legacy', fetcher = fetch, onDispatch = async () => {} }) {
+function validateOutputTokens(value) {
+  if (!Number.isSafeInteger(value) || value < 1 || value > 8192) throw new Error('invalid_local_output_tokens');
+  return value;
+}
+
+export async function localActionRequest({ endpoint, model, pin, body, signal, seed, profile = 'legacy',
+  maxOutputTokens = localRepositorySettings.outputTokens, fetcher = fetch, onDispatch = async () => {} }) {
+  validateOutputTokens(maxOutputTokens);
   if (!['legacy', 'grounded', 'checked'].includes(profile)) throw new Error('invalid_local_profile');
   const base = localEndpoint(endpoint);
   if (model !== pin.model || !Number.isSafeInteger(body.max_tokens) || body.max_tokens < 1
-    || body.max_tokens > localRepositorySettings.outputTokens || !Array.isArray(body.messages)
+    || body.max_tokens > maxOutputTokens || !Array.isArray(body.messages)
     || body.messages.some(row => !['system', 'user', 'assistant'].includes(row.role) || typeof row.content !== 'string')
     || body.response_format?.type !== 'json_schema') throw new Error('invalid_local_action_request');
   // Byte length is a conservative token upper bound for these text messages.
@@ -86,10 +93,12 @@ export async function localActionRequest({ endpoint, model, pin, body, signal, s
 
 export async function runLocalRepository({ repo, qualificationPath, out, sourceSha,
   models, endpoint = 'http://127.0.0.1:11435', fetcher = fetch, profile = 'legacy', taskManifest,
+  outputTokens = localRepositorySettings.outputTokens,
   agent, grade = verify, inspectImage = async image => {
     const result = await command('docker', ['image', 'inspect', '--format={{.Id}}', image]);
     if (result.stdout.toString().trim() !== image) throw new Error('local_image_missing');
   }, preflight = localGenerator }) {
+  const settings = { ...localRepositorySettings, outputTokens: validateOutputTokens(outputTokens) };
   localEndpoint(endpoint);
   if (!['legacy', 'grounded', 'checked'].includes(profile)) throw new Error('invalid_local_profile');
   const execute = agent ?? (profile !== 'legacy' ? runGroundedAgent : runAgent);
@@ -103,9 +112,9 @@ export async function runLocalRepository({ repo, qualificationPath, out, sourceS
   await mkdir(out, { mode: 0o700 });
   const state = { version: 1, kind: 'local-repository-development', sourceSha, profile,
     datasetDigest: hash(JSON.stringify(tasks)), qualificationDigest: hash(rawQualification), receipts,
-    modelPins: local.pins, settings: { ...localRepositorySettings,
+    modelPins: local.pins, settings: { ...settings,
       ...(profile !== 'legacy' ? groundedSampling : {}), requestTimeoutMs: profile !== 'legacy' ? 120000 : 60000 }, apiSpendMicros: 0,
-    maxCalls: tasks.length * strategies.length * localRepositorySettings.maxTurns,
+    maxCalls: tasks.length * strategies.length * settings.maxTurns,
     complete: false, calls: [], records: [],
     limitations: ['Previously used development repository tasks; not an unseen holdout.',
       'Same action harness and turn/context limits across arms; token and compute cost can differ.',
@@ -118,14 +127,14 @@ export async function runLocalRepository({ repo, qualificationPath, out, sourceS
   };
   await checkpoint();
   try {
-    const campaignDeadline = performance.now() + localRepositorySettings.campaignDeadlineMs;
+    const campaignDeadline = performance.now() + settings.campaignDeadlineMs;
     for (const [index, task] of tasks.entries()) for (let offset = 0; offset < strategies.length; offset++) {
       if (performance.now() >= campaignDeadline) throw new Error('campaign_deadline');
       const strategy = strategies[(index + offset) % strategies.length], trialId = `${task.id}:${strategy}`;
       const routes = localRoutes(strategy, local.pins), receipt = receipts.find(row => row.taskId === task.id);
       const trialCalls = [], started = performance.now();
       const invoke = async (id, role, body, signal) => {
-        if (id !== trialId || !routes[role] || trialCalls.length >= localRepositorySettings.maxTurns || state.calls.length >= state.maxCalls) {
+        if (id !== trialId || !routes[role] || trialCalls.length >= settings.maxTurns || state.calls.length >= state.maxCalls) {
           throw new Error('local_call_limit');
         }
         const model = routes[role], pin = local.pins.find(row => row.model === model);
@@ -133,8 +142,8 @@ export async function runLocalRepository({ repo, qualificationPath, out, sourceS
         trialCalls.push(call); state.calls.push(call); await checkpoint();
         const callStarted = performance.now();
         try {
-          const generated = await localActionRequest({ endpoint, model, pin, body, signal, profile,
-            seed: localRepositorySettings.seed + index, fetcher,
+          const generated = await localActionRequest({ endpoint, model, pin, body, signal, profile, maxOutputTokens: settings.outputTokens,
+            seed: settings.seed + index, fetcher,
             onDispatch: async () => { call.dispatched = true; await checkpoint(); } });
           const { result, ...metadata } = generated; Object.assign(call, metadata, { status: 'complete', elapsedMs: Math.round(performance.now() - callStarted) });
           await checkpoint(); return result;
@@ -150,7 +159,7 @@ export async function runLocalRepository({ repo, qualificationPath, out, sourceS
       let result, graded, outcome;
       try {
         result = await execute(task, receipt.image, strategy === 'handoff' ? 'handoff' : 'strong', trialId,
-          { ...localRepositorySettings, requireReproducer: profile === 'checked', deadlineMs: Math.min(localRepositorySettings.deadlineMs, Math.max(1, Math.floor(campaignDeadline - performance.now()))) }, invoke, undefined);
+          { ...settings, requireReproducer: profile === 'checked', deadlineMs: Math.min(settings.deadlineMs, Math.max(1, Math.floor(campaignDeadline - performance.now()))) }, invoke, undefined);
         graded = await grade(task, receipt.image, result.files, repo);
         if (graded.valid !== true || typeof graded.passed !== 'boolean') throw new Error('invalid_local_grade');
         outcome = result.outcome;
@@ -198,6 +207,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     const sourceSha = (await command('git', ['rev-parse', 'HEAD'])).stdout.toString().trim();
     if (process.env.GITHUB_SHA !== sourceSha || (await command('git', ['status', '--porcelain'])).stdout.length) throw new Error('clean_exact_source_required');
     await runLocalRepository({ repo: process.cwd(), qualificationPath, out, sourceSha, models: [general, coder],
-      endpoint: process.env.FUSION_OLLAMA_URL, profile, taskManifest });
+      endpoint: process.env.FUSION_OLLAMA_URL, profile, taskManifest,
+      outputTokens: process.env.FUSION_LOCAL_OUTPUT_TOKENS === undefined ? undefined : Number(process.env.FUSION_LOCAL_OUTPUT_TOKENS) });
   }).catch(() => { console.error('Local repository campaign incomplete; inspect its content-free checkpoint.'); process.exitCode = 1; });
 }
