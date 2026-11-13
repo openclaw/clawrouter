@@ -79,7 +79,7 @@ test('fixed controls receive identical supplied context without invoking or budg
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-for (const policy of ['edit-handoff', 'matched-handoff']) test(`${policy} keeps the same allowance and routes both handoff phases explicitly`, async () => {
+for (const policy of ['edit-handoff', 'matched-handoff', 'completion-handoff']) test(`${policy} keeps the same allowance and routes both handoff phases explicitly`, async () => {
   const { root, options } = await fixture();
   try {
     const seen = [];
@@ -96,7 +96,8 @@ for (const policy of ['edit-handoff', 'matched-handoff']) test(`${policy} keeps 
       : [config.cheap, config.strong, config.strong, config.cheap]);
     assert.equal(seen[2].strategy, 'handoff');
     assert.equal(seen[2].settings.maxTurns, config.maxCalls);
-    assert.deepEqual(seen[2].agentOptions, { preloadSource: true, handoffAfterEdit: true });
+    assert.deepEqual(seen[2].agentOptions, { preloadSource: true,
+      ...(policy === 'completion-handoff' ? { handoffOnFinish: true } : { handoffAfterEdit: true }) });
     assert.deepEqual(seen[0].agentOptions, { preloadSource: true });
     assert.deepEqual(seen[1].agentOptions, { preloadSource: true, ...(policy === 'matched-handoff' ? { handoffAfterEdit: true } : {}) });
     assert.equal(seen[1].strategy, policy === 'matched-handoff' ? 'handoff' : 'strong');
