@@ -64,6 +64,14 @@ less validation than a reproduced, held-out result in this workload.
 
 ## Spend gates
 
+Local repository scores require a completed agent outcome as well as independent
+acceptance: `submitted` for legacy and grounded execution, or `verified` for
+checked execution. A patch left at a turn limit, deadline, or missing outcome
+scores zero even if its final tests pass. The receipt retains the outcome and
+acceptance test counts. Checked execution also retains its reproduction and
+public-check requirements. Older local receipts can contain passing scores for
+unfinished patches; inspect their outcomes before using them as completed repairs.
+
 1. **Offline opportunity, no model calls.** Replay recorded binary outcomes.
    Measure the best fixed model, hindsight union, all-worker cost, and cases no
    worker solved. Hindsight selection is an upper bound, never a deployable score.
