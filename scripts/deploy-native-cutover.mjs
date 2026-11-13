@@ -1,5 +1,6 @@
 // Built-ins only: identical code is used by the fresh-runner recovery job.
 import { randomUUID } from 'node:crypto';
+import { nativeTarget } from './deploy-native-target.mjs';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { deploymentMessage, deploymentState, stableVersion } from './deploy-train-policy.mjs';
 import { verifyCutoverRecovery, nativeReceipt, assertNativeOwners } from './deploy-train-runtime.mjs';
@@ -36,14 +37,15 @@ function controlReady(s,runtimeSha) {
   return s.control?.schema === 1 && Number.isSafeInteger(s.control.revision) && s.control.revision >= 0 &&
     s.control.runtimeSha === runtimeSha && /^[a-f0-9]{64}$/.test(s.control.fingerprint ?? '');
 }
-export function createNativeControl({ env = process.env, fetchImpl = fetch, wait = sleep } = {}) {
+export function createNativeControl({ env = process.env, fetchImpl = fetch, wait = sleep, target } = {}) {
+  const selected = nativeTarget(target, env);
   if (!env.CLAWROUTER_NATIVE_ADMIN_TOKEN) throw new Error('Native cutover admin credential missing');
   if (Boolean(env.CF_ACCESS_CLIENT_ID) !== Boolean(env.CF_ACCESS_CLIENT_SECRET)) throw new Error('Native control Access credential pair incomplete');
   const headers = { authorization: 'Bearer ' + env.CLAWROUTER_NATIVE_ADMIN_TOKEN, 'content-type':'application/json' };
   if (env.CF_ACCESS_CLIENT_ID) Object.assign(headers, {'CF-Access-Client-Id':env.CF_ACCESS_CLIENT_ID,'CF-Access-Client-Secret':env.CF_ACCESS_CLIENT_SECRET});
   async function request(method, version, body) {
     let response;
-    try { response = await fetchImpl('https://clawrouter.openclaw.ai/v1/admin/large-http', {
+    try { response = await fetchImpl(selected.origin + '/v1/admin/large-http', {
       method, headers, redirect:'error', signal:AbortSignal.timeout(20_000), ...(body ? {body:JSON.stringify(body)} : {}),
     }); } catch { throw new Error('Native control request failed; delivery may be unknown'); }
     if (!response.ok || version && response.headers.get('x-clawrouter-version-id') !== version) {

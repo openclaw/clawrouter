@@ -1,0 +1,108 @@
+name: Qualify isolated native cutover
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_sha:
+        description: Exact reviewed main source of the pre-uploaded green and recovery
+        required: true
+        type: string
+      worker:
+        description: clawrouter-native-qualification- followed by 12 lowercase hex digits
+        required: true
+        type: string
+      origin:
+        description: Exact isolated Worker HTTPS workers.dev origin, without trailing slash
+        required: true
+        type: string
+      versions:
+        description: JSON object with blue, green, recovery UUIDs and upload lineage run string
+        required: true
+        type: string
+      mode:
+        description: Controller exercise only; not a complete hosted qualification verdict
+        required: true
+        default: interrupt-green
+        type: choice
+        options: [cutover, fail-smoke, interrupt-drain, interrupt-green, recover]
+      hold_seconds:
+        description: Green-warm window for external saved Codex follow-up and next active turn (0-300)
+        default: '120'
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: clawrouter-native-qualification
+  cancel-in-progress: false
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+  EXPECTED_SHA: ${{ inputs.expected_sha }}
+  QUALIFICATION_WORKER: ${{ inputs.worker }}
+  QUALIFICATION_ORIGIN: ${{ inputs.origin }}
+  QUALIFICATION_VERSIONS: ${{ inputs.versions }}
+  QUALIFICATION_HOLD_SECONDS: ${{ inputs.hold_seconds }}
+
+jobs:
+  exercise:
+    environment: native-qualification
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.NATIVE_QUALIFICATION_CF_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.NATIVE_QUALIFICATION_CF_ACCOUNT_ID }}
+      CLAWROUTER_NATIVE_ADMIN_TOKEN: ${{ secrets.NATIVE_QUALIFICATION_ADMIN_TOKEN }}
+      CF_ACCESS_CLIENT_ID: ${{ secrets.NATIVE_QUALIFICATION_ACCESS_CLIENT_ID }}
+      CF_ACCESS_CLIENT_SECRET: ${{ secrets.NATIVE_QUALIFICATION_ACCESS_CLIENT_SECRET }}
+      GH_TOKEN: ${{ github.token }}
+      QUALIFICATION_MODE: ${{ inputs.mode }}
+      QUALIFICATION_RECEIPT: ${{ runner.temp }}/native-controller.json
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+      - name: Exercise exact hosted isolated controller
+        run: node scripts/qualify-native-cutover.mjs
+      - name: Retain controller observations, never a qualification verdict
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-controller-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-controller.json
+          if-no-files-found: ignore
+          retention-days: 7
+  recover:
+    needs: exercise
+    if: always() && inputs.mode != 'recover' && (needs.exercise.result != 'success' || startsWith(inputs.mode, 'interrupt-'))
+    environment: native-qualification
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.NATIVE_QUALIFICATION_CF_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.NATIVE_QUALIFICATION_CF_ACCOUNT_ID }}
+      CLAWROUTER_NATIVE_ADMIN_TOKEN: ${{ secrets.NATIVE_QUALIFICATION_ADMIN_TOKEN }}
+      CF_ACCESS_CLIENT_ID: ${{ secrets.NATIVE_QUALIFICATION_ACCESS_CLIENT_ID }}
+      CF_ACCESS_CLIENT_SECRET: ${{ secrets.NATIVE_QUALIFICATION_ACCESS_CLIENT_SECRET }}
+      GH_TOKEN: ${{ github.token }}
+      QUALIFICATION_MODE: recover
+      QUALIFICATION_RECEIPT: ${{ runner.temp }}/native-recovery.json
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+      - name: Recover only the exact remote journal on a fresh runner
+        run: node scripts/qualify-native-cutover.mjs
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-recovery.json
+          if-no-files-found: ignore
+          retention-days: 7

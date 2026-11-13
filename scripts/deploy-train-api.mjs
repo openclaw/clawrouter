@@ -1,15 +1,17 @@
 import { setTimeout as sleep } from 'node:timers/promises';
+import { nativeTarget } from './deploy-native-target.mjs';
 
 const READBACK_ATTEMPTS = 5, READBACK_STEP_MS = 1_000;
-export function createApi({ env = process.env, fetchImpl = fetch, wait = sleep } = {}) {
+export function createApi({ env = process.env, fetchImpl = fetch, wait = sleep, target } = {}) {
   const repository = env.GITHUB_REPOSITORY || 'openclaw/clawrouter';
   if (repository !== 'openclaw/clawrouter') throw new Error('Production train repository mismatch');
-  const worker = env.CLAWROUTER_WORKER_NAME || 'clawrouter-edge';
-  if (worker !== 'clawrouter-edge') throw new Error('Production train Worker mismatch');
+  const selected = nativeTarget(target, env), worker = selected.worker;
   const account = env.CLOUDFLARE_ACCOUNT_ID;
   const workerPath = `/accounts/${account}/workers/scripts/${worker}`;
   async function request(origin, path, token, { method = 'GET', body, raw = false } = {}) {
     if (!token) throw new Error(`${origin === 'github' ? 'GitHub' : 'Cloudflare'} token missing`);
+    if (selected.isolated && method !== 'GET' && !(origin === 'cloudflare' && method === 'POST' && path === workerPath + '/deployments'))
+      throw new Error('Qualification API may mutate only its isolated deployments');
     const base = origin === 'github' ? 'https://api.github.com' : 'https://api.cloudflare.com/client/v4';
     const response = await fetchImpl(base + path, {
       method, redirect: 'error', signal: AbortSignal.timeout(30_000),

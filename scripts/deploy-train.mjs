@@ -18,6 +18,7 @@ import { nativeReceipt, assertRuntimePair, verifyRuntimeRecovery } from './deplo
 import { prepareNativeUpload, nativeUploadConfig } from './deploy-train-artifacts.mjs';
 import { runNativeCutover, recoverNativeCutover, createNativeControl } from './deploy-native-cutover.mjs';
 import { assertNativeQualification } from './deploy-native-qualification.mjs';
+import { smokeNativeCutover } from './smoke-native-cutover.mjs';
 
 export function command(args, { env = process.env, timeout = 10 * 60_000 } = {}) {
   return new Promise((resolve, reject) => {
@@ -215,7 +216,8 @@ export async function main(env = process.env) {
         await ready(green);
         await verifyConsoleAssets({ assets: state.assets, baseUrl: env.CLAWROUTER_BASE_URL, version: green });
         if (!state.migration && !state.cutover) await verifyConsoleAssets({ assets: state.assets, baseUrl: env.CLAWROUTER_BASE_URL, version: state.blue, legacy: state.blue === LEGACY_DEPLOYMENT.version });
-        await command(['cf:smoke'], { env: { ...env, CLAWROUTER_SMOKE_VERSION_ID: green }, timeout: 5 * 60_000 });
+        if (state.cutover) await smokeNativeCutover({ version: green, env });
+        else await command(['cf:smoke'], { env: { ...env, CLAWROUTER_SMOKE_VERSION_ID: green }, timeout: 5 * 60_000 });
       },
       negativeSmoke: async (green) => {
         const health = await ready(green);

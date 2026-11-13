@@ -130,6 +130,12 @@ not a bearer. This change adds references only; it creates/rotates no credential
 Access policy or infrastructure. Credential availability must be verified before
 publication/upload. Missing access is a blocker, not a reason to weaken auth.
 
+The [isolated controller Actions path](native-cutover-qualification.md) supplies
+explicit non-production targeting and fresh-runner execution. Its receipts remain
+controller-only until the external synthetic/Codex/accounting evidence is complete.
+Production native-cutover smoke is non-inference; ordinary rollouts retain their
+existing golden-provider smoke.
+
 Hosted qualification must use authorized isolated resources and synthetic upstream
 credentials. Cover old/new callbacks, shared allocation and non-HTTP triggers,
 actual slot adoption, pending/uncertain accounting, maximum/overflow envelopes,
