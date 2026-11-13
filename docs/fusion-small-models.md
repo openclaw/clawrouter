@@ -751,3 +751,16 @@ original fails acceptance because it lacks the explicitly required export.
 These are harness checks, not model results. Treat this public historical task
 as development data; qualify its pinned revisions before inference and do not
 claim that repeated draws are new unseen tasks.
+
+
+### Delivery regression tasks
+
+`benchmarks/fusion/delivery-workloads.json` adds two historical development
+repairs: alternate preparation must settle before a cancelled proxy request
+finishes, and native OpenRouter music must preserve full-size bounded SSE
+without aggregate audio decoding. Each task pins its original parent and repair,
+keeps existing visible tests, and grades with a separate acceptance suite.
+The music task exposes the original scalar-inspector interface as read-only
+context. These are development tasks, not an unseen public-endpoint benchmark.
+Qualify both original and repaired revisions before using them in a comparison;
+include fixed-model controls and keep acceptance tests out of model context.
