@@ -895,3 +895,42 @@ Receipts record `handoffMaxTurns` and a bounded handoff reason. Repeated blocks
 must use the same limit. Fixed cheap/strong controls retain their entire allowance;
 `matched-handoff` applies the same boundary to its all-strong handoff control.
 This option is an experimental allocation rule, not evidence of a quality gain.
+
+
+### Complete-adviser repair workload
+
+`benchmarks/fusion/adviser-completion-workloads.json` pins a one-file repair to
+Fusion's adviser collector. Incomplete, refused, tool-calling or provider-error
+responses must not become synthesis context. The repair must preserve completed
+text responses, response consumption, usage accounting, ordering and fallback.
+
+This is a coordinator-selected development task, not a random holdout. Both
+source revisions pass the three original visible tests. The original fails 11
+of 26 independent acceptance tests; the reference passes all 26 without skips.
+Qualify the exact manifest before reuse. Do not reveal the reference or
+independent acceptance tests to the repair model.
+
+One controlled development block used GPT-6 Luna with reasoning disabled,
+GPT-6.1 Sol with medium reasoning, and an edit handoff from Luna to Sol. Each
+arm had 24 shared calls, 4096 output tokens per call, an eight-minute deadline
+and a $1 cap. The mixed arm received original-source handoff evidence and the
+probe regression gate. The runner was pinned to
+`597020f6aea07ed1c0d68382860f96affd1fa52e`.
+
+| Strategy | Acceptance | Calls | Estimated cost | Agent time |
+| --- | --- | --- | --- | --- |
+| Luna only | 26/26 | 8 | $0.006637 | 35.812 s |
+| Sol only | 26/26 | 9 | $0.103371 | 68.604 s |
+| Luna → Sol | 26/26 | 11 | $0.033435 | 54.748 s |
+
+The mixed arm used both models. It cost 67.7% less than Sol alone, but Luna
+alone solved the same task at one fifth of the mixed cost and in less time.
+This block supports cheap execution on this case; it shows no fusion quality
+gain. A single selected task does not establish a general routing rule or
+production readiness. No default or public endpoint changed.
+
+Costs apply published tariffs to reported usage, not invoice totals. All 28
+calls settled. Agent time excludes independent grading: the first arm's cold
+grade took 46.045 seconds, while later grades took about one second each.
+Including that setup in only the first arm would reverse the latency ranking.
+Keep agent time and grading time separate when comparing these results.
