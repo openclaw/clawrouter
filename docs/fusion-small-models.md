@@ -891,6 +891,44 @@ current harness; report initial exposure separately from any later tuning or
 repetition. This task shares the authentication domain with the raw-ingress
 workload and does not establish cross-domain generalization.
 
+### Quota snapshot repair workload
+
+`benchmarks/fusion/quota-snapshot-workloads.json` isolates a historical
+two-file quota-state repair. Its instruction specifies the new
+`GrantRuntimeState.windowSnapshots` shape and limits; the original source does
+not contain that API. Successful probe snapshots must retire omitted
+windows within their own scope, retain watermarks against delayed observations,
+and preserve newer windows, other scopes, active rejection cooldowns and
+credential-revision boundaries. It does not exercise provider parsing or
+end-to-end grant failover.
+
+Both source revisions pass the original 10 quota tests. The original fails
+three assertions in the combined 18-test acceptance suite; the reference
+passes all 18, with no skipped or cancelled tests. The failures cover omitted
+windows, delayed observations and malformed snapshot metadata. Qualification
+establishes a usable development task, not a model-quality or fusion gain.
+
+One matched development trial with the explicit API contract produced:
+
+| Arm | Acceptance tests | Calls | Cost (USD) | Agent time |
+| --- | --- | --- | --- | --- |
+| GPT-6 Luna | 17/18 | 17 | $0.022631 | 64.569 s |
+| GPT-6.1 Sol | 18/18 | 7 | $0.113941 | 59.246 s |
+| Luna → Sol | 18/18 | 6 | $0.037212 | 39.968 s |
+
+All arms used a 24-call shared limit, 4096 output tokens per call and a
+480-second deadline. Luna used no reasoning; Sol used medium reasoning.
+The handoff arm made three calls to each model, retained source evidence
+and used the same pinned-probe regression gate as the fixed controls.
+Costs include every model call; agent time excludes final acceptance grading.
+
+The handoff matched the strong model's success at 67.34% lower cost and
+32.54% lower agent time, while resolving the remaining cheap-only failure.
+This is one exposed development task and one trial, not statistical evidence
+of superiority or a public-endpoint gain. Earlier trials whose instructions
+omitted the new API shape are excluded from these comparisons. No routing
+defaults change.
+
 ### Bounded edit handoff
 
 Set `FUSION_HANDOFF_MAX_TURNS` to reserve successor calls in an `edit-handoff`
