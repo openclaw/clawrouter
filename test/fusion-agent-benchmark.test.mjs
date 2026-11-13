@@ -623,3 +623,37 @@ test('a regression gate without a passing probe cannot submit at the turn limit'
   assert.equal(result.probeRegressionChecks, 0);
   await assert.rejects(runAgent({}, '', 'strong', '', {}, null, null, { probeRegressionGate: 'true' }), /invalid_probe_regression_gate/);
 });
+
+test('a timed-out regression replay terminates the trial before another model call', {
+  skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+}, async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { execFileSync } = await import('node:child_process');
+  const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+  const task = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+    .find(task => task.id === 'provided-responses-path');
+  const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+    .receipts.find(receipt => receipt.taskId === task.id);
+  const path = task.editPaths[0];
+  const original = execFileSync('git', ['show', `${task.base}:${path}`], { encoding: 'utf8' });
+  const query = `import { readFileSync } from 'node:fs';
+    if (readFileSync(${JSON.stringify(path)}, 'utf8').includes('// stall-replay'))
+      await new Promise(() => setInterval(() => {}, 1000));`;
+  let calls = 0;
+  await assert.rejects(runAgent(task, receipt.image, 'strong', 'replay-timeout-fixture',
+    { maxTurns: 5, deadlineMs: 6000, outputTokens: 256 }, async () => {
+      const turn = calls++;
+      const action = { action: turn === 0 ? 'probe' : turn === 1 ? 'edit' : 'finish',
+        paths: [], query: turn === 0 ? query : '', memory: '',
+        edits: turn === 1 ? [{ path, search: original, replace: original + '\n// stall-replay\n' }] : [] };
+      return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(action) } }] };
+    }, undefined, { probeRegressionGate: true }), error => {
+    assert.equal(error.message, 'command_timeout');
+    const trace = agentFailureTrace(error);
+    assert.equal(trace.probeRegressionChecks, 1);
+    assert.equal(trace.probeRegressionPassed, false);
+    assert.equal(JSON.stringify(trace).includes('stall-replay'), false);
+    return true;
+  });
+  assert.equal(calls, 3);
+});
