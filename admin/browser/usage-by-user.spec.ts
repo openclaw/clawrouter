@@ -19,6 +19,19 @@ async function serve(page:Page,role:'admin'|'user'){
   await route.fulfill({status:url.pathname in bodies?200:404,json:bodies[url.pathname]??{}});
  });return {...f,queries};
 }
+async function expectAccountingBoundary(page:Page,amount:string,calls:number,scope:string){
+ const metric=page.locator('.personalUsageSummary .personalGlance > div').filter({has:page.getByText('Recorded accounting amount',{exact:true})});
+ const value=metric.locator('dd > strong'),coverage=metric.locator('dd > small');
+ await expect(value).toHaveText(amount);await expect(coverage).toHaveText(calls+'/'+calls+' rows with a valid recorded accounting field');
+ await expect(value).toBeVisible();await expect(coverage).toBeVisible();
+ const valueBox=await value.boundingBox(),coverageBox=await coverage.boundingBox(),metricBox=await metric.boundingBox();
+ if(!valueBox||!coverageBox||!metricBox)throw Error('Accounting metric has no rendered bounds');
+ expect.soft(coverageBox.y-(valueBox.y+valueBox.height),scope+': coverage must start below the complete monetary amount with visible spacing').toBeGreaterThanOrEqual(4);
+ for(const box of [valueBox,coverageBox]){
+  expect.soft(box.x,scope+': accounting text must stay inside its metric').toBeGreaterThanOrEqual(metricBox.x);
+  expect.soft(box.x+box.width,scope+': accounting text must not clip horizontally').toBeLessThanOrEqual(metricBox.x+metricBox.width);
+ }
+}
 test('members see only current own calls, never shared policy totals in analytics',async({page})=>{
  const f=await serve(page,'user');try{
   await page.goto('/dashboard/home');const region=page.getByRole('region',{name:'Your personal usage',exact:true});await expect(region.locator('.personalGlance > div:nth-child(3) > dd:not(.personalGlanceMeta)').first()).toHaveText('6');await expect(region).toContainText('For your current access');await expect(region).not.toContainText('999,999');await expect(page.locator('.dashboardAnalyticsGrid')).toHaveCount(0);
@@ -28,8 +41,11 @@ test('admins refine retained user to deleted key, page events, and export the sa
  const f=await serve(page,'admin');try{
   await page.goto('/dashboard/usage');await expect(page.getByRole('heading',{name:'Usage in discovered locations',exact:true})).toBeVisible();
   await expect(page.getByRole('region',{name:'Retained usage ranking',exact:true})).toContainText('bob@example.test');
+  await expectAccountingBoundary(page,'$0.00084',120,'all users');
   await page.getByRole('button',{name:'bob@example.test',exact:true}).click();await expect(page.getByRole('heading',{name:'Exact ranking by key',exact:true})).toBeVisible();
+  await expectAccountingBoundary(page,'$0.000791',113,'selected user');
   await page.getByRole('button',{name:'bob@example.test · removed-key',exact:true}).click();const events=page.getByRole('region',{name:'Retained events',exact:true});await expect(events.locator('tbody > tr')).toHaveCount(100);await expect(events).not.toContainText('member@example.com');
+  await expectAccountingBoundary(page,'$0.000791',113,'selected key');
   await page.getByRole('button',{name:'Next page',exact:true}).click();await expect(events.locator('tbody > tr')).toHaveCount(13);
   const download=page.waitForEvent('download');await page.getByRole('button',{name:'Export refreshed snapshot JSON',exact:true}).click();const stream=await(await download).createReadStream();let text='';for await(const chunk of stream!)text+=chunk.toString();const file=JSON.parse(text);
   expect(file.events).toHaveLength(113);expect(file.events.every((e:{user:string;keyId:string})=>e.user==='bob@example.test'&&e.keyId==='removed-key')).toBe(true);expect(file.metadata.filters.user).toBe('bob@example.test');expect(file.metadata.totals.metrics.calls).toBe(113);
