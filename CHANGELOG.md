@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add qualified Fusion delivery workloads covering alternate preparation settlement and bounded full-size native OpenRouter music responses.
+
 - Bound Fusion draft test validation and terminate timed-out test process groups inside their sandbox so stalled candidates leave room for fallback.
 
 - Measure Fusion probe selection against independent candidate acceptance and reference behavior after repair execution, keeping private source and test output out of result traces.
