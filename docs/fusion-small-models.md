@@ -884,7 +884,9 @@ workload and does not establish cross-domain generalization.
 ### Quota snapshot repair workload
 
 `benchmarks/fusion/quota-snapshot-workloads.json` isolates a historical
-two-file quota-state repair. Successful probe snapshots must retire omitted
+two-file quota-state repair. Its instruction specifies the new
+`GrantRuntimeState.windowSnapshots` shape and limits; the original source does
+not contain that API. Successful probe snapshots must retire omitted
 windows within their own scope, retain watermarks against delayed observations,
 and preserve newer windows, other scopes, active rejection cooldowns and
 credential-revision boundaries. It does not exercise provider parsing or
