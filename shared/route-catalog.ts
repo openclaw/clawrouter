@@ -104,6 +104,7 @@ const unifiedProtocols = [
   ["audio.speech", "/v1/audio/speech", "openai.audio_speech"],
   ["audio.transcription", "/v1/audio/transcriptions", "openai.audio_transcriptions"],
   ["image.generation", "/v1/images/generations", "openai.images_generations"],
+  ["image.edit", "/v1/images/edits", "openai.images_edits"],
 ] as const;
 
 const pathsByCapability = new Map<string, string>(unifiedProtocols.map(([capability, path]) => [capability, path]));

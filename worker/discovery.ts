@@ -39,7 +39,7 @@ import { copilotPublicRecord, qualifiedPublicModel, type CopilotPublicDiscoveryV
 // and policy projections are always rebuilt from this request's observations.
 function staticProviderProjection(provider: CompiledProvider) {
   const models = new Map(provider.models.map(model => {
-    const display_name = `${provider.display_name} · ${model.id}`;
+    const display_name = model.displayName ?? `${provider.display_name} · ${model.id}`;
     const availability = model.availability ? { availability: structuredClone(model.availability) } : {};
     return [model.id, {
       openai: Object.freeze({ id: model.id, object: "model", owned_by: provider.id, display_name, ...availability }),
@@ -104,7 +104,7 @@ function modelsBody(entitlements: ClientEntitlements, anthropic: boolean): unkno
   const inventory = entitlements.inventory;
   if (anthropic) {
     const data = snapshot.providers.flatMap((provider) => (inventory.get(provider.id)?.models ?? []).filter((model) => model.capabilities.includes("llm.messages")).map((model) => compiledProjection(provider).models.get(model.id)?.anthropic ?? ({
-      id: model.id, type: "model", display_name: `${provider.display_name} · ${model.id}`, created_at: "1970-01-01T00:00:00Z",
+      id: model.id, type: "model", display_name: model.displayName ?? `${provider.display_name} · ${model.id}`, created_at: "1970-01-01T00:00:00Z",
       capabilities: null, max_input_tokens: model.pricing?.unit != null ? null : model.pricing?.maxInputTokens ?? null, max_tokens: model.pricing?.unit != null ? null : model.pricing?.defaultMaxOutputTokens ?? null,
     })));
     return { data, first_id: data[0]?.id ?? null, has_more: false, last_id: data.at(-1)?.id ?? null };
@@ -112,7 +112,7 @@ function modelsBody(entitlements: ClientEntitlements, anthropic: boolean): unkno
   const data = snapshot.providers.flatMap((provider) => (inventory.get(provider.id)?.models ?? []).flatMap((model) => {
     const capabilities = model.capabilities;
     const compiled = compiledProjection(provider).models.get(model.id)?.openai;
-    return capabilities.length ? [{ ...(compiled ?? { id: model.id, object: "model", owned_by: provider.id, display_name: `${provider.display_name} · ${model.id}` }), capabilities }] : [];
+    return capabilities.length ? [{ ...(compiled ?? { id: model.id, object: "model", owned_by: provider.id, display_name: model.displayName ?? `${provider.display_name} · ${model.id}` }), capabilities }] : [];
   }));
   const fusion = rows.find((row) => row.provider === "clawrouter");
   if (fusion?.allowed && fusion.readiness.executable) data.unshift({

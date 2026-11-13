@@ -57,6 +57,9 @@ import { assertInputTokensRequest } from "./responses-input-tokens.ts";
 import { softBudget, prepareSoftBudget, startSoftBudget, softBudgetPolicy, softBudgetPreflight } from "./soft-budget.ts";
 import { prepareUpstreamRequest } from "./proxy-upstream-request.ts";
 import { BodyLease, bodyLeaseMinimum } from "./body-budget.ts";
+import { largeHttp } from "./large-http/admission.ts";
+import { releaseProbe } from "./large-http/probe.ts";
+import { transferRequestContext } from "./correlation.ts";
 import { WanManagedOperation, readWanJson, wanRequestBytes, preflightWanJson, assertWanHeaders } from "./managed-media-json.ts";
 import { hasProxyQuery, type ProxyQuery } from "./proxy-query.ts";
 import { inheritLocalError } from "./native-errors.ts";
@@ -85,7 +88,7 @@ import {
 } from "./fusion";
 import { loadFusionConfig } from "./fusion-config";
 import { shouldFailoverGrant } from "./grant-quota";
-import { observeProviderGrantQuota } from "./provider-quota.ts";
+import { observeProviderGrantQuota, providerCreditExhausted } from "./provider-quota.ts";
 import { grantRoutingPolicy, type PinnedGrant } from "./grant-selection";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { assertSingleOpenAiAccount } from "./openai-public-account.ts";
@@ -93,6 +96,7 @@ import { isStandaloneSearch, SearchSession } from "./standalone-search.ts";
 import { HttpContinuation } from "./http-continuation.ts";
 import { HttpBackground } from "./http-background.ts";
 import { HttpOperation } from "./http-operation.ts";
+import { permitsGrantFailover, transportDispatchStarted } from "./upstream-transport.ts";
 import { backgroundResponse, requireEmptyResponseControlBody, responsesControls, responsesFileControls } from "./responses-lifecycle.ts";
 import { proxyResponseControl } from "./response-controls.ts";
 import { responseRouteDigest } from "./responses-control-dispatch.ts";
@@ -101,12 +105,14 @@ import {
   signSigV4, upstreamAuth, upstreamPath, type UpstreamAuth,
 } from "./providers";
 import { assertOperationConfiguration, grantSupports, openRouterPcmRequirement } from "./provider-auth.ts";
-import { normalizePreStreamError, observeUsage, proxyResponseHeaders } from "./proxy-response";
+import { inspectJsonError, normalizePreStreamError, observeUsage, proxyResponseHeaders } from "./proxy-response";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledProvider, CompiledQuotaConfig, Env, ProviderConnection } from "./types";
 import {
   decodePathSegment,
   errorResponse, HttpError, json, maxJsonBodyBytes, maxMediaJsonBodyBytes, randomId, readJson, type JsonIntake,
 } from "./utils";
+
+const MAX_GRANT_ATTEMPTS = 4;
 
 type AuthMode = "proxy_key" | "access";
 
@@ -136,12 +142,34 @@ class JsonAdmission implements JsonIntake {
   private intakeOperation?: HttpOperation;
   private intakeStartedAt = 0;
   private intakeBytes = 0;
-  private readonly request: Request;
+  private request: Request;
+  private classifiedRequest?: Request;
+  private completeClassification?: () => void;
+  private retainedPrefix?: { request: Request; prefix: import('./utils.ts').JsonReadPrefix };
   private readonly env: Env;
   private readonly mode: AuthMode;
   private readonly providerId: string | undefined;
   constructor(request: Request, env: Env, mode: AuthMode, providerId?: string) {
     this.request = request; this.env = env; this.mode = mode; this.providerId = providerId;
+  }
+  // Classify only at the canonical JSON admission boundary. Known supported
+  // bodies return synchronously; unrelated routes and WebSockets add no layer.
+  classify(): Response | Promise<Response | Request> | undefined {
+    const pending = largeHttp(this.request, this.env, this);
+    if (pending === undefined) return;
+    return Promise.resolve(pending).then(result => {
+      if (result instanceof Request) {
+        if (result !== this.request) this.completeClassification = transferRequestContext(this.request, result);
+        this.classifiedRequest = result;
+        this.request = result;
+      }
+      return result;
+    }, error => {
+      // Admission refusals have protocol status and retry headers. Preserve
+      // them just as the canonical JSON reader does inside its proxy path.
+      if (error instanceof Response) return error;
+      throw error;
+    });
   }
   reserve = async (bytes: number): Promise<void> => {
     if (bytes >= bodyLeaseMinimum) await this.authenticate();
@@ -150,6 +178,20 @@ class JsonAdmission implements JsonIntake {
       ? json({ type: "error", error: { type: "overloaded_error", message: "Large request capacity is busy; retry shortly." } }, 503, { "retry-after": "1" })
       : errorResponse("server_overloaded", "Large request capacity is busy; retry shortly.", 503, undefined, { "retry-after": "1" });
   };
+  // Large native handoffs never parse or retain a Worker JSON body. The
+  // classifier calls this only after its physical prefix has retired;
+  // provider latency must not keep that memory charged to ordinary requests.
+  retirePrefix(): void { this.lease.release(); }
+  retainPrefix(request: Request, prefix: import('./utils.ts').JsonReadPrefix): void {
+    if (this.retainedPrefix) throw new Error('JSON prefix already owned');
+    this.retainedPrefix = { request, prefix };
+  }
+  takePrefix(request: Request): import('./utils.ts').JsonReadPrefix | undefined {
+    if (this.retainedPrefix?.request !== request) return;
+    const { prefix } = this.retainedPrefix;
+    this.retainedPrefix = undefined;
+    return prefix;
+  }
   expand = async (): Promise<void> => {
     await this.authenticate();
     this.expanded = true;
@@ -223,6 +265,10 @@ class JsonAdmission implements JsonIntake {
   }
   ordinaryCompletion(): boolean { return !this.search && !this.wan && !this.input && !this.intakeOperation; }
   finish(context: ExecutionContext): void {
+    this.retainedPrefix?.prefix.finish();
+    this.retainedPrefix = undefined;
+    this.completeClassification?.();
+    if (this.classifiedRequest) releaseProbe(this.classifiedRequest);
     if (this.search) { context.waitUntil(this.search.finish()); return; }
     if (this.wanRefusal) context.waitUntil(this.wanRefusal);
     if (this.wan) {
@@ -261,7 +307,7 @@ interface PreparedUpstream {
   connection: ProviderConnection;
   websocket: boolean;
   backgroundRecovery: boolean;
-  failedGrantKey?: string;
+  failedGrantKeys?: string[];
   continuation?: ContinuationOwner;
   managedBaseUrl?: string;
   revalidateAccount?: (signal: AbortSignal) => Promise<void>;
@@ -274,7 +320,8 @@ interface PreparedUpstream {
 }
 
 interface ReservedProxyBudget {
-  failedGrantKey?: string;
+  failedGrantKeys?: string[];
+  grant: PinnedGrant;
   auth: AuthorizedIdentity;
   reservation: BudgetReservation;
   cost: EstimatedCost;
@@ -289,7 +336,15 @@ interface ReservedProxyBudget {
 
 export async function proxyOpenAi(request: Request, env: Env, context: ExecutionContext, path: string, mode: AuthMode): Promise<Response> {
   const admission = new JsonAdmission(request, env, mode);
-  try { return await proxyUnifiedOpenAi(request, env, context, path, mode, admission); }
+  try {
+    const pending = admission.classify();
+    if (pending !== undefined) {
+      const classified = await pending;
+      if (classified instanceof Response) return classified;
+      request = classified;
+    }
+    return await proxyUnifiedOpenAi(request, env, context, path, mode, admission);
+  }
   finally { admission.finish(context); }
 }
 
@@ -530,6 +585,12 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
   }
   const admission = new JsonAdmission(request, env, mode, provider.id);
   try {
+    const pending = admission.classify();
+    if (pending !== undefined) {
+      const classified = await pending;
+      if (classified instanceof Response) return classified;
+      request = classified;
+    }
     let envelope, prepared;
     try {
       if (request.method === "GET" || request.method === "HEAD") envelope = directManifestEnvelope(request, endpoint);
@@ -637,6 +698,12 @@ export async function proxyNative(request: Request, env: Env, context: Execution
   }
   const admission = new JsonAdmission(request, env, "proxy_key", provider.id);
   try {
+    const pending = admission.classify();
+    if (pending !== undefined) {
+      const classified = await pending;
+      if (classified instanceof Response) return classified;
+      request = classified;
+    }
     let prepared;
     try {
       let body = request.method === "GET" || request.method === "HEAD" ? {} : wanCreate(endpoint) ? await admission.wanCandidate(endpoint) : openRouterMusicCandidate(provider, endpoint)
@@ -892,6 +959,7 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
   let googleContinuation: GoogleContinuation | undefined;
   let search: SearchSession | undefined;
   let grantFailover = false;
+  const failedGrantKeys = new Set(reservedBudget?.failedGrantKeys ?? []);
   try {
     // Published assets require an acknowledged reservation before their sole
     // destination claim. A soft-budget request cannot supply that authority.
@@ -901,10 +969,11 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     continuation = await HttpContinuation.resolve(request, selection, auth, env);
     if (googleContinuationRoute(selection)) googleContinuation = await GoogleContinuation.resolve(request, selection, auth, env);
     const uploadGrant = nativeUploadGrants.get(selection);
-    prepared = await run(() => prepareSelected(request, env, selection, queryInput, auth, new Set(reservedBudget?.failedGrantKey ? [reservedBudget.failedGrantKey] : []), !uploadGrant && !published, reservedBudget?.connection, publishedPin ?? search?.pinned ?? continuation?.pinned ?? googleContinuation?.pinned ?? uploadGrant, "http", true, undefined, searchOwner));
+    prepared = await run(() => prepareSelected(request, env, selection, queryInput, auth, failedGrantKeys, !uploadGrant && !published, reservedBudget?.connection, publishedPin ?? search?.pinned ?? continuation?.pinned ?? googleContinuation?.pinned ?? uploadGrant, "http", true, undefined, searchOwner, undefined, request.signal, reservedBudget?.grant));
     assertRequestTariffDestination(selection.endpoint, prepared.url);
     assertNativeResponseDestination(selection.nativeResponse, prepared.url);
-    grantFailover = !!(reservedBudget?.failedGrantKey || prepared.failedGrantKey);
+    for (const key of prepared.failedGrantKeys ?? []) failedGrantKeys.add(key);
+    grantFailover = failedGrantKeys.size > 0;
     if (prepared.continuation) continuation?.bind(prepared.continuation);
     if (prepared.continuation && googleContinuation) await googleContinuation.bind(prepared.continuation);
     if (search) {
@@ -1152,17 +1221,37 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       finally { checking?.seal(); }
     }
     response = await operation.wait(pending, "upstream", discard);
+    if (completion) response = ownOrdinaryResponse(response, completion);
     if (music) {
       await music.completeUpload();
       prepared.requestBody = undefined;
     }
+    let creditExhausted = false;
+    const captureResponse = async (upstream: Response) => {
+      creditExhausted = false;
+      let errorBody: string | undefined;
+      if (selection.provider.id === "anthropic" && prepared.grantKey
+        && (upstream.status === 400 || upstream.status === 429 && prepared.grantLane === "subscription"
+          && selectionUpstreamModel(selection)?.startsWith("claude-fable-"))) {
+        const inspected = await inspectJsonError(upstream, operation);
+        upstream = inspected.response;
+        errorBody = inspected.body;
+        creditExhausted = providerCreditExhausted(selection.provider.id, upstream.status, inspected.body);
+      }
+      if (!searchOwner && !isModelDiscovery(selection.endpoint)) captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, upstream, selection.provider.id, selectionUpstreamModel(selection), creditExhausted, errorBody);
+      return upstream;
+    };
     accounting.observeUpstreamResponse(response, prepared.url);
     // Metadata permissions and rate limits do not establish inference health.
-    if (!searchOwner && !isModelDiscovery(selection.endpoint)) captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response, selection.provider.id, selectionUpstreamModel(selection));
-    if (!accounting.upstreamChargePossible && !miniMaxAnthropicRoute(selection.provider, selection.endpoint) && selection.provider.id !== "anthropic-vertex" && selection.provider.id !== "gmi" && !selection.nativeResponse && !selection.endpoint.requestPricing && !grantFailover && !isModelDiscovery(selection.endpoint) && !background && !search && !continuation?.requested && !googleContinuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
+    // A single-dispatch transport must retain the original rejection rather
+    // than discard it for an alternate that its transport cannot send.
+    response = await captureResponse(response);
+    while (!accounting.upstreamChargePossible && !miniMaxAnthropicRoute(selection.provider, selection.endpoint) && selection.provider.id !== "anthropic-vertex" && selection.provider.id !== "gmi" && !selection.nativeResponse && !selection.endpoint.requestPricing && failedGrantKeys.size < MAX_GRANT_ATTEMPTS - 1 && !isModelDiscovery(selection.endpoint) && !background && !search && !continuation?.requested && !googleContinuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover, creditExhausted) && permitsGrantFailover(env)) {
       let retry: PreparedUpstream | undefined;
       let capacityFailure: HttpError | undefined;
-      const preparation = run(() => prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection));
+      signal.throwIfAborted();
+      failedGrantKeys.add(prepared.grantKey!);
+      const preparation = run(() => prepareSelected(request, env, selection, queryInput, auth, failedGrantKeys, true, prepared.connection, undefined, "http", false, undefined, undefined, undefined, signal));
       const preparationSettled = preparation.then(() => {}, () => {});
       try {
         retry = await operation.wait(preparation);
@@ -1184,14 +1273,16 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
         // must not inherit the discarded attempt's nonbillable rejection.
         response = undefined;
         prepared = retry;
+        for (const key of prepared.failedGrantKeys ?? []) failedGrantKeys.add(key);
         accounting.setGrant(prepared.grantKey, prepared.grantLane);
         response = await operation.wait(ordinaryFetch(() => fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" })), "upstream", discard);
+        if (completion) response = ownOrdinaryResponse(response, completion);
         accounting.observeUpstreamResponse(response, prepared.url);
-        captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response, selection.provider.id, selectionUpstreamModel(selection));
+        response = await captureResponse(response);
         if (prepared.continuation) continuation?.bind(prepared.continuation);
         if (prepared.continuation && googleContinuation) await googleContinuation.bind(prepared.continuation);
         grantFailover = true;
-      }
+      } else break;
     }
     // Redirects cannot select a new destination or replay a credentialed body.
     // Do not pass Location downstream for the client to replay either.
@@ -1233,18 +1324,19 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
       ? selection.body.some(({ query }) => !!query && typeof query === "object" && "stream" in query && query.stream === true)
       : selection.body.stream === true;
     const errorFormat = selection.endpoint.request_format.startsWith("anthropic.") ? "anthropic" : selection.endpoint.request_format.startsWith("openai.") ? "openai" : undefined;
-    if (completion) response = ownOrdinaryResponse(response, completion);
     response = await normalizePreStreamError(response, !cost.requestTariff && streaming && !["audio.binary", "ollama.chat", "radius.messages"].includes(selection.endpoint.response_format), operation, errorFormat ? { format: errorFormat, requestId } : undefined);
     // Price inspection reads delivery bytes, not initial-response headers.
-    // Search retains its original deadline through delivery; other native paths
+    // Search and image edits retain their deadline through delivery; other paths
     // retire only the timer and keep caller cancellation connected through EOF.
-    if (!searchOwner) operation.retireDeadline();
+    if (!searchOwner && selection.endpoint.request_format !== "openai.images_edits") operation.retireDeadline();
     if (selection.capability === "llm.messages" && selection.endpoint.request_format === "anthropic.messages" && reservation?.reservations.length && policyRequestCost(auth.policy, selection.capability) == null) {
       priceGuard = await guardAnthropicPrice(response, tokens => tokens?.billable === false || !!anthropicPricing(selection.model?.pricing, selection.model?.upstream, accounting!.facts.anthropicRequest ?? {}, tokens?.anthropic ?? {}), operation, requestId);
       response = priceGuard.response;
     }
   } catch (error) {
-    if (error instanceof PublishedMusicUnsent) dispatched = false;
+    // A transport-local dispatch witness also covers a deadline/caller abort
+    // winning while native dispatch authorization is still pending.
+    if (error instanceof PublishedMusicUnsent || transportDispatchStarted(env) === false) dispatched = false;
     if (music) {
       operation.stop("upstream", error);
       // The operation's rejection may win before a physical quarantined read
@@ -1316,9 +1408,9 @@ async function proxySelectedOwned(request: Request, env: Env, context: Execution
     if (isModelDiscovery(selection.endpoint) && error instanceof HttpError) return errorResponse(error.code, error.message, error.status, undefined, error.headers);
     return errorResponse("provider_unavailable", `upstream request to provider ${selection.provider.id} failed`, 502, undefined);
   }
-  // Existing endpoint timers cover fetch and normalization. Search instead
-  // keeps its operation deadline through downstream EOF or cancellation.
-  if (!searchOwner) operation.retireDeadline();
+  // Generation keeps its existing fetch/normalization deadline. Search and
+  // image edits keep theirs through downstream EOF or cancellation.
+  if (!searchOwner && selection.endpoint.request_format !== "openai.images_edits") operation.retireDeadline();
   if (continuation && response.ok && !operation.receivedRejection && selection.capability !== "llm.responses.compact") {
     try { await operation.wait(run(() => continuation!.headers(response!)), "publication"); }
     catch (error) {
@@ -1391,7 +1483,7 @@ async function reserveSelected(request: Request, env: Env, context: ExecutionCon
   const failureAccounting = createProxyAccounting({ context, env, auth, selection, request, compound });
   let prepared: PreparedUpstream;
   try {
-    prepared = await prepareSelected(request, env, selection, {}, auth, new Set(), false);
+    prepared = await prepareSelected(request, env, selection, {}, auth);
   } catch (error) {
     if (isAccountingAdmissionFailure(error)) throw error;
     const failure = selectedFailure(error);
@@ -1406,7 +1498,7 @@ async function reserveSelected(request: Request, env: Env, context: ExecutionCon
   try {
     const reservation = await reserveBudget(env, auth, selection.capability, cost, prepared.connection);
     let claimed = false, cleanup: Promise<void> | undefined;
-    return { auth, reservation, cost, failedGrantKey: prepared.failedGrantKey, providerId: selection.provider.id, modelId: selection.model?.id ?? null, capability: selection.capability, connection: prepared.connection,
+    return { auth, reservation, cost, grant: { key: prepared.grantKey, revision: prepared.grantRevision }, failedGrantKeys: prepared.failedGrantKeys, providerId: selection.provider.id, modelId: selection.model?.id ?? null, capability: selection.capability, connection: prepared.connection,
       claim() { claimed = true; },
       finishUnclaimed() {
         if (claimed) return Promise.resolve();
@@ -1432,26 +1524,45 @@ async function selectedAuth(request: Request, env: Env, mode: AuthMode, selectio
   return (await preauthenticate(request, env, mode, selection.provider.id))!;
 }
 
-export async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation, searchOwner?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation): Promise<PreparedUpstream> {
+export async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation, searchOwner?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, signal = request.signal, reservedGrant?: PinnedGrant): Promise<PreparedUpstream> {
   // Direct prepareSelected callers are standalone preparation entries. Retain
   // the token on their selection for internal retries and subsequent calls.
   const preparation = selection.preparation ??= new PreparationAdmission();
   preparation.paths(selection.pathParams, selection.endpoint.path_param_styles);
   assertMultipartIntake(selection);
-  const prepare = (excluded: ReadonlySet<string>) => prepareSingleSelected(request, env, selection, queryInput, auth, excluded, recordSelection, resolvedConnection, pinned, transport, recoverBackground, wan, searchOwner, video, preparation);
-  try { return await prepare(excludedGrantKeys); }
-  catch (error) {
-    const routing = grantRoutingPolicy(auth.policy.grantRouting);
-    if (!(error instanceof SelectedGrantCredentialFailure) || video || searchOwner || wan || wanCreate(selection.endpoint) || pinned || selection.provider.id === "anthropic-vertex" || inlineMusicInput(selection) || publishedMusicInput(selection) || openRouterPcmRequirement({ ...selection, model: selection.model?.upstream }) || isModelDiscovery(selection.endpoint) || nativeRawFormat(selection.endpoint.request_format) || isStandaloneSearch(selection.endpoint) || ["minimax.speech", "minimax.images", "minimax.music"].includes(selection.endpoint.request_format) || miniMaxAnthropicRoute(selection.provider, selection.endpoint) || excludedGrantKeys.size || !routing.failover) throw error;
+  // Fusion already materialized this owner for its reservation. Revalidate the
+  // same authority first, rather than spending an uncounted fifth pool slot.
+  // This preference is not a continuation pin: an ordinary credential failure
+  // may still exclude it and use the remaining shared failover budget.
+  const prepare = (excluded: ReadonlySet<string>) => {
+    const reuseReserved = !pinned && reservedGrant && !(reservedGrant.key && excluded.has(reservedGrant.key));
+    // Reservation already applied the routing policy and recorded its choice.
+    // Revalidation must not advance routing again; a failed owner still allows
+    // the next loop to choose and record a policy-driven alternate normally.
+    return prepareSingleSelected(request, env, selection, queryInput, auth, excluded, recordSelection && !reuseReserved, resolvedConnection,
+      pinned ?? (reuseReserved ? reservedGrant : undefined), transport, recoverBackground, wan, searchOwner, video, preparation, signal);
+  };
+  const excluded = new Set(excludedGrantKeys);
+  const routing = grantRoutingPolicy(auth.policy.grantRouting);
+  let firstFailure: SelectedGrantCredentialFailure | undefined;
+  while (true) {
+    if (excluded.size) signal.throwIfAborted();
     try {
-      const retry = await prepare(new Set([error.grantKey]));
-      if (!retry.grantKey && !grantRoutingPolicy(auth.policy.grantRouting).environmentFallback) throw error;
-      return { ...retry, failedGrantKey: error.grantKey };
-    } catch (alternateError) { if (isPreparationLimit(alternateError) || isAccountingAdmissionFailure(alternateError)) throw alternateError; throw error; } // No usable alternate: preserve the original credential failure.
+      const prepared = await prepare(excluded);
+      if (!prepared.grantKey && excluded.size && !routing.environmentFallback) throw firstFailure ?? new HttpError(503, "upstream_grant_pool_unavailable", "no eligible alternate grant");
+      return excluded.size ? { ...prepared, failedGrantKeys: [...excluded] } : prepared;
+    } catch (error) {
+      if (isPreparationLimit(error) || isAccountingAdmissionFailure(error) || isIdentityFailure(error)) throw error;
+      signal.throwIfAborted();
+      if (!(error instanceof SelectedGrantCredentialFailure) || video || searchOwner || wan || wanCreate(selection.endpoint) || pinned || selection.provider.id === "anthropic-vertex" || inlineMusicInput(selection) || publishedMusicInput(selection) || openRouterPcmRequirement({ ...selection, model: selection.model?.upstream }) || isModelDiscovery(selection.endpoint) || nativeRawFormat(selection.endpoint.request_format) || isStandaloneSearch(selection.endpoint) || ["minimax.speech", "minimax.images", "minimax.music"].includes(selection.endpoint.request_format) || miniMaxAnthropicRoute(selection.provider, selection.endpoint) || !routing.failover) throw firstFailure ?? error;
+      firstFailure ??= error;
+      if (excluded.has(error.grantKey) || excluded.size >= MAX_GRANT_ATTEMPTS - 1) throw firstFailure;
+      excluded.add(error.grantKey);
+    }
   }
 }
 
-async function prepareSingleSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation, searchOwner?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, preparation?: PreparationAdmission): Promise<PreparedUpstream> {
+async function prepareSingleSelected(request: Request, env: Env, selection: ProxySelection, queryInput: ProxyQuery, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false, wan?: WanManagedOperation, searchOwner?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, preparation?: PreparationAdmission, signal = request.signal): Promise<PreparedUpstream> {
   assertPolicyModel(auth.policy, selection);
   if (isModelDiscovery(selection.endpoint)) {
     queryInput = discoveryQuery(queryInput);
@@ -1465,6 +1576,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
   assertServiceTier(auth, selection);
   if (selection.endpoint.request_format === "openai.responses_input_tokens") assertInputTokensRequest(request, queryInput);
   if (selection.endpoint.request_format === "openai.images_generations" && (hasProxyQuery(queryInput) || new URL(request.url).search)) throw new HttpError(400, "invalid_image_generation", "image generation options must be in JSON, not query parameters");
+  if (selection.endpoint.request_format === "openai.images_edits" && (hasProxyQuery(queryInput) || new URL(request.url).search)) throw new HttpError(400, "invalid_image_edit", "image edit options must be in JSON, not query parameters");
   const compact = selection.endpoint.request_format === "openai.responses_compact";
   const search = isStandaloneSearch(selection.endpoint);
   if (search && (hasProxyQuery(queryInput) || new URL(request.url).search)) throw new HttpError(400, "invalid_search_query", "search options must be in JSON, not query parameters");
@@ -1483,7 +1595,7 @@ async function prepareSingleSelected(request: Request, env: Env, selection: Prox
   let upstream: UpstreamAuth;
   if (video) videoJsonBytes(selection.body, "input");
   const stickyHash = await grantStickyHash(request, auth);
-  try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport, model: selectionUpstreamModel(selection), managedLifecycle: !!selection.endpoint.lifecycle }, video?.controlSignal ?? searchOwner?.operation.signal ?? request.signal, wan, searchOwner, video, preparation); }
+  try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport, model: selectionUpstreamModel(selection), managedLifecycle: !!selection.endpoint.lifecycle }, video?.controlSignal ?? searchOwner?.operation.signal ?? signal, wan, searchOwner, video, preparation); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_not_configured", "provider is not configured"); }
   try {
     if (compact) await assertCompactAccount(auth, env, upstream);
@@ -1651,11 +1763,11 @@ function wanCreateAuthority(env: Env, auth: AuthorizedIdentity, selection: Proxy
   };
 }
 
-export function captureGrantRuntime(context: ExecutionContext, env: Env, key: string | null, revision: string | null, quota: CompiledQuotaConfig, response: Pick<Response, "status" | "headers">, providerId?: string, model?: string | null): void {
+export function captureGrantRuntime(context: ExecutionContext, env: Env, key: string | null, revision: string | null, quota: CompiledQuotaConfig, response: Pick<Response, "status" | "headers">, providerId?: string, model?: string | null, creditExhausted = false, errorBody?: string): void {
   if (!key) return;
   // A rejected credential must not keep serving from this isolate's cache.
   if (response.status === 401 || response.status === 403) evictGrantCredentials(key);
-  const state = observeProviderGrantQuota(providerId, response, quota, model);
+  const state = observeProviderGrantQuota(providerId, response, quota, model, Date.now(), creditExhausted, errorBody);
   if (!state) return;
   const direct = queueGrantRuntime(env, key, { ...state, grantRevision: revision });
   if (direct) context.waitUntil(direct);

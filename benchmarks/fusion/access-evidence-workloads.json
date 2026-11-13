@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "access-github-evidence",
+      "split": "development",
+      "base": "cacd73f3e9ececb85e39023628c95e55dd584721",
+      "oracle": "e7eb5f0e2dffc0d1c5d83c501789bb6aa6755322",
+      "editPaths": [
+        "worker/access-json.ts",
+        "worker/access-response.ts",
+        "worker/access.ts"
+      ],
+      "visibleTests": [
+        "worker/test/access-bounds.test.mjs",
+        "worker/test/access-fetch-timeout.test.mjs",
+        "worker/test/access-policy.test.mjs",
+        "worker/test/assignment-reconciliation.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/access-evidence.test.mjs",
+        "worker/test/access-evidence-workerd.test.mjs"
+      ],
+      "instruction": "Bound GitHub identity evidence fetched after Cloudflare Access JWT verification while preserving assignment reconciliation. Use only the original request origin plus /cdn-cgi/access/get-identity, manual redirects, identity encoding and the original cookie. Start an independent 30-second evidence deadline before URL/header preparation and honor the original caller signal; do not reuse the completed JWT deadline. Reject an original URL over 16384 UTF-16 units or cookie over 32768 byte-string characters before outbound preparation, with a terminal access_limit denial and no local/admin fallback. Read successful 2xx evidence except 206 through the existing owned BYOB response path. Require application/json with optional UTF-8 charset, no content range or non-identity encoding, at most 32 response headers and 4096 header bytes, 262144 wire bytes, 65536 decoded UTF-16 units before append, 16384-byte whole read backing and 8192 reads including empty/EOF. Preserve strict content-length consistency and fatal UTF-8 decoding. Add a dedicated evidence JSON profile: depth 8, values 4096, containers 256, members 2048, total array entries 1024, total decoded key/string units 65536, key units 64, scalar units 1024, email units 320, and number-token length 64. Count root orgs entries at most 128 and teams entries at most 256 across all occurrences, including discarded duplicate members, before JSON.parse; retain last-member-wins parsing. Evidence metadata must not inherit JWKS key-row, kid, modulus or exponent restrictions. Keep existing JWT/JWKS behavior and cryptography unchanged. After physical response retirement, ordinary unusable responses, malformed/wrong-email/non-GitHub evidence, transport failure and evidence timeout yield UNKNOWN and retain assignments. Valid empty evidence revokes only revoke-on-loss assignments; manual groups remain. Explicit resource limits, original caller abort and independently observed cleanup failure are terminal. Use only privately branded operational failures, never caller-owned exception properties. Join the actual fetch, any late response, original pending read, first cancellation including rejection, and reader unlock before settling; a non-BYOB reader may be acquired for cancellation but must never be read. Recheck the original caller after evidence, after awaited assignment reconciliation, before session publication, and after awaited local/admin fallback work. Reconciliation is not rolled back. Preserve existing response ownership, cancellation and authorization precedence; no new cache, store, paid fallback or network destination."
+    }
+  ]
+}

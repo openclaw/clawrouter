@@ -2,7 +2,83 @@
 
 ## Unreleased
 
+- Retain bounded OpenAI request IDs in native Fusion benchmark receipts, including failed calls, without saving response bodies or changing retry and budget rules.
+
+- Add an opt-in Fusion handoff gate that requires an original-failing, candidate-passing assertion and current regression checks before normal transfer.
+
+- Distinguish submitted Fusion benchmark failures from budget stops and passing unsubmitted patches without changing scores or pilot gates.
+
+- Allow Fusion pair analysis to compare agent execution time explicitly, keeping independent grading out of latency ratios and dominance checks.
+
+- Exclude incomplete, filtered, refused, or tool-calling Fusion adviser responses from synthesis while retaining their usage accounting.
+
+- Record content-free rejection reasons for invalid local Fusion benchmark responses while preserving the campaign stop and unknown usage.
+
+- Reject incomplete acceptance verdicts in Fusion pair analysis before reporting quality, cost savings, or repeated pilot results.
+
+- Stop paired Fusion benchmark campaigns after incomplete agent tests or acceptance grading, preserving settled usage without calling later arms.
+
+- Stop one-shot and refined Fusion drafts after incomplete visible tests, before probing, another draft, or fallback inference.
+
+- Separate Fusion benchmark agent time from independent acceptance grading, including failed phases, so slow hidden tests do not obscure execution latency.
+
+- Stop grounded Fusion repair workers when visible test execution is incomplete, before another model call or grading.
+
+- Qualify supplied Fusion preservation checks against original and reference source, then pin them before paired execution without spending model calls.
+
+- Add an opt-in Fusion benchmark regression gate that pins passing probes across handoffs and replays them in isolated candidate snapshots before scoring.
+
+- Allow Fusion paired benchmark blocks to rotate their starting arm explicitly and retain the offset in analysis, reducing fixed-order comparisons.
+
+- Add an opt-in Fusion benchmark handoff that transfers bounded observed test and probe results separately from model-written notes, with matched strong-successor controls.
+
+- Stop Fusion benchmark agents after incomplete visible tests, recording a bounded failure before another model call.
+
+- Add an opt-in turn limit to Fusion edit handoffs so an unsuccessful first worker leaves calls for its successor.
+
+- Add qualified Fusion delivery workloads covering alternate preparation settlement and bounded full-size native OpenRouter music responses.
+
+- Bound Fusion draft test validation and terminate timed-out test process groups inside their sandbox so stalled candidates leave room for fallback.
+
+- Measure Fusion probe selection against independent candidate acceptance and reference behavior after repair execution, keeping private source and test output out of result traces.
+
+- Add an opt-in Fusion benchmark that compares two cheap repair drafts with one executable probe, abstaining on ambiguous evidence before strong fallback.
+
+- Add a qualified Fusion base64-inspection workload with explicit API, size-boundary and request-ownership requirements.
+
+- Preserve bounded, content-free Fusion agent traces when benchmark execution fails, without changing failure scores or budget stops.
+
+- Add an opt-in Fusion benchmark policy that hands a submitted candidate to a cheap verifier within the existing shared limits.
+
+- Add a cheap two-draft sampling control for Fusion probe-selection experiments, with deterministic visible-test selection, fixed-model baselines and shared call/spend limits.
+
+- Verify exported Fusion repairs against their task and digests, then rerun visible and independent acceptance checks without model calls or applying source to the caller's checkout.
+- Add Fusion validation workloads for threshold grant routing and cross-platform native snapshot compression, with pinned source revisions and independent acceptance tests.
+- Add private, opt-in source bundles for accepted Fusion handoff repairs, with provenance and content-free export receipts; failed delivery stops the run without overwriting existing files.
+- Allow qualified Fusion execution handoffs to run without paid baseline calls, retaining independent acceptance and explicit non-comparative reports.
+- Let threshold grant routing leave a grant at its switch point for a grant that has never reported quota or whose window has reset, and compare idle grants by their last reading in an open window so a pool cannot flap to one already past the cutoff.
+- Exclude Anthropic grants with exhausted prepaid credit for five minutes and retry eligible same-provider grants before delivery within the shared four-distinct-grant budget, preserving healthy session stickiness and scoped quota state.
+- Run Fusion native fixture dependencies from the read-only image and include public CA roots for workerd startup, retaining the isolated noexec workspace.
+- Add Fusion follow-up workloads for bounded grant-usage reports and MiniMax Music credential admission, with resource and runtime acceptance checks.
+- Add a matched strong-successor control for the Fusion handoff benchmark to separate model-selection gains from verification-protocol changes.
+
+- Add sandbox-qualified Fusion lifecycle repairs for cold-import settlement and assignment revision publication, with independent acceptance checks before model results are scored.
 - Add a versioned data-only JSON exchange contract for provider conformance fixtures, with a strict parser and provider-specific generated examples. Runtime conformance execution remains separate.
+- Add an opt-in, network-intercepted Worker runner for model-free native REST JSON plugin fixtures, with synthetic API-key auth and bounded exchange assertions.
+- Keep Fusion benchmark fallback active when a cheap repair exhausts its allowance without submitting, even if its partial patch passes the supplied check.
+- Fix Fusion source preloading for repairs spanning more than three editable files while retaining bounded source context and three-path action reads.
+
+- Retain bounded, content-free failed-test fingerprints in Fusion benchmark receipts to compare regressions with qualified baselines.
+
+- Export a private reviewable Git patch from an independently reverified Fusion repair, without applying changes or overwriting an existing file.
+- Add an experimental Fusion benchmark handoff from strong execution to a cheap worker after an edit passes visible checks, retaining a bounded executed probe, phase-specific verification instructions, independent final acceptance and shared limits.
+
+- Validate repeated Fusion benchmark blocks against one protocol and a consecutive spend ledger, with joint quality, cost and latency reporting.
+
+- Add an opt-in provider fixture validation command that checks captured scenarios against compiled manifest declarations and reports package digests without exposing fixture contents. This validates references without executing providers.
+
+- Preserve native cache-read and cache-write token buckets in Fusion benchmark receipts so recorded tariff estimates can be reconstructed.
+- Retain content-free Fusion request fingerprints before dispatch so failed requests can be compared without storing prompts or releasing uncertain charges.
 
 - Recover once from a truncated Fusion benchmark action within the existing call, time and spending limits, without applying partial output.
 
@@ -39,11 +115,15 @@
 
 - Add an opt-in Fusion single-draft benchmark policy with executable verification and original-source strong fallback.
 
+- Give Fusion draft refinement specific feedback for rejected patches and skip verification when no patch was applied.
+
 - Make the experimental Fusion cheap-stage call allowance explicit in benchmark configuration and reports, while preserving the shared hard ceiling.
 
 - Clarify exact-file navigation and edit limits in the Fusion benchmark agent, with actionable feedback after invalid tool requests.
 
 - Add three operational Fusion holdout candidates with supplied regression reproducers and independent acceptance suites.
+
+- Add a pinned Fusion evaluation task for reservation rollback and cleanup error preservation.
 
 - Preserve allowlisted Fusion provider error codes and parameter categories, and identify unknown-cost trial failures without storing provider text.
 - Add an experimental Fusion cascade for supplied, execution-qualified reproducers with equally informed fixed-model controls.

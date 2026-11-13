@@ -41,9 +41,11 @@ endpoints:
 models:
   entries:
     - id: chutes/deepseek-ai/DeepSeek-V4-Flash-0731-TEE
+      displayName: "DeepSeek V4 Flash (0731, TEE)"
       upstream: deepseek-ai/DeepSeek-V4-Flash-0731-TEE
       capabilities: [llm.chat]
     - id: chutes/deepseek-ai/DeepSeek-V3.2-TEE
+      displayName: "DeepSeek V3.2 TEE"
       upstream: deepseek-ai/DeepSeek-V3.2-TEE
       capabilities: [llm.chat]
       requestParameters:
@@ -61,6 +63,7 @@ models:
             contextWindow: 131072
             maxOutputTokens: 65536
     - id: chutes/moonshotai/Kimi-K2.6-TEE
+      displayName: "Kimi K2.6 TEE"
       upstream: moonshotai/Kimi-K2.6-TEE
       capabilities: [llm.chat]
       requestParameters:
@@ -78,6 +81,7 @@ models:
             contextWindow: 262144
             maxOutputTokens: 65535
     - id: chutes/zai-org/GLM-5.2-TEE
+      displayName: "GLM-5.2 TEE"
       upstream: zai-org/GLM-5.2-TEE
       capabilities: [llm.chat]
       requestParameters:
@@ -95,6 +99,7 @@ models:
             contextWindow: 1048576
             maxOutputTokens: 65535
     - id: chutes/Qwen/Qwen3.6-27B-TEE
+      displayName: "Qwen3.6 27B TEE"
       upstream: Qwen/Qwen3.6-27B-TEE
       capabilities: [llm.chat]
       requestParameters:
@@ -112,6 +117,7 @@ models:
             contextWindow: 262144
             maxOutputTokens: 65536
     - id: chutes/Qwen/Qwen3.5-397B-A17B-TEE
+      displayName: "Qwen3.5 397B A17B TEE"
       upstream: Qwen/Qwen3.5-397B-A17B-TEE
       capabilities: [llm.chat]
       requestParameters:

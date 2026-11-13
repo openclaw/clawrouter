@@ -103,6 +103,12 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
   // supplies its own imports despite the body-only instruction.
   const probePrelude = ['globalThis.assert = (await import("node:assert/strict")).default;',
     ...probeModules.map(({ binding, path }) => `globalThis.${binding} = await import(${JSON.stringify(path)});`)].join('\n');
+  const checkVisible = async () => {
+    const result = await test(box, task.visibleTests, remaining());
+    if (result.valid !== true) throw new Error('incomplete_test_run');
+    publicPassed = result.passed;
+    return result;
+  };
   const isolatedProbe = async (files, source) => {
     const isolated = await makeSandbox(image);
     try {
@@ -180,7 +186,7 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
           feedback = 'Requested source window is shown next. Copy exact source for an edit.';
         } else if (action.action === 'edit') {
           await write(box, groundedEdits(task, files, views, action), remaining());
-          const result = await test(box, task.visibleTests, remaining()); publicPassed = result.passed;
+          const result = await checkVisible();
           feedback = `Edit applied. Visible tests passed: ${publicPassed}. ${result.feedback.slice(-3500)}`;
           // Keep the edited location visible, including after a handoff.
           selection = { path: action.path, line: action.line, query: '' };
@@ -214,7 +220,7 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
             } else feedback = `Reproduction not qualified: it must fail with ERR_ASSERTION on the original source. ${feedback}`;
           }
         } else if (action.action === 'finish') {
-          const result = await test(box, task.visibleTests, remaining()); publicPassed = result.passed;
+          const result = await checkVisible();
           if (reviewing) {
             const checkedProbe = await isolatedProbe(await read(box, task.editPaths, remaining()), reproducer);
             probePassed = checkedProbe.passed;
@@ -226,6 +232,7 @@ export async function runGroundedAgent(task, image, strategy, trialId, config, i
           } else { outcome = 'submitted'; turns++; break; }
         } else throw new Error('invalid_action');
       } catch (error) {
+        if (error.message === 'incomplete_test_run') throw error;
         if (deadline.aborted) { outcome = 'deadline'; break; }
         event.status = ['unseen_edit', 'unchanged_edit'].includes(error.message) ? error.message : toolErrorCode(error);
         // Infrastructure failures stop the campaign; model tool mistakes can recover.

@@ -87,9 +87,9 @@ async function fixture(t, policy = routing, options) {
   const configure = async value => ok(await request("/fixture/provider", "POST", value));
   const proxy = (model = "claude-sonnet-5", session = "session-one", client = "client") => request("/v1/messages", "POST", { model: "anthropic/" + model, max_tokens: 16, messages: [{ role: "user", content: "synthetic fixture" }] }, { authorization: `Bearer clawrouter-live-${client}-fixture-key`, "x-clawrouter-session-id": session });
   const rows = async () => (await (await ok(await request("/v1/admin/upstream-grants"))).json()).grants;
-  const observe = async (id, used, window = "5h") => {
+  const observe = async (id, used, window = "5h", resetAt = now + 3600000) => {
     await setPolicy({ ...policy, eligibleGrants: { anthropic: [id] } });
-    await configure({ [id]: { headers: { [`anthropic-ratelimit-unified-${window}-utilization`]: String(used / 100), [`anthropic-ratelimit-unified-${window}-reset`]: iso(now + 3600000) } } });
+    await configure({ [id]: { headers: { [`anthropic-ratelimit-unified-${window}-utilization`]: String(used / 100), [`anthropic-ratelimit-unified-${window}-reset`]: iso(resetAt) } } });
     await selected(await proxy(), id); await configure({}); await setPolicy(policy);
   };
   return { request, base, proxy, configure, setPolicy, observe, rows,
@@ -144,6 +144,43 @@ test("threshold 90/10 hysteresis keeps the active account and will not flap to a
   await f.observe("b", 90); await selected(await f.proxy(), "b"); // 19% vs10% fails the10-point hysteresis
   await f.probe({ five_hour: { utilization: 79, resets_at: iso(now + 3600000) } });
   await selected(await f.proxy(), "a");
+  await selected(await f.proxy(), "a");
+});
+
+const pair = { ...routing, eligibleGrants: { anthropic: ["a", "b"] } };
+test("threshold moves off an account at the cutoff to one that has never reported quota", { timeout: 60000 }, async t => {
+  const f = await fixture(t, pair);
+  await f.observe("a", 89); await selected(await f.proxy(), "a");
+  await f.observe("a", 90); await selected(await f.proxy(), "b");
+  await selected(await f.proxy(), "b");
+});
+
+test("threshold moves off an account at the cutoff to one whose exhausted window has reset", { timeout: 60000 }, async t => {
+  const f = await fixture(t, pair);
+  await f.observe("b", 100, "5h", now + 600000); await f.observe("a", 90);
+  await selected(await f.proxy(), "a"); // B is exhausted until its reset
+  await f.clock(now + 660000);
+  await selected(await f.proxy(), "b");
+});
+
+test("threshold prefers an idle account's last reading in an open window over an unmeasured account", { timeout: 60000 }, async t => {
+  const f = await fixture(t);
+  await f.observe("c", 20); await f.observe("a", 89);
+  await f.clock(now + 600000); // C's reading is now older than staleAfterSeconds; B has none
+  await f.observe("a", 90); await selected(await f.proxy(), "c");
+});
+
+test("threshold never flaps to an idle account last seen past the cutoff in an open window", { timeout: 60000 }, async t => {
+  const f = await fixture(t, pair);
+  await f.observe("b", 95); await f.observe("a", 90); await selected(await f.proxy(), "a");
+  await f.clock(now + 600000);
+  await selected(await f.proxy(), "a");
+  await f.observe("a", 96); await selected(await f.proxy(), "a");
+});
+
+test("staleState deny keeps an account without fresh quota evidence out of threshold replacement", { timeout: 60000 }, async t => {
+  const f = await fixture(t, pair);
+  await f.observe("a", 90); await f.setPolicy({ ...pair, staleState: "deny" });
   await selected(await f.proxy(), "a");
 });
 

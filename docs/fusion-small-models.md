@@ -3,6 +3,47 @@
 Research reviewed on 2026-11-05. Keep production Fusion opt-in. This plan tests
 the mechanism before paying for another frontier-model comparison.
 
+Pair receipts separate `agentElapsedMs` from `gradingElapsedMs`. Agent time
+includes its tools, visible checks and sandbox cleanup. Grading time measures
+the independent final acceptance suite, including its cleanup, and is `null`
+when grading never starts. Both durations survive phase failures. Existing
+`elapsedMs` retains its end-to-end meaning and remains the analyzer's default.
+Select agent time explicitly for both single-run and repeated comparisons:
+
+```sh
+node scripts/fusion-pair-analysis.mjs --latency-metric=agentElapsedMs /path/to/pair.json
+```
+
+The report names the selected `latencyMetric` and retains both time totals.
+Latency ratios, cheap dominance and the repeated pilot screen use that same
+metric. Missing agent measurements never fall back to total time: single-run
+comparisons become unknown and repeated analysis rejects incomplete times.
+Predeclare the metric before a comparison; slow hidden timeout tests must not
+be treated as agent execution. Older receipts lack the phase measurements and
+cannot reconstruct them from total elapsed time.
+
+Failure diagnostics distinguish `visiblePassFailures` (a visible pass but zero
+final score), `falseAccepts` (a submitted visible-pass candidate with zero final
+score), and `acceptancePassesWithoutSubmission` (an unsubmitted attempt whose
+independent grade matches the qualified test count and passes). A passing
+partial patch does not change its zero score or the pilot gate. Older receipts
+without `outcome` cannot establish submission and count only in the first metric.
+
+Draft refinement skips verification when a response applies no patch. It tells
+the next attempt whether to shorten truncated output or repair invalid edit
+anchors, while retaining the current source and the same three-attempt ceiling.
+Applied drafts still require the visible tests and supplied reproducer to pass.
+
+Visible checks must produce a complete test summary. An incomplete run, including
+a test watchdog termination, stops that agent with `incomplete_test_run` before
+another model call or final grading. Complete assertion failures remain repairable.
+The general agent failure trace retains action metadata without raw test output.
+Pair analysis also requires complete acceptance verdicts before reporting quality
+or cost gains, including zero-score rows. Known-cost execution errors with no
+grading attempt remain failures; a supplied incomplete grade invalidates the run.
+Grounded and checked repair profiles also stop on incomplete visible checks,
+including checks after an edit or a review submission.
+
 ## What the evidence supports
 
 | Primary source | Relevant result | Engineering consequence |
@@ -36,6 +77,11 @@ less validation than a reproduced, held-out result in this workload.
 4. **Bounded frontier confirmation.** Freeze the policy on development data,
    then compare on new tasks with the same budget and tools. Pay for frontier
    workers only after earlier stages expose a plausible benefit.
+
+Paired benchmark campaigns stop after incomplete agent tests or acceptance grading.
+The checkpoint retains settled usage and the incomplete-run reason; later arms and
+tasks do not consume more model calls. Complete assertion failures remain scored
+results.
 
 For each stage, predeclare the cases, models, sample count, token limit and stop
 conditions. Count failed calls, discarded candidates, selection and verification.
@@ -389,12 +435,203 @@ repair. Earlier scores involving those tasks are not reliable comparisons.
 
 ## Native planner/editor comparison
 
+Set `FUSION_PAIR_POLICY=draft-sampling` for a cheap sampling control. It makes
+two independent single-call drafts from the original source, then selects the
+first submitted draft that passes visible tests, in fixed order. If neither
+qualifies, the cheap agent repairs from the original with the remaining shared
+allowance. There is no judge or hidden acceptance feedback. Both fixed-model
+controls remain present; this policy requires at least three shared calls.
+
+To compare with executable probe selection, freeze the same tasks, repetitions,
+model pins, call cap (at least four), token cap, deadline and spend budget for
+both policies. Report actual cost, including unused allowance, and preserve
+every attempted draw. Run each policy with its controls and compare the
+declared candidate arms; do not pool distinct policies as repeated blocks.
+This control measures whether executable selection adds value beyond two
+cheap drafts. It does not establish mixed-model benefit by itself.
+
+Single-draft visible tests get at most 30 seconds within the remaining trial
+deadline. Test execution uses an in-container watchdog that kills the process
+group before the Docker client deadline. A killed or incomplete test run never
+counts as a visible pass; infrastructure errors still stop execution.
+
+Set `FUSION_PAIR_POLICY=probe-selection` for an experimental executable
+comparison. Two independent one-call cheap drafts start from the same source.
+If both submit, pass visible tests, and differ, one cheap call writes a behavioral
+probe from the requirements, original source, declared context and bounded
+candidate previews. The same probe runs on three fresh sandboxes. Selection
+requires an assertion failure on the original, exactly one passing candidate,
+an assertion failure on the other, and unchanged editable source after execution.
+Import/runtime failures, ambiguous outcomes, invalid probes, duplicate drafts
+and incomplete drafts abstain. Strong repair then starts from the original
+source with the remaining allowance.
+
+This policy requires at least four shared calls and retains both fixed-model
+controls. All draft, author and fallback calls share the existing time and spend
+caps; uncertain charges and provider refusals stop the run. Receipts contain
+probe digests, snapshot outcomes and candidate digests, not generated source or
+probe text. Final acceptance remains independent. A generated probe can still
+test the wrong property or reject a correct repair; these guards do not certify
+test quality. No quality, cost or latency improvement is established. Before a
+gain claim, compare against equal-call sampling/retry and measure generated
+probes against accepted and rejected repairs without feeding grading results
+back into inference. After a successful policy run, the runner grades both
+candidates independently and replays the generated probe on the pinned accepted
+reference in a fresh sandbox. `probeDiagnostics` records candidate acceptance,
+reference-probe status and diagnostic elapsed time. Candidate source and probe
+text remain in memory and are consumed once. Diagnostic errors stay unknown;
+they neither replace the selected repair nor alter its final acceptance score.
+Diagnostic time is reported separately and excluded from trial elapsed time,
+so it does not penalize the policy in latency comparisons. No additional model
+calls are made.
+
 Use the existing repository agent with two fixed-model controls and one
 architect policy. The architect spends one call on a strong-model source plan;
 the cheap model executes the remaining actions. The plan consumes one of the
 same total calls available to each control. All calls and failed attempts count
 against the trial and campaign budgets. This is an experimental policy, not a
 claim of improvement.
+
+Set `FUSION_PAIR_POLICY=edit-handoff` to test an execution handoff instead of
+an up-front plan. The strong model starts the repair. After its first edit
+passes the visible tests, the cheap model receives the current source and
+working notes and continues verification or repair. A submission before that
+point also requires a successor turn. Failed edits do not trigger a handoff,
+and the ordinary turn-based handoff threshold is disabled for this policy.
+Both workers share the same total call, time and spend limits. Passing visible
+tests selects a handoff point; it does not certify correctness. Independent
+acceptance still scores the final patch. This policy is experimental and needs
+matched quality, cost and latency measurements; the default remains `architect`.
+
+The handoff also includes the latest executed behavior probe and its pass/fail
+result when the source is at most 8 KiB. This is untrusted context that may
+predate the last edit, not acceptance evidence. The successor must inspect its
+coverage and rerun it against current source. An oversized latest probe is
+omitted in full; an older probe is not substituted. Raw probe source and output
+are not added to benchmark receipts.
+
+The successor receives verification-specific instructions and the current source
+snapshot. Its task context retains the read-only repository context but omits the
+initial editable-source preload. It must check task invariants and repair concrete
+failures, then submit when verification is complete. It keeps the full remaining
+allowance; there is no forced early submission. Probe-use receipts require a
+successful model response to context that includes the transferred probe.
+
+Set `FUSION_PAIR_POLICY=completion-handoff` to keep the strong model until it
+calls `finish`, then transfer its current candidate, notes and latest bounded
+probe to the cheap verifier. Passing edits and the ordinary turn threshold do
+not trigger this transfer. `finish` is a submission signal, not proof that the
+repair is complete: even a candidate with failing visible tests goes to the
+successor for repair. The successor receives the same verification instructions
+as `edit-handoff` and uses only the calls, time and spend still available. If the
+primary exhausts the allowance, there may be no successor call; inspect recorded
+model calls before claiming a mixed run. Controls remain uninterrupted cheap and
+strong runs, and the report records this as a separate policy. This experimental
+comparison requires controls; repair export and control-free execution remain
+limited to the existing qualified `edit-handoff` mode. Do not pool the policies.
+
+Interrupted native pair and workload benchmark receipts retain a bounded
+`failureTrace` for the failing agent: the last 120
+completed action labels/statuses, timing/counters and handoff/probe-use flags.
+It excludes source, notes, prompts, completions, probe text/output and exception
+messages. The executor supplies this trace through an internal identity map;
+properties supplied by an arbitrary thrown error are ignored. A handoff flag
+records a transfer event, not proof of a successor call: use the call ledger to
+verify actual model mixing. Trace retention does not accept the candidate or
+resume execution. Failed rows stay failed, unknown charges keep their full
+reservation, and budget/refusal stop behavior is unchanged.
+
+Native OpenAI benchmark calls also save a unique `clientRequestId` before
+sending `X-Client-Request-Id`. Receipts retain `providerRequestId` from
+`x-request-id` when it contains only letters, digits, underscores or hyphens
+and is at most 128 characters. Other values are discarded. The response ID is
+captured before body parsing, including HTTP failures. A transport failure
+retains the client ID and unresolved cost reservation. No other headers or raw
+error bodies are retained, and correlation does not enable retries or settle
+unknown charges. See [OpenAI request debugging](https://developers.openai.com/api/reference/overview#debugging-requests).
+
+Set `FUSION_PAIR_POLICY=matched-handoff` to compare the cheap successor against
+a strong successor using the same handoff point, verification instructions,
+current-source context and shared limits. The cheap-only arm stays unchanged.
+The report records `matched-handoff` as its policy, `strong` for the unmixed
+control and `edit-handoff` for the mixed candidate. This control separates model
+selection from the effect of changing the execution protocol. Do not pool it
+with ordinary `edit-handoff` blocks as one repeated protocol.
+
+Set `FUSION_HANDOFF_EVIDENCE=1` with `edit-handoff`, `completion-handoff` or
+`matched-handoff` to also transfer recent test and probe results. The default
+keeps the existing notes-and-probe interface. The opt-in retains at most eight
+results and 16 KiB of serialized history, with each feedback excerpt capped at
+2 KiB of UTF-8. Records preserve execution order and pass/fail outcomes, separate
+from model-written notes. Program output remains untrusted, and old results may
+precede later edits; the successor must verify the current source.
+
+For `matched-handoff`, both the strong successor and mixed-model candidate get
+the same interface. Calls, output limits, deadlines and spend limits stay shared.
+Receipts record the option, transferred record count and whether a completed
+successor call received those records; they never retain the feedback text.
+Keep this interface as a separate experimental condition. Its implementation
+does not establish a quality or cost improvement.
+
+To run only the qualified handoff policy after evaluating it, set
+`FUSION_PAIR_POLICY=edit-handoff` and `FUSION_PAIR_CONTROLS=0`:
+
+```sh
+FUSION_PAIR_POLICY=edit-handoff FUSION_PAIR_CONTROLS=0 \
+  FUSION_CHEAP_REASONING=medium \
+  node scripts/fusion-pair-benchmark.mjs qualification.json tasks.json pair-config.json output-directory
+```
+
+This mode runs one repair per task, without paid baseline calls. It still requires
+qualified tasks, preserves the shared call/time/spend limits, and scores each
+repair with independent acceptance. Its `pair.json` has kind
+`native-policy-repository`; the paired analyzer rejects it because it contains no
+comparison. Keep controls enabled when measuring a gain. This is a sandboxed
+repository experiment, not a policy for the public `clawrouter/fusion` chat model.
+
+Add `FUSION_EXPORT_REPAIRS=1` to that handoff-only command to retain each accepted
+repair as `<task-id>.repair.json` in the private output directory. Export is off
+by default. These files contain generated source: keep them private and review
+them before applying changes. Nothing is applied to the caller's checkout.
+Each bundle records the task's base commit, executor source commit, task and
+qualification digests, generated files and their digest. The content-free run
+receipt records the bundle filename, byte count and SHA-256 digest.
+
+Export requires passing visible and independent acceptance checks. Failed
+repairs are not exported. Bundles contain at most 32 allowed editable files,
+256 KiB per file and 4 MiB total. On POSIX, files use mode `0600` in the run
+directory created with mode `0700`. An existing export is never replaced. A write failure
+stops the run as `repair_export_failed`, while retaining its acceptance result
+and accounting. This option does not turn the historical repair fixture into
+a general-purpose coding agent or establish additional quality evidence.
+
+Verify a saved repair without another model call:
+
+```sh
+node scripts/verify-fusion-repair.mjs qualification.json tasks.json output-directory/pair.json output-directory/example-task.repair.json
+```
+
+Use the exact manifest and qualification files from the export. The command
+checks task, base, executor-source, qualification and file digests against the
+accepted run. It rejects incomplete runs and altered or out-of-scope files before
+starting a sandbox. It then reruns visible tests and independent acceptance in
+fresh isolated sandboxes using the already-qualified local image and pinned Git
+history. Missing images or history fail; the command does not rebuild fixtures.
+Its JSON summary contains no source or test output. A failed check exits nonzero.
+
+This checks consistency of supplied provenance, not its authenticity or cost
+accounting. Passing applies to the pinned task base; it does not establish that
+the repair works on a different checkout. The command does not apply files.
+
+Add `--patch review.patch` to export a private unified Git patch only after
+both verification phases pass. It uses the verified source snapshot and the
+pinned base, preserves executable bits and end-of-file newlines, and does not
+overwrite an existing output. The patch can contain up to 16 MiB of source;
+keep it private, inspect it, and run `git apply --check /path/to/review.patch`
+from the intended target checkout before deciding whether to apply it.
+The command does not apply the patch. Its JSON receipt contains only the
+patch filename, size and digest. A delivery failure sets `patchExportFailed`
+and exits nonzero while preserving the separate acceptance result.
 
 Run from a committed task checkout with qualified workload receipts and an
 explicit JSON configuration. Only credentials for the selected models are
@@ -424,6 +661,34 @@ campaign's accumulated spend and unresolved reservations before starting.
 `pair.json` records exact source and dataset digests, declared splits, model
 pins, both controls, action metadata, acceptance counts, elapsed time and actual
 usage-based charges. It excludes prompts, completions and generated source.
+Set `FUSION_PAIR_ARM_OFFSET` to a zero-based arm index to change the starting
+arm for a repeated block. The default is `0`; a three-arm comparison accepts
+`0`, `1` or `2`. Execution rotates by this offset plus the task index while
+strategy labels and scoring stay fixed. Predeclare offsets before inference;
+receipts and analysis retain them, and repeated analysis allows different
+offsets under the same model/scoring protocol. Two blocks cannot fully balance
+three arms, so rotation alone does not remove all order or cache effects.
+
+Each call saves `requestDigest` (SHA-256 of the exact serialized provider body),
+UTF-8 `requestBytes`, and the input-message `promptDigest` before dispatch.
+These fields remain available on HTTP or transport failures without retaining
+request content or credentials. They identify a prepared request, not proof of
+provider receipt or billing; unresolved charges remain reserved.
+Single-block analysis reports cost savings versus strong, summed elapsed time,
+latency ratio, and whether cheap dominates the candidate on observed quality,
+cost and time. Missing or invalid time leaves latency and dominance unknown.
+Actual call identities distinguish mixed attempts and rescues from single-model
+resampling; neither savings nor a passing public check establishes a fusion gain.
+
+New paired-call receipts include `usageBreakdown`: disjoint uncached input,
+cache-read input, ordinary cache-write input, one-hour cache-write input, and
+output token counts. Use each model pin's `usagePrice` tariff for these buckets;
+`price` is the conservative reservation tariff. One-hour writes use twice the uncached input rate. Output counts already include
+reasoning tokens. The existing top-level input count retains its provider's
+semantics. Older receipts without a breakdown cannot reconstruct cache discounts;
+missing cache counts must not be interpreted as zero. These are tariff estimates,
+not provider invoices.
+
 An unknown charge retains its reservation and stops the campaign. Provider
 refusal also stops the campaign, without retry or model fallback.
 
@@ -458,3 +723,383 @@ and report incomplete attempts and transport reservations. Do not tune against
 acceptance failures and then describe the same tasks as held out.
 
 Literal source inspection reports `queryMatched: false` with no replacement source when a query has no match. Search text is literal; use a shorter query or an explicit line number after a miss.
+
+
+## Accounting cleanup evaluation task
+
+`benchmarks/fusion/cleanup-error-workloads.json` adds a pinned real repair for
+reservation rollback diagnostics. Only `worker/accounting.ts` is editable.
+The original accounting tests are visible; final verification replaces that
+same test path with the repaired revision's extended suite in a fresh sandbox.
+Qualification must show the original tests pass both source revisions, the
+extended suite rejects the original, and the repaired source passes it.
+
+This task has not been used for model inference at introduction. It remains a
+development task; once used for tuning it cannot support an unseen validation
+claim. The supplied instruction is the behavioral contract, not access to the
+reference source or final tests. No model call belongs to fixture qualification.
+
+
+## Lifecycle validation tasks
+
+`benchmarks/fusion/lifecycle-holdout-workloads.json` adds two development
+tasks from merged source fixes: credential cold-import settlement and
+assignment revision publication. The first joins concurrent imports without
+changing failure identity; the second combines compact revisions with ordered
+reconciliation and current-owner reads.
+
+Qualify the manifest with `scripts/qualify-fusion-workloads.mjs` before any
+model calls. Qualification must show the known source repair passes both the
+original visible tests and the independent acceptance tests, while the original
+source fails acceptance. Initial sandbox qualification passed:
+
+| Task | Original visible | Reference visible | Original acceptance | Reference acceptance |
+| --- | --- | --- | --- | --- |
+| Cold imports | 40/40 | 40/40 | 42/51 | 51/51 |
+| Assignment revisions | 11/11 | 11/11 | 5/12 | 22/22 |
+
+The original assignment implementation lacks the newly exported preparation
+functions, so its new API test module cannot load and its executed count is lower. No model result or gain is claimed
+by qualification; changed manifests or source pins require fresh qualification.
+
+The acceptance runner replaces the listed test files from the pinned reference
+only after repair. Those test bodies and the reference source must remain
+unavailable to model planning, editing and routing. Once used for inference,
+these cases are exposed and cannot remain an unseen validation set.
+
+## Routing and platform validation tasks
+
+`benchmarks/fusion/routing-platform-workloads.json` adds two historical repairs
+for testing a frozen policy on different work: threshold grant replacement and
+cross-platform native snapshot compression. The first allows four routing
+source files and checks real Worker behavior. The second allows only the
+snapshot plugin and checks the gzip header alongside the existing catalogue
+content, module identity and build determinism requirements.
+
+Qualify this manifest with `scripts/qualify-fusion-workloads.mjs` before model
+inference. The original visible tests must pass both revisions; the extended
+acceptance tests must reject the original source and pass the reference repair.
+Use Linux qualification for the gzip task so the original platform difference
+is exercised. Reference source and extended tests stay outside agent context.
+
+These tasks have no model results at introduction. Keep them separate from
+previously exposed workloads, freeze policy and comparison settings before
+inference, and retain unsuccessful attempts. Repeated draws become exposed-task
+replications; they do not add independent unseen tasks.
+
+
+## Discovery and stream validation tasks
+
+`benchmarks/fusion/discovery-stream-workloads.json` adds two historical repairs:
+manifest-only catalog route metadata and streamed terminal accounting. The
+first changes one discovery module. The second spans four source modules to
+inspect bounded SSE frames, preserve authoritative terminal usage, and settle
+protocol failures and caller cancellation without changing the HTTP status.
+The task explicitly specifies the `observeUsage().result` report shape required
+by acceptance tests; internal API requirements must be visible to the agent.
+
+Qualify this manifest before inference. The reference repair must pass the
+original visible tests and independent acceptance, and the broken base must
+fail acceptance. Initial Linux sandbox qualification passed with no skips:
+discovery visible 35/35 on both revisions and acceptance 43/55 before repair,
+55/55 after; streaming visible 9/9 on both and acceptance 41/59 before repair,
+59/59 after. These are harness checks, not model results. Keep reference source and acceptance-test bodies outside model
+context. The manifest is development data; subsequent draws on either task are
+replications, not additional unseen tasks. It does not alter the public Fusion
+policy or establish a new quality result.
+
+
+## Base64 inspection workload
+
+`benchmarks/fusion/base64-inspection-workloads.json` adds a historical MiniMax
+cover-reference repair. The task requires canonical base64 validation with
+bounded scalar inspection, exact 8-MiB size handling and preserved request
+identity. The public instruction declares the required exported inspector,
+frozen `{ decodedBytes }` result and rejection/error behavior. Acceptance-test
+bodies and reference source remain outside model context.
+
+Initial isolated qualification passed: original and reference each pass four
+visible tests; the reference passes all 28 acceptance tests with no skips. The
+original fails acceptance because it lacks the explicitly required export.
+These are harness checks, not model results. Treat this public historical task
+as development data; qualify its pinned revisions before inference and do not
+claim that repeated draws are new unseen tasks.
+
+
+### Delivery regression tasks
+
+`benchmarks/fusion/delivery-workloads.json` adds two historical development
+repairs: alternate preparation must settle before a cancelled proxy request
+finishes, and native OpenRouter music must preserve full-size bounded SSE
+without aggregate audio decoding. Each task pins its original parent and repair,
+keeps existing visible tests, and grades with a separate acceptance suite.
+The music task exposes the original scalar-inspector interface as read-only
+context. These are development tasks, not an unseen public-endpoint benchmark.
+Qualify both original and repaired revisions before using them in a comparison;
+include fixed-model controls and keep acceptance tests out of model context.
+
+
+## Pinned probe regression gate
+
+Set `FUSION_PROBE_REGRESSION_GATE=1` for an interactive paired `architect`,
+`edit-handoff`, `completion-handoff` or `matched-handoff` run. The same gate
+applies to cheap-only, strong-only and mixed arms. Defaults stay unchanged.
+
+The executor retains the first four distinct passing probes of at most 4096
+UTF-8 bytes each. Later probes cannot evict them. Before submission and at the
+end of a trial, it replays those probes against the current source in separate,
+fresh sandboxes. Replays cannot mutate the live repair or each other's state.
+At least one retained probe and successful replay are required for a gated
+score. Unchanged source and probe sets reuse their result within the trial.
+Probe execution, sandbox setup and cleanup count toward elapsed time; replays
+use the existing trial deadline and do not invoke a model.
+
+These are model-written regression checks, not trusted correctness oracles.
+They can miss behavior, encode a wrong assumption or be trivial. Independent
+acceptance tests still determine task correctness. Raw probe source and output
+remain in memory; reports contain only counts and the gate result. Repeat
+analysis rejects runs that change the gate setting.
+
+
+### Supplied preservation checks
+
+A workload may supply `preservationProbes`: one to four distinct Node ES modules,
+up to 4096 UTF-8 bytes each. Qualification runs each probe in a fresh sandbox on
+both the original source and the reference repair. Each must pass without
+changing an editable source file. Receipts bind these outcomes to each probe's
+digest; stale, missing or failed checks reject the workload before paid calls.
+This checks compatibility with two implementations, not general soundness.
+
+Use `FUSION_PROBE_REGRESSION_GATE=1` with these manifests. The probes occupy
+pinned slots before the first model call and remain visible to every arm.
+They do not consume model calls. Later generated probes can fill remaining slots
+but cannot replace supplied ones. Final replay and independent acceptance both
+remain mandatory.
+
+`benchmarks/fusion/preservation-workloads.json` is an exposed development variant
+of the existing music delivery task. It adds a small destination/header/byte-replay
+check. It is not a new holdout and must not be pooled with the original variant
+as an independent task. The original native test file cannot simply become a
+visible suite: some of its old fixtures and limits reject the required repair.
+
+### Stream and lifecycle confirmation tasks
+
+`benchmarks/fusion/stream-lifecycle-workloads.json` adds two historical repairs
+outside the quota snapshot case. These remain coordinator-selected development
+tasks. Their initial model exposure must be reported separately from repeats.
+
+| Task | Original tests, both revisions | Baseline acceptance failures | Reference acceptance |
+| --- | --- | --- | --- |
+| Gemini SSE negotiation | 12/12 | 2/15 | 15/15 |
+| Managed observation loss | 10/10 | 10/21 | 21/21 |
+
+Qualification runs real query-routing and managed-job fixtures, with no skipped
+or cancelled tests. The stream task preserves ordinary query transport while
+requiring exact SSE negotiation before upstream dispatch. The lifecycle task
+preserves billing and settlement while freezing a lost observation once,
+without replaying a create or inventing a terminal execution outcome. Its
+instruction names the new metadata and positional callback arguments explicitly.
+Neither qualification result establishes a model or fusion gain.
+
+### Bounded credential-ingress repair
+
+`benchmarks/fusion/raw-ingress-workloads.json` adds a historical repair
+across proxy authentication, discovery and pool selection. It requires bounded,
+sequential header inspection before parsing and preserves selection order,
+Access fallback and authentication failures. Credentials and authorities are
+synthetic fixtures; this benchmark does not use live accounts.
+
+Original identity, discovery and pool tests must pass on both source revisions.
+Independent acceptance checks the raw limits, early selection and terminal
+failure behavior. The original must fail and the reference must pass with no
+skipped tests before inference. The first exposure can serve as fresh
+validation; later runs are development repetitions.
+
+Initial Linux qualification passed without skips: both source revisions pass
+102 visible tests; the original fails 20 of 143 acceptance tests, and the
+reference passes all 143. This qualifies the task, not a model or fusion policy.
+
+
+### GitHub evidence validation workload
+
+`benchmarks/fusion/access-evidence-workloads.json` defines a historical
+three-file repair of GitHub identity evidence admission and response retirement.
+The original Access and assignment tests must pass before and after the repair.
+Independent unit and real-Worker tests cover bounded parsing, UNKNOWN versus
+terminal outcomes, assignment preservation and cancellation ownership. All
+accounts, signed assertions and HTTP fixtures are synthetic.
+
+Qualify the task before inference. The `development` label is required by the
+current harness; report initial exposure separately from any later tuning or
+repetition. This task shares the authentication domain with the raw-ingress
+workload and does not establish cross-domain generalization.
+
+### Quota snapshot repair workload
+
+`benchmarks/fusion/quota-snapshot-workloads.json` isolates a historical
+two-file quota-state repair. Its instruction specifies the new
+`GrantRuntimeState.windowSnapshots` shape and limits; the original source does
+not contain that API. Successful probe snapshots must retire omitted
+windows within their own scope, retain watermarks against delayed observations,
+and preserve newer windows, other scopes, active rejection cooldowns and
+credential-revision boundaries. It does not exercise provider parsing or
+end-to-end grant failover.
+
+Both source revisions pass the original 10 quota tests. The original fails
+three assertions in the combined 18-test acceptance suite; the reference
+passes all 18, with no skipped or cancelled tests. The failures cover omitted
+windows, delayed observations and malformed snapshot metadata. Qualification
+establishes a usable development task, not a model-quality or fusion gain.
+
+One matched development trial with the explicit API contract produced:
+
+| Arm | Acceptance tests | Calls | Cost (USD) | Agent time |
+| --- | --- | --- | --- | --- |
+| GPT-6 Luna | 17/18 | 17 | $0.022631 | 64.569 s |
+| GPT-6.1 Sol | 18/18 | 7 | $0.113941 | 59.246 s |
+| Sol → Luna | 18/18 | 6 | $0.037212 | 39.968 s |
+
+All arms used a 24-call shared limit, 4096 output tokens per call and a
+480-second deadline. Luna used no reasoning; Sol used medium reasoning.
+The handoff arm made three calls to each model, retained source evidence
+and used the same pinned-probe regression gate as the fixed controls.
+Costs include every model call; agent time excludes final acceptance grading.
+
+The handoff matched the strong model's success at 67.34% lower cost and
+32.54% lower agent time, while resolving the remaining cheap-only failure.
+This is one exposed development task and one trial, not statistical evidence
+of superiority or a public-endpoint gain. Earlier trials whose instructions
+omitted the new API shape are excluded from these comparisons. No routing
+defaults change.
+
+### Bounded edit handoff
+
+Set `FUSION_HANDOFF_PROBE_GATE=1` together with `FUSION_PROBE_REGRESSION_GATE=1`
+to delay an `edit-handoff` until a behavior probe distinguishes the original
+source from the current repair. The probe must fit in 4096 UTF-8 bytes, fail
+with an assertion on the frozen original source, and pass on the candidate in
+fresh isolated sandboxes. Current visible tests and pinned regression probes
+must also pass. A runtime/import error on the original is insufficient.
+
+Each edit invalidates earlier qualification. Calling `finish` cannot bypass
+the gate. An explicit `FUSION_HANDOFF_MAX_TURNS` still transfers unfinished
+work when its limit arrives; receipts distinguish `qualified_probe` from
+`turn_limit` transfers and record the comparison count. No hidden acceptance
+tests enter this decision, and the extra checks use the existing deadline.
+
+Use `matched-handoff` to apply the same gate to a strong-successor control.
+The option is off by default. Reports retain `handoffProbeGate`; repeated
+analysis rejects mixed settings. This gate proves only that one probe detects
+a source difference, not full contract coverage or a model-quality gain.
+
+Set `FUSION_HANDOFF_MAX_TURNS` to reserve successor calls in an `edit-handoff`
+comparison. The first worker hands off after its first passing edit or the
+specified number of turns, whichever comes first. The limit must be at least
+one and smaller than the shared call limit. The default remains uncapped.
+A handoff at the limit transfers the current attempt even if visible tests fail;
+the successor must repair and verify it. Refusals, uncertain charges and incomplete
+test execution still stop their existing paths rather than triggering this limit.
+
+Receipts record `handoffMaxTurns` and a bounded handoff reason. Repeated blocks
+must use the same limit. Fixed cheap/strong controls retain their entire allowance;
+`matched-handoff` applies the same boundary to its all-strong handoff control.
+This option is an experimental allocation rule, not evidence of a quality gain.
+
+
+### Complete-adviser repair workload
+
+`benchmarks/fusion/adviser-completion-workloads.json` pins a one-file repair to
+Fusion's adviser collector. Incomplete, refused, tool-calling or provider-error
+responses must not become synthesis context. The repair must preserve completed
+text responses, response consumption, usage accounting, ordering and fallback.
+
+This is a coordinator-selected development task, not a random holdout. Both
+source revisions pass the three original visible tests. The original fails 11
+of 26 independent acceptance tests; the reference passes all 26 without skips.
+Qualify the exact manifest before reuse. Do not reveal the reference or
+independent acceptance tests to the repair model.
+
+One controlled development block used GPT-6 Luna with reasoning disabled,
+GPT-6.1 Sol with medium reasoning, and an edit handoff from Sol to Luna. Each
+arm had 24 shared calls, 4096 output tokens per call, an eight-minute deadline
+and a $1 cap. The mixed arm received original-source handoff evidence and the
+probe regression gate. The runner was pinned to
+`597020f6aea07ed1c0d68382860f96affd1fa52e`.
+
+| Strategy | Acceptance | Calls | Estimated cost | Agent time |
+| --- | --- | --- | --- | --- |
+| Luna only | 26/26 | 8 | $0.006637 | 35.812 s |
+| Sol only | 26/26 | 9 | $0.103371 | 68.604 s |
+| Sol → Luna | 26/26 | 11 | $0.033435 | 54.748 s |
+
+The mixed arm used both models. It cost 67.7% less than Sol alone, but Luna
+alone solved the same task at one fifth of the mixed cost and in less time.
+This block supports cheap execution on this case; it shows no fusion quality
+gain. A single selected task does not establish a general routing rule or
+production readiness. No default or public endpoint changed.
+
+Costs apply published tariffs to reported usage, not invoice totals. All 28
+calls settled. Agent time excludes independent grading: the first arm's cold
+grade took 46.045 seconds, while later grades took about one second each.
+Including that setup in only the first arm would reverse the latency ranking.
+Keep agent time and grading time separate when comparing these results.
+
+
+## Two-task confirmation: cheaper, still below the reliability gate
+
+Two matched blocks on new historical Gemini SSE negotiation and managed
+observation-loss repairs used runner revision
+`77a1db776be0c3e6f909bb0ec447f44d76b873fc`. The policy and instructions were
+frozen before inference. These are two distinct development tasks repeated
+twice, not four independent tasks or a public-endpoint benchmark.
+
+Each arm had 24 calls, 4096 output tokens per call, 480 seconds and a $0.75
+ceiling. Models were `openai/gpt-6-luna` without reasoning and
+`openai/gpt-6.1-sol` with medium reasoning. The edit handoff ran Sol first, then Luna, retaining source
+and tool evidence; all arms used pinned regression probes. Costs include all
+191 calls, including unsuccessful attempts. Agent time excludes final grading.
+
+| Arm | Completed repairs / 4 | Cost (USD) | Agent time |
+| --- | ---: | ---: | ---: |
+| Luna | 0/4 | $0.208916 | 319.719 s |
+| Sol | 2/4 | $1.146421 | 281.385 s |
+| Sol → Luna | 2/4 | $0.487105 | 307.260 s |
+
+Sol and the handoff each completed the streaming task twice; Luna completed
+neither attempt. Neither Sol nor the handoff completed the lifecycle task in
+either block. The first block's Sol and handoff candidates passed their own
+checks but missed the same independent regression. In the second block, Sol
+hit the budget guard with a patch that passed independent acceptance but had
+not passed its pinned probes or submitted. The handoff hit the turn limit and
+failed independent acceptance. Those attempts retain zero scores.
+
+The handoff matched Sol's completed-repair count at 57.51% lower cost and
+9.20% more agent time. All four handoff attempts called both models in that order. This is a
+repeatable cost observation on the streaming task, not evidence of better
+quality than Sol. The aggregate 50% completion rate fails the predeclared 75%
+pilot threshold. No production or routing defaults change.
+
+The completed cohort cost $1.842442. Treat the remaining weakness as a
+verification and bounded-completion problem: visible probes can miss contract
+requirements, and a correct partial patch still needs to finish within budget.
+Any changed stop rule or verification policy needs fresh matched controls;
+rescoring these attempts as successes would invalidate this comparison.
+
+
+### Native Azure speech retirement confirmation task
+
+`benchmarks/fusion/azure-retirement-workloads.json` pins one historical repair
+to `655990cdb4c33a148b03425fd6a2c8831c6766ef`, with reference fix
+`80ecc42d40619894b10924c772a07a625996029e`. Only
+`worker/native-azure-speech.ts` is editable. The task requires a failed or aborted
+response to retain its reader and existing memory lease until cancellation
+settles, including reentrant abort and cancellation rejection. The original
+input-retirement helper is available as context.
+
+Original visible tests pass 9/9 on both revisions. Independent acceptance
+replaces the test file with its historical fixed revision: the original source
+fails three assertions across 12 tests; the reference passes all 12. No skipped
+or cancelled tests contribute to qualification. The task has no model results
+yet. Use it for a prospective comparison only while it remains unexposed; a
+qualified fixture alone demonstrates neither a handoff gain nor production
+readiness.

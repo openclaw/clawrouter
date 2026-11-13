@@ -16,7 +16,11 @@ export interface LoadedProviderPlugin {
   /** Content identity, not a signature or publisher trust assertion. */
   digest: string;
   files: readonly { path: string; bytes: number; sha256: string }[];
+  /** Opt-in fixture text captured from the same bytes used for the content digest. */
+  fixtureSources?: readonly { path: string; source: string }[];
 }
+
+export interface ProviderPluginLoadOptions { captureFixtures?: boolean }
 
 function hash(bytes: Uint8Array | string): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -39,13 +43,14 @@ function readRegularFile(root: string, relativePath: string, maxBytes: number): 
 }
 
 /** Build-time data loading only. The operator owns and stabilizes the input directory. */
-export function loadProviderPlugin(descriptorPath: string): LoadedProviderPlugin {
+export function loadProviderPlugin(descriptorPath: string, options: ProviderPluginLoadOptions = {}): LoadedProviderPlugin {
   const absolute = resolve(descriptorPath);
   if (basename(absolute) !== "clawrouter.plugin.json") throw new Error("provider plugin descriptor must be named clawrouter.plugin.json");
   const root = realpathSync(dirname(absolute));
   const descriptorBytes = readRegularFile(root, "clawrouter.plugin.json", PROVIDER_PLUGIN_LIMITS.descriptorBytes);
   const descriptor = parseProviderPluginDescriptor(JSON.parse(descriptorBytes.toString("utf8")));
   const files = [{ path: "clawrouter.plugin.json", bytes: descriptorBytes.length, sha256: hash(descriptorBytes) }];
+  const fixtureSources: { path: string; source: string }[] = [];
   let manifestSource = "";
   let total = descriptorBytes.length;
   for (const path of providerPluginFiles(descriptor)) {
@@ -54,14 +59,15 @@ export function loadProviderPlugin(descriptorPath: string): LoadedProviderPlugin
     total += bytes.length;
     if (total > PROVIDER_PLUGIN_LIMITS.packageBytes) throw new Error("provider plugin package exceeds total byte limit");
     if (path === descriptor.manifest) manifestSource = bytes.toString("utf8");
+    if (options.captureFixtures && descriptor.fixtures?.includes(path)) fixtureSources.push({ path, source: bytes.toString("utf8") });
     files.push({ path, bytes: bytes.length, sha256: hash(bytes) });
   }
-  return { descriptor, manifestSource, files, digest: hash(JSON.stringify(files)) };
+  return { descriptor, manifestSource, files, digest: hash(JSON.stringify(files)), ...(options.captureFixtures ? { fixtureSources } : {}) };
 }
 
 /** Explicit inputs only; ordering cannot select a winner for a duplicate provider. */
-export function loadProviderPlugins(paths: readonly string[]): LoadedProviderPlugin[] {
-  const loaded = paths.map(loadProviderPlugin).sort((a, b) => a.descriptor.id < b.descriptor.id ? -1 : a.descriptor.id > b.descriptor.id ? 1 : 0);
+export function loadProviderPlugins(paths: readonly string[], options: ProviderPluginLoadOptions = {}): LoadedProviderPlugin[] {
+  const loaded = paths.map(path => loadProviderPlugin(path, options)).sort((a, b) => a.descriptor.id < b.descriptor.id ? -1 : a.descriptor.id > b.descriptor.id ? 1 : 0);
   const ids = new Set<string>();
   for (const { descriptor } of loaded) {
     if (ids.has(descriptor.id)) throw new Error(`duplicate provider plugin id ${descriptor.id}`);

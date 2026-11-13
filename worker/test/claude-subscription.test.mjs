@@ -22,7 +22,7 @@ test("Claude subscription transport uses OAuth identity without changing API-key
   assert.equal(oauthHeaders.has("x-api-key"), false);
   assert.equal(oauthHeaders.get("anthropic-beta"), "interleaved-thinking-2025-05-14,claude-code-20250219,oauth-2025-04-20");
   assert.equal(oauthHeaders.get("x-app"), "cli");
-  assert.equal(oauthHeaders.get("user-agent"), "claude-cli/2.1.288 (external, cli)");
+  assert.equal(oauthHeaders.get("user-agent"), "claude-cli/2.1.322 (external, cli)");
 
   const body = transformTransportBody(transport, { model: "claude-sonnet-5", messages: [{ role: "user", content: "fixture" }], system: "operator system" });
   assert.deepEqual(body.system.map((block) => block.text), [
@@ -37,6 +37,29 @@ test("Claude subscription transport uses OAuth identity without changing API-key
   assert.equal(apiHeaders.get("x-api-key"), "anthropic-api-key-fixture");
   assert.equal(apiHeaders.has("authorization"), false);
 });
+
+for (const model of ["claude-fable-5-1", "claude-sonnet-5-5", "claude-opus-5-5"]) test(
+  "Claude subscription upgrade preserves the historical thinking prefix for " + model, () => {
+    const transport = transportForGrant(anthropic, { provider: "anthropic", kind: "subscription", accessToken: "synthetic-replay-token" });
+    // Historical wire fixture: these exact system blocks preceded the thinking
+    // block. Do not derive the expected prefix from the current transport.
+    const operatorSystem = { type: "text", text: "Synthetic stable operator instructions.", cache_control: { type: "ephemeral" } };
+    const historical = { model, max_tokens: 10, system: [
+      { type: "text", text: "x-anthropic-billing-header: cc_version=2.1.288; cc_entrypoint=sdk-cli;" },
+      { type: "text", text: "You are Claude Code, Anthropic's official CLI for Claude." }, operatorSystem,
+    ], tools: [{ name: "synthetic_lookup", description: "Synthetic fixture.", input_schema: { type: "object", properties: {} } }],
+    messages: [{ role: "user", content: "Synthetic first turn." }, { role: "assistant", content: [
+      { type: "thinking", thinking: "Synthetic earlier thought.", signature: "synthetic-historical-signature" },
+      { type: "text", text: "Synthetic earlier answer." },
+    ] }, { role: "user", content: "Continue." }] };
+    const expected = structuredClone(historical);
+    // A caller replays its own original system, tools and history; the router
+    // must reconstruct the same prefix, not upgrade a version inside it.
+    assert.deepEqual(transformTransportBody(transport, { ...historical, system: [operatorSystem] }), expected);
+    // Already-transformed historical input must not gain a new billing block.
+    assert.deepEqual(transformTransportBody(transport, historical), expected);
+    assert.deepEqual(historical, expected, "transformation does not mutate the supplied history");
+  });
 
 test("Claude usage payload maps five-hour, weekly, and model windows without retaining the payload", () => {
   const probe = anthropic.quota.probes.find((candidate) => candidate.grantKinds.includes("subscription"));

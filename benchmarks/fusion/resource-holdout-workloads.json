@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "resource-grant-usage",
+      "split": "development",
+      "base": "06ae9666227e416b705ecd8062d2eaa021109b4b",
+      "oracle": "f916c605f48eab6644f4af89b26637389aac47c5",
+      "editPaths": [
+        "worker/ledgers.ts"
+      ],
+      "visibleTests": [
+        "worker/test/usage-report.test.mjs",
+        "worker/test/usage-sharding.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/grant-usage.test.mjs",
+        "worker/test/grant-usage-runtime.test.mjs"
+      ],
+      "instruction": "Prevent grant-usage reports from exhausting memory on high-cardinality history. Bound aggregation to at most 8192 distinct (day, provider, grant key, grant lane, model) groups; return HTTP 422 with code usage_range_too_large when that limit is exceeded, and stop scanning excess history instead of fully materializing it first. Bound each database aggregation chunk. For accepted ranges preserve the existing response shape, all request/token/cache/cost totals, policy and date filtering, and deterministic SQLite BINARY ordering including nulls and Unicode. Preserve coverage and retention behavior. Do not change the database schema or add a second storage system. Preserve unrelated usage operations."
+    },
+    {
+      "id": "admission-music-prefetch",
+      "split": "development",
+      "base": "bbb7512b32081fb8f1804d59a7953f1779d8e15a",
+      "oracle": "b719d1c7a2254e2c09c9686f698a097ea4c26c0e",
+      "editPaths": [
+        "worker/admission-cache.ts"
+      ],
+      "visibleTests": [
+        "worker/test/minimax-music-runtime.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/minimax-music-runtime.test.mjs",
+        "worker/test/minimax-music-workerd.test.mjs"
+      ],
+      "instruction": "Ensure a remembered MiniMax Music selection cannot speculatively read grant secrets before the request passes fresh foreground admission, operation-specific authorization and body validation. The speculative credential prefetch exclusion must cover Music as well as the already-deferred MiniMax Images and Vertex paths. Preserve ordinary-provider prefetch, authenticated-hint checks, fresh runtime credential resolution, revocation behavior and existing routing. Do not disable the admission cache or all credential prefetch, and do not change provider endpoints or public request formats."
+    }
+  ]
+}

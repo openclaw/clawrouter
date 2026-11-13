@@ -5,6 +5,7 @@ const { reportingEstimate } = await import("../reporting-estimate.ts");
 const { accountingReceipt, estimateCost } = await import("../proxy-accounting.ts");
 const { extractUsageTokens } = await import("../token-usage.ts");
 const { createResponsesUsageInspector } = await import("../responses-usage.ts");
+const { extractCompactUsageTokens } = await import("../responses-compact.ts");
 const pricing = { inputMicrosPerMillion: 2000000, outputMicrosPerMillion: 10000000, cachedInputMicrosPerMillion: 100000, cacheWriteInputMicrosPerMillion: 2500000, serviceTiers: [
   { id: "default", aliases: [], inputMicrosPerMillion: 2000000, outputMicrosPerMillion: 10000000, cachedInputMicrosPerMillion: 100000, cacheWriteInputMicrosPerMillion: 2500000 },
   { id: "priority", aliases: [], inputMicrosPerMillion: 4000000, outputMicrosPerMillion: 20000000, cachedInputMicrosPerMillion: 200000, cacheWriteInputMicrosPerMillion: 5000000 },
@@ -20,6 +21,32 @@ test("missing served tier uses disclosed maximum declared tier, never prices exp
   assert.equal(reportingEstimate(pricing, { ...tokens, serviceTier: "future" }, "openai.responses"), null);
   for (const input of [{ ...tokens, input: null }, { ...tokens, output: null }, { ...tokens, cached: 1001 }, { ...tokens, cacheWrite: 601, serviceTier: null }, { ...tokens, cacheWrite5m: -1 }, { ...tokens, billable: false }]) assert.equal(reportingEstimate(pricing, input, "openai.responses"), null);
   assert.equal(reportingEstimate(pricing, tokens, "anthropic.messages"), null);
+});
+test("compaction missing-tier estimate remains separate from actual pricing and budget charges", () => {
+  const response = { object: "response.compaction", usage: { input_tokens: 1000, output_tokens: 200, total_tokens: 1200,
+    input_tokens_details: { cached_tokens: 400, cache_write_tokens: 0 }, output_tokens_details: { reasoning_tokens: 0 } } };
+  const format = "openai.responses_compact", model = { pricing, upstream: "fixture" };
+  const cost = estimateCost(model, { input: "fixture", service_tier: "default" }, null, "llm.responses_compact", { request_format: format });
+  const parsed = extractCompactUsageTokens(response), original = structuredClone(parsed);
+  const facts = { event: { capability: "llm.responses_compact" }, model, fixed: null, cost, requestFormat: format, startedAtMs: 0 };
+  const outcome = { occurredAtMs: 1, statusCode: 200, status: "success", billable: true, tokens: parsed, reservation: { reservations: [], reservedMicros: 0, charges: [] }, contentRef: null };
+  const event = accountingReceipt(facts, outcome);
+  assert.equal(event.actual_cost_micros, 0); assert.equal(event.cost_basis, "unpriced_usage");
+  assert.equal(event.served_service_tier, null);
+  assert.equal(event.reporting_estimated_cost_micros, 6480);
+  assert.equal(event.reporting_estimate_reason, "served_tier_unreported_max_declared_rate");
+  assert.deepEqual(parsed, original);
+  const fixed = accountingReceipt({ ...facts, fixed: 17 }, outcome);
+  assert.equal(fixed.actual_cost_micros, 17); assert.equal(fixed.reporting_estimated_cost_micros, undefined);
+  const reserved = accountingReceipt(facts, { ...outcome, reservation: { reservations: [], reservedMicros: 20000 } });
+  assert.equal(reserved.actual_cost_micros, cost.reserveMicros);
+  assert.equal(reserved.cost_basis, "manifest_reservation"); assert.equal(reserved.reporting_estimated_cost_micros, undefined);
+  const served = accountingReceipt(facts, { ...outcome, tokens: extractCompactUsageTokens({ ...response, service_tier: "default" }) });
+  assert.equal(served.actual_cost_micros, 3240); assert.equal(served.reporting_estimated_cost_micros, undefined);
+  const future = accountingReceipt(facts, { ...outcome, tokens: extractCompactUsageTokens({ ...response, service_tier: "future" }) });
+  assert.equal(future.cost_basis, "unpriced_usage"); assert.equal(future.reporting_estimated_cost_micros, undefined);
+  const incomplete = extractCompactUsageTokens({ ...response, usage: { ...response.usage, output_tokens_details: {} } });
+  assert.equal(incomplete, null); assert.equal(reportingEstimate(pricing, incomplete, format), null);
 });
 test("soft debit stays unknown zero while reporting estimate is separate; hosted tools stay partial/unknown", () => {
   const model = { pricing, upstream: "fixture" }, endpoint = { request_format: "openai.responses" };

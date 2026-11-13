@@ -50,6 +50,7 @@ endpoints:
 models:
   entries:
     - id: particle/particle-ai/particle-1
+      displayName: "Particle 1"
       upstream: particle-1
       capabilities: [llm.chat]
       supportedReasoningEfforts: [none, low, high, max]

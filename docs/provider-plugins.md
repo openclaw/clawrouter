@@ -379,6 +379,79 @@ make network requests. The existing loader still accepts arbitrary JSON fixture
 resources; it does not require this schema. Use synthetic content and synthetic
 header values only. Do not copy live credentials into examples.
 
+### Validate a package's scenario declarations
+
+```sh
+node scripts/validate-provider-conformance.mjs \
+  --plugin examples/provider-plugin/clawrouter.plugin.json
+```
+
+Repeat `--plugin` to validate several selected packages together. The command
+requires at least one scenario per package and validates every declared fixture
+against the scenario schema. Existing arbitrary JSON fixtures still load and
+compile normally; migrate them before opting into this command.
+
+The command compiles each captured manifest and checks provider identity, unique
+scenario IDs within each package, endpoint/capability bindings, and the declared
+upstream method. Optional model references must match an exact declared router
+model ID with the selected capability. An upstream alias or a matching suffix
+is not a substitute for that ID. The client method can differ from the upstream
+method; this step does not qualify the client route or its mapping.
+
+The loader captures fixture text from the same bytes it hashes, without reopening
+package files for validation. Output is a deterministic
+`clawrouter.provider-conformance-validation.v1` report with `scope: declarations`.
+It includes package content digests and scenario references, not fixture bodies,
+headers, credential configuration, upstream URLs, or absolute paths. The report
+type is exported by the plugin contract. Invalid packages produce no report.
+
+This check does not execute an adapter, compare expected HTTP messages, authorize
+an account, check runtime availability, or prove fixture coverage. A declared
+reference does not establish model availability. The future host runner must separately
+qualify routes, configuration, and supported scenario kinds before execution.
+
+### Execute native REST JSON exchanges
+
+```sh
+node scripts/run-provider-conformance.mjs \
+  --plugin examples/provider-plugin/clawrouter.plugin.json
+```
+
+This separate development command validates all selected packages first, then
+executes their fixtures through the actual Worker entry point. Run it in its own
+Node process with the repository dependencies installed. It temporarily replaces
+the in-process provider registry and intercepts every upstream `fetch`; it never
+falls back to the network. Packages supply data only. They cannot provide code,
+credentials, or host bindings.
+
+The first execution scope is deliberately narrow: model-free `rest_json`
+providers, one required `Authorization: Bearer ${secret}` API-key scheme, one
+`*_API_KEY` configuration value, one fixed HTTPS base URL, and unambiguous literal
+native POST routes. OAuth, grant transports, model catalogs, streaming, lifecycle
+endpoints, and stream/error adapters are rejected before any scenario runs.
+
+A fixture's client path is relative to the provider's native mount. For example,
+`/v1/invoke` runs at `/v1/native/example/v1/invoke`. Upstream paths include the
+complete path and query sent to the provider. The host owns client authorization
+and supplies the synthetic upstream key `synthetic-conformance-key`; fixtures
+can assert `authorization: Bearer synthetic-conformance-key` upstream. Ambient
+API keys are never copied into the fixture environment.
+
+Each scenario must cause exactly one upstream call with redirects disabled.
+The runner compares method, origin, path, asserted headers, and exact JSON body;
+it supplies the authored upstream response and checks the final client status,
+asserted headers, and exact JSON body. Additional headers are allowed. Omitted
+bodies differ from JSON `null`. Observed bodies are bounded to 2 MiB. The host's
+background settlement is joined, but accounting values are not asserted.
+
+Success emits a `clawrouter.provider-conformance-execution.v1` report with scope
+`native-rest-json-exchanges`, package digests, and scenario references. Failure
+emits no partial report and does not echo HTTP values. Registry and transport
+changes are restored before exit. This proves only these deterministic Worker
+exchanges, not live connectivity, entitlement, budget correctness, or complete
+provider coverage. Native model-free bodies retain their native shape; unified
+model-routing transforms are outside this scope.
+
 Streaming, binary bodies, auth setup, local rejection without an upstream call,
 multi-call lifecycle operations, usage assertions, and retry timing need separate
 scenario kinds and host support. They are not represented by `json-exchange`.
@@ -404,11 +477,14 @@ proof that an account is entitled to upstream access.
 | Compiler `--plugin` input alongside legacy inputs | Landed | Default CLI and snapshot stay equivalent; test mixed-input collisions. |
 | Generated package asset index and setup metadata | Landed | Do not render untrusted SVG or add auth capabilities. |
 | Complete-package scaffold command | Landed | Create only a new directory; never register or deploy a provider. |
-| Product and offer normalization behind compatibility layer | Separate future draft | Shadow-check existing discovery and dispatch; preserve public aliases. |
+| Fixture declaration validator and native REST JSON host runner | Landed | Opt-in development commands; no live probes or Worker changes. |
+| Product and offer declarations, compatibility resolver, and catalog references | Landed | Additive metadata; credentials and runtime admission retain authority. |
 | Shared model-catalog import and provenance | Separate future draft | Pin supported core release; qualify prices separately. |
 | Credential/connection and accounting migration | Separate future drafts | Preserve refresh ownership, reservations, and delayed execution settlement. |
 
 Do not move all existing provider files into package folders in the same PR.
 The Fusion and provider-parity work can continue against their current paths.
-Migrate one package only after the loader/compiler contract is accepted. Keep
-the initial refactor PRs unmerged until the owner explicitly releases that hold.
+Migrate one package only after its loader/compiler and execution contracts are
+qualified. The owner has released the initial core-refactor hold. Land narrow
+changes after review and required validation; release and deployment remain
+separate actions.

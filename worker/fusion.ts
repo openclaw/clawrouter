@@ -333,9 +333,15 @@ function fusionInstruction(proposals: FusionProposal[]): ChatMessage {
 
 function completionText(value: unknown): string {
   if (!value || typeof value !== "object") return "";
-  const choice = (value as { choices?: unknown[] }).choices?.[0];
+  const response = value as { error?: unknown; choices?: unknown };
+  if (response.error != null || !Array.isArray(response.choices)) return "";
+  const choice = response.choices[0];
   if (!choice || typeof choice !== "object") return "";
-  return contentText((choice as { message?: { content?: unknown } }).message?.content);
+  if (choice.finish_reason !== "stop") return "";
+  const message = choice.message;
+  if (!message || typeof message !== "object" || message.refusal != null || message.function_call != null
+    || message.tool_calls != null && (!Array.isArray(message.tool_calls) || message.tool_calls.length)) return "";
+  return contentText(message.content);
 }
 
 function contentText(content: unknown): string {

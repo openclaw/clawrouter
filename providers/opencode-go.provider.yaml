@@ -41,6 +41,7 @@ endpoints:
 models:
   entries:
     - id: opencode-go/glm-5.3
+      displayName: "GLM-5.3"
       upstream: glm-5.3
       capabilities: [llm.chat]
 billing:

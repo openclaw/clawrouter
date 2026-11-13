@@ -1,4 +1,5 @@
-import type { ClientCatalogModel, ModelPricing, GrantAccount, GrantExtraUsage } from "./contracts";
+import type { GrantAccount, GrantExtraUsage } from "./provider-observations.ts";
+import type { ProviderModelDefinition, ModelPricing } from "./provider-model.ts";
 import type { ProviderOfferDefinition, ProviderProduct } from "./provider-products.ts";
 
 // Compiled v1 declarations shared by build tools and runtime consumers.
@@ -93,7 +94,7 @@ export type AuthScheme =
 
 export interface AuthorizationConfig { authorizeUrl: string; tokenUrl: string; clientId: string | null; clientIdConfig: string | null; clientSecretConfig: string | null; scopes: string[]; grantKind: string; extraAuthorizeParams: Record<string, string>; extraTokenParams: Record<string, string>; accountIdJsonPointer: string | null; subscriptionPlanJsonPointer: string | null }
 export interface RefreshConfig { tokenUrl: string; clientId: string | null; clientIdConfig: string | null; clientSecretConfig: string | null; requestFormat: "form" | "json"; extraParams: Record<string, string> }
-export type CompiledModel = ClientCatalogModel;
+export type CompiledModel = ProviderModelDefinition;
 export interface OutputTokenLimit { field: "max_tokens" | "max_completion_tokens" | "max_output_tokens"; minimum: number; maximum: number }
 export interface ToolPricing { version: string; effectiveAt: string; source: string; webSearchMicrosPerCall: number; previewMicrosPerCallByModel: Record<string, number> }
 export interface CompiledEndpoint { inputProfile?: "clawrouter.pixverse-image-input.v1"; id: string; method: string; methods: string[]; path: string; upstreamPath?: string; native_proxy: boolean; auth: string | null; headers: Record<string, string>; request_headers: string[]; response_headers: string[]; query: Record<string, string>; path_params: string[]; path_param_styles: Record<string, string>; request_format: string; response_format: string; streaming: string | null; responsesLifecycle?: { retrieve: string; cancel: string }; lifecycle?: { protocol: ManagedProtocol; retrieve: string; result?: string; cancel?: string; files?: ManagedFileLinks }; outputTokenLimit?: OutputTokenLimit; toolPricing?: ToolPricing; requestPricing?: import("./request-pricing.ts").RequestPricing; modelPassthrough?: { pricing_ref: string | null; pricing: ModelPricing | null }; websocket?: "openai.responses" | "openai.realtime"; timeout_ms: number | null }

@@ -41,6 +41,7 @@ endpoints:
 models:
   entries:
     - id: requesty/openai/gpt-6-luna
+      displayName: "GPT-6 Luna"
       upstream: openai/gpt-6-luna
       capabilities: [llm.chat]
 billing:

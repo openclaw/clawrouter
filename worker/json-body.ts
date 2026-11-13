@@ -72,6 +72,7 @@ export function accountingNumberCapacity(): object {
 
 // No encoding, substring, entries vector or normalized copy precedes this walk.
 // A gateway entry loses only the two fields already excluded by retention.
+const accountingEscapedOrUnicode = /["\\\x00-\x1f\x80-\uffff]/;
 export function admitAccountingJson(value: unknown, profile: AccountingJsonProfile,
   gateway?: readonly unknown[]): { bytes: number; text: number } {
   const limits = accountingProfiles[profile];
@@ -83,6 +84,10 @@ export function admitAccountingJson(value: unknown, profile: AccountingJsonProfi
   };
   const string = (input: string, key: boolean) => {
     if (input.length > (key ? limits.key : limits.scalar) || (strings += input.length) > limits.strings) accountingAdmissionFailure();
+    // Plain ASCII has identical JSON wire bytes and text units. A bounded
+    // native scan avoids one closure call and two budget checks per character.
+    // Escapes and Unicode retain the exact existing scalar accounting below.
+    if (!accountingEscapedOrUnicode.test(input)) { add(input.length + 2); return; }
     add(2);
     for (let i = 0; i < input.length; i++) {
       const code = input.charCodeAt(i);
@@ -497,13 +502,15 @@ export function mediaJsonBody(value: unknown): MediaJsonBody | null {
   // The marker's control character is always escaped, and its UUID is fresh,
   // so caller text cannot produce this serialized form.
   const needle = `"${JSON.stringify(marker).slice(1, -1)}`;
-  const pieces: Array<Uint8Array | string> = [];
+  const pieces: Array<Uint8Array | { text: string; plain: boolean }> = [];
   let bytes = 0, offset = 0;
   for (let at = skeleton.indexOf(needle); at >= 0; at = skeleton.indexOf(needle, offset)) {
     const end = skeleton.indexOf('"', at + needle.length);
     const piece = encoder.encode(skeleton.slice(offset, at)), media = slots[Number(skeleton.slice(at + needle.length, end))].value;
-    pieces.push(piece, media);
-    bytes += piece.byteLength + (unplain.test(media) ? quotedBytes(media) : media.length + 2);
+    // Strings are immutable. Reuse this admission scan when a stream opens.
+    const plain = !unplain.test(media);
+    pieces.push(piece, { text: media, plain });
+    bytes += piece.byteLength + (plain ? media.length + 2 : quotedBytes(media));
     offset = end + 1;
   }
   const tail = encoder.encode(skeleton.slice(offset));
@@ -517,8 +524,8 @@ export function mediaJsonBody(value: unknown): MediaJsonBody | null {
         pull(controller) {
           while (index < pieces.length) {
             const piece = pieces[index];
-            if (typeof piece !== "string") { index++; if (piece.byteLength) { controller.enqueue(piece); return; } continue; }
-            chunks ??= unplain.test(piece) ? quoted(piece) : plainChunks(piece);
+            if (piece instanceof Uint8Array) { index++; if (piece.byteLength) { controller.enqueue(piece); return; } continue; }
+            chunks ??= piece.plain ? plainChunks(piece.text) : quoted(piece.text);
             const next = chunks.next();
             if (!next.done) { controller.enqueue(encoder.encode(next.value)); return; }
             chunks = null; index++;

@@ -43,6 +43,15 @@ const MIN_ALARM_DELAY_MS = 1_000;
 const MAX_MAINTENANCE_FAILURES = 6;
 const snapshot = snapshotJson as unknown as ProviderSnapshot;
 
+type RefreshSettlement = NonNullable<NonNullable<UpstreamGrant["refreshDiagnosis"]>["failure"]>["settlement"];
+interface PendingRefreshResult {
+  attempt: { id: string; generation: number };
+  grantKey?: string;
+  lineage?: string;
+  httpStatus: number;
+  credentials: Pick<CredentialRecord, "accessToken" | "refreshToken" | "tokenType" | "scopes" | "expiresAt" | "refreshTokenExpiresAt" | "updatedAt">;
+}
+
 export type GrantRevokeMetadata = Pick<UpstreamGrant, "kind" | "provider" | "label">;
 
 class SupersededRefresh extends Error {
@@ -63,6 +72,7 @@ export class GrantCredentialObject implements DurableObject {
   private state: DurableObjectState;
   private env: Env;
   private tail: Promise<void> = Promise.resolve();
+  private pendingRefresh?: PendingRefreshResult;
   private readonly vertexRefresh: VertexOwnerRefresh;
   private readonly minimaxDevice: MiniMaxDeviceFlow;
   private readonly copilotDevice: CopilotDeviceFlow;
@@ -208,7 +218,12 @@ export class GrantCredentialObject implements DurableObject {
       return operation;
     }
     if (request.method === "POST" && new URL(request.url).pathname === OWNERSHIP_CURRENT) {
-      return this.state.storage.get<CredentialRecord>("credential").then(record => json({ exists: !!record, refreshToken: record?.refreshToken ?? null }));
+      return (async () => {
+        const record = await this.state.storage.get<CredentialRecord>("credential");
+        const pending = this.pendingRefresh ?? await this.state.storage.get<PendingRefreshResult>("refresh-result");
+        return json({ exists: !!record, refreshToken: record?.refreshToken ?? null,
+          pendingRefreshToken: matchesRefreshResult(record, pending) ? pending?.credentials.refreshToken ?? null : null });
+      })();
     }
     if (request.method === "POST" && new URL(request.url).pathname === "/published-input/forward") {
       return import("./published-music-dispatch.ts").then(async dispatch => {
@@ -472,6 +487,7 @@ export class GrantCredentialObject implements DurableObject {
           if (JSON.stringify(reply) !== JSON.stringify(expected)) miniMaxSearchDenied();
         }
         await this.state.storage.put("credential", record);
+        await this.forgetRefreshResult();
         await this.schedule(record);
         await this.publishProjection(record);
         return json({ grant });
@@ -600,6 +616,7 @@ export class GrantCredentialObject implements DurableObject {
         // Never erase the tombstone or restore secrets when a derived write fails.
         // Retrying revoke republishes this same generation after partial failure.
         await this.state.storage.put("credential", record);
+        await this.forgetRefreshResult();
         await this.state.storage.deleteAlarm();
         await this.publishProjection(record);
         return json({ grant: metadataGrant(record) });
@@ -793,9 +810,17 @@ export class GrantCredentialObject implements DurableObject {
       if (record.providerId && record.providerId !== input.providerId || record.kind !== input.grant.kind) throw new HttpError(409, "upstream_grant_changed", "upstream grant changed; retry discovery before dispatch");
       if (record.status === "reauth_required") throw new ReauthorizationRequired("upstream grant requires reauthorization", credentialProjection(record));
 
-      if (record.refreshAttempt) throw new HttpError(502, "grant_refresh_at_risk", "refresh outcome is uncertain; replace with a fresh dedicated login, do not replay the stored token");
+      const settling = !!record.refreshAttempt;
+      if (settling) {
+        changed = true;
+        try { record = await this.recoverRefreshResult(record); }
+        catch (error) { record = await this.state.storage.get<CredentialRecord>("credential") ?? record; throw error; }
+        assertCredentialEnabled(record);
+        if (record.status === "reauth_required") throw new ReauthorizationRequired("upstream grant requires reauthorization", credentialProjection(record));
+      }
+      if (record.refreshAttempt) throw new HttpError(502, "grant_refresh_at_risk", "refresh settlement is blocked; wait for local recovery or replace with a fresh dedicated login, never replay the stored token");
       const expected = input.expectedGeneration;
-      const mayForce = input.force && (expected != null ? expected === record.generation : migrated || !input.legacy);
+      const mayForce = !settling && input.force && (expected != null ? expected === record.generation : migrated || !input.legacy);
       const expiresAtMs = record.expiresAt ? Date.parse(record.expiresAt) : NaN;
       const expiring = Number.isFinite(expiresAtMs) && expiresAtMs <= Date.now() + REFRESH_MARGIN_MS;
       const deferredRefresh = record.nextRefreshAttemptAt ? Date.parse(record.nextRefreshAttemptAt) > Date.now() : false;
@@ -842,6 +867,8 @@ export class GrantCredentialObject implements DurableObject {
     const current = await this.state.storage.get<CredentialRecord>("credential");
     if (!current || current.generation !== record.generation) return current ?? record;
     if (current.refreshAttempt) {
+      const recovered = await this.recoverRefreshResult(current);
+      if (!recovered.refreshAttempt) return recovered;
       if (!current.refreshDiagnosis?.failure || !["ambiguous", "provider_ok_persist_failed"].includes(current.refreshDiagnosis.failure.failureClass)) {
         await this.recordRefreshFailure(current, null, "outcome_unknown", "ambiguous");
       }
@@ -925,13 +952,8 @@ export class GrantCredentialObject implements DurableObject {
       throw new HttpError(502, "grant_refresh_failed", `provider ${providerId} rejected the refresh request`);
     }
 
-    let updated: CredentialRecord;
-    try { updated = {
-      ...record,
-      status: "active",
-      refreshAttempt: null,
-      generation: record.generation + 1,
-      poolSyncPending: true,
+    let credentials: PendingRefreshResult["credentials"];
+    try { credentials = {
       accessToken: boundedSecret(payload.access_token, "access token"),
       refreshToken: typeof payload.refresh_token === "string" && payload.refresh_token
         ? boundedSecret(payload.refresh_token, "refresh token")
@@ -944,23 +966,75 @@ export class GrantCredentialObject implements DurableObject {
       // Claude Code preserves the known absolute deadline when a rotation
       // omits it. Missing/invalid metadata must not invent a new lifetime.
       refreshTokenExpiresAt: refreshExpiryFromSeconds(payload.refresh_token_expires_in) ?? record.refreshTokenExpiresAt ?? null,
-      nextRefreshAttemptAt: null,
-      refreshDiagnosis: { lastSuccessfulRefreshAt: new Date().toISOString(), failure: null },
-      updatedAt: new Date().toISOString(),
+      updatedAt: new Date(Date.now()).toISOString(),
     }; } catch {
       await this.recordRefreshFailure(record, response.status, "invalid_response", response.ok ? "ambiguous" : undefined, response.headers.get("retry-after"));
       throw new HttpError(502, "grant_refresh_failed", `provider ${providerId} returned an invalid refresh response`);
     }
-    try {
-      if (updated.grantKey && updated.refreshToken) await claimRefreshOwnership(this.env, updated.grantKey, updated.refreshToken, { current: updated.refreshToken === record.refreshToken });
-      const latest = await this.state.storage.get<CredentialRecord>("credential");
-      if (!sameRefreshAttempt(latest, record)) return latest ?? record;
-      await this.state.storage.put("credential", updated);
-    } catch {
-      await this.recordRefreshFailure(record, response.status, "persistence_failed", "provider_ok_persist_failed");
-      throw new HttpError(502, "grant_refresh_persist_failed", "provider refreshed credentials but durable settlement failed; a fresh dedicated login may be required");
+    return this.settleRefreshResult(record, { attempt: record.refreshAttempt!, grantKey: record.grantKey, lineage: record.lineage,
+      httpStatus: response.status, credentials });
+  }
+
+  private async forgetRefreshResult(): Promise<void> {
+    this.pendingRefresh = undefined;
+    await this.state.storage.delete("refresh-result");
+  }
+
+  private async recoverRefreshResult(record: CredentialRecord): Promise<CredentialRecord> {
+    const pending = this.pendingRefresh ?? await this.state.storage.get<PendingRefreshResult>("refresh-result");
+    if (!matchesRefreshResult(record, pending)) {
+      if (pending) await this.forgetRefreshResult();
+      return record;
     }
-    return updated;
+    if (timestamp(record.nextRefreshAttemptAt) > Date.now()) return record;
+    return this.settleRefreshResult(record, pending!);
+  }
+
+  private async settleRefreshResult(record: CredentialRecord, pending: PendingRefreshResult): Promise<CredentialRecord> {
+    // One replacement pair, in the SAME private owner. Retain before any remote
+    // ownership claim or fallible current-record read; never overwrite authority
+    // merely to save a result. Memory also retains it if this first write fails.
+    this.pendingRefresh = pending;
+    let stage: NonNullable<RefreshSettlement>["stage"] = "result_store";
+    try {
+      await this.state.storage.put("refresh-result", pending);
+      stage = "credential_read";
+      let current = await this.state.storage.get<CredentialRecord>("credential");
+      if (!matchesRefreshResult(current, pending)) { await this.forgetRefreshResult(); return current ?? record; }
+      assertCredentialEnabled(current!);
+      stage = "ownership_claim";
+      const token = pending.credentials.refreshToken;
+      if (pending.grantKey && token) await claimRefreshOwnership(this.env, pending.grantKey, token, { current: token === current!.refreshToken });
+      stage = "credential_read";
+      current = await this.state.storage.get<CredentialRecord>("credential");
+      if (!matchesRefreshResult(current, pending)) { await this.forgetRefreshResult(); return current ?? record; }
+      const updated: CredentialRecord = { ...current!, ...pending.credentials,
+        generation: current!.generation + 1, status: "active", refreshAttempt: null, nextRefreshAttemptAt: null, poolSyncPending: true,
+        refreshDiagnosis: { lastSuccessfulRefreshAt: pending.credentials.updatedAt, failure: null } };
+      stage = "credential_write";
+      await this.state.storage.put("credential", updated);
+      // A failed cleanup cannot undo a committed pair. Its old fence is inert
+      // and the next owner read removes it, without a second provider exchange.
+      await this.forgetRefreshResult().catch(() => undefined);
+      return updated;
+    } catch (error) {
+      const code = stage === "ownership_claim" && error instanceof HttpError
+        && ["refresh_ownership_unavailable", "refresh_token_already_owned", "refresh_token_previously_used"].includes(error.code)
+        ? error.code : stage === "ownership_claim" ? "refresh_ownership_unavailable" : "storage_unavailable";
+      try { await this.recordRefreshFailure(record, pending.httpStatus, "persistence_failed", "provider_ok_persist_failed", undefined,
+        { stage, code, correlationId: pending.attempt.id }); }
+      catch (failure) {
+        if (failure instanceof SupersededRefresh) return failure.current;
+        // Diagnosis persistence is not the owner of recovery liveness. Keep a
+        // local wakeup even on paths whose caller cannot persist cleanup state.
+        const current = await this.state.storage.get<CredentialRecord>("credential");
+        if (current) await this.schedule(current);
+      }
+      const ownershipConflict = code === "refresh_token_already_owned" || code === "refresh_token_previously_used";
+      throw new HttpError(502, "grant_refresh_persist_failed", ownershipConflict
+        ? "provider refreshed credentials but replacement ownership is blocked; use a fresh dedicated login, do not replay the stored token"
+        : "provider refreshed credentials; local settlement will retry without another provider refresh");
+    }
   }
 
   private async maintain(): Promise<void> {
@@ -972,6 +1046,13 @@ export class GrantCredentialObject implements DurableObject {
     if (!record.enabled || !record.grantKey || !record.providerId || !record.kind || record.status === "reauth_required") {
       await this.state.storage.deleteAlarm();
       if (record !== previous || record.poolSyncPending) await this.publishProjection(record);
+      return;
+    }
+    if (record.refreshAttempt) {
+      try { record = await this.recoverRefreshResult(record); }
+      catch { record = await this.state.storage.get<CredentialRecord>("credential") ?? record; }
+      await this.schedule(record);
+      if (record.poolSyncPending) await this.publishProjection(record);
       return;
     }
     const provider = snapshot.providers.find((candidate) => candidate.id === record!.providerId);
@@ -1023,6 +1104,16 @@ export class GrantCredentialObject implements DurableObject {
   private async probeQuota(provider: CompiledProvider, record: CredentialRecord): Promise<GrantRuntimeState> {
     assertCredentialEnabled(record);
     if (record.status === "reauth_required") throw new ReauthorizationRequired("upstream grant requires reauthorization", credentialProjection(record));
+    if (record.refreshAttempt) {
+      try { Object.assign(record, await this.recoverRefreshResult(record)); }
+      catch (error) {
+        // /quota-refresh and maintenance persist this same object in cleanup.
+        // A failed settlement may already have advanced its durable diagnosis.
+        Object.assign(record, await this.state.storage.get<CredentialRecord>("credential") ?? record);
+        throw error;
+      }
+      if (record.refreshAttempt) throw new HttpError(502, "grant_refresh_at_risk", "refresh settlement is blocked; do not replay the stored token");
+    }
     // Already inside the owner tail: do not recursively call /materialize.
     return probeQuota(this.env, provider, record, async () => {
       const current = await this.state.storage.get<CredentialRecord>("credential");
@@ -1046,10 +1137,31 @@ export class GrantCredentialObject implements DurableObject {
 
   private async diagnoseUnsettled(record: CredentialRecord): Promise<CredentialRecord> {
     if (this.vertexRefresh.live(record)) return record;
+    const pending = this.pendingRefresh ?? await this.state.storage.get<PendingRefreshResult>("refresh-result");
+    const retained = matchesRefreshResult(record, pending);
+    if (pending && !retained) await this.forgetRefreshResult();
+    if (!retained && record.refreshAttempt && record.refreshDiagnosis?.failure?.settlement && record.nextRefreshAttemptAt) {
+      record = { ...record, nextRefreshAttemptAt: null, poolSyncPending: true,
+        refreshDiagnosis: { ...record.refreshDiagnosis, failure: { ...record.refreshDiagnosis.failure, nextRetryAt: null } } };
+      await this.state.storage.put("credential", record);
+      await this.schedule(record);
+    }
     // Only reached inside the owner tail, after any live refresh finished. A
     // remaining pending marker means its result was not durably settled.
     if (record.refreshAttempt && !["ambiguous", "provider_ok_persist_failed"].includes(record.refreshDiagnosis?.failure?.failureClass ?? "")) {
-      return this.recordRefreshFailure(record, null, "outcome_unknown", "ambiguous");
+      if (!retained) return this.recordRefreshFailure(record, null, "outcome_unknown", "ambiguous");
+      try {
+        return await this.recordRefreshFailure(record, pending!.httpStatus, "persistence_failed", "provider_ok_persist_failed", undefined,
+          { stage: "settlement_resume", code: "settlement_interrupted", correlationId: pending!.attempt.id });
+      } catch (error) {
+        if (error instanceof SupersededRefresh) throw error;
+        // Diagnosis cannot gate local settlement. Revalidate authority before
+        // continuing, and retain a bounded wakeup if installation also fails.
+        const current = await this.state.storage.get<CredentialRecord>("credential");
+        if (!matchesRefreshResult(current, pending)) throw error;
+        await this.schedule(current!);
+        return current!;
+      }
     }
     // Older canonical owners already diagnosed the failure, but neither pool
     // index knows the new availability field. Repair both once, before use.
@@ -1071,7 +1183,7 @@ export class GrantCredentialObject implements DurableObject {
   }
 
   private async recordRefreshFailure(record: CredentialRecord, status: number | null, code: unknown,
-    outcome?: NonNullable<NonNullable<UpstreamGrant["refreshDiagnosis"]>["failure"]>["failureClass"], retryAfter?: string | null): Promise<CredentialRecord> {
+    outcome?: NonNullable<NonNullable<UpstreamGrant["refreshDiagnosis"]>["failure"]>["failureClass"], retryAfter?: string | null, settlement?: RefreshSettlement): Promise<CredentialRecord> {
     const current = await this.state.storage.get<CredentialRecord>("credential");
     if (!current) throw new HttpError(409, "grant_credential_missing", "refresh owner no longer exists");
     if (current.generation !== record.generation || record.refreshAttempt && !sameRefreshAttempt(current, record)) throw new SupersededRefresh(current);
@@ -1081,7 +1193,8 @@ export class GrantCredentialObject implements DurableObject {
     const now = new Date(Date.now()).toISOString();
     const previous = current.refreshDiagnosis?.failure;
     const attemptCount = Math.min(Number.MAX_SAFE_INTEGER, (previous?.attemptCount ?? 0) + 1);
-    const nextRetryAt = permanent || atRisk ? null : refreshRetryAt(attemptCount, current.expiresAt, retryAfter);
+    const ownershipConflict = settlement?.code === "refresh_token_already_owned" || settlement?.code === "refresh_token_previously_used";
+    const nextRetryAt = permanent || atRisk && (!settlement || ownershipConflict) ? null : refreshRetryAt(attemptCount, current.expiresAt, retryAfter);
     const rejected: CredentialRecord = {
       ...current,
       status: permanent ? "reauth_required" : current.status,
@@ -1093,7 +1206,7 @@ export class GrantCredentialObject implements DurableObject {
       refreshDiagnosis: {
         lastSuccessfulRefreshAt: current.refreshDiagnosis?.lastSuccessfulRefreshAt ?? null,
         failure: { oauthError: safeOAuthError(code), httpStatus: status, failureClass,
-          firstFailureAt: previous?.firstFailureAt ?? now, lastFailureAt: now, attemptCount, nextRetryAt },
+          firstFailureAt: previous?.firstFailureAt ?? now, lastFailureAt: now, attemptCount, nextRetryAt, ...(settlement ? { settlement } : {}) },
       },
     };
     await this.state.storage.put("credential", rejected);
@@ -1127,11 +1240,21 @@ export class GrantCredentialObject implements DurableObject {
 
   private async schedule(record: CredentialRecord): Promise<void> {
     const refreshable = !!record.refreshToken || vertexOwnerBinding(record)?.source === "service_account";
-    const next = [
-      record.refreshAttempt ? NaN : refreshable && record.nextRefreshAttemptAt ? Date.parse(record.nextRefreshAttemptAt) : refreshable && record.expiresAt ? Date.parse(record.expiresAt) - REFRESH_MARGIN_MS : NaN,
+    // If both credential and diagnosis writes failed, the pre-egress fence has
+    // no future retry timestamp. A matching retained result needs a local wakeup;
+    // lost results and diagnosed ownership stops must not regain automatic work.
+    const failure = record.refreshDiagnosis?.failure;
+    const stopped = failure?.failureClass === "ambiguous"
+      || ["refresh_token_already_owned", "refresh_token_previously_used"].includes(failure?.settlement?.code ?? "");
+    const needsLocalRetry = record.refreshAttempt && !(timestamp(record.nextRefreshAttemptAt) > Date.now()) && !stopped;
+    const pending = needsLocalRetry ? this.pendingRefresh ?? await this.state.storage.get<PendingRefreshResult>("refresh-result") : undefined;
+    const localRetry = matchesRefreshResult(record, pending)
+      ? timestamp(refreshRetryAt(record.refreshDiagnosis?.failure?.attemptCount ?? 1, record.expiresAt)) : NaN;
+    const next = (record.refreshAttempt ? [Number.isFinite(localRetry) ? localRetry : timestamp(record.nextRefreshAttemptAt)] : [
+      refreshable && record.nextRefreshAttemptAt ? Date.parse(record.nextRefreshAttemptAt) : refreshable && record.expiresAt ? Date.parse(record.expiresAt) - REFRESH_MARGIN_MS : NaN,
       timestamp(record.nextQuotaProbeAt),
       record.maintenance?.keepWarm ? timestamp(record.nextKeepWarmAt) : NaN,
-    ].filter(Number.isFinite);
+    ]).filter(Number.isFinite);
     if (!record.enabled || !next.length || record.status === "reauth_required") {
       await this.state.storage.deleteAlarm();
       return;
@@ -1629,6 +1752,13 @@ function normalizedCredentials(value: Record<string, string>): Record<string, st
     if (!/^[A-Za-z0-9_.-]{1,128}$/.test(name)) throw new HttpError(400, "invalid_upstream_grant", "credential bundle contains an invalid field name");
     return [name, boundedSecret(secret, `credential ${name}`)];
   }));
+}
+
+function matchesRefreshResult(record: CredentialRecord | undefined, pending: PendingRefreshResult | undefined): boolean {
+  return !!record && !!pending && record.enabled === true && !record.revokedAt && record.status === "active"
+    && record.grantKey === pending.grantKey && record.lineage === pending.lineage
+    && record.generation === pending.attempt.generation && record.refreshAttempt?.generation === pending.attempt.generation
+    && record.refreshAttempt.id === pending.attempt.id;
 }
 
 function sameRefreshAttempt(current: CredentialRecord | undefined, attempted: CredentialRecord): boolean {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { nativeRequest, nativeResult, nativePins, responseDisposition, requireCompleteResponse, nativeErrorMetadata } from '../scripts/fusion-native-provider.mjs';
+import { nativeRequest, nativeResult, nativePins, responseDisposition, requireCompleteResponse, nativeErrorMetadata, attachNativeRequestId, nativeResponseMetadata } from '../scripts/fusion-native-provider.mjs';
 
 const body = { messages: [{ role: 'system', content: 'format instruction' }, { role: 'user', content: 'task' }], max_tokens: 4096, response_format: { type: 'json_object' } };
 const env = { OPENAI_API_KEY: 'synthetic-openai', ANTHROPIC_API_KEY: 'synthetic-anthropic' };
@@ -27,7 +27,10 @@ test('native requests use explicit owned endpoints, medium reasoning and JSON an
 
 test('OpenAI tariff includes cached reads, cache writes and reasoning in completion tokens', () => {
   const r = { model: 'gpt-6.1-sol', service_tier: 'default', usage: { prompt_tokens: 1000, completion_tokens: 500, prompt_tokens_details: { cached_tokens: 200, cache_write_tokens: 100 }, completion_tokens_details: { reasoning_tokens: 400 } } };
-  assert.equal(nativeResult('openai/gpt-6.1-sol', r).costMicros, 6670);
+  const out = nativeResult('openai/gpt-6.1-sol', r);
+  assert.equal(out.costMicros, 6670);
+  assert.deepEqual(out.usageBreakdown, { uncachedInputTokens: 700, cacheReadInputTokens: 200,
+    cacheWriteInputTokens: 100, cacheWrite1hInputTokens: 0, outputTokens: 500 });
   assert.throws(() => nativeResult('openai/gpt-6.1-sol', { ...r, service_tier: 'priority' }), /tier_unqualified/);
   assert.throws(() => nativeResult('openai/gpt-6.1-sol', { ...r, model: 'different-model' }), /identity_missing/);
   assert.throws(() => nativeResult('openai/gpt-6.1-sol', { ...r, usage: { ...r.usage, prompt_tokens: 1 } }), /usage_invalid/);
@@ -38,6 +41,8 @@ test('Anthropic tariff counts separate cache buckets and preserves only answer t
     usage: { input_tokens: 100, output_tokens: 200, cache_read_input_tokens: 300, cache_creation_input_tokens: 100, cache_creation: { ephemeral_5m_input_tokens: 40, ephemeral_1h_input_tokens: 60 } } };
   const out = nativeResult('anthropic/claude-sonnet-5.5', r);
   assert.equal(out.costMicros, 2570);
+  assert.deepEqual(out.usageBreakdown, { uncachedInputTokens: 100, cacheReadInputTokens: 300,
+    cacheWriteInputTokens: 40, cacheWrite1hInputTokens: 60, outputTokens: 200 });
   assert.equal(out.result.choices[0].message.content, '{"answer":"B"}');
   assert.equal(JSON.stringify(out).includes('private reasoning'), false);
   assert.throws(() => nativeResult('anthropic/claude-sonnet-5.5', { ...r, usage: { ...r.usage, speed: 'fast' } }), /tier_unqualified/);
@@ -115,4 +120,32 @@ test('structured error diagnostics admit known labels and discard arbitrary prov
     assert.ok(!JSON.stringify(result).includes('sentinel'));
   }
   assert.equal(nativeErrorMetadata({ error: { code: 'context_length_exceeded', param: 'max_tokens' } }).providerCode, 'context_length_exceeded');
+});
+
+
+test('OpenAI correlation IDs are unique and leave bodies and other providers unchanged', () => {
+  const first = nativeRequest('openai/gpt-6-luna', body, env);
+  const before = JSON.stringify(first.body);
+  const one = attachNativeRequestId('openai/gpt-6-luna', first);
+  const second = nativeRequest('openai/gpt-6-luna', body, env);
+  const two = attachNativeRequestId('openai/gpt-6-luna', second);
+  assert.match(one.clientRequestId, /^[0-9a-f-]{36}$/);
+  assert.equal(first.headers['X-Client-Request-Id'], one.clientRequestId);
+  assert.notEqual(one.clientRequestId, two.clientRequestId);
+  assert.equal(JSON.stringify(first.body), before);
+  const anthropic = nativeRequest('anthropic/claude-sonnet-5.5', body, env);
+  const unchanged = JSON.stringify(anthropic);
+  assert.deepEqual(attachNativeRequestId('anthropic/claude-sonnet-5.5', anthropic), {});
+  assert.equal(JSON.stringify(anthropic), unchanged);
+});
+
+test('response metadata accepts only bounded opaque OpenAI request IDs', () => {
+  for (const id of ['req_abc-123', 'a'.repeat(128)]) {
+    assert.deepEqual(nativeResponseMetadata('openai/gpt-6-luna', { headers: new Headers({ 'x-request-id': id }) }), { providerRequestId: id });
+  }
+  for (const id of ['', 'a'.repeat(129), 'private prompt sentinel', 'req_1,req_2', 'req_1\nsecret', 'req_1\n', 'req_1\r', null, 12]) {
+    assert.deepEqual(nativeResponseMetadata('openai/gpt-6-luna', { headers: { get: () => id } }), {});
+  }
+  assert.deepEqual(nativeResponseMetadata('openai/gpt-6-luna', {}), {});
+  assert.deepEqual(nativeResponseMetadata('anthropic/claude-sonnet-5.5', { headers: new Headers({ 'x-request-id': 'req_abc' }) }), {});
 });

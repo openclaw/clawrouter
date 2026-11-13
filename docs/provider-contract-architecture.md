@@ -48,13 +48,50 @@ The pressure is in the domain model:
 | Grant transport overrides | OpenAI and Anthropic manifests | A distinct product's endpoint, auth, and lifecycle hide inside credential-kind overrides. |
 | One provider connection key | `ProviderConnection.providerId`; `worker/provider-connections.ts` | No explicit identity for two projects/accounts of the same provider. |
 | Model metadata beside execution rules | Provider `models.entries` | The catalogue and router can drift on names, limits, reasoning, and prices. |
-| Model type aliases a client DTO | `CompiledModel = ClientCatalogModel` | Internal execution facts are coupled to the public projection. |
+| Model type ownership (resolved) | `shared/provider-model.ts` | Compiled models and client DTOs share model facts without making the client response the execution contract. |
 | Provider logic in discovery | `supportsHostedSearch` in `worker/discovery.ts` | Discovery must know implementation-specific qualifications. |
 | Central logo registry | `scripts/sync-provider-icons.mjs` | Adding a provider also requires editing an unrelated branding map. |
 
 This is not a proposal to replace tested protocol or accounting code wholesale.
 It moves facts to their owners and puts a compiler between declarations and the
 hot path.
+
+### Auth declaration ownership
+
+`scripts/provider-auth.mjs` compiles auth schemes, OAuth authorization and
+refresh metadata, and grant transport declarations. It checks grant transport
+references and maintenance prerequisites after manifest schema validation. The
+provider compiler retains validation order and uses the same compiled scheme
+identifiers. This build-time module does not resolve credentials, refresh tokens,
+execute transports, or establish account eligibility; those runtime owners stay
+unchanged.
+
+### Model contract ownership
+
+`shared/provider-model.ts` owns `ProviderModelDefinition` and the router-qualified
+pricing types. `CompiledModel` refers to that definition directly. The client
+`ClientCatalogModel` projection currently extends the same fields, preserving the
+v1 response shape and existing type imports from `shared/contracts.ts`.
+
+Build-time model handling lives in `scripts/provider-models.mjs`; price
+normalization and tariff checks live in `scripts/provider-pricing.mjs`. The
+provider compiler validates the manifest schema before calling their semantic
+checks. These modules preserve the existing routing qualifications and local
+price authority. They do not fetch a catalogue, trust remote prices, or infer
+endpoint support. A future catalogue importer can supply neutral facts without
+owning these provider-specific checks.
+
+This separation gives future catalogue import and client presentation changes
+an explicit boundary. It does not turn router price qualification into a public
+catalogue fact, change price units, or establish execution eligibility. The
+provider snapshot imports account observations from
+`shared/provider-observations.ts`. Existing account type imports from
+`shared/contracts.ts` remain available.
+
+The compiled snapshot's declaration dependency graph is independent of the client
+API and Worker environment. `test/provider-snapshot-contract.test.mjs` emits that
+graph and typechecks a consumer using only the emitted declarations. This is an
+internal build boundary, not a published package or a new runtime validator.
 
 ## 3. Vocabulary and identities
 

@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "lifecycle-credential-imports",
+      "split": "development",
+      "base": "8527db3f9924f8c6ef30612a9f5d1a2c48a6e80c",
+      "oracle": "2beb4ec85c9cbbbc82f15e93376411599ad1f8ff",
+      "editPaths": [
+        "worker/credentials.ts"
+      ],
+      "visibleTests": [
+        "worker/test/credential-mutations.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/credential-cold-import.test.mjs"
+      ],
+      "instruction": "Make credential mutation completion join every logical cold-import operation it started. Start credentials, policies and users imports concurrently, in that order; personal mutations also start bindings. Immediately observe each import and discard fulfilled list values. If any import rejects, wait for all started imports, then throw the first observed original rejection reason, including undefined, without invoking /credentials/mutate. Preserve error identity and observe later rejections. Successful mutations must retain complete hydration and final owner rereads before exactly one mutation. Preserve validation, authentication, actor provenance, collision, holdings and quota checks. Do not add timers, retries, cancellation, rollback, refunds, retained result arrays or a migration."
+    },
+    {
+      "id": "lifecycle-assignment-revisions",
+      "split": "development",
+      "base": "03b201da3720c8b264a5e43546e33200df0f15fa",
+      "oracle": "8d95b8f0468a62ec882ff7f77466927b3f45117a",
+      "editPaths": [
+        "worker/assignment-evaluator.ts",
+        "worker/authority.ts"
+      ],
+      "visibleTests": [
+        "worker/test/assignments.test.mjs",
+        "worker/test/assignment-reconciliation.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/assignments.test.mjs",
+        "worker/test/assignment-reconciliation.test.mjs"
+      ],
+      "instruction": "Compact assignment revisions on already-required authority writes without rewriting unchanged legacy state. Use assignment-rules.v1:sha256:<64 lowercase hex digits>, hashing exactly the existing ordered assignmentRulesRevision() serialization, still excluding generatedGroup. Preserve synchronous evaluateUserAssignments() and its legacy output. Add captureAssignmentRules(rules), async prepareAssignmentRules(snapshot), and evaluatePreparedUserAssignments(user, prepared, evidence?, force?). Capture immutable copies of rules and nested arrays before waits, and accept only genuine opaque snapshot/prepared objects; reject copied or forged objects with errors containing invalid assignment rules snapshot or invalid prepared assignment rules respectively. Prepared evaluation must accept either exact legacy text or its matching digest as unchanged, preserve revision bytes and timestamps on no-ops, and retain forced generated-group behavior. In authority reconciliation, after body parsing and before snapshot work or any await, enroll a FIFO turn. Snapshot failures, including undefined, must still join the predecessor and release their slot without poisoning successors. Hash the captured rules only in that turn, then read the current canonical user and synchronously evaluate/write. Preserve concurrent profile changes, return 404 unknown_user for a deleted user, ignore caller-supplied revision/prepared fields, and keep unrelated mutations concurrent. Do not migrate on reads, change serialization, add a global lock, cancellation, retries or refunds."
+    }
+  ]
+}

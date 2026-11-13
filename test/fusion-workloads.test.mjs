@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { spawnSync } from 'node:child_process';
-import { loadTasks, validateTask, validateEdits, sandboxArgs, sandbox, testResult, checkOracleVisible, qualificationSucceeded } from '../scripts/fusion-workloads.mjs';
+import { loadTasks, validateTask, validateEdits, sandboxArgs, sandbox, testResult, check, checkOracleVisible, qualificationSucceeded, validatePreservationProbes, preservationQualificationMatches, checkPreservationProbes, hash } from '../scripts/fusion-workloads.mjs';
 
 const task = (await loadTasks())[0];
 test('historical tasks have pinned distinct parents, source-only edits and development labels', async () => {
@@ -47,6 +47,46 @@ test('qualification rejects empty/malformed reports and distinguishes broken tes
   assert.equal(testResult({ code: 1, stdout: tap(2, 1), stderr: Buffer.alloc(0) }).valid, true);
   assert.equal(testResult({ code: 1, stdout: tap(2, 1), stderr: Buffer.alloc(0) }).passed, false);
   assert.equal(testResult({ code: 0, stdout: Buffer.from('success'), stderr: Buffer.alloc(0) }).valid, false);
+});
+
+test('failed-test fingerprints distinguish nested labels without retaining content', () => {
+  const output = `# Subtest: private suite one\n    # Subtest: private failure\n    not ok 1 - private failure\nnot ok 1 - private suite one\n# Subtest: private suite two\n    # Subtest: private failure\n    not ok 1 - private failure\nnot ok 2 - private suite two\n`;
+  const receipt = testResult({ code: 1, stdout: Buffer.concat([Buffer.from(output), tap(0, 4)]), stderr: Buffer.from('private error details') });
+  const fingerprints = receipt.failureFingerprints;
+  assert.equal(fingerprints.kind, 'tap-label-path-sha256');
+  assert.equal(fingerprints.digests.length, 4);
+  assert.equal(new Set(fingerprints.digests).size, 4);
+  assert.ok(fingerprints.digests.every(value => /^[a-f0-9]{64}$/.test(value)));
+  assert.equal(fingerprints.truncated, false);
+  assert.ok(!JSON.stringify(receipt).includes('private'));
+  const repeated = testResult({ code: 1, stdout: Buffer.concat([Buffer.from(output.replaceAll('\n', '\r\n')), tap(0, 4)]), stderr: Buffer.alloc(0) });
+  assert.deepEqual(repeated.failureFingerprints, fingerprints);
+});
+
+test('failure fingerprints are bounded and do not change acceptance', () => {
+  const lines = Array.from({ length: 129 }, (_, i) => `not ok ${i + 1} - failure ${i}`).join('\n') + '\n';
+  const receipt = testResult({ code: 1, stdout: Buffer.concat([Buffer.from(lines), tap(0, 129)]), stderr: Buffer.alloc(0) });
+  assert.equal(receipt.failureFingerprints.digests.length, 128);
+  assert.equal(receipt.failureFingerprints.truncated, true);
+  assert.equal(receipt.failures, 129);
+  assert.equal(receipt.passed, false);
+  const clean = testResult({ code: 0, stdout: tap(2, 0), stderr: Buffer.alloc(0) });
+  assert.deepEqual(clean.failureFingerprints.digests, []);
+  assert.equal(clean.passed, true);
+});
+
+test('real Node TAP failures produce stable fingerprints', () => {
+  const { NODE_TEST_CONTEXT: _context, ...env } = process.env;
+  const child = spawnSync(process.execPath, ['--test-reporter=tap', '--input-type=module', '-e',
+    "import {describe,it} from 'node:test'; import assert from 'node:assert/strict'; describe('fingerprint fixture',()=>{it('failed behavior',()=>assert.equal(1,2));});"],
+  { timeout: 5000, env });
+  assert.equal(child.error, undefined);
+  assert.equal(child.status, 1);
+  const receipt = testResult({ code: child.status, stdout: child.stdout, stderr: child.stderr });
+  assert.equal(receipt.valid, true);
+  assert.equal(receipt.passed, false);
+  assert.equal(receipt.failureFingerprints.digests.length, 2);
+  assert.ok(!JSON.stringify(receipt).includes('fingerprint fixture'));
 });
 
 
@@ -143,4 +183,108 @@ test('fresh corpus excludes repairs contradicted by their original visible tests
   const tasks = await loadTasks(new URL('../benchmarks/fusion/fresh-workloads.json', import.meta.url));
   assert.equal(tasks.length, 2);
   assert.ok(tasks.every(task => !['cerebras-worker-redirect-mode', 'minimax-regional-availability'].includes(task.id)));
+});
+
+// Native fixtures must execute image-owned dependencies while edits remain noexec.
+test('sandbox supports native fixtures without making edited source executable', {
+  skip: !process.env.FUSION_NATIVE_IMAGE,
+}, async () => {
+  const box = await sandbox(process.env.FUSION_NATIVE_IMAGE);
+  try {
+    await box.exec(['node', '--input-type=module', '-e', `
+      import assert from 'node:assert/strict';
+      import fs from 'node:fs';
+      import { execFileSync } from 'node:child_process';
+      import { createRequire } from 'node:module';
+      const projectRequire = createRequire('/work/package.json');
+      const require = createRequire(projectRequire.resolve('wrangler/package.json'));
+      assert.equal(require('esbuild').transformSync('const n: number = 1', { loader: 'ts' }).warnings.length, 0);
+      fs.writeFileSync('/work/execution-probe.sh', '#!/bin/sh\\nexit 0\\n', { mode: 0o755 });
+      assert.throws(() => execFileSync('/work/execution-probe.sh'), error => error.code === 'EACCES');
+      assert.throws(() => fs.writeFileSync('/work/node_modules/.write-probe', ''), error => ['EROFS', 'EACCES'].includes(error.code));
+      const { Miniflare, convertV4MiniflareOptions } = require('miniflare');
+      const runtime = new Miniflare(convertV4MiniflareOptions({ workers: [{ name: 'fixture', modules: true, script: 'export default { fetch() { return new Response("native fixture") } }', compatibilityDate: '2026-01-01' }] }));
+      try { assert.equal(await (await runtime.dispatchFetch('https://fixture.example')).text(), 'native fixture'); }
+      finally { await runtime.dispose(); }
+    `], { timeout: 30000 });
+  } finally { await box.close(); }
+});
+
+
+test('test watchdog rejects incomplete TAP and kills descendant processes inside the sandbox', {
+  skip: !process.env.FUSION_NATIVE_IMAGE,
+}, async () => {
+  const box = await sandbox(process.env.FUSION_NATIVE_IMAGE);
+  try {
+    const source = `import test from 'node:test';
+      import { spawn } from 'node:child_process';
+      import { writeFileSync } from 'node:fs';
+      const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+      writeFileSync('/tmp/watchdog-child.pid', String(child.pid));
+      test('never finishes', () => new Promise(() => {}));
+      setInterval(() => {}, 1000);`;
+    await box.exec(['node', '-e', "require('node:fs').writeFileSync('/work/watchdog.test.mjs', process.argv[1])", source]);
+    const result = await check(box, ['watchdog.test.mjs'], 2000);
+    assert.equal(result.passed, false);
+    assert.equal(result.valid, false);
+    await box.exec(['node', '-e', `
+      const fs = require('node:fs');
+      const pid = fs.readFileSync('/tmp/watchdog-child.pid', 'utf8');
+      try {
+        const state = fs.readFileSync('/proc/' + pid + '/stat', 'utf8').split(') ')[1][0];
+        if (state !== 'Z') throw Error('test descendant survived watchdog');
+      } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    `]);
+    await box.exec(['node', '-e', "require('node:fs').writeFileSync('/work/clean.test.mjs', \"import test from 'node:test'; test('clean', () => {});\")"]);
+    const clean = await check(box, ['clean.test.mjs'], 10000);
+    assert.equal(clean.passed, true);
+  } finally { await box.close(); }
+});
+
+
+test('test watchdog preserves infrastructure errors and rejects invalid timeouts before execution', async () => {
+  let calls = 0;
+  const failure = new Error('command_failed');
+  const box = { exec: async () => { calls++; throw failure; } };
+  for (const timeout of [0, -1, 1.5, Infinity, NaN, '1000']) {
+    await assert.rejects(check(box, ['test.mjs'], timeout), /invalid_test_timeout/);
+  }
+  assert.equal(calls, 0);
+  await assert.rejects(check(box, ['test.mjs'], 1000), error => error === failure);
+  assert.equal(calls, 1);
+});
+
+
+test('preservation qualification requires each exact bounded probe on both revisions', () => {
+  const sources = ['assert(true)'];
+  const row = { probeDigest: hash(sources[0]), passed: true, unchanged: true };
+  const evidence = { baseline: [row], reference: [row] };
+  assert.deepEqual(validatePreservationProbes(undefined), []);
+  assert.equal(preservationQualificationMatches(sources, evidence), true);
+  assert.equal(preservationQualificationMatches(sources, undefined), false);
+  for (const probes of [[], Array(1), [''], ['x', 'x'], Array(5).fill('x'), ['界'.repeat(1366)], 'x'])
+    assert.throws(() => validatePreservationProbes(probes), /invalid_preservation_probes/);
+  for (const change of [{ passed: false }, { unchanged: false }, { probeDigest: 'wrong' }]) {
+    assert.equal(preservationQualificationMatches(sources, { ...evidence, reference: [{ ...row, ...change }] }), false);
+  }
+  assert.equal(preservationQualificationMatches(sources, { ...evidence, baseline: [] }), false);
+  assert.equal(preservationQualificationMatches(sources, { ...evidence, baseline: Array(1) }), false);
+});
+
+test('preservation qualification rejects source-mutating checks and isolates the next probe', {
+  skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+}, async () => {
+  const { readFile } = await import('node:fs/promises');
+  const task = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json'))
+    .find(task => task.id === 'provided-responses-path');
+  const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION))
+    .receipts.find(row => row.taskId === task.id);
+  const path = JSON.stringify(task.editPaths[0]);
+  task.preservationProbes = [
+    `import {appendFileSync} from 'node:fs'; appendFileSync(${path}, '// guard-mutation');`,
+    `import {readFileSync} from 'node:fs'; import assert from 'node:assert/strict'; assert.ok(!readFileSync(${path},'utf8').includes('// guard-mutation'));`,
+  ];
+  const results = await checkPreservationProbes(task, receipt.image);
+  assert.deepEqual(results.map(row => [row.passed, row.unchanged]), [[true, false], [true, true]]);
+  assert.equal(JSON.stringify(results).includes('guard-mutation'), false);
 });

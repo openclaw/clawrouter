@@ -1,5 +1,6 @@
 import { miniMaxSearchBinding } from "../shared/minimax-search-binding.ts";
 import { miniMaxCurrentCnInlineVideoBinding, miniMaxCurrentCnVideoBinding, miniMaxInlineVideoBinding, miniMaxSixModelVideoBinding, miniMaxVideoBinding } from "../shared/minimax-video-binding.ts";
+import {lifecycleCall} from './large-http/lifecycle-client.ts';
 import { minimaxImageBinding, readMiniMaxImageBinding } from "../shared/minimax-image-binding.ts";
 import { miniMaxImageProjection } from "./minimax-image-credential.ts";
 import { normalizeVertexAnthropicBinding, vertexAnthropicProjection } from "./vertex-anthropic-binding.ts";
@@ -53,6 +54,15 @@ export async function adminApi(request: Request, env: Env, path: string): Promis
     if (path === "/v1/admin/usage/report" && ["GET","DELETE"].includes(request.method)) return await completeUsageResponse(request,env,"admin",request.method === "DELETE" ? "release" : "report",authorization);
     if (request.method === "GET" && path === "/v1/admin/usage/events") return await completeUsageResponse(request,env,"admin","events",authorization);
     if (request.method === "GET" && path === "/v1/admin/usage/validate") return await completeUsageResponse(request,env,"admin","validate",authorization);
+    if (path === "/v1/admin/large-http") {
+      if (!env.LARGE_HTTP_POOL || !env.LARGE_HTTP_TOKEN) return errorResponse("large_runtime_unavailable", "large HTTP runtime is not configured", 503);
+      if (request.method === "GET") return privateJson(await lifecycleCall(env, "snapshot", {}));
+      if (request.method === "POST") {
+        const value = await readJson<{accepting:boolean}>(request, undefined, 1024);
+        const result = await lifecycleCall(env, "admission", value);
+        return privateJson(result, result.status);
+      }
+    }
     if (request.method === "POST" && path === "/v1/admin/usage/recovery") return await backgroundRecovery(request, env);
     if (request.method === "GET" && path === "/v1/admin/content") return getContent(request, env);
     if (request.method === "GET" && path === "/v1/admin/bootstrap") return privateJson(await adminBootstrap(env));

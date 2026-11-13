@@ -1,5 +1,8 @@
 import { emptyUsageSnapshot } from "./usage-sharding.ts";
 import { sessionUsageReport } from "./usage-report-session.ts";
+import {lifecycleCall} from './large-http/lifecycle-client.ts';
+import {largeHttpRoute} from './large-http/admission.ts';
+import {largeHttpService} from './large-http/service.ts';
 import { consoleAsset } from "./console-assets.ts";
 import { proxyTranscription, transcriptionPath } from "./transcription.ts";
 import { withNativeLocalError } from "./native-errors.ts";
@@ -43,10 +46,12 @@ export { BudgetLedgerObject, GrantCredentialObject, UsageLedgerObject };
 
 const handler: ExportedHandler<Env, QueueMessage> = {
   async fetch(request, env, context) {
+    const ingressPath = new URL(request.url).pathname;
+    if(ingressPath.startsWith('/__large_http/'))return largeHttpService(request,env);
     const backgroundMark = currentBackgroundMark();
     // Private responses must not pass through public correlation, logging, or CORS.
-    if (privatePath(new URL(request.url).pathname)) return privateCodex(request, env);
-    const path = canonicalPath(new URL(request.url).pathname);
+    if (privatePath(ingressPath)) return privateCodex(request, env);
+    const path = canonicalPath(ingressPath);
     // Bearer asset paths must not enter correlation/logging/CORS. Publication
     // itself uses the ordinary authenticated API path below and returns no
     // verifier until the private owner and immutable archive acknowledge it.
@@ -70,6 +75,7 @@ const handler: ExportedHandler<Env, QueueMessage> = {
     if (background) context.waitUntil(background);
     response = withNativeLocalError(response, path, correlated.requestId);
     response = withBackgroundRecovery(withRequestId(response, correlated.requestId), request);
+    if (env.LARGE_HTTP_TESTING === '1' && largeHttpRoute(correlated.request)) response.headers.set('x-large-http-route', largeHttpRoute(correlated.request)!);
     // The correlation wrapper makes a mutable copy without buffering streams.
     if (env.CF_VERSION_METADATA?.id) response.headers.set("x-clawrouter-version-id", env.CF_VERSION_METADATA.id);
     if (/^\/v1\/(?:admin|session)\/usage\/(?:report|events|validate)$/.test(path)) {
@@ -79,7 +85,13 @@ const handler: ExportedHandler<Env, QueueMessage> = {
     return corsEnabled(path) ? withCors(response) : response;
   },
   queue,
-  scheduled: scheduledContentCleanup,
+  async scheduled(controller, env) {
+    await Promise.all([
+      scheduledContentCleanup(controller, env),
+      env.LARGE_HTTP_POOL && env.LARGE_HTTP_TOKEN && env.LARGE_HTTP_ENABLED !== '0'
+        ? lifecycleCall(env, 'activate', {}) : Promise.resolve(),
+    ]);
+  },
 };
 
 export default handler;
@@ -93,6 +105,7 @@ function mutatesHotState(method: string, path: string): boolean {
 
 async function route(request: Request, env: Env, context: ExecutionContext): Promise<Response> {
   const url = new URL(request.url), rawPath = url.pathname, path = canonicalPath(rawPath);
+
   if (request.method === "OPTIONS" && corsEnabled(path)) return corsPreflight();
   if (request.method === "GET" && rawPath === "/") return redirect(`/dashboard${url.search}`);
   if (request.method === "GET" && rawPath === "/dashboard") return redirect(`/dashboard/home${url.search}`);
@@ -193,7 +206,7 @@ async function sessionUsage(request: Request, env: Env): Promise<Response> {
   return privateJson({ session: publicSession(session), policies: policyRows, usage });
 }
 
-function openAiPath(path: string): boolean { return ["/v1/chat/completions", "/v1/responses", "/v1/decisions", "/v1/responses/compact", "/v1/responses/input_tokens", "/v1/embeddings", "/v1/moderations", "/v1/audio/speech", "/v1/images/generations"].includes(path); }
+function openAiPath(path: string): boolean { return ["/v1/chat/completions", "/v1/responses", "/v1/decisions", "/v1/responses/compact", "/v1/responses/input_tokens", "/v1/embeddings", "/v1/moderations", "/v1/audio/speech", "/v1/images/generations", "/v1/images/edits"].includes(path); }
 
 function responseControlPath(path: string, method: string): { id: string; action: "retrieve" | "cancel" } | null {
   const match = path.match(/^\/v1\/responses\/([^/]+)(\/cancel)?$/);
@@ -212,7 +225,7 @@ function serviceIndex(env: Env) {
       adminBootstrap: "/v1/admin/bootstrap", adminOverview: "/v1/admin/overview", adminUsers: "/v1/admin/users", adminUsage: "/v1/admin/usage", adminPolicies: "/v1/admin/policies",
       adminCredentials: "/v1/admin/credentials", adminConnections: "/v1/admin/connections", adminAccessUsers: "/v1/admin/access-users",
       adminAssignmentRules: "/v1/admin/assignment-rules", adminFusion: "/v1/admin/fusion", oauthCallback: "/v1/oauth/callback",
-      openaiCompatible: ["/v1/audio/transcriptions", "/v1/chat/completions", "/v1/responses", "/v1/decisions", "/v1/responses/compact", "/v1/responses/input_tokens", "/v1/embeddings", "/v1/moderations", "/v1/audio/speech", "/v1/images/generations"], manifestProxy: "/v1/proxy/{provider}/{endpoint}", nativeProxy: "/v1/native/{provider}/{provider-native-path}",
+      openaiCompatible: ["/v1/audio/transcriptions", "/v1/chat/completions", "/v1/responses", "/v1/decisions", "/v1/responses/compact", "/v1/responses/input_tokens", "/v1/embeddings", "/v1/moderations", "/v1/audio/speech", "/v1/images/generations", "/v1/images/edits"], manifestProxy: "/v1/proxy/{provider}/{endpoint}", nativeProxy: "/v1/native/{provider}/{provider-native-path}",
     },
   };
   if (localAuthEnabled(env)) Object.assign(index.endpoints, { sessionLogin: "/v1/session/login", sessionLogout: "/v1/session/logout" });

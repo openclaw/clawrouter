@@ -40,6 +40,7 @@ endpoints:
 models:
   entries:
     - id: deepseek/deepseek-v4-pro
+      displayName: "DeepSeek V4 Pro"
       upstream: deepseek-v4-pro
       capabilities: [llm.chat]
       pricingRef: deepseek-v4-pro-peak-upper-bound-2026-09-23
@@ -53,6 +54,7 @@ models:
         maxInputTokens: 1048576
         defaultMaxOutputTokens: 393216
     - id: deepseek/deepseek-v4-flash
+      displayName: "DeepSeek V4 Flash"
       upstream: deepseek-v4-flash
       capabilities: [llm.chat]
       pricingRef: deepseek-flash-peak-upper-bound-2026-09-23
@@ -66,6 +68,7 @@ models:
         maxInputTokens: 1048576
         defaultMaxOutputTokens: 393216
     - id: deepseek/deepseek-flash
+      displayName: "DeepSeek Flash"
       upstream: deepseek-flash
       capabilities: [llm.chat]
       pricingRef: deepseek-flash-peak-upper-bound-2026-09-23
@@ -79,6 +82,7 @@ models:
         maxInputTokens: 1048576
         defaultMaxOutputTokens: 393216
     - id: deepseek/deepseek-v4-flash-vision-exp
+      displayName: "DeepSeek V4 Flash Vision Exp"
       upstream: deepseek-v4-flash-vision-exp
       capabilities: [llm.chat]
       pricingRef: deepseek-flash-peak-upper-bound-2026-09-23

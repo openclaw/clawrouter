@@ -741,7 +741,7 @@ Scoped quota windows in `GET /v1/admin/upstream-grants` optionally carry
 occurs in the requested upstream model ID; an absent scope applies to all
 models. Exhausted unscoped windows cool down the whole grant. Scoped exhaustion
 excludes only matching models. `most_remaining` and `threshold` compare only
-applicable live windows. Freshness uses each applicable window's own timestamp, so partial header updates cannot refresh an older model window. Concurrent feedback merges by window observation time and preserves active inference cooldowns. Reset-passed readings are unknown. A reserve protects
+applicable live windows. `threshold` keeps the last reading of each open window regardless of `staleAfterSeconds`; a grant with no open-window reading is an unmeasured replacement of last resort. Freshness uses each applicable window's own timestamp, so partial header updates cannot refresh an older model window. Concurrent feedback merges by window observation time and preserves active inference cooldowns. Reset-passed readings are unknown. A reserve protects
 against extra-usage billing but cannot prevent one in-flight request crossing the
 boundary. It does not turn polling into an atomic upstream quota reservation.
 
@@ -930,7 +930,7 @@ only routing metadata and credential-presence flags.
 
 Before forwarding a request, the Worker authenticates the credential, resolves its policy, checks the provider connection and scoped grant readiness, and reserves a conservative budget. Policies can select grants by priority, round robin, least used, reported remaining quota, consume-until-threshold, or weighted random choice. Threshold routing owns pool affinity; other modes may use identity or session stickiness.
 
-Provider grants can be scoped to a policy or tenant. When several token references are eligible, ClawRouter applies the policy strategy within the active priority tier. An upstream 401, 403, or 429 records sanitized grant state and can trigger one same-provider alternate when policy allows failover.
+Provider grants can be scoped to a policy or tenant. When several token references are eligible, ClawRouter applies the policy strategy within the active priority tier. An upstream 401, 403, or 429 records sanitized grant state and can trigger same-provider alternates when policy allows failover, within one budget of four distinct eligible grants shared with credential preparation and Fusion reservation. Anthropic's explicit credit-balance HTTP 400 also excludes that grant for five minutes and can trigger the same bounded pre-delivery failover. Healthy grants retain stickiness; unrelated 400s and errors after streaming begins do not trigger credit failover. Exclusions use the full scoped grant key, including explicitly shared owners. If no further attempt is available, the last upstream rejection is returned; subsequent requests with no eligible grant return the pool-unavailable error with the earliest `Retry-After`.
 
 Unified, native, and manifest HTTP proxy routes refuse upstream 3xx redirects on both initial and alternate-grant dispatch. They cancel the redirect body and return a nonbillable `502 provider_unavailable` without `Location`; configure the final API endpoint rather than a redirect-dependent URL.
 

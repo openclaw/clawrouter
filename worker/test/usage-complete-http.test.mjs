@@ -46,6 +46,32 @@ test('admin token sees retained owners without impersonation; rotation invalidat
  assert.equal((await f.direct('/mutate',{seed:{principal:{principalType:'user',principalId:'alice@example.com'},bindings:[]},binding:{principalType:'user',principalId:'alice@example.com',policyId:'p0',enabled:false,priority:0}})).status,200);
  assert.equal((await (await f.http('/v1/session/usage/report?days=7',f.headers)).json()).kind,'no_access');
 });
+test('admin usage cuts coexist with authenticated large HTTP lifecycle controls',async t=>{
+ const f=await fixture(t),path='/v1/admin/large-http',calls=[];await f.ingest(0,f.event('coexisting'));
+ const unavailable=await f.http(path,f.bearer);assert.equal(unavailable.status,503);assert.equal((await unavailable.json()).error.code,'large_runtime_unavailable');
+ f.env.LARGE_HTTP_TOKEN='synthetic-lifecycle-token';
+ f.env.LARGE_HTTP_POOL={getByName:name=>({fetch:async(url,init)=>{
+  assert.equal(name,'large-http-pool');assert.equal(init.method,'POST');assert.equal(init.headers['x-container-token'],f.env.LARGE_HTTP_TOKEN);
+  const operation=new URL(url).pathname,body=JSON.parse(init.body);calls.push({operation,body});
+  return Response.json({status:200,accepting:operation==='/snapshot'||body.accepting});
+ }})};
+ const report=await value(await f.http('/v1/admin/usage/report?'+f.p,f.bearer));assert.equal(report.metrics.calls,1);assert.equal(calls.length,0);
+ const before=f.calls.length;
+ assert.equal((await f.http(path)).status,401);
+ assert.equal((await f.http(path,{...f.headers,origin:'https://evil.example','content-type':'application/json'},'POST',JSON.stringify({accepting:false}))).status,403);
+ assert.equal(calls.length,0,'auth and same-origin gates run before lifecycle dispatch');
+ for(const headers of [f.bearer,f.headers]){const response=await f.http(path,headers);assert.equal(response.status,200);assert.equal(response.headers.get('cache-control'),'no-store');assert.deepEqual(await response.json(),{status:200,accepting:true});}
+ const mutation=await f.http(path,{...f.bearer,'content-type':'application/json'},'POST',JSON.stringify({accepting:false}));
+ assert.equal(mutation.status,200);assert.equal(mutation.headers.get('cache-control'),'no-store');assert.deepEqual(await mutation.json(),{status:200,accepting:false});
+ assert.deepEqual(calls,[{operation:'/snapshot',body:{}},{operation:'/snapshot',body:{}},{operation:'/admission',body:{accepting:false}}]);
+ assert.deepEqual(f.calls.slice(before).filter(c=>c.kind==='shard'||c.path.startsWith('/usage-')),[],'lifecycle controls do not read usage shards or mutate usage cuts; authentication may read users');
+ assert.equal((await f.http(path,{...f.bearer,'content-type':'application/json'},'POST','x'.repeat(1025))).status,413);
+ assert.equal(calls.length,3,'oversized lifecycle body never reaches pool');
+ const events=await value(await f.http('/v1/admin/usage/events?'+params(f,report),f.bearer));assert.deepEqual(events.events.map(e=>e.id),['coexisting']);
+ assert.deepEqual(await value(await f.http('/v1/admin/usage/validate?'+params(f,report),f.bearer)),{valid:true});
+ assert.deepEqual(await value(await f.http('/v1/admin/usage/report?cut='+report.cut,f.bearer,'DELETE')),{released:true});
+ assert.equal(calls.length,3,'usage continuations/release never reach the large HTTP pool');
+});
 test('HTTP parser rejects malformed capabilities and unknown/private selectors without shard work',async t=>{
  const f=await fixture(t);for(const query of ['intent=invalid','intent=summary&cut='+ 'a'.repeat(43),'intent=export&cut='+'a'.repeat(43),'days=7&days=7','tenantId=other','policyId=p0','grain=minute&days=7','keyKind=session&key=forbidden','cut=','model='+ 'é'.repeat(257),'limit=3','cursor='+'a'.repeat(43)]){
   const before=f.calls.filter(c=>c.kind==='shard').length;assert.equal((await f.http('/v1/session/usage/report?'+query,f.headers)).status,400,query.slice(0,80));assert.equal(f.calls.filter(c=>c.kind==='shard').length,before);

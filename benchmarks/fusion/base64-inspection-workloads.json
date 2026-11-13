@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "cover-base64-scalar-inspection",
+      "split": "development",
+      "base": "3a500cced5c823579d236361aaa7ef859480327f",
+      "oracle": "bbbe34664515f0859397ddc628c3d12b35df8932",
+      "editPaths": [
+        "worker/minimax-music.ts"
+      ],
+      "visibleTests": [
+        "worker/test/json-tokens.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/minimax-music.test.mjs"
+      ],
+      "instruction": "Repair MiniMax cover-reference base64 validation so it does not decode, re-encode, normalize, or copy the complete audio payload. In worker/minimax-music.ts export inspectMiniMaxCoverBase64(value: unknown): Readonly<{ decodedBytes: number }>, returning a frozen object with only decodedBytes, and use it in prepareMiniMaxMusic for the audio_base64 branch. Preserve the original request/body identity. Accept nonempty canonical standard base64 with decoded size at most 8 MiB, including exact-limit input. Reject non-string values, whitespace, URL-safe alphabet, interior/excess padding, nonzero unused padding bits and oversize input, including max-plus-one inputs with the same encoded length as valid max input. Use bounded scalar inspection without atob/btoa or allocating a payload-sized decoded/normalized copy. Preserve existing invalid_minimax_music_text or invalid_minimax_music_audio_base64 errors and all unrelated URL, region, request and streaming behavior."
+    }
+  ]
+}

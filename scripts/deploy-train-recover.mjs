@@ -4,6 +4,7 @@ import { appendFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { createApi } from './deploy-train-api.mjs';
 import { deploymentMessage, deploymentState, recoveryDecision } from './deploy-train-policy.mjs';
+import { verifyRuntimeRecovery } from './deploy-train-runtime.mjs';
 
 export async function recoverRemote(api, run) {
   const latest = await api.latest();
@@ -24,6 +25,7 @@ export async function recoverRemote(api, run) {
     return 'rollback: blue restored to 100%';
   }
   if (action !== 'rollback') return action;
+  await verifyRuntimeRecovery(api, state);
   await api.deploy([{ version_id: state.blue, percentage: 100 }], deploymentMessage({ ...state, status: 'rolled-back' }), latest.id);
   return 'rollback: blue restored to 100%';
 }

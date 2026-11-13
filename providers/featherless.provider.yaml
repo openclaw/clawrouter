@@ -41,9 +41,11 @@ endpoints:
 models:
   entries:
     - id: featherless/GalrionSoftworks/Margnum-12B-v1
+      displayName: "Margnum 12B v1"
       upstream: GalrionSoftworks/Margnum-12B-v1
       capabilities: [llm.chat]
     - id: featherless/Qwen/Qwen3-32B
+      displayName: "Qwen3 32B"
       upstream: Qwen/Qwen3-32B
       capabilities: [llm.chat]
       requestParameters:

@@ -325,6 +325,42 @@ test("zero-cost Fusion offers stay exact with unavailable observations but confi
   }
 });
 
+for (const [providerId, modelId, displayName] of [
+  ["openai", "openai/gpt-6.1-sol", "GPT-6.1 Sol"],
+  ["anthropic", "anthropic/claude-opus-5-5", "Claude Opus 5.5"],
+]) test(`${providerId} display names reach client catalogs and model lists without changing identity or scope`, async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.config.enabled = false;
+  fixture.policy.providers = [providerId];
+  fixture.policy.models = [modelId];
+  fixture.connections.splice(0, fixture.connections.length, { providerId, enabled: true });
+  fixture.records.set("oauth/fixture/named-model", { provider: providerId, kind: "api_key", credential: "fixture-api-key", enabled: true });
+  for (const mode of ["key", "session"]) {
+    for (const handler of [catalogResponse, ...(mode === "session" ? [sessionResponse, entitlementResponse] : [])]) {
+      const response = await handler(fixture.request(mode), fixture.env);
+      assert.equal(response.status, 200);
+      const body = await response.json(), catalog = body.entitlements?.catalog ?? body.catalog ?? body;
+      const provider = catalog.providers.find(({ id }) => id === providerId);
+      assert.deepEqual(provider.models.map(({ id }) => id), [modelId]);
+      const [model] = provider.models;
+      assert.equal(model.displayName, displayName);
+      assert.equal(model.upstream, snapshot.model_index[modelId].upstream);
+      assert.deepEqual(model.pricing, snapshot.model_index[modelId].pricing);
+      assert.ok(provider.offers.some(offer => offer.modelId === modelId));
+      assert.ok(provider.offers.every(offer => offer.modelId === null || offer.modelId === modelId));
+    }
+    for (const anthropic of [false, ...(providerId === "anthropic" ? [true] : [])]) {
+      const request = fixture.request(mode);
+      if (anthropic) request.headers.set("anthropic-version", "2023-06-01");
+      const response = await modelsResponse(request, fixture.env);
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.deepEqual(body.data.map(({ id }) => id), [modelId]);
+      assert.equal(body.data[0].display_name, displayName);
+    }
+  }
+});
+
 test("authorized model metadata preserves declared reasoning efforts without adding sibling metadata", async (t) => {
   const fixture = await fusionDiscoveryFixture(t);
   const catalog = await (await catalogResponse(fixture.request("key"), fixture.env)).json();
@@ -504,6 +540,10 @@ test("Azure discovery keeps explicit native routes while hiding an unresolved de
     assert.deepEqual(view.routes.map(({ endpoint }) => endpoint), ["chat_completions", "embeddings", "responses"]);
     assert.deepEqual(view.models.map(({ id }) => id), configured ? ["azure-openai/deployment"] : []);
     assert.deepEqual(models.data.map(({ id }) => id), view.models.map(({ id }) => id));
+    if (configured) {
+      assert.equal("displayName" in view.models[0], false);
+      assert.equal(models.data[0].display_name, "Azure OpenAI · azure-openai/deployment");
+    }
   }
 });
 
@@ -629,8 +669,9 @@ for (const providerId of ["anthropic", "openai"]) test(`temporary grant cooldown
         if (phase === "before") { baseline.set(mode, inventory); baselineOffers.set(mode, view.offers); }
         assert.ok(view.models.length > 0, `${phase} ${mode}: keep registered models`);
         if (providerId === "anthropic") {
-          assert.equal(view.models.length, 10);
+          assert.equal(view.models.length, 11);
           assert.ok(view.models.some(({ id }) => id === "anthropic/claude-opus-5-5"));
+          assert.ok(view.models.some(({ id }) => id === "anthropic/claude-fable-5-2"));
           assert.equal(view.routes.length, 4);
         } else {
           assert.ok(view.models.some(({ id }) => id === "openai/gpt-6-astra"));

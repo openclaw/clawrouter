@@ -115,6 +115,9 @@ tokens before its failure becomes visible. Discarded HTTP-error responses and re
 adviser deadline are canceled so their upstream resources are released and
 accounting completes. HTTP errors release the adviser reservation; incomplete
 successful responses keep the conservative reservation.
+Only drafts with an explicit `stop` completion reason enter synthesis. Truncated,
+filtered, refused, and tool-calling drafts are omitted; normal subrequest accounting
+still applies. Other completed advisers remain available to the synthesizer.
 Adviser failures remain contained even when an invocation or body read rejects
 after its deadline has already elapsed.
 
