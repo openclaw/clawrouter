@@ -8,11 +8,12 @@ import { validateLocalQualification } from './fusion-local-repository.mjs';
 import { loadTasks, verify, hash, command, withReproducer, validateEdits } from './fusion-workloads.mjs';
 import { runContractAgent, runSingleDraft, runRefinedDraft } from './fusion-contract-agent.mjs';
 import { runProbeSelection, diagnoseProbeSelection } from './fusion-probe-selection.mjs';
+import { runDraftSampling } from './fusion-draft-sampling.mjs';
 
 export const pairDefaults = Object.freeze({ cheap: 'openai/gpt-6-luna', strong: 'openai/gpt-6.1-sol',
   maxCalls: 12, outputTokens: 8192, deadlineMs: 300000, trialBudgetMicros: 1000000,
   campaignBudgetMicros: 100000000, priorCostMicros: 0 });
-const strategies = ['cheap', 'strong', 'architect', 'edit-handoff', 'completion-handoff', 'probe-selection'];
+const strategies = ['cheap', 'strong', 'architect', 'edit-handoff', 'completion-handoff', 'probe-selection', 'draft-sampling'];
 const providedPolicies = ['contract-provided', 'contract-draft', 'contract-refine', 'contract-provided-cheap', 'contract-provided-strong'];
 const contractPolicies = ['contract', 'contract-cheap', 'contract-strong', 'contract-private', ...providedPolicies];
 
@@ -37,6 +38,7 @@ export function validatePair(config, taskCount, armCount = 3) {
 }
 
 export function pairModel(strategy, role, config) {
+  if (strategy === 'draft-sampling') return config.cheap;
   if (strategy === 'probe-selection') return role === roles.strong ? config.strong : config.cheap;
   if (['contract-cheap', 'contract-provided-cheap'].includes(strategy)) return config.cheap;
   if (['contract-strong', 'contract-provided-strong'].includes(strategy)) return config.strong;
@@ -73,9 +75,9 @@ async function exportAcceptedRepair(out, task, files, sourceSha, qualificationDi
 }
 
 export async function runPairBenchmark({ repo, qualificationPath, taskManifest, out, sourceSha, config,
-  cheapReasoning = 'none', cheapMaxCalls = 10, executor = 'interactive', preloadSource = false, policy = 'architect', includeControls = true, controlsOnly = false, exportRepairs = false, env = process.env, fetcher = fetch, agent, contractAgent = runContractAgent, probeAgent = runProbeSelection, grade = verify, preflight = nativePins }) {
+  cheapReasoning = 'none', cheapMaxCalls = 10, executor = 'interactive', preloadSource = false, policy = 'architect', includeControls = true, controlsOnly = false, exportRepairs = false, env = process.env, fetcher = fetch, agent, contractAgent = runContractAgent, probeAgent = runProbeSelection, samplingAgent = runDraftSampling, grade = verify, preflight = nativePins }) {
   if (!/^[a-f0-9]{40}$/.test(sourceSha ?? '')) throw new Error('exact_source_required');
-  if (!['architect', 'edit-handoff', 'completion-handoff', 'probe-selection', 'matched-handoff', 'scope', ...contractPolicies].includes(policy)) throw new Error('invalid_pair_policy');
+  if (!['architect', 'edit-handoff', 'completion-handoff', 'probe-selection', 'draft-sampling', 'matched-handoff', 'scope', ...contractPolicies].includes(policy)) throw new Error('invalid_pair_policy');
   if (!['interactive', 'single-draft'].includes(executor) || (executor === 'single-draft' && !providedPolicies.includes(policy))) throw new Error('invalid_pair_executor');
   agent ??= executor === 'single-draft' ? runSingleDraft : runAgent;
   if (typeof includeControls !== 'boolean' || typeof controlsOnly !== 'boolean'
@@ -87,6 +89,7 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
   if (policy !== 'architect') preloadSource = true;
   if (!controlsOnly && contractPolicies.includes(policy) && config.maxCalls < 4) throw new Error('contract_requires_four_calls');
   if (!controlsOnly && policy === 'probe-selection' && config.maxCalls < 4) throw new Error('probe_selection_requires_four_calls');
+  if (!controlsOnly && policy === 'draft-sampling' && config.maxCalls < 3) throw new Error('sampling_requires_three_calls');
   const candidateStrategy = policy === 'matched-handoff' ? 'edit-handoff' : policy;
   const trialStrategies = controlsOnly ? ['cheap', 'strong'] : includeControls ? ['cheap', 'strong', candidateStrategy] : [candidateStrategy];
   const tasks = await loadTasks(taskManifest);
@@ -174,7 +177,9 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
         state.records.push(row);
         await save();
         try {
-          const result = strategy === 'probe-selection'
+          const result = strategy === 'draft-sampling'
+            ? await samplingAgent(task, receipt.image, trialId, execution.settings, invoke(strategy), { agent })
+            : strategy === 'probe-selection'
             ? await probeAgent(task, receipt.image, trialId, execution.settings, invoke(strategy), { agent })
             : contractPolicies.includes(strategy)
             ? await contractAgent(task, receipt.image, trialId, execution.settings, invoke(strategy),

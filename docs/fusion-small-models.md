@@ -394,6 +394,21 @@ repair. Earlier scores involving those tasks are not reliable comparisons.
 
 ## Native planner/editor comparison
 
+Set `FUSION_PAIR_POLICY=draft-sampling` for a cheap sampling control. It makes
+two independent single-call drafts from the original source, then selects the
+first submitted draft that passes visible tests, in fixed order. If neither
+qualifies, the cheap agent repairs from the original with the remaining shared
+allowance. There is no judge or hidden acceptance feedback. Both fixed-model
+controls remain present; this policy requires at least three shared calls.
+
+To compare with executable probe selection, freeze the same tasks, repetitions,
+model pins, call cap (at least four), token cap, deadline and spend budget for
+both policies. Report actual cost, including unused allowance, and preserve
+every attempted draw. Run each policy with its controls and compare the
+declared candidate arms; do not pool distinct policies as repeated blocks.
+This control measures whether executable selection adds value beyond two
+cheap drafts. It does not establish mixed-model benefit by itself.
+
 Set `FUSION_PAIR_POLICY=probe-selection` for an experimental executable
 comparison. Two independent one-call cheap drafts start from the same source.
 If both submit, pass visible tests, and differ, one cheap call writes a behavioral
