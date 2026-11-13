@@ -1057,3 +1057,24 @@ for (const failure of ['none', 'http', 'json', 'transport']) test(`native correl
     assert.ok(!JSON.stringify(saved).includes('sentinel'));
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+
+test('source paging reaches every matched arm and rejects unsupported modes before dispatch', async () => {
+  const { root, options } = await fixture();
+  try {
+    let called = false;
+    for (const value of [0, -1, 401, 1.5, '200', false]) {
+      await assert.rejects(runPairBenchmark({ ...options, sourcePageLines: value, fetcher: async () => { called = true; } }), /invalid_source_page_lines/);
+    }
+    await assert.rejects(runPairBenchmark({ ...options, sourcePageLines: 200, policy: 'scope', fetcher: async () => { called = true; } }), /unsupported_source_paging/);
+    await assert.rejects(runPairBenchmark({ ...options, sourcePageLines: 200, policy: 'architect', fetcher: async () => { called = true; } }), /unsupported_source_paging/);
+    assert.equal(called, false);
+    const seen = [];
+    const state = await runPairBenchmark({ ...options, policy: 'matched-handoff', sourcePageLines: 200, grade, fetcher: success,
+      agent: async (_task, _image, _strategy, _id, _settings, _invoke, _engine, agentOptions) => {
+        seen.push(agentOptions.sourcePageLines); return repaired();
+      } });
+    assert.deepEqual(seen, [200, 200, 200]);
+    assert.equal(state.sourcePageLines, 200);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
