@@ -466,6 +466,24 @@ stops the run as `repair_export_failed`, while retaining its acceptance result
 and accounting. This option does not turn the historical repair fixture into
 a general-purpose coding agent or establish additional quality evidence.
 
+Verify a saved repair without another model call:
+
+```sh
+node scripts/verify-fusion-repair.mjs qualification.json tasks.json output-directory/pair.json output-directory/example-task.repair.json
+```
+
+Use the exact manifest and qualification files from the export. The command
+checks task, base, executor-source, qualification and file digests against the
+accepted run. It rejects incomplete runs and altered or out-of-scope files before
+starting a sandbox. It then reruns visible tests and independent acceptance in
+fresh isolated sandboxes using the already-qualified local image and pinned Git
+history. Missing images or history fail; the command does not rebuild fixtures.
+Its JSON summary contains no source or test output. A failed check exits nonzero.
+
+This checks consistency of supplied provenance, not its authenticity or cost
+accounting. Passing applies to the pinned task base; it does not establish that
+the repair works on a different checkout. The command does not apply files.
+
 Run from a committed task checkout with qualified workload receipts and an
 explicit JSON configuration. Only credentials for the selected models are
 required. Supply credentials through the existing secret injector; do not put
