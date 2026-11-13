@@ -842,3 +842,74 @@ for (const mode of ['read', 'invalid', 'failed-edit', 'passing-edit', 'submissio
     assert.equal(result.files[0].content, repaired);
   });
 }
+
+
+test('source pages keep later lines reachable without preloading entire files', () => {
+  const files = [{ path: 'worker/large.ts', content: Array.from({ length: 1200 }, (_, i) => `line ${i + 1}`).join('\n') }];
+  const first = editableSourceView(files, '', 200)[0];
+  assert.equal(first.content.split('\n').length, 200);
+  assert.equal(first.totalLines, 1200);
+  assert.equal(first.startLine, 1);
+  assert.equal(first.truncated, true);
+  const next = sourceView(files, ['worker/large.ts:201-1200'], '', 200)[0];
+  assert.equal(next.startLine, 201);
+  assert.equal(next.content.split('\n').length, 200);
+  assert.equal(next.truncated, true);
+  const last = sourceView(files, ['worker/large.ts:1100-1200'], '', 200)[0];
+  assert.equal(last.truncated, false);
+  assert.match(last.content, /line 1200$/);
+  assert.equal(sourceView(files, ['worker/large.ts'], 'line 1100', 2)[0].matches[0].line, 1100);
+  for (const value of [0, -1, 401, 1.5, NaN, Infinity, '200', false]) {
+    assert.throws(() => editableSourceView(files, '', value), /invalid_source_page_lines/);
+  }
+});
+
+test('source paging preserves the byte bound for a single oversized line', () => {
+  assert.throws(() => editableSourceView([{ path: 'worker/large.ts', content: 'x'.repeat(320001) }], '', 1), /source_view_too_large/);
+});
+
+test('paged handoff retains source navigation and fetches current lines after transfer', {
+  skip: !process.env.FUSION_PROVIDED_QUALIFICATION,
+}, async () => {
+  const { readFile } = await import('node:fs/promises');
+  const { execFileSync } = await import('node:child_process');
+  const { loadTasks } = await import('../scripts/fusion-workloads.mjs');
+  const task = (await loadTasks('benchmarks/fusion/provided-reproducer-workloads.json')).find(task => task.id === 'provided-responses-path');
+  const receipt = JSON.parse(await readFile(process.env.FUSION_PROVIDED_QUALIFICATION)).receipts.find(row => row.taskId === task.id);
+  const original = execFileSync('git', ['show', `${task.base}:${task.editPaths[0]}`], { encoding: 'utf8' });
+  const repaired = `${original}\n// paged transfer marker\n`;
+  const markerLine = repaired.split('\n').length - 1;
+  let calls = 0;
+  const result = await runAgent(task, receipt.image, 'handoff', 'paged-transfer',
+    { maxTurns: 3, deadlineMs: 120000, outputTokens: 256 }, async (_id, _role, body) => {
+      const turn = calls++;
+      if (turn === 0) {
+        assert.match(body.messages[0].content, /at most 2 lines/);
+        const first = JSON.parse(body.messages[1].content.split('Initial editable source (use tools for current source after edits):\n')[1])[0];
+        assert.equal(first.content.split('\n').length, 2);
+        assert.equal(first.truncated, true);
+      }
+      if (turn === 1) {
+        const page = JSON.parse(body.messages.at(-1).content.split('Current source:\n')[1])[0];
+        assert.equal(page.content.split('\n').length, 2);
+        assert.equal(page.truncated, true);
+        assert.doesNotMatch(page.content, /paged transfer marker/);
+      }
+      if (turn === 2) assert.match(body.messages.at(-1).content, /paged transfer marker/);
+      const action = turn === 0 ? { action: 'edit', paths: [], query: '', edits: [{ path: task.editPaths[0], search: original, replace: repaired }] }
+        : turn === 1 ? { action: 'read', paths: [`${task.editPaths[0]}:${markerLine}-${markerLine}`], query: '', edits: [] }
+        : { action: 'finish', paths: [], query: '', edits: [] };
+      return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ ...action, memory: '' }) } }] };
+    }, undefined, { handoffAfterEdit: true, preloadSource: true, sourcePageLines: 2 });
+  assert.equal(calls, 3);
+  assert.equal(result.handoffUsed, true);
+  assert.equal(result.publicPassed, true);
+  assert.equal(result.files[0].content, repaired);
+});
+
+
+test('paging rejects auxiliary model strategies before allocating a sandbox', async () => {
+  for (const strategy of ['planned', 'critique', 'panel', 'candidate-ensemble']) {
+    await assert.rejects(runAgent({}, 'unread-image', strategy, 'unsupported', {}, () => {}, undefined, { sourcePageLines: 200 }), /unsupported_source_paging/);
+  }
+});

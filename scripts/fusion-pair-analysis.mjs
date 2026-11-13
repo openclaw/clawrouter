@@ -70,6 +70,8 @@ export function analyzePairRun(run, options) {
     || (run.handoffProbeGate !== undefined && (typeof run.handoffProbeGate !== 'boolean'
       || (run.handoffProbeGate && (run.probeRegressionGate !== true || !['edit-handoff', 'matched-handoff'].includes(run.policy)))))
     || (run.handoffEvidence !== undefined && typeof run.handoffEvidence !== 'boolean')) throw new Error('invalid_pair_run');
+  if (run.sourcePageLines != null && (!Number.isSafeInteger(run.sourcePageLines) || run.sourcePageLines < 1 || run.sourcePageLines > 400
+    || run.executor !== 'interactive' || !['edit-handoff', 'completion-handoff', 'matched-handoff'].includes(run.policy))) throw new Error('invalid_pair_run');
   if (run.armOffset !== undefined && (!Number.isSafeInteger(run.armOffset) || run.armOffset < 0
     || run.armOffset >= run.strategies.length)) throw new Error('invalid_pair_run');
   if (run.handoffMaxTurns != null && (!Number.isSafeInteger(run.handoffMaxTurns) || run.handoffMaxTurns < 1
@@ -147,7 +149,7 @@ export function analyzePairRun(run, options) {
   }
   const oracleSolved = [...cases.values()].filter(({ rows }) => rows.get('cheap').score || rows.get('strong').score).length;
   return { version: 1, kind: 'observed-pair-analysis', sourceSha: run.sourceSha, armOffset: run.armOffset ?? 0,
-    handoffMaxTurns: run.handoffMaxTurns ?? null, handoffEvidence: run.handoffEvidence ?? false, probeRegressionGate: run.probeRegressionGate ?? false, handoffProbeGate: run.handoffProbeGate ?? false,
+    sourcePageLines: run.sourcePageLines ?? null, handoffMaxTurns: run.handoffMaxTurns ?? null, handoffEvidence: run.handoffEvidence ?? false, probeRegressionGate: run.probeRegressionGate ?? false, handoffProbeGate: run.handoffProbeGate ?? false,
     datasetDigest: run.datasetDigest, qualificationDigest: run.qualificationDigest,
     inputDigest: createHash('sha256').update(JSON.stringify(run)).digest('hex'),
     cases: cases.size, candidate, latencyMetric, totals, comparisons: [versusCheap, versusStrong],
@@ -185,7 +187,7 @@ export function analyzePairRepeats(runs, options) {
       qualificationDigest: run.qualificationDigest, config, pins: run.pins, policy: run.policy,
       executor: run.executor, cheapReasoning: run.cheapReasoning, cheapMaxCalls: run.cheapMaxCalls,
       preloadSource: run.preloadSource, includeControls: run.includeControls, controlsOnly: run.controlsOnly,
-      handoffMaxTurns: run.handoffMaxTurns ?? null, handoffEvidence: run.handoffEvidence ?? false, probeRegressionGate: run.probeRegressionGate ?? false, handoffProbeGate: run.handoffProbeGate ?? false,
+      sourcePageLines: run.sourcePageLines ?? null, handoffMaxTurns: run.handoffMaxTurns ?? null, handoffEvidence: run.handoffEvidence ?? false, probeRegressionGate: run.probeRegressionGate ?? false, handoffProbeGate: run.handoffProbeGate ?? false,
       strategies: [...run.strategies].sort(), receipts: [...run.receipts].sort((a, b) => a.taskId.localeCompare(b.taskId)) });
   };
   const expected = protocol(runs[0]);
@@ -220,7 +222,7 @@ export function analyzePairRepeats(runs, options) {
     withinLatencyLimit: latencyRatio !== null && latencyRatio <= 2,
     rescuedBeyondCheap: comparisons[0].wins > 0 };
   return { version: 1, kind: 'observed-pair-repeat-analysis', armOffsets: runs.map(run => run.armOffset ?? 0), sourceSha: runs[0].sourceSha,
-    handoffMaxTurns: runs[0].handoffMaxTurns ?? null, handoffEvidence: runs[0].handoffEvidence ?? false, probeRegressionGate: runs[0].probeRegressionGate ?? false, handoffProbeGate: runs[0].handoffProbeGate ?? false,
+    sourcePageLines: runs[0].sourcePageLines ?? null, handoffMaxTurns: runs[0].handoffMaxTurns ?? null, handoffEvidence: runs[0].handoffEvidence ?? false, probeRegressionGate: runs[0].probeRegressionGate ?? false, handoffProbeGate: runs[0].handoffProbeGate ?? false,
     blocks: runs.length, distinctTasks: reports[0].cases, attemptsPerStrategy: selected.attempts, latencyMetric,
     inputDigests: reports.map(report => report.inputDigest), totals, comparisons, candidateModelUse,
     costSavingVersusStrong: saving, latencyRatioVersusStrong: latencyRatio,

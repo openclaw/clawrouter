@@ -417,3 +417,20 @@ test('analysis retains per-block arm offsets without changing matched protocol o
     assert.throws(() => analyzePairRun(runs[0]), /invalid_pair_run/);
   }
 });
+
+
+test('source paging separates repeat protocols and rejects invalid or unsupported values', () => {
+  const runs = repeats();
+  for (const run of runs) { run.policy = 'matched-handoff'; run.executor = 'interactive'; }
+  assert.equal(analyzePairRepeats(runs).sourcePageLines, null);
+  runs[0].sourcePageLines = 200;
+  assert.throws(() => analyzePairRepeats(runs), /mismatched_pair_protocol/);
+  runs[1].sourcePageLines = 200;
+  assert.equal(analyzePairRepeats(runs).sourcePageLines, 200);
+  assert.equal(analyzePairRun(runs[0]).sourcePageLines, 200);
+  for (const value of [0, -1, 401, 1.5, '200', false]) {
+    assert.throws(() => analyzePairRun({ ...runs[0], sourcePageLines: value }), /invalid_pair_run/);
+  }
+  for (const policy of ['scope', 'architect']) assert.throws(() => analyzePairRun({ ...runs[0], policy }), /invalid_pair_run/);
+  assert.throws(() => analyzePairRun({ ...runs[0], executor: 'single-draft' }), /invalid_pair_run/);
+});

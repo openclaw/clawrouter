@@ -725,6 +725,23 @@ acceptance failures and then describe the same tasks as held out.
 Literal source inspection reports `queryMatched: false` with no replacement source when a query has no match. Search text is literal; use a shorter query or an explicit line number after a miss.
 
 
+### Bounded source pages for interactive benchmarks
+
+Set `FUSION_SOURCE_PAGE_LINES=200` (API: `sourcePageLines: 200`) to limit initial
+source, handoff source, and each read window to 200 lines per file. Use literal
+search to locate code and explicit `file.ts:start-end` reads to inspect later
+pages. Each read retains its starting line, total line count, and truncation
+flag. Search keeps its existing match limits; paging is not a token-budget
+estimate or permission to weaken the spending guard.
+
+The option accepts integers from 1 through 400. It is available only for the
+interactive edit-handoff, completion-handoff, and matched-handoff
+policies, with the same setting applied to every comparison arm. Unset retains
+existing behavior. Receipts include the setting, and repeat analysis rejects
+mixed page sizes or paged/unpaged runs. A changed setting needs a new comparison;
+no model-quality gain has been measured for paging.
+
+
 ## Accounting cleanup evaluation task
 
 `benchmarks/fusion/cleanup-error-workloads.json` adds a pinned real repair for
