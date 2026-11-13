@@ -19,6 +19,20 @@ function analysisMetric({ latencyMetric = 'elapsedMs' } = {}) {
 
 const duration = (rows, metric) => rows.every(row => money(row[metric])) ? sum(rows.map(row => row[metric])) : null;
 
+function failureSignals(rows, receipts) {
+  const failed = rows.filter(row => row.score === 0);
+  return {
+    visiblePassFailures: failed.filter(row => row.publicPassed === true).length,
+    falseAccepts: failed.filter(row => row.outcome === 'submitted' && row.publicPassed === true).length,
+    acceptancePassesWithoutSubmission: failed.filter(row => {
+      const receipt = receipts.find(receipt => receipt.taskId === row.taskId);
+      return typeof row.outcome === 'string' && row.outcome !== 'submitted'
+        && row.verdict?.passed === true && row.verdict.tests === receipt.oracleTests
+        && row.verdict.skipped === receipt.oracleSkipped;
+    }).length,
+  };
+}
+
 
 function modelUse(runs, candidate) {
   const result = { cheapOnlyAttempts: 0, strongOnlyAttempts: 0, mixedAttempts: 0,
@@ -102,7 +116,8 @@ export function analyzePairRun(run, options) {
     const rows = [...cases.values()].map(entry => entry.rows.get(strategy));
     return { strategy, solved: rows.reduce((total, row) => total + row.score, 0),
       costMicros: sum(rows.map(row => row.costMicros)), calls: sum(rows.map(row => row.calls)),
-      elapsedMs: duration(rows, 'elapsedMs'), agentElapsedMs: duration(rows, 'agentElapsedMs') };
+      elapsedMs: duration(rows, 'elapsedMs'), agentElapsedMs: duration(rows, 'agentElapsedMs'),
+      ...failureSignals(rows, run.receipts) };
   });
   const cheap = totals.find(row => row.strategy === 'cheap'), strong = totals.find(row => row.strategy === 'strong');
   const selected = totals.find(row => row.strategy === candidate);
@@ -181,7 +196,7 @@ export function analyzePairRepeats(runs, options) {
     return { strategy, solved: sum(rows.map(row => row.score)), attempts: rows.length,
       costMicros: sum(rows.map(row => row.costMicros)), elapsedMs: duration(rows, 'elapsedMs'),
       agentElapsedMs: duration(rows, 'agentElapsedMs'),
-      falseAccepts: rows.filter(row => row.publicPassed === true && row.score === 0).length };
+      ...failureSignals(rows, runs[0].receipts) };
   });
   const comparisons = ['cheap', 'strong'].map(reference => {
     const blocks = reports.map(report => report.comparisons.find(row => row.reference === reference));

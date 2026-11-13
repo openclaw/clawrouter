@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Distinguish submitted Fusion benchmark failures from budget stops and passing unsubmitted patches without changing scores or pilot gates.
+
 - Allow Fusion pair analysis to compare agent execution time explicitly, keeping independent grading out of latency ratios and dominance checks.
 
 - Exclude incomplete, filtered, refused, or tool-calling Fusion adviser responses from synthesis while retaining their usage accounting.

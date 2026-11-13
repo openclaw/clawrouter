@@ -22,6 +22,13 @@ Predeclare the metric before a comparison; slow hidden timeout tests must not
 be treated as agent execution. Older receipts lack the phase measurements and
 cannot reconstruct them from total elapsed time.
 
+Failure diagnostics distinguish `visiblePassFailures` (a visible pass but zero
+final score), `falseAccepts` (a submitted visible-pass candidate with zero final
+score), and `acceptancePassesWithoutSubmission` (an unsubmitted attempt whose
+independent grade matches the qualified test count and passes). A passing
+partial patch does not change its zero score or the pilot gate. Older receipts
+without `outcome` cannot establish submission and count only in the first metric.
+
 Draft refinement skips verification when a response applies no patch. It tells
 the next attempt whether to shorten truncated output or repair invalid edit
 anchors, while retaining the current source and the same three-attempt ceiling.
@@ -914,7 +921,7 @@ One matched development trial with the explicit API contract produced:
 | --- | --- | --- | --- | --- |
 | GPT-6 Luna | 17/18 | 17 | $0.022631 | 64.569 s |
 | GPT-6.1 Sol | 18/18 | 7 | $0.113941 | 59.246 s |
-| Luna → Sol | 18/18 | 6 | $0.037212 | 39.968 s |
+| Sol → Luna | 18/18 | 6 | $0.037212 | 39.968 s |
 
 All arms used a 24-call shared limit, 4096 output tokens per call and a
 480-second deadline. Luna used no reasoning; Sol used medium reasoning.
@@ -959,7 +966,7 @@ Qualify the exact manifest before reuse. Do not reveal the reference or
 independent acceptance tests to the repair model.
 
 One controlled development block used GPT-6 Luna with reasoning disabled,
-GPT-6.1 Sol with medium reasoning, and an edit handoff from Luna to Sol. Each
+GPT-6.1 Sol with medium reasoning, and an edit handoff from Sol to Luna. Each
 arm had 24 shared calls, 4096 output tokens per call, an eight-minute deadline
 and a $1 cap. The mixed arm received original-source handoff evidence and the
 probe regression gate. The runner was pinned to
@@ -969,7 +976,7 @@ probe regression gate. The runner was pinned to
 | --- | --- | --- | --- | --- |
 | Luna only | 26/26 | 8 | $0.006637 | 35.812 s |
 | Sol only | 26/26 | 9 | $0.103371 | 68.604 s |
-| Luna → Sol | 26/26 | 11 | $0.033435 | 54.748 s |
+| Sol → Luna | 26/26 | 11 | $0.033435 | 54.748 s |
 
 The mixed arm used both models. It cost 67.7% less than Sol alone, but Luna
 alone solved the same task at one fifth of the mixed cost and in less time.
@@ -982,3 +989,44 @@ calls settled. Agent time excludes independent grading: the first arm's cold
 grade took 46.045 seconds, while later grades took about one second each.
 Including that setup in only the first arm would reverse the latency ranking.
 Keep agent time and grading time separate when comparing these results.
+
+
+## Two-task confirmation: cheaper, still below the reliability gate
+
+Two matched blocks on new historical Gemini SSE negotiation and managed
+observation-loss repairs used runner revision
+`77a1db776be0c3e6f909bb0ec447f44d76b873fc`. The policy and instructions were
+frozen before inference. These are two distinct development tasks repeated
+twice, not four independent tasks or a public-endpoint benchmark.
+
+Each arm had 24 calls, 4096 output tokens per call, 480 seconds and a $0.75
+ceiling. Models were `openai/gpt-6-luna` without reasoning and
+`openai/gpt-6.1-sol` with medium reasoning. The edit handoff ran Sol first, then Luna, retaining source
+and tool evidence; all arms used pinned regression probes. Costs include all
+191 calls, including unsuccessful attempts. Agent time excludes final grading.
+
+| Arm | Completed repairs / 4 | Cost (USD) | Agent time |
+| --- | ---: | ---: | ---: |
+| Luna | 0/4 | $0.208916 | 319.719 s |
+| Sol | 2/4 | $1.146421 | 281.385 s |
+| Sol → Luna | 2/4 | $0.487105 | 307.260 s |
+
+Sol and the handoff each completed the streaming task twice; Luna completed
+neither attempt. Neither Sol nor the handoff completed the lifecycle task in
+either block. The first block's Sol and handoff candidates passed their own
+checks but missed the same independent regression. In the second block, Sol
+hit the budget guard with a patch that passed independent acceptance but had
+not passed its pinned probes or submitted. The handoff hit the turn limit and
+failed independent acceptance. Those attempts retain zero scores.
+
+The handoff matched Sol's completed-repair count at 57.51% lower cost and
+9.20% more agent time. All four handoff attempts called both models in that order. This is a
+repeatable cost observation on the streaming task, not evidence of better
+quality than Sol. The aggregate 50% completion rate fails the predeclared 75%
+pilot threshold. No production or routing defaults change.
+
+The completed cohort cost $1.842442. Treat the remaining weakness as a
+verification and bounded-completion problem: visible probes can miss contract
+requirements, and a correct partial patch still needs to finish within budget.
+Any changed stop rule or verification policy needs fresh matched controls;
+rescoring these attempts as successes would invalidate this comparison.

@@ -218,10 +218,31 @@ test('false accepts include a passing verdict with mismatched qualified test cou
   const runs = repeats();
   const rejected = runs[1].records.find(row => row.strategy === 'scope');
   rejected.score = 0;
+  rejected.outcome = 'submitted';
   rejected.verdict.tests = 1;
   const report = analyzePairRepeats(runs);
   assert.equal(report.totals.find(row => row.strategy === 'scope').falseAccepts, 1);
   assert.equal(report.pilotScreen.passed, false);
+});
+
+test('submission failures stay distinct from budget stops and passing partial patches', () => {
+  const runs = repeats([[0, 1, 0], [0, 1, 0]]);
+  const rows = runs.flatMap(run => run.records.filter(row => row.strategy === 'scope'));
+  rows[0].outcome = 'submitted';
+  rows[1].outcome = 'turn_limit';
+  rows[2].outcome = 'budget'; rows[2].verdict.passed = true;
+  // An older receipt without an outcome cannot establish submission.
+  const signals = report => report.totals.find(row => row.strategy === 'scope');
+  assert.equal(signals(analyzePairRun(runs[0])).falseAccepts, 1);
+  assert.equal(signals(analyzePairRun(runs[1])).falseAccepts, 0);
+  const result = signals(analyzePairRepeats(runs));
+  assert.equal(result.visiblePassFailures, 4);
+  assert.equal(result.falseAccepts, 1);
+  assert.equal(result.acceptancePassesWithoutSubmission, 1);
+  assert.equal(result.solved, 0);
+  assert.equal(analyzePairRepeats(runs).pilotScreen.passed, false);
+  rows[2].verdict.tests = 1;
+  assert.equal(signals(analyzePairRepeats(runs)).acceptancePassesWithoutSubmission, 0);
 });
 
 test('an arm win from another single-model sample is not counted as a mixed-model win', () => {
