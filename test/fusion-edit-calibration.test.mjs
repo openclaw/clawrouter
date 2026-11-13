@@ -15,9 +15,28 @@ test('calibration source and expected outputs stay out of the grading prompt', (
       assert.equal(user.instruction, task.instruction);
       assert.equal('expected' in user, false);
       assert.equal(request.max_tokens, 1024);
-      assert.ok(user.source[0].numberedSource.startsWith('1|'));
+      if (format === 'line-range') assert.ok(user.source[0].numberedSource.startsWith('1|'));
+      else assert.deepEqual(user.source, task.files);
     }
   }
+});
+
+test('legacy numbered presentation remains explicit and recorded', async () => {
+  const request = calibrationRequest(literal, 'search-replace', { sourcePresentation: 'numbered' });
+  const source = JSON.parse(request.messages[1].content).source[0];
+  assert.ok(source.numberedSource.startsWith('1|'));
+  assert.equal('content' in source, false);
+  const seen = [];
+  const state = await runCalibration(async (body) => {
+    seen.push(JSON.parse(body.messages[1].content).source[0]);
+    return response({});
+  }, { sourcePresentation: 'numbered' });
+  assert.equal(state.settings.sourcePresentation, 'numbered');
+  assert.ok(seen.every(file => file.numberedSource.startsWith('1|')));
+  assert.throws(() => calibrationRequest(literal, 'search-replace', { sourcePresentation: 'unknown' }), /invalid_calibration_source_presentation/);
+  let calls = 0;
+  await assert.rejects(runCalibration(async () => { calls++; }, { sourcePresentation: 'unknown' }), /invalid_calibration_source_presentation/);
+  assert.equal(calls, 0);
 });
 
 test('both existing executors apply a precise requested edit', () => {
@@ -76,6 +95,7 @@ test('runner rotates formats, uses paired seeds, and records all twelve calls', 
     return response({});
   });
   assert.equal(state.complete, true);
+  assert.equal(state.settings.sourcePresentation, 'format-native');
   assert.equal(state.records.length, 12);
   assert.deepEqual(calls.slice(0, 4).map(row => row.format), ['search-replace', 'line-range', 'line-range', 'search-replace']);
   assert.equal(calls[0].seed, calls[1].seed);
