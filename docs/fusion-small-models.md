@@ -324,7 +324,8 @@ change the per-request deadline independently of sampling. Defaults remain
 records the effective value in `settings.requestTimeoutMs`; its trial and
 campaign deadlines still apply. Programmatic callers pass `requestTimeoutMs`
 to `runLocalRepository` or `localActionRequest`. Declare a changed deadline as
-part of the experiment protocol.
+part of the experiment protocol. An expired request fails its trial and retains
+unknown usage; unrelated transport failures still stop the campaign.
 
 A conservative input-byte bound rejects oversized contexts before dispatch.
 Truncation, context limits and trial deadlines produce unsuccessful trial rows;

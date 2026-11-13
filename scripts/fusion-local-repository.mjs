@@ -72,17 +72,21 @@ export async function localActionRequest({ endpoint, model, pin, body, signal, s
     throw new Error('provider_context_limit');
   }
   await onDispatch();
+  const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(timeout)]);
   let response;
   try { response = await fetcher(base + '/api/chat', { method: 'POST', redirect: 'error',
-    headers: { 'content-type': 'application/json' }, signal: AbortSignal.any([signal, AbortSignal.timeout(timeout)]),
+    headers: { 'content-type': 'application/json' }, signal: requestSignal,
     body: JSON.stringify({ model, stream: false, keep_alive: '5m', ...(pin.thinking ? { think: false } : {}),
       format: body.response_format.json_schema.schema, messages: body.messages,
       options: { num_predict: body.max_tokens, num_ctx: localRepositorySettings.contextTokens,
         ...(profile !== 'legacy' ? groundedSampling : { temperature: localRepositorySettings.temperature }), seed } }) }); }
-  catch (error) { if (signal.aborted) throw new Error('provider_local_deadline'); throw error; }
+  catch (error) { if (requestSignal.aborted) throw new Error('provider_local_deadline'); throw error; }
   if (!response.ok) throw new Error('local_transport_failed');
   let value;
-  try { value = await response.json(); } catch { throw invalidLocalResponse('unreadable_body'); }
+  try { value = await response.json(); } catch {
+    if (requestSignal.aborted) throw new Error('provider_local_deadline');
+    throw invalidLocalResponse('unreadable_body');
+  }
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw invalidLocalResponse('invalid_envelope');
   const content = value.message?.content;
   if (typeof content === 'string' && /this content can[’']t be shown|safety refusal/i.test(content)) throw new Error('provider_safety_notice');

@@ -386,3 +386,30 @@ test('invalid campaign request deadlines fail before preflight or output creatio
     await assert.rejects(readFile(join(options.out, 'local-repository.json')), { code: 'ENOENT' });
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test('request timeouts fail only their trials and retain unknown usage', async t => {
+  const { root, options } = await fixture();
+  t.mock.method(AbortSignal, 'timeout', () => AbortSignal.abort(new DOMException('Expired', 'TimeoutError')));
+  try {
+    const result = await runLocalRepository({ ...options, requestTimeoutMs: 1,
+      fetcher: async (_url, request) => { request.signal.throwIfAborted(); },
+      agent: async (_task, _image, _strategy, id, _config, invoke) => {
+        await invoke(id, roles.strong, body, new AbortController().signal);
+      }, grade: async () => assert.fail('must not grade a timed-out request') });
+    assert.equal(result.complete, true);
+    assert.equal(result.records.length, 3);
+    assert.ok(result.records.every(row => row.outcome === 'deadline' && row.score === 0 && row.usageIncomplete));
+    assert.ok(result.calls.every(row => row.dispatched && row.status === 'failed' && row.inputTokens === null));
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('request deadlines also cover reading the response body', async t => {
+  const timeout = new AbortController();
+  t.mock.method(AbortSignal, 'timeout', () => timeout.signal);
+  await assert.rejects(localActionRequest({ endpoint: 'http://127.0.0.1:11435',
+    model: pins[0].model, pin: pins[0], body, signal: new AbortController().signal,
+    fetcher: async (_url, request) => ({ ok: true, json: async () => {
+      timeout.abort(new DOMException('Expired', 'TimeoutError'));
+      request.signal.throwIfAborted();
+    } }) }), /provider_local_deadline/);
+});
