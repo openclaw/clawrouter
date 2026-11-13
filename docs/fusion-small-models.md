@@ -414,7 +414,15 @@ test the wrong property or reject a correct repair; these guards do not certify
 test quality. No quality, cost or latency improvement is established. Before a
 gain claim, compare against equal-call sampling/retry and measure generated
 probes against accepted and rejected repairs without feeding grading results
-back into inference.
+back into inference. After a successful policy run, the runner grades both
+candidates independently and replays the generated probe on the pinned accepted
+reference in a fresh sandbox. `probeDiagnostics` records candidate acceptance,
+reference-probe status and diagnostic elapsed time. Candidate source and probe
+text remain in memory and are consumed once. Diagnostic errors stay unknown;
+they neither replace the selected repair nor alter its final acceptance score.
+Diagnostic time is reported separately and excluded from trial elapsed time,
+so it does not penalize the policy in latency comparisons. No additional model
+calls are made.
 
 Use the existing repository agent with two fixed-model controls and one
 architect policy. The architect spends one call on a strong-model source plan;
