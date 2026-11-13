@@ -62,7 +62,7 @@ test("fusion runs advisers concurrently, tolerates failures, and injects untrust
     await Promise.resolve();
     active--;
     return model.startsWith("local/")
-      ? Response.json({ choices: [{ message: { content: "local proposal" } }] })
+      ? Response.json({ choices: [{ finish_reason: "stop", message: { content: "local proposal" } }] })
       : new Response("unavailable", { status: 503 });
   });
   assert.equal(peak, 2);
@@ -78,6 +78,52 @@ test("fusion runs advisers concurrently, tolerates failures, and injects untrust
 
   const reasoningConfig = normalizeFusionConfig({ aggregatorModel: "openai/gpt-5.4" });
   assert.equal(buildAggregatorBody({ messages: [], temperature: 0.7 }, reasoningConfig, []).temperature, 0.7);
+});
+
+for (const [name, choice, extra] of [
+  ["truncated", { finish_reason: "length" }],
+  ["filtered", { finish_reason: "content_filter" }],
+  ["tool request", { finish_reason: "tool_calls" }],
+  ["function request", { finish_reason: "function_call" }],
+  ["missing completion reason", {}],
+  ["null completion reason", { finish_reason: null }],
+  ["unknown completion reason", { finish_reason: "unknown" }],
+  ["refusal with stop", { finish_reason: "stop", message: { refusal: "synthetic refusal" } }],
+  ["tool call with stop", { finish_reason: "stop", message: { tool_calls: [{ id: "synthetic" }] } }],
+  ["function call with stop", { finish_reason: "stop", message: { function_call: { name: "synthetic" } } }],
+  ["provider error with stop", { finish_reason: "stop" }, { error: { message: "synthetic error" } }],
+]) {
+  test(`fusion rejects ${name} adviser text after consuming usage`, async () => {
+    const config = normalizeFusionConfig({ adviserModels: ["local/incomplete"] });
+    const observed = observeUsage(Response.json({
+      ...extra,
+      choices: [{ ...choice, message: { content: "unqualified draft", ...choice.message } }],
+      usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 },
+    }));
+    let calls = 0;
+    const result = await collectFusionProposals(config, { messages: [] }, async () => {
+      calls++;
+      return observed.response;
+    });
+    assert.equal(calls, 1, "rejected advice must not trigger another inference");
+    assert.deepEqual(result.proposals, []);
+    assert.deepEqual(result.failedModels, ["local/incomplete"]);
+    const usage = await observed.result;
+    assert.equal(usage.delivery, "complete");
+    assert.equal(usage.tokens?.total, 10);
+    await observed.retired;
+  });
+}
+
+test("fusion accepts completed adviser text parts with empty optional metadata", async () => {
+  const config = normalizeFusionConfig({ adviserModels: ["local/complete"] });
+  const result = await collectFusionProposals(config, { messages: [] }, async () => Response.json({
+    choices: [{ finish_reason: "stop", message: {
+      content: [{ type: "text", text: "complete draft" }], refusal: null, function_call: null, tool_calls: [],
+    } }],
+  }));
+  assert.deepEqual(result.proposals, [{ model: "local/complete", content: "complete draft" }]);
+  assert.deepEqual(result.failedModels, []);
 });
 
 test("fusion fails open when adviser bodies stall or exceed their byte bound", async () => {
@@ -100,7 +146,7 @@ test("fusion fails open when adviser bodies stall or exceed their byte bound", a
 
   const oversizedConfig = normalizeFusionConfig({ adviserModels: ["local/oversized"], maxProposalChars: 256 });
   const oversized = await collectFusionProposals(oversizedConfig, { messages: [] }, async () => Response.json({
-    choices: [{ message: { content: "x".repeat(32_000) } }],
+    choices: [{ finish_reason: "stop", message: { content: "x".repeat(32_000) } }],
   }));
   assert.deepEqual(oversized.proposals, []);
   assert.deepEqual(oversized.failedModels, ["local/oversized"]);

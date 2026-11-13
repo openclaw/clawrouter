@@ -28,7 +28,7 @@ test("Fusion settles the final body estimate while retaining both original reser
   env.USAGE_QUEUE = { send: async (event) => events.push(event) };
   t.mock.method(globalThis, "fetch", async (_url, init) => {
     bodies.push(JSON.parse(init.body));
-    return Response.json({ choices: [{ message: { content: "short fixture answer" } }] });
+    return Response.json({ choices: [{ finish_reason: "stop", message: { content: "short fixture answer" } }] });
   });
   const response = await handler.fetch(new Request("https://router.example/v1/chat/completions", {
     method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" }, body: JSON.stringify(body),
@@ -146,7 +146,7 @@ test("Fusion injected post-reserve route containment failure releases the origin
     // Labelled containment fault, not a normal post-paid capacity decision.
     Object.defineProperty(transforms, "renameFields", { ...descriptor, value: [...descriptor.value,
       { from: "fixture_field", to: "fixture_changed", paths: [], upstreams: [route.model.upstream] }] });
-    return Response.json({ choices: [{ message: { content: "fixture adviser" } }] });
+    return Response.json({ choices: [{ finish_reason: "stop", message: { content: "fixture adviser" } }] });
   });
   try {
     const response = await track(handler.fetch(new Request("https://router.example/v1/chat/completions", {
