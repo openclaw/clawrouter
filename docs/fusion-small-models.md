@@ -858,6 +858,25 @@ check. It is not a new holdout and must not be pooled with the original variant
 as an independent task. The original native test file cannot simply become a
 visible suite: some of its old fixtures and limits reject the required repair.
 
+### Stream and lifecycle confirmation tasks
+
+`benchmarks/fusion/stream-lifecycle-workloads.json` adds two historical repairs
+outside the quota snapshot case. These remain coordinator-selected development
+tasks. Their initial model exposure must be reported separately from repeats.
+
+| Task | Original tests, both revisions | Baseline acceptance failures | Reference acceptance |
+| --- | --- | --- | --- |
+| Gemini SSE negotiation | 12/12 | 2/15 | 15/15 |
+| Managed observation loss | 10/10 | 10/21 | 21/21 |
+
+Qualification runs real query-routing and managed-job fixtures, with no skipped
+or cancelled tests. The stream task preserves ordinary query transport while
+requiring exact SSE negotiation before upstream dispatch. The lifecycle task
+preserves billing and settlement while freezing a lost observation once,
+without replaying a create or inventing a terminal execution outcome. Its
+instruction names the new metadata and positional callback arguments explicitly.
+Neither qualification result establishes a model or fusion gain.
+
 ### Bounded credential-ingress repair
 
 `benchmarks/fusion/raw-ingress-workloads.json` adds a historical repair

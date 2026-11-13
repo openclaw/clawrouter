@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "gemini-sse-negotiation",
+      "split": "development",
+      "base": "04b410e6a75f775503ed1cd14367569d758316ed",
+      "oracle": "e166a8db311953924c59cb021250d9434f5314b7",
+      "editPaths": [
+        "worker/proxy-query.ts",
+        "worker/proxy.ts"
+      ],
+      "visibleTests": [
+        "worker/test/query-transport-runtime.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/google-stream-contract.test.mjs"
+      ],
+      "instruction": "For endpoints whose response_format is google.stream_generate_content and streaming is sse, make the actual upstream request negotiate SSE. After combining caller query parameters with configured defaults, inject exactly one alt=sse if alt is absent; accept a single exact lowercase alt=sse; reject every other value (including empty and uppercase) and every repeated alt before upstream dispatch with HTTP 400 and error code unsupported_stream_format. Apply this to both native and manifest routes. Preserve other query parameters, request bodies, authentication protections, and final streaming usage accounting. Leave unary and other endpoint formats unchanged."
+    },
+    {
+      "id": "managed-observation-loss",
+      "split": "development",
+      "base": "181d427a76d246eff6c86b0f135e0f0470a75b02",
+      "oracle": "d3c91747625e4517fb9913bcba69d8a430a9fe0e",
+      "editPaths": [
+        "worker/background-store.ts",
+        "worker/managed-lifecycle-types.ts",
+        "worker/managed-predictions.ts",
+        "worker/response-controls.ts",
+        "worker/responses-scope.ts"
+      ],
+      "visibleTests": [
+        "worker/test/managed-background.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/managed-background.test.mjs",
+        "worker/test/managed-observation-loss.test.mjs"
+      ],
+      "instruction": "Propagate the optional observationUnavailable field from managed observations through public controls, collector callbacks and the durable background state. Preserve existing positional arguments and add observationUnavailable as the optional sixth argument of BackgroundStore.observeManaged(id, upstreamId, status, statusCode, attempt, observationUnavailable); the collector accept callback carries it as an optional fourth argument after id, status and statusCode. Its permitted values are expired_or_unknown, deleted and canceled_or_deleted. Accept it only for a matching live bound job with prediction status processing and a valid successful HTTP status; stale collector attempts must not affect state. Atomically persist managed.observationUnavailable and lastError=observation_unavailable with exactly one billable uncertainty receipt, retaining managed.terminal=null rather than inventing execution failure or a refund. Preserve the admitted fixed cost, immutable receipts, transactional rollback, settlement recovery after lost acknowledgments and restart, and genuine terminal outcomes that arrived first. Once visibility is lost, stop polling and follow-ups, reject later controls and idempotent create replays with HTTP 410, error code prediction_observation_unavailable and Cache-Control: no-store, without more upstream calls or resubmission. A cancel preflight that detects loss must not send cancellation. A qualified native cancel/delete acknowledgment of HTTP 204 with canceled_or_deleted stays bodyless 204 on that first response; subsequent controls return the frozen 410. Do not activate currently disabled managed providers or alter unrelated ownership and budget checks."
+    }
+  ]
+}
