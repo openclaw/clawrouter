@@ -374,12 +374,14 @@ async function start(id: string, modelId = models[0], options: { apiKey?: string
   const context: Context = { systemPrompt: "Synthetic instructions", messages: convertToLlm(messages),
     tools: options.tools === false ? undefined : [{ name: "lookup", description: "Synthetic lookup", parameters: { type: "object", properties: {} } }] };
   mark("wrapper");
+  expect(provider.wrapStreamFn).toBeUndefined();
+  expect(provider.wrapSimpleCompletionStreamFn).toBeUndefined();
   const wrap = options.simpleCompletion ? provider.wrapSimpleCompletionStreamFn : provider.wrapStreamFn;
-  const wrapped = wrap?.({ provider: "abliteration", modelId, model, streamFn: streamSimple });
-  expect(wrapped).toHaveProperty("preservesGenericCompatibility", true);
+  const selectedStream = wrap?.({ provider: "abliteration", modelId, model, streamFn: streamSimple }) ?? streamSimple;
+  expect(selectedStream).toBe(streamSimple);
   mark("stream");
   started++;
-  return wrapped!(model, context, { apiKey: options.apiKey ?? key(id), maxTokens: 128, reasoning: options.reasoning ?? "high", sessionId: "synthetic-cache-affinity", cacheRetention: "long", signal: options.signal });
+  return selectedStream(model, context, { apiKey: options.apiKey ?? key(id), maxTokens: 128, reasoning: options.reasoning ?? "high", sessionId: "synthetic-cache-affinity", cacheRetention: "long", signal: options.signal });
 }
 
 describe("actual Abliteration static catalog and replay through Worker and SQLite", () => {
@@ -389,7 +391,7 @@ describe("actual Abliteration static catalog and replay through Worker and SQLit
     expect(result.stopReason, result.errorMessage).toBe("stop");
     expect(result.content).toContainEqual({ type: "text", text: "synthetic-answer" });
   });
-  caseTest("T19", "runs the actual simple-completion tool/reasoning hook", async () => {
+  caseTest("T19", "runs the actual simple-completion tool/reasoning path", async () => {
     const result = await resultOf(await start("simple", models[0], { simpleCompletion: true }));
     expect(result.stopReason, result.errorMessage).toBe("stop");
   });
