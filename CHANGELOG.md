@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Pin local Fusion server and prompt-rendering metadata, and reject completed comparisons when those inputs change during a run.
+
 - Retain incomplete Fusion pair acceptance receipts and completed agent diagnostics while stopping further paid arms.
 
 - Preserve access to later Fusion repository search matches with explicit truncation, continuation lines, and validated search ranges.

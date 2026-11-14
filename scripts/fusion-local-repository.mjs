@@ -211,7 +211,7 @@ export async function runLocalRepository({ repo, qualificationPath, out, sourceS
     state.complete = true; await checkpoint(); return state;
   } catch (error) {
     state.failure = error.message === 'provider_safety_notice' ? 'provider_safety_notice' : 'local_repository_incomplete';
-    state.failureCode = ['local_transport_failed', 'invalid_local_response', 'local_call_limit', 'invalid_local_grade', 'campaign_deadline', 'model_changed']
+    state.failureCode = ['local_transport_failed', 'invalid_local_response', 'local_call_limit', 'invalid_local_grade', 'campaign_deadline', 'model_changed', 'local_runtime_changed', 'unqualified_local_runtime']
       .includes(error.message) ? error.message : 'other';
     await checkpoint();
     if (state.failure === 'provider_safety_notice') console.error("Provider safety notice: This content can't be shown. No retry or fallback.");

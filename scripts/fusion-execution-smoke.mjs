@@ -114,7 +114,24 @@ export async function localGenerator(models, endpoint = 'http://127.0.0.1:11435'
     if (!response.ok) throw new Error('local_transport_failed');
     return response.json();
   };
-  const tags = await request('/api/tags');
+  const serverVersion = async () => {
+    const version = (await request('/api/version'))?.version;
+    if (typeof version !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._+-]{0,127}$/.test(version)) throw new Error('unqualified_local_runtime');
+    return version;
+  };
+  const runtime = (version, info) => {
+    const identity = value => {
+      if (value == null) return null;
+      if (typeof value !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9._+-]{0,127}$/.test(value)) throw new Error('unqualified_local_runtime');
+      return value;
+    };
+    if (typeof info?.template !== 'string' || !info.template.trim() || Buffer.byteLength(info.template) > 1024 * 1024) {
+      throw new Error('unqualified_local_runtime');
+    }
+    return { serverVersion: version, renderer: identity(info.renderer), parser: identity(info.parser),
+      templateSource: identity(info.template_source), templateSha256: hash(info.template) };
+  };
+  const version = await serverVersion(), tags = await request('/api/tags');
   const pins = [];
   for (const model of models) {
     const matches = tags.models?.filter(row => row.name === model), row = matches?.[0];
@@ -122,11 +139,22 @@ export async function localGenerator(models, endpoint = 'http://127.0.0.1:11435'
       || !Number.isSafeInteger(row.size) || row.size <= 0) throw new Error('unqualified_local_model');
     const info = await request('/api/show', { model });
     if (info.remote_model || info.remote_host) throw new Error('local_model_required');
-    pins.push({ model, digest: row.digest, bytes: row.size, thinking: info.capabilities?.includes('thinking') === true });
+    pins.push({ model, digest: row.digest, bytes: row.size, thinking: info.capabilities?.includes('thinking') === true,
+      runtime: runtime(version, info) });
   }
   return { pins, async verifyPins() {
     const current = await request('/api/tags');
-    if (pins.some(pin => current.models?.find(row => row.name === pin.model)?.digest !== pin.digest)) throw new Error('model_changed');
+    for (const pin of pins) {
+      const matches = current.models?.filter(row => row.name === pin.model), row = matches?.[0];
+      if (matches?.length !== 1 || row.remote_model || row.remote_host || row.digest !== pin.digest || row.size !== pin.bytes) throw new Error('model_changed');
+    }
+    const currentVersion = await serverVersion();
+    for (const pin of pins) {
+      const info = await request('/api/show', { model: pin.model });
+      if (info.remote_model || info.remote_host) throw new Error('local_model_required');
+      if (!isDeepStrictEqual(runtime(currentVersion, info), pin.runtime)
+        || (info.capabilities?.includes('thinking') === true) !== pin.thinking) throw new Error('local_runtime_changed');
+    }
   }, async generate(model, prompt, seed) {
     const pin = pins.find(row => row.model === model);
     const response = await request('/api/chat', { model, stream: false, keep_alive: '5m',
