@@ -59,7 +59,7 @@ export function nvidiaPublicCatalogRequests(inferenceBaseUrl: string, signal: Ab
     unsupported();
   }
   const request = (target: string) => new Request(target, {
-    method: "GET", headers: { accept: "application/json" }, credentials: "omit", redirect: "error", signal,
+    method: "GET", headers: { accept: "application/json" }, credentials: "omit", redirect: "manual", signal,
   });
   return { inventory: request(INVENTORY_URL), featured: request(FEATURED_URL) };
 }
@@ -113,6 +113,12 @@ export function parseNvidiaPublicCatalog(inventory: unknown, featured: unknown, 
 export async function readNvidiaPublicCatalog(
   inventoryResponse: Response, featuredResponse: Response, signal: AbortSignal, permittedModelIds: ReadonlySet<string>,
 ): Promise<NvidiaPublicModel[]> {
+  // A manual redirect must never become the empty-inventory metadata exception.
+  const pair = [inventoryResponse, featuredResponse];
+  if (pair.some(response => response.redirected || response.status >= 300 && response.status < 400)) {
+    for (const response of pair) void response.body?.cancel().catch(() => undefined);
+    invalid();
+  }
   const [inventory, featured] = await Promise.allSettled([
     readNativeJson(inventoryResponse, signal, MAX_BYTES, inventoryIds, invalid),
     readNativeJson(featuredResponse, signal, MAX_BYTES, featuredModels, invalid),

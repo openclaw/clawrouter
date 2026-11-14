@@ -40,15 +40,19 @@ endpoints:
 models:
   entries:
     - id: volcengine-plan/ark-code-latest
+      displayName: "Ark Code (Latest)"
       upstream: ark-code-latest
       capabilities: [llm.chat]
     - id: volcengine-plan/deepseek-v4-pro
+      displayName: "DeepSeek V4 Pro"
       upstream: deepseek-v4-pro
       capabilities: [llm.chat]
     - id: volcengine-plan/deepseek-v4-flash
+      displayName: "DeepSeek V4 Flash"
       upstream: deepseek-v4-flash
       capabilities: [llm.chat]
     - id: volcengine-plan/doubao-seed-2.1-turbo
+      displayName: "Doubao Seed 2.1 Turbo"
       upstream: doubao-seed-2.1-turbo
       capabilities: []
       availability:
@@ -60,6 +64,7 @@ models:
           - https://docs.volcengine.com/docs/ark/coding-plan-personal-model-deprecation?lang=zh
     # Keep the selected identity; legacy account access and native alias proof are pending.
     - id: volcengine-plan/glm-5.2
+      displayName: "GLM-5.2"
       upstream: glm-5.2
       capabilities: []
       availability:

@@ -121,7 +121,7 @@ for (const status of ["PROCESSING", "FAILED"]) test(`metadata ${status} performs
   const response = await f.fileCall(); assert.equal(response.status, 409);
   assert.equal(response.headers.get("retry-after"), status === "PROCESSING" ? "5" : null);
   assert.equal((await response.json()).error.code, status === "PROCESSING" ? "managed_file_processing" : "managed_file_failed");
-  assert.equal(f.sent.length, 2); assert.deepEqual(f.state(created).job(), before); assert.equal(bodyBudgetCharged(), 0);
+  assert.equal(f.sent.length, 2); assert.deepEqual(f.state(created).job(), before); await f.drain(); assert.equal(bodyBudgetCharged(), 0);
 });
 
 for (const change of ["caller", "grant"]) test(`fresh ${change} revocation between metadata and download prevents content egress`, async t => {
@@ -139,7 +139,7 @@ for (const change of ["caller", "grant"]) test(`fresh ${change} revocation betwe
   };
   const response = await f.fileCall(); assert.ok([401, 403, 409, 502, 503].includes(response.status), await response.text());
   assert.equal(changed, true, "the authority mutation must commit before this test can prove revocation");
-  assert.equal(f.sent.length, 2); assert.equal(bodyBudgetCharged(), 0);
+  assert.equal(f.sent.length, 2); await f.drain(); assert.equal(bodyBudgetCharged(), 0);
 });
 
 for (const malformed of ["redirect", "wrong-id", "truncated", "oversized", "partial", "html", "wrong-mime", "metadata-oversized"]) test(`file ${malformed} is never delivered or used to refund generation`, async t => {
@@ -153,7 +153,7 @@ for (const malformed of ["redirect", "wrong-id", "truncated", "oversized", "part
     return new Response(media, { status: malformed === "partial" ? 206 : 200, headers: { "content-type": malformed === "html" ? "text/html" : malformed === "wrong-mime" ? "video/webm" : "video/mp4", "content-length": malformed === "truncated" ? "999" : String(media.length) } });
   };
   const response = await f.fileCall(); assert.equal(response.status, 502, await response.clone().text());
-  assert.deepEqual(f.state(created).job(), before); assert.equal(bodyBudgetCharged(), 0);
+  assert.deepEqual(f.state(created).job(), before); await f.drain(); assert.equal(bodyBudgetCharged(), 0);
   assert.ok(f.sent.every(r => new URL(r.url).hostname === "generativelanguage.googleapis.com"));
 });
 
@@ -164,7 +164,7 @@ test("caller cancellation cancels the held source reader and releases file capac
   const pending = f.fileCall(undefined, { signal: controller.signal });
   await Promise.race([ready, pending.then(async response => assert.fail(`file read ended before source entry: ${response.status} ${await response.text()}`))]); controller.abort();
   const response = await pending; assert.equal(response.status, 499); await Promise.resolve();
-  assert.equal(cancel, true); assert.equal(bodyBudgetCharged(), 0); assert.equal(f.sent.length, 2);
+  assert.equal(cancel, true); await f.drain(); assert.equal(bodyBudgetCharged(), 0); assert.equal(f.sent.length, 2);
 });
 
 test("collector qualifies and binds the original selected-origin file before publication", async t => {
@@ -206,7 +206,7 @@ test("file grants must permit both linked endpoints before paid creation", async
 test("canceling returned bytes releases the bounded allocation", async t => {
   const f = await fixture(t); await f.call(path, body({}));
   const response = await f.fileCall(); assert.equal(response.status, 200);
-  assert.ok(bodyBudgetCharged() > 0); await response.body.cancel(); assert.equal(bodyBudgetCharged(), 0);
+  assert.ok(bodyBudgetCharged() > 0); await response.body.cancel(); await f.drain(); assert.equal(bodyBudgetCharged(), 0);
 });
 
 test("another valid credential in the same policy cannot claim the original caller's file", async t => {
@@ -231,5 +231,91 @@ test("metadata cannot reset the one file-delivery deadline", async t => {
   const f = await fixture(t), created = await f.call(path, body({})), before = f.state(created).job();
   f.upstream = () => { f.advance(30_000); return Response.json({ name: "files/" + fileId, state: "ACTIVE" }); };
   const response = await f.fileCall(); assert.equal(response.status, 409);
-  assert.equal(f.sent.length, 2); assert.equal(bodyBudgetCharged(), 0); assert.deepEqual(f.state(created).job(), before);
+  assert.equal(f.sent.length, 2); await f.drain(); assert.equal(bodyBudgetCharged(), 0); assert.deepEqual(f.state(created).job(), before);
+});
+
+async function settledFileFixture(t) {
+  const f = await fixture(t), created = await f.call(path, body({}));
+  assert.equal(created.status, 200); const state = f.state(created); await created.json();
+  await state.alarm(); await f.drain(); const events = await f.events();
+  assert.equal(events.length, 1); assert.equal(events[0].actual_cost_micros, 700);
+  return f;
+}
+
+for (const phase of ["metadata", "download"]) for (const first of ["read", "cancel"]) for (const cleanupRejects of [false, true]) {
+  test(`managed ${phase} abort holds original read and first cleanup (${first}, rejection=${cleanupRejects})`, { timeout: 5000 }, async t => {
+    const f = await settledFileFixture(t); const upstream = f.upstream, caller = new AbortController();
+    const started = Promise.withResolvers(), readAck = Promise.withResolvers(), cancelAck = Promise.withResolvers(), cancelStarted = Promise.withResolvers();
+    let cancels = 0, unlocks = 0, drained = false;
+    const source = new ReadableStream({ pull() { started.resolve(); }, async cancel() {
+      cancels++; cancelStarted.resolve(); await cancelAck.promise; if (cleanupRejects) throw new Error("synthetic cleanup failure");
+    } }, { highWaterMark: 0 });
+    const acquire = source.getReader.bind(source);
+    source.getReader = () => { const reader = acquire(); return {
+      async read() { try { return await reader.read(); } finally { await readAck.promise; } },
+      cancel: reason => reader.cancel(reason), releaseLock() { unlocks++; reader.releaseLock(); },
+    }; };
+    f.upstream = request => phase === "download" && !request.url.includes(":download") ? upstream(request)
+      : new Response(source, { headers: { "content-type": phase === "metadata" ? "application/json" : "video/mp4" } });
+    try {
+      const pending = f.fileCall(undefined, { signal: caller.signal }); await started.promise; caller.abort();
+      const response = await pending; assert.equal(response.status, 499); await response.text(); await cancelStarted.promise;
+      const retirement = f.drain().then(() => { drained = true; });
+      assert.equal(bodyBudgetCharged(), 32 * 1024 * 1024); assert.equal(source.locked, true); assert.equal(cancels, 1);
+      const { BodyLease } = await import("../body-budget.ts"); const contender = new BodyLease();
+      assert.equal(contender.grow(33 * 1024 * 1024), false); contender.release();
+      (first === "read" ? readAck : cancelAck).resolve(); await new Promise(resolve => setImmediate(resolve));
+      assert.equal(drained, false); assert.equal(source.locked, true); assert.equal(bodyBudgetCharged(), 32 * 1024 * 1024);
+      (first === "read" ? cancelAck : readAck).resolve(); await retirement;
+      assert.equal(bodyBudgetCharged(), 0); assert.equal(source.locked, false); assert.equal(unlocks, 1); assert.equal(cancels, 1);
+      assert.equal(f.sent.length, phase === "metadata" ? 2 : 3); assert.equal((await f.events()).length, 1);
+    } finally { readAck.resolve(); cancelAck.resolve(); }
+  });
+}
+
+for (const phase of ["metadata", "download"]) test(`managed ${phase} adapter completion remains owned after original EOF`, { timeout: 5000 }, async t => {
+  const f = await settledFileFixture(t); const caller = new AbortController();
+  const parsed = Promise.withResolvers(), release = Promise.withResolvers(); let drained = false;
+  const method = phase === "metadata" ? "readState" : "readFile", original = f.wrapper[method];
+  f.wrapper[method] = async (...args) => { const value = await original(...args); parsed.resolve(); await release.promise; return value; };
+  try {
+    const pending = f.fileCall(undefined, { signal: caller.signal }); await parsed.promise; caller.abort();
+    const response = await pending; assert.equal(response.status, 499); await response.text();
+    const retirement = f.drain().then(() => { drained = true; });
+    assert.equal(bodyBudgetCharged(), 32 * 1024 * 1024); await new Promise(resolve => setImmediate(resolve)); assert.equal(drained, false);
+    release.resolve(); await retirement; assert.equal(bodyBudgetCharged(), 0);
+    assert.equal(f.sent.length, phase === "metadata" ? 2 : 3); assert.equal((await f.events()).length, 1);
+  } finally { release.resolve(); }
+});
+
+for (const phase of ["metadata", "download"]) test(`managed late ${phase} response keeps capacity until original cleanup`, { timeout: 5000 }, async t => {
+  const f = await settledFileFixture(t); const upstream = f.upstream, caller = new AbortController();
+  const started = Promise.withResolvers(), reply = Promise.withResolvers(), cancelStarted = Promise.withResolvers(), cleanup = Promise.withResolvers();
+  let cancels = 0, drained = false;
+  f.upstream = request => { if (phase === "download" && !request.url.includes(":download")) return upstream(request); started.resolve(); return reply.promise; };
+  const source = new ReadableStream({ async cancel() { cancels++; cancelStarted.resolve(); await cleanup.promise; } }, { highWaterMark: 0 });
+  try {
+    const pending = f.fileCall(undefined, { signal: caller.signal }); await started.promise; caller.abort();
+    const response = await pending; assert.equal(response.status, 499); await response.text();
+    const retirement = f.drain().then(() => { drained = true; }); assert.equal(bodyBudgetCharged(), 32 * 1024 * 1024);
+    reply.resolve(new Response(source, { headers: { "content-type": phase === "metadata" ? "application/json" : "video/mp4" } })); await cancelStarted.promise;
+    assert.equal(drained, false); assert.equal(source.locked, true); assert.equal(bodyBudgetCharged(), 32 * 1024 * 1024);
+    cleanup.resolve(); await retirement;
+    assert.equal(cancels, 1); assert.equal(source.locked, false); assert.equal(bodyBudgetCharged(), 0); assert.equal((await f.events()).length, 1);
+  } finally { reply.resolve(new Response(null)); cleanup.resolve(); }
+});
+
+for (const refusal of ["redirect", "mime"]) test(`managed ${refusal} refusal keeps an unclaimed body charged through cleanup`, { timeout: 5000 }, async t => {
+  const f = await settledFileFixture(t); const upstream = f.upstream;
+  const started = Promise.withResolvers(), cleanup = Promise.withResolvers(); let cancels = 0, drained = false;
+  const source = new ReadableStream({ async cancel() { cancels++; started.resolve(); await cleanup.promise; } }, { highWaterMark: 0 });
+  f.upstream = request => refusal === "mime" && !request.url.includes(":download") ? upstream(request)
+    : new Response(source, { status: refusal === "redirect" ? 302 : 200, headers: { "content-type": "text/html" } });
+  try {
+    const response = await f.fileCall(); assert.equal(response.status, 502); await response.text(); await started.promise;
+    const retirement = f.drain().then(() => { drained = true; });
+    assert.equal(source.locked, true); assert.equal(bodyBudgetCharged(), 32 * 1024 * 1024); assert.equal(drained, false);
+    cleanup.resolve(); await retirement;
+    assert.equal(source.locked, false); assert.equal(cancels, 1); assert.equal(bodyBudgetCharged(), 0); assert.equal((await f.events()).length, 1);
+  } finally { cleanup.resolve(); }
 });

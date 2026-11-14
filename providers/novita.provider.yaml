@@ -41,9 +41,11 @@ endpoints:
 models:
   entries:
     - id: novita/stepfun/step-3.7-flash
+      displayName: "Step 3.7 Flash"
       upstream: stepfun/step-3.7-flash
       capabilities: [llm.chat]
     - id: novita/moonshotai/kimi-k3
+      displayName: "Kimi K3"
       upstream: moonshotai/kimi-k3
       capabilities: [llm.chat]
       requestParameters:
@@ -61,6 +63,7 @@ models:
             contextWindow: 1048576
             maxOutputTokens: 1048576
     - id: novita/moonshotai/kimi-k2.7-code
+      displayName: "Kimi K2.7 Code"
       upstream: moonshotai/kimi-k2.7-code
       capabilities: [llm.chat]
       requestParameters:
@@ -78,6 +81,7 @@ models:
             contextWindow: 262144
             maxOutputTokens: 262144
     - id: novita/minimax/minimax-m3
+      displayName: "MiniMax M3"
       upstream: minimax/minimax-m3
       capabilities: [llm.chat]
       requestParameters:
@@ -95,6 +99,7 @@ models:
             contextWindow: 1000000
             maxOutputTokens: 131072
     - id: novita/zai-org/glm-5.2
+      displayName: "GLM-5.2"
       upstream: zai-org/glm-5.2
       capabilities: [llm.chat]
       requestParameters:
@@ -112,6 +117,7 @@ models:
             contextWindow: 1048576
             maxOutputTokens: 131072
     - id: novita/deepseek/deepseek-v4-pro
+      displayName: "DeepSeek V4 Pro"
       upstream: deepseek/deepseek-v4-pro
       capabilities: [llm.chat]
       requestParameters:
@@ -129,6 +135,7 @@ models:
             contextWindow: 1048576
             maxOutputTokens: 393216
     - id: novita/qwen/qwen3.7-max
+      displayName: "Qwen3.7 Max"
       upstream: qwen/qwen3.7-max
       capabilities: [llm.chat]
       requestParameters:
@@ -146,6 +153,7 @@ models:
             contextWindow: 1000000
             maxOutputTokens: 65536
     - id: novita/minimax/minimax-m2.7
+      displayName: "MiniMax M2.7"
       upstream: minimax/minimax-m2.7
       capabilities: [llm.chat]
       requestParameters:

@@ -1,8 +1,9 @@
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { registerHooks } from "node:module";
 import test from "node:test";
-const { prepareNativeOpenRouterMusic: prepare } = await import("../native-openrouter-music.ts");
+const { prepareNativeOpenRouterMusic: prepare, nativeOpenRouterMusicResponse: fromContext } = await import("../native-openrouter-music.ts");
 const { assertNativeResponseDestination } = await import("../native-response.ts");
 const { BodyLease, bodyBudgetBytes, bodyBudgetCharged } = await import("../body-budget.ts");
 const { observeUsage } = await import("../proxy-response.ts");
@@ -52,6 +53,141 @@ function chunks(values, onCancel = () => {}) {
     else controller.enqueue(Uint8Array.from(values[index++]));
   }, cancel: onCancel }, { highWaterMark: 0 });
 }
+
+test("the scalar constructor snapshots only selected metadata and keeps the fixed native destination", async () => {
+  for (const model of models) for (const [format, audio] of [["mp3", mp3], ["wav", wav]]) {
+    const original = { model, format, body: { unvalidated: true }, origin: "https://other.example", path: "/other" };
+    const { proxy, revoke } = Proxy.revocable(original, { get(target, key) {
+      assert.ok(key === "model" || key === "format"); return target[key];
+    } });
+    const native = fromContext(proxy); original.model = "changed"; original.format = "changed"; revoke();
+    assert.doesNotThrow(() => assertNativeResponseDestination(native, new URL("https://openrouter.ai/api/v1/chat/completions")));
+    for (const key of ["body", "headers", "query", "tariff", "receipt", "credential"]) assert.equal(native[key], undefined);
+    const baseline = bodyBudgetCharged(), lease = native.acquire(); let result;
+    try {
+      assert.equal(bodyBudgetCharged(), baseline + 64 * 1024 * 1024);
+      const originalWire = wire(audio, model); result = await native.read(response(originalWire), new AbortController().signal);
+      assert.equal(await result.response.text(), originalWire); assert.deepEqual(result.usage, { tokens: null, outcome: "success" });
+    } finally { await result?.response.body?.cancel().catch(() => undefined); lease.release(); }
+    assert.equal(bodyBudgetCharged(), baseline);
+  }
+});
+
+test("invalid scalar contexts are denied before any response capacity is acquired", () => {
+  const baseline = bodyBudgetCharged();
+  for (const context of [null, undefined, {}, { model: models[0] }, { model: models[0], format: "pcm" },
+    { model: "google/new-lyria", format: "wav" }, { model: "openrouter/auto", format: "mp3" }]) {
+    assert.throws(() => fromContext(context), error => error.code === "invalid_native_openrouter_music_context");
+    assert.equal(bodyBudgetCharged(), baseline);
+  }
+});
+
+test("direct response construction preserves EOF, identity, response bounds and stalled-read cancellation", async () => {
+  const native = fromContext({ model: models[0], format: "mp3" }), baseline = bodyBudgetCharged();
+  for (const upstream of [response(wire().replace(data("[DONE]"), "")), response(wire(mp3, models[1])),
+    response(wire(), { "content-length": String(32 * 1024 * 1024 + 1) })]) {
+    const lease = native.acquire();
+    try { await assert.rejects(native.read(upstream, new AbortController().signal), invalid); }
+    finally { lease.release(); }
+    assert.equal(bodyBudgetCharged(), baseline);
+  }
+  const abort = new AbortController(); let ready, canceled = 0;
+  const entered = new Promise(resolve => { ready = resolve; });
+  const upstream = new ReadableStream({ type: "bytes", pull() { ready(); }, cancel() { canceled++; } }, { highWaterMark: 0 });
+  const lease = native.acquire(); let pending;
+  try {
+    assert.throws(() => native.acquire(), /capacity is busy/);
+    pending = native.read(response(upstream), abort.signal); await entered; abort.abort();
+    await assert.rejects(pending, invalid); assert.equal(canceled, 1);
+  } finally { abort.abort(); await pending?.catch(() => undefined); lease.release(); }
+  assert.equal(bodyBudgetCharged(), baseline);
+});
+
+let scalarProbe;
+async function scalarPreparationProbe() {
+  if (scalarProbe) return scalarProbe;
+  const nativeUrl = new URL("../native-openrouter-music.ts?scalar-retention", import.meta.url).href;
+  // Observe the real codec boundary; do not substitute validation or assert GC.
+  const codecUrl = "data:text/javascript," + encodeURIComponent(`
+    import * as codec from ${JSON.stringify(new URL("../openrouter-music.ts", import.meta.url).href)};
+    export const openRouterMusicModels = codec.openRouterMusicModels;
+    let prepared, revoke; const contexts = [];
+    export function prepareOpenRouterMusic(...args) {
+      prepared = codec.prepareOpenRouterMusic(...args);
+      const guarded = Proxy.revocable(prepared, {}); revoke = guarded.revoke; return guarded.proxy;
+    }
+    export function retirePrepared() {
+      prepared.model = "changed-model"; prepared.format = prepared.format === "mp3" ? "wav" : "mp3";
+      prepared.body = null; revoke(); prepared = undefined; revoke = undefined;
+    }
+    export function createOpenRouterMusicInspector(context) {
+      contexts.push(context); return codec.createOpenRouterMusicInspector(context);
+    }
+    export function takeContexts() { return contexts.splice(0); }
+  `);
+  const hooks = registerHooks({ resolve(specifier, context, nextResolve) {
+    if (context.parentURL === nativeUrl && specifier === "./openrouter-music.ts") return { shortCircuit: true, url: codecUrl };
+    return nextResolve(specifier, context);
+  } });
+  try {
+    const native = await import(nativeUrl), codec = await import(codecUrl);
+    scalarProbe = { prepare: native.prepareNativeOpenRouterMusic, ...codec };
+    return scalarProbe;
+  } finally { hooks.deregister(); }
+}
+
+test("response callbacks pass only frozen selected metadata after prepared request revocation", async () => {
+  const probe = await scalarPreparationProbe(), baseline = bodyBudgetCharged();
+  for (const model of models) for (const [format, audio] of [["mp3", mp3], ["wav", wav]]) {
+    const native = probe.prepare(selection(model, format)); probe.retirePrepared();
+    const lease = native.acquire(); let result;
+    try {
+      const original = wire(audio, model);
+      result = await native.read(response(original), new AbortController().signal);
+      const contexts = probe.takeContexts(); assert.equal(contexts.length, 1);
+      assert.deepEqual(contexts[0], { model, format }); assert.equal(Object.isFrozen(contexts[0]), true);
+      assert.deepEqual(Object.keys(contexts[0]).sort(), ["format", "model"]);
+      assert.deepEqual(result.usage, { tokens: null, outcome: "success" });
+      assert.equal(await result.response.text(), original);
+    } finally { await result?.response.body?.cancel().catch(() => undefined); lease.release(); }
+  }
+  assert.equal(bodyBudgetCharged(), baseline);
+});
+
+test("pending quarantine keeps selected scalars and terminal, identity, EOF and cancellation rules", async () => {
+  const probe = await scalarPreparationProbe(), baseline = bodyBudgetCharged();
+  for (const outcome of ["done", "wrong-model", "eof", "abort"]) {
+    const model = models[1], native = probe.prepare(selection(model, "wav")), abort = new AbortController();
+    let source, ready, canceled = 0, result, pending;
+    const entered = new Promise(resolve => { ready = resolve; });
+    const first = data(frame({ data: wav.toString("base64") }, model));
+    const upstream = new ReadableStream({ type: "bytes", start(controller) {
+      source = controller; controller.enqueue(new TextEncoder().encode(first));
+    }, pull() { ready(); }, cancel() { canceled++; } }, { highWaterMark: 0 });
+    const lease = native.acquire();
+    try {
+      pending = native.read(response(upstream), abort.signal); await entered;
+      probe.retirePrepared();
+      const contexts = probe.takeContexts(); assert.equal(contexts.length, 1);
+      assert.deepEqual(contexts[0], { model, format: "wav" }); assert.equal(Object.isFrozen(contexts[0]), true);
+      assert.throws(() => { contexts[0].model = models[0]; }, TypeError);
+      assert.throws(() => { contexts[0].format = "mp3"; }, TypeError);
+      if (outcome === "abort") abort.abort(new Error("synthetic scalar-case cancellation"));
+      else if (outcome === "eof") { source.close(); source.byobRequest?.respond(0); }
+      else source.enqueue(new TextEncoder().encode(outcome === "done" ? data("[DONE]")
+        : data(frame({ data: "AAAA" }, models[0])) + data("[DONE]")));
+      if (outcome === "done") {
+        result = await pending; assert.equal(await result.response.text(), first + data("[DONE]"));
+        assert.deepEqual(result.usage, { tokens: null, outcome: "success" });
+      } else await assert.rejects(pending, invalid);
+      if (outcome !== "eof") assert.equal(canceled, 1);
+    } finally {
+      abort.abort(); await pending?.catch(() => undefined);
+      await result?.response.body?.cancel().catch(() => undefined); lease.release();
+    }
+    assert.equal(bodyBudgetCharged(), baseline);
+  }
+});
 
 test("both frozen models preserve complete MP3/WAV native SSE bytes and diagnostic usage", async () => {
   assert.equal(mp3.length, fixture.bytes); assert.equal(createHash("sha256").update(mp3).digest("hex"), fixture.sha256);
@@ -358,4 +494,38 @@ test("decoder-verified near-16-MiB MP3 remains native SSE with no aggregate vali
   for (;;) { const part = await reader.read(); if (part.done) break; hash.update(part.value); }
   reader.releaseLock(); assert.equal(hash.digest("hex"), createHash("sha256").update(original).digest("hex"));
   assert.equal(result.response.headers.get("content-type"), "text/event-stream"); assert.equal(result.usage.tokens, null);
+});
+
+for (const mode of ["done", "abort", "invalid-frame", "headers"]) test(`music ${mode} joins source cleanup before quarantine retirement`, { timeout: 5000 }, async t => {
+  const entered = Promise.withResolvers(), cleanup = Promise.withResolvers(), reading = Promise.withResolvers();
+  const abort = new AbortController(), native = prepare(selection()), baseline = bodyBudgetCharged(), lease = native.acquire();
+  let sent = false, cancels = 0, completed = false;
+  const source = new ReadableStream({ type: "bytes",
+    pull(controller) {
+      reading.resolve();
+      if (sent || mode === "abort") return;
+      sent = true; controller.enqueue(new TextEncoder().encode(mode === "invalid-frame" ? "data: {}\n\n" : wire()));
+    },
+    cancel() { cancels++; entered.resolve(); return cleanup.promise; },
+  }, { highWaterMark: 0 });
+  t.after(() => { cleanup.resolve(); lease.release(); });
+  const pending = native.read(response(source, mode === "headers" ? { "content-type": "application/json" } : {}), abort.signal)
+    .finally(() => { completed = true; });
+  const result = mode === "done" ? pending : assert.rejects(pending, invalid);
+  if (mode === "abort") { await reading.promise; abort.abort(); }
+  await entered.promise; await new Promise(setImmediate);
+  assert.equal(completed, false); assert.equal(source.locked, true); assert.equal(cancels, 1);
+  assert.equal(bodyBudgetCharged(), baseline + 64 * 1024 * 1024);
+  const other = new BodyLease(); assert.equal(other.grow(17 * 1024 * 1024), false); other.release();
+  cleanup.resolve(); const observed = await result;
+  assert.equal(source.locked, false); assert.equal(cancels, 1);
+  if (mode === "done") {
+    assert.deepEqual(observed.usage, { tokens: null, outcome: "success" });
+    const delivery = observeUsage(observed.response, new HttpOperation(), undefined, "openai.chat_completions", undefined, observed.usage);
+    const retired = delivery.retired.then(() => lease.release());
+    const reader = delivery.response.body.getReader();
+    assert.equal((await reader.read()).done, false); assert.equal(bodyBudgetCharged(), baseline + 64 * 1024 * 1024);
+    await reader.cancel(); reader.releaseLock(); await retired;
+  } else lease.release();
+  assert.equal(bodyBudgetCharged(), baseline);
 });

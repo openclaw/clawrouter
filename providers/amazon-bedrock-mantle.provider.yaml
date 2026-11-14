@@ -41,6 +41,7 @@ endpoints:
 models:
   entries:
     - id: amazon-bedrock-mantle/openai.gpt-oss-120b
+      displayName: "GPT-OSS 120B"
       upstream: openai.gpt-oss-120b
       capabilities: [llm.chat]
 billing:

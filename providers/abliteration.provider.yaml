@@ -41,6 +41,7 @@ endpoints:
 models:
   entries:
     - id: abliteration/abliterated-model-large-v2
+      displayName: "Abliterated Model Large v2"
       upstream: abliterated-model-large-v2
       capabilities: [llm.chat]
 billing:

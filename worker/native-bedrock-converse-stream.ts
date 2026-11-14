@@ -1,3 +1,4 @@
+import { inputRetirement } from "./input-retirement.ts";
 import { decodeBedrockEventFrame } from "./bedrock-eventstream.ts";
 import { jsonBodyBytes } from "./json-body.ts";
 import { nativeResponseLease, type NativeResponse } from "./native-response.ts";
@@ -55,24 +56,26 @@ export function prepareNativeBedrockConverseStream(
 
 async function readConverseStream(response: Response, signal: AbortSignal) {
   const length = response.headers.get("content-length"), encoding = response.headers.get("content-encoding");
-  if (response.status !== 200 || response.redirected || !response.body || response.headers.has("content-range")
+  if (!response.body) invalid();
+  const reader = response.body.getReader(), input = inputRetirement(reader);
+  if (response.status !== 200 || response.redirected || response.headers.has("content-range")
     || response.headers.get("content-type")?.trim().toLowerCase() !== "application/vnd.amazon.eventstream"
     || encoding !== null && encoding.trim().toLowerCase() !== "identity"
     || length !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)) || Number(length) > bedrockConverseLimit)) {
-    void response.body?.cancel().catch(() => undefined); invalid();
+    await input.retire("cancel"); invalid();
   }
   // One fixed buffer: chunk/frame metadata is never accumulated. Bound read and
   // frame counts as well, including pathological empty chunks and tiny frames.
-  const wire = new Uint8Array(bedrockConverseLimit), reader = response.body.getReader();
-  const abort = () => { void reader.cancel().catch(() => undefined); };
+  const wire = new Uint8Array(bedrockConverseLimit);
+  const abort = () => { void input.retire("cancel", signal.reason); };
   signal.addEventListener("abort", abort, { once: true });
-  let size = 0, reads = 0;
+  let size = 0, reads = 0, eof = false;
   try {
     signal.throwIfAborted();
     for (;;) {
       if (++reads > maxReads) invalid();
-      const chunk = await reader.read(); signal.throwIfAborted();
-      if (chunk.done) break;
+      const chunk = await input.read(() => reader.read()); signal.throwIfAborted();
+      if (chunk.done) { eof = true; break; }
       if (size + chunk.value.byteLength > wire.length) invalid();
       wire.set(chunk.value, size); size += chunk.value.byteLength;
     }
@@ -113,9 +116,9 @@ async function readConverseStream(response: Response, signal: AbortSignal) {
       "cache-control": "no-store", "x-content-type-options": "nosniff",
     } }), usage: result.inspection };
   } catch {
-    wire.fill(0); void reader.cancel().catch(() => undefined); invalid();
+    wire.fill(0); await input.retire("cancel", signal.reason); invalid();
   } finally {
-    signal.removeEventListener("abort", abort); reader.releaseLock();
+    signal.removeEventListener("abort", abort); await input.retire(eof ? "eof" : "cancel", signal.reason);
   }
 }
 

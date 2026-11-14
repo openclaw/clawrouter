@@ -1,3 +1,11 @@
+import { miniMaxSearchBinding } from "../shared/minimax-search-binding.ts";
+import { miniMaxCurrentCnInlineVideoBinding, miniMaxCurrentCnVideoBinding, miniMaxInlineVideoBinding, miniMaxSixModelVideoBinding, miniMaxVideoBinding } from "../shared/minimax-video-binding.ts";
+import {lifecycleCall} from './large-http/lifecycle-client.ts';
+import { minimaxImageBinding, readMiniMaxImageBinding } from "../shared/minimax-image-binding.ts";
+import { miniMaxImageProjection } from "./minimax-image-credential.ts";
+import { normalizeVertexAnthropicBinding, vertexAnthropicProjection } from "./vertex-anthropic-binding.ts";
+import { normalizeMiniMaxAnthropicBinding, miniMaxAnthropicProjection } from "./minimax-anthropic-binding.ts";
+import { normalizeInputPublicationPolicy, readInputPublicationPolicy } from "../shared/input-publication.ts";
 import { normalizeUpstreamRetentionPolicy } from "../shared/upstream-retention.ts";
 import { normalizeRequestCosts } from "../shared/request-pricing.ts";
 import { authorizationTimestamp, refreshExpiryWarning } from "../shared/refresh-expiry.ts";
@@ -5,8 +13,10 @@ import { budgetCapsCall } from "./authority-budgets.ts";
 import { effectiveBudgetPolicy, normalizeBudgetOverride } from "./budget-overrides.ts";
 import { normalizePolicyTiers } from "./service-tiers.ts";
 import { normalizeLimitHint } from "./policy-limits.ts";
+import { validGrantKey } from "./grant-routing.ts";
 import { authorizeAdmin } from "./access";
-import { minimaxSpeechBinding, readNativeMediaBinding } from "../shared/native-media-binding.ts";
+import { completeUsageResponse } from "./usage-report-session.ts";
+import { minimaxMusicBinding, minimaxMusicCoverBinding, minimaxSpeechBinding, readNativeMediaBinding } from "../shared/native-media-binding.ts";
 import { backgroundRecovery } from "./background-recovery.ts";
 import {
   authorityCall, listBindings, listConnections, listCredentials, listPolicies, listUsers, resolveConnection,
@@ -24,8 +34,10 @@ import { assertFusionModels, loadFusionConfig, storeFusionConfig } from "./fusio
 import { fusionReadiness } from "./fusion-readiness";
 import { hasPrimaryCredential, inspectGrantCredentials, putGrantCredentials, revokeGrantCredentials, type GrantRevokeMetadata } from "./grant-credentials.ts";
 import { normalizeFusionConfig } from "./fusion";
+import { fusionAdviserModels } from "../shared/fusion-strategy.ts";
 import { budgetStatus as policyBudgetStatus, providerBudgetStatus, usageSnapshots, grantUsageSnapshot } from "./ledgers";
 import { startOAuth } from "./oauth";
+import { miniMaxDeviceAuthorize } from "./minimax-device-admin.ts";
 import { normalizeConnectionMutation } from "./provider-connections.ts";
 import { endpointForPath, listGrantRecords, listHealth, modelRoute, providerReadiness, providerReadinessForPolicies, providerReadinessFromState, refreshStoredGrant, refreshStoredGrantQuota, snapshot } from "./providers";
 import type { AdminBootstrapResponse } from "../shared/contracts";
@@ -39,6 +51,18 @@ export async function adminApi(request: Request, env: Env, path: string): Promis
   const authorization = await authorizeAdmin(request, env);
   if (authorization instanceof Response) return authorization;
   try {
+    if (path === "/v1/admin/usage/report" && ["GET","DELETE"].includes(request.method)) return await completeUsageResponse(request,env,"admin",request.method === "DELETE" ? "release" : "report",authorization);
+    if (request.method === "GET" && path === "/v1/admin/usage/events") return await completeUsageResponse(request,env,"admin","events",authorization);
+    if (request.method === "GET" && path === "/v1/admin/usage/validate") return await completeUsageResponse(request,env,"admin","validate",authorization);
+    if (path === "/v1/admin/large-http") {
+      if (!env.LARGE_HTTP_POOL || !env.LARGE_HTTP_TOKEN) return errorResponse("large_runtime_unavailable", "large HTTP runtime is not configured", 503);
+      if (request.method === "GET") return privateJson(await lifecycleCall(env, "snapshot", {}));
+      if (request.method === "POST") {
+        const value = await readJson<{accepting:boolean}>(request, undefined, 1024);
+        const result = await lifecycleCall(env, "admission", value);
+        return privateJson(result, result.status);
+      }
+    }
     if (request.method === "POST" && path === "/v1/admin/usage/recovery") return await backgroundRecovery(request, env);
     if (request.method === "GET" && path === "/v1/admin/content") return getContent(request, env);
     if (request.method === "GET" && path === "/v1/admin/bootstrap") return privateJson(await adminBootstrap(env));
@@ -99,7 +123,7 @@ export async function adminApi(request: Request, env: Env, path: string): Promis
     if (path.startsWith("/v1/admin/policies/")) return policyMutation(request, env, path.slice("/v1/admin/policies/".length));
     if (path === "/v1/admin/credentials" || path.startsWith("/v1/admin/credentials/")) return await credentialMutationResponse(request, env, path === "/v1/admin/credentials" ? null : path.slice("/v1/admin/credentials/".length), authorization, "admin");
     if (path.startsWith("/v1/admin/connections/") && ["PUT", "PATCH"].includes(request.method)) return putConnection(request, env, path.slice("/v1/admin/connections/".length));
-    if (path.startsWith("/v1/admin/upstream-grants/")) return upstreamGrantMutation(request, env, path.slice("/v1/admin/upstream-grants/".length));
+    if (path.startsWith("/v1/admin/upstream-grants/")) return await upstreamGrantMutation(request, env, path.slice("/v1/admin/upstream-grants/".length), authorization);
     if (path === "/v1/admin/keys" && request.method === "GET") return privateJson({ keys: (await listPolicies(env)).map(legacyKeyResponse) });
     if (path.startsWith("/v1/admin/keys/")) return await legacyKeyMutation(request, env, path.slice("/v1/admin/keys/".length), authorization);
     return errorResponse("route_not_found", "admin route not found", 404);
@@ -172,7 +196,7 @@ async function previewFusion(request: Request, env: Env): Promise<Response> {
   assertFusionModels(config);
   const connections = await listConnections(env, snapshot.providers.map((provider) => provider.id));
   const [readiness, budget] = await Promise.all([providerReadinessForPolicies(env, [entry], connections), policyBudgetStatus(env, entry.policyId, entry.policy)]);
-  const routes = [...config.adviserModels, config.aggregatorModel].map((modelId) => {
+  const routes = [...fusionAdviserModels(config), config.aggregatorModel].map((modelId) => {
     const route = modelRoute(modelId, "llm.chat")!;
     const endpoint = endpointForPath(route.provider, "/v1/chat/completions")!;
     return {
@@ -364,10 +388,24 @@ async function policyMutation(request: Request, env: Env, rest: string): Promise
     const body = mutationObject(await readJson<unknown>(request), "invalid_policy", "policy");
     const existing = (await listPolicies(env)).find((entry) => entry.policyId === id)?.policy;
     policy = normalizePolicy(body, existing, contentRetentionDefault(env));
+    // Membership grants access to the existing owner; it never copies secrets.
+    // Recheck only new references so an unrelated edit can retain a revoked member.
+    for (const [providerId, keys] of Object.entries(policy.grantRouting.sharedGrants ?? {})) {
+      for (const key of keys) {
+        if (existing?.grantRouting?.sharedGrants?.[providerId]?.includes(key)) continue;
+        const grant = await inspectGrantCredentials(env, key);
+        if (grant.provider !== providerId || grant.kind !== "subscription" || grant.enabled === false || grant.revokedAt || !grantCredentialPresent(grant))
+          throw new HttpError(400, "invalid_policy", "sharedGrants must reference an enabled subscription owner for that provider");
+      }
+    }
   }
   else throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
   const ultrafastPolicy = id === "team_server" || id === "openclaw_stable";
   if (policy.serviceTiers?.allowed.includes("ultrafast") || Object.entries(policy.serviceTiers?.models ?? {}).some(([model, tiers]) => tiers.includes("ultrafast") && (!ultrafastPolicy || model !== "openai/gpt-6.1-sol"))) throw new HttpError(400, "invalid_policy", "ultrafast may only be granted by team_server or openclaw_stable for openai/gpt-6.1-sol");
+  if (Object.keys(policy.grantRouting?.sharedGrants ?? {}).length) {
+    const authorization = await authorizeAdmin(request, env);
+    if (authorization instanceof Response) return authorization;
+  }
   const entry = { policyId: id, policy }; await authorityCall(env, "/policies/put", entry);
   return privateJson(policyResponse(entry));
 }
@@ -380,13 +418,22 @@ async function putConnection(request: Request, env: Env, encodedId: string): Pro
   return privateJson(await authorityCall<ProviderConnection>(env, "/connections/put", mutation));
 }
 
-async function upstreamGrantMutation(request: Request, env: Env, rest: string): Promise<Response> {
+async function upstreamGrantMutation(request: Request, env: Env, rest: string, actor: AccessSession): Promise<Response> {
   const parts = rest.split("/").map(decodePathSegment), action = parts.length === 4 && ["revoke", "refresh", "quota-refresh", "authorize"].includes(parts.at(-1) ?? "") ? parts.pop() : null;
   if (parts.length !== 3 || !["policies", "tenants"].includes(parts[0])) throw new HttpError(400, "invalid_upstream_grant_route", "invalid upstream grant route");
   const [scope, scopeId, tokenRef] = parts, key = scope === "policies" ? `oauth/${scopeId}/${tokenRef}` : `oauth/tenants/${scopeId}/${tokenRef}`;
   if (!validGrantSegment(scopeId) || !validGrantSegment(tokenRef) || scope === "policies" && scopeId === "tenants") throw new HttpError(400, "invalid_upstream_grant_route", "scope id and token reference must be valid single key segments");
   if (action === "authorize" && request.method === "POST") {
+    if (new URL(request.url).searchParams.get("flow") === "copilot-account.v1") {
+      const { copilotAccountAuthorize } = await import("./copilot-account-admin.ts");
+      return copilotAccountAuthorize(request, env, key);
+    }
+    if (new URL(request.url).searchParams.get("flow") === "copilot-device.v1") {
+      const { copilotDeviceAuthorize } = await import("./copilot-device-admin.ts");
+      return copilotDeviceAuthorize(request, env, key);
+    }
     const body = mutationObject(await readJson<unknown>(request), "invalid_upstream_grant", "OAuth authorization");
+    if (Object.hasOwn(body, "flow")) return miniMaxDeviceAuthorize(request, env, key, body);
     if (typeof body.provider !== "string" || !body.provider.trim()) throw new HttpError(400, "invalid_upstream_grant", "provider is required");
     const priority = body.priority ?? 100;
     if (!Number.isInteger(priority) || (priority as number) < 0 || (priority as number) > 1_000_000) throw new HttpError(400, "invalid_upstream_grant", "grant priority must be an integer from 0 to 1000000");
@@ -394,7 +441,7 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
     if (typeof weight !== "number" || !Number.isFinite(weight) || weight <= 0 || weight > 1_000_000) throw new HttpError(400, "invalid_upstream_grant", "grant weight must be a number greater than 0 and at most 1000000");
     return startOAuth(request, env, key, body.provider.trim(), priority as number, weight);
   }
-  if (action === "refresh" && request.method === "POST") return privateJson(await upstreamGrantResponse(env, key, await refreshStoredGrant(env, key)));
+  if (action === "refresh" && request.method === "POST") return privateJson(await upstreamGrantResponse(env, key, await refreshStoredGrant(env, key, request.signal)));
   if (action === "quota-refresh" && request.method === "POST") {
     await refreshStoredGrantQuota(env, key);
     const grant = await env.POLICY_KV.get<UpstreamGrant>(key, "json");
@@ -405,22 +452,63 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
   let existing: UpstreamGrant | null;
   if (action === "revoke" && request.method === "POST") {
     const body = mutationObject(await readJson<unknown>(request, {}), "invalid_upstream_grant", "revocation metadata");
-    grant = await revokeGrantCredentials(env, key, normalizeRevokeMetadata(body));
+    grant = await revokeGrantCredentials(env, key, normalizeRevokeMetadata(body), { auth: actor.auth, email: actor.email, role: actor.role }, { auth: actor.auth, email: actor.email, role: actor.role }, { auth: actor.auth, email: actor.email, role: actor.role });
   }
   else if (!action && request.method === "PUT") {
     const mode = new URL(request.url).searchParams.get("mode");
     if (mode !== null && mode !== "replace") throw new HttpError(400, "invalid_upstream_grant", "grant mutation mode must be replace when specified");
     const body = mutationObject(await readJson<unknown>(request), "invalid_upstream_grant", "upstream grant");
-    if (Object.hasOwn(body, "nativeMediaBinding") || Object.hasOwn(body, "nativeMediaIntent"))
+    if (Object.hasOwn(body, "minimaxDeviceAttempt"))
+      throw new HttpError(400, "invalid_minimax_device_request", "Device attempt state is owner-managed");
+    if (["copilotDeviceAttempt", "copilotDeviceCredential", "copilotAccountAttempt", "copilotAccountBinding"].some(field => Object.hasOwn(body, field)))
+      throw new HttpError(400, "invalid_copilot_device_request", "Device attempt state is owner-managed");
+    if (["nativeMediaBinding", "nativeMediaIntent", "musicActor", "musicAttestation", "minimaxMusicTombstone"].some(field => Object.hasOwn(body, field)))
       throw new HttpError(400, "invalid_native_media_authorization", "Use the explicit native media product authorization");
+    if (Object.hasOwn(body, "minimaxAnthropicBinding") || Object.hasOwn(body, "minimaxAnthropicIntent"))
+      throw new HttpError(400, "invalid_minimax_anthropic_authorization", "Use explicit MiniMax regional credential authorization");
+    if (Object.hasOwn(body, "vertexAnthropicBinding") || Object.hasOwn(body, "vertexAnthropicIntent"))
+      throw new HttpError(400, "invalid_vertex_authorization", "Use explicit Vertex resource authorization");
+    if (Object.hasOwn(body, "vertexPrivateKey")) throw new HttpError(400, "invalid_vertex_authorization", "Use the explicit service-account key input");
+    const vertexPrivateKey = body.vertexServiceAccountPrivateKey;
+    delete body.vertexServiceAccountPrivateKey;
+    if (vertexPrivateKey !== undefined && (typeof vertexPrivateKey !== "string" || vertexPrivateKey.length > 16384))
+      throw new HttpError(400, "invalid_vertex_authorization", "Vertex signing key is invalid");
+    const vertexAnthropic = body.vertexAnthropicAuthorization === undefined ? undefined
+      : body.vertexAnthropicAuthorization === null ? null : normalizeVertexAnthropicBinding(body.vertexAnthropicAuthorization);
+    delete body.vertexAnthropicAuthorization;
+    if (vertexPrivateKey !== undefined && vertexAnthropic?.source !== "service_account")
+      throw new HttpError(400, "invalid_vertex_authorization", "Signing key replacement requires explicit service-account authorization");
+    const minimaxAnthropic = body.minimaxAnthropicAuthorization === undefined ? undefined
+      : body.minimaxAnthropicAuthorization === null ? null : normalizeMiniMaxAnthropicBinding(body.minimaxAnthropicAuthorization);
+    delete body.minimaxAnthropicAuthorization;
+    if (Object.hasOwn(body, "minimaxImageBinding") || Object.hasOwn(body, "minimaxImageIntent"))
+      throw new HttpError(400, "invalid_minimax_image_authorization", "Use explicit MiniMax image authorization");
+    if (["minimaxSearchBinding", "minimaxSearchIntent", "searchActor", "searchAttestation"].some(field => Object.hasOwn(body, field)))
+      throw new HttpError(400, "invalid_minimax_search_authorization", "Use explicit Search authorization");
+    const searchIntent = body.minimaxSearchAuthorization;
+    if (searchIntent !== undefined && searchIntent !== null && searchIntent !== "minimax-global-tokenplan-search" && searchIntent !== "minimax-cn-tokenplan-search")
+      throw new HttpError(400, "invalid_minimax_search_authorization", "Search authorization must name its TokenPlan region or null");
+    delete body.minimaxSearchAuthorization;
+    const minimaxSearch = searchIntent == null ? searchIntent : miniMaxSearchBinding(searchIntent === "minimax-global-tokenplan-search" ? "global" : "cn");
+    if (["minimaxVideoBinding", "minimaxVideoIntent", "videoActor", "videoAttestation"].some(field => Object.hasOwn(body, field)))
+      throw new HttpError(400, "invalid_minimax_video_authorization", "Use explicit video authorization");
+    const videoIntent = body.minimaxVideoAuthorization;
+    if (videoIntent !== undefined && videoIntent !== null && videoIntent !== "minimax-global-video" && videoIntent !== "minimax-cn-video" && videoIntent !== "minimax-global-video-inline-first-frame" && videoIntent !== "minimax-global-video-six-model-inline-first-frame" && videoIntent !== "minimax-current-cn-video" && videoIntent !== "minimax-current-cn-video-six-model-inline-first-frame")
+      throw new HttpError(400, "invalid_minimax_video_authorization", "Video authorization must name its region or null");
+    delete body.minimaxVideoAuthorization;
+    const minimaxVideo = videoIntent == null ? videoIntent : videoIntent === "minimax-current-cn-video-six-model-inline-first-frame" ? miniMaxCurrentCnInlineVideoBinding() : videoIntent === "minimax-current-cn-video" ? miniMaxCurrentCnVideoBinding() : videoIntent === "minimax-global-video-six-model-inline-first-frame" ? miniMaxSixModelVideoBinding() : videoIntent === "minimax-global-video-inline-first-frame" ? miniMaxInlineVideoBinding() : miniMaxVideoBinding(videoIntent === "minimax-global-video" ? "global" : "cn");
+    const minimaxImage = body.minimaxImageAuthorization;
+    if (minimaxImage !== undefined && minimaxImage !== null && minimaxImage !== "minimax-global-image")
+      throw new HttpError(400, "invalid_minimax_image_authorization", "Image authorization must be minimax-global-image or null");
+    delete body.minimaxImageAuthorization;
     const nativeMedia = body.nativeMediaAuthorization;
-    if (nativeMedia !== undefined && nativeMedia !== null && nativeMedia !== "minimax-global-speech")
-      throw new HttpError(400, "invalid_native_media_authorization", "Native media authorization must be minimax-global-speech or null");
+    if (nativeMedia !== undefined && nativeMedia !== null && nativeMedia !== "minimax-global-speech" && nativeMedia !== "minimax-global-music" && nativeMedia !== "minimax-global-music-cover-inline-audio")
+      throw new HttpError(400, "invalid_native_media_authorization", "Native media authorization must name an explicit qualified MiniMax profile or null");
     delete body.nativeMediaAuthorization;
-    if (mode === "replace" && !hasPrimaryCredential(body as UpstreamGrant)) throw new HttpError(400, "invalid_upstream_grant", "grant replacement requires a fresh primary credential");
+    if (mode === "replace" && !hasPrimaryCredential(body as UpstreamGrant) && !vertexPrivateKey) throw new HttpError(400, "invalid_upstream_grant", "grant replacement requires a fresh primary credential");
     existing = mode === "replace" ? null : await env.POLICY_KV.get<UpstreamGrant>(key, "json");
-    grant = await putGrantCredentials(env, key, normalizeGrant(body, existing), mode !== "replace", mode === "replace" ? "replace" : undefined,
-      undefined, nativeMedia === "minimax-global-speech" ? { ...minimaxSpeechBinding } : nativeMedia);
+    grant = await putGrantCredentials(env, key, normalizeGrant(body, existing, !!vertexPrivateKey), mode !== "replace", mode === "replace" ? "replace" : undefined,
+      undefined, nativeMedia === "minimax-global-speech" ? { ...minimaxSpeechBinding } : nativeMedia === "minimax-global-music" ? { ...minimaxMusicBinding } : nativeMedia === "minimax-global-music-cover-inline-audio" ? { ...minimaxMusicCoverBinding } : nativeMedia, minimaxAnthropic, vertexAnthropic, vertexPrivateKey as string | undefined, minimaxImage === "minimax-global-image" ? { ...minimaxImageBinding } : minimaxImage, minimaxSearch, { auth: actor.auth, email: actor.email, role: actor.role }, { auth: actor.auth, email: actor.email, role: actor.role }, minimaxVideo, { auth: actor.auth, email: actor.email, role: actor.role });
   }
   else throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
   return privateJson(await upstreamGrantResponse(env, key, grant));
@@ -560,13 +648,16 @@ export function normalizePolicy(
   let upstreamRetention: AccessPolicy["upstreamRetention"];
   try { upstreamRetention = normalizeUpstreamRetentionPolicy(body.upstreamRetention === undefined ? existing?.upstreamRetention : body.upstreamRetention); }
   catch { throw new HttpError(400, "invalid_policy", "upstreamRetention requires an explicit versioned provider/protocol permission list"); }
+  let inputPublication: AccessPolicy["inputPublication"];
+  try { inputPublication = body.inputPublication === undefined ? readInputPublicationPolicy(existing?.inputPublication) : normalizeInputPublicationPolicy(body.inputPublication); }
+  catch { throw new HttpError(400, "invalid_policy", "inputPublication requires an unexpired, closed versioned OpenRouter music permission list"); }
   // New policies default to soft (no foreground budget RPCs); updates keep the stored mode.
   const budgetMode = body.budgetMode === undefined ? existing ? existing.budgetMode : "soft" : body.budgetMode;
   if (budgetMode !== undefined && budgetMode !== "reserve" && budgetMode !== "soft") throw new HttpError(400, "invalid_policy", "budgetMode must be reserve or soft");
   const budgetScope = body.budgetScope ?? existing?.budgetScope ?? "policy";
   if (budgetScope !== "policy" && budgetScope !== "principal") throw new HttpError(400, "invalid_policy", "budgetScope must be policy or principal");
   const grantRouting = normalizeGrantRouting(body.grantRouting, existing?.grantRouting);
-  return { enabled: policyBoolean(body.enabled, "enabled", true), generation: existing?.generation ?? randomId("policy"), providers, models, poolStatus, tenantId: policyString(body.tenantId, "tenantId", "default"), tokenRole: policyString(body.tokenRole, "tokenRole", "service"), monthlyBudgetMicros, dailyBudgetMicros, weeklyBudgetMicros, serviceTiers, limitHint, requestCostMicros, requestCostsMicros, budgetScope, ...(budgetMode === undefined ? {} : { budgetMode }), ...(upstreamRetention ? { upstreamRetention } : {}), retainRequestContent: policyBoolean(body.retainRequestContent, "retainRequestContent", existing?.retainRequestContent ?? retainRequestContentDefault), grantRouting };
+  return { enabled: policyBoolean(body.enabled, "enabled", true), generation: existing?.generation ?? randomId("policy"), providers, models, poolStatus, tenantId: policyString(body.tenantId, "tenantId", "default"), tokenRole: policyString(body.tokenRole, "tokenRole", "service"), monthlyBudgetMicros, dailyBudgetMicros, weeklyBudgetMicros, serviceTiers, limitHint, requestCostMicros, requestCostsMicros, budgetScope, ...(budgetMode === undefined ? {} : { budgetMode }), ...(upstreamRetention ? { upstreamRetention } : {}), ...(inputPublication ? { inputPublication } : {}), retainRequestContent: policyBoolean(body.retainRequestContent, "retainRequestContent", existing?.retainRequestContent ?? retainRequestContentDefault), grantRouting };
 }
 
 function normalizeGrantRouting(value: unknown, existing?: AccessPolicy["grantRouting"]): AccessPolicy["grantRouting"] {
@@ -596,7 +687,17 @@ function normalizeGrantRouting(value: unknown, existing?: AccessPolicy["grantRou
     if (!snapshot.providers.some((provider) => provider.id === providerId) || !Array.isArray(rawRefs) || rawRefs.length > 32 || rawRefs.some((ref) => typeof ref !== "string" || !validGrantSegment(ref))) throw new HttpError(400, "invalid_policy", "grantRouting eligibleGrants contains an invalid provider or token reference");
     eligibleGrants[providerId] = [...new Set(rawRefs as string[])].sort();
   }
-  return { strategy: strategy as AccessPolicy["grantRouting"]["strategy"], stickiness: stickiness as AccessPolicy["grantRouting"]["stickiness"], failover, environmentFallback, includedQuotaReservePercent: includedQuotaReservePercent as number, staleState, staleAfterSeconds: staleAfterSeconds as number, switchAtUsedPercent, hysteresisPercent, eligibleGrants };
+  const shared = body.sharedGrants === undefined ? existing?.sharedGrants ?? {} : body.sharedGrants;
+  if (!shared || typeof shared !== "object" || Array.isArray(shared)) throw new HttpError(400, "invalid_policy", "grantRouting sharedGrants must map providers to grant keys");
+  const sharedGrants: Record<string, string[]> = {};
+  for (const [providerId, keys] of Object.entries(shared)) {
+    if (!snapshot.providers.some(provider => provider.id === providerId) || !Array.isArray(keys) || keys.length > 32 || keys.some(key => typeof key !== "string" || !validGrantKey(key)))
+      throw new HttpError(400, "invalid_policy", "grantRouting sharedGrants contains an invalid provider or grant key");
+    sharedGrants[providerId] = [...new Set(keys as string[])].sort();
+  }
+  if (Object.values(sharedGrants).reduce((count, keys) => count + keys.length, 0) > 32)
+    throw new HttpError(400, "invalid_policy", "grantRouting sharedGrants permits at most 32 shared owners per policy");
+  return { strategy: strategy as AccessPolicy["grantRouting"]["strategy"], stickiness: stickiness as AccessPolicy["grantRouting"]["stickiness"], failover, environmentFallback, includedQuotaReservePercent: includedQuotaReservePercent as number, staleState, staleAfterSeconds: staleAfterSeconds as number, switchAtUsedPercent, hysteresisPercent, eligibleGrants, ...(Object.keys(sharedGrants).length ? { sharedGrants } : {}) };
 }
 
 function policyBoolean(value: unknown, field: string, fallback: boolean): boolean {
@@ -691,7 +792,7 @@ function userGroups(value: unknown): string[] {
   if (!Array.isArray(value) || value.some((group) => typeof group !== "string")) throw new HttpError(400, "invalid_access_user", "groups must be an array of strings");
   return normalizeGroups(value as string[]);
 }
-function normalizeGrant(value: unknown, existing: UpstreamGrant | null): UpstreamGrant {
+function normalizeGrant(value: unknown, existing: UpstreamGrant | null, vertexSigningIntent = false): UpstreamGrant {
   const body = mutationObject(value, "invalid_upstream_grant", "upstream grant");
   const priority = body.priority ?? existing?.priority ?? 100;
   if (!Number.isInteger(priority) || (priority as number) < 0 || (priority as number) > 1_000_000) throw new HttpError(400, "invalid_upstream_grant", "grant priority must be an integer from 0 to 1000000");
@@ -713,7 +814,7 @@ function normalizeGrant(value: unknown, existing: UpstreamGrant | null): Upstrea
   if (grant.maintenance?.keepWarm && (grant.kind !== "subscription" || !provider.auth.grantTransports.subscription?.maintenance.keepWarm)) throw new HttpError(400, "invalid_upstream_grant", "provider does not declare keep-warm maintenance for this subscription");
   if (!validCredentialBundle(grant.credentials) || [grant.credential, grant.accessToken, grant.refreshToken].some((secret) => secret != null && (typeof secret !== "string" || !secret.trim().length))) throw new HttpError(400, "invalid_upstream_grant", "grant credentials must use non-empty string values");
   // Editing/reconnecting an unavailable grant validates presence, not routing eligibility.
-  if (!grantCredentialPresent({ ...grant, credentialStatus: "active" })) throw new HttpError(400, "invalid_upstream_grant", "grant credential is required");
+  if (!grantCredentialPresent({ ...grant, credentialStatus: "active" }) && !vertexSigningIntent) throw new HttpError(400, "invalid_upstream_grant", "grant credential is required");
   return grant;
 }
 function normalizeGrantMaintenance(value: unknown, existing: UpstreamGrant["maintenance"], defaultKeepWarm: boolean): UpstreamGrant["maintenance"] {
@@ -724,7 +825,7 @@ function normalizeGrantMaintenance(value: unknown, existing: UpstreamGrant["main
   return { keepWarm: body.keepWarm === true };
 }
 
-function policyResponse(entry: AccessPolicyEntry) { return { policyId: entry.policyId, enabled: entry.policy.enabled, providers: entry.policy.providers, models: entry.policy.models ?? null, poolStatus: entry.policy.poolStatus ?? "hidden", tenantId: entry.policy.tenantId ?? null, tokenRole: entry.policy.tokenRole ?? null, monthlyBudgetMicros: entry.policy.monthlyBudgetMicros ?? null, dailyBudgetMicros: entry.policy.dailyBudgetMicros ?? null, weeklyBudgetMicros: entry.policy.weeklyBudgetMicros ?? null, serviceTiers: entry.policy.serviceTiers ?? null, limitHint: entry.policy.limitHint ?? null, requestCostMicros: entry.policy.requestCostMicros ?? null, requestCostsMicros: entry.policy.requestCostsMicros ?? null, budgetScope: entry.policy.budgetScope ?? "policy", ...(entry.policy.budgetMode === undefined ? {} : { budgetMode: entry.policy.budgetMode }), ...(entry.policy.upstreamRetention ? { upstreamRetention: entry.policy.upstreamRetention } : {}), retainRequestContent: entry.policy.retainRequestContent !== false, grantRouting: grantRoutingPolicy(entry.policy.grantRouting) }; }
+function policyResponse(entry: AccessPolicyEntry) { const inputPublication = readInputPublicationPolicy(entry.policy.inputPublication); return { policyId: entry.policyId, enabled: entry.policy.enabled, providers: entry.policy.providers, models: entry.policy.models ?? null, poolStatus: entry.policy.poolStatus ?? "hidden", tenantId: entry.policy.tenantId ?? null, tokenRole: entry.policy.tokenRole ?? null, monthlyBudgetMicros: entry.policy.monthlyBudgetMicros ?? null, dailyBudgetMicros: entry.policy.dailyBudgetMicros ?? null, weeklyBudgetMicros: entry.policy.weeklyBudgetMicros ?? null, serviceTiers: entry.policy.serviceTiers ?? null, limitHint: entry.policy.limitHint ?? null, requestCostMicros: entry.policy.requestCostMicros ?? null, requestCostsMicros: entry.policy.requestCostsMicros ?? null, budgetScope: entry.policy.budgetScope ?? "policy", ...(entry.policy.budgetMode === undefined ? {} : { budgetMode: entry.policy.budgetMode }), ...(entry.policy.upstreamRetention ? { upstreamRetention: entry.policy.upstreamRetention } : {}), ...(inputPublication ? { inputPublication } : {}), retainRequestContent: entry.policy.retainRequestContent !== false, grantRouting: grantRoutingPolicy(entry.policy.grantRouting) }; }
 function legacyKeyResponse(entry: AccessPolicyEntry) { return { kid: entry.policyId, ...policyResponse(entry) }; }
 function userResponse(user: AccessControlUser) { return { ...(user.record.budgetOverrides ? { budgetOverrides: user.record.budgetOverrides } : {}), email: user.email, role: "user" as const, tenantId: user.record.tenantId ?? "default", enabled: user.record.enabled ?? true, groups: user.record.groups ?? [], contentRetentionDisabled: user.record.contentRetentionDisabled ?? false }; }
 function grantResponse(key: string, grant: UpstreamGrant) {
@@ -732,7 +833,8 @@ function grantResponse(key: string, grant: UpstreamGrant) {
   const refresh = grant.refresh ?? snapshot.providers.find((provider) => provider.id === grant.provider)?.auth.refresh;
   const refreshTokenExpiresAt = authorizationTimestamp(grant.refreshTokenExpiresAt);
   const lastManualAuthorizationAt = authorizationTimestamp(grant.lastManualAuthorizationAt);
-  return { nativeMediaBinding: grant.credentialStore === "durable_object" ? readNativeMediaBinding(grant.nativeMediaBinding) : null, refreshTokenExpiresAt, lastManualAuthorizationAt, refreshExpiryWarning: refreshExpiryWarning(refreshTokenExpiresAt), key, scope: tenant ? "tenants" as const : "policies" as const, scopeId: tenant ? parts[2] : parts[1], tokenRef: tenant ? parts[3] : parts[2], version: grant.version ?? 1, enabled: grant.enabled ?? true, kind: grant.kind ?? "oauth", provider: grant.provider ?? null, label: grant.label ?? null, tokenType: grant.tokenType ?? "Bearer", expiresAt: grant.expiresAt ?? null, scopes: grant.scopes ?? [], accountId: grant.accountId ?? null, subscription: grant.subscription ?? null, maintenance: grant.maintenance ?? { keepWarm: false }, createdAt: grant.createdAt ?? null, updatedAt: grant.updatedAt ?? null, revokedAt: grant.revokedAt ?? null, hasCredential: grant.hasCredential ?? (!!grant.credential || Object.keys(grant.credentials ?? {}).length > 0), credentialFields: grant.credentialFields ?? Object.keys(grant.credentials ?? {}).sort(), hasAccessToken: grant.hasAccessToken ?? !!grant.accessToken, hasRefreshToken: grant.hasRefreshToken ?? !!grant.refreshToken, credentialStatus: grant.credentialStatus ?? (grantUsable(grant) ? "active" as const : undefined), refreshDiagnosis: grant.refreshDiagnosis ?? null, credentialProvenance: grant.credentialProvenance ?? null, refreshConfigured: !!refresh, refreshTokenUrl: refresh?.tokenUrl ?? null, clientIdConfig: refresh?.clientIdConfig ?? null, clientSecretConfig: refresh?.clientSecretConfig ?? null, usable: grant.enabled !== false && grantUsable(grant) };
+  const minimaxAnthropicBinding = miniMaxAnthropicProjection(grant);
+  return { minimaxImageBinding: miniMaxImageProjection(grant) ? readMiniMaxImageBinding(grant.minimaxImageBinding) : null, vertexAnthropicBinding: vertexAnthropicProjection(grant), minimaxAnthropicBinding, nativeMediaBinding: grant.credentialStore === "durable_object" ? readNativeMediaBinding(grant.nativeMediaBinding) : null, refreshTokenExpiresAt, lastManualAuthorizationAt, refreshExpiryWarning: refreshExpiryWarning(refreshTokenExpiresAt), key, scope: tenant ? "tenants" as const : "policies" as const, scopeId: tenant ? parts[2] : parts[1], tokenRef: tenant ? parts[3] : parts[2], version: grant.version ?? 1, enabled: grant.enabled ?? true, kind: grant.kind ?? "oauth", provider: grant.provider ?? null, label: grant.label ?? null, tokenType: grant.tokenType ?? "Bearer", expiresAt: grant.expiresAt ?? null, scopes: grant.scopes ?? [], accountId: grant.accountId ?? null, subscription: grant.subscription ?? null, maintenance: grant.maintenance ?? { keepWarm: false }, createdAt: grant.createdAt ?? null, updatedAt: grant.updatedAt ?? null, revokedAt: grant.revokedAt ?? null, hasCredential: grant.hasCredential ?? (!!grant.credential || Object.keys(grant.credentials ?? {}).length > 0), credentialFields: grant.credentialFields ?? Object.keys(grant.credentials ?? {}).sort(), hasAccessToken: grant.hasAccessToken ?? !!grant.accessToken, hasRefreshToken: grant.hasRefreshToken ?? !!grant.refreshToken, credentialStatus: grant.credentialStatus ?? (grantUsable(grant) ? "active" as const : undefined), refreshDiagnosis: grant.refreshDiagnosis ?? null, credentialProvenance: grant.credentialProvenance ?? null, refreshConfigured: !!refresh || minimaxAnthropicBinding?.kind === "oauth", refreshTokenUrl: minimaxAnthropicBinding?.kind === "oauth" ? minimaxAnthropicBinding.tokenEndpoint : refresh?.tokenUrl ?? null, clientIdConfig: refresh?.clientIdConfig ?? null, clientSecretConfig: refresh?.clientSecretConfig ?? null, usable: grant.enabled !== false && grantUsable(grant) };
 }
 function assignmentResponse(ruleId: string, rule: AssignmentRule) { return { ruleId, ...rule, generatedGroup: `assignment.${ruleId}` }; }
 function sum(values: Array<number | null | undefined>) { return values.reduce<number>((total, value) => total + (value ?? 0), 0); }

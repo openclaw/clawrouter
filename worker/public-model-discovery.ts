@@ -34,6 +34,9 @@ export async function fetchPublicModelDiscovery(input: Readonly<{
     const response = await operation.wait(fetch(native), "upstream", discard);
     responses.push(response);
     signal.throwIfAborted();
+    if (response.redirected || response.status >= 300 && response.status < 400) {
+      throw new HttpError(502, "provider_catalog_invalid", "Public model catalog redirects are not supported");
+    }
     return response;
   };
   const allows = (id: string) => input.permittedModelIds.has(id) && input.allows(id);

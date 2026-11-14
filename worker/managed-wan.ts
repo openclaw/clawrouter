@@ -88,7 +88,9 @@ export const wanManagedAdapter: ManagedLifecycleAdapter = {
   },
   async read(response, context) {
     if (!["create", "retrieve"].includes(context.action)) throw new Error("unsupported_wan_control");
-    const { body } = await readMediaJson(response), output = body.output;
+    if (context.registerInput && !context.signal) throw new Error("wan_operation_signal_required");
+    const { body } = await readMediaJson(response, undefined, context.registerInput
+      ? { signal: context.signal!, registerInput: context.registerInput } : undefined), output = body.output;
     if (!mediaObject(output) || body.code !== undefined && body.code !== "") throw new Error("invalid_wan_response");
     const id = validateWanTaskId(output.task_id), status = output.task_status;
     if (context.action !== "create" && id !== validateWanTaskId(context.expectedId)) throw new Error("wan_identity_mismatch");

@@ -6,6 +6,7 @@ import test from "node:test";
 import { continuationAuthority } from "./continuation-authority.mjs";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 const { default: worker } = await import("../index.ts");
 const { authorityCall } = await import("../authority.ts");
 const { snapshot, configuredUpstream, providerModel } = await import("../providers.ts");
@@ -30,7 +31,11 @@ async function fixture(t, { ownGrant = true } = {}) {
   t.after(() => { snapshot.providers.splice(snapshot.providers.indexOf(row), 1, previous); });
   const values = new Map(), pending = [], events = [], sent = [];
   const env = { OPENAI_API_KEY: "synthetic-foreign-environment", CHUTES_OAUTH_TOKEN: "synthetic-foreign-oauth", OPENROUTER_API_KEY: "synthetic-foreign-router", POLICY_KV: {
-    async get(k) { return Array.isArray(k) ? new Map(k.map(k => [k, values.get(k) ?? null])) : values.get(k) ?? null; },
+    async get(k, type) {
+      if (Array.isArray(k)) return new Map(k.map(k => [k, values.get(k) ?? null]));
+      const value = values.get(k) ?? null;
+      return value !== null && type === "stream" ? accessBytesResponse(JSON.stringify(value)).body : value;
+    },
     async put(k, v) { values.set(k, JSON.parse(v)); },
   }, BUDGET_LEDGER: sqlBudgetNamespace(t), USAGE_QUEUE: { async send(e) { events.push(e); } } };
   env.ACCESS_CONTROL = continuationAuthority(t, env);
@@ -71,7 +76,10 @@ test("Chutes declaration preserves the existing seed and five frozen cards with 
     assert.equal(m.requestParameters.chat_completions.toolCalling, "supported");
     assert.equal(m.requestParameters.chat_completions.defaultReasoningEffort, undefined);
   }
-  assert.deepEqual(provider.endpoints.map(e => e.id), ["chat_completions"]);
+  assert.deepEqual(provider.endpoints.map(e => [e.id, e.method, e.methods, e.path, e.request_format, e.response_format]), [
+    ["chat_completions", "POST", ["POST"], "/chat/completions", "openai.chat_completions", "openai.chat_completions"],
+    ["models_list", "GET", ["GET"], "/models", "chutes.models", "chutes.models"],
+  ]);
   const opaque = providerModel(provider, "chutes/synthetic-tenant-model", provider.endpoints[0]);
   assert.equal(opaque.nativeCapabilities, undefined); assert.equal(opaque.requestParameters, undefined); assert.equal(opaque.pricing, null);
   assert.throws(() => configuredUpstream(provider, null, { CHUTES_OAUTH_TOKEN: "synthetic-unselected-oauth", OPENAI_API_KEY: "synthetic-foreign" }), e => e.code === "provider_not_configured");

@@ -5,6 +5,17 @@ import test from "node:test";
 
 const { adminBudgetStatus, budgetPrincipalsByPolicy, normalizePolicy } = await import("../admin.ts");
 
+test("admin policy validates shared subscription references and preserves them through unrelated edits", () => {
+  const sharedGrants = { anthropic: ["oauth/source/contributor"] };
+  const existing = normalizePolicy({ providers: ["anthropic"], grantRouting: { sharedGrants } }, undefined, false);
+  assert.deepEqual(existing.grantRouting.sharedGrants, sharedGrants);
+  assert.deepEqual(normalizePolicy({ providers: ["anthropic"], grantRouting: { strategy: "round_robin" } }, existing, false).grantRouting.sharedGrants, sharedGrants);
+  assert.equal(normalizePolicy({ providers: ["anthropic"], grantRouting: { sharedGrants: {} } }, existing, false).grantRouting.sharedGrants, undefined);
+  for (const sharedGrants of [null, [], { anthropic: ["oauth/source/"] }, { missing_provider: ["oauth/source/ok"] }, { anthropic: Array.from({ length: 33 }, (_, i) => `oauth/source/${i}`) }, { anthropic: Array.from({ length: 32 }, (_, i) => `oauth/source/${i}`), openai: ["oauth/source/extra"] }]) {
+    assert.throws(() => normalizePolicy({ providers: ["anthropic"], grantRouting: { sharedGrants } }, undefined, false), { code: "invalid_policy" });
+  }
+});
+
 test("policy normalization validates budgetScope and preserves generation", () => {
   const existing = policy({ generation: "policy_existing" });
   const updated = normalizePolicy({ providers: ["openai"], budgetScope: "principal" }, existing, true);

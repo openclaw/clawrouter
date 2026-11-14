@@ -116,3 +116,28 @@ test("ElevenLabs interruption and abort never expose partial HTTP200 audio or a 
   const pending = read(native(), response(stalled), abort.signal); abort.abort(); await assert.rejects(pending); assert.equal(canceled, true);
   const already = new AbortController(); already.abort(); await assert.rejects(read(native(), response(), already.signal));
 });
+for (const mode of ["headers", "abort", "cleanup-rejection"]) test(`source retirement holds capacity through ${mode}, including reentrant cancellation`, { timeout: 5000 }, async t => {
+  const ready = Promise.withResolvers(), canceled = Promise.withResolvers(), cleanup = Promise.withResolvers();
+  const abort = new AbortController(), baseline = bodyBudgetCharged();
+  let cancels = 0, completed = false;
+  const source = new ReadableStream({
+    pull() { ready.resolve(); },
+    cancel() { cancels++; abort.abort(); canceled.resolve(); return cleanup.promise; },
+  }, { highWaterMark: 0 });
+  const prepared = native(), lease = prepared.acquire();
+  t.after(() => { cleanup.resolve(); lease.release(); });
+  const result = prepared.read(response(source, mode === "headers" ? { "content-type": "application/json" } : {}), abort.signal)
+    .finally(() => { completed = true; lease.release(); });
+  const rejected = assert.rejects(result);
+  if (mode !== "headers") { await ready.promise; abort.abort(); }
+  await canceled.promise; await new Promise(setImmediate);
+  assert.equal(cancels, 1); assert.equal(completed, false); assert.equal(source.locked, true);
+  assert.equal(bodyBudgetCharged(), baseline + 32 * 1024 * 1024);
+  const competing = new BodyLease();
+  assert.equal(competing.grow(33 * 1024 * 1024), false); competing.release();
+  if (mode === "cleanup-rejection") cleanup.reject(new Error("synthetic cleanup rejection")); else cleanup.resolve();
+  await rejected;
+  assert.equal(cancels, 1); assert.equal(source.locked, false);
+  assert.equal(bodyBudgetCharged(), baseline);
+  lease.release(); assert.equal(bodyBudgetCharged(), baseline);
+});

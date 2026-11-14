@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { crc32 } from "node:zlib";
 import test from "node:test";
-import { parsePixVerseImageMultipart as parse } from "../pixverse-image-multipart.ts";
+import { parsePixVerseImageMultipart as parse, qualifyImageContainer } from "../pixverse-image-multipart.ts";
 
 // Generated offline from a 2x2 RGBA test pattern with ffmpeg (PNG/JPEG) and
 // ImageMagick (WebP). Each complete file decoded to 16 RGBA bytes with ffmpeg.
@@ -65,6 +65,35 @@ function changePngHeader(mutator) {
   return Buffer.concat([images.png.subarray(0, 8), pngChunk("IHDR", header), images.png.subarray(33)]);
 }
 function copyChange(bytes, offset, value) { const result = Buffer.from(bytes); result[offset] = value; return result; }
+
+test("portable container qualification preserves existing fixtures and returns no authority or byte owner", () => {
+  for (const [name, bytes] of Object.entries(images)) {
+    const type = name.startsWith("webp") ? "image/webp" : "image/" + name;
+    const carrier = Buffer.concat([Buffer.alloc(7), bytes, Buffer.alloc(11)]);
+    const view = new Uint8Array(carrier.buffer, carrier.byteOffset + 7, bytes.length);
+    const before = createHash("sha256").update(carrier).digest("hex");
+    assert.equal(qualifyImageContainer(view, type), undefined);
+    assert.equal(createHash("sha256").update(carrier).digest("hex"), before);
+    assert.deepEqual(Buffer.from(parse(request({}, image(view, type)), contentType).file.bytes), bytes);
+  }
+});
+
+test("portable container qualification retains MIME, exact termination and the original 8 MiB file bound", () => {
+  const large = insertPng(pngChunk("ruSt", Buffer.alloc(8 * 1024 * 1024 - images.png.length - 12)));
+  assert.equal(large.length, 8 * 1024 * 1024); assert.equal(qualifyImageContainer(large, "image/png"), undefined);
+  const oversized = insertPng(pngChunk("ruSt", Buffer.alloc(8 * 1024 * 1024 - images.png.length - 11)));
+  for (const [bytes, type] of [[oversized, "image/png"], [images.png, "image/jpeg"], [images.webp, "image/unknown"],
+    [images.webp, "image/webp; charset=utf-8"], [Buffer.alloc(0), "image/png"], [Buffer.from("https://example.com/image.png"), "image/png"],
+    [copyChange(images.png, 20, 99), "image/png"], [images.png.subarray(0, -1), "image/png"],
+    [Buffer.from([255, 216, 255, 217]), "image/jpeg"], [images.jpeg.subarray(0, -1), "image/jpeg"],
+    [copyChange(images.webp, 20, 18), "image/webp"], [Buffer.concat([images.webpLossless, Buffer.of(0)]), "image/webp"]]) {
+    assert.throws(() => qualifyImageContainer(bytes, type), { message: "invalid_pixverse_image_multipart" });
+    denied(request({}, image(bytes, type)));
+  }
+  for (const bytes of [null, "not bytes", new ArrayBuffer(8), [137, 80, 78, 71]]) {
+    assert.throws(() => qualifyImageContainer(bytes, "image/png"), { message: "invalid_pixverse_image_multipart" });
+  }
+});
 
 test("qualified offline fixtures retain exact bytes as views into a nonzero-offset envelope", () => {
   for (const [name, bytes] of Object.entries(images)) {

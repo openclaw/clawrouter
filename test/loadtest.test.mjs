@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, chmod, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
@@ -51,7 +51,9 @@ test('HTTP runner measures SSE delta, caps concurrency, refuses redirects, abort
   const directory = await mkdtemp(join(tmpdir(), 'loadtest-'));
   const keyFile = join(directory, 'key'); await writeFile(keyFile, 'synthetic-key\n', { mode: 0o600 });
   assert.equal(await readKey(keyFile), 'synthetic-key');
-  const unsafe = join(directory, 'unsafe'); await writeFile(unsafe, 'synthetic-key', { mode: 0o644 }); await assert.rejects(readKey(unsafe));
+  const unsafe = join(directory, 'unsafe'); await writeFile(unsafe, 'synthetic-key', { mode: 0o600 });
+  // Set the unsafe mode after creation so a restrictive umask cannot mask it.
+  await chmod(unsafe, 0o644); await assert.rejects(readKey(unsafe));
   let active = 0, peak = 0, mode = 'sse', hits = 0;
   const server = createServer(async (request, response) => {
     hits++; active++; peak = Math.max(active, peak); response.on('close', () => active--);

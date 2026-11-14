@@ -96,3 +96,8 @@ owns later snapshot and composed client/Worker acceptance. Source4 has no snapsh
 lease. Media/decision registry work remains with its existing owners. No helper-only
 activation, native parity, account entitlement, cryptographic badge or live
 inference/billing/cancellation proof is claimed.
+
+The frozen Chat continuation also preserves native effort options/defaults under
+`model_spec.capabilities`: explicit support, 1–7 unique recognized options,
+and an optional default that belongs to that same list. Boolean support alone
+never creates a menu. See [the finite inventory](venice-native-chat.md).

@@ -16,10 +16,13 @@ const compile = manifest => compileProviderSnapshot([manifest]);
 const origin = "https://bedrock-runtime.us-east-1.amazonaws.com";
 function fixture() {
   const manifest = structuredClone(existing);
+  manifest.capabilities = manifest.capabilities.filter(capability => capability.endpoint !== "embed_text");
   manifest.capabilities.push({ id: "llm.embeddings", endpoint: "embed_text", methods: ["POST"] });
-  manifest.endpoints.embed_text = { method: "POST", path: "/model/${model}/invoke", pathParams: ["model"], pathParamStyles: { model: "opaque_segment" },
+  manifest.endpoints.embed_text = { ...manifest.endpoints.embed_text, method: "POST", path: "/model/${model}/invoke", pathParams: ["model"], pathParamStyles: { model: "opaque_segment" },
     headers: { "content-type": "application/json", accept: "application/json" }, requestFormat: "aws_bedrock.invoke", responseFormat: "aws_bedrock.invoke" };
-  manifest.models.entries.push(...wire.cases.map(item => ({ id: `bedrock/${item.model}`, upstream: item.model, capabilities: ["llm.embeddings"] })));
+  const existingRows = new Map(manifest.models.entries.map(model => [model.upstream, model]));
+  manifest.models.entries = manifest.models.entries.filter(model => !wire.cases.some(item => item.model === model.upstream));
+  manifest.models.entries.push(...wire.cases.map(item => ({ ...existingRows.get(item.model), id: `bedrock/${item.model}`, upstream: item.model, capabilities: ["llm.embeddings"] })));
   return manifest;
 }
 function select(provider, item, native = false) {

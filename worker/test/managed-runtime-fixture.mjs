@@ -6,6 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { continuationAuthority } from "./continuation-authority.mjs";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 const { default: worker } = await import("../index.ts");
 const { sha256Hex } = await import("../utils.ts");
 const { providerById, snapshot } = await import("../providers.ts");
@@ -20,7 +21,13 @@ export async function fixture(t, { fixed = 700, pooled = false, providerId = "re
   let now = Date.parse("2026-11-03T00:00:00Z"); t.mock.method(Date, "now", () => now);
   const values = new Map(), pending = [], sent = [], budgetCalls = [];
   const env = { REPLICATE_API_TOKEN: "synthetic-environment-key", POLICY_KV: {
-    async get(key) { return Array.isArray(key) ? new Map(key.map(name => [name, structuredClone(values.get(name) ?? null)])) : structuredClone(values.get(key) ?? null); },
+    async get(key, type) {
+      const read = name => {
+        const value = values.get(name) ?? null;
+        return type === "stream" && value !== null ? accessBytesResponse(JSON.stringify(value), "").body : structuredClone(value);
+      };
+      return Array.isArray(key) ? new Map(key.map(name => [name, read(name)])) : read(key);
+    },
     async put(key, value) { values.set(key, JSON.parse(value)); },
   } };
   const budgets = sqlBudgetNamespace(t);

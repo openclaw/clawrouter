@@ -29,7 +29,7 @@ export function novitaCatalogRequest(inferenceBaseUrl: string, selectedApiKey: s
   }
   return new Request("https://api.novita.ai/openai/v1/models", {
     method: "GET", headers: { accept: "application/json", "content-type": "application/json", authorization: `Bearer ${selectedApiKey}` },
-    credentials: "omit", redirect: "error", signal,
+    credentials: "omit", redirect: "manual", signal,
   });
 }
 

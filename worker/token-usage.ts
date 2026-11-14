@@ -2,6 +2,7 @@ import { googleField, googleInt32, googleServiceTier } from "./google-protocol.t
 import { anthropicModifiers, type AnthropicModifiers } from "./anthropic-pricing.ts";
 
 export interface UsageTokens {
+  reasoning?: number | null; // Subset of output, never an additional billable category.
   webSearchRequests?: number | null; // Anthropic cumulative usage, not content-block count.
   image?: { textInput: number; imageInput: number; imageOutput: number };
   serviceTier?: string | null;
@@ -28,6 +29,9 @@ export function extractUsageTokens(value: unknown, context?: Readonly<UsageToken
   const reportedInput = pickNumber(usage, "input_tokens", "prompt_tokens", "inputTokens");
   const output = pickNumber(usage, "output_tokens", "completion_tokens", "outputTokens");
   const details = record(usage.prompt_tokens_details ?? usage.input_tokens_details);
+  const outputDetails = record(usage.output_tokens_details ?? usage.completion_tokens_details);
+  const reportedReasoning = outputDetails && Object.hasOwn(outputDetails, "reasoning_tokens")
+    ? subsetCounter(outputDetails.reasoning_tokens, output) : undefined;
   const inclusivePrompt = "prompt_tokens" in usage;
   const cached = inclusivePrompt ? promptCachedTokens(usage, details, reportedInput, context)
     : details ? pickNumber(details, "cached_tokens", "cache_read_input_tokens") : pickNumber(usage, "cache_read_input_tokens");
@@ -47,7 +51,7 @@ export function extractUsageTokens(value: unknown, context?: Readonly<UsageToken
   const modifiers = anthropicModifiers(usage);
   const serviceTier = modifiers.serviceTier !== undefined ? modifiers.serviceTier : extractServiceTier(record(root?.response) ?? root);
   const webSearchRequests = searchRequests(record(usage.server_tool_use)?.web_search_requests);
-  return { input, output, total, cached, cacheWrite, cacheWrite5m, cacheWrite1h, ...(root?.type === "message" && Object.hasOwn(usage, "server_tool_use") ? { webSearchRequests } : {}), ...(Object.keys(modifiers).length ? { anthropic: modifiers } : {}), ...(serviceTier !== undefined ? { serviceTier } : {}), ...(unbilled ? { billable: false as const } : {}) };
+  return { input, output, total, cached, cacheWrite, cacheWrite5m, cacheWrite1h, ...(reportedReasoning !== undefined ? { reasoning: reportedReasoning } : {}), ...(root?.type === "message" && Object.hasOwn(usage, "server_tool_use") ? { webSearchRequests } : {}), ...(Object.keys(modifiers).length ? { anthropic: modifiers } : {}), ...(serviceTier !== undefined ? { serviceTier } : {}), ...(unbilled ? { billable: false as const } : {}) };
 }
 
 // Cohere reports observed context separately from the units it bills. Missing
@@ -90,7 +94,7 @@ function googleUsageTokens(value: unknown): UsageTokens | null {
   const tier = googleField(value, "serviceTier", "service_tier");
   // Absent/null ProtoJSON fields are unset; null in normalized usage instead
   // records an explicit invalid tier so accounting cannot assume Standard.
-  return { input, output: candidates + thoughts, total, cached, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null,
+  return { input, output: candidates + thoughts, total, cached, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null, reasoning: thoughts,
     ...(tier == null ? {} : { serviceTier: googleServiceTier(tier) }) };
 }
 
@@ -353,6 +357,10 @@ function pickNumber(value: Record<string, unknown>, ...keys: string[]): number |
     if (number != null) return number;
   }
   return null;
+}
+
+function subsetCounter(value: unknown, inclusive: number | null): number | null {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && inclusive !== null && value <= inclusive ? value : null;
 }
 
 function searchRequests(value: unknown): number | null {

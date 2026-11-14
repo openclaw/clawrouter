@@ -1,3 +1,4 @@
+import { miniMaxVideoManagedAdapter } from "./managed-minimax-video.ts";
 import type { ManagedLifecycleAdapter } from "./managed-lifecycle-types.ts";
 import { falManagedAdapter } from "./managed-fal.ts";
 import { googleOmniManagedAdapter } from "./managed-google-omni-wrapper.ts";
@@ -16,7 +17,7 @@ const pixVerseImageControlAdapter = createPixVerseManagedAdapter("image");
 
 const adapters: readonly ManagedLifecycleAdapter[] = [
   replicateManagedAdapter, falManagedAdapter, kieManagedAdapter, vydraManagedAdapter, togetherManagedAdapter, googleOmniManagedAdapter,
-  openRouterVideoManagedAdapter, wanManagedAdapter, createPixVerseManagedAdapter("text"), createRunwayManagedAdapter("text"),
+  openRouterVideoManagedAdapter, wanManagedAdapter, miniMaxVideoManagedAdapter, createPixVerseManagedAdapter("text"), createRunwayManagedAdapter("text"),
 ];
 
 // A lifecycle declaration alone never activates an unknown protocol or format.

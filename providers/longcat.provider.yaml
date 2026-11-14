@@ -48,9 +48,11 @@ endpoints:
 models:
   entries:
     - id: longcat/LongCat-2.5
+      displayName: "LongCat 2.5"
       upstream: LongCat-2.5
       capabilities: [llm.chat]
     - id: longcat/LongCat-2.0
+      displayName: "LongCat 2.0"
       upstream: LongCat-2.0
       capabilities: [llm.chat]
       requestParameters:

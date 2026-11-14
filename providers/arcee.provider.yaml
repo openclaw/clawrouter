@@ -41,6 +41,7 @@ endpoints:
 models:
   entries:
     - id: arcee/trinity-mini
+      displayName: "Trinity Mini"
       upstream: trinity-mini
       capabilities: [llm.chat]
       requestParameters:
@@ -56,6 +57,7 @@ models:
             checkedAt: "2026-11-03"
             input: [text]
     - id: arcee/trinity-large-preview
+      displayName: "Trinity Large Preview"
       upstream: trinity-large-preview
       capabilities: [llm.chat]
       requestParameters:
@@ -71,6 +73,7 @@ models:
             checkedAt: "2026-11-03"
             input: [text]
     - id: arcee/trinity-large-thinking
+      displayName: "Trinity Large Thinking"
       upstream: trinity-large-thinking
       capabilities: [llm.chat]
       requestParameters:

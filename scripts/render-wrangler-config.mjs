@@ -19,6 +19,12 @@ const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
 const strict = process.env.CLAWROUTER_STRICT_CONFIG !== "0";
 const omitRoutes = process.env.CLAWROUTER_OMIT_ROUTES === "1";
 const workerVars = {
+  LARGE_HTTP_ORIGIN: deployment.baseUrl,
+  LARGE_HTTP_ENABLED: process.env.LARGE_HTTP_ENABLED ?? "1",
+  LARGE_HTTP_INGRESS_ENABLED: process.env.LARGE_HTTP_INGRESS_ENABLED ?? "1",
+  LARGE_HTTP_CAPACITY: process.env.LARGE_HTTP_CAPACITY ?? "8",
+  LARGE_HTTP_TENANT_LIMIT: process.env.LARGE_HTTP_TENANT_LIMIT ?? String(Math.min(2, Number(process.env.LARGE_HTTP_CAPACITY ?? 8))),
+  LARGE_HTTP_SLOT_STARTS_PER_HOUR: process.env.LARGE_HTTP_SLOT_STARTS_PER_HOUR ?? "24",
   CLAWROUTER_DEPLOY_ENV: deployment.environment,
   CLAWROUTER_CONTENT_RETENTION_DEFAULT: String(
     deployment.contentRetentionDefault,
@@ -46,6 +52,7 @@ if (kvId) {
 
 let config = readFileSync(source, "utf8");
 config = config.replace(/^name = .+$/m, `name = "${workerName}"`);
+config = config.replace(/name = "clawrouter-edge-large-http"/, `name = "${workerName}-large-http"`);
 config = config.replace(/^queue = ".+"$/gm, `queue = "${queueName}"`);
 config = config.replace(
   /^dead_letter_queue = ".+"$/gm,

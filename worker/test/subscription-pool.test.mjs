@@ -1,3 +1,4 @@
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
 import { sqliteFixture } from "./sqlite-storage.mjs";
 import { perRequestAuthority } from "./typescript-setup.mjs";
 perRequestAuthority();
@@ -5,7 +6,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createGrantAuthority } from "./grant-authority-fixture.mjs";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
-import { putGrantCredentials } from "../grant-credentials.ts";
+import { putGrantCredentials, revokeGrantCredentials } from "../grant-credentials.ts";
 import { observeGrantQuota, observeGrantQuotaProbe, grantQuotaExhausted, grantQuotaRatio } from "../grant-quota.ts";
 import { resolveGrantSelection, recordGrantRuntime, DEFAULT_GRANT_ROUTING } from "../grant-selection.ts";
 import { providerById, upstreamAuth, refreshStoredGrantQuota } from "../providers.ts";
@@ -29,7 +30,7 @@ async function fixture(t) {
     ANTHROPIC_API_KEY: "synthetic-api-key", CLAWROUTER_LOCAL_AUTH: "enabled",
     CLAWROUTER_ADMIN_TOKEN_SHA256: await sha256Hex("synthetic-admin"),
     ACCESS_CONTROL: { idFromName: name => name, get: () => ({ fetch: authority.fetch }) },
-    POLICY_KV: { async get(requested) { return Array.isArray(requested) ? new Map(requested.map(name => [name, structuredClone(values.get(name) ?? null)])) : structuredClone(values.get(requested) ?? null); }, async put(name, value) { values.set(name, JSON.parse(value)); }, async list({ prefix }) { return { keys: [...values.keys()].filter(name => name.startsWith(prefix)).map(name => ({ name })), list_complete: true }; } },
+    POLICY_KV: { async get(requested, type) { if (type === "stream") { const value = values.get(requested); return value == null ? null : accessBytesResponse(JSON.stringify(value), "").body; } return Array.isArray(requested) ? new Map(requested.map(name => [name, structuredClone(values.get(name) ?? null)])) : structuredClone(values.get(requested) ?? null); }, async put(name, value) { values.set(name, JSON.parse(value)); }, async list({ prefix }) { return { keys: [...values.keys()].filter(name => name.startsWith(prefix)).map(name => ({ name })), list_complete: true }; } },
   }, { useExistingAuthority: true });
   Object.assign(authorityEnv, env);
   const auth = { policyId: "pool", credentialId: "client", principalId: null, authType: "proxy_key", policy: { enabled: true, generation: "g1", providers: ["anthropic"], tenantId: "tenant-pool", retainRequestContent: false, grantRouting: routing({ environmentFallback: true }) } };
@@ -301,6 +302,83 @@ async function clientKey(f) {
   await authorityCall(f.env, "/credentials/mutate", { scope: "admin", operation: "put", actor: { auth: "admin_token", role: "admin", email: "synthetic@example.test" }, credentialId: "client", credential: { enabled: true, policyId: "pool", secretSha256: await sha256Hex("synthetic-client") } });
   return { authorization: "Bearer clawrouter-live-client-synthetic-client", "content-type": "application/json" };
 }
+
+test("admin sharing keeps one subscription owner, source access, quota and consumer accounting", async t => {
+  const f = await fixture(t), headers = await clientKey(f);
+  const sharedKey = "oauth/source/contributor";
+  await putGrantCredentials(f.env, sharedKey, { enabled: true, kind: "subscription", provider: "anthropic", accessToken: "synthetic-shared-access", refreshToken: "synthetic-shared-refresh", expiresAt: future });
+  const sourcePolicy = { ...f.auth.policy, tenantId: "source-tenant", grantRouting: routing({ environmentFallback: false }) };
+  await authorityCall(f.env, "/policies/put", { policyId: "source", policy: sourcePolicy });
+  const owner = f.env.GRANT_CREDENTIALS.objects.get(sharedKey);
+  const ownerBefore = structuredClone(owner.values.get("credential")), ownersBefore = [...f.env.GRANT_CREDENTIALS.objects.keys()];
+  const nextPolicy = { ...f.auth.policy, poolStatus: "visible", grantRouting: routing({ sharedGrants: { anthropic: [sharedKey] }, eligibleGrants: { anthropic: ["contributor"] } }) };
+  const update = authorization => handler.fetch(new Request("https://router.example/v1/admin/policies/pool", {
+    method: "PUT", headers: { "content-type": "application/json", ...(authorization ? { authorization } : {}) }, body: JSON.stringify(nextPolicy),
+  }), f.env, f.context);
+  assert.equal((await update()).status, 401);
+  assert.notEqual((await update(headers.authorization)).status, 200);
+  const saved = await update("Bearer synthetic-admin");
+  assert.equal(saved.status, 200, await saved.clone().text());
+  assert.deepEqual((await saved.json()).grantRouting.sharedGrants, { anthropic: [sharedKey] });
+  assert.deepEqual(owner.values.get("credential"), ownerBefore);
+  assert.deepEqual([...f.env.GRANT_CREDENTIALS.objects.keys()], ownersBefore, "sharing must not create another credential or refresh owner");
+  const sourceAuth = { ...f.auth, policyId: "source", policy: sourcePolicy };
+  assert.equal((await upstreamAuth(provider, sourceAuth, f.env, new Set(), null, false, undefined, requirement("claude-opus-5-5"))).grantKey, sharedKey);
+  let upstreamCalls = 0;
+  t.mock.method(globalThis, "fetch", async (_url, init) => {
+    upstreamCalls++;
+    assert.equal(new Headers(init.headers).get("authorization"), "Bearer synthetic-shared-access");
+    return Response.json({ id: "synthetic", type: "message", content: [], usage: { input_tokens: 10, output_tokens: 1 } });
+  });
+  const infer = () => handler.fetch(new Request("https://router.example/v1/messages", { method: "POST", headers, body: JSON.stringify({ model: "anthropic/claude-opus-5-5", max_tokens: 1, messages: [] }) }), f.env, f.context);
+  const response = await infer();
+  assert.equal(response.status, 200, await response.clone().text()); await response.text();
+  while (f.pending.length) await Promise.all(f.pending.splice(0));
+  assert.equal(upstreamCalls, 1);
+  assert.equal(f.events.at(-1).policy_id, "pool");
+  assert.equal(f.events.at(-1).tenant_id, "tenant-pool");
+  assert.equal(f.events.at(-1).grant_key, sharedKey);
+  const exhausted = observeGrantQuotaProbe(usage(100), provider.quota.probes[0]);
+  exhausted.grantRevision = f.values.get(sharedKey).updatedAt;
+  await recordGrantRuntime(f.env, sharedKey, exhausted);
+  for (const [policyId, tenantId, policyRouting] of [["pool", "tenant-pool", nextPolicy.grantRouting], ["source", "source-tenant", sourcePolicy.grantRouting]]) {
+    const selected = await resolveGrantSelection("anthropic", policyId, tenantId, "anthropic", f.env, new Set(), policyRouting, null, false, undefined, requirement("claude-opus-5-5"));
+    assert.equal(selected.selected, null, `${policyId} must consume the same owner quota`);
+  }
+  await revokeGrantCredentials(f.env, sharedKey);
+  const revoked = await infer();
+  assert.equal(revoked.status, 503, await revoked.clone().text()); await revoked.text();
+  assert.equal(upstreamCalls, 1, "revoked source must not dispatch from the consumer");
+  assert.equal((await authorityCall(f.env, "/grant-pools/resolve", { policyId: "source", tenantId: "source-tenant", providerId: "anthropic" })).keys.includes(sharedKey), false);
+  assert.equal((await authorityCall(f.env, "/grant-pools/resolve", { policyId: "pool", tenantId: "tenant-pool", providerId: "anthropic" })).keys.includes(sharedKey), false);
+});
+
+test("shared pool inventory hides foreign scopes and uses the same opaque identity in usage", async t => {
+  const f = await fixture(t), headers = await clientKey(f);
+  const sharedKey = "oauth/private-source/claude", unrelatedKey = "oauth/private-source/unrelated";
+  await putGrantCredentials(f.env, sharedKey, { enabled: true, kind: "subscription", provider: "anthropic", accessToken: "synthetic-shared-access", expiresAt: future });
+  await putGrantCredentials(f.env, unrelatedKey, { enabled: true, kind: "subscription", provider: "anthropic", accessToken: "synthetic-unrelated-access", expiresAt: future });
+  f.auth.policy.poolStatus = "visible";
+  f.auth.policy.grantRouting = routing({ sharedGrants: { anthropic: [sharedKey] }, eligibleGrants: { anthropic: ["claude"] } });
+  await authorityCall(f.env, "/policies/put", { policyId: "pool", policy: f.auth.policy });
+  f.env.USAGE_LEDGER = { idFromName(name) { assert.equal(name, "policy:tenant-pool:pool"); return name; }, get: () => ({ fetch: async () => Response.json({ lanes: [], grants: [{ grantKey: sharedKey, requests: 1 }] }) }) };
+  const read = () => handler.fetch(new Request("https://router.example/v1/pool", { headers }), f.env, f.context);
+  const response = await read(); assert.equal(response.status, 200, await response.clone().text());
+  const body = await response.json();
+  assert.equal(body.grants.length, 2);
+  assert.equal(body.grants[0].key, "claude");
+  assert.match(body.grants[1].key, /^shared-[a-f0-9]{16}$/);
+  assert.equal(body.usage.grants[0].grantKey, body.grants[1].key);
+  assert.doesNotMatch(JSON.stringify(body), /oauth\/|private-source|unrelated|synthetic|refreshToken|accessToken/);
+  await putGrantCredentials(f.env, sharedKey, { provider: "anthropic", kind: "api_key", enabled: true, credential: "synthetic-replacement" }, false, "replace");
+  assert.equal((await authorityCall(f.env, "/grant-pools/resolve", { policyId: "pool", tenantId: "tenant-pool", providerId: "anthropic" })).keys.includes(sharedKey), false);
+  assert.deepEqual((await (await read()).json()).grants.map(grant => grant.key), ["claude"], "replacement API keys cannot inherit subscription sharing");
+  await revokeGrantCredentials(f.env, unrelatedKey);
+  for (const invalid of [sharedKey, unrelatedKey]) {
+    const attempted = await handler.fetch(new Request("https://router.example/v1/admin/policies/other_consumer", { method: "PUT", headers: { authorization: "Bearer synthetic-admin", "content-type": "application/json" }, body: JSON.stringify({ ...f.auth.policy, grantRouting: routing({ sharedGrants: { anthropic: [invalid] } }) }) }), f.env, f.context);
+    assert.equal(attempted.status, 400, "new references cannot admit API keys or revoked owners");
+  }
+});
 
 test("policy model admission denies native, manifest, OpenAI and Responses before budget or upstream", async t => {
   const f = await fixture(t), headers = await clientKey(f);

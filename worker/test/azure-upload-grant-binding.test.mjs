@@ -38,19 +38,16 @@ for (const manifest of [false, true]) for (const change of ["disabled", "replace
     const f = await setup(t), sequence = [], reading = Promise.withResolvers(); let enabledOwnerObserved = false, enabledAtRead = false;
     overrideHotCacheConfig({ freshMs: 30_000, maxAgeMs: 60_000 }); t.after(() => overrideHotCacheConfig(HOT_CACHE_DISABLED));
     const owners = f.env.GRANT_CREDENTIALS;
-    f.env.GRANT_CREDENTIALS = { ...owners, get(id) {
-      const owner = owners.get(id);
-      return { async fetch(url, init) {
-        const response = await owner.fetch(url, init);
-        if (new URL(url).pathname === "/materialize" && response.ok) {
-          const { grant } = await response.clone().json();
-          if (grant?.provider === "azure-speech" && grant.enabled === true && !enabledOwnerObserved) {
-            enabledOwnerObserved = true; sequence.push("enabled-owner-materialized");
-          }
-        }
-        return response;
-      } };
-    } };
+    const owner = owners.objects.get(owners.idFromName(grantKey))?.object;
+    assert.ok(owner, "the seeded original grant owner exists");
+    const materialize = owner.materialize;
+    t.mock.method(owner, "materialize", async function (...args) {
+      const value = await materialize.apply(this, args), grant = value?.grant;
+      if (grant?.provider === "azure-speech" && grant.enabled === true && !enabledOwnerObserved) {
+        enabledOwnerObserved = true; sequence.push("enabled-owner-materialized");
+      }
+      return value;
+    });
     const body = new ReadableStream({ async pull(controller) {
       // A producer can prefetch. It cannot mutate the owner until the handler
       // actually acquires this request's reader after original admission.

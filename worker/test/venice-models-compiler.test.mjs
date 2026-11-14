@@ -36,7 +36,7 @@ test("Venice public catalog compiles a bodyless GET without forwarding the priva
   assert.deepEqual([...request.headers], [["accept", "application/json"]]);
   assert.equal(endpoint.auth, null);
   assert.equal(provider.auth.schemes[0].secretKind, "api_key");
-  assert.equal(request.redirect, "error"); assert.equal(request.credentials, "omit");
+  assert.equal(request.redirect, "manual"); assert.equal(request.credentials, "omit");
 });
 
 test("Venice catalog rejects alternate methods, native format aliases, query/body features and duplicate discovery routes", () => {
@@ -96,14 +96,16 @@ test("Venice public catalog composes exact original-policy filtering for every f
 });
 
 test("Venice sparse capabilities, independent limits and dated privacy/deprecation observations do not create entitlements", () => {
-  const provider = compile(fixture()).providers[0], allows = id => discoveryAllows({ models: null }, provider, id);
+  const provider = compile(fixture()).providers[0], before = structuredClone(provider.models), allows = id => discoveryAllows({ models: null }, provider, id);
   assert.deepEqual(filterVeniceModels(list([row(ids[6])]), allows), list([row(ids[6])]));
   const spec = { availableContextTokens: 4096, maxCompletionTokens: 8192, privacy: "anonymized", offline: false,
     capabilities: { supportsFunctionCalling: false, supportsReasoningEffort: true }, deprecation: { date: "2026-10-01T00:00:00.000Z" } };
   assert.deepEqual(filterVeniceModels(list([row(ids[0], spec)]), allows), list([row(ids[0], spec)]));
   assert.deepEqual(filterVeniceModels(list([row(ids[0], { ...spec, offline: true }), { ...row(ids[1]), type: "image" }]), allows), list([]));
   const absent = filterVeniceModels(list([row(ids[0])]), allows).data[0];
-  assert.equal(Object.hasOwn(absent, "model_spec"), false); assert.equal(Object.hasOwn(provider.models[0], "nativeCapabilities"), false);
+  assert.equal(Object.hasOwn(absent, "model_spec"), false);
+  // Sparse discovery cannot add entitlements or erase explicitly declared facts.
+  assert.deepEqual(provider.models, before);
 });
 
 test("Venice USD and DIEM prices remain separate observations with independent extended rates and no executable tariff", async () => {

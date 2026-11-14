@@ -13,6 +13,12 @@ import type { AccountingOutcome } from "./proxy-accounting.ts";
 import type { ResponsesObservation } from "./token-usage.ts";
 import type { Env } from "./types.ts";
 import { HttpError, json, readJson, sha256Hex } from "./utils.ts";
+import { assertPublishedVerifier, samePublishedInput, publishedInputUnavailable, type PublishedInputBinding,
+  type PublishedInputObject, type PublishedInputAttempt } from "./published-input-receipt.ts";
+
+type PublishedInputAction = { action: "asset_allocate" | "asset_claim_publish" | "asset_bind_publish" | "asset_claim_forward";
+  binding: PublishedInputBinding; object?: PublishedInputObject; attempt?: PublishedInputAttempt }
+  | { action: "asset_get"; id: string; verifierDigest: string };
 
 type Input = { summary?: true; input?: ManagedInputAllocation; binding?: ManagedInputBinding; imageId?: string; action: "get" | "list" | "admit" | "dispatch" | "identity" | "observe" | "freeze" | "replay" | "managed_admit" | "managed_bind" | "managed_observe" | "managed_lookup" | "managed_files" | "input_allocate" | "input_get" | "input_claim_upload" | "input_bind_upload" | "input_claim_create"; files?: readonly ManagedFileDescriptor[]; managed?: ManagedAdmission; policyGeneration?: string; id: string; admission?: BackgroundAdmission; responseId?: string; contentRef?: string | null; outcome?: Omit<AccountingOutcome, "reservation">; after?: string; fact?: ResponsesObservation; statusCode?: number; predictionStatus?: string; observationUnavailable?: ManagedObservationLoss };
 
@@ -51,7 +57,32 @@ export class ResponsesScopeStore {
   }
 
   async fetch(request: Request): Promise<Response> {
-    const input = await readJson<Input>(request);
+    const value = await readJson<Input | PublishedInputAction>(request);
+    if (typeof value?.action === "string" && value.action.startsWith("asset_")) {
+      const input = value as PublishedInputAction;
+      if (input.action === "asset_get") {
+        if (Object.keys(input).sort().join(",") !== "action,id,verifierDigest") publishedInputUnavailable();
+        return this.serial(() => {
+          const receipt = this.jobs.publishedInput(input.id);
+          assertPublishedVerifier(receipt, input.verifierDigest);
+          return json(receipt);
+        }, false);
+      }
+      const field = input.action === "asset_bind_publish" ? "object" : input.action === "asset_claim_forward" ? "attempt" : undefined;
+      if (Object.keys(input).sort().join(",") !== ["action", "binding", ...(field ? [field] : [])].sort().join(",")) publishedInputUnavailable();
+      // No external awaits, ledger ACKs, alarms or callback into a held grant
+      // owner. Publication/forwarding owners perform their own final checks.
+      return this.serial(() => this.storage.transactionSync(() => {
+        const receipt = input.action === "asset_allocate" ? this.jobs.allocatePublishedInput(input.binding)
+          : input.action === "asset_claim_publish" ? this.jobs.claimPublishedInputPublication(input.binding)
+          : input.action === "asset_bind_publish" && input.object ? this.jobs.bindPublishedInputObject(input.binding, input.object)
+          : input.action === "asset_claim_forward" && input.attempt ? this.jobs.claimPublishedInputForward(input.binding, input.attempt)
+          : publishedInputUnavailable();
+        if (!samePublishedInput(receipt.binding, input.binding)) publishedInputUnavailable();
+        return json({ acknowledged: true, receipt });
+      }), false);
+    }
+    const input = value as Input;
     if (input.summary !== undefined && (input.summary !== true || !input.action.startsWith("input_"))) inputUnavailable();
     if (input.action === "input_allocate" && input.input) {
       const job = await this.mutate(() => this.jobs.allocateInput(input.input!));

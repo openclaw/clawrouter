@@ -5,11 +5,16 @@ export const VENICE_MODELS_FORMAT = "venice.models";
 const CAPABILITY_KEYS = ["supportsFunctionCalling", "supportsReasoning", "supportsReasoningEffort", "supportsVision",
   "supportsMultipleImages", "supportsLogProbs", "supportsResponseSchema"] as const;
 const PRICE_KEYS = ["input", "output", "cache_input", "cache_write"] as const;
+const EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+type VeniceEffort = typeof EFFORTS[number];
 type VeniceRates = Partial<Record<typeof PRICE_KEYS[number], { usd?: number; diem?: number }>>;
 export interface VeniceModelSpec {
   availableContextTokens?: number;
   maxCompletionTokens?: number;
-  capabilities?: Partial<Record<typeof CAPABILITY_KEYS[number], boolean>>;
+  capabilities?: Partial<Record<typeof CAPABILITY_KEYS[number], boolean>> & {
+    reasoningEffortOptions?: VeniceEffort[];
+    defaultReasoningEffort?: VeniceEffort;
+  };
   offline?: boolean;
   privacy?: "private" | "anonymized";
   deprecation?: { date: string };
@@ -50,7 +55,7 @@ export function veniceCatalogRequest(inferenceBaseUrl: string, signal: AbortSign
     throw new HttpError(503, "provider_catalog_not_supported", "Venice text catalog requires its canonical inference service");
   }
   return new Request("https://api.venice.ai/api/v1/models?type=text", {
-    method: "GET", headers: { accept: "application/json" }, credentials: "omit", redirect: "error", signal,
+    method: "GET", headers: { accept: "application/json" }, credentials: "omit", redirect: "manual", signal,
   });
 }
 
@@ -85,6 +90,14 @@ export function filterVeniceModels(payload: unknown, allows: (id: string) => boo
     const capabilities = record(spec?.capabilities), observedCapabilities: NonNullable<VeniceModelSpec["capabilities"]> = {};
     for (const key of CAPABILITY_KEYS) {
       if (typeof capabilities?.[key] === "boolean") observedCapabilities[key] = capabilities[key];
+    }
+    const options = capabilities?.reasoningEffortOptions;
+    if (observedCapabilities.supportsReasoningEffort === true && Array.isArray(options)
+      && options.length > 0 && options.length <= EFFORTS.length && new Set(options).size === options.length
+      && options.every((value): value is VeniceEffort => EFFORTS.some(effort => effort === value))) {
+      observedCapabilities.reasoningEffortOptions = [...options];
+      const defaultEffort = options.find(value => value === capabilities?.defaultReasoningEffort);
+      if (defaultEffort !== undefined) observedCapabilities.defaultReasoningEffort = defaultEffort;
     }
     if (Object.keys(observedCapabilities).length) facts.capabilities = observedCapabilities;
     const pricing = record(spec?.pricing), observedPricing: NonNullable<VeniceModelSpec["pricing"]> = rates(pricing);

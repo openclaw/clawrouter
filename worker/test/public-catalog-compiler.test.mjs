@@ -13,6 +13,7 @@ const sources = Object.fromEntries(["cerebras", "nvidia"].map(id => [id,
 const compile = manifest => compileProviderSnapshot([manifest]);
 function fixture(id) {
   const manifest = structuredClone(sources[id]);
+  manifest.capabilities = manifest.capabilities.filter(row => row.endpoint !== "public_models");
   manifest.capabilities.push({ id: "models.list", endpoint: "public_models", methods: ["GET"] });
   manifest.endpoints.public_models = { method: "GET", path: "/models", nativeProxy: false,
     requestFormat: `${id}.public_catalog`, responseFormat: `${id}.public_catalog`,
@@ -98,7 +99,7 @@ test("published factories select one Cerebras URL and both NVIDIA URLs without i
   for (const request of [single, pair.inventory, pair.featured]) {
     assert.equal(request.method, "GET"); assert.equal(request.body, null);
     assert.deepEqual([...request.headers], [["accept", "application/json"]]);
-    assert.equal(request.credentials, "omit"); assert.equal(request.redirect, "error");
+    assert.equal(request.credentials, "omit"); assert.equal(request.redirect, "manual");
   }
 });
 

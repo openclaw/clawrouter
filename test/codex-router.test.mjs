@@ -497,7 +497,10 @@ for (const scenario of ["request_retry", "stream_retry", "interrupt"]) {
   test(`native Codex through workerd: HTTP defaults, ${scenario}`, { skip: !binary, timeout: 90_000 }, async t => {
     const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
     const home = await mkdtemp(join(tmpdir(), "clawrouter-native-retry-"));
-    let mf, client;
+    let mf, client, httpStarted;
+    const http = { phase: "not-started", headers: false, bodyComplete: false, elapsedMs: 0 };
+    const beginHttp = phase => { http.phase = phase; http.headers = false; http.bodyComplete = false; http.elapsedMs = 0; httpStarted = performance.now(); };
+    const completeHttp = phase => { http.phase = phase; http.bodyComplete = true; http.elapsedMs = Math.round(performance.now() - httpStarted); };
     try {
       mf = await startWorkerdFixture(home, routerFixture({ failFirstPublication: scenario === "request_retry" }), upstreamFixture({ toolCall: false, turnState: true }));
       const kv = await mf.getKVNamespace("POLICY_KV", "router");
@@ -506,8 +509,10 @@ for (const scenario of ["request_retry", "stream_retry", "interrupt"]) {
       await kv.put("connections/openai", JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: limit }));
       const origin = await mf.ready;
       const dispatch = path => fetch(new URL(path, origin), { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(10_000) });
-      const discovered = await dispatch("/v1/catalog"); assert.equal(discovered.status, 200);
-      const { env } = await configureNativeClient(home, origin, await discovered.json(), "http", true);
+      beginHttp("catalog-headers");
+      const discovered = await dispatch("/v1/catalog"); http.headers = true; assert.equal(discovered.status, 200);
+      http.phase = "catalog-body"; const catalog = await discovered.json(); completeHttp("catalog-complete");
+      const { env } = await configureNativeClient(home, origin, catalog, "http", true);
       client = nativeCodexClient(t, binary, home, env);
       await client.rpc("initialize", { clientInfo: { name: "clawrouter_fixture", version: "1.0.0" }, capabilities: { experimentalApi: true } });
       client.child.stdin.write('{"method":"initialized"}\n');
@@ -550,11 +555,13 @@ for (const scenario of ["request_retry", "stream_retry", "interrupt"]) {
       assert.equal(retries.length, scenario === "stream_retry" ? 1 : 0, "HTTP request retries stay below the native stream-retry notification layer");
       let usage;
       await until(async () => {
-        usage = await (await dispatch("/v1/usage")).json();
+        beginHttp("usage-headers"); const response = await dispatch("/v1/usage"); http.headers = true;
+        http.phase = "usage-body"; usage = await response.json(); completeHttp("usage-complete");
         assert.ok(usage.usage.events.length <= observed.requests.length);
         return usage.usage.events.length === observed.requests.length;
       });
-      const ingress = await (await dispatch("/fixture-ingress")).json();
+      beginHttp("ingress-headers"); const ingressResponse = await dispatch("/fixture-ingress"); http.headers = true;
+      http.phase = "ingress-body"; const ingress = await ingressResponse.json(); completeHttp("ingress-complete");
       assert.deepEqual(ingress.map(({ status }) => status), scenario === "request_retry" ? [503, 200] : [200, 200]);
       const receipts = ingress.map(({ requestId }) => usage.usage.events.filter(event => event.request_id === requestId));
       assert.ok(receipts.every(events => events.length === 1), "each actual router attempt has one receipt");
@@ -578,6 +585,12 @@ for (const scenario of ["request_retry", "stream_retry", "interrupt"]) {
         assert.deepEqual(await (await ledger.fetch("https://budget/fixture-unsettled")).json(), { total: 2, count: 0 });
       }
       assert.equal(/fallback model metadata|model metadata.*not found/i.test(client.stderr() + JSON.stringify(client.notifications)), false);
+    } catch (error) {
+      try {
+        t.diagnostic(JSON.stringify({ fixture: "native-http-defaults-failure", scenario, lastHttp: {
+          ...http, elapsedMs: httpStarted === undefined || http.bodyComplete ? http.elapsedMs : Math.round(performance.now() - httpStarted),
+        } }));
+      } finally { throw error; }
     } finally {
       await client?.close();
       await mf?.dispose();

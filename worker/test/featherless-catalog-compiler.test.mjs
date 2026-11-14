@@ -8,6 +8,9 @@ const { createRouteCatalog } = await import("../../shared/route-catalog.ts");
 const { prepareModelDiscovery, validateDiscoveryQuery } = await import("../model-discovery.ts");
 const { FEATHERLESS_MODELS_FORMAT, featherlessCatalogRequest, readFeatherlessModels } = await import("../featherless-model-catalog.ts");
 const source = parse(readFileSync(new URL("../../providers/featherless.provider.yaml", import.meta.url), "utf8"));
+// Foundation fixtures remain independent; bundled activation has its own suite.
+source.capabilities = source.capabilities.filter(capability => capability.endpoint !== "catalog");
+delete source.endpoints.catalog;
 const compile = manifest => compileProviderSnapshot([manifest]);
 function fixture() {
   const manifest = structuredClone(source);
@@ -96,7 +99,7 @@ test("Featherless projection reuses the original-key page factory and does not r
   for (const page of [1, 9]) {
     const request = featherlessCatalogRequest(provider.base_urls.default, key, page, signal);
     assert.equal(request.url, `https://api.featherless.ai/v1/models?capabilities=chat&page=${page}&per_page=100`);
-    assert.equal(request.method, "GET"); assert.equal(request.body, null); assert.equal(request.credentials, "omit"); assert.equal(request.redirect, "error");
+    assert.equal(request.method, "GET"); assert.equal(request.body, null); assert.equal(request.credentials, "omit"); assert.equal(request.redirect, "manual");
     assert.deepEqual([...request.headers], [["accept", "application/json"], ["authorization", `Bearer ${key}`]]);
   }
   const page = { data: [], pagination: { current_page: 2, per_page: 100, total_items: 844, total_pages: 9 }, total: 844 };

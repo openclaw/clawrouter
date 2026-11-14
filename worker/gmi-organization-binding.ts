@@ -17,13 +17,20 @@ export async function prepareGmiOrganizationBinding(request: Request, env: Env, 
   const catalog = endpoint.request_format === "openai.models";
   const format = catalog ? "openai.models" : "openai.chat_completions";
   const path = catalog ? "/models" : "/chat/completions", method = catalog ? "GET" : "POST";
+  const params = selection.pathParams, model = selection.model?.upstream;
+  // Unified Chat supplies these two selectors internally; they do not change
+  // GMI's literal path. Caller-supplied manifest/native parameters stay denied.
+  const unifiedModelParams = !catalog && request.method === "POST" && new URL(request.url).pathname === "/v1/chat/completions"
+    && Object.keys(params).length === 2 && Object.hasOwn(params, "model") && Object.hasOwn(params, "deployment")
+    && typeof model === "string" && model.length > 0 && params.model === model && params.deployment === model
+    && !Array.isArray(selection.body) && selection.body.model === model;
   if (provider.id !== "gmi" || provider.base_urls.default !== "https://api.gmi-serving.com/v1"
     || upstream.baseUrl !== provider.base_urls.default || url.href !== upstream.baseUrl + path
     || upstream.transport !== null || upstream.query.size || new URL(request.url).search
     || endpoint.request_format !== format || endpoint.response_format !== format
     || endpoint.path !== path || selection.method !== method || endpoint.method !== method
     || endpoint.auth != null || endpoint.upstreamPath !== undefined || endpoint.websocket || endpoint.lifecycle || endpoint.responsesLifecycle
-    || endpoint.path_params.length || Object.keys(selection.pathParams).length || Object.keys(endpoint.query).length
+    || endpoint.path_params.length || Object.keys(params).length && !unifiedModelParams || Object.keys(endpoint.query).length
     || selection.capability !== (catalog ? "models.list" : "llm.chat")) unavailable();
   const scheme = provider.auth.schemes.find(value => value.type !== "oauth");
   const selectedHeaders = new Headers();

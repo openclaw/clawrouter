@@ -46,9 +46,11 @@ endpoints:
 models:
   entries:
     - id: pixverse/v6
+      displayName: "PixVerse v6"
       upstream: v6
       capabilities: [media.predict]
     - id: pixverse/c1
+      displayName: "PixVerse C1"
       upstream: c1
       capabilities: [media.predict]
 billing:

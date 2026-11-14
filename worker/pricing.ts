@@ -219,6 +219,9 @@ const unpricedGoogleRequestFormats = new Set(["google.grounded_search", "google.
 const unpricedNativeAudioFormats = new Set(["groq.transcription", "mistral.transcription", "xai.stt", "xai.tts"]);
 
 export function requestPricingGap(pricing: ModelPricing | null | undefined, body: Record<string, unknown>, requestFormat: string, parentTools?: ToolKnowledge, selectedUpstreamModel?: string | null): PricingGap | null {
+  // GPT Image 2.5 publishes modality rates, not a whole-request reference-input
+  // token ceiling. Byte caps and GPT Image 1/vision formulas do not prove one.
+  if (requestFormat === "openai.images_edits") return "opaque_input_bound";
   // These native uploads have neither a qualified duration bound nor a token tariff.
   // Keep OpenAI's separately qualified soft-token settlement exception separate.
   if (unpricedNativeAudioFormats.has(requestFormat)) return "opaque_input_bound";
@@ -333,7 +336,8 @@ export function estimateModelCost(pricing: ModelPricing, body: Record<string, un
     return { reserveMicros: 0, inputTokens: null, outputTokens: null, pricingAvailable: false };
   if (requestPricing && (!qualifiedOutcome(requestPricing) || pricing.unit != null || endpoint?.request_format !== "openai.responses"))
     return { reserveMicros: 0, inputTokens: null, outputTokens: null, pricingAvailable: false };
-  if (pricing.unit === "image_token") return estimateImageCost(pricing, body);
+  if (pricing.unit === "image_token") return endpoint?.request_format === "openai.images_edits" || body.images !== undefined
+    ? { reserveMicros: 0, inputTokens: null, outputTokens: null, pricingAvailable: false } : estimateImageCost(pricing, body);
   if (pricing.unit === "character") {
     // UTF-8 bytes bound code points without assuming an upstream tokenizer.
     // Empty catalog probes retain the full bounded envelope; dispatch validates input.
@@ -399,7 +403,7 @@ export function actualModelCost(pricing: ModelPricing, tokens: PricedTokens, req
   if (unpricedGoogleRequestFormats.has(requestFormat ?? "") || unpricedNativeAudioFormats.has(requestFormat ?? "")) return null;
   if (requestFormat === "google.image_generate" || requestFormat === "google.music_generate"
     || requestFormat === "google.speech_generate_content" || requestFormat === "google.speech_interactions") return null;
-  if (pricing.unit === "image_token") return requestFormat === "openai.images_generations" ? actualImageCost(pricing, tokens) : null;
+  if (pricing.unit === "image_token") return requestFormat === "openai.images_generations" || requestFormat === "openai.images_edits" ? actualImageCost(pricing, tokens) : null;
   if (pricing.unit === "character") return null;
   if (tokens.billable === false) return 0;
   if (requestFormat === "cohere.chat" || tokens.billedTokens !== undefined) {

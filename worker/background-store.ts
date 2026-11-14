@@ -1,11 +1,15 @@
+import { admitAccountingJson, copyAccountingJson, accountingObjectProjection, accountingArrayProjection, accountingStringCapacity, accountingNumberCapacity } from "./json-body.ts";
 import { assertManagedInputLive, bindManagedInput, inputReceipt, inputUnavailable, uploadJob, validateInputAllocation, type ManagedInputAllocation, type ManagedInputBinding, type ManagedInputReceipt } from "./managed-input-receipt.ts";
-import type { BudgetReservationIntent, BudgetReservationPlan } from "./accounting.ts";
-import { accountingReceipt, type AccountingFacts, type AccountingOutcome } from "./proxy-accounting.ts";
+import { admitBudgetPlan, type BudgetReservationIntent, type BudgetReservationPlan } from "./accounting.ts";
+import { admitAccountingFacts, prospectiveAccountingEvent, accountingReceipt, type AccountingFacts, type AccountingOutcome } from "./proxy-accounting.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import type { UsageIngestReceipt } from "./ledgers.ts";
 import type { ManagedFileDescriptor, ManagedObservationLoss, ManagedProtocol } from "./managed-lifecycle-types.ts";
 import type { UsageEvent } from "./types.ts";
 import { HttpError } from "./utils.ts";
+import { assertPublishedInputLive, samePublishedInput, samePublishedObject, validatePublishedInput, validatePublishedObject,
+  validatePublishedAttempt, publishedInputUnavailable, publishedInputVersion, type PublishedInputBinding,
+  type PublishedInputReceipt, type PublishedInputObject, type PublishedInputAttempt } from "./published-input-receipt.ts";
 
 export const backgroundObservationMs = 60 * 60_000;
 export const backgroundAutoRetryMs = 7 * 86_400_000;
@@ -98,14 +102,72 @@ export class BackgroundStore {
     sql.exec("CREATE INDEX IF NOT EXISTS responses_background_due ON responses_background(next_action_ms)");
   }
 
+  // Separate input-publication records share the bounded scope/table, never the
+  // generation type, alarm, collector or financial recovery path. NULL due time
+  // is deliberate. Expired attempts remain tombstones; expiry cannot reset them.
+  allocatePublishedInput(binding: PublishedInputBinding): PublishedInputReceipt {
+    assertPublishedInputLive(binding);
+    const prior = [...this.sql.exec<{ job_json: string }>("SELECT job_json FROM responses_background WHERE phase LIKE 'asset_%' AND json_extract(job_json, '$.binding.idempotencyDigest') = ? LIMIT 1", binding.idempotencyDigest)][0];
+    if (prior) {
+      const receipt = JSON.parse(prior.job_json) as PublishedInputReceipt;
+      if (!samePublishedInput(receipt.binding, binding)) publishedInputUnavailable();
+      return receipt;
+    }
+    if ([...this.sql.exec("SELECT job_id FROM responses_background WHERE job_id = ?", binding.id)].length) publishedInputUnavailable();
+    const count = [...this.sql.exec<{ count: number }>("SELECT COUNT(*) AS count FROM responses_background")][0].count;
+    if (count >= backgroundCapacity) capacity();
+    const receipt: PublishedInputReceipt = { version: publishedInputVersion, binding, state: "pending", object: null, attempt: null };
+    this.savePublishedInput(receipt); return receipt;
+  }
+
+  publishedInput(id: string): PublishedInputReceipt {
+    if (typeof id !== "string" || id.length !== 38 || !/^asset_[a-f0-9]{32}$/.test(id)) publishedInputUnavailable();
+    const row = [...this.sql.exec<{ job_json: string }>("SELECT job_json FROM responses_background WHERE job_id = ? AND phase LIKE 'asset_%'", id)][0];
+    if (!row) publishedInputUnavailable();
+    const receipt = JSON.parse(row.job_json) as PublishedInputReceipt;
+    assertPublishedInputLive(receipt.binding);
+    return receipt;
+  }
+
+  claimPublishedInputPublication(binding: PublishedInputBinding): PublishedInputReceipt {
+    const receipt = this.publishedInput(binding.id);
+    if (!samePublishedInput(receipt.binding, binding) || receipt.state !== "pending") publishedInputUnavailable();
+    receipt.state = "publication_unknown"; this.savePublishedInput(receipt); return receipt;
+  }
+
+  bindPublishedInputObject(binding: PublishedInputBinding, object: PublishedInputObject): PublishedInputReceipt {
+    const receipt = this.publishedInput(binding.id);
+    validatePublishedObject(object, binding);
+    if (!samePublishedInput(receipt.binding, binding)) publishedInputUnavailable();
+    if (receipt.state === "published" && receipt.object && samePublishedObject(receipt.object, object)) return receipt;
+    if (receipt.state !== "publication_unknown" || receipt.object) publishedInputUnavailable();
+    receipt.object = object; receipt.state = "published"; this.savePublishedInput(receipt); return receipt;
+  }
+
+  claimPublishedInputForward(binding: PublishedInputBinding, attempt: PublishedInputAttempt): PublishedInputReceipt {
+    const receipt = this.publishedInput(binding.id);
+    validatePublishedAttempt(attempt);
+    if (!samePublishedInput(receipt.binding, binding) || receipt.state !== "published" || !receipt.object || receipt.attempt) publishedInputUnavailable();
+    receipt.attempt = attempt; receipt.state = "forwarding_unknown"; this.savePublishedInput(receipt); return receipt;
+  }
+
+  private savePublishedInput(receipt: PublishedInputReceipt): void {
+    validatePublishedInput(receipt.binding);
+    const encoded = JSON.stringify(receipt);
+    if (new TextEncoder().encode(encoded).byteLength > backgroundRowBytes) publishedInputUnavailable();
+    this.sql.exec("INSERT INTO responses_background (job_id, phase, admitted_at_ms, next_action_ms, job_json) VALUES (?, ?, ?, NULL, ?) ON CONFLICT(job_id) DO UPDATE SET phase = excluded.phase, next_action_ms = NULL, job_json = excluded.job_json",
+      receipt.binding.id, `asset_${receipt.state}`, receipt.binding.allocatedAt, encoded);
+  }
+
   admit(input: BackgroundAdmission): BackgroundJob {
+    admitBackgroundAdmission(input);
     if (!/^bg_[0-9a-f]{32}$/.test(input.id) || !Number.isSafeInteger(input.admittedAt) || Math.abs(Date.now() - input.admittedAt) > 60_000) invalid();
     if (input.managed) {
       validateManagedAdmission(input);
       if (this.managedRetry(input.managed, input.owner.policyGeneration)) throw new HttpError(409, "background_job_exists", "managed admission already exists");
     }
     if (this.get(input.id)) throw new HttpError(409, "background_job_exists", "background admission already exists");
-    const job = newBackgroundJob(input);
+    const job = copyAccountingJson(newBackgroundJob(input), "capsule");
     encode(job);
     const active = [...this.sql.exec<{ count: number }>("SELECT COUNT(*) AS count FROM responses_background WHERE phase IN ('admitting', 'observing')")][0].count;
     if (active >= backgroundActiveLimit) capacity();
@@ -122,11 +184,13 @@ export class BackgroundStore {
 
   // Input upload and generation share this row, never a global asset index.
   allocateInput(input: ManagedInputAllocation): BackgroundJob {
+    admitInputAllocation(input);
+    const uploadInput = { ...input.admission, managed: undefined, ...input.upload };
     validateInputAllocation(input);
     if (this.get(input.admission.id)) inputUnavailable();
     const job = this.admit(input.admission);
     job.inputReceipt = { binding: input.binding, state: "pending", imageId: null, createClaimed: false,
-      upload: newBackgroundJob({ ...input.admission, managed: undefined, ...input.upload }) };
+      upload: copyAccountingJson(newBackgroundJob(uploadInput), "capsule") };
     this.save(job); return job;
   }
 
@@ -179,12 +243,12 @@ export class BackgroundStore {
   }
 
   get(id: string): BackgroundRecord | null {
-    const row = [...this.sql.exec<{ job_json: string }>("SELECT job_json FROM responses_background WHERE job_id = ?", id)][0];
+    const row = [...this.sql.exec<{ job_json: string }>("SELECT job_json FROM responses_background WHERE job_id = ? AND phase NOT LIKE 'asset_%'", id)][0];
     return row ? JSON.parse(row.job_json) : null;
   }
 
   list(after = ""): BackgroundRecord[] {
-    return [...this.sql.exec<{ job_json: string }>("SELECT job_json FROM responses_background WHERE job_id > ? ORDER BY job_id LIMIT 16", after)].map(row => JSON.parse(row.job_json));
+    return [...this.sql.exec<{ job_json: string }>("SELECT job_json FROM responses_background WHERE job_id > ? AND phase NOT LIKE 'asset_%' ORDER BY job_id LIMIT 16", after)].map(row => JSON.parse(row.job_json));
   }
 
   beginReserve(id: string, index: number, upload = false): BudgetReservationIntent {
@@ -258,6 +322,10 @@ export class BackgroundStore {
       || managed.terminal !== "succeeded" || managed.observationUnavailable || Date.now() >= job.replayUntil) {
       throw new HttpError(409, "managed_files_unavailable", "files require the original succeeded managed job before its retention deadline");
     }
+    admitAccountingJson(files, "capsule");
+    admitAccountingJson(accountingObjectProjection(job, { managed: accountingObjectProjection(managed, {
+      files: accountingArrayProjection(managed.files ?? [], files),
+    }) }), "capsule");
     const merged = new Map<string, ManagedFileDescriptor>();
     for (const entries of [managed.files ?? [], files]) {
       if (!Array.isArray(entries) || entries.length > 64) invalidFiles();
@@ -407,7 +475,7 @@ function tombstone(job: BackgroundJob, phase: BackgroundTombstone["phase"]): Bac
 function validateManagedMetadata(managed: ManagedAdmission | undefined): void {
   const digest = (value: unknown) => typeof value === "string" && /^[0-9a-f]{64}$/.test(value);
   if (!managed || Object.keys(managed).some(key => !["protocol", "providerId", "idempotencyKey", "requestDigest", "requestedVersion", "fileBaseUrl"].includes(key))
-    || !["replicate.predictions", "fal.queue", "kie.jobs", "vydra.jobs", "dashscope.video", "pixverse.video", "runway.tasks", "together.video", "google.omni_video", "openrouter.video"].includes(managed.protocol)
+    || !["replicate.predictions", "fal.queue", "kie.jobs", "vydra.jobs", "dashscope.video", "pixverse.video", "runway.tasks", "together.video", "google.omni_video", "openrouter.video", "minimax.video"].includes(managed.protocol)
     || managed.providerId !== undefined && (typeof managed.providerId !== "string" || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(managed.providerId))
     || managed.protocol !== "replicate.predictions" && managed.providerId === undefined
     || managed.idempotencyKey !== null && !digest(managed.idempotencyKey) || !digest(managed.requestDigest)
@@ -436,6 +504,49 @@ function invalid(): never { throw new HttpError(400, "background_request_invalid
 function missing(): never { throw new HttpError(404, "background_unavailable", "background recovery record is unavailable; this does not confirm settlement"); }
 
 function invalidFiles(): never { throw new HttpError(400, "managed_files_invalid", "managed files require at most 64 bounded native identifiers and media types"); }
+
+/** Complete paired NEW admission, shared by caller and durable owner. */
+export function admitInputAllocation(input: ManagedInputAllocation): void {
+  admitAccountingJson(input, "capsule");
+  admitBackgroundAdmission(input.admission);
+  const uploadInput = { ...input.admission, managed: undefined, ...input.upload };
+  admitBackgroundAdmission(uploadInput);
+  const prospective = newBackgroundJob(input.admission);
+  const uploadJob = newBackgroundJob(uploadInput);
+  prospective.inputReceipt = { binding: input.binding, state: "pending", imageId: null, createClaimed: false, upload: uploadJob };
+  admitAccountingJson(prospective, "capsule");
+  for (const parent of [prospective, prospectiveBackgroundJob(prospective), prospectiveBackgroundJob(prospective, true)]) for (const upload of [uploadJob, prospectiveBackgroundJob(uploadJob), prospectiveBackgroundJob(uploadJob, true)]) {
+    admitAccountingJson(accountingObjectProjection(parent, { inputReceipt: { ...prospective.inputReceipt,
+      state: "dispatch_unknown", imageId: accountingStringCapacity(16), upload } }), "capsule");
+  }
+}
+
+/** NEW admissions only. Receipt/outbox recovery never re-enters admission. */
+export function admitBackgroundAdmission(input: BackgroundAdmission): void {
+  admitAccountingJson(input, "capsule");
+  admitBudgetPlan(input.plan);
+  admitAccountingFacts(input.facts, input.plan);
+  // Maps below have at most four already-admitted entries; the borrowed facts
+  // remain references until the COMPLETE prospective row has passed.
+  const job = newBackgroundJob(input);
+  admitAccountingJson(job, "capsule");
+  admitAccountingJson(prospectiveBackgroundJob(job), "capsule");
+  admitAccountingJson(prospectiveBackgroundJob(job, true), "capsule");
+}
+
+function prospectiveBackgroundJob(job: BackgroundJob, terminal = false): Record<string, unknown> {
+  const number = accountingNumberCapacity();
+  const legs = job.legs.map(leg => ({ ...leg, reserve: "accepted", settlement: "unavailable", uncertainReserve: false, dispatched: false }));
+  const event = prospectiveAccountingEvent(job.facts!);
+  return { ...job, phase: "observing", amount: number, basis: accountingStringCapacity(Math.max(64, job.facts!.cost.basis.length)),
+    usage: "expired_by_retention", settlements: job.settlements.map(() => "unavailable"), lastError: "observation_unavailable",
+    legs, responseId: accountingStringCapacity(256), nextAttemptAt: number, attempts: number, contentRef: accountingStringCapacity(40),
+    // These are separate complete serialized states, not GC/heap credit. The
+    // existing freeze nulls facts/route before save; earlier graphs may remain.
+    facts: terminal ? null : job.facts, route: terminal ? null : job.route,
+    event: terminal ? event : null, managed: job.managed ? { ...job.managed, submission: "submission_unknown", upstreamId: accountingStringCapacity(128),
+      terminal: "succeeded", observationUnavailable: "canceled_or_deleted" } : undefined };
+}
 
 function newBackgroundJob(input: BackgroundAdmission): BackgroundJob {
   return {

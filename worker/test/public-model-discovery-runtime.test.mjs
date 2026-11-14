@@ -61,7 +61,7 @@ for (const id of Object.keys(contracts)) {
     assert.deepEqual(f.sent.map(request => request.url), contracts[id].urls);
     for (const request of f.sent) {
       assert.equal(request.method, "GET"); assert.equal(request.body, null); assert.equal(request.credentials, "omit");
-      assert.deepEqual([...request.headers], [["accept", "application/json"]]); assert.equal(request.redirect, "error");
+      assert.deepEqual([...request.headers], [["accept", "application/json"]]); assert.equal(request.redirect, "manual");
     }
     await f.drain(); const events = await f.events(); assert.equal(events.length, 1); assert.equal(events[0].actual_cost_micros, 0);
     assert.equal(events[0].grant_key, grantKey); assert.equal(events[0].model, null);

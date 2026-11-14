@@ -21,10 +21,10 @@ on:
         default: ""
         type: string
       mode:
-        description: "Normal rollout or no-user-traffic rehearsal (zero-failure deliberately fails)"
+        description: "Same-runtime rollout/rehearsal, or separately qualified native payload cutover"
         default: rollout
         type: choice
-        options: [rollout, zero-smoke, zero-failure]
+        options: [rollout, zero-smoke, zero-failure, native-cutover]
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -48,6 +48,9 @@ jobs:
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLAWROUTER_NATIVE_ADMIN_TOKEN: ${{ secrets.CLAWROUTER_NATIVE_ADMIN_TOKEN }}
+      CF_ACCESS_CLIENT_ID: ${{ secrets.CLAWROUTER_NATIVE_ACCESS_CLIENT_ID }}
+      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CLAWROUTER_NATIVE_ACCESS_CLIENT_SECRET }}
       CLAWROUTER_ADMIN_TOKEN_SHA256: ${{ secrets.CLAWROUTER_ADMIN_TOKEN_SHA256 }}
       CLAWROUTER_POLICY_KV_ID: ${{ secrets.CLAWROUTER_POLICY_KV_ID }}
       CLAWROUTER_POLICY_KV_PREVIEW_ID: ${{ secrets.CLAWROUTER_POLICY_KV_PREVIEW_ID }}
@@ -171,7 +174,7 @@ jobs:
     needs: deploy
     if: always() && (needs.deploy.result == 'failure' || needs.deploy.result == 'cancelled')
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 25
     permissions:
       contents: read
       issues: write
@@ -179,6 +182,9 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLAWROUTER_NATIVE_ADMIN_TOKEN: ${{ secrets.CLAWROUTER_NATIVE_ADMIN_TOKEN }}
+      CF_ACCESS_CLIENT_ID: ${{ secrets.CLAWROUTER_NATIVE_ACCESS_CLIENT_ID }}
+      CF_ACCESS_CLIENT_SECRET: ${{ secrets.CLAWROUTER_NATIVE_ACCESS_CLIENT_SECRET }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

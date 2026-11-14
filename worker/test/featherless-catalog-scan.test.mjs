@@ -37,7 +37,7 @@ test("Featherless complete scan follows short and empty advertised pages with on
     order.push(`fetch-${n}`);
     assert.equal(request.url, `${base}/models?capabilities=chat&page=${n}&per_page=100`);
     assert.deepEqual([...request.headers], [["accept", "application/json"], ["authorization", `Bearer ${key}`]]);
-    assert.equal(request.redirect, "error"); assert.equal(request.credentials, "omit");
+    assert.equal(request.redirect, "manual"); assert.equal(request.credentials, "omit");
     return body(page(n, 300, n === 2 ? [] : [{ id: n === 1 ? "one" : "two" }]));
   });
   assert.deepEqual(await scan(selected), { providerId: "featherless", catalog: [{ id: "one" }, { id: "two" }] });
@@ -209,6 +209,27 @@ test("Featherless HTTP, MIME, redirect, truncated JSON and UTF-8 failures never 
 
 test("Featherless scan helper has qualified native Node runtime import suffixes", () => {
   const url = new URL("../featherless-catalog-scan.ts", import.meta.url).href;
-  assert.equal(execFileSync(process.execPath, ["--experimental-transform-types", "--input-type=module", "-e",
+  assert.equal(execFileSync(process.execPath, ["--input-type=module", "-e",
     `const m = await import(${JSON.stringify(url)}); if (typeof m.fetchFeatherlessModelCatalog !== "function") throw new Error("missing scan");`], { encoding: "utf8" }), "");
+});
+test("Featherless exposes every original page owner before reads and preserves registered physical fetches", async t => {
+  const responses = [], owners = [], fetches = [], order = [];
+  const selected = input(t, {
+    registerFetch(pending, discard) { order.push("fetch registered"); fetches.push({ pending, discard }); },
+    registerInput(owner, response) { order.push("input registered"); owners.push(owner); assert.equal(response, responses.at(-1)); },
+  });
+  mockPages(t, n => {
+    const bytes = encode(page(n, 200, [{ id: n === 1 ? "one" : "two" }])); let sent = false;
+    const response = new Response(new ReadableStream({ pull(controller) {
+      assert.equal(order.at(-1), "input registered");
+      if (sent) controller.close(); else { sent = true; controller.enqueue(bytes); }
+    } }, { highWaterMark: 0 }), { headers: { "content-type": "application/json" } });
+    responses.push(response); return response;
+  });
+  assert.equal((await scan(selected)).catalog.length, 2);
+  assert.deepEqual(order, ["fetch registered", "input registered", "fetch registered", "input registered"]);
+  assert.equal(owners.length, 2); assert.notEqual(owners[0], owners[1]);
+  await Promise.all(owners.map(owner => owner.retired));
+  for (const [i, tracked] of fetches.entries()) { assert.equal(await tracked.pending, responses[i]); await tracked.discard(responses[i]); }
+  assert.ok(responses.every(response => !response.body.locked));
 });

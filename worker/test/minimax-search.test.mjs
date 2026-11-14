@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
+import { jsonResponse } from "./minimax-search-byte-fixture.mjs";
 import { miniMaxSearchOrigins, prepareMiniMaxSearch, observeMiniMaxSearch, readMiniMaxSearch } from "../minimax-search.ts";
 const fixture = JSON.parse(readFileSync(new URL("../../providers/_fixtures/minimax/search.json", import.meta.url)));
 const signal = () => new AbortController().signal;
@@ -50,17 +51,17 @@ test("unsafe result destinations are omitted without replacing native accounting
 });
 
 test("native reader requires bounded complete UTF-8 JSON and cancels a stalled read", async () => {
-  const good = await readMiniMaxSearch(Response.json(fixture.response), 5, signal());
+  const good = await readMiniMaxSearch(jsonResponse(fixture.response), 5, signal());
   assert.equal(good.results.length, 2);
   for (const response of [
-    Response.json(fixture.response, { status: 202 }), new Response(null, { status: 302 }),
-    Response.json(fixture.error), new Response("{", { headers: { "content-type": "application/json" } }),
+    jsonResponse(fixture.response, { status: 202 }), new Response(null, { status: 302 }),
+    jsonResponse(fixture.error), new Response("{", { headers: { "content-type": "application/json" } }),
     new Response(Uint8Array.of(255), { headers: { "content-type": "application/json" } }),
     new Response(JSON.stringify(fixture.response), { headers: { "content-type": "application/json", "content-length": "1" } }),
-    Response.json(fixture.response, { headers: { "content-range": "bytes 0-1/10" } }),
+    jsonResponse(fixture.response, { headers: { "content-range": "bytes 0-1/10" } }),
   ]) await assert.rejects(readMiniMaxSearch(response, 5, signal()));
   let canceled = false; const controller = new AbortController();
-  const stream = new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('{"organic":')); }, cancel() { canceled = true; } });
+  const stream = new ReadableStream({ type: "bytes", start(c) { c.enqueue(new TextEncoder().encode('{"organic":')); }, cancel() { canceled = true; } });
   const pending = readMiniMaxSearch(new Response(stream, { headers: { "content-type": "application/json" } }), 5, controller.signal);
   controller.abort(); await assert.rejects(pending); assert.equal(canceled, true);
 });

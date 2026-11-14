@@ -55,6 +55,145 @@ async function denied(f, request = {}) {
   assert.ok((await f.events()).every(row => row.actual_cost_micros === 0)); assert.equal(bodyBudgetCharged(), 0); return response;
 }
 
+const declaredTextCases = wire.cases.filter(item => item.model !== "amazon.titan-embed-image-v1");
+async function compiledSetup(t, { reverse = false, fixed = 700 } = {}) {
+  const f = await fixture(t, { providerId: "aws-bedrock", compiledProvider: true, fixed,
+    configure(provider) { if (reverse) provider.endpoints.reverse(); } });
+  // No card or route insertion: these requests must exercise the shipped snapshot.
+  const cards = structuredClone(f.provider.models);
+  assert.deepEqual(cards.filter(model => model.capabilities.includes("llm.embeddings")).map(model => model.upstream),
+    declaredTextCases.map(item => item.model));
+  t.after(() => assert.deepEqual(f.provider.models, cards));
+  Object.assign(f.env, { AWS_ACCESS_KEY_ID: "synthetic-env-access", AWS_SECRET_ACCESS_KEY: "synthetic-env-secret",
+    AWS_SESSION_TOKEN: "synthetic-env-session", AWS_REGION: region });
+  await putGrantCredentials(f.env, grantKey, { provider: "aws-bedrock", kind: "api_key", enabled: true,
+    credentials: { accessKeyId: "synthetic-grant-access", secretAccessKey: "synthetic-grant-secret", sessionToken: "synthetic-grant-session" } });
+  f.upstream = () => Response.json(titan.response);
+  f.request = ({ model = titan.model, body = titan.body, manifest = false, ...extra } = {}) => f.call(
+    manifest ? "/v1/proxy/aws-bedrock/embed_text" : `/v1/native/aws-bedrock/model/${encodeURIComponent(model)}/invoke`,
+    manifest ? { body, pathParams: { model } } : body,
+    { ...extra, headers: { "x-amz-security-token": "synthetic-caller-session", "x-api-key": "synthetic-caller", ...extra.headers } });
+  t.after(f.drain); return f;
+}
+async function signedDispatch(f, model, body) {
+  assert.equal(f.sent.length, 1);
+  const sent = f.sent[0], raw = await sent.clone().text();
+  assert.equal(sent.url, `${origin}/model/${encodeURIComponent(model)}/invoke`);
+  assert.equal(sent.method, "POST"); assert.equal(sent.redirect, "manual");
+  assert.equal(raw, JSON.stringify(body));
+  assert.equal(sent.headers.get("x-amz-content-sha256"), createHash("sha256").update(raw).digest("hex"));
+  assert.match(sent.headers.get("authorization"), new RegExp(`^AWS4-HMAC-SHA256 Credential=synthetic-grant-access/\\d{8}/${region}/bedrock/aws4_request,`));
+  assert.equal(sent.headers.get("x-amz-security-token"), "synthetic-grant-session"); assert.equal(sent.headers.get("x-api-key"), null);
+  const settled = await event(f);
+  assert.equal(settled.actual_cost_micros, 700); assert.equal(settled.cost_basis, "policy_fixed");
+  assert.doesNotMatch(JSON.stringify(settled), /synthetic-(?:env|grant|caller)/);
+  return settled;
+}
+
+for (const reverse of [false, true]) test(`compiled Bedrock ordinary unknown Invoke remains signed and paid exactly once: reversed=${reverse}`, { timeout: 10_000 }, async t => {
+  const f = await compiledSetup(t, { reverse }), model = "anthropic.claude-3-5-sonnet-20240620-v1:0";
+  const body = { anthropic_version: "bedrock-2023-05-31", max_tokens: 8, messages: [{ role: "user", content: "Synthetic ordinary Invoke" }] };
+  const output = { content: [{ type: "text", text: "Synthetic result" }], usage: { input_tokens: 3, output_tokens: 2 } };
+  assert.equal(f.provider.models.some(card => card.upstream === model), false);
+  f.upstream = () => Response.json(output);
+  const response = await f.request({ model, body }); assert.equal(response.status, 200, await response.clone().text());
+  assert.deepEqual(await response.json(), output);
+  const settled = await signedDispatch(f, model, body); assert.equal(settled.capability, "llm.invoke");
+});
+
+for (const reverse of [false, true]) for (const manifest of [false, true]) for (const item of declaredTextCases) {
+  test(`compiled Bedrock ${item.model} is registered without fixture cards: manifest=${manifest}, reversed=${reverse}`, { timeout: 10_000 }, async t => {
+    const f = await compiledSetup(t, { reverse }); f.upstream = () => Response.json(item.response);
+    const response = await f.request({ model: item.model, body: item.body, manifest });
+    assert.equal(response.status, 200, await response.clone().text()); assert.deepEqual(await response.json(), item.response);
+    const settled = await signedDispatch(f, item.model, item.body);
+    assert.equal(settled.model, `bedrock/${item.model}`); assert.equal(settled.capability, "llm.embeddings");
+    assert.equal(settled.input_tokens, item.inputTokens); assert.equal(settled.output_tokens, null); assert.equal(settled.total_tokens, null);
+  });
+}
+
+for (const model of ["cohere.embed-english-v3", "cohere.embed-multilingual-v3"]) for (const manifest of [false, true]) {
+  for (const shape of ["default-array", "explicit-array", "explicit-keyed"]) {
+    test(`compiled Bedrock ${model} preserves the complete ${shape} native envelope: manifest=${manifest}`, { timeout: 10_000 }, async t => {
+      const f = await compiledSetup(t), item = wire.cases.find(item => item.model === model);
+      const body = { ...item.body, ...(shape !== "default-array" ? { embedding_types: ["float"] } : {}) };
+      const output = { ...item.response, embeddings: shape === "explicit-keyed" ? { float: item.response.embeddings } : item.response.embeddings,
+        response_type: shape === "default-array" ? "embeddings_floats" : "embeddings_by_type" };
+      f.upstream = () => Response.json(output);
+      const response = await f.request({ model, body, manifest }); assert.equal(response.status, 200, await response.clone().text());
+      assert.equal(await response.text(), JSON.stringify(output));
+      const settled = await signedDispatch(f, model, body);
+      assert.equal(settled.input_tokens, null); assert.equal(settled.output_tokens, null); assert.equal(settled.total_tokens, null);
+      assert.equal(settled.model, `bedrock/${model}`); assert.equal(settled.capability, "llm.embeddings");
+    });
+  }
+
+  for (const embedding_types of [["int8"], ["float", "int8"]]) {
+    test(`compiled Bedrock ${model} rejects ${embedding_types.join("+")} before dispatch: manifest=${manifest}`, { timeout: 10_000 }, async t => {
+      const f = await compiledSetup(t), item = wire.cases.find(item => item.model === model);
+      const response = await denied(f, { model, body: { ...item.body, embedding_types }, manifest });
+      assert.equal(response.status, 400);
+    });
+  }
+
+  for (const failure of ["unrequested-keyed", "missing-float", "null-float", "mixed-types", "later-vector", "wrong-count", "native-error", "incomplete-json"]) {
+    test(`compiled Bedrock ${model} ${failure} exposes no partial result or retry: manifest=${manifest}`, { timeout: 10_000 }, async t => {
+      const f = await compiledSetup(t), item = wire.cases.find(item => item.model === model);
+      const body = { ...item.body, texts: [item.body.texts[0], "Synthetic later document"],
+        ...(failure === "unrequested-keyed" ? {} : { embedding_types: ["float"] }) };
+      const vectors = [item.response.embeddings[0], item.response.embeddings[0]];
+      let output = { embeddings: { float: vectors } };
+      if (failure === "missing-float") output.embeddings = {};
+      if (failure === "null-float") output.embeddings.float = null;
+      if (failure === "mixed-types") output.embeddings.int8 = vectors;
+      if (failure === "later-vector") output.embeddings.float = [vectors[0], [1]];
+      if (failure === "wrong-count") output.embeddings.float = [vectors[0]];
+      if (failure === "native-error") output.error = "SyntheticFailure";
+      f.upstream = () => failure === "incomplete-json"
+        ? new Response(JSON.stringify(output).slice(0, -1), { headers: { "content-type": "application/json" } }) : Response.json(output);
+      const response = await f.request({ model, body, manifest }); assert.equal(response.status, 502);
+      const deniedBody = await response.json(); assert.equal(deniedBody.error.code, "provider_unavailable");
+      assert.equal(deniedBody.embeddings, undefined); assert.doesNotMatch(JSON.stringify(deniedBody), /SyntheticFailure|synthetic-(?:env|grant|caller)/);
+      const settled = await signedDispatch(f, model, body);
+      assert.equal(settled.input_tokens, null); assert.equal(settled.output_tokens, null); assert.equal(settled.total_tokens, null);
+    });
+  }
+}
+
+for (const reverse of [false, true]) for (const model of ["amazon.titan-embed-image-v1", "us.amazon.titan-embed-text-v2:0:2:8k", "twelvelabs.marengo-embed-2-7-v1:0"]) {
+  test(`compiled Bedrock recognized but unregistered embedding cannot use Invoke: ${model}, reversed=${reverse}`, { timeout: 10_000 }, async t => {
+    const f = await compiledSetup(t, { reverse });
+    assert.equal(f.provider.models.some(card => card.upstream === model), false);
+    const response = await f.request({ model }); assert.equal(response.status, 400);
+    assert.equal((await response.json()).error.code, "native_embedding_route_required");
+    assert.equal(f.sent.length, 0); assert.equal(f.budgetCalls.some(call => call.path === "/reserve"), false);
+    await f.drain(); assert.ok((await f.events()).every(row => row.actual_cost_micros === 0)); assert.equal(bodyBudgetCharged(), 0);
+  });
+}
+
+for (const scenario of ["hard-budget", "revoked-policy", "wrong-provider", "incomplete-original-grant", "invalid-proxy-key"]) {
+  for (const model of [titan.model, "anthropic.claude-3-5-sonnet-20240620-v1:0"]) {
+    test(`compiled Bedrock ${scenario} stays zero-egress after native selection: ${model}`, { timeout: 10_000 }, async t => {
+      const f = await compiledSetup(t, { reverse: true, fixed: scenario === "hard-budget" ? null : 700 });
+      if (scenario === "revoked-policy" || scenario === "wrong-provider") {
+        if (scenario === "revoked-policy") f.policy.enabled = false;
+        else f.policy.providers = ["google-gemini"];
+        await f.authority("/policies/put", { policyId: "fixture", policy: f.policy });
+      }
+      if (scenario === "incomplete-original-grant") await putGrantCredentials(f.env, grantKey, { provider: "aws-bedrock", kind: "api_key", enabled: true,
+        credentials: { accessKeyId: "synthetic-grant-access" } });
+      const response = await f.request({ model, ...(scenario === "invalid-proxy-key" ? { headers: { authorization: "Bearer synthetic-invalid" } } : {}) });
+      const text = await response.text(); assert.ok(response.status >= 400, text);
+      const expected = { "hard-budget": "pricing_required", "revoked-policy": "policy_revoked", "wrong-provider": "provider_not_allowed",
+        "incomplete-original-grant": "upstream_grant_pool_unavailable", "invalid-proxy-key": "invalid_proxy_key" };
+      assert.equal(JSON.parse(text).error.code, expected[scenario]); assert.doesNotMatch(text, /synthetic-(?:env|grant|caller)/);
+      assert.equal(f.sent.length, 0); await f.drain();
+      assert.ok((await f.events()).every(row => row.actual_cost_micros === 0)); assert.equal(bodyBudgetCharged(), 0);
+      if (scenario === "hard-budget") assert.equal(response.status, 400);
+    });
+  }
+}
+
 for (const [index, item] of wire.cases.entries()) test(`Bedrock real signed native memory dispatch preserves ${item.model} and complete vectors`, { timeout: 10_000 }, async t => {
   const pooled = index % 2 === 0, manifest = index % 3 === 0, f = await setup(t, { pooled, item, reverse: pooled });
   const response = await f.request({ manifest }); assert.equal(response.status, 200, response.ok ? undefined : await response.text());

@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "threshold-grant-replacement",
+      "split": "development",
+      "base": "a6c769c4ed14112f417778b21cdf3cb76f3df3b6",
+      "oracle": "9fe7d9924a2bcdd699ed7f133acc61182ef8bf51",
+      "editPaths": [
+        "worker/authority-grant-selection.ts",
+        "worker/grant-routing.ts",
+        "worker/grant-selection-strategies.ts",
+        "worker/grant-selection.ts"
+      ],
+      "visibleTests": [
+        "worker/test/grant-routing.test.mjs",
+        "worker/test/grant-quota.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/grant-threshold.test.mjs",
+        "worker/test/limit-switching-runtime.test.mjs"
+      ],
+      "instruction": "Fix threshold grant routing across authority and isolate-local selection paths. An active grant at or above the configured used-percent cutoff must yield to an eligible grant with no quota reading (including a reset window) when no measured candidate satisfies the configured headroom and hysteresis. Prefer qualifying measured headroom over unmeasured candidates, and choose unmeasured candidates deterministically by key. Never switch to a measured grant at or past the cutoff. For threshold ranking, retain the last quota reading while its quota window is still open even when the observation exceeds staleAfterSeconds; this must prevent flapping to an idle nearly exhausted grant. Preserve staleState deny eligibility filtering, ordinary stale handling for other strategies, and existing routing behavior for normal, private, generation, cover, and Copilot selections."
+    },
+    {
+      "id": "native-gzip-metadata",
+      "split": "development",
+      "base": "ce9705a11b28c5f9d028127d617e8b5a1c168601",
+      "oracle": "2b89f2dd9ca6710558716f540dcf9049548e0f2c",
+      "editPaths": [
+        "scripts/large-http-provider-snapshot.mjs"
+      ],
+      "visibleTests": [
+        "test/large-http-provider-snapshot.test.mjs"
+      ],
+      "hiddenTests": [
+        "test/large-http-provider-snapshot.test.mjs"
+      ],
+      "instruction": "Make compressed native provider snapshot bundles deterministic across build operating systems. Preserve the existing Darwin-produced bundle fingerprint by emitting gzip OS metadata value 19 on every host, including Linux. Preserve the complete decompressed catalogue, shared module state, deterministic builds, compressed size, and esbuild metafile inputs. Keep the change scoped to the snapshot plugin; do not alter catalogue data, public API behavior, or compression payload semantics."
+    }
+  ]
+}

@@ -10,6 +10,8 @@ const { publicControlAuthorization } = await import("../response-control-authori
 const { backgroundCall } = await import("../http-background.ts");
 const { GrantCredentialObject, putGrantCredentials, revokeGrantCredentials } = await import("../grant-credentials.ts");
 const { bodyBudgetCharged } = await import("../body-budget.ts");
+const { accountingAdmissionFailure, isAccountingAdmissionFailure } = await import("../json-body.ts");
+const { HttpError } = await import("../utils.ts");
 const plan = { model: "v6", prompt: "A lighthouse", duration: 5, quality: "720p" };
 // Decoder-valid 1x1 PNG, used unchanged; no remote input reference.
 const bytes = Uint8Array.from(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==", "base64"));
@@ -99,6 +101,46 @@ test("concurrent upload and create contenders each authorize at most one POST", 
   assert.ok(uploads.some(result => result.status === "fulfilled")); assert.equal(f.sent.length, 1);
   const creates = await Promise.allSettled([f.dispatch(a, "create"), f.dispatch(b, "create")]);
   assert.equal(creates.filter(result => result.status === "fulfilled").length, 1); assert.equal(f.sent.length, 2);
+});
+
+for (const branded of [true, false]) test(`allocation ${branded ? "private capacity denial escapes" : "nonbranded lost ACK recovers"} with an existing canonical winner`, async t => {
+  const f = await setup(t);
+  t.after(() => f.drain());
+  const canonical = await f.allocate(), originalRow = f.row(canonical);
+  const db = f.env.ACCESS_CONTROL.objects.get(canonical.scope).db;
+  const before = { rows: db.prepare("SELECT count(*) AS count FROM responses_background").get().count,
+    reserves: f.budgetCalls.filter(call => call.path === "/reserve").length, posts: f.sent.length };
+  let failure;
+  if (branded) { try { accountingAdmissionFailure(); } catch (error) { failure = error; } }
+  else failure = new HttpError(503, "accounting_preflight_unavailable", "synthetic lost allocation acknowledgment");
+  assert.equal(isAccountingAdmissionFailure(failure), branded);
+  const originalGet = f.env.ACCESS_CONTROL.get.bind(f.env.ACCESS_CONTROL);
+  let lookups = 0, allocations = 0;
+  t.mock.method(f.env.ACCESS_CONTROL, "get", name => {
+    const stub = originalGet(name);
+    return { async fetch(url, init) {
+      if (new URL(url).pathname !== "/responses-background") return stub.fetch(url, init);
+      const input = JSON.parse(init.body);
+      if (input.action === "managed_lookup" && ++lookups === 1) {
+        // Labelled stale lookup: the real SQLite winner already exists. The
+        // next lookup would return it, masking a swallowed terminal denial.
+        return Response.json(null);
+      }
+      if (input.action === "input_allocate") { allocations++; throw failure; }
+      return stub.fetch(url, init);
+    } };
+  });
+  if (branded) await assert.rejects(f.allocate(), error => error === failure);
+  else assert.deepEqual(await f.allocate(), canonical);
+  assert.equal(lookups, branded ? 1 : 2);
+  assert.equal(allocations, 1, "no second allocation attempt");
+  assert.equal(f.budgetCalls.filter(call => call.path === "/reserve").length, before.reserves);
+  assert.equal(f.sent.length, before.posts, "no upload or generation POST");
+  assert.equal(db.prepare("SELECT count(*) AS count FROM responses_background").get().count, before.rows);
+  assert.deepEqual(f.row(canonical), originalRow, "original job, upload and reservation IDs remain intact");
+  // An ordinary prior-hit remains healthy and never enters allocation.
+  assert.deepEqual(await f.allocate(), canonical);
+  assert.equal(allocations, 1);
 });
 
 for (const action of ["input_allocate", "input_claim_upload", "input_bind_upload", "input_claim_create"]) test(`lost ${action} ACK cannot mint a second job or replay dispatch`, async t => {

@@ -1,3 +1,4 @@
+import { inputRetirement } from "./input-retirement.ts";
 import { mediaObject } from "./managed-media-json.ts";
 
 export const openRouterSpeechModels = ["hexgrad/kokoro-82m", "elevenlabs/eleven-turbo-v2",
@@ -36,19 +37,21 @@ export async function readOpenRouterSpeech(response: Response, request: OpenRout
 }> {
   const mime = openRouterSpeechFormats[request.format], length = response.headers.get("content-length");
   const generationId = response.headers.get("x-generation-id");
-  if (response.status !== 200 || response.redirected || !response.body || response.headers.has("content-range")
+  if (!response.body) fail("http");
+  const reader = response.body.getReader(), input = inputRetirement(reader);
+  if (response.status !== 200 || response.redirected || response.headers.has("content-range")
     || response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== mime
     || length !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)) || Number(length) > maxBytes)
     || generationId !== null && !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,255}$/.test(generationId)) {
-    void response.body?.cancel().catch(() => undefined); fail("http");
+    await input.retire("cancel"); fail("http");
   }
-  const reader = response.body.getReader(), chunks: Uint8Array[] = [];
-  const abort = () => { void reader.cancel().catch(() => undefined); }; signal.addEventListener("abort", abort, { once: true });
-  let size = 0;
+  const chunks: Uint8Array[] = [];
+  const abort = () => { void input.retire("cancel", signal.reason); }; signal.addEventListener("abort", abort, { once: true });
+  let size = 0, eof = false;
   try {
     signal.throwIfAborted();
     for (;;) {
-      const chunk = await reader.read(); signal.throwIfAborted(); if (chunk.done) break;
+      const chunk = await input.read(() => reader.read()); signal.throwIfAborted(); if (chunk.done) { eof = true; break; }
       size += chunk.value.byteLength; if (size > maxBytes) fail("size"); chunks.push(chunk.value.slice());
     }
     if (!size || !response.headers.has("content-encoding") && length !== null && Number(length) !== size) fail("incomplete");
@@ -58,7 +61,7 @@ export async function readOpenRouterSpeech(response: Response, request: OpenRout
     // promise across these providers. Do not derive duration or character fees.
     return { audio, mimeType: mime, format: request.format, generationId,
       sampleRate: null, billableCharacters: null, upstreamCostMicros: null };
-  } catch { void reader.cancel().catch(() => undefined); throw new Error("invalid_openrouter_speech_response"); }
-  finally { signal.removeEventListener("abort", abort); reader.releaseLock(); }
+  } catch { await input.retire("cancel", signal.reason); throw new Error("invalid_openrouter_speech_response"); }
+  finally { signal.removeEventListener("abort", abort); await input.retire(eof ? "eof" : "cancel", signal.reason); }
 }
 function fail(reason: string): never { throw new Error(`invalid_openrouter_speech_${reason}`); }

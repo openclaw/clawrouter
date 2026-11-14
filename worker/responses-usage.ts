@@ -245,7 +245,7 @@ function metadataProjection(inspectIdentity: boolean, receipt: boolean) {
       return key === "usage" ? "usage" : null;
     }
     if (frame.context === "usage") {
-      if (key === "input_tokens_details" || key === "prompt_tokens_details" || key === "output_tokens_details") return "details";
+      if (key === "input_tokens_details" || key === "prompt_tokens_details" || key === "output_tokens_details" || key === "completion_tokens_details") return "details";
       if (key === "cache_creation") return "creation";
       return counters.has(key) || receipt && key === "cost_in_usd_ticks" ? "number" : null;
     }
