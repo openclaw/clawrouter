@@ -118,6 +118,9 @@ successful responses keep the conservative reservation.
 Only drafts with an explicit `stop` completion reason enter synthesis. Truncated,
 filtered, refused, and tool-calling drafts are omitted; normal subrequest accounting
 still applies. Other completed advisers remain available to the synthesizer.
+Completed drafts exceeding the proposal character limit are also omitted in full.
+Fusion never cuts off an adviser's conclusion to fit that limit. If no drafts remain,
+the synthesizer answers the original request without adviser text.
 Adviser failures remain contained even when an invocation or body read rejects
 after its deadline has already elapsed.
 

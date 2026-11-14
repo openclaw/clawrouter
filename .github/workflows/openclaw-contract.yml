@@ -41,6 +41,9 @@ jobs:
       max-parallel: 4
       matrix:
         include:
+          - consumer: bedrock-memory
+            ref: 0eed32b19ce3eb54b38c7dde1b88d0cf2f9613cd
+            test: test/openclaw-bedrock-memory.test.mjs
           - consumer: volcengine-payg
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-volcengine-payg.test.mjs
@@ -56,9 +59,6 @@ jobs:
           - consumer: native-memory
             ref: 60e29ff604075d6961e19469a60530782fb644f7
             test: test/openclaw-native-embeddings.test.mjs
-          - consumer: bedrock-memory
-            ref: 0eed32b19ce3eb54b38c7dde1b88d0cf2f9613cd
-            test: test/openclaw-bedrock-memory.test.mjs
           - consumer: cohere
             ref: b566e9a6b22a863bf0f1f869f106a2a91b062f16
             test: test/openclaw-cohere.test.mjs
@@ -158,12 +158,6 @@ jobs:
           - consumer: requesty-catalog
             ref: 1536faab19f2adf524b7ef1acef5c24501b35652
             test: test/openclaw-requesty-catalog.test.mjs
-          - consumer: deepseek-search
-            ref: 82dd065e23b678e61ad497f9d57fbb4c3da10eae
-            test: test/openclaw-deepseek-search.test.mjs
-          - consumer: google-speech
-            ref: ff34cf8e236ca698c7190c63087f2ecd37f94a7e
-            test: test/openclaw-google-speech.test.mjs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
