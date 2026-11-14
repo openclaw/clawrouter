@@ -434,3 +434,16 @@ test('source paging separates repeat protocols and rejects invalid or unsupporte
   for (const policy of ['scope', 'architect']) assert.throws(() => analyzePairRun({ ...runs[0], policy }), /invalid_pair_run/);
   assert.throws(() => analyzePairRun({ ...runs[0], executor: 'single-draft' }), /invalid_pair_run/);
 });
+
+test('repeated comparisons bind the OpenAI route and interpret missing legacy metadata', () => {
+  const runs = repeats();
+  assert.equal(analyzePairRun(runs[0]).openAiApi, 'chat-completions');
+  runs[1].openAiApi = 'chat-completions';
+  assert.equal(analyzePairRepeats(runs).openAiApi, 'chat-completions');
+  runs[1].openAiApi = 'responses';
+  assert.throws(() => analyzePairRepeats(runs), /mismatched_pair_protocol/);
+  runs[0].openAiApi = 'responses';
+  assert.equal(analyzePairRepeats(runs).openAiApi, 'responses');
+  runs[0].openAiApi = 'unknown';
+  assert.throws(() => analyzePairRun(runs[0]), /invalid_pair_run/);
+});

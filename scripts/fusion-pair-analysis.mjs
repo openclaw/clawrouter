@@ -65,6 +65,7 @@ export function analyzePairRun(run, options) {
     || !Array.isArray(run.receipts) || !run.receipts.length || !Array.isArray(run.records)
     || !Array.isArray(run.calls) || !money(run.config?.priorCostMicros) || !money(run.spentOrReservedMicros)
     || typeof run.config?.cheap !== 'string' || typeof run.config?.strong !== 'string'
+    || !['chat-completions', 'responses'].includes(run.openAiApi ?? 'chat-completions')
     || run.config.cheap === run.config.strong
     || (run.probeRegressionGate !== undefined && typeof run.probeRegressionGate !== 'boolean')
     || (run.handoffProbeGate !== undefined && (typeof run.handoffProbeGate !== 'boolean'
@@ -149,7 +150,7 @@ export function analyzePairRun(run, options) {
   }
   const oracleSolved = [...cases.values()].filter(({ rows }) => rows.get('cheap').score || rows.get('strong').score).length;
   return { version: 1, kind: 'observed-pair-analysis', sourceSha: run.sourceSha, armOffset: run.armOffset ?? 0,
-    sourcePageLines: run.sourcePageLines ?? null, handoffMaxTurns: run.handoffMaxTurns ?? null, handoffEvidence: run.handoffEvidence ?? false, probeRegressionGate: run.probeRegressionGate ?? false, handoffProbeGate: run.handoffProbeGate ?? false,
+    openAiApi: run.openAiApi ?? 'chat-completions', sourcePageLines: run.sourcePageLines ?? null, handoffMaxTurns: run.handoffMaxTurns ?? null, handoffEvidence: run.handoffEvidence ?? false, probeRegressionGate: run.probeRegressionGate ?? false, handoffProbeGate: run.handoffProbeGate ?? false,
     datasetDigest: run.datasetDigest, qualificationDigest: run.qualificationDigest,
     inputDigest: createHash('sha256').update(JSON.stringify(run)).digest('hex'),
     cases: cases.size, candidate, latencyMetric, totals, comparisons: [versusCheap, versusStrong],
@@ -187,7 +188,7 @@ export function analyzePairRepeats(runs, options) {
       qualificationDigest: run.qualificationDigest, config, pins: run.pins, policy: run.policy,
       executor: run.executor, cheapReasoning: run.cheapReasoning, cheapMaxCalls: run.cheapMaxCalls,
       preloadSource: run.preloadSource, includeControls: run.includeControls, controlsOnly: run.controlsOnly,
-      sourcePageLines: run.sourcePageLines ?? null, handoffMaxTurns: run.handoffMaxTurns ?? null, handoffEvidence: run.handoffEvidence ?? false, probeRegressionGate: run.probeRegressionGate ?? false, handoffProbeGate: run.handoffProbeGate ?? false,
+      openAiApi: run.openAiApi ?? 'chat-completions', sourcePageLines: run.sourcePageLines ?? null, handoffMaxTurns: run.handoffMaxTurns ?? null, handoffEvidence: run.handoffEvidence ?? false, probeRegressionGate: run.probeRegressionGate ?? false, handoffProbeGate: run.handoffProbeGate ?? false,
       strategies: [...run.strategies].sort(), receipts: [...run.receipts].sort((a, b) => a.taskId.localeCompare(b.taskId)) });
   };
   const expected = protocol(runs[0]);
@@ -222,7 +223,7 @@ export function analyzePairRepeats(runs, options) {
     withinLatencyLimit: latencyRatio !== null && latencyRatio <= 2,
     rescuedBeyondCheap: comparisons[0].wins > 0 };
   return { version: 1, kind: 'observed-pair-repeat-analysis', armOffsets: runs.map(run => run.armOffset ?? 0), sourceSha: runs[0].sourceSha,
-    sourcePageLines: runs[0].sourcePageLines ?? null, handoffMaxTurns: runs[0].handoffMaxTurns ?? null, handoffEvidence: runs[0].handoffEvidence ?? false, probeRegressionGate: runs[0].probeRegressionGate ?? false, handoffProbeGate: runs[0].handoffProbeGate ?? false,
+    openAiApi: runs[0].openAiApi ?? 'chat-completions', sourcePageLines: runs[0].sourcePageLines ?? null, handoffMaxTurns: runs[0].handoffMaxTurns ?? null, handoffEvidence: runs[0].handoffEvidence ?? false, probeRegressionGate: runs[0].probeRegressionGate ?? false, handoffProbeGate: runs[0].handoffProbeGate ?? false,
     blocks: runs.length, distinctTasks: reports[0].cases, attemptsPerStrategy: selected.attempts, latencyMetric,
     inputDigests: reports.map(report => report.inputDigest), totals, comparisons, candidateModelUse,
     costSavingVersusStrong: saving, latencyRatioVersusStrong: latencyRatio,

@@ -797,6 +797,27 @@ mixed page sizes or paged/unpaged runs. A changed setting needs a new comparison
 no model-quality gain has been measured for paging.
 
 
+### Optional native Responses transport
+
+Set `FUSION_OPENAI_API=responses` for the native pair benchmark to send OpenAI
+calls through `/v1/responses`. The default remains `chat-completions`; Anthropic
+transport is unchanged. The route is recorded as `openAiApi`, and repeated-run
+analysis rejects mixed routes. Missing route metadata means the legacy default.
+
+The adapter maps the same messages and JSON schema, requests `store: false`, and
+uses `max_output_tokens` for both dispatch and conservative budget reservations.
+It settles qualified usage even when an answer is truncated or refused.
+Truncation fails the arm; refusal stops the campaign, matching the existing rules. Invalid usage, HTTP failures, and unpriced tool or long-cache
+charges preserve the unknown-charge reservation. Reasoning text is not passed to
+the executor or retained in the receipt. Commentary messages are excluded from
+structured actions; one completed final-answer message (or legacy message with
+no phase) is required. Ambiguous final answers are rejected. No automatic retry or API fallback runs.
+
+This option enables a separately declared transport experiment. It does not
+establish that Responses fixes earlier Chat Completions errors, and results from
+different routes must remain separate. See the [Responses API contract](https://developers.openai.com/api/reference/python/resources/responses/methods/create).
+
+
 ## Accounting cleanup evaluation task
 
 `benchmarks/fusion/cleanup-error-workloads.json` adds a pinned real repair for
