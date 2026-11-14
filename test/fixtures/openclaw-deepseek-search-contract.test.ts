@@ -22,6 +22,8 @@ type Observation = {
   credential: string;
   releaseReturned: boolean;
   failedBeforeResponse: boolean;
+  deadlineAt?: number;
+  signal?: AbortSignal | null;
   dispatcher?: DispatcherAwareRequestInit["dispatcher"];
   close?: ReturnType<typeof vi.spyOn>;
   body?: ReadableStream<Uint8Array> | null;
@@ -59,6 +61,7 @@ beforeEach(() => {
     if (observations.some(row => row.path === url.pathname && row.credential === credential)) refuse("repeated Search route");
     let finished!: (value?: unknown) => void;
     const row: Observation = { path: url.pathname, credential, releaseReturned: false, failedBeforeResponse: false,
+      deadlineAt: options.timeoutMs === undefined ? undefined : performance.now() + options.timeoutMs,
       cancels: [], readers: [], done: new Promise(resolve => { finished = resolve; }) };
     observations.push(row);
     try {
@@ -68,6 +71,7 @@ beforeEach(() => {
           const init = supplied as DispatcherAwareRequestInit | undefined;
           if (!init?.dispatcher || row.dispatcher) throw new Error("missing or repeated real dispatcher");
           row.dispatcher = init.dispatcher;
+          row.signal = init.signal;
           // Pass-through spy on this exact owned dispatcher, including the
           // pre-response abort path. No fake release and no global prototype patch.
           row.close = vi.spyOn(init.dispatcher, "close");
@@ -255,11 +259,22 @@ describe("published OpenClaw DeepSeek Search through the real native catalog", (
           command("/seen", "GET", control, waiting.signal),
           outcome.then(() => { throw new Error("search ended before upstream acquisition"); }),
         ]);
+        const request = observations.find(row => row.path === nativePath);
+        if (!request?.signal || request.deadlineAt === undefined) throw new Error("missing original transport signal or deadline");
+        expect(request.signal.aborted).toBe(false);
+        expect(performance.now()).toBeLessThan(request.deadlineAt);
         controller.abort(reason);
+        // Observe the signal actually supplied to the real runtime fetch, not
+        // the tool's later error projection. A timeout has a different reason.
+        expect(request.signal.aborted).toBe(true);
+        expect(request.signal.reason).toBe(reason);
         expect(await outcome).toEqual({ error: reason });
         const state = await join("abort");
         expect(state.canceled || state.readRejected).toBe(true);
         expect(await command("/closed", "GET", control)).toBe("closed");
+        // Every original physical join must precede the unchanged provider
+        // deadline; eventual timeout cleanup cannot satisfy caller-abort proof.
+        expect(performance.now()).toBeLessThan(request.deadlineAt);
       } finally {
         waiting.abort(); controller.abort(reason);
         await outcome;
