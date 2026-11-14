@@ -364,5 +364,14 @@ These limits bound offline search; there are no model calls.
 
 Recorded costs are assumed independent of call order. Training statistics omit
 training cost and do not prove savings on future requests. Freeze the trained
-policy, then replay separate evaluation traces. Live pricing, cache behavior,
+policy, then replay separate evaluation traces:
+
+```sh
+node scripts/replay-fusion-vote.mjs evaluation.json
+node scripts/replay-fusion-vote.mjs evaluation.json policy.json
+```
+
+Compare the reported mean costs and calls. Both commands verify the full-panel
+answer for every case. The optional policy file has the same 4 MiB limit and
+panel binding as live execution. Live pricing, cache behavior,
 model changes, and latency require their own evaluation.
