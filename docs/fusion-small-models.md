@@ -1460,3 +1460,68 @@ failures and a complete passing repaired acceptance suite before inference.
 This is a development transfer case for an already studied cleanup pattern.
 It does not establish independent generalization or a Fusion quality gain.
 The workload adds no provider calls and changes no production strategy.
+
+### Short-prefix guidance screen
+
+A local screen on 2026-11-14 tested whether a short start from a stronger model
+could help a tiny model finish an arithmetic problem. This is a fixed-budget,
+zero-shot adaptation of [LLM Shepherding](https://arxiv.org/abs/2601.22132), not a
+reproduction of its trained hint-selection policy or few-shot setup.
+
+The student was `qwen3:0.6b` (digest
+`7df6b6e09427a769808717c0a93cadc4ae99ed4eb8bf5ca557c90846becea435`);
+the teacher was `qwen3.5:4b` (digest
+`7f3251fa6878a78a606bcb3c074283306e5ad2ea411a7774a9dd98a4bc7f2d13`).
+Both used Ollama 0.40.11, `think: false`, temperature 0, top-p 1, repeat penalty 1,
+seed 20261114, a 4,096-token context, and a 768-token final-output cap. Hints had
+a separate 64-token cap. A hint was the beginning of an ordinary answer, not a
+separately requested plan. Intentional hint truncation was allowed; final
+answers had to finish normally.
+
+The cohort was the first 16 questions in ascending SHA-256 order of UTF-8
+`prefix-hint-v1|` followed by the question, from the official
+[GSM8K test file](https://github.com/openai/grade-school-math/blob/b0bb162abedc65e1fdd8e93ed090fd7598ee68bc/grade_school_math/data/test.jsonl).
+All 1,319 questions were eligible. The source Git blob was
+`e4c2ff4942b9a78bd74f04141224c11e28d12dc9`; selection used no model outcomes.
+Ground-truth answers were used only by the grader.
+
+Each question had four arms: student alone, teacher alone, teacher prefix then
+student, and student prefix then student. Prefixes were generated independently
+of the full-answer controls. The four arms rotated execution order by question.
+All received the same problem and instruction to show a concise calculation and
+end with `#### <numeric answer>`. Continuations also received their prefix as
+potentially mistaken context and were asked for a complete solution. The study
+completed 96 question calls plus two warmups, with no retries or incomplete
+final outputs. Responses and usage were recorded before grading.
+
+| Arm | Frozen strict score | Post-hoc numeric diagnostic | Normalized compute seconds |
+| --- | ---: | ---: | ---: |
+| Student alone | 1/16 | 9/16 | 5.200 |
+| Teacher alone | 12/16 | 13/16 | 11.709 |
+| Teacher prefix, student finish | 3/16 | 12/16 | 13.390 |
+| Student prefix, student finish | 1/16 | 7/16 | 8.087 |
+
+The frozen grader required exactly one line containing `####` followed only by
+a number. The tiny model often copied the literal `<numeric answer>` placeholder
+or added currency/LaTeX formatting. Its strict score therefore mixes arithmetic
+errors with format failures. The separate, post-hoc diagnostic accepts exactly
+one numeric literal after exactly one `####` marker, including formatting or
+units. It does not search the preceding reasoning for a correct number and does
+not replace the frozen score. Under that diagnostic, teacher hints rescued four
+student failures; three hints did not already contain a final-answer marker.
+
+Compute is a local proxy: native prompt-evaluation plus generation duration.
+Each ordinary request pays the maximum observed original-prompt prefill for its
+model and question; each continuation pays at least that prefill. This limits
+benefits from control-warmed prompt caches. Even without that adjustment, mixed
+compute was 12.821 seconds versus 11.706 for the teacher alone. Shared-server
+wall time was 21.367 versus 20.800 seconds; it is not a deployment latency result.
+
+The predeclared gate required mixed quality within one answer of the teacher,
+at least two answers above each student control, at least two student failures
+rescued without a final-answer marker in the hint, and compute at most 80% of the
+teacher. The recipe failed. Even the more permissive diagnostic leaves it below
+the teacher while using 14.35% more normalized compute. No larger confirmation,
+production policy, or default change follows from this screen. API spend was
+zero; local compute was still consumed. GSM8K arithmetic is a capability screen,
+not evidence of repository-repair quality.
