@@ -6,7 +6,9 @@ import { createRequire, stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
+import test, { after } from "node:test";
+import { types as nodeTypes } from "node:util";
+import { execFile } from "node:child_process";
 import { parse } from "yaml";
 import { compileProviderSnapshot } from "../scripts/compile-providers.mjs";
 import { musicWave } from "../worker/test/openrouter-music-runtime-fixture.mjs";
@@ -14,7 +16,7 @@ import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 import { startBundledWorkerdFixture } from "./helpers/workerd.mjs";
 
 // Published canonical manifest-model correction, NOT a qualified client release.
-// Actual registered SDK/Worker execution remains unrun.
+// The previous hosted attempt failed without a typed cause; new diagnostics are unproven.
 const sourceHead = "15aeb223287b93cf26917e846f658dd53143eb4d";
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -29,6 +31,54 @@ const unsent = new Set(["reference", "options", "preabort", "missing", "foreign"
 const key = id => `clawrouter-live-orm_${id}-fixture-secret`;
 const headers = id => ({ authorization: `Bearer ${key(id)}`, "content-type": "application/json", "accept-encoding": "identity" });
 const body = row => ({ model: row.model, messages: [{ role: "user", content: `Synthetic ${row.id}` }], modalities: ["text", "audio"], audio: { format: row.format }, stream: true });
+
+
+const musicDiagnosticSource = readFileSync(new URL("./fixtures/openclaw-openrouter-music-contract.test.ts", import.meta.url), "utf8");
+const musicDiagnosticStart = musicDiagnosticSource.indexOf("// BEGIN music diagnostic protocol."), musicDiagnosticEnd = musicDiagnosticSource.indexOf("// END music diagnostic protocol.");
+assert.ok(musicDiagnosticStart >= 0 && musicDiagnosticEnd > musicDiagnosticStart);
+const musicDiagnosticCode = stripTypeScriptTypes(musicDiagnosticSource.slice(musicDiagnosticStart, musicDiagnosticEnd));
+const createMusicProtocol = new Function(musicDiagnosticCode + "; return musicDiagnosticProtocol;")();
+const musicProtocol = createMusicProtocol(nodeTypes.isProxy);
+const musicDiagnostics = musicProtocol.emitter(line => process.stdout.write(line)), musicDiagnosticFailures = [];
+function musicOuter(phase, route = "none", caseId = "none", outcome = "entered", role = "progress", failed = false, error, facts = {}) {
+  try {
+    const record = musicProtocol.record({ layer: "outer", route, caseId, phase, role, outcome, ...facts }, failed, error);
+    if (failed) musicDiagnostics.fail(record); else musicDiagnostics.put(record);
+  } catch (failure) { musicDiagnosticFailures.push(failure); }
+}
+function musicChildObserver(route, protocol = musicProtocol, diagnostics = musicDiagnostics, failures = musicDiagnosticFailures) {
+  let records = 0, invalid = 0, observedCode = null;
+  const parse = text => {
+    try {
+      const beforeInvalid = invalid;
+      const parsed = protocol.parse(text, record => {
+        if (record.route !== route) { invalid++; return; }
+        diagnostics.put(record);
+      });
+      records += parsed.records; invalid += parsed.invalid; observedCode ??= parsed.observedCode;
+      if (invalid > beforeInvalid) failures.push(new Error("invalid fresh music diagnostic records"));
+    } catch (failure) { failures.push(failure); }
+  };
+  return { diagnostic: parse, rejection(error) {
+    // Only the ORIGINAL helper rejection's own DATA fields from this execution.
+    parse(protocol.own(error, "stdout")); parse(protocol.own(error, "stderr"));
+    const exit = protocol.own(error, "code"), killed = protocol.own(error, "killed"), signal = protocol.own(error, "signal");
+    const facts = { exit: Number.isSafeInteger(exit) && Math.abs(exit) <= 1_000_000_000 ? exit : null,
+      killed: typeof killed === "boolean" ? killed : null,
+      signal: ["SIGTERM", "SIGKILL", "SIGABRT", "SIGINT", "SIGHUP"].includes(signal) ? signal : null,
+      records, invalid, ...(observedCode ? { code: observedCode } : {}) };
+    try { diagnostics.fail(protocol.record({ layer: "outer", route, caseId: "none", phase: "helper", role: "primary", outcome: "rejected", ...facts }, true, error)); }
+    catch (failure) { failures.push(failure); }
+  }, fulfilled() {
+    try { diagnostics.put(protocol.record({ layer: "outer", route, caseId: "none", phase: "helper", role: "summary", outcome: "fulfilled", records, invalid })); }
+    catch (failure) { failures.push(failure); }
+  } };
+}
+after(() => {
+  if (musicDiagnosticFailures.length) musicOuter("final_cleanup", "none", "none", "rejected", "cleanup", true, musicDiagnosticFailures[0]);
+  try { musicDiagnostics.flush(); } catch (error) { musicDiagnosticFailures.push(error); }
+  if (musicDiagnosticFailures.length) throw new AggregateError(musicDiagnosticFailures, "music diagnostic instrumentation failed");
+});
 
 function compiled(route) {
   const inputs = readdirSync(join(root, "providers")).filter(name => name.endsWith(".provider.yaml")).sort()
@@ -324,6 +374,7 @@ export default { async fetch(request) {
 }
 
 async function start(route, audio) {
+  musicOuter("worker_prepare", route);
   const snapshot = compiled(route), temporary = await mkdtemp(join(tmpdir(), "clawrouter-openrouter-music-"));
   let mf;
   try {
@@ -337,6 +388,7 @@ async function start(route, audio) {
     assert.equal(replacements, 1);
     mf = await startBundledWorkerdFixture(temporary, bundle.outputFiles[0].text, upstreamScript(audio), { directRouter: true });
     const origin = (await mf.unsafeGetDirectURL("router")).origin;
+    musicOuter("grant_setup", route);
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
     for (const row of cases) {
       await kv.put(`policies/orm_${row.id}`, JSON.stringify({ enabled: true, generation: "fixture", providers: row.kind === "foreign" ? ["openai"] : ["openrouter"],
@@ -346,16 +398,20 @@ async function start(route, audio) {
     }
     await kv.put("connections/openrouter", JSON.stringify({ providerId: "openrouter", enabled: true }));
     assert.equal((await fetch(origin + "/fixture/grants", { method: "POST" })).status, 204);
-    return { mf, origin, async close() {
+    musicOuter("worker_prepare", route, "none", "fulfilled");
+    return { mf, origin, route, async close() {
       const failures = [];
-      try { await mf.dispose(); } catch (error) { failures.push(error); }
-      try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+      musicOuter("worker_dispose", route);
+      try { await mf.dispose(); musicOuter("worker_dispose", route, "none", "fulfilled", "cleanup"); } catch (error) { musicOuter("worker_dispose", route, "none", "rejected", "cleanup", true, error); failures.push(error); }
+      musicOuter("scratch_cleanup", route);
+      try { await rm(temporary, { recursive: true, force: true }); musicOuter("scratch_cleanup", route, "none", "fulfilled", "cleanup"); } catch (error) { musicOuter("scratch_cleanup", route, "none", "rejected", "cleanup", true, error); failures.push(error); }
       if (failures.length) throw new AggregateError(failures, "fixture disposal failed");
     } };
   } catch (error) {
+    musicOuter("worker_prepare", route, "none", "rejected", "primary", true, error);
     const errors = [error];
-    try { await mf?.dispose(); } catch (failure) { errors.push(failure); }
-    try { await rm(temporary, { recursive: true, force: true }); } catch (failure) { errors.push(failure); }
+    try { await mf?.dispose(); } catch (failure) { musicOuter("worker_dispose", route, "none", "rejected", "cleanup", true, failure); errors.push(failure); }
+    try { await rm(temporary, { recursive: true, force: true }); } catch (failure) { musicOuter("scratch_cleanup", route, "none", "rejected", "cleanup", true, failure); errors.push(failure); }
     throw errors.length === 1 ? error : new AggregateError(errors, "fixture acquisition and cleanup failed");
   }
 }
@@ -372,8 +428,10 @@ async function usage(origin, id) {
   assert.equal(response.status, 200); return response.json();
 }
 async function cleanup(f, failures) {
-  try { await retirement(f.origin); } catch (error) { failures.push(error); }
+  musicOuter("worker_retirement", f.route);
+  try { await retirement(f.origin); musicOuter("worker_retirement", f.route, "none", "fulfilled", "cleanup"); } catch (error) { musicOuter("worker_retirement", f.route, "none", "rejected", "cleanup", true, error); failures.push(error); }
   try { await f.close(); } catch (error) { failures.push(error); }
+  musicOuter("final_cleanup", f.route, "none", failures.length ? "rejected" : "fulfilled", "summary", false, undefined, { rejected: failures.length });
   if (failures.length) throw new AggregateError(failures, "music contract and cleanup failed");
 }
 
@@ -423,21 +481,35 @@ for (const route of ["native", "manifest"]) {
 }
 
 test("actual registered OpenRouter music client through both real configurations", { skip: !source, timeout: 600000 }, async t => {
+  let diagnosticRoute = "none", diagnosticCase = "none", diagnosticPhase = "media_fixture";
+  musicOuter(diagnosticPhase);
+  try {
   const mp3 = readFileSync(join(source, "test/fixtures/media/lyria-silence.mp3"));
   assert.equal(createHash("sha256").update(mp3).digest("hex"), "94bf451427043b32a9893976aefdea79d784323e5422f1f986fb22548615162b");
   for (const route of ["native", "manifest"]) {
+    diagnosticRoute = route; diagnosticPhase = "worker_prepare";
     const audio = { wav: Buffer.from(musicWave()).toString("base64"), mp3: mp3.toString("base64") }, f = await start(route, audio), failures = [];
     let helperState = "pending";
+    const observer = musicChildObserver(route);
     try {
-      await runOpenClawConsumer(t, { source, sourceHead, fixture: new URL("./fixtures/openclaw-openrouter-music-contract.test.ts", import.meta.url),
+      diagnosticPhase = "helper"; musicOuter(diagnosticPhase, route);
+      try {
+      await runOpenClawConsumer({ diagnostic: observer.diagnostic }, { source, sourceHead, fixture: new URL("./fixtures/openclaw-openrouter-music-contract.test.ts", import.meta.url),
         testPath: "src/agents/tools/worker-openrouter-music-contract.test.ts",
         env: { CLAWROUTER_CONTRACT_ORIGIN: f.origin, CLAWROUTER_CONTRACT_ROUTE: route, CLAWROUTER_CONTRACT_AUDIO: JSON.stringify(audio), CLAWROUTER_CONTRACT_CASES: JSON.stringify(cases) } });
-      helperState = "fulfilled";
-      const physical = await retirement(f.origin), calls = await (await fetch(f.origin + "/fixture/state")).json();
+      } catch (error) { observer.rejection(error); throw error; }
+      helperState = "fulfilled"; observer.fulfilled();
+      diagnosticPhase = "worker_retirement"; musicOuter(diagnosticPhase, route);
+      const physical = await retirement(f.origin);
+      musicOuter(diagnosticPhase, route, "none", "fulfilled");
+      diagnosticPhase = "upstream_state"; musicOuter(diagnosticPhase, route);
+      const calls = await (await fetch(f.origin + "/fixture/state")).json();
       assert.equal(physical.requests.filter(row => row.path === "/fixture/alternate").length, 0);
       let headerReceipt;
       for (const row of cases) {
+        diagnosticCase = row.id; diagnosticPhase = "sqlite_read"; musicOuter(diagnosticPhase, route, row.id);
         const matched = calls.filter(call => call.id === row.id), receipt = await usage(f.origin, row.id);
+        diagnosticPhase = "upstream_assert"; musicOuter(diagnosticPhase, route, row.id);
         if (row.id === "abort_headers") headerReceipt = receipt;
         if (unsent.has(row.kind)) { assert.equal(matched.length, 0, row.id); assert.equal(receipt.budget.spentMicros, 0, row.id); continue; }
         assert.equal(matched.length, 1, row.id); const [call] = matched;
@@ -445,6 +517,7 @@ test("actual registered OpenRouter music client through both real configurations
         assert.equal(call.authorization, `Bearer fixture-upstream-${row.id}`); assert.equal(call.body.model, row.model);
         assert.equal(call.body.stream, true); assert.equal(call.body.audio.format, row.format);
         if (row.kind.startsWith("abort") || row.kind === "deadline_body") { assert.ok(call.aborted || call.canceled); assert.equal(call.expired, false); }
+        diagnosticPhase = "sqlite_assert"; musicOuter(diagnosticPhase, route, row.id);
         assert.equal(receipt.usage.events.length, 1); const [event] = receipt.usage.events;
         assert.equal(event.credential_id, `orm_${row.id}`); assert.equal(event.policy_id, `orm_${row.id}`);
         assert.equal(event.model, `openrouter/${row.model}`); assert.equal(event.provider, "openrouter"); assert.equal(event.capability, "music.generate");
@@ -453,10 +526,13 @@ test("actual registered OpenRouter music client through both real configurations
         assert.equal(event.status, row.kind === "success" ? "success" : row.kind.startsWith("abort") || row.kind === "deadline_body" ? "client_error" : "provider_error");
       }
       // Only after every independent source/SQLite oracle. /retire is provisional.
+      diagnosticCase = "abort_headers"; diagnosticPhase = "header_disposition"; musicOuter(diagnosticPhase, route, diagnosticCase);
       acceptHeaderDisposition(physical, helperState, calls, headerReceipt);
-    } catch (error) { failures.push(error); }
+    } catch (error) { musicOuter(diagnosticPhase, route, diagnosticCase, "rejected", "primary", true, error); failures.push(error); }
+    diagnosticPhase = "final_cleanup";
     await cleanup(f, failures);
   }
+  } catch (error) { musicOuter(diagnosticPhase, diagnosticRoute, diagnosticCase, "rejected", "primary", true, error); throw error; }
 });
 
 test("reader observer joins the original cancel and rejects cleanup failure including undefined", async () => {
@@ -703,4 +779,131 @@ test("SDK dynamic drain keeps observation failures and exact retirement/release 
     readers: [{ body, closed, releases: 0, returned: 0, operations: [] }] });
   assert.equal(releaseFailures.length, 1); assert.match(releaseFailures[0].message, /not released/);
   reader.releaseLock();
+});
+
+
+const musicDiagnosticContext = (route = "native", caseId = "abort_headers", phase = "helper", role = "primary") =>
+  ({ layer: "outer", route, caseId, phase, role, outcome: "rejected" });
+
+test("music diagnostic validator rejects hostile fields and preserves undefined without getters", () => {
+  const protocol = createMusicProtocol(nodeTypes.isProxy), context = musicDiagnosticContext();
+  assert.equal(protocol.record(context, true, undefined).category, "undefined");
+  assert.equal(protocol.record(context, true, null).category, "null");
+  let reads = 0;
+  const hostile = Object.defineProperties({}, { message: { get() { reads++; throw undefined; } }, name: { get() { reads++; throw undefined; } }, stdout: { get() { reads++; throw undefined; } } });
+  assert.equal(protocol.record(context, true, hostile).name, "unknown");
+  assert.equal(protocol.own(hostile, "stdout"), undefined);
+  const proxy = new Proxy({}, { getOwnPropertyDescriptor() { reads++; throw undefined; }, getPrototypeOf() { reads++; throw undefined; } });
+  assert.equal(protocol.validate(proxy), undefined); assert.equal(protocol.own(proxy, "code"), undefined);
+  const good = protocol.record(context);
+  for (const change of [{ caseId: "not_a_case" }, { route: "foreign" }, { phase: "private\n::error::" }, { partialDelivery: true },
+    { actual: "private payload" }, { actual: Infinity }, { stack: "private" }, { url: "https://private.example" }, { code: "secret" }]) assert.equal(protocol.validate({ ...good, ...change }), undefined);
+  assert.equal(protocol.validate(Object.defineProperty({ ...good }, "actual", { get() { reads++; throw undefined; } })), undefined);
+  assert.equal(reads, 0);
+});
+
+test("music diagnostic parser reads only fresh fixed records and closed module codes", () => {
+  const protocol = createMusicProtocol(nodeTypes.isProxy), records = [];
+  const record = protocol.record({ ...musicDiagnosticContext(), layer: "sdk" }, true, undefined);
+  const raw = "unowned output with a path and payload\n" + protocol.prefix + JSON.stringify(record) + "\nERR_MODULE_NOT_FOUND: unowned path\n";
+  const result = protocol.parse(raw, value => records.push(value));
+  assert.deepEqual(records, [record]); assert.equal(result.records, 1); assert.equal(result.observedCode, "ERR_MODULE_NOT_FOUND");
+  assert.equal(result.invalid, 0);
+  assert.equal(protocol.parse(protocol.prefix + '{"message":"not a record"}\n', () => assert.fail()).invalid, 1);
+  assert.equal(protocol.parse("x".repeat(2 * 1024 * 1024 + 1), () => assert.fail()).invalid, 1);
+  assert.deepEqual(protocol.parse(undefined, () => assert.fail()), { records: 0, invalid: 0, observedCode: null });
+});
+
+test("music diagnostic adapter parses success and original child failure without forwarding streams", () => {
+  const protocol = createMusicProtocol(nodeTypes.isProxy), lines = [], failures = [], diagnostics = protocol.emitter(line => lines.push(line));
+  const observer = musicChildObserver("native", protocol, diagnostics, failures);
+  const record = protocol.record({ ...musicDiagnosticContext(), layer: "sdk", phase: "body_assert" }, true, undefined);
+  observer.diagnostic("unowned success prose\n" + protocol.prefix + JSON.stringify(record) + "\n");
+  observer.fulfilled(); assert.deepEqual(lines, []);
+  let getters = 0;
+  const child = Object.defineProperties({ code: 1, killed: false, signal: "SIGTERM", stdout: protocol.prefix + JSON.stringify(record) + "\n", stderr: "ERR_PACKAGE_PATH_NOT_EXPORTED: private path" }, {
+    message: { get() { getters++; throw undefined; } }, stack: { get() { getters++; throw undefined; } }, cause: { get() { getters++; throw undefined; } },
+  });
+  observer.rejection(child); diagnostics.flush();
+  assert.equal(getters, 0); assert.deepEqual(failures, []);
+  assert.ok(lines.length > 0 && lines.every(line => !line.includes("private") && !line.includes("unowned")));
+  const records = lines.map(line => JSON.parse(line.slice("::error title=Music contract diagnostic::".length)));
+  const helper = records.find(row => row.phase === "helper" && row.role === "primary");
+  assert.equal(helper.exit, 1); assert.equal(helper.killed, false); assert.equal(helper.signal, "SIGTERM"); assert.equal(helper.code, "ERR_PACKAGE_PATH_NOT_EXPORTED");
+  assert.ok(helper.records >= 1);
+});
+
+test("music diagnostic zero-record helper failure stays unknown and foreign-route records fail independently", () => {
+  const protocol = createMusicProtocol(nodeTypes.isProxy), lines = [], failures = [], diagnostics = protocol.emitter(line => lines.push(line));
+  const observer = musicChildObserver("native", protocol, diagnostics, failures);
+  observer.rejection(undefined); diagnostics.flush();
+  const helper = JSON.parse(lines[0].slice("::error title=Music contract diagnostic::".length));
+  assert.equal(helper.category, "undefined"); assert.equal(helper.records, 0); assert.equal(helper.exit, null); assert.equal(helper.signal, null);
+  assert.equal(helper.code, undefined); assert.deepEqual(failures, []);
+  observer.diagnostic(protocol.prefix + JSON.stringify(protocol.record({ ...musicDiagnosticContext("manifest"), layer: "sdk" })) + "\n");
+  assert.equal(failures.length, 1);
+});
+
+test("music diagnostic emitter preserves route phase identity, final state and one step-wide 9 plus 1 budget", () => {
+  const protocol = createMusicProtocol(nodeTypes.isProxy), lines = [], diagnostics = protocol.emitter(line => lines.push(line));
+  const first = protocol.record(musicDiagnosticContext(), true, undefined);
+  diagnostics.fail(first);
+  for (const route of ["native", "manifest"]) {
+    for (const id of protocol.ids) {
+      diagnostics.put(protocol.record(musicDiagnosticContext(route, id, "body_assert"), true, new Error("never emitted")));
+      diagnostics.put(protocol.record(musicDiagnosticContext(route, id, "body_assert"), true, new Error("never emitted")));
+    }
+  }
+  diagnostics.flush(); const count = lines.length; diagnostics.flush();
+  assert.equal(count, 10); assert.equal(lines.length, 10); assert.ok(Buffer.byteLength(lines.join("")) <= 8192);
+  assert.ok(lines.every(line => line.startsWith("::error title=Music contract diagnostic::") && Buffer.byteLength(line) <= 768 && line.split("\n").length === 2));
+  const records = lines.map(line => JSON.parse(line.slice("::error title=Music contract diagnostic::".length)));
+  assert.equal(records.at(-1).phase, "capacity"); assert.ok(records.at(-1).suppressed > 0);
+  assert.equal(new Set(records.slice(0, 9).map(row => [row.layer, row.route, row.caseId, row.phase, row.role].join("/"))).size, 9);
+  const separated = [], second = protocol.emitter(line => separated.push(line));
+  for (const route of ["native", "manifest"]) for (const phase of ["body_assert", "original_join"]) second.fail(protocol.record(musicDiagnosticContext(route, "abort_headers", phase), true, undefined));
+  second.flush(); assert.equal(separated.length, 4);
+  const passing = []; const pass = protocol.emitter(line => passing.push(line));
+  pass.put(protocol.record({ ...musicDiagnosticContext(), outcome: "entered", role: "progress" })); pass.flush(); assert.deepEqual(passing, []);
+});
+
+test("music diagnostic writer failure retains primary undefined and independent cleanup failure", () => {
+  const protocol = createMusicProtocol(nodeTypes.isProxy), instrumentation = new Error("writer failed"), cleanupFailure = new Error("cleanup failed");
+  const diagnostics = protocol.emitter(() => { throw instrumentation; }), reporting = [], originals = [];
+  const observer = musicChildObserver("native", protocol, diagnostics, reporting);
+  try { throw undefined; } catch (error) { observer.rejection(error); originals.push(error); }
+  try { throw cleanupFailure; } catch (error) { originals.push(error); }
+  assert.deepEqual(originals, [undefined, cleanupFailure]); assert.deepEqual(reporting, [instrumentation]);
+  // An instrumentation failure is still independently failing when no body failed.
+  const isolated = [], bad = musicChildObserver("native", protocol, protocol.emitter(() => {}), isolated);
+  bad.diagnostic(protocol.prefix + "invalid-json\n"); assert.equal(isolated.length, 1);
+});
+
+test("music diagnostic pending progress is not fulfilled join evidence", () => {
+  const protocol = createMusicProtocol(nodeTypes.isProxy), lines = [], diagnostics = protocol.emitter(line => lines.push(line));
+  diagnostics.put(protocol.record({ ...musicDiagnosticContext("native", "abort_headers", "original_join", "progress"), outcome: "entered", settled: null, partialDelivery: null }));
+  diagnostics.fail(protocol.record(musicDiagnosticContext(), true, undefined)); diagnostics.flush();
+  const rows = lines.map(line => JSON.parse(line.slice("::error title=Music contract diagnostic::".length)));
+  const pending = rows.find(row => row.phase === "original_join");
+  assert.equal(pending.outcome, "entered"); assert.equal(pending.settled, null); assert.equal(pending.partialDelivery, null);
+});
+
+test("music diagnostic synthetic reporter child", { skip: process.env.CLAWROUTER_MUSIC_REPORTER_PROBE !== "1" }, () => {
+  const diagnostics = musicProtocol.emitter(line => process.stdout.write(line));
+  diagnostics.fail(musicProtocol.record(musicDiagnosticContext(), true, undefined));
+  for (const id of musicProtocol.ids) diagnostics.put(musicProtocol.record(musicDiagnosticContext("manifest", id, "body_assert"), true, undefined));
+  diagnostics.flush();
+});
+test("music diagnostic commands survive the actual Node24 default reporter at column zero", { skip: process.env.CLAWROUTER_MUSIC_REPORTER_PROBE === "1", timeout: 20000 }, async () => {
+  assert.match(process.version, /^v24\.22\./);
+  const { NODE_TEST_CONTEXT: _context, ...env } = process.env;
+  const stdout = await new Promise((resolve, reject) => execFile(process.execPath,
+    ["--test", "--test-name-pattern=^music diagnostic synthetic reporter child$", fileURLToPath(import.meta.url)],
+    { env: { ...env, CLAWROUTER_MUSIC_REPORTER_PROBE: "1" }, timeout: 15000, maxBuffer: 64 * 1024 }, (error, output) => {
+      if (error) reject(new Error("fresh synthetic diagnostic subprocess failed")); else resolve(output);
+    }));
+  const prefix = "::error title=Music contract diagnostic::", lines = stdout.split(/\r?\n/).filter(line => line.includes(prefix));
+  assert.equal(lines.length, 10); assert.ok(lines.every(line => line.startsWith(prefix)));
+  assert.ok(lines.every(line => musicProtocol.validate(JSON.parse(line.slice(prefix.length)))));
+  assert.ok(Buffer.byteLength(lines.join("\n")) <= 8192);
 });
