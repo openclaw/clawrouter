@@ -1450,3 +1450,21 @@ failures and a complete passing repaired acceptance suite before inference.
 This is a development transfer case for an already studied cleanup pattern.
 It does not establish independent generalization or a Fusion quality gain.
 The workload adds no provider calls and changes no production strategy.
+
+### Threshold routing repair workload
+
+`benchmarks/fusion/threshold-routing-workloads.json` pins a four-file repair
+across local and authority grant selection. A grant at the quota cutoff must
+yield to an eligible unmeasured grant when no measured replacement has enough
+headroom. Threshold ranking must retain readings for open windows, while other
+strategies and the stale-state eligibility filter keep their freshness rules.
+
+The original threshold and Worker runtime tests are visible. Acceptance runs
+the expanded versions from the reference fix, including reset windows, idle
+grants, hysteresis, deterministic ordering and stale-state denial. The supplied
+reproducer exposes only the basic cutoff case. Qualify passing original and
+reference visible tests, failing original acceptance and reproducer, and passing
+reference acceptance and reproducer before any model call.
+
+This opt-in development workload changes no production behavior. It provides
+no model-quality claim without a complete, separately declared comparison.

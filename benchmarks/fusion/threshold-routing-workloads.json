@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "threshold-unmeasured-grants",
+      "split": "development",
+      "base": "a6c769c4ed14112f417778b21cdf3cb76f3df3b6",
+      "oracle": "9fe7d9924a2bcdd699ed7f133acc61182ef8bf51",
+      "editPaths": [
+        "worker/grant-selection-strategies.ts",
+        "worker/grant-routing.ts",
+        "worker/grant-selection.ts",
+        "worker/authority-grant-selection.ts"
+      ],
+      "visibleTests": [
+        "worker/test/grant-threshold.test.mjs",
+        "worker/test/limit-switching-runtime.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/grant-threshold.test.mjs",
+        "worker/test/limit-switching-runtime.test.mjs"
+      ],
+      "reproducer": "import assert from 'node:assert/strict';\nimport { selectThresholdGrantKey } from '/work/worker/grant-selection-strategies.ts';\nassert.equal(selectThresholdGrantKey([{ key: 'active', remainingRatio: 0.1 }, { key: 'unused', remainingRatio: null }], 'active', 90, 10), 'unused');\n",
+      "instruction": "Repair threshold grant routing across the local and authority selection paths. When the active grant reaches the configured used-quota cutoff, prefer a measured alternative with sufficient hysteresis headroom; if none qualifies, permit an eligible unmeasured grant, ordered deterministically by key. A measured grant at or beyond the cutoff must never become a replacement merely because its reading grows old. For threshold ranking, retain quota readings while their windows remain open; after a window resets it is unmeasured. Keep the existing staleState deny eligibility filter and freshness behavior of all other routing strategies. Apply the same behavior to normal admission, generation admission and music-cover selection. Preserve weights, stickiness, error handling, provider-neutral routing, and existing APIs. Change only the four allowed source files; do not change tests, add network calls, polling, timers, retries or persistent state."
+    }
+  ]
+}
