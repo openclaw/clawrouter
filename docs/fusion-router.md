@@ -289,9 +289,13 @@ The endpoint must support strict JSON-schema responses and the selected models.
 Workers run sequentially; mathematically unnecessary calls are skipped. Each
 request allows 256 output tokens. The default request timeout is 30 seconds,
 within a two-minute panel deadline. Programmatic callers can use
-`runFusionVote(input, { endpoint, apiKey, signal, deadlineMs, requestTimeoutMs })`;
+`runFusionVote(input, { endpoint, apiKey, signal, deadlineMs, requestTimeoutMs, selectNext })`;
 deadlines are capped at five minutes. HTTPS is required except on loopback.
-Redirects are rejected.
+Redirects are rejected. The optional synchronous `selectNext` uses the same
+frozen snapshot contract as `runExactVote`. Preflight validates the panel
+without invoking the selector. An invalid selection or selector exception
+returns `vote_selection_failed` and preserves earlier call receipts. The CLI
+keeps the default panel order.
 
 The result contains the selected answer, called workers, and reported token
 usage. Missing or malformed usage stays `null`, and `usageComplete` is false.
