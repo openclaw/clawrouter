@@ -128,8 +128,12 @@ export async function localGenerator(models, endpoint = 'http://127.0.0.1:11435'
     if (typeof info?.template !== 'string' || !info.template.trim() || Buffer.byteLength(info.template) > 1024 * 1024) {
       throw new Error('unqualified_local_runtime');
     }
+    if (info.parameters !== undefined && (typeof info.parameters !== 'string' || Buffer.byteLength(info.parameters) > 1024 * 1024)) {
+      throw new Error('unqualified_local_runtime');
+    }
     return { serverVersion: version, renderer: identity(info.renderer), parser: identity(info.parser),
-      templateSource: identity(info.template_source), templateSha256: hash(info.template) };
+      templateSource: identity(info.template_source), templateSha256: hash(info.template),
+      parametersSha256: info.parameters === undefined ? null : hash(info.parameters) };
   };
   const version = await serverVersion(), tags = await request('/api/tags');
   const pins = [];

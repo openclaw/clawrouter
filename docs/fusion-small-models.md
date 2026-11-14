@@ -318,9 +318,10 @@ Docker images. A passing repair must execute the same test and skipped-test
 counts as the qualified oracle. The runner does not download models, images or dependencies.
 The local transport validates both model identities before execution and checks
 their digests again afterward. Each model pin also records the Ollama server
-version, optional renderer/parser names and template source, and a SHA-256 of
-the chat template. The template itself is not saved. Both named renderers and
-older Go-template servers are supported. Runtime or thinking-capability changes
+version, optional renderer/parser names and template source, and SHA-256 hashes of
+the chat template and any reported default parameters. Raw templates and parameter
+text are not saved. Missing parameter metadata is recorded as null. Both named renderers and
+older Go-template servers are supported. Runtime, default-parameter or thinking-capability changes
 at the final check leave the run incomplete; these start/end checks cannot detect
 a transient change that is reverted between checks. It never invokes a paid provider. Role labels
 inside the reused harness map explicitly to these local model pins.
