@@ -16,18 +16,18 @@ type Model = Catalog["models"][number];
 const expectedHead = "1536faab19f2adf524b7ef1acef5c24501b35652";
 const origin = process.env.CLAWROUTER_CONTRACT_ORIGIN!;
 const control = process.env.CLAWROUTER_CONTRACT_CONTROL!;
-const dispatch = process.env.CLAWROUTER_CONTRACT_DISPATCH!;
+const chatAnchor = "requesty/openai/gpt-6-luna";
 const nativeFetch = globalThis.fetch;
 const originalGuard = ssrfRuntime.fetchWithSsrFGuard;
-const managedPath = dispatch === "native" ? "/v1/native/requesty/models/managed" : "/v1/proxy/requesty/models_managed";
-const id = (scenario: string) => `rq_${dispatch}_${scenario}`;
+const managedPath = "/v1/native/requesty/models/managed";
+const id = (scenario: string) => `rq_native_${scenario}`;
 const key = (scenario: string) => `clawrouter-live-${id(scenario)}-fixture-secret`;
 const observations: Array<{ path: string; credential: string; released: boolean; done: Promise<unknown> }> = [];
 
 beforeEach(() => {
   expect(process.env.CLAWROUTER_CONTRACT_SOURCE_HEAD).toBe(expectedHead);
   expect(execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim()).toBe(expectedHead);
-  expect(["native", "manifest"]).toContain(dispatch);
+  expect(process.env.CLAWROUTER_CONTRACT_DISPATCH).toBe("native");
   clearLiveCatalogCacheForTests();
   observations.length = 0;
   vi.stubEnv("REQUESTY_API_KEY", "must-not-fallback-requesty");
@@ -52,6 +52,23 @@ beforeEach(() => {
     try {
       const result = await originalGuard({ ...options, fetchImpl: fetchWithRuntimeDispatcher,
         policy: ssrfRuntime.ssrfPolicyFromHttpBaseUrlAllowedOrigin(origin) });
+      if (url.pathname === "/v1/catalog") {
+        try {
+          // Observe the genuine payload; return its original response untouched.
+          const catalog = await result.response.clone().json();
+          const requesty = catalog.providers.find((row: { id: string }) => row.id === "requesty");
+          const offers = requesty.offers.filter((row: { endpoint: string }) => row.endpoint === "models_managed");
+          expect(offers).toEqual([expect.objectContaining({ routeKind: "native", route: managedPath, eligible: true })]);
+          expect(offers.some((row: { routeKind: string }) => row.routeKind === "manifest")).toBe(false);
+        } catch (error) {
+          // Failed observation still retires the actual acquisition, not just its clone.
+          const failures = [error];
+          try { await result.response.body?.cancel(); } catch (failure) { failures.push(failure); }
+          try { await result.release(); } catch (failure) { failures.push(failure); }
+          if (failures.length > 1) throw new AggregateError(failures, "catalog observation or cleanup failed");
+          throw error;
+        }
+      }
       return { ...result, release: async () => {
         try { await result.release(); observation.released = true; finished(); }
         catch (error) { finished({ error }); throw error; }
@@ -127,6 +144,7 @@ async function fixture(run: (discover: (scenario: string, signal?: AbortSignal) 
       const result = await plugin.catalog!.run({ config, env: {}, agentDir: state.agentDir(), workspaceDir: state.workspaceDir, signal,
         resolveProviderAuth: () => auth, resolveProviderApiKey: () => auth });
       if (!result || !("provider" in result) || !result.provider) throw new Error("missing actual registered catalog");
+      expect(result.provider.models.map(row => row.id)).not.toContain(chatAnchor);
       return result.provider;
     };
     try { await run(discover); }

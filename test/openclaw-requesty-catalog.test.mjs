@@ -62,21 +62,22 @@ async function barriers(ids) {
   };
 }
 
-for (const dispatch of ["manifest", "native"]) test(`actual registered Requesty ${dispatch} discovery through workerd and SQLite`, { skip: !source, timeout: 300_000 }, async t => {
+test("actual registered Requesty native discovery through workerd and SQLite", { skip: !source, timeout: 300_000 }, async t => {
   const requesty = snapshot.providers.find(provider => provider.id === "requesty");
   const endpoint = requesty?.endpoints.find(row => row.id === "models_managed");
   assert.equal(endpoint?.request_format, "requesty.models_managed");
   assert.equal(endpoint.response_format, "requesty.models_managed");
+  assert.equal(endpoint.native_proxy, true);
   assert.equal(endpoint.path, "/models/managed");
   assert.equal(endpoint.method, "GET");
-  const ids = scenarios.map(scenario => `rq_${dispatch}_${scenario}`);
+  const ids = scenarios.map(scenario => `rq_native_${scenario}`);
   const failures = [];
   let gates, temporary, mf;
   try {
-    gates = await barriers(heldScenarios.map(scenario => `rq_${dispatch}_${scenario}`));
+    gates = await barriers(heldScenarios.map(scenario => `rq_native_${scenario}`));
     temporary = await mkdtemp(join(tmpdir(), "clawrouter-requesty-client-"));
     const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
-    mf = await startWorkerdFixture(temporary, routerFixture(ids, dispatch), upstreamFixture(gates.origin), { directRouter: true, preventEviction: true });
+    mf = await startWorkerdFixture(temporary, routerFixture(ids), upstreamFixture(gates.origin), { directRouter: true, preventEviction: true });
     const origin = (await mf.unsafeGetDirectURL("router")).origin;
     const initialized = await fetch(`${origin}/__requesty/init`, { method: "POST" });
     assert.equal(initialized.status, 200, await initialized.text());
@@ -84,7 +85,7 @@ for (const dispatch of ["manifest", "native"]) test(`actual registered Requesty 
       source, sourceHead, fixture: new URL("./fixtures/openclaw-requesty-catalog-contract.test.ts", import.meta.url),
       testPath: "extensions/clawrouter/worker-requesty-catalog-contract.test.ts",
       env: { CLAWROUTER_CONTRACT_ORIGIN: origin, CLAWROUTER_CONTRACT_CONTROL: gates.origin,
-        CLAWROUTER_CONTRACT_DISPATCH: dispatch, CLAWROUTER_CONTRACT_SOURCE_HEAD: sourceHead },
+        CLAWROUTER_CONTRACT_DISPATCH: "native", CLAWROUTER_CONTRACT_SOURCE_HEAD: sourceHead },
     });
     const upstream = await mf.getWorker("upstream");
     const calls = await (await upstream.fetch("https://fixture.example/state")).json();
@@ -131,7 +132,7 @@ for (const dispatch of ["manifest", "native"]) test(`actual registered Requesty 
   if (failures.length > 1) throw new AggregateError(failures, "Requesty contract or owned-resource cleanup failed");
 });
 
-function routerFixture(ids, dispatch) {
+function routerFixture(ids) {
   return String.raw`
 import worker from "./worker/index.ts";
 export * from "./worker/index.ts";
@@ -139,15 +140,17 @@ import { authorityCall } from "./worker/authority.ts";
 import { putGrantCredentials } from "./worker/grant-credentials.ts";
 import { sha256Hex } from "./worker/utils.ts";
 import { bodyBudgetCharged } from "./worker/body-budget.ts";
-const ids = IDS, dispatch = DISPATCH;
+const ids = IDS;
+// This declared model admits Chat transport; metadata never returns it as a seed.
+const chatAnchor = "requesty/openai/gpt-6-luna";
 const rawFetch = globalThis.fetch.bind(globalThis);
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 const requests = new Map(), catalogs = new Map(), inputs = new Map(), ingested = new Map(ids.map(id => [id, deferred()]));
 const policy = id => ({ enabled: true, generation: "fixture", providers: ["requesty"], tenantId: "fixture",
   monthlyBudgetMicros: 100, requestCostMicros: 7, budgetMode: "reserve", retainRequestContent: false,
   grantRouting: { environmentFallback: false },
-  ...(id.endsWith("_other") ? { models: ["requesty/OnlyB"] } : {}),
-  ...(id.endsWith("_narrow") ? { models: ["requesty/Keep", "requesty/Remove"] } : {}) });
+  ...(id.endsWith("_other") ? { models: [chatAnchor, "requesty/OnlyB"] } : {}),
+  ...(id.endsWith("_narrow") ? { models: [chatAnchor, "requesty/Keep", "requesty/Remove"] } : {}) });
 const grant = id => ({ provider: "requesty", kind: "api_key", enabled: true, credential: "managed-" + id });
 globalThis.fetch = async (input, init) => {
   const request = new Request(input, init);
@@ -210,7 +213,7 @@ export default {
       if (action === "state") return Response.json(view(id));
       if (action === "join") return Response.json(await join(id));
       if (action === "narrow" && request.method === "POST") {
-        await authorityCall(env, "/policies/put", { policyId: id, policy: { ...policy(id), models: ["requesty/Keep", "requesty/New"] } });
+        await authorityCall(env, "/policies/put", { policyId: id, policy: { ...policy(id), models: [chatAnchor, "requesty/Keep", "requesty/New"] } });
         return Response.json({ changed: true });
       }
       if (action === "revoke" && request.method === "POST") {
@@ -225,23 +228,15 @@ export default {
     }
     const id = /^Bearer clawrouter-live-([a-z_]+)-fixture-secret$/.exec(request.headers.get("authorization") ?? "")?.[1];
     if (!ids.includes(id)) return new Response(null, { status: 401 });
-    const managed = path === "/v1/native/requesty/models/managed" || path === "/v1/proxy/requesty/models_managed";
+    const managed = path === "/v1/native/requesty/models/managed";
     if (path !== "/v1/catalog" && !managed) throw new Error("unexpected client route");
-    if (managed && (requests.has(id) || path !== (dispatch === "native" ? "/v1/native/requesty/models/managed" : "/v1/proxy/requesty/models_managed"))) throw new Error("alternate or repeated route");
+    if (managed && requests.has(id)) throw new Error("repeated managed route");
     const record = { pending: [], returned: deferred() };
     if (managed) requests.set(id, record);
     else catalogs.set(id, record);
     const ctx = { waitUntil(promise) { record.pending.push(promise); context.waitUntil(promise); } };
     try {
-      const response = await worker.fetch(request, env, ctx);
-      if (path !== "/v1/catalog" || dispatch === "manifest" || !response.ok) return response;
-      const catalog = await response.json();
-      // Remove only the equivalent Requesty manifest offer. Preserve every
-      // other real offer, model, authority, pricing and eligibility field.
-      for (const provider of catalog.providers) if (provider.id === "requesty") {
-        provider.offers = provider.offers.filter(offer => !(offer.endpoint === "models_managed" && offer.routeKind === "manifest"));
-      }
-      return Response.json(catalog, response);
+      return await worker.fetch(request, env, ctx);
     } finally { record.returned.resolve(); }
   },
   async queue(batch, env) {
@@ -249,7 +244,7 @@ export default {
     for (const message of batch.messages) if ("type" in message.body) ingested.get(message.body.credential_id)?.resolve();
   },
 };
-`.replace("IDS", JSON.stringify(ids)).replace("DISPATCH", JSON.stringify(dispatch));
+`.replace("IDS", JSON.stringify(ids));
 }
 
 function upstreamFixture(controlOrigin) {
@@ -257,11 +252,11 @@ function upstreamFixture(controlOrigin) {
 const calls = [], table = TABLE;
 export default { async fetch(request) {
   if (request.url === "https://fixture.example/state") return Response.json(calls);
-  const id = /^Bearer managed-(rq_(?:native|manifest)_[a-z_]+)$/.exec(request.headers.get("authorization") ?? "")?.[1];
+  const id = /^Bearer managed-(rq_native_[a-z_]+)$/.exec(request.headers.get("authorization") ?? "")?.[1];
   const noCredentialOverride = request.headers.get("accept") === "application/json" && !["x-api-key", "api-key", "x-goog-api-key"].some(name => request.headers.has(name));
   calls.push({ id, url: request.url, method: request.method, originalBearer: !!id, noCredentialOverride });
   if (!id || request.url !== "https://router.requesty.ai/v1/models/managed" || request.method !== "GET" || !noCredentialOverride) return new Response(null, { status: 400 });
-  const scenario = id.replace(/^rq_(native|manifest)_/, "");
+  const scenario = id.replace(/^rq_native_/, "");
   if (["narrow", "revoke", "abort"].includes(scenario)) {
     const body = JSON.stringify({ data: ["Keep", "Remove", "New"].map(id => ({ id, api: "chat" })) });
     let first = true;
