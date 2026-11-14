@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an opt-in fixed-choice Fusion vote runner with conservative early stopping and an offline cost replay tool.
+
 - Add bounded pairwise evidence packing for offline Fusion experiments, with numeric-only inputs and no model calls.
 
 - Pin reported default generation parameters in local Fusion comparisons so changes invalidate the run even when model weights stay the same.
