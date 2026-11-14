@@ -171,6 +171,12 @@ async function join(name: string) {
   if (state.calls) {
     expect(state).toMatchObject({ calls: 1, activeReads: 0, unlocked: true, sourceLocked: false, physicalLocked: false });
     expect(state.eof || state.canceled || state.readRejected).toBe(true);
+    expect(state.readResults).toHaveLength(state.readCalls);
+    expect(state.readResults.every((status: string) => status === "fulfilled" || status === "rejected")).toBe(true);
+    expect(state.readResults.includes("rejected")).toBe(state.readRejected);
+    expect(state.cancelCalls).toBe(state.canceled ? 1 : 0);
+    expect(state.cancelResults).toHaveLength(state.cancelCalls);
+    expect(state.cancelResults.every((status: string) => status === "fulfilled")).toBe(true);
   }
   return state;
 }

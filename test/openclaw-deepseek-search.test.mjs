@@ -100,6 +100,12 @@ test("actual OpenClaw DeepSeek native Search through workerd and SQLite", { skip
         assert.equal(joined.sourceLocked, false, name);
         assert.equal(joined.physicalLocked, false, name);
         assert.ok(joined.eof || joined.canceled || joined.readRejected, name);
+        assert.equal(joined.readResults.length, joined.readCalls, name);
+        assert.ok(joined.readResults.every(status => status === "fulfilled" || status === "rejected"), name);
+        assert.equal(joined.readResults.includes("rejected"), joined.readRejected, name);
+        assert.equal(joined.cancelCalls, joined.canceled ? 1 : 0, name);
+        assert.equal(joined.cancelResults.length, joined.cancelCalls, name);
+        assert.ok(joined.cancelResults.every(status => status === "fulfilled"), "original reader.cancel must settle successfully");
         assert.equal(joined.reservedBeforeFetch, name === "fixed" ? 17 : 750, name);
       }
       const receipt = await (await fetch(`${origin}/__deepseek/usage/${id}`)).json();
@@ -157,6 +163,7 @@ globalThis.fetch = async (input, init) => {
   const id = /^Bearer managed-(ds_[a-z_]+)$/.exec(request.headers.get("authorization") ?? "")?.[1];
   if (!ids.includes(id) || inputs.has(id)) refuse("unknown owner or repeated provider egress");
   const proof = { activeReads: 0, eof: false, canceled: false, unlocked: false, readRejected: false, terminal: deferred(),
+    readCalls: 0, reads: [], cancelCalls: 0, cancels: [], sourceRejected: false,
     reservedBeforeFetch: (await budgetStatus(fixtureEnv, id, policy(id))).spentMicros };
   inputs.set(id, proof);
   const response = await rawFetch(request), physical = response.body;
@@ -167,11 +174,21 @@ globalThis.fetch = async (input, init) => {
   const source = new ReadableStream({
     async pull(controller) {
       proof.activeReads++;
-      try { const next = await reader.read(); if (next.done) { proof.eof = true; controller.close(); } else controller.enqueue(next.value); }
-      catch (error) { proof.readRejected = true; controller.error(error); }
-      finally { proof.activeReads--; if (proof.eof || proof.readRejected) unlock(); }
+      try {
+        proof.readCalls++;
+        const original = reader.read(); proof.reads.push(original);
+        let next;
+        try { next = await original; } catch (error) { proof.readRejected = true; throw error; }
+        if (next.done) { proof.eof = true; controller.close(); } else controller.enqueue(next.value);
+      }
+      catch (error) { proof.sourceRejected = true; controller.error(error); }
+      finally { proof.activeReads--; if (proof.eof || proof.sourceRejected) unlock(); }
     },
-    async cancel(reason) { proof.canceled = true; try { await reader.cancel(reason); } finally { unlock(); } },
+    async cancel(reason) {
+      proof.canceled = true; proof.cancelCalls++;
+      try { const original = reader.cancel(reason); proof.cancels.push(original); await original; }
+      finally { unlock(); }
+    },
   }, { highWaterMark: 0 });
   proof.source = source;
   return new Response(source, { status: response.status, headers: response.headers });
@@ -182,9 +199,16 @@ async function join(id) {
     for (let cursor = 0; cursor < record.pending.length;) { const batch = record.pending.slice(cursor); cursor += batch.length; await Promise.all(batch); }
   }
   const p = inputs.get(id); await p?.terminal.promise;
+  // A concurrent pull may unlock before cancel settles. Join the exact native
+  // read/cancel promises separately; terminal/unlocked are not cancellation ACKs.
+  const [reads, cancels] = await Promise.all([
+    Promise.allSettled(p?.reads ?? []), Promise.allSettled(p?.cancels ?? []),
+  ]);
   return { paths: (requests.get(id) ?? []).map(row => row.path), calls: p ? 1 : 0, retired: true, charged: bodyBudgetCharged(), ...(p ? {
     activeReads: p.activeReads, eof: p.eof, canceled: p.canceled, readRejected: p.readRejected, unlocked: p.unlocked,
     sourceLocked: p.source.locked, physicalLocked: p.physical.locked, reservedBeforeFetch: p.reservedBeforeFetch,
+    readCalls: p.readCalls, readResults: reads.map(result => result.status),
+    cancelCalls: p.cancelCalls, cancelResults: cancels.map(result => result.status),
   } : {}) };
 }
 export default {
