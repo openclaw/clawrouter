@@ -21,6 +21,8 @@ const effortCases = efforts.flatMap((levels, i) => levels.map(level => ({ id: `a
 const charged = [...effortCases.map(row => row.id), "abliteration_simple", "abliteration_notools", "abliteration_image0", "abliteration_image2", "abliteration_observed", "abliteration_cached", "abliteration_error", "abliteration_cancel"];
 const modelFor = id => effortCases.find(row => row.id === id)?.model ?? (/^abliteration_image[02]$/.test(id) ? models[Number(id.at(-1))] : models[0]);
 const ids = [...charged, "abliteration_unpriced", "abliteration_foreign", "abliteration_revoked"];
+const upstreamUrl = provider.base_urls.default.replace(/\/$/, "") + endpoint.path;
+const upstreamCredentials = Object.fromEntries(ids.map(id => [id, `fixture-upstream-${id}`]));
 
 // Execute the same closed protocol in Node, the copied SDK test and the Worker.
 // Only Node receives the Proxy detector; Worker thrown values stay opaque.
@@ -87,10 +89,29 @@ function emitDiagnostic(record, write = process.stdout.write.bind(process.stdout
 function emitDiagnostics(records, failures, write) {
   try {
     const checked = records.map(record => { const valid = validateDiagnostic(record); if (!valid) throw new Error("invalid diagnostic response"); return valid; });
-    if (failures.length || checked.some(record => !Object.hasOwn(record, "metadata"))) {
-      const priority = record => record.observation ? (record.source === "worker" && record.operation === "worker_retire" ? 0 : record.observation.site === "sdk_join" ? 1 : 2) : Object.hasOwn(record, "metadata") ? 4 : 3;
-      for (const record of checked.sort((a, b) => priority(a) - priority(b))) emitDiagnostic(record, write);
+    if (!failures.length) return; // Provisional observations are not error verdicts.
+    const helper = [...checked].reverse().find(record => ["helper_fulfilled", "helper_rejected"].includes(record.metadata?.marker)) ?? checked.find(record => record.metadata);
+    const counts = [...checked].reverse().find(record => record.metadata?.marker === "diagnostics_received");
+    const leading = helper ? [{ ...helper, metadata: { ...helper.metadata, sdkRecords: counts?.metadata.sdkRecords ?? helper.metadata.sdkRecords } }] : [];
+    const unique = new Map(); let suppressed = 0;
+    for (const record of checked) {
+      if (record.metadata) continue;
+      if (record.operation === "capacity") { suppressed += record.ordinal; continue; }
+      const o = record.observation;
+      const key = o?.input !== undefined && o?.reader !== undefined && o?.op !== undefined ? `${record.source}/${o.input}/${o.reader}/${o.op}/${o.kind}` : JSON.stringify(record);
+      const prior = unique.get(key);
+      if (prior) {
+        suppressed++;
+        const a = [o?.settled ?? 0, o?.unlockReturns ?? 0, o?.unlockReturnSeq ?? 0], b = [prior.observation?.settled ?? 0, prior.observation?.unlockReturns ?? 0, prior.observation?.unlockReturnSeq ?? 0];
+        const changed = a.findIndex((value, index) => value !== b[index]); if (changed >= 0 && a[changed] < b[changed]) continue;
+      }
+      unique.set(key, record);
     }
+    const priority = record => ({ sdk_receipt: 0, binding: 1, read_join: 2, cancel_join: 3, upstream: 4, accounting: 5 }[record.observation?.site] ?? 6);
+    const all = [...leading, ...[...unique.values()].sort((a, b) => priority(a) - priority(b))];
+    const selected = all.slice(0, 9); suppressed += all.length - selected.length;
+    if (suppressed) selected.push({ ...diagnostic.record(outerContext("capacity"), undefined), ordinal: Math.min(1_000_000, suppressed), reasons: [{ kind: "suppressed", depth: 0, actual: null, expected: null }] });
+    for (const record of selected) emitDiagnostic(record, write);
   } catch (error) { failures.push(error); }
 }
 async function retrieveDiagnostics(origin) {
@@ -123,6 +144,7 @@ test("actual OpenClaw Abliteration configured native client through workerd and 
   const recordMetadata = (...args) => {
     try { localDiagnostics.add(outerMetadata(...args)); } catch (error) { diagnosticFailures.push(error); }
   };
+  let helperFulfilled = false, physical, cancelUsage, observedCalls;
   let phase = "fixture_start", scenarioContext = { test: "T00", scenario: "none", ordinal: 0 };
   const selectScenario = id => {
     const scenario = id.slice("abliteration_".length);
@@ -164,11 +186,12 @@ test("actual OpenClaw Abliteration configured native client through workerd and 
       testPath: "extensions/abliteration/worker-contract.test.ts",
       env: { CLAWROUTER_CONTRACT_ORIGIN: origin, ABLIT_KEY: "must-not-fallback", ABLITERATION_API_KEY: "must-not-fallback", OPENAI_API_KEY: "must-not-fallback" },
     });
+    helperFulfilled = true; // The complete original helper fulfilled, independently of any receipt.
     recordMetadata("helper_fulfilled");
     phase = "worker_retire";
     const retirement = await fetch(origin + "/fixture/retire", { method: "POST" });
     assert.equal(retirement.status, 200);
-    const joined = await retirement.json();
+    const joined = await retirement.json(); physical = joined;
     assert.equal(joined.requests, charged.length + 4, "all real SDK requests, including four denials");
     assert.equal(joined.inputs.length, charged.length);
     for (const input of joined.inputs) {
@@ -182,7 +205,8 @@ test("actual OpenClaw Abliteration configured native client through workerd and 
     let calls;
     for (let attempt = 0; attempt < 150; attempt++) {
       calls = await (await upstream.fetch("https://fixture.example/state")).json();
-      const cancelled = calls.find(call => call.body && JSON.stringify(call.body.messages).includes("abliteration_cancel"));
+      observedCalls = calls;
+    const cancelled = calls.find(call => call.id === "abliteration_cancel");
       if (cancelled?.cancelled || cancelled?.aborted) break;
       await new Promise(resolve => setTimeout(resolve, 20));
     }
@@ -195,8 +219,8 @@ test("actual OpenClaw Abliteration configured native client through workerd and 
     assert.equal(calls.length, charged.length, "invalid keys, foreign grants and unknown-price hard budgets must not dispatch; errors must not replay");
     for (const call of calls) {
       assert.equal(call.url, provider.base_urls.default.replace(/\/$/, "") + endpoint.path);
-      assert.equal(call.headers.authorization, "Bearer fixture-upstream-abliteration");
-      const id = charged.find(id => JSON.stringify(call.body.messages).includes(id)); assert.ok(id);
+      assert.equal(call.headers.authorization, `Bearer ${upstreamCredentials[call.id]}`);
+      const id = charged.find(id => JSON.stringify(call.body.messages).includes(id)); assert.ok(id); assert.equal(call.id, id);
       selectScenario(id);
       const expected = modelFor(id);
       assert.equal(call.body.model, expected);
@@ -243,6 +267,7 @@ test("actual OpenClaw Abliteration configured native client through workerd and 
       assert.deepEqual([event.input_tokens, event.output_tokens, event.total_tokens], id === "abliteration_observed" ? [4, 3, 7] : id === "abliteration_cached" ? [100, 20, 120] : [null, null, null]);
       assert.equal(event.cached_input_tokens, id === "abliteration_cached" ? 40 : null);
       assert.doesNotMatch(JSON.stringify(event), /synthetic-tool-result|fixture-upstream|must-not-fallback/);
+      if (id === "abliteration_cancel") cancelUsage = usage;
     }
     phase = "denial_assert";
     for (const id of ["abliteration_revoked", "abliteration_unpriced", "abliteration_foreign"]) {
@@ -251,6 +276,8 @@ test("actual OpenClaw Abliteration configured native client through workerd and 
       assert.equal(usage.budget.spentMicros, 0);
       assert.ok(usage.usage.events.every(event => event.actual_cost_micros === 0));
     }
+    assert.equal(finalAbliterationCallerCancellation({ physical, helperFulfilled, receipt: physical.sdkReceipt, incoming: physical.incoming, calls: observedCalls, usage: cancelUsage }), true,
+      "bound caller cancellation requires every independent oracle");
   } catch (error) {
     recordFailure(error);
     if (phase === "sdk_process") recordMetadata("helper_rejected", error);
@@ -269,6 +296,7 @@ test("actual OpenClaw Abliteration configured native client through workerd and 
     // Reporting follows original retirement and cannot short-circuit disposal.
     try {
       if (origin) {
+        for (const record of cancelSummaryEvidence(physical, observedCalls, cancelUsage)) localDiagnostics.add(record);
         const records = await retrieveDiagnostics(origin);
         recordMetadata("diagnostics_received", undefined, records.filter(record => record.source === "sdk").length);
         for (const record of records) localDiagnostics.add(record);
@@ -412,7 +440,7 @@ test("passive observation schema and annotation priority retain all safe records
   assert.equal(validateDiagnostic({ ...record, observation: { ...observation, state: "secret" } }), null);
   const generic = outerMetadata("setup"), emitted = [], failures = [undefined];
   emitDiagnostics([generic, record], failures, line => emitted.push(JSON.parse(line.slice(line.indexOf("::{") + 2))));
-  assert.equal(emitted.length, 2); assert.deepEqual(emitted[0], record); assert.deepEqual(emitted[1], generic);
+  assert.equal(emitted.length, 2); assert.deepEqual(emitted[0], generic); assert.deepEqual(emitted[1], record);
   assert.deepEqual(failures, [undefined]);
   emitDiagnostics([record], failures, () => { throw undefined; }); assert.deepEqual(failures, [undefined, undefined]);
   assert.equal(getters, 0);
@@ -444,14 +472,14 @@ test("SDK afterEach snapshots settled original products without accepting failed
   assert.equal(snapshot.observation.sameClosed, false); assert.equal(snapshot.observation.sameRead, false);
 });
 
-function sdkCleanupHarness(acquisitions, { bodyPassed = true, started = acquisitions.length, observationErrors = [] } = {}, acceptStoredSdkCancel) {
+function sdkCleanupHarness(acquisitions, { bodyPassed = true, started = acquisitions.length, observationErrors = [], testId = "T26", restore = () => {}, send = async () => new Response(null, { status: 204 }), invocationCount = 1, invocation = { test: "T27", id: "cancel", signal: AbortSignal.abort() } } = {}, acceptStoredSdkCancel) {
   const records = diagnostic.store(); let cleanup;
-  const context = { source: "sdk", test: "T26", scenario: "error", operation: "reader_join", ordinal: 0 };
+  const context = { source: "sdk", test: testId, scenario: testId === "T27" ? "cancel" : "error", operation: "reader_join", ordinal: 0 };
   const code = stripTypeScriptTypes(sdkText.slice(sdkText.indexOf("afterEach(async () => {"), sdkText.indexOf("\nasync function start(")));
   const expect = value => ({ toBeGreaterThan(n) { assert.ok(value > n); }, toBe(other) { assert.equal(value, other); }, toEqual(other) { assert.deepEqual(value, other); }, toHaveLength(n) { assert.equal(value.length, n); } });
-  new Function("afterEach", "acquisitions", "joinReaderOperations", "mark", "remember", "current", "observationErrors", "vi", "diagnostic", "failureRecords", "origin", "diagnosticFetch", "bodyPassed", "started", "acceptStoredSdkCancel", "expect", code)(
+  new Function("afterEach", "acquisitions", "joinReaderOperations", "mark", "remember", "current", "observationErrors", "vi", "diagnostic", "failureRecords", "origin", "diagnosticFetch", "bodyPassed", "started", "acceptStoredSdkCancel", "expect", "cancelInvocations", "cancelInvocation", code)(
     fn => { cleanup = fn; }, acquisitions, sdkJoinForCleanup, () => {}, (ctx, reason, observation) => { assert.equal(records.add(diagnostic.record(ctx, reason, observation)), true); }, context, observationErrors,
-    { restoreAllMocks() {} }, diagnostic, records, "https://fixture.example", async () => new Response(null, { status: 204 }), bodyPassed, started, acceptStoredSdkCancel, expect);
+    { restoreAllMocks: restore }, diagnostic, records, "https://fixture.example", send, bodyPassed, started, acceptStoredSdkCancel, expect, invocationCount, invocation);
   return { cleanup, records };
 }
 // Bound once from the actual SDK helper source, never the Worker classifier.
@@ -607,6 +635,9 @@ test("Abliteration annotation command survives the actual Node 24 default spec r
   const temporary = await mkdtemp(join(tmpdir(), "abliteration-reporter-"));
   const file = join(temporary, "annotation.test.mjs");
   const record = diagnostic.record(outerContext("assert"), undefined);
+  const crowded = Array.from({ length: 25 }, (_, ordinal) => ({ ...record, ordinal }));
+  crowded.push(outerMetadata("helper_entered"), outerMetadata("helper_fulfilled"), outerMetadata("diagnostics_received", undefined, 4));
+  crowded.push(...cancelSummaryEvidence(undefined, undefined, undefined));
   const failures = [];
   const program = `import test from "node:test";
 import { types as nodeTypes } from "node:util";
@@ -614,7 +645,9 @@ ${diagnosticCode}
 const diagnostic = diagnosticProtocol(nodeTypes.isProxy);
 ${validateDiagnostic.toString()}
 ${emitDiagnostic.toString()}
-test("fresh synthetic annotation", () => emitDiagnostic(${JSON.stringify(record)}));
+const outerContext = ${outerContext.toString()};
+${emitDiagnostics.toString()}
+test("fresh synthetic annotation", () => emitDiagnostics(${JSON.stringify(crowded)}, [undefined]));
 `;
   try {
     await writeFile(file, program);
@@ -631,9 +664,12 @@ test("fresh synthetic annotation", () => emitDiagnostic(${JSON.stringify(record)
     assert.match(stdout, /tests 1/);
     const prefix = "::error title=Abliteration contract diagnostic::";
     const lines = stdout.split(/\r?\n/).filter(line => line.includes(prefix));
-    assert.equal(lines.length, 1);
-    assert.equal(lines[0], prefix + JSON.stringify(record), "the final stdout line must start with the Actions command, without reporter decoration");
-    assert.deepEqual(JSON.parse(lines[0].slice(prefix.length)), record);
+    assert.equal(lines.length, 10);
+    assert.ok(lines.every(line => line.startsWith(prefix)), "actual spec output preserves undecorated commands");
+    const firstTen = lines.slice(0, 10).map(line => JSON.parse(line.slice(prefix.length)));
+    assert.equal(firstTen[0].metadata.marker, "helper_fulfilled"); assert.equal(firstTen[0].metadata.sdkRecords, 4);
+    assert.equal(firstTen[1].observation.site, "sdk_receipt"); assert.equal(firstTen[2].observation.site, "binding");
+    assert.equal(firstTen.at(-1).operation, "capacity"); assert.ok(firstTen.every(validateDiagnostic));
   } catch (error) { failures.push(error); }
   finally { try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); } }
   if (failures.length === 1) throw failures[0];
@@ -759,7 +795,8 @@ test("Abliteration diagnostic Worker control relay bypasses product dispatch and
     await diagnostic.flush([record], origin, fetch);
     assert.deepEqual(await retrieveDiagnostics(origin), [record]);
     const retirement = await fetch(origin + "/fixture/retire", { method: "POST" });
-    assert.equal(retirement.status, 200); assert.deepEqual(await retirement.json(), { requests: 0, inputs: [] });
+    assert.equal(retirement.status, 200); assert.deepEqual(await retirement.json(), { requests: 0, inputs: [], incoming: [], tasksFulfilled: true,
+      sdkReceipt: { attempts: 0, valid: false, receipt: null }, cancellationBinding: { bound: false, responseAdmitted: false } });
     assert.deepEqual(await (await (await mf.getWorker("upstream")).fetch("https://fixture.example/state")).json(), []);
   } catch (error) { failures.push(error); }
   finally {
@@ -775,7 +812,7 @@ test("actual Worker waitUntil retirement failure retains its typed site through 
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
   let mf; const failures = [];
   try {
-    const source = routerFixture().replace("const records = [], inputs = [], rawFetch = globalThis.fetch;", "const failure = Promise.reject(undefined); void failure.catch(() => {}); const records = [{ returned: { promise: Promise.resolve() }, pending: [failure] }], inputs = [], rawFetch = globalThis.fetch;");
+    const source = routerFixture().replace("const records = [], inputs = [], rawFetch = globalThis.fetch;", "const failure = Promise.reject(undefined); void failure.catch(() => {}); const records = [{ errors: [], returned: { promise: Promise.resolve() }, pending: [failure] }], inputs = [], rawFetch = globalThis.fetch;");
     mf = await startWorkerdFixture(temporary, source, upstreamFixture());
     const origin = String(await mf.ready).replace(/\/$/, "");
     const response = await fetch(origin + "/fixture/retire", { method: "POST" });
@@ -798,15 +835,15 @@ test("native fulfilled sibling cancel survives the Worker failed-read branch and
   const readOp = trace.begin("read", []), reading = trace.invoke(readOp, reader.read, reader, []);
   observeReaderOperation(pending, "read", reading, []); pending[1].detail = () => trace.snapshot(readOp);
   await Promise.allSettled([reading]);
-  const proof = { returned: Promise.resolve(), body, ordinal: 1, errors: [], readers: [{ pending, unlocked: true, terminal: { promise: Promise.resolve() }, trace }] };
+  const proof = { returned: Promise.resolve(), binding: { id: null }, candidates: [], body, ordinal: 1, errors: [], readers: [{ pending, unlocked: true, terminal: { promise: Promise.resolve() }, trace }] };
   const records = [], opaque = makeDiagnostic(), source = routerFixture();
   const retireCode = source.slice(source.indexOf("async function retire()"), source.indexOf("\nexport default", source.indexOf("async function retire()")));
-  const retire = new Function("records", "inputs", "joinReaderOperations", "remember", "workerContext", retireCode + ";return retire;")([], [proof], joinReaderOperations,
-    (context, observation) => records.push(opaque.record(context, undefined, observation)), (operation, ordinal) => ({ source: "worker", test: "T00", scenario: "none", operation, ordinal }));
+  const retire = new Function("records", "inputs", "joinReaderOperations", "remember", "workerContext", "abliterationBindingFacts", retireCode + ";return retire;")([], [proof], joinReaderOperations,
+    (context, observation) => records.push(opaque.record(context, undefined, observation)), (operation, ordinal) => ({ source: "worker", test: "T00", scenario: "none", operation, ordinal }), abliterationBindingFacts);
   const retiring = retire(); let mf; const failures = [];
   try {
     await assert.rejects(retiring, AggregateError);
-    assert.equal(proof.readers[0].pendingSettled, undefined);
+    assert.equal(proof.readers[0].pendingSettled, true, "settled does not mean accepted");
     mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture());
     const origin = String(await mf.ready).replace(/\/$/, "");
     await diagnostic.flush(records, origin, fetch);
@@ -827,10 +864,231 @@ test("native fulfilled sibling cancel survives the Worker failed-read branch and
   if (failures.length) throw new AggregateError(failures, "sibling evidence or cleanup failed");
 });
 
+function sdkCancelReceiptStore() {
+  let attempts = 0, receipt = null;
+  const valid = value => value && typeof value === "object" && Object.keys(value).length === 7 && value.v === 1 && value.test === "T27" && value.scenario === "cancel" &&
+    value.partialDelivery === true && value.callerAborted === true && value.originalsJoined === true && value.restored === true;
+  return {
+    async receive(request) {
+      attempts++;
+      if (request.method !== "POST" || !request.body) return new Response(null, { status: 409 });
+      const reader = request.body.getReader(), chunks = []; let bytes = 0; const failures = [];
+      try { for (;;) { const result = await reader.read(); if (result.done) break; bytes += result.value.byteLength; if (bytes > 512) throw new Error("receipt bound"); chunks.push(result.value); } }
+      catch (error) { failures.push(error); }
+      finally { try { await reader.cancel(); } catch (error) { failures.push(error); } try { reader.releaseLock(); } catch (error) { failures.push(error); } }
+      if (failures.length) return new Response(null, { status: 400 });
+      if (attempts !== 1) return new Response(null, { status: 409 });
+      try {
+        const joined = new Uint8Array(bytes); let offset = 0; for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.byteLength; }
+        const value = JSON.parse(new TextDecoder().decode(joined)); if (!valid(value)) return new Response(null, { status: 400 });
+        receipt = value; return new Response(null, { status: 204 });
+      } catch { return new Response(null, { status: 400 }); }
+    },
+    snapshot() { return { attempts, valid: attempts === 1 && receipt !== null, receipt }; },
+  };
+}
+function bindAbliterationInput(input, init, records, knownIds) {
+  const request = input instanceof Request ? input : null, url = request ? request.url : String(input);
+  const method = init?.method !== undefined ? init.method : request?.method ?? "GET";
+  // Fetch replaces Request headers when init.headers is defined; never merge.
+  const headers = new Headers(init?.headers !== undefined ? init.headers : request?.headers);
+  const id = knownIds.find(id => headers.get("authorization") === `Bearer ${upstreamCredentials[id]}`) ?? null;
+  const matches = records.filter(record => record.kind === "inference" && record.id === id && record.method === "POST" && record.path === "/v1/native/abliteration/chat/completions");
+  return { id, record: matches.length === 1 ? matches[0] : null, matches: matches.length,
+    target: url === upstreamUrl && method === "POST" };
+}
+function abliterationBindingFacts(proof, records, inputs) {
+  const ingress = records.filter(record => record.kind === "inference" && record.id === "abliteration_cancel"), binding = proof?.binding;
+  const bound = binding?.id === "abliteration_cancel" && binding.target === true && binding.matches === 1 && ingress.length === 1 &&
+    binding.record === ingress[0] && binding.record.request?.signal === binding.record.signal &&
+    binding.record.method === "POST" && binding.record.path === "/v1/native/abliteration/chat/completions" && inputs.filter(input => input.binding.id === "abliteration_cancel").length === 1;
+  const responseAdmitted = bound && proof.response?.status === 200 && proof.body === proof.response.body &&
+    proof.response.headers.get("content-type")?.includes("text/event-stream") === true && binding.record.response?.status === 200 &&
+    binding.record.response.headers.get("content-type")?.includes("text/event-stream") === true;
+  return { bound: !!bound, responseAdmitted: !!responseAdmitted };
+}
+
+function cancelSummaryEvidence(physical, calls, usage) {
+  const r = physical?.sdkReceipt, receipt = r?.receipt, binding = physical?.cancellationBinding;
+  const posts = calls?.filter(call => call.id === "abliteration_cancel"), event = usage?.usage?.events?.[0];
+  const rows = [
+    { site: "sdk_receipt", receiptValid: r ? r.valid === true : null, partialDelivery: receipt ? receipt.partialDelivery === true : null,
+      callerAbortedAfterJoin: receipt ? receipt.callerAborted === true : null, originalsJoined: receipt ? receipt.originalsJoined === true : null, restored: receipt ? receipt.restored === true : null },
+    { site: "binding", requestBound: binding ? binding.bound === true : null, admitted: binding ? binding.responseAdmitted === true : null },
+    { site: "upstream", upstreamCanceled: posts ? posts.length === 1 && (posts[0].aborted === true || posts[0].cancelled === true) : null,
+      nonExpired: posts ? posts.length === 1 && posts[0].fixtureExpired !== true : null, noReplay: posts ? posts.length === 1 : null },
+    { site: "accounting", accountingMatched: usage ? usage.usage?.events?.length === 1 && usage.budget?.spentMicros === 7 && event?.credential_id === "abliteration_cancel" && event?.policy_id === "abliteration_cancel" &&
+      event?.provider === "abliteration" && event?.model === `abliteration/${models[0]}` && event?.status === "client_error" && event?.actual_cost_micros === 7 && event?.cost_basis === "policy_fixed" &&
+      [event?.input_tokens, event?.output_tokens, event?.total_tokens, event?.cached_input_tokens].every(value => value === null) : null },
+  ];
+  return rows.map(observation => diagnostic.record({ source: "outer", test: "T27", scenario: "cancel", operation: "cancel_assert", ordinal: 0 }, undefined, observation));
+}
+
+function finalAbliterationCallerCancellation({ physical, helperFulfilled, receipt, incoming, calls, usage }) {
+  const candidates = physical?.inputs?.flatMap(input => input.candidates ?? []) ?? [];
+  const matches = incoming?.filter(row => row.id === "abliteration_cancel") ?? [], posts = calls?.filter(row => row.id === "abliteration_cancel") ?? [];
+  const event = usage?.usage?.events?.[0];
+  return helperFulfilled === true && receipt?.attempts === 1 && receipt.valid === true && receipt.receipt?.test === "T27" && receipt.receipt.scenario === "cancel" &&
+    receipt.receipt.partialDelivery === true && receipt.receipt.callerAborted === true && receipt.receipt.originalsJoined === true && receipt.receipt.restored === true &&
+    physical?.tasksFulfilled === true && Array.isArray(physical.inputs) && physical.inputs.every(input => input.joined === true && input.locked === false) &&
+    physical.cancellationBinding?.bound === true && physical.cancellationBinding.responseAdmitted === true &&
+    candidates.length <= 1 && candidates.every(candidate => candidate.scenario === "cancel" && candidate.bound === true && candidate.responseAdmitted === true &&
+      candidate.physical === true && candidate.ingressObserved === true && typeof candidate.ingressAborted === "boolean" && candidate.fetchAborted === true) &&
+    matches.length === 1 && matches[0].path === "/v1/native/abliteration/chat/completions" && matches[0].method === "POST" && matches[0].model === `abliteration/${models[0]}` &&
+    posts.length === 1 && posts[0].url === upstreamUrl &&
+    posts[0].headers?.authorization === `Bearer ${upstreamCredentials.abliteration_cancel}` && posts[0].body?.model === models[0] && posts[0].body?.stream === true &&
+    (posts[0].cancelled === true || posts[0].aborted === true) && posts[0].fixtureExpired !== true &&
+    usage?.usage?.events?.length === 1 && usage.budget?.spentMicros === 7 && event?.credential_id === "abliteration_cancel" && event.policy_id === "abliteration_cancel" &&
+    event.provider === "abliteration" && event.model === `abliteration/${models[0]}` && event.status === "client_error" &&
+    event.actual_cost_micros === 7 && event.cost_basis === "policy_fixed" &&
+    [event.input_tokens, event.output_tokens, event.total_tokens, event.cached_input_tokens].every(value => value === null);
+}
+
+const cancelReceipt = { v: 1, test: "T27", scenario: "cancel", partialDelivery: true, callerAborted: true, originalsJoined: true, restored: true };
+function completeCancelProof() {
+  return { helperFulfilled: true, receipt: { attempts: 1, valid: true, receipt: { ...cancelReceipt } },
+    physical: { tasksFulfilled: true, cancellationBinding: { bound: true, responseAdmitted: true }, inputs: [{ joined: true, locked: false,
+      candidates: [{ scenario: "cancel", bound: true, responseAdmitted: true, physical: true, ingressObserved: true, ingressAborted: false, fetchAborted: true }] }] },
+    incoming: [{ id: "abliteration_cancel", path: "/v1/native/abliteration/chat/completions", method: "POST", model: `abliteration/${models[0]}` }],
+    calls: [{ id: "abliteration_cancel", url: upstreamUrl, method: "POST", headers: { authorization: `Bearer ${upstreamCredentials.abliteration_cancel}` }, body: { model: models[0], stream: true }, cancelled: true }],
+    usage: { budget: { spentMicros: 7 }, usage: { events: [{ credential_id: "abliteration_cancel", policy_id: "abliteration_cancel", provider: "abliteration", model: `abliteration/${models[0]}`, status: "client_error",
+      actual_cost_micros: 7, cost_basis: "policy_fixed", input_tokens: null, output_tokens: null, total_tokens: null, cached_input_tokens: null }] } } };
+}
+test("Abliteration cancellation requires every independent witness and permits observed false ingress", () => {
+  assert.equal(finalAbliterationCallerCancellation(completeCancelProof()), true);
+  const mutations = [p => { p.helperFulfilled = false; }, p => { delete p.helperFulfilled; }, p => { p.receipt = undefined; }, p => { p.receipt.attempts = 2; },
+    p => { p.receipt.receipt.partialDelivery = false; }, p => { p.receipt.receipt.test = "T26"; }, p => { p.physical.tasksFulfilled = false; },
+    p => { p.physical.inputs[0].locked = true; }, p => { p.physical.inputs[0].joined = false; }, p => { p.physical.cancellationBinding.bound = false; },
+    p => { p.physical.cancellationBinding.responseAdmitted = false; }, p => { p.physical.inputs[0].candidates[0].ingressAborted = null; },
+    p => { p.physical.inputs[0].candidates[0].ingressObserved = false; }, p => { p.physical.inputs[0].candidates[0].fetchAborted = false; },
+    p => { p.physical.inputs[0].candidates[0].scenario = "error"; }, p => { p.incoming.push({ ...p.incoming[0] }); }, p => { p.calls.push({ ...p.calls[0] }); },
+    p => { p.calls[0].fixtureExpired = true; }, p => { p.calls[0].cancelled = false; }, p => { p.calls[0].headers.authorization = "Bearer fixture-foreign"; },
+    p => { p.usage = undefined; }, p => { p.usage.usage.events[0].status = "provider_error"; }, p => { p.usage.usage.events[0].status = "deadline_exceeded"; },
+    p => { p.usage.usage.events[0].policy_id = "foreign"; }, p => { p.usage.usage.events[0].actual_cost_micros = 0; }];
+  for (const mutate of mutations) { const proof = completeCancelProof(); mutate(proof); assert.equal(finalAbliterationCallerCancellation(proof), false); }
+  const records = cancelSummaryEvidence(undefined, undefined, undefined), failures = [], emitted = [];
+  emitDiagnostics(records, failures, value => emitted.push(value)); assert.deepEqual(failures, []); assert.deepEqual(emitted, []);
+});
+test("Abliteration actual request binding excludes duplicate ingress, wrong credentials and selected rejection", () => {
+  const request = new Request("https://fixture.example/v1/native/abliteration/chat/completions", { method: "POST" });
+  const record = { request, signal: request.signal, kind: "inference", id: "abliteration_cancel", method: "POST", path: "/v1/native/abliteration/chat/completions",
+    response: new Response(null, { headers: { "content-type": "text/event-stream" } }) };
+  const outgoing = new Request(upstreamUrl, { method: "POST", headers: { authorization: `Bearer ${upstreamCredentials.abliteration_cancel}` } });
+  assert.equal(bindAbliterationInput(outgoing, undefined, [record], ids).record, record);
+  assert.equal(bindAbliterationInput(outgoing, { headers: {} }, [record], ids).id, null);
+  assert.equal(bindAbliterationInput(outgoing, { method: "GET" }, [record], ids).target, false);
+  assert.equal(bindAbliterationInput(outgoing, undefined, [record, { ...record }], ids).record, null);
+  const response = new Response("data: {}\n\n", { headers: { "content-type": "text/event-stream" } });
+  const proof = { binding: bindAbliterationInput(outgoing, undefined, [record], ids), response, body: response.body };
+  assert.deepEqual(abliterationBindingFacts(proof, [record], [proof]), { bound: true, responseAdmitted: true });
+  assert.equal(abliterationBindingFacts(proof, [record], [proof, proof]).bound, false);
+  record.response = new Response(null, { status: 400 }); assert.equal(abliterationBindingFacts(proof, [record], [proof]).responseAdmitted, false);
+});
+test("Abliteration T27 receipt is once-only after original retirement restoration and diagnostic success", async t => {
+  for (const fault of [null, "body", "restore", "diagnostics", "delivery", "duplicate", "invocation", "caller"]) await t.test(fault ?? "joined", async () => {
+    const actual = await nativeStoredErrorCase({ t27: true }), store = sdkCancelReceiptStore(); let restored = false, reporting = 0, receipts = 0;
+    const records = diagnostic.store();
+    const options = { testId: "T27", bodyPassed: fault !== "body", invocationCount: fault === "invocation" ? 2 : 1,
+      invocation: { test: "T27", id: "cancel", signal: fault === "caller" ? new AbortController().signal : AbortSignal.abort() },
+      restore() { restored = true; if (fault === "restore") throw undefined; }, send: async (url, init) => {
+        assert.equal(restored, true); assert.equal(actual.row.body.locked, false);
+        if (!url.endsWith("/fixture/sdk-cancel")) { reporting++; if (fault === "diagnostics") throw undefined; return new Response(null, { status: 204 }); }
+        receipts++; if (fault === "delivery") throw undefined;
+        const response = await store.receive(new Request(url, init));
+        if (fault === "duplicate") return store.receive(new Request(url, init)); return response;
+      } };
+    try {
+      const harness = sdkCleanupHarness([actual.row], options, sdkHelpers.acceptStoredSdkCancel);
+      if (fault === "diagnostics") harness.records.add(diagnostic.record(outerContext("assert"), undefined));
+      if (fault) await assert.rejects(harness.cleanup()); else await harness.cleanup();
+      assert.equal(store.snapshot().valid, fault === null);
+      if (["body", "restore", "diagnostics", "invocation", "caller"].includes(fault)) assert.equal(receipts, 0);
+      if (fault === "diagnostics") assert.equal(reporting, 1);
+    } finally { actual.finish(); }
+  });
+  for (const payload of [{ ...cancelReceipt, test: "T26" }, { ...cancelReceipt, partialDelivery: false }, { ...cancelReceipt, extra: true }]) {
+    const store = sdkCancelReceiptStore(); assert.equal((await store.receive(new Request("https://fixture.example/fixture/sdk-cancel", { method: "POST", body: JSON.stringify(payload) }))).status, 400);
+    assert.equal(store.snapshot().valid, false);
+  }
+});
+test("Abliteration Worker candidate denies original early foreign errors, late abort and incomplete native retirement", async t => {
+  for (const fault of ["early", "late", "rejected", "undefined", "sync", "locked", "pending", "unknown_ingress"]) await t.test(fault, async () => {
+    let controller, resolveCancel; const effective = new AbortController(), ingress = new AbortController(), reason = new Error("fixture failure");
+    const body = new ReadableStream({ start(c) { controller = c; }, cancel() {
+      if (fault === "rejected") throw reason; if (fault === "undefined") throw undefined;
+      if (fault === "pending") return new Promise(resolve => { resolveCancel = resolve; });
+    } });
+    const reader = body.getReader(), trace = diagnostic.readerTrace(reader, 1, 1, effective.signal, undefined, "fetch_input", fault === "unknown_ingress" ? undefined : ingress.signal);
+    const op = trace.begin("read", []), reading = trace.invoke(op, reader.read, reader, []); void reading.catch(() => {});
+    if (fault === "early") { controller.error(reason); await reading.catch(() => {}); }
+    if (fault !== "late") effective.abort(reason);
+    const cancel = trace.begin("cancel", [reason]); let canceled;
+    try { canceled = trace.invoke(cancel, fault === "sync" ? function () { throw undefined; } : reader.cancel, reader, [reason]); } catch (error) { assert.equal(error, undefined); }
+    if (fault === "sync") controller.error(reason);
+    if (fault === "late") effective.abort(reason);
+    if (fault === "pending") { assert.equal(trace.workerCandidate(reading, reason, body), false); resolveCancel(); }
+    await Promise.allSettled([reading, canceled].filter(Boolean));
+    if (fault !== "locked") { trace.unlocking(); reader.releaseLock(); trace.unlocked(); }
+    assert.equal(trace.workerCandidate(reading, reason, body), false);
+    if (body.locked) reader.releaseLock();
+  });
+});
+
+test("real native Abliteration Worker control binds partial-stream cancellation and SQLite before disposition", { timeout: 45_000 }, async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "abliteration-bound-cancel-")); let mf, reader; const failures = [];
+  try {
+    const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
+    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture());
+    const kv = await mf.getKVNamespace("POLICY_KV", "router"), id = "abliteration_cancel";
+    await kv.put(`policies/${id}`, JSON.stringify({ enabled: true, generation: "fixture", tenantId: "fixture", providers: ["abliteration"], models: [`abliteration/${models[0]}`],
+      grantRouting: { eligibleGrants: { abliteration: ["abliteration"] }, environmentFallback: false }, monthlyBudgetMicros: 100, requestCostMicros: 7, budgetMode: "reserve", retainRequestContent: false }));
+    await kv.put(`credentials/${id}`, JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update("fixture-secret").digest("hex"), policyId: id, policyGeneration: "fixture" }));
+    await kv.put("connections/abliteration", JSON.stringify({ providerId: "abliteration", enabled: true }));
+    const origin = String(await mf.ready).replace(/\/$/, "");
+    assert.equal((await fetch(origin + "/fixture/grants", { method: "POST" })).status, 204);
+    const controller = new AbortController();
+    const response = await fetch(origin + "/v1/native/abliteration/chat/completions", { method: "POST", headers: { authorization: `Bearer clawrouter-live-${id}-fixture-secret`, "content-type": "application/json" },
+      body: JSON.stringify({ model: models[0], stream: true, max_tokens: 128, messages: [{ role: "user", content: "fixture abliteration_cancel" }] }), signal: controller.signal });
+    assert.equal(response.status, 200); reader = response.body.getReader();
+    let text = ""; const decoder = new TextDecoder();
+    while (!text.includes("synthetic-answer")) { const next = await reader.read(); assert.equal(next.done, false); text += decoder.decode(next.value); }
+    const closed = reader.closed; void closed.catch(() => {}); controller.abort();
+    await Promise.allSettled([reader.cancel(), closed]); reader.releaseLock(); reader = undefined;
+    // This validates the control protocol, not a genuine SDK/helper execution.
+    assert.equal((await fetch(origin + "/fixture/sdk-cancel", { method: "POST", body: JSON.stringify(cancelReceipt) })).status, 204);
+    const retired = await fetch(origin + "/fixture/retire", { method: "POST" }); assert.equal(retired.status, 200);
+    const physical = await retired.json(), upstream = await mf.getWorker("upstream"); let calls, usage;
+    for (let n = 0; n < 150; n++) {
+      calls = await (await upstream.fetch("https://fixture.example/state")).json();
+      usage = await (await fetch(origin + "/v1/usage", { headers: { authorization: `Bearer clawrouter-live-${id}-fixture-secret` } })).json();
+      if ((calls[0]?.cancelled || calls[0]?.aborted) && usage.usage.events.length === 1) break;
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    const proof = { physical, receipt: physical.sdkReceipt, helperFulfilled: true, incoming: physical.incoming, calls, usage };
+    assert.equal(finalAbliterationCallerCancellation(proof), true);
+    assert.equal(finalAbliterationCallerCancellation({ ...proof, helperFulfilled: false }), false);
+    const emitted = [], errors = []; emitDiagnostics([...await retrieveDiagnostics(origin), ...cancelSummaryEvidence(physical, calls, usage)], errors, line => emitted.push(line));
+    assert.deepEqual(errors, []); assert.deepEqual(emitted, []);
+    assert.equal(physical.cancellationBinding.bound, true); assert.equal(physical.cancellationBinding.responseAdmitted, true);
+    assert.equal(physical.inputs.length, 1); assert.ok(physical.inputs.every(input => input.joined && !input.locked));
+  } catch (error) { failures.push(error); }
+  finally {
+    if (reader) { try { await reader.cancel(); } catch (error) { failures.push(error); } try { reader.releaseLock(); } catch (error) { failures.push(error); } }
+    try { await mf?.dispose(); } catch (error) { failures.push(error); }
+    try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+  }
+  if (failures.length) throw new AggregateError(failures, "bound native fixture or cleanup failed");
+});
+
 function routerFixture() {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
 import { putGrantCredentials, revokeGrantCredentials } from "./worker/grant-credentials.ts";
 const records = [], inputs = [], rawFetch = globalThis.fetch;
+const upstreamUrl = ${JSON.stringify(upstreamUrl)}, upstreamCredentials = ${JSON.stringify(upstreamCredentials)};
+${sdkCancelReceiptStore.toString()}
+${bindAbliterationInput.toString()}
+${abliterationBindingFacts.toString()}
+const sdkReceipt = sdkCancelReceiptStore();
 ${diagnosticCode}
 const diagnostic = diagnosticProtocol(), diagnosticRelay = diagnostic.relay();
 const workerContext = (operation, ordinal = 0) => ({ source: "worker", test: "T00", scenario: "none", operation, ordinal });
@@ -845,19 +1103,20 @@ ${observeReaderOperation.toString()}
 ${joinReaderOperations.toString()}
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 globalThis.fetch = function(input, init) {
-  const pending = Reflect.apply(rawFetch, this, [input, init]);
   const url = input instanceof Request ? input.url : String(input);
-  if (url !== ${JSON.stringify(provider.base_urls.default.replace(/\/$/, "") + endpoint.path)}) return pending;
+  const binding = url === upstreamUrl ? bindAbliterationInput(input, init, records, ${JSON.stringify(ids)}) : null;
+  const pending = Reflect.apply(rawFetch, this, [input, init]);
+  if (!binding) return pending;
   const signals = [init?.signal, input instanceof Request ? input.signal : undefined];
-  const proof = { returned: pending, body: undefined, readers: [], errors: [], ordinal: inputs.length + 1 }; inputs.push(proof);
+  const proof = { returned: pending, binding, body: undefined, response: undefined, candidates: [], readers: [], errors: [], ordinal: inputs.length + 1 }; inputs.push(proof);
   void pending.then(response => {
     try {
-      proof.body = response.body;
+      proof.response = response; proof.body = response.body;
       if (!proof.body) { proof.errors.push(new Error("upstream body missing")); return; }
       const getReader = proof.body.getReader;
       proof.body.getReader = function(...args) {
         const reader = Reflect.apply(getReader, this, args);
-        const trace = diagnostic.readerTrace(reader, proof.ordinal, proof.readers.length + 1, init?.signal ?? (input instanceof Request ? input.signal : undefined), undefined, "fetch_input");
+        const trace = diagnostic.readerTrace(reader, proof.ordinal, proof.readers.length + 1, init?.signal !== undefined ? init.signal : (input instanceof Request ? input.signal : undefined), undefined, "fetch_input", binding.record?.signal);
         const row = { pending: [], unlocked: false, terminal: deferred(), pendingSettled: false, trace }; proof.readers.push(row);
         for (const name of ["read", "cancel"]) {
           const original = reader[name];
@@ -865,7 +1124,7 @@ globalThis.fetch = function(input, init) {
             const detail = trace.begin(name, operands);
             let pending;
             try { pending = trace.invoke(detail, original, this, operands); }
-            catch (error) { remember(workerContext(name, proof.ordinal), { site: name === "cancel" ? "cancel_join" : "read_join", ...trace.snapshot(detail), joinAccepted: false }); throw error; }
+            catch (error) { proof.errors.push(error); remember(workerContext(name, proof.ordinal), { site: name === "cancel" ? "cancel_join" : "read_join", ...trace.snapshot(detail), joinAccepted: false }); throw error; }
             const returned = observeReaderOperation(row.pending, name, pending, signals);
             const operation = row.pending.at(-1);
             operation.detail = () => trace.snapshot(detail);
@@ -887,7 +1146,7 @@ globalThis.fetch = function(input, init) {
 async function retire() {
   const failures = [];
   for (const record of records) {
-    await record.returned.promise;
+    await record.returned.promise; failures.push(...record.errors);
     for (let cursor = 0; cursor < record.pending.length;) {
       const batch = record.pending.slice(cursor); cursor += batch.length;
       for (const [index, result] of (await Promise.allSettled(batch)).entries()) if (result.status === "rejected") {
@@ -900,16 +1159,27 @@ async function retire() {
     try { await proof.returned; } catch (error) { remember(workerContext("worker_retire", proof.ordinal), { site: "fetch", input: proof.ordinal, state: "rejected", reasonDefined: error !== undefined, joinAccepted: false }); throw error; }
     const readers = await Promise.allSettled(proof.readers.map(async row => {
       await row.terminal.promise;
-      try { await joinReaderOperations(row.pending); row.pendingSettled = true; }
-      catch (error) {
+      const results = await Promise.allSettled(row.pending.map(operation => operation.pending)); row.pendingSettled = true;
+      const rejected = [];
+      for (const [index, result] of results.entries()) {
+        const operation = row.pending[index];
+        if (result.status !== "rejected" || operation.expectedAbort) continue;
+        const { bound, responseAdmitted } = abliterationBindingFacts(proof, records, inputs);
+        if (bound && responseAdmitted && operation.kind === "read" && row.trace.workerCandidate(operation.pending, result.reason, proof.body)) {
+          // Preserve the original reason privately, unclassified and provisional.
+          if (!proof.candidates.some(candidate => candidate.operation === operation)) proof.candidates.push({ operation, reason: result.reason,
+            safe: { scenario: "cancel", bound, responseAdmitted, ...row.trace.workerDisposition() } });
+        } else rejected.push(result.reason);
+      }
+      if (results.some(result => result.status === "rejected")) {
         for (const operation of row.pending) {
           const detail = operation.detail?.();
           if (detail && (operation.kind === "cancel" || (detail.state === "rejected" && !operation.expectedAbort))) remember(workerContext("worker_retire", proof.ordinal), {
             site: operation.kind === "cancel" ? "cancel_join" : "read_join", ...detail, allUnlocked: row.unlocked, bodyLocked: proof.body?.locked ?? null, joinAccepted: false,
           });
         }
-        throw error;
       }
+      if (rejected.length) throw new AggregateError(rejected, "original reader operations failed");
     }));
     const failures = [...proof.errors, ...readers.flatMap(result => result.status === "rejected" ? [result.reason] : [])];
     if (!proof.readers.length) { remember(workerContext("worker_retire", proof.ordinal), { site: "missing_reader", input: proof.ordinal, joinAccepted: false }); failures.push(new Error("upstream reader observation missing")); }
@@ -918,36 +1188,41 @@ async function retire() {
   }));
   for (const result of joined) if (result.status === "rejected") failures.push(result.reason);
   if (failures.length) throw new AggregateError(failures, "original Worker work failed");
-  return { requests: records.length, inputs: inputs.map(proof => ({ joined: proof.joined, locked: proof.body.locked,
+  return { requests: records.length, tasksFulfilled: true, sdkReceipt: sdkReceipt.snapshot(),
+    cancellationBinding: abliterationBindingFacts(inputs.find(input => input.binding.id === "abliteration_cancel"), records, inputs),
+    incoming: records.map(record => ({ id: record.id, path: record.path, method: record.method, model: record.model })),
+    inputs: inputs.map(proof => ({ joined: proof.joined, locked: proof.body.locked, candidates: proof.candidates.map(candidate => candidate.safe),
     readers: proof.readers.map(row => ({ unlocked: row.unlocked, pendingSettled: row.pendingSettled })) })) };
 }
 export default { ...handler, async fetch(request, env, context) {
   const path = new URL(request.url).pathname;
+  if (path === "/fixture/sdk-cancel") return sdkReceipt.receive(request);
   if (path === "/fixture/diagnostic" || path === "/fixture/diagnostics") return await diagnosticRelay(request) ?? new Response(null, { status: 405 });
   if (path === "/fixture/retire") {
     try { return Response.json(await retire()); } catch (error) { remember(workerContext("worker_retire")); throw error; }
   }
   if (path === "/fixture/grants") {
-    for (const id of ${JSON.stringify(ids)}) await putGrantCredentials(env, "oauth/" + id + "/abliteration", { provider: "abliteration", kind: "api_key", enabled: true, credential: "fixture-upstream-abliteration" });
+    for (const id of ${JSON.stringify(ids)}) await putGrantCredentials(env, "oauth/" + id + "/abliteration", { provider: "abliteration", kind: "api_key", enabled: true, credential: upstreamCredentials[id] });
     await revokeGrantCredentials(env, "oauth/abliteration_revoked/abliteration");
     return new Response(null, { status: 204 });
   }
   if (path !== "/v1/native/abliteration/chat/completions") return handler.fetch(request, env, context);
-  const identity = requestIdentity(request);
-  const record = { returned: deferred(), pending: [] }; records.push(record);
+  const identity = requestIdentity(request), body = await request.clone().json();
+  const record = { request, signal: request.signal, identity, kind: "inference", id: "abliteration_" + identity.scenario, path, method: request.method, model: body.model.startsWith("abliteration/") ? body.model : "abliteration/" + body.model,
+    response: undefined, errors: [], returned: deferred(), pending: [] }; records.push(record);
   try {
-    return await handler.fetch(request, { ...env, ABLIT_KEY: "must-not-fallback", ABLITERATION_API_KEY: "must-not-fallback" }, {
+    const response = await handler.fetch(request, { ...env, ABLIT_KEY: "must-not-fallback", ABLITERATION_API_KEY: "must-not-fallback" }, {
       waitUntil(pending) { record.pending.push(pending); context.waitUntil(pending); }
-    });
-  } catch (error) { remember(identity); throw error; } finally { record.returned.resolve(); }
+    }); record.response = response; return response;
+  } catch (error) { record.errors.push(error); remember(identity); throw error; } finally { record.returned.resolve(); }
 } };`;
 }
 
 function upstreamFixture() {
-  return `const calls = []; export default { async fetch(request) {
+  return `const calls = [], credentials = ${JSON.stringify(upstreamCredentials)}; export default { async fetch(request) {
     if (request.url === "https://fixture.example/state") return Response.json(calls);
     const body = request.method === "POST" ? await request.json() : null;
-    const call = { url: request.url, method: request.method, headers: Object.fromEntries(request.headers), body }; calls.push(call);
+    const call = { id: Object.keys(credentials).find(id => request.headers.get("authorization") === "Bearer " + credentials[id]) ?? null, url: request.url, method: request.method, headers: Object.fromEntries(request.headers), body }; calls.push(call);
     const input = JSON.stringify(body.messages), frame = value => "data: " + JSON.stringify(value) + "\\n\\n";
     const failed = input.includes("abliteration_error"), cancel = input.includes("abliteration_cancel");
     const first = frame({ id: "chat_fixture", object: "chat.completion.chunk", model: body.model, choices: [{ index: 0, delta: { role: "assistant", content: "synthetic-answer" }, finish_reason: null }] });

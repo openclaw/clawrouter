@@ -70,13 +70,13 @@ function diagnosticProtocol(isProxy?: (value: unknown) => boolean) {
   }
   function validateObservation(value: unknown): DiagnosticObservation | null {
     const enums: Record<string, string[]> = {
-      site: ["sdk_operation", "sdk_join", "wait_until", "fetch", "observer", "missing_reader", "read_join", "cancel_join"],
+      site: ["sdk_operation", "sdk_join", "wait_until", "fetch", "observer", "missing_reader", "read_join", "cancel_join", "sdk_receipt", "binding", "upstream", "accounting"],
       kind: ["read", "cancel", "none"], state: ["invoke", "sync_throw", "fulfilled", "rejected", "pending"],
       closedState: ["pending", "fulfilled", "rejected", "unknown"], closedFinal: ["pending", "fulfilled", "rejected", "unknown"],
       signalScope: ["guard_input", "fetch_input"],
     };
     const numbers = ["input", "reader", "op", "invokeSeq", "settleSeq", "closedSeq", "closedFinalSeq", "readRejectSeq", "unlockCallsBefore", "unlockCalls", "unlockReturns", "unlockInvokeSeq", "unlockReturnSeq", "operations", "settled", "releaseCalls", "releaseSettled", "releaseFulfilled", "acquisitions", "acquisitionSettled"];
-    const booleans = ["reasonDefined", "closedReasonDefined", "closedAfterUnlock", "closedFinalReasonDefined", "closedFinalAfterUnlock", "sameClosedFinal", "sameReadFinal", "operandSameRead", "operandSameClosed", "operandSameSignalAtInvoke", "operandSameSignalAtSettle", "readRejectSeen", "readReasonDefined", "operandPresent", "operandDefined", "sameClosed", "sameRead", "sameOperand", "sameSignal", "sameCaller", "signalPresent", "signalAborted", "signalReasonPresent", "signalReasonDefined", "rejectSignalPresent", "rejectSignalAborted", "rejectSignalReasonPresent", "rejectSignalReasonDefined", "callerPresent", "callerAborted", "callerReasonDefined", "rejectCallerPresent", "rejectCallerAborted", "rejectCallerReasonDefined", "effectiveSignalKnown", "eof", "allSettled", "allReleasesFulfilled", "allUnlocked", "bodyLocked", "joinAccepted"];
+    const booleans = ["reasonDefined", "closedReasonDefined", "closedAfterUnlock", "closedFinalReasonDefined", "closedFinalAfterUnlock", "sameClosedFinal", "sameReadFinal", "operandSameRead", "operandSameClosed", "operandSameSignalAtInvoke", "operandSameSignalAtSettle", "readRejectSeen", "readReasonDefined", "operandPresent", "operandDefined", "sameClosed", "sameRead", "sameOperand", "sameSignal", "sameCaller", "signalPresent", "signalAborted", "signalReasonPresent", "signalReasonDefined", "rejectSignalPresent", "rejectSignalAborted", "rejectSignalReasonPresent", "rejectSignalReasonDefined", "callerPresent", "callerAborted", "callerReasonDefined", "rejectCallerPresent", "rejectCallerAborted", "rejectCallerReasonDefined", "effectiveSignalKnown", "eof", "allSettled", "allReleasesFulfilled", "allUnlocked", "bodyLocked", "joinAccepted", "receiptValid", "partialDelivery", "callerAbortedAfterJoin", "originalsJoined", "restored", "requestBound", "admitted", "upstreamCanceled", "nonExpired", "noReplay", "accountingMatched"];
     if (!object(value)) return null;
     const keys = Reflect.ownKeys(value); if (!keys.length || keys.length > 64) return null;
     const result: DiagnosticObservation = {};
@@ -92,7 +92,7 @@ function diagnosticProtocol(isProxy?: (value: unknown) => boolean) {
     return result;
   }
   // Identity-only observation of original products; never waits on reader.closed.
-  function readerTrace(reader: ReadableStreamDefaultReader<Uint8Array>, input: number, readerIndex: number, signal: AbortSignal | null | undefined, caller: AbortSignal | undefined, signalScope: "guard_input" | "fetch_input") {
+  function readerTrace(reader: ReadableStreamDefaultReader<Uint8Array>, input: number, readerIndex: number, signal: AbortSignal | null | undefined, caller: AbortSignal | undefined, signalScope: "guard_input" | "fetch_input", ingress?: AbortSignal) {
     let sequence = 0, count = 0, settled = 0, unlockCalls = 0, unlockReturns = 0, eof = false, unlockInvokeSeq = 0, unlockReturnSeq = 0;
     let closedState = "pending", closedSeq = 0, closedReason: unknown, closedAfterUnlock = false;
     let originalClosed: Promise<void> | undefined;
@@ -106,7 +106,7 @@ function diagnosticProtocol(isProxy?: (value: unknown) => boolean) {
     const same = (a: unknown, b: unknown) => a !== undefined && b !== undefined && a === b;
     // Capture the actual promise before any consumer can release the lock.
     safe(() => { const closed = reader.closed; originalClosed = closed; void closed.then(() => safe(() => { closedState = "fulfilled"; closedSeq = tick(); closedAfterUnlock = unlockCalls > 0; }), reason => safe(() => { closedState = "rejected"; closedReason = reason; closedSeq = tick(); closedAfterUnlock = unlockCalls > 0; })); });
-    type Op = { kind: "read" | "cancel"; index: number; invokeSeq: number; settleSeq: number; state: string; operandPresent: boolean; operand: unknown; unlockBefore: number; signal: ReturnType<typeof signalState>; caller: ReturnType<typeof signalState>; detail?: DiagnosticObservation; reason?: unknown; pending?: Promise<unknown>; rejectSignal?: ReturnType<typeof signalState>; rejectCaller?: ReturnType<typeof signalState> };
+    type Op = { worker?: { ingress: ReturnType<typeof signalState>; earlierFailure: boolean; pendingReads: Op[] }; kind: "read" | "cancel"; index: number; invokeSeq: number; settleSeq: number; state: string; operandPresent: boolean; operand: unknown; unlockBefore: number; signal: ReturnType<typeof signalState>; caller: ReturnType<typeof signalState>; detail?: DiagnosticObservation; reason?: unknown; pending?: Promise<unknown>; rejectSignal?: ReturnType<typeof signalState>; rejectCaller?: ReturnType<typeof signalState> };
     const originalOperations = new Set<Op>();
     const finish = (op: Op, state: string, reason: unknown, value?: unknown) => safe(() => {
       op.state = state; op.reason = reason; op.settleSeq = tick(); settled++;
@@ -127,7 +127,9 @@ function diagnosticProtocol(isProxy?: (value: unknown) => boolean) {
     });
     return {
       begin(kind: "read" | "cancel", operands: unknown[]): Op {
-        const operation = { kind, index: ++count, invokeSeq: tick(), settleSeq: 0, state: "invoke", operandPresent: operands.length > 0, operand: operands[0], unlockBefore: unlockCalls, signal: signalState(signal), caller: signalState(caller) };
+        const operation: Op = { kind, index: ++count, invokeSeq: tick(), settleSeq: 0, state: "invoke", operandPresent: operands.length > 0, operand: operands[0], unlockBefore: unlockCalls, signal: signalState(signal), caller: signalState(caller),
+          ...(signalScope === "fetch_input" ? { worker: { ingress: signalState(ingress), earlierFailure: [...originalOperations].some(op => op.kind === "read" && ["rejected", "sync_throw"].includes(op.state)),
+            pendingReads: [...originalOperations].filter(op => op.kind === "read" && op.state === "invoke") } } : {}) };
         originalOperations.add(operation); return operation;
       },
       invoke<F extends (...args: any[]) => Promise<unknown>>(op: Op, original: F, receiver: unknown, operands: unknown[]): ReturnType<F> {
@@ -153,6 +155,19 @@ function diagnosticProtocol(isProxy?: (value: unknown) => boolean) {
           op.rejectSignal?.present === true && op.rejectSignal.aborted === true && op.rejectSignal.reason === reason &&
           (!requireCaller || (op.caller.present === true && op.caller.aborted === true && op.caller.reason === reason &&
             op.rejectCaller?.present === true && op.rejectCaller.aborted === true && op.rejectCaller.reason === reason));
+      },
+      workerCandidate(pending: Promise<unknown>, reason: unknown, body: ReadableStream<Uint8Array>) {
+        const ops = [...originalOperations], read = ops.find(op => op.pending === pending && op.kind === "read" && op.state === "rejected" && op.reason === reason);
+        const cancels = ops.filter(op => op.kind === "cancel"), cancel = cancels[0];
+        return signalScope === "fetch_input" && reason !== undefined && !!read && cancels.length === 1 && cancel.state === "fulfilled" && cancel.unlockBefore === 0 &&
+          cancel.signal.present === true && cancel.signal.aborted === true && cancel.worker?.ingress.present === true && typeof cancel.worker.ingress.aborted === "boolean" &&
+          !cancel.worker.earlierFailure && cancel.worker.pendingReads.includes(read) && originalClosed !== undefined && closedState === "fulfilled" &&
+          closedSeq > 0 && cancel.settleSeq > 0 && closedSeq < unlockInvokeSeq && cancel.settleSeq < unlockInvokeSeq &&
+          unlockCalls === 1 && unlockReturns === 1 && body.locked === false && ops.every(op => op.state === "fulfilled" || op === read);
+      },
+      workerDisposition() {
+        const cancel = [...originalOperations].find(op => op.kind === "cancel");
+        return { physical: true, ingressObserved: cancel?.worker?.ingress.present === true, ingressAborted: cancel?.worker?.ingress.aborted ?? null, fetchAborted: cancel?.signal.aborted === true };
       },
       snapshot(op?: Op): DiagnosticObservation {
         return { input, reader: readerIndex, op: op?.index ?? 0, kind: op?.kind ?? "none", state: op?.state ?? "pending", invokeSeq: op?.invokeSeq ?? 0, settleSeq: op?.settleSeq ?? 0,
@@ -253,8 +268,8 @@ function diagnosticProtocol(isProxy?: (value: unknown) => boolean) {
     };
     return Object.assign(route, { add: records.add });
   }
-  async function flush(records: DiagnosticRecord[], target: string, send: typeof fetch) {
-    if (!records.length) return;
+  async function flush(records: DiagnosticRecord[], target: string, send: typeof fetch, complete?: (signal: AbortSignal) => Promise<void>) {
+    if (!records.length && !complete) return;
     const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 2000);
     try {
       for (const value of records) {
@@ -263,6 +278,7 @@ function diagnosticProtocol(isProxy?: (value: unknown) => boolean) {
         await read(response.body, 2048);
         if (response.status !== 204) throw new Error("diagnostic rejected");
       }
+      if (complete) await complete(controller.signal);
     } finally { clearTimeout(timer); }
   }
   return { scenarios, operations, own, identity, validate, record, classify, store, read, relay, flush, readerTrace };
@@ -274,6 +290,8 @@ const diagnosticFetch = globalThis.fetch;
 let current: DiagnosticContext = { source: "sdk", test: "T00", scenario: "none", operation: "setup", ordinal: 0 };
 let failureRecords = diagnostic.store();
 let bodyPassed = false;
+let cancelInvocations = 0;
+let cancelInvocation: { test: string; id: string; signal?: AbortSignal } | undefined;
 const testNames = new Map<string, string>();
 function mark(operation: string) { current = { ...current, operation }; }
 function remember(context: DiagnosticContext, error: unknown, observation?: DiagnosticObservation) {
@@ -345,7 +363,7 @@ beforeEach(({ task }) => {
   const test = testNames.get(task.name);
   const scenario = test ? diagnostic.scenarios.find(value => diagnostic.identity(test, value))! : "none";
   current = { source: "sdk", test: test ?? "T00", scenario, operation: "setup", ordinal: 0 };
-  failureRecords = diagnostic.store(); bodyPassed = false;
+  failureRecords = diagnostic.store(); bodyPassed = false; cancelInvocations = 0; cancelInvocation = undefined;
   acquisitions.length = 0; observationErrors.length = 0; started = 0; callerSignal = undefined;
   try {
   if (!test) throw new Error("unmapped diagnostic test");
@@ -414,6 +432,7 @@ beforeEach(({ task }) => {
 
 afterEach(async () => {
   const cleanupFailures: unknown[] = [];
+  let joinedAndAsserted = false;
   try {
     mark("acquisition_join");
     const returned = await Promise.allSettled(acquisitions.map(row => row.returned));
@@ -462,22 +481,40 @@ afterEach(async () => {
     }
     expect(observationErrors).toEqual([]);
     expect(acquisitions).toHaveLength(started);
+    joinedAndAsserted = true;
   } catch (error) { remember({ ...current }, error); cleanupFailures.push(error); }
   finally {
     try { vi.restoreAllMocks(); } catch (error) { remember({ ...current, operation: "restore" }, error); cleanupFailures.push(error); }
     // Physical joins and mock restoration precede any reporting I/O. Vitest
     // retains the original body failure independently, including throw undefined.
-    try { await diagnostic.flush(failureRecords.values(), origin, diagnosticFetch); }
+    try { await diagnostic.flush(failureRecords.values(), origin, diagnosticFetch, current.test === "T27" && !cleanupFailures.length ? async signal => {
+      expect(bodyPassed && joinedAndAsserted).toBe(true);
+      expect(cancelInvocations).toBe(1); expect(cancelInvocation?.test).toBe("T27"); expect(cancelInvocation?.id).toBe("cancel");
+      expect(cancelInvocation?.signal?.aborted).toBe(true);
+      await sendCancelReceipt(diagnosticFetch, origin, signal);
+    } : undefined); }
     catch (error) { cleanupFailures.push(error); }
   }
   if (cleanupFailures.length === 1) throw cleanupFailures[0];
   if (cleanupFailures.length) throw new AggregateError(cleanupFailures, "retirement or diagnostic reporting failed");
 });
 
+async function sendCancelReceipt(send: typeof fetch, target: string, signal: AbortSignal) {
+  // Original control transport after original retirement, restoration and diagnostics.
+  const response = await send(target + "/fixture/sdk-cancel", { method: "POST", signal, headers: { "content-type": "application/json" },
+    body: JSON.stringify({ v: 1, test: "T27", scenario: "cancel", partialDelivery: true, callerAborted: true, originalsJoined: true, restored: true }) });
+  const failures: unknown[] = [];
+  if (response.status !== 204) failures.push(new Error("SDK cancellation receipt refused"));
+  try { await response.body?.cancel(); } catch (error) { failures.push(error); }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length) throw new AggregateError(failures, "SDK cancellation receipt failed");
+}
+
 async function start(id: string, modelId = models[0], options: { apiKey?: string; signal?: AbortSignal; simpleCompletion?: boolean; tools?: boolean; reasoning?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"; image?: boolean } = {}) {
   if (!diagnostic.identity(current.test, id)) throw new Error("unmapped diagnostic scenario");
   current = { ...current, scenario: id };
   callerSignal = options.signal;
+  if (id === "cancel") { cancelInvocations++; cancelInvocation = { test: current.test, id, signal: options.signal }; }
   mark("register");
   const provider = await registerSingleProviderPlugin(plugin);
   mark("catalog");
