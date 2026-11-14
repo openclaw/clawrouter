@@ -5,7 +5,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as guardedFetch from "../../infra/net/fetch-guard.js";
 import { fetchWithRuntimeDispatcher, type DispatcherAwareRequestInit } from "../../infra/net/runtime-fetch.js";
+import { registerTestPlugin } from "../../plugin-sdk/plugin-test-contracts.js";
+import { createPluginRecord } from "../../plugins/loader-records.js";
+import { resolvePluginCapabilityCatalogContext } from "../../plugins/loader-runtime-load.js";
+import { createPluginRegistry } from "../../plugins/registry.js";
+import { disposePluginRegistryInstances } from "../../plugins/runtime.js";
+import { withPluginRuntimeGenerationRegistryScope } from "../../plugins/runtime/generation-state.js";
+import { createPluginRuntime } from "../../plugins/runtime/index.js";
+import type { OpenClawPluginDefinition } from "../../plugins/types.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import manifest from "../../../extensions/clawrouter/openclaw.plugin.json" with { type: "json" };
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { createWebSearchTool } from "./web-search.js";
 
@@ -48,9 +58,10 @@ beforeEach(() => {
   observations.length = 0;
   unexpected.length = 0;
   vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
-    const request = new Request(input, init);
-    if (new URL(request.url).origin !== origin) refuse("unexpected client egress");
-    return nativeFetch(request);
+    const url = new URL(typeof input === "string" || input instanceof URL ? input : input.url);
+    if (url.origin !== origin) refuse("unexpected client egress");
+    // Preserve the actual init, including its dispatcher, signal and body.
+    return nativeFetch(input, init);
   });
   const observeGuard: typeof originalGuard = async options => {
     const url = new URL(String(options.url));
@@ -197,16 +208,47 @@ async function fixture(name: string, run: (execute: (args?: Record<string, unkno
         deepseek: { baseUrl: "https://api.deepseek.com", apiKey: "must-not-fallback", models: [] },
       } },
     };
-    const tool = createWebSearchTool({ config, agentDir: state.agentDir() });
-    if (!tool) throw new Error("missing actual registered Search tool");
-    const execute = async (args: Record<string, unknown> = {}, signal?: AbortSignal) => {
-      const result = await tool.execute("worker-deepseek-search", { query, ...args }, signal);
-      expect(JSON.stringify(result)).not.toMatch(/fixture-secret|must-not-fallback|managed-ds_/);
-      return result.details as Record<string, unknown>;
-    };
+    // The synchronous public-artifact loader has a separate module graph from
+    // Vitest. Use the pinned SDK's fixture loader after installing the spies,
+    // then the real registration API and request-owned registry scope. This
+    // keeps the unchanged AgentTool caller and the plugin's actual factories
+    // on the same guarded-fetch instance; no provider result is substituted.
+    const { default: plugin } = await loadBundledPluginFacade<{ default: OpenClawPluginDefinition }>({
+      pluginId: "clawrouter", artifactBasename: "index.js",
+    });
+    if (!plugin.register) throw new Error("missing actual ClawRouter registration");
+    const builder = createPluginRegistry({
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+      runtime: createPluginRuntime(), resolveCapabilityCatalogContext: resolvePluginCapabilityCatalogContext,
+      activateGlobalSideEffects: false,
+    });
+    const record = createPluginRecord({
+      id: manifest.id, source: fileURLToPath(new URL("../../../extensions/clawrouter/index.ts", import.meta.url)),
+      rootDir: fileURLToPath(new URL("../../../extensions/clawrouter", import.meta.url)),
+      origin: "bundled", enabled: true, configSchema: true, contracts: manifest.contracts,
+    });
     const failures: unknown[] = [];
-    try { await run(execute); } catch (error) { failures.push(error); }
-    try { await join(name); } catch (error) { failures.push(error); }
+    try {
+      registerTestPlugin({ registry: builder, config, record, register: plugin.register });
+      expect(builder.registry.diagnostics.filter(row => row.level === "error")).toEqual([]);
+      expect(builder.registry.webSearchProviders.map(row => [row.pluginId, row.provider.id])).toEqual([["clawrouter", "clawrouter"]]);
+      await withPluginRuntimeGenerationRegistryScope(builder.registry, async () => {
+        const tool = createWebSearchTool({ config, agentDir: state.agentDir() });
+        if (!tool) throw new Error("missing actual registered Search tool");
+        const execute = async (args: Record<string, unknown> = {}, signal?: AbortSignal) => {
+          const result = await tool.execute("worker-deepseek-search", { query, ...args }, signal);
+          expect(JSON.stringify(result)).not.toMatch(/fixture-secret|must-not-fallback|managed-ds_/);
+          return result.details as Record<string, unknown>;
+        };
+        try { await run(execute); } catch (error) { failures.push(error); }
+        try { await join(name); } catch (error) { failures.push(error); }
+      });
+    } catch (error) { failures.push(error); }
+    try {
+      const retired = await disposePluginRegistryInstances(builder.registry, undefined, { cfg: config });
+      expect(retired.failures).toEqual([]);
+      expect(retired.deferredPluginIds ?? []).toEqual([]);
+    } catch (error) { failures.push(error); }
     if (failures.length === 1) throw failures[0];
     if (failures.length) throw new AggregateError(failures, "Search assertion or original cleanup failed");
   });
