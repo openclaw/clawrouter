@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { createRequire, stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -613,4 +613,94 @@ test("reader join includes an original cancel added while closed is pending", as
     assert.ok(result.error instanceof AggregateError && result.error.errors.some(error => error === reason));
     await assert.rejects(cancel, error => error === reason);
   }
+});
+
+
+function sdkOriginalJoin() {
+  const text = readFileSync(new URL("./fixtures/openclaw-openrouter-music-contract.test.ts", import.meta.url), "utf8");
+  const section = (first, next) => {
+    const begin = text.indexOf(first), end = text.indexOf(next, begin);
+    assert.ok(begin >= 0 && end > begin && text.indexOf(first, begin + 1) === -1);
+    return stripTypeScriptTypes(text.slice(begin, end));
+  };
+  // Extract only the real observer helper and its unchanged classification rule;
+  // no SDK imports, registration, runtime setup or hosted case executes locally.
+  const code = section("function ownedStoredAbort(", "function observeResponse(")
+    + section("async function joinOriginalSdkOperations(", "function configuration(");
+  return new Function(code + "; return input => joinOriginalSdkOperations(input, ownedStoredAbort);")();
+}
+function deferredOriginal() {
+  let resolve, reject;
+  const pending = new Promise((accept, fail) => { resolve = accept; reject = fail; });
+  void pending.catch(() => {});
+  return { pending, resolve, reject };
+}
+const nextTurn = () => new Promise(resolve => setImmediate(resolve));
+
+for (const failure of ["none", "cancel", "body_cancel", "retirement"]) {
+  for (const undefinedReason of failure === "none" ? [false] : [false, true]) {
+    test(`SDK actual dynamic join retains late originals: ${failure}/${undefinedReason ? "undefined" : "defined"}`, async () => {
+      const join = sdkOriginalJoin(), reason = undefinedReason ? undefined : new Error("owned original failure");
+      const cancelOwner = deferredOriginal(), bodyOwner = deferredOriginal(), firstRetirement = deferredOriginal(), lateRetirement = deferredOriginal();
+      const response = new Response(new ReadableStream({ cancel() { return cancelOwner.pending; } }));
+      const bodyResponse = new Response(new ReadableStream({ cancel() { return bodyOwner.pending; } }));
+      const reader = response.body.getReader(), row = { body: response.body, closed: reader.closed, releases: 0, returned: 0, operations: [] };
+      const input = { readers: [row], bodyOperations: [], acquisitions: [], observationErrors: [], agents: [{ retirements: 1, pending: [firstRetirement.pending] }] };
+      let finished = false;
+      const joining = join(input).then(value => { finished = true; return value; });
+      await nextTurn(); assert.equal(finished, false);
+      const originalRead = reader.read(), originalCancel = reader.cancel(), originalBodyCancel = bodyResponse.body.cancel();
+      void originalRead.catch(() => {}); void originalCancel.catch(() => {}); void originalBodyCancel.catch(() => {});
+      const operation = (kind, pending, body) => ({ kind, pending, body, expectedAbort: false, invokeAborted: false, invokeReason: undefined });
+      row.operations.push(operation("read", originalRead, response.body), operation("cancel", originalCancel, response.body));
+      input.bodyOperations.push(operation("body_cancel", originalBodyCancel, bodyResponse.body));
+      row.releases++; reader.releaseLock(); row.returned++;
+      input.agents.push({ retirements: 1, pending: [lateRetirement.pending] });
+      firstRetirement.resolve();
+      await nextTurn(); assert.equal(finished, false, "new cancel/body/retirement originals remain held");
+      if (failure === "cancel") cancelOwner.reject(reason); else cancelOwner.resolve();
+      if (failure === "body_cancel") bodyOwner.reject(reason); else bodyOwner.resolve();
+      await nextTurn(); assert.equal(finished, false, "late original dispatcher retirement is still held");
+      if (failure === "retirement") lateRetirement.reject(reason); else lateRetirement.resolve();
+      const failures = await joining;
+      assert.equal(response.body.locked, false); assert.equal(bodyResponse.body.locked, false);
+      if (failure === "none") assert.deepEqual(failures, []);
+      else { assert.equal(failures.length, 1); assert.equal(failures[0], reason); }
+    });
+  }
+}
+
+test("SDK actual drain revisits acquisitions, response hooks and original closed state", async () => {
+  const join = sdkOriginalJoin(), acquired = deferredOriginal(), response = new Response(new ReadableStream());
+  const input = { readers: [], bodyOperations: [], acquisitions: [], observationErrors: [], agents: [] };
+  let reader, row;
+  const observed = acquired.pending.then(original => {
+    reader = original.body.getReader();
+    row = { body: original.body, closed: reader.closed, releases: 0, returned: 0, operations: [] };
+    input.readers.push(row);
+  });
+  input.acquisitions.push({ pending: acquired.pending, observed, expectedAbort: false });
+  let finished = false;
+  const joining = join(input).then(value => { finished = true; return value; });
+  acquired.resolve(response); await nextTurn();
+  assert.equal(finished, false, "captured closed belongs to the newly observed response");
+  const cancel = reader.cancel();
+  row.operations.push({ kind: "cancel", pending: cancel, body: response.body, expectedAbort: false, invokeAborted: false, invokeReason: undefined });
+  row.releases++; reader.releaseLock(); row.returned++;
+  assert.deepEqual(await joining, []);
+});
+
+test("SDK dynamic drain keeps observation failures and exact retirement/release invariants", async () => {
+  const join = sdkOriginalJoin(), failure = new Error("observer failure");
+  const raw = Promise.resolve(new Response(null)), observed = Promise.reject(undefined); void observed.catch(() => {});
+  const input = { acquisitions: [{ pending: raw, observed, expectedAbort: false }], readers: [], bodyOperations: [],
+    agents: [{ retirements: 0, pending: [] }], observationErrors: [failure] };
+  const failures = await join(input);
+  assert.equal(failures.length, 3); assert.equal(failures[0], undefined); assert.equal(failures[2], failure);
+  const body = new ReadableStream(), reader = body.getReader();
+  const closed = reader.closed; await reader.cancel();
+  const releaseFailures = await join({ acquisitions: [], bodyOperations: [], agents: [], observationErrors: [],
+    readers: [{ body, closed, releases: 0, returned: 0, operations: [] }] });
+  assert.equal(releaseFailures.length, 1); assert.match(releaseFailures[0].message, /not released/);
+  reader.releaseLock();
 });

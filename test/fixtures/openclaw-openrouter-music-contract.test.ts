@@ -99,6 +99,58 @@ function observeResponse(response: Response, signal: AbortSignal | undefined, ex
   } as typeof body.getReader;
 }
 
+// Drain only observed originals and their response hooks. Stable membership is
+// not a claim about arbitrary unscheduled work; closed/retirement outcomes and
+// the existing release invariants below remain required.
+async function joinOriginalSdkOperations(input: {
+  readers: Reader[]; bodyOperations: Operation[]; acquisitions: Acquisition[];
+  agents: Array<{ retirements: number; pending: Promise<unknown>[] }>;
+  observationErrors: unknown[];
+}, storedAbort: typeof ownedStoredAbort): Promise<unknown[]> {
+  const { readers, bodyOperations, acquisitions, agents, observationErrors } = input;
+  const outcomes = new Map<Promise<unknown>, PromiseSettledResult<unknown> | undefined>();
+  for (;;) {
+    const joining: Promise<void>[] = [];
+    const include = (pending: Promise<unknown>) => {
+      if (outcomes.has(pending)) return;
+      outcomes.set(pending, undefined);
+      joining.push(Promise.allSettled([pending]).then(([result]) => { outcomes.set(pending, result!); }));
+    };
+    for (const acquisition of acquisitions) { include(acquisition.pending); include(acquisition.observed); }
+    for (const row of readers) { include(row.closed); for (const operation of row.operations) include(operation.pending); }
+    for (const operation of bodyOperations) include(operation.pending);
+    for (const row of agents) for (const pending of row.pending) include(pending);
+    if (!joining.length) break;
+    await Promise.all(joining);
+  }
+  const failures: unknown[] = [];
+  for (const acquisition of acquisitions) {
+    const observed = outcomes.get(acquisition.observed)!;
+    if (observed.status === "rejected") failures.push(observed.reason);
+    const result = outcomes.get(acquisition.pending)!;
+    if (result.status === "rejected" && !(acquisition.expectedAbort && acquisition.rejectAborted && result.reason !== undefined && result.reason === acquisition.rejectReason)) failures.push(result.reason);
+  }
+  for (const row of readers) row.closedOutcome = outcomes.get(row.closed)!;
+  for (const operation of new Set([...bodyOperations, ...readers.flatMap(row => row.operations)])) {
+    const result = outcomes.get(operation.pending)!;
+    if (result.status !== "rejected") continue;
+    const owner = readers.find(row => row.body === operation.body && (operation.kind === "body_cancel" || row.operations.includes(operation)) && storedAbort(row, result.reason));
+    const expectedRead = operation.kind === "read" && operation.expectedAbort && operation.rejectAborted && result.reason !== undefined && operation.rejectReason === result.reason;
+    const storedCancellation = operation.kind !== "read" && operation.expectedAbort && operation.invokeAborted && operation.invokeReason === result.reason && owner !== undefined;
+    if (!expectedRead && !storedCancellation) failures.push(result.reason);
+  }
+  for (const row of readers) {
+    if (row.closedOutcome?.status === "rejected" && !storedAbort(row, row.closedOutcome.reason)) failures.push(row.closedOutcome.reason);
+    if (row.releases !== 1 || row.returned !== 1 || row.body.locked) failures.push(new Error("original SDK reader not released"));
+  }
+  for (const row of agents) {
+    for (const pending of new Set(row.pending)) { const result = outcomes.get(pending)!; if (result.status === "rejected") failures.push(result.reason); }
+    if (row.retirements !== 1 || row.pending.length !== 1) failures.push(new Error("missing exact external dispatcher retirement"));
+  }
+  failures.push(...observationErrors);
+  return failures;
+}
+
 function configuration(row: Case): OpenClawConfig {
   return {
     plugins: { allow: ["clawrouter", alternate.id], entries: { clawrouter: { enabled: true } }, load: { paths: [alternate.file] }, slots: { memory: "none" } },
@@ -134,30 +186,7 @@ beforeEach(() => {
 afterEach(async () => {
   const failures: unknown[] = [];
   try {
-    for (const acquisition of acquisitions) {
-      await acquisition.observed;
-      const [result] = await Promise.allSettled([acquisition.pending]);
-      if (result!.status === "rejected" && !(acquisition.expectedAbort && acquisition.rejectAborted && result.reason !== undefined && result.reason === acquisition.rejectReason)) failures.push(result!.reason);
-    }
-    const operations = [...bodyOperations, ...readers.flatMap(row => row.operations)];
-    for (const row of readers) [row.closedOutcome] = await Promise.allSettled([row.closed]);
-    for (const [index, result] of (await Promise.allSettled(operations.map(row => row.pending))).entries()) {
-      const operation = operations[index]!;
-      if (result.status !== "rejected") continue;
-      const owner = readers.find(row => row.body === operation.body && (operation.kind === "body_cancel" || row.operations.includes(operation)) && ownedStoredAbort(row, result.reason));
-      const expectedRead = operation.kind === "read" && operation.expectedAbort && operation.rejectAborted && result.reason !== undefined && operation.rejectReason === result.reason;
-      const storedCancellation = operation.kind !== "read" && operation.expectedAbort && operation.invokeAborted && operation.invokeReason === result.reason && owner !== undefined;
-      if (!expectedRead && !storedCancellation) failures.push(result.reason);
-    }
-    for (const row of readers) {
-      if (row.closedOutcome?.status === "rejected" && !ownedStoredAbort(row, row.closedOutcome.reason)) failures.push(row.closedOutcome.reason);
-      if (row.releases !== 1 || row.returned !== 1 || row.body.locked) failures.push(new Error("original SDK reader not released"));
-    }
-    for (const row of agents) {
-      for (const result of await Promise.allSettled(row.pending)) if (result.status === "rejected") failures.push(result.reason);
-      if (row.retirements !== 1 || row.pending.length !== 1) failures.push(new Error("missing exact external dispatcher retirement"));
-    }
-    failures.push(...observationErrors);
+    failures.push(...await joinOriginalSdkOperations({ readers, bodyOperations, acquisitions, agents, observationErrors }, ownedStoredAbort));
   } catch (error) { failures.push(error); }
   finally {
     try { if (prepared) await discardPreparedPluginGeneration(prepared.pluginGeneration); prepared = undefined; } catch (error) { failures.push(error); }
