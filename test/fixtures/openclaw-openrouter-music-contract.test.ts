@@ -27,7 +27,8 @@ const previousRuntime = Object.getOwnPropertyDescriptor(globalThis, runtimeKey);
 type Operation = { kind: "read" | "cancel" | "body_cancel"; pending: Promise<unknown>; signal?: AbortSignal; body: ReadableStream<Uint8Array>; expectedAbort: boolean;
   invokeAborted: boolean; invokeReason: unknown; rejected?: boolean; reason?: unknown; rejectAborted?: boolean; rejectReason?: unknown };
 type Reader = { body: ReadableStream<Uint8Array>; closed: Promise<unknown>; releases: number; returned: number; operations: Operation[]; closedOutcome?: PromiseSettledResult<unknown> };
-const readers: Reader[] = [], bodyOperations: Operation[] = [], acquisitions: Array<{ pending: Promise<unknown>; observed: Promise<unknown>; signal?: AbortSignal }> = [], observationErrors: unknown[] = [];
+type Acquisition = { pending: Promise<unknown>; observed: Promise<unknown>; expectedAbort: boolean; rejectAborted?: boolean; rejectReason?: unknown };
+const readers: Reader[] = [], bodyOperations: Operation[] = [], acquisitions: Acquisition[] = [], observationErrors: unknown[] = [];
 const agents: Array<{ retirements: number; pending: Promise<unknown>[] }> = [];
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
 let acquired: Awaited<ReturnType<typeof acquirePluginRegistryForInspection>>;
@@ -122,8 +123,11 @@ beforeEach(() => {
       const signal = init?.signal ?? undefined;
       const authorization = new Headers(init?.headers as HeadersInit | undefined).get("authorization");
       const expectedAbort = ["abort_headers", "abort_body", "deadline_body"].some(id => authorization === `Bearer clawrouter-live-orm_${id}-fixture-secret`);
-      const observed = pending.then(response => { try { observeResponse(response as unknown as Response, signal, expectedAbort); } catch (error) { observationErrors.push(error); } }, () => {});
-      acquisitions.push({ pending, observed, signal }); void pending.catch(() => {}); return pending;
+      const acquisition: Acquisition = { pending, observed: pending, expectedAbort };
+      acquisition.observed = pending.then(response => { try { observeResponse(response as unknown as Response, signal, expectedAbort); } catch (error) { observationErrors.push(error); } }, () => {
+        acquisition.rejectAborted = signal?.aborted === true; acquisition.rejectReason = signal?.reason;
+      });
+      acquisitions.push(acquisition); void pending.catch(() => {}); return pending;
     },
   } });
 });
@@ -133,7 +137,7 @@ afterEach(async () => {
     for (const acquisition of acquisitions) {
       await acquisition.observed;
       const [result] = await Promise.allSettled([acquisition.pending]);
-      if (result!.status === "rejected" && !(acquisition.signal?.aborted && acquisition.signal.reason !== undefined && result.reason === acquisition.signal.reason)) failures.push(result!.reason);
+      if (result!.status === "rejected" && !(acquisition.expectedAbort && acquisition.rejectAborted && result.reason !== undefined && result.reason === acquisition.rejectReason)) failures.push(result!.reason);
     }
     const operations = [...bodyOperations, ...readers.flatMap(row => row.operations)];
     for (const row of readers) [row.closedOutcome] = await Promise.allSettled([row.closed]);
