@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Evaluate trained Fusion vote policies through the offline replay CLI with the same panel validation as live execution.
+
 - Train bounded Fusion vote scheduling policies offline from observed answers and costs, without correctness labels or model calls.
 
 - Load validated, data-only scheduling tables in the experimental Fusion vote CLI, with canonical fallback for unseen states.
