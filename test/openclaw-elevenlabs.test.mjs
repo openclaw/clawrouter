@@ -26,7 +26,10 @@ for (const transport of ["native", "manifest"]) {
     const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
     let mf;
     try {
-      mf = await startWorkerdFixture(temporary, routerFixture(transport), upstreamFixture());
+      if (transport === "manifest") {
+        const { startCatalogVariantFixture } = await import("./helpers/openclaw-catalog-variant.mjs");
+        mf = await startCatalogVariantFixture(temporary, routerFixture(), upstreamFixture(), ["elevenlabs"]);
+      } else mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture());
       const kv = await mf.getKVNamespace("POLICY_KV", "router");
       for (const id of [...cases.map(entry => entry.id), ...denied]) {
         await kv.put(`policies/${id}`, JSON.stringify({ enabled: true, generation: "fixture", providers: id === "elevenlabs_denied" ? ["openai"] : ["elevenlabs"], models: null, tenantId: "fixture", monthlyBudgetMicros: 100, requestCostMicros: id === "elevenlabs_budget" ? null : 7, budgetMode: "reserve", retainRequestContent: false }));
@@ -34,6 +37,11 @@ for (const transport of ["native", "manifest"]) {
       }
       await kv.put("connections/elevenlabs", JSON.stringify({ providerId: "elevenlabs", enabled: true }));
       const origin = String(await mf.ready);
+      const catalogResponse = await fetch(new URL("/v1/catalog", origin), { headers: { authorization: "Bearer clawrouter-live-elevenlabs_tts-fixture-secret" } });
+      assert.equal(catalogResponse.status, 200);
+      const offers = (await catalogResponse.json()).providers.find(row => row.id === "elevenlabs").offers;
+      assert.ok(offers.some(offer => offer.endpoint === "speech" && offer.routeKind === transport && offer.eligible));
+      assert.ok(offers.filter(offer => offer.endpoint === "speech").every(offer => offer.routeKind === transport));
       try {
         await runOpenClawConsumer(t, {
           source, sourceHead, fixture: new URL("./fixtures/openclaw-elevenlabs-contract.test.ts", import.meta.url),
@@ -122,10 +130,8 @@ async function settledUsage(origin, id) {
   return usage;
 }
 
-function routerFixture(transport) {
+function routerFixture() {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
-    import { snapshot } from "./worker/providers.ts";
-    ${transport === "manifest" ? 'for (const endpoint of snapshot.providers.find(provider => provider.id === "elevenlabs").endpoints) endpoint.native_proxy = false;' : ""}
     const requests = [], caller = new AbortController(); let ingressAborted = false;
     export default { ...handler, fetch(request, env, context) {
       const path = new URL(request.url).pathname;
