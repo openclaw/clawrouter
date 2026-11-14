@@ -158,6 +158,12 @@ jobs:
           - consumer: requesty-catalog
             ref: 1536faab19f2adf524b7ef1acef5c24501b35652
             test: test/openclaw-requesty-catalog.test.mjs
+          - consumer: deepseek-search
+            ref: 82dd065e23b678e61ad497f9d57fbb4c3da10eae
+            test: test/openclaw-deepseek-search.test.mjs
+          - consumer: google-speech
+            ref: ff34cf8e236ca698c7190c63087f2ecd37f94a7e
+            test: test/openclaw-google-speech.test.mjs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
