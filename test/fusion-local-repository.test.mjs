@@ -235,25 +235,29 @@ for (const [profile, outcomes] of [
 });
 
 test('runtime drift preserves completed records but cannot complete the comparison', async () => {
-  const { root, options } = await fixture(); let version = '0.40.11';
-  try {
-    await assert.rejects(runLocalRepository({ ...options, preflight: localGenerator,
-      fetcher: async url => {
-        if (url.endsWith('/api/version')) return Response.json({ version });
-        if (url.endsWith('/api/tags')) return Response.json({ models: pins.map(pin => ({ name: pin.model, digest: pin.digest, size: 10 })) });
-        if (url.endsWith('/api/show')) return Response.json({ template: '{{ .Prompt }}', renderer: 'qwen3-coder', capabilities: [] });
-        assert.fail('no inference required by this fixture');
-      },
-      agent: async () => { version = '0.40.12'; return { files: [], outcome: 'submitted' }; },
-      grade: async () => ({ valid: true, passed: true, tests: 3, skipped: 0 }),
-    }), /local_repository_incomplete/);
-    const raw = await readFile(join(options.out, 'local-repository.json'), 'utf8'), state = JSON.parse(raw);
-    assert.equal(state.complete, false); assert.equal(state.failureCode, 'local_runtime_changed');
-    assert.equal(state.records.length, 3); assert.equal(state.summary, undefined);
-    assert.equal(state.modelPins[0].runtime.serverVersion, '0.40.11');
-    assert.equal(state.modelPins[0].runtime.renderer, 'qwen3-coder');
-    assert.ok(!raw.includes('{{ .Prompt }}'));
-  } finally { await rm(root, { recursive: true, force: true }); }
+  for (const drift of ['version', 'parameters']) {
+    const { root, options } = await fixture(); let version = '0.40.11', parameters = 'presence_penalty 1.5';
+    try {
+      await assert.rejects(runLocalRepository({ ...options, preflight: localGenerator,
+        fetcher: async url => {
+          if (url.endsWith('/api/version')) return Response.json({ version });
+          if (url.endsWith('/api/tags')) return Response.json({ models: pins.map(pin => ({ name: pin.model, digest: pin.digest, size: 10 })) });
+          if (url.endsWith('/api/show')) return Response.json({ template: '{{ .Prompt }}', renderer: 'qwen3-coder', parameters, capabilities: [] });
+          assert.fail('no inference required by this fixture');
+        },
+        agent: async () => { if (drift === 'version') version = '0.40.12'; else parameters = 'presence_penalty 0'; return { files: [], outcome: 'submitted' }; },
+        grade: async () => ({ valid: true, passed: true, tests: 3, skipped: 0 }),
+      }), /local_repository_incomplete/);
+      const raw = await readFile(join(options.out, 'local-repository.json'), 'utf8'), state = JSON.parse(raw);
+      assert.equal(state.complete, false); assert.equal(state.failureCode, 'local_runtime_changed');
+      assert.equal(state.records.length, 3); assert.equal(state.summary, undefined);
+      assert.equal(state.modelPins[0].runtime.serverVersion, '0.40.11');
+      assert.equal(state.modelPins[0].runtime.renderer, 'qwen3-coder');
+      assert.match(state.modelPins[0].runtime.parametersSha256, /^[a-f0-9]{64}$/);
+      assert.ok(!raw.includes('{{ .Prompt }}'));
+      assert.ok(!raw.includes('presence_penalty'));
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
 });
 
 test('transport failure checkpoints once and does not silently try another model', async () => {

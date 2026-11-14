@@ -121,31 +121,44 @@ function localRuntimeFixture(info = {}) {
   return { state, fetcher };
 }
 
-test('local pins capture named and legacy renderers without retaining template text', async () => {
-  for (const fields of [{}, { renderer: 'qwen3-coder', parser: 'qwen3-coder', template_source: 'renderer_parser' }]) {
+test('local pins capture named and legacy renderers without retaining template or default parameter text', async () => {
+  for (const fields of [{}, { parameters: '' }, { renderer: 'qwen3-coder', parser: 'qwen3-coder', template_source: 'renderer_parser', parameters: 'presence_penalty 1.5\n' }]) {
     const { state, fetcher } = localRuntimeFixture(fields);
     const generator = await localGenerator(['tiny', 'small'], undefined, fetcher);
     assert.deepEqual(generator.pins[0].runtime, { serverVersion: '0.40.11', renderer: fields.renderer ?? null,
       parser: fields.parser ?? null, templateSource: fields.template_source ?? null,
-      templateSha256: createHash('sha256').update(state.info.template).digest('hex') });
+      templateSha256: createHash('sha256').update(state.info.template).digest('hex'),
+      parametersSha256: fields.parameters === undefined ? null : createHash('sha256').update(fields.parameters).digest('hex') });
     assert.ok(!JSON.stringify(generator.pins).includes(state.info.template));
+    if (fields.parameters) assert.ok(!JSON.stringify(generator.pins).includes(fields.parameters.trim()));
     await generator.verifyPins();
     assert.equal(state.chats, 0);
   }
 });
 
-test('unchanged weights cannot hide server, renderer, template or thinking drift', async () => {
+test('unchanged weights cannot hide server, renderer, template, default parameter or thinking drift', async () => {
   for (const mutate of [
     state => { state.version = '0.40.12'; },
     state => { state.info.renderer = 'other'; },
     state => { state.info.parser = 'other'; },
     state => { state.info.template_source = 'other'; },
     state => { state.info.template = '{{ .System }}{{ .Prompt }}'; },
+    state => { state.info.parameters = 'presence_penalty 1.5'; },
     state => { state.info.capabilities = ['thinking']; },
   ]) {
     const { state, fetcher } = localRuntimeFixture();
     const generator = await localGenerator(['tiny', 'small'], undefined, fetcher);
     mutate(state);
+    await assert.rejects(generator.verifyPins(), /^Error: local_runtime_changed$/);
+    assert.equal(state.chats, 0);
+  }
+});
+
+test('default parameter removal and value changes invalidate local pins', async () => {
+  for (const parameters of [undefined, '', 'presence_penalty 0']) {
+    const { state, fetcher } = localRuntimeFixture({ parameters: 'presence_penalty 1.5' });
+    const generator = await localGenerator(['tiny', 'small'], undefined, fetcher);
+    state.info.parameters = parameters;
     await assert.rejects(generator.verifyPins(), /^Error: local_runtime_changed$/);
     assert.equal(state.chats, 0);
   }
@@ -161,6 +174,9 @@ test('invalid runtime metadata fails before inference without echoing source', a
     state => { state.info.renderer = { private: 'metadata' }; },
     state => { state.info.parser = 'x'.repeat(129); },
     state => { state.info.template_source = 'private\nsource'; },
+    state => { state.info.parameters = null; },
+    state => { state.info.parameters = { private: 'metadata' }; },
+    state => { state.info.parameters = 'x'.repeat(1024 * 1024 + 1); },
   ]) {
     const { state, fetcher } = localRuntimeFixture(); mutate(state);
     await assert.rejects(localGenerator(['tiny', 'small'], undefined, fetcher), /^Error: unqualified_local_runtime$/);
