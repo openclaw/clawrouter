@@ -16,7 +16,6 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
   EXPECTED_SHA: ${{ inputs.expected_sha }}
-  PREFLIGHT_RECEIPT: ${{ runner.temp }}/native-preflight.json
 
 jobs:
   observe:
@@ -25,6 +24,8 @@ jobs:
     steps:
       - name: Guard reviewed main source before checkout or credentials
         shell: bash
+        env:
+          PREFLIGHT_RECEIPT: ${{ runner.temp }}/native-preflight.json
         run: |
           node --input-type=module <<'NODE'
           import { writeFileSync } from 'node:fs';
@@ -46,6 +47,7 @@ jobs:
           node-version: 24.22.1
       - name: Read bounded Cloudflare metadata
         env:
+          PREFLIGHT_RECEIPT: ${{ runner.temp }}/native-preflight.json
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           PRESENT_NATIVE_QUALIFICATION_CF_API_TOKEN: ${{ secrets.NATIVE_QUALIFICATION_CF_API_TOKEN != '' }}

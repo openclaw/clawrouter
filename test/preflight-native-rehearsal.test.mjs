@@ -198,7 +198,11 @@ test('actual workflow guard executes before checkout, writes failure receipt, an
   assert.deepEqual(Object.keys(workflow.on), ['workflow_dispatch']);
   assert.deepEqual(workflow.permissions, { contents: 'read' });
   const steps = workflow.jobs.observe.steps, guard = steps[0];
-  assert.equal(guard.env, undefined); assert.equal(workflow.jobs.observe.env, undefined);
+  assert.deepEqual(Object.keys(guard.env), ['PREFLIGHT_RECEIPT']);
+  assert.equal(workflow.jobs.observe.env, undefined);
+  const receiptPath = steps.at(-1).with.path;
+  assert.equal(guard.env.PREFLIGHT_RECEIPT, receiptPath);
+  assert.equal(steps.find(step => step.name === 'Read bounded Cloudflare metadata').env.PREFLIGHT_RECEIPT, receiptPath);
   assert.match(steps[1].uses, /^actions\/checkout@[a-f0-9]{40}$/);
   assert.equal(steps[1].with.ref, '$' + '{{ inputs.expected_sha }}');
   assert.equal(steps[1].with['persist-credentials'], false);
@@ -206,7 +210,7 @@ test('actual workflow guard executes before checkout, writes failure receipt, an
   try {
     for (const change of [{}, { EXPECTED_SHA: 'bad\n$(false)' }, { GITHUB_REF: 'refs/heads/topic' }, { GITHUB_REPOSITORY: 'fork/clawrouter' },
       { GITHUB_EVENT_NAME: 'pull_request' }, { GITHUB_SHA: 'c'.repeat(40) }, { EXPECTED_SHA: 'b'.repeat(39) }]) {
-      const e = { ...env, ...change }, path = join(dir, 'receipt.json');
+      const e = { ...env, ...change }, path = guard.env.PREFLIGHT_RECEIPT.replace('$' + '{{ runner.temp }}', dir);
       const result = spawnSync('bash', ['-e', '-c', guard.run], { env: { PATH: process.env.PATH, ...e, PREFLIGHT_RECEIPT: path }, encoding: 'utf8' });
       assert.equal(result.status, sourceAccepted(e) ? 0 : 1, result.stderr);
       const receipt = JSON.parse(readFileSync(path, 'utf8'));
