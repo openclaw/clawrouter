@@ -561,6 +561,33 @@ test('large-file source navigation preserves line locations and literal search',
   assert.throws(() => sourceView(files, ['scripts/compile.mjs:0-1000']), /line_range/);
 });
 
+test('literal source search resumes without losing matches after the result limit', () => {
+  const files = [{ path: 'worker/repeated.ts', content: Array.from({ length: 25 }, (_, i) => `match ${i + 1}`).join('\n') }];
+  const first = sourceView(files, [files[0].path], 'match')[0];
+  assert.equal(first.matches.length, 12);
+  assert.equal(first.truncated, true);
+  assert.equal(first.nextLine, 13);
+  const second = sourceView(files, [`${files[0].path}:${first.nextLine}-25`], 'match')[0];
+  assert.equal(second.truncated, true);
+  assert.equal(second.nextLine, 25);
+  const last = sourceView(files, [`${files[0].path}:${second.nextLine}-25`], 'match')[0];
+  assert.equal(last.truncated, false);
+  assert.equal(last.nextLine, undefined);
+  assert.deepEqual([...first.matches, ...second.matches, ...last.matches].map(match => match.line),
+    Array.from({ length: 25 }, (_, i) => i + 1));
+});
+
+test('literal source search validates ranges and keeps matches and context inside them', () => {
+  const files = [{ path: 'worker/ranges.ts', content: 'match before\nkeep\nmatch inside\nkeep\nmatch after' }];
+  const result = sourceView(files, ['worker/ranges.ts:2-4'], 'match')[0];
+  assert.deepEqual(result.matches, [{ line: 3, content: 'keep\nmatch inside\nkeep' }]);
+  assert.equal(result.truncated, false);
+  assert.equal(sourceView(files, ['worker/ranges.ts:2-4'], 'absent')[0].matches.length, 0);
+  for (const selector of ['worker/ranges.ts:0-4', 'worker/ranges.ts:4-2', 'worker/ranges.ts:bad', 'worker/ranges.ts:2-9007199254740992']) {
+    assert.throws(() => sourceView(files, [selector], 'match'), /invalid_line_range/);
+  }
+});
+
 test('source preload includes every editable file without widening action reads', () => {
   const files = Array.from({ length: 4 }, (_, i) => ({ path: `worker/source-${i}.ts`, content: `source ${i}\n` }));
   const views = editableSourceView(files);

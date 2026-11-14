@@ -113,15 +113,22 @@ export function sourceView(files, selectors, query = '', pageLines = null) {
     const file = files.find(file => file.path === path);
     if (!file) throw new Error('missing_source');
     const lines = file.content.split('\n');
-    if (query) {
-      const matches = lines.flatMap((line, index) => line.includes(query) ? [{ line: index + 1,
-        content: lines.slice(Math.max(0, index - 3), index + 4).join('\n') }] : []).slice(0, 12);
-      return { path, totalLines: lines.length, matches };
-    }
     const values = range?.match(/^(\d+)-(\d+)$/);
     if (range && !values) throw new Error('invalid_line_range');
     const start = values ? Number(values[1]) : 1, requestedEnd = values ? Number(values[2]) : lines.length;
     if (!Number.isSafeInteger(start) || !Number.isSafeInteger(requestedEnd) || start < 1 || requestedEnd < start) throw new Error('invalid_line_range');
+    if (query) {
+      const matches = [];
+      let nextLine;
+      for (let index = start - 1; index < Math.min(lines.length, requestedEnd); index++) {
+        if (!lines[index].includes(query)) continue;
+        if (matches.length === 12) { nextLine = index + 1; break; }
+        matches.push({ line: index + 1,
+          content: lines.slice(Math.max(start - 1, index - 3), Math.min(requestedEnd, index + 4)).join('\n') });
+      }
+      return { path, totalLines: lines.length, matches, truncated: nextLine !== undefined,
+        ...(nextLine === undefined ? {} : { nextLine }) };
+    }
     const end = pageLines !== null ? Math.min(requestedEnd, start + pageLines - 1)
       : values ? Math.min(requestedEnd, start + 399) : requestedEnd;
     return { path, totalLines: lines.length, startLine: start, truncated: end < requestedEnd, content: lines.slice(start - 1, end).join('\n') };
@@ -231,7 +238,7 @@ export async function runAgent(task, image, strategy, trialId, config, invoke, e
   if (preservationProbes.length) messages[1].content += `\nSupplied preservation probes are already pinned for final replay; no model call is needed to register them. Keep their behavior while fixing the task. These checks are incomplete, and independent acceptance still applies:\n${JSON.stringify(preservationProbes)}`;
   if (options.probeRegressionGate) messages[0].content += ' Before submission, at least one passing behavior probe is required. The first four distinct passing probes of at most 4096 UTF-8 bytes are pinned and replayed against the final source in fresh sandboxes. Preserve their behavior across edits; passing probes are regression checks, not proof of task correctness.';
   if (options.handoffProbeGate) messages[0].content += ' Before a normal handoff, run a behavior probe of at most 4096 UTF-8 bytes that fails with an assertion on original source and passes on your current repair. Passing existing tests or a probe that also passes on the original source is insufficient. An explicitly configured turn limit can still transfer incomplete work.';
-  messages[0].content += ' read and search accept existing FILE paths only: no directories, globs or shell commands. Leave search paths empty to search editable files. Search query is literal text, at most 200 characters. An edit action accepts 1–8 edits; each search must match exactly once in current source.';
+  messages[0].content += ' read and search accept existing FILE paths only: no directories, globs or shell commands. Leave search paths empty to search editable files. Search query is literal text, at most 200 characters. Search returns at most 12 matches; when truncated, resume with file:nextLine-totalLines to reach later matches. An edit action accepts 1–8 edits; each search must match exactly once in current source.';
   let selectedCandidate = null, candidatesCompared = false;
   let planUsed = false, reviewUsed = false, handoffUsed = false;
   let handoffReady = false;

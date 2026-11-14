@@ -789,6 +789,11 @@ pages. Each read retains its starting line, total line count, and truncation
 flag. Search keeps its existing match limits; paging is not a token-budget
 estimate or permission to weaken the spending guard.
 
+Literal source search returns at most 12 matches per file. A clipped result sets
+`truncated: true` and `nextLine` to the first omitted match. Continue with the
+same query and `file.ts:nextLine-totalLines`. Search ranges also bound the
+returned context; they are independent of the read-page size.
+
 The option accepts integers from 1 through 400. It is available only for the
 interactive edit-handoff, completion-handoff, and matched-handoff
 policies, with the same setting applied to every comparison arm. Unset retains
