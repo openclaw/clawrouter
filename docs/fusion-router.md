@@ -199,3 +199,52 @@ the answer, and all models can share the same blind spot. The Worker does not
 execute client tools or repository regression checks. Executable repair policies
 in the benchmark require a caller-side agent and are not deployed by selecting
 `clawrouter/fusion`.
+
+## Fixed-choice voting experiments
+
+`scripts/fusion-exact-vote.mjs` exports `runExactVote(panel, invoke)`. It calls
+workers sequentially and stops when the leading answer's weight exceeds every
+competitor even if all remaining workers vote against it. A rounding margin
+makes near ties continue. This certificate preserves the full panel's chosen
+answer; it does not estimate correctness or repair correlated model errors.
+
+```js
+import { runExactVote } from './scripts/fusion-exact-vote.mjs';
+
+const panel = {
+  version: 1,
+  choices: ['A', 'B', 'C', 'D'],
+  workers: [
+    { id: 'worker-a', weight: 3, priority: 0 },
+    { id: 'worker-b', weight: 1, priority: 1 },
+    { id: 'worker-c', weight: 1, priority: 2 },
+  ],
+};
+const result = await runExactVote(panel, async id => invokeAndParseChoice(id));
+```
+
+Freeze weights, worker order, and unique nonnegative integer priorities before
+evaluation. Lower priority numbers break final ties between supported answers.
+The panel accepts 2–32 distinct choices and 1–64 distinct workers. Weights must
+be finite and nonnegative, with a finite positive sum. The callback returns an
+exact choice label or `null` for an abstention. Invalid answers and callback
+errors stop the run. If all workers abstain, the answer is `null`.
+
+The callback owns provider admission, deadlines, cancellation, usage settlement,
+and response parsing. This experimental runner does not connect to the Worker
+request path. Free-form prose is not an interchangeable choice label.
+
+For an offline replay, add `cases` to the panel. Each case contains `answers`
+and nonnegative finite `costs` arrays in worker order. Run:
+
+```sh
+node scripts/replay-fusion-vote.mjs replay.json
+node --test test/fusion-exact-vote.test.mjs
+```
+
+The replay accepts a regular JSON file up to 4 MiB and at most 10,000 cases.
+It checks every answer, compares early-stop answers with full-panel answers,
+and reports aggregate calls and historical costs without making model calls.
+Training and selection costs, present-day pricing, latency, and answer accuracy
+require separate measurements. Use training data to select call order and an
+independent evaluation to qualify any quality or cost claim.
