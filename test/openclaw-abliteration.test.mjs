@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { stripTypeScriptTypes } from "node:module";
 import { join } from "node:path";
@@ -30,11 +31,63 @@ const diagnosticCode = stripTypeScriptTypes(sdkText.slice(protocolStart, protoco
 const makeDiagnostic = new Function(diagnosticCode + "; return diagnosticProtocol;")();
 const diagnostic = makeDiagnostic(nodeTypes.isProxy);
 const outerContext = operation => ({ source: "outer", test: "T00", scenario: "none", operation, ordinal: 0 });
-function emitDiagnostic(t, record) {
-  const valid = diagnostic.validate(record);
+// The optional metadata belongs only to outer-launcher records. The SDK/Worker
+// wire protocol remains unchanged and still validates every received record.
+function validateDiagnostic(record) {
+  const plain = diagnostic.validate(record);
+  if (plain) return plain;
+  if (!record || typeof record !== "object" || nodeTypes.isProxy(record)) return null;
+  const keys = ["v", "source", "test", "scenario", "operation", "ordinal", "reasons", "metadata"];
+  if (Reflect.ownKeys(record).length !== keys.length) return null;
+  const base = {};
+  for (const key of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(record, key);
+    if (!descriptor || !Object.hasOwn(descriptor, "value")) return null;
+    if (key !== "metadata") base[key] = descriptor.value;
+  }
+  const valid = diagnostic.validate(base), metadata = diagnostic.own(record, "metadata");
+  if (!valid || valid.source !== "outer" || valid.test !== "T00" || !metadata || typeof metadata !== "object" || nodeTypes.isProxy(metadata)) return null;
+  const fields = ["marker", "exit", "killed", "signal", "sdkRecords"];
+  if (Reflect.ownKeys(metadata).length !== fields.length) return null;
+  const safe = {};
+  for (const key of fields) {
+    const descriptor = Object.getOwnPropertyDescriptor(metadata, key);
+    if (!descriptor || !Object.hasOwn(descriptor, "value")) return null;
+    safe[key] = descriptor.value;
+  }
+  if (!["setup", "fixture_ready", "helper_entered", "helper_fulfilled", "helper_rejected", "diagnostics_received"].includes(safe.marker)) return null;
+  if (safe.exit !== null && !(Number.isInteger(safe.exit) && Math.abs(safe.exit) <= 1_000_000)) return null;
+  if (safe.killed !== null && typeof safe.killed !== "boolean") return null;
+  if (safe.signal !== null && !["SIGTERM", "SIGKILL", "SIGABRT", "SIGINT", "SIGHUP"].includes(safe.signal)) return null;
+  if (safe.sdkRecords !== null && !(Number.isInteger(safe.sdkRecords) && safe.sdkRecords >= 0 && safe.sdkRecords <= 64)) return null;
+  const result = { ...valid, metadata: safe };
+  return Buffer.byteLength(JSON.stringify(result)) <= 2048 ? result : null;
+}
+function diagnosticStore() {
+  const records = []; let suppressed = 0;
+  return {
+    add(record) {
+      const valid = validateDiagnostic(record); if (!valid) return false;
+      if (records.length < 63) records.push(valid); else suppressed = Math.min(suppressed + 1, 1_000_000);
+      return true;
+    },
+    values() {
+      return suppressed ? [...records, { ...diagnostic.record(outerContext("capacity"), undefined), ordinal: suppressed, reasons: [{ kind: "suppressed", depth: 0, actual: null, expected: null }] }] : [...records];
+    },
+  };
+}
+function emitDiagnostic(record, write = process.stdout.write.bind(process.stdout)) {
+  const valid = validateDiagnostic(record);
   if (!valid) throw new Error("invalid diagnostic response");
   const escaped = JSON.stringify(valid).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
-  t.diagnostic(`::error title=Abliteration contract diagnostic::${escaped}`);
+  // TestContext.diagnostic is reporter-decorated; Actions requires the command
+  // to begin the output line. Only this freshly validated record reaches stdout.
+  write(`::error title=Abliteration contract diagnostic::${escaped}\n`);
+}
+function emitDiagnostics(records, failures, write) {
+  try {
+    if (failures.length || records.some(record => !Object.hasOwn(record, "metadata"))) for (const record of records) emitDiagnostic(record, write);
+  } catch (error) { failures.push(error); }
 }
 async function retrieveDiagnostics(origin) {
   const response = await fetch(origin + "/fixture/diagnostics", { redirect: "error", signal: AbortSignal.timeout(2000) });
@@ -46,26 +99,26 @@ async function retrieveDiagnostics(origin) {
   if (valid.some(record => !record)) throw new Error("invalid diagnostic collection");
   return valid;
 }
-function childMetadata(error) {
-  const records = [];
-  if (!error || (typeof error !== "object" && typeof error !== "function") || nodeTypes.isProxy(error)) return records;
-  // Never inspect the exec error's message, stdout, stderr, stack or cause.
-  for (const [key, expected] of [["code", 0], ["killed", false]]) {
-    const value = diagnostic.own(error, key);
-    if ((key === "code" && Number.isInteger(value) && Math.abs(value) <= 1_000_000) || (key === "killed" && typeof value === "boolean")) {
-      records.push({ ...diagnostic.record(outerContext("sdk_process"), undefined), reasons: [{ kind: "unknown", depth: 0, actual: value, expected }] });
-    }
+function outerMetadata(marker, error, sdkRecords = null) {
+  const metadata = { marker, exit: null, killed: null, signal: null, sdkRecords };
+  if (error && (typeof error === "object" || typeof error === "function") && !nodeTypes.isProxy(error)) {
+    // Missing metadata is unknown. A helper rejection does not prove that a
+    // child started; never inspect message, stdout, stderr, stack or cause.
+    const exit = diagnostic.own(error, "code"), killed = diagnostic.own(error, "killed"), signal = diagnostic.own(error, "signal");
+    if (Number.isInteger(exit) && Math.abs(exit) <= 1_000_000) metadata.exit = exit;
+    if (typeof killed === "boolean") metadata.killed = killed;
+    if (["SIGTERM", "SIGKILL", "SIGABRT", "SIGINT", "SIGHUP"].includes(signal)) metadata.signal = signal;
   }
-  return records;
+  const operation = marker === "setup" || marker === "fixture_ready" ? "fixture_start" : marker === "diagnostics_received" ? "report" : "sdk_process";
+  return { ...diagnostic.record(outerContext(operation), undefined), reasons: [{ kind: "unknown", depth: 0, actual: null, expected: null }], metadata };
 }
 
 test("actual OpenClaw Abliteration configured native client through workerd and SQLite", { skip: !source, timeout: 300_000 }, async t => {
-  assert.ok(endpoint);
-  assert.deepEqual(provider.models.map(model => [model.id, model.upstream]), models.map(id => ["abliteration/" + id, id]));
-  const temporary = await mkdtemp(join(tmpdir(), "clawrouter-abliteration-client-"));
-  const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
-  let mf, origin;
-  const failures = [], localDiagnostics = diagnostic.store();
+  let mf, origin, temporary;
+  const failures = [], diagnosticFailures = [], localDiagnostics = diagnosticStore();
+  const recordMetadata = (...args) => {
+    try { localDiagnostics.add(outerMetadata(...args)); } catch (error) { diagnosticFailures.push(error); }
+  };
   let phase = "fixture_start", scenarioContext = { test: "T00", scenario: "none", ordinal: 0 };
   const selectScenario = id => {
     const scenario = id.slice("abliteration_".length);
@@ -76,7 +129,13 @@ test("actual OpenClaw Abliteration configured native client through workerd and 
     try { localDiagnostics.add(diagnostic.record({ ...outerContext(operation), ...(operation === phase ? scenarioContext : {}) }, error)); } catch { /* preserve original */ }
   };
   try {
+    recordMetadata("setup");
+    assert.ok(endpoint);
+    assert.deepEqual(provider.models.map(model => [model.id, model.upstream]), models.map(id => ["abliteration/" + id, id]));
+    temporary = await mkdtemp(join(tmpdir(), "clawrouter-abliteration-client-"));
+    const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
     mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture());
+    recordMetadata("fixture_ready");
     phase = "provision";
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
     for (const id of ids) {
@@ -95,11 +154,13 @@ test("actual OpenClaw Abliteration configured native client through workerd and 
     assert.ok(models.every(id => visible.offers.some(offer => offer.modelId === "abliteration/" + id && offer.routeKind === "native" && offer.eligible)));
 
     phase = "sdk_process";
+    recordMetadata("helper_entered");
     await runOpenClawConsumer(t, {
       source, sourceHead, fixture: new URL("./fixtures/openclaw-abliteration-contract.test.ts", import.meta.url),
       testPath: "extensions/abliteration/worker-contract.test.ts",
       env: { CLAWROUTER_CONTRACT_ORIGIN: origin, ABLIT_KEY: "must-not-fallback", ABLITERATION_API_KEY: "must-not-fallback", OPENAI_API_KEY: "must-not-fallback" },
     });
+    recordMetadata("helper_fulfilled");
     phase = "worker_retire";
     const retirement = await fetch(origin + "/fixture/retire", { method: "POST" });
     assert.equal(retirement.status, 200);
@@ -188,7 +249,7 @@ test("actual OpenClaw Abliteration configured native client through workerd and 
     }
   } catch (error) {
     recordFailure(error);
-    if (phase === "sdk_process") for (const record of childMetadata(error)) localDiagnostics.add(record);
+    if (phase === "sdk_process") recordMetadata("helper_rejected", error);
     failures.push(error);
   }
   finally {
@@ -205,14 +266,14 @@ test("actual OpenClaw Abliteration configured native client through workerd and 
     try {
       if (origin) {
         const records = await retrieveDiagnostics(origin);
-        if (!records.length) t.diagnostic("Abliteration diagnostic records: none arrived");
+        recordMetadata("diagnostics_received", undefined, records.filter(record => record.source === "sdk").length);
         for (const record of records) localDiagnostics.add(record);
       }
     } catch (error) { recordFailure(error, "report"); failures.push(error); }
     try { await mf?.dispose(); } catch (error) { recordFailure(error, "dispose"); failures.push(error); }
-    try { await rm(temporary, { recursive: true, force: true }); } catch (error) { recordFailure(error, "scratch_cleanup"); failures.push(error); }
-    try { for (const record of localDiagnostics.values()) emitDiagnostic(t, record); }
-    catch (error) { failures.push(error); }
+    try { if (temporary) await rm(temporary, { recursive: true, force: true }); } catch (error) { recordFailure(error, "scratch_cleanup"); failures.push(error); }
+    failures.push(...diagnosticFailures);
+    emitDiagnostics(localDiagnostics.values(), failures);
   }
   if (failures.length === 1) throw failures[0];
   if (failures.length > 1) throw new AggregateError(failures, "Abliteration contract or retirement failed");
@@ -339,12 +400,89 @@ test("Abliteration diagnostic relay bounds bytes, record count, schema and fresh
   const records = JSON.parse(await diagnostic.read(response.body, 128 * 1024));
   assert.equal(records.length, 64); assert.equal(records.at(-1).operation, "capacity"); assert.equal(records.at(-1).ordinal, 7);
   assert.ok(records.every(row => diagnostic.validate(row)));
-  const output = []; emitDiagnostic({ diagnostic: line => output.push(line) }, records[0]);
-  assert.equal(output.length, 1); assert.match(output[0], /^::error title=Abliteration contract diagnostic::/);
-  assert.equal(output[0].includes("\n"), false);
-  assert.throws(() => emitDiagnostic({ diagnostic() { throw new Error("must not reach"); } }, { ...record, operation: "private\n::error" }), /invalid diagnostic/);
+  assert.throws(() => emitDiagnostic({ ...record, operation: "private\n::error" }, () => { throw new Error("must not reach"); }), /invalid diagnostic/);
   const tooLarge = new Response(new Uint8Array(128 * 1024 + 1));
   await assert.rejects(diagnostic.read(tooLarge.body, 128 * 1024), /capacity/); assert.equal(tooLarge.body.locked, false);
+});
+
+test("Abliteration annotation command survives the actual Node 24 default spec reporter", { timeout: 20_000 }, async () => {
+  assert.match(process.version, /^v24\.22\./);
+  // Only this fresh synthetic fixture's output is inspected. Never read the
+  // native SDK helper's child stdout/stderr or any historical job output.
+  const temporary = await mkdtemp(join(tmpdir(), "abliteration-reporter-"));
+  const file = join(temporary, "annotation.test.mjs");
+  const record = diagnostic.record(outerContext("assert"), undefined);
+  const failures = [];
+  const program = `import test from "node:test";
+import { types as nodeTypes } from "node:util";
+${diagnosticCode}
+const diagnostic = diagnosticProtocol(nodeTypes.isProxy);
+${validateDiagnostic.toString()}
+${emitDiagnostic.toString()}
+test("fresh synthetic annotation", () => emitDiagnostic(${JSON.stringify(record)}));
+`;
+  try {
+    await writeFile(file, program);
+    // Match the repository's standalone test-runner probes: the inherited
+    // child-v8 marker would make Node skip this nested --test invocation.
+    const { NODE_TEST_CONTEXT: _context, ...env } = process.env;
+    const stdout = await new Promise((resolve, reject) => {
+      execFile(process.execPath, ["--test", file], { env, timeout: 15_000, maxBuffer: 64 * 1024 }, (error, output) => {
+        if (error) reject(new Error("synthetic reporter subprocess failed"));
+        else resolve(output);
+      });
+    });
+    assert.match(stdout, /✔ fresh synthetic annotation/, "the real child must use Node 24 default spec reporting");
+    assert.match(stdout, /tests 1/);
+    const prefix = "::error title=Abliteration contract diagnostic::";
+    const lines = stdout.split(/\r?\n/).filter(line => line.includes(prefix));
+    assert.equal(lines.length, 1);
+    assert.equal(lines[0], prefix + JSON.stringify(record), "the final stdout line must start with the Actions command, without reporter decoration");
+    assert.deepEqual(JSON.parse(lines[0].slice(prefix.length)), record);
+  } catch (error) { failures.push(error); }
+  finally { try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); } }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length) throw new AggregateError(failures, "reporter regression or cleanup failed");
+});
+
+test("Abliteration outer metadata is closed, unknown-preserving and shares the 64-record cap", () => {
+  const missing = outerMetadata("helper_rejected", undefined);
+  assert.deepEqual(missing.metadata, { marker: "helper_rejected", exit: null, killed: null, signal: null, sdkRecords: null });
+  assert.ok(validateDiagnostic(missing));
+  let reads = 0;
+  const error = Object.defineProperties({}, {
+    code: { value: 1 }, killed: { value: false }, signal: { value: "SIGTERM" },
+    message: { get() { reads++; throw undefined; } },
+    stdout: { get() { reads++; throw undefined; } }, stderr: { get() { reads++; throw undefined; } },
+  });
+  assert.deepEqual(outerMetadata("helper_rejected", error).metadata, { marker: "helper_rejected", exit: 1, killed: false, signal: "SIGTERM", sdkRecords: null });
+  const accessor = Object.defineProperty({}, "code", { get() { reads++; return 1; } });
+  assert.equal(outerMetadata("helper_rejected", accessor).metadata.exit, null);
+  const proxy = new Proxy(error, { getOwnPropertyDescriptor() { reads++; throw undefined; }, ownKeys() { reads++; throw undefined; } });
+  assert.equal(outerMetadata("helper_rejected", proxy).metadata.exit, null);
+  assert.equal(validateDiagnostic({ ...missing, metadata: proxy }), null);
+  assert.equal(validateDiagnostic({ ...missing, metadata: { ...missing.metadata, signal: "private-signal" } }), null);
+  assert.equal(validateDiagnostic({ ...missing, metadata: { ...missing.metadata, childStarted: true } }), null);
+  assert.equal(reads, 0);
+  assert.equal(outerMetadata("diagnostics_received", undefined, 0).metadata.sdkRecords, 0);
+  const store = diagnosticStore();
+  for (let i = 0; i < 70; i++) assert.equal(store.add(missing), true);
+  assert.equal(store.values().length, 64); assert.equal(store.values().at(-1).ordinal, 7);
+  assert.ok(store.values().every(record => validateDiagnostic(record)));
+});
+
+test("Abliteration direct sink failures preserve original body and cleanup failures including undefined", () => {
+  const body = new Error("body"), cleanup = new Error("cleanup");
+  const records = [outerMetadata("helper_rejected", undefined), diagnostic.record(outerContext("assert"), undefined)];
+  const failures = [undefined, body, cleanup]; let writes = 0;
+  emitDiagnostics(records, failures, () => { writes++; throw undefined; });
+  assert.deepEqual(failures, [undefined, body, cleanup, undefined]); assert.equal(writes, 1);
+  let reached = false;
+  emitDiagnostics([outerMetadata("helper_fulfilled")], [], () => { reached = true; });
+  assert.equal(reached, false, "setup/helper observations alone must not emit a false error on success");
+  const rejected = [body];
+  emitDiagnostics([{ ...records[1], operation: "unsafe\n::error" }], rejected, () => { reached = true; });
+  assert.equal(rejected[0], body); assert.equal(rejected.length, 2); assert.equal(reached, false);
 });
 
 function sdkDiagnosticHarness(send) {
