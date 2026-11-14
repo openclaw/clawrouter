@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Identify the rejected edit, source path, and missing or ambiguous anchor in Fusion draft-repair feedback without recording source text or applying a partial patch.
+
+- Allow single-draft Fusion benchmark controls without a supplied reproducer, preserving independent acceptance grading and fixed-model cost receipts.
+
+- Document the corrected local Fusion code-plan comparison, including oracle repairs, failed promotion gates and an aliasing defect missed by value tests.
+
 - Record the negative tiny-model prefix-guidance screen, separating answer-format failures from arithmetic results and including both model controls and compute costs.
 
 - Add an explicit fixed-choice Fusion client for compatible Chat Completions endpoints, with lazy calls, bounded deadlines and partial usage receipts.

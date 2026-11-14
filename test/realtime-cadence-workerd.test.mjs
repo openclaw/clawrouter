@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { startBundledWorkerdFixture } from './helpers/workerd.mjs';
+import { createWsCloseObservation } from './helpers/ws-close-observation.mjs';
 const require = createRequire(import.meta.resolve('wrangler/package.json'));
 const { build } = require('esbuild');
 
@@ -246,7 +247,7 @@ async function observedRuntime(temporary, upstreamSource, bindings) {
 }
 async function fixture(t, options = {}) {
   const temporary = await mkdtemp(join(tmpdir(), 'clawrouter-cadence-'));
-  let mf, server, gate, drainProbe, released = false, hasPrimary = false, primary; const clients = [], sockets = [], serverFailures = [];
+  let mf, server, gate, drainProbe, closeObservation, released = false, hasPrimary = false, primary; const clients = [], sockets = [], serverFailures = [];
   const release = () => { released = true; gate?.end('released'); gate = undefined; };
   t.after(async () => {
     release(); const failures = [];
@@ -254,6 +255,7 @@ async function fixture(t, options = {}) {
     try { await drainProbe?.(); } catch (error) { failures.push(error); }
     for (const observed of clients) { const outcome = await observed; if (outcome.failed) failures.push(outcome.error); }
     try { await mf?.dispose(); } catch (error) { failures.push(error); }
+    try { await closeObservation?.finish(); } catch (error) { failures.push(error); }
     if (server) try { await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve())); } catch (error) { failures.push(error); }
     try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); }
     failures.push(...serverFailures);
@@ -268,6 +270,7 @@ async function fixture(t, options = {}) {
   const upstreamSource = upstream.replace('__GATE_ORIGIN__', JSON.stringify('http://127.0.0.1:' + server.address().port)).replace('__EXPECTED_AUTH__', JSON.stringify('Bearer ' + expectedKey));
   // Idle Durable Object eviction is a local co-scheduling stall, not router latency.
   mf = await observedRuntime(temporary, upstreamSource, { OPENAI_API_KEY: expectedKey });
+  if (options.observeClose) closeObservation = createWsCloseObservation(await mf.ready);
   const kv = await mf.getKVNamespace('POLICY_KV', 'router'), ns = await mf.getDurableObjectNamespace('ACCESS_CONTROL', 'router');
   const authority = ns.get(ns.idFromName('policy-bindings')), svc = await mf.getWorker('upstream');
   const secret = 'cadence-fixture-secret', headers = { authorization: 'Bearer clawrouter-live-fixture-' + secret, ...(options.probe ? { 'x-fixture-preparation-probe': 'on' } : {}), ...(options.lateFailure ? { 'x-fixture-late-failure': 'on' } : {}), ...(options.large ? { 'openai-organization': 'o'.repeat(8192), 'openai-project': 'p'.repeat(8192) } : {}) };
@@ -291,13 +294,20 @@ async function fixture(t, options = {}) {
     return done;
   } : undefined;
   return { mf, kv, authority, svc, headers, policy, setCredential, release, released: () => released, held: () => !!gate, primary(error) { hasPrimary = true; primary = error; },
-    track, probeState, drain: drainProbe,
+    track, probeState, drain: drainProbe, closeObservation,
     owned(mode) { return call('https://router/fixture-owned-inspection', { method: 'POST', headers, body: mode }); },
     control(path, body) { return call('https://router' + path, { method: 'POST', body }); },
     stats() { return track(svc.fetch('https://upstream/fixture-stats').then(response => response.json())); },
     open(asr, response = true, authHeaders = headers) { return track((async () => {
-      const r = await mf.dispatchFetch('https://router/v1/realtime?model=gpt-realtime-2.1', { headers: { ...authHeaders, upgrade: 'websocket' } }); assert.equal(r.status, 101, r.status === 101 ? '' : await r.text());
-      const ws = r.webSocket, socket = ownSocket(ws); sockets.push(socket); const q = observe(ws); ws.accept(); ws.send(JSON.stringify({ type: 'session.update', session: session(asr) })); await q.next('session.updated');
+      const dispatch = () => mf.dispatchFetch('https://router/v1/realtime?model=gpt-realtime-2.1', { headers: { ...authHeaders, upgrade: 'websocket' } });
+      const r = await (closeObservation ? closeObservation.capture(dispatch) : dispatch());
+      let socket;
+      if (closeObservation && r.webSocket) { socket = ownSocket(r.webSocket); sockets.push(socket); }
+      closeObservation?.assertAcquired();
+      assert.equal(r.status, 101, r.status === 101 ? '' : await r.text());
+      const ws = r.webSocket;
+      if (!socket) { socket = ownSocket(ws); sockets.push(socket); }
+      const q = observe(ws); ws.accept(); ws.send(JSON.stringify({ type: 'session.update', session: session(asr) })); await q.next('session.updated');
       if (response) { ws.send(JSON.stringify({ type: 'response.create' })); await q.next('response.output_item.added'); }
       return { ws, q, close: socket.close };
     })()); }
@@ -346,8 +356,8 @@ async function until(check) { const end = Date.now() + 3000; for (;;) { const va
 for (const asr of [false, true]) for (const kind of ['revocation', 'principal', 'tenant', 'generation', 'route', 'asr-model', 'budget']) {
   if (!asr && ['asr-model', 'budget'].includes(kind)) continue;
   test('bounded media authority ' + kind + ', ASR=' + asr, { timeout: 15_000 }, async t => {
-    const f = await fixture(t);
     const diagnostic = asr && ['revocation', 'generation', 'budget'].includes(kind);
+    const f = await fixture(t, { observeClose: diagnostic });
     if (diagnostic) await f.control('/fixture-observe', 'on');
     if (kind === 'route') await f.control('/fixture-grant', 'put');
     const c = await f.open(asr, false);
@@ -370,7 +380,9 @@ for (const asr of [false, true]) for (const kind of ['revocation', 'principal', 
       const calls = await (await f.mf.dispatchFetch('https://router/fixture-calls')).json();
       // A failed deadline must retain authority/RPC, sender and both socket
       // observations; diagnostics after the assertion lose the failing state.
-      t.diagnostic(JSON.stringify({ kind, asr, mutationStarted, changed, mutationMs, closeMs: elapsed, errorAt: c.q.errorAt, clientClosedAt: c.q.closedAt, sentAt, errors: c.q.errors, stats, calls }));
+      const closeFrame = f.closeObservation.snapshot(changed, c.q.closedAt);
+      t.diagnostic(JSON.stringify({ kind, asr, mutationStarted, changed, mutationMs, closeMs: elapsed, errorAt: c.q.errorAt, clientClosedAt: c.q.closedAt, sentAt, errors: c.q.errors, stats, calls, closeFrame }));
+      assert.equal(closeFrame.valid, true, 'one valid selected receiver conclude observation');
     }
     assert.equal(c.q.closed, true, JSON.stringify({ kind, elapsed, stats }));
     assert.ok(elapsed <= 250, '100ms freshness plus observed RPC envelope: ' + elapsed);
