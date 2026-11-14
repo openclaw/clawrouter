@@ -41,10 +41,26 @@ remote URL and uploaded ID remains closed until original asset authority exists.
   profile with qualified workerd capacity/delivery proof. This declaration
   starts from that actual squash and includes the common runtime above.
 
-The OpenRouter music consumer handoff has reached the actual-client owner;
-registered ClawRouter-client integration and composed consumer proof remain
-separate. The declaration tests use the actual compiled YAML, existing
-Worker/SQLite fixture and native music wire fixture. They are authored and unrun
-locally because this checkout has no qualified dependencies. Generated snapshots
-remain in the existing serialized integration queue after PR789. No live call,
-reference-image authority or full-client parity is claimed by this declaration.
+The server declaration is composed with the qualified BytePlus main checkpoint
+`7d93890666ec91cc255f895f97dcc23750a119b0`. All bundled manifests generate the
+checked-in snapshot. The 14 original declaration tests pass on that composition.
+
+The shipping catalog advertises the native route only. The separate actual-client
+harness also compiles a schema-validated configuration with only
+`openrouter.music_generate.nativeProxy: false`; its real catalog advertises the
+manifest route. This is configured-manifest coverage, not a second shipping offer.
+Neither configuration invents catalog entries or changes the client request.
+
+The provisional consumer pin `49743aff29c4adf37188725b130325026d3dad18` is not a
+qualified release. Its OpenRouter manifest envelope currently sends the upstream
+model ID, which belongs to Google in the router's complete model index; the
+manifest route requires the OpenRouter router ID. This remains a separate SDK
+correction. The authored registered-tool assertions deliberately require the
+correct contract and are not expected to pass that pin's manifest path.
+
+Actual registered SDK/Worker execution is unrun and publication is held. The
+harness retains explicit policy-fixed 700-micro-unit receipts separately from
+unknown vendor prices and null token usage. It observes original cancellation,
+reader and dispatcher promises before teardown; client rejection or disposal
+alone is not physical-retirement evidence. No live vendor call, reference-image
+authority, native READY state or complete client parity is claimed.
