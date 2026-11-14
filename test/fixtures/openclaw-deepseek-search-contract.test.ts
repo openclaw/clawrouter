@@ -17,6 +17,7 @@ import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import manifest from "../../../extensions/clawrouter/openclaw.plugin.json" with { type: "json" };
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
+import { ToolInputError } from "../tool-input-error.js";
 import { createWebSearchTool } from "./web-search.js";
 
 const expectedHead = "82dd065e23b678e61ad497f9d57fbb4c3da10eae";
@@ -207,7 +208,10 @@ async function join(name: string) {
 }
 
 async function fixture(name: string, run: (execute: (args?: Record<string, unknown>, signal?: AbortSignal) => Promise<Record<string, unknown>>) => Promise<void>) {
-  await withOpenClawTestState({ label: "clawrouter-deepseek-worker", env: {
+  const failures: unknown[] = [];
+  let callbackFailed = false;
+  let callbackFailure: unknown;
+  try { await withOpenClawTestState({ label: "clawrouter-deepseek-worker", env: {
     OPENCLAW_BUNDLED_PLUGINS_DIR: fileURLToPath(new URL("../../../extensions", import.meta.url)),
     CLAWROUTER_API_KEY: undefined, DEEPSEEK_API_KEY: "must-not-fallback-deepseek",
     HTTP_PROXY: undefined, HTTPS_PROXY: undefined, ALL_PROXY: undefined,
@@ -241,7 +245,6 @@ async function fixture(name: string, run: (execute: (args?: Record<string, unkno
       rootDir: fileURLToPath(new URL("../../../extensions/clawrouter", import.meta.url)),
       origin: "bundled", enabled: true, configSchema: true, contracts: manifest.contracts,
     });
-    const failures: unknown[] = [];
     try {
       registerTestPlugin({ registry: builder, config, record, register: plugin.register });
       expect(builder.registry.diagnostics.filter(row => row.level === "error")).toEqual([]);
@@ -263,9 +266,18 @@ async function fixture(name: string, run: (execute: (args?: Record<string, unkno
       expect(retired.failures).toEqual([]);
       expect(retired.deferredPluginIds ?? []).toEqual([]);
     } catch (error) { failures.push(error); }
-    if (failures.length === 1) throw failures[0];
-    if (failures.length) throw new AggregateError(failures, "Search assertion or original cleanup failed");
-  });
+    if (failures.length) {
+      callbackFailed = true;
+      callbackFailure = failures.length === 1 ? failures[0] : new AggregateError(failures, "Search assertion or original cleanup failed");
+      throw callbackFailure;
+    }
+  }); } catch (error) {
+    // Test-state cleanup can throw before it rethrows the callback failure.
+    // Keep both; still throw inside the callback so its retention guard runs.
+    if (!callbackFailed || error !== callbackFailure) failures.push(error);
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length) throw new AggregateError(failures, "Search assertion or original cleanup failed");
 }
 
 describe("published OpenClaw DeepSeek Search through the real native catalog", () => {
@@ -296,11 +308,18 @@ describe("published OpenClaw DeepSeek Search through the real native catalog", (
   it.each([
     ["long_query", { query: "x".repeat(129) }], ["surrogate", { query: "\ud800" }],
     ["content", { need_content: true }], ["country", { country: "US" }],
-    ["zero", { count: 0 }], ["eleven", { count: 11 }], ["fraction", { count: 1.5 }],
   ] as const)("%s input is rejected before paid egress", async (name, args) => {
     await fixture(name, async execute => {
       expect(await execute(args)).toMatchObject({ kind: "error", provider: "clawrouter" });
       expect((await join(name)).calls).toBe(0);
+    });
+  }, 120_000);
+
+  it.each([["zero", 0], ["eleven", 11], ["fraction", 1.5]] as const)("%s count is rejected before catalog or paid egress", async (name, count) => {
+    await fixture(name, async execute => {
+      await expect(execute({ count })).rejects.toThrow(ToolInputError);
+      expect(observations).toEqual([]);
+      expect(await join(name)).toMatchObject({ paths: [], calls: 0 });
     });
   }, 120_000);
 
