@@ -66,6 +66,15 @@ identifiers. This build-time module does not resolve credentials, refresh tokens
 execute transports, or establish account eligibility; those runtime owners stay
 unchanged.
 
+### Quota declaration ownership
+
+`scripts/provider-quota.mjs` normalizes quota response headers and account probe
+metadata, including fallback windows, units, metric scales, and fixed limits.
+It checks declared data sources and header names after manifest schema
+validation. The provider compiler preserves the existing validation order.
+This module does not run probes, refresh credentials, or decide budget admission;
+runtime polling and accounting retain their current owners.
+
 ### Model contract ownership
 
 `shared/provider-model.ts` owns `ProviderModelDefinition` and the router-qualified
