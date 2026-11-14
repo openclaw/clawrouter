@@ -107,14 +107,15 @@ qualified offline receipt includes build, production/test types, lint and
 26 Node plus 26 Bun real-HTTP cases. Native PR landing remains separate; no new
 SDK report is rendered or older artifact transferred to this composition.
 
-The fixture narrows real credential-scoped offers to exercise each native and
-manifest transport without manufacturing eligibility. The manifest isolate
-disables native preference only on the actual compiled music endpoint so its
-manifest offer remains available. Explicit stale and foreign discovery cases
-test rejection before a paid request.
+The actual-client fixture uses the unmodified bundled native catalog. Google
+music requires `nativeProxy: true`; disabling it is rejected by schema validation
+and cannot qualify a manifest-only client route. Explicit stale and foreign
+catalog tampering remains confined to negative cases that reject before a paid
+request. The separate direct Worker encoding test still covers native and
+manifest HTTP transport without claiming a manifest catalog offer.
 
-Thirty actual-client cases cover both frozen models, the pinned offline MP3 and
-valid PCM WAV bytes, host-loaded inline PNG, lyrics/instrumental preservation,
+The native actual-client cases cover both frozen models, the pinned offline MP3
+and valid PCM WAV bytes, host-loaded inline PNG, lyrics/instrumental preservation,
 unknown-price hard-budget denial, proxy-only credentials, incomplete/error output,
 no paid fallback, persistence failure and cancellation before dispatch or after
 EOF. Actual POST assertions require the client's identity encoding request,

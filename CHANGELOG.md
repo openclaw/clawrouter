@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Qualify OpenClaw catalog tests against unmodified native offers and schema-validated manifest configurations, keeping direct Worker transport coverage separate from client discovery.
+
 - Evaluate trained Fusion vote policies through the offline replay CLI with the same panel validation as live execution.
 
 - Train bounded Fusion vote scheduling policies offline from observed answers and costs, without correctness labels or model calls.

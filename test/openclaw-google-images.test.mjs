@@ -14,12 +14,12 @@ const ids = [...charged, "unpriced", "aborted"];
 const modelFor = id => id.startsWith("model1") ? models[1] : models[0];
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVQI12NkYPj/n4GBgYGJAQoAHRkCAhxhMhsAAAAASUVORK5CYII=";
 
-for (const dispatch of ["native", "manifest"]) test(`actual Google image ${dispatch} consumer through Worker/SQLite`, { skip: !source, timeout: 300_000 }, async t => {
+test("actual Google image native consumer through Worker/SQLite", { skip: !source, timeout: 300_000 }, async t => {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-google-image-client-"));
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
   let mf;
   try {
-    mf = await startWorkerdFixture(temporary, routerFixture(dispatch), upstreamFixture());
+    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture());
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
     for (const id of ids) {
       await kv.put(`policies/gimage_${id}`, JSON.stringify({ enabled: true, generation: "fixture", providers: ["google-gemini"], models: ["google/" + modelFor(id)], tenantId: "fixture",
@@ -32,8 +32,8 @@ for (const dispatch of ["native", "manifest"]) test(`actual Google image ${dispa
     assert.equal((await fetch(origin + "/fixture/grants", { method: "POST" })).status, 204);
     const catalog = await (await fetch(origin + "/v1/catalog", { headers: { authorization: "Bearer clawrouter-live-gimage_model0_text-fixture-secret" } })).json();
     const offers = catalog.providers.find(p => p.id === "google-gemini").offers;
-    assert.ok(offers.some(o => o.endpoint === "image_generate" && o.modelId === "google/" + models[0] && o.routeKind === dispatch && o.eligible));
-    if (dispatch === "manifest") assert.ok(offers.filter(o => o.endpoint === "image_generate").every(o => o.routeKind !== "native"));
+    assert.ok(offers.some(o => o.endpoint === "image_generate" && o.modelId === "google/" + models[0] && o.routeKind === "native" && o.eligible));
+    assert.ok(offers.filter(o => o.endpoint === "image_generate").every(o => o.routeKind !== "manifest"));
     await runOpenClawConsumer(t, { source, sourceHead, fixture: new URL("./fixtures/openclaw-google-images-contract.test.ts", import.meta.url), testPath: "extensions/clawrouter/worker-contract.test.ts",
       env: { CLAWROUTER_CONTRACT_ORIGIN: origin, GOOGLE_API_KEY: "must-not-fallback", GEMINI_API_KEY: "must-not-fallback" } });
     const upstream = await mf.getWorker("upstream"), calls = await (await upstream.fetch("https://fixture.example/state")).json();
@@ -62,13 +62,9 @@ for (const dispatch of ["native", "manifest"]) test(`actual Google image ${dispa
     }
   } finally { await mf?.dispose(); await rm(temporary, { recursive: true, force: true }); }
 });
-function routerFixture(dispatch) {
+function routerFixture() {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
-import { snapshot } from "./worker/providers.ts";
 import { putGrantCredentials } from "./worker/grant-credentials.ts";
-// A separate isolate uses the supported manifest-only endpoint declaration.
-// Eligibility and catalog contents are still constructed by the real Worker.
-if (${JSON.stringify(dispatch)} === "manifest") snapshot.providers.find(p => p.id === "google-gemini").endpoints.find(e => e.id === "image_generate").native_proxy = false;
 export default { ...handler, async fetch(request, env, context) {
   if (new URL(request.url).pathname === "/fixture/grants") {
     for (const id of ${JSON.stringify(ids)}) await putGrantCredentials(env, "oauth/gimage_" + id + "/google-gemini", { provider: "google-gemini", kind: "api_key", enabled: true, credential: "fixture-upstream-" + id });
