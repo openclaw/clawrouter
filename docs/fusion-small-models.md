@@ -1714,3 +1714,77 @@ The remaining-task confirmation protocol SHA-256 is
 `eb82ef0696f1a9420d63a676a4c1902fe3df88c3646ea60105dc5b60517cbeb1`;
 its result SHA-256 is
 `281394cb740f189eeb3eb090f50ba50a4a91b3746dd479625482388e680ab8b1`.
+
+## Native contrastive decoding: positive point estimates, failed admission
+
+A local token-level experiment combined a Qwen3 4B Instruct expert with a
+Qwen3 0.6B amateur. It improved observed accuracy in three arithmetic cohorts,
+but none passed its frozen admission gate. The final cohort lost two answers
+the expert answered correctly. This does not qualify a production profile.
+
+The decoder used the fixed rule from
+[Contrastive Decoding Improves Reasoning in Large Language Models](https://arxiv.org/html/2309.09117v2):
+discard tokens whose expert probability is below 0.1 times its maximum, then
+greedily maximize `1.5 * expert_logit - 0.5 * amateur_logit`. Both models receive
+the selected token at each step. Vocabulary entries, token attributes and
+prompt tokenization were checked for agreement. This needs full local logits;
+it is not available through ordinary Chat Completions responses.
+
+The implementation used an isolated native ARM64 Metal build of llama.cpp at
+`9ff0d7e90f0faaa7c16017e6dcf9cf91c50a100e`. It did not change the shared model
+server. The GGUF SHA-256 pins were:
+
+- Qwen3 4B Instruct: `85e4a5b7b8ef0e48af0e8658f5aaab9c2324c76c1641493f4d1e25fce54b18b9`.
+- Qwen3 0.6B: `7f4030143c1c477224c5434f8272c662a8b042079a0a584f0a27a1684fe2e1fa`.
+
+Questions came from the official
+[GSM8K test data](https://github.com/openai/grade-school-math/blob/b0bb162abedc65e1fdd8e93ed090fd7598ee68bc/grade_school_math/data/test.jsonl),
+whose raw SHA-256 was
+`3730d312f6e3440559ace48831e51066acaca737f6eabec99bccb9e4b3c39d14`.
+Each cohort used a fixed hash order of questions no longer than 500 characters.
+Later cohorts excluded earlier questions and the earlier prefix-hint study.
+These are disjoint local evaluation samples, not model-training holdouts.
+
+Every arm received the same zero-shot request for concise working and a final
+numeric answer, with a 256-token output cap. An answer counted only if generation
+ended and its final `####` number matched the reference. Capped outputs failed.
+Arm order alternated by question. All 352 calls completed across the three
+cohorts, without retries or paid API calls. The decoding rule and output budget
+were unchanged. This differs from the paper's eight-shot prompting setup.
+
+| Cohort | Expert correct | Fusion correct | Gains / losses | Expert / fusion output tokens | Expert / fusion wall seconds |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Development, 16 questions | 13 | 14 | 1 / 0 | 2,045 / 2,036 | 22.600 / 22.328 |
+| Disjoint confirmation, 32 questions | 25 | 26 | 1 / 0 | 4,164 / 4,030 | 66.633 / 78.424 |
+| Final confirmation, 128 questions | 101 | 107 | 8 / 2 | 17,598 / 17,175 | 267.426 / 313.938 |
+
+Wall time includes model loading, generation and teardown for each subprocess.
+The first development control incurred cold initialization, so its apparent
+1.2% timing advantage is not evidence of faster fusion. Final fusion took 17.4%
+longer while generating 2.4% fewer output tokens. These measurements do not
+establish resident-service latency or throughput.
+
+The first two frozen gates required at least two gains, zero losses, and no more
+than 25% extra wall time or output tokens. Both failed the gain requirement.
+The final test was declared before its calls, with a stricter requirement of
+at least six gains, zero losses and the same cost ceilings. It failed preservation.
+Do not pool the earlier exploratory gains to turn any failed gate into a pass.
+
+In the final cohort, four gains corrected completed wrong answers and four
+avoided baseline truncation. One loss was a new arithmetic error; the other
+misinterpreted a problem and truncated. The exact two-sided paired sign-test
+p-value was 0.109375. A post-hoc paired task bootstrap gave a 95% accuracy-difference
+interval of [0, 9.375] percentage points. The positive point estimate is not
+conclusive evidence of a general improvement. No further sample extension or
+parameter search is admitted for this candidate.
+
+Independent recomputation checked all question identities, reference answers,
+call ordering, grades, gains, losses, totals and receipt hashes. Final protocol
+SHA-256:
+`89fe4f6fba0145f6a107be91ecd9bac5b7f92bf42a2fcac06026a790ee62e43d`.
+Final calls SHA-256:
+`882fb43e8a7bc4ce0b3b908c647ce0eac6f88fe35543c7594489e011cb5c28c0`.
+Final result SHA-256:
+`757125cbf3105f9a60b5b5ad0b9b14fb3b514ba96bbddf944ced25717070536d`.
+These identify local research receipts, not a bundled reproduction suite.
+The experiment adds no Worker route, deployment or default activation.
