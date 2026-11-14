@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve access to later Fusion repository search matches with explicit truncation, continuation lines, and validated search ranges.
+
 - Add an opt-in Responses API transport for native Fusion pair benchmarks, with route-bound comparisons and conservative usage accounting.
 
 - Match Fusion edit calibration source views to each executor and record an explicit legacy numbered-source mode for reproducibility.
