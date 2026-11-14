@@ -1659,8 +1659,9 @@ reported separately from steady-state request time. All policies again passed
 Model loading within the cascade fell to 0.048 seconds. The cascade was 30.1%
 faster than verified strong repair and 25.0% faster than strong single with its
 public checks included. These descriptive comparisons suggest a narrower use
-case: requests that already require executable verification. They need a new,
-predeclared confirmation for that workload. Against strong single returning
+case: requests that already require executable verification. The separate
+confirmation below rejects that hypothesis for the remaining tasks. Against
+strong single returning
 before verification, the cascade was 37.5% slower, so the original latency gate
 still failed. Neither failed gate is replaced by the secondary comparison.
 
@@ -1668,6 +1669,29 @@ The resident run reused exposed tasks and repeated each twice. Its paired
 task-bootstrap 95% latency-ratio interval was [0.549, 0.874] against verified
 strong repair and [1.026, 1.820] against unverified strong single. This is local
 timing evidence, not new-task quality evidence or a production latency promise.
+
+The next run used all 14 tasks omitted from the first timing subset, repeated
+twice, with a new fixed seed and independent calls for each policy. The new
+gate required at least 24/28 passes, preservation of every strong-repair success,
+two accepted mixed-model cases, no false accepts and at least 20% less time
+than **both verified** strong baselines. Raw strong-single time remained a
+reported control. Prior verdicts were unchanged.
+
+| Remaining-task policy | Passes | Request seconds | Public-verified seconds |
+| --- | ---: | ---: | ---: |
+| 30B single | 22/28 | 31.428 | 50.686 |
+| 30B with conditional repair | 24/28 | 68.071 | 68.071 |
+| Tiny-first cascade | 24/28 | 68.622 | 68.622 |
+
+All 111 calls settled; there were no false accepts, skipped repairs or lost
+strong-repair successes. Both models stayed resident. The cascade was 0.8%
+slower than strong repair and 35.4% slower than verified strong single. It
+failed the newly declared latency gate. Cold preloads took 3.568 seconds,
+excluded from request time for every arm. These tasks had prior quality
+observations but no prior timings in this study. The failed confirmation
+rules out presenting the first subset's verified-workflow speedup as a
+general result. Do not repeat this unchanged cascade on the same tasks to
+search for a passing seed.
 
 The compute protocol SHA-256 is
 `a1cc2482b403ca47e19fcfd6de4d4117db420aa311c5d71c9ebc38df9b839bd6`;
@@ -1686,3 +1710,7 @@ The resident timing protocol SHA-256 is
 `0e9821f95b281f2cd58f0b650657d9bc604aa873ae4bfe2add8fdc455e4ab81b`;
 its result SHA-256 is
 `4d0e0d573d9216299d47a174b8fd1e4afd5b4e11fcb79514c76aa1144efc5503`.
+The remaining-task confirmation protocol SHA-256 is
+`eb82ef0696f1a9420d63a676a4c1902fe3df88c3646ea60105dc5b60517cbeb1`;
+its result SHA-256 is
+`281394cb740f189eeb3eb090f50ba50a4a91b3746dd479625482388e680ab8b1`.
