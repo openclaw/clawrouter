@@ -75,3 +75,73 @@ test('replay verifies full answers and accounts only for calls the certificate n
   input.cases[0].costs[0] = -1;
   await assert.rejects(replayFusionVote(input), /invalid_vote_case/);
 });
+
+
+test('adaptive selection preserves every six-worker vote against the integer oracle', async () => {
+  const weights = [61, 74, 9, 67, 0, 0];
+  const input = panel(weights);
+  for (let code = 0; code < 5 ** 6; code++) {
+    let value = code;
+    const answers = weights.map(() => { const digit = value % 5; value = Math.floor(value / 5); return choices[digit] ?? null; });
+    const totals = choices.map(choice => answers.reduce((sum, answer, i) => sum + (answer === choice ? weights[i] : 0), 0));
+    const ranks = choices.map(choice => Math.min(...answers.flatMap((answer, i) => answer === choice ? [input.workers[i].priority] : [])));
+    const candidates = choices.map((_, i) => i).filter(i => ranks[i] !== Infinity);
+    candidates.sort((a, b) => totals[b] - totals[a] || ranks[a] - ranks[b]);
+    const result = await runExactVote(input, id => answers[Number(id)], {
+      selectNext: ({ observed, remaining }) => observed.at(-1)?.answer === 'A' ? remaining[0] : remaining.at(-1),
+    });
+    assert.equal(result.answer, candidates.length ? choices[candidates[0]] : null, String(answers));
+  }
+});
+
+test('adaptive arrival order retains canonical floating-point sums', async () => {
+  const input = panel([1e16, 1, 1, 1e16, 2]);
+  const answers = ['A', 'A', 'A', 'B', 'B'];
+  const full = await runExactVote(input, id => answers[Number(id)], { earlyStop: false });
+  const adaptive = await runExactVote(input, id => answers[Number(id)], {
+    selectNext: ({ remaining }) => remaining.at(-1),
+  });
+  assert.equal(full.answer, 'B');
+  assert.equal(adaptive.answer, full.answer);
+  assert.equal(adaptive.complete, true);
+});
+
+test('selection snapshots are frozen and only expose observed answers and remaining IDs', async () => {
+  const snapshots = [];
+  await runExactVote(panel([1, 1]), () => 'A', { selectNext: state => {
+    snapshots.push(state);
+    assert.deepEqual(Object.keys(state), ['observed', 'remaining']);
+    assert.throws(() => state.remaining.pop(), TypeError);
+    assert.throws(() => state.observed.push({ id: 'fake', answer: 'B' }), TypeError);
+    if (state.observed.length) assert.throws(() => { state.observed[0].answer = 'B'; }, TypeError);
+    return state.remaining[0];
+  } });
+  assert.deepEqual(snapshots[0], { observed: [], remaining: ['0', '1'] });
+  assert.deepEqual(snapshots[1], { observed: [{ id: '0', answer: 'A' }], remaining: ['1'] });
+});
+
+test('invalid selections stop before invoking another worker', async () => {
+  for (const selection of [undefined, null, 'unknown', Promise.resolve('0')]) {
+    const called = [];
+    await assert.rejects(runExactVote(panel([1, 1]), id => { called.push(id); return 'A'; }, {
+      selectNext: () => selection,
+    }), /invalid_vote_selection/);
+    assert.deepEqual(called, []);
+  }
+  const called = [];
+  await assert.rejects(runExactVote(panel([1, 1]), id => { called.push(id); return 'A'; }, {
+    selectNext: () => '0',
+  }), /invalid_vote_selection/);
+  assert.deepEqual(called, ['0']);
+  await assert.rejects(runExactVote(panel([1]), () => 'A', { selectNext: true }), /invalid_vote_input/);
+});
+
+test('adaptive replay can avoid a call without changing the canonical answer', async () => {
+  const input = { ...panel([1, 1, 3]), cases: [{ answers: ['B', 'B', 'A'], costs: [2, 2, 3] }] };
+  const fixed = await replayFusionVote(input);
+  const adaptive = await replayFusionVote(input, { selectNext: ({ remaining }) => remaining.at(-1) });
+  assert.equal(fixed.meanCalls, 3);
+  assert.equal(adaptive.meanCalls, 1);
+  assert.equal(adaptive.meanCost, 3);
+  assert.equal(adaptive.answerMismatches, 0);
+});
