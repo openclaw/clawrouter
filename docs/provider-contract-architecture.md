@@ -104,6 +104,16 @@ Normalization and semantic validation retain their existing order and defaults.
 This build-time boundary does not change runtime routing or authorize additional
 provider protocols, credentials, or endpoints.
 
+### Provider qualification ownership
+
+`scripts/provider-validation/` holds host-owned semantic qualification rules.
+The Google module contains the existing unary media, speech, grounded search,
+inline understanding, and embedding checks. The compiler calls each check after
+schema validation, in its existing order, including on other providers so
+reserved formats cannot bypass qualification. Provider packages supply data;
+they cannot load validation code or register a protocol as qualified. Runtime
+adapters and lifecycle validation retain their existing owners.
+
 ### Model contract ownership
 
 `shared/provider-model.ts` owns `ProviderModelDefinition` and the router-qualified
