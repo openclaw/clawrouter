@@ -80,11 +80,15 @@ function observeBody(response, signal, owner) {
     const failures = [];
     if (!rows.length) failures.push(new Error("missing original reader"));
     for (const row of rows) {
-      const results = await Promise.allSettled(row.operations.map(operation => operation.pending));
-      for (const [index, result] of results.entries()) {
-        if (result.status === "rejected" && !(row.operations[index].kind === "read" && signal?.aborted && signal.reason !== undefined && result.reason === signal.reason)) failures.push(result.reason);
-      }
-      const closed = await Promise.allSettled([row.closed]);
+      let cursor = 0, closed;
+      do {
+        const batch = row.operations.slice(cursor); cursor = row.operations.length;
+        const results = await Promise.allSettled(batch.map(operation => operation.pending));
+        for (const [index, result] of results.entries()) {
+          if (result.status === "rejected" && !(batch[index].kind === "read" && signal?.aborted && signal.reason !== undefined && result.reason === signal.reason)) failures.push(result.reason);
+        }
+        closed = await Promise.allSettled([row.closed]);
+      } while (cursor < row.operations.length);
       if (closed[0].status === "rejected") failures.push(closed[0].reason);
       failures.push(...row.errors);
       if (row.unlocks !== 1 || row.returned !== 1 || body.locked) failures.push(new Error("original reader not physically released"));
@@ -94,33 +98,153 @@ function observeBody(response, signal, owner) {
   };
 }
 
+// These functions are used unchanged by the Worker and the local oracle tests.
+function effectiveFetch(input, init) {
+  const request = input instanceof Request ? input : undefined;
+  return {
+    url: request ? request.url : String(input),
+    method: String(init?.method ?? request?.method ?? "GET").toUpperCase(),
+    headers: new Headers(init?.headers !== undefined ? init.headers : request?.headers),
+    body: init?.body !== undefined ? init.body : request?.body,
+    // Null explicitly removes a Request signal; it is not an omitted operand.
+    signal: init?.signal !== undefined ? init.signal : request?.signal,
+    redirect: init?.redirect ?? request?.redirect ?? "follow",
+  };
+}
+function sameJson(left, right) {
+  if (left === right) return true;
+  if (!left || !right || typeof left !== "object" || typeof right !== "object" || Array.isArray(left) !== Array.isArray(right)) return false;
+  const keys = Object.keys(left);
+  return keys.length === Object.keys(right).length && keys.every(key => Object.hasOwn(right, key) && sameJson(left[key], right[key]));
+}
+function bindAcquisition(effective, ingresses, rows, target) {
+  if (effective.url !== target || effective.method !== "POST" || effective.redirect !== "manual" || typeof effective.body !== "string") return;
+  const selected = rows.filter(row => effective.headers.get("authorization") === "Bearer fixture-upstream-" + row.id);
+  if (selected.length !== 1) return;
+  const row = selected[0], matches = ingresses.filter(ingress => ingress.id === row.id);
+  if (matches.length !== 1) return;
+  const ingress = matches[0];
+  let outgoing; try { outgoing = JSON.parse(effective.body); } catch { return; }
+  const incoming = ingress.path === "/v1/proxy/openrouter/music_generate" ? ingress.body?.body : ingress.body;
+  if (!incoming || incoming.model !== (ingress.path === "/v1/proxy/openrouter/music_generate" ? "openrouter/" + row.model : row.model)
+    || !sameJson(outgoing, { ...incoming, model: row.model })) return;
+  return { row, ingress };
+}
+function observeAcquisition(original, receiver, input, init, proof, tick) {
+  const signal = proof.effective.signal, ingress = proof.binding?.ingress;
+  proof.state = "pending"; proof.response = undefined; proof.observerErrors = [];
+  proof.invoke = tick(); proof.effectiveLive = signal?.aborted === false; proof.ingressLive = ingress?.signal.aborted === false;
+  const aborted = () => { proof.effectiveAbort ??= tick(); };
+  signal?.addEventListener("abort", aborted, { once: true });
+  const detach = () => { signal?.removeEventListener("abort", aborted); proof.listenerRemoved = true; };
+  try { proof.pending = Reflect.apply(original, receiver, [input, init]); }
+  catch (reason) { proof.state = "threw"; proof.reason = reason; detach(); throw reason; }
+  proof.observed = proof.pending.then(response => {
+    proof.state = "fulfilled"; proof.response = response;
+    try { observeBody(response, signal, proof); } catch (error) { proof.observerErrors.push(error); }
+  }, reason => {
+    proof.state = "rejected"; proof.reason = reason; proof.rejected = tick();
+    proof.effectiveAbortedAtReject = signal?.aborted;
+    proof.ingressAbortedAtReject = ingress?.signal.aborted;
+    proof.ingressAbortAtReject = ingress?.abort;
+  }).finally(detach);
+  void proof.observed.catch(() => {});
+  return proof.pending;
+}
+function acquisitionSnapshot(proof, inputs, ingresses) {
+  const binding = proof.binding;
+  return {
+    id: binding?.row.id ?? null, state: proof.state, defined: proof.reason !== undefined,
+    noResponse: proof.response === undefined, observerClean: proof.observerErrors.length === 0,
+    unique: !!binding && ingresses.filter(row => row.id === binding.row.id).length === 1
+      && inputs.filter(row => row.effective.headers.get("authorization") === "Bearer fixture-upstream-" + binding.row.id).length === 1,
+    ingressLive: proof.ingressLive, effectiveLive: proof.effectiveLive,
+    abortedBeforeReject: proof.ingressAbortedAtReject === true && proof.effectiveAbortedAtReject === true
+      && Number.isInteger(proof.ingressAbortAtReject) && proof.ingressAbortAtReject > proof.invoke && proof.ingressAbortAtReject < proof.rejected
+      && Number.isInteger(proof.effectiveAbort) && proof.effectiveAbort > proof.invoke && proof.effectiveAbort < proof.rejected,
+    listenerRemoved: proof.listenerRemoved === true,
+  };
+}
+function provisionalHeaderDisposition(snapshot) {
+  return snapshot.id === "abort_headers" && snapshot.state === "rejected" && snapshot.defined === true
+    && snapshot.noResponse === true && snapshot.observerClean === true && snapshot.unique === true
+    && snapshot.ingressLive === true && snapshot.effectiveLive === true && snapshot.abortedBeforeReject === true
+    && snapshot.listenerRemoved === true;
+}
+// A joined rejection remains rejected and cause-unclassified. Native settlement
+// may race within one turn; these observations do not prove unique causality.
+function acceptHeaderDisposition(physical, helperState, calls, receipt) {
+  const candidates = physical.candidates;
+  if (helperState !== "fulfilled" || physical.otherOperations !== "fulfilled" || physical.listenersRemoved !== true
+    || !Array.isArray(candidates) || candidates.length !== 1 || !provisionalHeaderDisposition(candidates[0])
+    || physical.requests.some(row => row.path === "/fixture/alternate")) throw new Error("unaccepted preheader disposition");
+  const matched = calls.filter(call => call.id === "abort_headers"), events = receipt?.usage?.events;
+  if (matched.length !== 1) throw new Error("ambiguous preheader upstream");
+  const [call] = matched, event = events?.[0];
+  if (call.url !== "https://openrouter.ai/api/v1/chat/completions" || call.method !== "POST" || call.redirect !== "manual"
+    || call.authorization !== "Bearer fixture-upstream-abort_headers" || call.aborted !== true || call.expired !== false
+    || call.waiter !== "fulfilled" || call.waiterListenerRemoved !== true || call.sourceReturnReached !== true
+    || events.length !== 1 || event.credential_id !== "orm_abort_headers" || event.policy_id !== "orm_abort_headers"
+    || event.model !== "openrouter/google/lyria-3-pro-preview" || event.provider !== "openrouter" || event.capability !== "music.generate"
+    || event.status !== "client_error" || event.cost_basis !== "policy_fixed" || event.actual_cost_micros !== 700
+    || receipt.budget?.spentMicros !== 700 || event.input_tokens !== null || event.output_tokens !== null || event.total_tokens !== null) {
+    throw new Error("preheader source or accounting not accepted");
+  }
+}
+async function waitForSourceAbort(signal, call) {
+  call.waiter = "pending";
+  let listener;
+  const pending = new Promise(resolve => {
+    listener = () => { call.aborted = true; resolve(); };
+    if (signal.aborted) listener(); else signal.addEventListener("abort", listener, { once: true });
+  });
+  try { await pending; call.waiter = "fulfilled"; }
+  finally { signal.removeEventListener("abort", listener); call.waiterListenerRemoved = true; }
+}
+
 function routerScript() {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
 import { putGrantCredentials, revokeGrantCredentials } from "./worker/grant-credentials.ts";
-const rows = ${JSON.stringify(cases)}, target = ${JSON.stringify(target)}, inputs = [], requests = [], tasks = [], failures = [];
+const rows = ${JSON.stringify(cases)}, target = ${JSON.stringify(target)}, inputs = [], requests = [], ingresses = [], tasks = [], failures = [];
 const originalFetch = globalThis.fetch;
-${observeBody.toString()}
+let sequence = 0; const tick = () => ++sequence;
+${[observeBody, effectiveFetch, sameJson, bindAcquisition, observeAcquisition, acquisitionSnapshot, provisionalHeaderDisposition].map(fn => fn.toString()).join("\n")}
 globalThis.fetch = function(input, init) {
-  const url = input instanceof Request ? input.url : String(input);
-  const pending = Reflect.apply(originalFetch, this, [input, init]);
-  if (url === target) {
-    const proof = { pending }; inputs.push(proof);
-    proof.observed = pending.then(response => observeBody(response, init?.signal ?? (input instanceof Request ? input.signal : undefined), proof));
-    void proof.observed.catch(() => {});
-  }
-  return pending;
+  const effective = effectiveFetch(input, init);
+  if (effective.url !== target) return Reflect.apply(originalFetch, this, [input, init]);
+  const proof = { effective, binding: bindAcquisition(effective, ingresses, rows, target) }; inputs.push(proof);
+  try { return observeAcquisition(originalFetch, this, input, init, proof, tick); }
+  catch (error) { failures.push(error); throw error; }
 };
 async function retire() {
-  const errors = [...failures];
-  let cursor = 0;
-  while (cursor < tasks.length) { const batch = tasks.slice(cursor); cursor = tasks.length; for (const result of await Promise.allSettled(batch)) if (result.status === "rejected") errors.push(result.reason); }
-  const joined = [];
-  for (const input of inputs) {
-    try { await input.observed; if (!input.join) throw new Error("acquired input unobserved"); joined.push(await input.join()); }
-    catch (error) { errors.push(error); }
+  const errors = [], joined = [], candidates = [];
+  let taskCursor = 0, inputCursor = 0;
+  while (taskCursor < tasks.length || inputCursor < inputs.length) {
+    const batch = tasks.slice(taskCursor); taskCursor = tasks.length;
+    for (const result of await Promise.allSettled(batch)) if (result.status === "rejected") errors.push(result.reason);
+    while (inputCursor < inputs.length) {
+      const input = inputs[inputCursor++];
+      try {
+        const [original] = await Promise.allSettled([input.pending]);
+        await input.observed;
+        errors.push(...input.observerErrors);
+        if (original.status === "rejected") {
+          const snapshot = acquisitionSnapshot(input, inputs, ingresses);
+          if (provisionalHeaderDisposition(snapshot)) candidates.push(snapshot); else errors.push(original.reason);
+        } else {
+          if (!input.join) throw new Error("acquired input unobserved");
+          joined.push(await input.join());
+        }
+      } catch (error) { errors.push(error); }
+    }
   }
+  // A later duplicate cannot inherit an earlier provisional unique binding.
+  for (const candidate of candidates) if (inputs.filter(input => input.effective.headers.get("authorization") === "Bearer fixture-upstream-" + candidate.id).length !== 1
+    || ingresses.filter(ingress => ingress.id === candidate.id).length !== 1) errors.push(new Error("duplicate disposition binding"));
+  for (const ingress of ingresses) { ingress.signal.removeEventListener("abort", ingress.listener); ingress.listenerRemoved = true; }
+  errors.push(...failures);
   if (errors.length) throw new AggregateError(errors, "original Worker operations failed");
-  return { joined, requests, tasks: tasks.length };
+  return { joined, candidates, requests, tasks: tasks.length, otherOperations: "fulfilled", listenersRemoved: ingresses.every(row => row.listenerRemoved) };
 }
 export default { ...handler, async fetch(request, env, context) {
   const path = new URL(request.url).pathname;
@@ -133,19 +257,38 @@ export default { ...handler, async fetch(request, env, context) {
   if (path === "/fixture/state") return originalFetch("https://fixture.example/state");
   if (path === "/fixture/started") return originalFetch("https://fixture.example/started?id=" + new URL(request.url).searchParams.get("id"));
   if (path === "/fixture/alternate") { requests.push({ path }); return new Response("unexpected alternate", { status: 500 }); }
-  if (path.startsWith("/v1/") && path !== "/v1/usage") requests.push({ path, method: request.method, authorization: request.headers.get("authorization"), body: request.method === "POST" ? await request.clone().json() : null });
-  try { return await handler.fetch(request, { ...env, OPENROUTER_API_KEY: "must-not-fallback" }, { waitUntil(pending) { tasks.push(pending); context.waitUntil(pending); } }); }
+  try {
+  if (path.startsWith("/v1/") && path !== "/v1/usage") {
+    const record = { path, method: request.method, authorization: request.headers.get("authorization"), body: null };
+    requests.push(record);
+    let ingress;
+    if (request.method === "POST" && ["/v1/native/openrouter/v1/chat/completions", "/v1/proxy/openrouter/music_generate"].includes(path)) {
+      const matches = rows.filter(row => record.authorization === "Bearer clawrouter-live-orm_" + row.id + "-fixture-secret");
+      ingress = { path, id: matches.length === 1 ? matches[0].id : null, signal: request.signal, body: null, abort: request.signal.aborted ? tick() : null };
+      ingress.listener = () => { ingress.abort ??= tick(); };
+      request.signal.addEventListener("abort", ingress.listener, { once: true }); ingresses.push(ingress);
+    }
+    if (request.method === "POST") { record.body = await request.clone().json(); if (ingress) ingress.body = record.body; }
+  }
+  return await handler.fetch(request, { ...env, OPENROUTER_API_KEY: "must-not-fallback" }, { waitUntil(pending) { tasks.push(pending); context.waitUntil(pending); } }); }
   catch (error) { failures.push(error); throw error; }
 } };`;
 }
 
 function upstreamScript(audio) {
-  return `const calls = [], audio = ${JSON.stringify(audio)}, rows = ${JSON.stringify(cases)}, waiting = new Map();
+  return `const calls = [], audio = ${JSON.stringify(audio)}, rows = ${JSON.stringify(cases)}, waiting = new Map(), sourceTasks = [];
+${waitForSourceAbort.toString()}
 const event = value => "data: " + JSON.stringify(value) + "\\n\\n";
 export default { async fetch(request) {
   const url = new URL(request.url);
   if (url.hostname === "fixture.example") {
-    if (url.pathname === "/state") return Response.json(calls);
+    if (url.pathname === "/state") {
+      let cursor = 0; const errors = [];
+      while (cursor < sourceTasks.length) { const batch = sourceTasks.slice(cursor); cursor = sourceTasks.length;
+        for (const result of await Promise.allSettled(batch)) if (result.status === "rejected") errors.push(result.reason); }
+      if (errors.length) throw new AggregateError(errors, "source waiter failed");
+      return Response.json(calls);
+    }
     const id = url.searchParams.get("id");
     if (!calls.some(call => call.id === id)) await new Promise(resolve => waiting.set(id, resolve));
     return new Response(null, { status: 204 });
@@ -154,8 +297,8 @@ export default { async fetch(request) {
   if (!row) return new Response("unknown fixture credential", { status: 401 });
   const body = await request.json(), call = { id: row.id, url: request.url, method: request.method, redirect: request.redirect, authorization: request.headers.get("authorization"), body, aborted: request.signal.aborted, canceled: false, expired: false };
   calls.push(call); waiting.get(row.id)?.(); waiting.delete(row.id);
+  if (row.kind === "abort_headers") { const pending = waitForSourceAbort(request.signal, call); sourceTasks.push(pending); await pending; call.sourceReturnReached = true; return new Response(null, { status: 499 }); }
   request.signal.addEventListener("abort", () => { call.aborted = true; }, { once: true });
-  if (row.kind === "abort_headers") { await new Promise(resolve => { if (request.signal.aborted) resolve(); else request.signal.addEventListener("abort", resolve, { once: true }); }); return new Response(null, { status: 499 }); }
   if (row.kind === "redirect") return new Response(null, { status: 307, headers: { location: "https://alternate.example/paid" } });
   if (row.kind === "error") return Response.json({ error: { message: "synthetic refusal" } }, { status: 429 });
   const frame = delta => ({ model: row.model, choices: [{ index: 0, delta, finish_reason: null }] });
@@ -284,14 +427,18 @@ test("actual registered OpenRouter music client through both real configurations
   assert.equal(createHash("sha256").update(mp3).digest("hex"), "94bf451427043b32a9893976aefdea79d784323e5422f1f986fb22548615162b");
   for (const route of ["native", "manifest"]) {
     const audio = { wav: Buffer.from(musicWave()).toString("base64"), mp3: mp3.toString("base64") }, f = await start(route, audio), failures = [];
+    let helperState = "pending";
     try {
       await runOpenClawConsumer(t, { source, sourceHead, fixture: new URL("./fixtures/openclaw-openrouter-music-contract.test.ts", import.meta.url),
         testPath: "src/agents/tools/worker-openrouter-music-contract.test.ts",
         env: { CLAWROUTER_CONTRACT_ORIGIN: f.origin, CLAWROUTER_CONTRACT_ROUTE: route, CLAWROUTER_CONTRACT_AUDIO: JSON.stringify(audio), CLAWROUTER_CONTRACT_CASES: JSON.stringify(cases) } });
+      helperState = "fulfilled";
       const physical = await retirement(f.origin), calls = await (await fetch(f.origin + "/fixture/state")).json();
       assert.equal(physical.requests.filter(row => row.path === "/fixture/alternate").length, 0);
+      let headerReceipt;
       for (const row of cases) {
         const matched = calls.filter(call => call.id === row.id), receipt = await usage(f.origin, row.id);
+        if (row.id === "abort_headers") headerReceipt = receipt;
         if (unsent.has(row.kind)) { assert.equal(matched.length, 0, row.id); assert.equal(receipt.budget.spentMicros, 0, row.id); continue; }
         assert.equal(matched.length, 1, row.id); const [call] = matched;
         assert.equal(call.url, target); assert.equal(call.method, "POST"); assert.equal(call.redirect, "manual");
@@ -305,6 +452,8 @@ test("actual registered OpenRouter music client through both real configurations
         assert.deepEqual([event.input_tokens, event.output_tokens, event.total_tokens], [null, null, null]);
         assert.equal(event.status, row.kind === "success" ? "success" : row.kind.startsWith("abort") || row.kind === "deadline_body" ? "client_error" : "provider_error");
       }
+      // Only after every independent source/SQLite oracle. /retire is provisional.
+      acceptHeaderDisposition(physical, helperState, calls, headerReceipt);
     } catch (error) { failures.push(error); }
     await cleanup(f, failures);
   }
@@ -321,5 +470,147 @@ test("reader observer joins the original cancel and rejects cleanup failure incl
     await assert.rejects(original, error => error === reason);
     reader.releaseLock();
     await assert.rejects(proof.join(), error => error instanceof AggregateError && error.errors.some(value => value === reason));
+  }
+});
+
+// Oracle regressions exercise the exact serialized functions. Controlled promises
+// here test classification only; they do not supply hosted transport evidence.
+async function headerOracle(order = "abort-first", reason, response) {
+  if (arguments.length < 2) reason = new Error("unclassified native rejection");
+  const row = cases.find(row => row.id === "abort_headers"), ingressController = new AbortController(), effectiveController = new AbortController();
+  let sequence = 0; const tick = () => ++sequence;
+  const ingress = { id: row.id, path: "/v1/native/openrouter/v1/chat/completions", signal: ingressController.signal, body: body(row), abort: null };
+  ingress.signal.addEventListener("abort", () => { ingress.abort = tick(); }, { once: true });
+  const init = { method: "POST", headers: { authorization: `Bearer fixture-upstream-${row.id}` }, body: JSON.stringify(body(row)), signal: effectiveController.signal, redirect: "manual" };
+  const effective = effectiveFetch(target, init), ingresses = [ingress];
+  const proof = { effective, binding: bindAcquisition(effective, ingresses, cases, target) };
+  let reject, fulfill;
+  const original = new Promise((resolve, fail) => { fulfill = resolve; reject = fail; });
+  const receiver = {};
+  assert.equal(observeAcquisition(function(input, options) {
+    assert.equal(this, receiver); assert.equal(input, target); assert.equal(options, init); return original;
+  }, receiver, target, init, proof, tick), original);
+  const abort = () => { ingressController.abort(new Error("ingress abort")); effectiveController.abort(new Error("effective abort")); };
+  if (order === "abort-first") abort();
+  if (response !== undefined) fulfill(response); else reject(reason);
+  await proof.observed;
+  if (order === "reject-first") abort();
+  return { proof, ingresses, init, snapshot: acquisitionSnapshot(proof, [proof], ingresses) };
+}
+function headerEvidence(snapshot) {
+  return {
+    physical: { candidates: [snapshot], requests: [], otherOperations: "fulfilled", listenersRemoved: true },
+    calls: [{ id: "abort_headers", url: target, method: "POST", redirect: "manual", authorization: "Bearer fixture-upstream-abort_headers",
+      aborted: true, expired: false, waiter: "fulfilled", waiterListenerRemoved: true, sourceReturnReached: true }],
+    receipt: { budget: { spentMicros: 700 }, usage: { events: [{ credential_id: "orm_abort_headers", policy_id: "orm_abort_headers",
+      model: "openrouter/google/lyria-3-pro-preview", provider: "openrouter", capability: "music.generate", status: "client_error",
+      cost_basis: "policy_fixed", actual_cost_micros: 700, input_tokens: null, output_tokens: null, total_tokens: null }] } },
+    helper: "fulfilled",
+  };
+}
+
+test("preheader disposition retains original rejection and requires observed abort order", async () => {
+  const good = await headerOracle();
+  assert.equal(good.proof.state, "rejected"); assert.equal(good.proof.reason.message, "unclassified native rejection");
+  assert.equal(provisionalHeaderDisposition(good.snapshot), true);
+  for (const order of ["reject-first", "no-abort"]) {
+    assert.equal(provisionalHeaderDisposition((await headerOracle(order)).snapshot), false, order);
+  }
+  const missing = await headerOracle("abort-first", undefined);
+  assert.equal(provisionalHeaderDisposition(acquisitionSnapshot(missing.proof, [missing.proof], missing.ingresses)), false);
+  const response = new Response(null), observed = await headerOracle("abort-first", new Error("unused"), response);
+  assert.equal(observed.proof.response, response); assert.equal(observed.proof.state, "fulfilled");
+  assert.equal(observed.proof.observerErrors.length, 1);
+  assert.equal(provisionalHeaderDisposition(observed.snapshot), false, "observer error is not native acquisition rejection");
+});
+
+test("effective fetch binding uses replacement headers, original body and explicit null signal", async () => {
+  const good = await headerOracle(), request = new Request(target, { method: "POST", headers: good.init.headers, body: good.init.body, signal: good.init.signal, redirect: "manual" });
+  const replaced = effectiveFetch(request, { headers: { "x-fixture": "replacement" }, body: good.init.body, signal: null });
+  assert.equal(replaced.headers.has("authorization"), false); assert.equal(replaced.signal, null);
+  assert.equal(bindAcquisition(replaced, good.ingresses, cases, target), undefined);
+  const nullSignal = effectiveFetch(request, { ...good.init, signal: null });
+  const proof = { effective: nullSignal, binding: bindAcquisition(nullSignal, good.ingresses, cases, target) };
+  observeAcquisition(() => Promise.reject(new Error("defined")), null, request, { ...good.init, signal: null }, proof, () => 1);
+  await proof.observed;
+  assert.equal(provisionalHeaderDisposition(acquisitionSnapshot(proof, [proof], good.ingresses)), false);
+  for (const change of [
+    { method: "GET" }, { url: "https://alternate.example/paid" }, { redirect: "follow" },
+    { headers: new Headers({ authorization: "Bearer foreign-fixture" }) },
+    { body: JSON.stringify({ ...JSON.parse(good.init.body), model: "foreign" }) },
+    { body: JSON.stringify({ ...JSON.parse(good.init.body), messages: [] }) }, { body: null },
+  ]) assert.equal(bindAcquisition({ ...good.proof.effective, ...change }, good.ingresses, cases, target), undefined);
+  assert.equal(bindAcquisition(good.proof.effective, [...good.ingresses, good.ingresses[0]], cases, target), undefined);
+  assert.equal(provisionalHeaderDisposition(acquisitionSnapshot(good.proof, [good.proof, { effective: good.proof.effective }], good.ingresses)), false);
+  const manifest = { ...good.ingresses[0], path: "/v1/proxy/openrouter/music_generate", body: { body: { ...good.ingresses[0].body, model: "openrouter/" + models[0] } } };
+  assert.equal(bindAcquisition(good.proof.effective, [manifest], cases, target)?.ingress, manifest);
+});
+
+test("preheader oracle preserves synchronous native exceptions including undefined", () => {
+  for (const reason of [new Error("sync fixture failure"), undefined]) {
+    const controller = new AbortController(), proof = { effective: { signal: controller.signal } };
+    let threw = false;
+    try { observeAcquisition(() => { throw reason; }, null, target, {}, proof, () => 1); }
+    catch (error) { threw = true; assert.equal(error, reason); }
+    assert.equal(threw, true); assert.equal(proof.state, "threw"); assert.equal(proof.listenerRemoved, true);
+  }
+});
+
+test("source waiter completes and removes its original abort listener before evidence", async () => {
+  const controller = new AbortController(), call = { aborted: false };
+  const pending = waitForSourceAbort(controller.signal, call);
+  assert.equal(call.waiter, "pending"); assert.equal(call.waiterListenerRemoved, undefined);
+  controller.abort(new Error("owned source abort")); await pending;
+  assert.deepEqual(call, { aborted: true, waiter: "fulfilled", waiterListenerRemoved: true });
+});
+
+test("final preheader acceptance requires helper, source, one POST, accounting and all cleanup", async () => {
+  const { snapshot } = await headerOracle();
+  const accept = e => acceptHeaderDisposition(e.physical, e.helper, e.calls, e.receipt);
+  assert.doesNotThrow(() => accept(headerEvidence(snapshot)));
+  const changes = [
+    e => { e.helper = "pending"; }, e => { e.helper = "rejected"; },
+    e => { e.physical.otherOperations = "pending"; }, e => { e.physical.otherOperations = "rejected"; },
+    e => { e.physical.listenersRemoved = false; }, e => { e.physical.candidates = []; },
+    e => { e.physical.candidates.push(e.physical.candidates[0]); },
+    e => { e.physical.candidates[0].id = "deadline_body"; }, e => { e.physical.candidates[0].unique = false; },
+    e => { e.physical.candidates[0].defined = false; }, e => { e.physical.candidates[0].noResponse = false; },
+    e => { e.physical.candidates[0].observerClean = false; }, e => { e.physical.candidates[0].abortedBeforeReject = false; },
+    e => { e.physical.candidates[0].ingressLive = false; }, e => { e.physical.candidates[0].effectiveLive = false; },
+    e => { e.physical.candidates[0].listenerRemoved = false; },
+    e => { e.physical.requests.push({ path: "/fixture/alternate" }); },
+    e => { e.calls = []; }, e => { e.calls.push(e.calls[0]); }, e => { e.calls[0].id = "abort_body"; },
+    e => { e.calls[0].aborted = false; }, e => { e.calls[0].expired = true; },
+    e => { e.calls[0].waiter = "pending"; }, e => { e.calls[0].waiter = "rejected"; },
+    e => { e.calls[0].waiterListenerRemoved = false; }, e => { e.calls[0].sourceReturnReached = false; },
+    e => { e.calls[0].authorization = "Bearer foreign-fixture"; }, e => { e.calls[0].method = "GET"; },
+    e => { e.receipt.usage.events[0].status = "provider_error"; },
+    e => { e.receipt.usage.events[0].credential_id = "orm_foreign"; }, e => { e.receipt.usage.events[0].policy_id = "orm_foreign"; },
+    e => { e.receipt.usage.events[0].model = "foreign"; }, e => { e.receipt.usage.events[0].cost_basis = "none"; },
+    e => { e.receipt.usage.events[0].actual_cost_micros = 0; }, e => { e.receipt.usage.events[0].input_tokens = 0; },
+    e => { e.receipt.budget.spentMicros = 0; }, e => { e.receipt.usage.events.push(e.receipt.usage.events[0]); },
+  ];
+  for (const [index, change] of changes.entries()) {
+    const evidence = structuredClone(headerEvidence(snapshot)); change(evidence);
+    assert.throws(() => accept(evidence), undefined, `required evidence ${index}`);
+  }
+});
+
+
+test("reader join includes an original cancel added while closed is pending", async () => {
+  for (const reason of [new Error("late original cancel failure"), undefined]) {
+    let rejectCancel;
+    const pending = new Promise((_, reject) => { rejectCancel = reject; });
+    const response = new Response(new ReadableStream({ cancel() { return pending; } })), proof = {};
+    observeBody(response, undefined, proof);
+    const reader = response.body.getReader(), joining = proof.join();
+    const verdict = joining.then(() => ({ ok: true }), error => ({ ok: false, error }));
+    await Promise.resolve(); await Promise.resolve();
+    const cancel = reader.cancel(); void cancel.catch(() => {}); reader.releaseLock();
+    rejectCancel(reason);
+    const result = await verdict;
+    assert.equal(result.ok, false);
+    assert.ok(result.error instanceof AggregateError && result.error.errors.some(error => error === reason));
+    await assert.rejects(cancel, error => error === reason);
   }
 });
