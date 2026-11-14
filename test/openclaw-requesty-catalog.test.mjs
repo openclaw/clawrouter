@@ -70,10 +70,11 @@ for (const dispatch of ["manifest", "native"]) test(`actual registered Requesty 
   assert.equal(endpoint.path, "/models/managed");
   assert.equal(endpoint.method, "GET");
   const ids = scenarios.map(scenario => `rq_${dispatch}_${scenario}`);
-  const gates = await barriers(heldScenarios.map(scenario => `rq_${dispatch}_${scenario}`));
-  const temporary = await mkdtemp(join(tmpdir(), "clawrouter-requesty-client-"));
-  let mf;
+  const failures = [];
+  let gates, temporary, mf;
   try {
+    gates = await barriers(heldScenarios.map(scenario => `rq_${dispatch}_${scenario}`));
+    temporary = await mkdtemp(join(tmpdir(), "clawrouter-requesty-client-"));
     const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
     mf = await startWorkerdFixture(temporary, routerFixture(ids, dispatch), upstreamFixture(gates.origin), { directRouter: true, preventEviction: true });
     const origin = (await mf.unsafeGetDirectURL("router")).origin;
@@ -115,11 +116,19 @@ for (const dispatch of ["manifest", "native"]) test(`actual registered Requesty 
       assert.equal(receipt.budget.spentMicros, 0);
       assert.doesNotMatch(JSON.stringify(event), /fixture-secret|managed-rq_|must-not-fallback/);
     }
+  } catch (error) {
+    failures.push(error);
   } finally {
-    await gates.close();
-    await mf?.dispose();
-    await rm(temporary, { recursive: true, force: true });
+    // Every acquired resource gets its cleanup attempt, including failed setup.
+    // Keep the original failure and every cleanup failure; teardown is not proof.
+    try { await gates?.close(); } catch (error) { failures.push(error); }
+    try { await mf?.dispose(); } catch (error) { failures.push(error); }
+    if (temporary !== undefined) {
+      try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+    }
   }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new AggregateError(failures, "Requesty contract or owned-resource cleanup failed");
 });
 
 function routerFixture(ids, dispatch) {
