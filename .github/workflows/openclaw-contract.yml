@@ -41,6 +41,9 @@ jobs:
       max-parallel: 4
       matrix:
         include:
+          - consumer: featherless-catalog
+            ref: 1536faab19f2adf524b7ef1acef5c24501b35652
+            test: test/openclaw-featherless-catalog.test.mjs
           - consumer: public-catalogs
             ref: 1536faab19f2adf524b7ef1acef5c24501b35652
             test: test/openclaw-public-catalogs.test.mjs
