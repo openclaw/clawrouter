@@ -1,10 +1,11 @@
 // Installed into the exact public SDK revision only by the native CI helper.
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as guardedFetch from "../../infra/net/fetch-guard.js";
-import { fetchWithRuntimeDispatcher, type DispatcherAwareRequestInit } from "../../infra/net/runtime-fetch.js";
+import type { DispatcherAwareRequestInit } from "../../infra/net/runtime-fetch.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import fs from "node:fs/promises";
@@ -22,6 +23,9 @@ const speechPath = (path: string) => path === "/v1/proxy/google-gemini/speech_in
 const text = "Synthetic speech 😀 café";
 const wav = "524946462c00000057415645666d74201000000001000100c05d000080bb00000200100064617461080000000000ff7f0000ff7f";
 const nativeFetch = globalThis.fetch;
+// Same installed CommonJS module used by loadUndiciModule in both SDK graphs.
+const undici = createRequire(import.meta.url)("undici/index.js") as typeof import("undici");
+const originalRuntimeFetch = undici.fetch;
 const originalGuard = guardedFetch.fetchWithSsrFGuard;
 const key = (name: string) => `clawrouter-live-gs_${name}-fixture-secret`;
 type Observation = {
@@ -32,12 +36,13 @@ type Observation = {
   deadlineAt?: number;
   signal?: AbortSignal | null;
   dispatcher?: DispatcherAwareRequestInit["dispatcher"];
-  close?: ReturnType<typeof vi.spyOn>;
-  body?: ReadableStream<Uint8Array> | null;
+  closeCalls: Array<{ depth: number; args: unknown[]; outcome?: { value: unknown } | { error: unknown } }>;
+  guardObserved: boolean;
+  bodies: ReadableStream<Uint8Array>[];
   cancels: Array<Promise<unknown>>;
   reads: Array<Promise<unknown>>;
   readers: Array<{ reader: ReadableStreamDefaultReader<Uint8Array>; unlock: ReturnType<typeof vi.spyOn> }>;
-  done: Promise<unknown>;
+  closeStarted: Promise<void>;
 };
 const observations: Observation[] = [];
 const unexpected: string[] = [];
@@ -58,125 +63,149 @@ beforeEach(() => {
   vi.setSystemTime(new Date("2026-11-15T12:00:00Z"));
   observations.length = 0;
   unexpected.length = 0;
-  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
-    const request = new Request(input, init);
-    if (new URL(request.url).origin !== origin) refuse("unexpected client egress");
-    return nativeFetch(request);
+  // A plain pass-through keeps the real guard's DNS/dispatcher route. A Vitest
+  // fetch spy would select its deliberate no-dispatcher unit-test bypass.
+  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+    if (new URL(new Request(input, init).url).origin !== origin) refuse("unexpected client egress");
+    return nativeFetch(input, init);
   });
+  // The supported runtime-dependency hook is shared by native plugin and Vitest
+  // module graphs. All constructors remain original; only real fetch is observed.
+  vi.stubGlobal("__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__", { ...undici, fetch: observeRequest });
   const observeGuard: typeof originalGuard = async options => {
-    const url = new URL(String(options.url));
-    if (url.origin !== origin || (url.pathname !== "/v1/catalog" && !speechPath(url.pathname)) || url.search) refuse("unexpected speech route");
-    const headers = new Headers(options.init?.headers);
-    if (headers.has("x-api-key") || headers.has("x-goog-api-key")) refuse("client forwarded a vendor credential override");
-    const credential = headers.get("authorization") ?? "";
-    if (observations.some(row => row.path === url.pathname && row.credential === credential)) refuse("repeated speech route");
-    let finished!: (value?: unknown) => void;
-    const row: Observation = { path: url.pathname, credential, releaseReturned: false, failedBeforeResponse: false,
-      deadlineAt: options.timeoutMs === undefined ? undefined : performance.now() + options.timeoutMs,
-      cancels: [], reads: [], readers: [], done: new Promise(resolve => { finished = resolve; }) };
-    observations.push(row);
-    try {
-      const result = await originalGuard({ ...options,
-        policy: ssrfRuntime.ssrfPolicyFromHttpBaseUrlAllowedOrigin(origin),
-        fetchImpl: async (input, supplied) => {
-          const init = supplied as DispatcherAwareRequestInit | undefined;
-          if (!init?.dispatcher || row.dispatcher) throw new Error("missing or repeated real dispatcher");
-          row.dispatcher = init.dispatcher;
-          row.signal = init.signal;
-          // Pass-through spy on this exact owned dispatcher, including the
-          // pre-response abort path. No fake release and no global prototype patch.
-          row.close = vi.spyOn(init.dispatcher, "close");
-          return fetchWithRuntimeDispatcher(input, init);
-        },
-      });
-      if (url.pathname === "/v1/catalog" && result.response.ok) {
-        try {
-          const catalog = await result.response.clone().json();
-          const provider = catalog.providers.find((value: { id: string }) => value.id === "google-gemini");
-          expect(catalog.providers.some((value: { id: string }) => value.id === "google")).toBe(false);
-          const offers = provider?.offers.filter((value: { endpoint: string }) => value.endpoint.startsWith("speech_")) ?? [];
-          for (const offer of offers) {
-            expect(offer.routeKind).toBe(offer.endpoint === "speech_generate_content" ? "native" : "manifest");
-            expect(offer.modelId).toMatch(/^google\/gemini-/);
-          }
-          if (!/gs_(grant|foreign|policy|budget|key)-/.test(credential)) {
-            expect(catalog.scope).toMatchObject({ authType: "proxy_key", credentialId: credential.split("-")[2] });
-            expect(offers.filter((value: { eligible: boolean }) => value.eligible)).toHaveLength(5);
-          }
-          // Genuine current-authority mutations after the unmodified catalog.
-          if (credential === `Bearer ${key("revoked")}`) await command("/__google/revoke/gs_revoked", "POST");
-          if (credential === `Bearer ${key("stale_policy")}`) await command("/__google/restrict/gs_stale_policy", "POST");
-        } catch (error) {
-          const failures = [error];
-          let cancel: Promise<unknown> | undefined;
-          try { cancel = result.response.body?.cancel(); } catch (failure) { failures.push(failure); }
-          // Observe cancellation immediately, but preserve release-before-join:
-          // waiting for a tee cancellation first can deadlock the transport.
-          const cancellation = cancel ? Promise.allSettled([cancel]) : undefined;
-          try { await result.release(); } catch (failure) { failures.push(failure); }
-          for (const value of await cancellation ?? []) if (value.status === "rejected") failures.push(value.reason);
-          if (failures.length > 1) throw new AggregateError(failures, "catalog observation or cleanup failed");
-          throw error;
-        }
-      }
-      row.body = result.response.body;
-      if (row.body) {
-        const body = row.body, cancel = body.cancel.bind(body);
-        const getReader = body.getReader.bind(body) as () => ReadableStreamDefaultReader<Uint8Array>;
-        vi.spyOn(body, "cancel").mockImplementation(reason => {
-          const actual = cancel(reason); row.cancels.push(actual); return actual;
-        });
-        vi.spyOn(body, "getReader").mockImplementation(options => {
-          expect(options).toBeUndefined(); // The pinned SDK uses the default reader.
-          const reader = getReader();
-          row.readers.push({ reader, unlock: vi.spyOn(reader, "releaseLock") });
-          const read = reader.read.bind(reader);
-          vi.spyOn(reader, "read").mockImplementation(() => { const actual = read(); row.reads.push(actual); return actual; });
-          const cancelReader = reader.cancel.bind(reader);
-          vi.spyOn(reader, "cancel").mockImplementation(reason => {
-            const actual = cancelReader(reason); row.cancels.push(actual); return actual;
-          });
-          return reader;
-        });
-      }
-      return { ...result, release: async () => {
-        try { await result.release(); row.releaseReturned = true; finished(); }
-        catch (error) { finished({ error }); throw error; }
-      } };
-    } catch (error) { row.failedBeforeResponse = true; finished({ error }); throw error; }
+    const deadlineAt = options.timeoutMs === undefined ? undefined : performance.now() + options.timeoutMs;
+    const result = await originalGuard(options);
+    const row = observations.find(actual => actual.path === new URL(String(options.url)).pathname
+      && actual.credential === new Headers(options.init?.headers).get("authorization"));
+    if (!row) throw new Error("missing original guard request");
+    row.guardObserved = true;
+    row.deadlineAt = deadlineAt;
+    observeBody(result.response.body, row);
+    return { ...result, release: async () => {
+      await result.release();
+      if (!row) throw new Error("missing original guard request");
+      row.releaseReturned = true;
+    } };
   };
-  // Both the catalog reader and registered speech transport enter the genuine guard.
+  // Registered speech uses its genuine host context. Neither path fabricates
+  // a catalog/response or calls an adapter in place of the registered provider.
   vi.spyOn(guardedFetch, "fetchWithSsrFGuard").mockImplementation(observeGuard);
   vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(observeGuard);
 });
 
-afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); expect(unexpected).toEqual([]); });
+async function observeRequest(input: RequestInfo | URL, supplied?: RequestInit) {
+  const init = supplied as DispatcherAwareRequestInit | undefined;
+  const request = new Request(input, supplied), url = new URL(request.url);
+  if (url.origin !== origin || (url.pathname !== "/v1/catalog" && !speechPath(url.pathname)) || url.search) refuse("unexpected speech route");
+  if (request.headers.has("x-api-key") || request.headers.has("x-goog-api-key")) refuse("client forwarded a vendor credential override");
+  const credential = request.headers.get("authorization") ?? "";
+  if (observations.some(row => row.path === url.pathname && row.credential === credential)) refuse("repeated speech route");
+  const dispatcher = init?.dispatcher;
+  if (!dispatcher) refuse("missing original request dispatcher");
+  let closeStarted!: () => void;
+  const row: Observation = { path: url.pathname, credential, releaseReturned: false, failedBeforeResponse: false,
+    dispatcher, signal: init?.signal, guardObserved: false, closeCalls: [], bodies: [], cancels: [], reads: [], readers: [],
+    closeStarted: new Promise(resolve => { closeStarted = resolve; }) };
+  observations.push(row);
+  const originalClose = dispatcher.close;
+  let depth = 0;
+  vi.spyOn(dispatcher, "close").mockImplementation(function (this: typeof dispatcher, ...args: unknown[]) {
+    const call: Observation["closeCalls"][number] = { depth, args };
+    row.closeCalls.push(call); depth++;
+    try { const value = Reflect.apply(originalClose, this, args); call.outcome = { value }; return value; }
+    catch (error) { call.outcome = { error }; throw error; }
+    finally { depth--; if (call.depth === 0) closeStarted(); }
+  } as typeof dispatcher.close);
+  let response: Response;
+  try {
+    // Preserve the genuine guard's dispatcher and composed signal through
+    // the original installed Undici fetch, not Node's dispatcher-unaware fetch.
+    response = await Reflect.apply(originalRuntimeFetch, undici, [input, init]) as unknown as Response;
+  } catch (error) { row.failedBeforeResponse = true; throw error; }
+  if (url.pathname === "/v1/catalog" && response.ok) {
+    // Inspect the actual response, then return that same response to the guard.
+    // The clone is fully consumed before the caller reads the original branch.
+    try {
+      const catalog = await response.clone().json();
+      const provider = catalog.providers.find((value: { id: string }) => value.id === "google-gemini");
+      expect(catalog.providers.some((value: { id: string }) => value.id === "google")).toBe(false);
+      const offers = provider?.offers.filter((value: { endpoint: string }) => value.endpoint.startsWith("speech_")) ?? [];
+      for (const offer of offers) {
+        expect(offer.routeKind).toBe(offer.endpoint === "speech_generate_content" ? "native" : "manifest");
+        expect(offer.modelId).toMatch(/^google\/gemini-/);
+      }
+      if (!/gs_(grant|foreign|policy|budget|key)-/.test(credential)) {
+        expect(catalog.scope).toMatchObject({ authType: "proxy_key", credentialId: credential.split("-")[2] });
+        expect(offers.filter((value: { eligible: boolean }) => value.eligible)).toHaveLength(5);
+      }
+      if (credential === `Bearer ${key("revoked")}`) await command("/__google/revoke/gs_revoked", "POST");
+      if (credential === `Bearer ${key("stale_policy")}`) await command("/__google/restrict/gs_stale_policy", "POST");
+    } catch (error) {
+      // The original guard will close its dispatcher on this rejection. Start
+      // cancellation now, but join only after close to avoid a tee deadlock.
+      try {
+        const original = response.body?.cancel();
+        if (original) { row.cancels.push(original); void Promise.allSettled([original]); }
+      } catch (cleanup) { throw new AggregateError([error, cleanup], "catalog observation and cancellation failed"); }
+      throw error;
+    }
+  }
+  observeBody(response.body, row);
+  return response;
+}
+
+function observeBody(body: ReadableStream<Uint8Array> | null, row: Observation) {
+  if (body && !row.bodies.includes(body)) {
+    row.bodies.push(body);
+    const cancel = body.cancel.bind(body);
+    const getReader = body.getReader.bind(body) as () => ReadableStreamDefaultReader<Uint8Array>;
+    vi.spyOn(body, "cancel").mockImplementation(reason => {
+      const actual = cancel(reason); row.cancels.push(actual); return actual;
+    });
+    vi.spyOn(body, "getReader").mockImplementation(options => {
+      expect(options).toBeUndefined();
+      const reader = getReader();
+      row.readers.push({ reader, unlock: vi.spyOn(reader, "releaseLock") });
+      const read = reader.read.bind(reader);
+      vi.spyOn(reader, "read").mockImplementation(() => { const actual = read(); row.reads.push(actual); return actual; });
+      const cancelReader = reader.cancel.bind(reader);
+      vi.spyOn(reader, "cancel").mockImplementation(reason => {
+        const actual = cancelReader(reason); row.cancels.push(actual); return actual;
+      });
+      return reader;
+    });
+  }
+}
+
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); expect(unexpected).toEqual([]); });
 
 async function join(name: string) {
   const selected = observations.filter(row => row.credential.startsWith(`Bearer clawrouter-live-gs_${name}-`));
   const transport = selected.map(async row => {
-    const completion = await row.done;
-    expect(row.dispatcher).toBeDefined();
-    expect(row.close).toHaveBeenCalledOnce();
-    const closeResult = row.close!.mock.results[0];
-    if (!closeResult) throw new Error("missing original dispatcher close result");
-    expect(closeResult.type).toBe("return");
-    expect(closeResult.value).toBeInstanceOf(Promise);
-    await closeResult.value;
-    expect(row.dispatcher!.closed || row.dispatcher!.destroyed).toBe(true);
-    if (row.failedBeforeResponse) {
-      expect(["abort_headers", "abort_body", "deadline"]).toContain(name);
-      expect(completion).toHaveProperty("error");
-    } else {
-      expect(completion).toBeUndefined();
-      expect(row.releaseReturned).toBe(true);
-      // These are the SDK's own unawaited cancel promises. The test joins them
-      // after execute/release; it does not change the SDK's ordering.
-      await Promise.allSettled(row.reads);
-      const cancellations = await Promise.allSettled(row.cancels);
-      expect(cancellations.every(value => value.status === "fulfilled")).toBe(true);
+    await row.closeStarted;
+    const external = row.closeCalls.filter(call => call.depth === 0);
+    // Joining the actual promise precedes every retirement assertion. Undici's
+    // promise overload calls this.close(callback) internally; that is not a
+    // second external release. Do not count entry as physical completion.
+    const closes = await Promise.allSettled(external.flatMap(call =>
+      call.outcome && "value" in call.outcome && call.outcome.value instanceof Promise ? [call.outcome.value] : []));
+    const [reads, cancellations] = await Promise.all([
+      Promise.allSettled(row.reads), Promise.allSettled(row.cancels),
+    ]);
+    expect(external).toHaveLength(1);
+    expect(external[0]!.args).toEqual([]);
+    expect(external[0]!.outcome).toHaveProperty("value");
+    expect(closes).toEqual([{ status: "fulfilled", value: null }]);
+    expect(row.closeCalls.map(call => [call.depth, call.args.length])).toEqual([[0, 0], [1, 1]]);
+    expect(typeof row.closeCalls[1]!.args[0]).toBe("function");
+    expect(row.dispatcher!.destroyed).toBe(true);
+    expect(reads).toHaveLength(row.reads.length);
+    expect(cancellations.every(value => value.status === "fulfilled")).toBe(true);
+    if (row.failedBeforeResponse) expect(["abort_headers", "abort_body", "deadline"]).toContain(name);
+    else {
+      if (row.guardObserved) expect(row.releaseReturned).toBe(true);
       for (const entry of row.readers) expect(entry.unlock).toHaveBeenCalledOnce();
-      expect(row.body?.locked ?? false).toBe(false);
+      for (const body of row.bodies) expect(body.locked).toBe(false);
     }
   });
   // Attempt every original transport and the Worker join before any one
