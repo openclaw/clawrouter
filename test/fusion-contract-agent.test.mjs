@@ -348,6 +348,43 @@ test('rejected drafts get actionable feedback without checking unchanged source'
   }
 });
 
+for (const match of ['missing', 'ambiguous']) test(`draft repair identifies a ${match} anchor without applying earlier edits`, async () => {
+  const original = 'prefix\nprivate source sentinel\nneedle\nneedle';
+  const seen = [], writes = [], optionsSeen = [];
+  const dependencies = {
+    makeSandbox: async () => ({ close: async () => {} }),
+    read: async () => [{ path: 'worker/a.ts', content: original }],
+    write: async (_box, files) => { writes.push(files); },
+    test: async () => passed,
+  };
+  const output = await runRefinedDraft({ ...task, reproducer: 'supplied' }, 'image', 'strong', 'refine',
+    config, async (_id, _role, body) => {
+      seen.push(body);
+      const edits = seen.length === 1 ? [
+        { path: 'worker/a.ts', search: 'prefix', replace: 'partial prefix' },
+        { path: 'worker/a.ts', search: match === 'missing' ? 'private search sentinel' : 'needle', replace: 'private replacement sentinel' },
+      ] : [{ path: 'worker/a.ts', search: 'prefix', replace: 'fixed' }];
+      return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ edits }) } }] };
+    }, undefined, {
+      ...dependencies, runProbe: async () => passed,
+      draft: async (...args) => {
+        optionsSeen.push(args[7]);
+        args[7] = { ...args[7], ...dependencies };
+        return runSingleDraft(...args);
+      },
+    });
+  assert.equal(seen.length, 2);
+  assert.equal(output.publicPassed, true);
+  assert.deepEqual(output.actions[0].rejectedEdit, { index: 1, path: 'worker/a.ts', match });
+  assert.match(optionsSeen[1].feedback, new RegExp(`Edit 2 in worker/a\\.ts matched ${match === 'missing' ? 'no' : 'multiple'} locations`));
+  assert.doesNotMatch(optionsSeen[1].feedback, /sentinel|partial prefix|needle/);
+  assert.doesNotMatch(JSON.stringify(output.actions), /sentinel|partial prefix|needle/);
+  assert.equal(optionsSeen[1].initialFiles[0].content, original);
+  assert.equal(writes.length, 3); // Restore current source, apply the repair, then verify it.
+  assert.equal(writes[0][0].content, original);
+  assert.ok(writes.slice(1).every(files => files[0].content === original.replace('prefix', 'fixed')));
+});
+
 test('exhausting rejected drafts cannot certify unchanged source', async () => {
   let calls = 0;
   const output = await runRefinedDraft({ ...task, reproducer: 'supplied' }, 'image', 'strong', 'refine',
