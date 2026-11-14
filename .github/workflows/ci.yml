@@ -192,6 +192,16 @@ jobs:
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm test:scripts
+      - name: Validate native preflight workflow expression contexts
+        run: |
+          set -euo pipefail
+          validator="$(mktemp -d "$RUNNER_TEMP/preflight-actionlint.XXXXXX")"
+          trap 'rm -rf "$validator"' EXIT
+          curl --fail --location --retry 2 --output "$validator/actionlint.tar.gz" \
+            https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+          printf '%s  %s\n' 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8 "$validator/actionlint.tar.gz" | sha256sum --check --status
+          tar -xzf "$validator/actionlint.tar.gz" -C "$validator" actionlint
+          ACTIONLINT_BIN="$validator/actionlint" node --test test/preflight-workflow.validation.mjs
 
   worker-package:
     runs-on: ubuntu-latest
