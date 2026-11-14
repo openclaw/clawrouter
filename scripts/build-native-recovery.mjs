@@ -9,7 +9,7 @@ import { nativeProviderSnapshotPlugin } from './large-http-provider-snapshot.mjs
 import { prepareLargeHttpRelease } from './prepare-large-http-release.mjs';
 import { fullSha } from './deploy-train-policy.mjs';
 const hash = b => createHash('sha256').update(b).digest('hex');
-export async function prepareNativeRecovery({ state, configPath = '.wrangler.generated.toml', directory }) {
+export async function prepareNativeRecovery({ state, configPath = '.wrangler.generated.toml', directory, syntheticRehearsal = false }) {
   fullSha(state.cutover.nativeSource);
   const require = createRequire(resolve('package.json'));
   const { parseTOML, getStaticTOMLValue } = require('toml-eslint-parser');
@@ -30,7 +30,7 @@ export async function prepareNativeRecovery({ state, configPath = '.wrangler.gen
     runtime=old.outputFiles[0].contents;
   } finally { await rm(source,{recursive:true,force:true}); }
   if (hash(runtime) !== state.cutover.blueRuntimeSha) throw new Error('Deployed native payload could not be reproduced; no recovery upload is safe');
-  const edge = await build({entryPoints:['worker/large-http-entry.ts'],bundle:true,write:false,metafile:true,format:'esm',platform:'browser',external:['cloudflare:workers'],
+  const edge = await build({entryPoints:[syntheticRehearsal?'worker/native-rehearsal-entry.ts':'worker/large-http-entry.ts'],bundle:true,write:false,metafile:true,format:'esm',platform:'browser',external:['cloudflare:workers'],
     define:{__LARGE_HTTP_RUNTIME_SHA__:JSON.stringify(hash(runtime)),__LARGE_HTTP_RUNTIME_BYTES__:String(runtime.length)},logLevel:'silent'});
   const worker = resolve(dirname(config.main),'recovery-worker.mjs');
   const assets = resolve(dirname(configPath),config.assets.directory);

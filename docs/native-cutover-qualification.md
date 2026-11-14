@@ -54,13 +54,12 @@ production-only; do not fake a production environment or relax its owner/setting
 checks to upload this fixture. The coordinator's isolated provisioning/config and
 immutable release upload are a separately authorized preparation step.
 
-**Unresolved synthetic egress prerequisite:** OpenAI's origin is compiled into
-the old native payload, and this path adds no origin override or native shim.
-A source-patched old native module is not the exact old payload. The coordinator
-must first establish a reviewed synthetic-only transport that preserves the
-claimed payload bytes and accounting behavior. Until then, do not run paid
-inference and do not claim the full hosted gate passed. The controller can be
-exercised without inference, but that does not close this prerequisite.
+**Synthetic-only transport:** use the explicit fixture build and client described
+in [native-synthetic-rehearsal.md](native-synthetic-rehearsal.md). It registers
+Cloudflare HTTPS interception before native startup, trusts the runtime CA and
+disables Internet access. Both native modules retain their exact bytes. The
+ordinary production build does not import this entrypoint. Local transport and
+client tests do not attest hosted interception; that remains an execution gate.
 
 ## Actions inputs
 

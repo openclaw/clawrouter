@@ -9,7 +9,7 @@ export interface NativeJournal {
 export interface SlotConfig {fingerprint:string;runtimeSha?:string;enabled:boolean;deadline:number}
 export interface NativePorts {
  absent():Promise<boolean>;
- start(generation:number,token:string):void;
+ start(generation:number,token:string):void|Promise<void>;
  keepalive():Promise<void>;
  ready(generation:number,token:string):Promise<string|null>;
  monitor():Promise<void>;
@@ -76,7 +76,7 @@ export class NativeSlot {
     // absence check and issuance, and no second issuance in this generation.
     if(!await bounded(this.native.absent()))throw Error('native_present');
     const s=await this.state();if(s.generation!==generation||s.phase!=='starting')return this.status(generation);
-    this.native.start(generation,start);
+    await this.native.start(generation,start);
     const watch=this.native.monitor();void watch.then(()=>this.phase(generation,['starting','ready'],'failed','native_exit'),error=>{const message=String(error?.message??'').toLowerCase();const kind=/docker|engine/.test(message)?'engine':/timed out|timeout|deadline/.test(message)?'timeout':/capacity|resource|memory|limit/.test(message)?'resource':/start/.test(message)?'start':'unknown';return this.phase(generation,['starting','ready'],'failed','native_exit_'+kind);}).catch(()=>{});
     this.refreshLease(generation);
    }catch{await this.phase(generation,['starting','ready'],'failed','start_or_keepalive');}
