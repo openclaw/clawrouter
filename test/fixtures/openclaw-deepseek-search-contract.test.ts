@@ -35,7 +35,7 @@ type Observation = {
   deadlineAt?: number;
   signal?: AbortSignal | null;
   dispatcher?: DispatcherAwareRequestInit["dispatcher"];
-  close?: ReturnType<typeof vi.spyOn>;
+  closes: Array<{ receiver: DispatcherAwareRequestInit["dispatcher"]; argumentCount: number; result: unknown }>;
   body?: ReadableStream<Uint8Array> | null;
   cancels: Array<Promise<unknown>>;
   readers: Array<{ reader: ReadableStreamDefaultReader<Uint8Array>; unlock: ReturnType<typeof vi.spyOn> }>;
@@ -64,6 +64,7 @@ beforeEach(() => {
     return nativeFetch(input, init);
   });
   const observeGuard: typeof originalGuard = async options => {
+    if (options.dispatcherPool) refuse("unexpected pooled Search dispatcher");
     const url = new URL(String(options.url));
     if (url.origin !== origin || !["/v1/catalog", nativePath].includes(url.pathname) || url.search) refuse("unexpected Search route");
     const headers = new Headers(options.init?.headers);
@@ -73,7 +74,7 @@ beforeEach(() => {
     let finished!: (value?: unknown) => void;
     const row: Observation = { path: url.pathname, credential, releaseReturned: false, failedBeforeResponse: false,
       deadlineAt: options.timeoutMs === undefined ? undefined : performance.now() + options.timeoutMs,
-      cancels: [], readers: [], done: new Promise(resolve => { finished = resolve; }) };
+      closes: [], cancels: [], readers: [], done: new Promise(resolve => { finished = resolve; }) };
     observations.push(row);
     try {
       const result = await originalGuard({ ...options,
@@ -83,9 +84,19 @@ beforeEach(() => {
           if (!init?.dispatcher || row.dispatcher) throw new Error("missing or repeated real dispatcher");
           row.dispatcher = init.dispatcher;
           row.signal = init.signal;
-          // Pass-through spy on this exact owned dispatcher, including the
-          // pre-response abort path. No fake release and no global prototype patch.
-          row.close = vi.spyOn(init.dispatcher, "close");
+          // Undici's promise overload recursively calls close(callback). Observe
+          // only the external call and return its original promise unchanged.
+          const dispatcher = init.dispatcher, close = dispatcher.close;
+          let closeDepth = 0;
+          vi.spyOn(dispatcher, "close").mockImplementation(function (this: typeof dispatcher, ...args) {
+            const external = closeDepth === 0;
+            closeDepth++;
+            try {
+              const result = Reflect.apply(close, this, args);
+              if (external) row.closes.push({ receiver: this, argumentCount: args.length, result });
+              return result;
+            } finally { closeDepth--; }
+          });
           return fetchWithRuntimeDispatcher(input, init);
         },
       });
@@ -146,13 +157,17 @@ async function join(name: string) {
   const selected = observations.filter(row => row.credential.startsWith(`Bearer clawrouter-live-ds_${name}-`));
   const transport = selected.map(async row => {
     const completion = await row.done;
+    // Join every original close/cancel before checking the observation contract.
+    const [closures, cancellations] = await Promise.all([
+      Promise.allSettled(row.closes.map(entry => entry.result)),
+      Promise.allSettled(row.cancels),
+    ]);
     expect(row.dispatcher).toBeDefined();
-    expect(row.close).toHaveBeenCalledOnce();
-    const closeResult = row.close!.mock.results[0];
-    if (!closeResult) throw new Error("missing original dispatcher close result");
-    expect(closeResult.type).toBe("return");
-    expect(closeResult.value).toBeInstanceOf(Promise);
-    await closeResult.value;
+    expect(row.closes).toHaveLength(1);
+    expect(row.closes[0].receiver).toBe(row.dispatcher);
+    expect(row.closes[0].argumentCount).toBe(0);
+    expect(row.closes[0].result).toBeInstanceOf(Promise);
+    expect(closures).toEqual([{ status: "fulfilled", value: null }]);
     expect(row.dispatcher!.closed || row.dispatcher!.destroyed).toBe(true);
     if (row.failedBeforeResponse) {
       expect(name).toBe("abort");
@@ -162,7 +177,6 @@ async function join(name: string) {
       expect(row.releaseReturned).toBe(true);
       // These are the SDK's own unawaited cancel promises. The test joins them
       // after execute/release; it does not change the SDK's ordering.
-      const cancellations = await Promise.allSettled(row.cancels);
       expect(cancellations.every(value => value.status === "fulfilled")).toBe(true);
       for (const entry of row.readers) expect(entry.unlock).toHaveBeenCalledOnce();
       expect(row.body?.locked ?? false).toBe(false);
