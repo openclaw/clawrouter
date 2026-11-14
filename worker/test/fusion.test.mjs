@@ -62,7 +62,7 @@ test("fusion runs advisers concurrently, tolerates failures, and injects untrust
     await Promise.resolve();
     active--;
     return model.startsWith("local/")
-      ? Response.json({ choices: [{ message: { content: "local proposal" } }] })
+      ? Response.json({ choices: [{ finish_reason: "stop", message: { content: "local proposal" } }] })
       : new Response("unavailable", { status: 503 });
   });
   assert.equal(peak, 2);
@@ -78,6 +78,52 @@ test("fusion runs advisers concurrently, tolerates failures, and injects untrust
 
   const reasoningConfig = normalizeFusionConfig({ aggregatorModel: "openai/gpt-5.4" });
   assert.equal(buildAggregatorBody({ messages: [], temperature: 0.7 }, reasoningConfig, []).temperature, 0.7);
+});
+
+for (const [name, choice, extra] of [
+  ["truncated", { finish_reason: "length" }],
+  ["filtered", { finish_reason: "content_filter" }],
+  ["tool request", { finish_reason: "tool_calls" }],
+  ["function request", { finish_reason: "function_call" }],
+  ["missing completion reason", {}],
+  ["null completion reason", { finish_reason: null }],
+  ["unknown completion reason", { finish_reason: "unknown" }],
+  ["refusal with stop", { finish_reason: "stop", message: { refusal: "synthetic refusal" } }],
+  ["tool call with stop", { finish_reason: "stop", message: { tool_calls: [{ id: "synthetic" }] } }],
+  ["function call with stop", { finish_reason: "stop", message: { function_call: { name: "synthetic" } } }],
+  ["provider error with stop", { finish_reason: "stop" }, { error: { message: "synthetic error" } }],
+]) {
+  test(`fusion rejects ${name} adviser text after consuming usage`, async () => {
+    const config = normalizeFusionConfig({ adviserModels: ["local/incomplete"] });
+    const observed = observeUsage(Response.json({
+      ...extra,
+      choices: [{ ...choice, message: { content: "unqualified draft", ...choice.message } }],
+      usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 },
+    }));
+    let calls = 0;
+    const result = await collectFusionProposals(config, { messages: [] }, async () => {
+      calls++;
+      return observed.response;
+    });
+    assert.equal(calls, 1, "rejected advice must not trigger another inference");
+    assert.deepEqual(result.proposals, []);
+    assert.deepEqual(result.failedModels, ["local/incomplete"]);
+    const usage = await observed.result;
+    assert.equal(usage.delivery, "complete");
+    assert.equal(usage.tokens?.total, 10);
+    await observed.retired;
+  });
+}
+
+test("fusion accepts completed adviser text parts with empty optional metadata", async () => {
+  const config = normalizeFusionConfig({ adviserModels: ["local/complete"] });
+  const result = await collectFusionProposals(config, { messages: [] }, async () => Response.json({
+    choices: [{ finish_reason: "stop", message: {
+      content: [{ type: "text", text: "complete draft" }], refusal: null, function_call: null, tool_calls: [],
+    } }],
+  }));
+  assert.deepEqual(result.proposals, [{ model: "local/complete", content: "complete draft" }]);
+  assert.deepEqual(result.failedModels, []);
 });
 
 test("fusion fails open when adviser bodies stall or exceed their byte bound", async () => {
@@ -100,7 +146,7 @@ test("fusion fails open when adviser bodies stall or exceed their byte bound", a
 
   const oversizedConfig = normalizeFusionConfig({ adviserModels: ["local/oversized"], maxProposalChars: 256 });
   const oversized = await collectFusionProposals(oversizedConfig, { messages: [] }, async () => Response.json({
-    choices: [{ message: { content: "x".repeat(32_000) } }],
+    choices: [{ finish_reason: "stop", message: { content: "x".repeat(32_000) } }],
   }));
   assert.deepEqual(oversized.proposals, []);
   assert.deepEqual(oversized.failedModels, ["local/oversized"]);
@@ -178,3 +224,100 @@ for (const status of [200, 503]) {
 function encodedBytes(value) {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
+for (const failure of ["deadline", "oversized"]) for (const rejected of [false, true]) {
+  test(`fusion retains its reader until ${failure} cancellation settles: rejected=${rejected}`, async () => {
+    const config = { ...normalizeFusionConfig({ adviserModels: ["local/retirement"], maxProposalChars: 256 }), adviserTimeoutMs: 25 };
+    const cleanup = Promise.withResolvers();
+    let cancellations = 0;
+    const response = new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(failure === "oversized" ? "x".repeat(32_000) : '{"choices":['));
+      },
+      cancel() { cancellations++; return cleanup.promise; },
+    }));
+    const retained = [];
+    const result = await collectFusionProposals(config, { messages: [] }, async () => response, work => {
+      const record = { done: false, work };
+      retained.push(record);
+      void work.then(() => { record.done = true; }, () => { record.done = true; });
+    });
+    try {
+      assert.deepEqual(result.failedModels, ["local/retirement"]);
+      assert.equal(cancellations, 1);
+      assert.equal(response.body.locked, true, "pending cleanup must keep the original reader locked");
+      await new Promise(resolve => setImmediate(resolve));
+      assert.ok(retained.some(record => !record.done), "cleanup must remain owned after collection returns");
+    } finally {
+      if (rejected) cleanup.reject(new Error("synthetic cleanup rejection")); else cleanup.resolve();
+      await Promise.allSettled(retained.map(record => record.work));
+      await new Promise(resolve => setImmediate(resolve));
+    }
+    assert.equal(cancellations, 1);
+    assert.equal(response.body.locked, false);
+  });
+}
+
+test("fusion retains HTTP-error body cleanup without delaying collection", async () => {
+  const config = normalizeFusionConfig({ adviserModels: ["local/rejected"] });
+  const cleanup = Promise.withResolvers();
+  let cancellations = 0;
+  const response = new Response(new ReadableStream({ cancel() { cancellations++; return cleanup.promise; } }), { status: 503 });
+  const retained = [];
+  const result = await collectFusionProposals(config, { messages: [] }, async () => response, work => {
+    const record = { done: false, work };
+    retained.push(record);
+    void work.then(() => { record.done = true; }, () => { record.done = true; });
+  });
+  try {
+    assert.deepEqual(result.failedModels, ["local/rejected"]);
+    assert.equal(cancellations, 1);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.ok(retained.some(record => !record.done), "HTTP error cleanup must remain owned");
+  } finally {
+    cleanup.resolve();
+    await Promise.allSettled(retained.map(record => record.work));
+  }
+});
+
+test("fusion retains cleanup for a response arriving after its deadline", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const config = normalizeFusionConfig({ adviserModels: ["local/late"], adviserTimeoutMs: 1_000 });
+  const arrival = Promise.withResolvers();
+  const cleanup = Promise.withResolvers();
+  const retained = [];
+  const pending = collectFusionProposals(config, { messages: [] }, () => arrival.promise, work => {
+    const record = { done: false, work };
+    retained.push(record);
+    void work.then(() => { record.done = true; }, () => { record.done = true; });
+  });
+  t.mock.timers.tick(1_000);
+  assert.deepEqual((await pending).failedModels, ["local/late"]);
+  let cancellations = 0;
+  arrival.resolve(new Response(new ReadableStream({ cancel() { cancellations++; return cleanup.promise; } })));
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(cancellations, 1);
+    assert.ok(retained.some(record => !record.done), "late response cleanup must remain owned");
+  } finally {
+    cleanup.resolve();
+    await Promise.allSettled(retained.map(record => record.work));
+  }
+});
+
+test("fusion retires a successful reader without cancelling its source", async () => {
+  const config = normalizeFusionConfig({ adviserModels: ["local/success"] });
+  let cancellations = 0;
+  const response = new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "proposal" } }] })));
+      controller.close();
+    },
+    cancel() { cancellations++; },
+  }));
+  const retained = [];
+  const result = await collectFusionProposals(config, { messages: [] }, async () => response, work => retained.push(work));
+  await Promise.all(retained);
+  assert.deepEqual(result.proposals, [{ model: "local/success", content: "proposal" }]);
+  assert.equal(cancellations, 0);
+  assert.equal(response.body.locked, false);
+});

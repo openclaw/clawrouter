@@ -16,9 +16,16 @@ const existing = parse(readFileSync(new URL("../../providers/google-gemini.provi
 const wire = JSON.parse(readFileSync(new URL("../../providers/_fixtures/google/media-understanding.json", import.meta.url), "utf8"));
 const capabilities = { audio: "audio.transcription", video: "video.understanding" };
 const compile = manifest => compileProviderSnapshot([manifest]);
-function fixture(modes = ["audio", "video"]) {
+function fixture(modes = ["audio", "video"], isolated = false) {
   const manifest = structuredClone(existing), model = manifest.models.entries.find(model => model.upstream === wire.model);
   assert.ok(model, "the qualified frozen card is already declared");
+  if (isolated) {
+    // Keep provider-wide negative cases independent of the image/music guard order.
+    manifest.capabilities = manifest.capabilities.filter(row => !["image_generate", "music_generate"].includes(row.endpoint));
+    delete manifest.endpoints.image_generate;
+    delete manifest.endpoints.music_generate;
+    manifest.models.entries = manifest.models.entries.filter(row => !row.capabilities.some(id => ["image.generate", "audio.generate"].includes(id)));
+  }
   for (const mode of modes) {
     const id = `inline_${mode}`;
     manifest.capabilities.push({ id: capabilities[mode], endpoint: id, methods: ["POST"] });
@@ -118,6 +125,7 @@ test("inline declarations reject native ambiguity, protocol/capability swaps, pa
 });
 
 test("inline declarations reject origin/auth changes, model aliases and shared token-price inheritance", () => {
+  assert.doesNotThrow(() => compile(fixture(undefined, true)));
   const model = manifest => manifest.models.entries.find(model => model.upstream === wire.model);
   const changes = [
     m => { m.id = "other"; }, m => { m.baseUrls.default = "https://other.example"; }, m => { m.routing.baseUrlParam = "base_url"; },
@@ -129,7 +137,7 @@ test("inline declarations reject origin/auth changes, model aliases and shared t
     m => { model(m).endpointPricing.inline_audio.pricing = structuredClone(model(m).pricing); },
     m => { m.models.entries[0].capabilities.push("audio.transcription"); },
   ];
-  for (const change of changes) { const manifest = fixture(); change(manifest); assert.throws(() => compile(manifest), /Google inline understanding|Google embeddings|invalid manifest/, String(change)); }
+  for (const change of changes) { const manifest = fixture(undefined, true); change(manifest); assert.throws(() => compile(manifest), /Google inline understanding|Google embeddings|invalid manifest/, String(change)); }
 });
 
 test("compiled inline contracts keep raw files, remote input and generated audio outside the actual codec", () => {

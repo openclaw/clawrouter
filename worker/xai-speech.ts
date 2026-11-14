@@ -1,3 +1,4 @@
+import { inputRetirement } from "./input-retirement.ts";
 import { mediaObject } from "./managed-media-json.ts";
 
 export const xaiSpeechFormats = { mp3: "audio/mpeg", wav: "audio/wav", pcm: "audio/pcm", mulaw: "audio/basic", alaw: "audio/alaw" } as const;
@@ -46,25 +47,27 @@ export async function readXaiSpeechVoices(response: Response, signal: AbortSigna
 }
 async function readBytes(response: Response, mime: string, limit: number, signal: AbortSignal): Promise<Uint8Array> {
   const length = response.headers.get("content-length");
-  if (response.status !== 200 || response.redirected || !response.body || response.headers.has("content-range")
+  if (!response.body) fail("http");
+  const reader = response.body.getReader(), input = inputRetirement(reader);
+  if (response.status !== 200 || response.redirected || response.headers.has("content-range")
     || response.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== mime
     || length !== null && (!/^\d+$/.test(length) || !Number.isSafeInteger(Number(length)) || Number(length) > limit)) {
-    void response.body?.cancel().catch(() => undefined); fail("http");
+    await input.retire("cancel"); fail("http");
   }
-  const reader = response.body.getReader(), chunks: Uint8Array[] = [];
-  const abort = () => { void reader.cancel().catch(() => undefined); }; signal.addEventListener("abort", abort, { once: true }); let size = 0;
+  const chunks: Uint8Array[] = [];
+  const abort = () => { void input.retire("cancel", signal.reason); }; signal.addEventListener("abort", abort, { once: true }); let size = 0, eof = false;
   try {
     signal.throwIfAborted();
     for (;;) {
-      const chunk = await reader.read(); signal.throwIfAborted(); if (chunk.done) break;
+      const chunk = await input.read(() => reader.read()); signal.throwIfAborted(); if (chunk.done) { eof = true; break; }
       size += chunk.value.byteLength; if (size > limit) fail("size"); chunks.push(chunk.value);
     }
     if (!response.headers.has("content-encoding") && length !== null && Number(length) !== size) fail("truncated");
     const bytes = new Uint8Array(size); let offset = 0;
     for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
     return bytes;
-  } catch { void reader.cancel().catch(() => undefined); fail("response"); }
-  finally { signal.removeEventListener("abort", abort); reader.releaseLock(); }
+  } catch { await input.retire("cancel", signal.reason); return fail("response"); }
+  finally { signal.removeEventListener("abort", abort); await input.retire(eof ? "eof" : "cancel", signal.reason); }
 }
 function optionalText(value: unknown, limit: number): string | undefined {
   if (value === undefined || value === null) return undefined;

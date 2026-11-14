@@ -85,6 +85,16 @@ export function createPixVerseManagedAdapter(mode: "text" | "image", boundImageI
   };
 }
 
+// Validate the entire planned create before allocating or uploading bytes.
+// The sentinel is local validation only; it is never persisted or dispatched.
+export function preparePixVerseImagePlan(value: unknown): Record<string, unknown> {
+  if (!mediaObject(value) || Object.hasOwn(value, "img_id")) throw new Error("pixverse_input_receipt_required");
+  const body = { ...value, img_id: 1 };
+  createPixVerseManagedAdapter("image", "1").prepare(body, new Headers(), {}, new URLSearchParams());
+  const { img_id: _sentinel, ...plan } = body;
+  return plan;
+}
+
 export function preparePixVerseImageUpload(input: {
   file?: { bytes: Uint8Array; type: string; name: string };
   url?: string;

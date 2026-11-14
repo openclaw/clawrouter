@@ -41,8 +41,11 @@ jobs:
       max-parallel: 4
       matrix:
         include:
+          - consumer: volcengine-payg
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-volcengine-payg.test.mjs
           - consumer: search
-            ref: 1c72f546f839d2790168cd15a9f9d18afaf014ff
+            ref: 0a5f30f82d33eae69d10c5a5ceecd01bdb9706e7
             test: test/openclaw-search.test.mjs
           - consumer: embeddings
             ref: 9d2be9d82c2a6973ae1b025eac4a636964397c28
@@ -62,6 +65,93 @@ jobs:
           - consumer: vercel
             ref: 0093b58c0d132ae1707f9553839f1cf297fb9a25
             test: test/openclaw-vercel.test.mjs
+          - consumer: elevenlabs
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-elevenlabs.test.mjs
+          - consumer: wan
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-wan.test.mjs
+          - consumer: pixverse
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-pixverse.test.mjs
+          - consumer: runway
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-runway.test.mjs
+          - consumer: runway-defaults
+            ref: b01d76f2480c8d6c5c6b918a6fb71acdf3cfe17a
+            test: test/openclaw-runway-defaults.test.mjs
+          - consumer: chutes
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-chutes.test.mjs
+          - consumer: featherless
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-featherless.test.mjs
+          - consumer: azure
+            ref: 4e27e9ab53dd7215f84ffa06ef5f193be7fb603b
+            test: test/openclaw-azure.test.mjs
+          - consumer: venice
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-venice.test.mjs
+          - consumer: novita
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-novita.test.mjs
+          - consumer: gmi
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-gmi.test.mjs
+          - consumer: particle
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-particle.test.mjs
+          - consumer: longcat
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-longcat.test.mjs
+          - consumer: deepgram
+            ref: 0066d51dff16526f9a3aa46c534047aba2632918
+            test: test/openclaw-deepgram.test.mjs
+          - consumer: minimax-m3
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-minimax-m3.test.mjs
+          - consumer: minimax-highspeed
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-minimax-highspeed.test.mjs
+          - consumer: xai-frozen-chat
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-xai-frozen-chat.test.mjs
+          - consumer: stepfun
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-stepfun.test.mjs
+          - consumer: tencent
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-tencent.test.mjs
+          - consumer: xiaomi
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-xiaomi.test.mjs
+          - consumer: zai
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-zai.test.mjs
+          - consumer: qwen-global
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-qwen-global.test.mjs
+          - consumer: gemini36
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-gemini36.test.mjs
+          - consumer: gemini35lite
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-gemini35lite.test.mjs
+          - consumer: gemini31pro
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-gemini31pro.test.mjs
+          - consumer: gemini38
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-gemini38.test.mjs
+          - consumer: vertex
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-vertex.test.mjs
+          - consumer: google-images
+            ref: 4d052fa8347c97e876eb885789a82730e860a62f
+            test: test/openclaw-google-images.test.mjs
+          - consumer: lyria
+            ref: 3645a2c86518e9e98e4df2a81d00355bc6b082c0
+            test: test/openclaw-lyria.test.mjs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

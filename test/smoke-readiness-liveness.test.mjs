@@ -183,7 +183,11 @@ for (const mode of [
     }
     if (mode === "stalled body") {
       assert.equal(stalledBodyClosed, true, "cancel the timed-out response body");
-      assert.ok(secondHealthAt - firstHealthAt >= 2_450, "preserve the 2s attempt and 500ms retry");
+      assert.equal(result.stdout.split(/\r?\n/)[0],
+        "health readiness pending: attempt=1 reason=request error: health request deadline elapsed retryInMs=500");
+      // The attempt deadline starts before fetch, not at the first server arrival.
+      // Pre-spawn elapsed time bounds the whole CLI, not the isolated attempt timer.
+      assert.ok(result.elapsedMs >= 2_450, "whole CLI includes the stalled attempt and retry");
       assert.ok(secondHealthAt - firstHealthAt < 4_000, "do not inherit the deployed 10s attempt limit");
     }
     if (mode === "unavailable stream") {

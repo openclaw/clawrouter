@@ -1,3 +1,4 @@
+import { assertFalRunDispatch } from "./fal-dispatch.ts";
 import { canonicalMediaBase64, mediaObject } from "./managed-media-json.ts";
 import { observeFalImage, readFalImage, type FalImageRequest } from "./fal-images.ts";
 
@@ -33,12 +34,7 @@ export function prepareFalGrokImage(model: string, value: unknown): FalImageRequ
     headers: new Headers({ "content-type": "application/json", accept: "application/json" }) };
 }
 export function assertFalGrokImageDispatch(request: Request, prepared: FalImageRequest): void {
-  const url = new URL(request.url);
-  if (request.method !== "POST" || url.origin !== "https://fal.run" || url.pathname !== prepared.path
-    || !(falGrokImageModels as readonly string[]).includes(prepared.model) || prepared.path !== "/" + prepared.model
-    || url.username || url.password || url.search || url.hash
-    || !/^Key [\x21-\x7e]{1,4096}$/.test(request.headers.get("authorization") ?? "")
-    || request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json") fail("dispatch");
+  assertFalRunDispatch(request, prepared, falGrokImageModels, fail);
 }
 export const observeFalGrokImage = observeFalImage;
 export const readFalGrokImage = readFalImage;

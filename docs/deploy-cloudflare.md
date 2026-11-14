@@ -10,6 +10,77 @@ For the isolated non-production profile used by AWS FakeCo clients, follow
 [FakeCo staging](fakeco.md). Its locked resource names and dedicated workflow
 must be used instead of overriding the production deployment ad hoc.
 
+## Large HTTP staged release
+
+`config/deployment-hold.json` currently holds this source out of the production
+train. Scheduled selection exits without deploying; manual selection and
+`pnpm cf:deploy` refuse. The hold is read from the selected commit, so an
+environment variable or a different control checkout cannot release it. Remove
+the hold only in a reviewed follow-up after separately authorized infrastructure
+preparation and a compatible recovery version exist. This does not disable the
+workflow or change an already deployed Worker.
+
+The new `v6-large-http` Durable Object classes and cron configuration require
+an additive deployment before any percentage rollout. Do not bypass the train's
+non-versioned configuration or secret-lineage checks. Ordinary rollback across
+class creation is unavailable; recovery must retain the new classes, private
+native assets, control token, callbacks and outstanding accounting owners.
+
+After building and rendering the exact reviewed release, prepare three local
+configurations sharing the same immutable Worker, native and dashboard assets:
+
+```sh
+pnpm cf:large-http:release prepare .wrangler.generated.toml .wrangler/release
+pnpm cf:large-http:release verify .wrangler/release/manifest.json
+```
+
+Packaging does not deploy. It removes build hooks, hashes every asset and config,
+and refuses artifact/configuration drift. Bootstrap stops both large ingress and
+native starts. Compatible blue enables native lifecycle while keeping large
+ingress closed. Green opens ingress. Both controls default to enabled outside
+these explicit release artifacts. Blue and green have identical native settings
+and fingerprints, including the content-addressed private runtime.
+
+The reviewed execution sequence is bootstrap, idempotent control-secret
+provisioning, compatible blue, warm/readiness proof, then upload green and advance
+through the approved activation. A single cutover after readiness is sufficient
+when the session-continuity rehearsal supports it; gradual percentages are not a
+requirement. `cf:large-http:provision` only creates a
+missing secret, verifies its presence and never rotates an existing value or
+retries an ambiguous write. Secret creation is its own version/lineage boundary;
+attest the resulting version and establish blue afterward. Do not put it inside
+the train's preserved-secret upload sequence.
+
+Before production authorization, rehearse that sequence and recovery using
+separate Cloudflare resources and synthetic credentials/upstream. Verify
+mixed-version private callbacks, normal connection reuse/reconnects, bounded
+maximum/overflow behavior, once-only accounting, admission stop and exact
+retirement/absence. Keep native lifecycle enabled during a traffic split.
+Closing ingress preserves capacity; `/v1/admin/large-http` with
+`{"accepting":false}` stops new admission and drains it. Retain uncertain
+nonretryable deliveries and debt for reconciliation; never replay inference.
+Recovery selects a compatible post-migration version, not pre-migration main.
+Once large traffic has been admitted, that version must preserve the supported
+large-body envelope. An ingress-closed staging blue cannot restore those large
+conversations; it is a temporary fail-closed control until compatible service
+returns.
+
+The deployment requirement is session continuity, not uninterrupted execution.
+An active request, stream or Codex turn may fail briefly. An isolated rehearsal
+must deploy during a real Codex turn, then complete a subsequent turn in the same
+saved session using prior conversation context. Record the session ID, active
+request/turn and deployment timestamps, recovery duration and any scripted or
+human intervention. Reconnection alone is insufficient. Do not add socket handoff
+or live request migration solely to prevent a temporary failure. Never blindly
+replay uncertain upstream inference; preserve its continuation/accounting owner
+and use an assessed resume or a distinct follow-up question.
+
+These artifacts do not supply production authorization or an executable launch
+manifest. Record exact source/config/version identities, live preflight,
+observations, stop conditions, cost decisions and recovery receipts separately.
+Existing performance results still apply only to their measured inputs; this
+release-control change requires its own behavior proof and affected validation.
+
 ## Required Bindings
 
 - `POLICY_KV`: one-time migration seeds for access policies, issued credential
@@ -172,6 +243,13 @@ exhausts `max_retries`. An unconsumed DLQ retains messages for four days. Treat
 any DLQ depth as an operator incident: inspect the failed message, repair the
 underlying Durable Object or Worker issue, and replay it to `USAGE_QUEUE`
 before that recovery window expires.
+
+A UsageLedger `/snapshot` CPU-limit reset can also fail queued `/ingest` calls
+before they execute; zero-CPU ingest failures can therefore exhaust retries.
+Check the shard's snapshot failures as well as the failed ingest. Exact snapshot
+rollups remove those aggregate scans only after the shard's historical migration
+completes. The `usage_rollup_maintenance` alarm log reports retained row count,
+database bytes, and migration watermarks without principal IDs or event content.
 
 Provider API keys are Cloudflare Worker secrets, not GitHub repository files:
 
@@ -880,9 +958,16 @@ for five minutes, and no explicit grant restriction:
 
 `strategy` may be `priority`, `round_robin`, `least_used`, `most_remaining`,
 `threshold`, or `weighted_random`. `threshold` keeps the pool's current grant
-until its most constrained fresh quota window reaches `switchAtUsedPercent`,
+until its most constrained open quota window reaches `switchAtUsedPercent`,
 then selects the healthiest candidate below that cutoff only when it improves
-remaining capacity by at least `hysteresisPercent`. It requires
+remaining capacity by at least `hysteresisPercent`. If no measured candidate
+qualifies, it moves to a grant with no reading in an open window: one that has
+never reported quota, or whose window has reset since it was last used.
+Threshold routing compares the last reading of every open window, however old,
+because remaining quota only falls until reset; a grant last seen at or past the
+cutoff is therefore never a replacement until its window resets.
+`staleAfterSeconds` still bounds the readings `most_remaining` ranks and the
+evidence `staleState: "deny"` requires. Threshold routing requires
 `stickiness: "none"`; the pool cursor supplies affinity. `stickiness` may otherwise be
 `none`, `identity`, or `session`;
 identity and session values are hashed before selection and are not persisted as
@@ -893,6 +978,30 @@ Set `staleState` to `deny` to fail closed when all eligible grants lack fresh
 quota evidence. Set `failover` to `false` when a policy must never retry a
 request with another credential. The console exposes these controls and each
 grant's selection count and last-selected time.
+
+Administrators can share existing subscription owners across policies with
+`grantRouting.sharedGrants` on `PUT /v1/admin/policies/<policy-id>`:
+
+```json
+{ "sharedGrants": { "anthropic": ["oauth/contributor_policy/account"] } }
+```
+
+Merge this field into the policy's existing `grantRouting` object. It names
+existing enabled subscription grants, with at most 32 shared owners per policy.
+Routing keeps their full original keys; credentials, refresh ownership and quota
+stay with each original owner. Source-policy access remains available. The
+consumer's providers, models, token-reference allowlist, reserve and budgets
+still apply, and usage is charged to the consumer policy with the original grant
+key. This does not share another policy's bindings or follow its shared references.
+Revoking or pausing the source grant disables it for every consumer within the
+normal hot-cache maximum age. Replacing it with an API-key grant does not inherit
+subscription sharing. Disabling the source policy alone does not revoke its grants.
+
+Omitting `sharedGrants` preserves existing membership, including during console
+edits. Send `{}` to remove all shared members. There is no credential migration,
+copy or new refresh owner. A provider pool remains bounded to 98 candidates:
+32 policy grants, 32 tenant grants, two default references and up to 32 shared
+owners. Missing shared owners do not implicitly enable environment fallback.
 
 Provider manifests declare the response headers used to collect request, token,
 input-token, output-token, subscription-window, or credit quota. ClawRouter

@@ -26,11 +26,13 @@ auth:
       headers:
         accept: application/json
         anthropic-dangerous-direct-browser-access: "true"
-        user-agent: claude-cli/2.1.288 (external, cli)
+        user-agent: claude-cli/2.1.322 (external, cli)
         x-app: cli
       appendHeaders:
         anthropic-beta: claude-code-20250219,oauth-2025-04-20
       requestTransforms:
+        # Keep the historical billing prefix stable: changing it invalidates
+        # thinking signatures when existing conversations replay their history.
         prependSystem:
           - type: text
             text: "x-anthropic-billing-header: cc_version=2.1.288; cc_entrypoint=sdk-cli;"
@@ -52,6 +54,44 @@ auth:
             messages:
               - role: user
                 content: "."
+products:
+  - id: platform-api
+    displayName: Anthropic API
+    commercialModel: metered
+    authenticationMethod: api-key
+    binding: { type: provider-default }
+    endpoints: [models_list, models_retrieve, messages, count_tokens]
+    offers:
+      - { endpoint: models_list, capability: models.list, models: null }
+      - { endpoint: models_retrieve, capability: models.retrieve, models: null }
+      - &anthropicMessagesProductOffer
+        endpoint: messages
+        capability: llm.messages
+        models: &anthropicProductModels
+          - anthropic/claude-sonnet-5-5
+          - anthropic/claude-haiku-5-5
+          - anthropic/claude-opus-5-5
+          - anthropic/claude-opus-5
+          - anthropic/claude-sonnet-5
+          - anthropic/claude-fable-5-2
+          - anthropic/claude-fable-5-1
+          - anthropic/claude-fable-5
+          - anthropic/claude-opus-4-8
+          - anthropic/claude-sonnet-4-6
+          - anthropic/claude-haiku-4-5
+      - &anthropicCountTokensProductOffer
+        endpoint: count_tokens
+        capability: llm.count_tokens
+        models: *anthropicProductModels
+  - id: claude-subscription
+    displayName: Claude subscription
+    commercialModel: subscription
+    authenticationMethod: oauth2
+    binding: { type: grant-transport, grantKind: subscription }
+    endpoints: [messages, count_tokens]
+    offers:
+      - *anthropicMessagesProductOffer
+      - *anthropicCountTokensProductOffer
 baseUrls:
   default: https://api.anthropic.com
 routing:
@@ -161,6 +201,16 @@ quota:
         - id: subscription-seven-day
           kind: subscription
           unit: percent
+          window: seven_day
+          fixedLimit: 100
+          collection:
+            pointer: /limits
+            filter: { pointer: /kind, equals: weekly_all }
+          usedPointer: /percent
+          resetPointer: /resets_at
+        - id: subscription-seven-day
+          kind: subscription
+          unit: percent
           window: seven_day_scoped
           fixedLimit: 100
           collection:
@@ -213,6 +263,7 @@ endpoints:
 models:
   entries:
     - id: anthropic/claude-sonnet-5-5
+      displayName: "Claude Sonnet 5.5"
       upstream: claude-sonnet-5-5
       capabilities: [llm.messages, llm.count_tokens]
       nativeCapabilities:
@@ -253,6 +304,7 @@ models:
         maxInputTokens: 1000000
         defaultMaxOutputTokens: 128000
     - id: anthropic/claude-haiku-5-5
+      displayName: "Claude Haiku 5.5"
       upstream: claude-haiku-5-5
       capabilities: [llm.messages, llm.count_tokens]
       nativeCapabilities:
@@ -301,6 +353,7 @@ models:
           cacheWrite1hInputMicrosPerMillion: 1000000
           outputMicrosPerMillion: 2500000
     - id: anthropic/claude-opus-5-5
+      displayName: "Claude Opus 5.5"
       upstream: claude-opus-5-5
       capabilities: [llm.messages, llm.count_tokens]
       pricingRef: anthropic-claude-opus-5-5-standard-2026-10-11
@@ -315,6 +368,7 @@ models:
         maxInputTokens: 1000000
         defaultMaxOutputTokens: 128000
     - id: anthropic/claude-opus-5
+      displayName: "Claude Opus 5"
       upstream: claude-opus-5
       capabilities: [llm.messages, llm.count_tokens]
       pricingRef: anthropic-claude-opus-5-standard-2026-08-27
@@ -329,6 +383,7 @@ models:
         maxInputTokens: 1000000
         defaultMaxOutputTokens: 128000
     - id: anthropic/claude-sonnet-5
+      displayName: "Claude Sonnet 5"
       upstream: claude-sonnet-5
       capabilities: [llm.messages, llm.count_tokens]
       pricingRef: anthropic-claude-sonnet-5-standard-2026-08-27
@@ -342,7 +397,48 @@ models:
         outputMicrosPerMillion: 10000000
         maxInputTokens: 1000000
         defaultMaxOutputTokens: 128000
+    - id: anthropic/claude-fable-5-2
+      displayName: "Claude Fable 5.2"
+      upstream: claude-fable-5-2
+      capabilities: [llm.messages, llm.count_tokens]
+      supportedReasoningEfforts: [low, medium, high, xhigh, max]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          messages:
+            sources: [https://platform.claude.com/docs/en/models/fable-5-2/overview]
+            checkedAt: "2026-11-10"
+            input: [text, image]
+            contextWindow: 1000000
+            maxOutputTokens: 128000
+            inference: {chat: true}
+          count_tokens:
+            sources: [https://platform.claude.com/docs/en/models/fable-5-2/overview, https://platform.claude.com/docs/en/build-with-claude/token-counting]
+            checkedAt: "2026-11-10"
+            input: [text, image]
+            contextWindow: 1000000
+      pricingRef: anthropic-claude-fable-5-2-standard-2026-11-09
+      pricing:
+        effectiveAt: "2026-11-09"
+        source: https://platform.claude.com/docs/en/models/fable-5-2/overview
+        anthropicModifiers:
+          checkedAt: "2026-11-10"
+          sources:
+            - https://platform.claude.com/docs/en/build-with-claude/fast-mode#pricing
+            - https://platform.claude.com/docs/en/manage-claude/data-residency#pricing
+            - https://platform.claude.com/docs/en/models/fable-5-2/migration-guide
+          fastMultiplier: 2
+          usMultiplier: 1.1
+          serviceTiers: [standard]
+        inputMicrosPerMillion: 8000000
+        cachedInputMicrosPerMillion: 200000
+        cacheWrite5mInputMicrosPerMillion: 10000000
+        cacheWrite1hInputMicrosPerMillion: 16000000
+        outputMicrosPerMillion: 40000000
+        maxInputTokens: 1000000
+        defaultMaxOutputTokens: 128000
     - id: anthropic/claude-fable-5-1
+      displayName: "Claude Fable 5.1"
       upstream: claude-fable-5-1
       capabilities: [llm.messages, llm.count_tokens]
       pricingRef: anthropic-claude-fable-5-1-standard-2026-09-01
@@ -357,6 +453,7 @@ models:
         maxInputTokens: 1000000
         defaultMaxOutputTokens: 128000
     - id: anthropic/claude-fable-5
+      displayName: "Claude Fable 5"
       upstream: claude-fable-5
       capabilities: [llm.messages, llm.count_tokens]
       pricingRef: anthropic-claude-fable-5-standard-2026-08-28
@@ -371,6 +468,7 @@ models:
         maxInputTokens: 1000000
         defaultMaxOutputTokens: 128000
     - id: anthropic/claude-opus-4-8
+      displayName: "Claude Opus 4.8"
       upstream: claude-opus-4-8
       capabilities: [llm.messages, llm.count_tokens]
       pricingRef: anthropic-claude-opus-4-8-standard-2026-06-22
@@ -385,6 +483,7 @@ models:
         maxInputTokens: 1000000
         defaultMaxOutputTokens: 128000
     - id: anthropic/claude-sonnet-4-6
+      displayName: "Claude Sonnet 4.6"
       upstream: claude-sonnet-4-6
       capabilities: [llm.messages, llm.count_tokens]
       pricingRef: anthropic-claude-sonnet-4-6-standard-2026-06-22
@@ -399,6 +498,7 @@ models:
         maxInputTokens: 1000000
         defaultMaxOutputTokens: 64000
     - id: anthropic/claude-haiku-4-5
+      displayName: "Claude Haiku 4.5"
       upstream: claude-haiku-4-5
       capabilities: [llm.messages, llm.count_tokens]
       pricingRef: anthropic-claude-haiku-4-5-standard-2026-06-22

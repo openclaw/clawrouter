@@ -1,5 +1,5 @@
-# Standard API only; region and plan contracts: docs/hosted-platform-providers.md.
-# Endpoint/model source checked 2026-11-03: https://cloud.tencent.com/document/product/1823/132248
+# Frozen mainland standard contract: docs/tencent-tokenhub-native-catalog.md.
+# Primary endpoint, model and postpaid alias evidence checked 2026-11-03.
 schema: clawrouter.service-provider.v1
 id: tencent-tokenhub
 displayName: Tencent TokenHub mainland
@@ -27,10 +27,19 @@ adapter:
   stream: openai_sse
   error: openai_error
 capabilities:
+  - id: models.list
+    endpoint: models_list
+    methods: [GET]
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
 endpoints:
+  models_list:
+    method: GET
+    path: /models
+    requestFormat: openai.models
+    responseFormat: openai.models
+    timeoutMs: 30000
   chat_completions:
     modelPassthrough: {}
     path: /chat/completions
@@ -41,8 +50,60 @@ endpoints:
 models:
   entries:
     - id: tencent-tokenhub/deepseek-v4-flash
+      displayName: "DeepSeek V4 Flash"
       upstream: deepseek-v4-flash
       capabilities: [llm.chat]
+    - id: tencent-tokenhub/hy3-preview
+      displayName: "HY3 Preview"
+      upstream: hy3-preview
+      capabilities: [llm.chat]
+      availability:
+        version: clawrouter.model-availability.v1
+        status: upstream_alias
+        servingModel: hy3
+        effectiveAt: "2026-08-31"
+        checkedAt: "2026-11-03"
+        sources: [https://cloud.tencent.com/announce/detail/2391]
+    - id: tencent-tokenhub/hy3
+      displayName: "HY3"
+      upstream: hy3
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [none, high]
+      requestParameters:
+        chat_completions:
+          sources:
+            - https://cloud.tencent.com/document/product/1823/132252
+            - https://cloud.tencent.com/document/product/1823/131208
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+          defaultReasoningEffort: high
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://cloud.tencent.com/document/product/1823/132252]
+            checkedAt: "2026-11-03"
+            input: [text]
+    - id: tencent-tokenhub/hy4-preview
+      displayName: "HY4 Preview"
+      upstream: hy4-preview
+      capabilities: [llm.chat]
+      supportedReasoningEfforts: [none, high]
+      requestParameters:
+        chat_completions:
+          sources:
+            - https://cloud.tencent.com/document/product/1823/132252
+            - https://cloud.tencent.com/document/product/1823/131208
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+          defaultReasoningEffort: high
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://cloud.tencent.com/document/product/1823/132252]
+            checkedAt: "2026-11-03"
+            input: [text]
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

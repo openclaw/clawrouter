@@ -5,8 +5,10 @@ wrapper in [PR661](https://github.com/openclaw/clawrouter/pull/661), source
 `e2203e7ff4a18b1a2bbf95d8d57c0f9b64113d75`, landed as
 `4cb7ba420622183cc2c1fa44961f55d45d2346b9`, and the landed `prepareGoogleImage`
 codec. It qualifies only `gemini-3.1-flash-image` and `gemini-3-pro-image` from
-OpenClaw `31ad71a8addc1d42fbc5478f7e114860f5cbf6c7`. It does not activate YAML,
-generated discovery, shared routing or live image calls.
+OpenClaw `31ad71a8addc1d42fbc5478f7e114860f5cbf6c7`. The existing Google YAML now
+declares that exact endpoint and both image-only model rows. Generated discovery
+and actual-client integration still require the serialized snapshot proof. No
+live image call is made.
 
 ## Exact declaration
 
@@ -60,7 +62,7 @@ byte bounds, output count or another provider's card.
 
 Current unlocalized primary [image documentation](https://ai.google.dev/gemini-api/docs/image-generation)
 and [deprecation schedule](https://ai.google.dev/gemini-api/docs/deprecations),
-checked 2026-11-03, list both frozen non-preview identities without an announced
+checked 2026-11-04, list both frozen non-preview identities without an announced
 shutdown. Their preview IDs are separate retired identities and are rejected.
 Current examples prefer Interactions; they do not prove live GenerateContent
 compatibility. This slice preserves the actual frozen codec/wrapper wire and
@@ -71,5 +73,61 @@ matched model paths, conservative admission, unchanged existing routes, rejected
 origins/formats/prices and strict request preparation. Source1 owns common matching,
 auth, classification, dispatch and accounting; source5 owns the wrapper; source2
 owns actual-client image consumption; source6 owns serialized snapshot and composed
-Worker proof. Existing Google YAML remains source3-owned and unactivated until
-those runtime prerequisites qualify.
+Worker proof. The bundled declaration follows landed matcher
+[PR672](https://github.com/openclaw/clawrouter/pull/672)
+(`0777fa1cde38d9ed48fb664afb9eddfae55c6b71`), actual image runtime
+[PR675](https://github.com/openclaw/clawrouter/pull/675)
+(`cd75e6962b1c5656e4ea1aade84f39c1a622a9ba`) and shared-context pricing
+[PR681](https://github.com/openclaw/clawrouter/pull/681)
+(`9c21b70de2755b3353d1fc633d344beb8cf62db0`). Four declaration cases exercise
+actual bundled identities, native matching/preparation, order independence,
+manifest offers, ambiguity rejection and conservative admission. They do not
+replace source2/source6 actual-client and serialized snapshot proof. Source1
+retains the real Worker fixture and dispatch ownership. Its exact duplicate-row
+fixture correction [PR692](https://github.com/openclaw/clawrouter/pull/692) is
+consumed from landed `ed1b1318d8d0e9a2f31c235d1473c8b77dc861ba`, without copying
+or modifying its assertions. No snapshot is regenerated
+in this source slice, and model availability does not establish account entitlement.
+
+## Serialized declaration and actual-client integration
+
+Source PR698 declaration `d17a72f66e76fdade623c3b7297c50b44b193957` is
+composed onto qualified `58eac9c245f9585f8a179b1d0a335592824af5b4` with
+its authorship and exact two image cards, endpoint and capability preserved.
+All existing Google rows and ordinary routes remain intact. All 87 manifests
+compile; the snapshot is regenerated, never hand-merged. Its SHA256 is
+`e399655b27106730e569917a162a55747865b484319c8845aba0ddc3fc5967e2`.
+
+Local proof passes 147 focused image, compiler, Worker, admission and pricing
+cases, Worker types and 1,051 Chat matrix/consumer-selection cases. The retained
+negative compiler fixtures omit unrelated image declarations before asserting
+their intended music, Omni, speech or understanding guard. Positive fixtures
+still compile the full manifest; rejection patterns and mutations are unchanged.
+Frozen dependency inputs match the existing qualified install.
+
+Fourteen unchanged actual image-host cases are enrolled in hosted CI against
+public OpenClaw `4d052fa8347c97e876eb885789a82730e860a62f`, tree
+`ad0cbb314cb080588bc6d6b1b676f6bd1b8da8c2`. This candidate has scoped offline
+image execution qualification; its pending broader native SDK/CI is separate.
+No earlier SDK artifact or test result is transferred to this new source.
+
+Seven cases execute separately through native and manifest-only Worker/SQLite
+isolates. They cover actual registered ClawRouter selection, both exact models,
+text/edit, original key binding, byte-exact PNG delivery, unknown-dollar and
+invalid-key denial, already-aborted requests, and incomplete paid output without
+replay. The tests import the real `generateImage` host and provider; no parser is
+copied, fetch stub installed or request patched.
+
+The actual registration exposes `imageGenerationProviders`; the image host
+returns `{ provider, model, images, ... }`. The qualified Google adapter uses
+its runtime fetch and supplies manifest `pathParams.model` itself. This replaces
+the prior candidate's ambient-fetch dispatcher mismatch. The manifest harness
+checks eligible image offers without prohibiting unrelated native capabilities.
+Every outer policy retains its real 100-micro cap, positive seven-micro
+`policy_fixed` receipts and null token counters.
+
+Both exact-head actual-client/SQLite contracts must pass before qualification;
+native router checks alone do not establish client proof. No SDK report rerender,
+new local install, live inference or account change is performed. The declaration
+preserves frozen GenerateContent transport; current examples or an available
+model ID do not prove live entitlement or backwards compatibility.

@@ -19,7 +19,7 @@ test("catalog routes restrict models and samples to each endpoint's capabilities
 test("demo exposes modern unified routes and endpoint-specific model options", () => {
   const { routes } = demoCatalog();
   const openai = routes.openaiCompatible.find(provider => provider.provider === "openai");
-  for (const path of ["/v1/decisions", "/v1/responses/compact", "/v1/responses/input_tokens", "/v1/moderations", "/v1/audio/speech", "/v1/audio/transcriptions", "/v1/images/generations"]) assert.ok(openai.endpoints.includes(path), path);
+  for (const path of ["/v1/decisions", "/v1/responses/compact", "/v1/responses/input_tokens", "/v1/moderations", "/v1/audio/speech", "/v1/audio/transcriptions", "/v1/images/generations", "/v1/images/edits"]) assert.ok(openai.endpoints.includes(path), path);
   const speech = routes.manifestProxy.find(route => route.provider === "openai" && route.requestFormat === "openai.audio_speech");
   assert.ok(speech.models.length);
   assert.ok(speech.models.every(model => model.capabilities.includes("audio.speech")));

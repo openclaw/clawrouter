@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "sigv4-encoded-query",
+      "split": "development",
+      "base": "317597490b88f87d2a60637adfd4d05954517d91",
+      "oracle": "a33e43bcca09de95d13fb4774108dfb8b35ba9ab",
+      "editPaths": [
+        "worker/providers.ts"
+      ],
+      "visibleTests": [
+        "worker/test/aws-bedrock.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/aws-bedrock.test.mjs"
+      ],
+      "instruction": "Bedrock SigV4 requests fail for mixed-case or percent-encoded query names and repeated values. Canonicalize query parameters by AWS URI encoding each name and value before ASCII ordering, including value ordering for repeated names. Preserve name-prefix ordering, payload/header signing and requests without queries."
+    },
+    {
+      "id": "opaque-responses-input",
+      "split": "development",
+      "base": "bc05314a66d003dcda4b9e432709de0b4f3e8686",
+      "oracle": "5256930b4fd76933432263152d32378ed28698cb",
+      "editPaths": [
+        "worker/accounting.ts",
+        "worker/pricing.ts"
+      ],
+      "visibleTests": [
+        "worker/test/pricing.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/opaque-input-accounting.test.mjs"
+      ],
+      "instruction": "Responses compaction items and reasoning input items with encrypted_content can conceal more input tokens than their serialized size indicates. Reserve the full qualified model input bound for these protocol items, including malformed or empty opaque values. Reject budgeted opaque input without a qualified bound unless an explicit fixed request price applies. Do not treat literal text, function arguments, schemas or output controls as opaque input. Preserve existing pricing and output reservations."
+    }
+  ]
+}

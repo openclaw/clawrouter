@@ -1,0 +1,49 @@
+# Raw file protocol: https://developers.deepgram.com/docs/pre-recorded-audio
+# Requires bounded binary runtime dispatch, not the generic JSON proxy.
+schema: clawrouter.service-provider.v1
+id: deepgram
+displayName: Deepgram
+status: experimental
+class: rest_json
+service:
+  platform: deepgram
+  kind: tool_provider
+  upstreamService: deepgram
+  configKeys: [DEEPGRAM_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Token ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.deepgram.com
+routing:
+  nativePrefixes: [clawrouter-deepgram, deepgram]
+adapter:
+  request: rest_json
+  response: rest_json
+capabilities:
+  - id: audio.transcription
+    endpoint: listen
+    methods: [POST]
+endpoints:
+  listen:
+    path: /v1/listen
+    requestFormat: deepgram.prerecorded
+    responseFormat: deepgram.prerecorded
+    timeoutMs: 120000
+models:
+  entries:
+    # Native query/default identity only. No qualified upstream-dollar price card.
+    - id: deepgram/nova-3
+      displayName: "Nova 3"
+      upstream: nova-3
+      capabilities: [audio.transcription]
+billing:
+  meter: clawrouter.requests
+  dimensions: [provider, endpoint, key, service, subject]
+  counters:
+    - name: request
+      source: request.count
+      unit: request

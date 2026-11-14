@@ -42,7 +42,7 @@ export function basetenCatalogRequest(inferenceBaseUrl: string, selectedApiKey: 
   }
   return new Request("https://inference.baseten.co/v1/models", {
     method: "GET", headers: { accept: "application/json", authorization: `Bearer ${selectedApiKey}` },
-    credentials: "omit", redirect: "error", signal,
+    credentials: "omit", redirect: "manual", signal,
   });
 }
 

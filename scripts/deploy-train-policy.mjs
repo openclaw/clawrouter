@@ -69,7 +69,7 @@ export function recoveryDecision(state) {
 }
 const PREFIX = 'clawrouter-train:v1:';
 export function deploymentMessage(state) {
-  return PREFIX + JSON.stringify({ run: String(state.run), blue: versionId(state.blue), green: versionId(state.green), sha: fullSha(state.sha), unsafe: Boolean(state.unsafe), exposed: Boolean(state.exposed), status: state.status });
+  return PREFIX + JSON.stringify({ run: String(state.run), blue: versionId(state.blue), green: versionId(state.green), sha: fullSha(state.sha), unsafe: Boolean(state.unsafe), exposed: Boolean(state.exposed), status: state.status, ...(state.native ? { native: state.native } : {}), ...(state.cutover ? { cutover: state.cutover } : {}) });
 }
 export function deploymentState(deployment) {
   const message = deployment?.annotations?.['workers/message'];
@@ -77,7 +77,21 @@ export function deploymentState(deployment) {
   const state = JSON.parse(message.slice(PREFIX.length));
   if (!/^\d+$/.test(state.run) || typeof state.unsafe !== 'boolean' || typeof state.exposed !== 'boolean' || !['rolling', 'done', 'rehearsed', 'rolled-back'].includes(state.status)) throw new Error('Invalid remote train journal');
   versionId(state.blue); versionId(state.green); fullSha(state.sha);
+  if (state.native && (state.native.schema !== 1 || !/^[a-f0-9]{64}$/.test(state.native.runtimeSha ?? '') || Object.keys(state.native).sort().join() !== 'runtimeSha,schema')) throw new Error('Invalid remote native compatibility receipt');
+  if (state.cutover) {
+    const c = state.cutover;
+    if (!state.native || c.schema !== 1 || !/^[a-f0-9]{64}$/.test(c.blueRuntimeSha ?? '') ||
+        c.blueRuntimeSha === state.native.runtimeSha || state.unsafe ||
+        !['draining', 'warming', 'recover-draining-blue', 'recover-draining-green', 'recover-draining-recovery', 'recover-warming'].includes(c.phase) ||
+        !/^[a-f0-9]{40}$/.test(c.nativeSource ?? '') || Object.keys(c).sort().join() !== 'blueRuntimeSha,nativeSource,phase,recovery,schema') throw new Error('Invalid remote native cutover receipt');
+    versionId(c.recovery);
+    if ([state.blue,state.green].includes(c.recovery)) throw new Error('Recovery must retain the compatible control protocol');
+    const target = ['warming', 'recover-draining-green'].includes(c.phase) ? state.green : ['recover-warming','recover-draining-recovery'].includes(c.phase) ? c.recovery : state.blue;
+    if (deployment.versions?.length !== 1 || deployment.versions[0].percentage !== 100 || deployment.versions[0].version_id !== target ||
+        state.status === 'done' && c.phase !== 'warming' || state.status === 'rolled-back' && c.phase !== 'recover-warming' || state.status === 'rehearsed')
+      throw new Error('Native cutover journal requires one exact full-traffic version');
+  }
   const ids = deployment.versions.map((v) => v.version_id);
-  if (ids.some((id) => ![state.blue, state.green].includes(id))) throw new Error('Train journal does not match deployed versions');
+  if (ids.some((id) => ![state.blue, state.green, state.cutover?.recovery].includes(id))) throw new Error('Train journal does not match deployed versions');
   return state;
 }

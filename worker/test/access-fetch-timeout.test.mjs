@@ -1,3 +1,4 @@
+import { accessBytesResponse, accessCertsResponse } from "./access-byte-fixture.mjs";
 import "./typescript-setup.mjs";
 import { captureTimeouts } from "../../test/helpers/timeout-capture.mjs";
 import assert from "node:assert/strict";
@@ -50,7 +51,7 @@ function accessEnv(kv = new Map(), users = new Map()) {
       },
       async get(key, type) {
         const value = kv.get(key);
-        return value === undefined ? null : type === "json" ? structuredClone(value) : value;
+        return value === undefined ? null : type === "stream" ? accessBytesResponse(JSON.stringify(value), "").body : type === "json" ? structuredClone(value) : value;
       },
     },
     ACCESS_CONTROL: {
@@ -96,7 +97,7 @@ test("public Access certs fetch attaches a 30s AbortSignal", async (context) => 
   context.mock.method(globalThis, "fetch", async (input, init) => {
     assert.equal(String(input), certsUrl);
     certsInit = init;
-    return Response.json({ keys: [] });
+    return accessCertsResponse({ keys: [] }, certsUrl);
   });
 
   const session = await verifiedAccessSession(sessionRequest(unsignedJwt()), accessEnv());
@@ -123,7 +124,7 @@ test("public Access certs fetch aborts a hung certs endpoint", { timeout: 2_000 
   });
   await assert.rejects(
     verifiedAccessSession(sessionRequest(unsignedJwt()), accessEnv()),
-    (error) => error instanceof DOMException && (error.name === "TimeoutError" || error.name === "AbortError"),
+    (error) => error.code === "access_deadline",
   );
   assert.deepEqual(timeouts, [30_000]);
 });
@@ -152,7 +153,7 @@ test("GitHub identity fetch attaches a 30s AbortSignal and fails open on timeout
   const timeouts = captureTimeouts(context);
   let identityInit;
   context.mock.method(globalThis, "fetch", async (input, init) => {
-    if (String(input) === certsUrl) return Response.json({ keys: [jwk] });
+    if (String(input) === certsUrl) return accessCertsResponse({ keys: [jwk] }, certsUrl);
     assert.equal(String(input), identityUrl);
     identityInit = init;
     throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
@@ -169,7 +170,7 @@ test("first Access login cannot overwrite a user disabled after its initial look
   const kid = "bootstrap-race-key";
   const jwk = { ...await crypto.subtle.exportKey("jwk", keys.publicKey), kid, kty: "RSA" };
   const assertion = await signedJwt(keys.privateKey, kid);
-  context.mock.method(globalThis, "fetch", async () => Response.json({ keys: [jwk] }));
+  context.mock.method(globalThis, "fetch", async () => accessCertsResponse({ keys: [jwk] }, certsUrl));
   const users = new Map();
   const disabled = { role: "user", tenantId: "managed", enabled: false, groups: ["manual"], contentRetentionDisabled: true };
   const env = accessEnv(new Map(), users);

@@ -41,8 +41,72 @@ endpoints:
 models:
   entries:
     - id: zai/glm-5.3
+      displayName: "GLM-5.3"
       upstream: glm-5.3
       capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/zai/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text]
+    - id: zai/glm-5.3-flash
+      displayName: "GLM-5.3 Flash"
+      upstream: glm-5.3-flash
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/zai/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text, image]
+    - id: zai/glm-5.2
+      displayName: "GLM-5.2"
+      upstream: glm-5.2
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/zai/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text]
+    - id: zai/glm-5-turbo
+      displayName: "GLM-5 Turbo"
+      upstream: glm-5-turbo
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/zai/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text]
+    - id: zai/glm-5v-turbo
+      displayName: "GLM-5v Turbo"
+      upstream: glm-5v-turbo
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://github.com/openclaw/openclaw/blob/31ad71a8addc1d42fbc5478f7e114860f5cbf6c7/extensions/zai/openclaw.plugin.json]
+            checkedAt: "2026-11-04"
+            input: [text, image]
+    # Global standard API still documents this identity; no retirement or alias inferred.
+    - id: zai/glm-5.1
+      displayName: "GLM-5.1"
+      upstream: glm-5.1
+      capabilities: [llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://docs.z.ai/guides/llm/glm-5.1, https://docs.z.ai/guides/overview/pricing]
+            checkedAt: "2026-11-04"
+            input: [text]
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

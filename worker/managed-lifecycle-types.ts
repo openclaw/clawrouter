@@ -1,6 +1,7 @@
 import type { CompiledEndpoint } from "./types.ts";
 
-export type ManagedProtocol = "replicate.predictions" | "fal.queue" | "kie.jobs" | "vydra.jobs" | "dashscope.video" | "pixverse.video" | "runway.tasks" | "together.video" | "google.omni_video" | "openrouter.video";
+import type { ManagedProtocol } from "../shared/provider-snapshot.ts";
+export type { ManagedProtocol, ManagedFileLinks } from "../shared/provider-snapshot.ts";
 export type ManagedObservationLoss = "expired_or_unknown" | "deleted" | "canceled_or_deleted";
 export type ManagedTerminal = "succeeded" | "failed" | "canceled" | "aborted";
 export type ManagedControlAction = "retrieve" | "result" | "cancel";
@@ -16,6 +17,10 @@ export interface ManagedCreate {
 
 export interface ManagedReadContext {
   action: ManagedAction;
+  // The actual operation signal; newly qualified readers may require it.
+  signal?: AbortSignal;
+  // Opt-in direct-reader custody; legacy adapters keep their existing contract.
+  registerInput?: (input: import("./input-retirement.ts").InputRetirement, response?: Response) => void;
   // Undefined only for create. Other reads must verify this bound identity;
   // an ID-less acknowledgement/result inherits it from the original request.
   expectedId?: string;
@@ -99,22 +104,28 @@ export interface ManagedFileState {
   status: "processing" | "active" | "failed";
   body: Record<string, unknown>;
 }
-export type ManagedFileLinks = { mode?: "metadata"; metadata: string; download: string }
-  | { mode: "download_only"; metadata?: never; download: string };
 export interface ManagedFilePaths { id: string; metadata?: string; download: string }
+export interface ManagedFileReadContext {
+  signal: AbortSignal;
+  registerInput: NonNullable<ManagedReadContext["registerInput"]>;
+}
 // Source-owned wrappers expose this through managedFileAdapter(protocol).
 // These methods parse/prepare only; the scoped runtime owns all authority/I/O.
 interface ManagedFileAdapterBase {
   protocol: ManagedProtocol;
+  // Opt-in declarations only. Runtime qualification precedes their use.
+  publicControl?(action: ManagedFileAction, endpoint: Pick<CompiledEndpoint, "method" | "path" | "query">,
+    file: ManagedFileDescriptor): Pick<ManagedControl, "path" | "query">;
+  downloadMimeTypes?: readonly string[];
   describe(observation: ManagedObservation, selectedBaseUrl: string): readonly ManagedFileDescriptor[];
   identify(action: ManagedFileAction, pathParams: Record<string, string>, query: URLSearchParams): string;
   control(action: ManagedFileAction, endpoint: Pick<CompiledEndpoint, "method" | "path" | "query">,
     file: ManagedFileDescriptor, selectedBaseUrl: string, state?: ManagedFileState): ManagedControl;
-  readFile(response: Response, file: ManagedFileDescriptor, maxBytes: number): Promise<Uint8Array>;
+  readFile(response: Response, file: ManagedFileDescriptor, maxBytes: number, context?: ManagedFileReadContext): Promise<Uint8Array>;
   rewrite(body: Record<string, unknown>, paths: readonly ManagedFilePaths[]): Record<string, unknown>;
 }
 export type ManagedFileAdapter = ManagedFileAdapterBase & (
-  { mode?: "metadata"; readState(response: Response, file: ManagedFileDescriptor): Promise<ManagedFileState> }
+  { mode?: "metadata"; readState(response: Response, file: ManagedFileDescriptor, context?: ManagedFileReadContext): Promise<ManagedFileState> }
   // Availability comes from the original succeeded job and bound descriptor.
   // This mode neither manufactures metadata nor follows a response-supplied URL.
   | { mode: "download_only"; readState?: never }

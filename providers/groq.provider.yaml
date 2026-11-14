@@ -39,6 +39,7 @@ endpoints:
 models:
   entries:
     - id: groq/gpt-oss-120b
+      displayName: "GPT-OSS 120B"
       upstream: openai/gpt-oss-120b
       capabilities: [llm.chat]
       supportedReasoningEfforts: [low, medium, high]
@@ -70,6 +71,7 @@ models:
             cachedInputMicrosPerMillion: 75000
             outputMicrosPerMillion: 600000
     - id: groq/gpt-oss-20b
+      displayName: "GPT-OSS 20B"
       upstream: openai/gpt-oss-20b
       capabilities: [llm.chat]
       supportedReasoningEfforts: [low, medium, high]
@@ -120,6 +122,7 @@ models:
             cachedInputMicrosPerMillion: 37500
             outputMicrosPerMillion: 300000
     - id: groq/gpt-oss-safeguard-20b
+      displayName: "GPT-OSS Safeguard 20B"
       upstream: openai/gpt-oss-safeguard-20b
       capabilities: [llm.chat]
       supportedReasoningEfforts: [low, medium, high]

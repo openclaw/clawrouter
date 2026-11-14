@@ -48,4 +48,14 @@ export interface ImageRequestPricing {
     "grok-imagine-image-2.0": { inputMicrosPerImage: number; outputMicrosPerImage: Record<"low" | "medium", Record<"1k" | "2k", number>> };
   };
 }
-export type RequestPricing = SuccessfulRequestPricing | OutcomeRequestPricing | ImageRequestPricing;
+/** Published native-result tariff; admission freezes this before dispatch. */
+export interface DeepSeekSearchRequestPricing {
+  unit: "request";
+  protocol: "deepseek.search";
+  version: string;
+  effectiveAt: "2026-11-01T00:00:00+08:00";
+  source: "https://api-docs.deepseek.com/guides/search/";
+  successfulNonemptyRequestMicros: 750;
+  emptyRequestMicros: 0;
+}
+export type RequestPricing = SuccessfulRequestPricing | OutcomeRequestPricing | ImageRequestPricing | DeepSeekSearchRequestPricing;

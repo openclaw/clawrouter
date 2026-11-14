@@ -1,3 +1,16 @@
+import type { MiniMaxSearchBinding } from "../shared/minimax-search-binding.ts";
+import type { MiniMaxVideoBinding } from "../shared/minimax-video-binding.ts";
+import { miniMaxVideoOwnerBinding } from "./minimax-video-credential.ts";
+import { miniMaxSearchOwnerBinding } from "./minimax-search-credential.ts";
+import type { SearchGrantMutationActor } from "./authority-contracts.ts";
+import type { MusicCoverControlProfile } from "./authority-contracts.ts";
+import type { CopilotAccountAttempt, CopilotAccountBinding } from "./copilot-account-flow.ts";
+import { miniMaxImageOwnerBinding } from "./minimax-image-credential.ts";
+import type { MiniMaxImageBinding } from "../shared/minimax-image-binding.ts";
+import { vertexOwnerBinding, type VertexAnthropicBinding } from "./vertex-anthropic-binding.ts";
+import { miniMaxOwnerBinding, type MiniMaxAnthropicBinding } from "./minimax-anthropic-binding.ts";
+import type { MiniMaxDeviceAttempt } from "./minimax-device-flow.ts";
+import type { CopilotDeviceAttempt, CopilotDeviceCredential } from "./copilot-device-flow.ts";
 import { miniMaxApiKeySecret } from "./native-media-credential.ts";
 import type { UpstreamGrant, RefreshConfig } from "./types.ts";
 import { readNativeMediaBinding, type NativeMediaBinding } from "../shared/native-media-binding.ts";
@@ -10,7 +23,21 @@ interface CredentialMetadata extends Pick<UpstreamGrant,
 }
 
 export interface CredentialRecord extends CredentialMetadata, Pick<UpstreamGrant, "credential" | "credentials" | "accessToken" | "refreshToken"> {
+  // Private owner state; deliberately absent from every materialized projection.
+  minimaxDeviceAttempt?: MiniMaxDeviceAttempt;
+  copilotDeviceAttempt?: CopilotDeviceAttempt;
+  copilotDeviceCredential?: CopilotDeviceCredential;
+  copilotAccountAttempt?: CopilotAccountAttempt;
+  copilotAccountBinding?: CopilotAccountBinding;
+  vertexAnthropicBinding?: VertexAnthropicBinding | null;
+  vertexPrivateKey?: string;
+  minimaxAnthropicBinding?: MiniMaxAnthropicBinding | null;
   nativeMediaBinding?: NativeMediaBinding | null;
+  // Keeps repeated Music revocation under current administrator authority.
+  minimaxMusicTombstone?: true;
+  minimaxSearchBinding?: MiniMaxSearchBinding | null;
+  minimaxVideoBinding?: MiniMaxVideoBinding | null;
+  minimaxImageBinding?: MiniMaxImageBinding | null;
   version: 1;
   generation: number;
   lineage?: string;
@@ -36,7 +63,12 @@ export interface CredentialRecord extends CredentialMetadata, Pick<UpstreamGrant
 }
 
 export interface CredentialProjection extends CredentialMetadata {
+  vertexAnthropicBinding: VertexAnthropicBinding | null;
+  minimaxAnthropicBinding: MiniMaxAnthropicBinding | null;
   nativeMediaBinding: NativeMediaBinding | null;
+  minimaxSearchBinding: MiniMaxSearchBinding | null;
+  minimaxVideoBinding: MiniMaxVideoBinding | null;
+  minimaxImageBinding: MiniMaxImageBinding | null;
   credentialStore: "durable_object";
   credentialGeneration: number;
   credentialLineage?: string;
@@ -55,6 +87,8 @@ export interface OwnerResponse {
 }
 
 export interface MaterializeRequest {
+  coverOriginal?: MusicCoverControlProfile;
+  operation?: "minimax.images" | "minimax.music" | "minimax.search" | "minimax.video";
   key: string;
   grant: UpstreamGrant;
   legacy?: UpstreamGrant | null;
@@ -68,6 +102,15 @@ export interface PutRequest {
   // Only the privileged admin mutation supplies this owner intent. Grant
   // metadata, legacy imports, OAuth completion and pool submissions do not.
   nativeMediaIntent?: NativeMediaBinding | null;
+  minimaxSearchIntent?: MiniMaxSearchBinding | null;
+  minimaxVideoIntent?: MiniMaxVideoBinding | null;
+  videoActor?: SearchGrantMutationActor;
+  searchActor?: SearchGrantMutationActor;
+  musicActor?: SearchGrantMutationActor;
+  minimaxImageIntent?: MiniMaxImageBinding | null;
+  vertexAnthropicIntent?: VertexAnthropicBinding | null;
+  vertexPrivateKey?: string;
+  minimaxAnthropicIntent?: MiniMaxAnthropicBinding | null;
   key: string;
   grant: UpstreamGrant;
   preserveUnspecifiedSecrets: boolean;
@@ -79,6 +122,11 @@ export interface PutRequest {
 
 export function credentialProjection(record: CredentialRecord): CredentialProjection {
   return {
+    minimaxSearchBinding: miniMaxSearchOwnerBinding(record),
+    minimaxVideoBinding: miniMaxVideoOwnerBinding(record),
+    minimaxImageBinding: miniMaxImageOwnerBinding(record),
+    vertexAnthropicBinding: vertexOwnerBinding(record),
+    minimaxAnthropicBinding: miniMaxOwnerBinding(record),
     nativeMediaBinding: record.providerId === "minimax" && miniMaxApiKeySecret(record) ? readNativeMediaBinding(record.nativeMediaBinding) : null,
     credentialStore: "durable_object",
     credentialGeneration: record.generation,
@@ -105,14 +153,19 @@ export function credentialProjection(record: CredentialRecord): CredentialProjec
 }
 
 export function hasFreshPrimaryCredentials(previous: CredentialRecord, replacement: CredentialRecord): boolean {
-  const oldValues = new Set([previous.credential, previous.accessToken, ...Object.values(previous.credentials ?? {})]);
-  return [replacement.credential, replacement.accessToken, ...Object.values(replacement.credentials ?? {})]
+  const oldValues = new Set([previous.vertexPrivateKey, previous.credential, previous.accessToken, ...Object.values(previous.credentials ?? {})]);
+  return [replacement.vertexPrivateKey, replacement.credential, replacement.accessToken, ...Object.values(replacement.credentials ?? {})]
     .some(value => typeof value === "string" && !oldValues.has(value));
 }
 
 export function materializedGrant(metadata: UpstreamGrant, record: CredentialRecord): UpstreamGrant {
   return {
     ...metadata,
+    minimaxSearchBinding: miniMaxSearchOwnerBinding(record),
+    minimaxVideoBinding: miniMaxVideoOwnerBinding(record),
+    minimaxImageBinding: miniMaxImageOwnerBinding(record),
+    vertexAnthropicBinding: vertexOwnerBinding(record),
+    minimaxAnthropicBinding: miniMaxOwnerBinding(record),
     nativeMediaBinding: record.providerId === "minimax" && miniMaxApiKeySecret(record) ? readNativeMediaBinding(record.nativeMediaBinding) : null,
     credential: record.credential,
     credentials: record.credentials,

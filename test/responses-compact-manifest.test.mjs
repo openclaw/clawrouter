@@ -28,11 +28,15 @@ test("ordinary unpriced models remain supported without compact capability", () 
   const snapshot = compile(manifest => {
     const model = removePricing(manifest);
     model.capabilities = model.capabilities.filter(capability => capability !== "llm.responses.compact");
+    for (const product of manifest.products) for (const offer of product.offers) {
+      if (offer.capability === "llm.responses.compact") offer.models = offer.models.filter(id => id !== model.id);
+    }
   });
   const model = snapshot.providers[0].models.find(model => model.id === "openai/gpt-6-astra");
   assert.ok(model.capabilities.includes("llm.responses"));
   assert.ok(!model.capabilities.includes("llm.responses.compact"));
   assert.equal(model.pricing, null);
+  assert.ok(snapshot.providers[0].offer_definitions.some(offer => offer.model?.id === model.id && offer.capability === "llm.responses"));
 });
 const mutations = {
   wrong_response: manifest => { manifest.endpoints.responses_compact.responseFormat = "openai.responses"; },

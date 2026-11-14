@@ -21,6 +21,7 @@ export function isBedrockEmbeddingModel(model: string): boolean {
 export interface BedrockEmbeddingRequest {
   modelId: string; family: Family; dimensions: number; count: number;
   body: Record<string, unknown>; path: string; headers: Headers;
+  cohereV3TypedFloat?: true;
 }
 const encoder = new TextEncoder();
 
@@ -28,6 +29,7 @@ export function prepareBedrockEmbedding(modelId: string, body: unknown): Bedrock
   const spec = resolveSpec(modelId);
   if (!object(body) || encoder.encode(JSON.stringify(body)).byteLength > 2 * 1024 * 1024) throw new Error("invalid_bedrock_embedding_body");
   let dimensions = spec.defaultDimensions, count = 1;
+  let cohereV3TypedFloat: true | undefined;
   if (spec.family === "titan-v1" || spec.family === "titan-v2") {
     keys(body, spec.family === "titan-v1" ? ["inputText"] : ["inputText", "dimensions", "normalize", "embeddingTypes"]);
     text(body.inputText);
@@ -43,7 +45,10 @@ export function prepareBedrockEmbedding(modelId: string, body: unknown): Bedrock
     body.texts.forEach(text); count = body.texts.length;
     const truncate = spec.family === "cohere-v3" ? ["NONE", "START", "END"] : ["NONE", "LEFT", "RIGHT"];
     if (body.truncate !== undefined && !truncate.includes(String(body.truncate))) throw new Error("invalid_bedrock_embedding_truncate");
-    if (body.embedding_types !== undefined) floatOnly(body.embedding_types);
+    if (body.embedding_types !== undefined) {
+      floatOnly(body.embedding_types);
+      if (spec.family === "cohere-v3") cohereV3TypedFloat = true;
+    }
     if (body.output_dimension !== undefined) dimensions = dimension(body.output_dimension, spec);
   } else if (spec.family === "nova") {
     keys(body, ["taskType", "schemaVersion", "singleEmbeddingParams"]);
@@ -65,6 +70,7 @@ export function prepareBedrockEmbedding(modelId: string, body: unknown): Bedrock
     keys(body.text, ["inputText"]); text(body.text.inputText);
   }
   return { modelId, family: spec.family, dimensions, count, body,
+    ...(cohereV3TypedFloat ? { cohereV3TypedFloat } : {}),
     path: "/model/" + encodeURIComponent(modelId) + "/invoke",
     headers: new Headers({ "content-type": "application/json", accept: "application/json" }) };
 }
@@ -75,9 +81,20 @@ export function observeBedrockEmbedding(value: unknown, request: BedrockEmbeddin
   vectors: number[][]; inputTokens: number | null;
 } {
   if (!complete || !object(value) || value.error !== undefined || value.__type !== undefined) throw new Error("invalid_bedrock_embedding_response");
+  // Titan Multimodal uses a nullable error field, not a truthy diagnostic flag.
+  if (value.message !== undefined && value.message !== null && request.family === "titan-v1"
+    && resolveSpec(request.modelId) === specs["amazon.titan-embed-image-v1"])
+    throw new Error("invalid_bedrock_embedding_response");
   let rows: unknown;
   switch (request.family) {
-    case "cohere-v3": rows = value.embeddings; break;
+    case "cohere-v3":
+      rows = value.embeddings;
+      if (object(rows)) {
+        if (!request.cohereV3TypedFloat || !Object.hasOwn(rows, "float") || Object.keys(rows).length !== 1)
+          throw new Error("invalid_bedrock_embedding_response");
+        rows = rows.float;
+      }
+      break;
     case "cohere-v4": rows = object(value.embeddings) ? value.embeddings.float : value.embeddings; break;
     case "nova":
       if (!Array.isArray(value.embeddings) || value.embeddings.length !== 1 || !object(value.embeddings[0])

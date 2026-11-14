@@ -41,6 +41,7 @@ endpoints:
 models:
   entries:
     - id: cerebras/qwen-3.8-27b
+      displayName: "Qwen3.8 27B"
       upstream: qwen-3.8-27b
       capabilities: [llm.chat]
 billing:

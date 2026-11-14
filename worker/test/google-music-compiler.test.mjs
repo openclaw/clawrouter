@@ -10,16 +10,26 @@ const { configuredUpstream } = await import("../providers.ts");
 const { estimateCost } = await import("../proxy-accounting.ts");
 const { validateBudgetReservation } = await import("../accounting.ts");
 const existing = parse(readFileSync(new URL("../../providers/google-gemini.provider.yaml", import.meta.url), "utf8"));
+// Exercise the music contract independently of already-declared image routes.
+existing.capabilities = existing.capabilities.filter(value => value.endpoint !== "image_generate");
+delete existing.endpoints.image_generate;
+existing.models.entries = existing.models.entries.filter(value => !value.capabilities.includes("image.generate"));
 const compile = manifest => compileProviderSnapshot([manifest]);
 const ids = ["lyria-3-clip-preview", "lyria-3-pro-preview"];
 const body = () => ({ contents: [{ role: "user", parts: [{ text: "Synthetic music contract fixture" }] }],
   generationConfig: { responseModalities: ["AUDIO", "TEXT"] } });
 function fixture() {
   const manifest = structuredClone(existing);
+  manifest.capabilities = manifest.capabilities.filter(value => value.endpoint !== "music_generate");
+  manifest.models.entries = manifest.models.entries.filter(value => !ids.includes(value.upstream));
   manifest.capabilities.push({ id: "audio.generate", endpoint: "music_generate", methods: ["POST"] });
   manifest.endpoints.music_generate = { method: "POST", path: "/v1beta/models/${model}:generateContent", pathParams: ["model"],
     requestFormat: "google.music_generate", responseFormat: "google.music", timeoutMs: 600000 };
-  for (const upstream of ids) manifest.models.entries.push({ id: `google/${upstream}`, upstream, capabilities: ["audio.generate"] });
+  for (const upstream of ids) {
+    // Rebuild the music contract without dropping declared model metadata.
+    const declared = existing.models.entries.find(value => value.upstream === upstream);
+    manifest.models.entries.push({ ...structuredClone(declared), id: `google/${upstream}`, upstream, capabilities: ["audio.generate"] });
+  }
   return manifest;
 }
 function selection(provider, model, requestBody = body()) {
@@ -137,6 +147,8 @@ test("Google music declaration does not broaden the actual wrapper to missing MI
 
 test("Google music and image declarations retain separate native formats and reject mixed model capabilities", () => {
   const manifest = fixture();
+  manifest.capabilities = manifest.capabilities.filter(value => value.endpoint !== "image_generate");
+  manifest.models.entries = manifest.models.entries.filter(value => !value.capabilities.includes("image.generate"));
   manifest.capabilities.push({ id: "image.generate", endpoint: "image_generate", methods: ["POST"] });
   manifest.endpoints.image_generate = { method: "POST", path: "/v1beta/models/${model}:generateContent", pathParams: ["model"],
     requestFormat: "google.image_generate", responseFormat: "google.image" };

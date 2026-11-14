@@ -3,6 +3,15 @@ import test from "node:test";
 import { DEFAULT_GRANT_ROUTING, grantRoutingPolicy } from "../grant-routing.ts";
 import { normalizePolicyRecord } from "../authority-policy.ts";
 
+test("shared membership preserves full owner keys and bounds the total inventory", () => {
+  const sharedGrants = { anthropic: ["oauth/source/claude", "oauth/tenants/team/account", "oauth/source/claude", "oauth/source/", "oauth/tenants/account", "oauth/source/account/extra", "oauth/source/bad\u0000" ] };
+  const normalized = grantRoutingPolicy({ sharedGrants });
+  assert.deepEqual(normalized.sharedGrants, { anthropic: ["oauth/source/claude", "oauth/tenants/team/account"] });
+  assert.deepEqual(normalizePolicyRecord({ grantRouting: normalized }, false).grantRouting.sharedGrants, normalized.sharedGrants);
+  const many = grantRoutingPolicy({ sharedGrants: { anthropic: Array.from({ length: 32 }, (_, i) => `oauth/source/account-${i}`), openai: ["oauth/source/openai"] } });
+  assert.equal(Object.values(many.sharedGrants).flat().length, 32);
+});
+
 test("stored policies and runtime routing share defaults for malformed records", () => {
   for (const value of [undefined, null, false, 1, "priority", [], { strategy: "invalid", stickiness: "invalid", staleAfterSeconds: 29, switchAtUsedPercent: NaN, hysteresisPercent: 101, includedQuotaReservePercent: 51, eligibleGrants: [] }]) {
     assert.deepEqual(grantRoutingPolicy(value), DEFAULT_GRANT_ROUTING);

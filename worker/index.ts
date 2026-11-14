@@ -1,3 +1,8 @@
+import { emptyUsageSnapshot } from "./usage-sharding.ts";
+import { sessionUsageReport } from "./usage-report-session.ts";
+import {lifecycleCall} from './large-http/lifecycle-client.ts';
+import {largeHttpRoute} from './large-http/admission.ts';
+import {largeHttpService} from './large-http/service.ts';
 import { consoleAsset } from "./console-assets.ts";
 import { proxyTranscription, transcriptionPath } from "./transcription.ts";
 import { withNativeLocalError } from "./native-errors.ts";
@@ -41,10 +46,17 @@ export { BudgetLedgerObject, GrantCredentialObject, UsageLedgerObject };
 
 const handler: ExportedHandler<Env, QueueMessage> = {
   async fetch(request, env, context) {
+    const ingressPath = new URL(request.url).pathname;
+    if(ingressPath.startsWith('/__large_http/'))return largeHttpService(request,env);
     const backgroundMark = currentBackgroundMark();
     // Private responses must not pass through public correlation, logging, or CORS.
-    if (privatePath(new URL(request.url).pathname)) return privateCodex(request, env);
-    const path = canonicalPath(new URL(request.url).pathname);
+    if (privatePath(ingressPath)) return privateCodex(request, env);
+    const path = canonicalPath(ingressPath);
+    // Bearer asset paths must not enter correlation/logging/CORS. Publication
+    // itself uses the ordinary authenticated API path below and returns no
+    // verifier until the private owner and immutable archive acknowledge it.
+    if (path.startsWith("/v1/input-assets/") && path !== "/v1/input-assets/openrouter/music")
+      return (await import("./published-music.ts")).servePublishedMusicInput(request, env);
     const correlated = correlateIngressRequest(request);
     let response: Response;
     try {
@@ -57,29 +69,43 @@ const handler: ExportedHandler<Env, QueueMessage> = {
     // Mutations served by this isolate take effect here at once; other isolates
     // converge within the hot-cache max age.
     if (mutatesHotState(request.method, path)) { clearHotCaches(); fenceSharedHotCache(); }
-    // Stale-cache refreshes and coalesced counters registered during this request.
+    // Best-effort facade over a scalar sequence cohort, including interleaved
+    // registrations. Its own timers never join another request's native I/O.
     const background = pendingBackgroundWork(backgroundMark);
     if (background) context.waitUntil(background);
     response = withNativeLocalError(response, path, correlated.requestId);
     response = withBackgroundRecovery(withRequestId(response, correlated.requestId), request);
+    if (env.LARGE_HTTP_TESTING === '1' && largeHttpRoute(correlated.request)) response.headers.set('x-large-http-route', largeHttpRoute(correlated.request)!);
     // The correlation wrapper makes a mutable copy without buffering streams.
     if (env.CF_VERSION_METADATA?.id) response.headers.set("x-clawrouter-version-id", env.CF_VERSION_METADATA.id);
+    if (/^\/v1\/(?:admin|session)\/usage\/(?:report|events|validate)$/.test(path)) {
+      response.headers.set("cache-control", "no-store");
+      response.headers.set("x-content-type-options", "nosniff");
+    }
     return corsEnabled(path) ? withCors(response) : response;
   },
   queue,
-  scheduled: scheduledContentCleanup,
+  async scheduled(controller, env) {
+    await Promise.all([
+      scheduledContentCleanup(controller, env),
+      env.LARGE_HTTP_POOL && env.LARGE_HTTP_TOKEN && env.LARGE_HTTP_ENABLED !== '0'
+        ? lifecycleCall(env, 'activate', {}) : Promise.resolve(),
+    ]);
+  },
 };
 
 export default handler;
 
 function mutatesHotState(method: string, path: string): boolean {
   if (path === "/v1/oauth/callback") return true;
+  if (method === "DELETE" && path === "/v1/admin/usage/report") return false;
   if (method === "GET" || method === "HEAD" || method === "OPTIONS") return false;
   return path.startsWith("/v1/admin/") || path.startsWith("/v1/session/credentials") || path.startsWith("/v1/pool-submissions/");
 }
 
 async function route(request: Request, env: Env, context: ExecutionContext): Promise<Response> {
   const url = new URL(request.url), rawPath = url.pathname, path = canonicalPath(rawPath);
+
   if (request.method === "OPTIONS" && corsEnabled(path)) return corsPreflight();
   if (request.method === "GET" && rawPath === "/") return redirect(`/dashboard${url.search}`);
   if (request.method === "GET" && rawPath === "/dashboard") return redirect(`/dashboard/home${url.search}`);
@@ -92,17 +118,22 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
   if (request.method === "GET" && path === "/v1/health") return Response.json(healthStatus(env));
   if (request.method === "GET" && path === "/v1/providers") return Response.json(snapshot);
   if (request.method === "GET" && path === "/v1/routes") return Response.json(routeCatalog());
+  if (request.method === "POST" && path === "/v1/input-assets/openrouter/music")
+    return (await import("./published-music.ts")).publishMusicInput(request, env);
   if (request.method === "GET" && path === "/v1/session") return sessionResponse(request, env);
   if (request.method === "POST" && path === "/v1/session/login") return localLogin(request, env);
   if (request.method === "POST" && path === "/v1/session/logout") return localLogout(request, env);
   if (request.method === "GET" && path === "/v1/session/avatar") return avatarResponse(request, env);
   if (request.method === "GET" && path === "/v1/entitlements") return entitlementResponse(request, env);
+  if (["GET","DELETE"].includes(request.method) && path === "/v1/session/usage/report") return sessionUsageReport(request, env, request.method === "DELETE" ? "release" : "report");
+  if (request.method === "GET" && path === "/v1/session/usage/events") return sessionUsageReport(request, env, "events");
+  if (request.method === "GET" && path === "/v1/session/usage/validate") return sessionUsageReport(request, env, "validate");
   if (request.method === "GET" && path === "/v1/session/usage") return sessionUsage(request, env);
   if (path === "/v1/session/credentials" || path.startsWith("/v1/session/credentials/")) return sessionCredentialsApi(request, env, path);
   if (request.method === "GET" && path === "/v1/me") return meResponse(request, env);
   if (request.method === "GET" && path === "/v1/pool") return poolResponse(request, env);
   if (request.method === "GET" && path === "/v1/usage") return userUsage(request, env);
-  if (request.method === "GET" && path === "/v1/models") return modelsResponse(request, env);
+  if (request.method === "GET" && path === "/v1/models") return modelsResponse(request, env, context);
   if (request.method === "GET" && path.startsWith("/v1/models/")) {
     const id = decodePathSegment(path.slice("/v1/models/".length));
     const match = id.match(/^(openai|anthropic)\/(.+)$/);
@@ -112,7 +143,7 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
     }
     return proxyNative(request, env, context, `/v1/native/${match[1]}/v1/models/${encodeURIComponent(match[2])}`);
   }
-  if (request.method === "GET" && path === "/v1/catalog") return catalogResponse(request, env);
+  if (request.method === "GET" && path === "/v1/catalog") return catalogResponse(request, env, context);
   if (request.method === "GET" && path === "/v1/oauth/callback") return oauthCallback(request, env);
   if (path.startsWith("/v1/pool-submissions/")) return poolSubmissionApi(request, env, path);
   if (path.startsWith("/v1/admin/")) return adminApi(request, env, path);
@@ -168,12 +199,14 @@ async function sessionUsage(request: Request, env: Env): Promise<Response> {
   const session = await verifiedAccessSession(request, env);
   if (!session) return errorResponse("access_session_required", "a verified Cloudflare Access session is required", 401);
   const policies = await sessionPolicies(session, env);
-  const usage = await usageSnapshots(env, policies.map((entry) => ({ policyId: entry.policyId, tenantId: entry.policy.tenantId ?? "default" })), { kind: "principal", id: session.email });
+  const params = new URL(request.url).searchParams;
+  const budgetsOnly = params.getAll("budgets_only").length === 1 && params.get("budgets_only") === "true";
+  const usage = budgetsOnly ? emptyUsageSnapshot("not_requested") : await usageSnapshots(env, policies.map((entry) => ({ policyId: entry.policyId, tenantId: entry.policy.tenantId ?? "default" })), { kind: "principal", id: session.email });
   const policyRows = await Promise.all(policies.map(async (entry) => ({ policyId: entry.policyId, kid: entry.policyId, tenantId: entry.policy.tenantId ?? "default", enabled: entry.policy.enabled, providers: entry.policy.providers, tokenRole: entry.policy.tokenRole ?? null, monthlyBudgetMicros: entry.policy.monthlyBudgetMicros ?? null, dailyBudgetMicros: entry.policy.dailyBudgetMicros ?? null, weeklyBudgetMicros: entry.policy.weeklyBudgetMicros ?? null, serviceTiers: entry.policy.serviceTiers ?? null, limitHint: entry.policy.limitHint ?? null, requestCostMicros: entry.policy.requestCostMicros ?? null, requestCostsMicros: entry.policy.requestCostsMicros ?? null, budgetScope: entry.policy.budgetScope ?? "policy", budget: await budgetStatus(env, entry.policyId, entry.policy, budgetPrincipal({ credentialId: null, principalId: session.email, policy: entry.policy })) })));
   return privateJson({ session: publicSession(session), policies: policyRows, usage });
 }
 
-function openAiPath(path: string): boolean { return ["/v1/chat/completions", "/v1/responses", "/v1/decisions", "/v1/responses/compact", "/v1/responses/input_tokens", "/v1/embeddings", "/v1/moderations", "/v1/audio/speech", "/v1/images/generations"].includes(path); }
+function openAiPath(path: string): boolean { return ["/v1/chat/completions", "/v1/responses", "/v1/decisions", "/v1/responses/compact", "/v1/responses/input_tokens", "/v1/embeddings", "/v1/moderations", "/v1/audio/speech", "/v1/images/generations", "/v1/images/edits"].includes(path); }
 
 function responseControlPath(path: string, method: string): { id: string; action: "retrieve" | "cancel" } | null {
   const match = path.match(/^\/v1\/responses\/([^/]+)(\/cancel)?$/);
@@ -192,7 +225,7 @@ function serviceIndex(env: Env) {
       adminBootstrap: "/v1/admin/bootstrap", adminOverview: "/v1/admin/overview", adminUsers: "/v1/admin/users", adminUsage: "/v1/admin/usage", adminPolicies: "/v1/admin/policies",
       adminCredentials: "/v1/admin/credentials", adminConnections: "/v1/admin/connections", adminAccessUsers: "/v1/admin/access-users",
       adminAssignmentRules: "/v1/admin/assignment-rules", adminFusion: "/v1/admin/fusion", oauthCallback: "/v1/oauth/callback",
-      openaiCompatible: ["/v1/audio/transcriptions", "/v1/chat/completions", "/v1/responses", "/v1/decisions", "/v1/responses/compact", "/v1/responses/input_tokens", "/v1/embeddings", "/v1/moderations", "/v1/audio/speech", "/v1/images/generations"], manifestProxy: "/v1/proxy/{provider}/{endpoint}", nativeProxy: "/v1/native/{provider}/{provider-native-path}",
+      openaiCompatible: ["/v1/audio/transcriptions", "/v1/chat/completions", "/v1/responses", "/v1/decisions", "/v1/responses/compact", "/v1/responses/input_tokens", "/v1/embeddings", "/v1/moderations", "/v1/audio/speech", "/v1/images/generations", "/v1/images/edits"], manifestProxy: "/v1/proxy/{provider}/{endpoint}", nativeProxy: "/v1/native/{provider}/{provider-native-path}",
     },
   };
   if (localAuthEnabled(env)) Object.assign(index.endpoints, { sessionLogin: "/v1/session/login", sessionLogout: "/v1/session/logout" });

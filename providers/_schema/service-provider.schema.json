@@ -9,6 +9,140 @@
     "schema": { "const": "clawrouter.service-provider.v1" },
     "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
     "displayName": { "type": "string" },
+    "products": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "displayName",
+          "commercialModel",
+          "authenticationMethod",
+          "binding",
+          "endpoints"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 64,
+            "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+          },
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "commercialModel": {
+            "enum": [
+              "metered",
+              "subscription",
+              "prepaid",
+              "unbilled",
+              "unknown"
+            ]
+          },
+          "authenticationMethod": {
+            "enum": [
+              "api-key",
+              "oauth2",
+              "aws-sigv4",
+              "binding",
+              "none",
+              "unknown"
+            ]
+          },
+          "binding": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": [
+                  "type"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "type": {
+                    "const": "provider-default"
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "required": [
+                  "type",
+                  "grantKind"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "type": {
+                    "const": "grant-transport"
+                  },
+                  "grantKind": {
+                    "enum": [
+                      "api_key",
+                      "oauth",
+                      "subscription"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          "offers": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 256,
+            "items": {
+              "type": "object",
+              "required": [
+                "endpoint",
+                "capability",
+                "models"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "endpoint": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "capability": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "models": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "array",
+                      "minItems": 1,
+                      "maxItems": 4096,
+                      "uniqueItems": true,
+                      "items": {
+                        "type": "string",
+                        "minLength": 1
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "endpoints": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
     "description": { "type": "string" },
     "tags": { "type": "array", "items": { "type": "string" } },
     "status": { "enum": ["experimental", "stable", "deprecated", "disabled"] },
@@ -233,8 +367,7 @@
                 "additionalProperties": false,
                 "required": [
                   "pointer",
-                  "filter",
-                  "modelPointer"
+                  "filter"
                 ],
                 "properties": {
                   "pointer": {
@@ -605,6 +738,12 @@
     },
     "endpoint": {
       "allOf": [{
+        "if": { "anyOf": [
+          { "properties": { "requestFormat": { "pattern": "^aws_bedrock\\.converse" } }, "required": ["requestFormat"] },
+          { "properties": { "responseFormat": { "pattern": "^aws_bedrock\\.converse" } }, "required": ["responseFormat"] }
+        ] },
+        "then": { "oneOf": [{ "$ref": "#/$defs/bedrockConverseEndpoint" }, { "$ref": "#/$defs/bedrockConverseStreamEndpoint" }] }
+      }, {
         "if": { "properties": { "requestFormat": { "const": "openai.responses_compact" } }, "required": ["requestFormat"] },
         "then": {
           "properties": { "responseFormat": { "const": "openai.responses_compact" }, "method": { "const": "POST" } },
@@ -619,6 +758,12 @@
         },
         "then": { "$ref": "#/$defs/basetenSystemOneEndpoint" }
       }, {
+        "if": { "anyOf": [
+          { "properties": { "requestFormat": { "pattern": "^levanto\\.sage_batch" } }, "required": ["requestFormat"] },
+          { "properties": { "responseFormat": { "pattern": "^levanto\\.sage_batch" } }, "required": ["responseFormat"] }
+        ] },
+        "then": { "$ref": "#/$defs/sageBatchEndpoint" }
+      }, {
         "if": {
           "anyOf": [
             { "properties": { "requestFormat": { "pattern": "^gradium\\." } }, "required": ["requestFormat"] },
@@ -626,6 +771,13 @@
           ]
         },
         "then": { "$ref": "#/$defs/gradiumSpeechEndpoint" }
+      },
+      {
+        "if": { "anyOf": [
+          { "required": ["requestFormat"], "properties": { "requestFormat": { "pattern": "^xai\\.tts" } } },
+          { "required": ["responseFormat"], "properties": { "responseFormat": { "pattern": "^xai\\.tts" } } }
+        ] },
+        "then": { "$ref": "#/$defs/xaiSpeechEndpoint" }
       },
       {
         "if": { "anyOf": [
@@ -655,6 +807,12 @@
           { "properties": { "responseFormat": { "pattern": "^(groq|mistral)\\.transcription" } }, "required": ["responseFormat"] }
         ] },
         "then": { "$ref": "#/$defs/groqMistralTranscriptionEndpoint" }
+      }, {
+        "if": { "anyOf": [
+          { "properties": { "requestFormat": { "pattern": "^xai\\.stt" } }, "required": ["requestFormat"] },
+          { "properties": { "responseFormat": { "pattern": "^xai\\.stt" } }, "required": ["responseFormat"] }
+        ] },
+        "then": { "$ref": "#/$defs/xaiTranscriptionEndpoint" }
       }, {
         "if": {
           "anyOf": [
@@ -738,6 +896,12 @@
         },
         "then": { "$ref": "#/$defs/novitaModelsEndpoint" }
       }, {
+        "if": { "anyOf": [
+          { "properties": { "requestFormat": { "pattern": "^requesty\\.models" } }, "required": ["requestFormat"] },
+          { "properties": { "responseFormat": { "pattern": "^requesty\\.models" } }, "required": ["responseFormat"] }
+        ] },
+        "then": { "$ref": "#/$defs/requestyManagedModelsEndpoint" }
+      }, {
         "if": {
           "anyOf": [
             { "properties": { "requestFormat": { "pattern": "^chutes\\.models" } }, "required": ["requestFormat"] },
@@ -754,6 +918,12 @@
         },
         "then": { "$ref": "#/$defs/featherlessModelsEndpoint" }
       }, {
+        "if": { "anyOf": [
+          { "properties": { "requestFormat": { "pattern": "^featherless\\.catalog" } }, "required": ["requestFormat"] },
+          { "properties": { "responseFormat": { "pattern": "^featherless\\.catalog" } }, "required": ["responseFormat"] }
+        ] },
+        "then": { "$ref": "#/$defs/featherlessCatalogEndpoint" }
+      }, {
         "if": {
           "anyOf": [
             { "properties": { "requestFormat": { "pattern": "^venice\\.models" } }, "required": ["requestFormat"] },
@@ -761,6 +931,15 @@
           ]
         },
         "then": { "$ref": "#/$defs/veniceModelsEndpoint" }
+      }, {
+        "if": { "anyOf": [
+          { "properties": { "requestFormat": { "pattern": "^(cerebras|nvidia)\\.public_catalog" } }, "required": ["requestFormat"] },
+          { "properties": { "responseFormat": { "pattern": "^(cerebras|nvidia)\\.public_catalog" } }, "required": ["responseFormat"] }
+        ] },
+        "then": { "$ref": "#/$defs/publicCatalogEndpoint" }
+      }, {
+        "if": { "required": ["inputProfile"] },
+        "then": { "$ref": "#/$defs/pixVerseImageInputEndpoint" }
       }],
       "type": "object",
       "required": ["path", "requestFormat", "responseFormat"],
@@ -782,6 +961,7 @@
         },
         "requestFormat": { "type": "string" },
         "responseFormat": { "type": "string" },
+        "inputProfile": { "const": "clawrouter.pixverse-image-input.v1" },
         "streaming": { "type": "string" },
         "lifecycle": {
           "oneOf": [
@@ -1074,6 +1254,49 @@
         { "required": ["outputTokenLimit"] }
       ] }
     },
+    "requestyManagedModelsEndpoint": {
+      "type": "object",
+      "required": ["method", "path", "requestFormat", "responseFormat"],
+      "properties": {
+        "method": { "const": "GET" }, "path": { "const": "/models/managed" },
+        "requestFormat": { "const": "requesty.models_managed" },
+        "responseFormat": { "const": "requesty.models_managed" },
+        "nativeProxy": { "const": true },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["modelPassthrough"] }, { "required": ["lifecycle"] },
+        { "required": ["responsesLifecycle"] }, { "required": ["inputProfile"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
+        { "required": ["outputTokenLimit"] }
+      ] }
+    },
+    "publicCatalogEndpoint": {
+      "type": "object",
+      "required": ["method", "path", "requestFormat", "responseFormat", "nativeProxy"],
+      "properties": {
+        "method": { "const": "GET" }, "path": { "const": "/models" },
+        "nativeProxy": { "const": false },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 },
+        "headers": { "type": "object", "additionalProperties": false, "properties": { "accept": { "const": "application/json" } } }
+      },
+      "oneOf": [
+        { "properties": { "requestFormat": { "const": "cerebras.public_catalog" }, "responseFormat": { "const": "cerebras.public_catalog" } } },
+        { "properties": { "requestFormat": { "const": "nvidia.public_catalog" }, "responseFormat": { "const": "nvidia.public_catalog" } } }
+      ],
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["modelPassthrough"] }, { "required": ["lifecycle"] },
+        { "required": ["responsesLifecycle"] }, { "required": ["inputProfile"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
+        { "required": ["outputTokenLimit"] }
+      ] }
+    },
     "chutesModelsEndpoint": {
       "type": "object",
       "required": ["method", "path", "requestFormat", "responseFormat"],
@@ -1088,6 +1311,27 @@
         { "required": ["upstreamPath"] }, { "required": ["streaming"] },
         { "required": ["websocket"] }, { "required": ["modelPassthrough"] },
         { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
+        { "required": ["outputTokenLimit"] }
+      ] }
+    },
+    "featherlessCatalogEndpoint": {
+      "type": "object",
+      "required": ["method", "path", "requestFormat", "responseFormat", "nativeProxy"],
+      "properties": {
+        "method": { "const": "GET" }, "path": { "const": "/models" },
+        "requestFormat": { "const": "featherless.catalog" },
+        "responseFormat": { "const": "featherless.catalog" },
+        "nativeProxy": { "const": false },
+        "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 },
+        "headers": { "type": "object", "additionalProperties": false, "properties": { "accept": { "const": "application/json" } } }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["modelPassthrough"] }, { "required": ["lifecycle"] },
+        { "required": ["responsesLifecycle"] }, { "required": ["inputProfile"] },
         { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
         { "required": ["outputTokenLimit"] }
       ] }
@@ -1160,6 +1404,7 @@
       "properties": {
         "id": { "type": "string" },
         "upstream": { "type": "string" },
+        "displayName": { "type": "string", "minLength": 1, "pattern": "\\S" },
         "availability": { "$ref": "#/$defs/modelAvailability" },
         "codexModel": { "type": "string", "minLength": 1 },
         "capabilities": { "type": "array", "items": { "type": "string" } },
@@ -1239,6 +1484,119 @@
         }
       }
     },
+    "inlineMusicReferenceImage": {
+      "type": "object",
+      "required": ["required", "count", "encoding", "mimeTypes", "maxDecodedBytes", "maxJsonBytes", "https", "assetHandles"],
+      "additionalProperties": false,
+      "properties": {
+        "required": { "const": false },
+        "count": { "const": 1 },
+        "encoding": { "const": "base64_data_url" },
+        "mimeTypes": { "const": ["image/png", "image/jpeg", "image/webp"] },
+        "maxDecodedBytes": { "const": 8388608 },
+        "maxJsonBytes": { "const": 12582912 },
+        "https": { "const": false },
+        "assetHandles": { "const": false }
+      }
+    },
+    "publishedMusicInputSupport": {
+      "type": "object",
+      "required": [
+        "version",
+        "publication",
+        "slot",
+        "count",
+        "encoding",
+        "mimeTypes",
+        "maxDecodedBytes",
+        "maxJsonBytes",
+        "maxForwardJsonBytes",
+        "maxLifetimeSeconds",
+        "renewable",
+        "destinationAttempts"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "clawrouter.published-input.v1"
+        },
+        "publication": {
+          "type": "object",
+          "required": [
+            "method",
+            "path",
+            "query",
+            "body",
+            "idempotencyKey"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "POST"
+            },
+            "path": {
+              "const": "/v1/input-assets/openrouter/music"
+            },
+            "query": {
+              "const": false
+            },
+            "body": {
+              "const": "native_plan"
+            },
+            "idempotencyKey": {
+              "type": "object",
+              "required": [
+                "header",
+                "pattern"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "header": {
+                  "const": "Idempotency-Key"
+                },
+                "pattern": {
+                  "const": "^[A-Za-z0-9._:-]{1,128}$"
+                }
+              }
+            }
+          }
+        },
+        "slot": {
+          "const": "messages[0].content[1].image_url.url"
+        },
+        "count": {
+          "const": 1
+        },
+        "encoding": {
+          "const": "base64_data_url"
+        },
+        "mimeTypes": {
+          "const": [
+            "image/png",
+            "image/jpeg",
+            "image/webp"
+          ]
+        },
+        "maxDecodedBytes": {
+          "const": 8388608
+        },
+        "maxJsonBytes": {
+          "const": 12582912
+        },
+        "maxForwardJsonBytes": {
+          "const": 262144
+        },
+        "maxLifetimeSeconds": {
+          "const": 900
+        },
+        "renewable": {
+          "const": false
+        },
+        "destinationAttempts": {
+          "const": 1
+        }
+      }
+    },
     "nativeEndpointCapabilities": {
       "type": "object",
       "required": [
@@ -1248,6 +1606,9 @@
       "minProperties": 3,
       "additionalProperties": false,
       "properties": {
+        "speech": { "$ref": "#/$defs/opaquePcmSpeechProfile" },
+        "referenceImage": { "$ref": "#/$defs/inlineMusicReferenceImage" },
+        "publishedInput": { "$ref": "#/$defs/publishedMusicInputSupport" },
         "sources": {
           "$ref": "#/$defs/modelRequestParameters/properties/sources"
         },
@@ -1307,6 +1668,26 @@
             "decision": {
               "$ref": "#/$defs/nativeDecisionCapabilities"
             }
+          }
+        }
+      }
+    },
+    "opaquePcmSpeechProfile": {
+      "type": "object",
+      "required": ["voiceRequired", "responseFormat", "output"],
+      "additionalProperties": false,
+      "properties": {
+        "voiceRequired": { "const": true },
+        "responseFormat": { "const": "pcm" },
+        "output": {
+          "type": "object",
+          "required": ["kind", "mimeType", "sampleRate", "voiceCompatible"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "opaque" },
+            "mimeType": { "const": "audio/pcm" },
+            "sampleRate": { "const": null },
+            "voiceCompatible": { "const": false }
           }
         }
       }
@@ -2171,6 +2552,22 @@
         ]
       }
     },
+    "sageBatchEndpoint": {
+      "type": "object",
+      "properties": {
+        "path": { "const": "/decide/batch" }, "method": { "const": "POST" }, "nativeProxy": { "const": true },
+        "requestFormat": { "const": "levanto.sage_batch" }, "responseFormat": { "const": "levanto.sage_batch" },
+        "query": { "maxProperties": 0 }, "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 },
+        "requestHeaders": { "maxItems": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }, { "required": ["inputProfile"] }
+      ] }
+    },
     "basetenSystemOneEndpoint": {
       "type": "object",
       "properties": {
@@ -2185,6 +2582,61 @@
         { "required": ["requestPricing"] }, { "required": ["toolPricing"] }, { "required": ["upstreamPath"] }
       ] }
     },
+    "bedrockConverseEndpoint": {
+      "type": "object",
+      "required": ["method", "pathParams", "pathParamStyles"],
+      "properties": {
+        "path": { "const": "/model/${model}/converse" }, "method": { "const": "POST" },
+        "requestFormat": { "const": "aws_bedrock.converse" }, "responseFormat": { "const": "aws_bedrock.converse" },
+        "nativeProxy": { "const": true }, "pathParams": { "const": ["model"] },
+        "pathParamStyles": { "const": { "model": "opaque_segment" } },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+      ] }
+    },
+    "bedrockConverseStreamEndpoint": {
+      "type": "object",
+      "required": ["method", "pathParams", "pathParamStyles"],
+      "properties": {
+        "path": { "const": "/model/${model}/converse-stream" }, "method": { "const": "POST" },
+        "requestFormat": { "const": "aws_bedrock.converse_stream" }, "responseFormat": { "const": "aws_bedrock.converse_eventstream" },
+        "nativeProxy": { "const": true }, "pathParams": { "const": ["model"] },
+        "pathParamStyles": { "const": { "model": "opaque_segment" } },
+        "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+      ] }
+    },
+    "pixVerseImageInputEndpoint": {
+      "type": "object",
+      "required": ["method", "pathParams", "inputProfile", "lifecycle"],
+      "properties": {
+        "inputProfile": { "const": "clawrouter.pixverse-image-input.v1" },
+        "path": { "const": "/openapi/v2/video/img/generate" }, "method": { "const": "POST" },
+        "nativeProxy": { "const": true },
+        "requestFormat": { "const": "pixverse.image_video" }, "responseFormat": { "const": "pixverse.video" },
+        "pathParams": { "const": [] }, "pathParamStyles": { "maxProperties": 0 },
+        "query": { "maxProperties": 0 }, "headers": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 },
+        "lifecycle": { "required": ["protocol", "retrieve"], "properties": { "protocol": { "const": "pixverse.video" } } }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["responsesLifecycle"] }, { "required": ["modelPassthrough"] },
+        { "required": ["outputTokenLimit"] }, { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+      ] }
+    },
     "deepseekSearchEndpoint": {
       "type": "object",
       "properties": {
@@ -2193,6 +2645,23 @@
         "requestFormat": { "const": "deepseek.search" }, "responseFormat": { "const": "deepseek.search" },
         "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 },
         "pathParams": { "maxItems": 0 }, "pathParamStyles": { "maxProperties": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
+      ] }
+    },
+    "xaiSpeechEndpoint": {
+      "type": "object",
+      "required": ["method", "pathParams"],
+      "properties": {
+        "method": { "const": "POST" }, "nativeProxy": { "const": true },
+        "path": { "const": "/v1/tts" }, "pathParams": { "const": [] },
+        "requestFormat": { "const": "xai.tts" }, "responseFormat": { "const": "audio.binary" },
+        "pathParamStyles": { "maxProperties": 0 }, "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
       },
       "not": { "anyOf": [
         { "required": ["auth"] }, { "required": ["upstreamPath"] },
@@ -2220,6 +2689,22 @@
         { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
         { "required": ["requestPricing"] }, { "required": ["toolPricing"] },
         { "required": ["upstreamPath"] }
+      ] }
+    },
+    "xaiTranscriptionEndpoint": {
+      "type": "object", "required": ["method", "pathParams"],
+      "properties": {
+        "method": { "const": "POST" }, "nativeProxy": { "const": true },
+        "path": { "const": "/v1/stt" }, "pathParams": { "const": [] },
+        "requestFormat": { "const": "xai.stt" }, "responseFormat": { "const": "xai.stt" },
+        "pathParamStyles": { "maxProperties": 0 }, "query": { "maxProperties": 0 }, "requestHeaders": { "maxItems": 0 }
+      },
+      "not": { "anyOf": [
+        { "required": ["auth"] }, { "required": ["upstreamPath"] },
+        { "required": ["streaming"] }, { "required": ["websocket"] },
+        { "required": ["lifecycle"] }, { "required": ["responsesLifecycle"] },
+        { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] },
+        { "required": ["requestPricing"] }, { "required": ["toolPricing"] }
       ] }
     },
     "groqMistralTranscriptionEndpoint": {
@@ -2350,6 +2835,18 @@
             }
           }
         }
+      }
+    },
+    "deepSeekSearchRequestPricing": {
+      "type": "object",
+      "required": ["unit", "protocol", "version", "effectiveAt", "source", "successfulNonemptyRequestMicros", "emptyRequestMicros"],
+      "additionalProperties": false,
+      "properties": {
+        "unit": { "const": "request" }, "protocol": { "const": "deepseek.search" },
+        "version": { "type": "string", "pattern": "^[a-zA-Z0-9._:-]{1,128}$" },
+        "effectiveAt": { "const": "2026-11-01T00:00:00+08:00" },
+        "source": { "const": "https://api-docs.deepseek.com/guides/search/" },
+        "successfulNonemptyRequestMicros": { "const": 750 }, "emptyRequestMicros": { "const": 0 }
       }
     },
     "requestPricing": {

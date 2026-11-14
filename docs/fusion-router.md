@@ -5,6 +5,14 @@ chat model. It spends extra inference only for requests that explicitly choose
 that model: up to four adviser models run concurrently, then one configured
 synthesizer produces the response.
 
+The configuration's `strategy` selects `ensemble` (the default for existing
+profiles) or `single`. Single sends the original request to the configured final
+model without adviser calls or proposal reservation. Stored adviser choices stay
+available for switching back, but do not affect single-mode model validation,
+readiness, discovery, or charges. Every response reports the selected strategy in
+`x-clawrouter-fusion-strategy`. This is an explicit execution choice, not a
+learned router or a guarantee of better answers.
+
 ```text
 request model=clawrouter/fusion
         |
@@ -43,6 +51,12 @@ can remain a separate future activation policy.
 ## Configure
 
 Open the admin console, select **Access**, then **Fusion**. Configure:
+
+Choose **Single** for one final-model call or **Panel** for independent adviser
+proposals followed by synthesis. The cards show maximum call counts, not a
+quality prediction. Switching modes preserves your model choices and invalidates
+the previous readiness check. Single mode can be saved with no advisers. The
+model and resource controls below the cards configure the selected workflow.
 
 - one to four adviser model ids;
 - one final synthesizer model id;
@@ -101,6 +115,9 @@ tokens before its failure becomes visible. Discarded HTTP-error responses and re
 adviser deadline are canceled so their upstream resources are released and
 accounting completes. HTTP errors release the adviser reservation; incomplete
 successful responses keep the conservative reservation.
+Only drafts with an explicit `stop` completion reason enter synthesis. Truncated,
+filtered, refused, and tool-calling drafts are omitted; normal subrequest accounting
+still applies. Other completed advisers remain available to the synthesizer.
 Adviser failures remain contained even when an invocation or body read rejects
 after its deadline has already elapsed.
 
@@ -176,6 +193,117 @@ Direct public, native, and manifest routes retain their protocol passthrough.
   Raw prompt and completion bodies still never enter the usage ledger.
 - Fusion cannot select itself as an adviser or synthesizer.
 
-Fusion improves diversity and review, not correctness guarantees. The final
-synthesizer remains responsible for the answer, and all models can share the
-same blind spot.
+Fusion can provide multiple perspectives; measured quality or cost gains depend
+on the task and configuration. The final synthesizer remains responsible for
+the answer, and all models can share the same blind spot. The Worker does not
+execute client tools or repository regression checks. Executable repair policies
+in the benchmark require a caller-side agent and are not deployed by selecting
+`clawrouter/fusion`.
+
+## Fixed-choice voting experiments
+
+`scripts/fusion-exact-vote.mjs` exports `runExactVote(panel, invoke)`. It calls
+workers sequentially and stops when the leading answer's weight exceeds every
+competitor even if all remaining workers vote against it. A rounding margin
+makes near ties continue. This certificate preserves the full panel's chosen
+answer; it does not estimate correctness or repair correlated model errors.
+
+```js
+import { runExactVote } from './scripts/fusion-exact-vote.mjs';
+
+const panel = {
+  version: 1,
+  choices: ['A', 'B', 'C', 'D'],
+  workers: [
+    { id: 'worker-a', weight: 3, priority: 0 },
+    { id: 'worker-b', weight: 1, priority: 1 },
+    { id: 'worker-c', weight: 1, priority: 2 },
+  ],
+};
+const result = await runExactVote(panel, async id => invokeAndParseChoice(id));
+```
+
+Freeze weights, canonical worker order, and unique nonnegative integer priorities before
+evaluation. Lower priority numbers break final ties between supported answers.
+The panel accepts 2–32 distinct choices and 1–64 distinct workers. Weights must
+be finite and nonnegative, with a finite positive sum. The callback returns an
+exact choice label or `null` for an abstention. Invalid answers and callback
+errors stop the run. If all workers abstain, the answer is `null`.
+
+An optional third argument, `{ selectNext }`, changes call order. The synchronous
+selector receives a frozen snapshot with `observed` (`{ id, answer }` pairs in
+call order) and `remaining` (worker IDs in canonical order). It returns one
+remaining ID. Unknown or repeated IDs stop execution before another call.
+Freeze the selector before evaluation and fit it on training data only; the
+runner cannot enforce the data used by a caller's closure. Scores always sum
+in canonical panel order so floating-point ties do not depend on scheduling.
+The default remains sequential panel order. Programmatic
+`replayFusionVote(input, { selectNext })` compares the scheduled run against
+the canonical full panel; the replay CLI uses the default order.
+
+The callback owns provider admission, deadlines, cancellation, usage settlement,
+and response parsing. This experimental runner does not connect to the Worker
+request path. Free-form prose is not an interchangeable choice label.
+
+For an offline replay, add `cases` to the panel. Each case contains `answers`
+and nonnegative finite `costs` arrays in worker order. Run:
+
+```sh
+node scripts/replay-fusion-vote.mjs replay.json
+node --test test/fusion-exact-vote.test.mjs
+```
+
+The replay accepts a regular JSON file up to 4 MiB and at most 10,000 cases.
+It checks every answer, compares early-stop answers with full-panel answers,
+and reports aggregate calls and historical costs without making model calls.
+Training and selection costs, present-day pricing, latency, and answer accuracy
+require separate measurements. Use training data to select call order and an
+independent evaluation to qualify any quality or cost claim.
+
+### Run a panel against an endpoint
+
+`scripts/run-fusion-vote.mjs` connects the fixed-choice runner to a Chat
+Completions endpoint. Each worker adds a `model` field to the panel above, and
+the input adds a `prompt` string. For example:
+
+```json
+{
+  "version": 1,
+  "prompt": "Which choice satisfies the supplied problem: A or B?",
+  "choices": ["A", "B"],
+  "workers": [
+    { "id": "first", "model": "provider/model-a", "weight": 1, "priority": 0 },
+    { "id": "second", "model": "provider/model-b", "weight": 1, "priority": 1 },
+    { "id": "third", "model": "provider/model-c", "weight": 1, "priority": 2 }
+  ]
+}
+```
+
+Set `CLAWROUTER_API_KEY` for the selected endpoint, then run:
+
+```sh
+node scripts/run-fusion-vote.mjs https://router.example/v1/chat/completions panel.json
+```
+
+The endpoint must support strict JSON-schema responses and the selected models.
+Workers run sequentially; mathematically unnecessary calls are skipped. Each
+request allows 256 output tokens. The default request timeout is 30 seconds,
+within a two-minute panel deadline. Programmatic callers can use
+`runFusionVote(input, { endpoint, apiKey, signal, deadlineMs, requestTimeoutMs, selectNext })`;
+deadlines are capped at five minutes. HTTPS is required except on loopback.
+Redirects are rejected. The optional synchronous `selectNext` uses the same
+frozen snapshot contract as `runExactVote`. Preflight validates the panel
+without invoking the selector. An invalid selection or selector exception
+returns `vote_selection_failed` and preserves earlier call receipts. The CLI
+keeps the default panel order.
+
+The result contains the selected answer, called workers, and reported token
+usage. Missing or malformed usage stays `null`, and `usageComplete` is false.
+The client does not estimate monetary cost or replace the endpoint's admission,
+quota, or billing checks. HTTP errors, incomplete responses, cancellation and
+invalid answers stop the panel without retries. Failure results retain prior
+call status and known usage; the CLI exits nonzero. Prompts, raw completions,
+keys, and provider error bodies are omitted from results.
+
+This is an explicit caller-side experiment. It neither activates a Worker
+routing strategy nor establishes that the selected panel improves quality.

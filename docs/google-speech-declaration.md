@@ -38,7 +38,7 @@ unknown-price rejection and preview expiry. Existing compiler fixtures reuse
 declared rows without duplicating them or removing assertions. Synthetic audio
 does not establish intelligibility or live synthesis.
 
-Source-only publication leaves generated snapshots to the existing serialized
-integration queue. Until that qualification, new declaration tests and composed
-delivery remain pending. Actual OpenClaw speech/Talk consumption, live synthesis
-and deployment are separate; none is claimed here.
+The compiled provider snapshot carries these same five declarations. Focused
+compiler and Worker tests qualify routing, cutoff enforcement and synthetic
+accounting. Actual OpenClaw speech/Talk consumption, live synthesis and deployment
+remain separate; none is claimed here.

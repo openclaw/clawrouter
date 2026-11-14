@@ -6,14 +6,28 @@ import type { RequestTariff } from "./request-tariff.ts";
 import type { UsageInspection } from "./token-usage.ts";
 import { HttpError } from "./utils.ts";
 
-export type ValidatedNativeUsage = UsageInspection & { requestCostReceipt?: RequestCostReceipt };
+// Internal evidence from a codec-complete native response, bound to the frozen
+// admitted tariff. Neither caller fields nor an upstream invoice populate it.
+// Adding this slot alone does not admit or settle a priced operation.
+export interface NativeRequestUsage {
+  readonly operation: "deepseek.search";
+  readonly pricingVersion: string;
+  readonly billableRequests: 0 | 1;
+}
+
+export type ValidatedNativeUsage = UsageInspection & {
+  requestCostReceipt?: RequestCostReceipt;
+  nativeRequestUsage?: NativeRequestUsage;
+};
 export interface NativeResponse {
   origin: string;
   path: string;
   query?: NativeQueryBinding;
   tariff?: RequestTariff;
   acquire(): BodyLease;
-  read(response: Response, signal: AbortSignal): Promise<{ response: Response; usage: ValidatedNativeUsage }>;
+  // Complete codecs supply usage; incremental gates keep the existing delivery observer.
+  read(response: Response, signal: AbortSignal): Promise<{ response: Response; usage: ValidatedNativeUsage }
+    | { response: Response; observeUsage: true }>;
 }
 
 export function nativeResponseLease(bytes: number): BodyLease {

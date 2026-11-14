@@ -1,8 +1,13 @@
 import type { FusionConfig } from "../shared/contracts.ts";
+import { fusionAdviserModels } from "../shared/fusion-strategy.ts";
 import { assessModelRequest } from "../shared/model-request-parameters.ts";
 import type { CompiledEndpoint, CompiledModel } from "./types.ts";
 import { HttpError } from "./utils.ts";
 import { InternalHttpAbort } from "./http-operation.ts";
+import { inputRetirement } from "./input-retirement.ts";
+import { accountingAdmissionFailure, accountingIdentity, admitAccountingJson, copyAccountingJson,
+  accountingArrayProjection, accountingObjectProjection, accountingSequenceProjection, accountingJoinedText,
+  accountingTextCapacity, isAccountingAdmissionFailure } from "./json-body.ts";
 
 export const FUSION_MODEL_ID = "clawrouter/fusion" as const;
 const MAX_ADVISERS = 4;
@@ -10,6 +15,7 @@ const ADVISER_RESPONSE_OVERHEAD_BYTES = 16 * 1024;
 
 export const DEFAULT_FUSION_CONFIG: FusionConfig = {
   version: 1,
+  strategy: "ensemble",
   enabled: false,
   modelId: FUSION_MODEL_ID,
   adviserModels: ["local/qwen3:8b"],
@@ -35,9 +41,77 @@ export interface FusionRunResult {
 type ChatMessage = { role: string; content: unknown };
 type InvokeModel = (model: string, body: Record<string, unknown>, timeoutMs: number, index: number, signal: AbortSignal) => Promise<Response>;
 
+export interface FusionAccountingRoute { provider: string; endpoint: string; upstream: string; renames: ReadonlyArray<{ from: string; to: string }> }
+
+/** Immutable input and a finite prospective envelope, before NUL/body copies. */
+export function prepareFusionAccounting(original: Record<string, unknown>, config: FusionConfig,
+  route: FusionAccountingRoute, archive: (body: unknown) => void) {
+  admitAccountingJson(original, "archive"); admitAccountingJson(config, "capsule"); admitAccountingJson(route, "capsule");
+  if (fusionMessagesValid(original.messages)) admitLocalMessages(original.messages);
+  accountingIdentity(route.provider); accountingIdentity(route.endpoint); accountingIdentity(route.upstream);
+  const models = fusionAdviserModels(config);
+  if (models.length > MAX_ADVISERS || config.maxProposalChars > 20000) accountingAdmissionFailure();
+  for (const model of models) accountingIdentity(model);
+  // Every successful subset is possible; labels depend on its surviving order.
+  // Only unknown draft content receives the six-byte-per-unit worst case.
+  for (let mask = 0; mask < 1 << models.length; mask++) {
+    const labels: FusionProposal[] = [];
+    for (let i = 0; i < models.length; i++) if (mask & 1 << i) labels.push({ model: models[i], content: "" });
+    const instruction = labels.length ? fusionInstruction(labels) : undefined;
+    const messages = instruction && fusionMessagesValid(original.messages)
+      ? accountingArrayProjection(original.messages, [{ role: "system", content: accountingTextCapacity(instruction.content as string, labels.length * config.maxProposalChars) }])
+      : original.messages;
+    const overrides = { model: route.upstream, ...(messages === undefined ? {} : { messages }) };
+    const view = accountingObjectProjection(original, overrides, route.renames);
+    admitAccountingJson(view, "archive"); archive(view);
+    if (route.provider === "openai") {
+      // API preparation can add/replace the tier after route transforms.
+      // Admit both possibilities now; actual subscription bytes stay unchanged.
+      const api = accountingObjectProjection(original, overrides, route.renames, true);
+      admitAccountingJson(api, "archive"); archive(api);
+    }
+  }
+  const input = copyAccountingJson(original, "archive"), settings = copyAccountingJson(config, "capsule"), pinnedRoute = copyAccountingJson(route, "capsule");
+  const freeze = (value: unknown): void => {
+    if (!value || typeof value !== "object") return;
+    for (const key in value) if (Object.hasOwn(value, key)) freeze((value as Record<string, unknown>)[key]);
+    Object.freeze(value);
+  };
+  freeze(input); freeze(settings); freeze(pinnedRoute);
+  const admittedModels = fusionAdviserModels(settings);
+  return Object.freeze({ input, config: settings, route: pinnedRoute,
+    assertRoute(assembled: Record<string, unknown>, actual: Record<string, unknown>, provider: string, endpoint: string, upstream: string) {
+      if (provider !== pinnedRoute.provider || endpoint !== pinnedRoute.endpoint || upstream !== pinnedRoute.upstream) throw new Error("fusion certificate mismatch");
+      let expected = 0, received = 0;
+      for (const key in assembled) if (Object.hasOwn(assembled, key)) {
+        let name = key;
+        for (const rename of pinnedRoute.renames) if (name === rename.from) name = rename.to;
+        if (!Object.hasOwn(actual, name) || actual[name] !== (key === "model" ? upstream : assembled[key])) throw new Error("fusion certificate mismatch");
+        expected++;
+      }
+      for (const key in actual) if (Object.hasOwn(actual, key)) received++;
+      if (received !== expected) throw new Error("fusion certificate mismatch");
+    },
+    assemble(proposals: FusionProposal[]) {
+      // Containment in the admitted producer contract, not a new capacity gate.
+      let previous = -1;
+      if (proposals.length > admittedModels.length) throw new Error("fusion certificate mismatch");
+      for (const proposal of proposals) {
+        const index = admittedModels.indexOf(proposal.model, previous + 1);
+        if (index < 0 || typeof proposal.content !== "string" || proposal.content.length > settings.maxProposalChars) throw new Error("fusion certificate mismatch");
+        previous = index;
+      }
+      // The certificate stays immutable. Dispatch serialization temporarily
+      // replaces media slots, so it receives a mutable copy of admitted input.
+      return buildAggregatorBody(structuredClone(input), settings, proposals);
+    },
+  });
+}
+
 export function normalizeFusionConfig(input: unknown): FusionConfig {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new HttpError(400, "fusion_config_invalid", "fusion configuration must be a JSON object");
   const value = input as Partial<FusionConfig>;
+  if (value.strategy !== undefined && value.strategy !== "single" && value.strategy !== "ensemble") throw new HttpError(400, "fusion_strategy_invalid", "fusion strategy must be single or ensemble");
   const requestedAdvisers = value.adviserModels ?? DEFAULT_FUSION_CONFIG.adviserModels;
   if (!Array.isArray(requestedAdvisers) || requestedAdvisers.some((model) => !cleanModel(model))) throw new HttpError(400, "fusion_model_invalid", "fusion adviser model ids are invalid");
   const adviserModels = uniqueModels(requestedAdvisers).slice(0, MAX_ADVISERS);
@@ -45,6 +119,7 @@ export function normalizeFusionConfig(input: unknown): FusionConfig {
   if (!aggregatorModel) throw new HttpError(400, "fusion_model_invalid", "fusion aggregator model id is invalid");
   const config: FusionConfig = {
     version: 1,
+    strategy: value.strategy ?? "ensemble",
     enabled: value.enabled === true,
     modelId: FUSION_MODEL_ID,
     adviserModels,
@@ -55,7 +130,7 @@ export function normalizeFusionConfig(input: unknown): FusionConfig {
     maxProposalChars: boundedInteger(value.maxProposalChars, DEFAULT_FUSION_CONFIG.maxProposalChars, 256, 20_000),
     temperature: boundedNumber(value.temperature, DEFAULT_FUSION_CONFIG.temperature, 0, 2),
   };
-  if (config.enabled && !config.adviserModels.length) throw new HttpError(400, "fusion_advisers_required", "fusion requires at least one adviser model");
+  if (config.enabled && config.strategy === "ensemble" && !config.adviserModels.length) throw new HttpError(400, "fusion_advisers_required", "ensemble fusion requires at least one adviser model");
   if ([...config.adviserModels, config.aggregatorModel].includes(FUSION_MODEL_ID)) throw new HttpError(400, "fusion_recursive_model", "fusion cannot use itself as an adviser or aggregator");
   return config;
 }
@@ -95,9 +170,10 @@ export function prepareAdviserBody(body: Record<string, unknown>, model: Compile
   return assessment.conflicts.length || assessment.unknown.length ? body : preferred;
 }
 
-export async function collectFusionProposals(config: FusionConfig, original: Record<string, unknown>, invoke: InvokeModel): Promise<FusionRunResult> {
+export async function collectFusionProposals(config: FusionConfig, original: Record<string, unknown>, invoke: InvokeModel,
+  retain?: (work: Promise<unknown>) => void): Promise<FusionRunResult> {
   const startedAt = Date.now();
-  const settled = await Promise.all(config.adviserModels.map(async (model, index) => {
+  const outcomes = await Promise.allSettled(fusionAdviserModels(config).map(async (model, index) => {
     const controller = new AbortController();
     const deadline = Date.now() + config.adviserTimeoutMs;
     const timeout = setTimeout(() => controller.abort(new InternalHttpAbort("deadline", "fusion adviser deadline exceeded")), config.adviserTimeoutMs);
@@ -105,18 +181,26 @@ export async function collectFusionProposals(config: FusionConfig, original: Rec
     try {
       const invocation = invoke(model, buildAdviserBody(original, model, config, index), config.adviserTimeoutMs, index, controller.signal).then(response => {
         // Discarded responses still own upstream resources and delivery-based accounting.
-        if (controller.signal.aborted || !response.ok) void response.body?.cancel(controller.signal.reason ?? new InternalHttpAbort("upstream", "fusion adviser rejected")).catch(() => undefined);
+        if (controller.signal.aborted || !response.ok) {
+          const cleanup = response.body?.cancel(controller.signal.reason ?? new InternalHttpAbort("upstream", "fusion adviser rejected")).catch(() => undefined);
+          if (cleanup) retain?.(cleanup);
+        }
         return response;
       });
+      // The collection watchdog is not settlement. Production registers this
+      // original invocation's terminal observer in its originating request.
+      const invocationSettled = invocation.then(() => undefined, () => undefined);
+      retain?.(invocationSettled);
       const response = await beforeDeadline(invocation, deadline);
       if (!response.ok) return { model, failed: true as const };
       const maxResponseBytes = ADVISER_RESPONSE_OVERHEAD_BYTES + config.maxProposalChars * 6;
-      const content = completionText(await readJsonBeforeDeadline(response, maxResponseBytes, deadline)).trim();
+      const content = completionText(await readJsonBeforeDeadline(response, maxResponseBytes, deadline, retain)).trim();
       bodyComplete = true;
       return content
         ? { model, content: content.slice(0, config.maxProposalChars) }
         : { model, failed: true as const };
     } catch (error) {
+      if (isAccountingAdmissionFailure(error)) throw error;
       // The invocation watchdog can expire before the controller's own timer.
       if (error instanceof InternalHttpAbort) controller.abort(error);
       return { model, failed: true as const };
@@ -125,6 +209,9 @@ export async function collectFusionProposals(config: FusionConfig, original: Rec
       if (!bodyComplete && !controller.signal.aborted) controller.abort(new InternalHttpAbort("upstream", "fusion adviser failed before its response completed"));
     }
   }));
+  const failed = outcomes.find((outcome): outcome is PromiseRejectedResult => outcome.status === "rejected");
+  if (failed) throw failed.reason;
+  const settled = outcomes.map(outcome => (outcome as PromiseFulfilledResult<FusionProposal | { model: string; failed: true }>).value);
   return {
     proposals: settled.filter((item): item is FusionProposal => "content" in item),
     failedModels: settled.filter((item) => "failed" in item).map((item) => item.model),
@@ -132,15 +219,17 @@ export async function collectFusionProposals(config: FusionConfig, original: Rec
   };
 }
 
-async function readJsonBeforeDeadline(response: Response, maxBytes: number, deadline: number): Promise<unknown> {
+async function readJsonBeforeDeadline(response: Response, maxBytes: number, deadline: number, retain?: (work: Promise<unknown>) => void): Promise<unknown> {
   if (!response.body) throw new Error("fusion adviser response has no body");
   const reader = response.body.getReader();
+  const input = inputRetirement(reader);
   const decoder = new TextDecoder();
   let bytes = 0;
   let text = "";
   try {
+    retain?.(input.retired);
     while (true) {
-      const { done, value } = await beforeDeadline(reader.read(), deadline);
+      const { done, value } = await beforeDeadline(input.read(() => reader.read()), deadline);
       if (done) {
         break;
       }
@@ -148,11 +237,13 @@ async function readJsonBeforeDeadline(response: Response, maxBytes: number, dead
       if (bytes > maxBytes) throw new Error("fusion adviser response exceeds byte limit");
       text += decoder.decode(value, { stream: true });
     }
-    return JSON.parse(text + decoder.decode());
+    const result = JSON.parse(text + decoder.decode());
+    void input.retire("eof");
+    return result;
   } catch (error) {
-    void reader.cancel(error instanceof InternalHttpAbort ? error : new InternalHttpAbort("upstream", "fusion adviser response could not be consumed")).catch(() => undefined);
+    void input.retire("cancel", error instanceof InternalHttpAbort ? error : new InternalHttpAbort("upstream", "fusion adviser response could not be consumed"));
     throw error;
-  } finally { reader.releaseLock(); }
+  }
 }
 
 async function beforeDeadline<T>(operation: Promise<T>, deadline: number): Promise<T> {
@@ -176,10 +267,12 @@ async function beforeDeadline<T>(operation: Promise<T>, deadline: number): Promi
 export function buildFusionReservationProposals(config: FusionConfig): FusionProposal[] {
   // JSON escapes NUL as six ASCII bytes, the maximum expansion per UTF-16 code unit.
   const content = "\0".repeat(config.maxProposalChars);
-  return config.adviserModels.map((model) => ({ model, content }));
+  return fusionAdviserModels(config).map((model) => ({ model, content }));
 }
 
 export function buildLocalMessages(messages: ChatMessage[], maxInputChars: number): ChatMessage[] {
+  // Local adviser normalization cannot materialize an unadmitted input graph.
+  admitLocalMessages(messages);
   const normalized = messages.flatMap((message) => {
     const content = contentText(message.content);
     if (!content) return [];
@@ -199,6 +292,23 @@ export function buildLocalMessages(messages: ChatMessage[], maxInputChars: numbe
     remaining -= bounded.length;
   }
   return selected;
+}
+
+function admitLocalMessages(messages: ChatMessage[]): void {
+  admitAccountingJson(messages, "archive");
+  const parts = function* (content: unknown): Generator<string> {
+    if (typeof content === "string") { yield content; return; }
+    if (Array.isArray(content)) for (const part of content) if (part && typeof part === "object" && typeof part.text === "string") yield part.text;
+  };
+  admitAccountingJson(accountingSequenceProjection(function* () {
+    for (const message of messages) {
+      const text = accountingJoinedText(parts(message.content), "\n");
+      if (!text.units) continue;
+      const tool = message.role === "tool" || message.role === "function";
+      yield { role: message.role === "developer" ? "system" : ["system", "user", "assistant"].includes(message.role) ? message.role : "user",
+        content: tool ? accountingJoinedText(parts(message.content), "\n", "[Tool result]\n").value : text.value };
+    }
+  }), "archive");
 }
 
 function adviserPrompt(index: number): string {
@@ -231,9 +341,15 @@ function fusionInstruction(proposals: FusionProposal[]): ChatMessage {
 
 function completionText(value: unknown): string {
   if (!value || typeof value !== "object") return "";
-  const choice = (value as { choices?: unknown[] }).choices?.[0];
+  const response = value as { error?: unknown; choices?: unknown };
+  if (response.error != null || !Array.isArray(response.choices)) return "";
+  const choice = response.choices[0];
   if (!choice || typeof choice !== "object") return "";
-  return contentText((choice as { message?: { content?: unknown } }).message?.content);
+  if (choice.finish_reason !== "stop") return "";
+  const message = choice.message;
+  if (!message || typeof message !== "object" || message.refusal != null || message.function_call != null
+    || message.tool_calls != null && (!Array.isArray(message.tool_calls) || message.tool_calls.length)) return "";
+  return contentText(message.content);
 }
 
 function contentText(content: unknown): string {

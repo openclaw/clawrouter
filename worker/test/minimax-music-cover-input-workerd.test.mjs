@@ -1,0 +1,242 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createServer } from "node:http";
+import { createHash } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
+import { startWorkerdFixture } from "../../test/helpers/workerd.mjs";
+
+const router = String.raw`
+import { beginMiniMaxMusicCoverInput, claimMiniMaxMusicCoverInput, musicCoverInputLimits } from './worker/minimax-music-cover-input.ts';
+import { BodyLease, bodyBudgetCharged } from './worker/body-budget.ts';
+class UnusedOwner { fetch() { throw new Error('foundation has no authority/RPC path'); } }
+export { UnusedOwner as PolicyBindingIndexObject, UnusedOwner as BudgetLedgerObject, UnusedOwner as UsageLedgerObject, UnusedOwner as GrantCredentialObject };
+let active;
+const originalDigest=crypto.subtle.digest.bind(crypto.subtle);
+const gate=(mode,phase)=>fetch('https://cover-gate.example/'+mode+'/'+phase,{redirect:'manual'}).then(async r=>{if(!r.ok)throw Error('fixture gate');await r.text();});
+const snapshot=()=>active?{...active.op?.snapshot(),mode:active.mode,charged:bodyBudgetCharged(),locked:active.body.locked,
+  result:active.result,retired:active.retired,code:active.code,cleanupCode:active.cleanupCode,cancels:active.cancels,unlocks:active.unlocks,
+  readHeld:active.readHeld,cleanupDone:active.cleanupDone,hashHeld:active.hashHeld,hashBytes:active.hashBytes,hashBacking:active.hashBacking,
+  readCalls:active.readCalls,nativeReads:active.nativeReads,nativeEof:active.nativeEof,value:active.value,claimDenied:active.claimDenied}:{};
+Object.defineProperty(crypto.subtle,'digest',{value:async function(...args){
+ const a=active;a.hashBytes=args[1].byteLength;a.hashBacking=args[1].buffer.byteLength;
+ const result=await originalDigest(...args);
+ if(a.mode==='hash'||a.mode==='hash-reject'){a.hashHeld=true;a.ready();await gate(a.mode,'hash');if(a.mode==='hash-reject')throw Error('sanitized fixture hash');}
+ return result;
+}});
+export default {async fetch(request,env,context){
+ const url=new URL(request.url);
+ if(url.pathname==='/state')return Response.json(snapshot());
+ if(url.pathname==='/contend'){const lease=new BodyLease();try{return Response.json({allowed:lease.grow(1024*1024),charged:bodyBudgetCharged()});}finally{lease.release();}}
+ if(url.pathname!=='/start')return new Response(null,{status:404});
+ if(active&&!active.retired)return new Response(null,{status:409});
+ const mode=url.searchParams.get('mode'),a=active={mode,body:request.body,result:false,retired:false,cancels:0,unlocks:0,readHeld:false,cleanupDone:false,hashHeld:false,readCalls:0,nativeReads:0,nativeEof:false};
+ let ready;const entered=new Promise(r=>ready=r);a.ready=ready;
+ const controller=new AbortController(),getReader=request.body.getReader.bind(request.body);let readCount=0;
+ request.body.getReader=options=>{const reader=getReader(options);return {
+  async read(view){a.readCalls=++readCount;
+   const boundary=mode==='reads8192'?8192:mode==='reads8193'?8193:0;
+   // HTTP fragmentation is not a one-data-read contract. Observe its actual
+   // EOF first, then pad the controlled reader's EMPTY/EOF boundary exactly.
+   // Keep the original lock; native reads and controlled calls are separate.
+   if(boundary&&a.nativeEof)return {done:readCount>=boundary,value:view.subarray(0,0)};
+   try {a.nativeReads++;const part=await reader.read(view);if(part.done)a.nativeEof=true;
+    if(boundary&&part.done&&readCount<boundary)return {done:false,value:part.value?.buffer.byteLength?part.value:new Uint8Array(16384).subarray(0,0)};
+    if(mode==='backing')return {done:false,value:new Uint8Array(new ArrayBuffer(16385),0,2)};
+    return part;
+   }finally{if((mode==='read'||mode==='cancel-reject')&&readCount===1){a.readHeld=true;ready();await gate(mode,'read');}}
+  },
+  async cancel(reason){a.cancels++;try{await reader.cancel(reason);}finally{
+   if(mode==='read'||mode==='cancel-reject'){await gate(mode,'cleanup');a.cleanupDone=true;}
+   if(mode==='cancel-reject')throw {ignored:'original rejection is not persisted'};
+  }},releaseLock(){a.unlocks++;reader.releaseLock();}
+ }};
+ a.op=beginMiniMaxMusicCoverInput({body:request.body,signal:controller.signal,deadlineAt:Date.now()+60000,
+  route:url.searchParams.get('route')==='manifest'?'manifest':'native',contentType:'application/json'});
+ if(['read','cancel-reject','hash','hash-reject'].includes(mode))context.waitUntil(entered.then(()=>gate(mode,'abort')).then(()=>controller.abort()));
+ context.waitUntil(a.op.result.then(async sealed=>{
+  a.value=claimMiniMaxMusicCoverInput(sealed);try{claimMiniMaxMusicCoverInput(sealed);}catch{a.claimDenied=true;}
+  a.result=true;ready();await gate(mode,'delivery');await a.op.discard();
+ },error=>{a.code=error.code;a.result=true;ready();}).catch(()=>{}));
+ context.waitUntil(a.op.retired.then(()=>{a.retired=true;},error=>{a.cleanupCode=error.code;a.retired=true;}));
+ // Returning headers while the ORIGINAL request-body read is held can close
+ // the client's still-writing HTTP upload. Keep this exchange alive; the
+ // separate state probe observes prompt operation failure and physical custody.
+ if(['read','cancel-reject','hash','hash-reject'].includes(mode))await a.op.retired.catch(()=>{});
+ else await entered;
+ return Response.json({...snapshot(),limits:musicCoverInputLimits});
+}};`;
+
+async function barriers(t) {
+  const held = new Map(), released = new Set();
+  const server = createServer((request, response) => {
+    if (request.method !== "GET" || !/^\/[a-z0-9-]+\/(abort|read|cleanup|hash|delivery)$/.test(request.url)) { response.writeHead(400); response.end(); return; }
+    if (released.has(request.url)) { response.end("ok"); return; }
+    held.set(request.url, response); request.on("close", () => held.delete(request.url));
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  const release = (mode, phase) => { const key = "/" + mode + "/" + phase; released.add(key); held.get(key)?.end("ok"); held.delete(key); };
+  t.after(async () => { for (const response of held.values()) response.end("ok"); server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); });
+  return { origin: "http://127.0.0.1:" + server.address().port, release };
+}
+
+function input(bytes = 2, { route = "native", maximum = false, audio, suffix = "", malformed = false, raw } = {}, fixed = false) {
+  const encoder = new TextEncoder(), plan = { prompt: maximum ? "s".repeat(300) : "Synthetic style", ...(maximum ? { lyrics: "🎵".repeat(930) } : {}), model: "music-cover" };
+  const prefix = (route === "manifest" ? '{"body":' : "") + '{"audio_base64":"';
+  const tail = '",' + JSON.stringify(plan).slice(1) + (route === "manifest" ? "}" : "");
+  let padding = maximum ? 65536 - encoder.encode(prefix + tail).length : 0;
+  function* pieces() {
+    if (raw !== undefined) { for (let offset = 0; offset < raw.length; offset += 256) yield encoder.encode(raw.slice(offset, offset + 256)); return; }
+    yield encoder.encode(prefix);
+    if (malformed) { yield new Uint8Array([0xff]); return; }
+    if (audio !== undefined) { for (let offset = 0; offset < audio.length; offset += 256) yield encoder.encode(audio.slice(offset, offset + 256)); }
+    else {
+      let count = Math.floor(bytes / 3) * 4;
+      while (count) { const take = Math.min(16384, count); yield encoder.encode("A".repeat(take)); count -= take; }
+      if (bytes % 3) yield encoder.encode(bytes % 3 === 1 ? "AA==" : "AAA=");
+    }
+    yield encoder.encode(tail);
+    while (padding) { const take = Math.min(16384, padding); yield encoder.encode(" ".repeat(take)); padding -= take; }
+    if (suffix) yield encoder.encode(suffix);
+  }
+  const iterator = pieces();
+  const length = raw !== undefined ? Buffer.byteLength(raw) : malformed ? Buffer.byteLength(prefix) + 1
+    : Buffer.byteLength(prefix + tail + suffix) + padding + (audio !== undefined ? Buffer.byteLength(audio) : Math.ceil(bytes / 3) * 4);
+  if (fixed) {
+    assert.ok(length <= 128 * 1024, "bounded rejection fixture payload");
+    const body = new Uint8Array(length); let offset = 0;
+    for (const piece of iterator) {
+      assert.ok(offset + piece.byteLength <= length);
+      body.set(piece, offset); offset += piece.byteLength;
+    }
+    assert.equal(offset, length); return { body, length };
+  }
+  const body = new ReadableStream({ pull(c) { const next = iterator.next(); if (next.done) c.close(); else c.enqueue(next.value); }, cancel() { iterator.return(); } }, { highWaterMark: 0 });
+  return { body, length };
+}
+function zeroHash(bytes) {
+  const hash = createHash("sha256"), part = Buffer.alloc(16384);
+  while (bytes) { const take = Math.min(bytes, part.length); hash.update(part.subarray(0, take)); bytes -= take; }
+  return hash.digest("hex");
+}
+
+test("cover INPUT ONLY actual Workerd: decimal50M, seven-category bounds, malformed intake, physical retirement and contention", { timeout: 180000 }, async t => {
+  const temporary = await mkdtemp(join(tmpdir(), "minimax-cover-input-workerd-"));
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+  const control = await barriers(t);
+  const upstream = `export default {fetch(request){if(new URL(request.url).hostname!=='cover-gate.example')throw Error('no provider calls');return fetch(${JSON.stringify(control.origin)}+new URL(request.url).pathname,{redirect:'manual'});}};`;
+  const runtime = await startWorkerdFixture(temporary, router, upstream);
+  const modes = ["maximum", "manifest", "read", "cancel-reject", "hash", "hash-reject", "reads8192", "reads8193", "backing", "padding", "trailing", "overflow", "utf8", "tokens", "scalar", "escapes", "escape-boundary", "escape-overflow", "escape-unicode"];
+  const releaseMode = mode => { for (const phase of ["abort", "read", "cleanup", "hash", "delivery"]) control.release(mode, phase); };
+  let clientCleanup;
+  t.after(async () => {
+    for (const mode of modes) releaseMode(mode);
+    try { await clientCleanup?.(); } finally { await runtime.dispose(); }
+  });
+  const call = async path => { const response = await runtime.dispatchFetch("https://router.example" + path, { signal: t.signal }); assert.equal(response.status, 200); return response.json(); };
+  const until = async predicate => { let value; for (let i = 0; i < 500; i++) { value = await call("/state"); if (predicate(value)) return value; await delay(10); } assert.fail(JSON.stringify(value)); };
+  const start = async (mode, bytes, options = {}, signal = t.signal) => {
+    // Small early rejections use bounded, byte-identical HTTP-driver payloads.
+    // Large and held inputs stay streamed; unexpected EPIPE still fails.
+    const upload = mode === "escape-overflow" || mode === "escape-unicode"
+      ? { body: options.raw, length: Buffer.byteLength(options.raw) }
+      : input(bytes, options, ["backing", "padding", "utf8", "tokens", "scalar", "trailing"].includes(mode));
+    try {
+      // Known incremental length avoids Undici's trailing chunked terminator
+      // write after an intentional early input cancellation. Other cases stay streamed.
+      const response = await runtime.dispatchFetch("https://router.example/start?mode=" + mode + "&route=" + (options.route ?? "native"),
+        { method: "POST", headers: { "content-type": "application/json", "content-length": String(upload.length) }, body: upload.body, duplex: "half", signal });
+      assert.equal(response.status, 200); return response.json();
+    } catch (error) {
+      if (signal.aborted && error === signal.reason) throw error;
+      let state;
+      try {
+        const observed = await call("/state");
+        state = Object.fromEntries(["mode", "phase", "result", "retired", "code", "cleanupCode", "charged", "locked", "readCalls", "nativeReads", "nativeEof", "wire", "nonAudio", "digestStarted", "cancels", "unlocks"].map(key => [key, observed[key]]));
+      } catch { state = { unavailable: true }; }
+      throw new Error("fixture HTTP input failure " + JSON.stringify({ mode, state }), { cause: error });
+    }
+  };
+  for (const mode of ["maximum", "manifest"]) {
+    const route = mode === "manifest" ? "manifest" : "native";
+    let state = await start(mode, 50_000_000, { maximum: true, route });
+    assert.equal(state.value.bytes, 50_000_000, JSON.stringify(state)); assert.equal(state.hashBacking, 50_000_000);
+    assert.equal(state.hashBytes, 50_000_000); assert.equal(state.value.sha256, zeroHash(50_000_000));
+    assert.equal(state.wire, 66_732_204); assert.equal(state.nonAudio, 65536); assert.equal(state.maxFeed, 256);
+    assert.ok(state.maxBacking <= 16384); assert.ok(state.reads <= 8192); assert.equal(state.locked, false); assert.equal(state.claimDenied, true);
+    assert.equal(state.limits.remainder.reduce((a, b) => a + b), 655360); assert.equal(state.limits.records, 12);
+    assert.equal(state.limits.records * state.limits.recordCell + state.limits.unusedRecordAllowance, 256 * 1024);
+    assert.equal(state.limits.hashPhase + state.limits.slack, 96 * 1024 * 1024);
+    assert.equal(state.charged, 96 * 1024 * 1024); assert.deepEqual(await call("/contend"), { allowed: false, charged: 96 * 1024 * 1024 });
+    control.release(mode, "delivery"); state = await until(s => s.retired); assert.equal(state.charged, 0); assert.equal(state.unlocks, 1);
+  }
+  for (const mode of ["read", "cancel-reject", "hash", "hash-reject"]) {
+    const controller = new AbortController(), cleanupReason = new DOMException("fixture client cleanup", "AbortError");
+    let startFailure, primary, done = false, settled = Promise.resolve(), cleaning;
+    const abortClient = () => { releaseMode(mode); if (!done) controller.abort(cleanupReason); };
+    const cleanup = () => cleaning ??= (async () => {
+      abortClient(); await settled;
+      // Only this exact deliberate abort is expected. In particular EPIPE is
+      // never swallowed, even if it arrives while another assertion is failing.
+      if (startFailure && startFailure !== cleanupReason) {
+        if (primary && primary !== startFailure) throw new AggregateError([primary, startFailure], "fixture assertion and client transport failed");
+        throw startFailure;
+      }
+    })();
+    clientCleanup = cleanup; t.signal.addEventListener("abort", abortClient, { once: true });
+    if (t.signal.aborted) abortClient();
+    try {
+      const started = start(mode, 2, {}, controller.signal);
+      settled = started.then(() => { done = true; }, error => { done = true; startFailure = error; });
+      let state = await until(s => { if (startFailure) throw startFailure; return s.mode === mode && (s.readHeld || s.hashHeld || s.result); });
+      assert.equal(state.charged, 96 * 1024 * 1024);
+      assert.equal(mode.startsWith("hash") ? state.hashHeld : state.readHeld, true);
+      control.release(mode, "abort"); state = await until(s => s.result); assert.equal(state.code, "cancelled");
+      assert.equal(state.retired, false); assert.equal(state.charged, 96 * 1024 * 1024);
+      assert.deepEqual(await call("/contend"), { allowed: false, charged: 96 * 1024 * 1024 });
+      if (mode.startsWith("hash")) { assert.equal(state.locked, false); control.release(mode, "hash"); }
+      else {
+        assert.equal(state.cancels, 1); assert.equal(state.locked, true); control.release(mode, "cleanup");
+        state = await until(s => s.cleanupDone); assert.equal(state.charged, 96 * 1024 * 1024); assert.equal(state.locked, true);
+        control.release(mode, "read");
+      }
+      state = await until(s => s.retired); assert.equal(state.charged, 0); assert.equal(state.locked, false); assert.equal(state.unlocks, 1);
+      assert.equal(state.cleanupCode, mode === "cancel-reject" ? "cleanup" : undefined);
+      assert.equal((await started).retired, true);
+    } catch (error) { primary = error; }
+    finally {
+      try { await cleanup(); }
+      finally { t.signal.removeEventListener("abort", abortClient); if (clientCleanup === cleanup) clientCleanup = undefined; }
+    }
+    if (primary) throw primary;
+  }
+  for (const [mode, bytes, options] of [["padding", 2, { audio: "AAB=" }], ["trailing", 2, { suffix: "x" }],
+    ["utf8", 2, { malformed: true }], ["overflow", 50_000_001, {}], ["backing", 2, {}], ["reads8193", 2, {}],
+    ["tokens", 2, { raw: '{"audio_base64":' + "[".repeat(256) }],
+    ["scalar", 2, { raw: '{"audio_base64":"AAA=","model":"music-cover","prompt":"Synthetic style","lyrics":"' + "\\u0001".repeat(1000) + '"}' }]]) {
+    let state = await start(mode, bytes, options); state = await until(s => s.retired);
+    assert.equal(state.code, "invalid", JSON.stringify(state)); assert.equal(state.digestStarted, false); assert.equal(state.charged, 0);
+    assert.equal(state.locked, false); assert.equal(state.unlocks, 1); assert.equal(state.cancels, 1);
+    if (mode === "reads8193") {
+      assert.equal(state.reads, 8193); // Denied attempt; only8192 owned-reader calls start.
+      assert.equal(state.readCalls, 8192); assert.equal(state.nativeEof, true); assert.ok(state.nativeReads > 0 && state.nativeReads < 8192);
+    }
+  }
+  let state = await start("reads8192", 2); assert.ok(state.value, JSON.stringify(state)); assert.equal(state.value.bytes, 2); assert.equal(state.reads, 8192);
+  assert.equal(state.readCalls, 8192); assert.equal(state.nativeEof, true); assert.ok(state.nativeReads > 0 && state.nativeReads < 8192);
+  control.release("reads8192", "delivery"); state = await until(s => s.retired); assert.equal(state.charged, 0);
+  state = await start("escapes", 2, { audio: "\\u0041\\u0041\\u0041=" }); assert.equal(state.value.bytes, 2);
+  assert.ok(state.nonAudio > 18); control.release("escapes", "delivery"); state = await until(s => s.retired); assert.equal(state.charged, 0);
+  const escaped = '{"audio_base64":"' + "\\u0041".repeat(10000) + '","prompt":"Synthetic style","model":"music-cover"}';
+  const exact = escaped + " ".repeat(65536 - Buffer.byteLength(escaped));
+  state = await start("escape-boundary", 7500, { raw: exact });
+  assert.equal(state.value.bytes, 7500); assert.equal(state.nonAudio, 65536);
+  control.release("escape-boundary", "delivery"); await until(s => s.retired);
+  for (const [mode, raw] of [["escape-overflow", exact + " "], ["escape-unicode", '{"audio_base64":"' + "\\u0041".repeat(14000) + '","prompt":"Synthetic style","model":"music-cover"}']]) {
+    await start(mode, 10500, { raw }); state = await until(s => s.retired);
+    assert.equal(state.code, "invalid", JSON.stringify(state)); assert.equal(state.digestStarted, false);
+    assert.equal(state.cancels, 1); assert.equal(state.unlocks, 1); assert.equal(state.locked, false); assert.equal(state.charged, 0);
+  }
+});

@@ -24,6 +24,9 @@ adapter:
   stream: google_sse
   error: google_error
 capabilities:
+  - id: audio.generate
+    endpoint: music_generate
+    methods: [POST]
   - id: llm.generate
     endpoint: generate_content
     methods: [POST]
@@ -36,6 +39,9 @@ capabilities:
   - id: llm.embeddings
     endpoint: batch_embed_contents
     methods: [POST]
+  - id: image.generate
+    endpoint: image_generate
+    methods: [POST]
   - id: audio.speech
     endpoint: speech_generate_content
     methods: [POST]
@@ -43,6 +49,13 @@ capabilities:
     endpoint: speech_interactions
     methods: [POST]
 endpoints:
+  music_generate:
+    method: POST
+    path: /v1beta/models/${model}:generateContent
+    pathParams: [model]
+    requestFormat: google.music_generate
+    responseFormat: google.music
+    timeoutMs: 600000
   generate_content:
     modelPassthrough: {}
     path: /v1beta/models/${model}:generateContent
@@ -71,6 +84,13 @@ endpoints:
     requestFormat: google.batch_embed_contents
     responseFormat: google.batch_embed_contents
     timeoutMs: 60000
+  image_generate:
+    method: POST
+    path: /v1beta/models/${model}:generateContent
+    pathParams: [model]
+    requestFormat: google.image_generate
+    responseFormat: google.image
+    timeoutMs: 600000
   speech_generate_content:
     method: POST
     path: /v1beta/models/${model}:generateContent
@@ -89,6 +109,7 @@ endpoints:
 models:
   entries:
     - id: google/gemini-3.5-flash
+      displayName: "Gemini 3.5 Flash"
       upstream: gemini-3.5-flash
       capabilities: [llm.generate, llm.stream]
       pricingRef: google-gemini-3-5-flash-tiers-2026-09-23
@@ -114,7 +135,271 @@ models:
             inputMicrosPerMillion: 2700000
             cachedInputMicrosPerMillion: 270000
             outputMicrosPerMillion: 16200000
+    - id: google/gemini-2.5-pro
+      displayName: "Gemini 2.5 Pro"
+      upstream: gemini-2.5-pro
+      capabilities: [llm.generate, llm.stream]
+      availability:
+        version: clawrouter.model-availability.v1
+        status: deprecated
+        effectiveAt: "2026-11-03"
+        checkedAt: "2026-11-03"
+        sources: [https://ai.google.dev/gemini-api/docs/deprecations]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          generate_content:
+            sources: [https://ai.google.dev/gemini-api/docs/models/gemini-2.5-pro]
+            checkedAt: "2026-11-03"
+            input: [text, image, video, audio]
+            contextWindow: 1048576
+            maxOutputTokens: 65536
+          stream_generate_content:
+            sources: [https://ai.google.dev/gemini-api/docs/models/gemini-2.5-pro]
+            checkedAt: "2026-11-03"
+            input: [text, image, video, audio]
+            contextWindow: 1048576
+            maxOutputTokens: 65536
+      pricingRef: google-gemini-2.5-pro-published-upper-bound-2026-11-03
+      pricing:
+        effectiveAt: "2026-11-03"
+        checkedAt: "2026-11-03"
+        source: https://ai.google.dev/gemini-api/docs/pricing#gemini-2.5-pro
+        settlementBasis: published_upper_bound
+        inputMicrosPerMillion: 2500000
+        cachedInputMicrosPerMillion: 250000
+        outputMicrosPerMillion: 15000000
+        maxInputTokens: 1048576
+        defaultMaxOutputTokens: 65536
+        serviceTiers:
+          - id: default
+            aliases: [standard]
+            inputMicrosPerMillion: 2500000
+            cachedInputMicrosPerMillion: 250000
+            outputMicrosPerMillion: 15000000
+          - id: flex
+            inputMicrosPerMillion: 1250000
+            cachedInputMicrosPerMillion: 250000
+            outputMicrosPerMillion: 7500000
+          - id: priority
+            inputMicrosPerMillion: 4500000
+            cachedInputMicrosPerMillion: 450000
+            outputMicrosPerMillion: 27000000
+    - id: google/gemini-2.5-flash
+      displayName: "Gemini 2.5 Flash"
+      upstream: gemini-2.5-flash
+      capabilities: [llm.generate, llm.stream]
+      availability:
+        version: clawrouter.model-availability.v1
+        status: deprecated
+        effectiveAt: "2026-11-03"
+        checkedAt: "2026-11-03"
+        sources: [https://ai.google.dev/gemini-api/docs/deprecations]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          generate_content:
+            sources: [https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash]
+            checkedAt: "2026-11-03"
+            input: [text, image, video, audio]
+            contextWindow: 1048576
+            maxOutputTokens: 65536
+          stream_generate_content:
+            sources: [https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash]
+            checkedAt: "2026-11-03"
+            input: [text, image, video, audio]
+            contextWindow: 1048576
+            maxOutputTokens: 65536
+      pricingRef: google-gemini-2.5-flash-published-upper-bound-2026-11-03
+      pricing:
+        effectiveAt: "2026-11-03"
+        checkedAt: "2026-11-03"
+        source: https://ai.google.dev/gemini-api/docs/pricing#gemini-2.5-flash
+        settlementBasis: published_upper_bound
+        inputMicrosPerMillion: 1000000
+        cachedInputMicrosPerMillion: 100000
+        outputMicrosPerMillion: 2500000
+        maxInputTokens: 1048576
+        defaultMaxOutputTokens: 65536
+        serviceTiers:
+          - id: default
+            aliases: [standard]
+            inputMicrosPerMillion: 1000000
+            cachedInputMicrosPerMillion: 100000
+            outputMicrosPerMillion: 2500000
+          - id: flex
+            inputMicrosPerMillion: 500000
+            cachedInputMicrosPerMillion: 100000
+            outputMicrosPerMillion: 1250000
+          - id: priority
+            inputMicrosPerMillion: 1800000
+            cachedInputMicrosPerMillion: 180000
+            outputMicrosPerMillion: 4500000
+    - id: google/gemini-3.6-flash
+      displayName: "Gemini 3.6 Flash"
+      upstream: gemini-3.6-flash
+      capabilities: [llm.generate, llm.stream]
+      pricingRef: google-gemini-3-6-flash-published-upper-bound-2026-11-04
+      pricing:
+        effectiveAt: "2026-11-04"
+        source: https://ai.google.dev/gemini-api/docs/pricing#gemini-3.6-flash
+        settlementBasis: published_upper_bound
+        inputMicrosPerMillion: 1500000
+        cachedInputMicrosPerMillion: 150000
+        outputMicrosPerMillion: 7500000
+        maxInputTokens: 1048576
+        defaultMaxOutputTokens: 65536
+        serviceTiers:
+          - id: default
+            aliases: [standard]
+            inputMicrosPerMillion: 1500000
+            cachedInputMicrosPerMillion: 150000
+            outputMicrosPerMillion: 7500000
+          - id: flex
+            inputMicrosPerMillion: 750000
+            cachedInputMicrosPerMillion: 75000
+            outputMicrosPerMillion: 3750000
+          - id: priority
+            inputMicrosPerMillion: 2700000
+            cachedInputMicrosPerMillion: 270000
+            outputMicrosPerMillion: 13500000
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          generate_content: &gemini36Facts
+            checkedAt: "2026-11-04"
+            sources:
+              - https://ai.google.dev/gemini-api/docs/models/gemini-3.6-flash
+              - https://ai.google.dev/gemini-api/docs/pricing#gemini-3.6-flash
+              - https://ai.google.dev/gemini-api/docs/deprecations
+            contextWindow: 1048576
+            maxOutputTokens: 65536
+            input: [text, image, video, audio]
+          stream_generate_content: *gemini36Facts
+    - id: google/gemini-3.5-flash-lite
+      displayName: "Gemini 3.5 Flash Lite"
+      upstream: gemini-3.5-flash-lite
+      capabilities: [llm.generate, llm.stream]
+      pricingRef: google-gemini-3-5-flash-lite-tiers-2026-11-04
+      pricing:
+        effectiveAt: "2026-11-04"
+        source: https://ai.google.dev/gemini-api/docs/pricing#gemini-3.5-flash-lite
+        inputMicrosPerMillion: 300000
+        cachedInputMicrosPerMillion: 30000
+        outputMicrosPerMillion: 2500000
+        maxInputTokens: 1048576
+        defaultMaxOutputTokens: 65536
+        serviceTiers:
+          - id: default
+            aliases: [standard]
+            inputMicrosPerMillion: 300000
+            cachedInputMicrosPerMillion: 30000
+            outputMicrosPerMillion: 2500000
+          - id: flex
+            inputMicrosPerMillion: 150000
+            cachedInputMicrosPerMillion: 20000
+            outputMicrosPerMillion: 1250000
+          - id: priority
+            inputMicrosPerMillion: 540000
+            cachedInputMicrosPerMillion: 50000
+            outputMicrosPerMillion: 4500000
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          generate_content: &gemini35LiteFacts
+            checkedAt: "2026-11-04"
+            sources:
+              - https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite
+              - https://ai.google.dev/gemini-api/docs/pricing#gemini-3.5-flash-lite
+              - https://ai.google.dev/gemini-api/docs/deprecations
+            contextWindow: 1048576
+            maxOutputTokens: 65536
+            input: [text, image, video, audio]
+          stream_generate_content: *gemini35LiteFacts
+    - id: google/gemini-3.1-pro-preview
+      displayName: "Gemini 3.1 Pro Preview"
+      upstream: gemini-3.1-pro-preview
+      capabilities: [llm.generate, llm.stream]
+      pricingRef: google-gemini-3-1-pro-preview-published-upper-bound-2026-11-04
+      pricing:
+        effectiveAt: "2026-11-04"
+        source: https://ai.google.dev/gemini-api/docs/pricing#gemini-3.1-pro-preview
+        settlementBasis: published_upper_bound
+        inputMicrosPerMillion: 4000000
+        cachedInputMicrosPerMillion: 400000
+        outputMicrosPerMillion: 18000000
+        maxInputTokens: 1048576
+        defaultMaxOutputTokens: 65536
+        serviceTiers:
+          - id: default
+            aliases: [standard]
+            inputMicrosPerMillion: 4000000
+            cachedInputMicrosPerMillion: 400000
+            outputMicrosPerMillion: 18000000
+          - id: flex
+            inputMicrosPerMillion: 2000000
+            cachedInputMicrosPerMillion: 400000
+            outputMicrosPerMillion: 9000000
+          - id: priority
+            inputMicrosPerMillion: 7200000
+            cachedInputMicrosPerMillion: 720000
+            outputMicrosPerMillion: 32400000
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          generate_content: &gemini31ProFacts
+            checkedAt: "2026-11-04"
+            sources:
+              - https://ai.google.dev/gemini-api/docs/models/gemini-3.1-pro-preview
+              - https://ai.google.dev/gemini-api/docs/pricing#gemini-3.1-pro-preview
+              - https://ai.google.dev/gemini-api/docs/deprecations
+            contextWindow: 1048576
+            maxOutputTokens: 65536
+            input: [text, image, video, audio]
+          stream_generate_content: *gemini31ProFacts
+    - id: google/gemini-3.8-flash
+      displayName: "Gemini 3.8 Flash"
+      upstream: gemini-3.8-flash
+      capabilities: [llm.generate, llm.stream]
+      pricingRef: google-gemini-3-8-flash-published-upper-bound-2026-11-04
+      pricing:
+        effectiveAt: "2026-11-04"
+        source: https://ai.google.dev/gemini-api/docs/pricing#gemini-3.8-flash
+        settlementBasis: published_upper_bound
+        inputMicrosPerMillion: 1500000
+        cachedInputMicrosPerMillion: 150000
+        outputMicrosPerMillion: 7500000
+        maxInputTokens: 1048576
+        defaultMaxOutputTokens: 65536
+        serviceTiers:
+          - id: default
+            aliases: [standard]
+            inputMicrosPerMillion: 1500000
+            cachedInputMicrosPerMillion: 150000
+            outputMicrosPerMillion: 7500000
+          - id: flex
+            inputMicrosPerMillion: 750000
+            cachedInputMicrosPerMillion: 75000
+            outputMicrosPerMillion: 3750000
+          - id: priority
+            inputMicrosPerMillion: 2700000
+            cachedInputMicrosPerMillion: 270000
+            outputMicrosPerMillion: 13500000
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          generate_content: &gemini38Facts
+            checkedAt: "2026-11-04"
+            sources:
+              - https://ai.google.dev/gemini-api/docs/models/gemini-3.8-flash
+              - https://ai.google.dev/gemini-api/docs/pricing#gemini-3.8-flash
+              - https://ai.google.dev/gemini-api/docs/deprecations
+            contextWindow: 1048576
+            maxOutputTokens: 65536
+            input: [text, image, video, audio]
+          stream_generate_content: *gemini38Facts
     - id: google/gemini-embedding-001
+      displayName: "Gemini Embedding 001"
       upstream: gemini-embedding-001
       capabilities: [llm.embeddings]
       nativeCapabilities:
@@ -129,6 +414,7 @@ models:
             input: [text]
           batch_embed_contents: *embedding001Facts
     - id: google/gemini-embedding-2
+      displayName: "Gemini Embedding 2"
       upstream: gemini-embedding-2
       capabilities: [llm.embeddings]
       nativeCapabilities:
@@ -142,6 +428,7 @@ models:
             contextWindow: 8192
           batch_embed_contents: *embedding2Facts
     - id: google/gemini-3.1-flash-lite
+      displayName: "Gemini 3.1 Flash Lite"
       upstream: gemini-3.1-flash-lite
       capabilities: [llm.generate, llm.stream]
       nativeCapabilities:
@@ -185,6 +472,7 @@ models:
             cachedInputMicrosPerMillion: 90000
             outputMicrosPerMillion: 2700000
     - id: google/gemini-3-flash-preview
+      displayName: "Gemini 3 Flash Preview"
       upstream: gemini-3-flash-preview
       capabilities: [llm.generate, llm.stream]
       nativeCapabilities:
@@ -228,6 +516,7 @@ models:
             cachedInputMicrosPerMillion: 180000
             outputMicrosPerMillion: 5400000
     - id: google/gemini-2.5-flash-lite
+      displayName: "Gemini 2.5 Flash Lite"
       upstream: gemini-2.5-flash-lite
       capabilities: [llm.generate, llm.stream]
       nativeCapabilities:
@@ -270,6 +559,24 @@ models:
             inputMicrosPerMillion: 540000
             cachedInputMicrosPerMillion: 54000
             outputMicrosPerMillion: 720000
+    # Frozen non-preview identities; bounded native images have no qualified dollar tariff.
+    # Availability checked 2026-11-04: https://ai.google.dev/gemini-api/docs/deprecations
+    - id: google/gemini-3.1-flash-image
+      displayName: "Gemini 3.1 Flash Image"
+      upstream: gemini-3.1-flash-image
+      capabilities: [image.generate]
+    - id: google/gemini-3-pro-image
+      displayName: "Gemini 3 Pro Image"
+      upstream: gemini-3-pro-image
+      capabilities: [image.generate]
+    - id: google/lyria-3-clip-preview
+      displayName: "Lyria 3 Clip Preview"
+      upstream: lyria-3-clip-preview
+      capabilities: [audio.generate]
+    - id: google/lyria-3-pro-preview
+      displayName: "Lyria 3 Pro Preview"
+      upstream: lyria-3-pro-preview
+      capabilities: [audio.generate]
     - id: google/gemini-3.1-flash-tts-preview
       upstream: gemini-3.1-flash-tts-preview
       capabilities: [audio.speech]

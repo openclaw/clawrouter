@@ -1,27 +1,21 @@
+import type { GrantAccount, GrantExtraUsage } from "./provider-observations.ts";
+export type { GrantAccount, GrantExtraUsage } from "./provider-observations.ts";
+import type { ProviderModelDefinition } from "./provider-model.ts";
 import type { ModelAvailability } from "./model-availability";
 export type { ModelAvailability } from "./model-availability";
-import type { NativeModelCapabilities } from "./native-capabilities";
-import type { ModelRequestParameters, ProviderReasoningEffort } from "./model-request-parameters";
+import type { ProviderOfferReference, ProviderProductSummary } from "./provider-products.ts";
 
-export interface TokenRates { inputMicrosPerMillion: number; outputMicrosPerMillion: number; cachedInputMicrosPerMillion: number | null; cacheWriteInputMicrosPerMillion: number | null; cacheWrite5mInputMicrosPerMillion: number | null; cacheWrite1hInputMicrosPerMillion: number | null }
-export interface LongContextPricing extends TokenRates { thresholdInputTokens: number }
-export interface ServiceTierPricing extends TokenRates { id: string; aliases: string[]; maxInputTokens: number | null; longContext: LongContextPricing | null }
-// Native Messages modifiers are independent of OpenAI service-tier tariffs.
-// Null means no qualified premium; it never prevents standard/default admission.
-export interface AnthropicPriceModifiers { sources: string[]; checkedAt: string; fastMultiplier: 2 | null; usMultiplier: 1.1 | null; serviceTiers: ["standard"] }
-export interface TokenPricing extends TokenRates { unit?: never; effectiveAt: string; source: string; maxInputTokens: number; maxRequestInputTokens: number | null; defaultMaxOutputTokens: number; inputTokenOverhead: number; longContext: LongContextPricing | null; serviceTiers?: ServiceTierPricing[]; anthropicModifiers?: AnthropicPriceModifiers; unpricedCosts?: Array<"request_fee">; settlementBasis?: "published_upper_bound" }
-export interface CharacterPricing { unit: "character"; effectiveAt: string; source: string; inputMicrosPerMillionCharacters: number; maxInputCharacters: number }
-// Image generation uses modality-specific usage, not an ordinary chat token card.
-export interface ImageTokenPricing {
-  unit: "image_token"; effectiveAt: string; source: string;
-  textInputMicrosPerMillion: number; imageInputMicrosPerMillion: number; imageOutputMicrosPerMillion: number;
-  generation: { source: string; checkedAt: string; maxPromptCharacters: number; maxImages: number;
-    dimensionMultiple: number; minPixels: number; maxPixels: number; maxEdge: number; maxAspectRatio: number;
-    outputTokenBound: { basePixels: number; divisor: number; qualityFactors: Record<string, number> } };
-}
-export type ModelPricing = TokenPricing | CharacterPricing | ImageTokenPricing;
-export interface ClientCatalogModel { id: string; upstream: string; codexModel?: string; availability?: ModelAvailability; capabilities: string[]; supportedReasoningEfforts?: ProviderReasoningEffort[]; requestParameters?: Record<string, ModelRequestParameters>; nativeCapabilities?: NativeModelCapabilities; endpointPricing?: Record<string, { pricing_ref: string; pricing: ModelPricing }>; pricing_ref: string | null; pricing: ModelPricing | null }
+// Preserve the client import surface while model facts have their own owner.
+export type { TokenRates, LongContextPricing, ServiceTierPricing, AnthropicPriceModifiers,
+  TokenPricing, CharacterPricing, ImageTokenPricing, ModelPricing } from "./provider-model.ts";
+export interface ClientCatalogModel extends ProviderModelDefinition {}
 export interface CatalogOffer {
+  // Compatible declarations under this offer's policy. No selected account or entitlement promise.
+  productOffers?: ProviderOfferReference[];
+  // Configured server origin, not publication permission or automatic selection.
+  publishedInputOrigin?: { version: "clawrouter.published-input.v1"; origin: string };
+  // Encoding declaration only; runtime eligibility and authority remain separate.
+  inputProfile?: "clawrouter.pixverse-image-input.v1";
   endpoint: string;
   modelId: string | null;
   transport: "http" | "websocket";
@@ -50,7 +44,8 @@ export interface ClientCatalogProvider {
   policies: string[];
   readiness: ProviderReadiness;
   connectionTypes: string[];
-  routes: Array<{ endpoint: string; methods: string[]; path: string; requestFormat: string; responseFormat: string; streaming: string | null; websocket?: "openai.responses" | "openai.realtime"; requestPricing?: import("./request-pricing").RequestPricing }>;
+  products?: ProviderProductSummary[];
+  routes: Array<{ inputProfile?: "clawrouter.pixverse-image-input.v1"; endpoint: string; methods: string[]; path: string; requestFormat: string; responseFormat: string; streaming: string | null; websocket?: "openai.responses" | "openai.realtime"; requestPricing?: import("./request-pricing").RequestPricing }>;
   models: ClientCatalogModel[];
   offers: CatalogOffer[];
 }
@@ -79,7 +74,7 @@ export interface ProviderResponse { providers: ProviderRow[] }
 
 export interface RouteCatalog {
   openaiCompatible: Array<{ provider: string; models: Array<{ id: string; availability?: ModelAvailability; capabilities: string[]; endpoints: string[] }>; modelPrefixes?: string[]; endpoints: string[] }>;
-  manifestProxy: Array<{ provider: string; endpoint: string; route: string; methods: string[]; pathParams?: string[]; requestFormat?: string | null; responseFormat?: string | null; sampleModel?: string | null; models?: Array<{ id: string; availability?: ModelAvailability; capabilities: string[] }>; streaming?: boolean | null }>;
+  manifestProxy: Array<{ inputProfile?: "clawrouter.pixverse-image-input.v1"; provider: string; endpoint: string; route: string; methods: string[]; pathParams?: string[]; requestFormat?: string | null; responseFormat?: string | null; sampleModel?: string | null; models?: Array<{ id: string; availability?: ModelAvailability; capabilities: string[] }>; streaming?: boolean | null }>;
 }
 
 export interface AccessPolicy {
@@ -99,6 +94,7 @@ export interface AccessPolicy {
   budgetScope?: "policy" | "principal";
   budgetMode?: "reserve" | "soft";
   upstreamRetention?: import("./upstream-retention").UpstreamRetentionPolicy | null;
+  inputPublication?: import("./input-publication").InputPublicationPolicy | null;
   retainRequestContent: boolean;
   grantRouting: GrantRoutingPolicy;
 }
@@ -116,6 +112,8 @@ export interface GrantRoutingPolicy {
   switchAtUsedPercent: number;
   hysteresisPercent: number;
   eligibleGrants: Record<string, string[]>;
+  // Administrator-authorized subscription owners; keys retain their original scope.
+  sharedGrants?: Record<string, string[]>;
 }
 
 export interface ProxyCredential {
@@ -144,6 +142,7 @@ export interface ProviderConnection {
 
 export interface FusionConfig {
   version: 1;
+  strategy?: "single" | "ensemble";
   enabled: boolean;
   modelId: "clawrouter/fusion";
   adviserModels: string[];
@@ -198,10 +197,18 @@ export interface GrantRefreshDiagnosis {
     lastFailureAt: string;
     attemptCount: number;
     nextRetryAt: string | null;
+    settlement?: {
+      stage: "result_store" | "ownership_claim" | "credential_read" | "credential_write" | "settlement_resume";
+      code: string;
+      correlationId: string;
+    };
   } | null;
 }
 
 export interface UpstreamGrant {
+  minimaxSearchBinding?: import("./minimax-search-binding").MiniMaxSearchBinding | null;
+  minimaxVideoBinding?: import("./minimax-video-binding").MiniMaxVideoBinding | null;
+  minimaxImageBinding?: import("./minimax-image-binding").MiniMaxImageBinding | null;
   nativeMediaBinding?: import("./native-media-binding").NativeMediaBinding | null;
   key: string;
   scope: "policies" | "tenants";
@@ -423,8 +430,6 @@ export interface AdminBootstrapResponse {
   tenants: AdminTenantSummary[];
 }
 
-export interface GrantAccount { email?: string; displayName?: string; rateLimitTier?: string; subscriptionStatus?: string; extraUsageEnabled?: boolean }
-export interface GrantExtraUsage { enabled?: boolean; usedCredits?: number; monthlyLimit?: number; utilization?: number; currency?: string; spendLimitReached?: boolean }
 export type GrantLane = "subscription" | "api_key" | "environment";
 export interface GrantUsageTotals { requests: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; costMicros: number }
 export interface GrantUsageRow extends GrantUsageTotals { day: string; provider: string; grantKey: string | null; grantLane: GrantLane | null; model: string | null }

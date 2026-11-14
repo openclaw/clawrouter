@@ -1,3 +1,10 @@
+import { admitIdentity, isIdentityFailure } from "./identity-admission.ts";
+import type { MiniMaxVideoOperation } from "./minimax-video-operation.ts";
+import { miniMaxVideoDenied, miniMaxVideoIdentity, miniMaxVideoRequirement } from "./minimax-video-credential.ts";
+import { readMiniMaxVideoBinding } from "../shared/minimax-video-binding.ts";
+import type { MiniMaxSearchOperation } from "./minimax-search-operation.ts";
+import { miniMaxSearchDenied, miniMaxSearchIdentity } from "./minimax-search-credential.ts";
+import type { WanManagedOperation } from "./managed-media-json.ts";
 import { capabilityForPath, createRouteCatalog, unifiedPathForRequestFormat } from "../shared/route-catalog.ts";
 export { capabilityForPath, modelSupportsEndpoint } from "../shared/route-catalog.ts";
 import { selectedCredentialFailure } from "./grant-credential-failure.ts";
@@ -11,16 +18,17 @@ import { admittedGrantSelection, proxyAdmission, proxySessionHash } from "./prox
 import { grantRevision, grantUsable, resolveGrantSelection, type PinnedGrant } from "./grant-selection.ts";
 import { grantsVisibleToPolicies, type GrantRecord } from "./grant-scope.ts";
 import { materializeGrantCredentials, reconcileGrantAttachment, refreshGrantQuota } from "./grant-credentials.ts";
-import { hotCacheConfig, registerHotCache, runInBackground } from "./hot-cache.ts";
+import { hotCacheConfig, registerHotCache, tryRunInBackground } from "./hot-cache.ts";
 import { cachedGrantCredentials, evictGrantCredentials } from "./credential-cache.ts";
 import { recordCredentialWait } from "./admission-timing.ts";
-import { applyProviderCredential, applyTransportHeaders, assertOperationConfiguration, providerConfigPresent, providerSecretConfigKey, transportForGrant, type GrantRequirement } from "./provider-auth.ts";
+import { applyProviderCredential, applyTransportHeaders, assertOperationConfiguration, grantSupports, providerConfigPresent, providerSecretConfigKey, transportForGrant, type GrantRequirement } from "./provider-auth.ts";
 import type {
   AccessPolicyEntry, AuthorizedIdentity, CompiledEndpoint, CompiledGrantTransport, CompiledModel, CompiledProvider, Env,
   ProviderConnection, ProviderHealth, ProviderSnapshot, UpstreamGrant,
 } from "./types.ts";
 import { envValue, HttpError, sha256Hex } from "./utils.ts";
-import { applyTemplateHeaders, optionalConfigKeys, resolveHeaderTemplate, resolveTemplate, templateCandidates } from "./provider-templates.ts";
+import { providerConfigurationList } from "./provider-connections.ts";
+import { applyTemplateHeaders, optionalConfigKeys, resolveHeaderTemplate, resolveTemplate, templateCandidates, PreparationAdmission, isPreparationLimit, preparationValue, preparationHeader, preparationBytes, preparationEncodedBytes } from "./provider-templates.ts";
 
 export const snapshot = snapshotJson as unknown as ProviderSnapshot;
 
@@ -83,6 +91,15 @@ export function providerModel(provider: CompiledProvider, value: string, endpoin
   const upstream = prefix && !native ? value.slice(prefix.length) : value;
   const known = provider.models.find((model) => model.id === value) ?? provider.models.find((model) => model.upstream === value || model.upstream === upstream);
   if (known) return modelForEndpoint(known, endpoint?.id);
+  if (native && value) {
+    // A registered native identity may differ from its physical upstream alias.
+    // Match only literal cards with an exact declared router prefix plus identity,
+    // never configured deployment templates, suffixes or stripped unknown IDs.
+    const declared = provider.models.filter((model) => !model.id.includes("${") && !model.upstream.includes("${")
+      && provider.routing.modelPrefixes.some((prefix) => model.id === prefix + value));
+    if (declared.length > 1) return null;
+    if (declared.length === 1) return modelForEndpoint(declared[0], endpoint?.id);
+  }
   if (!value || !endpoint?.modelPassthrough) return null;
   if (!upstream) return null;
   // Native opaque ids belong to the upstream namespace, even when they match
@@ -105,7 +122,7 @@ export function endpointForPath(provider: CompiledProvider, path: string): Compi
 export function unifiedPathForEndpoint(provider: CompiledProvider, endpoint: CompiledEndpoint): string | null {
   const format = endpoint.request_format;
   const path = unifiedPathForRequestFormat(format);
-  const responseFormat = format === "openai.audio_speech" ? "audio.binary" : format;
+  const responseFormat = format === "openai.audio_speech" ? "audio.binary" : format === "openai.images_edits" ? "openai.images_generations" : format;
   return path && endpoint.response_format === responseFormat && endpointForPath(provider, path)?.id === endpoint.id ? path : null;
 }
 
@@ -182,28 +199,39 @@ export function providerReadinessForState(provider: CompiledProvider, env: Env, 
   };
 }
 
-export async function assertProviderAccess(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, resolvedConnection?: ProviderConnection): Promise<ProviderConnection> {
+export async function assertProviderAccess(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, resolvedConnection?: ProviderConnection, wan?: WanManagedOperation, video?: MiniMaxVideoOperation): Promise<ProviderConnection> {
   if (auth.policy.providers.length && !auth.policy.providers.includes(provider.id)) throw new HttpError(403, "provider_not_allowed", `policy does not allow provider ${provider.id}`);
+  if (video) {
+    const current = resolvedConnection ?? await resolveConnection(env, provider.id, undefined, undefined, video);
+    if (!current?.enabled) miniMaxVideoDenied();
+    return current;
+  }
   const admission = proxyAdmission(auth);
   if (!resolvedConnection && admission?.connectionsUnavailable) throw new Error("admission connection resolution failed");
+  if (wan && (wan.kind === "poll" || !resolvedConnection && !(admission && Object.hasOwn(admission.pools, provider.id)))) {
+    resolvedConnection = await resolveConnection(env, provider.id, wan) ?? undefined;
+    if (!resolvedConnection) throw new HttpError(503, "prediction_owner_unavailable", "Wan connection is unavailable");
+  }
   const connection = resolvedConnection ?? (admission && Object.hasOwn(admission.pools, provider.id) ? admission.connections.find(item => item.providerId === provider.id) ?? { providerId: provider.id, enabled: true } : await connectionFor(env, provider.id));
   if (!connection.enabled) throw new HttpError(503, "provider_disabled", `provider ${provider.id} is disabled`);
   return connection;
 }
 
-export async function upstreamAuth(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedGrantKeys: ReadonlySet<string> = new Set(), stickyHash: string | null = null, recordSelection = true, pinned?: PinnedGrant, requirement?: GrantRequirement): Promise<UpstreamAuth> {
-  const resolution = await grantFor(provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, requirement);
+export async function upstreamAuth(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedGrantKeys: ReadonlySet<string> = new Set(), stickyHash: string | null = null, recordSelection = true, pinned?: PinnedGrant, requirement?: GrantRequirement, signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, owner?: PreparationAdmission): Promise<UpstreamAuth> {
+  const resolution = await grantFor(provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, requirement, signal, wan, search, video, owner);
   const selected = resolution.selected;
+  if (video && !selected) miniMaxVideoDenied();
+  if (search && !selected) miniMaxSearchDenied();
   if (!selected && resolution.hasConfiguredGrant) {
     const unavailable = () => grantPoolUnavailable(provider, resolution.retryAt);
-    if (!auth.policy.grantRouting?.environmentFallback || pinned?.key != null) throw unavailable();
-    try { if (requirement) assertOperationConfiguration(requirement, null, env); configuredUpstream(provider, null, env); }
-    catch { throw unavailable(); }
+    if (video || wan || !auth.policy.grantRouting?.environmentFallback || pinned?.key != null) throw unavailable();
+    try { if (requirement) assertOperationConfiguration(requirement, null, env, owner); configuredUpstream(provider, null, env, undefined, owner); }
+    catch (error) { if (isPreparationLimit(error)) throw error; throw unavailable(); }
   }
   const grant = selected?.grant ?? null;
   assertPinnedGrant(pinned, selected);
-  if (requirement) assertOperationConfiguration(requirement, grant, env);
-  return { ...configuredUpstream(provider, grant, env), grantKey: selected?.key ?? null, grantRevision: grant ? grantRevision(grant) : null };
+  if (requirement) assertOperationConfiguration(requirement, grant, env, owner);
+  return { ...configuredUpstream(provider, grant, env, video ? requirement : undefined, owner), grantKey: selected?.key ?? null, grantRevision: grant ? grantRevision(grant) : null };
 }
 
 function assertPinnedGrant(pinned: PinnedGrant | undefined, selected: { key: string; grant: UpstreamGrant } | null): void {
@@ -213,20 +241,24 @@ function assertPinnedGrant(pinned: PinnedGrant | undefined, selected: { key: str
 
 // Selection and credential ownership stay with their callers. Both generation
 // and pinned controls use this same configuration-to-wire preparation.
-export function configuredUpstream(provider: CompiledProvider, grant: UpstreamGrant | null, env: Env): UpstreamAuth {
+export function configuredUpstream(provider: CompiledProvider, grant: UpstreamGrant | null, env: Env, videoRequirement?: GrantRequirement, owner?: PreparationAdmission): UpstreamAuth {
+  const videoBinding = videoRequirement ? readMiniMaxVideoBinding(grant?.minimaxVideoBinding) : null;
+  if (videoRequirement && (!videoBinding || !miniMaxVideoRequirement(videoRequirement) || !grant || !grantSupports(videoRequirement, grant))) miniMaxVideoDenied();
   const headers = new Headers();
   const query = new URLSearchParams();
-  applyProviderCredential(provider, grant, env, headers, query);
-  applyTemplateHeaders(provider, provider.adapter.injectHeaders, env, headers);
-  for (const [name, value] of Object.entries(provider.adapter.injectQuery)) query.set(name, resolveTemplate(provider, value, env));
+  applyProviderCredential(provider, grant, env, headers, query, owner);
+  applyTemplateHeaders(provider, provider.adapter.injectHeaders, env, headers, owner);
+  for (const name in provider.adapter.injectQuery) { const value = resolveTemplate(provider, provider.adapter.injectQuery[name], env, owner, 4096); owner?.query(name, value); query.set(name, value); }
   const transport = transportForGrant(provider, grant);
-  applyTransportHeaders(headers, transport, grant);
+  applyTransportHeaders(headers, transport, grant, owner);
+  const baseUrl = videoBinding?.origin ?? transport?.baseUrl ?? resolveTemplate(provider, provider.base_urls.default, env, owner, 4096);
+  owner?.text(baseUrl, 4096);
   return {
     grant,
     grantKey: null,
     grantLane: !grant ? "environment" : grant.kind === "api_key" ? "api_key" : "subscription",
     grantRevision: grant ? grantRevision(grant) : null,
-    baseUrl: transport?.baseUrl ?? resolveTemplate(provider, provider.base_urls.default, env),
+    baseUrl,
     headers,
     query,
     transportPaths: transport?.endpointPaths ?? {},
@@ -234,37 +266,47 @@ export function configuredUpstream(provider: CompiledProvider, grant: UpstreamGr
   };
 }
 
-export function upstreamPath(provider: CompiledProvider, endpoint: CompiledEndpoint, pathParams: Record<string, string>, env: Env, auth: UpstreamAuth): string {
+export function upstreamPath(provider: CompiledProvider, endpoint: CompiledEndpoint, pathParams: Record<string, string>, env: Env, auth: UpstreamAuth, owner?: PreparationAdmission): string {
+  owner?.paths(pathParams, endpoint.path_param_styles);
   const transportPath = auth.transportPaths[endpoint.id as keyof typeof auth.transportPaths];
   let path = configuredEndpointPath(endpoint, transportPath, auth.baseUrl);
   for (const name of endpoint.path_params) {
     const raw = pathParams[name];
     if (!raw) throw new HttpError(400, "missing_path_param", `path parameter ${name} is required`);
     const style = endpoint.path_param_styles[name as keyof typeof endpoint.path_param_styles] ?? "segment";
-    path = path.replace(`\${${name}}`, encodePathParam(raw, style));
+    const placeholder = `\${${name}}`;
+    if (owner) {
+      const encoded = owner.path(raw, style === "relative_path", style === "opaque_segment" || style === "relative_path");
+      owner.text(path, 16384);
+      if (path.includes(placeholder)) {
+        if (path.length - placeholder.length + encoded > 16384 || preparationBytes(path) - preparationBytes(placeholder) + encoded > 16384) owner.fail();
+        owner.substitute(1);
+      }
+    }
+    path = path.replace(placeholder, encodePathParam(raw, style));
   }
-  return resolveTemplate(provider, path, env);
+  return resolveTemplate(provider, path, env, owner);
 }
 
-export function copyRequestHeaders(incoming: Headers, provider: CompiledProvider, endpoint: CompiledEndpoint, target: Headers, env: Env): void {
+export function copyRequestHeaders(incoming: Headers, provider: CompiledProvider, endpoint: CompiledEndpoint, target: Headers, env: Env, owner?: PreparationAdmission): void {
   for (const name of [...provider.adapter.passthroughHeaders, ...endpoint.request_headers]) {
     const lower = name.toLowerCase();
     // Caller-selected tenancy, profile trust grants and replay keys have no
     // authorized owner binding. A manifest allowlist cannot grant authority.
     if (["x-clawrouter-background-recovery", "anthropic-workspace-id", "anthropic-user-profile-id", "idempotency-key"].includes(lower)) continue;
     const value = incoming.get(name);
-    if (value) target.set(name, value);
+    if (value) preparationHeader(target, name, value, owner);
   }
-  target.set("content-type", incoming.get("content-type") ?? "application/json");
-  applyTemplateHeaders(provider, endpoint.headers, env, target);
+  preparationHeader(target, "content-type", incoming.get("content-type") ?? "application/json", owner);
+  applyTemplateHeaders(provider, endpoint.headers, env, target, owner);
 }
 
-export function transformRequestBody(provider: CompiledProvider, path: string, model: string, body: Record<string, unknown>, env: Env): Record<string, unknown> {
+export function transformRequestBody(provider: CompiledProvider, path: string, model: string, body: Record<string, unknown>, env: Env, owner?: PreparationAdmission): Record<string, unknown> {
   // Renames only replace top-level fields; nested prompt/tool data is read-only.
   const transformed = { ...body };
   for (const rename of provider.adapter.requestTransforms.renameFields) {
     if (rename.paths.length && !rename.paths.includes(path)) continue;
-    const allowed = rename.upstreams.length === 0 || rename.upstreams.includes(model) || (!!rename.upstreamConfig && configuredList(provider, rename.upstreamConfig, env).includes(model));
+    const allowed = rename.upstreams.length === 0 || rename.upstreams.includes(model) || (!!rename.upstreamConfig && configuredList(provider, rename.upstreamConfig, env, owner).includes(model));
     if (allowed && rename.from in transformed && !(rename.to in transformed)) {
       transformed[rename.to] = transformed[rename.from];
       delete transformed[rename.from];
@@ -273,38 +315,74 @@ export function transformRequestBody(provider: CompiledProvider, path: string, m
   return transformed;
 }
 
-export async function signSigV4(provider: CompiledProvider, url: URL, method: string, body: string | undefined, headers: Headers, env: Env, grant: UpstreamGrant | null, now = new Date()): Promise<string | undefined> {
-  const scheme = provider.auth.schemes.find((candidate) => candidate.type === "sig_v4");
-  if (!scheme || scheme.type !== "sig_v4") return;
-  const credentials = grant?.credentials;
-  const accessKeyId = grant ? credentials?.accessKeyId : envValue(env, "AWS_ACCESS_KEY_ID");
-  const secretAccessKey = grant ? credentials?.secretAccessKey : envValue(env, "AWS_SECRET_ACCESS_KEY");
-  const sessionToken = grant ? credentials?.sessionToken : envValue(env, "AWS_SESSION_TOKEN");
-  const region = envValue(env, "AWS_REGION");
-  if (!accessKeyId || !secretAccessKey || !region) {
-    const message = grant
-      ? "selected AWS grant must contain accessKeyId and secretAccessKey; AWS_REGION is required"
-      : "AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_REGION are required";
-    throw new HttpError(503, "provider_not_configured", message);
+export function signSigV4(provider: CompiledProvider, url: URL, method: string, body: string | undefined, headers: Headers, env: Env, grant: UpstreamGrant | null, now = new Date(), owner?: PreparationAdmission): Promise<string | undefined> {
+  try {
+    const scheme = provider.auth.schemes.find((candidate) => candidate.type === "sig_v4");
+    if (!scheme || scheme.type !== "sig_v4") return Promise.resolve(undefined);
+    const credentials = grant?.credentials;
+    const accessKeyId = grant ? credentials?.accessKeyId : preparationValue(env, "AWS_ACCESS_KEY_ID", owner);
+    const secretAccessKey = grant ? credentials?.secretAccessKey : preparationValue(env, "AWS_SECRET_ACCESS_KEY", owner);
+    const sessionToken = grant ? credentials?.sessionToken : preparationValue(env, "AWS_SESSION_TOKEN", owner);
+    const region = preparationValue(env, "AWS_REGION", owner);
+    if (grant) { owner?.primitive("accessKeyId", accessKeyId); owner?.primitive("secretAccessKey", secretAccessKey); owner?.primitive("sessionToken", sessionToken); }
+    if (!accessKeyId || !secretAccessKey || !region) {
+      const message = grant
+        ? "selected AWS grant must contain accessKeyId and secretAccessKey; AWS_REGION is required"
+        : "AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_REGION are required";
+      throw new HttpError(503, "provider_not_configured", message);
+    }
+    owner?.primitive("service", scheme.service);
+    return signAdmittedSigV4(url, method, body, headers, accessKeyId, secretAccessKey, sessionToken, region, scheme.service, now, owner);
+  } catch (error) { return Promise.reject(error); }
+}
+
+// No Env or grant survives into this asynchronous signer.
+async function signAdmittedSigV4(url: URL, method: string, body: string | undefined, headers: Headers,
+  accessKeyId: string, secretAccessKey: string, sessionToken: string | null | undefined, region: string, service: string,
+  now: Date, owner?: PreparationAdmission): Promise<string> {
+  if (owner) {
+    owner.text(url.href, 16384); owner.headers(headers);
+    // Canonical query/URI expansion is admitted before encoding, arrays or sorting.
+    let queryBytes = 0, pairs = 0, segments = 1;
+    url.searchParams.forEach((value, key) => {
+      owner.query(key, value);
+      queryBytes += preparationEncodedBytes(key, "aws") + preparationEncodedBytes(value, "aws") + 1 + (pairs++ ? 1 : 0);
+      if (queryBytes > 8192) owner.fail();
+    });
+    for (const character of url.pathname) if (character === "/") segments++;
+    if (segments > 64 || preparationEncodedBytes(url.pathname, "aws") - (segments - 1) * 2 > 8192) owner.fail();
+    owner.text(region, 16384); owner.text(service, 16384);
+    owner.joined(["AWS4", secretAccessKey], 16388);
   }
   const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, ""), dateStamp = amzDate.slice(0, 8);
+  // Fixed-width digest/signature slots allow the complete generated-header plan
+  // to be admitted before any payload digest/import/sign invocation.
+  const generated: Array<[string, string]> = [["host", url.host], ["x-amz-date", amzDate], ["x-amz-content-sha256", "0".repeat(64)]];
+  if (sessionToken) generated.push(["x-amz-security-token", sessionToken]);
+  owner?.headerPlan(headers, generated, false);
+  const headerNames: string[] = [];
+  headers.forEach((_, name) => headerNames.push(name.toLowerCase()));
+  for (const [name] of generated) if (!headerNames.includes(name)) headerNames.push(name);
+  const signedHeaderNames = headerNames.filter(name => name === "host" || name === "content-type" || name.startsWith("x-amz-") || name.startsWith("x-amzn-")).sort();
+  const signedHeaders = signedHeaderNames.join(";");
+  owner?.joined([dateStamp, region, service, "aws4_request"], 8192, "/");
+  const scope = `${dateStamp}/${region}/${service}/aws4_request`;
+  owner?.joined(["AWS4-HMAC-SHA256 Credential=", accessKeyId, "/", scope, ", SignedHeaders=", signedHeaders, ", Signature=", "0".repeat(64)], 8192);
+  const authorization = `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=`;
+  owner?.headerPlan(headers, [...generated, ["authorization", authorization + "0".repeat(64)]]);
   const payloadHash = await sha256Hex(body ?? "");
   headers.set("host", url.host); headers.set("x-amz-date", amzDate); headers.set("x-amz-content-sha256", payloadHash);
   if (sessionToken) headers.set("x-amz-security-token", sessionToken);
-  const headerNames: string[] = []; headers.forEach((_, name) => headerNames.push(name.toLowerCase()));
-  const signedHeaderNames = headerNames.filter((name) => name === "host" || name === "content-type" || name.startsWith("x-amz-") || name.startsWith("x-amzn-")).sort();
   const canonicalHeaders = signedHeaderNames.map((name) => `${name}:${headers.get(name)!.trim().replace(/\s+/g, " ")}\n`).join("");
-  const signedHeaders = signedHeaderNames.join(";");
   const queryEntries: Array<[string, string]> = []; url.searchParams.forEach((value, key) => queryEntries.push([awsEncode(key), awsEncode(value)]));
   const query = queryEntries.sort(([a, av], [b, bv]) => compareAscii(a, b) || compareAscii(av, bv)).map(([key, value]) => `${key}=${value}`).join("&");
   const uri = url.pathname.split("/").map(awsEncode).join("/") || "/";
   const canonicalRequest = `${method}\n${uri}\n${query}\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
-  const scope = `${dateStamp}/${region}/${scheme.service}/aws4_request`;
   const stringToSign = `AWS4-HMAC-SHA256\n${amzDate}\n${scope}\n${await sha256Hex(canonicalRequest)}`;
   const dateKey = await hmac(new TextEncoder().encode(`AWS4${secretAccessKey}`), dateStamp);
-  const regionKey = await hmac(dateKey, region), serviceKey = await hmac(regionKey, scheme.service), signingKey = await hmac(serviceKey, "aws4_request");
+  const regionKey = await hmac(dateKey, region), serviceKey = await hmac(regionKey, service), signingKey = await hmac(serviceKey, "aws4_request");
   const signature = hex(await hmac(signingKey, stringToSign));
-  headers.set("authorization", `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`);
+  headers.set("authorization", authorization + signature);
   headers.delete("host");
   return region;
 }
@@ -344,22 +422,71 @@ function grantPoolUnavailable(provider: CompiledProvider, retryAt: string | unde
   return new HttpError(429, "upstream_grant_pool_unavailable", message, { "retry-after": String(Math.max(1, Math.ceil(waitMs / 1_000))) });
 }
 
-async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedKeys: ReadonlySet<string>, stickyHash: string | null, recordSelection: boolean, pinned?: PinnedGrant, requirement?: GrantRequirement): Promise<{ selected: { key: string; grant: UpstreamGrant } | null; hasConfiguredGrant: boolean; retryAt?: string }> {
+async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedKeys: ReadonlySet<string>, stickyHash: string | null, recordSelection: boolean, pinned?: PinnedGrant, requirement?: GrantRequirement, signal?: AbortSignal, wan?: WanManagedOperation, search?: MiniMaxSearchOperation, video?: MiniMaxVideoOperation, owner?: PreparationAdmission): Promise<{ selected: { key: string; grant: UpstreamGrant } | null; hasConfiguredGrant: boolean; retryAt?: string }> {
   const tokenRef = provider.auth.schemes.find((scheme) => scheme.type === "oauth")?.tokenRef ?? provider.id;
-  const admitted = recordSelection && requirement ? await admittedGrantSelection(auth, env, requirement, excludedKeys, pinned?.key) : undefined;
+  if (requirement?.endpoint.lifecycle?.protocol === "minimax.video" && (!video || excludedKeys.size || !recordSelection || !miniMaxVideoRequirement(requirement))) miniMaxVideoDenied();
+  if (requirement?.endpoint.request_format === "minimax.search" && (!search || excludedKeys.size || !recordSelection)) miniMaxSearchDenied();
+  if (wan && (excludedKeys.size || !requirement || provider.id !== "alibaba" || requirement.endpoint.lifecycle?.protocol !== "dashscope.video"))
+    throw new HttpError(503, "prediction_owner_unavailable", "Wan cannot reselect an original owner");
+  const admitted = requirement && (recordSelection || pinned && excludedKeys.size) ? await admittedGrantSelection(auth, env, requirement, excludedKeys, pinned?.key, recordSelection) : undefined;
+  if (video && !admitted) miniMaxVideoDenied();
+  if (search && !admitted) miniMaxSearchDenied();
+  if (wan && !admitted) throw new HttpError(503, "prediction_owner_unavailable", "Wan requires its original admitted selection");
   if (!admitted && excludedKeys.size && auth.authType === "proxy_key") stickyHash = await grantStickyInput(auth, proxySessionHash(auth));
   const resolution = admitted ?? await resolveGrantSelection(provider.id, auth.policyId, auth.policy.tenantId ?? "default", tokenRef, env, excludedKeys, auth.policy.grantRouting, stickyHash, recordSelection, pinned?.key, requirement, excludedKeys.size ? undefined : proxyAdmission(auth)?.pools[provider.id]);
   // Check the snapshot pin before materialization, then recheck the materialized owner.
   if (admitted) assertPinnedGrant(pinned, resolution.selected);
   if (!resolution.selected) return { selected: null, hasConfiguredGrant: resolution.hasConfiguredGrant, retryAt: resolution.retryAt };
+  if (!video && !wan && !search) admitIdentity(resolution.selected, "record");
   const { key, grant } = resolution.selected;
   let materialized: UpstreamGrant;
-  try { materialized = await cachedGrantCredentials(env, key, grant, () => refreshGrant(key, grant, provider, env, false), (state, ms) => recordCredentialWait(auth, state, ms)); }
-  catch (error) { evictGrantCredentials(key); throw selectedCredentialFailure(error, key); }
+  try {
+    if (video) {
+      const { revalidateMiniMaxVideoOwner } = await import("./minimax-video-dispatch.ts");
+      const original = miniMaxVideoIdentity(grant);
+      const current = await revalidateMiniMaxVideoOwner(env, auth, requirement!, key, grant, video);
+      materialized = await materializeGrantCredentials(env, key, current, provider.id, null, false, video.controlSignal, "minimax.video", undefined, undefined, video);
+      if (miniMaxVideoIdentity(materialized) !== original) miniMaxVideoDenied();
+    } else if (search) {
+      const { revalidateMiniMaxSearchOwner } = await import("./minimax-search-dispatch.ts");
+      const original = miniMaxSearchIdentity(grant);
+      const current = await revalidateMiniMaxSearchOwner(env, auth, requirement!, key, grant, search);
+      materialized = await materializeGrantCredentials(env, key, current, provider.id, null, false, search.operation.signal, "minimax.search", undefined, search);
+      if (miniMaxSearchIdentity(materialized) !== original) miniMaxSearchDenied();
+    } else if (wan) {
+      if (grant.provider !== provider.id || grant.kind !== "api_key" || grant.credentialStore !== "durable_object"
+        || !Number.isSafeInteger(grant.credentialGeneration) || !grant.credentialLineage)
+        throw new HttpError(503, "prediction_owner_unavailable", "Wan requires an original durable key revision");
+      wan.pin([key, provider.id, requirement!.endpoint.id, requirement!.model, grant.credentialGeneration, grant.credentialLineage,
+        resolveTemplate(provider, provider.base_urls.default, env, owner, 4096)]);
+      materialized = await materializeGrantCredentials(env, key, grant, provider.id, null, false, signal, undefined, wan);
+      if (materialized.credentialGeneration !== grant.credentialGeneration || materialized.credentialLineage !== grant.credentialLineage)
+        throw new HttpError(503, "prediction_owner_unavailable", "Wan owner revision changed");
+      wan.pin([key, provider.id, requirement!.endpoint.id, requirement!.model, grant.credentialGeneration, grant.credentialLineage,
+        resolveTemplate(provider, provider.base_urls.default, env, owner, 4096)]);
+    } else if (requirement?.endpoint.request_format === "minimax.images") {
+      // Keep the authenticated dispatch graph off metadata-only provider loads.
+      const { revalidateMiniMaxImageOwner } = await import("./minimax-image-dispatch.ts");
+      const current = await revalidateMiniMaxImageOwner(env, auth, requirement, key, grant, signal ?? new AbortController().signal);
+      materialized = await materializeGrantCredentials(env, key, current, provider.id, null, false, signal, "minimax.images");
+    } else if (requirement?.endpoint.request_format === "minimax.music") {
+      const { revalidateMiniMaxMusicOwner } = await import("./minimax-media-dispatch.ts");
+      const current = await revalidateMiniMaxMusicOwner(env, auth, requirement, key, grant, signal ?? new AbortController().signal);
+      materialized = await materializeGrantCredentials(env, key, current, provider.id, null, false, signal, "minimax.music");
+    } else materialized = provider.id === "anthropic-vertex" && grant.vertexAnthropicBinding?.source === "service_account"
+      ? await refreshGrant(key, grant, provider, env, false, signal)
+      : await cachedGrantCredentials(env, key, grant, () => refreshGrant(key, grant, provider, env, false), (state, ms) => recordCredentialWait(auth, state, ms));
+  }
+  catch (error) { if (isIdentityFailure(error)) throw error; if (!video && !wan && !search) evictGrantCredentials(key); throw selectedCredentialFailure(error, key); }
+  if (!video && !wan && !search) admitIdentity(materialized, "record");
+  // A shared owner can be replaced after selection. Sharing subscriptions must
+  // never authorize a replacement API-key/media transport under that same key.
+  if (!grantsVisibleToPolicies([{ key, grant: materialized }], [{ policyId: auth.policyId, policy: auth.policy }]).length)
+    throw new HttpError(503, "upstream_grant_changed", "shared subscription owner changed");
   // A proxy-key request that could not select from the admission snapshot ran
   // the legacy read-and-select path. Ask the owner to republish this grant's
   // routing projection so later requests take the local hot path.
-  if (!admitted && recordSelection && !pinned && !excludedKeys.size && auth.authType === "proxy_key") scheduleProjectionRepair(env, key);
+  if (!wan && !search && !admitted && recordSelection && !pinned && !excludedKeys.size && auth.authType === "proxy_key") scheduleProjectionRepair(env, key);
   return { selected: { key, grant: materialized }, hasConfiguredGrant: resolution.hasConfiguredGrant, retryAt: resolution.retryAt };
 }
 
@@ -369,17 +496,19 @@ function scheduleProjectionRepair(env: Env, key: string): void {
   if (!hotCacheConfig(env).maxAgeMs) return;
   const now = Date.now();
   if ((projectionRepairs.get(key) ?? -Infinity) > now - PROJECTION_REPAIR_INTERVAL_MS) return;
-  projectionRepairs.delete(key); projectionRepairs.set(key, now);
-  if (projectionRepairs.size > 1024) projectionRepairs.delete(projectionRepairs.keys().next().value!);
-  runInBackground(reconcileGrantAttachment(env, key));
+  tryRunInBackground(() => {
+    projectionRepairs.delete(key); projectionRepairs.set(key, now);
+    if (projectionRepairs.size > 1024) projectionRepairs.delete(projectionRepairs.keys().next().value!);
+    return reconcileGrantAttachment(env, key);
+  });
 }
 
-export async function refreshStoredGrant(env: Env, key: string): Promise<UpstreamGrant> {
+export async function refreshStoredGrant(env: Env, key: string, signal?: AbortSignal): Promise<UpstreamGrant> {
   const grant = await env.POLICY_KV.get<UpstreamGrant>(key, "json");
   if (!grant?.provider) throw new HttpError(404, "unknown_upstream_grant", "upstream grant is not registered");
   const provider = providerById(grant.provider);
   if (!provider) throw new HttpError(400, "unknown_provider", "upstream grant provider is not registered");
-  return refreshGrant(key, grant, provider, env, true);
+  return refreshGrant(key, grant, provider, env, true, signal);
 }
 
 export async function refreshStoredGrantQuota(env: Env, key: string): Promise<void> {
@@ -391,8 +520,8 @@ export async function refreshStoredGrantQuota(env: Env, key: string): Promise<vo
   await refreshGrantQuota(env, key);
 }
 
-async function refreshGrant(key: string, grant: UpstreamGrant, provider: CompiledProvider, env: Env, force: boolean): Promise<UpstreamGrant> {
-  return materializeGrantCredentials(env, key, grant, provider.id, provider.auth.refresh, force);
+async function refreshGrant(key: string, grant: UpstreamGrant, provider: CompiledProvider, env: Env, force: boolean, signal?: AbortSignal): Promise<UpstreamGrant> {
+  return materializeGrantCredentials(env, key, grant, provider.id, provider.auth.refresh, force, signal);
 }
 
 function grantSatisfiesConfig(provider: CompiledProvider, key: string, grants: GrantRecord[]): boolean {
@@ -423,9 +552,10 @@ function hex(value: Uint8Array): string { return [...value].map((byte) => byte.t
 function awsEncode(value: string): string { return encodeURIComponent(value).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`); }
 function compareAscii(left: string, right: string): number { return left < right ? -1 : left > right ? 1 : 0; }
 
-function configuredList(provider: CompiledProvider, name: string, env: Env): string[] {
-  const key = templateCandidates(provider, name).find((candidate) => envValue(env, candidate));
-  return key ? envValue(env, key)!.split(",").map((item) => item.trim()).filter(Boolean) : [];
+function configuredList(provider: CompiledProvider, name: string, env: Env, owner?: PreparationAdmission): string[] {
+  let selected: string | null = null;
+  const key = templateCandidates(provider, name, owner).find(candidate => (selected = preparationValue(env, candidate, owner, true)));
+  return key ? providerConfigurationList(selected!, owner, key, undefined, !!owner) : [];
 }
 
 function encodePathParam(value: string, style: string): string {

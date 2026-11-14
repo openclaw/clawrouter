@@ -2,10 +2,338 @@
 
 ## Unreleased
 
+- Expose opt-in adaptive Fusion vote ordering through the endpoint client, retaining settled usage when selection fails.
+
+- Allow an opt-in adaptive worker selector in the experimental Fusion vote runner while preserving canonical full-panel answers.
+
+- Identify the rejected edit, source path, and missing or ambiguous anchor in Fusion draft-repair feedback without recording source text or applying a partial patch.
+
+- Allow single-draft Fusion benchmark controls without a supplied reproducer, preserving independent acceptance grading and fixed-model cost receipts.
+
+- Document the corrected local Fusion code-plan comparison, including oracle repairs, failed promotion gates and an aliasing defect missed by value tests.
+
+- Record the negative tiny-model prefix-guidance screen, separating answer-format failures from arithmetic results and including both model controls and compute costs.
+
+- Add an explicit fixed-choice Fusion client for compatible Chat Completions endpoints, with lazy calls, bounded deadlines and partial usage receipts.
+
+- Record local Fusion model loading and inference durations separately from call wall time, preserving unknown timings in benchmark totals.
+
+- Add an opt-in fixed-choice Fusion vote runner with conservative early stopping and an offline cost replay tool.
+
+- Add bounded pairwise evidence packing for offline Fusion experiments, with numeric-only inputs and no model calls.
+
+- Pin reported default generation parameters in local Fusion comparisons so changes invalidate the run even when model weights stay the same.
+
+- Pin local Fusion server and prompt-rendering metadata, and reject completed comparisons when those inputs change during a run.
+
+- Retain incomplete Fusion pair acceptance receipts and completed agent diagnostics while stopping further paid arms.
+
+- Preserve access to later Fusion repository search matches with explicit truncation, continuation lines, and validated search ranges.
+
+- Add an opt-in Responses API transport for native Fusion pair benchmarks, with route-bound comparisons and conservative usage accounting.
+
+- Match Fusion edit calibration source views to each executor and record an explicit legacy numbered-source mode for reproducibility.
+
+- Add a bounded edit-interface calibration for Fusion experiments, separating exact edits, rejected edits, and wrong applied changes before repository benchmarks.
+
+- Allow an explicit, recorded output-token budget for local Fusion repository experiments while preserving existing defaults and context admission.
+
+- Allow bounded local Fusion request-deadline overrides independently of sampling, while preserving profile defaults and enclosing trial deadlines.
+
+- Retain Fusion adviser response cleanup through cancellation settlement without delaying timeout or error fallback.
+
+- Add opt-in source paging to interactive Fusion benchmarks so large files remain navigable without sending every line in initial and handoff context.
+
+- Add an opt-in compact action schema to local Fusion repository benchmarks, putting actions before bounded working notes and recording the selected profile.
+
+- Retain bounded OpenAI request IDs in native Fusion benchmark receipts, including failed calls, without saving response bodies or changing retry and budget rules.
+
+- Add an opt-in Fusion handoff gate that requires an original-failing, candidate-passing assertion and current regression checks before normal transfer.
+
+- Distinguish submitted Fusion benchmark failures from budget stops and passing unsubmitted patches without changing scores or pilot gates.
+
+- Allow Fusion pair analysis to compare agent execution time explicitly, keeping independent grading out of latency ratios and dominance checks.
+
+- Exclude incomplete, filtered, refused, or tool-calling Fusion adviser responses from synthesis while retaining their usage accounting.
+
+- Record content-free rejection reasons for invalid local Fusion benchmark responses while preserving the campaign stop and unknown usage.
+
+- Reject incomplete acceptance verdicts in Fusion pair analysis before reporting quality, cost savings, or repeated pilot results.
+
+- Require completed agent submissions before counting local Fusion repository repairs as successes, even when an unfinished patch passes independent acceptance.
+
+- Stop paired Fusion benchmark campaigns after incomplete agent tests or acceptance grading, preserving settled usage without calling later arms.
+
+- Stop one-shot and refined Fusion drafts after incomplete visible tests, before probing, another draft, or fallback inference.
+
+- Separate Fusion benchmark agent time from independent acceptance grading, including failed phases, so slow hidden tests do not obscure execution latency.
+
+- Stop grounded Fusion repair workers when visible test execution is incomplete, before another model call or grading.
+
+- Qualify supplied Fusion preservation checks against original and reference source, then pin them before paired execution without spending model calls.
+
+- Add an opt-in Fusion benchmark regression gate that pins passing probes across handoffs and replays them in isolated candidate snapshots before scoring.
+
+- Allow Fusion paired benchmark blocks to rotate their starting arm explicitly and retain the offset in analysis, reducing fixed-order comparisons.
+
+- Add an opt-in Fusion benchmark handoff that transfers bounded observed test and probe results separately from model-written notes, with matched strong-successor controls.
+
+- Stop Fusion benchmark agents after incomplete visible tests, recording a bounded failure before another model call.
+
+- Add an opt-in turn limit to Fusion edit handoffs so an unsuccessful first worker leaves calls for its successor.
+
+- Add qualified Fusion delivery workloads covering alternate preparation settlement and bounded full-size native OpenRouter music responses.
+
+- Bound Fusion draft test validation and terminate timed-out test process groups inside their sandbox so stalled candidates leave room for fallback.
+
+- Measure Fusion probe selection against independent candidate acceptance and reference behavior after repair execution, keeping private source and test output out of result traces.
+
+- Add an opt-in Fusion benchmark that compares two cheap repair drafts with one executable probe, abstaining on ambiguous evidence before strong fallback.
+
+- Add a qualified Fusion base64-inspection workload with explicit API, size-boundary and request-ownership requirements.
+
+- Preserve bounded, content-free Fusion agent traces when benchmark execution fails, without changing failure scores or budget stops.
+
+- Add an opt-in Fusion benchmark policy that hands a submitted candidate to a cheap verifier within the existing shared limits.
+
+- Add a cheap two-draft sampling control for Fusion probe-selection experiments, with deterministic visible-test selection, fixed-model baselines and shared call/spend limits.
+
+- Verify exported Fusion repairs against their task and digests, then rerun visible and independent acceptance checks without model calls or applying source to the caller's checkout.
+- Add Fusion validation workloads for threshold grant routing and cross-platform native snapshot compression, with pinned source revisions and independent acceptance tests.
+- Add private, opt-in source bundles for accepted Fusion handoff repairs, with provenance and content-free export receipts; failed delivery stops the run without overwriting existing files.
+- Allow qualified Fusion execution handoffs to run without paid baseline calls, retaining independent acceptance and explicit non-comparative reports.
+- Let threshold grant routing leave a grant at its switch point for a grant that has never reported quota or whose window has reset, and compare idle grants by their last reading in an open window so a pool cannot flap to one already past the cutoff.
+- Exclude Anthropic grants with exhausted prepaid credit for five minutes and retry eligible same-provider grants before delivery within the shared four-distinct-grant budget, preserving healthy session stickiness and scoped quota state.
+- Run Fusion native fixture dependencies from the read-only image and include public CA roots for workerd startup, retaining the isolated noexec workspace.
+- Add Fusion follow-up workloads for bounded grant-usage reports and MiniMax Music credential admission, with resource and runtime acceptance checks.
+- Add a matched strong-successor control for the Fusion handoff benchmark to separate model-selection gains from verification-protocol changes.
+
+- Add sandbox-qualified Fusion lifecycle repairs for cold-import settlement and assignment revision publication, with independent acceptance checks before model results are scored.
+- Add a versioned data-only JSON exchange contract for provider conformance fixtures, with a strict parser and provider-specific generated examples. Runtime conformance execution remains separate.
+- Add an opt-in, network-intercepted Worker runner for model-free native REST JSON plugin fixtures, with synthetic API-key auth and bounded exchange assertions.
+- Keep Fusion benchmark fallback active when a cheap repair exhausts its allowance without submitting, even if its partial patch passes the supplied check.
+- Fix Fusion source preloading for repairs spanning more than three editable files while retaining bounded source context and three-path action reads.
+
+- Retain bounded, content-free failed-test fingerprints in Fusion benchmark receipts to compare regressions with qualified baselines.
+
+- Export a private reviewable Git patch from an independently reverified Fusion repair, without applying changes or overwriting an existing file.
+- Add an experimental Fusion benchmark handoff from strong execution to a cheap worker after an edit passes visible checks, retaining a bounded executed probe, phase-specific verification instructions, independent final acceptance and shared limits.
+
+- Validate repeated Fusion benchmark blocks against one protocol and a consecutive spend ledger, with joint quality, cost and latency reporting.
+
+- Add an opt-in provider fixture validation command that checks captured scenarios against compiled manifest declarations and reports package digests without exposing fixture contents. This validates references without executing providers.
+
+- Preserve native cache-read and cache-write token buckets in Fusion benchmark receipts so recorded tariff estimates can be reconstructed.
+- Retain content-free Fusion request fingerprints before dispatch so failed requests can be compared without storing prompts or releasing uncertain charges.
+
+- Recover once from a truncated Fusion benchmark action within the existing call, time and spending limits, without applying partial output.
+
+- Add an inactive private retained-generation foundation with proof-bound two-slot preparation, immutable opaque borrowers and atomic exact common-arena handoff. A stable publication watermark prevents delayed resurrection after eviction or expiry; optional metadata pressure demotes matching hits under funded temporary custody without another RPC. Default authentication, cache consumers and providers remain unchanged. Source and hosted runtime qualification are required before activation.
+
+- Stage inactive owned generation authentication and local selection with explicit admitted coverage, separately funded derived records and advisory ownership. Default callers remain unchanged; source/factory closure and hosted runtime qualification remain required before use. Originating selections keep their authority count, authority-bound runtime observations reach live successors, and refused background work retains a drain capability after public disposal. Fixed-cohort envelope planning reserves the complete deep visitor in idle control windows before transport. Private prefetch retains hint children through original materialization cleanup and warms only a separately funded private destination, with dispose-only borrowers, publication fencing and optional-pressure refusal that preserves old entries. Ordinary foreground credential caching is unchanged.
+
+- Add a local, inactive private full-admission continuation candidate with cumulative source ownership, opaque disposal and a typed deferred-effect journal. Private string-keyed request copies omit callable references, while snapshot output, principal/model transforms, scratch and configuration factories receive prospective funding inside the unchanged ticket; final admission rechecks complete candidate projections, including same-generation publications, through sequential control windows. Private callable checks preserve inert serializer shadowing without copying descriptor values; default authentication and provider routes are unchanged. Source and hosted runtime qualification remain required before use.
+
+- Add an inactive private credential-preflight foundation with secret-only opaque proofs, exact common-arena reservations, original-source retirement and prospective final-read admission before cold credential seed writes. Default authentication and generation activation remain unchanged; runtime and factory qualification are required before use.
+
+- Bound each examined raw proxy credential header to 4096 UTF-16 units before normalization, parsing or hashing. Preserve first-valid header precedence and Access fallback while rejecting encountered oversize values with terminal 503; formerly accepted oversized legacy tokens are intentionally denied.
+
+- Keep ordinary selected JSON HTTP input custody through actual delivery cleanup, archive writes and terminal accounting without delaying response publication; preserve specialized owners and existing accounting outcomes.
+
+- Publish all admitted current-pool migration markers after successful identity admission, including absent grants after a legacy fallback, so canonical rereads do not repeat legacy source imports.
+
+- Bound selected identity SQL/KV sources, admission replies and private copies with complete record/graph profiles, metadata-first SQL guards and atomic refresh publication. Cumulative 2 MiB source overflow denies the whole generation without truncating pools or falling back to old authorization; embedded records retain their independent 1 MiB limit, alternate profile denial is terminal, and existing narrower selection guards and specialized owners remain. Selected pool commits consume their returned SQL row before replying. These are representation limits, not a combined heap or generation-count guarantee.
+
+- Include declared product summaries in provider package indexes, sharing metadata types with the plugin contract while keeping execution and auth configuration private.
+
+- Declare separate Anthropic API and existing Claude subscription catalog products, preserving Messages and token-counting transport boundaries.
+
+- Pin the shared source-release workflow to a reviewed commit with complete release listing and exact-byte draft retry checks.
+
+- Declare the bundled OpenAI API and existing ChatGPT subscription transport as separate catalog products, preserving execution, pricing and subscription scope.
+- Add a fixed-model-only Fusion benchmark mode with explicit reporting and budgets for the selected arms.
+
+- Add a matched one-shot Fusion executor and supplied-check single-model ablations for controlled benchmark comparisons.
+
+- Recognize regression assertions reported on stdout by Node test reporters in Fusion qualification.
+
+- Add a bounded Fusion draft-repair experiment that revises cheap patches from isolated executable feedback before strong fallback.
+
+- Add an opt-in Fusion single-draft benchmark policy with executable verification and original-source strong fallback.
+
+- Give Fusion draft refinement specific feedback for rejected patches and skip verification when no patch was applied.
+
+- Make the experimental Fusion cheap-stage call allowance explicit in benchmark configuration and reports, while preserving the shared hard ceiling.
+
+- Clarify exact-file navigation and edit limits in the Fusion benchmark agent, with actionable feedback after invalid tool requests.
+
+- Add three operational Fusion holdout candidates with supplied regression reproducers and independent acceptance suites.
+
+- Add a pinned Fusion evaluation task for reservation rollback and cleanup error preservation.
+
+- Preserve allowlisted Fusion provider error codes and parameter categories, and identify unknown-cost trial failures without storing provider text.
+- Add an experimental Fusion cascade for supplied, execution-qualified reproducers with equally informed fixed-model controls.
+
+- Add three pinned Fusion workflow-validation repairs covering embedding errors, native identity and response context.
+
+- Add an experimental Fusion contract policy that withholds the verifier probe from the cheap repair worker until escalation.
+
+- Recognize assertions rethrown by Node test setup in Fusion reproduction probes while continuing to reject timeouts and non-assertion failures.
+
+- Add same-workflow cheap-only and strong-only controls for the experimental Fusion contract benchmark, with explicitly labeled standalone runs.
+
+
+- Supply bounded original-source declaration context to Fusion repair workers, with unique selectors and unchanged edit permissions.
+
+- Add an independent three-repair Fusion evaluation cohort for generated-check policies, with observed/billed usage and scalar validation cases.
+
+- Preserve allowlisted Fusion provider error codes and parameter categories, and identify unknown-cost trial failures without storing provider text.
+
+- Recognize assertions rethrown by Node test setup in Fusion reproduction probes while continuing to reject timeouts and non-assertion failures.
+
+- Analyze complete Fusion pair benchmarks against fixed controls and a matched-cost random mixture, rejecting missing outcomes and unresolved charges.
+
+- Add an experimental Fusion benchmark policy that qualifies generated regression probes before cheap repair and bounded strong fallback.
+
+- Add an experimental declared-scope routing control to the Fusion repair benchmark, with independent cheap and strong baselines.
+
+- Add optional product identities to eligible client catalog offers, scoped to the selected policy and active compatible grants, without changing routing or legacy catalog eligibility.
+
+- Preserve bounded, untrusted working notes between grounded Fusion repair turns without adding them to benchmark reports.
+
+- Add two pinned Fusion repair tasks for prospective policy comparisons, with explicit exposure and qualification requirements.
+
+- Allow Fusion repair benchmarks to inspect bounded, declared source dependencies without expanding edit access or exposing hidden tests.
+
+- Require known Fusion repairs to pass unchanged visible tests before accepting workload qualification; remove three contradictory tasks.
+
+- Add an opt-in, budget-capped native model-pair benchmark with fixed controls and a strong-planner/cheap-editor policy.
+
+- Add experimental independent review of checked local Fusion repair candidates within the existing action and deadline limits.
+
+- Include both fixed-model controls in local Fusion function-smoke summaries so mixed policies can be compared against the stronger baseline.
+
+- Add an experimental local Fusion reproduction gate with isolated probes, frozen checks, and explicit acceptance accounting.
+
+- Add an opt-in grounded local Fusion repair scaffold with bounded current-source views and observed edit anchors, preserving the original benchmark profile.
+
+- Add internal product-offer compatibility resolution using the existing grant, model, endpoint, and lifecycle checks without switching routing or discovery.
+
+- Fence in-flight hot-cache and admission publications after local invalidation, including pending-only credential versions evicted by upstream 401/403. Keep original snapshot age and preserve coalesced runtime/counter writes.
+
+- Bound Access JWT and JWKS admission before decoding, parsing and key import; join original fetch, reader, cancellation and crypto retirement across one deadline, and prevent operational denials from falling back to other authentication. Broader session/evidence allocation remains separate.
+
+- Bound Access GitHub identity evidence before accumulation and parsing, retire original response readers on every outcome, and prevent limits, cleanup failures or caller aborts from falling back to other authentication. Preserve clean-unknown assignment retention and valid-empty revocation.
+
+- Bound generic soft-budget status requests and JSON observations, joining original response reads, FIRST cancellation and unlock without delaying provider dispatch. Preserve partial replies, exhaustion-cache classification and the existing delivery grace period.
+
+- Bound the seventeen generic authority acknowledgments to their exact protocol strings and join original fetch, response reads, FIRST cancellation and unlock. Preserve specialized transports and advisory catches; an invoked mutation with a lost acknowledgment remains uncertain and is never replayed.
+
+- Join every concurrent cold credential import before returning its first failure or issuing a mutation. Preserve admin/personal hydration and original error identity without retrying or rolling back completed imports.
+
+- Join alternate grant preparation before completing a canceled failover, and recheck the original signal after that join. Preserve the first provider rejection when preparation fails without cancellation; never dispatch a late alternate.
+
+- Admit at most 64 live cache background tasks before starting work, retain registrations until actual logical settlement, and poll bounded scalar cohorts on caller-owned timers. Saturation skips speculative work and retains unstarted coalesced writes for a later eligible flush.
+
+- Write compact, versioned assignment-rule revisions only when reconciliation already changes canonical state. Preserve unchanged legacy records and serialize owner-local reconciliation through immutable rule snapshots, hashing before the final current-user read without locking unrelated owner operations.
+
+- Bound selected user-resolution replies to a complete 1 MiB JSON profile and join original fetch, read, FIRST cancellation and unlock before publication. Preserve bounded legacy records, unknown fields and cold-import behavior; oversized or uncertain replies deny without authentication fallback. Producer allocations remain separate.
+
+- Bound selected user-record SQL/KV materialization and private cold initialization with cumulative source admission, original-stream retirement and complete batch checks before writes. Preserve canonical winners, full legacy records and unmarked bulk flows; resource failures deny without truncation, migration or rollback claims.
+
+- Bound selected assignment rule/KV/SQL sources, exact revision capture and complete stored/reply representations before materialization or writes. Admit four reconciliations through original-stream retirement and the existing FIFO; preserve legacy no-ops and projected storage without migration or rollback claims. Selected callers now propagate sanitized owner `404 unknown_user` and `400/500 authority_error` instead of the old generic public `500 internal_error` wrapper; unmarked flows are unchanged.
+
+- Bound selected policy collections with shared caller KV admission, private SQL/request/reply profiles, original-stream retirement and prospective candidate checks before normalization or writes. Conservatively reserve structurally valid publication permissions even when expired; actual expiry and permissions remain unchanged, with existing query/ACK public-error mappings preserved.
+
+- Preserve original budget-reservation failures and every ordered ledger/queue cleanup failure privately after all started operations settle. Keep the existing public accounting-unavailable error, acknowledged reservation IDs and queue recovery behavior.
+
+- Admit complete selected accounting intents, future receipts and retained-TEXT archives before owned effects, including tighter Search/cover sinks. Capture private facts, preserve original accounting IDs and durable recovery, stream admitted archives with bounded backings, and conservatively admit Fusion before its early synthesizer reservation. PixVerse allocation capacity denial stays terminal while ordinary lost-ACK recovery retains canonical IDs. Resource denial does not truncate required accounting or imply a refund, rollback or heap bound.
+
+- Bound selected dynamic provider preparation with one explicit allowance across configuration, templates, paths, queries, headers, signing and alternate preparation. Realtime uses a separate allowance per fresh authority observation, shared by its main and ASR stages; the handshake allowance remains separate. Preserve credential and transport semantics while making capacity denial terminal, keeping original abort precedence and accounting IDs; independent response controls own their own allowance.
+
+- Add private MiniMax cover composition with additive local WAVE custody, current-authority-to-POST handoff, original-ID dispatch-aware accounting and independent delivery/cleanup ownership. Public routing, audio-capable native clients and vendor format compatibility remain closed.
+
+- Add an inactive MiniMax cover upload and partial unary-HEX response foundation with sealed streaming input, one-attempt ownership, atomic allocation transfer and joined, terminally memoized cleanup. Public routing, dispatch authority, settlement composition and vendor input compatibility remain closed.
+
+- Add inactive, explicitly attested MiniMax cover authority and bounded canonical control ownership, with current SQL mutation checks, pre-secret monetary admission, generic-eligibility denial and joined accounting cleanup. Cover routing, upload and vendor audio compatibility remain closed.
+
+- Add an inactive private MiniMax cover input/hash foundation with incremental decimal50MB intake, a fixed operational reservation and joined read/cancel/hash retirement. Audio compatibility, cover authority and routing remain unqualified.
+
+- Exclude declared MiniMax Music routes from speculative credential prefetch so an expired admission hint cannot read secrets before current caller, pricing and original-operation checks. Ordinary-provider prefetch is unchanged.
+
+- Add explicit current-CN six-model inline video attestation. Every V5 create requires owned first-frame input before secrets and at final dispatch; prior bindings and T2V permissions remain unchanged, with original-job controls independent of retired input. Declarations and native-client activation remain separate.
+
+- Add explicit current-CN MiniMax video attestation for `api.minimax.cn`, limited to the original two text-to-video models and original-job files. Legacy CN and global bindings keep their destinations; re-attestation invalidates old jobs. Public declarations, native-client activation and live credential portability remain separate.
+- Compile explicit product offers into stable, model-specific declarations while keeping runtime admission and legacy routes unchanged.
+
+- Add a local-only repository repair benchmark with pinned model routing, bounded actions, explicit context failures and coder-to-general handoff comparisons.
+
+- Add explicit global six-model MiniMax video authority for the four frozen required-first-frame models, with pre-secret model membership, exact discovery identity and original-job controls after image retirement. Existing V1/V2 permissions and capacity profiles remain unchanged; declarations and native-client activation stay separate.
+
+- Add explicitly re-attested global Hailuo first-frame input for the two qualified models, with incremental full-size inline decoding, content-bound idempotency, pre-secret input authority and joined upload/hash/response retirement under the existing operational reservation. Public activation and platform-native transport allocation qualification remain separate.
+
+- Add a local Fusion generation screen with isolated execution, withheld grading and paired small-model retry baselines before paid benchmarks.
+
+- Add explicitly attested regional MiniMax Hailuo text-to-video execution and original-job file retrieval, with current SQL mutation authority, generation-bound job routes, bounded per-invocation ownership and conservative dispatch-acknowledgment handling. Public declarations and native-client activation remain separate. Resolve exact declared native and manifest model identities, pin current fixed tariffs into durable admission and preserve readable known-unsent denials after confirmed dispatch admission.
+
+- Recheck current SQL administrator authority after MiniMax Music grant preparation and pool admission, fencing exact mutations and revocation retries while preserving the old owner on denial.
+
+- Add administrator-attested regional MiniMax TokenPlan Search authority and bounded native/manifest execution, with current-role mutation fencing, original-key freshness, conservative unknown-cost accounting and retained physical cleanup. Declarations and client activation remain separate.
+
+- Bound Wan managed input, control exchanges and lifecycle delivery under one retained operation lease; pin the original grant revision and distinguish confirmed unsent dispatch from lost acknowledgments.
+
+- Add administrator-attested Copilot proxy identity, owner-bound native and manifest inference, and scoped live discovery with bounded cross-isolate retirement; provider declarations and native-client activation remain separate.
+- Serve usage snapshots from exact, transactionally maintained rollups after a resumable historical backfill, avoiding retained-event aggregate scans.
+
+- Add a local small-model selector smoke test with counterbalanced candidates, abstention checks and content-free replay metrics.
+
+- Add an offline Fusion opportunity analyzer and small-model research plan to screen experiments before paid inference.
+
+- Retain bounded provider error categories in Fusion benchmark accounting without persisting request or response text.
+
+- Add an opt-in hosted Fusion workload campaign with exact-source verification, cumulative budget preflight and content-free checkpoints across both corpora.
+- Add optional provider-product declarations with independent commercial and authentication metadata and validated references to existing endpoint and grant-transport bindings.
+
+- Bound Fusion candidate-selection context with change previews while preserving complete source inspection and paired probes.
+
+- Stop Fusion benchmark trials on provider refusals, incomplete responses and empty turns; retain bounded stop diagnostics and known usage costs.
+
+- Allow administrators to share existing subscription owners across policy pools while preserving one credential/refresh owner, shared quota, consumer billing and scoped pool visibility.
+
+- Add bounded, Access-admin-only Copilot device token acquisition with original-owner fences, atomic private installation and cancellation-safe capacity retirement; account and inference activation remain closed.
+
+- Qualify Copilot account identity privately under the original credential owner, with atomic binding, bounded streaming intake and cancellation-safe retirement; catalog and inference remain closed.
+
+- Acquire Copilot catalogs privately with fresh original-token account and model checks, bounded two-response retirement and current-policy selection; keep public discovery and inference activation closed.
+
+- Add private original-owner Copilot inference for advertised Chat, Messages and Responses APIs with atomic composite capacity, fresh model authority and conservative settlement; public and native-client activation remain closed, with owner-scoped cancel/status control that remains admissible at full inference capacity.
+
+- Add opt-in provider package index generation with validated names and hashed references to local docs, licenses, fixtures, and branding assets.
+- Add a separate pinned Fusion transfer-validation corpus and qualify every bundled workload set, fetching missing pinned history in shallow CI checkouts.
+- Add an experimental independent-candidate Fusion comparison with shared inference, turn and time budgets and paired candidate behavior probes.
+
+
+- Add a development-only, shared-budget multi-turn Fusion agent comparison with isolated source edits, test-feedback repair, and measured cascade acceptance.
+
+- Add a development Fusion workload corpus with pinned repository regressions, isolated Docker verification, and broken/known-repair qualification.
+
+- Allow the opt-in Fusion benchmark to use explicit native OpenAI/Anthropic credentials, report token-based tariff estimates, and carry uncertain prior spend within its existing $5 cap.
+- Add a provider-plugin scaffold command that creates a complete local package with a provider-specific manifest, docs, branding, license placeholder, and synthetic fixture.
+
+
+
+- Accept explicitly selected local provider packages with `compile-providers --plugin`, while preserving the default bundled manifests and snapshot output.
+
+- Define an opt-in provider plugin package contract with local assets, documentation, fixtures, and a starter example; existing provider loading and runtime behavior remain unchanged.
+
 - Add scoped OpenRouter video/content wrappers with download-only original-job files and bounded MP4 delivery, admitting creates only through explicit policy and original-credential retention qualification.
 
 
 - Support explicitly declared download-only managed files from original succeeded jobs, preserving scoped credentials, bounded delivery and existing metadata-backed file checks.
+- Add an internal one-job PixVerse byte-input receipt with original-credential upload ordering, single-attempt create claims and separate conservative upload/generation accounting; public image/upload routes remain closed.
+- Add a bounded PixVerse image multipart parser with zero-copy PNG/JPEG/WebP container validation and strict native-plan fields; public intake, credential authority and accounting remain separate.
+- Define the optional PixVerse composed-image input profile in schema, compiler metadata and catalog types while keeping image lifecycle activation and discovery projection closed.
+- Add a bounded PixVerse image multipart parser with zero-copy PNG/JPEG/WebP container validation and strict native-plan fields; public intake, credential authority and accounting remain separate.
 - Add a bounded Microsoft Edge speech request/frame codec with request-ID binding, complete-audio delivery and explicit interruption handling, without activating a route or assuming upstream cost.
 
 - Preserve the frozen Kie Seedance 1.5 request contract while denying unqualified new creates, without aliasing its identity or disrupting original scoped-job retrieval.
@@ -21,18 +349,38 @@
 - Qualify the three frozen fal unary music contracts with native Key dispatch, per-model inputs, bounded audio results and conservative unknown upstream costs.
 - Reject non-string native fal music MIME fields instead of coercing arrays into qualified audio descriptors.
 
+- xAI: add five frozen Chat identities with qualified context/input facts and explicit reasoning defaults where documented, preserving unknown whole-request costs and selected wire identities.
+- xAI: apply Grok 4.3 long-context token rates from exactly 200,000 prompt tokens, matching the published inclusive boundary without changing other providers’ thresholds.
 - Add native xAI code-interpreter request/result codecs and fixtures, preserving attempted calls separately from native tool usage and retaining conservative partial-delivery accounting.
 
 - Add bounded native xAI Responses search codecs and fixtures, preserving grounded answers, partial outcomes and separate fetched-item usage without inventing raw search results or upstream cost.
 
 - Add request-tariff runtime admission and original Responses charge receipts, retaining uncertain reservations through errors and interrupted delivery without replaying paid requests.
+- Add the frozen MiniMax M3 Chat identity with primary-sourced context and input facts, retaining unknown output/pricing bounds and existing M2.7 behavior.
+- Compile the MiniMax M3 inventory and prepare pinned registered-client fixtures for explicit Chat routing, original-key isolation and conservative accounting; actual-client execution remains pending.
+- MiniMax: record the frozen M2.7 highspeed identity as deprecated and unpriced, preserving existing-user PAYG selection without applying subscription-plan aliases or inferred tariffs.
 - Add native MiniMax unary speech codecs and sanitized fixtures for the eight frozen models, preserving complete hex audio and native billable-character observations without inferring account or voice fees.
 - Add bounded MiniMax native speech response validation with complete hex delivery and locally generated playable test audio; common native-media grant authority and fee qualification remain closed pending integration.
 - Require explicit owner-bound global MiniMax speech authorization, exact API-key source selection, fingerprint-qualified discovery and a fresh final credential-owner check; keep legacy grants and unknown dollar tariffs closed.
+- Authorize prompt-only MiniMax images through a separate original-owner API-key binding, fresh generation and policy checks, bounded native delivery with input-cleanup capacity retention and conservative accounting; keep unknown dollar prices, environment keys and reference inputs closed.
+- Retain native JSON and generic delivery capacity through pending reads, first cancellation cleanup and reader-lock retirement, separately from prompt cancellation and usage settlement.
+- Join native speech, ConverseStream, Venice and OpenRouter music reader cleanup before releasing capacity; retain original counting-transform pipelines and the first Groq/Mistral response cancellation without changing delivery or accounting contracts.
+- Keep existing keyed-catalog capacity charged through original-reader cleanup, late fetch disposal and publication retirement; remove Featherless/Requesty counting transforms while preserving fresh authority, scan bounds and prompt cancellation.
+- Keep multipart and original-job file capacity charged through physical reads, first cancellation cleanup, late-response disposal and downstream retirement, preserving original authority and conservative settlement.
+- Bind preprovisioned MiniMax Messages credentials to an explicit regional issuer and resource, reusing durable refresh fencing and fresh original-owner checks without environment or cross-region fallback.
+- Add Access-admin-only MiniMax device onboarding with same-origin controls, durable single-attempt exchange fences, cancellable owner-bound polling and atomic credential installation; uncertain exchanges are never replayed.
 - Bind qualified native speech query options to their selected route and response destination, preserving original credentials and denying undeclared formats or query overrides.
+- Keep native xAI unary speech unpriced before token-card admission and settlement, preserving separately authorized fixed policy charges without inferring an audio invoice from text or service defaults.
 - Add xAI native unary speech and voice-discovery codecs with exact codec MIME checks, bounded complete audio, no fabricated speech model and conservative character-cost boundaries.
+- Add the model-less xAI unary speech response leaf with complete binary delivery, bounded chunk storage, identity-encoding length validation and playable test audio; common credential and cost qualification remain separate.
+- Qualify the model-less xAI unary speech compiler contract with exact binary output, original credential binding and no OpenAI speech alias or inferred character tariff.
 - Add the frozen xAI WebSocket speech contract with admitted-text binding, bounded provisional audio and explicit incomplete-stream outcomes.
 - Add finite OpenRouter unary speech codecs and binary fixtures, preserving model/credential boundaries, Gemini PCM requirements and conservative unknown upstream usage.
+- Add bounded complete-MP3 response validation for three frozen OpenRouter speech models, with exact destination and length checks, cancellation and conservative unknown usage; common dispatch and PCM remain separately qualified.
+- Add an opaque Gemini PCM speech response leaf with complete even-byte delivery, bounded backing buffers and conservative unknown usage; common dispatch and playback qualification remain separate.
+- Preserve optional model-scoped opaque PCM speech facts through compilation and public catalogs, requiring explicit voice and PCM while retaining unknown sample rate and false voice compatibility without granting admission or pricing authority.
+- Dispatch the three qualified OpenRouter MP3 speech models through the existing native response factory, preserving explicit voice/input, original credentials, complete audio and fixed-policy accounting while unknown speech-dollar charges remain closed.
+- Dispatch the qualified OpenRouter Gemini PCM profile with original owned-key admission, fresh caller and credential checks after reservation, bounded complete opaque audio and conservative fixed-policy settlement; keep unknown dollar costs and environment fallback closed.
 - Add bounded native xAI image generation/edit codecs and fixtures, preserving the retired quality alias, actual serving model and distinct low versus auto-edit quality semantics without fabricating upstream cost.
 - Qualify documented frozen fal Grok image routes with ordered edit references and native geometry; keep unqualified quality generation closed without borrowing direct-xAI aliases or tariffs.
 - Add finite OpenRouter native image codecs and fixtures with ordered inline references, bounded binary images and separate per-request accounting for partially failed batches.
@@ -44,13 +392,20 @@
 - Dispatch Synthetic model discovery through its native data-only codec and scoped mapped route, preserving strict OpenAI decoding and original caller/grant filtering.
 - Add frozen OpenRouter custom-host Chat image codecs with explicit host qualification, reused image validation and honest partial-count delivery.
 - Reserve the qualified input window for Chat video references instead of estimating visual input from URL or base64 text length; preserve ordinary text and client function estimates.
+- Google Gemini: add the frozen 3.8 Flash card with primary-qualified context limits and labeled published price ceilings; preserve native model selection and fail-closed unknown hosted charges.
 - Reserve the declared Google input window for native continuation tokens instead of pricing restored context from token or prompt bytes, preserving plain requests and explicit policy tariffs.
+- Add the frozen Gemini 3.6 Flash card with sourced token limits and explicitly labeled published price ceilings across Standard, Flex and Priority, preserving conservative tool and cache admission.
+- Add the frozen Gemini 3.5 Flash-Lite card with sourced context/output bounds and exact Standard, Flex and Priority cache rates, preserving conditional tool-cost guards.
 - Bind Google continuation tokens to the original principal, model, request and credential, publishing ownership only from completed native candidate evidence and independently accounting for each HTTP hop.
+- Add the frozen Google 3.1 Pro preview card with explicitly labeled long-context price ceilings, exact tier cache rates and conservative hosted-tool admission.
 
 - Add finite Groq Whisper turbo and Mistral Voxtral multipart transcription codecs with byte-preserving fixtures, explicit unsupported-prompt handling and conservative duration/accounting boundaries.
+- Dispatch declared Groq and Mistral unary transcription through authenticated bounded multipart intake, original-key revalidation and conservative settlement; keep unknown audio-dollar budgets closed and preserve native file bytes.
 - Qualify finite Groq and Mistral multipart transcription declarations with exact frozen models, original credential/path binding and unknown audio costs; shared ingress activation remains separate.
 - Keep Groq and Mistral native transcription costs unknown before token/free/image estimates and settlement; deny unqualified hard-dollar admission while preserving explicit policy-fixed charges.
+- Keep model-less xAI native STT unpriced before token/free/image estimates and settlement, preserving explicit policy-fixed charging and conservative silence/duration accounting.
 - Add native xAI unary transcription codecs and fixtures preserving model-less file-last multipart requests, empty transcripts and unknown duration-cost boundaries.
+- Qualify model-less xAI native STT declarations with original multipart/credential binding, unchanged Chat cards and conservative unknown-dollar admission; shared upload activation remains separate.
 - Add frozen OpenRouter JSON transcription codecs and fixtures with exact inline audio, silent-transcript handling and independent native duration/token/cost observations.
 - Dispatch native OpenRouter JSON transcription with authenticated bounded uploads, original grants, complete output and conservative settlement without treating duration or diagnostic cost as a tariff.
 - Add bounded native OpenRouter transcription response validation with complete JSON delivery, playable audio byte-preservation tests and conservative independent usage; shared ingress, dispatch and actual consumer activation remain separately qualified.
@@ -60,8 +415,13 @@
 
 - Qualify closed Runway create/retrieve/cancel lifecycle declarations against native mode paths and stable version headers, preserving bodyless cancellation uncertainty before route activation.
 - Recognize and mask the canonical Runway server secret only for its declared Bearer scheme, preserving original grant credentials and rejecting malformed values before headers or egress.
+- Declare experimental Runway text-video routes and three unpriced frozen models with original-job controls, canonical native-Bearer credentials and cancellation uncertainty; keep image/video/upload modes closed pending input-asset binding and serialized integration proof.
+- Qualify Runway text-video native and manifest lifecycle dispatch, original versioned credentials and conservative settlement; recognize its canonical server secret in safe unresolved smoke plans and exercise the actual native video client with explicit supported durations.
+- Exercise the actual native Runway duration-default host through Worker lifecycle and SQLite, preserving three frozen Veo defaults, invalid-duration denial before dispatch, original grants and explicit fixed-policy accounting. Catalog-driven client video selection remains separately qualified.
 
 - Qualify PixVerse text-video lifecycle declarations with scoped retrieval, regional API-key auth and runtime-owned trace headers; keep upload/image routes closed pending durable asset binding.
+- Declare experimental PixVerse text-video routes with scoped retrieval, original regional credentials and unpriced frozen models; image/upload and cancellation stay unavailable.
+- Exercise both frozen PixVerse text models through compiled native/manifest Worker lifecycle tests and the actual configured native video client, preserving fresh trace headers, original keys and conservative settlement.
 
 - Qualify OpenRouter video download-only endpoint links with original-job content controls, preserving metadata-first file declarations and conservative unknown costs.
 - Add three frozen Gemini Flash/Lite identities with published multimodal input-cost bounds, served-tier cache rates and unchanged hosted-tool cost guards.
@@ -73,11 +433,26 @@
 - Add Runway video lifecycle adapters and synthetic fixtures for the frozen create modes, preserving version headers, scoped task controls and cancellation/deletion uncertainty. Shared durable route activation remains separately qualified.
 - Validate the two frozen Kie Grok video input contracts in the scoped jobs adapter, preserving native duration types and unknown costs while keeping unbound image creation closed.
 - Add finite MiniMax video/file codecs and fixtures with lossless int64 IDs, original-task observations, bounded native file reads and explicit legacy cancellation/accounting limits.
+- Add inactive MiniMax text-to-video and original-job file adapters with strict native identities, bounded complete responses and explicit signal/query/MIME declarations; regional authority and managed runtime activation remain separate.
+- Add inactive MiniMax first-frame validation with canonical inline base64, matching image containers and dimensions, and one bounded caller-owned decoded buffer; input authority and route activation remain separate.
 - Admit the six frozen fal Seedance create IDs and their exact dotted control root in the managed wrapper, retaining original create parameters and rejecting remote assets or arbitrary path expansion.
 - Validate frozen fal MiniMax Live and HeyGen prompt-only video requests in the registered scoped queue adapter, preserving original control routes and terminal execution when output media is unusable.
 - Validate the two frozen fal Wan video input contracts in the scoped queue adapter, preserving exact version paths and credential boundaries; keep the unsupported Kling 2.1 Master endpoint closed.
 - Dispatch frozen native Google Lyria music through bounded complete audio validation, preserving original credentials, unknown-dollar denial, explicit policy charging and no-replay settlement.
 - Add frozen OpenRouter Lyria streaming music codecs and fixtures, preserving split base64 audio, native completion and unknown-cost outcomes on interrupted delivery.
+- Add immutable borrowed OpenRouter music input preparation with bounded original-range base64 and JSON-size validation, preserving the existing owned-copy API and keeping image authority and capacity admission separate.
+- Define closed model-scoped inline reference-image facts for the two OpenRouter Lyria models, preserving optional text input, explicit URL/asset denial and public catalog constraints without activating image routes.
+- Add a bounded OpenRouter Lyria response leaf that quarantines complete music SSE before unchanged replay, preserving native diagnostics without token pricing; shared dispatch and asset authority remain separate.
+- Add scalar-only OpenRouter music inspection with incremental canonical base64 validation, retaining the original reader's decoded-output behavior and keeping larger response delivery behind actual Worker-path qualification.
+- Keep OpenRouter music response inspection and decoding bound to immutable model/format scalars without retaining prepared request bodies in state or reader callbacks.
+- Keep native OpenRouter music response callbacks and quarantine bound to frozen model/format metadata without retaining the prepared text request.
+- Expose scalar-only native music response construction and the existing bounded PNG/JPEG/WebP container checks for internal integration, without granting input, credential or capacity authority.
+- Route explicitly selected OpenRouter music through complete native SSE validation, original credentials and conservative policy-fixed accounting; keep unknown dollar prices and reference images closed.
+- Restore original OpenRouter music output bounds through scalar inspection and bounded BYOB quarantine/replay, preserving original SSE and response capacity through delivery; reference-image intake remains closed.
+- Admit bounded inline OpenRouter music images with original caller/key binding, immutable streamed input and atomic input/response capacity; preserve ordinary Chat admission and keep HTTPS references closed.
+- Add scoped OpenRouter music image publication, delegated immutable-byte delivery and single-attempt forwarding under the original caller/key and explicit publication policy; keep declaration activation separate from runtime qualification.
+- Add closed, expiring policy permissions for publishing and forwarding the two frozen OpenRouter music inputs, independently of retention and credentials; keep publication runtime and declaration activation separate.
+- Qualify closed model-scoped OpenRouter music publication support and deployment-origin catalog facts, preserving inline defaults and separating cached public origins from permission and automatic selection.
 - Keep Google music and speech output out of generic GenerateContent/SSE text dispatch and settlement, preserving selected-model and native AUDIO evidence until qualified audio routes are wired.
 - Add frozen xAI managed-video codecs and lifecycle fixtures with empty-202 polling, original-job identity, filtered output and conservative expired-observation accounting.
 - Add frozen OpenRouter video codecs and authenticated-content fixtures with original-job URL checks, explicit retention admission and conservative expiry/cost boundaries.
@@ -90,17 +465,26 @@
 - Skip expensive OpenClaw consumer contracts for unrelated and standalone Worker test changes while preserving the reported check; run the full suite when change detection is uncertain.
 
 - Add portable Bedrock Converse replay and response codecs with bounded stream validation, atomic tool completion, signed reasoning and cache-inclusive usage for native runtime integration.
+- Add a bounded unary Bedrock Converse response wrapper with explicit selected-model and regional-origin binding, complete validation and cache-inclusive usage; common dispatch and SigV4 integration remain separately qualified.
+- Add bounded complete-response quarantine for native Bedrock ConverseStream, validating every frame and terminal event before releasing original bytes; common dispatch, signing and route activation remain separately qualified.
+- Qualify unary Bedrock Converse declarations with explicit model binding and regional SigV4 constraints; keep streaming, tariffs and provider activation closed.
+- Qualify the distinct buffered Bedrock ConverseStream compiler contract alongside unary Converse, preserving explicit Chat selection, regional SigV4 binding and unknown-price denial.
+- Dispatch explicit native Bedrock Converse and buffered ConverseStream through original regional credentials, preparing payloads before SigV4 and withholding incomplete responses while preserving observed usage and conservative settlement.
 - Add MiniMax Global/CN device authorization, token, refresh and Anthropic request codecs with regional issuer/resource binding, explicit expiry handling and deterministic fixtures.
+- Record the existing MiniMax M2.7 PAYG deprecation without changing its selected identity, price card or default, or importing the separate subscription-plan alias.
 
 - Preserve native inline image envelopes for Sage, Liquid and TypeSafe decisions, with bounded encoding checks, product-specific headers and conservative Sage image accounting.
 - Add an explicitly configured Copilot Proxy Chat transport with optional upstream bearer authentication, no default host or invented tariff, and real Worker credential/accounting fixtures.
 
+- Declare scoped Vydra Jobs submission/retrieval/cancellation and validate returned workflow identity, preserving cancellation/refund uncertainty and unqualified upstream-dollar costs.
+- Qualify the shipped Vydra Jobs declaration through native and manifest Worker lifecycle and settlement fixtures, keeping owned-job smoke reads unresolved and the separate Models API unadvertised.
 - Add bounded Vydra Jobs protocol helpers and native lifecycle fixtures, separating result retrieval, cancellation acknowledgements and credit refunds from terminal execution and dollar settlement. Runtime activation remains separately qualified.
 - Register Together video with the existing scoped media controller, validating original-origin dispatch and complete native responses while keeping unsupported cancellation and unknown upstream costs closed.
 - Add bounded Together video lifecycle codecs and native fixtures for frozen Wan2.7 text/image-to-video and Hailuo02, preserving job identity, first-frame inputs and conservative settlement boundaries.
 - Qualify the six frozen fal Seedance input contracts and lifecycle fixtures with native duration/resolution rules and bounded multimodal references; scoped dotted-route activation remains separately qualified.
 - Add bounded native codecs and synthetic fixtures for the two frozen Google image models, with atomic image delivery, thought-image exclusion and explicit modality/accounting integration boundaries.
 - Qualify the two frozen Google image model declarations and native unary endpoint contract, preserving unknown image costs and requiring runtime model-aware routing before activation.
+- Declare the two frozen Google native image models through the qualified image route, keeping upstream-dollar costs unknown and ordinary text routes distinct.
 - Keep explicit native Google image generation unpriced under hard dollar budgets instead of borrowing text or another provider’s image tariff; preserve separately labeled policy-fixed accounting.
 - Reuse shared Google image classification in direct pricing helpers with trusted selected-model context, preserving unknown image charges and ordinary text estimates.
 - Keep Google image output out of generic GenerateContent/SSE text routes and token tariffs, preserving selected-model and ProtoJSON modality evidence while the bounded native image response route is qualified.
@@ -115,20 +499,34 @@
 
 
 - Add bounded Kie Market job helpers and executable wire/result fixtures that reject HTTP-200 API errors, preserve partial-job state and keep credit usage distinct from dollar settlement. Runtime activation remains separately qualified.
+- Add Deepgram prerecorded binary protocol and result adapters with ordered multichannel transcripts, bounded native options, explicitly unpriced Nova-3 model identity and conservative duration accounting.
+- Reject unsupported Nova-3 legacy keywords and include the default model in Deepgram's final query bounds, preserving repeated keyterms and raw audio identity.
+- Dispatch qualified prerecorded audio as bounded raw bytes through authenticated upload admission, original credentials, durable reservations and complete multichannel response validation. Preserve native query repeats and authoritative post-upload admission; deny unknown whole-upload prices under hard budgets and keep explicit fixed-policy fees separate.
 - Declare scoped Kie Market submit/retrieve routes and reject returned model mismatches; keep cancellation unavailable and native credits separate from upstream-dollar pricing.
 - Keep Kie smoke lookups explicitly unresolved without an owned task ID, and qualify the shipped Market declaration through native and manifest Worker lifecycle, original-credential and conservative settlement fixtures.
 - Validate the frozen Kie Wan 2.6 native text/image wire contracts, enforcing explicit text resolution and native string duration while keeping unbound image dispatch and unknown upstream costs closed.
 - Validate frozen Kie Kling 2.6 text inputs in the registered job adapter, preserve native sound/duration semantics and keep image execution closed pending original-credential asset binding.
 - Add a bounded Wan video lifecycle adapter and synthetic native fixtures, preserving model-specific inputs, regional credential boundaries and expired observations. Shared durable route activation remains separately qualified.
+- Declare and register canonical Alibaba Wan text-video creation with original Standard regional credential checks before every dispatch, scoped retrieval and conservative expired-task settlement; keep all image/reference creates closed until input assets are bound.
+- Exercise the compiled Wan lifecycle through Worker/SQLite and the actual OpenClaw native video host, preserving proxy credentials, unknown-price denial and one conservative settlement through observation loss.
 - Add PixVerse video and multipart upload adapters with synthetic lifecycle fixtures, fresh trace headers, explicit image-binding prerequisites and conservative deleted-task accounting. Shared durable route activation remains separately qualified.
+- Support authenticated one-job PixVerse image intake with bounded multipart bytes, original-owner upload/create ordering, dual operation reservations and acknowledged native-response delivery; generic JSON and unowned image IDs remain closed.
 - Qualify PixVerse fresh trace UUIDs and Runway stable version headers against the shared managed dispatch contract, preserving route identity and scoped asset prerequisites. Require both scoped Replicate read/cancel paths when rewriting controls.
 - Add the experimental Gradium unary speech manifest, binary-mode guard and native fixtures, with conservative plan-dependent credit accounting and explicit runtime activation requirements.
 - Route model-less Gradium unary speech through bounded native binary validation, original credentials and conservative reservation settlement without replaying synthesis.
+- Add Azure Speech regional SSML manifests and bounded unary protocol qualification, with conservative character admission and separate resource credentials.
+- Pin the original Azure Speech grant before raw upload so revocation or replacement during intake cannot switch the request to another credential or environment fallback.
+- Add the Azure Speech regional SSML response wrapper with complete bounded MP3 delivery, unchanged native bytes and conservative interruption accounting; dispatch activation remains separately qualified.
+- Route authenticated Azure Speech raw SSML through fresh post-upload admission, original regional credentials, complete MP3 delivery and conservative settlement; reject unpriced hard-budget uploads before egress.
+- Add actual Azure TTS/Talk SSML and MP3 acceptance through the Worker and credential-scoped catalog; keep live smoke unresolved without sending a paid synthesis request.
 - Add concrete managed lifecycle adapters for Replicate, fal, Kie and Vydra, with bounded native reads, scoped control-path construction and explicit result/cancel support for the shared durable controller.
 - Qualify the explicit four-segment fal submit template and shared owner/app control links against native HeyGen and Seedance fixtures; retain exact product admission, original credentials and unknown-cost boundaries.
 - Qualify the three native xAI video create formats and shared original-job retrieve link; reject unbound controls, credential overrides and fabricated token prices before activation.
 - Validate the model-less Gradium native unary speech declaration, preserving original API-key routing and native settings while rejecting format aliases and invented tariffs before activation.
 - Qualify Baseten SystemOne decision metadata and exact native endpoint links for the three frozen models, preserving option/question usage bounds and separation from Chat and unqualified tariffs.
+- Dispatch native Baseten, Arcee and Novita model catalogs with their original API-key grants, canonical destinations, fresh owner checks and bounded policy-filtered metadata.
+- Revalidate generic model-list callers and original managed credentials before fetch and after parsing; intersect current permissions before publishing metadata and retain bounded response capacity through delivery.
+- Dispatch public Cerebras, NVIDIA, Chutes and Venice catalogs under the original caller and grant, without inference credentials; keep aggregate catalogs manifest-only and reapply current model policy before publication.
 - Validate typed fal/Kie/Vydra lifecycle links against concrete native control contracts, rejecting unsupported cancellation and orphan controls before route activation.
 
 - Refresh the pinned streaming JSON parser and chain dependencies, preserving strict JSON admission and the synchronous tokenizer path.
@@ -136,6 +534,8 @@
 - Qualify literal endpoint upstream-path mappings while preserving caller routes, native formats and selected credentials; reject ambiguous paths and conflicting grant transport overrides.
 - Preserve typed model retirement, deprecation and explicit upstream-alias evidence in compiled inventories; reject executable stopped rows without rewriting selected identities or inheriting prices.
 - Declare Google's stable 001 and 2 embedding models on the qualified native unary and synchronous batch routes; preserve unknown prices and deny upstream-dollar hard budgets before dispatch.
+- Add an explicit single-model Fusion strategy that skips advisers and their reservations while preserving legacy ensemble behavior and policy-scoped final-model admission.
+- Add the two frozen Gemini 2.5 native model cards with dated deprecation facts, conservative published rate ceilings and distinct served-tier cache prices, preserving unknown hosted costs.
 - Refresh the provider compiler's JSON Schema validator to 4.1.4 for schema-conformance and package declaration fixes.
 - Refresh Wrangler to 4.156.0 and its Miniflare dependency under the existing runtime overrides. Wrangler's dotenv `--secrets-file` inputs now expand variables; use JSON for literal values (the provider-secret bulk helper already uses JSON).
 - Refresh pinned setup-node to 7.1.0 and upload-artifact to 7.0.2, including Node installation validation and updated cache/artifact clients.
@@ -159,11 +559,16 @@
 - Add a scoped Google inline-media response wrapper with qualified WAV/MP4 bytes, bounded complete text delivery, thought exclusion and conservative media-cost boundaries.
 - Add Google file-backed embedding batch codecs and fixtures with scoped file/model prerequisites, conservative async lifecycle/cancellation and bounded keyed JSONL result staging.
 - Add frozen DeepSeek native Search codecs and fixtures, separating native nonempty-request billing from filtered consumer results and preserving unknown interrupted outcomes.
+- Define an internal native Search observation bound to an admitted tariff version; pricing admission and settlement remain closed until their shared integration is qualified.
 - Add bounded native DeepSeek Search response validation with explicit frozen options, complete result delivery and conservative unknown usage; shared routing and native fee qualification remain separate.
 - Qualify model-less native DeepSeek Search declarations against the original Bearer origin and bounded codec, keeping Search request fees separate from Chat token prices and fixed policy charges.
+- Define the published DeepSeek Search request tariff and conservative single-dispatch reserve without enabling hard-dollar admission or deriving charges from incomplete results.
+- Calculate version-bound DeepSeek Search request receipts from validated native empty/nonempty observations while retaining reserves for unknown outcomes and keeping runtime admission closed.
+- Reserve the frozen native DeepSeek Search request fee before dispatch, settle only complete native empty/nonempty evidence, and retain uncertain charges without replay or generic failure refunds.
 - Add bounded native DeepSeek Search response validation with explicit frozen options, complete result delivery and conservative unknown usage; shared routing and native fee qualification remain separate.
 - Dispatch model-less DeepSeek Search through original credentials and bounded native response validation, denying unknown request fees under hard-dollar budgets and retaining explicit policy charges for empty or interrupted results.
 - Add bounded MiniMax native plan Search codecs and fixtures, preserving regional product boundaries, native result counts and unknown upstream costs through filtering and interrupted delivery.
+- Add an inactive MiniMax plan Search response leaf with trusted regional destinations, complete native JSON and validation of every result URL; preserve unknown usage and response capacity through downstream completion while operation authority remains separate.
 - Add frozen Gemini grounded-search codecs and synthetic fixtures with bounded native time filters, preserved attribution and conservative query/tool accounting boundaries.
 - Qualify the frozen Google grounded-search manifest contract with explicit endpoint selection and unknown grounding costs while overlapping native discovery remains closed.
 - Add a complete Google grounded-search response wrapper with scoped native selection, stable attribution indices, thought exclusion and bounded delivery without inferring tool costs.
@@ -178,6 +583,7 @@
 - Verify the caller-scoped catalog through native Responses streaming and usage accounting, including tool/reasoning replay, HTTP-200 terminal errors, and credential revocation. These synthetic checks do not certify live-provider or client-runtime parity.
 - Declare Gemini streaming requests with `alt=sse` to match the endpoint's SSE contract. Check compiled provider inventory against source manifests instead of a fixed provider count.
 
+- Add Single and Panel Fusion workflow cards with visible call counts, preserved adviser choices, and strategy-aware readiness and request flow.
 - Remove unused provider fixture files and the inert manifest `tests.fixtures` field. Put provider contract fixtures in executable tests.
 - Record current primary-source qualification and remaining runtime/billing gates for all 22 existing providers, including request and credit charges that token-only cards cannot certify.
 - Add executable Firecrawl v2 Search fixtures for native result groups, HTTP-200 failures, credential isolation and conservative credit accounting.
@@ -191,12 +597,16 @@
 - Keep the demo route catalog aligned with Worker routes and endpoint-specific model eligibility.
 
 - Observe bounded AWS Bedrock Invoke EventStream frames for Nova and Anthropic usage and embedded errors without changing bytes, backpressure, or cancellation. Unknown and oversized payloads retain conservative accounting; Converse remains a separate protocol.
+- Share complete Bedrock EventStream frame validation with exact length, CRC and metadata checks while preserving Invoke byte delivery and its inspection-only limit.
 - Add finite native Bedrock embedding codecs and complete synthetic vector fixtures for Titan, Cohere, Nova and version-specific Marengo requests. Shared model routing, native client fixes and tariff qualification remain separate integration work.
 - Qualify finite native Bedrock embedding declarations against the landed family codecs and signed runtime, retaining exact registered identities, text-only inputs and unknown costs.
+- Reject non-null Titan Multimodal error messages before exposing embeddings or usage, including empty and malformed values, while preserving other Bedrock families.
+- Declare nine frozen native Bedrock text embedding identities with primary provenance and unknown tariffs, preserving generic Invoke and excluding unqualified Titan Multimodal delivery. Select an explicit passthrough route for unknown native path models independently of declaration order, without treating known ineligible cards as unknown. Accept explicitly requested Cohere v3 float envelopes alongside legacy arrays, retaining complete vector validation and original native responses.
 - Add bounded native Bedrock embedding response validation with original regional destination binding, complete vector delivery and qualified Titan input counts; shared signing, dispatch and memory acceptance remain separately qualified.
 - Dispatch qualified native Bedrock embeddings with original regional SigV4 credentials, unchanged model-specific input, complete bounded vectors and conservative accounting without inferred tariffs.
 - Expose the existing Bedrock embedding model recognizer for shared route guards without duplicating family or inference-profile parsing rules.
 - Qualify typed Sage, Liquid/TypeSafe SystemOne and SubQ decision metadata against closed provider/wire contracts without inventing context, prices or client compatibility.
+- Qualify finite Sage batch decision metadata with an exact paired transport and text/list model binding, preserving singular protocols and leaving runtime activation, batch bounds and prices unqualified.
 - Add scoped durable prediction admission with idempotency replay guards, explicit uncertain submission, atomic original-owner bindings, and policy-fixed terminal settlement. Public prediction controls remain a separate integration step.
 - Observe native Radius Pi event usage and errors without rewriting SSE bytes or native tool/reasoning payloads. Preserve cancellation and conservative fixed-policy settlement when terminal evidence is incomplete.
 
@@ -213,16 +623,34 @@
 - Document how many screenshots fit in the 32 MB media envelope (about 60 text-heavy or 12 photo-heavy 2048 px screenshots), production-probed over HTTP and WebSocket, plus the remaining limitations: a hard 413 above 32 MB that compaction may not clear, per-isolate 503s under concurrent large bodies, and Claude's 2000 px rule above 20 images.
 
 - Add native Sage and Liquid/TypeSafe SystemOne decision codecs with typed fixtures, preserving abstention, probabilities, rubric scores and aggregate token evidence for runtime and DecisionV2 integration.
+- Wire singular Sage and Liquid/TypeSafe SystemOne decision formats through bounded complete-response validation and original-grant accounting, preserving unknown usage and cancellation through downstream delivery; provider activation, Sage batch and actual DecisionV2 clients remain separate.
+- Admit explicitly qualified Sage text/list batches through the existing native response path, validating every answer before release and preserving aggregate usage, conservative settlement and downstream capacity ownership; shipped declarations and actual DecisionV2 clients remain separate.
 
 - Make image-heavy turns work: OpenAI-format Responses (create, compact, input tokens) and Chat Completions now accept the 32 MB media envelope Claude already had, instead of 413 at 8 MiB, and Responses WebSocket creates accept 32 MB frames instead of 4 MiB. Bodies carrying media splice their large strings into a known-length upstream/R2 stream instead of whole-document copies (a 6.7 MiB image turn holds 7 MiB at dispatch instead of 20.5 MiB; WebSocket creates are parsed once and no longer build an unused HTTP body), and a 96 MiB per-isolate body budget replaces the two-request limit, refusing excess large bodies with a nonbillable `503` + `Retry-After: 1` before they can exceed isolate memory (eight concurrent 6.7 MiB turns: 55 MiB live instead of 122 MiB).
+- Add an atomic body-budget phase transfer that replaces an existing charge with independently owned input/response charges under the same pool, leaving the original lease unchanged on refusal; route activation remains separate.
+- Add a single-use nonmutating JSON transport with exact bounded bytes and explicit serializer-reference retirement, preserving frozen input and leaving existing route and capacity behavior unchanged.
 - Add GPT-6.1 Terra with sourced text/image metadata, Responses tool calling, Standard/Fast/Flex pricing and long-context budget bounds.
 - Cut streamed Responses inspection CPU in cold (interpreted) isolates by 25–35%: SSE lines are split with a native search instead of a per-character loop, and adjacent JSON string chunks of a feed are merged before reaching the projections instead of one dispatch per escape; evidence, limits and error semantics are unchanged.
 
 - Add Google service-account and Anthropic Vertex request codecs with explicit project/region/model binding, token expiration checks and deterministic signature tests for credential-owner integration.
+- Bind preprovisioned Anthropic Vertex access tokens to original owner project/location and expiry, with fixed native dispatch, fresh post-budget authority checks and conservative settlement; service-account refresh remains separate.
+- Refresh explicitly authorized Vertex service-account credentials inside the existing durable owner, with fixed JWT exchange, request-start expiry, cancellation outside owner ordering and uncertainty fences that prevent replay or late credential installation.
+- Define an inactive, default-deny Vertex model/location predicate for the exact Sonnet 4.6 identity and four documented locations; catalog and dispatch integration remain separate from these support facts.
+- Smoke planning: keep owner-bound Vertex Messages explicitly unresolved without environment credentials, paid requests or false live health.
+- Enforce the qualified Vertex Sonnet 4.6 model/location pair in model-scoped catalog eligibility and final original-owner dispatch, preserving unknown billing, credential freshness and unrelated provider routes.
+- Declare the exact Vertex Sonnet 4.6 Messages model with sourced numeric limits, original-owner JSON/SSE routing and explicitly unknown pricing; keep snapshot and registered-client qualification separate.
 
+- Add an opt-in, spend-bounded live Fusion composition pilot with paired public-task scoring and content-free result artifacts.
 - Patch Undici denial-of-service and integrity-check vulnerabilities in the local Worker toolchain.
 
 - Add GitHub Copilot account and native request codecs with explicit public/enterprise identity, advertised model transports and credential-owner binding for runtime integration.
+- Preserve native Copilot picker visibility and unconfigured-consent exclusions, and bind inactive catalog/request headers to one explicit original-owner identity without defaults, inferred entitlement or static-seed resurrection.
+- Add inactive Copilot device-code request/response codecs with original domain/owner binding, bounded text decoding and explicit polling intervals; durable onboarding and credential installation remain separate.
+- Add an inactive bounded Copilot catalog decoder that preserves explicit native facts and unknown limits, rejects duplicate or malformed authority rows, and retains existing visibility and transport filtering without inferred prices or entitlement.
+- Add an inactive Copilot response reader with exact response-URL checks, bounded byte windows, fatal UTF-8 and complete cancellation cleanup; common authority, decoded-graph capacity and account responses remain separately qualified.
+- Bound complete Copilot catalog/device JSON structure before parsing, counting discarded metadata and overwritten values while preserving device duplicate-last-value semantics and existing decoder errors; capacity and account activation remain separate.
+- Add an inactive incremental Copilot account projection that retains only the API endpoint, validates complete UTF-8/JSON with fixed parser storage and rejects duplicate authority fields; transport, canonicalization and capacity qualification remain separate.
+- Add bounded Copilot account response transport with reused BYOB windows, complete projection validation and shared input retirement, preserving catalog/device readers and denying cleanup failures or late aborts; account authority, canonicalization and capacity activation remain separate.
 
 - Reject compromised certificate keys in the self-host Worker runtime, and include the system CA bundle required by the patched verifier. Thanks @joshavant.
 
@@ -271,6 +699,10 @@
 - Add the frozen Groq Safeguard 20B identity with qualified plain-Chat token pricing and conditional tool/tier guards; record Qwen 3.6 retirement for public tiers without inventing a replacement alias.
 
 - Add experimental Moonshot global, Qwen Model Studio Singapore, and Z.AI global standard Chat Completions routes, with separate credentials and unpriced model passthrough. Regional, coding-plan, and OAuth products remain separate qualification work.
+- Complete the six frozen Z.AI global standard dispositions with model-specific input facts, preserving CN/Coding Plan isolation and qualifying GLM 5.1 against its explicit global standard API contract without turning a frozen deprecation into a shutdown.
+- Verify the registered Z.AI global client through the Worker and SQLite for both stream entrypoints, model-specific thinking defaults, tool replay, original-grant isolation and explicit policy-fixed accounting.
+- Complete the frozen Qwen global standard Chat roster with explicit closed legacy rows, native input facts and original-account fixtures, without borrowing regional plan credentials or vendor prices.
+- Verify configured Qwen global standard clients through both registered stream entrypoints and Worker SQLite accounting, preserving model-specific thinking, replay and region/plan isolation.
 - Qualify the five frozen Moonshot Chat models and authenticated model discovery on isolated global/China credentials, preserving native replay, account-dependent K2 availability and unknown tariffs.
 - Add isolated Singapore and Beijing Qwen Token Plan Chat routes with dedicated credentials and seven frozen unpriced model identities.
 - Document all 54 frozen missing provider families, scoped transport implementations and explicit native protocol, identity and host-runtime dependencies without claiming full parity.
@@ -286,7 +718,13 @@
 - Add the native Lyria response wrapper with explicit audio MIME, complete MP3/WAV framing, bounded delivery and thought exclusion; shared music routing and cost admission remain separately qualified.
 - Keep explicit native Lyria music unpriced at admission and settlement, rejecting borrowed token/image tariffs under hard-dollar budgets while preserving separately labeled policy charges.
 - Qualify the two frozen Lyria unary music declarations with exact native formats, selected-model paths and unknown-cost guards, keeping shared runtime activation separately gated.
+- Declare the two frozen Lyria music-only models on the qualified native Google route, preserving exact identities, unknown upstream prices and explicit policy charging.
 - Add bounded frozen MiniMax music stream codecs and fixtures with terminal audio validation, required cover references and explicit existing-user/free-discontinuation qualifications.
+- Validate MiniMax cover base64 with scalar inspection instead of full decoded and re-encoded copies, preserving canonical encoding and the 8MiB bound without enabling cover dispatch.
+- Scope MiniMax music availability metadata by region, distinguishing global free-discontinuation notice from stopped CN free service without changing origins, entitlement or pricing.
+- Qualify bounded global MiniMax music-2.6 unary hex responses with complete native JSON, playable test audio and conservative unknown costs; music dispatch still requires separate operation authority.
+- Add bounded global MiniMax music streaming inspection and complete terminal SSE replay without retaining full wire or hex copies; operation authority, actual transport bounds and registered-client activation remain unqualified.
+- Bind MiniMax music dispatch to explicit global music credentials and fresh original-owner authorization; retain response capacity through input cleanup and downstream completion.
 
 - Add experimental native Brave, Exa and Parallel search routes with provider-owned authentication and unchanged payloads. Upstream search fees remain unqualified; reserve budgets require an explicit policy request price. Add bounded format-specific smoke requests with real Worker usage checks.
 
@@ -294,6 +732,9 @@
 - Qualify NVIDIA's four frozen hosted model identities, exclude the deprecated Llama seed, and add credential-free inventory/featured metadata codecs with strict availability intersection and unknown pricing.
 - Fix native Node loading of the Cerebras catalog codec by resolving its TypeScript imports explicitly.
 - Add credential-free Cerebras public catalog request and bounded metadata codecs, preserving unknown prices, deprecated-model filtering and account-specific limit boundaries for runtime integration.
+- Qualify manifest-only Cerebras and NVIDIA public catalog declarations with fixed metadata factories and normalized fact arrays, preserving private caller binding and withholding native-route activation.
+- Reject registered catalog protocol declarations with mismatched wire pairs, noncanonical list/retrieve capabilities, missing GET or streaming transports before Worker execution, while preserving generic endpoint defaults and existing catalog exposure restrictions.
+- Add isolated public catalog orchestration for Cerebras, NVIDIA, Chutes and Venice with original-owner checks before every fetch and publication, one caller deadline and final current-policy filtering; shared dispatch activation remains separate.
 - Add bounded DeepInfra native catalog codecs with isolated authenticated metadata and public pricing, preserved deprecation/replacement observations, and no fabricated limits or tariffs.
 - Qualify DeepInfra’s eight frozen model dispositions and original-account model discovery, preserving the existing Chat seed and withholding the known GLM-5.1 alias until runtime availability integration.
 - Add the six frozen Baseten Chat identities with qualified image inputs and native reasoning/tool replay fixtures; keep decision-only identities out of Chat and unknown prices unset.
@@ -302,29 +743,65 @@
 - Wire native Baseten SystemOne decisions through bounded complete-response admission and original-credential dispatch, preserving observed answer usage and conservative settlement without OpenAI wire aliases.
 - Add bounded Baseten native model discovery codecs with original-credential binding, data-only lists, decision-model exclusion and unknown-price preservation.
 - Add experimental Arcee Platform, Chutes API-key, Featherless and Venice Chat Completions routes with independent credentials, unpriced model passthrough and explicit product boundaries.
+- Bind Venice Chat delivery to the explicitly selected model, reject caller fallback controls, and gate JSON or individual SSE frames under original credentials with conservative settlement.
 - Add bounded public Venice text catalog decoding with exact original-grant filtering, independent native metadata and conservative deprecation/currency observations.
 - Qualify Venice public text-catalog declarations with credential-free upstream requests, private original-grant filtering and separate unknown USD/DIEM observations before activation.
+- Providers: qualify nineteen frozen Venice Chat identities, independent limits and native effort menus; cover selected-grant tools, reasoning, vision and stream cancellation through real Worker fixtures.
+- Exercise the actual configured Venice SDK and registered compatibility hooks through Worker/SQLite, retaining strict selected-model delivery, rejected fallback controls, original grants and conservative cancellation/error settlement.
 - Add bounded Featherless native catalog pages with original-key requests, exact grant filtering and explicit pagination, preserving unknown plan eligibility and prices.
+- Use Worker-supported manual redirects for native catalog requests while rejecting every redirect response, preserving original credentials and public-request isolation.
+- Add an isolated complete Featherless catalog scan with original-key authorization per page, atomic bounds and final current-policy filtering; shared route and capacity ownership remain separate.
 - Qualify Featherless native catalog declarations with original-key pagination, validated page progress and unknown account/pricing observations, without activating discovery.
+- Qualify a separate manifest-only Featherless complete-catalog projection while retaining the native page codec, original-key boundary and unknown facts; shared scan runtime and provider activation remain separately gated.
+- Dispatch complete Featherless catalogs through the original keyed grant, revalidate every page and final policy, and hold bounded capacity through atomic catalog serialization and delivery.
+- Qualify the frozen Featherless Qwen3-32B Chat card and native reasoning/tool replay, preserving the existing seed, original API-key grant and unknown plan-dependent prices/output limits.
+- Regenerate the Featherless catalog and exercise the actual native SDK through the Worker and SQLite, including frozen compatibility flags, reasoning/tool replay, missing usage, cancellation and proxy-only credentials.
 - Add bounded Chutes native model discovery codecs with public upstream requests, original caller filtering and explicit unknown metadata.
 - Qualify Chutes public native catalog declarations while retaining private caller/grant authorization, credential-free upstream requests and unknown native pricing units.
+- Add the five frozen Chutes Chat cards with qualified native metadata and original-grant JSON/streaming fixtures that preserve missing usage and unknown pricing.
+- Include the frozen Chutes cards in the generated catalog and exercise their actual configured native SDK path through Worker/SQLite, preserving original keys, tool replay, absent versus observed usage and conservative cancellation settlement.
 - Add bounded Arcee native catalog codecs with original direct-credential filtering, distinct OpenRouter identities and independent unknown pricing.
 - Qualify the finite Arcee native catalog declaration with canonical original-key GET validation, exact policy identities and independent unknown price observations.
+- Qualify the three frozen direct Arcee Trinity Chat cards with native tool/reasoning replay, original-grant transport tests and unknown pricing.
+- Include the three direct Arcee Chat cards in the generated catalog and verify catalog-selected native/manifest transport, fragmented streams and conservative accounting across the bundled Chat matrix.
 - Add experimental GMI Cloud, Novita, LongCat and Xiaomi MiMo PAYG chat routes; keep GMI/Novita aliases canonical and Xiaomi Token Plan credentials separate.
+- Bind GMI's optional organization header to the original credential owner for Chat and keyed discovery, reject caller/static overrides, and recheck account identity and current policy after admission waits.
+- Preserve GMI unified Chat and model-prefix aliases by validating internal model selectors against the selected upstream model, while keeping caller path parameters and organization overrides closed.
+- Complete the four assigned Xiaomi PAYG model dispositions: expose MiMo 2.6 Pro/Flash and reject expired 2.5 identities before passthrough, preserving product credentials and unknown prices.
+- Verify the registered Xiaomi PAYG client through native streams, original-grant admission and SQLite settlement, separating stopped identities and unknown upstream prices from fixed policy charges.
 - Retain conservative generation charges for qualified Novita upstream HTTP 499 responses without treating local aborts, unsent requests, catalog reads or unrelated HTTP errors as that billing outcome.
 - Providers: add strict keyed Novita native catalog decoding with original-policy filtering, bounded complete responses and unconverted integer price observations.
 - Qualify Novita native model-catalog declarations against the canonical keyed data-only contract, preserving exact caller filtering and unknown price units before runtime activation.
+- Providers: declare Novita's seven frozen Chat models with qualified tool, input and token-limit facts, preserving native reasoning/tool replay, original credentials and conservative interrupted-stream accounting.
+- Exercise the actual configured Novita catalog and replay hooks through native SDK streams, Worker admission and SQLite, preserving frozen identities, original grants, cancellation and conservative HTTP 499 charges. Strict native discovery remains separately declared.
+- Providers: add the frozen LongCat 2.0 contract, canonical Meituan routing alias and keyed model discovery while retaining the existing seed and native thinking/replay behavior.
+- Verify LongCat's actual strict native catalog and registered thinking/replay wrapper through the Worker, preserving original credentials, zero-cost discovery and conservative stream settlement.
+- Providers: qualify eight frozen GMI Chat identities and credential-bound model discovery, with real Worker grant, replay, usage and cancellation fixtures.
+- Verify the registered GMI client, strict keyed discovery and both reasoning wrappers through Worker/SQLite, preserving optional organization binding and ordinary Bearer credentials.
 - Add isolated global and China Step Plan Chat routes with dedicated credentials, three frozen model identities and conservative streaming usage.
 - Add an isolated Tencent TokenPlan Chat route for the two frozen Hy models, using the current documented plan host and dedicated subscription credentials.
 - Add isolated Volcengine and BytePlus Coding Plan Chat routes for qualified frozen identities, preserving console aliases and rejecting retired or unqualified cards before upstream calls.
+- Tests: exercise registered ClawRouter catalog-selected Volcengine PAYG Chat, explicit tool replay, regional grant isolation, cancellation and SQLite accounting through the real Worker.
+- Complete the frozen Volcengine PAYG Chat roster while preserving its existing seed, closing deprecated identities and keeping dated standard models separate from Coding Plan aliases and tariffs.
 - Retain all frozen Ark Coding Plan identities with dated retirement, deprecation and upstream-alias evidence; keep unqualified cards non-executable and unpriced pending shared discovery eligibility integration.
 - Observe StepFun standard Chat cached_tokens as a validated inclusive prompt subset in JSON and terminal SSE, preserving gross input and conservative invalid-cache accounting without inferring prices.
 - Add experimental standard chat routes for Qianfan v2, StepFun global, Tencent TokenHub mainland, Volcengine Beijing and BytePlus Singapore with separate region/product credentials.
 - Accept canonical Abliteration ABLIT_KEY with ABLITERATION_API_KEY compatibility, consistent readiness and canonical precedence, preserving original selected grants and sanitized credential rejection.
+- Providers: qualify the two frozen StepFun standard Chat cards and keyed discovery in explicit global/China bindings, separate from Step Plan credentials and quota.
+- Fix global and China StepFun model discovery to declare GET explicitly, omit streaming and exclude an unintended POST method.
+- Qualify three frozen Tencent TokenHub Chat identities and private model discovery, preserving the documented postpaid Hy3 preview alias, native reasoning/tool replay and separate TokenPlan credentials without inferring tariffs.
+- Fix Tencent TokenHub model discovery to declare GET explicitly, omit streaming and exclude an unintended POST method.
 - Add experimental Abliteration, Meta Model API, Synthetic and Particle Chat routes with isolated API keys and explicit Particle catalog-to-request model mapping.
+- Resolve exact declared native model identities before opaque passthrough so Particle retains its canonical policy ID and physical upstream alias; reject ambiguous registered matches without widening unknown-model authority.
+- Providers: qualify the frozen Particle-1 Chat controls, tools, image input and token limits with original-key model discovery, preserving native identity mapping, usage and served-tier observations.
+- Verify Particle’s actual keyed catalog, native reasoning/cache controls and replay through Worker/SQLite; preserve public model identity, documented request alias and unknown-price denial.
 - Add a strict Synthetic native model-list codec for its data-only envelope, preserving current model observations and unknown prices for the separate Messages/discovery integration.
 - Add Meta native Responses, original-response retrieve/cancel links and credential-scoped model discovery declarations, preserving the six frozen model IDs and existing Chat routes without inferring prices or switching Contributor modes.
 - Add experimental Kilo, Requesty, Vercel AI Gateway, OpenCode Console and OpenCode Go Chat routes with gateway-scoped credentials and separate Go subscription selection.
+- Wire Requesty managed catalogs through original-owner discovery authorization, preserving native facts and final policy filtering with bounded reads, cancellation and delivery capacity.
+- Add a bounded Requesty managed-catalog request/reader leaf preserving native policy identities and unknown facts, without activating discovery or inferring current prices or entitlements.
+- Qualify the paired Requesty managed-catalog compiler contract with its fixed original-key GET route, model-less metadata selector and closed override surface; provider activation remains separate.
+- Declare Requesty native and manifest managed-model discovery under the original global gateway grant, preserving Chat cards and raw observations without inferred prices, limits or account entitlement.
 - Expose Vercel gateway Messages at the Anthropic SDK-compatible public path while keeping its original gateway dispatch path, credential and catalog offer.
 - Add native Vercel gateway Messages and policy-scoped model discovery while preserving gateway credentials, replay and unknown pricing.
 - Add Synthetic native Messages and model discovery beside the preserved Chat route, with distinct dispatch paths, original credentials, qualified frozen model facts and real Worker protocol fixtures.
@@ -343,8 +820,15 @@
 - Add explicitly configured llama.cpp, LM Studio, Ollama, oMLX, SGLang and vLLM Chat/SSE routes with scoped model discovery, plus Ollama native JSON/NDJSON/Tags and LM Studio Messages; optional server credentials, no loopback default or inferred free tariff.
 - Add experimental API-key Chat routes for Bedrock Mantle us-east-1, configured Microsoft Foundry deployments and overseas Kimi Coding, without conflating IAM, Entra or Moonshot credentials.
 - Add explicit authenticated Bifrost and LiteLLM gateway Chat routes with operator-selected URLs/models and unpriced accounting instead of inheriting local zero-charge assumptions.
+- Qualify ElevenLabs unary MP3 speech with native voice/query binding, bounded complete output and conservative dispatched-failure accounting, without inventing a model tariff.
+- Dispatch qualified native ElevenLabs MP3 speech with original credentials, bounded complete delivery and conservative settlement through the shared query and admission controls.
+- Compile the ElevenLabs offer and exercise actual OpenClaw TTS/Talk through the Worker with scoped proxy credentials, complete MP3 delivery, caller deadlines, controlled cancellation and conservative accounting; keep unattended speech smokes unresolved.
 
 - Preserve validated payload formats for caller-scoped manifest-only catalog routes so native embedding clients can qualify offers without enabling disabled native endpoints.
+- Keep native transcription formats out of legacy OpenAI route offers unless the selected endpoint declares the matching OpenAI request and response contract.
+- Qualify legacy speech offers against the OpenAI request and binary response pair, preserving provider-native speech routes and mixed Chat models without advertising an unsupported controller.
+
+- Add an offline paired Fusion evaluator for held-out quality, worst-domain retention, full-run cost, latency and case-level uncertainty without invoking providers.
 
 ## 0.5.0 - 2026-10-22
 

@@ -13,15 +13,8 @@ const { normalizePolicy } = await import('../admin.ts');
 
 function deferred() { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; }
 async function setup(t, options = {}) {
-  const env = usageEnv([], { provider: 'local-openai', retainContent: false, ...options });
+  const env = usageEnv([], { provider: 'local-openai', retainContent: false, ...options, budgetMode: 'soft' });
   env.LOCAL_OPENAI_BASE_URL = 'https://upstream.example.invalid';
-  const authority = env.ACCESS_CONTROL.get();
-  env.ACCESS_CONTROL.get = () => ({ fetch: async (...args) => {
-    const response = await authority.fetch(...args);
-    const value = await response.json();
-    if (value.policy) value.policy.policy.budgetMode = 'soft';
-    return Response.json(value);
-  } });
   const ledger = sqlBudgetNamespace(t), calls = [], events = [], pending = [];
   env.BUDGET_LEDGER = { ...ledger, get: name => ({ fetch: (url, init) => { calls.push(new URL(url).pathname); return ledger.get(name).fetch(url, init); } }) };
   env.USAGE_QUEUE = { send: async event => events.push(event) };

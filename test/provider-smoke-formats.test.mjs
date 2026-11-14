@@ -25,17 +25,111 @@ function renamed(id) {
 
 test("bundled target selection is stable and unresolved prediction coverage stays visible", () => {
   const plan = buildProviderSmokePlan(catalog, {});
-  const native = { anthropic: "count_tokens", "aws-bedrock": "invoke_model", brave: "search", "cloudflare-ai-gateway": "universal", cohere: "chat_completions", exa: "search", fal: "queue_result", firecrawl: "scrape", "google-gemini": "generate_content", gradium: "speech", kie: "record_info", parallel: "search", replicate: "prediction", tavily: "search", voyage: "embeddings" };
+  const native = { alibaba: "task", anthropic: "count_tokens", "anthropic-vertex": "messages", "aws-bedrock": "invoke_model", "azure-speech": "speech", brave: "search", "cloudflare-ai-gateway": "universal", cohere: "chat_completions", deepgram: "listen", exa: "search", elevenlabs: "speech", fal: "queue_result", firecrawl: "scrape", "google-gemini": "generate_content", gradium: "speech", kie: "record_info", parallel: "search", pixverse: "video", replicate: "prediction", runway: "text_task", tavily: "search", voyage: "embeddings", vydra: "job" };
   assert.deepEqual(plan.providers.map(provider => provider.id).sort(), catalog.providers.map(provider => provider.id).sort());
   assert.equal(plan.providerCount, catalog.providers.length);
   assert.equal(plan.targetCount, catalog.providers.length);
   for (const { id, target } of plan.providers) {
     assert.equal(target.kind, native[id] ? "manifest_proxy" : "openai_chat", id);
     assert.equal(target.endpoint ?? target.route, native[id] ?? "/v1/chat/completions", id);
-    assert.equal(!!target.unresolved, ["replicate", "gradium", "fal", "kie"].includes(id), id);
+    assert.equal(!!target.unresolved, ["anthropic-vertex", "replicate", "gradium", "elevenlabs", "fal", "kie", "vydra", "alibaba", "pixverse", "runway", "azure-speech", "deepgram"].includes(id), id);
   }
   assert.match(summarizePlan(plan), /replicate.*unresolved=.*existing prediction ID/);
   assert.match(summarizePlan(plan), /gradium.*unresolved=.*no smoke request template for gradium.speech/);
+});
+
+test("Deepgram raw-audio smoke remains unresolved with masked credentials and zero egress", async t => {
+  const provider = catalog.providers.find(provider => provider.id === "deepgram");
+  const plan = buildProviderSmokePlan({ providers: [provider] }, { DEEPGRAM_API_KEY: "fixture-private-deepgram-key" });
+  assert.equal(plan.configuredCount, 1); assert.equal(plan.targetCount, 1);
+  assert.deepEqual(plan.providers[0].requiredConfig, ["DEEPGRAM_API_KEY"]);
+  assert.equal(plan.providers[0].target.endpoint, "listen");
+  assert.match(plan.providers[0].target.unresolved, /no smoke request template for deepgram\.prerecorded/);
+  const network = t.mock.method(globalThis, "fetch", () => { throw new Error("unexpected raw upload"); }), health = [];
+  await assert.rejects(runLiveProviderSmokes({ baseUrl: "https://smoke-router.example", smokeKey: "fixture-proxy-key", plan,
+    liveProviders: ["deepgram"], onResult: result => health.push(result) }), /no smoke request template for deepgram\.prerecorded/);
+  assert.equal(network.mock.callCount(), 0); assert.deepEqual(health, []);
+  assert.doesNotMatch(JSON.stringify(plan) + summarizePlan(plan), /fixture-private-deepgram-key|fixture-proxy-key/);
+});
+
+test("Azure SSML smoke remains unresolved without paid synthesis, secret output or false health", async t => {
+  const provider = catalog.providers.find(provider => provider.id === "azure-speech");
+  const plan = buildProviderSmokePlan({ providers: [provider] }, { AZURE_SPEECH_API_KEY: "fixture-private-azure-key", AZURE_SPEECH_REGION: "eastus" });
+  assert.equal(plan.configuredCount, 1); assert.equal(plan.targetCount, 1);
+  assert.deepEqual(plan.providers[0].requiredConfig, ["AZURE_SPEECH_API_KEY", "AZURE_SPEECH_REGION"]);
+  assert.equal(plan.providers[0].target.endpoint, "speech");
+  assert.match(plan.providers[0].target.unresolved, /no smoke request template for azure_speech\.ssml/);
+  const network = t.mock.method(globalThis, "fetch", () => { throw new Error("unexpected network request"); }), health = [];
+  await assert.rejects(runLiveProviderSmokes({ baseUrl: "https://smoke-router.example", smokeKey: "fixture-proxy-key", plan,
+    liveProviders: ["azure-speech"], onResult: result => health.push(result) }), /no smoke request template for azure_speech\.ssml/);
+  assert.equal(network.mock.callCount(), 0); assert.deepEqual(health, []);
+  assert.doesNotMatch(JSON.stringify(plan) + summarizePlan(plan), /fixture-private-azure-key|fixture-proxy-key/);
+});
+
+test("Runway canonical secret stays masked and smoke cannot create or cancel a task", async t => {
+  const provider = catalog.providers.find(provider => provider.id === "runway");
+  const plan = buildProviderSmokePlan({ providers: [provider] }, { RUNWAYML_API_SECRET: "fixture-private-runway-secret", RUNWAY_API_KEY: "fixture-alias-key" });
+  assert.equal(plan.configuredCount, 1); assert.deepEqual(plan.providers[0].requiredConfig, ["RUNWAYML_API_SECRET"]);
+  assert.equal(plan.targetCount, 1); assert.equal(plan.providers[0].target.endpoint, "text_task");
+  assert.equal(plan.providers[0].target.upstreamMethod, "GET"); assert.match(plan.providers[0].target.unresolved, /id/);
+  const missing = buildProviderSmokePlan({ providers: [provider] }, { RUNWAY_API_KEY: "fixture-alias-key" });
+  assert.equal(missing.configuredCount, 0); assert.deepEqual(missing.providers[0].missingConfig, ["RUNWAYML_API_SECRET"]);
+  const network = t.mock.method(globalThis, "fetch", () => { throw new Error("unexpected network request"); }), health = [];
+  await assert.rejects(runLiveProviderSmokes({ baseUrl: "https://smoke-router.example", smokeKey: "fixture-proxy-key", plan,
+    liveProviders: ["runway"], onResult: result => health.push(result) }), /path parameters require a smoke fixture/);
+  assert.equal(network.mock.callCount(), 0); assert.deepEqual(health, []);
+  assert.doesNotMatch(JSON.stringify(plan) + summarizePlan(plan), /fixture-private-runway-secret|fixture-alias-key|fixture-proxy-key/);
+});
+
+test("Runway canonical smoke binding cannot authorize foreign products or schemes", () => {
+  const source = catalog.providers.find(provider => provider.id === "runway");
+  for (const patch of [{ id: "unrelated" }, { config_keys: ["OTHER_API_SECRET"] },
+    ...[{ type: "api_key" }, { format: "Key ${secret}" }, { header: "X-Api-Key" }, { secretKind: "api_token" }]
+      .map(scheme => ({ auth: { ...source.auth, schemes: [{ ...source.auth.schemes[0], ...scheme }] } }))]) {
+    const provider = { ...source, ...patch };
+    const plan = buildProviderSmokePlan({ providers: [provider] }, { RUNWAYML_API_SECRET: "fixture-private-key", OTHER_API_SECRET: "fixture-foreign-key" });
+    assert.equal(plan.targetCount, 0); assert.equal(plan.providers[0].target, null);
+    assert.doesNotMatch(JSON.stringify(plan) + summarizePlan(plan), /fixture-private-key|fixture-foreign-key/);
+  }
+});
+
+test("PixVerse smoke requires an original video ID and never creates paid output or fake health", async t => {
+  const provider = catalog.providers.find(provider => provider.id === "pixverse");
+  const plan = buildProviderSmokePlan({ providers: [provider] }, { PIXVERSE_API_KEY: "fixture-private-pixverse-key" });
+  assert.equal(plan.configuredCount, 1); assert.equal(plan.providers[0].target.endpoint, "video");
+  assert.equal(plan.providers[0].target.upstreamMethod, "GET"); assert.match(plan.providers[0].target.unresolved, /video_id/);
+  const network = t.mock.method(globalThis, "fetch", () => { throw new Error("unexpected network request"); }), health = [];
+  await assert.rejects(runLiveProviderSmokes({ baseUrl: "https://smoke-router.example", smokeKey: "fixture-proxy-key", plan,
+    liveProviders: ["pixverse"], onResult: result => health.push(result) }), /path parameters require a smoke fixture/);
+  assert.equal(network.mock.callCount(), 0); assert.deepEqual(health, []);
+  assert.doesNotMatch(JSON.stringify(plan) + summarizePlan(plan), /fixture-private-pixverse-key|fixture-proxy-key/);
+});
+
+test("Wan uses only its canonical Standard key and cannot smoke-create an unowned task", async t => {
+  const provider = catalog.providers.find(provider => provider.id === "alibaba");
+  const plan = buildProviderSmokePlan({ providers: [provider] }, { MODELSTUDIO_API_KEY: "fixture-private-standard-key", QWEN_API_KEY: "fixture-other-product-key" });
+  assert.equal(plan.configuredCount, 1); assert.deepEqual(plan.providers[0].requiredConfig, ["MODELSTUDIO_API_KEY"]);
+  assert.equal(plan.providers[0].target.endpoint, "task"); assert.equal(plan.providers[0].target.upstreamMethod, "GET");
+  assert.match(plan.providers[0].target.unresolved, /task_id/);
+  assert.equal(buildProviderSmokePlan({ providers: [provider] }, { QWEN_API_KEY: "fixture-other-product-key" }).configuredCount, 0);
+  const network = t.mock.method(globalThis, "fetch", () => { throw new Error("unexpected network request"); }), health = [];
+  await assert.rejects(runLiveProviderSmokes({ baseUrl: "https://smoke-router.example", smokeKey: "fixture-proxy-key", plan,
+    liveProviders: ["alibaba"], onResult: result => health.push(result) }), /path parameters require a smoke fixture/);
+  assert.equal(network.mock.callCount(), 0); assert.deepEqual(health, []);
+  assert.doesNotMatch(JSON.stringify(plan) + summarizePlan(plan), /fixture-private-standard-key|fixture-other-product-key|fixture-proxy-key/);
+});
+
+test("ElevenLabs stays unresolved without a qualified voice and never runs a paid speech smoke", async t => {
+  const provider = catalog.providers.find(provider => provider.id === "elevenlabs");
+  const plan = buildProviderSmokePlan({ providers: [provider] }, { ELEVENLABS_API_KEY: "fixture-private-elevenlabs-key" });
+  assert.equal(plan.configuredCount, 1); assert.equal(plan.targetCount, 1);
+  assert.equal(plan.providers[0].target.endpoint, "speech");
+  assert.match(plan.providers[0].target.unresolved, /voice_id/);
+  const network = t.mock.method(globalThis, "fetch", () => { throw new Error("unexpected network request"); }), health = [];
+  await assert.rejects(runLiveProviderSmokes({ baseUrl: "https://smoke-router.example", smokeKey: "fixture-proxy-key", plan,
+    liveProviders: ["elevenlabs"], onResult: result => health.push(result) }), /path parameters require a smoke fixture/);
+  assert.equal(network.mock.callCount(), 0); assert.deepEqual(health, []);
+  assert.doesNotMatch(JSON.stringify(plan) + summarizePlan(plan), /fixture-private-elevenlabs-key|fixture-proxy-key/);
 });
 
 test("Kie query-only lookup stays unresolved without an owned task and cannot fake live health", async t => {
@@ -50,6 +144,19 @@ test("Kie query-only lookup stays unresolved without an owned task and cannot fa
     liveProviders: ["kie"], onResult: result => health.push(result) }), /existing task ID/);
   assert.equal(network.mock.callCount(), 0); assert.deepEqual(health, []);
   assert.doesNotMatch(JSON.stringify(plan) + summarizePlan(plan), /fixture-private-kie-key|fixture-proxy-key/);
+});
+
+test("Vydra owned-job smoke stays unresolved without create, cancellation or false health", async t => {
+  const provider = catalog.providers.find(provider => provider.id === "vydra");
+  const plan = buildProviderSmokePlan({ providers: [provider] }, { VYDRA_API_KEY: "fixture-private-vydra-key" });
+  assert.equal(plan.configuredCount, 1); assert.equal(plan.targetCount, 1);
+  assert.equal(plan.providers[0].target.endpoint, "job"); assert.equal(plan.providers[0].target.upstreamMethod, "GET");
+  assert.match(plan.providers[0].target.unresolved, /job_id/);
+  const network = t.mock.method(globalThis, "fetch", () => { throw new Error("unexpected network request"); }), health = [];
+  await assert.rejects(runLiveProviderSmokes({ baseUrl: "https://smoke-router.example", smokeKey: "fixture-proxy-key", plan,
+    liveProviders: ["vydra"], onResult: result => health.push(result) }), /path parameters require a smoke fixture/);
+  assert.equal(network.mock.callCount(), 0); assert.deepEqual(health, []);
+  assert.doesNotMatch(JSON.stringify(plan) + summarizePlan(plan), /fixture-private-vydra-key|fixture-proxy-key/);
 });
 
 test("canonical fal Key auth plans an unresolved result read without egress, health success or key disclosure", async t => {
@@ -339,3 +446,27 @@ async function smokeEnvironment(provider, t) {
     } }) },
   };
 }
+
+
+test("Vertex smoke cannot infer private owner authority from environment tokens or report live success", async t => {
+  const provider = catalog.providers.find(provider => provider.id === "anthropic-vertex");
+  const plan = buildProviderSmokePlan({ providers: [provider] }, { ANTHROPIC_API_KEY: "fixture-private-anthropic", GOOGLE_API_KEY: "fixture-private-google",
+    GOOGLE_APPLICATION_CREDENTIALS: "fixture-private-adc", CLAWROUTER_OAUTH_READY_ANTHROPIC_VERTEX: "1" });
+  assert.equal(plan.targetCount, 1); assert.equal(plan.configuredCount, 0);
+  assert.deepEqual(plan.providers[0].requiredConfig, []); assert.equal(plan.providers[0].target.ownerGrantRequired, true);
+  assert.equal(plan.providers[0].target.envelope, undefined);
+  assert.match(summarizePlan(plan), /anthropic-vertex.*owner-grant-required.*unresolved=/);
+  const network = t.mock.method(globalThis, "fetch", () => { throw new Error("unexpected paid request"); }), health = [];
+  await assert.rejects(runLiveProviderSmokes({ baseUrl: "https://smoke-router.example", smokeKey: "fixture-proxy-key", plan,
+    liveProviders: ["anthropic-vertex"], onResult: result => health.push(result) }), /original private owner grant/);
+  assert.equal(network.mock.callCount(), 0); assert.deepEqual(health, []);
+  assert.doesNotMatch(JSON.stringify(plan) + summarizePlan(plan), /fixture-private-|fixture-proxy-key/);
+});
+
+test("Vertex private smoke disposition does not qualify another provider or origin", () => {
+  const source = catalog.providers.find(provider => provider.id === "anthropic-vertex");
+  for (const patch of [{ id: "foreign-vertex" }, { base_urls: { default: "https://foreign.example" } }]) {
+    const plan = buildProviderSmokePlan({ providers: [{ ...source, ...patch }] }, {});
+    assert.equal(plan.targetCount, 0); assert.equal(plan.providers[0].target, null);
+  }
+});

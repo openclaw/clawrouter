@@ -1,0 +1,71 @@
+name: Fusion workload qualification
+
+on:
+  pull_request:
+    paths:
+      - benchmarks/fusion/**
+      - scripts/fusion-*.mjs
+      - scripts/qualify-fusion-workloads.mjs
+      - test/fusion-*.test.mjs
+      - .github/workflows/fusion-workloads.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fusion-workloads-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 100
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+      - run: node --test test/fusion-*.test.mjs
+      - name: Fetch missing pinned task history
+        run: |
+          node --input-type=module <<'JS'
+          import { readdir } from 'node:fs/promises';
+          import { loadTasks, command } from './scripts/fusion-workloads.mjs';
+          const missing = new Set();
+          for (const file of await readdir('benchmarks/fusion')) {
+            if (!file.endsWith('workloads.json')) continue;
+            for (const task of await loadTasks(`benchmarks/fusion/${file}`)) {
+              for (const ref of [task.base, task.oracle, `${task.oracle}^`]) {
+                const result = await command('git', ['cat-file', '-e', `${ref}^{commit}`], { allowFailure: true });
+                if (result.code) { missing.add(task.base); missing.add(task.oracle); }
+              }
+            }
+          }
+          if (missing.size) await command('git', ['-c', 'gc.auto=0', '-c', 'maintenance.auto=false',
+            'fetch', '--no-tags', '--no-write-fetch-head', '--depth=2', 'origin', ...missing]);
+          JS
+      - name: Qualify real regression tasks without model calls
+        run: |
+          docker pull node:24.22.1-slim
+          image=$(docker image inspect node:24.22.1-slim --format '{{index .RepoDigests 0}}')
+          FUSION_EXECUTION_NODE_IMAGE="$image" node --test test/fusion-execution-smoke.test.mjs
+          for manifest in benchmarks/fusion/*workloads.json; do
+            name=$(basename "$manifest" .json)
+            node scripts/qualify-fusion-workloads.mjs "$image" "$RUNNER_TEMP/$name-qualification.json" "$manifest"
+          done
+      - name: Check isolated candidate selection and terminal responses
+        env:
+          FUSION_DOCKER_QUALIFICATION: ${{ runner.temp }}/workloads-qualification.json
+          FUSION_PROVIDED_QUALIFICATION: ${{ runner.temp }}/provided-reproducer-workloads-qualification.json
+        run: node --test test/fusion-candidate-ensemble.test.mjs test/fusion-agent-benchmark.test.mjs test/fusion-pair-benchmark.test.mjs
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: fusion-workload-qualification-${{ github.sha }}
+          path: ${{ runner.temp }}/*-qualification.json
+          if-no-files-found: ignore
+          retention-days: 7

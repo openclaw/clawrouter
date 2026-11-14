@@ -34,7 +34,7 @@ test("Arcee native catalog compiles one bodyless GET without remapping, model ch
   assert.equal(request.url, "https://api.arcee.ai/api/v1/models"); assert.equal(request.body, null);
   assert.equal(request.headers.get("authorization"), upstream.headers.get("authorization"));
   assert.equal(request.headers.get("authorization"), "Bearer synthetic-selected-key");
-  assert.equal(request.redirect, "error"); assert.equal(request.credentials, "omit");
+  assert.equal(request.redirect, "manual"); assert.equal(request.credentials, "omit");
 });
 
 test("Arcee catalog rejects alternate methods, native format aliases, query/body features and duplicate discovery routes", () => {

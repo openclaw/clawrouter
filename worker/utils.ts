@@ -18,7 +18,7 @@ const corsHeaders = {
   ].join(","),
   "access-control-expose-headers": [
     "retry-after", "server-timing", "request-id", "x-request-id", "x-clawrouter-request-id", "x-clawrouter-error-code", "x-clawrouter-content-retention", "x-clawrouter-upstream-provider", "x-clawrouter-fusion",
-    "x-clawrouter-fusion-aggregator", "x-clawrouter-fusion-adviser-count", "x-clawrouter-fusion-failed-count",
+    "x-clawrouter-fusion-strategy", "x-clawrouter-fusion-aggregator", "x-clawrouter-fusion-adviser-count", "x-clawrouter-fusion-failed-count",
     "x-clawrouter-fusion-latency-ms", "x-clawrouter-fusion-advisers", "x-clawrouter-background-recovery",
   ].join(","),
   "access-control-max-age": "600",
@@ -153,11 +153,55 @@ export const maxJsonBodyBytes = 8 * 1024 * 1024;
 // Responses and Chat Completions) accept 32 MB: Claude's documented limit and
 // Cloudflare's WebSocket message ceiling. Opt in only after resolving those
 // endpoints; admin and other provider routes stay at 8 MiB.
-export const maxMediaJsonBodyBytes = 32_000_000;
+export {mediaJsonBytes as maxMediaJsonBodyBytes} from './large-http/runtime-limits.ts';
 
 // Provider routes lease isolate memory as bytes arrive and authenticate before
 // expanding past 8 MiB; either may throw the caller's error response.
-export interface JsonIntake { reserve(bytes: number): Promise<void>; expand(): Promise<void> }
+// An ingress classifier may already own a complete, admitted byte prefix.
+// Transfer that owner directly to the canonical parser instead of replaying
+// its bytes through another ReadableStream and admitting the same bytes twice.
+export interface JsonReadPrefix {
+  bytes: number;
+  read(): Uint8Array | undefined;
+  finish(): void;
+}
+export interface JsonIntake {
+  reserve(bytes: number): Promise<void>;
+  expand(): Promise<void>;
+  takePrefix?(request: Request): JsonReadPrefix | undefined;
+}
+
+function jsonReadFailure(error: unknown): never {
+  if (error instanceof JsonBodyStructureLimit) throw new HttpError(413, "request_too_large", "JSON request exceeds Worker structure limits (65536 values, 128 nesting levels, 4096-character keys/numbers)");
+  if (error instanceof HttpError || error instanceof Response) throw error;
+  throw new HttpError(400, "invalid_json", "request body must be valid JSON");
+}
+
+async function readJsonPrefix<T>(request: Request, prefix: JsonReadPrefix, emptyValue: T | undefined, maxBytes: number, intake: JsonIntake): Promise<T> {
+  try {
+    if (prefix.bytes > maxBytes) throw new HttpError(413, "request_too_large", `JSON request body exceeds the ${maxBytes} byte limit`);
+    if (prefix.bytes === 0 && emptyValue !== undefined) return emptyValue;
+    const decoder = new TextDecoder();
+    if (prefix.bytes > maxJsonBodyBytes) {
+      await intake.expand();
+      const parser = createJsonBodyParser();
+      for (let chunk = prefix.read(); chunk; chunk = prefix.read()) {
+        if (request.signal.aborted) throw new HttpError(499, "request_canceled", "request was canceled");
+        for (let offset = 0; offset < chunk.byteLength; offset += 4096) parser.push(decoder.decode(chunk.subarray(offset, offset + 4096), { stream: true }));
+      }
+      parser.push(decoder.decode());
+      return parser.end() as T;
+    }
+    let text = "";
+    for (let chunk = prefix.read(); chunk; chunk = prefix.read()) text += decoder.decode(chunk, { stream: true });
+    return JSON.parse(text + decoder.decode()) as T;
+  } catch (error) { return jsonReadFailure(error); }
+  finally {
+    prefix.finish();
+    // The transferred stream is deliberately unread; release its empty owner.
+    void request.body?.cancel().catch(() => undefined);
+  }
+}
 
 export async function readJson<T>(request: Request, emptyValue?: T, maxBytes = maxJsonBodyBytes, intake?: JsonIntake): Promise<T> {
   const tooLarge = () => new HttpError(413, "request_too_large", `JSON request body exceeds the ${maxBytes} byte limit`);
@@ -170,6 +214,8 @@ export async function readJson<T>(request: Request, emptyValue?: T, maxBytes = m
     if (emptyValue !== undefined) return emptyValue;
     throw new HttpError(400, "invalid_json", "request body must be valid JSON");
   }
+  const retained = intake?.takePrefix?.(request);
+  if (retained) return readJsonPrefix(request, retained, emptyValue, maxBytes, intake!);
   // A declared length leases all at once: concurrent uploads that each lease
   // as they read could all stall partway past the budget and all be refused.
   if (Number.isFinite(declared) && declared > 0) {
@@ -223,9 +269,7 @@ export async function readJson<T>(request: Request, emptyValue?: T, maxBytes = m
     return JSON.parse(text + decoder.decode()) as T;
   } catch (error) {
     void reader.cancel().catch(() => undefined);
-    if (error instanceof JsonBodyStructureLimit) throw new HttpError(413, "request_too_large", "JSON request exceeds Worker structure limits (65536 values, 128 nesting levels, 4096-character keys/numbers)");
-    if (error instanceof HttpError || error instanceof Response) throw error;
-    throw new HttpError(400, "invalid_json", "request body must be valid JSON");
+    return jsonReadFailure(error);
   } finally {
     request.signal.removeEventListener("abort", canceled);
     reader.releaseLock();

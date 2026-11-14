@@ -8,6 +8,45 @@
   font-size: 0.95em;
 }
 
+.fusionPresets {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0 16px 16px;
+}
+
+.fusionPresets button {
+  display: grid;
+  gap: 5px;
+  padding: 14px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+}
+
+.fusionPresets button[aria-pressed="true"] {
+  border-color: var(--accent);
+  box-shadow: inset 0 2px var(--accent);
+}
+
+.fusionPresets button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.fusionPresets button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.fusionPresets span, .fusionPresets small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .fusionTopology {
   display: grid;
   grid-template-columns: minmax(150px, 0.8fr) 30px minmax(210px, 1.1fr) 30px minmax(180px, 0.9fr);
@@ -16,6 +55,10 @@
   margin: 16px;
   border: 1px solid var(--line-strong);
   background: var(--surface-muted);
+}
+
+.fusionTopology-single {
+  grid-template-columns: minmax(150px, 1fr) 30px minmax(180px, 1fr);
 }
 
 .fusionInput,
@@ -242,7 +285,7 @@
 }
 
 @media (max-width: 1180px) {
-  .fusionTopology {
+  .fusionTopology, .fusionTopology-single {
     grid-template-columns: 1fr;
   }
 
@@ -262,6 +305,10 @@
 }
 
 @media (max-width: 760px) {
+  .fusionPresets {
+    grid-template-columns: 1fr;
+    margin-inline: 10px;
+  }
   .fusionWorkspace {
     grid-template-columns: 1fr;
   }

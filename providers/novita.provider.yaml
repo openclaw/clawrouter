@@ -1,4 +1,4 @@
-# Hosted Chat API only; product boundaries: docs/hosted-regional-providers.md.
+# Frozen native Chat inventory: docs/novita-native-catalog.md. Discovery activation is separate.
 # Endpoint/model source checked 2026-11-03: https://docs.novita.ai/api-reference/model-apis-llm-create-chat-completion
 schema: clawrouter.service-provider.v1
 id: novita
@@ -41,8 +41,135 @@ endpoints:
 models:
   entries:
     - id: novita/stepfun/step-3.7-flash
+      displayName: "Step 3.7 Flash"
       upstream: stepfun/step-3.7-flash
       capabilities: [llm.chat]
+    - id: novita/moonshotai/kimi-k3
+      displayName: "Kimi K3"
+      upstream: moonshotai/kimi-k3
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://novita.ai/models/model-detail/moonshotai-kimi-k3]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://novita.ai/models/model-detail/moonshotai-kimi-k3]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 1048576
+            maxOutputTokens: 1048576
+    - id: novita/moonshotai/kimi-k2.7-code
+      displayName: "Kimi K2.7 Code"
+      upstream: moonshotai/kimi-k2.7-code
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://novita.ai/models/model-detail/moonshotai-kimi-k2.7-code]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://novita.ai/models/model-detail/moonshotai-kimi-k2.7-code]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 262144
+            maxOutputTokens: 262144
+    - id: novita/minimax/minimax-m3
+      displayName: "MiniMax M3"
+      upstream: minimax/minimax-m3
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://novita.ai/models/model-detail/minimax-minimax-m3]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://novita.ai/models/model-detail/minimax-minimax-m3]
+            checkedAt: "2026-11-03"
+            input: [text, image]
+            contextWindow: 1000000
+            maxOutputTokens: 131072
+    - id: novita/zai-org/glm-5.2
+      displayName: "GLM-5.2"
+      upstream: zai-org/glm-5.2
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://novita.ai/models/model-detail/zai-org-glm-5.2]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://novita.ai/models/model-detail/zai-org-glm-5.2]
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 1048576
+            maxOutputTokens: 131072
+    - id: novita/deepseek/deepseek-v4-pro
+      displayName: "DeepSeek V4 Pro"
+      upstream: deepseek/deepseek-v4-pro
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://novita.ai/models/model-detail/deepseek-deepseek-v4-pro]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://novita.ai/models/model-detail/deepseek-deepseek-v4-pro]
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 1048576
+            maxOutputTokens: 393216
+    - id: novita/qwen/qwen3.7-max
+      displayName: "Qwen3.7 Max"
+      upstream: qwen/qwen3.7-max
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://novita.ai/models/model-detail/qwen-qwen3.7-max]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://novita.ai/models/model-detail/qwen-qwen3.7-max]
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 1000000
+            maxOutputTokens: 65536
+    - id: novita/minimax/minimax-m2.7
+      displayName: "MiniMax M2.7"
+      upstream: minimax/minimax-m2.7
+      capabilities: [llm.chat]
+      requestParameters:
+        chat_completions:
+          sources: [https://novita.ai/models/model-detail/minimax-minimax-m2.7]
+          checkedAt: "2026-11-03"
+          toolCalling: supported
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          chat_completions:
+            sources: [https://novita.ai/models/model-detail/minimax-minimax-m2.7]
+            checkedAt: "2026-11-03"
+            input: [text]
+            contextWindow: 204800
+            maxOutputTokens: 131072
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

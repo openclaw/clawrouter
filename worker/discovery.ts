@@ -1,17 +1,23 @@
+import { isMiniMaxVideoModel } from "../shared/minimax-video-binding.ts";
 import { qualifyMiniMaxEnvironmentBinding } from "./native-media-credential.ts";
+import { isPublishedMusicInputSupport } from "../shared/native-capabilities.ts";
+import { readPublishedInputOrigin } from "./published-input-receipt.ts";
+import { manifestOnlyPublicCatalog } from "./public-model-discovery-formats.ts";
 import { modelExecutable } from "../shared/route-catalog.ts";
+import { fusionAdviserModels } from "../shared/fusion-strategy.ts";
 import { nativeModelEligible, nativeModelEligibilityRevision } from "../shared/native-model-eligibility.ts";
 import { assertSingleOpenAiAccount } from "./openai-public-account.ts";
 import { assertSearchTariff, isStandaloneSearch } from "./standalone-search.ts";
 import { allowedServiceTiers } from "../shared/service-tiers.ts";
 import { policyAllowsModel } from "./policy-models.ts";
-import type { CatalogOffer, ClientCatalog, ClientCatalogProvider, EntitlementsResponse, FusionConfig, SessionResponse } from "../shared/contracts";
+import { catalogProviderOfferReferences } from "./provider-offers.ts";
+import type { CatalogOffer, ClientCatalog, ClientCatalogModel, ClientCatalogProvider, EntitlementsResponse, FusionConfig, SessionResponse } from "../shared/contracts";
 import { fusionCatalogReadiness } from "./fusion-readiness";
 import { concreteOpenAiSelection, isSelectionFailure, type ProxySelection } from "./proxy-selection";
 import { resolveTemplate } from "./provider-templates.ts";
 import { listConnections } from "./authority";
 import { activeOperationCandidates, policyGrantCandidates, selectPolicyCandidates } from "./grant-selection";
-import { assertOperationConfiguration, type GrantRequirement } from "./provider-auth";
+import { assertOperationConfiguration, openRouterPcmModel, type GrantRequirement } from "./provider-auth";
 import { budgetPrincipal } from "./budget-scope";
 import { budgetStatus, providerBudgetStatus } from "./ledgers";
 import { operationAffordability, type OperationAffordability } from "./operation-budget";
@@ -20,26 +26,27 @@ import { publicSession, sessionPolicies, sessionPolicyIdentity, verifiedAccessSe
 import { contentRetentionDefault } from "./content-retention.ts";
 import { loadFusionConfig } from "./fusion-config";
 import { FUSION_MODEL_ID } from "./fusion";
-import { authenticateProxyKey, proxyAdmission } from "./proxy-auth";
+import { authenticateProxyKey, hasProxyKeyIntent, proxyAdmission } from "./proxy-auth";
 import { assertProviderAccess, listHealth, modelRoute, modelSupportsEndpoint, providerReadinessForState, snapshot, unifiedPathForEndpoint, type Readiness } from "./providers";
-import type { AccessSession, AuthorizedIdentity, CompiledModel, CompiledProvider, Env } from "./types";
+import type { AccessSession, AuthorizedIdentity, CompiledModel, CompiledProvider, Env, UpstreamGrant } from "./types";
 import { errorResponse, HttpError, privateJson, sha256Hex } from "./utils";
 import { responsesControl } from "./responses-lifecycle.ts";
 import { HotCache, hotCacheConfig, hotCacheNow, registerHotCache } from "./hot-cache.ts";
 import { coloGet, coloPut } from "./colo-cache.ts";
+import { copilotPublicRecord, qualifiedPublicModel, type CopilotPublicDiscoveryView } from "./copilot-public-proxy.ts";
 
 // Only compiled metadata lives across requests. Eligibility, health, balances
 // and policy projections are always rebuilt from this request's observations.
 function staticProviderProjection(provider: CompiledProvider) {
   const models = new Map(provider.models.map(model => {
-    const display_name = `${provider.display_name} · ${model.id}`;
+    const display_name = model.displayName ?? `${provider.display_name} · ${model.id}`;
     const availability = model.availability ? { availability: structuredClone(model.availability) } : {};
     return [model.id, {
       openai: Object.freeze({ id: model.id, object: "model", owned_by: provider.id, display_name, ...availability }),
       anthropic: Object.freeze({ id: model.id, type: "model", display_name, ...availability, created_at: "1970-01-01T00:00:00Z", capabilities: null, max_input_tokens: model.pricing?.unit != null ? null : model.pricing?.maxInputTokens ?? null, max_tokens: model.pricing?.unit != null ? null : model.pricing?.defaultMaxOutputTokens ?? null }),
     }];
   }));
-  const routes = new Map(provider.endpoints.map(endpoint => [endpoint.id, Object.freeze({ endpoint: endpoint.id, methods: Object.freeze([...endpoint.methods]) as unknown as string[], path: endpoint.path, requestFormat: endpoint.request_format, responseFormat: endpoint.response_format, streaming: endpoint.streaming, ...(endpoint.requestPricing ? { requestPricing: structuredClone(endpoint.requestPricing) } : {}) })]));
+  const routes = new Map(provider.endpoints.map(endpoint => [endpoint.id, Object.freeze({ ...(endpoint.inputProfile ? { inputProfile: endpoint.inputProfile } : {}), endpoint: endpoint.id, methods: Object.freeze([...endpoint.methods]) as unknown as string[], path: endpoint.path, requestFormat: endpoint.request_format, responseFormat: endpoint.response_format, streaming: endpoint.streaming, ...(endpoint.requestPricing ? { requestPricing: structuredClone(endpoint.requestPricing) } : {}) })]));
   return { models, routes, connectionTypes: Object.freeze(connectionTypes(provider)) as unknown as string[] };
 }
 const compiledProjections = new WeakMap(snapshot.providers.map(provider => [provider, staticProviderProjection(provider)]));
@@ -82,8 +89,13 @@ export async function avatarResponse(request: Request, env: Env): Promise<Respon
   return new Response(bytes, { headers: { "content-type": type, "cache-control": "private, no-store", vary: "cf-access-jwt-assertion" } });
 }
 
-export function modelsResponse(request: Request, env: Env): Promise<Response> {
+export function modelsResponse(request: Request, env: Env, context?: ExecutionContext): Promise<Response> {
   const anthropic = request.headers.has("anthropic-version");
+  if (new URL(request.url).searchParams.getAll("provider").includes("github-copilot")) {
+    if (!context) return Promise.resolve(errorResponse("copilot_public_unavailable", "Discovery retirement owner required", 503));
+    return import("./copilot-public-proxy.ts").then(({ proxyCopilotDiscovery }) => proxyCopilotDiscovery(request, env, context,
+      view => copilotDiscoveryPieces(view, anthropic ? "models-anthropic" : "models")));
+  }
   return discoveryResponse(request, env, anthropic ? "models-anthropic" : "models", entitlements => modelsBody(entitlements, anthropic));
 }
 
@@ -92,7 +104,7 @@ function modelsBody(entitlements: ClientEntitlements, anthropic: boolean): unkno
   const inventory = entitlements.inventory;
   if (anthropic) {
     const data = snapshot.providers.flatMap((provider) => (inventory.get(provider.id)?.models ?? []).filter((model) => model.capabilities.includes("llm.messages")).map((model) => compiledProjection(provider).models.get(model.id)?.anthropic ?? ({
-      id: model.id, type: "model", display_name: `${provider.display_name} · ${model.id}`, created_at: "1970-01-01T00:00:00Z",
+      id: model.id, type: "model", display_name: model.displayName ?? `${provider.display_name} · ${model.id}`, created_at: "1970-01-01T00:00:00Z",
       capabilities: null, max_input_tokens: model.pricing?.unit != null ? null : model.pricing?.maxInputTokens ?? null, max_tokens: model.pricing?.unit != null ? null : model.pricing?.defaultMaxOutputTokens ?? null,
     })));
     return { data, first_id: data[0]?.id ?? null, has_more: false, last_id: data.at(-1)?.id ?? null };
@@ -100,7 +112,7 @@ function modelsBody(entitlements: ClientEntitlements, anthropic: boolean): unkno
   const data = snapshot.providers.flatMap((provider) => (inventory.get(provider.id)?.models ?? []).flatMap((model) => {
     const capabilities = model.capabilities;
     const compiled = compiledProjection(provider).models.get(model.id)?.openai;
-    return capabilities.length ? [{ ...(compiled ?? { id: model.id, object: "model", owned_by: provider.id, display_name: `${provider.display_name} · ${model.id}` }), capabilities }] : [];
+    return capabilities.length ? [{ ...(compiled ?? { id: model.id, object: "model", owned_by: provider.id, display_name: model.displayName ?? `${provider.display_name} · ${model.id}` }), capabilities }] : [];
   }));
   const fusion = rows.find((row) => row.provider === "clawrouter");
   if (fusion?.allowed && fusion.readiness.executable) data.unshift({
@@ -113,8 +125,83 @@ function modelsBody(entitlements: ClientEntitlements, anthropic: boolean): unkno
   return { object: "list", data };
 }
 
-export function catalogResponse(request: Request, env: Env): Promise<Response> {
+export function catalogResponse(request: Request, env: Env, context?: ExecutionContext): Promise<Response> {
+  if (new URL(request.url).searchParams.getAll("provider").includes("github-copilot")) {
+    if (!context) return Promise.resolve(errorResponse("copilot_public_unavailable", "Discovery retirement owner required", 503));
+    return import("./copilot-public-proxy.ts").then(({ proxyCopilotDiscovery }) => proxyCopilotDiscovery(request, env, context,
+      view => copilotDiscoveryPieces(view, "catalog")));
+  }
   return discoveryResponse(request, env, "catalog", catalogProjection);
+}
+
+// A compact observation filters only registered server metadata. Produce one
+// closed record at a time in BOTH the counting and delivery passes; no second
+// catalog graph, model/offer archive or serialized document is retained.
+export function* copilotDiscoveryPieces(view: CopilotPublicDiscoveryView, variant: "catalog" | "models" | "models-anthropic"): Generator<string> {
+  const { registry, observation, policy, connection } = view, provider = registry.provider;
+  const auth = { ...view.auth, policy };
+  const admitted = (index: number, api: number) => observation.permits(index, api)
+    && qualifiedPublicModel(registry, provider.models[index], api, policy);
+  const capability = (api: number) => ["llm.chat", "llm.responses", "llm.messages"][api];
+  const affordable = (index: number, api: number) => operationAffordability(auth, connection, provider.models[index], capability(api), registry.endpoints[api], undefined, {}, provider.id);
+  let count = 0, firstId: string | null = null, lastId: string | null = null;
+  const executable = new Set<string>();
+  for (let index = 0; index < provider.models.length; index++) {
+    let visible = false;
+    for (let api = 0; api < 3; api++) if (admitted(index, api) && affordable(index, api).status !== "exact-blocked") {
+      executable.add(registry.endpoints[api].id);
+      if (variant !== "models-anthropic" || api === 2) visible = true;
+    }
+    if (visible) { count++; firstId ??= provider.models[index].id; lastId = provider.models[index].id; }
+  }
+  if (variant !== "catalog") {
+    yield variant === "models" ? '{"object":"list","data":[' : '{"data":[';
+    let comma = false;
+    for (let index = 0; index < provider.models.length; index++) {
+      const model = provider.models[index], capabilities = [0, 1, 2].filter(api => (variant !== "models-anthropic" || api === 2)
+        && admitted(index, api) && affordable(index, api).status !== "exact-blocked").map(capability);
+      if (!capabilities.length) continue;
+      if (comma) yield ","; comma = true;
+      yield copilotPublicRecord(variant === "models" ? { id: model.id, object: "model", owned_by: provider.id, display_name: `${provider.display_name} · ${model.id}`, capabilities }
+        : { id: model.id, type: "model", display_name: `${provider.display_name} · ${model.id}`, created_at: "1970-01-01T00:00:00Z", capabilities: null, max_input_tokens: null, max_tokens: null });
+    }
+    yield variant === "models" ? "]}" : '],"first_id":' + copilotPublicRecord(firstId) + ',"last_id":' + copilotPublicRecord(lastId) + ',"has_more":false}';
+    return;
+  }
+  yield '{"version":"clawrouter.client-catalog.v1","observedAt":' + copilotPublicRecord(new Date(observation.observedAt).toISOString())
+    + ',"scope":' + copilotPublicRecord({ authType: "proxy_key", credentialId: auth.credentialId, principalId: auth.principalId }) + ',"providers":[';
+  const header = { id: provider.id, displayName: provider.display_name, allowed: true, executable: executable.size > 0,
+    openaiCompatible: false, nativeBaseUrl: `/v1/native/${provider.id}`, policies: [auth.policyId], connectionTypes: ["oauth"],
+    readiness: { id: provider.id, displayName: provider.display_name, class: provider.class, serviceKind: provider.service_kind,
+      requiredConfig: [], optionalConfig: [], missingConfig: [], configPresent: true, oauthGrantRequired: true, oauthGrantCount: 1,
+      upstreamGrantCount: 1, openaiCompatible: false, manifestRoutes: 3, modelCount: count, connectionEnabled: connection.enabled,
+      executable: executable.size > 0, executableEndpoints: [...executable], verified: false, lastCheckedAt: null, latencyMs: null,
+      status: executable.size ? "configured" : "unavailable", reasons: executable.size ? [] : ["No current model/API offer is executable."] } };
+  yield copilotPublicRecord(header).slice(0, -1) + ',"routes":[';
+  for (let api = 0; api < 3; api++) {
+    if (api) yield ",";
+    const endpoint = registry.endpoints[api];
+    yield copilotPublicRecord({ endpoint: endpoint.id, methods: ["POST"], path: endpoint.path, requestFormat: endpoint.request_format,
+      responseFormat: endpoint.response_format, streaming: endpoint.streaming });
+  }
+  yield '],"models":['; let comma = false;
+  for (let index = 0; index < provider.models.length; index++) {
+    const model = provider.models[index], capabilities = [0, 1, 2].filter(api => admitted(index, api)).map(capability);
+    if (!capabilities.length) continue;
+    if (comma) yield ","; comma = true;
+    yield copilotPublicRecord({ id: model.id, upstream: model.upstream, capabilities, pricing_ref: null, pricing: null });
+  }
+  yield '],"offers":['; comma = false;
+  for (let index = 0; index < provider.models.length; index++) for (let api = 0; api < 3; api++) {
+    if (!admitted(index, api)) continue;
+    const model = provider.models[index], endpoint = registry.endpoints[api], availability = affordable(index, api);
+    if (comma) yield ","; comma = true;
+    yield copilotPublicRecord({ endpoint: endpoint.id, modelId: model.id, transport: "http", policyId: auth.policyId,
+      policyGeneration: policy.generation, routeKind: endpoint.native_proxy ? "native" : "manifest",
+      route: endpoint.native_proxy ? `/v1/native/${provider.id}${endpoint.path}` : `/v1/proxy/${provider.id}/${endpoint.id}`,
+      eligible: availability.status !== "exact-blocked", affordability: availability.status, ...(availability.reasonCode ? { reasonCode: availability.reasonCode } : {}) });
+  }
+  yield "]}]}";
 }
 
 // The compiler validates declarations; retain a fail-closed projection for
@@ -131,11 +218,31 @@ function supportsHostedSearch(provider: CompiledProvider, model: CompiledModel, 
     && typeof facts.checkedAt === "string" && /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(facts.checkedAt);
 }
 
+function supportsPublishedMusicInput(provider: CompiledProvider, model: CompiledModel, endpointId: string): boolean {
+  const endpoint = provider.endpoints.find(endpoint => endpoint.id === endpointId);
+  const facts = model.nativeCapabilities?.endpoints[endpointId];
+  const capabilities = provider.capabilities.filter(capability => capability.endpoint === endpointId);
+  return isPublishedMusicInputSupport(facts?.publishedInput)
+    && provider.id === "openrouter" && endpointId === "music_generate"
+    && Object.values(provider.base_urls).length > 0 && Object.values(provider.base_urls).every(base => base === "https://openrouter.ai/api")
+    && ["google/lyria-3-pro-preview", "google/lyria-3-clip-preview"].includes(model.upstream)
+    && model.id === `openrouter/${model.upstream}` && model.availability?.status !== "upstream_alias"
+    && model.capabilities.length === 1 && model.capabilities[0] === "music.generate"
+    && capabilities.length === 1 && capabilities[0].id === "music.generate" && Array.isArray(capabilities[0].methods) && capabilities[0].methods.length === 1 && capabilities[0].methods[0] === "POST"
+    && endpoint?.method === "POST" && Array.isArray(endpoint.methods) && endpoint.methods.length === 1 && endpoint.methods[0] === "POST" && endpoint.path === "/v1/chat/completions"
+    && endpoint.request_format === "openai.chat_completions" && endpoint.response_format === "openai.chat_completions"
+    && endpoint.streaming === "sse" && !endpoint.path_params.length && !Object.keys(endpoint.query).length
+    && !endpoint.upstreamPath && !endpoint.websocket && !endpoint.lifecycle && !endpoint.responsesLifecycle
+    && !endpoint.modelPassthrough && !endpoint.requestPricing && !endpoint.inputProfile
+    && model.nativeCapabilities?.version === "clawrouter.native-capabilities.v1"
+    && facts?.input?.length === 2 && facts.input.includes("text") && facts.input.includes("image");
+}
+
 function projectCatalogModel(provider: CompiledProvider, model: CompiledModel, capabilities: string[], visibleEndpoints: ReadonlySet<string>): CompiledModel {
   const { nativeCapabilities, requestParameters, ...base } = model;
   const nativeEndpoints = Object.fromEntries(Object.entries(nativeCapabilities?.endpoints ?? {}).filter(([id]) => visibleEndpoints.has(id)).map(([id, facts]) => {
-    const { hostedTools, ...baseFacts } = facts;
-    return [id, { ...baseFacts, ...(supportsHostedSearch(provider, model, id) ? { hostedTools: ["web_search" as const] } : {}) }];
+    const { hostedTools, publishedInput, ...baseFacts } = facts;
+    return [id, { ...baseFacts, ...(supportsPublishedMusicInput(provider, model, id) ? { publishedInput } : {}), ...(supportsHostedSearch(provider, model, id) ? { hostedTools: ["web_search" as const] } : {}) }];
   }));
   const parameters = Object.fromEntries(Object.entries(requestParameters ?? {}).filter(([id]) => visibleEndpoints.has(id)));
   return { ...base, capabilities,
@@ -144,7 +251,7 @@ function projectCatalogModel(provider: CompiledProvider, model: CompiledModel, c
   };
 }
 
-function catalogProjection(entitlements: ClientEntitlements): ClientCatalog {
+function catalogProjection(entitlements: ClientEntitlements, publicOrigin: string | null = null): ClientCatalog {
   const rows = entitlements.rows;
   const inventory = entitlements.inventory;
   // Route formats describe both native and manifest payloads. Only scoped
@@ -156,12 +263,21 @@ function catalogProjection(entitlements: ClientEntitlements): ClientCatalog {
     if (!view.configured) return [];
     const endpoints = view.endpoints;
     const executable = view.offers.some((offer) => offer.eligible);
+    const productIds = new Set(view.offers.flatMap(offer => offer.productOffers?.map(reference => reference.productId) ?? []));
+    const products = provider.products?.filter(product => productIds.has(product.id))
+      .map(({ id, displayName, commercialModel, authenticationMethod }) => ({ id, displayName, commercialModel, authenticationMethod }));
     return [{
       id: provider.id, displayName: provider.display_name, allowed: true, executable,
       openaiCompatible: executable && provider.class === "openai_compatible", nativeBaseUrl: `/v1/native/${provider.id}`,
       policies: row.policies, readiness: row.readiness, connectionTypes: compiledProjection(provider).connectionTypes,
+      ...(products?.length ? { products } : {}),
       routes: provider.endpoints.filter((endpoint) => endpoints.includes(endpoint.id) || view.websockets.includes(endpoint.id)).map((endpoint) => ({ ...compiledProjection(provider).routes.get(endpoint.id)!, ...(view.websockets.includes(endpoint.id) ? { websocket: endpoint.websocket } : {}) })),
-      models: view.models, offers: view.offers,
+      models: view.models, offers: view.offers.map(offer => {
+        const model = view.models.find(model => model.id === offer.modelId);
+        return publicOrigin && offer.eligible && offer.transport === "http" && (offer.routeKind === "native" || offer.routeKind === "manifest")
+          && model && supportsPublishedMusicInput(provider, model, offer.endpoint)
+          ? { ...offer, publishedInputOrigin: { version: "clawrouter.published-input.v1" as const, origin: publicOrigin } } : offer;
+      }),
     }];
   });
   const fusion = rows.find((row) => row.provider === "clawrouter" && row.allowed);
@@ -229,7 +345,7 @@ function fusionEntitlement(rows: EntitlementRow[], inventory: ClientInventory, e
   const reasons = [
     ...(!allowed ? ["No active policy grants the configured fusion aggregator provider."] : []),
     ...(allowed && !executable ? ["The configured fusion aggregator is unavailable under the selected policy, provider budget, or grant."] : []),
-    ...(state.readyAdviserCount < config.adviserModels.length ? [`${state.readyAdviserCount}/${config.adviserModels.length} advisers are currently executable; unavailable advisers fail open.`] : []),
+    ...(state.readyAdviserCount < fusionAdviserModels(config).length ? [`${state.readyAdviserCount}/${fusionAdviserModels(config).length} advisers are currently executable; unavailable advisers fail open.`] : []),
   ];
   const readiness: Readiness = {
     id: "clawrouter",
@@ -286,23 +402,28 @@ const loads = new WeakMap<ClientEntitlements, { started: number; published: Set<
 // A cold isolate first adopts a sibling's rendered body from the same location:
 // it is exactly what this caller receives, so it is secretless, unlike the
 // inventory (selectors, grants). It keeps the load's start time and fence.
-async function discoveryResponse(request: Request, env: Env, variant: string, render: (entitlements: ClientEntitlements) => unknown): Promise<Response> {
-  const hasKey = ["authorization", "x-api-key", "x-goog-api-key", "api-key"].some((name) => request.headers.get(name)?.includes("clawrouter-") || request.headers.get(name)?.includes("ocpk_"));
+async function discoveryResponse(request: Request, env: Env, variant: string, render: (entitlements: ClientEntitlements, publicOrigin: string | null) => unknown): Promise<Response> {
+  // Freeze the configured value once for both cache identity and projection.
+  // Request/forwarded origins and publication response URLs cannot supply it.
+  const publicOrigin = readPublishedInputOrigin(env.CLAWROUTER_PUBLIC_ORIGIN);
+  const hasKey = hasProxyKeyIntent(request.headers);
   if (!hasKey) {
     const session = await verifiedAccessSession(request, env);
     if (!session) return errorResponse("client_auth_required", "a valid ClawRouter proxy key or Cloudflare Access session is required", 401);
-    return privateJson(render(await sessionEntitlements(session, env)));
+    return privateJson(render(await sessionEntitlements(session, env), publicOrigin));
   }
   const auth = await authenticateProxyKey(request.headers, env, snapshot.providers.map(provider => ({ id: provider.id, tokenRef: provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? provider.id })), true);
   if (auth instanceof Response) return auth;
   const mediaProvider = snapshot.providers.find(provider => provider.id === "minimax"
-    && provider.endpoints.some(endpoint => endpoint.request_format === "minimax.speech")
+    && provider.endpoints.some(endpoint => ["minimax.speech", "minimax.music"].includes(endpoint.request_format))
     && (!auth.policy.providers.length || auth.policy.providers.includes(provider.id)));
   const mediaEnvironment = mediaProvider ? await qualifyMiniMaxEnvironmentBinding(mediaProvider, env) : null;
   // A rotated server key cannot reuse an eligible discovery body from either
   // isolate or colo caches. No credential bytes enter the cache identity.
-  const mediaRevision = mediaProvider ? [mediaEnvironment ? await sha256Hex(mediaEnvironment.binding) : null] : [];
-  const key = JSON.stringify([auth.credentialId, auth.principalId, auth.policyId, auth.serviceTiers ?? null, auth.contentRetentionDisabled, auth.policy, nativeModelEligibilityRevision(), ...mediaRevision]);
+  const musicEnvironment = mediaProvider ? await qualifyMiniMaxEnvironmentBinding(mediaProvider, env, "minimax.music") : null;
+  const mediaRevision = mediaProvider ? [mediaEnvironment ? await sha256Hex(mediaEnvironment.binding) : null,
+    musicEnvironment ? await sha256Hex(musicEnvironment.binding) : null] : [];
+  const key = JSON.stringify([auth.credentialId, auth.principalId, auth.policyId, auth.serviceTiers ?? null, auth.contentRetentionDisabled, auth.policy, nativeModelEligibilityRevision(), ["clawrouter.published-input.v1", publicOrigin], ...mediaRevision]);
   const config = hotCacheConfig(env), shared = `${variant}\n${key}`;
   if (!entitlementCache.peek(key, config)) {
     const adopted = await coloGet<unknown>("discovery", shared, config);
@@ -314,7 +435,7 @@ async function discoveryResponse(request: Request, env: Env, variant: string, re
     loads.set(value, { started, published: new Set() });
     return { value, cacheable: true };
   });
-  const body = render(value);
+  const body = render(value, publicOrigin);
   // Each variant of a loaded inventory is published once, stamped with the
   // load's start, whichever request first renders it in this isolate.
   const load = loads.get(value);
@@ -340,24 +461,39 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
     const pools = providerPools[index];
     const savedConnection = connections.find((connection) => connection.providerId === provider.id);
     const connection = savedConnection ?? { providerId: provider.id, enabled: true };
+    if (provider.id === "github-copilot") {
+      const readiness = providerReadinessForState(provider, env, [], connection, undefined, {
+        executableEndpoints: [], executable: false, status: "unavailable", reasons: ["copilot_public_discovery_required"],
+      });
+      return [provider.id, { configured: false, endpoints: [] as string[], websockets: [] as string[], models: [] as ClientCatalogModel[], offers: [] as CatalogOffer[], readiness,
+        operation: (_selection: ProxySelection): null => null }] as const;
+    }
     const keyScope = pools[0]?.entry.authType === "proxy_key";
     let configured = !!savedConnection || pools.some((pool) => pool.candidates.hasConfiguredGrant)
       || provider.config_keys.some((key) => typeof env[key] === "string" && (env[key] as string).trim());
     let providerBalance: ReturnType<typeof providerBudgetStatus> | undefined;
     // Group models by their ordered eligible policies, not policies by allowlist.
     // Each model gets one policy choice before affordability is observed.
-    const grouped = new Map<string, { pools: typeof pools; modelIds: Set<string | null>; passthrough: boolean }>();
+    const grouped = new Map<string, { pools: typeof pools; modelIds: Set<string | null>; passthrough: boolean; modelRequirement?: string }>();
     for (const model of [...provider.models, null, undefined]) {
       const matching = model === undefined ? pools.filter(pool => pool.entry.policy.models == null) : model ? pools.filter(pool => policyAllowsModel(pool.entry.policy, provider.id, model.id)) : pools;
-      const key = JSON.stringify(matching.map(pool => pool.entry.policyId));
-      const group = grouped.get(key) ?? { pools: matching, modelIds: new Set<string | null>(), passthrough: false };
+      // PCM key authority and Vertex model/location support depend on the
+      // selected model even when multiple models share one endpoint.
+      const videoModel = model && provider.id === "minimax" && isMiniMaxVideoModel(model.upstream);
+      // Hailuo eligibility consumes exact upstream identity; offers and policy
+      // matching above continue to use the declared router ID.
+      const modelRequirement = model && videoModel
+        ? provider.models.filter(card => card.id === model.id || card.upstream === model.upstream).length === 1 ? model.upstream : undefined
+        : model && (provider.id === "anthropic-vertex" || provider.id === "minimax" && ["image-01", "music-2.6", "music-2.6-free"].includes(model.upstream) || openRouterPcmModel(provider, model.id)) ? model.id : undefined;
+      const key = JSON.stringify([matching.map(pool => pool.entry.policyId), modelRequirement ?? null]);
+      const group = grouped.get(key) ?? { pools: matching, modelIds: new Set<string | null>(), passthrough: false, modelRequirement };
       if (model === undefined) group.passthrough = true;
       else group.modelIds.add(model?.id ?? null);
       grouped.set(key, group);
     }
     const poolGroups = [...grouped.values()];
     const contexts = await Promise.all(provider.endpoints.filter((endpoint) => !responsesControl(provider, endpoint)).flatMap((endpoint) => (keyScope && endpoint.websocket ? ["http", "websocket"] as const : ["http"] as const).flatMap(mode => poolGroups.map(async group => {
-      const requirement: GrantRequirement = { provider, endpoint, mode };
+      const requirement: GrantRequirement = { provider, endpoint, mode, model: group.modelRequirement };
       const candidates = endpoint.request_format === "cloudflare_ai_gateway.universal" ? group.pools.filter(pool => pool.entry.policy.models == null) : group.pools;
       const selected = selectPolicyCandidates(candidates, requirement);
       if (!selected) return null;
@@ -365,6 +501,7 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
         const auth = selection.entry;
         let reasonCode: string | undefined;
         let temporarilyUnavailable = false;
+        let productGrants: Array<UpstreamGrant | null> = [];
         try {
           await assertProviderAccess(provider, auth, env, connection);
           const available = activeOperationCandidates(selection.candidates.available, env, requirement);
@@ -380,12 +517,22 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
               assertOperationConfiguration(requirement, null, env);
               if (endpoint.request_format === "minimax.speech" && !await qualifyMiniMaxEnvironmentBinding(provider, env))
                 throw new HttpError(403, "native_media_authorization_required", "Global MiniMax speech requires matching original credential authorization");
+              if (endpoint.request_format === "minimax.music" && !await qualifyMiniMaxEnvironmentBinding(provider, env, "minimax.music"))
+                throw new HttpError(403, "minimax_music_authorization_required", "Global MiniMax music requires matching original credential authorization");
             }
+          }
+          if (endpoint.inputProfile !== undefined) {
+            if (!keyScope) throw new HttpError(403, "managed_input_profile_required", "composed input is available only through its native authenticated route");
+            await (await import("./pixverse-inputs.ts")).qualifyPixVerseInputCatalog(provider, endpoint, auth, env);
           }
           if (isStandaloneSearch(endpoint)) {
             assertSearchTariff(auth);
             await assertSingleOpenAiAccount(auth, env, { transport: null, grantKey: configuredGrants[0]?.key ?? null, grant: configuredGrants[0]?.grant ?? null }, "search");
           }
+          // These candidates belong to this exact policy/operation. Empty configured
+          // pools must never acquire product metadata from environment fallback.
+          if (provider.offer_definitions?.length) productGrants = available.length ? available.map(entry => entry.grant)
+            : selection.candidates.hasConfiguredGrant ? [] : [null];
           configured = true;
         } catch (error) {
           reasonCode = error instanceof HttpError ? error.code : "provider_not_configured";
@@ -399,7 +546,7 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
           const [policy, providerBudget] = await Promise.all([policyBalances.get(auth.policyId)!, providerBalance]);
           observation = { policyRemaining: policy.remainingMicros, dailyRemaining: policy.daily.remainingMicros, weeklyRemaining: policy.weekly.remainingMicros, providerRemaining: providerBudget?.remainingMicros ?? null };
         }
-        return { endpoint, mode, auth, reasonCode, temporarilyUnavailable, observation, modelIds: group.modelIds, passthrough: group.passthrough };
+        return { endpoint, mode, auth, reasonCode, temporarilyUnavailable, observation, productGrants, modelIds: group.modelIds, passthrough: group.passthrough };
       };
       const execution = await inspect(selected);
       // When every compatible pool is cooling, execution still falls back to
@@ -432,7 +579,7 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
         try { resolveTemplate(provider, model.upstream, env); }
         catch (error) { if (error instanceof HttpError) return { status: "exact-blocked" as const, reasonCode: error.code }; throw error; }
       }
-      return operationAffordability(context.auth, connection, model, capability, context.endpoint, context.observation);
+      return operationAffordability(context.auth, connection, model, capability, context.endpoint, context.observation, {}, provider.id);
     };
     const models = provider.models.filter(model => modelExecutable(provider, model) && pools.some(pool => policyAllowsModel(pool.entry.policy, provider.id, model.id))).flatMap((model) => {
       const capabilities = model.capabilities.filter((capability) => inventoryContexts.some((context) => provider.capabilities.some((item) => item.id === capability && item.endpoint === context.endpoint.id) && eligibility(context, model, capability, true).status !== "exact-blocked"));
@@ -461,17 +608,20 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
         const availability: OperationAffordability = !model && resolved.reasonCode === "pricing_required" && selectableModel ? { status: "request-dependent" } : resolved;
         const supportedTiers = model?.nativeCapabilities?.endpoints[endpoint.id]?.supportedServiceTiers;
         const permittedServiceTiers = supportedTiers?.filter(tier => availability.status !== "exact-blocked" && allowedServiceTiers(auth.policy, model!.id, auth.serviceTiers).includes(tier));
-        const common = { ...(endpoint.requestPricing ? { requestPricing: structuredClone(endpoint.requestPricing) } : {}), endpoint: endpoint.id, modelId: model?.id ?? null, transport: mode, policyId: auth.policyId, policyGeneration: auth.policy.generation, eligible: availability.status !== "exact-blocked", affordability: availability.status, ...(availability.reasonCode ? { reasonCode: availability.reasonCode } : {}), ...(permittedServiceTiers ? { permittedServiceTiers } : {}) };
-        const native: CatalogOffer = { ...common, routeKind: keyScope ? endpoint.native_proxy ? "native" : "manifest" : "playground", route: keyScope && endpoint.native_proxy ? `/v1/native/${provider.id}${endpoint.path}` : `/v1/${keyScope ? "" : "playground/"}proxy/${provider.id}/${endpoint.id}` };
-        const unified = model && unifiedPathForEndpoint(provider, endpoint);
+        const productOffers = availability.status !== "exact-blocked" && provider.offer_definitions?.length
+          ? catalogProviderOfferReferences({ provider, endpoint, mode, model, capability }, context.productGrants) : [];
+        const common = { ...(productOffers.length ? { productOffers } : {}), ...(endpoint.inputProfile ? { inputProfile: endpoint.inputProfile } : {}), ...(endpoint.requestPricing ? { requestPricing: structuredClone(endpoint.requestPricing) } : {}), endpoint: endpoint.id, modelId: model?.id ?? null, transport: mode, policyId: auth.policyId, policyGeneration: auth.policy.generation, eligible: availability.status !== "exact-blocked", affordability: availability.status, ...(availability.reasonCode ? { reasonCode: availability.reasonCode } : {}), ...(permittedServiceTiers ? { permittedServiceTiers } : {}) };
+        const nativeEnabled = endpoint.native_proxy && !manifestOnlyPublicCatalog(endpoint.request_format) && endpoint.request_format !== "featherless.catalog";
+        const native: CatalogOffer = { ...common, routeKind: keyScope ? nativeEnabled ? "native" : "manifest" : "playground", route: keyScope && nativeEnabled ? `/v1/native/${provider.id}${endpoint.path}` : `/v1/${keyScope ? "" : "playground/"}proxy/${provider.id}/${endpoint.id}` };
+        const unified = !manifestOnlyPublicCatalog(endpoint.request_format) && endpoint.request_format !== "featherless.catalog" && model && unifiedPathForEndpoint(provider, endpoint);
         let hostedToolAdmission: CatalogOffer["hostedToolAdmission"];
         if (keyScope && mode === "http" && common.eligible && model && unified === "/v1/responses" && supportsHostedSearch(provider, model, endpoint.id)) {
-          const hosted = operationAffordability(auth, connection, model, capability, endpoint, context.observation, { tools: [{ type: "web_search" }] });
+          const hosted = operationAffordability(auth, connection, model, capability, endpoint, context.observation, { tools: [{ type: "web_search" }] }, provider.id);
           if (hosted.status !== "exact-blocked" || hosted.reasonCode === "pricing_required") hostedToolAdmission = {
             version: "clawrouter.hosted-tool-admission.v1", web_search: hosted.reasonCode === "pricing_required" ? "pricing_required" : "admitted",
           };
         }
-        return [...(mode === "http" || endpoint.native_proxy ? [native] : []), ...(unified ? [{ ...common, ...(hostedToolAdmission ? { hostedToolAdmission } : {}), routeKind: "unified" as const, route: keyScope ? unified : `/v1/playground${unified}` }] : [])];
+        return [...(mode === "http" || nativeEnabled ? [native] : []), ...(unified ? [{ ...common, ...(hostedToolAdmission ? { hostedToolAdmission } : {}), routeKind: "unified" as const, route: keyScope ? unified : `/v1/playground${unified}` }] : [])];
       });
     });
     const endpoints = [...new Set(offers.filter((offer) => offer.eligible && offer.transport === "http").map((offer) => offer.endpoint))];

@@ -24,3 +24,12 @@ test("similarly prefixed policy and tenant ids do not cross scope", () => {
   ], policies.slice(0, 1));
   assert.deepEqual(visible, []);
 });
+
+test("shared readiness sees only explicitly named subscription owners for the provider", () => {
+  const shared = { key: "oauth/source/contributor", grant: { provider: "anthropic", kind: "subscription" } };
+  const entry = { policyId: "consumer", policy: { grantRouting: { sharedGrants: { anthropic: [shared.key] } } } };
+  assert.deepEqual(grantsVisibleToPolicies([shared, ...grants], [entry]), [shared]);
+  assert.deepEqual(grantsVisibleToPolicies([{ ...shared, grant: { ...shared.grant, kind: "api_key" } }], [entry]), []);
+  assert.deepEqual(grantsVisibleToPolicies([{ ...shared, grant: { ...shared.grant, provider: "openai" } }], [entry]), []);
+  assert.deepEqual(grantsVisibleToPolicies([shared], [{ ...entry, policy: {} }]), []);
+});
