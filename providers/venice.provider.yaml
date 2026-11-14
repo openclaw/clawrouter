@@ -1,5 +1,6 @@
 # Frozen Chat inventory and evidence: docs/venice-native-chat.md.
 # Endpoint/model source checked 2026-11-03: https://docs.venice.ai/overview/about-venice
+# Catalog exposure and authority: docs/public-catalog-declarations.md.
 schema: clawrouter.service-provider.v1
 id: venice
 displayName: Venice API
@@ -30,6 +31,9 @@ capabilities:
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
+  - id: models.list
+    endpoint: models_list
+    methods: [GET]
 endpoints:
   chat_completions:
     modelPassthrough: {}
@@ -38,6 +42,15 @@ endpoints:
     responseFormat: openai.chat_completions
     streaming: sse
     timeoutMs: 600000
+  models_list:
+    method: GET
+    path: /models
+    nativeProxy: true
+    requestFormat: venice.models
+    responseFormat: venice.models
+    headers:
+      accept: application/json
+    timeoutMs: 10000
 models:
   entries:
     - id: venice/zai-org-glm-5-2
