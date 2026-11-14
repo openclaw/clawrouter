@@ -30,7 +30,7 @@ type Acquisition = {
   releaseCalls: number;
   releases: Promise<void>[];
   body?: ReadableStream<Uint8Array> | null;
-  readers: Array<{ pending: Promise<unknown>[]; unlocked: boolean }>;
+  readers: Array<{ pending: ReaderOperation[]; unlocked: boolean }>;
 };
 const acquisitions: Acquisition[] = [];
 const closeOperations: Promise<unknown>[] = [];
@@ -38,7 +38,24 @@ const dispatchers = new Set<object>();
 const observationErrors: unknown[] = [];
 let catalogCalls = 0, chatCalls = 0, expectedChatCalls = 0;
 
-function observe(kind: Acquisition["kind"], returned: Acquisition["returned"]) {
+// Pure observation/join functions are also exercised by the outer fixture tests.
+type ReaderOperation = { kind: "read" | "cancel"; pending: Promise<unknown>; expectedAbort: boolean };
+function observeReaderOperation(operations: ReaderOperation[], kind: ReaderOperation["kind"], pending: Promise<unknown>, signals: Array<AbortSignal | null | undefined>) {
+  const operation = { kind, pending, expectedAbort: false }; operations.push(operation);
+  void pending.then(() => {}, reason => {
+    // Match the original request's exact reason at rejection, never an error name
+    // or a signal that only becomes aborted later. Cancellation failures always fail.
+    operation.expectedAbort = kind === "read" && reason !== undefined && signals.some(signal => signal?.aborted && signal.reason === reason);
+  });
+  return pending;
+}
+async function joinReaderOperations(operations: ReaderOperation[]) {
+  const results = await Promise.allSettled(operations.map(operation => operation.pending));
+  const failures = results.flatMap((result, index) => result.status === "rejected" && !operations[index].expectedAbort ? [result.reason] : []);
+  if (failures.length) throw new AggregateError(failures, "original reader operations failed");
+}
+
+function observe(kind: Acquisition["kind"], returned: Acquisition["returned"], signals: Array<AbortSignal | null | undefined>) {
   let released!: () => void;
   const row: Acquisition = { kind, returned, released: new Promise(resolve => { released = resolve; }), releaseCalls: 0, releases: [], readers: [] };
   acquisitions.push(row);
@@ -57,13 +74,12 @@ function observe(kind: Acquisition["kind"], returned: Acquisition["returned"]) {
       const getReader = row.body.getReader;
       vi.spyOn(row.body, "getReader").mockImplementation(function (...args) {
         const reader = Reflect.apply(getReader, this, args) as ReadableStreamDefaultReader<Uint8Array>;
-        const observed = { pending: [] as Promise<unknown>[], unlocked: false }; row.readers.push(observed);
+        const observed = { pending: [] as ReaderOperation[], unlocked: false }; row.readers.push(observed);
         for (const method of ["read", "cancel"] as const) {
           const original = reader[method];
           vi.spyOn(reader, method).mockImplementation(function (...operands: unknown[]) {
-            const pending = Reflect.apply(original, this, operands); observed.pending.push(pending);
-            void pending.then(() => {}, () => {});
-            return pending;
+            const pending = Reflect.apply(original, this, operands);
+            return observeReaderOperation(observed.pending, method, pending, signals);
           });
         }
         const unlock = reader.releaseLock;
@@ -104,12 +120,12 @@ beforeEach(() => {
         }
         return Reflect.apply(fetchWithRuntimeDispatcher, this, [input, init]);
       },
-    }]));
+    }]), [options.signal, options.init?.signal]);
   });
   vi.spyOn(guardedTransport, "fetchWithProviderHttpGuard").mockImplementation(function (options) {
     expect(String(options.url)).toBe(`${origin}/v1/chat/completions`);
     chatCalls++;
-    return observe("chat", Reflect.apply(originalChatGuard, this, [options]));
+    return observe("chat", Reflect.apply(originalChatGuard, this, [options]), [options.signal, options.init?.signal]);
   });
 });
 afterEach(async () => {
@@ -118,15 +134,16 @@ afterEach(async () => {
     const releases = await Promise.all(acquisitions.map(async row => {
       await row.released;
       const results = await Promise.allSettled(row.releases);
-      await Promise.all(row.readers.map(reader => Promise.allSettled(reader.pending)));
-      return results;
+      const readers = await Promise.allSettled(row.readers.map(reader => joinReaderOperations(reader.pending)));
+      return [...results, ...readers];
     }));
     const closed = await Promise.allSettled(closeOperations);
     // Assert only after the actual guard, reader, release and owned-dispatcher
     // joins. The shared Chat pool is never closed by this fixture.
-    expect(returned.every(result => result.status === "fulfilled")).toBe(true);
-    expect(releases.flat().every(result => result.status === "fulfilled")).toBe(true);
-    expect(closed.every(result => result.status === "fulfilled")).toBe(true);
+    const failures = [...returned, ...releases.flat(), ...closed].flatMap(result => result.status === "rejected" ? [result.reason] : []);
+    failures.push(...observationErrors);
+    // Vitest retains the test-body failure separately from this afterEach failure.
+    if (failures.length) throw new AggregateError(failures, "BytePlus client retirement failed");
     expect(closeOperations).toHaveLength(dispatchers.size);
     expect([...dispatchers].every(dispatcher => Reflect.get(dispatcher, "closed") === true)).toBe(true);
     expect(catalogCalls).toBe(1);
