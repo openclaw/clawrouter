@@ -86,7 +86,11 @@ function emitDiagnostic(record, write = process.stdout.write.bind(process.stdout
 }
 function emitDiagnostics(records, failures, write) {
   try {
-    if (failures.length || records.some(record => !Object.hasOwn(record, "metadata"))) for (const record of records) emitDiagnostic(record, write);
+    const checked = records.map(record => { const valid = validateDiagnostic(record); if (!valid) throw new Error("invalid diagnostic response"); return valid; });
+    if (failures.length || checked.some(record => !Object.hasOwn(record, "metadata"))) {
+      const priority = record => record.observation ? (record.source === "worker" && record.operation === "worker_retire" ? 0 : record.observation.site === "sdk_join" ? 1 : 2) : Object.hasOwn(record, "metadata") ? 4 : 3;
+      for (const record of checked.sort((a, b) => priority(a) - priority(b))) emitDiagnostic(record, write);
+    }
   } catch (error) { failures.push(error); }
 }
 async function retrieveDiagnostics(origin) {
@@ -345,6 +349,101 @@ test("retirement observers accept only exact owned read aborts and never cancell
 });
 
 
+
+test("passive reader identity observes stored errors without accepting cancellation rejection", async () => {
+  let controller;
+  const stream = new ReadableStream({ start(value) { controller = value; } }), reader = stream.getReader();
+  const signal = new AbortController(), reason = new Error("fixed synthetic reason");
+  const trace = diagnostic.readerTrace(reader, 1, 1, signal.signal, signal.signal, "guard_input");
+  const operations = [];
+  const read = trace.begin("read", []);
+  const reading = trace.invoke(read, reader.read, reader, []);
+  observeReaderOperation(operations, "read", reading, [signal.signal]);
+  controller.error(reason); await Promise.allSettled([reading]);
+  const cancel = trace.begin("cancel", [reason]);
+  let actualPromise, actualReceiver, actualOperands;
+  const original = reader.cancel;
+  function call(...operands) { actualReceiver = this; actualOperands = operands; return actualPromise = Reflect.apply(original, this, operands); }
+  const canceled = trace.invoke(cancel, call, reader, [reason]);
+  assert.equal(canceled, actualPromise); assert.equal(actualReceiver, reader); assert.equal(actualOperands[0], reason);
+  observeReaderOperation(operations, "cancel", canceled, [signal.signal]);
+  await Promise.allSettled([canceled]);
+  await assert.rejects(joinReaderOperations(operations), error => error.errors.length === 2 && error.errors.every(value => value === reason));
+  const beforeUnlock = trace.snapshot(cancel);
+  assert.equal(beforeUnlock.state, "rejected"); assert.equal(beforeUnlock.sameClosed, true); assert.equal(beforeUnlock.sameRead, true); assert.equal(beforeUnlock.sameOperand, true);
+  assert.equal(beforeUnlock.closedAfterUnlock, false); assert.equal(beforeUnlock.unlockCallsBefore, 0); assert.equal(beforeUnlock.allSettled, true);
+  assert.equal(beforeUnlock.effectiveSignalKnown, false); assert.equal(beforeUnlock.sameSignal, false);
+  trace.unlocking(); reader.releaseLock(); trace.unlocked();
+  const observation = { site: "cancel_join", ...trace.snapshot(cancel), joinAccepted: false, allUnlocked: true, bodyLocked: stream.locked };
+  assert.ok(diagnostic.validate(diagnostic.record({ source: "worker", test: "T00", scenario: "none", operation: "worker_retire", ordinal: 1 }, undefined, observation)));
+  assert.equal(observation.allSettled, true); assert.equal(observation.joinAccepted, false); assert.equal(observation.bodyLocked, false);
+});
+
+test("passive reader trace separates sync throw, pending closed, undefined identity and late abort", async () => {
+  const reader = new ReadableStream().getReader(), signal = new AbortController();
+  const trace = diagnostic.readerTrace(reader, 2, 3, signal.signal, signal.signal, "fetch_input");
+  assert.equal(trace.snapshot().closedFinal, "pending");
+  const sync = trace.begin("cancel", [undefined]);
+  let caught = false;
+  try { trace.invoke(sync, function () { assert.equal(this, reader); throw undefined; }, reader, [undefined]); }
+  catch (error) { caught = true; assert.equal(error, undefined); }
+  assert.equal(caught, true); assert.equal(trace.snapshot(sync).state, "sync_throw");
+  const op = trace.begin("cancel", [undefined]), original = Promise.reject(undefined);
+  assert.equal(trace.invoke(op, () => original, reader, [undefined]), original);
+  await Promise.allSettled([original]); signal.abort(new Error("late"));
+  const value = trace.snapshot(op);
+  assert.equal(value.state, "rejected"); assert.equal(value.signalAborted, false); assert.equal(value.rejectSignalAborted, false);
+  for (const key of ["reasonDefined", "sameClosed", "sameRead", "sameOperand", "sameSignal", "sameCaller"]) assert.equal(value[key], false, key);
+  assert.equal(value.operandPresent, true); assert.equal(value.operandDefined, false);
+  trace.unlocking(); reader.releaseLock(); trace.unlocked(); await Promise.resolve();
+  assert.equal(trace.snapshot(op).closedFinalAfterUnlock, true);
+  assert.equal(trace.snapshot(op).sameClosedFinal, false);
+});
+
+test("passive observation schema and annotation priority retain all safe records and original failures", () => {
+  let getters = 0;
+  const observation = { site: "cancel_join", input: 1, reader: 1, op: 2, state: "rejected", reasonDefined: false, joinAccepted: false };
+  const record = diagnostic.record({ source: "worker", test: "T00", scenario: "none", operation: "worker_retire", ordinal: 1 }, undefined, observation);
+  assert.ok(validateDiagnostic(record));
+  const getter = { ...observation }; Object.defineProperty(getter, "sameRead", { get() { getters++; return true; }, enumerable: true });
+  assert.equal(validateDiagnostic({ ...record, observation: getter }), null);
+  assert.equal(validateDiagnostic({ ...record, observation: new Proxy({}, { ownKeys() { getters++; return []; } }) }), null);
+  assert.equal(validateDiagnostic({ ...record, observation: { ...observation, message: "forbidden" } }), null);
+  assert.equal(validateDiagnostic({ ...record, observation: { ...observation, state: "secret" } }), null);
+  const generic = outerMetadata("setup"), emitted = [], failures = [undefined];
+  emitDiagnostics([generic, record], failures, line => emitted.push(JSON.parse(line.slice(line.indexOf("::{") + 2))));
+  assert.equal(emitted.length, 2); assert.deepEqual(emitted[0], record); assert.deepEqual(emitted[1], generic);
+  assert.deepEqual(failures, [undefined]);
+  emitDiagnostics([record], failures, () => { throw undefined; }); assert.deepEqual(failures, [undefined, undefined]);
+  assert.equal(getters, 0);
+});
+
+test("SDK afterEach snapshots settled original products without accepting failed retirement", async () => {
+  let controller;
+  const body = new ReadableStream({ start(value) { controller = value; } }), reader = body.getReader();
+  const trace = diagnostic.readerTrace(reader, 1, 1, undefined, undefined, "guard_input");
+  const op = trace.begin("read", []), reading = trace.invoke(op, reader.read, reader, []);
+  controller.error(undefined); await Promise.allSettled([reading]);
+  const canceledOp = trace.begin("cancel", []), canceled = trace.invoke(canceledOp, reader.cancel, reader, []);
+  const operations = []; observeReaderOperation(operations, "read", reading, []); observeReaderOperation(operations, "cancel", canceled, []);
+  operations[1].detail = () => trace.snapshot(canceledOp);
+  await Promise.allSettled([reading, canceled]); trace.unlocking(); reader.releaseLock(); trace.unlocked();
+  const context = { source: "sdk", test: "T26", scenario: "error", operation: "reader_join", ordinal: 1 };
+  const release = Promise.resolve(), records = diagnostic.store(); let cleanup;
+  const acquisitions = [{ context, returned: Promise.resolve({}), released: release, releasePending: [release], releaseCalls: 1, releaseSettled: 1, releaseFulfilled: 1, body, readers: [{ pending: operations, unlocked: true, trace }] }];
+  const code = stripTypeScriptTypes(sdkText.slice(sdkText.indexOf("afterEach(async () => {"), sdkText.indexOf("\nasync function start(")));
+  new Function("afterEach", "acquisitions", "joinReaderOperations", "mark", "remember", "current", "observationErrors", "vi", "diagnostic", "failureRecords", "origin", "diagnosticFetch", code)(
+    fn => { cleanup = fn; }, acquisitions, joinReaderOperations, () => {}, (ctx, error, observation) => { assert.equal(records.add(diagnostic.record(ctx, error, observation)), true); }, context, [],
+    { restoreAllMocks() {} }, diagnostic, records, "https://fixture.example", async () => new Response(null, { status: 204 }));
+  const result = await Promise.allSettled([cleanup()]);
+  assert.equal(result[0].status, "rejected"); assert.equal(result[0].reason.errors[0].errors[0], undefined);
+  const snapshot = records.values().find(record => record.observation?.site === "sdk_join");
+  assert.ok(snapshot); assert.ok(Buffer.byteLength(JSON.stringify(snapshot)) <= 2048);
+  assert.equal(snapshot.observation.allSettled, true); assert.equal(snapshot.observation.allReleasesFulfilled, true);
+  assert.equal(snapshot.observation.allUnlocked, true); assert.equal(snapshot.observation.bodyLocked, false); assert.equal(snapshot.observation.joinAccepted, false);
+  assert.equal(snapshot.observation.sameClosed, false); assert.equal(snapshot.observation.sameRead, false);
+});
+
 test("Abliteration diagnostics map all 27 registered tests and 30 scenarios without interpolated-title assumptions", () => {
   const registered = [];
   const registration = sdkText.slice(sdkText.indexOf('describe("actual Abliteration'));
@@ -560,7 +659,7 @@ test("Abliteration diagnostic Worker control relay bypasses product dispatch and
   try {
     mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture());
     const origin = String(await mf.ready).replace(/\/$/, "");
-    const record = diagnostic.record({ source: "sdk", test: "T01", scenario: "m0_off", operation: "catalog", ordinal: 0 }, undefined);
+    const record = diagnostic.record({ source: "sdk", test: "T01", scenario: "m0_off", operation: "catalog", ordinal: 0 }, undefined, { site: "sdk_join", input: 1, reader: 1, state: "rejected", allSettled: true, joinAccepted: false });
     await diagnostic.flush([record], origin, fetch);
     assert.deepEqual(await retrieveDiagnostics(origin), [record]);
     const retirement = await fetch(origin + "/fixture/retire", { method: "POST" });
@@ -575,6 +674,24 @@ test("Abliteration diagnostic Worker control relay bypasses product dispatch and
   if (failures.length) throw new AggregateError(failures, "diagnostic relay or cleanup failed");
 });
 
+test("actual Worker waitUntil retirement failure retains its typed site through the existing control relay", { timeout: 30_000 }, async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "clawrouter-abliteration-retire-site-"));
+  const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
+  let mf; const failures = [];
+  try {
+    const source = routerFixture().replace("const records = [], inputs = [], rawFetch = globalThis.fetch;", "const failure = Promise.reject(undefined); void failure.catch(() => {}); const records = [{ returned: { promise: Promise.resolve() }, pending: [failure] }], inputs = [], rawFetch = globalThis.fetch;");
+    mf = await startWorkerdFixture(temporary, source, upstreamFixture());
+    const origin = String(await mf.ready).replace(/\/$/, "");
+    const response = await fetch(origin + "/fixture/retire", { method: "POST" });
+    assert.equal(response.status, 500); await response.arrayBuffer();
+    const records = await retrieveDiagnostics(origin);
+    assert.ok(records.some(record => record.observation?.site === "wait_until" && record.observation.input === 1 && record.observation.op === 1 && record.observation.reasonDefined === false && record.observation.joinAccepted === false));
+  } catch (error) { failures.push(error); }
+  finally { try { await mf?.dispose(); } catch (error) { failures.push(error); } try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); } }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length) throw new AggregateError(failures, "retirement site or cleanup failed");
+});
+
 function routerFixture() {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
 import { putGrantCredentials, revokeGrantCredentials } from "./worker/grant-credentials.ts";
@@ -582,7 +699,7 @@ const records = [], inputs = [], rawFetch = globalThis.fetch;
 ${diagnosticCode}
 const diagnostic = diagnosticProtocol(), diagnosticRelay = diagnostic.relay();
 const workerContext = (operation, ordinal = 0) => ({ source: "worker", test: "T00", scenario: "none", operation, ordinal });
-const remember = context => { try { diagnosticRelay.add(diagnostic.record(context, undefined)); } catch {} };
+const remember = (context, observation) => { try { diagnosticRelay.add(diagnostic.record(context, undefined, observation)); } catch {} };
 function requestIdentity(request) {
   const authorization = request.headers.get("authorization");
   const scenario = diagnostic.scenarios.find(id => authorization === (id === "invalid" ? "Bearer clawrouter-live-abliteration_m0_high-invalid" : "Bearer clawrouter-live-abliteration_" + id + "-fixture-secret"));
@@ -605,25 +722,31 @@ globalThis.fetch = function(input, init) {
       const getReader = proof.body.getReader;
       proof.body.getReader = function(...args) {
         const reader = Reflect.apply(getReader, this, args);
-        const row = { pending: [], unlocked: false, terminal: deferred(), pendingSettled: false }; proof.readers.push(row);
+        const trace = diagnostic.readerTrace(reader, proof.ordinal, proof.readers.length + 1, init?.signal ?? (input instanceof Request ? input.signal : undefined), undefined, "fetch_input");
+        const row = { pending: [], unlocked: false, terminal: deferred(), pendingSettled: false, trace }; proof.readers.push(row);
         for (const name of ["read", "cancel"]) {
           const original = reader[name];
           reader[name] = function(...operands) {
-            const pending = Reflect.apply(original, this, operands);
+            const detail = trace.begin(name, operands);
+            let pending;
+            try { pending = trace.invoke(detail, original, this, operands); }
+            catch (error) { remember(workerContext(name, proof.ordinal), { site: name === "cancel" ? "cancel_join" : "read_join", ...trace.snapshot(detail), joinAccepted: false }); throw error; }
             const returned = observeReaderOperation(row.pending, name, pending, signals);
             const operation = row.pending.at(-1);
-            void pending.then(() => {}, () => { if (!operation.expectedAbort) remember(workerContext(name, proof.ordinal)); });
+            operation.detail = () => trace.snapshot(detail);
+            void pending.then(() => {}, () => { if (!operation.expectedAbort) remember(workerContext(name, proof.ordinal), { site: name === "cancel" ? "cancel_join" : "read_join", ...trace.snapshot(detail), joinAccepted: false }); });
             return returned;
           };
         }
         const release = reader.releaseLock;
         reader.releaseLock = function() {
-          const result = Reflect.apply(release, this, []); row.unlocked = true; row.terminal.resolve(); return result;
+          trace.unlocking();
+          const result = Reflect.apply(release, this, []); trace.unlocked(); row.unlocked = true; row.terminal.resolve(); return result;
         };
         return reader;
       };
-    } catch (error) { remember(workerContext("acquire", proof.ordinal)); proof.errors.push(error); }
-  }, () => { remember(workerContext("guard", proof.ordinal)); });
+    } catch (error) { remember(workerContext("acquire", proof.ordinal), { site: "observer", input: proof.ordinal, joinAccepted: false }); proof.errors.push(error); }
+  }, () => { remember(workerContext("guard", proof.ordinal), { site: "fetch", input: proof.ordinal, joinAccepted: false }); });
   return pending;
 };
 async function retire() {
@@ -632,17 +755,29 @@ async function retire() {
     await record.returned.promise;
     for (let cursor = 0; cursor < record.pending.length;) {
       const batch = record.pending.slice(cursor); cursor += batch.length;
-      for (const result of await Promise.allSettled(batch)) if (result.status === "rejected") failures.push(result.reason);
+      for (const [index, result] of (await Promise.allSettled(batch)).entries()) if (result.status === "rejected") {
+        remember(workerContext("worker_retire", records.indexOf(record) + 1), { site: "wait_until", input: records.indexOf(record) + 1, op: cursor - batch.length + index + 1, state: "rejected", reasonDefined: result.reason !== undefined, joinAccepted: false });
+        failures.push(result.reason);
+      }
     }
   }
   const joined = await Promise.allSettled(inputs.map(async proof => {
-    await proof.returned;
+    try { await proof.returned; } catch (error) { remember(workerContext("worker_retire", proof.ordinal), { site: "fetch", input: proof.ordinal, state: "rejected", reasonDefined: error !== undefined, joinAccepted: false }); throw error; }
     const readers = await Promise.allSettled(proof.readers.map(async row => {
       await row.terminal.promise;
-      await joinReaderOperations(row.pending); row.pendingSettled = true;
+      try { await joinReaderOperations(row.pending); row.pendingSettled = true; }
+      catch (error) {
+        for (const operation of row.pending) {
+          const detail = operation.detail?.();
+          if (detail?.state === "rejected" && !operation.expectedAbort) remember(workerContext("worker_retire", proof.ordinal), {
+            site: operation.kind === "cancel" ? "cancel_join" : "read_join", ...detail, allUnlocked: row.unlocked, bodyLocked: proof.body?.locked ?? null, joinAccepted: false,
+          });
+        }
+        throw error;
+      }
     }));
     const failures = [...proof.errors, ...readers.flatMap(result => result.status === "rejected" ? [result.reason] : [])];
-    if (!proof.readers.length) failures.push(new Error("upstream reader observation missing"));
+    if (!proof.readers.length) { remember(workerContext("worker_retire", proof.ordinal), { site: "missing_reader", input: proof.ordinal, joinAccepted: false }); failures.push(new Error("upstream reader observation missing")); }
     if (failures.length) throw new AggregateError(failures, "upstream reader retirement failed");
     proof.joined = true;
   }));

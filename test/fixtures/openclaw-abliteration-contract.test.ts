@@ -24,7 +24,8 @@ const key = (id: string) => `clawrouter-live-abliteration_${id}-fixture-secret`;
 type DiagnosticValue = number | boolean | null;
 type DiagnosticContext = { source: string; test: string; scenario: string; operation: string; ordinal: number };
 type DiagnosticReason = { kind: string; depth: number; actual: DiagnosticValue; expected: DiagnosticValue };
-type DiagnosticRecord = DiagnosticContext & { v: number; reasons: DiagnosticReason[] };
+type DiagnosticObservation = Record<string, DiagnosticValue | string>;
+type DiagnosticRecord = DiagnosticContext & { v: number; reasons: DiagnosticReason[]; observation?: DiagnosticObservation };
 function diagnosticProtocol(isProxy?: (value: unknown) => boolean) {
   const scenarios = ["m0_off", "m0_low", "m0_high", "m0_max", "m1_off", "m1_low", "m1_high", "m1_max", "m2_off", "m2_minimal", "m2_low", "m2_medium", "m2_high", "m2_xhigh", "m2_max", "m3_off", "m3_high", "m3_max", "simple", "notools", "image0", "image2", "observed", "cached", "invalid", "foreign", "revoked", "unpriced", "error", "cancel"];
   const operations = ["setup", "register", "catalog", "select", "augment", "history", "wrapper", "stream", "result", "assert", "abort", "guard", "acquire", "reader", "read", "cancel", "release", "unlock", "acquisition_join", "release_join", "reader_join", "retirement_assert", "restore", "report", "fixture_start", "provision", "catalog_assert", "sdk_process", "worker_retire", "upstream_assert", "cancel_assert", "usage_wait", "usage_assert", "denial_assert", "dispose", "scratch_cleanup", "capacity"];
@@ -47,7 +48,8 @@ function diagnosticProtocol(isProxy?: (value: unknown) => boolean) {
   }
   function validate(value: unknown): DiagnosticRecord | null {
     try {
-      if (!fields(value, ["v", "source", "test", "scenario", "operation", "ordinal", "reasons"])) return null;
+      const hasObservation = object(value) && Object.hasOwn(value, "observation");
+      if (!fields(value, ["v", "source", "test", "scenario", "operation", "ordinal", "reasons", ...(hasObservation ? ["observation"] : [])])) return null;
       const v = own(value, "v"), source = own(value, "source"), test = own(value, "test"), scenario = own(value, "scenario"), operation = own(value, "operation"), ordinal = own(value, "ordinal"), raw = own(value, "reasons");
       if (v !== 1 || typeof source !== "string" || !["sdk", "worker", "outer"].includes(source) || typeof test !== "string" || typeof scenario !== "string" || !identity(test, scenario) || typeof operation !== "string" || !operations.includes(operation) || typeof ordinal !== "number" || !Number.isInteger(ordinal) || ordinal < 0 || ordinal > 1_000_000 || !object(raw) || !Array.isArray(raw)) return null;
       const length = own(raw, "length");
@@ -60,9 +62,88 @@ function diagnosticProtocol(isProxy?: (value: unknown) => boolean) {
         if (typeof kind !== "string" || !kinds.includes(kind) || typeof depth !== "number" || !Number.isInteger(depth) || depth < 0 || depth > 2 || !scalar(actual) || !scalar(expected)) return null;
         reasons.push({ kind, depth, actual, expected });
       }
-      const result = { v: 1, source, test, scenario, operation, ordinal, reasons };
+      const observation = hasObservation ? validateObservation(own(value, "observation")) : undefined;
+      if (hasObservation && !observation) return null;
+      const result = { v: 1, source, test, scenario, operation, ordinal, reasons, ...(observation ? { observation } : {}) };
       return new TextEncoder().encode(JSON.stringify(result)).byteLength <= 2048 ? result : null;
     } catch { return null; }
+  }
+  function validateObservation(value: unknown): DiagnosticObservation | null {
+    const enums: Record<string, string[]> = {
+      site: ["sdk_operation", "sdk_join", "wait_until", "fetch", "observer", "missing_reader", "read_join", "cancel_join"],
+      kind: ["read", "cancel", "none"], state: ["invoke", "sync_throw", "fulfilled", "rejected", "pending"],
+      closedState: ["pending", "fulfilled", "rejected", "unknown"], closedFinal: ["pending", "fulfilled", "rejected", "unknown"],
+      signalScope: ["guard_input", "fetch_input"],
+    };
+    const numbers = ["input", "reader", "op", "invokeSeq", "settleSeq", "closedSeq", "closedFinalSeq", "readRejectSeq", "unlockCallsBefore", "unlockCalls", "unlockReturns", "operations", "settled", "releaseCalls", "releaseSettled", "releaseFulfilled", "acquisitions", "acquisitionSettled"];
+    const booleans = ["reasonDefined", "closedReasonDefined", "closedAfterUnlock", "closedFinalReasonDefined", "closedFinalAfterUnlock", "sameClosedFinal", "sameReadFinal", "readRejectSeen", "readReasonDefined", "operandPresent", "operandDefined", "sameClosed", "sameRead", "sameOperand", "sameSignal", "sameCaller", "signalPresent", "signalAborted", "signalReasonPresent", "signalReasonDefined", "rejectSignalPresent", "rejectSignalAborted", "rejectSignalReasonPresent", "rejectSignalReasonDefined", "callerPresent", "callerAborted", "callerReasonDefined", "rejectCallerPresent", "rejectCallerAborted", "rejectCallerReasonDefined", "effectiveSignalKnown", "eof", "allSettled", "allReleasesFulfilled", "allUnlocked", "bodyLocked", "joinAccepted"];
+    if (!object(value)) return null;
+    const keys = Reflect.ownKeys(value); if (!keys.length || keys.length > 64) return null;
+    const result: DiagnosticObservation = {};
+    for (const key of keys) {
+      if (typeof key !== "string" || !Object.hasOwn(Object.getOwnPropertyDescriptor(value, key)!, "value")) return null;
+      const v = own(value, key);
+      if (Object.hasOwn(enums, key)) { if (typeof v !== "string" || !enums[key].includes(v)) return null; }
+      else if (numbers.includes(key)) { if (v !== null && !(typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 1_000_000)) return null; }
+      else if (booleans.includes(key)) { if (v !== null && typeof v !== "boolean") return null; }
+      else return null;
+      result[key] = v as DiagnosticValue | string;
+    }
+    return result;
+  }
+  // Identity-only observation of original products; never waits on reader.closed.
+  function readerTrace(reader: ReadableStreamDefaultReader<Uint8Array>, input: number, readerIndex: number, signal: AbortSignal | null | undefined, caller: AbortSignal | undefined, signalScope: "guard_input" | "fetch_input") {
+    let sequence = 0, count = 0, settled = 0, unlockCalls = 0, unlockReturns = 0, eof = false;
+    let closedState = "pending", closedSeq = 0, closedReason: unknown, closedAfterUnlock = false;
+    let readSeen = false, readSeq = 0, readReason: unknown;
+    const tick = () => sequence = Math.min(sequence + 1, 1_000_000);
+    const safe = (fn: () => void) => { try { fn(); } catch { /* observation cannot alter an original outcome */ } };
+    const signalState = (value: AbortSignal | null | undefined) => {
+      try { return value ? { present: true, aborted: value.aborted, reasonPresent: true, reason: value.reason } : { present: false, aborted: null, reasonPresent: false, reason: undefined }; }
+      catch { return { present: null, aborted: null, reasonPresent: null, reason: undefined }; }
+    };
+    const same = (a: unknown, b: unknown) => a !== undefined && b !== undefined && a === b;
+    // Capture the actual promise before any consumer can release the lock.
+    safe(() => { const closed = reader.closed; void closed.then(() => safe(() => { closedState = "fulfilled"; closedSeq = tick(); closedAfterUnlock = unlockCalls > 0; }), reason => safe(() => { closedState = "rejected"; closedReason = reason; closedSeq = tick(); closedAfterUnlock = unlockCalls > 0; })); });
+    type Op = { kind: "read" | "cancel"; index: number; invokeSeq: number; settleSeq: number; state: string; operandPresent: boolean; operand: unknown; unlockBefore: number; signal: ReturnType<typeof signalState>; caller: ReturnType<typeof signalState>; detail?: DiagnosticObservation; reason?: unknown };
+    const finish = (op: Op, state: string, reason: unknown, value?: unknown) => safe(() => {
+      op.state = state; op.reason = reason; op.settleSeq = tick(); settled++;
+      if (op.kind === "read" && state === "fulfilled" && object(value) && own(value, "done") === true) eof = true;
+      if (op.kind === "read" && state !== "fulfilled") { readSeen = true; readSeq = op.settleSeq; readReason = reason; }
+      const atReject = signalState(signal), callerReject = signalState(caller);
+      op.detail = { closedState, closedSeq, closedReasonDefined: closedState === "rejected" && closedReason !== undefined, closedAfterUnlock,
+        readRejectSeen: readSeen, readRejectSeq: readSeq, readReasonDefined: readSeen && readReason !== undefined,
+        reasonDefined: state !== "fulfilled" && reason !== undefined,
+        sameClosed: state !== "fulfilled" && closedState === "rejected" && same(reason, closedReason),
+        sameRead: state !== "fulfilled" && readSeen && same(reason, readReason),
+        sameOperand: state !== "fulfilled" && op.operandPresent && same(reason, op.operand),
+        sameSignal: state !== "fulfilled" && atReject.aborted === true && same(reason, atReject.reason),
+        sameCaller: state !== "fulfilled" && callerReject.aborted === true && same(reason, callerReject.reason),
+        rejectSignalPresent: atReject.present, rejectSignalAborted: atReject.aborted, rejectSignalReasonPresent: atReject.reasonPresent, rejectSignalReasonDefined: atReject.reasonPresent === true && atReject.reason !== undefined,
+        rejectCallerPresent: callerReject.present, rejectCallerAborted: callerReject.aborted, rejectCallerReasonDefined: callerReject.reasonPresent === true && callerReject.reason !== undefined };
+    });
+    return {
+      begin(kind: "read" | "cancel", operands: unknown[]): Op {
+        return { kind, index: ++count, invokeSeq: tick(), settleSeq: 0, state: "invoke", operandPresent: operands.length > 0, operand: operands[0], unlockBefore: unlockCalls, signal: signalState(signal), caller: signalState(caller) };
+      },
+      invoke<F extends (...args: any[]) => Promise<unknown>>(op: Op, original: F, receiver: unknown, operands: unknown[]): ReturnType<F> {
+        let pending: ReturnType<F>;
+        try { pending = Reflect.apply(original, receiver, operands); } catch (reason) { finish(op, "sync_throw", reason); throw reason; }
+        safe(() => { void pending.then(value => finish(op, "fulfilled", undefined, value), reason => finish(op, "rejected", reason)); });
+        return pending;
+      },
+      unlocking() { safe(() => { unlockCalls++; tick(); }); },
+      unlocked() { safe(() => { unlockReturns++; tick(); }); },
+      snapshot(op?: Op): DiagnosticObservation {
+        return { input, reader: readerIndex, op: op?.index ?? 0, kind: op?.kind ?? "none", state: op?.state ?? "pending", invokeSeq: op?.invokeSeq ?? 0, settleSeq: op?.settleSeq ?? 0,
+          signalScope, effectiveSignalKnown: signalScope === "fetch_input", operandPresent: op?.operandPresent ?? false, operandDefined: !!op?.operandPresent && op.operand !== undefined,
+          signalPresent: op?.signal.present ?? null, signalAborted: op?.signal.aborted ?? null, signalReasonPresent: op?.signal.reasonPresent ?? null, signalReasonDefined: op ? op.signal.reasonPresent === true && op.signal.reason !== undefined : null,
+          callerPresent: op?.caller.present ?? null, callerAborted: op?.caller.aborted ?? null, callerReasonDefined: op ? op.caller.reasonPresent === true && op.caller.reason !== undefined : null,
+          unlockCallsBefore: op?.unlockBefore ?? 0, ...(op?.detail ?? { closedState, closedSeq }), closedFinal: closedState, closedFinalSeq: closedSeq, closedFinalReasonDefined: closedState === "rejected" && closedReason !== undefined, closedFinalAfterUnlock: closedAfterUnlock,
+          sameClosedFinal: !!op && op.state !== "fulfilled" && closedState === "rejected" && same(op.reason, closedReason), sameReadFinal: !!op && op.state !== "fulfilled" && readSeen && same(op.reason, readReason),
+          unlockCalls, unlockReturns, operations: count, settled, allSettled: count === settled, eof };
+      },
+    };
   }
   function classify(reason: unknown): DiagnosticReason[] {
     const result: DiagnosticReason[] = [], seen = new Set<object>();
@@ -105,8 +186,8 @@ function diagnosticProtocol(isProxy?: (value: unknown) => boolean) {
     }
     visit(reason, 0); return result;
   }
-  function record(context: DiagnosticContext, reason: unknown): DiagnosticRecord {
-    return { v: 1, ...context, reasons: classify(reason) };
+  function record(context: DiagnosticContext, reason: unknown, observation?: DiagnosticObservation): DiagnosticRecord {
+    return { v: 1, ...context, reasons: classify(reason), ...(observation ? { observation } : {}) };
   }
   function store() {
     const records: DiagnosticRecord[] = []; let suppressed = 0;
@@ -162,7 +243,7 @@ function diagnosticProtocol(isProxy?: (value: unknown) => boolean) {
       }
     } finally { clearTimeout(timer); }
   }
-  return { scenarios, operations, own, identity, validate, record, classify, store, read, relay, flush };
+  return { scenarios, operations, own, identity, validate, record, classify, store, read, relay, flush, readerTrace };
 }
 // END typed diagnostic protocol.
 
@@ -172,9 +253,9 @@ let current: DiagnosticContext = { source: "sdk", test: "T00", scenario: "none",
 let failureRecords = diagnostic.store();
 const testNames = new Map<string, string>();
 function mark(operation: string) { current = { ...current, operation }; }
-function remember(context: DiagnosticContext, error: unknown) {
+function remember(context: DiagnosticContext, error: unknown, observation?: DiagnosticObservation) {
   // This observer never throws into an original operation or promise continuation.
-  try { failureRecords.add(diagnostic.record(context, error)); } catch { /* original outcome remains authoritative */ }
+  try { failureRecords.add(diagnostic.record(context, error, observation)); } catch { /* original outcome remains authoritative */ }
 }
 function caseBody<T extends unknown[]>(testId: string, body: (...args: T) => Promise<void>) {
   return async (...args: T) => {
@@ -204,14 +285,16 @@ const acquisitions: Array<{
   released: Promise<void>;
   releaseCalls: number;
   releasePending: Promise<void>[];
+  releaseSettled: number; releaseFulfilled: number;
   body?: ReadableStream<Uint8Array> | null;
-  readers: Array<{ reader: ReadableStreamDefaultReader<Uint8Array>; pending: ReaderOperation[]; unlocked: boolean }>;
+  readers: Array<{ reader: ReadableStreamDefaultReader<Uint8Array>; pending: ReaderOperation[]; unlocked: boolean; trace: ReturnType<typeof diagnostic.readerTrace> }>;
 }> = [];
 const observationErrors: unknown[] = [];
 let started = 0;
+let callerSignal: AbortSignal | undefined;
 
 // Pure observation/join functions are also exercised by the outer fixture tests.
-type ReaderOperation = { kind: "read" | "cancel"; pending: Promise<unknown>; expectedAbort: boolean };
+type ReaderOperation = { kind: "read" | "cancel"; pending: Promise<unknown>; expectedAbort: boolean; detail?: () => DiagnosticObservation };
 function observeReaderOperation<T extends Promise<unknown>>(operations: ReaderOperation[], kind: ReaderOperation["kind"], pending: T, signals: Array<AbortSignal | null | undefined>): T {
   const operation = { kind, pending, expectedAbort: false }; operations.push(operation);
   void pending.then(() => {}, reason => {
@@ -233,16 +316,16 @@ beforeEach(({ task }) => {
   const scenario = test ? diagnostic.scenarios.find(value => diagnostic.identity(test, value))! : "none";
   current = { source: "sdk", test: test ?? "T00", scenario, operation: "setup", ordinal: 0 };
   failureRecords = diagnostic.store();
-  acquisitions.length = 0; observationErrors.length = 0; started = 0;
+  acquisitions.length = 0; observationErrors.length = 0; started = 0; callerSignal = undefined;
   try {
   if (!test) throw new Error("unmapped diagnostic test");
   vi.spyOn(guardedTransport, "fetchWithProviderHttpGuard").mockImplementation(function (options) {
     const context = { ...current, operation: "guard", ordinal: acquisitions.length + 1 };
     let returned: ReturnType<typeof originalGuard>;
     try { returned = Reflect.apply(originalGuard, this, [options]); } catch (error) { remember(context, error); throw error; }
-    const signals = [options.signal, options.init?.signal];
+    const signals = [options.signal, options.init?.signal], caller = callerSignal;
     let released!: () => void;
-    const row: (typeof acquisitions)[number] = { context, returned, released: new Promise(resolve => { released = resolve; }), releaseCalls: 0, releasePending: [], readers: [] };
+    const row: (typeof acquisitions)[number] = { context, returned, released: new Promise(resolve => { released = resolve; }), releaseCalls: 0, releasePending: [], releaseSettled: 0, releaseFulfilled: 0, readers: [] };
     acquisitions.push(row);
     // Register before returning the same promise, so instrumentation precedes the
     // consumer's continuation without replacing its response or transport.
@@ -255,7 +338,7 @@ beforeEach(({ task }) => {
           let pending: Promise<void>;
           try { pending = Reflect.apply(release, this, []); } catch (error) { remember({ ...context, operation: "release" }, error); throw error; }
           row.releasePending.push(pending);
-          void pending.then(released, error => { remember({ ...context, operation: "release" }, error); released(); });
+          void pending.then(() => { row.releaseSettled++; row.releaseFulfilled++; released(); }, error => { row.releaseSettled++; remember({ ...context, operation: "release" }, error); released(); });
           return pending;
         });
         if (row.body) {
@@ -263,25 +346,29 @@ beforeEach(({ task }) => {
           vi.spyOn(row.body, "getReader").mockImplementation(function (...args) {
             let reader: ReadableStreamDefaultReader<Uint8Array>;
             try { reader = Reflect.apply(getReader, this, args); } catch (error) { remember({ ...context, operation: "reader" }, error); throw error; }
-            const observed = { reader, pending: [] as ReaderOperation[], unlocked: false };
+            const trace = diagnostic.readerTrace(reader, context.ordinal, row.readers.length + 1, options.signal ?? options.init?.signal, caller, "guard_input");
+            const observed = { reader, pending: [] as ReaderOperation[], unlocked: false, trace };
             row.readers.push(observed);
             for (const name of ["read", "cancel"] as const) {
               const original = reader[name];
               vi.spyOn(reader, name).mockImplementation(function (...operands: unknown[]) {
                 const operation = { ...context, operation: name };
+                const detail = trace.begin(name, operands);
                 let pending: ReturnType<typeof original>;
-                try { pending = Reflect.apply(original, this, operands); } catch (error) { remember(operation, error); throw error; }
+                try { pending = trace.invoke(detail, original, this, operands); } catch (error) { remember(operation, error, { site: "sdk_operation", ...trace.snapshot(detail) }); throw error; }
                 const result = observeReaderOperation(observed.pending, name, pending, signals);
                 const observedOperation = observed.pending.at(-1)!;
-                void pending.then(() => {}, error => { if (!observedOperation.expectedAbort) remember(operation, error); });
+                observedOperation.detail = () => trace.snapshot(detail);
+                void pending.then(() => {}, error => { if (!observedOperation.expectedAbort) remember(operation, error, { site: "sdk_operation", ...trace.snapshot(detail) }); });
                 return result;
               });
             }
             const unlock = reader.releaseLock;
             vi.spyOn(reader, "releaseLock").mockImplementation(function () {
+              trace.unlocking();
               let result: void;
               try { result = Reflect.apply(unlock, this, []); } catch (error) { remember({ ...context, operation: "unlock" }, error); throw error; }
-              observed.unlocked = true;
+              trace.unlocked(); observed.unlocked = true;
               return result;
             });
             return reader;
@@ -312,7 +399,16 @@ afterEach(async () => {
     const failures = [...returned, ...releases.flat()].flatMap(result => result.status === "rejected" ? [result.reason] : []);
     failures.push(...observationErrors);
     // Vitest retains the test-body failure separately from this afterEach failure.
-    if (failures.length) throw new AggregateError(failures, "Abliteration client retirement failed");
+    if (failures.length) {
+      // Snapshot only after the existing joins. Settled is not accepted/retired.
+      for (const row of acquisitions) for (const observed of row.readers) for (const operation of observed.pending) {
+        if (operation.kind !== "cancel") continue;
+        try { remember({ ...row.context, operation: "reader_join" }, undefined, { site: "sdk_join", ...operation.detail?.(),
+          acquisitions: acquisitions.length, acquisitionSettled: returned.length, releaseCalls: row.releaseCalls, releaseSettled: row.releaseSettled, releaseFulfilled: row.releaseFulfilled,
+          allReleasesFulfilled: row.releasePending.length === row.releaseFulfilled, allUnlocked: row.readers.every(value => value.unlocked), bodyLocked: row.body?.locked ?? null, joinAccepted: false }); } catch { /* preserve original failures */ }
+      }
+      throw new AggregateError(failures, "Abliteration client retirement failed");
+    }
     mark("retirement_assert");
     for (const row of acquisitions) {
       expect(row.releaseCalls).toBeGreaterThan(0);
@@ -337,6 +433,7 @@ afterEach(async () => {
 async function start(id: string, modelId = models[0], options: { apiKey?: string; signal?: AbortSignal; simpleCompletion?: boolean; tools?: boolean; reasoning?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"; image?: boolean } = {}) {
   if (!diagnostic.identity(current.test, id)) throw new Error("unmapped diagnostic scenario");
   current = { ...current, scenario: id };
+  callerSignal = options.signal;
   mark("register");
   const provider = await registerSingleProviderPlugin(plugin);
   mark("catalog");
