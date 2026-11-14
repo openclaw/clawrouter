@@ -77,14 +77,14 @@ test("unknown or interrupted native observations do not lower the dispatch bound
   }
 });
 
-test("compiler registration stays closed while qualified injected tariffs reserve the native maximum", () => {
+test("compiled native tariffs reserve the maximum while absent tariffs remain closed", () => {
   const manifest = fixture(), provider = compileProviderSnapshot([manifest]).providers[0];
   const endpoint = provider.endpoints.find(value => value.id === "search");
   assert.equal(endpoint.requestPricing, undefined);
   manifest.endpoints.search.requestPricing = structuredClone(tariff);
-  assert.throws(() => compileProviderSnapshot([manifest]), /requestPricing|invalid manifest/);
-  // Shared runtime qualifies this injected tariff; manifest activation stays separate.
-  for (const selected of [endpoint, { ...endpoint, requestPricing: tariff }]) {
+  const priced = compileProviderSnapshot([manifest]).providers[0].endpoints.find(value => value.id === "search");
+  assert.deepEqual(priced.requestPricing, tariff);
+  for (const selected of [endpoint, priced]) {
     const cost = estimateCost(null, wire.request.body, null, "search.web", selected);
     if (selected.requestPricing) assert.equal(cost.reserveMicros, 750);
     else assert.equal(cost.requestTariff, undefined);
@@ -108,8 +108,8 @@ test("existing provider-reported receipts remain distinct from a manifest reques
   assert.equal(requestOutcomeCost(tariff, body, true), null);
 });
 
-// The shared producer remains unactivated. These calculator fixtures construct
-// its published slot exclusively from the actual complete codec observation.
+// These pure calculator fixtures construct the shared observation slot
+// exclusively from the actual complete codec observation.
 function nativeUsage(observed, pricingVersion = tariff.version) {
   return { tokens: null, outcome: "success", nativeRequestUsage: {
     operation: "deepseek.search", pricingVersion, billableRequests: observed.billableRequests,
