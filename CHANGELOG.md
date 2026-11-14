@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Expose opt-in adaptive Fusion vote ordering through the endpoint client, retaining settled usage when selection fails.
+
 - Allow an opt-in adaptive worker selector in the experimental Fusion vote runner while preserving canonical full-panel answers.
 
 - Identify the rejected edit, source path, and missing or ambiguous anchor in Fusion draft-repair feedback without recording source text or applying a partial patch.

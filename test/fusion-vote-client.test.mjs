@@ -158,3 +158,48 @@ test('standard HTTP endpoint works without any provider-specific adapter', async
     assert.equal(result.answer, 'B'); assert.equal(models.length, 2);
   } finally { await new Promise(resolve => server.close(resolve)); }
 });
+
+
+test('adaptive endpoint scheduling skips unnecessary calls and retains usage', async () => {
+  const panel = input(); panel.workers[2].weight = 3;
+  const models = [], snapshots = [];
+  const result = await runFusionVote(panel, { ...options,
+    selectNext: snapshot => { snapshots.push(snapshot); return snapshot.remaining.at(-1); },
+    fetcher: async (_url, request) => {
+      models.push(JSON.parse(request.body).model);
+      return Response.json(envelope('B'));
+    },
+  });
+  assert.equal(result.status, 'ok'); assert.equal(result.answer, 'B');
+  assert.deepEqual(models, ['provider/three']);
+  assert.deepEqual(result.called, ['three']);
+  assert.equal(result.usageComplete, true);
+  assert.deepEqual(result.calls[0].usage, { promptTokens: 11, completionTokens: 7 });
+  // Preflight validates the panel without invoking the caller's policy.
+  assert.deepEqual(snapshots, [{ observed: [], remaining: ['one', 'two', 'three'] }]);
+});
+
+test('selector failures stop dispatch and preserve earlier settled usage', async () => {
+  for (const mode of ['unknown', 'repeated', 'throw']) {
+    let calls = 0;
+    const result = await runFusionVote(input(), { ...options,
+      selectNext: ({ observed }) => {
+        if (!observed.length) return 'one';
+        if (mode === 'throw') throw new Error('private selector sentinel');
+        return mode === 'repeated' ? 'one' : 'unknown';
+      },
+      fetcher: async () => { calls++; return Response.json(envelope('A')); },
+    });
+    assert.equal(calls, 1); assert.equal(result.status, 'failed');
+    assert.equal(result.error, 'vote_selection_failed');
+    assert.equal(result.calls[0].status, 'complete');
+    assert.deepEqual(result.calls[0].usage, { promptTokens: 11, completionTokens: 7 });
+    assert.ok(!JSON.stringify(result).includes('sentinel'));
+  }
+  let calls = 0;
+  const fetcher = async () => { calls++; return Response.json(envelope('A')); };
+  const failed = await runFusionVote(input(), { ...options, fetcher, selectNext: () => 'unknown' });
+  assert.equal(failed.error, 'vote_selection_failed'); assert.deepEqual(failed.calls, []);
+  await assert.rejects(runFusionVote(input(), { ...options, fetcher, selectNext: true }), /invalid_vote_request/);
+  assert.equal(calls, 0);
+});
