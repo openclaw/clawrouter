@@ -76,11 +76,15 @@ export class SpendLedger {
 export function replaceEdits(task, files, edits) {
   if (!Array.isArray(edits) || !edits.length || edits.length > 8) throw new Error('invalid_edits');
   const current = new Map(files.map(file => [file.path, file.content]));
-  for (const edit of edits) {
+  for (const [editIndex, edit] of edits.entries()) {
     if (!task.editPaths.includes(edit?.path) || typeof edit.search !== 'string' || !edit.search.length
       || typeof edit.replace !== 'string' || !current.has(edit.path)) throw new Error('invalid_edit');
     const original = current.get(edit.path), index = original.indexOf(edit.search);
-    if (index < 0 || original.indexOf(edit.search, index + 1) !== -1) throw new Error('search_must_match_once');
+    if (index < 0 || original.indexOf(edit.search, index + 1) !== -1) {
+      throw new Error('search_must_match_once', { cause: {
+        index: editIndex, path: edit.path, match: index < 0 ? 'missing' : 'ambiguous',
+      } });
+    }
     current.set(edit.path, original.slice(0, index) + edit.replace + original.slice(index + edit.search.length));
   }
   return validateEdits(task, [...current].map(([path, content]) => ({ path, content })));
