@@ -53,14 +53,16 @@ async function barriers() {
     }
   });
   await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
-  return { origin: `http://127.0.0.1:${server.address().port}`, async close() {
+  return { origin: `http://127.0.0.1:${server.address().port}`, releaseAll() {
+    for (const state of states.values()) { state.released = true; state.response?.end("released"); }
+  }, async close() {
     for (const state of states.values()) { state.released = true; state.response?.end("teardown"); }
     server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
   } };
 }
 
 async function withWorker(run) {
-  const failures = []; let gates, temporary, mf;
+  const failures = []; let gates, temporary, mf, retire;
   try {
     gates = await barriers();
     temporary = await mkdtemp(join(tmpdir(), "clawrouter-public-catalogs-"));
@@ -72,9 +74,14 @@ async function withWorker(run) {
       const text = await response.text(); assert.equal(response.status, 200, text); return JSON.parse(text);
     };
     await command("/__catalog/init", "POST");
+    retire = () => command("/__catalog/retire", "POST");
     await run({ origin, control: gates.origin, command, mf });
   } catch (error) { failures.push(error); }
   finally {
+    // Even a failed assertion releases the real producer and joins original
+    // Worker waitUntil/read/cancel promises before disposal. Cleanup is not proof.
+    gates?.releaseAll();
+    try { await retire?.(); } catch (error) { failures.push(error); }
     try { await gates?.close(); } catch (error) { failures.push(error); }
     try { await mf?.dispose(); } catch (error) { failures.push(error); }
     if (temporary !== undefined) try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); }
@@ -193,8 +200,11 @@ globalThis.fetch = async (input, init) => {
     activeReads: 0, eof: false, canceled: false, unlocked: false, readRejected: false, aborted: false, terminal: deferred(), pending: [] };
   list.push(proof);
   request.signal.addEventListener("abort", () => { proof.aborted = true; }, { once: true });
-  const response = await rawFetch(request), physical = response.body;
-  if (!physical) throw new Error("missing real public catalog body");
+  let response;
+  try { response = await rawFetch(request); }
+  catch (error) { proof.readRejected = true; proof.terminal.resolve(); throw error; }
+  const physical = response.body;
+  if (!physical) { proof.readRejected = true; proof.terminal.resolve(); throw new Error("missing real public catalog body"); }
   proof.status = response.status; proof.headers = [...response.headers]; proof.physical = physical;
   const reader = physical.getReader();
   const unlock = () => { if (!proof.unlocked) { reader.releaseLock(); proof.unlocked = true; proof.terminal.resolve(); } };
@@ -243,6 +253,11 @@ export default {
       await authorityCall(env, "/connections/initialize-all", [...new Set(cases.map(row => row.provider))].map(providerId => ({ providerId, enabled: true })));
       for (const row of cases) await putGrantCredentials(env, "oauth/" + row.id + "/" + row.provider, grant(row));
       return Response.json({ ready: true });
+    }
+    if (path === "/__catalog/retire" && request.method === "POST") {
+      const results = await Promise.allSettled([...records.keys()].map(join));
+      for (const result of results) if (result.status === "rejected") throw result.reason;
+      return Response.json({ retired: results.length });
     }
     const control = /^\/__catalog\/(activate|state|join|revoke|usage)\/([a-z_]+)$/.exec(path);
     if (control) {
