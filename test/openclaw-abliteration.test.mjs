@@ -234,10 +234,7 @@ test("actual OpenClaw Abliteration configured native client through workerd and 
       assert.equal(call.body.prompt_cache_retention, undefined);
       assert.ok(call.body.messages.some(message => ["system", "developer"].includes(message.role) && message.content === "Synthetic instructions"));
       if (id === "abliteration_notools") {
-        assert.equal(call.body.tools, undefined);
-        assert.ok(call.body.messages.some(message => message.role === "assistant" && message.content === '[tool call id=callfixture name=lookup] {}'));
-        assert.ok(call.body.messages.some(message => message.role === "user" && message.content === '[tool result id=callfixture name=lookup] synthetic-tool-result'));
-        assert.ok(call.body.messages.every(message => message.tool_calls === undefined && message.role !== "tool"));
+        assertAbliterationNoToolsReplay(call.body);
       } else {
         assert.equal(call.body.tools[0].function.name, "lookup");
         assert.ok(call.body.messages.some(message => message.role === "tool" && message.tool_call_id === "callfixture" && message.content === "synthetic-tool-result"));
@@ -309,6 +306,47 @@ test("actual OpenClaw Abliteration configured native client through workerd and 
   }
   if (failures.length === 1) throw failures[0];
   if (failures.length > 1) throw new AggregateError(failures, "Abliteration contract or retirement failed");
+});
+
+function assertAbliterationNoToolsReplay(body) {
+  // The pinned native direct serializer retains the empty tools marker and
+  // appends undeclared tool results to the assistant's text replay.
+  assert.deepEqual(body.tools, []);
+  const replay = body.messages.find(message => message.role === "assistant" && message.content ===
+    '[tool call id=callfixture name=lookup] {}\n[tool result id=callfixture name=lookup] synthetic-tool-result');
+  assert.ok(replay);
+  assert.equal(replay.reasoning_content, "synthetic-prior-thinking");
+  assert.ok(body.messages.every(message => message.tool_calls === undefined && message.role !== "tool"));
+}
+
+test("Abliteration no-tools oracle requires the pinned direct replay shape", async t => {
+  const payload = () => ({ tools: [], messages: [
+    { role: "system", content: "Synthetic instructions" },
+    { role: "assistant", reasoning_content: "synthetic-prior-thinking",
+      content: '[tool call id=callfixture name=lookup] {}\n[tool result id=callfixture name=lookup] synthetic-tool-result' },
+    { role: "user", content: "fixture abliteration_notools" },
+  ] });
+  const valid = payload(), before = structuredClone(valid);
+  assert.doesNotThrow(() => assertAbliterationNoToolsReplay(valid));
+  assert.deepEqual(valid, before);
+  const invalid = [
+    ["missing tools marker", body => { delete body.tools; }],
+    ["null tools marker", body => { body.tools = null; }],
+    ["nonempty tools", body => { body.tools.push({ type: "function", function: { name: "lookup" } }); }],
+    ["missing call", body => { body.messages[1].content = body.messages[1].content.split("\n")[1]; }],
+    ["altered call", body => { body.messages[1].content = body.messages[1].content.replace("[tool call id=callfixture", "[tool call id=foreign"); }],
+    ["missing result", body => { body.messages[1].content = body.messages[1].content.split("\n")[0]; }],
+    ["altered result", body => { body.messages[1].content = body.messages[1].content.replace("synthetic-tool-result", "different-result"); }],
+    ["wrong replay role", body => { body.messages[1].role = "user"; }],
+    ["old split-role expectation", body => { const [call, result] = body.messages[1].content.split("\n"); body.messages[1].content = call; body.messages.splice(2, 0, { role: "user", content: result }); }],
+    ["native tool calls", body => { body.messages[1].tool_calls = [{ id: "callfixture", type: "function", function: { name: "lookup", arguments: "{}" } }]; }],
+    ["native tool role", body => { body.messages.push({ role: "tool", tool_call_id: "callfixture", content: "synthetic-tool-result" }); }],
+    ["missing reasoning history", body => { delete body.messages[1].reasoning_content; }],
+  ];
+  for (const [name, mutate] of invalid) await t.test(name, () => {
+    const body = payload(); mutate(body);
+    assert.throws(() => assertAbliterationNoToolsReplay(body), assert.AssertionError);
+  });
 });
 
 function observeReaderOperation(operations, kind, pending, signals) {
