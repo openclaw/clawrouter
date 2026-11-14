@@ -196,8 +196,8 @@ export async function collectFusionProposals(config: FusionConfig, original: Rec
       const maxResponseBytes = ADVISER_RESPONSE_OVERHEAD_BYTES + config.maxProposalChars * 6;
       const content = completionText(await readJsonBeforeDeadline(response, maxResponseBytes, deadline, retain)).trim();
       bodyComplete = true;
-      return content
-        ? { model, content: content.slice(0, config.maxProposalChars) }
+      return content && content.length <= config.maxProposalChars
+        ? { model, content }
         : { model, failed: true as const };
     } catch (error) {
       if (isAccountingAdmissionFailure(error)) throw error;

@@ -126,6 +126,46 @@ test("fusion accepts completed adviser text parts with empty optional metadata",
   assert.deepEqual(result.failedModels, []);
 });
 
+for (const [name, content, accepted] of [
+  ["exact character boundary", "x".repeat(256), true],
+  ["outer whitespace", ` \n${"x".repeat(256)}\n `, true],
+  ["overlong complete draft", `${"x".repeat(256)}\nReject the preceding proposal.`, false],
+  ["surrogate pair at the boundary", `${"x".repeat(255)}😀`, false],
+]) {
+  test(`fusion preserves complete advice at the ${name}`, async () => {
+    const config = normalizeFusionConfig({ adviserModels: ["local/bounded"], maxProposalChars: 256 });
+    const observed = observeUsage(Response.json({
+      choices: [{ finish_reason: "stop", message: { content } }],
+      usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 },
+    }));
+    let calls = 0;
+    const original = { messages: [{ role: "user", content: "solve" }] };
+    const result = await collectFusionProposals(config, original, async () => {
+      calls++;
+      return observed.response;
+    });
+    assert.equal(calls, 1, "discarded advice must not trigger another inference");
+    assert.deepEqual(result.proposals, accepted ? [{ model: "local/bounded", content: content.trim() }] : []);
+    assert.deepEqual(result.failedModels, accepted ? [] : ["local/bounded"]);
+    if (!accepted) {
+      assert.deepEqual(buildAggregatorBody(original, config, result.proposals), { ...original, model: config.aggregatorModel });
+    }
+    const usage = await observed.result;
+    assert.equal(usage.delivery, "complete");
+    assert.equal(usage.tokens?.total, 10);
+    await observed.retired;
+  });
+}
+
+test("fusion keeps complete advisers when another exceeds the character limit", async () => {
+  const config = normalizeFusionConfig({ adviserModels: ["local/long", "local/complete"], maxProposalChars: 256 });
+  const result = await collectFusionProposals(config, { messages: [] }, async model => Response.json({
+    choices: [{ finish_reason: "stop", message: { content: model === "local/long" ? "x".repeat(257) : "complete advice" } }],
+  }));
+  assert.deepEqual(result.proposals, [{ model: "local/complete", content: "complete advice" }]);
+  assert.deepEqual(result.failedModels, ["local/long"]);
+});
+
 test("fusion fails open when adviser bodies stall or exceed their byte bound", async () => {
   const stalledConfig = { ...normalizeFusionConfig({ adviserModels: ["local/stalled"] }), adviserTimeoutMs: 25 };
   let aborted = false, observed;
