@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Record local Fusion model loading and inference durations separately from call wall time, preserving unknown timings in benchmark totals.
+
 - Add an opt-in fixed-choice Fusion vote runner with conservative early stopping and an offline cost replay tool.
 
 - Add bounded pairwise evidence packing for offline Fusion experiments, with numeric-only inputs and no model calls.

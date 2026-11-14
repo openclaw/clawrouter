@@ -75,6 +75,16 @@ Declare the profile before generation and use it for every compared arm.
 It supplements public examples; independent hidden grading is still required.
 Changing a profile creates a new experiment, not a revision of historical scores.
 
+Local repository calls also record `runtimeTimingsNs` from the local server:
+`total`, `load`, `promptEval`, and `generation`, all in nanoseconds.
+`runtimeTimingStatus` distinguishes `available`, `missing`, and `invalid` metadata.
+Per-task and per-strategy totals stay `null` if any dispatched call lacks valid
+timings or a total exceeds the safe integer range. Missing timings never count
+as zero. For inference-only comparisons, add `promptEval` and `generation`;
+report model loading separately. These server measurements do not replace call
+or agent wall time, which includes other overhead. Existing receipts cannot
+reconstruct these measurements from `elapsedMs`.
+
 Local repository scores require a completed agent outcome as well as independent
 acceptance: `submitted` for legacy and grounded execution, or `verified` for
 checked execution. A patch left at a turn limit, deadline, or missing outcome
