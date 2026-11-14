@@ -75,6 +75,16 @@ validation. The provider compiler preserves the existing validation order.
 This module does not run probes, refresh credentials, or decide budget admission;
 runtime polling and accounting retain their current owners.
 
+### Model discovery declaration ownership
+
+`scripts/provider-catalogs.mjs` owns the registered discovery request/response
+pairs and the existing native and public catalog qualification checks. It
+preserves provider origins, credential binding constraints, GET-only routes,
+and the qualified opaque model-ID retrieval variants. The provider compiler
+calls these checks in the same order after validating the manifest schema.
+This is upstream model discovery validation; it does not import the shared
+model catalogue or authorize a new endpoint, protocol, or provider.
+
 ### Model contract ownership
 
 `shared/provider-model.ts` owns `ProviderModelDefinition` and the router-qualified
