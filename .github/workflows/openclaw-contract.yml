@@ -41,6 +41,9 @@ jobs:
       max-parallel: 4
       matrix:
         include:
+          - consumer: bedrock-memory
+            ref: 0eed32b19ce3eb54b38c7dde1b88d0cf2f9613cd
+            test: test/openclaw-bedrock-memory.test.mjs
           - consumer: volcengine-payg
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-volcengine-payg.test.mjs
