@@ -13,9 +13,9 @@ import { musicWave } from "../worker/test/openrouter-music-runtime-fixture.mjs";
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 import { startBundledWorkerdFixture } from "./helpers/workerd.mjs";
 
-// Provisional published source, NOT a qualified client release. Its manifest
-// model envelope needs the separately owned SDK correction before this can pass.
-const sourceHead = "49743aff29c4adf37188725b130325026d3dad18";
+// Published canonical manifest-model correction, NOT a qualified client release.
+// Actual registered SDK/Worker execution remains unrun.
+const sourceHead = "15aeb223287b93cf26917e846f658dd53143eb4d";
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const root = fileURLToPath(new URL("../", import.meta.url));
 const snapshotPath = resolve(root, "worker/generated/provider-snapshot.json");
@@ -250,8 +250,8 @@ for (const route of ["native", "manifest"]) {
       assert.deepEqual(offers.filter(offer => offer.modelId !== null).map(offer => offer.modelId).sort(), models.map(model => `openrouter/${model}`).sort());
       assert.ok(offers.filter(offer => offer.modelId !== null).every(offer => offer.eligible));
       if (route === "manifest") {
-        // SDK497's uncorrected envelope is deliberately not rewritten by this
-        // fixture. The real complete index distinguishes Google from OpenRouter.
+        // Retain the original wrong-ID regression: the complete index distinguishes
+        // Google from OpenRouter. The corrected SDK must send the router ID.
         const refused = await fetch(f.origin + "/v1/proxy/openrouter/music_generate", { method: "POST", headers: headers("m0_mp3"), body: JSON.stringify({ body: body(positives[0]) }) });
         assert.equal(refused.status, 400); assert.equal((await refused.json()).error.code, "model_provider_mismatch");
         assert.deepEqual(await (await fetch(f.origin + "/fixture/state")).json(), []);

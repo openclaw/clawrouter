@@ -51,12 +51,14 @@ harness also compiles a schema-validated configuration with only
 manifest route. This is configured-manifest coverage, not a second shipping offer.
 Neither configuration invents catalog entries or changes the client request.
 
-The provisional consumer pin `49743aff29c4adf37188725b130325026d3dad18` is not a
-qualified release. Its OpenRouter manifest envelope currently sends the upstream
-model ID, which belongs to Google in the router's complete model index; the
-manifest route requires the OpenRouter router ID. This remains a separate SDK
-correction. The authored registered-tool assertions deliberately require the
-correct contract and are not expected to pass that pin's manifest path.
+The published consumer pin `15aeb223287b93cf26917e846f658dd53143eb4d` contains the
+canonical OpenRouter manifest-model correction. The previous pin
+`49743aff29c4adf37188725b130325026d3dad18` sent the upstream model ID, which belongs
+to Google in the router's complete model index. The corrected manifest envelope
+uses the selected OpenRouter router ID; native request bodies remain unchanged.
+The wrong-ID Worker denial regression and registered-tool assertions are unchanged.
+This source correction is not a qualified client release: SDK application tests,
+types, lint and builds remain unrun, and its native readiness gate remains held.
 
 Actual registered SDK/Worker execution is unrun and publication is held. The
 harness retains explicit policy-fixed 700-micro-unit receipts separately from

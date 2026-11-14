@@ -42,7 +42,7 @@ jobs:
       matrix:
         include:
           - consumer: openrouter-music
-            ref: 49743aff29c4adf37188725b130325026d3dad18
+            ref: 15aeb223287b93cf26917e846f658dd53143eb4d
             test: test/openclaw-openrouter-music.test.mjs
           - consumer: byteplus-payg
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
