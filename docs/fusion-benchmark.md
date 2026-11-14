@@ -392,6 +392,11 @@ three development tasks, not independent holdout evidence.
 
 ### Single-draft supplied checks
 
+For baseline calibration without a supplied reproducer, combine
+`FUSION_PAIR_EXECUTOR=single-draft` with `FUSION_PAIR_CONTROLS_ONLY=1`.
+Each fixed model gets one patch attempt and independent acceptance grading.
+No candidate or fallback runs, so these receipts do not establish a Fusion gain.
+
 `FUSION_PAIR_POLICY=contract-draft` uses one cheap-model call to propose
 1–8 exact source edits. It receives the original editable source, declared
 read-only context, visible test examples and the supplied reproducer. The
