@@ -60,11 +60,6 @@ export function validateEndpoints(manifest, literalUpstreamPathPattern) {
         || !manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "llm.responses")
         || manifest.capabilities.some(capability => capability.endpoint === id && (capability.id !== "llm.responses" || capability.methods?.some(method => method !== "POST"))))
         throw new Error(`endpoint ${id} requestPricing requires the qualified xAI Responses outcome contract`);
-    } else if (endpoint.requestPricing?.protocol) {
-      if (endpoint.requestPricing.protocol !== "deepseek.search" || manifest.id !== "deepseek"
-        || endpoint.path !== "/v1/tools/search" || (endpoint.method ?? "POST") !== "POST"
-        || endpoint.requestFormat !== "deepseek.search" || endpoint.responseFormat !== "deepseek.search")
-        throw new Error(`endpoint ${id} requestPricing requires the qualified deepseek.search native-result contract`);
     } else if (endpoint.requestPricing) {
       // The runtime can select a flat request tariff without provider branches.
       // Qualification remains explicit until another protocol has sourced billing semantics.
