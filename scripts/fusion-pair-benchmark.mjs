@@ -214,8 +214,11 @@ export async function runPairBenchmark({ repo, qualificationPath, taskManifest, 
           const gradingStarted = performance.now();
           try { verdict = await grade(task, receipt.image, result.files, repo); }
           finally { gradingElapsedMs = Math.round(performance.now() - gradingStarted); }
-          if (verdict.valid !== true) throw new Error('incomplete_test_run');
           const { files, ...trace } = result;
+          if (verdict.valid !== true) {
+            Object.assign(row, { ...trace, verdict, score: 0 });
+            throw new Error('incomplete_test_run');
+          }
           Object.assign(row, { ...trace, verdict, score: Number(verdict.passed && verdict.tests === receipt.oracleTests
             && verdict.skipped === receipt.oracleSkipped && result.publicPassed && (!probeRegressionGate || result.probeRegressionPassed === true)), status: 'complete' });
           if (strategy === 'probe-selection') {
