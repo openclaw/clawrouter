@@ -303,7 +303,7 @@ async function readerObservers() {
   const start = text.indexOf("type ReaderOperation = "), end = text.indexOf("\nbeforeEach(", start);
   assert.ok(start >= 0 && end > start);
   const code = stripTypeScriptTypes(text.slice(start, end));
-  const sdk = new Function(code + "; return { observeReaderOperation, joinReaderOperations };")();
+  const sdk = new Function(code + "; return { observeReaderOperation, joinReaderOperations, acceptStoredSdkCancel };")();
   return [["Worker", { observeReaderOperation, joinReaderOperations }], ["SDK fixture", sdk]];
 }
 
@@ -432,9 +432,9 @@ test("SDK afterEach snapshots settled original products without accepting failed
   const release = Promise.resolve(), records = diagnostic.store(); let cleanup;
   const acquisitions = [{ context, returned: Promise.resolve({}), released: release, releasePending: [release], releaseCalls: 1, releaseSettled: 1, releaseFulfilled: 1, body, readers: [{ pending: operations, unlocked: true, trace }] }];
   const code = stripTypeScriptTypes(sdkText.slice(sdkText.indexOf("afterEach(async () => {"), sdkText.indexOf("\nasync function start(")));
-  new Function("afterEach", "acquisitions", "joinReaderOperations", "mark", "remember", "current", "observationErrors", "vi", "diagnostic", "failureRecords", "origin", "diagnosticFetch", code)(
+  new Function("afterEach", "acquisitions", "joinReaderOperations", "mark", "remember", "current", "observationErrors", "vi", "diagnostic", "failureRecords", "origin", "diagnosticFetch", "bodyPassed", "started", "acceptStoredSdkCancel", code)(
     fn => { cleanup = fn; }, acquisitions, joinReaderOperations, () => {}, (ctx, error, observation) => { assert.equal(records.add(diagnostic.record(ctx, error, observation)), true); }, context, [],
-    { restoreAllMocks() {} }, diagnostic, records, "https://fixture.example", async () => new Response(null, { status: 204 }));
+    { restoreAllMocks() {} }, diagnostic, records, "https://fixture.example", async () => new Response(null, { status: 204 }), true, 1, () => false);
   const result = await Promise.allSettled([cleanup()]);
   assert.equal(result[0].status, "rejected"); assert.equal(result[0].reason.errors[0].errors[0], undefined);
   const snapshot = records.values().find(record => record.observation?.site === "sdk_join");
@@ -442,6 +442,102 @@ test("SDK afterEach snapshots settled original products without accepting failed
   assert.equal(snapshot.observation.allSettled, true); assert.equal(snapshot.observation.allReleasesFulfilled, true);
   assert.equal(snapshot.observation.allUnlocked, true); assert.equal(snapshot.observation.bodyLocked, false); assert.equal(snapshot.observation.joinAccepted, false);
   assert.equal(snapshot.observation.sameClosed, false); assert.equal(snapshot.observation.sameRead, false);
+});
+
+function sdkCleanupHarness(acquisitions, { bodyPassed = true, started = acquisitions.length, observationErrors = [] } = {}, acceptStoredSdkCancel) {
+  const records = diagnostic.store(); let cleanup;
+  const context = { source: "sdk", test: "T26", scenario: "error", operation: "reader_join", ordinal: 0 };
+  const code = stripTypeScriptTypes(sdkText.slice(sdkText.indexOf("afterEach(async () => {"), sdkText.indexOf("\nasync function start(")));
+  const expect = value => ({ toBeGreaterThan(n) { assert.ok(value > n); }, toBe(other) { assert.equal(value, other); }, toEqual(other) { assert.deepEqual(value, other); }, toHaveLength(n) { assert.equal(value.length, n); } });
+  new Function("afterEach", "acquisitions", "joinReaderOperations", "mark", "remember", "current", "observationErrors", "vi", "diagnostic", "failureRecords", "origin", "diagnosticFetch", "bodyPassed", "started", "acceptStoredSdkCancel", "expect", code)(
+    fn => { cleanup = fn; }, acquisitions, sdkJoinForCleanup, () => {}, (ctx, reason, observation) => { assert.equal(records.add(diagnostic.record(ctx, reason, observation)), true); }, context, observationErrors,
+    { restoreAllMocks() {} }, diagnostic, records, "https://fixture.example", async () => new Response(null, { status: 204 }), bodyPassed, started, acceptStoredSdkCancel, expect);
+  return { cleanup, records };
+}
+// Bound once from the actual SDK helper source, never the Worker classifier.
+const sdkHelpers = new Function(stripTypeScriptTypes(sdkText.slice(sdkText.indexOf("type ReaderOperation = "), sdkText.indexOf("\nbeforeEach("))) + ";return { observeReaderOperation, joinReaderOperations, acceptStoredSdkCancel };")();
+const sdkJoinForCleanup = sdkHelpers.joinReaderOperations;
+async function nativeStoredErrorCase(options = {}) {
+  const reason = options.undefinedReason ? undefined : new Error("fixed native stored error"), foreign = new Error("fixed native stored error");
+  const guard = new AbortController(), caller = new AbortController(); let controller;
+  const body = new ReadableStream({ start(value) { controller = value; }, cancel() { if (options.underlyingFailure) throw foreign; } });
+  const reader = body.getReader(), trace = diagnostic.readerTrace(reader, 1, 1, guard.signal, options.t27 ? caller.signal : undefined, "guard_input");
+  if (!options.lateAbort) { guard.abort(reason); if (options.t27) caller.abort(reason); }
+  const readOp = trace.begin("read", []), reading = trace.invoke(readOp, reader.read, reader, []), operations = [];
+  sdkHelpers.observeReaderOperation(operations, "read", reading, [guard.signal]);
+  if (!options.underlyingFailure) controller.error(options.foreignStored ? foreign : reason);
+  const unlock = () => { trace.unlocking(); reader.releaseLock(); trace.unlocked(); };
+  if (options.afterUnlock) unlock();
+  const cancelOp = trace.begin("cancel", []), canceled = trace.invoke(cancelOp, reader.cancel, reader, []);
+  sdkHelpers.observeReaderOperation(operations, "cancel", canceled, [guard.signal]);
+  operations[1].detail = () => trace.snapshot(cancelOp);
+  if (!options.missingWitness) operations[1].storedError = (value, needCaller) => trace.storedErrorCancel(cancelOp, canceled, value, needCaller);
+  if (!options.locked && !options.afterUnlock) unlock();
+  await Promise.allSettled([reading, canceled]);
+  if (options.lateAbort) { guard.abort(reason); if (options.t27) caller.abort(reason); }
+  if (options.unrelatedRead) { const pending = Promise.reject(foreign); sdkHelpers.observeReaderOperation(operations, "read", pending, [guard.signal]); await Promise.allSettled([pending]); }
+  const release = options.releaseFailure ? Promise.reject(foreign) : Promise.resolve(); await Promise.allSettled([release]);
+  const context = { source: "sdk", test: options.t27 ? "T27" : "T26", scenario: options.t27 ? "cancel" : "error", operation: "guard", ordinal: 1 };
+  const row = { context, returned: Promise.resolve({}), released: Promise.resolve(), releasePending: [release], releaseCalls: 1, releaseSettled: 1, releaseFulfilled: options.releaseFailure ? 0 : 1, body, readers: [{ reader, pending: operations, unlocked: !options.locked, trace }] };
+  return { reason, foreign, row, trace, cancelOp, operations, finish() { if (body.locked) unlock(); } };
+}
+function flattenedFailures(error) { return error instanceof AggregateError ? error.errors.flatMap(flattenedFailures) : [error]; }
+
+test("SDK stored-error classification accepts only original native identities after full retirement", async t => {
+  for (const t27 of [false, true]) await t.test(t27 ? "T27 caller abort" : "T26 guard finalization", async () => {
+    const actual = await nativeStoredErrorCase({ t27 });
+    try {
+      const { cleanup } = sdkCleanupHarness([actual.row], {}, sdkHelpers.acceptStoredSdkCancel);
+      await cleanup();
+      assert.equal(actual.trace.snapshot(actual.cancelOp).closedAfterUnlock, true);
+      assert.equal(actual.trace.snapshot(actual.cancelOp).sameClosedFinal, true);
+      assert.equal(actual.trace.snapshot(actual.cancelOp).eof, false);
+      assert.equal(actual.body?.locked ?? actual.row.body.locked, false);
+    } finally { actual.finish(); }
+  });
+});
+
+test("SDK stored-error classification rejects missing, foreign, late and incomplete evidence", async t => {
+  for (const options of [{ underlyingFailure: true }, { foreignStored: true }, { undefinedReason: true }, { missingWitness: true }, { afterUnlock: true }, { lateAbort: true }, { unrelatedRead: true }, { releaseFailure: true }, { locked: true }, { bodyPassed: false }]) await t.test(Object.keys(options)[0], async () => {
+    const actual = await nativeStoredErrorCase(options);
+    try {
+      const { cleanup } = sdkCleanupHarness([actual.row], { bodyPassed: options.bodyPassed !== false }, sdkHelpers.acceptStoredSdkCancel);
+      const result = await Promise.allSettled([cleanup()]);
+      assert.equal(result[0].status, "rejected");
+      if (options.unrelatedRead || options.releaseFailure || options.foreignStored) assert.ok(flattenedFailures(result[0].reason).includes(actual.foreign));
+      if (options.undefinedReason) assert.ok(flattenedFailures(result[0].reason).includes(undefined));
+      if (options.bodyPassed === false) {
+        const primary = undefined, both = await Promise.allSettled([Promise.reject(primary), Promise.reject(result[0].reason)]);
+        assert.equal(both[0].status, "rejected"); assert.equal(both[0].reason, primary); assert.equal(both[1].reason, result[0].reason);
+      }
+    } finally { actual.finish(); }
+  });
+});
+
+test("SDK stored-error admission waits for original release and operation joins", async () => {
+  const actual = await nativeStoredErrorCase(); let release, finishOperation;
+  const heldRelease = new Promise(resolve => { release = resolve; }), heldRead = new Promise(resolve => { finishOperation = resolve; });
+  actual.row.released = heldRelease; actual.row.releasePending = [heldRelease];
+  sdkHelpers.observeReaderOperation(actual.operations, "read", heldRead, []);
+  const { cleanup } = sdkCleanupHarness([actual.row], {}, sdkHelpers.acceptStoredSdkCancel);
+  let ended = false; const result = cleanup(); void result.then(() => { ended = true; }, () => { ended = true; });
+  try {
+    await new Promise(resolve => setImmediate(resolve)); assert.equal(ended, false);
+    release(); await new Promise(resolve => setImmediate(resolve)); assert.equal(ended, false);
+    finishOperation(); await result;
+  } finally { release(); finishOperation(); await Promise.allSettled([result]); actual.finish(); }
+});
+
+test("SDK stored-error predicate cannot accept synchronous throws or foreign operation ownership", async () => {
+  const actual = await nativeStoredErrorCase();
+  try {
+    const op = actual.trace.begin("cancel", []);
+    assert.throws(() => actual.trace.invoke(op, () => { throw actual.reason; }, actual.row.readers[0].reader, []), error => error === actual.reason);
+    assert.equal(actual.trace.storedErrorCancel(op, actual.operations[1].pending, actual.reason, false), false);
+    assert.equal(actual.trace.storedErrorCancel({ ...actual.cancelOp }, actual.operations[1].pending, actual.reason, false), false);
+    assert.equal(sdkHelpers.acceptStoredSdkCancel({ test: "T25", scenario: "invalid" }, actual.operations[1], actual.reason, true), false);
+    assert.equal(sdkHelpers.acceptStoredSdkCancel({ test: "T27", scenario: "cancel" }, actual.operations[1], actual.reason, true), false);
+  } finally { actual.finish(); }
 });
 
 test("Abliteration diagnostics map all 27 registered tests and 30 scenarios without interpolated-title assumptions", () => {
@@ -626,10 +722,10 @@ test("Abliteration diagnostics join original cleanup before reporting and preser
   const begin = sdkText.indexOf("afterEach(async () => {"), end = sdkText.indexOf("\nasync function start(", begin);
   const code = stripTypeScriptTypes(sdkText.slice(begin, end));
   let cleanup;
-  new Function("afterEach", "acquisitions", "joinReaderOperations", "mark", "remember", "current", "observationErrors", "vi", "diagnostic", "failureRecords", "origin", "diagnosticFetch", code)(
+  new Function("afterEach", "acquisitions", "joinReaderOperations", "mark", "remember", "current", "observationErrors", "vi", "diagnostic", "failureRecords", "origin", "diagnosticFetch", "bodyPassed", "started", "acceptStoredSdkCancel", code)(
     callback => { cleanup = callback; }, acquisitions, joinReaderOperations, () => {}, () => {}, outerContext("reader_join"), [],
     { restoreAllMocks() { restored = true; } }, diagnostic, records, "https://fixture.example",
-    async () => { sent++; assert.equal(readDone, true); assert.equal(restored, true); throw writerFailure; });
+    async () => { sent++; assert.equal(readDone, true); assert.equal(restored, true); throw writerFailure; }, false, 1, () => false);
   let finished = false; const pending = cleanup().finally(() => { finished = true; }); void pending.catch(() => {});
   await new Promise(resolve => setImmediate(resolve)); assert.equal(sent, 0); assert.equal(finished, false);
   release();
@@ -690,6 +786,45 @@ test("actual Worker waitUntil retirement failure retains its typed site through 
   finally { try { await mf?.dispose(); } catch (error) { failures.push(error); } try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); } }
   if (failures.length === 1) throw failures[0];
   if (failures.length) throw new AggregateError(failures, "retirement site or cleanup failed");
+});
+
+test("native fulfilled sibling cancel survives the Worker failed-read branch and real control relay", { timeout: 30_000 }, async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "clawrouter-abliteration-sibling-"));
+  const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
+  const body = new ReadableStream(), reader = body.getReader(), trace = diagnostic.readerTrace(reader, 1, 1, undefined, undefined, "fetch_input");
+  const operand = {}, cancelOp = trace.begin("cancel", [operand]), canceled = trace.invoke(cancelOp, reader.cancel, reader, [operand]);
+  const pending = []; observeReaderOperation(pending, "cancel", canceled, []); pending[0].detail = () => trace.snapshot(cancelOp);
+  await canceled; trace.unlocking(); reader.releaseLock(); trace.unlocked();
+  const readOp = trace.begin("read", []), reading = trace.invoke(readOp, reader.read, reader, []);
+  observeReaderOperation(pending, "read", reading, []); pending[1].detail = () => trace.snapshot(readOp);
+  await Promise.allSettled([reading]);
+  const proof = { returned: Promise.resolve(), body, ordinal: 1, errors: [], readers: [{ pending, unlocked: true, terminal: { promise: Promise.resolve() }, trace }] };
+  const records = [], opaque = makeDiagnostic(), source = routerFixture();
+  const retireCode = source.slice(source.indexOf("async function retire()"), source.indexOf("\nexport default", source.indexOf("async function retire()")));
+  const retire = new Function("records", "inputs", "joinReaderOperations", "remember", "workerContext", retireCode + ";return retire;")([], [proof], joinReaderOperations,
+    (context, observation) => records.push(opaque.record(context, undefined, observation)), (operation, ordinal) => ({ source: "worker", test: "T00", scenario: "none", operation, ordinal }));
+  const retiring = retire(); let mf; const failures = [];
+  try {
+    await assert.rejects(retiring, AggregateError);
+    assert.equal(proof.readers[0].pendingSettled, undefined);
+    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture());
+    const origin = String(await mf.ready).replace(/\/$/, "");
+    await diagnostic.flush(records, origin, fetch);
+    const arrived = await retrieveDiagnostics(origin), sibling = arrived.find(record => record.observation?.kind === "cancel");
+    assert.ok(sibling); assert.equal(sibling.observation.state, "fulfilled"); assert.equal(sibling.observation.op, 1);
+    assert.equal(sibling.observation.operandPresent, true); assert.equal(sibling.observation.operandDefined, true);
+    assert.ok(sibling.observation.unlockInvokeSeq > sibling.observation.settleSeq); assert.ok(sibling.observation.unlockReturnSeq > sibling.observation.unlockInvokeSeq);
+    assert.equal(sibling.observation.operandSameRead, false);
+    assert.equal(sibling.observation.allUnlocked, true); assert.equal(sibling.observation.bodyLocked, false); assert.equal(sibling.observation.joinAccepted, false);
+    assert.equal(arrived.find(record => record.observation?.kind === "read").observation.state, "rejected");
+  } catch (error) { failures.push(error); }
+  finally {
+    await Promise.allSettled([reading, canceled, retiring]);
+    try { await mf?.dispose(); } catch (error) { failures.push(error); }
+    try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length) throw new AggregateError(failures, "sibling evidence or cleanup failed");
 });
 
 function routerFixture() {
@@ -769,7 +904,7 @@ async function retire() {
       catch (error) {
         for (const operation of row.pending) {
           const detail = operation.detail?.();
-          if (detail?.state === "rejected" && !operation.expectedAbort) remember(workerContext("worker_retire", proof.ordinal), {
+          if (detail && (operation.kind === "cancel" || (detail.state === "rejected" && !operation.expectedAbort))) remember(workerContext("worker_retire", proof.ordinal), {
             site: operation.kind === "cancel" ? "cancel_join" : "read_join", ...detail, allUnlocked: row.unlocked, bodyLocked: proof.body?.locked ?? null, joinAccepted: false,
           });
         }
