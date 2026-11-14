@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { runExactVote } from './fusion-exact-vote.mjs';
 
 const responseLimit = 128 * 1024;
-const failures = new Set(['vote_http_error', 'vote_response_limit', 'vote_invalid_response', 'vote_incomplete_response']);
+const failures = new Set(['vote_http_error', 'vote_response_limit', 'vote_invalid_response', 'vote_incomplete_response', 'vote_selection_failed']);
 
 async function readResponse(response) {
   if (!response.body) throw new Error('vote_invalid_response');
@@ -28,14 +28,15 @@ async function readResponse(response) {
 
 /** Invoke a frozen finite-choice panel through an existing compatible gateway. */
 export async function runFusionVote(input, { endpoint, apiKey, signal, fetcher = fetch,
-  deadlineMs = 120000, requestTimeoutMs = 30000 } = {}) {
+  deadlineMs = 120000, requestTimeoutMs = 30000, selectNext } = {}) {
   const url = new URL(endpoint);
   if (url.username || url.password || url.search || url.hash
     || !(url.protocol === 'https:' || url.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname))) {
     throw new Error('invalid_vote_endpoint');
   }
   if (typeof apiKey !== 'string' || !apiKey.length || apiKey.length > 8192 || /[\s\x00-\x1f\x7f]/.test(apiKey)
-    || typeof fetcher !== 'function' || signal !== undefined && !(signal instanceof AbortSignal)
+    || typeof fetcher !== 'function' || selectNext !== undefined && typeof selectNext !== 'function'
+    || signal !== undefined && !(signal instanceof AbortSignal)
     || !Number.isSafeInteger(deadlineMs) || deadlineMs < 1 || deadlineMs > 300000
     || !Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs < 1 || requestTimeoutMs > deadlineMs
     || typeof input?.prompt !== 'string' || !input.prompt.trim() || Buffer.byteLength(input.prompt) > 32768
@@ -51,6 +52,10 @@ export async function runFusionVote(input, { endpoint, apiKey, signal, fetcher =
   await runExactVote(panel, async () => null);
   const deadline = AbortSignal.any([AbortSignal.timeout(deadlineMs), ...(signal ? [signal] : [])]);
   const calls = [];
+  const selector = selectNext === undefined ? undefined : state => {
+    try { return selectNext(state); }
+    catch { throw new Error('vote_selection_failed'); }
+  };
   try {
     const result = await runExactVote(panel, async id => {
       deadline.throwIfAborted();
@@ -96,10 +101,11 @@ export async function runFusionVote(input, { endpoint, apiKey, signal, fetcher =
         call.error = requestSignal.aborted ? 'vote_deadline' : failures.has(error?.message) ? error.message : 'vote_transport_failed';
         throw new Error(call.error);
       }
-    });
+    }, { selectNext: selector });
     return { status: 'ok', ...result, calls, usageComplete: calls.every(call => call.usage !== null) };
   } catch (error) {
-    return { status: 'failed', error: deadline.aborted ? 'vote_deadline' : failures.has(error?.message)
+    return { status: 'failed', error: deadline.aborted ? 'vote_deadline'
+      : error?.message === 'invalid_vote_selection' ? 'vote_selection_failed' : failures.has(error?.message)
       || error?.message === 'vote_deadline' ? error.message : 'vote_transport_failed', calls };
   }
 }

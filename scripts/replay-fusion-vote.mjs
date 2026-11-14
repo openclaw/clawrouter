@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { runExactVote } from './fusion-exact-vote.mjs';
 
 /** Replay frozen answers and historical costs without invoking any provider. */
-export async function replayFusionVote(input) {
+export async function replayFusionVote(input, { selectNext } = {}) {
   if (!Array.isArray(input?.cases) || !input.cases.length || input.cases.length > 10_000
     || !Array.isArray(input.workers)) throw new Error('invalid_vote_cases');
   const width = input.workers.length;
@@ -16,14 +16,16 @@ export async function replayFusionVote(input) {
     }
     return { answers: Array.from(row.answers), costs: Array.from(row.costs) };
   });
-  const panel = { version: input.version, choices: input.choices, workers: input.workers };
+  const panel = { version: input.version,
+    choices: Array.isArray(input.choices) ? Array.from(input.choices) : input.choices,
+    workers: Array.from(input.workers, worker => ({ id: worker?.id, weight: worker?.weight, priority: worker?.priority })) };
   let calls = 0, cost = 0, fullCost = 0, earlyStopped = 0;
   for (const row of cases) {
     const indices = new Map(panel.workers.map((worker, index) => [worker.id, index]));
     const invoke = id => row.answers[indices.get(id)];
     // Run the full panel as well: invalid skipped answers must still fail replay.
     const full = await runExactVote(panel, invoke, { earlyStop: false });
-    const result = await runExactVote(panel, invoke);
+    const result = await runExactVote(panel, invoke, { selectNext });
     if (result.answer !== full.answer) throw new Error('vote_answer_mismatch');
     calls += result.called.length;
     cost += result.called.reduce((sum, id) => sum + row.costs[indices.get(id)], 0);

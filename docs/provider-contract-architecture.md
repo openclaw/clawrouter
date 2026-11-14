@@ -94,6 +94,16 @@ provider compiler calls it in the same validation order. This module does not
 create jobs, poll, cancel, download files, or settle usage; runtime job ownership
 and execution stay with their existing owners.
 
+### Endpoint declaration ownership
+
+`scripts/provider-endpoints.mjs` compiles endpoint metadata and checks endpoint
+transport, pricing, model passthrough, and path constraints. The provider
+compiler validates the manifest schema first and supplies its canonical literal
+upstream-path pattern; the endpoint module does not maintain a second pattern.
+Normalization and semantic validation retain their existing order and defaults.
+This build-time boundary does not change runtime routing or authorize additional
+provider protocols, credentials, or endpoints.
+
 ### Model contract ownership
 
 `shared/provider-model.ts` owns `ProviderModelDefinition` and the router-qualified

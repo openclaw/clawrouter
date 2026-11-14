@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "google-image-opaque-pricing",
+      "split": "development",
+      "base": "c52965a07c09e4b68227a7806a676ee48942e24f",
+      "oracle": "994c37377bc25fcfd11feb3e54eaa33c6fcb99c1",
+      "editPaths": [
+        "worker/pricing.ts"
+      ],
+      "visibleTests": [
+        "worker/test/pricing.test.mjs",
+        "worker/test/request-pricing.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/google-image-pricing-gap.test.mjs"
+      ],
+      "instruction": "Native google.image_generate requests cannot be priced using text-token cards, zero-price text cards, or OpenAI image cards. For this explicit request format, report opaque_input_bound at admission, no token-based reservation estimate and no actual token invoice, even with usage counters or billable:false. Preserve explicit policy-fixed pricing, ordinary Google text pricing, and qualified OpenAI image pricing. Only edit worker/pricing.ts; do not change tests, request formats, other files or provider manifests.",
+      "reproducer": "import './worker/test/typescript-setup.mjs';\nimport assert from 'node:assert/strict'; import test from 'node:test';\nconst {requestPricingGap,actualModelCost}=await import('./worker/pricing.ts');\nconst card={effectiveAt:'2026-11-03',source:'https://example.com/pricing',inputMicrosPerMillion:1000000,cachedInputMicrosPerMillion:100000,outputMicrosPerMillion:2000000,cacheWriteInputMicrosPerMillion:null,cacheWrite5mInputMicrosPerMillion:null,cacheWrite1hInputMicrosPerMillion:null,maxInputTokens:1048576,maxRequestInputTokens:null,defaultMaxOutputTokens:65536,inputTokenOverhead:1024,longContext:null};\ntest('native image billing is opaque',()=>{assert.equal(requestPricingGap(card,{contents:[{parts:[{text:'Draw a circle'}]}]},'google.image_generate'),'opaque_input_bound');assert.equal(actualModelCost(card,{input:100,output:10,total:110,cached:0,cacheWrite:0,cacheWrite5m:0,cacheWrite1h:0,serviceTier:'standard'},'google.image_generate'),null);});\n"
+    },
+    {
+      "id": "voyage-native-usage-split",
+      "split": "development",
+      "base": "0b5543d8f3972ba70f1227380e008214ce274a3c",
+      "oracle": "2521bc22f030174326324d4ef6c7e43f7e330cbc",
+      "editPaths": [
+        "worker/proxy-response.ts"
+      ],
+      "visibleTests": [
+        "worker/test/proxy-response.test.mjs",
+        "worker/test/proxy-usage.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/voyage-usage-dispatch.test.mjs"
+      ],
+      "instruction": "Dispatch native voyage.embeddings response accounting to the existing Voyage usage parser. A complete successful native embedding response reporting only total_tokens must yield equal input and total tokens and zero output tokens, without changing response bytes. Preserve generic usage behavior, rejection handling, malformed/absent usage handling, bounded parsing, cancellation and stream completion semantics. Do not infer an embedding split for generic responses or rejected requests. Only edit worker/proxy-response.ts; do not change tests or other files.",
+      "reproducer": "import './worker/test/typescript-setup.mjs';\nimport assert from 'node:assert/strict'; import test from 'node:test';\nimport {readFileSync} from 'node:fs'; const {observeUsage}=await import('./worker/proxy-response.ts');\ntest('native Voyage total represents input',async()=>{const wire=JSON.parse(readFileSync('providers/_fixtures/voyage/embeddings.json'));const text=JSON.stringify({...wire.response,usage:{total_tokens:7}});const observed=observeUsage(new Response(text,{headers:{'content-type':'application/json'}}),undefined,undefined,'voyage.embeddings');assert.equal(await observed.response.text(),text);const result=await observed.result;assert.equal(result.delivery,'complete');assert.equal(result.tokens.input,7);assert.equal(result.tokens.output,0);assert.equal(result.tokens.total,7);await observed.retired;});\n"
+    },
+    {
+      "id": "responses-literal-upstream-path",
+      "split": "development",
+      "base": "c5c1cd19834b6e7f1df65f2d6604210ae7e372e8",
+      "oracle": "d35d4bd683aa5dc36367141a05303bd3d64ba86c",
+      "editPaths": [
+        "worker/endpoint-path.ts"
+      ],
+      "visibleTests": [
+        "worker/test/endpoint-upstream-path.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/responses-upstream-path.test.mjs"
+      ],
+      "instruction": "Qualify explicitly configured literal upstream paths for native and manifest openai.responses POST endpoints. Keep the public endpoint path /v1/responses and forward to the configured same-origin upstream path. Require matching response format and POST-only methods; reject queries, malformed/nonliteral paths, alternate public paths, websocket or lifecycle behavior, dynamic parameters and unqualified base URLs. Preserve existing chat/models path rules and caller-override rejection. Only edit worker/endpoint-path.ts; do not change tests, manifests, auth or other files.",
+      "reproducer": "import './worker/test/typescript-setup.mjs';\nimport assert from 'node:assert/strict'; import test from 'node:test';\nconst {configuredEndpointPath}=await import('./worker/endpoint-path.ts');\ntest('Responses supports an explicit literal upstream path',()=>{const endpoint={path:'/v1/responses',upstreamPath:'/inference/go/openai/v1/responses',request_format:'openai.responses',response_format:'openai.responses',method:'POST',methods:['POST'],path_params:[],path_param_styles:{},query:{}};let actual;assert.doesNotThrow(()=>{actual=configuredEndpointPath(endpoint,undefined,'https://opencode.ai');});assert.equal(actual,endpoint.upstreamPath);assert.throws(()=>configuredEndpointPath({...endpoint,upstreamPath:'/a/../b'}));assert.throws(()=>configuredEndpointPath({...endpoint,method:'GET'}));});\n"
+    }
+  ]
+}

@@ -223,12 +223,23 @@ const panel = {
 const result = await runExactVote(panel, async id => invokeAndParseChoice(id));
 ```
 
-Freeze weights, worker order, and unique nonnegative integer priorities before
+Freeze weights, canonical worker order, and unique nonnegative integer priorities before
 evaluation. Lower priority numbers break final ties between supported answers.
 The panel accepts 2–32 distinct choices and 1–64 distinct workers. Weights must
 be finite and nonnegative, with a finite positive sum. The callback returns an
 exact choice label or `null` for an abstention. Invalid answers and callback
 errors stop the run. If all workers abstain, the answer is `null`.
+
+An optional third argument, `{ selectNext }`, changes call order. The synchronous
+selector receives a frozen snapshot with `observed` (`{ id, answer }` pairs in
+call order) and `remaining` (worker IDs in canonical order). It returns one
+remaining ID. Unknown or repeated IDs stop execution before another call.
+Freeze the selector before evaluation and fit it on training data only; the
+runner cannot enforce the data used by a caller's closure. Scores always sum
+in canonical panel order so floating-point ties do not depend on scheduling.
+The default remains sequential panel order. Programmatic
+`replayFusionVote(input, { selectNext })` compares the scheduled run against
+the canonical full panel; the replay CLI uses the default order.
 
 The callback owns provider admission, deadlines, cancellation, usage settlement,
 and response parsing. This experimental runner does not connect to the Worker
@@ -278,9 +289,13 @@ The endpoint must support strict JSON-schema responses and the selected models.
 Workers run sequentially; mathematically unnecessary calls are skipped. Each
 request allows 256 output tokens. The default request timeout is 30 seconds,
 within a two-minute panel deadline. Programmatic callers can use
-`runFusionVote(input, { endpoint, apiKey, signal, deadlineMs, requestTimeoutMs })`;
+`runFusionVote(input, { endpoint, apiKey, signal, deadlineMs, requestTimeoutMs, selectNext })`;
 deadlines are capped at five minutes. HTTPS is required except on loopback.
-Redirects are rejected.
+Redirects are rejected. The optional synchronous `selectNext` uses the same
+frozen snapshot contract as `runExactVote`. Preflight validates the panel
+without invoking the selector. An invalid selection or selector exception
+returns `vote_selection_failed` and preserves earlier call receipts. The CLI
+keeps the default panel order.
 
 The result contains the selected answer, called workers, and reported token
 usage. Missing or malformed usage stays `null`, and `usageComplete` is false.
