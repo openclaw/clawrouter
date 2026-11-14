@@ -7,6 +7,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { stripTypeScriptTypes } from "node:module";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 
@@ -30,15 +31,115 @@ const specifications = [
   ["rotated_new", 3, 200], ["grant_revoke", 1, 503], ["grant_rotate", 1, 503], ["abort", 3, 200],
 ];
 const cases = specifications.map(([scenario, count, status]) => ({ id: `featherless_${scenario}`, provider: "featherless", scenario, status,
-  endpoint: "catalog", format: "featherless.catalog", native: false, route: "/v1/proxy/featherless/catalog", models,
+  endpoint: "catalog", format: "featherless.catalog", native: false, path: endpoint.path, route: "/v1/proxy/featherless/catalog", models,
   expected: ["empty"].includes(scenario) ? [] : scenario === "policy" ? [models[0].upstream] : models.map(row => row.upstream),
   urls: Array.from({ length: count }, (_, i) => `https://api.featherless.ai/v1/models?capabilities=chat&page=${i + 1}&per_page=100`) }));
 const key = row => `clawrouter-live-${row.id}-${row.scenario === "rotated_new" ? "rotated-secret" : "fixture-secret"}`;
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 
-async function barriers() {
+// BEGIN catalog diagnostic protocol
+const diagnosticIds = ["inventory", "maximum", "policy", "rotated_new", "duplicate", "totals", "malformed", "redirect", "limit", "revoked", "rotated_old", "grant_revoke", "grant_rotate", "abort"];
+const diagnosticTestIds = new Set(["none", ...diagnosticIds]);
+const diagnosticCaseIds = new Set(["none", "featherless_table", "featherless_empty", ...diagnosticIds.filter(id => id !== "inventory").map(id => "featherless_" + id)]);
+const diagnosticPhases = new Set(["setup", "facade_load", "registration", "body", "native_fetch", "offer_observation", "offer_json", "provider_lookup", "routes_lookup", "offer_assert", "route_assert", "stale_revocation", "transport_join", "worker_join", "restoration", "state_cleanup", "worker_acquisition", "sdk_process", "case_verify", "worker_retirement", "sql_receipt", "upstream_contract", "producer_release", "control_close", "worker_dispose", "scratch_cleanup", "relay"]);
+const diagnosticCategories = new Set(["error", "assertion", "aggregate", "undefined", "null", "unknown", "child_process", "limit"]);
+const diagnosticNames = new Set(["Error", "TypeError", "RangeError", "AssertionError", "AggregateError", "AbortError", "TimeoutError", "undefined", "null", "unknown"]);
+const diagnosticFields = new Set(["none", "assertion", "count", "presence", "endpoint", "methods", "path", "formats", "exit_code", "killed", "sdk_records", "suppressed", "status", "retirement", "receipt", "upstream", "close"]);
+const diagnosticCodes = new Set(["ERR_ASSERTION", "ERR_ASSERTION_ERROR", "ECONNRESET", "ABORT_ERR", "UND_ERR_ABORTED", "UND_ERR_HEADERS_TIMEOUT", "ETIMEDOUT", "SIGTERM", "SIGKILL"]);
+function diagnosticData(value, key) {
+  if ((typeof value !== "object" || value === null) && typeof value !== "function") return undefined;
+  try { const descriptor = Object.getOwnPropertyDescriptor(value, key); return descriptor && "value" in descriptor ? descriptor.value : undefined; }
+  catch { return undefined; }
+}
+function diagnosticPrimitive(value) {
+  return value === null || typeof value === "boolean" || typeof value === "number" && Number.isSafeInteger(value) && Math.abs(value) <= 1_000_000_000;
+}
+function safeDiagnosticRecord(value) {
+  try {
+    if (!value || typeof value !== "object" || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) return;
+    const keys = Reflect.ownKeys(value), required = ["v", "layer", "testId", "caseId", "phase", "category", "name", "field"];
+    if (keys.some(key => typeof key !== "string" || ![...required, "expected", "actual", "code"].includes(key))) return;
+    const result = {};
+    for (const key of required) { const descriptor = Object.getOwnPropertyDescriptor(value, key); if (!descriptor || !("value" in descriptor)) return; result[key] = descriptor.value; }
+    if (result.v !== 1 || !["sdk", "outer"].includes(result.layer)
+      || !diagnosticTestIds.has(result.testId) || !diagnosticCaseIds.has(result.caseId)
+      || !diagnosticPhases.has(result.phase) || !diagnosticCategories.has(result.category)
+      || !diagnosticNames.has(result.name) || !diagnosticFields.has(result.field)) return;
+    for (const key of ["expected", "actual", "code"]) if (keys.includes(key)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key); if (!descriptor || !("value" in descriptor)) return;
+      if (key === "code" ? !diagnosticCodes.has(descriptor.value) : !diagnosticPrimitive(descriptor.value)) return;
+      result[key] = descriptor.value;
+    }
+    return result;
+  } catch { return; }
+}
+function failureDiagnostic(layer, testId, caseId, phase, error, field = "none") {
+  let name = error === undefined ? "undefined" : error === null ? "null" : diagnosticData(error, "name");
+  if (name === undefined) { try { name = diagnosticData(Object.getPrototypeOf(error), "name"); } catch {} }
+  if (typeof name !== "string" || !diagnosticNames.has(name)) name = "unknown";
+  const category = error === undefined ? "undefined" : error === null ? "null" : name === "AssertionError" ? "assertion" : name === "AggregateError" ? "aggregate" : name === "unknown" ? "unknown" : "error";
+  const record = { v: 1, layer, testId, caseId, phase, category, name, field };
+  const code = diagnosticData(error, "code"); if (typeof code === "string" && diagnosticCodes.has(code)) record.code = code;
+  if (category === "assertion") for (const key of ["expected", "actual"]) {
+    const value = diagnosticData(error, key); if (diagnosticPrimitive(value)) record[key] = value;
+  }
+  return safeDiagnosticRecord(record);
+}
+// END catalog diagnostic protocol
+
+const annotationEscape = value => value.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
+const diagnosticTestFor = caseId => diagnosticCaseIds.has(caseId) && caseId !== "none"
+  ? ["featherless_table", "featherless_empty"].includes(caseId) ? "inventory" : caseId.slice("featherless_".length) : "none";
+function createDiagnostics(write = line => process.stdout.write(line)) {
+  let emitted = 0, suppressed = 0, sdkRecords = 0, finished = false;
+  const emit = (value, summary = false) => {
+    try {
+      const record = safeDiagnosticRecord(value); if (!record) return false;
+      if (record.layer === "sdk") sdkRecords = Math.min(65_535, sdkRecords + 1);
+      if (finished || emitted >= (summary ? 64 : 63)) { suppressed = Math.min(65_535, suppressed + 1); return true; }
+      const json = JSON.stringify(record); if (Buffer.byteLength(json) > 2_048) return false;
+      emitted++; write("::error title=Catalog contract diagnostic::" + annotationEscape(json) + "\n");
+      return true;
+    } catch { return false; } // Reporting cannot replace the original outcome.
+  };
+  const failure = (phase, error, caseId = "none", field = "none") => emit(failureDiagnostic("outer", diagnosticTestFor(caseId), caseId, phase, error, field));
+  return { emit, failure, child(error) {
+    // Do not inspect message, stdout or stderr from the buffered child.
+    const base = { v: 1, layer: "outer", testId: "none", caseId: "none", phase: "sdk_process", category: "child_process", name: "unknown" };
+    const code = diagnosticData(error, "code"), killed = diagnosticData(error, "killed"), signal = diagnosticData(error, "signal");
+    if (typeof code === "number" && diagnosticPrimitive(code)) emit({ ...base, field: "exit_code", actual: code });
+    if (typeof killed === "boolean") emit({ ...base, field: "killed", actual: killed });
+    emit({ ...base, field: "sdk_records", actual: sdkRecords, ...(["SIGTERM", "SIGKILL"].includes(signal) ? { code: signal } : {}) });
+    // Zero reports establishes only that no structured record arrived.
+  }, finish() {
+    if (finished) return;
+    if (suppressed) emit({ v: 1, layer: "outer", testId: "none", caseId: "none", phase: "relay", category: "limit", name: "unknown", field: "suppressed", actual: suppressed }, true);
+    finished = true;
+  } };
+}
+async function receiveDiagnostic(request, response, diagnostics) {
+  try {
+    if (request.method !== "POST" || request.headers.authorization || request.headers["content-type"] !== "application/json") {
+      request.resume(); response.writeHead(400); response.end(); return;
+    }
+    const chunks = []; let bytes = 0;
+    request.setTimeout(2_000, () => request.destroy());
+    for await (const chunk of request.iterator({ destroyOnReturn: false })) {
+      bytes += chunk.length;
+      if (bytes > 2_048) { request.resume(); response.writeHead(413); response.end(); return; }
+      chunks.push(chunk);
+    }
+    request.setTimeout(0);
+    const record = safeDiagnosticRecord(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+    if (!record || record.layer !== "sdk" || !diagnostics.emit(record)) { response.writeHead(400); response.end(); return; }
+    response.writeHead(204); response.end();
+  } catch { if (!response.headersSent) response.writeHead(400); response.end(); }
+  finally { request.setTimeout(0); }
+}
+async function barriers(diagnostics = createDiagnostics()) {
   const states = new Map(cases.filter(row => row.scenario === "abort").map(row => [row.id, { seen: deferred(), response: undefined, released: false }]));
   const server = createServer(async (request, response) => {
+    if (request.url === "/diagnostic") { await receiveDiagnostic(request, response, diagnostics); return; }
     const match = /^\/(hold|seen|release)\/([a-z_]+)$/.exec(request.url ?? "");
     const state = match && states.get(match[2]);
     if (!state || request.headers.authorization || request.method !== (match[1] === "release" ? "POST" : "GET")) {
@@ -64,9 +165,9 @@ async function barriers() {
 }
 
 async function withWorker(run) {
-  const failures = []; let gates, temporary, mf, retire;
+  const failures = [], diagnostics = createDiagnostics(); let gates, temporary, mf, retire, phase = "worker_acquisition";
   try {
-    gates = await barriers();
+    gates = await barriers(diagnostics);
     temporary = await mkdtemp(join(tmpdir(), "clawrouter-featherless-catalog-"));
     const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
     mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(gates.origin), { directRouter: true, preventEviction: true });
@@ -77,17 +178,19 @@ async function withWorker(run) {
     };
     await command("/__catalog/init", "POST");
     retire = () => command("/__catalog/retire", "POST");
-    await run({ origin, control: gates.origin, command, mf });
-  } catch (error) { failures.push(error); }
+    phase = "body";
+    await run({ origin, control: gates.origin, command, mf, diagnostics });
+  } catch (error) { diagnostics.failure(phase, error); failures.push(error); }
   finally {
     // Even a failed assertion releases the real producer and joins original
     // Worker waitUntil/read/cancel promises before disposal. Cleanup is not proof.
-    try { gates?.releaseAll(); } catch (error) { failures.push(error); }
-    try { await retire?.(); } catch (error) { failures.push(error); }
-    try { await gates?.close(); } catch (error) { failures.push(error); }
-    try { await mf?.dispose(); } catch (error) { failures.push(error); }
-    if (temporary !== undefined) try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+    try { gates?.releaseAll(); } catch (error) { diagnostics.failure("producer_release", error); failures.push(error); }
+    try { await retire?.(); } catch (error) { diagnostics.failure("worker_retirement", error); failures.push(error); }
+    try { await gates?.close(); } catch (error) { diagnostics.failure("control_close", error); failures.push(error); }
+    try { await mf?.dispose(); } catch (error) { diagnostics.failure("worker_dispose", error); failures.push(error); }
+    if (temporary !== undefined) try { await rm(temporary, { recursive: true, force: true }); } catch (error) { diagnostics.failure("scratch_cleanup", error); failures.push(error); }
   }
+  diagnostics.finish();
   if (failures.length === 1) throw failures[0];
   if (failures.length) throw new AggregateError(failures, "catalog contract or owned cleanup failed");
 }
@@ -122,6 +225,141 @@ async function verifyCase(f, row) {
   return joined;
 }
 
+test("Featherless diagnostic schema rejects control text, extra data and hostile getters", () => {
+  const base = failureDiagnostic("sdk", "inventory", "featherless_table", "body", undefined);
+  assert.equal(base.category, "undefined"); assert.equal(base.name, "undefined");
+  assert.equal(failureDiagnostic("sdk", "none", "none", "setup", null).category, "null");
+  assert.equal(failureDiagnostic("sdk", "none", "none", "setup", "untrusted throw").category, "unknown");
+  for (const extra of [{ message: "private" }, { field: "status\r\n::error::injection" }, { actual: "private" }, { expected: NaN }, { actual: 1_000_000_001 }]) {
+    assert.equal(safeDiagnosticRecord({ ...base, ...extra }), undefined);
+  }
+  let getters = 0;
+  const hostile = Object.defineProperties({}, Object.fromEntries(["name", "code", "expected", "actual", "message", "stack"].map(key => [key, { get() { getters++; throw new Error("must not run"); } }])));
+  assert.equal(failureDiagnostic("sdk", "none", "none", "setup", hostile).category, "unknown");
+  assert.equal(safeDiagnosticRecord(Object.defineProperty({ ...base }, "field", { get() { getters++; return "none"; } })), undefined);
+  assert.equal(getters, 0);
+  const assertion = new assert.AssertionError({ expected: 1, actual: 1, operator: "strictEqual", message: "not relayed" });
+  assert.deepEqual(failureDiagnostic("sdk", "inventory", "featherless_table", "offer_assert", assertion, "count"), {
+    v: 1, layer: "sdk", testId: "inventory", caseId: "featherless_table", phase: "offer_assert", category: "assertion", name: "AssertionError", field: "count", code: "ERR_ASSERTION", expected: 1, actual: 1,
+  });
+  assert.equal(annotationEscape("%\r\n::error::"), "%25%0D%0A::error::");
+});
+
+test("Featherless diagnostic relay accepts only new typed SDK records and rejects oversized input", async () => {
+  const lines = [], diagnostics = createDiagnostics(line => lines.push(line)), gates = await barriers(diagnostics);
+  const post = async body => {
+    const response = await fetch(gates.origin + "/diagnostic", { method: "POST", headers: { "content-type": "application/json" }, body, signal: AbortSignal.timeout(2_000) });
+    await response.arrayBuffer(); return response.status;
+  };
+  try {
+    const record = failureDiagnostic("sdk", "revoked", "featherless_revoked", "native_fetch", null);
+    assert.equal(await post(JSON.stringify(record)), 204);
+    assert.equal(await post(JSON.stringify({ ...record, layer: "outer" })), 400);
+    assert.equal(await post(JSON.stringify({ ...record, caseId: "unknown" })), 400);
+    assert.equal(await post(JSON.stringify({ ...record, message: "not allowed" })), 400);
+    assert.equal(await post("{"), 400);
+    assert.equal(await post(" ".repeat(2_049)), 413);
+    assert.deepEqual(lines, ["::error title=Catalog contract diagnostic::" + JSON.stringify(record) + "\n"]);
+  } finally { await gates.close(); diagnostics.finish(); }
+});
+
+test("Featherless diagnostic relay caps annotations and reports only safe child metadata", () => {
+  const lines = [], diagnostics = createDiagnostics(line => lines.push(line));
+  let getters = 0;
+  const child = Object.defineProperties({ code: 1, killed: false, signal: "SIGTERM" }, Object.fromEntries(["message", "stdout", "stderr"].map(key => [key, { get() { getters++; throw new Error("must not read child output"); } }])));
+  diagnostics.child(child);
+  for (let index = 0; index < 100; index++) diagnostics.emit(failureDiagnostic("sdk", "abort", "featherless_abort", "transport_join", undefined));
+  diagnostics.finish(); diagnostics.finish();
+  assert.equal(getters, 0); assert.equal(lines.length, 64);
+  const records = lines.map(line => JSON.parse(line.slice("::error title=Catalog contract diagnostic::".length)));
+  assert.deepEqual(records.slice(0, 3).map(row => [row.field, row.actual]), [["exit_code", 1], ["killed", false], ["sdk_records", 0]]);
+  assert.equal(records[2].code, "SIGTERM");
+  assert.equal(records.at(-1).field, "suppressed"); assert.equal(records.at(-1).actual, 40);
+  assert.ok(lines.every(line => !line.includes("\r") && line.split("\n").length === 2));
+});
+
+
+const sdkFixtureSource = readFileSync(new URL("./fixtures/openclaw-featherless-catalog-contract.test.ts", import.meta.url), "utf8");
+function sdkSection(start, end) {
+  const first = sdkFixtureSource.indexOf(start), last = sdkFixtureSource.indexOf(end, first);
+  assert.ok(first >= 0 && last > first);
+  return stripTypeScriptTypes(sdkFixtureSource.slice(first, last));
+}
+const nodeExpect = actual => ({
+  toBe: expected => assert.equal(actual, expected), toEqual: expected => assert.deepEqual(actual, expected),
+  toHaveLength: expected => assert.equal(actual.length, expected), toBeTypeOf: expected => assert.equal(typeof actual, expected),
+});
+const rawCatalogAssertion = new Function("expect", sdkSection("type RawCatalog =", "function observeBody(") + "; return assertRawCatalog;")(nodeExpect);
+
+// Exercise the same SDK-side raw schema assertion against real Worker responses.
+const rawCatalogForTest = row => ({ providers: [{ id: row.provider,
+  offers: [{ endpoint: row.endpoint, routeKind: "manifest", route: row.route, eligible: true }],
+  routes: [{ endpoint: row.endpoint, methods: ["GET"], path: row.path, requestFormat: row.format, responseFormat: row.format }] }] });
+test("SDK raw catalog assertion joins formats from the exact declared route, not the offer", () => {
+  const row = cases[0], body = rawCatalogForTest(row), markers = [];
+  rawCatalogAssertion(body, row, (...args) => markers.push(args));
+  assert.equal(Object.hasOwn(body.providers[0].offers[0], "requestFormat"), false);
+  assert.deepEqual(markers.at(-1), ["route_assert", "formats", true, true]);
+  for (const mutate of [value => value.providers[0].offers.push(value.providers[0].offers[0]),
+    value => { value.providers[0].offers[0].eligible = false; },
+    value => { value.providers[0].routes[0].path = "/wrong"; },
+    value => { value.providers[0].routes[0].methods = ["POST"]; },
+    value => { value.providers[0].routes[0].responseFormat = "wrong"; },
+    value => { value.providers[0].routes[0].endpoint = "wrong"; }]) {
+    const changed = structuredClone(body); mutate(changed);
+    assert.throws(() => rawCatalogAssertion(changed, row, (...args) => markers.push(args)));
+    assert.ok(markers.at(-1).slice(2).every(value => typeof value === "number" || typeof value === "boolean"));
+  }
+});
+
+function sdkDiagnosticFunctions(originalFetch, withOpenClawTestState = async (_options, body) => body({})) {
+  const protocol = sdkSection("// BEGIN catalog diagnostic protocol", "beforeEach(async context");
+  const failures = sdkSection("function throwFailures(", "function refuse(");
+  const restore = sdkSection("async function restoreTestState(", "afterEach(");
+  const fixture = sdkSection("async function fixture(", "describe(");
+  return new Function("originalFetch", "control", "withOpenClawTestState", "loadBundledPluginFacade", "registerSingleProviderPlugin", "expect", "origin", "unexpected", "joined",
+    protocol + failures + restore + fixture + "; return { restoreTestState, fixture, reportDiagnostic, safeDiagnosticRecord, failureDiagnostic };")(
+      originalFetch, "http://127.0.0.1:1", withOpenClawTestState, async () => ({ default: {} }),
+      async () => ({ catalog: { run() {} } }), nodeExpect, "http://127.0.0.1:1", [], async () => {});
+}
+
+test("SDK diagnostic packet shares the outer allowlists and never invokes hostile error getters", async () => {
+  const packets = [], sdk = sdkDiagnosticFunctions(async (_url, init) => { packets.push(JSON.parse(init.body)); assert.equal(init.redirect, "error"); assert.ok(init.signal instanceof AbortSignal); return new Response(null, { status: 204 }); });
+  let getters = 0;
+  const hostile = Object.defineProperties({}, Object.fromEntries(["name", "message", "stack", "code", "actual", "expected"].map(key => [key, { get() { getters++; throw new Error("must not inspect"); } }])));
+  await sdk.reportDiagnostic("route_assert", hostile, "featherless_table", "formats", { expected: true, actual: false });
+  assert.equal(getters, 0); assert.equal(packets.length, 1);
+  assert.deepEqual(safeDiagnosticRecord(packets[0]), packets[0]);
+  assert.deepEqual(packets[0], { v: 1, layer: "sdk", testId: "none", caseId: "featherless_table", phase: "route_assert", category: "unknown", name: "unknown", field: "formats", expected: true, actual: false });
+  for (const id of diagnosticTestIds) assert.ok(sdk.safeDiagnosticRecord({ ...packets[0], testId: id }));
+  assert.equal(diagnosticTestIds.size, 15); assert.equal(diagnosticCaseIds.size, 16);
+  await sdk.reportDiagnostic("body", undefined);
+  assert.equal(packets.at(-1).category, "undefined");
+});
+
+test("SDK restoration attempts every owner and retains undefined despite reporting failure", async () => {
+  const reportFailure = new Error("report failed"), restoreFailure = new Error("restore failed"), reached = [];
+  const sdk = sdkDiagnosticFunctions(async () => { throw reportFailure; });
+  await assert.rejects(sdk.restoreTestState([
+    () => { reached.push(1); throw undefined; }, () => { reached.push(2); throw restoreFailure; }, () => { reached.push(3); },
+  ]), error => { assert.deepEqual(error.errors, [undefined, restoreFailure]); return true; });
+  assert.deepEqual(reached, [1, 2, 3]);
+});
+
+test("SDK fixture preserves body and state cleanup failures outside the callback with identity protection", async t => {
+  for (const body of [new Error("body failed"), undefined]) for (const cleanup of [new Error("state cleanup failed"), undefined]) {
+    await t.test(`${body === undefined ? "undefined" : "Error"} body plus ${cleanup === undefined ? "undefined" : "Error"} cleanup`, async () => {
+      const sdk = sdkDiagnosticFunctions(async () => { throw new Error("report failed"); }, async (_options, run) => {
+        try { await run({}); } finally { throw cleanup; }
+      });
+      await assert.rejects(sdk.fixture(async () => { throw body; }), error => { assert.deepEqual(error.errors, [body, cleanup]); return true; });
+    });
+  }
+  const body = new Error("original body"), sdk = sdkDiagnosticFunctions(async () => { throw new Error("report failed"); });
+  const result = await sdk.fixture(async () => { throw body; }).then(() => ({ ok: true }), error => ({ error }));
+  assert.equal(result.error, body, "the callback aggregate is an identity guard, not a duplicate failure");
+});
+
 // Real Worker/SQLite preparation, separate from execution of the pinned SDK.
 test("compiled Featherless complete scans preserve policy, original credentials and physical joins", { timeout: 120_000 }, async () => {
   await withWorker(async f => {
@@ -130,8 +368,17 @@ test("compiled Featherless complete scans preserve policy, original credentials 
       await f.command(`/__catalog/activate/${row.id}`, "POST");
       const headers = { authorization: `Bearer ${key(row)}` };
       const catalog = await (await fetch(`${f.origin}/v1/catalog`, { headers })).json();
-      const offers = catalog.providers.find(value => value.id === row.provider).offers.filter(value => value.endpoint === row.endpoint);
-      assert.deepEqual(offers.map(value => value.route), [row.route]);
+      rawCatalogAssertion(catalog, row, () => {});
+      const advertised = catalog.providers.find(value => value.id === row.provider);
+      const offers = advertised.offers.filter(value => value.endpoint === row.endpoint);
+      assert.equal(offers.length, 1); assert.equal(offers[0].eligible, true);
+      assert.equal(offers[0].routeKind, "manifest"); assert.equal(offers[0].route, row.route);
+      assert.equal(Object.hasOwn(offers[0], "requestFormat"), false);
+      assert.equal(Object.hasOwn(offers[0], "responseFormat"), false);
+      const routes = advertised.routes.filter(value => value.endpoint === row.endpoint);
+      assert.equal(routes.length, 1); assert.deepEqual(routes[0].methods, ["GET"]);
+      assert.equal(routes[0].path, row.path);
+      assert.equal(routes[0].requestFormat, row.format); assert.equal(routes[0].responseFormat, row.format);
       const response = await fetch(f.origin + row.route, { headers });
       const body = await response.json();
       assert.equal(response.status, row.status, `${row.id}: ${JSON.stringify(body)}`);
@@ -171,11 +418,12 @@ test("a held later page keeps the original response pending until real producer 
 
 test("actual registered Featherless catalog through workerd and SQLite", { skip: !source, timeout: 300_000 }, async t => {
   await withWorker(async f => {
-    await runOpenClawConsumer(t, { source, sourceHead,
+    try { await runOpenClawConsumer(t, { source, sourceHead,
       fixture: new URL("./fixtures/openclaw-featherless-catalog-contract.test.ts", import.meta.url),
       testPath: "extensions/clawrouter/worker-featherless-catalog-contract.test.ts",
       env: { CLAWROUTER_CONTRACT_ORIGIN: f.origin, CLAWROUTER_CONTRACT_CONTROL: f.control,
         CLAWROUTER_CONTRACT_SOURCE_HEAD: sourceHead, CLAWROUTER_CONTRACT_CATALOG_CASES: JSON.stringify(cases) } });
+    } catch (error) { f.diagnostics.child(error); throw error; }
     for (const row of cases) await verifyCase(f, row);
     await verifyCalls(f, cases);
   });
