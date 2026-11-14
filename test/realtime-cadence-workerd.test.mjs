@@ -120,13 +120,16 @@ function delayed(ns, key) { return new Proxy(ns, { get(target, prop) {
     const url = new URL(typeof input[0] === 'string' || input[0] instanceof URL ? input[0] : input[0].url);
     if (key === 'ledger' && url.pathname === holdPath) { calls.held++; await new Promise(resolve => releases.push(resolve)); }
     const observed = key === 'authority' || url.pathname === '/status';
-    const started = Date.now();
+    const started = Date.now(), startedMono = performance.now();
     if (observed) { calls[key]++; await pause(delay[key]); }
-    const dispatched = Date.now(), response = await stub.fetch(...input);
+    const dispatched = Date.now(), dispatchedMono = performance.now(), response = await stub.fetch(...input);
+    const completedMono = performance.now();
     if(key==='authority'&&holdInspection&&!heldInspection){heldInspection=true;preparation.phase='held-completed-authority-reply';
       try{const gate=await fetch('https://cadence-gate.example/observation');await gate.text();}
       catch(primary){try{await response.body?.cancel();}catch(cleanup){throw new AggregateError([primary,cleanup],'cadence held-reply cleanup');}throw primary;}}
-    if (observing && observed && observations.length < 64) observations.push({ key, pathId:rpcPaths.indexOf(url.pathname)+1, phaseId:3, started, dispatched, completed: Date.now(), status: response.status });
+    if (observing && observed && observations.length < 64) observations.push({ key, pathId:rpcPaths.indexOf(url.pathname)+1, phaseId:3, started, dispatched, completed: Date.now(), status: response.status,
+      isolate: { clock: "performance.now", started: startedMono, dispatched: dispatchedMono, completed: completedMono,
+        injectedDelayMs: delay[key], preDispatchWaitMs: dispatchedMono - startedMono, fetchMs: completedMono - dispatchedMono } });
     return response;
   } }; };
 } }); }
@@ -381,7 +384,7 @@ for (const asr of [false, true]) for (const kind of ['revocation', 'principal', 
       // A failed deadline must retain authority/RPC, sender and both socket
       // observations; diagnostics after the assertion lose the failing state.
       const closeFrame = f.closeObservation.snapshot(changed, c.q.closedAt);
-      t.diagnostic(JSON.stringify({ kind, asr, mutationStarted, changed, mutationMs, closeMs: elapsed, errorAt: c.q.errorAt, clientClosedAt: c.q.closedAt, sentAt, errors: c.q.errors, stats, calls, closeFrame }));
+      t.diagnostic(JSON.stringify({ kind, asr, clocks: { host: "Date.now; authority ACK to client close before stats RPC", router: "performance.now; isolate-local only" }, mutationStarted, changed, mutationMs, closeMs: elapsed, errorAt: c.q.errorAt, clientClosedAt: c.q.closedAt, sentAt, errors: c.q.errors, stats, calls, closeFrame }));
       assert.equal(closeFrame.valid, true, 'one valid selected receiver conclude observation');
     }
     assert.equal(c.q.closed, true, JSON.stringify({ kind, elapsed, stats }));
