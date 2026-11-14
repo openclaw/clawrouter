@@ -138,6 +138,7 @@ test("four compiled public catalogs preserve owner isolation, bodyless formats a
         assert.equal(body.error.code, "upstream_grant_pool_unavailable");
       } else if (row.scenario === "malformed") {
         assert.equal(response.status, 502, JSON.stringify(body));
+        assert.equal(body.error.code, row.native ? "invalid_model_discovery_response" : "provider_catalog_invalid");
       } else {
         if (response.status !== 200) {
           const upstream = await f.mf.getWorker("upstream");

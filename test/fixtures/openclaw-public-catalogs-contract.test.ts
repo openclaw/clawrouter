@@ -184,7 +184,7 @@ for (const provider of providers) describe(`${provider} registered public discov
     await fixture(async discover => {
       const row = caseFor(provider, "malformed");
       await expect(discover(row)).rejects.toThrow(); await joined(row);
-      expect(observations.find(value => value.path === row.route)).toMatchObject({ status: 502, errorCode: "provider_catalog_invalid" });
+      expect(observations.find(value => value.path === row.route)).toMatchObject({ status: 502, errorCode: row.native ? "invalid_model_discovery_response" : "provider_catalog_invalid" });
       expect(retainedSources()).toBe(1);
     });
   }, 120_000);
