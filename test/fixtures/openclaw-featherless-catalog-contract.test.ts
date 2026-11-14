@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
-import { fetchWithRuntimeDispatcher } from "../../src/infra/net/runtime-fetch.js";
+import { type DispatcherAwareRequestInit, fetchWithRuntimeDispatcher } from "../../src/infra/net/runtime-fetch.js";
 import { registerSingleProviderPlugin } from "../../src/plugin-sdk/plugin-test-runtime.js";
 import { loadBundledPluginFacade } from "../../src/test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
@@ -20,7 +20,7 @@ const cases = JSON.parse(process.env.CLAWROUTER_CONTRACT_CATALOG_CASES!) as Case
 const originalFetch = globalThis.fetch;
 const originalGuard = ssrfRuntime.fetchWithSsrFGuard;
 const key = (row: Case) => `clawrouter-live-${row.id}-${row.scenario === "rotated_new" ? "rotated-secret" : "fixture-secret"}`;
-const observations: Array<{ path: string; credential: string; released: boolean; done: Promise<unknown>; status?: number; errorCode?: string }> = [];
+const observations: Array<{ path: string; credential: string; released: boolean; done: Promise<unknown>; status?: number; errorCode?: string; closes: Promise<unknown>[]; destroys: number; dispatchers: number }> = [];
 const caseFor = (scenario: Scenario) => {
   const row = cases.find(value => value.scenario === scenario);
   if (!row) throw new Error("missing compiled fixture contract");
@@ -39,7 +39,7 @@ beforeEach(() => {
   vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
     const request = new Request(input, init);
     if (new URL(request.url).origin !== origin) throw new Error("unexpected direct client provider egress");
-    return originalFetch(request);
+    return originalFetch(input, init);
   });
   // Keep the real SSRF guard/dispatcher. The only allowance is this exact local
   // fixture origin; no fabricated offer, native credential or release substitute.
@@ -52,10 +52,24 @@ beforeEach(() => {
     }
     let finished!: (error?: unknown) => void;
     const done = new Promise<unknown>(resolve => { finished = resolve; });
-    const observation = { path: url.pathname, credential, released: false, done } as typeof observations[number];
+    const observation = { path: url.pathname, credential, released: false, done, closes: [], destroys: 0, dispatchers: 0 } as typeof observations[number];
     observations.push(observation);
     try {
-      const result = await originalGuard({ ...options, fetchImpl: fetchWithRuntimeDispatcher,
+      const result = await originalGuard({ ...options, fetchImpl: (input, init) => {
+        const dispatcher = (init as DispatcherAwareRequestInit | undefined)?.dispatcher;
+        if (!dispatcher || observation.dispatchers++) throw new Error("missing or repeated original dispatcher");
+        const close = dispatcher.close, destroy = dispatcher.destroy;
+        vi.spyOn(dispatcher, "close").mockImplementation((...args) => {
+          const pending = Reflect.apply(close, dispatcher, args);
+          observation.closes.push(pending);
+          return pending;
+        });
+        vi.spyOn(dispatcher, "destroy").mockImplementation((...args) => {
+          observation.destroys++;
+          return Reflect.apply(destroy, dispatcher, args);
+        });
+        return fetchWithRuntimeDispatcher(input, init);
+      },
         policy: ssrfRuntime.ssrfPolicyFromHttpBaseUrlAllowedOrigin(origin) });
       observation.status = result.response.status;
       try {
@@ -96,6 +110,9 @@ async function joined(row: Case) {
   expect(selected.map(value => value.path)).toEqual(["/v1/catalog", row.route]);
   for (const observation of selected) {
     expect(await observation.done).toBeUndefined(); expect(observation.released).toBe(true);
+    expect(observation.dispatchers).toBe(1); expect(observation.closes).toHaveLength(1);
+    expect(await observation.closes[0]).toBeNull(); // Undici close fulfills with null.
+    expect(observation.destroys).toBe(0);
   }
   const state = JSON.parse(await command(`/__catalog/join/${row.id}`));
   expect(state).toMatchObject({ calls: row.urls.length, retired: true, charged: 0 });
@@ -125,6 +142,10 @@ async function fixture(run: (discover: (row: Case, signal?: AbortSignal) => Prom
     try { await run(discover); }
     finally {
       const releases = await Promise.allSettled(observations.map(row => row.done));
+      for (const row of observations) {
+        expect(row.dispatchers).toBe(1); expect(row.closes).toHaveLength(1);
+        expect(await row.closes[0]).toBeNull(); expect(row.destroys).toBe(0);
+      }
       const credentials = new Set(observations.map(row => row.credential));
       const joins = await Promise.allSettled([...credentials].map(async credential => {
         const row = cases.find(value => credential === `Bearer ${key(value)}`);
