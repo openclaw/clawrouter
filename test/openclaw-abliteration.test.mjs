@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { stripTypeScriptTypes } from "node:module";
 import { join } from "node:path";
 import test from "node:test";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
@@ -143,20 +144,88 @@ test("actual OpenClaw Abliteration configured native client through workerd and 
   if (failures.length > 1) throw new AggregateError(failures, "Abliteration contract or retirement failed");
 });
 
+function observeReaderOperation(operations, kind, pending, signals) {
+  const operation = { kind, pending, expectedAbort: false }; operations.push(operation);
+  void pending.then(() => {}, reason => {
+    operation.expectedAbort = kind === "read" && reason !== undefined && signals.some(signal => signal?.aborted && signal.reason === reason);
+  });
+  return pending;
+}
+async function joinReaderOperations(operations) {
+  const results = await Promise.allSettled(operations.map(operation => operation.pending));
+  const failures = results.flatMap((result, index) => result.status === "rejected" && !operations[index].expectedAbort ? [result.reason] : []);
+  if (failures.length) throw new AggregateError(failures, "original reader operations failed");
+}
+
+// Exercise the same functions embedded in the Worker and the actual TS fixture.
+// This is observer coverage, not execution of the native OpenClaw SDK.
+async function readerObservers() {
+  const text = await readFile(new URL("./fixtures/openclaw-abliteration-contract.test.ts", import.meta.url), "utf8");
+  const start = text.indexOf("type ReaderOperation = "), end = text.indexOf("\nbeforeEach(() => {", start);
+  assert.ok(start >= 0 && end > start);
+  const code = stripTypeScriptTypes(text.slice(start, end));
+  const sdk = new Function(code + "; return { observeReaderOperation, joinReaderOperations };")();
+  return [["Worker", { observeReaderOperation, joinReaderOperations }], ["SDK fixture", sdk]];
+}
+
+test("retirement observers retain rejecting cancellation and body failures until every original operation joins", async t => {
+  for (const [name, observer] of await readerObservers()) await t.test(name, async () => {
+    const operations = [], bodyFailure = new Error("body read failed"), cancellationFailure = new Error("cancel failed");
+    let body, rejectCancel;
+    const broken = new ReadableStream({ start(controller) { body = controller; } }).getReader();
+    const reading = broken.read();
+    assert.equal(observer.observeReaderOperation(operations, "read", reading, []), reading);
+    body.error(bodyFailure);
+    const canceled = new ReadableStream({ cancel() { return new Promise((_, reject) => { rejectCancel = reject; }); } }).getReader();
+    const cancellation = canceled.cancel();
+    assert.equal(observer.observeReaderOperation(operations, "cancel", cancellation, []), cancellation);
+    const joined = observer.joinReaderOperations(operations);
+    let settled = false; void joined.then(() => { settled = true; }, () => { settled = true; });
+    try {
+      await reading.catch(() => {}); await Promise.resolve();
+      assert.equal(settled, false, "body failure must not bypass a still-owned cancellation");
+      rejectCancel(cancellationFailure);
+      await assert.rejects(joined, error => error instanceof AggregateError && error.errors.length === 2 && error.errors[0] === bodyFailure && error.errors[1] === cancellationFailure);
+    } finally {
+      rejectCancel(cancellationFailure);
+      await Promise.allSettled([reading, cancellation, joined]);
+      broken.releaseLock(); canceled.releaseLock();
+    }
+  });
+});
+test("retirement observers accept only exact owned read aborts and never cancellation rejection", async t => {
+  for (const [name, observer] of await readerObservers()) await t.test(name, async () => {
+    const controller = new AbortController(), reason = new Error("owned abort"), foreign = new Error("owned abort");
+    const operations = []; controller.abort(reason);
+    for (const [kind, value] of [["read", reason], ["read", foreign], ["cancel", reason], ["cancel", undefined]]) {
+      const pending = Promise.reject(value);
+      assert.equal(observer.observeReaderOperation(operations, kind, pending, [controller.signal]), pending);
+    }
+    await assert.rejects(observer.joinReaderOperations(operations), error => error instanceof AggregateError && error.errors.length === 3 && error.errors[0] === foreign && error.errors[1] === reason && error.errors[2] === undefined);
+    const late = new AbortController(), lateOperations = [];
+    observer.observeReaderOperation(lateOperations, "read", Promise.reject(reason), [late.signal]);
+    await Promise.resolve(); late.abort(reason);
+    await assert.rejects(observer.joinReaderOperations(lateOperations), error => error.errors[0] === reason);
+  });
+});
+
 function routerFixture() {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
 import { putGrantCredentials, revokeGrantCredentials } from "./worker/grant-credentials.ts";
 const records = [], inputs = [], rawFetch = globalThis.fetch;
+${observeReaderOperation.toString()}
+${joinReaderOperations.toString()}
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 globalThis.fetch = function(input, init) {
   const pending = Reflect.apply(rawFetch, this, [input, init]);
   const url = input instanceof Request ? input.url : String(input);
   if (url !== ${JSON.stringify(provider.base_urls.default.replace(/\/$/, "") + endpoint.path)}) return pending;
-  const proof = { returned: pending, body: undefined, readers: [], error: false }; inputs.push(proof);
+  const signals = [init?.signal, input instanceof Request ? input.signal : undefined];
+  const proof = { returned: pending, body: undefined, readers: [], errors: [] }; inputs.push(proof);
   void pending.then(response => {
     try {
       proof.body = response.body;
-      if (!proof.body) { proof.error = true; return; }
+      if (!proof.body) { proof.errors.push(new Error("upstream body missing")); return; }
       const getReader = proof.body.getReader;
       proof.body.getReader = function(...args) {
         const reader = Reflect.apply(getReader, this, args);
@@ -164,9 +233,8 @@ globalThis.fetch = function(input, init) {
         for (const name of ["read", "cancel"]) {
           const original = reader[name];
           reader[name] = function(...operands) {
-            const pending = Reflect.apply(original, this, operands); row.pending.push(pending);
-            void pending.then(() => {}, () => {});
-            return pending;
+            const pending = Reflect.apply(original, this, operands);
+            return observeReaderOperation(row.pending, name, pending, signals);
           };
         }
         const release = reader.releaseLock;
@@ -175,8 +243,8 @@ globalThis.fetch = function(input, init) {
         };
         return reader;
       };
-    } catch { proof.error = true; }
-  }, () => { proof.error = true; });
+    } catch (error) { proof.errors.push(error); }
+  }, () => {});
   return pending;
 };
 async function retire() {
@@ -190,11 +258,13 @@ async function retire() {
   }
   const joined = await Promise.allSettled(inputs.map(async proof => {
     await proof.returned;
-    if (proof.error || !proof.readers.length) throw new Error("upstream reader observation missing");
-    for (const row of proof.readers) {
+    const readers = await Promise.allSettled(proof.readers.map(async row => {
       await row.terminal.promise;
-      await Promise.allSettled(row.pending); row.pendingSettled = true;
-    }
+      await joinReaderOperations(row.pending); row.pendingSettled = true;
+    }));
+    const failures = [...proof.errors, ...readers.flatMap(result => result.status === "rejected" ? [result.reason] : [])];
+    if (!proof.readers.length) failures.push(new Error("upstream reader observation missing"));
+    if (failures.length) throw new AggregateError(failures, "upstream reader retirement failed");
     proof.joined = true;
   }));
   for (const result of joined) if (result.status === "rejected") failures.push(result.reason);

@@ -26,15 +26,34 @@ const acquisitions: Array<{
   releaseCalls: number;
   releasePending: Promise<void>[];
   body?: ReadableStream<Uint8Array> | null;
-  readers: Array<{ reader: ReadableStreamDefaultReader<Uint8Array>; pending: Promise<unknown>[]; unlocked: boolean }>;
+  readers: Array<{ reader: ReadableStreamDefaultReader<Uint8Array>; pending: ReaderOperation[]; unlocked: boolean }>;
 }> = [];
 const observationErrors: unknown[] = [];
 let started = 0;
+
+// Pure observation/join functions are also exercised by the outer fixture tests.
+type ReaderOperation = { kind: "read" | "cancel"; pending: Promise<unknown>; expectedAbort: boolean };
+function observeReaderOperation<T extends Promise<unknown>>(operations: ReaderOperation[], kind: ReaderOperation["kind"], pending: T, signals: Array<AbortSignal | null | undefined>): T {
+  const operation = { kind, pending, expectedAbort: false }; operations.push(operation);
+  void pending.then(() => {}, reason => {
+    // Match the original request's exact reason at rejection, never an error name
+    // or a signal that only becomes aborted later. Cancellation failures always fail.
+    operation.expectedAbort = kind === "read" && reason !== undefined && signals.some(signal => signal?.aborted && signal.reason === reason);
+  });
+  return pending;
+}
+async function joinReaderOperations(operations: ReaderOperation[]) {
+  const results = await Promise.allSettled(operations.map(operation => operation.pending));
+  const failures = results.flatMap((result, index) => result.status === "rejected" && !operations[index].expectedAbort ? [result.reason] : []);
+  if (failures.length) throw new AggregateError(failures, "original reader operations failed");
+}
+
 
 beforeEach(() => {
   acquisitions.length = 0; observationErrors.length = 0; started = 0;
   vi.spyOn(guardedTransport, "fetchWithProviderHttpGuard").mockImplementation(function (options) {
     const returned = Reflect.apply(originalGuard, this, [options]);
+    const signals = [options.signal, options.init?.signal];
     let released!: () => void;
     const row: (typeof acquisitions)[number] = { returned, released: new Promise(resolve => { released = resolve; }), releaseCalls: 0, releasePending: [], readers: [] };
     acquisitions.push(row);
@@ -55,17 +74,13 @@ beforeEach(() => {
           const getReader = row.body.getReader;
           vi.spyOn(row.body, "getReader").mockImplementation(function (...args) {
             const reader = Reflect.apply(getReader, this, args) as ReadableStreamDefaultReader<Uint8Array>;
-            const observed = { reader, pending: [] as Promise<unknown>[], unlocked: false };
+            const observed = { reader, pending: [] as ReaderOperation[], unlocked: false };
             row.readers.push(observed);
             for (const name of ["read", "cancel"] as const) {
               const original = reader[name];
               vi.spyOn(reader, name).mockImplementation(function (...operands: unknown[]) {
                 const pending = Reflect.apply(original, this, operands);
-                observed.pending.push(pending);
-                // Preserve rejection for the real caller while keeping the retained
-                // original promise observed until the later allSettled join.
-                void pending.then(() => {}, () => {});
-                return pending;
+                return observeReaderOperation(observed.pending, name, pending, signals);
               });
             }
             const unlock = reader.releaseLock;
@@ -77,7 +92,7 @@ beforeEach(() => {
             return reader;
           });
         }
-      } catch (error) { observationErrors.push(error); }
+      } catch (error) { observationErrors.push(error); released(); }
     }, () => { released(); });
     return returned;
   });
@@ -85,18 +100,19 @@ beforeEach(() => {
 
 afterEach(async () => {
   try {
-    await Promise.allSettled(acquisitions.map(row => row.returned));
+    const returned = await Promise.allSettled(acquisitions.map(row => row.returned));
     const releases = await Promise.all(acquisitions.map(async row => {
       await row.released;
       const results = await Promise.allSettled(row.releasePending);
-      await Promise.all(row.readers.map(async observed => {
-        await Promise.allSettled(observed.pending);
-      }));
-      return results;
+      const readers = await Promise.allSettled(row.readers.map(observed => joinReaderOperations(observed.pending)));
+      return [...results, ...readers];
     }));
     // Assertions follow every original join, so one failed observation cannot
     // skip retirement of a later acquisition in the four-denial case.
-    expect(releases.flat().every(result => result.status === "fulfilled")).toBe(true);
+    const failures = [...returned, ...releases.flat()].flatMap(result => result.status === "rejected" ? [result.reason] : []);
+    failures.push(...observationErrors);
+    // Vitest retains the test-body failure separately from this afterEach failure.
+    if (failures.length) throw new AggregateError(failures, "Abliteration client retirement failed");
     for (const row of acquisitions) {
       expect(row.releaseCalls).toBeGreaterThan(0);
       expect(row.readers.length).toBeGreaterThan(0);
