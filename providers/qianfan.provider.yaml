@@ -35,10 +35,10 @@ capabilities:
     methods: [POST]
 endpoints:
   models_list:
+    method: GET
     path: /models
     requestFormat: openai.models
     responseFormat: openai.models
-    streaming: none
     timeoutMs: 30000
   chat_completions:
     modelPassthrough: {}

@@ -806,6 +806,8 @@
 - Tests: qualify registered ClawRouter BytePlus PAYG catalog selection, both stream entrypoints, host tool replay, Singapore grant isolation and SQLite settlement through the real Worker.
 - Complete the six frozen BytePlus PAYG Chat dispositions with original Singapore credentials and native input facts, keeping deprecated GLM closed and Coding Plan prices or aliases separate.
 - Add experimental standard chat routes for Qianfan v2, StepFun global, Tencent TokenHub mainland, Volcengine Beijing and BytePlus Singapore with separate region/product credentials.
+- Providers: qualify five frozen Qianfan Chat cards and keyed native model discovery; preserve model-specific thinking, tool replay and cumulative stream usage without inferred limits or prices.
+- Verify the actual registered Qianfan client, five frozen model identities, keyed discovery, image/tool replay and usage through Worker/SQLite; keep unknown-price hard budgets closed.
 - Accept canonical Abliteration ABLIT_KEY with ABLITERATION_API_KEY compatibility, consistent readiness and canonical precedence, preserving original selected grants and sanitized credential rejection.
 - Providers: qualify the two frozen StepFun standard Chat cards and keyed discovery in explicit global/China bindings, separate from Step Plan credentials and quota.
 - Fix global and China StepFun model discovery to declare GET explicitly, omit streaming and exclude an unintended POST method.

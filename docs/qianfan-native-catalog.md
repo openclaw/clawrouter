@@ -81,7 +81,7 @@ account entitlement, tier interpolation, default zero or frozen price is added.
 Discovery incurs no inference tariff; this does not declare inference free.
 Fixture `policy_fixed` charges are independent router policy, not vendor prices.
 
-## Existing embedding contract and ownership handoff
+## Separate embedding contract
 
 The frozen `index.ts` registers remote provider `qianfan` through the existing
 `openai-compatible` memory adapter and `resolveRemoteEmbeddingBearerClient`.
@@ -92,9 +92,9 @@ That is a per-request batch cap, not a default model, output dimension, price or
 entitlement. The comment points to the
 [original embedding reference](https://ai.baidu.com/ai-doc/WENXINWORKSHOP/Ultiovtgu).
 This source adds no embedding endpoint, codec, media file or common changes.
-Source2 owns the existing native memory consumer; source3 owns schema, source1
-shared runtime and source6 actual 16-input/17-input acceptance. Any missing
-interface must be named before extending it.
+The three-model memory route requires separate registered-client and Worker
+acceptance, including the 16-input/17-input batch boundary. The Chat and
+discovery tests below do not establish embedding support.
 
 ## Proof boundary
 
@@ -104,9 +104,22 @@ It covers both routes, the five identities, qualified tool replay, fragmented
 SSE, thinking controls, cumulative/terminal usage, native images, strict private
 discovery, errors, cancellation, late errors and no credential/model fallback.
 
-Local source remains code-only under the qualified dependency policy. Prepared
-cases are not executed proof. Source6 owns a later serialized generated-snapshot
-slot and final integrated-head checks; this PR claims no snapshot lease.
-Source2 owns actual frozen-client discovery/configuration, thinking and replay
-qualification. No live key, account consent, inference, provisioning or manual
-deployment is performed here.
+Integration composes the source with current main and generates the snapshot
+serially. The metadata endpoint uses explicit GET with no streaming protocol.
+Undeclared native URL aliases remain closed with zero upstream requests.
+
+`test/openclaw-qianfan.test.mjs` imports actual public OpenClaw
+`d8bb939408aa4d2be7df0161748edb52ebf3b1fb` from its own frozen CI checkout.
+It executes the registered catalog, strict keyed discovery, host replay policy
+and native serializer through real Worker/SQLite. The frozen nonreasoning
+ERNIE 5.1 and DeepSeek V3.2 rows strip thinking history; the other three retain
+it. Positive tool history assertions remain on every model. The cases cover
+all five exact identities, V4 efforts, both image-input cards, credentials,
+usage, errors, cancellation and conservative policy-fixed settlement.
+Authored cases are not execution proof; exact-head results belong in the PR.
+
+This is configured native client coverage. It does not establish ClawRouter
+catalog-driven or manifest client selection, the separate three-model memory
+adapter, account entitlement or upstream-dollar pricing. Worker fixtures
+independently cover native and manifest transport. No live key, account
+consent, inference, provisioning or manual deployment is performed here.
