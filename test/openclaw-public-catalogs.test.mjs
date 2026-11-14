@@ -34,9 +34,109 @@ const cases = Object.entries(contracts).flatMap(([provider, contract]) => {
 });
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 
-async function barriers() {
+// BEGIN catalog diagnostic protocol
+const diagnosticProviders = ["cerebras", "nvidia", "chutes", "venice"];
+const diagnosticTestIds = new Set(["none", ...diagnosticProviders.flatMap(provider => ["inventory", "stale", "malformed", "abort"].map(kind => provider + "_" + kind))]);
+const diagnosticCaseIds = new Set(["none", ...diagnosticProviders.flatMap(provider => ["table", "empty", "stale", "malformed", "abort"].map(kind => provider + "_" + kind))]);
+const diagnosticPhases = new Set(["setup", "facade_load", "registration", "body", "native_fetch", "offer_observation", "stale_revocation", "transport_join", "worker_join", "restoration", "state_cleanup", "worker_acquisition", "sdk_process", "case_verify", "worker_retirement", "sql_receipt", "upstream_contract", "producer_release", "control_close", "worker_dispose", "scratch_cleanup", "relay"]);
+const diagnosticCategories = new Set(["error", "assertion", "aggregate", "undefined", "null", "unknown", "child_process", "limit"]);
+const diagnosticNames = new Set(["Error", "TypeError", "RangeError", "AssertionError", "AggregateError", "AbortError", "TimeoutError", "undefined", "null", "unknown"]);
+const diagnosticFields = new Set(["none", "assertion", "exit_code", "killed", "sdk_records", "suppressed", "status", "retirement", "receipt", "upstream", "close", "cache"]);
+const diagnosticCodes = new Set(["ERR_ASSERTION", "ERR_ASSERTION_ERROR", "ECONNRESET", "ABORT_ERR", "UND_ERR_ABORTED", "UND_ERR_HEADERS_TIMEOUT", "ETIMEDOUT", "SIGTERM", "SIGKILL"]);
+function diagnosticData(value, key) {
+  if ((typeof value !== "object" || value === null) && typeof value !== "function") return undefined;
+  try { const descriptor = Object.getOwnPropertyDescriptor(value, key); return descriptor && "value" in descriptor ? descriptor.value : undefined; }
+  catch { return undefined; }
+}
+function diagnosticPrimitive(value) {
+  return value === null || typeof value === "boolean" || typeof value === "number" && Number.isSafeInteger(value) && Math.abs(value) <= 1_000_000_000;
+}
+function safeDiagnosticRecord(value) {
+  try {
+    if (!value || typeof value !== "object" || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) return;
+    const keys = Reflect.ownKeys(value), required = ["v", "layer", "testId", "caseId", "phase", "category", "name", "field"];
+    if (keys.some(key => typeof key !== "string" || ![...required, "expected", "actual", "code"].includes(key))) return;
+    const result = {};
+    for (const key of required) { const descriptor = Object.getOwnPropertyDescriptor(value, key); if (!descriptor || !("value" in descriptor)) return; result[key] = descriptor.value; }
+    if (result.v !== 1 || !["sdk", "outer"].includes(result.layer)
+      || !diagnosticTestIds.has(result.testId) || !diagnosticCaseIds.has(result.caseId)
+      || !diagnosticPhases.has(result.phase) || !diagnosticCategories.has(result.category)
+      || !diagnosticNames.has(result.name) || !diagnosticFields.has(result.field)) return;
+    for (const key of ["expected", "actual", "code"]) if (keys.includes(key)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key); if (!descriptor || !("value" in descriptor)) return;
+      if (key === "code" ? !diagnosticCodes.has(descriptor.value) : !diagnosticPrimitive(descriptor.value)) return;
+      result[key] = descriptor.value;
+    }
+    return result;
+  } catch { return; }
+}
+function failureDiagnostic(layer, testId, caseId, phase, error, field = "none") {
+  let name = error === undefined ? "undefined" : error === null ? "null" : diagnosticData(error, "name");
+  if (name === undefined) { try { name = diagnosticData(Object.getPrototypeOf(error), "name"); } catch {} }
+  if (typeof name !== "string" || !diagnosticNames.has(name)) name = "unknown";
+  const category = error === undefined ? "undefined" : error === null ? "null" : name === "AssertionError" ? "assertion" : name === "AggregateError" ? "aggregate" : name === "unknown" ? "unknown" : "error";
+  const record = { v: 1, layer, testId, caseId, phase, category, name, field };
+  const code = diagnosticData(error, "code"); if (typeof code === "string" && diagnosticCodes.has(code)) record.code = code;
+  if (category === "assertion") for (const key of ["expected", "actual"]) {
+    const value = diagnosticData(error, key); if (diagnosticPrimitive(value)) record[key] = value;
+  }
+  return safeDiagnosticRecord(record);
+}
+// END catalog diagnostic protocol
+
+const annotationEscape = value => value.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
+const diagnosticTestFor = caseId => diagnosticCaseIds.has(caseId) && caseId !== "none"
+  ? caseId.replace(/_(table|empty)$/, "_inventory") : "none";
+function createDiagnostics(write = line => process.stdout.write(line)) {
+  let emitted = 0, suppressed = 0, sdkRecords = 0, finished = false;
+  const emit = (value, summary = false) => {
+    try {
+      const record = safeDiagnosticRecord(value); if (!record) return false;
+      if (record.layer === "sdk") sdkRecords = Math.min(65_535, sdkRecords + 1);
+      if (finished || emitted >= (summary ? 64 : 63)) { suppressed = Math.min(65_535, suppressed + 1); return true; }
+      const json = JSON.stringify(record); if (Buffer.byteLength(json) > 2_048) return false;
+      emitted++; write("::error title=Catalog contract diagnostic::" + annotationEscape(json) + "\n");
+      return true;
+    } catch { return false; } // Reporting cannot replace the original outcome.
+  };
+  const failure = (phase, error, caseId = "none", field = "none") => emit(failureDiagnostic("outer", diagnosticTestFor(caseId), caseId, phase, error, field));
+  return { emit, failure, child(error) {
+    // Do not inspect message, stdout or stderr from the buffered child.
+    const base = { v: 1, layer: "outer", testId: "none", caseId: "none", phase: "sdk_process", category: "child_process", name: "unknown" };
+    const code = diagnosticData(error, "code"), killed = diagnosticData(error, "killed"), signal = diagnosticData(error, "signal");
+    if (typeof code === "number" && diagnosticPrimitive(code)) emit({ ...base, field: "exit_code", actual: code });
+    if (typeof killed === "boolean") emit({ ...base, field: "killed", actual: killed });
+    emit({ ...base, field: "sdk_records", actual: sdkRecords, ...(["SIGTERM", "SIGKILL"].includes(signal) ? { code: signal } : {}) });
+    // Zero reports establishes only that no structured record arrived.
+  }, finish() {
+    if (finished) return;
+    if (suppressed) emit({ v: 1, layer: "outer", testId: "none", caseId: "none", phase: "relay", category: "limit", name: "unknown", field: "suppressed", actual: suppressed }, true);
+    finished = true;
+  } };
+}
+async function receiveDiagnostic(request, response, diagnostics) {
+  try {
+    if (request.method !== "POST" || request.headers.authorization || request.headers["content-type"] !== "application/json") {
+      request.resume(); response.writeHead(400); response.end(); return;
+    }
+    const chunks = []; let bytes = 0;
+    request.setTimeout(2_000, () => request.destroy());
+    for await (const chunk of request.iterator({ destroyOnReturn: false })) {
+      bytes += chunk.length;
+      if (bytes > 2_048) { request.resume(); response.writeHead(413); response.end(); return; }
+      chunks.push(chunk);
+    }
+    request.setTimeout(0);
+    const record = safeDiagnosticRecord(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+    if (!record || record.layer !== "sdk" || !diagnostics.emit(record)) { response.writeHead(400); response.end(); return; }
+    response.writeHead(204); response.end();
+  } catch { if (!response.headersSent) response.writeHead(400); response.end(); }
+  finally { request.setTimeout(0); }
+}
+async function barriers(diagnostics = createDiagnostics()) {
   const states = new Map(cases.filter(row => row.scenario === "abort").map(row => [row.id, { seen: deferred(), response: undefined, released: false }]));
   const server = createServer(async (request, response) => {
+    if (request.url === "/diagnostic") { await receiveDiagnostic(request, response, diagnostics); return; }
     const match = /^\/(hold|seen|release)\/([a-z_]+)$/.exec(request.url ?? "");
     const state = match && states.get(match[2]);
     if (!state || request.headers.authorization || request.method !== (match[1] === "release" ? "POST" : "GET")) {
@@ -113,30 +213,47 @@ async function finishOwnedCleanup(failures, steps) {
 }
 
 async function withWorker(run) {
-  const failures = []; let gates, temporary, mf, retire;
+  const failures = [], diagnostics = createDiagnostics(); let gates, temporary, mf, retire, phase = "worker_acquisition";
   try {
-    gates = await barriers();
+    gates = await barriers(diagnostics);
     temporary = await mkdtemp(join(tmpdir(), "clawrouter-public-catalogs-"));
     const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
     mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(gates.origin), { directRouter: true, preventEviction: true });
     const origin = (await mf.unsafeGetDirectURL("router")).origin;
     const command = async (path, method = "GET") => {
-      const response = await fetch(origin + path, { method });
-      const text = await response.text(); assert.equal(response.status, 200, text); return JSON.parse(text);
+      try {
+        const response = await fetch(origin + path, { method });
+        const text = await response.text(); assert.equal(response.status, 200, text); return JSON.parse(text);
+      } catch (error) {
+        const id = path.split("/").at(-1), caseId = diagnosticCaseIds.has(id) ? id : "none";
+        diagnostics.failure(path.includes("/usage/") ? "sql_receipt" : path.includes("/join/") || path.endsWith("/retire") ? "worker_retirement" : "worker_acquisition", error, caseId, "status");
+        throw error;
+      }
     };
     await command("/__catalog/init", "POST");
     retire = () => command("/__catalog/retire", "POST");
-    await run({ origin, control: gates.origin, command, mf });
-  } catch (error) { failures.push(error); }
+    phase = "body";
+    await run({ origin, control: gates.origin, command, mf, diagnostics });
+  } catch (error) { diagnostics.failure(phase, error); failures.push(error); }
   // Release real producers, then join every original operation before disposal.
   // No failed cleanup step may hide the body error or skip a later owner.
-  await finishOwnedCleanup(failures, [
-    () => gates?.releaseAll(), () => retire?.(), () => gates?.close(), () => mf?.dispose(),
-    () => temporary === undefined ? undefined : rm(temporary, { recursive: true, force: true }),
-  ]);
+  const steps = [
+    ["producer_release", () => gates?.releaseAll()], ["worker_retirement", () => retire?.()],
+    ["control_close", () => gates?.close()], ["worker_dispose", () => mf?.dispose()],
+    ["scratch_cleanup", () => temporary === undefined ? undefined : rm(temporary, { recursive: true, force: true })],
+  ];
+  try {
+    await finishOwnedCleanup(failures, steps.map(([phase, step]) => async () => {
+      try { await step(); } catch (error) { diagnostics.failure(phase, error); throw error; }
+    }));
+  } finally { diagnostics.finish(); }
 }
 
 async function verifyCase(f, row) {
+  try { return await verifyCaseResult(f, row); }
+  catch (error) { f.diagnostics.failure("case_verify", error, row.id, "assertion"); throw error; }
+}
+async function verifyCaseResult(f, row) {
   const joined = await f.command(`/__catalog/join/${row.id}`);
   assert.equal(joined.retired, true, row.id);
   assert.equal(joined.charged, 0, row.id);
@@ -154,14 +271,16 @@ async function verifyCase(f, row) {
     }
   }
   if (row.scenario !== "stale") {
-    const receipt = await f.command(`/__catalog/usage/${row.id}`);
-    assert.equal(receipt.usage.events.length, 1, row.id);
-    const [event] = receipt.usage.events;
-    assert.equal(event.provider, row.provider); assert.equal(event.credential_id, row.id); assert.equal(event.policy_id, row.id);
-    assert.equal(event.capability, "models.list"); assert.equal(event.model, null);
-    assert.equal(event.cost_basis, "none"); assert.equal(event.actual_cost_micros, 0);
-    assert.equal(receipt.budget.spentMicros, 0);
-    assert.doesNotMatch(JSON.stringify(event), /fixture-secret|catalog-owner-|must-not-fallback/);
+    try {
+      const receipt = await f.command(`/__catalog/usage/${row.id}`);
+      assert.equal(receipt.usage.events.length, 1, row.id);
+      const [event] = receipt.usage.events;
+      assert.equal(event.provider, row.provider); assert.equal(event.credential_id, row.id); assert.equal(event.policy_id, row.id);
+      assert.equal(event.capability, "models.list"); assert.equal(event.model, null);
+      assert.equal(event.cost_basis, "none"); assert.equal(event.actual_cost_micros, 0);
+      assert.equal(receipt.budget.spentMicros, 0);
+      assert.doesNotMatch(JSON.stringify(event), /fixture-secret|catalog-owner-|must-not-fallback/);
+    } catch (error) { f.diagnostics.failure("sql_receipt", error, row.id, "receipt"); throw error; }
   }
   return joined;
 }
@@ -258,6 +377,72 @@ test("catalog cleanup retains the primary body error and every cleanup failure w
   } finally { reader.releaseLock(); }
 });
 
+test("catalog diagnostic schema rejects control text, extra data and hostile getters", () => {
+  const base = failureDiagnostic("sdk", "cerebras_inventory", "cerebras_table", "body", undefined);
+  assert.equal(base.category, "undefined"); assert.equal(base.name, "undefined");
+  assert.equal(failureDiagnostic("sdk", "none", "none", "setup", null).category, "null");
+  assert.equal(failureDiagnostic("sdk", "none", "none", "setup", "untrusted throw").category, "unknown");
+  for (const extra of [{ message: "private" }, { field: "status\r\n::error::injection" }, { actual: "private" }, { expected: NaN }, { actual: 1_000_000_001 }]) {
+    assert.equal(safeDiagnosticRecord({ ...base, ...extra }), undefined);
+  }
+  let getters = 0;
+  const hostile = Object.defineProperties({}, Object.fromEntries(["name", "code", "expected", "actual", "message", "stack"].map(key => [key, { get() { getters++; throw new Error("must not run"); } }])));
+  assert.equal(failureDiagnostic("sdk", "none", "none", "setup", hostile).category, "unknown");
+  assert.equal(safeDiagnosticRecord(Object.defineProperty({ ...base }, "field", { get() { getters++; return "none"; } })), undefined);
+  assert.equal(getters, 0);
+  const assertion = new assert.AssertionError({ expected: 4, actual: 1, operator: "strictEqual", message: "not relayed" });
+  assert.deepEqual(failureDiagnostic("sdk", "chutes_inventory", "chutes_table", "body", assertion, "cache"), {
+    v: 1, layer: "sdk", testId: "chutes_inventory", caseId: "chutes_table", phase: "body", category: "assertion", name: "AssertionError", field: "cache", code: "ERR_ASSERTION", expected: 4, actual: 1,
+  });
+  assert.equal(annotationEscape("%\r\n::error::"), "%25%0D%0A::error::");
+});
+
+test("catalog diagnostic relay accepts only new typed SDK records and rejects oversized input", async () => {
+  const lines = [], diagnostics = createDiagnostics(line => lines.push(line)), gates = await barriers(diagnostics);
+  const post = async body => {
+    const response = await fetch(gates.origin + "/diagnostic", { method: "POST", headers: { "content-type": "application/json" }, body, signal: AbortSignal.timeout(2_000) });
+    await response.arrayBuffer(); return response.status;
+  };
+  try {
+    const record = failureDiagnostic("sdk", "nvidia_stale", "nvidia_stale", "stale_revocation", null);
+    assert.equal(await post(JSON.stringify(record)), 204);
+    assert.equal(await post(JSON.stringify({ ...record, layer: "outer" })), 400);
+    assert.equal(await post(JSON.stringify({ ...record, caseId: "unknown" })), 400);
+    assert.equal(await post(JSON.stringify({ ...record, message: "not allowed" })), 400);
+    assert.equal(await post("{"), 400);
+    assert.equal(await post(" ".repeat(2_049)), 413);
+    assert.deepEqual(lines, ["::error title=Catalog contract diagnostic::" + JSON.stringify(record) + "\n"]);
+  } finally { await gates.close(); diagnostics.finish(); }
+});
+
+test("catalog diagnostic relay caps annotations and reports only safe child metadata", () => {
+  const lines = [], diagnostics = createDiagnostics(line => lines.push(line));
+  let getters = 0;
+  const child = Object.defineProperties({ code: 1, killed: false, signal: "SIGTERM" }, Object.fromEntries(["message", "stdout", "stderr"].map(key => [key, { get() { getters++; throw new Error("must not read child output"); } }])));
+  diagnostics.child(child);
+  for (let index = 0; index < 100; index++) diagnostics.emit(failureDiagnostic("sdk", "venice_abort", "venice_abort", "transport_join", undefined));
+  diagnostics.finish(); diagnostics.finish();
+  assert.equal(getters, 0); assert.equal(lines.length, 64);
+  const records = lines.map(line => JSON.parse(line.slice("::error title=Catalog contract diagnostic::".length)));
+  assert.deepEqual(records.slice(0, 3).map(row => [row.field, row.actual]), [["exit_code", 1], ["killed", false], ["sdk_records", 0]]);
+  assert.equal(records[2].code, "SIGTERM");
+  assert.equal(records.at(-1).field, "suppressed"); assert.equal(records.at(-1).actual, 40);
+  assert.ok(lines.every(line => !line.includes("\r") && line.split("\n").length === 2));
+});
+
+test("catalog diagnostic reporting failure preserves undefined body and all cleanup failures", async () => {
+  const diagnosticFailure = new Error("diagnostic sink failed"), cleanupFailure = new Error("original cleanup failed");
+  const diagnostics = createDiagnostics(() => { throw diagnosticFailure; }), failures = [];
+  try { throw undefined; } catch (error) { diagnostics.failure("body", error); failures.push(error); }
+  let laterOwner = false;
+  await assert.rejects(finishOwnedCleanup(failures, [
+    () => { try { throw cleanupFailure; } catch (error) { diagnostics.failure("worker_retirement", error); throw error; } },
+    () => { try { throw undefined; } catch (error) { diagnostics.failure("worker_dispose", error); throw error; } },
+    () => { laterOwner = true; },
+  ]), error => { assert.deepEqual(retirementFailures(error), [undefined, cleanupFailure, undefined]); return true; });
+  diagnostics.finish(); assert.equal(laterOwner, true);
+});
+
 // This is real Worker/SQLite preparation proof, not an execution of the SDK.
 test("four compiled public catalogs preserve owner isolation, bodyless formats and physical reader retirement", { timeout: 120_000 }, async () => {
   await withWorker(async f => {
@@ -294,17 +479,22 @@ test("four compiled public catalogs preserve owner isolation, bodyless formats a
 
 test("actual registered four-provider discovery through workerd and SQLite", { skip: !source, timeout: 300_000 }, async t => {
   await withWorker(async f => {
-    await runOpenClawConsumer(t, { source, sourceHead,
+    try { await runOpenClawConsumer(t, { source, sourceHead,
       fixture: new URL("./fixtures/openclaw-public-catalogs-contract.test.ts", import.meta.url),
       testPath: "extensions/clawrouter/worker-public-catalogs-contract.test.ts",
       env: { CLAWROUTER_CONTRACT_ORIGIN: f.origin, CLAWROUTER_CONTRACT_CONTROL: f.control,
         CLAWROUTER_CONTRACT_SOURCE_HEAD: sourceHead, CLAWROUTER_CONTRACT_CATALOG_CASES: JSON.stringify(cases) } });
+    } catch (error) { f.diagnostics.child(error); throw error; }
     for (const row of cases) await verifyCase(f, row);
     await verifyCalls(f, cases);
   });
 });
 
 async function verifyCalls(f, selected) {
+  try { await verifyCallResults(f, selected); }
+  catch (error) { f.diagnostics.failure("upstream_contract", error, "none", "upstream"); throw error; }
+}
+async function verifyCallResults(f, selected) {
   const upstream = await f.mf.getWorker("upstream");
   const calls = await (await upstream.fetch("https://fixture.example/state")).json();
   assert.equal(calls.length, selected.reduce((sum, row) => sum + (row.scenario === "stale" ? 0 : row.urls.length), 0));
