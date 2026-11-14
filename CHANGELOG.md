@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an explicit fixed-choice Fusion client for compatible Chat Completions endpoints, with lazy calls, bounded deadlines and partial usage receipts.
+
 - Record local Fusion model loading and inference durations separately from call wall time, preserving unknown timings in benchmark totals.
 
 - Add an opt-in fixed-choice Fusion vote runner with conservative early stopping and an offline cost replay tool.
