@@ -39,6 +39,7 @@ const observationErrors: unknown[] = [];
 let catalogCalls = 0, chatCalls = 0, expectedChatCalls = 0;
 let bodyPassed = false, negativeCase: "embedded_error" | "cancel" | null = null;
 let callerSignal: AbortSignal | undefined;
+let callerScenario: string | undefined;
 function it(name: string, body: () => Promise<void>) {
   nativeIt(name, async () => {
     negativeCase = name === "returns embedded_error without region, plan or credential retry" ? "embedded_error" :
@@ -152,7 +153,7 @@ function observe(kind: Acquisition["kind"], returned: Acquisition["returned"], s
 
 beforeEach(() => {
   clearLiveCatalogCacheForTests();
-  bodyPassed = false; negativeCase = null; callerSignal = undefined;
+  bodyPassed = false; negativeCase = null; callerSignal = undefined; callerScenario = undefined;
   acquisitions.length = 0; closeOperations.length = 0; dispatchers.clear(); observationErrors.length = 0;
   catalogCalls = 0; chatCalls = 0; expectedChatCalls = 0;
   vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(function (options) {
@@ -187,6 +188,8 @@ beforeEach(() => {
   });
 });
 afterEach(async () => {
+  const cleanupFailures: unknown[] = [];
+  let joinedAndAsserted = false;
   try {
     const returned = await Promise.allSettled(acquisitions.map(row => row.returned));
     const joined = await Promise.all(acquisitions.map(async row => {
@@ -227,8 +230,33 @@ afterEach(async () => {
       if (row.kind === "chat") expect(row.readers.length).toBeGreaterThan(0);
     }
     expect(observationErrors).toEqual([]);
-  } finally { vi.restoreAllMocks(); clearLiveCatalogCacheForTests(); }
+    joinedAndAsserted = true;
+  } catch (error) { cleanupFailures.push(error); }
+  try { vi.restoreAllMocks(); } catch (error) { cleanupFailures.push(error); }
+  try { clearLiveCatalogCacheForTests(); } catch (error) { cleanupFailures.push(error); }
+  if (cleanupFailures.length === 1) throw cleanupFailures[0];
+  if (cleanupFailures.length > 1) throw new AggregateError(cleanupFailures, "BytePlus client retirement or restoration failed");
+  if (negativeCase === "cancel") {
+    expect(bodyPassed && joinedAndAsserted).toBe(true);
+    expect(callerScenario).toBe("cancel"); expect(callerSignal?.aborted).toBe(true);
+    await sendCancelReceipt(nativeFetch, origin, {
+      v: 1, scenario: "cancel", partialDelivery: true, callerAborted: true, originalsJoined: true, restored: true,
+    });
+  }
 });
+
+async function sendCancelReceipt(fetchControl: typeof fetch, controlOrigin: string, receipt: {
+  v: 1; scenario: "cancel"; partialDelivery: true; callerAborted: true; originalsJoined: true; restored: true;
+}) {
+  // This original control transport is outside both observed inference guards.
+  // The named unchanged body asserts text delivery before abort; receipt follows
+  // every original join/assertion and successful mock/cache restoration.
+  const response = await fetchControl(controlOrigin + "/fixture/sdk-cancel", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(receipt) });
+  const failures: unknown[] = [];
+  if (response.status !== 204) failures.push(new Error("SDK cancellation receipt refused"));
+  try { await response.body?.cancel(); } catch (error) { failures.push(error); }
+  if (failures.length) throw new AggregateError(failures, "SDK cancellation receipt failed");
+}
 
 async function selected(id: string, modelId = models[0]) {
   const provider = await registerSingleProviderPlugin(plugin);
@@ -248,7 +276,7 @@ function context(id: string): Context {
 }
 async function start(selection: Awaited<ReturnType<typeof selected>>, id: string, simple = false, ctx = context(id), signal?: AbortSignal, apiKey = key(id)) {
   const { provider, model } = selection;
-  callerSignal = signal;
+  callerSignal = signal; callerScenario = id;
   // The embedded host selects its managed transport before provider wrapping.
   // Simple completion keeps its separate registered source stream and defaults.
   const host = simple ? undefined : selectEmbeddedAgentStream({

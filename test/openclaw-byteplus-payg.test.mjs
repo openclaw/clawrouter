@@ -25,7 +25,7 @@ test("registered ClawRouter catalog routes BytePlus PAYG turns with original gra
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-byteplus-client-"));
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs"); let mf, origin;
   const failures = [], helperRecord = { v: 1, site: "helper", kind: "none", state: "unknown", helperCalled: false, diagnosticCount: null, sdkRecords: null };
-  let evidenceRecords = [];
+  let evidenceRecords = [], helperFulfilled = false, cancelUsage, physical, observedCalls;
   try {
     mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(), { directRouter: true });
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
@@ -40,6 +40,7 @@ test("registered ClawRouter catalog routes BytePlus PAYG turns with original gra
     assert.equal((await fetch(origin + "/fixture/grants", { method: "POST" })).status, 204);
     await observeConsumerReturn(() => runOpenClawConsumer(t, { source, sourceHead, fixture: new URL("./fixtures/openclaw-byteplus-payg-contract.test.ts", import.meta.url),
       env: { CLAWROUTER_CONTRACT_ORIGIN: origin, BYTEPLUS_API_KEY: "must-not-fallback", VOLCANO_ENGINE_API_KEY: "must-not-fallback", VOLCENGINE_PLAN_API_KEY: "must-not-fallback", BYTEPLUS_PLAN_API_KEY: "must-not-fallback", ARK_API_KEY: "must-not-fallback" } }), helperRecord);
+    helperFulfilled = true; // Only the fulfilled original await qualifies the suite.
     // The actual client omits closed rows. Separately prove its raw Worker
     // denial rather than inventing an executable client catalog entry.
     for (const [i, model] of closed.entries()) {
@@ -48,7 +49,8 @@ test("registered ClawRouter catalog routes BytePlus PAYG turns with original gra
     }
     const retirement = await fetch(origin + "/fixture/retire", { method: "POST" });
     assert.equal(retirement.status, 200);
-    const joined = await retirement.json();
+    const joined = await retirement.json(); physical = joined;
+    helperRecord.sdkRecords = joined.sdkReceipt?.valid === true ? 1 : 0;
     const observation = await (await fetch(origin + "/fixture/state")).json();
     assert.equal(joined.requests, observation.catalog.length + observation.incoming.length);
     assert.equal(joined.inputs.length, dispatched.length + 1);
@@ -69,6 +71,7 @@ test("registered ClawRouter catalog routes BytePlus PAYG turns with original gra
       const call = calls.find(c => c.id === "cancel"); if (call?.cancelled || call?.aborted) break;
       await new Promise(resolve => setTimeout(resolve, 20));
     }
+    observedCalls = calls;
     const cancelled = calls.find(c => c.id === "cancel");
     assert.ok(cancelled?.cancelled || cancelled?.aborted, "actual post-header cancellation must reach upstream transport");
     assert.notEqual(cancelled.fixtureExpired, true, "fixture expiry is not caller cancellation");
@@ -108,7 +111,10 @@ test("registered ClawRouter catalog routes BytePlus PAYG turns with original gra
         assert.deepEqual([event.input_tokens, event.output_tokens, event.total_tokens, event.cached_input_tokens], rejected || ["cancel", "no_usage"].includes(id) ? [null, null, null, null] : [100, 20, 120, 40], id);
       }
       assert.doesNotMatch(JSON.stringify(usage), /fixture-upstream|synthetic-reasoning|synthetic-tool-result|synthetic-answer/);
+      if (id === "cancel") cancelUsage = usage;
     }
+    assert.equal(finalCallerCancellation({ physical: joined, helperFulfilled, receipt: joined.sdkReceipt, incoming: observation.incoming, calls, usage: cancelUsage }), true,
+      "bound caller cancellation disposition requires every independent oracle");
   } catch (error) { failures.push(error); }
   finally {
     if (mf && origin) {
@@ -125,7 +131,7 @@ test("registered ClawRouter catalog routes BytePlus PAYG turns with original gra
     try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); }
   }
   if (failures.length) {
-    try { emitWorkerEvidence(evidenceRecords, undefined, [helperRecord, primaryEvidence(failures[0])]); }
+    try { emitWorkerEvidence(evidenceRecords, undefined, [helperRecord, ...cancelSummaryEvidence(physical, observedCalls, cancelUsage), primaryEvidence(failures[0])]); }
     catch (error) { failures.push(error); }
   }
   if (failures.length === 1) throw failures[0];
@@ -204,10 +210,10 @@ async function sdkRetirementHarness(rows, options = {}) {
   const expect = value => ({ toBe(v) { assert.equal(value, v); }, toEqual(v) { assert.deepEqual(value, v); },
     toHaveLength(n) { assert.equal(value.length, n); }, toBeGreaterThan(n) { assert.ok(value > n); } });
   const code = stripTypeScriptTypes(text.slice(begin, end));
-  new Function("afterEach", "acquisitions", "closeOperations", "dispatchers", "observationErrors", "bodyPassed", "catalogCalls", "chatCalls", "expectedChatCalls", "negativeCase", "joinReaderOperations", "acceptStoredSdkCancel", "vi", "clearLiveCatalogCacheForTests", "expect", code)(
+  new Function("afterEach", "acquisitions", "closeOperations", "dispatchers", "observationErrors", "bodyPassed", "catalogCalls", "chatCalls", "expectedChatCalls", "negativeCase", "joinReaderOperations", "acceptStoredSdkCancel", "vi", "clearLiveCatalogCacheForTests", "expect", "callerScenario", "callerSignal", "nativeFetch", "origin", code)(
     fn => { cleanup = fn; }, rows, options.closeOperations ?? [Promise.resolve()], options.dispatchers ?? new Set([{ closed: true }]), options.observationErrors ?? [], options.bodyPassed !== false,
     1, rows.length - 1, rows.length - 1, Object.hasOwn(options, "scenario") ? options.scenario : "embedded_error", helpers.joinReaderOperations, helpers.acceptStoredSdkCancel,
-    { restoreAllMocks() {} }, () => {}, expect);
+    { restoreAllMocks: options.restore ?? (() => {}) }, options.clear ?? (() => {}), expect, options.callerScenario ?? "cancel", options.callerSignal ?? AbortSignal.abort(), options.fetchControl ?? (async () => new Response(null, { status: 204 })), "https://fixture.example");
   return cleanup;
 }
 async function nativeStoredReader(options = {}) {
@@ -287,17 +293,18 @@ test("SDK retirement retains unrelated reads and dispatcher failures including u
 // Worker-only evidence. No exception strings or diagnostic values authorize a
 // verdict; the original joinReaderOperations classifier remains unchanged.
 function workerEvidenceProtocol(isProxy) {
-  const numeric = ["input", "reader", "op", "invokeSeq", "settleSeq", "closedSeq", "readSeq", "unlockBefore", "unlockCalls", "unlockReturns", "unlockInvokeSeq", "unlockReturnSeq", "operations", "settled", "suppressed", "duplicates", "omitted"];
-  const boolean = ["reasonDefined", "closedReasonDefined", "readReasonDefined", "operandPresent", "operandDefined", "signalAborted", "signalReasonDefined", "settleSignalAborted", "settleSignalReasonDefined", "sameClosed", "sameRead", "sameOperand", "sameSignal", "operandSameRead", "operandSameSignal", "allSettled", "bodyLocked", "joinAccepted", "helperCalled"];
-  const enums = { signalScope: ["fetch_input"], site: ["read_join", "cancel_join", "suppressed", "helper", "primary"], kind: ["read", "cancel", "none"], state: ["pending", "fulfilled", "rejected", "sync_throw", "unknown"], failureClass: ["unknown", "undefined", "assertion"], closedState: ["pending", "fulfilled", "rejected"] };
+  const numeric = ["input", "reader", "op", "invokeSeq", "settleSeq", "closedSeq", "readSeq", "unlockBefore", "unlockCalls", "unlockReturns", "unlockInvokeSeq", "unlockReturnSeq", "operations", "settled", "suppressed", "duplicates", "omitted", "attempts", "matchedPosts"];
+  const boolean = ["reasonDefined", "closedReasonDefined", "readReasonDefined", "operandPresent", "operandDefined", "signalAborted", "signalReasonDefined", "settleSignalAborted", "settleSignalReasonDefined", "sameClosed", "sameRead", "sameOperand", "sameSignal", "operandSameRead", "operandSameSignal", "allSettled", "bodyLocked", "joinAccepted", "helperCalled", "ingressObserved", "readPendingAtCancel", "earlierReadFailure", "bound", "responseAdmitted"];
+  const enums = { scenario: ["cancel", "none"], disposition: ["provisional", "unclassified"], signalScope: ["fetch_input"], site: ["read_join", "cancel_join", "suppressed", "helper", "primary", "sdk_receipt", "binding", "upstream", "accounting"], kind: ["read", "cancel", "none"], state: ["pending", "fulfilled", "rejected", "sync_throw", "unknown"], failureClass: ["unknown", "undefined", "assertion"], closedState: ["pending", "fulfilled", "rejected"] };
   function validate(value) {
     try {
       if (!value || typeof value !== "object" || isProxy?.(value)) return null;
-      const out = {}, keys = Reflect.ownKeys(value); if (keys.length < 4 || keys.length > 48) return null;
+      const out = {}, keys = Reflect.ownKeys(value); if (keys.length < 4 || keys.length > 64) return null;
       for (const key of keys) {
         const d = Object.getOwnPropertyDescriptor(value, key); if (!d || !Object.hasOwn(d, "value")) return null;
         const v = d.value;
-        if (["diagnosticCount", "sdkRecords"].includes(key)) { if (v !== null && !(Number.isInteger(v) && v >= 0 && v <= 64)) return null; }
+        if (["ingressAborted", "receiptValid", "partialDelivery", "callerAborted", "originalsJoined", "restored", "requestBound", "admitted", "upstreamCanceled", "nonExpired", "noReplay", "accountingMatched"].includes(key)) { if (v !== null && typeof v !== "boolean") return null; }
+        else if (["diagnosticCount", "sdkRecords"].includes(key)) { if (v !== null && !(Number.isInteger(v) && v >= 0 && v <= 64)) return null; }
         else if (["actual", "expected"].includes(key)) { if (v !== null && typeof v !== "boolean" && !(typeof v === "number" && Number.isFinite(v) && Math.abs(v) <= 1_000_000_000)) return null; }
         else if (key === "v" ? v !== 1 : numeric.includes(key) ? !(Number.isInteger(v) && v >= 0 && v <= 1_000_000) : boolean.includes(key) ? typeof v !== "boolean" : !enums[key]?.includes(v)) return null;
         out[key] = v;
@@ -310,7 +317,7 @@ function workerEvidenceProtocol(isProxy) {
   return { validate, add(value) { const row = validate(value); if (!row) return false; if (records.length < 63) records.push(row); else suppressed = Math.min(1_000_000, suppressed + 1); return true; },
     values() { return suppressed ? [...records, { v: 1, site: "suppressed", kind: "none", state: "fulfilled", suppressed }] : [...records]; } };
 }
-function workerReaderEvidence(reader, input, index, signal) {
+function workerReaderEvidence(reader, input, index, signal, ingressSignal) {
   let seq = 0, unlockCalls = 0, unlockReturns = 0, unlockInvokeSeq = 0, unlockReturnSeq = 0;
   let closedState = "pending", closedReason, closedSeq = 0, readReason, readSeq = 0;
   const operations = [], closed = reader.closed;
@@ -318,16 +325,33 @@ function workerReaderEvidence(reader, input, index, signal) {
   const snapshot = () => ({ aborted: signal?.aborted === true, reason: signal?.reason });
   return {
     invoke(kind, original, receiver, args) {
-      const op = { kind, state: "pending", op: operations.length + 1, invokeSeq: ++seq, settleSeq: 0, unlockBefore: unlockCalls, operandPresent: args.length > 0, operand: args[0], signal: snapshot(), reason: undefined };
+      const op = { kind, state: "pending", op: operations.length + 1, invokeSeq: ++seq, settleSeq: 0, unlockBefore: unlockCalls, operandPresent: args.length > 0, operand: args[0], signal: snapshot(), reason: undefined,
+        ingressObserved: !!ingressSignal, ingressAborted: ingressSignal ? ingressSignal.aborted : null,
+        earlierReadFailure: operations.some(row => row.kind === "read" && ["rejected", "sync_throw"].includes(row.state)),
+        pendingReads: operations.filter(row => row.kind === "read" && row.state === "pending") };
       operations.push(op);
       let pending;
       try { pending = Reflect.apply(original, receiver, args); } catch (reason) { op.state = "sync_throw"; op.reason = reason; op.settleSeq = ++seq; op.settleSignal = snapshot(); throw reason; }
+      op.pending = pending;
       void pending.then(() => { op.state = "fulfilled"; op.settleSeq = ++seq; op.settleSignal = snapshot(); }, reason => {
         op.state = "rejected"; op.reason = reason; op.settleSeq = ++seq; op.settleSignal = snapshot(); if (kind === "read") { readReason = reason; readSeq = op.settleSeq; }
       });
       return pending;
     },
     unlocking() { unlockCalls++; unlockInvokeSeq = ++seq; }, unlocked() { unlockReturns++; unlockReturnSeq = ++seq; },
+    candidate(pending, reason, body) {
+      const read = operations.find(op => op.pending === pending && op.kind === "read" && op.state === "rejected" && op.reason === reason);
+      const cancels = operations.filter(op => op.kind === "cancel"), cancel = cancels[0];
+      return reason !== undefined && !!read && cancels.length === 1 && cancel.state === "fulfilled" && cancel.unlockBefore === 0 &&
+        cancel.signal.aborted === true && cancel.ingressObserved && typeof cancel.ingressAborted === "boolean" &&
+        !cancel.earlierReadFailure && cancel.pendingReads.includes(read) && closedState === "fulfilled" &&
+        cancel.settleSeq > 0 && closedSeq > 0 && cancel.settleSeq < unlockInvokeSeq && closedSeq < unlockInvokeSeq &&
+        unlockCalls === 1 && unlockReturns === 1 && body.locked === false && operations.every(op => op.state === "fulfilled" || op === read);
+    },
+    disposition() {
+      const cancel = operations.find(op => op.kind === "cancel");
+      return { physical: true, ingressObserved: cancel?.ingressObserved === true, ingressAborted: cancel?.ingressAborted ?? null, fetchAborted: cancel?.signal.aborted === true };
+    },
     records(body) {
       const definedSame = (a, b) => a !== undefined && b !== undefined && a === b;
       return operations.filter(op => op.state === "rejected" || op.state === "sync_throw" || op.kind === "cancel").map(op => ({
@@ -337,6 +361,7 @@ function workerReaderEvidence(reader, input, index, signal) {
         reasonDefined: op.reason !== undefined, closedReasonDefined: closedReason !== undefined, readReasonDefined: readReason !== undefined,
         operandPresent: op.operandPresent, operandDefined: op.operand !== undefined,
         signalAborted: op.signal.aborted, signalReasonDefined: op.signal.reason !== undefined,
+        ingressObserved: op.ingressObserved, ingressAborted: op.ingressAborted, readPendingAtCancel: op.pendingReads.length > 0, earlierReadFailure: op.earlierReadFailure,
         settleSignalAborted: op.settleSignal?.aborted === true, settleSignalReasonDefined: op.settleSignal?.reason !== undefined,
         sameClosed: definedSame(op.reason, closedReason), sameRead: definedSame(op.reason, readReason), sameOperand: definedSame(op.reason, op.operand),
         sameSignal: definedSame(op.reason, op.settleSignal?.reason), operandSameRead: definedSame(op.operand, readReason), operandSameSignal: definedSame(op.operand, op.signal.reason),
@@ -373,7 +398,7 @@ function primaryEvidence(error) {
   return row;
 }
 function emitWorkerEvidence(records, write = process.stdout.write.bind(process.stdout), outer = []) {
-  if (!Array.isArray(outer) || nodeTypes.isProxy(outer) || outer.length > 2) throw new Error("invalid outer evidence collection");
+  if (!Array.isArray(outer) || nodeTypes.isProxy(outer) || outer.length > 6) throw new Error("invalid outer evidence collection");
   const safe = [...validateWorkerEvidenceCollection(records), ...validateWorkerEvidenceCollection(outer)];
   const unique = new Map(); let duplicates = 0, suppressed = 0;
   const finality = row => [row.settled ?? 0, row.unlockReturns ?? 0, row.unlockReturnSeq ?? 0, row.settleSeq ?? 0];
@@ -396,8 +421,8 @@ function emitWorkerEvidence(records, write = process.stdout.write.bind(process.s
   const first = physical.find(row => row.kind === "read") ?? physical[0];
   const sibling = first && physical.find(row => row !== first && row.input === first.input && row.reader === first.reader && row.kind === "cancel");
   const leading = [first, sibling].filter(Boolean);
-  const ordered = [...values.filter(row => row.site === "helper"), ...leading,
-    ...values.filter(row => !["helper", "read_join", "cancel_join"].includes(row.site)), ...physical.filter(row => !leading.includes(row))];
+  const ordered = [...values.filter(row => row.site === "helper"), ...values.filter(row => row.site === "sdk_receipt"), ...values.filter(row => row.site === "binding"), ...leading,
+    ...values.filter(row => !["helper", "sdk_receipt", "binding", "read_join", "cancel_join"].includes(row.site)), ...physical.filter(row => !leading.includes(row))];
   const selected = ordered.slice(0, 9), omitted = ordered.length - selected.length;
   // Actions admits ten error annotations per step, independently of the API's
   // fifty-annotation request size. Retain the internal 64-record evidence bank.
@@ -557,6 +582,236 @@ export default { ...handler, async fetch(request) {
   if (failures.length) throw new AggregateError(failures, "Worker evidence or cleanup failed");
 });
 
+function sdkCancelReceiptStore() {
+  let attempts = 0, receipt = null;
+  const valid = value => value && typeof value === "object" && Object.keys(value).length === 6 && value.v === 1 && value.scenario === "cancel" &&
+    value.partialDelivery === true && value.callerAborted === true && value.originalsJoined === true && value.restored === true;
+  return {
+    async receive(request) {
+      attempts++;
+      if (request.method !== "POST" || !request.body) return new Response(null, { status: 409 });
+      const reader = request.body.getReader(), chunks = []; let bytes = 0; const failures = [];
+      try { for (;;) { const result = await reader.read(); if (result.done) break; bytes += result.value.byteLength; if (bytes > 512) throw new Error("receipt bound"); chunks.push(result.value); } }
+      catch (error) { failures.push(error); }
+      finally { try { await reader.cancel(); } catch (error) { failures.push(error); } try { reader.releaseLock(); } catch (error) { failures.push(error); } }
+      if (failures.length) return new Response(null, { status: 400 });
+      if (attempts !== 1) return new Response(null, { status: 409 });
+      try {
+        const joined = new Uint8Array(bytes); let offset = 0; for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.byteLength; }
+        const value = JSON.parse(new TextDecoder().decode(joined)); if (!valid(value)) return new Response(null, { status: 400 });
+        receipt = value; return new Response(null, { status: 204 });
+      } catch { return new Response(null, { status: 400 }); }
+    },
+    snapshot() { return { attempts, valid: attempts === 1 && receipt !== null, receipt }; },
+  };
+}
+function bindByteplusInput(input, init, records, knownIds) {
+  const request = input instanceof Request ? input : null, url = request ? request.url : String(input);
+  const method = init?.method !== undefined ? init.method : request?.method ?? "GET";
+  // Fetch replaces Request headers when init.headers is defined; never merge.
+  const headers = new Headers(init?.headers !== undefined ? init.headers : request?.headers);
+  const id = knownIds.find(id => headers.get("authorization") === `Bearer fixture-upstream-${id}`) ?? null;
+  const matches = records.filter(record => record.kind === "inference" && record.id === id && record.method === "POST" && record.path === "/v1/chat/completions");
+  return { id, record: matches.length === 1 ? matches[0] : null, matches: matches.length,
+    target: url === "https://ark.ap-southeast.bytepluses.com/api/v3/chat/completions" && method === "POST" };
+}
+function byteplusBindingFacts(proof, records, inputs) {
+  const ingress = records.filter(record => record.kind === "inference" && record.id === "cancel"), binding = proof?.binding;
+  const bound = binding?.id === "cancel" && binding.target === true && binding.matches === 1 && ingress.length === 1 &&
+    binding.record === ingress[0] && binding.record.request?.signal === binding.record.signal &&
+    binding.record.method === "POST" && binding.record.path === "/v1/chat/completions" && inputs.filter(input => input.binding.id === "cancel").length === 1;
+  const responseAdmitted = bound && proof.response?.status === 200 && proof.body === proof.response.body &&
+    proof.response.headers.get("content-type")?.includes("text/event-stream") === true && binding.record.response?.status === 200 &&
+    binding.record.response.headers.get("content-type")?.includes("text/event-stream") === true;
+  return { bound: !!bound, responseAdmitted: !!responseAdmitted };
+}
+
+function cancelSummaryEvidence(physical, calls, usage) {
+  const receipt = physical?.sdkReceipt, proof = receipt?.receipt, binding = physical?.cancellationBinding;
+  const posts = calls?.filter(row => row.id === "cancel"), event = usage?.usage?.events?.[0];
+  const base = { v: 1, kind: "none", state: "fulfilled", scenario: "cancel" };
+  return [
+    { ...base, site: "sdk_receipt", receiptValid: receipt ? receipt.valid === true : null, partialDelivery: proof ? proof.partialDelivery === true : null,
+      callerAborted: proof ? proof.callerAborted === true : null, originalsJoined: proof ? proof.originalsJoined === true : null, restored: proof ? proof.restored === true : null },
+    { ...base, site: "binding", requestBound: binding ? binding.bound === true : null, admitted: binding ? binding.responseAdmitted === true : null },
+    { ...base, site: "upstream", upstreamCanceled: posts ? posts.length === 1 && (posts[0].cancelled === true || posts[0].aborted === true) : null,
+      nonExpired: posts ? posts.length === 1 && posts[0].fixtureExpired !== true : null, noReplay: posts ? posts.length === 1 : null },
+    { ...base, site: "accounting", accountingMatched: usage ? usage?.usage?.events?.length === 1 && usage.budget?.spentMicros === 7 && event?.status === "client_error" &&
+      event?.credential_id === "byte_cancel" && event?.policy_id === "byte_cancel" && event?.provider === "byteplus" && event?.model === "byteplus/dola-seed-2-1-turbo-260628" &&
+      event?.actual_cost_micros === 7 && event?.cost_basis === "policy_fixed" && [event?.input_tokens, event?.output_tokens, event?.total_tokens, event?.cached_input_tokens].every(value => value === null) : null },
+  ];
+}
+
+function finalCallerCancellation({ physical, helperFulfilled, receipt, incoming, calls, usage }) {
+  const candidates = physical?.inputs?.flatMap(input => input.candidates ?? []) ?? [];
+  const matches = incoming?.filter(row => row.id === "cancel") ?? [], posts = calls?.filter(row => row.id === "cancel") ?? [];
+  const event = usage?.usage?.events?.[0];
+  return helperFulfilled === true && receipt?.attempts === 1 && receipt.valid === true && receipt.receipt?.scenario === "cancel" &&
+    receipt.receipt.partialDelivery === true && receipt.receipt.callerAborted === true && receipt.receipt.originalsJoined === true && receipt.receipt.restored === true &&
+    physical?.tasksFulfilled === true && Array.isArray(physical.inputs) && physical.inputs.every(input => input.joined === true && input.locked === false) &&
+    physical.cancellationBinding?.bound === true && physical.cancellationBinding.responseAdmitted === true &&
+    candidates.length <= 1 && candidates.every(candidate => candidate.scenario === "cancel" && candidate.bound === true && candidate.responseAdmitted === true &&
+      candidate.physical === true && candidate.ingressObserved === true && typeof candidate.ingressAborted === "boolean" && candidate.fetchAborted === true) &&
+    matches.length === 1 && matches[0].path === "/v1/chat/completions" && matches[0].method === "POST" && matches[0].model === "byteplus/dola-seed-2-1-turbo-260628" &&
+    posts.length === 1 && posts[0].url === "https://ark.ap-southeast.bytepluses.com/api/v3/chat/completions" &&
+    posts[0].authorization === "Bearer fixture-upstream-cancel" && posts[0].body?.model === "dola-seed-2-1-turbo-260628" && posts[0].body?.stream === true &&
+    (posts[0].cancelled === true || posts[0].aborted === true) && posts[0].fixtureExpired !== true &&
+    usage?.usage?.events?.length === 1 && usage.budget?.spentMicros === 7 && event?.credential_id === "byte_cancel" && event.policy_id === "byte_cancel" &&
+    event.provider === "byteplus" && event.model === "byteplus/dola-seed-2-1-turbo-260628" && event.status === "client_error" &&
+    event.actual_cost_micros === 7 && event.cost_basis === "policy_fixed" &&
+    [event.input_tokens, event.output_tokens, event.total_tokens, event.cached_input_tokens].every(value => value === null);
+}
+
+const cancelReceipt = { v: 1, scenario: "cancel", partialDelivery: true, callerAborted: true, originalsJoined: true, restored: true };
+test("SDK cancellation receipt follows original joins and restoration and refuses failed or duplicate delivery", async t => {
+  for (const fault of [null, "body", "restore", "observer", "delivery", "duplicate"]) await t.test(fault ?? "joined", async () => {
+    const state = await nativeStoredReader(), store = sdkCancelReceiptStore(), order = [];
+    const options = { scenario: "cancel", restore() { order.push("restore"); if (fault === "restore") throw undefined; },
+      clear() { order.push("clear"); }, fetchControl: async (url, init) => {
+        order.push("receipt"); assert.deepEqual(order.slice(0, 2), ["restore", "clear"]);
+        assert.equal(state.row.body.locked, false);
+        if (fault === "delivery") throw undefined;
+        const response = await store.receive(new Request(url, init));
+        if (fault === "duplicate") return store.receive(new Request(url, init));
+        return response;
+      }, ...(fault === "body" ? { bodyPassed: false } : {}), ...(fault === "observer" ? { observationErrors: [undefined] } : {}) };
+    try {
+      const cleanup = await sdkRetirementHarness([state.catalog, state.row], options);
+      if (fault) await assert.rejects(cleanup()); else await cleanup();
+      assert.equal(store.snapshot().valid, fault === null);
+      if (["body", "restore", "observer"].includes(fault)) assert.equal(order.includes("receipt"), false);
+    } finally { state.finish(); }
+  });
+  for (const payload of [{ ...cancelReceipt, partialDelivery: false }, { ...cancelReceipt, unexpected: true }, { v: 1 }]) {
+    const store = sdkCancelReceiptStore();
+    const result = await store.receive(new Request("https://fixture.example/fixture/sdk-cancel", { method: "POST", body: JSON.stringify(payload) }));
+    assert.equal(result.status, 400); assert.equal(store.snapshot().valid, false);
+  }
+});
+
+test("actual Request binding honors header replacement and rejects ambiguous or unadmitted inference", () => {
+  const ingress = new Request("https://fixture.example/v1/chat/completions", { method: "POST" });
+  const record = { request: ingress, signal: ingress.signal, kind: "inference", id: "cancel", method: "POST", path: "/v1/chat/completions",
+    response: new Response(null, { headers: { "content-type": "text/event-stream" } }) };
+  const outgoing = new Request("https://ark.ap-southeast.bytepluses.com/api/v3/chat/completions", { method: "POST", headers: { authorization: "Bearer fixture-upstream-cancel" } });
+  const catalog = { ...record, kind: "catalog" }, records = [catalog, record];
+  assert.equal(bindByteplusInput(outgoing, undefined, records, ids).record, record);
+  assert.equal(bindByteplusInput(outgoing, { headers: {} }, records, ids).id, null);
+  assert.equal(bindByteplusInput(outgoing, { method: "GET" }, records, ids).target, false);
+  assert.equal(bindByteplusInput(outgoing, undefined, [...records, { ...record }], ids).record, null);
+  const response = new Response("data: {}\n\n", { headers: { "content-type": "text/event-stream" } });
+  const proof = { binding: bindByteplusInput(outgoing, undefined, records, ids), response, body: response.body };
+  assert.deepEqual(byteplusBindingFacts(proof, records, [proof]), { bound: true, responseAdmitted: true });
+  assert.equal(byteplusBindingFacts(proof, records, [proof, proof]).bound, false);
+  record.response = new Response(null, { status: 400 });
+  assert.equal(byteplusBindingFacts(proof, records, [proof]).responseAdmitted, false);
+});
+
+function completeCancelProof() {
+  return { helperFulfilled: true, receipt: { attempts: 1, valid: true, receipt: { ...cancelReceipt } },
+    physical: { tasksFulfilled: true, cancellationBinding: { bound: true, responseAdmitted: true }, inputs: [{ joined: true, locked: false,
+      candidates: [{ scenario: "cancel", bound: true, responseAdmitted: true, physical: true, ingressObserved: true, ingressAborted: false, fetchAborted: true }] }] },
+    incoming: [{ id: "cancel", path: "/v1/chat/completions", method: "POST", model: `byteplus/${models[0]}` }],
+    calls: [{ id: "cancel", url: "https://ark.ap-southeast.bytepluses.com/api/v3/chat/completions", authorization: "Bearer fixture-upstream-cancel", body: { model: models[0], stream: true }, cancelled: true }],
+    usage: { budget: { spentMicros: 7 }, usage: { events: [{ credential_id: "byte_cancel", policy_id: "byte_cancel", provider: "byteplus", model: `byteplus/${models[0]}`, status: "client_error",
+      actual_cost_micros: 7, cost_basis: "policy_fixed", input_tokens: null, output_tokens: null, total_tokens: null, cached_input_tokens: null }] } } };
+}
+test("final cancellation gate accepts observed false ingress but rejects every missing or contrary independent witness", () => {
+  assert.equal(finalCallerCancellation(completeCancelProof()), true);
+  const mutations = [
+    p => { p.helperFulfilled = false; }, p => { delete p.helperFulfilled; }, p => { p.receipt = undefined; }, p => { p.receipt.attempts = 2; },
+    p => { p.receipt.receipt.partialDelivery = false; }, p => { p.physical.tasksFulfilled = false; }, p => { p.physical.inputs[0].locked = true; },
+    p => { p.physical.inputs[0].joined = false; }, p => { p.physical.cancellationBinding.bound = false; },
+    p => { p.physical.cancellationBinding.responseAdmitted = false; }, p => { p.physical.inputs[0].candidates[0].ingressAborted = null; },
+    p => { p.physical.inputs[0].candidates[0].ingressObserved = false; }, p => { p.physical.inputs[0].candidates[0].fetchAborted = false; },
+    p => { p.incoming.push({ ...p.incoming[0] }); }, p => { p.calls.push({ ...p.calls[0] }); }, p => { p.calls[0].fixtureExpired = true; },
+    p => { p.calls[0].cancelled = false; }, p => { p.calls[0].authorization = "Bearer fixture-foreign"; }, p => { p.usage = undefined; },
+    p => { p.usage.usage.events[0].status = "provider_error"; }, p => { p.usage.usage.events[0].status = "deadline_exceeded"; },
+    p => { p.usage.usage.events[0].policy_id = "foreign"; }, p => { p.usage.usage.events[0].actual_cost_micros = 0; },
+  ];
+  for (const mutate of mutations) { const proof = completeCancelProof(); mutate(proof); assert.equal(finalCallerCancellation(proof), false); }
+  // Client-error without a successful partial stream cannot qualify a rejection.
+  const rejected = completeCancelProof(); rejected.physical.cancellationBinding.responseAdmitted = false;
+  assert.equal(finalCallerCancellation(rejected), false);
+});
+
+test("Worker original native operations deny foreign early failures, late abort, rejected cancel, locked or pending work", async t => {
+  for (const fault of ["early", "late", "cancel", "undefined", "sync", "locked", "pending", "unknown_ingress"]) await t.test(fault, async () => {
+    let controller, finishCancel; const signal = new AbortController(), ingress = new Request("https://fixture.example/").signal;
+    const reason = new Error("fixture failure");
+    const body = new ReadableStream({ start(c) { controller = c; }, cancel() {
+      if (fault === "cancel") throw reason;
+      if (fault === "undefined") throw undefined;
+      if (fault === "pending") return new Promise(resolve => { finishCancel = resolve; });
+    } });
+    const reader = body.getReader(), trace = workerReaderEvidence(reader, 1, 1, signal.signal, fault === "unknown_ingress" ? undefined : ingress);
+    const reading = trace.invoke("read", reader.read, reader, []); void reading.catch(() => {});
+    if (fault === "early") { controller.error(reason); await reading.catch(() => {}); }
+    if (fault !== "late") signal.abort(reason);
+    let canceled;
+    try { canceled = trace.invoke("cancel", fault === "sync" ? function () { throw undefined; } : reader.cancel, reader, [reason]); }
+    catch (error) { assert.equal(error, undefined); }
+    if (fault === "sync") controller.error(reason); // Retire this unit-test source after the synchronous counterexample.
+    if (fault === "late") signal.abort(reason);
+    if (fault === "pending") { assert.equal(trace.candidate(reading, reason, body), false); finishCancel(); }
+    await Promise.allSettled([reading, canceled].filter(Boolean));
+    if (fault !== "locked") { trace.unlocking(); reader.releaseLock(); trace.unlocked(); }
+    assert.equal(trace.candidate(reading, reason, body), false);
+    if (body.locked) reader.releaseLock();
+  });
+});
+
+test("real Worker cancellation binds admitted partial streaming, physical joins and exact SQLite before disposition", { timeout: 45_000 }, async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "byteplus-bound-cancel-")); let mf, reader; const failures = [];
+  try {
+    const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
+    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(), { directRouter: true });
+    const kv = await mf.getKVNamespace("POLICY_KV", "router"), id = "cancel";
+    await kv.put("policies/byte_cancel", JSON.stringify({ enabled: true, generation: "fixture", tenantId: "fixture", providers: ["byteplus"], models: [`byteplus/${models[0]}`],
+      grantRouting: { eligibleGrants: { byteplus: ["byteplus"] }, environmentFallback: false }, monthlyBudgetMicros: 100, requestCostMicros: 7, budgetMode: "reserve", retainRequestContent: false }));
+    await kv.put("credentials/byte_cancel", JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update("fixture-secret").digest("hex"), policyId: "byte_cancel", policyGeneration: "fixture" }));
+    await kv.put("connections/byteplus", JSON.stringify({ providerId: "byteplus", enabled: true }));
+    const origin = (await mf.unsafeGetDirectURL("router")).origin;
+    assert.equal((await fetch(origin + "/fixture/grants", { method: "POST" })).status, 204);
+    const controller = new AbortController();
+    const response = await fetch(origin + "/v1/chat/completions", { method: "POST", headers: { authorization: `Bearer ${key(id)}`, "content-type": "application/json" },
+      body: JSON.stringify({ model: `byteplus/${models[0]}`, stream: true, max_tokens: 128, messages: [{ role: "user", content: "fixture" }] }), signal: controller.signal });
+    assert.equal(response.status, 200); reader = response.body.getReader();
+    let text = ""; const decoder = new TextDecoder();
+    while (!text.includes("synthetic-answer")) { const next = await reader.read(); assert.equal(next.done, false); text += decoder.decode(next.value); }
+    const closed = reader.closed; void closed.catch(() => {}); controller.abort();
+    await Promise.allSettled([reader.cancel(), closed]); reader.releaseLock(); reader = undefined;
+    // Control-protocol regression only: this is not an actual SDK/helper receipt.
+    const receiptResponse = await fetch(origin + "/fixture/sdk-cancel", { method: "POST", body: JSON.stringify(cancelReceipt) });
+    assert.equal(receiptResponse.status, 204);
+    const retired = await fetch(origin + "/fixture/retire", { method: "POST" }); assert.equal(retired.status, 200);
+    const physical = await retired.json(), observation = await (await fetch(origin + "/fixture/state")).json();
+    const upstream = await mf.getWorker("upstream"); let calls, usage;
+    for (let n = 0; n < 150; n++) {
+      calls = await (await upstream.fetch("https://fixture.example/state")).json();
+      usage = await (await fetch(origin + "/v1/usage", { headers: { authorization: `Bearer ${key(id)}` } })).json();
+      if ((calls[0]?.cancelled || calls[0]?.aborted) && usage.usage.events.length === 1) break;
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    const proof = { physical, receipt: physical.sdkReceipt, helperFulfilled: true, incoming: observation.incoming, calls, usage };
+    assert.equal(finalCallerCancellation(proof), true);
+    assert.equal(finalCallerCancellation({ ...proof, helperFulfilled: false }), false, "a valid receipt cannot override helper rejection");
+    assert.equal(physical.cancellationBinding.responseAdmitted, true);
+    assert.equal(physical.inputs.length, 1); assert.ok(physical.inputs.every(input => input.joined && !input.locked));
+    const records = await retrieveWorkerEvidence(origin), annotations = [];
+    const verdictFailures = finalCallerCancellation(proof) ? [] : [new Error("disposition failed")];
+    if (verdictFailures.length) emitWorkerEvidence(records, line => annotations.push(line));
+    assert.equal(annotations.length, 0, "successful disposition produces no error annotations");
+    assert.ok(cancelSummaryEvidence(physical, calls, usage).every(record => workerEvidence.validate(record)));
+  } catch (error) { failures.push(error); }
+  finally {
+    if (reader) { try { await reader.cancel(); } catch (error) { failures.push(error); } try { reader.releaseLock(); } catch (error) { failures.push(error); } }
+    try { await mf?.dispose(); } catch (error) { failures.push(error); }
+    try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+  }
+  if (failures.length) throw new AggregateError(failures, "bound cancellation fixture or cleanup failed");
+});
+
 function routerFixture() {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
 import { putGrantCredentials, revokeGrantCredentials } from "./worker/grant-credentials.ts";
@@ -566,28 +821,35 @@ ${observeReaderOperation.toString()}
 ${joinReaderOperations.toString()}
 ${workerEvidenceProtocol.toString()}
 ${workerReaderEvidence.toString()}
+${bindByteplusInput.toString()}
+${byteplusBindingFacts.toString()}
+${sdkCancelReceiptStore.toString()}
+const sdkReceipt = sdkCancelReceiptStore();
 const evidence = workerEvidenceProtocol();
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 globalThis.fetch = function(input, init) {
-  const pending = Reflect.apply(rawFetch, this, [input, init]);
   const url = input instanceof Request ? input.url : String(input);
-  if (url !== "https://ark.ap-southeast.bytepluses.com/api/v3/chat/completions") return pending;
+  const binding = url === "https://ark.ap-southeast.bytepluses.com/api/v3/chat/completions" ? bindByteplusInput(input, init, records, ${JSON.stringify(ids)}) : null;
+  const pending = Reflect.apply(rawFetch, this, [input, init]);
+  if (!binding) return pending;
   const signals = [init?.signal, input instanceof Request ? input.signal : undefined];
-  const proof = { returned: pending, body: undefined, readers: [], errors: [] }; inputs.push(proof);
+  const effectiveSignal = init?.signal !== undefined ? init.signal : input instanceof Request ? input.signal : undefined;
+  const proof = { returned: pending, binding, body: undefined, response: undefined, readers: [], errors: [], candidates: [] }; inputs.push(proof);
   const inputIndex = inputs.length;
   void pending.then(response => {
     try {
-      proof.body = response.body;
+      proof.response = response; proof.body = response.body;
       if (!proof.body) { proof.errors.push(new Error("upstream body missing")); return; }
       const getReader = proof.body.getReader;
       proof.body.getReader = function(...args) {
         const reader = Reflect.apply(getReader, this, args);
-        const row = { pending: [], unlocked: false, terminal: deferred(), pendingSettled: false, reported: false, evidence: workerReaderEvidence(reader, inputIndex, proof.readers.length + 1, signals[0] ?? signals[1]) }; proof.readers.push(row);
+        const row = { pending: [], unlocked: false, terminal: deferred(), pendingSettled: false, reported: false, evidence: workerReaderEvidence(reader, inputIndex, proof.readers.length + 1, effectiveSignal, binding.record?.signal) }; proof.readers.push(row);
         for (const name of ["read", "cancel"]) {
           const original = reader[name];
           reader[name] = function(...operands) {
-            const pending = row.evidence.invoke(name, original, this, operands);
-            return observeReaderOperation(row.pending, name, pending, signals);
+            try { const pending = row.evidence.invoke(name, original, this, operands);
+              return observeReaderOperation(row.pending, name, pending, signals);
+            } catch (error) { proof.errors.push(error); throw error; }
           };
         }
         const release = reader.releaseLock;
@@ -604,7 +866,7 @@ globalThis.fetch = function(input, init) {
 async function retire() {
   const failures = [];
   for (const record of records) {
-    await record.returned.promise;
+    await record.returned.promise; failures.push(...record.errors);
     for (let cursor = 0; cursor < record.pending.length;) {
       const batch = record.pending.slice(cursor); cursor += batch.length;
       for (const result of await Promise.allSettled(batch)) if (result.status === "rejected") failures.push(result.reason);
@@ -614,11 +876,25 @@ async function retire() {
     await proof.returned;
     const readers = await Promise.allSettled(proof.readers.map(async row => {
       await row.terminal.promise;
-      try { await joinReaderOperations(row.pending); row.pendingSettled = true; }
-      catch (error) {
-        if (!row.reported) { row.reported = true; try { for (const snapshot of row.evidence.records(proof.body)) evidence.add(snapshot); } catch { /* original failure remains authoritative */ } }
-        throw error;
+      const results = await Promise.allSettled(row.pending.map(operation => operation.pending)); row.pendingSettled = true;
+      const failures = [];
+      for (let i = 0; i < results.length; i++) {
+        const result = results[i], operation = row.pending[i];
+        if (result.status !== "rejected" || operation.expectedAbort) continue;
+        const { bound, responseAdmitted } = byteplusBindingFacts(proof, records, inputs);
+        if (bound && responseAdmitted && operation.kind === "read" && row.evidence.candidate(operation.pending, result.reason, proof.body)) {
+          // Preserve the original defined rejection. This is only a provisional
+          // joined post-termination disposition, never an exception-cause claim.
+          if (!proof.candidates.some(candidate => candidate.operation === operation)) proof.candidates.push({ operation, reason: result.reason,
+            safe: { scenario: "cancel", bound: true, responseAdmitted: true, ...row.evidence.disposition() } });
+        } else failures.push(result.reason);
       }
+      if (results.some(result => result.status === "rejected") && !row.reported) {
+        row.reported = true; try { for (const snapshot of row.evidence.records(proof.body)) evidence.add({ ...snapshot,
+          scenario: proof.binding.id === "cancel" ? "cancel" : "none", ...byteplusBindingFacts(proof, records, inputs),
+          disposition: proof.candidates.length ? "provisional" : "unclassified" }); } catch { /* original errors remain */ }
+      }
+      if (failures.length) throw new AggregateError(failures, "original reader operations failed");
     }));
     const failures = [...proof.errors, ...readers.flatMap(result => result.status === "rejected" ? [result.reason] : [])];
     if (!proof.readers.length) failures.push(new Error("upstream reader observation missing"));
@@ -627,12 +903,14 @@ async function retire() {
   }));
   for (const result of joined) if (result.status === "rejected") failures.push(result.reason);
   if (failures.length) throw new AggregateError(failures, "original Worker work failed");
-  return { requests: records.length, inputs: inputs.map(proof => ({ joined: proof.joined, locked: proof.body.locked,
-    readers: proof.readers.map(row => ({ unlocked: row.unlocked, pendingSettled: row.pendingSettled })) })) };
+  return { requests: records.length, tasksFulfilled: true, sdkReceipt: sdkReceipt.snapshot(),
+    cancellationBinding: byteplusBindingFacts(inputs.find(input => input.binding.id === "cancel"), records, inputs), inputs: inputs.map(proof => ({ joined: proof.joined, locked: proof.body.locked,
+    candidates: proof.candidates.map(candidate => candidate.safe), readers: proof.readers.map(row => ({ unlocked: row.unlocked, pendingSettled: row.pendingSettled })) })) };
 }
 
 export default { ...handler, async fetch(request, env, context) {
   const path = new URL(request.url).pathname;
+  if (path === "/fixture/sdk-cancel") return sdkReceipt.receive(request);
   if (path === "/fixture/retire") return Response.json(await retire());
   if (path === "/fixture/diagnostics") return Response.json(evidence.values());
   if (path === "/fixture/state") return Response.json({ catalog, incoming, denials });
@@ -646,13 +924,13 @@ export default { ...handler, async fetch(request, env, context) {
   if (path === "/fixture/revoke") { await revokeGrantCredentials(env, "oauth/byte_revoked/byteplus"); return new Response(null, { status: 204 }); }
   const id = ${JSON.stringify(ids)}.find(id => request.headers.get("authorization") === "Bearer clawrouter-live-byte_" + id + "-fixture-secret");
   if (path === "/v1/catalog") catalog.push({ id, path, proxyKey: !!id });
-  if (path === "/v1/chat/completions") incoming.push({ id, path, proxyKey: (request.headers.get("authorization") ?? "").startsWith("Bearer clawrouter-live-byte_"), model: (await request.clone().json()).model });
-  const record = { returned: deferred(), pending: [] };
+  if (path === "/v1/chat/completions") incoming.push({ id, path, method: request.method, proxyKey: (request.headers.get("authorization") ?? "").startsWith("Bearer clawrouter-live-byte_"), model: (await request.clone().json()).model });
+  const record = { request, signal: request.signal, id, path, method: request.method, kind: path === "/v1/chat/completions" ? "inference" : "catalog", returned: deferred(), pending: [], errors: [], response: undefined };
   if (path === "/v1/catalog" || path === "/v1/chat/completions") records.push(record);
   let response;
   try { response = await handler.fetch(request, { ...env, BYTEPLUS_API_KEY: "must-not-fallback", VOLCANO_ENGINE_API_KEY: "must-not-fallback", ARK_API_KEY: "must-not-fallback", VOLCENGINE_PLAN_API_KEY: "must-not-fallback", BYTEPLUS_PLAN_API_KEY: "must-not-fallback" }, {
     waitUntil(pending) { record.pending.push(pending); context.waitUntil(pending); }
-  }); } finally { record.returned.resolve(); }
+  }); record.response = response; } catch (error) { record.errors.push(error); throw error; } finally { record.returned.resolve(); }
   if (path === "/v1/chat/completions" && ["foreign", "missing", "unpriced", "revoked"].includes(id)) {
     const body = await response.clone().json(); denials.push({ id, status: response.status, code: body.error?.code });
   }
