@@ -1788,3 +1788,87 @@ Final result SHA-256:
 `757125cbf3105f9a60b5b5ad0b9b14fb3b514ba96bbddf944ced25717070536d`.
 These identify local research receipts, not a bundled reproduction suite.
 The experiment adds no Worker route, deployment or default activation.
+
+
+## Asymmetric reader/reasoner screening
+
+The local [PAIR-style](https://arxiv.org/html/2610.16003v1) screens did not
+qualify a deployment profile. The Reader receives the full document context;
+the Reasoner receives only the question and shared generated prefix. Each
+step selects one token from `0.7 * reader_logits + 0.3 * reasoner_logits`.
+This requires compatible local vocabularies and logits, not ordinary
+OpenAI-compatible API responses. No adapters were trained, so these screens
+are not a replication of the paper's adapted models.
+
+Each screen used 16 HotpotQA validation questions, retaining the original ten
+paragraphs and adding thirty fixed distractors from the same pinned source
+page. Question and paragraph order came from fixed hashes. All four arms used
+balanced execution order. Scoring required a completed response ending in a
+separate `####` answer line, with normalized exact match (EM); token F1 was a
+secondary metric. Each complete screen made 64 logical requests across 80 model
+branches. All inference was local, with zero paid API calls.
+
+| Screen | Full-context Reasoner EM | Reader EM | Question-only Reasoner EM | Fusion EM |
+| --- | ---: | ---: | ---: | ---: |
+| 0.6B Reader / 4B Reasoner, 128-token cap | 7/16 | 0/16 | 1/16 | 2/16 |
+| 4B Reader / 30B Reasoner, 128-token cap | 0/16 | 7/16 | 1/16 | 9/16 |
+| 4B Reader / 30B Reasoner, calibrated prompt and 512-token cap | 9/16 | 9/16 | 1/16 | 9/16 |
+
+The first screen lost five full-context Reasoner successes. The second used
+disjoint question IDs, but its apparent gain was invalid: eleven full-context
+Reasoner responses hit the output cap, and the other five omitted the required
+answer marker. Even a numerical gate pass cannot establish improvement over
+that broken control.
+
+The calibration kept the second screen's questions and models. It repeated
+the answer-format instruction after the question and raised the cap to 512
+for every arm. This is exposed-cohort development, not independent confirmation.
+Before inference, baseline qualification required at least 15 valid completed
+answers and eight exact answers. All 16 full-context Reasoner responses then
+completed with the required marker; none hit the cap.
+
+| Calibrated arm | EM | Mean token F1 | Output tokens | Subprocess seconds |
+| --- | ---: | ---: | ---: | ---: |
+| Full-context Qwen3-Coder 30B | 9/16 | 0.6982 | 1,007 | 133.372 |
+| Full-context Qwen3 4B Instruct | 9/16 | 0.7190 | 1,155 | 79.983 |
+| Question-only Qwen3-Coder 30B | 1/16 | 0.1739 | 1,538 | 31.765 |
+| Fused 4B Reader / 30B Reasoner | 9/16 | 0.7692 | 1,157 | 104.718 |
+
+The frozen gate required no lost full-context Reasoner successes, at least as
+many exact answers as that Reasoner, two more exact answers than both the
+Reader and question-only controls, at most 80% of full-context Reasoner wall
+time, and at most 125% of its output tokens. Fusion took 78.52% of that wall
+time and 114.90% of its tokens, but lost one officially scored success and
+added no net exact answers. It failed the quality gate. It was also 30.9% slower
+than the Reader alone. Timing includes model loading, prefill, decoding and
+teardown on one shared host; it is not a production latency claim.
+
+The two EM disagreements also limit the semantic interpretation. Fusion's
+only official gain shortened a correct song name with an alias to the exact
+reference name. Its official loss rejected a false premise: the question
+places the English Electric Canberra in World War II, while the supplied
+paragraph dates its service entry to May 1951. The supporting squadron paragraph
+assigns Canberra service to later conflicts. The [RAF Museum's historical
+account](https://www.rafmuseum.org.uk/documents/Research/RAF-Historical-Society-Journals/Journal_43a_Seminar_The_Canberra_in_the_RAF.pdf)
+independently dates the first RAF delivery to 25 May 1951. The full-context
+Reasoner repeated the incorrect premise and matched the reference. Keep the
+official scores unchanged; neither disagreement proves a capability gain or
+regression. Future quality studies need fresh, semantically qualified tasks.
+
+Smaller parameter count also did not mean smaller KV memory. The cached Reader
+has 36 layers and eight KV heads; the sparse Reasoner has 48 layers and four KV
+heads. Both use 128-wide keys and values. At F16, their KV storage is 144 KiB and
+96 KiB per context token, respectively. The full-context Reader therefore needs
+1.5 times the Reasoner's KV storage, before adding the short-context Reasoner
+state. This pair cannot support a KV-memory-saving claim.
+
+The calibrated protocol SHA-256 is
+`0fd21cc78581e398e4d4fa651a407096de09c2bdef166897ff40a9044c50b96e`;
+its result SHA-256 is
+`1a945f31890c2ff3236d8f9911f11c5285b67da81bb9def1677d9bdf31a42074`.
+Audits reconstructed source questions, answers, document text, execution order,
+prompt-length equality, scores and timing totals. The full-context Reader and
+Reasoner used identical prompts; the pair reused the matching full-context
+Reader and question-only Reasoner prompts. These hashes identify private local
+receipts, not a bundled reproduction suite. No runtime, deployment or default
+policy changed.
