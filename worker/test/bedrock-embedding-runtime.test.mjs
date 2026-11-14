@@ -112,6 +112,54 @@ for (const reverse of [false, true]) for (const manifest of [false, true]) for (
   });
 }
 
+for (const model of ["cohere.embed-english-v3", "cohere.embed-multilingual-v3"]) for (const manifest of [false, true]) {
+  for (const shape of ["default-array", "explicit-array", "explicit-keyed"]) {
+    test(`compiled Bedrock ${model} preserves the complete ${shape} native envelope: manifest=${manifest}`, { timeout: 10_000 }, async t => {
+      const f = await compiledSetup(t), item = wire.cases.find(item => item.model === model);
+      const body = { ...item.body, ...(shape !== "default-array" ? { embedding_types: ["float"] } : {}) };
+      const output = { ...item.response, embeddings: shape === "explicit-keyed" ? { float: item.response.embeddings } : item.response.embeddings,
+        response_type: shape === "default-array" ? "embeddings_floats" : "embeddings_by_type" };
+      f.upstream = () => Response.json(output);
+      const response = await f.request({ model, body, manifest }); assert.equal(response.status, 200, await response.clone().text());
+      assert.equal(await response.text(), JSON.stringify(output));
+      const settled = await signedDispatch(f, model, body);
+      assert.equal(settled.input_tokens, null); assert.equal(settled.output_tokens, null); assert.equal(settled.total_tokens, null);
+      assert.equal(settled.model, `bedrock/${model}`); assert.equal(settled.capability, "llm.embeddings");
+    });
+  }
+
+  for (const embedding_types of [["int8"], ["float", "int8"]]) {
+    test(`compiled Bedrock ${model} rejects ${embedding_types.join("+")} before dispatch: manifest=${manifest}`, { timeout: 10_000 }, async t => {
+      const f = await compiledSetup(t), item = wire.cases.find(item => item.model === model);
+      const response = await denied(f, { model, body: { ...item.body, embedding_types }, manifest });
+      assert.equal(response.status, 400);
+    });
+  }
+
+  for (const failure of ["unrequested-keyed", "missing-float", "null-float", "mixed-types", "later-vector", "wrong-count", "native-error", "incomplete-json"]) {
+    test(`compiled Bedrock ${model} ${failure} exposes no partial result or retry: manifest=${manifest}`, { timeout: 10_000 }, async t => {
+      const f = await compiledSetup(t), item = wire.cases.find(item => item.model === model);
+      const body = { ...item.body, texts: [item.body.texts[0], "Synthetic later document"],
+        ...(failure === "unrequested-keyed" ? {} : { embedding_types: ["float"] }) };
+      const vectors = [item.response.embeddings[0], item.response.embeddings[0]];
+      let output = { embeddings: { float: vectors } };
+      if (failure === "missing-float") output.embeddings = {};
+      if (failure === "null-float") output.embeddings.float = null;
+      if (failure === "mixed-types") output.embeddings.int8 = vectors;
+      if (failure === "later-vector") output.embeddings.float = [vectors[0], [1]];
+      if (failure === "wrong-count") output.embeddings.float = [vectors[0]];
+      if (failure === "native-error") output.error = "SyntheticFailure";
+      f.upstream = () => failure === "incomplete-json"
+        ? new Response(JSON.stringify(output).slice(0, -1), { headers: { "content-type": "application/json" } }) : Response.json(output);
+      const response = await f.request({ model, body, manifest }); assert.equal(response.status, 502);
+      const deniedBody = await response.json(); assert.equal(deniedBody.error.code, "provider_unavailable");
+      assert.equal(deniedBody.embeddings, undefined); assert.doesNotMatch(JSON.stringify(deniedBody), /SyntheticFailure|synthetic-(?:env|grant|caller)/);
+      const settled = await signedDispatch(f, model, body);
+      assert.equal(settled.input_tokens, null); assert.equal(settled.output_tokens, null); assert.equal(settled.total_tokens, null);
+    });
+  }
+}
+
 for (const reverse of [false, true]) for (const model of ["amazon.titan-embed-image-v1", "us.amazon.titan-embed-text-v2:0:2:8k", "twelvelabs.marengo-embed-2-7-v1:0"]) {
   test(`compiled Bedrock recognized but unregistered embedding cannot use Invoke: ${model}, reversed=${reverse}`, { timeout: 10_000 }, async t => {
     const f = await compiledSetup(t, { reverse });
