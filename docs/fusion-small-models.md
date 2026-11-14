@@ -1586,3 +1586,131 @@ does not reproduce that protocol. Its negative result does not reject planning
 in general. [Planning-Driven Programming](https://aclanthology.org/2025.acl-long.621/)
 also checks plans against visible tests before implementation and refinement;
 plan validation remains a separate hypothesis to test with matched controls.
+
+## Tiny-first execution: compute savings are not latency savings
+
+A November 14 local comparison used Qwen2.5-Coder 1.5B Q4_K_M and
+Qwen3-Coder 30B on 32 MBPP tasks not previously used in the recorded campaign.
+The benchmark is public and may overlap model training. Before inference,
+reference implementations and input contracts were reviewed; ambiguous tasks
+were excluded. Each task had its original public examples, eight additional
+public inputs and up to 64 disjoint hidden inputs. Expected results came from
+the frozen references. This tests supplied, trusted verification, not automatic
+test generation or arbitrary repository repair.
+
+Both models received the same specification with 512 output tokens and a
+4,096-token context limit. Each could repair one public-test failure. The
+cascade accepted the tiny model's initial public pass, otherwise used the
+strong model's initial answer and conditional repair. Hidden results were
+withheld until all 78 calls completed. No calls or timings were reused.
+
+| Policy | Public and hidden passes | Model compute seconds | Tokens |
+| --- | ---: | ---: | ---: |
+| 1.5B single | 21/32 | 8.917 | 6,801 |
+| 1.5B with conditional repair | 21/32 | 12.238 | 10,260 |
+| 30B single | 29/32 | 37.705 | 7,312 |
+| 30B with conditional repair | 30/32 | 43.149 | 8,345 |
+| Tiny-first cascade | 30/32 | 29.518 | 10,488 |
+
+The cascade preserved every strong-repair success, had nine accepted mixed-model
+cases and no observed false accepts. It passed the frozen gate: at least 27
+passes, two more than tiny repair, preservation of strong-repair successes,
+at least two accepted mixed-model cases, no false accepts and at least 20%
+less model compute than both strong baselines. Compute fell 21.7% against
+strong single and 31.6% against strong repair. Tokens increased 43.4% and
+25.7%, respectively. These are local compute measurements, not API savings.
+
+Thirty-two tasks are too few for a broad reliability claim. A post-hoc paired
+task-bootstrap 95% interval for the compute ratio was [0.506, 1.098] against
+strong single and [0.481, 0.865] against strong repair. The observed gate passed;
+the advantage against strong single remains uncertain beyond this sample.
+
+A separate timing run selected 18 of those exposed tasks deterministically,
+repeated each twice and made fresh calls for all three compared policies.
+All six execution orders were balanced across the 36 cases. Every policy
+passed all 36 cases, with no false accepts; 115 calls completed. Request time
+included model loading and checkpoints. Strong-single time stopped before
+its public grading; the other policies included all public checks and repairs.
+Hidden grading was excluded from request time.
+
+| Policy | Summed request seconds | Included model-loading seconds |
+| --- | ---: | ---: |
+| 30B single response | 64.574 | 27.723 |
+| 30B with public verification and conditional repair | 89.447 | 24.739 |
+| Tiny-first cascade | 84.384 | 40.723 |
+
+The latency gate failed: the cascade was 30.7% slower than strong single and
+only 5.7% faster than verified strong repair, below the required 20% reduction
+against both. Saving model compute did not save enough request time. This
+does not qualify a faster production profile or justify default activation.
+
+A follow-up used a separate local server with both models resident, preserving
+the same runtime, weights, task sequence, seeds, policies and timing gate.
+Each policy made fresh calls. Two zero-token preloads took 2.062 seconds,
+reported separately from steady-state request time. All policies again passed
+36/36; the run completed 115 inference calls without skipped repairs.
+
+| Resident-model policy | Summed request seconds | Public-verified seconds |
+| --- | ---: | ---: |
+| 30B single | 34.385 | 63.040 |
+| 30B with public verification and conditional repair | 67.650 | 67.650 |
+| Tiny-first cascade | 47.282 | 47.282 |
+
+Model loading within the cascade fell to 0.048 seconds. The cascade was 30.1%
+faster than verified strong repair and 25.0% faster than strong single with its
+public checks included. These descriptive comparisons suggest a narrower use
+case: requests that already require executable verification. The separate
+confirmation below rejects that hypothesis for the remaining tasks. Against
+strong single returning
+before verification, the cascade was 37.5% slower, so the original latency gate
+still failed. Neither failed gate is replaced by the secondary comparison.
+
+The resident run reused exposed tasks and repeated each twice. Its paired
+task-bootstrap 95% latency-ratio interval was [0.549, 0.874] against verified
+strong repair and [1.026, 1.820] against unverified strong single. This is local
+timing evidence, not new-task quality evidence or a production latency promise.
+
+The next run used all 14 tasks omitted from the first timing subset, repeated
+twice, with a new fixed seed and independent calls for each policy. The new
+gate required at least 24/28 passes, preservation of every strong-repair success,
+two accepted mixed-model cases, no false accepts and at least 20% less time
+than **both verified** strong baselines. Raw strong-single time remained a
+reported control. Prior verdicts were unchanged.
+
+| Remaining-task policy | Passes | Request seconds | Public-verified seconds |
+| --- | ---: | ---: | ---: |
+| 30B single | 22/28 | 31.428 | 50.686 |
+| 30B with conditional repair | 24/28 | 68.071 | 68.071 |
+| Tiny-first cascade | 24/28 | 68.622 | 68.622 |
+
+All 111 calls settled; there were no false accepts, skipped repairs or lost
+strong-repair successes. Both models stayed resident. The cascade was 0.8%
+slower than strong repair and 35.4% slower than verified strong single. It
+failed the newly declared latency gate. Cold preloads took 3.568 seconds,
+excluded from request time for every arm. These tasks had prior quality
+observations but no prior timings in this study. The failed confirmation
+rules out presenting the first subset's verified-workflow speedup as a
+general result. Do not repeat this unchanged cascade on the same tasks to
+search for a passing seed.
+
+The compute protocol SHA-256 is
+`a1cc2482b403ca47e19fcfd6de4d4117db420aa311c5d71c9ebc38df9b839bd6`;
+its result SHA-256 is
+`3bf08dca3c6523f19ed3ce9925ea1d9802ece469f0b092f33be7b84f071dca01`.
+The timing protocol SHA-256 is
+`003b8bdd9b4084e1426bc78ae03a6a917a7c91edcb679963b4b0751ec3d4630b`;
+its result SHA-256 is
+`48f344ce4fdbd9726f4f314d0dc1418e1aa7aeff5cd5178e1724d8ca0d107925`.
+These identify local development receipts, not a bundled reproduction suite.
+Independent audits checked source and model pins, prompts, seeds, execution
+order, conditional calls, usage, selections and reported totals. All inference
+was local, with zero paid API calls.
+
+The resident timing protocol SHA-256 is
+`0e9821f95b281f2cd58f0b650657d9bc604aa873ae4bfe2add8fdc455e4ab81b`;
+its result SHA-256 is
+`4d0e0d573d9216299d47a174b8fd1e4afd5b4e11fcb79514c76aa1144efc5503`.
+The remaining-task confirmation protocol SHA-256 is
+`eb82ef0696f1a9420d63a676a4c1902fe3df88c3646ea60105dc5b60517cbeb1`;
+its result SHA-256 is
+`281394cb740f189eeb3eb090f50ba50a4a91b3746dd479625482388e680ab8b1`.
