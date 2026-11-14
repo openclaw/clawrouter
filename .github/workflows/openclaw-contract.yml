@@ -41,6 +41,9 @@ jobs:
       max-parallel: 4
       matrix:
         include:
+          - consumer: abliteration
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-abliteration.test.mjs
           - consumer: volcengine-payg
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-volcengine-payg.test.mjs
