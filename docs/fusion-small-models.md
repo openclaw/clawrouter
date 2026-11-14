@@ -317,7 +317,12 @@ have a passing oracle and failing broken baseline, and identify cached immutable
 Docker images. A passing repair must execute the same test and skipped-test
 counts as the qualified oracle. The runner does not download models, images or dependencies.
 The local transport validates both model identities before execution and checks
-their digests again afterward. It never invokes a paid provider. Role labels
+their digests again afterward. Each model pin also records the Ollama server
+version, optional renderer/parser names and template source, and a SHA-256 of
+the chat template. The template itself is not saved. Both named renderers and
+older Go-template servers are supported. Runtime or thinking-capability changes
+at the final check leave the run incomplete; these start/end checks cannot detect
+a transient change that is reverted between checks. It never invokes a paid provider. Role labels
 inside the reused harness map explicitly to these local model pins.
 
 Set `FUSION_LOCAL_OUTPUT_TOKENS` to an integer from 1 through 8,192 to change the

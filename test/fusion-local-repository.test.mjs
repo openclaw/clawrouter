@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { hash } from '../scripts/fusion-workloads.mjs';
+import { localGenerator } from '../scripts/fusion-execution-smoke.mjs';
 import { models as roles } from '../scripts/fusion-benchmark-accounting.mjs';
 import { localRoutes, localActionRequest, validateLocalQualification, runLocalRepository, groundedSampling } from '../scripts/fusion-local-repository.mjs';
 
@@ -230,6 +231,28 @@ for (const [profile, outcomes] of [
     assert.deepEqual(result.records.map(row => row.outcome), outcomes);
     assert.ok(result.records.every(row => row.graderTests === 3));
     assert.equal(result.summary.reduce((sum, row) => sum + row.solved, 0), 1);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('runtime drift preserves completed records but cannot complete the comparison', async () => {
+  const { root, options } = await fixture(); let version = '0.40.11';
+  try {
+    await assert.rejects(runLocalRepository({ ...options, preflight: localGenerator,
+      fetcher: async url => {
+        if (url.endsWith('/api/version')) return Response.json({ version });
+        if (url.endsWith('/api/tags')) return Response.json({ models: pins.map(pin => ({ name: pin.model, digest: pin.digest, size: 10 })) });
+        if (url.endsWith('/api/show')) return Response.json({ template: '{{ .Prompt }}', renderer: 'qwen3-coder', capabilities: [] });
+        assert.fail('no inference required by this fixture');
+      },
+      agent: async () => { version = '0.40.12'; return { files: [], outcome: 'submitted' }; },
+      grade: async () => ({ valid: true, passed: true, tests: 3, skipped: 0 }),
+    }), /local_repository_incomplete/);
+    const raw = await readFile(join(options.out, 'local-repository.json'), 'utf8'), state = JSON.parse(raw);
+    assert.equal(state.complete, false); assert.equal(state.failureCode, 'local_runtime_changed');
+    assert.equal(state.records.length, 3); assert.equal(state.summary, undefined);
+    assert.equal(state.modelPins[0].runtime.serverVersion, '0.40.11');
+    assert.equal(state.modelPins[0].runtime.renderer, 'qwen3-coder');
+    assert.ok(!raw.includes('{{ .Prompt }}'));
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
