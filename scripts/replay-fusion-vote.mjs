@@ -16,7 +16,9 @@ export async function replayFusionVote(input, { selectNext } = {}) {
     }
     return { answers: Array.from(row.answers), costs: Array.from(row.costs) };
   });
-  const panel = { version: input.version, choices: input.choices, workers: input.workers };
+  const panel = { version: input.version,
+    choices: Array.isArray(input.choices) ? Array.from(input.choices) : input.choices,
+    workers: Array.from(input.workers, worker => ({ id: worker?.id, weight: worker?.weight, priority: worker?.priority })) };
   let calls = 0, cost = 0, fullCost = 0, earlyStopped = 0;
   for (const row of cases) {
     const indices = new Map(panel.workers.map((worker, index) => [worker.id, index]));

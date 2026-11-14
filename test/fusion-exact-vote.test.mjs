@@ -145,3 +145,21 @@ test('adaptive replay can avoid a call without changing the canonical answer', a
   assert.equal(adaptive.meanCost, 3);
   assert.equal(adaptive.answerMismatches, 0);
 });
+
+
+test('replay freezes the panel and all cases before invoking a selector', async () => {
+  const input = { ...panel([3, 1, 1]), cases: [
+    { answers: ['A', 'B', 'B'], costs: [1, 1, 1] },
+    { answers: ['A', 'B', 'B'], costs: [1, 1, 1] },
+  ] };
+  const expected = await replayFusionVote(input);
+  const actual = await replayFusionVote(input, { selectNext: ({ remaining }) => {
+    input.workers[0].weight = 0;
+    input.workers[1].id = 'changed';
+    input.choices[0] = 'changed';
+    input.cases[1].answers[0] = 'B';
+    input.cases[1].costs[0] = 999;
+    return remaining[0];
+  } });
+  assert.deepEqual(actual, expected);
+});
