@@ -454,6 +454,7 @@
 - Qualify unary Bedrock Converse declarations with explicit model binding and regional SigV4 constraints; keep streaming, tariffs and provider activation closed.
 - Qualify the distinct buffered Bedrock ConverseStream compiler contract alongside unary Converse, preserving explicit Chat selection, regional SigV4 binding and unknown-price denial.
 - Dispatch explicit native Bedrock Converse and buffered ConverseStream through original regional credentials, preparing payloads before SigV4 and withholding incomplete responses while preserving observed usage and conservative settlement.
+- Declare native Converse and buffered ConverseStream for the existing bare Amazon Nova Lite model, preserving Invoke routes, explicit model eligibility and fail-closed unknown dollar prices.
 - Add MiniMax Global/CN device authorization, token, refresh and Anthropic request codecs with regional issuer/resource binding, explicit expiry handling and deterministic fixtures.
 - Record the existing MiniMax M2.7 PAYG deprecation without changing its selected identity, price card or default, or importing the separate subscription-plan alias.
 

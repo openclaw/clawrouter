@@ -25,6 +25,12 @@ adapter:
   stream: aws_eventstream
   error: aws_error
 capabilities:
+  - id: llm.chat
+    endpoint: converse
+    methods: [POST]
+  - id: llm.chat
+    endpoint: converse_stream
+    methods: [POST]
   - id: llm.invoke
     endpoint: invoke_model
     methods: [POST]
@@ -32,6 +38,24 @@ capabilities:
     endpoint: invoke_model_stream
     methods: [POST]
 endpoints:
+  converse:
+    method: POST
+    path: /model/${model}/converse
+    pathParams: [model]
+    pathParamStyles: { model: opaque_segment }
+    headers: { content-type: application/json, accept: application/json }
+    requestFormat: aws_bedrock.converse
+    responseFormat: aws_bedrock.converse
+    timeoutMs: 600000
+  converse_stream:
+    method: POST
+    path: /model/${model}/converse-stream
+    pathParams: [model]
+    pathParamStyles: { model: opaque_segment }
+    headers: { content-type: application/json, accept: application/vnd.amazon.eventstream }
+    requestFormat: aws_bedrock.converse_stream
+    responseFormat: aws_bedrock.converse_eventstream
+    timeoutMs: 600000
   invoke_model:
     modelPassthrough: {}
     path: /model/${model}/invoke
@@ -79,7 +103,7 @@ models:
     - id: bedrock/amazon.nova-lite-v1:0
       displayName: "Amazon Nova Lite v1"
       upstream: amazon.nova-lite-v1:0
-      capabilities: [llm.invoke, llm.stream]
+      capabilities: [llm.invoke, llm.stream, llm.chat]
       pricingRef: aws-bedrock-model
 billing:
   meter: clawrouter.tokens
