@@ -330,7 +330,8 @@ const managedLifecycleContracts = {
     },
   },
   "pixverse.video": {
-    provider: "pixverse", create: ["/openapi/v2/video/text/generate"], request: "pixverse.text_video", response: "pixverse.video",
+    provider: "pixverse", create: ["/openapi/v2/video/text/generate", "/openapi/v2/video/img/generate"], response: "pixverse.video",
+    requestByPath: { "/openapi/v2/video/text/generate": "pixverse.text_video", "/openapi/v2/video/img/generate": "pixverse.image_video" },
     controls: { retrieve: ["GET", "/openapi/v2/video/result/${video_id}", "pixverse.video_get", "pixverse.video"] },
   },
   "google.omni_video": {
@@ -383,6 +384,7 @@ function validateManagedLifecycles(manifest) {
     const fail = () => { throw new Error(`provider ${manifest.id} endpoint ${id} lifecycle requires distinct qualified native create/control endpoints`); };
     const protocol = endpoint.lifecycle.protocol;
     const fourSegmentFal = protocol === "fal.queue" && endpoint.path === "/${owner}/${app}/${variant}/${subvariant}";
+    const pixVerseImage = protocol === "pixverse.video" && endpoint.path === "/openapi/v2/video/img/generate";
     const contract = Object.hasOwn(managedLifecycleContracts, protocol) ? managedLifecycleContracts[protocol] : null;
     const incompatible = value => value.responsesLifecycle || value.modelPassthrough || value.streaming || value.websocket || value.nativeProxy === false;
     const methodsMatch = (endpointId, method) => !manifest.capabilities.some(capability => capability.endpoint === endpointId && capability.methods?.some(value => value !== method));
@@ -394,7 +396,7 @@ function validateManagedLifecycles(manifest) {
     if (!contract || manifest.id !== contract.provider || incompatible(endpoint) || Object.keys(endpoint.query ?? {}).length || !parametersMatch(endpoint)
       || (endpoint.method ?? "POST") !== "POST" || !methodsMatch(id, "POST") || !contract.create.includes(endpoint.path)
       || endpoint.requestFormat !== (contract.requestByPath?.[endpoint.path] ?? contract.request) || endpoint.responseFormat !== contract.response
-      || !manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "media.predict")) fail();
+      || !manifest.capabilities.some(capability => capability.endpoint === id && capability.id === (pixVerseImage ? "video.generate" : "media.predict"))) fail();
     if (fourSegmentFal) {
       // Concrete product/segment values are checked by the registered fal codec.
       // The new shape cannot change origin, credentials or control ownership.
@@ -468,7 +470,8 @@ function validateManagedLifecycles(manifest) {
         || schemes[0].format !== "Bearer ${secret}" || schemes[0].secretKind !== "api_key" || schemes[0].required === false) fail();
     }
     if (protocol === "pixverse.video") {
-      // Image routes remain closed until uploads have durable original-job scope.
+      // Only the registered composed intake may establish image ownership.
+      if (pixVerseImage && endpoint.inputProfile !== "clawrouter.pixverse-image-input.v1") fail();
       if (Object.values(manifest.baseUrls).some(base => !["https://app-api.pixverse.ai", "https://app-api.pixverseai.cn"].includes(base))
         || endpoint.auth || endpoint.requestHeaders?.length || Object.entries(endpoint.headers ?? {}).some(([name, value]) => name.toLowerCase() !== "content-type" || value !== "application/json")) fail();
       const schemes = manifest.auth.schemes;
@@ -487,7 +490,12 @@ function validateManagedLifecycles(manifest) {
     for (const [action, [method, path, request, response, query = {}]] of Object.entries({ ...contract.controls, ...contract.files })) {
       const controlId = Object.hasOwn(contract.controls, action) ? endpoint.lifecycle[action] : endpoint.lifecycle.files[action];
       const control = Object.hasOwn(manifest.endpoints, controlId) ? manifest.endpoints[controlId] : null;
-      const sharedControl = ["fal.queue", "xai.video"].includes(protocol) && controlBindings.get(controlId) === `${protocol}:${action}`;
+      // One text/image pair may share the GET shape; the runtime resolves the
+      // original create owner. A duplicate create or third route cannot borrow it.
+      const pixVersePair = protocol === "pixverse.video" && action === "retrieve"
+        && [...creates].filter(createId => manifest.endpoints[createId].lifecycle.retrieve === controlId)
+          .map(createId => manifest.endpoints[createId].requestFormat).sort().join(",") === "pixverse.image_video,pixverse.text_video";
+      const sharedControl = (["fal.queue", "xai.video"].includes(protocol) || pixVersePair) && controlBindings.get(controlId) === `${protocol}:${action}`;
       if (!control || controlId === id || controls.has(controlId) && !sharedControl || control.lifecycle || incompatible(control) || !parametersMatch(control)
         || Object.keys(control.query ?? {}).length !== Object.keys(query).length || Object.entries(query).some(([name, value]) => control.query?.[name] !== value)
         || (control.method ?? "POST") !== method || !methodsMatch(controlId, method) || control.path !== path
