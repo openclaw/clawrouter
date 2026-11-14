@@ -68,6 +68,9 @@ jobs:
           fi
       - name: Native client through real router and ledgers
         run: node --test test/codex-router.test.mjs test/codex-native.test.mjs test/codex-connect.test.mjs
+      - name: Synthetic native rehearsal saved-client contract
+        if: matrix.version == '0.164.0'
+        run: node --test test/native-rehearsal.test.mjs
       - name: Native steering and completion-race regression
         if: matrix.version == '0.164.0'
         run: node --test test/codex-interrupt.test.mjs
@@ -181,6 +184,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Fetch exact launch native source for synthetic compatibility
+        run: git -c maintenance.auto=false -c gc.auto=0 fetch --no-tags --depth=1 origin 434a526a37fff4d91e04cc1caa5cd6aa2eff2d82
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.22.1

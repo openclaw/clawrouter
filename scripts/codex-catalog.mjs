@@ -61,7 +61,7 @@ export function buildCodexCatalog(catalog, bundled, providerId) {
   return { catalog: { models }, skipped, mappings, supportsWebsockets, standaloneSearchModels, nativeBasePath: `${provider.nativeBaseUrl}${responseRoute.path.slice(0, -"/responses".length)}` };
 }
 
-export async function readCodexCatalog({ routerUrl, providerId, codex = "codex", env = process.env }) {
+export async function readCodexCatalog({ routerUrl, providerId, codex = "codex", env = process.env, headers = {} }) {
   let origin;
   try { origin = new URL(routerUrl); } catch { throw new Error("router URL is invalid"); }
   if (origin.username || origin.password || origin.search || origin.hash || origin.pathname !== "/") throw new Error("router URL must be the router origin without credentials, path, or query");
@@ -70,7 +70,7 @@ export async function readCodexCatalog({ routerUrl, providerId, codex = "codex",
   if (!key?.trim()) throw new Error("CLAWROUTER_API_KEY is required");
   let routerBytes;
   try {
-    const response = await fetch(new URL("/v1/catalog", origin), { headers: { authorization: `Bearer ${key}` }, redirect: "error", signal: AbortSignal.timeout(30_000) });
+    const response = await fetch(new URL("/v1/catalog", origin), { headers: { ...headers, authorization: `Bearer ${key}` }, redirect: "error", signal: AbortSignal.timeout(30_000) });
     if (!response.ok) {
       await response.body?.cancel();
       throw new Error(`authorized router catalog returned HTTP ${response.status}`);

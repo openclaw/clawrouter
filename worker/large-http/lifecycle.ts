@@ -67,6 +67,7 @@ export class LargeHttpPool extends DurableObject<Env>{
  }
 }
 export class LargeHttpSlot extends DurableObject<Env>{
+ protected startContainer(options:ContainerStartupOptions):void|Promise<void>{this.ctx.container!.start(options);}
  private slot:Promise<NativeSlot>;
  private config:Promise<RuntimeConfig>;
  private index:number;
@@ -78,7 +79,7 @@ export class LargeHttpSlot extends DurableObject<Env>{
    let inspectionGeneration=0,inspection=startupInspection(()=>c.inspect());
    return new NativeSlot(store<NativeJournal>(ctx,'native'),{
     absent:async()=>!c.running&&await c.inspect()===null,
-    start:(generation,token)=>c.start({image:config.image,instance:'standard-1',enableInternet:true,labels:{slot:String(this.index),generation:String(generation),build:config.runtimeSha},entrypoint:['node','--input-type=module','-e',bootstrap],env:{LARGE_HTTP_SLOT:String(this.index),LARGE_HTTP_GENERATION:String(generation),LARGE_HTTP_RUNTIME_TOKEN:token,LARGE_HTTP_ORIGIN:config.origin,LARGE_HTTP_LOCAL:config.local?'1':'0',LARGE_HTTP_RUNTIME_SHA:config.runtimeSha,LARGE_HTTP_RUNTIME_BYTES:String(config.runtimeBytes)}}),
+    start:(generation,token)=>this.startContainer({image:config.image,instance:'standard-1',enableInternet:true,labels:{slot:String(this.index),generation:String(generation),build:config.runtimeSha},entrypoint:['node','--input-type=module','-e',bootstrap],env:{LARGE_HTTP_SLOT:String(this.index),LARGE_HTTP_GENERATION:String(generation),LARGE_HTTP_RUNTIME_TOKEN:token,LARGE_HTTP_ORIGIN:config.origin,LARGE_HTTP_LOCAL:config.local?'1':'0',LARGE_HTTP_RUNTIME_SHA:config.runtimeSha,LARGE_HTTP_RUNTIME_BYTES:String(config.runtimeBytes)}}),
     monitor:()=>{const watch=c.monitor();ctx.waitUntil(watch.catch(()=>{}));return watch;},keepalive:()=>c.setInactivityTimeout(600000),destroy:()=>c.destroy(),
     ready:async(generation,token)=>{
      if(!c.running)return null;
