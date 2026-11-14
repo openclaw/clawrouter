@@ -96,7 +96,10 @@ test("Venice declaration preserves exactly nineteen frozen identities with indep
     assert.equal(m.requestParameters.chat_completions.toolCalling, "supported");
     assert.equal(m.requestParameters.chat_completions.defaultReasoningEffort, defaultEffort ?? undefined);
   }
-  assert.deepEqual(provider.endpoints.map(e => e.id), ["chat_completions"]);
+  assert.deepEqual(provider.endpoints.map(e => [e.id, e.method, e.methods, e.path, e.request_format, e.response_format]), [
+    ["chat_completions", "POST", ["POST"], "/chat/completions", "openai.chat_completions", "openai.chat_completions"],
+    ["models_list", "GET", ["GET"], "/models", "venice.models", "venice.models"],
+  ]);
   const opaque = providerModel(provider, "venice/synthetic-tenant-model", provider.endpoints[0]);
   assert.equal(opaque.nativeCapabilities, undefined); assert.equal(opaque.requestParameters, undefined); assert.equal(opaque.pricing, null);
   assert.throws(() => configuredUpstream(provider, null, { ANTHROPIC_API_KEY: "synthetic-unselected-anthropic", OPENAI_API_KEY: "synthetic-foreign" }), e => e.code === "provider_not_configured");
