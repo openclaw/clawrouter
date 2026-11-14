@@ -15,6 +15,14 @@ async function control(path: string) {
   return response.json();
 }
 
+async function finishOwnedCleanup(failures: unknown[], operations: Array<() => unknown>): Promise<void> {
+  for (const operation of operations) {
+    try { await operation(); } catch (error) { failures.push(error); }
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length) throw new AggregateError(failures, "Bedrock assertion or owned cleanup failed");
+}
+
 describe("Bedrock through the registered ClawRouter memory provider and real Worker", () => {
   useIsolatedStateGuard();
   const captured = createCapturedPluginRegistration();
@@ -99,19 +107,21 @@ describe("Bedrock through the registered ClawRouter memory provider and real Wor
     const entry = cases[0], config = options(entry), controller = new AbortController();
     config.remote!.apiKey = `clawrouter-live-${entry.credential}-rotated-secret`;
     const { provider } = await memory.createEmbeddingProvider(config);
-    // Observe rejection immediately; retain and join this original call in finally.
+    // Observe rejection immediately; retain and join this original call even if release fails.
     const outcome = provider!.embed(`held body fixture ${entry.credential} pending`, { signal: controller.signal })
       .then(value => ({ value, error: undefined }), error => ({ value: undefined, error }));
+    const failures: unknown[] = [], reason = new Error("original caller stopped reading");
     try {
       await vi.waitFor(async () => expect((await control("state")).held).toBe(1), { timeout: 10_000, interval: 20 });
-      controller.abort(new Error("original caller stopped reading"));
+      controller.abort(reason);
       expect((await outcome).value).toBeUndefined();
       expect((await outcome).error).toBeDefined();
-    } finally {
-      controller.abort(new Error("fixture teardown"));
-      await control("release");
-      await outcome;
-    }
+    } catch (error) { failures.push(error); }
+    await finishOwnedCleanup(failures, [
+      () => controller.abort(reason),
+      () => control("release"),
+      () => outcome,
+    ]);
     expect((await control("state")).held).toBe(0);
   }, 30_000);
 });

@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { stripTypeScriptTypes } from "node:module";
 import { join } from "node:path";
 import test from "node:test";
+import { execFile } from "node:child_process";
+import { promisify, types as nodeTypes } from "node:util";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 
@@ -114,6 +116,10 @@ test("registered ClawRouter catalog routes BytePlus PAYG turns with original gra
         assert.equal(response.status, 200); await response.json();
       } catch (error) { failures.push(error); }
     }
+    if (mf && origin) {
+      try { const records = await retrieveWorkerEvidence(origin); if (failures.length) emitWorkerEvidence(records); }
+      catch (error) { failures.push(error); }
+    }
     try { await mf?.dispose(); } catch (error) { failures.push(error); }
     try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); }
   }
@@ -140,7 +146,7 @@ async function readerObservers() {
   const start = text.indexOf("type ReaderOperation = "), end = text.indexOf("\nfunction observe(kind:", start);
   assert.ok(start >= 0 && end > start);
   const code = stripTypeScriptTypes(text.slice(start, end));
-  const sdk = new Function(code + "; return { observeReaderOperation, joinReaderOperations };")();
+  const sdk = new Function(code + "; return { observeReaderOperation, joinReaderOperations, readerWitness, acceptStoredSdkCancel };")();
   return [["Worker", { observeReaderOperation, joinReaderOperations }], ["SDK fixture", sdk]];
 }
 
@@ -185,6 +191,257 @@ test("retirement observers accept only exact owned read aborts and never cancell
   });
 });
 
+async function sdkRetirementHarness(rows, options = {}) {
+  const text = await readFile(new URL("./fixtures/openclaw-byteplus-payg-contract.test.ts", import.meta.url), "utf8");
+  const helpers = (await readerObservers())[1][1];
+  const begin = text.indexOf("afterEach(async () => {"), end = text.indexOf("\nasync function selected(", begin);
+  let cleanup;
+  const expect = value => ({ toBe(v) { assert.equal(value, v); }, toEqual(v) { assert.deepEqual(value, v); },
+    toHaveLength(n) { assert.equal(value.length, n); }, toBeGreaterThan(n) { assert.ok(value > n); } });
+  const code = stripTypeScriptTypes(text.slice(begin, end));
+  new Function("afterEach", "acquisitions", "closeOperations", "dispatchers", "observationErrors", "bodyPassed", "catalogCalls", "chatCalls", "expectedChatCalls", "negativeCase", "joinReaderOperations", "acceptStoredSdkCancel", "vi", "clearLiveCatalogCacheForTests", "expect", code)(
+    fn => { cleanup = fn; }, rows, options.closeOperations ?? [Promise.resolve()], options.dispatchers ?? new Set([{ closed: true }]), options.observationErrors ?? [], options.bodyPassed !== false,
+    1, rows.length - 1, rows.length - 1, Object.hasOwn(options, "scenario") ? options.scenario : "embedded_error", helpers.joinReaderOperations, helpers.acceptStoredSdkCancel,
+    { restoreAllMocks() {} }, () => {}, expect);
+  return cleanup;
+}
+async function nativeStoredReader(options = {}) {
+  const helpers = (await readerObservers())[1][1], guard = new AbortController(), caller = new AbortController();
+  const reason = options.undefinedReason ? undefined : new Error("fixed stored error"), foreign = new Error("fixed stored error");
+  let controller;
+  const body = new ReadableStream({ start(value) { controller = value; }, cancel() { if (options.underlyingFailure) throw reason; } });
+  const reader = body.getReader(), witness = helpers.readerWitness(reader, guard.signal, caller.signal), operations = [];
+  if (!options.lateAbort) { guard.abort(options.foreign ? foreign : reason); if (!options.noCaller) caller.abort(reason); }
+  const reading = witness.invoke("read", reader.read, reader, []);
+  helpers.observeReaderOperation(operations, "read", reading.pending, [guard.signal]);
+  if (options.unlockBefore) { witness.unlocking(); reader.releaseLock(); witness.unlocked(); }
+  if (!options.underlyingFailure) controller.error(reason);
+  const canceled = witness.invoke("cancel", reader.cancel, reader, []);
+  helpers.observeReaderOperation(operations, "cancel", canceled.pending, [guard.signal]);
+  if (!options.missingWitness) operations.at(-1).storedError = canceled.storedError;
+  if (!options.unlockBefore && !options.locked) { witness.unlocking(); reader.releaseLock(); witness.unlocked(); }
+  await Promise.allSettled([reading.pending, canceled.pending]);
+  if (options.lateAbort) { guard.abort(reason); caller.abort(reason); }
+  const release = options.releaseFailure ? Promise.reject(options.releaseFailure) : Promise.resolve();
+  void release.catch(() => {});
+  const row = { kind: "chat", returned: Promise.resolve(), released: Promise.resolve(), releaseCalls: 1, releases: [release], body,
+    readers: [{ pending: operations, unlocked: !options.locked, witness }] };
+  // A real catalog body and release join remain separate from the Chat request.
+  const catalogBody = new ReadableStream({ start(c) { c.close(); } }), catalogReader = catalogBody.getReader();
+  const catalogWitness = helpers.readerWitness(catalogReader), catalogRead = catalogWitness.invoke("read", catalogReader.read, catalogReader, []), catalogOps = [];
+  helpers.observeReaderOperation(catalogOps, "read", catalogRead.pending, []); await catalogRead.pending;
+  catalogWitness.unlocking(); catalogReader.releaseLock(); catalogWitness.unlocked();
+  const catalog = { kind: "catalog", returned: Promise.resolve(), released: Promise.resolve(), releaseCalls: 1, releases: [Promise.resolve()], body: catalogBody,
+    readers: [{ pending: catalogOps, unlocked: true, witness: catalogWitness }] };
+  return { row, catalog, reason, reader, witness, operations, helpers, finish() { if (body.locked) reader.releaseLock(); } };
+}
+
+test("SDK stored-error classification uses real original native identities after every retirement join", async t => {
+  for (const scenario of ["embedded_error", "cancel"]) await t.test(scenario, async () => {
+    const actual = await nativeStoredReader();
+    try { await (await sdkRetirementHarness([actual.catalog, actual.row], { scenario }))(); }
+    finally { actual.finish(); }
+  });
+  for (const [name, options] of Object.entries({ foreign: { foreign: true }, undefined: { undefinedReason: true }, missing: { missingWitness: true },
+    late: { lateAbort: true }, unlocked: { unlockBefore: true }, locked: { locked: true }, underlying: { underlyingFailure: true },
+    primary: { bodyPassed: false }, release: { releaseFailure: new Error("release") }, caller: { noCaller: true, scenario: "cancel" },
+    wrongCase: { scenario: null }, observerUndefined: { observationErrors: [undefined] } })) await t.test(name, async () => {
+    const actual = await nativeStoredReader(options);
+    try { await assert.rejects((await sdkRetirementHarness([actual.catalog, actual.row], options))(), AggregateError); }
+    finally { actual.finish(); }
+  });
+});
+test("SDK cancellation never qualifies synchronous failure, foreign ownership, or pending original retirement", async () => {
+  const actual = await nativeStoredReader();
+  let finishRelease, finishOperation;
+  const release = new Promise(resolve => { finishRelease = resolve; }), pending = new Promise(resolve => { finishOperation = resolve; });
+  actual.row.released = release; actual.row.releases = [release];
+  actual.helpers.observeReaderOperation(actual.operations, "read", pending, []);
+  const cleanup = await sdkRetirementHarness([actual.catalog, actual.row]); let ended = false;
+  const joined = cleanup(); void joined.then(() => { ended = true; }, () => { ended = true; });
+  try {
+    await new Promise(resolve => setImmediate(resolve)); assert.equal(ended, false);
+    finishRelease(); await new Promise(resolve => setImmediate(resolve)); assert.equal(ended, false);
+    finishOperation(); await joined;
+    assert.throws(() => actual.witness.invoke("cancel", () => { throw actual.reason; }, actual.reader, []), error => error === actual.reason);
+    assert.equal(actual.witness.retired(), false);
+    assert.equal(actual.helpers.acceptStoredSdkCancel("catalog", "embedded_error", actual.operations[1], actual.reason, true), false);
+    assert.equal(actual.helpers.acceptStoredSdkCancel("chat", "embedded_error", { kind: "cancel", pending: actual.operations[1].pending }, actual.reason, true), false);
+  } finally { finishRelease(); finishOperation(); await Promise.allSettled([joined]); actual.finish(); }
+});
+test("SDK retirement retains unrelated reads and dispatcher failures including undefined", async () => {
+  const actual = await nativeStoredReader();
+  const unrelated = new Error("unrelated read"), rejected = Promise.reject(undefined); void rejected.catch(() => {});
+  actual.helpers.observeReaderOperation(actual.operations, "read", Promise.reject(unrelated), []);
+  try {
+    await assert.rejects((await sdkRetirementHarness([actual.catalog, actual.row], { closeOperations: [rejected], dispatchers: new Set([{ closed: true }]) }))(), error =>
+      error instanceof AggregateError && error.errors.includes(undefined) && error.errors.some(value => value instanceof AggregateError && value.errors.includes(unrelated)));
+  } finally { actual.finish(); }
+});
+
+// Worker-only evidence. No exception strings or diagnostic values authorize a
+// verdict; the original joinReaderOperations classifier remains unchanged.
+function workerEvidenceProtocol(isProxy) {
+  const numeric = ["input", "reader", "op", "invokeSeq", "settleSeq", "closedSeq", "readSeq", "unlockBefore", "unlockCalls", "unlockReturns", "unlockInvokeSeq", "unlockReturnSeq", "operations", "settled", "suppressed"];
+  const boolean = ["reasonDefined", "closedReasonDefined", "readReasonDefined", "operandPresent", "operandDefined", "signalAborted", "signalReasonDefined", "settleSignalAborted", "settleSignalReasonDefined", "sameClosed", "sameRead", "sameOperand", "sameSignal", "operandSameRead", "operandSameSignal", "allSettled", "bodyLocked", "joinAccepted"];
+  const enums = { signalScope: ["fetch_input"], site: ["read_join", "cancel_join", "suppressed"], kind: ["read", "cancel", "none"], state: ["pending", "fulfilled", "rejected", "sync_throw"], closedState: ["pending", "fulfilled", "rejected"] };
+  function validate(value) {
+    try {
+      if (!value || typeof value !== "object" || isProxy?.(value)) return null;
+      const out = {}, keys = Reflect.ownKeys(value); if (keys.length < 4 || keys.length > 48) return null;
+      for (const key of keys) {
+        const d = Object.getOwnPropertyDescriptor(value, key); if (!d || !Object.hasOwn(d, "value")) return null;
+        const v = d.value;
+        if (key === "v" ? v !== 1 : numeric.includes(key) ? !(Number.isInteger(v) && v >= 0 && v <= 1_000_000) : boolean.includes(key) ? typeof v !== "boolean" : !enums[key]?.includes(v)) return null;
+        out[key] = v;
+      }
+      if (out.v !== 1 || !out.site || !out.kind || !out.state) return null;
+      return new TextEncoder().encode(JSON.stringify(out)).byteLength <= 2048 ? out : null;
+    } catch { return null; }
+  }
+  const records = []; let suppressed = 0;
+  return { validate, add(value) { const row = validate(value); if (!row) return false; if (records.length < 63) records.push(row); else suppressed = Math.min(1_000_000, suppressed + 1); return true; },
+    values() { return suppressed ? [...records, { v: 1, site: "suppressed", kind: "none", state: "fulfilled", suppressed }] : [...records]; } };
+}
+function workerReaderEvidence(reader, input, index, signal) {
+  let seq = 0, unlockCalls = 0, unlockReturns = 0, unlockInvokeSeq = 0, unlockReturnSeq = 0;
+  let closedState = "pending", closedReason, closedSeq = 0, readReason, readSeq = 0;
+  const operations = [], closed = reader.closed;
+  void closed.then(() => { closedState = "fulfilled"; closedSeq = ++seq; }, reason => { closedState = "rejected"; closedReason = reason; closedSeq = ++seq; });
+  const snapshot = () => ({ aborted: signal?.aborted === true, reason: signal?.reason });
+  return {
+    invoke(kind, original, receiver, args) {
+      const op = { kind, state: "pending", op: operations.length + 1, invokeSeq: ++seq, settleSeq: 0, unlockBefore: unlockCalls, operandPresent: args.length > 0, operand: args[0], signal: snapshot(), reason: undefined };
+      operations.push(op);
+      let pending;
+      try { pending = Reflect.apply(original, receiver, args); } catch (reason) { op.state = "sync_throw"; op.reason = reason; op.settleSeq = ++seq; op.settleSignal = snapshot(); throw reason; }
+      void pending.then(() => { op.state = "fulfilled"; op.settleSeq = ++seq; op.settleSignal = snapshot(); }, reason => {
+        op.state = "rejected"; op.reason = reason; op.settleSeq = ++seq; op.settleSignal = snapshot(); if (kind === "read") { readReason = reason; readSeq = op.settleSeq; }
+      });
+      return pending;
+    },
+    unlocking() { unlockCalls++; unlockInvokeSeq = ++seq; }, unlocked() { unlockReturns++; unlockReturnSeq = ++seq; },
+    records(body) {
+      const definedSame = (a, b) => a !== undefined && b !== undefined && a === b;
+      return operations.filter(op => op.state === "rejected" || op.state === "sync_throw" || op.kind === "cancel").map(op => ({
+        v: 1, signalScope: "fetch_input", site: op.kind === "cancel" ? "cancel_join" : "read_join", input, reader: index, op: op.op, kind: op.kind, state: op.state,
+        invokeSeq: op.invokeSeq, settleSeq: op.settleSeq, closedState, closedSeq, readSeq, unlockBefore: op.unlockBefore,
+        unlockCalls, unlockReturns, unlockInvokeSeq, unlockReturnSeq, operations: operations.length, settled: operations.filter(p => p.state !== "pending").length,
+        reasonDefined: op.reason !== undefined, closedReasonDefined: closedReason !== undefined, readReasonDefined: readReason !== undefined,
+        operandPresent: op.operandPresent, operandDefined: op.operand !== undefined,
+        signalAborted: op.signal.aborted, signalReasonDefined: op.signal.reason !== undefined,
+        settleSignalAborted: op.settleSignal?.aborted === true, settleSignalReasonDefined: op.settleSignal?.reason !== undefined,
+        sameClosed: definedSame(op.reason, closedReason), sameRead: definedSame(op.reason, readReason), sameOperand: definedSame(op.reason, op.operand),
+        sameSignal: definedSame(op.reason, op.settleSignal?.reason), operandSameRead: definedSame(op.operand, readReason), operandSameSignal: definedSame(op.operand, op.signal.reason),
+        allSettled: operations.every(p => p.state !== "pending"), bodyLocked: body.locked, joinAccepted: false,
+      }));
+    },
+  };
+}
+const workerEvidence = workerEvidenceProtocol(nodeTypes.isProxy);
+function emitWorkerEvidence(records, write = process.stdout.write.bind(process.stdout)) {
+  if (!Array.isArray(records) || nodeTypes.isProxy(records) || records.length > 64) throw new Error("invalid Worker evidence collection");
+  const safe = Array.from({ length: records.length }, (_, i) => {
+    const descriptor = Object.getOwnPropertyDescriptor(records, String(i));
+    return descriptor && Object.hasOwn(descriptor, "value") ? workerEvidence.validate(descriptor.value) : null;
+  });
+  if (safe.some(record => !record) || Buffer.byteLength(JSON.stringify(safe)) > 128 * 1024) throw new Error("invalid Worker evidence");
+  for (const record of safe) write(`::error title=BytePlus retirement diagnostic::${JSON.stringify(record).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A")}\n`);
+}
+async function retrieveWorkerEvidence(origin) {
+  const response = await fetch(origin + "/fixture/diagnostics", { redirect: "error", signal: AbortSignal.timeout(2000) });
+  if (response.status !== 200 || !response.body) throw new Error("Worker evidence unavailable");
+  const reader = response.body.getReader(), chunks = []; let bytes = 0; const failures = [];
+  try { for (;;) { const result = await reader.read(); if (result.done) break; bytes += result.value.byteLength; if (bytes > 128 * 1024) throw new Error("Worker evidence bound"); chunks.push(result.value); } }
+  catch (error) { failures.push(error); }
+  finally { try { await reader.cancel(); } catch (error) { failures.push(error); } try { reader.releaseLock(); } catch (error) { failures.push(error); } }
+  if (failures.length) throw new AggregateError(failures, "Worker evidence read failed");
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+test("Worker evidence preserves native invocation and fulfilled sibling cancellation without accepting a failed read", async () => {
+  const reason = new Error("fixed source error"), signal = new AbortController(); let controller;
+  const body = new ReadableStream({ start(value) { controller = value; } }), reader = body.getReader();
+  const evidence = workerReaderEvidence(reader, 1, 1, signal.signal), operations = [];
+  const reading = evidence.invoke("read", reader.read, reader, []); observeReaderOperation(operations, "read", reading, [signal.signal]);
+  controller.error(reason);
+  const cancel = evidence.invoke("cancel", reader.cancel, reader, []); observeReaderOperation(operations, "cancel", cancel, [signal.signal]);
+  await Promise.allSettled([reading, cancel]); evidence.unlocking(); reader.releaseLock(); evidence.unlocked();
+  await assert.rejects(joinReaderOperations(operations), AggregateError);
+  const rows = evidence.records(body); assert.equal(rows.length, 2);
+  assert.ok(rows.every(row => workerEvidence.validate(row) && row.allSettled && row.bodyLocked === false && row.joinAccepted === false));
+  assert.equal(rows[1].sameClosed, true); assert.equal(rows[1].sameRead, true);
+  assert.equal(rows[1].operandDefined, false); assert.equal(rows[1].sameOperand, false);
+  // A separate native readable reader proves fulfilled cancellation and the
+  // captured original closed promise; it is never relabelled as the failed reader.
+  const live = new ReadableStream().getReader(), trace = workerReaderEvidence(live, 2, 1, signal.signal);
+  const pending = trace.invoke("read", live.read, live, []), cancelling = trace.invoke("cancel", live.cancel, live, [reason]);
+  await Promise.all([pending, cancelling]); trace.unlocking(); live.releaseLock(); trace.unlocked();
+  const sibling = trace.records({ locked: false })[0];
+  assert.equal(sibling.state, "fulfilled"); assert.equal(sibling.closedState, "fulfilled"); assert.equal(sibling.operandDefined, true);
+  assert.equal(sibling.reasonDefined, false); assert.equal(sibling.sameOperand, false); assert.equal(sibling.joinAccepted, false);
+});
+test("Worker evidence schema rejects private strings, getters, proxies and undefined identity claims and caps reports", () => {
+  const valid = { v: 1, site: "read_join", kind: "read", state: "rejected", reasonDefined: false, sameRead: false };
+  let called = 0; const accessor = { ...valid }; Object.defineProperty(accessor, "input", { get() { called++; return 1; }, enumerable: true });
+  const proxy = new Proxy(valid, { ownKeys() { called++; throw new Error("must not probe"); } });
+  for (const bad of [accessor, proxy, { ...valid, message: "private" }, { ...valid, input: Infinity }]) assert.equal(workerEvidence.validate(bad), null);
+  assert.equal(called, 0);
+  const store = workerEvidenceProtocol(); for (let i = 0; i < 80; i++) assert.equal(store.add(valid), true);
+  assert.equal(store.values().length, 64); assert.equal(store.values().at(-1).suppressed, 17);
+  assert.throws(() => emitWorkerEvidence([accessor]), /invalid Worker evidence/);
+  const array = []; Object.defineProperty(array, "0", { get() { called++; return valid; } }); assert.throws(() => emitWorkerEvidence(array)); assert.equal(called, 0);
+  const primary = undefined, failures = [primary]; try { emitWorkerEvidence([valid], () => { throw new Error("writer"); }); } catch (error) { failures.push(error); }
+  assert.equal(failures.length, 2); assert.equal(failures[0], undefined);
+});
+test("Worker typed evidence reaches an undecorated Actions command through the real Node spec reporter", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "byteplus-reporter-"));
+  try {
+    const file = join(temporary, "report.test.mjs");
+    await writeFile(file, `import test from "node:test"; import { types as nodeTypes } from "node:util";
+${workerEvidenceProtocol.toString()}
+const workerEvidence = workerEvidenceProtocol(nodeTypes.isProxy);
+${emitWorkerEvidence.toString()}
+test("fixed safe report", () => emitWorkerEvidence([{ v: 1, site: "read_join", kind: "read", state: "rejected" }]));`);
+    // Remove only Node's inherited nested-test marker for this standalone
+    // reporter probe, matching the repository's existing reporter regressions.
+    const { NODE_TEST_CONTEXT: _context, ...env } = process.env;
+    const { stdout } = await promisify(execFile)(process.execPath, ["--test", file], { env, timeout: 30_000, maxBuffer: 128 * 1024 });
+    assert.match(stdout, /✔ fixed safe report/); assert.match(stdout, /tests 1/);
+    assert.ok(stdout.split("\n").some(line => line.startsWith("::error title=BytePlus retirement diagnostic::{")));
+  } finally { await rm(temporary, { recursive: true, force: true }); }
+});
+test("real Worker relay preserves a fulfilled sibling snapshot from the strict failed-reader join", { timeout: 30_000 }, async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "byteplus-evidence-")); let mf; const failures = [];
+  try {
+    const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
+    const script = `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
+${workerEvidenceProtocol.toString()}
+${workerReaderEvidence.toString()}
+${joinReaderOperations.toString()}
+const evidence = workerEvidenceProtocol();
+export default { ...handler, async fetch(request) {
+      if (new URL(request.url).pathname === "/fixture/diagnostics") return Response.json(evidence.values());
+      const body = new ReadableStream(), reader = body.getReader(), trace = workerReaderEvidence(reader, 1, 1);
+      const reading = trace.invoke("read", reader.read, reader, []), canceled = trace.invoke("cancel", reader.cancel, reader, [undefined]);
+      await Promise.all([reading, canceled]); trace.unlocking(); reader.releaseLock(); trace.unlocked();
+      // An independently failed join tests relay retention; this does not claim
+      // that native Node cancellation rejects its own pending read.
+      try { await joinReaderOperations([{ kind: "read", pending: Promise.reject(undefined), expectedAbort: false }]); }
+      catch { for (const record of trace.records(body)) evidence.add(record); }
+      return new Response(null, { status: 204 });
+    } };`;
+    mf = await startWorkerdFixture(temporary, script, 'export default { fetch() { return new Response(null, { status: 204 }); } };', { directRouter: true });
+    const origin = (await mf.unsafeGetDirectURL("router")).origin;
+    assert.equal((await fetch(origin + "/fixture/start")).status, 204);
+    const records = await retrieveWorkerEvidence(origin); assert.equal(records.length, 1);
+    assert.ok(workerEvidence.validate(records[0])); assert.equal(records[0].kind, "cancel"); assert.equal(records[0].state, "fulfilled");
+    assert.equal(records[0].closedState, "fulfilled"); assert.equal(records[0].bodyLocked, false); assert.equal(records[0].joinAccepted, false);
+  } catch (error) { failures.push(error); }
+  finally { try { await mf?.dispose(); } catch (error) { failures.push(error); } try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); } }
+  if (failures.length) throw new AggregateError(failures, "Worker evidence or cleanup failed");
+});
+
 function routerFixture() {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
 import { putGrantCredentials, revokeGrantCredentials } from "./worker/grant-credentials.ts";
@@ -192,6 +449,9 @@ const catalog = [], incoming = [], denials = [];
 const records = [], inputs = [], rawFetch = globalThis.fetch;
 ${observeReaderOperation.toString()}
 ${joinReaderOperations.toString()}
+${workerEvidenceProtocol.toString()}
+${workerReaderEvidence.toString()}
+const evidence = workerEvidenceProtocol();
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 globalThis.fetch = function(input, init) {
   const pending = Reflect.apply(rawFetch, this, [input, init]);
@@ -199,6 +459,7 @@ globalThis.fetch = function(input, init) {
   if (url !== "https://ark.ap-southeast.bytepluses.com/api/v3/chat/completions") return pending;
   const signals = [init?.signal, input instanceof Request ? input.signal : undefined];
   const proof = { returned: pending, body: undefined, readers: [], errors: [] }; inputs.push(proof);
+  const inputIndex = inputs.length;
   void pending.then(response => {
     try {
       proof.body = response.body;
@@ -206,17 +467,18 @@ globalThis.fetch = function(input, init) {
       const getReader = proof.body.getReader;
       proof.body.getReader = function(...args) {
         const reader = Reflect.apply(getReader, this, args);
-        const row = { pending: [], unlocked: false, terminal: deferred(), pendingSettled: false }; proof.readers.push(row);
+        const row = { pending: [], unlocked: false, terminal: deferred(), pendingSettled: false, reported: false, evidence: workerReaderEvidence(reader, inputIndex, proof.readers.length + 1, signals[0] ?? signals[1]) }; proof.readers.push(row);
         for (const name of ["read", "cancel"]) {
           const original = reader[name];
           reader[name] = function(...operands) {
-            const pending = Reflect.apply(original, this, operands);
+            const pending = row.evidence.invoke(name, original, this, operands);
             return observeReaderOperation(row.pending, name, pending, signals);
           };
         }
         const release = reader.releaseLock;
         reader.releaseLock = function() {
-          const result = Reflect.apply(release, this, []); row.unlocked = true; row.terminal.resolve(); return result;
+          row.evidence.unlocking();
+          const result = Reflect.apply(release, this, []); row.evidence.unlocked(); row.unlocked = true; row.terminal.resolve(); return result;
         };
         return reader;
       };
@@ -237,7 +499,11 @@ async function retire() {
     await proof.returned;
     const readers = await Promise.allSettled(proof.readers.map(async row => {
       await row.terminal.promise;
-      await joinReaderOperations(row.pending); row.pendingSettled = true;
+      try { await joinReaderOperations(row.pending); row.pendingSettled = true; }
+      catch (error) {
+        if (!row.reported) { row.reported = true; try { for (const snapshot of row.evidence.records(proof.body)) evidence.add(snapshot); } catch { /* original failure remains authoritative */ } }
+        throw error;
+      }
     }));
     const failures = [...proof.errors, ...readers.flatMap(result => result.status === "rejected" ? [result.reason] : [])];
     if (!proof.readers.length) failures.push(new Error("upstream reader observation missing"));
@@ -253,6 +519,7 @@ async function retire() {
 export default { ...handler, async fetch(request, env, context) {
   const path = new URL(request.url).pathname;
   if (path === "/fixture/retire") return Response.json(await retire());
+  if (path === "/fixture/diagnostics") return Response.json(evidence.values());
   if (path === "/fixture/state") return Response.json({ catalog, incoming, denials });
   if (path === "/fixture/grants") {
     for (const id of ${JSON.stringify(ids)}) {

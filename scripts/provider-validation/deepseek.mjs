@@ -7,7 +7,7 @@ export function validateDeepSeekSearch(manifest) {
     || manifest.id === "deepseek" && (endpoint.path === "/v1/tools/search"
       || manifest.capabilities.some(capability => capability.endpoint === id && capability.id === "search.web")));
   if (!endpoints.length) return;
-  const fail = () => { throw new Error("deepseek.search requires model-less native search, canonical origin, original Bearer auth and a qualified optional native-result tariff"); };
+  const fail = () => { throw new Error("deepseek.search requires model-less native search, canonical origin, original Bearer auth and an unpriced request contract"); };
   const scheme = manifest.auth.schemes[0], adapter = manifest.adapter;
   if (manifest.id !== "deepseek" || endpoints.length !== 1
     || Object.values(manifest.baseUrls).some(base => base !== "https://api.deepseek.com")

@@ -5,7 +5,7 @@ import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-cata
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { fetchWithRuntimeDispatcher } from "../../src/infra/net/runtime-fetch.js";
 import * as guardedTransport from "../../src/agents/provider-transport-dispatcher-pool.js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it as nativeIt, vi } from "vitest";
 import { makeInMemorySessionManager, makeModelSnapshotEntry } from "../../src/agents/embedded-agent-runner.sanitize-session-history.test-harness.js";
 import { sanitizeSessionHistory } from "../../src/agents/embedded-agent-runner/replay-history.js";
 import { selectEmbeddedAgentStream } from "../../src/agents/embedded-agent-runner/stream-resolution.js";
@@ -30,42 +30,93 @@ type Acquisition = {
   releaseCalls: number;
   releases: Promise<void>[];
   body?: ReadableStream<Uint8Array> | null;
-  readers: Array<{ pending: ReaderOperation[]; unlocked: boolean }>;
+  readers: Array<{ pending: ReaderOperation[]; unlocked: boolean; witness: ReturnType<typeof readerWitness> }>;
 };
 const acquisitions: Acquisition[] = [];
 const closeOperations: Promise<unknown>[] = [];
 const dispatchers = new Set<object>();
 const observationErrors: unknown[] = [];
 let catalogCalls = 0, chatCalls = 0, expectedChatCalls = 0;
+let bodyPassed = false, negativeCase: "embedded_error" | "cancel" | null = null;
+let callerSignal: AbortSignal | undefined;
+function it(name: string, body: () => Promise<void>) {
+  nativeIt(name, async () => {
+    negativeCase = name === "returns embedded_error without region, plan or credential retry" ? "embedded_error" :
+      name === "propagates a post-header SDK cancellation without another attempt" ? "cancel" : null;
+    await body(); bodyPassed = true;
+  });
+}
 
 // Pure observation/join functions are also exercised by the outer fixture tests.
-type ReaderOperation = { kind: "read" | "cancel"; pending: Promise<unknown>; expectedAbort: boolean };
+type ReaderOperation = { kind: "read" | "cancel"; pending: Promise<unknown>; expectedAbort: boolean; storedError?: (reason: unknown, requireCaller: boolean) => boolean };
 function observeReaderOperation<T extends Promise<unknown>>(operations: ReaderOperation[], kind: ReaderOperation["kind"], pending: T, signals: Array<AbortSignal | null | undefined>): T {
   const operation = { kind, pending, expectedAbort: false }; operations.push(operation);
   void pending.then(() => {}, reason => {
     // Match the original request's exact reason at rejection, never an error name
-    // or a signal that only becomes aborted later. Cancellation failures always fail.
+    // or a signal that only becomes aborted later. Stored-error cancellation is qualified separately after all original joins.
     operation.expectedAbort = kind === "read" && reason !== undefined && signals.some(signal => signal?.aborted && signal.reason === reason);
   });
   return pending;
 }
-async function joinReaderOperations(operations: ReaderOperation[]) {
-  const results = await Promise.allSettled(operations.map(operation => operation.pending));
-  const failures = results.flatMap((result, index) => result.status === "rejected" && !operations[index].expectedAbort ? [result.reason] : []);
+async function joinReaderOperations(operations: ReaderOperation[], accepted?: (operation: ReaderOperation, reason: unknown) => boolean, joined?: PromiseSettledResult<unknown>[]) {
+  const results = joined ?? await Promise.allSettled(operations.map(operation => operation.pending));
+  const failures = results.flatMap((result, index) => result.status === "rejected" && !operations[index].expectedAbort &&
+    !(operations[index].kind === "cancel" && accepted?.(operations[index], result.reason)) ? [result.reason] : []);
   if (failures.length) throw new AggregateError(failures, "original reader operations failed");
+}
+
+// These witnesses keep original promises and values private. A captured closed
+// rejection plus the identical read/cancel rejection proves a stored stream error;
+// callback order after unlock does not replace that original promise identity.
+function readerWitness(reader: ReadableStreamDefaultReader<Uint8Array>, guard?: AbortSignal | null, caller?: AbortSignal | null) {
+  type Signal = { aborted: boolean; reason: unknown };
+  type Operation = { kind: "read" | "cancel"; pending?: Promise<unknown>; state: "pending" | "fulfilled" | "rejected" | "sync_throw";
+    reason?: unknown; unlockBefore: number; guard: Signal; caller: Signal; guardAtReject?: Signal; callerAtReject?: Signal };
+  const snapshot = (signal?: AbortSignal | null): Signal => ({ aborted: signal?.aborted === true, reason: signal?.reason });
+  const closed = reader.closed, operations = new Set<Operation>();
+  let closedRejected = false, closedReason: unknown, unlockCalls = 0, unlockReturns = 0;
+  void closed.then(() => {}, reason => { closedRejected = true; closedReason = reason; });
+  const matches = (signal: Signal | undefined, reason: unknown) => signal?.aborted === true && signal.reason !== undefined && signal.reason === reason;
+  return {
+    invoke(kind: Operation["kind"], original: (...args: any[]) => Promise<unknown>, receiver: unknown, args: unknown[]) {
+      const op: Operation = { kind, state: "pending", unlockBefore: unlockCalls, guard: snapshot(guard), caller: snapshot(caller) };
+      operations.add(op);
+      let pending: Promise<unknown>;
+      try { pending = Reflect.apply(original, receiver, args); } catch (reason) { op.state = "sync_throw"; op.reason = reason; throw reason; }
+      op.pending = pending;
+      void pending.then(() => { op.state = "fulfilled"; }, reason => {
+        op.state = "rejected"; op.reason = reason; op.guardAtReject = snapshot(guard); op.callerAtReject = snapshot(caller);
+      });
+      return { pending, storedError(reason: unknown, requireCaller: boolean) {
+        return operations.has(op) && kind === "cancel" && op.pending === pending && op.state === "rejected" && op.unlockBefore === 0 &&
+          reason !== undefined && op.reason === reason && closedRejected && closedReason === reason &&
+          [...operations].some(read => read.kind === "read" && read.pending && read.state === "rejected" && read.reason === reason) &&
+          matches(op.guard, reason) && matches(op.guardAtReject, reason) &&
+          (!requireCaller || (matches(op.caller, reason) && matches(op.callerAtReject, reason)));
+      } };
+    },
+    unlocking() { unlockCalls++; }, unlocked() { unlockReturns++; },
+    retired() { return unlockCalls > 0 && unlockCalls === unlockReturns && [...operations].every(op => op.pending && (op.state === "fulfilled" || op.state === "rejected")); },
+  };
+}
+function acceptStoredSdkCancel(kind: Acquisition["kind"], scenario: typeof negativeCase, operation: ReaderOperation, reason: unknown, originalsRetired: boolean) {
+  return originalsRetired && kind === "chat" && (scenario === "embedded_error" || scenario === "cancel") && operation.kind === "cancel" &&
+    reason !== undefined && operation.storedError?.(reason, scenario === "cancel") === true;
 }
 
 function observe(kind: Acquisition["kind"], returned: Acquisition["returned"], signals: Array<AbortSignal | null | undefined>) {
   let released!: () => void;
   const row: Acquisition = { kind, returned, released: new Promise(resolve => { released = resolve; }), releaseCalls: 0, releases: [], readers: [] };
   acquisitions.push(row);
+  const guard = signals[0] ?? signals[1], caller = callerSignal;
   void returned.then(result => {
     try {
       row.body = result.response.body;
       const release = result.release;
       vi.spyOn(result, "release").mockImplementation(function () {
         row.releaseCalls++;
-        const pending = Reflect.apply(release, this, []);
+        let pending: Promise<void>;
+        try { pending = Reflect.apply(release, this, []); } catch (error) { observationErrors.push(error); released(); throw error; }
         row.releases.push(pending);
         void pending.then(released, released);
         return pending;
@@ -74,17 +125,23 @@ function observe(kind: Acquisition["kind"], returned: Acquisition["returned"], s
       const getReader = row.body.getReader;
       vi.spyOn(row.body, "getReader").mockImplementation(function (...args) {
         const reader = Reflect.apply(getReader, this, args) as ReadableStreamDefaultReader<Uint8Array>;
-        const observed = { pending: [] as ReaderOperation[], unlocked: false }; row.readers.push(observed);
+        const observed = { pending: [] as ReaderOperation[], unlocked: false, witness: readerWitness(reader, guard, caller) }; row.readers.push(observed);
         for (const method of ["read", "cancel"] as const) {
           const original = reader[method];
           vi.spyOn(reader, method).mockImplementation(function (...operands: unknown[]) {
-            const pending = Reflect.apply(original, this, operands);
-            return observeReaderOperation(observed.pending, method, pending, signals);
+            let invoked: ReturnType<typeof observed.witness.invoke>;
+            try { invoked = observed.witness.invoke(method, original, this, operands); } catch (error) { observationErrors.push(error); throw error; }
+            const pending = observeReaderOperation(observed.pending, method, invoked.pending, signals);
+            observed.pending.at(-1)!.storedError = invoked.storedError;
+            return pending;
           });
         }
         const unlock = reader.releaseLock;
         vi.spyOn(reader, "releaseLock").mockImplementation(function () {
-          const value = Reflect.apply(unlock, this, []); observed.unlocked = true; return value;
+          observed.witness.unlocking();
+          let value: void;
+          try { value = Reflect.apply(unlock, this, []); } catch (error) { observationErrors.push(error); throw error; }
+          observed.witness.unlocked(); observed.unlocked = true; return value;
         });
         return reader;
       });
@@ -95,6 +152,7 @@ function observe(kind: Acquisition["kind"], returned: Acquisition["returned"], s
 
 beforeEach(() => {
   clearLiveCatalogCacheForTests();
+  bodyPassed = false; negativeCase = null; callerSignal = undefined;
   acquisitions.length = 0; closeOperations.length = 0; dispatchers.clear(); observationErrors.length = 0;
   catalogCalls = 0; chatCalls = 0; expectedChatCalls = 0;
   vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(function (options) {
@@ -131,13 +189,24 @@ beforeEach(() => {
 afterEach(async () => {
   try {
     const returned = await Promise.allSettled(acquisitions.map(row => row.returned));
-    const releases = await Promise.all(acquisitions.map(async row => {
+    const joined = await Promise.all(acquisitions.map(async row => {
       await row.released;
-      const results = await Promise.allSettled(row.releases);
-      const readers = await Promise.allSettled(row.readers.map(reader => joinReaderOperations(reader.pending)));
-      return [...results, ...readers];
+      const releases = await Promise.allSettled(row.releases);
+      const readers = await Promise.all(row.readers.map(reader => Promise.allSettled(reader.pending.map(operation => operation.pending))));
+      return { releases, readers };
     }));
     const closed = await Promise.allSettled(closeOperations);
+    const originalsRetired = bodyPassed && observationErrors.length === 0 && acquisitions.length === catalogCalls + chatCalls &&
+      returned.every(result => result.status === "fulfilled") && closeOperations.length === dispatchers.size && closed.every(result => result.status === "fulfilled") &&
+      [...dispatchers].every(dispatcher => Reflect.get(dispatcher, "closed") === true) && acquisitions.every((row, index) =>
+        row.releaseCalls > 0 && row.releaseCalls === row.releases.length && joined[index].releases.every(result => result.status === "fulfilled") &&
+        row.body?.locked === false && row.readers.length > 0 && row.readers.every((reader, readerIndex) => reader.unlocked && reader.witness.retired() &&
+          joined[index].readers[readerIndex].every((result, opIndex) => result.status === "fulfilled" || reader.pending[opIndex].kind === "cancel" || reader.pending[opIndex].expectedAbort)));
+    const releases = await Promise.all(acquisitions.map(async (row, index) => {
+      const readers = await Promise.allSettled(row.readers.map((reader, readerIndex) => joinReaderOperations(reader.pending,
+        (operation, reason) => acceptStoredSdkCancel(row.kind, negativeCase, operation, reason, originalsRetired), joined[index].readers[readerIndex])));
+      return [...joined[index].releases, ...readers];
+    }));
     // Assert only after the actual guard, reader, release and owned-dispatcher
     // joins. The shared Chat pool is never closed by this fixture.
     const failures = [...returned, ...releases.flat(), ...closed].flatMap(result => result.status === "rejected" ? [result.reason] : []);
@@ -179,6 +248,7 @@ function context(id: string): Context {
 }
 async function start(selection: Awaited<ReturnType<typeof selected>>, id: string, simple = false, ctx = context(id), signal?: AbortSignal, apiKey = key(id)) {
   const { provider, model } = selection;
+  callerSignal = signal;
   // The embedded host selects its managed transport before provider wrapping.
   // Simple completion keeps its separate registered source stream and defaults.
   const host = simple ? undefined : selectEmbeddedAgentStream({

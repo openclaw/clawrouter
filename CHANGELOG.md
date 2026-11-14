@@ -6,6 +6,8 @@
 
 - Qualify OpenClaw catalog tests against unmodified native offers and schema-validated manifest configurations, keeping direct Worker transport coverage separate from client discovery.
 
+- Discard Fusion adviser drafts that exceed the proposal character limit instead of injecting a truncated answer, preserving completed usage and existing synthesis fallback.
+
 - Evaluate trained Fusion vote policies through the offline replay CLI with the same panel validation as live execution.
 
 - Train bounded Fusion vote scheduling policies offline from observed answers and costs, without correctness labels or model calls.
@@ -581,7 +583,6 @@
 - Reserve the frozen native DeepSeek Search request fee before dispatch, settle only complete native empty/nonempty evidence, and retain uncertain charges without replay or generic failure refunds.
 - Add bounded native DeepSeek Search response validation with explicit frozen options, complete result delivery and conservative unknown usage; shared routing and native fee qualification remain separate.
 - Dispatch model-less DeepSeek Search through original credentials and bounded native response validation, denying unknown request fees under hard-dollar budgets and retaining explicit policy charges for empty or interrupted results.
-- Declare DeepSeek native Search alongside unchanged Chat cards with the frozen 750-microUSD maximum request tariff, complete-empty zero settlement and conservative uncertain charges; preserve original credentials and explicit fixed policy pricing.
 - Add bounded MiniMax native plan Search codecs and fixtures, preserving regional product boundaries, native result counts and unknown upstream costs through filtering and interrupted delivery.
 - Add an inactive MiniMax plan Search response leaf with trusted regional destinations, complete native JSON and validation of every result URL; preserve unknown usage and response capacity through downstream completion while operation authority remains separate.
 - Add frozen Gemini grounded-search codecs and synthetic fixtures with bounded native time filters, preserved attribution and conservative query/tool accounting boundaries.
@@ -800,10 +801,10 @@
 - Add isolated Volcengine and BytePlus Coding Plan Chat routes for qualified frozen identities, preserving console aliases and rejecting retired or unqualified cards before upstream calls.
 - Tests: exercise registered ClawRouter catalog-selected Volcengine PAYG Chat, explicit tool replay, regional grant isolation, cancellation and SQLite accounting through the real Worker.
 - Complete the frozen Volcengine PAYG Chat roster while preserving its existing seed, closing deprecated identities and keeping dated standard models separate from Coding Plan aliases and tariffs.
-- Tests: qualify registered ClawRouter BytePlus PAYG catalog selection, both stream entrypoints, host tool replay, Singapore grant isolation and SQLite settlement through the real Worker.
-- Complete the six frozen BytePlus PAYG Chat dispositions with original Singapore credentials and native input facts, keeping deprecated GLM closed and Coding Plan prices or aliases separate.
 - Retain all frozen Ark Coding Plan identities with dated retirement, deprecation and upstream-alias evidence; keep unqualified cards non-executable and unpriced pending shared discovery eligibility integration.
 - Observe StepFun standard Chat cached_tokens as a validated inclusive prompt subset in JSON and terminal SSE, preserving gross input and conservative invalid-cache accounting without inferring prices.
+- Tests: qualify registered ClawRouter BytePlus PAYG catalog selection, both stream entrypoints, host tool replay, Singapore grant isolation and SQLite settlement through the real Worker.
+- Complete the six frozen BytePlus PAYG Chat dispositions with original Singapore credentials and native input facts, keeping deprecated GLM closed and Coding Plan prices or aliases separate.
 - Add experimental standard chat routes for Qianfan v2, StepFun global, Tencent TokenHub mainland, Volcengine Beijing and BytePlus Singapore with separate region/product credentials.
 - Accept canonical Abliteration ABLIT_KEY with ABLITERATION_API_KEY compatibility, consistent readiness and canonical precedence, preserving original selected grants and sanitized credential rejection.
 - Providers: qualify the two frozen StepFun standard Chat cards and keyed discovery in explicit global/China bindings, separate from Step Plan credentials and quota.
@@ -811,8 +812,6 @@
 - Qualify three frozen Tencent TokenHub Chat identities and private model discovery, preserving the documented postpaid Hy3 preview alias, native reasoning/tool replay and separate TokenPlan credentials without inferring tariffs.
 - Fix Tencent TokenHub model discovery to declare GET explicitly, omit streaming and exclude an unintended POST method.
 - Add experimental Abliteration, Meta Model API, Synthetic and Particle Chat routes with isolated API keys and explicit Particle catalog-to-request model mapping.
-- Providers: qualify four frozen Abliteration Chat cards, native project discovery and canonical reasoning controls; retain the deprecated Large identity and project credential boundary.
-- Verify actual Abliteration static catalog, both stream hooks, effort ladders and tool/image replay through Worker/SQLite with original-key isolation and conservative usage.
 - Resolve exact declared native model identities before opaque passthrough so Particle retains its canonical policy ID and physical upstream alias; reject ambiguous registered matches without widening unknown-model authority.
 - Providers: qualify the frozen Particle-1 Chat controls, tools, image input and token limits with original-key model discovery, preserving native identity mapping, usage and served-tier observations.
 - Verify Particle’s actual keyed catalog, native reasoning/cache controls and replay through Worker/SQLite; preserve public model identity, documented request alias and unknown-price denial.
