@@ -2,6 +2,7 @@ import { open } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runExactVote } from './fusion-exact-vote.mjs';
+import { createVotePolicy } from './fusion-vote-policy.mjs';
 
 const responseLimit = 128 * 1024;
 const failures = new Set(['vote_http_error', 'vote_response_limit', 'vote_invalid_response', 'vote_incomplete_response', 'vote_selection_failed']);
@@ -110,14 +111,13 @@ export async function runFusionVote(input, { endpoint, apiKey, signal, fetcher =
   }
 }
 
-async function main() {
-  if (process.argv.length !== 4) throw new Error('invalid_arguments');
-  const file = await open(process.argv[3], 'r');
+async function readJson(path, limit) {
+  const file = await open(path, 'r');
   let input;
   try {
     const stat = await file.stat();
-    if (!stat.isFile() || stat.size > 128 * 1024) throw new Error('invalid_vote_file');
-    const bytes = Buffer.alloc(128 * 1024 + 1);
+    if (!stat.isFile() || stat.size > limit) throw new Error('invalid_vote_file');
+    const bytes = Buffer.alloc(limit + 1);
     let length = 0;
     while (length < bytes.length) {
       const { bytesRead } = await file.read(bytes, length, bytes.length - length, null);
@@ -127,7 +127,15 @@ async function main() {
     if (length === bytes.length) throw new Error('invalid_vote_file');
     input = JSON.parse(bytes.subarray(0, length).toString('utf8'));
   } finally { await file.close(); }
-  const result = await runFusionVote(input, { endpoint: process.argv[2], apiKey: process.env.CLAWROUTER_API_KEY });
+  return input;
+}
+
+async function main() {
+  if (![4, 5].includes(process.argv.length)) throw new Error('invalid_arguments');
+  const input = await readJson(process.argv[3], 128 * 1024);
+  const selectNext = process.argv[4] === undefined ? undefined
+    : await createVotePolicy(input, await readJson(process.argv[4], 4 * 1024 * 1024));
+  const result = await runFusionVote(input, { endpoint: process.argv[2], apiKey: process.env.CLAWROUTER_API_KEY, selectNext });
   console.log(JSON.stringify(result));
   if (result.status !== 'ok') process.exitCode = 1;
 }
