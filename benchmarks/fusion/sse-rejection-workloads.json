@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "native-sse-rejection-accounting",
+      "split": "development",
+      "base": "7f2fb8363ac4524f31ca97955b50893c601e24e5",
+      "oracle": "622777b39fe25e85fcd02f439367e0a73017222f",
+      "editPaths": [
+        "worker/http-operation.ts",
+        "worker/proxy-response.ts",
+        "worker/token-usage.ts",
+        "worker/responses-usage.ts"
+      ],
+      "visibleTests": [
+        "worker/test/proxy-response.test.mjs",
+        "worker/test/proxy-usage.test.mjs",
+        "worker/test/responses-usage.test.mjs"
+      ],
+      "hiddenTests": [
+        "worker/test/native-rejection-tail.test.mjs",
+        "worker/test/responses-usage.test.mjs"
+      ],
+      "reproducer": "import './worker/test/typescript-setup.mjs';\nimport assert from 'node:assert/strict';\nconst {HttpOperation}=await import('./worker/http-operation.ts');\nconst {normalizePreStreamError,observeUsage}=await import('./worker/proxy-response.ts');\nconst wire='event: error\\ndata: {\"error\":{\"message\":\"initial rejection\"}}\\n\\ndata: {\"choices\":[{\"delta\":{\"content\":\"paid work\"}}]}\\n\\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,\"total_tokens\":12}}\\n\\ndata: [DONE]\\n\\n';\nconst op=new HttpOperation();\nconst normalized=await normalizePreStreamError(new Response(wire,{headers:{'content-type':'text/event-stream'}}),true,op,{format:'openai',requestId:'fixture'});\nassert.equal(normalized.status,200);assert.equal(op.receivedRejection,true);\nconst observed=observeUsage(normalized,op,undefined,'openai.chat');\nassert.equal(await observed.response.text(),wire);\nconst result=await observed.result;\nassert.equal(op.receivedRejection,false,'later work revokes initial free-rejection classification');\nassert.notEqual(result.nonbillable,true);assert.equal(op.status,'provider_error');\nassert.deepEqual([result.tokens.input,result.tokens.output,result.tokens.total],[10,2,12]);\n",
+      "instruction": "Repair provisional no-charge evidence after an initial native HTTP-200 SSE error. Scope is the stream inspectors and HttpOperation evidence, not billing settlement callers. Preserve every delivered byte and the operation's provider_error status. After normalizePreStreamError marks receivedRejection, observeUsage must revoke only that no-charge evidence if later bytes contain generated output, usage, invalid/oversized non-error data, or a failed Responses terminal carrying usage or nonempty output. Error-only, empty data, comments, [DONE] and Anthropic message_stop alone stay free, even before EOF or cancellation. Work after a terminal-only marker still revokes rejection. OpenAI Chat, OpenAI Responses and Anthropic Messages all obey this rule. Preserve normal nonprovisional terminal/error precedence. Authoritative usage in completed events must remain collectable after provisional rejection; partial or undelimited frames never supply authoritative usage or terminal facts. At EOF/cancellation, unfinished data and UTF-8 decoder bytes in a data payload revoke rejection, while raw comment, empty, terminal-marker, and explicit event:error-only tails do not. Explicit event:error with a complete usage-bearing JSON payload is work. Null error is not error evidence. Responses projection must track nonempty output with bounded memory without retaining generated content, respecting escaped keys, duplicate output keys and replaced response ancestors; nested error.output does not count as root/response output. Preserve cancellation ownership, tool/identity observations, existing limits and ordinary response behavior. Extend createSseUsageInspector with an optional revoke callback, and createResponsesUsageInspector with an optional fifth callback after usageExtractor so direct inspector callers can observe the same decision. Call the revocation callback at most once. Keep receivedRejection observable and add a method if needed to revoke it without resetting status. Do not change tests or any files outside the four editable modules."
+    }
+  ]
+}
