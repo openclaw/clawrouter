@@ -1,7 +1,9 @@
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
-import { type DispatcherAwareRequestInit, fetchWithRuntimeDispatcher } from "../../src/infra/net/runtime-fetch.js";
+import type { DispatcherAwareRequestInit } from "../../src/infra/net/runtime-fetch.js";
+import * as guardedFetch from "../../src/infra/net/fetch-guard.js";
 import { registerSingleProviderPlugin } from "../../src/plugin-sdk/plugin-test-runtime.js";
 import { loadBundledPluginFacade } from "../../src/test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
@@ -18,100 +20,174 @@ const control = process.env.CLAWROUTER_CONTRACT_CONTROL!;
 const cases = JSON.parse(process.env.CLAWROUTER_CONTRACT_CATALOG_CASES!) as Case[];
 
 const originalFetch = globalThis.fetch;
-const originalGuard = ssrfRuntime.fetchWithSsrFGuard;
+const undici = createRequire(import.meta.url)("undici/index.js") as typeof import("undici");
+const originalRuntimeFetch = undici.fetch;
+const originalGuard = guardedFetch.fetchWithSsrFGuard;
 const key = (row: Case) => `clawrouter-live-${row.id}-${row.scenario === "rotated_new" ? "rotated-secret" : "fixture-secret"}`;
-const observations: Array<{ path: string; credential: string; released: boolean; done: Promise<unknown>; status?: number; errorCode?: string; closes: Promise<unknown>[]; dispatchers: number }> = [];
+type Observation = {
+  path: string; credential: string; status?: number; errorCode?: string;
+  dispatcher: NonNullable<DispatcherAwareRequestInit["dispatcher"]>;
+  guardObserved: boolean; released: boolean; leases: Promise<unknown>[];
+  closeStarted: Promise<void>;
+  closeCalls: Array<{ depth: number; args: unknown[]; outcome?: { value: unknown } | { error: unknown } }>;
+  bodies: ReadableStream<Uint8Array>[]; reads: Promise<unknown>[]; cancels: Promise<unknown>[];
+  readers: Array<{ unlock: ReturnType<typeof vi.spyOn> }>;
+};
+const observations: Observation[] = [];
+const unexpected: unknown[] = [];
 const caseFor = (scenario: Scenario) => {
   const row = cases.find(value => value.scenario === scenario);
   if (!row) throw new Error("missing compiled fixture contract");
   return row;
 };
+function throwFailures(failures: unknown[]): void {
+  if (failures.length === 1) throw failures[0];
+  if (failures.length) throw new AggregateError(failures, "catalog assertion or original cleanup failed");
+}
+function refuse(message: string): never {
+  const error = new Error(message); unexpected.push(error); throw error;
+}
 
 beforeEach(() => {
   expect(process.env.CLAWROUTER_CONTRACT_SOURCE_HEAD).toBe(expectedHead);
   expect(execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim()).toBe(expectedHead);
   expect(cases).toHaveLength(15);
-  clearLiveCatalogCacheForTests(); observations.length = 0;
-  for (const name of ["FEATHERLESS_API_KEY", "OPENAI_API_KEY"]) {
-    vi.stubEnv(name, "must-not-fallback");
-  }
+  clearLiveCatalogCacheForTests(); observations.length = 0; unexpected.length = 0;
+  for (const name of ["FEATHERLESS_API_KEY", "OPENAI_API_KEY"]) vi.stubEnv(name, "must-not-fallback");
   vi.stubEnv("CLAWROUTER_API_KEY", "");
-  vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
-    const request = new Request(input, init);
-    if (new URL(request.url).origin !== origin) throw new Error("unexpected direct client provider egress");
+  // A plain pass-through avoids the guard's deliberate mocked-fetch bypass.
+  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+    if (new URL(new Request(input, init).url).origin !== origin) refuse("unexpected direct client provider egress");
     return originalFetch(input, init);
   });
-  // Keep the real SSRF guard/dispatcher. The only allowance is this exact local
-  // fixture origin; no fabricated offer, native credential or release substitute.
-  vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(async options => {
-    const url = new URL(String(options.url));
-    const credential = new Headers(options.init?.headers).get("authorization") ?? "";
-    const row = cases.find(value => credential === `Bearer ${key(value)}`);
-    if (!row || url.origin !== origin || !["/v1/catalog", row.route].includes(url.pathname) || url.search) {
-      throw new Error("unexpected registered catalog route or key");
+  // Both native plugin and Vitest graphs consult this supported dependency hook.
+  // Keep genuine constructors and call the captured installed Undici fetch.
+  vi.stubGlobal("__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__", { ...undici, fetch: observeRequest });
+  const observeGuard: typeof originalGuard = async options => {
+    const result = await originalGuard(options);
+    const row = observations.find(value => value.path === new URL(String(options.url)).pathname
+      && value.credential === new Headers(options.init?.headers).get("authorization"));
+    if (!row) {
+      const failures: unknown[] = [new Error("missing transport for observed original guard")];
+      const results = await Promise.allSettled([result.response.body?.cancel(), result.release()]);
+      for (const item of results) if (item.status === "rejected") failures.push(item.reason);
+      throwFailures(failures);
+      throw new Error("unreachable missing transport");
     }
-    let finished!: (error?: unknown) => void;
-    const done = new Promise<unknown>(resolve => { finished = resolve; });
-    const observation = { path: url.pathname, credential, released: false, done, closes: [], dispatchers: 0 } as typeof observations[number];
-    observations.push(observation);
-    try {
-      const result = await originalGuard({ ...options, fetchImpl: (input, init) => {
-        const dispatcher = (init as DispatcherAwareRequestInit | undefined)?.dispatcher;
-        if (!dispatcher || observation.dispatchers++) throw new Error("missing or repeated original dispatcher");
-        const close = dispatcher.close;
-        vi.spyOn(dispatcher, "close").mockImplementation((...args) => {
-          const pending = Reflect.apply(close, dispatcher, args);
-          // Undici re-enters close(callback); retain only the original
-          // promise-form retirement result, including its real null fulfillment.
-          if (args[0] === undefined) observation.closes.push(pending);
-          return pending;
-        });
-        return fetchWithRuntimeDispatcher(input, init);
-      },
-        policy: ssrfRuntime.ssrfPolicyFromHttpBaseUrlAllowedOrigin(origin) });
-      observation.status = result.response.status;
-      try {
-        if (url.pathname === "/v1/catalog") {
-          const body = await result.response.clone().json();
-          const provider = body.providers.find((value: { id: string }) => value.id === row.provider);
-          const offers = provider.offers.filter((value: { endpoint: string }) => value.endpoint === row.endpoint);
-          expect(offers).toEqual([expect.objectContaining({ routeKind: row.native ? "native" : "manifest",
-            route: row.route, eligible: true, requestFormat: row.format, responseFormat: row.format })]);
-
-        } else if (!result.response.ok) {
-          const body = await result.response.clone().json();
-          observation.errorCode = body.error?.code;
-        }
-      } catch (error) {
-        const failures = [error];
-        try { await result.response.body?.cancel(); } catch (failure) { failures.push(failure); }
-        try { await result.release(); } catch (failure) { failures.push(failure); }
-        if (failures.length > 1) throw new AggregateError(failures, "catalog observation or cleanup failed");
-        throw error;
-      }
-      return { ...result, release: async () => {
-        try { await result.release(); observation.released = true; finished(); }
-        catch (error) { finished({ error }); throw error; }
-      } };
-    } catch (error) { finished({ error }); throw error; }
-  });
+    row.guardObserved = true;
+    observeBody(result.response.body, row);
+    return { ...result, release: () => {
+      const pending = result.release(); row.leases.push(pending);
+      void pending.then(() => { row.released = true; }, () => undefined);
+      return pending;
+    } };
+  };
+  // Supplementary only: actual transport/close evidence does not depend on a
+  // namespace spy intercepting a different native module graph.
+  vi.spyOn(guardedFetch, "fetchWithSsrFGuard").mockImplementation(observeGuard);
+  vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(observeGuard);
 });
 
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); clearLiveCatalogCacheForTests(); });
+async function observeRequest(input: RequestInfo | URL, supplied?: RequestInit): Promise<Response> {
+  const init = supplied as DispatcherAwareRequestInit | undefined;
+  const request = new Request(input, supplied), url = new URL(request.url);
+  const credential = request.headers.get("authorization") ?? "";
+  const row = cases.find(value => credential === `Bearer ${key(value)}`);
+  if (!row || url.origin !== origin || !["/v1/catalog", row.route].includes(url.pathname) || url.search
+    || request.method !== "GET" || request.body || request.headers.has("x-api-key")) refuse("unexpected registered catalog route or key");
+  if (observations.some(value => value.path === url.pathname && value.credential === credential)) refuse("repeated original catalog transport");
+  const dispatcher = init?.dispatcher;
+  if (!dispatcher) refuse("missing original catalog dispatcher");
+  let closeStarted!: () => void;
+  const observation: Observation = { path: url.pathname, credential, dispatcher, guardObserved: false, released: false, leases: [],
+    closeStarted: new Promise(resolve => { closeStarted = resolve; }), closeCalls: [], bodies: [], reads: [], cancels: [], readers: [] };
+  observations.push(observation);
+  const close = dispatcher.close; let depth = 0;
+  vi.spyOn(dispatcher, "close").mockImplementation(function (this: typeof dispatcher, ...args: unknown[]) {
+    const call: Observation["closeCalls"][number] = { depth, args };
+    observation.closeCalls.push(call); depth++;
+    try { const value = Reflect.apply(close, this, args); call.outcome = { value }; return value; }
+    catch (error) { call.outcome = { error }; throw error; }
+    finally { depth--; if (call.depth === 0) closeStarted(); }
+  } as typeof dispatcher.close);
+  const response = await Reflect.apply(originalRuntimeFetch, undici, [input, init]) as unknown as Response;
+  observation.status = response.status;
+  try {
+    if (url.pathname === "/v1/catalog") {
+      const body = await response.clone().json();
+      const provider = body.providers.find((value: { id: string }) => value.id === row.provider);
+      const offers = provider.offers.filter((value: { endpoint: string }) => value.endpoint === row.endpoint);
+      expect(offers).toEqual([expect.objectContaining({ routeKind: row.native ? "native" : "manifest",
+        route: row.route, eligible: true, requestFormat: row.format, responseFormat: row.format })]);
+    } else if (!response.ok) observation.errorCode = (await response.clone().json()).error?.code;
+  } catch (error) {
+    unexpected.push(error);
+    // Start original cancellation, but let the genuine guard close transport
+    // before joining it: awaiting a tee here can deadlock the error path.
+    try {
+      const pending = response.body?.cancel();
+      if (pending) { observation.cancels.push(pending); void Promise.allSettled([pending]); }
+    } catch (cleanup) { unexpected.push(cleanup); throw new AggregateError([error, cleanup], "catalog observation and cancellation failed"); }
+    throw error;
+  }
+  observeBody(response.body, observation);
+  return response;
+}
+
+function observeBody(body: ReadableStream<Uint8Array> | null, row: Observation): void {
+  if (!body || row.bodies.includes(body)) return;
+  row.bodies.push(body);
+  const cancel = body.cancel, getReader = body.getReader;
+  vi.spyOn(body, "cancel").mockImplementation(function (this: typeof body, ...args) {
+    const pending = Reflect.apply(cancel, this, args); row.cancels.push(pending); return pending;
+  });
+  vi.spyOn(body, "getReader").mockImplementation(function (this: typeof body, options) {
+    if (options !== undefined) refuse("unexpected catalog reader mode");
+    const reader = Reflect.apply(getReader, this, []) as ReadableStreamDefaultReader<Uint8Array>;
+    row.readers.push({ unlock: vi.spyOn(reader, "releaseLock") });
+    const read = reader.read, cancelReader = reader.cancel;
+    vi.spyOn(reader, "read").mockImplementation(function (this: typeof reader) {
+      const pending = Reflect.apply(read, this, []); row.reads.push(pending); return pending;
+    });
+    vi.spyOn(reader, "cancel").mockImplementation(function (this: typeof reader, ...args) {
+      const pending = Reflect.apply(cancelReader, this, args); row.cancels.push(pending); return pending;
+    });
+    return reader;
+  });
+}
+
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); clearLiveCatalogCacheForTests(); });
 
 async function command(path: string, method = "GET", base = origin, signal?: AbortSignal) {
   const response = await originalFetch(base + path, { method, signal });
   const text = await response.text(); expect(response.status, path).toBe(200); return text;
 }
+async function joinTransport(row: Observation): Promise<void> {
+  await row.closeStarted;
+  const external = row.closeCalls.filter(call => call.depth === 0);
+  const closes = external.flatMap(call => call.outcome && "value" in call.outcome && call.outcome.value instanceof Promise ? [call.outcome.value] : []);
+  const closed = await Promise.allSettled(closes);
+  const results = [...closed, ...await Promise.allSettled([...row.reads, ...row.cancels, ...row.leases])];
+  const failures: unknown[] = results.filter((item): item is PromiseRejectedResult => item.status === "rejected").map(item => item.reason);
+  for (const call of external) if (call.outcome && "error" in call.outcome) failures.push(call.outcome.error);
+  throwFailures(failures); // Cancellation/read/lease failures are never silently settled.
+  expect(external).toHaveLength(1); expect(external[0]!.args).toEqual([]);
+  expect(closes).toHaveLength(1); expect(await closes[0]).toBeNull();
+  expect(row.closeCalls.map(call => [call.depth, call.args.length])).toEqual([[0, 0], [1, 1]]);
+  expect(typeof row.closeCalls[1]!.args[0]).toBe("function");
+  expect(row.dispatcher.destroyed).toBe(true);
+  if (row.guardObserved) { expect(row.leases).toHaveLength(1); expect(row.released).toBe(true); }
+  for (const reader of row.readers) expect(reader.unlock).toHaveBeenCalledOnce();
+  for (const body of row.bodies) expect(body.locked).toBe(false);
+}
 async function joined(row: Case) {
   const selected = observations.filter(value => value.credential === `Bearer ${key(row)}`);
+  const results = await Promise.allSettled([...selected.map(joinTransport), command(`/__catalog/join/${row.id}`)]);
+  throwFailures(results.filter((item): item is PromiseRejectedResult => item.status === "rejected").map(item => item.reason));
   expect(selected.map(value => value.path)).toEqual(["/v1/catalog", row.route]);
-  for (const observation of selected) {
-    expect(await observation.done).toBeUndefined(); expect(observation.released).toBe(true);
-    expect(observation.dispatchers).toBe(1); expect(observation.closes).toHaveLength(1);
-    expect(await observation.closes[0]).toBeNull(); // Undici close fulfills with null.
-  }
-  const state = JSON.parse(await command(`/__catalog/join/${row.id}`));
+  const worker = results.at(-1);
+  if (worker?.status !== "fulfilled" || typeof worker.value !== "string") throw new Error("missing original Worker join");
+  const state = JSON.parse(worker.value);
   expect(state).toMatchObject({ calls: row.urls.length, retired: true, charged: 0 });
   for (const input of state.inputs) {
     expect(input).toMatchObject({ activeReads: 0, unlocked: true, sourceLocked: false, physicalLocked: false, pendingSettled: true });
@@ -128,28 +204,21 @@ async function fixture(run: (discover: (row: Case, signal?: AbortSignal) => Prom
   expect(plugin.catalog?.run).toBeTypeOf("function");
   await withOpenClawTestState({ label: "clawrouter-featherless-catalog-worker" }, async state => {
     const config: OpenClawConfig = { models: { providers: { clawrouter: { baseUrl: `${origin}/v1`, models: [] } } } };
+    const activated = new Set<Case>();
     const discover = async (row: Case, signal?: AbortSignal) => {
-      await command(`/__catalog/activate/${row.id}`, "POST");
+      await command(`/__catalog/activate/${row.id}`, "POST"); activated.add(row);
       const auth = { apiKey: key(row), discoveryApiKey: key(row), mode: "api_key" as const, source: "profile" as const };
       const result = await plugin.catalog!.run({ config, env: {}, agentDir: state.agentDir(), workspaceDir: state.workspaceDir, signal,
         resolveProviderAuth: () => auth, resolveProviderApiKey: () => auth });
       if (!result || !("provider" in result) || !result.provider) throw new Error("missing registered catalog result");
       return result.provider;
     };
-    try { await run(discover); }
-    finally {
-      const releases = await Promise.allSettled(observations.map(row => row.done));
-      const closes = await Promise.allSettled(observations.flatMap(row => row.closes));
-      const credentials = new Set(observations.map(row => row.credential));
-      const joins = await Promise.allSettled([...credentials].map(async credential => {
-        const row = cases.find(value => credential === `Bearer ${key(value)}`);
-        if (!row) throw new Error("unknown observed credential");
-        await command(`/__catalog/join/${row.id}`);
-      }));
-      for (const result of [...releases, ...joins]) expect(result).toEqual({ status: "fulfilled", value: undefined });
-      for (const row of observations) { expect(row.dispatchers).toBe(1); expect(row.closes).toHaveLength(1); }
-      for (const result of closes) expect(result).toEqual({ status: "fulfilled", value: null });
-    }
+    const failures: unknown[] = [];
+    try { await run(discover); } catch (error) { failures.push(error); }
+    const joins = await Promise.allSettled([...activated].map(joined));
+    for (const result of joins) if (result.status === "rejected") failures.push(result.reason);
+    failures.push(...unexpected);
+    throwFailures(failures);
   });
 }
 
@@ -199,6 +268,7 @@ describe("Featherless registered complete catalog", () => {
       const reason = new Error("synthetic catalog caller abort");
       const outcome = discover(row, controller.signal).then(value => ({ value }), error => ({ error }));
       const release = () => command(`/release/${row.id}`, "POST", control);
+      const failures: unknown[] = [];
       try {
         await Promise.race([command(`/seen/${row.id}`, "GET", control, wait.signal), outcome.then(() => { throw new Error("acquisition ended before held later page"); })]);
         controller.abort(reason); expect(await outcome).toEqual({ error: reason });
@@ -206,15 +276,17 @@ describe("Featherless registered complete catalog", () => {
         expect(before.calls).toBe(2); expect(before.retired).toBe(false);
         expect(before.inputs[0]).toMatchObject({ eof: true, unlocked: true });
         expect(before.inputs[1]).toMatchObject({ eof: false, canceled: false, aborted: false });
-        expect(observations.find(value => value.path === row.route)?.released).toBe(false);
+        expect(observations.find(value => value.path === row.route)?.closeCalls).toEqual([]);
         // Shared acquisition survives the waiter. Release real I/O; do not
         // claim a pre-header disconnect or infer closure from zero counters.
         await release(); const after = await joined(row);
         expect(after.inputs.every((input: { eof: boolean; canceled: boolean }) => input.eof && !input.canceled)).toBe(true);
-      } finally {
-        wait.abort();
-        try { await release(); } finally { await outcome; await joined(row); }
-      }
+      } catch (error) { failures.push(error); }
+      wait.abort();
+      try { await release(); } catch (error) { failures.push(error); }
+      try { await outcome; } catch (error) { failures.push(error); }
+      try { await joined(row); } catch (error) { failures.push(error); }
+      throwFailures(failures);
     });
   }, 120_000);
 });
