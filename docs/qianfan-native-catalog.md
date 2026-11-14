@@ -116,7 +116,27 @@ ERNIE 5.1 and DeepSeek V3.2 rows strip thinking history; the other three retain
 it. Positive tool history assertions remain on every model. The cases cover
 all five exact identities, V4 efforts, both image-input cards, credentials,
 usage, errors, cancellation and conservative policy-fixed settlement.
+The pinned registered V4 row clamps a requested `max` to `high` through the
+native client's exported `clampThinkingLevel`; the fixture retains the original
+`max` request and checks `high` on the wire. It does not claim literal MAX parity.
 Authored cases are not execution proof; exact-head results belong in the PR.
+
+The fixture observes original request, reader and release products and requires
+their settlement before restoring observers or clearing discovery caches. It
+does not close the client's shared dispatcher pool. Local observer regressions
+do not qualify the fifteen actual SDK cases or physical disconnect behavior.
+Only the bound SDK cancellation case can classify matching original read/closed
+abort outcomes, and stored-error cancellation invoked before unlock. It requires
+partial delivery, the observed caller abort, matching guard-input signal and
+error identities, fulfilled original request release, completed unlocks and
+successful cleanup. Original errors remain retained. Worker retirement remains
+strict. The outer fixture requires both the once-only post-cleanup SDK receipt
+and successful completion of the original consumer helper, in addition to its
+independent upstream cancellation and SQLite assertions. This classifies the
+observed ownership outcome; it does not establish native exception causality.
+Two shared setup helpers can still mask a primary failure if their own cleanup
+also fails: workerd readiness/disposal and consumer execution/fixture removal.
+That helper-owner follow-up is outside this declaration's fixture changes.
 
 This is configured native client coverage. It does not establish ClawRouter
 catalog-driven or manifest client selection, the separate three-model memory
