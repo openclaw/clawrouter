@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Load validated, data-only scheduling tables in the experimental Fusion vote CLI, with canonical fallback for unseen states.
+
 - Expose opt-in adaptive Fusion vote ordering through the endpoint client, retaining settled usage when selection fails.
 
 - Allow an opt-in adaptive worker selector in the experimental Fusion vote runner while preserving canonical full-panel answers.

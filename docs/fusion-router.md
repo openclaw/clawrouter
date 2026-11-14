@@ -295,7 +295,7 @@ Redirects are rejected. The optional synchronous `selectNext` uses the same
 frozen snapshot contract as `runExactVote`. Preflight validates the panel
 without invoking the selector. An invalid selection or selector exception
 returns `vote_selection_failed` and preserves earlier call receipts. The CLI
-keeps the default panel order.
+uses the default panel order unless an explicit policy file is supplied.
 
 The result contains the selected answer, called workers, and reported token
 usage. Missing or malformed usage stays `null`, and `usageComplete` is false.
@@ -307,3 +307,34 @@ keys, and provider error bodies are omitted from results.
 
 This is an explicit caller-side experiment. It neither activates a Worker
 routing strategy nor establishes that the selected panel improves quality.
+
+
+### Load a data-only scheduling policy
+
+Pass an optional policy file to the CLI:
+
+```sh
+node scripts/run-fusion-vote.mjs https://router.example/v1/chat/completions panel.json policy.json
+```
+
+A version-1 policy contains `panel` and `entries`. Copy the panel's `version`,
+`choices`, and `workers` into `panel`; omit the prompt. Worker IDs, weights,
+priorities, order, and any model IDs must match. For example, one entry is:
+
+```json
+{ "answers": [-2, -2, -2], "next": "third" }
+```
+
+The `answers` array follows canonical worker order: `-2` means unobserved,
+`-1` means abstained, and `0` through `choices.length - 1` identify observed
+choices. `next` must name an unobserved worker. Duplicate states and malformed
+entries fail before dispatch. Missing states fall back to the first remaining
+worker in canonical order. Policy files allow at most 20,000 entries and 4 MiB.
+No policy code is evaluated.
+
+Programmatic callers can use `await createVotePolicy(input, policy)` from
+`scripts/fusion-vote-policy.mjs` and pass the returned `selectNext` to
+`runFusionVote` or `replayFusionVote`. The table cannot alter vote weights or
+bypass the exact stopping certificate. It only changes call order. Freeze the
+table using training data and evaluate separately before claiming savings;
+loading a table does not qualify its training procedure or cost estimates.
