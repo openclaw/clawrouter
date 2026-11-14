@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Test the registered OpenClaw Featherless catalog against complete Worker scans, original credentials, policy filtering, and SQLite metadata settlement.
+
 - Qualify OpenClaw catalog tests against unmodified native offers and schema-validated manifest configurations, keeping direct Worker transport coverage separate from client discovery.
 
 - Evaluate trained Fusion vote policies through the offline replay CLI with the same panel validation as live execution.
@@ -768,6 +770,7 @@
 - Qualify Featherless native catalog declarations with original-key pagination, validated page progress and unknown account/pricing observations, without activating discovery.
 - Qualify a separate manifest-only Featherless complete-catalog projection while retaining the native page codec, original-key boundary and unknown facts; shared scan runtime and provider activation remain separately gated.
 - Dispatch complete Featherless catalogs through the original keyed grant, revalidate every page and final policy, and hold bounded capacity through atomic catalog serialization and delivery.
+- Declare the Featherless complete-catalog manifest route with original-grant keyed scanning, preserving all existing Chat cards and unknown pricing without inventing native pagination.
 - Qualify the frozen Featherless Qwen3-32B Chat card and native reasoning/tool replay, preserving the existing seed, original API-key grant and unknown plan-dependent prices/output limits.
 - Regenerate the Featherless catalog and exercise the actual native SDK through the Worker and SQLite, including frozen compatibility flags, reasoning/tool replay, missing usage, cancellation and proxy-only credentials.
 - Add bounded Chutes native model discovery codecs with public upstream requests, original caller filtering and explicit unknown metadata.
