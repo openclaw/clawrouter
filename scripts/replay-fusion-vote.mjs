@@ -2,6 +2,7 @@ import { open } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { runExactVote } from './fusion-exact-vote.mjs';
+import { createVotePolicy } from './fusion-vote-policy.mjs';
 
 /** Replay frozen answers and historical costs without invoking any provider. */
 export async function replayFusionVote(input, { selectNext } = {}) {
@@ -37,9 +38,8 @@ export async function replayFusionVote(input, { selectNext } = {}) {
     meanCost: cost / cases.length, fullPanelMeanCost: fullCost / cases.length, answerMismatches: 0 };
 }
 
-async function main() {
-  if (process.argv.length !== 3) throw new Error('usage: node scripts/replay-fusion-vote.mjs INPUT.json');
-  const file = await open(process.argv[2], 'r');
+async function readJson(path) {
+  const file = await open(path, 'r');
   let input;
   try {
     const stat = await file.stat();
@@ -56,7 +56,14 @@ async function main() {
   } finally {
     await file.close();
   }
-  console.log(JSON.stringify(await replayFusionVote(input)));
+  return input;
+}
+
+async function main() {
+  if (process.argv.length !== 3 && process.argv.length !== 4) throw new Error('invalid_arguments');
+  const input = await readJson(process.argv[2]);
+  const selectNext = process.argv[3] ? await createVotePolicy(input, await readJson(process.argv[3])) : undefined;
+  console.log(JSON.stringify(await replayFusionVote(input, { selectNext })));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

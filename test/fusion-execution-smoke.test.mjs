@@ -91,6 +91,34 @@ test('transport failure checkpoints without persisting generated source or raw e
   } finally { await rm(parent, { recursive: true, force: true }); }
 });
 
+test('grader failures retain generated usage before validation without claiming a result', async () => {
+  const parent = await mkdtemp(join(tmpdir(), 'fusion-execution-test-')), out = join(parent, 'run');
+  const task = { id: 'sample', instruction: 'double', reference: x => x * 2, mutant: 'x=>x', visible: [{ args: [1], expected: 2 }], hidden: [{ args: [2], expected: 4 }] };
+  let calls = 0, grades = 0;
+  const content = JSON.stringify({ code: 'export default x => x * 2; // private candidate' });
+  const generator = { pins: [{ model: 'tiny' }, { model: 'small' }], verifyPins: async () => {}, generate: async () => {
+    calls++; return { content, code: JSON.parse(content).code, inputTokens: 17, outputTokens: 23 };
+  } };
+  try {
+    await assert.rejects(runExecutionSmoke({ out, image: 'sha256:' + 'a'.repeat(64), sourceSha: 'b'.repeat(40), tasks: [task], generator,
+      grade: async () => {
+        if (++grades <= 4) return { passed: grades !== 4, outcome: 'qualification' };
+        const saved = JSON.parse(await readFile(join(out, 'execution-smoke.json'), 'utf8'));
+        assert.equal(saved.records[0].status, 'grading');
+        assert.equal(saved.records[0].inputTokens, 17);
+        throw Error('private grader failure');
+      } }), /execution_smoke_incomplete/);
+    const raw = await readFile(join(out, 'execution-smoke.json'), 'utf8'), state = JSON.parse(raw);
+    assert.equal(calls, 1); assert.equal(state.complete, false); assert.equal(state.records.length, 1);
+    assert.equal(state.records[0].outputTokens, 23);
+    assert.equal(state.records[0].responseDigest, createHash('sha256').update(content).digest('hex'));
+    assert.equal(state.records[0].publicPassed, undefined);
+    assert.equal(state.policies, undefined);
+    assert.throws(() => summarizeExecution([task], state.records, ['tiny', 'small']), /invalid_execution_record/);
+    assert.ok(!raw.includes('private candidate')); assert.ok(!raw.includes('private grader failure'));
+  } finally { await rm(parent, { recursive: true, force: true }); }
+});
+
 test('candidate output overflow fails that candidate, closes its container, and does not hide infrastructure errors', async () => {
   for (const reason of ['command_output_limit', 'command_timeout']) {
     let calls = 0, closed = 0;
