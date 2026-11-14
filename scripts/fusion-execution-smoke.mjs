@@ -199,12 +199,17 @@ export async function runExecutionSmoke({ out, image, generator, sourceSha, task
         if (performance.now() >= deadline) throw new Error('execution_deadline');
         const prompt = executionPrompt(task), started = performance.now();
         const generated = await generator.generate(model, prompt, 42000 + index * 3 + sample);
+        const record = { caseId: task.id, model, sample, status: 'grading',
+          promptDigest: hash(prompt), responseDigest: hash(generated.content),
+          inputTokens: generated.inputTokens, outputTokens: generated.outputTokens,
+          elapsedMs: Math.round(performance.now() - started) };
+        state.records.push(record);
+        await checkpoint();
         const publicResult = generated.code ? await grade(image, generated.code, task.visible) : { passed: false, outcome: 'invalid_module' };
         const hiddenResult = generated.code ? await grade(image, generated.code, task.hidden) : { passed: false, outcome: 'invalid_module' };
-        state.records.push({ caseId: task.id, model, sample, status: generated.code ? 'valid' : 'invalid',
-          promptDigest: hash(prompt), responseDigest: hash(generated.content), publicPassed: publicResult.passed,
+        Object.assign(record, { status: generated.code ? 'valid' : 'invalid', publicPassed: publicResult.passed,
           hiddenPassed: hiddenResult.passed, publicOutcome: publicResult.outcome, hiddenOutcome: hiddenResult.outcome,
-          inputTokens: generated.inputTokens, outputTokens: generated.outputTokens, elapsedMs: Math.round(performance.now() - started) });
+          elapsedMs: Math.round(performance.now() - started) });
         await checkpoint();
       }
       console.log(JSON.stringify({ modelIndex, completedCases: index + 1, calls: state.records.length }));

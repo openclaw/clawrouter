@@ -4,6 +4,8 @@
 
 - Train bounded Fusion vote scheduling policies offline from observed answers and costs, without correctness labels or model calls.
 
+- Preserve generated token usage in local Fusion smoke receipts before grading, so a grader failure cannot discard completed inference costs.
+
 - Load validated, data-only scheduling tables in the experimental Fusion vote CLI, with canonical fallback for unseen states.
 
 - Expose opt-in adaptive Fusion vote ordering through the endpoint client, retaining settled usage when selection fails.
