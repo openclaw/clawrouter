@@ -223,12 +223,23 @@ const panel = {
 const result = await runExactVote(panel, async id => invokeAndParseChoice(id));
 ```
 
-Freeze weights, worker order, and unique nonnegative integer priorities before
+Freeze weights, canonical worker order, and unique nonnegative integer priorities before
 evaluation. Lower priority numbers break final ties between supported answers.
 The panel accepts 2–32 distinct choices and 1–64 distinct workers. Weights must
 be finite and nonnegative, with a finite positive sum. The callback returns an
 exact choice label or `null` for an abstention. Invalid answers and callback
 errors stop the run. If all workers abstain, the answer is `null`.
+
+An optional third argument, `{ selectNext }`, changes call order. The synchronous
+selector receives a frozen snapshot with `observed` (`{ id, answer }` pairs in
+call order) and `remaining` (worker IDs in canonical order). It returns one
+remaining ID. Unknown or repeated IDs stop execution before another call.
+Freeze the selector before evaluation and fit it on training data only; the
+runner cannot enforce the data used by a caller's closure. Scores always sum
+in canonical panel order so floating-point ties do not depend on scheduling.
+The default remains sequential panel order. Programmatic
+`replayFusionVote(input, { selectNext })` compares the scheduled run against
+the canonical full panel; the replay CLI uses the default order.
 
 The callback owns provider admission, deadlines, cancellation, usage settlement,
 and response parsing. This experimental runner does not connect to the Worker
