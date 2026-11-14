@@ -6,6 +6,8 @@ import test from "node:test";
 import { continuationAuthority } from "./continuation-authority.mjs";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
+import { accessBytesResponse } from "./access-byte-fixture.mjs";
+const { identitySourceBudget, readIdentityKv } = await import("../identity-admission.ts");
 const { default: worker } = await import("../index.ts");
 const { authorityCall } = await import("../authority.ts");
 const { snapshot, configuredUpstream, providerModel } = await import("../providers.ts");
@@ -30,7 +32,11 @@ async function fixture(t, { ownGrant = true } = {}) {
   t.after(() => { snapshot.providers.splice(snapshot.providers.indexOf(row), 1, previous); });
   const values = new Map(), pending = [], events = [], sent = [];
   const env = { OPENAI_API_KEY: "synthetic-foreign-environment", ANTHROPIC_API_KEY: "synthetic-foreign-anthropic", OPENROUTER_API_KEY: "synthetic-foreign-router", POLICY_KV: {
-    async get(k) { return Array.isArray(k) ? new Map(k.map(k => [k, values.get(k) ?? null])) : values.get(k) ?? null; },
+    async get(k, type) {
+      if (Array.isArray(k)) return new Map(k.map(k => [k, values.get(k) ?? null]));
+      const value = values.get(k) ?? null;
+      return value !== null && type === "stream" ? accessBytesResponse(JSON.stringify(value), "").body : value;
+    },
     async put(k, v) { values.set(k, JSON.parse(v)); },
   }, BUDGET_LEDGER: sqlBudgetNamespace(t), USAGE_QUEUE: { async send(e) { events.push(e); } } };
   env.ACCESS_CONTROL = continuationAuthority(t, env);
@@ -281,4 +287,23 @@ test("Qianfan undeclared native URL aliases stay closed without egress", async t
   const r = await f.call(body, { nativePrefix: "clawrouter-qianfan" });
   assert.equal(r.status, 404); assert.equal((await r.json()).error.code, "provider_not_found");
   await f.drain(); assert.equal(f.sent.length, 0); assert.equal(f.events.length, 0);
+});
+
+
+test("Qianfan fixture KV preserves stream, missing and bulk grant reads", async t => {
+  const f = await fixture(t), kv = f.env.POLICY_KV;
+  const metadata = await kv.get(f.grantKey, "json");
+  assert.ok(metadata);
+  const original = await kv.get(f.grantKey, "stream");
+  assert.equal(original.locked, false);
+  assert.deepEqual(await readIdentityKv(() => Promise.resolve(original), identitySourceBudget()), metadata);
+  assert.equal(original.locked, false);
+  assert.equal(await kv.get(f.grantKey, "json"), metadata);
+  assert.equal(await kv.get("fixture-missing-grant", "stream"), null);
+  assert.equal(await readIdentityKv(() => kv.get("fixture-missing-grant", "stream"), identitySourceBudget()), null);
+  const bulk = await kv.get([f.grantKey, "fixture-missing-grant"], "json");
+  assert.ok(bulk instanceof Map);
+  assert.deepEqual([...bulk], [[f.grantKey, metadata], ["fixture-missing-grant", null]]);
+  await f.drain();
+  assert.equal(f.sent.length, 0);
 });
