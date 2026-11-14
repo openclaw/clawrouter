@@ -66,12 +66,75 @@ test("Bedrock memory fixtures bundle with Wrangler's locked compiler without exe
   }
 });
 
+test("the SDK's Titan wire reaches the real policy-grant signer and SQLite", { timeout: 30_000 }, async t => {
+  const temporary = await mkdtemp(join(tmpdir(), "clawrouter-bedrock-wire-"));
+  const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
+  let mf;
+  try {
+    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(), { bindings: { AWS_REGION: "us-east-1" } });
+    const kv = await mf.getKVNamespace("POLICY_KV", "router"), entry = cases[0], id = entry.credential;
+    for (const credential of [id, `${id}_stale`]) {
+      await kv.put(`policies/${credential}`, JSON.stringify({ enabled: true, generation: "fixture", providers: ["aws-bedrock"], models: [entry.model], tenantId: "fixture", monthlyBudgetMicros: 100_000, requestCostMicros: 700, budgetMode: "reserve", retainRequestContent: false, grantRouting: { eligibleGrants: { "aws-bedrock": ["bedrock"] }, environmentFallback: false } }));
+      await kv.put(`credentials/${credential}`, JSON.stringify({ enabled: true, secretSha256: secretHash("fixture-secret"), policyId: credential, policyGeneration: "fixture" }));
+    }
+    await kv.put("connections/aws-bedrock", JSON.stringify({ providerId: "aws-bedrock", enabled: true }));
+    const origin = String(await mf.ready).replace(/\/$/, "");
+    for (const credential of [id, `${id}_stale`]) {
+      const grant = await fetch(`${origin}/v1/admin/upstream-grants/policies/${credential}/bedrock`, {
+        method: "PUT", headers: { authorization: "Bearer fixture-admin", "content-type": "application/json" },
+        body: JSON.stringify({ provider: "aws-bedrock", kind: "api_key", enabled: true,
+          credentials: { accessKeyId: "fixture-aws-access", secretAccessKey: "fixture-aws-secret", sessionToken: "fixture-aws-session" } }),
+      });
+      assert.equal(grant.status, 200, await grant.text());
+    }
+    // Exact first request produced by the pinned SDK's buildBedrockEmbeddingBody.
+    const response = await fetch(`${origin}/v1/native/aws-bedrock/model/${encodeURIComponent(entry.upstream)}/invoke`, {
+      method: "POST", headers: { authorization: `Bearer ${token(id)}`, "content-type": "application/json" },
+      body: JSON.stringify({ inputText: `query fixture ${id} café 東京 🦊`, dimensions: 1024, normalize: true }),
+    });
+    const payload = await response.json(); // One reader of the original response, including its safe error code.
+    const state = await (await (await mf.getWorker("upstream")).fetch("https://fixture.example/state")).json();
+    const usage = await (await fetch(`${origin}/v1/usage`, { headers: { authorization: `Bearer ${token(id)}` } })).json();
+    t.diagnostic(JSON.stringify({ status: response.status, errorCode: payload.error?.code, upstreamCalls: state.calls.length, events: usage.usage.events.length, spentMicros: usage.budget.spentMicros }));
+    assert.equal(response.status, 200, payload.error?.code);
+    assert.equal(payload.embedding.length, 1024);
+    assert.equal(state.calls.length, 1);
+    verifyWire(entry, state.calls[0]);
+    assert.equal(usage.budget.spentMicros, 700);
+    assert.equal(usage.usage.events.length, 1);
+    assert.equal(usage.usage.events[0].cost_basis, "policy_fixed");
+    assert.equal(usage.usage.events[0].actual_cost_micros, 700);
+
+    // The original catalog remains eligible; its hook revokes the proxy key,
+    // not the upstream grant. Admission must return the canonical 403.
+    const catalogResponse = await fetch(`${origin}/v1/catalog`, { headers: { authorization: `Bearer ${token(`${id}_stale`)}` } });
+    assert.equal(catalogResponse.status, 200);
+    const catalog = await catalogResponse.json();
+    assert.ok(catalog.providers.find(row => row.id === "aws-bedrock").offers.some(offer => offer.modelId === entry.model && offer.endpoint === "embed_text" && offer.eligible));
+    const denied = await fetch(`${origin}/v1/native/aws-bedrock/model/${encodeURIComponent(entry.upstream)}/invoke`, {
+      method: "POST", headers: { authorization: `Bearer ${token(`${id}_stale`)}`, "content-type": "application/json" },
+      body: JSON.stringify({ inputText: `stale fixture ${id} request`, dimensions: 1024, normalize: true }),
+    });
+    assert.equal(denied.status, 403);
+    assert.equal((await denied.json()).error.code, "proxy_key_revoked");
+    const after = await (await (await mf.getWorker("upstream")).fetch("https://fixture.example/state")).json();
+    assert.deepEqual(after.calls, state.calls, "revocation cannot reach the provider");
+    const adminResponse = await fetch(`${origin}/v1/admin/usage`, { headers: { authorization: "Bearer fixture-admin" } });
+    assert.equal(adminResponse.status, 200);
+    const adminUsage = await adminResponse.json();
+    assert.equal(adminUsage.policies.find(row => row.policyId === `${id}_stale`).budget.spentMicros, 0);
+    assert.equal(adminUsage.usage.events.filter(event => event.credential_id === `${id}_stale`).length, 0);
+    assert.equal(adminUsage.policies.find(row => row.policyId === id).budget.spentMicros, 700);
+  } finally { await mf?.dispose(); await rm(temporary, { recursive: true, force: true }); }
+});
+
 test("actual OpenClaw Bedrock memory through the native Worker and SQLite", { skip: !source, timeout: 300_000 }, async t => {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-bedrock-memory-"));
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
   let mf;
   try {
-    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture());
+    // Authority Durable Objects need the same region as the fetch handler.
+    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(), { bindings: { AWS_REGION: "us-east-1" } });
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
     for (const entry of cases) for (const suffix of ["", "_unpriced", "_denied", "_stale", "_error", "_eof", "_invalid", "_later"]) {
       const id = entry.credential + suffix;
@@ -151,7 +214,7 @@ function verifyWire(entry, call) {
   assert.equal(call.headers.accept, "application/json");
   const rotated = texts(call.body).some(text => text.includes("rotated key") || text.includes("held body"));
   const access = rotated ? "fixture-aws-rotated" : "fixture-aws-access";
-  assert.match(call.headers.authorization, new RegExp(`^AWS4-HMAC-SHA256 Credential=${access}/\\d{8}/us-east-1/bedrock/aws4_request, SignedHeaders=[a-z;-]+, Signature=[0-9a-f]{64}$`));
+  assert.match(call.headers.authorization, new RegExp(`^AWS4-HMAC-SHA256 Credential=${access}/\\d{8}/us-east-1/bedrock/aws4_request, SignedHeaders=content-type;host;x-amz-content-sha256;x-amz-date;x-amz-security-token, Signature=[0-9a-f]{64}$`));
   assert.equal(call.headers["x-amz-security-token"], rotated ? "fixture-aws-rotated-session" : "fixture-aws-session");
   assert.equal(call.headers["x-amz-content-sha256"], secretHash(JSON.stringify(call.body)));
   assert.match(call.headers["x-amz-date"], /^\d{8}T\d{6}Z$/);
@@ -174,7 +237,7 @@ function verifyWire(entry, call) {
 function routerFixture() {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
 export default { ...handler, async fetch(request, env, context) {
-  env = { ...env, CLAWROUTER_ADMIN_TOKEN_SHA256: ${JSON.stringify(secretHash("fixture-admin"))}, AWS_REGION: "us-east-1" };
+  env = { ...env, CLAWROUTER_ADMIN_TOKEN_SHA256: ${JSON.stringify(secretHash("fixture-admin"))} };
   const admin = async (path, method, body) => {
     const response = await handler.fetch(new Request("https://fixture.example/v1/admin/" + path, {
       method, headers: { authorization: "Bearer fixture-admin", "content-type": "application/json" },

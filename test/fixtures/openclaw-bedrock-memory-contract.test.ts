@@ -70,7 +70,7 @@ describe("Bedrock through the registered ClawRouter memory provider and real Wor
 
     it(`${entry.model}: an original eligible catalog cannot bypass subsequent revocation`, async () => {
       const { provider } = await memory.createEmbeddingProvider(options(entry, "_stale"));
-      await expect(provider!.embed(`stale fixture ${entry.credential} request`)).rejects.toThrow(/401/);
+      await expect(provider!.embed(`stale fixture ${entry.credential} request`)).rejects.toThrow(/403/);
     });
 
     for (const [suffix, marker] of [["_error", "embedded error"], ["_eof", "broken EOF"], ["_invalid", "invalid vector"]]) {
