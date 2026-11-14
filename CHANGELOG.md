@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add bounded pairwise evidence packing for offline Fusion experiments, with numeric-only inputs and no model calls.
+
 - Pin reported default generation parameters in local Fusion comparisons so changes invalidate the run even when model weights stay the same.
 
 - Pin local Fusion server and prompt-rendering metadata, and reject completed comparisons when those inputs change during a run.

@@ -119,6 +119,53 @@ Do not start by training TRINITY, adding a third frontier worker, or asking an
 expensive judge to grade every cheap draft. Those choices add costs before we
 know whether the worker pool contains useful complementary answers.
 
+## Pairwise evidence packing
+
+`scripts/fusion-evidence-packing.mjs` selects a document set from a supplied
+linear model over document pairs. It is an offline experiment tool; it does not
+read document text, extract features, train a model, call a provider, or change
+the production Fusion profile.
+
+Provide every unordered pair exactly once, with indices in ascending order.
+Each feature vector must match the head's `weights`, `mean`, and positive
+`scale` vectors. The scorer standardizes features, computes pair logits, and
+selects the set containing the most total softmax pair mass. Input pair order
+does not affect ties; the lowest lexicographic document set wins.
+
+```json
+{
+  "version": 1,
+  "documentCount": 3,
+  "limit": 2,
+  "head": { "weights": [1], "mean": [0], "scale": [1] },
+  "pairs": [
+    { "indices": [0, 1], "features": [0] },
+    { "indices": [0, 2], "features": [2] },
+    { "indices": [1, 2], "features": [1] }
+  ]
+}
+```
+
+```sh
+node scripts/fusion-evidence-packing.mjs /path/to/evidence.json
+```
+
+This example selects indices `[0, 2]`. The returned `retainedPairMass` is mass
+assigned by the supplied model, not a calibrated probability that the selected
+documents contain the answer. Do not use it as an accuracy guarantee.
+
+The contract accepts 2–10 documents and 1–32 features. `limit` defaults to four
+documents, or all documents when fewer than four are available. It may be any
+integer from two through `documentCount`. The CLI accepts one regular JSON file
+of at most 2 MiB. Unknown fields, missing or duplicate pairs, nonfinite values,
+and arithmetic overflow are rejected. No prompts or answers belong in this file.
+
+Train the supplied head and choose its features on development data. Freeze
+them before evaluating a fresh cohort. Compare equal-size sets from lexical,
+semantic and relevance-only controls, then measure downstream answer quality,
+token use and selector overhead. A retrieval gain alone does not qualify a
+Fusion configuration for activation.
+
 ## Offline opportunity command
 
 ```sh
