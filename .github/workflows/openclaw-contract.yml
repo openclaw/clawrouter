@@ -86,6 +86,9 @@ jobs:
           - consumer: chutes
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-chutes.test.mjs
+          - consumer: featherless-catalog
+            ref: 1536faab19f2adf524b7ef1acef5c24501b35652
+            test: test/openclaw-featherless-catalog.test.mjs
           - consumer: featherless
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-featherless.test.mjs
