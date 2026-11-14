@@ -9,6 +9,9 @@ const { FEATHERLESS_MODELS_FORMAT, featherlessCatalogRequest, filterFeatherlessM
 const { discoveryAllows, modelDiscoveryResponse } = await import("../model-discovery.ts");
 const { HttpOperation } = await import("../http-operation.ts");
 const existing = parse(readFileSync(new URL("../../providers/featherless.provider.yaml", import.meta.url), "utf8"));
+// Foundation fixtures remain independent; bundled activation has its own suite.
+existing.capabilities = existing.capabilities.filter(capability => capability.endpoint !== "catalog");
+delete existing.endpoints.catalog;
 const compile = manifest => compileProviderSnapshot([manifest]);
 function fixture() {
   const manifest = structuredClone(existing);
