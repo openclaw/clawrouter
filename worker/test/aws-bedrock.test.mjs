@@ -58,7 +58,7 @@ test("AWS Bedrock is ready with long-lived credentials and no session token", ()
   assert.deepEqual(readiness.optionalConfig, ["AWS_SESSION_TOKEN"]);
   assert.deepEqual(readiness.missingConfig, []);
   assert.equal(readiness.configPresent, true);
-  assert.deepEqual(readiness.executableEndpoints, ["invoke_model", "invoke_model_stream"]);
+  assert.deepEqual(readiness.executableEndpoints, ["embed_text", "invoke_model", "invoke_model_stream"]);
 });
 
 test("AWS Bedrock manifest requests accept raw path models and remove routed body models", () => {
