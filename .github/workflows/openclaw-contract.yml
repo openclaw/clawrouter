@@ -152,6 +152,9 @@ jobs:
           - consumer: lyria
             ref: 3645a2c86518e9e98e4df2a81d00355bc6b082c0
             test: test/openclaw-lyria.test.mjs
+          - consumer: requesty-catalog
+            ref: 1536faab19f2adf524b7ef1acef5c24501b35652
+            test: test/openclaw-requesty-catalog.test.mjs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

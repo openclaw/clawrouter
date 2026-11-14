@@ -5,7 +5,7 @@ import { once } from 'node:events';
 import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { runFusionVote } from '../scripts/run-fusion-vote.mjs';
 
 const input = () => ({ version: 1, prompt: 'Private prompt sentinel', choices: ['A', 'B'], workers:
@@ -202,4 +202,41 @@ test('selector failures stop dispatch and preserve earlier settled usage', async
   assert.equal(failed.error, 'vote_selection_failed'); assert.deepEqual(failed.calls, []);
   await assert.rejects(runFusionVote(input(), { ...options, fetcher, selectNext: true }), /invalid_vote_request/);
   assert.equal(calls, 0);
+});
+
+
+test('CLI loads a bound table before dispatch and follows its worker order', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'fusion-vote-table-'));
+  const panel = input(); panel.workers[2].weight = 3;
+  const table = { version: 1, panel: { version: panel.version, choices: panel.choices, workers: panel.workers },
+    entries: [{ answers: [-2, -2, -2], next: 'three' }] };
+  const models = [];
+  const server = createServer(async (request, response) => {
+    const chunks = []; for await (const chunk of request) chunks.push(chunk);
+    models.push(JSON.parse(Buffer.concat(chunks)).model);
+    response.writeHead(200, { 'content-type': 'application/json' }); response.end(JSON.stringify(envelope('B')));
+  }).listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  const endpoint = `http://127.0.0.1:${server.address().port}/v1/chat/completions`;
+  try {
+    const panelPath = join(directory, 'panel.json'), tablePath = join(directory, 'table.json');
+    await writeFile(panelPath, JSON.stringify(panel)); await writeFile(tablePath, JSON.stringify(table));
+    const child = spawn(process.execPath, ['scripts/run-fusion-vote.mjs', endpoint, panelPath, tablePath],
+      { env: { PATH: process.env.PATH, CLAWROUTER_API_KEY: options.apiKey } });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
+    const [code] = await once(child, 'close');
+    assert.equal(code, 0, stderr); assert.equal(JSON.parse(stdout).answer, 'B');
+    assert.deepEqual(models, ['provider/three']);
+    table.panel.workers[0].model = 'provider/changed';
+    await writeFile(tablePath, JSON.stringify(table));
+    const invalid = spawnSync(process.execPath, ['scripts/run-fusion-vote.mjs', endpoint, panelPath, tablePath],
+      { encoding: 'utf8', env: { PATH: process.env.PATH, CLAWROUTER_API_KEY: options.apiKey }, timeout: 5000 });
+    assert.equal(invalid.status, 1); assert.equal(invalid.stdout, '');
+    assert.match(invalid.stderr, /fusion_vote_failed/); assert.ok(!invalid.stderr.includes('sentinel'));
+    assert.deepEqual(models, ['provider/three']);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+    await rm(directory, { recursive: true, force: true });
+  }
 });
