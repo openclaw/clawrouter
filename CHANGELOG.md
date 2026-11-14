@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Record the negative tiny-model prefix-guidance screen, separating answer-format failures from arithmetic results and including both model controls and compute costs.
+
 - Add an explicit fixed-choice Fusion client for compatible Chat Completions endpoints, with lazy calls, bounded deadlines and partial usage receipts.
 
 - Record local Fusion model loading and inference durations separately from call wall time, preserving unknown timings in benchmark totals.
