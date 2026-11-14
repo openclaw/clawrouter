@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
+import { types as nodeTypes } from "node:util";
 import { readFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -26,9 +28,158 @@ const observerStart = sdkText.indexOf("type OriginalOperation ="), observerEnd =
 assert.ok(observerStart >= 0 && observerEnd > observerStart);
 const observerCode = stripTypeScriptTypes(sdkText.slice(observerStart, observerEnd));
 const { preserveFailures, createRequestBindings, createLifetimeObserver, createCancelReceiptReceiver, cancelReceiptLine } = new Function(observerCode + "; return { preserveFailures, createRequestBindings, createLifetimeObserver, createCancelReceiptReceiver, cancelReceiptLine };")();
+// Reuse the SDK-owned closed protocol; never forward child stdout/stderr.
+const diagnosticStart = sdkText.indexOf("// BEGIN QIANFAN FAILURE DIAGNOSTICS"), diagnosticEnd = sdkText.indexOf("// END QIANFAN FAILURE DIAGNOSTICS");
+assert.ok(diagnosticStart >= 0 && diagnosticEnd > diagnosticStart);
+const diagnosticCode = stripTypeScriptTypes(sdkText.slice(diagnosticStart, diagnosticEnd));
+const makeDiagnostic = new Function(diagnosticCode + "; return qianfanDiagnostics;")();
+const diagnostic = makeDiagnostic(nodeTypes.isProxy);
+const stepAnnotations = diagnostic.emitter(text => process.stdout.write(text));
+function outerDiagnostics(context, annotations = stepAnnotations) {
+  const records = []; let failed = false, phase = "worker";
+  const base = (phase, role) => ({ layer: "outer", route: "none", caseId: "none", phase, role });
+  const collect = text => { for (const record of diagnostic.parse(text)) if (records.length < 512) records.push(record); };
+  const safe = fn => { try { fn(); } catch { /* reporting never replaces original errors */ } };
+  function failure(error, at = phase, role = "primary", facts = {}) {
+    failed = true; safe(() => annotations.emit(diagnostic.record(base(at, role), "rejected", error, facts)));
+  }
+  const adapter = new Proxy(context, { get(target, property, receiver) {
+    if (property !== "diagnostic") return Reflect.get(target, property, receiver);
+    return function (...args) { safe(() => collect(args[0])); };
+  } });
+  function helper(original) {
+    return diagnostic.observe(original, (outcome, error) => {
+      if (outcome !== "rejected") return;
+      const child = diagnostic.child(error);
+      for (const record of child.records) if (records.length < 512) records.push(record);
+      failure(error, "helper", "primary", { ...child.metadata, sdkRecords: records.length });
+      reportSdk();
+    });
+  }
+  function reportSdk() {
+    safe(() => {
+      if (!failed) return;
+      const latest = new Map();
+      for (const record of records) latest.set([record.layer, record.route, record.caseId, record.phase, record.role].join("/"), record);
+      const values = [...latest.values()];
+      // Prioritize real failure outcomes; a pending boundary remains only an
+      // observation. No SDK record means unknown, never an inferred loader bug.
+      for (const record of values.filter(record => record.outcome === "rejected")) annotations.emit(record);
+      const last = records.at(-1); if (last && last.outcome !== "rejected") annotations.emit(last);
+    });
+  }
+  return { context: adapter, helper, failure,
+    stage(next) { phase = next; },
+    cleanup(at, original) { return () => diagnostic.observe(original, (outcome, error) => {
+      if (outcome === "rejected") failure(error, at, "cleanup");
+      else if (failed && outcome === "fulfilled") safe(() => annotations.emit(diagnostic.record(base(at, "cleanup"), outcome)));
+    }); },
+    get failed() { return failed; },
+    finish() { if (failed) { reportSdk(); safe(() => annotations.finish()); } },
+    count() { return records.length; },
+  };
+}
 const grantSecret = id => "fixture-upstream-" + id;
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 const nextTurn = () => new Promise(resolve => setImmediate(resolve));
+
+const diagnosticContext = { layer: "sdk", route: "nativechat", caseId: "cancel", phase: "body", role: "primary" };
+test("Qianfan diagnostic schema rejects accessors, proxies, private strings and extra fields", () => {
+  const valid = diagnostic.record(diagnosticContext, "rejected", undefined, { pending: null, partialDelivery: null });
+  assert.equal(valid.category, "undefined"); assert.deepEqual(diagnostic.validate(valid), valid);
+  let touched = 0;
+  const getter = { ...valid }; Object.defineProperty(getter, "phase", { enumerable: true, get() { touched++; throw undefined; } });
+  const proxy = new Proxy({}, { ownKeys() { touched++; throw undefined; }, getOwnPropertyDescriptor() { touched++; throw undefined; } });
+  for (const value of [getter, proxy, { ...valid, phase: "body\n::error" }, { ...valid, caseId: "foreign" }, { ...valid, message: "private" }, { ...valid, pending: -1 }, { ...valid, pending: 10000 }, { ...valid, partialDelivery: "true" }]) assert.equal(diagnostic.validate(value), null);
+  const error = Object.create({ get name() { touched++; throw undefined; } });
+  assert.equal(diagnostic.category(error), "unknown"); assert.equal(diagnostic.category(proxy), "unknown");
+  assert.equal(diagnostic.category(null), "null"); assert.equal(touched, 0);
+});
+
+test("Qianfan diagnostics parse only new closed records and own child DATA fields", () => {
+  const record = diagnostic.record(diagnosticContext, "rejected", undefined);
+  const wire = diagnostic.encode(record), output = "private child output\n" + wire;
+  assert.deepEqual(diagnostic.parse(output), [record]);
+  assert.deepEqual(diagnostic.parse('QIANFAN_DIAGNOSTIC {"message":"private"}\n'), []);
+  assert.deepEqual(diagnostic.parse("QIANFAN_DIAGNOSTIC " + "x".repeat(769)), []);
+  assert.deepEqual(diagnostic.parse("x".repeat(2 * 1024 * 1024 + 1)), []);
+  let touched = 0;
+  const child = Object.defineProperties({}, { stdout: { value: output }, stderr: { get() { touched++; throw undefined; } }, code: { value: 1 }, killed: { value: false }, signal: { value: null } });
+  const parsed = diagnostic.child(child); assert.deepEqual(parsed.records, [record]); assert.equal(parsed.metadata.exit, 1); assert.equal(touched, 0);
+  const missing = diagnostic.child({ stderr: "Error [ERR_MODULE_NOT_FOUND]: private/path" });
+  assert.equal(missing.metadata.observedCode, "ERR_MODULE_NOT_FOUND"); assert.equal(missing.metadata.sdkRecords, 0);
+  assert.equal(diagnostic.child(undefined).metadata.exit, null);
+});
+
+test("Qianfan one-step annotation budget deduplicates, caps and flushes only once", () => {
+  const lines = [], emitter = diagnostic.emitter(line => lines.push(line));
+  const first = diagnostic.record(diagnosticContext, "rejected", undefined);
+  emitter.emit(first); emitter.emit(first);
+  emitter.emit({ ...first, route: "discovery" });
+  for (const caseId of diagnostic.cases.filter(id => id !== "none")) emitter.emit({ ...first, caseId });
+  emitter.finish(); emitter.finish();
+  assert.equal(lines.length, 10); assert.equal(emitter.summary().emitted, 9);
+  assert.ok(lines.every(line => line.startsWith("::error title=Qianfan contract diagnostic::") && Buffer.byteLength(line) <= 768));
+  assert.ok(Buffer.byteLength(lines.join("")) <= 8192);
+  const records = lines.map(line => JSON.parse(line.slice(line.indexOf("::{") + 2)));
+  assert.equal(records.at(-1).phase, "overflow"); assert.ok(records.at(-1).suppressed > 0);
+  assert.equal(records.filter(row => row.caseId === "cancel").length, 2);
+  emitter.emit({ ...first, message: "private\r\n::error" }); assert.equal(lines.length, 10);
+});
+
+test("Qianfan success output adapter preserves the independent receipt without raw forwarding", async () => {
+  const lines = [], diagnostics = outerDiagnostics({ diagnostic() { throw new Error("raw output forwarded"); } }, diagnostic.emitter(line => lines.push(line)));
+  const receiver = createCancelReceiptReceiver(diagnostics.context);
+  receiver.context.diagnostic("private text\n" + diagnostic.encode(diagnostic.record(diagnosticContext, "fulfilled")) + cancelReceiptLine + "\n");
+  const original = Promise.resolve(7); assert.equal(diagnostics.helper(() => original), original);
+  assert.equal(await receiver.finish(original), 7); diagnostics.finish();
+  assert.equal(diagnostics.count(), 1); assert.deepEqual(lines, []);
+});
+
+test("Qianfan rejected child emits early safe attribution and retains primary plus cleanup errors", async () => {
+  const lines = [], diagnostics = outerDiagnostics({}, diagnostic.emitter(line => lines.push(line)));
+  const record = diagnostic.record(diagnosticContext, "rejected", undefined);
+  const primary = Object.assign(new Error("private child error"), { stdout: diagnostic.encode(record), stderr: "private stderr", code: 1, killed: false });
+  const original = Promise.reject(primary);
+  assert.equal(diagnostics.helper(() => original), original);
+  await assert.rejects(preserveFailures(() => original, [diagnostics.cleanup("dispose", () => { throw undefined; }), diagnostics.cleanup("rm", () => {})]), error => error.errors.length === 2 && error.errors[0] === primary && error.errors[1] === undefined);
+  diagnostics.finish(); assert.ok(lines[0].includes('"phase":"helper"')); assert.ok(lines.some(line => line.includes('"caseId":"cancel"')));
+  assert.ok(lines.some(line => line.includes('"phase":"dispose"') && line.includes('"category":"undefined"')));
+  assert.doesNotMatch(lines.join(""), /private/);
+});
+
+test("Qianfan zero SDK records and failing diagnostic writer never alter the original verdict", async () => {
+  const lines = [], diagnostics = outerDiagnostics({}, diagnostic.emitter(line => lines.push(line)));
+  const original = Promise.reject(undefined); diagnostics.helper(() => original);
+  await assert.rejects(preserveFailures(() => original, [diagnostics.cleanup("rm", () => { throw null; })]), error => error.errors[0] === undefined && error.errors[1] === null);
+  diagnostics.finish(); assert.ok(lines[0].includes('"sdkRecords":0')); assert.doesNotMatch(lines.join(""), /loader/);
+  const broken = outerDiagnostics({}, diagnostic.emitter(() => { throw new Error("writer failed"); }));
+  await assert.rejects(preserveFailures(() => broken.helper(() => { throw undefined; }), [broken.cleanup("dispose", () => { throw null; })]), error => error.errors.length === 2 && error.errors[0] === undefined && error.errors[1] === null);
+  broken.finish();
+});
+
+test("Qianfan diagnostic observations retain original promises and real pending counts", async () => {
+  const pending = deferred(), lifetime = createLifetimeObserver(), bindings = createRequestBindings(), outcomes = [];
+  const original = lifetime.watch("release", pending.promise, {});
+  assert.equal(diagnostic.observe(() => original, outcome => outcomes.push(outcome)), original);
+  const before = diagnostic.snapshot(lifetime, bindings); assert.equal(before.pending, 1); assert.equal(before.releasePending, 1); assert.equal(before.partialDelivery, null);
+  assert.deepEqual(outcomes, ["entered"]); pending.resolve(); await original; await nextTurn();
+  const after = diagnostic.snapshot(lifetime, bindings); assert.equal(after.pending, 0); assert.equal(after.releasePending, 0);
+  assert.deepEqual(outcomes, ["entered", "fulfilled"]);
+});
+
+test("Qianfan default Node reporter forwards only column-zero diagnostic commands", { timeout: 10000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "qianfan-diagnostic-reporter-"));
+  try {
+    const path = join(directory, "reporter.test.mjs");
+    await writeFile(path, 'import test from "node:test"; import { types } from "node:util";\n' + diagnosticCode + '\nconst d=qianfanDiagnostics(types.isProxy);test("reporter",()=>{const e=d.emitter(text=>process.stdout.write(text));e.emit(' + JSON.stringify(diagnostic.record(diagnosticContext, "rejected", undefined)) + ');e.finish();});\n');
+    const env = { ...process.env }; delete env.NODE_TEST_CONTEXT;
+    const result = spawnSync(process.execPath, ["--test", path], { env, encoding: "utf8", timeout: 5000 });
+    assert.equal(result.error, undefined); assert.equal(result.status, 0);
+    const commands = result.stdout.split("\n").filter(line => line.includes("::error title=Qianfan contract diagnostic::"));
+    assert.equal(commands.length, 1); assert.ok(commands[0].startsWith("::error title=Qianfan contract diagnostic::"));
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
 
 test("Qianfan observer retains original receiver, operands, acquisition, reader and release products", async () => {
   const lifetime = createLifetimeObserver(), release = deferred(), owner = { id: "card0" }, receiver = {};
@@ -299,13 +450,17 @@ async function retireWorker(mf) {
 }
 
 test("actual OpenClaw Qianfan configured native client through workerd and SQLite", { skip: !source, timeout: 300_000 }, async t => {
+  const diagnostics = outerDiagnostics(t);
+  try {
   assert.ok(endpoint);
   assert.deepEqual(provider.models.map(model => [model.id, model.upstream]), ["ernie-4.5-0.3b", ...models].map(id => ["qianfan/" + id, id]));
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-qianfan-client-"));
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
   let mf;
   await preserveFailures(async () => {
+    try {
     mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture());
+    diagnostics.stage("grant");
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
     for (const id of ids) {
       await kv.put(`policies/${id}`, JSON.stringify({ enabled: true, generation: "fixture", providers: [id === "qianfan_foreign" ? "openai" : "qianfan"], models: id === "qianfan_empty" ? ["qianfan/unlisted-fixture"] : models.map(id => `qianfan/${id}`), tenantId: "fixture", monthlyBudgetMicros: 100, requestCostMicros: id === "qianfan_unpriced" ? null : 7, budgetMode: "reserve", retainRequestContent: false }));
@@ -314,6 +469,7 @@ test("actual OpenClaw Qianfan configured native client through workerd and SQLit
     await kv.put("connections/qianfan", JSON.stringify({ providerId: "qianfan", enabled: true }));
     const origin = String(await mf.ready).replace(/\/$/, "");
     assert.equal((await fetch(origin + "/fixture/grants", { method: "POST" })).status, 204);
+    diagnostics.stage("catalog");
     const catalogResponse = await fetch(origin + "/v1/catalog", { headers: { authorization: "Bearer clawrouter-live-qianfan_catalog-fixture-secret" } });
     assert.equal(catalogResponse.status, 200); const catalog = await catalogResponse.json();
     assert.equal(catalog.scope.credentialId, "qianfan_catalog");
@@ -321,13 +477,16 @@ test("actual OpenClaw Qianfan configured native client through workerd and SQLit
     assert.deepEqual(visible.models.map(row => row.id).sort(), models.map(id => "qianfan/" + id).sort());
     assert.ok(models.every(id => visible.offers.some(offer => offer.modelId === "qianfan/" + id && offer.routeKind === "native" && offer.eligible)));
 
-    const cancelReceipt = createCancelReceiptReceiver(t);
-    const originalConsumer = runOpenClawConsumer(cancelReceipt.context, {
+    diagnostics.stage("helper");
+    const cancelReceipt = createCancelReceiptReceiver(diagnostics.context);
+    const originalConsumer = diagnostics.helper(() => runOpenClawConsumer(cancelReceipt.context, {
       source, sourceHead, fixture: new URL("./fixtures/openclaw-qianfan-contract.test.ts", import.meta.url),
       testPath: "extensions/qianfan/worker-contract.test.ts",
       env: { CLAWROUTER_CONTRACT_ORIGIN: origin, QIANFAN_API_KEY: "must-not-fallback", OPENAI_API_KEY: "must-not-fallback" },
-    });
+    }));
+    diagnostics.stage("receipt");
     await cancelReceipt.finish(originalConsumer);
+    diagnostics.stage("upstream");
     const upstream = await mf.getWorker("upstream");
     let calls;
     for (let attempt = 0; attempt < 150; attempt++) {
@@ -367,6 +526,7 @@ test("actual OpenClaw Qianfan configured native client through workerd and SQLit
       assert.ok(call.body.messages.some(message => message.tool_calls?.[0]?.function?.name === "lookup"));
       assert.doesNotMatch(JSON.stringify(call), /clawrouter-live-|must-not-fallback/);
     }
+    diagnostics.stage("sqlite");
     for (const id of charged) {
       let usage;
       for (let attempt = 0; attempt < 150; attempt++) {
@@ -395,7 +555,10 @@ test("actual OpenClaw Qianfan configured native client through workerd and SQLit
       assert.equal(usage.budget.spentMicros, 0);
       assert.ok(usage.usage.events.every(event => event.actual_cost_micros === 0));
     }
-  }, [() => retireWorker(mf), () => mf?.dispose(), () => rm(temporary, { recursive: true, force: true })]);
+    } catch (error) { diagnostics.failure(error); throw error; }
+  }, [diagnostics.cleanup("retirement", () => retireWorker(mf)), diagnostics.cleanup("dispose", () => mf?.dispose()), diagnostics.cleanup("rm", () => rm(temporary, { recursive: true, force: true }))]);
+  } catch (error) { if (!diagnostics.failed) diagnostics.failure(error); throw error; }
+  finally { diagnostics.finish(); }
 });
 
 function routerFixture() {

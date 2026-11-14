@@ -12,11 +12,124 @@ import { resolveTranscriptPolicy } from "../../src/agents/transcript-policy.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import plugin from "./index.js";
+import { types as nodeTypes } from "node:util";
 
 const origin = process.env.CLAWROUTER_CONTRACT_ORIGIN!;
 const models = ["deepseek-v4-pro", "ernie-5.1", "ernie-5.0", "deepseek-v3.2", "ernie-5.0-thinking-preview"];
 const image = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=";
 const key = (id: string) => `clawrouter-live-qianfan_${id}-fixture-secret`;
+
+// BEGIN QIANFAN FAILURE DIAGNOSTICS
+// Extracted unchanged by the outer fixture. This protocol never carries errors,
+// request data or the independent successful cancellation receipt.
+function qianfanDiagnostics(isProxy: (value: any) => boolean) {
+  const prefix = "QIANFAN_DIAGNOSTIC ";
+  const cases = ["none", "card0", "card1", "card2", "card3", "card4", "high", "max", "image2", "image4", "catalog", "catalog_denials", "observed", "admission_denials", "error", "cancel"];
+  const phases = ["module", "setup", "body", "registration", "catalog", "replay", "dispatch", "original_join", "release", "binding", "restoration", "mock_cleanup", "cache_cleanup", "worker", "grant", "helper", "receipt", "retirement", "upstream", "sqlite", "dispose", "rm", "overflow"];
+  const enums: Record<string, any[]> = { layer: ["sdk", "outer"], route: ["none", "nativechat", "discovery"], caseId: cases, phase: phases,
+    role: ["progress", "primary", "cleanup", "summary"], outcome: ["entered", "fulfilled", "rejected", "unknown"],
+    category: ["none", "undefined", "null", "assertion", "aggregate", "unknown"],
+    signal: [null, "SIGTERM", "SIGKILL", "SIGABRT", "SIGINT", "SIGHUP", "SIGSEGV"],
+    observedCode: [null, "ERR_MODULE_NOT_FOUND", "ERR_PACKAGE_PATH_NOT_EXPORTED", "ERR_REQUIRE_ESM", "ERR_UNKNOWN_FILE_EXTENSION"] };
+  const required = ["v", "layer", "route", "caseId", "phase", "role", "outcome", "category"];
+  const counts = ["pending", "settled", "operations", "releasePending", "releaseRejected", "sdkRecords", "suppressed"];
+  const bools = ["partialDelivery", "callerAborted", "killed"];
+  const optional = [...counts, ...bools, "exit", "signal", "observedCode"];
+  function own(value: any, field: string): any {
+    try { if (!value || !["object", "function"].includes(typeof value) || isProxy(value)) return undefined;
+      const descriptor = Object.getOwnPropertyDescriptor(value, field);
+      return descriptor && Object.hasOwn(descriptor, "value") ? descriptor.value : undefined;
+    } catch { return undefined; }
+  }
+  function validate(value: any): any {
+    try {
+      if (!value || typeof value !== "object" || isProxy(value) || Array.isArray(value)) return null;
+      const keys = Reflect.ownKeys(value);
+      if (keys.some(key => typeof key !== "string" || ![...required, ...optional].includes(key)) || required.some(key => !keys.includes(key))) return null;
+      const result: any = {};
+      for (const key of keys as string[]) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, key);
+        if (!descriptor || !Object.hasOwn(descriptor, "value")) return null;
+        const item = descriptor.value;
+        if (key === "v" ? item !== 1 : enums[key] ? !enums[key].includes(item) : counts.includes(key) ? item !== null && !(Number.isInteger(item) && item >= 0 && item <= 9999)
+          : bools.includes(key) ? item !== null && typeof item !== "boolean" : key === "exit" ? item !== null && !(Number.isInteger(item) && Math.abs(item) <= 255) : true) return null;
+        result[key] = item;
+      }
+      return Buffer.byteLength(JSON.stringify(result)) <= 640 ? result : null;
+    } catch { return null; }
+  }
+  function category(error: unknown) {
+    if (error === undefined) return "undefined";
+    if (error === null) return "null";
+    if (own(error, "code") === "ERR_ASSERTION") return "assertion";
+    if (Array.isArray(own(error, "errors"))) return "aggregate";
+    return "unknown";
+  }
+  function record(context: any, outcome: string, error?: unknown, facts: any = {}) {
+    return validate({ v: 1, ...context, outcome, category: outcome === "rejected" ? category(error) : "none", ...facts });
+  }
+  function encode(record: any) { const valid = validate(record); return valid ? prefix + JSON.stringify(valid) + "\n" : null; }
+  function parse(text: any): any[] {
+    if (typeof text !== "string" || text.length > 2 * 1024 * 1024) return [];
+    const records: any[] = [];
+    for (const line of text.split("\n")) {
+      if (!line.startsWith(prefix) || Buffer.byteLength(line) > 768 || records.length >= 512) continue;
+      try { const value = validate(JSON.parse(line.slice(prefix.length))); if (value?.layer === "sdk") records.push(value); } catch { /* not protocol */ }
+    }
+    return records;
+  }
+  function child(error: unknown) {
+    const stdout = own(error, "stdout"), stderr = own(error, "stderr");
+    const records = [...parse(stdout), ...parse(stderr)].slice(0, 512);
+    const exit = own(error, "code"), killed = own(error, "killed"), signal = own(error, "signal");
+    let observedCode = null;
+    for (const text of [stdout, stderr]) if (typeof text === "string" && text.length <= 2 * 1024 * 1024) {
+      for (const code of enums.observedCode.filter(Boolean)) if (new RegExp("\\b" + code + "\\b").test(text)) { observedCode = code; break; }
+    }
+    return { records, metadata: { sdkRecords: records.length, exit: Number.isInteger(exit) && Math.abs(exit) <= 255 ? exit : null,
+      killed: typeof killed === "boolean" ? killed : null, signal: enums.signal.includes(signal) ? signal : null, observedCode } };
+  }
+  function emitter(write: (text: string) => unknown) {
+    const seen = new Set<string>(); let emitted = 0, bytes = 0, suppressed = 0, overflow = false;
+    function command(value: any) {
+      const text = "::error title=Qianfan contract diagnostic::" + JSON.stringify(value).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A") + "\n";
+      const length = Buffer.byteLength(text); if (length > 768 || bytes + length > 8192) return;
+      bytes += length; try { write(text); } catch { /* reporting cannot replace the verdict */ }
+    }
+    function emit(input: any) {
+      const value = validate(input); if (!value) return;
+      const id = [value.layer, value.route, value.caseId, value.phase, value.role].join("/");
+      if (seen.has(id)) return; seen.add(id);
+      if (emitted >= 9) { suppressed = Math.min(9999, suppressed + 1); return; }
+      emitted++; command(value);
+    }
+    function finish() {
+      if (!suppressed || overflow) return; overflow = true;
+      command(record({ layer: "outer", route: "none", caseId: "none", phase: "overflow", role: "summary" }, "unknown", undefined, { suppressed }));
+    }
+    return { emit, finish, summary: () => ({ emitted, suppressed, bytes }) };
+  }
+  // Observe, but return the very same original result/promise. No diagnostic await.
+  function observe(original: () => any, notify: (outcome: string, error?: unknown) => void) {
+    const safe = (outcome: string, error?: unknown) => { try { notify(outcome, error); } catch { /* original verdict wins */ } };
+    safe("entered"); let value;
+    try { value = original(); } catch (error) { safe("rejected", error); throw error; }
+    if (value instanceof Promise) void value.then(() => safe("fulfilled"), error => safe("rejected", error));
+    else safe("fulfilled");
+    return value;
+  }
+  function snapshot(lifetime: any, bindings: any) {
+    const summary = lifetime?.summary(), bound = bindings?.bindings.filter((row: any) => row.id === "cancel" && row.kind === "chat");
+    return { operations: summary?.operations ?? null, settled: summary?.settled ?? null,
+      pending: summary ? summary.operations - summary.settled : null,
+      releasePending: lifetime ? lifetime.operations.filter((op: any) => op.kind === "release" && op.state === "pending").length : null,
+      releaseRejected: lifetime ? lifetime.operations.filter((op: any) => op.kind === "release" && ["rejected", "sync_throw"].includes(op.state)).length : null,
+      partialDelivery: bound?.length === 1 && bound[0].partialDelivery === true ? true : null,
+      callerAborted: bound?.length === 1 && bound[0].callerObservation?.abort ? true : null };
+  }
+  return { cases, phases, own, validate, category, record, encode, parse, child, emitter, observe, snapshot };
+}
+// END QIANFAN FAILURE DIAGNOSTICS
 
 // BEGIN ORIGINAL LIFETIME OBSERVERS
 // The outer fixture executes these exact functions with native streams and
@@ -225,12 +338,42 @@ function createCancelReceiptReceiver(context: { diagnostic: (...args: any[]) => 
 }
 // END ORIGINAL LIFETIME OBSERVERS
 
+const diagnostic = qianfanDiagnostics(nodeTypes.isProxy);
+let diagnosticCase = "none", diagnosticRoute = "none", diagnosticPhase = "module", diagnosticCount = 0;
+function sdkDiagnostic(phase: string, role: string, outcome: string, error?: unknown) {
+  try {
+    if (diagnosticCount >= 512) return;
+    const value = diagnostic.record({ layer: "sdk", route: diagnosticRoute, caseId: diagnosticCase, phase, role }, outcome, error, diagnostic.snapshot(lifetime, bindings));
+    const line = diagnostic.encode(value); if (line) { diagnosticCount++; process.stdout.write(line); }
+  } catch { /* never mask body, original join or cleanup errors */ }
+}
+function sdkStage(phase: string, route = diagnosticRoute) { diagnosticPhase = phase; diagnosticRoute = route; sdkDiagnostic(phase, "progress", "entered"); }
+function sdkCleanup(phase: string, original: () => any) {
+  return () => diagnostic.observe(original, (outcome, error) => {
+    sdkDiagnostic(phase, "cleanup", outcome, error);
+    if (phase === "original_join" && outcome !== "entered") sdkDiagnostic("release", "summary", "unknown");
+  });
+}
+function registeredCaseId(name: string, args: any[]) {
+  if (name === "streams frozen %s through the registered replay policy") return args[1];
+  if (name === "serializes explicit V4 effort %s") return args[0];
+  if (name === "preserves actual image input on frozen card %i") return "image" + args[0];
+  return ({ "selects the public identity from strict keyed discovery before native dispatch": "catalog",
+    "keeps strict empty and denied catalogs closed without static fallback": "catalog_denials",
+    "uses observed counters when actually supplied": "observed",
+    "denies invalid credentials, foreign policy and unknown-dollar admission without key fallback": "admission_denials",
+    "retains embedded errors without replay": "error",
+    "cancels the actual native SDK stream after partial delivery": "cancel" } as Record<string, string>)[name] ?? "none";
+}
 const originalInferenceGuard = guardedTransport.fetchWithProviderHttpGuard;
 let lifetime: ReturnType<typeof createLifetimeObserver>, bindings: ReturnType<typeof createRequestBindings>, caseState: { bodySucceeded: boolean };
 let cancelReceiptCount = 0;
+sdkDiagnostic("module", "progress", "entered");
 beforeEach(async () => {
+  diagnosticCase = "none"; diagnosticRoute = "none";
   bindings = createRequestBindings(); caseState = { bodySucceeded: false };
   lifetime = createLifetimeObserver({ bindings: bindings.bindings, bodySucceeded: () => caseState.bodySucceeded });
+  sdkStage("setup");
   try {
     clearLiveCatalogCacheForTests();
     vi.spyOn(guardedTransport, "fetchWithProviderHttpGuard").mockImplementation(function (...args) {
@@ -238,10 +381,14 @@ beforeEach(async () => {
       lifetime.signal(owner, options.signal ?? options.init?.signal);
       return lifetime.guard(originalInferenceGuard, this, args, owner);
     });
-  } catch (error) { await preserveFailures(() => { throw error; }, [() => lifetime.join(), () => lifetime.restore(), () => vi.restoreAllMocks(), () => clearLiveCatalogCacheForTests()]); }
+  } catch (error) { sdkDiagnostic("setup", "primary", "rejected", error); await preserveFailures(() => { throw error; }, [sdkCleanup("original_join", () => lifetime.join()), sdkCleanup("restoration", () => lifetime.restore()), sdkCleanup("mock_cleanup", () => vi.restoreAllMocks()), sdkCleanup("cache_cleanup", () => clearLiveCatalogCacheForTests())]); }
 });
-async function runCase(body: () => unknown) {
-  await preserveFailures(async () => { await body(); caseState.bodySucceeded = true; }, [() => lifetime.join(), () => {
+async function runCase(body: () => unknown, caseId: string) {
+  diagnosticCase = caseId; sdkStage("body", "none");
+  await preserveFailures(async () => {
+    try { await body(); caseState.bodySucceeded = true; sdkDiagnostic("body", "primary", "fulfilled"); }
+    catch (error) { sdkDiagnostic(diagnosticPhase, "primary", "rejected", error); throw error; }
+  }, [sdkCleanup("original_join", () => lifetime.join()), sdkCleanup("binding", () => {
     bindings.verify();
     for (const row of bindings.bindings.filter(row => row.caller)) {
       expect(row.callerObservation.signal).toBe(row.caller);
@@ -250,18 +397,20 @@ async function runCase(body: () => unknown) {
         expect(row.callerObservation.abort.sequence).toBeGreaterThan(row.partialSequence);
       }
     }
-  }, () => lifetime.restore(), () => vi.restoreAllMocks(), () => clearLiveCatalogCacheForTests()]);
+  }), sdkCleanup("restoration", () => lifetime.restore()), sdkCleanup("mock_cleanup", () => vi.restoreAllMocks()), sdkCleanup("cache_cleanup", () => clearLiveCatalogCacheForTests())]);
   if (bindings.bindings.some(row => row.id === "cancel" && row.kind === "chat")) {
     if (++cancelReceiptCount !== 1) throw new Error("duplicate Qianfan cancellation receipt emission");
     console.log(cancelReceiptLine);
   }
 }
-const it = Object.assign((name: string, body: () => unknown) => nativeIt(name, () => runCase(body)), {
-  each: (values: any) => (name: string, body: (...args: any[]) => unknown) => nativeIt.each(values)(name, (...args) => runCase(() => body(...args))),
+const it = Object.assign((name: string, body: () => unknown) => nativeIt(name, () => runCase(body, registeredCaseId(name, []))), {
+  each: (values: any) => (name: string, body: (...args: any[]) => unknown) => nativeIt.each(values)(name, (...args) => runCase(() => body(...args), registeredCaseId(name, args))),
 });
 
 async function start(id: string, modelId = models[0], options: { apiKey?: string; signal?: AbortSignal; reasoning?: "high" | "max"; image?: boolean; discovered?: Model<"openai-completions"> } = {}) {
+  sdkStage("registration", "nativechat");
   const provider = await registerSingleProviderPlugin(plugin);
+  sdkStage("catalog");
   const catalog = await runSingleProviderCatalog({ catalog: provider.staticCatalog });
   const row = catalog.models.find(row => row.id === modelId);
   expect(row).toBeDefined();
@@ -280,6 +429,7 @@ async function start(id: string, modelId = models[0], options: { apiKey?: string
   ];
   // Execute the registered provider's actual replay policy and host sanitizer.
   // The proxy URL is explicit configuration; no live-discovery route is invented.
+  sdkStage("replay");
   const messages = await withOpenClawTestState({ label: "qianfan-worker" }, async state => {
     const policy = resolveTranscriptPolicy({ provider: "qianfan", modelId, modelApi: model.api, model, runtimeHandle: { provider: "qianfan", plugin: provider } });
     expect(policy.dropReasoningFromHistory).toBe([models[1], models[3]].includes(modelId));
@@ -292,13 +442,16 @@ async function start(id: string, modelId = models[0], options: { apiKey?: string
     tools: [{ name: "lookup", description: "Synthetic lookup", parameters: { type: "object", properties: {} } }] };
   const invocation = bindings.expect(id, "chat", configured.baseUrl + "/chat/completions", "POST", options.apiKey ?? key(id), options.signal);
   invocation.callerObservation = {}; lifetime.signal(invocation.callerObservation, options.signal);
+  sdkStage("dispatch");
   return streamSimple(model, context, { apiKey: options.apiKey ?? key(id), maxTokens: 128, reasoning: options.reasoning, signal: options.signal });
 }
 
 async function discovered(id: string) {
+  sdkStage("registration", "discovery");
   const provider = await registerSingleProviderPlugin(plugin);
   const catalog = await runSingleProviderCatalog({ catalog: provider.staticCatalog });
   bindings.expect(id, "catalog", origin + "/v1/native/qianfan/models", "GET", key(id));
+  sdkStage("catalog", "discovery");
   return buildLiveModelProviderConfig({ providerId: "qianfan", endpoint: origin + "/v1/native/qianfan/models",
     fetchGuard: function (...args) {
       const options = args[0], owner = bindings.claim(options.url, options.init, "catalog");
