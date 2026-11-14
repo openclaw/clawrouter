@@ -13,7 +13,7 @@ function fixture(isolated = false) {
   const manifest = structuredClone(bundled);
   if (isolated) {
     // Provider-wide negative cases must exercise the Omni guard itself.
-    const unrelatedCapabilities = ["llm.embeddings", "image.generate", "audio.generate"];
+    const unrelatedCapabilities = ["llm.embeddings", "image.generate", "audio.generate", "audio.speech"];
     const unrelatedEndpoints = new Set(manifest.capabilities.filter(row => unrelatedCapabilities.includes(row.id)).map(row => row.endpoint));
     for (const id of unrelatedEndpoints) delete manifest.endpoints[id];
     manifest.capabilities = manifest.capabilities.filter(row => !unrelatedEndpoints.has(row.endpoint));
