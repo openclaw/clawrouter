@@ -142,10 +142,7 @@ async function fixture(run: (discover: (row: Case, signal?: AbortSignal) => Prom
     try { await run(discover); }
     finally {
       const releases = await Promise.allSettled(observations.map(row => row.done));
-      for (const row of observations) {
-        expect(row.dispatchers).toBe(1); expect(row.closes).toHaveLength(1);
-        expect(await row.closes[0]).toBeNull(); expect(row.destroys).toBe(0);
-      }
+      const closes = await Promise.allSettled(observations.flatMap(row => row.closes));
       const credentials = new Set(observations.map(row => row.credential));
       const joins = await Promise.allSettled([...credentials].map(async credential => {
         const row = cases.find(value => credential === `Bearer ${key(value)}`);
@@ -153,6 +150,8 @@ async function fixture(run: (discover: (row: Case, signal?: AbortSignal) => Prom
         await command(`/__catalog/join/${row.id}`);
       }));
       for (const result of [...releases, ...joins]) expect(result).toEqual({ status: "fulfilled", value: undefined });
+      for (const row of observations) { expect(row.dispatchers).toBe(1); expect(row.closes).toHaveLength(1); expect(row.destroys).toBe(0); }
+      for (const result of closes) expect(result).toEqual({ status: "fulfilled", value: null });
     }
   });
 }
