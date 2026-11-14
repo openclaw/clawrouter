@@ -56,6 +56,30 @@ function localRequestTimeout(profile, value) {
   return value;
 }
 
+const runtimeDurationFields = { total: 'total_duration', load: 'load_duration',
+  promptEval: 'prompt_eval_duration', generation: 'eval_duration' };
+
+function localRuntimeTimings(value) {
+  const values = Object.values(runtimeDurationFields).map(field => value[field]);
+  const invalid = values.some(duration => duration !== undefined
+    && (!Number.isSafeInteger(duration) || duration < 0));
+  const runtimeTimingStatus = invalid ? 'invalid' : values.includes(undefined) ? 'missing' : 'available';
+  return { runtimeTimingStatus, runtimeTimingsNs: runtimeTimingStatus === 'available'
+    ? Object.fromEntries(Object.entries(runtimeDurationFields).map(([name, field]) => [name, value[field]])) : null };
+}
+
+function sumRuntimeTimings(rows) {
+  const totals = Object.fromEntries(Object.keys(runtimeDurationFields).map(name => [name, 0]));
+  for (const row of rows) {
+    if (!row.runtimeTimingsNs) return null;
+    for (const name of Object.keys(totals)) {
+      totals[name] += row.runtimeTimingsNs[name];
+      if (!Number.isSafeInteger(totals[name])) return null;
+    }
+  }
+  return totals;
+}
+
 export async function localActionRequest({ endpoint, model, pin, body, signal, seed, profile = 'legacy',
   maxOutputTokens = localRepositorySettings.outputTokens, requestTimeoutMs, fetcher = fetch, onDispatch = async () => {} }) {
   validateOutputTokens(maxOutputTokens);
@@ -99,7 +123,8 @@ export async function localActionRequest({ endpoint, model, pin, body, signal, s
   if (!['stop', 'length'].includes(value.done_reason)) throw invalidLocalResponse('invalid_stop_reason');
   return { result: { model, choices: [{ message: { content }, finish_reason: value.done_reason }] },
     inputTokens: value.prompt_eval_count, outputTokens: value.eval_count,
-    promptDigest: hash(JSON.stringify(body.messages)), responseDigest: hash(content), stopReason: value.done_reason };
+    promptDigest: hash(JSON.stringify(body.messages)), responseDigest: hash(content), stopReason: value.done_reason,
+    ...localRuntimeTimings(value) };
 }
 
 export async function runLocalRepository({ repo, qualificationPath, out, sourceSha,
@@ -189,6 +214,7 @@ export async function runLocalRepository({ repo, qualificationPath, out, sourceS
         && (profile !== 'checked' || (result?.reproducerQualified === true && result.probePassed === true && result.publicPassed === true));
       state.records.push({ caseId: task.id, strategy, score: passed ? 1 : 0, outcome,
         calls: trialCalls.filter(row => row.dispatched).length, attempts: trialCalls.length,
+        runtimeTimingsNs: sumRuntimeTimings(trialCalls.filter(row => row.dispatched)),
         inputTokens: trialCalls.reduce((sum, row) => sum + (row.inputTokens ?? 0), 0),
         outputTokens: trialCalls.reduce((sum, row) => sum + (row.outputTokens ?? 0), 0),
         usageIncomplete: trialCalls.some(row => row.inputTokens === null),
@@ -206,6 +232,7 @@ export async function runLocalRepository({ repo, qualificationPath, out, sourceS
       const rows = state.records.filter(row => row.strategy === strategy);
       return { strategy, solved: rows.reduce((sum, row) => sum + row.score, 0), cases: rows.length,
         calls: rows.reduce((sum, row) => sum + row.calls, 0),
+        runtimeTimingsNs: sumRuntimeTimings(rows),
         inputTokens: rows.reduce((sum, row) => sum + row.inputTokens, 0), outputTokens: rows.reduce((sum, row) => sum + row.outputTokens, 0) };
     });
     state.complete = true; await checkpoint(); return state;

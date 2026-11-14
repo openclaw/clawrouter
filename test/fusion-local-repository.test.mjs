@@ -36,6 +36,27 @@ test('adapter sends the same action schema through loopback with fixed limits', 
   assert.equal(sent.body.options.temperature, 0);
 });
 
+test('runtime timings preserve nanoseconds and leave missing or invalid metadata unknown', async () => {
+  const timings = { total_duration: 91, load_duration: 13, prompt_eval_duration: 17, eval_duration: 31 };
+  const options = { endpoint: 'http://127.0.0.1:11435', model: pins[0].model, pin: pins[0], body,
+    signal: new AbortController().signal, seed: 4 };
+  const cases = [
+    [timings, 'available', { total: 91, load: 13, promptEval: 17, generation: 31 }],
+    [Object.fromEntries(Object.keys(timings).map(key => [key, 0])), 'available',
+      { total: 0, load: 0, promptEval: 0, generation: 0 }],
+    [{}, 'missing', null],
+    [{ ...timings, eval_duration: undefined }, 'missing', null],
+    ...[-1, '31', null, 1.5, Number.MAX_SAFE_INTEGER + 1].map(value =>
+      [{ ...timings, eval_duration: value }, 'invalid', null]),
+  ];
+  for (const [extra, status, expected] of cases) {
+    const result = await localActionRequest({ ...options, fetcher: async () => response(pins[0].model, 'complete', extra) });
+    assert.equal(result.runtimeTimingStatus, status);
+    assert.deepEqual(result.runtimeTimingsNs, expected);
+    assert.equal(result.outputTokens, 9);
+  }
+});
+
 test('grounded sampling is explicit and does not change legacy requests', async () => {
   let options;
   await localActionRequest({ endpoint: 'http://127.0.0.1:11435', model: pins[0].model, pin: pins[0], body,
@@ -145,6 +166,36 @@ test('campaigns record and enforce an explicit output allowance', async () => {
     assert.equal(result.settings.outputTokens, 4096);
     assert.ok(result.calls.every(call => call.outputTokens === 2000));
     assert.equal(result.summary.reduce((sum, row) => sum + row.outputTokens, 0), 6000);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('campaign timing totals never sum partial measurements or unsafe integers', async () => {
+  const { root, options } = await fixture();
+  let count = 0;
+  try {
+    const result = await runLocalRepository({ ...options,
+      fetcher: async (_url, request) => {
+        const sent = JSON.parse(request.body);
+        const extra = { total_duration: 91, load_duration: 13, prompt_eval_duration: 17, eval_duration: 31 };
+        if (count === 3) delete extra.load_duration;
+        if (count >= 4) extra.total_duration = Number.MAX_SAFE_INTEGER;
+        count++;
+        return response(sent.model, 'complete', extra);
+      },
+      agent: async (_task, _image, _strategy, id, _config, invoke) => {
+        for (let i = 0; i < 2; i++) await invoke(id, roles.strong, body, new AbortController().signal);
+        return { files: [], outcome: 'submitted' };
+      }, grade: async () => ({ valid: true, passed: true, tests: 3, skipped: 0 }) });
+    assert.equal(count, 6);
+    const expected = { total: 182, load: 26, promptEval: 34, generation: 62 };
+    assert.deepEqual(result.records.map(row => row.runtimeTimingsNs), [expected, null, null]);
+    assert.deepEqual(result.summary.map(row => row.runtimeTimingsNs), [expected, null, null]);
+    assert.deepEqual(result.calls.map(row => row.runtimeTimingStatus),
+      ['available', 'available', 'available', 'missing', 'available', 'available']);
+    assert.ok(result.records.every(row => row.score === 1 && !row.usageIncomplete));
+    const saved = JSON.parse(await readFile(join(options.out, 'local-repository.json'), 'utf8'));
+    assert.deepEqual(saved.summary, result.summary);
+    assert.deepEqual(saved.calls[0].runtimeTimingsNs, result.calls[0].runtimeTimingsNs);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
