@@ -45,10 +45,9 @@ export class UsageLedgerObject extends Current {
   const deleting=state.storage.transactionSync(()=>openUsageReportCut(sql,query.range.from));
   await old.fetch(new Request('https://ledger/snapshot?events=admin&policy_id=policy'));
   let oldDelete;try{validateUsageVisibility(sql,deleting,query.range.from)}catch(e){oldDelete=e.reason}
-  const clockBeforeCuts=[...sql.exec('SELECT observed_clock FROM usage_report_visibility')][0].observed_clock;
-  const futureClock=clockBeforeCuts+1;
+  const futureClock=now+100;
   state.storage.transactionSync(()=>openUsageReportCut(sql,query.range.from,futureClock));
-  state.storage.transactionSync(()=>openUsageReportCut(sql,query.range.from,clockBeforeCuts-1));
+  state.storage.transactionSync(()=>openUsageReportCut(sql,query.range.from,now-100));
   const savedClock=[...sql.exec('SELECT observed_clock FROM usage_report_visibility')][0].observed_clock;
   const sqlClockNumeric=typeof [...sql.exec("SELECT CAST(strftime('%s','now') AS INTEGER) AS now")][0].now==='number';
   sql.exec('UPDATE usage_report_visibility SET arrival_rows = 100000');
