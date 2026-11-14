@@ -248,3 +248,47 @@ and reports aggregate calls and historical costs without making model calls.
 Training and selection costs, present-day pricing, latency, and answer accuracy
 require separate measurements. Use training data to select call order and an
 independent evaluation to qualify any quality or cost claim.
+
+### Run a panel against an endpoint
+
+`scripts/run-fusion-vote.mjs` connects the fixed-choice runner to a Chat
+Completions endpoint. Each worker adds a `model` field to the panel above, and
+the input adds a `prompt` string. For example:
+
+```json
+{
+  "version": 1,
+  "prompt": "Which choice satisfies the supplied problem: A or B?",
+  "choices": ["A", "B"],
+  "workers": [
+    { "id": "first", "model": "provider/model-a", "weight": 1, "priority": 0 },
+    { "id": "second", "model": "provider/model-b", "weight": 1, "priority": 1 },
+    { "id": "third", "model": "provider/model-c", "weight": 1, "priority": 2 }
+  ]
+}
+```
+
+Set `CLAWROUTER_API_KEY` for the selected endpoint, then run:
+
+```sh
+node scripts/run-fusion-vote.mjs https://router.example/v1/chat/completions panel.json
+```
+
+The endpoint must support strict JSON-schema responses and the selected models.
+Workers run sequentially; mathematically unnecessary calls are skipped. Each
+request allows 256 output tokens. The default request timeout is 30 seconds,
+within a two-minute panel deadline. Programmatic callers can use
+`runFusionVote(input, { endpoint, apiKey, signal, deadlineMs, requestTimeoutMs })`;
+deadlines are capped at five minutes. HTTPS is required except on loopback.
+Redirects are rejected.
+
+The result contains the selected answer, called workers, and reported token
+usage. Missing or malformed usage stays `null`, and `usageComplete` is false.
+The client does not estimate monetary cost or replace the endpoint's admission,
+quota, or billing checks. HTTP errors, incomplete responses, cancellation and
+invalid answers stop the panel without retries. Failure results retain prior
+call status and known usage; the CLI exits nonzero. Prompts, raw completions,
+keys, and provider error bodies are omitted from results.
+
+This is an explicit caller-side experiment. It neither activates a Worker
+routing strategy nor establishes that the selected panel improves quality.
