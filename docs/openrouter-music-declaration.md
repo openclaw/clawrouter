@@ -41,9 +41,10 @@ remote URL and uploaded ID remains closed until original asset authority exists.
   profile with qualified workerd capacity/delivery proof. This declaration
   starts from that actual squash and includes the common runtime above.
 
-The server declaration is composed with the qualified BytePlus main checkpoint
-`7d93890666ec91cc255f895f97dcc23750a119b0`. All bundled manifests generate the
-checked-in snapshot. The 14 original declaration tests pass on that composition.
+The server declaration retains its qualified BytePlus composition at
+`7d93890666ec91cc255f895f97dcc23750a119b0` and now includes the landed Abliteration
+checkpoint `09dc4f0c53a0befffc4aed91bd8faf774d46289a`. All bundled manifests generate
+the checked-in snapshot. The 14 original declaration tests pass on this composition.
 
 The shipping catalog advertises the native route only. The separate actual-client
 harness also compiles a schema-validated configuration with only
@@ -60,8 +61,8 @@ The wrong-ID Worker denial regression and registered-tool assertions are unchang
 This source correction is not a qualified client release: SDK application tests,
 types, lint and builds remain unrun, and its native readiness gate remains held.
 
-Actual registered SDK/Worker execution is unrun and publication is held. The
-harness retains explicit policy-fixed 700-micro-unit receipts separately from
+Actual registered SDK/Worker execution is unrun; publication alone is not client
+qualification. The harness retains explicit policy-fixed 700-micro-unit receipts separately from
 unknown vendor prices and null token usage. It observes original cancellation,
 reader and dispatcher promises before teardown; client rejection or disposal
 alone is not physical-retirement evidence. No live vendor call, reference-image
