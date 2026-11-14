@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { stripTypeScriptTypes } from "node:module";
 import { join } from "node:path";
 import test from "node:test";
+import { types as nodeTypes } from "node:util";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 
@@ -20,15 +21,63 @@ const charged = [...effortCases.map(row => row.id), "abliteration_simple", "abli
 const modelFor = id => effortCases.find(row => row.id === id)?.model ?? (/^abliteration_image[02]$/.test(id) ? models[Number(id.at(-1))] : models[0]);
 const ids = [...charged, "abliteration_unpriced", "abliteration_foreign", "abliteration_revoked"];
 
+// Execute the same closed protocol in Node, the copied SDK test and the Worker.
+// Only Node receives the Proxy detector; Worker thrown values stay opaque.
+const sdkText = await readFile(new URL("./fixtures/openclaw-abliteration-contract.test.ts", import.meta.url), "utf8");
+const protocolStart = sdkText.indexOf("// BEGIN typed diagnostic protocol."), protocolEnd = sdkText.indexOf("// END typed diagnostic protocol.");
+assert.ok(protocolStart >= 0 && protocolEnd > protocolStart);
+const diagnosticCode = stripTypeScriptTypes(sdkText.slice(protocolStart, protocolEnd));
+const makeDiagnostic = new Function(diagnosticCode + "; return diagnosticProtocol;")();
+const diagnostic = makeDiagnostic(nodeTypes.isProxy);
+const outerContext = operation => ({ source: "outer", test: "T00", scenario: "none", operation, ordinal: 0 });
+function emitDiagnostic(t, record) {
+  const valid = diagnostic.validate(record);
+  if (!valid) throw new Error("invalid diagnostic response");
+  const escaped = JSON.stringify(valid).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
+  t.diagnostic(`::error title=Abliteration contract diagnostic::${escaped}`);
+}
+async function retrieveDiagnostics(origin) {
+  const response = await fetch(origin + "/fixture/diagnostics", { redirect: "error", signal: AbortSignal.timeout(2000) });
+  const text = await diagnostic.read(response.body, 128 * 1024);
+  if (response.status !== 200) throw new Error("diagnostic retrieval failed");
+  const records = JSON.parse(text);
+  if (!Array.isArray(records) || records.length > 64) throw new Error("invalid diagnostic collection");
+  const valid = records.map(record => diagnostic.validate(record));
+  if (valid.some(record => !record)) throw new Error("invalid diagnostic collection");
+  return valid;
+}
+function childMetadata(error) {
+  const records = [];
+  if (!error || (typeof error !== "object" && typeof error !== "function") || nodeTypes.isProxy(error)) return records;
+  // Never inspect the exec error's message, stdout, stderr, stack or cause.
+  for (const [key, expected] of [["code", 0], ["killed", false]]) {
+    const value = diagnostic.own(error, key);
+    if ((key === "code" && Number.isInteger(value) && Math.abs(value) <= 1_000_000) || (key === "killed" && typeof value === "boolean")) {
+      records.push({ ...diagnostic.record(outerContext("sdk_process"), undefined), reasons: [{ kind: "unknown", depth: 0, actual: value, expected }] });
+    }
+  }
+  return records;
+}
+
 test("actual OpenClaw Abliteration configured native client through workerd and SQLite", { skip: !source, timeout: 300_000 }, async t => {
   assert.ok(endpoint);
   assert.deepEqual(provider.models.map(model => [model.id, model.upstream]), models.map(id => ["abliteration/" + id, id]));
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-abliteration-client-"));
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
   let mf, origin;
-  const failures = [];
+  const failures = [], localDiagnostics = diagnostic.store();
+  let phase = "fixture_start", scenarioContext = { test: "T00", scenario: "none", ordinal: 0 };
+  const selectScenario = id => {
+    const scenario = id.slice("abliteration_".length);
+    const test = Array.from({ length: 27 }, (_, i) => `T${String(i + 1).padStart(2, "0")}`).find(test => diagnostic.identity(test, scenario));
+    scenarioContext = test ? { test, scenario, ordinal: 0 } : { test: "T00", scenario: "none", ordinal: 0 };
+  };
+  const recordFailure = (error, operation = phase) => {
+    try { localDiagnostics.add(diagnostic.record({ ...outerContext(operation), ...(operation === phase ? scenarioContext : {}) }, error)); } catch { /* preserve original */ }
+  };
   try {
     mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture());
+    phase = "provision";
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
     for (const id of ids) {
       await kv.put(`policies/${id}`, JSON.stringify({ enabled: true, generation: "fixture", providers: [id === "abliteration_foreign" ? "openai" : "abliteration"], models: models.map(id => `abliteration/${id}`), tenantId: "fixture", monthlyBudgetMicros: 100, requestCostMicros: id === "abliteration_unpriced" ? null : 7, budgetMode: "reserve", retainRequestContent: false, grantRouting: { eligibleGrants: { abliteration: ["abliteration"] }, environmentFallback: false } }));
@@ -37,6 +86,7 @@ test("actual OpenClaw Abliteration configured native client through workerd and 
     await kv.put("connections/abliteration", JSON.stringify({ providerId: "abliteration", enabled: true }));
     origin = String(await mf.ready).replace(/\/$/, "");
     assert.equal((await fetch(origin + "/fixture/grants", { method: "POST" })).status, 204);
+    phase = "catalog_assert";
     const catalogResponse = await fetch(origin + "/v1/catalog", { headers: { authorization: "Bearer clawrouter-live-abliteration_m0_high-fixture-secret" } });
     assert.equal(catalogResponse.status, 200); const catalog = await catalogResponse.json();
     assert.equal(catalog.scope.credentialId, "abliteration_m0_high");
@@ -44,11 +94,13 @@ test("actual OpenClaw Abliteration configured native client through workerd and 
     assert.deepEqual(visible.models.map(row => row.id).sort(), models.map(id => "abliteration/" + id).sort());
     assert.ok(models.every(id => visible.offers.some(offer => offer.modelId === "abliteration/" + id && offer.routeKind === "native" && offer.eligible)));
 
+    phase = "sdk_process";
     await runOpenClawConsumer(t, {
       source, sourceHead, fixture: new URL("./fixtures/openclaw-abliteration-contract.test.ts", import.meta.url),
       testPath: "extensions/abliteration/worker-contract.test.ts",
       env: { CLAWROUTER_CONTRACT_ORIGIN: origin, ABLIT_KEY: "must-not-fallback", ABLITERATION_API_KEY: "must-not-fallback", OPENAI_API_KEY: "must-not-fallback" },
     });
+    phase = "worker_retire";
     const retirement = await fetch(origin + "/fixture/retire", { method: "POST" });
     assert.equal(retirement.status, 200);
     const joined = await retirement.json();
@@ -60,6 +112,7 @@ test("actual OpenClaw Abliteration configured native client through workerd and 
       assert.ok(input.readers.length > 0);
       assert.ok(input.readers.every(reader => reader.unlocked && reader.pendingSettled));
     }
+    phase = "cancel_assert";
     const upstream = await mf.getWorker("upstream");
     let calls;
     for (let attempt = 0; attempt < 150; attempt++) {
@@ -71,6 +124,7 @@ test("actual OpenClaw Abliteration configured native client through workerd and 
     const cancelled = calls.find(call => call.body && JSON.stringify(call.body.messages).includes("abliteration_cancel"));
     assert.ok(cancelled?.cancelled || cancelled?.aborted, "actual client abort must cancel the upstream transport");
     assert.notEqual(cancelled.fixtureExpired, true, "fixture timeout is not caller cancellation");
+    phase = "upstream_assert";
     assert.equal(calls.filter(call => call.method === "GET").length, 0, "the actual registered catalog remains static");
     calls = calls.filter(call => call.method === "POST");
     assert.equal(calls.length, charged.length, "invalid keys, foreign grants and unknown-price hard budgets must not dispatch; errors must not replay");
@@ -78,6 +132,7 @@ test("actual OpenClaw Abliteration configured native client through workerd and 
       assert.equal(call.url, provider.base_urls.default.replace(/\/$/, "") + endpoint.path);
       assert.equal(call.headers.authorization, "Bearer fixture-upstream-abliteration");
       const id = charged.find(id => JSON.stringify(call.body.messages).includes(id)); assert.ok(id);
+      selectScenario(id);
       const expected = modelFor(id);
       assert.equal(call.body.model, expected);
       assert.equal(call.body.stream, true);
@@ -102,12 +157,15 @@ test("actual OpenClaw Abliteration configured native client through workerd and 
       assert.doesNotMatch(JSON.stringify(call), /clawrouter-live-|must-not-fallback/);
     }
     for (const id of charged) {
+      selectScenario(id);
+      phase = "usage_wait";
       let usage;
       for (let attempt = 0; attempt < 150; attempt++) {
         usage = await (await fetch(`${origin}/v1/usage`, { headers: { authorization: `Bearer clawrouter-live-${id}-fixture-secret` } })).json();
         if (usage.usage.events.length === 1) break;
         await new Promise(resolve => setTimeout(resolve, 20));
       }
+      phase = "usage_assert";
       const events = usage.usage.events.filter(event => event.capability === "llm.chat");
       assert.equal(events.length, 1);
       assert.equal(usage.usage.events.length, 1);
@@ -121,12 +179,18 @@ test("actual OpenClaw Abliteration configured native client through workerd and 
       assert.equal(event.cached_input_tokens, id === "abliteration_cached" ? 40 : null);
       assert.doesNotMatch(JSON.stringify(event), /synthetic-tool-result|fixture-upstream|must-not-fallback/);
     }
+    phase = "denial_assert";
     for (const id of ["abliteration_revoked", "abliteration_unpriced", "abliteration_foreign"]) {
+      selectScenario(id);
       const usage = await (await fetch(`${origin}/v1/usage`, { headers: { authorization: `Bearer clawrouter-live-${id}-fixture-secret` } })).json();
       assert.equal(usage.budget.spentMicros, 0);
       assert.ok(usage.usage.events.every(event => event.actual_cost_micros === 0));
     }
-  } catch (error) { failures.push(error); }
+  } catch (error) {
+    recordFailure(error);
+    if (phase === "sdk_process") for (const record of childMetadata(error)) localDiagnostics.add(record);
+    failures.push(error);
+  }
   finally {
     // Join the original Worker work before disposal, including failed assertions.
     // This cleanup call is not substituted for the successful retirement assertions.
@@ -136,9 +200,19 @@ test("actual OpenClaw Abliteration configured native client through workerd and 
         await response.arrayBuffer();
         assert.equal(response.status, 200, "Worker retirement must complete before disposal");
       }
-    } catch (error) { failures.push(error); }
-    try { await mf?.dispose(); } catch (error) { failures.push(error); }
-    try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+    } catch (error) { recordFailure(error, "worker_retire"); failures.push(error); }
+    // Reporting follows original retirement and cannot short-circuit disposal.
+    try {
+      if (origin) {
+        const records = await retrieveDiagnostics(origin);
+        if (!records.length) t.diagnostic("Abliteration diagnostic records: none arrived");
+        for (const record of records) localDiagnostics.add(record);
+      }
+    } catch (error) { recordFailure(error, "report"); failures.push(error); }
+    try { await mf?.dispose(); } catch (error) { recordFailure(error, "dispose"); failures.push(error); }
+    try { await rm(temporary, { recursive: true, force: true }); } catch (error) { recordFailure(error, "scratch_cleanup"); failures.push(error); }
+    try { for (const record of localDiagnostics.values()) emitDiagnostic(t, record); }
+    catch (error) { failures.push(error); }
   }
   if (failures.length === 1) throw failures[0];
   if (failures.length > 1) throw new AggregateError(failures, "Abliteration contract or retirement failed");
@@ -161,7 +235,7 @@ async function joinReaderOperations(operations) {
 // This is observer coverage, not execution of the native OpenClaw SDK.
 async function readerObservers() {
   const text = await readFile(new URL("./fixtures/openclaw-abliteration-contract.test.ts", import.meta.url), "utf8");
-  const start = text.indexOf("type ReaderOperation = "), end = text.indexOf("\nbeforeEach(() => {", start);
+  const start = text.indexOf("type ReaderOperation = "), end = text.indexOf("\nbeforeEach(", start);
   assert.ok(start >= 0 && end > start);
   const code = stripTypeScriptTypes(text.slice(start, end));
   const sdk = new Function(code + "; return { observeReaderOperation, joinReaderOperations };")();
@@ -209,10 +283,174 @@ test("retirement observers accept only exact owned read aborts and never cancell
   });
 });
 
+
+test("Abliteration diagnostics map all 27 registered tests and 30 scenarios without interpolated-title assumptions", () => {
+  const registered = [];
+  const registration = sdkText.slice(sdkText.indexOf('describe("actual Abliteration'));
+  new Function("describe", "caseTest", "efforts", registration)((_title, body) => body(), (id, title, body) => registered.push({ id, title, body }), efforts);
+  assert.equal(registered.length, 27);
+  assert.equal(new Set(registered.map(row => row.id)).size, 27);
+  assert.equal(new Set(registered.map(row => row.title)).size, 27);
+  assert.equal(diagnostic.scenarios.length, 30);
+  for (const scenario of diagnostic.scenarios) assert.equal(registered.filter(row => diagnostic.identity(row.id, scenario)).length, 1);
+  assert.deepEqual(diagnostic.scenarios.filter(scenario => diagnostic.identity("T25", scenario)), ["invalid", "foreign", "revoked", "unpriced"]);
+  assert.equal(diagnostic.identity("T25", "error"), false);
+});
+
+test("Abliteration diagnostic schema rejects getters, proxies and private strings without observing them", () => {
+  let traps = 0;
+  const secret = "private-value-must-not-escape";
+  const error = Object.create(Error.prototype, {
+    name: { get() { traps++; return "AssertionError"; } },
+    message: { get() { traps++; return secret; } },
+    stack: { get() { traps++; return secret; } },
+    toJSON: { value() { traps++; return secret; } },
+  });
+  const proxy = new Proxy(error, { getOwnPropertyDescriptor() { traps++; throw undefined; }, getPrototypeOf() { traps++; throw undefined; }, ownKeys() { traps++; throw undefined; } });
+  assert.equal(diagnostic.classify(proxy)[0].kind, "proxy");
+  assert.equal(diagnostic.validate(proxy), null);
+  const record = diagnostic.record(outerContext("assert"), error);
+  assert.ok(diagnostic.validate(record));
+  assert.doesNotMatch(JSON.stringify(record), /private-value/);
+  const invalid = { ...record, toJSON() { traps++; return secret; } };
+  assert.equal(diagnostic.validate(invalid), null);
+  const accessor = { ...record }; Object.defineProperty(accessor, "operation", { get() { traps++; return "assert"; } });
+  assert.equal(diagnostic.validate(accessor), null);
+  const assertion = Object.assign(new Error(secret), { name: "AssertionError", actual: secret, expected: 7 });
+  assert.deepEqual(diagnostic.classify(assertion), [{ kind: "assertion", depth: 0, actual: null, expected: 7 }]);
+  const aggregate = new AggregateError([new AggregateError([undefined, null, secret]), proxy, error]);
+  const reasons = diagnostic.classify(aggregate);
+  assert.equal(reasons.length, 4); assert.deepEqual(reasons.map(row => row.depth), [0, 1, 2, 2]);
+  assert.equal(traps, 0);
+  const opaque = makeDiagnostic();
+  assert.equal(opaque.record(outerContext("guard"), proxy).reasons[0].kind, "unknown");
+  assert.equal(traps, 0);
+});
+
+test("Abliteration diagnostic relay bounds bytes, record count, schema and fresh annotations", async () => {
+  const relay = diagnostic.relay(), record = diagnostic.record({ source: "sdk", test: "T25", scenario: "invalid", operation: "guard", ordinal: 1 }, undefined);
+  const send = (body, method = "POST") => relay(new Request("https://fixture.example/fixture/diagnostic", { method, body, duplex: "half" }));
+  assert.equal((await send(JSON.stringify({ ...record, message: "never allowed" }))).status, 400);
+  let cancelled = false;
+  const oversized = new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(2049)); }, cancel() { cancelled = true; } });
+  assert.equal((await send(oversized)).status, 400); assert.equal(cancelled, true); assert.equal(oversized.locked, false);
+  for (let i = 0; i < 70; i++) assert.equal((await send(JSON.stringify(record))).status, 204);
+  const response = await relay(new Request("https://fixture.example/fixture/diagnostics"));
+  const records = JSON.parse(await diagnostic.read(response.body, 128 * 1024));
+  assert.equal(records.length, 64); assert.equal(records.at(-1).operation, "capacity"); assert.equal(records.at(-1).ordinal, 7);
+  assert.ok(records.every(row => diagnostic.validate(row)));
+  const output = []; emitDiagnostic({ diagnostic: line => output.push(line) }, records[0]);
+  assert.equal(output.length, 1); assert.match(output[0], /^::error title=Abliteration contract diagnostic::/);
+  assert.equal(output[0].includes("\n"), false);
+  assert.throws(() => emitDiagnostic({ diagnostic() { throw new Error("must not reach"); } }, { ...record, operation: "private\n::error" }), /invalid diagnostic/);
+  const tooLarge = new Response(new Uint8Array(128 * 1024 + 1));
+  await assert.rejects(diagnostic.read(tooLarge.body, 128 * 1024), /capacity/); assert.equal(tooLarge.body.locked, false);
+});
+
+function sdkDiagnosticHarness(send) {
+  const begin = sdkText.indexOf("const diagnostic = diagnosticProtocol(nodeTypes.isProxy);"), end = sdkText.indexOf("// Observe the shipped guard", begin);
+  const helpers = stripTypeScriptTypes(sdkText.slice(begin, end));
+  return new Function("diagnosticProtocol", "nodeTypes", "globalThis", "it", helpers + `; return {
+    caseBody, remember, mark,
+    set(context) { current = context; },
+    context() { return { ...current }; },
+    records() { return failureRecords.values(); },
+    flush(origin) { return diagnostic.flush(failureRecords.values(), origin, diagnosticFetch); },
+  };`)(makeDiagnostic, nodeTypes, { fetch: send }, () => {});
+}
+
+test("Abliteration diagnostics retain late T25 operation identity and original undefined body failure", async () => {
+  const relay = diagnostic.relay();
+  const harness = sdkDiagnosticHarness((input, init) => relay(new Request(input, init)));
+  let reject;
+  const original = new Promise((_, fail) => { reject = fail; });
+  const first = { source: "sdk", test: "T25", scenario: "invalid", operation: "read", ordinal: 1 };
+  harness.set(first);
+  const captured = harness.context();
+  void original.then(() => {}, error => harness.remember(captured, error));
+  harness.set({ ...first, scenario: "unpriced", operation: "assert", ordinal: 4 });
+  const body = await Promise.allSettled([harness.caseBody("T25", async () => { throw undefined; })()]);
+  assert.equal(body[0].status, "rejected"); assert.equal(body[0].reason, undefined);
+  reject(undefined); await Promise.allSettled([original]);
+  harness.mark("reader_join");
+  await harness.flush("https://fixture.example");
+  const records = await (await relay(new Request("https://fixture.example/fixture/diagnostics"))).json();
+  assert.deepEqual(records.map(row => [row.scenario, row.operation, row.ordinal]), [["unpriced", "assert", 4], ["invalid", "read", 1]]);
+  assert.ok(records.every(row => row.reasons[0].kind === "undefined"));
+});
+
+test("Abliteration diagnostics join original cleanup before reporting and preserve body, undefined cancellation and writer failures", async () => {
+  const bodyFailure = new Error("body"), writerFailure = new Error("writer");
+  let release, readDone = false, restored = false, sent = 0;
+  const held = new Promise(resolve => { release = () => { readDone = true; resolve(); }; });
+  const canceled = Promise.reject(undefined); void canceled.catch(() => {});
+  const acquisitions = [{ returned: Promise.resolve({}), released: Promise.resolve(), releasePending: [], readers: [{ pending: [{ kind: "cancel", pending: canceled, expectedAbort: false }, { kind: "read", pending: held, expectedAbort: false }] }] }];
+  const records = diagnostic.store(); records.add(diagnostic.record(outerContext("assert"), bodyFailure));
+  const begin = sdkText.indexOf("afterEach(async () => {"), end = sdkText.indexOf("\nasync function start(", begin);
+  const code = stripTypeScriptTypes(sdkText.slice(begin, end));
+  let cleanup;
+  new Function("afterEach", "acquisitions", "joinReaderOperations", "mark", "remember", "current", "observationErrors", "vi", "diagnostic", "failureRecords", "origin", "diagnosticFetch", code)(
+    callback => { cleanup = callback; }, acquisitions, joinReaderOperations, () => {}, () => {}, outerContext("reader_join"), [],
+    { restoreAllMocks() { restored = true; } }, diagnostic, records, "https://fixture.example",
+    async () => { sent++; assert.equal(readDone, true); assert.equal(restored, true); throw writerFailure; });
+  let finished = false; const pending = cleanup().finally(() => { finished = true; }); void pending.catch(() => {});
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(sent, 0); assert.equal(finished, false);
+  release();
+  const results = await Promise.allSettled([Promise.reject(bodyFailure), pending]);
+  assert.equal(results[0].reason, bodyFailure);
+  const cleanupError = results[1].reason;
+  assert.equal(cleanupError.errors[1], writerFailure);
+  assert.equal(cleanupError.errors[0].errors[0].errors[0], undefined);
+  assert.equal(sent, 1);
+});
+
+test("Abliteration diagnostic reporting uses one two-second deadline and joins abort without retry", { timeout: 5000 }, async () => {
+  let sent = 0, retired = false, signal;
+  const record = diagnostic.record(outerContext("assert"), undefined);
+  await assert.rejects(diagnostic.flush([record, record], "https://fixture.example", async (_input, init) => {
+    sent++; signal = init.signal;
+    try { await new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true })); }
+    finally { retired = true; }
+  }));
+  assert.equal(signal.aborted, true); assert.equal(sent, 1); assert.equal(retired, true);
+});
+
+test("Abliteration diagnostic Worker control relay bypasses product dispatch and retains retirement", { timeout: 30_000 }, async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "clawrouter-abliteration-diagnostic-"));
+  const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
+  let mf; const failures = [];
+  try {
+    mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture());
+    const origin = String(await mf.ready).replace(/\/$/, "");
+    const record = diagnostic.record({ source: "sdk", test: "T01", scenario: "m0_off", operation: "catalog", ordinal: 0 }, undefined);
+    await diagnostic.flush([record], origin, fetch);
+    assert.deepEqual(await retrieveDiagnostics(origin), [record]);
+    const retirement = await fetch(origin + "/fixture/retire", { method: "POST" });
+    assert.equal(retirement.status, 200); assert.deepEqual(await retirement.json(), { requests: 0, inputs: [] });
+    assert.deepEqual(await (await (await mf.getWorker("upstream")).fetch("https://fixture.example/state")).json(), []);
+  } catch (error) { failures.push(error); }
+  finally {
+    try { await mf?.dispose(); } catch (error) { failures.push(error); }
+    try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length) throw new AggregateError(failures, "diagnostic relay or cleanup failed");
+});
+
 function routerFixture() {
   return `import handler from "./worker/index.ts"; export * from "./worker/index.ts";
 import { putGrantCredentials, revokeGrantCredentials } from "./worker/grant-credentials.ts";
 const records = [], inputs = [], rawFetch = globalThis.fetch;
+${diagnosticCode}
+const diagnostic = diagnosticProtocol(), diagnosticRelay = diagnostic.relay();
+const workerContext = (operation, ordinal = 0) => ({ source: "worker", test: "T00", scenario: "none", operation, ordinal });
+const remember = context => { try { diagnosticRelay.add(diagnostic.record(context, undefined)); } catch {} };
+function requestIdentity(request) {
+  const authorization = request.headers.get("authorization");
+  const scenario = diagnostic.scenarios.find(id => authorization === (id === "invalid" ? "Bearer clawrouter-live-abliteration_m0_high-invalid" : "Bearer clawrouter-live-abliteration_" + id + "-fixture-secret"));
+  const test = scenario && Array.from({ length: 27 }, (_, i) => "T" + String(i + 1).padStart(2, "0")).find(test => diagnostic.identity(test, scenario));
+  return test ? { source: "worker", test, scenario, operation: "stream", ordinal: records.length + 1 } : workerContext("stream", records.length + 1);
+}
 ${observeReaderOperation.toString()}
 ${joinReaderOperations.toString()}
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
@@ -221,7 +459,7 @@ globalThis.fetch = function(input, init) {
   const url = input instanceof Request ? input.url : String(input);
   if (url !== ${JSON.stringify(provider.base_urls.default.replace(/\/$/, "") + endpoint.path)}) return pending;
   const signals = [init?.signal, input instanceof Request ? input.signal : undefined];
-  const proof = { returned: pending, body: undefined, readers: [], errors: [] }; inputs.push(proof);
+  const proof = { returned: pending, body: undefined, readers: [], errors: [], ordinal: inputs.length + 1 }; inputs.push(proof);
   void pending.then(response => {
     try {
       proof.body = response.body;
@@ -234,7 +472,10 @@ globalThis.fetch = function(input, init) {
           const original = reader[name];
           reader[name] = function(...operands) {
             const pending = Reflect.apply(original, this, operands);
-            return observeReaderOperation(row.pending, name, pending, signals);
+            const returned = observeReaderOperation(row.pending, name, pending, signals);
+            const operation = row.pending.at(-1);
+            void pending.then(() => {}, () => { if (!operation.expectedAbort) remember(workerContext(name, proof.ordinal)); });
+            return returned;
           };
         }
         const release = reader.releaseLock;
@@ -243,8 +484,8 @@ globalThis.fetch = function(input, init) {
         };
         return reader;
       };
-    } catch (error) { proof.errors.push(error); }
-  }, () => {});
+    } catch (error) { remember(workerContext("acquire", proof.ordinal)); proof.errors.push(error); }
+  }, () => { remember(workerContext("guard", proof.ordinal)); });
   return pending;
 };
 async function retire() {
@@ -274,19 +515,23 @@ async function retire() {
 }
 export default { ...handler, async fetch(request, env, context) {
   const path = new URL(request.url).pathname;
-  if (path === "/fixture/retire") return Response.json(await retire());
+  if (path === "/fixture/diagnostic" || path === "/fixture/diagnostics") return await diagnosticRelay(request) ?? new Response(null, { status: 405 });
+  if (path === "/fixture/retire") {
+    try { return Response.json(await retire()); } catch (error) { remember(workerContext("worker_retire")); throw error; }
+  }
   if (path === "/fixture/grants") {
     for (const id of ${JSON.stringify(ids)}) await putGrantCredentials(env, "oauth/" + id + "/abliteration", { provider: "abliteration", kind: "api_key", enabled: true, credential: "fixture-upstream-abliteration" });
     await revokeGrantCredentials(env, "oauth/abliteration_revoked/abliteration");
     return new Response(null, { status: 204 });
   }
   if (path !== "/v1/native/abliteration/chat/completions") return handler.fetch(request, env, context);
+  const identity = requestIdentity(request);
   const record = { returned: deferred(), pending: [] }; records.push(record);
   try {
     return await handler.fetch(request, { ...env, ABLIT_KEY: "must-not-fallback", ABLITERATION_API_KEY: "must-not-fallback" }, {
       waitUntil(pending) { record.pending.push(pending); context.waitUntil(pending); }
     });
-  } finally { record.returned.resolve(); }
+  } catch (error) { remember(identity); throw error; } finally { record.returned.resolve(); }
 } };`;
 }
 
