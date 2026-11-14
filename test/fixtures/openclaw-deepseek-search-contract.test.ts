@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as guardedFetch from "../../infra/net/fetch-guard.js";
 import { fetchWithRuntimeDispatcher, type DispatcherAwareRequestInit } from "../../infra/net/runtime-fetch.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
@@ -14,7 +15,7 @@ const control = process.env.CLAWROUTER_CONTRACT_CONTROL!;
 const nativePath = "/v1/native/deepseek/v1/tools/search";
 const query = "site:example.com synthetic search";
 const nativeFetch = globalThis.fetch;
-const originalGuard = ssrfRuntime.fetchWithSsrFGuard;
+const originalGuard = guardedFetch.fetchWithSsrFGuard;
 const key = (name: string) => `clawrouter-live-ds_${name}-fixture-secret`;
 type Observation = {
   path: string;
@@ -49,7 +50,7 @@ beforeEach(() => {
     if (new URL(request.url).origin !== origin) refuse("unexpected client egress");
     return nativeFetch(request);
   });
-  vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(async options => {
+  const observeGuard: typeof originalGuard = async options => {
     const url = new URL(String(options.url));
     if (url.origin !== origin || !["/v1/catalog", nativePath].includes(url.pathname) || url.search) refuse("unexpected Search route");
     const headers = new Headers(options.init?.headers);
@@ -117,7 +118,11 @@ beforeEach(() => {
         catch (error) { finished({ error }); throw error; }
       } };
     } catch (error) { row.failedBeforeResponse = true; finished({ error }); throw error; }
-  });
+  };
+  // Capability discovery imports the source guard through provider-http;
+  // Search imports its SDK facade. Both enter the same genuine implementation.
+  vi.spyOn(guardedFetch, "fetchWithSsrFGuard").mockImplementation(observeGuard);
+  vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(observeGuard);
 });
 
 afterEach(() => { vi.restoreAllMocks(); expect(unexpected).toEqual([]); });
@@ -157,6 +162,7 @@ async function join(name: string) {
   const worker = results.at(-1);
   if (worker?.status !== "fulfilled" || typeof worker.value !== "string") throw new Error("missing Worker join result");
   const state = JSON.parse(worker.value);
+  expect(selected.map(row => row.path)).toEqual(state.paths);
   expect(state).toMatchObject({ retired: true, charged: 0 });
   if (state.calls) {
     expect(state).toMatchObject({ calls: 1, activeReads: 0, unlocked: true, sourceLocked: false, physicalLocked: false });

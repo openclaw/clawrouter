@@ -182,7 +182,7 @@ async function join(id) {
     for (let cursor = 0; cursor < record.pending.length;) { const batch = record.pending.slice(cursor); cursor += batch.length; await Promise.all(batch); }
   }
   const p = inputs.get(id); await p?.terminal.promise;
-  return { calls: p ? 1 : 0, retired: true, charged: bodyBudgetCharged(), ...(p ? {
+  return { paths: (requests.get(id) ?? []).map(row => row.path), calls: p ? 1 : 0, retired: true, charged: bodyBudgetCharged(), ...(p ? {
     activeReads: p.activeReads, eof: p.eof, canceled: p.canceled, readRejected: p.readRejected, unlocked: p.unlocked,
     sourceLocked: p.source.locked, physicalLocked: p.physical.locked, reservedBeforeFetch: p.reservedBeforeFetch,
   } : {}) };
