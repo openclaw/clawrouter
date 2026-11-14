@@ -40,7 +40,7 @@ let catalogCalls = 0, chatCalls = 0, expectedChatCalls = 0;
 
 // Pure observation/join functions are also exercised by the outer fixture tests.
 type ReaderOperation = { kind: "read" | "cancel"; pending: Promise<unknown>; expectedAbort: boolean };
-function observeReaderOperation(operations: ReaderOperation[], kind: ReaderOperation["kind"], pending: Promise<unknown>, signals: Array<AbortSignal | null | undefined>) {
+function observeReaderOperation<T extends Promise<unknown>>(operations: ReaderOperation[], kind: ReaderOperation["kind"], pending: T, signals: Array<AbortSignal | null | undefined>): T {
   const operation = { kind, pending, expectedAbort: false }; operations.push(operation);
   void pending.then(() => {}, reason => {
     // Match the original request's exact reason at rejection, never an error name
