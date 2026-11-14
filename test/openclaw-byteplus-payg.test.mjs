@@ -24,7 +24,8 @@ test("registered ClawRouter catalog routes BytePlus PAYG turns with original gra
   assert.ok(provider.models.every(m => m.pricing === null));
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-byteplus-client-"));
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs"); let mf, origin;
-  const failures = [];
+  const failures = [], helperRecord = { v: 1, site: "helper", kind: "none", state: "unknown", helperCalled: false, diagnosticCount: null, sdkRecords: null };
+  let evidenceRecords = [];
   try {
     mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(), { directRouter: true });
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
@@ -37,8 +38,8 @@ test("registered ClawRouter catalog routes BytePlus PAYG turns with original gra
     await kv.put("connections/byteplus", JSON.stringify({ providerId: "byteplus", enabled: true }));
     origin = (await mf.unsafeGetDirectURL("router")).origin;
     assert.equal((await fetch(origin + "/fixture/grants", { method: "POST" })).status, 204);
-    await runOpenClawConsumer(t, { source, sourceHead, fixture: new URL("./fixtures/openclaw-byteplus-payg-contract.test.ts", import.meta.url),
-      env: { CLAWROUTER_CONTRACT_ORIGIN: origin, BYTEPLUS_API_KEY: "must-not-fallback", VOLCANO_ENGINE_API_KEY: "must-not-fallback", VOLCENGINE_PLAN_API_KEY: "must-not-fallback", BYTEPLUS_PLAN_API_KEY: "must-not-fallback", ARK_API_KEY: "must-not-fallback" } });
+    await observeConsumerReturn(() => runOpenClawConsumer(t, { source, sourceHead, fixture: new URL("./fixtures/openclaw-byteplus-payg-contract.test.ts", import.meta.url),
+      env: { CLAWROUTER_CONTRACT_ORIGIN: origin, BYTEPLUS_API_KEY: "must-not-fallback", VOLCANO_ENGINE_API_KEY: "must-not-fallback", VOLCENGINE_PLAN_API_KEY: "must-not-fallback", BYTEPLUS_PLAN_API_KEY: "must-not-fallback", ARK_API_KEY: "must-not-fallback" } }), helperRecord);
     // The actual client omits closed rows. Separately prove its raw Worker
     // denial rather than inventing an executable client catalog entry.
     for (const [i, model] of closed.entries()) {
@@ -117,11 +118,15 @@ test("registered ClawRouter catalog routes BytePlus PAYG turns with original gra
       } catch (error) { failures.push(error); }
     }
     if (mf && origin) {
-      try { const records = await retrieveWorkerEvidence(origin); if (failures.length) emitWorkerEvidence(records); }
+      try { evidenceRecords = validateWorkerEvidenceCollection(await retrieveWorkerEvidence(origin)); helperRecord.diagnosticCount = evidenceRecords.length; }
       catch (error) { failures.push(error); }
     }
     try { await mf?.dispose(); } catch (error) { failures.push(error); }
     try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+  }
+  if (failures.length) {
+    try { emitWorkerEvidence(evidenceRecords, undefined, [helperRecord, primaryEvidence(failures[0])]); }
+    catch (error) { failures.push(error); }
   }
   if (failures.length === 1) throw failures[0];
   if (failures.length > 1) throw new AggregateError(failures, "BytePlus contract or retirement failed");
@@ -282,9 +287,9 @@ test("SDK retirement retains unrelated reads and dispatcher failures including u
 // Worker-only evidence. No exception strings or diagnostic values authorize a
 // verdict; the original joinReaderOperations classifier remains unchanged.
 function workerEvidenceProtocol(isProxy) {
-  const numeric = ["input", "reader", "op", "invokeSeq", "settleSeq", "closedSeq", "readSeq", "unlockBefore", "unlockCalls", "unlockReturns", "unlockInvokeSeq", "unlockReturnSeq", "operations", "settled", "suppressed"];
-  const boolean = ["reasonDefined", "closedReasonDefined", "readReasonDefined", "operandPresent", "operandDefined", "signalAborted", "signalReasonDefined", "settleSignalAborted", "settleSignalReasonDefined", "sameClosed", "sameRead", "sameOperand", "sameSignal", "operandSameRead", "operandSameSignal", "allSettled", "bodyLocked", "joinAccepted"];
-  const enums = { signalScope: ["fetch_input"], site: ["read_join", "cancel_join", "suppressed"], kind: ["read", "cancel", "none"], state: ["pending", "fulfilled", "rejected", "sync_throw"], closedState: ["pending", "fulfilled", "rejected"] };
+  const numeric = ["input", "reader", "op", "invokeSeq", "settleSeq", "closedSeq", "readSeq", "unlockBefore", "unlockCalls", "unlockReturns", "unlockInvokeSeq", "unlockReturnSeq", "operations", "settled", "suppressed", "duplicates", "omitted"];
+  const boolean = ["reasonDefined", "closedReasonDefined", "readReasonDefined", "operandPresent", "operandDefined", "signalAborted", "signalReasonDefined", "settleSignalAborted", "settleSignalReasonDefined", "sameClosed", "sameRead", "sameOperand", "sameSignal", "operandSameRead", "operandSameSignal", "allSettled", "bodyLocked", "joinAccepted", "helperCalled"];
+  const enums = { signalScope: ["fetch_input"], site: ["read_join", "cancel_join", "suppressed", "helper", "primary"], kind: ["read", "cancel", "none"], state: ["pending", "fulfilled", "rejected", "sync_throw", "unknown"], failureClass: ["unknown", "undefined", "assertion"], closedState: ["pending", "fulfilled", "rejected"] };
   function validate(value) {
     try {
       if (!value || typeof value !== "object" || isProxy?.(value)) return null;
@@ -292,7 +297,9 @@ function workerEvidenceProtocol(isProxy) {
       for (const key of keys) {
         const d = Object.getOwnPropertyDescriptor(value, key); if (!d || !Object.hasOwn(d, "value")) return null;
         const v = d.value;
-        if (key === "v" ? v !== 1 : numeric.includes(key) ? !(Number.isInteger(v) && v >= 0 && v <= 1_000_000) : boolean.includes(key) ? typeof v !== "boolean" : !enums[key]?.includes(v)) return null;
+        if (["diagnosticCount", "sdkRecords"].includes(key)) { if (v !== null && !(Number.isInteger(v) && v >= 0 && v <= 64)) return null; }
+        else if (["actual", "expected"].includes(key)) { if (v !== null && typeof v !== "boolean" && !(typeof v === "number" && Number.isFinite(v) && Math.abs(v) <= 1_000_000_000)) return null; }
+        else if (key === "v" ? v !== 1 : numeric.includes(key) ? !(Number.isInteger(v) && v >= 0 && v <= 1_000_000) : boolean.includes(key) ? typeof v !== "boolean" : !enums[key]?.includes(v)) return null;
         out[key] = v;
       }
       if (out.v !== 1 || !out.site || !out.kind || !out.state) return null;
@@ -339,14 +346,66 @@ function workerReaderEvidence(reader, input, index, signal) {
   };
 }
 const workerEvidence = workerEvidenceProtocol(nodeTypes.isProxy);
-function emitWorkerEvidence(records, write = process.stdout.write.bind(process.stdout)) {
+function validateWorkerEvidenceCollection(records) {
   if (!Array.isArray(records) || nodeTypes.isProxy(records) || records.length > 64) throw new Error("invalid Worker evidence collection");
   const safe = Array.from({ length: records.length }, (_, i) => {
     const descriptor = Object.getOwnPropertyDescriptor(records, String(i));
     return descriptor && Object.hasOwn(descriptor, "value") ? workerEvidence.validate(descriptor.value) : null;
   });
   if (safe.some(record => !record) || Buffer.byteLength(JSON.stringify(safe)) > 128 * 1024) throw new Error("invalid Worker evidence");
-  for (const record of safe) write(`::error title=BytePlus retirement diagnostic::${JSON.stringify(record).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A")}\n`);
+  return safe;
+}
+function observeConsumerReturn(invoke, record) {
+  record.helperCalled = true; record.state = "pending";
+  let pending;
+  try { pending = invoke(); } catch (error) { record.state = "rejected"; throw error; }
+  void pending.then(() => { record.state = "fulfilled"; }, () => { record.state = "rejected"; });
+  return pending; // Original helper promise; no child-start or SDK-count inference.
+}
+function primaryEvidence(error) {
+  const row = { v: 1, site: "primary", kind: "none", state: "rejected", failureClass: error === undefined ? "undefined" : "unknown", reasonDefined: error !== undefined, actual: null, expected: null };
+  if (!error || typeof error !== "object" || nodeTypes.isProxy(error)) return row;
+  const own = key => { const d = Object.getOwnPropertyDescriptor(error, key); return d && Object.hasOwn(d, "value") ? d.value : undefined; };
+  if (own("code") === "ERR_ASSERTION") {
+    row.failureClass = "assertion";
+    for (const key of ["actual", "expected"]) { const value = own(key); if (typeof value === "boolean" || (typeof value === "number" && Number.isFinite(value) && Math.abs(value) <= 1_000_000_000)) row[key] = value; }
+  }
+  return row;
+}
+function emitWorkerEvidence(records, write = process.stdout.write.bind(process.stdout), outer = []) {
+  if (!Array.isArray(outer) || nodeTypes.isProxy(outer) || outer.length > 2) throw new Error("invalid outer evidence collection");
+  const safe = [...validateWorkerEvidenceCollection(records), ...validateWorkerEvidenceCollection(outer)];
+  const unique = new Map(); let duplicates = 0, suppressed = 0;
+  const finality = row => [row.settled ?? 0, row.unlockReturns ?? 0, row.unlockReturnSeq ?? 0, row.settleSeq ?? 0];
+  for (const row of safe) {
+    if (row.site === "suppressed") { suppressed = Math.min(1_000_000, suppressed + (row.suppressed ?? 0)); continue; }
+    const operation = row.input !== undefined && row.reader !== undefined && row.op !== undefined;
+    const key = row.site === "helper" ? "helper" : operation ? `${row.input}/${row.reader}/${row.op}/${row.kind}` : JSON.stringify(row);
+    const previous = unique.get(key);
+    if (previous) {
+      duplicates++;
+      if (operation) {
+        const next = finality(row), prior = finality(previous), differing = next.findIndex((value, i) => value !== prior[i]);
+        if (differing >= 0 && next[differing] < prior[differing]) continue;
+      } else if (row.site === "helper" && ["fulfilled", "rejected"].includes(previous.state) && !["fulfilled", "rejected"].includes(row.state)) continue;
+    }
+    unique.set(key, row);
+  }
+  const values = [...unique.values()], physical = values.filter(row => ["read_join", "cancel_join"].includes(row.site)).sort((a, b) =>
+    (a.input ?? 0) - (b.input ?? 0) || (a.reader ?? 0) - (b.reader ?? 0) || (a.op ?? 0) - (b.op ?? 0));
+  const first = physical.find(row => row.kind === "read") ?? physical[0];
+  const sibling = first && physical.find(row => row !== first && row.input === first.input && row.reader === first.reader && row.kind === "cancel");
+  const leading = [first, sibling].filter(Boolean);
+  const ordered = [...values.filter(row => row.site === "helper"), ...leading,
+    ...values.filter(row => !["helper", "read_join", "cancel_join"].includes(row.site)), ...physical.filter(row => !leading.includes(row))];
+  const selected = ordered.slice(0, 9), omitted = ordered.length - selected.length;
+  // Actions admits ten error annotations per step, independently of the API's
+  // fifty-annotation request size. Retain the internal 64-record evidence bank.
+  if (duplicates || omitted || suppressed) selected.push({ v: 1, site: "suppressed", kind: "none", state: "fulfilled", duplicates, omitted, suppressed });
+  for (const record of selected) {
+    if (!workerEvidence.validate(record)) throw new Error("invalid compacted evidence");
+    write(`::error title=BytePlus retirement diagnostic::${JSON.stringify(record).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A")}\n`);
+  }
 }
 async function retrieveWorkerEvidence(origin) {
   const response = await fetch(origin + "/fixture/diagnostics", { redirect: "error", signal: AbortSignal.timeout(2000) });
@@ -394,22 +453,78 @@ test("Worker evidence schema rejects private strings, getters, proxies and undef
   const primary = undefined, failures = [primary]; try { emitWorkerEvidence([valid], () => { throw new Error("writer"); }); } catch (error) { failures.push(error); }
   assert.equal(failures.length, 2); assert.equal(failures[0], undefined);
 });
-test("Worker typed evidence reaches an undecorated Actions command through the real Node spec reporter", async () => {
+function crowdedEvidence(outcome) {
+  const read = { v: 1, site: "read_join", kind: "read", state: "rejected", input: 26, reader: 1, op: 32, invokeSeq: 63, settleSeq: 67, settled: 33, unlockReturns: 1, unlockReturnSeq: 69, allSettled: true, bodyLocked: false, joinAccepted: false };
+  const cancel = { ...read, site: "cancel_join", kind: "cancel", state: "fulfilled", op: 33, invokeSeq: 64, settleSeq: 66 };
+  return [
+    { v: 1, site: "helper", kind: "none", state: "pending", helperCalled: true, diagnosticCount: null, sdkRecords: null },
+    ...Array.from({ length: 20 }, () => ({ ...read, unlockReturns: 0, unlockReturnSeq: 0, bodyLocked: true })),
+    ...Array.from({ length: 20 }, () => ({ ...cancel, unlockReturns: 0, unlockReturnSeq: 0, bodyLocked: true })),
+    read, cancel,
+    ...Array.from({ length: 12 }, (_, i) => ({ ...read, input: i + 30 })),
+    { v: 1, site: "helper", kind: "none", state: outcome, helperCalled: true, diagnosticCount: 56, sdkRecords: null },
+  ];
+}
+test("first-ten annotation collector retains final helper facts and original physical snapshots before duplicate overflow", () => {
+  const prefix = "::error title=BytePlus retirement diagnostic::";
+  for (const outcome of ["fulfilled", "rejected"]) {
+    const lines = []; emitWorkerEvidence(crowdedEvidence(outcome), line => lines.push(line));
+    const collected = lines.slice(0, 10).map(line => JSON.parse(line.slice(prefix.length)));
+    assert.equal(lines.length, 10); assert.equal(collected[0].site, "helper"); assert.equal(collected[0].state, outcome);
+    assert.equal(collected[0].diagnosticCount, 56); assert.equal(collected[0].sdkRecords, null);
+    assert.deepEqual(collected.slice(1, 3).map(row => [row.op, row.kind, row.state, row.unlockReturns, row.bodyLocked, row.joinAccepted]),
+      [[32, "read", "rejected", 1, false, false], [33, "cancel", "fulfilled", 1, false, false]]);
+    assert.deepEqual(collected.at(-1), { v: 1, site: "suppressed", kind: "none", state: "fulfilled", duplicates: 41, omitted: 6, suppressed: 0 });
+    assert.ok(collected.every(row => workerEvidence.validate(row) && Buffer.byteLength(JSON.stringify(row)) <= 2048));
+  }
+  const rows = []; emitWorkerEvidence([], line => rows.push(JSON.parse(line.slice(prefix.length))),
+    [{ v: 1, site: "helper", kind: "none", state: "fulfilled", helperCalled: true, diagnosticCount: 0, sdkRecords: null }]);
+  assert.equal(rows[0].sdkRecords, null, "no SDK count is inferred from an empty Worker collection");
+  const withPrimary = []; emitWorkerEvidence(crowdedEvidence("rejected"), line => withPrimary.push(JSON.parse(line.slice(prefix.length))), [primaryEvidence(undefined)]);
+  assert.deepEqual(withPrimary.slice(0, 4).map(row => row.site), ["helper", "read_join", "cancel_join", "primary"]);
+  assert.equal(withPrimary[3].failureClass, "undefined"); assert.equal(withPrimary.length, 10);
+});
+test("helper outcome observes the original promise and preserves undefined rejection independently of reporting", async () => {
+  const record = { v: 1, site: "helper", kind: "none", state: "unknown", helperCalled: false, diagnosticCount: null, sdkRecords: null };
+  const original = Promise.resolve(); assert.equal(observeConsumerReturn(() => original, record), original); await original;
+  assert.equal(record.state, "fulfilled"); assert.equal(record.sdkRecords, null);
+  const rejected = Promise.reject(undefined); assert.equal(observeConsumerReturn(() => rejected, record), rejected);
+  const results = await Promise.allSettled([rejected]); assert.equal(results[0].status, "rejected"); assert.equal(results[0].reason, undefined); assert.equal(record.state, "rejected");
+  assert.throws(() => observeConsumerReturn(() => { throw undefined; }, record), error => error === undefined);
+  let called = 0; const error = { code: "ERR_ASSERTION", actual: 500, expected: 200 };
+  Object.defineProperties(error, { message: { get() { called++; throw undefined; } }, stdout: { get() { called++; throw undefined; } }, stderr: { get() { called++; throw undefined; } } });
+  assert.deepEqual(primaryEvidence(error), { v: 1, site: "primary", kind: "none", state: "rejected", failureClass: "assertion", reasonDefined: true, actual: 500, expected: 200 });
+  assert.equal(primaryEvidence(undefined).failureClass, "undefined"); assert.equal(called, 0);
+  const failures = [undefined]; try { emitWorkerEvidence([], () => { throw undefined; }, [record]); } catch (reason) { failures.push(reason); }
+  assert.deepEqual(failures, [undefined, undefined]);
+});
+test("Worker typed evidence reaches an undecorated bounded first-ten collector through the real Node spec reporter", async () => {
   const temporary = await mkdtemp(join(tmpdir(), "byteplus-reporter-"));
+  const failures = [];
   try {
     const file = join(temporary, "report.test.mjs");
-    await writeFile(file, `import test from "node:test"; import { types as nodeTypes } from "node:util";
+    for (const outcome of ["fulfilled", "rejected"]) {
+      await writeFile(file, `import test from "node:test"; import { types as nodeTypes } from "node:util";
 ${workerEvidenceProtocol.toString()}
 const workerEvidence = workerEvidenceProtocol(nodeTypes.isProxy);
+${validateWorkerEvidenceCollection.toString()}
 ${emitWorkerEvidence.toString()}
-test("fixed safe report", () => emitWorkerEvidence([{ v: 1, site: "read_join", kind: "read", state: "rejected" }]));`);
-    // Remove only Node's inherited nested-test marker for this standalone
-    // reporter probe, matching the repository's existing reporter regressions.
-    const { NODE_TEST_CONTEXT: _context, ...env } = process.env;
-    const { stdout } = await promisify(execFile)(process.execPath, ["--test", file], { env, timeout: 30_000, maxBuffer: 128 * 1024 });
-    assert.match(stdout, /✔ fixed safe report/); assert.match(stdout, /tests 1/);
-    assert.ok(stdout.split("\n").some(line => line.startsWith("::error title=BytePlus retirement diagnostic::{")));
-  } finally { await rm(temporary, { recursive: true, force: true }); }
+test("fixed safe report", () => emitWorkerEvidence(${JSON.stringify(crowdedEvidence(outcome))}));`);
+      // Match the standalone Node reporter probe; never read actual SDK child output.
+      const { NODE_TEST_CONTEXT: _context, ...env } = process.env;
+      const { stdout } = await promisify(execFile)(process.execPath, ["--test", file], { env, timeout: 30_000, maxBuffer: 128 * 1024 });
+      assert.match(stdout, /✔ fixed safe report/); assert.match(stdout, /tests 1/);
+      const prefix = "::error title=BytePlus retirement diagnostic::", lines = stdout.split("\n").filter(line => line.includes(prefix));
+      assert.equal(lines.length, 10); assert.ok(lines.every(line => line.startsWith(prefix)));
+      const collected = lines.slice(0, 10).map(line => JSON.parse(line.slice(prefix.length)));
+      assert.equal(collected[0].state, outcome); assert.equal(collected[0].diagnosticCount, 56); assert.equal(collected[0].sdkRecords, null);
+      assert.equal(collected[1].op, 32); assert.equal(collected[2].op, 33); assert.equal(collected[2].state, "fulfilled");
+      assert.ok(collected.slice(1, 3).every(row => row.unlockReturns === 1 && row.bodyLocked === false && row.joinAccepted === false));
+      assert.equal(collected[9].site, "suppressed");
+    }
+  } catch (error) { failures.push(error); }
+  finally { try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); } }
+  if (failures.length) throw new AggregateError(failures, "reporter regression or cleanup failed");
 });
 test("real Worker relay preserves a fulfilled sibling snapshot from the strict failed-reader join", { timeout: 30_000 }, async () => {
   const temporary = await mkdtemp(join(tmpdir(), "byteplus-evidence-")); let mf; const failures = [];
