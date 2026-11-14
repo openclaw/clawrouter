@@ -82,7 +82,7 @@ async function withWorker(run) {
   finally {
     // Even a failed assertion releases the real producer and joins original
     // Worker waitUntil/read/cancel promises before disposal. Cleanup is not proof.
-    gates?.releaseAll();
+    try { gates?.releaseAll(); } catch (error) { failures.push(error); }
     try { await retire?.(); } catch (error) { failures.push(error); }
     try { await gates?.close(); } catch (error) { failures.push(error); }
     try { await mf?.dispose(); } catch (error) { failures.push(error); }
@@ -191,6 +191,93 @@ async function verifyCalls(f, selected) {
   })), row.id);
 }
 
+function observeReaderOperation(operations, kind, pending, signal) {
+  const operation = { kind, pending, expectedAbort: false, rejected: false, reason: undefined }; operations.push(operation);
+  void pending.then(() => {}, reason => {
+    operation.rejected = true; operation.reason = reason;
+    // Capture the original transport signal at rejection, never the caller's
+    // separate waiter signal, an error name, or a signal aborted only later.
+    operation.expectedAbort = kind === "read" && reason !== undefined && signal?.aborted === true && signal.reason === reason;
+  });
+  return pending;
+}
+async function joinReaderOperations(operations) {
+  const results = await Promise.allSettled(operations.map(operation => operation.pending));
+  const failures = results.flatMap((result, index) => result.status === "rejected" && !operations[index].expectedAbort ? [result.reason] : []);
+  if (failures.length) throw new AggregateError(failures, "original catalog reader operations failed");
+}
+
+// Execute the actual join emitted into the Worker, not a second implementation.
+function workerJoinForTest(proofs, original = [{ returned: { promise: Promise.resolve() }, pending: [] }]) {
+  const text = routerFixture(), start = text.indexOf("async function join(id) {"), end = text.indexOf("\nexport default {", start);
+  assert.ok(start >= 0 && end > start);
+  return new Function("records", "inputs", "view", observeReaderOperation.toString() + "\n" + joinReaderOperations.toString()
+    + "\n" + text.slice(start, end) + "; return join;")(
+    new Map([["observer", original]]), new Map([["observer", proofs]]), () => ({ retired: true }));
+}
+function failingReader(kind, signal) {
+  const terminal = deferred(), proof = { terminal, pending: [], errors: [], pendingSettled: false };
+  let reject;
+  const stream = kind === "read" ? new ReadableStream({ start(controller) { reject = reason => controller.error(reason); } })
+    : new ReadableStream({ cancel() { return new Promise((_, fail) => { reject = fail; }); } });
+  const reader = stream.getReader(), pending = kind === "read" ? reader.read() : reader.cancel();
+  assert.equal(observeReaderOperation(proof.pending, kind, pending, signal), pending);
+  void pending.then(() => { reader.releaseLock(); terminal.resolve(); }, () => { reader.releaseLock(); terminal.resolve(); });
+  return { proof, pending, reject };
+}
+const originalFailures = error => error instanceof AggregateError ? error.errors.flatMap(originalFailures) : [error];
+
+test("original Worker join rejects cancellation even with the exact transport abort reason", async () => {
+  const controller = new AbortController(), reason = new Error("transport cancellation failed"); controller.abort(reason);
+  const row = failingReader("cancel", controller.signal); row.reject(reason);
+  await assert.rejects(workerJoinForTest([row.proof])("observer"), error => originalFailures(error).includes(reason));
+  assert.equal(row.proof.pendingSettled, false);
+});
+test("original Worker join rejects unrelated reads despite a matching error name", async () => {
+  const controller = new AbortController(), owned = new Error("owned"), foreign = new Error("unrelated");
+  owned.name = foreign.name = "AbortError"; controller.abort(owned);
+  const row = failingReader("read", controller.signal); row.reject(foreign);
+  await assert.rejects(workerJoinForTest([row.proof])("observer"), error => originalFailures(error).includes(foreign));
+  assert.equal(row.proof.pendingSettled, false);
+});
+test("original Worker join accepts only an already-signaled exact transport-owned read reason", async () => {
+  const controller = new AbortController(), reason = new Error("owned read abort");
+  const row = failingReader("read", controller.signal); controller.abort(reason); row.reject(reason);
+  assert.deepEqual(await workerJoinForTest([row.proof])("observer"), { retired: true });
+  assert.equal(row.proof.pendingSettled, true);
+});
+test("original Worker join cannot excuse a read failure with a later abort", async () => {
+  const controller = new AbortController(), reason = new Error("earlier read failure");
+  const row = failingReader("read", controller.signal); row.reject(reason); await row.pending.catch(() => {}); controller.abort(reason);
+  await assert.rejects(workerJoinForTest([row.proof])("observer"), error => originalFailures(error).includes(reason));
+  assert.equal(row.proof.pendingSettled, false);
+});
+test("original Worker join retains primary and every cleanup failure while joining later operations", async () => {
+  const primary = new Error("original Worker failure"), waitUntil = new Error("original waitUntil failure");
+  const read = new Error("original read failure"), cancel = new Error("original cancel failure");
+  const first = failingReader("read"), later = failingReader("cancel"); first.reject(read);
+  const pending = Promise.reject(waitUntil); void pending.catch(() => {});
+  const joined = workerJoinForTest([first.proof, later.proof], [{ returned: { promise: Promise.resolve() }, pending: [pending], failure: primary }])("observer");
+  let finished = false; void joined.then(() => { finished = true; }, () => { finished = true; });
+  try {
+    await first.pending.catch(() => {}); await Promise.resolve(); assert.equal(finished, false);
+    later.reject(cancel);
+    await assert.rejects(joined, error => {
+      const failures = originalFailures(error);
+      assert.deepEqual(failures, [primary, waitUntil, read, cancel]); return true;
+    });
+    assert.equal(first.proof.pendingSettled, false); assert.equal(later.proof.pendingSettled, false);
+  } finally { later.reject(cancel); await Promise.allSettled([first.pending, later.pending, joined]); }
+});
+test("original Worker join preserves undefined cancellation and primary failures", async () => {
+  const row = failingReader("cancel"); row.reject(undefined);
+  const original = [{ returned: { promise: Promise.resolve() }, pending: [], failure: undefined }];
+  await assert.rejects(workerJoinForTest([row.proof], original)("observer"), error => {
+    assert.deepEqual(originalFailures(error), [undefined, undefined]); return true;
+  });
+  assert.equal(row.proof.pendingSettled, false);
+});
+
 function routerFixture() {
   return String.raw`
 import worker from "./worker/index.ts";
@@ -200,6 +287,8 @@ import { putGrantCredentials } from "./worker/grant-credentials.ts";
 import { sha256Hex } from "./worker/utils.ts";
 import { bodyBudgetCharged } from "./worker/body-budget.ts";
 const cases = CASES, rawFetch = globalThis.fetch.bind(globalThis);
+${observeReaderOperation.toString()}
+${joinReaderOperations.toString()}
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 const records = new Map(), inputs = new Map(), ingested = new Map(cases.map(row => [row.id, deferred()]));
 let active, fixtureEnv;
@@ -212,7 +301,7 @@ globalThis.fetch = async (input, init) => {
   const list = inputs.get(row.id) ?? []; inputs.set(row.id, list);
   if (list.some(value => value.url === request.url)) throw new Error("repeated provider egress");
   const proof = { url: request.url, onlyExpectedHeaders: JSON.stringify([...request.headers]) === JSON.stringify([["accept", "application/json"], ["authorization", "Bearer catalog-owner-" + row.id]]),
-    activeReads: 0, eof: false, canceled: false, unlocked: false, readRejected: false, aborted: false, terminal: deferred(), pending: [] };
+    activeReads: 0, eof: false, canceled: false, unlocked: false, readRejected: false, aborted: false, terminal: deferred(), pending: [], errors: [] };
   list.push(proof);
   request.signal.addEventListener("abort", () => { proof.aborted = true; }, { once: true });
   let response;
@@ -223,25 +312,26 @@ globalThis.fetch = async (input, init) => {
         ...(row.scenario === "grant_revoke" ? { enabled: false, revokedAt: new Date().toISOString() } : { credential: "changed-owner-" + row.id }) });
     }
   }
-  catch (error) { proof.readRejected = true; proof.terminal.resolve(); throw error; }
+  catch (error) { proof.errors.push(error); proof.readRejected = true; proof.terminal.resolve(); throw error; }
   const physical = response.body;
-  if (!physical) { proof.readRejected = true; proof.terminal.resolve(); throw new Error("missing real public catalog body"); }
+  if (!physical) { const error = new Error("missing real public catalog body"); proof.errors.push(error); proof.readRejected = true; proof.terminal.resolve(); throw error; }
   proof.status = response.status; proof.headers = [...response.headers]; proof.physical = physical;
   const reader = physical.getReader();
   const unlock = () => { if (!proof.unlocked) { reader.releaseLock(); proof.unlocked = true; proof.terminal.resolve(); } };
   const source = new ReadableStream({
     async pull(controller) {
-      proof.activeReads++;
+      proof.activeReads++; let pending, operation;
       try {
-        const pending = reader.read(); proof.pending.push(pending);
+        pending = reader.read(); observeReaderOperation(proof.pending, "read", pending, request.signal); operation = proof.pending.at(-1);
         const next = await pending;
         if (next.done) { proof.eof = true; controller.close(); } else controller.enqueue(next.value);
-      } catch (error) { proof.readRejected = true; controller.error(error); }
+      } catch (error) { if (!operation?.rejected || operation.reason !== error) proof.errors.push(error); proof.readRejected = true; controller.error(error); }
       finally { proof.activeReads--; if (proof.eof || proof.readRejected) unlock(); }
     },
     async cancel(reason) {
-      proof.canceled = true;
-      try { const pending = reader.cancel(reason); proof.pending.push(pending); await pending; }
+      proof.canceled = true; let pending;
+      try { pending = reader.cancel(reason); observeReaderOperation(proof.pending, "cancel", pending, request.signal); await pending; }
+      catch (error) { if (!pending) proof.errors.push(error); throw error; }
       finally { unlock(); }
     },
   }, { highWaterMark: 0 });
@@ -254,14 +344,26 @@ const view = (id, retired = false) => ({ calls: (inputs.get(id) ?? []).length, r
     sourceLocked: p.source?.locked ?? false, physicalLocked: p.physical?.locked ?? false, pendingSettled: p.pendingSettled === true })) });
 async function join(id) {
   const original = records.get(id); if (!original?.length) throw new Error("no original client request");
-  for (const record of original) {
+  const requests = await Promise.allSettled(original.map(async record => {
     await record.returned.promise;
-    for (let cursor = 0; cursor < record.pending.length;) { const batch = record.pending.slice(cursor); cursor += batch.length; await Promise.all(batch); }
-  }
-  for (const proof of inputs.get(id) ?? []) {
+    const failures = Object.hasOwn(record, "failure") ? [record.failure] : [];
+    for (let cursor = 0; cursor < record.pending.length;) {
+      const batch = record.pending.slice(cursor); cursor += batch.length;
+      const settled = await Promise.allSettled(batch);
+      failures.push(...settled.flatMap(result => result.status === "rejected" ? [result.reason] : []));
+    }
+    return failures;
+  }));
+  const failures = requests.flatMap(result => result.status === "rejected" ? [result.reason] : result.value);
+  const readers = await Promise.allSettled((inputs.get(id) ?? []).map(async proof => {
     await proof.terminal.promise;
-    await Promise.allSettled(proof.pending); proof.pendingSettled = true;
-  }
+    const joined = await Promise.allSettled([joinReaderOperations(proof.pending)]);
+    const failures = [...proof.errors, ...joined.flatMap(result => result.status === "rejected" ? [result.reason] : [])];
+    if (failures.length) throw new AggregateError(failures, "original upstream catalog operations failed");
+    proof.pendingSettled = true;
+  }));
+  failures.push(...readers.flatMap(result => result.status === "rejected" ? [result.reason] : []));
+  if (failures.length) throw new AggregateError(failures, "original catalog request or retirement failed");
   return view(id, true);
 }
 export default {
@@ -285,7 +387,8 @@ export default {
     }
     if (path === "/__catalog/retire" && request.method === "POST") {
       const results = await Promise.allSettled([...records.keys()].map(join));
-      for (const result of results) if (result.status === "rejected") throw result.reason;
+      const failures = results.flatMap(result => result.status === "rejected" ? [result.reason] : []);
+      if (failures.length) throw new AggregateError(failures, "catalog retirements failed");
       return Response.json({ retired: results.length });
     }
     const control = /^\/__catalog\/(activate|state|join|revoke|usage)\/([a-z_]+)$/.exec(path);
@@ -324,6 +427,7 @@ export default {
       if (path === "/v1/catalog" && response.ok && row.scenario === "rotated_old") await admin("credentials/" + id + "/rotate", { secretSha256: await sha256Hex("rotated-secret") });
       return response;
     }
+    catch (error) { record.failure = error; throw error; }
     finally { record.returned.resolve(); }
   },
   async queue(batch, env) { await worker.queue(batch, env); for (const message of batch.messages) if ("type" in message.body) ingested.get(message.body.credential_id)?.resolve(); },
