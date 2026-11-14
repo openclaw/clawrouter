@@ -338,3 +338,31 @@ Programmatic callers can use `await createVotePolicy(input, policy)` from
 bypass the exact stopping certificate. It only changes call order. Freeze the
 table using training data and evaluate separately before claiming savings;
 loading a table does not qualify its training procedure or cost estimates.
+
+### Train call order offline
+
+Create a training file with the same `version`, `choices`, `workers`, and
+`cases` fields used by the replay tool. Each case contains complete `answers`
+and nonnegative `costs` arrays in canonical worker order. Model IDs are optional
+for offline replay; include them when binding the policy to an endpoint panel.
+
+```sh
+node scripts/train-fusion-vote-policy.mjs training.json policy.json
+```
+
+The trainer uses observed answer patterns and recorded costs to minimize
+expected remaining call cost. It never reads correctness labels or changes
+vote weights. Every stopping decision uses the existing exact-vote certificate.
+Equal-cost choices follow canonical worker order. The output contains a bound
+policy and training-only cost statistics, and an existing output file is never
+overwritten.
+
+Training is limited to eight workers, 10,000 cases, 50,000 explored states,
+20,000 policy entries, and 5,000,000 row visits. Input and output files are each
+limited to 4 MiB. Exceeding a limit fails without writing a partial policy.
+These limits bound offline search; there are no model calls.
+
+Recorded costs are assumed independent of call order. Training statistics omit
+training cost and do not prove savings on future requests. Freeze the trained
+policy, then replay separate evaluation traces. Live pricing, cache behavior,
+model changes, and latency require their own evaluation.
