@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
+import { readFileSync } from "node:fs";
+import { stripTypeScriptTypes } from "node:module";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,18 +32,25 @@ const cases = Object.entries(contracts).flatMap(([provider, contract]) => {
   const model = compiled.models[0];
   return scenarios.map(scenario => ({ id: `${provider}_${scenario}`, provider, scenario, ...contract,
     route: contract.native ? `/v1/native/${provider}/models` : `/v1/proxy/${provider}/${contract.endpoint}`,
-    model: model.id, upstream: model.upstream }));
+    endpointPath: endpoint.path, model: model.id, upstream: model.upstream }));
 });
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
+
+// Execute the SDK fixture's exact wire assertion without loading the SDK.
+const sdkFixtureText = readFileSync(new URL("./fixtures/openclaw-public-catalogs-contract.test.ts", import.meta.url), "utf8");
+const assertionStart = sdkFixtureText.indexOf("function assertRawCatalogOffer(");
+const assertionEnd = sdkFixtureText.indexOf("// END raw catalog assertion", assertionStart);
+assert.ok(assertionStart >= 0 && assertionEnd > assertionStart);
+const assertRawCatalogOffer = new Function(stripTypeScriptTypes(sdkFixtureText.slice(assertionStart, assertionEnd)) + "; return assertRawCatalogOffer;")();
 
 // BEGIN catalog diagnostic protocol
 const diagnosticProviders = ["cerebras", "nvidia", "chutes", "venice"];
 const diagnosticTestIds = new Set(["none", ...diagnosticProviders.flatMap(provider => ["inventory", "stale", "malformed", "abort"].map(kind => provider + "_" + kind))]);
 const diagnosticCaseIds = new Set(["none", ...diagnosticProviders.flatMap(provider => ["table", "empty", "stale", "malformed", "abort"].map(kind => provider + "_" + kind))]);
-const diagnosticPhases = new Set(["setup", "facade_load", "registration", "body", "native_fetch", "offer_observation", "stale_revocation", "transport_join", "worker_join", "restoration", "state_cleanup", "worker_acquisition", "sdk_process", "case_verify", "worker_retirement", "sql_receipt", "upstream_contract", "producer_release", "control_close", "worker_dispose", "scratch_cleanup", "relay"]);
+const diagnosticPhases = new Set(["setup", "facade_load", "registration", "body", "native_fetch", "offer_observation", "offer_json", "provider_find", "routes_select", "offer_assert", "route_assert", "stale_revocation", "transport_join", "worker_join", "restoration", "state_cleanup", "worker_acquisition", "sdk_process", "case_verify", "worker_retirement", "sql_receipt", "upstream_contract", "producer_release", "control_close", "worker_dispose", "scratch_cleanup", "relay"]);
 const diagnosticCategories = new Set(["error", "assertion", "aggregate", "undefined", "null", "unknown", "child_process", "limit"]);
 const diagnosticNames = new Set(["Error", "TypeError", "RangeError", "AssertionError", "AggregateError", "AbortError", "TimeoutError", "undefined", "null", "unknown"]);
-const diagnosticFields = new Set(["none", "assertion", "exit_code", "killed", "sdk_records", "suppressed", "status", "retirement", "receipt", "upstream", "close", "cache"]);
+const diagnosticFields = new Set(["none", "assertion", "exit_code", "killed", "sdk_records", "suppressed", "status", "retirement", "receipt", "upstream", "close", "cache", "provider_present", "route_count", "offer_count", "route_kind", "offer_route", "offer_eligible", "route_methods", "route_path", "request_format", "response_format"]);
 const diagnosticCodes = new Set(["ERR_ASSERTION", "ERR_ASSERTION_ERROR", "ECONNRESET", "ABORT_ERR", "UND_ERR_ABORTED", "UND_ERR_HEADERS_TIMEOUT", "ETIMEDOUT", "SIGTERM", "SIGKILL"]);
 function diagnosticData(value, key) {
   if ((typeof value !== "object" || value === null) && typeof value !== "function") return undefined;
@@ -389,6 +398,8 @@ test("catalog diagnostic schema rejects control text, extra data and hostile get
   const hostile = Object.defineProperties({}, Object.fromEntries(["name", "code", "expected", "actual", "message", "stack"].map(key => [key, { get() { getters++; throw new Error("must not run"); } }])));
   assert.equal(failureDiagnostic("sdk", "none", "none", "setup", hostile).category, "unknown");
   assert.equal(safeDiagnosticRecord(Object.defineProperty({ ...base }, "field", { get() { getters++; return "none"; } })), undefined);
+  const chaiLike = Object.create(Object.defineProperty({}, "name", { get() { getters++; throw new Error("must not call prototype name getter"); } }));
+  assert.equal(failureDiagnostic("sdk", "none", "none", "offer_assert", chaiLike, "offer_eligible").category, "unknown");
   assert.equal(getters, 0);
   const assertion = new assert.AssertionError({ expected: 4, actual: 1, operator: "strictEqual", message: "not relayed" });
   assert.deepEqual(failureDiagnostic("sdk", "chutes_inventory", "chutes_table", "body", assertion, "cache"), {
@@ -444,15 +455,36 @@ test("catalog diagnostic reporting failure preserves undefined body and all clea
 });
 
 // This is real Worker/SQLite preparation proof, not an execution of the SDK.
-test("four compiled public catalogs preserve owner isolation, bodyless formats and physical reader retirement", { timeout: 120_000 }, async () => {
+test("four compiled public catalogs preserve owner isolation, bodyless formats and physical reader retirement", { timeout: 120_000 }, async t => {
   await withWorker(async f => {
     const selected = cases.filter(row => row.scenario !== "abort");
     for (const row of selected) {
       await f.command(`/__catalog/activate/${row.id}`, "POST");
       const headers = { authorization: `Bearer clawrouter-live-${row.id}-fixture-secret` };
       const catalog = await (await fetch(`${f.origin}/v1/catalog`, { headers })).json();
+      assertRawCatalogOffer(catalog, row, assert.deepEqual, () => {});
       const provider = catalog.providers.find(value => value.id === row.provider);
       assert.deepEqual(provider.offers.filter(offer => offer.endpoint === row.endpoint).map(offer => offer.route), [row.route]);
+      if (row.scenario === "table") {
+        const malformed = [
+          ["missing route", "route_count", value => { value.routes = value.routes.filter(route => route.endpoint !== row.endpoint); }],
+          ["duplicate offer", "offer_count", value => { value.offers.push(value.offers.find(offer => offer.endpoint === row.endpoint)); }],
+          ["wrong offer kind", "route_kind", value => { value.offers.find(offer => offer.endpoint === row.endpoint).routeKind = "wrong"; }],
+          ["wrong offer route", "offer_route", value => { value.offers.find(offer => offer.endpoint === row.endpoint).route = "/wrong"; }],
+          ["ineligible offer", "offer_eligible", value => { value.offers.find(offer => offer.endpoint === row.endpoint).eligible = false; }],
+          ["wrong method", "route_methods", value => { value.routes.find(route => route.endpoint === row.endpoint).methods = ["POST"]; }],
+          ["wrong path", "route_path", value => { value.routes.find(route => route.endpoint === row.endpoint).path = "/wrong"; }],
+          ["missing request format", "request_format", value => { delete value.routes.find(route => route.endpoint === row.endpoint).requestFormat; }],
+          ["wrong request format", "request_format", value => { value.routes.find(route => route.endpoint === row.endpoint).requestFormat = "wrong"; }],
+          ["wrong response format", "response_format", value => { value.routes.find(route => route.endpoint === row.endpoint).responseFormat = "wrong"; }],
+        ];
+        for (const [name, expectedField, mutate] of malformed) await t.test(row.provider + " " + name, () => {
+          const copy = structuredClone(catalog); mutate(copy.providers.find(value => value.id === row.provider));
+          let field;
+          assert.throws(() => assertRawCatalogOffer(copy, row, assert.deepEqual, (_, value) => { field = value; }), assert.AssertionError);
+          assert.equal(field, expectedField);
+        });
+      }
       if (row.scenario === "stale") await f.command(`/__catalog/revoke/${row.id}`, "POST");
       const response = await fetch(f.origin + row.route, { headers });
       const body = await response.json();

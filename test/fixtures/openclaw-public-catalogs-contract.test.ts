@@ -14,7 +14,7 @@ import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 
 type Scenario = "table" | "empty" | "stale" | "malformed" | "abort";
 type Case = { id: string; provider: string; scenario: Scenario; endpoint: string; format: string;
-  native: boolean; route: string; model: string; upstream: string; urls: string[] };
+  native: boolean; route: string; endpointPath: string; model: string; upstream: string; urls: string[] };
 const expectedHead = "1536faab19f2adf524b7ef1acef5c24501b35652";
 const origin = process.env.CLAWROUTER_CONTRACT_ORIGIN!;
 const control = process.env.CLAWROUTER_CONTRACT_CONTROL!;
@@ -70,10 +70,10 @@ function invokeOperation<T>(row: Observation, kind: Operation["kind"], invoke: (
 const diagnosticProviders = ["cerebras", "nvidia", "chutes", "venice"];
 const diagnosticTestIds = new Set(["none", ...diagnosticProviders.flatMap(provider => ["inventory", "stale", "malformed", "abort"].map(kind => provider + "_" + kind))]);
 const diagnosticCaseIds = new Set(["none", ...diagnosticProviders.flatMap(provider => ["table", "empty", "stale", "malformed", "abort"].map(kind => provider + "_" + kind))]);
-const diagnosticPhases = new Set(["setup", "facade_load", "registration", "body", "native_fetch", "offer_observation", "stale_revocation", "transport_join", "worker_join", "restoration", "state_cleanup", "worker_acquisition", "sdk_process", "case_verify", "worker_retirement", "sql_receipt", "upstream_contract", "producer_release", "control_close", "worker_dispose", "scratch_cleanup", "relay"]);
+const diagnosticPhases = new Set(["setup", "facade_load", "registration", "body", "native_fetch", "offer_observation", "offer_json", "provider_find", "routes_select", "offer_assert", "route_assert", "stale_revocation", "transport_join", "worker_join", "restoration", "state_cleanup", "worker_acquisition", "sdk_process", "case_verify", "worker_retirement", "sql_receipt", "upstream_contract", "producer_release", "control_close", "worker_dispose", "scratch_cleanup", "relay"]);
 const diagnosticCategories = new Set(["error", "assertion", "aggregate", "undefined", "null", "unknown", "child_process", "limit"]);
 const diagnosticNames = new Set(["Error", "TypeError", "RangeError", "AssertionError", "AggregateError", "AbortError", "TimeoutError", "undefined", "null", "unknown"]);
-const diagnosticFields = new Set(["none", "assertion", "exit_code", "killed", "sdk_records", "suppressed", "status", "retirement", "receipt", "upstream", "close", "cache"]);
+const diagnosticFields = new Set(["none", "assertion", "exit_code", "killed", "sdk_records", "suppressed", "status", "retirement", "receipt", "upstream", "close", "cache", "provider_present", "route_count", "offer_count", "route_kind", "offer_route", "offer_eligible", "route_methods", "route_path", "request_format", "response_format"]);
 const diagnosticCodes = new Set(["ERR_ASSERTION", "ERR_ASSERTION_ERROR", "ECONNRESET", "ABORT_ERR", "UND_ERR_ABORTED", "UND_ERR_HEADERS_TIMEOUT", "ETIMEDOUT", "SIGTERM", "SIGKILL"]);
 function diagnosticData(value: unknown, key: string): unknown {
   if ((typeof value !== "object" || value === null) && typeof value !== "function") return undefined;
@@ -117,12 +117,15 @@ function failureDiagnostic(layer: string, testId: string, caseId: string, phase:
 // END catalog diagnostic protocol
 
 let diagnosticTestId = "none", diagnosticCaseId = "none";
-async function reportDiagnostic(phase: string, error: unknown, caseId = diagnosticCaseId, field = "none"): Promise<void> {
+async function reportDiagnostic(phase: string, error: unknown, caseId = diagnosticCaseId, field = "none", comparison: { actual?: unknown; expected?: unknown } = {}): Promise<void> {
   // One independently bounded call for this new execution only. Reporting can
   // never replace the original failure or establish transport retirement.
   try {
     const record = failureDiagnostic("sdk", diagnosticTestId, caseId, phase, error, field);
     if (!record) return;
+    for (const key of ["actual", "expected"] as const) {
+      const value = diagnosticData(comparison, key); if (diagnosticPrimitive(value)) record[key] = value;
+    }
     const endpoint = new URL(control);
     if (endpoint.protocol !== "http:" || endpoint.hostname !== "127.0.0.1" || endpoint.pathname !== "/" || endpoint.search || endpoint.hash || endpoint.username || endpoint.password) return;
     endpoint.pathname = "/diagnostic";
@@ -183,6 +186,33 @@ beforeEach(async context => {
   } catch (error) { await reportDiagnostic("setup", error); throw error; }
 });
 
+// The wire catalog keeps formats on routes; the client enriches offers later.
+function assertRawCatalogOffer(
+  body: { providers: Array<{ id: string; offers: Array<{ endpoint: string; routeKind: string; route: string; eligible: boolean }>;
+    routes: Array<{ endpoint: string; methods: string[]; path: string; requestFormat: string; responseFormat: string }> }> },
+  row: Pick<Case, "provider" | "endpoint" | "native" | "route" | "endpointPath" | "format">,
+  check: (actual: unknown, expected: unknown) => void,
+  mark: (phase: string, field: string) => void,
+): void {
+  mark("provider_find", "provider_present");
+  const provider = body.providers.find(value => value.id === row.provider);
+  check(provider !== undefined, true);
+  mark("routes_select", "route_count");
+  const routes = provider!.routes.filter(value => value.endpoint === row.endpoint);
+  check(routes.length, 1);
+  mark("offer_assert", "offer_count");
+  const offers = provider!.offers.filter(value => value.endpoint === row.endpoint);
+  check(offers.length, 1);
+  mark("offer_assert", "route_kind"); check(offers[0]!.routeKind, row.native ? "native" : "manifest");
+  mark("offer_assert", "offer_route"); check(offers[0]!.route, row.route);
+  mark("offer_assert", "offer_eligible"); check(offers[0]!.eligible, true);
+  mark("route_assert", "route_methods"); check(routes[0]!.methods, ["GET"]);
+  mark("route_assert", "route_path"); check(routes[0]!.path, row.endpointPath);
+  mark("route_assert", "request_format"); check(routes[0]!.requestFormat, row.format);
+  mark("route_assert", "response_format"); check(routes[0]!.responseFormat, row.format);
+}
+// END raw catalog assertion
+
 async function observeRequest(input: RequestInfo | URL, supplied?: RequestInit): Promise<Response> {
   try { return await observeNativeRequest(input, supplied); }
   catch (error) { await reportDiagnostic("native_fetch", error); throw error; }
@@ -213,23 +243,31 @@ async function observeNativeRequest(input: RequestInfo | URL, supplied?: Request
   } as typeof dispatcher.close);
   const response = await Reflect.apply(originalRuntimeFetch, undici, [input, supplied]) as unknown as Response;
   observation.response = response; observation.status = response.status;
+  let offerPhase = "offer_json", offerField = "none", comparison: { actual?: unknown; expected?: unknown } = {};
+  const mark = (phase: string, field: string) => { offerPhase = phase; offerField = field; comparison = {}; };
+  const check = (actual: unknown, expected: unknown) => {
+    // Capture only bounded primitive operands of this known assertion, never
+    // Chai's name getter or arbitrary exception properties.
+    comparison = {};
+    if (diagnosticPrimitive(actual)) comparison.actual = actual;
+    if (diagnosticPrimitive(expected)) comparison.expected = expected;
+    expect(actual).toEqual(expected);
+  };
   try {
     if (url.pathname === "/v1/catalog") {
       const body = await observeOperation(observation, "read", response.clone().json());
-      const provider = body.providers.find((value: { id: string }) => value.id === row.provider);
-      const offers = provider.offers.filter((value: { endpoint: string }) => value.endpoint === row.endpoint);
-      expect(offers).toEqual([expect.objectContaining({ routeKind: row.native ? "native" : "manifest",
-        route: row.route, eligible: true, requestFormat: row.format, responseFormat: row.format })]);
+      assertRawCatalogOffer(body, row, check, mark);
       // Genuine old offer observed; mutate the original Worker owner exactly
       // once before returning this same response to the registered client.
       if (row.scenario === "stale") {
+        mark("stale_revocation", "none");
         observation.revocations++;
         try { expect(JSON.parse(await command("/__catalog/revoke/" + row.id, "POST"))).toEqual({ changed: true }); }
         catch (error) { await reportDiagnostic("stale_revocation", error, row.id); throw error; }
       }
     } else if (!response.ok) observation.errorCode = (await observeOperation(observation, "read", response.clone().json())).error?.code;
   } catch (error) {
-    await reportDiagnostic("offer_observation", error, row.id);
+    await reportDiagnostic(offerPhase, error, row.id, offerField, comparison);
     unexpected.push(error);
     // Do not await a tee cancellation inside fetch: the original guard must
     // first get its rejection and retire its original transport.
