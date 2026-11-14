@@ -98,7 +98,7 @@ function emitDiagnostics(records, failures, write) {
       if (record.metadata) continue;
       if (record.operation === "capacity") { suppressed += record.ordinal; continue; }
       const o = record.observation;
-      const key = o?.input !== undefined && o?.reader !== undefined && o?.op !== undefined ? `${record.source}/${o.input}/${o.reader}/${o.op}/${o.kind}` : JSON.stringify(record);
+      const key = o?.input !== undefined && o?.reader !== undefined && o?.op !== undefined ? `${record.source}/${record.test}/${record.scenario}/${o.input}/${o.reader}/${o.op}/${o.kind}` : JSON.stringify(record);
       const prior = unique.get(key);
       if (prior) {
         suppressed++;
@@ -626,6 +626,25 @@ test("Abliteration diagnostic relay bounds bytes, record count, schema and fresh
   assert.throws(() => emitDiagnostic({ ...record, operation: "private\n::error" }, () => { throw new Error("must not reach"); }), /invalid diagnostic/);
   const tooLarge = new Response(new Uint8Array(128 * 1024 + 1));
   await assert.rejects(diagnostic.read(tooLarge.body, 128 * 1024), /capacity/); assert.equal(tooLarge.body.locked, false);
+});
+
+test("Abliteration annotation deduplication retains distinct SDK cases and only compares same-case snapshots", () => {
+  const row = (test, scenario, settled) => diagnostic.record({ source: "sdk", test, scenario, operation: "reader_join", ordinal: 1 }, undefined,
+    { site: "read_join", input: 1, reader: 1, op: 1, kind: "read", state: "rejected", settled, unlockReturns: settled === 2 ? 1 : 0 });
+  const t26 = row("T26", "error", 1), t27 = row("T27", "cancel", 1), final = row("T26", "error", 2);
+  const failure = {}, failures = [undefined, failure], received = [];
+  const collect = output => received.push(JSON.parse(output.slice(output.indexOf("::{") + 2)));
+  emitDiagnostics([t26, t27, final, t26], failures, collect);
+  const operations = received.filter(record => record.observation);
+  assert.deepEqual(operations.map(record => [record.test, record.scenario, record.observation.settled]), [["T26", "error", 2], ["T27", "cancel", 1]]);
+  assert.equal(received.at(-1).operation, "capacity"); assert.equal(received.at(-1).ordinal, 2);
+  assert.deepEqual(failures, [undefined, failure]);
+  received.length = 0;
+  const extra = Array.from({ length: 20 }, (_, ordinal) => ({ ...diagnostic.record(outerContext("assert"), undefined), ordinal }));
+  emitDiagnostics([t26, t27, final, ...extra], failures, collect);
+  assert.equal(received.length, 10); assert.equal(received.at(-1).operation, "capacity");
+  assert.deepEqual(received.filter(record => record.observation).map(record => record.test), ["T26", "T27"]);
+  assert.deepEqual(failures, [undefined, failure]);
 });
 
 test("Abliteration annotation command survives the actual Node 24 default spec reporter", { timeout: 20_000 }, async () => {
