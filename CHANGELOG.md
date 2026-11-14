@@ -4,6 +4,8 @@
 
 - Qualify OpenClaw catalog tests against unmodified native offers and schema-validated manifest configurations, keeping direct Worker transport coverage separate from client discovery.
 
+- Discard Fusion adviser drafts that exceed the proposal character limit instead of injecting a truncated answer, preserving completed usage and existing synthesis fallback.
+
 - Evaluate trained Fusion vote policies through the offline replay CLI with the same panel validation as live execution.
 
 - Train bounded Fusion vote scheduling policies offline from observed answers and costs, without correctness labels or model calls.
