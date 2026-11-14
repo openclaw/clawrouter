@@ -84,6 +84,12 @@ no test titles, source or error text. They identify reported label paths, not
 authenticated tests, and do not alter acceptance or replace test-count checks.
 Older receipts without fingerprints remain readable.
 
+If final acceptance returns an incomplete receipt, the pair checkpoint retains
+that receipt and the completed agent diagnostics, including the patch digest.
+It excludes generated source. The trial keeps an error status and zero score,
+and the campaign stops before another paid arm. An incomplete receipt cannot
+establish a quality or cost comparison.
+
 The summary reports per-task wins and losses against each fixed control, total
 cost, and the number of extra repairs available from choosing correctly between
 the controls. It also compares the candidate with a task-independent random

@@ -60,6 +60,19 @@ for (const phase of ['agent', 'grade-failed', 'grade-passed', 'grade-missing-val
       assert.equal(saved.records[0].status, 'error');
       assert.equal(saved.records[0].errorCode, 'incomplete_test_run');
       assert.equal(saved.records[0].score, 0);
+      if (phase === 'agent') {
+        assert.equal(saved.records[0].verdict, undefined);
+        assert.equal(saved.records[0].patchDigest, undefined);
+      } else {
+        assert.deepEqual(saved.records[0].verdict, {
+          ...(phase === 'grade-missing-valid' ? {} : { valid: false }),
+          passed: phase !== 'grade-failed', tests: 3, skipped: 0,
+        });
+        assert.equal(saved.records[0].patchDigest, 'f'.repeat(64));
+        assert.equal(saved.records[0].outcome, 'submitted');
+        assert.equal(saved.records[0].publicPassed, true);
+        assert.equal(saved.records[0].files, undefined);
+      }
       assert.equal(saved.calls.length, 1);
       assert.ok(Number.isSafeInteger(saved.calls[0].costMicros));
       assert.ok(!JSON.stringify(saved).includes('sentinel'));

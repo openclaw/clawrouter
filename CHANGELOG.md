@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Retain incomplete Fusion pair acceptance receipts and completed agent diagnostics while stopping further paid arms.
+
 - Preserve access to later Fusion repository search matches with explicit truncation, continuation lines, and validated search ranges.
 
 - Add an opt-in Responses API transport for native Fusion pair benchmarks, with route-bound comparisons and conservative usage accounting.
