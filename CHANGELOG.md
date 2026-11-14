@@ -789,6 +789,7 @@
 - Wire Requesty managed catalogs through original-owner discovery authorization, preserving native facts and final policy filtering with bounded reads, cancellation and delivery capacity.
 - Add a bounded Requesty managed-catalog request/reader leaf preserving native policy identities and unknown facts, without activating discovery or inferring current prices or entitlements.
 - Qualify the paired Requesty managed-catalog compiler contract with its fixed original-key GET route, model-less metadata selector and closed override surface; provider activation remains separate.
+- Declare Requesty native and manifest managed-model discovery under the original global gateway grant, preserving Chat cards and raw observations without inferred prices, limits or account entitlement.
 - Expose Vercel gateway Messages at the Anthropic SDK-compatible public path while keeping its original gateway dispatch path, credential and catalog offer.
 - Add native Vercel gateway Messages and policy-scoped model discovery while preserving gateway credentials, replay and unknown pricing.
 - Add Synthetic native Messages and model discovery beside the preserved Chat route, with distinct dispatch paths, original credentials, qualified frozen model facts and real Worker protocol fixtures.
