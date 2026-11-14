@@ -12,7 +12,7 @@ import snapshot from "../worker/generated/provider-snapshot.json" with { type: "
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
-const sourceHead = "55fb53b54f5f430439ade866f68a18626890610c";
+const sourceHead = "ff34cf8e236ca698c7190c63087f2ecd37f94a7e";
 const models = ["gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts", "gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts"];
 const success = [...models.map((_, i) => `model${i}`), "talk", "unknown", "key_a", "key_b"];
 const invalid = ["later", "truncated", "non200", "redirect", "encoding"];

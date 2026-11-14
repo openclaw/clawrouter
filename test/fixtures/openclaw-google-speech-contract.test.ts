@@ -14,7 +14,7 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../conf
 import { invokeTalkSpeakDirect } from "../../gateway/talk/test-helpers.js";
 import { createTtsTool } from "./tts-tool.js";
 
-const expectedHead = "55fb53b54f5f430439ade866f68a18626890610c";
+const expectedHead = "ff34cf8e236ca698c7190c63087f2ecd37f94a7e";
 const origin = process.env.CLAWROUTER_CONTRACT_ORIGIN!;
 const control = process.env.CLAWROUTER_CONTRACT_CONTROL!;
 const models = ["gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts", "gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts"];

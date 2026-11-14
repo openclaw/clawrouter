@@ -156,7 +156,7 @@ jobs:
             ref: 1536faab19f2adf524b7ef1acef5c24501b35652
             test: test/openclaw-requesty-catalog.test.mjs
           - consumer: google-speech
-            ref: 55fb53b54f5f430439ade866f68a18626890610c
+            ref: ff34cf8e236ca698c7190c63087f2ecd37f94a7e
             test: test/openclaw-google-speech.test.mjs
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
