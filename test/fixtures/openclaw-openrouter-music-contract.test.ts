@@ -24,8 +24,9 @@ const undici = createRequire(import.meta.url)("undici/index.js") as typeof impor
 const runtimeKey = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 const globals = globalThis as Record<string, unknown>;
 const previousRuntime = Object.getOwnPropertyDescriptor(globalThis, runtimeKey);
-type Operation = { kind: "read" | "cancel" | "body_cancel"; pending: Promise<unknown>; signal?: AbortSignal };
-type Reader = { body: ReadableStream<Uint8Array>; closed: Promise<unknown>; releases: number; returned: number; operations: Operation[] };
+type Operation = { kind: "read" | "cancel" | "body_cancel"; pending: Promise<unknown>; signal?: AbortSignal; body: ReadableStream<Uint8Array>; expectedAbort: boolean;
+  invokeAborted: boolean; invokeReason: unknown; rejected?: boolean; reason?: unknown; rejectAborted?: boolean; rejectReason?: unknown };
+type Reader = { body: ReadableStream<Uint8Array>; closed: Promise<unknown>; releases: number; returned: number; operations: Operation[]; closedOutcome?: PromiseSettledResult<unknown> };
 const readers: Reader[] = [], bodyOperations: Operation[] = [], acquisitions: Array<{ pending: Promise<unknown>; observed: Promise<unknown>; signal?: AbortSignal }> = [], observationErrors: unknown[] = [];
 const agents: Array<{ retirements: number; pending: Promise<unknown>[] }> = [];
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
@@ -60,12 +61,23 @@ function observedConstructor<T extends new (...args: any[]) => any>(Original: T)
     return agent;
   } });
 }
-function observeResponse(response: Response, signal?: AbortSignal) {
+function observeOperation(kind: Operation["kind"], pending: Promise<unknown>, body: ReadableStream<Uint8Array>, signal: AbortSignal | undefined, expectedAbort: boolean,
+  invocation: { aborted: boolean; reason: unknown }): Operation {
+  const operation: Operation = { kind, pending, body, signal, expectedAbort, invokeAborted: invocation.aborted, invokeReason: invocation.reason };
+  void pending.then(() => {}, reason => { operation.rejected = true; operation.reason = reason; operation.rejectAborted = signal?.aborted === true; operation.rejectReason = signal?.reason; });
+  return operation;
+}
+function ownedStoredAbort(row: Reader, reason: unknown) {
+  return reason !== undefined && row.closedOutcome?.status === "rejected" && row.closedOutcome.reason === reason &&
+    row.operations.some(operation => operation.kind === "read" && operation.expectedAbort && operation.rejected && operation.reason === reason && operation.rejectAborted && operation.rejectReason === reason);
+}
+function observeResponse(response: Response, signal: AbortSignal | undefined, expectedAbort: boolean) {
   const body = response.body;
   if (!body) return;
   const originalCancel = body.cancel;
   body.cancel = function(reason) {
-    try { const pending = Reflect.apply(originalCancel, this, [reason]); bodyOperations.push({ kind: "body_cancel", pending, signal }); void pending.catch(() => {}); return pending; }
+    const invocation = { aborted: signal?.aborted === true, reason: signal?.reason };
+    try { const pending = Reflect.apply(originalCancel, this, [reason]); bodyOperations.push(observeOperation("body_cancel", pending, body, signal, expectedAbort, invocation)); return pending; }
     catch (error) { observationErrors.push(error); throw error; }
   };
   const originalGetReader = body.getReader;
@@ -75,7 +87,8 @@ function observeResponse(response: Response, signal?: AbortSignal) {
     for (const kind of ["read", "cancel"] as const) {
       const original = reader[kind];
       (reader as any)[kind] = function(...operands: unknown[]) {
-        try { const pending = Reflect.apply(original, this, operands) as Promise<unknown>; row.operations.push({ kind, pending, signal }); void pending.catch(() => {}); return pending; }
+        const invocation = { aborted: signal?.aborted === true, reason: signal?.reason };
+        try { const pending = Reflect.apply(original, this, operands) as Promise<unknown>; row.operations.push(observeOperation(kind, pending, body, signal, expectedAbort, invocation)); return pending; }
         catch (error) { observationErrors.push(error); throw error; }
       };
     }
@@ -89,7 +102,7 @@ function configuration(row: Case): OpenClawConfig {
   return {
     plugins: { allow: ["clawrouter", alternate.id], entries: { clawrouter: { enabled: true } }, load: { paths: [alternate.file] }, slots: { memory: "none" } },
     models: { providers: { clawrouter: { baseUrl: origin, apiKey: `clawrouter-live-orm_${row.id}-fixture-secret`, models: [] } } },
-    agents: { defaults: { workspace: state.workspaceDir, mediaModels: { music: { primary: `clawrouter/openrouter/${row.model}`, fallbacks: [`${alternate.id}/fixture`], timeoutMs: row.kind === "deadline_body" ? 1000 : 30000 } } } },
+    agents: { defaults: { workspace: state.workspaceDir, mediaModels: { music: { primary: `clawrouter/openrouter/${row.model}`, fallbacks: [`${alternate.id}/fixture`], timeoutMs: 120000 } } } },
   };
 }
 beforeAll(async () => {
@@ -107,7 +120,9 @@ beforeEach(() => {
     fetch(input: Parameters<typeof undici.fetch>[0], init?: Parameters<typeof undici.fetch>[1]) {
       const pending = undici.fetch(input, init);
       const signal = init?.signal ?? undefined;
-      const observed = pending.then(response => { try { observeResponse(response as unknown as Response, signal); } catch (error) { observationErrors.push(error); } }, () => {});
+      const authorization = new Headers(init?.headers as HeadersInit | undefined).get("authorization");
+      const expectedAbort = ["abort_headers", "abort_body", "deadline_body"].some(id => authorization === `Bearer clawrouter-live-orm_${id}-fixture-secret`);
+      const observed = pending.then(response => { try { observeResponse(response as unknown as Response, signal, expectedAbort); } catch (error) { observationErrors.push(error); } }, () => {});
       acquisitions.push({ pending, observed, signal }); void pending.catch(() => {}); return pending;
     },
   } });
@@ -121,13 +136,17 @@ afterEach(async () => {
       if (result!.status === "rejected" && !(acquisition.signal?.aborted && acquisition.signal.reason !== undefined && result.reason === acquisition.signal.reason)) failures.push(result!.reason);
     }
     const operations = [...bodyOperations, ...readers.flatMap(row => row.operations)];
+    for (const row of readers) [row.closedOutcome] = await Promise.allSettled([row.closed]);
     for (const [index, result] of (await Promise.allSettled(operations.map(row => row.pending))).entries()) {
       const operation = operations[index]!;
-      if (result.status === "rejected" && !(operation.kind === "read" && operation.signal?.aborted && operation.signal.reason !== undefined && result.reason === operation.signal.reason)) failures.push(result.reason);
+      if (result.status !== "rejected") continue;
+      const owner = readers.find(row => row.body === operation.body && (operation.kind === "body_cancel" || row.operations.includes(operation)) && ownedStoredAbort(row, result.reason));
+      const expectedRead = operation.kind === "read" && operation.expectedAbort && operation.rejectAborted && result.reason !== undefined && operation.rejectReason === result.reason;
+      const storedCancellation = operation.kind !== "read" && operation.expectedAbort && operation.invokeAborted && operation.invokeReason === result.reason && owner !== undefined;
+      if (!expectedRead && !storedCancellation) failures.push(result.reason);
     }
     for (const row of readers) {
-      const [closed] = await Promise.allSettled([row.closed]);
-      if (closed!.status === "rejected") failures.push(closed!.reason);
+      if (row.closedOutcome?.status === "rejected" && !ownedStoredAbort(row, row.closedOutcome.reason)) failures.push(row.closedOutcome.reason);
       if (row.releases !== 1 || row.returned !== 1 || row.body.locked) failures.push(new Error("original SDK reader not released"));
     }
     for (const row of agents) {
@@ -187,4 +206,6 @@ for (const row of cases) it(`real registered music ${route}/${row.id}`, async ()
     expect(result.ok).toBe(false); expect(saved).not.toHaveBeenCalled();
     if (row.kind.startsWith("abort") || row.kind === "preabort") expect(controller.signal.aborted).toBe(true);
   }
-}, 120000);
+// The actual tool minimum is 120s. This new case encloses that real deadline;
+// the unchanged native consumer helper still owns its independent 240s ceiling.
+}, row.kind === "deadline_body" ? 180000 : 120000);
