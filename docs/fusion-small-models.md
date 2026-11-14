@@ -1525,3 +1525,64 @@ the teacher while using 14.35% more normalized compute. No larger confirmation,
 production policy, or default change follows from this screen. API spend was
 zero; local compute was still consumed. GSM8K arithmetic is a capability screen,
 not evidence of repository-repair quality.
+
+### Corrected code-plan development screen, 2026-11-14
+
+A bounded local comparison tested Qwen3-Coder 30B plans with a
+Qwen2.5-Coder 3B Instruct Q4_K_M implementation worker. It retained 16 selected
+MBPP+ tasks and compared direct generation with both same-model planning
+controls. Plans allowed 64 output tokens; implementations allowed 1,024.
+Generation was greedy, with thinking disabled and an 8,192-token context.
+Both plans were generated before any implementation. The same large-model
+plan fed the mixed and large-model self-plan arms, with its cost charged to each.
+
+This is a corrected development study, **not an untouched MBPP+ score**.
+The original run stopped after finding an unsound reference for task 620:
+its order-dependent algorithm could accept a chain without pairwise divisibility.
+A sorted positive-integer oracle, checked against 19,531 exhaustive small cases,
+corrected seven expanded expected outputs. Tasks 294 and 305 received explicit
+contract clarifications before their first model calls. All 16 tasks remained.
+The continuation reused 41 responses only after exact request-body matching,
+then made 73 new local calls. Original artifacts were preserved.
+
+| Policy | Value-test acceptance | Normalized native seconds | Native plus grading seconds |
+| --- | ---: | ---: | ---: |
+| 3B direct | 10/16 | 11.825 | 27.003 |
+| 30B direct | 13/16 | 22.124 | 36.973 |
+| 30B plan → 3B code | 13/16 | 19.718 | 35.455 |
+| 3B plan → 3B code | 10/16 | 12.613 | 26.770 |
+| 30B plan → 30B code | 14/16 | 40.074 | 55.073 |
+
+Native time is the server's prompt-evaluation plus generation duration. Each
+phase pays at least the largest observed base-prompt prefill for its model and
+task, limiting benefits from cache warming by another arm. The final column
+also includes isolated executable grading and its container startup. These
+are local resource proxies, not production latency or dollar savings. Replayed
+responses retain their original timings, so this is not a continuous wall-time
+comparison.
+
+The frozen gate **failed**. Mixed planning repaired four failed small-model
+value tests, but lost two large-model successes and finished below the
+large-model self-plan control. Its native ratio was 0.891; with grading it was
+0.959. Both exceed the predeclared 0.8 ceiling. All 114 logical calls have complete
+response and usage receipts; none required a paid API call.
+
+Value tests also miss some real defects. A separate, post-hoc mutation check
+found that the mixed answer for task 568 repeated one dictionary object rather
+than creating independent dictionaries. Changing one element changed another;
+the large-model direct answer preserved independence. The frozen table remains
+unchanged, but its four scored rescues do not establish four complete repairs.
+Reject this recipe without changing production routing.
+
+Protocol SHA-256:
+`ff317a7e84b501fa8af12eca97b92ffacb88052f01c88e9576762e79019fe4a4`.
+Complete journal SHA-256:
+`cff70a2ff1bc295c995b72c74af7d50a4f743195a4ba83915514b06c96cbad70`.
+
+The [November 2026 planning/coding separation study](https://arxiv.org/html/2611.04320v1)
+uses three independently sampled plans per task, up to 2,048 plan tokens and
+8,192 code tokens, and tests multiple model pairings. This short-plan screen
+does not reproduce that protocol. Its negative result does not reject planning
+in general. [Planning-Driven Programming](https://aclanthology.org/2025.acl-long.621/)
+also checks plans against visible tests before implementation and refinement;
+plan validation remains a separate hypothesis to test with matched controls.
