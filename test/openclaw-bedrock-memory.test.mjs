@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { createRequire, stripTypeScriptTypes } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -66,11 +66,65 @@ test("Bedrock memory fixtures bundle with Wrangler's locked compiler without exe
   }
 });
 
+async function finishOwnedCleanup(failures, operations) {
+  for (const operation of operations) {
+    try { await operation(); } catch (error) { failures.push(error); }
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length) throw new AggregateError(failures, "Bedrock assertion or owned cleanup failed");
+}
+
+function cleanupImplementations() {
+  const text = readFileSync(new URL("./fixtures/openclaw-bedrock-memory-contract.test.ts", import.meta.url), "utf8");
+  const start = text.indexOf("async function finishOwnedCleanup("), end = text.indexOf("\ndescribe(", start);
+  assert.ok(start >= 0 && end > start);
+  const sdk = new Function(stripTypeScriptTypes(text.slice(start, end)) + "; return finishOwnedCleanup;")();
+  return [["outer fixture", finishOwnedCleanup], ["actual SDK fixture helper", sdk]];
+}
+
+test("owned cleanup still joins the original pending outcome after release fails", async t => {
+  for (const [name, finish] of cleanupImplementations()) await t.test(name, async () => {
+    const body = new Error("body assertion failed"), release = new Error("release failed");
+    let producer, closed = false; const stream = new ReadableStream({ start(controller) { producer = controller; } });
+    const finishProducer = () => { if (!closed) { closed = true; producer.close(); } };
+    const reader = stream.getReader(), outcome = reader.read(), calls = [];
+    const finishing = finish([body], [() => { calls.push("release"); throw release; }, () => { calls.push("join"); return outcome; }]);
+    let settled = false; void finishing.then(() => { settled = true; }, () => { settled = true; });
+    try {
+      await Promise.resolve(); assert.deepEqual(calls, ["release", "join"]); assert.equal(settled, false);
+      finishProducer();
+      await assert.rejects(finishing, error => error instanceof AggregateError && error.errors.length === 2 && error.errors[0] === body && error.errors[1] === release);
+    } finally { finishProducer(); await Promise.allSettled([outcome, finishing]); reader.releaseLock(); }
+  });
+});
+test("owned cleanup preserves body and dispose errors while attempting later removal", async t => {
+  for (const [name, finish] of cleanupImplementations()) await t.test(name, async () => {
+    const body = new Error("body failed"), dispose = new Error("dispose failed"), remove = new Error("remove failed"), calls = [];
+    await assert.rejects(finish([body], [
+      () => { calls.push("dispose"); throw dispose; },
+      () => { calls.push("remove"); return Promise.reject(remove); },
+    ]), error => error instanceof AggregateError && error.errors.length === 3 && error.errors[0] === body && error.errors[1] === dispose && error.errors[2] === remove);
+    assert.deepEqual(calls, ["dispose", "remove"]);
+  });
+});
+test("owned cleanup retains undefined primary, release, outcome and removal failures", async t => {
+  for (const [name, finish] of cleanupImplementations()) await t.test(name, async () => {
+    const calls = [], outcome = Promise.reject(undefined); void outcome.catch(() => {});
+    await assert.rejects(finish([undefined], [
+      () => { calls.push("release"); throw undefined; },
+      () => { calls.push("join"); return outcome; },
+      () => { calls.push("remove"); throw undefined; },
+    ]), error => error instanceof AggregateError && error.errors.length === 4 && error.errors.every(value => value === undefined));
+    assert.deepEqual(calls, ["release", "join", "remove"]);
+    await assert.rejects(finish([], [() => Promise.reject(undefined)]), error => error === undefined);
+  });
+});
+
 test("the SDK's Titan wire reaches the real policy-grant signer and SQLite", { timeout: 30_000 }, async t => {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-bedrock-wire-"));
-  const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
-  let mf;
+  let mf; const failures = [];
   try {
+    const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
     mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(), { bindings: { AWS_REGION: "us-east-1" } });
     const kv = await mf.getKVNamespace("POLICY_KV", "router"), entry = cases[0], id = entry.credential;
     for (const credential of [id, `${id}_stale`]) {
@@ -125,14 +179,15 @@ test("the SDK's Titan wire reaches the real policy-grant signer and SQLite", { t
     assert.equal(adminUsage.policies.find(row => row.policyId === `${id}_stale`).budget.spentMicros, 0);
     assert.equal(adminUsage.usage.events.filter(event => event.credential_id === `${id}_stale`).length, 0);
     assert.equal(adminUsage.policies.find(row => row.policyId === id).budget.spentMicros, 700);
-  } finally { await mf?.dispose(); await rm(temporary, { recursive: true, force: true }); }
+  } catch (error) { failures.push(error); }
+  await finishOwnedCleanup(failures, [() => mf?.dispose(), () => rm(temporary, { recursive: true, force: true })]);
 });
 
 test("actual OpenClaw Bedrock memory through the native Worker and SQLite", { skip: !source, timeout: 300_000 }, async t => {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-bedrock-memory-"));
-  const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
-  let mf;
+  let mf; const failures = [];
   try {
+    const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
     // Authority Durable Objects need the same region as the fetch handler.
     mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(), { bindings: { AWS_REGION: "us-east-1" } });
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
@@ -199,12 +254,10 @@ test("actual OpenClaw Bedrock memory through the native Worker and SQLite", { sk
     }
     assert.equal(state.held, 0, "the fixture's original stream was canceled or explicitly closed; this alone is not a host-join proof");
     assert.equal(state.calls.length, cases.reduce((count, entry) => count + successes(entry) + 3 + (isBatch(entry) ? 1 : 2), 2));
-  } finally {
-    // The SDK helper joins its original process. Dispose joins the genuine fixture;
-    // neither a zero counter nor a returned vector substitutes for these awaits.
-    await mf?.dispose();
-    await rm(temporary, { recursive: true, force: true });
-  }
+  } catch (error) { failures.push(error); }
+  // Attempt every owned cleanup even after an earlier failure. None is proof
+  // that caller abort physically retired the upstream producer.
+  await finishOwnedCleanup(failures, [() => mf?.dispose(), () => rm(temporary, { recursive: true, force: true })]);
 });
 
 function verifyWire(entry, call) {
