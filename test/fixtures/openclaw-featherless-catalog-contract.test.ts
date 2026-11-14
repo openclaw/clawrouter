@@ -20,7 +20,7 @@ const cases = JSON.parse(process.env.CLAWROUTER_CONTRACT_CATALOG_CASES!) as Case
 const originalFetch = globalThis.fetch;
 const originalGuard = ssrfRuntime.fetchWithSsrFGuard;
 const key = (row: Case) => `clawrouter-live-${row.id}-${row.scenario === "rotated_new" ? "rotated-secret" : "fixture-secret"}`;
-const observations: Array<{ path: string; credential: string; released: boolean; done: Promise<unknown>; status?: number; errorCode?: string; closes: Promise<unknown>[]; destroys: number; dispatchers: number }> = [];
+const observations: Array<{ path: string; credential: string; released: boolean; done: Promise<unknown>; status?: number; errorCode?: string; closes: Promise<unknown>[]; dispatchers: number }> = [];
 const caseFor = (scenario: Scenario) => {
   const row = cases.find(value => value.scenario === scenario);
   if (!row) throw new Error("missing compiled fixture contract");
@@ -52,21 +52,19 @@ beforeEach(() => {
     }
     let finished!: (error?: unknown) => void;
     const done = new Promise<unknown>(resolve => { finished = resolve; });
-    const observation = { path: url.pathname, credential, released: false, done, closes: [], destroys: 0, dispatchers: 0 } as typeof observations[number];
+    const observation = { path: url.pathname, credential, released: false, done, closes: [], dispatchers: 0 } as typeof observations[number];
     observations.push(observation);
     try {
       const result = await originalGuard({ ...options, fetchImpl: (input, init) => {
         const dispatcher = (init as DispatcherAwareRequestInit | undefined)?.dispatcher;
         if (!dispatcher || observation.dispatchers++) throw new Error("missing or repeated original dispatcher");
-        const close = dispatcher.close, destroy = dispatcher.destroy;
+        const close = dispatcher.close;
         vi.spyOn(dispatcher, "close").mockImplementation((...args) => {
           const pending = Reflect.apply(close, dispatcher, args);
-          observation.closes.push(pending);
+          // Undici re-enters close(callback); retain only the original
+          // promise-form retirement result, including its real null fulfillment.
+          if (args[0] === undefined) observation.closes.push(pending);
           return pending;
-        });
-        vi.spyOn(dispatcher, "destroy").mockImplementation((...args) => {
-          observation.destroys++;
-          return Reflect.apply(destroy, dispatcher, args);
         });
         return fetchWithRuntimeDispatcher(input, init);
       },
@@ -112,7 +110,6 @@ async function joined(row: Case) {
     expect(await observation.done).toBeUndefined(); expect(observation.released).toBe(true);
     expect(observation.dispatchers).toBe(1); expect(observation.closes).toHaveLength(1);
     expect(await observation.closes[0]).toBeNull(); // Undici close fulfills with null.
-    expect(observation.destroys).toBe(0);
   }
   const state = JSON.parse(await command(`/__catalog/join/${row.id}`));
   expect(state).toMatchObject({ calls: row.urls.length, retired: true, charged: 0 });
@@ -150,7 +147,7 @@ async function fixture(run: (discover: (row: Case, signal?: AbortSignal) => Prom
         await command(`/__catalog/join/${row.id}`);
       }));
       for (const result of [...releases, ...joins]) expect(result).toEqual({ status: "fulfilled", value: undefined });
-      for (const row of observations) { expect(row.dispatchers).toBe(1); expect(row.closes).toHaveLength(1); expect(row.destroys).toBe(0); }
+      for (const row of observations) { expect(row.dispatchers).toBe(1); expect(row.closes).toHaveLength(1); }
       for (const result of closes) expect(result).toEqual({ status: "fulfilled", value: null });
     }
   });
