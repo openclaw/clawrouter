@@ -64,6 +64,17 @@ less validation than a reproduced, held-out result in this workload.
 
 ## Spend gates
 
+Optional visible function checks live in
+`benchmarks/fusion/gateway-verification.mjs`. Pass
+`gatewayVerificationCases('stream-stop-match')` or
+`gatewayVerificationCases('json-pointer-read')` to the existing sandboxed
+`gradeCandidate` helper and record `GATEWAY_VERIFICATION_REVISION` in the
+experiment protocol. These checks cover original stop indices after ignoring
+empty strings, split Unicode, pointer syntax and array-index boundaries.
+Declare the profile before generation and use it for every compared arm.
+It supplements public examples; independent hidden grading is still required.
+Changing a profile creates a new experiment, not a revision of historical scores.
+
 Local repository scores require a completed agent outcome as well as independent
 acceptance: `submitted` for legacy and grounded execution, or `verified` for
 checked execution. A patch left at a turn limit, deadline, or missing outcome
