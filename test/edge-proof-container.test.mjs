@@ -11,7 +11,7 @@ import { dirname, join, relative } from "node:path";
 import { containerContract, harnessInputs, installInputs, parseIdentity, validateIdentity, validateMapping, validateImage, dockerEnvironment, containerEnvironment, createArguments, validateContainerInspect, parseControl, validateTerminal, validateNativeIdentity, parseImageBuildReceipt, parseImageBuildStages, parseNativePrepareStages, observeImageBuild, parseContainerReceipt, parseChildPackaging, createProjectionLedger, parseInitPrerequisites, createAttachProjection, runInitPrerequisites, createInitGuardLedger, initGuardLeaf, createMountObservation, validateEmptyMasks, validateMaskCompletion, parseMounts, validateMountFreshness, validateMounts, validateMetadataMounts, validateChildStatus, validateTarget, cgroupPath, validateLimits, attachContainer, processEvidence, retiredCgroup, raiseContainerFailures, validateContainerDiagnostic, emitContainerFailure } from "../scripts/edge-proof-container.mjs";
 import { frozenGitEnvironment, validateGitExecutable, frozenSource } from "../scripts/edge-proof-build.mjs";
 import { edgeProof } from "../scripts/edge-proof-profile.mjs";
-import { launchCli, createPackagingDiagnostics, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, projectionBoundaries, createContainerDiagnostics, containerProcessDiagnostic, imageBuildStages, runOwnedProcess, nativePrepareStages, createNativePrepareDiagnostics, enumerationOperations, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, initGuardTags, initSourcePhases, validateInitDetail, mountPredicates, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission } from "../scripts/edge-proof.mjs";
+import { launchCli, createPackagingDiagnostics, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, projectionBoundaries, createContainerDiagnostics, containerProcessDiagnostic, imageBuildStages, runOwnedProcess, nativePrepareStages, createNativePrepareDiagnostics, enumerationOperations, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, initGuardTags, initSourcePhases, validateInitDetail, mountPredicates, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission } from "../scripts/edge-proof.mjs";
 
 const hex = "a".repeat(64), other = "b".repeat(64), imageId = "sha256:" + hex;
 const identity = { uid: [501, 501, 501, 501], gid: [20, 20, 20, 20], groups: [20, 30] };
@@ -1863,7 +1863,7 @@ async function receiptParserFactory(overrides = {}) {
   const helpers = source.slice(source.indexOf("const receiptRecord ="), source.indexOf("export function raiseContainerFailures("));
   const parser = source.slice(source.indexOf("export function createReceiptLedger("), source.indexOf("async function containerInit(")).replaceAll("export ", "");
   const masks = source.slice(source.indexOf("export function validateMaskCompletion("), source.indexOf("export async function validateEmptyMasks(")).replaceAll("export ", "");
-  const bindings = { check: (value, code) => { if (!value) throw new Error(code); }, same: (a,b) => JSON.stringify(a) === JSON.stringify(b), Buffer, JSON, Object, hashPattern: /^[a-f0-9]{64}$/, receiptOperations, validateReceiptDiagnostic, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, createProjectionLedger, raiseContainerFailures,
+  const bindings = { check: (value, code) => { if (!value) throw new Error(code); }, same: (a,b) => JSON.stringify(a) === JSON.stringify(b), Buffer, JSON, Object, hashPattern: /^[a-f0-9]{64}$/, receiptOperations, validateReceiptDiagnostic, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, createProjectionLedger, raiseContainerFailures,
     edgeProof: { sourceSha: "c".repeat(40), sourceTree: "d".repeat(40) }, containerContract, ...overrides };
   const api = new Function(...Object.keys(bindings), helpers + masks + parser + "return {parseContainerReceipt,createReceiptLedger,observeContainerReceipt};")(...Object.values(bindings));
   const plan = { nonce: hex, contextHash: other, nativeHash: imageId.slice(7) };
@@ -1909,7 +1909,7 @@ test("receipt child actual producer repeated reports and complete role failures 
     if(phase) {assert.equal(summary[6],receiptChildPhases.indexOf(phase)+1);assert.equal(summary[7],false);} else {report.errors.push(undefined);assert.equal(capture.summary()[8],"UNKNOWN");}
     const api=await receiptParserFactory(), diagnostics=createContainerDiagnostics();
     await assert.rejects(api.observeContainerReceipt(diagnostics,"",api.plan,capture.summary));
-    const detail=diagnostics.records.find(row=>row.v===11);assert.equal(detail.parser[3],3);assert.deepEqual(detail.child,summary);
+    const detail=diagnostics.records.find(row=>row.v===12);assert.equal(detail.parser[3],3);assert.deepEqual(detail.child,summary);
     const full=[{v:2,phase:"entry",state:"rejected",defined:true,exit:null,signal:null},...diagnostics.records];
     const project=createAttachProjection(capture.h.attached,{cid:hex,nonce:hex,contextHash:other},{internal:row=>full.push(row)});project(capture.h.attached.result);
     full.push({v:2,phase:"retirement",state:"rejected",defined:false,exit:null,signal:null});
@@ -1956,17 +1956,17 @@ test("receipt child original undefined and reporter failures remain independent 
   for(const phase of ["entered","rejected","fulfilled"]){const report=createContainerDiagnostics(),push=report.records.push.bind(report.records);report.records.push=(row)=>{if(row.phase==="receipt"&&row.state===phase&&row.v===2)throw undefined;return push(row);};
     let reason,failed=false;try{await api.observeContainerReceipt(report,phase==="fulfilled"?api.text(api.value):{split(){throw undefined;}},api.plan,unknown);}catch(error){reason=error;failed=true;}assert.equal(failed,true);
     if(phase==="rejected"){assert.ok(reason instanceof AggregateError);assert.deepEqual(reason.errors,[undefined,undefined]);}else assert.equal(reason,undefined);
-    const detail=report.records.find(row=>row.v===11);assert.ok(detail);assert.equal(detail.parser[1],phase==="entered"?0:phase==="fulfilled"?1:2);assert.deepEqual(detail.reports,[1,1]);
+    const detail=report.records.find(row=>row.v===12);assert.ok(detail);assert.equal(detail.parser[1],phase==="entered"?0:phase==="fulfilled"?1:2);assert.deepEqual(detail.reports,[1,1]);
     assert.throws(()=>raiseContainerFailures([reason,undefined]),error=>error instanceof AggregateError&&error.errors.length===2&&error.errors[1]===undefined);
   }
-  const ledger=api.createReceiptLedger();ledger.enter=()=>{throw undefined;};const report=createContainerDiagnostics();await assert.rejects(api.observeContainerReceipt(report,api.text(api.value),api.plan,unknown,ledger));assert.equal(report.records.find(row=>row.v===11).parser,null);
+  const ledger=api.createReceiptLedger();ledger.enter=()=>{throw undefined;};const report=createContainerDiagnostics();await assert.rejects(api.observeContainerReceipt(report,api.text(api.value),api.plan,unknown,ledger));assert.equal(report.records.find(row=>row.v===12).parser,null);
 });
 test("receipt child schema closed relationships priority and quotas reject invalid tuples", async () => {
   const api=await receiptParserFactory(),report=createContainerDiagnostics();await assert.rejects(api.observeContainerReceipt(report,"",api.plan,()=>[1,"reported_rejection",256,7,2,3,33,false,"UNKNOWN"]));
-  const detail=report.records.find(row=>row.v===11);validateContainerDiagnostic(detail);
+  const detail=report.records.find(row=>row.v===12);validateContainerDiagnostic(detail);
   for(const mutate of [v=>v.child[7]=null,v=>v.child[8]="CLEAN",v=>v.child[3]=0,v=>v.parser[7]=3,v=>v.parser[8]=1,v=>v.parser[2]=false,v=>v.reports=[0,1]]){const bad=structuredClone(detail);mutate(bad);assert.throws(()=>validateContainerDiagnostic(bad));}
   const source=await readFile(new URL("../scripts/edge-proof.mjs",import.meta.url),"utf8"), containerDiagnosticPhases=JSON.parse(/const containerDiagnosticPhases = (\[[^\n]+\]);/.exec(source)[1]);
-  const many=[...Array.from({length:30},(_,i)=>({v:2,phase:containerDiagnosticPhases.filter(phase=>!["image_build_process","image_build_internal","native_prepare_internal","attach_process","init_prerequisite","overflow"].includes(phase))[i],state:"fulfilled",defined:null,exit:null,signal:null})),detail,{v:2,phase:"entry",state:"rejected",defined:true,exit:null,signal:null}];const lines=[];emitContainerFailure(many,line=>lines.push(line));assert.equal(lines.length,10);assert.equal(JSON.parse(lines[0].slice(lines[0].indexOf("::{")+2)).v,11);assert.ok(lines.every(line=>Buffer.byteLength(line)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);
+  const many=[...Array.from({length:30},(_,i)=>({v:2,phase:containerDiagnosticPhases.filter(phase=>!["image_build_process","image_build_internal","native_prepare_internal","attach_process","init_prerequisite","overflow"].includes(phase))[i],state:"fulfilled",defined:null,exit:null,signal:null})),detail,{v:2,phase:"entry",state:"rejected",defined:true,exit:null,signal:null}];const lines=[];emitContainerFailure(many,line=>lines.push(line));assert.equal(lines.length,10);assert.equal(JSON.parse(lines[0].slice(lines[0].indexOf("::{")+2)).v,12);assert.ok(lines.every(line=>Buffer.byteLength(line)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);
 });
 test("receipt child parser every original boundary retains undefined without later operand reads", async () => {
   const base=await receiptParserFactory();
@@ -2032,7 +2032,7 @@ async function receiptActualProducer(failure = "wrangler_input", writerFailure =
   let pipeline = cut("export async function runPackagingPipeline(","async function offlineCi(");
   assert.equal(pipeline.split('import.meta.resolve("wrangler/package.json")').length,2);
   pipeline = pipeline.replace('import.meta.resolve("wrangler/package.json")','resolveModule("wrangler/package.json")');
-  const frames=[], calls=[], rejections=[], builderFailures=[], builders=[], denied=Object.freeze({inert:"unreached-binding"}), fixed={sourceSha:"c".repeat(40),sourceTree:"d".repeat(40)}, digest=value=>createHash("sha256").update(value).digest("hex");
+  const frames=[], calls=[], rejections=[], builderFailures=[], builders=[], processResults=[], denied=Object.freeze({inert:"unreached-binding"}), fixed={sourceSha:"c".repeat(40),sourceTree:"d".repeat(40)}, digest=value=>createHash("sha256").update(value).digest("hex");
   const capsule={...fixed,sourceFiles:Array(600).fill(0),dependencyInputs:Array(268).fill(0),instrumentation:Array(4).fill({erasureExact:true}),observerSha256:hex,harnessInputs:[],bundles:{edge:hex,upstream:hex},runtime:{}};
   const unreachable=name=>(..._args)=>{calls.push(["unreached",name]);throw denied;};
   const bindings={Buffer,JSON,createHash,join,relative,dirname,edgeProof:fixed,digest,refuse:code=>{throw new Error(code);},process:{execPath:"/immutable/node"},
@@ -2048,7 +2048,8 @@ async function receiptActualProducer(failure = "wrangler_input", writerFailure =
       for(const [phase] of built.calls)calls.push(["builder",role,phase]);
       if(built.failed)builderFailures.push({role,reason:built.reason});
       const stdout=built.frames.join("")+(built.failed?"":JSON.stringify(built.value)+"\n");
-      return {code:built.failed?1:0,signal:null,closed:true,timedOut:false,interrupted:false,errors:[],remaining:[],stdout,stderr:"",outputSummary:{stdout:{bytes:Buffer.byteLength(stdout),sha256:digest(stdout),esc:false,complete:true},stderr:{bytes:0,sha256:digest(""),esc:false,complete:true}}};
+      const result = builderOptions.ownedProcess ? await builderOptions.ownedProcess(command,args,options,stdout) : {code:built.failed?1:0,signal:null,closed:true,timedOut:false,interrupted:false,errors:[],remaining:[],stdout,stderr:"",outputSummary:{stdout:{bytes:Buffer.byteLength(stdout),sha256:digest(stdout),esc:false,complete:true},stderr:{bytes:0,sha256:digest(""),esc:false,complete:true}}};
+      if (builderOptions.processResult) builderOptions.processResult(result,role); processResults.push(result); return result;
     }};
   // These are the external callable bindings of the extracted pipeline. The
   // later filesystem/rendering branches remain explicit inert refusals.
@@ -2059,12 +2060,12 @@ async function receiptActualProducer(failure = "wrangler_input", writerFailure =
   report.mark("entry","fulfilled");let failed=false,reason;
   try{await api.runPackagingPipeline("/opt/edge-input","/task",report,{checkBoundary:async()=>{calls.push(["boundary"]);if(failure==="namespace_read")throw undefined;},buildArguments:(capsule,role)=>["/opt/edge-input/scripts/edge-proof.mjs","container-build",capsule,role,hex,"501","501"]});}catch(error){failed=true;reason=error;}
   report.mark("final",failed?"rejected":"fulfilled",reason);
-  return {frames,calls,report,failed,reason,rejections,builderFailures,builders,summarizePackagingOutput:api.summarizePackagingOutput};
+  return {frames,calls,report,failed,reason,rejections,builderFailures,builders,processResults,summarizePackagingOutput:api.summarizePackagingOutput};
 }
 async function receiptProjectionFactory(overrides={}) {
   const source=await readFile(new URL("../scripts/edge-proof-container.mjs",import.meta.url),"utf8");
-  const body=source.slice(source.indexOf("export function createProjectionLedger("),source.indexOf("export function createAttachProjection(")).replaceAll("export ","");
-  const bindings={Buffer,JSON,Map,hash:bytes=>createHash("sha256").update(bytes).digest("hex"),cidPattern:/^[a-f0-9]{64}$/,hashPattern:/^[a-f0-9]{64}$/,check:(value,code)=>{if(!value)throw new Error(code);},projectionBoundaries,validatePackagingDiagnostic,receiptChildPhases,...overrides};
+  const body=source.slice(source.indexOf("export function projectBuilderCloseGroup("),source.indexOf("export function createAttachProjection(")).replaceAll("export ","");
+  const bindings={Buffer,JSON,Map,hash:bytes=>createHash("sha256").update(bytes).digest("hex"),cidPattern:/^[a-f0-9]{64}$/,hashPattern:/^[a-f0-9]{64}$/,check:(value,code)=>{if(!value)throw new Error(code);},projectionBoundaries,validatePackagingDiagnostic,receiptChildPhases,validateReportedBuilderProcess,receiptBuilderSignals,...overrides};
   return new Function(...Object.keys(bindings),body+"return {createProjectionLedger,parseChildPackaging,validateChildLifecycle,projectionRun,projectionLeaf};")(...Object.values(bindings));
 }
 function receiptBoundaryRecord(child,projection,count="ZERO") {return {v:10,phase:"receipt",state:"rejected",defined:true,exit:null,signal:null,parser:[1,2,true,3,1,1,0,1,0],child,reports:[0,0],count,projection};}
@@ -2087,7 +2088,7 @@ test("receipt boundary actual pipeline forwarding admits repeated reports and pr
     assert.equal(produced.calls.filter(row=>row[0]==="read").length,failure==="wrangler_input"?2:failure==="receipt_read"||failure.startsWith("build_b:")?1:0);
     const capture=await receiptCapture(produced.frames),ledger=createProjectionLedger(),child=capture.summary(ledger);
     assert.equal(child[1],"reported_rejection",failure);assert.equal(ledger.detail(),null);assert.equal(child[8],"UNKNOWN");
-    const api=await receiptParserFactory(),report=createContainerDiagnostics();await assert.rejects(api.observeContainerReceipt(report,"",api.plan,capture.summary));const detail=report.records.find(r=>r.v===11);assert.equal(detail.count,"ZERO");assert.equal(detail.projection,null);
+    const api=await receiptParserFactory(),report=createContainerDiagnostics();await assert.rejects(api.observeContainerReceipt(report,"",api.plan,capture.summary));const detail=report.records.find(r=>r.v===12);assert.equal(detail.count,"ZERO");assert.equal(detail.projection,null);
     const full=[{v:2,phase:"entry",state:"rejected",defined:true,exit:null,signal:null},...report.records,{v:2,phase:"retirement",state:"rejected",defined:false,exit:null,signal:null}];createAttachProjection(capture.h.attached,{cid:hex,nonce:hex,contextHash:other},{internal:r=>full.push(r)})(capture.h.attached.result);
     const lines=[];emitContainerFailure(full,line=>lines.push(line));receiptPackets.push(lines.map(line=>JSON.parse(line.slice(line.indexOf("::{")+2))));
     const builds=produced.calls.filter(row=>row[0]==="build");assert.equal(new Set(builds.map(row=>row[2][3])).size,builds.length);assert.ok(builds.every(row=>row[1]==="/immutable/node"&&row[3]==="/task"));
@@ -2149,7 +2150,7 @@ test("receipt boundary schema rejects contradictory count masks contexts and pre
   const child=[1,"invalid",null,0,0,0,0,null,"UNKNOWN"],base=receiptBoundaryRecord(child,[1,10,0,1,2,3,1,null]);validateReceiptBoundaryDiagnostic(base);
   const historical={...base,v:9};delete historical.count;delete historical.projection;assert.deepEqual(validateContainerDiagnostic(historical),historical);
   for(const mutate of [r=>r.count="ONE",r=>r.projection[0]=2,r=>r.projection[1]=99,r=>r.projection[2]=5,r=>r.projection[3]=0,r=>r.projection[4]=1,r=>r.projection[5]=7,r=>r.projection[6]=3,r=>r.projection[7]=false,r=>r.child=[1,"reported_complete",100,7,1,0,0,null,"UNKNOWN"],r=>r.child[1]="capture_mismatch"]){const bad=structuredClone(base);mutate(bad);assert.throws(()=>validateReceiptBoundaryDiagnostic(bad));}
-  const parser=await receiptParserFactory(),report=createContainerDiagnostics(),ledger=createProjectionLedger();ledger.start=()=>{throw undefined;};await assert.rejects(parser.observeContainerReceipt(report,"",parser.plan,()=>{throw undefined;}));assert.ok(report.records.find(r=>r.v===11).reports[0]>0);
+  const parser=await receiptParserFactory(),report=createContainerDiagnostics(),ledger=createProjectionLedger();ledger.start=()=>{throw undefined;};await assert.rejects(parser.observeContainerReceipt(report,"",parser.plan,()=>{throw undefined;}));assert.ok(report.records.find(r=>r.v===12).reports[0]>0);
   const lines=[];emitContainerFailure([{v:2,phase:"entry",state:"rejected",defined:true,exit:null,signal:null},base],line=>lines.push(line));assert.ok(lines.every(line=>Buffer.byteLength(line)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);
 });
 test("receipt boundary actual parser getter order is identical with optional observation",async()=>{
@@ -2181,7 +2182,7 @@ async function lifecyclePacket(produced, mutate=frames=>frames) {
   const capture=await receiptCapture(mutate(produced.frames)),api=await receiptParserFactory(),report=createContainerDiagnostics();
   let failed=false,reason;try{await api.observeContainerReceipt(report,"",api.plan,capture.summary);}catch(error){failed=true;reason=error;}
   assert.equal(failed,true);assert.ok(reason instanceof Error);
-  const row=report.records.find(r=>r.v===11);assert.ok(row);validateReceiptLifecycleDiagnostic(row);
+  const row=report.records.find(r=>r.v===12);assert.ok(row);validateReceiptBuilderDiagnostic(row);
   const full=[{v:2,phase:"entry",state:"rejected",defined:true,exit:null,signal:null},...report.records,{v:2,phase:"retirement",state:"rejected",defined:false,exit:null,signal:null}];
   createAttachProjection(capture.h.attached,{cid:hex,nonce:hex,contextHash:other},{internal:r=>full.push(r)})(capture.h.attached.result);
   const lines=[];emitContainerFailure(full,line=>lines.push(line));receiptPackets.push(lines.map(line=>JSON.parse(line.slice(line.indexOf("::{")+2))));
@@ -2225,15 +2226,139 @@ test("receipt lifecycle original getters short circuit and diagnostic errors can
 });
 test("receipt lifecycle closed context relations legacy versions and maximum packet stay strict",async()=>{
   const produced=await receiptActualProducer("wrangler_input",false,{writeFailure:["namespace_read","fulfilled"]}),base=await lifecyclePacket(produced);
-  const prior={...base,v:10};delete prior.lifecycle;assert.deepEqual(validateReceiptBoundaryDiagnostic(prior),prior);const old={...prior,v:9};delete old.count;delete old.projection;assert.deepEqual(validateReceiptDiagnostic(old),old);
+  const prior={...base,v:10};delete prior.lifecycle;delete prior.builder;assert.deepEqual(validateReceiptBoundaryDiagnostic(prior),prior);const old={...prior,v:9};delete old.count;delete old.projection;assert.deepEqual(validateReceiptDiagnostic(old),old);
   for(const mutate of [r=>r.lifecycle[0]=2,r=>r.lifecycle[1]=1,r=>r.lifecycle[1]=12,r=>r.lifecycle[2]=257,r=>r.lifecycle[3]=0,r=>r.lifecycle[4]=r.lifecycle[3],r=>r.lifecycle[5]=2,r=>r.lifecycle[6]=2,r=>r.projection[1]=28,r=>{r.projection[2]=3;r.lifecycle[3]=14;},r=>r.projection[3]=2]){
-    const bad=structuredClone(base);mutate(bad);assert.throws(()=>validateReceiptLifecycleDiagnostic(bad));
+    const bad=structuredClone(base);mutate(bad);assert.throws(()=>validateReceiptBuilderDiagnostic(bad));
   }
-  const absent=structuredClone(base);absent.lifecycle=[1,2,2,receiptChildPhases.indexOf("namespace_read")+1,0,2,0];validateReceiptLifecycleDiagnostic(absent);
-  const outcome=structuredClone(base);outcome.projection=[1,30,4,1,2,3,1,null];outcome.lifecycle[4]=outcome.lifecycle[3];outcome.lifecycle[6]=1;validateReceiptLifecycleDiagnostic(outcome);outcome.lifecycle[6]=4;validateReceiptLifecycleDiagnostic(outcome);for(const n of [0,2,3,5]){outcome.lifecycle[6]=n;assert.throws(()=>validateReceiptLifecycleDiagnostic(outcome));}
-  const wide=structuredClone(base);wide.lifecycle=[1,255,256,14,33,1,0];wide.reports=[65535,65535];validateReceiptLifecycleDiagnostic(wide);
+  const absent=structuredClone(base);absent.lifecycle=[1,2,2,receiptChildPhases.indexOf("namespace_read")+1,0,2,0];validateReceiptBuilderDiagnostic(absent);
+  const outcome=structuredClone(base);outcome.projection=[1,30,4,1,2,3,1,null];outcome.lifecycle[4]=outcome.lifecycle[3];outcome.lifecycle[6]=1;validateReceiptBuilderDiagnostic(outcome);outcome.lifecycle[6]=4;validateReceiptBuilderDiagnostic(outcome);for(const n of [0,2,3,5]){outcome.lifecycle[6]=n;assert.throws(()=>validateReceiptBuilderDiagnostic(outcome));}
+  const wide=structuredClone(base);wide.lifecycle=[1,255,256,14,33,1,0];wide.reports=[65535,65535];validateReceiptBuilderDiagnostic(wide);
   const source=await readFile(new URL("../scripts/edge-proof.mjs",import.meta.url),"utf8"),phases=JSON.parse(/const containerDiagnosticPhases = (\[[^\n]+\]);/.exec(source)[1]);
   const rows=[...phases.filter(p=>!["receipt","overflow","image_build_process","image_build_internal","native_prepare_internal","attach_process","init_prerequisite"].includes(p)).map(phase=>({v:2,phase,state:"fulfilled",defined:null,exit:null,signal:null})),wide,{v:2,phase:"entry",state:"rejected",defined:true,exit:null,signal:null}];
-  const lines=[];emitContainerFailure(rows,line=>lines.push(line));assert.equal(lines.length,10);assert.equal(JSON.parse(lines[0].slice(lines[0].indexOf("::{")+2)).v,11);assert.ok(Buffer.byteLength(JSON.stringify(wide))<=512);assert.ok(lines.every(l=>Buffer.byteLength(l)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);
+  const lines=[];emitContainerFailure(rows,line=>lines.push(line));assert.equal(lines.length,10);assert.equal(JSON.parse(lines[0].slice(lines[0].indexOf("::{")+2)).v,12);assert.ok(Buffer.byteLength(JSON.stringify(wide))<=512);assert.ok(lines.every(l=>Buffer.byteLength(l)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);
+});
+function truncateActualBuilder(result) {
+  const lines=result.stdout.split("\n").filter(Boolean);
+  result.stdout=lines.slice(0,6).join("\n")+"\n";
+  result.outputSummary.stdout={bytes:Buffer.byteLength(result.stdout),sha256:createHash("sha256").update(result.stdout).digest("hex"),esc:false,complete:result.closed};
+}
+async function receiptOwnedResult(command,args,options,stdout,scenario) {
+  const source=await readFile(new URL("../scripts/edge-proof.mjs",import.meta.url),"utf8");
+  const body=source.slice(source.indexOf("export async function runOwnedProcess("),source.indexOf("export function requireProcessSuccess(")).replace("export ","");
+  const child=new EventEmitter(),signals=new EventEmitter(),timers=[],cleared=[],kills=[];child.pid=123;child.stdout=new EventEmitter();child.stderr=new EventEmitter();
+  let spawns=0,samples=0;
+  const bindings={createHash,Map,Promise,Object,Error,process:{kill:(...values)=>kills.push(values)},refuse:code=>{throw new Error(code);},
+    spawn:()=>{throw new Error("native spawn forbidden");},
+    setTimeout:(fn,ms)=>{const timer={fn,ms};timers.push(timer);return timer;},setInterval:(fn,ms)=>({fn,ms}),clearTimeout:t=>cleared.push(t),clearInterval:t=>cleared.push(t)};
+  const run=new Function(...Object.keys(bindings),body+"return runOwnedProcess;")(...Object.values(bindings));
+  const promise=run(command,args,{...options,signalSource:signals,sample:async()=>{samples++;if(scenario==="sample_undefined")throw undefined;return[];},spawnProcess:(...values)=>{
+    spawns++;assert.deepEqual(values,[command,args,{cwd:options.cwd,env:options.env,detached:true,stdio:["ignore","pipe","pipe"]}]);
+    if(scenario==="spawn_undefined")throw undefined;return child;
+  }});
+  if(scenario!=="spawn_undefined"){
+    child.stdout.emit("data",Buffer.from(stdout.split("\n").slice(0,6).join("\n")+"\n"));
+    child.stderr.emit("data",Buffer.from("private-inert-stderr"));
+    if(scenario==="timeout")timers[0].fn();
+    if(scenario==="interrupt")signals.emit("SIGINT");
+    if(scenario==="error_undefined")child.emit("error",undefined);
+    child.emit("close",scenario==="signal"?null:scenario==="nonzero"?9:0,scenario==="signal"?"SIGKILL":null);
+  }
+  const result=await promise;
+  assert.equal(spawns,1);assert.equal(samples,1);assert.equal(signals.listenerCount("SIGINT"),0);assert.equal(signals.listenerCount("SIGTERM"),0);assert.equal(cleared.length,3);
+  assert.equal(kills.length,["timeout","interrupt"].includes(scenario)?1:0);
+  if(scenario.endsWith("undefined"))assert.equal(result.errors[0],undefined);
+  return result;
+}
+test("receipt builder actual owned-process original result reaches acceptor capture and projection",async()=>{
+  for(const scenario of ["normal","nonzero","signal","timeout","interrupt","error_undefined","sample_undefined","spawn_undefined"]){
+    const produced=await receiptActualProducer("wrangler_input",false,{ownedProcess:(...values)=>receiptOwnedResult(...values,scenario)});
+    const result=produced.processResults[0],row=await lifecyclePacket(produced);
+    assert.equal(produced.processResults.length,1);assert.equal(produced.builders[0].calls.filter(r=>r[0]==="build").length,1);
+    if(scenario==="spawn_undefined"){assert.equal(row.builder,null);assert.equal(result.closed,false);assert.equal(result.spawnErrors[0],undefined);continue;}
+    assert.ok(row.builder);assert.equal(row.builder[3],result.code);assert.equal(row.builder[4],receiptBuilderSignals.indexOf(result.signal));
+    assert.equal(row.builder[6],result.errors.length);assert.equal(row.builder[7],result.remaining?.length??null);
+    assert.deepEqual(row.builder.slice(8),[result.outputSummary.stdout.bytes,result.outputSummary.stdout.sha256,result.outputSummary.stderr.bytes,result.outputSummary.stderr.sha256]);
+    assert.equal(row.child[1],"invalid");assert.equal(row.child[8],"UNKNOWN");
+  }
+});
+test("receipt builder original close group projects actual acceptor fields without lifecycle credit",async()=>{
+  for(const change of [
+    r=>{},r=>{r.code=7;},r=>{r.code=null;r.signal="SIGTERM";},
+    r=>{r.timedOut=true;},r=>{r.interrupted=true;},r=>{r.errors=[undefined];},
+    r=>{r.remaining=null;},r=>{r.remaining=[{inert:true}];},
+    r=>{r.closed=false;r.code=null;r.outputSummary.stderr.complete=false;},
+  ]){
+    let observed=0;
+    const produced=await receiptActualProducer("wrangler_input",false,{processResult(result){observed++;change(result);truncateActualBuilder(result);}});
+    assert.equal(observed,1);assert.equal(produced.builders.length,1);assert.equal(produced.builders[0].failed,false);
+    assert.equal(produced.builders[0].calls.filter(r=>r[0]==="build").length,1);
+    assert.equal(produced.builders[0].calls.filter(r=>r[0]==="build_service_stop").length,1);
+    const result=produced.processResults[0],row=await lifecyclePacket(produced),group=row.builder;
+    assert.equal(row.child[1],"invalid");assert.deepEqual(row.lifecycle,[1,6,6,12,0,2,0]);assert.ok(group);
+    const close=produced.report.records.find(r=>r.phase==="build_a_close");
+    assert.deepEqual(group,[1,1,close.outcome==="fulfilled"?1:close.defined?3:2,result.code,receiptBuilderSignals.indexOf(result.signal),
+      (result.closed?1:0)+(result.timedOut?2:0)+(result.interrupted?4:0)+(result.outputSummary.stdout.complete?16:0)+(result.outputSummary.stderr.complete?64:0),
+      result.errors.length,result.remaining?.length??null,result.outputSummary.stdout.bytes,result.outputSummary.stdout.sha256,0,result.outputSummary.stderr.sha256]);
+    if(result.errors.length){assert.equal(result.errors[0],undefined);assert.ok(produced.reason.errors[0].errors.includes(undefined));}
+    assert.equal(row.child[8],"UNKNOWN");assert.equal(row.child[6],0);assert.equal(row.reports[0],0);
+  }
+});
+test("receipt builder source-selected second builder remains separate from the first role",async()=>{
+  const produced=await receiptActualProducer("wrangler_input",false,{processResult(result,role){if(role==="build_b")truncateActualBuilder(result);}});
+  assert.equal(produced.builders.length,2);assert.equal(produced.processResults.length,2);
+  const row=await lifecyclePacket(produced);assert.equal(row.projection[2],5);assert.equal(row.builder[1],2);
+  assert.deepEqual(row.builder.slice(8,10),[produced.processResults[1].outputSummary.stdout.bytes,produced.processResults[1].outputSummary.stdout.sha256]);
+});
+test("receipt builder capture reports retain byte fingerprints without retaining-text or OS claims",async()=>{
+  const produced=await receiptActualProducer("build_a:build",false,{processResult(result){
+    truncateActualBuilder(result);result.stderr="private-not-forwarded";
+    result.outputSummary.stderr={bytes:result.stderr.length,sha256:createHash("sha256").update(result.stderr).digest("hex"),esc:true,complete:true};
+    // Complete is the producer's original close flag, not a retained-text claim.
+    result.outputSummary.stdout.bytes+=100;result.outputSummary.stdout.sha256=other;
+  }});
+  assert.equal(produced.builders[0].reason,undefined);assert.equal(produced.builders[0].calls.filter(r=>r[0]==="build").length,1);
+  const row=await lifecyclePacket(produced);assert.ok(row.builder);assert.equal(row.builder[9],other);assert.equal(row.builder[10],21);assert.ok(row.builder[5]&32);
+  assert.ok(!JSON.stringify(row).includes("private-not-forwarded"));assert.equal(row.child[1],"invalid");
+  const incomplete=await receiptActualProducer("wrangler_input",false,{processResult(result){truncateActualBuilder(result);result.outputSummary.stderr.complete=false;}});
+  assert.equal((await lifecyclePacket(incomplete)).builder,null);
+});
+test("receipt builder group rejects duplicate foreign conflicting and ambiguous frames before projection",async()=>{
+  const produced=await receiptActualProducer("wrangler_input",false,{processResult:truncateActualBuilder});
+  const original=produced.frames, change=(frames,phase,fn)=>frames.map(line=>{const row=JSON.parse(line.slice("EDGE_PACKAGING_V1 ".length));if(row.phase===phase)fn(row);return"EDGE_PACKAGING_V1 "+JSON.stringify(row)+"\n";});
+  const find=phase=>original.find(line=>line.includes('"phase":"'+phase+'"'));
+  for(const mutate of [
+    frames=>[...frames,find("build_a_launch")],frames=>[...frames,find("build_a_close")],
+    frames=>[...frames,find("stdout_summary")],frames=>[...frames,find("entry").replace('"role":"child"','"role":"build_b"')],frames=>change(frames,"build_a_close",r=>r.role="build_b"),
+    frames=>change(frames,"stderr_summary",r=>r.role="build_a"),frames=>change(frames,"stdout_summary",r=>r.bytes=null),
+    frames=>change(frames,"build_a_close",r=>r.errors=null),frames=>change(frames,"build_a_close",r=>r.closed=null),
+    frames=>[...frames,"EDGE_PACKAGING_V1 {}\n"],frames=>[...frames,find("entry").trimEnd()],
+    frames=>[...frames,"EDGE_PACKAGING_V1 \x1b{}\n"],frames=>[...frames,find("entry").replace('"v":1','"v":1,"v":1')],
+    frames=>Array(257).fill(frames[0]),frames=>change(frames,"build_a_close",r=>r.role="foreign"),
+  ]){const row=await lifecyclePacket(produced,mutate);assert.equal(row.builder,null);assert.notEqual(row.child[1],"reported_complete");}
+  for(const stream of ["stdout","stderr"]){
+    const capture=await receiptCapture(original);capture.h.attached.result.outputSummary[stream].sha256=other;
+    const ledger=createProjectionLedger();assert.equal(capture.summary(ledger)[1],"capture_mismatch");assert.equal(ledger.builder(),null);
+  }
+  const missing=await receiptActualProducer("wrangler_input",true,{processResult:truncateActualBuilder});assert.ok(missing.report.errors.includes(undefined));assert.equal((await lifecyclePacket(missing)).builder,null);
+});
+test("receipt builder schema preserves historical decoders exact fields and maximum atomic budget",async()=>{
+  const produced=await receiptActualProducer("wrangler_input",false,{processResult:truncateActualBuilder}),base=await lifecyclePacket(produced);
+  const prior={...base,v:11};delete prior.builder;assert.deepEqual(validateReceiptLifecycleDiagnostic(prior),prior);
+  for(const mutate of [
+    r=>r.builder[0]=2,r=>r.builder[1]=2,r=>r.builder[2]=0,r=>r.builder[3]=65536,r=>r.builder[4]=15,
+    r=>r.builder[5]=128,r=>r.builder[6]=null,r=>r.builder[7]=-1,r=>r.builder[8]=-1,r=>r.builder[9]="x".repeat(64),
+    r=>r.builder[10]=Number.MAX_SAFE_INTEGER+1,r=>r.builder[11]=null,r=>r.projection=null,r=>r.child[1]="reported_complete",
+    r=>{r.builder[2]=1;r.builder[3]=1;},r=>r.builder[5]=0,
+  ]){const bad=structuredClone(base);mutate(bad);assert.throws(()=>validateReceiptBuilderDiagnostic(bad));}
+  const wide=structuredClone(base);wide.reports=[65535,65535];wide.lifecycle=[1,256,256,14,0,2,0];
+  wide.builder=[1,1,3,-65535,14,127,65535,65535,Number.MAX_SAFE_INTEGER,hex,Number.MAX_SAFE_INTEGER,other];
+  validateReceiptBuilderDiagnostic(wide);
+  const lines=[],records=[wide,{v:2,phase:"entry",state:"rejected",defined:false,exit:null,signal:null},...Array.from({length:20},(_,i)=>({v:2,phase:["dispatch","image","base","create","attach","ready","cwd","temp","environment","retirement"][i%10],state:"rejected",defined:false,exit:null,signal:null}))];
+  // Maximum-width evidence still needs its actual outer attach/init witnesses.
+  for (const row of records) if (["ready","admission","permit"].includes(row.phase)) { row.state="fulfilled";row.defined=null; }
+  const capture=await receiptCapture(produced.frames);
+  createAttachProjection(capture.h.attached,{cid:hex,nonce:hex,contextHash:other},{internal:row=>records.push(row)})(capture.h.attached.result);
+  emitContainerFailure(records,line=>lines.push(line));assert.equal(lines.length,10);assert.ok(Buffer.byteLength(JSON.stringify(wide))<=512);assert.ok(lines.every(line=>Buffer.byteLength(line)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);
+  receiptPackets.push(lines.map(line=>JSON.parse(line.slice(line.indexOf("::{")+2))));
 });
 // END attach diagnostic pure tests.

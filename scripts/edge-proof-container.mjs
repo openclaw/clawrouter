@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { deflateSync } from "node:zlib";
 import { createRequire } from "node:module";
 import { edgeProof } from "./edge-proof-profile.mjs";
-import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, validateContainerDiagnostic, initGuardTags, initSourcePhases, validateInitDetail, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic, projectionBoundaries, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic } from "./edge-proof.mjs";
+import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, validateContainerDiagnostic, initGuardTags, initSourcePhases, validateInitDetail, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic, projectionBoundaries, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals } from "./edge-proof.mjs";
 export { validateContainerDiagnostic, emitContainerFailure } from "./edge-proof.mjs";
 
 export const containerContract = Object.freeze({
@@ -883,10 +883,45 @@ export function parseInitPrerequisites(result, binding) {
 }
 // This validates the source-defined record lifecycle, not native success or
 // operation-vs-bookkeeping causality. Report errors can follow FINAL fulfilled.
+export function projectBuilderCloseGroup(rows, childLifecycle, first) {
+  // Only a source-selected builder validation failure can implicate this group.
+  // All rows have already passed canonical validation; the child wrapper order
+  // has passed separately. The builder lifecycle itself remains unqualified.
+  if (!rows || !childLifecycle || !first || ![4,5].includes(first[2]) || first[1] < 18 || first[1] > 30) return null;
+  const role = first[2] === 4 ? "build_a" : "build_b";
+  // No canonical-but-unassociated builder frames may hide outside a wrapper's
+  // original close/summary/report interval, including a different builder role.
+  for (const candidate of ["build_a","build_b"]) {
+    const members = rows.filter(row=>row.role===candidate), owners = childLifecycle.accepts.filter(item=>item.role===candidate);
+    if (!members.length) continue;
+    if (owners.length !== 1) return null;
+    const begin = rows.indexOf(owners[0].close)+4, end = rows.indexOf(owners[0].row), forwarded = rows.slice(begin,end);
+    if (begin < 4 || end < begin || members.length !== forwarded.length || members.some((row,i)=>row!==forwarded[i])) return null;
+  }
+  const accepted = childLifecycle.accepts.filter(item=>item.role===role);
+  const launches = rows.filter(row=>row.role==="child"&&row.phase===role+"_launch");
+  const closes = rows.filter(row=>row.role==="child"&&row.phase===role+"_close");
+  if (accepted.length !== 1 || launches.length !== 1 || closes.length !== 1 || accepted[0].close !== closes[0]) return null;
+  const start = rows.indexOf(launches[0]), end = rows.indexOf(accepted[0].row);
+  if (rows[start+1] !== closes[0] || launches[0].outcome !== "enter" || end < start+5) return null;
+  if (["defined","exit","signal","closed","timedOut","interrupted","errors","remaining"].some(key=>launches[0][key]!==null)) return null;
+  const summaries = rows.slice(start+2,start+5);
+  if (!summaries.every((row,i)=>row.role==="child"&&row.phase===["stdout_summary","stderr_summary","protocol_summary"][i]&&row.outcome==="observed")) return null;
+  const members = rows.filter(row=>row.role===role), forwarded = rows.slice(start+5,end);
+  if (!members.length || members.length !== forwarded.length || members.some((row,i)=>row!==forwarded[i])) return null;
+  const close = closes[0], [out,err] = summaries;
+  if (!["fulfilled","rejected"].includes(close.outcome) || (close.outcome === "rejected" ? typeof close.defined !== "boolean" : close.defined !== null)) return null;
+  if (![close.closed,close.timedOut,close.interrupted,out.esc,out.complete,err.esc,err.complete].every(value=>typeof value==="boolean")) return null;
+  const flags = [close.closed,close.timedOut,close.interrupted,out.esc,out.complete,err.esc,err.complete].reduce((mask,value,i)=>mask+(value?2**i:0),0);
+  try { return validateReportedBuilderProcess([1,first[2]-3,close.outcome==="fulfilled"?1:close.defined?3:2,close.exit,receiptBuilderSignals.indexOf(close.signal),flags,close.errors,close.remaining,out.bytes,out.sha256,err.bytes,err.sha256]); } catch { return null; }
+}
 export function createProjectionLedger() {
-  const errors = [], stack = [], admitted = new WeakMap(); let first = null, firstLifecycle = null, broken = false;
+  const errors = [], stack = [], admitted = new WeakMap(); let first = null, firstLifecycle = null, canonicalRows = null, childLifecycle = null, broken = false;
   const note = operation => { try { return operation(); } catch (error) { broken = true; errors.push(error); } };
   return { errors,
+    canonical(rows) { note(() => { canonicalRows = rows; }); },
+    childLifecycle(value) { note(() => { childLifecycle = value; }); },
+    builder() { return broken || errors.length || stack.length ? null : projectBuilderCloseGroup(canonicalRows, childLifecycle, first); },
     start(boundary, context) { return note(() => { const frame = { boundary, context, seen: 0, passed: 0 }; stack.push(frame); return frame; }); },
     leaf(id, value, negative) { note(() => { const frame = stack.at(-1); if (!frame) return; const bit = 2 ** (id - 1); frame.seen |= bit; if (negative ? !value : value) frame.passed |= bit; }); },
     admit(rows, count, context) { note(() => admitted.set(rows, { count, context })); },
@@ -944,12 +979,14 @@ export function parseChildPackaging(result, binding, initSummary, recorder) {
       projectionRun(recorder, 16, 0, () => rows.push(row));
     }
     if (projectionRun(recorder, 17, 0, () => projectionLeaf(recorder, 1, !rows.length, true), true)) return unknown("no_records",0);
+    projectionRecord(recorder, "canonical", rows);
     const roles = ["child","build_a","build_b"], lifecycle = new Map();
     for (const role of roles) {
       const context = roles.indexOf(role) + 3;
       const records = projectionRun(recorder, 18, context, () => rows.filter(row => row.role === role)); const count = records.length; if (!count) continue;
       projectionRecord(recorder, "admit", records, count, context);
       const terminal = projectionRun(recorder, 19, context, () => validateChildLifecycle(records, role, recorder, context)); if (projectionRun(recorder, 20, context, () => projectionLeaf(recorder, 1, !terminal, true), true)) return unknown("incomplete",rows.length);
+      if (role === "child") projectionRecord(recorder, "childLifecycle", terminal);
       projectionRun(recorder, 21, context, () => lifecycle.set(role,terminal));
     }
     if (projectionRun(recorder, 22, 0, () => projectionLeaf(recorder, 1, !lifecycle.has("child"), true), true)) return unknown("incomplete",rows.length);
@@ -1239,8 +1276,8 @@ export async function observeContainerReceipt(report, text, plan, childSummary, 
     try { child = childSummary(projector); } catch (error) { reporting.push(error); failures.push(error); child = [1,"invalid",null,0,0,0,0,null,"UNKNOWN"]; }
     failures.push(...projector.errors);
     const diagnostics = [...reporting, ...recorder.errors, ...projector.errors];
-    try { report.internal(validateReceiptLifecycleDiagnostic({ v: 11, phase: "receipt", state: "rejected", defined: failures[0] !== undefined, exit: null, signal: null,
-      parser: recorder.finish(outcome, operationReason), child, reports: [diagnostics.length, diagnostics.filter(error => error === undefined).length], count: recorder.cardinality(), projection: projector.detail(), lifecycle: projector.lifecycle() })); }
+    try { report.internal(validateReceiptBuilderDiagnostic({ v: 12, phase: "receipt", state: "rejected", defined: failures[0] !== undefined, exit: null, signal: null,
+      parser: recorder.finish(outcome, operationReason), child, reports: [diagnostics.length, diagnostics.filter(error => error === undefined).length], count: recorder.cardinality(), projection: projector.detail(), lifecycle: projector.lifecycle(), builder: projector.builder() })); }
     catch (error) { failures.push(error); }
     raiseContainerFailures(failures);
   }

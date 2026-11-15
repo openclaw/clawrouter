@@ -928,7 +928,44 @@ export function validateReceiptLifecycleDiagnostic(value) {
   if (Buffer.byteLength(JSON.stringify(result)) > 512) refuse("receipt-lifecycle-capacity");
   return result;
 }
+// V12 adds CHILD-REPORTED original builder process facts, not lifecycle or
+// physical-host custody. Flags: close, timeout, interrupt, stdout ESC/complete,
+// stderr ESC/complete. Codec 1 requires a bound, complete outer capture and a
+// canonical source-associated group. Inner retained-text integrity stays UNKNOWN;
+// capture hashes describe received bytes only. Wrapper 1=fulfilled, 2=rejected
+// undefined, 3=rejected defined. Signal 0=null; remaining null=UNKNOWN.
+export const receiptBuilderSignals = Object.freeze([null,"SIGINT","SIGTERM","SIGKILL","SIGABRT","SIGSEGV","SIGBUS","SIGILL","SIGPIPE","SIGHUP","SIGQUIT","SIGTRAP","SIGXCPU","SIGXFSZ","SIGSYS"]);
+export function validateReportedBuilderProcess(value) {
+  if (!Array.isArray(value) || Object.getOwnPropertyNames(value).join() !== [...Array(12).keys(),"length"].join()) refuse("receipt-builder-tuple");
+  value = Array.from({length:12},(_,i)=>ownData(value,String(i)));
+  const [v,role,outcome,exit,signal,flags,errors,remaining,outBytes,outHash,errBytes,errHash] = value;
+  if (v !== 1 || ![1,2].includes(role)) refuse("receipt-builder-role");
+  if (![1,2,3].includes(outcome) || !Number.isSafeInteger(signal) || signal < 0 || signal >= receiptBuilderSignals.length || !Number.isSafeInteger(flags) || flags < 0 || flags > 127) refuse("receipt-builder-values");
+  if (exit !== null && (!Number.isSafeInteger(exit) || exit < -65535 || exit > 65535)) refuse("receipt-builder-exit");
+  if (!Number.isSafeInteger(errors) || errors < 0 || errors > 65535 || remaining !== null && (!Number.isSafeInteger(remaining) || remaining < 0 || remaining > 65535)) refuse("receipt-builder-counts");
+  if (![outBytes,errBytes].every(n=>Number.isSafeInteger(n)&&n>=0) || ![outHash,errHash].every(s=>typeof s==="string"&&/^[a-f0-9]{64}$/.test(s))) refuse("receipt-builder-captures");
+  if (!(flags & 1) && (exit !== null || signal !== 0) || Boolean(flags & 16) !== Boolean(flags & 1) || Boolean(flags & 64) !== Boolean(flags & 1)) refuse("receipt-builder-close");
+  if (outcome === 1 && (exit !== 0 || signal !== 0 || !(flags & 1) || (flags & 6) || errors !== 0 || remaining !== 0)) refuse("receipt-builder-success");
+  return value;
+}
+export function validateReceiptBuilderDiagnostic(value) {
+  const keys = ["v","phase","state","defined","exit","signal","parser","child","reports","count","projection","lifecycle","builder"];
+  if (!value || Object.getOwnPropertyNames(value).sort().join() !== [...keys].sort().join()) refuse("receipt-builder-keys");
+  const row = Object.fromEntries(keys.map(key => [key,ownData(value,key)]));
+  if (row.v !== 12) refuse("receipt-builder-version");
+  const prior = Object.fromEntries(keys.slice(0,-1).map(key => [key,row[key]])); prior.v = 11;
+  const validated = validateReceiptLifecycleDiagnostic(prior);
+  if (row.builder !== null) {
+    row.builder = validateReportedBuilderProcess(row.builder);
+    const detail = validated.projection;
+    if (!detail || detail[2] !== row.builder[1]+3 || !["invalid","incomplete"].includes(validated.child[1]) || detail[1] < 18 || detail[1] > 30) refuse("receipt-builder-source-role");
+  }
+  const result = {...validated,v:12,builder:row.builder};
+  if (Buffer.byteLength(JSON.stringify(result)) > 512) refuse("receipt-builder-capacity");
+  return result;
+}
 export function validateContainerDiagnostic(value) {
+  if (value && typeof value === "object" && ownData(value, "v") === 12) return validateReceiptBuilderDiagnostic(value);
   if (value && typeof value === "object" && ownData(value, "v") === 11) return validateReceiptLifecycleDiagnostic(value);
   if (value && typeof value === "object" && ownData(value, "v") === 10) return validateReceiptBoundaryDiagnostic(value);
   if (value && typeof value === "object" && ownData(value, "v") === 9) return validateReceiptDiagnostic(value);
@@ -1038,7 +1075,7 @@ export function containerProcessDiagnostic(result, available = true, reason) {
 export function emitContainerFailure(records, writer = line => process.stdout.write(line)) {
   const validated = records.map(validateContainerDiagnostic), detailed = validated.filter(row => row.v === 8);
   if (detailed.length > 1) refuse("parent-admission-duplicate");
-  const receipt = validated.filter(row => row.v === 9 || row.v === 10 || row.v === 11); if (receipt.length > 1) refuse("receipt-diagnostic-duplicate");
+  const receipt = validated.filter(row => row.v === 9 || row.v === 10 || row.v === 11 || row.v === 12); if (receipt.length > 1) refuse("receipt-diagnostic-duplicate");
   const rows = validated.filter(row => !(detailed.length && row.phase === "admission" && row.v === 2) && !(receipt.length && row.phase === "receipt" && row.v === 2)), unique = new Map();
   const rejected = rows.filter(row => row.state === "rejected");
   // Reserve the first actual failure and original build outcome before context.
