@@ -1,6 +1,6 @@
 # Changelog
 
-- Add an offline, isolated edge-cancellation proof preparation route with frozen-source instrumentation, a pinned-image packaging job with independent host process and cgroup admission, and strict native-client retirement controls. Keep the image build’s pnpm store explicitly outside the sealed source input. Preserve original attach outcomes and identity-bound init-prerequisite diagnostics separately from readiness and physical retirement, including invocation-owned guard, exact mount-predicate and prerequisite failure detail. Cloud activation and actual SDK/edge qualification remain separate, explicitly authorized steps.
+- Add an offline, isolated edge-cancellation proof preparation route with frozen-source instrumentation, a pinned-image packaging job with independent host process and cgroup admission, and strict native-client retirement controls. Keep the image build’s pnpm store explicitly outside the sealed source input. Preserve original attach outcomes and identity-bound init-prerequisite diagnostics separately from readiness and physical retirement, including invocation-owned guard, exact mount-predicate and prerequisite failure detail with consistent captured enum evidence. Cloud activation and actual SDK/edge qualification remain separate, explicitly authorized steps.
 
 ## Unreleased
 

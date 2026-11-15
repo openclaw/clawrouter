@@ -702,6 +702,24 @@ export function validateMountDetail(value, source) {
   if (predicate === 16 && (leaf < 3 && fs !== null || leaf < 2 && root !== null) || predicate === 18 && leaf < 2 && root !== null || [20, 21, 22].includes(predicate) && leaf < 3 && root !== null || predicate === 1 && root !== null && role !== null) refuse("mount-detail-unreached-field");
   if (count !== null && ![3, 6, 7, 9, 10, 11, 23].includes(predicate) || distinct !== null && ![6, 7, 9, 23].includes(predicate) || [6, 7].includes(predicate) && leaf < 4 && distinct !== null) refuse("mount-detail-unobserved-count");
   if ([2, 3, 4, 9, 10, 11, 12, 13, 23].includes(predicate) && role !== null) refuse("mount-detail-unobserved-role");
+  const relation = (id, result) => { if (result !== null && seen & 2 ** (id - 1) && Boolean(passed & 2 ** (id - 1)) !== result) refuse("mount-detail-value-comparison"); };
+  const fsIs = names => fs === null ? null : names.includes(mountFilesystems[fs - 2]);
+  const rootIs = expected => root === null ? null : root === expected;
+  if (predicate === 1) {
+    if (role !== null || root !== null) relation(1, true);
+    if (role >= 2 || root === 1 || root === 2) for (const id of [2, 3, 4]) relation(id, true);
+  }
+  if (predicate === 5) { if (fs !== null) relation(1, true); if (fs >= 2) relation(2, true); }
+  if (predicate === 16) { relation(2, rootIs(1)); relation(3, fsIs(["overlay", "ext4", "xfs"])); }
+  if (predicate === 18) {
+    const expected = { "/task": "tmpfs", "/proc": "proc", "/dev": "tmpfs", "/dev/pts": "devpts", "/dev/shm": "tmpfs", "/dev/mqueue": "mqueue", "/sys": "sysfs", "/sys/fs/cgroup": "cgroup2" };
+    relation(1, fsIs([expected[mountTargets[role - 2]]])); relation(2, rootIs(1));
+  }
+  if (predicate === 19) relation(1, fsIs(["ext4", "xfs"]));
+  if (predicate === 20) relation(1, fsIs(["proc"]));
+  if (predicate === 21) relation(3, rootIs(2));
+  if (predicate === 22) { relation(1, fsIs(["tmpfs"])); relation(3, rootIs(1)); }
+  // The proc root RHS and null-mask filesystem RHS are separate, uncaptured reads.
   const comparison = predicate === 9 ? leaf : predicate === 23 ? 1 : [6, 7].includes(predicate) && leaf >= 4 ? 4 : null;
   if (comparison !== null && count !== null && distinct !== null && overflow === 0 && (count === distinct) !== Boolean(passed & 2 ** (comparison - 1))) refuse("mount-detail-count-comparison");
   if (predicate === 23 && (count === null || distinct === null || role !== null)) refuse("mount-detail-aggregate");

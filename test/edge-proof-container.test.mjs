@@ -1373,4 +1373,52 @@ test("mount diagnostics each structural leaf and original unobserved operand rel
   const firstFs = mountDiagnosticCases.find(detail => detail.m[1] === 18 && detail.m[2] === 1).m;
   assert.equal(firstFs[5], null); assert.equal(firstFs[6], 1); assert.equal(firstFs[7], 0);
 });
+const contradictoryMountEnums = [];
+test("mount diagnostics reject valid-range enum contradictions without inventing uncaptured operands", async () => {
+  const fs = name => mountFilesystems.indexOf(name) + 2;
+  contradictoryMountEnums.push([1, 16, 2, 2, null, 1, 3, 1, null, null, 0]);
+  const api = await initGuardFactory();
+  for (const target of ["/task", "/proc", "/dev", "/dev/pts", "/dev/shm", "/dev/mqueue", "/sys", "/sys/fs/cgroup"]) {
+    const rows = mounts(); rows.find(row => row.target === target).fs = "ext4";
+    observedMountFailure(r => api.validateMounts(rows, r), 18, 1);
+  }
+  for (const detail of mountDiagnosticCases) {
+    const m = detail.m, predicate = m[1]; validateMountDetail(m, detail.source);
+    const opposite = (index, bit, yes, no) => { if (m[index] === null) return; const copy = [...m]; copy[index] = m[7] & 2 ** (bit - 1) ? no : yes; contradictoryMountEnums.push(copy); };
+    if (predicate === 16) { opposite(5, 2, 1, 3); opposite(4, 3, fs("overlay"), fs("tmpfs")); }
+    if (predicate === 18) {
+      const expected = { "/task": "tmpfs", "/proc": "proc", "/dev": "tmpfs", "/dev/pts": "devpts", "/dev/shm": "tmpfs", "/dev/mqueue": "mqueue", "/sys": "sysfs", "/sys/fs/cgroup": "cgroup2" }[mountTargets[m[3] - 2]];
+      opposite(4, 1, fs(expected), 1); opposite(5, 2, 1, 3);
+    }
+    if (predicate === 19) opposite(4, 1, fs("ext4"), fs("tmpfs"));
+    if (predicate === 20) opposite(4, 1, fs("proc"), fs("tmpfs"));
+    if (predicate === 21) opposite(5, 3, 2, 1);
+    if (predicate === 22) { opposite(4, 1, fs("tmpfs"), fs("proc")); opposite(5, 3, 1, 2); }
+  }
+  for (const m of contradictoryMountEnums) assert.throws(() => validateMountDetail(m, "mount_validate"));
+  for (const predicate of [16, 18, 19, 20, 21, 22]) assert.ok(contradictoryMountEnums.some(m => m[1] === predicate));
+  for (const detail of mountDiagnosticCases.filter(d => [1, 5].includes(d.m[1]))) {
+    const invalid = [...detail.m]; invalid[invalid[1] === 1 ? 5 : 4] = invalid[1] === 1 ? 1 : fs("proc");
+    assert.throws(() => validateMountDetail(invalid, detail.source));
+  }
+  // These RHS values were not captured; their result cannot be inferred from a role or earlier row.
+  for (const detail of mountDiagnosticCases.filter(d => d.m[1] === 20 && d.m[5] !== null || d.m[1] === 21 && d.m[4] !== null)) {
+    for (const value of detail.m[1] === 20 ? [1, 2, 3, null] : [1, fs("proc"), fs("tmpfs"), null]) {
+      const unknown = [...detail.m]; unknown[unknown[1] === 20 ? 5 : 4] = value; validateMountDetail(unknown, detail.source);
+    }
+  }
+});
+test("mount diagnostics framed parser refuses contradictory enums with complete bound capture", async () => {
+  const detail = mountDiagnosticCases.find(d => d.m[1] === 16 && d.m[2] === 2), frames = [], trace = createInitDiagnostics(line => frames.push(line));
+  trace.enter("arguments"); trace.bind(hex, other); for (const stage of initPrerequisiteStages.slice(1, 5)) trace.enter(stage);
+  trace.finish(true, undefined, detail); assert.deepEqual(trace.errors, []);
+  const records = frames.map(frame => JSON.parse(frame.trim().slice("EDGE_INIT_V1 ".length)));
+  for (const m of contradictoryMountEnums) {
+    const altered = structuredClone(records); altered.at(-1).detail.m = m;
+    const captured = await attachWithFrames(altered.map(row => "\nEDGE_INIT_V1 " + JSON.stringify(row) + "\n").join(""));
+    const result = captured.h.attached.result; assert.equal(result.supervisor[4], true);
+    assert.equal(result.outputSummary.stdout.complete, true); assert.equal(result.outputSummary.stderr.complete, true);
+    const parsed = parseInitPrerequisites(result, captured.binding); assert.equal(parsed.reason, "invalid"); assert.equal(Object.hasOwn(parsed, "detail"), false);
+  }
+});
 // END attach diagnostic pure tests.
