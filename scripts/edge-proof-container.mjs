@@ -9,7 +9,7 @@ import { createRequire } from "node:module";
 import { channel } from "node:diagnostics_channel";
 import { errorMonitor } from "node:events";
 import { edgeProof } from "./edge-proof-profile.mjs";
-import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, validateContainerDiagnostic, initGuardTags, initSourcePhases, validateInitDetail, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic, projectionBoundaries, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, packReceiptOwnedDiagnostic, packReceiptCodeDiagnostic, packReceiptAssociatedDiagnostic, packReceiptCensusDiagnostic, unpackCensusCloseDiagnostic, validateWranglerCloseDiagnostic, packReceiptWranglerDiagnostic } from "./edge-proof.mjs";
+import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, validateContainerDiagnostic, initGuardTags, initSourcePhases, validateInitDetail, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic, projectionBoundaries, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, packReceiptOwnedDiagnostic, packReceiptCodeDiagnostic, packReceiptAssociatedDiagnostic, packReceiptCensusDiagnostic, unpackCensusCloseDiagnostic, validateWranglerCloseDiagnostic, packReceiptObservedWranglerDiagnostic, validateObservedWranglerCloseDiagnostic } from "./edge-proof.mjs";
 export { validateContainerDiagnostic, emitContainerFailure } from "./edge-proof.mjs";
 
 export const containerContract = Object.freeze({
@@ -1125,7 +1125,7 @@ function reconcileSuccessfulBuilderSummary(rows, lifecycle, role) {
 // Only the exact admitted close row and its source lifecycle launch can own
 // this group. Global canonical/capture checks run before rejection is recorded.
 export function projectWranglerCloseGroup(rows, lifecycle, rejection) {
-  if (!rows || !lifecycle || !rejection || rejection.v !== 5 || rejection.role !== "child" || rejection.outcome !== "rejected") return null;
+  if (!rows || !lifecycle || !rejection || ![5,6].includes(rejection.v) || rejection.role !== "child" || rejection.outcome !== "rejected") return null;
   // Wrangler is reached only after BOTH exact builder acceptance intervals.
   // All forwarded rows must follow the three summaries, including foreign-role
   // insertions that role-local lifecycle checks alone cannot detect.
@@ -1140,7 +1140,7 @@ export function projectWranglerCloseGroup(rows, lifecycle, rejection) {
   const {launch,close} = owners[0], start = rows.indexOf(launch);
   if (start < 0 || rows[start+1] !== close || launch.role !== "child" || launch.phase !== close.phase.replace("_close","_launch") || launch.outcome !== "enter" || rows.filter(row=>row.phase===launch.phase).length !== 1) return null;
   if (["defined","exit","signal","closed","timedOut","interrupted","errors","remaining"].some(key=>launch[key]!==null)) return null;
-  try { return validateWranglerCloseDiagnostic(close).detail; } catch { return null; }
+  try { return (close.v === 6 ? validateObservedWranglerCloseDiagnostic(close) : validateWranglerCloseDiagnostic(close)).detail; } catch { return null; }
 }
 export function createProjectionLedger() {
   const errors = [], stack = [], admitted = new WeakMap(); let first = null, firstLifecycle = null, canonicalRows = null, childLifecycle = null, firstOwnedTrace = null, firstOwnedCode = null, firstCensus = null, admittedRejection = null, broken = false;
@@ -1513,7 +1513,7 @@ export async function observeContainerReceipt(report, text, plan, childSummary, 
     try { child = childSummary(projector); } catch (error) { reporting.push(error); failures.push(error); child = [1,"invalid",null,0,0,0,0,null,"UNKNOWN"]; }
     failures.push(...projector.errors);
     const diagnostics = [...reporting, ...recorder.errors, ...projector.errors];
-    try { const builder=projector.builder();report.internal(packReceiptWranglerDiagnostic(packReceiptCensusDiagnostic({ v: 12, phase: "receipt", state: "rejected", defined: failures[0] !== undefined, exit: null, signal: null,
+    try { const builder=projector.builder();report.internal(packReceiptObservedWranglerDiagnostic(packReceiptCensusDiagnostic({ v: 12, phase: "receipt", state: "rejected", defined: failures[0] !== undefined, exit: null, signal: null,
       parser: recorder.finish(outcome, operationReason), child, reports: [diagnostics.length, diagnostics.filter(error => error === undefined).length], count: recorder.cardinality(), projection: projector.detail(), lifecycle: projector.lifecycle(), builder },projector.owned(),projector.code(),projector.census()),projector.wrangler())); }
     catch (error) { failures.push(error); }
     raiseContainerFailures(failures);

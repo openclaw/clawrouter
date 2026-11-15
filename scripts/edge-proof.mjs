@@ -64,6 +64,7 @@ function ownData(value, name) {
   return descriptor.value;
 }
 export function validatePackagingDiagnostic(value) {
+  if (value && typeof value === "object" && ownData(value,"v") === 6) return validateObservedWranglerCloseDiagnostic(value);
   if (value && typeof value === "object" && ownData(value,"v") === 5) return validateWranglerCloseDiagnostic(value);
   if (value && typeof value === "object" && ownData(value,"v") === 4) return validateCensusCloseDiagnostic(value);
   if(value && typeof value==="object" && ownData(value,"v")===3) return validateOwnedCodeCloseDiagnostic(value);
@@ -120,7 +121,7 @@ export function createPackagingDiagnostics(role, writer) {
       }
       if (result && Object.hasOwn(result,"ownedTrace")) { row.v=2;row.trace=ownData(result,"ownedTrace"); }
       if (result && Object.hasOwn(result,"ownedCode")) { row.v=3;row.code=ownData(result,"ownedCode"); }
-      accept(qualification === undefined ? (result && Object.hasOwn(result,"ownedCensus") ? packCensusCloseDiagnostic(row,ownData(result,"ownedCensus")) : row) : packWranglerCloseDiagnostic(row, ownData(result,"outputSummary"), qualification));
+      accept(qualification === undefined ? (result && Object.hasOwn(result,"ownedCensus") ? packCensusCloseDiagnostic(row,ownData(result,"ownedCensus")) : row) : (Object.hasOwn(result,"ownedCensus") ? packObservedWranglerCloseDiagnostic(row, ownData(result,"outputSummary"), qualification, ownData(result,"ownedCensus")) : packWranglerCloseDiagnostic(row, ownData(result,"outputSummary"), qualification)));
     } catch (error) { errors.push(error); }
   };
   return {
@@ -537,6 +538,27 @@ export function requireProcessSuccess(result) {
     throw new AggregateError([new Error("edge-proof: child-not-qualified"), ...result.errors], "edge-proof: child-not-qualified");
   }
 }
+// Observation faults are independent of the original process verdict. Report
+// the earliest original failure, then retain every secondary failure on throw.
+export function reportObservedWranglerProcess(result, report, phase) {
+  let qualification = 1, failed = false, reason;
+  try { requireProcessSuccess(result); }
+  catch (error) { qualification = error === undefined ? 2 : 3; failed = true; reason = error; }
+  const failures = failed ? [reason] : [];
+  failures.push(...result.observerErrors);
+  if (failures.length) {
+    try { report.mark(phase, "rejected", failures[0], result, qualification); }
+    catch (error) { failures.push(error); }
+    if (failures.length === 1) throw failures[0];
+    throw new AggregateError(failures, "edge-proof: process-observation-failures");
+  }
+  try { report.mark(phase, "fulfilled", undefined, result, qualification); }
+  catch (error) {
+    try { report.mark(phase, "rejected", error, result, qualification); }
+    catch (reportError) { throw new AggregateError([error, reportError], "edge-proof: process-report-failures"); }
+    throw error;
+  }
+}
 // The qualification result is captured inside the original operation. A later
 // reporting throw cannot relabel that operation or replace its original reason.
 export function reportWranglerProcess(result, report, phase) {
@@ -638,8 +660,9 @@ export async function runPackagingPipeline(cwd, root, report, boundary) {
     const config = join(capsule, `${kind}.toml`), output = join(root, `dry-${kind}`);
     await report.step(configPhase, () => writeFile(config, renderEdgeConfig(offlineProjection(), kind, `${kind}.mjs`), { flag: "wx", mode: 0o600 }));
     report.mark(launch, "enter");
-    const result = await runOwnedProcess(process.execPath, ["--no-warnings", cli, "deploy", "--dry-run", "--config", config, "--outdir", output], { cwd: capsule, env, sample: privateProcesses });
-    reportWranglerProcess(result, report, close);
+    const recorder = boundary.builderDiagnostics ? createOwnedProcessLedger() : undefined;
+    const result = await runOwnedProcess(process.execPath, ["--no-warnings", cli, "deploy", "--dry-run", "--config", config, "--outdir", output], { cwd: capsule, env, sample: recorder ? () => privateProcesses(recorder) : privateProcesses, ...(recorder ? {recorder} : {}) });
+    (recorder ? reportObservedWranglerProcess : reportWranglerProcess)(result, report, close);
     const bytes = await report.step(outputPhase, () => readFile(join(output, `${kind}.mjs`)));
     results[kind] = verifyDryRun(result, bytes, receipts[0].bundles[kind], report, { marker, hash, privacy }, [root, cwd]);
   }
@@ -1394,7 +1417,54 @@ export function validateReceiptWranglerDiagnostic(value) {
   if (Buffer.byteLength(JSON.stringify(row)) > 512) refuse("wrangler-receipt-capacity");
   return row;
 }
+// V18 retains the whole V17 process group plus the existing invocation-owned
+// trace, code operand and census. The four absent builder slots are implicit;
+// unpacking restores V17 exactly. No sampled relation establishes ownership.
+export function validateObservedWranglerGroup(value) {
+  const group = ownedTuple(value,4), process = group[0] = validateReportedWranglerProcess(group[0]);
+  const trace = group[1] = validateOwnedTrace(group[1],process[6],[Boolean(process[5]&2),Boolean(process[5]&4)]);
+  group[2] = validateOwnedCode(group[2],trace);
+  if (group[3] !== null) group[3] = validateFinalCensus(group[3],process[7],Boolean(process[5]&1),process[6],trace);
+  const [faults,undefinedFaults] = trace[3];
+  if (faults && (process[2] === 1 || process[12] === 1 && (undefinedFaults === faults ? process[2] !== 2 : undefinedFaults === 0 && process[2] !== 3))) refuse("wrangler-observer-outcome");
+  return group;
+}
+export function packObservedWranglerCloseDiagnostic(row, summaries, qualification, census) {
+  const prior = packWranglerCloseDiagnostic(row,summaries,qualification);
+  return validateObservedWranglerCloseDiagnostic({...prior,v:6,detail:[prior.detail,row.trace,row.code,census]});
+}
+export function validateObservedWranglerCloseDiagnostic(value) {
+  const keys = ["v","role","phase","outcome","defined","detail"];
+  if (!value || Object.getOwnPropertyNames(value).sort().join() !== [...keys].sort().join()) refuse("wrangler-observed-close-keys");
+  const row = Object.fromEntries(keys.map(k=>[k,ownData(value,k)]));
+  if (row.v !== 6) refuse("wrangler-observed-close-version");
+  row.detail = validateObservedWranglerGroup(row.detail);
+  validateWranglerCloseDiagnostic({...row,v:5,detail:row.detail[0]});
+  if (Buffer.byteLength(JSON.stringify(row)) > 512) refuse("wrangler-observed-close-capacity");
+  return row;
+}
+export function packReceiptObservedWranglerDiagnostic(value, group) {
+  if (group === null || group.length === 13) return packReceiptWranglerDiagnostic(value,group);
+  const observed = validateObservedWranglerGroup(group), prior = packReceiptWranglerDiagnostic(value,observed[0]);
+  return validateReceiptObservedWranglerDiagnostic({...prior,v:18,detail:[...prior.detail.slice(0,7),...observed]});
+}
+export function unpackReceiptObservedWranglerDiagnostic(value) {
+  const detail = ownedTuple(ownData(value,"detail"),11);
+  return {v:17,phase:ownData(value,"phase"),state:ownData(value,"state"),detail:[...detail.slice(0,7),null,null,null,null,detail[7]]};
+}
+export function validateReceiptObservedWranglerDiagnostic(value) {
+  const keys = ["v","phase","state","detail"];
+  if (!value || Object.getOwnPropertyNames(value).sort().join() !== [...keys].sort().join()) refuse("wrangler-observed-receipt-keys");
+  const row = Object.fromEntries(keys.map(k=>[k,ownData(value,k)]));
+  if (row.v !== 18) refuse("wrangler-observed-receipt-version");
+  row.detail = ownedTuple(row.detail,11);
+  validateReceiptWranglerDiagnostic(unpackReceiptObservedWranglerDiagnostic(row));
+  row.detail.splice(7,4,...validateObservedWranglerGroup(row.detail.slice(7)));
+  if (Buffer.byteLength(JSON.stringify(row)) > 512) refuse("wrangler-observed-receipt-capacity");
+  return row;
+}
 export function validateContainerDiagnostic(value) {
+  if (value && typeof value === "object" && ownData(value,"v") === 18) return validateReceiptObservedWranglerDiagnostic(value);
   if (value && typeof value === "object" && ownData(value,"v") === 17) return validateReceiptWranglerDiagnostic(value);
   if (value && typeof value === "object" && ownData(value,"v") === 16) return validateReceiptCensusDiagnostic(value);
   if (value && typeof value === "object" && ownData(value, "v") === 15) return validateReceiptAssociatedDiagnostic(value);
@@ -1510,7 +1580,7 @@ export function containerProcessDiagnostic(result, available = true, reason) {
 export function emitContainerFailure(records, writer = line => process.stdout.write(line)) {
   const validated = records.map(validateContainerDiagnostic), detailed = validated.filter(row => row.v === 8);
   if (detailed.length > 1) refuse("parent-admission-duplicate");
-  const receipt = validated.filter(row => row.v === 9 || row.v === 10 || row.v === 11 || row.v === 12 || row.v === 13 || row.v === 14 || row.v === 15 || row.v === 16 || row.v === 17); if (receipt.length > 1) refuse("receipt-diagnostic-duplicate");
+  const receipt = validated.filter(row => row.v === 9 || row.v === 10 || row.v === 11 || row.v === 12 || row.v === 13 || row.v === 14 || row.v === 15 || row.v === 16 || row.v === 17 || row.v === 18); if (receipt.length > 1) refuse("receipt-diagnostic-duplicate");
   const rows = validated.filter(row => !(detailed.length && row.phase === "admission" && row.v === 2) && !(receipt.length && row.phase === "receipt" && row.v === 2)), unique = new Map();
   const rejected = rows.filter(row => row.state === "rejected");
   // Reserve the first actual failure and original build outcome before context.
