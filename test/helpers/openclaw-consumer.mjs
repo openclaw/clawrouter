@@ -75,19 +75,19 @@ export async function withNativeRunnerReport(options, run) {
   const reporterBytes = await readFile(reporterSource);
   assert.equal(sha256(reporterBytes), runnerReport.reporterSha256, "reporter bytes changed");
   assert.equal(sha256(await readFile(fixture)), runnerReport.fixtureSha256, "fixture bytes changed");
-  const directory = await mkdtemp(join(resolve(source), ".clawrouter-runner-report-"));
-  const report = join(directory, "report.jsonl");
   const binding = validateBinding({ ...runnerContract, fixtureSha256: runnerReport.fixtureSha256,
     reporterSha256: runnerReport.reporterSha256, nonce: randomBytes(32).toString("hex") });
+  const publish = runnerReport.onReport;
+  const directory = await mkdtemp(join(resolve(source), ".clawrouter-runner-report-"));
   // Required temporary input/report artifacts are owned only by this invocation.
   return settleRunnerReport(async () => {
     await chmod(directory, 0o700);
     await writeFile(join(directory, "plan.json"), JSON.stringify(binding), { flag: "wx", mode: 0o600 });
     const reporter = join(directory, "reporter.mjs");
     await writeFile(reporter, reporterBytes, { flag: "wx", mode: 0o400 });
-    return run(["--reporter=default", `--reporter=${reporter}`, `--outputFile=${report}`]);
+    return run(["--reporter=default", `--reporter=${reporter}`, `--outputFile=${join(directory, "report.jsonl")}`]);
   }, async () => {
-    try { return parseRunnerReport(readPrivateFile(report, reportByteLimit), binding); }
+    try { return parseRunnerReport(readPrivateFile(join(directory, "report.jsonl"), reportByteLimit), binding); }
     catch (error) {
       // Only a real missing file is an absent reporter. Other read/validation errors remain failures.
       const code = error !== null && typeof error === "object" ? Object.getOwnPropertyDescriptor(error, "code") : undefined;
@@ -96,7 +96,7 @@ export async function withNativeRunnerReport(options, run) {
       }
       throw error;
     }
-  }, () => rm(directory, { recursive: true }), runnerReport.onReport);
+  }, () => rm(directory, { recursive: true }), publish);
 }
 
 export async function withCopiedConsumerFixture(copy, run, remove) {

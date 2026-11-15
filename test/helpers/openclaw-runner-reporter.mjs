@@ -64,8 +64,19 @@ function validateError(error) {
   }
 }
 
+// Descriptor retirement must preserve both outcomes, including throw undefined.
+function closeRunnerDescriptor(fd, primaryFailed, primaryError) {
+  try { closeSync(fd); }
+  catch (closeError) {
+    if (primaryFailed) throw new AggregateError([primaryError, closeError], "runner operation and descriptor close failed");
+    throw closeError;
+  }
+  if (primaryFailed) throw primaryError;
+}
+
 export function readPrivateFile(file, limit) {
   const fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  let primaryFailed = false; let primaryError;
   try {
     const stat = fstatSync(fd);
     assert.ok(stat.isFile() && (stat.mode & 0o777) === 0o600 && stat.size <= limit, "private bounded runner file");
@@ -79,7 +90,8 @@ export function readPrivateFile(file, limit) {
     }
     assert.ok(size <= limit, "runner report grew past bound");
     return bytes.subarray(0, size);
-  } finally { closeSync(fd); }
+  } catch (error) { primaryFailed = true; primaryError = error; }
+  finally { closeRunnerDescriptor(fd, primaryFailed, primaryError); }
 }
 
 export function parseRunnerReport(bytes, binding) {
@@ -148,7 +160,10 @@ export default class NativeRunnerReporter {
     assert.equal(sha256(readFileSync(fileURLToPath(import.meta.url))), this.#binding.reporterSha256);
     assert.equal(sha256(readFileSync(join(this.#root, this.#binding.target))), this.#binding.fixtureSha256);
     const fd = openSync(this.#file, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
-    try { this.#inode = fstatSync(fd).ino; } finally { closeSync(fd); }
+    let primaryFailed = false; let primaryError;
+    try { this.#inode = fstatSync(fd).ino; }
+    catch (error) { primaryFailed = true; primaryError = error; }
+    finally { closeRunnerDescriptor(fd, primaryFailed, primaryError); }
     this.#write({ kind: "init", binding: this.#binding });
   }
   #write(value, final = false) {
@@ -159,13 +174,15 @@ export default class NativeRunnerReporter {
     }
     assert.ok(this.#bytes + bytes.length <= reportByteLimit, "runner final report bound");
     const fd = openSync(this.#file, constants.O_WRONLY | constants.O_APPEND | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    let primaryFailed = false; let primaryError;
     try {
       const stat = fstatSync(fd);
       assert.ok(stat.isFile() && stat.ino === this.#inode && stat.size === this.#bytes && (stat.mode & 0o777) === 0o600, "runner report replaced");
       let offset = 0;
       while (offset < bytes.length) { const n = writeSync(fd, bytes, offset); assert.ok(n > 0); offset += n; }
       this.#bytes += bytes.length; this.#sequence++;
-    } finally { closeSync(fd); }
+    } catch (error) { primaryFailed = true; primaryError = error; }
+    finally { closeRunnerDescriptor(fd, primaryFailed, primaryError); }
   }
   #module(module) {
     assert.equal(resolve(module.moduleId), join(this.#root, this.#binding.target), "foreign runner module");

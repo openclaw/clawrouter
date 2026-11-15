@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { syncBuiltinESMExports } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
@@ -244,4 +248,128 @@ test("unqualified fixture bytes reject before child or report-directory acquisit
     runnerReport: { ...request().runnerReport, fixtureSha256: "f".repeat(64) } }), () => { called = true; }));
   assert.equal(called, false);
   assert.deepEqual(readdirSync(h.root).filter(name => name.startsWith(".clawrouter-runner-report-")), []);
+});
+
+// Patch the built-in operations, not a duplicate cleanup implementation. The
+// injected close error follows a real close so these tests retain no descriptors.
+test("descriptor paths preserve primary and close failures independently", async t => {
+  const paths = [
+    ["read", ["fstat", "read", "validation"]],
+    ["initialize", ["fstat"]],
+    ["write", ["fstat", "write", "validation"]],
+  ];
+  const faults = [
+    { name: "both objects", primary: {}, close: {}, primaryFailed: true, closeFailed: true },
+    { name: "undefined primary", primary: undefined, close: {}, primaryFailed: true, closeFailed: true },
+    { name: "undefined close", primary: {}, close: undefined, primaryFailed: true, closeFailed: true },
+    { name: "both undefined", primary: undefined, close: undefined, primaryFailed: true, closeFailed: true },
+    { name: "sole primary", primary: {}, primaryFailed: true, closeFailed: false },
+    { name: "sole undefined primary", primary: undefined, primaryFailed: true, closeFailed: false },
+  ];
+  for (const [path, stages] of paths) {
+    const cases = stages.flatMap(stage => faults.map(fault => ({ ...fault, stage })));
+    cases.push({ name: "sole close", close: {}, primaryFailed: false, closeFailed: true });
+    cases.push({ name: "sole undefined close", close: undefined, primaryFailed: false, closeFailed: true });
+    for (const fault of cases) await t.test(`${path} ${fault.stage ?? "success"} ${fault.name}`, child => {
+      const h = harness(child);
+      if (path === "write") h.init();
+      const file = path === "read" ? join(h.root, "plan.json") : h.output;
+      const originals = { openSync: fs.openSync, closeSync: fs.closeSync, fstatSync: fs.fstatSync,
+        readSync: fs.readSync, writeSync: fs.writeSync, ok: assert.ok };
+      let descriptor; let opens = 0; let closes = 0; let operationFaults = 0;
+      const failOperation = () => { operationFaults++; throw fault.primary; };
+      let failed = false; let reason;
+      try {
+        child.mock.method(fs, "openSync", function (...args) {
+          const fd = Reflect.apply(originals.openSync, this, args);
+          if (args[0] === file) { descriptor = fd; opens++; }
+          return fd;
+        });
+        child.mock.method(fs, "fstatSync", function (...args) {
+          if (args[0] === descriptor && fault.stage === "fstat") return failOperation();
+          return Reflect.apply(originals.fstatSync, this, args);
+        });
+        for (const [name, stage] of [["readSync", "read"], ["writeSync", "write"]]) {
+          child.mock.method(fs, name, function (...args) {
+            if (args[0] === descriptor && fault.stage === stage) return failOperation();
+            return Reflect.apply(originals[name], this, args);
+          });
+        }
+        child.mock.method(assert, "ok", function (...args) {
+          const message = path === "read" ? "private bounded runner file" : "runner report replaced";
+          if (fault.stage === "validation" && args[1] === message) return failOperation();
+          return Reflect.apply(originals.ok, this, args);
+        });
+        child.mock.method(fs, "closeSync", function (...args) {
+          const result = Reflect.apply(originals.closeSync, this, args);
+          if (args[0] === descriptor) { closes++; if (fault.closeFailed) throw fault.close; }
+          return result;
+        });
+        syncBuiltinESMExports();
+        try {
+          if (path === "read") readPrivateFile(file, 4096);
+          else if (path === "initialize") h.init();
+          else h.reporter.onTestRunEnd([], [], "failed");
+        } catch (error) { failed = true; reason = error; }
+      } finally { child.mock.restoreAll(); syncBuiltinESMExports(); }
+      assert.equal(opens, 1); assert.equal(closes, 1);
+      assert.equal(operationFaults, fault.primaryFailed ? 1 : 0); assert.equal(failed, true);
+      if (fault.primaryFailed && fault.closeFailed) {
+        assert.ok(reason instanceof AggregateError);
+        assert.equal(reason.errors.length, 2);
+        assert.equal(reason.errors[0], fault.primary); assert.equal(reason.errors[1], fault.close);
+      } else assert.equal(reason, fault.primaryFailed ? fault.primary : fault.close);
+    });
+  }
+});
+
+test("report setup acquires custody only after nonce and binding validation", async t => {
+  for (const mode of ["nonce-undefined", "invalid-nonce", "acquire-undefined", "setup-and-cleanup-undefined"]) {
+    await t.test(mode, async child => {
+      const h = harness(child); const events = []; let failure; let failed = false; let childCalls = 0;
+      const original = { randomBytes: crypto.randomBytes, mkdtemp: fsPromises.mkdtemp, chmod: fsPromises.chmod, rm: fsPromises.rm };
+      const setupError = {}; let removed = 0;
+      try {
+        child.mock.method(crypto, "randomBytes", function (...args) {
+          events.push("nonce");
+          if (mode === "nonce-undefined") throw undefined;
+          if (mode === "invalid-nonce") return Buffer.alloc(1);
+          return Reflect.apply(original.randomBytes, this, args);
+        });
+        child.mock.method(fsPromises, "mkdtemp", function (...args) {
+          events.push("acquire");
+          if (mode === "acquire-undefined") throw undefined;
+          return Reflect.apply(original.mkdtemp, this, args);
+        });
+        child.mock.method(fsPromises, "chmod", function (...args) {
+          events.push("setup");
+          if (mode === "setup-and-cleanup-undefined") throw setupError;
+          return Reflect.apply(original.chmod, this, args);
+        });
+        child.mock.method(fsPromises, "rm", async function (...args) {
+          events.push("cleanup"); removed++;
+          await Reflect.apply(original.rm, this, args);
+          if (mode === "setup-and-cleanup-undefined") throw undefined;
+        });
+        syncBuiltinESMExports();
+        try {
+          await withNativeRunnerReport(request({ source: h.root, fixture: h.module.moduleId,
+            runnerReport: { ...request().runnerReport, onReport() { events.push("report"); } } }), () => { childCalls++; });
+        } catch (error) { failed = true; failure = error; }
+      } finally { child.mock.restoreAll(); syncBuiltinESMExports(); }
+      assert.equal(failed, true); assert.equal(childCalls, 0);
+      if (mode === "nonce-undefined" || mode === "invalid-nonce") {
+        assert.deepEqual(events, ["nonce"]); assert.equal(removed, 0);
+        if (mode === "nonce-undefined") assert.equal(failure, undefined);
+      } else if (mode === "acquire-undefined") {
+        assert.deepEqual(events, ["nonce", "acquire"]); assert.equal(removed, 0); assert.equal(failure, undefined);
+      } else {
+        assert.deepEqual(events, ["nonce", "acquire", "setup", "cleanup", "report"]);
+        assert.equal(removed, 1); assert.ok(failure instanceof AggregateError);
+        assert.equal(failure.errors[0], setupError); assert.equal(failure.errors[1], undefined);
+        assert.equal(failure.errors.length, 3); // Original setup, cleanup, then incomplete report.
+      }
+      assert.deepEqual(readdirSync(h.root).filter(name => name.startsWith(".clawrouter-runner-report-")), []);
+    });
+  }
 });
