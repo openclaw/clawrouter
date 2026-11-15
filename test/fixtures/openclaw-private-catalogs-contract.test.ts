@@ -185,6 +185,7 @@ export function validatePrivateCheckpoint(record:any):void {
  const phases=["module","setup","case_setup","case_result","child","body","original_join","read","closed","cancel","release","observer","worker_retirement","restoration","cleanup","control","assertions","final","overflow","callback","selection","owner","postlude","registration"];
  const integer=(n:any,max:number)=>Number.isSafeInteger(n)&&n>=0&&n<=max;
  const nullable=(n:any,max:number)=>n===null||integer(n,max);
+ const fieldV6=(p:any)=>Array.isArray(p)&&p.length===2&&integer(p[0],5)&&(p[0]===5?integer(p[1],12)&&p[1]>0:p[1]===null);
  const tuple=(a:any,length:number,valid:(x:any)=>boolean)=>Array.isArray(a)&&a.length===length&&a.every(valid);
  if(record?.v===3){
   const base=record.pin==="e2a8b8d4ec290cd6c035f3568a14e4d7c6433635";
@@ -209,24 +210,25 @@ export function validatePrivateCheckpoint(record:any):void {
   }
   throw Error("unknown Private boundary capsule");
  }
- if(record?.v===2||record?.v===4||record?.v===5){
-  const keys=["v","pin","lane","case","phase","state","defined","decl","stages","owner","receipt",...([4,5].includes(record.v)?["body"]:[]),...(record.v===5?["meta"]:[])];
+ if(record?.v===2||record?.v===4||record?.v===5||record?.v===6){
+  const keys=["v","pin","lane","case","phase","state","defined","decl","stages","owner","receipt",...([4,5,6].includes(record.v)?["body"]:[]),...([5,6].includes(record.v)?["meta"]:[])];
   if(Object.keys(record).sort().join(",")!==keys.sort().join(",")||record.pin!=="e2a8b8d4ec290cd6c035f3568a14e4d7c6433635"||
    !["sdk","outer"].includes(record.lane)||!nullable(record.case,107)||!phases.includes(record.phase)||!["rejected","threw"].includes(record.state)||typeof record.defined!=="boolean"||
    !nullable(record.decl,65)||!tuple(record.stages,7,x=>integer(x,3))||!(record.owner===null||tuple(record.owner,6,x=>integer(x,65535))))throw Error("invalid Private primary capsule");
-  if(record.v===4||record.v===5){const b=record.body;
+  if(record.v===4||record.v===5||record.v===6){const b=record.body;
    if(record.lane!=="sdk"||record.phase!=="body"||record.case===null||record.decl===null||record.decl>=24||record.decl%4!==0||record.stages[4]!==3||record.owner!==null||record.receipt!==null||
     !Array.isArray(b)||b.length!==7||!integer(b[0],22)||![5,6,7].includes(b[1])||b[2]!==record.defined||!integer(b[3],4194303)||b[3]>=2**b[0]||!integer(b[4],3)||
     (b[0]<5&&b[4]!==0)||(b[0]<18&&(b[4]&2)!==0)||!nullable(b[5],3)||!(b[6]===null||tuple(b[6],4,x=>integer(x,65535)))||
     (b[1]===6&&(![5,18].includes(b[0])||(b[4]&(b[0]===5?1:2))!==0))||(b[5]!==null&&b[0]<20))throw Error("invalid Private EOF body span");
   }
-  if(record.v===5){const m=record.meta;
+  if(record.v===5||record.v===6){const m=record.meta;
    const field=(p:any,max:number)=>Array.isArray(p)&&p.length===2&&integer(p[0],5)&&(p[0]===5?integer(p[1],max)&&p[1]>0:p[1]===null);
-   if(record.case!==0||record.decl!==0||!Array.isArray(m)||m.length!==4||!field(m[0],2)||!field(m[1],10)||
+   if(record.case!==0||record.decl!==0||!Array.isArray(m)||m.length!==(record.v===6?5:4)||!field(m[0],2)||!field(m[1],10)||
     !Array.isArray(m[2])||m[2].length!==2||!integer(m[2][0],3)||(m[2][0]===1?!(Number.isInteger(m[2][1])&&m[2][1]>=100&&m[2][1]<=599):m[2][1]!==null)||
     !(m[3]===null||Array.isArray(m[3])&&m[3].length===3&&[1,2,3].includes(m[3][0])&&[1,2].includes(m[3][1])&&typeof m[3][2]==="boolean")||
     (record.body[0]<14&&m[2][0]!==0)||(!(record.body[4]&2)&&(m[0][0]!==0||m[1][0]!==0)))throw Error("invalid Private result metadata span");
   }
+  if(record.v===6&&(!fieldV6(record.meta[4])||(!(record.body[4]&2)&&record.meta[4][0]!==0)))throw Error("invalid Private wording span");
   if(record.owner!==null&&(record.lane!=="sdk"||record.case===null||record.stages[5]!==2))throw Error("unjoined Private owner capsule");
   if(record.receipt!==null){const r=record.receipt;
    if(record.lane!=="outer"||!Array.isArray(r)||r.length!==6||!integer(r[0],107)||!(r[1]===null||Array.isArray(r[1])&&r[1].length===4&&integer(r[1][0],33)&&nullable(r[1][1],65535)&&integer(r[1][2],1)&&typeof r[1][3]==="boolean")||
@@ -270,7 +272,7 @@ export function createPrivateCheckpointReporter(lane:string,emit:Function) {
   for(const o of b.originals)if(o.kind==="read"){const at=["pending","fulfilled","rejected","threw"].indexOf(o.state);if(at<0||++counts[at]>65535)return null;}
   return [b.site,b.state===1?5:b.state===3?6:7,reason!==undefined,b.returned,b.awaited,b.stop,counts];};
  const primary=()=>{if(!first||primarySent)return;primarySent=true;const b=first.body??null;
-  send({v:b===null?2:first.meta===null?4:5,pin:first.pin,lane,case:first.case,phase:first.phase,state:first.state,defined:first.defined,decl:first.decl,
+  send({v:b===null?2:first.meta===null?4:6,pin:first.pin,lane,case:first.case,phase:first.phase,state:first.state,defined:first.defined,decl:first.decl,
    stages:[...scope(first.case,first.decl)],owner:first.case===null?null:owners.get(first.case)??null,receipt,...(b===null?{}:{body:b}),...(first.meta===null?{}:{meta:first.meta})});};
  const progress=(point:string,decl:number|null)=>({v:3,pin:"e2a8b8d4ec290cd6c035f3568a14e4d7c6433635",lane,kind:"progress",point,decl,registration:[...registration]});
  const entry=(record:any)=>{if(entrySent)return;entrySent=true;send(record);};
@@ -281,7 +283,7 @@ export function createPrivateCheckpointReporter(lane:string,emit:Function) {
    const key=String(index)+":"+phase;if(!["rejected","threw"].includes(records.get(key)?.state))records.set(key,record);
    if(state==="rejected"||state==="threw"){failed++;
     // Raw read/closed/cancel outcomes are not themselves the SDK case verdict.
-    if(!first&&!["read","closed","cancel","release"].includes(phase)){first={...record,decl,body:lane==="sdk"&&phase==="body"&&index!==null?bodySnapshot(index,reason):null,meta:null};if(first.body!==null){const m=bodyScopes.get(index!)?.metadata;if(m)first.meta=[m.type,m.code,m.http,m.first].map((v:any)=>v===null?null:[...v]);}if(lane==="sdk")primary();}}
+    if(!first&&!["read","closed","cancel","release"].includes(phase)){first={...record,decl,body:lane==="sdk"&&phase==="body"&&index!==null?bodySnapshot(index,reason):null,meta:null};if(first.body!==null){const m=bodyScopes.get(index!)?.metadata;if(m)first.meta=[m.type,m.code,m.http,m.first,m.wording].map((v:any)=>v===null?null:[...v]);}if(lane==="sdk")primary();}}
    if(lane==="sdk"&&phase==="callback"&&state==="enter")entry(progress("callback",decl));
   }catch(error){failures.push(error);}
  };
@@ -300,13 +302,27 @@ export function createPrivateCheckpointReporter(lane:string,emit:Function) {
  // definedness. These observations do not establish cause, EOF or joined ownership.
  const own=(m:any,value:any,key:string)=>{if(!value||typeof value!=="object"||m.isProxy(value))return [4,null];
   const d=Object.getOwnPropertyDescriptor(value,key);return !d?[1,null]:!Object.hasOwn(d,"value")?[3,null]:d.value===undefined?[2,null]:[5,d.value];};
- const invalidateMetadata=(index:number)=>{const b=bodyScopes.get(index),m=b?.metadata;if(m){m.invalid=true;m.type=b.awaited&2?[4,null]:[0,null];m.code=b.awaited&2?[4,null]:[0,null];m.http=m.responseSeen?[3,null]:[0,null];m.first=null;}};
+ const invalidateMetadata=(index:number)=>{const b=bodyScopes.get(index),m=b?.metadata;if(m){m.invalid=true;m.type=b.awaited&2?[4,null]:[0,null];m.code=b.awaited&2?[4,null]:[0,null];m.http=m.responseSeen?[3,null]:[0,null];m.first=null;m.wording=b.awaited&2?[4,null]:[0,null];}};
  const metadata=(index:number,owner:object)=>{const b=bodyScopes.get(index);if(!b||b.owner!==owner||b.invalid||b.failed||finished||!b.metadata||b.metadata.invalid)throw Error("foreign Private metadata owner");return b;};
  const label=(p:any,values:string[])=>p[0]!==5?p:values.includes(p[1])?[5,values.indexOf(p[1])+1]:[4,null];
+ // V6 reads one own-data field of the already bound ordinary result. These exact
+ // E2 source forms mean WORDING MATCH only: an upstream may echo them. They do
+ // not authenticate origin, HTTP status or cause. Fixed templates are scoped to
+ // this Baseten/openai-completions case; no text is retained in private state.
+ const wording=(p:any)=>{if(p[0]!==5)return p;if(typeof p[1]!=="string"||p[1].length>4096)return [4,null];
+  const values=[
+   "Scoped AI transport hosts require Node.js async context support",
+   "Explicit AI transport hosts require Node.js async context support",
+   "429 Shared organization token rate limit exceeded the same-model retry wait budget.",
+   "Stream ended without finish_reason", "Exceeded post-tool-call delta buffer limit",
+   "The embedding host requires a managed provider transport", "Request was aborted",
+   "Unknown provider error", "Stream iteration failed", "Stream result failed",
+   "No API provider registered for api: openai-completions", "No API key for provider: baseten",
+  ];const at=values.indexOf(p[1]);return at<0?[4,null]:[5,at+1];};
  return {failures,mark,flush,
   bindBodyMetadata(index:number,owner:any,proxyCheck:Function){try{const b=bodyScopes.get(index);
    if(index!==0||declarations.get(index)!==0||!b||b.owner!==owner||b.metadata||b.failed||b.invalid||finished||owner.provider!=="baseten"||owner.api!=="stream"||owner.control!=="eof"||typeof proxyCheck!=="function")throw Error("foreign Private metadata case");
-   b.metadata={isProxy:proxyCheck,type:[0,null],code:[0,null],http:[0,null],first:null,caller:null,model:null,pending:null,responseSeen:false,resultSeen:false,invalid:false};
+   b.metadata={isProxy:proxyCheck,type:[0,null],code:[0,null],http:[0,null],first:null,wording:[0,null],caller:null,model:null,pending:null,responseSeen:false,resultSeen:false,invalid:false};
   }catch(error){invalidateMetadata(index);failures.push(error);}},
   bodyResponseObserver(index:number,owner:object,caller:object,model:object){let b:any;try{b=metadata(index,owner);if(!caller||!model||b.metadata.caller)throw Error("duplicate Private response observer");b.metadata.caller=caller;b.metadata.model=model;
   }catch(error){invalidateMetadata(index);failures.push(error);return undefined;}
@@ -324,6 +340,7 @@ export function createPrivateCheckpointReporter(lane:string,emit:Function) {
    if(m.resultSeen||m.pending===null||m.pending!==pending)throw Error("foreign Private result observation");m.resultSeen=true;
    m.type=label(own(m,value,"errorType"),["PostgresQueryCanceledError","SqliteWorkerError"]);
    m.code=label(own(m,value,"errorCode"),["SQLITE_BUSY","SQLITE_LOCKED","SQLITE_READONLY","SQLITE_IOERR","SQLITE_FULL","transcript_writer_fenced","session_actor_reconciliation","57014","storage-worker-memory","unavailable"]);
+   m.wording=wording(own(m,value,"errorMessage"));
   }catch(error){invalidateMetadata(index);failures.push(error);}},
   bodyOperationFailure(index:number,owner:object,operation:Original,reason:unknown){try{const b=bodyScopes.get(index);if(!b?.metadata)return;
    if(b.failed)return;metadata(index,owner);const site=["guard","fetch","read"].indexOf(operation.kind)+1;if(!site)return;

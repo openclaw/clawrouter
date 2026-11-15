@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Classify exact pinned-source wording from the already observed Private EOF result in a bounded diagnostic enum, without retaining message text or treating a wording match as error origin, cause or retirement proof.
+
 - Observe the first Private Baseten EOF result labels and original response status with bounded, case-owned diagnostics; preserve original SDK errors and independent observer failures.
 
 - Preserve the first Private EOF body source span and original call/await outcomes in the existing bounded failure capsule, without changing SDK operations or retirement/accounting acceptance.
