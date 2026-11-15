@@ -396,9 +396,13 @@ export async function privateProcesses(recorder) {
   for (const name of await readdir("/proc")) {
     ownedNote(recorder,"sampleStage",3);
     if (!/^\d+$/.test(name) || name === "1") continue;
+    let readingStat = false;
     try {
       ownedNote(recorder,"sampleStage",4);
-      const text = await readFile(`/proc/${name}/stat`, "utf8");
+      const statPath = `/proc/${name}/stat`;
+      readingStat = true;
+      const text = await readFile(statPath, "utf8");
+      readingStat = false;
       ownedNote(recorder,"sampleStage",5);
       const fields = text.slice(text.lastIndexOf(")") + 2).split(" ");
       ownedNote(recorder,"sampleStage",6);
@@ -410,7 +414,9 @@ export async function privateProcesses(recorder) {
       let code;
       try { code=error?.code; }
       catch (accessError) { ownedNote(recorder,"sampleCode",accessError,2);throw accessError; }
-      if (code !== "ENOENT") { ownedNote(recorder,"sampleCode",error,1,code);ownedNote(recorder,"sampleRestore",failure);throw error; }
+      // proc_single_show can report a vanished task after enumeration. Only
+      // the original stat read may tolerate ESRCH; later phases remain fatal.
+      if (code !== "ENOENT" && !(readingStat && code === "ESRCH")) { ownedNote(recorder,"sampleCode",error,1,code);ownedNote(recorder,"sampleRestore",failure);throw error; }
     }
   }
   ownedNote(recorder,"sampleStage",9);

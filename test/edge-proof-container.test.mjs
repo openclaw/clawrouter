@@ -2364,7 +2364,7 @@ test("receipt builder schema preserves historical decoders exact fields and maxi
 });
 async function ownedLedgerFactory(overrides={},supplied) {
   const source=await readFile(new URL("../scripts/edge-proof.mjs",import.meta.url),"utf8");
-  const body=source.slice(source.indexOf("// Optional, invocation-local observations."),source.indexOf("export function requireProcessSuccess(")).replaceAll("export ","");
+  const body=source.slice(source.indexOf("// Optional, invocation-local observations."),source.indexOf("export function verifyDryRun(")).replaceAll("export ","");
   const fields=Array(20).fill("0");fields[0]="S";fields[1]="1";fields[2]="12";fields[19]="123";
   const calls=[],timers=[],intervals=[],signals=new EventEmitter(),child=new EventEmitter();child.pid=12;child.stdout=new EventEmitter();child.stderr=new EventEmitter();
   const environment=supplied?.options.env??Object.freeze({inert:true}),command=supplied?.command??"/immutable/node",args=supplied?.args??Object.freeze(["inert"]);
@@ -2377,7 +2377,7 @@ async function ownedLedgerFactory(overrides={},supplied) {
     setTimeout:(fn,ms)=>{const t={fn,ms};timers.push(t);return t;},setInterval:(fn,ms)=>{const t={fn,ms};intervals.push(t);return t;},
     clearTimeout:t=>calls.push(["clearTimeout",t]),clearInterval:t=>calls.push(["clearInterval",t]),...overrides};
   for(const name of ["readdir","readFile","spawn","setTimeout","setInterval","clearTimeout","clearInterval","refuse","createHash"])assert.equal(typeof bindings[name],"function",name);
-  const api=new Function(...Object.keys(bindings),body+"return {privateProcesses,runOwnedProcess,createOwnedProcessLedger};")(...Object.values(bindings));
+  const api=new Function(...Object.keys(bindings),body+"return {privateProcesses,runOwnedProcess,createOwnedProcessLedger,requireProcessSuccess};")(...Object.values(bindings));
   return {...api,bindings,fields,calls,timers,intervals,signals,child,environment,command,args};
 }
 test("owned ledger actual sampler preserves each original phase predicate and undefined failure",async()=>{
@@ -2602,9 +2602,9 @@ test("owned code actual sampler classifies only the original operand once and re
     let reads=0;const holder={get code(){reads++;return value;}},reason=inherited?Object.create(holder):holder;
     const f=await ownedLedgerFactory({readFile:async()=>{throw reason;}}),rec=f.createOwnedProcessLedger();let failed=false,caught;
     try{await f.privateProcesses(rec);}catch(error){failed=true;caught=error;rec.error(2,error);rec.request(1,"SIGTERM");rec.skipped();}
-    assert.equal(reads,1);assert.equal(failed,value!=="ENOENT");if(failed)assert.equal(caught,reason);
+    assert.equal(reads,1);assert.equal(failed,!["ENOENT","ESRCH"].includes(value));if(failed)assert.equal(caught,reason);
     const trace=rec.finish(),code=rec.code();validateOwnedTrace(trace,failed?1:0,[false,false]);validateOwnedCode(code,trace);
-    assert.deepEqual(code,value==="ENOENT"?[1,0,0]:[1,1,classifyOwnedCode(value)]);
+    assert.deepEqual(code,["ENOENT","ESRCH"].includes(value)?[1,0,0]:[1,1,classifyOwnedCode(value)]);
   }
   for(const reason of [undefined,null]){
     const f=await ownedLedgerFactory({readFile:async()=>{throw reason;}}),rec=f.createOwnedProcessLedger();let caught=false;
@@ -2643,9 +2643,9 @@ test("owned code actual process acceptor projector pipeline preserves each displ
   for(const value of [...ownedCodeClasses.slice(1,12),"private-other",undefined,null,{},"THROW_UNDEFINED"]){
     let original,reads=0;const reason={get code(){reads++;if(value==="THROW_UNDEFINED")throw undefined;return value;}};
     const produced=await receiptActualProducer("wrangler_input",false,{diagnostics:true,ownedProcess:async(command,args,options,stdout)=>{
-      let calls=0;const f=await ownedProcessScenario("monitor_proc",stdout.split("\n").slice(0,6).join("\n")+"\n",{readFile:async()=>{if(calls++===0)throw reason;return"12 (inert) S 1 12 "+Array(16).fill("0").join(" ")+" 123";}},{command,args,options});original=f.result;assert.deepEqual(f.calls.filter(r=>r[0]==="kill"),[["kill",-12,"SIGTERM"]]);return original;
+      let calls=0;const f=await ownedProcessScenario("monitor_proc",stdout.split("\n").slice(0,6).join("\n")+"\n",{readFile:async()=>{if(calls++===0){if(value==="ESRCH")return{lastIndexOf(){throw reason;}};throw reason;}return"12 (inert) S 1 12 "+Array(16).fill("0").join(" ")+" 123";}},{command,args,options});original=f.result;assert.deepEqual(f.calls.filter(r=>r[0]==="kill"),[["kill",-12,"SIGTERM"]]);return original;
     }});
-    assert.equal(reads,1);assert.equal(original.errors[0],value==="THROW_UNDEFINED"?undefined:reason);
+    assert.equal(reads,1);assert.equal(original.errors[0],value==="THROW_UNDEFINED"?undefined:reason);if(value==="ESRCH")assert.equal(original.ownedTrace[1][1],5);
     const wire=await lifecyclePacket(produced,frames=>frames,true);assert.equal(wire.v,14);assert.deepEqual(wire.detail[8],value==="THROW_UNDEFINED"?[1,2,0]:[1,1,classifyOwnedCode(value)]);assert.deepEqual(wire.detail[7],original.ownedTrace);assert.equal(receiptView(wire).builder[9],original.outputSummary.stdout.sha256);assert.equal(receiptView(wire).child[1],"invalid");
   }
 });
@@ -2668,5 +2668,64 @@ test("owned code widest receipt retains historical codecs all process fields and
   assert.ok(Buffer.byteLength(JSON.stringify(wire))<=512);const rows=[wire,...["entry","dispatch","retirement","host_runtime","cwd","context","environment","image"].map(phase=>({v:2,phase,state:"rejected",defined:false,exit:null,signal:null}))],lines=[];
   const captured=await receiptCapture(made.frames);createAttachProjection(captured.h.attached,{cid:hex,nonce:hex,contextHash:other},{internal:r=>rows.push(r)})(captured.h.attached.result);
   emitContainerFailure(rows,line=>lines.push(line));assert.equal(lines.length,10);assert.ok(lines.every(line=>Buffer.byteLength(line)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);receiptPackets.push(lines.map(line=>JSON.parse(line.slice(line.indexOf("::{")+2))));
+});
+
+const esrchStat = (start="123",parent="1",group="12") => {
+  const fields=Array(20).fill("0");fields[0]="S";fields[1]=parent;fields[2]=group;fields[19]=start;return"12 (inert) "+fields.join(" ");
+};
+test("stat ESRCH read-only omission keeps valid neighbors and original property reads",async()=>{
+  for(const code of ["ENOENT","ESRCH"])for(const enabled of [false,true]){
+    const calls=[];let getters=0;const reason={get code(){getters++;return code;}};
+    const f=await ownedLedgerFactory({readdir:async path=>{calls.push(["directory",path]);return["1","self","12","13","14"];},readFile:async(...args)=>{calls.push(["stat",...args]);if(args[0]==="/proc/13/stat")throw reason;return esrchStat(args[0]==="/proc/12/stat"?"123":"456","99","88");}}),rec=enabled?f.createOwnedProcessLedger():undefined;
+    const rows=await f.privateProcesses(rec);assert.deepEqual(rows.map(r=>[r.pid,r.start,r.parent,r.group]),[[12,"123",99,88],[14,"456",99,88]]);assert.equal(getters,1);
+    assert.deepEqual(calls,[["directory","/proc"],["stat","/proc/12/stat","utf8"],["stat","/proc/13/stat","utf8"],["stat","/proc/14/stat","utf8"]]);if(rec){assert.equal(rec.finish()[1],null);assert.deepEqual(rec.code(),[1,0,0]);}
+  }
+});
+test("stat ESRCH outside the original read stays fatal with the same reason and stage",async()=>{
+  for(const phase of ["directory","path","parse","shape","row"]){
+    let getters=0,reads=0;const reason={get code(){getters++;return"ESRCH";}};
+    const override={readFile:async()=>{reads++;if(phase==="parse")return{lastIndexOf(){throw reason;}};return phase==="shape"?"12 (inert) ?":esrchStat();}};
+    if(phase==="directory")override.readdir=async()=>{throw reason;};
+    if(phase==="path"){let conversions=0;override.readdir=async()=>[{toString(){if(++conversions===1)return"12";throw reason;}}];}
+    if(phase==="shape")override.refuse=()=>{throw reason;};
+    if(phase==="row")override.Number=()=>{throw reason;};
+    const f=await ownedLedgerFactory(override),rec=f.createOwnedProcessLedger();let failed=false;
+    try{await f.privateProcesses(rec);}catch(error){failed=true;assert.equal(error,reason);rec.error(2,error);}
+    assert.ok(failed);assert.equal(rec.finish()[1][1],{directory:2,path:4,parse:5,shape:6,row:7}[phase]);assert.equal(getters,phase==="directory"?0:1);assert.equal(reads,["directory","path"].includes(phase)?0:1);
+  }
+});
+test("stat ESRCH ignored entry cannot contaminate a later failure or an observation failure",async()=>{
+  for(const later of [undefined,{code:"EPERM"}]){
+    let reads=0;const f=await ownedLedgerFactory({readdir:async()=>["12","13"],readFile:async()=>{throw reads++===0?{code:"ESRCH"}:later;}}),rec=f.createOwnedProcessLedger();let failed=false;
+    try{await f.privateProcesses(rec);}catch(error){failed=true;assert.equal(error,later);rec.error(2,error);}
+    assert.ok(failed);assert.equal(reads,2);assert.deepEqual(rec.code(),[1,1,later===undefined?14:4]);assert.equal(rec.finish()[1][6],later!==undefined);
+  }
+  const original={code:"ESRCH"};let reads=0;const f=await ownedLedgerFactory({readFile:async()=>{reads++;return{lastIndexOf(){throw original;}};}}),rec=f.createOwnedProcessLedger();rec.sampleState=()=>{throw undefined;};let failed=false;
+  try{await f.privateProcesses(rec);}catch(error){failed=true;assert.equal(error,original);rec.error(2,error);}
+  assert.ok(failed);assert.equal(reads,1);assert.ok(rec.errors.includes(undefined));assert.equal(rec.code(),null);
+});
+async function esrchMonitorResult({final="empty",exit=0,observerFault=false}={}) {
+  let sampleIndex=0;const pending=[],finalReason={code:"ESRCH"};
+  const f=await ownedLedgerFactory({readdir:async()=>final==="parse"&&sampleIndex===4?["12"]:sampleIndex===4&&final==="empty"?[]:["12"],readFile:async()=>{if(sampleIndex===2)throw{code:"ESRCH"};if(sampleIndex===4&&final==="parse")return{lastIndexOf(){throw finalReason;}};return esrchStat(sampleIndex===1?"123":"124",sampleIndex===4?"99":"1");}}),rec=f.createOwnedProcessLedger();
+  if(observerFault)rec.sampleState=()=>{throw undefined;};
+  const work=f.runOwnedProcess(f.command,f.args,{cwd:"/task",env:f.environment,recorder:rec,signalSource:f.signals,sample:()=>{sampleIndex++;const p=f.privateProcesses(rec);pending.push(p);return p;}});
+  for(let i=0;i<3;i++){f.intervals[0].fn();await pending[i].catch(()=>{});await Promise.resolve();}
+  f.child.emit("close",exit,null);const result=await work;assert.equal(sampleIndex,4);assert.deepEqual([...result.observed.keys()],["12:123","12:124"]);assert.deepEqual(f.calls.filter(r=>r[0]==="kill"),[]);assert.equal(f.signals.listenerCount("SIGTERM"),0);
+  return{...f,result,finalReason};
+}
+test("stat ESRCH sampling retains prior starts and cannot waive original success or final census",async()=>{
+  const success=await esrchMonitorResult();success.requireProcessSuccess(success.result);assert.equal(success.result.errors.length,0);assert.deepEqual(success.result.ownedCode,[1,0,0]);
+  for(const options of [{final:"live"},{final:"parse"},{exit:1}]){
+    const f=await esrchMonitorResult(options);assert.throws(()=>f.requireProcessSuccess(f.result));if(options.final==="live")assert.equal(f.result.remaining[0].parent,99);if(options.final==="parse"){assert.equal(f.result.errors[0],f.finalReason);assert.equal(f.result.ownedTrace[1][0],9);assert.equal(f.result.ownedTrace[1][1],5);}
+  }
+  const fault=await esrchMonitorResult({observerFault:true});assert.ok(fault.result.observerErrors.includes(undefined));assert.equal(fault.result.ownedTrace[1],null);assert.equal(fault.result.ownedCode,null);
+});
+test("stat ESRCH actual producer keeps missing terminal invalid after a tolerated read",async()=>{
+  let original;
+  const made=await receiptActualProducer("wrangler_input",false,{diagnostics:true,ownedProcess:async(command,args,options,stdout)=>{
+    let n=0;const f=await ownedProcessScenario("monitor_proc",stdout.split("\n").slice(0,6).join("\n")+"\n",{readFile:async()=>{if(n++===0)throw{code:"ESRCH"};return esrchStat();}},{command,args,options});original=f.result;assert.deepEqual(f.calls.filter(r=>r[0]==="kill"),[]);return original;
+  }});
+  assert.equal(original.errors.length,0);assert.equal(original.ownedTrace[1],null);assert.deepEqual(original.ownedCode,[1,0,0]);
+  const wire=await lifecyclePacket(made,frames=>frames,true);assert.equal(wire.detail[1][1],"invalid");assert.deepEqual(wire.detail[5],[1,6,6,12,0,2,0]);assert.equal(wire.detail[7][1],null);assert.deepEqual(wire.detail[8],[1,0,0]);
 });
 // END attach diagnostic pure tests.
