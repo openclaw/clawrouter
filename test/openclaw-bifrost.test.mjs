@@ -86,11 +86,18 @@ export function bifrostCheckpointFunctions(){
  const start="export function bifrostSetupPhase(",end="const checkpoints=createBifrostCheckpointReporter(";
  assert.equal(source.split(start).length,2);assert.equal(source.split(end).length,2);
  const text=source.slice(source.indexOf(start),source.indexOf(end));assert.doesNotMatch(text,/\bimport\b|\brequire\s*\(/);
- return runInNewContext('"use strict";\n'+stripTypeScriptTypes(text.replace(/^export /gm,""),{mode:"strip"})+"\n({bifrostSetupPhase,validateBifrostCheckpoint,createBifrostCheckpointReporter,finishBifrostCheckpointCase,createBifrostSetupBoundary})",{},{timeout:1000});
+ return runInNewContext('"use strict";\n'+stripTypeScriptTypes(text.replace(/^export /gm,""),{mode:"strip"})+"\n({bifrostSetupPhase,bifrostSignalEvidence,bifrostOperationEvidence,bifrostReasonMetadata,bifrostCaseEvidence,validateBifrostEvidence,validateBifrostCheckpoint,createBifrostCheckpointReporter,finishBifrostCheckpointCase,createBifrostSetupBoundary})",{AbortSignal,Buffer,bifrostInvocationBound:bifrostNativeEvaluator().bifrostInvocationBound},{timeout:1000});
 }
 export function bifrostCheckpointRecords(error){
  const {validateBifrostCheckpoint}=bifrostCheckpointFunctions();
- return bifrostChildDiagnosticRecords(error,"BIFROST_CHECKPOINT ",record=>{validateBifrostCheckpoint(record);assert.equal(record.lane,"sdk");return JSON.stringify(record);});
+ const records=bifrostChildDiagnosticRecords(error,"BIFROST_CHECKPOINT ",record=>{validateBifrostCheckpoint(record);assert.equal(record.lane,"sdk");return JSON.stringify(record);});
+ const group=records.filter(r=>r.evidence===true);
+ if(group.length){
+  assert.equal(group.length,4,"incomplete diagnostic evidence group");
+  assert.deepEqual(group.map(r=>r.part),["identity","reasons","order","retirement"]);
+  assert.ok(group.every(r=>r.case===group[0].case&&r.complete===group[0].complete),"cross-case diagnostic evidence");
+ }
+ return records;
 }
 export function bifrostAnnotationEmitter(write){
  let bytes=0,count=0;
@@ -548,6 +555,128 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
   bind(transport);bind(getTransport);
   return {owner,identity,provider:"bifrost",api:"stream",role:"partial",caller,transports:[transport,getTransport],originals:[prefix,read,closed,cancel,release,getClosed],failures:[],observerFailures:[],syncFailures:[],restored:true,sourceExpired:0};
  }
+ function reasonEvidence(){
+  const f=bifrostCheckpointFunctions(),w=nativeEvidence(),controller=new AbortController();
+  w.caller.signal=controller.signal;w.caller.reason={};w.caller.abortArgumentCount=1;controller.abort(w.caller.reason);w.caller.evidenceAbort=f.bifrostSignalEvidence(controller.signal);
+  w.acquisitions=w.transports.map(t=>t.acquisition);w.evidenceJoined=true;w.evidenceRestoreFailures=0;w.evidenceRestoreUndefined=0;
+  for(const t of w.transports){
+   const input=new AbortController(),effective=new AbortController();input.abort({});effective.abort({});
+   t.acquisition.input={signal:input.signal};t.acquisition.inputSignal=input.signal;t.signal=effective.signal;
+   const i=t.invocation,args=i.kind==="inference"?[{}, {}, {signal:controller.signal}]:[{signal:controller.signal}];
+   t.invocation=Object.freeze({...i,signal:controller.signal,args:Object.freeze(args)});t.acquisition.invocation=t.invocation;
+   t.context=t.acquisition.context=Object.freeze({invocation:t.invocation,acquisition:t.acquisition});
+   t.input={};t.init={signal:t.signal};const promise=Promise.resolve();t.fetch={state:"fulfilled",pending:promise,returned:promise,args:[t.input,t.init]};
+  }
+  for(const o of w.originals){
+   o.pending??=Promise.resolve();o.returned=o.pending;
+   if(o.reader){o.callerSignal=controller.signal;o.effectiveSignal=o.reader.transport.signal;
+    o.evidenceInvoke=f.bifrostOperationEvidence(o,w.originals);o.evidenceSettle=f.bifrostOperationEvidence(o,w.originals);}
+  }
+  const r=w.transports[0].readers[0];
+  w.originals.push({owner:w.owner,kind:"unlock",reader:r,receiver:r.original,state:"fulfilled",invoke:14,returnAt:15,settle:16});
+  return {f,w,controller,proof:{source:{canceled:0,settled:0,expired:1,held:1},inboundChatAborted:false}};
+ }
+ test("Bifrost reason evidence observes native signal reason separately from undefined abort operand",()=>{
+  const f=bifrostCheckpointFunctions(),controller=new AbortController();let getter=0;
+  Object.defineProperty(controller.signal,"reason",{get(){getter++;throw undefined;}});
+  const before=f.bifrostSignalEvidence(controller.signal);assert.equal(before.observed,true);assert.equal(before.aborted,false);assert.equal(before.reason,undefined);
+  controller.abort(undefined);const after=f.bifrostSignalEvidence(controller.signal);
+  assert.equal(after.observed,true);assert.equal(after.aborted,true);assert.notEqual(after.reason,undefined);assert.equal(typeof after.reason,"object");assert.equal(getter,0);
+  const foreign={get reason(){getter++;throw undefined;},get aborted(){getter++;throw undefined;}};
+  assert.equal(f.bifrostSignalEvidence(foreign).observed,false);assert.equal(getter,0);
+ });
+ test("Bifrost reason evidence retains rejected originals and private equality without reason getters",()=>{
+  const {f,w,proof}=reasonEvidence();let getters=0;const reason={};
+  for(const name of ["name","message","stack","code","toJSON"])Object.defineProperty(reason,name,{get(){getters++;throw undefined;}});
+  const vector=w.originals.filter(o=>["read","closed","cancel"].includes(o.kind)&&o.state==="rejected");
+  for(const o of vector)o.reason=reason;
+  const records=f.bifrostCaseEvidence(2,w,proof,false,[undefined]);records.forEach(f.validateBifrostEvidence);
+  const reasons=records.find(r=>r.part==="reasons"),retirement=records.find(r=>r.part==="retirement");
+  assert.equal(records[0].complete,true);assert.equal(reasons.readClosed,true);assert.equal(reasons.readCancel,true);
+  assert.deepEqual(JSON.parse(JSON.stringify(reasons.read)),{observed:true,defined:true,object:true});
+  assert.deepEqual(Array.from(reasons.readSignals),[false,false,false]);assert.equal(getters,0);
+  assert.equal(retirement.states.read,"rejected");assert.equal(retirement.states.closed,"rejected");assert.equal(retirement.states.cancel,"rejected");
+  assert.equal(retirement.worker,false);assert.equal(records[0].source.expired,1);assert.equal(records[0].firstFailed,null);
+  assert.ok(vector.every(o=>o.reason===reason&&o.state==="rejected"));
+ });
+ test("Bifrost reason evidence distinguishes undefined null foreign and unobserved outcomes",()=>{
+  for(const reason of [undefined,null,{}]){
+   const {f,w,proof}=reasonEvidence(),read=w.originals.find(o=>o.kind==="read"&&o.state==="rejected");
+   read.reason=reason;const records=f.bifrostCaseEvidence(2,w,proof,false,[]);records.forEach(f.validateBifrostEvidence);
+   const r=records[1];assert.equal(r.read.observed,true);assert.equal(r.read.defined,reason!==undefined);assert.equal(r.read.object,reason!==null&&typeof reason==="object");
+   assert.equal(r.readClosed,false);assert.equal(r.readCancel,false);
+  }
+  const {f,w,proof}=reasonEvidence();w.originals.find(o=>o.kind==="read"&&o.state==="rejected").state="pending";
+  const records=f.bifrostCaseEvidence(2,w,proof,false,[]);records.forEach(f.validateBifrostEvidence);
+  assert.equal(records[0].complete,false);assert.equal(records[1].read.observed,false);assert.equal(records[1].read.defined,null);assert.equal(records[1].readClosed,null);
+  assert.equal(records[3].counts.pending,1);
+ });
+ test("Bifrost reason evidence binds cancel operands to invocation-time signal reasons",()=>{
+  const {f,w,proof}=reasonEvidence(),cancel=w.originals.find(o=>o.kind==="cancel");
+  const actual=cancel.evidenceInvoke.caller.reason;
+  cancel.args=[actual];let reasons=f.bifrostCaseEvidence(2,w,proof,false,[])[1];
+  assert.equal(reasons.cancelArgs,1);assert.equal(reasons.cancelRead,false);assert.deepEqual(Array.from(reasons.cancelInput),[true,false,false]);
+  cancel.args=[undefined];reasons=f.bifrostCaseEvidence(2,w,proof,false,[])[1];
+  assert.equal(reasons.cancelArgs,1);assert.deepEqual(Array.from(reasons.cancelInput),[false,false,false]);
+  cancel.args=[];reasons=f.bifrostCaseEvidence(2,w,proof,false,[])[1];
+  assert.equal(reasons.cancelArgs,0);assert.equal(reasons.cancelRead,null);assert.deepEqual(Array.from(reasons.cancelInput),[null,null,null]);
+  const controller=new AbortController();controller.abort(undefined);w.caller.reason=undefined;w.caller.abortArgumentCount=1;w.caller.evidenceAbort=f.bifrostSignalEvidence(controller.signal);
+  reasons=f.bifrostCaseEvidence(2,w,proof,false,[])[1];
+  assert.equal(reasons.abortOperand.observed,true);assert.equal(reasons.abortOperand.defined,false);assert.equal(reasons.callerReason.defined,true);assert.equal(reasons.operandSignal,false);
+ });
+ test("Bifrost reason evidence keeps observed cancel chronology separate from later abort",()=>{
+  const {f,w}=reasonEvidence(),controller=new AbortController(),r=w.transports[0].readers[0];
+  const read={kind:"read",reader:r,state:"pending",callerSignal:controller.signal,effectiveSignal:controller.signal};
+  const closed={kind:"closed",reader:r,state:"pending"},cancel={kind:"cancel",reader:r,callerSignal:controller.signal,effectiveSignal:controller.signal};
+  const earlier=f.bifrostOperationEvidence(cancel,[read,closed]);controller.abort({});read.state="rejected";
+  const later=f.bifrostOperationEvidence(cancel,[read,closed]);closed.state="rejected";
+  assert.equal(earlier.caller.aborted,false);assert.equal(earlier.readRejected,false);assert.equal(earlier.pendingReads,1);
+  assert.equal(later.caller.aborted,true);assert.equal(later.readRejected,true);assert.equal(later.closedRejected,false);assert.equal(later.pendingReads,0);
+ });
+ test("Bifrost reason evidence marks wrong ambiguous attachment and original release failure without disposition",()=>{
+  for(const mutate of [
+   w=>{w.transports[0].acquisition.response={};},w=>{w.transports[0].readers.push(w.transports[0].readers[0]);},
+   w=>{w.acquisitions.shift();},w=>{w.acquisitions.push(w.transports[0].acquisition);},
+   w=>{w.originals.find(o=>o.kind==="read"&&o.state==="rejected").receiver={};},
+   w=>{w.originals.find(o=>o.kind==="cancel").returned=Promise.resolve();}
+  ]){
+   const {f,w,proof}=reasonEvidence();mutate(w);const records=f.bifrostCaseEvidence(2,w,proof,false,[]);records.forEach(f.validateBifrostEvidence);assert.equal(records[0].complete,false);
+  }
+  const {f,w,proof}=reasonEvidence(),release=w.transports[0].release;
+  release.state="rejected";release.reason=undefined;w.failures.push(undefined);w.syncFailures.push(undefined);w.observerFailures.push(undefined);w.evidenceRestoreFailures=1;w.restored=false;
+  const records=f.bifrostCaseEvidence(2,w,proof,false,[undefined]);records.forEach(f.validateBifrostEvidence);
+  assert.equal(records[3].states.release,"rejected");assert.equal(records[3].release.defined,false);assert.deepEqual(Array.from(records[3].undefined),[1,1,1,0]);
+  assert.equal(records[3].counts.sync,1);assert.equal(records[3].counts.observer,1);assert.equal(records[3].counts.restoration,1);assert.equal(records[3].counts.worker,1);
+ });
+ test("Bifrost reason evidence reserves one complete failed case through parser emitter and overflow",()=>{
+  const {f,w,proof}=reasonEvidence(),records=[],report=f.createBifrostCheckpointReporter("sdk",r=>records.push(r),true);
+  report.mark(null,"module","fulfilled");report.flush(null);
+  for(let i=0;i<20;i++){report.mark(i,"setup","fulfilled");report.flush(i);}
+  const group=f.bifrostCaseEvidence(2,w,proof,false,[]);report.evidence(group);report.evidence(f.bifrostCaseEvidence(3,w,proof,false,[]));report.finish();
+  assert.equal(report.failures.length,0);assert.equal(records.length,9);assert.equal(records.filter(r=>r.evidence).length,4);
+  assert.ok(records.filter(r=>r.evidence).every(r=>r.case===2));assert.equal(records.at(-2).phase,"overflow");assert.ok(records.at(-2).count>0);
+  const child={stdout:records.map(r=>"BIFROST_CHECKPOINT "+JSON.stringify(r)).join("\n")},decoded=bifrostCheckpointRecords(child);
+  const lines=[],emit=bifrostAnnotationEmitter(line=>lines.push(line));decoded.forEach(emit);
+  assert.ok(lines.every(line=>Buffer.byteLength(line)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);
+  for(const changed of [group.slice(1),group.map((r,i)=>i===1?{...r,case:3}:r),group.map((r,i)=>i===1?{...r,complete:!r.complete}:r)]){
+   assert.throws(()=>bifrostCheckpointRecords({stdout:changed.map(r=>"BIFROST_CHECKPOINT "+JSON.stringify(r)).join("\n")}));
+  }
+  for(const changed of [{...group[0],firstFailed:"invented"},{...group[1],message:"private"},{...group[2],abortInvoke:Infinity}]){
+   assert.throws(()=>f.validateBifrostEvidence(changed));
+  }
+ });
+ test("Bifrost reason evidence maximum closed numeric fields fit complete original quotas",()=>{
+  const {f,w,proof}=reasonEvidence();
+  const worst=value=>typeof value==="number"?1000000:Array.isArray(value)?value.map(worst):value&&typeof value==="object"?Object.fromEntries(Object.entries(value).map(([k,v])=>[k,["v","case"].includes(k)?v:worst(v)])):value;
+  const group=f.bifrostCaseEvidence(2,w,proof,false,[]).map(worst),records=[];
+  group.forEach(f.validateBifrostEvidence);
+  const report=f.createBifrostCheckpointReporter("sdk",r=>records.push(r),true);
+  for(let i=0;i<4;i++){report.mark(i,"worker_retirement","rejected",undefined,4095,4095);report.flush(i);}
+  report.evidence(group);report.finish();assert.equal(report.failures.length,0);assert.equal(records.length,9);
+  const decoded=bifrostCheckpointRecords({stdout:records.map(r=>"BIFROST_CHECKPOINT "+JSON.stringify(r)).join("\n")});
+  const lines=[],emit=bifrostAnnotationEmitter(line=>lines.push(line));decoded.forEach(emit);
+  assert.ok(lines.every(line=>Buffer.byteLength(line)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);
+ });
  function controlEvidence(role,identity){
   const w=nativeEvidence();w.identity=identity;for(const t of w.transports)t.acquisition.guard=identity.guard;w.role=role;
   if(role!=="partial"){for(const o of w.originals)o.state="fulfilled";w.caller.abortCalled=role==="preabort";w.caller.signal.aborted=role==="preabort";w.caller.result=role==="eof"?"stop":"error";w.caller.emptyContent=role==="preabort";}

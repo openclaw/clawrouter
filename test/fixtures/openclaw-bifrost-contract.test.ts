@@ -183,7 +183,110 @@ function emitControl(row:Case,w:any,result:any,worker:boolean):void {
 export function bifrostSetupPhase(phase:unknown):boolean {
  return typeof phase==="string"&&["caller_install","progress_subscribe","source_env_pin","source_git_pin","poison_env","fetch_hook","undici_hook","guard_hook","guard_descriptor","profile_write","discovery_env","api_key_resolver","auth_resolver","discovery_auth_check","inference_auth_check","facade_load","plugin_register","plugin_id_check","catalog_check"].includes(phase);
 }
+// Native accessors bypass instance getters. Reasons stay private and are never serialized.
+export function bifrostSignalEvidence(signal:unknown):any {
+ try{
+  const aborted=Reflect.apply(Object.getOwnPropertyDescriptor(AbortSignal.prototype,"aborted")!.get!,signal,[]);
+  const reason=Reflect.apply(Object.getOwnPropertyDescriptor(AbortSignal.prototype,"reason")!.get!,signal,[]);
+  return {observed:true,aborted,reason};
+ }catch{return {observed:false,aborted:null};}
+}
+export function bifrostOperationEvidence(o:any,originals:any[]):any {
+ const t=o.reader?.transport;
+ return {caller:bifrostSignalEvidence(o.callerSignal),input:bifrostSignalEvidence(t?.acquisition?.inputSignal),effective:bifrostSignalEvidence(o.effectiveSignal),
+  readRejected:originals.some(p=>p.reader===o.reader&&p.kind==="read"&&p.state==="rejected"),
+  closedRejected:originals.some(p=>p.reader===o.reader&&p.kind==="closed"&&p.state==="rejected"),
+  pendingReads:originals.filter(p=>p.reader===o.reader&&p.kind==="read"&&p.state==="pending").length};
+}
+export function bifrostReasonMetadata(observed:boolean,reason:unknown):any {
+ return {observed,defined:observed?reason!==undefined:null,object:observed?reason!==null&&typeof reason==="object":null};
+}
+export function bifrostCaseEvidence(index:number,w:any,proof:any,worker:boolean,workerFailures:unknown[]):any[] {
+ const one=(values:any[])=>values.length===1?values[0]:undefined;
+ const num=(n:any)=>Number.isSafeInteger(n)&&n>=0&&n<=1000000?n:null;
+ const flag=(v:any)=>typeof v==="boolean"?v:null;
+ const id=(values:any[],v:any)=>v&&values.includes(v)?values.indexOf(v):null;
+ const state=(o:any)=>o&&["pending","fulfilled","rejected","threw"].includes(o.state)?o.state:"absent";
+ const observed=(o:any)=>!!o&&["rejected","threw"].includes(o.state);
+ const meta=(o:any)=>bifrostReasonMetadata(observed(o),o?.reason);
+ const same=(a:any,b:any)=>observed(a)&&observed(b)?Object.is(a.reason,b.reason):null;
+ const transports=w.transports.filter((t:any)=>t.method==="POST"),t=one(transports),a=t?.acquisition,c=w.caller,r=t?one(t.readers):undefined;
+ const ops=(kind:string)=>r?w.originals.filter((o:any)=>o.reader===r&&o.kind===kind):[];
+ const rejected=ops("read").filter((o:any)=>o.state==="rejected"),read=one(rejected),closes=ops("closed"),closed=one(closes),cancels=ops("cancel"),cancel=one(cancels);
+ const prefix=ops("read").find((o:any)=>o.state==="fulfilled"&&o.value?.done===false&&o.value.value?.byteLength>0);
+ const unlock=one(ops("unlock")),release=t?.release;
+ const bindings={
+  invocation:t?bifrostInvocationBound(w,t):null,
+  guard:a?!!(w.acquisitions.filter((v:any)=>v===a).length===1&&a.owner===w.owner&&a.guard===w.identity.guard&&a.operation?.state==="fulfilled"&&a.pending===a.operation.pending):null,
+  response:t&&a?!!(a.transport===t&&a.response===t.response&&a.result?.response===t.response&&t.guardObserved):null,
+  reader:r?!!(r.owner===w.owner&&r.transport===t&&r.body===t.response?.body&&t.bodies.length===1&&r.body===t.bodies[0]):null,
+  receivers:r&&read&&closed&&cancel?[read,closed,cancel].every(o=>o.owner===w.owner&&o.receiver===r.original):null,
+  readPromise:read?!!read.pending&&read.pending===read.returned:null,
+  closedPromise:closed?!!closed.pending&&closed.pending===closed.returned&&closed.pending===r.closed:null,
+  cancelPromise:cancel?!!cancel.pending&&cancel.pending===cancel.returned:null,
+  fetchArgs:t?.fetch?!!t.fetch.args&&t.fetch.args[0]===t.input&&t.fetch.args[1]===t.init:null,
+  signals:read&&closed&&cancel?[read,closed,cancel].every(o=>["evidenceInvoke","evidenceSettle"].every(at=>["caller","input","effective"].every(k=>o[at]?.[k]?.observed===true))):null,
+ };
+ const signals=(o:any)=>["caller","input","effective"].map(k=>observed(o)&&o.evidenceSettle?.[k]?.observed===true?Object.is(o.reason,o.evidenceSettle[k].reason):null);
+ const signalStates=(o:any,where:string)=>["caller","input","effective"].map(k=>flag(o?.[where]?.[k]?.aborted));
+ // Complete means unique observed bindings, never accepted native outcomes.
+ const complete=transports.length===1&&!!r&&rejected.length===1&&closes.length===1&&cancels.length===1&&Object.values(bindings).every(v=>v===true);
+ const base={v:1,pin:"d8bb939408aa4d2be7df0161748edb52ebf3b1fb",lane:"sdk",case:index,evidence:true,complete};
+ const source=proof?.source;
+ return [
+  {...base,part:"identity",ids:{transport:id(w.transports,t),acquisition:id(w.acquisitions,a),reader:t?id(t.readers,r):null,read:id(w.originals,read),closed:id(w.originals,closed),cancel:id(w.originals,cancel),release:id(w.originals,release)},
+   counts:{posts:transports.length,gets:w.transports.filter((v:any)=>v.method==="GET").length,acquisitions:w.acquisitions.length,readers:t?t.readers.length:0,reads:ops("read").length,closed:closes.length,cancel:cancels.length},bindings,firstFailed:null,
+   source:{canceled:num(source?.canceled),settled:num(source?.settled),expired:num(source?.expired),held:num(source?.held)},inbound:flag(proof?.inboundChatAborted)},
+  {...base,part:"reasons",read:meta(read),closed:meta(closed),cancel:meta(cancel),readClosed:same(read,closed),readCancel:same(read,cancel),
+   readSignals:signals(read),closedSignals:signals(closed),cancelSignals:signals(cancel),
+   cancelArgs:cancel?num(cancel.args?.length):null,cancelRead:cancel?.args?.length>0&&observed(read)?Object.is(cancel.args[0],read.reason):null,
+   cancelInput:["caller","input","effective"].map(k=>cancel?.args?.length>0&&cancel.evidenceInvoke?.[k]?.observed===true?Object.is(cancel.args[0],cancel.evidenceInvoke[k].reason):null),
+   abortOperand:bifrostReasonMetadata(c?.abortArgumentCount>0,c?.reason),callerReason:bifrostReasonMetadata(c?.evidenceAbort?.observed===true,c?.evidenceAbort?.reason),
+   operandSignal:c?.abortArgumentCount>0&&c?.evidenceAbort?.observed===true?Object.is(c.reason,c.evidenceAbort.reason):null},
+  {...base,part:"order",acquired:num(r?.acquired),prefix:num(prefix?.settle),delivered:num(c?.delivered),abortInvoke:num(c?.abortInvoke),abortObserved:num(c?.abortObserved),abortReturn:num(c?.abortReturn),
+   readInvoke:num(read?.invoke),readSettle:num(read?.settle),closedInvoke:num(closed?.invoke),closedSettle:num(closed?.settle),cancelInvoke:num(cancel?.invoke),cancelReturn:num(cancel?.returnAt),cancelSettle:num(cancel?.settle),unlockAt:num(r?.unlockAt),
+   readRejectedAtCancel:flag(cancel?.evidenceInvoke?.readRejected),closedRejectedAtCancel:flag(cancel?.evidenceInvoke?.closedRejected),pendingReadsAtCancel:num(cancel?.evidenceInvoke?.pendingReads),
+   readInvokeSignals:signalStates(read,"evidenceInvoke"),readSettleSignals:signalStates(read,"evidenceSettle"),cancelInvokeSignals:signalStates(cancel,"evidenceInvoke")},
+  {...base,part:"retirement",states:{read:state(read),closed:state(closed),cancel:state(cancel),release:state(release),unlock:state(unlock),fetch:state(t?.fetch)},
+   counts:{originals:w.originals.length,pending:w.originals.filter((o:any)=>o.state==="pending").length,rejected:w.originals.filter((o:any)=>o.state==="rejected").length,sync:w.syncFailures.length,observer:w.observerFailures.length,restoration:num(w.evidenceRestoreFailures),worker:workerFailures.length,unlocks:num(r?.unlocks)},
+   release:{invoke:num(release?.invoke),returned:num(release?.returnAt),settle:num(release?.settle),promise:release?!!release.pending&&release.pending===release.returned:null,defined:observed(release)?release.reason!==undefined:null},
+   unlock:{invoke:num(unlock?.invoke),returned:num(unlock?.returnAt)},
+   // Undefined failure counts: all, synchronous, observer, restoration/cleanup.
+   undefined:[w.failures.filter((e:unknown)=>e===undefined).length,w.syncFailures.filter((e:unknown)=>e===undefined).length,w.observerFailures.filter((e:unknown)=>e===undefined).length,num(w.evidenceRestoreUndefined)],
+   bodyUnlocked:r?flag(r.body.locked===false):null,restored:flag(w.restored),joins:flag(w.evidenceJoined),worker}
+ ];
+}
+export function validateBifrostEvidence(record:any):void {
+ const number=(v:any)=>v===null||Number.isSafeInteger(v)&&v>=0&&v<=1000000;
+ const boolean=(v:any)=>v===null||typeof v==="boolean";
+ const reason=(v:any)=>v&&Object.keys(v).sort().join(",")==="defined,object,observed"&&typeof v.observed==="boolean"&&
+  (v.observed?typeof v.defined==="boolean"&&typeof v.object==="boolean"&&(!v.object||v.defined):v.defined===null&&v.object===null);
+ const signals=(v:any)=>Array.isArray(v)&&v.length===3&&v.every(boolean);
+ const fields:any={
+  identity:{ids:"transport acquisition reader read closed cancel release",counts:"posts gets acquisitions readers reads closed cancel",bindings:"invocation guard response reader receivers readPromise closedPromise cancelPromise fetchArgs signals",firstFailed:null,source:"canceled settled expired held",inbound:boolean},
+  reasons:{read:reason,closed:reason,cancel:reason,readClosed:boolean,readCancel:boolean,readSignals:signals,closedSignals:signals,cancelSignals:signals,cancelArgs:number,cancelRead:boolean,cancelInput:signals,abortOperand:reason,callerReason:reason,operandSignal:boolean},
+  order:Object.fromEntries(("acquired prefix delivered abortInvoke abortObserved abortReturn readInvoke readSettle closedInvoke closedSettle cancelInvoke cancelReturn cancelSettle unlockAt pendingReadsAtCancel").split(" ").map(k=>[k,number])),
+  retirement:{states:"read closed cancel release unlock fetch",counts:"originals pending rejected sync observer restoration worker unlocks",release:(v:any)=>v&&Object.keys(v).sort().join(",")==="defined,invoke,promise,returned,settle"&&[v.invoke,v.returned,v.settle].every(number)&&[v.promise,v.defined].every(boolean),unlock:"invoke returned",undefined:(v:any)=>Array.isArray(v)&&v.length===4&&v.every(number),bodyUnlocked:boolean,restored:boolean,joins:boolean,worker:boolean},
+ };
+ Object.assign(fields.order,{readRejectedAtCancel:boolean,closedRejectedAtCancel:boolean,readInvokeSignals:signals,readSettleSignals:signals,cancelInvokeSignals:signals});
+ const schema=fields[record?.part],base=["v","pin","lane","case","evidence","complete","part"];
+ if(!schema||!record||record.v!==1||record.pin!=="d8bb939408aa4d2be7df0161748edb52ebf3b1fb"||record.lane!=="sdk"||record.evidence!==true||
+  typeof record.complete!=="boolean"||!Number.isSafeInteger(record.case)||record.case<0||record.case>=32||
+  Object.keys(record).sort().join(",")!==[...base,...Object.keys(schema)].sort().join(","))throw Error("invalid Bifrost evidence");
+ for(const [key,rule] of Object.entries(schema)){
+  const value=record[key];
+  if(rule===null){if(value!==null)throw Error("unsupported predicate attribution");}
+  else if(typeof rule==="function"){if(!rule(value))throw Error("invalid evidence field");}
+  else {
+   if(!value||Object.keys(value).sort().join(",")!==(rule as string).split(" ").sort().join(","))throw Error("invalid evidence fields");
+   const valid=key==="bindings"?boolean:key==="states"?(v:any)=>["absent","pending","fulfilled","rejected","threw"].includes(v):number;
+   if(!Object.values(value).every(valid))throw Error("invalid evidence values");
+  }
+ }
+ if(Buffer.byteLength("::notice title=Bifrost closed diagnostic::"+JSON.stringify(record)+"\n")>768)throw Error("evidence record quota exceeded");
+}
 export function validateBifrostCheckpoint(record:any):void {
+ if(record?.evidence===true){validateBifrostEvidence(record);return;}
  const keys=["v","pin","lane","case","phase","state","defined","acq","op","count"];
  if(!record||Object.keys(record).sort().join(",")!==keys.sort().join(",")||record.v!==1||
   record.pin!=="d8bb939408aa4d2be7df0161748edb52ebf3b1fb"||!["outer","sdk"].includes(record.lane)||
@@ -195,9 +298,9 @@ export function validateBifrostCheckpoint(record:any):void {
   (bifrostSetupPhase(record.phase)&&(record.lane!=="sdk"||record.case===null||record.state!=="rejected"||record.acq!==null||record.op!==null||record.count!==0))||
   (["rejected","threw"].includes(record.state)?typeof record.defined!=="boolean":record.defined!==null))throw Error("invalid Bifrost checkpoint");
 }
-export function createBifrostCheckpointReporter(lane:string,emit:Function) {
+export function createBifrostCheckpointReporter(lane:string,emit:Function,withEvidence=false) {
  const records=new Map<string,any>(),sent=new Set<string>(),observers:Promise<unknown>[]=[],failures:unknown[]=[];
- let emitted=0,suppressed=0,finished=false,failed=0;
+ let emitted=0,suppressed=0,finished=false,failed=0,evidenceCase:number|null=null;
  const make=(index:number|null,phase:string,state:string,reason:unknown,acq:number|null=null,op:number|null=null,count=0)=>({v:1,pin:"d8bb939408aa4d2be7df0161748edb52ebf3b1fb",lane,case:index,phase,state,
   defined:state==="rejected"||state==="threw"?reason!==undefined:null,acq,op,count});
  const send=(record:any)=>{try{validateBifrostCheckpoint(record);emit(record);}catch(error){failures.push(error);}};
@@ -214,9 +317,18 @@ export function createBifrostCheckpointReporter(lane:string,emit:Function) {
   const selected=[...records.values()].filter(r=>r.case===index);
   selected.sort((a,b)=>Number(["rejected","threw"].includes(b.state))-Number(["rejected","threw"].includes(a.state)));
   for(const record of selected){const key=JSON.stringify(record);if(sent.has(key))continue;sent.add(key);
-   if(emitted<7){emitted++;send(record);}else suppressed=Math.min(65535,suppressed+1);}
+   if(emitted<(withEvidence?3:7)){emitted++;send(record);}else suppressed=Math.min(65535,suppressed+1);}
  };
  return {failures,mark,flush,
+  evidence(records:any[]){
+   try{
+    if(!withEvidence||lane!=="sdk"||finished||records.length!==4)throw Error("unsupported evidence group");
+    for(const record of records)validateBifrostEvidence(record);
+    if(records.map(r=>r.part).join(",")!=="identity,reasons,order,retirement"||records.some(r=>r.case!==records[0].case||r.complete!==records[0].complete))throw Error("incomplete evidence group");
+    if(evidenceCase!==null){suppressed=Math.min(65535,suppressed+4);return;}
+    evidenceCase=records[0].case;for(const record of records)send(record);
+   }catch(error){failures.push(error);}
+  },
   observe(index:number|null,phase:string,fn:Function,receiver:unknown,args:any[]){
    mark(index,phase,"enter");let original;
    try{original=Reflect.apply(fn,receiver,args);}catch(reason){mark(index,phase,"threw",reason);flush(index);throw reason;}
@@ -251,7 +363,7 @@ export function createBifrostSetupBoundary(report:any,index:number) {
   },
  };
 }
-const checkpoints=createBifrostCheckpointReporter("sdk",(record:any)=>process.stdout.write("BIFROST_CHECKPOINT "+JSON.stringify(record)+"\n"));
+const checkpoints=createBifrostCheckpointReporter("sdk",(record:any)=>process.stdout.write("BIFROST_CHECKPOINT "+JSON.stringify(record)+"\n"),true);
 checkpoints.mark(null,"module","fulfilled");checkpoints.flush(null);
 afterAll(async()=>{await checkpoints.drain();checkpoints.finish();throwFailures(checkpoints.failures);});
 function checkpointCase(row:Case):number {
@@ -276,9 +388,11 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
  const ownership=createBifrostInvocationOwnership(new AsyncLocalStorage());
  const failures:unknown[]=w.failures,originals:Original[]=w.originals,transports:Transport[]=w.transports,restores:Array<()=>void>=[];
  const observer=(p:Promise<unknown>)=>{w.observers.push(p.then(()=>{},e=>{w.observerFailures.push(e);}));};
- const record=(kind:string,details:any={})=>{const o:Original={owner:w.owner,kind,invoke:++w.sequence,settle:0,returnAt:0,state:"pending",returned:undefined,...details};originals.push(o);return o;};
+ const record=(kind:string,details:any={})=>{const o:Original={owner:w.owner,kind,invoke:++w.sequence,settle:0,returnAt:0,state:"pending",returned:undefined,...details};originals.push(o);
+  if(["read","closed","cancel"].includes(kind))try{o.evidenceInvoke=bifrostOperationEvidence(o,originals);}catch(e){w.observerFailures.push(e);}return o;};
  const returned=(o:Original,value:any)=>{o.returned=value;o.returnAt=++w.sequence;
   const settle=(state:Original["state"],v:any)=>{o.state=state;o.settle=++w.sequence;if(state==="rejected")o.reason=v;else o.value=v;
+   if(["read","closed","cancel"].includes(o.kind))try{o.evidenceSettle=bifrostOperationEvidence(o,originals);}catch(e){w.observerFailures.push(e);}
    o.callerAbortedAtSettle=o.callerSignal?.aborted??null;o.effectiveAbortedAtSettle=o.effectiveSignal?.aborted??null;
    const phase=["read","closed","cancel"].includes(o.kind)?o.kind:o.kind==="guard_release"?"release":null;
    if(phase)checkpoints.mark(caseIndex,phase,state,v,o.reader?transports.indexOf(o.reader.transport):null,originals.indexOf(o));};
@@ -293,8 +407,9 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
  const aborted=()=>{c.abortObserved=++w.sequence;};control.signal.addEventListener("abort",aborted,{once:true});restores.push(()=>control.signal.removeEventListener("abort",aborted));
  const abort=control.abort;patch(control,"abort",function(this:AbortController,...args:Parameters<typeof abort>){
   if(this!==control)throw Error("foreign original caller");c.abortCalled=true;c.noEarlierFailure=!control.signal.aborted&&!originals.some(o=>o.state==="rejected"||o.state==="threw");
-  c.pending=originals.filter(o=>o.kind==="read"&&o.state==="pending"&&o.reader.transport.caller===c);c.abortInvoke=++w.sequence;c.reason=args[0];
-  try{const value=Reflect.apply(abort,this,args);c.abortReturn=++w.sequence;c.abortedAfter=control.signal.aborted;return value;}catch(e){w.syncFailures.push(e);throw e;}});
+  c.pending=originals.filter(o=>o.kind==="read"&&o.state==="pending"&&o.reader.transport.caller===c);c.abortInvoke=++w.sequence;c.reason=args[0];c.abortArgumentCount=args.length;
+  try{const value=Reflect.apply(abort,this,args);c.abortReturn=++w.sequence;c.abortedAfter=control.signal.aborted;
+   try{c.evidenceAbort=bifrostSignalEvidence(control.signal);}catch(e){w.observerFailures.push(e);}return value;}catch(e){w.syncFailures.push(e);throw e;}});
  callerWitnesses.set(control.signal,{begin:()=>{c.inferenceInvoked=++w.sequence;c.completed=false;c.postsBefore=transports.filter(t=>t.method==="POST").length;},delivered:()=>{c.delivered=++w.sequence;},
   invoke:(fn:Function,receiver:unknown,args:any[])=>ownership.invoke(c,"inference",fn,receiver,args),
   progress:async()=>{const ts=transports.filter(t=>t.method==="POST"&&t.caller===c);expect(ts).toHaveLength(1);const t=ts[0];
@@ -406,6 +521,7 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
  while(at<originals.length||seen<w.observers.length){const batch=originals.slice(at);at=originals.length;await Promise.allSettled(batch.flatMap(o=>o.pending?[o.pending]:[]));
   const observed=w.observers.slice(seen);seen=w.observers.length;for(const r of await Promise.allSettled(observed))if(r.status==="rejected")w.observerFailures.push(r.reason);}
  checkpoints.mark(caseIndex,"original_join","fulfilled");
+ w.evidenceJoined=true;
  if(w.observerFailures.length)checkpoints.mark(caseIndex,"observer","rejected",w.observerFailures[0]);
  w.preabortPostDelta=transports.filter(t=>t.method==="POST").length-(c.postsBefore??0);
  if(row.mode==="preabort")await check(()=>expect(transports.filter(t=>t.method==="POST")).toHaveLength(0));
@@ -419,6 +535,8 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
  if(spy)await check(()=>checkpoints.observe(caseIndex,"restoration",()=>{if(!sameBifrostDescriptor(Object.getOwnPropertyDescriptor(guard,"fetchWithSsrFGuard"),spyDescriptor))throw Error("foreign guard descriptor");spy!.mockRestore();},undefined,[]));
  for(const cleanup of [()=>ownership.restore(),()=>vi.unstubAllEnvs(),()=>state.cleanup(),()=>state.restoreEnv()])await check(()=>checkpoints.observe(caseIndex,"cleanup",cleanup,undefined,[]));
  w.restored=failures.length===beforeRestore;
+ w.evidenceRestoreFailures=failures.length-beforeRestore;
+ w.evidenceRestoreUndefined=failures.slice(beforeRestore).filter(e=>e===undefined).length;
  let allowed:Original[]=[];
  if(row.control){checkpoints.mark(caseIndex,"control","enter");const evaluated=evaluateBifrostNativeControl(w);checkpoints.mark(caseIndex,"control","fulfilled");if(evaluated.qualified&&row.control==="partial")allowed=bifrostStoredErrorVector(w)??[];
   const reports=controlReports.get(row.api)??new Map();try{emitControl(row,w,evaluated,worker);}catch(e){failures.push(e);evaluated.qualified=false;}
@@ -431,6 +549,7 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
   if(!bifrostProgressQualified(f))failures.push(Error("progress case physical or accounting proof incomplete"));
  }
  failures.push(...w.syncFailures,...w.observerFailures,...workerFailures);
+ if(failures.length)try{checkpoints.evidence(bifrostCaseEvidence(caseIndex,w,proof,worker,workerFailures));}catch(e){checkpoints.failures.push(e);}
  finishBifrostCheckpointCase(checkpoints,caseIndex,failures);throwFailures(failures);
 }
 
