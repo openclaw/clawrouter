@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- Drain DeepSeek fixture request work, original reads/cancels and retained observer tails before reporting independent join failures, including undefined reasons.
+
 - Preserve original cancellation rejections and independent cleanup/reporting failures in the DeepSeek held-upstream diagnostic, including undefined reasons.
 
 - Distinguish an exactly owned, settled metadata read and its derived rejection from native HTTP/1 fixture retirement failures, preserving raw outcomes, permanent ownership seals and independent producer and SQLite checks without claiming the error cause.

@@ -237,6 +237,12 @@ const deferred = () => { let resolve; const promise = new Promise(done => { reso
 const requests = new Map(), inputs = new Map(), ingested = new Map(ids.map(id => [id, deferred()])), violations = [];
 function refuse(reason) { violations.push(reason); throw new Error(reason); }
 let fixtureEnv;
+function retainDeepSeekObserver(proof, observer) {
+  proof.observers.push(observer);
+  try { proof.observers.push(observer.then(undefined, () => {})); }
+  catch (error) { proof.failures.push(error); throw error; }
+  return observer;
+}
 const policy = id => ({ enabled: true, generation: "fixture", providers: id === "ds_policy" ? ["openai"] : ["deepseek"], tenantId: "fixture",
   monthlyBudgetMicros: id === "ds_budget" ? 749 : 10000, requestCostMicros: id === "ds_fixed" ? 17 : null,
   budgetMode: "reserve", retainRequestContent: false, grantRouting: { environmentFallback: false } });
@@ -246,7 +252,7 @@ globalThis.fetch = async (input, init) => {
   const id = /^Bearer managed-(ds_[a-z_]+)$/.exec(request.headers.get("authorization") ?? "")?.[1];
   if (!ids.includes(id) || inputs.has(id)) refuse("unknown owner or repeated provider egress");
   const proof = { activeReads: 0, eof: false, canceled: false, unlocked: false, readRejected: false, terminal: deferred(),
-    readCalls: 0, reads: [], cancelCalls: 0, cancels: [], sourceRejected: false,
+    readCalls: 0, reads: [], cancelCalls: 0, cancels: [], observers: [], failures: [], sourceRejected: false,
     reservedBeforeFetch: (await budgetStatus(fixtureEnv, id, policy(id))).spentMicros };
   inputs.set(id, proof);
   const response = await rawFetch(request), physical = response.body;
@@ -255,44 +261,131 @@ globalThis.fetch = async (input, init) => {
   const reader = physical.getReader();
   const unlock = () => { if (!proof.unlocked) { reader.releaseLock(); proof.unlocked = true; proof.terminal.resolve(); } };
   const source = new ReadableStream({
-    async pull(controller) {
+    pull(controller) { return retainDeepSeekObserver(proof, (async () => {
       proof.activeReads++;
       try {
         proof.readCalls++;
-        const original = reader.read(); proof.reads.push(original);
+        let original;
+        try { original = reader.read(); } catch (error) { proof.failures.push(error); throw error; }
+        proof.reads.push(original);
         let next;
         try { next = await original; } catch (error) { proof.readRejected = true; throw error; }
         if (next.done) { proof.eof = true; controller.close(); } else controller.enqueue(next.value);
       }
       catch (error) { proof.sourceRejected = true; controller.error(error); }
       finally { proof.activeReads--; if (proof.eof || proof.sourceRejected) unlock(); }
-    },
-    async cancel(reason) {
+    })()); },
+    cancel(reason) { return retainDeepSeekObserver(proof, (async () => {
       proof.canceled = true; proof.cancelCalls++;
       try { const original = reader.cancel(reason); proof.cancels.push(original); await original; }
       finally { unlock(); }
-    },
+    })()); },
   }, { highWaterMark: 0 });
   proof.source = source;
   return new Response(source, { status: response.status, headers: response.headers });
 };
-async function join(id) {
-  for (const record of requests.get(id) ?? []) {
-    await record.returned.promise;
-    for (let cursor = 0; cursor < record.pending.length;) { const batch = record.pending.slice(cursor); cursor += batch.length; await Promise.all(batch); }
-  }
-  const p = inputs.get(id); await p?.terminal.promise;
-  // A concurrent pull may unlock before cancel settles. Join the exact native
-  // read/cancel promises separately; terminal/unlocked are not cancellation ACKs.
-  const [reads, cancels] = await Promise.all([
-    Promise.allSettled(p?.reads ?? []), Promise.allSettled(p?.cancels ?? []),
-  ]);
-  return { paths: (requests.get(id) ?? []).map(row => row.path), calls: p ? 1 : 0, retired: true, charged: bodyBudgetCharged(), ...(p ? {
-    activeReads: p.activeReads, eof: p.eof, canceled: p.canceled, readRejected: p.readRejected, unlocked: p.unlocked,
-    sourceLocked: p.source.locked, physicalLocked: p.physical.locked, reservedBeforeFetch: p.reservedBeforeFetch,
-    readCalls: p.readCalls, readResults: reads.map(result => result.status),
-    cancelCalls: p.cancelCalls, cancelResults: cancels.map(result => result.status),
-  } : {}) };
+const joinOwners = new Map();
+function join(id) {
+  let state = joinOwners.get(id);
+  if (!state) { state = { entries: new Map(), lists: new Map(), fields: new Map(), records: [], items: [], faults: new Map(), version: 0 }; joinOwners.set(id, state); }
+  if (state.active) return state.active;
+  let resolve, reject;
+  const result = new Promise((a, b) => { resolve = a; reject = b; });
+  state.active = result;
+  const fault = (owner, field, error) => {
+    let fields = state.faults.get(owner);
+    if (!fields) { fields = new Set(); state.faults.set(owner, fields); }
+    if (!fields.has(field)) { fields.add(field); state.items.push({ failure: { error } }); }
+  };
+  const bound = (owner, field, read) => {
+    let fields = state.fields.get(owner);
+    if (!fields) { fields = new Map(); state.fields.set(owner, fields); }
+    try {
+      const value = read();
+      if (!fields.has(field) && value !== undefined) fields.set(field, value);
+      if (fields.has(field) && fields.get(field) !== value) fault(owner, field, new Error("DeepSeek join ownership changed"));
+    } catch (error) { fault(owner, field, error); }
+    return fields.get(field);
+  };
+  const observe = (original, fatal) => {
+    if (original === state.active || state.runner && original === state.runner || state.completion && original === state.completion) {
+      fault(state, "self", new Error("DeepSeek join cannot own itself")); return;
+    }
+    let entry = state.entries.get(original);
+    if (entry) { if (fatal && !entry.fatal) { entry.fatal = true; state.version++; } return; }
+    entry = { original, fatal, done: false }; state.entries.set(original, entry); state.items.push(entry); state.version++;
+    try {
+      const observer = original.then(
+        value => { entry.outcome = { status: "fulfilled", value }; },
+        error => { entry.outcome = { status: "rejected", reason: error }; },
+      );
+      entry.joined = observer.then(() => { entry.done = true; }, error => { entry.observerFailure = { error }; entry.done = true; });
+    } catch (error) { entry.registrationFailure = { error }; entry.done = true; }
+  };
+  const list = (owner, field, visit) => {
+    const values = bound(owner, field, () => owner[field]);
+    if (!Array.isArray(values)) { fault(owner, field, new Error("DeepSeek join ledger is missing")); return; }
+    let fields = state.lists.get(owner);
+    if (!fields) { fields = new Map(); state.lists.set(owner, fields); }
+    let cursor = fields.get(field);
+    if (!cursor) { cursor = []; fields.set(field, cursor); }
+    if (values.length < cursor.length || cursor.some((value, index) => values[index] !== value)) {
+      fault(values, "prefix", new Error("DeepSeek join ledger changed"));
+    }
+    while (cursor.length < values.length) {
+      const index = cursor.length, value = values[index]; cursor.push(value);
+      try { visit(value); } catch (error) { fault(values, index, error); }
+    }
+  };
+  const scan = () => {
+    const records = bound(state, "requests", () => requests.get(id));
+    if (records) {
+      if (records.length < state.records.length || state.records.some((record, index) => records[index] !== record)) fault(state, "records", new Error("DeepSeek request ledger changed"));
+      while (state.records.length < records.length) state.records.push(records[state.records.length]);
+    }
+    for (const record of state.records) {
+      observe(bound(record, "returned", () => record.returned.promise), true);
+      list(record, "pending", promise => observe(promise, true));
+      list(record, "failures", error => state.items.push({ failure: { error } }));
+    }
+    const p = bound(state, "proof", () => inputs.get(id));
+    if (p) {
+      observe(bound(p, "terminal", () => p.terminal.promise), true);
+      list(p, "reads", promise => observe(promise, false));
+      list(p, "cancels", promise => observe(promise, true));
+      list(p, "observers", promise => observe(promise, true));
+      list(p, "failures", error => state.items.push({ failure: { error } }));
+    }
+    return p;
+  };
+  state.runner = (async () => {
+    let p;
+    for (;;) {
+      const version = state.version;
+      scan();
+      await Promise.all([...state.entries.values()].filter(entry => !entry.done).map(entry => entry.joined));
+      p = scan();
+      if (version === state.version) break;
+    }
+    const failures = [];
+    for (const entry of state.items) {
+      if (entry.failure) failures.push(entry.failure.error);
+      if (entry.registrationFailure) failures.push(entry.registrationFailure.error);
+      if ("original" in entry && !entry.outcome && !entry.registrationFailure && !entry.observerFailure) failures.push(new Error("DeepSeek original settlement is missing"));
+      if (entry.fatal && entry.outcome?.status === "rejected") failures.push(entry.outcome.reason);
+      if (entry.observerFailure) failures.push(entry.observerFailure.error);
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length) throw new AggregateError(failures, "DeepSeek original work or observation failed");
+    return { paths: (state.fields.get(state).get("requests") ?? []).map(row => row.path), calls: p ? 1 : 0, retired: true, charged: bodyBudgetCharged(), ...(p ? {
+      activeReads: p.activeReads, eof: p.eof, canceled: p.canceled, readRejected: p.readRejected, unlocked: p.unlocked,
+      sourceLocked: p.source.locked, physicalLocked: p.physical.locked, reservedBeforeFetch: p.reservedBeforeFetch,
+      readCalls: p.readCalls, readResults: p.reads.map(original => state.entries.get(original).outcome.status),
+      cancelCalls: p.cancelCalls, cancelResults: p.cancels.map(original => state.entries.get(original).outcome.status),
+    } : {}) };
+  })();
+  state.completion = state.runner.then(value => { state.active = undefined; resolve(value); }, error => { state.active = undefined; reject(error); });
+  return result;
 }
 export default {
   async fetch(request, env, context) {
@@ -327,8 +420,11 @@ export default {
     if (!["/v1/catalog", "/v1/native/deepseek/v1/tools/search"].includes(path)) refuse("unexpected client route");
     const records = requests.get(id) ?? []; requests.set(id, records);
     if (records.some(row => row.path === path)) refuse("repeated client route");
-    const record = { path, pending: [], returned: deferred() }; records.push(record);
-    const ctx = { waitUntil(promise) { record.pending.push(promise); context.waitUntil(promise); } };
+    const record = { path, pending: [], failures: [], returned: deferred() }; records.push(record);
+    const ctx = { waitUntil(promise) {
+      record.pending.push(promise);
+      try { context.waitUntil(promise); } catch (error) { record.failures.push(error); throw error; }
+    } };
     try { return await worker.fetch(request, { ...env, DEEPSEEK_API_KEY: "must-not-fallback-deepseek" }, ctx); }
     finally { record.returned.resolve(); }
   },

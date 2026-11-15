@@ -191,3 +191,213 @@ test("DeepSeek diagnostic reporting failure cannot skip successful original clea
   assert.deepEqual(await actual.result, { failed: true, reason: undefined });
   assertOwned(actual);
 });
+
+function workerJoinFixture() {
+  const record = { path: "/v1/native/deepseek/v1/tools/search", returned: deferred(), pending: [], failures: [] };
+  record.returned.resolve();
+  const proof = { terminal: deferred(), reads: [], cancels: [], observers: [], failures: [], readCalls: 0, cancelCalls: 0,
+    activeReads: 0, eof: false, canceled: false, readRejected: false, unlocked: true, source: { locked: false }, physical: { locked: false } };
+  proof.terminal.resolve();
+  const records = [record], requests = new Map([["ds_abort", records]]), inputs = new Map([["ds_abort", proof]]);
+  const begin = source.indexOf("const joinOwners = new Map();");
+  const end = source.indexOf("\nexport default", begin);
+  assert.ok(begin >= 0 && end > begin);
+  const join = new Function("requests", "inputs", "bodyBudgetCharged", source.slice(begin, end) + ";return join;")(requests, inputs, () => 0);
+  const observerBegin = source.indexOf("function retainDeepSeekObserver(");
+  const observerEnd = source.indexOf("\nconst policy", observerBegin);
+  const retain = new Function(source.slice(observerBegin, observerEnd) + ";return retainDeepSeekObserver;")();
+  return { join: () => join("ds_abort"), record, records, requests, inputs, proof, retain };
+}
+
+function countedPromise() {
+  const pending = deferred(), subscribed = deferred();
+  const then = pending.promise.then;
+  let count = 0;
+  pending.promise.then = function (...args) {
+    assert.equal(this, pending.promise);
+    count++; subscribed.resolve();
+    return Reflect.apply(then, this, args);
+  };
+  return { ...pending, subscribed: subscribed.promise, count: () => count };
+}
+
+for (const reason of [undefined, new Error("synthetic request work failure")]) {
+  test(`DeepSeek Worker joins held original cancellation after ${reason === undefined ? "undefined" : "defined"} waitUntil rejection`, async () => {
+    const f = workerJoinFixture(), cancel = countedPromise();
+    f.record.pending.push(Promise.reject(reason));
+    f.proof.cancels.push(cancel.promise); f.proof.cancelCalls++;
+    const first = f.join(); assert.equal(f.join(), first);
+    let finished = false;
+    const completion = outcome(first).then(value => { finished = true; return value; });
+    await cancel.subscribed;
+    await Promise.resolve();
+    assert.equal(finished, false);
+    cancel.resolve();
+    assert.deepEqual(await completion, { failed: true, reason });
+    assert.equal(cancel.count(), 1);
+    assert.deepEqual(await outcome(f.join()), { failed: true, reason });
+    assert.equal(cancel.count(), 1);
+  });
+}
+
+test("DeepSeek Worker retains independent undefined, cancel and observer failures without flattening", async () => {
+  const f = workerJoinFixture(), cancel = {}, observer = new AggregateError([undefined], "synthetic observer");
+  f.record.pending.push(Promise.reject(undefined));
+  f.proof.cancels.push(Promise.reject(cancel)); f.proof.cancelCalls++;
+  f.retain(f.proof, Promise.reject(observer));
+  f.proof.failures.push(undefined);
+  const result = await outcome(f.join());
+  assert.equal(result.failed, true);
+  assert.deepEqual(result.reason.errors, [undefined, cancel, observer, undefined]);
+});
+
+test("DeepSeek Worker registration failure cannot skip a later original", async () => {
+  const f = workerJoinFixture(), cancel = countedPromise();
+  f.record.pending.push({ get then() { throw undefined; } });
+  f.proof.cancels.push(cancel.promise); f.proof.cancelCalls++;
+  let finished = false;
+  const result = outcome(f.join()).then(value => { finished = true; return value; });
+  await cancel.subscribed; await Promise.resolve();
+  assert.equal(finished, false);
+  cancel.resolve();
+  assert.deepEqual(await result, { failed: true, reason: undefined });
+});
+
+test("DeepSeek Worker fixed point includes tails appended by an already attached observer", async () => {
+  const f = workerJoinFixture(), read = countedPromise(), cancel = countedPromise(), tail = deferred(), failure = {};
+  f.proof.reads.push(read.promise); f.proof.readCalls++;
+  const observer = read.promise.then(() => {
+    f.proof.cancels.push(cancel.promise); f.proof.cancelCalls++;
+    f.record.pending.push(Promise.reject(failure));
+    f.retain(f.proof, tail.promise);
+  });
+  f.retain(f.proof, observer);
+  let finished = false;
+  const result = outcome(f.join()).then(value => { finished = true; return value; });
+  read.resolve({ done: true });
+  await cancel.subscribed; await Promise.resolve();
+  assert.equal(finished, false);
+  cancel.resolve(); await Promise.resolve();
+  assert.equal(finished, false);
+  tail.resolve();
+  assert.deepEqual(await result, { failed: true, reason: failure });
+  assert.equal(read.count(), 2); // Existing source observer plus one join subscription.
+  assert.equal(cancel.count(), 1);
+});
+
+test("DeepSeek Worker successful join cannot cache acceptance over a later cancel rejection", async () => {
+  const f = workerJoinFixture(), read = countedPromise(), cancel = countedPromise();
+  f.proof.reads.push(read.promise); f.proof.readCalls++;
+  const first = f.join(); assert.equal(first, f.join());
+  read.resolve({ done: true });
+  assert.equal((await first).retired, true);
+  assert.equal(read.count(), 1);
+  f.proof.cancels.push(cancel.promise); f.proof.cancelCalls++;
+  const second = outcome(f.join()); cancel.reject(undefined);
+  assert.deepEqual(await second, { failed: true, reason: undefined });
+  assert.deepEqual(await outcome(f.join()), { failed: true, reason: undefined });
+  assert.equal(read.count(), 1); assert.equal(cancel.count(), 1);
+});
+
+test("DeepSeek Worker preserves its distinct read-rejection oracle but a late cancel alias is fatal", async () => {
+  const f = workerJoinFixture(), read = countedPromise(), reason = {};
+  f.proof.reads.push(read.promise); f.proof.readCalls++; f.proof.readRejected = true;
+  const first = f.join(); read.reject(reason);
+  assert.deepEqual((await first).readResults, ["rejected"]);
+  f.proof.cancels.push(read.promise); f.proof.cancelCalls++;
+  assert.deepEqual(await outcome(f.join()), { failed: true, reason });
+  assert.equal(read.count(), 1);
+});
+
+test("DeepSeek Worker reentrant self-join fails after independent cancellation settles", async () => {
+  const f = workerJoinFixture(), cancel = countedPromise();
+  let reentrant;
+  f.record.pending.push({ then(resolve) {
+    reentrant = f.join(); f.record.pending.push(reentrant);
+    return Promise.resolve().then(() => resolve());
+  } });
+  f.proof.cancels.push(cancel.promise); f.proof.cancelCalls++;
+  const first = f.join(); assert.equal(reentrant, first);
+  let finished = false;
+  const result = outcome(first).then(value => { finished = true; return value; });
+  await cancel.subscribed; await Promise.resolve(); assert.equal(finished, false);
+  cancel.resolve();
+  const failure = await result;
+  assert.equal(failure.failed, true);
+  assert.match(failure.reason.message, /cannot own itself/);
+});
+
+test("DeepSeek Worker retains original cancellation and its failed join observer", async () => {
+  const f = workerJoinFixture(), original = {}, observer = {};
+  const promise = Promise.reject(original), then = promise.then;
+  promise.then = function (...args) { return Reflect.apply(then, this, args).then(() => { throw observer; }); };
+  f.proof.cancels.push(promise); f.proof.cancelCalls++;
+  const result = await outcome(f.join());
+  assert.equal(result.failed, true);
+  assert.deepEqual(result.reason.errors, [original, observer]);
+});
+
+test("DeepSeek Worker rejects removed ownership while still draining captured originals", async () => {
+  const f = workerJoinFixture(), cancel = countedPromise();
+  f.proof.cancels.push(cancel.promise); f.proof.cancelCalls++;
+  const result = outcome(f.join());
+  await cancel.subscribed;
+  f.proof.cancels.length = 0;
+  cancel.resolve();
+  const failure = await result;
+  assert.equal(failure.failed, true);
+  assert.match(failure.reason.message, /ledger changed/);
+});
+
+test("DeepSeek Worker records original waitUntil registration failure before joining", async () => {
+  const f = workerJoinFixture(), pending = countedPromise();
+  const start = source.indexOf("const ctx = { waitUntil(promise)");
+  const end = source.indexOf("\n    try { return await worker.fetch", start);
+  const context = { waitUntil(promise) { assert.equal(promise, pending.promise); throw undefined; } };
+  const ctx = new Function("record", "context", source.slice(start, end) + ";return ctx;")(f.record, context);
+  let threw = false;
+  try { ctx.waitUntil(pending.promise); } catch (error) { threw = true; assert.equal(error, undefined); }
+  assert.equal(threw, true); assert.equal(f.record.pending[0], pending.promise);
+  let finished = false;
+  const result = outcome(f.join()).then(value => { finished = true; return value; });
+  await pending.subscribed; await Promise.resolve(); assert.equal(finished, false);
+  pending.resolve(); assert.deepEqual(await result, { failed: true, reason: undefined });
+});
+
+test("DeepSeek Worker retains exact read/cancel callback promises without changing native call operands", async () => {
+  const read = deferred(), cancel = deferred(), inputs = new Map(), reason = {};
+  let callbacks, reads = 0, cancels = 0, unlocks = 0;
+  const reader = {
+    read(...args) { assert.equal(this, reader); assert.deepEqual(args, []); reads++; return read.promise; },
+    cancel(...args) { assert.equal(this, reader); assert.deepEqual(args, [reason]); cancels++; return cancel.promise; },
+    releaseLock() { assert.equal(this, reader); unlocks++; },
+    get closed() { throw new Error("no new closed observation"); },
+  };
+  const physical = { getReader: () => reader, locked: false };
+  const bindings = {
+    globalThis: {}, ids: ["ds_abort"], inputs, deferred, fixtureEnv: {}, policy: () => ({}),
+    budgetStatus: async () => ({ spentMicros: 750 }),
+    rawFetch: async () => ({ body: physical, status: 200, headers: {} }),
+    refuse: message => { throw new Error(message); },
+    Request: class { constructor(input) { return input; } },
+    Response: class { constructor(body) { this.body = body; } },
+    ReadableStream: class { constructor(source, options) { callbacks = source; assert.equal(options.highWaterMark, 0); this.locked = false; } },
+  };
+  const observerStart = source.indexOf("function retainDeepSeekObserver(");
+  const observerEnd = source.indexOf("\nconst policy", observerStart);
+  const fetchStart = source.indexOf("globalThis.fetch = async");
+  const fetchEnd = source.indexOf("\nconst joinOwners", fetchStart);
+  const fetch = new Function(...Object.keys(bindings), source.slice(observerStart, observerEnd) + source.slice(fetchStart, fetchEnd) + ";return globalThis.fetch;")(...Object.values(bindings));
+  await fetch({ url: "https://api.deepseek.com/v1/tools/search", method: "POST", headers: { get: () => "Bearer managed-ds_abort" } });
+  const proof = inputs.get("ds_abort");
+  const errors = [];
+  const pull = callbacks.pull({ error: error => errors.push(error), close() {}, enqueue() {} });
+  const cancellation = callbacks.cancel(reason);
+  assert.equal(proof.reads[0], read.promise); assert.equal(proof.cancels[0], cancel.promise);
+  assert.equal(proof.observers[0], pull); assert.equal(proof.observers[2], cancellation);
+  read.reject(undefined); await pull;
+  assert.deepEqual(errors, [undefined]);
+  cancel.resolve(); await cancellation;
+  await Promise.all(proof.observers);
+  assert.equal(reads, 1); assert.equal(cancels, 1); assert.equal(unlocks, 1);
+});
