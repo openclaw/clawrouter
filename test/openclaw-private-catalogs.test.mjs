@@ -33,14 +33,14 @@ export const privateNativeControls=privateProviders.flatMap(provider=>["stream",
 // No SDK imports, module initialization, plugin loading or native client runs.
 export function privateNativeEvaluator(){
  const source=readFileSync(new URL("./fixtures/openclaw-private-catalogs-contract.test.ts",import.meta.url),"utf8");
- const names=["createPrivateInvocationOwnership","newPrivateInvocationCaller","privateControlCaller","privateInvocationBound","samePrivateDescriptor","privateCancelOperand","privateStoredErrorVector","evaluatePrivateNativeControl","privateQualification","privateProductExpected"];
- const start="export function createPrivateInvocationOwnership(",end="function emitNativeControl(";
+ const names=["createPrivateFetchObserver","createPrivateInvocationOwnership","newPrivateInvocationCaller","privateControlCaller","privateInvocationBound","samePrivateDescriptor","privateCancelOperand","privateStoredErrorVector","evaluatePrivateNativeControl","privateQualification","privateProductExpected"];
+ const start="export function createPrivateFetchObserver(",end="function emitNativeControl(";
  assert.equal(source.split(start).length,2);assert.equal(source.split(end).length,2);
  const declarations=source.slice(source.indexOf(start),source.indexOf(end));
  assert.deepEqual([...declarations.matchAll(/^export function (\w+)\(/gm)].map(m=>m[1]),names);
  assert.doesNotMatch(declarations,/\bimport\b|\brequire\s*\(/);
  const code=stripTypeScriptTypes(declarations.replace(/^export /gm,""),{mode:"strip"});
- return runInNewContext(code+"\n({"+names.join(",")+"})",{}, {timeout:1000});
+ return runInNewContext('"use strict";\n'+code+"\n({"+names.join(",")+"})",{}, {timeout:1000});
 }
 export function privateNativeDiagnosticRecords(error){
  const records=new Map(),seen=new Set(),pending=[error];let bytes=0,nodes=0;
@@ -218,7 +218,7 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
  }
  function controlEvidence(role,identity){
   const w=nativeEvidence();w.identity=identity;w.transports[0].acquisition.guard=identity.guard;w.role=role;
-  if(role!=="partial"){for(const o of w.originals)o.state="fulfilled";w.caller.abortCalled=role==="preabort";w.caller.signal.aborted=role==="preabort";w.caller.result=role==="eof"?"stop":role==="preabort"?"aborted":"error";}
+  if(role!=="partial"){for(const o of w.originals)o.state="fulfilled";w.caller.abortCalled=role==="preabort";w.caller.signal.aborted=role==="preabort";w.caller.result=role==="eof"?"stop":"error";w.caller.emptyContent=role==="preabort";}
   if(role==="preabort"){const t=w.transports[0],a=t.acquisition,c=evaluator.newPrivateInvocationCaller(w.owner,undefined,"discovery");w.callers.push(c);t.method="GET";
    const invocation=Object.freeze({owner:w.owner,caller:c,signal:c.signal,kind:"discovery",fn:()=>{},receiver:undefined,args:Object.freeze([{signal:c.signal}])});
    a.invocation=t.invocation=invocation;a.context=t.context=Object.freeze({invocation,acquisition:a});t.caller=undefined;t.catalogInitiator=c;w.coldZeroDispatch=true;w.preabortPostDelta=0;}
@@ -330,6 +330,31 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
  });
  test('private invocation evaluator requires one inference invocation for a control vector',()=>{
   const w=nativeEvidence();w.callers.push(evaluator.newPrivateInvocationCaller(w.owner,w.caller.signal,"inference"));assert.equal(evaluator.evaluatePrivateNativeControl(w).qualified,false);
+ });
+ test('private fetch receiver wrapper preserves unbound sentinel and exact original arguments and promise',async()=>{
+  for(const receiver of [undefined,{}])for(const args of [[],[{}],[{},undefined],[{}, {}, {}]]){
+   const failures=[],calls=[],pending=Promise.resolve({});let captured;
+   function original(...actual){calls.push({receiver:this,args:actual});return pending;}
+   const wrapped=evaluator.createPrivateFetchObserver(original,(actualReceiver,actualArgs)=>{captured={receiver:actualReceiver,args:actualArgs};return {returned:value=>assert.equal(value,pending),threw:()=>assert.fail('unexpected throw')};},failures);
+   const result=Reflect.apply(wrapped,receiver,args);assert.equal(result,pending);assert.equal(calls.length,1);assert.equal(calls[0].receiver,receiver);assert.deepEqual(calls[0].args,args);
+   assert.equal(captured.receiver,receiver);assert.deepEqual([...captured.args],args);assert.deepEqual(failures,[]);await result;
+  }
+ });
+ test('private fetch receiver wrapper preserves synchronous undefined and independent observer failure',()=>{
+  const failures=[],observerError={},receiver={},arg={};let called=0,threw=false;
+  function original(value){assert.equal(this,receiver);assert.equal(value,arg);called++;throw undefined;}
+  const wrapped=evaluator.createPrivateFetchObserver(original,()=>({threw:reason=>{assert.equal(reason,undefined);throw observerError;}}),failures);
+  try{Reflect.apply(wrapped,receiver,[arg]);}catch(e){threw=true;assert.equal(e,undefined);}assert.equal(threw,true);assert.equal(called,1);assert.deepEqual(failures,[observerError]);
+ });
+ test('private fetch receiver wrapper keeps rejected original promise despite return observer failure',async()=>{
+  const reason={},observerError={},failures=[],pending=Promise.reject(reason);
+  const wrapped=evaluator.createPrivateFetchObserver(()=>pending,()=>({returned:()=>{throw observerError;}}),failures);
+  const result=wrapped();assert.equal(result,pending);await assert.rejects(result,e=>e===reason);assert.deepEqual(failures,[observerError]);
+ });
+ test('private predispatch oracle requires exact error empty content and zero inference POST',()=>{
+  const identity={guard:()=>{}},good=controlEvidence('preabort',identity);assert.equal(evaluator.evaluatePrivateNativeControl(good).qualified,true);
+  for(const mutate of [w=>{w.caller.result='aborted';},w=>{w.caller.emptyContent=false;},w=>{w.preabortPostDelta=1;}]){const w=controlEvidence('preabort',identity);mutate(w);assert.equal(evaluator.evaluatePrivateNativeControl(w).qualified,false);}
+  const partial=controlEvidence('partial',identity);assert.equal(evaluator.evaluatePrivateNativeControl(partial).qualified,true);partial.caller.result='error';assert.equal(evaluator.evaluatePrivateNativeControl(partial).qualified,false);
  });
  test('private native evaluator records the predefined rejection vector without C0 identity or product credit',()=>{
   const w=nativeEvidence(),result=evaluator.evaluatePrivateNativeControl(w);assert.equal(result.qualified,true);assert.equal(result.vectorObserved,true);

@@ -37,6 +37,15 @@ let diagnosticCount=0,diagnosticBytes=0;
 
 // Invocation ownership, not signal equality or a claim about C1's cause.
 // Every context is captured at the original call boundary; absent attachment fails closed.
+export function createPrivateFetchObserver(fetcher:Function,capture:Function,observerFailures:unknown[]) {
+ return function(this:unknown,...args:any[]) {
+  const receipt=capture(this,args);let original;
+  try{original=Reflect.apply(fetcher,this,args);}catch(reason){
+   try{receipt.threw(reason);}catch(error){observerFailures.push(error);}throw reason;
+  }
+  try{receipt.returned(original);}catch(error){observerFailures.push(error);}return original;
+ };
+}
 export function createPrivateInvocationOwnership(storage:any) {
  const invocations=new WeakSet<object>(),acquisitions=new WeakSet<object>(),transports=new WeakSet<object>(),responses=new WeakMap<object,any>();
  let active=true;
@@ -139,7 +148,7 @@ export function evaluatePrivateNativeControl(w:any):any {
  const strict=w.originals.every((o:any)=>o.state==="fulfilled");
  const posts=w.transports.filter((t:any)=>t.method==="POST").length;
  const role=w.role;
- const matched=role==="partial"?!!vector:role==="preabort"?strict&&w.coldZeroDispatch&&w.preabortPostDelta===0&&c?.abortCalled===true&&c?.signal.aborted===true&&c?.result==="aborted":
+ const matched=role==="partial"?!!vector:role==="preabort"?strict&&w.coldZeroDispatch&&w.preabortPostDelta===0&&c?.abortCalled===true&&c?.signal.aborted===true&&c?.result==="error"&&c?.emptyContent===true&&posts===0:
   (role==="eof"||role==="provider_error")&&strict&&posts===1&&c?.abortCalled===false&&c?.signal.aborted===false&&
    c?.result===(role==="eof"?"stop":"error");
  return {qualified:!hard&&matched===true,vector:vector?"stored_error":"strict",operand:vector?privateCancelOperand(vector[0],vector[2],c):null,
@@ -192,7 +201,7 @@ async function fixture(row:Case,body:(f:Awaited<ReturnType<typeof session>>)=>Pr
   if(signal?.aborted&&prior?.abortedAfter)Object.assign(c,prior,{pending:[]});
   if(signal&&!signal.aborted){const onAbort=()=>{c.abortObserved=++w.sequence;};signal.addEventListener("abort",onAbort,{once:true});restores.push(()=>signal.removeEventListener("abort",onAbort));}return c;};
  const begin=(signal:AbortSignal|undefined)=>{const c=caller(signal,"inference");c.inferenceInvoked=++w.sequence;return c;};
- const finish=(c:any,p:Promise<any>)=>observer(p.then(v=>{c.result=v.stopReason;c.completed=true;},()=>{c.completed=true;}));
+ const finish=(c:any,p:Promise<any>)=>observer(p.then(v=>{c.result=v.stopReason;c.emptyContent=Array.isArray(v.content)&&v.content.length===0;c.completed=true;},()=>{c.completed=true;}));
  const abort=(controller:AbortController,reason:unknown)=>{
   const active=w.callers.filter((c:any)=>c.kind==="inference"&&c.signal===controller.signal&&!c.completed);
   const entry:any={abortCalled:true,noEarlierFailure:!controller.signal.aborted&&!originals.some(o=>o.state==="rejected"||o.state==="threw"),abortInvoke:++w.sequence,reason};
@@ -219,7 +228,8 @@ async function fixture(row:Case,body:(f:Awaited<ReturnType<typeof session>>)=>Pr
     const value=invoke(kind,()=>Reflect.apply(original,this,args),{reader:r,receiver:this,args,callerSignal:c?.signal,effectiveSignal:t.signal,callerAbortedAtInvoke:c?.signal?.aborted??null});
     if(kind==="read"&&c?.delivered&&c.pendingReady){const notify=c.pendingReady;c.pendingReady=undefined;notify();}return value;});}
    const release=reader.releaseLock;patch(reader,"releaseLock",function(this:unknown,...args:unknown[]){try{const v=invoke("unlock",()=>Reflect.apply(release,this,args),{reader:r,receiver:this,args});r.unlocks++;r.unlockReceiver=this;r.unlockAt=++w.sequence;return v;}catch(e){r.unlockFailed=true;throw e;}});return reader;});};
- const observedFetch=(fetcher:Function,receiver:unknown)=>(input:RequestInfo|URL,init?:DispatcherAwareRequestInit):Promise<Response>=>{
+ const observedFetch=(fetcher:Function)=>createPrivateFetchObserver(fetcher,(receiver:unknown,args:any[])=>{
+  const [input,init]=args as [RequestInfo|URL,DispatcherAwareRequestInit|undefined];
   const u=new URL(typeof input==="string"?input:input instanceof URL?input.href:input.url);expect(u.origin).toBe(origin);expect(u.search).toBe("");
   expect([base(row)+"/models",base(row,true)+"/models",base(row)+"/chat/completions",base(row,true)+"/chat/completions"]).toContain(u.href);
   const headers=new Headers(init?.headers??(input instanceof Request?input.headers:undefined));
@@ -229,15 +239,16 @@ async function fixture(row:Case,body:(f:Awaited<ReturnType<typeof session>>)=>Pr
   t.signalHistory=signalHistory(t.signal);
   expect(headers.has("x-api-key")).toBe(false);expect(headers.has("x-upstream-url")).toBe(false);expect(["inference","discovery","alternate"].flatMap(kind=>["fixture-secret","rotated-secret","invalid-secret"].map(secret=>"Bearer "+key(row,kind,secret)))).toContain(t.credential);expect(t.signal).toBeInstanceOf(AbortSignal);expect(t.dispatcher).toBeDefined();transports.push(t);
   const d=t.dispatcher as {close:Function};if(!observedDispatchers.has(d)){observedDispatchers.add(d);const close=d.close;let depth=0;patch(d,"close",function(this:unknown,...args:unknown[]){const outer=depth++===0;try{return outer?invoke("dispatcher_close",()=>Reflect.apply(close,this,args),{dispatcher:d,receiver:this,args}):Reflect.apply(close,this,args);}finally{depth--;}});}
-  const o=record("fetch",{transport:t,receiver,input,init,callerSignal:t.caller?.signal,effectiveSignal:t.signal,callerAbortedAtInvoke:t.caller?.signal?.aborted??null});t.fetch=o;let pending:Promise<Response>;
-  try{pending=returned(o,Reflect.apply(fetcher,receiver,[input,init]));}catch(e){o.state="threw";o.reason=e;o.settle=++w.sequence;w.syncFailures.push(e);throw e;}
-  observer(pending.then(response=>{ownership.response(t,response);observeBody(response,t);},()=>{}));return pending;};
+  const o=record("fetch",{transport:t,receiver,args,input,init,callerSignal:t.caller?.signal,effectiveSignal:t.signal,callerAbortedAtInvoke:t.caller?.signal?.aborted??null});t.fetch=o;
+  return {threw(reason:unknown){o.state="threw";o.reason=reason;o.settle=++w.sequence;w.syncFailures.push(reason);},
+   returned(pending:Promise<Response>){returned(o,pending);observer(pending.then(response=>{ownership.response(t,response);observeBody(response,t);},()=>{}));}};
+ },w.observerFailures);
  const check=async(fn:()=>unknown)=>{try{await fn();}catch(e){failures.push(e);}};
  let spy:ReturnType<typeof vi.spyOn>|undefined,spyDescriptor:PropertyDescriptor|undefined,worker=false;
  try{
   expect(process.env.CLAWROUTER_CONTRACT_SOURCE_HEAD).toBe(pin);expect(execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim()).toBe(pin);
   for(const name of [...Object.values(envNames),"OPENAI_API_KEY","OPENROUTER_API_KEY"])vi.stubEnv(name,"synthetic-poison-unselected");
-  patch(globalThis,"fetch",observedFetch(nativeFetch,globalThis));patch(globalThis,"__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__",{...undici,fetch:observedFetch(originalUndiciFetch,undici)});
+  patch(globalThis,"fetch",observedFetch(nativeFetch));patch(globalThis,"__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__",{...undici,fetch:observedFetch(originalUndiciFetch)});
   spy=vi.spyOn(guard,"fetchWithSsrFGuard").mockImplementation(function(this:unknown,...args:Parameters<typeof originalGuard>){
    const input=args[0],a:any={guard:originalGuard,input,inputSignal:input.signal??input.init?.signal,invoke:++w.sequence};a.signalHistory=signalHistory(a.inputSignal);w.acquisitions.push(a);
    const o=record("guard",{acquisition:a,receiver:this,args});a.operation=o;let pending:ReturnType<typeof originalGuard>;
@@ -332,7 +343,7 @@ async function exercise(row:Case){await fixture(row,async f=>{
  if(s==="caller_revoke"||s==="grant_revoke"){await command(row,"mutate",{kind:s});const value=await f.infer(provider).result;expect(value.stopReason).toBe("error");expect((await command(row,"state")).calls).toBe(1);const denied=await f.discover({alias:true});failedCatalog(denied,s==="caller_revoke"?"auth-rejected":"unavailable");return;}
  if(s==="rotation"){await command(row,"mutate",{kind:"rotation"});const before=(await command(row,"state")).calls;expect((await f.infer(provider).result).stopReason).toBe("error");expect((await command(row,"state")).calls).toBe(before);const current=ready(await f.discover({secret:"rotated-secret"}));await completeInference(f,current,{credential:key(row,"inference","rotated-secret")});return;}
  if(s==="foreign_inference"){expect((await f.infer(provider,{credential:key(row,"inference","invalid-secret")}).result).stopReason).toBe("error");expect((await command(row,"state")).calls).toBe(1);return;}
- if(s==="inference_abort"){const c=new AbortController();c.abort(new Error("synthetic inference preabort"));expect((await f.infer(provider,{signal:c.signal}).result).stopReason).toBe("aborted");expect((await command(row,"state")).calls).toBe(1);return;}
+ if(s==="inference_abort"){const c=new AbortController();c.abort(new Error("synthetic inference preabort"));const result=await f.infer(provider,{signal:c.signal}).result;expect(result.stopReason).toBe("error");expect(result.content).toEqual([]);expect(f.transports.filter(t=>t.method==="POST")).toHaveLength(0);expect((await command(row,"state")).calls).toBe(1);return;}
  if(s==="stream_abort"||s==="simple_abort"){const c=new AbortController(),pending=f.infer(provider,{signal:c.signal});let partial=false;for await(const event of pending.stream){if(event.type==="text_delta"){partial=true;f.partialNow(c,new Error("synthetic original caller abort"));break;}}expect(partial).toBe(true);expect((await pending.result).stopReason).toBe("aborted");return;}
  if(s==="provider_error"){const c=new AbortController();expect((await f.infer(provider,{signal:c.signal}).result).stopReason).toBe("error");expect(c.signal.aborted).toBe(false);return;}
  await completeInference(f,provider);
@@ -346,7 +357,7 @@ async function diagnosticControl(row:Case){await fixture(row,async f=>{
   const coldZero=(await command(row,"state")).calls===0;expect(coldZero).toBe(true);
   const provider=ready(await f.discover()),before=f.transports.filter((t:Transport)=>t.method==="POST").length;
   f.abort(controller,new Error("synthetic inference preabort"));
-  expect((await f.infer(provider,{signal:controller.signal}).result).stopReason).toBe("aborted");
+  const result=await f.infer(provider,{signal:controller.signal}).result;expect(result.stopReason).toBe("error");expect(result.content).toEqual([]);
   const delta=f.transports.filter((t:Transport)=>t.method==="POST").length-before;expect(delta).toBe(0);f.preabortProof(coldZero,delta);return;
  }
  const provider=ready(await f.discover()),pending=f.infer(provider,{signal:controller.signal});
