@@ -564,11 +564,11 @@ async function workerRelationCase({ reason = {}, undefinedReason = false, nonrea
   };
   return { ...c, h, calls, error, failure, closed, read, derivative, cancel, project };
 }
-function workerRelationFrames(observation, { reportFault = -1 } = {}) {
-  const proof = workerAbortEvidence(), frames = []; proof.stage(14); proof.failed(undefined);
+function workerRelationFrames(observation, { reportFault = -1, reportReason, primary } = {}) {
+  const proof = workerAbortEvidence(), frames = []; proof.stage(14); proof.failed(primary);
   proof.observation(15, { status: "fulfilled", value: observation });
   proof.observation(16, { status: "fulfilled", value: { calls: [{}], active: 0, canceled: 0, aborted: 0, expired: 1, finished: 1, producer: [1, 0, 0, 0, 0] } });
-  const errors = proof.report({ diagnostic(frame) { if (frames.length === reportFault) throw undefined; frames.push(frame); } });
+  const errors = proof.report({ diagnostic(frame) { if (frames.length === reportFault) throw reportReason; frames.push(frame); } });
   return { frames, errors };
 }
 function workerRelationEvents(frames, reverse = false) {
@@ -576,6 +576,99 @@ function workerRelationEvents(frames, reverse = false) {
   return reverse ? [events[0], ...diagnostics.reverse(), events[1]] : [...events.slice(0, 2), ...diagnostics];
 }
 const relationRecords = rows => rows.filter(row => row.kind === "worker_abort_relation");
+async function workerFallbackObservation({ closedFulfilled = false, cancelFulfilled = false, handlerRejected = false, reason } = {}) {
+  const c = workerOperationCase(), h = pureWorkerRetirement();
+  for (const kind of ["handler", "fetch", "acquisition_observer"]) {
+    h.observeLiteLLMOperation(c.r, kind, () => kind === "handler" && handlerRejected ? Promise.reject(reason) : Promise.resolve({}), { token: c.token });
+  }
+  const details = { input: c.input, reader: c.reader, receiverIdentity: true, signalAborted: false };
+  const closed = closedFulfilled ? Promise.resolve() : Promise.reject(reason), read = Promise.reject(reason);
+  const cancel = cancelFulfilled ? Promise.resolve() : Promise.reject(reason); c.reader.closed = closed;
+  h.observeLiteLLMOperation(c.r, "closed", () => closed, details);
+  h.observeLiteLLMOperation(c.r, "read", () => read, details);
+  const derivative = read.then(value => value);
+  h.observeLiteLLMOperation(c.r, "read_observer", () => derivative, { ...details, originalRead: read });
+  h.observeLiteLLMOperation(c.r, "cancel", () => cancel, { ...details, argc: 1, operandPresent: true, reason });
+  c.input.abortSequence = ++c.r.sequence; c.input.callerAbortedAtAbort = false;
+  c.input.noEarlierFailure = true; c.input.pendingAtAbort = [c.r.operations[4]];
+  c.reader.unlockInvoke = ++c.r.sequence; c.reader.unlockSequence = ++c.r.sequence;
+  let failed = false, failure;
+  try { await h.litellmWorkerDrain(c.r, c.scope, () => assert.fail()); } catch (error) { failed = true; failure = error; }
+  assert.equal(failed, true);
+  const rejected = c.r.operations.filter(op => op.state === "rejected");
+  assert.deepEqual(failure.errors, rejected.map(() => reason));
+  const ledger = h.litellmWorkerLedger(c.r, c.scope);
+  return JSON.parse(JSON.stringify({ operations: ledger[0], syncFailures: ledger[2], checks: c.r.retireChecks.snapshot(), ledger,
+    ingress: [true], inputs: [{ signalAborted: true }], readers: [{ unlocks: 1, locked: false }] }));
+}
+test("worker abort fallback pure: actual original outcomes select exactly one validated family", async () => {
+  for (const reason of [undefined, {}]) for (const shape of [{}, { cancelFulfilled: true }, { closedFulfilled: true, cancelFulfilled: true }, { closedFulfilled: true, cancelFulfilled: true, handlerRejected: true }]) {
+    const observation = await workerFallbackObservation({ ...shape, reason }), complete = Object.keys(shape).length === 0;
+    const { frames, errors } = workerRelationFrames(observation, { primary: reason });
+    assert.deepEqual(errors, []); assert.equal(frames.length, complete ? 8 : 1);
+    assert.equal(frames.every(frame => frame.startsWith(complete ? workerAbortRelationalPrefix : workerAbortPrefix)), true);
+    for (const reverse of [false, true]) {
+      const result = await workerAbortPipeline(workerRelationEvents(frames, reverse));
+      assert.equal(result.rows[0].kind, "failure"); assert.equal(relationRecords(result.rows).length, complete ? 8 : 0);
+      if (!complete) {
+        const stage = result.rows.find(row => row.kind === "worker_abort"); assert.ok(stage);
+        assert.deepEqual(stage.stage, [14, 0, reason !== undefined]);
+        assert.deepEqual(stage.worker[2], observation.checks); assert.deepEqual(stage.worker[3], observation.ledger[10]);
+        assert.deepEqual(stage.counts, [1, reason === undefined ? 1 : 0, 0]);
+        assert.equal(result.rows.at(-1).relational, undefined);
+      }
+    }
+  }
+});
+test("worker abort fallback pure: unsupported foreign and inconsistent groups retain only coarse evidence", async () => {
+  const cases = await workerRelationRepairCases();
+  const missing = (await workerRelationCase()).project(); delete missing.ledger[11].rows;
+  cases.push({ name: "missing relational rows", observation: missing, accepted: false });
+  for (const entry of cases) {
+    const { frames, errors } = workerRelationFrames(entry.observation);
+    assert.equal(frames.length, entry.accepted ? 8 : 1, entry.name);
+    if (errors.length) assert.equal(entry.accepted, false);
+    for (const reverse of [false, true]) {
+      const result = await workerAbortPipeline(workerRelationEvents(frames, reverse));
+      assert.equal(relationRecords(result.rows).length, entry.accepted ? 8 : 0, entry.name);
+      assert.equal(result.rows[0].kind, "failure");
+      if (!entry.accepted) assert.equal(result.rows.find(row => row.kind === "worker_abort").counts[2], errors.length);
+    }
+  }
+});
+test("worker abort fallback pure: coarse fallback cannot bypass native ownership", async () => {
+  const { frames } = workerRelationFrames(await workerFallbackObservation({ cancelFulfilled: true }));
+  for (const reverse of [false, true]) for (const mutate of [
+    events => { delete events.find(e => e.type === "test:enqueue").data.parentId; },
+    events => { delete events.find(e => e.type === "test:diagnostic").data.entryFile; },
+    events => { events.find(e => e.type === "test:diagnostic").data.line++; },
+    events => { events.push({ ...events[0], data: { ...events[0].data, name: "foreign" } }); },
+  ]) {
+    const events = workerRelationEvents(frames, reverse); mutate(events);
+    const result = await workerAbortPipeline(events);
+    assert.equal(result.rows[0].kind, "failure"); assert.equal(result.rows.some(row => row.kind === "worker_abort"), false);
+    assert.equal(relationRecords(result.rows).length, 0); assert.equal(result.rows.some(row => row.kind === "worker_abort_unbound"), true);
+  }
+});
+test("worker abort fallback pure: writer failures never emit a second family or replace primary undefined", async () => {
+  for (const complete of [false, true]) for (const reportReason of [undefined, {}]) {
+    const observation = await workerFallbackObservation({ cancelFulfilled: !complete });
+    for (let reportFault = 0; reportFault < (complete ? 8 : 1); reportFault++) {
+      const { frames, errors } = workerRelationFrames(observation, { reportFault, reportReason });
+      assert.equal(errors.length, 1); assert.equal(errors[0], reportReason); assert.equal(frames.length, reportFault);
+      assert.equal(frames.every(frame => frame.startsWith(complete ? workerAbortRelationalPrefix : workerAbortPrefix)), true);
+      const result = await workerAbortPipeline(workerRelationEvents(frames));
+      assert.equal(result.rows[0].kind, "failure"); assert.equal(relationRecords(result.rows).length, 0);
+      assert.equal(result.rows.some(row => row.kind === "worker_abort"), false);
+    }
+  }
+  const invalid = await workerFallbackObservation({ cancelFulfilled: true });
+  const proof = workerAbortEvidence(), frames = []; proof.stage(99); proof.failed(undefined);
+  proof.observation(15, { status: "fulfilled", value: invalid });
+  // Neither an invalid component nor an invalid legacy stage is invented evidence.
+  const errors = proof.report({ diagnostic(frame) { frames.push(frame); } });
+  assert.equal(frames.length, 0); assert.equal(errors.length, 2);
+});
 test("worker abort relational pure: actual ledger preserves four originals private identities and all eight parts", async () => {
   for (const undefinedReason of [false, true]) {
     const c = await workerRelationCase({ undefinedReason }), observation = c.project(), projected = observation.ledger[11];

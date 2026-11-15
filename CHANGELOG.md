@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- Preflight complete LiteLLM retirement diagnostic groups before emission, falling back to validated coarse evidence without widening relational admission or changing test verdicts.
+
 - Qualify LiteLLM metadata cancellation with an explicitly owned HTTP/1 reset after request-owned readiness, retaining strict ingress, producer retirement and accounting checks; generic fetch-abort coverage remains unqualified.
 
 - Report native LiteLLM retirement diagnostics as one atomic eight-part set of retained operation, resource, signal and coverage facts; validate each operation’s exact owner and complete census references, rejecting inconsistent sets without changing retirement checks.

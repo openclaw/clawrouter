@@ -69,10 +69,15 @@ export function workerAbortEvidence() {
     report(context) {
       attempt(() => {
         if (relational !== null) {
-          const parts = buildWorkerAbortParts(relational, observation, first, [failures, undefinedFailures, reporting.length], worker?.[2] ?? null, worker?.[0] ?? null, upstream, producer);
-          const frames = parts.map(part => workerAbortRelationalPrefix + JSON.stringify(part));
-          for (const frame of frames) context.diagnostic(frame);
-          return;
+          const frames = attempt(() => {
+            const parts = buildWorkerAbortParts(relational, observation, first, [failures, undefinedFailures, reporting.length], worker?.[2] ?? null, worker?.[0] ?? null, upstream, producer);
+            if (!validateWorkerAbortGroup(parts)) return null;
+            return parts.map(part => workerAbortRelationalPrefix + JSON.stringify(part));
+          });
+          if (frames) {
+            for (const frame of frames) context.diagnostic(frame);
+            return;
+          }
         }
         const record = { v: 1, kind: "worker_abort_stage", first, failures, undefinedFailures,
           worker, upstream, reportingFailures: reporting.length };
