@@ -1157,7 +1157,45 @@ export function validateReceiptCodeDiagnostic(value) {
   row.detail[8]=validateOwnedCode(row.detail[8],prior.detail[7]);
   if(Buffer.byteLength(JSON.stringify(row))>512)refuse("code-receipt-capacity");return row;
 }
+// V15 retains the V14 layout and adds exact admitted-rejection association.
+// No new process facts or lifecycle credit are created by this envelope.
+export function packReceiptAssociatedDiagnostic(value, trace, code) {
+  if (value.child[1] !== "reported_rejection") return { ...packReceiptCodeDiagnostic(value, trace, code), v: 15 };
+  const builder = value.builder === null ? null : validateReportedBuilderProcess(value.builder).slice();
+  if (builder) for (const i of [9,11]) builder[i] = Buffer.from(builder[i], "hex").toString("base64url");
+  return validateReceiptAssociatedDiagnostic({ v: 15, phase: value.phase, state: value.state, defined: value.defined, exit: value.exit, signal: value.signal,
+    detail: [value.parser,value.child,value.reports,value.count,value.projection,value.lifecycle,builder,trace,code] });
+}
+export function validateReceiptAssociatedDiagnostic(value) {
+  const keys = ["v","phase","state","defined","exit","signal","detail"];
+  if (!value || Object.getOwnPropertyNames(value).sort().join() !== [...keys].sort().join()) refuse("associated-receipt-keys");
+  const row = Object.fromEntries(keys.map(key => [key,ownData(value,key)]));
+  if (row.v !== 15) refuse("associated-receipt-version");
+  row.detail = ownedTuple(row.detail,9);
+  const decoded = unpackReceiptOwnedDiagnostic({...row,v:13,detail:row.detail.slice(0,8)});
+  const {builder,...base} = decoded;
+  const prior = validateReceiptLifecycleDiagnostic({...base,v:11});
+  if (prior.child[1] !== "reported_rejection") {
+    validateReceiptCodeDiagnostic({...row,v:14});
+  } else {
+    if (builder !== null) {
+      validateReportedBuilderProcess(builder);
+      const role = builder[1], phase = receiptChildPhases[prior.child[6]-1];
+      const childRole = prior.child[5], name = role === 1 ? "build_a" : "build_b";
+      if (childRole === 1) {
+        if (![name+"_close",name+"_report"].includes(phase)) refuse("associated-child-role");
+        if (phase === name+"_close" ? builder[2] !== (prior.child[7] ? 3 : 2) : builder[2] !== 1) refuse("associated-close-outcome");
+      } else if (childRole !== role+1 || builder[2] !== 1 || !["namespace_read","builder_import","build","receipt_write","build_service_stop","final"].includes(phase)) refuse("associated-builder-role");
+      if (role === 2 && !(prior.child[3] & 2)) refuse("associated-prior-builder");
+      if (row.detail[7] !== null) validateOwnedTrace(row.detail[7],builder[6],[Boolean(builder[5]&2),Boolean(builder[5]&4)]);
+    } else if (row.detail[7] !== null || row.detail[8] !== null) refuse("associated-unbound-observation");
+    validateOwnedCode(row.detail[8],row.detail[7]);
+  }
+  if (Buffer.byteLength(JSON.stringify(row)) > 512) refuse("associated-receipt-capacity");
+  return row;
+}
 export function validateContainerDiagnostic(value) {
+  if (value && typeof value === "object" && ownData(value, "v") === 15) return validateReceiptAssociatedDiagnostic(value);
   if (value && typeof value === "object" && ownData(value, "v") === 14) return validateReceiptCodeDiagnostic(value);
   if (value && typeof value === "object" && ownData(value, "v") === 13) return validateReceiptOwnedDiagnostic(value);
   if (value && typeof value === "object" && ownData(value, "v") === 12) return validateReceiptBuilderDiagnostic(value);
@@ -1270,7 +1308,7 @@ export function containerProcessDiagnostic(result, available = true, reason) {
 export function emitContainerFailure(records, writer = line => process.stdout.write(line)) {
   const validated = records.map(validateContainerDiagnostic), detailed = validated.filter(row => row.v === 8);
   if (detailed.length > 1) refuse("parent-admission-duplicate");
-  const receipt = validated.filter(row => row.v === 9 || row.v === 10 || row.v === 11 || row.v === 12 || row.v === 13 || row.v === 14); if (receipt.length > 1) refuse("receipt-diagnostic-duplicate");
+  const receipt = validated.filter(row => row.v === 9 || row.v === 10 || row.v === 11 || row.v === 12 || row.v === 13 || row.v === 14 || row.v === 15); if (receipt.length > 1) refuse("receipt-diagnostic-duplicate");
   const rows = validated.filter(row => !(detailed.length && row.phase === "admission" && row.v === 2) && !(receipt.length && row.phase === "receipt" && row.v === 2)), unique = new Map();
   const rejected = rows.filter(row => row.state === "rejected");
   // Reserve the first actual failure and original build outcome before context.
