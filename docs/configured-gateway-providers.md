@@ -25,6 +25,23 @@ gateway virtual key and its deployment's aliases. Administrative master keys,
 key creation, JWT/OIDC lifecycle, BYOK management and gateway databases are not
 configured by these manifests.
 
+Bifrost's source declaration also describes query-free `GET /models` through
+`/v1/native/bifrost/models` or `/v1/proxy/bifrost/models_list`. The original-owner
+runtime checks the selected managed grant, credential lineage and configured
+destination before fetch and after parsing. Published IDs intersect the admitted
+and current caller model policies; permissions acquired during the read cannot
+widen the result. An environment key cannot substitute for that selected catalog
+owner, even when inference fallback is enabled. Snapshot activation and actual
+client qualification remain separate from this source declaration.
+
+The frozen OpenClaw implementation at
+`31ad71a8addc1d42fbc5478f7e114860f5cbf6c7`, `extensions/bifrost/models.ts`
+and `defaults.ts`, normalizes its configured inference base to end in `/v1`
+and requests `${baseUrl}/models`. Configure that exact API base for discovery;
+ClawRouter does not append `/v1`, rewrite the existing Chat destination, or
+adopt OpenClaw's loopback default. Empty inventory stays empty. Returned IDs
+do not establish inference prices, limits, installed models or entitlements.
+
 These gateways can call paid providers. They deliberately do not reuse
 `local-openai` zero-API-charge pricing. Both the configured model and unknown
 aliases remain unpriced: hard budgets need an explicit fixed policy request
