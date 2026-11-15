@@ -25,7 +25,7 @@ const key = (id: string) => `clawrouter-live-qianfan_${id}-fixture-secret`;
 function qianfanDiagnostics(isProxy: (value: any) => boolean) {
   const prefix = "QIANFAN_DIAGNOSTIC ";
   const cases = ["none", "card0", "card1", "card2", "card3", "card4", "high", "max", "image2", "image4", "catalog", "catalog_denials", "observed", "admission_denials", "error", "cancel"];
-  const phases = ["module", "setup", "body", "registration", "catalog", "replay", "dispatch", "original_join", "join_contract", "join_census", "join_rejections", "retirement_router", "retirement_router_ops", "retirement_upstream", "retirement_upstream_ops", "release", "binding", "restoration", "mock_cleanup", "cache_cleanup", "worker", "grant", "helper", "receipt", "retirement", "upstream", "sqlite", "dispose", "rm", "controls", "overflow"];
+  const phases = ["module", "setup", "body", "registration", "catalog", "replay", "dispatch", "original_join", "join_contract", "join_census", "join_rejections", "retirement_router", "retirement_router_ops", "retirement_upstream", "retirement_upstream_ops", "release", "binding", "restoration", "mock_cleanup", "cache_cleanup", "worker", "grant", "helper", "receipt", "retirement", "upstream", "sqlite", "dispose", "rm", "controls", "overflow", "collection", "control_registration", "product_registration"];
   const enums: Record<string, any[]> = { layer: ["sdk", "outer"], route: ["none", "nativechat", "discovery"], caseId: cases, phase: phases,
     role: ["progress", "primary", "cleanup", "summary"], outcome: ["entered", "fulfilled", "rejected", "unknown"],
     category: ["none", "undefined", "null", "assertion", "aggregate", "unknown"],
@@ -34,7 +34,7 @@ function qianfanDiagnostics(isProxy: (value: any) => boolean) {
   const required = ["v", "layer", "route", "caseId", "phase", "role", "outcome", "category"];
   const counts = ["pending", "settled", "operations", "releasePending", "releaseRejected", "sdkRecords", "suppressed"];
   const bools = ["partialDelivery", "callerAborted", "killed"];
-  const optional = [...counts, ...bools, "exit", "signal", "observedCode", "bodySucceeded", "releasesFulfilled", "failureFlags", "ownership", "census", "rejections", "omitted", "predicate", "releaseTrace", "releaseOmitted", "work", "retirement", "folded", "controlCounts", "controlSequence", "controlFlags"];
+  const optional = [...counts, ...bools, "exit", "signal", "observedCode", "bodySucceeded", "releasesFulfilled", "failureFlags", "ownership", "census", "rejections", "omitted", "predicate", "releaseTrace", "releaseOmitted", "work", "retirement", "folded", "controlCounts", "controlSequence", "controlFlags", "sdkAt", "sdkFault", "fault", "controlAt", "retirementChecks"];
   // Fixed columns, not arbitrary nested data. See joinDiagnostic() for the
   // operation/state/flag dictionaries. Null means outside the bounded range.
   function vector(value: any, length: number, maximum: number) {
@@ -75,11 +75,14 @@ function qianfanDiagnostics(isProxy: (value: any) => boolean) {
         const descriptor = Object.getOwnPropertyDescriptor(value, key);
         if (!descriptor || !Object.hasOwn(descriptor, "value")) return null;
         const item = descriptor.value;
-        if (["failureFlags", "ownership", "census", "rejections", "releaseTrace", "work", "retirement", "folded", "controlCounts", "controlSequence", "controlFlags"].includes(key)) {
-          const copy = key === "controlCounts" ? vector(item, 7, 9999) : key === "controlSequence" ? vector(item, 8, 9999) : key === "controlFlags" ? vector(item, 6, 1) : key === "failureFlags" ? vector(item, 6, 1) : key === "ownership" ? vector(item, 9, 9999)
+        if (["failureFlags", "ownership", "census", "rejections", "releaseTrace", "work", "retirement", "folded", "controlCounts", "controlSequence", "controlFlags", "sdkAt", "sdkFault", "fault", "controlAt", "retirementChecks"].includes(key)) {
+          const copy = key === "sdkAt" ? vector(item, 3, 40) : ["sdkFault", "fault"].includes(key) ? vector(item, 5, 9999) : key === "controlAt" ? vector(item, 2, 12) : key === "retirementChecks" ? vector(item, 8, 3) : key === "controlCounts" ? vector(item, 7, 9999) : key === "controlSequence" ? vector(item, 8, 9999) : key === "controlFlags" ? vector(item, 6, 1) : key === "failureFlags" ? vector(item, 6, 1) : key === "ownership" ? vector(item, 9, 9999)
             : key === "census" ? vector(item, 56, 9999) : key === "work" ? vector(item, 8, 9999) : key === "retirement" ? vector(item, 5, 9999)
             : key === "folded" ? vector(item, 7, 9999) : key === "releaseTrace" ? table(item, 8, 1048575) : table(item, 12, 8388607);
           if (!copy) return null;
+          if (key === "sdkAt" && copy.some((n: any, i: number) => n !== null && n >= [phases.length, enums.outcome.length, enums.category.length][i])) return null;
+          if (["fault", "sdkFault"].includes(key) && copy.some((n: any, i: number) => n !== null && n > [9, 5, 4, 9999, 4][i])) return null;
+          if (key === "controlAt" && (copy[0] !== null && copy[0] > 11 || copy[1] === null || copy[1] > 6)) return null;
           if (key === "controlCounts" && (copy[0] !== 12 || copy.slice(1, 4).some((n: any) => n === null || n > 4095) || (copy[2] & copy[3]) !== 0 || ((copy[2] | copy[3]) & ~copy[1]) !== 0)) return null;
           if (key === "retirement" && copy.slice(0, 2).some((n: any) => n !== null && n > 1)) return null;
           if (key === "rejections" && copy.some((row: any[]) => row[0] === null || row[0] > 13 || ![2, 3].includes(row[1]) || row[2] === null || row.slice(3).some((n: any) => n !== null && n > 9999) || row[9] === null || row[9] > 19 || row[10] === null || row[10] > 2)) return null;
@@ -95,6 +98,28 @@ function qianfanDiagnostics(isProxy: (value: any) => boolean) {
       }
       return Buffer.byteLength(JSON.stringify(result)) <= 640 ? result : null;
     } catch { return null; }
+  }
+  // Only own DATA properties; names/codes are mapped to closed ordinals.
+  function fault(error: unknown) {
+    const type = error === null ? 1 : ["undefined", "boolean", "number", "string", "bigint", "symbol", "function", "object"].indexOf(typeof error) + 2;
+    const name = ["Error", "TypeError", "SyntaxError", "ReferenceError", "AssertionError", "AggregateError"].indexOf(own(error, "name"));
+    const code = enums.observedCode.indexOf(own(error, "code"));
+    const reasons = own(error, "errors"); let count = null, undefinedCount = null;
+    if (!isProxy(reasons) && Array.isArray(reasons)) {
+      const length = own(reasons, "length");
+      if (Number.isInteger(length) && length >= 0 && length <= 9999) {
+        count = length; undefinedCount = 0;
+        for (let i = 0; i < Math.min(length, 4); i++) {
+          const descriptor = Object.getOwnPropertyDescriptor(reasons, String(i));
+          if (!descriptor || !Object.hasOwn(descriptor, "value")) { undefinedCount = null; break; }
+          if (descriptor.value === undefined) undefinedCount++;
+        }
+      }
+    }
+    return [type, name < 0 ? null : name, code < 0 ? null : code, count, undefinedCount];
+  }
+  function boundary(value: any) {
+    const valid = validate(value); return valid ? [phases.indexOf(valid.phase), enums.outcome.indexOf(valid.outcome), enums.category.indexOf(valid.category)] : [null, null, null];
   }
   function category(error: unknown) {
     if (error === undefined) return "undefined";
@@ -181,7 +206,7 @@ function qianfanDiagnostics(isProxy: (value: any) => boolean) {
       partialDelivery: bound?.length === 1 && bound[0].partialDelivery === true ? true : null,
       callerAborted: bound?.length === 1 && bound[0].callerObservation?.abort ? true : null };
   }
-  return { cases, phases, own, validate, category, record, encode, parse, child, emitter, observe, snapshot };
+  return { cases, phases, own, validate, category, fault, boundary, record, encode, parse, child, emitter, observe, snapshot };
 }
 // END QIANFAN FAILURE DIAGNOSTICS
 
@@ -189,11 +214,13 @@ function qianfanDiagnostics(isProxy: (value: any) => boolean) {
 const pinnedControlIds = ["done", "embedded", "release", "caller", "timeout", "preabort", "binding", "prior_foreign", "undefined", "pending_release", "failed_release", "unlock"] as const;
 function createPinnedControlSummary() {
   let entered = 0, passed = 0, failed = 0, pending = 0, cleanup = 0, deadline = 0;
+  let current: number | null = null, stage = 0;
   let sequence: Array<number | null> = Array(8).fill(null), flags: Array<number | null> = Array(6).fill(null);
   const bit = (id: string) => { const index = pinnedControlIds.indexOf(id as any); if (index < 0) throw new Error("unknown pinned control"); return 2 ** index; };
   const bounded = (n: any) => Number.isInteger(n) && n >= 0 && n <= 9999 ? n : null;
   return {
-    start(id: string) { const value = bit(id); if (entered & value) throw new Error("duplicate pinned control"); entered |= value; },
+    start(id: string) { const value = bit(id); if (entered & value) throw new Error("duplicate pinned control"); entered |= value; current = pinnedControlIds.indexOf(id as any); stage = 1; },
+    stage(value: number) { stage = value; },
     finish(id: string, ok: boolean) { const value = bit(id); if (!(entered & value) || ((passed | failed) & value)) throw new Error("invalid pinned control completion"); if (ok) passed |= value; else failed |= value; },
     pending(n: number) { pending += n; }, cleanup() { cleanup++; }, deadline() { deadline++; },
     embedded(life: ReturnType<typeof createLifetimeObserver>, owner: any) {
@@ -202,7 +229,7 @@ function createPinnedControlSummary() {
         life.operations.find(row => row.kind === "reader.read" && row.state === "rejected")?.settled, op("reader.closed")?.settled, op("reader.cancel")?.settled, life.readers[0]?.unlockReturns[0]].map(bounded);
       const proof = life.joinDiagnostic(); if (proof) flags = proof.contract.failureFlags;
     },
-    facts() { return { controlCounts: [12, entered, passed, failed, (passed | failed) === entered ? bounded(pending) : null, pending === 0 && (passed | failed) === entered ? bounded(cleanup) : null, bounded(deadline)], controlSequence: sequence.slice(), controlFlags: flags.slice() }; },
+    facts() { return { controlAt: [current, stage], controlCounts: [12, entered, passed, failed, (passed | failed) === entered ? bounded(pending) : null, pending === 0 && (passed | failed) === entered ? bounded(cleanup) : null, bounded(deadline)], controlSequence: sequence.slice(), controlFlags: flags.slice() }; },
   };
 }
 function requirePinnedControlAdmission(fetchValue: any, mocked: boolean, managed: boolean, runtime: any, installed: any, version: unknown) {
@@ -501,6 +528,19 @@ function createCancelReceiptReceiver(context: { diagnostic: (...args: any[]) => 
     }]);
   } };
 }
+// Passive stage states: 0 uncalled, 1 invoked, 2 fulfilled, 3 rejected.
+// The second four columns distinguish no rejection / defined / undefined.
+function observeRetirementSteps() {
+  const checks = Array(8).fill(0);
+  return { facts: () => checks.slice(), observe(index: number, original: () => any) {
+    checks[index] = 1;
+    const failed = (error: unknown) => { checks[index] = 3; checks[index + 4] = error === undefined ? 2 : 1; };
+    let value; try { value = original(); } catch (error) { failed(error); throw error; }
+    if (value instanceof Promise) void value.then(() => { checks[index] = 2; }, failed);
+    else checks[index] = 2;
+    return value;
+  } };
+}
 // END ORIGINAL LIFETIME OBSERVERS
 
 const diagnostic = qianfanDiagnostics(nodeTypes.isProxy);
@@ -508,7 +548,7 @@ let diagnosticCase = "none", diagnosticRoute = "none", diagnosticPhase = "module
 function sdkDiagnostic(phase: string, role: string, outcome: string, error?: unknown) {
   try {
     if (diagnosticCount >= 512) return;
-    const value = diagnostic.record({ layer: "sdk", route: diagnosticRoute, caseId: diagnosticCase, phase, role }, outcome, error, diagnostic.snapshot(lifetime, bindings));
+    const value = diagnostic.record({ layer: "sdk", route: diagnosticRoute, caseId: diagnosticCase, phase, role }, outcome, error, { ...diagnostic.snapshot(lifetime, bindings), ...(outcome === "rejected" ? { fault: diagnostic.fault(error) } : {}) });
     const line = diagnostic.encode(value); if (line) { diagnosticCount++; process.stdout.write(line); }
   } catch { /* never mask body, original join or cleanup errors */ }
 }
@@ -674,6 +714,7 @@ async function runQianfanObserverControl(id: string, assert: any) {
 
 // BEGIN PINNED HOSTED IMPLEMENTATION CONTROLS
 async function runQianfanPinnedControl(id: string, summary: ReturnType<typeof createPinnedControlSummary>, deadlineAt: number) {
+  summary.stage(2);
   const [{ strict: assert }, { createServer }, { Stream }, { APIError }, guarded, bodyModule, runtime, undici, { readFile }] = await Promise.all([
     import("node:assert"), import("node:http"), import("openai/core/streaming"), import("openai/core/error"),
     import("../../src/infra/net/fetch-guard.js"), import("../../src/infra/net/guarded-body-stream.js"),
@@ -681,6 +722,7 @@ async function runQianfanPinnedControl(id: string, summary: ReturnType<typeof cr
   ]);
   const { isMockedFetch } = await import("../../src/infra/net/runtime-fetch.js");
   const packageMetadata = JSON.parse(await readFile(new URL("../package.json", import.meta.resolve("openai/core/streaming")), "utf8"));
+  summary.stage(3);
   requirePinnedControlAdmission(globalThis.fetch, isMockedFetch(globalThis.fetch), guarded.isManagedProxyActive(), runtime.loadUndiciRuntimeDeps(), undici, packageMetadata.version);
   const remaining = deadlineAt - performance.now(); if (remaining <= 0) { summary.deadline(); throw new Error("pinned control admission deadline"); }
   const life = createLifetimeObserver(), input = new AbortController(), bindings = createRequestBindings();
@@ -708,6 +750,7 @@ async function runQianfanPinnedControl(id: string, summary: ReturnType<typeof cr
   const failDeadline = new Error("pinned control deadline");
   let rejectDeadline!: (reason: unknown) => void;
   const deadline = new Promise<never>((_, reject) => { rejectDeadline = reject; });
+  summary.stage(4);
   const owned = preserveFailures(async () => {
     await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", () => { server.removeListener("error", reject); resolve(); }); });
     const address = server.address(); assert.ok(address && typeof address !== "string");
@@ -736,6 +779,7 @@ async function runQianfanPinnedControl(id: string, summary: ReturnType<typeof cr
         else await Promise.allSettled([iterator.next()]);
       }
     }
+    summary.stage(5);
     // No disposition change: expected source failures remain strict failures.
     let rejected = false, rejection: any;
     try { await life.join(); } catch (error) { rejected = true; rejection = error; }
@@ -768,7 +812,7 @@ async function runQianfanPinnedControl(id: string, summary: ReturnType<typeof cr
     async () => { if (server.listening) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); },
     () => { if (id === "embedded" && owner) try { summary.embedded(life, owner); } catch { /* diagnostic only */ } },
     () => life.restore(),
-  ].map(cleanup => async () => { try { await cleanup(); } catch (error) { summary.cleanup(); throw error; } }));
+  ].map(cleanup => async () => { summary.stage(6); try { await cleanup(); } catch (error) { summary.cleanup(); throw error; } }));
   // The five-second bound includes imports. Reserve the last half-second for
   // failure-only owned cleanup; hitting either boundary is never a PASS.
   const outcome = owned.then(() => { ownedSettled = true; return { ok: true as const }; }, error => { ownedSettled = true; return { ok: false as const, error }; });
@@ -790,26 +834,34 @@ async function runQianfanPinnedControl(id: string, summary: ReturnType<typeof cr
 
 }
 
+sdkStage("collection");
+try {
 describe.sequential("exact d8 parser and guard controls, separate from registered product cases", () => {
+sdkDiagnostic("control_registration", "progress", "entered");
+try {
   const controls = createPinnedControlSummary(); let groupDeadline: number | undefined;
   nativeIt.each(pinnedControlIds)("pinned control %s", async id => {
-    groupDeadline ??= performance.now() + 45000; controls.start(id); let ok = false;
-    const emit = (outcome: string) => { try { const line = diagnostic.encode(diagnostic.record({ layer: "sdk", route: "none", caseId: "none", phase: "controls", role: "summary" }, outcome, undefined, controls.facts())); if (line) process.stdout.write(line); } catch { /* original control verdict wins */ } };
+    groupDeadline ??= performance.now() + 45000; controls.start(id); let ok = false, failed = false, failure: unknown;
+    const emit = (outcome: string) => { try { const line = diagnostic.encode(diagnostic.record({ layer: "sdk", route: "none", caseId: "none", phase: "controls", role: "summary" }, outcome, failure, { ...controls.facts(), ...(failed ? { fault: diagnostic.fault(failure) } : {}) })); if (line) process.stdout.write(line); } catch { /* original control verdict wins */ } };
     emit("entered");
     try {
       const remaining = groupDeadline - performance.now(); if (remaining <= 0 || controls.facts().controlCounts[6]) { controls.deadline(); throw new Error("pinned control group deadline"); }
       if (pinnedControlIds.indexOf(id) < 6) await runQianfanPinnedControl(id, controls, Math.min(groupDeadline, performance.now() + 5000));
       else { const { strict: assert } = await import("node:assert"); await runQianfanObserverControl(id, assert); }
       ok = true;
-    } finally {
+    } catch (error) { failed = true; failure = error; throw error; } finally {
       controls.finish(id, ok);
       emit(ok ? "fulfilled" : "rejected");
     }
   }, 5000);
+sdkDiagnostic("control_registration", "progress", "fulfilled");
+} catch (error) { sdkDiagnostic("control_registration", "primary", "rejected", error); throw error; }
 });
 // END PINNED HOSTED IMPLEMENTATION CONTROLS
 
 describe("actual Qianfan configured catalog and replay through Worker and SQLite", () => {
+sdkDiagnostic("product_registration", "progress", "entered");
+try {
 beforeEach(async () => {
   diagnosticCase = "none"; diagnosticRoute = "none";
   bindings = createRequestBindings(); caseState = { bodySucceeded: false };
@@ -866,4 +918,10 @@ beforeEach(async () => {
     for await (const event of stream) if (event.type === "text_delta") { lifetime.partial(bindings.bindings.find(row => row.id === "cancel" && row.kind === "chat")!); controller.abort(); break; }
     const result = await stream.result(); expect(controller.signal.aborted).toBe(true); expect(["aborted", "error"]).toContain(result.stopReason);
   });
+sdkDiagnostic("product_registration", "progress", "fulfilled");
+} catch (error) { sdkDiagnostic("product_registration", "primary", "rejected", error); throw error; }
 });
+
+// Registration API return is not evidence that any hook or case ran.
+sdkDiagnostic("collection", "progress", "fulfilled");
+} catch (error) { sdkDiagnostic("collection", "primary", "rejected", error); throw error; }

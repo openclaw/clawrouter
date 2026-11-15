@@ -27,7 +27,7 @@ const sdkText = readFileSync(new URL("./fixtures/openclaw-qianfan-contract.test.
 const observerStart = sdkText.indexOf("type OriginalOperation ="), observerEnd = sdkText.indexOf("// END ORIGINAL LIFETIME OBSERVERS");
 assert.ok(observerStart >= 0 && observerEnd > observerStart);
 const observerCode = stripTypeScriptTypes(sdkText.slice(observerStart, observerEnd));
-const { preserveFailures, createRequestBindings, createLifetimeObserver, createCancelReceiptReceiver, cancelReceiptLine } = new Function(observerCode + "; return { preserveFailures, createRequestBindings, createLifetimeObserver, createCancelReceiptReceiver, cancelReceiptLine };")();
+const { preserveFailures, createRequestBindings, createLifetimeObserver, createCancelReceiptReceiver, cancelReceiptLine, observeRetirementSteps } = new Function(observerCode + "; return { preserveFailures, createRequestBindings, createLifetimeObserver, createCancelReceiptReceiver, cancelReceiptLine, observeRetirementSteps };")();
 // Reuse the SDK-owned closed protocol; never forward child stdout/stderr.
 const diagnosticStart = sdkText.indexOf("// BEGIN QIANFAN FAILURE DIAGNOSTICS"), diagnosticEnd = sdkText.indexOf("// END QIANFAN FAILURE DIAGNOSTICS");
 assert.ok(diagnosticStart >= 0 && diagnosticEnd > diagnosticStart);
@@ -48,7 +48,9 @@ function outerDiagnostics(context, annotations = stepAnnotations) {
   const safe = fn => { try { fn(); } catch { /* reporting never replaces original errors */ } };
   function controlFacts() {
     const record = records.findLast(row => row.phase === "controls" && row.controlCounts);
-    return record ? { controlCounts: record.controlCounts, controlSequence: record.controlSequence, controlFlags: record.controlFlags } : {};
+    const last = records.at(-1), failed = records.findLast(row => row.outcome === "rejected");
+    return { ...(record ? { controlCounts: record.controlCounts, controlSequence: record.controlSequence, controlFlags: record.controlFlags, controlAt: record.controlAt } : {}),
+      sdkAt: diagnostic.boundary(last), ...(failed?.fault ? { sdkFault: failed.fault } : {}) };
   }
   function failure(error, at = phase, role = "primary", facts = {}) {
     failed = true; safe(() => annotations.emit(diagnostic.record(base(at, role), "rejected", error,
@@ -98,6 +100,7 @@ function outerDiagnostics(context, annotations = stepAnnotations) {
         const outcome = fulfilled ? "fulfilled" : "rejected";
         retirements.set(side, [
           diagnostic.record(base("retirement_" + side, "cleanup"), outcome, error, { ...proof?.join?.contract, predicate,
+            ...(proof?.retirementChecks ? { retirementChecks: proof.retirementChecks } : {}),
             retirement: [bit(proof?.accepted), bit(proof?.settled), bounded(proof?.rejected), bounded(proof?.readers), bounded(proof?.unlocked)] }),
           diagnostic.record(base("retirement_" + side + "_ops", "cleanup"), outcome, error, { ...proof?.join?.worker, predicate }),
         ]);
@@ -830,9 +833,9 @@ test("Qianfan actual registrations isolate twelve controls from the exact fiftee
   suite.sequential = suite;
   function register(name, body) { cases.push({ name, body, scope: scopes.at(-1), hooks: hooks.filter(h => h.scope === scopes.at(-1)).length }); }
   register.each = rows => (name, body) => { for (const row of rows) register(name, () => body(...Array.isArray(row) ? row : [row])); };
-  const registrations = stripTypeScriptTypes(sdkText.slice(sdkText.indexOf('describe.sequential("exact d8 parser')));
-  new Function("describe", "beforeEach", "nativeIt", "it", "models", "createPinnedControlSummary", "pinnedControlIds", registrations)(
-    suite, body => hooks.push({ scope: scopes.at(-1), body }), register, register, models, createPinnedControlSummary, pinnedControlIds);
+  const registrations = stripTypeScriptTypes(sdkText.slice(sdkText.indexOf('describe.sequential("exact d8 parser'), sdkText.lastIndexOf('sdkDiagnostic("collection", "progress", "fulfilled");')));
+  new Function("describe", "beforeEach", "nativeIt", "it", "models", "createPinnedControlSummary", "pinnedControlIds", "sdkDiagnostic", registrations)(
+    suite, body => hooks.push({ scope: scopes.at(-1), body }), register, register, models, createPinnedControlSummary, pinnedControlIds, () => {});
   assert.equal(cases.length, 27); assert.equal(hooks.length, 1);
   assert.ok(cases.slice(0, 12).every(row => row.scope.startsWith("exact d8 parser") && row.hooks === 0));
   assert.ok(cases.slice(12).every(row => row.scope.startsWith("actual Qianfan") && row.hooks === 1));
@@ -876,12 +879,80 @@ test("Qianfan full twelve plus fifteen failure pipeline keeps all nine essential
 
 test("Qianfan maximum closed control metadata fits the reserved helper command", () => {
   const facts = { sdkRecords: 512, exit: 255, killed: true, signal: "SIGTERM", observedCode: "ERR_PACKAGE_PATH_NOT_EXPORTED",
+    sdkAt: [diagnostic.phases.length - 1, 2, 5], sdkFault: [9, 5, 4, 9999, 4], controlAt: [11, 6],
     controlCounts: [12, 4095, 0, 4095, 9999, 9999, 9999], controlSequence: Array(8).fill(9999), controlFlags: Array(6).fill(1) };
   const record = diagnostic.record({ layer: "outer", route: "none", caseId: "none", phase: "helper", role: "primary" }, "rejected", undefined, facts);
   assert.ok(record); const lines = [], emitter = diagnostic.emitter(line => lines.push(line)); emitter.emit(record);
   assert.equal(lines.length, 1); assert.ok(Buffer.byteLength(lines[0]) <= 768);
   const controls = createPinnedControlSummary(); controls.start("embedded"); controls.pending(1); controls.finish("embedded", false);
   assert.equal(controls.facts().controlCounts[4], 1); assert.equal(controls.facts().controlCounts[5], null);
+});
+
+test("Qianfan precase progress and own-data failure shapes survive helper failure without invented control results", async () => {
+  const lines = [], diagnostics = outerDiagnostics({}, diagnostic.emitter(line => lines.push(line)));
+  let getters = 0;
+  const unsafe = Object.defineProperty({}, "name", { get() { getters++; throw undefined; } });
+  Object.defineProperty(unsafe, "code", { get() { getters++; throw undefined; } });
+  const proxy = new Proxy({}, { getOwnPropertyDescriptor() { getters++; throw undefined; } });
+  assert.deepEqual(diagnostic.fault(unsafe).slice(1), [null, null, null, null]);
+  assert.deepEqual(diagnostic.fault(proxy).slice(1), [null, null, null, null]);
+  const aggregate = new AggregateError([undefined, null]);
+  assert.deepEqual(diagnostic.fault(aggregate).slice(3), [2, 1]); assert.equal(getters, 0);
+  const record = diagnostic.record({ ...diagnosticContext, route: "none", caseId: "none", phase: "collection", role: "primary" }, "rejected", undefined, { fault: diagnostic.fault(undefined) });
+  const original = Object.assign(new Error("not emitted"), { code: 1, stdout: diagnostic.encode(record) });
+  await assert.rejects(diagnostics.helper(() => Promise.reject(original)), error => error === original);
+  diagnostics.finish(); const first = JSON.parse(lines[0].slice(lines[0].indexOf("::{") + 2));
+  assert.deepEqual(first.sdkAt, diagnostic.boundary(record)); assert.deepEqual(first.sdkFault, diagnostic.fault(undefined));
+  assert.equal(first.sdkRecords, 1); assert.equal(Object.hasOwn(first, "controlCounts"), false);
+  for (const extra of [{ sdkAt: [40, 1, 1] }, { sdkFault: [1, 6, null, null, null] }, { controlAt: [12, 1] }, { retirementChecks: Array(8).fill(4) }]) assert.equal(diagnostic.validate({ ...record, ...extra }), null);
+});
+
+test("Qianfan original retirement steps preserve pending promises, undefined failures and independent restore", async () => {
+  const steps = observeRetirementSteps(); let finish;
+  const pending = new Promise(resolve => { finish = resolve; });
+  assert.equal(steps.observe(0, () => pending), pending); assert.deepEqual(steps.facts(), [1, 0, 0, 0, 0, 0, 0, 0]);
+  finish(); await pending; assert.equal(steps.facts()[0], 2);
+  let thrown = false; try { steps.observe(1, () => { throw undefined; }); } catch (error) { thrown = true; assert.equal(error, undefined); }
+  assert.equal(thrown, true);
+  const restore = Promise.reject(undefined); assert.equal(steps.observe(3, () => restore), restore); await Promise.allSettled([restore]);
+  assert.deepEqual(steps.facts(), [2, 3, 0, 3, 0, 2, 0, 2]);
+  const life = createLifetimeObserver(), bindings = createRequestBindings(), stage = observeRetirementSteps();
+  bindings.expect("error", "chat", "https://fixture.example/test", "POST", "fixture-only");
+  await assert.rejects(preserveFailures(async () => { await stage.observe(0, () => life.join()); stage.observe(1, () => bindings.verify()); }, [() => stage.observe(3, () => life.restore())]));
+  assert.deepEqual(stage.facts(), [2, 3, 0, 2, 0, 1, 0, 0]); assert.equal(life.summary().readers, 0);
+  assert.equal(life.joinDiagnostic().worker.rejections.length, 0);
+  const lines = [], diagnostics = outerDiagnostics({}, diagnostic.emitter(line => lines.push(line)));
+  assert.throws(() => verifyRetirement({ accepted: false, settled: true, rejected: 1, readers: 0, unlocked: 0, join: life.joinDiagnostic(), retirementChecks: stage.facts() }, "router", diagnostics));
+  diagnostics.finish(); const record = JSON.parse(lines[0].slice(lines[0].indexOf("::{") + 2));
+  assert.equal(record.predicate, "accepted"); assert.deepEqual(record.retirementChecks, stage.facts());
+});
+
+test("Qianfan control failure retains actual case masks, stage and undefined reason before product execution", async () => {
+  const summary = createPinnedControlSummary(); summary.start("done"); summary.stage(2); summary.finish("done", false);
+  const context = { ...diagnosticContext, caseId: "none", route: "none", phase: "controls", role: "summary" };
+  const record = diagnostic.record(context, "rejected", undefined, { ...summary.facts(), fault: diagnostic.fault(undefined) });
+  const lines = [], diagnostics = outerDiagnostics({}, diagnostic.emitter(line => lines.push(line)));
+  const error = { code: 1, stdout: diagnostic.encode(record) };
+  await assert.rejects(diagnostics.helper(() => Promise.reject(error)), value => value === error); diagnostics.finish();
+  const value = JSON.parse(lines[0].slice(lines[0].indexOf("::{") + 2));
+  assert.deepEqual(value.controlCounts, [12, 1, 0, 1, 0, 0, 0]); assert.deepEqual(value.controlAt, [0, 2]);
+  assert.deepEqual(value.sdkFault, diagnostic.fault(undefined)); assert.deepEqual(value.sdkAt, diagnostic.boundary(record));
+});
+
+test("Qianfan actual collection boundaries rethrow undefined and retain the failing registration phase", () => {
+  const callbacks = [], events = [];
+  function suite(name, body) { callbacks.push(body); } suite.sequential = suite;
+  const registrations = stripTypeScriptTypes(sdkText.slice(sdkText.indexOf('sdkStage("collection");')));
+  const register = () => {}; register.each = () => () => { throw undefined; };
+  new Function("describe", "beforeEach", "nativeIt", "it", "models", "createPinnedControlSummary", "pinnedControlIds", "sdkStage", "sdkDiagnostic", registrations)(
+    suite, () => {}, register, register, models, createPinnedControlSummary, pinnedControlIds, phase => events.push([phase, "entered"]),
+    (phase, role, outcome, error) => events.push([phase, outcome, error]));
+  assert.equal(callbacks.length, 2);
+  assert.ok(events.some(row => row[0] === "collection" && row[1] === "fulfilled"));
+  for (const [i, phase] of ["control_registration", "product_registration"].entries()) {
+    let failed = false; try { callbacks[i](); } catch (error) { failed = true; assert.equal(error, undefined); }
+    assert.equal(failed, true); assert.deepEqual(events.at(-1), [phase, "rejected", undefined]);
+  }
 });
 
 test("actual OpenClaw Qianfan configured native client through workerd and SQLite", { skip: !source, timeout: 300_000 }, async t => {
@@ -1026,10 +1097,11 @@ lifetime.patch(globalThis, "fetch", function (...args) {
   return lifetime.invoke("fetch", originals, this, args, owner, response => lifetime.response(response, owner));
 });
 let accepted = false;
+const retirementSteps = observeRetirementSteps();
 async function retirement() {
-  try { await preserveFailures(async () => { await lifetime.join(); ingress.verify(); outbound.verify(); }, [() => lifetime.restore()]); accepted = true; } catch (error) { lifetime.errors.push(error); }
+  try { await preserveFailures(async () => { await retirementSteps.observe(0, () => lifetime.join()); retirementSteps.observe(1, () => ingress.verify()); retirementSteps.observe(2, () => outbound.verify()); }, [() => retirementSteps.observe(3, () => lifetime.restore())]); accepted = true; } catch (error) { lifetime.errors.push(error); }
   const proof = lifetime.summary();
-  return Response.json({ ...proof, settled: proof.operations === proof.settled, accepted, join: lifetime.joinDiagnostic() });
+  return Response.json({ ...proof, settled: proof.operations === proof.settled, accepted, retirementChecks: retirementSteps.facts(), join: lifetime.joinDiagnostic() });
 }
 export default { ...handler, fetch(request, env, context) {
   const path = new URL(request.url).pathname;
@@ -1051,7 +1123,7 @@ export default { ...handler, fetch(request, env, context) {
 
 function upstreamFixture() {
   return `${observerCode}
-const lifetime = createLifetimeObserver(), calls = [];
+const lifetime = createLifetimeObserver(), calls = [], retirementSteps = observeRetirementSteps();
 const bindings = createRequestBindings();
 for (const id of ${JSON.stringify(charged)}) bindings.expect(id, "chat", ${JSON.stringify(provider.base_urls.default.replace(/\/$/, "") + endpoint.path)}, "POST", "fixture-upstream-" + id);
 for (const id of ["qianfan_catalog", "qianfan_empty"]) bindings.expect(id, "catalog", ${JSON.stringify(provider.base_urls.default + "/models")}, "GET", "fixture-upstream-" + id);
@@ -1059,8 +1131,8 @@ export default { async fetch(request) {
     if (request.url === "https://fixture.example/state") return Response.json(calls);
     if (request.url === "https://fixture.example/retirement") {
       let accepted = false;
-      try { await preserveFailures(async () => { await lifetime.join(); bindings.verify(); }, [() => lifetime.restore()]); accepted = true; } catch (error) { lifetime.errors.push(error); }
-      const proof = lifetime.summary(); return Response.json({ ...proof, settled: proof.operations === proof.settled, accepted, join: lifetime.joinDiagnostic() });
+      try { await preserveFailures(async () => { await retirementSteps.observe(0, () => lifetime.join()); retirementSteps.observe(1, () => bindings.verify()); }, [() => retirementSteps.observe(3, () => lifetime.restore())]); accepted = true; } catch (error) { lifetime.errors.push(error); }
+      const proof = lifetime.summary(); return Response.json({ ...proof, settled: proof.operations === proof.settled, accepted, retirementChecks: retirementSteps.facts(), join: lifetime.joinDiagnostic() });
     }
     const owner = bindings.claim(request, undefined, request.method === "GET" ? "catalog" : "chat"); lifetime.signal(owner, request.signal);
     const body = request.method === "POST" ? await request.json() : null;
