@@ -352,8 +352,87 @@ export function litellmJoinedReadData(r, scope, source) {
   if(!litellmProducerRetired(r,source))return null;
   return [read,derivative];
 }
+// This classifies an owned data outcome, never the cause of its error. The raw
+// read and its fulfillment-only observer remain rejected; all other work retires.
+export function litellmNativeReadData(r, scope) {
+  if (r.id !== "native_abort" || r.mode !== "held" || r.failures.length || r.observerFailures.length
+    || r.requests.length !== 1 || r.ingresses?.length !== 1 || r.inputs.length !== 1 || r.readers.length !== 1 || r.bodies.length !== 1) return null;
+  const request = r.requests[0], input = r.inputs[0], reader = r.readers[0], token = request.token;
+  if (request.retired || request.ingress !== r.ingresses[0] || !token || token.scenario !== r || token.request !== request.request || input.token !== token || input.request !== request.request
+    || reader.transport !== input || reader.response !== input.response || r.bodies[0] !== reader.body || reader.bound !== true
+    || !scope.owns(input, reader.response, reader.body, reader.reader) || reader.eof !== false || reader.unlocks !== 1 || reader.unlockReceiver !== true) return null;
+  const bad = r.operations.filter(op => op.state !== "fulfilled"), read = bad.find(op => op.kind === "read"), observer = bad.find(op => op.kind === "read_observer");
+  if (bad.length !== 2 || !read || !observer || bad.some(op => op.state !== "rejected" || !Object.hasOwn(op, "error"))
+    || read.error === null || typeof read.error !== "object" || !Object.is(read.error, observer.error)) return null;
+  if (new Set(r.operations).size !== r.operations.length || r.operations.some((op, i) => op.ordinal !== i
+    || (op.token !== undefined && op.token !== token) || (op.input !== undefined && op.input !== input)
+    || (op.transport !== undefined && op.transport !== input) || (op.reader !== undefined && op.reader !== reader))) return null;
+  const owned = r.operations.filter(op => op.reader === reader);
+  const closedRows = owned.filter(op => op.kind === "closed"), cancelRows = owned.filter(op => op.kind === "cancel");
+  if (closedRows.length !== 1 || cancelRows.length !== 1) return null;
+  const closed = closedRows[0], cancel = cancelRows[0], originals = [read, observer, closed, cancel];
+  if (originals.some(op => op.input !== input || op.reader !== reader || !op.pending)
+    || new Set(originals.map(op => op.pending)).size !== 4 || observer.originalRead !== read.pending
+    || closed.pending !== reader.closed || closed.state !== "fulfilled" || closed.receiverIdentity !== true || cancel.state !== "fulfilled"
+    || cancel.argc !== 1 || cancel.operandPresent !== true || !Object.hasOwn(cancel, "reason") || cancel.signalAborted !== true) return null;
+  for (const op of [read, observer, cancel]) if (op.receiver !== reader.reader || op.receiverIdentity !== true || op.signal !== input.signal
+    || op.originalMethod !== reader.methods[op === cancel ? "cancel" : "read"]) return null;
+  for (const [name, key] of [["read", "read"], ["cancel", "cancel"], ["releaseLock", "unlock"]])
+    if (Object.getOwnPropertyDescriptor(reader.reader, name)?.value !== reader.wrappers[key]) return null;
+  for (const original of originals) {
+    if (r.operations.filter(op => op.pending === original.pending).length !== 1 || r.roots.includes(original.pending)) return null;
+    if (r.operations.some(op => op.originalFetch === original.pending || (op.originalRead === original.pending && !(original === read && op === observer)))) return null;
+  }
+  if (read.signalAborted !== false || read.abortedAtSettle !== true || observer.abortedAtSettle !== true
+    || input.callerAbortedAtAbort !== true || input.noEarlierFailure !== true || input.pendingAtAbort?.length !== 1 || input.pendingAtAbort[0] !== read
+    || !Number.isSafeInteger(input.abortSequence) || !(read.invoke < observer.invoke && observer.invoke < input.abortSequence && input.abortSequence < cancel.invoke && input.abortSequence < read.settle)
+    || !Number.isSafeInteger(reader.unlockInvoke) || !Number.isSafeInteger(reader.unlockSequence) || reader.unlockSequence <= reader.unlockInvoke
+    || owned.some(op => !Number.isSafeInteger(op.settle) || op.settle >= reader.unlockInvoke) || closed.invoke >= read.invoke) return null;
+  if (!owned.some(op => op.kind === "read" && op.state === "fulfilled" && op.value?.done === false && op.value.value?.byteLength > 0 && op.settle < read.invoke)) return null;
+  const fetches = r.operations.filter(op => op.kind === "fetch" && op.transport === input), acquired = r.operations.filter(op => op.kind === "acquisition_observer" && op.input === input);
+  if (fetches.length !== 1 || fetches[0].value !== reader.response || acquired.length !== 1 || acquired[0].originalFetch !== fetches[0].pending
+    || r.operations.filter(op => op.kind === "handler" && op.token === token && op.state === "fulfilled").length !== 1) return null;
+  const call = r.calls[0];
+  if (r.calls.length !== 1 || call.method !== "GET" || call.url !== "https://gateway.example" + r.basePath + "/models"
+    || call.authorization !== "Bearer fixture-upstream-native_abort" || call.query !== "" || call.body !== false || call.extra !== false || call.redirect !== "manual") return null;
+  return Object.freeze([read, observer]);
+}
+// Admit while live, then permit only the expected token retirement. After that
+// transition every mutation permanently invalidates this same private witness.
+export function litellmNativeRetirement(r, scope, pair, liveStable) {
+  const request = r.requests[0], input = r.inputs[0], reader = r.readers[0], token = request.token, sequence = r.sequence;
+  const requestFields = Object.getOwnPropertyDescriptors(request), tokenFields = Object.getOwnPropertyDescriptors(token);
+  const ingress = r.ingresses, ingressMembers = ingress.slice(), pending = input.pendingAtAbort, pendingMembers = pending.slice();
+  const id = r.id, mode = r.mode, basePath = r.basePath;
+  const data = Object.freeze({ v: 1, kind: "native_read_data", operations: Object.freeze(pair.map(op => op.ordinal)) });
+  const descriptors = (value, before, retiring = false) => {
+    const now = Object.getOwnPropertyDescriptors(value), keys = Reflect.ownKeys(before).filter(key => !retiring || key !== "retired");
+    return Reflect.ownKeys(now).filter(key => !retiring || key !== "retired").length === keys.length && keys.every(key => Object.hasOwn(before[key], "value") && Object.hasOwn(now[key] ?? {}, "value")
+      && Object.is(before[key].value, now[key].value) && ["writable", "enumerable", "configurable"].every(flag => before[key][flag] === now[key][flag]));
+  };
+  const unchanged = () => r.id === id && r.mode === mode && r.basePath === basePath && r.sequence === sequence && r.ingresses === ingress
+    && ingress.length === ingressMembers.length && ingress.every((value, i) => value === ingressMembers[i])
+    && input.pendingAtAbort === pending && pending.length === pendingMembers.length && pending.every((value, i) => value === pendingMembers[i])
+    && descriptors(token, tokenFields) && descriptors(request, requestFields, true);
+  let prepared = false, sealed, invalid = false;
+  const deny = () => { invalid = true; throw new Error("invalid native read retirement witness"); };
+  return Object.freeze({ data,
+    prepare() { if (invalid || prepared || !unchanged() || !descriptors(request, requestFields) || !liveStable() || request.retired || !scope.owns(input, reader.response, reader.body, reader.reader)) deny(); prepared = true; },
+    seal() { if (invalid || !prepared || sealed || !unchanged() || !liveStable() || request.retired !== true) deny(); const retired = Object.getOwnPropertyDescriptor(request, "retired"); if (!retired || retired.value !== true || ["writable", "enumerable", "configurable"].some(flag => retired[flag] !== (requestFields.retired?.[flag] ?? true))) deny(); sealed = litellmRetirementSeal(r, scope, pair, true); if (!sealed()) deny(); },
+    valid() { if (invalid) return false; try { if (!sealed || !unchanged() || !sealed()) invalid = true; } catch (error) { invalid = true; throw error; } return !invalid; },
+  });
+}
+export async function litellmNativeUsage(r, snapshot) {
+  const valid = () => { if (!r.localRetirement.valid()) throw new Error("invalid native read usage witness"); };
+  valid(); const failures = []; let value;
+  try { value = await snapshot(); } catch (error) { failures.push(error); }
+  try { valid(); } catch (error) { failures.push(error); }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length) throw new AggregateError(failures, "native read accounting and witness failed");
+  return value;
+}
 // Snapshot every retained data field and array membership; no getter or error inspection.
-export function litellmRetirementSeal(r, scope, pair, postRetired = false) {
+export function litellmRetirementSeal(r, scope, pair, postRetired = false, retainedLocks = false) {
   const names=["operations","roots","inputs","readers","bodies","requests","failures","observerFailures","calls",...(postRetired?["ingresses"]:[])],arrays=names.map(name=>r[name]);
   const members=arrays.map(values=>values.slice());
   const rows=[...r.operations,...r.inputs,...r.readers,...r.calls,...(postRetired?[...r.requests,...r.requests.map(q=>q.token)]:[])];
@@ -361,7 +440,7 @@ export function litellmRetirementSeal(r, scope, pair, postRetired = false) {
   const sequence=r.sequence;let invalid=false;
   const check = () => (!postRetired||r.sequence===sequence&&r.requests.every(q=>q.retired===true)) && arrays.every((values,i)=>r[names[i]]===values&&values.length===members[i].length&&values.every((v,j)=>v===members[i][j]))
     && rows.every((row,i)=>{const now=Object.getOwnPropertyDescriptors(row),before=captured[i];return Reflect.ownKeys(now).length===Reflect.ownKeys(before).length&&Reflect.ownKeys(before).every(key=>Object.hasOwn(before[key],"value")&&Object.hasOwn(now[key],"value")&&Object.is(before[key].value,now[key].value)&&(!postRetired||["writable","enumerable","configurable"].every(flag=>before[key][flag]===now[key][flag])));})
-    && r.readers.every(reader=>reader.unlocks===1&&(postRetired||!reader.body.locked)&&scope.retains(reader.transport,reader.response,reader.body,reader.reader))
+    && r.readers.every(reader=>reader.unlocks===1&&(postRetired||retainedLocks||!reader.body.locked)&&scope.retains(reader.transport,reader.response,reader.body,reader.reader))
     && r.readers.every(reader=>[["read","read"],["cancel","cancel"],["releaseLock","unlock"]].every(([name,key])=>Object.getOwnPropertyDescriptor(reader.reader,name)?.value===reader.wrappers[key]))
     && (!pair||pair.every(op=>op.state==="rejected"));
   return () => {if(!postRetired)return check();if(invalid)return false;try{if(!check())invalid=true;}catch(error){invalid=true;throw error;}return !invalid;};
@@ -389,7 +468,10 @@ export function litellmPostRetirement(r, scope, primary) {
 }
 export function litellmFinishRetirement(r, scope, failed, primary) {
   const errors=failed?[primary]:[];
+  const native = !failed && r.id === "native_abort" ? r.localRetirement?.native : undefined;
+  if (native) try { native.prepare(); } catch (error) { errors.push(error); }
   for(const q of r.requests)if(!q.retired){try{scope.retire(q.token);q.retired=true;}catch(error){errors.push(error);}}
+  if (native && errors.length === 0) try { native.seal(); } catch (error) { errors.push(error); }
   if(failed&&r.id==="native_abort"&&!r.failurePostlude){
     try{r.failurePostlude=litellmPostRetirement(r,scope,primary);}catch(error){errors.push(error);}
   }
@@ -456,14 +538,15 @@ export async function litellmWorkerDrain(r, scope, loadSource) {
   const failures=[...r.failures,...r.observerFailures,...controlFailures];
   checks.note(2,r.failures.length===0);checks.note(3,r.observerFailures.length===0);
   if(litellmPartialRole(r)&&!litellmProducerRetired(r,source))failures.push(new Error("original producer did not retire"));
-  const pair=failures.length===0?litellmJoinedReadData(r,scope,source):null;
+  const pair=failures.length===0?(r.id==="native_abort"?litellmNativeReadData(r,scope):litellmJoinedReadData(r,scope,source)):null;
   for(const op of r.operations){const state=op.state;if(!checks.note(4,state==="fulfilled",r.id==="native_abort"?r:undefined,op,state)&&!pair?.includes(op))failures.push(op.error);}
   for(const reader of r.readers)if(!checks.note(5,reader.unlocks===1&&!reader.body.locked))failures.push(new Error("original reader remained owned"));
   if(!checks.note(6,!r.bodies.some(body=>body.locked)))failures.push(new Error("original body locked"));
   const raw=r.operations.filter(op=>op.state==="rejected"||op.state==="threw").length;
   r.workerDataDisposition=Object.freeze([pair&&failures.length===0?2:raw?1:0,raw,failures.length]);
-  const stable=litellmRetirementSeal(r,scope,pair), sourceSnapshot=source===undefined?undefined:JSON.stringify(source);
-  const result=Object.freeze({failures:Object.freeze(failures),source,valid:()=>stable()&&(source===undefined?sourceSnapshot===undefined:JSON.stringify(source)===sourceSnapshot)});if(litellmPartialRole(r))r.localRetirement=result;
+  const stable=litellmRetirementSeal(r,scope,pair,false,r.id==="native_abort"&&!!pair), sourceSnapshot=source===undefined?undefined:JSON.stringify(source);
+  const native=r.id==="native_abort"&&pair&&failures.length===0?litellmNativeRetirement(r,scope,pair,stable):undefined;
+  const result=Object.freeze({failures:Object.freeze(failures),source,native,readOutcome:native?.data??null,valid:native?()=>native.valid():()=>stable()&&(source===undefined?sourceSnapshot===undefined:JSON.stringify(source)===sourceSnapshot)});if(litellmPartialRole(r)||native)r.localRetirement=result;
   if(failures.length)throw new AggregateError(failures,"original Worker retirement failed");return result;
 }
 export async function litellmWorkerSourceProof(r, fetchOriginal) {
@@ -551,6 +634,9 @@ ${litellmRequestScope.toString()}
 ${litellmPartialRole.toString()}
 ${litellmProducerRetired.toString()}
 ${litellmJoinedReadData.toString()}
+${litellmNativeReadData.toString()}
+${litellmNativeRetirement.toString()}
+${litellmNativeUsage.toString()}
 ${litellmRetirementSeal.toString()}
 ${litellmPostRetirement.toString()}
 ${litellmPostludeUsage.toString()}
@@ -571,8 +657,9 @@ const signalState=signal=>signal==null?null:signal.aborted;
 const invoke=(r,kind,start,details)=>observeLiteLLMOperation(r,kind,start,details);
 const observe=(r,p,kind,input,reader,details={})=>invoke(r,kind,()=>p,{input,reader,signal:input?.signal,...details});
 function observation(r){
+ if(r.id==='native_abort'&&r.localRetirement&&!r.localRetirement.valid())throw Error('invalid native observation witness');
  const counts={};for(const op of r.operations){const key=op.kind+'_'+op.state;counts[key]=(counts[key]??0)+1;}
- return {postlude:r.failurePostlude?.project(true)??null,checks:r.retireChecks?.snapshot()??null,ledger:litellmWorkerLedger(r,requestScope),operations:r.operations.length,counts,ingress:r.ingresses.map(signalState),
+ return {readOutcome:r.localRetirement?.readOutcome??null,postlude:r.failurePostlude?.project(true)??null,checks:r.retireChecks?.snapshot()??null,ledger:litellmWorkerLedger(r,requestScope),operations:r.operations.length,counts,ingress:r.ingresses.map(signalState),
   readers:r.readers.map(reader=>({unlocks:reader.unlocks,locked:reader.body.locked})),
   inputs:r.inputs.map(input=>({signalAborted:signalState(input.signal)})),
   rejections:r.operations.filter(op=>op.state==='rejected').slice(0,8).map(op=>({kind:op.kind,invoke:op.invoke,settle:op.settle,defined:op.error!==undefined,signalAtInvoke:op.signalAborted??null,signalAtSettlement:op.abortedAtSettle??null,sameSignalReason:op.sameSignalReasonAtSettle??false,
@@ -645,8 +732,8 @@ export default {async fetch(request,bindings,context){
   if(action==='observation')return Response.json(observation(r));
   if(action==='started'){const deadline=Date.now()+5000;while(!litellmHeldReady(r,requestScope)){if(Date.now()>=deadline)return new Response(null,{status:504});await scheduler.wait(10);}return Response.json({started:true});}
   if(action==='release')return Reflect.apply(rawFetch,globalThis,['https://fixture.test/release/'+id,{method:'POST'}]);
-  if(action==='retire'){r.retireChecks??=litellmPredicateFacts();for(const q of r.requests)await r.retireChecks.wait(0,()=>q.promise);let failed=false,primary;try{if(r.workerDeadline===true){r.retirement??=retireDeadline(r,bindings);return Response.json(await r.retirement);}const retirement=await drain(r);return Response.json({retired:true,source:retirement.source,dataDisposition:r.workerDataDisposition,calls:r.calls,operations:r.operations.map(x=>({kind:x.kind,state:x.state})),unlocked:r.readers.every(x=>x.unlocks===1&&!x.body.locked)});}catch(error){failed=true;primary=error;throw error;}finally{if(r.id==='native_abort')litellmFinishRetirement(r,requestScope,failed,primary);else for(const q of r.requests)if(!q.retired){requestScope.retire(q.token);q.retired=true;}}}
-  if(action==='usage'){if(r.failurePostlude)return await litellmPostludeUsage(r,()=>drain(r),()=>usageSnapshot(bindings,'fixture',id,{kind:'admin'}));await drain(r);return Response.json(await usageSnapshot(bindings,'fixture',id,{kind:'admin'}));}
+  if(action==='retire'){r.retireChecks??=litellmPredicateFacts();for(const q of r.requests)await r.retireChecks.wait(0,()=>q.promise);let failed=false,primary;try{if(r.workerDeadline===true){r.retirement??=retireDeadline(r,bindings);return Response.json(await r.retirement);}const retirement=await drain(r);return Response.json({retired:true,source:retirement.source,dataDisposition:r.workerDataDisposition,readOutcome:retirement.readOutcome,calls:r.calls,operations:r.operations.map(x=>({kind:x.kind,state:x.state})),unlocked:r.readers.every(x=>x.unlocks===1&&!x.body.locked)});}catch(error){failed=true;primary=error;throw error;}finally{if(r.id==='native_abort')litellmFinishRetirement(r,requestScope,failed,primary);else for(const q of r.requests)if(!q.retired){requestScope.retire(q.token);q.retired=true;}}}
+  if(action==='usage'){if(r.failurePostlude)return await litellmPostludeUsage(r,()=>drain(r),()=>usageSnapshot(bindings,'fixture',id,{kind:'admin'}));await drain(r);return Response.json(r.localRetirement?.native?await litellmNativeUsage(r,()=>usageSnapshot(bindings,'fixture',id,{kind:'admin'})):await usageSnapshot(bindings,'fixture',id,{kind:'admin'}));}
   if(request.method!=='POST')return new Response(null,{status:405});
   if(action==='narrow'||action==='broaden'){r.policy={...r.policy,models:action==='narrow'?[]:null};await authorityCall(bindings,'/policies/put',{policyId:id,policy:r.policy});}
   else if(action==='revoke')await revokeGrantCredentials(bindings,'oauth/'+id+'/litellm');
@@ -657,7 +744,7 @@ export default {async fetch(request,bindings,context){
  }
  const match=/^Bearer clawrouter-live-([a-z0-9_]+)-fixture-secret$/.exec(request.headers.get('authorization')??''),r=match&&records.get(match[1]);
  if(!r)return new Response(null,{status:401});
- r.ingresses.push(request.signal);const token=requestScope.register(request,r),returned={...deferred(),request,token};r.requests.push(returned);
+ r.ingresses.push(request.signal);const token=requestScope.register(request,r),returned={...deferred(),request,token,ingress:r.ingresses[r.ingresses.length-1]};r.requests.push(returned);
  const env={...bindings,LITELLM_BASE_URL:'https://gateway.example'+r.basePath,LITELLM_API_KEY:'poison-environment',OPENAI_API_KEY:'poison-unrelated',LITELLM_MODEL:selected,USAGE_QUEUE:{send:event=>observe(r,ingestUsage(bindings,event),'usage_ingest')}};
  // Deliberately injected configuration-race control, not a deployed hot-reload claim.
  if(r.destinationFault){const namespace=env.GRANT_CREDENTIALS;env.GRANT_CREDENTIALS=new Proxy(namespace,{get(target,property){if(property==='get')return (...args)=>{const stub=Reflect.apply(target.get,target,args);return new Proxy(stub,{get(object,key){if(key==='fetch')return (...values)=>{if(new URL(values[0] instanceof Request?values[0].url:String(values[0])).pathname==='/inspect'){r.destinationFault=false;env.LITELLM_BASE_URL='https://foreign.example/v1';}return Reflect.apply(object.fetch,object,values);};const value=Reflect.get(object,key,object);return typeof value==='function'?value.bind(object):value;}});};const value=Reflect.get(target,property,target);return typeof value==='function'?value.bind(target):value;}});}
@@ -911,7 +998,14 @@ export function litellmOwnedH1Reset(requestOriginal, isSocket, url, authorizatio
 
 export function assertLiteLLMResetRetirement(proof, observed, source, usage) {
   assert.equal(proof.retired, true); assert.equal(proof.unlocked, true);
-  assert.ok(proof.operations.every(op => op.state === "fulfilled"));
+  const rejected = proof.operations.map((op, i) => ({ op, i })).filter(({ op }) => op.state !== "fulfilled");
+  if (rejected.length) {
+    assert.equal(rejected.length, 2);
+    assert.deepEqual(proof.readOutcome, { v: 1, kind: "native_read_data", operations: rejected.map(({ i }) => i) });
+    assert.deepEqual(observed.readOutcome, proof.readOutcome);
+    assert.deepEqual(rejected.map(({ op }) => [op.kind, op.state]), [["read", "rejected"], ["read_observer", "rejected"]]);
+    assert.deepEqual(proof.dataDisposition, [2, 2, 0]);
+  } else assert.equal(proof.readOutcome ?? null, null);
   assert.equal(observed.syncFailures, 0); assert.deepEqual(observed.ingress, [true]);
   assert.deepEqual(observed.inputs, [{ signalAborted: true }]);
   assert.equal(observed.readers.length, 1); assert.deepEqual(observed.readers[0], { unlocks: 1, locked: false });

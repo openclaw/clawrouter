@@ -1424,6 +1424,151 @@ test("owned HTTP/1 reset repair pure: successful return admits only the first bo
     assert.equal(c.calls.filter(row => row[0] === "reset").length, 1);
   }
 });
+// Inert promises and plain resource objects exercise the actual private owners.
+function nativeTypedFunctions(source = readFileSync("worker/test/litellm-model-discovery.test.mjs", "utf8")) {
+  const functions = source.slice(source.indexOf("export function observeLiteLLMOperation("), source.indexOf("// END request-owned fixture functions."));
+  const outer = source.slice(source.indexOf("export function assertLiteLLMResetRetirement("), source.indexOf("export async function withGateway("));
+  return new Function("assert", (functions + outer).replace(/^export /gm, "") + ";return {observeLiteLLMOperation,collectLiteLLMOperations,litellmRequestScope,litellmPredicateFacts,litellmWorkerDrain,litellmFinishRetirement,assertLiteLLMResetRetirement,nativeUsage:typeof litellmNativeUsage==='function'?litellmNativeUsage:null};")(assert);
+}
+async function nativeTypedCase({ healthy = false, helpers = nativeTypedFunctions() } = {}) {
+  const h = helpers, r = { id: "native_abort", mode: "held", basePath: "/team/v1", sequence: 0, operations: [], roots: [], inputs: [], readers: [], bodies: [], requests: [], ingresses: [], failures: [], observerFailures: [], calls: [] };
+  let current;
+  const scope = h.litellmRequestScope({ getStore: () => current, run(token, fn) { const prior = current; current = token; try { return fn(); } finally { current = prior; } } }, 17);
+  const signal = { aborted: false, reason: {} }, request = { signal: { aborted: false } }, token = scope.register(request, r);
+  r.ingresses.push(request.signal);
+  let input; const handler = scope.invoke(token, () => { input = scope.transport(r, signal); return Promise.resolve(); }, {}, [request]);
+  r.requests.push({ token, request, ingress: request.signal, promise: handler, retired: false }); r.inputs.push(input);
+  h.observeLiteLLMOperation(r, "handler", () => handler, { token });
+  const body = { locked: true }, response = { body }, originalReader = {};
+  const fetch = h.observeLiteLLMOperation(r, "fetch", () => Promise.resolve(response), { transport: input });
+  const acquisition = fetch.then(value => { assert.equal(scope.response(input, value), body); input.response = value; });
+  h.observeLiteLLMOperation(r, "acquisition_observer", () => acquisition, { input, originalFetch: fetch });
+  await h.collectLiteLLMOperations(r);
+  scope.body(input, body); const reader = { id: scope.reader(input, body, originalReader), reader: originalReader, body, response, transport: input, bound: true, unlocks: 0, eof: false, methods: {}, wrappers: {} };
+  for (const [name, key] of [["read", "read"], ["cancel", "cancel"], ["releaseLock", "unlock"]]) { reader.methods[key] = () => {}; reader.wrappers[key] = () => {}; originalReader[name] = reader.wrappers[key]; }
+  Object.freeze(reader.methods); Object.freeze(reader.wrappers);
+  r.readers.push(reader); r.bodies.push(body);
+  let close, reject, fulfill;
+  reader.closed = new Promise(resolve => { close = resolve; });
+  const details = { input, reader, signal, receiver: originalReader, receiverIdentity: true, originalMethod: reader.methods.read, signalAborted: false };
+  const invoke = (kind, promise, more = {}) => h.observeLiteLLMOperation(r, kind, () => promise, { ...details, ...more });
+  invoke("closed", reader.closed);
+  const prefix = Promise.resolve({ done: false, value: { byteLength: 1 } });
+  invoke("read", prefix); const prefixQ = prefix.then(value => value); invoke("read_observer", prefixQ, { originalRead: prefix });
+  await prefixQ; await Promise.resolve();
+  const p = new Promise((yes, no) => { fulfill = yes; reject = no; }); invoke("read", p);
+  const read = r.operations.at(-1), q = p.then(value => value); invoke("read_observer", q, { originalRead: p }); const observer = r.operations.at(-1);
+  signal.aborted = true; request.signal.aborted = true;
+  input.abortSequence = ++r.sequence; input.callerAbortedAtAbort = true; input.noEarlierFailure = true; input.pendingAtAbort = [read];
+  scope.operation(input, originalReader, originalReader, "cancel");
+  const operand = signal.reason; close();
+  invoke("cancel", Promise.resolve(), { originalMethod: reader.methods.cancel, signalAborted: true, argc: 1, operandPresent: true, reason: operand });
+  const cancel = r.operations.at(-1), error = {};
+  if (healthy) fulfill({ done: false, value: { byteLength: 1 } }); else reject(error);
+  await h.collectLiteLLMOperations(r);
+  reader.unlockInvoke = ++r.sequence; scope.operation(input, originalReader, originalReader, "unlock"); body.locked = false;
+  reader.unlocks = 1; reader.unlockSequence = ++r.sequence; reader.unlockReceiver = true;
+  r.calls.push({ method: "GET", url: "https://gateway.example/team/v1/models", authorization: "Bearer fixture-upstream-native_abort", query: "", redirect: "manual", body: false, extra: false });
+  r.retireChecks = h.litellmPredicateFacts(); r.retireChecks.note(0, true);
+  const drain = () => h.litellmWorkerDrain(r, scope, () => assert.fail("native drain must not request producer proof"));
+  return { h, r, scope, token, request, input, reader, read, observer, cancel, error, operand, p, q, drain };
+}
+async function nativeTypedRetired(c) {
+  const result = await c.drain(); c.h.litellmFinishRetirement(c.r, c.scope, false);
+  const remote = resetRemoteFacts();
+  remote.proof.operations = c.r.operations.map(op => ({ kind: op.kind, state: op.state }));
+  remote.proof.dataDisposition = c.r.workerDataDisposition; remote.proof.readOutcome = result.readOutcome;
+  remote.observed.readOutcome = result.readOutcome;
+  return { result, remote };
+}
+test("native typed read pure: owned pair remains rejected while healthy fulfillment is unchanged", async () => {
+  for (const healthy of [false, true]) {
+    const c = await nativeTypedCase({ healthy }), { result, remote } = await nativeTypedRetired(c);
+    c.h.assertLiteLLMResetRetirement(remote.proof, remote.observed, remote.source, remote.usage);
+    assert.deepEqual(c.r.workerDataDisposition, healthy ? [0, 0, 0] : [2, 2, 0]);
+    if (!healthy) {
+      assert.deepEqual(c.r.retireChecks.snapshot().slice(0, 4), [4, 127, 111, 16]);
+      assert.equal(c.read.error, c.error); assert.equal(c.observer.error, c.error); assert.notEqual(c.error, c.operand);
+      assert.equal(c.read.pending, c.p); assert.equal(c.observer.pending, c.q); assert.equal(c.cancel.reason, c.operand);
+      assert.deepEqual([c.read.state, c.observer.state], ["rejected", "rejected"]); assert.equal(result.valid(), true);
+      assert.equal(await c.drain(), result); assert.equal(await c.drain(), result);
+      assert.equal(await c.h.nativeUsage(c.r, async () => remote.usage), remote.usage);
+    }
+  }
+});
+test("native typed read pure: incomplete foreign aliased or faulty originals remain fatal", async () => {
+  const changes = {
+    third: c => { c.r.operations[0].state = "rejected"; c.r.operations[0].error = c.error; },
+    undefined: c => { c.read.error = c.observer.error = undefined; }, null: c => { c.read.error = c.observer.error = null; }, different: c => { c.observer.error = {}; },
+    missingError: c => { delete c.read.error; }, missingP: c => { delete c.read.pending; }, foreignQ: c => { c.observer.originalRead = {}; },
+    samePromise: c => { c.observer.pending = c.p; }, foreignC0: c => { c.reader.closed = {}; },
+    rejectedC0: c => { c.r.operations.find(op => op.kind === "closed").state = "rejected"; },
+    rejectedCancel: c => { c.cancel.state = "rejected"; }, cancelArgs: c => { c.cancel.argc = 0; }, missingOperand: c => { delete c.cancel.reason; },
+    duplicateCancel: c => { c.r.operations.push({ ...c.cancel, ordinal: c.r.operations.length }); },
+    foreignIngress: c => { c.r.ingresses[0] = {}; }, foreignInput: c => { c.read.input = { ...c.input }; }, foreignReader: c => { c.observer.reader = { ...c.reader }; },
+    foreignResponse: c => { c.reader.response = {}; }, foreignBody: c => { c.reader.body = { locked: false }; },
+    foreignToken: c => { c.r.inputs[0] = { ...c.input, token: { ...c.token } }; }, wrongGeneration: c => { c.r.requests[0].token = { ...c.token, generation: 18 }; },
+    foreignMethod: c => { c.cancel.originalMethod = () => {}; }, foreignReceiver: c => { c.read.receiver = {}; }, foreignSignal: c => { c.read.signal = {}; },
+    lateAlias: c => { c.r.operations.push({ kind: "fetch", state: "fulfilled", pending: c.p, ordinal: c.r.operations.length }); },
+    originalAlias: c => { c.r.operations[0].originalRead = c.p; }, excludedAlias: c => { c.r.operations[0].originalFetch = c.q; },
+    pending: c => { c.r.operations[0].state = "pending"; }, sync: c => { c.r.failures.push(undefined); }, observer: c => { c.r.observerFailures.push(undefined); },
+    caller: c => { c.input.callerAbortedAtAbort = false; }, notPendingAtAbort: c => { c.input.pendingAtAbort = []; }, earlier: c => { c.input.noEarlierFailure = false; },
+    noAbort: c => { delete c.input.abortSequence; }, wrongAbortOrder: c => { c.input.abortSequence = c.read.settle; }, noEffectiveAbort: c => { c.read.abortedAtSettle = false; },
+    alreadyAborted: c => { c.read.signalAborted = true; }, prefix: c => { c.r.operations.find(op => op.kind === "read" && op.state === "fulfilled").value.value.byteLength = 0; },
+    earlyUnlock: c => { c.reader.unlockInvoke = c.read.settle; }, doubleUnlock: c => { c.reader.unlocks = 2; }, locked: c => { c.reader.body.locked = true; }, eof: c => { c.reader.eof = true; },
+    foreignCall: c => { c.r.calls[0].authorization = "foreign"; }, wrongRole: c => { c.r.id = "other"; }, retired: c => { c.scope.retire(c.token); c.r.requests[0].retired = true; },
+  };
+  for (const [name, change] of Object.entries(changes)) {
+    const c = await nativeTypedCase(); change(c);
+    try { await assert.rejects(c.drain, name); assert.equal(c.r.localRetirement, undefined, name); } catch (error) { error.caseName = name; throw error; }
+  }
+});
+test("native typed read pure: held original and attached tails block initial admission", async () => {
+  for (const kind of ["original", "observer"]) {
+    const c = await nativeTypedCase(); let release; const held = new Promise(resolve => { release = resolve; });
+    if (kind === "original") c.h.observeLiteLLMOperation(c.r, "wait_until", () => held, { token: c.token }); else c.r.roots.push(held);
+    let done = false; const pending = c.drain().then(value => { done = true; return value; });
+    await Promise.resolve(); await Promise.resolve(); assert.equal(done, false); release();
+    const result = await pending; c.h.litellmFinishRetirement(c.r, c.scope, false); assert.equal(result.valid(), true);
+  }
+});
+test("native typed read pure: token retirement permits one transition and permanently denies later mutations", async () => {
+  const changes = [c => { c.r.sequence++; }, c => { c.r.operations.push({ state: "fulfilled" }); }, c => { c.r.roots = [...c.r.roots]; },
+    c => { c.r.ingresses = [...c.r.ingresses]; }, c => { c.r.requests[0].retired = false; }, c => { c.input.pendingAtAbort.push(c.read); },
+    c => { c.r.failures.push(undefined); }, c => { c.r.observerFailures.push(undefined); }, c => { c.r.operations[0].originalRead = c.p; },
+    c => { c.reader.reader.cancel = () => {}; }, c => { c.r.requests[0].token = { ...c.token }; }];
+  for (const change of changes) {
+    const c = await nativeTypedCase(), { result } = await nativeTypedRetired(c); change(c);
+    assert.equal(result.valid(), false); await assert.rejects(c.drain); assert.equal(result.valid(), false);
+  }
+  const before = await nativeTypedCase(); await before.drain(); before.r.requests[0].retired = true;
+  assert.throws(() => before.h.litellmFinishRetirement(before.r, before.scope, false));
+  const c = await nativeTypedCase(), { result } = await nativeTypedRetired(c);
+  assert.throws(() => c.h.litellmFinishRetirement(c.r, c.scope, false)); assert.equal(result.valid(), false);
+});
+test("native typed read pure: accounting await cannot hide undefined failure or seal mutation", async () => {
+  const c = await nativeTypedCase(); await nativeTypedRetired(c);
+  const original = await rejectedValue(() => c.h.nativeUsage(c.r, async () => { throw undefined; })); assert.equal(original, undefined);
+  const both = await rejectedValue(() => c.h.nativeUsage(c.r, async () => { c.r.sequence++; throw undefined; }));
+  assert.equal(both.errors.length, 2); assert.equal(both.errors[0], undefined);
+  let calls = 0; await assert.rejects(() => c.h.nativeUsage(c.r, async () => { calls++; })); assert.equal(calls, 0);
+});
+test("native typed read pure: actual outer producer and accounting gates stay independent", async () => {
+  const changes = [c => { c.source.joined = null; }, c => { c.source.joined[2]--; }, c => { c.source.joined[3]++; },
+    c => { c.source.operations[1].state = "pending"; }, c => { c.source.operations[1].state = "rejected"; }, c => { c.source.owners[0].call = 7; },
+    c => { c.source.owners[0].fulfilledCancels = 0; }, c => { c.source.owners[0].cancels = 2; }, c => { c.source.expired = 1; },
+    c => { c.source.active = 1; }, c => { c.source.released = true; }, c => { c.source.calls.push(c.source.calls[0]); },
+    c => { c.usage = null; }, c => { c.usage.events = []; }, c => { c.usage.events[0].actual_cost_micros = 7; },
+    c => { c.usage.events[0].policy_id = "foreign"; }, c => { c.usage.events[0].reserved_cost_micros = 7; }, c => { c.observed.ingress[0] = false; },
+    c => { c.observed.inputs[0].signalAborted = false; }, c => { c.proof.readOutcome.operations[0]++; }, c => { c.observed.readOutcome = null; }];
+  for (const change of changes) {
+    const c = await nativeTypedCase(), { remote } = await nativeTypedRetired(c), projected = structuredClone(remote); change(projected);
+    assert.throws(() => c.h.assertLiteLLMResetRetirement(projected.proof, projected.observed, projected.source, projected.usage));
+  }
+  for (const fault of ["proof", "usage", "remote_assertions"]) { const c = await abortDiagnosticCase({ fault, undefinedFault: true }); assert.equal(c.failed, true); }
+  const healthy = await abortDiagnosticCase(); assert.equal(healthy.failed, false);
+  assert.deepEqual(healthy.calls.filter(name => ["retire", "observation", "proof", "usage"].includes(name)), ["retire", "observation", "proof", "usage"]);
+});
 // END worker abort diagnostic pure tests.
 // These children start independent native runners, not nested IPC test workers.
 const { NODE_TEST_CONTEXT: _context, ...childEnv } = process.env;
