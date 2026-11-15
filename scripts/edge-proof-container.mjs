@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { deflateSync } from "node:zlib";
 import { createRequire } from "node:module";
 import { edgeProof } from "./edge-proof-profile.mjs";
-import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, validateContainerDiagnostic, initGuardTags, initSourcePhases, validateInitDetail, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail } from "./edge-proof.mjs";
+import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, validateContainerDiagnostic, initGuardTags, initSourcePhases, validateInitDetail, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission } from "./edge-proof.mjs";
 export { validateContainerDiagnostic, emitContainerFailure } from "./edge-proof.mjs";
 
 export const containerContract = Object.freeze({
@@ -66,25 +66,58 @@ export function raiseContainerFailures(errors) {
   if (errors.length) throw new AggregateError(errors, "edge-container: independent failures");
 }
 
-const number = text => { check(typeof text === "string" && /^(0|[1-9]\d*)$/.test(text) && Number.isSafeInteger(Number(text)), "canonical-number"); return Number(text); };
+// This ledger belongs only to one parent admission callback; cleanup never receives it.
+export function createParentAdmissionLedger() {
+  const errors = [], stack = []; let source = 0, visit = 1, role = 0, predicate = 0, seen = 0, passed = 0, falseLeaf = 0, evaluating = false, sealed = false, broken = false, count = null, saturation = 0, mount;
+  const note = fn => { if (sealed) return; try { fn(); } catch (error) { broken = true; errors.push(error); } };
+  return { parent: true, errors,
+    enter(value) { note(() => { source = parentAdmissionSources.indexOf(value) + 1; check(source > 0, "parent-source"); predicate = seen = passed = falseLeaf = 0; evaluating = false; stack.length = 0; role = 0; count = null; saturation = 0; mount = undefined; }); },
+    visit(value) { note(() => { check([1,2].includes(value), "parent-visit"); visit = value; }); },
+    role(value) { note(() => { role = parentAdmissionRoles.indexOf(value) + 1; check(role > 0, "parent-role"); }); },
+    begin(id) { note(() => { check(Number.isInteger(id) && id > 0 && id <= parentAdmissionPredicates.length, "parent-predicate"); if (evaluating) stack.push({predicate,seen,passed,falseLeaf,count,saturation}); predicate = id; seen = passed = falseLeaf = 0; count = null; saturation = 0; evaluating = true; }); },
+    leaf(id, value) { note(() => { const bit = 2 ** (id - 1); check(evaluating && id >= 1 && id <= parentAdmissionPredicates[predicate - 1][1], "parent-leaf"); seen |= bit; if (value) passed |= bit; else { passed &= ~bit; falseLeaf = id; } }); return value; },
+    result(value) { note(() => { evaluating = false; if (value) { const previous = stack.pop(); if (previous) { ({predicate,seen,passed,falseLeaf,count,saturation} = previous); evaluating = true; } else { predicate = seen = passed = falseLeaf = 0; count = null; saturation = 0; } } }); return value; },
+    count(value) { note(() => { if (Number.isSafeInteger(value) && value >= 0) { count = Math.min(value,4095); saturation = value > 4095 ? 1 : 0; } }); },
+    guard() {}, mount(value) { note(() => { mount = validateMountDetail(value, value[1] >= 10 && value[1] <= 13 ? "mount_parse" : "mount_validate"); predicate = seen = passed = falseLeaf = 0; evaluating = false; count = null; saturation = 0; }); },
+    seal() { sealed = true; },
+    finish(original, reason) {
+      if (sealed) return null; sealed = true;
+      if (broken || !source) return null;
+      const detail = [1, source, visit, original ? predicate ? evaluating ? 2 : 1 : mount ? 1 : 0 : 3, predicate, predicate && !evaluating ? falseLeaf : 0, role, seen, passed, count, saturation];
+      return validateParentAdmission({ v: 8, phase: "admission", state: "rejected", defined: reason !== undefined, exit: null, signal: null, detail, ...(mount ? { m: mount } : {}) });
+    },
+  };
+}
+const parentRecord = (recorder, method, ...args) => { if (recorder?.parent) try { recorder[method](...args); } catch (error) { recorder.errors.push(error); } };
+const parentSource = (recorder, source) => parentRecord(recorder, "enter", source);
+const parentRole = (recorder, role) => parentRecord(recorder, "role", role);
+const parentCount = (recorder, value) => { parentRecord(recorder, "count", value); return value; };
+const parentLeaf = (recorder, id, value) => { parentRecord(recorder, "leaf", id, value); return value; };
+const parentEvaluate = (recorder, id, operation) => {
+  if (!recorder?.parent) return operation();
+  parentRecord(recorder, "begin", id); const value = operation(); parentRecord(recorder, "result", value); return value;
+};
+
+const number = (text, recorder) => { check(parentEvaluate(recorder, 44, () => parentLeaf(recorder, 1, typeof text === "string") && parentLeaf(recorder, 2, /^(0|[1-9]\d*)$/.test(text)) && parentLeaf(recorder, 3, Number.isSafeInteger(Number(text)))), "canonical-number"); return Number(text); };
 export function parseIdentity(status, recorder) {
   const check = (value, code) => initGuardCheck(value, code, recorder, "uid_gid_groups");
-  check(typeof status === "string" && status.length <= 65536, "status-capacity");
-  const field = name => { const rows = status.split("\n").filter(line => line.startsWith(name + ":")); check(rows.length === 1, "status-field"); return rows[0].slice(name.length + 1).trim(); };
-  const tuple = name => { const values = field(name).split(/\s+/).map(number); check(values.length === 4 && values[0] > 0 && values.every(value => value === values[0]), "identity-tuple"); return values; };
-  const groups = field("Groups").split(/\s+/).filter(Boolean).map(number).sort((a, b) => a - b);
-  check(new Set(groups).size === groups.length, "identity-groups");
+  check(parentEvaluate(recorder, 1, () => parentLeaf(recorder, 1, typeof status === "string") && parentLeaf(recorder, 2, parentCount(recorder, status.length) <= 65536)), "status-capacity");
+  const field = name => { parentRole(recorder, name); const rows = status.split("\n").filter(line => line.startsWith(name + ":")); check(parentEvaluate(recorder, 2, () => parentLeaf(recorder, 1, parentCount(recorder, rows.length) === 1)), "status-field"); return rows[0].slice(name.length + 1).trim(); };
+  const tuple = name => { const values = field(name).split(/\s+/).map(value => number(value, recorder)); check(parentEvaluate(recorder, 3, () => parentLeaf(recorder, 1, parentCount(recorder, values.length) === 4) && parentLeaf(recorder, 2, values[0] > 0) && parentLeaf(recorder, 3, values.every(value => value === values[0]))), "identity-tuple"); return values; };
+  const groups = field("Groups").split(/\s+/).filter(Boolean).map(value => number(value, recorder)).sort((a, b) => a - b);
+  check(parentEvaluate(recorder, 4, () => parentLeaf(recorder, 1, new Set(groups).size === groups.length)), "identity-groups");
   return { uid: tuple("Uid"), gid: tuple("Gid"), groups };
 }
 export function validateIdentity(actual, expected, child = false, recorder) {
+  parentRole(recorder, "identity");
   const check = (value, code) => initGuardCheck(value, code, recorder, "uid_gid_groups");
-  check(same(actual.uid, expected.uid) && same(actual.gid, expected.gid), "identity-drift");
-  check(child ? actual.groups.length <= 1 && actual.groups.every(group => group === expected.gid[0]) : same(actual.groups, expected.groups), "groups-drift");
+  check(parentEvaluate(recorder, 5, () => parentLeaf(recorder, 1, same(actual.uid, expected.uid)) && parentLeaf(recorder, 2, same(actual.gid, expected.gid))), "identity-drift");
+  check(parentEvaluate(recorder, 6, () => parentLeaf(recorder, 1,  child ? actual.groups.length <= 1 && actual.groups.every(group => group === expected.gid[0]) : same(actual.groups, expected.groups))), "groups-drift");
   return actual;
 }
-export function validateMapping(text, id) {
-  const rows = text.trim().split("\n").map(line => line.trim().split(/\s+/).map(number));
-  check(rows.length === 1 && rows[0].length === 3 && rows[0][0] === 0 && rows[0][1] === 0 && rows[0][2] > id, "host-id-mapping");
+export function validateMapping(text, id, recorder) {
+  const rows = text.trim().split("\n").map(line => line.trim().split(/\s+/).map(value => number(value, recorder)));
+  check(parentEvaluate(recorder, 7, () => parentLeaf(recorder, 1, rows.length === 1) && parentLeaf(recorder, 2, rows[0].length === 3) && parentLeaf(recorder, 3, rows[0][0] === 0) && parentLeaf(recorder, 4, rows[0][1] === 0) && parentLeaf(recorder, 5, rows[0][2] > id)), "host-id-mapping");
   return rows;
 }
 export function validateImage(image, { derived = false, identity, id, contextHash } = {}) {
@@ -117,21 +150,21 @@ export function createArguments(plan, cidFile) {
   check(uid > 0 && gid > 0 && Number.isSafeInteger(uid) && Number.isSafeInteger(gid), "create-identity");
   return ["create", "--cidfile", cidFile, "--platform=linux/amd64", "--network=none", "--ipc=private", "--cgroupns=private", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges=true", "--user", `${uid}:${gid}`, "--pids-limit=128", "--cpus=2", "--memory=4g", "--memory-swap=4g", "--stop-timeout=2", "--interactive", "--log-driver=none", "--tmpfs", `/task:rw,noexec,nosuid,nodev,size=2147483648,mode=0700,uid=${uid},gid=${gid}`, "--workdir=/task", "--label", `org.openclaw.edge.nonce=${plan.nonce}`, "--label", `org.openclaw.edge.context=${plan.contextHash}`, "--entrypoint", containerContract.node, plan.image, "/opt/edge-input/scripts/edge-proof.mjs", "container-init", plan.nonce, plan.contextHash, String(uid), String(gid)];
 }
-export function validateContainerInspect(row, plan, cid) {
-  check(cidPattern.test(cid) && row.Id === cid && row.Image === plan.image && row.Config?.Labels?.["org.openclaw.edge.nonce"] === plan.nonce && row.Config.Labels["org.openclaw.edge.context"] === plan.contextHash, "container-custody");
+export function validateContainerInspect(row, plan, cid, recorder) {
+  check(parentEvaluate(recorder, 8, () => parentLeaf(recorder, 1, cidPattern.test(cid)) && parentLeaf(recorder, 2, row.Id === cid) && parentLeaf(recorder, 3, row.Image === plan.image) && parentLeaf(recorder, 4, row.Config?.Labels?.["org.openclaw.edge.nonce"] === plan.nonce) && parentLeaf(recorder, 5, row.Config.Labels["org.openclaw.edge.context"] === plan.contextHash)), "container-custody");
   const h = row.HostConfig, c = row.Config;
-  check(h.NetworkMode === "none" && h.PidMode === "" && h.IpcMode === "private" && h.CgroupnsMode === "private" && h.ReadonlyRootfs === true && h.Privileged === false, "container-isolation");
-  check(same(h.CapDrop, ["ALL"]) && (!h.CapAdd || !h.CapAdd.length) && same(h.SecurityOpt, ["no-new-privileges=true"]), "container-capabilities");
-  check(h.Memory === containerContract.memory && h.MemorySwap === containerContract.memory && h.NanoCpus === containerContract.cpus && h.PidsLimit === containerContract.pids, "container-limits");
-  for (const key of ["Binds", "VolumesFrom", "Devices", "DeviceRequests", "GroupAdd"]) check(!h[key] || !h[key].length, "container-extra-input");
-  for (const key of ["PortBindings", "Sysctls"]) check(!h[key] || !Object.keys(h[key]).length, "container-extra-input");
-  check(!c.ExposedPorts || !Object.keys(c.ExposedPorts).length, "container-port");
+  check(parentEvaluate(recorder, 9, () => parentLeaf(recorder, 1, h.NetworkMode === "none") && parentLeaf(recorder, 2, h.PidMode === "") && parentLeaf(recorder, 3, h.IpcMode === "private") && parentLeaf(recorder, 4, h.CgroupnsMode === "private") && parentLeaf(recorder, 5, h.ReadonlyRootfs === true) && parentLeaf(recorder, 6, h.Privileged === false)), "container-isolation");
+  check(parentEvaluate(recorder, 10, () => parentLeaf(recorder, 1, same(h.CapDrop, ["ALL"])) && parentLeaf(recorder, 2, (!h.CapAdd || !h.CapAdd.length)) && parentLeaf(recorder, 3, same(h.SecurityOpt, ["no-new-privileges=true"]))), "container-capabilities");
+  check(parentEvaluate(recorder, 11, () => parentLeaf(recorder, 1, h.Memory === containerContract.memory) && parentLeaf(recorder, 2, h.MemorySwap === containerContract.memory) && parentLeaf(recorder, 3, h.NanoCpus === containerContract.cpus) && parentLeaf(recorder, 4, h.PidsLimit === containerContract.pids)), "container-limits");
+  for (const key of ["Binds", "VolumesFrom", "Devices", "DeviceRequests", "GroupAdd"]) { parentRole(recorder, key); check(parentEvaluate(recorder, 12, () => parentLeaf(recorder, 1, !h[key]) || parentLeaf(recorder, 2, !h[key].length)), "container-extra-input"); }
+  for (const key of ["PortBindings", "Sysctls"]) { parentRole(recorder, key); check(parentEvaluate(recorder, 13, () => parentLeaf(recorder, 1, !h[key]) || parentLeaf(recorder, 2, !Object.keys(h[key]).length)), "container-extra-input"); }
+  check(parentEvaluate(recorder, 14, () => parentLeaf(recorder, 1, !c.ExposedPorts) || parentLeaf(recorder, 2, !Object.keys(c.ExposedPorts).length)), "container-port");
   // --tmpfs is stored separately from inspect.Mounts (Moby v28.5.2).
-  check(Array.isArray(row.Mounts) && row.Mounts.length === 0, "container-mounts");
-  check(same(h.Tmpfs, { "/task": `rw,noexec,nosuid,nodev,size=2147483648,mode=0700,uid=${plan.identity.uid[0]},gid=${plan.identity.gid[0]}` }), "container-tmpfs");
+  check(parentEvaluate(recorder, 15, () => parentLeaf(recorder, 1, Array.isArray(row.Mounts)) && parentLeaf(recorder, 2, row.Mounts.length === 0)), "container-mounts");
+  check(parentEvaluate(recorder, 16, () => parentLeaf(recorder, 1, same(h.Tmpfs, { "/task": `rw,noexec,nosuid,nodev,size=2147483648,mode=0700,uid=${plan.identity.uid[0]},gid=${plan.identity.gid[0]}` }))), "container-tmpfs");
   const expected = createArguments(plan, "/unused");
-  check(same(c.Entrypoint, [containerContract.node]) && same(c.Cmd, expected.slice(expected.indexOf(plan.image) + 1)) && c.User === `${plan.identity.uid[0]}:${plan.identity.gid[0]}` && c.WorkingDir === "/task", "container-command");
-  check(same(c.Env, plan.imageEnv) && !c.Volumes && !c.OnBuild?.length, "container-env");
+  check(parentEvaluate(recorder, 17, () => parentLeaf(recorder, 1, same(c.Entrypoint, [containerContract.node])) && parentLeaf(recorder, 2, same(c.Cmd, expected.slice(expected.indexOf(plan.image) + 1))) && parentLeaf(recorder, 3, c.User === `${plan.identity.uid[0]}:${plan.identity.gid[0]}`) && parentLeaf(recorder, 4, c.WorkingDir === "/task")), "container-command");
+  check(parentEvaluate(recorder, 18, () => parentLeaf(recorder, 1, same(c.Env, plan.imageEnv)) && parentLeaf(recorder, 2, !c.Volumes) && parentLeaf(recorder, 3, !c.OnBuild?.length)), "container-env");
   return row;
 }
 export function parseControl(text, expectedKind, nonce, contextHash) {
@@ -371,31 +404,31 @@ export function parseMounts(text, privateView = true, recorder) {
     return { id: Number(a[0]), parentId: Number(a[1]), target: decodeMountPath(a[4], recorder, "role"), root: decodeMountPath(a[3], recorder, "root"), device: a[2], options: a[5].split(","), fs: b[0], superOptions: b[2].split(","), optional };
   }), recorder);
 }
-export function validateMountFreshness(before, after) {
-  const snapshot = rows => mountTable(rows).map(mountTuple).sort((a, b) => a.id - b.id);
+export function validateMountFreshness(before, after, recorder) {
+  const snapshot = rows => mountTable(rows, recorder).map(mountTuple).sort((a, b) => a.id - b.id);
   // IDs are namespace-local and may be reused after unmount. This compares two
   // observations in ONE unchanged namespace, not continuous/ABA-free custody.
-  check(same(snapshot(before), snapshot(after)), "mount-observation-drift");
+  check(parentEvaluate(recorder, 25, () => parentLeaf(recorder, 1, same(snapshot(before), snapshot(after)))), "mount-observation-drift");
 }
 // mountinfo identifies the filesystem and bind root independently of directory
 // traversal permissions. Never stat Docker's root-owned private storage.
-export function validateMetadataMounts(inspect, targetMounts, parentMounts, daemonRoot, cid) {
-  check(cidPattern.test(cid), "daemon-root-identity"); canonicalMountPath(daemonRoot);
-  mountTable(parentMounts); mountTable(targetMounts);
+export function validateMetadataMounts(inspect, targetMounts, parentMounts, daemonRoot, cid, recorder) {
+  check(parentEvaluate(recorder, 19, () => parentLeaf(recorder, 1, cidPattern.test(cid))), "daemon-root-identity"); canonicalMountPath(daemonRoot, recorder);
+  mountTable(parentMounts, recorder); mountTable(targetMounts, recorder);
   const result = [];
   for (const [key, name] of [["ResolvConfPath", "resolv.conf"], ["HostnamePath", "hostname"], ["HostsPath", "hosts"]]) {
-    const source = inspect[key];
-    check(source === join(daemonRoot, "containers", cid, name), "daemon-metadata-custody");
+    parentRole(recorder, key); const source = inspect[key];
+    check(parentEvaluate(recorder, 20, () => parentLeaf(recorder, 1, source === join(daemonRoot, "containers", cid, name))), "daemon-metadata-custody");
     const candidates = parentMounts.filter(row => containsMountPath(row.target, source)).sort((a, b) => b.target.length - a.target.length);
-    check(candidates.length > 0 && (candidates.length === 1 || candidates[0].target.length > candidates[1].target.length), "daemon-metadata-parent-ambiguous");
+    check(parentEvaluate(recorder, 21, () => parentLeaf(recorder, 1, parentCount(recorder, candidates.length) > 0) && parentLeaf(recorder, 2, (parentCount(recorder, candidates.length) === 1 || candidates[0].target.length > candidates[1].target.length))), "daemon-metadata-parent-ambiguous");
     const parent = candidates[0], matches = targetMounts.filter(row => row.target === `/etc/${name}`);
-    check(matches.length === 1, "daemon-metadata-target");
+    check(parentEvaluate(recorder, 22, () => parentLeaf(recorder, 1, parentCount(recorder, matches.length) === 1)), "daemon-metadata-target");
     // ext4/xfs expose the same resolved filesystem-relative dentry root in both
     // namespaces. Overlay/unknown mappings stop here. A symlink alias whose
     // resolved root differs cannot be certified by lexical normalization.
-    check(["ext4", "xfs"].includes(parent.fs), "daemon-metadata-filesystem-unqualified");
+    check(parentEvaluate(recorder, 23, () => parentLeaf(recorder, 1, ["ext4", "xfs"].includes(parent.fs))), "daemon-metadata-filesystem-unqualified");
     const target = matches[0], root = join(parent.root, relative(parent.target, source));
-    check(target.root === root && target.device === parent.device && target.fs === parent.fs && target.options.includes("ro"), "daemon-metadata-mount-identity");
+    check(parentEvaluate(recorder, 24, () => parentLeaf(recorder, 1, target.root === root) && parentLeaf(recorder, 2, target.device === parent.device) && parentLeaf(recorder, 3, target.fs === parent.fs) && parentLeaf(recorder, 4, target.options.includes("ro"))), "daemon-metadata-mount-identity");
     // Keep each namespace's IDs separately, including selected parent ancestry.
     result.push({ name, parent: candidates.map(mountTuple), target: mountTuple(target) });
   }
@@ -526,35 +559,39 @@ export async function validateEmptyMasks(rows, recorder, io = { open, opendir, r
 
 export function validateChildStatus(text, expected, recorder) {
   validateIdentity(parseIdentity(text, recorder), expected, true, recorder);
-  for (const name of ["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"]) initGuardCheck(new RegExp(`^${name}:\\s+0+$`, "m").test(text), "child-capability", recorder, "capabilities");
-  check(initGuardLeaf(/^NoNewPrivs:\s+1$/m.test(text), recorder, "nnp") && initGuardLeaf(/^Seccomp:\s+2$/m.test(text), recorder, "seccomp"), "child-security");
+  for (const name of ["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"]) { parentRole(recorder, name); initGuardCheck(parentEvaluate(recorder, 35, () => parentLeaf(recorder, 1, new RegExp(`^${name}:\\s+0+$`, "m").test(text))), "child-capability", recorder, "capabilities"); }
+  check(parentEvaluate(recorder, 36, () => parentLeaf(recorder, 1, initGuardLeaf(/^NoNewPrivs:\s+1$/m.test(text), recorder, "nnp")) && parentLeaf(recorder, 2, initGuardLeaf(/^Seccomp:\s+2$/m.test(text), recorder, "seccomp"))), "child-security");
 }
-async function readParentIdentity() { return parseIdentity(await readFile("/proc/self/status", "utf8")); }
-export async function processEvidence(pid, { read = readFile, link = readlink } = {}) {
-  check(Number.isSafeInteger(pid) && pid > 0, "process-id");
+async function readParentIdentity(recorder) { parentSource(recorder, "parent_status_read"); const status = await readFile("/proc/self/status", "utf8"); parentSource(recorder, "parent_identity"); return parseIdentity(status, recorder); }
+export async function processEvidence(pid, { read = readFile, link = readlink, recorder } = {}) {
+  parentSource(recorder, "target_stat");
+  check(parentEvaluate(recorder, 26, () => parentLeaf(recorder, 1, Number.isSafeInteger(pid)) && parentLeaf(recorder, 2, pid > 0)), "process-id");
   const prefix = `/proc/${pid}`, raw = await read(join(prefix, "stat"), "utf8"), fields = raw.slice(raw.lastIndexOf(")") + 2).split(" ");
-  check(/^\d+$/.test(fields[19]), "process-start");
-  return { pid, start: fields[19], parent: number(fields[1]), status: await read(join(prefix, "status"), "utf8"), uidMap: await read(join(prefix, "uid_map"), "utf8"), gidMap: await read(join(prefix, "gid_map"), "utf8"), namespaces: Object.fromEntries(await Promise.all(["pid", "net", "mnt", "user"].map(async name => [name, await link(join(prefix, "ns", name))]))), mounts: parseMounts(await read(join(prefix, "mountinfo"), "utf8")), cgroup: await read(join(prefix, "cgroup"), "utf8") };
+  parentSource(recorder, "target_start"); check(parentEvaluate(recorder, 27, () => parentLeaf(recorder, 1, /^\d+$/.test(fields[19]))), "process-start");
+  return { pid, start: fields[19], parent: (parentSource(recorder, "target_parent"), number(fields[1], recorder)), status: await (parentSource(recorder, "target_status"), read(join(prefix, "status"), "utf8")), uidMap: await (parentSource(recorder, "target_uid_map"), read(join(prefix, "uid_map"), "utf8")), gidMap: await (parentSource(recorder, "target_gid_map"), read(join(prefix, "gid_map"), "utf8")), namespaces: Object.fromEntries(await (parentSource(recorder, "target_namespace_group"), Promise.all(["pid", "net", "mnt", "user"].map(async name => [name, await link(join(prefix, "ns", name))])))), mounts: parseMounts(await (parentSource(recorder, "target_mount_read"), read(join(prefix, "mountinfo"), "utf8")), true, (parentSource(recorder, "target_mount_parse"), recorder)), cgroup: await (parentSource(recorder, "target_cgroup_read"), read(join(prefix, "cgroup"), "utf8")) };
 }
-export function validateTarget(target, parent, identity) {
-  validateChildStatus(target.status, identity); validateMapping(target.uidMap, identity.uid[0]); validateMapping(target.gidMap, identity.gid[0]);
-  check(target.namespaces.user === parent.user, "user-mapping-unqualified");
-  for (const name of ["pid", "net", "mnt"]) check(new RegExp(`^${name}:\\[\\d+\\]$`).test(target.namespaces[name]) && target.namespaces[name] !== parent[name], "private-namespace");
-  validateMounts(target.mounts); return target;
+export function validateTarget(target, parent, identity, recorder) {
+  parentSource(recorder, "target_validate");
+  validateChildStatus(target.status, identity, recorder); parentRole(recorder, "uid"); validateMapping(target.uidMap, identity.uid[0], recorder); parentRole(recorder, "gid"); validateMapping(target.gidMap, identity.gid[0], recorder);
+  check(parentEvaluate(recorder, 28, () => parentLeaf(recorder, 1, target.namespaces.user === parent.user)), "user-mapping-unqualified");
+  for (const name of ["pid", "net", "mnt"]) { parentRole(recorder, name); check(parentEvaluate(recorder, 29, () => parentLeaf(recorder, 1, new RegExp(`^${name}:\\[\\d+\\]$`).test(target.namespaces[name])) && parentLeaf(recorder, 2, target.namespaces[name] !== parent[name])), "private-namespace"); }
+  validateMounts(target.mounts, recorder); return target;
 }
-export function cgroupPath(text, cid) {
-  check(cidPattern.test(cid), "cgroup-cid"); const match = /^0::(\/[^\n]+)\n?$/.exec(text);
-  check(match && !match[1].split("/").includes("..") && match[1].split("/").some(part => part === cid || part === `docker-${cid}.scope`), "cgroup-custody");
+export function cgroupPath(text, cid, recorder) {
+  check(parentEvaluate(recorder, 30, () => parentLeaf(recorder, 1, cidPattern.test(cid))), "cgroup-cid"); const match = /^0::(\/[^\n]+)\n?$/.exec(text);
+  check(parentEvaluate(recorder, 31, () => parentLeaf(recorder, 1, match) && parentLeaf(recorder, 2, !match[1].split("/").includes("..")) && parentLeaf(recorder, 3, match[1].split("/").some(part => part === cid || part === `docker-${cid}.scope`))), "cgroup-custody");
   return "/sys/fs/cgroup" + match[1];
 }
-export function validateLimits(values) {
-  check(values.memory.trim() === "4294967296" && values.swap.trim() === "0" && values.pids.trim() === "128", "effective-cgroup-limit");
-  const cpu = values.cpu.trim().split(" "); check(cpu.length === 2 && number(cpu[0]) === 2 * number(cpu[1]) && number(cpu[1]) > 0, "effective-cpu-limit");
+export function validateLimits(values, recorder) {
+  check(parentEvaluate(recorder, 32, () => parentLeaf(recorder, 1, values.memory.trim() === "4294967296") && parentLeaf(recorder, 2, values.swap.trim() === "0") && parentLeaf(recorder, 3, values.pids.trim() === "128")), "effective-cgroup-limit");
+  const cpu = values.cpu.trim().split(" "); check(parentEvaluate(recorder, 33, () => parentLeaf(recorder, 1, cpu.length === 2) && parentLeaf(recorder, 2, number(cpu[0], recorder) === 2 * number(cpu[1], recorder)) && parentLeaf(recorder, 3, number(cpu[1], recorder) > 0)), "effective-cpu-limit");
 }
-async function bindCgroup(target, cid) {
-  const path = cgroupPath(target.cgroup, cid); check(await realpath(path) === path, "cgroup-realpath");
-  const inode = await stat(path), parent = await stat(dirname(path));
-  validateLimits(Object.fromEntries(await Promise.all([["memory", "memory.max"], ["swap", "memory.swap.max"], ["pids", "pids.max"], ["cpu", "cpu.max"]].map(async ([key, name]) => [key, await readFile(join(path, name), "utf8")]))));
+async function bindCgroup(target, cid, recorder) {
+  parentSource(recorder, "cgroup_path");
+  const path = cgroupPath(target.cgroup, cid, recorder); parentSource(recorder, "cgroup_realpath"); const resolvedPath = await realpath(path); check(parentEvaluate(recorder, 34, () => parentLeaf(recorder, 1, resolvedPath === path)), "cgroup-realpath");
+  const inode = await (parentSource(recorder, "cgroup_stat"), stat(path)), parent = await (parentSource(recorder, "cgroup_parent_stat"), stat(dirname(path)));
+  parentSource(recorder, "cgroup_limits_group");
+  validateLimits(Object.fromEntries(await Promise.all([["memory", "memory.max"], ["swap", "memory.swap.max"], ["pids", "pids.max"], ["cpu", "cpu.max"]].map(async ([key, name]) => [key, await readFile(join(path, name), "utf8")]))), (parentSource(recorder, "cgroup_limits"), recorder));
   return { path, dev: inode.dev, ino: inode.ino, parentDev: parent.dev, parentIno: parent.ino };
 }
 export async function retiredCgroup(bound, { read = readFile, statPath = stat, lstatPath = lstat } = {}) {
@@ -919,8 +956,8 @@ async function hostContainerRun(report) {
   const docker = (await report.step("docker_executable", () => fileIdentity("/usr/bin/docker"))).path;
   await report.step("daemon_socket", async () => check((await stat("/var/run/docker.sock")).isSocket() && ["/run/docker.sock", "/var/run/docker.sock"].includes(await realpath("/var/run/docker.sock")), "local-daemon-socket"));
   const runOriginal = (args, timeoutMs = 30000) => runOwnedProcess(docker, ["--host=unix:///var/run/docker.sock", ...args], { cwd: root, env, timeoutMs });
-  const run = async (args, timeoutMs = 30000) => { const result = await runOriginal(args, timeoutMs); requireProcessSuccess(result); return result; };
-  const inspect = async (type, id) => { const result = await run([type, "inspect", id]); const rows = JSON.parse(result.stdout); check(Array.isArray(rows) && rows.length === 1, "inspect-count"); return rows[0]; };
+  const run = async (args, timeoutMs = 30000, recorder) => { parentSource(recorder, "inspect_command"); const result = await runOriginal(args, timeoutMs); parentSource(recorder, "inspect_success"); requireProcessSuccess(result); return result; };
+  const inspect = async (type, id, recorder) => { const result = await run([type, "inspect", id], 30000, recorder); parentSource(recorder, "inspect_json"); const rows = JSON.parse(result.stdout); parentSource(recorder, "inspect_count"); check(parentEvaluate(recorder, 43, () => parentLeaf(recorder, 1, Array.isArray(rows)) && parentLeaf(recorder, 2, parentCount(recorder, rows.length) === 1)), "inspect-count"); return rows[0]; };
   let daemonRoot;
   await report.step("daemon", async () => {
     check((await readdir(env.DOCKER_CONFIG)).length === 0, "docker-config-not-empty");
@@ -940,9 +977,9 @@ async function hostContainerRun(report) {
   const image = await report.step("image", async () => validateImage(await inspect("image", imageId), { derived: true, identity, id: imageId, contextHash: context.contextHash }));
   check(image.Config.Labels?.["org.openclaw.edge.nonce"] === nonce, "image-invocation");
   const plan = { image: imageId, identity, imageEnv: image.Config.Env, nonce, contextHash: context.contextHash, nativeHash: hash(JSON.stringify(native)) };
-  const cidFile = join(root, "container-id"), failures = []; let cid, created, attached, projectAttach, waiting, bound, target, receipt, disposition = "retained";
-  const readOwned = async () => validateContainerInspect(await inspect("container", cid), plan, cid);
-  const recheckParent = async () => validateIdentity(await readParentIdentity(), identity);
+  const cidFile = join(root, "container-id"), failures = [], admissionReporting = []; let cid, created, attached, projectAttach, waiting, bound, target, receipt, disposition = "retained";
+  const readOwned = async recorder => validateContainerInspect(await inspect("container", cid, recorder), plan, cid, (parentSource(recorder, "inspect_validate"), recorder));
+  const recheckParent = async recorder => validateIdentity(await readParentIdentity(recorder), identity, false, recorder);
   const stopOwned = async () => {
     const stopErrors = [];
     try { const row = await readOwned(); if (row.State.Running) { try { await run(["stop", "--time=2", cid], 5000); } catch (error) { stopErrors.push(error); } } } catch (error) { stopErrors.push(error); }
@@ -964,19 +1001,25 @@ async function hostContainerRun(report) {
     });
     await report.step("ready", () => attached.ready);
     await report.step("admission", async () => {
-      await recheckParent(); const row = await readOwned(); check(row.State.Running && row.State.Pid > 1, "missing-live-init");
-      target = validateTarget(await processEvidence(row.State.Pid), parentNamespaces, identity);
-      bound = await bindCgroup(target, cid);
+      const recorder = createParentAdmissionLedger();
+      const project = (original, reason) => { try { const detail = recorder.finish(original, reason); if (detail) report.internal(detail); } catch (error) { recorder.errors.push(error); } };
+      try {
+      await recheckParent(recorder); const row = await readOwned(recorder); parentSource(recorder, "live_init"); check(parentEvaluate(recorder, 37, () => parentLeaf(recorder, 1, row.State.Running) && parentLeaf(recorder, 2, row.State.Pid > 1)), "missing-live-init");
+      target = validateTarget(await processEvidence(row.State.Pid, { recorder }), parentNamespaces, identity, recorder);
+      bound = await bindCgroup(target, cid, recorder);
       // Parent and target kernel mount tables correlate the daemon's exact
       // per-container metadata paths without privileged storage traversal.
-      check(await readlink("/proc/self/ns/mnt") === parentNamespaces.mnt, "parent-mount-namespace-drift");
-      const parentMounts = parseMounts(await readFile("/proc/self/mountinfo", "utf8"), false);
-      const metadata = validateMetadataMounts(row, target.mounts, parentMounts, daemonRoot, cid);
-      const again = await processEvidence(target.pid); check(again.start === target.start && same(again.namespaces, target.namespaces) && again.cgroup === target.cgroup, "init-identity-drift"); validateTarget(again, parentNamespaces, identity);
-      validateMountFreshness(target.mounts, again.mounts);
-      check(same(bound, await bindCgroup(again, cid)), "init-cgroup-drift");
-      check(same(metadata, validateMetadataMounts(row, again.mounts, parseMounts(await readFile("/proc/self/mountinfo", "utf8"), false), daemonRoot, cid)), "daemon-metadata-drift");
-      check(await readlink("/proc/self/ns/mnt") === parentNamespaces.mnt, "parent-mount-namespace-drift");
+      parentSource(recorder, "parent_namespace"); const currentNamespace = await readlink("/proc/self/ns/mnt"); check(parentEvaluate(recorder, 38, () => parentLeaf(recorder, 1, currentNamespace === parentNamespaces.mnt)), "parent-mount-namespace-drift");
+      parentSource(recorder, "parent_mount_read"); const parentMounts = parseMounts(await readFile("/proc/self/mountinfo", "utf8"), false, (parentSource(recorder, "parent_mount_parse"), recorder));
+      parentSource(recorder, "metadata"); const metadata = validateMetadataMounts(row, target.mounts, parentMounts, daemonRoot, cid, recorder);
+      parentRecord(recorder, "visit", 2); const again = await processEvidence(target.pid, { recorder }); parentSource(recorder, "identity_freshness"); check(parentEvaluate(recorder, 39, () => parentLeaf(recorder, 1, again.start === target.start) && parentLeaf(recorder, 2, same(again.namespaces, target.namespaces)) && parentLeaf(recorder, 3, again.cgroup === target.cgroup)), "init-identity-drift"); validateTarget(again, parentNamespaces, identity, recorder);
+      parentSource(recorder, "mount_freshness"); validateMountFreshness(target.mounts, again.mounts, recorder);
+      const rebound = await bindCgroup(again, cid, recorder); parentSource(recorder, "cgroup_freshness"); check(parentEvaluate(recorder, 40, () => parentLeaf(recorder, 1, same(bound, rebound))), "init-cgroup-drift");
+      parentSource(recorder, "parent_mount_read"); const repeatedParent = parseMounts(await readFile("/proc/self/mountinfo", "utf8"), false, (parentSource(recorder, "parent_mount_parse"), recorder)); parentSource(recorder, "metadata"); const repeatedMetadata = validateMetadataMounts(row, again.mounts, repeatedParent, daemonRoot, cid, recorder); parentSource(recorder, "metadata_freshness"); check(parentEvaluate(recorder, 41, () => parentLeaf(recorder, 1, same(metadata, repeatedMetadata))), "daemon-metadata-drift");
+      parentSource(recorder, "parent_namespace"); const finalNamespace = await readlink("/proc/self/ns/mnt"); check(parentEvaluate(recorder, 42, () => parentLeaf(recorder, 1, finalNamespace === parentNamespaces.mnt)), "parent-mount-namespace-drift");
+      } catch (error) { project(true, error); admissionReporting.push(...recorder.errors); throw error; }
+      if (recorder.errors.length) { project(false, recorder.errors[0]); raiseContainerFailures(recorder.errors); }
+      recorder.seal();
     });
     // READY keeps init alive before compilation. Starting wait only after the
     // running PID was admitted avoids observing an as-yet-unstarted container.
@@ -992,7 +1035,7 @@ async function hostContainerRun(report) {
       const cgroup = await report.step("cgroup", () => retiredCgroup(bound));
       validateTerminal({ wait: waitResult, attached: attachResult, inspect: terminal, cgroup, receipt });
     });
-  } catch (error) { failures.push(error); }
+  } catch (error) { failures.push(error, ...admissionReporting); }
   // Every acquired resource gets an independent cleanup attempt. A cleanup
   // outcome never supplies the passing terminal/cgroup proof above.
   if (cid && created) {

@@ -784,7 +784,43 @@ export function createInitDiagnostics(writer = text => {
 }
 const containerDiagnosticSignals = [null, "SIGINT", "SIGTERM", "SIGKILL", "SIGABRT", "SIGSEGV", "SIGPIPE", "SIGBUS", "SIGSYS"];
 const processDiagnosticFields = ["v", "phase", "state", "defined", "available", "exit", "signal", "closed", "timedOut", "interrupted", "errors", "undefinedErrors", "spawnErrors", "undefinedSpawnErrors", "stdoutComplete", "stderrComplete"];
+export const parentAdmissionSources = Object.freeze(["parent_status_read", "parent_identity", "inspect_command", "inspect_success", "inspect_json", "inspect_count", "inspect_validate", "live_init", "target_stat", "target_start", "target_parent", "target_status", "target_uid_map", "target_gid_map", "target_namespace_group", "target_mount_read", "target_mount_parse", "target_cgroup_read", "target_validate", "cgroup_path", "cgroup_realpath", "cgroup_stat", "cgroup_parent_stat", "cgroup_limits_group", "cgroup_limits", "parent_namespace", "parent_mount_read", "parent_mount_parse", "metadata", "identity_freshness", "mount_freshness", "cgroup_freshness", "metadata_freshness"]);
+export const parentAdmissionRoles = Object.freeze(["Groups", "Uid", "Gid", "uid", "gid", "pid", "net", "mnt", "CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb", "ResolvConfPath", "HostnamePath", "HostsPath", "identity", "Binds", "VolumesFrom", "Devices", "DeviceRequests", "GroupAdd", "PortBindings", "Sysctls"]);
+export const parentAdmissionPredicates = Object.freeze([["status-capacity", 2, [[1, 0], [3, 1]], [[0, 0], [1, 1]]], ["status-field", 1, [[1, 0]], [[0, 0]]], ["identity-tuple", 3, [[1, 0], [3, 1], [7, 3]], [[0, 0], [1, 1], [3, 3]]], ["identity-groups", 1, [[1, 0]], [[0, 0]]], ["identity-drift", 2, [[1, 0], [3, 1]], [[0, 0], [1, 1]]], ["groups-drift", 1, [[1, 0]], [[0, 0]]], ["host-id-mapping", 5, [[1, 0], [3, 1], [7, 3], [15, 7], [31, 15]], [[0, 0], [1, 1], [3, 3], [7, 7], [15, 15]]], ["container-custody", 5, [[1, 0], [3, 1], [7, 3], [15, 7], [31, 15]], [[0, 0], [1, 1], [3, 3], [7, 7], [15, 15]]], ["container-isolation", 6, [[1, 0], [3, 1], [7, 3], [15, 7], [31, 15], [63, 31]], [[0, 0], [1, 1], [3, 3], [7, 7], [15, 15], [31, 31]]], ["container-capabilities", 3, [[1, 0], [3, 1], [7, 3]], [[0, 0], [1, 1], [3, 3]]], ["container-limits", 4, [[1, 0], [3, 1], [7, 3], [15, 7]], [[0, 0], [1, 1], [3, 3], [7, 7]]], ["container-extra-input", 2, [[3, 0]], [[0, 0], [1, 0]]], ["container-extra-input", 2, [[3, 0]], [[0, 0], [1, 0]]], ["container-port", 2, [[3, 0]], [[0, 0], [1, 0]]], ["container-mounts", 2, [[1, 0], [3, 1]], [[0, 0], [1, 1]]], ["container-tmpfs", 1, [[1, 0]], [[0, 0]]], ["container-command", 4, [[1, 0], [3, 1], [7, 3], [15, 7]], [[0, 0], [1, 1], [3, 3], [7, 7]]], ["container-env", 3, [[1, 0], [3, 1], [7, 3]], [[0, 0], [1, 1], [3, 3]]], ["daemon-root-identity", 1, [[1, 0]], [[0, 0]]], ["daemon-metadata-custody", 1, [[1, 0]], [[0, 0]]], ["daemon-metadata-parent-ambiguous", 2, [[1, 0], [3, 1]], [[0, 0], [1, 1]]], ["daemon-metadata-target", 1, [[1, 0]], [[0, 0]]], ["daemon-metadata-filesystem-unqualified", 1, [[1, 0]], [[0, 0]]], ["daemon-metadata-mount-identity", 4, [[1, 0], [3, 1], [7, 3], [15, 7]], [[0, 0], [1, 1], [3, 3], [7, 7]]], ["mount-observation-drift", 1, [[1, 0]], [[0, 0]]], ["process-id", 2, [[1, 0], [3, 1]], [[0, 0], [1, 1]]], ["process-start", 1, [[1, 0]], [[0, 0]]], ["user-mapping-unqualified", 1, [[1, 0]], [[0, 0]]], ["private-namespace", 2, [[1, 0], [3, 1]], [[0, 0], [1, 1]]], ["cgroup-cid", 1, [[1, 0]], [[0, 0]]], ["cgroup-custody", 3, [[1, 0], [3, 1], [7, 3]], [[0, 0], [1, 1], [3, 3]]], ["effective-cgroup-limit", 3, [[1, 0], [3, 1], [7, 3]], [[0, 0], [1, 1], [3, 3]]], ["effective-cpu-limit", 3, [[1, 0], [3, 1], [7, 3]], [[0, 0], [1, 1], [3, 3]]], ["cgroup-realpath", 1, [[1, 0]], [[0, 0]]], ["child-capability", 1, [[1, 0]], [[0, 0]]], ["child-security", 2, [[1, 0], [3, 1]], [[0, 0], [1, 1]]], ["missing-live-init", 2, [[1, 0], [3, 1]], [[0, 0], [1, 1]]], ["parent-mount-namespace-drift", 1, [[1, 0]], [[0, 0]]], ["init-identity-drift", 3, [[1, 0], [3, 1], [7, 3]], [[0, 0], [1, 1], [3, 3]]], ["init-cgroup-drift", 1, [[1, 0]], [[0, 0]]], ["daemon-metadata-drift", 1, [[1, 0]], [[0, 0]]], ["parent-mount-namespace-drift", 1, [[1, 0]], [[0, 0]]], ["inspect-count", 2, [[1, 0], [3, 1]], [[0, 0], [1, 1]]], ["canonical-number", 3, [[1, 0], [3, 1], [7, 3]], [[0, 0], [1, 1], [3, 3]]]]);
+export function validateParentAdmission(value) {
+  const fields = ["v", "phase", "state", "defined", "exit", "signal", "detail", ...(Object.hasOwn(value, "m") ? ["m"] : [])];
+  if (Object.getOwnPropertyNames(value).sort().join() !== [...fields].sort().join()) refuse("parent-admission-keys");
+  const row = Object.fromEntries(fields.map(key => [key, ownData(value, key)]));
+  if (row.v !== 8 || row.phase !== "admission" || row.state !== "rejected" || typeof row.defined !== "boolean" || row.exit !== null || row.signal !== null) refuse("parent-admission-outcome");
+  const tuple = row.detail;
+  if (!Array.isArray(tuple) || Object.getOwnPropertyNames(tuple).join() !== [...Array(11).keys(), "length"].join()) refuse("parent-admission-tuple");
+  row.detail = Array.from({length:11}, (_,i) => ownData(tuple,String(i)));
+  const [version,source,visit,kind,predicate,leaf,role,seen,passed,count,saturation] = row.detail;
+  if (version !== 1 || !Number.isInteger(source) || source < 1 || source > parentAdmissionSources.length || ![1,2].includes(visit) || ![0,1,2,3].includes(kind) || !Number.isInteger(predicate) || predicate < 0 || predicate > parentAdmissionPredicates.length || !Number.isInteger(role) || role < 0 || role > parentAdmissionRoles.length || !Number.isInteger(seen) || !Number.isInteger(passed) || seen < 0 || passed < 0 || (passed & seen) !== passed) refuse("parent-admission-value");
+  const spec = predicate ? parentAdmissionPredicates[predicate - 1] : null;
+  const sources = [[2, 19], [2, 19], [2, 19], [2, 19], [2, 19], [2, 19], [19], [7], [7], [7], [7], [7], [7], [7], [7], [7], [7], [7], [29], [29], [29], [29], [29], [29], [31], [9], [10], [19], [19], [20], [20], [25], [25], [21], [19], [19], [8], [26], [30], [32], [33], [26], [6], [2, 11, 19, 25]];
+  if (predicate && !sources[predicate - 1].includes(source)) refuse("parent-admission-source");
+  if (kind === 1 && predicate) {
+    if (!Number.isInteger(leaf) || leaf < 1 || leaf > spec[1] || !(seen & 2 ** (leaf - 1)) || passed & 2 ** (leaf - 1) || !spec[2].some(([s,p]) => s === seen && p === passed)) refuse("parent-admission-mask");
+  } else if (leaf !== 0 || (kind !== 2 && (predicate || seen || passed))) refuse("parent-admission-mask");
+  if (kind === 2 && (!spec || !spec[3].some(([s,p]) => s === seen && p === passed))) refuse("parent-admission-evaluation");
+  if (!(count === null || Number.isInteger(count) && count >= 0 && count <= 4095) || ![0,1].includes(saturation) || saturation && count !== 4095 || count !== null && ![1, 2, 3, 21, 22, 43].includes(predicate)) refuse("parent-admission-count");
+  if (visit === 2 && [1,2,3,4,5,6,7,8].includes(source)) refuse("parent-admission-visit");
+  if (count !== null && !saturation) {
+    const relation = (bit, expected) => { if (seen & bit && Boolean(passed & bit) !== expected) refuse("parent-admission-count-relation"); };
+    if (predicate === 1) relation(2, count <= 65536);
+    if ([2,22].includes(predicate)) relation(1, count === 1);
+    if (predicate === 3) relation(1, count === 4);
+    if (predicate === 21) { relation(1, count > 0); if (count === 1) relation(2, true); }
+    if (predicate === 43) relation(2, count === 1);
+  }
+  if (Object.hasOwn(row,"m")) { if (![17,19,28,29,31].includes(source) || kind !== 1 || predicate) refuse("parent-admission-mount"); row.m = validateMountDetail(row.m, row.m[1] >= 10 && row.m[1] <= 13 ? "mount_parse" : "mount_validate"); }
+  else if (kind === 1 && !predicate) refuse("parent-admission-missing-predicate");
+  return row;
+}
+
 export function validateContainerDiagnostic(value) {
+  if (value && typeof value === "object" && ownData(value, "v") === 8) return validateParentAdmission(value);
   if (value && typeof value === "object" && ownData(value, "v") === 6) {
     const fields = ["v", "phase", "state", "exit", "signal", "closed", "timedOut", "interrupted", "errors", "undefinedErrors", "supervisor", "ready", "first", "branches", "capture"];
     if (Object.getOwnPropertyNames(value).sort().join() !== [...fields].sort().join()) refuse("attach-summary-keys");
@@ -888,10 +924,12 @@ export function containerProcessDiagnostic(result, available = true, reason) {
     stdoutComplete: field(field(summary, "stdout"), "complete"), stderrComplete: field(field(summary, "stderr"), "complete") });
 }
 export function emitContainerFailure(records, writer = line => process.stdout.write(line)) {
-  const rows = records.map(validateContainerDiagnostic), unique = new Map();
+  const validated = records.map(validateContainerDiagnostic), detailed = validated.filter(row => row.v === 8);
+  if (detailed.length > 1) refuse("parent-admission-duplicate");
+  const rows = validated.filter(row => !(detailed.length && row.phase === "admission" && row.v === 2)), unique = new Map();
   const rejected = rows.filter(row => row.state === "rejected");
   // Reserve the first actual failure and original build outcome before context.
-  const reserved = ["ready", "attach_process", "init_prerequisite", "retirement"].map(phase =>
+  const reserved = ["admission", "ready", "attach_process", "init_prerequisite", "retirement"].map(phase =>
     rows.findLast(row => row.phase === phase && row.state === "rejected") ?? (["attach_process", "init_prerequisite"].includes(phase) ? rows.findLast(row => row.phase === phase) : undefined),
   ).filter(Boolean).concat(rows.filter(row => [3, 4, 5].includes(row.v)));
   for (const row of [...rejected.slice(0, 1), ...reserved, ...rejected.slice(1), ...rows.toReversed()]) if (!unique.has(row.phase)) unique.set(row.phase, row);

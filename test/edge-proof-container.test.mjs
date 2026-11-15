@@ -11,7 +11,7 @@ import { dirname, join, relative } from "node:path";
 import { containerContract, harnessInputs, installInputs, parseIdentity, validateIdentity, validateMapping, validateImage, dockerEnvironment, containerEnvironment, createArguments, validateContainerInspect, parseControl, validateTerminal, validateNativeIdentity, parseImageBuildReceipt, parseImageBuildStages, parseNativePrepareStages, observeImageBuild, parseContainerReceipt, parseInitPrerequisites, createAttachProjection, runInitPrerequisites, createInitGuardLedger, initGuardLeaf, createMountObservation, validateEmptyMasks, validateMaskCompletion, parseMounts, validateMountFreshness, validateMounts, validateMetadataMounts, validateChildStatus, validateTarget, cgroupPath, validateLimits, attachContainer, processEvidence, retiredCgroup, raiseContainerFailures, validateContainerDiagnostic, emitContainerFailure } from "../scripts/edge-proof-container.mjs";
 import { frozenGitEnvironment, validateGitExecutable, frozenSource } from "../scripts/edge-proof-build.mjs";
 import { edgeProof } from "../scripts/edge-proof-profile.mjs";
-import { launchCli, createContainerDiagnostics, containerProcessDiagnostic, imageBuildStages, runOwnedProcess, nativePrepareStages, createNativePrepareDiagnostics, enumerationOperations, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, initGuardTags, initSourcePhases, validateInitDetail, mountPredicates, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail } from "../scripts/edge-proof.mjs";
+import { launchCli, createContainerDiagnostics, containerProcessDiagnostic, imageBuildStages, runOwnedProcess, nativePrepareStages, createNativePrepareDiagnostics, enumerationOperations, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, initGuardTags, initSourcePhases, validateInitDetail, mountPredicates, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission } from "../scripts/edge-proof.mjs";
 
 const hex = "a".repeat(64), other = "b".repeat(64), imageId = "sha256:" + hex;
 const identity = { uid: [501, 501, 501, 501], gid: [20, 20, 20, 20], groups: [20, 30] };
@@ -1198,10 +1198,10 @@ async function initGuardFactory(overrides = {}) {
   const runtime = source.slice(source.indexOf("async function validateContainerRuntime("), source.indexOf("export function parseImageBuildReceipt("));
   const status = source.slice(source.indexOf("export function parseIdentity("), source.indexOf("export function validateMapping(")).replaceAll("export ", "") + source.slice(source.indexOf("export function validateChildStatus("), source.indexOf("async function readParentIdentity(")).replaceAll("export ", "");
   const mounts = source.slice(source.indexOf("export function createMountObservation("), source.indexOf("export function validateChildStatus(")).replaceAll("export ", "");
-  const helpers = source.slice(source.indexOf("export function createInitGuardLedger("), source.indexOf("const own =")).replaceAll("export ", "");
+  const helpers = (source.slice(source.indexOf("export function createInitGuardLedger("), source.indexOf("const own =")) + source.slice(source.indexOf("export function createParentAdmissionLedger("), source.indexOf("const number ="))).replaceAll("export ", "");
   const declarations = source.slice(source.indexOf("const same ="), source.indexOf("const hashPattern =")) + source.slice(source.indexOf("const number ="), source.indexOf("export function parseIdentity("));
   const goodStatus = "Groups:\t20\nUid:\t501 501 501 501\nGid:\t20 20 20 20\n" + ["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"].map(k => k + ":\t0000\n").join("") + "NoNewPrivs:\t1\nSeccomp:\t2\n";
-  const calls = [], bindings = { initGuardTags, initSourcePhases, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, raiseContainerFailures, process: { platform: "linux", arch: "x64", version: "v24.22.1", versions: { modules: "137" }, pid: 1, env: {} },
+  const calls = [], bindings = { parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission, initGuardTags, initSourcePhases, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, raiseContainerFailures, process: { platform: "linux", arch: "x64", version: "v24.22.1", versions: { modules: "137" }, pid: 1, env: {} },
     readFile: async path => { calls.push(path); if (path.endsWith("status")) return goodStatus; if (path.endsWith("mountinfo")) return ""; return "{}"; }, namespaceEvidence: async () => ({ interfaces: ["lo"], routes4: [], routes6: [] }), containerEnvironment: () => ({}),
     validateNativeIdentity: value => value, qualifyImageInputs: async () => ({}), containerContract: { input: "/input" }, join: (...parts) => parts.join("/"), ...overrides };
   const api = new Function(...Object.keys(bindings), declarations + helpers + status + mounts + runtime + "return { validateContainerRuntime, nativeReceipt, validateChildStatus, parseIdentity, validateIdentity, parseMounts, validateMounts, mountTable, canonicalMountPath, decodeMountPath, createMountObservation, validateEmptyMasks, validateMaskCompletion, createInitGuardLedger, initGuardLeaf }; ")(...Object.values(bindings));
@@ -1571,6 +1571,94 @@ test("empty gate retains asynchronous directory rejection and synchronous anchor
     assert.equal(output.length, 10); assert.ok(output.every(line => Buffer.byteLength(line) <= 768)); assert.ok(Buffer.byteLength(output.join("")) <= 8192);
     const packet = output.map(line => JSON.parse(line.slice(line.indexOf("::", 2) + 2).trimEnd()));
     assert.deepEqual(packet.find(row => row.phase === "init_prerequisite").detail, detail); mixedClosePackets.push(packet);
+  }
+});
+async function parentAdmissionFactory(overrides = {}) {
+  const source = await readFile(new URL("../scripts/edge-proof-container.mjs", import.meta.url), "utf8");
+  const cut = (a,b) => source.slice(source.indexOf(a),source.indexOf(b)).replaceAll("export ", "");
+  const code = cut("const hash =", "export function parseIdentity(") + cut("export function createInitGuardLedger(", "const own =") + cut("export function parseIdentity(", "export function validateImage(") + cut("export function createArguments(", "export function parseControl(") + cut("export function createMountObservation(", "export async function retiredCgroup(");
+  const contractSource = cut("export const containerContract =", "export const harnessInputs =");
+  const bindings = { createHash, join, dirname, relative, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission, validateMountDetail, validateMaskDetail, initGuardTags, initSourcePhases, mountTargets, mountFilesystems,
+    readFile: async () => { throw undefined; }, readlink: async () => { throw undefined; }, realpath: async () => { throw undefined; }, stat: async () => { throw undefined; }, ...overrides };
+  return new Function(...Object.keys(bindings), contractSource + code + ";return {createParentAdmissionLedger,parentSource,parentRole,parentEvaluate,parentLeaf,parentCount,parseIdentity,validateIdentity,validateMapping,validateContainerInspect,validateTarget,processEvidence,validateLimits,bindCgroup,validateMetadataMounts,validateMountFreshness};")(...Object.values(bindings));
+}
+const parentAdmissionPackets = [];
+test("parent admission actual predicates preserve short circuit getters original throws and fixed first evidence", async () => {
+  const api = await parentAdmissionFactory();
+  const ledger = api.createParentAdmissionLedger(); ledger.enter("cgroup_limits"); const reads=[];
+  const values = { get memory(){reads.push("memory");return "bad";}, get swap(){throw new Error("unreached");}, get pids(){throw new Error("unreached");} };
+  assert.throws(()=>api.validateLimits(values,ledger)); assert.deepEqual(reads,["memory"]);
+  const detail=ledger.finish(true,undefined); assert.equal(detail.defined,false); assert.deepEqual(detail.detail.slice(3,9),[1,32,1,0,1,0]);
+  ledger.enter("metadata"); ledger.begin(1); assert.equal(ledger.finish(true,{}),null); assert.equal(detail.detail[1],parentAdmissionSources.indexOf("cgroup_limits")+1);
+  const broken=api.createParentAdmissionLedger();broken.enter("cgroup_limits");let caught=false;
+  try{api.validateLimits({get memory(){throw undefined;}},broken);}catch(e){caught=true;assert.equal(e,undefined);}assert.equal(caught,true);
+  assert.deepEqual(broken.finish(true,undefined).detail.slice(3,9),[2,32,0,0,0,0]);
+  const mapping=api.createParentAdmissionLedger();mapping.enter("target_validate");mapping.role("uid");assert.throws(()=>api.validateMapping("1 0 4294967295",501,mapping));assert.equal(mapping.finish(true,{}).detail[4],7);
+  const groups=api.createParentAdmissionLedger();groups.enter("parent_identity");assert.throws(()=>api.parseIdentity("Groups:\t20 20\nUid:\t501 501 501 501\nGid:\t20 20 20 20\n",groups));assert.equal(groups.finish(true,{}).detail[4],4);
+  const reportFailure=api.createParentAdmissionLedger();reportFailure.enter("cgroup_limits");reportFailure.leaf=()=>{throw undefined;};api.validateLimits({memory:"4294967296",swap:"0",pids:"128",cpu:"200000 100000"},reportFailure);assert.ok(reportFailure.errors.length);assert.ok(reportFailure.errors.every(e=>e===undefined));
+});
+test("parent admission actual metadata ambiguity captures bounded counts and original comparison result", async () => {
+  const api=await parentAdmissionFactory(), target=mounts(), root="/var/lib/docker";
+  const inspect={ResolvConfPath:`${root}/containers/${hex}/resolv.conf`,HostnamePath:`${root}/containers/${hex}/hostname`,HostsPath:`${root}/containers/${hex}/hosts`};
+  const parent=[mount(1,0,"/","ext4","8:1",["rw"])];
+  for(const r of target.filter(r=>r.target.startsWith("/etc/")))r.root=`${root}/containers/${hex}/${r.target.slice(5)}`;
+  const ledger=api.createParentAdmissionLedger();ledger.enter("metadata");const valid=api.validateMetadataMounts(inspect,target,parent,root,hex,ledger);assert.equal(valid.length,3);assert.deepEqual(ledger.errors,[]);
+  const wrong=api.createParentAdmissionLedger();wrong.enter("metadata");wrong.visit(2);assert.throws(()=>api.validateMetadataMounts({...inspect,HostsPath:"/foreign"},target,parent,root,hex,wrong));const row=wrong.finish(true,{});assert.equal(row.detail[2],2);assert.equal(row.detail[4],20);assert.equal(row.detail[6],parentAdmissionRoles.indexOf("HostsPath")+1);
+  const ambiguous=api.createParentAdmissionLedger();ambiguous.enter("metadata");assert.throws(()=>api.validateMetadataMounts(inspect,target,[...parent,{...parent[0],id:2}],root,hex,ambiguous));const duplicate=ambiguous.finish(true,{});assert.ok(duplicate.m);assert.equal(duplicate.m[1],9);
+  const saturation=api.createParentAdmissionLedger();saturation.enter("metadata");saturation.begin(22);saturation.count(5000);saturation.leaf(1,false);saturation.result(false);const saturated=saturation.finish(true,{});assert.deepEqual(saturated.detail.slice(9),[4095,1]);assert.throws(()=>validateParentAdmission({...saturated,detail:[...saturated.detail.slice(0,9),4094,1]}));
+});
+test("parent admission original process evidence preserves sequential reads and parallel group ambiguity", async () => {
+  const api=await parentAdmissionFactory();
+  for(const failAt of ["stat","status","uid_map","gid_map","ns","mountinfo","cgroup"]) {
+    const ledger=api.createParentAdmissionLedger(), calls=[];ledger.enter("target_stat");let caught=false;
+    const fields=Array(20).fill("0");fields[1]="1";fields[19]="123";
+    const read=async path=>{const key=path.split("/").at(-1);calls.push(key);if(key===failAt)throw undefined;if(key==="stat")return "123 (init) "+fields.join(" ");if(key==="mountinfo")return mounts().map(r=>`${r.id} ${r.parentId} ${r.device} ${r.root} ${r.target} ${r.options.join(",")} - ${r.fs} none ${r.superOptions.join(",")}`).join("\n")+"\n";return "0";};
+    const link=async path=>{calls.push("ns:"+path.split("/").at(-1));if(failAt==="ns")throw undefined;return "ns:[1]";};
+    try{await api.processEvidence(123,{read,link,recorder:ledger});}catch(e){caught=true;assert.equal(e,undefined);}assert.equal(caught,true);
+    const row=ledger.finish(true,undefined);assert.equal(row.defined,false);assert.equal(row.detail[3],0);
+    if(failAt==="ns"){assert.deepEqual(calls.slice(-4),["ns:pid","ns:net","ns:mnt","ns:user"]);assert.equal(parentAdmissionSources[row.detail[1]-1],"target_namespace_group");}
+    assert.equal(calls[0],"stat");
+  }
+});
+test("parent admission closed tuple formatter reserves originals and refuses foreign contradictory evidence", async () => {
+  const api=await parentAdmissionFactory(), ledger=api.createParentAdmissionLedger();ledger.enter("cgroup_limits");assert.throws(()=>api.validateLimits({memory:"bad"},ledger));const detail=ledger.finish(true,undefined);
+  const report=createContainerDiagnostics();report.mark("admission","rejected",undefined);report.internal(detail);report.mark("entry","rejected",undefined);
+  const captured=await attachWithFrames(initReady());createAttachProjection(captured.h.attached,captured.binding,report)(captured.h.attached.result);
+  report.mark("retirement","rejected",undefined);
+  for(const phase of ["dispatch","image","base","create","attach","ready","cwd","temp","environment"])report.mark(phase,"fulfilled");
+  const lines=[];emitContainerFailure(report.records,line=>lines.push(line));assert.equal(lines.length,10);assert.ok(lines.every(line=>Buffer.byteLength(line)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);
+  const packet=lines.map(line=>JSON.parse(line.slice(line.indexOf("::",2)+2).trimEnd()));assert.deepEqual(packet.find(r=>r.phase==="admission"),detail);parentAdmissionPackets.push(packet);
+  for(const mutate of [r=>r.detail[0]=2,r=>r.detail[1]=1,r=>r.detail[2]=3,r=>r.detail[3]=0,r=>r.detail[4]=999,r=>r.detail[5]=0,r=>r.detail[7]=255,r=>r.detail[8]=1,r=>r.detail[9]=99999,r=>r.state="fulfilled",r=>r.defined=null]){const bad=structuredClone(detail);mutate(bad);assert.throws(()=>validateParentAdmission(bad));}
+  assert.throws(()=>emitContainerFailure([...report.records,detail],()=>{}));
+  const hostile=[...detail.detail];let touched=false;Object.defineProperty(hostile,"7",{get(){touched=true;throw undefined;}});assert.throws(()=>validateParentAdmission({...detail,detail:hostile}));assert.equal(touched,false);
+});
+test("parent admission actual callback rejects each original boundary and reporter failure before permit", async () => {
+  const api=await parentAdmissionFactory(), source=await readFile(new URL("../scripts/edge-proof-container.mjs",import.meta.url),"utf8");
+  const start=source.indexOf('    await report.step("admission", async () => {'), end=source.indexOf("\n    // READY keeps init",start), callback=source.slice(start,end);
+  const parentNamespaces={pid:"pid:[1]",net:"net:[1]",mnt:"mnt:[1]",user:"user:[1]"}, root="/var/lib/docker", targetMounts=mounts();
+  for(const r of targetMounts.filter(r=>r.target.startsWith("/etc/")))r.root=`${root}/containers/${hex}/${r.target.slice(5)}`;
+  const metadata={ResolvConfPath:`${root}/containers/${hex}/resolv.conf`,HostnamePath:`${root}/containers/${hex}/hostname`,HostsPath:`${root}/containers/${hex}/hosts`};
+  const parentRows=[mount(1,0,"/","ext4","8:1",["rw"])], parentText=parentRows.map(r=>`${r.id} ${r.parentId} ${r.device} ${r.root} ${r.target} ${r.options.join(",")} - ${r.fs} none ${r.superOptions.join(",")}`).join("\n")+"\n";
+  const goodStatus="Groups:\t20\nUid:\t501 501 501 501\nGid:\t20 20 20 20\n"+["CapInh","CapPrm","CapEff","CapBnd","CapAmb"].map(n=>n+":\t0000\n").join("")+"NoNewPrivs:\t1\nSeccomp:\t2\n";
+  const target={pid:123,start:"123",status:goodStatus,uidMap:"0 0 4294967295",gidMap:"0 0 4294967295",namespaces:{pid:"pid:[2]",net:"net:[2]",mnt:"mnt:[2]",user:"user:[1]"},mounts:targetMounts,cgroup:`0::/docker/${hex}\n`};
+  let baseline;
+  for(const stop of [0,...Array.from({length:12},(_,i)=>i+1),"report"]) {
+    const calls=[], reporting=[], report=createContainerDiagnostics();let permits=0, caught=false, reason;
+    const record=(name,args,value)=>{calls.push({name,args});if(calls.length===stop)throw undefined;return value;};
+    const ledgerFactory=()=>{const l=api.createParentAdmissionLedger();if(stop==="report")l.enter=()=>{throw undefined;};return l;};
+    const bindings={raiseContainerFailures,createParentAdmissionLedger:ledgerFactory,parentSource:api.parentSource,parentRecord:(l,m,...a)=>{try{l[m](...a);}catch(e){l.errors.push(e);}},parentEvaluate:api.parentEvaluate,parentLeaf:api.parentLeaf,check:(v)=>{if(!v)throw undefined;},report,admissionReporting:reporting,identity,parentNamespaces,cid:hex,daemonRoot:root,
+      recheckParent:async l=>{api.parentSource(l,"parent_identity");return record("parent",[],identity);},readOwned:async l=>{api.parentSource(l,"inspect_validate");return record("inspect",[],{...metadata,State:{Running:true,Pid:123}});},
+      processEvidence:async(pid,{recorder})=>{api.parentSource(recorder,"target_stat");return record("process",[pid],target);},validateTarget:api.validateTarget,
+      bindCgroup:async(t,cid,l)=>{api.parentSource(l,"cgroup_path");return record("cgroup",[t,cid],{dev:1,ino:2});},
+      readlink:async path=>record("namespace",[path],parentNamespaces.mnt),readFile:async(...args)=>record("mounts",args,parentText),
+      parseMounts:(...args)=>record("parse",args.slice(1,2),mountTableForParent(args[0])),validateMetadataMounts:api.validateMetadataMounts,validateMountFreshness:api.validateMountFreshness,same:(a,b)=>JSON.stringify(a)===JSON.stringify(b)};
+    function mountTableForParent(){return structuredClone(parentRows);}
+    const run=new Function(...Object.keys(bindings),'return async () => { let target,bound; '+callback+'; return {target,bound}; };')(...Object.values(bindings));
+    try{await run();permits++;}catch(e){caught=true;reason=e;}
+    if(stop===0){assert.equal(caught,false);assert.equal(permits,1);baseline=calls;assert.equal(calls.length,12);}
+    else{assert.equal(caught,true);assert.equal(permits,0);if(stop!=="report"){assert.equal(reason,undefined);assert.deepEqual(calls,baseline.slice(0,stop));}else assert.ok(reason===undefined||reason instanceof AggregateError);}
+    assert.ok(report.records.some(r=>r.phase==="admission"));
+    if(stop!==0&&stop!=="report"){const detailed=report.records.find(r=>r.v===8);assert.ok(detailed);assert.equal(detailed.defined,false);validateParentAdmission(detailed);}
   }
 });
 // END attach diagnostic pure tests.
