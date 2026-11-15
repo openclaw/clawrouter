@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Keep Edge script-test extraction and inert control bindings aligned with the current coordinator and census interfaces; exercise the frozen Git seam with explicit fake data rather than undeclared checkout history. Production privacy, native ownership, and retirement gates are unchanged.
+
 - Distinguish an exactly owned, settled metadata read and its derived rejection from native HTTP/1 fixture retirement failures, preserving raw outcomes, permanent ownership seals and independent producer and SQLite checks without claiming the error cause.
 
 - Add a versioned, complete one-to-four-operation retirement diagnostic census and failure-preserving producer/accounting postlude guarded by the original router retirement seal; retain historical records and coarse fallback without changing strict Worker verdicts or claiming cancellation causes.

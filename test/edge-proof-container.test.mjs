@@ -9,7 +9,7 @@ import { createRequire } from "node:module";
 import { runInNewContext } from "node:vm";
 import { dirname, join, relative, resolve, isAbsolute } from "node:path";
 import { containerContract, harnessInputs, installInputs, parseIdentity, validateIdentity, validateMapping, validateImage, dockerEnvironment, containerEnvironment, createArguments, validateContainerInspect, parseControl, validateTerminal, validateNativeIdentity, parseImageBuildReceipt, parseImageBuildStages, parseNativePrepareStages, observeImageBuild, parseContainerReceipt, parseChildPackaging, createProjectionLedger, parseInitPrerequisites, createAttachProjection, runInitPrerequisites, createInitGuardLedger, initGuardLeaf, createMountObservation, validateEmptyMasks, validateMaskCompletion, parseMounts, validateMountFreshness, validateMounts, validateMetadataMounts, validateChildStatus, validateTarget, cgroupPath, validateLimits, attachContainer, processEvidence, retiredCgroup, raiseContainerFailures, validateContainerDiagnostic, emitContainerFailure } from "../scripts/edge-proof-container.mjs";
-import { frozenGitEnvironment, validateGitExecutable, frozenSource } from "../scripts/edge-proof-build.mjs";
+import { frozenGitEnvironment } from "../scripts/edge-proof-build.mjs";
 import { edgeProof } from "../scripts/edge-proof-profile.mjs";
 import { reaperFrame, createReaperClient, parseControlStat, validateControlPair, validateReaperElf, parseReaperTerminal, requireReaperTerminal, createReaperTerminalRetention, hostedCensusMatrix } from "../scripts/edge-proof-container.mjs";
 import { bindCensusControls, classifyCensusControl, privateProcesses, createCensusComparisonWitness } from "../scripts/edge-proof.mjs";
@@ -184,16 +184,39 @@ test("native attestation is source, install, ABI and immutable absolute executab
   assert.throws(() => parseImageBuildReceipt(("EDGE_IMAGE_V2 " + JSON.stringify(native()) + "\n").repeat(2), other));
 });
 test("actual Git seam rejects relative, missing, unattested binary and environment overrides", async () => {
-  const path = await realpath("/usr/bin/git");
-  const sha256 = createHash("sha256").update(await readFile(path)).digest("hex");
-  const valid = { executable: path, sha256, env: { ...frozenGitEnvironment } };
-  assert.equal(validateGitExecutable(valid).executable, path);
-  for (const options of [{ ...valid, executable: "git" }, { ...valid, executable: "/missing-edge-git" }, { ...valid, sha256: "0".repeat(64) }, { ...valid, env: { ...valid.env, PATH: "/untrusted" } }, { ...valid, env: { ...valid.env, GIT_CONFIG_GLOBAL: "/untrusted" } }, { ...valid, extra: true }]) assert.throws(() => validateGitExecutable(options));
+  // This seam is pure: the script job does not acquire the frozen Edge tree.
+  // Native executable and full source qualification belong to packaging CI.
+  const source = await readFile(new URL("../scripts/edge-proof-build.mjs", import.meta.url), "utf8");
+  const start = source.indexOf("export const frozenGitEnvironment ="), end = source.indexOf("export function instrumentAst(", start);
+  assert.ok(start >= 0 && end > start);
+  const binary = Buffer.from("inert-git"), path = "/immutable/git", calls = [], original = new Error("inert original Git failure");
+  const rows = Array.from({ length: 600 }, (_, i) => ({ path: `worker/fixture-${i}.ts`, oid: i.toString(16).padStart(40, "0"), bytes: Buffer.from(`export const fixture = ${i};`) }));
+  const byOid = new Map(rows.map(row => [row.oid, row]));
+  let failed, failurePresent = false, wrongTree = false;
+  const bindings = { Buffer, Object, isAbsolute, edgeProof, sha256: bytes => createHash("sha256").update(bytes).digest("hex"),
+    realpathSync: value => { assert.equal(value, path); return value; }, lstatSync: value => { assert.equal(value, path); return { isFile: () => true }; }, readFileSync: value => { assert.equal(value, path); return binary; },
+    execFileSync: (executable, args, options) => {
+      calls.push([executable, args, options]); assert.equal(executable, path); assert.equal(options.cwd, "/synthetic-checkout");
+      assert.deepEqual(options.env, frozenGitEnvironment); assert.equal(options.maxBuffer, 32 * 1024 * 1024);
+      if (failurePresent) throw failed;
+      if (args[0] === "rev-parse") { assert.deepEqual(args, ["rev-parse", edgeProof.sourceSha + "^{tree}"]); return Buffer.from((wrongTree ? "0".repeat(40) : edgeProof.sourceTree) + "\n"); }
+      if (args[0] === "ls-tree") { assert.deepEqual(args, ["ls-tree", "-rz", edgeProof.sourceSha, "--", "worker", "shared", "providers", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "admin/package.json"]); return Buffer.from(rows.map(row => `100644 blob ${row.oid}\t${row.path}\0`).join("")); }
+      assert.equal(args[0], "cat-file"); assert.equal(args[1], "blob"); assert.equal(args.length, 3); assert.ok(byOid.has(args[2])); return byOid.get(args[2]).bytes;
+    },
+  };
+  const api = new Function(...Object.keys(bindings), source.slice(start, end).replaceAll("export ", "") + "return { validateGitExecutable, frozenSource };")(...Object.values(bindings));
+  const valid = { executable: path, sha256: bindings.sha256(binary), env: { ...frozenGitEnvironment } };
+  assert.equal(api.validateGitExecutable(valid).executable, path);
+  for (const options of [{ ...valid, executable: "git" }, { ...valid, executable: "/missing-edge-git" }, { ...valid, sha256: "0".repeat(64) }, { ...valid, env: { ...valid.env, PATH: "/untrusted" } }, { ...valid, env: { ...valid.env, GIT_CONFIG_GLOBAL: "/untrusted" } }, { ...valid, extra: true }]) assert.throws(() => api.validateGitExecutable(options));
   let accessed = false; const hostile = { ...valid }; Object.defineProperty(hostile, "env", { get() { accessed = true; return valid.env; } });
-  assert.throws(() => validateGitExecutable(hostile)); assert.equal(accessed, false);
-  const files = frozenSource(process.cwd(), edgeProof.sourceSha, valid);
-  assert.equal(files.length, 600); assert.ok(files.every(row => row.sha256 === createHash("sha256").update(row.bytes).digest("hex")));
-  assert.throws(() => frozenSource(process.cwd(), edgeProof.sourceSha, { ...valid, sha256: "0".repeat(64) }));
+  assert.throws(() => api.validateGitExecutable(hostile)); assert.equal(accessed, false); assert.equal(calls.length, 0);
+  const files = api.frozenSource("/synthetic-checkout", edgeProof.sourceSha, valid);
+  assert.equal(files.length, 600); assert.equal(calls.length, 602); assert.deepEqual(files.map(row => row.path), rows.map(row => row.path));
+  for (const [i, row] of files.entries()) { assert.equal(row.bytes, rows[i].bytes); assert.equal(row.sha256, bindings.sha256(rows[i].bytes)); }
+  const before = calls.length;
+  assert.throws(() => api.frozenSource("/synthetic-checkout", edgeProof.sourceSha, { ...valid, sha256: "0".repeat(64) })); assert.equal(calls.length, before);
+  wrongTree = true; assert.throws(() => api.frozenSource("/synthetic-checkout", edgeProof.sourceSha, valid), /immutable source identity mismatch/); wrongTree = false;
+  for (failed of [original, undefined]) { failurePresent = true; assert.throws(() => api.frozenSource("/synthetic-checkout", edgeProof.sourceSha, valid), error => error === failed); }
 });
 test("create argument arrays use only exact owned identity and private resource limits", () => {
   const args = createArguments(plan(), "/owned/cid");
@@ -409,7 +432,9 @@ async function pureCliModuleSources() {
   const names = backImport.split("{", 2)[1].split("}", 1)[0].trim().split(", ");
   const tail = entry.slice(entry.indexOf("const containerDiagnosticPhases ="));
   assert.ok(tail.includes('launchCli(process.argv.slice(2));'));
-  const pureHelpers = names.filter(name => !["createContainerDiagnostics", "emitContainerFailure", "imageBuildStages", "nativePrepareStages", "validateEnumerationDetail"].includes(name)).map(name => `export const ${name} = undefined;`).join("\n");
+  const defined = new Set([...tail.matchAll(/^export (?:async )?(?:function|const|let|class) ([A-Za-z_$][\w$]*)/gm)].map(match => match[1]));
+  assert.ok(defined.has("createContainerDiagnostics") && defined.has("validateContainerDiagnostic"));
+  const pureHelpers = names.filter(name => !defined.has(name)).map(name => `export const ${name} = undefined;`).join("\n");
   // Actual dispatch and CLI functions, including their back-import. Only the
   // container operation is replaced by a closed, inert return value.
   const prefix = 'import { pathToFileURL } from "node:url"; import { resolve } from "node:path";\n' + pureHelpers + '\nconst refuse = code => { throw new Error(code); };\n' + entry.slice(entry.indexOf("function ownData("), entry.indexOf("export function validatePackagingDiagnostic("));
@@ -436,7 +461,9 @@ test("CLI actual extracted module-loader cycle fails old TLA and dispatches exac
 
 test("CLI actual extracted host startup records each boundary before the original operation", async () => {
   const source = await readFile(new URL("../scripts/edge-proof-container.mjs", import.meta.url), "utf8");
-  const prefix = source.slice(source.indexOf("async function hostContainerRun(report) {"), source.indexOf("  const run = async (args, timeoutMs = 30000) => {", source.indexOf("async function hostContainerRun(report) {")));
+  const start = source.indexOf("async function hostContainerRun(report) {"), end = source.indexOf("  const runOriginal =", start);
+  assert.ok(start >= 0 && end > start);
+  const prefix = source.slice(start, end);
   const names = ["process", "check", "readParentIdentity", "namespaceIdentity", "realpath", "mkdtemp", "join", "tmpdir", "dockerEnvironment", "mkdir", "fileIdentity", "stat"];
   const create = new Function(...names, `return ${prefix}return { identity, parentNamespaces, cwd, root, env, docker }; };`);
   for (const failedPhase of [null, "parent_namespaces", "temp", "environment", "docker_executable", "daemon_socket"]) {
@@ -1747,13 +1774,16 @@ async function initGuardFactory(overrides = {}) {
   const status = source.slice(source.indexOf("export function parseIdentity("), source.indexOf("export function validateMapping(")).replaceAll("export ", "") + source.slice(source.indexOf("export function validateChildStatus("), source.indexOf("async function readParentIdentity(")).replaceAll("export ", "");
   const mounts = source.slice(source.indexOf("export function createMountObservation("), source.indexOf("export function validateChildStatus(")).replaceAll("export ", "");
   const helpers = (source.slice(source.indexOf("export function createInitGuardLedger("), source.indexOf("const own =")) + source.slice(source.indexOf("export function createParentAdmissionLedger("), source.indexOf("const number ="))).replaceAll("export ", "");
-  const declarations = source.slice(source.indexOf("const receiptRecord ="), source.indexOf("const exactKeys =")) + source.slice(source.indexOf("const same ="), source.indexOf("const hashPattern =")) + source.slice(source.indexOf("const number ="), source.indexOf("export function parseIdentity("));
+  const declarations = source.slice(source.indexOf("const receiptRecord ="), source.indexOf("const exactKeys =")) + source.slice(source.indexOf("const same ="), source.indexOf("const cidPattern =")) + source.slice(source.indexOf("const number ="), source.indexOf("export function parseIdentity("));
   const goodStatus = "Groups:\t20\nUid:\t501 501 501 501\nGid:\t20 20 20 20\n" + ["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"].map(k => k + ":\t0000\n").join("") + "NoNewPrivs:\t1\nSeccomp:\t2\n";
-  const calls = [], bindings = { parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission, initGuardTags, initSourcePhases, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, raiseContainerFailures, process: { platform: "linux", arch: "x64", version: "v24.22.1", versions: { modules: "137" }, pid: 1, env: {} },
+  const calls = [], bindings = { parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission, initGuardTags, initSourcePhases, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, raiseContainerFailures, process: { platform: "linux", arch: "x64", version: "v24.22.1", versions: { modules: "137" }, pid: 2, ppid: 1, argv: ["node", "entry", "container-init", hex, other], env: {} },
+    qualifyControls: async (...args) => { assert.deepEqual(args, [identity, hex, other, 2]); calls.push("qualifyControls"); },
     readFile: async path => { calls.push(path); if (path.endsWith("status")) return goodStatus; if (path.endsWith("mountinfo")) return ""; return "{}"; }, namespaceEvidence: async () => ({ interfaces: ["lo"], routes4: [], routes6: [] }), containerEnvironment: () => ({}),
     validateNativeIdentity: value => value, qualifyImageInputs: async () => ({}), containerContract: { input: "/input" }, join: (...parts) => parts.join("/"), ...overrides };
+  const read = bindings.readFile;
+  bindings.readFile = async (...args) => { if (args[0] === "/proc/2/cmdline") { calls.push(args[0]); return Buffer.from(["node", "entry", "container-init", hex, other].join("\0") + "\0"); } return read(...args); };
   const api = new Function(...Object.keys(bindings), declarations + helpers + status + mounts + runtime + "return { validateContainerRuntime, nativeReceipt, validateChildStatus, parseIdentity, validateIdentity, parseMounts, validateMounts, mountTable, canonicalMountPath, decodeMountPath, createMountObservation, validateEmptyMasks, validateMaskCompletion, createInitGuardLedger, initGuardLeaf }; ")(...Object.values(bindings));
-  const runtimeBindings = { ...bindings, validateChildStatus: api.validateChildStatus, parseMounts: api.parseMounts, validateMounts: api.validateMounts, ...overrides };
+  const runtimeBindings = { ...bindings, validateChildStatus: api.validateChildStatus, parseMounts: api.parseMounts, validateMounts: api.validateMounts, ...overrides, readFile: bindings.readFile };
   const runtimeApi = new Function(...Object.keys(runtimeBindings), declarations + helpers.replace(/export /g, "") + runtime + "return { validateContainerRuntime, nativeReceipt }; ")(...Object.values(runtimeBindings));
   return { ...api, ...runtimeApi, calls, goodStatus };
 }
@@ -2190,22 +2220,24 @@ test("parent admission actual callback rejects each original boundary and report
   const parentRows=[mount(1,0,"/","ext4","8:1",["rw"])], parentText=parentRows.map(r=>`${r.id} ${r.parentId} ${r.device} ${r.root} ${r.target} ${r.options.join(",")} - ${r.fs} none ${r.superOptions.join(",")}`).join("\n")+"\n";
   const goodStatus="Groups:\t20\nUid:\t501 501 501 501\nGid:\t20 20 20 20\n"+["CapInh","CapPrm","CapEff","CapBnd","CapAmb"].map(n=>n+":\t0000\n").join("")+"NoNewPrivs:\t1\nSeccomp:\t2\n";
   const target={pid:123,start:"123",status:goodStatus,uidMap:"0 0 4294967295",gidMap:"0 0 4294967295",namespaces:{pid:"pid:[2]",net:"net:[2]",mnt:"mnt:[2]",user:"user:[1]"},mounts:targetMounts,cgroup:`0::/docker/${hex}\n`};
+  const controlPair=Object.freeze({inert:"controls"}), nativeIdentity=Object.freeze({inert:"native"});
   let baseline;
-  for(const stop of [0,...Array.from({length:6},(_,i)=>i+1),"binding","report"]) {
+  for(const stop of [0,...Array.from({length:8},(_,i)=>i+1),"binding","report"]) {
     const calls=[], reporting=[], report=createContainerDiagnostics();let permits=0, caught=false, reason;
     const record=(name,args,value)=>{calls.push({name,args});if(calls.length===stop)throw undefined;return value;};
     const ledgerFactory=()=>{const l=api.createParentAdmissionLedger();if(stop==="report")l.enter=()=>{throw undefined;};return l;};
-    const bindings={raiseContainerFailures,createParentAdmissionLedger:ledgerFactory,createParentCgroupAdmission:()=>({observe:async(pid,visit,l)=>{api.parentSource(l,"cgroup_observer");return record("cgroup-view",[pid,visit],{target,bound:{path:"/owned",dev:1n,ino:stop==="binding"&&visit===2?3n:2n,parentDev:1n,parentIno:1n},parentMounts:parentRows});}}),sameCgroupBinding:api.sameCgroupBinding,parentSource:api.parentSource,parentRecord:(l,m,...a)=>{try{l[m](...a);}catch(e){l.errors.push(e);}},parentEvaluate:api.parentEvaluate,parentLeaf:api.parentLeaf,check:(v)=>{if(!v)throw undefined;},report,admissionReporting:reporting,identity,parentNamespaces,cid:hex,daemonRoot:root,
+    const bindings={raiseContainerFailures,createParentAdmissionLedger:ledgerFactory,createParentCgroupAdmission:()=>({observe:async(pid,visit,l)=>{api.parentSource(l,"cgroup_observer");return record("cgroup-view",[pid,visit],{target,bound:{path:"/owned",dev:1n,ino:stop==="binding"&&visit===2?3n:2n,parentDev:1n,parentIno:1n},parentMounts:parentRows});}}),sameCgroupBinding:api.sameCgroupBinding,parentSource:api.parentSource,parentRecord:(l,m,...a)=>{try{l[m](...a);}catch(e){l.errors.push(e);}},parentEvaluate:api.parentEvaluate,parentLeaf:api.parentLeaf,check:(v)=>{if(!v)throw undefined;},report,admissionReporting:reporting,identity,parentNamespaces,cid:hex,daemonRoot:root,nonce:hex,plan:{contextHash:other},native:nativeIdentity,
+      parentControls:async(...args)=>{assert.deepEqual(args,[123,target,identity,hex,other,nativeIdentity]);assert.equal(args[1],target);assert.equal(args[2],identity);assert.equal(args[5],nativeIdentity);return record("controls",args,controlPair);},
       recheckParent:async l=>{api.parentSource(l,"parent_identity");return record("parent",[],identity);},readOwned:async l=>{api.parentSource(l,"inspect_validate");return record("inspect",[],{...metadata,State:{Running:true,Pid:123}});},
       processEvidence:async(pid,{recorder})=>{api.parentSource(recorder,"target_stat");return record("process",[pid],target);},validateTarget:api.validateTarget,
       bindCgroup:async(t,cid,l)=>{api.parentSource(l,"cgroup_path");return record("cgroup",[t,cid],{dev:1,ino:2});},
       readlink:async path=>record("namespace",[path],parentNamespaces.mnt),readFile:async(...args)=>record("mounts",args,parentText),
       parseMounts:(...args)=>record("parse",args.slice(1,2),mountTableForParent(args[0])),validateMetadataMounts:api.validateMetadataMounts,validateMountFreshness:api.validateMountFreshness,same:(a,b)=>JSON.stringify(a)===JSON.stringify(b)};
     function mountTableForParent(){return structuredClone(parentRows);}
-    const run=new Function(...Object.keys(bindings),'return async () => { let target,bound; '+callback+'; return {target,bound}; };')(...Object.values(bindings));
-    try{await run();permits++;}catch(e){caught=true;reason=e;}
-    if(stop===0){assert.equal(caught,false);assert.equal(permits,1);baseline=calls;assert.equal(calls.length,6);}
-    else{assert.equal(caught,true);assert.equal(permits,0);if(stop!=="report"){assert.equal(reason,undefined);assert.deepEqual(calls,baseline.slice(0,stop==="binding"?5:stop));}else assert.ok(reason===undefined||reason instanceof AggregateError);}
+    const run=new Function(...Object.keys(bindings),'return async () => { let target,bound,controlBinding; '+callback+'; return {target,bound,controlBinding}; };')(...Object.values(bindings));
+    try{const result=await run();assert.equal(result.controlBinding,controlPair);permits++;}catch(e){caught=true;reason=e;}
+    if(stop===0){assert.equal(caught,false);assert.equal(permits,1);baseline=calls;assert.equal(calls.length,8);}
+    else{assert.equal(caught,true);assert.equal(permits,0);if(stop!=="report"){assert.equal(reason,undefined);assert.deepEqual(calls,baseline.slice(0,stop==="binding"?6:stop));}else assert.ok(reason===undefined||reason instanceof AggregateError);}
     assert.ok(report.records.some(r=>r.phase==="admission"));
     if(stop!==0&&stop!=="report"){const detailed=report.records.find(r=>r.v===8);assert.ok(detailed);assert.equal(detailed.defined,false);validateParentAdmission(detailed);}
   }
@@ -2740,11 +2772,11 @@ async function receiptActualProducer(failure = "wrangler_input", writerFailure =
   let pipeline = cut("export async function runPackagingPipeline(","async function offlineCi(");
   assert.equal(pipeline.split('import.meta.resolve("wrangler/package.json")').length,2);
   pipeline = pipeline.replace('import.meta.resolve("wrangler/package.json")','resolveModule("wrangler/package.json")');
-  const frames=[], calls=[], rejections=[], builderFailures=[], builders=[], processResults=[], denied=Object.freeze({inert:"unreached-binding"}), fixed={sourceSha:"c".repeat(40),sourceTree:"d".repeat(40)}, digest=value=>createHash("sha256").update(value).digest("hex");
+  const controls=Object.freeze({inert:"invocation-controls"}), frames=[], calls=[], rejections=[], builderFailures=[], builders=[], processResults=[], denied=Object.freeze({inert:"unreached-binding"}), fixed={sourceSha:"c".repeat(40),sourceTree:"d".repeat(40)}, digest=value=>createHash("sha256").update(value).digest("hex");
   const capsule={...fixed,sourceFiles:Array(600).fill(0),dependencyInputs:Array(268).fill(0),instrumentation:Array(4).fill({erasureExact:true}),observerSha256:hex,harnessInputs:[],bundles:{edge:hex,upstream:hex},runtime:{}};
   const unreachable=name=>(..._args)=>{calls.push(["unreached",name]);throw denied;};
   const bindings={Buffer,JSON,createHash,join,relative,dirname,createOwnedProcessLedger,packObservedWranglerCloseDiagnostic,validateObservedWranglerCloseDiagnostic,packWranglerCloseDiagnostic,validateWranglerCloseDiagnostic,validateOwnedCloseDiagnostic,validateOwnedCodeCloseDiagnostic,packCensusCloseDiagnostic,validateCensusCloseDiagnostic,edgeProof:fixed,digest:value=>builderOptions.wrangler&&value==="inert-cli"?containerContract.cliHash:digest(value),refuse:code=>{throw new Error(code);},process:{execPath:"/immutable/node"},
-    privateProcesses:async(...args)=>{if(args.length)assert.ok(args[0]?.censusBegin);calls.push(["inventory"]);return [];},prepareEnvironment:async path=>{calls.push(["environment",path]);return {};},
+    privateProcesses:async(...args)=>{assert.equal(args.length,2);if(args[0]!==undefined)assert.equal(typeof args[0].censusBegin,"function");assert.equal(args[1],controls);calls.push(["inventory"]);return [];},prepareEnvironment:async path=>{calls.push(["environment",path]);return {};},
     createRequire:(...args)=>{calls.push(["require",...args]);throw denied;},resolveModule:specifier=>{calls.push(["resolve",specifier]);throw undefined;},
     realpath:unreachable("realpath"),lstat:unreachable("lstat"),writeFile:unreachable("writeFile"),renderEdgeConfig:unreachable("renderEdgeConfig"),offlineProjection:unreachable("offlineProjection"),verifyDryRun:unreachable("verifyDryRun"),
     readFile:async path=>{calls.push(["read",path]);if(failure==="receipt_read" || failure==="receipt_read_b" && path.includes("capsule-b"))throw undefined;return JSON.stringify(capsule);},
@@ -2784,7 +2816,7 @@ async function receiptActualProducer(failure = "wrangler_input", writerFailure =
       assert.equal(command,"/immutable/node");
       assert.deepEqual(args,["--no-warnings","/opt/edge-input/node_modules/wrangler/wrangler-dist/cli.js","deploy","--dry-run","--config","/task/capsule-a/"+kind+".toml","--outdir","/task/dry-"+kind]);
       assert.equal(options.cwd,"/task/capsule-a");
-      if(builderOptions.diagnostics){assert.ok(options.recorder);const before=calls.length;await options.sample();assert.deepEqual(calls.slice(before),[["inventory"]]);}else{assert.equal(options.sample,bindings.privateProcesses);assert.equal(Object.hasOwn(options,"recorder"),false);}
+      assert.equal(Object.hasOwn(options,"recorder"),builderOptions.diagnostics===true);if(builderOptions.diagnostics)assert.ok(options.recorder);const before=calls.length;await options.sample();assert.deepEqual(calls.slice(before),[["inventory"]]);
       const result = requested.ownedProcess ? await requested.ownedProcess(command,args,options,kind) : await receiptOwnedResult(command,args,options,"--dry-run: exiting now.\n",kind===requested.role?requested.scenario:"normal",true);
       if (kind===requested.role && requested.mutate) requested.mutate(result);
       processResults.push(result); return result;
@@ -2801,7 +2833,7 @@ async function receiptActualProducer(failure = "wrangler_input", writerFailure =
     return Reflect.apply(mark,report,args);
   };
   report.mark("entry","fulfilled");let failed=false,reason;
-  try{await api.runPackagingPipeline("/opt/edge-input","/task",report,{builderDiagnostics:builderOptions.diagnostics===true,checkBoundary:async()=>{calls.push(["boundary"]);if(failure==="namespace_read")throw undefined;},buildArguments:(capsule,role)=>["/opt/edge-input/scripts/edge-proof.mjs","container-build",capsule,role,hex,"501","501"]});}catch(error){failed=true;reason=error;}
+  try{await api.runPackagingPipeline("/opt/edge-input","/task",report,{controls,builderDiagnostics:builderOptions.diagnostics===true,checkBoundary:async()=>{calls.push(["boundary"]);if(failure==="namespace_read")throw undefined;},buildArguments:(capsule,role)=>["/opt/edge-input/scripts/edge-proof.mjs","container-build",capsule,role,hex,"501","501"]});}catch(error){failed=true;reason=error;}
   report.mark("final",failed?"rejected":"fulfilled",reason);
   return {frames,calls,report,failed,reason,rejections,builderFailures,builders,processResults,summarizePackagingOutput:api.summarizePackagingOutput};
 }
