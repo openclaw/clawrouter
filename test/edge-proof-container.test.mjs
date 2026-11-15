@@ -646,7 +646,7 @@ test("canonical package factories retain original install containment before any
 
 // BEGIN actual preparation helper tests. Every helper I/O binding below is inert.
 let preparationInputSeed;
-async function reaperCompileFixture() {
+async function reaperCompileFixture(legacyCc1 = false) {
   preparationInputSeed ??= (async () => {
     const owner = await ownershipFixture(), value = await owner.run();
     return { owner, value, source: await readFile(new URL("../scripts/edge-proof-container.mjs", import.meta.url), "utf8") };
@@ -686,7 +686,7 @@ async function reaperCompileFixture() {
     execFileSync: (...args) => invoke("execFileSync", args, () => {
       const [command, argv, options] = args;
       assert.deepEqual(structuredClone(options), { env: { PATH: "/usr/bin:/bin", LANG: "C", HOME: "/opt/build-home" }, encoding: "utf8", timeout: 60000, maxBuffer: 1024*1024 });
-      if (argv[0] === "--version") { const role = Object.keys(tools).find(role => tools[role] === command); assert.ok(role); return role + " inert-version\n"; }
+      if (argv[0] === "--version") { const role = Object.keys(tools).find(role => tools[role] === command); assert.ok(role); return role === "cc1" ? "" : role + " inert-version\n"; }
       assert.equal(command, tools.gcc);
       if (argv[0] === "-dumpmachine") return "x86_64-linux-gnu\n";
       if (argv[0].startsWith("-print-prog-name=")) { const role = argv[0].split("=")[1]; assert.ok(Object.hasOwn(tools, role)); return tools[role] + "\n"; }
@@ -697,8 +697,19 @@ async function reaperCompileFixture() {
       assert.equal(argv[0], "-pie"); disk.set(paths.binary, Buffer.from(elf));
       return "/usr/lib/inert/start.o\n" + paths.object + "\n/usr/lib/inert/libc.so\n";
     }),
+    spawnSync: (...args) => invoke("spawnSync", args, () => {
+      assert.equal(args[0], tools.cc1); assert.deepEqual(structuredClone(args[1]), ["-version", "--version"]);
+      assert.deepEqual(structuredClone(args[2]), { env: { PATH: "/usr/bin:/bin", LANG: "C", HOME: "/opt/build-home" }, encoding: "utf8", timeout: 60000, maxBuffer: 1024*1024 });
+      return { status:0, signal:null, stdout:"", stderr:"cc1 inert-version\nsecond stderr line\n" };
+    }),
   };
-  const helpers = select("const own =", "export function raiseContainerFailures(") + select("const reaperBuildRoot =", "export function validateNativeIdentity(");
+  let helpers = select("const own =", "export function raiseContainerFailures(") + select("const reaperBuildRoot =", "export function validateNativeIdentity(");
+  if (legacyCc1) {
+    // Restore only the exact previous query leaf in the extracted actual helper.
+    const start = helpers.indexOf("    let version;"), end = helpers.indexOf("    point?.(11,role);", start);
+    assert.ok(start >= 0 && end > start);
+    helpers = helpers.slice(0,start) + '    const version = execFileSync(file.path, ["--version"], options).split("\\n")[0];\n' + helpers.slice(end);
+  }
   const exports = "({ compileReaper, qualifyReaper, validateReaperBuild, reaperCompileArguments })";
   let api = new Function(...Object.keys(bindings), helpers + "return " + exports + ";")(...Object.values(bindings));
   const useFaultRealm = () => {
@@ -717,11 +728,11 @@ async function reaperCompileFixture() {
 }
 test("actual preparation helpers compile and qualify one closed inert context without native calls", async () => {
   const f = await reaperCompileFixture(); await f.compile();
-  const commands = f.calls.filter(row => row.name === "execFileSync").map(row => row.args.slice(0,2));
+  const commands = f.calls.filter(row => ["execFileSync","spawnSync"].includes(row.name)).map(row => row.args.slice(0,2));
   const expected = [[f.tools.gcc, ["-dumpmachine"]]];
   for (const role of ["gcc","cc1","as","collect2","ld"]) {
     if (role !== "gcc") expected.push([f.tools.gcc, ["-print-prog-name=" + role]]);
-    expected.push([f.tools[role], ["--version"]]);
+    expected.push([f.tools[role], role === "cc1" ? ["-version","--version"] : ["--version"]]);
   }
   expected.push([f.tools.gcc, ["-std=c11","-O2","-Wall","-Wextra","-Werror","-fstack-protector-strong","-fPIE","-MD","-MF",f.paths.headers,"-MT","reaper","-c",f.paths.source,"-o",f.paths.object]], [f.tools.gcc, ["-pie","-Wl,-z,relro,-z,now","-Wl,-t",f.paths.object,"-o",f.paths.binary]]);
   assert.deepEqual(commands, expected); assert.equal(commands.length, 12);
@@ -733,7 +744,7 @@ test("actual preparation helpers compile and qualify one closed inert context wi
   for (const row of [manifest.source,manifest.object,manifest.binary,...manifest.tools,...manifest.headers,...manifest.links]) assert.equal(row.sha256, f.sha(f.disk.get(row.path)));
   const before = f.calls.length, qualified = await f.qualify();
   assert.deepEqual(qualified, { version:1, contextHash:f.state.contextHash, source:manifest.source, buildSha256:f.sha(manifestText), binary:manifest.binary });
-  assert.ok(f.calls.slice(before).every(row => row.name !== "execFileSync" && row.name !== "writeFile"));
+  assert.ok(f.calls.slice(before).every(row => !["execFileSync","spawnSync","writeFile"].includes(row.name)));
   assert.equal(f.calls.filter(row => row.name === "writeFile").length, 1);
   assert.ok(f.calls.filter(row => row.name === "writeFile").every(row => !row.args[0].startsWith(containerContract.input + "/")));
 });
@@ -764,7 +775,7 @@ test("actual preparation helpers reject context, source inventory and materializ
     [f => f.setPlan(plan => { for (const list of [plan.harness,plan.files]) list.find(row => row.path === "config/edge-proof/reaper.c").sha256 = "0".repeat(64); }), /reaper-original-source/],
   ]) {
     const f = await reaperCompileFixture(); change(f); await assert.rejects(f.compile(), failure);
-    assert.equal(f.calls.filter(row => row.name === "execFileSync").length, 0); assert.ok(!f.disk.has(f.paths.manifest));
+    assert.equal(f.calls.filter(row => ["execFileSync","spawnSync"].includes(row.name)).length, 0); assert.ok(!f.disk.has(f.paths.manifest));
   }
 });
 test("actual preparation helpers reject unqualified tools, output inventories and ELF bytes", async () => {
@@ -797,7 +808,7 @@ test("actual preparation qualification rejects manifest and every attested file 
   const seed = await reaperCompileFixture(); await seed.compile(); const original = JSON.parse(seed.disk.get(seed.paths.manifest));
   for (const row of [original.source,original.object,original.binary,...original.tools,...original.headers,...original.links]) {
     const f = await reaperCompileFixture(); await f.compile(); f.calls.length = 0; f.disk.set(row.path, Buffer.from("changed input"));
-    await assert.rejects(f.qualify(), /reaper-build-drift/); assert.ok(f.calls.every(row => row.name !== "execFileSync" && row.name !== "writeFile"));
+    await assert.rejects(f.qualify(), /reaper-build-drift/); assert.ok(f.calls.every(row => !["execFileSync","spawnSync","writeFile"].includes(row.name)));
   }
   for (const change of [
     value => { value.contextHash = "0".repeat(64); }, value => { value.arguments[0].push("-extra"); },
@@ -818,7 +829,7 @@ test("actual preparation helper extraction retains committed imports and helper 
   for (const name of ["compileReaper","qualifyReaper","reaperFile","validateReaperBuild","validateReaperElf","validateContextPlan"]) {
     assert.equal((source.match(new RegExp("^(?:export )?(?:async )?function " + name + "\\(", "gm")) ?? []).length, 1, name);
   }
-  for (const [module,names] of [["node:child_process",["execFileSync"]],["node:fs/promises",["realpath","stat","readFile","writeFile"]],["node:path",["join","isAbsolute"]],["node:crypto",["createHash"]]]) {
+  for (const [module,names] of [["node:child_process",["execFileSync","spawnSync"]],["node:fs/promises",["realpath","stat","readFile","writeFile"]],["node:path",["join","isAbsolute"]],["node:crypto",["createHash"]]]) {
     const imported = source.match(new RegExp('import \\{([^}]+)\\} from "' + module + '";'))[1].split(",").map(name => name.trim());
     for (const name of names) assert.ok(imported.includes(name), name);
   }
@@ -982,6 +993,81 @@ test("compile tuple widest full packet stays atomic within all existing quotas",
   }
   assert.ok(frameMax<=512&&recordMax<=512&&commandMax<=768&&packetMax<=8192);
   return {frameMax,recordMax,commandMax,packetMax};
+});
+test("cc1 query actual old silent stdout rejects and combined stderr query qualifies", async () => {
+  const old = await reaperCompileFixture(true);
+  assert.equal(old.sha(old.api.compileReaper.toString()), "9c9ecc5c0cb0da21883041ea724e5512fec33d30b16a58f05c795868a2ea37f8");
+  const failed = await compileTupleAttempt(old);
+  assert.equal(failed.reason.message, "reaper-tool-version"); assert.deepEqual(failed.summary.compile, [1,28,0]);
+  assert.equal(failed.summary.defined, true); assert.equal(failed.summary.reportFailures, 0);
+  assert.ok(!old.disk.has(old.paths.manifest)); await compileTuplePacket(failed);
+  const f = await reaperCompileFixture(), success = await compileTupleAttempt(f);
+  assert.equal(success.reason, success.later); assert.equal(success.summary.stage, "runtime");
+  assert.ok(!Object.hasOwn(success.summary, "compile")); await compileTuplePacket(success);
+  const commands = rows => rows.filter(row => ["execFileSync","spawnSync"].includes(row.name));
+  const before = commands(old.calls), after = commands(f.calls);
+  assert.equal(before.length, 12); assert.equal(after.length, 12);
+  const cc1 = after.findIndex(row => row.name === "spawnSync"); assert.equal(cc1, 3);
+  for (let i = 0; i < after.length; i++) {
+    if (i !== cc1) assert.deepEqual(after[i], before[i]);
+    else {
+      assert.equal(before[i].name, "execFileSync"); assert.deepEqual(before[i].args[1], ["--version"]);
+      assert.deepEqual(after[i].args[1], ["-version","--version"]);
+      assert.equal(after[i].args[0], before[i].args[0]); assert.deepEqual(after[i].args[2], before[i].args[2]);
+    }
+  }
+  const manifest = JSON.parse(f.disk.get(f.paths.manifest));
+  assert.equal(manifest.tools[1].role, "cc1"); assert.equal(manifest.tools[1].version, "cc1 inert-version");
+  assert.deepEqual(manifest.arguments, f.api.reaperCompileArguments);
+  const callCount = f.calls.length; await f.qualify();
+  assert.ok(f.calls.slice(callCount).every(row => !["execFileSync","spawnSync","writeFile"].includes(row.name)));
+  return {oldRejected:true,newManifestRequalified:true,commands:12,changedCommand:cc1};
+});
+test("cc1 query actual helper selects only its role and only the stderr first line", async () => {
+  const f = await reaperCompileFixture();
+  // A gcc executable named cc1 must still use gcc's stdout query.
+  f.disk.set("/usr/bin/cc1", f.disk.get(f.tools.gcc)); f.tools.gcc = "/usr/bin/cc1";
+  f.state.transform = (name,args,value) => name === "spawnSync" ? {...value,stdout:"wrong stream version\n",stderr:"cc1 selected version\nignored second line\n"} : value;
+  await f.compile(); const manifest = JSON.parse(f.disk.get(f.paths.manifest));
+  assert.equal(manifest.tools[0].role,"gcc"); assert.equal(manifest.tools[0].version,"gcc inert-version");
+  assert.equal(manifest.tools[1].version,"cc1 selected version");
+  assert.equal(f.calls.filter(row=>row.name==="spawnSync").length,1);
+  const gccQuery=f.calls.find(row=>row.name==="execFileSync"&&row.args[0]===f.tools.gcc&&row.args[1][0]==="--version");assert.ok(gccQuery);
+  await f.qualify();
+  for (const stderr of ["", "\nsecond line only", "bad\tversion", "v".repeat(513), undefined, null]) {
+    const bad=await reaperCompileFixture();bad.state.transform=(name,args,value)=>name==="spawnSync"?{...value,stdout:"not a stderr fallback",stderr}:value;
+    const result=await compileTupleAttempt(bad);assert.equal(result.failed,true);assert.notEqual(result.reason,result.later);
+    assert.ok(!bad.disk.has(bad.paths.manifest));assert.deepEqual(result.summary.compile,typeof stderr==="string"?[1,28,0]:[1,10,2]);
+    await compileTuplePacket(result);
+  }
+  for (const role of ["gcc","as","collect2","ld"]) {
+    const bad=await reaperCompileFixture();bad.state.transform=(name,args,value)=>name==="execFileSync"&&args[0]===bad.tools[role]&&args[1][0]==="--version"?"":value;
+    const result=await compileTupleAttempt(bad);assert.equal(result.reason.message,"reaper-tool-version");assert.deepEqual(result.summary.compile,[1,28,0]);
+    assert.ok(!bad.disk.has(bad.paths.manifest));await compileTuplePacket(result);
+  }
+  return {stderrNegatives:6,otherRoleNegatives:4};
+});
+test("cc1 query actual original process failures remain fatal with exact reason identity", async () => {
+  const good=await reaperCompileFixture();await good.compile();const index=good.calls.findIndex(row=>row.name==="spawnSync");assert.ok(index>=0);
+  let cases=0;
+  for (const reason of [new Error("inert synchronous query failure"),undefined]) {
+    const f=await reaperCompileFixture();f.state.failAt=index;f.state.reason=reason;
+    const result=await compileTupleAttempt(f);assert.equal(result.failed,true);assert.equal(result.reason,reason);assert.equal(f.state.failures,1);
+    assert.deepEqual(result.summary.compile,[1,10,2]);assert.equal(result.summary.defined,reason!==undefined);
+    assert.equal(f.calls.length,index+1);assert.ok(!f.disk.has(f.paths.manifest));await compileTuplePacket(result);cases++;
+  }
+  for (const code of ["ENOENT","ETIMEDOUT","ENOBUFS"]) {
+    const reason=Object.assign(new Error("inert query runner failure"),{code}),f=await reaperCompileFixture();
+    f.state.transform=(name,args,value)=>name==="spawnSync"?{...value,error:reason,status:null,signal:"SIGTERM"}:value;
+    const result=await compileTupleAttempt(f);assert.equal(result.reason,reason);assert.deepEqual(result.summary.compile,[1,10,2]);
+    assert.equal(f.calls.length,index+1);assert.ok(!f.disk.has(f.paths.manifest));await compileTuplePacket(result);cases++;
+  }
+  for (const outcome of [{status:1,signal:null},{status:42,signal:null},{status:null,signal:"SIGTERM"},{status:null,signal:null},{status:0,signal:"SIGTERM"}]) {
+    const f=await reaperCompileFixture();f.state.transform=(name,args,value)=>name==="spawnSync"?{...value,...outcome}:value;
+    const result=await compileTupleAttempt(f);assert.equal(result.reason.message,"reaper-cc1-version-process");assert.deepEqual(result.summary.compile,[1,10,2]);
+    assert.equal(f.calls.length,index+1);assert.ok(!f.disk.has(f.paths.manifest));await compileTuplePacket(result);cases++;
+  }
+  return {failureCases:cases,originalThrows:2,retainedRunnerErrors:3,rejectedStatuses:5};
 });
 // END existing-channel compile tuple tests.
 

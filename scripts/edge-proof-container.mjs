@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
-import { spawn, execFileSync } from "node:child_process";
+import { spawn, spawnSync, execFileSync } from "node:child_process";
 import { readFile, writeFile, mkdir, mkdtemp, realpath, readlink, readdir, lstat, stat, open, opendir } from "node:fs/promises";
 import { join, dirname, resolve, relative, isAbsolute } from "node:path";
 import { tmpdir } from "node:os";
@@ -484,7 +484,14 @@ async function compileReaper(contextHash, point) {
     point?.(9,role);
     const file = await reaperFile(isAbsolute(selected) ? selected : join("/usr/bin", selected), true);
     point?.(10,role);
-    const version = execFileSync(file.path, ["--version"], options).split("\n")[0];
+    let version;
+    if (role === "cc1") {
+      // GCC's -version prints to stderr; --version exits before compilation.
+      const result = spawnSync(file.path, ["-version", "--version"], options);
+      if (result.error) throw result.error;
+      check(result.status === 0 && result.signal === null, "reaper-cc1-version-process");
+      version = result.stderr.split("\n")[0];
+    } else version = execFileSync(file.path, ["--version"], options).split("\n")[0];
     point?.(11,role); tools.push({role,...file,version});
   }
   point?.(12,"gcc");
