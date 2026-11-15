@@ -1,5 +1,7 @@
 # Changelog
 
+- Preserve the held-ACK fixture's original process errors, including undefined reasons, before its independent qualification failure. Keep the expected timeout-negative route and all native closure, census and retirement gates unchanged; add inert coverage using the original coordinator and process supervisor.
+
 - Query the GCC cc1 version with the combined print-and-exit options and retain its stderr version line from the same synchronous command result. Keep other tool queries, strict version validation, build-input closure and native qualification gates unchanged. This corrects the source-proven silent-stdout contract mismatch without attributing the previous hosted failure or claiming native qualification.
 
 - Identify the original reaper preparation operation that rejects through the existing bounded preparation failure record. Preserve original errors, command order and qualification gates; concurrent file inventories remain aggregate observations, and this diagnostic adds no native qualification credit.

@@ -1849,7 +1849,8 @@ async function hostedReaperFixtures(args, rpc, controls) {
   // Use the original supervisor's existing default deadline and escalation.
   // The fixture server authenticates HELLO but deliberately withholds DRAIN ACK.
   const held = await runOwnedProcess(containerContract.reaper, ["--fixture-hold",containerContract.node,"/opt/edge-input/scripts/edge-proof.mjs","container-reaper-probe",...args], {cwd:"/task",env:containerEnvironment(),sample,beforeFinal});
-  check(held.closed && held.timedOut && !held.interrupted && held.errors.length === 0 && Array.isArray(held.remaining) && held.remaining.length === 0 && held.code !== 0, "reaper-held-ack-fixture");
+  try { check(held.closed && held.timedOut && !held.interrupted && held.errors.length === 0 && Array.isArray(held.remaining) && held.remaining.length === 0 && held.code !== 0, "reaper-held-ack-fixture"); }
+  catch (error) { raiseContainerFailures([...held.errors, error]); }
   let rejected = false; try { requireProcessSuccess(held); } catch { rejected = true; } check(rejected, "reaper-held-ack-qualified");
 }
 export async function hostedCensusMatrix(args, rpc, controls, supplied = {}) {

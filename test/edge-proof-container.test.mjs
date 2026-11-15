@@ -4402,3 +4402,273 @@ test("reaper inert actual hosted substitution aborts on unrelated census failure
   }
 });
 // END explicit reaper inert tests.
+
+// BEGIN actual coordinator supervisor inert tests.
+function coordinatorDeclaration(source, name) {
+  const match = new RegExp("^(?:export )?(?:async )?function " + name + "\\(", "m").exec(source);
+  assert.ok(match, name);
+  const tail = source.slice(match.index), end = /\n}\r?\n/.exec(tail);
+  assert.ok(end, name);
+  return tail.slice(0, end.index + 2).replace(/^export /, "");
+}
+async function coordinatorSupervisorFixture(faults = new Map()) {
+  const [container, proof] = await Promise.all(["edge-proof-container.mjs", "edge-proof.mjs"].map(name => readFile(new URL("../scripts/" + name, import.meta.url), "utf8")));
+  const cut = (source, start, end) => {
+    const a = source.indexOf(start), b = source.indexOf(end, a + start.length);
+    assert.ok(a >= 0 && b > a, start); return source.slice(a, b).replaceAll("export ", "");
+  };
+  const line = (source, name) => {
+    const found = source.match(new RegExp("^(?:export )?const " + name + " ?=.*$", "m"));
+    assert.ok(found, name); return found[0].replace(/^export /, "");
+  };
+  const f = { calls: [], queue: [], timers: [], intervals: [], children: [], output: [], faults, nextPid: 3, extra: [], manual: false, results: [] };
+  const visit = (name, ...args) => {
+    f.calls.push([name, ...args]);
+    const occurrence=f.calls.filter(row=>row[0]===name).length, key=faults.has(name+"#"+occurrence)?name+"#"+occurrence:name;
+    if (faults.has(key)) { const reason = faults.get(key); faults.delete(key); throw reason; }
+  };
+  const later = fn => f.queue.push(fn);
+  const identity = {uid:Array(4).fill(501),gid:Array(4).fill(20),groups:[]};
+  const args = ["a".repeat(64),"b".repeat(64),"501","20"];
+  const base = [{pid:1,parent:0,group:1,start:"10",state:"S"},{pid:2,parent:1,group:2,start:"20",state:"S"}];
+  const statText = row => `${row.pid} (inert) ${[row.state,String(row.parent),String(row.group),...Array(16).fill("0"),row.start].join(" ")}`;
+  const command = [containerContract.node,"/opt/edge-input/scripts/edge-proof.mjs","container-init",...args];
+  const namespace = Object.fromEntries(["pid","mnt","net","user","cgroup"].map((name,i)=>[name,`${name}:[${100+i}]`]));
+  const statusFor = pid => status("") + `NSpid:\t${pid}\n`;
+  const rows = () => [...base,...f.extra];
+  const processInert = Object.assign(new EventEmitter(), {
+    platform:"linux",arch:"x64",version:"v24.22.1",versions:{modules:"137"},pid:2,ppid:1,execPath:containerContract.node,
+    argv:command,env:{},stdout:{write(text){visit(text.startsWith("EDGE_CONTAINER_RECEIPT_V2 ")?"receipt.write":text.startsWith("EDGE_CONTAINER_V2 ")?"ready.write":"report.write",text);f.output.push(text);return true;}},
+    stdin:{async *[Symbol.asyncIterator](){visit("permit.receive");yield Buffer.from('EDGE_CONTAINER_V2 '+JSON.stringify({v:2,kind:"permit",nonce:args[0],contextHash:args[1]})+'\n');},destroy(reason){visit("permit.destroy",reason);}},
+    kill(pid,signal){assert.equal(this,processInert);visit("kill",pid,signal);const child=f.children.find(c=>c.pid===-pid);assert.ok(child);later(()=>child.complete(null,signal));},
+  });
+  const read = async (path,encoding) => {
+    visit("read",path,encoding);
+    if(path===containerContract.node)return Buffer.from("node");
+    const match=/^\/proc\/(\d+)\/(.+)$/.exec(path);assert.ok(match,path);
+    const pid=Number(match[1]), leaf=match[2], row=rows().find(value=>value.pid===pid);assert.ok(row,path);
+    if(leaf==="stat")return statText(row);
+    assert.ok(pid<=2,path);
+    if(leaf==="status")return statusFor(pid);
+    if(leaf==="cgroup")return "0::/\n";
+    if(leaf==="cmdline")return Buffer.from((pid===1?[containerContract.reaper,...command]:command).join("\0")+"\0");
+    if(leaf==="exe")return Buffer.from(pid===1?"reaper":"node");
+    assert.fail(path);
+  };
+  const link = async path => {
+    visit("link",path);const match=/^\/proc\/(1|2)\/(.+)$/.exec(path);assert.ok(match,path);
+    if(match[2]==="exe")return match[1]==="1"?containerContract.reaper:containerContract.node;
+    assert.ok(match[2].startsWith("ns/"));return namespace[match[2].slice(3)];
+  };
+  const spawnInert = (command,argv,options) => {
+    const mode=argv[0];visit("spawn:"+mode,command,argv,options);
+    assert.equal(command,containerContract.reaper);assert.equal(options.detached,true);
+    assert.deepEqual(options.stdio,mode==="--fixture-census"?["pipe","pipe","pipe"]:["ignore","pipe","pipe"]);
+    const child=new EventEmitter();child.pid=f.nextPid++;child.stdout=new EventEmitter();child.stderr=new EventEmitter();child.stdin=new EventEmitter();child.mode=mode;
+    f.children.push(child);f.extra.push({pid:child.pid,parent:2,group:child.pid,start:String(child.pid*10),state:"S"});
+    child.complete=(code=0,signal=null)=>{visit("close:"+mode,code,signal);f.extra=f.extra.filter(row=>row.pid!==child.pid);child.emit("close",code,signal);};
+    child.stdin.end=()=>visit("stdin.end");child.stdin.destroy=()=>{visit("stdin.destroy");later(()=>child.complete(1));};
+    if(mode==="--fixture-census"){
+      const pid=f.nextPid++, row={pid,parent:child.pid,group:child.pid,start:String(pid*10),state:"S"};f.extra.push(row);
+      child.stdin.write=(value,callback)=>{
+        visit("stdin.write:"+value);callback();
+        if(value==="L"){row.state="Z";later(()=>child.stdout.emit("data",Buffer.from(`ZOMBIE:${pid}\n`)));}
+        else {assert.equal(value,"Z");f.extra=f.extra.filter(value=>value.pid!==pid);later(()=>child.complete());}
+        return true;
+      };
+      if(!f.manual)later(()=>child.stdout.emit("data",Buffer.from(`LIVE:${pid}\n`)));
+    } else if(!f.manual && mode==="--check-fd")later(()=>child.complete());
+    else if(!f.manual && mode==="--fixture-hold")later(()=>{visit("held.deadline");const timer=f.timers.findLast(t=>!t.cleared&&t.ms===60000);assert.ok(timer);timer.fn();});
+    return child;
+  };
+  class InertSocket extends EventEmitter {
+    constructor(options){super();visit("socket",options);assert.deepEqual(options,{fd:3,readable:true,writable:true});f.socket=this;}
+    write(frame,callback){const phase={1:"start",2:"drain",3:"finish"}[frame[4]];assert.ok(phase);visit("rpc."+phase);callback();later(()=>{const ack=Buffer.from(frame);ack[4]|=128;this.emit("data",ack);});return true;}
+    end(){visit("rpc.end");later(()=>{visit("rpc.close");this.emit("close");});}
+    destroy(){visit("rpc.destroy");later(()=>{visit("rpc.close");this.emit("close");});}
+  }
+  const timer=(list,fn,ms)=>{const token={fn,ms,cleared:false};list.push(token);return token;};
+  const bindings = {Buffer,createHash,Map,Promise,Error,AggregateError,process:processInert,Socket:InertSocket,
+    readFile:read,readlink:link,readdir:async path=>{visit("census.list",path);assert.equal(path,"/proc");return f.censusNames?.get(f.calls.filter(row=>row[0]==="census.list").length) ?? rows().map(row=>String(row.pid));},
+    spawn:spawnInert,setTimeout:(fn,ms)=>timer(f.timers,fn,ms),setInterval:(fn,ms)=>timer(f.intervals,fn,ms),
+    clearTimeout:t=>{if(t)t.cleared=true;},clearInterval:t=>{if(t)t.cleared=true;},
+    writeSync:(fd,bytes,offset,length)=>{visit("init.frame",fd);assert.equal(fd,1);f.output.push(bytes.subarray(offset,offset+length).toString());return length;},
+    prepareEnvironment:async root=>{visit("prepare",root);return{};},
+    validateContainerRuntime:async(...values)=>{visit("runtime",...values);return[];},
+    nativeReceipt:async context=>{visit("native",context);return{inert:true};},
+    qualifyReaper:async context=>{visit("qualify.reaper",context);return{binary:{sha256:createHash("sha256").update("reaper").digest("hex")}};},
+    runPackagingPipeline:async(cwd,root,report,boundary)=>{visit("packaging",cwd,root);assert.equal(cwd,containerContract.input);assert.equal(root,"/task");assert.equal(boundary.builderDiagnostics,true);assert.equal(boundary.controls.coordinator.pid,2);return{version:1,isolated:true,inert:true};},
+  };
+  const core = cut(container,"export const containerContract =","export const harnessInputs =")+cut(container,"const hash =","export function validateImage(");
+  const declarations = ["refuse","ownedNote","ownedLeaf","ownedValue","ownedCondition","ownedArgument","diagnosticPrefix","diagnosticRoles","diagnosticPhases","diagnosticSignals","initPrerequisiteStages"].map(name=>line(proof,name)).join("\n");
+  const proofNames=["ownData","validatePackagingDiagnostic","createPackagingDiagnostics","createInitDiagnostics","runOwnedProcess","requireProcessSuccess"];
+  const containerNames=["parseControl","validateChildStatus","containerEnvironment","runInitPrerequisites","receivePermit","containerInit","hostedReaperFixtures","hostedCensusMatrix"];
+  const source=core+"\n"+line(container,"control")+"\n"+declarations+"\n"+cut(proof,"const censusControls =","// Original operations remain authoritative;")+proofNames.map(name=>coordinatorDeclaration(proof,name)).join("\n")+containerNames.map(name=>coordinatorDeclaration(container,name)).join("\n");
+  for(const name of ["readFile","readlink","readdir","spawn","Socket","setTimeout","setInterval","writeSync","runPackagingPipeline","validateContainerRuntime","qualifyReaper"])assert.equal(typeof bindings[name],"function",name);
+  f.api=new Function(...Object.keys(bindings),source+"\nreturn {containerInit,hostedReaperFixtures,hostedCensusMatrix,runOwnedProcess,requireProcessSuccess,privateProcesses,bindCensusControls,createCensusComparisonWitness,readControl,validateControlPair,createReaperTerminalRetention};")(...Object.values(bindings));
+  f.controls=f.api.bindCensusControls({pid:1,parent:0,start:"10"},{pid:2,parent:1,start:"20"});f.args=args;f.process=processInert;f.bindings=bindings;f.sources={container,proof};f.visit=visit;
+  f.pump=async promise=>{
+    let done=false,outcome;void originalOutcome(promise).then(value=>{done=true;outcome=value;});
+    for(let i=0;i<1000&&!done;i++){await reaperTick();if(f.queue.length)f.queue.shift()();}
+    assert.equal(done,true,"inert route has an unresolved original obligation: "+JSON.stringify({calls:f.calls.slice(-20).map(row=>row[0]),timers:f.timers.map(t=>[t.ms,t.cleared]),children:f.children.map(c=>[c.mode,c.listenerCount("close")])}));return outcome;
+  };
+  f.run=()=>f.api.containerInit(args,{});
+  return f;
+}
+test("coordinator actual supervisor full inert route reaches receipt only after FINISH CLOSE", async () => {
+  const f=await coordinatorSupervisorFixture();const outcome=await f.pump(f.run());
+  assert.equal(outcome.failed,false,String(outcome.reason?.stack ?? outcome.reason));assert.deepEqual(outcome.value,{container:"complete",version:2});
+  assert.deepEqual(f.calls.filter(row=>row[0].startsWith("spawn:")).map(row=>row[0]),["spawn:--fixture-census","spawn:--check-fd","spawn:--fixture-hold"]);
+  assert.equal(f.calls.filter(row=>row[0]==="packaging").length,1);
+  assert.ok(f.calls.findIndex(row=>row[0]==="permit.receive")<f.calls.findIndex(row=>row[0]==="spawn:--fixture-census"));
+  assert.ok(f.calls.findIndex(row=>row[0]==="rpc.close")<f.calls.findIndex(row=>row[0]==="receipt.write"));
+  assert.deepEqual(f.calls.filter(row=>row[0]==="kill").map(row=>row.slice(2)),[["SIGTERM"]]);
+  assert.equal(f.process.listenerCount("SIGINT"),0);assert.equal(f.process.listenerCount("SIGTERM"),0);
+  assert.ok(f.timers.every(timer=>timer.cleared));assert.ok(f.intervals.every(timer=>timer.cleared));
+});
+
+function coordinatorFailureLeaves(reason) {
+  return reason instanceof AggregateError ? reason.errors.flatMap(coordinatorFailureLeaves) : [reason];
+}
+function requireCoordinatorFailure(outcome, reason) {
+  assert.equal(outcome.failed,true);
+  const leaves=coordinatorFailureLeaves(outcome.reason);
+  assert.ok(leaves.some(value=>Object.is(value,reason)),"original failure identity was lost");
+  assert.ok(leaves.every(value=>!(value instanceof ReferenceError)),"unbound extracted dependency is not a failure witness");
+}
+test("coordinator actual boundaries retain Error and undefined with independent FINISH and no receipt", async () => {
+  const boundaries=["socket","rpc.start","prepare","runtime","qualify.reaper","native","ready.write","permit.receive","read","link","census.list#1","census.list#2","spawn:--fixture-census","stdin.write:L","stdin.write:Z","spawn:--check-fd","spawn:--fixture-hold","rpc.drain","packaging","report.write","rpc.finish","rpc.end","receipt.write","init.frame"];
+  for(const boundary of boundaries)for(const undefinedReason of [false,true]){
+    const reason=undefinedReason?undefined:new Error("inert boundary "+boundary),f=await coordinatorSupervisorFixture(new Map([[boundary,reason]]));
+    const outcome=await f.pump(f.run());
+    assert.ok(coordinatorFailureLeaves(outcome.reason).some(value=>Object.is(value,reason)),boundary+": "+coordinatorFailureLeaves(outcome.reason).map(value=>String(value)).join("; "));
+    requireCoordinatorFailure(outcome,reason);assert.equal(f.faults.size,0,boundary);
+    assert.equal(f.output.some(text=>text.startsWith("EDGE_CONTAINER_RECEIPT_V2 ")),false,boundary);
+    assert.equal(f.process.listenerCount("SIGINT"),0);assert.equal(f.process.listenerCount("SIGTERM"),0);
+    if(f.socket)assert.equal(f.calls.filter(row=>row[0]==="rpc.close").length,1,boundary);
+  }
+  for(const first of [undefined,new Error("packaging original")])for(const last of [undefined,new Error("finish original")]){
+    const f=await coordinatorSupervisorFixture(new Map([["packaging",first],["rpc.finish",last]]));
+    const outcome=await f.pump(f.run());requireCoordinatorFailure(outcome,first);requireCoordinatorFailure(outcome,last);
+    assert.ok(outcome.reason instanceof AggregateError);assert.equal(outcome.reason.errors[0],first);assert.ok(coordinatorFailureLeaves(outcome.reason.errors[1]).some(value=>Object.is(value,last)));
+    assert.equal(f.calls.filter(row=>row[0]==="packaging").length,1);assert.equal(f.calls.filter(row=>row[0]==="rpc.close").length,1);
+    assert.equal(f.output.some(text=>text.startsWith("EDGE_CONTAINER_RECEIPT_V2 ")),false);
+  }
+});
+test("coordinator actual substitution negatives cannot consume unrelated read or missing-control failures", async () => {
+  for(const ordinal of [1,2])for(const reason of [undefined,new Error("original census read")]){
+    const f=await coordinatorSupervisorFixture(new Map([["census.list#"+ordinal,reason]]));
+    const outcome=await f.pump(f.run());requireCoordinatorFailure(outcome,reason);
+    assert.equal(f.children.length,0);assert.equal(f.calls.filter(row=>row[0]==="packaging").length,0);
+    assert.deepEqual(await f.api.privateProcesses(undefined,f.controls),[]);
+  }
+  for(const ordinal of [1,2]){
+    const f=await coordinatorSupervisorFixture();f.censusNames=new Map([[ordinal,ordinal===1?["2"]:["1"]]]);
+    const outcome=await f.pump(f.run());assert.equal(outcome.failed,true);assert.equal(f.children.length,0);
+    const leaves=coordinatorFailureLeaves(outcome.reason);assert.equal(leaves.length,1);assert.match(leaves[0].message,/missing-census-control/);
+    assert.deepEqual(await f.api.privateProcesses(undefined,f.controls),[]);
+  }
+  const f=await coordinatorSupervisorFixture();
+  for(const role of ["reaper","coordinator"]){
+    const wrong={...f.controls,[role]:{...f.controls[role],start:"99"}}, token=f.api.bindCensusControls(wrong.reaper,wrong.coordinator);
+    const witness=f.api.createCensusComparisonWitness(token,role), outcome=await originalOutcome(f.api.privateProcesses(undefined,token,witness.recorder));
+    assert.equal(outcome.failed,true);witness.requireRejected(true,outcome.reason);
+    const other=f.api.createCensusComparisonWitness(token,role);
+    assert.throws(()=>other.requireRejected(true,outcome.reason),error=>error===outcome.reason);
+    const unobserved=f.api.createCensusComparisonWitness(token,role);let failed=false;
+    try{unobserved.requireRejected(true,undefined);}catch(error){failed=true;assert.equal(error,undefined);}assert.equal(failed,true);
+  }
+});
+test("coordinator actual supervisor waits CLOSE and held monitor before drain and its one final sample", async () => {
+  const f=await coordinatorSupervisorFixture();f.manual=true;
+  let release, samples=0, finished=false;const order=[],held=new Promise(resolve=>{release=resolve;});
+  const pending=f.api.runOwnedProcess(containerContract.reaper,["--check-fd"],{cwd:"/task",env:{},sample:()=>{order.push(++samples===1?"monitor":"final");return samples===1?held:Promise.resolve([]);},beforeFinal:async()=>{order.push("drain");}});
+  void pending.then(()=>{finished=true;});f.intervals[0].fn();await reaperTick();assert.equal(samples,1);
+  assert.equal(finished,false);f.children[0].complete();await reaperTick();assert.equal(finished,false);assert.deepEqual(order,["monitor"]);
+  release([]);await reaperTick();const join=f.timers.findLast(timer=>timer.ms===1);assert.ok(join);join.fn();
+  const outcome=await f.pump(pending);assert.equal(outcome.failed,false);f.api.requireProcessSuccess(outcome.value);
+  assert.deepEqual(order,["monitor","drain","final"]);assert.equal(outcome.value.observed.size,0);
+  assert.equal(f.process.listenerCount("SIGINT"),0);assert.ok(f.intervals.every(timer=>timer.cleared));
+});
+test("coordinator actual failed drain preserves Error or undefined and still samples strict live and Z census", async () => {
+  for(const reason of [undefined,new Error("original drain")])for(const state of [null,"S","Z"]){
+    const f=await coordinatorSupervisorFixture();f.manual=true;let samples=0,drains=0;
+    const pending=f.api.runOwnedProcess(containerContract.reaper,["--check-fd"],{cwd:"/task",env:{},sample:()=>{samples++;return f.api.privateProcesses(undefined,f.controls);},beforeFinal:async()=>{drains++;throw reason;}});
+    if(state)f.extra.push({pid:999,parent:1,group:777,start:"9990",state});
+    f.children[0].complete();const outcome=await f.pump(pending);assert.equal(outcome.failed,false);
+    const result=outcome.value;assert.equal(result.closed,true);assert.equal(result.errors.length,1);assert.equal(result.errors[0],reason);assert.equal(samples,1);assert.equal(drains,1);
+    assert.deepEqual(result.remaining.map(row=>row.state),state?[state]:[]);assert.throws(()=>f.api.requireProcessSuccess(result));
+  }
+  for(const state of ["S","Z"]){
+    const f=await coordinatorSupervisorFixture();f.manual=true;
+    const pending=f.api.runOwnedProcess(containerContract.reaper,["--check-fd"],{cwd:"/task",env:{},sample:()=>f.api.privateProcesses(undefined,f.controls),beforeFinal:async()=>{}});
+    f.extra.push({pid:999,parent:1,group:777,start:"9990",state});f.children[0].complete();const outcome=await f.pump(pending);
+    assert.equal(outcome.failed,false);assert.equal(outcome.value.errors.length,0);assert.equal(outcome.value.remaining[0].state,state);assert.throws(()=>f.api.requireProcessSuccess(outcome.value));
+  }
+});
+test("coordinator actual first final-read failure and monitor failure keep original errors and stop joins", async () => {
+  for(const stage of ["final","monitor"])for(const reason of [undefined,new Error("original sample")]){
+    const f=await coordinatorSupervisorFixture();f.manual=true;let calls=0,drains=0;
+    const pending=f.api.runOwnedProcess(containerContract.reaper,["--check-fd"],{cwd:"/task",env:{},sample:async()=>{if(++calls===1)throw reason;return[];},beforeFinal:async()=>{drains++;}});
+    if(stage==="monitor"){f.intervals[0].fn();await reaperTick();}else f.children[0].complete();
+    const outcome=await f.pump(pending);assert.equal(outcome.failed,false);const result=outcome.value;
+    assert.equal(result.errors.length,1);assert.equal(result.errors[0],reason);assert.equal(result.closed,true);assert.equal(drains,1);assert.equal(calls,stage==="monitor"?2:1);
+    assert.equal(f.calls.filter(row=>row[0]==="kill").length,stage==="monitor"?1:0);
+    if(stage==="final")assert.equal(result.remaining,null);else assert.deepEqual(result.remaining,[]);
+    assert.throws(()=>f.api.requireProcessSuccess(result));assert.equal(f.process.listenerCount("SIGINT"),0);
+  }
+});
+test("coordinator actual terminal retention precedes receipt projection and retains failure before rejection", async () => {
+  const f=await coordinatorSupervisorFixture(), source=f.sources.container;
+  const start=source.indexOf("    const attachResult = outcomes[0].value, waitResult = outcomes[1].value;"),end=source.indexOf('    await report.step("terminal"',start);
+  assert.ok(start>0&&end>start);
+  for(const mode of ["success","exit","retain-undefined","malformed"]){
+    const terminal=terminalFixture(mode==="exit"?{value:42}:{}),calls=[];
+    if(mode==="malformed")terminal.result.stderr="";
+    const retention=f.api.createReaperTerminalRetention(terminal.attached,()=>terminal.binding,async value=>{calls.push(["retain",value]);if(mode==="retain-undefined")throw undefined;});
+    const projected=async()=>{calls.push(["receipt"]);return{};};
+    const run=new Function("outcomes","projectAttach","terminalRetention","observeContainerReceipt","report","plan",`return(async()=>{let receipt;${source.slice(start,end)}return receipt;})();`);
+    const project=()=>calls.push(["attach"]);project.child=()=>{};
+    const original=retention, task=run([{value:terminal.result},{value:{}}],project,original,projected,{},{}), outcome=await originalOutcome(task);
+    assert.equal(outcome.failed,mode!=="success");assert.deepEqual(calls.map(row=>row[0]),mode==="success"?["attach","retain","receipt"]:["attach","retain"]);
+    if(mode==="retain-undefined")assert.equal(outcome.reason,undefined);
+    if(mode==="exit")assert.equal(calls[1][1].terminal.coordinator.value,42);
+    if(mode==="malformed")assert.equal(calls[1][1].unavailable,true);
+    await originalOutcome(retention(terminal.result));assert.equal(calls.filter(row=>row[0]==="retain").length,1);
+  }
+});
+test("coordinator actual extracted functions and import bindings match committed operations", async () => {
+  const f=await coordinatorSupervisorFixture();
+  for(const name of ["containerInit","hostedReaperFixtures","hostedCensusMatrix"])
+    assert.equal(f.api[name].toString(),coordinatorDeclaration(f.sources.container,name));
+  for(const name of ["runOwnedProcess","requireProcessSuccess","privateProcesses","createCensusComparisonWitness"])
+    assert.equal(f.api[name].toString(),coordinatorDeclaration(f.sources.proof,name));
+  assert.ok(f.sources.container.includes('import { Socket } from "node:net"'));
+  assert.ok(f.sources.container.includes('import { bindCensusControls, privateProcesses, createCensusComparisonWitness } from "./edge-proof.mjs"'));
+  const imports=f.sources.container.split("\n").filter(line=>line.startsWith("import ")).join("\n");
+  for(const name of ["runOwnedProcess","requireProcessSuccess","createInitDiagnostics","createPackagingDiagnostics","runPackagingPipeline"])assert.match(imports,new RegExp("\\b"+name+"\\b"));
+});
+
+test("coordinator actual held spawn errors remain original entries before qualification and FINISH failures", async () => {
+  for(const original of [undefined,new Error("held spawn"),new AggregateError([undefined],"original aggregate")])for(const finish of [undefined,new Error("independent finish")]){
+    const f=await coordinatorSupervisorFixture(new Map([["spawn:--fixture-hold",original],["rpc.finish",finish]]));
+    const outcome=await f.pump(f.run());assert.equal(outcome.failed,true);
+    assert.ok(outcome.reason instanceof AggregateError);const operation=outcome.reason.errors[0];assert.ok(operation instanceof AggregateError);
+    assert.equal(operation.errors.length,3);assert.equal(operation.errors[0],original);assert.match(operation.errors[1].message,/control-barrier-without-close/);assert.match(operation.errors[2].message,/reaper-held-ack-fixture/);
+    assert.equal(operation.errors.filter(error=>Object.is(error,original)).length,1);
+    assert.ok(coordinatorFailureLeaves(outcome.reason.errors[1]).some(value=>Object.is(value,finish)));
+    assert.equal(f.calls.filter(row=>row[0]==="spawn:--fixture-hold").length,1);assert.equal(f.calls.filter(row=>row[0]==="rpc.finish").length,1);
+    assert.equal(f.calls.filter(row=>row[0]==="rpc.close").length,1);assert.equal(f.calls.filter(row=>row[0]==="packaging").length,0);
+    assert.equal(f.output.some(text=>text.startsWith("EDGE_CONTAINER_RECEIPT_V2 ")),false);
+  }
+});
+test("coordinator actual successful negative fixture still waits FINISH original CLOSE before receipt", async () => {
+  const f=await coordinatorSupervisorFixture();let done=false;const pending=f.run();void pending.then(()=>{done=true;});
+  for(let i=0;i<1000&&!f.calls.some(row=>row[0]==="rpc.end");i++){await reaperTick();if(f.queue.length&&!f.calls.some(row=>row[0]==="rpc.end"))f.queue.shift()();}
+  assert.equal(f.calls.filter(row=>row[0]==="rpc.end").length,1);assert.equal(done,false);
+  assert.equal(f.calls.filter(row=>row[0]==="rpc.close").length,0);assert.equal(f.output.some(text=>text.startsWith("EDGE_CONTAINER_RECEIPT_V2 ")),false);
+  assert.deepEqual(f.calls.filter(row=>row[0]==="kill").map(row=>row.slice(1)),[[-6,"SIGTERM"]]);
+  assert.equal(f.calls.filter(row=>row[0]==="rpc.drain").length,3);
+  const outcome=await f.pump(pending);assert.equal(outcome.failed,false);assert.equal(done,true);
+});
+// END actual coordinator supervisor inert tests.
