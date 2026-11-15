@@ -1,51 +1,75 @@
 # LiteLLM configured model discovery
 
-The `models_list` declaration uses bodyless, query-free `GET /models`, exposed
-through `/v1/native/litellm/models` and `/v1/proxy/litellm/models_list`.
-It appends `/models` to the explicitly configured `LITELLM_BASE_URL`. Configure
-the gateway's API base, including its deployment prefix and `/v1` when used.
-The router adds no version segment or default host and does not change Chat.
+The original `models_list` declaration remains bodyless, query-free `GET /models`,
+exposed through `/v1/native/litellm/models` and
+`/v1/proxy/litellm/models_list`. The additional native `/v1/models` alias maps to
+that same upstream `/models` suffix. The native `/v1/chat/completions` alias maps
+to the original upstream `/chat/completions` suffix. Original endpoints and first
+capability bindings remain unchanged; unified routing still selects them.
 
-Only the original selected managed API-key grant can authorize this catalog.
-The key belongs to that configured gateway; a direct-provider key, caller header,
-environment fallback or another grant cannot replace it. Discovery establishes
-no administrative or master-key authority. Common original-owner runtime from
-PR798 checks caller policy, credential lineage and destination before fetch and
-after complete parsing. Returned IDs intersect the admitted and current model
-policies. Broader permissions acquired during the read cannot widen the result.
-One operation owns the deadline, cancellation and bounded response lease.
+Configure `LITELLM_BASE_URL` with the gateway's API base, including deployment
+prefixes and `/v1` when used. The router appends the original upstream suffix;
+it does not invent a default host, credentials, or another version segment.
 
-The supported response is `{object: "list", data: [{id: "..."}]}`. IDs are opaque
-gateway aliases; the router does not resolve them to an underlying vendor model.
-The policy identity is `litellm/<returned-id>`. Empty inventory stays empty, with
-no configured-card or cached-catalog replacement. Additional upstream row fields
-remain opaque metadata: they do not set router token limits, model capabilities,
-prices, account entitlements or administrative permissions. Unknown inference
-costs remain unknown; a nonbillable metadata operation is not free inference.
+Only the selected managed API-key grant authorizes discovery. Caller headers,
+environment credentials and unrelated grants cannot replace that owner. The
+original caller, credential lineage and destination are checked before egress
+and after complete parsing. Returned IDs intersect both admitted and current
+model policies. Permissions broadened during parsing cannot widen that result.
 
-## Frozen client contract and remaining integration
+The response must be `{object: "list", data: [{id: "..."}]}`. Empty inventory
+stays empty. IDs are opaque gateway aliases; additional row fields are upstream
+observations, not router prices, limits, entitlements or vendor model identity.
+The discovery policy identity is `litellm/<returned-id>`. Arbitrary gateway
+inference aliases require an unrestricted model policy: the existing native
+opaque-model fallback refuses a restricted policy that cannot prove a registered
+model. Discovery permission alone does not grant inference permission.
 
-At OpenClaw `31ad71a8addc1d42fbc5478f7e114860f5cbf6c7`,
-`extensions/litellm/index.ts:256-271` selects strict live discovery and the
-configured base. A base ending in `/v1` uses `models`; otherwise it uses
-`v1/models`. That source records LiteLLM's root and versioned model-list routes.
-`src/plugin-sdk/provider-catalog-live-acquisition.internal.ts:82-118` accepts
-arrays or a `data` envelope and sends the resolved discovery key as Bearer.
-This declaration keeps the stricter existing `openai.models` envelope; it does
-not activate a data-only or array decoder, or retry another path after failure.
+Metadata has zero router reservation and cost. Inference still requires explicit
+financial admission. The fixtures use a seven-micro-unit fixed policy, separately
+from unknown vendor pricing. A hard-dollar budget without qualified pricing or
+that explicit fixed policy refuses inference before a paid POST. Observed token
+usage remains distinct from absent counters.
 
-The frozen normalizer in
-`src/plugin-sdk/provider-catalog-live-normalize.internal.ts:200-345` can infer
-context, output limits and zero costs. Those client defaults are not qualified
-LiteLLM account facts and are not copied into this declaration. The existing
-configured card and its unknown prices remain unchanged.
+## Pinned client proof
 
-Snapshot activation belongs to the serialized integration owner. Actual client
-qualification remains separate: the qualified public client at
-`d8bb939408aa4d2be7df0161748edb52ebf3b1fb`,
-`extensions/clawrouter/provider-catalog.ts:463-489`, reads `/v1/catalog`; this
-server declaration alone does not make it refresh LiteLLM's upstream list.
-The client owner must consume the offered native/manifest discovery route with
-the router credential, preserve the caller operation and cancellation, and keep
-unknown facts distinct from defaults. No direct gateway-key forwarding, live
-gateway provisioning or additional provider scope is included here.
+The authored consumer pins OpenClaw
+`d8bb939408aa4d2be7df0161748edb52ebf3b1fb`. Its registered LiteLLM catalog selects
+strict live discovery, preserves the configured base and resolves auth once.
+A base ending in `/v1` requests `models`; other bases request `v1/models`.
+The fixture calls that real catalog and public `stream`/`streamSimple`, using the
+native aliases above. It does not claim registered-client manifest support.
+Manifest metadata is covered separately by real Worker requests.
+
+The local tests compile the entire provider inventory and use real HTTP,
+Workerd, original managed grants and SQLite. The configuration-race test alone
+is labelled fault injection: it changes the fixture environment during an
+original credential inspection. It is not a claim about deployed hot reload.
+
+The SDK consumer executes only in the existing ephemeral Node 24 workflow with
+its own pinned checkout and dependencies. Local syntax, source and Worker tests
+are not SDK execution proof. Four genuine EOF, pre-abort, partial caller-abort
+and provider-error controls precede the other SDK cases. Original acquisition,
+read, closed, cancel, release and dispatcher promises remain strict; no native
+cancellation disposition from another provider is imported. Inference releases
+its original request lease without closing the process-owned dispatcher pool.
+A cached discovery waiter abort is not shared transport cancellation.
+
+The local 30-second metadata deadline control has a separate Worker-only
+disposition. It retains the original rejected read and its same-reason derived
+observer after the bound, branded deadline fires with the caller still active.
+The cancellation operand must be the deadline reason; the read reason can
+differ. Original cancellation, closed, unlock, handler, background work and
+upstream producer retirement must still succeed without fixture expiry. The
+single GET must return the sanitized 502 and its correlated zero-cost metadata
+receipt with absent token counters. This does not establish that the deadline
+caused the read rejection: a concurrent data failure can meet the same contract.
+
+The two earlier local caller-abort controls failed: the direct HTTP/1 ingress
+did not deliver an abort signal to the Worker, and the fixture upstream expired.
+Those failures remain open; deadline qualification does not waive them or
+qualify SDK cancellation.
+
+Hosted SDK execution, its actual compiled observer attachment and complete
+physical retirement remain unqualified until that candidate's consumer passes.
+No deployment or native OpenClaw readiness is implied.
