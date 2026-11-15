@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { deflateSync } from "node:zlib";
 import { createRequire } from "node:module";
 import { edgeProof } from "./edge-proof-profile.mjs";
-import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, validateContainerDiagnostic, initGuardTags, initSourcePhases, validateInitDetail, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission } from "./edge-proof.mjs";
+import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, validateContainerDiagnostic, initGuardTags, initSourcePhases, validateInitDetail, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic } from "./edge-proof.mjs";
 export { validateContainerDiagnostic, emitContainerFailure } from "./edge-proof.mjs";
 
 export const containerContract = Object.freeze({
@@ -60,7 +60,9 @@ const own = (value, key) => {
   check(descriptor && Object.hasOwn(descriptor, "value"), "own-data");
   return descriptor.value;
 };
-const exactKeys = (value, keys) => check(same(Object.getOwnPropertyNames(value).sort(), [...keys].sort()), "data-keys");
+const receiptRecord = (recorder, method, ...args) => { if (recorder) try { recorder[method](...args); } catch (error) { recorder.errors.push(error); } };
+const receiptLeaf = (recorder, id, value) => { receiptRecord(recorder, "leaf", id, value); return value; };
+const exactKeys = (value, keys, recorder) => check(receiptLeaf(recorder, 1, same(Object.getOwnPropertyNames(value).sort(), [...keys].sort())), "data-keys");
 export function raiseContainerFailures(errors) {
   if (errors.length === 1) throw errors[0];
   if (errors.length) throw new AggregateError(errors, "edge-container: independent failures");
@@ -575,8 +577,8 @@ export function validateMounts(rows, recorder, cgroupView) {
 }
 // Node v24.22.1 fs.Dir uses the held proc-FD path, bufferSize 1, and explicit
 // read/close promises. Native closedir errno is not exposed by bundled libuv.
-export function validateMaskCompletion(value) {
-  check(Array.isArray(value) && value.length === 6 && value[0] === 1 && Number.isInteger(value[1]) && value[1] >= 0 && value[1] < 4096 && value.slice(2, 5).every(n => n === value[1]) && value[5] === "UNOBSERVABLE", "mask-completion");
+export function validateMaskCompletion(value, recorder) {
+  check(receiptLeaf(recorder, 1, Array.isArray(value)) && receiptLeaf(recorder, 2, value.length === 6) && receiptLeaf(recorder, 3, value[0] === 1) && receiptLeaf(recorder, 4, Number.isInteger(value[1])) && receiptLeaf(recorder, 5, value[1] >= 0) && receiptLeaf(recorder, 6, value[1] < 4096) && receiptLeaf(recorder, 7, value.slice(2, 5).every(n => n === value[1])) && receiptLeaf(recorder, 8, value[5] === "UNOBSERVABLE"), "mask-completion");
   return value;
 }
 export async function validateEmptyMasks(rows, recorder, io = { open, opendir, realpath, lstat, readFile, readlink, constants: fsConstants }) {
@@ -878,9 +880,98 @@ export function parseInitPrerequisites(result, binding) {
     return validateContainerDiagnostic({ v: 7, phase: "init_prerequisite", state: terminal.reason === "complete" ? "observed" : "rejected", stage: terminal.reason === "original_failure" ? terminal.stage : null, defined: terminal.defined, records: rows.length, reason: terminal.reason, reportFailures: terminal.reportFailures, undefinedReportFailures: terminal.undefinedReportFailures, ...(Object.hasOwn(terminal, "detail") ? { detail: terminal.detail } : {}) });
   } catch { return unknown("invalid"); }
 }
+// This validates the source-defined record lifecycle, not native success or
+// operation-vs-bookkeeping causality. Report errors can follow FINAL fulfilled.
+export function parseChildPackaging(result, binding, initSummary) {
+  const unknown = (reason, records = null) => [1,reason,records,0,0,0,0,null,"UNKNOWN"];
+  if (!binding || !cidPattern.test(binding.cid) || !hashPattern.test(binding.nonce) || !hashPattern.test(binding.contextHash) || binding.attached?.result !== result) return unknown("binding_unavailable");
+  if (!result.supervisor?.[4] || !result.supervisor?.[5] || !result.closed) return unknown("capture_unavailable");
+  for (const key of ["stdout", "stderr"]) {
+    const summary = result.outputSummary?.[key];
+    if (!summary || summary.complete !== true || summary.truncated !== false) return unknown("capture_unavailable");
+    const bytes = Buffer.from(result[key]);
+    if (bytes.length !== summary.bytes || bytes.length !== summary.retainedBytes || hash(bytes) !== summary.sha256 || summary.retainedSha256 !== summary.sha256) return unknown("capture_mismatch");
+  }
+  if (initSummary?.reason !== "complete" || initSummary.records !== 9) return unknown("init_unqualified");
+  const rows = [], prefix = "EDGE_PACKAGING_V1 ";
+  try {
+    const lines = result.stdout.split("\n");
+    for (const [index,line] of lines.entries()) {
+      if (!line.includes("EDGE_PACKAGING")) continue;
+      check(index < lines.length - 1 && line.startsWith(prefix) && !line.includes("\x1b") && Buffer.byteLength(line + "\n") <= 768 && rows.length < 256, "child-frame");
+      const value = JSON.parse(line.slice(prefix.length)), row = validatePackagingDiagnostic(value);
+      check(JSON.stringify(value) === line.slice(prefix.length) && JSON.stringify(row) === JSON.stringify(value) && ["child","build_a","build_b"].includes(row.role), "child-frame-canonical");
+      if (row.outcome === "rejected") check(typeof row.defined === "boolean", "child-rejection-presence");
+      else if (row.outcome !== "observed") check(row.defined === null, "child-nonfailure-presence");
+      rows.push(row);
+    }
+    if (!rows.length) return unknown("no_records",0);
+    const roles = ["child","build_a","build_b"], lifecycle = new Map();
+    for (const role of roles) {
+      const records = rows.filter(row => row.role === role); if (!records.length) continue;
+      const terminal = validateChildLifecycle(records, role); if (!terminal) return unknown("incomplete",rows.length);
+      lifecycle.set(role,terminal);
+    }
+    if (!lifecycle.has("child")) return unknown("incomplete",rows.length);
+    const child = lifecycle.get("child"), rejected = rows.find(row => row.outcome === "rejected");
+    for (const role of ["build_a","build_b"]) {
+      const members = rows.filter(row => row.role === role), accepted = child.accepts.find(item => item.role === role);
+      if (members.length) {
+        check(accepted && rows.indexOf(members[0]) > rows.indexOf(accepted.close) && rows.indexOf(members.at(-1)) < rows.indexOf(accepted.row) && rows.indexOf(members.at(-1)) - rows.indexOf(members[0]) + 1 === members.length, "child-forwarded-order");
+      }
+      if (accepted?.row.outcome === "fulfilled") check(lifecycle.get(role)?.terminal === "fulfilled" && !members.some(row => row.outcome === "rejected"), "child-accepted-role");
+    }
+    check(child.terminal !== "fulfilled" || !rejected && lifecycle.size === 3, "child-final-conflict");
+    const first = rejected ?? null, mask = roles.reduce((bits,role,index) => bits | (lifecycle.has(role) ? 2 ** index : 0),0);
+    return [1,first ? "reported_rejection" : "reported_complete",rows.length,mask,child.terminal === "fulfilled" ? 1 : 2,first ? roles.indexOf(first.role)+1 : 0,first ? receiptChildPhases.indexOf(first.phase)+1 : 0,first ? first.defined : null,"UNKNOWN"];
+  } catch { return unknown("invalid"); }
+}
+function validateChildLifecycle(rows, role) {
+  let index = 0, failed = false; const accepts = [];
+  const peek = (phase,outcome) => rows[index]?.phase === phase && (outcome === undefined || rows[index]?.outcome === outcome);
+  const take = (phase,outcome) => { check(peek(phase,outcome),"child-lifecycle-order"); return rows[index++]; };
+  const final = complete => {
+    if (!peek("final")) return null;
+    const row = rows[index++]; check(index === rows.length && ["fulfilled","rejected"].includes(row.outcome) && (row.outcome !== "fulfilled" || complete && !failed),"child-lifecycle-final");
+    return { terminal: row.outcome, accepts };
+  };
+  const step = phase => { take(phase,"enter"); const row=rows[index++]; check(row?.phase===phase && ["fulfilled","rejected"].includes(row.outcome),"child-lifecycle-step"); failed ||= row.outcome === "rejected"; return row.outcome === "fulfilled"; };
+  take("entry","fulfilled");
+  if (role !== "child") {
+    if (!step("namespace_read")) return final(false);
+    if (peek("final")) return final(false); // original nativeReceipt can throw
+    if (!step("builder_import")) return final(false);
+    if (peek("final")) return final(false); // original module acquisition can throw
+    if (step("build")) step("receipt_write");
+    step("build_service_stop");
+    return final(!failed);
+  }
+  for (const phase of ["namespace_read","process_inventory","environment"]) if (!step(phase)) return final(false);
+  for (const role of ["build_a","build_b"]) {
+    take(role+"_launch","enter"); if (peek("final")) return final(false);
+    const close = rows[index++]; check(close?.phase === role+"_close" && ["fulfilled","rejected"].includes(close.outcome),"child-lifecycle-close"); failed ||= close.outcome === "rejected";
+    let summaries = 0;
+    for (const phase of ["stdout_summary","stderr_summary","protocol_summary"]) { if (!peek(phase,"observed")) break; take(phase,"observed"); summaries++; }
+    if (summaries !== 3) { take(role+"_report","rejected"); failed = true; }
+    const accepted = rows[index++]; check(accepted?.phase === role+"_report" && ["fulfilled","rejected"].includes(accepted.outcome),"child-lifecycle-report"); failed ||= accepted.outcome === "rejected"; accepts.push({role,row:accepted,close});
+    if (failed) return final(false);
+    if (peek("final")) return final(false); // original JSON/result checks can throw
+    if (!step(role+"_report")) return final(false); // legitimate repeated phase
+  }
+  for (const phase of ["two_roots","wrangler_input"]) if (!step(phase)) return final(false);
+  for (const role of ["edge","upstream"]) {
+    if (!step(role+"_config")) return final(false);
+    take(role+"_launch","enter"); if (peek("final")) return final(false);
+    const close = rows[index++]; check(close?.phase === role+"_close" && ["fulfilled","rejected"].includes(close.outcome),"child-lifecycle-close"); failed ||= close.outcome === "rejected";
+    if (failed) return final(false);
+    for (const suffix of ["output","marker","hash","privacy"]) if (!step(role+"_"+suffix)) return final(false);
+  }
+  for (const phase of ["final_namespace","final_descendants"]) if (!step(phase)) return final(false);
+  return final(true);
+}
 export function createAttachProjection(attached, plan, report) {
-  const binding = { attached, cid: plan.cid, nonce: plan.nonce, contextHash: plan.contextHash }; let projected = false;
-  return result => {
+  const binding = { attached, cid: plan.cid, nonce: plan.nonce, contextHash: plan.contextHash }; let projected = false, initSummary;
+  const project = result => {
     if (projected) return; projected = true;
     const retain = operation => { try { operation(); } catch (error) { attached.result.errors.push(error); } };
     retain(() => {
@@ -889,8 +980,10 @@ export function createAttachProjection(attached, plan, report) {
         errors: result.errors.length, undefinedErrors: result.errors.filter(error => error === undefined).length, supervisor: [...result.supervisor], ready: result.readyAccepted, first: result.firstBranch, branches: result.branches,
         capture: [result.outputSummary.stdout?.complete === true, result.outputSummary.stderr?.complete === true] }));
     });
-    retain(() => report.internal(parseInitPrerequisites(result, binding)));
+    retain(() => { initSummary = parseInitPrerequisites(result, binding); report.internal(initSummary); });
   };
+  project.child = result => parseChildPackaging(result, binding, initSummary);
+  return project;
 }
 export async function runInitPrerequisites(args, trace, operations, ledger) {
   const reporting = [], observe = operation => { try { operation(); } catch (error) { reporting.push(error); } };
@@ -1054,16 +1147,50 @@ export async function observeImageBuild(operation, readImageId, parseReceipt, re
   const native = await observe("native_receipt", () => parseReceipt(built.stdout));
   return { imageId, native };
 }
-export function parseContainerReceipt(text, plan) {
-  const lines = text.split("\n").filter(line => line.startsWith("EDGE_CONTAINER_RECEIPT_V2 "));
-  check(lines.length === 1 && Buffer.byteLength(lines[0]) <= 8192, "container-receipt-count");
-  const receipt = JSON.parse(lines[0].slice("EDGE_CONTAINER_RECEIPT_V2 ".length));
-  exactKeys(receipt, ["version", "isolation", "nonce", "contextHash", "nativeHash", "sourceSha", "sourceTree", "sourceFiles", "dependencyFiles", "exactErasures", "twoRoots", "cliSha256", "results", "cloud", "sdk", "masks"]);
-  check(receipt.version === 2 && receipt.isolation === "private-container-pid-net-mount" && receipt.nonce === plan.nonce && receipt.contextHash === plan.contextHash && receipt.nativeHash === plan.nativeHash && receipt.sourceSha === edgeProof.sourceSha && receipt.sourceTree === edgeProof.sourceTree && receipt.sourceFiles === 600 && receipt.dependencyFiles === 268 && receipt.exactErasures === 4 && receipt.twoRoots === true && receipt.cliSha256 === containerContract.cliHash && receipt.sdk === "UNRUN" && receipt.cloud === "UNRUN", "container-receipt-identity");
-  validateMaskCompletion(receipt.masks);
-  exactKeys(receipt.results, ["edge", "upstream"]);
-  for (const result of Object.values(receipt.results)) { exactKeys(result, ["code", "signal", "closed", "sha256", "observedProcesses"]); check(result.code === 0 && result.signal === null && result.closed === true && hashPattern.test(result.sha256) && Number.isSafeInteger(result.observedProcesses) && result.observedProcesses >= 1, "container-wrangler-result"); }
+export function createReceiptLedger() {
+  const errors = []; let operation = 0, ordinal = 0, seen = 0, passed = 0, falseLeaf = 0, broken = false;
+  const note = fn => { try { fn(); } catch (error) { broken = true; errors.push(error); } };
+  return { errors,
+    enter(name, role = 0) { note(() => { operation = receiptOperations.findIndex(row => row[0] === name) + 1; check(operation > 0 && [0,1,2].includes(role), "receipt-observation-operation"); ordinal = role; seen = passed = falseLeaf = 0; }); },
+    leaf(id, value) { note(() => { check(operation > 0 && Number.isInteger(id) && id > 0 && id <= receiptOperations[operation - 1][1], "receipt-observation-leaf"); const bit = 2 ** (id - 1); seen |= bit; if (value) passed |= bit; else falseLeaf ||= id; }); },
+    finish(outcome, reason) { return broken || errors.length ? null : [1,outcome,outcome === 2 ? reason !== undefined : null,outcome === 2 ? operation : 0,outcome === 2 ? falseLeaf ? 1 : seen ? 2 : 0 : 0,outcome === 2 ? falseLeaf : 0,outcome === 2 ? ordinal : 0,outcome === 2 ? seen : 0,outcome === 2 ? passed : 0]; },
+  };
+}
+export function parseContainerReceipt(text, plan, recorder) {
+  receiptRecord(recorder, "enter", "scan"); const split = text.split("\n");
+  receiptRecord(recorder, "enter", "filter"); const lines = split.filter(line => line.startsWith("EDGE_CONTAINER_RECEIPT_V2 "));
+  receiptRecord(recorder, "enter", "count_size");
+  check(receiptLeaf(recorder, 1, lines.length === 1) && receiptLeaf(recorder, 2, Buffer.byteLength(lines[0]) <= 8192), "container-receipt-count");
+  receiptRecord(recorder, "enter", "json"); const receipt = JSON.parse(lines[0].slice("EDGE_CONTAINER_RECEIPT_V2 ".length));
+  receiptRecord(recorder, "enter", "keys"); exactKeys(receipt, ["version", "isolation", "nonce", "contextHash", "nativeHash", "sourceSha", "sourceTree", "sourceFiles", "dependencyFiles", "exactErasures", "twoRoots", "cliSha256", "results", "cloud", "sdk", "masks"], recorder);
+  receiptRecord(recorder, "enter", "identity");
+  check(receiptLeaf(recorder, 1, receipt.version === 2) && receiptLeaf(recorder, 2, receipt.isolation === "private-container-pid-net-mount") && receiptLeaf(recorder, 3, receipt.nonce === plan.nonce) && receiptLeaf(recorder, 4, receipt.contextHash === plan.contextHash) && receiptLeaf(recorder, 5, receipt.nativeHash === plan.nativeHash) && receiptLeaf(recorder, 6, receipt.sourceSha === edgeProof.sourceSha) && receiptLeaf(recorder, 7, receipt.sourceTree === edgeProof.sourceTree) && receiptLeaf(recorder, 8, receipt.sourceFiles === 600) && receiptLeaf(recorder, 9, receipt.dependencyFiles === 268) && receiptLeaf(recorder, 10, receipt.exactErasures === 4) && receiptLeaf(recorder, 11, receipt.twoRoots === true) && receiptLeaf(recorder, 12, receipt.cliSha256 === containerContract.cliHash) && receiptLeaf(recorder, 13, receipt.sdk === "UNRUN") && receiptLeaf(recorder, 14, receipt.cloud === "UNRUN"), "container-receipt-identity");
+  receiptRecord(recorder, "enter", "masks"); validateMaskCompletion(receipt.masks, recorder);
+  receiptRecord(recorder, "enter", "results_keys"); exactKeys(receipt.results, ["edge", "upstream"], recorder);
+  receiptRecord(recorder, "enter", "values"); let ordinal = 0;
+  for (const result of Object.values(receipt.results)) {
+    receiptRecord(recorder, "enter", "result_keys", ++ordinal); exactKeys(result, ["code", "signal", "closed", "sha256", "observedProcesses"], recorder);
+    receiptRecord(recorder, "enter", "result", ordinal);
+    check(receiptLeaf(recorder, 1, result.code === 0) && receiptLeaf(recorder, 2, result.signal === null) && receiptLeaf(recorder, 3, result.closed === true) && receiptLeaf(recorder, 4, hashPattern.test(result.sha256)) && receiptLeaf(recorder, 5, Number.isSafeInteger(result.observedProcesses)) && receiptLeaf(recorder, 6, result.observedProcesses >= 1), "container-wrangler-result");
+  }
   return receipt;
+}
+export async function observeContainerReceipt(report, text, plan, childSummary, recorder = createReceiptLedger()) {
+  const reporting = []; let outcome = 0, operationReason, stepFailed = false, stepReason, value;
+  try { value = await report.step("receipt", () => {
+    try { value = parseContainerReceipt(text, plan, recorder); outcome = 1; return value; }
+    catch (error) { outcome = 2; operationReason = error; throw error; }
+  }, reporting); } catch (error) { stepFailed = true; stepReason = error; }
+  const failures = [...(outcome === 2 ? [operationReason] : []), ...reporting];
+  if (stepFailed && !reporting.length && (outcome !== 2 || !Object.is(stepReason, operationReason))) failures.push(stepReason);
+  failures.push(...recorder.errors);
+  if (failures.length) {
+    try { report.internal(validateReceiptDiagnostic({ v: 9, phase: "receipt", state: "rejected", defined: failures[0] !== undefined, exit: null, signal: null,
+      parser: recorder.finish(outcome, operationReason), child: childSummary(), reports: [reporting.length + recorder.errors.length, [...reporting, ...recorder.errors].filter(error => error === undefined).length] })); }
+    catch (error) { failures.push(error); }
+    raiseContainerFailures(failures);
+  }
+  return value;
 }
 async function containerInit(args, sharedReport) {
   let identity, masks; const trace = createInitDiagnostics(), ledger = createInitGuardLedger(); if (sharedReport) sharedReport.init = trace;
@@ -1207,7 +1334,7 @@ async function hostContainerRun(report) {
     raiseContainerFailures(outcomes.filter(outcome => outcome.status === "rejected").map(outcome => outcome.reason));
     const attachResult = outcomes[0].value, waitResult = outcomes[1].value;
     projectAttach(attachResult);
-    receipt = await report.step("receipt", () => parseContainerReceipt(attachResult.stdout, plan));
+    receipt = await observeContainerReceipt(report, attachResult.stdout, plan, () => projectAttach.child(attachResult));
     await report.step("terminal", async () => {
       await recheckParent(); const terminal = await readOwned();
       const cgroup = await report.step("cgroup", () => retiredCgroup(bound));

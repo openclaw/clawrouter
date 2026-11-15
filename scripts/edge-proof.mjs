@@ -823,7 +823,37 @@ export function validateParentAdmission(value) {
   return row;
 }
 
+export const receiptOperations = Object.freeze([["scan",0],["filter",0],["count_size",2],["json",0],["keys",1],["identity",14],["masks",8],["results_keys",1],["values",0],["result_keys",1],["result",6]]);
+export const receiptChildPhases = Object.freeze(["entry","namespace_read","process_inventory","environment","build_a_launch","build_a_close","build_a_report","build_b_launch","build_b_close","build_b_report","builder_import","build","receipt_write","build_service_stop","two_roots","wrangler_input","edge_config","edge_launch","edge_close","edge_output","edge_marker","edge_hash","edge_privacy","upstream_config","upstream_launch","upstream_close","upstream_output","upstream_marker","upstream_hash","upstream_privacy","final_namespace","final_descendants","final"]);
+export function validateReceiptDiagnostic(value) {
+  const keys=["v","phase","state","defined","exit","signal","parser","child","reports"];
+  if (Object.getOwnPropertyNames(value).sort().join() !== [...keys].sort().join()) refuse("receipt-diagnostic-keys");
+  const row=Object.fromEntries(keys.map(key=>[key,ownData(value,key)]));
+  if (row.v!==9 || row.phase!=="receipt" || row.state!=="rejected" || typeof row.defined!=="boolean" || row.exit!==null || row.signal!==null) refuse("receipt-diagnostic-state");
+  const tuple=(v,n)=>{if(!Array.isArray(v)||Object.getOwnPropertyNames(v).join()!==[...Array(n).keys(),"length"].join())refuse("receipt-diagnostic-tuple");return Array.from({length:n},(_,i)=>ownData(v,String(i)));};
+  if(row.parser!==null){
+    row.parser=tuple(row.parser,9);const [v,outcome,defined,op,kind,leaf,role,seen,passed]=row.parser;
+    if(v!==1||![0,1,2].includes(outcome)||![0,1,2].includes(kind)||![0,1,2].includes(role)||![op,leaf,seen,passed].every(Number.isSafeInteger)||op<0||op>receiptOperations.length||seen<0||passed<0||(passed&seen)!==passed)refuse("receipt-parser-values");
+    if(outcome!==2){if(defined!==null||op||kind||leaf||role||seen||passed)refuse("receipt-parser-nonfailure");}
+    else {
+      if(typeof defined!=="boolean"||row.defined!==defined||!op||([10,11].includes(op)?role===0:role!==0))refuse("receipt-parser-operation");
+      const width=receiptOperations[op-1][1];if(seen>=2**width||passed>=2**width)refuse("receipt-parser-width");
+      if(kind===1){if(leaf<1||leaf>width||seen!==2**leaf-1||passed!==2**(leaf-1)-1)refuse("receipt-parser-false");}
+      else if(leaf||passed!==seen||(kind===0?seen!==0:seen===0)||!Array.from({length:width+1},(_,n)=>2**n-1).includes(seen))refuse("receipt-parser-throw");
+    }
+  }
+  row.child=tuple(row.child,9);const [v,reason,records,mask,terminal,role,phase,defined,reporting]=row.child;
+  const known=["reported_rejection","reported_complete"].includes(reason);
+  if(v!==1||reporting!=="UNKNOWN"||!["binding_unavailable","capture_unavailable","capture_mismatch","init_unqualified","no_records","incomplete","invalid","reported_rejection","reported_complete"].includes(reason))refuse("receipt-child-reason");
+  if(known){if(!Number.isInteger(records)||records<2||records>256||!Number.isInteger(mask)||mask<1||mask>7||!(mask&1)||![1,2].includes(terminal))refuse("receipt-child-lifecycle");
+    if(reason==="reported_complete"?(mask!==7||terminal!==1||role!==0||phase!==0||defined!==null):(terminal!==2||![1,2,3].includes(role)||!(mask&2**(role-1))||!Number.isInteger(phase)||phase<1||phase>receiptChildPhases.length||typeof defined!=="boolean"))refuse("receipt-child-outcome");
+    if(reason === "reported_rejection") { const builder = ["entry","namespace_read","builder_import","build","receipt_write","build_service_stop","final"]; const name = receiptChildPhases[phase-1]; if (role === 1 ? ["builder_import","build","receipt_write","build_service_stop"].includes(name) : !builder.includes(name)) refuse("receipt-child-role-phase"); }
+  } else if(mask||terminal||role||phase||defined!==null||(reason==="no_records"?records!==0:reason==="incomplete"?!Number.isInteger(records)||records<1||records>256:records!==null))refuse("receipt-child-unknown");
+  row.reports=tuple(row.reports,2);if(!row.reports.every(n=>Number.isSafeInteger(n)&&n>=0&&n<=65535)||row.reports[1]>row.reports[0]||row.parser?.[1]!==2&&row.reports[0]===0)refuse("receipt-report-failure");
+  return row;
+}
 export function validateContainerDiagnostic(value) {
+  if (value && typeof value === "object" && ownData(value, "v") === 9) return validateReceiptDiagnostic(value);
   if (value && typeof value === "object" && ownData(value, "v") === 8) return validateParentAdmission(value);
   if (value && typeof value === "object" && ownData(value, "v") === 6) {
     const fields = ["v", "phase", "state", "exit", "signal", "closed", "timedOut", "interrupted", "errors", "undefinedErrors", "supervisor", "ready", "first", "branches", "capture"];
@@ -930,13 +960,14 @@ export function containerProcessDiagnostic(result, available = true, reason) {
 export function emitContainerFailure(records, writer = line => process.stdout.write(line)) {
   const validated = records.map(validateContainerDiagnostic), detailed = validated.filter(row => row.v === 8);
   if (detailed.length > 1) refuse("parent-admission-duplicate");
-  const rows = validated.filter(row => !(detailed.length && row.phase === "admission" && row.v === 2)), unique = new Map();
+  const receipt = validated.filter(row => row.v === 9); if (receipt.length > 1) refuse("receipt-diagnostic-duplicate");
+  const rows = validated.filter(row => !(detailed.length && row.phase === "admission" && row.v === 2) && !(receipt.length && row.phase === "receipt" && row.v === 2)), unique = new Map();
   const rejected = rows.filter(row => row.state === "rejected");
   // Reserve the first actual failure and original build outcome before context.
   const reserved = ["admission", "ready", "attach_process", "init_prerequisite", "retirement"].map(phase =>
     rows.findLast(row => row.phase === phase && row.state === "rejected") ?? (["attach_process", "init_prerequisite"].includes(phase) ? rows.findLast(row => row.phase === phase) : undefined),
   ).filter(Boolean).concat(rows.filter(row => [3, 4, 5].includes(row.v)));
-  for (const row of [...rejected.slice(0, 1), ...reserved, ...rejected.slice(1), ...rows.toReversed()]) if (!unique.has(row.phase)) unique.set(row.phase, row);
+  for (const row of [...receipt, ...rejected.slice(0, 1), ...reserved, ...rejected.slice(1), ...rows.toReversed()]) if (!unique.has(row.phase)) unique.set(row.phase, row);
   const selected = [...unique.values()].slice(0, 9);
   if (unique.size > 9) selected.push({ v: 2, phase: "overflow", state: "rejected", defined: null, exit: Math.min(255, unique.size - 9), signal: null });
   let bytes = 0;
@@ -950,7 +981,13 @@ export function createContainerDiagnostics() {
   const mark = (phase, state, reason) => records.push(validateContainerDiagnostic({ v: 2, phase, state, defined: state === "rejected" ? reason !== undefined : null, exit: null, signal: null }));
   return { records, mark, process(result, available, reason) { records.push(containerProcessDiagnostic(result, available, reason)); }, internal(row) { records.push(validateContainerDiagnostic(row)); },
     sync(phase, operation) { mark(phase, "entered"); try { const value = operation(); mark(phase, "fulfilled"); return value; } catch (error) { mark(phase, "rejected", error); throw error; } },
-    async step(phase, operation) { mark(phase, "entered"); try { const value = await operation(); mark(phase, "fulfilled"); return value; } catch (error) { mark(phase, "rejected", error); throw error; } },
+    async step(phase, operation, reporting) {
+      if (reporting === undefined) { mark(phase, "entered"); try { const value = await operation(); mark(phase, "fulfilled"); return value; } catch (error) { mark(phase, "rejected", error); throw error; } }
+      try { mark(phase, "entered"); } catch (error) { reporting.push(error); throw error; }
+      let failed=false, reason, value; try { value=await operation(); } catch(error) { failed=true; reason=error; }
+      try { mark(phase, failed ? "rejected" : "fulfilled", reason); } catch(error) { reporting.push(error); }
+      if(failed) throw reason; if(reporting.length) throw reporting[0]; return value;
+    },
   };
 }
 export function launchCli(argv, { run = main, writer = line => process.stdout.write(line), errorWriter = line => process.stderr.write(line), events = process, setExit = code => { process.exitCode = code; }, prepareWriter, prepareIdentity } = {}) {
