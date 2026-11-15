@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { types as nodeTypes } from "node:util";
 import { createRequire } from "node:module";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it as nativeIt, vi } from "vitest";
 import { stream, streamSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
@@ -28,6 +30,165 @@ const readers: Array<{ body: ReadableStream<Uint8Array>; unlocks: number }> = []
 const closes: Array<{ depth: number; original?: Promise<unknown>; threw: boolean; error?: unknown }> = [];
 const dispatchers = new Set<object>();
 const requests: Array<{ method: string; path: string; credential: string }> = [];
+// BEGIN shared proof functions. These observe originals; they grant no disposition.
+function litellmOwnership(storage: any) {
+  const tokens = new WeakSet<object>(), guards = new WeakSet<object>(), responses = new WeakMap<object, any>(), bodies = new WeakMap<object, any>(), readers = new WeakMap<object, any>();
+  const faults: unknown[] = [], transports: any[] = [], reactions: Promise<unknown>[] = [], signals: any[] = [];
+  let active = true, sequence = 0;
+  const invalid = () => { faults.push(new Error("incomplete LiteLLM invocation ownership")); };
+  function signal(value: AbortSignal | null | undefined) {
+    const row: any = { signal: value, observed: false, initial: null, event: null, reasonPresent: false, reason: undefined }; let attached = false;
+    const abort = () => { try { row.event = ++sequence; row.reasonPresent = true; row.reason = value?.reason; } catch (error) { faults.push(error); } };
+    try {
+      row.initial = value?.aborted ?? null; row.reasonPresent = value?.aborted === true; row.reason = value?.aborted ? value.reason : undefined;
+      value?.addEventListener("abort", abort, { once: true }); attached = !!value; row.observed = !!value;
+    } catch (error) { faults.push(error); }
+    row.restore = () => { if (attached) value?.removeEventListener("abort", abort); }; signals.push(row); return row;
+  }
+  const current = () => { const c = storage.getStore(); return active && c && tokens.has(c.token) ? c : undefined; };
+  const bound = (a: any) => {
+    const t = a?.transport;
+    return !!(active && guards.has(a) && t?.context === a.context && t.acquisition === a && t.unique && t.state === "fulfilled"
+      && a.result?.response === t.response && a.result.response.body === t.body && responses.get(t.response) === t && (!t.body || bodies.get(t.body) === t));
+  };
+  return {
+    faults, transports, signals,
+    invoke(owner: any, fn: Function, receiver: unknown, args: any[]) {
+      if (!active || !["catalog", "chat"].includes(owner.role) || args[owner.role === "catalog" ? 0 : 2]?.signal !== owner.signal) invalid();
+      const token = Object.freeze({ owner: Object.freeze({ ...owner }), fn, receiver, args: Object.freeze([...args]), caller: signal(owner.signal) });
+      tokens.add(token);
+      return storage.run(Object.freeze({ token }), () => Reflect.apply(fn, receiver, args));
+    },
+    guard(kind: string, fn: Function, receiver: unknown, args: any[], a: any) {
+      const c = current();
+      if (!c || c.acquisition || guards.has(a) || c.token.owner.role !== kind) { invalid(); return Reflect.apply(fn, receiver, args); }
+      guards.add(a); a.context = Object.freeze({ token: c.token, acquisition: a });
+      a.guardInput = signal(args[0]?.signal ?? args[0]?.init?.signal);
+      a.fn = fn; a.receiver = receiver; a.args = args;
+      return storage.run(a.context, () => Reflect.apply(fn, receiver, args));
+    },
+    fetch(fn: Function, receiver: unknown, args: any[], facts: any) {
+      const c = current(), a = c?.acquisition;
+      const t: any = { context: c, acquisition: a, fn, receiver, args, state: "invoke", unique: false, input: signal(facts.signal) }; transports.push(t);
+      if (!a || !guards.has(a) || a.context !== c || a.transport || c.token.owner.url !== facts.url || c.token.owner.credential !== facts.credential
+        || (c.token.owner.role === "catalog" ? "GET" : "POST") !== facts.method) invalid();
+      else a.transport = t;
+      let pending;
+      try { pending = Reflect.apply(fn, receiver, args); t.pending = pending; }
+      catch (reason) { t.state = "sync_throw"; t.reasonPresent = true; t.reason = reason; throw reason; }
+      const reaction = pending.then((response: Response) => {
+        t.state = "fulfilled"; t.response = response; t.body = response.body;
+        const prior = responses.get(response), priorBody = t.body && bodies.get(t.body);
+        if (prior || priorBody) { if (prior) prior.unique = false; if (priorBody) priorBody.unique = false; invalid(); return; }
+        responses.set(response, t); if (t.body) bodies.set(t.body, t); t.unique = true;
+      }, (reason: unknown) => { t.state = "rejected"; t.reasonPresent = true; t.reason = reason; });
+      reactions.push(reaction.catch((error: unknown) => { faults.push(error); })); return pending;
+    },
+    attach(a: any, result: any) { if (a.result) invalid(); a.result = result; if (!bound(a)) invalid(); return bound(a); },
+    reader(body: object, reader: object, receiver: unknown) {
+      const t = bodies.get(body), c = current();
+      if (!t || receiver !== body || readers.has(reader) || !c || c.token !== t.context?.token) invalid(); else readers.set(reader, t);
+    },
+    operation(reader: object, receiver: unknown) {
+      const t = readers.get(reader), c = current();
+      if (!t || receiver !== reader || !c || c.token !== t.context?.token) invalid();
+    },
+    bodyCancel(body: object, receiver: unknown) {
+      const t = bodies.get(body), c = current();
+      if (!t || receiver !== body || !c || c.token !== t.context?.token) invalid();
+    },
+    bound,
+    async join() {
+      let at = 0;
+      while (at < transports.length) { const batch = transports.slice(at); at += batch.length; await Promise.allSettled(batch.flatMap(t => t.pending ? [t.pending] : [])); }
+      await Promise.all(reactions);
+      return [...faults, ...transports.filter(t => ["rejected", "sync_throw"].includes(t.state)).map(t => t.reason)];
+    },
+    restore() {
+      if (!active) throw new Error("duplicate LiteLLM ownership restoration"); active = false;
+      const errors: unknown[] = [];
+      for (const row of signals) try { row.restore(); } catch (error) { errors.push(error); }
+      try { storage.disable(); } catch (error) { errors.push(error); }
+      if (errors.length) throw new AggregateError(errors, "LiteLLM ownership restoration failed");
+    },
+  };
+}
+function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
+  const prefix = "LITELLM_PROOF_V1 ", phases = new Set(["setup", "body", "catalog", "chat", "control", "join", "restore", "child_launch", "child_result", "retirement", "cleanup", "overflow"]);
+  const names = new Set(["none", ...ids]), seen = new Set<string>(); let emitted = 0, suppressed = 0, bytes = 0, overflow = false;
+  const own = (v: unknown, k: string) => { try { return v && typeof v === "object" && !isProxy(v) ? Object.getOwnPropertyDescriptor(v, k)?.value : undefined; } catch { return undefined; } };
+  function validate(v: unknown) {
+    try {
+      if (!v || typeof v !== "object" || isProxy(v)) return null;
+      const keys = ["v", "layer", "id", "role", "phase", "kind", "count", "code"];
+      if (Reflect.ownKeys(v).length !== keys.length || keys.some(k => !Object.hasOwn(Object.getOwnPropertyDescriptor(v, k) ?? {}, "value"))) return null;
+      const r: any = Object.fromEntries(keys.map(k => [k, own(v, k)]));
+      if (r.v !== 1 || !["sdk", "outer"].includes(r.layer) || !names.has(r.id) || !["unknown", "catalog", "chat"].includes(r.role) || !phases.has(r.phase)
+        || !["undefined", "unknown", "child", "overflow"].includes(r.kind) || !(r.count === null || Number.isSafeInteger(r.count) && r.count >= 0 && r.count <= 1000000)
+        || !["UNKNOWN", "EXIT_1", "TIMEOUT", "SIGTERM", "SIGKILL"].includes(r.code)) return null;
+      return r;
+    } catch { return null; }
+  }
+  const record = (layer: string, id: string, phase: string, error: unknown, role = "unknown", count: number | null = null) => {
+    const value = validate({ v: 1, layer, id, role, phase, kind: error === undefined ? "undefined" : "unknown", count, code: "UNKNOWN" });
+    if (!value) throw new Error("invalid LiteLLM diagnostic"); return value;
+  };
+  function parse(text: unknown) {
+    if (typeof text !== "string" || text.length > 2 * 1024 * 1024) return [];
+    const records = [];
+    for (const line of text.split("\n")) {
+      const clean = line.trimStart(); if (!clean.startsWith(prefix) || clean.length > 768) continue;
+      try { const r = validate(JSON.parse(clean.slice(prefix.length))); if (r) records.push(r); } catch {}
+      if (records.length >= 64) break;
+    }
+    return records;
+  }
+  function child(error: unknown) {
+    const records: any[] = [], queue = [{ value: error, depth: 0 }]; let resultCode = "UNKNOWN";
+    for (let index = 0; index < queue.length && index < 4; index++) {
+      const { value, depth } = queue[index];
+      records.push(...parse(own(value, "stdout")), ...parse(own(value, "stderr")));
+      const code = own(value, "code"), signal = own(value, "signal"), killed = own(value, "killed");
+      if (resultCode === "UNKNOWN") resultCode = signal === "SIGTERM" || signal === "SIGKILL" ? signal : code === 1 ? "EXIT_1" : killed === true ? "TIMEOUT" : "UNKNOWN";
+      const errors = own(value, "errors");
+      if (depth < 2 && Array.isArray(errors) && !isProxy(errors)) for (let n = 0; n < Math.min(errors.length, 4) && queue.length < 4; n++) {
+        const item = Object.getOwnPropertyDescriptor(errors, String(n));
+        if (item && Object.hasOwn(item, "value")) queue.push({ value: item.value, depth: depth + 1 });
+      }
+    }
+    return { records, envelope: { v: 1, layer: "outer", id: "none", role: "unknown", phase: "child_result", kind: "child", count: records.length,
+      code: resultCode } };
+  }
+  function emit(records: unknown[], write: (s: string) => void) {
+    for (const value of records) {
+      const r = validate(value); if (!r) throw new Error("invalid LiteLLM diagnostic");
+      const key = [r.layer, r.role, r.id, r.phase].join("/"); if (seen.has(key)) continue; seen.add(key);
+      if (emitted >= 9) { suppressed++; continue; }
+      const line = `::error title=LiteLLM typed contract::${JSON.stringify(r).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A")}\n`;
+      const size = new TextEncoder().encode(line).length;
+      if (size > 768 || bytes + size > 8192) throw new Error("LiteLLM diagnostic quota");
+      write(line); bytes += size; emitted++;
+    }
+  }
+  function flush(write: (s: string) => void) {
+    if (!suppressed || overflow) return; overflow = true;
+    const r = { v: 1, layer: "outer", id: "none", role: "unknown", phase: "overflow", kind: "overflow", count: Math.min(suppressed, 1000000), code: "UNKNOWN" };
+    const line = `::error title=LiteLLM typed contract::${JSON.stringify(r)}\n`; const size = new TextEncoder().encode(line).length;
+    if (size > 768 || bytes + size > 8192) throw new Error("LiteLLM diagnostic quota"); write(line); bytes += size;
+  }
+  return { prefix, own, validate, record, parse, child, emit, flush };
+}
+// END shared proof functions.
+let ownership = litellmOwnership(new AsyncLocalStorage());
+const diagnostic = litellmDiagnostics(rows.map(row => row.id), nodeTypes.isProxy);
+let diagnosticId = "none", diagnosticRole = "unknown", diagnosticRecords: any[] = [], diagnosticSuppressed = 0;
+function reportSdk(phase: string, error: unknown) {
+  if (diagnosticRecords.length < 63) diagnosticRecords.push(diagnostic.record("sdk", diagnosticId, phase, error, diagnosticRole)); else diagnosticSuppressed++;
+}
+function flushSdk() {
+  if (diagnosticSuppressed) { diagnosticRecords.push(diagnostic.record("sdk", "none", "overflow", undefined, "unknown", Math.min(diagnosticSuppressed, 1000000))); diagnosticSuppressed = 0; }
+  for (const record of diagnosticRecords.splice(0, 64)) process.stdout.write(diagnostic.prefix + JSON.stringify(record) + "\n");
+}
 function remember<T extends Promise<unknown>>(kind: string, promise: T): T {
   operations.push({ kind, promise }); void promise.then(() => {}, () => {}); return promise;
 }
@@ -51,27 +212,35 @@ function observeBody(body: ReadableStream<Uint8Array> | null): void {
   bodies.add(body);
   const get = body.getReader, cancel = body.cancel;
   vi.spyOn(body, "cancel").mockImplementation(function (this: typeof body, ...args) {
+    ownership.bodyCancel(body, this);
     try { return remember("body_cancel", Reflect.apply(cancel, this, args)); } catch (error) { failures.push(error); throw error; }
   });
   vi.spyOn(body, "getReader").mockImplementation(function (this: typeof body, ...args) {
-    const reader = Reflect.apply(get, this, args) as ReadableStreamDefaultReader<Uint8Array>;
+    let reader: ReadableStreamDefaultReader<Uint8Array>;
+    try { reader = Reflect.apply(get, this, args); } catch (error) { failures.push(error); throw error; }
+    ownership.reader(body, reader, this);
     const record = { body, unlocks: 0 }; readers.push(record); remember("closed", reader.closed);
     for (const kind of ["read", "cancel"] as const) {
       const original = reader[kind];
       vi.spyOn(reader, kind).mockImplementation(function (this: typeof reader, ...values: unknown[]) {
+        ownership.operation(reader, this);
         try { return remember(kind, Reflect.apply(original, this, values)); } catch (error) { failures.push(error); throw error; }
       });
     }
     const unlock = reader.releaseLock;
-    vi.spyOn(reader, "releaseLock").mockImplementation(function (this: typeof reader) {
-      try { const value = Reflect.apply(unlock, this, []); record.unlocks++; return value; } catch (error) { failures.push(error); throw error; }
+    vi.spyOn(reader, "releaseLock").mockImplementation(function (this: typeof reader, ...args: unknown[]) {
+      ownership.operation(reader, this);
+      try { const value = Reflect.apply(unlock, this, args); record.unlocks++; return value; } catch (error) { failures.push(error); throw error; }
     });
     return reader;
   });
 }
-function observeTransport(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  const request = new Request(input, init), url = new URL(request.url);
-  const credential = request.headers.get("authorization") ?? "";
+function observeTransport(this: unknown, ...args: Parameters<typeof undici.fetch>): Promise<Response> {
+  const [input, init] = args;
+  const request = { url: typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+    method: init?.method ?? (typeof input === "object" && "method" in input ? input.method : "GET"),
+    headers: new Headers(init?.headers !== undefined ? init.headers : typeof input === "object" && "headers" in input ? input.headers : undefined) };
+  const url = new URL(request.url), credential = request.headers.get("authorization") ?? "";
   expect(url.origin).toBe(origin); expect(url.search).toBe("");
   expect(["/v1/native/litellm/models", "/v1/native/litellm/v1/models", "/v1/native/litellm/chat/completions", "/v1/native/litellm/v1/chat/completions"]).toContain(url.pathname);
   expect(rows.some(row => credential === "Bearer " + key(row.id))).toBe(true);
@@ -91,29 +260,44 @@ function observeTransport(input: RequestInfo | URL, init?: RequestInit): Promise
       finally { depth--; }
     } as typeof dispatcher.close);
   }
-  const pending = Reflect.apply(undici.fetch, undici, [input, init]) as unknown as Promise<Response>;
+  const signal = init?.signal !== undefined ? init.signal : typeof input === "object" && "signal" in input ? input.signal : undefined;
+  const pending = ownership.fetch(undici.fetch, this, args, { url: request.url, method: request.method.toUpperCase(), credential, signal }) as Promise<Response>;
   remember("native_acquisition", pending);
   remember("response_observer", pending.then(response => { observeBody(response.body); }));
   return pending;
 }
-function observeLease<T extends { response: Response; release: () => Promise<void> }>(kind: Acquisition["kind"], pending: Promise<T>): Promise<T> {
+function observeLease(kind: Acquisition["kind"], fn: Function, receiver: unknown, args: any[]): Promise<any> {
   let markReleased!: () => void;
   const released = new Promise<void>(resolve => { markReleased = resolve; });
-  const record = { kind, promise: pending, releases: 0, released, markReleased }; acquisitions.push(record);
+  const record: any = { kind, releases: 0, released, markReleased }; acquisitions.push(record);
+  let pending;
+  try { pending = ownership.guard(kind, fn, receiver, args, record); record.promise = pending; }
+  catch (error) { failures.push(error); markReleased(); throw error; }
   remember("guard_acquisition", pending);
-  // The original Promise and result object stay intact. This reaction is
-  // registered before the provider's continuation and observes its own lease.
-  remember("lease_observer", pending.then(result => {
+  remember("lease_observer", pending.then((result: any) => {
+    try {
+    ownership.attach(record, result);
     observeBody(result.response.body); const release = result.release;
-    result.release = function (...args) {
+    vi.spyOn(result, "release").mockImplementation(function (this: any, ...values: unknown[]) {
       record.releases++;
-      try { const value = Reflect.apply(release, this, args); remember("release", value); void value.then(markReleased, markReleased); return value; }
+      try { const value = Reflect.apply(release, this, values); remember("release", value); void value.then(markReleased, markReleased); return value; }
       catch (error) { failures.push(error); markReleased(); throw error; }
-    };
+    });
+    } catch (error) { failures.push(error); markReleased(); throw error; }
   }, () => { markReleased(); }));
   return pending;
 }
+const it = (name: string, body: () => Promise<void>, timeout: number) => nativeIt(name, async () => {
+  try { await body(); }
+  catch (error) {
+    try { reportSdk("body", error); flushSdk(); } catch (reportError) { throw new AggregateError([error, reportError], "LiteLLM body and reporting failed"); }
+    throw error;
+  }
+}, timeout);
 beforeEach(() => {
+  diagnosticId = "none"; diagnosticRole = "unknown"; diagnosticRecords = []; diagnosticSuppressed = 0;
+  ownership = litellmOwnership(new AsyncLocalStorage());
+  try {
   expect(process.env.CLAWROUTER_CONTRACT_SOURCE_HEAD).toBe(sourceHead);
   expect(execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim()).toBe(sourceHead);
   clearLiveCatalogCacheForTests(); operations.length = 0; acquisitions.length = 0; failures.length = 0;
@@ -121,11 +305,15 @@ beforeEach(() => {
   for (const name of ["LITELLM_API_KEY", "OPENAI_API_KEY"]) vi.stubEnv(name, "poison-environment");
   vi.stubGlobal("__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__", { ...undici, fetch: observeTransport });
   vi.spyOn(catalogGuard, "fetchWithSsrFGuard").mockImplementation(function (options) {
-    return observeLease("catalog", Reflect.apply(originalCatalogGuard, this, [options]));
+    return observeLease("catalog", originalCatalogGuard, this, [options]);
   });
   vi.spyOn(chatGuard, "fetchWithProviderHttpGuard").mockImplementation(function (options) {
-    return observeLease("chat", Reflect.apply(originalChatGuard, this, [options]));
+    return observeLease("chat", originalChatGuard, this, [options]);
   });
+  } catch (error) {
+    try { reportSdk("setup", error); flushSdk(); } catch (reportError) { throw new AggregateError([error, reportError], "LiteLLM setup and reporting failed"); }
+    throw error;
+  }
 });
 afterEach(async () => {
   const errors: unknown[] = [];
@@ -144,15 +332,20 @@ afterEach(async () => {
     for (const dispatcher of dispatchers) expect(Reflect.get(dispatcher, "destroyed")).toBe(true);
     // Inference owns a pooled request lease, never the global pool lifetime.
   } catch (error) { errors.push(error); }
+  try { errors.push(...await ownership.join()); } catch (error) { errors.push(error); }
   errors.push(...failures);
-  for (const restore of [() => vi.restoreAllMocks(), () => vi.unstubAllGlobals(), () => vi.unstubAllEnvs(), () => clearLiveCatalogCacheForTests()]) {
-    try { restore(); } catch (error) { errors.push(error); }
+  for (const error of errors) try { reportSdk("join", error); } catch (reportError) { errors.push(reportError); break; }
+  for (const restore of [() => ownership.restore(), () => vi.restoreAllMocks(), () => vi.unstubAllGlobals(), () => vi.unstubAllEnvs(), () => clearLiveCatalogCacheForTests()]) {
+    try { restore(); } catch (error) { errors.push(error); try { reportSdk("restore", error); } catch (reportError) { errors.push(reportError); } }
   }
+  try { flushSdk(); } catch (error) { errors.push(error); }
   raise(errors);
 });
 async function control(action: string, id: string): Promise<void> {
-  const response = await originalFetch(`${origin}/__litellm/${action}/${id}`, { method: ["started", "retire"].includes(action) ? "GET" : "POST" });
-  await response.arrayBuffer(); expect(response.status).toBe(200);
+  try {
+    const response = await originalFetch(`${origin}/__litellm/${action}/${id}`, { method: ["started", "retire"].includes(action) ? "GET" : "POST" });
+    await response.arrayBuffer(); expect(response.status).toBe(200);
+  } catch (error) { try { reportSdk("control", error); flushSdk(); } catch (reportError) { throw new AggregateError([error, reportError], "LiteLLM control and reporting failed"); } throw error; }
 }
 async function fixture(body: (discover: (row: Row, signal?: AbortSignal, authId?: string) => Promise<ModelProviderConfig | undefined>) => Promise<void>): Promise<void> {
   const { default: entry } = await loadBundledPluginFacade<{ default: Parameters<typeof registerSingleProviderPlugin>[0] }>({ pluginId: "litellm", artifactBasename: "index.js" });
@@ -161,8 +354,9 @@ async function fixture(body: (discover: (row: Row, signal?: AbortSignal, authId?
     const discover = async (row: Row, signal?: AbortSignal, authId = row.id) => {
       const baseUrl = origin + "/v1/native/litellm" + (row.versioned ? "/v1" : ""); let resolutions = 0;
       const auth = { apiKey: key(authId), discoveryApiKey: key(row.id), profileId: row.id, mode: "api_key" as const, source: "profile" as const };
-      const result = await provider.catalog!.run({ config: { models: { providers: { litellm: { baseUrl, models: [] } } } }, env: {}, agentDir: state.agentDir(), workspaceDir: state.workspaceDir, signal,
-        resolveProviderAuth: () => { throw new Error("unexpected second auth resolver"); }, resolveProviderApiKey: () => { resolutions++; return auth; } });
+      diagnosticId = row.id; diagnosticRole = "catalog";
+      const result = await ownership.invoke({ id: row.id, role: "catalog", signal, url: baseUrl + "/models", credential: "Bearer " + key(row.id) }, provider.catalog!.run, provider.catalog, [{ config: { models: { providers: { litellm: { baseUrl, models: [] } } } }, env: {}, agentDir: state.agentDir(), workspaceDir: state.workspaceDir, signal,
+        resolveProviderAuth: () => { throw new Error("unexpected second auth resolver"); }, resolveProviderApiKey: () => { resolutions++; return auth; } }]);
       expect(resolutions).toBe(1);
       if (!result || !("provider" in result)) return undefined;
       if (result.provider) { expect(result.provider.baseUrl).toBe(baseUrl); expect(result.provider.apiKey).toBe(key(authId)); }
@@ -173,8 +367,10 @@ async function fixture(body: (discover: (row: Row, signal?: AbortSignal, authId?
 }
 async function infer(catalog: ModelProviderConfig, row: Row, signal?: AbortSignal, simple = true) {
   const model = catalog.models.find(value => value.id === selected); expect(model).toBeDefined();
-  return (simple ? streamSimple : stream)({ ...model, provider: "litellm", api: "openai-completions", baseUrl: catalog.baseUrl } as Model<"openai-completions">,
-    { messages: [{ role: "user", content: "synthetic fixture", timestamp: 1 }] }, { apiKey: key(row.id), maxTokens: 16, signal });
+  diagnosticId = row.id; diagnosticRole = "chat";
+  return ownership.invoke({ id: row.id, role: "chat", signal, url: catalog.baseUrl + "/chat/completions", credential: "Bearer " + key(row.id) }, simple ? streamSimple : stream, undefined,
+    [{ ...model, provider: "litellm", api: "openai-completions", baseUrl: catalog.baseUrl } as Model<"openai-completions">,
+    { messages: [{ role: "user", content: "synthetic fixture", timestamp: 1 }] }, { apiKey: key(row.id), maxTokens: 16, signal }]);
 }
 
 describe("registered LiteLLM live inventory and native inference", () => {
