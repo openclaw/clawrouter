@@ -855,8 +855,19 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
     if (new Set(generations).size !== generations.length) return null;
     return { api: r.api, outcomes: outcomes.map(row => row === null ? null : [...row.slice(0, 6), row[6] === null ? null : [...row[6]], ...(row.length === 8 ? [row[7] === null ? null : [...row[7]]] : [])]) };
   }
+  function workerResource(value: unknown) {
+    if (value === null) return null;
+    const a = array(value,7,()=>true), nullable = (v: unknown) => v===null||number(v);
+    if (!a || !array(a[0],4,nullable) || !number(a[1]) || a[1]>63
+      || !array(a[2],4,row=>{if(row===null)return true;const r=array(row,5,()=>true);return !!r&&r.slice(0,4).every(number)&&nullable(r[4]);})
+      || !array(a[3],11,nullableBool) || !nullable(a[4]) || !array(a[5],3,nullable) || !bool(a[6])) return null;
+    for(const row of a[2]) if(row && (row[1]>3||row[2]>7||(row[1]<2?row[2]!==0:!(row[2]&1))||(row[2]&4)&&!(row[2]&2)||(row[2]&2)&&!(row[2]&1)||(row[1]===0?row[4]!==null:row[4]===null))) return null;
+    const ids=a[2].filter(Boolean).map(row=>row[0]);if(new Set(ids).size!==ids.length)return null;
+    return a;
+  }
   function workerLedger(v: unknown) {
-    const a = array(v, 8, (_: unknown) => true);
+    const width = own(v, "length");
+    const a = [8,9].includes(width) ? array(v, width, (_: unknown) => true) : null;
     if (!a || !a.slice(0, 7).every(number) || a[1] > a[0]) return null;
     const rows = own(a[7], "length");
     if (!Number.isSafeInteger(rows) || rows < 0 || rows > 2) return null;
@@ -868,7 +879,18 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
         && ((op[2] === 0 && !op[6] && op[9] === null) || (op[2] >= 2 && op[6] && op[9] !== null));
     });
     if (!ops || new Set(ops.map(op => op[0])).size !== ops.length || ops.some(op => op[0] >= a[0]) || ops.length + a[6] > a[0]) return null;
-    return [...a.slice(0, 7), ops.map(op => [...op])];
+    const detail = a.length === 9 ? workerResource(a[8]) : null;
+    if (a.length === 9 && a[8] !== null && !detail) return null;
+    if (detail) {
+      const raw = detail[2][0], op = raw && ops.find(op => op[0] === raw[0]);
+      if (!op || op[1] !== 4 || op[2] !== raw[1] || op[6] !== !!(raw[2]&1) || op[7] !== !!(raw[2]&2) || op[8] !== raw[3] || op[9] !== raw[4]
+        || JSON.stringify(op.slice(3,6)) !== JSON.stringify(detail[0].slice(1))) return null;
+      for (const row of detail[2]) if (row && row[0] >= a[0]) return null;
+      const derivative = detail[2][1], retained = derivative && ops.find(op=>op[0]===derivative[0]);
+      if (retained && (retained[1]!==5 || retained[2]!==derivative[1] || retained[6]!==!!(derivative[2]&1) || retained[7]!==!!(derivative[2]&2) || retained[8]!==derivative[3] || retained[9]!==derivative[4]
+        || JSON.stringify(retained.slice(3,6))!==JSON.stringify(detail[0].slice(1)))) return null;
+    }
+    return [...a.slice(0, 7), ops.map(op => [...op]), ...(a.length === 9 ? [detail] : [])];
   }
   function predicateFacts(v: unknown) {
     const a = array(v, 5, (_: unknown) => true), mask = (v: unknown) => Number.isSafeInteger(v) && (v as number) >= 0 && (v as number) <= 1073741823;
@@ -876,11 +898,28 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
       || (a[2] & a[3]) !== 0 || ((a[2] | a[3]) & ~a[1]) !== 0 || (a[0] === null ? a[3] !== 0 || a[4] !== null : !(a[3] & 2 ** a[0]) || !nullableBool(a[4]))) return null;
     return [...a];
   }
+  function retirementWire(value: any, encode: boolean): any {
+    if (encode) {
+      const row = [...value]; row[0] = caseNames.indexOf(row[0]);
+      const token = (v: any): string => Array.isArray(v) ? "["+v.map(token).join(",")+"]" : v===null ? "~" : v===true ? "T" : v===false ? "F" : v.toString(36);
+      return "w1:" + token(row);
+    }
+    if (typeof value !== "string" || !value.startsWith("w1:") || value.length > 2048 || !/^[0-9a-zTF~,\[\]]+$/.test(value.slice(3))) return null;
+    try {
+      const row = JSON.parse(value.slice(3).replace(/[0-9a-z]+|T|F|~/g, token => {
+        if (token === "T") return "true"; if (token === "F") return "false"; if (token === "~") return "null";
+        const n = parseInt(token,36); if (!Number.isSafeInteger(n) || n.toString(36)!==token) throw undefined; return String(n);
+      }));
+      if (!Array.isArray(row) || !Number.isInteger(row[0]) || row[0]<0 || !caseNames[row[0]]) return null;
+      row[0]=caseNames[row[0]]; return row;
+    } catch { return null; }
+  }
   function retirementFacts(v: unknown) {
+    if (typeof v === "string") v = retirementWire(v, false);
     const a = array(v, 5, (_: unknown) => true);
     if (!a || a[0] === "none" || !names.has(a[0]) || !predicateFacts(a[1]) || a[1][0] === null
       || a[2] !== null && !predicateFacts(a[2]) || a[3] !== null && !workerLedger(a[3])
-      || !array(a[4], 11, (n: unknown) => n === null || number(n))) return null;
+      || ![11,15].includes(own(a[4],"length")) || !array(a[4], own(a[4],"length"), (n: unknown) => n === null || number(n))) return null;
     return [a[0], predicateFacts(a[1]), a[2] === null ? null : predicateFacts(a[2]), a[3] === null ? null : workerLedger(a[3]), [...a[4]]];
   }
   const fixedStages = new Set(["warm_a", "warm_b", "warm_cached", "warm_versioned", "warm_count", "warm_window", "held_started", "held_mutation", "held_release", "held_join", "held_result", "waiter_started", "waiter_mutation", "waiter_release", "waiter_join", "waiter_result"]);
@@ -939,7 +978,7 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
   const worker = (value: unknown, facts: unknown) => { const r = validate({ ...validate(value), worker: facts }); if (!r) throw new Error("invalid LiteLLM Worker witness"); return r; };
   const workerFailure = (id: string, checks: unknown, workerChecks: unknown, ledger: any, state: unknown) => {
     // One original bad-operation identity; omitted originals stay counted.
-    const compact = ledger === null ? null : [...ledger.slice(0, 6), ledger[6] + Math.max(0, ledger[7].length - 1), ledger[7].slice(0, 1)];
+    const compact = ledger;
     const value = validate({ ...record("outer", id, "retirement", undefined), retire: [id, checks, workerChecks, compact, state] });
     if (!value) throw new Error("invalid Worker first predicate"); return value;
   };
@@ -984,6 +1023,7 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
   function json(value: unknown) {
     const r = validate(value); if (!r) throw new Error("invalid LiteLLM diagnostic");
     if (r.witness) r.witness = { ...r.witness, data: witnessWire(r.witness.data, r.witness.part, true) };
+    if (r.retire) r.retire = retirementWire(r.retire, true);
     return JSON.stringify(r);
   }
   function boundary(code: string, error: unknown) {

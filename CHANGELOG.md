@@ -1,5 +1,6 @@
 # Changelog
 
+- Retain same-reader Worker rejection identities and join original synthetic producer observations before reporting LiteLLM retirement failures.
 - Join replayed response reads and first cancellation before releasing the original reader, retaining independent source retirement failures.
 
 ## Unreleased

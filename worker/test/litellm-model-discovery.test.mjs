@@ -148,6 +148,22 @@ export function litellmHeldReady(r, scope) {
   return pending.length === 1 && reads.some(op => op.state === "fulfilled" && op.value?.done === false
     && op.value.value?.byteLength > 0 && Number.isSafeInteger(op.settle) && Number.isSafeInteger(pending[0].invoke) && op.settle < pending[0].invoke);
 }
+export function litellmWorkerResource(r) {
+  const read = r.operations.find(op => op.kind === "read" && op.state !== "fulfilled"), reader = read?.reader, input = read?.input;
+  if (!read || !reader || !input) return null;
+  const matches = kind => r.operations.filter(op => op.kind === kind && op.reader === reader && op.input === input);
+  const observers = matches("read_observer").filter(op => op.originalRead === read.pending), closed = matches("closed"), cancels = matches("cancel");
+  const rows = [read, observers.length === 1 ? observers[0] : null, closed.length === 1 ? closed[0] : null, cancels.length === 1 ? cancels[0] : null];
+  const mask = values => values.reduce((n,v,i) => n | (v === true ? 2 ** i : 0), 0);
+  const error = op => !!op && Object.hasOwn(op,"error");
+  const same = (a,b) => error(a) && error(b) ? Object.is(a.error,b.error) : null;
+  const c = rows[3], reasonPresent = !!c && c.operandPresent;
+  return [[input.token.generation,input.token.id,input.id,reader.id ?? null],
+    mask([reader.bound,reader.response === input.response,reader.body === reader.response?.body,reader.transport === input,read.receiverIdentity,rows[1]?.originalRead === read.pending]),
+    rows.map(op => op ? [op.ordinal,["pending","fulfilled","rejected","threw"].indexOf(op.state),mask([error(op),error(op)&&op.error!==undefined,error(op)&&op.error!==null&&typeof op.error==="object"]),op.invoke,op.settle ?? null] : null),
+    [same(rows[0],rows[1]),same(rows[0],rows[2]),same(rows[0],rows[3]),same(rows[2],rows[3]),reasonPresent&&error(read)?Object.is(c.reason,read.error):null,c?.signalAborted??null,c?.sameSignalReasonAtSettle??null,read.signalAborted??null,read.abortedAtSettle??null,read.sameSignalReasonAtSettle??null,c?.abortedAtSettle??null],
+    c?.argc ?? null,[reader.unlockInvoke??null,reader.unlockSequence??null,reader.unlocks],reader.eof];
+}
 export function litellmWorkerLedger(r) {
   const cap = n => Math.min(n, 1_000_000), kinds = ["handler", "fetch", "acquisition_observer", "read", "read_observer", "closed", "cancel", "body_cancel", "wait_until", "usage_ingest"];
   const bad = r.operations.filter(op => op.state !== "fulfilled"), selected = bad.slice(0, 2);
@@ -155,7 +171,7 @@ export function litellmWorkerLedger(r) {
     cap(r.readers.filter(reader => reader.body.locked).length), cap(r.readers.filter(reader => reader.unlocks !== 1).length), cap(Math.max(0, bad.length - selected.length)),
     selected.map(op => [cap(op.ordinal), kinds.indexOf(op.kind) + 1, ["pending", "fulfilled", "rejected", "threw"].indexOf(op.state),
       op.input?.token?.id ?? op.transport?.token?.id ?? op.token?.id ?? null, op.input?.id ?? op.transport?.id ?? null, op.reader?.id ?? null,
-      Object.hasOwn(op, "error"), Object.hasOwn(op, "error") ? op.error !== undefined : null, cap(op.invoke), op.settle == null ? null : cap(op.settle)])];
+      Object.hasOwn(op, "error"), Object.hasOwn(op, "error") ? op.error !== undefined : null, cap(op.invoke), op.settle == null ? null : cap(op.settle)]), litellmWorkerResource(r)];
 }
 export async function litellmControlResponse(response, action) {
   const errors = []; let result;
@@ -229,6 +245,7 @@ import {InternalHttpAbort} from './worker/http-operation.ts';
 import {bodyBudgetCharged} from './worker/body-budget.ts';
 ${litellmPredicateFacts.toString()}
 ${litellmRequestScope.toString()}
+${litellmWorkerResource.toString()}
 ${litellmWorkerLedger.toString()}
 ${litellmHeldReady.toString()}
 ${observeLiteLLMOperation.toString()}
@@ -252,7 +269,7 @@ function observation(r){
   syncFailures:r.failures.length};
 }
 function observeBody(r,response,input){
- requestScope.response(input,response);
+ requestScope.response(input,response);input.response=response;
  if(!response.body)return;
  const body=response.body;r.bodies.push(body);const get=body.getReader,cancel=body.cancel;
  const check=fn=>{try{fn();}catch(error){r.observerFailures.push(error);}};
@@ -260,15 +277,15 @@ function observeBody(r,response,input){
  body.getReader=function(...args){
   check(()=>requestScope.body(input,this,body));
   let reader;try{reader=Reflect.apply(get,this,args);}catch(error){r.failures.push(error);throw error;}
-  const info={body,reader,transport:input,unlocks:0,eof:false};check(()=>{info.id=requestScope.reader(input,body,reader);});r.readers.push(info);
+  const info={body,reader,response,transport:input,unlocks:0,eof:false};check(()=>{info.id=requestScope.reader(input,body,reader);info.bound=requestScope.owns(input,response,body,reader);});r.readers.push(info);
   observe(r,reader.closed,'closed',input,info,{receiverIdentity:this===body});
   for(const name of ['read','cancel']){const original=reader[name];reader[name]=function(...values){
    check(()=>requestScope.operation(input,this,reader,name));
-   const pending=invoke(r,name,()=>Reflect.apply(original,this,values),{reader:info,input,signal:input.signal,receiverIdentity:this===reader,operandPresent:values.length>0,reason:values[0],signalAborted:input.signal?.aborted===true});
+   const pending=invoke(r,name,()=>Reflect.apply(original,this,values),{reader:info,input,signal:input.signal,receiverIdentity:this===reader,argc:values.length,operandPresent:values.length>0,reason:values[0],signalAborted:input.signal?.aborted===true});
    if(name==='read')observe(r,pending.then(chunk=>{if(chunk.done)info.eof=true;}),'read_observer',input,info,{originalRead:pending,receiverIdentity:this===reader});
    return pending;
   };}
-  const unlock=reader.releaseLock;reader.releaseLock=function(...values){check(()=>requestScope.operation(input,this,reader,'unlock'));try{const value=Reflect.apply(unlock,this,values);info.unlocks++;info.unlockSequence=++r.sequence;info.unlockReceiver=this===reader;return value;}catch(error){r.failures.push(error);throw error;}};
+  const unlock=reader.releaseLock;reader.releaseLock=function(...values){info.unlockInvoke=++r.sequence;check(()=>requestScope.operation(input,this,reader,'unlock'));try{const value=Reflect.apply(unlock,this,values);info.unlocks++;info.unlockSequence=++r.sequence;info.unlockReceiver=this===reader;return value;}catch(error){r.failures.push(error);throw error;}};
   return reader;
  };
 }
@@ -339,17 +356,26 @@ export default {async fetch(request,bindings,context){
 }};`;
 }
 
+export async function joinLiteLLMProducer(r) {
+  let at=0, observed=0;
+  while(at<r.operations.length||observed<r.observers.length) {
+    const batch=[...r.operations.slice(at).map(op=>op.promise),...r.observers.slice(observed)];
+    at=r.operations.length;observed=r.observers.length;await Promise.allSettled(batch);
+  }
+  return [1,r.operations.length,r.observers.length,r.operations.filter(op=>op.state!=="fulfilled").length+r.observerFailures.length];
+}
 export function upstreamFixture() {
   return String.raw`
+${joinLiteLLMProducer.toString()}
 const rows=new Map(),encoder=new TextEncoder();
 const frame=value=>'data: '+JSON.stringify(value)+'\n\n';
 export default {async fetch(request){
  const u=new URL(request.url);
  if(u.origin==='https://fixture.test'){
-  if(u.pathname==='/setup'){for(const row of await request.json())rows.set(row.id,{...row,calls:[],active:0,canceled:0,aborted:0,expired:0,finished:0,release:false,operations:[]});return Response.json({ready:true});}
+  if(u.pathname==='/setup'){for(const row of await request.json())rows.set(row.id,{...row,calls:[],active:0,canceled:0,aborted:0,expired:0,finished:0,release:false,operations:[],observers:[],observerFailures:[]});return Response.json({ready:true});}
   const m=/^\/(release|state|started|proof)\/([a-z0-9_]+)$/.exec(u.pathname);if(!m||!rows.has(m[2]))return new Response(null,{status:404});const r=rows.get(m[2]);
   if(m[1]==='release')r.release=true;
-  if(m[1]==='proof'){let at=0;while(at<r.operations.length){const batch=r.operations.slice(at);at=r.operations.length;await Promise.allSettled(batch.map(op=>op.promise));}return Response.json({calls:r.calls,active:r.active,canceled:r.canceled,aborted:r.aborted,expired:r.expired,finished:r.finished,operations:r.operations.map(op=>({kind:op.kind,state:op.state}))});}
+  if(m[1]==='proof'){const joined=await joinLiteLLMProducer(r);return Response.json({calls:r.calls,active:r.active,canceled:r.canceled,aborted:r.aborted,expired:r.expired,finished:r.finished,operations:r.operations.map(op=>({kind:op.kind,state:op.state})),joined});}
   if(m[1]==='started'){const deadline=Date.now()+5000;while(r.calls.length===0){if(Date.now()>=deadline)return new Response(null,{status:504});await scheduler.wait(10);}}
   return Response.json({calls:r.calls,active:r.active,canceled:r.canceled,aborted:r.aborted,expired:r.expired,finished:r.finished,producer:[r.operations.length,...['pending','fulfilled','rejected','threw'].map(state=>r.operations.filter(op=>op.state===state).length)]});
  }
@@ -383,7 +409,7 @@ export default {async fetch(request){
    const end=held&&offset===0?(chat?text.indexOf('\n\n')+4:1):Math.min(offset+4096,text.length);controller.enqueue(encoder.encode(text.slice(offset,end)));offset=end;
   }finally{r.active--;}
  },async cancel(){r.canceled++;finish();if(waiting)await waiting;}};
- for(const kind of ['pull','cancel']){const original=source[kind];source[kind]=function(...args){const op={kind,state:'pending'};r.operations.push(op);let pending;try{pending=Reflect.apply(original,this,args);}catch(error){op.state='threw';throw error;}op.promise=pending;void pending.then(()=>{op.state='fulfilled';},()=>{op.state='rejected';});return pending;};}
+ for(const kind of ['pull','cancel']){const original=source[kind];source[kind]=function(...args){const op={kind,state:'pending'};r.operations.push(op);let pending;try{pending=Reflect.apply(original,this,args);}catch(error){op.state='threw';op.error=error;throw error;}op.promise=pending;const observer=pending.then(()=>{op.state='fulfilled';},error=>{op.state='rejected';op.error=error;});r.observers.push(observer);const guard=observer.then(()=>undefined,error=>{r.observerFailures.push(error);});r.observers.push(guard);return pending;};}
  const stream=new ReadableStream(source,{highWaterMark:0});
  return new Response(stream,{headers:{'content-type':chat?'text/event-stream':'application/json'}});
 }};`;
@@ -400,10 +426,11 @@ export async function withGateway(rows, body, { basePath = "/team/v1", hotCache 
     assert.equal((await upstream.fetch("https://fixture.test/setup", { method: "POST", body: JSON.stringify(rows) })).status, 200);
     const setup = await fetch(origin + "/__litellm/setup", { method: "POST", body: JSON.stringify(rows) }); assert.equal(setup.status, 200); await setup.json();
     const control = async (action, id) => { const response = await fetch(`${origin}/__litellm/${action}/${id}`, { method: ["retire", "usage", "observation"].includes(action) ? "GET" : "POST" }); return litellmControlResponse(response, action); };
+    const proof = async id => litellmControlResponse(await upstream.fetch("https://fixture.test/proof/" + id), "proof");
     const state = async id => litellmControlResponse(await upstream.fetch("https://fixture.test/state/" + id), "state");
     const started = async id => { const r = await upstream.fetch("https://fixture.test/started/" + id); assert.equal(r.status, 200); return r.json(); };
     const release = async id => (await upstream.fetch("https://fixture.test/release/" + id, { method: "POST" })).json();
-    await body({ origin, control, state, release, started, call: (id, path = "/v1/native/litellm/models", init = {}) => fetch(origin + path, { ...init, headers: { authorization: "Bearer " + key(id), ...init.headers } }) });
+    await body({ origin, control, state, proof, release, started, call: (id, path = "/v1/native/litellm/models", init = {}) => fetch(origin + path, { ...init, headers: { authorization: "Bearer " + key(id), ...init.headers } }) });
   } catch (error) { failures.push(error); }
   try { await runtime?.dispose(); } catch (error) { failures.push(error); }
   try { await rm(directory, { recursive: true, force: true }); } catch (error) { failures.push(error); }

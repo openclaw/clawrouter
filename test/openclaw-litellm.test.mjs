@@ -133,7 +133,7 @@ test("actual LiteLLM registered catalog, native stream/streamSimple and original
     // Join every row independently and preserve all body/cleanup failures.
     for (const row of cases) {
       const checks = litellmPredicateFacts(), observed = Array(9).fill(null);
-      let observationAttempted = false, workerChecks = null, state;
+      let observationAttempted = false, workerChecks = null, state, producerJoin = null;
       const captureLedger = (ledger, facts) => { diagnostic.worker(diagnostic.record("outer", row.id, "retirement", undefined), [...observed.slice(0, 8), ledger]); observed[8] = ledger; workerChecks = facts; };
       try {
         const proof = await litellmRetireSnapshot(f.control, row.id, captureLedger, () => { observationAttempted = true; }, start => checks.wait(0, start));
@@ -170,8 +170,9 @@ test("actual LiteLLM registered catalog, native stream/streamSimple and original
         failures.push(error); envelope.record(() => diagnostic.record("outer", row.id, "retirement", error), "REPORT_WORKER");
         if (!observationAttempted) try { observationAttempted = true; const observation = await f.control("observation", row.id); captureLedger(observation.ledger, observation.checks ?? null); } catch (failure) { failures.push(failure); envelope.record(() => diagnostic.boundary("REPORT_WORKER", failure), "REPORT_WORKER"); }
         if (!state) try { state = await f.state(row.id); [observed[2], observed[3], observed[4], observed[5], observed[6], observed[7]] = [state.active, state.expired, state.canceled, state.aborted, state.finished, state.calls.length]; } catch (failure) { failures.push(failure); envelope.record(() => diagnostic.boundary("REPORT_WORKER", failure), "REPORT_WORKER"); }
+        try { const proof = await f.proof(row.id); producerJoin = proof.joined; assert.deepEqual(proof.joined, [1, proof.operations.length, proof.operations.length * 2, 0]); assert.equal(proof.active, 0); assert.equal(proof.expired, 0); } catch (failure) { failures.push(failure); envelope.record(() => diagnostic.boundary("REPORT_WORKER", failure), "REPORT_WORKER"); }
         // Preserve the first failed row independently of SDK witnesses and verdict.
-        if (firstWorker === null) { firstWorker = row.id; envelope.record(() => diagnostic.workerFailure(row.id, checks.snapshot(), workerChecks, observed[8], [...observed.slice(2, 8), ...(state?.producer ?? Array(5).fill(null))]), "REPORT_WORKER"); }
+        if (firstWorker === null) { firstWorker = row.id; envelope.record(() => diagnostic.workerFailure(row.id, checks.snapshot(), workerChecks, observed[8], [...observed.slice(2, 8), ...(state?.producer ?? Array(5).fill(null)),...(producerJoin ?? Array(4).fill(null))]), "REPORT_WORKER"); }
       }
       if (witnessCases.has(row.id)) envelope.record(() => diagnostic.worker(diagnostic.record("outer", row.id, "retirement", undefined), observed), "REPORT_WORKER");
     }
@@ -2261,3 +2262,56 @@ test("wrapper delivery annotation and helper fit existing quota and retain repor
   assert.equal(thrown, true);
 });
 // END wrapper pure comparisons.
+
+// BEGIN replay Worker resource pure tests.
+function replayWorkerFunctions() {
+  const text=readFileSync("worker/test/litellm-model-discovery.test.mjs","utf8");
+  return new Function(text.slice(text.indexOf("export function litellmWorkerResource"),text.indexOf("export async function litellmControlResponse")).replaceAll("export ","")+";return {litellmWorkerResource,litellmWorkerLedger};")();
+}
+function replayWorkerRow() {
+  const body={locked:false},response={body},input={id:5,token:{id:5,generation:1},response},reader={id:5,body,response,transport:input,bound:true,unlocks:1,unlockInvoke:47,unlockSequence:49,eof:false},error={};
+  const read={ordinal:1,kind:"read",state:"rejected",error,pending:{},invoke:41,settle:48,input,reader,receiverIdentity:true};
+  const observer={...read,ordinal:2,kind:"read_observer",pending:{},originalRead:read.pending,invoke:42,settle:50};
+  const closed={ordinal:0,kind:"closed",state:"fulfilled",pending:{},invoke:20,settle:46,input,reader};
+  const cancel={ordinal:3,kind:"cancel",state:"fulfilled",pending:{},invoke:44,settle:45,input,reader,argc:1,operandPresent:true,reason:error,signalAborted:true};
+  return {operations:[closed,read,observer,cancel],readers:[reader],failures:[],observerFailures:[],read,observer,closed,cancel,reader,input};
+}
+test("replay Worker exact original read observer relation rejects foreign bindings",()=>{
+  const {litellmWorkerResource,litellmWorkerLedger}=replayWorkerFunctions(),r=replayWorkerRow();
+  let d=litellmWorkerResource(r);assert.equal(d[1],63);assert.equal(d[3][0],true);assert.equal(d[3][4],true);assert.equal(litellmWorkerLedger(r)[7].length,2);
+  r.observer.originalRead={};d=litellmWorkerResource(r);assert.equal(d[2][1],null);assert.equal(d[3][0],null);
+  r.observer.originalRead=r.read.pending;r.observer.error={};assert.equal(litellmWorkerResource(r)[3][0],false);
+  r.read.error=undefined;r.observer.error=undefined;d=litellmWorkerResource(r);assert.equal(d[2][0][2],1);assert.equal(d[3][0],true);
+  r.reader.response={body:r.reader.body};assert.equal(litellmWorkerResource(r)[1]&2,0);
+});
+test("replay Worker complete maximum envelope retains both originals and resource facts",()=>{
+  const proof=litellmDiagnostics(cases.map(r=>r.id),nodeTypes.isProxy),lines=[];
+  const first=maximumWorkerFailure(proof), detail=[[1000000,1000000,1000000,1000000],63,
+    [[999998,2,7,1000000,1000000],[999999,2,7,1000000,1000000],[999996,1,0,1000000,1000000],[999997,1,0,1000000,1000000]],
+    [true,true,true,true,true,true,true,true,true,true,true],1000000,[1000000,1000000,1000000],false];
+  first.retire[3][7][0][1]=4;first.retire[3][7][0][7]=true;first.retire[3][7][1][1]=5;first.retire[3].push(detail);first.retire[4].push(1,1000000,1000000,0);
+  const records=[...reportingPair(proof,"sdk_provider_error",[true,false],true),...reportingPair(proof,"sdk_partial_abort",[false,true],true),...roleRecords(proof,true),proof.child({code:1}).envelope,proof.record("sdk","sdk_waiter_abort","waiter_mutation",undefined,"catalog"),first,proof.boundary("REPORT_WORKER",undefined)];
+  proof.emit(records,line=>lines.push(line));proof.flush(line=>lines.push(line));const decoded=reportingDecode(proof,lines);
+  assert.deepEqual(decoded.find(r=>r.phase==="child_result").retire,first.retire);
+  assert.equal(decoded.filter(r=>r.witness).length,4);assert.equal(decoded.filter(r=>r.roles).length,2);assert.ok(lines.every(line=>Buffer.byteLength(line)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);
+});
+test("replay producer joins original observer cross tails and retains undefined",async()=>{
+  const source=readFileSync("worker/test/litellm-model-discovery.test.mjs","utf8"),code=source.slice(source.indexOf("export async function joinLiteLLMProducer"),source.indexOf("export function upstreamFixture"));
+  const join=new Function(code.replace("export ","")+";return joinLiteLLMProducer;")();
+  let release,tailRelease,settled=false;const original=new Promise(resolve=>release=resolve),tail=new Promise((_,reject)=>tailRelease=reject),r={operations:[],observers:[],observerFailures:[]};
+  const op={promise:original,state:"pending"};r.operations.push(op);
+  r.observers.push(original.then(()=>{op.state="fulfilled";const child={promise:tail,state:"pending"};r.operations.push(child);r.observers.push(tail.then(()=>{child.state="fulfilled";},error=>{child.state="rejected";child.error=error;}));}));
+  const joining=join(r);joining.then(()=>{settled=true;});release();for(let i=0;i<8;i++)await Promise.resolve();assert.equal(settled,false);
+  tailRelease();assert.deepEqual(await joining,[1,2,2,1]);assert.ok(Object.hasOwn(r.operations[1],"error"));assert.equal(r.operations[1].error,undefined);
+});
+test("replay Worker schema rejects foreign identities malformed wire and shadow getters",()=>{
+  const proof=litellmDiagnostics(cases.map(r=>r.id),nodeTypes.isProxy),r=replayWorkerRow(),ledger=replayWorkerFunctions().litellmWorkerLedger(r);
+  const good=proof.workerFailure("sdk_partial_abort",[0,1,0,1,true],[4,127,111,16,null],ledger,Array(15).fill(null));assert.ok(good);
+  for(const mutate of [d=>d[0][1]++,d=>d[2][0][0]=99,d=>d[2][1][0]=d[2][0][0],d=>d[2][0][3]++,d=>d[2][0][1]=1]){
+    const bad=structuredClone(good);mutate(bad.retire[3][8]);assert.equal(proof.validate(bad),null);
+  }
+  const encoded=JSON.parse(proof.json(good));assert.equal(typeof encoded.retire,"string");assert.deepEqual(proof.validate(encoded).retire,good.retire);
+  for(const wire of ["w1:[~]","w1:[T]","w1:[00]","w1:[{}]","w1:[1e999]","w2:[1]"])assert.equal(proof.validate({...encoded,retire:wire}),null);
+  let touched=0;const hostile={...good};Object.defineProperty(hostile,"retire",{get(){touched++;throw undefined;},enumerable:true});assert.equal(proof.validate(hostile),null);assert.equal(touched,0);
+});
+// END replay Worker resource pure tests.
