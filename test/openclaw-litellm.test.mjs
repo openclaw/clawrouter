@@ -6,8 +6,16 @@ import { stripTypeScriptTypes } from "node:module";
 import test from "node:test";
 import { parse } from "yaml";
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
-import { selected, withGateway } from "../worker/test/litellm-model-discovery.test.mjs";
 
+
+const controlSource = readFileSync("test/fixtures/openclaw-litellm-contract.test.ts", "utf8").split("// BEGIN isolated wrapper proof.")[1]?.split("// END isolated wrapper proof.")[0];
+assert.ok(controlSource);
+const { litellmControlMode, litellmControlRestore, litellmContinuation, litellmControlWire } = new Function("nodeTypes", stripTypeScriptTypes(controlSource, { mode: "transform" }) + ";return {litellmControlMode,litellmControlRestore,litellmContinuation,litellmControlWire};")(nodeTypes);
+const contractMode = litellmControlMode(process.env.CLAWROUTER_LITELLM_MODE);
+if (contractMode === "control-only") {
+  registerWrapperControlConsumer();
+} else {
+const { selected, withGateway } = await import("../worker/test/litellm-model-discovery.test.mjs");
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
 const cases = [
@@ -778,3 +786,134 @@ test("reporting repair compact decoder rejects hostile fields without getters", 
   const proxy = new Proxy(wire.witness.data, { ownKeys() { touches++; throw undefined; } });
   assert.equal(proof.validate({ ...wire, witness: { ...wire.witness, data: proxy } }), null); assert.equal(touches, 0);
 });
+
+}
+
+function registerWrapperControlConsumer() {
+  test("isolated D8 original wrapper continuation entry only", { timeout: 250000 }, async () => {
+    const wire = litellmControlWire(), records = [], errors = [];
+    let helperFulfilled = false, code = null;
+    try {
+      assert.ok(process.env.CLAWROUTER_OPENCLAW_CHECKOUT, "control-only mode requires the genuine CI checkout");
+      await runOpenClawConsumer({ diagnostic(value) { records.push(...wire.parse(value)); } }, {
+        source: process.env.CLAWROUTER_OPENCLAW_CHECKOUT,
+        sourceHead: "d8bb939408aa4d2be7df0161748edb52ebf3b1fb",
+        fixture: "test/fixtures/openclaw-litellm-contract.test.ts",
+        testPath: "extensions/litellm/worker-contract.test.ts",
+        env: { CLAWROUTER_LITELLM_MODE: "control-only" },
+      });
+      helperFulfilled = true;
+    } catch (error) {
+      errors.push(error); const child = wire.child(error); code = child.code; records.push(...child.records);
+    }
+    const report = wire.collect(records);
+    try {
+      assert.deepEqual(report.missing, []); assert.deepEqual(report.invalid, []);
+      assert.equal(report.records.every(r => r.ok && r.restored && r.faults === 0 && r.entries > 0 && r.cancels === 1 && r.unlocks === 1 && r.sameContext + r.absentContext === 2), true);
+      assert.equal(helperFulfilled, true);
+    } catch (error) { errors.push(error); }
+    if (errors.length) {
+      // This independent summary survives missing native records or collector failure.
+      const summary = { v: 1, mode: "wrapper-control", helperFulfilled, code,
+        records: report.records.length, missing: report.missing.length, invalid: report.invalid.length,
+        undefinedFailure: errors.some(error => error === undefined) };
+      try { process.stdout.write("::error title=LiteLLM wrapper helper::" + JSON.stringify(summary) + "\n"); } catch (error) { errors.push(error); }
+      try { wire.emit(records, text => process.stdout.write(text)); } catch (error) { errors.push(error); }
+    }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length) throw new AggregateError(errors, "wrapper control consumer and reporting failed");
+  });
+}
+
+// BEGIN wrapper pure comparisons.
+function controlBinding() {
+  const reader = {}, cancel = () => {}, releaseLock = () => {}, token = {};
+  const owner = Object.freeze({ reader, token, generation: 3, methods: Object.freeze({ cancel, releaseLock }) });
+  const witness = litellmContinuation(owner), p = {}, q = {}, then = () => {}, handlers = [() => {}, () => {}];
+  const register = () => { witness.registering(p, then, p, handlers); witness.init(q, p); witness.registered(q); };
+  const operation = () => witness.operation(reader, reader, cancel, "cancel", 3, "absent");
+  return { reader, cancel, releaseLock, owner, witness, p, q, then, handlers, register, operation };
+}
+test("wrapper pure mode rejects unknown before product registration", () => {
+  assert.equal(litellmControlMode(undefined), "product"); assert.equal(litellmControlMode("product"), "product");
+  assert.equal(litellmControlMode("control-only"), "control-only");
+  for (const value of ["", "control", null, {}, 1]) assert.throws(() => litellmControlMode(value));
+});
+test("wrapper pure initial reaction is one use and adoption never reopens", () => {
+  const c = controlBinding(); c.register(); c.witness.before(c.q); assert.equal(c.operation(), "none"); c.witness.after(c.q);
+  c.witness.before(c.q); c.witness.after(c.q);
+  assert.deepEqual(c.witness.finish(), { entries: 1, adoptions: 1, faults: [], contexts: [0, 1], calls: [1, 0] });
+});
+test("wrapper pure missing parent mapping and receiver cannot mint entry", () => {
+  for (const mismatch of ["parent", "returned", "receiver", "duplicate"]) {
+    const c = controlBinding(); c.witness.registering(c.p, c.then, mismatch === "receiver" ? {} : c.p, c.handlers);
+    c.witness.init(c.q, mismatch === "parent" ? {} : c.p);
+    if (mismatch === "duplicate") c.witness.init({}, c.p);
+    c.witness.registered(mismatch === "returned" ? {} : c.q); c.witness.before(c.q);
+    assert.equal(c.operation(), "outside"); assert.ok(c.witness.finish().faults.length);
+  }
+});
+test("wrapper pure foreign unrecognized reader method and generation fail closed", () => {
+  for (const variant of ["foreign", "unrecognized", "reader", "receiver", "method", "kind", "generation"]) {
+    const c = controlBinding(); c.register(); c.witness.before(c.q);
+    const result = c.witness.operation(variant === "reader" ? {} : c.reader, variant === "receiver" ? {} : c.reader,
+      variant === "method" ? () => {} : c.cancel, variant === "kind" ? "read" : "cancel", variant === "generation" ? 4 : 3,
+      ["foreign", "unrecognized"].includes(variant) ? variant : "absent");
+    assert.notEqual(result, "none"); c.witness.after(c.q); assert.equal(c.witness.finish().faults.length, 1);
+  }
+});
+test("wrapper pure replay stale incomplete overlap and unmatched exit fail", () => {
+  const replay = controlBinding(); replay.register(); replay.witness.before(replay.q); replay.operation(); assert.equal(replay.operation(), "replay");
+  replay.witness.after(replay.q); assert.equal(replay.operation(), "outside"); replay.witness.finish(); assert.equal(replay.operation(), "generation");
+  const held = controlBinding(); held.register(); held.witness.before(held.q); assert.ok(held.witness.finish().faults.includes("incomplete"));
+  const overlap = controlBinding(); overlap.register(); overlap.witness.before(overlap.q); overlap.witness.before(overlap.q); assert.ok(overlap.witness.faults.includes("entry"));
+  const exit = controlBinding(); exit.register(); exit.witness.after(exit.q); assert.ok(exit.witness.faults.includes("boundary"));
+});
+function wrapperRecords(wire) { return wire.ids.map(id => ({ v: 1, id, ok: true, settled: 12, rejected: 0, entries: 2, adoptions: 1, faults: 0, restored: true, sameContext: 0, absentContext: 2, cancels: 1, unlocks: 1 })); }
+test("wrapper pure collector is order independent and rejects duplicates or omissions", () => {
+  const wire = litellmControlWire(), rows = wrapperRecords(wire);
+  assert.deepEqual(wire.collect([...rows].reverse()), wire.collect(rows));
+  assert.equal(wire.collect(rows.slice(1)).missing.length, 1); assert.deepEqual(wire.collect([...rows, rows[0]]).invalid, ["duplicate"]);
+  assert.equal(wire.decode({ ...rows[0], id: "sdk_partial_abort" }), null);
+  assert.equal(wire.decode({ ...rows[0], acquisition: 1 }), null);
+});
+test("wrapper pure current wire retains child undefined and rejects hostile data", () => {
+  const wire = litellmControlWire(), row = wrapperRecords(wire)[0]; let getters = 0;
+  const hostile = { ...row }; Object.defineProperty(hostile, "ok", { get() { getters++; return true; } });
+  assert.equal(wire.decode(hostile), null); assert.equal(getters, 0);
+  assert.equal(wire.decode(new Proxy(row, { ownKeys() { throw undefined; } })), null);
+  assert.deepEqual(wire.child(undefined), { records: [], code: null, undefinedFailure: true });
+  assert.deepEqual(wire.child({ code: 1, stdout: wire.prefix + JSON.stringify(row), stderr: "" }).records, [row]);
+  assert.deepEqual(wire.parse("\x1b" + wire.prefix + JSON.stringify(row)), []);
+  assert.deepEqual(wire.parse("x".repeat(769)), []);
+});
+test("wrapper pure bounded emitter preserves writer and restoration failures", () => {
+  const wire = litellmControlWire(), rows = wrapperRecords(wire).map(r => ({ ...r, ok: false, restored: false, faults: 1000 })), output = [];
+  wire.emit(rows, line => output.push(line)); assert.equal(output.length, 5);
+  assert.ok(output.every(line => Buffer.byteLength(line) <= 768 && line.startsWith("::error ")));
+  assert.ok(Buffer.byteLength(output.join("")) <= 8192);
+  let present = false, reason;
+  try { wire.emit(rows, () => { throw undefined; }); } catch (error) { present = true; reason = error; }
+  assert.equal(present, true); assert.equal(reason, undefined);
+  assert.equal(wire.collect(rows).records.every(row => row.restored === false), true);
+});
+test("wrapper pure restoration attempts every callback and retains primary undefined", () => {
+  const errors = [undefined], cleanup = {}, calls = [];
+  assert.equal(litellmControlRestore(errors, [() => { calls.push(1); throw cleanup; }, () => { calls.push(2); throw undefined; }, () => { calls.push(3); }]), false);
+  assert.deepEqual(calls, [1, 2, 3]); assert.deepEqual(errors, [undefined, cleanup, undefined]);
+});
+test("wrapper pure helper failure survives records and API order", () => {
+  const wire = litellmControlWire(), rows = wrapperRecords(wire);
+  const helper = { v: 1, mode: "wrapper-control", helperFulfilled: false, code: 1, records: 5, missing: 0, invalid: 0, undefinedFailure: true };
+  assert.deepEqual(wire.collect([...rows, helper]), wire.collect([helper, ...rows].reverse()));
+  assert.equal(wire.collect([helper]).helper.helperFulfilled, false);
+  assert.equal(wire.collect([helper, helper]).invalid.includes("duplicate_helper"), true);
+  assert.deepEqual(wire.parse(JSON.stringify(helper)), [helper]);
+});
+test("wrapper pure two registered reactions cannot overlap", () => {
+  const c = controlBinding(), p2 = {}, q2 = {}; c.register();
+  c.witness.registering(p2, c.then, p2, c.handlers); c.witness.init(q2, p2); c.witness.registered(q2);
+  c.witness.before(c.q); c.witness.before(q2); c.witness.after(q2); c.witness.after(c.q);
+  const result = c.witness.finish(); assert.ok(result.faults.includes("entry")); assert.ok(result.faults.includes("boundary"));
+});
+// END wrapper pure comparisons.

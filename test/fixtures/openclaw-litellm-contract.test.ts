@@ -3,33 +3,13 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { types as nodeTypes } from "node:util";
 import { createRequire } from "node:module";
 import { afterEach, beforeEach, describe, expect, it as nativeIt, vi } from "vitest";
-import { stream, streamSimple, type Model } from "openclaw/plugin-sdk/llm";
-import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import * as catalogGuard from "openclaw/plugin-sdk/ssrf-runtime";
-import * as chatGuard from "../../src/agents/provider-transport-dispatcher-pool.js";
-import { loadBundledPluginFacade } from "../../src/test-utils/bundled-plugin-public-surface.js";
-import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 
 const sourceHead = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
-const origin = process.env.CLAWROUTER_CONTRACT_ORIGIN!;
-type Row = { id: string; mode: string; action?: string; unrestricted?: boolean; versioned?: boolean; control?: string };
-const rows = JSON.parse(process.env.CLAWROUTER_CONTRACT_CASES!) as Row[];
-const selected = "tenant/private-alias";
-const key = (id: string) => `clawrouter-live-${id}-fixture-secret`;
-const originalFetch = globalThis.fetch;
-const undici = createRequire(import.meta.url)("undici/index.js") as typeof import("undici");
-const originalCatalogGuard = catalogGuard.fetchWithSsrFGuard;
-const originalChatGuard = chatGuard.fetchWithProviderHttpGuard;
+import type { Model } from "openclaw/plugin-sdk/llm";
+const contractMode = litellmControlMode(process.env.CLAWROUTER_LITELLM_MODE);
+
 type Operation = { kind: string; promise: Promise<unknown>; state?: "pending" | "fulfilled" | "rejected"; reasonDefined?: boolean };
-type Acquisition = { kind: "catalog" | "chat"; promise: Promise<unknown>; releases: number; released: Promise<void>; markReleased: () => void };
-const operations: Operation[] = [], acquisitions: Acquisition[] = [], failures: unknown[] = [];
-const bodies = new Set<ReadableStream<Uint8Array>>();
-const readers: Array<{ body: ReadableStream<Uint8Array>; unlocks: number }> = [];
-const closes: Array<{ depth: number; original?: Promise<unknown>; threw: boolean; error?: unknown }> = [];
-const dispatchers = new Set<object>();
-const requests: Array<{ method: string; path: string; credential: string }> = [];
 // BEGIN shared proof functions. These observe originals; they grant no disposition.
 function litellmOwnership(storage: any, generation = 0) {
   const witness = litellmWitness(generation);
@@ -496,6 +476,277 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
   return { prefix, own, validate, record, joined, witness, worker, parse, child, json, boundary, emit, flush };
 }
 // END shared proof functions.
+
+// BEGIN isolated wrapper proof.
+function litellmControlMode(value: unknown) {
+  if (value === undefined || value === "product") return "product";
+  if (value === "control-only") return value;
+  throw new Error("unknown LiteLLM contract mode");
+}
+function litellmControlRestore(errors: unknown[], callbacks: Array<() => void>) {
+  let restored = true;
+  for (const restore of callbacks) try { restore(); } catch (error) { restored = false; errors.push(error); }
+  return restored;
+}
+// This is an entry witness, not a replacement for the product ownership verdict.
+function litellmContinuation(owner: any) {
+  const capabilities = new Map<object, any>(), faults: string[] = [];
+  let registration: any, entered: any, active = true, entries = 0, adoptions = 0;
+  const contexts = [0, 0], calls = [0, 0];
+  const fault = (id: string) => { faults.push(id); };
+  return {
+    faults,
+    registering(p: object, then: Function, receiver: unknown, args: unknown[]) {
+      if (!active || registration || receiver !== p || args.length !== 2 || args.some(v => typeof v !== "function")) { fault("registration"); return; }
+      registration = { p, then, receiver, args: Object.freeze([...args]), matches: [] };
+    },
+    init(q: object, p: object | undefined) { if (registration && p === registration.p) registration.matches.push(q); },
+    registered(q: object) {
+      const r = registration; registration = undefined;
+      if (!r || r.matches.length !== 1 || r.matches[0] !== q || capabilities.has(q)) { fault("mapping"); return; }
+      capabilities.set(q, { binding: Object.freeze({ ...r, q, owner }), state: "armed", calls: new Set() });
+    },
+    registrationFailed() { registration = undefined; fault("registration_throw"); },
+    before(q: object) {
+      const c = capabilities.get(q); if (!c) return;
+      // Adoption jobs reuse Q after the original reaction. They never reopen it.
+      if (c.state === "consumed") { adoptions++; return; }
+      if (!active || entered || c.state !== "armed") { fault("entry"); return; }
+      c.state = "entered"; entered = c; entries++;
+    },
+    after(q: object) {
+      const c = capabilities.get(q); if (!c || c.state === "consumed") return;
+      if (entered !== c || c.state !== "entered") { fault("boundary"); return; }
+      c.state = "consumed"; entered = undefined;
+    },
+    operation(reader: object, receiver: unknown, method: Function, kind: string, generation: number, context: string) {
+      let id = "none";
+      if (!active || generation !== owner.generation) id = "generation";
+      else if (!entered) id = "outside";
+      else if (context !== "same" && context !== "absent") id = "context";
+      else if (reader !== owner.reader || receiver !== reader) id = "receiver";
+      else if (!Object.hasOwn(owner.methods, kind) || owner.methods[kind] !== method) id = "method";
+      else if (entered.calls.has(kind)) id = "replay";
+      if (id !== "none") fault(id); else { entered.calls.add(kind); contexts[context === "same" ? 0 : 1]++; calls[kind === "cancel" ? 0 : 1]++; }
+      return id;
+    },
+    finish() {
+      if (registration || entered || [...capabilities.values()].some(c => c.state !== "consumed")) fault("incomplete");
+      active = false;
+      return { entries, adoptions, faults: [...faults], contexts: [...contexts], calls: [...calls] };
+    },
+  };
+}
+function litellmControlWire() {
+  const ids = ["eof", "source_error", "source_undefined", "held_cleanup", "cleanup_undefined"];
+  const prefix = "LITELLM_WRAPPER_V1 ", keys = ["v", "id", "ok", "settled", "rejected", "entries", "adoptions", "faults", "restored", "sameContext", "absentContext", "cancels", "unlocks"];
+  function decode(value: unknown): any {
+    try {
+      if (!value || typeof value !== "object" || nodeTypes.isProxy(value)) return null;
+      if (Object.getOwnPropertyDescriptor(value, "mode")?.value === "wrapper-control") {
+        const fields = ["v", "mode", "helperFulfilled", "code", "records", "missing", "invalid", "undefinedFailure"], r: any = {};
+        if (Reflect.ownKeys(value).length !== fields.length) return null;
+        for (const key of fields) { const d = Object.getOwnPropertyDescriptor(value, key); if (!d || !Object.hasOwn(d, "value")) return null; r[key] = d.value; }
+        if (r.v !== 1 || typeof r.helperFulfilled !== "boolean" || typeof r.undefinedFailure !== "boolean"
+          || !(r.code === null || Number.isInteger(r.code) && r.code >= 0 && r.code <= 255)
+          || [r.records, r.missing, r.invalid].some(n => !Number.isSafeInteger(n) || n < 0 || n > 100000)) return null;
+        return r;
+      }
+      if (Reflect.ownKeys(value).length !== keys.length) return null;
+      const r: any = {};
+      for (const key of keys) { const d = Object.getOwnPropertyDescriptor(value, key); if (!d || !Object.hasOwn(d, "value")) return null; r[key] = d.value; }
+      if (r.v !== 1 || !ids.includes(r.id) || typeof r.ok !== "boolean" || typeof r.restored !== "boolean"
+        || [r.settled, r.rejected, r.entries, r.adoptions, r.faults, r.sameContext, r.absentContext, r.cancels, r.unlocks].some(n => !Number.isSafeInteger(n) || n < 0 || n > 1000)) return null;
+      return r;
+    } catch { return null; }
+  }
+  const parse = (text: unknown) => {
+    if (typeof text !== "string" || Buffer.byteLength(text) > 2 * 1024 * 1024 || text.includes("\x1b")) return [];
+    const records: any[] = [];
+    for (const line of text.split(/\r?\n/)) {
+      const bare = line.startsWith(prefix) ? line.slice(prefix.length) : line;
+      if (Buffer.byteLength(bare) > 768) continue;
+      try { const r = decode(JSON.parse(bare)); if (r) records.push(r); } catch {}
+    }
+    return records;
+  };
+  function collect(records: unknown[]) {
+    const found = new Map<string, any>(), invalid: string[] = []; let helper: any = null;
+    for (const value of records) { const r = decode(value); if (!r) { invalid.push("schema"); continue; }
+      if (r.mode === "wrapper-control") { if (helper) invalid.push("duplicate_helper"); else helper = r; continue; }
+      if (found.has(r.id)) invalid.push("duplicate"); else found.set(r.id, r); }
+    return { records: ids.flatMap(id => found.has(id) ? [found.get(id)] : []), missing: ids.filter(id => !found.has(id)), invalid, helper };
+  }
+  function emit(records: unknown[], write: (s: string) => unknown) {
+    const result = collect(records); let bytes = 0;
+    for (const r of result.records) {
+      if (r.ok) continue;
+      const text = "::error title=LiteLLM wrapper control::" + JSON.stringify(r).replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A") + "\n";
+      bytes += Buffer.byteLength(text); if (Buffer.byteLength(text) > 768 || bytes > 8192) throw new Error("wrapper reporting quota");
+      write(text);
+    }
+    return result;
+  }
+  function child(error: unknown) {
+    const data = (key: string) => { try { return error && typeof error === "object" && !nodeTypes.isProxy(error) ? Object.getOwnPropertyDescriptor(error, key)?.value : undefined; } catch { return undefined; } };
+    const code = data("code"), stdout = data("stdout"), stderr = data("stderr");
+    return { records: [...parse(stdout), ...parse(stderr)], code: Number.isInteger(code) && code >= 0 && code <= 255 ? code : null,
+      undefinedFailure: error === undefined };
+  }
+  return { ids, prefix, decode, parse, collect, emit, child };
+}
+// END isolated wrapper proof.
+
+function registerLiteLLMWrapperControls() {
+  nativeIt("D8 original wrapper continuation entry only", async () => {
+    expect(process.version).toBe("v24.22.1");
+    expect(execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim()).toBe(sourceHead);
+    const { wrapGuardedBodyStream } = await import("../../src/infra/net/guarded-body-stream.js");
+    const { promiseHooks } = await import("node:v8");
+    const wire = litellmControlWire();
+    for (const id of wire.ids) {
+      const errors: unknown[] = [], operations: any[] = [], restores: Array<() => void> = [];
+      const storage = new AsyncLocalStorage<object>(), token = Object.freeze({}), generation = 1;
+      const expected = id === "source_undefined" ? undefined : Object.freeze({});
+      const sourceError = id === "source_error" || id === "source_undefined";
+      let observer: ReturnType<typeof litellmContinuation> | undefined, stop: (() => void) | undefined;
+      let unlocks = 0, cleanupCalls = 0, restored = false, summary: any;
+      const remember = (kind: string, original: Promise<any>) => {
+        const row: any = { kind, original, state: "pending" }; operations.push(row);
+        // Observe using the prototype: never confuse our handlers with the wrapper's.
+        row.observed = Reflect.apply(Promise.prototype.then, original, [
+          (value: unknown) => { row.state = "fulfilled"; row.value = value; },
+          (reason: unknown) => { row.state = "rejected"; row.reason = reason; },
+        ]); return original;
+      };
+      const patch = (object: object, key: string, value: unknown) => {
+        const prior = Object.getOwnPropertyDescriptor(object, key);
+        Object.defineProperty(object, key, { configurable: true, writable: true, value });
+        restores.push(() => { if (prior) Object.defineProperty(object, key, prior); else if (!Reflect.deleteProperty(object, key)) throw new Error("descriptor restoration failed"); });
+      };
+      const join = async () => { for (let cursor = 0; cursor < operations.length;) {
+        const batch = operations.slice(cursor); cursor += batch.length;
+        await Promise.all(batch.map(row => row.observed));
+      } };
+      let endHeld!: () => void;
+      const held = new Promise<void>(resolve => { endHeld = resolve; });
+      let cleanupStarted!: () => void;
+      const started = new Promise<void>(resolve => { cleanupStarted = resolve; });
+      let pulls = 0;
+      const source = new ReadableStream<Uint8Array>({ pull(c) {
+        if (sourceError) c.error(expected);
+        else if (pulls++ === 0) c.enqueue(new Uint8Array([7])); else c.close();
+      } }, { highWaterMark: 0 });
+      const response = new Response(source), body = response.body!;
+      const originalGet = body.getReader;
+      const cleanup = () => {
+        cleanupCalls++; cleanupStarted();
+        return remember("cleanup", id === "cleanup_undefined" ? Promise.reject(undefined) : id === "held_cleanup" ? held : Promise.resolve());
+      };
+      let client: ReadableStreamDefaultReader<Uint8Array> | undefined, deadline: ReturnType<typeof setTimeout> | undefined;
+      try {
+        patch(body, "getReader", function (this: ReadableStream<Uint8Array>, ...args: unknown[]) {
+          const reader = Reflect.apply(originalGet, this, args) as ReadableStreamDefaultReader<Uint8Array>;
+          if (this !== body || observer) throw new Error("nonunique wrapper reader");
+          const read = reader.read, cancel = reader.cancel, unlock = reader.releaseLock;
+          const owner = Object.freeze({ generation, reader, response, body, methods: Object.freeze({ cancel, releaseLock: unlock }) });
+          observer = litellmContinuation(owner);
+          stop = promiseHooks.createHook({ init: (q, p) => observer!.init(q, p), before: q => observer!.before(q), after: q => observer!.after(q) });
+          remember("closed", reader.closed);
+          patch(reader, "read", function (this: typeof reader, ...values: unknown[]) {
+            const p = Reflect.apply(read, this, values); remember("read", p);
+            const then = p.then;
+            patch(p, "then", function (this: typeof p, ...handlers: unknown[]) {
+              observer!.registering(p, then, this, handlers);
+              try { const q = Reflect.apply(then, this, handlers); observer!.registered(q); remember("continuation", q); return q; }
+              catch (error) { observer!.registrationFailed(); throw error; }
+            }); return p;
+          });
+          for (const [kind, original] of [["cancel", cancel], ["releaseLock", unlock]] as const) patch(reader, kind, function (this: typeof reader, ...values: unknown[]) {
+            const raw = storage.getStore(), context = raw === undefined ? "absent" : raw === token ? "same" : "foreign";
+            observer!.operation(reader, this, original, kind, generation, context);
+            try { const value = Reflect.apply(original, this, values); if (kind === "cancel") remember(kind, value); else unlocks++; return value; }
+            catch (error) { errors.push(error); throw error; }
+          });
+          return reader;
+        });
+        // Only construction has authoring context. Consumption is deliberately outside.
+        const wrapped = storage.run(token, () => wrapGuardedBodyStream({ body, cleanup }));
+        client = wrapped.getReader(); remember("client_closed", client.closed);
+        const consume = (async () => { for (;;) { const chunk = await remember("client_read", client!.read()); if (chunk.done) break; } })();
+        remember("consumer", consume);
+        const proof = (async () => {
+          if (id === "held_cleanup") {
+            await started;
+            try {
+              expect(operations.find(row => row.kind === "cleanup")?.state).toBe("pending");
+              expect(operations.some(row => row.kind === "continuation" && row.state === "pending")).toBe(true);
+            } finally {
+              // This control owns the original cleanup producer. Failure stays failure.
+              endHeld();
+            }
+          }
+          await consume.catch(() => {}); await join();
+        })();
+        await Promise.race([proof, new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new Error("wrapper control deadline")), 5000); })]);
+        summary = observer!.finish();
+        expect(summary.faults).toEqual([]); expect(summary.entries).toBeGreaterThan(0);
+        if (id === "held_cleanup") expect(summary.adoptions).toBeGreaterThan(0);
+        expect(cleanupCalls).toBe(1); expect(unlocks).toBe(1); expect(body.locked).toBe(false); expect(summary.calls).toEqual([1, 1]);
+        const rejected = operations.filter(row => row.state === "rejected");
+        if (sourceError) {
+          for (const kind of ["read", "closed", "cancel", "client_read", "client_closed", "consumer"]) expect(rejected.some(row => row.kind === kind && Object.is(row.reason, expected))).toBe(true);
+          expect(rejected.every(row => Object.is(row.reason, expected))).toBe(true);
+        } else if (id === "cleanup_undefined") {
+          expect(rejected.map(row => row.kind)).toEqual(["cleanup"]); expect(rejected[0].reason).toBeUndefined();
+        } else expect(rejected).toEqual([]);
+      } catch (error) { errors.push(error); }
+      finally {
+        if (deadline) clearTimeout(deadline);
+        // Join originals even on assertion failure; the helper's process deadline is failure only.
+        try { await join(); } catch (error) { errors.push(error); }
+        if (!summary && observer) summary = observer.finish();
+        restored = litellmControlRestore(errors, [() => client?.releaseLock(), () => stop?.(), ...restores.reverse(), () => storage.disable()]);
+      }
+      const record = wire.decode({ v: 1, id, ok: errors.length === 0, settled: operations.filter(row => row.state !== "pending").length,
+        rejected: operations.filter(row => row.state === "rejected").length, entries: summary?.entries ?? 0, adoptions: summary?.adoptions ?? 0,
+        faults: observer?.faults.length ?? 0, restored, sameContext: summary?.contexts[0] ?? 0, absentContext: summary?.contexts[1] ?? 0,
+        cancels: summary?.calls[0] ?? 0, unlocks: summary?.calls[1] ?? 0 });
+      try { if (!record) throw new Error("invalid wrapper control record"); process.stdout.write(wire.prefix + JSON.stringify(record) + "\n"); }
+      catch (error) { errors.push(error); }
+      if (errors.length === 1) throw errors[0];
+      if (errors.length) throw new AggregateError(errors, "wrapper control and cleanup failed");
+    }
+  }, 45_000);
+}
+
+if (contractMode === "control-only") {
+  registerLiteLLMWrapperControls();
+} else {
+const { stream, streamSimple } = await import("openclaw/plugin-sdk/llm");
+const { registerSingleProviderPlugin } = await import("openclaw/plugin-sdk/plugin-test-runtime");
+const { clearLiveCatalogCacheForTests } = await import("openclaw/plugin-sdk/provider-catalog-live-runtime");
+const catalogGuard = await import("openclaw/plugin-sdk/ssrf-runtime");
+const chatGuard = await import("../../src/agents/provider-transport-dispatcher-pool.js");
+const { loadBundledPluginFacade } = await import("../../src/test-utils/bundled-plugin-public-surface.js");
+const { withOpenClawTestState } = await import("../../src/test-utils/openclaw-test-state.js");
+const origin = process.env.CLAWROUTER_CONTRACT_ORIGIN!;
+type Row = { id: string; mode: string; action?: string; unrestricted?: boolean; versioned?: boolean; control?: string };
+const rows = JSON.parse(process.env.CLAWROUTER_CONTRACT_CASES!) as Row[];
+const selected = "tenant/private-alias";
+const key = (id: string) => `clawrouter-live-${id}-fixture-secret`;
+const originalFetch = globalThis.fetch;
+const undici = createRequire(import.meta.url)("undici/index.js") as typeof import("undici");
+const originalCatalogGuard = catalogGuard.fetchWithSsrFGuard;
+const originalChatGuard = chatGuard.fetchWithProviderHttpGuard;
+type Acquisition = { kind: "catalog" | "chat"; promise: Promise<unknown>; releases: number; released: Promise<void>; markReleased: () => void };
+const operations: Operation[] = [], acquisitions: Acquisition[] = [], failures: unknown[] = [];
+const bodies = new Set<ReadableStream<Uint8Array>>();
+const readers: Array<{ body: ReadableStream<Uint8Array>; unlocks: number }> = [];
+const closes: Array<{ depth: number; original?: Promise<unknown>; threw: boolean; error?: unknown }> = [];
+const dispatchers = new Set<object>();
+const requests: Array<{ method: string; path: string; credential: string }> = [];
+
 let observerGeneration = 0;
 const selectedWitness = { drain: false, ownership: false };
 let ownership = litellmOwnership(new AsyncLocalStorage(), observerGeneration);
@@ -806,3 +1057,5 @@ describe("registered LiteLLM live inventory and native inference", () => {
     });
   }, 120_000);
 });
+
+}
