@@ -30,6 +30,9 @@ capabilities:
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
+  - id: models.list
+    endpoint: catalog
+    methods: [GET]
 endpoints:
   chat_completions:
     modelPassthrough: {}
@@ -38,6 +41,15 @@ endpoints:
     responseFormat: openai.chat_completions
     streaming: sse
     timeoutMs: 600000
+  catalog:
+    method: GET
+    path: /models
+    nativeProxy: false
+    requestFormat: featherless.catalog
+    responseFormat: featherless.catalog
+    headers:
+      accept: application/json
+    timeoutMs: 10000
 models:
   entries:
     - id: featherless/GalrionSoftworks/Margnum-12B-v1

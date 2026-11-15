@@ -13,6 +13,7 @@ const sources = Object.fromEntries(["cerebras", "nvidia"].map(id => [id,
 const compile = manifest => compileProviderSnapshot([manifest]);
 function fixture(id) {
   const manifest = structuredClone(sources[id]);
+  manifest.capabilities = manifest.capabilities.filter(row => row.endpoint !== "public_models");
   manifest.capabilities.push({ id: "models.list", endpoint: "public_models", methods: ["GET"] });
   manifest.endpoints.public_models = { method: "GET", path: "/models", nativeProxy: false,
     requestFormat: `${id}.public_catalog`, responseFormat: `${id}.public_catalog`,

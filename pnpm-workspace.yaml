@@ -1,5 +1,6 @@
 packages:
   - admin
+  - packages/provider-plugin-contract
 overrides:
   workerd: 1.20261023.1
   undici: 7.30.1

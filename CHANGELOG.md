@@ -1,8 +1,61 @@
 # Changelog
 
+- Retain same-reader Worker rejection identities and join original synthetic producer observations before reporting LiteLLM retirement failures.
+- Join replayed response reads and first cancellation before releasing the original reader, retaining independent source retirement failures.
+
 ## Unreleased
 
+- Google speech proof: compose the landed response-reader retirement base while preserving the pinned speech scenarios, diagnostics, consumer selection, and provider snapshot indexes. Native speech qualification remains a separate original-CI requirement.
+
+- Distinguish an exactly owned, settled metadata read and its derived rejection from native HTTP/1 fixture retirement failures, preserving raw outcomes, permanent ownership seals and independent producer and SQLite checks without claiming the error cause.
+
+- Add a versioned, complete one-to-four-operation retirement diagnostic census and failure-preserving producer/accounting postlude guarded by the original router retirement seal; retain historical records and coarse fallback without changing strict Worker verdicts or claiming cancellation causes.
+
+- Preflight complete LiteLLM retirement diagnostic groups before emission, falling back to validated coarse evidence without widening relational admission or changing test verdicts.
+
+- Qualify LiteLLM metadata cancellation with an explicitly owned HTTP/1 reset after request-owned readiness, retaining strict ingress, producer retirement and accounting checks; generic fetch-abort coverage remains unqualified.
+
+- Report native LiteLLM retirement diagnostics as one atomic eight-part set of retained operation, resource, signal and coverage facts; validate each operation’s exact owner and complete census references, rejecting inconsistent sets without changing retirement checks.
+
+- Retain the first nonfulfilled original Worker operation at the strict retirement comparison, relaying bounded operation and error-presence evidence without changing cancellation acceptance.
+
+- Scope Worker failure diagnostics to individual native child executions and target coordinates, retaining bounded admission failures without changing test verdicts.
+
+- Retain bounded metadata caller-abort failure stages alongside native Worker test identities, preserving strict retirement checks and independent cleanup failures.
+
+- Distinguish joined partial-delivery read outcomes from Worker retirement failures only after exact producer cancellation and observer joins; retain raw rejections and independent SDK, SQLite and cleanup checks.
+
+- Preserve pending Worker reason unknowns and project retained response/body bindings without additional native body getter calls.
+
+- Preserve both replay source and delivery-reader release failures when usage observation retires a mapped replay body.
+
+- Preserve the original LiteLLM retirement failure definedness before independent observation or reporting errors are aggregated.
+
+- Match LiteLLM public waiter cancellation and pre-output rejection receipts, retaining the first Worker predicate independently of SDK failure evidence.
+
+- Preserve the first precise LiteLLM catalog failure stage in the reserved helper envelope without displacing original failure, role or retirement evidence.
+
+- Correct LiteLLM canonical catalog cache expectations and bind held readiness to original request reads, preserving all discovery joins after control or release failures.
+
+- Distinguish source-qualified native stored-error data outcomes from LiteLLM local handle-retirement failures while retaining independent Worker and accounting checks.
+
+- Join LiteLLM captured transport and guard originals, observer derivatives, and independent cleanup checks even when observer registration fails.
+
+- Bind LiteLLM fixture transports to individual Worker ingresses with opt-in native request context and retain bounded retirement failure observations.
+
+- Join replayed response reads and cancellation before releasing readers, preserving independent source and delivery retirement failures.
+
+- Build and pack the provider plugin contract as a standalone ESM package with TypeScript declarations for external provider tooling.
+
+- Add opt-in, bounded native consumer runner diagnostics that separate collection failures from missing startup reports without changing SDK test verdicts.
+
+- Run provider plugin REST JSON conformance fixtures with named API-key headers, using host-owned synthetic credentials and rejecting client credential injection.
+
+- Test the registered OpenClaw Featherless catalog against complete Worker scans, original credentials, policy filtering, and SQLite metadata settlement.
+
 - Qualify OpenClaw catalog tests against unmodified native offers and schema-validated manifest configurations, keeping direct Worker transport coverage separate from client discovery.
+
+- Discard Fusion adviser drafts that exceed the proposal character limit instead of injecting a truncated answer, preserving completed usage and existing synthesis fallback.
 
 - Evaluate trained Fusion vote policies through the offline replay CLI with the same panel validation as live execution.
 
@@ -748,6 +801,7 @@
 - Qualify manifest-only Cerebras and NVIDIA public catalog declarations with fixed metadata factories and normalized fact arrays, preserving private caller binding and withholding native-route activation.
 - Reject registered catalog protocol declarations with mismatched wire pairs, noncanonical list/retrieve capabilities, missing GET or streaming transports before Worker execution, while preserving generic endpoint defaults and existing catalog exposure restrictions.
 - Add isolated public catalog orchestration for Cerebras, NVIDIA, Chutes and Venice with original-owner checks before every fetch and publication, one caller deadline and final current-policy filtering; shared dispatch activation remains separate.
+- Declare owner-bound public model catalogs for Cerebras, NVIDIA, Chutes and Venice, preserving manifest-only fact projections versus native envelopes and keeping inference credentials off public requests. Add registered-client discovery coverage for exact formats, original-key isolation, authoritative empty catalogs and physical reader retirement.
 - Add bounded DeepInfra native catalog codecs with isolated authenticated metadata and public pricing, preserved deprecation/replacement observations, and no fabricated limits or tariffs.
 - Qualify DeepInfra’s eight frozen model dispositions and original-account model discovery, preserving the existing Chat seed and withholding the known GLM-5.1 alias until runtime availability integration.
 - Add the six frozen Baseten Chat identities with qualified image inputs and native reasoning/tool replay fixtures; keep decision-only identities out of Chat and unknown prices unset.
@@ -767,6 +821,7 @@
 - Qualify Featherless native catalog declarations with original-key pagination, validated page progress and unknown account/pricing observations, without activating discovery.
 - Qualify a separate manifest-only Featherless complete-catalog projection while retaining the native page codec, original-key boundary and unknown facts; shared scan runtime and provider activation remain separately gated.
 - Dispatch complete Featherless catalogs through the original keyed grant, revalidate every page and final policy, and hold bounded capacity through atomic catalog serialization and delivery.
+- Declare the Featherless complete-catalog manifest route with original-grant keyed scanning, preserving all existing Chat cards and unknown pricing without inventing native pagination.
 - Qualify the frozen Featherless Qwen3-32B Chat card and native reasoning/tool replay, preserving the existing seed, original API-key grant and unknown plan-dependent prices/output limits.
 - Regenerate the Featherless catalog and exercise the actual native SDK through the Worker and SQLite, including frozen compatibility flags, reasoning/tool replay, missing usage, cancellation and proxy-only credentials.
 - Add bounded Chutes native model discovery codecs with public upstream requests, original caller filtering and explicit unknown metadata.
@@ -798,6 +853,8 @@
 - Complete the frozen Volcengine PAYG Chat roster while preserving its existing seed, closing deprecated identities and keeping dated standard models separate from Coding Plan aliases and tariffs.
 - Retain all frozen Ark Coding Plan identities with dated retirement, deprecation and upstream-alias evidence; keep unqualified cards non-executable and unpriced pending shared discovery eligibility integration.
 - Observe StepFun standard Chat cached_tokens as a validated inclusive prompt subset in JSON and terminal SSE, preserving gross input and conservative invalid-cache accounting without inferring prices.
+- Tests: qualify registered ClawRouter BytePlus PAYG catalog selection, both stream entrypoints, host tool replay, Singapore grant isolation and SQLite settlement through the real Worker.
+- Complete the six frozen BytePlus PAYG Chat dispositions with original Singapore credentials and native input facts, keeping deprecated GLM closed and Coding Plan prices or aliases separate.
 - Add experimental standard chat routes for Qianfan v2, StepFun global, Tencent TokenHub mainland, Volcengine Beijing and BytePlus Singapore with separate region/product credentials.
 - Accept canonical Abliteration ABLIT_KEY with ABLITERATION_API_KEY compatibility, consistent readiness and canonical precedence, preserving original selected grants and sanitized credential rejection.
 - Providers: qualify the two frozen StepFun standard Chat cards and keyed discovery in explicit global/China bindings, separate from Step Plan credentials and quota.
@@ -805,6 +862,8 @@
 - Qualify three frozen Tencent TokenHub Chat identities and private model discovery, preserving the documented postpaid Hy3 preview alias, native reasoning/tool replay and separate TokenPlan credentials without inferring tariffs.
 - Fix Tencent TokenHub model discovery to declare GET explicitly, omit streaming and exclude an unintended POST method.
 - Add experimental Abliteration, Meta Model API, Synthetic and Particle Chat routes with isolated API keys and explicit Particle catalog-to-request model mapping.
+- Providers: qualify four frozen Abliteration Chat cards, native project discovery and canonical reasoning controls; retain the deprecated Large identity and project credential boundary.
+- Verify actual Abliteration static catalog, both stream hooks, effort ladders and tool/image replay through Worker/SQLite with original-key isolation and conservative usage.
 - Resolve exact declared native model identities before opaque passthrough so Particle retains its canonical policy ID and physical upstream alias; reject ambiguous registered matches without widening unknown-model authority.
 - Providers: qualify the frozen Particle-1 Chat controls, tools, image input and token limits with original-key model discovery, preserving native identity mapping, usage and served-tier observations.
 - Verify Particle’s actual keyed catalog, native reasoning/cache controls and replay through Worker/SQLite; preserve public model identity, documented request alias and unknown-price denial.
@@ -833,6 +892,7 @@
 - Add explicitly configured llama.cpp, LM Studio, Ollama, oMLX, SGLang and vLLM Chat/SSE routes with scoped model discovery, plus Ollama native JSON/NDJSON/Tags and LM Studio Messages; optional server credentials, no loopback default or inferred free tariff.
 - Add experimental API-key Chat routes for Bedrock Mantle us-east-1, configured Microsoft Foundry deployments and overseas Kimi Coding, without conflating IAM, Entra or Moonshot credentials.
 - Add explicit authenticated Bifrost and LiteLLM gateway Chat routes with operator-selected URLs/models and unpriced accounting instead of inheriting local zero-charge assumptions.
+- Declare LiteLLM model discovery and literal versioned native aliases through its configured gateway and original managed key, preserving first capability bindings, opaque aliases and current-policy filtering without inferring prices or context limits.
 - Qualify ElevenLabs unary MP3 speech with native voice/query binding, bounded complete output and conservative dispatched-failure accounting, without inventing a model tariff.
 - Dispatch qualified native ElevenLabs MP3 speech with original credentials, bounded complete delivery and conservative settlement through the shared query and admission controls.
 - Compile the ElevenLabs offer and exercise actual OpenClaw TTS/Talk through the Worker with scoped proxy credentials, complete MP3 delivery, caller deadlines, controlled cancellation and conservative accounting; keep unattended speech smokes unresolved.

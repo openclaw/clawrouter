@@ -54,7 +54,8 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   const sse = !nativeChat && !bedrock && !compact && !images && !responses && eventStream ? createSseUsageInspector(revokeRejection, bodyInspection?.acceptJson, usageContext) : null;
   let inspect = !validated && !nativeChat && !bedrock && !compact && !images && !responses && !sse && json;
   const decoder = new TextDecoder();
-  const reader = response.body.getReader(), input = inputRetirement(reader);
+  const reader = response.body.getReader(), sourceRetired = replayRetirements.get(response.body);
+  const input = sourceRetired ? replayInputOwner(reader, sourceRetired) : inputRetirement(reader);
   let text = "", bytes = 0, nonempty = false, finished = false;
   let completedJson: UsageInspection | undefined;
   let resolve!: (result: ObservedUsage) => void;
@@ -266,28 +267,66 @@ async function normalizeFirstSseEvent(response: Response, errorStatus: number | 
   }
 }
 
+// The published body carries its predecessor's physical retirement independently
+// of cancellation's data-error policy. Weak keys do not extend response lifetime.
+const replayRetirements = new WeakMap<ReadableStream<Uint8Array>, Promise<void>>();
+function replayInputOwner(reader: ReadableStreamDefaultReader<Uint8Array>, predecessor?: Promise<void>) {
+  const failures: unknown[] = [];
+  const source = predecessor?.then(() => undefined, error => { failures.push(error); });
+  const input = inputRetirement({
+    cancel(reason) {
+      try { return reader.cancel(reason); }
+      catch (error) { failures.push(error); throw error; }
+    },
+    releaseLock() { try { reader.releaseLock(); } catch (error) { failures.push(error); } },
+  }, source);
+  let started = false, resolve!: () => void, reject!: (error: unknown) => void;
+  const retired = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+  void retired.catch(() => undefined);
+  return {
+    read: input.read,
+    retired,
+    retire(kind: "eof" | "cancel", reason?: unknown) {
+      if (started) return retired;
+      started = true;
+      // Publish first: a native cancel can synchronously re-enter this owner.
+      void input.retire(kind, reason).then(() => {
+        if (failures.length === 1) reject(failures[0]);
+        else if (failures.length) reject(new AggregateError(failures, "replay retirement failed"));
+        else resolve();
+      }, error => { failures.push(error); reject(failures.length === 1 ? error : new AggregateError(failures, "replay retirement failed")); });
+      return retired;
+    },
+  };
+}
 function replayResponse(response: Response, reader: ReadableStreamDefaultReader<Uint8Array>, chunks: Uint8Array[], readerDone: boolean): Response {
-  let chunkIndex = 0;
+  const owner = replayInputOwner(reader, response.body ? replayRetirements.get(response.body) : undefined);
+  let chunkIndex = 0, canceled = false;
   const body = new ReadableStream<Uint8Array>({
     async pull(controller) {
-      if (chunkIndex < chunks.length) {
-        controller.enqueue(chunks[chunkIndex++]);
-        return;
-      }
-      if (readerDone) {
-        reader.releaseLock();
-        controller.close();
-        return;
-      }
+      if (canceled) return;
+      const end = async (failed: boolean, primary?: unknown) => {
+        const failures: unknown[] = failed ? [primary] : [];
+        try { await owner.retire("eof"); } catch (error) { failures.push(error); }
+        if (canceled) return;
+        if (failures.length) controller.error(failures.length === 1 ? failures[0] : new AggregateError(failures, "replay read and retirement failed"));
+        else controller.close();
+      };
+      let next: ReadableStreamReadResult<Uint8Array>;
       try {
-        const { done, value } = await reader.read();
-        if (done) { reader.releaseLock(); controller.close(); }
-        else controller.enqueue(value);
-      } catch (error) { reader.releaseLock(); controller.error(error); }
+        if (chunkIndex < chunks.length) { controller.enqueue(chunks[chunkIndex++]); return; }
+        if (readerDone) { await end(false); return; }
+        next = await owner.read(() => reader.read());
+      } catch (error) { if (!canceled) await end(true, error); return; }
+      if (canceled) return;
+      if (next.done) await end(false);
+      else { try { controller.enqueue(next.value); } catch (error) { await end(true, error); } }
     },
-    cancel(reason) { void reader.cancel(reason).catch(() => undefined); reader.releaseLock(); },
+    cancel(reason) { canceled = true; return owner.retire("cancel", reason); },
   }, { highWaterMark: 0 });
-  return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+  const replay = new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+  replayRetirements.set(replay.body!, owner.retired);
+  return replay;
 }
 
 export interface SseBoundaryCursor { offset: number; lineStart: number; eof?: boolean }
