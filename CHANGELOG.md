@@ -417,7 +417,7 @@
 
 - Add finite Groq Whisper turbo and Mistral Voxtral multipart transcription codecs with byte-preserving fixtures, explicit unsupported-prompt handling and conservative duration/accounting boundaries.
 - Dispatch declared Groq and Mistral unary transcription through authenticated bounded multipart intake, original-key revalidation and conservative settlement; keep unknown audio-dollar budgets closed and preserve native file bytes.
-- Qualify finite Groq and Mistral multipart transcription declarations with exact frozen models, original credential/path binding and unknown audio costs; shared ingress activation remains separate.
+- Ship the finite Groq and Mistral native transcription cards in the compiled catalog and add registered OpenClaw consumer coverage for original credentials, multipart bytes, unknown audio costs and SQLite settlement.
 - Keep Groq and Mistral native transcription costs unknown before token/free/image estimates and settlement; deny unqualified hard-dollar admission while preserving explicit policy-fixed charges.
 - Declare frozen Groq Whisper Turbo and Mistral Voxtral unary transcription cards on their provider-specific multipart formats, preserving existing inference blocks and keeping whole-upload tariffs unknown.
 - Keep model-less xAI native STT unpriced before token/free/image estimates and settlement, preserving explicit policy-fixed charging and conservative silence/duration accounting.

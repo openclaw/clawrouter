@@ -35,28 +35,42 @@ does not prove live availability. Groq preserves its supported prompt field;
 Mistral rejects that field rather than discarding it or converting it to
 `context_bias`. Translation, realtime and streaming remain separate contracts.
 
-## Qualified server binding and remaining consumer proof
+## Shipping native catalog and registered consumer
+
+The generated bundled snapshot includes both real YAML declarations. Each
+`nativeProxy: true` endpoint advertises only its native offer:
+`/v1/native/groq/v1/audio/transcriptions` or
+`/v1/native/mistral/v1/audio/transcriptions`. The schema does not admit a
+`nativeProxy: false` configuration for these formats. Direct manifest transport
+coverage and constructed-catalog tests do not establish advertised client support.
 
 [PR796](https://github.com/openclaw/clawrouter/pull/796), landed as
 [`2f7855f`](https://github.com/openclaw/clawrouter/commit/2f7855f54b45f2f1a0e7c55951f0c4c7d8f76388),
-qualifies the common registry binding for these exact paired formats and
-`transcription` endpoint IDs, including authenticated multipart intake and
-actual workerd execution. The native paths are
-`/v1/native/groq/v1/audio/transcriptions` and
-`/v1/native/mistral/v1/audio/transcriptions`; the manifest paths are
-`/v1/proxy/groq/transcription` and `/v1/proxy/mistral/transcription`. Parsed
-native fields select the upstream ID; parsed manifest fields select the full
-card ID. No new schema field is required by the existing compiler contract.
+qualifies authenticated multipart intake for these exact formats and endpoint IDs.
+`worker/test/groq-mistral-transcription-declaration.test.mjs` retains its focused
+codec and compiler checks. The new
+`test/openclaw-groq-mistral-transcription.test.mjs` compiles all bundled manifests
+before starting the actual Worker with SQLite storage. It verifies the unchanged
+shipping catalog, original server-owned provider grants, multipart wire bytes,
+complete response validation and explicit policy-fixed settlement. Vendor prices
+and token usage remain unknown; hard-dollar requests cannot use that fixed charge
+as a fabricated audio tariff.
 
-`worker/test/groq-mistral-transcription-declaration.test.mjs` composes the actual
-YAML, parsed-field selection, landed multipart codec, complete response reader
-and conservative budget checks. It uses the original four-byte fixtures only
-for wire identity. These tests do not exercise HTTP multipart intake, fresh
-owner checks, playable audio or actual client dispatch. The common runtime's HTTP and owner checks have their separate
-qualified proof. The actual client bridge is
-[OpenClaw PR192558](https://github.com/openclaw/openclaw/pull/192558), handed off
-at `6de028c4e960db91bdf87882989cb6756a6429c3` with 40 authored, unrun client
-cases. That handoff is not actual registered-consumer execution proof. The ten
-declaration cases also remain unrun locally; hosted qualification and the
-integration owner's serialized snapshot/composed consumer proof remain required.
-This declaration makes no live-availability or full-client-parity claim.
+The hosted consumer pins public
+[OpenClaw PR192558](https://github.com/openclaw/openclaw/pull/192558) at
+`6de028c4e960db91bdf87882989cb6756a6429c3`. It calls the exported
+`transcribeAudioFile` through the actual registered ClawRouter plugin, without
+constructed offers, direct adapter injection or a mocked global fetch. Thirty
+cases cover both native models: Unicode text, locked proxy profiles, key rotation,
+revocation after discovery, policy denial, unknown-price denial, malformed,
+partial, error, redirect and truncated responses, unsupported inputs and caller
+cancellation. Original response reads, cancellation and dispatcher close promises
+are retained and joined; cleanup errors do not replace earlier failures.
+
+The held-response case distinguishes caller rejection from controlled cancellation
+of the original Worker request. That control operation and its joined upstream
+reader do not prove that the client disconnect propagated through the service
+binding. Local Worker checks do not execute the pinned SDK. Actual SDK compilation,
+all thirty registered-consumer cases and the outer SQLite/cleanup assertions remain
+unqualified until the hosted consumer runs successfully. No live vendor service,
+manifest-route client support, deployment or full-client parity is claimed.
