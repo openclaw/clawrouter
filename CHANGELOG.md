@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- Use the existing direct Worker socket for Bifrost SDK and control requests, retaining strict producer cancellation, nonexpiry and accounting checks.
+
 - Compare Bifrost inert cleanup failures by their original reason identities across VM realms, preserving order and undefined failures.
 
 - Preserve failed Bifrost producer, control-response and accounting observations after original joins without changing native retirement acceptance.

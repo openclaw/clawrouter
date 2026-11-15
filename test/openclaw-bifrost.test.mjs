@@ -709,10 +709,11 @@ export default {async fetch(request){const url=new URL(request.url);
 }};`;
 
 export async function startBifrostFixture({hotCache=false}={}) {
-  const directory = await mkdtemp(join(tmpdir(), "bifrost-contract-")); let runtime;
-  try { runtime = await startWorkerdFixture(directory, router, upstream, {hotCache,bindings:{BIFROST_BASE_URL:'https://gateway.fixture/openai/v1',BIFROST_MODEL:'tenant/opaque-a',BIFROST_API_KEY:'synthetic-poison-env'}}); }
-  catch (error) { await finishBifrostOwned(() => { throw error; }, [() => rm(directory,{recursive:true,force:true})]); }
-  const origin = (await runtime.ready).origin;
+  const directory = await mkdtemp(join(tmpdir(), "bifrost-contract-")); let runtime, origin;
+  try {
+    runtime = await startWorkerdFixture(directory, router, upstream, {directRouter:true,hotCache,bindings:{BIFROST_BASE_URL:'https://gateway.fixture/openai/v1',BIFROST_MODEL:'tenant/opaque-a',BIFROST_API_KEY:'synthetic-poison-env'}});
+    origin = (await runtime.unsafeGetDirectURL("router")).origin;
+  } catch (error) { await finishBifrostOwned(() => { throw error; }, [() => runtime?.dispose(), () => rm(directory,{recursive:true,force:true})]); }
   const readControl = createBifrostControlReader();
   const json = async (path, body) => {
     const { response, value: text } = await readControl(Object.freeze({id:path}),fetch,undefined,[origin+path,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body??{})}],"text",(_kind,start)=>start());
@@ -751,7 +752,73 @@ export function assertBifrostRetired(proof, {workerDeadline=false, application}=
   for(const call of proof.calls){assert.equal(call.noCaller,true);assert.equal(call.redirect,'manual');assert.ok(call.original||call.rotated);}
 }
 
+export async function bifrostDirectRouterInertCases(assert) {
+  const source = readFileSync(new URL("./openclaw-bifrost.test.mjs", import.meta.url), "utf8");
+  const helper = readFileSync(new URL("./helpers/workerd.mjs", import.meta.url), "utf8");
+  const between = (text, start, end) => {
+    const begin = "\n" + start, finish = "\n" + end;
+    assert.equal(text.split(begin).length, 2); assert.equal(text.split(finish).length, 2);
+    return text.slice(text.indexOf(begin) + 1, text.indexOf(finish)).replace(/^export /gm, "");
+  };
+  const fixture = between(source, "export async function startBifrostFixture(", "export function assertBifrostRetired(");
+  const finish = between(source, "export async function finishBifrostOwned(", "export function createBifrostProducerJoin(");
+  const helperBody = helper.slice(helper.indexOf("export function workerdRequestContext(")).replace(/^export /gm, "");
+  const cases = [];
+  for (const hotCache of [false, true]) {
+    const calls = [], requests = [], tickets = new Map(); let configured, instance;
+    const direct = Object.freeze({origin:"http://router.fixture:1234"});
+    class Runtime {
+      constructor(options) { configured = options; instance = this; calls.push("construct"); }
+      get ready() { calls.push("ready"); return Promise.resolve({origin:"http://bridge.fixture:5678"}); }
+      unsafeGetDirectURL(...args) { assert.equal(this, instance); assert.deepEqual(args, ["router"]); calls.push("direct"); return Promise.resolve(direct); }
+      dispose() { assert.equal(this, instance); calls.push("dispose"); }
+    }
+    const fetch = () => { throw Error("unexpected native fetch"); };
+    const control = async (owner, fn, receiver, args, method, observe, ticket) => {
+      assert.equal(fn, fetch); assert.equal(receiver, undefined); assert.equal(method, "text");
+      requests.push({owner, url:args[0], init:args[1]});
+      const result = {response:{status:200},value:"{}"}; if (ticket) tickets.set(ticket, {...result,owner,parsed:{owner:owner.id}}); return result;
+    };
+    control.capture = owner => Object.freeze({owner});
+    control.parse = ticket => tickets.get(ticket).parsed;
+    control.validate = (ticket, validate) => { const entry=tickets.get(ticket); entry.validated=true; return validate(entry.parsed); };
+    control.verdict = (ticket, check) => { const entry=tickets.get(ticket); check(entry.response,entry.parsed); };
+    control.inspect = ticket => ({...tickets.get(ticket), id:ticket.owner.id});
+    const context = {
+      assert, router:"original-router", upstream:"original-upstream", deploymentRuntime:{compatibility_date:"fixture",compatibility_flags:[]},
+      build:async options=>{calls.push("build");assert.equal(options.stdin.contents,"original-router");return {outputFiles:[{text:"bundled-router"}]};},
+      convertV4MiniflareOptions:options=>options, Miniflare:Runtime, process:{cwd:()=>"/fixture-root"},
+      mkdtemp:async prefix=>{assert.equal(prefix,"/fixture-root/bifrost-contract-");calls.push("directory");return "/fixture-root/owned";},
+      tmpdir:()=>"/fixture-root", join:(...parts)=>parts.join("/"), rm:async(path,options)=>{assert.equal(path,"/fixture-root/owned");assert.equal(options.recursive,true);assert.equal(options.force,true);calls.push("rm");},
+      createBifrostControlReader:()=>control, bifrostCheckpointFunctions:()=>({validateBifrostRetirementProof:value=>value}), fetch,
+    };
+    const start = runInNewContext(helperBody+"\n"+finish+"\n"+fixture+"\nstartBifrostFixture", context, {timeout:1000});
+    const f = await start({hotCache});
+    assert.equal(f.runtime,instance);assert.equal(f.origin,direct.origin);
+    assert.deepEqual(calls,["directory","build","construct","ready","direct"]);
+    assert.equal(configured.workers.length,2);const [router,upstream]=configured.workers;
+    assert.equal(router.name,"router");assert.equal(router.script,"bundled-router");assert.equal(router.outboundService,"upstream");
+    assert.deepEqual(JSON.parse(JSON.stringify(router.unsafeDirectSockets)),[{host:"127.0.0.1",port:0}]);
+    assert.equal(upstream.name,"upstream");assert.equal(upstream.script,"original-upstream");assert.equal(upstream.unsafeDirectSockets,undefined);
+    assert.equal(router.bindings.BIFROST_BASE_URL,"https://gateway.fixture/openai/v1");
+    assert.equal(router.bindings.CLAWROUTER_HOT_CACHE_MAX_AGE_SECONDS,hotCache?undefined:"0");
+    const row={id:"owned-case"};await f.setup(row);await f.mutate(row.id,"rotation");await f.state(row.id);
+    const proof=await f.join(row.id);assert.equal(f.joinEvidence(row.id),proof);
+    assert.deepEqual(requests.map(r=>r.url),["/__bifrost/setup","/__bifrost/mutate/owned-case","/__bifrost/state/owned-case","/__bifrost/join/owned-case"].map(path=>direct.origin+path));
+    assert.ok(requests.every(r=>r.init.method==="POST"));assert.deepEqual(requests.map(r=>r.init.body),[JSON.stringify(row),'{"kind":"rotation"}',"{}","{}"]);
+    await assert.rejects(f.join(row.id));assert.equal(requests.length,4);
+    await f.close();assert.deepEqual(calls.slice(-2),["dispose","rm"]);cases.push(hotCache?"hot-cache":"default-cache");
+    for (const reason of [undefined, Object.freeze({failure:"direct-url"})]) {
+      calls.length=0;Runtime.prototype.unsafeGetDirectURL=function(...args){assert.equal(this,instance);assert.deepEqual(args,["router"]);calls.push("direct");return Promise.reject(reason);};
+      let rejected=false;try{await start({hotCache});}catch(error){rejected=true;assert.equal(error,reason);}
+      assert.equal(rejected,true);assert.deepEqual(calls,["directory","build","construct","ready","direct","dispose","rm"]);cases.push("direct-failure");
+    }
+  }
+  return cases;
+}
+
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  test("Bifrost SDK and controls share the owned direct router (inert)", async () => { assert.equal((await bifrostDirectRouterInertCases(assert)).length, 6); });
  test("Bifrost original producer, observer and control retirement (inert)", async () => {
   const cases = await bifrostRetirementInertCases(assert); assert.ok(cases.length >= 30);
  });
