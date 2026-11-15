@@ -156,7 +156,7 @@ for (const row of qwenRegionCases()) it(`${row.id}: registered Qwen ${row.mode}`
     }
     const result = await output.result();
     const success = ["eof", "rotation", "no_usage", "effort_off", "effort_low", "effort_medium"].includes(row.mode);
-    expect(result.stopReason).toBe(success ? "stop" : "error");
+    expect(result.stopReason).toBe(success ? "stop" : row.mode === "partial" ? "aborted" : "error");
     if (success) {
       expect(result.content).toContainEqual({ type: "text", text: "synthetic-answer" });
       expect(result.usage.totalTokens).toBe(row.mode === "no_usage" ? 0 : 320);
