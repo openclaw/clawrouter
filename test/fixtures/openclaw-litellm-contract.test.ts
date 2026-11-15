@@ -707,7 +707,7 @@ function litellmJoinFacts(at: string, body: string, operations: Operation[], acq
   };
 }
 function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
-  const prefix = "LITELLM_PROOF_V1 ", phases = new Set(["setup", "body", "catalog", "chat", "control", "join", "restore", "child_launch", "child_result", "retirement", "cleanup", "reporting", "overflow", "roles"]);
+  const prefix = "LITELLM_PROOF_V1 ", phases = new Set(["setup", "body", "catalog", "chat", "control", "join", "restore", "child_launch", "child_result", "retirement", "cleanup", "reporting", "overflow", "roles", "warm_a", "warm_b", "warm_cached", "warm_versioned", "warm_count", "warm_window", "held_started", "held_mutation", "held_release", "held_join", "held_result", "waiter_started", "waiter_mutation", "waiter_release", "waiter_join", "waiter_result"]);
   const names = new Set(["none", ...ids]), seen = new Set<string>(); let emitted = 0, ordinary = 0, suppressed = 0, bytes = 0, overflow = false, reporting = false;
   const own = (v: unknown, k: string) => { try { return v && typeof v === "object" && !isProxy(v) ? Object.getOwnPropertyDescriptor(v, k)?.value : undefined; } catch { return undefined; } };
   const fields = (v: unknown, keys: string[]) => {
@@ -1566,6 +1566,26 @@ afterAll(() => {
   if (errors.length) try { process.stdout.write(diagnostic.prefix + diagnostic.json(diagnostic.boundary("REPORT_FLUSH", errors[0])) + "\n"); } catch (error) { errors.push(error); }
   raise(errors);
 });
+// BEGIN held outcome helpers.
+async function litellmHeldSequence(start: () => Promise<unknown>, mutate: () => Promise<unknown>, release: () => Promise<unknown>, joins: Array<() => Promise<unknown>>, report: (stage: string, error: unknown) => void, prefix: "held" | "waiter") {
+  const failures: Array<{stage: string; error: unknown}> = [];
+  let started = false;
+  try { await start(); started = true; } catch (error) { failures.push({stage: prefix + "_started", error}); }
+  if (started) try { await mutate(); } catch (error) { failures.push({stage: prefix + "_mutation", error}); }
+  try { await release(); } catch (error) { failures.push({stage: prefix + "_release", error}); }
+  for (const join of joins) try { await join(); } catch (error) { failures.push({stage: prefix + "_join", error}); }
+  const errors = failures.map(failure => failure.error);
+  for (const failure of failures) try { report(failure.stage, failure.error); } catch (error) { errors.push(error); }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length) throw new AggregateError(errors, "LiteLLM held control, original outcomes and reporting failed");
+}
+async function litellmCatalogStage<T>(stage: string, run: () => Promise<T>, report: (stage: string, error: unknown) => void): Promise<T> {
+  try { return await run(); } catch (error) {
+    try { report(stage, error); } catch (reportError) { throw new AggregateError([error, reportError], "LiteLLM catalog assertion and reporting failed"); }
+    throw error;
+  }
+}
+// END held outcome helpers.
 async function control(action: string, id: string): Promise<void> {
   try {
     const response = await originalFetch(`${origin}/__litellm/${action}/${id}`, { method: ["started", "retire"].includes(action) ? "GET" : "POST" });
@@ -1654,11 +1674,14 @@ describe("registered LiteLLM live inventory and native inference", () => {
   it("keeps warm catalog keys and configured versioned bases isolated without clearing between them", async () => {
     await fixture(async discover => {
       const a = rows.find(row => row.id === "sdk_warm_a")!, b = rows.find(row => row.id === "sdk_warm_b")!;
-      expect((await discover(a))?.models.map(model => model.id)).toEqual([selected]);
-      expect((await discover(b))?.models).toEqual([]);
-      expect((await discover(a))?.models.map(model => model.id)).toEqual([selected]);
-      expect((await discover({ ...a, versioned: true }))?.models.map(model => model.id)).toEqual([selected]);
-      expect(requests).toHaveLength(3); expect(requests[0].credential).not.toBe(requests[1].credential);
+      const started = Date.now();
+      await litellmCatalogStage("warm_a", async () => { expect((await discover(a))?.models.map(model => model.id)).toEqual([selected]); }, reportSdk);
+      await litellmCatalogStage("warm_b", async () => { expect((await discover(b))?.models).toEqual([]); }, reportSdk);
+      await litellmCatalogStage("warm_cached", async () => { expect((await discover(a))?.models.map(model => model.id)).toEqual([selected]); }, reportSdk);
+      await litellmCatalogStage("warm_versioned", async () => { expect((await discover({ ...a, versioned: true }))?.models.map(model => model.id)).toEqual([selected]); }, reportSdk);
+      // D8 retains successful strict rows for 60s. No refresh or clear occurs here.
+      await litellmCatalogStage("warm_window", async () => { const elapsed = Date.now() - started; expect(elapsed).toBeGreaterThanOrEqual(0); expect(elapsed).toBeLessThan(60_000); }, reportSdk);
+      await litellmCatalogStage("warm_count", async () => { expect(requests).toHaveLength(2); expect(requests[0].credential).not.toBe(requests[1].credential); }, reportSdk);
     });
   }, 120_000);
   it("keeps discovery profile and explicit inference credentials distinct", async () => {
@@ -1673,11 +1696,16 @@ describe("registered LiteLLM live inventory and native inference", () => {
     await fixture(async discover => {
       const row = rows.find(value => value.id === "sdk_held_" + action)!;
       const pending = discover(row); const outcome = pending.then(value => ({ value }), error => ({ error }));
-      try { await control("started", row.id); await control(action, row.id); } finally { await control("release", row.id); }
-      const result = await outcome; if ("error" in result) throw result.error;
-      if (action === "revoke") expect(result.value).toBeUndefined();
-      else expect(result.value?.models.map(model => model.id)).toEqual(action === "narrow" ? [] : [selected]);
-      expect(requests).toHaveLength(1);
+      let result: Awaited<typeof outcome> | undefined;
+      await litellmHeldSequence(() => control("started", row.id), () => control(action, row.id), () => control("release", row.id), [async () => {
+        result = await outcome; if ("error" in result) throw result.error;
+      }], reportSdk, "held");
+      await litellmCatalogStage("held_result", async () => {
+        if (!result || "error" in result) throw new Error("missing held discovery result");
+        if (action === "revoke") expect(result.value).toBeUndefined();
+        else expect(result.value?.models.map(model => model.id)).toEqual(action === "narrow" ? [] : [selected]);
+        expect(requests).toHaveLength(1);
+      }, reportSdk);
     });
   }, 120_000);
   it("consumer abort rejects only its waiter while the same original acquisition completes for its survivor", async () => {
@@ -1685,10 +1713,16 @@ describe("registered LiteLLM live inventory and native inference", () => {
       const row = rows.find(value => value.id === "sdk_waiter_abort")!, controller = new AbortController();
       const first = discover(row, controller.signal), observed = first.then(() => ({ rejected: false }), error => ({ rejected: true, error }));
       const survivor = discover(row); const retained = survivor.then(value => ({ value }), error => ({ error }));
-      try { await control("started", row.id); controller.abort(); expect((await observed).rejected).toBe(true); expect(requests).toHaveLength(1); }
-      finally { await control("release", row.id); }
-      const result = await retained; if ("error" in result) throw result.error;
-      expect(result.value?.models.map(model => model.id)).toEqual([selected]); expect(requests).toHaveLength(1);
+      let authoredAbort = false, result: Awaited<typeof retained> | undefined;
+      await litellmHeldSequence(() => control("started", row.id), async () => {
+        authoredAbort = true; controller.abort(); expect((await observed).rejected).toBe(true); expect(requests).toHaveLength(1);
+      }, () => control("release", row.id), [async () => {
+        const value = await observed; if (!authoredAbort && "error" in value) throw value.error;
+      }, async () => { result = await retained; if ("error" in result) throw result.error; }], reportSdk, "waiter");
+      await litellmCatalogStage("waiter_result", async () => {
+        if (!result || "error" in result) throw new Error("missing surviving discovery result");
+        expect(result.value?.models.map(model => model.id)).toEqual([selected]); expect(requests).toHaveLength(1);
+      }, reportSdk);
     });
   }, 120_000);
 });

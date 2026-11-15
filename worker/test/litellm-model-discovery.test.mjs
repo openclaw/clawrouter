@@ -106,8 +106,36 @@ export function litellmRequestScope(storage, generation) {
       if (!["read", "cancel", "unlock"].includes(method)) throw new Error("foreign reader method");
       if (method !== "read") { const attempts = cleanup.get(reader); if (attempts.has(method)) throw new Error("replayed reader cleanup"); attempts.add(method); }
     },
+    owns(owner, response, body, reader) {
+      try { state(owner.token); } catch { return false; }
+      return transports.has(owner) && resources.get(response) === owner && !!response && response.body === body
+        && resources.get(body) === owner && resources.get(reader) === owner;
+    },
     retire(token) { const s = state(token); s.live = false; },
   };
+}
+// Read-only readiness from originals already observed by this request owner.
+// This does not certify the independent upstream producer's nonexpiry.
+export function litellmHeldReady(r, scope) {
+  if (r.mode !== "held" || r.failures.length || r.observerFailures.length
+    || r.operations.some(op => op.state === "rejected" || op.state === "threw") || r.requests.length !== 1) return false;
+  const request = r.requests[0], token = request.token;
+  if (!token || token.request !== request.request || token.scenario !== r || request.retired || request.request.signal.aborted) return false;
+  const handlers = r.operations.filter(op => op.kind === "handler" && op.token === token);
+  const transports = r.inputs.filter(input => input.token === token && input.request === request.request);
+  if (handlers.length !== 1 || handlers[0].state !== "pending" || transports.length !== 1 || r.inputs.length !== 1) return false;
+  const transport = transports[0];
+  if (!transport.signal || transport.signal.aborted || transport.abortSequence !== undefined) return false;
+  const fetches = r.operations.filter(op => op.kind === "fetch" && op.transport === transport);
+  const acquired = r.operations.filter(op => op.kind === "acquisition_observer" && op.input === transport);
+  const readers = r.readers.filter(reader => reader.transport === transport);
+  if (fetches.length !== 1 || fetches[0].state !== "fulfilled" || acquired.length !== 1 || acquired[0].state !== "fulfilled" || acquired[0].originalFetch !== fetches[0].pending || readers.length !== 1 || r.readers.length !== 1) return false;
+  const reader = readers[0];
+  if (reader.eof || reader.unlocks !== 0 || !reader.body.locked || !scope.owns(transport, fetches[0].value, reader.body, reader.reader)) return false;
+  const reads = r.operations.filter(op => op.kind === "read" && op.reader === reader && op.input === transport && op.receiverIdentity === true);
+  const pending = reads.filter(op => op.state === "pending");
+  return pending.length === 1 && reads.some(op => op.state === "fulfilled" && op.value?.done === false
+    && op.value.value?.byteLength > 0 && Number.isSafeInteger(op.settle) && Number.isSafeInteger(pending[0].invoke) && op.settle < pending[0].invoke);
 }
 export function litellmWorkerLedger(r) {
   const cap = n => Math.min(n, 1_000_000), kinds = ["handler", "fetch", "acquisition_observer", "read", "read_observer", "closed", "cancel", "body_cancel", "wait_until", "usage_ingest"];
@@ -190,6 +218,7 @@ import {InternalHttpAbort} from './worker/http-operation.ts';
 import {bodyBudgetCharged} from './worker/body-budget.ts';
 ${litellmRequestScope.toString()}
 ${litellmWorkerLedger.toString()}
+${litellmHeldReady.toString()}
 ${observeLiteLLMOperation.toString()}
 ${collectLiteLLMOperations.toString()}
 ${litellmDeadlineQualified.toString()}
@@ -238,7 +267,7 @@ globalThis.fetch=function(input,init){
  r.calls.push({url:request.url,method:request.method,authorization:request.headers.get('authorization'),query:url.search,redirect:request.redirect,body:request.body!==null,extra:request.headers.has('x-api-key')||request.headers.has('x-upstream-url')});
  const owner=requestScope.transport(r,init&&Object.hasOwn(init,'signal')?init.signal:input instanceof Request?input.signal:null);r.inputs.push(owner);
  if(owner.signal){const aborted=()=>{owner.abortSequence=++r.sequence;owner.callerAbortedAtAbort=owner.request?.signal.aborted;owner.pendingAtAbort=r.operations.filter(op=>op.kind==='read'&&op.reader?.transport===owner&&op.state==='pending');owner.noEarlierFailure=r.failures.length===0&&r.observerFailures.length===0&&r.operations.every(op=>op.state!=='rejected'&&op.state!=='threw');};if(owner.signal.aborted)aborted();else owner.signal.addEventListener('abort',aborted,{once:true});}
- const p=invoke(r,'fetch',()=>Reflect.apply(rawFetch,this,[input,init]),{transport:owner});observe(r,p.then(response=>observeBody(r,response,owner)),'acquisition_observer',owner);return p;
+ const p=invoke(r,'fetch',()=>Reflect.apply(rawFetch,this,[input,init]),{transport:owner});observe(r,p.then(response=>observeBody(r,response,owner)),'acquisition_observer',owner,undefined,{originalFetch:p});return p;
 };
 async function drain(r){await collectLiteLLMOperations(r);const failures=[...r.failures,...r.observerFailures];
  for(const op of r.operations)if(op.state!=='fulfilled')failures.push(op.error);
@@ -275,7 +304,7 @@ export default {async fetch(request,bindings,context){
  const control=/^\/__litellm\/(observation|retire|usage|started|release|narrow|broaden|revoke|rotate|destination|disable)\/([a-z0-9_]+)$/.exec(url.pathname);
  if(control){const [,action,id]=control,r=records.get(id);if(!r)return new Response(null,{status:404});
   if(action==='observation')return Response.json(observation(r));
-  if(action==='started'){const deadline=Date.now()+5000;while(!r.operations.some(x=>x.kind==='acquisition'&&x.state==='fulfilled')){if(Date.now()>=deadline)return new Response(null,{status:504});await scheduler.wait(10);}return Response.json({started:true});}
+  if(action==='started'){const deadline=Date.now()+5000;while(!litellmHeldReady(r,requestScope)){if(Date.now()>=deadline)return new Response(null,{status:504});await scheduler.wait(10);}return Response.json({started:true});}
   if(action==='release')return Reflect.apply(rawFetch,globalThis,['https://fixture.test/release/'+id,{method:'POST'}]);
   if(action==='retire'){for(const q of r.requests)await q.promise;try{if(r.workerDeadline===true){r.retirement??=retireDeadline(r,bindings);return Response.json(await r.retirement);}await drain(r);return Response.json({retired:true,calls:r.calls,operations:r.operations.map(x=>({kind:x.kind,state:x.state})),unlocked:r.readers.every(x=>x.unlocks===1&&!x.body.locked)});}finally{for(const q of r.requests)if(!q.retired){requestScope.retire(q.token);q.retired=true;}}}
   if(action==='usage'){await drain(r);return Response.json(await usageSnapshot(bindings,'fixture',id,{kind:'admin'}));}

@@ -23,7 +23,7 @@ const cases = [
   ...["eof", "preabort", "partial_abort", "provider_error"].map(control => ({ id: "sdk_stream_" + control, mode: control === "eof" || control === "preabort" ? "table" : control, unrestricted: true, control, nativeApi: "stream" })),
   ...["stream", "streamSimple"].flatMap(action => [false, true].flatMap(versioned => ["table", "measured"].map(mode => ({ id: `sdk_${action.toLowerCase()}_${versioned ? "v1" : "root"}_${mode}`, mode, action, versioned, unrestricted: true })))),
   ...["table", "empty", "loose", "malformed", "truncated", "oversized", "error401", "error403", "redirect", "missing", "invalid_owner", "foreign"].map(mode => ({ id: "sdk_catalog_" + mode, mode, action: "catalog" })),
-  { id: "sdk_warm_a", mode: "table", expectedGets: 2 }, { id: "sdk_warm_b", mode: "empty" },
+  { id: "sdk_warm_a", mode: "table", expectedGets: 1 }, { id: "sdk_warm_b", mode: "empty" },
   ...["narrow", "broaden", "revoke"].map(action => ({ id: "sdk_held_" + action, mode: "held", action })),
   { id: "sdk_waiter_abort", mode: "held" },
   { id: "sdk_auth_metadata", mode: "table" }, { id: "sdk_auth_inference", mode: "table", unrestricted: true },
@@ -1530,6 +1530,93 @@ test("reporting repair compact decoder rejects hostile fields without getters", 
   const proxy = new Proxy(wire.witness.data, { ownKeys() { touches++; throw undefined; } });
   assert.equal(proof.validate({ ...wire, witness: { ...wire.witness, data: proxy } }), null); assert.equal(touches, 0);
 });
+
+// BEGIN warm held pure tests.
+function warmHeldFunctions() {
+  const sdk = readFileSync("test/fixtures/openclaw-litellm-contract.test.ts", "utf8");
+  const worker = readFileSync("worker/test/litellm-model-discovery.test.mjs", "utf8");
+  const controls = sdk.split("// BEGIN held outcome helpers.")[1].split("// END held outcome helpers.")[0];
+  const scope = worker.slice(worker.indexOf("export function litellmRequestScope"), worker.indexOf("export function litellmWorkerLedger")).replaceAll("export ", "");
+  return new Function(stripTypeScriptTypes(controls, { mode: "transform" }) + scope + ";return {litellmHeldSequence,litellmCatalogStage,litellmRequestScope,litellmHeldReady};")();
+}
+function readyHeldOriginals() {
+  const {litellmRequestScope,litellmHeldReady} = warmHeldFunctions(); let current;
+  const scope=litellmRequestScope({getStore:()=>current,run(t,fn){const old=current;current=t;try{return fn();}finally{current=old;}}},1);
+  const r={mode:"held",failures:[],observerFailures:[],requests:[],inputs:[],readers:[],operations:[]};
+  const request={signal:{aborted:false}},token=scope.register(request,r),body={locked:true},response={body},nativeReader={},promise={};let transport;
+  scope.invoke(token,()=>{transport=scope.transport(r,{aborted:false});scope.response(transport,response);scope.reader(transport,body,nativeReader);},undefined,[request]);
+  const reader={body,reader:nativeReader,transport,unlocks:0,eof:false};r.requests.push({request,token});r.inputs.push(transport);r.readers.push(reader);
+  r.operations.push({kind:"handler",token,state:"pending"},{kind:"fetch",transport,state:"fulfilled",value:response,pending:promise},
+    {kind:"acquisition_observer",input:transport,originalFetch:promise,state:"fulfilled"},
+    {kind:"read",input:transport,reader,receiverIdentity:true,state:"fulfilled",value:{done:false,value:{byteLength:1}},settle:4},
+    {kind:"read",input:transport,reader,receiverIdentity:true,state:"pending",invoke:5});
+  return {r,scope,token,transport,reader,response,ready:()=>litellmHeldReady(r,scope)};
+}
+test("warm held actual readiness replaces the impossible operation label",()=>{
+  const f=readyHeldOriginals();assert.equal(f.r.operations.some(x=>x.kind==="acquisition"&&x.state==="fulfilled"),false);assert.equal(f.ready(),true);
+});
+test("warm held readiness rejects foreign missing terminal and false chronology evidence",()=>{
+  const mutations=[f=>f.r.observerFailures.push(undefined),f=>f.r.failures.push(undefined),f=>f.r.requests[0].retired=true,
+    f=>f.scope.retire(f.token),f=>f.r.requests[0].request.signal.aborted=true,f=>f.transport.signal.aborted=true,
+    f=>f.r.inputs.push({}),f=>f.r.operations[0].token={},f=>f.r.operations[0].state="fulfilled",f=>f.r.operations[1].transport={},
+    f=>f.r.operations[1].value={body:f.reader.body},f=>f.r.operations[2].originalFetch={},f=>f.r.operations.splice(2,1),
+    f=>f.r.operations[2].state="pending",f=>f.r.operations[3].value.value.byteLength=0,f=>f.reader.eof=true,
+    f=>f.reader.unlocks=1,f=>f.reader.body.locked=false,f=>f.r.operations[4].state="rejected",
+    f=>f.r.operations[3].settle=5,f=>f.r.operations[3].settle=6,f=>f.r.operations[4].input={},f=>f.reader.reader={},
+    f=>f.r.operations[3].value.done=true,f=>f.r.operations.push({...f.r.operations[4]})];
+  for(const mutate of mutations){const f=readyHeldOriginals();mutate(f);assert.equal(f.ready(),false);}
+  // Expiry is observed as an original rejection, never inferred from readiness.
+  const expired=readyHeldOriginals();expired.r.operations[4].state="rejected";expired.r.operations[4].error={};assert.equal(expired.ready(),false);
+});
+test("warm held release undefined still joins every held outcome and retains all errors",async()=>{
+  const {litellmHeldSequence}=warmHeldFunctions();const order=[];let release,finished=false;
+  const held=new Promise(resolve=>{release=resolve;});const late={},report={};
+  const work=litellmHeldSequence(async()=>{order.push("start");throw undefined;},async()=>{order.push("mutation");},async()=>{order.push("release");throw undefined;},
+    [async()=>{order.push("join1");await held;throw late;},async()=>{order.push("join2");}],()=>{order.push("report");throw report;},"held").then(()=>{finished=true;return null;},e=>{finished=true;return e;});
+  await Promise.resolve();await Promise.resolve();assert.equal(finished,false);assert.ok(!order.includes("mutation"));release();
+  const error=await work;assert.deepEqual(error.errors,[undefined,undefined,late,report,report,report]);assert.ok(order.indexOf("join2")<order.indexOf("report"));
+});
+test("warm held waiter joins both outcomes before reporting mutation failure",async()=>{
+  const {litellmHeldSequence}=warmHeldFunctions();const order=[],primary={};let result;
+  try{await litellmHeldSequence(async()=>{},async()=>{throw primary;},async()=>{order.push("release");},[async()=>{order.push("first");},async()=>{order.push("survivor");throw undefined;}],stage=>order.push(stage),"waiter");}catch(e){result=e;}
+  assert.deepEqual(result.errors,[primary,undefined]);assert.deepEqual(order.slice(0,3),["release","first","survivor"]);
+});
+test("warm held success and stage reporting preserve exact values and undefined",async()=>{
+  const {litellmHeldSequence,litellmCatalogStage}=warmHeldFunctions();let reported=0;
+  await litellmHeldSequence(async()=>{},async()=>{},async()=>{},[async()=>{}],()=>reported++,"held");assert.equal(reported,0);
+  const value={};assert.equal(await litellmCatalogStage("warm_a",async()=>value,()=>{}),value);
+  let result;try{await litellmCatalogStage("warm_b",async()=>{throw undefined;},()=>{throw null;});}catch(e){result=e;}assert.deepEqual(result.errors,[undefined,null]);
+});
+function litellmD8CacheChecks(texts) {
+  const [plugin,runtime,cache]=texts;
+  const versioned=plugin.match(/const versionedBaseUrl = ([^;]+);/)[1];
+  const endpointChoice=plugin.match(/modelDiscovery: \{ endpointPath: ([^}]+) \}/)[1];
+  const join=runtime.slice(runtime.indexOf("function resolveLiveModelDiscoveryEndpoint("),runtime.indexOf("function resolveFixedLiveModelDiscoveryEndpoint("));
+  const key=runtime.slice(runtime.indexOf("  const cacheKeyParts =",runtime.indexOf("export async function buildLiveModelProviderConfig")),runtime.indexOf("  try {",runtime.indexOf("  const cacheKeyParts =",runtime.indexOf("export async function buildLiveModelProviderConfig"))));
+  const keyOf=new Function("params","liveModelCatalogAuthCacheKey",key+"return JSON.stringify(cacheKeyParts);");
+  const endpoint=new Function("explicitBaseUrl",stripTypeScriptTypes(join,{mode:"transform"})+"const versionedBaseUrl="+versioned+";return resolveLiveModelDiscoveryEndpoint(explicitBaseUrl,"+endpointChoice+");");
+  const reuse=cache.slice(cache.indexOf("  const existing ="),cache.indexOf("  liveCatalogCache.delete(key);",cache.indexOf("  const existing =")));
+  assert.ok(reuse.includes("existing.expiresAt > rawNow"));
+  const hit=new Function("liveCatalogCache","key","pendingKey","refresh","rawNow","params","consumeLiveCatalog",stripTypeScriptTypes("async function reuse(){"+reuse+"return 'MISS';}",{mode:"transform"})+"return reuse();");
+  assert.match(runtime,/ttlMs: params\.modelDiscovery\?\.ttlMs \?\? 60_000/);
+  assert.match(cache,/entry\.expiresAt = \(params\.now\?\.\(\) \?\? Date\.now\(\)\) \+ ttlMs/);
+  const make=(base,credential)=>keyOf({providerId:"litellm",discoveryMode:"strict",endpoint:endpoint(base),credential},p=>p.credential);
+  return {make,hit:(store,key,now,refresh=false)=>hit(store,key,key+":pending",refresh,now,{},async()=>"HIT")};
+}
+test("warm held D8 source cache aliases hit while credential endpoint expiry and refresh miss",{skip:!source},async()=>{
+  const texts=["extensions/litellm/index.ts","src/plugin-sdk/provider-catalog-live-runtime.ts","src/plugins/provider-live-catalog-cache.ts"].map(path=>readFileSync(source+"/"+path,"utf8"));
+  const {make,hit}=litellmD8CacheChecks(texts),key=make("https://fixture.example/router","credential-a");
+  assert.equal(make("https://fixture.example/router/v1","credential-a"),key);
+  const store=new Map([[key,{result:{state:"fulfilled"},expiresAt:61000}]]);
+  assert.equal(await hit(store,key,1001),"HIT");assert.equal(await hit(store,make("https://fixture.example/router","credential-b"),1001),"MISS");
+  assert.equal(await hit(store,make("https://fixture.example/other","credential-a"),1001),"MISS");assert.equal(await hit(store,key,61000),"MISS");assert.equal(await hit(store,key,1001,true),"MISS");
+});
+test("warm held fixed stages retain undefined and fit closed annotation budgets",()=>{
+  const proof=litellmDiagnostics(["sdk_warm_a","sdk_held_narrow"],nodeTypes.isProxy),lines=[];
+  for(const phase of ["warm_a","warm_b","warm_cached","warm_versioned","warm_count","warm_window","held_started","held_mutation","held_release","held_join","held_result","waiter_started","waiter_mutation","waiter_release","waiter_join","waiter_result"]){const r=proof.record("sdk","sdk_warm_a",phase,undefined,"catalog");assert.equal(proof.validate(r).kind,"undefined");proof.emit([r],s=>lines.push(s));}
+  proof.flush(s=>lines.push(s));assert.ok(lines.every(s=>Buffer.byteLength(s)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);assert.ok(lines.length<=10);
+});
+// END warm held pure tests.
 
 // BEGIN ingress scope pure tests.
 function ingressPureFunctions() {
