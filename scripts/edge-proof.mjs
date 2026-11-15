@@ -646,8 +646,23 @@ export function verifyDryRun(result, bytes, expectedHash, report, phases, privat
   const check = (phase, fn) => report ? report.sync(phase, fn) : fn();
   check(phases?.marker, () => { if (!result.stdout.split(/\r?\n/).some(line => line.trim() === "--dry-run: exiting now.")) refuse("dry-run-marker-or-bundle-mismatch"); });
   check(phases?.hash, () => { if (!Buffer.isBuffer(bytes) || !bytes.length || digest(bytes) !== expectedHash) refuse("dry-run-marker-or-bundle-mismatch"); });
-  check(phases?.privacy, () => { if ([...privateRoots, "/Users/", "/home/"].some(path => bytes.includes(path))) refuse("dry-run-private-path"); });
+  check(phases?.privacy, () => {
+    const paths = [...privateRoots, "/Users/", "/home/"];
+    if (paths.some((path, index) => bytes.includes(path) && (index >= paths.length - 2 || privateDirectoryMatch(bytes, path)))) refuse("dry-run-private-path");
+  });
   return { code: result.code, signal: result.signal, closed: true, sha256: digest(bytes), observedProcesses: result.observed.size };
+}
+function privateDirectoryMatch(bytes, root) {
+  // Only prove longer literal components safe. Do not normalize private roots
+  // or interpret escapes, encodings, interpolation or ambiguous suffixes.
+  if (typeof root !== "string" || !/^\/(?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+$/.test(root) || root.split("/").some(part => part === "." || part === "..")) return true;
+  for (let at = bytes.indexOf(root); at !== -1; at = bytes.indexOf(root, at + 1)) {
+    let end = at + root.length;
+    const start = end;
+    while (end < bytes.length && ((bytes[end] >= 65 && bytes[end] <= 90) || (bytes[end] >= 97 && bytes[end] <= 122) || (bytes[end] >= 48 && bytes[end] <= 57) || bytes[end] === 95 || bytes[end] === 45)) end++;
+    if (end === start || (end < bytes.length && ![47, 34, 39, 96].includes(bytes[end]))) return true;
+  }
+  return false;
 }
 export function compareCapsules(first, second) {
   for (const value of [first, second]) {

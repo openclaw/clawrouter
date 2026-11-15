@@ -43,6 +43,121 @@ const container = () => ({ Id: hex, Image: imageId, State: { Status: "created", 
 const native = () => ({ version: 3, reaper: {version:1,contextHash:other,source:{path:"/opt/edge-input/config/edge-proof/reaper.c",sha256:hex},buildSha256:hex,binary:{path:containerContract.reaper,sha256:hex}}, contextHash: other, sourceSha: edgeProof.sourceSha, sourceTree: edgeProof.sourceTree, install: { ...installInputs }, runtime: { node: "v24.22.1", abi: "137", platform: "linux", arch: "x64", pnpm: "11.28.4" }, containedLinks: 164, native: { node: { path: containerContract.node, sha256: hex }, git: { path: containerContract.git, sha256: hex }, typescript: { path: "/opt/edge-input/node_modules/.pnpm/ts/lib/tsc", sha256: hex }, esbuild: { path: "/opt/edge-input/node_modules/.pnpm/esbuild/bin/esbuild", sha256: hex }, wrangler: { path: "/opt/edge-input/node_modules/.pnpm/wrangler/wrangler-dist/cli.js", sha256: containerContract.cliHash } } });
 const receipt = () => ({ version: 2, isolation: "private-container-pid-net-mount", nonce: hex, contextHash: other, nativeHash: hex, sourceSha: edgeProof.sourceSha, sourceTree: edgeProof.sourceTree, sourceFiles: 600, dependencyFiles: 268, exactErasures: 4, twoRoots: true, cliSha256: containerContract.cliHash, results: Object.fromEntries(["edge", "upstream"].map(kind => [kind, { code: 0, signal: null, closed: true, sha256: hex, observedProcesses: 1 }])), cloud: "UNRUN", sdk: "UNRUN", masks: [1, 1, 1, 1, 1, "UNOBSERVABLE"] });
 
+// BEGIN private directory boundary inert tests.
+async function privateDirectoryFixture(legacy = false, options = {}) {
+  const source = await readFile(new URL("../scripts/edge-proof.mjs", import.meta.url), "utf8");
+  const cut = (start, end) => { const a = source.indexOf(start), b = source.indexOf(end, a + start.length); assert.ok(a >= 0 && b > a); return source.slice(a, b); };
+  const hash = value => createHash("sha256").update(value).digest("hex");
+  let verifier = cut("export function verifyDryRun(", "export function compareCapsules(");
+  if (legacy) {
+    verifier = verifier.slice(0, verifier.indexOf("function privateDirectoryMatch("));
+    const start = verifier.indexOf("  check(phases?.privacy,");
+    verifier = verifier.slice(0, start) + '  check(phases?.privacy, () => { if ([...privateRoots, "/Users/", "/home/"].some(path => bytes.includes(path))) refuse("dry-run-private-path"); });\n' + verifier.slice(verifier.indexOf("  return { code:", start));
+    // Exact committed 34647 verifier, not a separately implemented oracle.
+    assert.equal(hash(verifier), "01db0e4398a7d5116e0a5ff89b0791461a652753ec55c8318fd72c1ab02617fb");
+  }
+  const bytes = Buffer.from(options.text ?? 'const route = "/v1/tasks/";'), calls = [], frames = [];
+  const fixed = {sourceSha:"c".repeat(40),sourceTree:"d".repeat(40)};
+  const capsule = {...fixed,sourceFiles:Array(600).fill(0),dependencyInputs:Array(268).fill(0),instrumentation:Array(4).fill({erasureExact:true}),observerSha256:hash("observer"),harnessInputs:[],bundles:{edge:hash(bytes),upstream:hash(bytes)},runtime:{}};
+  const result = stdout => ({code:0,signal:null,closed:true,timedOut:false,interrupted:false,errors:[],remaining:[],observed:new Map(),stdout,stderr:"",outputSummary:Object.fromEntries([["stdout",stdout],["stderr",""]].map(([key,text])=>[key,{bytes:Buffer.byteLength(text),sha256:hash(text),esc:false,complete:true}]))});
+  let api;
+  const bindings = {Buffer,createHash,join,dirname,relative,edgeProof:fixed,process:{execPath:"/immutable/node"},
+    digest:value=>value==="inert-cli"?"934d8051582ed5d85336e9e6677126ec87324a47166974de22d49a5523ba4d11":hash(value),
+    refuse:code=>{throw new Error("edge-proof: "+code);},
+    privateProcesses:async()=>{calls.push(["census"]);return [];},prepareEnvironment:async root=>{calls.push(["environment",root]);return {};},
+    resolveModule:specifier=>{calls.push(["resolve",specifier]);return "/opt/edge-input/node_modules/wrangler/package.json";},
+    createRequire:anchor=>{calls.push(["require",anchor]);return {resolve:specifier=>{calls.push(["require.resolve",specifier]);return anchor;}};},
+    realpath:async path=>{calls.push(["realpath",path]);return path;},lstat:async path=>{calls.push(["lstat",path]);return {isFile:()=>true};},
+    readFile:async(...args)=>{calls.push(["read",...args]);const path=args[0];if(path.endsWith("source-receipt.json"))return JSON.stringify(capsule);if(path.endsWith("package.json"))return JSON.stringify({version:"4.156.0"});if(path.endsWith("cli.js"))return "inert-cli";assert.ok(["/task/dry-edge/edge.mjs","/task/dry-upstream/upstream.mjs"].includes(path));return bytes;},
+    writeFile:async(...args)=>{calls.push(["write",...args]);},offlineProjection:()=>({inert:true}),renderEdgeConfig:(_plan,kind,file)=>{calls.push(["config",kind,file]);return "inert-config";},
+    runOwnedProcess:async(command,args,config)=>{
+      calls.push(["command",command,args,{cwd:config.cwd,env:config.env,timeoutMs:config.timeoutMs}]);
+      if(args[0]==="inert-build") {const rows=[],report=api.createPackagingDiagnostics(args[2],line=>rows.push(line));report.mark("entry","fulfilled");report.mark("final","fulfilled");return result(rows.join("")+'{"built":true}\n');}
+      assert.equal(command,"/immutable/node");assert.equal(config.cwd,"/task/capsule-a");return result("--dry-run: exiting now.\n");
+    },
+  };
+  for (const name of ["createRequire","resolveModule","realpath","lstat","writeFile","readFile","renderEdgeConfig","offlineProjection","runOwnedProcess","privateProcesses","prepareEnvironment","digest","refuse"]) assert.equal(typeof bindings[name],"function",name);
+  // Prove the real module bindings separately from the inert replacements.
+  assert.match(source,/import \{[^\n]*readFile[^\n]*\} from "node:fs\/promises"/);
+  assert.match(source,/import \{ createRequire \} from "node:module"/);
+  const pipeline = cut("export async function runPackagingPipeline(","async function offlineCi(");
+  assert.equal(pipeline.split('import.meta.resolve("wrangler/package.json")').length,2);
+  const body = cut("const diagnosticPrefix =","export function decodeLinuxPolicy(") + cut("const containerDiagnosticPhases =","export function launchCli(") + cut("export function validatePackagingReceipt(","export function emitPackagingFailure(") + cut("export function requireProcessSuccess(","export function verifyDryRun(") + verifier + cut("export function compareCapsules(","function offlineProjection(") + pipeline.replace('import.meta.resolve("wrangler/package.json")','resolveModule("wrangler/package.json")');
+  api = new Function(...Object.keys(bindings),body.replaceAll("export ","")+"return {verifyDryRun,createPackagingDiagnostics,runPackagingPipeline,raisePackagingFailures};")(...Object.values(bindings));
+  const phases={marker:"edge_marker",hash:"edge_hash",privacy:"edge_privacy"};
+  const report=api.createPackagingDiagnostics("child",line=>{frames.push(line);if(options.writer)options.writer(line);});
+  return {api,bytes,calls,frames,report,phases,hash,result,verify:(text,roots=["/task","/opt/edge-input"],row=result("--dry-run: exiting now.\n"))=>{const data=Buffer.from(text);return api.verifyDryRun(row,data,hash(data),report,phases,roots);},
+    pipeline:()=>api.runPackagingPipeline("/opt/edge-input","/task",report,{checkBoundary:async()=>{calls.push(["boundary"]);},buildArguments:(path,role)=>["inert-build",path,role]})};
+}
+test("private directory actual legacy rejects frozen API paths and current verifier accepts unchanged bytes", async()=>{
+  const old=await privateDirectoryFixture(true),current=await privateDirectoryFixture();
+  for(const text of ['"/v1/tasks/"','"/api/v1/tasks/"','"/api/v1/tasks/${encodeURIComponent(taskId)}"']) {
+    assert.throws(()=>old.verify(text),/dry-run-private-path/);
+    assert.equal(current.verify(text).sha256,current.hash(Buffer.from(text)));
+  }
+});
+test("private directory exact and descendant occurrences remain fatal for every supplied root", async()=>{
+  const f=await privateDirectoryFixture();
+  for(const root of ["/task","/opt/edge-input","/task/capsule-a","/task/capsule-b"]){
+    for(const suffix of ["","/","/private.mjs","\"","'","`","?query","#fragment",":value",";"," ","\n","\0",".","..","%2fsecret","\\secret","\\u002fsecret","é","／secret","${value}"])
+      assert.throws(()=>f.verify(root+suffix,[root]),/dry-run-private-path/,JSON.stringify([root,suffix]));
+    for(const suffix of ["s/","_other/","-other/","9/","s\"","s'","s`","s"])assert.doesNotThrow(()=>f.verify(root+suffix,[root]));
+    for(const suffix of ["s%2fsecret","s\\u002fsecret","s.escape","s/../"+root.slice(1),"s\n","sé","s${value}","s?query"])
+      assert.throws(()=>f.verify(root+suffix,[root]),/dry-run-private-path/);
+    assert.throws(()=>f.verify(root+'s/ "'+root+'/private"',[root]),/dry-run-private-path/);
+    assert.throws(()=>f.verify(root+'s/ "'+root+'s/ "'+root,[root,root]),/dry-run-private-path/);
+  }
+  assert.throws(()=>f.verify('"/tasks/";"/opt/edge-input/file"'),/dry-run-private-path/);
+});
+test("private directory ambiguous supplied roots never gain normalization or escape exemptions",async()=>{
+  const f=await privateDirectoryFixture();
+  for(const root of ["","/","/task/","/./task","/a/../task","//task","/ta%73k","/ta\\sk","/tásk","task","/task\0"])
+    assert.throws(()=>f.verify(root+"s/",[root]),/dry-run-private-path/);
+  assert.throws(()=>f.verify("/tasks/",[Buffer.from("/task")]),/dry-run-private-path/);
+});
+test("private directory literal home guards retain original byte behavior and includes order",async()=>{
+  const old=await privateDirectoryFixture(true),f=await privateDirectoryFixture();
+  for(const text of ["/Users/","/home/","prefix/Users/private","/home/private","/home/suffix","/Users/../"])
+    for(const fixture of [old,f])assert.throws(()=>fixture.verify(text,[]),/dry-run-private-path/);
+  for(const text of ["/Users","/home","/Users2/","/homes/"])for(const fixture of [old,f])assert.doesNotThrow(()=>fixture.verify(text,[]));
+  for(const fixture of [old,f]){
+    const bytes=Buffer.from("ordinary-bundle"),calls=[];bytes.includes=function(value){assert.equal(this,bytes);calls.push(value);return Buffer.prototype.includes.call(this,value);};
+    let iterations=0;const roots={[Symbol.iterator]:function*(){iterations++;yield "/task";yield "/opt/edge-input";}};
+    fixture.api.verifyDryRun(fixture.result("--dry-run: exiting now.\n"),bytes,fixture.hash(bytes),fixture.report,fixture.phases,roots);
+    assert.equal(iterations,1);assert.deepEqual(calls,["/task","/opt/edge-input","/Users/","/home/"]);
+  }
+});
+test("private directory original process marker hash and privacy errors keep order and undefined identity",async()=>{
+  const f=await privateDirectoryFixture();
+  for(const change of [r=>r.closed=false,r=>r.code=1,r=>r.signal="SIGTERM",r=>r.timedOut=true,r=>r.interrupted=true,r=>r.remaining=null,r=>r.remaining=[{state:"Z"}],r=>r.remaining=[{state:"S"}]]){
+    const row=f.result("bad-marker");change(row);assert.throws(()=>f.verify("/task/private",undefined,row),/child-not-qualified/);
+  }
+  assert.throws(()=>f.verify("/task/private",undefined,f.result("bad-marker")),/dry-run-marker-or-bundle-mismatch/);
+  assert.throws(()=>f.api.verifyDryRun(f.result("--dry-run: exiting now.\n"),Buffer.from("/task/private"),"0".repeat(64),f.report,f.phases,["/task"]),/dry-run-marker-or-bundle-mismatch/);
+  for(const reason of [new Error("original"),undefined])for(const reportReason of [new Error("report"),undefined]){
+    const actual=await privateDirectoryFixture(false,{writer:line=>{const row=JSON.parse(line.slice("EDGE_PACKAGING_V1 ".length));if(row.phase==="edge_privacy"&&row.outcome==="rejected")throw reportReason;}});
+    const bytes=Buffer.from("/task/private");let calls=0;bytes.includes=()=>{calls++;throw reason;};
+    let caught=false,original;try{actual.api.verifyDryRun(actual.result("--dry-run: exiting now.\n"),bytes,actual.hash(bytes),actual.report,actual.phases,["/task"]);}catch(error){caught=true;original=error;}
+    assert.equal(caught,true);assert.equal(original,reason);assert.equal(calls,1);assert.deepEqual(actual.report.errors,[reportReason]);
+    assert.throws(()=>actual.api.raisePackagingFailures([original,...actual.report.errors]),error=>error instanceof AggregateError&&error.errors.length===2&&error.errors[0]===reason&&error.errors[1]===reportReason);
+    const failed=actual.result("--dry-run: exiting now.\n");failed.errors=[reason];assert.throws(()=>actual.verify("/v1/tasks/",undefined,failed),error=>error instanceof AggregateError&&error.errors[1]===reason);
+  }
+});
+test("private directory actual pipeline keeps one bundle read per role and exact commands",async()=>{
+  const old=await privateDirectoryFixture(true,{text:'"/v1/jobs/"'}),current=await privateDirectoryFixture(false,{text:'"/v1/tasks/"'});
+  const before=await old.pipeline(),after=await current.pipeline();assert.equal(before.twoRoots,true);assert.equal(after.twoRoots,true);
+  assert.deepEqual(current.calls,old.calls);assert.equal(current.calls.filter(row=>row[0]==="command").length,4);
+  for(const role of ["edge","upstream"]){
+    assert.deepEqual(current.calls.filter(row=>row[0]==="read"&&row[1]===`/task/dry-${role}/${role}.mjs`),[["read",`/task/dry-${role}/${role}.mjs`]]);
+    const command=current.calls.find(row=>row[0]==="command"&&row[2].includes(`/task/dry-${role}`));assert.deepEqual(command[2],["--no-warnings","/opt/edge-input/node_modules/wrangler/wrangler-dist/cli.js","deploy","--dry-run","--config",`/task/capsule-a/${role}.toml`,"--outdir",`/task/dry-${role}`]);
+  }
+  assert.equal(current.report.errors.length,0);assert.equal(after.results.edge.sha256,current.hash(current.bytes));
+  const leak=await privateDirectoryFixture(false,{text:'"/v1/tasks/";"/task/private"'});
+  await assert.rejects(leak.pipeline(),/dry-run-private-path/);assert.equal(leak.calls.filter(row=>row[0]==="command").length,3);
+  assert.equal(leak.report.records.find(row=>row.phase==="edge_privacy"&&row.outcome==="rejected").defined,true);
+});
+// END private directory boundary inert tests.
+
 test("parent identity includes real/effective/saved/filesystem columns with no arbitrary UID floor", () => {
   assert.deepEqual(parseIdentity(status("20 30")), identity);
   assert.equal(parseIdentity(status().replaceAll("501", "1").replaceAll("20", "2")).uid[0], 1);

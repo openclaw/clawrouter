@@ -1,5 +1,7 @@
 # Changelog
 
+- Match supplied private directories at component boundaries in dry-run bundles, allowing longer literal components such as public API `/tasks/` paths. Keep exact roots, descendants, ambiguous suffixes and home-directory guards rejected, and inspect every occurrence without changing bundle hashes or native qualification.
+
 - Retain the independently decoded reaper outcome and exact private receipt-write result in the existing attach diagnostic. Record the coordinator’s first escaping post-permit boundary and independent FINISH outcome without interpreting process causes or granting receipt or retirement credit. Preserve original failures, complete-capture custody and historical diagnostics.
 
 - Preserve the held-ACK fixture's original process errors, including undefined reasons, before its independent qualification failure. Keep the expected timeout-negative route and all native closure, census and retirement gates unchanged; add inert coverage using the original coordinator and process supervisor.
