@@ -1,10 +1,54 @@
 # Changelog
 
+- Retain same-reader Worker rejection identities and join original synthetic producer observations before reporting LiteLLM retirement failures.
+- Join replayed response reads and first cancellation before releasing the original reader, retaining independent source retirement failures.
+
 ## Unreleased
+
+- Preserve bounded script and Worker failure reports when composing Qwen region coverage with the landed native retirement diagnostics.
 
 - Report native-bound realtime authority failure stages and independent cleanup outcomes for twelve distinct variants, retaining original failures within bounded diagnostics and keeping build failures attributed to the build after anchor callbacks finish.
 
 - Report bounded, invocation-bound search observation failure stages and independent cleanup outcomes without changing test verdicts; require matching native terminal IDs and retain the target failure when diagnostic buffers fill.
+- Distinguish an exactly owned, settled metadata read and its derived rejection from native HTTP/1 fixture retirement failures, preserving raw outcomes, permanent ownership seals and independent producer and SQLite checks without claiming the error cause.
+
+- Add a versioned, complete one-to-four-operation retirement diagnostic census and failure-preserving producer/accounting postlude guarded by the original router retirement seal; retain historical records and coarse fallback without changing strict Worker verdicts or claiming cancellation causes.
+
+- Preflight complete LiteLLM retirement diagnostic groups before emission, falling back to validated coarse evidence without widening relational admission or changing test verdicts.
+
+- Qualify LiteLLM metadata cancellation with an explicitly owned HTTP/1 reset after request-owned readiness, retaining strict ingress, producer retirement and accounting checks; generic fetch-abort coverage remains unqualified.
+
+- Report native LiteLLM retirement diagnostics as one atomic eight-part set of retained operation, resource, signal and coverage facts; validate each operation’s exact owner and complete census references, rejecting inconsistent sets without changing retirement checks.
+
+- Retain the first nonfulfilled original Worker operation at the strict retirement comparison, relaying bounded operation and error-presence evidence without changing cancellation acceptance.
+
+- Scope Worker failure diagnostics to individual native child executions and target coordinates, retaining bounded admission failures without changing test verdicts.
+
+- Retain bounded metadata caller-abort failure stages alongside native Worker test identities, preserving strict retirement checks and independent cleanup failures.
+
+- Distinguish joined partial-delivery read outcomes from Worker retirement failures only after exact producer cancellation and observer joins; retain raw rejections and independent SDK, SQLite and cleanup checks.
+
+- Preserve pending Worker reason unknowns and project retained response/body bindings without additional native body getter calls.
+
+- Preserve both replay source and delivery-reader release failures when usage observation retires a mapped replay body.
+
+- Preserve the original LiteLLM retirement failure definedness before independent observation or reporting errors are aggregated.
+
+- Match LiteLLM public waiter cancellation and pre-output rejection receipts, retaining the first Worker predicate independently of SDK failure evidence.
+
+- Preserve the first precise LiteLLM catalog failure stage in the reserved helper envelope without displacing original failure, role or retirement evidence.
+
+- Correct LiteLLM canonical catalog cache expectations and bind held readiness to original request reads, preserving all discovery joins after control or release failures.
+
+- Distinguish source-qualified native stored-error data outcomes from LiteLLM local handle-retirement failures while retaining independent Worker and accounting checks.
+
+- Join LiteLLM captured transport and guard originals, observer derivatives, and independent cleanup checks even when observer registration fails.
+
+- Bind LiteLLM fixture transports to individual Worker ingresses with opt-in native request context and retain bounded retirement failure observations.
+
+- Join replayed response reads and cancellation before releasing readers, preserving independent source and delivery retirement failures.
+
+- Build and pack the provider plugin contract as a standalone ESM package with TypeScript declarations for external provider tooling.
 
 - Add opt-in, bounded native consumer runner diagnostics that separate collection failures from missing startup reports without changing SDK test verdicts.
 
@@ -851,6 +895,7 @@
 - Add explicitly configured llama.cpp, LM Studio, Ollama, oMLX, SGLang and vLLM Chat/SSE routes with scoped model discovery, plus Ollama native JSON/NDJSON/Tags and LM Studio Messages; optional server credentials, no loopback default or inferred free tariff.
 - Add experimental API-key Chat routes for Bedrock Mantle us-east-1, configured Microsoft Foundry deployments and overseas Kimi Coding, without conflating IAM, Entra or Moonshot credentials.
 - Add explicit authenticated Bifrost and LiteLLM gateway Chat routes with operator-selected URLs/models and unpriced accounting instead of inheriting local zero-charge assumptions.
+- Declare LiteLLM model discovery and literal versioned native aliases through its configured gateway and original managed key, preserving first capability bindings, opaque aliases and current-policy filtering without inferring prices or context limits.
 - Qualify ElevenLabs unary MP3 speech with native voice/query binding, bounded complete output and conservative dispatched-failure accounting, without inventing a model tariff.
 - Dispatch qualified native ElevenLabs MP3 speech with original credentials, bounded complete delivery and conservative settlement through the shared query and admission controls.
 - Compile the ElevenLabs offer and exercise actual OpenClaw TTS/Talk through the Worker with scoped proxy credentials, complete MP3 delivery, caller deadlines, controlled cancellation and conservative accounting; keep unattended speech smokes unresolved.

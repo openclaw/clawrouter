@@ -41,10 +41,19 @@ my-provider/
 ```
 
 The descriptor contract is exported from
-`packages/provider-plugin-contract/src/index.ts`. The package is currently
-private, source-only, and not registered as a workspace or published to npm.
-Node 24+ can import the source using native TypeScript stripping. This first
-contract needs no dependency install and performs no I/O.
+`packages/provider-plugin-contract/src/index.ts`. The package is a private
+workspace package with compiled ESM JavaScript and TypeScript declarations. It is not published to npm. Build and pack a local
+archive for use outside this repository:
+
+```sh
+pnpm --filter @clawrouter/provider-plugin-contract pack --pack-destination /tmp
+```
+
+Install that archive in a separate project and import
+`@clawrouter/provider-plugin-contract`. Its runtime has no dependencies and needs
+no TypeScript loader. See the [package README](../packages/provider-plugin-contract/README.md).
+Repository tooling can still import the source directly with Node 24+ native
+TypeScript stripping. The contract performs no I/O.
 
 ```ts
 import { parseProviderPluginDescriptor, providerPluginFiles } from
