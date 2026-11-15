@@ -51,6 +51,36 @@ test("the starter executes through the Worker with synthetic host credentials", 
   assert.doesNotMatch(result.stdout, /PRIVATE_ENV_SENTINEL|synthetic-conformance|Authorization|api.example.invalid/);
 });
 
+for (const header of ["X-API-Key", "api-key", "X-Goog-Api-Key"]) test(`header API-key authentication executes with ${header}`, t => {
+  const f = fixture(t);
+  f.manifest(m => { m.auth.schemes = [{ type: "api_key", header, secretKind: "api_key" }]; });
+  f.scenario(s => { s.upstream.request.headers = { [header.toLowerCase()]: "synthetic-conformance-key" }; });
+  const result = run([f.descriptor]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).packages[0].id, "example");
+  assert.doesNotMatch(result.stdout, /PRIVATE_ENV_SENTINEL|synthetic-conformance/);
+});
+
+test("header API-key fixtures cannot supply host credentials or a second upstream authorization", t => {
+  const f = fixture(t);
+  f.manifest(m => { m.auth.schemes = [{ type: "api_key", header: "X-API-Key", secretKind: "api_key" }]; });
+  f.scenario(s => { s.request.headers = { "x-api-key": "PRIVATE_KEY_SENTINEL" }; });
+  failed(run([f.descriptor]), /authorization belongs to the host/);
+  f.scenario(s => { delete s.request.headers; });
+  f.manifest(m => { m.adapter.injectHeaders = { authorization: "Bearer PRIVATE_AUTH_SENTINEL" }; });
+  failed(run([f.descriptor]), /unexpected upstream authorization/);
+});
+
+for (const scheme of [
+  { type: "query_api_key", param: "key", secretKind: "api_key" },
+  { type: "api_key", header: "bad header", secretKind: "api_key" },
+  { type: "api_key", header: "X-API-Key", secretKind: "access_token" },
+  { type: "bearer", header: "Authorization", format: "Bearer ${secret}", secretKind: "api_key", required: false },
+]) test(`unsupported auth stays rejected: ${JSON.stringify(scheme)}`, t => {
+  const f = fixture(t); f.manifest(m => { m.auth.schemes = [scheme]; });
+  failed(run([f.descriptor]), /one required bearer or header API-key scheme/);
+});
+
 test("native model-free bodies stay intact while host header injection and subset assertions run", t => {
   const f = fixture(t);
   f.manifest(m => {
