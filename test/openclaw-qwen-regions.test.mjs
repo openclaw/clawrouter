@@ -10,7 +10,8 @@ import { parse } from "yaml";
 import { compileProviderSnapshot } from "../scripts/compile-providers.mjs";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
 import { startWorkerdFixture } from "./helpers/workerd.mjs";
-import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
+import { runOpenClawConsumer, settleRunnerReport } from "./helpers/openclaw-consumer.mjs";
+import { parseRunnerReport, runnerContract, validateBinding } from "./helpers/openclaw-runner-reporter.mjs";
 
 const sourceHead = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
 const fixture = new URL("./fixtures/openclaw-qwen-regions-contract.test.ts", import.meta.url);
@@ -40,9 +41,87 @@ async function finish(body, cleanups) {
 // Raw child failures remain available to this owner, never serialized by the
 // test reporter. Only closed fixture records leave this boundary.
 const retainedNativeFailures = new WeakMap();
+
+const qwenRunnerFixtureSha256 = "47ef4694ff45c89cac41bcaa1168b6eb26d78cc21a095b9c1999baac2e41a3db";
+const qwenRunnerReporterSha256 = "5cd2b7b4ebbe72f1864fd83c695c6ca521e8f382bd2a01e29af83f169f8bc4b3";
+
+// Copy only bounded own data before validation; never invoke toJSON or getters.
+function qwenRunnerData(value, depth = 0, budget = { remaining: 8192 }) {
+  assert.ok(depth <= 8 && --budget.remaining >= 0, "runner data bound");
+  if (value === null || typeof value === "boolean") return value;
+  if (typeof value === "string") { assert.ok(Buffer.byteLength(value) <= 65536); return value; }
+  if (typeof value === "number") { assert.ok(Number.isFinite(value)); return value; }
+  assert.ok(value && typeof value === "object", "runner own data required");
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const keys = Reflect.ownKeys(descriptors);
+  assert.ok(keys.every(key => typeof key === "string" && Object.hasOwn(descriptors[key], "value")), "runner accessors forbidden");
+  if (Array.isArray(value)) {
+    const length = descriptors.length.value;
+    assert.ok(Number.isSafeInteger(length) && length >= 0 && length <= 512 && keys.length === length + 1);
+    return Array.from({ length }, (_, index) => {
+      assert.ok(Object.hasOwn(descriptors, String(index)));
+      return qwenRunnerData(descriptors[index].value, depth + 1, budget);
+    });
+  }
+  assert.ok(keys.length <= 16 && !keys.includes("toJSON"));
+  return Object.fromEntries(keys.map(key => [key, qwenRunnerData(descriptors[key].value, depth + 1, budget)]));
+}
+
+function qwenUnobservedRunner(status) {
+  return [
+    { kind: "runner_binding", observed: false, pin: sourceHead, target: runnerContract.target,
+      fixtureSha256: qwenRunnerFixtureSha256, reporterSha256: qwenRunnerReporterSha256, reportBytes: 0, reportSha256: null },
+    { kind: "runner_summary", status, complete: false, phases: [], readyCallbacks: null, resultCallbacks: null,
+      reason: "unknown", capturedErrors: 0, serializedErrors: null, reportOmitted: null, errorRecordsOmitted: 0 },
+  ];
+}
+
+function projectQwenRunnerReport(original) {
+  const packet = qwenRunnerData(original);
+  if (packet.reporter === "absent") {
+    assert.deepEqual(Object.keys(packet).sort(), ["bytes", "complete", "records", "reporter", "sha256"]);
+    assert.equal(packet.complete, false); assert.equal(packet.bytes, 0); assert.equal(packet.sha256, null);
+    assert.deepEqual(packet.records, []);
+    return qwenUnobservedRunner("absent");
+  }
+  assert.deepEqual(Object.keys(packet).sort(), ["bytes", "complete", "records", "sha256"]);
+  assert.ok(Array.isArray(packet.records) && packet.records[0]?.kind === "init");
+  const binding = validateBinding(packet.records[0].binding);
+  assert.equal(binding.fixtureSha256, qwenRunnerFixtureSha256); assert.equal(binding.reporterSha256, qwenRunnerReporterSha256);
+  // The helper already matched the private invocation nonce. Reuse its parser;
+  // public records disclose neither that nonce nor any private report location.
+  const bytes = Buffer.from(packet.records.map(record => JSON.stringify(record)).join("\n") + "\n");
+  const checked = parseRunnerReport(bytes, binding);
+  assert.equal(checked.complete, packet.complete); assert.equal(checked.bytes, packet.bytes); assert.equal(checked.sha256, packet.sha256);
+  const end = checked.records.find(record => record.kind === "end");
+  const callbacks = checked.records.filter(record => record.kind === "case").at(-1);
+  const errors = checked.records.filter(record => record.kind === "error");
+  const result = [
+    { kind: "runner_binding", observed: true, pin: sourceHead, target: runnerContract.target,
+      fixtureSha256: qwenRunnerFixtureSha256, reporterSha256: qwenRunnerReporterSha256,
+      reportBytes: checked.bytes, reportSha256: checked.sha256 },
+    { kind: "runner_summary", status: checked.complete ? "complete" : "partial", complete: checked.complete,
+      phases: checked.records.filter(record => record.kind === "phase").map(record => ({ phase: record.phase, count: record.count })),
+      readyCallbacks: end?.ready ?? callbacks?.ready ?? 0, resultCallbacks: end?.results ?? callbacks?.results ?? 0,
+      reason: end?.reason ?? "unknown", capturedErrors: errors.length, serializedErrors: end?.errors ?? null,
+      reportOmitted: end?.omitted ?? null, errorRecordsOmitted: Math.max(0, errors.length - 1) },
+  ];
+  if (errors.length) {
+    const first = errors[0];
+    result.push({ kind: "runner_error", surface: first.surface, received: first.error.received, originalPresence: "unknown",
+      namePresence: first.error.name.presence, name: first.error.name.value, codePresence: first.error.code.presence, code: first.error.code.value });
+  }
+  return result;
+}
+
 function createQwenFailureRelay() {
   const records = new Map(), sdkCases = new Map();
-  let moduleEvaluated = false, registration;
+  let moduleEvaluated = false, registration, runner;
+  let runnerReceived = false;
+  function runnerReport(packet) {
+    assert.equal(runnerReceived, false, "duplicate native runner report"); runnerReceived = true;
+    runner = projectQwenRunnerReport(packet);
+  }
   const entered = new Map(), completed = new Map();
   const consistent = (terminal, original) => {
     if (terminal && original) for (const key of ["state", "operations", "rejected", "pending"]) {
@@ -137,11 +216,12 @@ function createQwenFailureRelay() {
       registrationComplete: registration?.complete ?? false, registrationFailurePresent: registration?.failurePresent ?? null,
       registrationReasonDefined: registration?.reasonDefined ?? null, enteredCases: entered.size, completedCases: completed.size }, ...group,
     { kind: "helper", pin: sourceHead, state: helper, expectedCases: rows.length, observedCases: observed.length,
-      failedCases: observed.filter(value => value.state !== "passed").length, unknownCases: rows.length - observed.length }];
+      failedCases: observed.filter(value => value.state !== "passed").length, unknownCases: rows.length - observed.length }, ...(runner ?? qwenUnobservedRunner("unobserved"))];
     const room = 9 - essential.length, result = [...essential, ...failures.slice(0, room)];
     if (failures.length > room) result.push({ kind: "overflow", omitted: failures.length - room });
-    assert.ok(result.every(value => Buffer.byteLength(JSON.stringify(value)) <= 768), "closed annotation bound exceeded");
-    assert.ok(Buffer.byteLength(JSON.stringify(result)) <= 8192, "closed packet bound exceeded");
+    const commands = result.map(qwenBoundaryAnnotation);
+    assert.ok(commands.every(value => Buffer.byteLength(value) <= 768), "escaped annotation bound exceeded");
+    assert.ok(Buffer.byteLength(commands.join("\n")) <= 8192, "escaped packet bound exceeded");
     return result;
   }
   const complete = () => moduleEvaluated && registration?.complete === true && entered.size === rows.length && completed.size === rows.length
@@ -149,13 +229,14 @@ function createQwenFailureRelay() {
     && sdkCases.size === rows.length && [...sdkCases.values()].every(value => {
     const row = JSON.parse(value); return row.state === "passed" && row.rejected === 0 && row.pending === 0;
   });
-  return { record, entry, text, error, output, complete };
+  return { record, entry, text, error, runnerReport, output, complete };
 }
 
 function qwenBoundaryAnnotation(record) {
-  const informational = ["entry_summary", "case_enter"].includes(record.kind);
+  const informational = ["entry_summary", "case_enter", "runner_binding", "runner_summary"].includes(record.kind);
   const severity = informational || record.state === "passed" ? "notice" : "error";
-  return `::${severity} title=Qwen native boundary::${JSON.stringify(record)}`;
+  const message = JSON.stringify(record).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
+  return `::${severity} title=Qwen native boundary::${message}`;
 }
 
 async function withQwenNativeRelay(body, cleanups, emit) {
@@ -167,7 +248,7 @@ async function withQwenNativeRelay(body, cleanups, emit) {
     catch (reportError) { failures.push(reportError); }
   };
   try {
-    await body({ record: relay.record, async runChild(run) {
+    await body({ record: relay.record, runnerReport: relay.runnerReport, async runChild(run) {
       phase = "helper";
       try { await run({ diagnostic: relay.text }); helper = "passed"; }
       catch (error) { helper = "failed"; throw error; }
@@ -182,7 +263,9 @@ async function withQwenNativeRelay(body, cleanups, emit) {
   }
   // Original child work, Worker retirement and runtime cleanup have all joined
   // before this bounded relay. Missing records remain unknown, never PASS.
-  for (const record of relay.output(helper)) {
+  let output = [];
+  try { output = relay.output(helper); } catch (error) { failures.push(error); }
+  for (const record of output) {
     try { emit(record); } catch (error) { failures.push(error); }
   }
   if (failures.length) {
@@ -538,14 +621,14 @@ test("Qwen failure relay requires complete receipts, prioritizes entry groups an
   const relay = createQwenFailureRelay();
   for (const row of rows.slice(0, 12)) relay.text(closedSDKLine(closedSDKRecord(row.id, "failed")));
   const output = relay.output("failed"); assert.equal(output[0].kind, "entry_summary"); assert.equal(output[1].kind, "helper"); assert.equal(output.length, 10);
-  assert.deepEqual(output[9], { kind: "overflow", omitted: 5 });
+  assert.deepEqual(output[9], { kind: "overflow", omitted: 7 });
   const success = [];
   await withQwenNativeRelay(relay => relay.runChild(sink => {
     const witness = createQwenEntryWitness(value => sink.diagnostic(closedEntryLine(value)));
     witness.moduleEvaluated(); rows.forEach(row => witness.registered(row.id)); witness.registrationComplete();
     for (const row of rows) { witness.enter(row.id).complete({ operations: 4, rejected: 0, pending: 0 }); sink.diagnostic(closedSDKLine(closedSDKRecord(row.id))); }
   }), [], row => success.push(row));
-  assert.equal(success.length, 2); assert.equal(success[1].state, "passed"); assert.equal(success[1].unknownCases, 0);
+  assert.equal(success.length, 4); assert.equal(success[1].state, "passed"); assert.equal(success[1].unknownCases, 0);
   assert.equal(success[0].enteredCases, 103); assert.equal(success[0].completedCases, 103);
   assert.ok(success.every(value => qwenBoundaryAnnotation(value).startsWith("::notice title=Qwen native boundary::")));
 });
@@ -571,7 +654,7 @@ test("Qwen failure relay capacity errors cannot prevent independent cleanup", as
   }, [{ phase: "worker", run: () => { cleaned.push("worker"); throw undefined; } },
     { phase: "restore", run: () => { cleaned.push("restore"); } }], row => emitted.push(row)), error => retainedNativeFailures.get(error).includes(undefined));
   assert.deepEqual(cleaned, ["worker", "restore"]); assert.equal(emitted.length, 10);
-  assert.deepEqual(emitted.at(-1), { kind: "overflow", omitted: 505 });
+  assert.deepEqual(emitted.at(-1), { kind: "overflow", omitted: 507 });
 });
 
 test("Qwen failure relay parses real failed control response before its strict status assertion", async t => {
@@ -677,14 +760,134 @@ test("Qwen entry relay keeps the complete first observed failure group before bo
   const packet = h.relay.output("failed");
   assert.equal(packet.length, 10); assert.equal(packet[1].case, rows[0].id); assert.equal(packet[2].case, rows[0].id);
   assert.equal(packet[2].kind, "case_complete"); assert.equal(packet[3].kind, "helper");
-  assert.deepEqual(packet[9], { kind: "overflow", omitted: 7 });
+  assert.deepEqual(packet[9], { kind: "overflow", omitted: 9 });
   assert.ok(packet.every(value => Buffer.byteLength(JSON.stringify(value)) <= 768));
   assert.ok(Buffer.byteLength(JSON.stringify(packet)) <= 8192);
   for (const [index, record] of packet.entries()) {
-    const annotation = qwenBoundaryAnnotation(record), prefix = index < 2 ? "::notice" : "::error";
+    const annotation = qwenBoundaryAnnotation(record), prefix = index < 2 || ["runner_binding", "runner_summary"].includes(record.kind) ? "::notice" : "::error";
     assert.ok(annotation.startsWith(prefix + " title=Qwen native boundary::"));
     assert.deepEqual(JSON.parse(annotation.slice(annotation.indexOf("::", 2) + 2)), record);
   }
+});
+
+// Pure projection inputs go through the actual landed parser, never a native run.
+function qwenRunnerPacket(mode = "complete", mutate = () => {}) {
+  const binding = { ...runnerContract, fixtureSha256: qwenRunnerFixtureSha256, reporterSha256: qwenRunnerReporterSha256, nonce: "a".repeat(64) };
+  const records = [{ kind: "init", seq: 0, binding }];
+  const add = record => records.push({ ...record, seq: records.length });
+  if (mode !== "partial") {
+    for (const phase of ["run_start", "module_queued", "module_collected", "module_start", "module_end"]) add({ kind: "phase", phase, count: 1 });
+    add({ kind: "error", surface: "collection", error: { received: "undefined", originalPresence: "unknown",
+      name: { presence: "absent", value: "unknown" }, code: { presence: "defined", value: "ERR_MODULE_NOT_FOUND" } } });
+    add({ kind: "end", reason: "failed", ready: 0, results: 0, errors: 1, omitted: 0, complete: true });
+  }
+  mutate(records);
+  const bytes = Buffer.from(records.map(record => JSON.stringify(record)).join("\n") + "\n");
+  return parseRunnerReport(bytes, binding);
+}
+
+test("Qwen runner projection distinguishes absent, bound partial and complete failed reports", () => {
+  const absent = projectQwenRunnerReport({ complete: false, records: [], bytes: 0, sha256: null, reporter: "absent" });
+  assert.equal(absent[0].observed, false); assert.equal(absent[1].readyCallbacks, null); assert.equal(absent[1].status, "absent");
+  const partial = projectQwenRunnerReport(qwenRunnerPacket("partial"));
+  assert.equal(partial[0].observed, true); assert.equal(partial[1].complete, false); assert.equal(partial[1].reason, "unknown");
+  const complete = projectQwenRunnerReport(qwenRunnerPacket());
+  assert.equal(complete[1].complete, true); assert.equal(complete[1].reason, "failed");
+  assert.equal(complete[2].received, "undefined"); assert.equal(complete[2].originalPresence, "unknown");
+  assert.equal(complete[2].code, "ERR_MODULE_NOT_FOUND");
+  const encoded = JSON.stringify(complete);
+  assert.doesNotMatch(encoded, /nonce|aaaaaaaaaaaaaaaa|plan.json|report.jsonl|stdout|stack/);
+  const relay = createQwenFailureRelay(); relay.runnerReport(qwenRunnerPacket());
+  assert.equal(relay.complete(), false); assert.equal(relay.output("failed").find(row => row.kind === "helper").unknownCases, 103);
+});
+
+test("Qwen runner projection rejects foreign provenance, duplicate calls, malformed data and getters", () => {
+  for (const mutate of [packet => { packet.extra = true; }, packet => { packet.sha256 = "0".repeat(64); },
+    packet => { packet.bytes++; }, packet => { packet.complete = false; },
+    packet => { packet.records[0].binding.pin = "0".repeat(40); },
+    packet => { packet.records[0].binding.target = "extensions/other/worker-contract.test.ts"; },
+    packet => { packet.records[0].binding.fixtureSha256 = "0".repeat(64); },
+    packet => { packet.records[0].binding.reporterSha256 = "0".repeat(64); },
+    packet => { packet.records[0].binding.nonce = "bad"; }, packet => { packet.records[1].phase = "private"; },
+    packet => { packet.records[6].error.originalPresence = "defined"; },
+    packet => { packet.records[6].error.message = "synthetic-private-marker"; }]) {
+    const packet = qwenRunnerPacket(); mutate(packet); assert.throws(() => projectQwenRunnerReport(packet));
+  }
+  assert.throws(() => projectQwenRunnerReport(undefined));
+  assert.throws(() => projectQwenRunnerReport({ complete: false, records: [{}], bytes: 0, sha256: null, reporter: "absent" }));
+  let getters = 0;
+  for (const key of ["records", "sha256", "toJSON"]) {
+    const packet = qwenRunnerPacket(); Object.defineProperty(packet, key, { get() { getters++; throw undefined; } });
+    assert.throws(() => projectQwenRunnerReport(packet));
+  }
+  const nested = qwenRunnerPacket(); Object.defineProperty(nested.records[0].binding, "nonce", { get() { getters++; throw undefined; } });
+  assert.throws(() => projectQwenRunnerReport(nested)); assert.equal(getters, 0);
+  const relay = createQwenFailureRelay(); relay.runnerReport(qwenRunnerPacket());
+  assert.throws(() => relay.runnerReport(qwenRunnerPacket()), /duplicate/);
+});
+
+test("Qwen runner quota preserves first case pair, helper and complete runner group before optional failures", () => {
+  const packet = qwenRunnerPacket("complete", records => {
+    const error = records[6];
+    records.splice(7, 0, { ...error, error: { ...error.error, received: "object", code: { presence: "defined", value: "ERR_PACKAGE_PATH_NOT_EXPORTED" } } });
+    records.forEach((record, seq) => { record.seq = seq; });
+    Object.assign(records.at(-1), { ready: 1_000_000, results: 1_000_000, errors: 1_000_000, omitted: 1_000_000, complete: false });
+  });
+  const h = entryHarness(); h.witness.moduleEvaluated(); h.register(); h.relay.runnerReport(packet);
+  for (const row of rows.slice(0, 12)) {
+    const current = h.witness.enter(row.id); current.at("loader"); current.failed(undefined); current.complete({ operations: 4, rejected: 1, pending: 0 });
+    h.relay.text(closedSDKLine(closedSDKRecord(row.id, "failed")));
+  }
+  const output = h.relay.output("failed");
+  assert.deepEqual(output.slice(0, 7).map(row => row.kind), ["entry_summary", "case_enter", "case_complete", "helper", "runner_binding", "runner_summary", "runner_error"]);
+  assert.equal(output[1].case, output[2].case); assert.equal(output[5].errorRecordsOmitted, 1);
+  assert.equal(output[5].reportOmitted, 1_000_000); assert.equal(output[5].complete, false);
+  assert.deepEqual(output.at(-1), { kind: "overflow", omitted: 10 });
+  const commands = output.map(qwenBoundaryAnnotation);
+  assert.ok(commands.every(command => Buffer.byteLength(command) <= 768));
+  assert.ok(Buffer.byteLength(commands.join("\n")) <= 8192);
+  assert.match(qwenBoundaryAnnotation({ kind: "probe", value: "%\r\n" }), /%25\\r\\n/);
+  // The command prefix and escaped percent bytes count, not just the JSON body.
+  const wide = { kind: "probe", value: "%".repeat(250) };
+  assert.ok(Buffer.byteLength(JSON.stringify(wide)) < 768);
+  assert.ok(Buffer.byteLength(qwenBoundaryAnnotation(wide)) > 768);
+});
+
+test("Qwen runner report wiring preserves undefined child, report, Worker and restore failures after original joins", async () => {
+  const events = [], emitted = [], cleanupError = {}, workerError = {}, restoreError = {};
+  let release; const original = new Promise((_, reject) => { release = () => reject(undefined); });
+  const pending = withQwenNativeRelay(relay => relay.runChild(sink => {
+    assert.equal(typeof sink.diagnostic, "function"); assert.equal(typeof relay.runnerReport, "function");
+    return settleRunnerReport(() => original, () => { events.push("collect"); return qwenRunnerPacket(); },
+      () => { events.push("report_cleanup"); throw cleanupError; }, packet => {
+        relay.runnerReport(packet); events.push("report"); throw undefined;
+      });
+  }), [{ phase: "worker", run: () => { events.push("worker"); throw workerError; } },
+    { phase: "restore", run: () => { events.push("restore"); throw restoreError; } }], record => emitted.push(record));
+  await Promise.resolve(); assert.deepEqual(events, []); assert.deepEqual(emitted, []);
+  release();
+  await assert.rejects(pending, error => {
+    const failures = retainedNativeFailures.get(error);
+    assert.deepEqual(failures[0].errors, [undefined, cleanupError, undefined]);
+    assert.equal(failures[1], workerError); assert.equal(failures[2], restoreError); return true;
+  });
+  assert.deepEqual(events, ["collect", "report_cleanup", "report", "worker", "restore"]);
+  assert.ok(emitted.some(record => record.kind === "runner_error"));
+  assert.equal(emitted.find(record => record.kind === "helper").state, "failed");
+  assert.equal(emitted.find(record => record.kind === "helper").unknownCases, 103);
+});
+
+test("Qwen runner envelope construction failure cannot replace the original child outcome", async t => {
+  const originalLength = Buffer.byteLength, primary = {}, events = [];
+  t.mock.method(Buffer, "byteLength", function (value, ...args) {
+    if (typeof value === "string" && value.startsWith("::")) throw undefined;
+    return Reflect.apply(originalLength, this, [value, ...args]);
+  });
+  await assert.rejects(withQwenNativeRelay(relay => relay.runChild(() => { throw primary; }),
+    [{ phase: "restore", run: () => { events.push("restored"); } }], () => { events.push("emitted"); }), error => {
+    assert.deepEqual(retainedNativeFailures.get(error), [primary, undefined]); return true;
+  });
+  assert.deepEqual(events, ["restored"]);
 });
 
 test("Qwen fixture syntax bundles SDK and Worker observer routes without executing them", async () => {
@@ -704,7 +907,8 @@ test("registered Qwen regional SDK through shipping Worker and SQLite", { skip: 
     f = await startFixture();
     await readControl(f, "/fixture/setup", relay.record);
     await relay.runChild(sink => runOpenClawConsumer(sink, { source: process.env.CLAWROUTER_OPENCLAW_CHECKOUT, sourceHead, fixture, testPath: "extensions/qwen/worker-regions-contract.test.ts",
-      env: { CLAWROUTER_CONTRACT_ORIGIN: f.origin, CLAWROUTER_SDK_SOURCE_HEAD: sourceHead, QWEN_API_KEY: "synthetic-poison-client" } }));
+      env: { CLAWROUTER_CONTRACT_ORIGIN: f.origin, CLAWROUTER_SDK_SOURCE_HEAD: sourceHead, QWEN_API_KEY: "synthetic-poison-client" },
+      runnerReport: { expectedInvocations: 1, fixtureSha256: qwenRunnerFixtureSha256, reporterSha256: qwenRunnerReporterSha256, onReport: relay.runnerReport } }));
   }, [{ phase: "worker", run: async report => {
     if (!f) return;
     const failures = [];
