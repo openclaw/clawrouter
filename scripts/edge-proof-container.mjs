@@ -160,8 +160,8 @@ async function qualifyImageInputs(contextHash) {
   check(same(actual, inputPlan.files), "context-byte-closure");
   for (const [path, expected] of Object.entries(installInputs)) check(hash(await readFile(join(root, path))) === expected, "install-input-drift");
   const { containedLinks } = await qualifyInstalledInputs(root);
-  const tsRequire = createRequire(join(root, "node_modules/typescript/package.json"));
-  const wranglerRequire = createRequire(join(root, "node_modules/wrangler/package.json"));
+  const tsRequire = createRequire(await realpath(join(root, "node_modules/typescript/package.json")));
+  const wranglerRequire = createRequire(await realpath(join(root, "node_modules/wrangler/package.json")));
   const esbuildRequire = createRequire(wranglerRequire.resolve("esbuild/package.json"));
   const native = {
     node: await fileIdentity(containerContract.node), git: await fileIdentity(containerContract.git),

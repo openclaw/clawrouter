@@ -5,6 +5,8 @@ import { spawnSync } from "node:child_process";
 import { PassThrough, Writable } from "node:stream";
 import { readFile, realpath } from "node:fs/promises";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
+import { dirname, join, relative } from "node:path";
 import { containerContract, harnessInputs, installInputs, parseIdentity, validateIdentity, validateMapping, validateImage, dockerEnvironment, containerEnvironment, createArguments, validateContainerInspect, parseControl, validateTerminal, validateNativeIdentity, parseImageBuildReceipt, parseImageBuildStages, observeImageBuild, parseContainerReceipt, parseMounts, validateMountFreshness, validateMounts, validateMetadataMounts, validateChildStatus, validateTarget, cgroupPath, validateLimits, attachContainer, processEvidence, retiredCgroup, raiseContainerFailures, validateContainerDiagnostic, emitContainerFailure } from "../scripts/edge-proof-container.mjs";
 import { frozenGitEnvironment, validateGitExecutable, frozenSource } from "../scripts/edge-proof-build.mjs";
 import { edgeProof } from "../scripts/edge-proof-profile.mjs";
@@ -560,5 +562,73 @@ test("marker delimiter missing reporter output stays unknown and independent rep
     report.internal = () => { throw undefined; };
     await assert.rejects(observeImageBuild(() => original, () => { reached = true; }, () => { reached = true; }, report, stageIdentity), error => error instanceof AggregateError && error.errors[0] instanceof AggregateError && error.errors[1] === undefined);
     assert.equal(reached, false); assert.equal(original.code, status); assert.equal(report.records[0].exit, status);
+  }
+});
+
+async function actualPackageFactories() {
+  const source = await readFile(new URL("../scripts/edge-proof-container.mjs", import.meta.url), "utf8"), cli = await readFile(new URL("../scripts/edge-proof.mjs", import.meta.url), "utf8");
+  const start = source.indexOf("  const { containedLinks } = await qualifyInstalledInputs(root);"), end = source.indexOf("  const esbuildRequire =", start);
+  assert.ok(start > 0 && end > start);
+  const current = source.slice(start, end), pattern = /createRequire\(await realpath\((join\([^;\n]+?\))\)\)/g;
+  assert.equal([...current.matchAll(pattern)].length, 2);
+  const legacy = current.replace(pattern, "createRequire($1)");
+  const qualifier = cli.slice(cli.indexOf("export async function qualifyInstalledInputs("), cli.indexOf("async function offlineChild(")).replace("export ", "");
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  const factory = text => new AsyncFunction("root", "createRequire", "realpath", "lstat", "readdir", "join", "relative", "refuse", qualifier + text + "return { containedLinks, tsRequire, wranglerRequire };");
+  assert.ok(source.includes('const esbuildRequire = createRequire(wranglerRequire.resolve("esbuild/package.json"));'));
+  const lock = await readFile(new URL("../pnpm-lock.yaml", import.meta.url), "utf8");
+  for (const version of ["typescript@7.0.2:", "wrangler@4.156.0:", "'@typescript/typescript-linux-x64@7.0.2':", "esbuild@0.28.2:"]) assert.ok(lock.includes(version));
+  return { current: factory(current), legacy: factory(legacy) };
+}
+function packageLookupFixture({ missing, reason, escaped } = {}) {
+  const root = "/opt/edge-input", anchors = [], canonicalCalls = [];
+  const packages = {
+    typescript: join(root, "node_modules/.pnpm/typescript@7.0.2/node_modules/typescript"),
+    wrangler: join(root, "node_modules/.pnpm/wrangler@4.156.0_@cloudflare+workers-types@5.20261101.1/node_modules/wrangler"),
+  };
+  const canonical = async path => {
+    canonicalCalls.push(path); if (path === root) return root;
+    for (const [name, target] of Object.entries(packages)) {
+      if (path === join(root, "node_modules", name)) return escaped && name === "typescript" ? escaped : target;
+      if (path === join(root, "node_modules", name, "package.json")) { if (missing === name) throw reason; return join(target, "package.json"); }
+    }
+    throw new Error("unexpected fixture path");
+  };
+  const lstat = async path => { assert.ok([join(root, "node_modules"), join(root, "admin/node_modules")].includes(path)); return { isDirectory: () => true }; };
+  const readdir = async path => {
+    assert.ok([join(root, "node_modules"), join(root, "admin/node_modules")].includes(path));
+    return path === join(root, "admin/node_modules") ? [] : Object.keys(packages).map(name => ({ name, isSymbolicLink: () => true }));
+  };
+  // Filesystem observations are controlled data; Node's actual createRequire
+  // and lookup construction run without resolving/importing any dependency.
+  return { root, packages, anchors, canonicalCalls, args: [root, path => { anchors.push(path); return createRequire(path); }, canonical, lstat, readdir, join, relative, code => { throw new Error(code); }] };
+}
+test("canonical package factories include frozen private dependency lookup directories without importing them", async () => {
+  const factories = await actualPackageFactories(), oldFixture = packageLookupFixture(), fixedFixture = packageLookupFixture();
+  const old = await factories.legacy(...oldFixture.args), fixed = await factories.current(...fixedFixture.args);
+  assert.equal(fixed.containedLinks, 2);
+  for (const [name, key, dependency] of [["typescript", "tsRequire", "@typescript/typescript-linux-x64"], ["wrangler", "wranglerRequire", "esbuild"]]) {
+    const directory = dirname(fixedFixture.packages[name]);
+    assert.equal(old[key].resolve.paths(dependency).includes(directory), false);
+    assert.equal(fixed[key].resolve.paths(dependency).includes(directory), true);
+    assert.ok(fixedFixture.anchors.includes(join(fixedFixture.packages[name], "package.json")));
+  }
+  assert.ok(oldFixture.anchors.every(path => !path.includes("/.pnpm/"))); assert.equal(fixedFixture.anchors.length, 2);
+});
+test("canonical package factories propagate missing anchor errors including undefined without fallback", async () => {
+  const { current } = await actualPackageFactories();
+  for (const missing of ["typescript", "wrangler"]) for (const reason of [new Error("missing fixture anchor"), undefined]) {
+    const fixture = packageLookupFixture({ missing, reason });
+    await assert.rejects(current(...fixture.args), error => error === reason);
+    assert.equal(fixture.anchors.length, missing === "typescript" ? 0 : 1);
+    assert.equal(fixture.canonicalCalls.filter(path => path === join(fixture.root, "node_modules", missing, "package.json")).length, 1);
+  }
+});
+test("canonical package factories retain original install containment before any resolver construction", async () => {
+  const { current } = await actualPackageFactories();
+  for (const escaped of ["/foreign/typescript", "/opt/edge-input-other/typescript"]) {
+    const fixture = packageLookupFixture({ escaped });
+    await assert.rejects(current(...fixture.args), { message: "installation-link-escape" });
+    assert.equal(fixture.anchors.length, 0); assert.ok(!fixture.canonicalCalls.some(path => path.endsWith("package.json")));
   }
 });
