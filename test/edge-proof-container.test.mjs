@@ -1,12 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { spawnSync } from "node:child_process";
 import { PassThrough, Writable } from "node:stream";
 import { readFile, realpath } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { containerContract, harnessInputs, installInputs, parseIdentity, validateIdentity, validateMapping, validateImage, dockerEnvironment, containerEnvironment, createArguments, validateContainerInspect, parseControl, validateTerminal, validateNativeIdentity, parseImageBuildReceipt, parseContainerReceipt, parseMounts, validateMountFreshness, validateMounts, validateMetadataMounts, validateChildStatus, validateTarget, cgroupPath, validateLimits, attachContainer, processEvidence, retiredCgroup, raiseContainerFailures, validateContainerDiagnostic, emitContainerFailure } from "../scripts/edge-proof-container.mjs";
 import { frozenGitEnvironment, validateGitExecutable, frozenSource } from "../scripts/edge-proof-build.mjs";
 import { edgeProof } from "../scripts/edge-proof-profile.mjs";
+import { launchCli, createContainerDiagnostics } from "../scripts/edge-proof.mjs";
 
 const hex = "a".repeat(64), other = "b".repeat(64), imageId = "sha256:" + hex;
 const identity = { uid: [501, 501, 501, 501], gid: [20, 20, 20, 20], groups: [20, 30] };
@@ -233,4 +235,105 @@ test("automatic mount admission rejects foreign writable filesystems, roots, dev
   // Docker /dev is executable and permits devices; readonly directory masks
   // need not inherit /dev's flags. Neither exception admits an arbitrary fs.
   assert.equal(mounts().find(row => row.target === "/dev").options.includes("noexec"), false);
+});
+
+function cliOptions(run, extra = {}) {
+  const output = [], stderr = [], exits = [], events = new EventEmitter();
+  return { output, stderr, exits, events, run, writer: line => output.push(line), errorWriter: line => stderr.push(line), setExit: code => exits.push(code), ...extra };
+}
+test("CLI original execution, serialization and error ownership preserve undefined and independent reporting failures", async () => {
+  let calls = 0;
+  const ok = cliOptions(async () => { calls++; return { ok: true }; });
+  const success = launchCli(["container-ci"], ok); await success.completion;
+  assert.equal(calls, 1); assert.deepEqual(ok.output, ['{"ok":true}\n']); assert.deepEqual(ok.exits, []); assert.equal(ok.events.listenerCount("beforeExit"), 0);
+  for (const reason of [new Error("private fixture error"), undefined]) {
+    const options = cliOptions(async () => { throw reason; }), state = launchCli(["container-ci"], options);
+    await assert.rejects(state.completion, error => error === reason);
+    assert.deepEqual(state.errors, [reason]); assert.deepEqual(options.exits, [1]); assert.equal(options.events.listenerCount("beforeExit"), 0);
+    assert.ok(state.records.some(row => row.phase === "entry" && row.state === "rejected" && row.defined === (reason !== undefined)));
+    assert.ok(options.output.every(line => line.startsWith("::error title=Edge container boundary::") && !line.includes("private fixture error")));
+  }
+  const serializationReason = new Error("private serialization");
+  const serial = cliOptions(async () => ({ toJSON() { throw serializationReason; } }));
+  const serialized = launchCli(["container-ci"], serial); await assert.rejects(serialized.completion, error => error === serializationReason);
+  assert.ok(serialized.records.some(row => row.phase === "serialization" && row.state === "rejected")); assert.ok(!serial.output.join("").includes("private serialization"));
+  const reportingReason = new Error("private stderr refusal");
+  const failed = cliOptions(async () => { throw undefined; }, { writer() { throw undefined; }, errorWriter() { throw reportingReason; } });
+  const state = launchCli(["container-ci"], failed);
+  await assert.rejects(state.completion, error => error instanceof AggregateError && error.errors.length === 3 && error.errors[0] === undefined && error.errors[1] === undefined && error.errors[2] === reportingReason);
+  assert.equal(state.errors.length, 3); assert.equal(state.records.filter(row => row.phase === "reporting" && row.state === "rejected").length, 2);
+  const old = cliOptions(async () => { throw undefined; }); const legacy = launchCli(["offline-ci"], old);
+  await assert.rejects(legacy.completion, error => error === undefined); assert.deepEqual(old.output, []); assert.equal(old.stderr.length, 1);
+});
+test("CLI pending sentinel owns one listener, cannot emit success later, and never resolves original work", async () => {
+  let resolveOriginal, calls = 0;
+  const original = new Promise(resolve => { resolveOriginal = resolve; });
+  const options = cliOptions(() => { calls++; return original; }), state = launchCli(["container-ci"], options);
+  options.events.emit("beforeExit"); options.events.emit("beforeExit");
+  assert.deepEqual(options.exits, [13]); assert.equal(calls, 1); assert.equal(options.events.listenerCount("beforeExit"), 0);
+  assert.ok(state.records.some(row => row.phase === "pending" && row.state === "rejected"));
+  const count = options.output.length; resolveOriginal({ forbiddenSuccess: true });
+  await assert.rejects(state.completion); assert.equal(options.output.length, count); assert.ok(!options.output.join("").includes("forbiddenSuccess"));
+});
+test("CLI shared startup diagnostics reject unknown phases before operations and share one annotation budget", async () => {
+  const report = createContainerDiagnostics(); let invoked = false;
+  assert.throws(() => report.sync("foreign", () => { invoked = true; }));
+  await assert.rejects(report.step("foreign", () => { invoked = true; })); assert.equal(invoked, false);
+  const options = cliOptions(async (args, shared) => {
+    for (const phase of ["module_import", "dispatch", "host_runtime", "identity", "parent_namespaces", "cwd", "temp", "environment", "docker_executable"]) shared.sync(phase, () => {});
+    return shared.step("daemon_socket", () => { throw undefined; });
+  });
+  const state = launchCli(["container-ci"], options); await assert.rejects(state.completion, error => error === undefined);
+  assert.equal(options.output.length, 10); assert.ok(options.output.every(line => line.startsWith("::error") && Buffer.byteLength(line) <= 768)); assert.ok(Buffer.byteLength(options.output.join("")) <= 8192);
+  assert.match(options.output[0], /"phase":"daemon_socket","state":"rejected","defined":false/); assert.match(options.output.at(-1), /"phase":"overflow"/);
+});
+async function pureCliModuleSources() {
+  const entry = await readFile(new URL("../scripts/edge-proof.mjs", import.meta.url), "utf8"), container = await readFile(new URL("../scripts/edge-proof-container.mjs", import.meta.url), "utf8");
+  const backImport = container.split("\n").find(line => line.startsWith("import { runOwnedProcess,"));
+  const names = backImport.split("{", 2)[1].split("}", 1)[0].trim().split(", ");
+  const tail = entry.slice(entry.indexOf("const containerDiagnosticPhases ="));
+  assert.ok(tail.includes('launchCli(process.argv.slice(2));'));
+  const pureHelpers = names.filter(name => !["createContainerDiagnostics", "emitContainerFailure"].includes(name)).map(name => `export const ${name} = undefined;`).join("\n");
+  // Actual dispatch and CLI functions, including their back-import. Only the
+  // container operation is replaced by a closed, inert return value.
+  const prefix = 'import { pathToFileURL } from "node:url"; import { resolve } from "node:path";\n' + pureHelpers + '\nconst refuse = code => { throw new Error(code); };\n' + entry.slice(entry.indexOf("function ownData("), entry.indexOf("export function validatePackagingDiagnostic("));
+  const operation = 'let calls = 0; const harmless = () => ({ dispatchCalls: ++calls }); const containerCi = harmless, containerInit = harmless, containerBuild = harmless, containerPrepare = harmless; const fail = () => { throw undefined; };\n';
+  return { entry: prefix + tail, container: backImport + "\n" + operation + container.slice(container.indexOf("export async function containerMain(")) };
+}
+function runPureCli(sources, { old = false, imported = false, pending = false, moduleFailure = false } = {}) {
+  let entry = sources.entry;
+  if (old) entry = entry.replace('launchCli(process.argv.slice(2));', 'try { console.log(JSON.stringify(await main(process.argv.slice(2)))); } catch { process.exitCode = 1; }');
+  const container = pending ? sources.container.replace('let calls = 0; const harmless = () => ({ dispatchCalls: ++calls });', 'const harmless = () => new Promise(() => {});') : sources.container;
+  const modules = { 'file:///__edge_cli__/edge-proof.mjs': entry, 'file:///__edge_cli__/edge-proof-container.mjs': moduleFailure ? 'throw undefined;' : container };
+  if (imported) modules['file:///__edge_cli__/importer.mjs'] = 'import "./edge-proof.mjs"; process.stdout.write("imported-only\\n");';
+  const hook = 'import { registerHooks } from "node:module"; const modules=' + JSON.stringify(modules) + '; registerHooks({resolve(s,c,n){const u=s.startsWith("/")?"file://"+s:s.startsWith("./")&&c.parentURL?.startsWith("file:///__edge_cli__/")?new URL(s,c.parentURL).href:s;return Object.hasOwn(modules,u)?{url:u,shortCircuit:true}:n(s,c);},load(u,c,n){return Object.hasOwn(modules,u)?{format:"module",source:modules[u],shortCircuit:true}:n(u,c);}});';
+  return spawnSync(process.execPath, ['--import', 'data:text/javascript;base64,' + Buffer.from(hook).toString('base64'), imported ? '/__edge_cli__/importer.mjs' : '/__edge_cli__/edge-proof.mjs', 'container-ci'], { env: { PATH: '/usr/bin:/bin', NO_COLOR: '1' }, encoding: 'utf8', timeout: 5000, maxBuffer: 16384 });
+}
+test("CLI actual extracted module-loader cycle fails old TLA and dispatches exactly once after repair", async () => {
+  const sources = await pureCliModuleSources();
+  const old = runPureCli(sources, { old: true }); assert.equal(old.error, undefined); assert.equal(old.status, 13); assert.equal(old.stdout, "");
+  const current = runPureCli(sources); assert.equal(current.error, undefined); assert.equal(current.status, 0); assert.equal(current.signal, null); assert.deepEqual(JSON.parse(current.stdout), { dispatchCalls: 1 }); assert.equal(current.stderr, "");
+  const imported = runPureCli(sources, { imported: true }); assert.equal(imported.error, undefined); assert.equal(imported.status, 0); assert.equal(imported.stdout, "imported-only\n"); assert.equal(imported.stderr, "");
+  const pending = runPureCli(sources, { pending: true }); assert.equal(pending.error, undefined); assert.equal(pending.status, 13); assert.match(pending.stdout, /"phase":"pending","state":"rejected"/); assert.doesNotMatch(pending.stdout, /dispatchCalls/);
+  const failedImport = runPureCli(sources, { moduleFailure: true }); assert.equal(failedImport.error, undefined); assert.equal(failedImport.status, 1); assert.match(failedImport.stdout, /"phase":"module_import","state":"rejected","defined":false/);
+});
+
+test("CLI actual extracted host startup records each boundary before the original operation", async () => {
+  const source = await readFile(new URL("../scripts/edge-proof-container.mjs", import.meta.url), "utf8");
+  const prefix = source.slice(source.indexOf("async function hostContainerRun(report) {"), source.indexOf("  const run = async (args, timeoutMs = 30000) => {", source.indexOf("async function hostContainerRun(report) {")));
+  const names = ["process", "check", "readParentIdentity", "namespaceIdentity", "realpath", "mkdtemp", "join", "tmpdir", "dockerEnvironment", "mkdir", "fileIdentity", "stat"];
+  const create = new Function(...names, `return ${prefix}return { identity, parentNamespaces, cwd, root, env, docker }; };`);
+  for (const failedPhase of [null, "parent_namespaces", "temp", "environment", "docker_executable", "daemon_socket"]) {
+    const report = createContainerDiagnostics(), seen = [];
+    const original = (phase, value) => (...args) => { assert.equal(report.records.at(-1).phase, phase); assert.equal(report.records.at(-1).state, "entered"); seen.push(phase); if (phase === failedPhase) throw undefined; return typeof value === "function" ? value(...args) : value; };
+    const startup = create({ platform: "linux", arch: "x64", version: "v24.22.1", versions: { modules: "137" }, cwd: () => "/synthetic" }, (value) => assert.ok(value), original("identity", identity), original("parent_namespaces", {}), path => original(path === "/synthetic" ? "cwd" : "daemon_socket", path)(), original("temp", "/synthetic/task"), (...parts) => parts.join("/"), () => "/synthetic", original("environment", { HOME: "/synthetic/home", DOCKER_CONFIG: "/synthetic/config" }), original("environment", undefined), original("docker_executable", { path: "/usr/bin/docker" }), original("daemon_socket", { isSocket: () => true }));
+    if (failedPhase) {
+      await assert.rejects(startup(report), error => error === undefined);
+      assert.equal(report.records.at(-1).phase, failedPhase); assert.equal(report.records.at(-1).state, "rejected"); assert.equal(report.records.at(-1).defined, false);
+      assert.equal(seen.at(-1), failedPhase);
+    } else {
+      const result = await startup(report); assert.equal(result.docker, "/usr/bin/docker");
+      assert.deepEqual(report.records.filter(row => row.state === "entered").map(row => row.phase), ["host_runtime", "identity", "parent_namespaces", "cwd", "temp", "environment", "docker_executable", "daemon_socket"]);
+    }
+  }
 });

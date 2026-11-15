@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { deflateSync } from "node:zlib";
 import { createRequire } from "node:module";
 import { edgeProof } from "./edge-proof-profile.mjs";
-import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics } from "./edge-proof.mjs";
+import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure } from "./edge-proof.mjs";
+export { validateContainerDiagnostic, emitContainerFailure } from "./edge-proof.mjs";
 
 export const containerContract = Object.freeze({
   version: 2,
@@ -38,8 +39,6 @@ const hashPattern = /^[a-f0-9]{64}$/;
 const cidPattern = /^[a-f0-9]{64}$/;
 const imagePattern = /^sha256:[a-f0-9]{64}$/;
 const shaPattern = /^[a-f0-9]{40}$/;
-const phases = ["identity", "context", "daemon", "base", "image_build", "image", "create", "attach", "ready", "admission", "permit", "wait", "receipt", "terminal", "cgroup", "retirement", "remove", "final", "overflow"];
-const signalNames = [null, "SIGINT", "SIGTERM", "SIGKILL", "SIGABRT", "SIGSEGV", "SIGPIPE", "SIGBUS", "SIGSYS"];
 const protocol = "EDGE_CONTAINER_V2 ";
 const own = (value, key) => {
   check(value && typeof value === "object", "data-object");
@@ -51,32 +50,6 @@ const exactKeys = (value, keys) => check(same(Object.getOwnPropertyNames(value).
 export function raiseContainerFailures(errors) {
   if (errors.length === 1) throw errors[0];
   if (errors.length) throw new AggregateError(errors, "edge-container: independent failures");
-}
-export function validateContainerDiagnostic(value) {
-  exactKeys(value, ["v", "phase", "state", "defined", "exit", "signal"]);
-  const row = Object.fromEntries(["v", "phase", "state", "defined", "exit", "signal"].map(key => [key, own(value, key)]));
-  check(row.v === 2 && phases.includes(row.phase) && ["entered", "fulfilled", "rejected"].includes(row.state), "diagnostic-enum");
-  check([null, true, false].includes(row.defined) && signalNames.includes(row.signal) && (row.exit === null || Number.isInteger(row.exit) && row.exit >= 0 && row.exit <= 255), "diagnostic-outcome");
-  return row;
-}
-export function emitContainerFailure(records, writer = line => process.stdout.write(line)) {
-  const rows = records.map(validateContainerDiagnostic), unique = new Map();
-  for (const row of [...rows.filter(row => row.state === "rejected"), ...rows.toReversed()]) if (!unique.has(row.phase)) unique.set(row.phase, row);
-  const selected = [...unique.values()].slice(0, 9);
-  if (unique.size > 9) selected.push({ v: 2, phase: "overflow", state: "rejected", defined: null, exit: Math.min(255, unique.size - 9), signal: null });
-  let bytes = 0;
-  for (const row of selected) {
-    const command = `::error title=Edge container boundary::${JSON.stringify(row).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A")}\n`;
-    bytes += Buffer.byteLength(command); check(Buffer.byteLength(command) <= 768 && bytes <= 8192, "diagnostic-capacity"); writer(command);
-  }
-}
-function reporter() {
-  const records = [];
-  return { records, async step(phase, fn) {
-    records.push({ v: 2, phase, state: "entered", defined: null, exit: null, signal: null });
-    try { const result = await fn(); records.push({ v: 2, phase, state: "fulfilled", defined: null, exit: null, signal: null }); return result; }
-    catch (error) { records.push({ v: 2, phase, state: "rejected", defined: error !== undefined, exit: null, signal: null }); throw error; }
-  } };
 }
 
 const number = text => { check(typeof text === "string" && /^(0|[1-9]\d*)$/.test(text) && Number.isSafeInteger(Number(text)), "canonical-number"); return Number(text); };
@@ -556,19 +529,19 @@ async function containerPrepare(args) {
   process.stdout.write("EDGE_IMAGE_V2 " + JSON.stringify(native) + "\n"); return { prepared: true };
 }
 
-async function containerCi() {
-  const report = reporter(), errors = []; let value;
+async function containerCi(sharedReport) {
+  const report = sharedReport ?? createContainerDiagnostics(), errors = []; let value;
   try { value = await hostContainerRun(report); } catch (error) { errors.push(error); }
-  if (errors.length) try { emitContainerFailure(report.records); } catch (error) { errors.push(error); }
+  if (errors.length && !sharedReport) try { emitContainerFailure(report.records); } catch (error) { errors.push(error); }
   raiseContainerFailures(errors); return value;
 }
 async function hostContainerRun(report) {
-  check(process.platform === "linux" && process.arch === "x64" && process.version === "v24.22.1" && process.versions.modules === "137", "host-runtime");
-  const identity = await report.step("identity", readParentIdentity), parentNamespaces = await namespaceIdentity();
-  const cwd = await realpath(process.cwd()), root = await mkdtemp(join(tmpdir(), "edge-container-"));
-  const env = dockerEnvironment(root); await mkdir(env.HOME, { mode: 0o700 }); await mkdir(env.DOCKER_CONFIG, { mode: 0o700 });
-  const docker = (await fileIdentity("/usr/bin/docker")).path;
-  check((await stat("/var/run/docker.sock")).isSocket() && ["/run/docker.sock", "/var/run/docker.sock"].includes(await realpath("/var/run/docker.sock")), "local-daemon-socket");
+  report.sync("host_runtime", () => check(process.platform === "linux" && process.arch === "x64" && process.version === "v24.22.1" && process.versions.modules === "137", "host-runtime"));
+  const identity = await report.step("identity", readParentIdentity), parentNamespaces = await report.step("parent_namespaces", namespaceIdentity);
+  const cwd = await report.step("cwd", () => realpath(process.cwd())), root = await report.step("temp", () => mkdtemp(join(tmpdir(), "edge-container-")));
+  const env = await report.step("environment", async () => { const value = dockerEnvironment(root); await mkdir(value.HOME, { mode: 0o700 }); await mkdir(value.DOCKER_CONFIG, { mode: 0o700 }); return value; });
+  const docker = (await report.step("docker_executable", () => fileIdentity("/usr/bin/docker"))).path;
+  await report.step("daemon_socket", async () => check((await stat("/var/run/docker.sock")).isSocket() && ["/run/docker.sock", "/var/run/docker.sock"].includes(await realpath("/var/run/docker.sock")), "local-daemon-socket"));
   const run = async (args, timeoutMs = 30000) => {
     const result = await runOwnedProcess(docker, ["--host=unix:///var/run/docker.sock", ...args], { cwd: root, env, timeoutMs }); requireProcessSuccess(result); return result;
   };
@@ -672,8 +645,8 @@ async function hostContainerRun(report) {
   await report.step("remove", () => run(["image", "rm", imageId]));
   return { ...receipt, image: imageId, base: containerContract.base, contextHash: context.contextHash, dockerfileHash: context.dockerfileHash, disposition, imageDisposition: "removed-owned-derived", runtime: "qualified-in-this-execution" };
 }
-export async function containerMain(action, args) {
-  if (action === "container-ci" && args.length === 0) return containerCi();
+export async function containerMain(action, args, report) {
+  if (action === "container-ci" && args.length === 0) return containerCi(report);
   if (action === "container-prepare") return containerPrepare(args);
   if (action === "container-init") return containerInit(args);
   if (action === "container-build") return containerBuild(args);

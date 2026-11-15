@@ -518,11 +518,79 @@ async function offlineCi(report) {
   const receipt = report.sync("child_report", () => validatePackagingReceipt(JSON.parse(output)));
   return receipt;
 }
-export async function main(argv) {
+const containerDiagnosticPhases = ["entry", "module_import", "dispatch", "serialization", "reporting", "pending", "host_runtime", "parent_namespaces", "cwd", "temp", "environment", "docker_executable", "daemon_socket", "identity", "context", "daemon", "base", "image_build", "image", "create", "attach", "ready", "admission", "permit", "wait", "receipt", "terminal", "cgroup", "retirement", "remove", "final", "overflow"];
+const containerDiagnosticSignals = [null, "SIGINT", "SIGTERM", "SIGKILL", "SIGABRT", "SIGSEGV", "SIGPIPE", "SIGBUS", "SIGSYS"];
+export function validateContainerDiagnostic(value) {
+  if (!value || typeof value !== "object" || Object.getOwnPropertyNames(value).sort().join() !== ["v", "phase", "state", "defined", "exit", "signal"].sort().join()) refuse("container-diagnostic-keys");
+  const row = Object.fromEntries(["v", "phase", "state", "defined", "exit", "signal"].map(key => [key, ownData(value, key)]));
+  if (row.v !== 2 || !containerDiagnosticPhases.includes(row.phase) || !["entered", "fulfilled", "rejected"].includes(row.state)) refuse("container-diagnostic-enum");
+  if (![null, true, false].includes(row.defined) || !containerDiagnosticSignals.includes(row.signal) || !(row.exit === null || Number.isInteger(row.exit) && row.exit >= 0 && row.exit <= 255)) refuse("container-diagnostic-outcome");
+  return row;
+}
+export function emitContainerFailure(records, writer = line => process.stdout.write(line)) {
+  const rows = records.map(validateContainerDiagnostic), unique = new Map();
+  for (const row of [...rows.filter(row => row.state === "rejected"), ...rows.toReversed()]) if (!unique.has(row.phase)) unique.set(row.phase, row);
+  const selected = [...unique.values()].slice(0, 9);
+  if (unique.size > 9) selected.push({ v: 2, phase: "overflow", state: "rejected", defined: null, exit: Math.min(255, unique.size - 9), signal: null });
+  let bytes = 0;
+  for (const row of selected) {
+    const command = `::error title=Edge container boundary::${JSON.stringify(row).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A")}\n`;
+    bytes += Buffer.byteLength(command); if (Buffer.byteLength(command) > 768 || bytes > 8192) refuse("container-diagnostic-capacity"); writer(command);
+  }
+}
+export function createContainerDiagnostics() {
+  const records = [];
+  const mark = (phase, state, reason) => records.push(validateContainerDiagnostic({ v: 2, phase, state, defined: state === "rejected" ? reason !== undefined : null, exit: null, signal: null }));
+  return { records, mark,
+    sync(phase, operation) { mark(phase, "entered"); try { const value = operation(); mark(phase, "fulfilled"); return value; } catch (error) { mark(phase, "rejected", error); throw error; } },
+    async step(phase, operation) { mark(phase, "entered"); try { const value = await operation(); mark(phase, "fulfilled"); return value; } catch (error) { mark(phase, "rejected", error); throw error; } },
+  };
+}
+export function launchCli(argv, { run = main, writer = line => process.stdout.write(line), errorWriter = line => process.stderr.write(line), events = process, setExit = code => { process.exitCode = code; } } = {}) {
+  const report = createContainerDiagnostics(), errors = [];
+  const containerAction = ["container-ci", "container-init", "container-build", "container-prepare"].includes(argv[0]);
+  let pending = true, emitted = false;
+  const failure = code => {
+    setExit(code);
+    if (emitted) return;
+    emitted = true;
+    // Existing non-container commands retain their own diagnostic protocol.
+    if (containerAction) try { emitContainerFailure(report.records, writer); } catch (error) { errors.push(error); report.mark("reporting", "rejected", error); }
+    try { errorWriter("edge-proof: offline preparation refused; no cloud action attempted\n"); } catch (error) { errors.push(error); report.mark("reporting", "rejected", error); }
+  };
+  const beforeExit = () => {
+    if (!pending) return;
+    const error = new Error("edge-proof: original CLI work unresolved");
+    errors.push(error); report.mark("pending", "rejected", error);
+    events.removeListener("beforeExit", beforeExit);
+    failure(13);
+  };
+  events.on("beforeExit", beforeExit);
+  // Do not top-level-await this promise: container dispatch dynamically imports
+  // a module that statically imports these exports. Keep rejection ownership,
+  // and fail closed if Node would exit with original work still unresolved.
+  const completion = (async () => {
+    try {
+      const value = await report.step("entry", () => run(argv, report));
+      if (!errors.length) report.sync("serialization", () => writer(`${JSON.stringify(value)}\n`));
+    } catch (error) { errors.push(error); }
+    finally { pending = false; events.removeListener("beforeExit", beforeExit); }
+    if (errors.length) {
+      failure(1);
+      if (errors.length === 1) throw errors[0];
+      throw new AggregateError(errors, "edge-proof: CLI and reporting failures");
+    }
+  })();
+  // The CLI owns exit status; callers/tests may still inspect the exact failures.
+  void completion.catch(() => {});
+  return { completion, errors, records: report.records };
+}
+export async function main(argv, report) {
   const [action = "plan", ...args] = argv;
   if (["container-ci", "container-init", "container-build", "container-prepare"].includes(action)) {
-    const { containerMain } = await import("./edge-proof-container.mjs");
-    return containerMain(action, args);
+    const load = () => import("./edge-proof-container.mjs");
+    const { containerMain } = report ? await report.step("module_import", load) : await load();
+    return report ? report.step("dispatch", () => containerMain(action, args, report)) : containerMain(action, args);
   }
   if (action === "offline-ci" && args.length === 0) return runPackagingBoundary("parent", offlineCi);
   if (action === "offline-child" && args.length === 3) return runPackagingBoundary("child", report => offlineChild(args[0], args[1], JSON.parse(args[2]), report), { writer: line => process.stdout.write(line) });
@@ -556,6 +624,5 @@ export async function main(argv) {
   return { built: true, sourceSha: receipt.sourceSha, sourceTree: receipt.sourceTree, sourceFiles: receipt.sourceFiles.length, cloud: "UNRUN", sdk: "UNRUN" };
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  try { console.log(JSON.stringify(await main(process.argv.slice(2)))); }
-  catch { console.error("edge-proof: offline preparation refused; no cloud action attempted"); process.exitCode = 1; }
+  launchCli(process.argv.slice(2));
 }
