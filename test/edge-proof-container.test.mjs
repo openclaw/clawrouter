@@ -2814,18 +2814,19 @@ test("receipt associated schemas preserve all legacy branches and reject contrad
   createAttachProjection(capture.h.attached,{cid:hex,nonce:hex,contextHash:other},{internal:r=>records.push(r)})(capture.h.attached.result);
   const lines=[];emitContainerFailure(records,line=>lines.push(line));assert.equal(lines.length,10);assert.ok(lines.every(line=>Buffer.byteLength(line)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);receiptPackets.push(lines.map(line=>JSON.parse(line.slice(line.indexOf("::{")+2))));
 });
-async function censusActualProcess(monitorRows,finalRows,{stdout="",reason,failFinal=false,held=false,fault=false,expectedStops=0,supplied}={}) {
+async function censusActualProcess(monitorRows,finalRows,{stdout="",reason,failFinal=false,held=false,fault=false,expectedStops=0,hasChildError=false,childError,failMonitor=false,monitorReason,supplied}={}) {
   let phase=0,release;const gate=new Promise(resolve=>{release=resolve;}),reads=[],samples=[];
   const f=await ownedLedgerFactory({readdir:async path=>{assert.equal(path,"/proc");const rows=phase?finalRows:monitorRows;return["1","self",...rows.map(r=>String(r.pid))];},readFile:async(path,encoding)=>{
-    assert.equal(encoding,"utf8");const at=phase,rows=at?finalRows:monitorRows;reads.push([at,path]);if(at&&failFinal)throw reason;
+    assert.equal(encoding,"utf8");const at=phase,rows=at?finalRows:monitorRows;reads.push([at,path]);if(at&&failFinal)throw reason;if(!at&&failMonitor)throw monitorReason;
     const row=rows.find(r=>path===`/proc/${r.pid}/stat`);assert.ok(row);const fields=Array(20).fill("0");fields[0]=row.state;fields[1]=String(row.parent);fields[2]=String(row.group);fields[19]=row.start;
     const text=row.pid+" (inert) "+fields.join(" ");if(!at&&held)await gate;return text;
   }},supplied),rec=supplied?.options.recorder??f.createOwnedProcessLedger();
   if(fault)rec.censusRow=()=>{throw undefined;};
   const sample=()=>{const p=f.privateProcesses(rec);samples.push(p);return p;};
   const promise=f.runOwnedProcess(f.command,f.args,{cwd:"/task",env:f.environment,signalSource:f.signals,recorder:rec,sample});let settled=false;promise.then(()=>{settled=true;});
+  if(hasChildError)f.child.emit("error",childError);
   f.intervals[0].fn();
-  if(!held)await samples[0];
+  if(!held)await samples[0].catch(()=>{});
   f.child.stdout.emit("data",Buffer.from(stdout));f.child.emit("close",0,null);phase=1;
   if(held){await Promise.resolve();assert.equal(samples.length,1);assert.equal(settled,false);release();await samples[0];const join=f.timers.find(t=>t.ms===1);assert.ok(join);join.fn();}
   const result=await promise;assert.equal(samples.length,2);assert.equal(f.calls.filter(r=>r[0]==="spawn").length,1);assert.equal(f.calls.filter(r=>r[0]==="kill").length,expectedStops);
@@ -2877,6 +2878,71 @@ test("final census failed monitor history cannot contradict its original trace i
     const frame=structuredClone(close);frame.detail[7][8][0]+=bits;assert.throws(()=>validatePackagingDiagnostic(frame));
   }
 });
+async function censusTraceCase(monitorRows,finalRows,options={}) {
+  let actual,calls=0;
+  const made=await receiptActualProducer("wrangler_input",false,{diagnostics:true,ownedProcess:async(command,args,provided,stdout)=>{
+    calls++;actual=await censusActualProcess(monitorRows,finalRows,{...options,stdout,supplied:{command,args,options:provided}});return actual.result;
+  }});
+  assert.equal(calls,1);assert.equal(made.failed,true);
+  const wire=await lifecyclePacket(made,frames=>frames,"census");
+  const frames=made.frames.map(line=>JSON.parse(line.slice("EDGE_PACKAGING_V1 ".length))).filter(r=>r.v===4&&r.phase==="build_a_close");
+  assert.equal(frames.length,1);assert.deepEqual(wire.detail[10],actual.result.ownedCensus);assert.deepEqual(wire.detail[8],actual.result.ownedTrace);
+  return{...actual,wire,frame:frames[0]};
+}
+const rejectCensusTrace = (original,mutate) => {
+  const wire=structuredClone(original.wire),frame=structuredClone(original.frame);mutate(wire.detail[10]);mutate(frame.detail[7]);
+  assert.throws(()=>validatePackagingDiagnostic(frame));assert.throws(()=>validateContainerDiagnostic(wire));
+  assert.throws(()=>emitContainerFailure([wire],()=>assert.fail("contradictory census emitted")));
+};
+test("final census trace class observes child error before later monitor stop without trusted history",async()=>{
+  for(const childError of [undefined,new Error("inert child")]){
+    const f=await censusTraceCase([censusRow()],[censusRow()],{hasChildError:true,childError,failMonitor:true,monitorReason:undefined,expectedStops:1});
+    assert.equal(f.result.errors.length,2);assert.equal(f.result.errors[0],childError);assert.equal(f.result.errors[1],undefined);
+    assert.deepEqual(f.result.ownedTrace[1],[8,0,0,0,0,0,childError!==undefined]);assert.equal(f.result.ownedTrace[2][5]&1,1);
+    assert.deepEqual(f.calls.filter(r=>r[0]==="kill"),[["kill",-12,"SIGTERM"]]);assert.equal(f.reads.length,2);assert.equal(f.samples.length,2);
+    assert.deepEqual(censusDecode(f.result.ownedCensus[8][0]).slice(1),[0,1,1,0,0,0]);assert.throws(()=>f.requireProcessSuccess(f.result));
+    for(const history of [1,2,3])rejectCensusTrace(f,t=>{t[8][0]+=history*16+(history===1?2048+8192+32768:0);});
+  }
+});
+test("final census trace class observer faults exclude even ambiguous known counts and rows",async()=>{
+  const rows=[censusRow(),censusRow()],f=await censusTraceCase([],rows,{fault:true});
+  assert.equal(f.result.errors.length,0);assert.equal(f.result.remaining.length,2);assert.equal(f.result.observerErrors.length,2);assert.ok(f.result.observerErrors.every(e=>e===undefined));
+  assert.equal(f.result.ownedCensus[3],null);assert.equal(f.result.ownedCensus[9],3);assert.equal(f.result.ownedTrace[3][0],2);
+  const forged=[1,1,7,2,2,0,0,[0,2,0,0,0,0,0,0,0,0],[322,322],0];
+  rejectCensusTrace(f,t=>{t.splice(0,t.length,...structuredClone(forged));});
+  for(const availability of [0,3]){
+    const wire=structuredClone(f.wire),frame=structuredClone(f.frame);wire.detail[10][9]=availability;frame.detail[7][9]=availability;
+    validateContainerDiagnostic(wire);validatePackagingDiagnostic(frame);
+    for(const faults of [[65535,65535,3],[65535,0,1]]){wire.detail[8][3]=faults;frame.detail[5][3]=faults;validateContainerDiagnostic(wire);validatePackagingDiagnostic(frame);}
+  }
+  const ambiguous=await censusTraceCase([],rows);assert.equal(ambiguous.result.ownedCensus[9],0);assert.equal(ambiguous.result.ownedCensus[3],2);assert.equal(ambiguous.result.ownedTrace[3][0],0);
+});
+test("final census trace class final rejection preserves exact definedness before unavailable return",async()=>{
+  for(const reason of [undefined,new Error("inert final")]){
+    const f=await censusTraceCase([],[censusRow()],{failFinal:true,reason});
+    assert.equal(f.result.errors.length,1);assert.equal(f.result.errors[0],reason);assert.equal(f.result.remaining,null);
+    assert.deepEqual(f.result.ownedTrace[1],[9,4,0,0,0,0,reason!==undefined]);assert.equal(f.result.ownedCensus[1],reason===undefined?2:3);
+    assert.equal(f.reads.length,1);assert.equal(f.samples.length,2);assert.equal(f.calls.filter(r=>r[0]==="kill").length,0);
+    rejectCensusTrace(f,t=>{t[1]=reason===undefined?3:2;});rejectCensusTrace(f,t=>{t[1]=1;});
+    rejectCensusTrace(f,t=>{t[9]=3;});
+    const wire=structuredClone(f.wire),frame=structuredClone(f.frame);wire.detail[10][1]=0;frame.detail[7][1]=0;
+    validateContainerDiagnostic(wire);validatePackagingDiagnostic(frame);wire.detail[10]=null;validateContainerDiagnostic(wire);
+    assert.throws(()=>f.requireProcessSuccess(f.result));
+  }
+});
+test("final census trace class earlier failures and unavailable observations do not invent final error identity",async()=>{
+  for(const reason of [undefined,new Error("inert final")]){
+    const childError=reason===undefined?new Error("inert earlier"):undefined;
+    const f=await censusTraceCase([],[censusRow()],{hasChildError:true,childError,failFinal:true,reason});
+    assert.deepEqual(f.result.errors,[childError,reason]);assert.equal(f.result.ownedTrace[1][0],8);assert.equal(f.result.ownedTrace[1][6],childError!==undefined);
+    assert.equal(f.result.ownedCensus[1],reason===undefined?2:3);assert.equal(f.result.ownedTrace[2][5],0);assert.throws(()=>f.requireProcessSuccess(f.result));
+    const wire=structuredClone(f.wire),frame=structuredClone(f.frame);wire.detail[7][6]=1;frame.detail[3]=1;
+    assert.throws(()=>validateContainerDiagnostic(wire));assert.throws(()=>validatePackagingDiagnostic(frame));assert.throws(()=>emitContainerFailure([wire],()=>assert.fail("missing final failure emitted")));
+  }
+  const f=await censusTraceCase([],[censusRow()],{hasChildError:true,childError:undefined});
+  assert.equal(censusDecode(f.result.ownedCensus[8][0])[1],3);assert.equal(f.result.ownedTrace[2][5],0);
+  const absent=structuredClone(f.wire);absent.detail[8]=null;absent.detail[9]=null;absent.detail[10]=[1,0,7,null,0,null,0,null,[],0];validateContainerDiagnostic(absent);
+});
 test("final census actual producer carries V16 atomic group and original nonempty failure in both builders",async()=>{
   for(const role of ["build_a","build_b"])for(const scenario of ["live","zombie","reused","undefined","observer"]){
     let original;const made=await receiptActualProducer("wrangler_input",false,{diagnostics:true,ownedProcess:async(command,args,options,stdout)=>{
@@ -2910,7 +2976,7 @@ test("final census widest canonical packets retain every historical field and al
   const made=await receiptActualProducer("wrangler_input",false,{processResult:truncateActualBuilder}),base=await lifecyclePacket(made);
   base.defined=false;base.parser=[1,2,false,6,1,14,0,16383,8191];base.count="UNKNOWN";base.lifecycle=[1,255,256,14,33,1,0];base.reports=[65535,65535];
   base.builder=[1,1,3,-65535,14,127,65535,65535,Number.MAX_SAFE_INTEGER,hex,Number.MAX_SAFE_INTEGER,other];
-  const trace=[1,[8,0,0,0,0,0,false],[255,255,255,255,255,63,7,5,2,3,2,63,255],[0,0,0]],code=[1,0,0];
+  const trace=[1,[8,0,0,0,0,0,false],[255,255,255,255,255,62,7,5,2,3,2,63,255],[0,0,0]],code=[1,0,0];
   const historical=packReceiptAssociatedDiagnostic(base,trace,code),wire=packReceiptCensusDiagnostic(base,trace,code,census);
   assert.deepEqual(unpackReceiptCensusDiagnostic(wire),historical);assert.deepEqual(receiptView(wire),base);
   const close=packCensusCloseDiagnostic({v:3,role:"child",phase:"build_a_close",outcome:"rejected",defined:true,exit:-65535,signal:receiptBuilderSignals[14],closed:true,timedOut:true,interrupted:true,errors:65535,remaining:65535,trace,code},census);

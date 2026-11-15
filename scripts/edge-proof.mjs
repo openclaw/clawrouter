@@ -1255,6 +1255,11 @@ export function validateFinalCensus(value,remaining,closed,errors,trace) {
   if(outcome?(order!==6+Number(closed)):(order!==0&&order!==6+Number(closed)))refuse("census-order");
   if(!Number.isInteger(projected)||projected<0||projected>2||!Array.isArray(rows)||rows.length!==projected||!Number.isInteger(saturation)||saturation<0||saturation>=2048)refuse("census-counts");
   t[8]=ownedTuple(rows,projected);
+  const first=trace?.[1], monitorFailed=[2,3,4].includes(first?.[0])||Boolean(trace?.[2]?.[5]&1);
+  if(trace?.[3]?.[0]&&(total!==null||projected||omitted!==null||saturation||counts!==null))refuse("census-observer-fault");
+  if(availability===3&&trace?.[3]?.[0]===0)refuse("census-missing-observer-fault");
+  if(first?.[0]===9&&(remaining!==null||outcome!==0&&outcome!==2+Number(first[6])))refuse("census-final-failure");
+  if(outcome>=2&&first&&first[0]!==9&&errors<2)refuse("census-later-final-failure");
   if(outcome!==1 || total===null){
     if(total!==null||projected||omitted!==null||saturation||counts!==null||availability===1||availability===2)refuse("census-unavailable");
     if(outcome>=2&&(remaining!==null||errors<1))refuse("census-original-failure");
@@ -1269,12 +1274,11 @@ export function validateFinalCensus(value,remaining,closed,errors,trace) {
     if(!Number.isInteger(code)||code<0||code>=131072)refuse("census-row");
     const state=code%16,history=(code>>4)&3,parent=(code>>6)&3,group=(code>>8)&7,changes=[(code>>11)&3,(code>>13)&3,(code>>15)&3];
     if(state<1||state>10||group>4||changes.some(n=>n===3)||(history===1?changes.some(n=>n===0):changes.some(n=>n!==0)))refuse("census-row-relations");
-    if([2,3,4].includes(trace?.[1]?.[0])&&history!==0)refuse("census-failed-monitor-history");
+    if(monitorFailed&&history!==0)refuse("census-failed-monitor-history");
     if(availability!==1&&(parent>1||group>2)||availability===0&&history!==0)refuse("census-ambiguous");
     seen[state-1]++;
   }
   if(seen.some((n,i)=>n>counts[i]))refuse("census-row-state-count");
-  if(trace?.[3]?.[0]&&availability!==3&&availability!==0)refuse("census-observer-fault");
   return t;
 }
 export function packCensusCloseDiagnostic(value,census) {
