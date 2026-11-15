@@ -5,11 +5,11 @@ import fsPromises from "node:fs/promises";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { syncBuiltinESMExports } from "node:module";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { runInNewContext } from "node:vm";
-import NativeRunnerReporter, { parseRunnerReport, projectRunnerError, readPrivateFile, reportByteLimit, runnerContract, sha256 } from "./helpers/openclaw-runner-reporter.mjs";
+import NativeRunnerReporter, { parseRunnerReport, projectRunnerError, readPrivateFile, reportByteLimit, runnerContract, sha256, validateBinding } from "./helpers/openclaw-runner-reporter.mjs";
 import { settleRunnerReport, validateRunnerRequest, withCopiedConsumerFixture, withNativeRunnerReport } from "./helpers/openclaw-consumer.mjs";
 
 const reporterPath = fileURLToPath(new URL("./helpers/openclaw-runner-reporter.mjs", import.meta.url));
@@ -274,6 +274,60 @@ test("unqualified fixture bytes reject before child or report-directory acquisit
     runnerReport: { ...request().runnerReport, fixtureSha256: "f".repeat(64) } }), () => { called = true; }));
   assert.equal(called, false);
   assert.deepEqual(readdirSync(h.root).filter(name => name.startsWith(".clawrouter-runner-report-")), []);
+});
+
+test("Qwen runner digest matches the current fixture through the original pre-execution check", async () => {
+  const fixtureUrl = new URL("./fixtures/openclaw-qwen-regions-contract.test.ts", import.meta.url);
+  const fixtureBytes = readFileSync(fixtureUrl);
+  const outer = readFileSync(new URL("./openclaw-qwen-regions.test.mjs", import.meta.url), "utf8");
+  const declared = outer.match(/^const qwenRunnerFixtureSha256 = "([a-f0-9]{64})";$/m)?.[1];
+  const declaredReporter = outer.match(/^const qwenRunnerReporterSha256 = "([a-f0-9]{64})";$/m)?.[1];
+  assert.ok(declared && declaredReporter);
+  assert.equal(outer.split("runnerReport: { expectedInvocations: 1, fixtureSha256: qwenRunnerFixtureSha256, reporterSha256: qwenRunnerReporterSha256, onReport: relay.runnerReport }").length, 2);
+  const helperUrl = new URL("./helpers/openclaw-consumer.mjs", import.meta.url);
+  const helperSource = readFileSync(helperUrl, "utf8");
+  const start = helperSource.indexOf("export async function withNativeRunnerReport(");
+  const end = helperSource.indexOf("\nexport async function withCopiedConsumerFixture(", start);
+  assert.ok(start >= 0 && end > start);
+  const implementation = helperSource.slice(start, end).replace(/^export /, "");
+  assert.equal(implementation.split("import.meta.url").length, 2);
+  const reporterBytes = readFileSync(reporterPath);
+  const stale = "47ef4694ff45c89cac41bcaa1168b6eb26d78cc21a095b9c1999baac2e41a3db";
+  for (const [digest, accepted] of [[stale, false], [declared, true]]) {
+    const files = new Map(), reads = [], effects = [], result = {};
+    const directory = "/fixture-source/.clawrouter-runner-report-owned";
+    const scope = { assert, URL, helperUrl, fileURLToPath, join, resolve, sha256, runnerContract, validateBinding,
+      validateRunnerRequest, settleRunnerReport, parseRunnerReport, reportByteLimit,
+      randomBytes: size => Buffer.alloc(size),
+      async readFile(path) { reads.push(path); assert.ok(path === reporterPath || path === fixtureUrl); return path === reporterPath ? reporterBytes : fixtureBytes; },
+      async mkdtemp(prefix) { effects.push("directory"); assert.equal(prefix, "/fixture-source/.clawrouter-runner-report-"); return directory; },
+      async chmod(path, mode) { effects.push("chmod"); assert.equal(path, directory); assert.equal(mode, 0o700); },
+      async writeFile(path, bytes, options) { effects.push("write"); assert.equal(options.flag, "wx"); files.set(path, bytes); },
+      readPrivateFile(path, limit) { effects.push("collect"); assert.equal(limit, reportByteLimit); assert.ok(files.has(path)); return files.get(path); },
+      async rm(path, options) { effects.push("remove"); assert.equal(path, directory); assert.equal(options.recursive, true); },
+    };
+    // Only import.meta is supplied as data; the original validation and lifecycle body is intact.
+    const run = new Function(...Object.keys(scope), `return (${implementation.replace("import.meta.url", "helperUrl")});`)(...Object.values(scope));
+    const pending = run({ source: "/fixture-source", sourceHead: runnerContract.pin, testPath: runnerContract.target, fixture: fixtureUrl, env: {},
+      runnerReport: { expectedInvocations: 1, fixtureSha256: digest, reporterSha256: declaredReporter,
+        onReport(packet) { effects.push("publish"); assert.equal(packet.complete, true); assert.equal(packet.records[0].binding.fixtureSha256, declared); } } }, async args => {
+      effects.push("execute");
+      assert.deepEqual(args, ["--reporter=default", `--reporter=${join(directory, "reporter.mjs")}`, `--outputFile=${join(directory, "report.jsonl")}`]);
+      const binding = JSON.parse(files.get(join(directory, "plan.json")));
+      assert.equal(sha256(files.get(join(directory, "reporter.mjs"))), declaredReporter);
+      const records = [{ kind: "init", binding, seq: 0 }, { kind: "end", reason: "passed", ready: 0, results: 0, errors: 0, omitted: 0, complete: true, seq: 1 }];
+      files.set(join(directory, "report.jsonl"), Buffer.from(records.map(row => JSON.stringify(row)).join("\n") + "\n"));
+      return result;
+    });
+    if (accepted) {
+      assert.equal(await pending, result); assert.equal(declared, sha256(fixtureBytes));
+      assert.deepEqual(effects, ["directory", "chmod", "write", "write", "execute", "collect", "remove", "publish"]);
+    } else {
+      await assert.rejects(pending, error => error.code === "ERR_ASSERTION" && error.actual === sha256(fixtureBytes) && error.expected === stale);
+      assert.deepEqual(effects, []);
+    }
+    assert.deepEqual(reads, [reporterPath, fixtureUrl]);
+  }
 });
 
 // Patch the built-in operations, not a duplicate cleanup implementation. The

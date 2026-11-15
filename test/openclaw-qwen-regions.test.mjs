@@ -43,7 +43,7 @@ async function finish(body, cleanups) {
 // test reporter. Only closed fixture records leave this boundary.
 const retainedNativeFailures = new WeakMap();
 
-const qwenRunnerFixtureSha256 = "47ef4694ff45c89cac41bcaa1168b6eb26d78cc21a095b9c1999baac2e41a3db";
+const qwenRunnerFixtureSha256 = "a359eea4e4887cb3c133dbc1e1be2b168c6ce892327ab03c6f83c8211e2094d4";
 const qwenRunnerReporterSha256 = "5cd2b7b4ebbe72f1864fd83c695c6ca521e8f382bd2a01e29af83f169f8bc4b3";
 
 // Copy only bounded own data before validation; never invoke toJSON or getters.

@@ -19,6 +19,8 @@
 
 ## Unreleased
 
+- Bind Qwen's native runner report to the current SDK fixture bytes, retaining strict pre-execution digest checks and a fake-I/O regression that rejects stale bindings before any child or report-directory acquisition.
+
 - Qwen regional proof: join original operations and their attached observers to a stable fixed point, bind Worker fetches to the original ingress request, and seal ownership only after independent producer/accounting checks and restoration. All original rejection and retirement assertions remain strict. Reentrant drains share the published join before original promise assimilation.
 
 - Preserve bounded script and Worker failure reports when composing Qwen region coverage with the landed native retirement diagnostics.
