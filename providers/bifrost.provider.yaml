@@ -33,11 +33,22 @@ capabilities:
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
+  - { id: models.list, endpoint: models_list_v1, methods: [GET] }
+  - { id: llm.chat, endpoint: chat_completions_v1, methods: [POST] }
 endpoints:
   models_list: { method: GET, path: /models, requestFormat: openai.models, responseFormat: openai.models, timeoutMs: 30000 }
   chat_completions:
     modelPassthrough: {}
     path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+  models_list_v1: { method: GET, path: /v1/models, upstreamPath: /models, requestFormat: openai.models, responseFormat: openai.models, timeoutMs: 30000 }
+  chat_completions_v1:
+    modelPassthrough: {}
+    path: /v1/chat/completions
+    upstreamPath: /chat/completions
     requestFormat: openai.chat_completions
     responseFormat: openai.chat_completions
     streaming: sse

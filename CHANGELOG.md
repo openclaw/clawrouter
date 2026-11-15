@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Activate Bifrost model discovery and versioned native aliases with original-owner catalog checks; add a pinned registered-client fixture for discovery and opaque-ID streaming.
+
 - Test the registered OpenClaw Featherless catalog against complete Worker scans, original credentials, policy filtering, and SQLite metadata settlement.
 
 - Qualify OpenClaw catalog tests against unmodified native offers and schema-validated manifest configurations, keeping direct Worker transport coverage separate from client discovery.
