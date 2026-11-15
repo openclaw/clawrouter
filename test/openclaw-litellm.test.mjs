@@ -48,7 +48,9 @@ async function withFailureEnvelope(run, proof = diagnostic, write = text => proc
     errors.unshift(error);
     record(() => proof.record("outer", "none", entered ? "cleanup" : "setup", error), "REPORT_INVALID");
   } finally {
-    try { proof.emit(errors.length || retained.some(r => !r.roles) ? retained : [], write); } catch (error) { errors.push(error); }
+    let validated;
+    try { validated = proof.validateEnvelope(retained); } catch (error) { errors.push(error); }
+    try { proof.emit(errors.length || validated.some(r => !r.roles) ? retained : [], write); } catch (error) { errors.push(error); }
     try { proof.flush(write); } catch (error) { errors.push(error); }
   }
   if (errors.length === 1) throw errors[0];
@@ -1134,6 +1136,38 @@ test("role summaries alone emit no error while original undefined failure remain
   const other = litellmDiagnostics(cases.map(r => r.id), nodeTypes.isProxy);
   await assert.rejects(withFailureEnvelope(async ({ emit }) => { emit(roleRecords(other)); throw undefined; }, other, line => lines.push(line)), error => error === undefined);
   assert.equal(reportingDecode(other, lines).filter(r => r.roles).length, 2);
+});
+test("success envelope rejects incomplete conflicting malformed and duplicate-generation role groups", async () => {
+  for (const fault of ["incomplete", "conflicting", "malformed", "duplicate_generation"]) {
+    const proof = litellmDiagnostics(cases.map(r => r.id), nodeTypes.isProxy), roles = roleRecords(proof), lines = [];
+    let records = roles;
+    if (fault === "incomplete") records = [roles[0]];
+    if (fault === "conflicting") records = [...roles, proof.roles({ api: "stream", outcomes: [null, null, null, null] })];
+    if (fault === "malformed") { records = structuredClone(roles); records[0].roles.outcomes[0][3] = 0; }
+    if (fault === "duplicate_generation") { records = structuredClone(roles); records[1].roles.outcomes[0][0] = records[0].roles.outcomes[0][0]; }
+    // a3f's success branch passed [] to emit and silently admitted these inputs.
+    const historical = litellmDiagnostics(cases.map(r => r.id), nodeTypes.isProxy); historical.emit(records.some(r => !r.roles) ? records : [], () => assert.fail("historical role-only path emitted"));
+    await assert.rejects(withFailureEnvelope(async ({ emit }) => emit(records), proof, line => lines.push(line)));
+    assert.ok(reportingDecode(proof, lines).some(r => r.phase === "reporting"));
+  }
+});
+test("success envelope validates complete roles without consuming emission state", async () => {
+  const proof = litellmDiagnostics(cases.map(r => r.id), nodeTypes.isProxy), roles = roleRecords(proof, true), lines = [];
+  await withFailureEnvelope(async ({ emit }) => emit(roles), proof, line => lines.push(line)); assert.deepEqual(lines, []);
+  assert.deepEqual(proof.validateEnvelope(roles), roles);
+  proof.emit(roles, line => lines.push(line)); assert.deepEqual(reportingDecode(proof, lines), roles);
+});
+test("success envelope primary undefined and independent validation failures both survive", async () => {
+  for (const primary of [undefined, {}]) {
+    const proof = litellmDiagnostics(cases.map(r => r.id), nodeTypes.isProxy), roles = roleRecords(proof), lines = [];
+    let observed, caught = false;
+    try { await withFailureEnvelope(async ({ emit }) => { emit([roles[0]]); throw primary; }, proof, line => lines.push(line)); }
+    catch (error) { caught = true; observed = error; }
+    assert.equal(caught, true); assert.ok(observed instanceof AggregateError); assert.equal(observed.errors[0], primary);
+    assert.ok(observed.errors.length >= 2); assert.ok(reportingDecode(proof, lines).some(r => r.phase === "reporting"));
+  }
+  const proof = litellmDiagnostics(cases.map(r => r.id), nodeTypes.isProxy), primary = {};
+  await assert.rejects(withFailureEnvelope(async () => { throw primary; }, { ...proof, validateEnvelope() { throw undefined; } }, () => {}), error => error instanceof AggregateError && error.errors[0] === primary && error.errors[1] === undefined);
 });
 // END product reaction pure comparisons.
 

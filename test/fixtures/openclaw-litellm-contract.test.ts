@@ -693,6 +693,18 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
     const r = validate({ v: 1, layer: "outer", id: "none", role: "unknown", phase: "reporting", kind: error === undefined ? "undefined" : "unknown", count: null, code });
     if (!r) throw new Error("invalid LiteLLM reporting boundary"); return r;
   }
+  // Pure validation: no deduplication, quota, or emission state is consumed.
+  function roleGroup(valid: any[]) {
+    const records = valid.filter(r => r.roles); if (!records.length) return null;
+    const parts = ["streamSimple", "stream"].map(api => [...new Map(records.filter(r => r.roles.api === api).map(r => [JSON.stringify(r), r])).values()]);
+    const generations = parts.flat().flatMap(r => r.roles.outcomes.filter((row: any) => row !== null).map((row: any) => row[0]));
+    if (parts.some(rows => rows.length !== 1) || new Set(generations).size !== generations.length) throw new Error("incomplete LiteLLM role evidence");
+    return parts.map(rows => rows[0]);
+  }
+  function validateEnvelope(records: unknown[]) {
+    const valid = records.map(value => { const r = validate(value); if (!r) throw new Error("invalid LiteLLM diagnostic"); return r; });
+    roleGroup(valid); return valid;
+  }
   function emit(records: unknown[], write: (s: string) => void) {
     const errors: unknown[] = [], valid: any[] = []; let failureCode: string | undefined;
     const failed = (code: string, error: unknown) => { errors.push(error); failureCode ??= code; };
@@ -712,13 +724,8 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
       for (let i = 0; i < 2; i++) selectedGroups[i] ||= parts[0].witness.select[i];
       ordered.push(parts);
     }
-    const roleRecords = valid.filter(r => r.roles);
-    if (roleRecords.length) {
-      const parts = ["streamSimple", "stream"].map(api => [...new Map(roleRecords.filter(r => r.roles.api === api).map(r => [JSON.stringify(r), r])).values()]);
-      const generations = parts.flat().flatMap(r => r.roles.outcomes.filter((row: any) => row !== null).map((row: any) => row[0]));
-      if (parts.some(rows => rows.length !== 1) || new Set(generations).size !== generations.length) { suppressed += roleRecords.length; failed("REPORT_GROUP", new Error("incomplete LiteLLM role evidence")); }
-      else ordered.push(parts.map(rows => rows[0]));
-    }
+    try { const roles = roleGroup(valid); if (roles) ordered.push(roles); }
+    catch (error) { suppressed += valid.filter(r => r.roles).length; failed("REPORT_GROUP", error); }
     ordered.push(...valid.filter(r => r.worker).map(r => [r]), ...valid.filter(r => !r.witness && !r.worker && r.phase === "child_result").map(r => [r]),
       ...valid.filter(r => r.phase === "reporting").map(r => [r]), ...valid.filter(r => !r.witness && !r.worker && !r.roles && !["child_result", "reporting"].includes(r.phase)).map(r => [r]));
     for (const group of ordered) {
@@ -757,7 +764,7 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
     const line = `::error title=LiteLLM typed contract::${JSON.stringify(r)}\n`; const size = new TextEncoder().encode(line).length;
     if (size > 768 || bytes + size > 8192) throw new Error("LiteLLM diagnostic quota"); write(line); bytes += size;
   }
-  return { prefix, own, validate, record, joined, witness, roles, worker, parse, child, json, boundary, emit, flush };
+  return { prefix, own, validate, validateEnvelope, record, joined, witness, roles, worker, parse, child, json, boundary, emit, flush };
 }
 // END shared proof functions.
 
