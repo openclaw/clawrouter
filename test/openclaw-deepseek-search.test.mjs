@@ -58,9 +58,23 @@ async function abortBarrier() {
 }
 
 test("DeepSeek held upstream joins original cancellation before teardown", { timeout: 60_000 }, async () => {
-  const failures = [], reason = new Error("synthetic DeepSeek raw cancellation");
+  const failures = [], cancellationFailures = [], cleanupFailures = [], reportingFailures = [];
+  const reason = new Error("synthetic DeepSeek raw cancellation");
   const caller = new AbortController();
   let barrier, temporary, mf, reader, cancellation, phase = "setup", observed;
+  let cancelAttempted = false, cancelCompletion, cancelResult, cancelObserverFailure, stoppedForObserver = false;
+  const beginCancellation = () => {
+    cancelAttempted = true;
+    cancellation = reader.cancel(reason);
+    // One original subscription, with its outcome retained before the observer
+    // tail can fail. Cleanup joins the same tail without resubscribing.
+    const observer = cancellation.then(
+      value => { cancelResult = { status: "fulfilled", value }; },
+      error => { cancelResult = { status: "rejected", reason: error }; },
+    );
+    cancelCompletion = observer.then(undefined, error => { cancelObserverFailure = { error }; });
+  };
+  const report = write => { try { write(); } catch (error) { reportingFailures.push(error); } };
   let timer;
   const expired = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("bounded DeepSeek ownership probe expired")), 45_000); });
   const bounded = promise => Promise.race([promise, expired]);
@@ -82,31 +96,39 @@ test("DeepSeek held upstream joins original cancellation before teardown", { tim
     assert.deepEqual(barrier.state(), { requests: 1, responseClosed: false, socketClosed: false, teardown: false });
     caller.abort(reason);
     phase = "cancel";
-    cancellation = reader.cancel(reason);
-    const [canceled] = await bounded(Promise.allSettled([cancellation]));
+    beginCancellation();
+    await bounded(cancelCompletion);
+    if (cancelObserverFailure) { stoppedForObserver = true; throw cancelObserverFailure.error; }
+    const canceled = cancelResult;
     reader.releaseLock(); reader = undefined;
     phase = "retirement";
     observed = await bounded(upstream.fetch("https://fixture.example/state").then(response => response.json()));
-    console.log("deepseek-held-ownership", JSON.stringify({ phase, cancellation: { status: canceled.status, originalCallerReason: canceled.status === "rejected" && canceled.reason === reason }, barrier: barrier.state(), calls: observed.map(call => ({ finished: call.finished, abort: call.abort })) }));
+    report(() => console.log("deepseek-held-ownership", JSON.stringify({ phase, cancellation: { status: canceled.status, originalCallerReason: canceled.status === "rejected" && canceled.reason === reason }, barrier: barrier.state(), calls: observed.map(call => ({ finished: call.finished, abort: call.abort })) })));
     assert.equal(observed.length, 1);
     assert.equal(observed[0].finished, true, "original nested fetch must settle before teardown");
     assert.equal(await bounded(fetch(barrier.origin + "/socket-closed").then(response => response.text())), "socket-closed");
     assert.equal(barrier.state().teardown, false);
-  } catch (error) { failures.push(error); }
+  } catch (error) { if (!stoppedForObserver) failures.push(error); }
   finally {
-    clearTimeout(timer);
-    console.log("deepseek-held-cleanup", JSON.stringify({ phase, beforeTeardown: barrier?.state() }));
-    caller.abort(reason);
-    try { await barrier?.close(); } catch (error) { failures.push(error); }
-    if (reader) {
-      try { if (cancellation) await Promise.allSettled([cancellation]); else await reader.cancel(reason); }
-      catch (error) { failures.push(error); }
-      finally { try { reader.releaseLock(); } catch (error) { failures.push(error); } }
+    try { clearTimeout(timer); } catch (error) { cleanupFailures.push(error); }
+    report(() => console.log("deepseek-held-cleanup", JSON.stringify({ phase, beforeTeardown: barrier?.state() })));
+    try { caller.abort(reason); } catch (error) { cleanupFailures.push(error); }
+    try { await barrier?.close(); } catch (error) { cleanupFailures.push(error); }
+    if (reader && !cancelAttempted) {
+      try { beginCancellation(); } catch (error) { cancellationFailures.push(error); }
     }
-    try { await mf?.dispose(); } catch (error) { failures.push(error); }
-    if (temporary !== undefined) try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+    if (cancelCompletion) {
+      try { await cancelCompletion; } catch (error) { cancellationFailures.push(error); }
+      if (cancelResult?.status === "rejected") cancellationFailures.push(cancelResult.reason);
+      if (cancelObserverFailure) cancellationFailures.push(cancelObserverFailure.error);
+    }
+    if (reader) try { reader.releaseLock(); } catch (error) { cleanupFailures.push(error); }
+    try { await mf?.dispose(); } catch (error) { cleanupFailures.push(error); }
+    if (temporary !== undefined) try { await rm(temporary, { recursive: true, force: true }); } catch (error) { cleanupFailures.push(error); }
   }
-  if (failures.length) console.log("deepseek-held-failures", JSON.stringify(failures.map(error => ({ category: error?.name ?? "unknown", originalCallerReason: error === reason }))));
+  failures.push(...cancellationFailures, ...cleanupFailures);
+  if (failures.length || reportingFailures.length) report(() => console.log("deepseek-held-failures", JSON.stringify([...failures, ...reportingFailures].map(error => ({ defined: error !== undefined, originalCallerReason: error === reason })))));
+  failures.push(...reportingFailures);
   if (failures.length === 1) throw failures[0];
   if (failures.length) throw new AggregateError(failures, "DeepSeek cancellation or cleanup failed");
 });
