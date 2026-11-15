@@ -34,8 +34,8 @@ export async function runOpenClawConsumer(t, { source, sourceHead, fixture, env,
       t.diagnostic(`OpenClaw ${sourceHead}; native test wall time ${Math.round(performance.now() - started)}ms\n${result.stdout}`);
       return;
     }
-    const started = performance.now();
     if (privateExec !== undefined) {
+      const started = performance.now();
       const result = await observePrivateExec({ sourceHead, testPath, privateExec },
         () => readCopiedPrivateFixture(clientTest, privateExec.fixtureBytes),
         () => promisify(execFile)("pnpm", ["test", testPath, "--maxWorkers=1"], {
@@ -45,6 +45,7 @@ export async function runOpenClawConsumer(t, { source, sourceHead, fixture, env,
       t.diagnostic(`OpenClaw ${sourceHead}; native test wall time ${Math.round(performance.now() - started)}ms\n${result.stdout}`);
       return;
     }
+    const started = performance.now();
     const result = await promisify(execFile)("pnpm", ["test", testPath, "--maxWorkers=1"], {
       // The native runner compiles its own SDK worker graph on a cold CI host.
       cwd: source, timeout: 240_000, maxBuffer: 2 * 1024 * 1024,

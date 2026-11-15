@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- Preserve the original default OpenClaw consumer launch block alongside the Private-only runner observer, keeping the existing command/options/diagnostic compatibility assertion intact.
+
 - Deliver Private SDK callback and first-failure evidence before teardown, and observe the original E2 runner outcome after verifying the exclusively copied fixture; retain independent reporting and removal failures without changing test acceptance.
 
 - Preserve the first observed Private SDK failure boundary and exact receipt-assertion evidence with bounded producer/accounting availability, without changing original rejection or financial acceptance.
