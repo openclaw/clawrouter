@@ -1,6 +1,6 @@
 # Changelog
 
-- Add an offline, isolated edge-cancellation proof preparation route with frozen-source instrumentation, a pinned-image packaging job with independent host process and cgroup admission, and strict native-client retirement controls. Cloud activation and actual SDK/edge qualification remain separate, explicitly authorized steps.
+- Add an offline, isolated edge-cancellation proof preparation route with frozen-source instrumentation, a pinned-image packaging job with independent host process and cgroup admission, and strict native-client retirement controls. Keep the image build’s pnpm store explicitly outside the sealed source input. Cloud activation and actual SDK/edge qualification remain separate, explicitly authorized steps.
 
 ## Unreleased
 

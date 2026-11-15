@@ -32,7 +32,7 @@ WORKDIR /opt/edge-input
 RUN edge_seq=16; \
     edge_emit() { printf '\n%s%s {"v":1,"context":"%s","nonce":"%s","seq":%s,"stage":"%s","event":"%s","status":%s}\n' 'EDGE_BUILD_' 'STAGE_V1' "$CONTEXT_HASH" "$TASK_NONCE" "$edge_seq" "$1" "$2" "$3"; }; \
     edge_stage() { edge_name=$1; shift; edge_seq=$((edge_seq+1)); edge_emit "$edge_name" entered null || return 70; if "$@"; then edge_status=0; else edge_status=$?; fi; edge_seq=$((edge_seq+1)); if edge_emit "$edge_name" terminal "$edge_status"; then :; elif [ "$edge_status" -eq 0 ]; then return 70; fi; return "$edge_status"; }; \
-    frozen_install() { HOME=/opt/build-home /usr/local/bin/pnpm install --frozen-lockfile; }; \
+    frozen_install() { HOME=/opt/build-home /usr/local/bin/pnpm install --frozen-lockfile --store-dir /opt/build-home/pnpm-store; }; \
     native_prepare() { HOME=/opt/build-home /usr/local/bin/node scripts/edge-proof.mjs container-prepare "$CONTEXT_HASH"; }; \
     edge_stage frozen_install frozen_install \
     && edge_stage native_prepare native_prepare

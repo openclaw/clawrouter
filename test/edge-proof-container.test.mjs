@@ -433,11 +433,23 @@ async function actualStageShells() {
   assert.equal(first.replace("edge_seq=0", "edge_seq=16"), second);
   assert.match(runs[0], /node_version\(\) \{ test "\$\(\/usr\/local\/bin\/node --version\)" = v24\.22\.1; \}/);
   assert.match(runs[0], /pnpm_bootstrap\(\) \{ \/usr\/local\/bin\/npm install --global --ignore-scripts pnpm@11\.28\.4; \}/);
-  assert.match(runs[1], /frozen_install\(\) \{ HOME=\/opt\/build-home \/usr\/local\/bin\/pnpm install --frozen-lockfile; \}/);
+  assert.match(runs[1], /frozen_install\(\) \{ HOME=\/opt\/build-home \/usr\/local\/bin\/pnpm install --frozen-lockfile --store-dir \/opt\/build-home\/pnpm-store; \}/);
   assert.match(runs[1], /native_prepare\(\) \{ HOME=\/opt\/build-home \/usr\/local\/bin\/node scripts\/edge-proof\.mjs container-prepare "\$CONTEXT_HASH"; \}/);
   assert.deepEqual(runs.flatMap(run => [...run.matchAll(/(?:;|&&)\s*edge_stage (\w+) (\w+)/g)].map(match => { assert.equal(match[1], match[2]); return match[1]; })), imageBuildStages);
   return [first, second];
 }
+test("image install keeps one absolute store outside the source input", async () => {
+  await actualStageShells(); // Source assertions only; never execute either RUN.
+  const file = await readFile(new URL("../config/edge-proof/Dockerfile", import.meta.url), "utf8");
+  assert.equal((file.match(/--store-dir\b/g) ?? []).length, 1);
+  assert.equal((file.match(/\/usr\/local\/bin\/pnpm install\b/g) ?? []).length, 1);
+  assert.deepEqual(file.split("\n").filter(line => line.startsWith("ENV ")), ["ENV PNPM_HOME=/usr/local/share/pnpm"]);
+  assert.deepEqual(file.split("\n").filter(line => line.startsWith("USER ")), ["USER ${HOST_UID}:${HOST_GID}"]);
+  assert.ok(file.indexOf("edge_stage input_ownership input_ownership") < file.indexOf("USER ${HOST_UID}:${HOST_GID}"));
+  assert.ok(file.indexOf("USER ${HOST_UID}:${HOST_GID}") < file.indexOf("RUN edge_seq=16;"));
+  assert.ok(file.includes("WORKDIR /opt/edge-input\nRUN edge_seq=16;"));
+  assert.ok(!file.includes("--virtual-store-dir") && !file.includes("--ignore-scripts pnpm install"));
+});
 function harmlessShell(script) {
   const result = spawnSync("/bin/sh", ["-c", script], { env: { PATH: "/usr/bin:/bin", HOME: "/owned-fixture-home", CONTEXT_HASH: other, TASK_NONCE: hex }, encoding: "utf8", timeout: 3000, maxBuffer: 65536 });
   assert.equal(result.error, undefined); assert.equal(result.signal, null); return result;
