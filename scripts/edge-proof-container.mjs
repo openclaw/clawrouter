@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { deflateSync } from "node:zlib";
 import { createRequire } from "node:module";
 import { edgeProof } from "./edge-proof-profile.mjs";
-import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages, validateEnumerationDetail } from "./edge-proof.mjs";
+import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, validateContainerDiagnostic, initGuardTags, initSourcePhases, validateInitDetail } from "./edge-proof.mjs";
 export { validateContainerDiagnostic, emitContainerFailure } from "./edge-proof.mjs";
 
 export const containerContract = Object.freeze({
@@ -40,6 +40,17 @@ const cidPattern = /^[a-f0-9]{64}$/;
 const imagePattern = /^sha256:[a-f0-9]{64}$/;
 const shaPattern = /^[a-f0-9]{40}$/;
 const protocol = "EDGE_CONTAINER_V2 ";
+export function createInitGuardLedger() {
+  const errors = []; let source = null, guard = null, sealed = false, detail;
+  return { errors,
+    source(value) { try { check(!sealed && initSourcePhases.includes(value), "init-source-phase"); source = value; } catch (error) { errors.push(error); } },
+    guard(value) { try { check(!sealed && initGuardTags.includes(value), "init-guard-tag"); guard ??= value; } catch (error) { errors.push(error); } },
+    failure() { if (!sealed) { sealed = true; if (source !== null) detail = { guard, source }; } return detail; },
+  };
+}
+function initRecord(recorder, method, value) { if (recorder) try { recorder[method](value); } catch (error) { recorder.errors.push(error); } }
+export function initGuardLeaf(value, recorder, tag) { if (!value) initRecord(recorder, "guard", tag); return value; }
+function initGuardCheck(value, code, recorder, tag) { check(initGuardLeaf(value, recorder, tag), code); }
 const own = (value, key) => {
   check(value && typeof value === "object", "data-object");
   const descriptor = Object.getOwnPropertyDescriptor(value, key);
@@ -53,7 +64,8 @@ export function raiseContainerFailures(errors) {
 }
 
 const number = text => { check(typeof text === "string" && /^(0|[1-9]\d*)$/.test(text) && Number.isSafeInteger(Number(text)), "canonical-number"); return Number(text); };
-export function parseIdentity(status) {
+export function parseIdentity(status, recorder) {
+  const check = (value, code) => initGuardCheck(value, code, recorder, "uid_gid_groups");
   check(typeof status === "string" && status.length <= 65536, "status-capacity");
   const field = name => { const rows = status.split("\n").filter(line => line.startsWith(name + ":")); check(rows.length === 1, "status-field"); return rows[0].slice(name.length + 1).trim(); };
   const tuple = name => { const values = field(name).split(/\s+/).map(number); check(values.length === 4 && values[0] > 0 && values.every(value => value === values[0]), "identity-tuple"); return values; };
@@ -61,7 +73,8 @@ export function parseIdentity(status) {
   check(new Set(groups).size === groups.length, "identity-groups");
   return { uid: tuple("Uid"), gid: tuple("Gid"), groups };
 }
-export function validateIdentity(actual, expected, child = false) {
+export function validateIdentity(actual, expected, child = false, recorder) {
+  const check = (value, code) => initGuardCheck(value, code, recorder, "uid_gid_groups");
   check(same(actual.uid, expected.uid) && same(actual.gid, expected.gid), "identity-drift");
   check(child ? actual.groups.length <= 1 && actual.groups.every(group => group === expected.gid[0]) : same(actual.groups, expected.groups), "groups-drift");
   return actual;
@@ -300,7 +313,8 @@ function decodeMountPath(path) {
   check(!/\\(?!040|011|012|134)/.test(path), "mount-escape");
   return canonicalMountPath(path.replace(/\\(040|011|012|134)/g, (_, octal) => String.fromCharCode(parseInt(octal, 8))));
 }
-function mountTable(rows) {
+function mountTable(rows, recorder) {
+  const check = (value, code) => initGuardCheck(value, code, recorder, "mounts");
   check(Array.isArray(rows) && rows.length > 0 && rows.length < 4096, "mount-capacity");
   for (const row of rows) {
     check(Number.isSafeInteger(row.id) && row.id > 0 && Number.isSafeInteger(row.parentId) && row.parentId >= 0 && /^(0|[1-9]\d*):(0|[1-9]\d*)$/.test(row.device), "mount-identity");
@@ -314,7 +328,8 @@ function mountTable(rows) {
 }
 const containsMountPath = (parent, path) => parent === "/" || path === parent || path.startsWith(parent + "/");
 const mountTuple = row => ({ id: row.id, parentId: row.parentId, target: row.target, root: row.root, device: row.device, fs: row.fs, options: [...row.options].sort(), superOptions: [...row.superOptions].sort(), optional: [...row.optional].sort() });
-export function parseMounts(text, privateView = true) {
+export function parseMounts(text, privateView = true, recorder) {
+  const check = (value, code) => initGuardCheck(value, code, recorder, "mounts");
   check(typeof text === "string" && text.length > 0 && text.length < 128 * 1024, "mount-capacity");
   return mountTable(text.replace(/\n$/, "").split("\n").map(line => {
     const halves = line.split(" - "); check(halves.length === 2, "mount-format");
@@ -323,7 +338,7 @@ export function parseMounts(text, privateView = true) {
     const optional = a.slice(6);
     check(optional.every(value => /^(?:(?:shared|master|propagate_from):[1-9]\d*|unbindable)$/.test(value)) && (!privateView || !optional.some(value => /^(shared|master|propagate_from):/.test(value))), "shared-mount");
     return { id: Number(a[0]), parentId: Number(a[1]), target: decodeMountPath(a[4]), root: decodeMountPath(a[3]), device: a[2], options: a[5].split(","), fs: b[0], superOptions: b[2].split(","), optional };
-  }));
+  }), recorder);
 }
 export function validateMountFreshness(before, after) {
   const snapshot = rows => mountTable(rows).map(mountTuple).sort((a, b) => a.id - b.id);
@@ -355,8 +370,9 @@ export function validateMetadataMounts(inspect, targetMounts, parentMounts, daem
   }
   return result;
 }
-export function validateMounts(rows) {
-  mountTable(rows);
+export function validateMounts(rows, recorder) {
+  const check = (value, code) => initGuardCheck(value, code, recorder, "mounts");
+  mountTable(rows, recorder);
   // moby v28.5.2 oci/defaults.go: automatic mounts and conditional masks.
   const readonlyProc = ["/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys", "/proc/sysrq-trigger"];
   const fileMasks = ["/proc/interrupts", "/proc/kcore", "/proc/keys", "/proc/latency_stats", "/proc/timer_list", "/proc/timer_stats", "/proc/sched_debug"];
@@ -400,10 +416,10 @@ export function validateMounts(rows) {
   check(at("/dev/shm").superOptions.includes("size=65536k"), "shm-mount");
   return true;
 }
-export function validateChildStatus(text, expected) {
-  validateIdentity(parseIdentity(text), expected, true);
-  for (const name of ["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"]) check(new RegExp(`^${name}:\\s+0+$`, "m").test(text), "child-capability");
-  check(/^NoNewPrivs:\s+1$/m.test(text) && /^Seccomp:\s+2$/m.test(text), "child-security");
+export function validateChildStatus(text, expected, recorder) {
+  validateIdentity(parseIdentity(text, recorder), expected, true, recorder);
+  for (const name of ["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"]) initGuardCheck(new RegExp(`^${name}:\\s+0+$`, "m").test(text), "child-capability", recorder, "capabilities");
+  check(initGuardLeaf(/^NoNewPrivs:\s+1$/m.test(text), recorder, "nnp") && initGuardLeaf(/^Seccomp:\s+2$/m.test(text), recorder, "seccomp"), "child-security");
 }
 async function readParentIdentity() { return parseIdentity(await readFile("/proc/self/status", "utf8")); }
 export async function processEvidence(pid, { read = readFile, link = readlink } = {}) {
@@ -443,58 +459,136 @@ export async function retiredCgroup(bound, { read = readFile, statPath = stat, l
 
 // Original attach close and stdin write outcomes remain separate from READY.
 // This supervisor never treats killing a Docker client as container retirement.
-export function attachContainer(command, args, { cwd, env, nonce, contextHash, spawnProcess = spawn, onStop, signalSource = process, killGroup = (pid, signal) => process.kill(-pid, signal), timeoutMs = 480000, readyMs = 30000 }) {
-  const result = { code: null, signal: null, closed: false, timedOut: false, interrupted: false, errors: [], remaining: [], observed: new Map(), stdout: "", stderr: "" };
+export function attachContainer(command, args, { cwd, env, nonce, contextHash, spawnProcess = spawn, onStop, signalSource = process, killGroup = (pid, signal) => process.kill(-pid, signal), timeoutMs = 480000, readyMs = 30000, setTimer = setTimeout, clearTimer = clearTimeout }) {
+  const result = { code: null, signal: null, closed: false, timedOut: false, interrupted: false, errors: [], remaining: [], observed: new Map(), stdout: "", stderr: "",
+    supervisor: [false, false, false, false, false, false], readyAccepted: false, firstBranch: null, branches: 0, outputSummary: {} };
+  const diagnostic = operation => { try { operation(); } catch (error) { result.errors.push(error); } };
+  const fact = index => diagnostic(() => { result.supervisor[index] = true; });
+  const branch = name => diagnostic(() => { result.firstBranch ??= name; result.branches |= 2 ** attachFailureBranches.indexOf(name); });
+  const capture = {};
+  for (const key of ["stdout", "stderr"]) diagnostic(() => { capture[key] = { bytes: 0, hash: createHash("sha256"), truncated: false }; });
   const ready = Promise.withResolvers(), closed = Promise.withResolvers();
-  // A failed launch can close before its owner begins awaiting the handshake.
   void ready.promise.catch(() => {});
-  let child, bytes = 0, frame = "", seen = false, stopTask, timer, readyTimer;
+  let child, bytes = 0, frame = "", seen = false, stopTask, timer, readyTimer, spawnReturned = false;
   const stop = reason => {
     if (!stopTask) stopTask = Promise.resolve().then(() => onStop(reason)).catch(error => { result.errors.push(error); }).finally(() => {
-      // If the daemon could not retire the owned container, close this task's
-      // own CLI too. That outcome stays failed; it is never cgroup evidence.
       if (!result.closed && child?.pid) try { killGroup(child.pid, "SIGKILL"); } catch (error) { if (error?.code !== "ESRCH") result.errors.push(error); }
     });
     return stopTask;
   };
-  const onSignal = () => { result.interrupted = true; void stop("interrupt"); };
+  const onSignal = () => { branch("interrupt"); result.interrupted = true; void stop("interrupt"); };
   const finish = async (code, signal) => {
     result.code = code; result.signal = signal; result.closed = true;
-    clearTimeout(timer); clearTimeout(readyTimer); signalSource.removeListener("SIGINT", onSignal); signalSource.removeListener("SIGTERM", onSignal);
-    if (!seen) ready.reject(new Error("edge-container: ready-missing"));
+    clearTimer(timer); clearTimer(readyTimer); signalSource.removeListener("SIGINT", onSignal); signalSource.removeListener("SIGTERM", onSignal);
+    if (!seen) { branch(frame.startsWith(protocol) ? "incomplete_ready" : "close_before_ready"); ready.reject(new Error("edge-container: ready-missing")); }
     if (stopTask) await stopTask;
-    closed.resolve(result);
+    for (const key of ["stdout", "stderr"]) diagnostic(() => {
+      const original = capture[key], retained = Buffer.from(result[key]), sha256 = original.hash.digest("hex"), retainedSha256 = hash(retained);
+      result.outputSummary[key] = { bytes: original.bytes, sha256, retainedBytes: retained.length, retainedSha256, truncated: original.truncated,
+        complete: result.supervisor[4] && !original.truncated && original.bytes === retained.length && sha256 === retainedSha256 };
+    });
+    fact(5); closed.resolve(result);
   };
   try {
-    child = spawnProcess(command, args, { cwd, env, detached: true, stdio: ["pipe", "pipe", "pipe"] });
-    child.on("error", error => { result.errors.push(error); ready.reject(error); void stop("attach-error"); });
-    child.stdin.on("error", error => { result.errors.push(error); void stop("stdin-error"); });
-    child.once("close", (code, signal) => { void finish(code, signal); });
+    fact(0); child = spawnProcess(command, args, { cwd, env, detached: true, stdio: ["pipe", "pipe", "pipe"] }); spawnReturned = true; fact(1);
+    child.on("error", error => { branch("child_error"); result.errors.push(error); ready.reject(error); void stop("attach-error"); });
+    child.stdin.on("error", error => { branch("stdin_error"); result.errors.push(error); void stop("stdin-error"); });
+    child.once("close", (code, signal) => { fact(4); void finish(code, signal); });
     for (const key of ["stdout", "stderr"]) child[key].on("data", data => {
+      diagnostic(() => { capture[key].bytes += data.length; capture[key].hash.update(data); });
       bytes += data.length;
-      if (bytes > 1024 * 1024) { result.errors.push(new Error("edge-container: attach-capacity")); void stop("output-capacity"); return; }
+      if (bytes > 1024 * 1024) { branch("output_capacity"); diagnostic(() => { capture[key].truncated = true; }); result.errors.push(new Error("edge-container: attach-capacity")); void stop("output-capacity"); return; }
       result[key] += data.toString("utf8");
       if (key !== "stdout") return;
       frame += data.toString("utf8");
       while (frame.includes("\n")) {
         const end = frame.indexOf("\n") + 1, line = frame.slice(0, end); frame = frame.slice(end);
         if (!line.startsWith(protocol)) continue;
-        try { check(!seen, "ready-replayed"); parseControl(line, "ready", nonce, contextHash); seen = true; clearTimeout(readyTimer); ready.resolve(); }
-        catch (error) { result.errors.push(error); ready.reject(error); void stop("ready-invalid"); }
+        try { check(!seen, "ready-replayed"); parseControl(line, "ready", nonce, contextHash); seen = true; diagnostic(() => { result.readyAccepted = true; }); clearTimer(readyTimer); ready.resolve(); }
+        catch (error) { branch(seen ? "replayed_ready" : "invalid_ready"); result.errors.push(error); ready.reject(error); void stop("ready-invalid"); }
       }
     });
-    timer = setTimeout(() => { result.timedOut = true; ready.reject(new Error("edge-container: deadline")); void stop("deadline"); }, timeoutMs);
-    readyTimer = setTimeout(() => { result.timedOut = true; ready.reject(new Error("edge-container: ready-deadline")); void stop("ready-deadline"); }, readyMs);
+    timer = setTimer(() => { branch("deadline"); result.timedOut = true; ready.reject(new Error("edge-container: deadline")); void stop("deadline"); }, timeoutMs);
+    readyTimer = setTimer(() => { branch("ready_deadline"); result.timedOut = true; ready.reject(new Error("edge-container: ready-deadline")); void stop("ready-deadline"); }, readyMs);
     signalSource.on("SIGINT", onSignal); signalSource.on("SIGTERM", onSignal);
-  } catch (error) { result.errors.push(error); ready.reject(error); void finish(null, null); }
+  } catch (error) { fact(spawnReturned ? 3 : 2); branch(spawnReturned ? "setup_failure" : "spawn_throw"); result.errors.push(error); ready.reject(error); void finish(null, null); }
   return {
     ready: ready.promise, closed: closed.promise, result,
     async permit() {
       check(seen && !result.closed && !result.errors.length && !result.timedOut && !result.interrupted, "permit-without-ready");
-      await new Promise((resolveWrite, rejectWrite) => child.stdin.end(control("permit", nonce, contextHash), error => error ? rejectWrite(error) : resolveWrite()));
+      try { await new Promise((resolveWrite, rejectWrite) => child.stdin.end(control("permit", nonce, contextHash), error => error ? rejectWrite(error) : resolveWrite())); }
+      catch (error) { branch("permit_write"); throw error; }
     },
   };
 }
+export function parseInitPrerequisites(result, binding) {
+  const unknown = (reason, records = null) => ({ v: 7, phase: "init_prerequisite", state: "observed", stage: null, defined: null, records, reason, reportFailures: null, undefinedReportFailures: null });
+  if (!binding || !cidPattern.test(binding.cid) || !hashPattern.test(binding.nonce) || !hashPattern.test(binding.contextHash) || binding.attached?.result !== result) return unknown("binding_unavailable");
+  if (!result.supervisor?.[4] || !result.supervisor?.[5] || !result.closed) return unknown("capture_unavailable");
+  for (const key of ["stdout", "stderr"]) {
+    const summary = result.outputSummary?.[key];
+    if (!summary || summary.complete !== true || summary.truncated !== false) return unknown("capture_unavailable");
+    const retained = Buffer.from(result[key]);
+    if (retained.length !== summary.bytes || retained.length !== summary.retainedBytes || hash(retained) !== summary.sha256 || summary.retainedSha256 !== summary.sha256) return unknown("capture_mismatch");
+  }
+  const prefix = "EDGE_INIT_" + "V1 ", rows = []; let terminal;
+  try {
+    const lines = result.stdout.split("\n");
+    for (const [lineIndex, line] of lines.entries()) {
+      if (!line.startsWith("EDGE_INIT_")) continue;
+      check(lineIndex < lines.length - 1, "init-private-incomplete-line");
+      check(line.startsWith(prefix) && Buffer.byteLength(line + "\n") <= 512 && !line.includes("\x1b"), "init-private-frame");
+      const row = JSON.parse(line.slice(prefix.length));
+      const detailKeys = Object.hasOwn(row, "detail") ? ["detail"] : [];
+      exactKeys(row, ["v", "nonce", "contextHash", "seq", "stage", "event", "reason", "defined", "reportFailures", "undefinedReportFailures", ...detailKeys]);
+      check(Object.keys(row).join() === "v,nonce,contextHash,seq,stage,event,reason,defined,reportFailures,undefinedReportFailures" + (detailKeys.length ? ",detail" : "") && JSON.stringify(row) === line.slice(prefix.length) && row.v === 1 && row.nonce === binding.nonce && row.contextHash === binding.contextHash && row.seq === rows.length + 1 && !terminal && rows.length < 9, "init-private-identity");
+      check(Number.isInteger(row.reportFailures) && row.reportFailures >= 0 && row.reportFailures <= 16 && Number.isInteger(row.undefinedReportFailures) && row.undefinedReportFailures >= 0 && row.undefinedReportFailures <= row.reportFailures, "init-private-reports");
+      const previous = rows.at(-1);
+      if (previous) check(row.reportFailures >= previous.reportFailures && row.undefinedReportFailures >= previous.undefinedReportFailures && row.undefinedReportFailures - previous.undefinedReportFailures <= row.reportFailures - previous.reportFailures, "init-private-report-order");
+      if (detailKeys.length) { check(row.event === "terminal" && row.reason === "original_failure" && ["runtime", "native_receipt"].includes(row.stage), "init-private-detail"); validateInitDetail(row.detail); }
+      if (row.event === "entered") check(row.stage === initPrerequisiteStages[rows.length] && row.reason === null && row.defined === null, "init-private-order");
+      else { check(row.event === "terminal" && rows.length > 0 && row.stage === initPrerequisiteStages[rows.length - 1], "init-private-terminal"); terminal = row; }
+      rows.push(row);
+    }
+    if (!rows.length) return unknown("no_records", 0);
+    if (!terminal) return unknown("incomplete", rows.length);
+    return validateContainerDiagnostic({ v: 7, phase: "init_prerequisite", state: terminal.reason === "complete" ? "observed" : "rejected", stage: terminal.reason === "original_failure" ? terminal.stage : null, defined: terminal.defined, records: rows.length, reason: terminal.reason, reportFailures: terminal.reportFailures, undefinedReportFailures: terminal.undefinedReportFailures, ...(Object.hasOwn(terminal, "detail") ? { detail: terminal.detail } : {}) });
+  } catch { return unknown("invalid"); }
+}
+export function createAttachProjection(attached, plan, report) {
+  const binding = { attached, cid: plan.cid, nonce: plan.nonce, contextHash: plan.contextHash }; let projected = false;
+  return result => {
+    if (projected) return; projected = true;
+    const retain = operation => { try { operation(); } catch (error) { attached.result.errors.push(error); } };
+    retain(() => {
+      check(result === attached.result && result.supervisor[5], "attach-original-unsettled");
+      report.internal(validateContainerDiagnostic({ v: 6, phase: "attach_process", state: "observed", exit: result.code, signal: result.signal, closed: result.closed, timedOut: result.timedOut, interrupted: result.interrupted,
+        errors: result.errors.length, undefinedErrors: result.errors.filter(error => error === undefined).length, supervisor: [...result.supervisor], ready: result.readyAccepted, first: result.firstBranch, branches: result.branches,
+        capture: [result.outputSummary.stdout?.complete === true, result.outputSummary.stderr?.complete === true] }));
+    });
+    retain(() => report.internal(parseInitPrerequisites(result, binding)));
+  };
+}
+export async function runInitPrerequisites(args, trace, operations, ledger) {
+  const reporting = [], observe = operation => { try { operation(); } catch (error) { reporting.push(error); } };
+  let failed = false, reason, identity, native, detailActive = false;
+  try {
+    observe(() => trace.enter("arguments")); operations.arguments(args);
+    observe(() => trace.bind(args[0], args[1]));
+    observe(() => trace.enter("identity")); identity = operations.identity(args);
+    observe(() => trace.enter("environment_reset")); operations.reset();
+    observe(() => trace.enter("environment_prepare")); await operations.prepare();
+    observe(() => trace.enter("runtime")); detailActive = true; await operations.runtime(identity); detailActive = false;
+    observe(() => trace.enter("native_receipt")); detailActive = true; native = await operations.native(args[1]); detailActive = false;
+    observe(() => trace.enter("ready_write")); operations.ready(args[0], args[1]);
+    observe(() => trace.enter("permit_receive")); await operations.permit(args[0], args[1]);
+  } catch (error) { failed = true; reason = error; }
+  let detail; if (failed && detailActive && ledger) observe(() => { detail = ledger.failure(); });
+  observe(() => trace.finish(failed, reason, detail, [...(ledger ? ledger.errors : []), ...reporting]));
+  raiseContainerFailures([...(failed ? [reason] : []), ...trace.errors, ...(ledger ? ledger.errors : []), ...reporting]);
+  return native;
+}
+
 async function receivePermit(nonce, contextHash) {
   let text = "";
   const deadline = setTimeout(() => process.stdin.destroy(new Error("edge-container: permit-deadline")), 30000);
@@ -503,22 +597,32 @@ async function receivePermit(nonce, contextHash) {
     return parseControl(text, "permit", nonce, contextHash);
   } finally { clearTimeout(deadline); }
 }
-async function validateContainerRuntime(identity, builder = false) {
-  check(process.platform === "linux" && process.arch === "x64" && process.version === "v24.22.1" && process.versions.modules === "137", "container-runtime");
-  check(builder ? process.pid > 1 && process.ppid === 1 : process.pid === 1, "container-init-ancestry");
-  validateChildStatus(await readFile("/proc/self/status", "utf8"), identity);
-  validateMounts(parseMounts(await readFile("/proc/self/mountinfo", "utf8")));
-  const evidence = await namespaceEvidence();
-  check(same(evidence.interfaces, ["lo"]) && evidence.routes4.length === 0, "container-external-network");
+async function validateContainerRuntime(identity, builder = false, recorder) {
+  initRecord(recorder, "source", "runtime");
+  initGuardCheck(process.platform === "linux" && process.arch === "x64" && process.version === "v24.22.1" && process.versions.modules === "137", "container-runtime", recorder, "runtime");
+  initRecord(recorder, "source", "ancestry");
+  initGuardCheck(builder ? process.pid > 1 && process.ppid === 1 : process.pid === 1, "container-init-ancestry", recorder, "ancestry");
+  initRecord(recorder, "source", "status_read"); const status = await readFile("/proc/self/status", "utf8");
+  initRecord(recorder, "source", "status_validate"); validateChildStatus(status, identity, recorder);
+  initRecord(recorder, "source", "mount_read"); const mounts = await readFile("/proc/self/mountinfo", "utf8");
+  initRecord(recorder, "source", "mount_parse"); const parsed = parseMounts(mounts, true, recorder);
+  initRecord(recorder, "source", "mount_validate"); validateMounts(parsed, recorder);
+  initRecord(recorder, "source", "namespace_read"); const evidence = await namespaceEvidence();
+  initRecord(recorder, "source", "network_validate");
+  check(initGuardLeaf(same(evidence.interfaces, ["lo"]), recorder, "interfaces") && initGuardLeaf(evidence.routes4.length === 0, recorder, "routes4"), "container-external-network");
   for (const line of evidence.routes6) {
     const fields = line.trim().split(/\s+/);
-    check(fields.length === 10 && fields[9] === "lo" && fields[4] === "0".repeat(32) && ((fields[0] === "0".repeat(31) + "1" && fields[1] === "80") || fields[0] === "0".repeat(32) && fields[1] === "00" && (Number.parseInt(fields[8], 16) & 0x200) !== 0), "container-external-ipv6");
+    initGuardCheck(fields.length === 10 && fields[9] === "lo" && fields[4] === "0".repeat(32) && ((fields[0] === "0".repeat(31) + "1" && fields[1] === "80") || fields[0] === "0".repeat(32) && fields[1] === "00" && (Number.parseInt(fields[8], 16) & 0x200) !== 0), "container-external-ipv6", recorder, "routes6");
   }
-  const expected = containerEnvironment(builder ? "/task/child" : "/task"); check(same(Object.entries(process.env).sort(), Object.entries(expected).sort()), "container-effective-environment");
+  initRecord(recorder, "source", "environment_construct"); const expected = containerEnvironment(builder ? "/task/child" : "/task");
+  initRecord(recorder, "source", "environment_validate"); initGuardCheck(same(Object.entries(process.env).sort(), Object.entries(expected).sort()), "container-effective-environment", recorder, "effective_env");
 }
-async function nativeReceipt(contextHash) {
-  const receipt = validateNativeIdentity(JSON.parse(await readFile(join(containerContract.input, ".edge-native.json"), "utf8")), { contextHash });
-  const actual = await qualifyImageInputs(contextHash); check(same(receipt, actual), "image-native-drift"); return receipt;
+async function nativeReceipt(contextHash, recorder) {
+  initRecord(recorder, "source", "native_read"); const bytes = await readFile(join(containerContract.input, ".edge-native.json"), "utf8");
+  initRecord(recorder, "source", "native_parse"); const parsed = JSON.parse(bytes);
+  initRecord(recorder, "source", "native_validate"); const receipt = validateNativeIdentity(parsed, { contextHash });
+  initRecord(recorder, "source", "native_qualify"); const actual = await qualifyImageInputs(contextHash);
+  initRecord(recorder, "source", "native_equality"); initGuardCheck(same(receipt, actual), "image-native-drift", recorder, "native_receipt_equality"); return receipt;
 }
 export function parseImageBuildReceipt(text, contextHash) {
   const lines = text.split("\n").filter(line => line.startsWith("EDGE_IMAGE_V2 "));
@@ -633,17 +737,16 @@ export function parseContainerReceipt(text, plan) {
   for (const result of Object.values(receipt.results)) { exactKeys(result, ["code", "signal", "closed", "sha256", "observedProcesses"]); check(result.code === 0 && result.signal === null && result.closed === true && hashPattern.test(result.sha256) && Number.isSafeInteger(result.observedProcesses) && result.observedProcesses >= 1, "container-wrangler-result"); }
   return receipt;
 }
-async function containerInit(args) {
-  check(args.length === 4 && hashPattern.test(args[0]) && hashPattern.test(args[1]), "init-arguments");
-  const [nonce, contextHash, uid, gid] = args, identity = { uid: Array(4).fill(number(uid)), gid: Array(4).fill(number(gid)), groups: [] };
-  // Docker supplies only admitted image environment. No inherited host env is
-  // merged into builder/CLI execution, including NODE_OPTIONS or binary overrides.
-  for (const key of Object.keys(process.env)) delete process.env[key]; Object.assign(process.env, containerEnvironment());
-  await prepareEnvironment("/task");
-  await validateContainerRuntime(identity);
-  const native = await nativeReceipt(contextHash);
-  process.stdout.write(control("ready", nonce, contextHash));
-  await receivePermit(nonce, contextHash);
+async function containerInit(args, sharedReport) {
+  let identity; const trace = createInitDiagnostics(), ledger = createInitGuardLedger(); if (sharedReport) sharedReport.init = trace;
+  const native = await runInitPrerequisites(args, trace, {
+    arguments: values => check(values.length === 4 && hashPattern.test(values[0]) && hashPattern.test(values[1]), "init-arguments"),
+    identity: ([nonce, contextHash, uid, gid]) => (identity = { uid: Array(4).fill(number(uid)), gid: Array(4).fill(number(gid)), groups: [] }),
+    reset: () => { for (const key of Object.keys(process.env)) delete process.env[key]; Object.assign(process.env, containerEnvironment()); },
+    prepare: () => prepareEnvironment("/task"), runtime: identity => validateContainerRuntime(identity, false, ledger), native: contextHash => nativeReceipt(contextHash, ledger),
+    ready: (nonce, contextHash) => process.stdout.write(control("ready", nonce, contextHash)), permit: (nonce, contextHash) => receivePermit(nonce, contextHash),
+  }, ledger);
+  const [nonce, contextHash, uid, gid] = args;
   const report = createPackagingDiagnostics("child", line => process.stdout.write(line)), errors = []; let built;
   report.mark("entry", "fulfilled");
   try {
@@ -724,7 +827,7 @@ async function hostContainerRun(report) {
   const image = await report.step("image", async () => validateImage(await inspect("image", imageId), { derived: true, identity, id: imageId, contextHash: context.contextHash }));
   check(image.Config.Labels?.["org.openclaw.edge.nonce"] === nonce, "image-invocation");
   const plan = { image: imageId, identity, imageEnv: image.Config.Env, nonce, contextHash: context.contextHash, nativeHash: hash(JSON.stringify(native)) };
-  const cidFile = join(root, "container-id"), failures = []; let cid, created, attached, waiting, bound, target, receipt, disposition = "retained";
+  const cidFile = join(root, "container-id"), failures = []; let cid, created, attached, projectAttach, waiting, bound, target, receipt, disposition = "retained";
   const readOwned = async () => validateContainerInspect(await inspect("container", cid), plan, cid);
   const recheckParent = async () => validateIdentity(await readParentIdentity(), identity);
   const stopOwned = async () => {
@@ -744,6 +847,7 @@ async function hostContainerRun(report) {
     });
     await report.step("attach", async () => {
       await recheckParent(); attached = attachContainer(docker, ["--host=unix:///var/run/docker.sock", "start", "--attach", "--interactive", cid], { cwd: root, env, nonce: plan.nonce, contextHash: plan.contextHash, onStop: stopOwned });
+      projectAttach = createAttachProjection(attached, { cid, nonce: plan.nonce, contextHash: plan.contextHash }, report);
     });
     await report.step("ready", () => attached.ready);
     await report.step("admission", async () => {
@@ -768,6 +872,7 @@ async function hostContainerRun(report) {
     const outcomes = await report.step("wait", () => Promise.allSettled([attached.closed, waiting]));
     raiseContainerFailures(outcomes.filter(outcome => outcome.status === "rejected").map(outcome => outcome.reason));
     const attachResult = outcomes[0].value, waitResult = outcomes[1].value;
+    projectAttach(attachResult);
     receipt = await report.step("receipt", () => parseContainerReceipt(attachResult.stdout, plan));
     await report.step("terminal", async () => {
       await recheckParent(); const terminal = await readOwned();
@@ -786,7 +891,7 @@ async function hostContainerRun(report) {
       } catch (error) { cleanupFailures.push(error); }
       try { await stopOwned(); } catch (error) { cleanupFailures.push(error); }
       const originals = await Promise.allSettled([...(attached ? [attached.closed] : []), ...(waiting ? [waiting] : [])]);
-      for (const outcome of originals) if (outcome.status === "rejected") cleanupFailures.push(outcome.reason); else try { requireProcessSuccess(outcome.value); } catch (error) { cleanupFailures.push(error); }
+      for (const outcome of originals) if (outcome.status === "rejected") cleanupFailures.push(outcome.reason); else try { if (attached && outcome.value === attached.result) projectAttach(outcome.value); requireProcessSuccess(outcome.value); } catch (error) { cleanupFailures.push(error); }
       try {
         await recheckParent(); const row = await readOwned(); check(!row.State.Running && row.State.Pid === 0, "retirement-live");
         // A never-started container has no process/cgroup to retire. An attempted
@@ -807,7 +912,7 @@ async function hostContainerRun(report) {
 export async function containerMain(action, args, report) {
   if (action === "container-ci" && args.length === 0) return containerCi(report);
   if (action === "container-prepare") return containerPrepare(args, report?.prepare);
-  if (action === "container-init") return containerInit(args);
+  if (action === "container-init") return containerInit(args, report);
   if (action === "container-build") return containerBuild(args);
   fail("container-action");
 }

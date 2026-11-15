@@ -520,7 +520,7 @@ async function offlineCi(report) {
   const receipt = report.sync("child_report", () => validatePackagingReceipt(JSON.parse(output)));
   return receipt;
 }
-const containerDiagnosticPhases = ["entry", "module_import", "dispatch", "serialization", "reporting", "pending", "host_runtime", "parent_namespaces", "cwd", "temp", "environment", "docker_executable", "daemon_socket", "identity", "context", "daemon", "base", "image_build", "image_build_process", "image_build_internal", "native_prepare_internal", "image_id", "native_receipt", "image", "create", "attach", "ready", "admission", "permit", "wait", "receipt", "terminal", "cgroup", "retirement", "remove", "final", "overflow"];
+const containerDiagnosticPhases = ["entry", "module_import", "dispatch", "serialization", "reporting", "pending", "host_runtime", "parent_namespaces", "cwd", "temp", "environment", "docker_executable", "daemon_socket", "identity", "context", "daemon", "base", "image_build", "image_build_process", "image_build_internal", "native_prepare_internal", "attach_process", "init_prerequisite", "image_id", "native_receipt", "image", "create", "attach", "ready", "admission", "permit", "wait", "receipt", "terminal", "cgroup", "retirement", "remove", "final", "overflow"];
 export const imageBuildStages = ["node_version", "node_abi", "architecture", "git_executable", "pnpm_bootstrap", "pnpm_version", "input_directories", "input_ownership", "frozen_install", "native_prepare"];
 export const nativePrepareStages = Object.freeze([
   "app_entry", "module_import", "dispatch", "prepare_arguments", "runtime", "context_read", "context_identity",
@@ -657,9 +657,71 @@ export function createNativePrepareDiagnostics(identity, write = (bytes, offset,
     },
   };
 }
+export const initPrerequisiteStages = Object.freeze(["arguments", "identity", "environment_reset", "environment_prepare", "runtime", "native_receipt", "ready_write", "permit_receive"]);
+export const attachFailureBranches = Object.freeze(["spawn_throw", "setup_failure", "child_error", "stdin_error", "close_before_ready", "invalid_ready", "replayed_ready", "deadline", "ready_deadline", "interrupt", "output_capacity", "permit_write", "incomplete_ready"]);
+export const initGuardTags = Object.freeze(["runtime", "ancestry", "uid_gid_groups", "capabilities", "nnp", "seccomp", "mounts", "interfaces", "routes4", "routes6", "effective_env", "native_receipt_equality"]);
+export const initSourcePhases = Object.freeze(["runtime", "ancestry", "status_read", "status_validate", "mount_read", "mount_parse", "mount_validate", "namespace_read", "network_validate", "environment_construct", "environment_validate", "native_read", "native_parse", "native_validate", "native_qualify", "native_equality"]);
+export function validateInitDetail(value) {
+  if (!value || Object.getOwnPropertyNames(value).sort().join() !== "guard,source") refuse("init-detail-keys");
+  const row = { guard: ownData(value, "guard"), source: ownData(value, "source") };
+  if (!(row.guard === null || initGuardTags.includes(row.guard)) || !initSourcePhases.includes(row.source)) refuse("init-detail-enum");
+  const sources = { runtime: ["runtime"], ancestry: ["ancestry"], uid_gid_groups: ["status_validate"], capabilities: ["status_validate"], nnp: ["status_validate"], seccomp: ["status_validate"], mounts: ["mount_parse", "mount_validate"], interfaces: ["network_validate"], routes4: ["network_validate"], routes6: ["network_validate"], effective_env: ["environment_validate"], native_receipt_equality: ["native_equality"] };
+  if (row.guard !== null && !sources[row.guard].includes(row.source)) refuse("init-detail-pair");
+  return row;
+}
+export function createInitDiagnostics(writer = text => {
+  const bytes = Buffer.from(text); if (writeSync(1, bytes, 0, bytes.length) !== bytes.length) refuse("init-frame-short-write");
+}) {
+  const errors = []; let identity, index = -1, seq = 0, finished = false;
+  const emit = (event, reason = null, defined = null, detail, extraErrors = []) => {
+    if (!identity) return;
+    const row = { v: 1, ...identity, seq: ++seq, stage: initPrerequisiteStages[index], event, reason, defined, reportFailures: errors.length + extraErrors.length, undefinedReportFailures: [...errors, ...extraErrors].filter(error => error === undefined).length };
+    if (detail !== undefined) row.detail = validateInitDetail(detail);
+    const text = "\nEDGE_INIT_" + "V1 " + JSON.stringify(row) + "\n";
+    if (seq > 9 || row.reportFailures > 16 || Buffer.byteLength(text) > 512) refuse("init-frame-capacity");
+    writer(text);
+  };
+  return { errors,
+    bind(nonce, contextHash) { try {
+      if (identity || index !== 0 || !/^[a-f0-9]{64}$/.test(nonce) || !/^[a-f0-9]{64}$/.test(contextHash)) refuse("init-frame-binding");
+      identity = { nonce, contextHash }; emit("entered");
+    } catch (error) { errors.push(error); } },
+    enter(stage) { try { if (finished || initPrerequisiteStages[index + 1] !== stage) refuse("init-frame-order"); index++; emit("entered"); } catch (error) { errors.push(error); } },
+    finish(failed, reason, detail, extraErrors = []) { try {
+      if (finished || index < 0 || typeof failed !== "boolean" || !failed && index !== 7) refuse("init-frame-terminal");
+      finished = true; emit("terminal", failed ? "original_failure" : errors.length + extraErrors.length ? "reporter_failure" : "complete", failed ? reason !== undefined : null, failed ? detail : undefined, extraErrors);
+    } catch (error) { errors.push(error); } },
+  };
+}
 const containerDiagnosticSignals = [null, "SIGINT", "SIGTERM", "SIGKILL", "SIGABRT", "SIGSEGV", "SIGPIPE", "SIGBUS", "SIGSYS"];
 const processDiagnosticFields = ["v", "phase", "state", "defined", "available", "exit", "signal", "closed", "timedOut", "interrupted", "errors", "undefinedErrors", "spawnErrors", "undefinedSpawnErrors", "stdoutComplete", "stderrComplete"];
 export function validateContainerDiagnostic(value) {
+  if (value && typeof value === "object" && ownData(value, "v") === 6) {
+    const fields = ["v", "phase", "state", "exit", "signal", "closed", "timedOut", "interrupted", "errors", "undefinedErrors", "supervisor", "ready", "first", "branches", "capture"];
+    if (Object.getOwnPropertyNames(value).sort().join() !== [...fields].sort().join()) refuse("attach-summary-keys");
+    const row = Object.fromEntries(fields.map(key => [key, ownData(value, key)]));
+    const tuple = (v, n) => Array.isArray(v) && Object.getOwnPropertyNames(v).join() === [...Array(n).keys(), "length"].join() && Array.from({ length: n }, (_, i) => ownData(v, String(i))).every(x => typeof x === "boolean");
+    if (row.phase !== "attach_process" || row.state !== "observed" || !containerDiagnosticSignals.includes(row.signal) || !(row.exit === null || Number.isInteger(row.exit) && row.exit >= -2147483648 && row.exit <= 2147483647)) refuse("attach-summary-outcome");
+    if (![row.closed, row.timedOut, row.interrupted, row.ready].every(v => typeof v === "boolean") || !tuple(row.supervisor, 6) || !tuple(row.capture, 2)) refuse("attach-summary-facts");
+    const [attempted, returned, threw, setupFailed, closeEvent, settled] = row.supervisor;
+    if (!attempted || !settled || !row.closed || returned === threw || setupFailed && !returned || closeEvent && !returned || row.ready && !returned || !closeEvent && row.capture.some(Boolean)) refuse("attach-summary-consistency");
+    if (!Number.isSafeInteger(row.errors) || row.errors < 0 || !Number.isSafeInteger(row.undefinedErrors) || row.undefinedErrors < 0 || row.undefinedErrors > row.errors || !Number.isInteger(row.branches) || row.branches < 0 || row.branches >= 2 ** attachFailureBranches.length || !(row.first === null || attachFailureBranches.includes(row.first)) || (row.first === null ? row.branches !== 0 : !(row.branches & 2 ** attachFailureBranches.indexOf(row.first)))) refuse("attach-summary-counts");
+    return row;
+  }
+  if (value && typeof value === "object" && ownData(value, "v") === 7) {
+    const fields = ["v", "phase", "state", "stage", "defined", "records", "reason", "reportFailures", "undefinedReportFailures"];
+    if (Object.hasOwn(value, "detail")) fields.push("detail");
+    if (Object.getOwnPropertyNames(value).sort().join() !== [...fields].sort().join()) refuse("init-summary-keys");
+    const row = Object.fromEntries(fields.map(key => [key, ownData(value, key)]));
+    const terminal = ["original_failure", "reporter_failure", "complete"].includes(row.reason);
+    if (Object.hasOwn(row, "detail")) { if (row.reason !== "original_failure" || !["runtime", "native_receipt"].includes(row.stage)) refuse("init-detail-stage"); row.detail = validateInitDetail(row.detail); if (row.detail.source.startsWith("native_") !== (row.stage === "native_receipt")) refuse("init-detail-source-stage"); }
+    if (row.phase !== "init_prerequisite" || !["binding_unavailable", "capture_unavailable", "capture_mismatch", "no_records", "incomplete", "invalid", "original_failure", "reporter_failure", "complete"].includes(row.reason)) refuse("init-summary-enum");
+    if (terminal) {
+      if (!Number.isInteger(row.records) || row.records < 2 || row.records > 9 || !Number.isInteger(row.reportFailures) || row.reportFailures < 0 || row.reportFailures > 16 || !Number.isInteger(row.undefinedReportFailures) || row.undefinedReportFailures < 0 || row.undefinedReportFailures > row.reportFailures) refuse("init-summary-counts");
+      if (row.reason === "original_failure" ? row.state !== "rejected" || row.stage !== initPrerequisiteStages[row.records - 2] || typeof row.defined !== "boolean" : row.stage !== null || row.defined !== null || row.records !== 9 || (row.reason === "complete" ? row.state !== "observed" || row.reportFailures !== 0 : row.state !== "rejected" || row.reportFailures < 1)) refuse("init-summary-terminal");
+    } else if (row.state !== "observed" || row.stage !== null || row.defined !== null || row.reportFailures !== null || row.undefinedReportFailures !== null || (row.reason === "no_records" ? row.records !== 0 : row.reason === "incomplete" ? !Number.isInteger(row.records) || row.records < 1 || row.records > 8 : row.records !== null)) refuse("init-summary-unknown");
+    return row;
+  }
   if (value && typeof value === "object" && ownData(value, "v") === 5) {
     const fields = ["v", "phase", "state", "stage", "defined", "records", "reason", "reportFailures", "undefinedReportFailures"];
     if (Object.hasOwn(value, "enumeration")) fields.push("enumeration");
@@ -712,7 +774,7 @@ export function validateContainerDiagnostic(value) {
   }
   if (!value || typeof value !== "object" || Object.getOwnPropertyNames(value).sort().join() !== ["v", "phase", "state", "defined", "exit", "signal"].sort().join()) refuse("container-diagnostic-keys");
   const row = Object.fromEntries(["v", "phase", "state", "defined", "exit", "signal"].map(key => [key, ownData(value, key)]));
-  if (row.v !== 2 || !containerDiagnosticPhases.includes(row.phase) || ["image_build_process", "image_build_internal", "native_prepare_internal"].includes(row.phase) || !["entered", "fulfilled", "rejected"].includes(row.state)) refuse("container-diagnostic-enum");
+  if (row.v !== 2 || !containerDiagnosticPhases.includes(row.phase) || ["image_build_process", "image_build_internal", "native_prepare_internal", "attach_process", "init_prerequisite"].includes(row.phase) || !["entered", "fulfilled", "rejected"].includes(row.state)) refuse("container-diagnostic-enum");
   if (![null, true, false].includes(row.defined) || !containerDiagnosticSignals.includes(row.signal) || !(row.exit === null || Number.isInteger(row.exit) && row.exit >= 0 && row.exit <= 255)) refuse("container-diagnostic-outcome");
   return row;
 }
@@ -738,7 +800,9 @@ export function emitContainerFailure(records, writer = line => process.stdout.wr
   const rows = records.map(validateContainerDiagnostic), unique = new Map();
   const rejected = rows.filter(row => row.state === "rejected");
   // Reserve the first actual failure and original build outcome before context.
-  const reserved = rows.filter(row => [3, 4, 5].includes(row.v));
+  const reserved = ["ready", "attach_process", "init_prerequisite", "retirement"].map(phase =>
+    rows.findLast(row => row.phase === phase && row.state === "rejected") ?? (["attach_process", "init_prerequisite"].includes(phase) ? rows.findLast(row => row.phase === phase) : undefined),
+  ).filter(Boolean).concat(rows.filter(row => [3, 4, 5].includes(row.v)));
   for (const row of [...rejected.slice(0, 1), ...reserved, ...rejected.slice(1), ...rows.toReversed()]) if (!unique.has(row.phase)) unique.set(row.phase, row);
   const selected = [...unique.values()].slice(0, 9);
   if (unique.size > 9) selected.push({ v: 2, phase: "overflow", state: "rejected", defined: null, exit: Math.min(255, unique.size - 9), signal: null });

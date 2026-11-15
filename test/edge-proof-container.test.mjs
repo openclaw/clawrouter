@@ -8,10 +8,10 @@ import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { runInNewContext } from "node:vm";
 import { dirname, join, relative } from "node:path";
-import { containerContract, harnessInputs, installInputs, parseIdentity, validateIdentity, validateMapping, validateImage, dockerEnvironment, containerEnvironment, createArguments, validateContainerInspect, parseControl, validateTerminal, validateNativeIdentity, parseImageBuildReceipt, parseImageBuildStages, parseNativePrepareStages, observeImageBuild, parseContainerReceipt, parseMounts, validateMountFreshness, validateMounts, validateMetadataMounts, validateChildStatus, validateTarget, cgroupPath, validateLimits, attachContainer, processEvidence, retiredCgroup, raiseContainerFailures, validateContainerDiagnostic, emitContainerFailure } from "../scripts/edge-proof-container.mjs";
+import { containerContract, harnessInputs, installInputs, parseIdentity, validateIdentity, validateMapping, validateImage, dockerEnvironment, containerEnvironment, createArguments, validateContainerInspect, parseControl, validateTerminal, validateNativeIdentity, parseImageBuildReceipt, parseImageBuildStages, parseNativePrepareStages, observeImageBuild, parseContainerReceipt, parseInitPrerequisites, createAttachProjection, runInitPrerequisites, createInitGuardLedger, initGuardLeaf, parseMounts, validateMountFreshness, validateMounts, validateMetadataMounts, validateChildStatus, validateTarget, cgroupPath, validateLimits, attachContainer, processEvidence, retiredCgroup, raiseContainerFailures, validateContainerDiagnostic, emitContainerFailure } from "../scripts/edge-proof-container.mjs";
 import { frozenGitEnvironment, validateGitExecutable, frozenSource } from "../scripts/edge-proof-build.mjs";
 import { edgeProof } from "../scripts/edge-proof-profile.mjs";
-import { launchCli, createContainerDiagnostics, containerProcessDiagnostic, imageBuildStages, runOwnedProcess, nativePrepareStages, createNativePrepareDiagnostics, enumerationOperations, validateEnumerationDetail } from "../scripts/edge-proof.mjs";
+import { launchCli, createContainerDiagnostics, containerProcessDiagnostic, imageBuildStages, runOwnedProcess, nativePrepareStages, createNativePrepareDiagnostics, enumerationOperations, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, initGuardTags, initSourcePhases, validateInitDetail } from "../scripts/edge-proof.mjs";
 
 const hex = "a".repeat(64), other = "b".repeat(64), imageId = "sha256:" + hex;
 const identity = { uid: [501, 501, 501, 501], gid: [20, 20, 20, 20], groups: [20, 30] };
@@ -1074,3 +1074,205 @@ test("enumeration membership strict counters private framing and public budgets 
   for (const text of [hex, other, "/fixture", "sha256", "pnpm", "a/b", "inert traversal"]) assert.ok(!output.join("").includes(text));
   const incomplete = parseNativePrepareStages(nativePrepareCapture(fixture.frames.slice(0, -1).join("")), stageIdentity); assert.equal(incomplete.reason, "incomplete");
 });
+
+// BEGIN attach diagnostic pure tests.
+function inertAttach(spawnMode = "normal") {
+  const child = new EventEmitter(), signals = new EventEmitter(), timers = new Map(); let next = 0, stops = 0, writes = 0;
+  child.pid = 12345; child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.stdin = new EventEmitter();
+  child.stdin.end = (text, done) => { writes++; done(); };
+  const attached = attachContainer("inert", [], { nonce: hex, contextHash: other, signalSource: signals,
+    spawnProcess: () => { if (spawnMode === "throw") throw undefined; if (spawnMode === "setup") child.stdin = null; return child; },
+    onStop: async () => { stops++; child.emit("close", 1, null); }, killGroup: () => {},
+    setTimer: (callback, delay) => { const id = ++next; timers.set(id, { callback, delay }); return id; }, clearTimer: id => timers.delete(id),
+  });
+  return { child, signals, timers, attached, stops: () => stops, writes: () => writes, data: text => child.stdout.emit("data", Buffer.from(text)) };
+}
+const initReady = () => "EDGE_CONTAINER_V2 " + JSON.stringify({ v: 2, kind: "ready", nonce: hex, contextHash: other }) + "\n";
+function inertInitOperations(failAt, calls) {
+  return Object.fromEntries(["arguments", "identity", "reset", "prepare", "runtime", "native", "ready", "permit"].map(name => [name, (...args) => { calls.push({ name, args }); if (name === failAt) throw undefined; return name === "identity" ? identity : name === "native" ? imageId : undefined; }]));
+}
+async function initCapture(failAt, failWrite = false) {
+  const frames = [], calls = [], trace = createInitDiagnostics(line => { if (failWrite) throw undefined; frames.push(line); });
+  let failed = false, reason, value;
+  try { value = await runInitPrerequisites([hex, other, "501", "20"], trace, inertInitOperations(failAt, calls)); } catch (error) { failed = true; reason = error; }
+  return { frames, calls, trace, failed, reason, value };
+}
+async function attachWithFrames(text) {
+  const h = inertAttach(); h.data(text); h.child.emit("close", 1, null); await h.attached.closed;
+  return { h, binding: { attached: h.attached, cid: hex, nonce: hex, contextHash: other } };
+}
+test("attach diagnostic distinguishes spawn throw setup failure and synthetic settlement from child close", async () => {
+  for (const mode of ["throw", "setup", "normal"]) {
+    const h = inertAttach(mode); if (mode === "normal") h.child.emit("close", 2, null);
+    await assert.rejects(h.attached.ready); const result = await h.attached.closed;
+    assert.deepEqual(result.supervisor, mode === "throw" ? [true, false, true, false, false, true] : mode === "setup" ? [true, true, false, true, false, true] : [true, true, false, false, true, true]);
+    assert.equal(result.closed, true); assert.equal(result.outputSummary.stdout.complete, mode === "normal");
+    const rows = [], project = createAttachProjection(h.attached, { cid: hex, nonce: hex, contextHash: other }, { internal: row => rows.push(validateContainerDiagnostic(row)) });
+    project(result); project(result); assert.equal(rows.length, 2); assert.equal(rows[0].supervisor[4], mode === "normal"); assert.equal(rows[1].reason, mode === "normal" ? "no_records" : "capture_unavailable");
+  }
+});
+test("attach diagnostic original branch failures stop and settle without a real child or timer", async () => {
+  for (const mode of ["child_error", "stdin_error", "partial", "invalid_ready", "foreign", "ready_deadline", "deadline", "interrupt", "output_capacity"]) {
+    const h = inertAttach();
+    if (mode === "child_error") h.child.emit("error", undefined);
+    else if (mode === "stdin_error") h.child.stdin.emit("error", undefined);
+    else if (mode === "partial") { h.data(initReady().slice(0, -1)); h.child.emit("close", 0, null); }
+    else if (mode === "invalid_ready") h.data("EDGE_CONTAINER_V2 {bad}\n");
+    else if (mode === "foreign") h.data(initReady().replace(hex, other));
+    else if (mode === "interrupt") h.signals.emit("SIGTERM");
+    else if (mode === "output_capacity") h.data("x".repeat(1024 * 1024 + 1));
+    else [...h.timers.values()].find(timer => timer.delay === (mode === "deadline" ? 480000 : 30000)).callback();
+    await assert.rejects(h.attached.ready); const result = await h.attached.closed;
+    assert.equal(result.supervisor[4], true); assert.equal(result.supervisor[5], true); assert.equal(h.timers.size, 0);
+    assert.equal(result.firstBranch, mode === "partial" ? "incomplete_ready" : mode === "foreign" ? "invalid_ready" : mode);
+    if (mode !== "partial") assert.equal(h.stops(), 1);
+    if (["child_error", "stdin_error"].includes(mode)) assert.ok(result.errors.includes(undefined));
+    if (mode === "output_capacity") assert.equal(result.outputSummary.stdout.complete, false);
+    await assert.rejects(h.attached.permit()); assert.equal(h.writes(), 0);
+  }
+});
+test("attach diagnostic accepted READY replay and reporting failures cannot erase cleanup or earlier permit", async () => {
+  const h = inertAttach(); h.data(initReady()); await h.attached.ready; await h.attached.permit(); assert.equal(h.writes(), 1);
+  h.data(initReady()); const result = await h.attached.closed; assert.equal(result.readyAccepted, true); assert.equal(result.firstBranch, "replayed_ready"); assert.equal(h.stops(), 1);
+  await assert.rejects(h.attached.permit()); assert.equal(h.writes(), 1);
+  let attempts = 0; const project = createAttachProjection(h.attached, { cid: hex, nonce: hex, contextHash: other }, { internal() { attempts++; throw undefined; } });
+  project(result); project(result); assert.equal(attempts, 2); assert.ok(result.errors.includes(undefined)); assert.equal(result.supervisor[5], true);
+  const writeFailure = inertAttach(); writeFailure.data(initReady()); await writeFailure.attached.ready;
+  writeFailure.child.stdin.end = () => { throw undefined; }; await assert.rejects(writeFailure.attached.permit());
+  assert.equal(writeFailure.attached.result.firstBranch, "permit_write"); writeFailure.child.emit("close", 1, null); await writeFailure.attached.closed;
+  assert.throws(() => raiseContainerFailures([undefined, new Error("independent retirement")]), error => error instanceof AggregateError && error.errors.length === 2 && error.errors[0] === undefined);
+  const broken = inertAttach(); broken.attached.result.supervisor = new Proxy([], { set() { throw undefined; } });
+  broken.child.emit("error", undefined); await assert.rejects(broken.attached.ready); const settled = await broken.attached.closed;
+  assert.equal(broken.stops(), 1); assert.equal(broken.timers.size, 0); assert.ok(settled.errors.includes(undefined));
+});
+test("init prerequisite actual operations preserve order operands original undefined and reporter failures", async () => {
+  const success = await initCapture(); assert.equal(success.failed, false); assert.equal(success.value, imageId); assert.equal(success.frames.length, 9);
+  assert.deepEqual(success.calls.map(call => call.name), ["arguments", "identity", "reset", "prepare", "runtime", "native", "ready", "permit"]);
+  assert.deepEqual(success.calls[0].args, [[hex, other, "501", "20"]]); assert.equal(success.calls[4].args[0], identity); assert.deepEqual(success.calls[6].args, [hex, other]);
+  for (const [index, op] of success.calls.entries()) {
+    const failed = await initCapture(op.name); assert.equal(failed.failed, true); assert.equal(failed.reason, undefined); assert.equal(failed.calls.length, index + 1);
+    if (index) { const both = await initCapture(op.name, true); assert.ok(both.reason instanceof AggregateError); assert.equal(both.reason.errors[0], undefined); assert.equal(both.calls.length, index + 1); }
+    const { h, binding } = await attachWithFrames(failed.frames.join("")); const row = parseInitPrerequisites(h.attached.result, binding);
+    assert.equal(row.reason, index === 0 ? "no_records" : "original_failure"); if (index) { assert.equal(row.stage, initPrerequisiteStages[index]); assert.equal(row.defined, false); }
+  }
+  const brokenTrace = createInitDiagnostics(() => {}); brokenTrace.enter = () => { throw undefined; };
+  await assert.rejects(runInitPrerequisites([hex, other, "501", "20"], brokenTrace, inertInitOperations("arguments", [])), error => error instanceof AggregateError && error.errors.length === 3 && error.errors[0] === undefined && error.errors[2] === undefined);
+  const reports = await initCapture("runtime", true); assert.ok(reports.reason instanceof AggregateError); assert.equal(reports.reason.errors[0], undefined); assert.ok(reports.reason.errors.length > 1); assert.equal(reports.calls.length, 5);
+  const onlyReports = await initCapture(undefined, true); assert.equal(onlyReports.failed, true); assert.equal(onlyReports.calls.length, 8);
+});
+test("init private parser rejects capture loss foreign identity incomplete duplicate and malformed frames", async () => {
+  const captured = await initCapture(); const text = captured.frames.join("");
+  const { h, binding } = await attachWithFrames(text); const result = h.attached.result;
+  assert.equal(parseInitPrerequisites(result, binding).reason, "complete");
+  assert.equal(parseInitPrerequisites(result, { ...binding, attached: {} }).reason, "binding_unavailable");
+  for (const change of [r => r.supervisor[4] = false, r => r.outputSummary.stdout.complete = false, r => r.outputSummary.stderr.truncated = true]) {
+    const row = structuredClone(result); change(row); assert.equal(parseInitPrerequisites(row, { ...binding, attached: { result: row } }).reason, "capture_unavailable");
+  }
+  for (const key of ["stdout", "stderr"]) { const saved = result[key]; result[key] += "lost"; assert.equal(parseInitPrerequisites(result, binding).reason, "capture_mismatch"); result[key] = saved; }
+  for (const [mutate, expected] of [[s => s.replace(hex, other), "invalid"], [s => s + captured.frames[0], "invalid"], [s => s.replace('"seq":1', '"seq":2'), "invalid"], [s => s.replace('"event":"entered"', '"event":"foreign"'), "invalid"], [s => s.replace('"v":1', '"v":1,"secret":"private"'), "invalid"], [s => s.replace("EDGE_INIT_V1 ", "EDGE_INIT_V1 \x1b"), "invalid"], [s => s.slice(0, -1), "invalid"], [s => s.slice(0, s.lastIndexOf("\nEDGE_INIT_")), "incomplete"]]) {
+    const v = await attachWithFrames(mutate(text)); assert.equal(parseInitPrerequisites(v.h.attached.result, v.binding).reason, expected);
+  }
+  const utf8 = inertAttach(); utf8.child.stdout.emit("data", Buffer.from([0xc3])); utf8.child.stdout.emit("data", Buffer.from([0xa9])); utf8.data(text); utf8.child.emit("close", 1, null); await utf8.attached.closed;
+  assert.equal(parseInitPrerequisites(utf8.attached.result, { ...binding, attached: utf8.attached }).reason, "capture_unavailable");
+  const decreasing = text.replace('"reportFailures":0,"undefinedReportFailures":0', '"reportFailures":1,"undefinedReportFailures":0');
+  const nonmonotonic = await attachWithFrames(decreasing); assert.equal(parseInitPrerequisites(nonmonotonic.h.attached.result, nonmonotonic.binding).reason, "invalid");
+  assert.ok(captured.frames.every(frame => Buffer.byteLength(frame) <= 512));
+});
+test("attach and init failure records retain priority privacy and independent retirement within quota", async () => {
+  const captured = await initCapture("runtime"), { h, binding } = await attachWithFrames(captured.frames.join(""));
+  const report = createContainerDiagnostics(); createAttachProjection(h.attached, binding, report)(h.attached.result);
+  for (const phase of ["entry", "module_import", "dispatch", "host_runtime", "parent_namespaces", "cwd", "temp", "environment", "daemon", "base", "image", "create", "attach"]) report.mark(phase, "fulfilled");
+  report.mark("ready", "entered"); report.mark("retirement", "entered"); report.mark("ready", "rejected", undefined); report.mark("retirement", "rejected", undefined);
+  const lines = []; emitContainerFailure(report.records, line => lines.push(line)); const rows = lines.map(line => validateContainerDiagnostic(JSON.parse(line.slice(line.indexOf("::", 2) + 2))));
+  for (const phase of ["ready", "attach_process", "init_prerequisite", "retirement"]) assert.ok(rows.some(row => row.phase === phase));
+  assert.equal(rows.find(row => row.phase === "ready").state, "rejected"); assert.equal(rows.find(row => row.phase === "retirement").state, "rejected");
+  assert.equal(lines.length, 10); assert.ok(lines.every(line => Buffer.byteLength(line) <= 768)); assert.ok(Buffer.byteLength(lines.join("")) <= 8192); assert.ok(!lines.join("").includes(hex) && !lines.join("").includes(other));
+  const complete = await initCapture(), positive = inertAttach(); positive.data(complete.frames.join("") + initReady()); await positive.attached.ready; await positive.attached.permit(); positive.child.emit("close", 0, null);
+  const final = await positive.attached.closed, positiveRecords = []; const project = createAttachProjection(positive.attached, { cid: hex, nonce: hex, contextHash: other }, { internal: row => positiveRecords.push(validateContainerDiagnostic(row)) });
+  project(final); project(final); assert.equal(positiveRecords.length, 2); assert.equal(positiveRecords[0].exit, 0); assert.deepEqual(positiveRecords[0].capture, [true, true]); assert.equal(positiveRecords[1].reason, "complete");
+  const row = rows.find(row => row.v === 6); for (const change of [r => r.first = "private", r => r.supervisor = [], r => r.branches = 99999, r => r.stdout = "private"]) { const bad = structuredClone(row); change(bad); assert.throws(() => validateContainerDiagnostic(bad)); }
+  let accessed = false; const bad = { ...row }; Object.defineProperty(bad, "errors", { get() { accessed = true; throw undefined; } }); assert.throws(() => validateContainerDiagnostic(bad)); assert.equal(accessed, false);
+});
+async function initGuardFactory(overrides = {}) {
+  const source = await readFile(new URL("../scripts/edge-proof-container.mjs", import.meta.url), "utf8");
+  const runtime = source.slice(source.indexOf("async function validateContainerRuntime("), source.indexOf("export function parseImageBuildReceipt("));
+  const status = source.slice(source.indexOf("export function parseIdentity("), source.indexOf("export function validateMapping(")).replaceAll("export ", "") + source.slice(source.indexOf("export function validateChildStatus("), source.indexOf("async function readParentIdentity(")).replaceAll("export ", "");
+  const mounts = source.slice(source.indexOf("function canonicalMountPath("), source.indexOf("export function validateChildStatus(")).replaceAll("export ", "");
+  const helpers = source.slice(source.indexOf("export function createInitGuardLedger("), source.indexOf("const own =")).replaceAll("export ", "");
+  const declarations = source.slice(source.indexOf("const same ="), source.indexOf("const hashPattern =")) + source.slice(source.indexOf("const number ="), source.indexOf("export function parseIdentity("));
+  const goodStatus = "Groups:\t20\nUid:\t501 501 501 501\nGid:\t20 20 20 20\n" + ["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"].map(k => k + ":\t0000\n").join("") + "NoNewPrivs:\t1\nSeccomp:\t2\n";
+  const calls = [], bindings = { initGuardTags, initSourcePhases, process: { platform: "linux", arch: "x64", version: "v24.22.1", versions: { modules: "137" }, pid: 1, env: {} },
+    readFile: async path => { calls.push(path); if (path.endsWith("status")) return goodStatus; if (path.endsWith("mountinfo")) return ""; return "{}"; }, namespaceEvidence: async () => ({ interfaces: ["lo"], routes4: [], routes6: [] }), containerEnvironment: () => ({}),
+    validateNativeIdentity: value => value, qualifyImageInputs: async () => ({}), containerContract: { input: "/input" }, join: (...parts) => parts.join("/"), ...overrides };
+  const api = new Function(...Object.keys(bindings), declarations + helpers + status + mounts + runtime + "return { validateContainerRuntime, nativeReceipt, validateChildStatus, parseIdentity, validateIdentity, parseMounts, validateMounts, createInitGuardLedger, initGuardLeaf }; ")(...Object.values(bindings));
+  const runtimeBindings = { ...bindings, validateChildStatus: api.validateChildStatus, parseMounts: api.parseMounts, validateMounts: api.validateMounts, ...overrides };
+  const runtimeApi = new Function(...Object.keys(runtimeBindings), declarations + helpers.replace(/export /g, "") + runtime + "return { validateContainerRuntime, nativeReceipt }; ")(...Object.values(runtimeBindings));
+  return { ...api, ...runtimeApi, calls, goodStatus };
+}
+test("init guard actual validators retain short circuit and default outcomes", async () => {
+  const api = await initGuardFactory();
+  for (const [mutate, guard] of [[s => s.replace("501 501 501 501", "0 0 0 0"), "uid_gid_groups"], [s => s.replace("CapEff:\t0000", "CapEff:\t0001"), "capabilities"], [s => s.replace("NoNewPrivs:\t1", "NoNewPrivs:\t0"), "nnp"], [s => s.replace("Seccomp:\t2", "Seccomp:\t0"), "seccomp"]]) {
+    const ledger = api.createInitGuardLedger(); ledger.source("status_validate");
+    assert.throws(() => api.validateChildStatus(mutate(api.goodStatus), identity, ledger)); assert.equal(ledger.failure().guard, guard);
+    assert.throws(() => api.validateChildStatus(mutate(api.goodStatus), identity));
+  }
+  const status = api.goodStatus.replace("Groups:\t20", "Groups:\t20 20").replace("Uid:\t501", "Uid:\tinvalid");
+  assert.throws(() => api.parseIdentity(status), error => error.message === "edge-container: identity-groups");
+  let touched = false; const ledger = api.createInitGuardLedger(); ledger.source("status_validate");
+  assert.throws(() => api.validateIdentity({ uid: [], get gid() { touched = true; throw undefined; } }, identity, true, ledger)); assert.equal(touched, false);
+  const mounts = api.createInitGuardLedger(); mounts.source("mount_parse"); assert.throws(() => api.parseMounts("", true, mounts)); assert.equal(mounts.failure().guard, "mounts");
+  const valid = api.createInitGuardLedger(); valid.source("status_validate"); assert.equal(api.validateChildStatus(api.goodStatus, identity, valid), undefined); assert.equal(api.validateChildStatus(api.goodStatus, identity), undefined); assert.equal(valid.failure().guard, null);
+});
+test("init guard invocation ledger separates prerequisites false predicates and original undefined", async () => {
+  const original = undefined;
+  for (const phase of ["status_read", "native_read", "native_qualify"]) {
+    const api = await initGuardFactory({ readFile: async () => { if (phase !== "native_qualify") throw original; return "{}"; }, qualifyImageInputs: async () => { throw original; } });
+    const ledger = api.createInitGuardLedger();
+    await assert.rejects(phase === "status_read" ? api.validateContainerRuntime(identity, false, ledger) : api.nativeReceipt(other, ledger), error => error === original);
+    assert.deepEqual(ledger.failure(), { guard: null, source: phase });
+  }
+  for (const [overrides, expected] of [[{ process: { platform: "other" } }, "runtime"], [{ process: { platform: "linux", arch: "x64", version: "v24.22.1", versions: { modules: "137" }, pid: 2 } }, "ancestry"], [{ qualifyImageInputs: async () => ({ changed: true }) }, "native_receipt_equality"]]) {
+    const api = await initGuardFactory(overrides), ledger = api.createInitGuardLedger();
+    await assert.rejects(expected.startsWith("native") ? api.nativeReceipt(other, ledger) : api.validateContainerRuntime(identity, false, ledger)); assert.equal(ledger.failure().guard, expected);
+  }
+  for (const tag of initGuardTags) { const ledger = createInitGuardLedger(); ledger.source(tag === "native_receipt_equality" ? "native_equality" : "runtime"); initGuardLeaf(false, ledger, tag); initGuardLeaf(false, ledger, "ancestry"); assert.equal(ledger.failure().guard, tag); }
+  const a = createInitGuardLedger(), b = createInitGuardLedger(); a.source("runtime"); b.source("ancestry"); initGuardLeaf(false, a, "runtime"); assert.equal(a.failure().guard, "runtime"); assert.equal(b.failure().guard, null); a.source("ancestry"); assert.equal(a.errors.length, 1); assert.equal(a.failure().source, "runtime");
+  const trace = createInitDiagnostics(() => {}), ledger = createInitGuardLedger(); ledger.source = () => { throw undefined; };
+  const api = await initGuardFactory({ readFile: async () => { throw undefined; } }); const ops = inertInitOperations(undefined, []); ops.runtime = () => api.validateContainerRuntime(identity, false, ledger);
+  await assert.rejects(runInitPrerequisites([hex, other, "501", "20"], trace, ops, ledger), error => error instanceof AggregateError && error.errors[0] === undefined && error.errors.slice(1).includes(undefined));
+});
+test("init guard actual runtime network leaves and native receipt phases preserve short circuit", async () => {
+  for (const tag of ["interfaces", "routes4", "routes6", "effective_env"]) {
+    const evidence = { interfaces: tag === "interfaces" ? ["foreign"] : ["lo"], routes4: tag === "routes4" ? ["foreign"] : [], routes6: tag === "routes6" ? ["invalid"] : [] };
+    let touched = false; if (tag === "interfaces") Object.defineProperty(evidence, "routes4", { get() { touched = true; throw undefined; } });
+    const api = await initGuardFactory({ parseMounts: value => value, validateMounts: () => true, namespaceEvidence: async () => evidence, containerEnvironment: () => tag === "effective_env" ? { X: "closed" } : {} }), ledger = api.createInitGuardLedger();
+    await assert.rejects(api.validateContainerRuntime(identity, false, ledger)); assert.equal(ledger.failure().guard, tag); assert.equal(touched, false);
+  }
+  for (const [source, overrides] of [["native_parse", { readFile: async () => "{" }], ["native_validate", { validateNativeIdentity: () => { throw undefined; } }], ["namespace_read", { namespaceEvidence: async () => { throw undefined; }, parseMounts: value => value, validateMounts: () => true }]]) {
+    const api = await initGuardFactory(overrides), ledger = api.createInitGuardLedger();
+    await assert.rejects(source === "namespace_read" ? api.validateContainerRuntime(identity, false, ledger) : api.nativeReceipt(other, ledger)); assert.deepEqual(ledger.failure(), { guard: null, source });
+  }
+});
+test("init guard private terminal detail is bounded identity bound and absent after unrelated later failure", async () => {
+  const frames = [], trace = createInitDiagnostics(line => frames.push(line)), ledger = createInitGuardLedger(), ops = inertInitOperations(undefined, []);
+  ops.runtime = () => { ledger.source("network_validate"); initGuardLeaf(false, ledger, "interfaces"); throw undefined; };
+  await assert.rejects(runInitPrerequisites([hex, other, "501", "20"], trace, ops, ledger), error => error === undefined);
+  const v = await attachWithFrames(frames.join("")), row = parseInitPrerequisites(v.h.attached.result, v.binding);
+  assert.deepEqual(row.detail, { guard: "interfaces", source: "network_validate" }); assert.equal(row.defined, false); assert.ok(frames.every(line => Buffer.byteLength(line) <= 512));
+  for (const detail of [{ guard: "foreign", source: "runtime" }, { guard: "seccomp", source: "native_read" }, { guard: null, source: "private" }]) assert.throws(() => validateInitDetail(detail));
+  const broken = structuredClone(row); broken.detail.source = "native_equality"; broken.detail.guard = "native_receipt_equality"; assert.throws(() => validateContainerDiagnostic(broken));
+  const sharedError = new Error("owned synthetic");
+  const concurrent = await Promise.all(["runtime", "ancestry"].map(async tag => {
+    const records = [], trace = createInitDiagnostics(line => records.push(line)), ledger = createInitGuardLedger(), operations = inertInitOperations(undefined, []);
+    operations.runtime = () => { ledger.source(tag); initGuardLeaf(false, ledger, tag); throw sharedError; };
+    await assert.rejects(runInitPrerequisites([hex, other, "501", "20"], trace, operations, ledger), error => error === sharedError);
+    const captured = await attachWithFrames(records.join("")); return parseInitPrerequisites(captured.h.attached.result, captured.binding).detail;
+  }));
+  assert.deepEqual(concurrent, [{ guard: "runtime", source: "runtime" }, { guard: "ancestry", source: "ancestry" }]);
+  const maximum = createInitDiagnostics(line => assert.ok(Buffer.byteLength(line) <= 512)); maximum.enter("arguments"); maximum.bind(hex, other);
+  for (const stage of initPrerequisiteStages.slice(1, 6)) maximum.enter(stage);
+  maximum.finish(true, undefined, { guard: "native_receipt_equality", source: "native_equality" }, Array(16).fill(undefined)); assert.equal(maximum.errors.length, 0);
+  const later = [], laterTrace = createInitDiagnostics(line => later.push(line)), fresh = createInitGuardLedger(), laterOps = inertInitOperations("ready", []); laterOps.runtime = () => fresh.source("environment_validate");
+  await assert.rejects(runInitPrerequisites([hex, other, "501", "20"], laterTrace, laterOps, fresh)); assert.equal(Object.hasOwn(JSON.parse(later.at(-1).trim().slice("EDGE_INIT_V1 ".length)), "detail"), false);
+});
+// END attach diagnostic pure tests.
