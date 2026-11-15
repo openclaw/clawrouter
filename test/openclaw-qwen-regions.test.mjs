@@ -734,6 +734,20 @@ test("Qwen SDK acquisition binds exact invocation, fetch P, Response and reader 
   assert.equal(nativeCalls, 1); assert.equal(acquisitions, 1);
   ledger.restore(); ownership.restore(); await ledger.drain(); ledger.seal();
 });
+test("Qwen publishes the shared drain before original assimilation can reenter", async () => {
+  const ledger = createQwenLedger(), held = qwenDeferred(); let nested, subscriptions = 0, settled = false;
+  const originalThen = held.promise.then;
+  held.promise.then = function (...args) {
+    if (++subscriptions === 2) nested = ledger.drain();
+    return Reflect.apply(originalThen, this, args);
+  };
+  ledger.observe("held", held.promise); const joined = ledger.drain();
+  // Old code returned a different, early-failing nested join while P was held.
+  if (nested !== joined) nested.catch(() => {});
+  assert.equal(nested, joined); joined.then(() => { settled = true; });
+  await Promise.resolve(); await Promise.resolve(); assert.equal(settled, false);
+  held.resolve(); await joined; assert.equal(subscriptions, 2); await ledger.drain(); assert.equal(subscriptions, 2);
+});
 // END Qwen observer ownership pure tests.
 
 function ownershipFixture() {

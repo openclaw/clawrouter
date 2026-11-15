@@ -5,7 +5,7 @@
 
 ## Unreleased
 
-- Qwen regional proof: join original operations and their attached observers to a stable fixed point, bind Worker fetches to the original ingress request, and seal ownership only after independent producer/accounting checks and restoration. All original rejection and retirement assertions remain strict.
+- Qwen regional proof: join original operations and their attached observers to a stable fixed point, bind Worker fetches to the original ingress request, and seal ownership only after independent producer/accounting checks and restoration. All original rejection and retirement assertions remain strict. Reentrant drains share the published join before original promise assimilation.
 
 - Preserve bounded script and Worker failure reports when composing Qwen region coverage with the landed native retirement diagnostics.
 

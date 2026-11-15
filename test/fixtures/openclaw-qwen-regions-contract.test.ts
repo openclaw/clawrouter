@@ -137,23 +137,30 @@ function createQwenLedger() {
     responses.set(value, owner); body(value.body, owner, value);
   }
   async function join() {
-    try {
-      // Cursors survive every drain. Original and attached observer batches are
-      // always joined together: observer rejection cannot skip a held original.
-      do {
-        const originalsAt = operations.length, observersAt = observers.length;
-        const batch = operations.slice(originalCursor, originalsAt), tails = observers.slice(observerCursor, observersAt);
-        originalCursor = originalsAt; observerCursor = observersAt;
-        await Promise.allSettled([...batch.map(row => row.pending), ...tails.map(row => row.terminal ?? row.pending)]);
-      } while (originalCursor < operations.length || observerCursor < observers.length);
-      const failures = [...synchronous, ...registration, ...observerFailures, ...ownershipFailures, ...restorationFailures, ...lateFailures,
-        ...operations.filter(operation => operation.state !== "fulfilled").map(operation => operation.reason)];
-      for (const row of observers) if (row.state === "pending") failures.push(new Error("original observer remains pending"));
-      for (const row of readers) if (row.unlocks !== 1 || row.returns !== 1 || row.body.locked) failures.push(new Error("original reader remains owned"));
-      if (failures.length) throw new AggregateError(failures, "original Qwen operations failed");
-    } finally { inFlight = undefined; }
+    // Cursors survive every drain. Original and attached observer batches are
+    // always joined together: observer rejection cannot skip a held original.
+    do {
+      const originalsAt = operations.length, observersAt = observers.length;
+      const batch = operations.slice(originalCursor, originalsAt), tails = observers.slice(observerCursor, observersAt);
+      originalCursor = originalsAt; observerCursor = observersAt;
+      await Promise.allSettled([...batch.map(row => row.pending), ...tails.map(row => row.terminal ?? row.pending)]);
+    } while (originalCursor < operations.length || observerCursor < observers.length);
+    const failures = [...synchronous, ...registration, ...observerFailures, ...ownershipFailures, ...restorationFailures, ...lateFailures,
+      ...operations.filter(operation => operation.state !== "fulfilled").map(operation => operation.reason)];
+    for (const row of observers) if (row.state === "pending") failures.push(new Error("original observer remains pending"));
+    for (const row of readers) if (row.unlocks !== 1 || row.returns !== 1 || row.body.locked) failures.push(new Error("original reader remains owned"));
+    if (failures.length) throw new AggregateError(failures, "original Qwen operations failed");
   }
-  function drain() { open(); if (!inFlight) inFlight = join(); return inFlight; }
+  function drain() {
+    open(); if (inFlight) return inFlight;
+    let resolve!: () => void, reject!: (reason: unknown) => void;
+    // Publish before original promise assimilation can reenter drain(). This
+    // preserves the original subscription order without starting another join.
+    const current = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
+    inFlight = current;
+    void join().then(() => { inFlight = undefined; resolve(); }, reason => { inFlight = undefined; reject(reason); });
+    return current;
+  }
   function restore() {
     open(); if (restored) throw new Error("Qwen observers already restored");
     restored = true; const failures: unknown[] = [];
