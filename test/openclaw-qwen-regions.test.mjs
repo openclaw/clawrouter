@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync, readdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { stripTypeScriptTypes } from "node:module";
+import { createRequire, stripTypeScriptTypes } from "node:module";
 import test from "node:test";
 import { parse } from "yaml";
 import { compileProviderSnapshot } from "../scripts/compile-providers.mjs";
@@ -19,7 +20,7 @@ const shared = transformed.split("// BEGIN shared fixture functions.")[1]?.split
 assert.ok(shared, "original fixture functions are present");
 // The marker's prose ends before the first function declaration.
 const functions = shared.slice(shared.indexOf("function qwenRegionCases"));
-const { qwenRegionCases, createQwenLedger } = new Function(`${functions}; return { qwenRegionCases, createQwenLedger };`)();
+const { qwenRegionCases, createQwenLedger, createQwenOwnership, qwenClosedRecord } = new Function(`${functions}; return { qwenRegionCases, createQwenLedger, createQwenOwnership, qwenClosedRecord };`)();
 const rows = qwenRegionCases();
 const regions = ["qwen-cn", "qwen-coding-global", "qwen-coding-cn"];
 const bases = ["https://dashscope.aliyuncs.com/compatible-mode/v1", "https://coding-intl.dashscope.aliyuncs.com/v1", "https://coding.dashscope.aliyuncs.com/v1"];
@@ -34,6 +35,108 @@ async function finish(body, cleanups) {
   if (failures.length === 1) throw failures[0];
   if (failures.length) throw new AggregateError(failures, "Qwen body and cleanup failed");
   return result;
+}
+
+// Raw child failures remain available to this owner, never serialized by the
+// test reporter. Only closed fixture records leave this boundary.
+const retainedNativeFailures = new WeakMap();
+function createQwenFailureRelay() {
+  const records = new Map(), sdkCases = new Map();
+  function record(value, sdk = false) {
+    assert.deepEqual(Object.keys(value).sort(), ["v", "case", "phase", "op", "state", "operations", "rejected", "pending"].sort());
+    assert.equal(value.v, 1);
+    if (sdk) assert.notEqual(value.case, "none", "SDK receipt requires an actual case");
+    const checked = qwenClosedRecord(value.case, value.phase, value.op, value.state, { operations: value.operations, rejected: value.rejected, pending: value.pending });
+    const key = value.case + ":" + value.phase + ":" + value.op;
+    const encoded = JSON.stringify(checked);
+    if (records.has(key)) assert.equal(records.get(key), encoded, "conflicting closed diagnostic");
+    assert.ok(records.has(key) || records.size < 512, "closed diagnostic capacity exceeded");
+    records.set(key, encoded);
+    if (sdk) {
+      if (sdkCases.has(value.case)) assert.equal(sdkCases.get(value.case), encoded, "ambiguous SDK case receipt");
+      sdkCases.set(value.case, encoded);
+    }
+  }
+  function text(value) {
+    assert.equal(typeof value, "string");
+    assert.ok(Buffer.byteLength(value) <= 2 * 1024 * 1024, "native output bound exceeded");
+    for (const line of value.split("\n")) {
+      if (!line.startsWith("QWEN_SDK_V1 ")) continue;
+      assert.ok(Buffer.byteLength(line) <= 512, "native record bound exceeded");
+      record(JSON.parse(line.slice("QWEN_SDK_V1 ".length)), true);
+    }
+  }
+  function error(original) {
+    const pending = [original], seen = new Set(); let bytes = 0;
+    while (pending.length) {
+      const value = pending.pop();
+      if (!value || !["object", "function"].includes(typeof value) || seen.has(value)) continue;
+      seen.add(value); assert.ok(seen.size <= 64, "native error closure exceeded");
+      for (const field of ["stdout", "stderr"]) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, field);
+        if (!descriptor || !("value" in descriptor) || typeof descriptor.value !== "string") continue;
+        bytes += Buffer.byteLength(descriptor.value); assert.ok(bytes <= 4 * 1024 * 1024, "native error bytes exceeded");
+        text(descriptor.value);
+      }
+      const cause = Object.getOwnPropertyDescriptor(value, "cause");
+      if (cause && "value" in cause) pending.push(cause.value);
+      const errors = Object.getOwnPropertyDescriptor(value, "errors");
+      if (errors && "value" in errors && Array.isArray(errors.value)) {
+        const length = Object.getOwnPropertyDescriptor(errors.value, "length")?.value;
+        assert.ok(Number.isSafeInteger(length) && length <= 64, "native aggregate exceeded");
+        for (let i = 0; i < length; i++) {
+          const item = Object.getOwnPropertyDescriptor(errors.value, String(i));
+          if (item && "value" in item) pending.push(item.value);
+        }
+      }
+    }
+  }
+  function output(helper) {
+    const failures = [...records.values()].map(value => JSON.parse(value)).filter(value => value.state !== "passed");
+    const observed = [...sdkCases.values()].map(value => JSON.parse(value));
+    const result = [{ kind: "helper", pin: sourceHead, state: helper, expectedCases: rows.length, observedCases: observed.length,
+      failedCases: observed.filter(value => value.state !== "passed").length, unknownCases: rows.length - observed.length }, ...failures.slice(0, 8)];
+    if (failures.length > 8) result.push({ kind: "overflow", omitted: failures.length - 8 });
+    return result;
+  }
+  const complete = () => sdkCases.size === rows.length && [...sdkCases.values()].every(value => {
+    const row = JSON.parse(value); return row.state === "passed" && row.rejected === 0 && row.pending === 0;
+  });
+  return { record, text, error, output, complete };
+}
+
+async function withQwenNativeRelay(body, cleanups, emit) {
+  const relay = createQwenFailureRelay(), failures = []; let helper = "unrun", phase = "setup";
+  const capture = (error, currentPhase) => {
+    failures.push(error);
+    try { relay.error(error); } catch (reportError) { failures.push(reportError); }
+    try { relay.record(qwenClosedRecord("none", currentPhase, "cleanup", "failed", { operations: 0, rejected: 0, pending: 0 })); }
+    catch (reportError) { failures.push(reportError); }
+  };
+  try {
+    await body({ record: relay.record, async runChild(run) {
+      phase = "helper";
+      try { await run({ diagnostic: relay.text }); helper = "passed"; }
+      catch (error) { helper = "failed"; throw error; }
+    } });
+  } catch (error) { capture(error, phase); }
+  for (const cleanup of cleanups) {
+    try { await cleanup.run(relay.record); } catch (error) { capture(error, cleanup.phase); }
+  }
+  if (helper === "unrun" && !failures.length || helper === "passed" && !relay.complete()) {
+    helper = "incomplete";
+    capture(new Error("missing or failed native SDK receipts"), "relay");
+  }
+  // Original child work, Worker retirement and runtime cleanup have all joined
+  // before this bounded relay. Missing records remain unknown, never PASS.
+  for (const record of relay.output(helper)) {
+    try { emit(record); } catch (error) { failures.push(error); }
+  }
+  if (failures.length) {
+    const closed = new AggregateError(failures.map(() => new Error("Qwen owned proof phase failed")), "Qwen native proof failed; inspect closed boundary records");
+    retainedNativeFailures.set(closed, failures);
+    throw closed;
+  }
 }
 
 function routerScript() {
@@ -139,11 +242,19 @@ async function startFixture() {
   return { runtime, origin, close: () => finish(() => {}, [() => runtime.dispose(), () => rm(directory, { recursive: true, force: true })]) };
 }
 
-async function readControl(f, path) {
+async function readControl(f, path, report) {
   const response = await fetch(f.origin + path);
   const text = await response.text();
+  const proof = JSON.parse(text);
+  if (report) {
+    const id = path.startsWith("/fixture/join/") ? path.slice("/fixture/join/".length) : "none";
+    const operations = Array.isArray(proof.operations) ? proof.operations : [];
+    report(qwenClosedRecord(id, id === "none" ? "setup" : "worker", "control", response.status === 200 ? "passed" : "failed", {
+      operations: operations.length, rejected: operations.filter(op => op.state === "rejected").length, pending: operations.filter(op => op.state === "pending").length,
+    }));
+  }
   assert.equal(response.status, 200, path === "/fixture/setup" ? "Worker setup failed" : "original Worker retirement failed");
-  return JSON.parse(text);
+  return proof;
 }
 
 function assertProof(row, proof) {
@@ -236,17 +347,205 @@ test("cleanup retains body failure and attempts both independent finalizers", as
   assert.deepEqual(order, [1, 2]);
 });
 
+function ownershipFixture() {
+  const ledger = createQwenLedger(), storage = new AsyncLocalStorage();
+  const expected = { url: "https://qwen.fixture/chat/completions", credential: "synthetic-fixture" };
+  const owner = createQwenOwnership(storage, ledger, expected);
+  const consume = async result => {
+    const reader = result.response.body.getReader();
+    while (!(await reader.read()).done) {}
+    reader.releaseLock(); await result.release();
+  };
+  const close = () => { ledger.restore(); owner.restore(); };
+  return { ledger, storage, expected, owner, consume, close };
+}
+
+test("Qwen invocation ownership preserves concurrent async ancestry, arguments and original promises with reused signals", async () => {
+  const f = ownershipFixture(), receiver = {}, fetchReceiver = {}, caller = Object.freeze({}), signal = new AbortController().signal;
+  const options = { method: "POST", headers: { authorization: "Bearer " + f.expected.credential }, signal: new AbortController().signal };
+  const invocations = [], nativePromises = [], guardPromises = [];
+  const native = f.owner.wrapFetch(function (...args) {
+    assert.equal(this, fetchReceiver); assert.deepEqual(args, [f.expected.url, options, "extra"]);
+    const pending = Promise.resolve(new Response("original-body")); nativePromises.push(pending); return pending;
+  });
+  function guard(input, extra) {
+    assert.equal(this, receiver); assert.equal(input, options); assert.equal(extra, "guard-extra");
+    const pending = native.call(fetchReceiver, f.expected.url, options, "extra");
+    assert.equal(pending, nativePromises.at(-1));
+    const result = pending.then(response => ({ response, release: () => Promise.resolve() })); guardPromises.push(result); return result;
+  }
+  function publicCall(model, context, args) {
+    assert.equal(this, receiver); assert.equal(model, "model"); assert.equal(context, "context"); assert.equal(args.signal, signal);
+    const pending = Promise.resolve().then(() => {
+      const guarded = f.owner.guard(guard, receiver, [options, "guard-extra"]);
+      assert.equal(guarded, guardPromises.at(-1)); return guarded;
+    });
+    invocations.push(pending); return pending;
+  }
+  try {
+    const a = f.owner.invoke(publicCall, receiver, ["model", "context", { signal }], caller);
+    const b = f.owner.invoke(publicCall, receiver, ["model", "context", { signal }], caller);
+    assert.equal(a, invocations[0]); assert.equal(b, invocations[1]);
+    await Promise.all((await Promise.all([a, b])).map(f.consume));
+    await f.ledger.drain(); f.owner.verify(2, 2);
+    const acquired = [...f.owner.acquisitions];
+    assert.notEqual(acquired[0].invocation, acquired[1].invocation);
+    assert.ok(acquired.every(a => Object.isFrozen(a.invocation) && Object.isFrozen(a.invocation.args)));
+    assert.notEqual([...f.owner.fetches][0].response, [...f.owner.fetches][1].response);
+  } finally { f.close(); }
+});
+
+for (const fault of ["missing", "detached", "foreign_url", "foreign_key", "foreign_method", "second_fetch"]) {
+  test(`Qwen invocation ownership fails closed for ${fault} without replacing original work`, async () => {
+    const f = ownershipFixture(); let calls = 0, original;
+    const options = { method: fault === "foreign_method" ? "GET" : "POST", headers: { authorization: "Bearer " + (fault === "foreign_key" ? "foreign" : f.expected.credential) } };
+    const native = f.owner.wrapFetch(function (...args) {
+      calls++; assert.equal(args[1], options);
+      original = Promise.resolve(new Response("original")); return original;
+    });
+    const fetchOnce = () => {
+      const pending = native(fault === "foreign_url" ? "https://foreign.fixture/chat/completions" : f.expected.url, options);
+      assert.equal(pending, original); return pending;
+    };
+    const guard = async () => {
+      if (fault === "second_fetch") { const extra = await fetchOnce(); await f.consume({ response: extra, release: () => Promise.resolve() }); }
+      return { response: await fetchOnce(), release: () => Promise.resolve() };
+    };
+    try {
+      const call = () => fault === "missing" ? guard() : f.owner.guard(guard, undefined, [options]);
+      const result = await (fault === "missing" ? call() : f.owner.invoke(() => fault === "detached" ? f.storage.exit(call) : call(), undefined, [], {}));
+      await f.consume(result);
+      await assert.rejects(f.ledger.drain()); assert.throws(() => f.owner.verify(1));
+      assert.equal(calls, fault === "second_fetch" ? 2 : 1);
+    } finally { f.close(); }
+  });
+}
+
+test("Qwen invocation ownership rejects ambiguous Response attachment and preserves synchronous undefined", async () => {
+  const f = ownershipFixture(), response = new Response("one"), options = { method: "POST", headers: { authorization: "Bearer " + f.expected.credential } };
+  const native = f.owner.wrapFetch(() => Promise.resolve(response));
+  const guard = () => native(f.expected.url, options).then(response => ({ response, release: () => Promise.resolve() }));
+  try {
+    const first = await f.owner.invoke(() => f.owner.guard(guard, undefined, [options]), undefined, [], {});
+    await f.consume(first);
+    const second = await f.owner.invoke(() => f.owner.guard(guard, undefined, [options]), undefined, [], {});
+    await second.release();
+    await assert.rejects(f.ledger.drain()); assert.throws(() => f.owner.verify(2, 2));
+  } finally { f.close(); }
+  for (const boundary of ["public", "guard", "fetch"]) {
+    const g = ownershipFixture(); let caught = false;
+    const original = () => { throw undefined; };
+    try {
+      if (boundary === "public") g.owner.invoke(original, undefined, [], {});
+      else if (boundary === "guard") g.owner.invoke(() => g.owner.guard(original, undefined, [{}]), undefined, [], {});
+      else g.owner.invoke(() => g.owner.guard(() => g.owner.wrapFetch(original)(g.expected.url, options), undefined, [{}]), undefined, [], {});
+    } catch (error) { caught = true; assert.equal(error, undefined); }
+    assert.equal(caught, true);
+    if (boundary !== "public") await assert.rejects(g.ledger.drain(), error => error.errors.includes(undefined));
+    g.close();
+  }
+});
+
+const closedSDKLine = row => "QWEN_SDK_V1 " + JSON.stringify(row) + "\n";
+const closedSDKRecord = (id, state = "passed") => qwenClosedRecord(id, "join", "read", state, { operations: 4, rejected: state === "failed" ? 1 : 0, pending: 0 });
+
+test("Qwen failure relay retains setup undefined and joins every cleanup before emission", async () => {
+  const events = [], cleanupFailure = {}, output = []; let release;
+  const held = new Promise(resolve => { release = resolve; });
+  const pending = withQwenNativeRelay(() => { throw undefined; }, [
+    { phase: "worker", run: async () => { events.push("worker"); await held; throw cleanupFailure; } },
+    { phase: "restore", run: () => { events.push("restore"); } },
+  ], record => { events.push("emit"); output.push(record); });
+  await Promise.resolve(); assert.deepEqual(events, ["worker"]); assert.deepEqual(output, []);
+  release();
+  await assert.rejects(pending, error => {
+    assert.deepEqual(retainedNativeFailures.get(error), [undefined, cleanupFailure]);
+    assert.ok(!Object.hasOwn(error, "cause") && !Object.hasOwn(error, "stdout")); return true;
+  });
+  assert.equal(events[1], "restore"); assert.equal(output[0].state, "unrun");
+  assert.ok(output.some(row => row.phase === "setup") && output.some(row => row.phase === "worker"));
+});
+
+test("Qwen failure relay captures child failure and cleanup aggregates without getters or raw text", async () => {
+  let getters = 0;
+  const child = { stdout: "private child prose\n" + closedSDKLine(closedSDKRecord(rows[0].id, "failed")) }, cleanup = {};
+  Object.defineProperty(cleanup, "stderr", { get() { getters++; throw Error("never read"); } });
+  const original = new AggregateError([child, cleanup], "private child error"); original.cause = original;
+  const emitted = [];
+  await assert.rejects(withQwenNativeRelay(relay => relay.runChild(() => { throw original; }), [], value => emitted.push(value)), error => retainedNativeFailures.get(error)[0] === original);
+  assert.equal(getters, 0); assert.equal(emitted[0].state, "failed"); assert.equal(emitted[0].observedCases, 1);
+  assert.ok(emitted.some(row => row.case === rows[0].id)); assert.doesNotMatch(JSON.stringify(emitted), /private child|stdout|stderr/);
+});
+
+test("Qwen failure relay requires complete receipts, emits helper first and bounds overflow", async () => {
+  const absent = [];
+  await assert.rejects(withQwenNativeRelay(() => {}, [], () => {}));
+  await assert.rejects(withQwenNativeRelay(relay => relay.runChild(() => {}), [], row => absent.push(row)));
+  assert.equal(absent[0].state, "incomplete"); assert.equal(absent[0].unknownCases, rows.length);
+  const relay = createQwenFailureRelay();
+  for (const row of rows.slice(0, 12)) relay.text(closedSDKLine(closedSDKRecord(row.id, "failed")));
+  const output = relay.output("failed"); assert.equal(output[0].kind, "helper"); assert.equal(output.length, 10);
+  assert.deepEqual(output[9], { kind: "overflow", omitted: 4 });
+  const success = [];
+  await withQwenNativeRelay(relay => relay.runChild(sink => sink.diagnostic(rows.map(row => closedSDKLine(closedSDKRecord(row.id))).join(""))), [], row => success.push(row));
+  assert.equal(success.length, 1); assert.equal(success[0].state, "passed"); assert.equal(success[0].unknownCases, 0);
+});
+
+test("Qwen failure relay rejects malformed, foreign, conflicting and oversized records", () => {
+  const sample = closedSDKRecord(rows[0].id);
+  for (const patch of [{ case: "foreign" }, { case: "none" }, { phase: "private prose" }, { op: "unknown" }, { state: "maybe" }, { pending: -1 }, { extra: "private" }]) {
+    assert.throws(() => createQwenFailureRelay().text(closedSDKLine({ ...sample, ...patch })));
+  }
+  assert.throws(() => createQwenFailureRelay().text("QWEN_SDK_V1 {"));
+  assert.throws(() => createQwenFailureRelay().text("x".repeat(2 * 1024 * 1024 + 1)));
+  const relay = createQwenFailureRelay(); relay.text(closedSDKLine(sample));
+  assert.throws(() => relay.text(closedSDKLine({ ...sample, rejected: 1 })));
+  assert.throws(() => createQwenFailureRelay().error(new AggregateError(Array.from({ length: 65 }, () => ({})), "bounded")));
+});
+
+test("Qwen failure relay capacity errors cannot prevent independent cleanup", async () => {
+  const cleaned = [], emitted = [];
+  await assert.rejects(withQwenNativeRelay(relay => {
+    for (const row of rows) for (const phase of ["setup", "caller", "join", "restore", "worker", "helper"]) {
+      relay.record({ ...closedSDKRecord(row.id, "failed"), phase });
+    }
+  }, [{ phase: "worker", run: () => { cleaned.push("worker"); throw undefined; } },
+    { phase: "restore", run: () => { cleaned.push("restore"); } }], row => emitted.push(row)), error => retainedNativeFailures.get(error).includes(undefined));
+  assert.deepEqual(cleaned, ["worker", "restore"]); assert.equal(emitted.length, 10);
+  assert.deepEqual(emitted.at(-1), { kind: "overflow", omitted: 504 });
+});
+
+test("Qwen failure relay parses real failed control response before its strict status assertion", async t => {
+  const row = rows[0], records = [];
+  t.mock.method(globalThis, "fetch", () => Promise.resolve(Response.json({ retired: false, operations: [{ kind: "read", state: "rejected" }] }, { status: 500 })));
+  await assert.rejects(readControl({ origin: "https://qwen.fixture" }, "/fixture/join/" + row.id, value => records.push(value)));
+  assert.equal(records.length, 1); assert.equal(records[0].case, row.id); assert.equal(records[0].rejected, 1); assert.equal(records[0].state, "failed");
+});
+
+test("Qwen fixture syntax bundles SDK and Worker observer routes without executing them", async () => {
+  const require = createRequire(import.meta.url), tooling = createRequire(require.resolve("wrangler/package.json"));
+  const { build } = tooling("esbuild");
+  const sdk = await build({ stdin: { contents: fixtureText, sourcefile: "qwen-contract.ts", loader: "ts" }, bundle: true, external: ["*"], platform: "node", format: "esm", write: false, logLevel: "silent" });
+  assert.equal(sdk.errors.length, 0); assert.ok(sdk.outputFiles[0].contents.length > 0);
+  for (const contents of [routerScript(), upstreamScript()]) {
+    const result = await build({ stdin: { contents, resolveDir: new URL("..", import.meta.url).pathname, sourcefile: "qwen-worker.mjs", loader: "js" }, bundle: true, external: ["cloudflare:*", "node:*"], platform: "browser", format: "esm", write: false, logLevel: "silent" });
+    assert.equal(result.errors.length, 0); assert.ok(result.outputFiles[0].contents.length > 0);
+  }
+});
+
 test("registered Qwen regional SDK through shipping Worker and SQLite", { skip: !process.env.CLAWROUTER_OPENCLAW_CHECKOUT, timeout: 300_000 }, async t => {
-  const f = await startFixture();
-  await finish(async () => {
-    await readControl(f, "/fixture/setup");
-    await runOpenClawConsumer(t, { source: process.env.CLAWROUTER_OPENCLAW_CHECKOUT, sourceHead, fixture, testPath: "extensions/qwen/worker-regions-contract.test.ts",
-      env: { CLAWROUTER_CONTRACT_ORIGIN: f.origin, CLAWROUTER_SDK_SOURCE_HEAD: sourceHead, QWEN_API_KEY: "synthetic-poison-client" } });
-  }, [async () => {
+  let f;
+  await withQwenNativeRelay(async relay => {
+    f = await startFixture();
+    await readControl(f, "/fixture/setup", relay.record);
+    await relay.runChild(sink => runOpenClawConsumer(sink, { source: process.env.CLAWROUTER_OPENCLAW_CHECKOUT, sourceHead, fixture, testPath: "extensions/qwen/worker-regions-contract.test.ts",
+      env: { CLAWROUTER_CONTRACT_ORIGIN: f.origin, CLAWROUTER_SDK_SOURCE_HEAD: sourceHead, QWEN_API_KEY: "synthetic-poison-client" } }));
+  }, [{ phase: "worker", run: async report => {
+    if (!f) return;
     const failures = [];
-    for (const row of rows) try { assertProof(row, await readControl(f, "/fixture/join/" + row.id)); } catch (error) { failures.push(error); }
+    for (const row of rows) try { assertProof(row, await readControl(f, "/fixture/join/" + row.id, report)); } catch (error) { failures.push(error); }
     if (failures.length) throw new AggregateError(failures, "Qwen Worker cases and retirement failed");
-  }, () => f.close()]);
+  } }, { phase: "restore", run: () => f?.close() }], record => console.log(`::${record.state === "passed" ? "notice" : "error"} title=Qwen native boundary::` + JSON.stringify(record)));
 });
 
 test("shipping regional Worker reaches each original origin and joins positive metadata-free streams", { timeout: 60_000 }, async () => {
