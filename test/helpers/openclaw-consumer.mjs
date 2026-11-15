@@ -6,7 +6,7 @@ import { chmod, copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promi
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { parseRunnerReport, readPrivateFile, reportByteLimit, runnerContract, sha256, validateBinding } from "./openclaw-runner-reporter.mjs";
+import { parseRunnerReport, readPrivateFile, reportByteLimit, runnerPlan, sha256, validateBinding } from "./openclaw-runner-reporter.mjs";
 
 export async function runOpenClawConsumer(t, { source, sourceHead, fixture, env, testPath = "extensions/clawrouter/worker-contract.test.ts", runnerReport }) {
   assert.equal(process.env.CI, "true", "the public client uses its own native install in ephemeral CI only");
@@ -41,8 +41,7 @@ export async function runOpenClawConsumer(t, { source, sourceHead, fixture, env,
 }
 
 export function validateRunnerRequest({ sourceHead, testPath, env, runnerReport }) {
-  assert.equal(sourceHead, runnerContract.pin, "unsupported native diagnostic pin");
-  assert.equal(testPath, runnerContract.target, "unsupported native diagnostic target");
+  runnerPlan(sourceHead, testPath);
   assert.deepEqual(Object.keys(runnerReport).sort(), ["expectedInvocations", "fixtureSha256", "onReport", "reporterSha256"]);
   assert.equal(runnerReport.expectedInvocations, 1, "unsupported native diagnostic cardinality");
   assert.equal(typeof runnerReport.onReport, "function");
@@ -75,7 +74,7 @@ export async function withNativeRunnerReport(options, run) {
   const reporterBytes = await readFile(reporterSource);
   assert.equal(sha256(reporterBytes), runnerReport.reporterSha256, "reporter bytes changed");
   assert.equal(sha256(await readFile(fixture)), runnerReport.fixtureSha256, "fixture bytes changed");
-  const binding = validateBinding({ ...runnerContract, fixtureSha256: runnerReport.fixtureSha256,
+  const binding = validateBinding({ ...runnerPlan(options.sourceHead, options.testPath), fixtureSha256: runnerReport.fixtureSha256,
     reporterSha256: runnerReport.reporterSha256, nonce: randomBytes(32).toString("hex") });
   const publish = runnerReport.onReport;
   const directory = await mkdtemp(join(resolve(source), ".clawrouter-runner-report-"));

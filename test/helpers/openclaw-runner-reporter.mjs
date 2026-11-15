@@ -11,6 +11,11 @@ export const runnerContract = Object.freeze({
   target: "extensions/qwen/worker-regions-contract.test.ts",
   expectedInvocations: 1,
 });
+export function runnerPlan(pin, target) {
+  assert.equal(pin, runnerContract.pin, "unsupported native diagnostic pin");
+  assert.ok([runnerContract.target, "extensions/xiaomi/worker-contract.test.ts"].includes(target), "unsupported native diagnostic target");
+  return { ...runnerContract, target };
+}
 export const reportByteLimit = 64 * 1024;
 const hashPattern = /^[a-f0-9]{64}$/;
 const phases = ["run_start", "module_queued", "module_collected", "module_start", "module_end"];
@@ -27,7 +32,7 @@ function count(value) {
 }
 export function validateBinding(binding) {
   keys(binding, [...Object.keys(runnerContract), "fixtureSha256", "reporterSha256", "nonce"]);
-  for (const [key, value] of Object.entries(runnerContract)) assert.equal(binding[key], value, "unsupported native runner plan");
+  for (const [key, value] of Object.entries(runnerPlan(binding.pin, binding.target))) assert.equal(binding[key], value, "unsupported native runner plan");
   for (const key of ["fixtureSha256", "reporterSha256", "nonce"]) assert.match(binding[key], hashPattern);
   return binding;
 }

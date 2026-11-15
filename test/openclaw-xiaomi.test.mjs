@@ -20,6 +20,48 @@ const { xiaomiPlanCases, xiaomiNativeControls, xiaomiInvocationOwnership, xiaomi
 const planRows = xiaomiPlanCases(), allPlanRows = [...xiaomiNativeControls(), ...planRows], diagnostic = xiaomiDiagnostic(nodeTypes.isProxy);
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
+function xiaomiRunnerReport() {
+  let reported = false, summary;
+  const options = {
+    expectedInvocations: 1,
+    fixtureSha256: "408ddfb962295a92e15802fb32b286ab04d6df2927f54e21581af22527aa41b8",
+    reporterSha256: "1adfaddb720664bd887dfda031b706783db40287119eb1e5ddd4669c61c10917",
+    onReport(packet) {
+      summary = undefined;
+      assert.equal(reported, false, "duplicate Xiaomi runner report"); reported = true;
+      // Only the canonical helper's complete, invocation-bound packet supplies facts.
+      const row = { v: 1, kind: "native_runner_startup", state: packet.reporter === "absent" ? "absent" : "incomplete",
+        phases: null, counts: null, reason: null, first: null, bytes: null, sha256: null };
+      if (packet.complete) {
+        const binding = packet.records[0].binding;
+        assert.equal(binding.pin, sourceHead); assert.equal(binding.target, "extensions/xiaomi/worker-contract.test.ts");
+        assert.equal(binding.fixtureSha256, options.fixtureSha256); assert.equal(binding.reporterSha256, options.reporterSha256);
+        const end = packet.records.at(-1), first = packet.records.find(value => value.kind === "error");
+        row.state = "complete";
+        row.phases = ["run_start", "module_queued", "module_collected", "module_start", "module_end"]
+          .map(phase => packet.records.find(value => value.kind === "phase" && value.phase === phase)?.count ?? null);
+        row.counts = [end.ready, end.results, end.errors, end.omitted]; row.reason = end.reason;
+        row.first = first ? [first.surface, first.error.received, first.error.name.presence, first.error.name.value,
+          first.error.code.presence, first.error.code.value] : null;
+        row.bytes = packet.bytes; row.sha256 = packet.sha256;
+      }
+      const text = JSON.stringify(row);
+      assert.ok(Buffer.byteLength(text) <= 768, "Xiaomi runner summary capacity");
+      summary = text;
+    },
+  };
+  return { options, emit(rows, failed, sdkCount, write) {
+    diagnostic.emit(rows, failed, text => {
+      // Never displace an SDK record or claim absence after a failed diagnostic read.
+      // A full existing packet leaves the supplementary runner report unknown.
+      if (sdkCount === 0 && !rows.some(row => row.source === "sdk") && summary !== undefined && text.split("\n").length - 1 < 9) {
+        const extra = `::error title=Xiaomi native runner::${summary.replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A")}\n`;
+        if (Buffer.byteLength(extra) <= 768 && Buffer.byteLength(text + extra) <= 8192) text += extra;
+      }
+      write(text);
+    });
+  } };
+}
 const cards = { pro_stream: "mimo-v2.6-pro", pro_simple: "mimo-v2.6-pro", flash_stream: "mimo-v2.6-flash", flash_simple: "mimo-v2.6-flash",
   off: "mimo-v2.6-pro", max: "mimo-v2.6-pro", no_usage: "mimo-v2.6-pro", http_error: "mimo-v2.6-pro", embedded_error: "mimo-v2.6-pro" };
 const dispatched = Object.keys(cards), ids = [...dispatched, "foreign", "missing", "unpriced", "retired_pro", "retired", "aborted"];
@@ -29,7 +71,7 @@ test("registered Xiaomi PAYG streams preserve original grants, retired identitie
   assert.ok(provider.models.every(m => m.pricing === null));
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-xiaomi-client-"));
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs"); let mf, origin;
-  const failures = [], evidence = diagnostic.store(); let helperFulfilled = false, phase = "setup", sdkCount = null;
+  const failures = [], evidence = diagnostic.store(), runner = xiaomiRunnerReport(); let helperFulfilled = false, phase = "setup", sdkCount = null;
   try {
     mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture());
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
@@ -47,6 +89,7 @@ test("registered Xiaomi PAYG streams preserve original grants, retired identitie
     assert.equal((await fetch(origin + "/fixture/grants", { method: "POST" })).status, 204);
     phase = "helper";
     await runOpenClawConsumer({ diagnostic() {} }, { source, sourceHead, fixture: new URL("./fixtures/openclaw-xiaomi-contract.test.ts", import.meta.url), testPath: "extensions/xiaomi/worker-contract.test.ts",
+      runnerReport: runner.options,
       env: { CLAWROUTER_CONTRACT_ORIGIN: origin, XIAOMI_API_KEY: "must-not-fallback", XIAOMI_TOKEN_PLAN_API_KEY: "must-not-fallback", XIAOMI_TOKEN_PLAN_CN_API_KEY: "must-not-fallback", XIAOMI_TOKEN_PLAN_AMS_API_KEY: "must-not-fallback" } });
     helperFulfilled = true;
     phase = "retire"; const retirement = await fetch(origin + "/fixture/retire", { method: "POST" });
@@ -99,7 +142,7 @@ test("registered Xiaomi PAYG streams preserve original grants, retired identitie
     try { await mf?.dispose(); } catch (error) { failures.push(error); evidence.add(diagnostic.record("outer", "none", "dispose", 0, true, error)); }
     try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); evidence.add(diagnostic.record("outer", "none", "remove", 0, true, error)); }
     const helper = diagnostic.record("outer", "none", "helper", helperFulfilled ? 1 : phase === "helper" ? 2 : 0, phase === "helper" && !helperFulfilled, undefined, sdkCount);
-    try { diagnostic.emit([helper, ...evidence.values()], failures.length > 0, line => process.stdout.write(line)); } catch (error) { failures.push(error); }
+    try { runner.emit([helper, ...evidence.values()], failures.length > 0, sdkCount, line => process.stdout.write(line)); } catch (error) { failures.push(error); }
   }
   if (failures.length === 1) throw failures[0];
   if (failures.length) throw new AggregateError(failures, "Xiaomi original contract and cleanup failures");

@@ -5,7 +5,8 @@ import fsPromises from "node:fs/promises";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { syncBuiltinESMExports } from "node:module";
-import { dirname, join } from "node:path";
+import { stripTypeScriptTypes } from "node:module";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import NativeRunnerReporter, { parseRunnerReport, projectRunnerError, readPrivateFile, reportByteLimit, runnerContract, sha256 } from "./helpers/openclaw-runner-reporter.mjs";
@@ -373,3 +374,247 @@ test("report setup acquires custody only after nonce and binding validation", as
     });
   }
 });
+
+// BEGIN pinned runner inert coverage. All acquired files and commands below are fakes.
+const inertRunnerMeasurements = [];
+function inertPinnedRunner() {
+  const reporterSource = readFileSync(new URL("./helpers/openclaw-runner-reporter.mjs", import.meta.url), "utf8");
+  const consumerSource = readFileSync(new URL("./helpers/openclaw-consumer.mjs", import.meta.url), "utf8");
+  const outerSource = readFileSync(new URL("./openclaw-xiaomi.test.mjs", import.meta.url), "utf8");
+  const sdk = readFileSync(new URL("./fixtures/openclaw-xiaomi-contract.test.ts", import.meta.url), "utf8");
+  const sourceHead = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb", target = "extensions/xiaomi/worker-contract.test.ts";
+  const proof = stripTypeScriptTypes(sdk.slice(sdk.indexOf("// BEGIN Xiaomi proof functions."), sdk.indexOf("// END Xiaomi proof functions.")));
+  const diagnostic = new Function(proof + ";return xiaomiDiagnostic();")();
+  const factory = outerSource.slice(outerSource.indexOf("function xiaomiRunnerReport()"), outerSource.indexOf("\nconst cards ="));
+  assert.ok(factory.startsWith("function xiaomiRunnerReport()") && factory.endsWith("\n}"));
+  const runner = new Function("assert", "sourceHead", "diagnostic", factory + ";return xiaomiRunnerReport();")(assert, sourceHead, diagnostic);
+  const files = new Map(), descriptors = new Map(), events = [], commands = [], packets = [];
+  let inode = 0, nextFd = 0;
+  const h = { runner, diagnostic, files, events, commands, packets, sourceHead, target, reporterSource, consumerSource, sdk,
+    fault() {}, native: null, options: null };
+  const observe = (op, ...args) => { events.push(op); h.fault(op, ...args); };
+  const put = (path, bytes, mode) => files.set(path, { bytes: Buffer.from(bytes), mode, ino: ++inode });
+  const get = path => { const value = files.get(String(path)); if (!value) { const error = new Error("fake missing file"); error.code = "ENOENT"; throw error; } return value; };
+  const constants = { O_RDONLY: 1, O_NOFOLLOW: 2, O_NONBLOCK: 4, O_WRONLY: 8, O_CREAT: 16, O_EXCL: 32, O_APPEND: 64, COPYFILE_EXCL: 128 };
+  const reporterFile = "/repo/test/helpers/openclaw-runner-reporter.mjs", fixtureFile = "/repo/fixture.ts";
+  put(reporterFile, reporterSource, 0o644); put(fixtureFile, sdk, 0o644);
+  const fs = {
+    constants,
+    openSync(path, flags, mode) {
+      observe("open", path, flags);
+      if (flags & constants.O_CREAT) { assert.ok(!files.has(path)); put(path, "", mode); }
+      get(path); const fd = ++nextFd; descriptors.set(fd, path); return fd;
+    },
+    closeSync(fd) { observe("close", fd); assert.equal(descriptors.delete(fd), true); },
+    fstatSync(fd) { const f = get(descriptors.get(fd)); return { isFile: () => true, mode: f.mode, size: f.bytes.length, ino: f.ino }; },
+    readFileSync(path) { observe("readSyncFile", path); return get(path).bytes; },
+    readSync(fd, buffer, offset, length, position) { const bytes = get(descriptors.get(fd)).bytes; const n = Math.min(length, bytes.length - position); bytes.copy(buffer, offset, position, position + n); return n; },
+    writeSync(fd, buffer, offset) { const f = get(descriptors.get(fd)), bytes = buffer.subarray(offset); f.bytes = Buffer.concat([f.bytes, bytes]); return bytes.length; },
+    readFile: async path => { observe("readFile", path); return get(path).bytes; },
+    copyFile: async (from, to, flags) => { observe("copy", from, to, flags); assert.equal(flags, constants.COPYFILE_EXCL); assert.ok(!files.has(to)); put(to, get(from).bytes, 0o600); },
+    mkdtemp: async prefix => { observe("directory", prefix); return prefix + "1"; },
+    chmod: async (...args) => { observe("chmod", ...args); },
+    writeFile: async (path, bytes, opts) => { observe("writeFile", path, bytes, opts); assert.equal(opts.flag, "wx"); assert.ok(!files.has(path)); put(path, bytes, opts.mode); },
+    rm: async (path, opts) => { observe(opts?.recursive ? "removeReport" : "removeFixture", path); for (const name of files.keys()) if (name === path || opts?.recursive && name.startsWith(path + "/")) files.delete(name); },
+  };
+  const pure = { assert, createHash: crypto.createHash, dirname, join, resolve, fileURLToPath };
+  const evaluate = (source, dependencies, exports) => {
+    const body = source.replace(/^import .*;\n/gm, "").replaceAll("import.meta.url", "moduleUrl").replace(/export default class /g, "class ").replace(/export /g, "");
+    return new Function(...Object.keys(dependencies), body + `;return {${exports}};`)(...Object.values(dependencies));
+  };
+  const report = evaluate(reporterSource, { ...pure, ...fs, moduleUrl: "file:///native/.clawrouter-runner-report-1/reporter.mjs" },
+    "runnerContract,runnerPlan,validateBinding,parseRunnerReport,projectRunnerError,readPrivateFile,reportByteLimit,sha256,NativeRunnerReporter");
+  const execFile = async (command, args, opts) => {
+    observe("command", command, args, opts); commands.push({ command, args, opts });
+    return h.native(command, args, opts);
+  };
+  const helper = evaluate(consumerSource, { ...pure, ...fs, ...report, moduleUrl: "file:///repo/test/helpers/openclaw-consumer.mjs",
+    process: { version: "v24.22.1", env: { CI: "true", PATH: "inert-path", HOME: "inert-home", TMPDIR: "inert-temp" } },
+    performance: { now: () => 0 }, randomBytes: size => Buffer.alloc(size, 7), execFile,
+    promisify: fn => { assert.equal(fn, execFile); return fn; },
+    execFileSync: (command, args, opts) => { observe("git", command, args, opts); assert.equal(command, "git"); return args[0] === "rev-parse" ? sourceHead : ""; },
+  }, "runOpenClawConsumer,validateRunnerRequest,withNativeRunnerReport,settleRunnerReport,withCopiedConsumerFixture");
+  Object.assign(h, { report, helper });
+  h.options = { source: "/native", sourceHead, fixture: fixtureFile, testPath: target, env: { CLAWROUTER_CONTRACT_ORIGIN: "synthetic" },
+    runnerReport: { ...runner.options, onReport(packet) { observe("publish"); packets.push(packet); runner.options.onReport(packet); } } };
+  h.produce = (args, change = () => {}) => {
+    const reporter = new report.NativeRunnerReporter(), outputFile = args.find(a => a.startsWith("--outputFile=")).slice(13);
+    const module = { moduleId: "/native/" + h.options.testPath, errors: () => [] };
+    reporter.onInit({ version: "5.0.5", projects: [{ name: "extension-providers" }], config: { root: "/native", outputFile } });
+    reporter.onTestRunStart([module]); reporter.onTestModuleQueued(module);
+    change(reporter, module, outputFile);
+    reporter.onTestRunEnd([module], [], "failed");
+    return outputFile;
+  };
+  h.native = (_command, args) => { h.produce(args); return { stdout: "private native output" }; };
+  h.run = () => helper.runOpenClawConsumer({ diagnostic() { observe("discardStdout"); } }, h.options);
+  h.emit = (rows = [diagnostic.record("outer", "none", "helper", 2, true, undefined, 0)], sdkCount = 0, failed = true) => {
+    const writes = []; runner.emit(rows, failed, sdkCount, text => writes.push(text));
+    for (const text of writes) {
+      const lines = text.trimEnd().split("\n");
+      inertRunnerMeasurements.push({ packet: Buffer.byteLength(text), annotations: lines.length,
+        command: Math.max(...lines.map(line => Buffer.byteLength(line + "\n"))),
+        record: Math.max(...lines.map(line => Buffer.byteLength(line.split("::")[2]))) });
+    }
+    return writes;
+  };
+  return h;
+}
+
+test("pinned Xiaomi runner uses actual helper and reporter with inert I/O", async () => {
+  const h = inertPinnedRunner(); await h.run();
+  assert.equal(h.commands.length, 1); const [{ command, args, opts }] = h.commands;
+  assert.equal(command, "pnpm"); assert.deepEqual(args, ["test", h.target, "--maxWorkers=1", "--reporter=default",
+    "--reporter=/native/.clawrouter-runner-report-1/reporter.mjs", "--outputFile=/native/.clawrouter-runner-report-1/report.jsonl"]);
+  assert.deepEqual(opts, { cwd: "/native", timeout: 240_000, maxBuffer: 2 * 1024 * 1024,
+    env: { PATH: "inert-path", HOME: "inert-home", TMPDIR: "inert-temp", CI: "true", CLAWROUTER_CONTRACT_ORIGIN: "synthetic" } });
+  assert.equal(h.packets.length, 1); assert.equal(h.packets[0].complete, true);
+  assert.ok(h.events.indexOf("removeReport") < h.events.indexOf("publish"));
+  assert.ok(h.events.indexOf("publish") < h.events.indexOf("removeFixture"));
+  const [text] = h.emit(); assert.equal(text.split("\n").length - 1, 2); assert.ok(!text.includes("private native output"));
+  const row = JSON.parse(text.split("\n")[1].split("::")[2]);
+  assert.deepEqual(row.phases, [1, 1, null, null, null]); assert.deepEqual(row.counts, [0, 0, 0, 0]);
+  assert.equal(row.reason, "failed"); assert.equal(row.state, "complete"); assert.equal(row.sha256, h.packets[0].sha256);
+});
+
+test("pinned reporter preserves Qwen and rejects foreign plans and stale digests before native effects", async () => {
+  const q = inertPinnedRunner(); q.options.testPath = q.report.runnerContract.target;
+  q.options.runnerReport.onReport = packet => { q.packets.push(packet); }; await q.run(); assert.equal(q.packets[0].complete, true);
+  for (const change of [h => h.options.sourceHead = "0".repeat(40), h => h.options.testPath = "extensions/foreign/test.ts",
+    h => h.options.runnerReport.fixtureSha256 = "f".repeat(64), h => h.options.runnerReport.reporterSha256 = "f".repeat(64),
+    h => h.options.env.NODE_OPTIONS = "foreign", h => h.options.runnerReport.expectedInvocations = 2]) {
+    const h = inertPinnedRunner(); change(h); await assert.rejects(h.run());
+    assert.equal(h.commands.length, 0); assert.equal(h.events.includes("directory"), false); assert.equal(h.packets.length, 0);
+  }
+  const h = inertPinnedRunner();
+  for (const [version, projects] of [["other", [{ name: "extension-providers" }]], ["5.0.5", [{ name: "foreign" }]], ["5.0.5", []]]) {
+    const reporter = new h.report.NativeRunnerReporter();
+    assert.throws(() => reporter.onInit({ version, projects, config: { root: "/native", outputFile: "/native/report" } }));
+  }
+});
+
+test("complete canonical reporter packets alone supply Xiaomi startup facts", async () => {
+  for (const variant of ["absent", "incomplete", "truncated", "duplicate", "foreign", "preamble"]) {
+    const h = inertPinnedRunner(), original = new Error("original child");
+    h.native = (_command, args) => {
+      if (variant !== "absent") {
+        const path = h.produce(args), file = h.files.get(path); const text = file.bytes.toString();
+        if (variant === "incomplete") file.bytes = Buffer.from(text.split("\n").slice(0, -2).join("\n") + "\n");
+        if (variant === "truncated") file.bytes = file.bytes.subarray(0, -1);
+        if (variant === "duplicate") file.bytes = Buffer.from(text.replace('"kind":"init"', '"kind":"init","kind":"init"'));
+        if (variant === "foreign") file.bytes = Buffer.from(text.replace(h.target, h.report.runnerContract.target));
+        if (variant === "preamble") file.bytes = Buffer.from("private preamble" + text);
+      }
+      throw original;
+    };
+    await assert.rejects(h.run(), error => { assert.equal(error.errors[0], original); return true; });
+    assert.ok(h.events.includes("removeReport") && h.events.includes("removeFixture"));
+    const [text] = h.emit();
+    if (["absent", "incomplete"].includes(variant)) {
+      const row = JSON.parse(text.split("\n")[1].split("::")[2]); assert.equal(row.state, variant);
+      for (const key of ["phases", "counts", "reason", "first", "bytes", "sha256"]) assert.equal(row[key], null);
+    } else { assert.equal(h.packets.length, 0); assert.equal(text.includes("Xiaomi native runner"), false); }
+  }
+});
+
+test("original child errors including undefined survive independent runner cleanup and report failures", async () => {
+  for (const original of [new Error("child"), undefined]) for (const secondary of [new Error("secondary"), undefined]) {
+    const h = inertPinnedRunner(); h.native = (_command, args) => { h.produce(args); throw original; };
+    h.fault = op => { if (["removeReport", "publish"].includes(op)) throw secondary; };
+    let caught = false;
+    try { await h.run(); } catch (error) { caught = true; assert.deepEqual(error.errors, [original, secondary, secondary]); }
+    assert.equal(caught, true); assert.ok(h.events.includes("removeFixture")); assert.equal(h.commands.length, 1);
+  }
+  for (const original of [new Error("child"), undefined]) {
+    const h = inertPinnedRunner(); h.native = (_command, args) => { h.produce(args); throw original; };
+    let caught = false; try { await h.run(); } catch (error) { caught = true; assert.equal(error, original); }
+    assert.equal(caught, true); assert.equal(h.packets[0].complete, true);
+  }
+});
+
+test("Xiaomi SDK annotations keep their exact priority and quota without runner displacement", async () => {
+  const h = inertPinnedRunner(); await h.run(); const rows = [h.diagnostic.record("sdk", "c_cancel", "join", 0, true, undefined)];
+  const old = []; h.diagnostic.emit(rows, true, text => old.push(text)); assert.deepEqual(h.emit(rows, 1), old);
+  assert.deepEqual(h.emit(rows, null), old); assert.deepEqual(h.emit(rows, 0, false), []);
+  for (const size of [8, 9, 10, 30]) {
+    const records = Array.from({ length: size }, (_, i) => h.diagnostic.record("outer", "none", "assert", i, true, undefined));
+    const baseline = []; h.diagnostic.emit(records, true, text => baseline.push(text));
+    const [text] = h.emit(records), lines = text.trimEnd().split("\n");
+    assert.ok(lines.length <= 10); assert.ok(Buffer.byteLength(text) <= 8192);
+    assert.equal(text.includes("Xiaomi native runner"), size === 8);
+    if (size > 8) assert.equal(text, baseline[0]); else assert.ok(text.startsWith(baseline[0]));
+  }
+  assert.throws(() => h.runner.options.onReport(h.packets[0]));
+  assert.equal(h.emit()[0].includes("Xiaomi native runner"), false);
+});
+
+test("Xiaomi startup projection excludes raw fields and bounds the complete error supplement", async () => {
+  const h = inertPinnedRunner(); let getterReads = 0;
+  h.native = (_command, args) => {
+    h.produce(args, (_reporter, module) => {
+      const error = { name: "ReferenceError", code: "ERR_PACKAGE_PATH_NOT_EXPORTED", message: "private-message", stack: "private-stack" };
+      Object.defineProperty(error, "cause", { get() { getterReads++; throw undefined; } });
+      module.errors = () => [error];
+    }); return { stdout: "private-stdout" };
+  }; await h.run(); const text = h.emit()[0], line = text.split("\n")[1];
+  const row = JSON.parse(line.split("::")[2]);
+  assert.deepEqual(row.first, ["collection", "object", "defined", "ReferenceError", "defined", "ERR_PACKAGE_PATH_NOT_EXPORTED"]);
+  assert.equal(getterReads, 0); assert.doesNotMatch(text, /private-|\/native|nonce|fixtureSha256|reporterSha256/);
+  assert.ok(Buffer.byteLength(line) <= 768); assert.ok(Buffer.byteLength(text) <= 8192);
+  const wide = inertPinnedRunner();
+  wide.native = (_command, args) => {
+    wide.produce(args, (reporter, module) => {
+      reporter.onTestModuleCollected(module); reporter.onTestModuleStart(module);
+      for (let i = 0; i < 200; i++) { const value = { module }; reporter.onTestCaseReady(value); reporter.onTestCaseResult(value); }
+      module.errors = () => Array.from({ length: 32 }, () => ({ name: "ReferenceError", code: "ERR_PACKAGE_PATH_NOT_EXPORTED" }));
+      reporter.onTestModuleEnd(module);
+    }); return { stdout: "private" };
+  }; await wide.run(); assert.equal(wide.packets[0].complete, true);
+  assert.ok(Buffer.byteLength(wide.emit()[0].split("\n")[1]) <= 768);
+});
+
+test("Xiaomi opt-in digests and default-off launch fingerprint match actual source bytes", () => {
+  const h = inertPinnedRunner();
+  assert.equal(h.runner.options.fixtureSha256, sha256(h.sdk)); assert.equal(h.runner.options.reporterSha256, sha256(h.reporterSource));
+  const start = h.consumerSource.lastIndexOf("    const started = performance.now();"), end = h.consumerSource.indexOf("\n  }, () => rm(clientTest));", start);
+  assert.ok(start > 0 && end > start);
+  assert.equal(sha256(h.consumerSource.slice(start, end)), "ebdbbf3622f59fc0423ee500e227607316f9309b4e60d4cea7896f43c15fc3b6");
+  const match = h.consumerSource.match(/import \{ ([^\n]+) \} from "\.\/openclaw-runner-reporter.mjs";/); assert.ok(match);
+  for (const name of match[1].split(", ")) assert.ok(Object.hasOwn(h.report, name), `actual reporter export ${name}`);
+});
+
+test("held original child prevents collection, cleanup and publication until it settles", async () => {
+  const h = inertPinnedRunner(); let release; let entered;
+  const began = new Promise(resolve => { entered = resolve; });
+  h.native = async (_command, args) => { entered(); await new Promise(resolve => { release = resolve; }); h.produce(args); return { stdout: "private" }; };
+  let settled = false; const run = h.run(); run.then(() => { settled = true; }); await began;
+  assert.equal(h.commands.length, 1); assert.equal(settled, false);
+  for (const event of ["removeReport", "publish", "removeFixture"]) assert.equal(h.events.includes(event), false);
+  release(); await run; assert.equal(settled, true); assert.equal(h.packets.length, 1);
+});
+
+test("foreign callback packets and duplicate delivery cannot leave a credible startup summary", async () => {
+  const q = inertPinnedRunner(); q.options.testPath = q.report.runnerContract.target;
+  q.options.runnerReport.onReport = packet => q.packets.push(packet); await q.run();
+  const h = inertPinnedRunner(); assert.throws(() => h.runner.options.onReport(q.packets[0]));
+  assert.equal(h.emit()[0].includes("Xiaomi native runner"), false);
+  for (const key of ["fixtureSha256", "reporterSha256", "pin"]) {
+    const valid = inertPinnedRunner(); await valid.run();
+    valid.packets[0].records[0].binding[key] = "f".repeat(key === "pin" ? 40 : 64);
+    const copy = inertPinnedRunner(); assert.throws(() => copy.runner.options.onReport(valid.packets[0]));
+    assert.equal(copy.emit()[0].includes("Xiaomi native runner"), false);
+  }
+});
+
+test("native launch failure plus invalid report and fixture cleanup preserves original nested identities", async () => {
+  for (const original of [new Error("child"), undefined]) for (const cleanup of [new Error("cleanup"), undefined]) {
+    const h = inertPinnedRunner(); h.native = () => { throw original; };
+    h.fault = op => { if (op === "removeFixture") throw cleanup; };
+    await assert.rejects(h.run(), error => {
+      assert.equal(error.errors[0].errors[0], original); assert.equal(error.errors[0].errors.length, 2);
+      assert.equal(error.errors[1], cleanup); return true;
+    });
+    assert.equal(h.packets[0].reporter, "absent"); assert.equal(h.commands.length, 1);
+  }
+});
+// END pinned runner inert coverage.
