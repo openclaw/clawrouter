@@ -441,15 +441,43 @@ async function pureCliModuleSources() {
   const operation = 'let calls = 0; const harmless = () => ({ dispatchCalls: ++calls }); const containerCi = harmless, containerInit = harmless, containerBuild = harmless, containerPrepare = harmless; const fail = () => { throw undefined; };\n';
   return { entry: prefix + tail, container: backImport + "\n" + operation + container.slice(container.indexOf("export async function containerMain(")) };
 }
-function runPureCli(sources, { old = false, imported = false, pending = false, moduleFailure = false } = {}) {
+function runPureCli(sources, { old = false, imported = false, pending = false, moduleFailure = false } = {}, spawnProcess = spawnSync) {
   let entry = sources.entry;
   if (old) entry = entry.replace('launchCli(process.argv.slice(2));', 'try { console.log(JSON.stringify(await main(process.argv.slice(2)))); } catch { process.exitCode = 1; }');
   const container = pending ? sources.container.replace('let calls = 0; const harmless = () => ({ dispatchCalls: ++calls });', 'const harmless = () => new Promise(() => {});') : sources.container;
   const modules = { 'file:///__edge_cli__/edge-proof.mjs': entry, 'file:///__edge_cli__/edge-proof-container.mjs': moduleFailure ? 'throw undefined;' : container };
   if (imported) modules['file:///__edge_cli__/importer.mjs'] = 'import "./edge-proof.mjs"; process.stdout.write("imported-only\\n");';
   const hook = 'import { registerHooks } from "node:module"; const modules=' + JSON.stringify(modules) + '; registerHooks({resolve(s,c,n){const u=s.startsWith("/")?"file://"+s:s.startsWith("./")&&c.parentURL?.startsWith("file:///__edge_cli__/")?new URL(s,c.parentURL).href:s;return Object.hasOwn(modules,u)?{url:u,shortCircuit:true}:n(s,c);},load(u,c,n){return Object.hasOwn(modules,u)?{format:"module",source:modules[u],shortCircuit:true}:n(u,c);}});';
-  return spawnSync(process.execPath, ['--import', 'data:text/javascript;base64,' + Buffer.from(hook).toString('base64'), imported ? '/__edge_cli__/importer.mjs' : '/__edge_cli__/edge-proof.mjs', 'container-ci'], { env: { PATH: '/usr/bin:/bin', NO_COLOR: '1' }, encoding: 'utf8', timeout: 5000, maxBuffer: 16384 });
+  // Keep the complete extracted modules off argv: the fixture grows with the
+  // diagnostic validators. The preloader finishes registration before entry.
+  const preload = 'import { readFileSync } from "node:fs"; await import("data:text/javascript;base64," + readFileSync(0, "utf8"));';
+  return spawnProcess(process.execPath, ['--import', 'data:text/javascript;base64,' + Buffer.from(preload).toString('base64'), imported ? '/__edge_cli__/importer.mjs' : '/__edge_cli__/edge-proof.mjs', 'container-ci'], { input: Buffer.from(hook).toString('base64'), env: { PATH: '/usr/bin:/bin', NO_COLOR: '1' }, encoding: 'utf8', timeout: 5000, maxBuffer: 16384 });
 }
+test("CLI extracted module fixture keeps complete source off bounded argv", async () => {
+  const sources = await pureCliModuleSources(), calls = [];
+  const original = new Error("inert original spawn failure");
+  for (const options of [{ old: true }, {}, { imported: true }, { pending: true }, { moduleFailure: true }]) {
+    const result = { error: original, status: null, signal: null, stdout: "", stderr: "" };
+    assert.equal(runPureCli(sources, options, (command, args, config) => { calls.push({ command, args, config, options }); return result; }), result);
+  }
+  assert.equal(calls.length, 5);
+  for (const { command, args, config, options } of calls) {
+    assert.equal(command, process.execPath); assert.equal(args.length, 4); assert.equal(args[0], "--import"); assert.equal(args[3], "container-ci");
+    assert.ok(args.every(arg => Buffer.byteLength(arg) < 1024));
+    assert.equal(args[2], options.imported ? "/__edge_cli__/importer.mjs" : "/__edge_cli__/edge-proof.mjs");
+    assert.deepEqual(config.env, { PATH: "/usr/bin:/bin", NO_COLOR: "1" }); assert.equal(config.encoding, "utf8"); assert.equal(config.timeout, 5000); assert.equal(config.maxBuffer, 16384);
+    const preload = Buffer.from(args[1].slice("data:text/javascript;base64,".length), "base64").toString("utf8");
+    assert.equal(preload, 'import { readFileSync } from "node:fs"; await import("data:text/javascript;base64," + readFileSync(0, "utf8"));');
+    const hook = Buffer.from(config.input, "base64").toString("utf8"); assert.equal(Buffer.from(hook).toString("base64"), config.input);
+    let hooks;
+    new Function("registerHooks", "URL", hook.replace('import { registerHooks } from "node:module";', ""))(value => { assert.equal(hooks, undefined); hooks = value; }, URL);
+    const load = file => hooks.load("file:///__edge_cli__/" + file, {}, () => assert.fail("foreign load")).source;
+    assert.equal(load("edge-proof.mjs"), options.old ? sources.entry.replace('launchCli(process.argv.slice(2));', 'try { console.log(JSON.stringify(await main(process.argv.slice(2)))); } catch { process.exitCode = 1; }') : sources.entry);
+    assert.equal(load("edge-proof-container.mjs"), options.moduleFailure ? "throw undefined;" : options.pending ? sources.container.replace('let calls = 0; const harmless = () => ({ dispatchCalls: ++calls });', 'const harmless = () => new Promise(() => {});') : sources.container);
+    if (options.imported) assert.equal(load("importer.mjs"), 'import "./edge-proof.mjs"; process.stdout.write("imported-only\\n");');
+  }
+  for (const reason of [original, undefined]) assert.throws(() => runPureCli(sources, {}, () => { throw reason; }), error => error === reason);
+});
 test("CLI actual extracted module-loader cycle fails old TLA and dispatches exactly once after repair", async () => {
   const sources = await pureCliModuleSources();
   const old = runPureCli(sources, { old: true }); assert.equal(old.error, undefined); assert.equal(old.status, 13); assert.equal(old.stdout, "");
@@ -4088,17 +4116,35 @@ test("wrangler census widest complete lossless envelopes keep historical decodin
   const packet=structuredClone(receiptPackets.at(-1));packet[packet.findIndex(r=>r.phase==="receipt")]=wide;for(const phase of ["dispatch","image","base","create","attach","ready","cwd","temp","environment","permit"])packet.push({v:2,phase,state:"fulfilled",defined:null,exit:null,signal:null});const lines=[];emitContainerFailure(packet,line=>lines.push(line));assert.equal(lines.length,10);assert.equal(JSON.parse(lines[0].slice(lines[0].indexOf("::{")+2)).v,18);assert.ok(lines.every(line=>Buffer.byteLength(line)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);receiptPackets.push(lines.map(line=>JSON.parse(line.slice(line.indexOf("::{")+2))));
   for(const faults of [[65535,65535,3],[65535,0,1]]){const unknown=structuredClone(wide);unknown.detail[8]=[1,null,null,faults];unknown.detail[9]=null;unknown.detail[10]=[1,1,7,null,0,null,0,null,[],3];validateContainerDiagnostic(unknown);assert.ok(Buffer.byteLength(JSON.stringify(unknown))<=512);}
 });
-test("wrangler census actual module imports and recorder wiring are explicit",async()=>{
-  const proof=await readFile(new URL("../scripts/edge-proof.mjs",import.meta.url),"utf8"),container=await readFile(new URL("../scripts/edge-proof-container.mjs",import.meta.url),"utf8");
-  const tests=await readFile(new URL("./edge-proof-container.test.mjs",import.meta.url),"utf8"),testImports=/import \{([^}]+)\} from "\.\.\/scripts\/edge-proof\.mjs";/.exec(tests)[1].split(",").map(n=>n.trim());
-  for(const name of ["unpackReceiptObservedWranglerDiagnostic","unpackReceiptWranglerDiagnostic","unpackReceiptCensusDiagnostic","unpackReceiptOwnedDiagnostic","validateObservedWranglerCloseDiagnostic","validateReceiptObservedWranglerDiagnostic"])assert.ok(testImports.includes(name),name);
-  const imported=/import \{([^}]+)\} from "\.\/edge-proof\.mjs";/.exec(container)[1].split(",").map(n=>n.trim());
-  for(const name of ["packReceiptObservedWranglerDiagnostic","validateObservedWranglerCloseDiagnostic"]){assert.ok(imported.includes(name));assert.ok(proof.includes("export function "+name+"("));}
-  const pipeline=proof.slice(proof.indexOf("export async function runPackagingPipeline("),proof.indexOf("async function offlineCi("));
-  assert.ok(pipeline.includes("sample: recorder ? () => privateProcesses(recorder) : privateProcesses"));
+function assertWranglerCensusBindings(proof, container, tests) {
+  const imports = (source, from) => [...source.matchAll(/import \{([^}]+)\} from "([^"]+)";/g)].filter(match => match[2] === from).flatMap(match => match[1].split(",").map(name => name.trim()));
+  const testImports = imports(tests, "../scripts/edge-proof.mjs");
+  for (const name of ["unpackReceiptObservedWranglerDiagnostic", "unpackReceiptWranglerDiagnostic", "unpackReceiptCensusDiagnostic", "unpackReceiptOwnedDiagnostic", "validateObservedWranglerCloseDiagnostic", "validateReceiptObservedWranglerDiagnostic"]) assert.ok(testImports.includes(name), name);
+  const imported = imports(container, "./edge-proof.mjs");
+  for (const name of ["packReceiptObservedWranglerDiagnostic", "validateObservedWranglerCloseDiagnostic"]) { assert.ok(imported.includes(name)); assert.ok(proof.includes("export function " + name + "(")); }
+  const start = proof.indexOf("export async function runPackagingPipeline("), end = proof.indexOf("async function offlineCi(", start);
+  assert.ok(start >= 0 && end > start);
+  const pipeline = proof.slice(start, end);
+  assert.equal(pipeline.split("const census = recorder => privateProcesses(recorder, boundary.controls);").length, 2);
+  assert.equal(pipeline.split("sample: () => census(recorder)").length, 3);
   assert.ok(pipeline.includes("(recorder ? reportObservedWranglerProcess : reportWranglerProcess)(result, report, close)"));
-  assert.equal(pipeline.split("createOwnedProcessLedger()").length,3);
+  assert.equal(pipeline.split("createOwnedProcessLedger()").length, 3);
   assert.ok(container.includes("builderDiagnostics: true"));
+}
+test("wrangler census actual module imports and recorder wiring are explicit", async () => {
+  const proof = await readFile(new URL("../scripts/edge-proof.mjs", import.meta.url), "utf8"), container = await readFile(new URL("../scripts/edge-proof-container.mjs", import.meta.url), "utf8");
+  const tests = await readFile(new URL("./edge-proof-container.test.mjs", import.meta.url), "utf8");
+  assertWranglerCensusBindings(proof, container, tests);
+  for (const [p, c, t] of [
+    [proof, container, tests.replace("unpackReceiptObservedWranglerDiagnostic, ", "")],
+    [proof, container, tests.replace("unpackReceiptObservedWranglerDiagnostic, ", "").replace('import test from "node:test";', 'import { unpackReceiptObservedWranglerDiagnostic } from "foreign";')],
+    [proof, container.replace("packReceiptObservedWranglerDiagnostic, ", ""), tests],
+    [proof.replace("export function packReceiptObservedWranglerDiagnostic(", "function packReceiptObservedWranglerDiagnostic("), container, tests],
+    [proof.replace("privateProcesses(recorder, boundary.controls)", "privateProcesses(recorder)"), container, tests],
+    [proof.replace("sample: () => census(recorder)", "sample: () => census()"), container, tests],
+    [proof.replace("const recorder=boundary.builderDiagnostics?createOwnedProcessLedger():undefined;", "const recorder=undefined;"), container, tests],
+    [proof, container.replace("builderDiagnostics: true", "builderDiagnostics: false"), tests],
+  ]) assert.throws(() => assertWranglerCensusBindings(p, c, t));
 });
 // END attach diagnostic pure tests.
 
