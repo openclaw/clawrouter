@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { types } from "node:util";
 import { execFileSync } from "node:child_process";
 import { channel } from "node:diagnostics_channel";
 import { createRequire } from "node:module";
@@ -33,13 +34,97 @@ let diagnosticCount=0,diagnosticBytes=0;
 
 // Invocation ownership, not signal equality or a claim about C1's cause.
 // Every context is captured at the original call boundary; absent attachment fails closed.
-export function createBifrostFetchObserver(fetcher:Function,capture:Function,observerFailures:unknown[]) {
+export function createBifrostFetchObserver(fetcher:Function,capture:Function,observerFailures:unknown[],callOriginal?:Function) {
  return function(this:unknown,...args:any[]) {
   const receipt=capture(this,args);let original;
-  try{original=Reflect.apply(fetcher,this,args);}catch(reason){
+  try{original=callOriginal?callOriginal(fetcher,this,args,receipt):Reflect.apply(fetcher,this,args);}catch(reason){
    try{receipt.threw(reason);}catch(error){observerFailures.push(error);}throw reason;
   }
   try{receipt.returned(original);}catch(error){observerFailures.push(error);}return original;
+ };
+}
+// Passive diagnostics for one private fetch generation. No transport flag is read.
+// Counts saturate at 16; overflow invalidates attribution. Missing close stays unknown.
+// Wire: [binding/restored/overflow bits, fetch/create/send/headers/trailers/error/close/omitted counts,
+// create/send/headers/trailers/first-error/last-error/close/seal orders,
+// [reason presence/defined/object/same/caller/read bits, undefined errors, faults,
+// undefined faults, restoration failures, undefined restoration failures]].
+export function createBifrostTransportWitness(deps:any) {
+ const generations=new WeakSet<object>(),requests=new WeakMap<object,any>(),foreignSockets=new WeakSet<object>();
+ const subscriptions:any[]=[],errors:any[]=[],faults:unknown[]=[],restoration:unknown[]=[];
+ const counts=Array(8).fill(0),order:any[]=Array(8).fill(null);
+ let active=true,started=false,finished=false,overflow=false,registrationFailed=false;
+ let generation:any,request:any,socket:any,closeListener:any,removeClose:any;
+ const object=(v:any)=>v!==null&&(typeof v==="object"||typeof v==="function")&&!deps.isProxy(v);
+ const fault=(e:unknown)=>{if(faults.length<16)faults.push(e);else overflow=true;};
+ const invalid=()=>fault(Error("incomplete passive transport identity"));
+ const own=(v:any,k:string)=>{if(!object(v))throw Error("unsupported diagnostic object");const d=Object.getOwnPropertyDescriptor(v,k);
+  if(d&&!("value" in d))throw Error("unsupported diagnostic accessor");return d;};
+ const method=(v:any,k:string)=>{for(let n=0;n<8&&v!==null;n++,v=Object.getPrototypeOf(v)){
+  const d=own(v,k);if(d){if(typeof d.value!=="function")throw Error("unsupported socket method");return d.value;}}
+  throw Error("missing socket method");};
+ const increment=(i:number)=>{if(counts[i]<16)counts[i]++;else overflow=true;};
+ const sequence=()=>{const n=deps.next();if(!Number.isSafeInteger(n)||n<=0||n>1000000)throw Error("transport order exceeded");return n;};
+ const handle=(kind:number,message:any)=>{if(!active)return;try{
+  // A foreign diagnostic never supplies ownership. Inspect only own data descriptors.
+  if(!object(message))return;const rd=own(message,"request"),r=rd?.value;if(!object(r))return;
+  if(kind===0){const token=deps.storage.getStore();if(!token||!generations.has(token))return;
+   increment(1);if(request||requests.has(r)||token!==generation){invalid();return;}
+   request=r;requests.set(r,token);order[0]=sequence();return;
+  }
+  const token=requests.get(r);
+  if(kind===1&&(!token||token!==generation)){const other=own(message,"socket")?.value;
+   if(object(other)){foreignSockets.add(other);if(other===socket)invalid();}return;}
+  if(!token||token!==generation||r!==request)return;
+  if(kind===1){increment(2);const candidate=own(message,"socket")?.value;
+   if(!object(candidate)||socket||foreignSockets.has(candidate)){invalid();return;}
+   socket=candidate;order[1]=sequence();const once=method(socket,"once");removeClose=method(socket,"removeListener");
+   closeListener=function(this:unknown){if(!active)return;try{if(this!==socket){invalid();return;}increment(6);if(counts[6]!==1)invalid();order[6]=sequence();}catch(e){fault(e);}};
+   Reflect.apply(once,socket,["close",closeListener]);return;
+  }
+  if(kind===2||kind===3){const index=kind+1;increment(index);if(kind===3&&counts[index]!==1)invalid();if(order[kind]===null)order[kind]=sequence();return;}
+  increment(5);const at=sequence();if(order[4]===null)order[4]=at;order[5]=at;
+  const d=own(message,"error");if(errors.length<16)errors.push({present:!!d,reason:d?.value});else{increment(7);overflow=true;}
+ }catch(e){fault(e);}};
+ return {
+  start(){if(started||finished)throw Error("duplicate transport start");started=true;
+   for(const [kind,name] of ["undici:request:create","undici:client:sendHeaders","undici:request:headers","undici:request:trailers","undici:request:error"].entries()){
+    try{const c=deps.channel(name),callback=(m:unknown)=>handle(kind,m);subscriptions.push({c,callback});c.subscribe(callback);}
+    catch(e){registrationFailed=true;fault(e);}
+   }
+  },
+  fetch(t:any,fn:Function,receiver:unknown,args:any[]){
+   let token:any;
+   // All passive setup completes before the one original invocation. Never retry a throw.
+   try{if(active&&started&&deps.selected(t)){
+    increment(0);if(!deps.bound(t,fn,receiver,args,false))invalid();else{
+     token=Object.freeze({t,fn,receiver,args});generations.add(token);if(generation)invalid();else generation=token;
+    }
+   }}catch(e){fault(e);}
+   return token?deps.storage.run(token,()=>Reflect.apply(fn,receiver,args)):Reflect.apply(fn,receiver,args);
+  },
+  finish(){if(finished)throw Error("duplicate transport finish");finished=true;
+   let bound=false,reasonMask=0;
+   try{bound=!!generation&&counts[0]===1&&counts[1]===1&&counts[2]===1&&!!socket&&
+     deps.bound(generation.t,generation.fn,generation.receiver,generation.args,true)===true;
+    if(errors.length){const reference=deps.reasons(generation?.t),all=(fn:Function)=>errors.every(fn as any);
+     reasonMask=(all((e:any)=>e.present)?1:0)|(all((e:any)=>e.present&&e.reason!==undefined)?2:0)|
+      (all((e:any)=>e.present&&e.reason!==null&&typeof e.reason==="object")?4:0)|
+      (all((e:any)=>e.present&&errors[0].present&&Object.is(e.reason,errors[0].reason))?8:0)|
+      (all((e:any)=>e.present&&reference.callerPresent&&Object.is(e.reason,reference.caller))?16:0)|
+      (all((e:any)=>e.present&&reference.readPresent&&Object.is(e.reason,reference.read))?32:0);
+    }
+    order[7]=sequence();
+   }catch(e){fault(e);}finally{active=false;}
+   for(const {c,callback} of subscriptions.toReversed())try{c.unsubscribe(callback);}catch(e){restoration.push(e);}
+   if(closeListener)try{Reflect.apply(removeClose,socket,["close",closeListener]);}catch(e){restoration.push(e);}
+   try{deps.storage.disable();}catch(e){restoration.push(e);}
+   const closed=started&&subscriptions.length===5&&!registrationFailed&&restoration.length===0;
+   const data=[(bound&&!faults.length&&!overflow&&closed?1:0)|(closed?2:0)|(overflow?4:0),counts,order,
+    [reasonMask,errors.filter(e=>e.present&&e.reason===undefined).length,faults.length,faults.filter(e=>e===undefined).length,restoration.length,restoration.filter(e=>e===undefined).length]];
+   Object.freeze(counts);Object.freeze(order);Object.freeze(data[3]);Object.freeze(data);
+   return {data,failures:overflow?[...faults,Error("passive transport evidence overflow")]:faults,restorationFailures:restoration};
+  },
  };
 }
 export function createBifrostInvocationOwnership(storage:any) {
@@ -270,7 +355,7 @@ export function bifrostCaseEvidence(index:number,w:any,proof:any,worker:boolean,
    // Undefined failure counts: all, synchronous, observer, restoration/cleanup.
    undefined:[w.failures.filter((e:unknown)=>e===undefined).length,w.syncFailures.filter((e:unknown)=>e===undefined).length,w.observerFailures.filter((e:unknown)=>e===undefined).length,num(w.evidenceRestoreUndefined)],
    bodyUnlocked:r?flag(r.body.locked===false):null,restored:flag(w.restored),joins:flag(w.evidenceJoined),worker},
-  {...base,part:"postlude",...bifrostPostludeEvidence(retirement,proof)}
+  {...base,part:"postlude",...bifrostPostludeEvidence(retirement,proof),...(w.transportWitnessEvidence?{transport:w.transportWitnessEvidence}:{})}
  ];
 }
 export function validateBifrostEvidence(record:any):void {
@@ -295,6 +380,17 @@ export function validateBifrostEvidence(record:any):void {
   router:(v:any)=>v===null||Array.isArray(v)&&v.length===4&&v.every((r:any)=>Array.isArray(r)&&r.length===2&&[2,3].includes(r[0])&&(r[0]===3?typeof r[1]==="boolean":r[1]===null)),
   usage:(v:any)=>v===null||Array.isArray(v)&&v.length===3&&typeof v[0]==="boolean"&&(v[0]?v.slice(1).every((n:any)=>n!==null&&number(n)):v[1]===null&&v[2]===null),
  };
+ // Optional only for the source-owned stream-partial control; not a success predicate.
+ if(record?.part==="postlude"&&Object.hasOwn(record,"transport")){
+  if(record.case!==2)throw Error("foreign transport witness");
+  fields.postlude.transport=(v:any)=>Array.isArray(v)&&v.length===4&&Number.isInteger(v[0])&&v[0]>=0&&v[0]<=7&&
+   Array.isArray(v[1])&&v[1].length===8&&v[1].every((n:any)=>Number.isInteger(n)&&n>=0&&n<=16)&&
+   Array.isArray(v[2])&&v[2].length===8&&v[2].every((n:any)=>n===null||Number.isSafeInteger(n)&&n>0&&n<=1000000)&&
+   Array.isArray(v[3])&&v[3].length===6&&Number.isInteger(v[3][0])&&v[3][0]>=0&&v[3][0]<=63&&
+   v[3].slice(1).every((n:any)=>Number.isInteger(n)&&n>=0&&n<=16)&&
+   (!(v[0]&1)||(v[0]===3&&v[1].slice(0,3).every((n:any)=>n===1)&&v[1][7]===0&&v[3][2]===0&&v[3][4]===0&&v[2][0]!==null&&v[2][1]!==null&&v[2][7]!==null))&&
+   (!(v[0]&2)||v[3][4]===0)&&v[3][1]<=v[1][5]&&v[3][3]<=v[3][2]&&v[3][5]<=v[3][4];
+ }
  Object.assign(fields.order,{readRejectedAtCancel:boolean,closedRejectedAtCancel:boolean,readInvokeSignals:signals,readSettleSignals:signals,cancelInvokeSignals:signals});
  fields.order.cancelOperand=(v:any)=>v&&Object.keys(v).sort().join(",")==="defined,kind,object,observed"&&reason({observed:v.observed,defined:v.defined,object:v.object})&&["absent","undefined","same-as-stored","distinct-defined","invalid","unobserved"].includes(v.kind);
  const schema=fields[record?.part],base=["v","pin","lane","case","evidence","complete","part"];
@@ -500,6 +596,15 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
  const w:any={owner:Object.freeze({id:row.id}),identity:nativeIdentity,provider:"bifrost",api:row.api,role:row.control,
   originals:[],observers:[],transports:[],acquisitions:[],failures:[],observerFailures:[],syncFailures:[],reportingFailures:checkpoints.failures,restored:false,sourceExpired:null,sequence:0};
  const ownership=createBifrostInvocationOwnership(new AsyncLocalStorage());
+ const transportWitness=row.control==="partial"&&row.api==="stream"?createBifrostTransportWitness({
+  storage:new AsyncLocalStorage(),channel,isProxy:types.isProxy,next:()=>++w.sequence,
+  selected:(t:any)=>t.method==="POST"&&t.owner===w.owner,
+  bound:(t:any,fn:Function,receiver:unknown,args:any[],settled:boolean)=>ownership.bound(t)&&bifrostInvocationBound(w,t)&&
+   (fn===nativeFetch||fn===nativeUndiciFetch)&&t.fetch.receiver===receiver&&t.fetch.args===args&&args[0]===t.input&&args[1]===t.init&&
+   (!settled||!!t.fetch.pending&&t.fetch.pending===t.fetch.returned),
+  reasons:(t:any)=>{const reads=w.originals.filter((o:any)=>o.kind==="read"&&o.reader?.transport===t&&o.state==="rejected");
+   return {callerPresent:w.caller?.evidenceAbort?.observed===true,caller:w.caller?.evidenceAbort?.reason,readPresent:reads.length===1,read:reads[0]?.reason};},
+ }):undefined;
  const failures:unknown[]=w.failures,originals:Original[]=w.originals,transports:Transport[]=w.transports,restores:Array<()=>void>=[];
  const observer=(p:Promise<unknown>)=>{w.observers.push(p.then(()=>{},e=>{w.observerFailures.push(e);}));};
  const record=(kind:string,details:any={})=>{const o:Original={owner:w.owner,kind,invoke:++w.sequence,settle:0,returnAt:0,state:"pending",returned:undefined,...details};originals.push(o);
@@ -552,9 +657,9 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
   t.signalHistory=signalHistory(t.signal);expect(t.signal).toBeInstanceOf(AbortSignal);expect(t.dispatcher).toBeDefined();transports.push(t);
   const d=t.dispatcher as {close:Function};if(!observedDispatchers.has(d)){observedDispatchers.add(d);const close=d.close;let depth=0;patch(d,"close",function(this:unknown,...args:unknown[]){const outer=depth++===0;try{return outer?invoke("dispatcher_close",()=>Reflect.apply(close,this,args),{dispatcher:d,receiver:this,args}):Reflect.apply(close,this,args);}finally{depth--;}});}
   const o=record("fetch",{transport:t,receiver,args,input,init,callerSignal:c.signal,effectiveSignal:t.signal,callerAbortedAtInvoke:c.signal.aborted});t.fetch=o;
-  return {threw(reason:unknown){o.state="threw";o.reason=reason;o.settle=++w.sequence;w.syncFailures.push(reason);},
+  return {transport:t,threw(reason:unknown){o.state="threw";o.reason=reason;o.settle=++w.sequence;w.syncFailures.push(reason);},
    returned(pending:Promise<Response>){returned(o,pending);observer(pending.then(response=>{ownership.response(t,response);observeBody(response,t);},()=>{}));}};
- },w.observerFailures);
+ },w.observerFailures,(fn:Function,receiver:unknown,args:any[],receipt:any)=>transportWitness?transportWitness.fetch(receipt.transport,fn,receiver,args):Reflect.apply(fn,receiver,args));
  const check=async(fn:()=>unknown)=>{try{await fn();}catch(e){failures.push(e);}};
  let bodyEntered=false;
  const setupBoundary=createBifrostSetupBoundary(checkpoints,caseIndex);
@@ -574,6 +679,8 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
   setupBoundary.enter("caller_install");
   setupCaller();
   setupBoundary.enter("progress_subscribe");
+  if(transportWitness){restores.push(()=>{const result=transportWitness.finish();w.transportWitnessEvidence=result.data;
+   w.observerFailures.push(...result.failures);throwFailures(result.restorationFailures);});transportWitness.start();}
   if(row.mode==="progress"){sent.subscribe(onSent);restores.push(()=>sent.unsubscribe(onSent));}
   setupBoundary.enter("source_env_pin");
   expect(process.env.CLAWROUTER_CONTRACT_SOURCE_HEAD).toBe(pin);

@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- Observe the original Bifrost control fetch, Undici request and socket lifecycle with bounded private identity evidence, retaining strict retirement and accounting failures.
+
 - Use the existing direct Worker socket for Bifrost SDK and control requests, retaining strict producer cancellation, nonexpiry and accounting checks.
 
 - Compare Bifrost inert cleanup failures by their original reason identities across VM realms, preserving order and undefined failures.

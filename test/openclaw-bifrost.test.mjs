@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { promisify, types } from "node:util";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -27,7 +27,7 @@ export const bifrostControls=["stream","simple"].flatMap(api=>["eof","preabort",
 export const bifrostProgressCases=["stream","simple"].map(api=>({id:`bifrost_${api}_progress`,mode:"progress",api}));
 export function bifrostNativeEvaluator(){
  const source=readFileSync(new URL("./fixtures/openclaw-bifrost-contract.test.ts",import.meta.url),"utf8");
- const names=["createBifrostFetchObserver","createBifrostInvocationOwnership","bifrostInvocationBound","sameBifrostDescriptor","bifrostNativeContract","bifrostCancelOperand","bifrostStoredErrorVector","evaluateBifrostNativeControl","bifrostQualification","bifrostProductExpected","bifrostProgressQualified","bifrostProgressWitness"];
+ const names=["createBifrostFetchObserver","createBifrostTransportWitness","createBifrostInvocationOwnership","bifrostInvocationBound","sameBifrostDescriptor","bifrostNativeContract","bifrostCancelOperand","bifrostStoredErrorVector","evaluateBifrostNativeControl","bifrostQualification","bifrostProductExpected","bifrostProgressQualified","bifrostProgressWitness"];
  const start="export function createBifrostFetchObserver(",end="function emitControl(";
  assert.equal(source.split(start).length,2);assert.equal(source.split(end).length,2);
  const declarations=source.slice(source.indexOf(start),source.indexOf(end));
@@ -752,6 +752,83 @@ export function assertBifrostRetired(proof, {workerDeadline=false, application}=
   for(const call of proof.calls){assert.equal(call.noCaller,true);assert.equal(call.redirect,'manual');assert.ok(call.original||call.rotated);}
 }
 
+export function bifrostTransportWitnessInertCases(assert) {
+ const {createBifrostTransportWitness,createBifrostFetchObserver}=bifrostNativeEvaluator(),passed=[];
+ const run=(name,body)=>{body();passed.push(name);};
+ function harness(options={}){
+  const channels=new Map(),events=[],listeners=new Set(),owner={},request={},reason={},receiver={},args=[{},{}];let context,clock=0,calls=0;
+  const storage={getStore:()=>context,run(token,fn){const old=context;context=token;try{return fn();}finally{context=old;}},disable(){events.push("disable");if(options.disableThrow)throw undefined;}};
+  const channel=name=>{if(!channels.has(name))channels.set(name,{callbacks:new Set(),subscribe(cb){events.push("subscribe");this.callbacks.add(cb);if(options.subscribeThrow)throw undefined;},
+   unsubscribe(cb){events.push("unsubscribe");this.callbacks.delete(cb);if(options.unsubscribeThrow)throw undefined;}});return channels.get(name);};
+  const emit=(kind,value)=>{for(const callback of [...channel("undici:"+kind).callbacks])callback(value);};
+  const socket={once(name,fn){assert.equal(name,"close");events.push("listen");listeners.add(fn);},removeListener(name,fn){assert.equal(name,"close");events.push("remove");listeners.delete(fn);if(options.removeThrow)throw undefined;}};
+  const t={owner},original=options.promise??{},observerFailures=[];let fn;
+  const witness=createBifrostTransportWitness({storage,channel,isProxy:types.isProxy,next(){if(options.nextThrow)throw undefined;return ++clock;},
+   selected(value){if(options.selectedThrow)throw undefined;return value===t;},bound(value,f,r,a,settled){return value===t&&value.owner===owner&&f===fn&&r===receiver&&a===t.args&&(!settled||t.returned===original)&&!options.unbound;},
+   reasons:()=>({callerPresent:true,caller:reason,readPresent:true,read:reason})});
+  fn=function(...actual){calls++;assert.equal(this,receiver);assert.equal(actual.length,args.length);actual.forEach((v,i)=>assert.equal(v,args[i]));
+   if(options.inside)options.inside({emit,request,socket,storage});else emit("request:create",{request});
+   if(options.throwOriginal)throw options.originalReason;return options.returnUndefined?undefined:original;};
+  const wrapped=createBifrostFetchObserver(fn,(r,a)=>{assert.equal(r,receiver);t.args=a;return {t,threw(e){t.threw=true;t.reason=e;},returned(p){t.returned=p;}};},observerFailures,
+   (f,r,a,receipt)=>witness.fetch(receipt.t,f,r,a));
+  witness.start();
+  return {witness,t,request,socket,reason,original,events,channels,listeners,emit,storage,observerFailures,
+   call:()=>Reflect.apply(wrapped,receiver,args),calls:()=>calls,
+   sent:()=>emit("client:sendHeaders",{request,socket}),close:()=>{for(const callback of [...listeners]){listeners.delete(callback);Reflect.apply(callback,socket,[]);}},
+   finish:()=>witness.finish()};
+ }
+ const bound=result=>!!(result.data[0]&1),closed=result=>!!(result.data[0]&2);
+ run("original forwarding and complete ordered passive events",()=>{const h=harness();assert.equal(h.call(),h.original);h.sent();h.emit("request:headers",{request:h.request});h.emit("request:trailers",{request:h.request});h.emit("request:error",{request:h.request,error:h.reason});h.close();const r=h.finish();assert.ok(bound(r));assert.ok(closed(r));assert.equal(r.data[3][0],63);assert.deepEqual(Array.from(r.data[1]),[1,1,1,1,1,1,1,0]);assert.ok(r.data[2][3]<r.data[2][4]&&r.data[2][4]<r.data[2][6]&&r.data[2][6]<r.data[2][7]);assert.equal(h.calls(),1);assert.equal(h.events.filter(e=>e==="subscribe").length,5);assert.equal(h.events.filter(e=>e==="unsubscribe").length,5);assert.equal(h.listeners.size,0);assert.ok(Object.isFrozen(r.data)&&r.data.every(v=>typeof v==="number"||Object.isFrozen(v)));});
+ run("headers error trailers and later close retain actual order",()=>{const h=harness();h.call();h.sent();h.emit("request:headers",{request:h.request});h.emit("request:error",{request:h.request,error:h.reason});h.emit("request:trailers",{request:h.request});h.close();const r=h.finish();assert.ok(bound(r));assert.ok(r.data[2][4]<r.data[2][3]&&r.data[2][3]<r.data[2][6]);});
+ run("missing close is unknown without a wait",()=>{const h=harness();h.call();h.sent();const r=h.finish();assert.ok(bound(r));assert.equal(r.data[1][6],0);assert.equal(r.data[2][6],null);h.close();assert.equal(r.data[2][6],null);});
+ run("duplicate errors retain count and first last order",()=>{const h=harness();h.call();h.sent();for(let i=0;i<3;i++)h.emit("request:error",{request:h.request,error:h.reason});const r=h.finish();assert.ok(bound(r));assert.equal(r.data[1][5],3);assert.ok(r.data[2][4]<r.data[2][5]);assert.equal(r.data[3][0],63);});
+ run("different errors do not inherit equality",()=>{const h=harness();h.call();h.sent();h.emit("request:error",{request:h.request,error:h.reason});h.emit("request:error",{request:h.request,error:{}});assert.equal(h.finish().data[3][0],7);});
+ run("explicit undefined error remains present",()=>{const h=harness();h.call();h.sent();h.emit("request:error",{request:h.request,error:undefined});const r=h.finish();assert.equal(r.data[3][0],9);assert.equal(r.data[3][1],1);});
+ run("absent error field differs from undefined",()=>{const h=harness();h.call();h.sent();h.emit("request:error",{request:h.request});const r=h.finish();assert.equal(r.data[3][0],0);assert.equal(r.data[3][1],0);});
+ run("error overflow invalidates attribution",()=>{const h=harness();h.call();h.sent();for(let i=0;i<17;i++)h.emit("request:error",{request:h.request,error:h.reason});const r=h.finish();assert.equal(bound(r),false);assert.ok(r.data[0]&4);assert.equal(r.data[1][5],16);assert.equal(r.data[1][7],1);assert.equal(r.failures.length,1);});
+ run("foreign request and context cannot bind",()=>{const h=harness({inside:({emit,request,storage})=>storage.run({},()=>emit("request:create",{request}))});h.call();h.sent();assert.equal(bound(h.finish()),false);});
+ run("concurrent foreign requests remain untouched",()=>{const h=harness();const foreign=()=>{};h.channels.get("undici:request:error").subscribe(foreign);h.call();h.sent();h.emit("request:create",{request:{}});h.emit("client:sendHeaders",{request:{},socket:{}});h.emit("request:error",{request:{},get error(){throw Error("not owned");}});const r=h.finish();assert.ok(bound(r));assert.equal(r.data[1][5],0);assert.ok(h.channels.get("undici:request:error").callbacks.has(foreign));});
+ run("duplicate request creation invalidates",()=>{const h=harness({inside:({emit,request})=>{emit("request:create",{request});emit("request:create",{request});}});h.call();h.sent();assert.equal(bound(h.finish()),false);});
+ run("send reassignment invalidates",()=>{const h=harness();h.call();h.sent();h.emit("client:sendHeaders",{request:h.request,socket:{}});assert.equal(bound(h.finish()),false);});
+ for(const before of [true,false])run("foreign socket reuse "+(before?"before":"after"),()=>{const h=harness();if(before)h.emit("client:sendHeaders",{request:{},socket:h.socket});h.call();h.sent();if(!before)h.emit("client:sendHeaders",{request:{},socket:h.socket});assert.equal(bound(h.finish()),false);});
+ run("replaced private owner invalidates at seal",()=>{const h=harness();h.call();h.sent();h.t.owner={};assert.equal(bound(h.finish()),false);});
+ run("proxy message traps never run",()=>{let traps=0;const h=harness();h.call();h.sent();h.emit("request:error",new Proxy({},{get(){traps++;throw undefined;},getOwnPropertyDescriptor(){traps++;throw undefined;}}));assert.ok(bound(h.finish()));assert.equal(traps,0);});
+ run("owned error accessor never runs and faults independently",()=>{let reads=0;const h=harness();h.call();h.sent();h.emit("request:error",{request:h.request,get error(){reads++;throw undefined;}});const r=h.finish();assert.equal(reads,0);assert.equal(bound(r),false);assert.equal(r.failures.length,1);});
+ run("socket method accessor never runs",()=>{let reads=0;const h=harness();h.call();h.emit("client:sendHeaders",{request:h.request,socket:{get once(){reads++;throw undefined;}}});assert.equal(bound(h.finish()),false);assert.equal(reads,0);});
+ run("callback throws undefined cannot escape",()=>{const h=harness({nextThrow:true});h.call();h.sent();const r=h.finish();assert.ok(r.failures.length>0);assert.ok(r.failures.every(e=>e===undefined));assert.equal(bound(r),false);});
+ for(const reason of [undefined,{}])run("original synchronous throw preserved "+(reason===undefined?"undefined":"object"),()=>{const h=harness({throwOriginal:true,originalReason:reason});let threw=false;try{h.call();}catch(e){threw=true;assert.equal(e,reason);}assert.ok(threw);assert.equal(h.calls(),1);assert.equal(h.t.threw,true);assert.equal(h.t.reason,reason);h.finish();});
+ run("original Promise identity and no extra observation",()=>{let thenReads=0;const original=Promise.resolve("inert");Object.defineProperty(original,"then",{get(){thenReads++;throw undefined;}});const h=harness({promise:original});assert.equal(h.call(),original);assert.equal(thenReads,0);h.sent();assert.ok(bound(h.finish()));});
+ run("undefined original return unchanged",()=>{const h=harness({returnUndefined:true});assert.equal(h.call(),undefined);assert.equal(h.calls(),1);h.finish();});
+ run("selected callback failure preserves original invocation",()=>{const h=harness({selectedThrow:true});assert.equal(h.call(),h.original);const r=h.finish();assert.equal(h.calls(),1);assert.equal(r.failures[0],undefined);});
+ run("unbound original synchronous failure is never retried",()=>{const h=harness({unbound:true,throwOriginal:true});let thrown=false;try{h.call();}catch(e){thrown=true;assert.equal(e,undefined);}assert.ok(thrown);assert.equal(h.calls(),1);h.finish();});
+ run("independent restoration undefined failures retained",()=>{const h=harness({unsubscribeThrow:true,removeThrow:true,disableThrow:true});h.call();h.sent();const r=h.finish();assert.equal(closed(r),false);assert.equal(r.restorationFailures.length,7);assert.ok(r.restorationFailures.every(e=>e===undefined));assert.equal(r.data[3][4],7);assert.equal(r.data[3][5],7);assert.equal(h.events.filter(e=>e==="unsubscribe").length,5);assert.equal(h.events.filter(e=>e==="remove").length,1);});
+ run("partial registration is not a complete window",()=>{const h=harness({subscribeThrow:true});h.call();h.sent();const r=h.finish();assert.equal(bound(r),false);assert.equal(closed(r),false);assert.equal(r.failures.length,5);});
+ run("late close before seal retained and repeated finish denied",()=>{const h=harness();h.call();h.sent();h.emit("request:error",{request:h.request,error:h.reason});h.close();const r=h.finish();assert.ok(r.data[2][6]>r.data[2][4]);assert.throws(()=>h.finish());});
+ run("multiple fetch generations cannot become one binding",()=>{const h=harness();h.call();h.call();h.sent();assert.equal(bound(h.finish()),false);assert.equal(h.calls(),2);});
+ run("five part protocol and maximum width stay within original quotas",()=>{
+  const {validateBifrostEvidence,bifrostPostludeEvidence}=bifrostCheckpointFunctions();
+  const base={v:1,pin:bifrostPin,lane:"sdk",case:2,evidence:true,complete:false,part:"postlude"};
+  const legacy={...base,...bifrostPostludeEvidence(undefined,undefined)};validateBifrostEvidence(legacy);
+  const record={...legacy,transport:[4,Array(8).fill(16),Array(8).fill(1000000),[63,16,16,16,7,7]]};
+  record.control=Array.from({length:6},()=>[3,false,1000000,1000000,1000000]);record.validated=true;
+  record.producer=[false,Array.from({length:4},(_,i)=>[i,3,false]),...Array(7).fill(1000000)];
+  record.router=Array.from({length:4},()=>[3,false]);record.usage=[true,1000000,1000000];
+  validateBifrostEvidence(record);const lines=[];bifrostAnnotationEmitter(line=>lines.push(line))(record);assert.ok(Buffer.byteLength(lines[0])<=768);
+  assert.equal(JSON.stringify(legacy).includes("transport"),false);
+  const f=bifrostCheckpointFunctions(),group=f.bifrostCaseEvidence(2,{transports:[],acquisitions:[],originals:[],caller:{},failures:[],syncFailures:[],observerFailures:[],evidenceRestoreFailures:0,evidenceRestoreUndefined:0},undefined,false,[]);
+  group[4]=record;const wire=[],reporter=f.createBifrostCheckpointReporter("sdk",r=>wire.push(r),true);reporter.evidence(group);
+  for(const phase of ["body","worker_retirement","restoration"])reporter.mark(2,phase,"rejected",undefined);
+  reporter.flush(2);reporter.finish();assert.equal(reporter.failures.length,0);assert.equal(wire.length,9);
+  assert.ok(wire.reduce((n,r)=>n+Buffer.byteLength("BIFROST_CHECKPOINT "+JSON.stringify(r)+"\n"),0)<=4096);
+  const emitted=[];const emit=bifrostAnnotationEmitter(line=>emitted.push(line));wire.forEach(emit);assert.ok(emitted.every(line=>Buffer.byteLength(line)<=768));assert.ok(emitted.reduce((n,line)=>n+Buffer.byteLength(line),0)<=8192);
+  const error={stdout:wire.map(r=>"BIFROST_CHECKPOINT "+JSON.stringify(r)).join("\n")};assert.equal(bifrostCheckpointRecords(error).filter(r=>r.evidence).length,5);
+  for(const mutate of [r=>r.case=3,r=>r.transport[1][0]=true,r=>r.transport[1][0]=17,r=>r.transport[2][0]=0,r=>r.transport[3][0]=64,r=>r.transport.push(0),r=>r.transport[0]=3]){
+   const bad=JSON.parse(JSON.stringify(record));mutate(bad);assert.throws(()=>validateBifrostEvidence(bad));
+  }
+ });
+ return passed;
+}
+
 export async function bifrostDirectRouterInertCases(assert) {
   const source = readFileSync(new URL("./openclaw-bifrost.test.mjs", import.meta.url), "utf8");
   const helper = readFileSync(new URL("./helpers/workerd.mjs", import.meta.url), "utf8");
@@ -822,6 +899,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
  test("Bifrost original producer, observer and control retirement (inert)", async () => {
   const cases = await bifrostRetirementInertCases(assert); assert.ok(cases.length >= 30);
  });
+ test("Bifrost passive transport witness preserves original calls and event identity (inert)",()=>{assert.equal(bifrostTransportWitnessInertCases(assert).length,30);});
  test("Bifrost failed retirement observations preserve original failures (inert)",async()=>{assert.equal((await bifrostFailureObservationInertCases(assert)).length,15);});
  test("Bifrost checkpoint preserves original invocation, promise and undefined rejection",async()=>{
   const records=[],r=bifrostCheckpointFunctions().createBifrostCheckpointReporter("sdk",v=>records.push(v)),receiver={},args=[{},undefined];
