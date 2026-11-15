@@ -425,7 +425,8 @@ falls back to the network. Packages supply data only. They cannot provide code,
 credentials, or host bindings.
 
 The first execution scope is deliberately narrow: model-free `rest_json`
-providers, one required `Authorization: Bearer ${secret}` API-key scheme, one
+providers, one required API-key scheme (either `Authorization: Bearer ${secret}`
+or a named `api_key` header such as `X-API-Key`), one
 `*_API_KEY` configuration value, one fixed HTTPS base URL, and unambiguous literal
 native POST routes. OAuth, grant transports, model catalogs, streaming, lifecycle
 endpoints, and stream/error adapters are rejected before any scenario runs.
@@ -434,8 +435,12 @@ A fixture's client path is relative to the provider's native mount. For example,
 `/v1/invoke` runs at `/v1/native/example/v1/invoke`. Upstream paths include the
 complete path and query sent to the provider. The host owns client authorization
 and supplies the synthetic upstream key `synthetic-conformance-key`; fixtures
-can assert `authorization: Bearer synthetic-conformance-key` upstream. Ambient
-API keys are never copied into the fixture environment.
+can assert `authorization: Bearer synthetic-conformance-key` upstream, or the
+configured API-key header with value `synthetic-conformance-key`. Header names
+in manifests are case-insensitive; fixture header names must be lowercase. Client fixtures cannot supply either host authorization
+or the selected API-key header. Header API-key scenarios also reject an
+additional upstream `Authorization` header. Query-string keys remain unsupported.
+Ambient API keys are never copied into the fixture environment.
 
 Each scenario must cause exactly one upstream call with redirects disabled.
 The runner compares method, origin, path, asserted headers, and exact JSON body;
