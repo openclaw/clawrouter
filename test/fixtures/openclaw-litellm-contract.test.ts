@@ -59,13 +59,22 @@ function litellmFixedPoint(sources: Array<() => Array<{promise: Promise<unknown>
   };
   return () => { const pending = run(); joins.add(pending); return pending; };
 }
+function litellmRetirementJoin(owner: any, acquisitions: Array<{released: Promise<unknown>}>, operations: Operation[]) {
+  return litellmFixedPoint([
+    () => acquisitions.map(row => ({promise: row.released})), () => operations,
+    // These originals are captured before observer registration can throw.
+    () => owner.transports.filter((row: any) => row.pending).map((row: any) => ({promise: row.pending})),
+    () => owner.guardOriginals,
+    () => owner.reactions.map((promise: Promise<unknown>) => ({promise})), () => owner.observers.rows,
+  ], () => owner.prepareDrain());
+}
 async function litellmAttemptAll(checks: Array<[string, () => unknown]>, failed: (phase: string, error: unknown) => void) {
   for (const [phase, check] of checks) try { await check(); } catch (error) { failed(phase, error); }
 }
 function litellmOwnership(storage: any, generation = 0) {
   const observers = litellmObserverLedger(generation), witness = litellmWitness(generation, observers);
   const tokens = new WeakSet<object>(), guards = new WeakSet<object>(), responses = new WeakMap<object, any>(), bodies = new WeakMap<object, any>(), readers = new WeakMap<object, any>();
-  const faults: unknown[] = [], transports: any[] = [], reactions: Promise<unknown>[] = [], signals: any[] = [];
+  const faults: unknown[] = [], transports: any[] = [], reactions: Promise<unknown>[] = [], signals: any[] = [], guardOriginals: Array<{promise: Promise<unknown>}> = [];
   let active = true, publicOpen = true;
   let firstFault = "none", relation: Array<boolean | null> = [null, null, null, null];
   const invalid = (code: string, observed: Array<boolean | null> = [null, null, null, null]) => {
@@ -118,7 +127,7 @@ function litellmOwnership(storage: any, generation = 0) {
       facts: Object.freeze([checks.every(Boolean), first, reaction.matches, "unknown", "unknown", Object.freeze(checks)]) };
   }
   return {
-    faults, transports, signals, witness, generation, observers, reactions,
+    faults, transports, signals, witness, generation, observers, reactions, guardOriginals,
     invoke(owner: any, fn: Function, receiver: unknown, args: any[]) {
       if (!publicOpen) { invalid("invoke"); return Reflect.apply(fn, receiver, args); }
       if (!active || !["catalog", "chat"].includes(owner.role) || args[owner.role === "catalog" ? 0 : 2]?.signal !== owner.signal) invalid("invoke");
@@ -133,7 +142,7 @@ function litellmOwnership(storage: any, generation = 0) {
       a.guardInput = signal(args[0]?.signal ?? args[0]?.init?.signal);
       a.fn = fn; a.receiver = receiver; a.args = args;
       const event = witness.guard(a);
-      try { const original = storage.run(a.context, () => Reflect.apply(fn, receiver, args)); witness.promise(event, original); return original; }
+      try { const original = storage.run(a.context, () => Reflect.apply(fn, receiver, args)); guardOriginals.push({promise: original}); witness.promise(event, original); return original; }
       catch (error) { witness.threw(event, error); throw error; }
     },
     fetch(fn: Function, receiver: unknown, args: any[], facts: any) {
@@ -272,7 +281,7 @@ function litellmOwnership(storage: any, generation = 0) {
     },
     settledFailures() { return [...faults, ...transports.filter(t => t.state === "sync_throw").map(t => t.reason)]; },
     async join() {
-      const drain = litellmFixedPoint([() => transports.filter(t => t.pending).map(t => ({promise: t.pending})), () => reactions.map(promise => ({promise})), () => observers.rows], () => entry.drain());
+      const drain = litellmRetirementJoin(this, [], []);
       const errors = await drain();
       return [...this.settledFailures(), ...observers.faults, ...errors];
     },
@@ -1416,10 +1425,7 @@ afterEach(async () => {
   let failedCheckpoint: string | undefined;
   const failed = (phase: string, error: unknown) => { failedCheckpoint ??= phase; errors.push(error); };
   try { ownership.closeRegistration(); } catch (error) { failed("release_wait", error); }
-  const drain = litellmFixedPoint([
-    () => acquisitions.map(row => ({promise: row.released})), () => operations,
-    () => ownership.reactions.map(promise => ({promise})), () => ownership.observers.rows,
-  ], () => ownership.prepareDrain());
+  const drain = litellmRetirementJoin(ownership, acquisitions, operations);
   try { for (const error of await drain()) failed("original_drain", error); } catch (error) { failed("original_drain", error); }
   const checks: Array<[string, () => unknown]> = [];
   for (const row of acquisitions) checks.push(["release_count", () => expect(row.releases).toBe(1)]);

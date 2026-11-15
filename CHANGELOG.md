@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Join LiteLLM observer derivatives and independent cleanup checks without suppressing original SDK retirement failures.
+- Join LiteLLM captured transport and guard originals, observer derivatives, and independent cleanup checks even when observer registration fails.
 
 - Bind LiteLLM fixture transports to individual Worker ingresses with opt-in native request context and retain bounded retirement failure observations.
 
