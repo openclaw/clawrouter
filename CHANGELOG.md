@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- Google speech fixture: finish every original Worker waitUntil and resource join, including appended tails, before throwing retained join failures; preserve undefined and independent result failures.
+
 - Google speech proof: compose the landed response-reader retirement base while preserving the pinned speech scenarios, diagnostics, consumer selection, and provider snapshot indexes. Native speech qualification remains a separate original-CI requirement.
 
 - Distinguish an exactly owned, settled metadata read and its derived rejection from native HTTP/1 fixture retirement failures, preserving raw outcomes, permanent ownership seals and independent producer and SQLite checks without claiming the error cause.

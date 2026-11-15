@@ -467,22 +467,61 @@ globalThis.fetch = async (input, init) => {
   return new Response(source, { status: response.status, headers: response.headers });
 };
 async function join(id) {
-  for (const record of requests.get(id) ?? []) {
-    await record.returned.promise;
-    for (let cursor = 0; cursor < record.pending.length;) { const batch = record.pending.slice(cursor); cursor += batch.length; await Promise.all(batch); }
+  const failures = [], cursors = new Map(), reads = [], cancels = [];
+  let p, terminalOwner, terminalJoined = false;
+  async function settle(originals) {
+    return Promise.all(originals.map(async original => {
+      // Isolate abrupt registration (including a throwing original then getter)
+      // so it cannot prevent subscription to the remaining originals.
+      try { return (await Promise.allSettled([original]))[0]; }
+      catch (reason) { return { status: "rejected", reason, registrationFailed: true }; }
+    }));
   }
-  const p = inputs.get(id); await p?.terminal.promise;
-  // A concurrent pull may unlock before cancel settles. Join the exact native
-  // read/cancel promises separately; terminal/unlocked are not cancellation ACKs.
-  const [reads, cancels] = await Promise.all([
-    Promise.allSettled(p?.reads ?? []), Promise.allSettled(p?.cancels ?? []),
-  ]);
-  return { hasBody: !!p?.physical, paths: (requests.get(id) ?? []).map(row => row.path), calls: p ? 1 : 0, retired: true, charged: bodyBudgetCharged(), ...(p?.physical ? {
+  // Cursors belong to this original join invocation. Concurrent/repeated joins
+  // retain their existing subscriptions; no original promise is replaced.
+  for (;;) {
+    for (const record of requests.get(id) ?? []) {
+      if (!cursors.has(record)) {
+        cursors.set(record, 0);
+        try { await record.returned.promise; } catch (error) { failures.push(error); }
+      }
+      while (cursors.get(record) < record.pending.length) {
+        const batch = record.pending.slice(cursors.get(record));
+        cursors.set(record, cursors.get(record) + batch.length);
+        const outcomes = await settle(batch);
+        for (const outcome of outcomes) if (outcome.status === "rejected") failures.push(outcome.reason);
+      }
+    }
+    p = inputs.get(id);
+    if (!terminalJoined || terminalOwner !== p) {
+      terminalJoined = true; terminalOwner = p;
+      try { await p?.terminal.promise; } catch (error) { failures.push(error); }
+    }
+    // Join the original native read/cancel promises even after an earlier
+    // waitUntil/terminal failure. Keep their existing outcome assertions intact.
+    const [nextReads, nextCancels] = await Promise.all([
+      settle((p?.reads ?? []).slice(reads.length)),
+      settle((p?.cancels ?? []).slice(cancels.length)),
+    ]);
+    for (const outcome of [...nextReads, ...nextCancels]) if (outcome.registrationFailed) failures.push(outcome.reason);
+    reads.push(...nextReads); cancels.push(...nextCancels);
+    // Settlement can append work to an earlier record or resource. Revisit only
+    // new tails, without subscribing again to an already joined original.
+    if ((requests.get(id) ?? []).every(record => cursors.has(record) && cursors.get(record) === record.pending.length)
+      && inputs.get(id) === p && reads.length === (p?.reads.length ?? 0) && cancels.length === (p?.cancels.length ?? 0)) break;
+  }
+  let result;
+  try {
+    result = { hasBody: !!p?.physical, paths: (requests.get(id) ?? []).map(row => row.path), calls: p ? 1 : 0, retired: true, charged: bodyBudgetCharged(), ...(p?.physical ? {
     activeReads: p.activeReads, eof: p.eof, canceled: p.canceled, readRejected: p.readRejected, unlocked: p.unlocked,
     sourceLocked: p.source.locked, physicalLocked: p.physical.locked, reservedBeforeFetch: p.reservedBeforeFetch,
     readCalls: p.readCalls, readResults: reads.map(result => result.status),
     cancelCalls: p.cancelCalls, cancelResults: cancels.map(result => result.status),
   } : {}) };
+  } catch (error) { failures.push(error); }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length) throw new AggregateError(failures, "Google original Worker joins or result failed");
+  return result;
 }
 export default {
   async fetch(request, env, context) {
@@ -577,3 +616,175 @@ export default { async fetch(request) {
 } };
 `.replaceAll("CONTROL", JSON.stringify(control));
 }
+
+// BEGIN Google original join pure tests.
+// Extract only the actual generated join; no Worker, SDK or network is started.
+function originalJoinFixture(records = [], proof, charged = () => 0) {
+  const source = routerFixture();
+  const start = source.indexOf("async function join(id) {");
+  const end = source.indexOf("\nexport default {", start);
+  assert.ok(start >= 0 && end > start);
+  const requests = new Map([["gs_model0", records]]), inputs = new Map();
+  if (proof) inputs.set("gs_model0", proof);
+  const join = new Function("requests", "inputs", "bodyBudgetCharged", source.slice(start, end) + "; return join;")(requests, inputs, charged);
+  return { join: () => join("gs_model0"), requests, inputs };
+}
+function joinDeferred() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+function joinRecord(pending = [], path = "/v1/catalog") {
+  return { path, pending, returned: { promise: Promise.resolve() } };
+}
+function watchedOriginal(promise, onSubscribe = () => {}) {
+  const nativeThen = promise.then;
+  let calls = 0;
+  Object.defineProperty(promise, "then", { value: function (...args) {
+    assert.equal(this, promise); assert.equal(args.length, 2);
+    assert.equal(typeof args[0], "function"); assert.equal(typeof args[1], "function");
+    calls++; onSubscribe();
+    return Reflect.apply(nativeThen, this, args);
+  } });
+  return { promise, calls: () => calls };
+}
+function joinOutcome(promise) {
+  const observed = { settled: false, rejected: false, value: undefined };
+  observed.done = promise.then(value => { observed.settled = true; observed.value = value; }, error => {
+    observed.settled = true; observed.rejected = true; observed.value = error;
+  });
+  return observed;
+}
+async function flushJoinJobs() { for (let i = 0; i < 24; i++) await Promise.resolve(); }
+function exactJoinFailures(error, expected) {
+  assert.ok(error instanceof AggregateError);
+  assert.ok(Array.isArray(error.errors)); assert.equal(error.errors.length, expected.length);
+  expected.forEach((value, index) => assert.equal(error.errors[index], value));
+}
+for (const reason of [{ original: "waitUntil" }, undefined]) {
+  test(`Google original join retains ${reason === undefined ? "undefined" : "defined"} failure until held original settles`, async () => {
+    const held = joinDeferred(), attached = joinDeferred();
+    const watched = watchedOriginal(held.promise, attached.resolve);
+    const failed = Promise.reject(reason);
+    const fixture = originalJoinFixture([joinRecord([failed, watched.promise])]);
+    const result = joinOutcome(fixture.join());
+    await attached.promise; await flushJoinJobs();
+    const early = result.settled;
+    held.resolve(); await result.done;
+    assert.equal(early, false); assert.equal(result.rejected, true); assert.equal(result.value, reason);
+    assert.equal(watched.calls(), 1);
+  });
+}
+test("Google original join retains ordered failures through terminal, resource and result joins", async () => {
+  const first = { first: true }, second = new AggregateError([undefined], "original nested failure"), report = { report: true };
+  const heldRead = joinDeferred(), heldCancel = joinDeferred(), attachedRead = joinDeferred(), attachedCancel = joinDeferred();
+  const read = watchedOriginal(heldRead.promise, attachedRead.resolve), cancel = watchedOriginal(heldCancel.promise, attachedCancel.resolve);
+  const terminal = joinDeferred();
+  const proof = { terminal, reads: [read.promise], cancels: [cancel.promise] };
+  const records = [joinRecord([Promise.reject(first), Promise.reject(undefined), Promise.reject(second)])];
+  const result = joinOutcome(originalJoinFixture(records, proof, () => { throw report; }).join());
+  await flushJoinJobs(); terminal.reject(undefined);
+  await Promise.all([attachedRead.promise, attachedCancel.promise]); await flushJoinJobs();
+  const beforeRead = result.settled;
+  heldRead.resolve(); await flushJoinJobs(); const beforeCancel = result.settled;
+  heldCancel.resolve(); await result.done;
+  assert.equal(beforeRead, false); assert.equal(beforeCancel, false); assert.equal(result.rejected, true);
+  exactJoinFailures(result.value, [first, undefined, second, undefined, report]);
+  assert.equal(read.calls(), 1); assert.equal(cancel.calls(), 1);
+});
+test("Google original join revisits earlier records and appended resource tails exactly once", async () => {
+  const tail = joinDeferred(), resourceTail = joinDeferred(), tailAttached = joinDeferred(), resourceAttached = joinDeferred();
+  const tailWatch = watchedOriginal(tail.promise, tailAttached.resolve), resourceWatch = watchedOriginal(resourceTail.promise, resourceAttached.resolve);
+  const first = joinRecord(), second = joinRecord([], "/v1/native/google-gemini/model");
+  const proof = { terminal: { promise: Promise.resolve() }, reads: [], cancels: [] };
+  const append = watchedOriginal(Promise.resolve(), () => first.pending.push(tailWatch.promise));
+  const appendRead = watchedOriginal(Promise.resolve(), () => proof.cancels.push(resourceWatch.promise));
+  second.pending.push(append.promise); proof.reads.push(appendRead.promise);
+  const result = joinOutcome(originalJoinFixture([first, second], proof).join());
+  await resourceAttached.promise; await flushJoinJobs(); const beforeResource = result.settled;
+  resourceTail.resolve(); await tailAttached.promise; await flushJoinJobs(); const beforeTail = result.settled;
+  tail.resolve(); await result.done;
+  assert.equal(beforeResource, false); assert.equal(beforeTail, false); assert.equal(result.rejected, false);
+  for (const original of [append, appendRead, tailWatch, resourceWatch]) assert.equal(original.calls(), 1);
+});
+test("Google original join preserves concurrent and repeated invocation subscriptions", async () => {
+  const held = joinDeferred(), original = watchedOriginal(held.promise);
+  const record = joinRecord([original.promise]), fixture = originalJoinFixture([record]);
+  const first = joinOutcome(fixture.join()), second = joinOutcome(fixture.join());
+  await flushJoinJobs(); const early = first.settled || second.settled;
+  held.resolve(); await Promise.all([first.done, second.done]);
+  assert.equal(early, false); assert.equal(original.calls(), 2);
+  await fixture.join(); assert.equal(original.calls(), 3); assert.equal(record.pending[0], original.promise);
+});
+test("Google original join allows subscription reentry without replacing or self-joining originals", async () => {
+  const held = joinDeferred(); let nested, fixture;
+  const original = watchedOriginal(held.promise, () => { if (!nested) nested = joinOutcome(fixture.join()); });
+  fixture = originalJoinFixture([joinRecord([original.promise])]);
+  const outer = joinOutcome(fixture.join());
+  await flushJoinJobs(); assert.ok(nested); const early = outer.settled || nested.settled;
+  held.resolve(); await Promise.all([outer.done, nested.done]);
+  assert.equal(early, false); assert.equal(outer.rejected, false); assert.equal(nested.rejected, false);
+  assert.equal(original.calls(), 2);
+});
+for (const report of [{ report: true }, undefined]) {
+  test(`Google original join preserves throwing subscription and ${report === undefined ? "undefined" : "defined"} result failure`, async () => {
+    let gets = 0;
+    const original = Promise.resolve();
+    Object.defineProperty(original, "then", { get() { gets++; throw undefined; } });
+    const held = joinDeferred(), attached = joinDeferred(), watched = watchedOriginal(held.promise, attached.resolve);
+    const result = joinOutcome(originalJoinFixture([joinRecord([original, watched.promise])], undefined, () => { throw report; }).join());
+    await attached.promise; await flushJoinJobs(); const early = result.settled;
+    held.resolve(); await result.done;
+    assert.equal(early, false); assert.equal(result.rejected, true); exactJoinFailures(result.value, [undefined, report]);
+    assert.equal(gets, 1); assert.equal(watched.calls(), 1);
+  });
+}
+test("Google original join preserves resource outcome projection and successful result fields", async () => {
+  const error = { native: true };
+  const proof = { terminal: { promise: Promise.resolve() }, reads: [Promise.reject(error)], cancels: [Promise.reject(undefined)],
+    physical: { locked: false }, source: { locked: false }, activeReads: 0, eof: false, canceled: true,
+    readRejected: true, unlocked: true, reservedBeforeFetch: true, readCalls: 1, cancelCalls: 1 };
+  const result = await originalJoinFixture([joinRecord()], proof, () => 7).join();
+  assert.deepEqual(result, { hasBody: true, paths: ["/v1/catalog"], calls: 1, retired: true, charged: 7,
+    activeReads: 0, eof: false, canceled: true, readRejected: true, unlocked: true, sourceLocked: false,
+    physicalLocked: false, reservedBeforeFetch: true, readCalls: 1, readResults: ["rejected"],
+    cancelCalls: 1, cancelResults: ["rejected"] });
+  // Existing caller assertions, not this join, still decide these raw outcomes.
+});
+test("Google original join retains resource registration faults while joining later resources", async () => {
+  const report = { report: true }, held = joinDeferred(), attached = joinDeferred();
+  let gets = 0;
+  const original = Promise.resolve();
+  Object.defineProperty(original, "then", { get() { gets++; throw undefined; } });
+  const watched = watchedOriginal(held.promise, attached.resolve);
+  const proof = { terminal: { promise: Promise.resolve() }, reads: [original, watched.promise], cancels: [] };
+  const result = joinOutcome(originalJoinFixture([], proof, () => { throw report; }).join());
+  await attached.promise; await flushJoinJobs(); const early = result.settled;
+  held.resolve(); await result.done;
+  assert.equal(early, false); assert.equal(result.rejected, true); exactJoinFailures(result.value, [undefined, report]);
+  assert.equal(gets, 1); assert.equal(watched.calls(), 1);
+});
+test("Google original join retains returned failure and joins subsequently appended request records", async () => {
+  const originalFailure = { returned: true }, held = joinDeferred(), attached = joinDeferred();
+  const watched = watchedOriginal(held.promise, attached.resolve);
+  const first = joinRecord(); first.returned.promise = Promise.reject(originalFailure);
+  const records = [first];
+  first.pending.push(watchedOriginal(Promise.resolve(), () => records.push(joinRecord([watched.promise], "/v1/native/google-gemini/model"))).promise);
+  const result = joinOutcome(originalJoinFixture(records).join());
+  await attached.promise; await flushJoinJobs(); const early = result.settled;
+  held.resolve(); await result.done;
+  assert.equal(early, false); assert.equal(result.rejected, true); assert.equal(result.value, originalFailure);
+  assert.equal(watched.calls(), 1);
+});
+test("Google original join retains each later failure after an earlier record rejected", async () => {
+  const first = { first: true }, later = { later: true }, report = { report: true };
+  const held = joinDeferred(), attached = joinDeferred(), watched = watchedOriginal(held.promise, attached.resolve);
+  const late = joinDeferred();
+  const records = [joinRecord([Promise.reject(first)]), joinRecord([late.promise, watched.promise], "/v1/native/google-gemini/model")];
+  const result = joinOutcome(originalJoinFixture(records, undefined, () => { throw report; }).join());
+  await attached.promise; late.reject(later); await flushJoinJobs(); const early = result.settled;
+  held.resolve(); await result.done;
+  assert.equal(early, false); assert.equal(result.rejected, true); exactJoinFailures(result.value, [first, later, report]);
+  assert.equal(watched.calls(), 1);
+});
+// END Google original join pure tests.
