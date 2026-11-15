@@ -17,6 +17,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  edge-offline-packaging:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+      # ONLINE setup happens inside the pinned Bookworm image. No host
+      # node_modules, Git config, home, proxy or Docker config enters it.
+      # This is a separate private PID/NET/MNT container route, not a claim
+      # that the earlier unprivileged USER namespace attempt qualified.
+      # No secrets, OIDC, environments, cache, artifacts or SDK execution.
+      - name: Isolated offline packaging (no SDK or cloud execution)
+        run: node scripts/edge-proof.mjs container-ci
+
   native-codex:
     runs-on: ubuntu-latest
     timeout-minutes: 10
