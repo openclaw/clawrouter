@@ -916,7 +916,7 @@ beforeEach(async () => {
   it("cancels the actual native SDK stream after partial delivery", async () => {
     const controller = new AbortController(), stream = await start("cancel", models[0], { signal: controller.signal });
     for await (const event of stream) if (event.type === "text_delta") { lifetime.partial(bindings.bindings.find(row => row.id === "cancel" && row.kind === "chat")!); controller.abort(); break; }
-    const result = await stream.result(); expect(controller.signal.aborted).toBe(true); expect(["aborted", "error"]).toContain(result.stopReason);
+    const result = await stream.result(); expect(controller.signal.aborted).toBe(true); expect(result.stopReason).toBe("aborted");
   });
 sdkDiagnostic("product_registration", "progress", "fulfilled");
 } catch (error) { sdkDiagnostic("product_registration", "primary", "rejected", error); throw error; }
