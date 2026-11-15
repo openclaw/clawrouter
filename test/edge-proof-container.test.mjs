@@ -172,13 +172,8 @@ test("parent proc denial preserves the original error and never substitutes chil
     assert.equal(caught, true);
   }
 });
-test("actual cgroup retirement distinguishes removed from missing files, replacement and denied evidence", async () => {
-  const bound = { path: "/synthetic/owned", dev: 1, ino: 2, parentDev: 1, parentIno: 1 };
-  const missing = () => { throw Object.assign(new Error("fixture missing"), { code: "ENOENT" }); };
-  const valid = { statPath: async path => ({ dev: 1, ino: path === "/synthetic" ? 1 : 2 }), read: async path => path.endsWith("cgroup.procs") ? "" : "populated 0\n", lstatPath: async () => ({}) };
-  assert.equal(await retiredCgroup(bound, valid), "empty");
-  assert.equal(await retiredCgroup(bound, { ...valid, statPath: async path => path === "/synthetic" ? { dev: 1, ino: 1 } : missing(), lstatPath: async () => missing() }), "removed");
-  for (const change of [{ read: async () => "12345\n" }, { read: async () => { throw undefined; } }, { read: async () => missing() }, { statPath: async () => ({ dev: 1, ino: 9 }) }, { lstatPath: async () => { throw Object.assign(new Error("denied"), { code: "EACCES" }); }, statPath: async path => path === "/synthetic" ? { dev: 1, ino: 1 } : missing() }]) await assert.rejects(retiredCgroup(bound, { ...valid, ...change }));
+test("actual cgroup retirement refuses unqualified synthetic bindings", async () => {
+  await assert.rejects(retiredCgroup({ path: "/synthetic/owned", dev: 1n, ino: 2n, parentDev: 1n, parentIno: 1n }));
 });
 
 function metadataMounts() {
@@ -1366,8 +1361,9 @@ test("mount diagnostics strict tuple relationships and maximum frames preserve c
 test("mount diagnostics each structural leaf and original unobserved operand relation is exercised", () => {
   const covered = new Set(mountDiagnosticCases.map(detail => `${detail.m[1]}:${detail.m[2]}`));
   for (const [index, [, width]] of mountPredicates.entries()) for (let leaf = 1; leaf <= width; leaf++) {
+    // Parent-only predicate 29 is exercised through qualified views below.
     // A failed OR has both operands false; the first false is not a terminal leaf.
-    if (index + 1 === 22 || index + 1 === 28 || index + 1 === 14 && leaf === 1) continue;
+    if (index + 1 === 22 || index + 1 === 28 || index + 1 === 29 || index + 1 === 14 && leaf === 1) continue;
     assert.ok(covered.has(`${index + 1}:${leaf}`), `missing original predicate ${index + 1} leaf ${leaf}`);
   }
   const firstFs = mountDiagnosticCases.find(detail => detail.m[1] === 18 && detail.m[2] === 1).m;
@@ -1576,11 +1572,11 @@ test("empty gate retains asynchronous directory rejection and synchronous anchor
 async function parentAdmissionFactory(overrides = {}) {
   const source = await readFile(new URL("../scripts/edge-proof-container.mjs", import.meta.url), "utf8");
   const cut = (a,b) => source.slice(source.indexOf(a),source.indexOf(b)).replaceAll("export ", "");
-  const code = cut("const hash =", "export function parseIdentity(") + cut("export function createInitGuardLedger(", "const own =") + cut("export function parseIdentity(", "export function validateImage(") + cut("export function createArguments(", "export function parseControl(") + cut("export function createMountObservation(", "export async function retiredCgroup(");
+  const code = cut("const hash =", "export function parseIdentity(") + cut("export function createInitGuardLedger(", "const own =") + cut("export function parseIdentity(", "export function validateImage(") + cut("export function createArguments(", "export function parseControl(") + cut("export function createMountObservation(", "// Original attach close");
   const contractSource = cut("export const containerContract =", "export const harnessInputs =");
   const bindings = { createHash, join, dirname, relative, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission, validateMountDetail, validateMaskDetail, initGuardTags, initSourcePhases, mountTargets, mountFilesystems,
-    readFile: async () => { throw undefined; }, readlink: async () => { throw undefined; }, realpath: async () => { throw undefined; }, stat: async () => { throw undefined; }, ...overrides };
-  return new Function(...Object.keys(bindings), contractSource + code + ";return {createParentAdmissionLedger,parentSource,parentRole,parentEvaluate,parentLeaf,parentCount,parseIdentity,validateIdentity,validateMapping,validateContainerInspect,validateTarget,processEvidence,validateLimits,bindCgroup,validateMetadataMounts,validateMountFreshness};")(...Object.values(bindings));
+    readFile: async () => { throw undefined; }, readlink: async () => { throw undefined; }, realpath: async () => { throw undefined; }, stat: async () => { throw undefined; }, lstat: async () => { throw undefined; }, ...overrides };
+  return new Function(...Object.keys(bindings), contractSource + code + ";return {createParentAdmissionLedger,parentSource,parentRole,parentEvaluate,parentLeaf,parentCount,parseIdentity,validateIdentity,validateMapping,validateContainerInspect,validateTarget,processEvidence,validateLimits,bindCgroup,validateMetadataMounts,validateMountFreshness,createParentCgroupAdmission,sameCgroupBinding,retiredCgroup};")(...Object.values(bindings));
 }
 const parentAdmissionPackets = [];
 test("parent admission actual predicates preserve short circuit getters original throws and fixed first evidence", async () => {
@@ -1642,11 +1638,11 @@ test("parent admission actual callback rejects each original boundary and report
   const goodStatus="Groups:\t20\nUid:\t501 501 501 501\nGid:\t20 20 20 20\n"+["CapInh","CapPrm","CapEff","CapBnd","CapAmb"].map(n=>n+":\t0000\n").join("")+"NoNewPrivs:\t1\nSeccomp:\t2\n";
   const target={pid:123,start:"123",status:goodStatus,uidMap:"0 0 4294967295",gidMap:"0 0 4294967295",namespaces:{pid:"pid:[2]",net:"net:[2]",mnt:"mnt:[2]",user:"user:[1]"},mounts:targetMounts,cgroup:`0::/docker/${hex}\n`};
   let baseline;
-  for(const stop of [0,...Array.from({length:12},(_,i)=>i+1),"report"]) {
+  for(const stop of [0,...Array.from({length:6},(_,i)=>i+1),"binding","report"]) {
     const calls=[], reporting=[], report=createContainerDiagnostics();let permits=0, caught=false, reason;
     const record=(name,args,value)=>{calls.push({name,args});if(calls.length===stop)throw undefined;return value;};
     const ledgerFactory=()=>{const l=api.createParentAdmissionLedger();if(stop==="report")l.enter=()=>{throw undefined;};return l;};
-    const bindings={raiseContainerFailures,createParentAdmissionLedger:ledgerFactory,parentSource:api.parentSource,parentRecord:(l,m,...a)=>{try{l[m](...a);}catch(e){l.errors.push(e);}},parentEvaluate:api.parentEvaluate,parentLeaf:api.parentLeaf,check:(v)=>{if(!v)throw undefined;},report,admissionReporting:reporting,identity,parentNamespaces,cid:hex,daemonRoot:root,
+    const bindings={raiseContainerFailures,createParentAdmissionLedger:ledgerFactory,createParentCgroupAdmission:()=>({observe:async(pid,visit,l)=>{api.parentSource(l,"cgroup_observer");return record("cgroup-view",[pid,visit],{target,bound:{path:"/owned",dev:1n,ino:stop==="binding"&&visit===2?3n:2n,parentDev:1n,parentIno:1n},parentMounts:parentRows});}}),sameCgroupBinding:api.sameCgroupBinding,parentSource:api.parentSource,parentRecord:(l,m,...a)=>{try{l[m](...a);}catch(e){l.errors.push(e);}},parentEvaluate:api.parentEvaluate,parentLeaf:api.parentLeaf,check:(v)=>{if(!v)throw undefined;},report,admissionReporting:reporting,identity,parentNamespaces,cid:hex,daemonRoot:root,
       recheckParent:async l=>{api.parentSource(l,"parent_identity");return record("parent",[],identity);},readOwned:async l=>{api.parentSource(l,"inspect_validate");return record("inspect",[],{...metadata,State:{Running:true,Pid:123}});},
       processEvidence:async(pid,{recorder})=>{api.parentSource(recorder,"target_stat");return record("process",[pid],target);},validateTarget:api.validateTarget,
       bindCgroup:async(t,cid,l)=>{api.parentSource(l,"cgroup_path");return record("cgroup",[t,cid],{dev:1,ino:2});},
@@ -1655,10 +1651,90 @@ test("parent admission actual callback rejects each original boundary and report
     function mountTableForParent(){return structuredClone(parentRows);}
     const run=new Function(...Object.keys(bindings),'return async () => { let target,bound; '+callback+'; return {target,bound}; };')(...Object.values(bindings));
     try{await run();permits++;}catch(e){caught=true;reason=e;}
-    if(stop===0){assert.equal(caught,false);assert.equal(permits,1);baseline=calls;assert.equal(calls.length,12);}
-    else{assert.equal(caught,true);assert.equal(permits,0);if(stop!=="report"){assert.equal(reason,undefined);assert.deepEqual(calls,baseline.slice(0,stop));}else assert.ok(reason===undefined||reason instanceof AggregateError);}
+    if(stop===0){assert.equal(caught,false);assert.equal(permits,1);baseline=calls;assert.equal(calls.length,6);}
+    else{assert.equal(caught,true);assert.equal(permits,0);if(stop!=="report"){assert.equal(reason,undefined);assert.deepEqual(calls,baseline.slice(0,stop==="binding"?5:stop));}else assert.ok(reason===undefined||reason instanceof AggregateError);}
     assert.ok(report.records.some(r=>r.phase==="admission"));
     if(stop!==0&&stop!=="report"){const detailed=report.records.find(r=>r.v===8);assert.ok(detailed);assert.equal(detailed.defined,false);validateParentAdmission(detailed);}
+  }
+});
+
+async function cgroupFixture(change = () => {}) {
+  const api = await parentAdmissionFactory(), membership = `/docker/${hex}`, parentNamespaces = { pid:"pid:[1]",net:"net:[1]",mnt:"mnt:[1]",user:"user:[1]" };
+  const targetRows = mounts(); targetRows.find(r => r.target === "/sys/fs/cgroup").root = membership;
+  const parentRows = [mount(1,0,"/","ext4","8:1",["rw"]),mount(2,1,"/sys/fs/cgroup","cgroup2","0:99",["rw"])];
+  const text = rows => rows.map(r=>`${r.id} ${r.parentId} ${r.device} ${r.root} ${r.target} ${r.options.join(",")} - ${r.fs} none ${r.superOptions.join(",")}`).join("\n")+"\n";
+  const fields=Array(20).fill("0");fields[1]="1";fields[19]="123";
+  const status="Groups:\t20\nUid:\t501 501 501 501\nGid:\t20 20 20 20\n"+["CapInh","CapPrm","CapEff","CapBnd","CapAmb"].map(n=>n+":\t0000\n").join("")+"NoNewPrivs:\t1\nSeccomp:\t2\n";
+  const state={membership,targetRows,parentRows,fields,calls:[],ino:9007199254740993n,removed:false};
+  const missing=()=>{throw Object.assign(new Error("inert"),{code:"ENOENT"});};
+  const io={
+    read:async path=>{state.calls.push(["read",path]);if(path==="/proc/self/mountinfo")return text(state.parentRows);if(path.endsWith("/stat"))return "123 (init) "+state.fields.join(" ");if(path.endsWith("/status"))return status;if(path.endsWith("/uid_map")||path.endsWith("/gid_map"))return "0 0 4294967295";if(path.endsWith("/mountinfo"))return text(state.targetRows);if(path.endsWith("/cgroup"))return `0::${state.membership}\n`;const key=path.split("/").at(-1);return ({"memory.max":"4294967296","memory.swap.max":"0","pids.max":"128","cpu.max":"200000 100000","cgroup.procs":"","cgroup.events":"populated 0\n"})[key];},
+    link:async path=>{state.calls.push(["link",path]);const name=path.split("/").at(-1);return `${name}:[${path.startsWith("/proc/self/")||name==="user"?1:2}]`;},
+    realpath:async path=>{state.calls.push(["realpath",path]);return path;},
+    stat:async(path,options)=>{state.calls.push(["stat",path,options.bigint]);assert.equal(options.bigint,true);if(state.removed&&path.endsWith(hex))return missing();return {dev:99n,ino:path.endsWith(hex)?state.ino:path==="/sys/fs/cgroup"?10n:1n,isDirectory:()=>true};},
+  };
+  change({state,io,api});
+  const admission=api.createParentCgroupAdmission(hex,parentNamespaces,identity,io);
+  return {api,state,io,admission,retire:bound=>api.retiredCgroup(bound,{read:io.read,link:io.link,statPath:io.stat,lstatPath:async()=>missing()})};
+}
+test("same observer cgroup actual qualified visits allow different devices and retain exact BigInt retirement", async()=>{
+  const f=await cgroupFixture(), ledger=f.api.createParentAdmissionLedger();
+  const first=await f.admission.observe(123,1,ledger);assert.equal(first.bound.ino,9007199254740993n);assert.deepEqual(ledger.errors,[]);
+  assert.throws(()=>f.api.validateTarget(first.target,{pid:"pid:[1]",net:"net:[1]",mnt:"mnt:[1]",user:"user:[1]"},identity));
+  assert.throws(()=>f.api.validateTarget(first.target,{},identity,undefined,{}));
+  const second=await f.admission.observe(123,2,ledger);assert.equal(f.api.sameCgroupBinding(first.bound,second.bound),true);await assert.rejects(f.retire(first.bound));assert.equal(await f.retire(second.bound),"empty");
+  f.state.ino=9007199254740992n;await assert.rejects(f.retire(second.bound));f.state.ino=9007199254740993n;f.state.removed=true;assert.equal(await f.retire(second.bound),"removed");
+  assert.equal(f.state.calls.filter(([k,p])=>k==="read"&&p.endsWith("memory.max")).length,2);
+});
+test("same observer cgroup actual mapping rejects all directory parent controller and deeper overmounts",async()=>{
+  for(const suffix of ["",`/docker`, `/docker/${hex}`,`/docker/${hex}/deep`,`/docker/${hex}/memory.max`,`/docker/${hex}/memory.swap.max`,`/docker/${hex}/pids.max`,`/docker/${hex}/cpu.max`]){
+    const f=await cgroupFixture(({state})=>state.parentRows.push(mount(3,2,"/sys/fs/cgroup"+suffix,"tmpfs","0:999",["rw"])));
+    await assert.rejects(f.admission.observe(123,1));assert.equal(f.state.calls.some(([k])=>k==="stat"),false);
+  }
+});
+test("same observer cgroup actual membership and namespace counterexamples never qualify equal strings alone",async()=>{
+  for(const member of ["/",`/docker/${hex}/child`,`/docker/${hex}x`,`/docker/../${hex}`,`/docker//${hex}`,`/docker/./${hex}`,`/docker/\u0000${hex}`,`/docker/${other}`]){
+    const f=await cgroupFixture(({state})=>{state.membership=member;state.targetRows.find(r=>r.target==="/sys/fs/cgroup").root=member;});await assert.rejects(f.admission.observe(123,1));
+  }
+  for(const mutate of [({state})=>state.parentRows[1].root="/foreign",({state})=>state.parentRows[1].fs="tmpfs",({state})=>state.targetRows.find(r=>r.target==="/sys/fs/cgroup").root="/sibling",({state})=>state.targetRows.find(r=>r.target==="/sys/fs/cgroup").options=["rw"],({io})=>{const original=io.link;io.link=async p=>p.endsWith("/ns/cgroup")?"cgroup:[1]":original(p);},({io})=>{io.realpath=async()=>"/foreign";},({io})=>{io.stat=async()=>({dev:99,ino:9007199254740992,isDirectory:()=>true});}]){const f=await cgroupFixture(mutate);await assert.rejects(f.admission.observe(123,1));}
+});
+test("same observer cgroup actual original read order failures brackets and stale visits deny permit",async()=>{
+  const baseline=await cgroupFixture();await baseline.admission.observe(123,1);const original=baseline.state.calls;
+  for(let stop=1;stop<=original.length;stop++){
+    let calls=0;const seen=[];const f=await cgroupFixture(({io})=>{for(const key of ["read","link","realpath","stat"]){const fn=io[key];io[key]=async(...args)=>{seen.push(key==="stat"?[key,args[0],args[1].bigint]:[key,args[0]]);if(++calls===stop)throw undefined;return fn(...args);};}});
+    let caught=false;try{await f.admission.observe(123,1);}catch(e){caught=true;assert.equal(e,undefined);}assert.equal(caught,true);let end=stop;for(const suffixes of [["/ns/pid","/ns/cgroup"],["/memory.max","/cpu.max"]]){const first=original.findIndex(([,p])=>p.endsWith(suffixes[0])&&(!suffixes[0].startsWith("/ns/")||p.startsWith("/proc/123/")))+1,last=original.findIndex(([,p])=>p.endsWith(suffixes[1])&&(!suffixes[1].startsWith("/ns/")||p.startsWith("/proc/123/")))+1;if(stop>=first&&stop<=last)end=last;}assert.equal(calls,end);assert.deepEqual(seen,original.slice(0,end));await assert.rejects(f.admission.observe(123,2));
+  }
+  for(const field of ["observer","target","start"]){let n=0;const f=await cgroupFixture(({io,state})=>{if(field==="start"){const fn=io.read;io.read=async p=>{if(p.endsWith("/stat")&&++n===2)state.fields[19]="124";return fn(p);};}else{const fn=io.link;io.link=async p=>{const selected=field==="observer"?p==="/proc/self/ns/cgroup":p==="/proc/123/ns/cgroup";return selected&&++n===2?"cgroup:[9]":fn(p);};}});await assert.rejects(f.admission.observe(123,1));}
+  const f=await cgroupFixture(), first=await f.admission.observe(123,1);await assert.rejects(f.admission.observe(999,2));await assert.rejects(f.retire(first.bound));
+});
+test("same observer cgroup actual parent automatic leaves preserve strict historical and private schemas",async()=>{
+  const changes=[[1,r=>r.fs="ext4"],[2,r=>r.root="/foreign"],[3,r=>r.device="8:99"],[5,r=>r.options=r.options.map(x=>x==="ro"?"rw":x)],[6,r=>r.options=r.options.filter(x=>x!=="nosuid")],[7,r=>r.options=r.options.filter(x=>x!=="nodev")],[8,r=>r.options=r.options.filter(x=>x!=="noexec")]];
+  for(const [leaf,change] of changes){const f=await cgroupFixture(({state})=>change(state.targetRows.find(r=>r.target==="/sys/fs/cgroup"))), ledger=f.api.createParentAdmissionLedger();let reason;try{await f.admission.observe(123,1,ledger);}catch(e){reason=e;}const row=ledger.finish(true,reason);assert.ok(row.m);assert.equal(row.m[1],29);assert.equal(row.m[2],leaf);validateParentAdmission(row);if(leaf>2)for(const root of [1,2]){const bad=structuredClone(row);bad.m[5]=root;assert.throws(()=>validateParentAdmission(bad));}assert.throws(()=>validateInitDetail({source:"mount_validate",guard:"mounts",m:row.m}));const report=createContainerDiagnostics();report.mark("entry","rejected",reason);report.internal(row);const captured=await attachWithFrames(initReady());createAttachProjection(captured.h.attached,captured.binding,report)(captured.h.attached.result);const lines=[];emitContainerFailure(report.records,x=>lines.push(x));parentAdmissionPackets.push(lines.map(x=>JSON.parse(x.slice(x.indexOf("::",2)+2).trimEnd())));}
+});
+test("same observer cgroup appended evidence retains actual failures reporter undefined and command quotas",async()=>{
+  const f=await cgroupFixture(({state})=>state.parentRows[1].root="/foreign"), ledger=f.api.createParentAdmissionLedger();let reason;try{await f.admission.observe(123,1,ledger);}catch(e){reason=e;}const detail=ledger.finish(true,reason);assert.equal(detail.detail[4],48);validateParentAdmission(detail);
+  const report=createContainerDiagnostics();report.mark("entry","rejected",reason);report.internal(detail);const captured=await attachWithFrames(initReady());createAttachProjection(captured.h.attached,captured.binding,report)(captured.h.attached.result);report.mark("retirement","rejected",undefined);for(const p of ["dispatch","image","base","create","attach","ready","cwd","temp","environment"])report.mark(p,"fulfilled");const lines=[];emitContainerFailure(report.records,x=>lines.push(x));assert.equal(lines.length,10);assert.ok(lines.every(x=>Buffer.byteLength(x)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);parentAdmissionPackets.push(lines.map(x=>JSON.parse(x.slice(x.indexOf("::",2)+2).trimEnd())));
+  const broken=await cgroupFixture(), l=broken.api.createParentAdmissionLedger();l.enter=()=>{throw undefined;};await broken.admission.observe(123,1,l);assert.ok(l.errors.length);assert.ok(l.errors.every(e=>e===undefined));
+});
+
+test("same observer cgroup held original limits deny completion and all repeat identity substitutions fail",async()=>{
+  const held=Promise.withResolvers();let limitCalls=0,completed=false;
+  const f=await cgroupFixture(({io})=>{const read=io.read;io.read=path=>{if(path.endsWith("memory.max")){limitCalls++;return held.promise;}return read(path);};});
+  const pending=f.admission.observe(123,1).then(x=>{completed=true;return x;});await Promise.resolve();await Promise.resolve();for(let i=0;i<30;i++)await Promise.resolve();assert.equal(completed,false);assert.equal(limitCalls,1);held.resolve("4294967296");await pending;
+  for(const mutate of [f=>f.state.parentRows[1].id=77,f=>f.state.ino=9007199254740992n,f=>{f.state.membership=`/different/${hex}`;f.state.targetRows.find(r=>r.target==="/sys/fs/cgroup").root=f.state.membership;}]){
+    const x=await cgroupFixture(),one=await x.admission.observe(123,1);mutate(x);
+    try{const two=await x.admission.observe(123,2);assert.equal(x.api.sameCgroupBinding(one.bound,two.bound),false);}catch(e){assert.ok(e!==undefined);await assert.rejects(x.retire(one.bound));}
+  }
+  const x=await cgroupFixture(), namespaces={pid:"pid:[1]",net:"net:[1]",mnt:"mnt:[1]",user:"user:[1]"};await assert.rejects(x.api.createParentCgroupAdmission(other,namespaces,identity,x.io).observe(123,1));
+  const y=await cgroupFixture(({io})=>{const original=io.stat;io.stat=async(...args)=>{const row=await original(...args);if(args[0]==="/sys/fs/cgroup")row.dev=100n;return row;};});await assert.rejects(y.admission.observe(123,1));
+});
+test("same observer cgroup actual failure cleanup still stops and joins without unqualified retirement fallback",async()=>{
+  const source=await readFile(new URL("../scripts/edge-proof-container.mjs",import.meta.url),"utf8"),start=source.indexOf("  if (cid && created) {"),end=source.indexOf("  raiseContainerFailures(failures);",start),code=source.slice(start,end);
+  for(const stopFailure of [false,true]){
+    const original=Promise.withResolvers(),result={closed:true},failures=[];let stops=0,joins=0,removes=0,finished=false;
+    const bindings={cid:hex,created:{},attached:{closed:original.promise,result},waiting:undefined,bound:undefined,failures,report:{step:async(p,f)=>f()},readOwned:async()=>({State:{Running:false,Pid:0}}),check:(v)=>{if(!v)throw new Error("inert");},stopOwned:async()=>{stops++;if(stopFailure)throw undefined;},projectAttach:()=>{joins++;},requireProcessSuccess:()=>{},recheckParent:async()=>{},retiredCgroup:async()=>{throw new Error("must not qualify");},run:async()=>{removes++;},raiseContainerFailures};
+    const execute=new Function(...Object.keys(bindings),'return async()=>{let disposition="retained";'+code+';return disposition;}')(...Object.values(bindings));
+    const pending=execute().then(x=>{finished=true;return x;});for(let i=0;i<10;i++)await Promise.resolve();assert.equal(stops,1);assert.equal(finished,false);original.resolve(result);assert.equal(await pending,"retained");assert.equal(joins,1);assert.equal(removes,0);assert.ok(failures.length);if(stopFailure)assert.ok(failures[0].errors.includes(undefined));
   }
 });
 // END attach diagnostic pure tests.

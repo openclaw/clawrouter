@@ -437,7 +437,8 @@ export function validateMetadataMounts(inspect, targetMounts, parentMounts, daem
 const directoryMaskTargets = Object.freeze(["/proc/asound", "/proc/acpi", "/proc/scsi", "/sys/firmware", "/sys/devices/virtual/powercap"]);
 const thermalMaskTarget = path => /^\/sys\/devices\/system\/cpu\/cpu(0|[1-9]\d*)\/thermal_throttle$/.test(path);
 const isDirectoryMask = target => directoryMaskTargets.includes(target) || thermalMaskTarget(target);
-export function validateMounts(rows, recorder) {
+export function validateMounts(rows, recorder, cgroupView) {
+  const parentView = cgroupView === undefined ? null : requireCgroupView(cgroupView, rows, recorder);
   mountTable(rows, recorder);
   // moby v28.5.2 oci/defaults.go: automatic mounts and conditional masks.
   const readonlyProc = ["/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys", "/proc/sysrq-trigger"];
@@ -468,8 +469,8 @@ export function validateMounts(rows, recorder) {
     m.check(m.leaf(1, parent) && m.leaf(2, row.parentId === parent.id), "mount-parent");
     let target; const targetValue = value => { target = value; return value; };
     if (automatic[targetValue(row.target)]) {
-      const [fs, ...flags] = automatic[targetValue(row.target)], m = createMountObservation(recorder, 18, target);
-      m.check(m.leaf(1, m.value("fs", row.fs) === fs) && m.leaf(2, m.value("root", row.root) === "/") && m.leaf(3, row.device.startsWith("0:")) && flags.every(flag => m.leaf({ rw: 4, ro: 5, nosuid: 6, nodev: 7, noexec: 8 }[flag], row.options.includes(flag))), "automatic-mount");
+      const [fs, ...flags] = automatic[targetValue(row.target)], mapped = parentView && target === "/sys/fs/cgroup", m = createMountObservation(recorder, mapped ? 29 : 18, target);
+      m.check(m.leaf(1, m.value("fs", row.fs) === fs) && m.leaf(2, m.value("root", row.root) === (mapped ? parentView.membership : "/")) && m.leaf(3, row.device.startsWith("0:")) && flags.every(flag => m.leaf({ rw: 4, ro: 5, nosuid: 6, nodev: 7, noexec: 8 }[flag], row.options.includes(flag))), "automatic-mount");
     } else if (metadata.includes(targetValue(row.target))) {
       const m = createMountObservation(recorder, 19, target); m.check(m.leaf(1, ["ext4", "xfs"].includes(m.value("fs", row.fs))) && m.leaf(2, row.options.includes("ro")), "metadata-mount");
     } else if (readonlyProc.includes(targetValue(row.target))) {
@@ -563,19 +564,19 @@ export function validateChildStatus(text, expected, recorder) {
   check(parentEvaluate(recorder, 36, () => parentLeaf(recorder, 1, initGuardLeaf(/^NoNewPrivs:\s+1$/m.test(text), recorder, "nnp")) && parentLeaf(recorder, 2, initGuardLeaf(/^Seccomp:\s+2$/m.test(text), recorder, "seccomp"))), "child-security");
 }
 async function readParentIdentity(recorder) { parentSource(recorder, "parent_status_read"); const status = await readFile("/proc/self/status", "utf8"); parentSource(recorder, "parent_identity"); return parseIdentity(status, recorder); }
-export async function processEvidence(pid, { read = readFile, link = readlink, recorder } = {}) {
+export async function processEvidence(pid, { read = readFile, link = readlink, recorder, cgroup = false } = {}) {
   parentSource(recorder, "target_stat");
   check(parentEvaluate(recorder, 26, () => parentLeaf(recorder, 1, Number.isSafeInteger(pid)) && parentLeaf(recorder, 2, pid > 0)), "process-id");
   const prefix = `/proc/${pid}`, raw = await read(join(prefix, "stat"), "utf8"), fields = raw.slice(raw.lastIndexOf(")") + 2).split(" ");
   parentSource(recorder, "target_start"); check(parentEvaluate(recorder, 27, () => parentLeaf(recorder, 1, /^\d+$/.test(fields[19]))), "process-start");
-  return { pid, start: fields[19], parent: (parentSource(recorder, "target_parent"), number(fields[1], recorder)), status: await (parentSource(recorder, "target_status"), read(join(prefix, "status"), "utf8")), uidMap: await (parentSource(recorder, "target_uid_map"), read(join(prefix, "uid_map"), "utf8")), gidMap: await (parentSource(recorder, "target_gid_map"), read(join(prefix, "gid_map"), "utf8")), namespaces: Object.fromEntries(await (parentSource(recorder, "target_namespace_group"), Promise.all(["pid", "net", "mnt", "user"].map(async name => [name, await link(join(prefix, "ns", name))])))), mounts: parseMounts(await (parentSource(recorder, "target_mount_read"), read(join(prefix, "mountinfo"), "utf8")), true, (parentSource(recorder, "target_mount_parse"), recorder)), cgroup: await (parentSource(recorder, "target_cgroup_read"), read(join(prefix, "cgroup"), "utf8")) };
+  return { pid, start: fields[19], parent: (parentSource(recorder, "target_parent"), number(fields[1], recorder)), status: await (parentSource(recorder, "target_status"), read(join(prefix, "status"), "utf8")), uidMap: await (parentSource(recorder, "target_uid_map"), read(join(prefix, "uid_map"), "utf8")), gidMap: await (parentSource(recorder, "target_gid_map"), read(join(prefix, "gid_map"), "utf8")), namespaces: Object.fromEntries(await (parentSource(recorder, "target_namespace_group"), Promise.all(["pid", "net", "mnt", "user", ...(cgroup ? ["cgroup"] : [])].map(async name => [name, await link(join(prefix, "ns", name))])))), mounts: parseMounts(await (parentSource(recorder, "target_mount_read"), read(join(prefix, "mountinfo"), "utf8")), true, (parentSource(recorder, "target_mount_parse"), recorder)), cgroup: await (parentSource(recorder, "target_cgroup_read"), read(join(prefix, "cgroup"), "utf8")) };
 }
-export function validateTarget(target, parent, identity, recorder) {
+export function validateTarget(target, parent, identity, recorder, cgroupView) {
   parentSource(recorder, "target_validate");
   validateChildStatus(target.status, identity, recorder); parentRole(recorder, "uid"); validateMapping(target.uidMap, identity.uid[0], recorder); parentRole(recorder, "gid"); validateMapping(target.gidMap, identity.gid[0], recorder);
   check(parentEvaluate(recorder, 28, () => parentLeaf(recorder, 1, target.namespaces.user === parent.user)), "user-mapping-unqualified");
   for (const name of ["pid", "net", "mnt"]) { parentRole(recorder, name); check(parentEvaluate(recorder, 29, () => parentLeaf(recorder, 1, new RegExp(`^${name}:\\[\\d+\\]$`).test(target.namespaces[name])) && parentLeaf(recorder, 2, target.namespaces[name] !== parent[name])), "private-namespace"); }
-  validateMounts(target.mounts, recorder); return target;
+  validateMounts(target.mounts, recorder, cgroupView); return target;
 }
 export function cgroupPath(text, cid, recorder) {
   check(parentEvaluate(recorder, 30, () => parentLeaf(recorder, 1, cidPattern.test(cid))), "cgroup-cid"); const match = /^0::(\/[^\n]+)\n?$/.exec(text);
@@ -586,20 +587,103 @@ export function validateLimits(values, recorder) {
   check(parentEvaluate(recorder, 32, () => parentLeaf(recorder, 1, values.memory.trim() === "4294967296") && parentLeaf(recorder, 2, values.swap.trim() === "0") && parentLeaf(recorder, 3, values.pids.trim() === "128")), "effective-cgroup-limit");
   const cpu = values.cpu.trim().split(" "); check(parentEvaluate(recorder, 33, () => parentLeaf(recorder, 1, cpu.length === 2) && parentLeaf(recorder, 2, number(cpu[0], recorder) === 2 * number(cpu[1], recorder)) && parentLeaf(recorder, 3, number(cpu[1], recorder) > 0)), "effective-cpu-limit");
 }
-async function bindCgroup(target, cid, recorder) {
-  parentSource(recorder, "cgroup_path");
-  const path = cgroupPath(target.cgroup, cid, recorder); parentSource(recorder, "cgroup_realpath"); const resolvedPath = await realpath(path); check(parentEvaluate(recorder, 34, () => parentLeaf(recorder, 1, resolvedPath === path)), "cgroup-realpath");
-  const inode = await (parentSource(recorder, "cgroup_stat"), stat(path)), parent = await (parentSource(recorder, "cgroup_parent_stat"), stat(dirname(path)));
-  parentSource(recorder, "cgroup_limits_group");
-  validateLimits(Object.fromEntries(await Promise.all([["memory", "memory.max"], ["swap", "memory.swap.max"], ["pids", "pids.max"], ["cpu", "cpu.max"]].map(async ([key, name]) => [key, await readFile(join(path, name), "utf8")]))), (parentSource(recorder, "cgroup_limits"), recorder));
-  return { path, dev: inode.dev, ino: inode.ino, parentDev: parent.dev, parentIno: parent.ino };
+// Linux e8f897f4: cgroup paths are relative to the current reader's cgroup
+// namespace. Namespace-tagged kernfs superblocks need not share device IDs.
+// Tokens are private authority for one invocation, visit and original row set.
+const cgroupViews = new WeakMap(), cgroupBindings = new WeakMap();
+const cgroupCheck = (recorder, id, value) => check(parentEvaluate(recorder, id, () => parentLeaf(recorder, 1, value)), "cgroup-relation");
+function requireCgroupView(token, rows, recorder) {
+  const view = token && cgroupViews.get(token);
+  cgroupCheck(recorder, 50, Boolean(view && view.active && view.rows === rows && view.owner.active === token && same(rows.map(mountTuple), view.rowSnapshot)));
+  return view;
 }
-export async function retiredCgroup(bound, { read = readFile, statPath = stat, lstatPath = lstat } = {}) {
-  const parent = await statPath(dirname(bound.path)); check(parent.dev === bound.parentDev && parent.ino === bound.parentIno, "cgroup-parent-replaced");
+function ownedMembership(text, cid, recorder) {
+  const match = typeof text === "string" && /^0::(\/[^\n]+)\n?$/.exec(text);
+  cgroupCheck(recorder, 47, Boolean(cidPattern.test(cid) && match && match[1] !== "/" && !/[\x00-\x1f\x7f]/.test(match[1]) && match[1].slice(1).split("/").every(part => part && part !== "." && part !== "..") && [cid, `docker-${cid}.scope`].includes(match[1].split("/").at(-1))));
+  return match[1];
+}
+function cgroupMapping(rows, recorder) {
+  mountTable(rows);
+  const found = rows.filter(row => row.target === "/sys/fs/cgroup");
+  cgroupCheck(recorder, 48, found.length === 1 && found[0].fs === "cgroup2" && found[0].root === "/");
+  const mapping = found[0];
+  // No intervening or deeper mount may redirect the owned directory, its parent,
+  // any controller file, or future descendant checks to another filesystem.
+  cgroupCheck(recorder, 49, rows.every(row => row === mapping || !containsMountPath(mapping.target, row.target)));
+  return mountTuple(mapping);
+}
+const cgroupStamp = async (link, prefix) => ({ mnt: await link(prefix + "/ns/mnt"), cgroup: await link(prefix + "/ns/cgroup") });
+const validCgroupStamp = value => /^mnt:\[\d+\]$/.test(value.mnt) && /^cgroup:\[\d+\]$/.test(value.cgroup);
+const physicalDirectory = value => value.isDirectory() && typeof value.dev === "bigint" && typeof value.ino === "bigint" && value.dev >= 0n && value.ino > 0n;
+export function sameCgroupBinding(a, b) {
+  return a.path === b.path && a.mountDev === b.mountDev && a.mountIno === b.mountIno && a.dev === b.dev && a.ino === b.ino && a.parentDev === b.parentDev && a.parentIno === b.parentIno;
+}
+async function bindCgroup(target, cid, recorder, token, io) {
+  parentSource(recorder, "cgroup_binding");
+  const view = requireCgroupView(token, target.mounts, recorder);
+  cgroupCheck(recorder, 50, view.target === target && view.cid === cid);
+  const path = view.mapping.target + view.membership;
+  const resolved = await io.realpath(path); cgroupCheck(recorder, 51, resolved === path);
+  const inode = await io.stat(path, { bigint: true }), parent = await io.stat(dirname(path), { bigint: true });
+  const mount = await io.stat(view.mapping.target, { bigint: true });
+  cgroupCheck(recorder, 51, physicalDirectory(inode) && physicalDirectory(parent) && physicalDirectory(mount) && inode.dev === parent.dev && inode.dev === mount.dev);
+  parentSource(recorder, "cgroup_limits_group");
+  validateLimits(Object.fromEntries(await Promise.all([["memory", "memory.max"], ["swap", "memory.swap.max"], ["pids", "pids.max"], ["cpu", "cpu.max"]].map(async ([key, name]) => [key, await io.read(join(path, name), "utf8")]))), (parentSource(recorder, "cgroup_limits"), recorder));
+  return { path, dev: inode.dev, ino: inode.ino, parentDev: parent.dev, parentIno: parent.ino, mountDev: mount.dev, mountIno: mount.ino };
+}
+export function createParentCgroupAdmission(cid, parentNamespaces, identity, supplied = {}) {
+  const io = { read: readFile, link: readlink, realpath, stat, evidence: processEvidence, ...supplied };
+  const owner = { active: null, next: 1, complete: null, failed: false };
+  return { async observe(pid, visit, recorder) {
+    parentSource(recorder, "cgroup_observer");
+    const eligible = !owner.failed && !owner.active && visit === owner.next && [1, 2].includes(visit);
+    if (!eligible) { owner.failed = true; if (owner.complete) owner.complete.valid = false; }
+    cgroupCheck(recorder, 50, eligible);
+    const previous = owner.complete; if (previous) previous.valid = false;
+    const token = {}; owner.active = token; let view;
+    try {
+      const before = await cgroupStamp(io.link, "/proc/self");
+      cgroupCheck(recorder, 45, validCgroupStamp(before) && before.mnt === parentNamespaces.mnt);
+      const target = await io.evidence(pid, { read: io.read, link: io.link, recorder, cgroup: true });
+      parentSource(recorder, "parent_mount_read"); const parentMounts = parseMounts(await io.read("/proc/self/mountinfo", "utf8"), false, (parentSource(recorder, "parent_mount_parse"), recorder));
+      parentSource(recorder, "cgroup_relation");
+      const targetNs = { mnt: target.namespaces.mnt, cgroup: target.namespaces.cgroup };
+      cgroupCheck(recorder, 46, validCgroupStamp(targetNs) && targetNs.cgroup !== before.cgroup && targetNs.mnt !== before.mnt && target.pid === pid);
+      const membership = ownedMembership(target.cgroup, cid, recorder), mapping = cgroupMapping(parentMounts, recorder);
+      view = { owner, active: true, valid: false, visit, cid, target, rows: target.mounts, rowSnapshot: target.mounts.map(mountTuple), stamp: { pid: target.pid, start: target.start }, membership, mapping, before, targetNs };
+      cgroupViews.set(token, view);
+      validateTarget(target, parentNamespaces, identity, recorder, token);
+      const bound = await bindCgroup(target, cid, recorder, token, io);
+      parentSource(recorder, "cgroup_closing");
+      const raw = await io.read(`/proc/${pid}/stat`, "utf8"), fields = raw.slice(raw.lastIndexOf(")") + 2).split(" ");
+      const targetAfter = await cgroupStamp(io.link, `/proc/${pid}`), after = await cgroupStamp(io.link, "/proc/self");
+      cgroupCheck(recorder, 52, fields[19] === target.start && same(targetAfter, targetNs) && same(after, before));
+      if (previous) {
+        parentSource(recorder, "cgroup_repeat");
+        cgroupCheck(recorder, 53, previous.stamp.pid === pid && previous.stamp.start === target.start && previous.cid === cid && same(previous.before, before) && same(previous.targetNs, targetNs) && previous.membership === membership && same(previous.mapping, mapping));
+      }
+      view.active = false; view.valid = true; owner.active = null; owner.complete = view; owner.next++;
+      cgroupBindings.set(bound, { view, original: Object.freeze({ ...bound }) });
+      return { target, bound, parentMounts };
+    } catch (error) { owner.failed = true; if (view) { view.active = false; view.valid = false; } owner.active = null; throw error; }
+  } };
+}
+export async function retiredCgroup(bound, { read = readFile, link = readlink, statPath = stat, lstatPath = lstat } = {}) {
+  const binding = bound && cgroupBindings.get(bound), view = binding?.view;
+  check(view && sameCgroupBinding(bound, binding.original) && view.valid && !view.owner.failed && view.owner.complete === view, "retirement-cgroup-unqualified");
+  const snapshot = async () => {
+    check(same(await cgroupStamp(link, "/proc/self"), view.before), "retirement-observer-drift");
+    check(same(cgroupMapping(parseMounts(await read("/proc/self/mountinfo", "utf8"), false)), view.mapping), "retirement-mapping-drift");
+  };
+  await snapshot();
+  const mount = await statPath(view.mapping.target, { bigint: true }); check(physicalDirectory(mount) && mount.dev === bound.mountDev && mount.ino === bound.mountIno, "cgroup-mapping-replaced");
+  const parent = await statPath(dirname(bound.path), { bigint: true }); check(physicalDirectory(parent) && parent.dev === bound.parentDev && parent.ino === bound.parentIno, "cgroup-parent-replaced");
+  let disposition;
   try {
-    const current = await statPath(bound.path); check(current.dev === bound.dev && current.ino === bound.ino, "cgroup-replaced");
-    check((await read(join(bound.path, "cgroup.procs"), "utf8")).trim() === "" && /^populated 0$/m.test(await read(join(bound.path, "cgroup.events"), "utf8")), "cgroup-descendants-live"); return "empty";
-  } catch (error) { if (error?.code === "ENOENT") { try { await lstatPath(bound.path); } catch (missing) { if (missing?.code === "ENOENT") return "removed"; throw missing; } } throw error; }
+    const current = await statPath(bound.path, { bigint: true }); check(physicalDirectory(current) && current.dev === bound.dev && current.ino === bound.ino, "cgroup-replaced");
+    check((await read(join(bound.path, "cgroup.procs"), "utf8")).trim() === "" && /^populated 0$/m.test(await read(join(bound.path, "cgroup.events"), "utf8")), "cgroup-descendants-live"); disposition = "empty";
+  } catch (error) { if (error?.code === "ENOENT") { try { await lstatPath(bound.path, { bigint: true }); } catch (missing) { if (missing?.code === "ENOENT") disposition = "removed"; else throw missing; } } if (!disposition) throw error; }
+  await snapshot(); return disposition;
 }
 
 // Original attach close and stdin write outcomes remain separate from READY.
@@ -1001,21 +1085,20 @@ async function hostContainerRun(report) {
     });
     await report.step("ready", () => attached.ready);
     await report.step("admission", async () => {
-      const recorder = createParentAdmissionLedger();
+      const recorder = createParentAdmissionLedger(), cgroups = createParentCgroupAdmission(cid, parentNamespaces, identity);
       const project = (original, reason) => { try { const detail = recorder.finish(original, reason); if (detail) report.internal(detail); } catch (error) { recorder.errors.push(error); } };
       try {
       await recheckParent(recorder); const row = await readOwned(recorder); parentSource(recorder, "live_init"); check(parentEvaluate(recorder, 37, () => parentLeaf(recorder, 1, row.State.Running) && parentLeaf(recorder, 2, row.State.Pid > 1)), "missing-live-init");
-      target = validateTarget(await processEvidence(row.State.Pid, { recorder }), parentNamespaces, identity, recorder);
-      bound = await bindCgroup(target, cid, recorder);
+      const first = await cgroups.observe(row.State.Pid, 1, recorder); target = first.target; bound = first.bound;
       // Parent and target kernel mount tables correlate the daemon's exact
       // per-container metadata paths without privileged storage traversal.
       parentSource(recorder, "parent_namespace"); const currentNamespace = await readlink("/proc/self/ns/mnt"); check(parentEvaluate(recorder, 38, () => parentLeaf(recorder, 1, currentNamespace === parentNamespaces.mnt)), "parent-mount-namespace-drift");
-      parentSource(recorder, "parent_mount_read"); const parentMounts = parseMounts(await readFile("/proc/self/mountinfo", "utf8"), false, (parentSource(recorder, "parent_mount_parse"), recorder));
+      const parentMounts = first.parentMounts;
       parentSource(recorder, "metadata"); const metadata = validateMetadataMounts(row, target.mounts, parentMounts, daemonRoot, cid, recorder);
-      parentRecord(recorder, "visit", 2); const again = await processEvidence(target.pid, { recorder }); parentSource(recorder, "identity_freshness"); check(parentEvaluate(recorder, 39, () => parentLeaf(recorder, 1, again.start === target.start) && parentLeaf(recorder, 2, same(again.namespaces, target.namespaces)) && parentLeaf(recorder, 3, again.cgroup === target.cgroup)), "init-identity-drift"); validateTarget(again, parentNamespaces, identity, recorder);
+      parentRecord(recorder, "visit", 2); const second = await cgroups.observe(target.pid, 2, recorder), again = second.target; parentSource(recorder, "identity_freshness"); check(parentEvaluate(recorder, 39, () => parentLeaf(recorder, 1, again.start === target.start) && parentLeaf(recorder, 2, same(again.namespaces, target.namespaces)) && parentLeaf(recorder, 3, again.cgroup === target.cgroup)), "init-identity-drift");
       parentSource(recorder, "mount_freshness"); validateMountFreshness(target.mounts, again.mounts, recorder);
-      const rebound = await bindCgroup(again, cid, recorder); parentSource(recorder, "cgroup_freshness"); check(parentEvaluate(recorder, 40, () => parentLeaf(recorder, 1, same(bound, rebound))), "init-cgroup-drift");
-      parentSource(recorder, "parent_mount_read"); const repeatedParent = parseMounts(await readFile("/proc/self/mountinfo", "utf8"), false, (parentSource(recorder, "parent_mount_parse"), recorder)); parentSource(recorder, "metadata"); const repeatedMetadata = validateMetadataMounts(row, again.mounts, repeatedParent, daemonRoot, cid, recorder); parentSource(recorder, "metadata_freshness"); check(parentEvaluate(recorder, 41, () => parentLeaf(recorder, 1, same(metadata, repeatedMetadata))), "daemon-metadata-drift");
+      const rebound = second.bound; parentSource(recorder, "cgroup_freshness"); check(parentEvaluate(recorder, 40, () => parentLeaf(recorder, 1, sameCgroupBinding(bound, rebound))), "init-cgroup-drift"); bound = rebound;
+      const repeatedParent = second.parentMounts; parentSource(recorder, "metadata"); const repeatedMetadata = validateMetadataMounts(row, again.mounts, repeatedParent, daemonRoot, cid, recorder); parentSource(recorder, "metadata_freshness"); check(parentEvaluate(recorder, 41, () => parentLeaf(recorder, 1, same(metadata, repeatedMetadata))), "daemon-metadata-drift");
       parentSource(recorder, "parent_namespace"); const finalNamespace = await readlink("/proc/self/ns/mnt"); check(parentEvaluate(recorder, 42, () => parentLeaf(recorder, 1, finalNamespace === parentNamespaces.mnt)), "parent-mount-namespace-drift");
       } catch (error) { project(true, error); admissionReporting.push(...recorder.errors); throw error; }
       if (recorder.errors.length) { project(false, recorder.errors[0]); raiseContainerFailures(recorder.errors); }
@@ -1042,8 +1125,8 @@ async function hostContainerRun(report) {
     const cleanupFailures = [];
     try { await report.step("retirement", async () => {
       try {
-        const row = await readOwned();
-        if (!bound && row.State.Running && row.State.Pid > 1) bound = await bindCgroup(await processEvidence(row.State.Pid), cid);
+        await readOwned();
+        if (attached) check(bound, "retirement-cgroup-unknown");
       } catch (error) { cleanupFailures.push(error); }
       try { await stopOwned(); } catch (error) { cleanupFailures.push(error); }
       const originals = await Promise.allSettled([...(attached ? [attached.closed] : []), ...(waiting ? [waiting] : [])]);
