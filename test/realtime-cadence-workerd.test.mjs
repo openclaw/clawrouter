@@ -238,7 +238,6 @@ async function observedRuntime(temporary, upstreamSource, bindings, witness) {
         const observation = '    const observation = inspect(input);';
         const producer = '  const session = new RealtimeSession(pair[1], upstream, {';
         const options = '    waitUntil: promise => context.waitUntil(promise),';
-        witness?.mark("bundle_anchor");
         for (const anchor of [entry, owner, observation, producer, options]) assert.equal(source.split(anchor).length, 2, 'unique observation anchor');
         assert.equal(source.split('await prepareSelected(').length, 4, 'three original preparation calls');
         source = source.replaceAll('await prepareSelected(', 'await fixturePrepare(').replace(entry, entry + `
@@ -251,7 +250,6 @@ async function observedRuntime(temporary, upstreamSource, bindings, witness) {
       });
       build.onLoad({ filter: /[\\/]worker[\\/]realtime-session\.ts$/ }, async ({ path }) => {
         const source = await readFile(path, 'utf8'), closed = '    this.options.waitUntil(finish);';
-        witness?.mark("bundle_anchor");
         assert.equal(source.split(closed).length, 2, 'one actual producer-close notification');
         return { contents: source.replace(closed, closed + '\n    this.options.fixtureProducerClosed?.();'), loader: 'ts', resolveDir: dirname(path) };
       });

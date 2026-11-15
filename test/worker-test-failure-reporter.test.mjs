@@ -593,4 +593,34 @@ test("inert realtime pre-registration reporting failures preserve primary includ
   const ledger = createRealtimeLedger("r01", () => {}); ledger.body(true, undefined);
   assert.equal(ledger.finishUnregistered(true, undefined), undefined);
 });
+for (const defined of [false, true]) test(`inert realtime completed anchors retain bundle failure, defined=${defined}`, async () => {
+  const source = readFileSync("test/realtime-cadence-workerd.test.mjs", "utf8");
+  const setup = source.slice(source.indexOf("async function observedRuntime("), source.indexOf("async function fixture("));
+  const cleanup = source.slice(source.indexOf("// BEGIN original cadence cleanup:"), source.indexOf("// END original cadence cleanup."));
+  const callbacks = [], output = [], order = [], original = defined ? {} : undefined;
+  let rejectBuild, builds = 0, starts = 0;
+  const building = new Promise((resolve, reject) => { rejectBuild = reject; });
+  const build = options => { builds++; options.plugins[0].setup({ onLoad(options, callback) { callbacks.push(callback); } }); return building; };
+  const inputs = new Map(["worker/realtime-websocket.ts", "worker/realtime-session.ts"].map(path => [path, readFileSync(path, "utf8")]));
+  const readFile = async (path, encoding) => { assert.equal(encoding, "utf8"); assert.ok(inputs.has(path)); return inputs.get(path); };
+  const ledger = createRealtimeLedger("r01", text => output.push(parseRealtimeDiagnostic(text))); ledger.registered();
+  const run = new Function("build", "readFile", "assert", "router", "session", "dirname", "startBundledWorkerdFixture", "process", setup + "return observedRuntime;")(
+    build, readFile, assert, "__INITIAL_SESSION__ __ASR_SESSION__", value => value, () => "worker", () => { starts++; }, { cwd: () => "/fixture" });
+  const pending = run("synthetic", "upstream", {}, ledger);
+  const outcome = pending.then(() => ({ failed: false }), reason => ({ failed: true, reason }));
+  assert.equal(builds, 1); assert.equal(callbacks.length, 2);
+  for (const [index, path] of [...inputs.keys()].entries()) {
+    const result = await callbacks[index]({ path }); assert.equal(result.loader, "ts"); assert.equal(typeof result.contents, "string");
+  }
+  rejectBuild(original);
+  const result = await outcome;
+  assert.equal(result.failed, true); assert.equal(result.reason, original); assert.equal(starts, 0);
+  ledger.body(true, result.reason);
+  const retire = new Function("witness", "release", "sockets", "drainProbe", "clients", "mf", "closeObservation", "server", "rm", "temporary", "serverFailures", "hasPrimary", "primary", "return (async () => {" + cleanup + "})();");
+  await retire(ledger, () => order.push("release"), [{ close() { order.push("socket"); } }], () => order.push("drain"), [],
+    { dispose() { order.push("dispose"); } }, { finish() { order.push("observer"); } }, { close(callback) { order.push("server"); callback(); } }, () => order.push("remove"), "synthetic", [], true, original);
+  assert.deepEqual(order, ["release", "socket", "drain", "dispose", "observer", "server", "remove"]);
+  assert.equal(output.length, 2); assert.equal(output[0].failurePresent, true); assert.equal(output[0].reasonDefined, defined);
+  assert.equal(output[0].operation, "bundle"); assert.equal(output[1].outcomes, "fffffffff");
+});
 // END inert realtime diagnostic tests.
