@@ -417,11 +417,47 @@ function parentMountTable(rows, recorder) {
     }
     { const m = createMountObservation(recorder, 8, target); m.check(m.leaf(1, Array.isArray(row.optional)), "mount-optional"); }
   }
-  { const m = createMountObservation(recorder, 9); m.check(m.leaf(1, m.value("distinct", new Set(rows.map(row => row.id)).size) === m.value("count", rows.length)) && m.leaf(2, m.value("distinct", new Set(rows.map(row => row.target)).size) === m.value("count", rows.length)), "mount-overmount"); }
+  { const m = createMountObservation(recorder, 9); m.check(m.leaf(1, m.value("distinct", new Set(rows.map(row => row.id)).size) === m.value("count", rows.length)), "mount-overmount"); }
   return rows;
 }
 const containsMountPath = (parent, path) => parent === "/" || path === parent || path.startsWith(parent + "/");
 const mountTuple = row => ({ id: row.id, parentId: row.parentId, target: row.target, root: row.root, device: row.device, fs: row.fs, options: [...row.options].sort(), superOptions: [...row.superOptions].sort(), optional: [...row.optional].sort() });
+// Linux e8f897f4 mount enumeration includes covered mount objects. Parent
+// snapshots retain them; only an invocation's validated authorities may use rows.
+const parentMountAuthorities = new WeakMap();
+function createParentMountAuthority(inspect, daemonRoot, cid, recorder) {
+  parentRole(recorder, "ParentAuthority");
+  cgroupCheck(recorder, 59, cidPattern.test(cid) && typeof daemonRoot === "string" && Boolean(inspect));
+  canonicalMountPath(daemonRoot, recorder);
+  const sources = [];
+  for (const [key, name] of [["ResolvConfPath", "resolv.conf"], ["HostnamePath", "hostname"], ["HostsPath", "hosts"]]) {
+    parentRole(recorder, key);
+    const source = inspect[key];
+    cgroupCheck(recorder, 59, source === join(daemonRoot, "containers", cid, name));
+    sources.push(Object.freeze({ role: key, path: source }));
+  }
+  const token = {};
+  parentMountAuthorities.set(token, { cid, sources });
+  return token;
+}
+function validateParentMountAuthorities(rows, token, recorder) {
+  parentRole(recorder, "ParentAuthority");
+  const authority = token && parentMountAuthorities.get(token);
+  cgroupCheck(recorder, 59, Boolean(authority));
+  const counts = new Map();
+  for (const row of rows) counts.set(row.target, (counts.get(row.target) ?? 0) + 1);
+  // The entire cgroup subtree protects the mapping, owned directory, its parent,
+  // four limits and retirement files. No caller-supplied or empty path list.
+  for (const { role, path } of [...authority.sources, { role: "CgroupMount", path: "/sys/fs/cgroup" }]) {
+    parentRole(recorder, role);
+    for (const row of rows) if (counts.get(row.target) > 1) {
+      cgroupCheck(recorder, 55, !(row.target !== path && containsMountPath(row.target, path)));
+      cgroupCheck(recorder, 56, row.target !== path);
+      cgroupCheck(recorder, 57, !containsMountPath(path, row.target));
+    }
+    if (role !== "CgroupMount") cgroupCheck(recorder, 58, rows.every(row => !containsMountPath(path, row.target)));
+  }
+}
 export function parseMounts(text, privateView = true, recorder) {
   { const m = createMountObservation(recorder, 10); m.check(m.leaf(1, typeof text === "string") && m.leaf(2, m.value("count", text.length) > 0) && m.leaf(3, m.value("count", text.length) < 128 * 1024), "mount-capacity"); }
   return mountTable(text.replace(/\n$/, "").split("\n").map(line => {
@@ -457,6 +493,8 @@ export function validateMountFreshness(before, after, recorder) {
 export function validateMetadataMounts(inspect, targetMounts, parentMounts, daemonRoot, cid, recorder) {
   check(parentEvaluate(recorder, 19, () => parentLeaf(recorder, 1, cidPattern.test(cid))), "daemon-root-identity"); canonicalMountPath(daemonRoot, recorder);
   parentMountTable(parentMounts, recorder); mountTable(targetMounts, recorder);
+  const authority = createParentMountAuthority(inspect, daemonRoot, cid, recorder);
+  validateParentMountAuthorities(parentMounts, authority, recorder);
   const result = [];
   for (const [key, name] of [["ResolvConfPath", "resolv.conf"], ["HostnamePath", "hostname"], ["HostsPath", "hosts"]]) {
     parentRole(recorder, key); const source = inspect[key];
@@ -645,8 +683,9 @@ function ownedMembership(text, cid, recorder) {
   cgroupCheck(recorder, 47, Boolean(cidPattern.test(cid) && match && match[1] !== "/" && !/[\x00-\x1f\x7f]/.test(match[1]) && match[1].slice(1).split("/").every(part => part && part !== "." && part !== "..") && [cid, `docker-${cid}.scope`].includes(match[1].split("/").at(-1))));
   return match[1];
 }
-function cgroupMapping(rows, recorder) {
+function cgroupMapping(rows, recorder, authority) {
   parentMountTable(rows);
+  validateParentMountAuthorities(rows, authority, recorder);
   const found = rows.filter(row => row.target === "/sys/fs/cgroup");
   cgroupCheck(recorder, 48, found.length === 1 && found[0].fs === "cgroup2" && found[0].root === "/");
   const mapping = found[0];
@@ -684,9 +723,10 @@ async function bindCgroup(target, cid, recorder, token, io) {
   validateLimits(Object.fromEntries(await Promise.all([["memory", "memory.max"], ["swap", "memory.swap.max"], ["pids", "pids.max"], ["cpu", "cpu.max"]].map(async ([key, name]) => [key, await io.read(join(path, name), "utf8")]))), (parentSource(recorder, "cgroup_limits"), recorder));
   return { path, dev: inode.dev, ino: inode.ino, parentDev: parent.dev, parentIno: parent.ino, mountDev: mount.dev, mountIno: mount.ino };
 }
-export function createParentCgroupAdmission(cid, parentNamespaces, identity, supplied = {}) {
+export function createParentCgroupAdmission(cid, parentNamespaces, identity, supplied = {}, metadata) {
   const io = { read: readFile, link: readlink, realpath, stat, evidence: processEvidence, ...supplied };
   const owner = { active: null, next: 1, complete: null, failed: false };
+  let authority;
   return { async observe(pid, visit, recorder) {
     parentSource(recorder, "cgroup_observer");
     const eligible = !owner.failed && !owner.active && visit === owner.next && [1, 2].includes(visit);
@@ -702,8 +742,9 @@ export function createParentCgroupAdmission(cid, parentNamespaces, identity, sup
       parentSource(recorder, "cgroup_relation");
       const targetNs = { mnt: target.namespaces.mnt, cgroup: target.namespaces.cgroup };
       cgroupCheck(recorder, 46, validCgroupStamp(targetNs) && targetNs.cgroup !== before.cgroup && targetNs.mnt !== before.mnt && target.pid === pid);
-      const membership = ownedMembership(target.cgroup, cid, recorder), mapping = cgroupMapping(parentMounts, recorder);
-      view = { owner, active: true, valid: false, visit, cid, target, rows: target.mounts, rowSnapshot: target.mounts.map(mountTuple), stamp: { pid: target.pid, start: target.start }, membership, mapping, before, targetNs };
+      authority ??= createParentMountAuthority(metadata?.inspect, metadata?.daemonRoot, cid, recorder);
+      const membership = ownedMembership(target.cgroup, cid, recorder), mapping = cgroupMapping(parentMounts, recorder, authority);
+      view = { owner, active: true, valid: false, visit, cid, target, rows: target.mounts, rowSnapshot: target.mounts.map(mountTuple), stamp: { pid: target.pid, start: target.start }, membership, mapping, authority, before, targetNs };
       cgroupViews.set(token, view);
       validateTarget(target, parentNamespaces, identity, recorder, token);
       const bound = await bindCgroup(target, cid, recorder, token, io);
@@ -726,7 +767,7 @@ export async function retiredCgroup(bound, { read = readFile, link = readlink, s
   check(view && sameCgroupBinding(bound, binding.original) && view.valid && !view.owner.failed && view.owner.complete === view, "retirement-cgroup-unqualified");
   const snapshot = async () => {
     check(same(await cgroupStamp(link, "/proc/self"), view.before), "retirement-observer-drift");
-    check(same(cgroupMapping(parseParentMounts(await read("/proc/self/mountinfo", "utf8"))), view.mapping), "retirement-mapping-drift");
+    check(same(cgroupMapping(parseParentMounts(await read("/proc/self/mountinfo", "utf8")), undefined, view.authority), view.mapping), "retirement-mapping-drift");
   };
   await snapshot();
   const mount = await statPath(view.mapping.target, { bigint: true }); check(physicalDirectory(mount) && matchesLinuxDevice(mount.dev, view.mapping.device) && mount.dev === bound.mountDev && mount.ino === bound.mountIno, "cgroup-mapping-replaced");
@@ -1138,10 +1179,11 @@ async function hostContainerRun(report) {
     });
     await report.step("ready", () => attached.ready);
     await report.step("admission", async () => {
-      const recorder = createParentAdmissionLedger(), cgroups = createParentCgroupAdmission(cid, parentNamespaces, identity);
+      const recorder = createParentAdmissionLedger();
       const project = (original, reason) => { try { const detail = recorder.finish(original, reason); if (detail) report.internal(detail); } catch (error) { recorder.errors.push(error); } };
       try {
       await recheckParent(recorder); const row = await readOwned(recorder); parentSource(recorder, "live_init"); check(parentEvaluate(recorder, 37, () => parentLeaf(recorder, 1, row.State.Running) && parentLeaf(recorder, 2, row.State.Pid > 1)), "missing-live-init");
+      const cgroups = createParentCgroupAdmission(cid, parentNamespaces, identity, {}, { inspect: row, daemonRoot });
       const first = await cgroups.observe(row.State.Pid, 1, recorder); target = first.target; bound = first.bound;
       // Parent and target kernel mount tables correlate the daemon's exact
       // per-container metadata paths without privileged storage traversal.

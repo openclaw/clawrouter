@@ -1599,8 +1599,8 @@ test("parent admission actual metadata ambiguity captures bounded counts and ori
   const parent=[mount(1,0,"/","ext4","8:1",["rw"])];
   for(const r of target.filter(r=>r.target.startsWith("/etc/")))r.root=`${root}/containers/${hex}/${r.target.slice(5)}`;
   const ledger=api.createParentAdmissionLedger();ledger.enter("metadata");const valid=api.validateMetadataMounts(inspect,target,parent,root,hex,ledger);assert.equal(valid.length,3);assert.deepEqual(ledger.errors,[]);
-  const wrong=api.createParentAdmissionLedger();wrong.enter("metadata");wrong.visit(2);assert.throws(()=>api.validateMetadataMounts({...inspect,HostsPath:"/foreign"},target,parent,root,hex,wrong));const row=wrong.finish(true,{});assert.equal(row.detail[2],2);assert.equal(row.detail[4],20);assert.equal(row.detail[6],parentAdmissionRoles.indexOf("HostsPath")+1);
-  const ambiguous=api.createParentAdmissionLedger();ambiguous.enter("metadata");assert.throws(()=>api.validateMetadataMounts(inspect,target,[...parent,{...parent[0],id:2}],root,hex,ambiguous));const duplicate=ambiguous.finish(true,{});assert.ok(duplicate.m);assert.equal(duplicate.m[1],9);
+  const wrong=api.createParentAdmissionLedger();wrong.enter("metadata");wrong.visit(2);assert.throws(()=>api.validateMetadataMounts({...inspect,HostsPath:"/foreign"},target,parent,root,hex,wrong));const row=wrong.finish(true,{});assert.equal(row.detail[2],2);assert.equal(row.detail[4],59);assert.equal(row.detail[6],parentAdmissionRoles.indexOf("HostsPath")+1);
+  const ambiguous=api.createParentAdmissionLedger();ambiguous.enter("metadata");assert.throws(()=>api.validateMetadataMounts(inspect,target,[...parent,{...parent[0],id:2}],root,hex,ambiguous));const duplicate=ambiguous.finish(true,{});assert.equal(duplicate.detail[4],55);assert.equal(duplicate.detail[6],parentAdmissionRoles.indexOf("ResolvConfPath")+1);
   const saturation=api.createParentAdmissionLedger();saturation.enter("metadata");saturation.begin(22);saturation.count(5000);saturation.leaf(1,false);saturation.result(false);const saturated=saturation.finish(true,{});assert.deepEqual(saturated.detail.slice(9),[4095,1]);assert.throws(()=>validateParentAdmission({...saturated,detail:[...saturated.detail.slice(0,9),4094,1]}));
 });
 test("parent admission original process evidence preserves sequential reads and parallel group ambiguity", async () => {
@@ -1674,8 +1674,9 @@ async function cgroupFixture(change = () => {}) {
     stat:async(path,options)=>{state.calls.push(["stat",path,options.bigint]);assert.equal(options.bigint,true);if(state.removed&&path.endsWith(hex))return missing();return {dev:99n,ino:path.endsWith(hex)?state.ino:path==="/sys/fs/cgroup"?10n:1n,isDirectory:()=>true};},
   };
   change({state,io,api});
-  const admission=api.createParentCgroupAdmission(hex,parentNamespaces,identity,io);
-  return {api,state,io,admission,retire:bound=>api.retiredCgroup(bound,{read:io.read,link:io.link,statPath:io.stat,lstatPath:async()=>missing()})};
+  const metadata={daemonRoot:"/var/lib/docker",inspect:Object.fromEntries([["ResolvConfPath","resolv.conf"],["HostnamePath","hostname"],["HostsPath","hosts"]].map(([key,name])=>[key,`/var/lib/docker/containers/${hex}/${name}`]))};
+  const admission=api.createParentCgroupAdmission(hex,parentNamespaces,identity,io,metadata);
+  return {api,state,io,metadata,admission,retire:bound=>api.retiredCgroup(bound,{read:io.read,link:io.link,statPath:io.stat,lstatPath:async()=>missing()})};
 }
 test("same observer cgroup actual qualified visits allow different devices and retain exact BigInt retirement", async()=>{
   const f=await cgroupFixture(), ledger=f.api.createParentAdmissionLedger();
@@ -1795,7 +1796,7 @@ test("same observer cgroup opaque rows retain every mountpoint overmount and par
   for(const value of ["\\000","\\777","\\x20","\\","a\\011b","a\\012b"]){const r=row();r.root=value;assert.throws(()=>api.parseParentMounts(parentMountText([r])));}
   for(const value of ["relative","/a/../b","/a//b","/a/.","/a/","/a\tb"]){const r=row();r.target=value;assert.throws(()=>api.parentMountTable([r]));}
   for(const mutate of [r=>r.id=0,r=>r.parentId=-1,r=>r.device="0:01",r=>r.fs="bad fs",r=>r.options=["rw","ro"],r=>r.superOptions=[],r=>r.optional=null]){const r=row();mutate(r);assert.throws(()=>api.parentMountTable([r]));}
-  assert.throws(()=>api.parentMountTable([row(),{...row(),id:2}]));assert.throws(()=>api.parentMountTable([row(),{...row(),target:"/other"}]));
+  assert.equal(api.parentMountTable([row(),{...row(),id:2}]).length,2);assert.throws(()=>api.parentMountTable([row(),{...row(),target:"/other"}]));
 });
 test("same observer cgroup opaque root evidence stays parent only bounded and preserves undefined failures",async()=>{
   for(const [bad,leaf] of [[undefined,1],["",2],["x".repeat(128*1024),3],["a\tb",4]]){
@@ -1808,5 +1809,51 @@ test("same observer cgroup opaque root evidence stays parent only bounded and pr
   const f=await cgroupFixture(({state})=>state.parentRows.push(mount(3,1,"/run/held-ns","nsfs","0:101",["rw"],"bad\\011root"))),ledger=f.api.createParentAdmissionLedger();let reason;try{await f.admission.observe(123,1,ledger);}catch(e){reason=e;}const detail=ledger.finish(true,reason);assert.equal(detail.detail[1],28);assert.equal(detail.m[1],30);assert.equal(detail.m[2],4);
   const fail=await cgroupFixture(({io})=>{const read=io.read;io.read=path=>path==="/proc/self/mountinfo"?Promise.reject(undefined):read(path);});let caught=false;try{await fail.admission.observe(123,1);}catch(e){caught=true;assert.equal(e,undefined);}assert.ok(caught);
   const api=await parentAdmissionFactory(),broken=api.createParentAdmissionLedger();broken.enter("parent_mount_parse");broken.mount=()=>{throw undefined;};assert.throws(()=>api.parentMountRoot("",broken));assert.ok(broken.errors.includes(undefined));
+});
+test("parent target ambiguity retains unrelated covered rows but never weakens child or ID uniqueness", async()=>{
+  const f=await cgroupFixture(({state})=>state.parentRows.push(mount(3,1,"/unrelated","tmpfs","0:111",["rw"]),mount(4,3,"/unrelated","tmpfs","0:112",["ro"])));
+  const parsed=f.api.parseParentMounts(parentMountText(f.state.parentRows));assert.deepEqual(parsed,f.state.parentRows);assert.throws(()=>f.api.parseMounts(parentMountText(f.state.parentRows),false));
+  const first=await f.admission.observe(123,1),second=await f.admission.observe(123,2);assert.equal(first.parentMounts.length,4);assert.equal(second.parentMounts.length,4);assert.equal(await f.retire(second.bound),"empty");
+  f.state.parentRows[3].id=3;await assert.rejects(f.retire(second.bound));assert.throws(()=>f.api.parseParentMounts(parentMountText(f.state.parentRows)));
+});
+test("parent target ambiguity rejects every metadata relation before cgroup physical binding", async()=>{
+  for(const name of ["resolv.conf","hostname","hosts"])for(const relation of ["ancestor","equal","descendant","unique_equal","unique_descendant","covered_ancestor"]){
+    const source=`/var/lib/docker/containers/${hex}/${name}`,target=relation.includes("ancestor")?"/var":relation.endsWith("descendant")?source+"/deep":source;
+    const f=await cgroupFixture(({state})=>{state.parentRows.push(mount(3,1,target,"ext4","8:1",["rw"]));if(!relation.startsWith("unique"))state.parentRows.push(mount(4,3,target,"ext4","8:1",["rw"]));if(relation==="covered_ancestor")state.parentRows.push(mount(5,4,"/var/lib/docker","ext4","8:1",["rw"]));});
+    const ledger=f.api.createParentAdmissionLedger();let reason;try{await f.admission.observe(123,1,ledger);}catch(e){reason=e;}assert.ok(reason);assert.ok(!f.state.calls.some(([kind])=>kind==="stat"||kind==="realpath"));
+    const detail=ledger.finish(true,reason);assert.equal(detail.detail[4],relation.startsWith("unique")?58:relation.includes("ancestor")?55:relation==="equal"?56:57);validateParentAdmission(detail);
+    const targetRows=mounts();for(const r of targetRows.filter(r=>r.target.startsWith("/etc/")))r.root=`/var/lib/docker/containers/${hex}/${r.target.slice(5)}`;
+    let composed=0;const api=await parentAdmissionFactory({relative:(...a)=>{composed++;return relative(...a);}});assert.throws(()=>api.validateMetadataMounts(f.metadata.inspect,targetRows,f.state.parentRows,f.metadata.daemonRoot,hex));assert.equal(composed,0);
+  }
+});
+test("parent target ambiguity covers cgroup ancestors every owned descendant both visits and retirement", async()=>{
+  const protectedTargets=["/","/sys","/sys/fs","/sys/fs/cgroup","/sys/fs/cgroup/docker",`/sys/fs/cgroup/docker/${hex}`,...["deep","memory.max","memory.swap.max","pids.max","cpu.max","cgroup.procs","cgroup.events"].map(x=>`/sys/fs/cgroup/docker/${hex}/${x}`),`/var/lib/docker/containers/${hex}/hosts`];
+  for(const target of protectedTargets)for(const stage of ["first","repeat","retire"]){
+    const f=await cgroupFixture();let bound;if(stage!=="first")bound=(await f.admission.observe(123,1)).bound;if(stage==="retire")bound=(await f.admission.observe(123,2)).bound;
+    f.state.parentRows.push(mount(3,1,target,"tmpfs","0:111",["rw"]),mount(4,3,target,"tmpfs","0:112",["ro"]));
+    const before=f.state.calls.length;await assert.rejects(stage==="retire"?f.retire(bound):f.admission.observe(123,stage==="first"?1:2));assert.ok(!f.state.calls.slice(before).some(([kind])=>kind==="stat"||kind==="realpath"));
+  }
+});
+test("parent target ambiguity is order independent and component bounded without resolving stack tops", async()=>{
+  for(const order of [false,true])for(const offset of [0,100])for(const accepted of [false,true]){
+    const f=await cgroupFixture(({state})=>{const target=accepted?"/sys/fs/cgroup-shadow":"/sys";state.parentRows.push(mount(3,1,target,"tmpfs","0:111",["rw"]),mount(4,3,target,"tmpfs","0:112",["ro"]));if(!accepted)state.parentRows.push(mount(5,4,"/sys/fs","tmpfs","0:113",["rw"]));for(const r of state.parentRows){r.id+=offset;r.parentId+=offset;}if(order)state.parentRows.reverse();});
+    if(accepted){const first=await f.admission.observe(123,1),second=await f.admission.observe(123,2);assert.equal(first.parentMounts.length,4);assert.equal(await f.retire(second.bound),"empty");}else await assert.rejects(f.admission.observe(123,1));
+  }
+  const f=await cgroupFixture(({state})=>state.parentRows.push(mount(3,1,`/var/lib/docker/containers/${hex}/hosts-shadow`,"tmpfs","0:111",["rw"]),mount(4,3,`/var/lib/docker/containers/${hex}/hosts-shadow`,"tmpfs","0:112",["rw"])));await f.admission.observe(123,1);const second=await f.admission.observe(123,2);assert.equal(await f.retire(second.bound),"empty");
+});
+test("parent target authority cannot be missing empty foreign or replaced by a caller path list", async()=>{
+  for(const metadata of [undefined,{}, {paths:[]}, {daemonRoot:"/var/lib/docker",inspect:{}}, {daemonRoot:"/var/lib/docker",inspect:{ResolvConfPath:`/var/lib/docker/containers/${other}/resolv.conf`}}]){
+    const f=await cgroupFixture(),ledger=f.api.createParentAdmissionLedger();const admission=f.api.createParentCgroupAdmission(hex,{mnt:"mnt:[1]"},identity,f.io,metadata);let reason;try{await admission.observe(123,1,ledger);}catch(e){reason=e;}assert.ok(reason);assert.equal(ledger.finish(true,reason).detail[4],59);assert.ok(!f.state.calls.some(([k])=>k==="realpath"||k==="stat"));
+  }
+  const f=await cgroupFixture(), reason=undefined;Object.defineProperty(f.metadata.inspect,"ResolvConfPath",{get(){throw reason;}});let caught=false;try{await f.admission.observe(123,1);}catch(e){caught=true;assert.equal(e,reason);}assert.ok(caught);
+});
+test("parent target ambiguity actual diagnostics retain first failure undefined reporting and bounded packets",async()=>{
+  for(const [target,predicate,role] of [["/sys",55,25],["/sys/fs/cgroup",56,25],["/sys/fs/cgroup/deep",57,25],[`/var/lib/docker/containers/${hex}/hosts`,56,16],[`/var/lib/docker/containers/${hex}/hostname`,58,15],[null,59,14]]){
+    const f=await cgroupFixture(({state})=>{if(target){state.parentRows.push(mount(3,1,target,"tmpfs","0:111",["rw"]));if(predicate!==58)state.parentRows.push(mount(4,3,target,"tmpfs","0:112",["ro"]));}}),ledger=f.api.createParentAdmissionLedger();if(predicate===59)f.metadata.inspect.ResolvConfPath="/foreign";let reason;try{await f.admission.observe(123,1,ledger);}catch(e){reason=e;}const detail=ledger.finish(true,reason);assert.equal(detail.detail[4],predicate);assert.equal(detail.detail[6],role);validateParentAdmission(detail);
+    for(const mutate of [r=>r.detail[1]=19,r=>r.detail[6]=1,r=>r.detail[7]=0,r=>r.detail[8]=1,r=>r.detail[9]=4095,r=>r.detail[10]=1]){const bad=structuredClone(detail);mutate(bad);assert.throws(()=>validateParentAdmission(bad));}
+    const report=createContainerDiagnostics();report.mark("entry","rejected",reason);report.internal(detail);const captured=await attachWithFrames(initReady());createAttachProjection(captured.h.attached,captured.binding,report)(captured.h.attached.result);report.mark("retirement","rejected",undefined);for(const phase of ["dispatch","image","base","create","attach","ready","cwd","temp","environment"])report.mark(phase,"fulfilled");
+    const lines=[];emitContainerFailure(report.records,x=>lines.push(x));assert.equal(lines.length,10);assert.ok(lines.every(x=>Buffer.byteLength(x)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);parentAdmissionPackets.push(lines.map(x=>JSON.parse(x.slice(x.indexOf("::",2)+2).trimEnd())));
+  }
+  const f=await cgroupFixture(({state})=>state.parentRows.push(mount(3,1,"/sys","tmpfs","0:111",["rw"]),mount(4,3,"/sys","tmpfs","0:112",["rw"]))),ledger=f.api.createParentAdmissionLedger();ledger.leaf=()=>{throw undefined;};await assert.rejects(f.admission.observe(123,1,ledger));assert.ok(ledger.errors.includes(undefined));assert.ok(!f.state.calls.some(([k])=>k==="realpath"||k==="stat"));
 });
 // END attach diagnostic pure tests.
