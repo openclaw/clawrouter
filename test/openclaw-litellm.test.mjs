@@ -15,7 +15,7 @@ const contractMode = litellmControlMode(process.env.CLAWROUTER_LITELLM_MODE);
 if (contractMode === "control-only") {
   registerWrapperControlConsumer();
 } else {
-const { selected, withGateway } = await import("../worker/test/litellm-model-discovery.test.mjs");
+const { selected, withGateway, litellmPredicateFacts } = await import("../worker/test/litellm-model-discovery.test.mjs");
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
 const cases = [
@@ -57,11 +57,11 @@ async function withFailureEnvelope(run, proof = diagnostic, write = text => proc
   if (errors.length) throw new AggregateError(errors, "LiteLLM original and reporting failures");
 }
 // BEGIN retirement observation boundary.
-async function litellmRetireSnapshot(control, id, capture) {
+async function litellmRetireSnapshot(control, id, capture, attempted = () => {}) {
   try { return await control("retire", id); }
   catch (primary) {
     const errors = [primary];
-    try { const observation = await control("observation", id); capture(observation.ledger); }
+    try { attempted(); const observation = await control("observation", id); capture(observation.ledger, observation.checks ?? null); }
     catch (error) { errors.push(error); }
     if (errors.length === 1) throw errors[0];
     throw new AggregateError(errors, "retirement and independent observation failed");
@@ -117,12 +117,12 @@ test("actual Worker unknown-price admission denies inference before any paid POS
 test("actual LiteLLM registered catalog, native stream/streamSimple and original retirement through Worker SQLite", { skip: !source, timeout: 300000 }, async t => {
   await withFailureEnvelope(async envelope => withGateway(cases, async f => {
     envelope.entered();
-    const failures = [], witnessCases = new Set();
+    const failures = [], witnessCases = new Set(); let helperFulfilled = false, firstWorker = null;
     const capture = records => { for (const r of records) if (r.witness) witnessCases.add(r.id); envelope.emit(records); };
     try {
       await runOpenClawConsumer({ diagnostic(value) { capture(diagnostic.parse(value)); } }, { source, sourceHead, fixture, testPath: "extensions/litellm/worker-contract.test.ts", env: {
         CLAWROUTER_CONTRACT_ORIGIN: f.origin, CLAWROUTER_CONTRACT_SOURCE_HEAD: sourceHead, CLAWROUTER_CONTRACT_CASES: JSON.stringify(cases),
-      } });
+      } }); helperFulfilled = true;
     } catch (error) {
       failures.push(error);
       const child = diagnostic.child(error);
@@ -132,39 +132,50 @@ test("actual LiteLLM registered catalog, native stream/streamSimple and original
     // A failed SDK suite never becomes a pass because its Worker retired.
     // Join every row independently and preserve all body/cleanup failures.
     for (const row of cases) {
-      let phase = "control"; const observed = Array(9).fill(null);
+      const checks = litellmPredicateFacts(), observed = Array(9).fill(null);
+      let observationAttempted = false, workerChecks = null, state;
+      const captureLedger = (ledger, facts) => { diagnostic.worker(diagnostic.record("outer", row.id, "retirement", undefined), [...observed.slice(0, 8), ledger]); observed[8] = ledger; workerChecks = facts; };
       try {
-        phase = "retirement"; const proof = await litellmRetireSnapshot(f.control, row.id, ledger => {
-          const candidate = [...observed]; candidate[8] = ledger; diagnostic.worker(diagnostic.record("outer", row.id, "retirement", undefined), candidate); observed[8] = ledger;
-        }); observed[0] = proof.retired; observed[1] = proof.unlocked; assert.equal(proof.retired, true); assert.equal(proof.unlocked, true);
-        const state = await f.state(row.id);
-        [observed[2], observed[3], observed[4], observed[5], observed[6], observed[7]] = [state.active, state.expired, state.canceled, state.aborted, state.finished, state.calls.length]; assert.equal(state.active, 0); assert.equal(state.expired, 0);
+        const proof = await checks.wait(0, () => litellmRetireSnapshot(f.control, row.id, captureLedger, () => { observationAttempted = true; }));
+        checks.run(1, () => { observed[0] = proof.retired; assert.equal(proof.retired, true); }); checks.run(2, () => { observed[1] = proof.unlocked; assert.equal(proof.unlocked, true); });
+        state = await checks.wait(3, () => f.state(row.id));
+        checks.run(3, () => { [observed[2], observed[3], observed[4], observed[5], observed[6], observed[7]] = [state.active, state.expired, state.canceled, state.aborted, state.finished, state.calls.length]; });
+        checks.run(4, () => assert.equal(state.active, 0)); checks.run(5, () => assert.equal(state.expired, 0));
         const denied = ["missing", "invalid_owner", "foreign"].includes(row.mode);
         const post = row.action === "stream" || row.action === "streamSimple" || ["eof", "partial_abort", "provider_error"].includes(row.control) || row.id === "sdk_auth_inference";
         const gets = row.id === "sdk_auth_inference" || denied ? 0 : row.expectedGets ?? 1;
-        assert.equal(state.calls.length, gets + Number(post)); assert.equal(proof.calls.length, state.calls.length);
-        assert.equal(state.calls.filter(call => call.method === "POST").length, Number(post));
+        checks.run(6, () => assert.equal(state.calls.length, gets + Number(post))); checks.run(7, () => assert.equal(proof.calls.length, state.calls.length));
+        checks.run(8, () => assert.equal(state.calls.filter(call => call.method === "POST").length, Number(post)));
         for (const call of state.calls) {
-          assert.equal(call.authorization, "Bearer fixture-upstream-" + row.id);
-          assert.equal(call.url, "https://gateway.example/team/v1/" + (call.method === "GET" ? "models" : "chat/completions"));
-          if (call.method === "POST") { assert.equal(call.body.model, selected); assert.equal(call.body.stream, true); }
-          else assert.equal(call.body, null);
+          checks.run(9, () => assert.equal(call.authorization, "Bearer fixture-upstream-" + row.id));
+          checks.run(10, () => assert.equal(call.url, "https://gateway.example/team/v1/" + (call.method === "GET" ? "models" : "chat/completions")));
+          if (call.method === "POST") { checks.run(11, () => assert.equal(call.body.model, selected)); checks.run(12, () => assert.equal(call.body.stream, true)); }
+          else checks.run(13, () => assert.equal(call.body, null));
         }
-        if (row.control === "partial_abort") { assert.equal(state.canceled, 1); assert.ok(state.aborted >= 1); }
-        const usage = await f.control("usage", row.id);
-        const inference = usage.events.filter(event => event.reserved_cost_micros === 7);
-        assert.equal(inference.length, Number(post));
+        if (row.control === "partial_abort") { checks.run(14, () => assert.equal(state.canceled, 1)); checks.run(15, () => assert.ok(state.aborted >= 1)); }
+        const usage = await checks.wait(16, () => f.control("usage", row.id));
+        const inference = checks.run(17, () => usage.events.filter(event => event.reserved_cost_micros === 7));
+        checks.run(17, () => assert.equal(inference.length, Number(post)));
         for (const event of usage.events) {
-          assert.equal(event.credential_id, row.id); assert.equal(event.policy_id, row.id); assert.equal(event.provider, "litellm");
-          if (event.reserved_cost_micros === 0) { assert.equal(event.actual_cost_micros, 0); continue; }
-          assert.equal(event.actual_cost_micros, 7); assert.equal(event.cost_basis, "policy_fixed");
-          if (row.mode === "measured") { assert.equal(event.input_tokens, 4); assert.equal(event.output_tokens, 3); }
-          else { assert.equal(event.input_tokens, null); assert.equal(event.output_tokens, null); }
-          if (row.control === "partial_abort") assert.equal(event.status, "client_error");
+          checks.run(18, () => assert.equal(event.credential_id, row.id)); checks.run(19, () => assert.equal(event.policy_id, row.id)); checks.run(20, () => assert.equal(event.provider, "litellm"));
+          if (event.reserved_cost_micros === 0) { checks.run(21, () => assert.equal(event.actual_cost_micros, 0)); continue; }
+          const preoutput = row.control === "provider_error";
+          checks.run(22, () => assert.equal(event.actual_cost_micros, preoutput ? 0 : 7)); checks.run(23, () => assert.equal(event.cost_basis, preoutput ? "none" : "policy_fixed"));
+          if (row.mode === "measured") { checks.run(24, () => assert.equal(event.input_tokens, 4)); checks.run(25, () => assert.equal(event.output_tokens, 3)); }
+          else { checks.run(24, () => assert.equal(event.input_tokens, null)); checks.run(25, () => assert.equal(event.output_tokens, null)); }
+          if (row.control === "partial_abort") checks.run(26, () => assert.equal(event.status, "client_error"));
+          if (preoutput) { checks.run(26, () => assert.equal(event.status, "provider_error")); checks.run(27, () => assert.equal(event.status_code, 200)); checks.run(28, () => assert.equal(event.reserved_cost_micros, 7)); checks.run(29, () => assert.equal(event.total_tokens, null)); }
         }
-      } catch (error) { failures.push(error); envelope.record(() => diagnostic.record("outer", row.id, phase, error), "REPORT_WORKER"); }
+      } catch (error) {
+        failures.push(error); envelope.record(() => diagnostic.record("outer", row.id, "retirement", error), "REPORT_WORKER");
+        if (!observationAttempted) try { observationAttempted = true; const observation = await f.control("observation", row.id); captureLedger(observation.ledger, observation.checks ?? null); } catch (failure) { failures.push(failure); envelope.record(() => diagnostic.boundary("REPORT_WORKER", failure), "REPORT_WORKER"); }
+        if (!state) try { state = await f.state(row.id); [observed[2], observed[3], observed[4], observed[5], observed[6], observed[7]] = [state.active, state.expired, state.canceled, state.aborted, state.finished, state.calls.length]; } catch (failure) { failures.push(failure); envelope.record(() => diagnostic.boundary("REPORT_WORKER", failure), "REPORT_WORKER"); }
+        // Preserve the first failed row independently of SDK witnesses and verdict.
+        if (firstWorker === null) { firstWorker = row.id; envelope.record(() => diagnostic.workerFailure(row.id, checks.snapshot(), workerChecks, observed[8], [...observed.slice(2, 8), ...(state?.producer ?? Array(5).fill(null))]), "REPORT_WORKER"); }
+      }
       if (witnessCases.has(row.id)) envelope.record(() => diagnostic.worker(diagnostic.record("outer", row.id, "retirement", undefined), observed), "REPORT_WORKER");
     }
+    if (firstWorker !== null && helperFulfilled) envelope.emit([{ ...diagnostic.record("outer", "none", "child_result", undefined), kind: "child", code: "FULFILLED" }]);
     if (failures.length) throw new AggregateError(failures, "LiteLLM SDK, Worker or SQLite proof failed");
   }));
 });
@@ -1641,6 +1652,73 @@ test("warm held stage envelope rejects foreign case phase kind and hostile field
   assert.deepEqual(reportingDecode(proof,lines).find(r=>r.phase==="child_result").stage,["sdk_held_narrow","held_started","undefined"]);
 });
 // END warm held pure tests.
+
+// BEGIN waiter Worker predicate pure tests.
+function waiterWorkerFunctions() {
+  const worker = readFileSync("worker/test/litellm-model-discovery.test.mjs", "utf8");
+  const text = worker.slice(worker.indexOf("export function litellmPredicateFacts"), worker.indexOf("export function litellmRequestScope")).replace("export ", "");
+  return new Function(text + ";return litellmPredicateFacts;")();
+}
+test("waiter Worker predicates retain first undefined failure and exact return identity", () => {
+  const make = waiterWorkerFunctions();
+  for (let id = 0; id < 30; id++) {
+    const c = make(), token = {}; assert.equal(c.run(id, () => token), token);
+    let caught = false; try { c.run(id, () => { throw undefined; }); } catch (error) { caught = true; assert.equal(error, undefined); }
+    assert.ok(caught); assert.deepEqual(c.snapshot(), [id, 2 ** id, 0, 2 ** id, true]);
+    c.run((id + 1) % 30, () => true); assert.equal(c.snapshot()[0], id);
+  }
+  const c = make(); c.note(3, false); assert.deepEqual(c.snapshot(), [3, 8, 0, 8, null]);
+  for (const id of [-1, 30, undefined]) assert.throws(() => c.run(id, () => true));
+});
+test("waiter Worker pending predicates never become passed before settlement", async () => {
+  const c = waiterWorkerFunctions()(); let release;
+  const pending = new Promise(resolve => { release = resolve; }); const work = c.wait(0, () => pending);
+  assert.deepEqual(c.snapshot(), [null, 1, 0, 0, null]); release(7); assert.equal(await work, 7);
+  await assert.rejects(c.wait(1, () => Promise.reject(undefined)), error => error === undefined);
+  assert.deepEqual(c.snapshot(), [1, 3, 1, 2, true]);
+});
+function maximumWorkerFailure(proof, id = "sdk_partial_abort") {
+  return proof.workerFailure(id, [29, 1073741823, 536870911, 536870912, true], [6, 127, 63, 64, null],
+    [1000000, 1000000, 1000000, 1000000, 1000000, 1000000, 999998,
+      [[999998, 10, 2, 1000000, 1000000, 1000000, true, false, 1000000, 1000000], [999999, 7, 2, 1000000, 1000000, 1000000, true, true, 1000000, 1000000]]], Array(11).fill(1000000));
+}
+test("waiter Worker full envelope preserves first predicate with both classes eight roles and precise stage", () => {
+  for (const fulfilled of [false, true]) {
+    const proof = litellmDiagnostics(cases.map(r => r.id), nodeTypes.isProxy), lines = [];
+    const pairs = [...reportingPair(proof, "sdk_provider_error", [true, false], true), ...reportingPair(proof, "sdk_partial_abort", [false, true], true)];
+    const helper = fulfilled ? { ...proof.record("outer", "none", "child_result", undefined), kind: "child", code: "FULFILLED" } : proof.child({code:1}).envelope;
+    const first = maximumWorkerFailure(proof), roles = roleRecords(proof, true), stage = proof.record("sdk", "sdk_waiter_abort", "waiter_mutation", undefined, "catalog");
+    proof.emit([...pairs, ...roles, helper, stage, first, maximumWorkerFailure(proof, "sdk_provider_error"), proof.boundary("REPORT_WORKER", undefined)], line => lines.push(line)); proof.flush(line => lines.push(line));
+    const decoded = reportingDecode(proof, lines), retained = decoded.find(r => r.phase === "child_result");
+    assert.deepEqual(retained.retire, first.retire); assert.equal(retained.code, fulfilled ? "FULFILLED" : "EXIT_1"); assert.deepEqual(retained.stage, ["sdk_waiter_abort", "waiter_mutation", "undefined"]);
+    assert.equal(decoded.filter(r => r.witness).length, 4); assert.equal(decoded.filter(r => r.roles).length, 2); assert.ok(decoded.some(r=>r.phase==="reporting"));
+    assert.ok(lines.length <= 10); assert.ok(lines.every(line => Buffer.byteLength(line) <= 768)); assert.ok(Buffer.byteLength(lines.join("")) <= 8192);
+  }
+});
+test("waiter Worker evidence does not require SDK witnesses and rejects foreign malformed or conflicting data", () => {
+  const proof = litellmDiagnostics(cases.map(r => r.id), nodeTypes.isProxy), lines = [], first = maximumWorkerFailure(proof);
+  proof.emit([first, proof.child({code:1}).envelope], line => lines.push(line));
+  assert.deepEqual(reportingDecode(proof, lines).find(r=>r.phase==="child_result").retire, first.retire);
+  for (const change of [r=>r.retire[0]="foreign", r=>r.retire[1][0]=null, r=>r.retire[1][2]=1073741823, r=>r.retire[4].pop(), r=>r.retire[3][7][0][6]=false]) {
+    const bad=structuredClone(first);change(bad);assert.equal(proof.validate(bad),null);
+  }
+  let touches=0;const hostile={...first};Object.defineProperty(hostile,"retire",{get(){touches++;throw undefined;},enumerable:true});assert.equal(proof.validate(hostile),null);assert.equal(touches,0);
+  const fresh=litellmDiagnostics(cases.map(r=>r.id),nodeTypes.isProxy), output=[];
+  assert.throws(()=>fresh.emit([first],line=>output.push(line)));assert.ok(reportingDecode(fresh,output).some(r=>r.code==="REPORT_GROUP"));
+  const write=litellmDiagnostics(cases.map(r=>r.id),nodeTypes.isProxy);assert.throws(()=>write.emit([first,write.child({code:1}).envelope],()=>{throw undefined;}),error=>reportingLeaves(error).every(v=>v===undefined));
+});
+test("waiter public D8 adapter fulfills unavailable without replacing the acquisition result contract", {skip:!source}, async () => {
+  const text=readFileSync(source+"/src/plugin-sdk/provider-catalog-live-outcome.internal.ts","utf8");
+  const code=text.slice(text.indexOf("export class LiveModelCatalogHttpError")).replaceAll("export ","");
+  const {runLiveProviderCatalog,LiveModelCatalogHttpError}=new Function(stripTypeScriptTypes(code,{mode:"transform"})+";return {runLiveProviderCatalog,LiveModelCatalogHttpError};")();
+  for(const error of [undefined,{},new Error("controlled")]) {
+    let calls=0;const result=await runLiveProviderCatalog({providerId:"litellm",profileId:"case",run:()=>{calls++;return Promise.reject(error);}});
+    assert.equal(calls,1);assert.deepEqual(result,{providers:{},outcomes:[{provider:"litellm",profileId:"case",status:"unavailable"}]});assert.equal("provider" in result,false);
+  }
+  const survivor={provider:{models:[{id:"selected"}]},outcomes:[{provider:"litellm",profileId:"case",status:"ready"}]};assert.equal(await runLiveProviderCatalog({providerId:"litellm",profileId:"case",run:()=>Promise.resolve(survivor)}),survivor);
+  assert.equal((await runLiveProviderCatalog({providerId:"litellm",profileId:"case",run:()=>Promise.reject(new LiveModelCatalogHttpError("litellm",401))})).outcomes[0].status,"auth-rejected");
+});
+// END waiter Worker predicate pure tests.
 
 // BEGIN ingress scope pure tests.
 function ingressPureFunctions() {

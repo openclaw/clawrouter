@@ -870,6 +870,19 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
     if (!ops || new Set(ops.map(op => op[0])).size !== ops.length || ops.some(op => op[0] >= a[0]) || ops.length + a[6] > a[0]) return null;
     return [...a.slice(0, 7), ops.map(op => [...op])];
   }
+  function predicateFacts(v: unknown) {
+    const a = array(v, 5, (_: unknown) => true), mask = (v: unknown) => Number.isSafeInteger(v) && (v as number) >= 0 && (v as number) <= 1073741823;
+    if (!a || !(a[0] === null || Number.isInteger(a[0]) && a[0] >= 0 && a[0] < 30) || !a.slice(1, 4).every(mask)
+      || (a[2] & a[3]) !== 0 || ((a[2] | a[3]) & ~a[1]) !== 0 || (a[0] === null ? a[3] !== 0 || a[4] !== null : !(a[3] & 2 ** a[0]) || !nullableBool(a[4]))) return null;
+    return [...a];
+  }
+  function retirementFacts(v: unknown) {
+    const a = array(v, 5, (_: unknown) => true);
+    if (!a || a[0] === "none" || !names.has(a[0]) || !predicateFacts(a[1]) || a[1][0] === null
+      || a[2] !== null && !predicateFacts(a[2]) || a[3] !== null && !workerLedger(a[3])
+      || !array(a[4], 11, (n: unknown) => n === null || number(n))) return null;
+    return [a[0], predicateFacts(a[1]), a[2] === null ? null : predicateFacts(a[2]), a[3] === null ? null : workerLedger(a[3]), [...a[4]]];
+  }
   const fixedStages = new Set(["warm_a", "warm_b", "warm_cached", "warm_versioned", "warm_count", "warm_window", "held_started", "held_mutation", "held_release", "held_join", "held_result", "waiter_started", "waiter_mutation", "waiter_release", "waiter_join", "waiter_result"]);
   const stageCase = (id: unknown, phase: unknown) => typeof phase === "string" && fixedStages.has(phase) && names.has(id as string)
     && (phase.startsWith("warm_") ? id === (phase === "warm_b" ? "sdk_warm_b" : "sdk_warm_a")
@@ -887,14 +900,19 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
       if (Object.hasOwn(v, "worker")) keys.push("worker");
       if (Object.hasOwn(v, "roles")) keys.push("roles");
       if (Object.hasOwn(v, "stage")) keys.push("stage");
+      if (Object.hasOwn(v, "retire")) keys.push("retire");
       if (Reflect.ownKeys(v).length !== keys.length || keys.some(k => !Object.hasOwn(Object.getOwnPropertyDescriptor(v, k) ?? {}, "value"))) return null;
       const r: any = Object.fromEntries(keys.map(k => [k, own(v, k)]));
       if (r.v !== 1 || !["sdk", "outer"].includes(r.layer) || !names.has(r.id) || !["unknown", "catalog", "chat"].includes(r.role) || !phases.has(r.phase)
         || !["undefined", "unknown", "child", "overflow"].includes(r.kind) || !(r.count === null || Number.isSafeInteger(r.count) && r.count >= 0 && r.count <= 1000000)
-        || !["UNKNOWN", "EXIT_1", "TIMEOUT", "SIGTERM", "SIGKILL", "REPORT_INVALID", "REPORT_GROUP", "REPORT_QUOTA", "REPORT_WRITE", "REPORT_WORKER", "REPORT_WITNESS", "REPORT_FLUSH"].includes(r.code)) return null;
+        || !["UNKNOWN", "FULFILLED", "EXIT_1", "TIMEOUT", "SIGTERM", "SIGKILL", "REPORT_INVALID", "REPORT_GROUP", "REPORT_QUOTA", "REPORT_WRITE", "REPORT_WORKER", "REPORT_WITNESS", "REPORT_FLUSH"].includes(r.code)) return null;
       if (fixedStages.has(r.phase) && (r.layer !== "sdk" || r.role !== "catalog" || !stageCase(r.id, r.phase) || keys.length !== 8 || !["unknown", "undefined"].includes(r.kind))) return null;
-      if (keys.includes("stage") && (keys.length !== 9 || r.layer !== "outer" || r.id !== "none" || r.role !== "unknown"
+      if (keys.includes("stage") && (keys.length !== (keys.includes("retire") ? 10 : 9) || r.layer !== "outer" || r.id !== "none" || r.role !== "unknown"
         || r.phase !== "child_result" || r.kind !== "child" || !(r.stage = stageFacts(r.stage)))) return null;
+      if (keys.includes("retire") && (r.layer !== "outer" || !(r.retire = retirementFacts(r.retire))
+        || (r.phase === "child_result" ? r.id !== "none" || r.kind !== "child" || keys.length !== (keys.includes("stage") ? 10 : 9)
+          : r.phase !== "retirement" || r.id !== r.retire[0] || keys.length !== 9))) return null;
+      if (r.code === "FULFILLED" && (r.layer !== "outer" || r.id !== "none" || r.phase !== "child_result" || r.kind !== "child")) return null;
       if (r.code.startsWith("REPORT_") && r.phase !== "reporting") return null;
       if (r.phase === "reporting" && (r.id !== "none" || r.role !== "unknown" || !r.code.startsWith("REPORT_") || keys.length !== 8)) return null;
       if (keys.includes("roles")) {
@@ -919,6 +937,12 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
   };
   const joined = (value: unknown, facts: unknown) => { const r = validate({ ...validate(value), join: facts }); if (!r) throw new Error("invalid LiteLLM join diagnostic"); return r; };
   const worker = (value: unknown, facts: unknown) => { const r = validate({ ...validate(value), worker: facts }); if (!r) throw new Error("invalid LiteLLM Worker witness"); return r; };
+  const workerFailure = (id: string, checks: unknown, workerChecks: unknown, ledger: any, state: unknown) => {
+    // One original bad-operation identity; omitted originals stay counted.
+    const compact = ledger === null ? null : [...ledger.slice(0, 6), ledger[6] + Math.max(0, ledger[7].length - 1), ledger[7].slice(0, 1)];
+    const value = validate({ ...record("outer", id, "retirement", undefined), retire: [id, checks, workerChecks, compact, state] });
+    if (!value) throw new Error("invalid Worker first predicate"); return value;
+  };
   const witness = (value: unknown, select: boolean[], parts: unknown[]) => parts.map((data, part) => {
     const r = validate({ ...validate(value), witness: { part, select, data } });
     if (!r) throw new Error("invalid LiteLLM witness"); return r;
@@ -998,6 +1022,16 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
       const retained = validate({ ...valid[i], stage });
       if (retained) valid[i] = retained; else failed("REPORT_INVALID", new Error("invalid LiteLLM stage envelope"));
     }
+    const firstWorker = valid.find(r => r.retire && r.phase === "retirement");
+    if (firstWorker) {
+      const helper = valid.findIndex(r => r.phase === "child_result");
+      if (helper < 0) failed("REPORT_GROUP", new Error("missing original helper verdict"));
+      else {
+        if (valid[helper].retire && JSON.stringify(valid[helper].retire) !== JSON.stringify(firstWorker.retire)) failed("REPORT_GROUP", new Error("conflicting Worker predicate"));
+        const retained = validate({ ...valid[helper], retire: firstWorker.retire });
+        if (retained) valid[helper] = retained; else failed("REPORT_INVALID", new Error("invalid Worker helper envelope"));
+      }
+    }
     const groups = new Map<string, any[]>();
     for (const r of valid) if (r.witness) { const key = [r.layer, r.role, r.id].join("/"); const group = groups.get(key) ?? []; group.push(r); groups.set(key, group); }
     const ordered: any[][] = [], selectedGroups: boolean[] = [false, false];
@@ -1057,7 +1091,7 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
     const line = `::error title=LiteLLM typed contract::${JSON.stringify(r)}\n`; const size = new TextEncoder().encode(line).length;
     if (size > 768 || bytes + size > 8192) throw new Error("LiteLLM diagnostic quota"); write(line); bytes += size;
   }
-  return { prefix, own, validate, validateEnvelope, record, joined, witness, roles, worker, parse, child, json, boundary, emit, flush };
+  return { workerFailure, prefix, own, validate, validateEnvelope, record, joined, witness, roles, worker, parse, child, json, boundary, emit, flush };
 }
 // END shared proof functions.
 
@@ -1617,17 +1651,17 @@ async function control(action: string, id: string): Promise<void> {
     await response.arrayBuffer(); expect(response.status).toBe(200);
   } catch (error) { try { reportSdk("control", error); flushSdk(); } catch (reportError) { throw new AggregateError([error, reportError], "LiteLLM control and reporting failed"); } throw error; }
 }
-async function fixture(body: (discover: (row: Row, signal?: AbortSignal, authId?: string) => Promise<ModelProviderConfig | undefined>) => Promise<void>): Promise<void> {
+async function fixture(body: (discover: (row: Row, signal?: AbortSignal, authId?: string, capture?: (result: unknown) => void) => Promise<ModelProviderConfig | undefined>) => Promise<void>): Promise<void> {
   const { default: entry } = await loadBundledPluginFacade<{ default: Parameters<typeof registerSingleProviderPlugin>[0] }>({ pluginId: "litellm", artifactBasename: "index.js" });
   const provider = await registerSingleProviderPlugin(entry); expect(provider.catalog?.run).toBeTypeOf("function");
   await withOpenClawTestState({ label: "litellm-worker" }, async state => {
-    const discover = async (row: Row, signal?: AbortSignal, authId = row.id) => {
+    const discover = async (row: Row, signal?: AbortSignal, authId = row.id, capture?: (result: unknown) => void) => {
       const baseUrl = origin + "/v1/native/litellm" + (row.versioned ? "/v1" : ""); let resolutions = 0;
       const auth = { apiKey: key(authId), discoveryApiKey: key(row.id), profileId: row.id, mode: "api_key" as const, source: "profile" as const };
       diagnosticId = row.id; diagnosticRole = "catalog";
       const result = await ownership.invoke({ id: row.id, role: "catalog", api: "catalog", signal, url: litellmCatalogTarget(baseUrl), credential: "Bearer " + key(row.id) }, provider.catalog!.run, provider.catalog, [{ config: { models: { providers: { litellm: { baseUrl, models: [] } } } }, env: {}, agentDir: state.agentDir(), workspaceDir: state.workspaceDir, signal,
         resolveProviderAuth: () => { throw new Error("unexpected second auth resolver"); }, resolveProviderApiKey: () => { resolutions++; return auth; } }]);
-      expect(resolutions).toBe(1);
+      expect(resolutions).toBe(1); capture?.(result);
       if (!result || !("provider" in result)) return undefined;
       if (result.provider) { expect(result.provider.baseUrl).toBe(baseUrl); expect(result.provider.apiKey).toBe(key(authId)); }
       return result.provider;
@@ -1736,13 +1770,17 @@ describe("registered LiteLLM live inventory and native inference", () => {
   it("consumer abort rejects only its waiter while the same original acquisition completes for its survivor", async () => {
     await fixture(async discover => {
       const row = rows.find(value => value.id === "sdk_waiter_abort")!, controller = new AbortController();
-      const first = discover(row, controller.signal), observed = first.then(() => ({ rejected: false }), error => ({ rejected: true, error }));
+      let publicResult: unknown;
+      const first = discover(row, controller.signal, row.id, result => { publicResult = result; }), observed = first.then(value => ({ value }), error => ({ error }));
       const survivor = discover(row); const retained = survivor.then(value => ({ value }), error => ({ error }));
       let authoredAbort = false, result: Awaited<typeof retained> | undefined;
       await litellmHeldSequence(() => control("started", row.id), async () => {
-        authoredAbort = true; controller.abort(); expect((await observed).rejected).toBe(true); expect(requests).toHaveLength(1);
+        authoredAbort = true; controller.abort(); const completed = await observed;
+        if ("error" in completed) throw completed.error;
+        expect(publicResult).toEqual({ providers: {}, outcomes: [{ provider: "litellm", profileId: row.id, status: "unavailable" }] });
+        expect(completed.value).toBeUndefined(); expect(requests).toHaveLength(1); expect(requests[0].method).toBe("GET");
       }, () => control("release", row.id), [async () => {
-        const value = await observed; if (!authoredAbort && "error" in value) throw value.error;
+        const value = await observed; if ("error" in value) throw value.error;
       }, async () => { result = await retained; if ("error" in result) throw result.error; }], reportSdk, "waiter");
       await litellmCatalogStage("waiter_result", async () => {
         if (!result || "error" in result) throw new Error("missing surviving discovery result");

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Match LiteLLM public waiter cancellation and pre-output rejection receipts, retaining the first Worker predicate independently of SDK failure evidence.
+
 - Preserve the first precise LiteLLM catalog failure stage in the reserved helper envelope without displacing original failure, role or retirement evidence.
 
 - Correct LiteLLM canonical catalog cache expectations and bind held readiness to original request reads, preserving all discovery joins after control or release failures.
