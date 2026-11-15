@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Report bounded, invocation-bound search observation failure stages and independent cleanup outcomes without changing test verdicts.
+
 - Add opt-in, bounded native consumer runner diagnostics that separate collection failures from missing startup reports without changing SDK test verdicts.
 
 - Run provider plugin REST JSON conformance fixtures with named API-key headers, using host-owned synthetic credentials and rejecting client credential injection.

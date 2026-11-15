@@ -7,7 +7,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { after, before, test } from "node:test";
 import { parse } from "yaml";
-import { workerFailureReport } from "../scripts/worker-test-failure-reporter.mjs";
+import { annotation, createObservationRelay, selectFailureRecords, workerFailureReport } from "../scripts/worker-test-failure-reporter.mjs";
+import { createObservationLedger, observationDiagnosticText, parseObservationDiagnostic, searchObservationContract } from "../scripts/search-semantics-fixture.mjs";
 import { affectsOpenClawContract } from "../scripts/openclaw-contract-changes.mjs";
 
 const reporter = fileURLToPath(new URL("../scripts/worker-test-failure-reporter.mjs", import.meta.url));
@@ -78,7 +79,7 @@ for (const [name, body] of [
 
 test("a native child exercises the actual reporter without invoking hostile getters", async () => {
   const f = await fixture(prelude + `
-    import { workerFailureReport } from ${JSON.stringify(pathToFileURL(reporter).href)};
+    import { annotation, createObservationRelay, selectFailureRecords, workerFailureReport } from ${JSON.stringify(pathToFileURL(reporter).href)};
     test('getter isolation', async () => {
       let reads = 0;
       const error = Object.defineProperties({}, Object.fromEntries(
@@ -249,3 +250,156 @@ test("workflow preserves typecheck order, the full default-concurrency glob and 
   assert.equal(JSON.parse(readFileSync("package.json", "utf8")).scripts["test:scripts"], "node --test test/*.test.mjs");
   for (const file of ["scripts/worker-test-failure-reporter.mjs", "test/worker-test-failure-reporter.test.mjs", ".github/workflows/ci.yml"]) assert.equal(affectsOpenClawContract(file), false);
 });
+
+// BEGIN inert observation diagnostic tests (extract without native child fixtures).
+const observationBoundary = (overrides = {}) => ({ v: 1, kind: "boundary", case: "variants", operation: "twenty_gets", stage: "begin", state: "rejected", failurePresent: true, reasonDefined: false, ...overrides });
+const observationCleanup = (overrides = {}) => ({ v: 1, kind: "cleanup", case: "variants", registered: true, dispose: "fulfilled", disposeDefined: null, remove: "fulfilled", removeDefined: null, recorderFailures: 0, recorderFirstDefined: null, ...overrides });
+function observationEvents() {
+  const location = { entryFile: searchObservationContract.file, file: searchObservationContract.file, line: 257, column: 1, nesting: 0 };
+  return { location, enqueue: { ...location, name: searchObservationContract.name, testId: 9 }, terminal: { ...location, name: searchObservationContract.name },
+    failure: { v: 1, kind: "failure", file: searchObservationContract.file, line: 257, failureType: "testCodeFailure", errorClass: "unknown", code: "ERR_TEST_FAILURE" } };
+}
+function inertObservationRelay() { return createObservationRelay(value => value === searchObservationContract.file ? value : null); }
+function feedObservation(relay, events, rows = [observationBoundary(), observationCleanup()]) {
+  relay.observe("test:enqueue", events.enqueue);
+  relay.observe("test:fail", events.terminal, events.failure);
+  for (const row of rows) relay.observe("test:diagnostic", { ...events.location, message: observationDiagnosticText(row) });
+}
+test("inert observation schema preserves undefined presence and canonical complete records", () => {
+  for (const row of [observationBoundary(), observationBoundary({ reasonDefined: true }), observationCleanup()]) assert.deepEqual(parseObservationDiagnostic(observationDiagnosticText(row)), row);
+  assert.throws(() => observationDiagnosticText(observationBoundary({ failurePresent: false })));
+  assert.throws(() => observationDiagnosticText(observationCleanup({ disposeDefined: false })));
+});
+test("inert observation schema refuses duplicate keys, escapes, foreign fields and non-ASCII", () => {
+  const text = observationDiagnosticText(observationBoundary());
+  for (const bad of [text.replace('"v":1', '"v":1,"v":1'), text.replace('"variants"', '"\\u0076ariants"'), text + " ", "preamble" + text, text.replace('"variants"', '"foreign"'), text.replace('"begin"', '"é"'), text + "x".repeat(641)]) assert.throws(() => parseObservationDiagnostic(bad));
+  assert.throws(() => observationDiagnosticText({ ...observationBoundary(), private: "not permitted" }));
+});
+test("inert observation schema and event reader never invoke getters or proxy traps", () => {
+  let reads = 0;
+  const getter = Object.defineProperty({}, "operation", { get() { reads++; throw undefined; } });
+  const proxy = new Proxy({}, { ownKeys() { reads++; throw undefined; }, get() { reads++; throw undefined; }, getOwnPropertyDescriptor() { reads++; throw undefined; } });
+  for (const value of [getter, proxy]) assert.throws(() => observationDiagnosticText(value));
+  const relay = inertObservationRelay(); relay.observe("test:enqueue", proxy); relay.observe("test:diagnostic", Object.defineProperty({}, "file", { get() { reads++; } }));
+  assert.equal(reads, 0); assert.equal(relay.finish().active, false);
+});
+test("inert observation relay binds native coordinates rather than payload case or arrival order", () => {
+  const events = observationEvents(), relay = inertObservationRelay();
+  for (const row of [observationCleanup(), observationBoundary()]) relay.observe("test:diagnostic", { ...events.location, message: observationDiagnosticText(row) });
+  relay.observe("test:fail", events.terminal, events.failure); relay.observe("test:enqueue", events.enqueue);
+  assert.deepEqual(relay.finish().records, [observationBoundary(), observationCleanup()]);
+});
+test("inert observation relay rejects late coordinate collisions including another name", () => {
+  for (const name of [searchObservationContract.name, "unrelated native test"]) {
+    const events = observationEvents(), relay = inertObservationRelay(); feedObservation(relay, events);
+    relay.observe("test:enqueue", { ...events.enqueue, name, testId: 10 });
+    assert.equal(relay.finish().records[0].state, "incomplete");
+    assert.deepEqual(relay.finish().targetFailure, events.failure);
+  }
+});
+test("inert observation relay rejects missing location, terminal and conflicting child identity", () => {
+  for (const variant of ["file", "entryFile", "column", "nesting", "testId", "terminal", "foreignId"]) {
+    const e = observationEvents(), relay = inertObservationRelay();
+    if (variant !== "terminal" && variant !== "foreignId") delete e.enqueue[variant];
+    relay.observe("test:enqueue", e.enqueue);
+    if (variant !== "terminal") relay.observe("test:fail", variant === "foreignId" ? { ...e.terminal, testId: 77 } : e.terminal, e.failure);
+    for (const row of [observationBoundary(), observationCleanup()]) relay.observe("test:diagnostic", { ...e.location, message: observationDiagnosticText(row) });
+    const r = relay.finish(); assert.equal(r.active && r.records.some(row => row.kind === "boundary"), false);
+  }
+});
+test("inert observation relay rejects foreign child diagnostics and duplicate or incomplete pairs", () => {
+  for (const variant of ["foreign", "duplicate", "missing", "malformed"]) {
+    const e = observationEvents(), relay = inertObservationRelay();
+    feedObservation(relay, e, variant === "missing" ? [observationBoundary()] : [observationBoundary(), observationCleanup()]);
+    if (variant !== "missing") relay.observe("test:diagnostic", { ...e.location, ...(variant === "foreign" ? { entryFile: "test/foreign.test.mjs" } : {}), message: variant === "malformed" ? searchObservationContract.prefix + "{" : observationDiagnosticText(observationBoundary()) });
+    assert.equal(relay.finish().records[0].state, "incomplete");
+  }
+});
+test("inert observation relay treats pending cleanup and contradictory success as incomplete", () => {
+  const e = observationEvents(), pending = inertObservationRelay(); feedObservation(pending, e, [observationBoundary(), observationCleanup({ dispose: "pending" })]);
+  assert.equal(pending.finish().records[0].reason, "cleanup_incomplete");
+  const contradictory = inertObservationRelay(); contradictory.observe("test:enqueue", e.enqueue); contradictory.observe("test:pass", e.terminal);
+  for (const row of [observationBoundary(), observationCleanup()]) contradictory.observe("test:diagnostic", { ...e.location, message: observationDiagnosticText(row) });
+  assert.equal(contradictory.finish().records[0].reason, "diagnostics_conflict");
+});
+test("inert observation ledger distinguishes operand rejection from later assertion failure", () => {
+  for (const stage of ["dispatch", "response_ok", "byte_bound", "json", "assertion"]) {
+    const out = [], ledger = createObservationLedger(text => out.push(parseObservationDiagnostic(text)));
+    ledger.select("initial_snapshot"); ledger.mark(stage); ledger.body(true, undefined); ledger.flush();
+    assert.equal(out[0].stage, stage); assert.equal(out[0].reasonDefined, false); assert.equal(out[1].registered, false); assert.equal(out[1].dispose, "unregistered");
+  }
+});
+test("inert observation ledger retains undefined body and both original cleanup failures", async () => {
+  const out = [], order = [], second = {}, ledger = createObservationLedger(text => out.push(parseObservationDiagnostic(text)));
+  ledger.registered(); ledger.body(true, undefined);
+  await assert.rejects(ledger.cleanup(() => { order.push("dispose"); throw undefined; }, () => { order.push("remove"); return Promise.reject(second); }), error => error instanceof AggregateError && error.errors.length === 2 && error.errors[0] === undefined && error.errors[1] === second);
+  assert.deepEqual(order, ["dispose", "remove"]); assert.equal(out[0].reasonDefined, false); assert.equal(out[1].disposeDefined, false); assert.equal(out[1].removeDefined, true);
+  assert.deepEqual(ledger.failures().cleanup, [undefined, second]);
+});
+test("inert observation ledger joins held originals before subsequent cleanup and reporting", async () => {
+  let releaseDispose, releaseRemove; const out = [], order = [], ledger = createObservationLedger(text => out.push(text)); ledger.registered(); ledger.body(false);
+  const disposing = new Promise(resolve => { releaseDispose = resolve; }), removing = new Promise(resolve => { releaseRemove = resolve; });
+  const done = ledger.cleanup(() => { order.push("dispose"); return disposing; }, () => { order.push("remove"); return removing; });
+  await Promise.resolve(); assert.deepEqual(order, ["dispose"]); assert.equal(out.length, 0);
+  releaseDispose(); await Promise.resolve(); assert.deepEqual(order, ["dispose", "remove"]); assert.equal(out.length, 0);
+  releaseRemove(); await done; assert.equal(out.length, 2);
+});
+test("inert observation ledger preserves sole undefined cleanup and all recorder failures", async () => {
+  const ledger = createObservationLedger(() => { throw undefined; }); ledger.registered(); ledger.body(true, undefined);
+  const original = {}; let remove = 0;
+  await assert.rejects(ledger.cleanup(() => { throw original; }, () => { remove++; }), error => error instanceof AggregateError && error.errors.length === 3 && error.errors[0] === original && error.errors[1] === undefined && error.errors[2] === undefined);
+  assert.equal(remove, 1); assert.deepEqual(ledger.failures().reporting, [undefined, undefined]);
+  const sole = createObservationLedger(() => {}); sole.registered(); sole.body(false); let caught = false;
+  try { await sole.cleanup(() => { throw undefined; }, () => {}); } catch (error) { caught = true; assert.equal(error, undefined); }
+  assert.equal(caught, true);
+});
+test("inert observation ledgers remain invocation-owned and flush at most once", () => {
+  const a = [], b = [], first = createObservationLedger(x => a.push(parseObservationDiagnostic(x))), second = createObservationLedger(x => b.push(parseObservationDiagnostic(x)));
+  first.select("head"); second.select("post"); first.body(true, undefined); second.body(false); first.flush(); second.flush(); first.flush();
+  assert.equal(a.length, 2); assert.equal(b.length, 2); assert.equal(a[0].operation, "head"); assert.equal(b[0].operation, "post");
+});
+test("inert observation quota keeps target identity inside nine essentials after earlier failures", () => {
+  const e = observationEvents(), relay = inertObservationRelay(); feedObservation(relay, e); const result = relay.finish();
+  const earlier = Array.from({ length: 9 }, (_, i) => ({ ...e.failure, file: "test/another.test.mjs", line: i + 1 }));
+  const selected = selectFailureRecords(earlier, [], result);
+  assert.deepEqual(selected[0], e.failure); assert.equal(selected.length, 7); assert.equal(selected.length + result.records.length, 9);
+  assert.deepEqual(selectFailureRecords(earlier, [], { active: false }), earlier);
+});
+test("inert observation full-stream overflow cannot acquire complete binding", () => {
+  const e = observationEvents(), relay = inertObservationRelay(); feedObservation(relay, e);
+  for (let i = 0; i < 257; i++) relay.observe("test:enqueue", { ...e.enqueue, line: 1000 + i, name: "unrelated" });
+  assert.equal(relay.finish().records[0].reason, "bounded_overflow");
+});
+test("inert observation maximum-width command and total budgets remain closed", () => {
+  for (const row of [observationBoundary({ operation: "observation_create", stage: "cleanup_registration", reasonDefined: true }), observationCleanup({ recorderFailures: 1000000, recorderFirstDefined: false, dispose: "rejected", disposeDefined: false, remove: "rejected", removeDefined: true })]) {
+    const admitted = parseObservationDiagnostic(observationDiagnosticText(row));
+    const command = annotation(admitted, "notice");
+    assert.ok(Buffer.byteLength(command) <= 768); assert.ok(Buffer.byteLength(command) * 10 <= 8192);
+  }
+});
+test("inert observation absent-target output retains the exact original identity bytes", () => {
+  const e = observationEvents(), relay = inertObservationRelay();
+  relay.observe("test:enqueue", { ...e.enqueue, name: "another case" });
+  relay.observe("test:diagnostic", { ...e.location, message: observationDiagnosticText(observationBoundary()) });
+  const disposition = relay.finish(); assert.equal(disposition.active, false);
+  const selected = selectFailureRecords([e.failure], [], disposition);
+  assert.equal(selected[0], e.failure);
+  assert.equal(annotation(selected[0], "error"), '::error title=Worker test identity::{"v":1,"kind":"failure","file":"test/search-semantics-observe.test.mjs","line":257,"failureType":"testCodeFailure","errorClass":"unknown","code":"ERR_TEST_FAILURE"}\n');
+  const summary = { v: 1, kind: "summary", failureEvents: 1, reported: 1, omittedEvents: 0, unknownFiles: 0, countsSaturated: false };
+  assert.equal(annotation(summary, "error"), '::error title=Worker test identity::{"v":1,"kind":"summary","failureEvents":1,"reported":1,"omittedEvents":0,"unknownFiles":0,"countsSaturated":false}\n');
+});
+test("inert observation cleanup retains original call receiver, arguments and returned promise", async () => {
+  const receiver = { calls: 0 }, argument = {}, original = Promise.resolve(), out = [];
+  function dispose(value) { assert.equal(this, receiver); assert.equal(value, argument); this.calls++; return original; }
+  const ledger = createObservationLedger(text => out.push(text)); ledger.registered(); ledger.body(false);
+  const bound = () => { const result = dispose.call(receiver, argument); assert.equal(result, original); return result; };
+  await ledger.cleanup(bound, () => {}); assert.equal(receiver.calls, 1); assert.equal(out.length, 2);
+});
+test("inert observation relay rejects late reused child IDs and foreign terminal collisions", () => {
+  for (const type of ["test:enqueue", "test:fail"]) {
+    const e = observationEvents(), relay = inertObservationRelay(); feedObservation(relay, e);
+    relay.observe(type, type === "test:enqueue" ? { ...e.enqueue, line: 999, name: "other" } : { ...e.terminal, name: "other" }, e.failure);
+    assert.equal(relay.finish().records[0].state, "incomplete");
+  }
+});
+// END inert observation diagnostic tests.
