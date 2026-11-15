@@ -18,11 +18,19 @@ import { createMusicGenerateTool } from "./music-generate-tool.js";
 function musicFailureCounts() {
   const kinds = ["acquisition", "acquisition_observer", "read", "cancel", "body_cancel", "closed", "release_invariant", "dispatcher_promise", "dispatcher_invariant", "observer_exception", "task", "body_join", "binding", "handler"];
   const counts: Record<string, number> = {}; let overflow = false;
+  let dispatcher: Record<string, number> | undefined;
   return { add(kind: string) {
     if (!kinds.includes(kind)) throw new Error("unknown music failure kind");
     const key = "f_" + kind, count = counts[key] ?? 0;
     if (count === 65535) overflow = true; else counts[key] = count + 1;
-  }, snapshot(): Record<string, number | boolean> { return { ...counts, ...(overflow ? { failureOverflow: true } : {}) }; }, kinds };
+  }, dispatcher(row: { retirements: number; pending: Promise<unknown>[] }, outcomes: Map<Promise<unknown>, PromiseSettledResult<unknown> | undefined>) {
+    if (dispatcher) { dispatcher.d_violations!++; return; }
+    dispatcher = { d_retirements: row.retirements, d_promises: row.pending.length, d_fulfilled: 0, d_rejected: 0, d_pending: 0, d_violations: 1 };
+    for (const pending of new Set(row.pending)) {
+      const outcome = outcomes.get(pending);
+      dispatcher[outcome?.status === "fulfilled" ? "d_fulfilled" : outcome?.status === "rejected" ? "d_rejected" : "d_pending"]!++;
+    }
+  }, snapshot(): Record<string, number | boolean> { return { ...counts, ...dispatcher, ...(overflow ? { failureOverflow: true } : {}) }; }, kinds };
 }
 function musicDiagnosticProtocol(isProxy: (value: unknown) => boolean) {
   type Data = Record<string, string | number | boolean | null>;
@@ -31,7 +39,7 @@ function musicDiagnosticProtocol(isProxy: (value: unknown) => boolean) {
   const phases = new Set(["module_entered", "setup", "registry_acquire", "registry_assert", "case_setup", "prepare_runtime", "tool_create", "tool_dispatch", "tool_returned", "started_fetch", "started_status", "execute", "caller_abort", "body_assert", "original_join", "prepared_discard", "runtime_restore", "registry_release", "cache_reset", "state_cleanup", "media_fixture", "worker_prepare", "grant_setup", "helper", "worker_retirement", "upstream_state", "upstream_assert", "sqlite_read", "sqlite_assert", "header_disposition", "worker_dispose", "scratch_cleanup", "final_cleanup", "capacity"]);
   const names = new Set(["Error", "TypeError", "RangeError", "AssertionError", "AggregateError", "AbortError", "TimeoutError", "unknown"]);
   const codes = new Set(["ERR_ASSERTION", "ERR_ASSERTION_ERROR", "ERR_MODULE_NOT_FOUND", "MODULE_NOT_FOUND", "ERR_PACKAGE_PATH_NOT_EXPORTED", "ERR_UNKNOWN_FILE_EXTENSION", "ERR_REQUIRE_ESM", "ABORT_ERR", "ECONNRESET", "ETIMEDOUT"]);
-  const keys = ["v", "layer", "route", "caseId", "phase", "role", "outcome", "category", "name", "code", "exit", "killed", "signal", "records", "suppressed", "acquisitions", "readers", "operations", "settled", "rejected", "releases", "returned", "dispatchers", "callerAborted", "partialDelivery", "restored", "actual", "expected", "invalid", "httpStatus", "toolReturned", "failureOverflow", ...musicFailureCounts().kinds.map(kind => "f_" + kind)];
+  const keys = ["v", "layer", "route", "caseId", "phase", "role", "outcome", "category", "name", "code", "exit", "killed", "signal", "records", "suppressed", "acquisitions", "readers", "operations", "settled", "rejected", "releases", "returned", "dispatchers", "callerAborted", "partialDelivery", "restored", "actual", "expected", "invalid", "httpStatus", "toolReturned", "failureOverflow", "observedOutcome", "d_retirements", "d_promises", "d_fulfilled", "d_rejected", "d_pending", "d_violations", ...musicFailureCounts().kinds.map(kind => "f_" + kind)];
   const own = (value: unknown, key: string): unknown => {
     if (!value || typeof value !== "object" || isProxy(value)) return undefined;
     try { const d = Object.getOwnPropertyDescriptor(value, key); return d && "value" in d ? d.value : undefined; } catch { return undefined; }
@@ -49,6 +57,8 @@ function musicDiagnosticProtocol(isProxy: (value: unknown) => boolean) {
         || !["none", "error", "assertion", "aggregate", "undefined", "null", "unknown", "child_process", "limit"].includes(out.category as string)) return;
       for (const key of found as string[]) {
         if (keys.indexOf(key) < 8) continue;
+        if (key === "observedOutcome") { if (![null, "pending", "fulfilled", "rejected"].includes(out[key] as string | null)) return; continue; }
+        if (key.startsWith("d_")) { if (typeof out[key] !== "number" || !Number.isSafeInteger(out[key]) || (out[key] as number) < 0 || (out[key] as number) > 1_000_000_000) return; continue; }
         if (key.startsWith("f_")) { if (typeof out[key] !== "number" || !Number.isSafeInteger(out[key]) || (out[key] as number) < 0 || (out[key] as number) > 65535) return; continue; }
         if (key === "httpStatus") { if (out[key] !== null && (typeof out[key] !== "number" || !Number.isInteger(out[key]) || (out[key] as number) < 100 || (out[key] as number) > 599)) return; continue; }
         if (key === "toolReturned" || key === "failureOverflow") { if (typeof out[key] !== "boolean") return; continue; }
@@ -128,9 +138,9 @@ function musicDiagnosticProtocol(isProxy: (value: unknown) => boolean) {
 const musicProtocol = musicDiagnosticProtocol(nodeTypes.isProxy);
 const musicDiagnosticErrors: unknown[] = [];
 let musicCase = "none", musicPhase = "module_entered", musicRecords = 0;
-let musicStageFacts: Record<string, number | boolean | null> = {};
+let musicStageFacts: Record<string, string | number | boolean | null> = {};
 const musicRoute = ["native", "manifest"].includes(process.env.CLAWROUTER_CONTRACT_ROUTE ?? "") ? process.env.CLAWROUTER_CONTRACT_ROUTE! : "none";
-function musicMark(phase: string, outcome = "entered", role = "progress", failed = false, error?: unknown, facts: Record<string, number | boolean | null> = {}) {
+function musicMark(phase: string, outcome = "entered", role = "progress", failed = false, error?: unknown, facts: Record<string, string | number | boolean | null> = {}) {
   musicPhase = phase; musicStageFacts = facts;
   try {
     if (musicRecords >= 512) throw new Error("music SDK diagnostic capacity exceeded");
@@ -144,7 +154,8 @@ const origin = process.env.CLAWROUTER_CONTRACT_ORIGIN!;
 const route = process.env.CLAWROUTER_CONTRACT_ROUTE;
 if (route !== "native" && route !== "manifest") throw new Error("explicit real music configuration required");
 const audio = JSON.parse(process.env.CLAWROUTER_CONTRACT_AUDIO!) as Record<string, string>;
-type Case = { id: string; kind: string; model: string; format: "wav" | "mp3" };
+type ToolObservation = { state: "pending" | "fulfilled" | "rejected" };
+type Case = { id: string; kind: string; model: string; format: "wav" | "mp3"; observedTool?: ToolObservation };
 const cases = JSON.parse(process.env.CLAWROUTER_CONTRACT_CASES!) as Case[];
 const nativeFetch = globalThis.fetch;
 const undici = createRequire(import.meta.url)("undici/index.js") as typeof import("undici");
@@ -276,7 +287,10 @@ async function joinOriginalSdkOperations(input: {
   }
   for (const row of agents) {
     for (const pending of new Set(row.pending)) { const result = outcomes.get(pending)!; if (result.status === "rejected") fail("dispatcher_promise", result.reason); }
-    if (row.retirements !== 1 || row.pending.length !== 1) fail("dispatcher_invariant", new Error("missing exact external dispatcher retirement"));
+    if (row.retirements !== 1 || row.pending.length !== 1) {
+      fail("dispatcher_invariant", new Error("missing exact external dispatcher retirement"));
+      try { input.failureCounts?.dispatcher(row, outcomes); } catch (error) { reportingFailures.push(error); }
+    }
   }
   for (const error of observationErrors) fail("observer_exception", error);
   failures.push(...reportingFailures);
@@ -305,7 +319,9 @@ beforeAll(async () => {
   } catch (error) { musicMark(musicPhase, "rejected", "primary", true, error); throw error; }
 });
 beforeEach(context => {
-  musicCase = cases.find(row => context.task.name === `real registered music ${route}/${row.id}`)?.id ?? "none";
+  const caseRow = cases.find(row => context.task.name === `real registered music ${route}/${row.id}`);
+  if (caseRow) caseRow.observedTool = undefined;
+  musicCase = caseRow?.id ?? "none";
   if (!musicProtocol.ids.has(musicCase)) musicCase = "none";
   musicMark("case_setup");
   try {
@@ -327,16 +343,17 @@ beforeEach(context => {
   musicMark("case_setup", "fulfilled");
   } catch (error) { musicMark("case_setup", "rejected", "primary", true, error); throw error; }
 });
-afterEach(async () => {
+afterEach(async context => {
+  const observedTool = cases.find(row => context.task.name === `real registered music ${route}/${row.id}`)?.observedTool;
   const failures: unknown[] = [], failureCounts = musicProtocol.failureCounts();
   musicMark("original_join");
   try {
     failures.push(...await joinOriginalSdkOperations({ readers, bodyOperations, acquisitions, agents, observationErrors, failureCounts }, ownedStoredAbort));
-    musicMark("original_join", failures.length ? "rejected" : "fulfilled", "summary", false, undefined, { acquisitions: acquisitions.length, readers: readers.length,
+    musicMark("original_join", failures.length ? "rejected" : "fulfilled", "summary", false, undefined, { observedOutcome: observedTool?.state ?? null, acquisitions: acquisitions.length, readers: readers.length,
       operations: bodyOperations.length + readers.reduce((n, row) => n + row.operations.length, 0),
       rejected: bodyOperations.filter(row => row.rejected).length + readers.reduce((n, row) => n + row.operations.filter(op => op.rejected).length, 0),
       releases: readers.reduce((n, row) => n + row.releases, 0), returned: readers.reduce((n, row) => n + row.returned, 0), dispatchers: agents.length });
-    for (const failure of failures) musicMark("original_join", "rejected", "cleanup", true, failure, failureCounts.snapshot());
+    for (const failure of failures) musicMark("original_join", "rejected", "cleanup", true, failure, { ...failureCounts.snapshot(), observedOutcome: observedTool?.state ?? null });
   } catch (error) { musicMark("original_join", "rejected", "cleanup", true, error); failures.push(error); }
   finally {
     musicMark("prepared_discard");
@@ -362,6 +379,7 @@ afterAll(async () => {
 
 for (const row of cases) it(`real registered music ${route}/${row.id}`, async () => {
   const config = configuration(row), controller = new AbortController();
+  let caseObservation: ToolObservation | undefined;
   musicMark("prepare_runtime");
   try {
   prepared = await prepareWorkspaceBuildGroup([{ agentId: "main", agentDir: state.agentDir(), workspaceDir: state.workspaceDir, config, skipCredentials: true }], "static", { includeCredentialProviders: false }, () => acquired.registry);
@@ -384,7 +402,10 @@ for (const row of cases) it(`real registered music ${route}/${row.id}`, async ()
   const pending = withPluginRuntimeRegistryScope(acquired.registry, () => tool!.execute(`music-${route}-${row.id}`, args, controller.signal));
   musicMark("tool_returned", "fulfilled", "progress", false, undefined, { toolReturned: true, callerAborted: controller.signal.aborted });
   // The observation is attached immediately; a later await never leaves a rejection unhandled.
-  const outcome = pending.then(value => ({ ok: true as const, value }), reason => ({ ok: false as const, reason }));
+  const observedTool: ToolObservation = { state: "pending" }; caseObservation = row.observedTool = observedTool;
+  // BEGIN original tool outcome observation.
+  const outcome = pending.then(value => { observedTool.state = "fulfilled"; return { ok: true as const, value }; }, reason => { observedTool.state = "rejected"; return { ok: false as const, reason }; });
+  // END original tool outcome observation.
   if (row.kind.startsWith("abort_")) {
     musicMark("started_fetch", "entered", "progress", false, undefined, { toolReturned: true, callerAborted: controller.signal.aborted });
     const started = await nativeFetch(origin + "/fixture/started?id=" + row.id);
@@ -409,7 +430,7 @@ for (const row of cases) it(`real registered music ${route}/${row.id}`, async ()
     if (row.kind.startsWith("abort") || row.kind === "preabort") expect(controller.signal.aborted).toBe(true);
   }
   musicMark("body_assert", "fulfilled", "progress", false, undefined, { callerAborted: controller.signal.aborted });
-  } catch (error) { musicMark(musicPhase, "rejected", "primary", true, error, { ...musicStageFacts, callerAborted: controller.signal.aborted }); throw error; }
+  } catch (error) { musicMark(musicPhase, "rejected", "primary", true, error, { ...musicStageFacts, callerAborted: controller.signal.aborted, observedOutcome: caseObservation?.state ?? null }); throw error; }
 // The actual tool minimum is 120s. This new case encloses that real deadline;
 // the unchanged native consumer helper still owns its independent 240s ceiling.
 }, row.kind === "deadline_body" ? 180000 : 120000);

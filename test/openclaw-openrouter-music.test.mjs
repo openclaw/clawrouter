@@ -310,6 +310,7 @@ export default { ...handler, async fetch(request, env, context) {
   if (path === "/fixture/revoke") { const id = new URL(request.url).searchParams.get("id"); if (!rows.some(row => row.id === id)) return new Response(null, { status: 400 }); await revokeGrantCredentials(env, "oauth/orm_" + id + "/openrouter"); return new Response(null, { status: 204 }); }
   if (path === "/fixture/retire") return Response.json(await retire());
   if (path === "/fixture/state") return originalFetch("https://fixture.example/state");
+  if (path === "/fixture/readiness") return originalFetch("https://fixture.example/readiness?id=" + new URL(request.url).searchParams.get("id"));
   if (path === "/fixture/started") return originalFetch("https://fixture.example/started?id=" + new URL(request.url).searchParams.get("id"));
   if (path === "/fixture/alternate") { requests.push({ path }); return new Response("unexpected alternate", { status: 500 }); }
   try {
@@ -330,28 +331,170 @@ export default { ...handler, async fetch(request, env, context) {
 } };`;
 }
 
+// Closed data only; original readiness Promise/resolver remain in the handler.
+function createReadinessWitness(ids) {
+  const allowed = new Set(ids), records = new Map(); let sequence = 0;
+  const empty = id => ({ id, wait_entered: null, resolver_called: null, resolver_returned: null, wait_returned: null, matchingPosts: 0, waitCount: 0,
+    timer: "unstarted", notification: "unstarted", task: "unstarted", cancelCalls: 0, cancelReturned: false, cancelWhilePending: false,
+    timerRejectionObject: null, expired: false, joined: false, mapRemoved: false, listenerRemoved: false, failureCount: 0 });
+  const record = id => {
+    if (!allowed.has(id)) throw new Error("unknown readiness witness");
+    if (!records.has(id)) records.set(id, empty(id));
+    return records.get(id);
+  };
+  return { entered(id) { const row = record(id); row.waitCount++; row.wait_entered ??= ++sequence; },
+    called(id) { record(id).resolver_called ??= ++sequence; },
+    returned(id) { record(id).resolver_returned ??= ++sequence; },
+    resumed(id) { record(id).wait_returned ??= ++sequence; },
+    post(id) { record(id).matchingPosts++; },
+    update(id, fields) { Object.assign(record(id), fields); },
+    snapshot(id) { return allowed.has(id) ? { ...(records.get(id) ?? empty(id)) } : null; } };
+}
+function validateReadinessSnapshot(value, id) {
+  if (!value || typeof value !== "object" || nodeTypes.isProxy(value) || Object.getPrototypeOf(value) !== Object.prototype) return false;
+  const sequence = ["wait_entered", "resolver_called", "resolver_returned", "wait_returned"];
+  const counts = ["matchingPosts", "waitCount", "cancelCalls", "failureCount"];
+  const states = ["timer", "notification", "task"];
+  const booleans = ["cancelReturned", "cancelWhilePending", "expired", "joined", "mapRemoved", "listenerRemoved"];
+  const fields = ["id", ...sequence, ...counts, ...states, ...booleans, "timerRejectionObject"];
+  if (Reflect.ownKeys(value).length !== fields.length) return false;
+  for (const field of fields) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, field);
+    if (!descriptor || !("value" in descriptor)) return false;
+    const v = descriptor.value;
+    if (field === "id" ? v !== id : sequence.includes(field) ? v !== null && (!Number.isSafeInteger(v) || v <= 0 || v > 1000000)
+      : counts.includes(field) ? !Number.isSafeInteger(v) || v < 0 || v > (field === "cancelCalls" ? 1 : 1000)
+      : states.includes(field) ? !["unstarted", "pending", "fulfilled", "rejected"].includes(v)
+      : field === "timerRejectionObject" ? v !== null && typeof v !== "boolean" : typeof v !== "boolean") return false;
+  }
+  return true;
+}
+
+// This exact function runs inside the readiness GET and in the ownership tests.
+// Only its controller owns the timer. The POST retains only the notification resolver.
+async function waitForReadiness(id, waiting, readiness, signal, runtime = {
+  wait: (delay, options) => scheduler.wait(delay, options), controller: () => new AbortController(),
+}) {
+  const failures = [];
+  let controller, timer, timerObserved, notification, notificationObserved, resolveNotification, rejectNotification;
+  let timerResult, notificationResult, timerHandled = false, notificationHandled = false;
+  let listenerAttached = false, cleanupNotification = false, cleanupReason, cancelCalls = 0, cancelReturned = false, cancelWhilePending = false;
+  const aborted = () => { rejectNotification(signal.reason); };
+  const cancel = () => {
+    cancelWhilePending = timerResult === undefined; cancelCalls++;
+    readiness.update(id, { cancelCalls, cancelWhilePending });
+    controller.abort(new Error("readiness owner canceled its timer"));
+    cancelReturned = true; readiness.update(id, { cancelReturned });
+  };
+  try {
+    if (readiness.snapshot(id) === null || waiting.has(id)) throw new Error("unknown or duplicate readiness waiter");
+    if (!signal || typeof signal.aborted !== "boolean") throw new Error("readiness request signal missing");
+    if (signal.aborted) throw signal.reason;
+    controller = runtime.controller();
+    timer = runtime.wait(10000, { signal: controller.signal });
+    readiness.update(id, { timer: "pending" });
+    timerObserved = timer.then(() => {
+      timerResult = { kind: "timer", status: "fulfilled" };
+      readiness.update(id, { timer: "fulfilled", expired: true }); return timerResult;
+    }, reason => {
+      timerResult = { kind: "timer", status: "rejected", reason };
+      readiness.update(id, { timer: "rejected", timerRejectionObject: reason !== null && typeof reason === "object" }); return timerResult;
+    });
+    notification = new Promise((resolve, reject) => { resolveNotification = resolve; rejectNotification = reject; });
+    notificationObserved = notification.then(() => {
+      notificationResult = { kind: "notification", status: "fulfilled" };
+      readiness.update(id, { notification: "fulfilled" }); return notificationResult;
+    }, reason => {
+      notificationResult = { kind: "notification", status: "rejected", reason };
+      readiness.update(id, { notification: "rejected" }); return notificationResult;
+    });
+    signal.addEventListener("abort", aborted, { once: true }); listenerAttached = true;
+    waiting.set(id, resolveNotification); readiness.update(id, { notification: "pending" }); readiness.entered(id);
+    if (signal.aborted) aborted();
+    const first = await Promise.race([notificationObserved, timerObserved]);
+    if (first.kind === "timer") {
+      timerHandled = true; failures.push(first.status === "rejected" ? first.reason : new Error("readiness timer expired"));
+    } else {
+      notificationHandled = true;
+      if (first.status === "rejected") failures.push(first.reason);
+      else if (timerResult !== undefined) {
+        timerHandled = true; failures.push(timerResult.status === "rejected" ? timerResult.reason : new Error("readiness timer expired"));
+      } else {
+        readiness.resumed(id);
+        cancel();
+      }
+    }
+  } catch (reason) { failures.push(reason); }
+  finally {
+    // Failed notification paths still cancel and join their own original timer.
+    if (timerObserved && timerResult === undefined && cancelCalls === 0) {
+      try { cancel(); } catch (reason) { failures.push(reason); }
+    }
+    if (notificationObserved && notificationResult === undefined) {
+      cleanupNotification = true; cleanupReason = failures.length ? failures[0] : new Error("readiness notification incomplete");
+      rejectNotification(cleanupReason);
+    }
+    if (timerObserved) {
+      await timerObserved;
+      if (!timerHandled && !(timerResult.status === "rejected" && timerResult.reason !== null && typeof timerResult.reason === "object"
+        && cancelCalls === 1 && cancelReturned && cancelWhilePending)) {
+        failures.push(timerResult.status === "rejected" ? timerResult.reason : new Error("readiness timer expired"));
+      }
+    }
+    if (notificationObserved) {
+      await notificationObserved;
+      if (!notificationHandled && notificationResult.status === "rejected" && !(cleanupNotification && notificationResult.reason === cleanupReason)) failures.push(notificationResult.reason);
+      if (notificationResult.status === "fulfilled" && signal.aborted) failures.push(signal.reason);
+    }
+    try {
+      if (resolveNotification && waiting.get(id) === resolveNotification) waiting.delete(id);
+      if (resolveNotification && waiting.has(id)) throw new Error("readiness waiter ownership changed");
+      readiness.update(id, { mapRemoved: !waiting.has(id) });
+    } catch (reason) { failures.push(reason); }
+    try {
+      if (listenerAttached) signal.removeEventListener("abort", aborted);
+      readiness.update(id, { listenerRemoved: true });
+    } catch (reason) { failures.push(reason); }
+    if (readiness.snapshot(id) !== null) readiness.update(id, { joined: (!timer || timerResult !== undefined) && (!notification || notificationResult !== undefined), failureCount: failures.length });
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length) throw new AggregateError(failures, "readiness original operations failed");
+}
+
 function upstreamScript(audio) {
   return `const calls = [], audio = ${JSON.stringify(audio)}, rows = ${JSON.stringify(cases)}, waiting = new Map(), sourceTasks = [];
 ${waitForSourceAbort.toString()}
+${createReadinessWitness.toString()}
+${waitForReadiness.toString()}
+const readiness = createReadinessWitness(rows.map(row => row.id));
 const event = value => "data: " + JSON.stringify(value) + "\\n\\n";
 export default { async fetch(request) {
   const url = new URL(request.url);
   if (url.hostname === "fixture.example") {
+    if (url.pathname === "/readiness") { const snapshot = readiness.snapshot(url.searchParams.get("id")); return snapshot ? Response.json(snapshot) : new Response(null, { status: 400 }); }
     if (url.pathname === "/state") {
       let cursor = 0; const errors = [];
       while (cursor < sourceTasks.length) { const batch = sourceTasks.slice(cursor); cursor = sourceTasks.length;
         for (const result of await Promise.allSettled(batch)) if (result.status === "rejected") errors.push(result.reason); }
       if (errors.length) throw new AggregateError(errors, "source waiter failed");
-      return Response.json(calls);
+      return Response.json(calls.map(call => ({ ...call, readiness: readiness.snapshot(call.id) })));
     }
     const id = url.searchParams.get("id");
-    if (!calls.some(call => call.id === id)) await new Promise(resolve => waiting.set(id, resolve));
+    if (!calls.some(call => call.id === id)) {
+      readiness.update(id, { task: "pending" });
+      const pending = waitForReadiness(id, waiting, readiness, request.signal); sourceTasks.push(pending);
+      try { await pending; readiness.update(id, { task: "fulfilled" }); }
+      catch (reason) { readiness.update(id, { task: "rejected" }); throw reason; }
+    }
     return new Response(null, { status: 204 });
   }
   const row = rows.find(row => request.headers.get("authorization") === "Bearer fixture-upstream-" + row.id);
   if (!row) return new Response("unknown fixture credential", { status: 401 });
   const body = await request.json(), call = { id: row.id, url: request.url, method: request.method, redirect: request.redirect, authorization: request.headers.get("authorization"), body, aborted: request.signal.aborted, canceled: false, expired: false };
-  calls.push(call); waiting.get(row.id)?.(); waiting.delete(row.id);
+  calls.push(call); readiness.post(row.id);
+  const resolver = waiting.get(row.id);
+  if (resolver !== undefined) { readiness.called(row.id); resolver(); readiness.returned(row.id); }
+  waiting.delete(row.id);
   if (row.kind === "abort_headers") { const pending = waitForSourceAbort(request.signal, call); sourceTasks.push(pending); await pending; call.sourceReturnReached = true; return new Response(null, { status: 499 }); }
   request.signal.addEventListener("abort", () => { call.aborted = true; }, { once: true });
   if (row.kind === "redirect") return new Response(null, { status: 307, headers: { location: "https://alternate.example/paid" } });
@@ -953,7 +1096,7 @@ test("SDK actual drain sidecar classifies original failures without replacing un
   assert.equal(failures.length, 10);
   assert.deepEqual(failures.slice(0, 6), [reason, undefined, reason, reason, undefined, undefined]);
   assert.equal(failures[7], undefined); assert.equal(failures[9], undefined);
-  assert.deepEqual(counts.snapshot(), { f_acquisition_observer: 1, f_acquisition: 1, f_body_cancel: 1, f_read: 1, f_cancel: 1, f_closed: 1, f_release_invariant: 1, f_dispatcher_promise: 1, f_dispatcher_invariant: 1, f_observer_exception: 1 });
+  assert.deepEqual(counts.snapshot(), { f_acquisition_observer: 1, f_acquisition: 1, f_body_cancel: 1, f_read: 1, f_cancel: 1, f_closed: 1, f_release_invariant: 1, f_dispatcher_promise: 1, f_dispatcher_invariant: 1, f_observer_exception: 1, d_retirements: 0, d_promises: 1, d_fulfilled: 0, d_rejected: 1, d_pending: 0, d_violations: 1 });
 });
 
 test("reader actual observer sidecar preserves original closed and read rejection", async () => {
@@ -966,20 +1109,33 @@ test("reader actual observer sidecar preserves original closed and read rejectio
   assert.deepEqual(counts.snapshot(), { f_read: 1, f_closed: 1 });
 });
 
-// Invocation ordering only: no claim that the GET entered the upstream waiter
-// before the POST. No SDK, injected abort, timer producer or forced resolution.
-test("original native started GET before one positive POST coordination", { timeout: 60000 }, async () => {
-  const proof = { ready: "unstarted", readyStatus: null, post: "unstarted", postStatus: null, sse: "unknown", upstream: "unknown", sqlite: "unknown", retirement: "unknown", dispose: "unknown", scratch: "unknown", waitEntered: null };
+// One pre-POST snapshot witnesses the actual original waiter branch. The extra
+// control request changes scheduling; no SDK or native error-cause claim follows.
+test("original native waiter witness before one positive POST coordination", { timeout: 60000 }, async () => {
+  const proof = { ready: "unstarted", readyStatus: null, post: "unstarted", postStatus: null, sse: "unknown", upstream: "unknown", sqlite: "unknown", retirement: "unknown", dispose: "unknown", scratch: "unknown", control: "unstarted", controlStatus: null, controlCount: 0, informative: false, preWitness: null, finalWitness: null, readyBeforePost: "unknown", readyStatusBeforePost: null };
   const failures = [], f = await start("native", { wav: Buffer.from(musicWave()).toString("base64"), mp3: Buffer.from(musicWave()).toString("base64") });
   const emit = () => { try { process.stdout.write("MUSIC_COORDINATION " + JSON.stringify(proof) + "\n"); } catch (error) { failures.push(error); } };
   try {
     const row = positives[0];
     proof.ready = "pending";
     const ready = fetch(f.origin + "/fixture/started?id=" + row.id);
+    const observedReady = { state: "pending", status: null };
+    const readyObservation = ready.then(response => { observedReady.state = "fulfilled"; observedReady.status = response.status; }, () => { observedReady.state = "rejected"; });
+    proof.control = "pending"; proof.controlCount++; emit();
+    try {
+      const control = await fetch(f.origin + "/fixture/readiness?id=" + row.id);
+      proof.controlStatus = control.status; assert.equal(control.status, 200);
+      const snapshot = await control.json(); assert.equal(validateReadinessSnapshot(snapshot, row.id), true);
+      proof.preWitness = snapshot; proof.control = "fulfilled";
+      proof.informative = snapshot.wait_entered !== null && snapshot.waitCount === 1 && snapshot.resolver_called === null && snapshot.resolver_returned === null && snapshot.wait_returned === null && snapshot.matchingPosts === 0;
+    } catch (error) { proof.control = "rejected"; failures.push(error); }
+    // One scheduled normal POST still runs after an inconclusive snapshot.
+    proof.readyBeforePost = observedReady.state; proof.readyStatusBeforePost = observedReady.status;
     proof.post = "pending";
     const posted = fetch(f.origin + "/v1/native/openrouter/v1/chat/completions", { method: "POST", headers: headers(row.id), body: JSON.stringify(body(row)) });
     emit();
     const [readyResult, postResult] = await Promise.allSettled([ready, posted]);
+    await readyObservation;
     proof.ready = readyResult.status; proof.post = postResult.status;
     if (readyResult.status === "fulfilled") proof.readyStatus = readyResult.value.status; else failures.push(readyResult.reason);
     if (postResult.status === "fulfilled") proof.postStatus = postResult.value.status; else failures.push(postResult.reason);
@@ -988,13 +1144,21 @@ test("original native started GET before one positive POST coordination", { time
       try { const wire = await postResult.value.text(); assert.equal(postResult.value.status, 200); assert.match(wire, /data: \[DONE\]/); assert.match(wire, /café/); proof.sse = "fulfilled"; }
       catch (error) { proof.sse = "rejected"; failures.push(error); }
     }
-    try { assert.equal(proof.readyStatus, 204); } catch (error) { failures.push(error); }
+    try { assert.equal(proof.informative, true, "original waiter entry was not established"); assert.equal(proof.readyStatus, 204); } catch (error) { failures.push(error); }
     try { await retirement(f.origin); proof.retirement = "fulfilled"; } catch (error) { proof.retirement = "rejected"; failures.push(error); }
     emit();
     try {
       const calls = await (await fetch(f.origin + "/fixture/state")).json();
       assert.equal(calls.length, 1); assert.equal(calls[0].id, row.id); assert.equal(calls[0].authorization, "Bearer fixture-upstream-" + row.id);
       assert.equal(calls[0].method, "POST"); assert.equal(calls[0].url, target); assert.deepEqual(calls[0].body, body(row)); assert.equal(calls[0].expired, false);
+      assert.equal(validateReadinessSnapshot(calls[0].readiness, row.id), true); proof.finalWitness = calls[0].readiness;
+      const witnessed = proof.finalWitness;
+      assert.equal(witnessed.waitCount, 1); assert.equal(witnessed.matchingPosts, 1);
+      assert.ok(witnessed.wait_entered !== null && witnessed.wait_entered < witnessed.resolver_called && witnessed.resolver_called < witnessed.resolver_returned && witnessed.resolver_returned < witnessed.wait_returned);
+      assert.deepEqual([witnessed.timer, witnessed.notification, witnessed.task], ["rejected", "fulfilled", "fulfilled"]);
+      assert.equal(witnessed.cancelCalls, 1); assert.equal(witnessed.failureCount, 0);
+      for (const field of ["cancelReturned", "cancelWhilePending", "timerRejectionObject", "joined", "mapRemoved", "listenerRemoved"]) assert.equal(witnessed[field], true, field);
+      assert.equal(witnessed.expired, false);
       proof.upstream = "fulfilled";
     } catch (error) { proof.upstream = "rejected"; failures.push(error); }
     try {
@@ -1009,4 +1173,198 @@ test("original native started GET before one positive POST coordination", { time
     emit();
   }
   if (failures.length) throw new AggregateError(failures, "original native readiness coordination failed");
+});
+
+
+test("request-owned native readiness expiry joins originals without a POST", { timeout: 60000 }, async () => {
+  const proof = { readyStatus: null, snapshot: null, stateStatus: null, upstream: "unknown", sqlite: "unknown", retirement: "unknown", dispose: "unknown", scratch: "unknown" };
+  const failures = [], f = await start("native", { wav: Buffer.from(musicWave()).toString("base64"), mp3: Buffer.from(musicWave()).toString("base64") });
+  try {
+    const response = await fetch(f.origin + "/fixture/started?id=m0_wav");
+    proof.readyStatus = response.status; assert.equal(response.status, 500);
+    const snapshot = await (await fetch(f.origin + "/fixture/readiness?id=m0_wav")).json();
+    assert.equal(validateReadinessSnapshot(snapshot, "m0_wav"), true); proof.snapshot = snapshot;
+    assert.deepEqual([snapshot.timer, snapshot.notification, snapshot.task], ["fulfilled", "rejected", "rejected"]);
+    assert.equal(snapshot.expired, true); assert.equal(snapshot.matchingPosts, 0); assert.equal(snapshot.waitCount, 1);
+    assert.equal(snapshot.cancelCalls, 0); assert.equal(snapshot.failureCount, 1);
+    assert.equal(snapshot.resolver_called, null); assert.equal(snapshot.wait_returned, null);
+    for (const field of ["joined", "mapRemoved", "listenerRemoved"]) assert.equal(snapshot[field], true, field);
+    // This control joins the retained failed source task and must preserve its failure.
+    const state = await fetch(f.origin + "/fixture/state"); proof.stateStatus = state.status;
+    assert.equal(state.status, 500); proof.upstream = "fulfilled";
+    const receipt = await usage(f.origin, "m0_wav");
+    assert.equal(receipt.usage.events.length, 0); assert.equal(receipt.budget.spentMicros, 0); proof.sqlite = "fulfilled";
+    await retirement(f.origin); proof.retirement = "fulfilled";
+  } catch (reason) { failures.push(reason); }
+  finally {
+    try { await f.close(); proof.dispose = proof.scratch = "fulfilled"; } catch (reason) { failures.push(reason); }
+    try { process.stdout.write("MUSIC_EXPIRY " + JSON.stringify(proof) + "\n"); } catch (reason) { failures.push(reason); }
+  }
+  if (failures.length) throw new AggregateError(failures, "native readiness expiry proof failed");
+});
+
+// Fault injection qualifies this exact fixture function, not native host behavior.
+function readinessTestHarness({ cancel, requestSignal, waiting = new Map() } = {}) {
+  const witness = createReadinessWitness(["m0_wav", "m1_wav"]), native = new AbortController(), request = new AbortController();
+  const timer = deferredOriginal(), cancellation = deferredOriginal(), reason = new Error("controlled original timer rejection");
+  let timerCalls = 0, delay, passedSignal;
+  const controller = { signal: native.signal, abort(value) {
+    cancellation.resolve();
+    if (cancel) return cancel({ native, value, timer, reason });
+    native.abort(value); timer.reject(reason);
+  } };
+  const runtime = { controller: () => controller, wait(value, options) { timerCalls++; delay = value; passedSignal = options.signal; return timer.pending; } };
+  let settled = false;
+  const pending = waitForReadiness("m0_wav", waiting, witness, requestSignal ?? request.signal, runtime);
+  const outcome = pending.then(value => { settled = true; return { status: "fulfilled", value }; }, reason => { settled = true; return { status: "rejected", reason }; });
+  return { witness, waiting, timer, cancellation, pending, outcome, request, native, reason, runtime,
+    get settled() { return settled; }, get timerCalls() { return timerCalls; }, get delay() { return delay; }, get passedSignal() { return passedSignal; },
+    notify(id = "m0_wav") {
+      witness.post(id); const resolver = waiting.get(id);
+      if (resolver !== undefined) { witness.called(id); resolver(); witness.returned(id); }
+      waiting.delete(id);
+    } };
+}
+
+test("readiness owner joins the original pending timer after notification and cancels once", async () => {
+  const h = readinessTestHarness({ cancel({ native, value }) { native.abort(value); } });
+  assert.equal(h.timerCalls, 1); assert.equal(h.delay, 10000); assert.equal(h.passedSignal, h.native.signal);
+  const originalResolver = h.waiting.get("m0_wav"); assert.equal(typeof originalResolver, "function");
+  h.notify("m1_wav"); assert.equal(h.waiting.get("m0_wav"), originalResolver); assert.equal(h.settled, false);
+  h.notify(); await h.cancellation.pending;
+  assert.equal(h.settled, false); assert.equal(h.witness.snapshot("m0_wav").joined, false);
+  h.timer.reject(h.reason); assert.equal((await h.outcome).status, "fulfilled");
+  const row = h.witness.snapshot("m0_wav");
+  assert.equal(validateReadinessSnapshot(row, "m0_wav"), true);
+  assert.deepEqual([row.timer, row.notification, row.cancelCalls, row.failureCount], ["rejected", "fulfilled", 1, 0]);
+  for (const field of ["cancelReturned", "cancelWhilePending", "timerRejectionObject", "joined", "mapRemoved", "listenerRemoved"]) assert.equal(row[field], true);
+});
+
+test("readiness owner expiry rejects and joins the original notification without success", async () => {
+  const h = readinessTestHarness(); h.timer.resolve(); const result = await h.outcome;
+  assert.equal(result.status, "rejected"); const row = h.witness.snapshot("m0_wav");
+  assert.deepEqual([row.timer, row.notification, row.expired, row.cancelCalls, row.failureCount], ["fulfilled", "rejected", true, 0, 1]);
+  assert.equal(row.resolver_called, null); assert.equal(row.joined, true); assert.equal(h.waiting.size, 0);
+});
+
+for (const reason of [undefined, null, 1, new Error("controlled early timer failure")]) {
+  test("readiness owner retains early timer rejection " + (reason === undefined ? "undefined" : reason === null ? "null" : typeof reason), async () => {
+    const h = readinessTestHarness(); h.timer.reject(reason); const result = await h.outcome;
+    assert.equal(result.status, "rejected"); assert.equal(result.reason, reason);
+    assert.equal(h.witness.snapshot("m0_wav").cancelCalls, 0); assert.equal(h.witness.snapshot("m0_wav").joined, true);
+    assert.equal(h.waiting.size, 0);
+  });
+}
+
+for (const reason of [undefined, null, "unexpected primitive"]) {
+  test("readiness owner refuses nonobject rejection after cancellation " + String(reason), async () => {
+    const h = readinessTestHarness({ cancel({ native, value, timer }) { native.abort(value); timer.reject(reason); } });
+    h.notify(); const result = await h.outcome;
+    assert.equal(result.status, "rejected"); assert.equal(result.reason, reason); assert.equal(h.witness.snapshot("m0_wav").joined, true);
+  });
+}
+
+test("readiness owner preserves undefined cancellation throw and joins later original expiry", async () => {
+  const h = readinessTestHarness({ cancel() { throw undefined; } }); h.notify(); await h.cancellation.pending;
+  assert.equal(h.settled, false); h.timer.resolve(); const result = await h.outcome;
+  assert.equal(result.status, "rejected"); assert.ok(result.reason instanceof AggregateError);
+  assert.equal(result.reason.errors[0], undefined); assert.equal(result.reason.errors.length, 2);
+  assert.equal(h.witness.snapshot("m0_wav").cancelReturned, false); assert.equal(h.witness.snapshot("m0_wav").joined, true);
+});
+
+test("readiness owner preabort performs no timer or resolver acquisition", async () => {
+  const reason = new Error("controlled request preabort"), h = readinessTestHarness({ requestSignal: AbortSignal.abort(reason) });
+  assert.equal((await h.outcome).reason, reason); assert.equal(h.timerCalls, 0); assert.equal(h.waiting.size, 0);
+  assert.equal(h.witness.snapshot("m0_wav").wait_entered, null);
+});
+
+test("readiness owner joins request abort and removes its original listener", async () => {
+  const original = new AbortController(), listeners = new Set(), reason = new Error("controlled request abort");
+  const signal = { get aborted() { return original.signal.aborted; }, get reason() { return original.signal.reason; },
+    addEventListener(type, listener, options) { listeners.add(listener); original.signal.addEventListener(type, listener, options); },
+    removeEventListener(type, listener) { original.signal.removeEventListener(type, listener); listeners.delete(listener); } };
+  const h = readinessTestHarness({ requestSignal: signal }); assert.equal(listeners.size, 1);
+  original.abort(reason); const result = await h.outcome;
+  assert.equal(result.status, "rejected"); assert.equal(result.reason, reason); assert.equal(listeners.size, 0);
+  assert.equal(h.witness.snapshot("m0_wav").joined, true); assert.equal(h.waiting.size, 0);
+});
+
+test("readiness owner cleanup retains undefined removal failure and foreign map ownership", async () => {
+  const original = new AbortController(), foreign = () => {}, signal = {
+    get aborted() { return original.signal.aborted; }, get reason() { return original.signal.reason; },
+    addEventListener(...args) { original.signal.addEventListener(...args); },
+    removeEventListener(...args) { original.signal.removeEventListener(...args); throw undefined; } };
+  const h = readinessTestHarness({ requestSignal: signal }); h.notify(); h.waiting.set("m0_wav", foreign);
+  const result = await h.outcome; assert.equal(result.status, "rejected"); assert.ok(result.reason instanceof AggregateError);
+  assert.equal(result.reason.errors.length, 2); assert.equal(result.reason.errors[1], undefined); assert.equal(h.waiting.get("m0_wav"), foreign);
+  assert.equal(h.witness.snapshot("m0_wav").listenerRemoved, false);
+});
+
+test("readiness owner refuses duplicate and unknown bindings without touching their resolvers", async () => {
+  const resolver = () => {}, waiting = new Map([["m0_wav", resolver]]), h = readinessTestHarness({ waiting });
+  assert.equal((await h.outcome).status, "rejected"); assert.equal(h.timerCalls, 0); assert.equal(waiting.get("m0_wav"), resolver);
+  await assert.rejects(waitForReadiness("unknown", waiting, h.witness, new AbortController().signal, h.runtime));
+  assert.equal(h.timerCalls, 0); assert.equal(waiting.get("m0_wav"), resolver);
+});
+
+test("readiness closed snapshot validator refuses open fields and bounds worst-case state", () => {
+  const witness = createReadinessWitness(["m0_wav"]), row = witness.snapshot("m0_wav");
+  assert.equal(validateReadinessSnapshot({ ...row, timer: "resolved" }, "m0_wav"), false);
+  assert.equal(validateReadinessSnapshot({ ...row, cancelCalls: 2 }, "m0_wav"), false);
+  assert.equal(validateReadinessSnapshot({ ...row, joined: null }, "m0_wav"), false);
+  assert.equal(validateReadinessSnapshot({ ...row, failureCount: 1001 }, "m0_wav"), false);
+  const worst = { ...row, wait_entered: 1000000, resolver_called: 1000000, resolver_returned: 1000000, wait_returned: 1000000,
+    matchingPosts: 1000, waitCount: 1000, cancelCalls: 1, failureCount: 1000, timer: "fulfilled", notification: "fulfilled", task: "fulfilled" };
+  assert.equal(validateReadinessSnapshot(worst, "m0_wav"), true); assert.ok(Buffer.byteLength(JSON.stringify(worst)) < 768);
+});
+
+test("original readiness witness snapshots do not resolve, replace or react to the waiter", async () => {
+  const witness = createReadinessWitness(["m0_wav"]), waiting = new Map(); let originalResolver, returned = false;
+  const pending = new Promise(resolve => { originalResolver = resolve; waiting.set("m0_wav", resolve); witness.entered("m0_wav"); });
+  const continuation = (async () => { await pending; witness.resumed("m0_wav"); returned = true; })();
+  const before = witness.snapshot("m0_wav");
+  assert.equal(validateReadinessSnapshot(before, "m0_wav"), true);
+  assert.deepEqual(before, { ...createReadinessWitness(["m0_wav"]).snapshot("m0_wav"), wait_entered: 1, waitCount: 1 });
+  assert.equal(waiting.get("m0_wav"), originalResolver); assert.equal(returned, false);
+  before.wait_returned = 99; assert.equal(witness.snapshot("m0_wav").wait_returned, null);
+  assert.equal(witness.snapshot("unknown"), null); assert.throws(() => witness.entered("unknown"));
+  witness.post("m0_wav"); const resolver = waiting.get("m0_wav"); witness.called("m0_wav"); resolver(); witness.returned("m0_wav"); waiting.delete("m0_wav");
+  assert.equal(returned, false); await continuation;
+  assert.deepEqual(witness.snapshot("m0_wav"), { ...createReadinessWitness(["m0_wav"]).snapshot("m0_wav"), wait_entered: 1, resolver_called: 2, resolver_returned: 3, wait_returned: 4, matchingPosts: 1, waitCount: 1 });
+  const plain = witness.snapshot("m0_wav"); let accesses = 0;
+  assert.equal(validateReadinessSnapshot({ ...plain, extra: true }, "m0_wav"), false);
+  assert.equal(validateReadinessSnapshot(Object.defineProperty({ ...plain }, "matchingPosts", { get() { accesses++; return 1; } }), "m0_wav"), false);
+  assert.equal(validateReadinessSnapshot(new Proxy(plain, { getPrototypeOf() { accesses++; throw undefined; } }), "m0_wav"), false);
+  assert.equal(accesses, 0);
+});
+
+test("original tool outcome callbacks retain case ownership and original values including undefined", async () => {
+  const source = musicDiagnosticSource, first = source.indexOf("// BEGIN original tool outcome observation."), last = source.indexOf("// END original tool outcome observation.");
+  assert.ok(first >= 0 && last > first);
+  const attach = new Function("pending", "observedTool", stripTypeScriptTypes(source.slice(first, last)) + ";return outcome;");
+  const firstOwner = { state: "pending" }, nextOwner = { state: "pending" }, original = deferredOriginal();
+  const observed = attach(original.pending, firstOwner); assert.equal(firstOwner.state, "pending");
+  original.reject(undefined); const rejected = await observed;
+  assert.deepEqual(rejected, { ok: false, reason: undefined }); assert.equal(firstOwner.state, "rejected"); assert.equal(nextOwner.state, "pending");
+  const value = {}, normal = await attach(Promise.resolve(value), nextOwner);
+  assert.equal(normal.value, value); assert.deepEqual(normal, { ok: true, value }); assert.equal(nextOwner.state, "fulfilled");
+});
+
+test("music diagnostic dispatcher snapshot reports offending original membership and outcome counts", async () => {
+  const protocol = createMusicProtocol(nodeTypes.isProxy), counts = protocol.failureCounts();
+  const fulfilled = Promise.resolve(), rejected = Promise.reject(undefined), unobserved = new Promise(() => {}); void rejected.catch(() => {});
+  const outcomes = new Map([[fulfilled, { status: "fulfilled", value: undefined }], [rejected, { status: "rejected", reason: undefined }]]);
+  counts.dispatcher({ retirements: 2, pending: [fulfilled, fulfilled, rejected, unobserved] }, outcomes);
+  counts.dispatcher({ retirements: 0, pending: [] }, outcomes);
+  assert.deepEqual(counts.snapshot(), { d_retirements: 2, d_promises: 4, d_fulfilled: 1, d_rejected: 1, d_pending: 1, d_violations: 2 });
+  const record = protocol.record({ ...musicDiagnosticContext("native", "abort_headers", "original_join", "cleanup"), ...counts.snapshot(), observedOutcome: "pending", partialDelivery: null }, true, undefined);
+  assert.equal(protocol.validate({ ...record, observedOutcome: "resolved" }), undefined);
+  assert.equal(protocol.validate({ ...record, d_pending: -1 }), undefined);
+  const lines = [], emitter = protocol.emitter(line => lines.push(line));
+  emitter.fail(protocol.record({ ...musicDiagnosticContext("native", "abort_headers", "started_status"), httpStatus: 500, observedOutcome: "rejected", toolReturned: true, callerAborted: false, partialDelivery: null }, true, undefined));
+  emitter.put(record); emitter.flush();
+  assert.equal(lines.length, 2); assert.ok(lines.every(line => Buffer.byteLength(line) <= 768));
+  assert.equal(JSON.parse(lines[0].slice("::error title=Music contract diagnostic::".length)).observedOutcome, "rejected");
+  assert.equal(JSON.parse(lines[1].slice("::error title=Music contract diagnostic::".length)).d_promises, 4);
+  await Promise.allSettled([fulfilled, rejected]);
 });
