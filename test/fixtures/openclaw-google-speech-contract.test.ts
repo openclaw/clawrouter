@@ -3,7 +3,8 @@ import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { types as nodeTypes } from "node:util";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as guardedFetch from "../../infra/net/fetch-guard.js";
 import type { DispatcherAwareRequestInit } from "../../infra/net/runtime-fetch.js";
@@ -177,7 +178,164 @@ const undici = createRequire(import.meta.url)("undici/index.js") as typeof impor
 const originalRuntimeFetch = undici.fetch;
 const originalGuard = guardedFetch.fetchWithSsrFGuard;
 const key = (name: string) => `clawrouter-live-gs_${name}-fixture-secret`;
+// BEGIN Google private ownership. Extracted with inert values by the outer tests.
+function googleOwnership(isCurrent: () => boolean, bindings: WeakMap<object, any>, isPromise: (value: unknown) => boolean) {
+  const generation = Object.freeze({}), entries: any[] = [], calls: any[] = [], failures: unknown[] = [], restores: Array<() => void> = [];
+  const promises = new WeakMap<object, any>();
+  let cursor = 0, inFlight: Promise<void> | undefined, finalFlight: Promise<object> | undefined, publicClosed = false, final: object | undefined, invalid = false;
+  function fault(error: unknown) { failures.push(error); if (final) invalid = true; }
+  function fail(message: string): never { const error = new Error(message); fault(error); throw error; }
+  function use(publicOperation = false) {
+    if (!isCurrent() || final || (publicOperation && publicClosed)) fail("Google ownership generation is closed or foreign");
+  }
+  function bind(value: object, kind: string, row: object) {
+    use();
+    if (!value || (typeof value !== "object" && typeof value !== "function")) fail("missing Google resource identity");
+    const previous = bindings.get(value);
+    if (previous && (previous.generation !== generation || previous.kind !== kind || previous.row !== row)) fail("aliased Google resource identity");
+    if (!previous) bindings.set(value, { generation, kind, row });
+    return value;
+  }
+  function lookup(value: object, kind: string) {
+    use(); const found = bindings.get(value);
+    if (!found || found.generation !== generation || found.kind !== kind) fail("unmatched Google resource identity");
+    return found.row;
+  }
+  function watch(original: Promise<unknown>, row: object, kind: string, required = false, observe?: (outcome: any) => unknown, binding?: object) {
+    use();
+    if (!isPromise(original)) fail("missing original Google promise");
+    const previous = promises.get(original);
+    if (previous) {
+      // Only an exact close/release forwarding chain may share its original P.
+      if (previous.row !== row || !["close", "release"].includes(kind) || !["close", "release"].includes(previous.kind) || previous.kind === kind) fail("aliased Google operation promise");
+      previous.required ||= required; if (binding) previous.bindings.push(binding);
+      if (observe) {
+        const follow = (async () => { await previous.tail; return observe(previous.outcome); })();
+        watch(follow, row, "observer", true);
+      }
+      return previous;
+    }
+    bind(original, "promise", row);
+    const entry: any = { original, row, kind, required, bindings: binding ? [binding] : [], outcome: undefined, tail: undefined };
+    promises.set(original, entry); entries.push(entry);
+    // This is the single retained settlement observer on this original. Drains
+    // join its continuation, never subscribe to the original again.
+    entry.tail = (async () => {
+      let outcome;
+      try { outcome = { status: "fulfilled", value: await original }; }
+      catch (reason) { outcome = { status: "rejected", reason }; }
+      entry.outcome = outcome;
+      if (outcome.status === "rejected" && entry.required) fault(outcome.reason);
+      try {
+        const tail = observe?.(outcome);
+        if (isPromise(tail)) {
+          if (tail === inFlight || tail === finalFlight) throw new Error("Google observer cannot join its own drain");
+          watch(tail as Promise<unknown>, row, "observer", true, undefined, Object.freeze({ generation, parent: entry }));
+        }
+      } catch (error) { fault(error); }
+    })();
+    return entry;
+  }
+  function invoke(row: object, resource: object, method: (...args: any[]) => any, receiver: unknown, args: unknown[], kind: string) {
+    use();
+    const call: any = { generation, row, resource, method, receiver, args: Object.freeze([...args]), kind, outcome: undefined };
+    calls.push(call);
+    try { const value = Reflect.apply(method, receiver, args); call.outcome = Object.freeze({ value }); return { value, call }; }
+    catch (error) { call.outcome = Object.freeze({ error }); fault(error); throw error; }
+  }
+  function raise() {
+    if (failures.length === 1) throw failures[0];
+    if (failures.length) throw new AggregateError([...failures], "Google original ownership or observation failed");
+  }
+  function drain() {
+    if (final) return Promise.resolve().then(() => { assertFinal(); });
+    if (inFlight) return inFlight;
+    inFlight = Promise.resolve().then(async () => {
+      for (;;) {
+        while (cursor < entries.length) {
+          const batch = entries.slice(cursor); cursor += batch.length;
+          const results = await Promise.allSettled(batch.map(entry => entry.tail));
+          for (const result of results) if (result.status === "rejected") fault(result.reason);
+        }
+        await Promise.resolve();
+        if (cursor === entries.length) break;
+      }
+      raise();
+    }).finally(() => { inFlight = undefined; });
+    return inFlight;
+  }
+  const sameDescriptor = (a?: PropertyDescriptor, b?: PropertyDescriptor) => a === undefined || b === undefined ? a === b
+    : a.value === b.value && a.get === b.get && a.set === b.set && a.writable === b.writable && a.enumerable === b.enumerable && a.configurable === b.configurable;
+  function install(target: object, key: PropertyKey, apply: () => any, restore: (value: any) => void) {
+    use(); const before = Object.getOwnPropertyDescriptor(target, key);
+    let value: any, installed = before;
+    restores.push(() => {
+      if (!sameDescriptor(Object.getOwnPropertyDescriptor(target, key), installed)) throw new Error("Google descriptor custody changed");
+      restore(value);
+      if (!sameDescriptor(Object.getOwnPropertyDescriptor(target, key), before)) throw new Error("Google descriptor restoration changed");
+    });
+    try { value = apply(); return value; }
+    catch (error) { fault(error); throw error; }
+    finally { installed = Object.getOwnPropertyDescriptor(target, key); }
+  }
+  function replace(target: object, key: PropertyKey, value: unknown) {
+    const before = Object.getOwnPropertyDescriptor(target, key);
+    install(target, key, () => Object.defineProperty(target, key, { configurable: true, enumerable: true, writable: true, value }),
+      () => { if (before) Object.defineProperty(target, key, before); else Reflect.deleteProperty(target, key); });
+  }
+  function finish() {
+    if (final) return Promise.resolve().then(assertFinal);
+    if (finalFlight) return finalFlight;
+    publicClosed = true;
+    finalFlight = (async () => {
+      try { await drain(); } catch { /* failures remain in their original ordered ledger */ }
+      for (const restore of restores.splice(0).reverse()) { try { restore(); } catch (error) { fault(error); } }
+      try { await drain(); } catch { /* restoration may append an owned observer tail */ }
+      for (const call of calls) Object.freeze(call);
+      final = Object.freeze({ generation, originals: entries.length, observers: cursor,
+        calls: Object.freeze([...calls]),
+        operations: Object.freeze(entries.map(entry => Object.freeze({ original: entry.original, row: entry.row, kind: entry.kind,
+          bindings: Object.freeze([...entry.bindings]), outcome: Object.freeze({ ...entry.outcome }) }))) });
+      invalid ||= failures.length > 0; raise(); return final;
+    })();
+    return finalFlight;
+  }
+  function outcome(original: Promise<unknown>, row: object) {
+    const entry = promises.get(original);
+    if (!entry || entry.row !== row || !entry.outcome) fail("missing settled Google original");
+    return entry.outcome;
+  }
+  function assertFinal() {
+    raise(); if (!final || invalid || cursor !== entries.length) fail("missing stable Google final seal");
+    return final;
+  }
+  return { generation, use, bind, lookup, watch, invoke, outcome, drain, finish, assertFinal, fault, install, replace, fail };
+}
+// END Google private ownership.
+
+const resourceBindings = new WeakMap<object, any>();
+const invocationContext = new AsyncLocalStorage<object>();
+const guardContext = new AsyncLocalStorage<{ generation: object }>();
+let ownership: ReturnType<typeof googleOwnership>;
+const ownershipHistory: Array<ReturnType<typeof googleOwnership>> = [];
+function spyOwned(owner: ReturnType<typeof googleOwnership>, target: any, key: string, implementation: (original: any) => any) {
+  let original, wrapped;
+  try { original = target[key]; wrapped = implementation(original); } catch (error) { owner.fault(error); throw error; }
+  const spy = owner.install(target, key, () => vi.spyOn(target, key), installed => installed.mockRestore());
+  try { spy.mockImplementation(wrapped); } catch (error) { owner.fault(error); throw error; }
+  return spy;
+}
 type Observation = {
+  owner: ReturnType<typeof googleOwnership>;
+  invocation: object;
+  guardInvocation?: object;
+  acquisition?: Promise<unknown>;
+  response?: Response;
+  bodyCaptured?: boolean;
+  body?: ReadableStream<Uint8Array> | null;
+  fetchReceiver: object;
+  fetchArgs: [RequestInfo | URL, DispatcherAwareRequestInit | undefined];
+  closed: Array<ReturnType<ReturnType<typeof googleOwnership>["watch"]>>;
   path: string;
   credential: string;
   releaseReturned: boolean;
@@ -208,46 +366,69 @@ beforeEach(() => {
   diagnosticCase = null; diagnosticCaller = undefined;
   mark("setup", "progress", "entered");
   try {
+  const owner = googleOwnership(() => ownership === owner, resourceBindings, nodeTypes.isPromise);
+  ownership = owner; ownershipHistory.push(owner);
   expect(process.env.CLAWROUTER_CONTRACT_SOURCE_HEAD).toBe(expectedHead);
   expect(execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim()).toBe(expectedHead);
   // Fake Date alone: actual timers, signals, I/O and cleanup remain native.
-  vi.useFakeTimers({ toFake: ["Date"] });
+  owner.install(globalThis, "Date", () => vi.useFakeTimers({ toFake: ["Date"] }), () => vi.useRealTimers());
   vi.setSystemTime(new Date("2026-11-15T12:00:00Z"));
   observations.length = 0;
   unexpected.length = 0;
   // A plain pass-through keeps the real guard's DNS/dispatcher route. A Vitest
   // fetch spy would select its deliberate no-dispatcher unit-test bypass.
-  vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+  owner.replace(globalThis, "fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+    owner.use(true);
     if (new URL(new Request(input, init).url).origin !== origin) refuse("unexpected client egress");
     return nativeFetch(input, init);
   });
   // The supported runtime-dependency hook is shared by native plugin and Vitest
   // module graphs. All constructors remain original; only real fetch is observed.
-  vi.stubGlobal("__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__", { ...undici, fetch: observeRequest });
-  const observeGuard: typeof originalGuard = async options => {
-    const deadlineAt = options.timeoutMs === undefined ? undefined : performance.now() + options.timeoutMs;
-    const result = await originalGuard(options);
-    const row = observations.find(actual => actual.path === new URL(String(options.url)).pathname
-      && actual.credential === new Headers(options.init?.headers).get("authorization"));
-    if (!row) throw new Error("missing original guard request");
-    row.guardObserved = true;
-    row.deadlineAt = deadlineAt;
-    observeBody(result.response.body, row);
-    return { ...result, release: async () => {
-      await result.release();
-      if (!row) throw new Error("missing original guard request");
-      row.releaseReturned = true;
-    } };
+  owner.replace(globalThis, "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__", { ...undici, fetch: function (...args: [RequestInfo | URL, RequestInit?]) { owner.use(true); return observeRequest(owner, ...args); } });
+  const observeGuard = function (this: unknown, ...args: Parameters<typeof originalGuard>) {
+    owner.use(true);
+    if (invocationContext.getStore() !== owner) owner.fail("foreign Google SDK invocation");
+    const invocation = Object.freeze({ generation: owner.generation, method: originalGuard, receiver: this, args: Object.freeze([...args]) });
+    const options = args[0], deadlineAt = options.timeoutMs === undefined ? undefined : performance.now() + options.timeoutMs;
+    const original = guardContext.run(invocation, () => Reflect.apply(originalGuard, this, args));
+    owner.watch(original, invocation, "guard", false, outcome => {
+      if (outcome.status !== "fulfilled") return;
+      const result = outcome.value, row = owner.lookup(result.response, "response") as Observation;
+      if (row.guardInvocation !== invocation || row.guardObserved || row.response !== result.response) owner.fail("foreign or repeated original Google guard response");
+      row.guardObserved = true; row.deadlineAt = deadlineAt;
+      observeBody(result.response.body, row);
+      spyOwned(owner, result, "release", release => function (this: unknown, ...params: unknown[]) {
+        owner.use();
+        const { value: actual, call } = owner.invoke(row, result, release, this, params, "release");
+        if (nodeTypes.isPromise(actual)) owner.watch(actual, row, "release", true, settled => { if (settled.status === "fulfilled") row.releaseReturned = true; }, call);
+        else if (actual === undefined) row.releaseReturned = true;
+        else owner.fail("unexpected Google release result");
+        return actual;
+      });
+    });
+    return original;
   };
   // Registered speech uses its genuine host context. Neither path fabricates
   // a catalog/response or calls an adapter in place of the registered provider.
-  vi.spyOn(guardedFetch, "fetchWithSsrFGuard").mockImplementation(observeGuard);
-  vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(observeGuard);
+  spyOwned(owner, guardedFetch, "fetchWithSsrFGuard", () => observeGuard);
+  spyOwned(owner, ssrfRuntime, "fetchWithSsrFGuard", () => observeGuard);
   mark("setup", "progress", "fulfilled");
   } catch (error) { mark("setup", "primary", "rejected", true, error); throw error; }
 });
 
-async function observeRequest(input: RequestInfo | URL, supplied?: RequestInit) {
+function observeRequest(owner: ReturnType<typeof googleOwnership>, input: RequestInfo | URL, supplied?: RequestInit) {
+  owner.use(true);
+  if (invocationContext.getStore() !== owner) owner.fail("foreign Google SDK invocation");
+  const guard = guardContext.getStore();
+  if (guard && guard.generation !== owner.generation) owner.fail("stale Google guard invocation");
+  const invocation = Object.freeze({ generation: owner.generation }), state = { originalFailureEscaping: false };
+  const original = observeRequestOwned(owner, invocation, state, input, supplied);
+  owner.watch(original, invocation, "fetch_observer", false, outcome => {
+    if (outcome.status === "rejected" && !state.originalFailureEscaping) owner.fault(outcome.reason);
+  });
+  return original;
+}
+async function observeRequestOwned(owner: ReturnType<typeof googleOwnership>, invocation: object, state: { originalFailureEscaping: boolean }, input: RequestInfo | URL, supplied?: RequestInit) {
   const init = supplied as DispatcherAwareRequestInit | undefined;
   const request = new Request(input, supplied), url = new URL(request.url);
   if (url.origin !== origin || (url.pathname !== "/v1/catalog" && !speechPath(url.pathname)) || url.search) refuse("unexpected speech route");
@@ -257,27 +438,37 @@ async function observeRequest(input: RequestInfo | URL, supplied?: RequestInit) 
   const dispatcher = init?.dispatcher;
   if (!dispatcher) refuse("missing original request dispatcher");
   let closeStarted!: () => void;
-  const row: Observation = { path: url.pathname, credential, releaseReturned: false, failedBeforeResponse: false,
+  const row: Observation = { owner, invocation, fetchReceiver: undici, fetchArgs: [input, init], guardInvocation: guardContext.getStore(), closed: [], path: url.pathname, credential, releaseReturned: false, failedBeforeResponse: false,
     dispatcher, signal: init?.signal, guardObserved: false, closeCalls: [], bodies: [], cancels: [], reads: [], readers: [],
     closeStarted: new Promise(resolve => { closeStarted = resolve; }) };
   observations.push(row);
+  owner.bind(dispatcher, "dispatcher", row);
   const originalClose = dispatcher.close;
   let depth = 0;
-  vi.spyOn(dispatcher, "close").mockImplementation(function (this: typeof dispatcher, ...args: unknown[]) {
+  spyOwned(owner, dispatcher, "close", () => function (this: typeof dispatcher, ...args: unknown[]) {
+    owner.use(); if (this !== dispatcher) owner.fail("foreign Google dispatcher receiver");
     const call: Observation["closeCalls"][number] = { depth, args };
     row.closeCalls.push(call); depth++;
-    try { const value = Reflect.apply(originalClose, this, args); call.outcome = { value }; return value; }
-    catch (error) { call.outcome = { error }; throw error; }
+    try { const invoked = owner.invoke(row, dispatcher, originalClose, this, args, "close"); const value = invoked.value; call.outcome = { value }; if (call.depth === 0 && nodeTypes.isPromise(value)) owner.watch(value as Promise<unknown>, row, "close", true, undefined, invoked.call); return value; }
+    catch (error) { if (!call.outcome) call.outcome = { error }; throw error; }
     finally { depth--; if (call.depth === 0) closeStarted(); }
-  } as typeof dispatcher.close);
+  });
   const identity = reportIdentity(row);
   mark("acquisition", "progress", "entered", false, undefined, {}, identity.caseId, identity.route);
   let response: Response;
+  function originalAcquisitionFailure(error: unknown): never {
+    row.failedBeforeResponse = true;
+    mark("acquisition", "progress", "rejected", true, error, { effectiveAborted: row.signal?.aborted ?? null }, identity.caseId, identity.route);
+    state.originalFailureEscaping = true; throw error;
+  }
+  let original: Promise<Response>;
   try {
-    // Preserve the genuine guard's dispatcher and composed signal through
-    // the original installed Undici fetch, not Node's dispatcher-unaware fetch.
-    response = await Reflect.apply(originalRuntimeFetch, undici, [input, init]) as unknown as Response;
-  } catch (error) { row.failedBeforeResponse = true; mark("acquisition", "progress", "rejected", true, error, { effectiveAborted: row.signal?.aborted ?? null }, identity.caseId, identity.route); throw error; }
+    // Preserve the genuine guard's dispatcher, receiver, operands and original P.
+    original = Reflect.apply(originalRuntimeFetch, row.fetchReceiver, row.fetchArgs) as unknown as Promise<Response>;
+  } catch (error) { return originalAcquisitionFailure(error); }
+  row.acquisition = original; owner.watch(original, row, "acquisition", false, undefined, Object.freeze({ generation: owner.generation, invocation, receiver: row.fetchReceiver, args: Object.freeze([...row.fetchArgs]) }));
+  try { response = await original; } catch (error) { return originalAcquisitionFailure(error); }
+  row.response = response; owner.bind(response, "response", row);
   mark("acquisition", "progress", "fulfilled", false, undefined, {}, identity.caseId, identity.route);
   if (url.pathname === "/v1/catalog" && response.ok) {
     // Inspect the actual response, then return that same response to the guard.
@@ -303,7 +494,7 @@ async function observeRequest(input: RequestInfo | URL, supplied?: RequestInit) 
       // cancellation now, but join only after close to avoid a tee deadlock.
       try {
         const original = response.body?.cancel();
-        if (original) { row.cancels.push(original); void Promise.allSettled([original]); }
+        if (original) { row.cancels.push(original); owner.watch(original, row, "cancel", true); }
       } catch (cleanup) { throw new AggregateError([error, cleanup], "catalog observation and cancellation failed"); }
       throw error;
     }
@@ -313,35 +504,62 @@ async function observeRequest(input: RequestInfo | URL, supplied?: RequestInit) 
 }
 
 function observeBody(body: ReadableStream<Uint8Array> | null, row: Observation) {
+  const owner = row.owner; owner.use();
+  if (row.bodyCaptured && row.body !== body) owner.fail("changed original Google response body");
+  row.bodyCaptured = true; row.body = body;
+  if (body) owner.bind(body, "body", row);
   if (body && !row.bodies.includes(body)) {
     row.bodies.push(body);
-    const cancel = body.cancel.bind(body);
-    const getReader = body.getReader.bind(body) as () => ReadableStreamDefaultReader<Uint8Array>;
-    vi.spyOn(body, "cancel").mockImplementation(reason => {
-      const actual = cancel(reason); row.cancels.push(actual); return actual;
+    spyOwned(owner, body, "cancel", cancel => function (this: typeof body, ...args: unknown[]) {
+      owner.use(); if (this !== body) owner.fail("foreign Google body receiver");
+      const { value: actual, call } = owner.invoke(row, body, cancel, this, args, "body_cancel");
+      row.cancels.push(actual); owner.watch(actual, row, "cancel", true, undefined, call); return actual;
     });
-    vi.spyOn(body, "getReader").mockImplementation(options => {
-      expect(options).toBeUndefined();
-      const reader = getReader();
-      row.readers.push({ reader, unlock: vi.spyOn(reader, "releaseLock") });
-      const read = reader.read.bind(reader);
-      vi.spyOn(reader, "read").mockImplementation(() => { const actual = read(); row.reads.push(actual); return actual; });
-      const cancelReader = reader.cancel.bind(reader);
-      vi.spyOn(reader, "cancel").mockImplementation(reason => {
-        const actual = cancelReader(reason); row.cancels.push(actual); return actual;
+    spyOwned(owner, body, "getReader", getReader => function (this: typeof body, ...args: unknown[]) {
+      owner.use(); if (this !== body) owner.fail("foreign Google body receiver");
+      try { expect(args[0]).toBeUndefined(); } catch (error) { owner.fault(error); throw error; }
+      const acquired = owner.invoke(row, body, getReader, this, args, "getReader"), reader = acquired.value;
+      if (row.readers.some(entry => entry.reader === reader)) owner.fail("repeated Google reader acquisition");
+      owner.bind(reader, "reader", row);
+      // Capture the original C0 exactly once, before this reader is exposed.
+      let closed;
+      try { closed = reader.closed; } catch (error) { owner.fault(error); throw error; }
+      row.closed.push(owner.watch(closed, row, "closed", false, undefined, Object.freeze({ generation: owner.generation, acquisition: acquired.call, body, reader })));
+      const unlock = spyOwned(owner, reader, "releaseLock", release => function (this: typeof reader, ...params: unknown[]) {
+        owner.use(); if (this !== reader) owner.fail("foreign Google reader receiver");
+        return owner.invoke(row, reader, release, this, params, "releaseLock").value;
+      });
+      row.readers.push({ reader, unlock });
+      spyOwned(owner, reader, "read", read => function (this: typeof reader, ...params: unknown[]) {
+        owner.use(); if (this !== reader) owner.fail("foreign Google reader receiver");
+        const { value: actual, call } = owner.invoke(row, reader, read, this, params, "read");
+        row.reads.push(actual); owner.watch(actual, row, "read", false, undefined, call); return actual;
+      });
+      spyOwned(owner, reader, "cancel", cancel => function (this: typeof reader, ...params: unknown[]) {
+        owner.use(); if (this !== reader) owner.fail("foreign Google reader receiver");
+        const { value: actual, call } = owner.invoke(row, reader, cancel, this, params, "reader_cancel");
+        row.cancels.push(actual); owner.watch(actual, row, "cancel", true, undefined, call); return actual;
       });
       return reader;
     });
   }
 }
 
-afterEach(() => {
+afterEach(async () => {
+  const owner = ownership;
   mark("runtime_restore", "progress", "entered");
-  try { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.useRealTimers(); expect(unexpected).toEqual([]); }
+  try { expect(unexpected).toEqual([]); } catch (error) { owner.fault(error); }
+  // All installed descriptors restore independently, after original/observer joins.
+  try { await owner.finish(); }
   catch (error) { mark("runtime_restore", "cleanup", "rejected", true, error); throw error; }
   mark("runtime_restore", "progress", "fulfilled");
-  // Diagnostics never substitute for the original test failure or restoration.
   if (diagnosticFailures.length) throw new AggregateError(diagnosticFailures, "Google diagnostic delivery failed");
+});
+afterAll(() => {
+  const failures: unknown[] = [];
+  for (const owner of ownershipHistory) { try { owner.assertFinal(); } catch (error) { failures.push(error); } }
+  if (diagnosticFailures.length) failures.push(...diagnosticFailures);
+  if (failures.length) throw new AggregateError(failures, "Google final ownership or reporting failed");
 });
 
 async function join(name: string) {
@@ -354,11 +572,13 @@ async function join(name: string) {
     // Joining the actual promise precedes every retirement assertion. Undici's
     // promise overload calls this.close(callback) internally; that is not a
     // second external release. Do not count entry as physical completion.
-    const closes = await Promise.allSettled(external.flatMap(call =>
-      call.outcome && "value" in call.outcome && call.outcome.value instanceof Promise ? [call.outcome.value] : []));
-    const [reads, cancellations] = await Promise.all([
-      Promise.allSettled(row.reads), Promise.allSettled(row.cancels),
-    ]);
+    await row.owner.drain();
+    const closes = external.flatMap(call => call.outcome && "value" in call.outcome && nodeTypes.isPromise(call.outcome.value)
+      ? [row.owner.outcome(call.outcome.value as Promise<unknown>, row)] : []);
+    const reads = row.reads.map(original => row.owner.outcome(original, row));
+    const cancellations = row.cancels.map(original => row.owner.outcome(original, row));
+    expect(row.closed).toHaveLength(row.readers.length);
+    for (const closed of row.closed) expect(["fulfilled", "rejected"]).toContain(closed.outcome?.status);
     const identity = reportIdentity(row);
     mark("original_join", "progress", "fulfilled", false, undefined, {
       reads: reads.length, readRejected: reads.filter(value => value.status === "rejected").length,
@@ -386,7 +606,7 @@ async function join(name: string) {
   });
   // Attempt every original transport and the Worker join before any one
   // observation failure can prevent another owned resource's cleanup.
-  const results = await Promise.allSettled([...transport, command(`/__google/join/gs_${name}`)]);
+  const results = await Promise.allSettled([ownership.drain(), ...transport, command(`/__google/join/gs_${name}`)]);
   const failures = results.filter((value): value is PromiseRejectedResult => value.status === "rejected").map(value => value.reason);
   if (failures.length === 1) throw failures[0];
   if (failures.length) throw new AggregateError(failures, "speech transport or Worker join failed");
@@ -433,7 +653,7 @@ async function fixture(name: string, run: (cfg: OpenClawConfig, prefsPath: strin
     };
     const failures: unknown[] = [];
     mark("body", "progress", "entered");
-    try { await run(cfg, state.home + "/tts-prefs.json"); mark("body", "progress", "fulfilled", false, undefined, { callerAborted: diagnosticCaller?.aborted ?? null }); } catch (error) { failures.push(error); mark("body", "primary", "rejected", true, error, { callerAborted: diagnosticCaller?.aborted ?? null }); }
+    try { await invocationContext.run(ownership, () => run(cfg, state.home + "/tts-prefs.json")); mark("body", "progress", "fulfilled", false, undefined, { callerAborted: diagnosticCaller?.aborted ?? null }); } catch (error) { failures.push(error); mark("body", "primary", "rejected", true, error, { callerAborted: diagnosticCaller?.aborted ?? null }); }
     try { await join(name); } catch (error) { failures.push(error); }
     if (failures.length === 1) throw failures[0];
     if (failures.length) throw new AggregateError(failures, "speech assertion or original cleanup failed");

@@ -788,3 +788,217 @@ test("Google original join retains each later failure after an earlier record re
   assert.equal(watched.calls(), 1);
 });
 // END Google original join pure tests.
+
+// BEGIN Google ownership pure tests.
+function googleOwnershipHelpers() {
+  const start = sdkText.indexOf("// BEGIN Google private ownership."), end = sdkText.indexOf("// END Google private ownership.");
+  const spyStart = sdkText.indexOf("function spyOwned("), spyEnd = sdkText.indexOf("type Observation =", spyStart);
+  const bodyStart = sdkText.indexOf("function observeBody("), bodyEnd = sdkText.indexOf("\nafterEach(", bodyStart);
+  assert.ok(start >= 0 && end > start && spyStart > end && bodyEnd > bodyStart);
+  const vi = { spyOn(target, key) {
+    const before = Object.getOwnPropertyDescriptor(target, key), original = target[key];
+    let implementation = original;
+    function spy(...args) { spy.mock.calls.push(args); return Reflect.apply(implementation, this, args); }
+    spy.mock = { calls: [] };
+    spy.mockImplementation = fn => { implementation = fn; return spy; };
+    spy.mockRestore = () => { if (before) Object.defineProperty(target, key, before); else Reflect.deleteProperty(target, key); };
+    Object.defineProperty(target, key, { configurable: true, enumerable: true, writable: true, value: spy });
+    return spy;
+  } };
+  const expect = value => ({ toBeUndefined() { assert.equal(value, undefined); } });
+  return new Function("vi", "expect", stripTypeScriptTypes(sdkText.slice(start, end) + sdkText.slice(spyStart, spyEnd) + sdkText.slice(bodyStart, bodyEnd))
+    + ";return {googleOwnership,spyOwned,observeBody};")(vi, expect);
+}
+function googleInertOwner(bindings = new WeakMap()) {
+  const helpers = googleOwnershipHelpers(); let current;
+  const owner = helpers.googleOwnership(() => current === owner, bindings, nodeTypes.isPromise); current = owner;
+  return { ...helpers, owner, replaceGeneration() { current = {}; } };
+}
+function googleInertRow(owner) { return { owner, invocation: {}, bodies: [], readers: [], closed: [], reads: [], cancels: [] }; }
+function googleInertReader(closed, read = Promise.resolve({ done: true }), cancel = Promise.resolve()) {
+  const calls = []; let closedGets = 0;
+  const reader = { get closed() { closedGets++; return closed; }, read(...args) { calls.push(["read", this, args]); return read; },
+    cancel(...args) { calls.push(["cancel", this, args]); return cancel; }, releaseLock(...args) { calls.push(["release", this, args]); } };
+  const body = { getReader(...args) { calls.push(["getReader", this, args]); return reader; }, cancel(...args) { calls.push(["bodyCancel", this, args]); return cancel; } };
+  return { reader, body, calls, closedGets: () => closedGets };
+}
+test("Google ownership rejects aliased responses, bodies, readers, promises and stale generations", async () => {
+  for (const kind of ["response", "body", "reader", "promise", "dispatcher"]) {
+    const bindings = new WeakMap(), first = googleInertOwner(bindings), row = {};
+    const value = kind === "promise" ? Promise.resolve() : {};
+    first.owner.bind(value, kind, row);
+    assert.equal(first.owner.lookup(value, kind), row);
+    assert.throws(() => first.owner.bind(value, kind, {}), /aliased/);
+    await assert.rejects(first.owner.finish());
+    const second = googleInertOwner(bindings);
+    assert.throws(() => second.owner.bind(value, kind, row), /aliased/);
+    await assert.rejects(second.owner.finish());
+  }
+  const { owner, replaceGeneration } = googleInertOwner(); replaceGeneration();
+  assert.throws(() => owner.use(), /foreign/); await assert.rejects(owner.finish());
+});
+for (const reason of [{ original: "closed" }, undefined]) {
+  test(`Google original C0 captures once and retains ${reason === undefined ? "undefined" : "defined"} outcome before seal`, async () => {
+    const { owner, observeBody } = googleInertOwner(), row = googleInertRow(owner);
+    const closed = joinDeferred(), read = joinDeferred(), original = googleInertReader(closed.promise, read.promise);
+    observeBody(original.body, row); assert.equal(original.body.getReader(), original.reader); assert.equal(original.closedGets(), 1);
+    const operand = {};
+    assert.equal(original.reader.read(operand), read.promise);
+    const first = owner.drain(), second = owner.drain(); assert.equal(first, second);
+    const result = joinOutcome(first); read.resolve({ done: true }); await flushJoinJobs(); const early = result.settled;
+    closed.reject(reason); await result.done;
+    assert.equal(early, false); assert.equal(result.rejected, false);
+    assert.equal(row.closed[0].original, closed.promise); assert.equal(row.closed[0].outcome.status, "rejected"); assert.equal(row.closed[0].outcome.reason, reason);
+    assert.equal(original.closedGets(), 1); assert.equal(original.calls[1][1], original.reader); assert.equal(original.calls[1][2][0], operand);
+    original.reader.releaseLock(); const seal = await owner.finish(); assert.ok(Object.isFrozen(seal)); assert.equal(owner.assertFinal(), seal);
+    const rawRead = seal.operations.find(entry => entry.kind === "read");
+    assert.equal(rawRead.original, read.promise); assert.equal(rawRead.bindings[0].resource, original.reader);
+    assert.equal(rawRead.bindings[0].receiver, original.reader); assert.equal(rawRead.bindings[0].args[0], operand);
+    assert.ok(seal.calls.every(call => Object.isFrozen(call) && Object.isFrozen(call.args)));
+  });
+}
+test("Google ownership rejects changed body and repeated reader acquisition", async () => {
+  for (const mode of ["body", "reader"]) {
+    const { owner, observeBody } = googleInertOwner(), row = googleInertRow(owner), original = googleInertReader(Promise.resolve());
+    observeBody(original.body, row); original.body.getReader();
+    assert.throws(() => mode === "body" ? observeBody({}, row) : original.body.getReader());
+    await assert.rejects(owner.finish()); assert.equal(original.closedGets(), 1);
+  }
+});
+test("Google ownership joins appended observer tails and concurrent reentrant drains", async () => {
+  const { owner } = googleInertOwner(), row = {}, original = joinDeferred(), tail = joinDeferred();
+  let nested;
+  owner.watch(original.promise, row, "read", false, () => { nested = owner.drain(); return tail.promise; });
+  const first = owner.drain(), second = owner.drain(); assert.equal(first, second);
+  const result = joinOutcome(first); original.resolve(); await flushJoinJobs(); const early = result.settled;
+  assert.equal(nested, first); tail.resolve(); await result.done;
+  assert.equal(early, false); assert.equal(result.rejected, false);
+  await owner.drain(); const seal = await owner.finish(); assert.equal(seal.originals, 2); assert.equal(seal.observers, 2);
+});
+test("Google ownership joins held originals after undefined observer failure and preserves independent source failure", async () => {
+  const { owner } = googleInertOwner(), row = {}, held = joinDeferred(), source = { original: true };
+  owner.watch(Promise.resolve(), row, "read", false, () => { throw undefined; });
+  owner.watch(held.promise, row, "cancel", true);
+  const result = joinOutcome(owner.drain()); await flushJoinJobs(); const early = result.settled;
+  held.reject(source); await result.done;
+  assert.equal(early, false); assert.equal(result.rejected, true); exactJoinFailures(result.value, [undefined, source]);
+  await assert.rejects(owner.finish(), error => { exactJoinFailures(error, [undefined, source]); return true; });
+});
+test("Google ownership restores independently and rejects descriptor substitution", async () => {
+  const { owner } = googleInertOwner(), original = () => {}, replacement = () => {}, foreign = () => {};
+  const first = { run: original }, second = { run: original };
+  owner.replace(first, "run", replacement); owner.replace(second, "run", replacement); first.run = foreign;
+  await assert.rejects(owner.finish(), /custody/);
+  assert.equal(first.run, foreign); assert.equal(second.run, original); assert.throws(() => owner.assertFinal());
+});
+test("Google final seal is permanent, shared, and invalidated by saved late wrappers or late failure", async () => {
+  for (const mode of ["operation", "failure"]) {
+    const { owner, observeBody } = googleInertOwner(), row = googleInertRow(owner), original = googleInertReader(Promise.resolve());
+    observeBody(original.body, row); original.body.getReader(); const late = original.reader.read;
+    const first = owner.finish(), second = owner.finish(); assert.equal(first, second); const seal = await first;
+    const calls = original.calls.length;
+    if (mode === "operation") assert.throws(() => late.call(original.reader), /closed/); else owner.fault(undefined);
+    assert.equal(original.calls.length, calls); assert.ok(Object.isFrozen(seal));
+    let failed = false; try { owner.assertFinal(); } catch { failed = true; } assert.equal(failed, true);
+    await assert.rejects(owner.finish());
+  }
+});
+test("Google restoration preserves undefined failure and still joins restoration-appended work", async () => {
+  const { owner } = googleInertOwner(), target = { value: 1 }, row = {}, held = joinDeferred();
+  owner.install(target, "value", () => { target.value = 2; }, () => { target.value = 1; owner.watch(held.promise, row, "observer", true); throw undefined; });
+  const result = joinOutcome(owner.finish()); await flushJoinJobs(); const early = result.settled;
+  held.resolve(); await result.done; assert.equal(early, false); assert.equal(result.rejected, true); assert.equal(result.value, undefined); assert.equal(target.value, 1);
+});
+test("Google guard association uses exact response and invocation and preserves original P/release operands", async () => {
+  const sdkStart = sdkText.indexOf("  const observeGuard = function"), sdkEnd = sdkText.indexOf("  // Registered speech uses", sdkStart);
+  const source = stripTypeScriptTypes(sdkText.slice(sdkStart, sdkEnd));
+  for (const mode of ["exact", "foreignResponse", "foreignInvocation"]) {
+    const { owner, spyOwned, observeBody } = googleInertOwner(), row = googleInertRow(owner);
+    const original = googleInertReader(Promise.resolve()), response = { body: original.body }, releaseP = Promise.resolve();
+    const releaseCalls = [], result = { response, release(...args) { releaseCalls.push([this, args]); return releaseP; } };
+    let guardP;
+    const guardContext = { run(token, fn) { row.guardInvocation = mode === "foreignInvocation" ? {} : token; return fn(); } };
+    row.response = response; owner.bind(mode === "foreignResponse" ? {} : response, "response", row);
+    const guard = new Function("owner", "guardContext", "originalGuard", "performance", "observeBody", "spyOwned", "nodeTypes", "invocationContext", source + ";return observeGuard;")(
+      owner, guardContext, function (...args) { assert.equal(this, receiver); assert.equal(args[0], options); guardP = Promise.resolve(result); return guardP; }, { now: () => 0 }, observeBody, spyOwned, nodeTypes, { getStore: () => owner });
+    const receiver = {}, options = {}; assert.equal(guard.call(receiver, options), guardP);
+    if (mode !== "exact") { await assert.rejects(owner.drain()); await assert.rejects(owner.finish()); continue; }
+    await owner.drain(); const operand = {}; assert.equal(result.release(operand), releaseP);
+    await owner.drain(); assert.equal(releaseCalls[0][0], result); assert.equal(releaseCalls[0][1][0], operand); assert.equal(row.releaseReturned, true);
+    await owner.finish();
+  }
+});
+test("Google close/release forwarding shares its exact P while cross-owner alias remains fatal", async () => {
+  const { owner } = googleInertOwner(), row = {}, original = joinDeferred(); let observed = false;
+  const first = owner.watch(original.promise, row, "close", true);
+  const second = owner.watch(original.promise, row, "release", true, () => { observed = true; });
+  assert.equal(first, second); const result = joinOutcome(owner.drain()); await flushJoinJobs(); const early = result.settled;
+  original.resolve(null); await result.done; assert.equal(early, false); assert.equal(observed, true);
+  assert.throws(() => owner.watch(original.promise, {}, "release", true), /aliased/); await assert.rejects(owner.finish());
+});
+function googleAcquisitionFixture(runtimeFetch, foreignInvocation = false) {
+  const harness = googleInertOwner(), observations = [], undici = {};
+  const token = { generation: harness.owner.generation };
+  const a = sdkText.indexOf("function observeRequest("), b = sdkText.indexOf("function observeBody(", a);
+  const source = stripTypeScriptTypes(sdkText.slice(a, b));
+  const Request = class { constructor(input, init) { this.url = input; this.headers = { has: () => false, get: () => init.credential }; } };
+  const URL = class { constructor(url) { this.origin = "fixture"; this.pathname = url; this.search = ""; } };
+  const observe = new Function("Request", "URL", "origin", "speechPath", "refuse", "observations", "guardContext", "undici", "originalRuntimeFetch", "spyOwned", "reportIdentity", "mark", "nodeTypes", "observeBody", "invocationContext", source + ";return observeRequest;")(
+    Request, URL, "fixture", () => true, message => { throw new Error(message); }, observations, { getStore: () => token }, undici,
+    runtimeFetch, harness.spyOwned, () => ({ caseId: null, route: "native" }), () => {}, nodeTypes, harness.observeBody, { getStore: () => foreignInvocation ? {} : harness.owner });
+  return { ...harness, observations, undici, token, observe: (...args) => observe(harness.owner, ...args) };
+}
+test("Google original acquisition binds actual receiver, operands, P and returned resource chain", async () => {
+  const acquisition = joinDeferred(), closed = joinDeferred(), original = googleInertReader(closed.promise), response = { body: original.body };
+  let actualThis, actualArgs;
+  const harness = googleAcquisitionFixture(function (...args) { actualThis = this; actualArgs = args; return acquisition.promise; });
+  const input = "/v1/native/google-gemini/v1beta/models/gemini-fixture:generateContent", init = { credential: "owned", dispatcher: { close() { return Promise.resolve(null); } } };
+  const returned = harness.observe(input, init); acquisition.resolve(response); assert.equal(await returned, response);
+  const row = harness.observations[0];
+  assert.equal(actualThis, harness.undici); assert.equal(actualArgs[0], input); assert.equal(actualArgs[1], init);
+  assert.equal(row.acquisition, acquisition.promise); assert.equal(row.fetchReceiver, actualThis); assert.equal(row.fetchArgs[1], init);
+  assert.equal(row.response, response); assert.equal(row.guardInvocation, harness.token); assert.equal(harness.owner.lookup(response, "response"), row);
+  assert.equal(original.body.getReader(), original.reader); closed.resolve(); await init.dispatcher.close(); await harness.owner.finish();
+});
+for (const reason of [{ original: "acquisition" }, undefined]) {
+  test(`Google preserves separate expected ${reason === undefined ? "undefined" : "defined"} acquisition failure without borrowing observer status`, async () => {
+    const original = joinDeferred(), harness = googleAcquisitionFixture(() => original.promise);
+    const init = { credential: "owned", dispatcher: { close() { return Promise.resolve(null); } } };
+    const outcome = joinOutcome(harness.observe("/native", init)); original.reject(reason); await outcome.done;
+    assert.equal(outcome.rejected, true); assert.equal(outcome.value, reason); assert.equal(harness.observations[0].failedBeforeResponse, true);
+    await init.dispatcher.close(); await harness.owner.finish();
+  });
+}
+test("Google acquisition observer failures cannot masquerade as expected fetch failures", async () => {
+  const response = { get body() { throw undefined; } }, harness = googleAcquisitionFixture(() => Promise.resolve(response));
+  const init = { credential: "owned", dispatcher: { close() { return Promise.resolve(null); } } };
+  const result = joinOutcome(harness.observe("/native", init)); await result.done;
+  assert.equal(result.rejected, true); assert.equal(result.value, undefined); assert.equal(harness.observations[0].failedBeforeResponse, false);
+  await init.dispatcher.close();
+  await assert.rejects(harness.owner.finish(), error => { assert.equal(error, undefined); return true; });
+});
+test("Google failed installation retains original undefined and still restores its owned target", async () => {
+  const { owner } = googleInertOwner(), target = { value: 1 }; let restores = 0, caught = false;
+  try { owner.install(target, "value", () => { target.value = 2; throw undefined; }, () => { restores++; target.value = 1; }); }
+  catch (error) { caught = true; assert.equal(error, undefined); }
+  assert.equal(caught, true); await assert.rejects(owner.finish(), error => { assert.equal(error, undefined); return true; });
+  assert.equal(restores, 1); assert.equal(target.value, 1);
+});
+test("Google public acquisition refuses foreign invocation before the original fetch", async () => {
+  let calls = 0;
+  const harness = googleAcquisitionFixture(() => { calls++; return Promise.resolve({}); }, true);
+  assert.throws(() => harness.observe("/native", {}), /foreign/); assert.equal(calls, 0); await assert.rejects(harness.owner.finish());
+});
+test("Google original synchronous undefined failure waits for C0 and retains independent restore failure", async () => {
+  const { owner, observeBody } = googleInertOwner(), row = googleInertRow(owner), closed = joinDeferred(), original = googleInertReader(closed.promise);
+  const source = function () { throw undefined; }, cleanup = { cleanup: true };
+  original.reader.read = source; observeBody(original.body, row); original.body.getReader();
+  let caught = false; try { original.reader.read(); } catch (error) { caught = true; assert.equal(error, undefined); }
+  assert.equal(caught, true);
+  owner.install({}, "unused", () => {}, () => { throw cleanup; });
+  const result = joinOutcome(owner.finish()); await flushJoinJobs(); const early = result.settled;
+  closed.resolve(); await result.done;
+  assert.equal(early, false); assert.equal(result.rejected, true); exactJoinFailures(result.value, [undefined, cleanup]);
+  assert.equal(original.reader.read, source);
+});
+// END Google ownership pure tests.

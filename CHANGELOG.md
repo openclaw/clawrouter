@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- Bind Google speech fixture observations to exact acquisition and resource identities, retain original closed promises and observer joins, and permanently seal each restored invocation without changing speech outcome assertions.
+
 - Google speech fixture: finish every original Worker waitUntil and resource join, including appended tails, before throwing retained join failures; preserve undefined and independent result failures.
 
 - Google speech proof: compose the landed response-reader retirement base while preserving the pinned speech scenarios, diagnostics, consumer selection, and provider snapshot indexes. Native speech qualification remains a separate original-CI requirement.
