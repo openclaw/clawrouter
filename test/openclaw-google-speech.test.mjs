@@ -13,9 +13,11 @@ import { parse } from "yaml";
 import { compileProviderSnapshot } from "../scripts/compile-providers.mjs";
 import snapshot from "../worker/generated/provider-snapshot.json" with { type: "json" };
 import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
+import { runnerStartupRecord, runnerStartupCommand } from "./helpers/openclaw-runner-reporter.mjs";
 
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "ff34cf8e236ca698c7190c63087f2ecd37f94a7e";
+const fixtureSha256 = "721e8e6185407fb47ecb4a973043294ef4cb9712be6d53c2c78c42cccb0bc11f", reporterSha256 = "c8e29baf48600a71264f8099580f11384160e86f74db2a711695bf53f0c92d61";
 const models = ["gemini-3.1-flash-tts-preview", "gemini-2.5-flash-preview-tts", "gemini-2.5-pro-preview-tts", "gemini-3.8-flash-tts", "gemini-3.8-flash-lite-tts"];
 const success = [...models.map((_, i) => `model${i}`), "talk", "unknown", "key_a", "key_b"];
 const invalid = ["later", "truncated", "non200", "redirect", "encoding"];
@@ -35,8 +37,27 @@ assert.equal(protocol.pin, sourceHead);
 assert.deepEqual([...protocol.ids], scenarios);
 
 function diagnosticSession(write = line => process.stdout.write(line)) {
-  const emitter = protocol.emitter(write), failures = [];
+  const failures = [];
   let records = 0, invalid = 0, inputBytes = 0, finished = false;
+  let runner, runnerWritten = false, commands = 0, outputBytes = 0;
+  function boundedWrite(line) {
+    const size = Buffer.byteLength(line);
+    assert.ok(size <= 768 && outputBytes + size <= 8192 && commands < 10, "combined Google annotation budget");
+    outputBytes += size; commands++; write(line);
+  }
+  const emitter = protocol.emitter(line => {
+    // Keep the existing SDK protocol and every essential record byte-for-byte.
+    // Only a nonessential outer progress row can give its slot to missing-SDK startup evidence.
+    if (finished && records === 0 && runner && !runnerWritten) {
+      const prefix = "::error title=Google contract diagnostic::";
+      assert.ok(line.startsWith(prefix));
+      const row = JSON.parse(line.slice(prefix.length).trimEnd().replaceAll("%0D", "\r").replaceAll("%0A", "\n").replaceAll("%25", "%"));
+      if (row.source === "outer" && row.role === "progress" && ["compile", "barrier", "temporary", "worker_start", "initialize"].includes(row.phase)) {
+        runnerWritten = true; boundedWrite(runnerStartupCommand(runner, 1)); return;
+      }
+    }
+    boundedWrite(line);
+  });
   function protect(run) { try { run(); } catch (error) { failures.push(error); } }
   function mark(phase, caseId, role, outcome, failed = false, error, fields = {}, route = "none") {
     protect(() => emitter.put(protocol.record({ source: "outer", caseId, route, phase, role, outcome, ...fields }, failed, error)));
@@ -83,6 +104,7 @@ function diagnosticSession(write = line => process.stdout.write(line)) {
   }
   return {
     mark,
+    runner(packet) { protect(() => { assert.equal(runner, undefined, "duplicate runner packet"); runner = runnerStartupRecord(packet); }); },
     diagnostic(text) { protect(() => parse(text)); }, // The helper's successful stdout, never forwarded raw.
     rejected(error) { protect(() => received(error)); report(); protect(() => emitter.checkpoint()); },
     checkpoint() { protect(() => emitter.checkpoint()); },
@@ -91,7 +113,11 @@ function diagnosticSession(write = line => process.stdout.write(line)) {
       if (invalid) failures.push(new Error("invalid fresh Google diagnostics"));
       report();
       if (failures.length) mark("report", null, "primary", "rejected", true, failures[0]);
-      protect(() => emitter.flush()); return failures;
+      protect(() => emitter.flush());
+      if (records === 0 && runner && !runnerWritten && commands > 0 && commands < 9) {
+        protect(() => { runnerWritten = true; boundedWrite(runnerStartupCommand(runner)); });
+      }
+      return failures;
     },
   };
 }
@@ -312,6 +338,7 @@ test("published Google TTS and Talk client through real Worker catalog and SQLit
     phase = "helper"; diagnostics.mark(phase, caseId, "progress", "entered");
     await runOpenClawConsumer({ diagnostic: text => diagnostics.diagnostic(text) }, { source, sourceHead, fixture: new URL("./fixtures/openclaw-google-speech-contract.test.ts", import.meta.url),
       testPath: "src/agents/tools/worker-clawrouter-google-speech.test.ts",
+      runnerReport: { expectedInvocations: 1, fixtureSha256, reporterSha256, onReport: packet => diagnostics.runner(packet) },
       env: { CLAWROUTER_CONTRACT_ORIGIN: origin, CLAWROUTER_CONTRACT_CONTROL: barrier.origin, CLAWROUTER_CONTRACT_SOURCE_HEAD: sourceHead } });
     diagnostics.mark(phase, caseId, "progress", "fulfilled");
     phase = "upstream"; diagnostics.mark(phase, caseId, "progress", "entered");
