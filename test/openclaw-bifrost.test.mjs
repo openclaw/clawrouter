@@ -332,7 +332,11 @@ export async function bifrostRetirementInertCases(assert) {
     const c = control(), cleanup = primary === undefined ? {} : undefined;
     c.response.text = function () { assert.equal(this, c.response); return Promise.reject(primary); };
     c.body.cancel = function () { assert.equal(this, c.body); c.calls.push("cancel"); return Promise.reject(cleanup); };
-    const result = await outcome(c.invoke()); assert.equal(result.failed, true); assert.deepEqual(result.error.errors, [primary, cleanup]);
+    const result = await outcome(c.invoke()); assert.equal(result.failed, true);
+    // The extracted helper owns a VM-realm array; the original reasons retain identity.
+    assert.ok(Array.isArray(result.error.errors)); assert.equal(result.error.errors.length, 2);
+    assert.deepEqual(Reflect.ownKeys(result.error.errors), ["0", "1", "length"]);
+    assert.equal(result.error.errors[0], primary); assert.equal(result.error.errors[1], cleanup);
     assert.deepEqual(c.calls, ["fetch", "cancel"]); assert.deepEqual(c.pending.map(x => x.kind), ["control_fetch", "control_body", "control_cancel"]);
   });
   await run("synchronous undefined consumption still cancels once", async () => {
@@ -419,7 +423,10 @@ export async function bifrostFailureObservationInertCases(assert) {
   await run("consumption and cancellation keep separate original undefined failures",async()=>{
     const c=fixture(),primary={},cancel=deferred();c.response.text=()=>Promise.reject(primary);c.body.cancel=()=>{c.calls.push("cancel");return cancel.promise;};
     let done=false;const pending=outcome(c.invoke()).then(v=>{done=true;return v;});await Promise.resolve();await Promise.resolve();assert.equal(done,false);
-    cancel.reject(undefined);const result=await pending;assert.deepEqual(result.error.errors,[primary,undefined]);
+    cancel.reject(undefined);const result=await pending;
+    assert.ok(Array.isArray(result.error.errors));assert.equal(result.error.errors.length,2);
+    assert.deepEqual(Reflect.ownKeys(result.error.errors),["0","1","length"]);
+    assert.equal(result.error.errors[0],primary);assert.equal(result.error.errors[1],undefined);
     const state=c.read.inspect(c.ticket);assert.equal(state.steps[2].returned,cancel.promise);assert.equal(state.steps[1].state,3);assert.equal(state.steps[2].state,3);assert.equal(state.readJoined,true);
   });
   await run("foreign owner ticket and invalid proof rejected",async()=>{

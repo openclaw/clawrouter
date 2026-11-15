@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- Compare Bifrost inert cleanup failures by their original reason identities across VM realms, preserving order and undefined failures.
+
 - Preserve failed Bifrost producer, control-response and accounting observations after original joins without changing native retirement acceptance.
 
 - Join Bifrost fixture producers and their already-attached progress observers explicitly, preserving original failures and retiring acquired control bodies before reporting cleanup failures.
