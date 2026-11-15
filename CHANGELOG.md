@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add opt-in, bounded native consumer runner diagnostics that separate collection failures from missing startup reports without changing SDK test verdicts.
+
+- Run provider plugin REST JSON conformance fixtures with named API-key headers, using host-owned synthetic credentials and rejecting client credential injection.
+
 - Test the registered OpenClaw Featherless catalog against complete Worker scans, original credentials, policy filtering, and SQLite metadata settlement.
 
 - Qualify OpenClaw catalog tests against unmodified native offers and schema-validated manifest configurations, keeping direct Worker transport coverage separate from client discovery.
