@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { types as nodeTypes } from "node:util";
 import { after, before, test } from "node:test";
 import { parse } from "yaml";
-import { workerFailureReport, workerAbortEvidence, decodeWorkerAbortDiagnostic, decodeWorkerReporterRecord, parseWorkerAbortDiagnostic, parseWorkerReporterRecord, workerAbortPrefix, workerAbortInvocation, workerAbortAdmissionSites, decodeWorkerAbortOperation, workerAbortParts, workerAbortRelationalPrefix, decodeWorkerAbortPart, parseWorkerAbortPart, validateWorkerAbortGroup } from "../scripts/worker-test-failure-reporter.mjs";
+import { workerFailureReport, workerAbortEvidence, decodeWorkerAbortDiagnostic, decodeWorkerReporterRecord, parseWorkerAbortDiagnostic, parseWorkerReporterRecord, workerAbortPrefix, workerAbortInvocation, workerAbortAdmissionSites, decodeWorkerAbortOperation, workerAbortParts, workerAbortRelationalPrefix, workerAbortRelationalPrefixV3, decodeWorkerAbortPart, parseWorkerAbortPart, validateWorkerAbortGroup, decodeWorkerPostludeRouter, decodeWorkerPostludeNode, workerAbortPostludeCoverage } from "../scripts/worker-test-failure-reporter.mjs";
 import { affectsOpenClawContract } from "../scripts/openclaw-contract-changes.mjs";
 
 const reporter = fileURLToPath(new URL("../scripts/worker-test-failure-reporter.mjs", import.meta.url));
@@ -31,6 +31,7 @@ async function abortDiagnosticCase({ fault, undefinedFault = false, secondary = 
   const upstream = { async fetch(url) {
     if (url.endsWith("/setup")) { check("upstream_setup"); return { status: fault === "upstream_status" ? 500 : 200 }; }
     if (url.includes("/started/")) { check("started"); return response("started_body", {}); }
+    if (url.includes("/proof/")) { check("proof"); return response("proof_body", diagnosticSource()); }
     const stage = retireFailed ? "fallback_state" : "final_state"; check(stage);
     return response(stage + "_body", { ...state, calls: fault === "calls_assertion" ? [] : state.calls, canceled: fault === "canceled_assertion" ? 0 : 1, active: fault === "active_assertion" ? 1 : 0, expired: fault === "expired_assertion" ? 1 : 0 });
   } };
@@ -40,7 +41,7 @@ async function abortDiagnosticCase({ fault, undefinedFault = false, secondary = 
     if (url.includes("/__litellm/retire/")) { try { check("retire"); } catch (error) { retireFailed = true; return Promise.reject(error); } return Promise.resolve(response("retire_body", { retired: fault !== "retired_assertion" })); }
     if (url.includes("/__litellm/observation/")) { check("observation"); return Promise.resolve(response("observation_body", observation)); }
     if (url.includes("/__litellm/started/")) { check("owner_ready"); return Promise.resolve(response("owner_ready_body", { started: true })); }
-    if (url.includes("/__litellm/usage/")) return Promise.resolve(response("usage_body", {}));
+    if (url.includes("/__litellm/usage/")) { check("usage"); return Promise.resolve(response("usage_body", {})); }
     throw new Error("unexpected inert control");
   };
   const runtime = { async unsafeGetDirectURL() { check("direct_url"); return "https://fixture.test"; }, async getWorker() { check("upstream_handle"); return upstream; }, async dispose() { check("dispose"); } };
@@ -51,7 +52,7 @@ async function abortDiagnosticCase({ fault, undefinedFault = false, secondary = 
   const withGateway = new Function(...Object.keys(context), gateway + ";return withGateway;")(...Object.values(context));
   let callback;
   const owner = () => ({ start() { check("caller"); }, async ready() { check("caller_observer"); }, reset() { check("authored_abort"); }, async join() { check("caller_outcome"); }, async close() { try { check("caller_cleanup"); return []; } catch (error) { return [error]; } } });
-  new Function("test", "withGateway", "workerAbortEvidence", "litellmOwnedH1Reset", "httpRequest", "Socket", "key", "assertLiteLLMResetRetirement", "assert", body)((name, options, fn) => { callback = fn; }, withGateway, workerAbortEvidence, owner, {}, class {}, () => "inert", () => check("remote_assertions"), assert);
+  new Function("test", "withGateway", "workerAbortEvidence", "litellmOwnedH1Reset", "httpRequest", "Socket", "key", "assertLiteLLMResetRetirement", "litellmFailurePostlude", "assert", body)((name, options, fn) => { callback = fn; }, withGateway, workerAbortEvidence, owner, {}, class {}, () => "inert", () => check("remote_assertions"), purePostludeFunctions().litellmFailurePostlude, assert);
   let failed = false, error;
   try { await callback({ diagnostic(value) { if (reportingFault) throw undefined; diagnostics.push(value); } }); }
   catch (reason) { failed = true; error = reason; }
@@ -421,7 +422,7 @@ function pureWorkerRetirement() {
   const source = readFileSync("worker/test/litellm-model-discovery.test.mjs", "utf8");
   const original = source.slice(source.indexOf("export function observeLiteLLMOperation("), source.indexOf("// BEGIN request-owned fixture functions."));
   const helpers = source.slice(source.indexOf("export function litellmPredicateFacts("), source.indexOf("// END request-owned fixture functions."));
-  return new Function((original + helpers).replace(/^export /gm, "") + ";return {observeLiteLLMOperation,litellmWorkerDrain,litellmWorkerLedger,litellmPredicateFacts};")();
+  return new Function((original + helpers).replace(/^export /gm, "") + ";return {observeLiteLLMOperation,collectLiteLLMOperations,litellmWorkerDrain,litellmWorkerLedger,litellmPredicateFacts};")();
 }
 function workerOperationCase() {
   const r = { id: "native_abort", mode: "held", operations: [], roots: [], inputs: [], readers: [], bodies: [], requests: [], failures: [], observerFailures: [], calls: [], sequence: 0 };
@@ -603,10 +604,10 @@ async function workerFallbackObservation({ closedFulfilled = false, cancelFulfil
 }
 test("worker abort fallback pure: actual original outcomes select exactly one validated family", async () => {
   for (const reason of [undefined, {}]) for (const shape of [{}, { cancelFulfilled: true }, { closedFulfilled: true, cancelFulfilled: true }, { closedFulfilled: true, cancelFulfilled: true, handlerRejected: true }]) {
-    const observation = await workerFallbackObservation({ ...shape, reason }), complete = Object.keys(shape).length === 0;
+    const observation = await workerFallbackObservation({ ...shape, reason }), complete = !shape.handlerRejected;
     const { frames, errors } = workerRelationFrames(observation, { primary: reason });
     assert.deepEqual(errors, []); assert.equal(frames.length, complete ? 8 : 1);
-    assert.equal(frames.every(frame => frame.startsWith(complete ? workerAbortRelationalPrefix : workerAbortPrefix)), true);
+    assert.equal(frames.every(frame => frame.startsWith(complete ? (Object.keys(shape).length ? workerAbortRelationalPrefixV3 : workerAbortRelationalPrefix) : workerAbortPrefix)), true);
     for (const reverse of [false, true]) {
       const result = await workerAbortPipeline(workerRelationEvents(frames, reverse));
       assert.equal(result.rows[0].kind, "failure"); assert.equal(relationRecords(result.rows).length, complete ? 8 : 0);
@@ -637,7 +638,7 @@ test("worker abort fallback pure: unsupported foreign and inconsistent groups re
   }
 });
 test("worker abort fallback pure: coarse fallback cannot bypass native ownership", async () => {
-  const { frames } = workerRelationFrames(await workerFallbackObservation({ cancelFulfilled: true }));
+  const { frames } = workerRelationFrames(await workerFallbackObservation({ cancelFulfilled: true, handlerRejected: true }));
   for (const reverse of [false, true]) for (const mutate of [
     events => { delete events.find(e => e.type === "test:enqueue").data.parentId; },
     events => { delete events.find(e => e.type === "test:diagnostic").data.entryFile; },
@@ -652,7 +653,7 @@ test("worker abort fallback pure: coarse fallback cannot bypass native ownership
 });
 test("worker abort fallback pure: writer failures never emit a second family or replace primary undefined", async () => {
   for (const complete of [false, true]) for (const reportReason of [undefined, {}]) {
-    const observation = await workerFallbackObservation({ cancelFulfilled: !complete });
+    const observation = await workerFallbackObservation({ cancelFulfilled: !complete, handlerRejected: !complete });
     for (let reportFault = 0; reportFault < (complete ? 8 : 1); reportFault++) {
       const { frames, errors } = workerRelationFrames(observation, { reportFault, reportReason });
       assert.equal(errors.length, 1); assert.equal(errors[0], reportReason); assert.equal(frames.length, reportFault);
@@ -875,6 +876,292 @@ test("worker abort relational repair pure: exact operation owners and complete c
       const result=await workerAbortPipeline(workerRelationEvents(frames,reverse));
       assert.equal(relationRecords(result.rows).length,c.accepted?8:0,c.name);
       assert.equal(result.rows[0].kind,"failure",c.name);
+    }
+  }
+});
+
+// These inert originals exercise the actual projection and retirement helper.
+// They establish diagnostic protocol behavior, never native cancellation credit.
+async function workerBoundedCase(options={}) {
+  const {closedRejected=false,readRejected=true,cancelState="fulfilled",extra=false,prefix=false}=options;
+  const reason=Object.hasOwn(options,"reason")?options.reason:{},closedReason=Object.hasOwn(options,"closedReason")?options.closedReason:reason,cancelReason=Object.hasOwn(options,"cancelReason")?options.cancelReason:reason;
+  const c=workerOperationCase(),h=pureWorkerRetirement(),details={input:c.input,reader:c.reader,receiverIdentity:true,signalAborted:false};
+  for(const kind of ["handler","fetch","acquisition_observer"])h.observeLiteLLMOperation(c.r,kind,()=>Promise.resolve({}),{token:c.token});
+  const closed=closedRejected?Promise.reject(closedReason):Promise.resolve(),read=readRejected?Promise.reject(reason):Promise.resolve({done:false,value:{byteLength:1}});
+  c.reader.closed=closed;
+  const call=(kind,pending,extra={})=>h.observeLiteLLMOperation(c.r,kind,()=>pending,{...details,...extra});
+  call("closed",closed);
+  if(prefix){const prefixRead=Promise.resolve({done:false,value:{byteLength:1}});call("read",prefixRead);call("read_observer",prefixRead.then(value=>value),{originalRead:prefixRead});await h.collectLiteLLMOperations(c.r);}
+  call("read",read);const derivative=read.then(value=>value);call("read_observer",derivative,{originalRead:read});
+  if(prefix){c.input.abortSequence=++c.r.sequence;c.input.callerAbortedAtAbort=true;c.input.noEarlierFailure=true;c.input.pendingAtAbort=[c.r.operations.find(op=>op.pending===read)];}
+  if(cancelState!==null)call("cancel",cancelState==="rejected"?Promise.reject(cancelReason):Promise.resolve(),{argc:1,operandPresent:true,reason:cancelReason});
+  if(extra)h.observeLiteLLMOperation(c.r,"wait_until",()=>Promise.reject(reason),{token:c.token});
+  await h.collectLiteLLMOperations(c.r);
+  c.reader.unlockInvoke=++c.r.sequence;c.reader.unlockSequence=++c.r.sequence;
+  let failure;try{await h.litellmWorkerDrain(c.r,c.scope,()=>assert.fail());}catch(error){failure=error;}
+  assert.ok(failure);assert.equal(failure.errors.length,c.r.operations.filter(op=>op.state!=="fulfilled").length);
+  const project=()=>{const ledger=h.litellmWorkerLedger(c.r,c.scope);return JSON.parse(JSON.stringify({operations:ledger[0],syncFailures:ledger[2],checks:c.r.retireChecks.snapshot(),ledger,
+    ingress:[true],inputs:[{signalAborted:true}],readers:[{unlocks:1,locked:false}]}));};
+  return {...c,h,closed,read,derivative,project};
+}
+test("worker abort bounded pure: one through four exact originals preserve resource and reason distinctions",async()=>{
+  const shapes=[{closedRejected:true,readRejected:false,cancelState:null},{closedRejected:true,readRejected:false},
+    {readRejected:false,cancelState:"rejected"},{cancelState:null},{},{closedRejected:true,cancelState:null},
+    {cancelState:"rejected"},{closedRejected:true,cancelState:"rejected"}];
+  for(const reason of [undefined,null,{},0])for(const shape of shapes){
+    const c=await workerBoundedCase({...shape,reason}),o=c.project(),n=o.ledger[11].rows.length;
+    const {frames,errors}=workerRelationFrames(o,{primary:reason});assert.deepEqual(errors,[]);assert.equal(frames.length,8);
+    const version=n===4?2:3,prefix=version===2?workerAbortRelationalPrefix:workerAbortRelationalPrefixV3;
+    const parts=frames.map(frame=>{assert.ok(frame.startsWith(prefix));return parseWorkerAbortPart(frame.slice(prefix.length));});
+    assert.ok(validateWorkerAbortGroup(parts));assert.ok(parts.every(p=>p.v===version));
+    const bad=[...parts[1].data,...parts[2].data];assert.equal(bad.filter(Boolean).length,n);assert.ok(bad.slice(n).every(x=>x===null));assert.ok(bad.filter(Boolean).every(row=>row[7]===true&&row[8]===(reason!==undefined)));
+    assert.deepEqual(parts[7].data.slice(0,4),[n,n,0,false]);assert.deepEqual(parts[3].data.slice(5),[true,true]);
+    assert.equal(parts[3].data[3][0],3);assert.equal(parts[3].data[1][0],4);assert.equal(parts[3].data[2][0],5);
+    assert.equal(parts[3].data[4]===null,shape.cancelState===null);assert.equal(parts[7].data[17],null);
+    for(const reverse of [false,true]){const result=await workerAbortPipeline(workerRelationEvents(frames,reverse));assert.equal(relationRecords(result.rows).length,8);assert.equal(result.rows[0].kind,"failure");}
+  }
+  const c=await workerBoundedCase({closedRejected:true,cancelState:"rejected",closedReason:{},cancelReason:{}});
+  const resource=c.project().ledger[8];assert.deepEqual(resource[3].slice(0,4),[true,false,false,false]);
+});
+test("worker abort bounded pure: every owner alias and optional original is independently required",async()=>{
+  for(const mutate of [
+    c=>{c.r.operations[4].input={...c.input};},c=>{c.r.operations[5].originalRead=Promise.resolve();},
+    c=>{c.reader.closed=Promise.resolve();},c=>{c.r.operations[5].pending=c.read;},
+    c=>{c.r.operations.push({...c.r.operations[4],ordinal:c.r.operations.length,state:"fulfilled"});},
+    c=>{c.r.operations[4].token={...c.token};},c=>{c.input.token={...c.token};},
+    c=>{c.r.operations[3].reader={...c.reader};},c=>{c.r.operations[6].reader={...c.reader};},
+    c=>{c.r.operations[4].ordinal=0;},c=>{c.r.operations[5].token={...c.token,generation:2};},
+    c=>{c.r.operations.push({...c.r.operations[6],ordinal:c.r.operations.length,pending:Promise.resolve()});},
+  ]){
+    const c=await workerBoundedCase();mutate(c);const {frames}=workerRelationFrames(c.project());assert.equal(frames.length,1);
+    for(const reverse of [false,true]){const out=await workerAbortPipeline(workerRelationEvents(frames,reverse));assert.equal(relationRecords(out.rows).length,0);assert.equal(out.rows.some(x=>x.kind==="worker_abort"),true);}
+  }
+  const c=await workerBoundedCase({closedRejected:true,cancelState:"rejected",extra:true});
+  assert.equal(c.project().ledger[11].coverage[0],5);assert.equal(workerRelationFrames(c.project()).frames.length,1);
+});
+test("worker abort bounded pure: complete census padding cross references and versions fail closed",async()=>{
+  const c=await workerBoundedCase(),{frames}=workerRelationFrames(c.project());
+  const parts=frames.map(f=>parseWorkerAbortPart(f.slice(workerAbortRelationalPrefixV3.length)));
+  for(const mutate of [
+    x=>{x[1].data[0]=null;},x=>{x[2].data[0]=x[1].data[0];},x=>{x[7].data[0]++;},x=>{x[7].data[1]--;},
+    x=>{x[7].data[2]=1;},x=>{x[7].data[3]=true;},x=>{x[7].data[4]=1;},x=>{x[7].data[12]=false;},
+    x=>{x[1].data[0][3]++;},x=>{x[1].data[1][4]++;},x=>{x[1].data[1][5]++;},x=>{x[1].data[1][6]++;},
+    x=>{x[1].data.reverse();},x=>{x[1].data[0][0]=x[0].data[3];},x=>{x[3].data[3][0]=x[0].data[3];},
+    x=>{x[3].data[1][1]=1;},x=>{x[3].data[2][4]=x[3].data[1][4];},x=>{x[3].data[5]=false;},x=>{x[3].data[6]=false;},
+    x=>{x[4].data[1]=1;},x=>{x[5].data[2]=x[5].data[0];},x=>{x[0].data[4]=3;},
+    x=>{x[1].data[0][7]=false;x[1].data[0][8]=null;},x=>{x[1].data[0][10]=null;},x=>{x[1].data[0][9]=0;},
+    x=>{x[0].v=2;},x=>{x[6].ref[2]++;},x=>{x[3].data[4]=null;},x=>{x[5].data[1]=null;},
+  ]){
+    const changed=structuredClone(parts);mutate(changed);assert.equal(validateWorkerAbortGroup(changed),null);
+    for(const reverse of [false,true]){const input=changed.map(p=>(p.v===2?workerAbortRelationalPrefix:workerAbortRelationalPrefixV3)+JSON.stringify(p));const out=await workerAbortPipeline(workerRelationEvents(input,reverse));assert.equal(relationRecords(out.rows).length,0);assert.equal(out.rows[0].kind,"failure");}
+  }
+  for(const altered of [frames.slice(1),[...frames,frames[0]],frames.map((f,i)=>i===1?f.replace('"v":3,','"v":3,"v":3,'):f)]){
+    const out=await workerAbortPipeline(workerRelationEvents(altered));assert.equal(relationRecords(out.rows).length,0);assert.equal(out.rows[0].kind,"failure");
+  }
+});
+test("worker abort bounded pure: output faults retain primary and never emit a fallback after a fragment",async()=>{
+  const c=await workerBoundedCase({reason:undefined});
+  for(const reportReason of [undefined,{}])for(let reportFault=0;reportFault<8;reportFault++){
+    const {frames,errors}=workerRelationFrames(c.project(),{primary:undefined,reportFault,reportReason});
+    assert.deepEqual(errors,[reportReason]);assert.equal(frames.length,reportFault);assert.ok(frames.every(x=>x.startsWith(workerAbortRelationalPrefixV3)));
+    const out=await workerAbortPipeline(workerRelationEvents(frames));assert.equal(relationRecords(out.rows).length,0);assert.equal(out.rows[0].kind,"failure");
+  }
+});
+
+test("worker abort bounded pure: native ownership canonical framing and saturated census retain only coarse failure",async()=>{
+  const c=await workerBoundedCase(),{frames}=workerRelationFrames(c.project());
+  const mutations=[
+    e=>{delete e[0].data.parentId;},e=>{delete e[2].data.entryFile;},e=>{e[2].data.line++;},
+    e=>{e[0].data.testId=0;},e=>{e.push({...e[0],data:{...e[0].data,testId:9}});},
+    e=>{e[2].data.message=e[2].data.message.replace('V3 ','V2 ');},
+    e=>{e[2].data.message+=' ';},e=>{e[2].data.message+='\u001b';},
+    e=>{e[2].data.message=e[2].data.message.replace('"v":3,','"v":3,"v":3,');},
+    e=>{e[2].data.message=workerAbortRelationalPrefixV3+'x'.repeat(513);},
+    e=>{e.push(...Array.from({length:4097},(_,i)=>({...e[0],data:{...e[0].data,testId:i+100,name:"unrelated",line:i+1000}})));},
+  ];
+  for(const mutate of mutations){const e=workerRelationEvents(frames);mutate(e);const out=await workerAbortPipeline(e);assert.equal(relationRecords(out.rows).length,0);assert.equal(out.rows[0].kind,"failure");}
+  const e=workerRelationEvents(frames);for(let i=0;i<10;i++)e.push({...e[0],data:{...e[0].data,testId:i+20,name:"unrelated",line:900}});
+  assert.equal(relationRecords((await workerAbortPipeline(e)).rows).length,8);
+});
+test("worker abort bounded pure: maximum v3 canonical serialization keeps every existing quota",async()=>{
+  const historical=await workerRelationMaximum();
+  for(const count of [1,2,3,4]){
+    const parts=historical.rows.filter(x=>x.kind==="worker_abort_relation").map(x=>({v:3,kind:"worker_abort_part",part:x.part,ref:x.ref,data:structuredClone(x.data)}));
+    parts[0].data.push(null);
+    const all=[...parts[1].data,...parts[2].data],keep=all.slice(0,count),first=keep[0];
+    for(let i=0;i<4;i++){parts[i<2?1:2].data[i%2]=keep[i]??null;parts[5].data[i]=i<count?parts[5].data[i]:null;}
+    parts[7].data.splice(0,3,count,count,0);parts[4].data[1]=0;
+    for(const role of parts[3].data.slice(1,5))if(!keep.some(row=>row[0]===role[0])){role[1]=1;role[2]=0;}
+    // Equality comparisons involving fulfilled records have no rejected reason.
+    for(let i=2;i<=6;i++)parts[4].data[i]=null;
+    for(const part of parts)part.ref[4]=first[0];parts[0].data[4]=first[2];
+    assert.ok(validateWorkerAbortGroup(parts));
+    const frames=parts.map(p=>workerAbortRelationalPrefixV3+JSON.stringify(p)),events=workerRelationEvents(frames);
+    for(const event of events){event.data.line=1000000;event.data.column=1000000;event.data.nesting=1000000;}
+    const out=await workerAbortPipeline(events);assert.equal(relationRecords(out.rows).length,8);
+    assert.ok(out.rows.every(row=>Buffer.byteLength(JSON.stringify(row))<=512));assert.ok(out.lines.every(line=>Buffer.byteLength(line)<=768));
+    assert.ok(Buffer.byteLength(out.lines.join(""))<=8192);assert.equal(out.lines.length,10);
+  }
+});
+
+test("worker abort bounded repair pure: foreign cancel cannot disappear and absent cancel rejects a wire row",async()=>{
+  const c=await workerBoundedCase();c.r.operations[6].input={...c.input};c.r.operations[6].reader={...c.reader};
+  const {frames}=workerRelationFrames(c.project());assert.equal(frames.length,1);
+  const missing=await workerBoundedCase({cancelState:null});const parts=workerRelationFrames(missing.project()).frames.map(f=>parseWorkerAbortPart(f.slice(workerAbortRelationalPrefixV3.length)));
+  parts[2].data[0]=[6,7,2,1,1,1,1,true,true,20,21];parts[0].data[3]=7;parts[5].data[2]=[6,false,null,false,null,false,null];parts[7].data[0]=3;parts[7].data[1]=3;
+  assert.equal(validateWorkerAbortGroup(parts),null);
+  for(const reverse of [false,true]){const out=await workerAbortPipeline(workerRelationEvents(parts.map(p=>workerAbortRelationalPrefixV3+JSON.stringify(p)),reverse));assert.equal(relationRecords(out.rows).length,0);assert.equal(out.rows[0].kind,"failure");}
+});
+test("worker abort bounded repair pure: actual prefix plus pending read retains unique original lineage",async()=>{
+  for(const shape of [{closedRejected:true,readRejected:false,cancelState:null},{readRejected:false,cancelState:"rejected"},{cancelState:null}]){
+    const c=await workerBoundedCase({...shape,prefix:true}),o=c.project();
+    const {frames,errors}=workerRelationFrames(o);assert.deepEqual(errors,[]);assert.equal(frames.length,8);
+    const parts=frames.map(f=>parseWorkerAbortPart(f.slice(workerAbortRelationalPrefixV3.length)));
+    assert.equal(parts[3].data[1][0],6);assert.equal(parts[3].data[2][0],7);assert.equal(parts[3].data[3][0],3);
+    assert.equal(parts[3].data[5],true);assert.equal(parts[3].data[6],true);
+    for(const reverse of [false,true])assert.equal(relationRecords((await workerAbortPipeline(workerRelationEvents(frames,reverse))).rows).length,8);
+  }
+  for(const mutate of [c=>{delete c.input.pendingAtAbort;},c=>{c.input.pendingAtAbort=[{...c.r.operations[6]}];},
+    c=>{c.input.pendingAtAbort=[c.r.operations[4],c.r.operations[6]];},c=>{c.input.pendingAtAbort=[c.r.operations[5]];}]){
+    const c=await workerBoundedCase({closedRejected:true,readRejected:false,prefix:true,cancelState:null});mutate(c);
+    assert.equal(workerRelationFrames(c.project()).frames.length,1);
+  }
+});
+
+function purePostludeFunctions() {
+  const source=readFileSync("worker/test/litellm-model-discovery.test.mjs","utf8");
+  const code=source.slice(source.indexOf("export function observeLiteLLMOperation("),source.indexOf("// END request-owned fixture functions."));
+  const producer=source.slice(source.indexOf("export function litellmObserveProducer("),source.indexOf("export function upstreamFixture("));
+  return new Function("assert",(code+producer).replace(/^export /gm,"")+";return {litellmRetirementSeal,litellmPostRetirement,litellmFinishRetirement,litellmPostludeUsage,litellmFailurePostlude,litellmProducerBoundary,litellmProducerOwners,litellmObserveProducer,joinLiteLLMProducer};")(assert);
+}
+async function postludeCase(primary=undefined) {
+  const c=await workerBoundedCase(),h=purePostludeFunctions();c.r.basePath="/team/v1";c.r.ingresses=[{}];
+  c.r.calls=[{method:"GET",url:"https://gateway.example/team/v1/models",authorization:"Bearer fixture-upstream-native_abort",query:"",redirect:"manual",body:false,extra:false}];
+  c.reader.methods={};c.reader.wrappers={};for(const name of ["read","cancel","releaseLock"]){const fn=()=>{};c.reader.reader[name]=fn;c.reader.wrappers[name==="releaseLock"?"unlock":name]=fn;}
+  c.r.requests[0].retired=false;c.scope.retire=token=>{assert.equal(token,c.token);};
+  c.r.retireChecks.note(0,true);
+  let thrown=false;try{h.litellmFinishRetirement(c.r,c.scope,true,primary);}catch(error){thrown=true;assert.equal(error,primary);}assert.equal(thrown,true);
+  assert.equal(c.r.requests[0].retired,true);assert.equal(c.r.failurePostlude.state.valid,true);
+  return {...c,post:h,primary};
+}
+const diagnosticUsage=()=>({events:[{provider:"litellm",policy_id:"native_abort",credential_id:"native_abort",capability:"models.list",actual_cost_micros:0,reserved_cost_micros:0,model:null,input_tokens:null,output_tokens:null,total_tokens:null}]});
+const diagnosticSource=()=>({joined:[1,2,4,0],owners:[{call:0,held:true,chat:false,finished:true,eof:false,cancels:1,fulfilledCancels:1,operations:2,observers:4}],
+  calls:[{method:"GET",url:"https://gateway.example/team/v1/models",authorization:"Bearer fixture-upstream-native_abort",body:null}],released:false,active:0,expired:0,canceled:1,finished:1,operations:[{kind:"pull",state:"fulfilled"},{kind:"cancel",state:"fulfilled"}]});
+async function rejectedValue(fn){try{await fn();assert.fail("expected original failure");}catch(error){return error;}}
+test("worker abort postlude pure: actual registered failure callback binds helper and preserves success control order",async()=>{
+  const success=await abortDiagnosticCase();assert.equal(success.failed,false);
+  assert.deepEqual(success.calls.filter(x=>["retire","observation","proof","usage"].includes(x)),["retire","observation","proof","usage"]);
+  for(const secondary of [[],["proof"],["usage"],["proof","usage","observation","fallback_state","dispose","remove"]]){
+    const result=await abortDiagnosticCase({fault:"retire",undefinedFault:true,secondary});assert.equal(result.failed,true);assert.deepEqual(result.record.first,[14,0,false]);
+    assert.deepEqual(result.calls.filter(x=>["retire","proof","usage","observation","fallback_state"].includes(x)),["retire","proof","usage","observation","fallback_state"]);
+    assert.ok(result.calls.includes("dispose")&&result.calls.includes("remove"));
+  }
+});
+test("worker abort postlude pure: same retired seal guards accounting and always retains original failure",async()=>{
+  for(const primary of [undefined,{}])for(const accounting of ["fulfilled","undefined","defined"]){
+    const c=await postludeCase(primary),drainError={},snapshotError=accounting==="undefined"?undefined:{},calls=[];
+    const error=await rejectedValue(()=>c.post.litellmPostludeUsage(c.r,async()=>{calls.push("drain");throw drainError;},async()=>{calls.push("usage");if(accounting!=="fulfilled")throw snapshotError;return diagnosticUsage();}));
+    assert.deepEqual(calls,["drain","usage"]);assert.deepEqual(error.errors,[primary,drainError,...(accounting==="fulfilled"?[]:[snapshotError])]);
+    const row=c.r.failurePostlude.project(true);assert.ok(decodeWorkerPostludeRouter(row));assert.equal(row[7],true);assert.equal(row[13],accounting==="fulfilled");assert.equal(row[15],accounting!=="fulfilled");
+    const repeated=await rejectedValue(()=>c.post.litellmPostludeUsage(c.r,()=>assert.fail(),()=>assert.fail()));assert.equal(repeated.errors[0],primary);assert.deepEqual(calls,["drain","usage"]);
+    assert.equal(c.r.retireChecks.snapshot()[0],4);assert.equal(c.r.workerDataDisposition[0],1);
+  }
+  const c=await postludeCase(undefined);assert.equal(await rejectedValue(()=>c.post.litellmPostludeUsage(c.r,async()=>{},async()=>diagnosticUsage())),undefined);
+});
+test("worker abort postlude pure: private seal rejects every original mutation permanently without native reads",async()=>{
+  const mutations=[c=>c.r.sequence++,c=>{c.input.abortSequence=++c.r.sequence;},c=>c.r.operations.push({...c.r.operations[0]}),
+    c=>{c.r.roots=[...c.r.roots];},c=>c.r.ingresses.push({}),c=>c.r.requests[0].retired=false,c=>{c.r.requests[0].token={...c.token};},
+    c=>c.r.observerFailures.push(undefined),c=>c.r.failures.push(undefined),c=>c.r.inputs[0]={...c.input},c=>c.reader.unlocks++,
+    c=>{c.r.sequence++;c.r.operations.push({});c.r.operations.pop();},c=>c.r.operations[0].state="pending",c=>c.r.basePath="/foreign",c=>Object.defineProperty(c.r.operations[0],"state",{writable:false})];
+  for(const mutate of mutations){const c=await postludeCase();const before=c.r.sequence;mutate(c);let snapshots=0;
+    const error=await rejectedValue(()=>c.post.litellmPostludeUsage(c.r,async()=>{},async()=>{snapshots++;}));assert.ok(error instanceof AggregateError);assert.equal(snapshots,0);assert.equal(c.r.failurePostlude.state.valid,false);
+    c.r.sequence=before;assert.equal(c.r.failurePostlude.check(1),false);assert.equal(c.r.failurePostlude.project(true)[7],false);
+  }
+  const c=await postludeCase();let getters=0;Object.defineProperty(c.reader.body,"locked",{get(){getters++;throw undefined;}});
+  assert.equal(c.r.failurePostlude.check(1),true);assert.equal(getters,0);
+  const early=await workerBoundedCase();early.r.ingresses=[];early.r.basePath="/team/v1";early.reader.wrappers={};
+  const owner=purePostludeFunctions().litellmPostRetirement(early.r,early.scope,undefined);assert.equal(owner.state.valid,false);
+  early.r.requests[0].retired=true;assert.equal(owner.check(1),false);
+});
+test("worker abort postlude pure: mutations during each await deny the same cohort including rejected accounting",async()=>{
+  for(const at of ["drain","snapshot","after"]){const c=await postludeCase(),calls=[];
+    await rejectedValue(()=>c.post.litellmPostludeUsage(c.r,async()=>{calls.push("drain");if(at==="drain")c.r.sequence++;throw undefined;},async()=>{calls.push("snapshot");if(at==="snapshot")c.r.sequence++;throw undefined;}));
+    if(at==="after")c.r.sequence++;
+    assert.equal(c.r.failurePostlude.project(true)[7],false);assert.deepEqual(calls,at==="drain"?["drain"]:["drain","snapshot"]);
+  }
+  const c=await postludeCase();c.scope.retains=()=>{throw undefined;};
+  const error=await rejectedValue(()=>c.post.litellmPostludeUsage(c.r,async()=>{throw undefined;},()=>assert.fail()));assert.equal(error.errors[0],undefined);assert.ok(error.errors.slice(1).includes(undefined));
+});
+test("worker abort postlude pure: original cleanup failures and undefined seal errors remain independent",async()=>{
+  const c=await workerBoundedCase(),h=purePostludeFunctions();c.r.ingresses=[];c.r.requests.push({token:{},retired:false});let count=0;
+  c.scope.retire=()=>{count++;throw undefined;};
+  const failure=await rejectedValue(()=>h.litellmFinishRetirement(c.r,c.scope,true,undefined));assert.equal(count,2);assert.deepEqual(failure.errors,[undefined,undefined,undefined]);
+  assert.equal(c.r.failurePostlude.state.valid,false);
+});
+test("worker abort postlude pure: failure path attempts proof usage and both observations exactly once",async()=>{
+  for(const primary of [undefined,{}])for(const failed of ["none","proof","usage","observation","state","report","all"]){
+    const h=purePostludeFunctions(),calls=[],evidence=workerAbortEvidence();let node; evidence.stage(14);evidence.failed(primary);
+    const bad=name=>failed==="all"||failed===name;
+    const f={proof(){calls.push("proof");if(bad("proof"))throw undefined;return Promise.resolve(diagnosticSource());},
+      control(name){calls.push(name);if(bad(name))throw undefined;return Promise.resolve(name==="usage"?{}:{});},state(){calls.push("state");if(bad("state"))throw undefined;return Promise.resolve({});}};
+    const recorder={observation(...args){if(bad("report"))throw undefined;evidence.observation(...args);},postlude(value){node=value;evidence.postlude(value);}};
+    const error=await rejectedValue(()=>h.litellmFailurePostlude(primary,f,recorder));assert.deepEqual(calls,["proof","usage","observation","state"]);
+    assert.equal(error instanceof AggregateError?error.errors[0]:error,primary);assert.ok(decodeWorkerPostludeNode(node));
+    if(failed==="all")assert.deepEqual(error.errors,[primary,undefined,undefined,undefined,undefined,undefined,undefined]);
+    if(failed==="none")assert.equal(error,primary);
+  }
+});
+test("worker abort postlude pure: pending producer original and observer tails block postlude without forced release",async()=>{
+  const h=purePostludeFunctions();for(const heldKind of ["original","observer"]){
+    let resolve,done=false;const held=new Promise(r=>{resolve=r;}),calls=[];
+    const r={calls:[{}],producers:[],operations:[],observers:[],observerFailures:[]},p={call:r.calls[0],request:{},held:true,chat:false};r.producers.push(p);
+    h.litellmObserveProducer(r,p,"pull",()=>heldKind==="original"?held:Promise.resolve(),p,[]);
+    if(heldKind==="observer"){await Promise.resolve();r.observers[1]=held;r.operations[0].guard=held;}
+    const boundary=h.litellmProducerBoundary(r),proof=h.joinLiteLLMProducer(r).then(joined=>{boundary();return {joined};});
+    const task=h.litellmFailurePostlude(undefined,{proof:()=>proof,control(name){calls.push(name);return {};},state:()=>({})},{observation(){},postlude(){}}).then(()=>{done=true;},()=>{done=true;});
+    await Promise.resolve();await Promise.resolve();assert.equal(done,false);assert.deepEqual(calls,[]);resolve();await task;assert.equal(done,true);assert.deepEqual(calls,["usage","observation"]);
+  }
+  const r={calls:[{}],producers:[],operations:[],observers:[],observerFailures:[]};r.producers.push({call:r.calls[0],request:{},held:true,chat:false});
+  const boundary=h.litellmProducerBoundary(r);r.calls=[...r.calls];assert.throws(boundary);
+});
+test("worker abort postlude pure: complete cohort traverses native admission and shared decoder in both orders",async()=>{
+  for(const primary of [undefined,{}])for(const accounting of ["fulfilled","rejected"]){
+    const c=await postludeCase(primary);await rejectedValue(()=>c.post.litellmPostludeUsage(c.r,async()=>{throw undefined;},async()=>{if(accounting==="rejected")throw undefined;return diagnosticUsage();}));
+    const o=c.project();o.postlude=c.r.failurePostlude.project(true);
+    const evidence=workerAbortEvidence();evidence.stage(14);evidence.failed(primary);evidence.observation(15,{status:"fulfilled",value:o});
+    const node=[1,true,primary!==undefined,2,null,3,true,2,4,0,true,0,0];evidence.postlude(node);
+    const frames=[];assert.deepEqual(evidence.report({diagnostic:f=>frames.push(f)}),[]);assert.equal(frames.length,8);
+    const parts=frames.map(f=>parseWorkerAbortPart(f.slice(workerAbortRelationalPrefixV3.length)));assert.equal(workerAbortPostludeCoverage(parts),true);
+    for(const reverse of [false,true])assert.equal(relationRecords((await workerAbortPipeline(workerRelationEvents(frames,reverse))).rows).length,8);
+    for(const missing of [0,7]){const copy=structuredClone(parts);if(missing===0)copy[0].data[5]=null;else copy[7].data[17]=null;assert.ok(validateWorkerAbortGroup(copy));assert.equal(workerAbortPostludeCoverage(copy),false);}
+    for(const change of [p=>p[0].data[5][7]=false,p=>p[0].data[5][16]=false,p=>p[7].data[17][2]=!primary,p=>p[0].data[5][3]=1,p=>p[7].data[17][8]=3]){
+      const copy=structuredClone(parts);change(copy);assert.equal(workerAbortPostludeCoverage(copy),false);
+      for(const reverse of [false,true])await workerAbortPipeline(workerRelationEvents(copy.map(p=>workerAbortRelationalPrefixV3+JSON.stringify(p)),reverse));
+    }
+  }
+});
+test("worker abort postlude pure: postlude schema denies malformed and hostile cohorts without getters",async()=>{
+  const router=[1,63,63,100,100,true,false,true,true,3,false,3,false,false,null,true,true,0,0],node=[1,true,false,2,null,3,false,2,4,0,true,0,0];
+  assert.ok(decodeWorkerPostludeRouter(router));assert.ok(decodeWorkerPostludeNode(node));let getters=0;
+  for(const [decode,value]of [[decodeWorkerPostludeRouter,router],[decodeWorkerPostludeNode,node]])for(let i=0;i<value.length;i++){
+    const copy=[...value];Object.defineProperty(copy,String(i),{get(){getters++;throw undefined;}});assert.equal(decode(copy),null);
+    assert.equal(decode(new Proxy(copy,{get(){getters++;throw undefined;}})),null);
+  }
+  assert.equal(getters,0);
+  for(const mutate of [r=>r[2]=64,r=>r[4]++,r=>r[10]=null,r=>r[13]=true,r=>r[14]=15,r=>r[18]=1]){const copy=[...router];mutate(copy);assert.equal(decodeWorkerPostludeRouter(copy),null);}
+  for(const mutate of [n=>n[4]=false,n=>n[6]=null,n=>n[8]=3,n=>n[9]=1,n=>n[12]=1]){const copy=[...node];mutate(copy);assert.equal(decodeWorkerPostludeNode(copy),null);}
+});
+test("worker abort postlude pure: maximum extended cohort remains atomic within unchanged command budgets",async()=>{
+  const max=1000000,historical=await workerRelationMaximum(),parts=historical.rows.filter(x=>x.kind==="worker_abort_relation").map(x=>({v:3,kind:"worker_abort_part",part:x.part,ref:x.ref,data:structuredClone(x.data)}));
+  parts[4].data[1]=0;parts[0].data.push([1,63,63,max,max,true,true,true,true,3,true,2,null,true,15,false,true,0,0]);
+  parts[7].data[17]=[1,true,false,2,null,3,true,max/2,max,0,true,0,0];assert.ok(validateWorkerAbortGroup(parts));
+  for(const invalid of [false,true]){
+    if(invalid){parts[0].data[5]=[1,63,1,max,max,true,true,false,true,3,false,3,false,false,null,true,true,max,max];parts[7].data[17]=[1,true,false,2,null,3,false,max,max,max,false,max,max];}
+    assert.ok(validateWorkerAbortGroup(parts));
+    const frames=parts.map(p=>workerAbortRelationalPrefixV3+JSON.stringify(p));
+    for(const reverse of [false,true]){const events=workerRelationEvents(frames,reverse);for(const e of events){e.data.line=max;e.data.column=max;e.data.nesting=max;}
+      const out=await workerAbortPipeline(events);assert.equal(relationRecords(out.rows).length,8);assert.equal(out.lines.length,10);
+      assert.ok(out.rows.every(r=>Buffer.byteLength(JSON.stringify(r))<=512));assert.ok(out.lines.every(l=>Buffer.byteLength(l)<=768));assert.ok(Buffer.byteLength(out.lines.join(""))<=8192);
     }
   }
 });

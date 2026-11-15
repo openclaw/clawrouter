@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- Add a versioned, complete one-to-four-operation retirement diagnostic census and failure-preserving producer/accounting postlude guarded by the original router retirement seal; retain historical records and coarse fallback without changing strict Worker verdicts or claiming cancellation causes.
+
 - Preflight complete LiteLLM retirement diagnostic groups before emission, falling back to validated coarse evidence without widening relational admission or changing test verdicts.
 
 - Qualify LiteLLM metadata cancellation with an explicitly owned HTTP/1 reset after request-owned readiness, retaining strict ingress, producer retirement and accounting checks; generic fetch-abort coverage remains unqualified.

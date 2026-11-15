@@ -160,7 +160,16 @@ export function litellmHeldReady(r, scope) {
     && op.value.value?.byteLength > 0 && Number.isSafeInteger(op.settle) && Number.isSafeInteger(pending[0].invoke) && op.settle < pending[0].invoke);
 }
 export function litellmWorkerResource(r, scope) {
-  const read = r.operations.find(op => op.kind === "read" && op.state !== "fulfilled"), reader = read?.reader, input = read?.input;
+  let read = r.operations.find(op => op.kind === "read" && op.state !== "fulfilled");
+  if (!read && r.id === "native_abort") {
+    const first = r.retireChecks?.operation(r)?.operation;
+    const reads = r.operations.filter(op => op.kind === "read" && op.reader === first?.reader && op.input === first?.input);
+    const retained = first?.input?.pendingAtAbort;
+    const pending = Array.isArray(retained) && retained.length === 1 ? retained[0] : undefined;
+    if (first?.reader && pending && reads.includes(pending) && r.operations.filter(op => op === pending).length === 1) read = pending;
+    else if (first?.reader && reads.length === 1) read = reads[0];
+  }
+  const reader = read?.reader, input = read?.input;
   if (!read || !reader || !input) return null;
   const matches = kind => r.operations.filter(op => op.kind === kind && op.reader === reader && op.input === input);
   const observers = matches("read_observer").filter(op => op.originalRead === read.pending), closed = matches("closed"), cancels = matches("cancel");
@@ -262,8 +271,17 @@ export function litellmWorkerLedger(r, scope) {
     const pendingBound = pendingArray ? pending.every(op => owned(op) && op.kind === "read" && op.input === input && op.reader === reader) : null;
     const requestIndex = r.requests.findIndex(q => q.token === token && q.request === value(token, "request"));
     const inputIndex = r.inputs.indexOf(input), readerIndex = r.readers.indexOf(reader);
-    const associated = matched?.binding === true && ref.every(n => n !== null) && captured?.operation.kind === "closed"
-      && selected.every(owned) && exact.every(Boolean) && resource[0].every((n, i) => n === ref[i]) && resource[2][2][0] === ref[4] && c0 && derived;
+    const originalMembers = originals.filter(Boolean);
+    const aliasesOwned = originalMembers.every(op => r.operations.every(other =>
+      other === op || !has(other, "pending") || value(other, "pending") !== op.pending))
+      && r.operations.filter(op => has(op, "originalRead") && op.originalRead === originals[0]?.pending).every(op => op === originals[1]);
+    const cancellations = r.operations.filter(op => op.kind === "cancel");
+    const absentCancel = originals[3] === null && cancellations.length === 0;
+    const cancellationBound = cancellations.every(op => op === originals[3] && owned(op));
+    const associated = matched?.binding === true && ref.every(n => n !== null)
+      && originalMembers.includes(captured?.operation) && selected.every(owned)
+      && exact.slice(0, 3).every(Boolean) && (exact[3] || absentCancel) && cancellationBound && aliasesOwned
+      && resource[0].every((n, i) => n === ref[i]) && c0 && derived;
     const overflow = bad.length > 4 || rows.some(row => [row[0], row[3], row[9]].some(n => n === null))
       || ref.some(n => n === null) || pendingArray && (pending.length > 4 || pendingRows.some(row => row.some(n => n === null)));
     ledger[11] = {
@@ -335,17 +353,100 @@ export function litellmJoinedReadData(r, scope, source) {
   return [read,derivative];
 }
 // Snapshot every retained data field and array membership; no getter or error inspection.
-export function litellmRetirementSeal(r, scope, pair) {
-  const names=["operations","roots","inputs","readers","bodies","requests","failures","observerFailures","calls"],arrays=names.map(name=>r[name]);
+export function litellmRetirementSeal(r, scope, pair, postRetired = false) {
+  const names=["operations","roots","inputs","readers","bodies","requests","failures","observerFailures","calls",...(postRetired?["ingresses"]:[])],arrays=names.map(name=>r[name]);
   const members=arrays.map(values=>values.slice());
-  const rows=[...r.operations,...r.inputs,...r.readers,...r.calls];
+  const rows=[...r.operations,...r.inputs,...r.readers,...r.calls,...(postRetired?[...r.requests,...r.requests.map(q=>q.token)]:[])];
   const captured=rows.map(row=>Object.getOwnPropertyDescriptors(row));
-  return () => arrays.every((values,i)=>r[names[i]]===values&&values.length===members[i].length&&values.every((v,j)=>v===members[i][j]))
-    && rows.every((row,i)=>{const now=Object.getOwnPropertyDescriptors(row),before=captured[i];return Reflect.ownKeys(now).length===Reflect.ownKeys(before).length&&Reflect.ownKeys(before).every(key=>Object.hasOwn(before[key],"value")&&Object.hasOwn(now[key],"value")&&Object.is(before[key].value,now[key].value));})
-    && r.readers.every(reader=>reader.unlocks===1&&!reader.body.locked&&scope.retains(reader.transport,reader.response,reader.body,reader.reader))
+  const sequence=r.sequence;let invalid=false;
+  const check = () => (!postRetired||r.sequence===sequence&&r.requests.every(q=>q.retired===true)) && arrays.every((values,i)=>r[names[i]]===values&&values.length===members[i].length&&values.every((v,j)=>v===members[i][j]))
+    && rows.every((row,i)=>{const now=Object.getOwnPropertyDescriptors(row),before=captured[i];return Reflect.ownKeys(now).length===Reflect.ownKeys(before).length&&Reflect.ownKeys(before).every(key=>Object.hasOwn(before[key],"value")&&Object.hasOwn(now[key],"value")&&Object.is(before[key].value,now[key].value)&&(!postRetired||["writable","enumerable","configurable"].every(flag=>before[key][flag]===now[key][flag])));})
+    && r.readers.every(reader=>reader.unlocks===1&&(postRetired||!reader.body.locked)&&scope.retains(reader.transport,reader.response,reader.body,reader.reader))
     && r.readers.every(reader=>[["read","read"],["cancel","cancel"],["releaseLock","unlock"]].every(([name,key])=>Object.getOwnPropertyDescriptor(reader.reader,name)?.value===reader.wrappers[key]))
     && (!pair||pair.every(op=>op.state==="rejected"));
+  return () => {if(!postRetired)return check();if(invalid)return false;try{if(!check())invalid=true;}catch(error){invalid=true;throw error;}return !invalid;};
 }
+// Diagnostic-only owner. Its records never enter the original-operation ledger.
+export function litellmPostRetirement(r, scope, primary) {
+  const state={primary,failures:[],sequence:r.sequence,evaluated:0,passed:0,valid:true,usage:false,drain:0,drainDefined:null,
+    snapshot:0,snapshotDefined:null,available:false,receipt:null,nestedUnknown:false,final:false};
+  const seal=litellmRetirementSeal(r,scope,null,true), requests=r.requests.slice(), id=r.id, basePath=r.basePath;
+  const originalChecks=r.retireChecks.snapshot(), physicalMask=111;
+  const prerequisite=()=>r.id===id&&r.basePath===basePath&&id==="native_abort"&&(originalChecks[1]&physicalMask)===physicalMask&&(originalChecks[2]&physicalMask)===physicalMask&&requests.length===1&&r.inputs.length===1&&r.readers.length===1
+    &&r.failures.length===0&&r.observerFailures.length===0&&r.operations.every(op=>op.state!=="pending")
+    &&requests.every(q=>q.retired===true&&q.token.request===q.request&&q.token.scenario===r&&Number.isSafeInteger(q.token.generation)&&q.token.generation>0
+      &&r.operations.filter(op=>op.kind==="handler"&&op.token===q.token&&op.state==="fulfilled").length===1)
+    &&r.inputs.every(input=>requests.some(q=>q.token===input.token&&q.request===input.request))
+    &&r.readers.every(reader=>r.inputs.includes(reader.transport)&&reader.response===reader.transport.response
+      &&scope.retains(reader.transport,reader.response,reader.body,reader.reader)&&reader.unlocks===1)
+    &&r.calls.length===1&&r.calls[0].method==="GET"&&r.calls[0].url==="https://gateway.example"+r.basePath+"/models"
+    &&r.calls[0].authorization==="Bearer fixture-upstream-"+r.id&&r.calls[0].query===""&&r.calls[0].redirect==="manual"&&r.calls[0].body===false&&r.calls[0].extra===false;
+  const check=id=>{state.evaluated|=2**id;let ok=false;try{ok=state.valid&&seal()&&prerequisite();}catch(error){state.failures.push(error);}
+    if(ok)state.passed|=2**id;else state.valid=false;return ok;};
+  check(0);
+  return {state,check,seal,project(final=false){if(final){state.final=true;check(5);}return [1,state.evaluated,state.passed,state.sequence,r.sequence,true,primary!==undefined,state.valid,state.usage,
+    state.drain,state.drainDefined,state.snapshot,state.snapshotDefined,state.available,state.receipt,state.nestedUnknown,state.final,state.failures.length,state.failures.filter(e=>e===undefined).length];}};
+}
+export function litellmFinishRetirement(r, scope, failed, primary) {
+  const errors=failed?[primary]:[];
+  for(const q of r.requests)if(!q.retired){try{scope.retire(q.token);q.retired=true;}catch(error){errors.push(error);}}
+  if(failed&&r.id==="native_abort"&&!r.failurePostlude){
+    try{r.failurePostlude=litellmPostRetirement(r,scope,primary);}catch(error){errors.push(error);}
+  }
+  if(errors.length===1)throw errors[0];if(errors.length)throw new AggregateError(errors,"retirement and diagnostic seal failed");
+}
+export async function litellmPostludeUsage(r, drain, snapshot) {
+  const p=r.failurePostlude,s=p.state,errors=[s.primary];
+  if(s.usage)throw new AggregateError([s.primary,new Error("replayed diagnostic usage")],"retirement and diagnostic usage failed");
+  s.usage=true;p.check(1);
+  s.drain=1;try{await drain();s.drain=2;}catch(error){s.drain=3;s.drainDefined=error!==undefined;errors.push(error);}
+  p.check(2);
+  if(p.check(3)){
+    s.snapshot=1;
+    try{const usage=await snapshot();s.snapshot=2;s.available=true;
+      const events=usage?.events,event=Array.isArray(events)&&events.length===1?events[0]:null;
+      s.receipt=[!!event,event?.provider==="litellm"&&event.policy_id===r.id&&event.credential_id===r.id&&event.capability==="models.list",
+        event?.actual_cost_micros===0&&event.reserved_cost_micros===0,event?.model===null&&event.input_tokens===null&&event.output_tokens===null&&event.total_tokens===null]
+        .reduce((mask,value,i)=>mask|(value?2**i:0),0);
+    }catch(error){s.snapshot=3;s.snapshotDefined=error!==undefined;s.nestedUnknown=true;errors.push(error);}
+    finally{p.check(4);}
+  }else s.snapshot=4;
+  errors.push(...s.failures);
+  if(!s.valid)errors.push(new Error("invalidated diagnostic retirement seal"));
+  if(errors.length===1)throw errors[0];throw new AggregateError(errors,"retirement and diagnostic usage failed");
+}
+// Node owns only serialized correlation, not either Worker's private resources.
+export async function litellmFailurePostlude(primary, f, evidence, report = () => {}) {
+  const errors=[primary],node=[1,true,primary!==undefined,0,null,0,null,null,null,null,null,0,0];
+  const retain=error=>{errors.push(error);};
+  node[3]=1;
+  try{const source=await f.proof("native_abort");node[3]=2;
+    const joined=source?.joined;
+    if(Array.isArray(joined)&&joined.length===4&&joined[0]===1&&joined.slice(1).every(n=>Number.isSafeInteger(n)&&n>=0)){node[7]=joined[1];node[8]=joined[2];node[9]=joined[3];}
+    const owner=source?.owners?.length===1?source.owners[0]:null,call=source?.calls?.length===1?source.calls[0]:null;
+    node[10]=!!owner&&!!call&&owner.call===0&&owner.held===true&&owner.chat===false&&owner.finished===true&&owner.eof===false&&owner.cancels===1&&owner.fulfilledCancels===1
+      &&source.released===false&&source.active===0&&source.expired===0&&source.canceled===1&&source.finished===1
+      &&Array.isArray(source.operations)&&source.operations.every(op=>op.state==="fulfilled"&&["pull","cancel"].includes(op.kind))
+      &&source.operations.filter(op=>op.kind==="cancel").length===1&&owner.operations===source.operations.length&&owner.observers===source.operations.length*2
+      &&node[7]===source.operations.length&&node[8]===owner.observers&&node[9]===0
+      &&call.method==="GET"&&call.url==="https://gateway.example/team/v1/models"&&call.authorization==="Bearer fixture-upstream-native_abort"&&call.body===null;
+  }catch(error){node[3]=3;node[4]=error!==undefined;retain(error);}
+  node[5]=1;try{await f.control("usage","native_abort");node[5]=2;}catch(error){node[5]=3;node[6]=error!==undefined;retain(error);}
+  const pending=[];
+  for(const call of [()=>f.control("observation","native_abort"),()=>f.state("native_abort")]){
+    try{pending.push({promise:call()});}catch(error){pending.push({error});}
+  }
+  const reports=await Promise.all(pending.map(async row=>{if(Object.hasOwn(row,"error"))return {status:"rejected",reason:row.error};
+    try{return {status:"fulfilled",value:await row.promise};}catch(error){return {status:"rejected",reason:error};}}));
+  for(let i=0;i<reports.length;i++){
+    const outcome=reports[i];if(outcome.status==="rejected")retain(outcome.reason);
+    try{evidence.observation(15+i,outcome);}catch(error){node[11]++;if(error===undefined)node[12]++;retain(error);}
+  }
+  if(reports.every(row=>row.status==="fulfilled")){try{report(reports[0].value,reports[1].value);}catch(error){node[11]++;if(error===undefined)node[12]++;retain(error);}}
+  try{evidence.postlude(node);}catch(error){retain(error);}
+  if(errors.length===1)throw primary;throw new AggregateError(errors,"original retirement and diagnostic postlude failed");
+}
+
 export async function litellmWorkerDrain(r, scope, loadSource) {
   const checks=r.retireChecks??=litellmPredicateFacts();await checks.wait(1,()=>collectLiteLLMOperations(r));
   if(r.localRetirement){if(!r.localRetirement.valid()){const late=[...r.failures,...r.observerFailures,...r.operations.filter(op=>op.state!=="fulfilled").map(op=>op.error),new Error("late Worker retirement mutation")];r.workerDataDisposition=Object.freeze([1,r.operations.filter(op=>op.state==="rejected"||op.state==="threw").length,late.length]);throw new AggregateError(late,"invalidated Worker retirement");}if(r.localRetirement.failures.length)throw new AggregateError(r.localRetirement.failures,"original Worker retirement failed");return r.localRetirement;}
@@ -451,6 +552,9 @@ ${litellmPartialRole.toString()}
 ${litellmProducerRetired.toString()}
 ${litellmJoinedReadData.toString()}
 ${litellmRetirementSeal.toString()}
+${litellmPostRetirement.toString()}
+${litellmPostludeUsage.toString()}
+${litellmFinishRetirement.toString()}
 ${litellmWorkerDrain.toString()}
 ${litellmWorkerSourceProof.toString()}
 ${litellmWorkerResource.toString()}
@@ -468,7 +572,7 @@ const invoke=(r,kind,start,details)=>observeLiteLLMOperation(r,kind,start,detail
 const observe=(r,p,kind,input,reader,details={})=>invoke(r,kind,()=>p,{input,reader,signal:input?.signal,...details});
 function observation(r){
  const counts={};for(const op of r.operations){const key=op.kind+'_'+op.state;counts[key]=(counts[key]??0)+1;}
- return {checks:r.retireChecks?.snapshot()??null,ledger:litellmWorkerLedger(r,requestScope),operations:r.operations.length,counts,ingress:r.ingresses.map(signalState),
+ return {postlude:r.failurePostlude?.project(true)??null,checks:r.retireChecks?.snapshot()??null,ledger:litellmWorkerLedger(r,requestScope),operations:r.operations.length,counts,ingress:r.ingresses.map(signalState),
   readers:r.readers.map(reader=>({unlocks:reader.unlocks,locked:reader.body.locked})),
   inputs:r.inputs.map(input=>({signalAborted:signalState(input.signal)})),
   rejections:r.operations.filter(op=>op.state==='rejected').slice(0,8).map(op=>({kind:op.kind,invoke:op.invoke,settle:op.settle,defined:op.error!==undefined,signalAtInvoke:op.signalAborted??null,signalAtSettlement:op.abortedAtSettle??null,sameSignalReason:op.sameSignalReasonAtSettle??false,
@@ -541,8 +645,8 @@ export default {async fetch(request,bindings,context){
   if(action==='observation')return Response.json(observation(r));
   if(action==='started'){const deadline=Date.now()+5000;while(!litellmHeldReady(r,requestScope)){if(Date.now()>=deadline)return new Response(null,{status:504});await scheduler.wait(10);}return Response.json({started:true});}
   if(action==='release')return Reflect.apply(rawFetch,globalThis,['https://fixture.test/release/'+id,{method:'POST'}]);
-  if(action==='retire'){r.retireChecks??=litellmPredicateFacts();for(const q of r.requests)await r.retireChecks.wait(0,()=>q.promise);try{if(r.workerDeadline===true){r.retirement??=retireDeadline(r,bindings);return Response.json(await r.retirement);}const retirement=await drain(r);return Response.json({retired:true,source:retirement.source,dataDisposition:r.workerDataDisposition,calls:r.calls,operations:r.operations.map(x=>({kind:x.kind,state:x.state})),unlocked:r.readers.every(x=>x.unlocks===1&&!x.body.locked)});}finally{for(const q of r.requests)if(!q.retired){requestScope.retire(q.token);q.retired=true;}}}
-  if(action==='usage'){await drain(r);return Response.json(await usageSnapshot(bindings,'fixture',id,{kind:'admin'}));}
+  if(action==='retire'){r.retireChecks??=litellmPredicateFacts();for(const q of r.requests)await r.retireChecks.wait(0,()=>q.promise);let failed=false,primary;try{if(r.workerDeadline===true){r.retirement??=retireDeadline(r,bindings);return Response.json(await r.retirement);}const retirement=await drain(r);return Response.json({retired:true,source:retirement.source,dataDisposition:r.workerDataDisposition,calls:r.calls,operations:r.operations.map(x=>({kind:x.kind,state:x.state})),unlocked:r.readers.every(x=>x.unlocks===1&&!x.body.locked)});}catch(error){failed=true;primary=error;throw error;}finally{if(r.id==='native_abort')litellmFinishRetirement(r,requestScope,failed,primary);else for(const q of r.requests)if(!q.retired){requestScope.retire(q.token);q.retired=true;}}}
+  if(action==='usage'){if(r.failurePostlude)return await litellmPostludeUsage(r,()=>drain(r),()=>usageSnapshot(bindings,'fixture',id,{kind:'admin'}));await drain(r);return Response.json(await usageSnapshot(bindings,'fixture',id,{kind:'admin'}));}
   if(request.method!=='POST')return new Response(null,{status:405});
   if(action==='narrow'||action==='broaden'){r.policy={...r.policy,models:action==='narrow'?[]:null};await authorityCall(bindings,'/policies/put',{policyId:id,policy:r.policy});}
   else if(action==='revoke')await revokeGrantCredentials(bindings,'oauth/'+id+'/litellm');
@@ -575,6 +679,18 @@ export function litellmProducerOwners(r) {
     return {call:index,held:producer.held,chat:producer.chat,finished:producer.finished,eof:producer.eof,cancels:cancels.length,fulfilledCancels:cancels.filter(op=>op.state==="fulfilled").length,operations:ops.length,observers:ops.length*2};
   });
 }
+export function litellmProducerBoundary(r) {
+  litellmProducerOwners(r);
+  const names=["operations","observers","observerFailures","producers","calls"],arrays=names.map(name=>r[name]),members=arrays.map(a=>a.slice());
+  const owners=r.producers.map(p=>[p,p.call,p.request,p.held,p.chat]);
+  const operations=r.operations.map(op=>[op,op.producer,op.promise,op.observer,op.guard]);
+  return ()=>{
+    if(arrays.some((a,i)=>r[names[i]]!==a||a.length<members[i].length||members[i].some((v,j)=>a[j]!==v))
+      ||owners.some(([p,call,request,held,chat])=>p.call!==call||p.request!==request||p.held!==held||p.chat!==chat)
+      ||operations.some(([op,p,promise,observer,guard])=>op.producer!==p||op.promise!==promise||op.observer!==observer||op.guard!==guard))throw new Error("changed producer ownership");
+    return litellmProducerOwners(r);
+  };
+}
 export async function joinLiteLLMProducer(r) {
   let at=0, observed=0;
   while(at<r.operations.length||observed<r.observers.length) {
@@ -588,6 +704,7 @@ export async function joinLiteLLMProducer(r) {
 export function upstreamFixture() {
   return String.raw`
 ${joinLiteLLMProducer.toString()}
+${litellmProducerBoundary.toString()}
 ${litellmObserveProducer.toString()}
 ${litellmProducerOwners.toString()}
 const rows=new Map(),encoder=new TextEncoder();
@@ -598,8 +715,9 @@ export default {async fetch(request){
   if(u.pathname==='/setup'){for(const row of await request.json())rows.set(row.id,{...row,calls:[],active:0,canceled:0,aborted:0,expired:0,finished:0,release:false,operations:[],observers:[],observerFailures:[],producers:[]});return Response.json({ready:true});}
   const m=/^\/(release|state|started|proof)\/([a-z0-9_]+)$/.exec(u.pathname);if(!m||!rows.has(m[2]))return new Response(null,{status:404});const r=rows.get(m[2]);
   if(m[1]==='release')r.release=true;
-  if(m[1]==='proof'){const joined=await joinLiteLLMProducer(r);return Response.json({owners:r.mode==='partial_abort'||r.id==='native_abort'?litellmProducerOwners(r):null,released:r.release,calls:r.calls,active:r.active,canceled:r.canceled,aborted:r.aborted,expired:r.expired,finished:r.finished,operations:r.operations.map(op=>({kind:op.kind,state:op.state})),joined});}
+  if(m[1]==='proof'){const boundary=r.id==='native_abort'?litellmProducerBoundary(r):null;const joined=await joinLiteLLMProducer(r);const owners=boundary?boundary():r.mode==='partial_abort'?litellmProducerOwners(r):null;return Response.json({owners,released:r.release,calls:r.calls,active:r.active,canceled:r.canceled,aborted:r.aborted,expired:r.expired,finished:r.finished,operations:r.operations.map(op=>({kind:op.kind,state:op.state})),joined});}
   if(m[1]==='started'){const deadline=Date.now()+5000;while(r.calls.length===0){if(Date.now()>=deadline)return new Response(null,{status:504});await scheduler.wait(10);}}
+  if(r.id==='native_abort')litellmProducerBoundary(r)();
   return Response.json({calls:r.calls,active:r.active,canceled:r.canceled,aborted:r.aborted,expired:r.expired,finished:r.finished,producer:[r.operations.length,...['pending','fulfilled','rejected','threw'].map(state=>r.operations.filter(op=>op.state===state).length)]});
  }
  const id=/^Bearer fixture-upstream-([a-z0-9_]+)(?:-rotated)?$/.exec(request.headers.get('authorization')??'')?.[1],r=rows.get(id);
@@ -1009,16 +1127,9 @@ function registerTests() {
       try { proof = await f.control("retire", "native_abort"); }
       catch (error) {
         evidence.failed(error);
-        const reports = await Promise.allSettled([f.control("observation", "native_abort"), f.state("native_abort")]);
-        evidence.observation(15, reports[0]); evidence.observation(16, reports[1]);
-        const failures = [error, ...reports.filter(report => report.status === "rejected").map(report => report.reason)];
-        if (reports.every(report => report.status === "fulfilled")) {
-          const [observed, state] = reports.map(report => report.value);
-          try { t.diagnostic(JSON.stringify({ worker: observed, upstream: { calls: state.calls.length, active: state.active, canceled: state.canceled, aborted: state.aborted, expired: state.expired, finished: state.finished } })); }
-          catch (reportingError) { failures.push(reportingError); }
-        }
-        if (failures.length > 1) throw new AggregateError(failures, "original failure and observation failure");
-        throw error;
+        await litellmFailurePostlude(error, f, evidence, (observed, state) => {
+          t.diagnostic(JSON.stringify({ worker: observed, upstream: { calls: state.calls.length, active: state.active, canceled: state.canceled, aborted: state.aborted, expired: state.expired, finished: state.finished } }));
+        });
       }
       evidence.stage(17); assert.equal(proof.retired, true);
       evidence.stage(18); const state = await f.state("native_abort");
