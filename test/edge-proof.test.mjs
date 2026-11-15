@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import YAML from "yaml";
 import { edgeProof, validatePlan, renderEdgeConfig } from "../scripts/edge-proof-profile.mjs";
-import { cases, newRuntimeAuthority, secretProjections, teardownGuard, packagingEnvironment, validateNamespace, namespaceArguments, runOwnedProcess, requireProcessSuccess, verifyDryRun, compareCapsules, admitSource, qualifyInstalledInputs, createPackagingDiagnostics, validatePackagingDiagnostic, parsePackagingOutput, acceptPackagingProcess, emitPackagingFailure, runPackagingBoundary, validatePackagingReceipt } from "../scripts/edge-proof.mjs";
+import { cases, newRuntimeAuthority, secretProjections, teardownGuard, packagingEnvironment, validateNamespace, namespaceArguments, runOwnedProcess, requireProcessSuccess, verifyDryRun, compareCapsules, admitSource, qualifyInstalledInputs, createPackagingDiagnostics, validatePackagingDiagnostic, parsePackagingOutput, acceptPackagingProcess, emitPackagingFailure, runPackagingBoundary, validatePackagingReceipt, summarizePackagingOutput, decodeLinuxPolicy } from "../scripts/edge-proof.mjs";
 import { deploymentTarget, assertDeploymentMutation } from "../scripts/deployment-profile.mjs";
 import { parseSdkReceipts, readBoundedJson } from "./openclaw-edge-native-cancellation.test.mjs";
 
@@ -154,7 +154,8 @@ test("namespace evidence rejects absent, shared, external and malformed state", 
   assert.equal(validateNamespace({ ...evidence, routes6: [reject] }, parent), true);
   assert.throws(() => validateNamespace({ ...evidence, routes6: [reject.replace("00200200", "00000001")] }, parent));
 });
-const successfulProcess = () => ({ code: 0, signal: null, closed: true, timedOut: false, interrupted: false, errors: [], remaining: [], observed: new Map(), stdout: "--dry-run: exiting now.\n", stderr: "" });
+const fingerprint = bytes => ({ bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex"), esc: bytes.includes(0x1b), complete: true });
+const successfulProcess = () => ({ outputSummary: { stdout: fingerprint(Buffer.from("--dry-run: exiting now.\n")), stderr: fingerprint(Buffer.alloc(0)) }, code: 0, signal: null, closed: true, timedOut: false, interrupted: false, errors: [], remaining: [], observed: new Map(), stdout: "--dry-run: exiting now.\n", stderr: "" });
 test("dry-run requires original successful close, marker and exact bytes, retaining undefined errors", () => {
   const bytes = Buffer.from("export default {};\n"), hash = createHash("sha256").update(bytes).digest("hex");
   assert.equal(verifyDryRun(successfulProcess(), bytes, hash).sha256, hash);
@@ -334,4 +335,90 @@ test("Wrangler completion reports distinct marker, output hash and privacy gates
     assert.throws(() => verifyDryRun(result, body, expected, failure, phases, roots));
     assert.equal(failure.records.filter(row => row.outcome === "rejected").at(-1).phase, phase);
   }
+});
+
+test("launch summary keeps unknown, ANSI and near-match output private without OS classification", () => {
+  const samples = ["unshare: unshare failed: Operation not permitted\n", "unshare: unshare failed: Operation not permitted!\n", "\u001b[31munshare: unshare failed: Operation not permitted\n", "PRIVATE_SENTINEL value\n"];
+  for (const stderr of samples) {
+    const result = { ...successfulProcess(), code: 1, stdout: "", stderr, outputSummary: { stdout: fingerprint(Buffer.alloc(0)), stderr: fingerprint(Buffer.from(stderr)) } };
+    const report = createPackagingDiagnostics("parent");
+    assert.throws(() => acceptPackagingProcess(result, report, "child", "supervisor_close", "child_report"));
+    const protocol = report.records.find(row => row.phase === "protocol_summary");
+    assert.deepEqual([protocol.valid, protocol.entry, protocol.final, protocol.receipts], [0, 0, 0, 0]);
+    assert.equal(report.records.find(row => row.phase === "supervisor_close").exit, 1);
+    const lines = []; emitPackagingFailure(report.records, line => lines.push(line));
+    assert.ok(!lines.join("").includes("unshare:") && !lines.join("").includes("PRIVATE_SENTINEL") && !lines.join("").includes("\u001b"));
+    const stream = report.records.find(row => row.phase === "stderr_summary");
+    assert.deepEqual({ bytes: stream.bytes, sha256: stream.sha256, esc: stream.esc, complete: stream.complete }, fingerprint(Buffer.from(stderr)));
+  }
+});
+test("launch protocol census distinguishes valid, foreign, malformed and receipt lines without accepting them", () => {
+  const good = diagnosticChildOutput("build_a");
+  assert.deepEqual(summarizePackagingOutput(good, "build_a"), { valid: 2, entry: 1, final: 1, rejected: 0, foreign: 0, malformed: 0, receipts: 1, unclassified: 0, complete: true });
+  const failedFinal = good.replace('"phase":"final","outcome":"fulfilled"', '"phase":"final","outcome":"rejected"');
+  assert.equal(summarizePackagingOutput(failedFinal, "build_a").final, 1);
+  assert.equal(summarizePackagingOutput(failedFinal, "build_a").rejected, 1);
+  const foreign = diagnosticChildOutput("build_b"), invalid = 'EDGE_PACKAGING_V1 {bad}\n';
+  const summary = summarizePackagingOutput(good + foreign + invalid + 'PRIVATE_SENTINEL\n', "build_a");
+  assert.deepEqual(summary, { valid: 2, entry: 1, final: 1, rejected: 0, foreign: 2, malformed: 1, receipts: 2, unclassified: 1, complete: true });
+  assert.throws(() => parsePackagingOutput(good + foreign, ["build_a"]));
+  assert.throws(() => parsePackagingOutput(good + invalid, ["build_a"]));
+  const bounded = summarizePackagingOutput("unknown\n".repeat(257), "child");
+  assert.equal(bounded.complete, false); assert.equal(bounded.unclassified, 256);
+  assert.equal(summarizePackagingOutput('{"built":true}\n', "child").receipts, 0);
+});
+test("launch fingerprints hash original byte chunks even when UTF-8 capture differs", async () => {
+  const stdout = Buffer.from([0xf0, 0x9f, 0xa6, 0x8a, 0xff]), stderr = Buffer.from([0x1b, 0xff, 0x0a]);
+  const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter();
+  const result = await runOwnedProcess("synthetic-only", [], { spawnProcess() {
+    queueMicrotask(() => {
+      child.stdout.emit("data", stdout.subarray(0, 2)); child.stdout.emit("data", stdout.subarray(2));
+      child.stderr.emit("data", stderr); child.emit("close", 1, null);
+    });
+    return child;
+  } });
+  assert.deepEqual(result.outputSummary, { stdout: fingerprint(stdout), stderr: fingerprint(stderr) });
+  const report = createPackagingDiagnostics("parent");
+  assert.throws(() => acceptPackagingProcess(result, report, "child", "supervisor_close", "child_report"));
+  assert.equal(report.records.find(row => row.phase === "protocol_summary").complete, false);
+  assert.equal(result.code, 1); assert.equal(result.closed, true);
+});
+test("launch summary own-data rejection retains original undefined failure and never invokes getters", () => {
+  let reads = 0;
+  const capture = fingerprint(Buffer.alloc(0)); Object.defineProperty(capture, "sha256", { get() { reads++; return "PRIVATE_SENTINEL"; } });
+  const result = { ...successfulProcess(), code: 1, errors: [undefined], outputSummary: { stdout: capture } };
+  assert.throws(() => acceptPackagingProcess(result, createPackagingDiagnostics("parent"), "child", "supervisor_close", "child_report"), error => error instanceof AggregateError && error.errors[0].errors.includes(undefined));
+  assert.equal(reads, 0);
+  const record = { v: 1, role: "parent", phase: "stdout_summary", outcome: "observed", ...fingerprint(Buffer.alloc(0)) };
+  for (const value of [{ ...record, message: "private" }, { ...record, sha256: "private" }, { ...record, bytes: -1 }, { ...record, complete: null }, { ...record, role: "foreign" }]) assert.throws(() => validatePackagingDiagnostic(value));
+  Object.defineProperty(record, "bytes", { get() { reads++; return 0; } });
+  assert.throws(() => validatePackagingDiagnostic(record)); assert.equal(reads, 0);
+  assert.throws(() => validatePackagingDiagnostic(new Proxy({}, { getOwnPropertyDescriptor() { throw undefined; } })));
+});
+test("launch Linux policy enums treat missing, invalid and hostile data as unknown", () => {
+  assert.deepEqual(decodeLinuxPolicy({ status: "Name:\tfixture\nSeccomp:\t2\n", apparmor: "1\n", usernsClone: "0\n", maxUserNamespaces: "123\n" }), { seccomp: 2, apparmor: 1, usernsClone: 0, maxUserNamespaces: "positive" });
+  assert.equal(decodeLinuxPolicy({ maxUserNamespaces: "0\n" }).maxUserNamespaces, "zero");
+  const unknown = { seccomp: null, apparmor: null, usernsClone: null, maxUserNamespaces: "unknown" };
+  for (const inputs of [{}, { status: "Seccomp:\t2\nSeccomp:\t0\n", apparmor: "2", usernsClone: "1 private", maxUserNamespaces: "-1" }, new Proxy({}, { getOwnPropertyDescriptor() { throw undefined; } })]) assert.deepEqual(decodeLinuxPolicy(inputs), unknown);
+  let reads = 0; const inputs = {}; Object.defineProperty(inputs, "status", { get() { reads++; return "Seccomp:\t0"; } });
+  assert.deepEqual(decodeLinuxPolicy(inputs), unknown); assert.equal(reads, 0);
+  const row = { v: 1, role: "parent", phase: "linux_policy", outcome: "observed", ...unknown };
+  assert.deepEqual(validatePackagingDiagnostic(row), row);
+  for (const change of [{ seccomp: 3 }, { apparmor: -1 }, { maxUserNamespaces: "private" }]) assert.throws(() => validatePackagingDiagnostic({ ...row, ...change }));
+});
+test("launch failure and no-child evidence precede fulfilled milestones within the same annotation budget", () => {
+  const report = createPackagingDiagnostics("parent");
+  for (const phase of ["entry", "runtime", "cwd", "source", "dependencies", "temp", "environment", "parent_namespaces"]) report.mark(phase, "fulfilled");
+  report.accept({ v: 1, role: "parent", phase: "linux_policy", outcome: "observed", ...decodeLinuxPolicy({}) });
+  const failed = { ...successfulProcess(), code: 1, stdout: "", outputSummary: { stdout: fingerprint(Buffer.alloc(0)), stderr: fingerprint(Buffer.alloc(0)) } };
+  assert.throws(() => acceptPackagingProcess(failed, report, "child", "supervisor_close", "child_report"));
+  report.mark("final", "rejected", undefined);
+  const lines = []; emitPackagingFailure(report.records, line => lines.push(line));
+  const rows = lines.map(line => JSON.parse(line.slice(line.indexOf("::", 2) + 2)));
+  assert.deepEqual(rows.slice(0, 6).map(row => row.phase), ["supervisor_close", "protocol_summary", "stdout_summary", "stderr_summary", "child_report", "linux_policy"]);
+  assert.equal(rows.length, 10); assert.equal(rows.at(-1).phase, "overflow");
+  assert.equal(rows.at(-1).errors, new Set(report.records.map(row => row.role + ":" + row.phase)).size - 9);
+  assert.ok(lines.every(line => line.startsWith("::error ") && Buffer.byteLength(line) <= 768));
+  assert.ok(Buffer.byteLength(lines.join("")) <= 8192);
+  const again = []; emitPackagingFailure(report.records, line => again.push(line)); assert.deepEqual(again, lines);
 });

@@ -1,5 +1,5 @@
 import { randomBytes, createHash } from "node:crypto";
-import { readFile, writeFile, mkdir, mkdtemp, realpath, readlink, readdir, lstat } from "node:fs/promises";
+import { readFile, writeFile, mkdir, mkdtemp, realpath, readlink, readdir, lstat, open } from "node:fs/promises";
 import { resolve, join, dirname, relative } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { spawn, execFileSync } from "node:child_process";
@@ -63,6 +63,28 @@ function ownData(value, name) {
   return descriptor.value;
 }
 export function validatePackagingDiagnostic(value) {
+  const phase = value && typeof value === "object" ? ownData(value, "phase") : null;
+  const summaries = {
+    stdout_summary: ["bytes", "sha256", "esc", "complete"], stderr_summary: ["bytes", "sha256", "esc", "complete"],
+    protocol_summary: ["valid", "entry", "final", "rejected", "foreign", "malformed", "receipts", "unclassified", "complete"],
+    linux_policy: ["seccomp", "apparmor", "usernsClone", "maxUserNamespaces"],
+  };
+  if (typeof phase === "string" && Object.hasOwn(summaries, phase)) {
+    const keys = ["v", "role", "phase", "outcome", ...summaries[phase]];
+    if (Object.getOwnPropertyNames(value).sort().join() !== [...keys].sort().join()) refuse("diagnostic-schema");
+    const row = Object.fromEntries(keys.map(key => [key, ownData(value, key)]));
+    if (row.v !== 1 || !diagnosticRoles.includes(row.role) || row.outcome !== "observed") refuse("diagnostic-enum");
+    if (phase === "linux_policy") {
+      if (![null, 0, 1, 2].includes(row.seccomp) || ![null, 0, 1].includes(row.apparmor) || ![null, 0, 1].includes(row.usernsClone) || !["zero", "positive", "unknown"].includes(row.maxUserNamespaces)) refuse("diagnostic-policy");
+    } else {
+      if (typeof row.complete !== "boolean") refuse("diagnostic-boolean");
+      if (phase === "protocol_summary") {
+        for (const key of summaries[phase].filter(key => key !== "complete")) if (!Number.isSafeInteger(row[key]) || row[key] < 0 || row[key] > 65535) refuse("diagnostic-count");
+      } else if (!Number.isSafeInteger(row.bytes) || row.bytes < 0 || typeof row.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(row.sha256) || typeof row.esc !== "boolean") refuse("diagnostic-stream");
+    }
+    if (Buffer.byteLength(JSON.stringify(row)) > 640) refuse("diagnostic-capacity");
+    return row;
+  }
   const keys = ["v", "role", "phase", "outcome", "defined", "exit", "signal", "closed", "timedOut", "interrupted", "errors", "remaining"];
   if (!value || typeof value !== "object" || Object.getOwnPropertyNames(value).sort().join() !== [...keys].sort().join()) refuse("diagnostic-schema");
   const row = Object.fromEntries(keys.map(key => [key, ownData(value, key)]));
@@ -95,7 +117,7 @@ export function createPackagingDiagnostics(role, writer) {
     } catch (error) { errors.push(error); }
   };
   return {
-    records, errors, accept, mark,
+    role, records, errors, accept, mark,
     sync(phase, operation) { mark(phase, "enter"); try { const value = operation(); mark(phase, "fulfilled"); return value; } catch (error) { mark(phase, "rejected", error); throw error; } },
     async step(phase, operation) { mark(phase, "enter"); try { const value = await operation(); mark(phase, "fulfilled"); return value; } catch (error) { mark(phase, "rejected", error); throw error; } },
   };
@@ -112,6 +134,60 @@ export function parsePackagingOutput(text, roles) {
     } else if (line.trim()) output.push(line);
   }
   return { records, output };
+}
+// Independent observation only: malformed/foreign records remain fatal in the
+// original parser below. Never emit non-protocol lines or infer an OS cause.
+export function summarizePackagingOutput(text, role) {
+  if (typeof text !== "string" || Buffer.byteLength(text) > 1024 * 1024 || !diagnosticRoles.includes(role)) refuse("diagnostic-output-capacity");
+  const summary = { valid: 0, entry: 0, final: 0, rejected: 0, foreign: 0, malformed: 0, receipts: 0, unclassified: 0, complete: true };
+  const roles = role === "child" ? ["child", "build_a", "build_b"] : [role];
+  let count = 0;
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    if (++count > 256) { summary.complete = false; break; }
+    if (line.startsWith(diagnosticPrefix)) {
+      try {
+        if (Buffer.byteLength(line) > 768) refuse("diagnostic-capacity");
+        const row = validatePackagingDiagnostic(JSON.parse(line.slice(diagnosticPrefix.length)));
+        if (!roles.includes(row.role)) { summary.foreign++; continue; }
+        summary.valid++;
+        if (row.outcome === "rejected") summary.rejected++;
+        if (row.role === role) {
+          if (row.phase === "entry") summary.entry++;
+          if (row.phase === "final") summary.final++;
+        }
+      } catch { summary.malformed++; }
+    } else {
+      try {
+        const value = JSON.parse(line);
+        if (role === "child") validatePackagingReceipt(value);
+        else if (!value || Object.keys(value).join() !== "built" || value.built !== true) refuse("invalid-builder-receipt");
+        summary.receipts++;
+      } catch { summary.unclassified++; }
+    }
+  }
+  return summary;
+}
+export function decodeLinuxPolicy(inputs) {
+  const get = key => { try { const value = ownData(inputs, key); return typeof value === "string" ? value : null; } catch { return null; } };
+  const bit = value => value === "0\n" || value === "0" ? 0 : value === "1\n" || value === "1" ? 1 : null;
+  const status = get("status"), matches = status?.split("\n").filter(line => line.startsWith("Seccomp:"));
+  const seccomp = matches?.length === 1 && /^Seccomp:\t[012]$/.test(matches[0]) ? Number(matches[0].at(-1)) : null;
+  const max = get("maxUserNamespaces");
+  return { seccomp, apparmor: bit(get("apparmor")), usernsClone: bit(get("usernsClone")), maxUserNamespaces: typeof max === "string" && /^(?:0|[1-9][0-9]{0,19})\n?$/.test(max) ? (BigInt(max.trim()) === 0n ? "zero" : "positive") : "unknown" };
+}
+async function readLinuxPolicy() {
+  const inputs = {};
+  for (const [key, path, limit] of [["status", "/proc/self/status", 65536], ["apparmor", "/proc/sys/kernel/apparmor_restrict_unprivileged_userns", 64], ["usernsClone", "/proc/sys/kernel/unprivileged_userns_clone", 64], ["maxUserNamespaces", "/proc/sys/user/max_user_namespaces", 64]]) {
+    let handle;
+    try {
+      handle = await open(path, "r");
+      const bytes = Buffer.alloc(limit + 1), result = await handle.read(bytes, 0, bytes.length, 0);
+      inputs[key] = result.bytesRead <= limit ? bytes.subarray(0, result.bytesRead).toString("utf8") : null;
+    } catch { inputs[key] = null; }
+    finally { if (handle) await handle.close(); }
+  }
+  return decodeLinuxPolicy(inputs);
 }
 export function validatePackagingReceipt(value) {
   const exact = (object, keys) => {
@@ -133,6 +209,20 @@ export function acceptPackagingProcess(result, report, role, closePhase, reportP
   const errors = []; let parsed;
   try { requireProcessSuccess(result); report.mark(closePhase, "fulfilled", undefined, result); }
   catch (error) { errors.push(error); report.mark(closePhase, "rejected", error, result); }
+  // Observe the original capture independently of strict parsing, so no-entry
+  // failures still carry bounded evidence. Observation failures cannot mask exit.
+  try {
+    const output = ownData(result, "outputSummary");
+    for (const stream of ["stdout", "stderr"]) {
+      const capture = ownData(output, stream);
+      report.accept({ v: 1, role: report.role, phase: `${stream}_summary`, outcome: "observed", ...Object.fromEntries(["bytes", "sha256", "esc", "complete"].map(key => [key, ownData(capture, key)])) });
+    }
+    const summary = summarizePackagingOutput(ownData(result, "stdout"), role);
+    // The strict parser remains authoritative. A truncated/undecodable capture
+    // cannot claim a complete census of the original byte stream.
+    summary.complete &&= ownData(ownData(output, "stdout"), "complete") === true && ownData(ownData(output, "stdout"), "sha256") === digest(ownData(result, "stdout"));
+    report.accept({ v: 1, role: report.role, phase: "protocol_summary", outcome: "observed", ...summary });
+  } catch (error) { errors.push(error); report.mark(reportPhase, "rejected", error); }
   // Parse only newly generated, strictly validated records. Never echo child
   // stdout/stderr or classify their arbitrary text as an operating-system cause.
   try {
@@ -150,7 +240,9 @@ export function emitPackagingFailure(records, writer) {
   const valid = records.map(validatePackagingDiagnostic), unique = new Map();
   // Keep failure boundaries first, then the most recent phase per role. All
   // omitted failures still fail the operation; this is only a bounded report.
-  for (const row of [...valid.filter(row => row.outcome === "rejected"), ...valid.toReversed()]) {
+  const priority = ["supervisor_close", "protocol_summary", "stdout_summary", "stderr_summary", "child_report", "linux_policy"];
+  const first = priority.flatMap(phase => valid.filter(row => row.role === "parent" && row.phase === phase).toReversed());
+  for (const row of [...first, ...valid.filter(row => row.outcome === "rejected"), ...valid.toReversed()]) {
     const key = `${row.role}:${row.phase}`; if (!unique.has(key)) unique.set(key, row);
   }
   let bytes = 0;
@@ -262,6 +354,7 @@ export async function privateProcesses() {
 // failed command pass. The outer PID namespace also contains escaped groups.
 export async function runOwnedProcess(command, args, { cwd, env, timeoutMs = 60000, graceMs = 1000, sample = async () => [], spawnProcess = spawn, signalSource = process } = {}) {
   const result = { code: null, signal: null, timedOut: false, interrupted: false, closed: false, errors: [], observed: new Map(), stdout: "", stderr: "" };
+  const captures = Object.fromEntries(["stdout", "stderr"].map(key => [key, { bytes: 0, hash: createHash("sha256"), esc: false }]));
   let child, escalation, bytes = 0, sampling = false, stopped = false, finished = false;
   const stop = signal => {
     if (!child?.pid || finished) return;
@@ -281,6 +374,9 @@ export async function runOwnedProcess(command, args, { cwd, env, timeoutMs = 600
     finally { sampling = false; }
   };
   const append = key => data => {
+    // Hash original bytes before the existing bounded UTF-8 capture. Chunk
+    // boundaries and malformed UTF-8 must not change these fingerprints.
+    const capture = captures[key]; capture.bytes += data.length; capture.hash.update(data); capture.esc ||= data.includes(0x1b);
     bytes += data.length;
     if (bytes > 1024 * 1024) { if (!stopped) result.errors.push(new Error("edge-proof: output-capacity")); stopped = true; stop("SIGTERM"); }
     else result[key] += data.toString("utf8");
@@ -305,6 +401,7 @@ export async function runOwnedProcess(command, args, { cwd, env, timeoutMs = 600
   // Join any already-started observation before reading the final process set.
   while (sampling) await new Promise(resolveTick => setTimeout(resolveTick, 1));
   try { result.remaining = await sample(); } catch (error) { result.errors.push(error); result.remaining = null; }
+  result.outputSummary = Object.fromEntries(Object.entries(captures).map(([key, value]) => [key, { bytes: value.bytes, sha256: value.hash.digest("hex"), esc: value.esc, complete: result.closed }]));
   return result;
 }
 export function requireProcessSuccess(result) {
@@ -406,6 +503,7 @@ async function offlineCi(report) {
   await report.step("dependencies", () => qualifyInstalledInputs(cwd));
   const root = await report.step("temp", () => mkdtemp(join(tmpdir(), "edge-offline-")));
   const env = await report.step("environment", () => prepareEnvironment(root)), parent = await report.step("parent_namespaces", namespaceIdentity);
+  report.accept({ v: 1, role: "parent", phase: "linux_policy", outcome: "observed", ...await readLinuxPolicy() });
   report.mark("parent_launch", "enter");
   const result = await runOwnedProcess("/usr/bin/unshare", namespaceArguments(process.execPath, [script, "offline-child", cwd, root, JSON.stringify(parent)]), { cwd: root, env, timeoutMs: 480000 });
   const output = acceptPackagingProcess(result, report, "child", "supervisor_close", "child_report");
