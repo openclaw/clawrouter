@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- Qwen regional proof: join original operations and their attached observers to a stable fixed point, bind Worker fetches to the original ingress request, and seal ownership only after independent producer/accounting checks and restoration. All original rejection and retirement assertions remain strict.
+
 - Preserve bounded script and Worker failure reports when composing Qwen region coverage with the landed native retirement diagnostics.
 
 - Report native-bound realtime authority failure stages and independent cleanup outcomes for twelve distinct variants, retaining original failures within bounded diagnostics and keeping build failures attributed to the build after anchor callbacks finish.

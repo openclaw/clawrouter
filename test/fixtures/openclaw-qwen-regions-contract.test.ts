@@ -18,10 +18,10 @@ const entryWitness = createQwenEntryWitness(value => console.log("QWEN_ENTRY_V1 
 entryWitness.moduleEvaluated();
 const origin = process.env.CLAWROUTER_CONTRACT_ORIGIN!;
 type Row = { id: string; provider: string; model: string; simple: boolean; mode: string };
-type Operation = { kind: string; pending: Promise<unknown>; state: string; reason?: unknown };
-type Invocation = Readonly<{ caller: object; fn: Function; receiver: unknown; args: readonly unknown[] }>;
+type Operation = { kind: string; pending: Promise<unknown>; state: string; reason?: unknown; generation: object; binding?: object };
+type Invocation = Readonly<{ generation: object; caller: object; fn: Function; receiver: unknown; args: readonly unknown[] }>;
 type Acquisition = { invocation: Invocation; context: object; input: unknown; fn: Function; receiver: unknown; args: readonly unknown[]; transport?: FetchReceipt; result?: unknown };
-type FetchReceipt = { acquisition: Acquisition; context: object; response?: Response };
+type FetchReceipt = { acquisition: Acquisition; context: object; generation: object; fn: Function; receiver: unknown; args: readonly unknown[]; pending?: Promise<Response>; response?: Response };
 
 // BEGIN shared fixture functions. The outer executes these exact functions after
 // native TypeScript stripping, including their original-operation tests.
@@ -46,47 +46,84 @@ function qwenRegionCases(): Row[] {
 }
 
 function createQwenLedger() {
-  const operations: Operation[] = [], synchronous: unknown[] = [], restorers: Array<() => void> = [];
-  const readers: Array<{ body: ReadableStream<Uint8Array>; owner?: object; unlocks: number; returns: number }> = [];
-  const bodies = new WeakSet<object>();
-  function observe<T>(kind: string, pending: Promise<T>): Promise<T> {
-    const operation: Operation = { kind, pending, state: "pending" }; operations.push(operation);
-    void pending.then(() => { operation.state = "fulfilled"; }, reason => { operation.state = "rejected"; operation.reason = reason; });
+  const generation = Object.freeze({});
+  const operations: Operation[] = [], observers: Array<{ pending: Promise<unknown>; terminal?: Promise<unknown>; state: string; reason?: unknown }> = [];
+  const synchronous: unknown[] = [], registration: unknown[] = [], observerFailures: unknown[] = [], ownershipFailures: unknown[] = [], restorationFailures: unknown[] = [], lateFailures: unknown[] = [];
+  const restorers: Array<() => void> = [];
+  const readers: Array<{ body: ReadableStream<Uint8Array>; reader: ReadableStreamDefaultReader<Uint8Array>; response?: Response; owner?: object; generation: object; closed: Promise<unknown>; unlocks: number; returns: number }> = [];
+  const bodies = new WeakSet<object>(), responses = new WeakMap<object, object | undefined>(), originals = new WeakSet<object>();
+  let originalCursor = 0, observerCursor = 0, inFlight: Promise<void> | undefined, restored = false, sealed: object | undefined;
+  function open() {
+    if (sealed) { const error = new Error("sealed Qwen owner cannot acquire work"); lateFailures.push(error); throw error; }
+  }
+  function observe<T>(kind: string, pending: Promise<T>, binding?: object): Promise<T> {
+    open();
+    if (pending && (typeof pending === "object" || typeof pending === "function")) {
+      if (originals.has(pending)) { const error = new Error("duplicate Qwen original promise"); ownershipFailures.push(error); throw error; }
+      originals.add(pending);
+    }
+    const operation: Operation = { kind, pending, state: "pending", generation, binding }; operations.push(operation);
+    let derived: Promise<unknown>;
+    // Preserve the existing first two-arm subscription and retain its Q.
+    try { derived = pending.then(() => { operation.state = "fulfilled"; }, reason => { operation.state = "rejected"; operation.reason = reason; }); }
+    catch (error) { registration.push(error); throw error; }
+    const row = { pending: derived, terminal: undefined as Promise<unknown> | undefined, state: "pending", reason: undefined as unknown }; observers.push(row);
+    // Nonthrowing terminal guards subscribe only to Q, never again to original P.
+    try { row.terminal = derived.then(() => { row.state = "fulfilled"; }, reason => { row.state = "rejected"; row.reason = reason; observerFailures.push(reason); }); }
+    catch (error) { registration.push(error); throw error; }
     return pending;
   }
-  function invoke<T>(kind: string, original: (...args: any[]) => Promise<T>, receiver: unknown, args: unknown[]): Promise<T> {
-    try { return observe(kind, Reflect.apply(original, receiver, args)); }
+  function invoke<T>(kind: string, original: (...args: any[]) => Promise<T>, receiver: unknown, args: unknown[], resource?: object): Promise<T> {
+    open(); let pending: Promise<T>;
+    try { pending = Reflect.apply(original, receiver, args); }
     catch (error) { synchronous.push(error); throw error; }
+    return observe(kind, pending, Object.freeze({ original, receiver, args, resource }));
+  }
+  function follow<T>(kind: string, pending: Promise<unknown>, callbacks: Array<((value: any) => any) | undefined>): Promise<T> {
+    open(); let derived: Promise<T>;
+    try { derived = Reflect.apply(pending.then, pending, callbacks); }
+    catch (error) { registration.push(error); throw error; }
+    return observe(kind, derived, Object.freeze({ parent: pending, callbacks }));
   }
   function replace(target: any, name: string, next: any) {
-    const original = target[name]; target[name] = next;
-    restorers.push(() => { target[name] = original; }); return original;
+    open(); if (restored) throw new Error("Qwen observer installation after restoration");
+    const descriptor = Object.getOwnPropertyDescriptor(target, name), original = target[name];
+    const installed = { configurable: true, enumerable: descriptor?.enumerable ?? true, writable: true, value: next };
+    Object.defineProperty(target, name, installed);
+    restorers.push(() => {
+      const current = Object.getOwnPropertyDescriptor(target, name);
+      if (!current || current.value !== next || current.get || current.set || current.configurable !== installed.configurable || current.enumerable !== installed.enumerable || current.writable !== installed.writable) throw new Error("Qwen observer descriptor custody changed");
+      if (descriptor) Object.defineProperty(target, name, descriptor); else if (!Reflect.deleteProperty(target, name)) throw new Error("Qwen observer removal failed");
+    }); return original;
   }
-  function body(source: ReadableStream<Uint8Array> | null, owner?: object) {
-    if (!source) return;
-    if (bodies.has(source)) { synchronous.push(new Error("ambiguous original body")); return; }
+  function body(source: ReadableStream<Uint8Array> | null, owner?: object, response?: Response) {
+    open(); if (!source) return;
+    if (bodies.has(source)) { ownershipFailures.push(new Error("ambiguous original body")); return; }
     bodies.add(source);
     const originalCancel = source.cancel;
     replace(source, "cancel", function (this: ReadableStream<Uint8Array>, ...args: unknown[]) {
+      if (this !== source) ownershipFailures.push(new Error("foreign original body cancel receiver"));
       return invoke("body_cancel", originalCancel, this, args);
     });
     const getReader = source.getReader;
     replace(source, "getReader", function (this: ReadableStream<Uint8Array>, ...args: unknown[]) {
-      let reader: ReadableStreamDefaultReader<Uint8Array>;
+      open(); let reader: ReadableStreamDefaultReader<Uint8Array>;
       try { reader = Reflect.apply(getReader, this, args); } catch (error) { synchronous.push(error); throw error; }
-      const row = { body: source, owner, unlocks: 0, returns: 0 }; readers.push(row);
-      if (this !== source) synchronous.push(new Error("foreign original body receiver"));
-      observe("closed", reader.closed);
+      if (this !== source) ownershipFailures.push(new Error("foreign original body receiver"));
+      if (readers.some(row => row.reader === reader)) { ownershipFailures.push(new Error("duplicate original reader")); return reader; }
+      const closed = reader.closed;
+      const row = { body: source, reader, response, owner, generation, closed, unlocks: 0, returns: 0 }; readers.push(row);
+      observe("closed", closed, row);
       for (const kind of ["read", "cancel"] as const) {
         const original = reader[kind];
         replace(reader, kind, function (this: ReadableStreamDefaultReader<Uint8Array>, ...operands: unknown[]) {
-          if (this !== reader) synchronous.push(new Error("foreign original reader receiver"));
-          return invoke(kind, original, this, operands);
+          if (this !== reader) ownershipFailures.push(new Error("foreign original reader receiver"));
+          return invoke(kind, original, this, operands, row);
         });
       }
       const release = reader.releaseLock;
       replace(reader, "releaseLock", function (this: ReadableStreamDefaultReader<Uint8Array>, ...operands: unknown[]) {
-        if (this !== reader) synchronous.push(new Error("foreign original unlock receiver"));
+        open(); if (this !== reader) ownershipFailures.push(new Error("foreign original unlock receiver"));
         row.unlocks++;
         try { const result = Reflect.apply(release, this, operands); row.returns++; return result; }
         catch (error) { synchronous.push(error); throw error; }
@@ -94,25 +131,45 @@ function createQwenLedger() {
       return reader;
     });
   }
-  async function drain() {
-    let at = 0;
-    // Actual acquisitions/attachment reactions, closed and release lifetimes
-    // remain in this list. New work registered while joining is included.
-    while (at < operations.length) {
-      const batch = operations.slice(at); at = operations.length;
-      await Promise.allSettled(batch.map(operation => operation.pending));
-    }
-    const failures = [...synchronous, ...operations.filter(operation => operation.state !== "fulfilled").map(operation => operation.reason)];
-    for (const row of readers) if (row.unlocks !== 1 || row.returns !== 1 || row.body.locked) failures.push(new Error("original reader remains owned"));
-    if (failures.length) throw new AggregateError(failures, "original Qwen operations failed");
+  function response(value: Response, owner?: object) {
+    open();
+    if (responses.has(value)) { ownershipFailures.push(new Error("duplicate original response")); return; }
+    responses.set(value, owner); body(value.body, owner, value);
   }
+  async function join() {
+    try {
+      // Cursors survive every drain. Original and attached observer batches are
+      // always joined together: observer rejection cannot skip a held original.
+      do {
+        const originalsAt = operations.length, observersAt = observers.length;
+        const batch = operations.slice(originalCursor, originalsAt), tails = observers.slice(observerCursor, observersAt);
+        originalCursor = originalsAt; observerCursor = observersAt;
+        await Promise.allSettled([...batch.map(row => row.pending), ...tails.map(row => row.terminal ?? row.pending)]);
+      } while (originalCursor < operations.length || observerCursor < observers.length);
+      const failures = [...synchronous, ...registration, ...observerFailures, ...ownershipFailures, ...restorationFailures, ...lateFailures,
+        ...operations.filter(operation => operation.state !== "fulfilled").map(operation => operation.reason)];
+      for (const row of observers) if (row.state === "pending") failures.push(new Error("original observer remains pending"));
+      for (const row of readers) if (row.unlocks !== 1 || row.returns !== 1 || row.body.locked) failures.push(new Error("original reader remains owned"));
+      if (failures.length) throw new AggregateError(failures, "original Qwen operations failed");
+    } finally { inFlight = undefined; }
+  }
+  function drain() { open(); if (!inFlight) inFlight = join(); return inFlight; }
   function restore() {
-    const failures: unknown[] = [];
-    for (const restore of restorers.reverse()) try { restore(); } catch (error) { failures.push(error); }
+    open(); if (restored) throw new Error("Qwen observers already restored");
+    restored = true; const failures: unknown[] = [];
+    for (const restore of restorers.reverse()) try { restore(); } catch (error) { failures.push(error); restorationFailures.push(error); }
     restorers.length = 0;
     if (failures.length) throw new AggregateError(failures, "Qwen observer restoration failed");
   }
-  return { observe, invoke, replace, body, drain, restore, operations, readers, fail: (reason: unknown) => synchronous.push(reason) };
+  function seal() {
+    open();
+    if (!restored || inFlight || originalCursor !== operations.length || observerCursor !== observers.length || operations.some(row => row.state === "pending") || observers.some(row => row.state === "pending")) throw new Error("Qwen retirement is not joined and restored");
+    sealed = Object.freeze({ generation, operations: Object.freeze(operations.map(row => Object.freeze({ ...row }))), observers: Object.freeze(observers.map(row => Object.freeze({ ...row }))), readers: Object.freeze(readers.map(row => Object.freeze({ ...row }))) });
+    return sealed;
+  }
+  return { generation, observe, invoke, follow, replace, body, response, drain, restore, seal, operations, observers, readers,
+    failures: () => ({ synchronous: [...synchronous], registration: [...registration], observer: [...observerFailures], ownership: [...ownershipFailures], restoration: [...restorationFailures], late: [...lateFailures] }),
+    fail: (reason: unknown) => { open(); ownershipFailures.push(reason); } };
 }
 
 // Tokens follow actual asynchronous invocation ancestry, never a current case or
@@ -120,16 +177,16 @@ function createQwenLedger() {
 function createQwenOwnership(storage: AsyncLocalStorage<any>, ledger: ReturnType<typeof createQwenLedger>, expected: { url: string; credential: string }) {
   const invocations = new Set<Invocation>(), acquisitions = new Set<Acquisition>(), fetches = new Set<FetchReceipt>();
   const responses = new WeakMap<object, FetchReceipt>();
-  let active = true;
+  let active = true, publicOpen = true;
   function incomplete(): never { throw new Error("incomplete Qwen invocation ownership"); }
   const current = () => {
     const value = storage.getStore();
-    if (!active || !value || !invocations.has(value.invocation)) return incomplete();
+    if (!active || !value || !invocations.has(value.invocation) || value.invocation.generation !== ledger.generation) return incomplete();
     return value;
   };
   function invoke<F extends (...args: any[]) => any>(fn: F, receiver: unknown, args: Parameters<F>, caller: object): ReturnType<F> {
-    if (!active) return incomplete();
-    const invocation = Object.freeze({ caller, fn, receiver, args: Object.freeze([...args]) });
+    if (!active || !publicOpen) return incomplete();
+    const invocation = Object.freeze({ generation: ledger.generation, caller, fn, receiver, args: Object.freeze([...args]) });
     invocations.add(invocation);
     return storage.run(Object.freeze({ invocation }), () => Reflect.apply(fn, receiver, args)) as ReturnType<F>;
   }
@@ -144,7 +201,7 @@ function createQwenOwnership(storage: AsyncLocalStorage<any>, ledger: ReturnType
     } catch (error) { ledger.fail(error); }
     const call = () => ledger.invoke("acquisition", fn as (...args: any[]) => Promise<any>, receiver, args);
     const pending = acquisition ? storage.run(acquisition.context, call) : call();
-    ledger.observe("acquisition_observer", pending.then(result => {
+    ledger.follow("acquisition_observer", pending, [result => {
       // Release is owned even when identity validation fails afterward.
       const release = result.release;
       ledger.replace(result, "release", function (this: unknown, ...operands: unknown[]) {
@@ -154,7 +211,7 @@ function createQwenOwnership(storage: AsyncLocalStorage<any>, ledger: ReturnType
       const transport = acquisition?.transport;
       if (!acquisition || !transport || acquisition.result || responses.get(result.response) !== transport || transport.response !== result.response) incomplete();
       acquisition.result = result;
-    }, () => {}));
+    }, () => {}]);
     return pending;
   }
   function wrapFetch(original: Function) {
@@ -167,14 +224,15 @@ function createQwenOwnership(storage: AsyncLocalStorage<any>, ledger: ReturnType
         const method = init?.method ?? (input instanceof Request ? input.method : "GET");
         const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
         if (!acquisition || !acquisitions.has(acquisition) || acquisition.context !== context || acquisition.transport || method !== "POST" || url.href !== expected.url || headers.get("authorization") !== "Bearer " + expected.credential) incomplete();
-        receipt = { acquisition, context }; acquisition.transport = receipt; fetches.add(receipt);
+        receipt = { acquisition, context, generation: ledger.generation, fn: original, receiver: this, args: Object.freeze([...args]) }; acquisition.transport = receipt; fetches.add(receipt);
       } catch (error) { ledger.fail(error); }
       const pending = ledger.invoke("fetch", original as (...args: any[]) => Promise<Response>, this, args);
-      ledger.observe("fetch_observer", pending.then(response => {
-        ledger.body(response.body, receipt);
+      if (receipt) receipt.pending = pending;
+      ledger.follow("fetch_observer", pending, [response => {
+        ledger.response(response, receipt);
         if (!receipt || receipt.response || responses.has(response)) incomplete();
         receipt.response = response; responses.set(response, receipt);
-      }, () => {}));
+      }, () => {}]);
       return pending;
     };
   }
@@ -182,11 +240,11 @@ function createQwenOwnership(storage: AsyncLocalStorage<any>, ledger: ReturnType
     if (invocations.size !== calls || acquisitions.size !== count || fetches.size !== count) incomplete();
     for (const acquisition of acquisitions) {
       const receipt = acquisition.transport;
-      if (!receipt || !acquisition.result || !receipt.response || responses.get(receipt.response) !== receipt || receipt.context !== acquisition.context) incomplete();
+      if (!receipt || !acquisition.result || !receipt.response || responses.get(receipt.response) !== receipt || receipt.context !== acquisition.context || receipt.generation !== ledger.generation || !receipt.pending) incomplete();
     }
-    for (const reader of ledger.readers) if (!reader.owner || !fetches.has(reader.owner as FetchReceipt)) incomplete();
+    for (const reader of ledger.readers) if (!reader.owner || !fetches.has(reader.owner as FetchReceipt) || reader.generation !== ledger.generation || reader.response !== (reader.owner as FetchReceipt).response) incomplete();
   }
-  return { invoke, guard, wrapFetch, verify, acquisitions, fetches, restore() { active = false; storage.disable(); } };
+  return { invoke, guard, wrapFetch, verify, acquisitions, fetches, closePublic() { publicOpen = false; }, restore() { publicOpen = false; active = false; storage.disable(); } };
 }
 
 function qwenClosedRecord(id: string, phase: string, op: string, state: string, counts: { operations: number; rejected: number; pending: number }) {
@@ -369,6 +427,7 @@ it(`${row.id}: registered Qwen ${row.mode}`, async () => {
     if (row.mode === "partial") { expect(partial).toBe(true); expect(controller.signal.aborted).toBe(true); }
     if (row.mode === "preabort") expect(result.content).toEqual([]);
   } catch (error) { witness.failed(error); failedPhase = phase; failures.push(error); }
+  ownership.closePublic();
   try {
     witness.at("owned_drain");
     await ledger.drain();
@@ -387,6 +446,8 @@ it(`${row.id}: registered Qwen ${row.mode}`, async () => {
     witness.at(restoreStages[restoreIndex++]);
     try { restore(); } catch (error) { witness.failed(error); if (!failures.length) failedPhase = "restore"; failures.push(error); }
   }
+  try { await ledger.drain(); } catch (error) { witness.failed(error); if (!failures.length) failedPhase = "join"; failures.push(error); }
+  try { ledger.seal(); } catch (error) { witness.failed(error); if (!failures.length) failedPhase = "join"; failures.push(error); }
   witness.at("report");
   for (const error of entryWitness.takeErrors()) { witness.failed(error); failures.push(error); }
   const rejected = ledger.operations.filter(op => op.state === "rejected"), pending = ledger.operations.filter(op => op.state === "pending");

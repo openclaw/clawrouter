@@ -348,9 +348,28 @@ async function withQwenNativeRelay(body, cleanups, emit) {
   }
 }
 
+// The credential selects a case; only the original ingress call establishes
+// asynchronous request ancestry. Owned cleanup tails outlive public admission.
+function createQwenRequestOwnership(storage) {
+  const owners = new WeakMap(), retired = new WeakSet();
+  function current() {
+    const owner = storage.getStore();
+    if (!owner || owners.get(owner.state) !== owner || retired.has(owner.state) || owner.generation !== owner.state.ledger.generation) throw new Error("unbound Qwen request ancestry");
+    return owner;
+  }
+  function invoke(state, request, original, receiver, args) {
+    if (state.retirement || owners.has(state) || retired.has(state) || args[0] !== request) throw new Error("duplicate or retired Qwen request owner");
+    const owner = Object.freeze({ state, request, generation: state.ledger.generation, original, receiver, args });
+    owners.set(state, owner);
+    return storage.run(owner, () => state.ledger.invoke("handler", original, receiver, args, owner));
+  }
+  return { current, invoke, retire(state) { retired.add(state); } };
+}
+
 function routerScript() {
   return `
 import handler from './worker/index.ts';
+import {AsyncLocalStorage} from 'node:async_hooks';
 export {PolicyBindingIndexObject,BudgetLedgerObject,UsageLedgerObject,GrantCredentialObject} from './worker/index.ts';
 import {authorityCall} from './worker/authority.ts';
 import {putGrantCredentials,revokeGrantCredentials} from './worker/grant-credentials.ts';
@@ -358,16 +377,19 @@ import {ingestUsage,usageSnapshot,budgetStatus} from './worker/ledgers.ts';
 import {bodyBudgetCharged} from './worker/body-budget.ts';
 import {sha256Hex} from './worker/utils.ts';
 ${createQwenLedger.toString()}
+${createQwenRequestOwnership.toString()}
+const requestOwnership=createQwenRequestOwnership(new AsyncLocalStorage());
 const rows=${JSON.stringify(rows)},regions=${JSON.stringify(regions)},states=new Map(),nativeFetch=globalThis.fetch;
 const credential=${credential.toString()};
 globalThis.fetch=function(input,init){
  const headers=new Headers(init?.headers!==undefined?init.headers:input instanceof Request?input.headers:undefined);
- const secret=headers.get('authorization'),matches=[...states.values()].filter(s=>secret==='Bearer '+credential(s.row)||secret==='Bearer '+credential(s.row,true));
- if(matches.length!==1)throw Error('unbound Qwen upstream request');const s=matches[0];
+ const owner=requestOwnership.current(),s=owner.state,secret=headers.get('authorization');
+ if(secret!=='Bearer '+credential(s.row)&&secret!=='Bearer '+credential(s.row,true))throw Error('foreign Qwen upstream credential');
  const url=typeof input==='string'?input:input instanceof URL?input.href:input.url;
  s.calls.push({url,method:init?.method??(input instanceof Request?input.method:'GET'),original:secret==='Bearer '+credential(s.row),rotated:secret==='Bearer '+credential(s.row,true),noCaller:!headers.has('x-api-key')&&!headers.has('api-key')});
- const original=s.ledger.invoke('fetch',nativeFetch,this,[input,init]);
- s.ledger.observe('fetch_observer',original.then(response=>s.ledger.body(response.body)));return original;
+ const receipt={owner,original:nativeFetch,receiver:this,args:[input,init],pending:undefined,response:undefined};
+ const original=s.ledger.invoke('fetch',nativeFetch,this,receipt.args,receipt);receipt.pending=original;
+ s.ledger.follow('fetch_observer',original,[response=>{receipt.response=response;s.ledger.response(response,receipt);}]);return original;
 };
 async function control(s,path){const response=await s.ledger.invoke('control_fetch',nativeFetch,globalThis,['https://control.fixture/'+path+'/'+s.row.id]);return s.ledger.observe('control_body',response.json());}
 export default {async fetch(request,env,context){
@@ -407,13 +429,17 @@ export default {async fetch(request,env,context){
    try{usage=await s.ledger.invoke('usage',usageSnapshot,undefined,[env,'fixture',s.row.id,{kind:'admin'}]);}catch(error){failures.push(error);}
    try{budget=await s.ledger.invoke('budget',budgetStatus,undefined,[env,s.row.id,{tenantId:'fixture',monthlyBudgetMicros:100}]);}catch(error){failures.push(error);}
    try{await s.ledger.drain();}catch(error){failures.push(error);}
+   try{s.ledger.restore();}catch(error){failures.push(error);}
+   try{await s.ledger.drain();}catch(error){failures.push(error);}
+   try{s.ledger.seal();}catch(error){failures.push(error);}
+   requestOwnership.retire(s);
    return {retired:failures.length===0,calls:s.calls,source,usage,budget,status:s.status,requests:s.requests,charged:bodyBudgetCharged(),operations:s.ledger.operations.map(o=>({kind:o.kind,state:o.state})),readers:s.ledger.readers.map(r=>({unlocks:r.unlocks,returns:r.returns,locked:r.body.locked}))};
   })();const proof=await s.retirement;return Response.json(proof,{status:proof.retired?200:500});
  }
  const authorization=request.headers.get('authorization'),s=[...states.values()].find(s=>authorization==='Bearer clawrouter-live-'+s.row.id+'-fixture-secret'||authorization==='Bearer clawrouter-live-'+s.row.id+'-invalid');
  if(!s||s.retirement)throw Error('unbound or retired Qwen caller');s.requests++;
- const original=s.ledger.invoke('handler',handler.fetch,handler,[request,s.env,{waitUntil:p=>{s.ledger.observe('waitUntil',p);context.waitUntil(p);}}]);
- s.ledger.observe('handler_observer',original.then(response=>{s.status=response.status;}));return original;
+ const original=requestOwnership.invoke(s,request,handler.fetch,handler,[request,s.env,{waitUntil:p=>{s.ledger.observe('waitUntil',p);context.waitUntil(p);}}]);
+ s.ledger.follow('handler_observer',original,[response=>{s.status=response.status;}]);return original;
 },queue:handler.queue};`;
 }
 
@@ -445,7 +471,7 @@ export default {async fetch(request){
 
 async function startFixture() {
   const directory = await mkdtemp(join(tmpdir(), "qwen-regions-")); let runtime;
-  try { runtime = await startWorkerdFixture(directory, routerScript(), upstreamScript()); }
+  try { runtime = await startWorkerdFixture(directory, routerScript(), upstreamScript(), { requestContext: true }); }
   catch (error) { return finish(() => { throw error; }, [() => rm(directory, { recursive: true, force: true })]); }
   const origin = String(await runtime.ready).replace(/\/$/, "");
   return { runtime, origin, close: () => finish(() => {}, [() => runtime.dispose(), () => rm(directory, { recursive: true, force: true })]) };
@@ -555,6 +581,160 @@ test("cleanup retains body failure and attempts both independent finalizers", as
   await assert.rejects(finish(() => { throw undefined; }, [() => { order.push(1); throw second; }, () => { order.push(2); }]), error => error instanceof AggregateError && error.errors[0] === undefined && error.errors[1] === second);
   assert.deepEqual(order, [1, 2]);
 });
+
+// BEGIN Qwen observer ownership pure tests.
+function qwenDeferred() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+function qwenInertReader() {
+  const closed = Promise.resolve(), read = Promise.resolve({ done: true }), cancel = Promise.resolve();
+  const calls = [], reader = { closed, read(...args) { calls.push(["read", this, args]); return read; }, cancel(...args) { calls.push(["cancel", this, args]); return cancel; }, releaseLock(...args) { calls.push(["unlock", this, args]); body.locked = false; } };
+  const body = { locked: false, cancel() { return Promise.resolve(); }, getReader(...args) { calls.push(["reader", this, args]); body.locked = true; return reader; } };
+  return { body, reader, calls, closed, read, cancel };
+}
+test("Qwen drains share a fixed point and never resubscribe settled originals", async () => {
+  const ledger = createQwenLedger(), held = qwenDeferred(); let subscriptions = 0, finished = false;
+  const nativeThen = held.promise.then;
+  held.promise.then = function (...args) { subscriptions++; return Reflect.apply(nativeThen, this, args); };
+  assert.equal(ledger.observe("read", held.promise), held.promise); assert.equal(subscriptions, 1);
+  const first = ledger.drain(); assert.equal(ledger.drain(), first);
+  first.then(() => { finished = true; });
+  await Promise.resolve(); assert.equal(finished, false); assert.equal(subscriptions, 2);
+  held.resolve(); await first; await ledger.drain(); assert.equal(subscriptions, 2);
+  ledger.restore(); await ledger.drain(); const sealed = ledger.seal();
+  assert.ok(Object.isFrozen(sealed)); assert.ok(Object.isFrozen(sealed.operations[0]));
+  assert.throws(() => ledger.seal()); assert.throws(() => ledger.observe("late", Promise.resolve()));
+});
+test("Qwen joins the already attached observer derivative before retirement", async () => {
+  const ledger = createQwenLedger(), held = qwenDeferred(); let subscriptions = 0, settled = false;
+  const original = { then(yes) { subscriptions++; yes(); return subscriptions === 1 ? held.promise : Promise.resolve(); } };
+  assert.equal(ledger.observe("read", original), original);
+  const joined = ledger.drain().then(() => { settled = true; });
+  await Promise.resolve(); await Promise.resolve(); assert.equal(settled, false);
+  held.resolve(); await joined; assert.equal(subscriptions, 2);
+  assert.equal(ledger.observers[0].state, "fulfilled");
+});
+test("Qwen appends original and observer tails to the same in-flight join", async () => {
+  const ledger = createQwenLedger(), first = qwenDeferred(), late = qwenDeferred(); let done = false;
+  ledger.observe("first", first.promise);
+  ledger.follow("attachment", first.promise, [() => ledger.observe("late", late.promise)]);
+  const joined = ledger.drain().then(() => { done = true; }); first.resolve();
+  await Promise.resolve(); await Promise.resolve(); assert.equal(done, false);
+  late.resolve(); await joined; assert.ok(ledger.operations.every(row => row.state === "fulfilled"));
+});
+test("Qwen cross-ledger owned tails settle without cursor resets", async () => {
+  const a = createQwenLedger(), b = createQwenLedger(), first = qwenDeferred(), tail = qwenDeferred();
+  a.observe("original", first.promise);
+  a.follow("append", first.promise, [() => b.observe("owned-tail", tail.promise)]);
+  const joined = Promise.all([a.drain(), b.drain()]); first.resolve();
+  await Promise.resolve(); tail.resolve(); await joined; await Promise.all([a.drain(), b.drain()]);
+  assert.equal(b.operations.length, 1); assert.equal(b.operations[0].state, "fulfilled");
+});
+for (const stage of ["then_getter", "species", "terminal_registration"]) {
+  test(`Qwen ${stage} failure cannot skip a separately held original`, async () => {
+    const ledger = createQwenLedger(), held = qwenDeferred(); ledger.observe("held", held.promise);
+    let source;
+    if (stage === "then_getter") source = Object.defineProperty({}, "then", { get() { throw undefined; } });
+    else if (stage === "species") { class Species extends Promise { static get [Symbol.species]() { throw undefined; } } source = new Species(resolve => resolve()); }
+    else source = { then(yes) { yes(); return Object.defineProperty({}, "then", { get() { throw undefined; } }); } };
+    let caught = false; try { ledger.observe("fault", source); } catch (error) { caught = true; assert.equal(error, undefined); }
+    assert.equal(caught, true); assert.equal(ledger.failures().registration[0], undefined);
+    let done = false; const joined = ledger.drain().then(() => { throw Error("unexpected pass"); }, error => { done = true; return error; });
+    await Promise.resolve(); await Promise.resolve(); assert.equal(done, false);
+    held.resolve(); const error = await joined; assert.ok(Array.isArray(error.errors)); assert.ok(error.errors.includes(undefined));
+    assert.equal(ledger.failures().synchronous.length, 0);
+  });
+}
+test("Qwen observer rejection remains fatal and cannot skip original joins", async () => {
+  const ledger = createQwenLedger(), held = qwenDeferred(), reason = {};
+  let subscriptions = 0;
+  const original = { then(yes) { yes(); return ++subscriptions === 1 ? Promise.reject(reason) : Promise.resolve(); } };
+  ledger.observe("read", original); ledger.observe("held", held.promise);
+  const joined = ledger.drain(); held.resolve();
+  await assert.rejects(joined, error => Array.isArray(error.errors) && error.errors.includes(reason));
+  assert.equal(ledger.failures().observer[0], reason); assert.equal(ledger.operations[0].state, "fulfilled");
+});
+test("Qwen call, registration and restoration preserve independent undefined failures", async () => {
+  const ledger = createQwenLedger(), receiver = {}, reason = {}, target = { method() {} };
+  let caught = false; try { ledger.invoke("call", () => { throw undefined; }, receiver, []); } catch (error) { caught = true; assert.equal(error, undefined); }
+  assert.equal(caught, true); ledger.observe("read", Promise.reject(reason));
+  ledger.replace(target, "method", () => {}); target.method = () => {};
+  assert.throws(() => ledger.restore());
+  await assert.rejects(ledger.drain(), error => Array.isArray(error.errors) && error.errors[0] === undefined && error.errors.includes(reason) && error.errors.includes(ledger.failures().restoration[0]));
+});
+test("Qwen exact descriptors restore and foreign replacements remain untouched", async () => {
+  const ledger = createQwenLedger(), inherited = () => {}, prototype = { method: inherited }, target = Object.create(prototype);
+  const installed = () => {}; ledger.replace(target, "method", installed); ledger.restore();
+  assert.equal(Object.hasOwn(target, "method"), false); assert.equal(target.method, inherited);
+  await ledger.drain(); ledger.seal();
+  const other = createQwenLedger(), foreign = () => {}; other.replace(target, "method", installed); target.method = foreign;
+  assert.throws(() => other.restore()); assert.equal(target.method, foreign); await assert.rejects(other.drain());
+});
+test("Qwen reader provenance retains C0, receiver, all arguments and original promises", async () => {
+  const ledger = createQwenLedger(), source = qwenInertReader(), owner = {}, response = { body: source.body };
+  const before = Object.getOwnPropertyDescriptor(source.body, "getReader"); ledger.response(response, owner);
+  const reader = source.body.getReader("reader-option");
+  assert.equal(reader.read(1, 2), source.read); assert.equal(reader.cancel(undefined, 3), source.cancel); reader.releaseLock("unlock-option");
+  await ledger.drain(); const row = ledger.readers[0];
+  assert.equal(row.owner, owner); assert.equal(row.generation, ledger.generation); assert.equal(row.response, response); assert.equal(row.closed, source.closed);
+  assert.equal(source.calls[1][1], reader); assert.equal(source.calls[1][2].length, 2); assert.equal(source.calls[2][2][0], undefined);
+  const readOperation = ledger.operations.find(row => row.kind === "read"); assert.equal(readOperation.binding.resource, row); assert.equal(readOperation.pending, source.read);
+  ledger.restore(); assert.deepEqual(Object.getOwnPropertyDescriptor(source.body, "getReader"), before); await ledger.drain(); ledger.seal();
+});
+test("Qwen duplicate and foreign resources remain fatal without replacing original operands", async () => {
+  const ledger = createQwenLedger(), source = qwenInertReader(), response = { body: source.body };
+  ledger.response(response, {}); ledger.response(response, {});
+  const reader = source.body.getReader(), foreign = {};
+  assert.equal(reader.read.call(foreign, "exact"), source.read); assert.equal(source.calls.at(-1)[1], foreign);
+  reader.releaseLock(); await assert.rejects(ledger.drain()); ledger.restore();
+  const duplicate = createQwenLedger(), pending = Promise.resolve(); duplicate.observe("one", pending);
+  assert.throws(() => duplicate.observe("two", pending)); await assert.rejects(duplicate.drain());
+});
+test("Qwen public closure preserves already owned asynchronous tails then seals permanently", async () => {
+  const ledger = createQwenLedger(), storage = new AsyncLocalStorage(), ownership = createQwenOwnership(storage, ledger, { url: "https://qwen.fixture/", credential: "fixture" });
+  const held = qwenDeferred(), receiver = {}, args = [1, undefined]; let calls = 0;
+  const original = function (...actual) { calls++; assert.equal(this, receiver); assert.equal(actual.length, 2); assert.equal(actual[1], undefined); return held.promise; };
+  assert.equal(ownership.invoke(original, receiver, args, {}), held.promise); ownership.closePublic();
+  assert.throws(() => ownership.invoke(original, receiver, args, {})); assert.equal(calls, 1);
+  ledger.observe("owned-tail", held.promise); const joined = ledger.drain(); held.resolve(); await joined;
+  ledger.restore(); ownership.restore(); await ledger.drain(); ledger.seal();
+  assert.throws(() => ownership.invoke(original, receiver, args, {})); assert.throws(() => ledger.invoke("late", original, receiver, args)); assert.equal(calls, 1);
+});
+test("Qwen Worker ancestry uses exact original ingress rather than credential or most recent case", async () => {
+  const storage = new AsyncLocalStorage(), ownership = createQwenRequestOwnership(storage), first = qwenDeferred(), second = qwenDeferred();
+  const a = { ledger: createQwenLedger() }, b = { ledger: createQwenLedger() }, requestA = {}, requestB = {}, receiver = {};
+  const seen = [];
+  function original(request, pending, extra) { assert.equal(this, receiver); assert.equal(extra, undefined); return pending.then(() => { const owner = ownership.current(); seen.push(owner); assert.equal(owner.request, request); return owner; }); }
+  const one = ownership.invoke(a, requestA, original, receiver, [requestA, first.promise, undefined]);
+  const two = ownership.invoke(b, requestB, original, receiver, [requestB, second.promise, undefined]);
+  second.resolve(); first.resolve(); await Promise.all([one, two]); await Promise.all([a.ledger.drain(), b.ledger.drain()]);
+  assert.equal(seen.length, 2); assert.notEqual(seen[0], seen[1]); assert.equal(seen[0].state, b); assert.equal(seen[1].state, a);
+  assert.throws(() => ownership.current()); assert.throws(() => ownership.invoke(a, requestA, original, receiver, [requestA, first.promise, undefined]));
+  assert.throws(() => storage.run({ ...seen[0] }, ownership.current));
+  ownership.retire(b); assert.throws(() => storage.run(seen[0], ownership.current));
+  const generation = a.ledger.generation; a.ledger = createQwenLedger(); assert.notEqual(a.ledger.generation, generation); assert.throws(() => storage.run(seen[1], ownership.current));
+});
+test("Qwen SDK acquisition binds exact invocation, fetch P, Response and reader generation", async () => {
+  const ledger = createQwenLedger(), storage = new AsyncLocalStorage(), source = qwenInertReader(), response = { body: source.body };
+  const expected = { url: "https://qwen.fixture/chat/completions", credential: "synthetic-fixture" };
+  const ownership = createQwenOwnership(storage, ledger, expected), caller = {}, receiver = {}, options = { method: "POST", headers: { authorization: "Bearer " + expected.credential } };
+  const fetchP = Promise.resolve(response), releaseP = Promise.resolve(); let acquisitions = 0, nativeCalls = 0, acquisitionP, publicP;
+  const native = ownership.wrapFetch(function (...args) { nativeCalls++; assert.equal(this, receiver); assert.equal(args[0], expected.url); assert.equal(args[1], options); assert.equal(args[2], undefined); return fetchP; });
+  function guard(input, extra) { acquisitions++; assert.equal(this, receiver); assert.equal(input, options); assert.equal(extra, undefined); acquisitionP = native.call(receiver, expected.url, options, undefined).then(response => ({ response, release() { return releaseP; } })); return acquisitionP; }
+  const original = function (...args) { assert.equal(this, receiver); assert.equal(args[0], options); publicP = ownership.guard(guard, receiver, [options, undefined]); return publicP; };
+  const returned = ownership.invoke(original, receiver, [options], caller); assert.equal(returned, publicP); assert.equal(returned, acquisitionP);
+  const acquired = await returned, reader = acquired.response.body.getReader(); assert.equal(reader, source.reader);
+  await reader.read(); await reader.cancel(undefined); reader.releaseLock(); assert.equal(acquired.release(), releaseP);
+  ownership.closePublic(); await ledger.drain(); ownership.verify(1);
+  const receipt = [...ownership.fetches][0], acquisition = [...ownership.acquisitions][0];
+  assert.equal(receipt.pending, fetchP); assert.equal(receipt.response, response); assert.equal(receipt.acquisition, acquisition); assert.equal(acquisition.invocation.caller, caller);
+  assert.equal(ledger.readers[0].owner, receipt); assert.equal(ledger.readers[0].closed, source.closed); assert.equal(receipt.generation, ledger.generation);
+  assert.equal(nativeCalls, 1); assert.equal(acquisitions, 1);
+  ledger.restore(); ownership.restore(); await ledger.drain(); ledger.seal();
+});
+// END Qwen observer ownership pure tests.
 
 function ownershipFixture() {
   const ledger = createQwenLedger(), storage = new AsyncLocalStorage();
