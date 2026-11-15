@@ -1,10 +1,10 @@
 # Qwen regional standard and Coding Plan contracts
 
-Scope: OpenClaw `31ad71a8addc1d42fbc5478f7e114860f5cbf6c7`,
+Declaration evidence: OpenClaw `31ad71a8addc1d42fbc5478f7e114860f5cbf6c7`,
 `extensions/qwen/{models.ts,openclaw.plugin.json,provider-catalog.ts,stream.ts}`
 and `docs/providers/qwen.md`. Primary evidence checked 2026-11-03.
 This implements the remaining three frozen regional Chat choices. Existing
-Singapore standard `qwen` and the separate Token Plan source PR are unchanged.
+Singapore standard `qwen` and the separate Token Plan routes are unchanged.
 
 ## Endpoint, product and credential selection
 
@@ -64,8 +64,8 @@ published page data; stale search snippets still show older plan inventories.
 [Notice 118728](https://www.aliyun.com/notice/118728) schedules `qwen3.5-plus`
 end of marketing for 2026-11-18 and end of service for 2027-01-19 at 10:00
 Beijing time, including affected plans. It is not retired on this qualification
-date. Source3 needs dated availability metadata before that transition; the
-current declarations do not implement an automatic retirement clock.
+date. Dated availability metadata is needed before that transition; the current
+declarations do not implement an automatic retirement clock.
 
 The frozen docs explicitly remove `qwen-oauth` / Qwen Portal authentication.
 [Current Qwen Code documentation](https://qwenlm.github.io/qwen-code-docs/en/users/configuration/auth/)
@@ -73,7 +73,11 @@ confirms the OAuth free tier closed on 2026-04-15. No Portal flow, refresh,
 credential conversion or live OAuth offer is added. Historical migration aliases
 do not make Portal tokens valid API keys.
 
-## Focused proof and handoffs
+## Activation and verification
+
+The `qwen-cn`, `qwen-coding-global` and `qwen-coding-cn` declarations are included
+in the shipping provider snapshot for the native and manifest Chat routes above.
+Compilation preserves every unrelated provider record and index.
 
 `worker/test/qwen-regional-runtime.test.mjs` exercises the real Worker,
 authority, scoped grant store and SQLite budget ledger: both native and manifest
@@ -104,12 +108,21 @@ settlement history, with no second POST. Fixture KV streams return actual bytes;
 response cancellation and original request tasks join before SQLite disposal,
 with independent cleanup failures retained.
 
-The three manifests are compiled and injected only for focused runtime tests.
-The shipping snapshot is unchanged. No registered SDK execution or manifest SDK
-envelope parity is claimed by these Worker tests.
+`test/fixtures/openclaw-qwen-regions-contract.test.ts` pins OpenClaw
+`d8bb939408aa4d2be7df0161748edb52ebf3b1fb` and uses its registered `qwen` provider,
+`buildQwenProvider` and both public `stream` and `streamSimple` APIs. The fixture
+defines 103 cases, including 44 positive cases across the 22 regional model pairs.
+All remain UNRUN through the genuine ephemeral OpenClaw consumer runner. Local
+Worker checks and authored cases do not establish SDK compatibility or the SDK's
+cancellation and physical transport retirement. Manifest Chat coverage is Worker
+coverage, not registered SDK manifest-envelope parity.
 
-All new manifests are Chat-only with no passthrough inventory. Native Messages,
-Responses, discovery, original global inventory, schema facts and actual-client
-proof remain separate continuations. Source5 retains media ownership. Source6
-retains snapshot/acceptance scheduling. No snapshot lease, live call, login,
-provisioning, account change or deployment is included.
+These declarations are Chat-only, with no native `/v1/native/<id>/models` route
+or passthrough inventory. The pinned Qwen `catalog.run` also does not forward
+`ctx.signal`; native live discovery and its caller cancellation remain explicit
+gaps. ClawRouter's cached `/v1/catalog` inventory is separate from that native
+discovery path. Native Messages, Responses and media are outside this activation.
+
+This local activation does not establish production deployment, live vendor
+acceptance, credential entitlement or subscriber identity. No live vendor call,
+login, provisioning or account change is part of the proof.
