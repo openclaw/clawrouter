@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Distinguish source-qualified native stored-error data outcomes from LiteLLM local handle-retirement failures while retaining independent Worker and accounting checks.
+
 - Join LiteLLM captured transport and guard originals, observer derivatives, and independent cleanup checks even when observer registration fails.
 
 - Bind LiteLLM fixture transports to individual Worker ingresses with opt-in native request context and retain bounded retirement failure observations.

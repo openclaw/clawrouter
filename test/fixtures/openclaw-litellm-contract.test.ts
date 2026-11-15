@@ -8,6 +8,7 @@ import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-sha
 const sourceHead = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
 import type { Model } from "openclaw/plugin-sdk/llm";
 const contractMode = litellmControlMode(process.env.CLAWROUTER_LITELLM_MODE);
+const nativeStreamProof = litellmNativeIntrinsics(createRequire(import.meta.url)("node:stream/web"), process.versions.node, process.versions.modules);
 
 type Operation = { kind: string; promise: Promise<unknown>; state?: "pending" | "fulfilled" | "rejected"; reasonDefined?: boolean };
 // BEGIN shared proof functions. These observe originals; they grant no disposition.
@@ -33,31 +34,39 @@ function litellmObserverLedger(generation: number) {
   };
 }
 function litellmFixedPoint(sources: Array<() => Array<{promise: Promise<unknown>}>>, before: () => void) {
+  const audit = { members: new Map<Promise<unknown>, Array<{source: number; row: any}>>(), settled: new Map<Promise<unknown>, PromiseSettledResult<unknown>>(), failures: [] as any[], stable: false, sealed: false };
   const cursors = sources.map(() => 0), seen = new WeakSet<object>(), settled = new WeakMap<object, PromiseSettledResult<unknown>>(), joins = new WeakSet<object>();
   const mark = (row: any, result: PromiseSettledResult<unknown>) => {
     if (row.observer === true) { row.state = result.status; if (result.status === "rejected") row.error = result.reason; }
   };
   const run = async () => {
-    const errors: unknown[] = [];
+    const errors: unknown[] = []; audit.stable = false;
+    const structural = (error: unknown) => { errors.push(error); audit.failures.push({ kind: "structural", reason: error }); };
+    if (audit.sealed) { structural(new Error("sealed retirement join")); return errors; }
     while (true) {
-      try { before(); } catch (error) { errors.push(error); }
+      try { before(); } catch (error) { structural(error); }
       const batch: Promise<unknown>[] = [], pendingRows: any[] = [];
       sources.forEach((source, index) => {
         const rows = source();
         for (; cursors[index] < rows.length; cursors[index]++) {
           const row = rows[cursors[index]], p = row.promise;
-          if (joins.has(p)) { errors.push(new Error("observer drain cannot join itself")); continue; }
+          const members = audit.members.get(p) ?? []; members.push({ source: index, row }); audit.members.set(p, members);
+          if (joins.has(p)) { structural(new Error("observer drain cannot join itself")); continue; }
           const prior = settled.get(p); if (prior) mark(row, prior); else pendingRows.push(row);
           if (!seen.has(p)) { seen.add(p); batch.push(p); }
         }
       });
-      if (!batch.length) return errors;
+      if (!batch.length) { audit.stable = true; return errors; }
       const results = await Promise.allSettled(batch);
-      results.forEach((result, i) => { settled.set(batch[i], result); if (result.status === "rejected") errors.push(result.reason); });
+      results.forEach((result, i) => { settled.set(batch[i], result); audit.settled.set(batch[i], result); if (result.status === "rejected") { errors.push(result.reason); audit.failures.push({ kind: "rejection", promise: batch[i], reason: result.reason }); } });
       for (const row of pendingRows) { const result = settled.get(row.promise); if (result) mark(row, result); }
     }
   };
-  return () => { const pending = run(); joins.add(pending); return pending; };
+  const drain = () => { const pending = run(); joins.add(pending); return pending; };
+  return Object.assign(drain, { audit, seal() {
+    if (audit.sealed || !audit.stable || sources.some((source, i) => source().length !== cursors[i])) throw new Error("unstable retirement seal");
+    audit.sealed = true;
+  } });
 }
 function litellmRetirementJoin(owner: any, acquisitions: Array<{released: Promise<unknown>}>, operations: Operation[]) {
   return litellmFixedPoint([
@@ -67,6 +76,61 @@ function litellmRetirementJoin(owner: any, acquisitions: Array<{released: Promis
     () => owner.guardOriginals,
     () => owner.reactions.map((promise: Promise<unknown>) => ({promise})), () => owner.observers.rows,
   ], () => owner.prepareDrain());
+}
+// Native references are captured before fixture spies. This proves a local
+// stream branch only; it does not identify its actor or retire its producer.
+function litellmNativeIntrinsics(web: any, node: string, abi: string) {
+  const stream = web.ReadableStream.prototype, reader = web.ReadableStreamDefaultReader.prototype;
+  const value = (o: object, k: string) => Object.getOwnPropertyDescriptor(o, k)?.value;
+  return Object.freeze({ runtime: node === "24.22.1" && abi === "137", stream, reader,
+    get: value(stream, "getReader"), read: value(reader, "read"), cancel: value(reader, "cancel"), unlock: value(reader, "releaseLock"),
+    closed: Object.getOwnPropertyDescriptor(reader, "closed")?.get });
+}
+function litellmNativeCapture(i: any, body: any, get: Function, receiver: unknown, args: unknown[], reader: any) {
+  const original = (o: any, k: string, fn: unknown) => !Object.hasOwn(o, k) && Object.getOwnPropertyDescriptor(Object.getPrototypeOf(o), k)?.value === fn;
+  const qualified = i.runtime && get === i.get && receiver === body && Object.getPrototypeOf(body) === i.stream
+    && Object.getPrototypeOf(reader) === i.reader && !Object.hasOwn(reader, "closed")
+    && Object.getOwnPropertyDescriptor(i.reader, "closed")?.get === i.closed
+    && ["read", "cancel", "releaseLock"].every((k, n) => original(reader, k, [i.read, i.cancel, i.unlock][n]));
+  // Capture once, before any ownership bookkeeping or exposure. An unqualified
+  // getter is never replaced with a trusted intrinsic to manufacture evidence.
+  const closed = qualified ? Reflect.apply(i.closed, reader, []) : reader.closed;
+  return Object.freeze({ qualified: !!qualified, body, reader, get, receiver, args, closed, read: i.read, cancel: i.cancel, unlock: i.unlock });
+}
+function litellmDataDisposition(audit: any, owner: any, body: string, independent: unknown[], originals: Operation[]) {
+  const raw = audit.failures.map((f: any) => f.reason), events = owner.witness.operations;
+  const result = (accepted: boolean, native = false) => ({ accepted, raw, fatal: accepted ? [] : [...raw, ...independent],
+    facts: [native ? 1 : 0, accepted ? 2 : raw.length ? 1 : 0, Math.min(raw.length, 1_000_000), Math.min(accepted ? 0 : raw.length + independent.length, 1_000_000)] });
+  if (!audit.sealed || !audit.stable || body !== "fulfilled" || independent.length || audit.failures.length !== 3) return result(false);
+  const selected = ["read", "closed", "cancel"].map(kind => events.filter((e: any) => e.kind === kind && e.state === "rejected"));
+  if (selected.some((a: any[]) => a.length !== 1)) return result(false);
+  const [read, closed, cancel] = selected.map((a: any[]) => a[0]), row = read.row, native = row?.native, b = native?.binding, proof = native?.proof, t = row?.t, a = t?.acquisition;
+  if (!proof?.qualified || closed.row !== row || cancel.row !== row || proof.reader !== row.reader || proof.body !== t?.body || proof.closed !== closed.promise
+    || !b || b.observer !== owner || b.generation !== owner.generation || b.reader !== row.reader || b.body !== t.body || b.response !== t.response
+    || b.transport !== t || b.acquisition !== a || b.context !== t.context || b.token !== t.context?.token || b.result !== a?.result
+    || t.unique !== true || t.state !== "fulfilled" || a.context !== t.context || a.transport !== t || a.result?.response !== t.response || t.response.body !== t.body
+    || [read, closed, cancel].some(e => e.generation !== owner.generation || e.census !== events)
+    || [read, cancel].some(e => e.context?.predicate !== "none" || !e.context.active || !e.context.sameOwner || !e.context.receiver)
+    || read.context.context !== "same" || !["same", "absent"].includes(cancel.context.context)
+    || read.call?.fn !== proof.read || read.call?.receiver !== row.reader || cancel.call?.fn !== proof.cancel || cancel.call?.receiver !== row.reader
+    || !Array.isArray(read.call.args) || !Array.isArray(cancel.call.args) || cancel.resource?.[0] !== true
+    || events.filter((e: any) => e.row === row && e.kind === "cancel").length !== 1
+    || row.unlockCount !== 1 || row.unlockReturned !== 1 || row.unlockInvoke <= cancel.invoke) return result(false);
+  const ps = [read.promise, closed.promise, cancel.promise];
+  if (new Set(ps).size !== 3) return result(false, true);
+  const outcomes = ps.map(p => audit.settled.get(p));
+  if (outcomes.some(r => r?.status !== "rejected" || r.reason === undefined) || !outcomes.every(r => Object.is(r.reason, outcomes[0].reason))) return result(false, true);
+  for (const [index, p] of ps.entries()) {
+    const members = audit.members.get(p), kind = ["read", "closed", "cancel"][index];
+    if (!members || members.length !== 1 || members[0].source !== 1 || members[0].row.kind !== kind || members[0].row.promise !== p
+      || !originals.includes(members[0].row) || members[0].row.state !== "rejected"
+      || !Object.is(selected[index][0].reason, outcomes[index].reason)) return result(false, true);
+  }
+  if (audit.failures.some((f: any) => f.kind !== "rejection" || !ps.includes(f.promise)) || new Set(audit.failures.map((f: any) => f.promise)).size !== 3) return result(false, true);
+  return result(true, true);
+}
+function litellmFinalizeDisposition(disposition: {accepted: boolean; raw: unknown[]}, errors: unknown[]) {
+  return disposition.accepted && errors.length ? [...disposition.raw, ...errors] : errors;
 }
 async function litellmAttemptAll(checks: Array<[string, () => unknown]>, failed: (phase: string, error: unknown) => void) {
   for (const [phase, check] of checks) try { await check(); } catch (error) { failed(phase, error); }
@@ -195,6 +259,7 @@ function litellmOwnership(storage: any, generation = 0) {
         if (c.token.owner.role === "chat") entries.set(reader, binding);
       }
     },
+    nativeReader(reader: object, proof: any) { witness.nativeReader(reader, proof, cleanupReaders.get(reader)); },
     operation(reader: object, receiver: unknown, kind = "unknown", captured?: any, operand?: unknown, method?: Function, args?: unknown[]) {
       const t = readers.get(reader), raw = storage.getStore();
       const trusted = !!raw && tokens.has(raw.token), c = active && trusted ? raw : undefined;
@@ -216,6 +281,7 @@ function litellmOwnership(storage: any, generation = 0) {
         binding: !!t, receiver: receiver === reader, sameOwner: origin === this, predicate,
       }, origin === this ? invocation[1] : undefined);
       event.invocation = invocation; event.reaction = reaction; event.resource = resource?.facts;
+      event.call = { fn: method, receiver, args };
       if (predicate !== "none") { witness.fault(event); invalid("reader_operation", [!!c, !!t, c && t?.context ? c.token === t.context.token : null, receiver === reader]); }
       return event;
     },
@@ -476,7 +542,7 @@ function litellmWitness(generation: number, observers = litellmObserverLedger(ge
   const bodyTransports = new WeakMap<object, any>();
   const tokenIds = new WeakMap<object, number>(), acquisitionIds = new WeakMap<object, number>(), transportIds = new WeakMap<object, number>(), readerIds = new WeakMap<object, any>();
   const observerFailures: unknown[] = [], faultEvents: any[] = [], lifetime = { restore: 0 };
-  const tokens: any[] = [];
+  const tokens: any[] = []; let localDisposition: number[] | null = null;
   const rows: any[] = [], operations: any[] = [], releases = new Map<object, any>(), abortEvents = new WeakMap<object, number>();
   const aborted = Object.getOwnPropertyDescriptor(AbortSignal.prototype, "aborted")!.get!;
   const reason = Object.getOwnPropertyDescriptor(AbortSignal.prototype, "reason")!.get!;
@@ -554,14 +620,16 @@ function litellmWitness(generation: number, observers = litellmObserverLedger(ge
         input: sig(event, "input"), output: sig(event, "output"),
         release: rel?.state ?? "unknown", locked, eof: row?.eof ?? false,
         otherRejected: census.filter((op: any) => hasReason(op) && !selected.includes(op)).length,
-        abortOperand: "unknown" },
+        abortOperand: "unknown", local: localDisposition },
     ];
   }
   return {
+    local(value?: number[]) { if (value) localDisposition = [...value]; return localDisposition && [...localDisposition]; },
     generation, operations, observerFailures, tick, fault(event: any) { faultEvents.push(event); }, aborted(value: object) { if (!abortEvents.has(value)) abortEvents.set(value, tick()); return abortEvents.get(value)!; }, token(t: object) { tokenIds.set(t, ++tokenCount); tokens.push(t); }, acquisition(a: object) { acquisitionIds.set(a, ++acquisitionCount); }, transport(t: any) { transportIds.set(t, ++transportCount); t.witness = begin({ t, id: 0 }, "native_acquisition", undefined, null); },
     guard(a: any) { return begin({ t: { context: a.context, acquisition: a }, id: 0 }, "guard_acquisition", undefined, null); },
     response(t: any) { if (t.body) bodyTransports.set(t.body, t); },
     readerBody(body: object, reader: object, receiver: boolean) { const t = bodyTransports.get(body); const row = { id: rows.length + 1, reader, t, receiver, eof: false, unlockInvoke: 0, unlockReturn: 0, unlockCount: 0, unlockReturned: 0 }; rows.push(row); readerIds.set(reader, row); },
+    nativeReader(reader: object, proof: any, binding: any) { const row = readerIds.get(reader); if (row) row.native = Object.freeze({ proof, binding }); },
     readerFault(reader: object, context: any) { const event = begin(readerIds.get(reader), "getReader", undefined, context); event.invoke = 0; event.returned = tick(); settle(event, "fulfilled"); return event; },
     begin(reader: object, kind: string, operand: unknown, context: any, invoked?: number) { const row = readerIds.get(reader); const event = begin(row, kind, operand, context, invoked); if (row && kind === "releaseLock") { row.unlockInvoke = event.invoke; row.unlockCount++; } return event; },
     beginBody(t: any, operand: unknown, context: any, invoked?: number) { return begin({ t, id: 0 }, "body_cancel", operand, context, invoked); },
@@ -614,6 +682,7 @@ function litellmRoleEvidence() {
       slot.outcome[1] = observer.witness.roleInvocation(ticket.id, api, role);
       slot.outcome[4] = errors.length; slot.outcome[5] = errors.some(error => error === undefined);
       slot.outcome[6] = [originals.length, originals.filter(op => op.state === "pending").length, originals.filter(op => op.state === "fulfilled").length, originals.filter(op => op.state === "rejected").length];
+      const local = observer.witness.local(); if (local !== null) slot.outcome[7] = local;
       slot.finished = true;
     },
     snapshot() { return ["streamSimple", "stream"].map((api, n) => ({ api, outcomes: slots.slice(n * 4, n * 4 + 4).map(slot => slot ? structuredClone(slot.outcome) : null) })); },
@@ -675,7 +744,7 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
   // retain the full schema; enum and boolean codes avoid width-dependent quotas.
   const witnessKeys = [
     ["at", "body", "caseId", "role", "control", "api", "ids", "g", "op", "pred", "ctx", "time", "life", "counts", "failures", "source", "reaction", "invocation", "resource"],
-    ["ids", "acquisition", "originals", "same", "signals", "cancel", "input", "output", "release", "locked", "eof", "otherRejected", "abortOperand"],
+    ["ids", "acquisition", "originals", "same", "signals", "cancel", "input", "output", "release", "locked", "eof", "otherRejected", "abortOperand", "local"],
   ];
   const words = ["unknown", "undefined", "null", "object", "primitive", "invoking", "pending", "fulfilled", "rejected", "sync_throw", "release_wait", "original_drain", "release_count", "acquisition_count", "reader_unlock", "body_unlocked", "dispatcher_count", "dispatcher_throw", "dispatcher_original", "dispatcher_result", "dispatcher_destroyed", "ownership", "original_observer", "catalog", "chat", "eof", "preabort", "partial_abort", "provider_error", "product", "stream", "streamSimple", "none", "read", "closed", "cancel", "getReader", "releaseLock", "body_cancel", "release", "native_acquisition", "guard_acquisition", "reader_missing", "body_missing", "reader_duplicate", "receiver", "context", "token", "absent", "same", "foreign", "unrecognized", "reaction", "release_entry", "registered", "unmatched", "resource"];
   const caseNames = [...names];
@@ -686,7 +755,7 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
     const map = (v: any, length: number, f: (x: any, i: number) => any) => tuple(v, length)?.map(f);
     const original = (v: any) => v === null ? null : map(v, 10, (x, i) => i === 1 || i === 6 ? word(x) : i === 5 || i >= 7 ? bit(x) : x);
     const signals = (v: any) => map(v, 3, row => map(row, 3, (x, i) => i === 0 ? bit(x) : i === 1 ? word(x) : x));
-    const values = encode ? witnessKeys[part].map(k => data[k]) : tuple(data, witnessKeys[part].length);
+    const values = encode ? witnessKeys[part].map(k => k === "local" ? data[k] ?? null : data[k]) : tuple(data, witnessKeys[part].length);
     if (!values) return undefined;
     const d: any = Object.fromEntries(witnessKeys[part].map((k, i) => [k, values[i]]));
     if (part === 0) {
@@ -741,7 +810,9 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
       }
       return { part: 0, select, data: { ...d, ids, g, time, life, counts, ctx, reaction, invocation, resource } };
     }
-    const d = fields(w.data, ["ids", "acquisition", "originals", "same", "signals", "cancel", "input", "output", "release", "locked", "eof", "otherRejected", "abortOperand"]);
+    const hasLocal = own(w.data, "local") !== undefined;
+    const d = fields(w.data, ["ids", "acquisition", "originals", "same", "signals", "cancel", "input", "output", "release", "locked", "eof", "otherRejected", "abortOperand", ...(hasLocal ? ["local"] : [])]);
+    if (hasLocal && d && !localFacts(d.local)) return null;
     if (!d || !nullableBool(d.locked) || !(state(d.release) || d.release === "unknown") || !bool(d.eof) || !number(d.otherRejected) || d.abortOperand !== "unknown") return null;
     const ids = array(d.ids, 4, number), same = array(d.same, 3, nullableBool);
     const original = (v: unknown) => {
@@ -756,15 +827,25 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
     const input = signalRows(d.input), output = signalRows(d.output);
     const cancel = d.cancel === null ? null : array(d.cancel, 4, () => true);
     if (acquisition === undefined || !ids || !same || !originals || !signals || !input || !output || (d.cancel !== null && (!cancel || !valueKind(cancel[0]) || !cancel.slice(1).every(nullableBool)))) return null;
-    return { part: 1, select, data: { ...d, ids, acquisition, originals, same, signals, input, output, cancel } };
+    if (d.local?.[1] === 2 && (originals.some(row => !row || row[1] !== "rejected" || !row[5] || row[6] === "undefined")
+      || !same.every(v => v === true) || d.release !== "fulfilled" || d.locked !== false || d.otherRejected !== 0)) return null;
+    return { part: 1, select, data: { ...d, ids, acquisition, originals, same, signals, input, output, cancel, local: d.local ?? null } };
+  }
+  function localFacts(value: unknown) {
+    if (value === null) return true;
+    const a = array(value, 4, number);
+    return !!a && [0, 1].includes(a[0]) && [0, 1, 2].includes(a[1])
+      && (a[1] !== 2 || a[0] === 1 && a[2] === 3 && a[3] === 0);
   }
   function roleEvidence(value: unknown) {
     const r = fields(value, ["api", "outcomes"]);
     if (!r || !["streamSimple", "stream"].includes(r.api)) return null;
     const outcomes = array(r.outcomes, 4, value => {
       if (value === null) return true;
-      const row = array(value, 7, () => true); if (!row) return false;
+      const size = own(value, "length");
+      const row = [7, 8].includes(size) ? array(value, size, () => true) : null; if (!row || row.length === 8 && !localFacts(row[7])) return false;
       const counts = row[6] === null ? null : array(row[6], 4, number);
+      if (row[7]?.[1] === 2 && (row[2] !== 1 || row[4] !== 0 || row[5] !== false || !counts || counts[1] !== 0 || counts[3] !== 3)) return false;
       return number(row[0]) && row[0] > 0 && (row[1] === null || number(row[1]) && row[1] > 0)
         && [0, 1, 2].includes(row[2]) && (row[2] === 2 ? [0, 1, 2, 3].includes(row[3]) : row[3] === null)
         && (row[4] === null ? row[5] === null && row[6] === null && row[1] === null : number(row[4]) && bool(row[5]) && !(row[4] === 0 && row[5]) && !!counts && counts[0] === counts[1] + counts[2] + counts[3]);
@@ -772,7 +853,7 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
     if (!outcomes) return null;
     const generations = outcomes.filter(row => row !== null).map(row => row[0]);
     if (new Set(generations).size !== generations.length) return null;
-    return { api: r.api, outcomes: outcomes.map(row => row === null ? null : [...row.slice(0, 6), row[6] === null ? null : [...row[6]]]) };
+    return { api: r.api, outcomes: outcomes.map(row => row === null ? null : [...row.slice(0, 6), row[6] === null ? null : [...row[6]], ...(row.length === 8 ? [row[7] === null ? null : [...row[7]]] : [])]) };
   }
   function workerLedger(v: unknown) {
     const a = array(v, 8, (_: unknown) => true);
@@ -901,6 +982,9 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
       if (parts.length !== 2 || parts[0].witness.part !== 0 || parts[1].witness.part !== 1 || JSON.stringify(parts[0].witness.select) !== JSON.stringify(parts[1].witness.select)
         || JSON.stringify(parts[0].witness.data.ids) !== JSON.stringify(parts[1].witness.data.ids)) { suppressed += group.length; failed("REPORT_GROUP", new Error("incomplete LiteLLM witness")); continue; }
       const resource = parts[0].witness.data.resource;
+      if (parts[1].witness.data.local?.[1] === 2 && (parts[0].witness.data.body !== "fulfilled" || parts[0].witness.data.pred !== "none" || parts[0].witness.data.failures !== 0 || resource?.[5]?.[0] !== true)) {
+        suppressed += group.length; failed("REPORT_GROUP", new Error("inconsistent local data witness")); continue;
+      }
       if (resource && resource[1] !== parts[0].witness.data.op && (resource[1] !== "cancel" || resource[0] !== parts[1].witness.data.originals[2]?.[0])) {
         suppressed += group.length; failed("REPORT_GROUP", new Error("foreign LiteLLM cleanup operation")); continue;
       }
@@ -1266,8 +1350,10 @@ function flushSdk() {
     raise(errors);
   }
 }
-function remember<T extends Promise<unknown>>(kind: string, promise: T): T {
-  const record: Operation = { kind, promise, state: "pending" }; operations.push(record);
+function remember<T extends Promise<unknown>>(kind: string, promise: T, captured?: Operation): T {
+  const record: Operation = captured ?? { kind, promise, state: "pending" };
+  if (!captured) operations.push(record);
+  else if (record.kind !== kind || record.promise !== promise || !operations.includes(record)) throw new Error("foreign captured original");
   const derived = promise.then(() => { record.state = "fulfilled"; }, error => { record.state = "rejected"; record.reasonDefined = error !== undefined; });
   ownership.observers.terminal(ownership.generation, record, "original_bookkeeping", derived); return promise;
 }
@@ -1297,8 +1383,12 @@ function observeBody(body: ReadableStream<Uint8Array> | null): void {
   vi.spyOn(body, "getReader").mockImplementation(function (this: typeof body, ...args) {
     let reader: ReadableStreamDefaultReader<Uint8Array>;
     try { reader = Reflect.apply(get, this, args); } catch (error) { failures.push(error); throw error; }
+    let native;
+    try { native = litellmNativeCapture(nativeStreamProof, body, get, this, args, reader); } catch (error) { failures.push(error); throw error; }
+    const capturedClosed: Operation = { kind: "closed", promise: native.closed, state: "pending" }; operations.push(capturedClosed);
     ownership.reader(body, reader, this, captured, { read: reader.read, cancel: reader.cancel, releaseLock: reader.releaseLock });
-    const record = { body, unlocks: 0 }; readers.push(record); const closed = reader.closed; captured.witness.closed(reader, closed); remember("closed", closed);
+    captured.nativeReader(reader, native);
+    const record = { body, unlocks: 0 }; readers.push(record); const closed = native.closed; captured.witness.closed(reader, closed); remember("closed", closed, capturedClosed);
     const read = reader.read;
     try {
       litellmReadBoundary(reader, read, {
@@ -1421,12 +1511,12 @@ beforeEach(() => {
   }
 });
 afterEach(async () => {
-  const errors: unknown[] = [];
+  let errors: unknown[] = [];
   let failedCheckpoint: string | undefined;
   const failed = (phase: string, error: unknown) => { failedCheckpoint ??= phase; errors.push(error); };
   try { ownership.closeRegistration(); } catch (error) { failed("release_wait", error); }
   const drain = litellmRetirementJoin(ownership, acquisitions, operations);
-  try { for (const error of await drain()) failed("original_drain", error); } catch (error) { failed("original_drain", error); }
+  try { if ((await drain()).length) failedCheckpoint ??= "original_drain"; } catch (error) { failed("original_drain", error); }
   const checks: Array<[string, () => unknown]> = [];
   for (const row of acquisitions) checks.push(["release_count", () => expect(row.releases).toBe(1)]);
   checks.push(["acquisition_count", () => expect(acquisitions.length).toBe(requests.length)]);
@@ -1443,10 +1533,13 @@ afterEach(async () => {
   await litellmAttemptAll(checks, failed);
   // Inference owns a pooled request lease, never the global pool lifetime.
   await litellmAttemptAll([...readRestores, () => ownership.restore(), () => vi.restoreAllMocks(), () => vi.unstubAllGlobals(), () => vi.unstubAllEnvs(), () => clearLiveCatalogCacheForTests()].map(restore => ["restore", restore]), failed);
-  try { for (const error of await drain()) failed("original_drain", error); } catch (error) { failed("original_drain", error); }
+  try { if ((await drain()).length) failedCheckpoint ??= "original_drain"; } catch (error) { failed("original_drain", error); }
   ownership.observers.seal(); retiredObservers.push(ownership.observers);
+  try { drain.seal(); } catch (error) { failed("original_drain", error); }
   for (const error of ownership.settledFailures()) failed("ownership", error);
   for (const error of [...failures, ...ownership.observers.faults, ...ownership.witness.observerFailures]) failed("original_observer", error);
+  const disposition = litellmDataDisposition(drain.audit, ownership, bodyOutcome, errors, operations);
+  errors = disposition.fatal; ownership.witness.local(disposition.facts);
   // Snapshot before reporting; reporter failures cannot grow this iteration.
   const failureSnapshot = [...errors];
   let join: ReturnType<typeof litellmJoinFacts> | undefined;
@@ -1462,8 +1555,10 @@ afterEach(async () => {
     }
   } catch (error) { errors.push(error); try { diagnosticRecords.push(diagnostic.boundary("REPORT_WITNESS", error)); } catch (reportError) { errors.push(reportError); } }
   try { flushSdk(); } catch (error) { errors.push(error); }
-  try { roleEvidence.complete(roleTicket, ownership, errors, operations); } catch (error) { errors.push(error); }
-  raise(errors);
+  if (disposition.accepted && errors.length) ownership.witness.local([1, 1, 3, Math.min(3 + errors.length, 1_000_000)]);
+  try { roleEvidence.complete(roleTicket, ownership, litellmFinalizeDisposition(disposition, errors), operations); } catch (error) { errors.push(error); }
+  // Reporting cannot turn a provisional partition into a successful verdict.
+  raise(litellmFinalizeDisposition(disposition, errors));
 });
 afterAll(() => {
   const errors: unknown[] = retiredObservers.flatMap(ledger => ledger.lateFaults);
