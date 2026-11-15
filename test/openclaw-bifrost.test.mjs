@@ -130,6 +130,236 @@ export async function finishBifrostOwned(body, cleanups) {
   return result;
 }
 
+// BEGIN Bifrost owned producer/control retirement helpers.
+// Record existing promises without adding settlement handlers or replacing them.
+export function createBifrostProducerJoin(state, request, call) {
+  if (state.producerJoin || state.calls.filter(value => value === call).length !== 1) throw Error("ambiguous producer owner");
+  const id = state.id, mode = state.mode, calls = state.calls, callIndex = calls.indexOf(call);
+  const roles = ["producer", "progressTask", "progressObserved", "progressCommand"];
+  const records = new Map(), faults = [], seen = new Set();
+  let response, body, attached = false, running;
+  const fail = () => { if (!faults.length) faults.push(Error("changed producer ownership")); };
+  const check = () => {
+    if (state.id !== id || state.mode !== mode || state.calls !== calls || calls[callIndex] !== call
+      || calls.filter(value => value === call).length !== 1 || state.producerJoin !== owner
+      || state.producerRequest !== request || (attached && (state.producerResponse !== response || state.producerBody !== body))) fail();
+    for (const role of roles) if (state[role] !== records.get(role)?.promise) fail();
+    return faults.length === 0;
+  };
+  const owner = Object.freeze({
+    attach(value, stream) {
+      if (attached || !value || !stream || value.body !== stream) { fail(); throw faults[0]; }
+      response = value; body = stream; state.producerResponse = value; state.producerBody = stream; attached = true;
+      if (!check()) throw faults[0];
+    },
+    capture(role, promise, originalRequest = request) {
+      if (!roles.includes(role) || originalRequest !== request || state[role] !== promise || !(promise instanceof Promise)) { fail(); throw faults[0]; }
+      const old = records.get(role);
+      if (old) { if (old.promise !== promise) { fail(); throw faults[0]; } return promise; }
+      if (seen.has(promise)) { fail(); throw faults[0]; }
+      seen.add(promise); records.set(role, { role, promise, state: "pending" });
+      if (!check()) throw faults[0];
+      return promise;
+    },
+    drain() {
+      if (running) return running;
+      running = (async () => {
+        try {
+          do {
+            check();
+            const batch = roles.map(role => records.get(role)).filter(row => row && row.state === "pending");
+            const outcomes = await Promise.allSettled(batch.map(row => row.promise));
+            outcomes.forEach((outcome, i) => {
+              const row = batch[i]; row.state = outcome.status;
+              if (outcome.status === "rejected") row.error = outcome.reason;
+            });
+            check();
+          } while ([...records.values()].some(row => row.state === "pending"));
+          if (!attached) fail();
+          const rejected = roles.map(role => records.get(role)).filter(row => row?.state === "rejected");
+          const failures = [...rejected.map(row => row.error), ...faults];
+          if (records.get("producer")?.state === "fulfilled") state.settled = 1;
+          if (failures.length === 1) throw failures[0];
+          if (failures.length) throw new AggregateError(failures, "original producer joins failed");
+          return roles.filter(role => records.has(role)).map(role => ({ role, state: records.get(role).state }));
+        } finally { running = undefined; }
+      })();
+      return running;
+    },
+  });
+  state.producerRequest = request; state.producerJoin = owner;
+  return owner;
+}
+
+// Consume the actual control response first. On failure, retire its body once
+// without replacing the original failure (which may be undefined).
+export function createBifrostControlReader() {
+  const responses = new WeakSet(), bodies = new WeakSet();
+  return async function read(owner, original, receiver, args, method, observe) {
+    const id = owner.id, mode = owner.mode, members = args.slice(), failures = [];
+    let response, body, claimed = false, consumed = false;
+    const check = () => {
+      if (owner.id !== id || owner.mode !== mode || args.length !== members.length || args.some((value, i) => value !== members[i])) throw Error("changed control ownership");
+    };
+    let value;
+    try {
+      check();
+      response = await observe("control_fetch", () => Reflect.apply(original, receiver, args));
+      if (!response || responses.has(response)) throw Error("ambiguous control response");
+      responses.add(response);
+      body = response.body;
+      if (body && bodies.has(body)) throw Error("foreign control body");
+      if (body) bodies.add(body);
+      claimed = true; check();
+      if (method !== "json" && method !== "text") throw Error("invalid control consumption");
+      const consume = response[method];
+      value = await observe("control_body", () => Reflect.apply(consume, response, []));
+      consumed = true; check();
+    } catch (error) { failures.push(error); }
+    if (failures.length && claimed && body && !consumed) {
+      try { const cancel = body.cancel; await observe("control_cancel", () => Reflect.apply(cancel, body, [])); }
+      catch (error) { failures.push(error); }
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length) throw new AggregateError(failures, "control consumption and original cleanup failed");
+    return { response, value };
+  };
+}
+// END Bifrost owned producer/control retirement helpers.
+
+// BEGIN Bifrost inert retirement regressions (no native transports or timers).
+export async function bifrostRetirementInertCases(assert) {
+  const cases = [];
+  const run = async (name, body) => { await body(); cases.push(name); };
+  const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
+  const outcome = async promise => { try { return { failed: false, value: await promise }; } catch (error) { return { failed: true, error }; } };
+  const fixture = () => {
+    const request = {}, call = {}, state = { id: "case", mode: "progress", calls: [call], settled: 0 };
+    const owner = createBifrostProducerJoin(state, request, call), body = {}, response = { body };
+    owner.attach(response, body);
+    const capture = (role, promise) => { state[role] = promise; assert.equal(owner.capture(role, promise, request), promise); };
+    return { request, call, state, owner, body, response, capture };
+  };
+  await run("no acquired producer creates no release", async () => {
+    const c = fixture(); assert.deepEqual(await c.owner.drain(), []); assert.equal(c.state.settled, 0);
+  });
+  for (const role of ["producer", "progressTask", "progressObserved", "progressCommand"]) {
+    await run("held " + role, async () => {
+      const c = fixture(), held = deferred(); c.capture(role, held.promise);
+      const joined = c.owner.drain(); assert.equal(c.owner.drain(), joined);
+      let done = false; const observed = joined.then(() => { done = true; });
+      await Promise.resolve(); await Promise.resolve(); assert.equal(done, false);
+      held.resolve(); await observed;
+      assert.deepEqual(await c.owner.drain(), [{ role, state: "fulfilled" }]);
+    });
+    await run("rejected " + role, async () => {
+      const c = fixture(), original = deferred(), reason = {}; c.capture(role, original.promise);
+      const joined = outcome(c.owner.drain()); original.reject(reason);
+      assert.deepEqual(await joined, { failed: true, error: reason });
+      assert.deepEqual(await outcome(c.owner.drain()), { failed: true, error: reason });
+    });
+  }
+  await run("undefined task remains failed when its attached observer fulfills", async () => {
+    const c = fixture(), original = deferred(); c.capture("progressTask", original.promise);
+    const alreadyAttached = original.promise.then(() => {}, () => {}); c.capture("progressObserved", alreadyAttached);
+    const joined = outcome(c.owner.drain()); original.reject(undefined);
+    assert.deepEqual(await joined, { failed: true, error: undefined }); await alreadyAttached;
+    assert.deepEqual(await outcome(c.owner.drain()), { failed: true, error: undefined });
+  });
+  await run("independent producer and task failures retained once in role order", async () => {
+    const c = fixture(), producer = deferred(), task = deferred(), first = {}, second = {};
+    c.capture("progressTask", task.promise); c.capture("progressObserved", task.promise.then(() => {}, () => {})); c.capture("producer", producer.promise);
+    const joined = outcome(c.owner.drain()); task.reject(second); producer.reject(first);
+    const result = await joined; assert.equal(result.failed, true); assert.deepEqual(result.error.errors, [first, second]);
+    assert.deepEqual((await outcome(c.owner.drain())).error.errors, [first, second]);
+  });
+  await run("settlement reveals late owned work and fixed point joins it", async () => {
+    const c = fixture(), command = deferred(), held = deferred();
+    const task = command.promise.then(() => { c.capture("producer", held.promise); }); c.capture("progressTask", task);
+    let done = false; const joined = c.owner.drain().then(value => { done = true; return value; });
+    command.resolve(); await task; await Promise.resolve(); assert.equal(done, false);
+    held.resolve(); assert.deepEqual(await joined, [{ role: "producer", state: "fulfilled" }, { role: "progressTask", state: "fulfilled" }]);
+  });
+  const changes = [c => { c.state.id = "foreign"; }, c => { c.state.mode = "other"; }, c => { c.state.calls = [...c.state.calls]; },
+    c => { c.state.calls[0] = {}; }, c => { c.state.calls.push(c.call); }, c => { c.state.producerRequest = {}; },
+    c => { c.state.producerResponse = {}; }, c => { c.state.producerBody = {}; }, c => { c.state.producerJoin = {}; },
+    c => { c.state.producer = Promise.resolve(); }];
+  for (const [index, change] of changes.entries()) await run("owner mutation " + index, async () => {
+    const c = fixture(), held = deferred(); c.capture("producer", held.promise); change(c);
+    let done = false; const joined = outcome(c.owner.drain()).then(value => { done = true; return value; });
+    await Promise.resolve(); await Promise.resolve(); assert.equal(done, false); held.resolve(); assert.equal((await joined).failed, true);
+  });
+  await run("foreign request and promise alias cannot be captured", async () => {
+    const c = fixture(), promise = Promise.resolve(); c.state.producer = promise;
+    assert.throws(() => c.owner.capture("producer", promise, {}));
+    const d = fixture(); d.capture("producer", promise); d.state.progressTask = promise;
+    assert.throws(() => d.owner.capture("progressTask", promise));
+    assert.equal((await outcome(d.owner.drain())).failed, true);
+  });
+  await run("replaced promise and response cannot replace existing ownership", async () => {
+    const c = fixture(); c.capture("producer", Promise.resolve()); c.state.producer = Promise.resolve();
+    assert.throws(() => c.owner.capture("producer", c.state.producer));
+    assert.throws(() => c.owner.attach({ body: c.body }, c.body));
+    assert.throws(() => createBifrostProducerJoin(c.state, c.request, c.call));
+  });
+  const control = () => {
+    const read = createBifrostControlReader(), owner = { id: "case", mode: "progress" }, receiver = {}, args = ["fixture", { method: "POST" }], calls = [], pending = [];
+    const body = { cancel(...values) { assert.equal(this, body); assert.deepEqual(values, []); calls.push("cancel"); return Promise.resolve(); } };
+    const response = { body, text(...values) { assert.equal(this, response); assert.deepEqual(values, []); calls.push("text"); return Promise.resolve("value"); } };
+    function fetch(...values) { assert.equal(this, receiver); assert.deepEqual(values, args); calls.push("fetch"); return Promise.resolve(response); }
+    const observe = (kind, start) => { const original = start(); pending.push({ kind, original }); return original; };
+    return { read, owner, receiver, args, calls, pending, body, response, fetch, observe, invoke: () => read(owner, fetch, receiver, args, "text", observe) };
+  };
+  await run("control original arguments receiver response and consumption order", async () => {
+    const c = control(), result = await c.invoke(); assert.equal(result.response, c.response); assert.equal(result.value, "value");
+    assert.deepEqual(c.calls, ["fetch", "text"]); assert.deepEqual(c.pending.map(x => x.kind), ["control_fetch", "control_body"]);
+    await Promise.all(c.pending.map(x => x.original));
+  });
+  await run("control waits for original body before returning", async () => {
+    const c = control(), held = deferred(); c.response.text = function () { assert.equal(this, c.response); return held.promise; };
+    let done = false; const result = c.invoke().then(value => { done = true; return value; });
+    await Promise.resolve(); await Promise.resolve(); assert.equal(done, false); held.resolve("body");
+    assert.equal((await result).value, "body"); assert.equal(c.pending[1].original, held.promise);
+  });
+  for (const primary of [undefined, {}]) await run("control consumption plus independent cancellation failure " + (primary === undefined), async () => {
+    const c = control(), cleanup = primary === undefined ? {} : undefined;
+    c.response.text = function () { assert.equal(this, c.response); return Promise.reject(primary); };
+    c.body.cancel = function () { assert.equal(this, c.body); c.calls.push("cancel"); return Promise.reject(cleanup); };
+    const result = await outcome(c.invoke()); assert.equal(result.failed, true); assert.deepEqual(result.error.errors, [primary, cleanup]);
+    assert.deepEqual(c.calls, ["fetch", "cancel"]); assert.deepEqual(c.pending.map(x => x.kind), ["control_fetch", "control_body", "control_cancel"]);
+  });
+  await run("synchronous undefined consumption still cancels once", async () => {
+    const c = control(); c.response.text = () => { throw undefined; };
+    assert.deepEqual(await outcome(c.invoke()), { failed: true, error: undefined }); assert.deepEqual(c.calls, ["fetch", "cancel"]);
+  });
+  await run("no acquired response means no invented cancellation", async () => {
+    const c = control(); const result = await outcome(c.read(c.owner, () => Promise.reject(undefined), c.receiver, c.args, "text", c.observe));
+    assert.deepEqual(result, { failed: true, error: undefined }); assert.deepEqual(c.calls, []);
+  });
+  await run("foreign reused response or body never cancels the other owner", async () => {
+    const c = control(); await c.invoke(); assert.equal((await outcome(c.invoke())).failed, true);
+    const foreign = { body: c.body, text: c.response.text };
+    assert.equal((await outcome(c.read({ id: "foreign" }, () => Promise.resolve(foreign), c.receiver, c.args, "text", c.observe))).failed, true);
+    assert.equal(c.calls.includes("cancel"), false);
+  });
+  for (const replace of [c => { c.owner.id = "foreign"; }, c => { c.args[0] = "foreign"; }]) await run("control ownership changes before acquired consumption", async () => {
+    const c = control(), held = deferred(); const result = outcome(c.read(c.owner, () => held.promise, c.receiver, c.args, "text", c.observe));
+    replace(c); held.resolve(c.response); assert.equal((await result).failed, true); assert.deepEqual(c.calls, ["cancel"]);
+  });
+  await run("unchanged progress command and expired/canceled semantics", async () => {
+    const s = { mode: "progress", progressCalls: 0, progressEnqueued: 0, held: 1, canceled: 0, expired: 0, completed: 0 }, command = deferred();
+    let enqueues = 0; s.progressResolve = command.resolve;
+    s.progressTask = command.promise.then(value => performBifrostProgress(s, value, () => { enqueues++; }));
+    assert.equal(requestBifrostProgress(s), s.progressTask); await s.progressTask;
+    assert.equal(enqueues, 1); assert.equal(s.progressCalls, 1); assert.throws(() => requestBifrostProgress(s));
+    const expired = { ...s, expired: 1 }; assert.throws(() => performBifrostProgress(expired, "expired", () => { enqueues++; }));
+    assert.deepEqual(performBifrostProgress({ ...s, canceled: 1 }, "cancel", () => { enqueues++; }), { accepted: true, alreadyCanceled: true, enqueued: false });
+    assert.equal(enqueues, 1);
+  });
+  return cases;
+}
+// END Bifrost inert retirement regressions.
+
 // These functions are embedded unchanged in the real Worker fixture and tested
 // below. Rejection records retain the original reason, including undefined.
 export function observeBifrostOperation(s, kind, start, details = {}) {
@@ -214,13 +444,14 @@ ${observeBifrostOperation.toString()}
 ${collectBifrostOperations.toString()}
 ${bifrostDeadlineQualified.toString()}
 ${bifrostDeadlineWitness.toString()}
+${createBifrostControlReader.toString()}
 import {resolveGrantCandidates,grantRoutingPolicy} from './worker/grant-selection.ts';
-const nativeFetch=globalThis.fetch,states=new Map(),base='https://gateway.fixture/openai/v1';
+const nativeFetch=globalThis.fetch,states=new Map(),base='https://gateway.fixture/openai/v1',readControl=createBifrostControlReader();
 function invoke(s,kind,run,details){return observeBifrostOperation(s,kind,run,details);}
 function observe(s,p,kind,details){return invoke(s,kind,()=>p,details);}
 async function drain(s){return collectBifrostOperations(s);}
 function publicOperations(s){return s.ops.map(o=>({kind:o.kind,ordinal:o.ordinal,state:o.state,invoke:o.invoke,settle:o.settle??null}));}
-async function control(s,path){const r=await observe(s,Reflect.apply(nativeFetch,globalThis,['https://bifrost-control.fixture/'+path+'/'+s.id,{method:'POST',body:JSON.stringify({mode:s.mode,models:s.ids})}]),'control_fetch');return observe(s,r.json(),'control_body');}
+async function control(s,path){const result=await readControl(s,nativeFetch,globalThis,['https://bifrost-control.fixture/'+path+'/'+s.id,{method:'POST',body:JSON.stringify({mode:s.mode,models:s.ids})}],'json',(kind,start)=>invoke(s,kind,start));return result.value;}
 async function mutate(s,kind){
  if(kind==='arm_revoke'||kind==='arm_destination'){s.armed=kind.slice(4);return;}
  if(kind==='revoke'||kind==='warm_revoke')await revokeGrantCredentials(s.env,s.grantKey);
@@ -319,6 +550,7 @@ export default {async fetch(request,bindings,originalContext){
 const upstream = `
 ${requestBifrostProgress.toString()}
 ${performBifrostProgress.toString()}
+${createBifrostProducerJoin.toString()}
 const states=new Map();
 export default {async fetch(request){const url=new URL(request.url);
  if(url.hostname==='bifrost-control.fixture'){
@@ -327,14 +559,13 @@ export default {async fetch(request){const url=new URL(request.url);
   const s=states.get(id);if(!s)throw Error('missing upstream owner');
   if(kind==='progress')return Response.json(await requestBifrostProgress(s));
   if(kind==='complete'){if(!s.complete)throw Error('missing producer');s.complete();return Response.json({accepted:true});}
-  if(kind==='proof'){if(s.mode==='progress'){const failures=[];if(s.producer)try{await s.producer;s.settled=1;}catch(e){failures.push(e);}if(s.progressTask)try{await s.progressTask;}catch(e){failures.push(e);}if(failures.length)throw new AggregateError(failures,'original producer joins failed');}
-   else if(s.producer){await s.producer;s.settled=1;}return Response.json({calls:s.calls,held:s.held,canceled:s.canceled,expired:s.expired,settled:s.settled,completed:s.completed,progressCalls:s.progressCalls,progressEnqueued:s.progressEnqueued,progressTerminal:s.progressTerminal});}
+   if(kind==='proof'){if(s.producerJoin)await s.producerJoin.drain();else if(s.producer||s.progressTask||s.progressObserved||s.progressCommand)throw Error('unbound producer originals');return Response.json({calls:s.calls,held:s.held,canceled:s.canceled,expired:s.expired,settled:s.settled,completed:s.completed,progressCalls:s.progressCalls,progressEnqueued:s.progressEnqueued,progressTerminal:s.progressTerminal});}
  }
  const secret=request.headers.get('authorization')??'',s=[...states.values()].find(s=>secret==='Bearer synthetic-owner-'+s.id||secret==='Bearer synthetic-rotated-'+s.id);
  if(!s)throw Error('foreign upstream credential');
  if(url.origin!=='https://gateway.fixture'||url.search||!['/openai/v1/models','/custom/openai/models','/openai/v1/chat/completions'].includes(url.pathname))throw Error('foreign upstream destination');
  const chat=url.pathname.endsWith('/chat/completions'),body=chat?await request.json():null;
- s.calls.push({method:request.method,path:url.pathname,query:!!url.search,chat,model:body?.model??null,stream:body?.stream??null});
+  const call={method:request.method,path:url.pathname,query:!!url.search,chat,model:body?.model??null,stream:body?.stream??null};s.calls.push(call);
  if(s.mode==='redirect')return new Response(null,{status:302,headers:{location:'https://foreign.fixture/models'}});
  if(s.mode==='error401'||s.mode==='error403')return Response.json({error:{message:'sanitized fixture rejection'}},{status:Number(s.mode.slice(5))});
  if(!chat){
@@ -342,19 +573,19 @@ export default {async fetch(request){const url=new URL(request.url);
   const value=s.mode==='malformed'?{object:'list',data:[{}]}:s.mode==='loose'?{data}:s.mode==='wrong_object'?{object:'wrong',data}:{object:'list',data};
   if(!s.mode.startsWith('held_')&&s.mode!=='deadline')return Response.json(value);
   const bytes=JSON.stringify(value),prefix='{"object":"list","data":[';
-  return new Response(new ReadableStream({start(c){s.held=1;c.enqueue(new TextEncoder().encode(prefix));},pull(c){
+   const owner=createBifrostProducerJoin(s,request,call),stream=new ReadableStream({start(c){s.held=1;c.enqueue(new TextEncoder().encode(prefix));},pull(c){
    if(s.producer)return s.producer;s.producer=new Promise((resolve,reject)=>{s.resolve=resolve;const timer=setTimeout(()=>{s.expired++;s.held=0;c.error(Error('producer expired'));reject(Error('producer expired'));},s.mode==='deadline'?35000:5000);s.timer=timer;
-    s.complete=()=>{clearTimeout(timer);c.enqueue(new TextEncoder().encode(bytes.slice(prefix.length)));c.close();s.held=0;resolve();};});return s.producer;
-  },cancel(){s.canceled++;clearTimeout(s.timer);s.held=0;s.resolve?.();}}),{headers:{'content-type':'application/json'}});
+     s.complete=()=>{clearTimeout(timer);c.enqueue(new TextEncoder().encode(bytes.slice(prefix.length)));c.close();s.held=0;resolve();};});owner.capture('producer',s.producer,request);return s.producer;
+   },cancel(){s.canceled++;clearTimeout(s.timer);s.held=0;s.resolve?.();}});const response=new Response(stream,{headers:{'content-type':'application/json'}});owner.attach(response,stream);return response;
  }
  const frame=v=>'data: '+JSON.stringify(v)+'\\n\\n',chunk=delta=>({id:'chat_fixture',object:'chat.completion.chunk',created:1,model:body.model,choices:[{index:0,delta,finish_reason:null}]}),prefix=frame(chunk({role:'assistant',content:'synthetic-prefix'}));
  if(s.mode==='provider_error')return new Response(prefix+frame({error:{message:'synthetic-provider-error',type:'server_error'}}),{headers:{'content-type':'text/event-stream'}});
  if(s.mode!=='partial'&&s.mode!=='progress')return new Response(prefix+frame({id:'chat_fixture',object:'chat.completion.chunk',created:1,model:body.model,choices:[{index:0,delta:{},finish_reason:'stop'}],usage:{prompt_tokens:4,completion_tokens:3,total_tokens:7}})+'data: [DONE]\\n\\n',{headers:{'content-type':'text/event-stream'}});
- return new Response(new ReadableStream({start(c){s.held=1;c.enqueue(new TextEncoder().encode(prefix));
-  if(s.mode==='progress'){s.progressTask=new Promise(resolve=>{s.progressResolve=resolve;}).then(command=>performBifrostProgress(s,command,()=>c.enqueue(new TextEncoder().encode(': progress\\n\\n'))));s.progressObserved=s.progressTask.then(()=>{},()=>{});}
+  const owner=createBifrostProducerJoin(s,request,call),stream=new ReadableStream({start(c){s.held=1;c.enqueue(new TextEncoder().encode(prefix));
+   if(s.mode==='progress'){s.progressCommand=new Promise(resolve=>{s.progressResolve=resolve;});owner.capture('progressCommand',s.progressCommand,request);s.progressTask=s.progressCommand.then(command=>performBifrostProgress(s,command,()=>c.enqueue(new TextEncoder().encode(': progress\\n\\n'))));owner.capture('progressTask',s.progressTask,request);s.progressObserved=s.progressTask.then(()=>{},()=>{});owner.capture('progressObserved',s.progressObserved,request);}
  },pull(c){if(s.producer)return s.producer;
-  s.producer=new Promise((resolve,reject)=>{s.resolve=resolve;s.timer=setTimeout(()=>{s.expired++;s.held=0;s.progressResolve?.('expired');c.error(Error('producer expired'));reject(Error('producer expired'));},10000);});return s.producer;
- },cancel(){s.canceled++;clearTimeout(s.timer);s.held=0;s.progressResolve?.('cancel');s.resolve?.();}}),{headers:{'content-type':'text/event-stream'}});
+   s.producer=new Promise((resolve,reject)=>{s.resolve=resolve;s.timer=setTimeout(()=>{s.expired++;s.held=0;s.progressResolve?.('expired');c.error(Error('producer expired'));reject(Error('producer expired'));},10000);});owner.capture('producer',s.producer,request);return s.producer;
+  },cancel(){s.canceled++;clearTimeout(s.timer);s.held=0;s.progressResolve?.('cancel');s.resolve?.();}});const response=new Response(stream,{headers:{'content-type':'text/event-stream'}});owner.attach(response,stream);return response;
 }};`;
 
 export async function startBifrostFixture({hotCache=false}={}) {
@@ -362,9 +593,10 @@ export async function startBifrostFixture({hotCache=false}={}) {
   try { runtime = await startWorkerdFixture(directory, router, upstream, {hotCache,bindings:{BIFROST_BASE_URL:'https://gateway.fixture/openai/v1',BIFROST_MODEL:'tenant/opaque-a',BIFROST_API_KEY:'synthetic-poison-env'}}); }
   catch (error) { await finishBifrostOwned(() => { throw error; }, [() => rm(directory,{recursive:true,force:true})]); }
   const origin = (await runtime.ready).origin;
+  const readControl = createBifrostControlReader();
   const json = async (path, body) => {
-    const response = await fetch(origin+path,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body??{})});
-    const text = await response.text(); let value;try{value=JSON.parse(text);}catch{throw Error('fixture control returned non-JSON');}assert.equal(response.status,200,JSON.stringify(value)); return value;
+    const { response, value: text } = await readControl(Object.freeze({id:path}),fetch,undefined,[origin+path,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body??{})}],"text",(_kind,start)=>start());
+    let value;try{value=JSON.parse(text);}catch{throw Error('fixture control returned non-JSON');}assert.equal(response.status,200,JSON.stringify(value)); return value;
   };
   return { origin, runtime, setup:row=>json('/__bifrost/setup',row), mutate:(id,kind)=>json('/__bifrost/mutate/'+id,{kind}),
     join:id=>json('/__bifrost/join/'+id), state:id=>json('/__bifrost/state/'+id),
@@ -387,6 +619,9 @@ export function assertBifrostRetired(proof, {workerDeadline=false, application}=
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+ test("Bifrost original producer, observer and control retirement (inert)", async () => {
+  const cases = await bifrostRetirementInertCases(assert); assert.ok(cases.length >= 30);
+ });
  test("Bifrost checkpoint preserves original invocation, promise and undefined rejection",async()=>{
   const records=[],r=bifrostCheckpointFunctions().createBifrostCheckpointReporter("sdk",v=>records.push(v)),receiver={},args=[{},undefined];
   let calls=0,reject;const original=new Promise((_,no)=>{reject=no;});
