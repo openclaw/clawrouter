@@ -198,6 +198,61 @@ function litellmOwnership(storage: any, generation = 0) {
     },
   };
 }
+// No spy may wrap this return: Vitest subscribes to returned promises after a
+// mock implementation exits, before the real D8 caller can register its Q.
+function litellmReadBoundary(reader: object, original: Function, observe: {
+  begin(receiver: unknown, args: unknown[]): any;
+  returned(event: any, original: Promise<unknown>): void;
+  arm(event: any, original: Promise<unknown>): void;
+  threw(event: any, error: unknown): void;
+}, errors: unknown[], restores: Array<() => void>) {
+  const same = (a: PropertyDescriptor | undefined, b: PropertyDescriptor | undefined) => a === undefined || b === undefined ? a === b
+    : ["value", "get", "set", "writable", "enumerable", "configurable"].every(key => Object.hasOwn(a, key) === Object.hasOwn(b, key) && Object.is((a as any)[key], (b as any)[key]));
+  const inherited = () => {
+    const chain: object[] = []; let at = Object.getPrototypeOf(reader);
+    while (at) { chain.push(at); const descriptor = Object.getOwnPropertyDescriptor(at, "read"); if (descriptor) return { chain, descriptor }; at = Object.getPrototypeOf(at); }
+    return { chain, descriptor: undefined };
+  };
+  const own = Object.getOwnPropertyDescriptor(reader, "read"), prototype = Object.getPrototypeOf(reader), source = inherited();
+  const descriptor = own ?? source.descriptor;
+  if (!descriptor || !Object.hasOwn(descriptor, "value") || descriptor.value !== original) throw new Error("unsupported original read descriptor");
+  const unchangedPrototype = () => {
+    if (Object.getPrototypeOf(reader) !== prototype) return false;
+    if (own) return true;
+    const now = inherited(); return same(now.descriptor, source.descriptor) && now.chain.length === source.chain.length && now.chain.every((value, index) => value === source.chain[index]);
+  };
+  const wrapped = function (this: unknown, ...args: unknown[]) {
+    let event: any, observed = true;
+    try { event = observe.begin(this, args); } catch (error) { errors.push(error); observed = false; }
+    let pending: Promise<unknown>;
+    try { pending = Reflect.apply(original, this, args); }
+    catch (error) {
+      errors.push(error);
+      try { observe.threw(event, error); } catch (failure) { errors.push(failure); }
+      throw error;
+    }
+    try { observe.returned(event, pending); } catch (error) { errors.push(error); observed = false; }
+    if (observed) try { observe.arm(event, pending); } catch (error) { errors.push(error); }
+    return pending;
+  };
+  const installed = own ? { ...own, value: wrapped } : { value: wrapped, writable: true, configurable: true, enumerable: descriptor.enumerable };
+  let completed = false, defined = false;
+  restores.push(() => {
+    if (completed) throw new Error("duplicate read descriptor restoration");
+    const now = Object.getOwnPropertyDescriptor(reader, "read");
+    if (!unchangedPrototype()) throw new Error("foreign read prototype mutation");
+    // A failed defineProperty may have made no change. Never overwrite a foreign
+    // descriptor, including altered flags on our own function.
+    if (!defined && same(now, own)) { completed = true; return; }
+    if (!same(now, installed)) throw new Error("foreign read descriptor mutation");
+    if (own) Object.defineProperty(reader, "read", own);
+    else if (!Reflect.deleteProperty(reader, "read")) throw new Error("read descriptor deletion failed");
+    if (!same(Object.getOwnPropertyDescriptor(reader, "read"), own) || !unchangedPrototype()) throw new Error("read descriptor restoration mismatch");
+    completed = true;
+  });
+  try { Object.defineProperty(reader, "read", installed); defined = true; }
+  catch (error) { errors.push(error); }
+}
 // Original read registration only; this grants entry ownership, never disposition.
 function litellmProductReactions(fault: () => void, error: (value: unknown) => void, observe: (q: Promise<unknown>) => void = () => {}) {
   const reads = new WeakMap<object, any>(), qs = new WeakMap<object, any>(), leases = new WeakSet<object>();
@@ -899,6 +954,7 @@ const originalCatalogGuard = catalogGuard.fetchWithSsrFGuard;
 const originalChatGuard = chatGuard.fetchWithProviderHttpGuard;
 type Acquisition = { kind: "catalog" | "chat"; promise: Promise<unknown>; releases: number; released: Promise<void>; markReleased: () => void };
 const operations: Operation[] = [], acquisitions: Acquisition[] = [], failures: unknown[] = [];
+const readRestores: Array<() => void> = [];
 const bodies = new Set<ReadableStream<Uint8Array>>();
 const readers: Array<{ body: ReadableStream<Uint8Array>; unlocks: number }> = [];
 const closes: Array<{ depth: number; original?: Promise<unknown>; threw: boolean; error?: unknown }> = [];
@@ -959,13 +1015,25 @@ function observeBody(body: ReadableStream<Uint8Array> | null): void {
     try { reader = Reflect.apply(get, this, args); } catch (error) { failures.push(error); throw error; }
     ownership.reader(body, reader, this, captured, { read: reader.read, cancel: reader.cancel, releaseLock: reader.releaseLock });
     const record = { body, unlocks: 0 }; readers.push(record); const closed = reader.closed; captured.witness.closed(reader, closed); remember("closed", closed);
-    for (const kind of ["read", "cancel"] as const) {
+    const read = reader.read;
+    try {
+      litellmReadBoundary(reader, read, {
+        begin(receiver, values) { return ownership.operation(reader, receiver, "read", captured, values[0], read, values); },
+        returned(event, pending) {
+          const errors: unknown[] = [];
+          for (const observe of [() => { if (event) captured.witness.promise(event, pending); }, () => remember("read", pending)]) try { observe(); } catch (error) { errors.push(error); }
+          raise(errors);
+        },
+        arm(event, pending) { event.reaction = ownership.prepareRead(reader, pending, read, captured); },
+        threw(event, error) { if (event) captured.witness.threw(event, error); },
+      }, failures, readRestores);
+    } catch (error) { failures.push(error); }
+    for (const kind of ["cancel"] as const) {
       const original = reader[kind];
       vi.spyOn(reader, kind).mockImplementation(function (this: typeof reader, ...values: unknown[]) {
         const event = ownership.operation(reader, this, kind, captured, values[0], original, values);
         try {
           const pending = Reflect.apply(original, this, values); captured.witness.promise(event, pending); remember(kind, pending);
-          if (kind === "read") event.reaction = ownership.prepareRead(reader, pending, original, captured);
           return pending;
         } catch (error) { captured.witness.threw(event, error); failures.push(error); throw error; }
       });
@@ -1049,6 +1117,7 @@ beforeEach(() => {
   expect(process.env.CLAWROUTER_CONTRACT_SOURCE_HEAD).toBe(sourceHead);
   expect(execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim()).toBe(sourceHead);
   clearLiveCatalogCacheForTests(); operations.length = 0; acquisitions.length = 0; failures.length = 0;
+  readRestores.length = 0;
   bodies.clear(); readers.length = 0; closes.length = 0; dispatchers.clear(); requests.length = 0;
   for (const name of ["LITELLM_API_KEY", "OPENAI_API_KEY"]) vi.stubEnv(name, "poison-environment");
   vi.stubGlobal("__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__", { ...undici, fetch: observeTransport });
@@ -1098,7 +1167,7 @@ afterEach(async () => {
   let join: ReturnType<typeof litellmJoinFacts> | undefined;
   if (errors.length) try { join = litellmJoinFacts(failedCheckpoint ?? "original_observer", bodyOutcome, operations, acquisitions, readers, bodies, failures, ownership); } catch (error) { errors.push(error); }
   for (const error of errors) try { reportSdk("join", error, join); } catch (reportError) { errors.push(reportError); break; }
-  for (const restore of [() => ownership.restore(), () => vi.restoreAllMocks(), () => vi.unstubAllGlobals(), () => vi.unstubAllEnvs(), () => clearLiveCatalogCacheForTests()]) {
+  for (const restore of [...readRestores, () => ownership.restore(), () => vi.restoreAllMocks(), () => vi.unstubAllGlobals(), () => vi.unstubAllEnvs(), () => clearLiveCatalogCacheForTests()]) {
     try { restore(); } catch (error) { errors.push(error); try { reportSdk("restore", error); } catch (reportError) { errors.push(reportError); } }
   }
   if (errors.length) try {
