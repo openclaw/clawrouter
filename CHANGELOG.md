@@ -1,5 +1,7 @@
 # Changelog
 
+- Add an offline, isolated edge-cancellation proof preparation route with frozen-source instrumentation and strict native-client retirement controls. Cloud activation and actual SDK/edge qualification remain separate, explicitly authorized steps.
+
 ## Unreleased
 
 - Test the registered OpenClaw Featherless catalog against complete Worker scans, original credentials, policy filtering, and SQLite metadata settlement.
