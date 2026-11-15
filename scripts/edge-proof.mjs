@@ -902,7 +902,34 @@ export function validateReceiptBoundaryDiagnostic(value) {
   }
   return {...validated,v:10,count:row.count,projection:row.projection};
 }
+// V11 adds rejected-projector input context only. V9/V10 remain unchanged.
+// lifecycle = [version, role-local index, count, expected phase, actual phase,
+// presence (1 present, 2 absent), evaluated outcome]. Zero means UNKNOWN.
+export function validateReceiptLifecycleDiagnostic(value) {
+  const keys = ["v","phase","state","defined","exit","signal","parser","child","reports","count","projection","lifecycle"];
+  if (!value || Object.getOwnPropertyNames(value).sort().join() !== [...keys].sort().join()) refuse("receipt-lifecycle-keys");
+  const row = Object.fromEntries(keys.map(key => [key,ownData(value,key)]));
+  if (row.v !== 11) refuse("receipt-lifecycle-version");
+  const prior = Object.fromEntries(keys.slice(0,-1).map(key => [key,row[key]])); prior.v = 10;
+  const validated = validateReceiptBoundaryDiagnostic(prior);
+  if (row.lifecycle !== null) {
+    if (!Array.isArray(row.lifecycle) || Object.getOwnPropertyNames(row.lifecycle).join() !== "0,1,2,3,4,5,6,length") refuse("receipt-lifecycle-tuple");
+    row.lifecycle = Array.from({length:7},(_,i)=>ownData(row.lifecycle,String(i)));
+    const [v,index,count,expected,actual,presence,outcome] = row.lifecycle, detail = validated.projection;
+    if (!detail || detail[1] !== 30 || detail[3] !== 1 || validated.child[1] !== "invalid") refuse("receipt-lifecycle-boundary");
+    if (v !== 1 || !row.lifecycle.every(Number.isSafeInteger) || index < 2 || count < 2 || count > 256 || index > count || expected < 1 || expected > receiptChildPhases.length || actual < 0 || actual > receiptChildPhases.length || ![1,2].includes(presence)) refuse("receipt-lifecycle-values");
+    const builder = ["namespace_read","builder_import","build","receipt_write","build_service_stop"];
+    const child = ["namespace_read","process_inventory","environment","build_a_report","build_b_report","two_roots","wrangler_input","edge_config","edge_output","edge_marker","edge_hash","edge_privacy","upstream_config","upstream_output","upstream_marker","upstream_hash","upstream_privacy","final_namespace","final_descendants"];
+    if (!(detail[2] === 3 ? child : builder).includes(receiptChildPhases[expected-1])) refuse("receipt-lifecycle-role");
+    if (presence === 2 ? index !== count || actual !== 0 || outcome !== 0 || detail[4] !== 1 : index >= count) refuse("receipt-lifecycle-presence");
+    if (detail[4] === 1 ? actual === expected || outcome !== 0 : presence !== 1 || actual !== expected || ![1,4].includes(outcome)) refuse("receipt-lifecycle-comparison");
+  }
+  const result = {...validated,v:11,lifecycle:row.lifecycle};
+  if (Buffer.byteLength(JSON.stringify(result)) > 512) refuse("receipt-lifecycle-capacity");
+  return result;
+}
 export function validateContainerDiagnostic(value) {
+  if (value && typeof value === "object" && ownData(value, "v") === 11) return validateReceiptLifecycleDiagnostic(value);
   if (value && typeof value === "object" && ownData(value, "v") === 10) return validateReceiptBoundaryDiagnostic(value);
   if (value && typeof value === "object" && ownData(value, "v") === 9) return validateReceiptDiagnostic(value);
   if (value && typeof value === "object" && ownData(value, "v") === 8) return validateParentAdmission(value);
@@ -1011,7 +1038,7 @@ export function containerProcessDiagnostic(result, available = true, reason) {
 export function emitContainerFailure(records, writer = line => process.stdout.write(line)) {
   const validated = records.map(validateContainerDiagnostic), detailed = validated.filter(row => row.v === 8);
   if (detailed.length > 1) refuse("parent-admission-duplicate");
-  const receipt = validated.filter(row => row.v === 9 || row.v === 10); if (receipt.length > 1) refuse("receipt-diagnostic-duplicate");
+  const receipt = validated.filter(row => row.v === 9 || row.v === 10 || row.v === 11); if (receipt.length > 1) refuse("receipt-diagnostic-duplicate");
   const rows = validated.filter(row => !(detailed.length && row.phase === "admission" && row.v === 2) && !(receipt.length && row.phase === "receipt" && row.v === 2)), unique = new Map();
   const rejected = rows.filter(row => row.state === "rejected");
   // Reserve the first actual failure and original build outcome before context.
