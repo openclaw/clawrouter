@@ -64,6 +64,7 @@ function ownData(value, name) {
   return descriptor.value;
 }
 export function validatePackagingDiagnostic(value) {
+  if (value && typeof value === "object" && ownData(value,"v") === 4) return validateCensusCloseDiagnostic(value);
   if(value && typeof value==="object" && ownData(value,"v")===3) return validateOwnedCodeCloseDiagnostic(value);
   if(value && typeof value==="object" && ownData(value,"v")===2) return validateOwnedCloseDiagnostic(value);
   const phase = value && typeof value === "object" ? ownData(value, "phase") : null;
@@ -118,7 +119,7 @@ export function createPackagingDiagnostics(role, writer) {
       }
       if (result && Object.hasOwn(result,"ownedTrace")) { row.v=2;row.trace=ownData(result,"ownedTrace"); }
       if (result && Object.hasOwn(result,"ownedCode")) { row.v=3;row.code=ownData(result,"ownedCode"); }
-      accept(row);
+      accept(result && Object.hasOwn(result,"ownedCensus") ? packCensusCloseDiagnostic(row,ownData(result,"ownedCensus")) : row);
     } catch (error) { errors.push(error); }
   };
   return {
@@ -348,11 +349,56 @@ export function classifyOwnedCode(value) {
 }
 export const ownedErrorSites = Object.freeze(["stop_throw","monitor_sample","monitor_rows","monitor_capacity","capture_capacity","spawn","setup","child_error","final_sample"]);
 export const ownedSampleStages = Object.freeze(["admission","directory","entry_filter","stat_read","stat_parse","stat_shape","row","stat_error_filter","returned"]);
+// Census observations are private copied primitives, never process identities
+// in the wire format. Two detailed rows; all states retain bounded counts.
+export const censusStates = "RSDZTWXIKt";
+export function createFinalCensusLedger(errors) {
+  const samples = new WeakMap(), history = new Map(); let close = false, order = 0, outcome = 0, final = null, broken = false, historyUnknown = false;
+  const note = fn => { try { return fn(); } catch (error) { broken = true; errors.push(error); } };
+  const bounded = n => Math.min(65535,n);
+  return {
+    censusBegin() { return note(() => ({ count: 0, counts: Array(10).fill(0), rows: [], invalid: false })); },
+    censusRow(token,pid,parent,group,start,state) { note(() => {
+      if (!token) throw new Error("edge-proof: census-token");
+      const index = censusStates.indexOf(state);
+      if (![pid,parent,group].every(n=>Number.isSafeInteger(n)&&n>=0) || pid<2 || typeof start!=="string" || !/^\d+$/.test(start) || typeof state!=="string" || state.length!==1 || index<0) token.invalid = true;
+      token.count++; if(index>=0)token.counts[index]++;
+      if(token.rows.length<512)token.rows.push({pid,parent,group,start,state:index+1});
+    }); },
+    censusSample(token,rows) { note(() => { if (!token || !Array.isArray(rows)) throw new Error("edge-proof: census-sample"); samples.set(rows,token); }); },
+    censusObserved(rows) { note(() => {
+      const token=samples.get(rows); samples.delete(rows);
+      if(!token || token.invalid || token.count>512) { historyUnknown=true; return; }
+      for(const row of token.rows){ const key=row.pid+":"+row.start; if(!history.has(key)&&history.size>=512){historyUnknown=true;return;} history.set(key,row); }
+    }); },
+    censusMonitorFailed() { note(() => { historyUnknown=true; }); },
+    censusClose() { note(() => { close=true; }); },
+    censusFinal() { note(() => { if(outcome||order)throw new Error("edge-proof: census-final-repeat");order=(close?1:0)|6; }); },
+    censusResult(rows) { note(() => { outcome=1;final=samples.get(rows)??null;samples.delete(rows); }); },
+    censusFailed(reason) { note(() => { outcome=reason===undefined?2:3; }); },
+    censusFinish() { return note(() => {
+      if (!outcome) return [1,0,order,null,0,null,0,null,[],0];
+      if (outcome!==1) return [1,outcome,order,null,0,null,0,null,[],broken?3:0];
+      if (!final || final.invalid || broken || errors.length) return [1,1,order,null,0,null,0,null,[],broken||errors.length?3:0];
+      const complete=final.count<=512, ids=new Set(final.rows.map(row=>row.pid)), priorPids=new Set([...history.values()].map(row=>row.pid));
+      const ambiguous=ids.size!==final.rows.length;
+      const rows=final.rows.slice(0,2).map(row=>{
+        const prior=ambiguous||historyUnknown?null:history.get(row.pid+":"+row.start), observed=ambiguous||historyUnknown?0:prior?1:priorPids.has(row.pid)?2:3;
+        const parent=row.parent===1?1:ambiguous||!complete?0:ids.has(row.parent)?2:3;
+        const group=row.group===row.pid?1:row.group===1?2:ambiguous||!complete?0:ids.has(row.group)?3:4;
+        const compare=key=>prior?(row[key]===prior[key]?1:2):0;
+        return row.state+observed*16+parent*64+group*256+compare("state")*2048+compare("parent")*8192+compare("group")*32768;
+      });
+      let saturation=final.count>65535?1:0;final.counts.forEach((n,i)=>{if(n>65535)saturation|=2**(i+1);});
+      return [1,1,order,bounded(final.count),rows.length,bounded(final.count-rows.length),saturation,final.counts.map(bounded),rows,ambiguous?0:complete?1:2];
+    }); },
+  };
+}
 export function createOwnedProcessLedger() {
   const errors=[], counts=Array(5).fill(0); let activeSamples=0, pendingCode=null, firstCode=[1,0,0]; let saturation=0, first=null, sample=[0,0,0,0,0], condition=[0,0,0,0], operation=0, reasons=0, signals=0, firstReason=0, firstSignal=0, firstOutcome=0, firstThrow=0, active=false, sealed=false, ignored=0;
   const note=fn=>{try{return fn();}catch(error){errors.push(error);}};
   const bump=i=>{if(counts[i]===255)saturation|=2**i;else counts[i]++;};
-  return {errors,
+  return {errors,...createFinalCensusLedger(errors),
     sampleBegin(){note(()=>{if(sealed)return;if(++activeSamples!==1)throw new Error("edge-proof: overlapping-sampler-observation");if(!first)pendingCode=null;});},
     sampleEnd(){note(()=>{if(!sealed)activeSamples--;});},
     sampleCode(reason,access,value){note(()=>{if(!sealed&&!first)pendingCode={reason,tuple:[1,access,access===1?classifyOwnedCode(value):0]};});},
@@ -387,6 +433,7 @@ const ownedValue=(recorder,method,observed,value)=>{ownedNote(recorder,method,ob
 const ownedCondition=(recorder,value)=>{ownedNote(recorder,"condition",value);return value;};
 const ownedArgument=(recorder,reason,signal,value)=>{ownedNote(recorder,"attempt",reason,signal);return value;};
 export async function privateProcesses(recorder) {
+  const census=ownedNote(recorder,"censusBegin");
   ownedNote(recorder,"sampleBegin");
   try {
   ownedNote(recorder,"sampleStage",1);
@@ -408,7 +455,8 @@ export async function privateProcesses(recorder) {
       ownedNote(recorder,"sampleStage",6);
       if (ownedLeaf(recorder,1,!/^[RSDZTWXIKt]$/.test(fields[0]),true) || ownedLeaf(recorder,2,!/^\d+$/.test(fields[19]),true) || ownedLeaf(recorder,3,![fields[1], fields[2]].every(value => /^\d+$/.test(value)),true)) { ownedNote(recorder,"sampleFalse"); refuse("private-process-state-unknown"); }
       ownedNote(recorder,"sampleStage",7);
-      rows.push({ pid: Number(name), parent: Number(fields[1]), group: Number(fields[2]), start: fields[19], state: fields[0] });
+      const row={ pid: Number(name), parent: Number(fields[1]), group: Number(fields[2]), start: fields[19], state: fields[0] }; rows.push(row);
+      ownedNote(recorder,"censusRow",census,row.pid,row.parent,row.group,row.start,row.state);
     } catch (error) {
       const failure=ownedNote(recorder,"sampleState");ownedNote(recorder,"sampleStage",8);
       let code;
@@ -420,6 +468,7 @@ export async function privateProcesses(recorder) {
     }
   }
   ownedNote(recorder,"sampleStage",9);
+  ownedNote(recorder,"censusSample",census,rows);
   return rows;
   } finally { ownedNote(recorder,"sampleEnd"); }
 }
@@ -446,8 +495,9 @@ export async function runOwnedProcess(command, args, { cwd, env, timeoutMs = 600
       for (const row of sampled) { ownedNote(recorder,"operation",2);result.observed.set(ownedValue(recorder,"operation",3,`${row.pid}:${row.start}`), row); }
       stage=4;ownedNote(recorder,"condition",undefined);
       if (ownedCondition(recorder,result.observed.size > 512)) refuse("process-monitor-capacity");
+      ownedNote(recorder,"censusObserved",sampled);
     }
-    catch (error) { result.errors.push(error);ownedNote(recorder,"error",stage,error);stop("SIGTERM",1); }
+    catch (error) { result.errors.push(error);ownedNote(recorder,"error",stage,error);ownedNote(recorder,"censusMonitorFailed");stop("SIGTERM",1); }
     finally { sampling = false; }
   };
   const append = key => data => {
@@ -466,7 +516,7 @@ export async function runOwnedProcess(command, args, { cwd, env, timeoutMs = 600
     setup=5;monitor = setInterval(() => { void observe(); }, 20);
     setup=6;await new Promise(resolveClose => {
       child.on("error", error => { result.spawnErrors.push(error); result.errors.push(error);ownedNote(recorder,"error",8,error); });
-      child.once("close", (code, signal) => { result.code = code; result.signal = signal; result.closed = true; resolveClose(); });
+      child.once("close", (code, signal) => { result.code = code; result.signal = signal; result.closed = true; ownedNote(recorder,"censusClose"); resolveClose(); });
     });
   } catch (error) { result.errors.push(error);ownedNote(recorder,"error",setup===1?6:7,error,setup); }
   finally {
@@ -475,9 +525,10 @@ export async function runOwnedProcess(command, args, { cwd, env, timeoutMs = 600
     signalSource.removeListener("SIGINT", onInt); signalSource.removeListener("SIGTERM", onTerm);
   }
   while (sampling) await new Promise(resolveTick => setTimeout(resolveTick, 1));
-  try { ownedNote(recorder,"sampleStage",0);result.remaining = await sample(); } catch (error) { result.errors.push(error);ownedNote(recorder,"error",9,error);result.remaining = null; }
+  ownedNote(recorder,"censusFinal");
+  try { ownedNote(recorder,"sampleStage",0);const remaining = await sample();result.remaining = remaining;ownedNote(recorder,"censusResult",remaining); } catch (error) { result.errors.push(error);ownedNote(recorder,"error",9,error);result.remaining = null;ownedNote(recorder,"censusFailed",error); }
   result.outputSummary = Object.fromEntries(Object.entries(captures).map(([key, value]) => [key, { bytes: value.bytes, sha256: value.hash.digest("hex"), esc: value.esc, complete: result.closed }]));
-  if(recorder){result.ownedCode=ownedNote(recorder,"code");result.ownedTrace=ownedNote(recorder,"finish");result.observerErrors=recorder.errors;}
+  if(recorder){result.ownedCensus=ownedNote(recorder,"censusFinish");result.ownedCode=ownedNote(recorder,"code");result.ownedTrace=ownedNote(recorder,"finish");result.observerErrors=recorder.errors;}
   return result;
 }
 export function requireProcessSuccess(result) {
@@ -1194,7 +1245,75 @@ export function validateReceiptAssociatedDiagnostic(value) {
   if (Buffer.byteLength(JSON.stringify(row)) > 512) refuse("associated-receipt-capacity");
   return row;
 }
+// V16 reconstructs V15 losslessly; fixed envelope fields and enum labels are
+// implicit. Reporting counts are two unsigned 16-bit fields in one integer.
+const censusReasons = ["binding_unavailable","capture_unavailable","capture_mismatch","init_unqualified","no_records","incomplete","invalid","reported_rejection","reported_complete"];
+const censusCardinality = ["UNKNOWN","ZERO","ONE","MULTIPLE"];
+export function validateFinalCensus(value,remaining,closed,errors,trace) {
+  const t=ownedTuple(value,10),[v,outcome,order,total,projected,omitted,saturation,counts,rows,availability]=t;
+  if(v!==1||![0,1,2,3].includes(outcome)||!Number.isInteger(order)||order<0||order>7||![0,1,2,3].includes(availability))refuse("census-header");
+  if(outcome?(order!==6+Number(closed)):(order!==0&&order!==6+Number(closed)))refuse("census-order");
+  if(!Number.isInteger(projected)||projected<0||projected>2||!Array.isArray(rows)||rows.length!==projected||!Number.isInteger(saturation)||saturation<0||saturation>=2048)refuse("census-counts");
+  t[8]=ownedTuple(rows,projected);
+  if(outcome!==1 || total===null){
+    if(total!==null||projected||omitted!==null||saturation||counts!==null||availability===1||availability===2)refuse("census-unavailable");
+    if(outcome>=2&&(remaining!==null||errors<1))refuse("census-original-failure");
+    if(outcome===0&&availability!==0)refuse("census-unobserved");
+    return t;
+  }
+  if(![total,omitted].every(n=>Number.isSafeInteger(n)&&n>=0&&n<=65535)||remaining!==total||projected!==Math.min(2,total)||omitted!==total-projected||saturation!==0||availability===3)refuse("census-total");
+  t[7]=ownedTuple(counts,10);
+  if(!t[7].every(n=>Number.isSafeInteger(n)&&n>=0&&n<=65535)||t[7].reduce((a,b)=>a+b,0)!==total||availability===1&&total>512||availability===2&&total<=512||availability===0&&total<2)refuse("census-states");
+  const seen=Array(10).fill(0);
+  for(const code of rows){
+    if(!Number.isInteger(code)||code<0||code>=131072)refuse("census-row");
+    const state=code%16,history=(code>>4)&3,parent=(code>>6)&3,group=(code>>8)&7,changes=[(code>>11)&3,(code>>13)&3,(code>>15)&3];
+    if(state<1||state>10||group>4||changes.some(n=>n===3)||(history===1?changes.some(n=>n===0):changes.some(n=>n!==0)))refuse("census-row-relations");
+    if([2,3,4].includes(trace?.[1]?.[0])&&history!==0)refuse("census-failed-monitor-history");
+    if(availability!==1&&(parent>1||group>2)||availability===0&&history!==0)refuse("census-ambiguous");
+    seen[state-1]++;
+  }
+  if(seen.some((n,i)=>n>counts[i]))refuse("census-row-state-count");
+  if(trace?.[3]?.[0]&&availability!==3&&availability!==0)refuse("census-observer-fault");
+  return t;
+}
+export function packCensusCloseDiagnostic(value,census) {
+  const row=validateOwnedCodeCloseDiagnostic(value),flags=Number(row.closed)+2*Number(row.timedOut)+4*Number(row.interrupted);
+  return validateCensusCloseDiagnostic({v:4,role:row.role,phase:row.phase,outcome:row.outcome,defined:row.defined,detail:[row.exit,receiptBuilderSignals.indexOf(row.signal),flags,row.errors,row.remaining,row.trace,row.code,census]});
+}
+export function unpackCensusCloseDiagnostic(row) {
+  const d=ownedTuple(ownData(row,"detail"),8);
+  if(!Number.isInteger(d[2])||d[2]<0||d[2]>7||!Number.isInteger(d[1])||d[1]<0||d[1]>=receiptBuilderSignals.length)refuse("census-close-flags");
+  return {v:3,role:row.role,phase:row.phase,outcome:row.outcome,defined:row.defined,exit:d[0],signal:receiptBuilderSignals[d[1]],closed:Boolean(d[2]&1),timedOut:Boolean(d[2]&2),interrupted:Boolean(d[2]&4),errors:d[3],remaining:d[4],trace:d[5],code:d[6]};
+}
+export function validateCensusCloseDiagnostic(value) {
+  const keys=["v","role","phase","outcome","defined","detail"];
+  if(!value||Object.getOwnPropertyNames(value).sort().join()!==[...keys].sort().join())refuse("census-close-keys");
+  const row=Object.fromEntries(keys.map(k=>[k,ownData(value,k)]));if(row.v!==4)refuse("census-close-version");
+  row.detail=ownedTuple(row.detail,8);const original=validateOwnedCodeCloseDiagnostic(unpackCensusCloseDiagnostic(row));
+  validateFinalCensus(row.detail[7],original.remaining,original.closed,original.errors,original.trace);
+  if(Buffer.byteLength(JSON.stringify(row))>512)refuse("census-close-capacity");return row;
+}
+export function packReceiptCensusDiagnostic(value,trace,code,census) {
+  const prior=packReceiptAssociatedDiagnostic(value,trace,code),d=prior.detail.slice(),c=d[1];
+  d[1]=[censusReasons.indexOf(c[1]),...c.slice(2,8)];d[2]=d[2][0]*65536+d[2][1];d[3]=censusCardinality.indexOf(d[3]);
+  return validateReceiptCensusDiagnostic({v:16,phase:prior.phase,state:prior.state,detail:[prior.defined,...d,census]});
+}
+export function unpackReceiptCensusDiagnostic(value) {
+  const d=ownedTuple(ownData(value,"detail"),11),c=ownedTuple(d[2],7);
+  if(!Number.isInteger(c[0])||c[0]<0||c[0]>=censusReasons.length||!Number.isInteger(d[3])||d[3]<0||d[3]>4294967295||!Number.isInteger(d[4])||d[4]<0||d[4]>=censusCardinality.length)refuse("census-receipt-codec");
+  return {v:15,phase:value.phase,state:value.state,defined:d[0],exit:null,signal:null,detail:[d[1],[1,censusReasons[c[0]],...c.slice(1),"UNKNOWN"],[Math.floor(d[3]/65536),d[3]%65536],censusCardinality[d[4]],...d.slice(5,10)]};
+}
+export function validateReceiptCensusDiagnostic(value) {
+  const keys=["v","phase","state","detail"];
+  if(!value||Object.getOwnPropertyNames(value).sort().join()!==[...keys].sort().join())refuse("census-receipt-keys");
+  const row=Object.fromEntries(keys.map(k=>[k,ownData(value,k)]));if(row.v!==16)refuse("census-receipt-version");
+  row.detail=ownedTuple(row.detail,11);const prior=validateReceiptAssociatedDiagnostic(unpackReceiptCensusDiagnostic(row)),builder=prior.detail[6];
+  if(row.detail[10]!==null){if(!builder)refuse("census-unbound");validateFinalCensus(row.detail[10],builder[7],Boolean(builder[5]&1),builder[6],prior.detail[7]);}
+  if(Buffer.byteLength(JSON.stringify(row))>512)refuse("census-receipt-capacity");return row;
+}
 export function validateContainerDiagnostic(value) {
+  if (value && typeof value === "object" && ownData(value,"v") === 16) return validateReceiptCensusDiagnostic(value);
   if (value && typeof value === "object" && ownData(value, "v") === 15) return validateReceiptAssociatedDiagnostic(value);
   if (value && typeof value === "object" && ownData(value, "v") === 14) return validateReceiptCodeDiagnostic(value);
   if (value && typeof value === "object" && ownData(value, "v") === 13) return validateReceiptOwnedDiagnostic(value);
@@ -1308,7 +1427,7 @@ export function containerProcessDiagnostic(result, available = true, reason) {
 export function emitContainerFailure(records, writer = line => process.stdout.write(line)) {
   const validated = records.map(validateContainerDiagnostic), detailed = validated.filter(row => row.v === 8);
   if (detailed.length > 1) refuse("parent-admission-duplicate");
-  const receipt = validated.filter(row => row.v === 9 || row.v === 10 || row.v === 11 || row.v === 12 || row.v === 13 || row.v === 14 || row.v === 15); if (receipt.length > 1) refuse("receipt-diagnostic-duplicate");
+  const receipt = validated.filter(row => row.v === 9 || row.v === 10 || row.v === 11 || row.v === 12 || row.v === 13 || row.v === 14 || row.v === 15 || row.v === 16); if (receipt.length > 1) refuse("receipt-diagnostic-duplicate");
   const rows = validated.filter(row => !(detailed.length && row.phase === "admission" && row.v === 2) && !(receipt.length && row.phase === "receipt" && row.v === 2)), unique = new Map();
   const rejected = rows.filter(row => row.state === "rejected");
   // Reserve the first actual failure and original build outcome before context.
