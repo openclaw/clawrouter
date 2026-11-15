@@ -555,13 +555,29 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
   for(const change of [{token:Object.freeze({})},{fixtureSha256:'0'.repeat(64)},{sourceHead:'foreign'}]){const owned=privateExecObservation(source,report);assert.throws(()=>owned.onOutcome({...raw,binding:Object.freeze({...raw.binding,...change})}));}
   opt.onOutcome(raw);assert.equal(captured.state,'fulfilled');assert.throws(()=>opt.onOutcome(raw));
  });
+ test('Private E2 suite registration uses explicit serial options without a removed chain method',()=>{
+  const source=readFileSync(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url),'utf8');
+  const suite=source.slice(source.indexOf('checkpoints.registration("describe","enter")'));
+  const call='describe("registered private catalogs with native Worker and SQLite",{concurrent:false},()=>{';
+  assert.equal(suite.split(call).length,2);
+  const code=stripTypeScriptTypes(suite,{mode:'strip'}),old=code.replace(call,'describe.sequential("registered private catalogs with native Worker and SQLite",()=>{');
+  const run=body=>{const out=[],r=privateCheckpointFunctions().createPrivateCheckpointReporter('sdk',x=>out.push(x)),callbacks=[];let factory;
+   const describe=(_name,options,fn)=>{assert.deepEqual(options,{concurrent:false});factory=fn;return Object.freeze({});};
+   const invoke=()=>new Function('checkpoints','describe','it','providers','groups',body)(r,describe,(name,fn)=>callbacks.push({name,fn}),privateProviders,Object.keys(privateGroups));
+   return {out,callbacks,invoke,collect:()=>factory()};};
+  const before=run(old);assert.throws(before.invoke,TypeError);assert.equal(before.callbacks.length,0);
+  assert.equal(before.out.find(r=>r.v===2).phase,'registration');
+  const after=run(code);after.invoke();assert.equal(after.callbacks.length,0);after.collect();
+  assert.equal(after.callbacks.length,66);assert.equal(after.callbacks.filter(x=>!x.name.startsWith('native diagnostic ')).length,42);
+  assert.equal(after.out.some(r=>r.point==='callback'||r.v===2),false);
+ });
  test('Private actual registration reports synchronous undefined and never confuses return with invocation',()=>{
   const source=readFileSync(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url),'utf8');
   const pre=source.slice(source.indexOf('checkpoints.registration("afterAll","enter")'),source.indexOf('function checkpointCase('));
   const suite=source.slice(source.indexOf('checkpoints.registration("describe","enter")'));
   const code=stripTypeScriptTypes(pre+suite,{mode:'strip'});
   for(const fail of ['afterAll','describe','it','none']){const out=[],checkpoints=privateCheckpointFunctions().createPrivateCheckpointReporter('sdk',x=>out.push(x));let registrations=0;
-   const run=()=>new Function('checkpoints','afterAll','describe','it','providers','groups','throwFailures',code)(checkpoints,()=>{if(fail==='afterAll')throw undefined;}, {sequential(_name,fn){if(fail==='describe')throw undefined;fn();}},()=>{if(fail==='it'&&registrations===9)throw undefined;registrations++;},privateProviders,Object.keys(privateGroups),()=>{});
+   const run=()=>new Function('checkpoints','afterAll','describe','it','providers','groups','throwFailures',code)(checkpoints,()=>{if(fail==='afterAll')throw undefined;}, (_name,options,fn)=>{assert.deepEqual(options,{concurrent:false});if(fail==='describe')throw undefined;fn();},()=>{if(fail==='it'&&registrations===9)throw undefined;registrations++;},privateProviders,Object.keys(privateGroups),()=>{});
    if(fail==='none')run();else assert.throws(run,e=>e===undefined);
    assert.equal(out.some(r=>r.point==='callback'),false);
    if(fail==='none'){assert.equal(registrations,66);assert.deepEqual([...out.find(r=>r.point==='describe_return').registration],[2,2,1,66,66,65]);assert.equal(out.some(r=>r.v===2),false);}
@@ -606,7 +622,7 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
   const source=readFileSync(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url),'utf8');
   const suite=stripTypeScriptTypes(source.slice(source.indexOf('checkpoints.registration("describe","enter")')),{mode:'strip'});
   for(const reason of [undefined,{}]){const out=[],r=privateCheckpointFunctions().createPrivateCheckpointReporter('sdk',x=>out.push(x));let deferred,attempts=0;
-   new Function('checkpoints','describe','it','providers','groups',suite)(r,{sequential(_name,fn){deferred=fn;return Object.freeze({});}},()=>{if(attempts++===3)throw reason;},privateProviders,Object.keys(privateGroups));
+   new Function('checkpoints','describe','it','providers','groups',suite)(r,(_name,options,fn)=>{assert.deepEqual(options,{concurrent:false});deferred=fn;return Object.freeze({});},()=>{if(attempts++===3)throw reason;},privateProviders,Object.keys(privateGroups));
    assert.equal(attempts,0);const returned=out.find(x=>x.point==='describe_return');assert.deepEqual([...returned.registration],[0,2,0,0,0,null]);assert.equal(out.some(x=>x.v===2),false);
    assert.throws(()=>deferred(),e=>e===reason);assert.equal(attempts,4);const cap=out.find(x=>x.v===2),entry=out.find(x=>x.point==='registration_failure');
    assert.equal(cap.phase,'registration');assert.equal(cap.defined,reason!==undefined);assert.equal(cap.decl,3);assert.deepEqual([...entry.registration],[0,2,1,4,3,3]);assert.equal(out.some(x=>x.point==='callback'),false);assert.equal(out.some(x=>x.phase==='final'),false);
@@ -712,11 +728,11 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
   assert.ok(start>0);const callbacks=[],records=[],checkpoints=privateCheckpointFunctions().createPrivateCheckpointReporter('sdk',r=>records.push(r));let invoked=0;
   const providers=['baseten','arcee','novita'],groups=Object.keys(privateGroups),expect=value=>({toHaveLength:n=>assert.equal(value.length,n),toBeGreaterThan:n=>assert.ok(value>n)});
   const code=stripTypeScriptTypes(source.slice(start),{mode:'strip'});
-  new Function('describe','it','providers','groups','controlRows','rows','expect','diagnosticControl','exercise','checkpoints','checkpointCase','callbackDeclarations',code)({sequential(_name,fn){fn();}},(name,fn)=>callbacks.push({name,fn}),providers,groups,[],privateCases,expect,()=>{invoked++;},()=>{invoked++;},checkpoints,()=>0,new WeakMap());
+  new Function('describe','it','providers','groups','controlRows','rows','expect','diagnosticControl','exercise','checkpoints','checkpointCase','callbackDeclarations',code)((_name,options,fn)=>{assert.deepEqual(options,{concurrent:false});fn();},(name,fn)=>callbacks.push({name,fn}),providers,groups,[],privateCases,expect,()=>{invoked++;},()=>{invoked++;},checkpoints,()=>0,new WeakMap());
   assert.equal(callbacks.length,66);assert.equal(callbacks.filter(r=>!r.name.startsWith('native diagnostic ')).length,42);await assert.rejects(callbacks[0].fn());await checkpoints.drain();checkpoints.finish();assert.equal(invoked,0);
   const cap=records.find(r=>r.v===2);assert.equal(cap.phase,'selection');assert.equal(cap.decl,0);assert.equal(cap.owner,null);
   const success=[],bindings=new WeakMap(),report=privateCheckpointFunctions().createPrivateCheckpointReporter('sdk',()=>{});
-  new Function('describe','it','providers','groups','controlRows','rows','expect','diagnosticControl','exercise','checkpoints','checkpointCase','callbackDeclarations',code)({sequential(_name,fn){fn();}},(name,fn)=>success.push({name,fn}),providers,groups,privateNativeControls,privateCases,expect,row=>{assert.equal(row,privateNativeControls[0]);invoked++;},()=>{invoked++;},report,()=>0,bindings);
+  new Function('describe','it','providers','groups','controlRows','rows','expect','diagnosticControl','exercise','checkpoints','checkpointCase','callbackDeclarations',code)((_name,options,fn)=>{assert.deepEqual(options,{concurrent:false});fn();},(name,fn)=>success.push({name,fn}),providers,groups,privateNativeControls,privateCases,expect,row=>{assert.equal(row,privateNativeControls[0]);invoked++;},()=>{invoked++;},report,()=>0,bindings);
   assert.deepEqual(success.map(x=>x.name),callbacks.map(x=>x.name));await success[0].fn();assert.equal(invoked,1);assert.equal(bindings.get(privateNativeControls[0]),0);
  });
  // END Private primary and receipt inert regressions

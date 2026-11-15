@@ -527,7 +527,7 @@ async function diagnosticControl(row:Case){await fixture(row,async f=>{
 });}
 
 checkpoints.registration("describe","enter");
-try{describe.sequential("registered private catalogs with native Worker and SQLite",()=>{
+try{describe("registered private catalogs with native Worker and SQLite",{concurrent:false},()=>{
  checkpoints.registration("suite","enter");
  try{
  // These are diagnostic tests, not replacements for the 42 product groups.

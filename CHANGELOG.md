@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- Register the Private E2 consumer suite with Vitest 5 explicit serial options instead of the removed sequential chain, preserving all original cases and strict retirement/accounting assertions.
+
 - Preserve the original default OpenClaw consumer launch block alongside the Private-only runner observer, keeping the existing command/options/diagnostic compatibility assertion intact.
 
 - Deliver Private SDK callback and first-failure evidence before teardown, and observe the original E2 runner outcome after verifying the exclusively copied fixture; retain independent reporting and removal failures without changing test acceptance.
