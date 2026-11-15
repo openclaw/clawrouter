@@ -29,32 +29,13 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.22.1
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          version: 11.28.4
-      # Setup is ONLINE. Exact source availability is required; there is no
-      # carrier ref, source substitution or uploaded capsule fallback.
-      - name: Admit published frozen source (online setup)
-        run: |
-          set -euo pipefail
-          source_sha=5cfafe8c8df43102365ec900431b8b3be1dd4eb0
-          source_tree=6da1d6ea30f74d18730365c875b2978c61f34ce2
-          git -c gc.auto=0 -c maintenance.auto=false -c fetch.writeCommitGraph=false fetch --no-auto-maintenance --no-tags --no-prune --no-recurse-submodules --no-write-fetch-head --refmap= --depth=1 origin "$source_sha"
-          test "$(git rev-parse "$source_sha^{commit}")" = "$source_sha"
-          test "$(git rev-parse "$source_sha^{tree}")" = "$source_tree"
-      - name: Install frozen Linux dependencies (online setup)
-        run: |
-          set -euo pipefail
-          test "$(node --version)" = v24.22.1
-          test "$(node -p 'process.versions.modules')" = 137
-          test "$(pnpm --version)" = 11.28.4
-          pnpm install --frozen-lockfile
-          git diff --exit-code -- package.json pnpm-lock.yaml pnpm-workspace.yaml admin/package.json
-      # No cloud/provider credentials, environment, OIDC, cache or uploads.
-      # Child environment is rebuilt; private namespaces are verified before
-      # compiling. Unsupported user namespaces FAIL, never skip or use sudo.
+      # ONLINE setup happens inside the pinned Bookworm image. No host
+      # node_modules, Git config, home, proxy or Docker config enters it.
+      # This is a separate private PID/NET/MNT container route, not a claim
+      # that the earlier unprivileged USER namespace attempt qualified.
+      # No secrets, OIDC, environments, cache, artifacts or SDK execution.
       - name: Isolated offline packaging (no SDK or cloud execution)
-        run: node scripts/edge-proof.mjs offline-ci
+        run: node scripts/edge-proof.mjs container-ci
 
   native-codex:
     runs-on: ubuntu-latest

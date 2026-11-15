@@ -218,12 +218,15 @@ test("fresh packaging job uses pinned online setup and no credentials, upload, c
   assert.equal(job["runs-on"], "ubuntu-24.04"); assert.deepEqual(job.permissions, { contents: "read" });
   assert.equal(job.environment, undefined); assert.equal(job.env, undefined);
   assert.equal(job.steps[0].with["persist-credentials"], false);
-  assert.equal(job.steps[1].with["node-version"], "24.22.1"); assert.equal(job.steps[2].with.version, "11.28.4");
+  assert.equal(job.steps[1].with["node-version"], "24.22.1");
+  assert.equal(job.steps.filter(step => step.uses).length, 2);
   assert.ok(job.steps.filter(step => step.uses).every(step => /@[a-f0-9]{40}$/.test(step.uses)));
   const text = JSON.stringify(job);
   assert.doesNotMatch(text, /secrets\.|id-token|upload-artifact|actions\/cache|--execute|cf:provision|cf:deploy|sudo|sysctl|workflow_dispatch/);
-  assert.match(text, /online setup/); assert.match(text, new RegExp(edgeProof.sourceSha)); assert.match(text, new RegExp(edgeProof.sourceTree));
-  assert.equal(job.steps.at(-1).run, "node scripts/edge-proof.mjs offline-ci");
+  assert.equal(job.steps.at(-1).run, "node scripts/edge-proof.mjs container-ci");
+  const dockerfile = await readFile(new URL("../config/edge-proof/Dockerfile", import.meta.url), "utf8");
+  assert.match(dockerfile, /pnpm@11\.28\.4/); assert.match(dockerfile, /--frozen-lockfile/);
+  assert.doesNotMatch(text, /pnpm install|git fetch|offline-ci/);
 });
 test("actual owned workspace installation qualifies contained links without a donor receipt", async () => {
   const result = await qualifyInstalledInputs(process.cwd());

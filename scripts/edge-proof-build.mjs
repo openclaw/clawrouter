@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile, realpath, readdir } from "node:fs/promises";
+import { readFileSync, realpathSync, lstatSync } from "node:fs";
 import { dirname, join, resolve, relative, isAbsolute } from "node:path";
 import { createRequire } from "node:module";
 import { API } from "typescript/unstable/sync";
@@ -22,16 +23,29 @@ export const occurrenceCounts = {
   "worker/input-retirement.ts": { cancel: 1, releaseLock: 1 },
   "worker/model-discovery.ts": { reader: 2, factory: 2, read: 2, cancel: 1, releaseLock: 1, response: 1 },
 };
-function git(cwd, ...args) { return execFileSync("git", args, { cwd, maxBuffer: 32 * 1024 * 1024 }); }
-export function frozenSource(cwd, sha = edgeProof.sourceSha) {
-  if (sha !== edgeProof.sourceSha || git(cwd, "rev-parse", sha + "^{tree}").toString().trim() !== edgeProof.sourceTree) throw new Error("edge-proof: immutable source identity mismatch");
-  const entries = git(cwd, "ls-tree", "-rz", sha, "--", "worker", "shared", "providers", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "admin/package.json").toString().split("\0").filter(Boolean).map(line => {
+export const frozenGitEnvironment = Object.freeze({ GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null", GIT_NO_REPLACE_OBJECTS: "1", GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0", LC_ALL: "C" });
+export function validateGitExecutable(options) {
+  if (!options || Object.getOwnPropertyNames(options).sort().join() !== "env,executable,sha256") throw new Error("edge-proof: Git attestation required");
+  const data = key => { const d = Object.getOwnPropertyDescriptor(options, key); if (!d || !("value" in d)) throw new Error("edge-proof: Git data required"); return d.value; };
+  const executable = data("executable"), expected = data("sha256"), env = data("env");
+  if (typeof executable !== "string" || !isAbsolute(executable) || realpathSync(executable) !== executable || !lstatSync(executable).isFile() || typeof expected !== "string" || !/^[a-f0-9]{64}$/.test(expected) || sha256(readFileSync(executable)) !== expected) throw new Error("edge-proof: immutable Git identity mismatch");
+  if (!env || Object.getOwnPropertyNames(env).sort().join() !== Object.keys(frozenGitEnvironment).sort().join() || Object.entries(frozenGitEnvironment).some(([key, value]) => Object.getOwnPropertyDescriptor(env, key)?.value !== value)) throw new Error("edge-proof: Git environment mismatch");
+  return { executable, env: { ...frozenGitEnvironment } };
+}
+function git(cwd, options, ...args) {
+  if (options === undefined) return execFileSync("git", args, { cwd, maxBuffer: 32 * 1024 * 1024 });
+  const admitted = validateGitExecutable(options);
+  return execFileSync(admitted.executable, args, { cwd, env: admitted.env, maxBuffer: 32 * 1024 * 1024 });
+}
+export function frozenSource(cwd, sha = edgeProof.sourceSha, gitOptions) {
+  if (sha !== edgeProof.sourceSha || git(cwd, gitOptions, "rev-parse", sha + "^{tree}").toString().trim() !== edgeProof.sourceTree) throw new Error("edge-proof: immutable source identity mismatch");
+  const entries = git(cwd, gitOptions, "ls-tree", "-rz", sha, "--", "worker", "shared", "providers", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "admin/package.json").toString().split("\0").filter(Boolean).map(line => {
     const [meta, path] = line.split("\t"), [mode, kind, oid] = meta.split(" ");
     if (!["100644", "100755"].includes(mode) || kind !== "blob" || !/^[a-zA-Z0-9_./-]+$/.test(path) || path.split("/").includes("..")) throw new Error("edge-proof: unsupported source entry");
     return { path, mode, oid };
   }).filter(entry => !entry.path.startsWith("worker/test/") && !entry.path.startsWith("worker/fixtures/"));
   let size = 0;
-  return entries.map(entry => { const bytes = git(cwd, "cat-file", "blob", entry.oid); size += bytes.length; if (size > 32 * 1024 * 1024) throw new Error("edge-proof: capsule capacity exceeded"); return { ...entry, bytes, sha256: sha256(bytes) }; });
+  return entries.map(entry => { const bytes = git(cwd, gitOptions, "cat-file", "blob", entry.oid); size += bytes.length; if (size > 32 * 1024 * 1024) throw new Error("edge-proof: capsule capacity exceeded"); return { ...entry, bytes, sha256: sha256(bytes) }; });
 }
 export function instrumentAst(file, source, expectedBlob) {
   const actual = createHash("sha1").update(`blob ${Buffer.byteLength(source)}\0`).update(source).digest("hex");
@@ -122,11 +136,11 @@ export async function bundleCapsule(root) {
   }
   return bundles;
 }
-export async function buildCapsule(cwd, output) {
+export async function buildCapsule(cwd, output, gitOptions) {
   if (process.version !== "v24.22.1" || process.versions.modules !== "137") throw new Error("edge-proof: unqualified build runtime");
   const root = resolve(output);
   await mkdir(root, { recursive: false });
-  const files = frozenSource(cwd);
+  const files = frozenSource(cwd, edgeProof.sourceSha, gitOptions);
   for (const name of ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "admin/package.json"]) {
     if (!files.find(row => row.path === name)?.bytes.equals(await readFile(join(cwd, name)))) throw new Error("edge-proof: dependency input mismatch");
   }

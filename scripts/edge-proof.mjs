@@ -283,7 +283,7 @@ export function packagingEnvironment(root, node = process.execPath) {
     DO_NOT_TRACK: "1", NO_COLOR: "1", LANG: "C.UTF-8",
   };
 }
-async function prepareEnvironment(root) {
+export async function prepareEnvironment(root) {
   const env = packagingEnvironment(root);
   for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "TMPDIR", "WRANGLER_LOG_PATH"]) await mkdir(env[key], { recursive: true, mode: 0o700 });
   return env;
@@ -313,10 +313,10 @@ export function validateNamespace(evidence, parent, builder = false, report) {
   check("private_mount", () => { if (evidence.sharedMount !== false || evidence.procMounted !== true) refuse("private-proc-required"); });
   return true;
 }
-async function namespaceIdentity() {
+export async function namespaceIdentity() {
   return Object.fromEntries(await Promise.all(namespaceNames.map(async name => [name, await readlink(`/proc/self/ns/${name}`)])));
 }
-async function namespaceEvidence() {
+export async function namespaceEvidence() {
   const mounts = (await readFile("/proc/self/mountinfo", "utf8")).trim().split("\n");
   const devices = (await readFile("/proc/net/dev", "utf8")).trim().split("\n").slice(2);
   return {
@@ -461,14 +461,22 @@ export async function qualifyInstalledInputs(cwd) {
   return { owned: true, containedLinks: links };
 }
 async function offlineChild(cwd, root, parent, report) {
-  validateNamespace(await report.step("namespace_read", namespaceEvidence), parent, false, report);
+  return runPackagingPipeline(cwd, root, report, {
+    checkBoundary: async () => validateNamespace(await namespaceEvidence(), parent, false, report),
+    buildArguments: (capsule, role) => [script, "offline-build", cwd, capsule, JSON.stringify(parent), role],
+  });
+}
+// Both admitted isolation routes use the same original builder, two-root
+// comparison, direct CLI, output checks and private-process retirement.
+export async function runPackagingPipeline(cwd, root, report, boundary) {
+  await report.step("namespace_read", boundary.checkBoundary);
   await report.step("process_inventory", async () => { if ((await privateProcesses()).length) refuse("unexpected-private-process"); });
   const env = await report.step("environment", () => prepareEnvironment(join(root, "child")));
   const receipts = [];
   for (const [label, role, launch, close, check] of [["a", "build_a", "build_a_launch", "build_a_close", "build_a_report"], ["b", "build_b", "build_b_launch", "build_b_close", "build_b_report"]]) {
     const capsule = join(root, `capsule-${label}`);
     report.mark(launch, "enter");
-    const built = await runOwnedProcess(process.execPath, [script, "offline-build", cwd, capsule, JSON.stringify(parent), role], { cwd: root, env, timeoutMs: 120000, sample: privateProcesses });
+    const built = await runOwnedProcess(process.execPath, boundary.buildArguments(capsule, role), { cwd: root, env, timeoutMs: 120000, sample: privateProcesses });
     const value = JSON.parse(acceptPackagingProcess(built, report, role, close, check));
     if (value.built !== true || Object.keys(value).join() !== "built") refuse("invalid-builder-receipt");
     receipts.push(await report.step(check, async () => JSON.parse(await readFile(join(capsule, "source-receipt.json"), "utf8"))));
@@ -492,7 +500,7 @@ async function offlineChild(cwd, root, parent, report) {
     const bytes = await report.step(outputPhase, () => readFile(join(output, `${kind}.mjs`)));
     results[kind] = verifyDryRun(result, bytes, receipts[0].bundles[kind], report, { marker, hash, privacy }, [root, cwd]);
   }
-  await report.step("final_namespace", async () => validateNamespace(await namespaceEvidence(), parent));
+  await report.step("final_namespace", boundary.checkBoundary);
   await report.step("final_descendants", async () => { if ((await privateProcesses()).length) refuse("private-descendant-not-retired"); });
   return { version: 1, isolated: true, sourceSha: edgeProof.sourceSha, sourceTree: edgeProof.sourceTree, sourceFiles: 600, dependencyFiles: 268, exactErasures: 4, twoRoots: true, cliSha256: digest(await readFile(cli)), results, cloud: "UNRUN", sdk: "UNRUN" };
 }
@@ -512,6 +520,10 @@ async function offlineCi(report) {
 }
 export async function main(argv) {
   const [action = "plan", ...args] = argv;
+  if (["container-ci", "container-init", "container-build", "container-prepare"].includes(action)) {
+    const { containerMain } = await import("./edge-proof-container.mjs");
+    return containerMain(action, args);
+  }
   if (action === "offline-ci" && args.length === 0) return runPackagingBoundary("parent", offlineCi);
   if (action === "offline-child" && args.length === 3) return runPackagingBoundary("child", report => offlineChild(args[0], args[1], JSON.parse(args[2]), report), { writer: line => process.stdout.write(line) });
   if (action === "offline-build" && args.length === 4 && ["build_a", "build_b"].includes(args[3])) return runPackagingBoundary(args[3], async report => {
