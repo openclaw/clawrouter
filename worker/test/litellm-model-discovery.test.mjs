@@ -8,6 +8,7 @@ import test from "node:test";
 import { parse } from "yaml";
 import { compileProviderSnapshot } from "../../scripts/compile-providers.mjs";
 import { startWorkerdFixture } from "../../test/helpers/workerd.mjs";
+import { workerAbortEvidence } from "../../scripts/worker-test-failure-reporter.mjs";
 import snapshot from "../generated/provider-snapshot.json" with { type: "json" };
 
 export const selected = "tenant/private-alias", hidden = "tenant/private-hidden";
@@ -539,25 +540,38 @@ export default {async fetch(request){
 }};`;
 }
 
-export async function withGateway(rows, body, { basePath = "/team/v1", hotCache = false } = {}) {
+export async function withGateway(rows, body, { basePath = "/team/v1", hotCache = false, evidence } = {}) {
   rows = rows.map(row => ({ ...row, basePath }));
-  const directory = await mkdtemp(join(tmpdir(), "clawrouter-litellm-"));
+  evidence?.stage(1);
+  let directory;
+  try { directory = await mkdtemp(join(tmpdir(), "clawrouter-litellm-")); }
+  catch (error) { evidence?.failed(error); throw error; }
   const failures = []; let runtime;
   try {
+    evidence?.stage(2);
     runtime = await startWorkerdFixture(directory, routerFixture(), upstreamFixture(), { directRouter: true, requestContext: true, hotCache, bindings: { LITELLM_BASE_URL: "https://gateway.example" + basePath, LITELLM_MODEL: selected, LITELLM_API_KEY: "poison-environment", OPENAI_API_KEY: "poison-unrelated" } });
+    evidence?.stage(3);
     const origin = String(await runtime.unsafeGetDirectURL("router")).replace(/\/$/, "");
+    evidence?.stage(4);
     const upstream = await runtime.getWorker("upstream");
-    assert.equal((await upstream.fetch("https://fixture.test/setup", { method: "POST", body: JSON.stringify(rows) })).status, 200);
-    const setup = await fetch(origin + "/__litellm/setup", { method: "POST", body: JSON.stringify(rows) }); assert.equal(setup.status, 200); await setup.json();
+    evidence?.stage(5);
+    const upstreamSetup = await upstream.fetch("https://fixture.test/setup", { method: "POST", body: JSON.stringify(rows) });
+    evidence?.stage(5, 1); assert.equal(upstreamSetup.status, 200);
+    evidence?.stage(6);
+    const setup = await fetch(origin + "/__litellm/setup", { method: "POST", body: JSON.stringify(rows) });
+    evidence?.stage(7); assert.equal(setup.status, 200);
+    evidence?.stage(8); await setup.json();
     const control = async (action, id) => { const response = await fetch(`${origin}/__litellm/${action}/${id}`, { method: ["retire", "usage", "observation"].includes(action) ? "GET" : "POST" }); return litellmControlResponse(response, action); };
     const proof = async id => litellmControlResponse(await upstream.fetch("https://fixture.test/proof/" + id), "proof");
     const state = async id => litellmControlResponse(await upstream.fetch("https://fixture.test/state/" + id), "state");
     const started = async id => { const r = await upstream.fetch("https://fixture.test/started/" + id); assert.equal(r.status, 200); return r.json(); };
     const release = async id => (await upstream.fetch("https://fixture.test/release/" + id, { method: "POST" })).json();
     await body({ origin, control, state, proof, release, started, call: (id, path = "/v1/native/litellm/models", init = {}) => fetch(origin + path, { ...init, headers: { authorization: "Bearer " + key(id), ...init.headers } }) });
-  } catch (error) { failures.push(error); }
-  try { await runtime?.dispose(); } catch (error) { failures.push(error); }
-  try { await rm(directory, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+  } catch (error) { evidence?.failed(error); failures.push(error); }
+  evidence?.stage(23);
+  try { await runtime?.dispose(); } catch (error) { evidence?.failed(error); failures.push(error); }
+  evidence?.stage(24);
+  try { await rm(directory, { recursive: true, force: true }); } catch (error) { evidence?.failed(error); failures.push(error); }
   if (failures.length === 1) throw failures[0];
   if (failures.length) throw new AggregateError(failures, "gateway assertion and cleanup failed");
 }
@@ -702,16 +716,25 @@ function registerTests() {
     });
   });
   test("original metadata caller abort retains strict acquisition and retirement outcomes", { timeout: 15000 }, async t => {
-    await withGateway([{ id: "native_abort", mode: "held" }], async f => {
+    const evidence = workerAbortEvidence(); let failed = false, primary;
+    try { await withGateway([{ id: "native_abort", mode: "held" }], async f => {
       const controller = new AbortController();
+      evidence.stage(9);
       const pending = f.call("native_abort", undefined, { signal: controller.signal });
+      evidence.stage(9, 1);
       const result = pending.then(value => ({ value }), error => ({ error }));
-      await f.started("native_abort"); controller.abort();
-      const outcome = await result; assert.ok("error" in outcome); assert.equal(controller.signal.aborted, true);
+      evidence.stage(10); await f.started("native_abort");
+      evidence.stage(11); controller.abort();
+      evidence.stage(12); const outcome = await result;
+      assert.ok("error" in outcome);
+      evidence.stage(13); assert.equal(controller.signal.aborted, true);
       let proof;
+      evidence.stage(14);
       try { proof = await f.control("retire", "native_abort"); }
       catch (error) {
+        evidence.failed(error);
         const reports = await Promise.allSettled([f.control("observation", "native_abort"), f.state("native_abort")]);
+        evidence.observation(15, reports[0]); evidence.observation(16, reports[1]);
         const failures = [error, ...reports.filter(report => report.status === "rejected").map(report => report.reason)];
         if (reports.every(report => report.status === "fulfilled")) {
           const [observed, state] = reports.map(report => report.value);
@@ -721,9 +744,16 @@ function registerTests() {
         if (failures.length > 1) throw new AggregateError(failures, "original failure and observation failure");
         throw error;
       }
-      assert.equal(proof.retired, true);
-      const state = await f.state("native_abort"); assert.equal(state.calls.length, 1); assert.equal(state.canceled, 1); assert.equal(state.active, 0); assert.equal(state.expired, 0);
-    });
+      evidence.stage(17); assert.equal(proof.retired, true);
+      evidence.stage(18); const state = await f.state("native_abort");
+      evidence.stage(19); assert.equal(state.calls.length, 1);
+      evidence.stage(20); assert.equal(state.canceled, 1);
+      evidence.stage(21); assert.equal(state.active, 0);
+      evidence.stage(22); assert.equal(state.expired, 0);
+    }, { evidence }); } catch (error) { failed = true; primary = error; }
+    const reporting = evidence.report(t);
+    if (failed && reporting.length === 0) throw primary;
+    if (failed || reporting.length) throw new AggregateError([...(failed ? [primary] : []), ...reporting], "original failure and diagnostic reporting failure");
   });
   test("shipping 30000ms metadata deadline cancels without paid replay", { timeout: 45000 }, async t => {
     await withGateway([{ id: "native_deadline", mode: "deadline", workerDeadline: true }], async f => {

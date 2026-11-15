@@ -5,13 +5,215 @@ import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { types as nodeTypes } from "node:util";
 import { after, before, test } from "node:test";
 import { parse } from "yaml";
-import { workerFailureReport } from "../scripts/worker-test-failure-reporter.mjs";
+import { workerFailureReport, workerAbortEvidence, decodeWorkerAbortDiagnostic, decodeWorkerReporterRecord, workerAbortPrefix } from "../scripts/worker-test-failure-reporter.mjs";
 import { affectsOpenClawContract } from "../scripts/openclaw-contract-changes.mjs";
 
 const reporter = fileURLToPath(new URL("../scripts/worker-test-failure-reporter.mjs", import.meta.url));
 const marker = "synthetic-private-marker-do-not-report";
+// BEGIN worker abort diagnostic pure tests.
+function abortDiagnosticSource() {
+  const source = readFileSync("worker/test/litellm-model-discovery.test.mjs", "utf8");
+  const gateway = source.slice(source.indexOf("export async function withGateway("), source.indexOf("\nfunction registerTests()"));
+  const start = source.indexOf('  test("original metadata caller abort retains strict acquisition and retirement outcomes"');
+  const body = source.slice(start, source.indexOf('  test("shipping 30000ms', start));
+  const control = source.slice(source.indexOf("export async function litellmControlResponse("), source.indexOf("// END request-owned fixture functions."));
+  return { gateway: gateway.replace("export async function", "async function"), body, control: control.replace("export async function", "async function") };
+}
+async function abortDiagnosticCase({ fault, undefinedFault = false, secondary = [], reportingFault = false } = {}) {
+  const { gateway, body, control } = abortDiagnosticSource(), calls = [], diagnostics = [], failure = {};
+  const check = name => { calls.push(name); if (name === fault || secondary.includes(name)) throw undefinedFault ? undefined : failure; };
+  const response = (name, value) => ({ status: 200, bodyUsed: false, async json() { check(name); this.bodyUsed = true; return value; }, body: { async cancel() {} } });
+  const state = { calls: [{}], canceled: 1, active: 0, expired: 0, aborted: 0, finished: 1 };
+  const observation = { operations: 4, syncFailures: 0, checks: [4, 127, 111, 16, null] };
+  const upstream = { async fetch(url) {
+    if (url.endsWith("/setup")) { check("upstream_setup"); return { status: fault === "upstream_status" ? 500 : 200 }; }
+    if (url.includes("/started/")) { check("started"); return response("started_body", {}); }
+    const stage = retireFailed ? "fallback_state" : "final_state"; check(stage);
+    return response(stage + "_body", { ...state, calls: fault === "calls_assertion" ? [] : state.calls, canceled: fault === "canceled_assertion" ? 0 : 1, active: fault === "active_assertion" ? 1 : 0, expired: fault === "expired_assertion" ? 1 : 0 });
+  } };
+  let retireFailed = false;
+  const fetch = (url) => {
+    if (url.endsWith("/__litellm/setup")) { check("router_setup"); const r = response("router_setup_body", {}); if (fault === "router_status") r.status = 500; return Promise.resolve(r); }
+    if (url.includes("/__litellm/retire/")) { try { check("retire"); } catch (error) { retireFailed = true; return Promise.reject(error); } return Promise.resolve(response("retire_body", { retired: fault !== "retired_assertion" })); }
+    if (url.includes("/__litellm/observation/")) { check("observation"); return Promise.resolve(response("observation_body", observation)); }
+    check("caller");
+    if (fault === "caller_observer") return { then() { check("caller_observer"); } };
+    return fault === "caller_outcome" ? Promise.resolve({}) : Promise.reject(undefined);
+  };
+  const runtime = { async unsafeGetDirectURL() { check("direct_url"); return "https://fixture.test"; }, async getWorker() { check("upstream_handle"); return upstream; }, async dispose() { check("dispose"); } };
+  const controlResponse = new Function("assert", control + ";return litellmControlResponse;")(assert);
+  const context = { mkdtemp: async () => { check("directory"); return "inert"; }, join: (...args) => args.join("/"), tmpdir: () => "inert",
+    startWorkerdFixture: async () => { check("runtime"); return runtime; }, routerFixture: () => "", upstreamFixture: () => "", selected: "inert", fetch, assert,
+    litellmControlResponse: controlResponse, key: () => "inert", rm: async () => { check("remove"); } };
+  const withGateway = new Function(...Object.keys(context), gateway + ";return withGateway;")(...Object.values(context));
+  let callback;
+  const Controller = function() { this.signal = { aborted: false }; this.abort = () => { check("authored_abort"); this.signal.aborted = fault !== "caller_signal"; }; };
+  new Function("test", "withGateway", "workerAbortEvidence", "AbortController", "assert", body)((name, options, fn) => { callback = fn; }, withGateway, workerAbortEvidence, Controller, assert);
+  let failed = false, error;
+  try { await callback({ diagnostic(value) { if (reportingFault) throw undefined; diagnostics.push(value); } }); }
+  catch (reason) { failed = true; error = reason; }
+  const frames = diagnostics.filter(value => value.startsWith(workerAbortPrefix));
+  return { failed, error, failure, calls, retireFailed, frames, record: frames.length ? decodeWorkerAbortDiagnostic(JSON.parse(frames.at(-1).slice(workerAbortPrefix.length))) : null };
+}
+test("worker abort diagnostic pure: actual fixture stages preserve first failure and both cleanup attempts", async () => {
+  const stages = { directory: [1, 0], runtime: [2, 0], direct_url: [3, 0], upstream_handle: [4, 0], upstream_setup: [5, 0], upstream_status: [5, 1],
+    router_setup: [6, 0], router_status: [7, 0], router_setup_body: [8, 0], caller: [9, 0], caller_observer: [9, 1], started: [10, 0],
+    authored_abort: [11, 0], caller_outcome: [12, 0], caller_signal: [13, 0], retire: [14, 0], retired_assertion: [17, 0], final_state: [18, 0], calls_assertion: [19, 0], canceled_assertion: [20, 0], active_assertion: [21, 0], expired_assertion: [22, 0], dispose: [23, 0], remove: [24, 0] };
+  for (const [fault, expected] of Object.entries(stages)) {
+    const result = await abortDiagnosticCase({ fault });
+    assert.equal(result.failed, true, fault); assert.deepEqual(result.record.first.slice(0, 2), expected, fault);
+    if (fault !== "directory") assert.equal(result.calls.includes("remove"), true, fault);
+  }
+});
+test("worker abort diagnostic pure: original undefined and independent cleanup and reporting remain failures", async () => {
+  const result = await abortDiagnosticCase({ fault: "retire", undefinedFault: true, secondary: ["dispose", "remove"] });
+  assert.deepEqual(result.record.first, [14, 0, false]); assert.equal(result.record.undefinedFailures, 3);
+  assert.equal(result.failed, true); assert.deepEqual(result.error.errors, [undefined, undefined, undefined]);
+  const reported = await abortDiagnosticCase({ fault: "retire", undefinedFault: true, secondary: ["dispose", "remove"], reportingFault: true });
+  assert.equal(reported.failed, true); assert.equal(reported.error.errors.at(-1), undefined);
+  const original = reported.error.errors[0].errors;
+  assert.deepEqual(original[0].errors, [undefined, undefined]);
+  assert.deepEqual(original.slice(1), [undefined, undefined]);
+});
+test("worker abort diagnostic pure: one unavailable observation preserves the other without retirement credit", async () => {
+  for (const secondary of [["observation"], ["fallback_state"]]) {
+    const result = await abortDiagnosticCase({ fault: "retire", undefinedFault: true, secondary });
+    assert.equal(result.failed, true); assert.deepEqual(result.record.first, [14, 0, false]);
+    assert.equal(result.record.worker !== null, secondary[0] !== "observation");
+    assert.equal(result.record.upstream !== null, secondary[0] !== "fallback_state");
+    assert.deepEqual(result.error.errors, [undefined, undefined]);
+  }
+});
+test("worker abort diagnostic pure: schema preserves nulls and rejects hostile fields without invocation", () => {
+  let reads = 0;
+  const evidence = workerAbortEvidence(); evidence.stage(14); evidence.failed(undefined); let frame;
+  evidence.report({ diagnostic(value) { frame = value; } }); const record = JSON.parse(frame.slice(workerAbortPrefix.length));
+  assert.ok(decodeWorkerAbortDiagnostic(record));
+  for (const key of Object.keys(record)) {
+    const hostile = { ...record }; Object.defineProperty(hostile, key, { get() { reads++; throw undefined; } });
+    assert.equal(decodeWorkerAbortDiagnostic(hostile), null);
+  }
+  const nested = { ...record, first: [14, 0, false] }; Object.defineProperty(nested.first, "0", { get() { reads++; throw undefined; } });
+  assert.equal(decodeWorkerAbortDiagnostic(nested), null); assert.equal(reads, 0);
+  const foreign = new Proxy([], { get() { reads++; throw undefined; } });
+  evidence.observation(16, { status: "fulfilled", value: { calls: foreign } });
+  evidence.report({ diagnostic(value) { frame = value; } });
+  assert.equal(JSON.parse(frame.slice(workerAbortPrefix.length)).upstream[0], null); assert.equal(reads, 0);
+  for (const change of [{ first: null }, { undefinedFailures: 2 }, { extra: true }, { first: [14, 1, false] }]) assert.equal(decodeWorkerAbortDiagnostic({ ...record, ...change }), null);
+});
+function pureWorkerReporter() {
+  const source = readFileSync("scripts/worker-test-failure-reporter.mjs", "utf8");
+  const definitions = source.slice(source.indexOf("const failureTypes"), source.indexOf("function trackedTestFiles"))
+    + source.slice(source.indexOf("function failureRecord"), source.indexOf("export default workerFailureReport"));
+  // Only the unchanged filesystem resolver is inert here; the producer, native
+  // event admission, selection and escaped serializer are the actual source.
+  const tracked = file => typeof file === "string" && /^(?:worker\/)?test\/[A-Za-z0-9._-]+\.test\.mjs$/.test(file) ? file : null;
+  return new Function("types", "trackedTestFiles", definitions.replace(/^export /gm, "") + ";return workerFailureReport;")(nodeTypes, () => tracked);
+}
+function workerAbortNativeEvents(frame) {
+  const native = { testId: 7, parentId: undefined, name: "original metadata caller abort retains strict acquisition and retirement outcomes",
+    file: "worker/test/litellm-model-discovery.test.mjs", line: 704, column: 3, nesting: 0 };
+  return [
+    { type: "test:enqueue", data: { ...native, type: "test" } },
+    { type: "test:fail", data: { ...native, testNumber: 9, details: { error: { failureType: "testCodeFailure", code: "ERR_TEST_FAILURE" } } } },
+    { type: "test:diagnostic", data: { file: native.file, line: native.line, column: native.column, nesting: native.nesting, message: frame, level: "info" } },
+  ];
+}
+async function workerAbortPipeline(events) {
+  const lines = [];
+  for await (const line of pureWorkerReporter()(events)) lines.push(line);
+  assert.ok(lines.length <= 10); assert.ok(lines.reduce((n, line) => n + Buffer.byteLength(line), 0) <= 8192);
+  const rows = lines.map(line => {
+    assert.ok(Buffer.byteLength(line) <= 768);
+    const json = line.slice(line.indexOf("::", 2) + 2).trimEnd().replaceAll("%0A", "\n").replaceAll("%0D", "\r").replaceAll("%25", "%");
+    assert.ok(Buffer.byteLength(json) <= 512); const record = JSON.parse(json);
+    assert.deepEqual(decodeWorkerReporterRecord(record), record); return record;
+  });
+  return { rows, lines };
+}
+test("worker abort diagnostic pure: actual producer binds native coordinates in either diagnostic order", async () => {
+  const fixture = await abortDiagnosticCase({ fault: "retire", undefinedFault: true });
+  for (const order of [[0, 1, 2], [0, 2, 1]]) {
+    const events = workerAbortNativeEvents(fixture.frames[0]), result = await workerAbortPipeline(order.map(i => events[i]));
+    assert.equal(result.rows[0].kind, "failure"); assert.equal(result.rows[1].kind, "worker_abort");
+    assert.deepEqual(result.rows[1].stage, [14, 0, false]); assert.deepEqual(result.rows.at(-1).diagnostics, [1, 1, 0, 0, false]);
+  }
+});
+test("worker abort diagnostic pure: native identities reject late collisions and missing or foreign fields", async () => {
+  const fixture = await abortDiagnosticCase({ fault: "retire" });
+  const mutations = [
+    e => { delete e[0].data.testId; }, e => { e[0].data.testId = 0; e[1].data.testId = 0; },
+    e => { e[1].data.testId = 8; }, e => { delete e[1].data.parentId; }, e => { e[1].data.parentId = null; },
+    e => { e[0].data.name = "x".repeat(513); }, e => { e[0].data.testId = Number.MAX_SAFE_INTEGER + 1; },
+    e => { delete e[2].data.file; }, e => { delete e[2].data.column; }, e => { e[2].data.nesting = 1; },
+    e => { e[2].data.entryFile = "worker/test/foreign.test.mjs"; }, e => { e[2].data.file = "worker/test/foreign.test.mjs"; },
+    e => e.push({ type: "test:enqueue", data: { ...e[0].data, name: "foreign", line: 900 } }),
+    e => e.push({ type: "test:enqueue", data: { ...e[0].data, testId: 8, name: "foreign" } }),
+    e => e.push({ type: "test:enqueue", data: { ...e[0].data, testId: undefined, name: "foreign", line: 900 } }),
+    e => e.push(...[900, 901].map(line => ({ type: "test:enqueue", data: { ...e[0].data, testId: 20, name: "foreign", line } }))),
+    e => e.push(...[20, 21].map(testId => ({ type: "test:enqueue", data: { ...e[0].data, testId, name: "foreign", line: 900 } }))),
+    e => e.push(e[0]), e => e.push(e[1]), e => e.push(e[2]),
+    e => { e[2].data.message = workerAbortPrefix + '{"v":1}'; },
+    e => { e[2].data.message = workerAbortPrefix + "x".repeat(513); },
+    e => { e[2].data.message += "\x1b"; }, e => { e[2].data.message = e[2].data.message.slice(0, -1); },
+    e => e.push(...Array.from({ length: 4097 }, (_, i) => ({ type: "test:enqueue", data: { ...e[0].data, name: "other", testId: i + 100, line: i + 1000 } }))),
+  ];
+  for (const mutate of mutations) {
+    const events = workerAbortNativeEvents(fixture.frames[0]); mutate(events);
+    const result = await workerAbortPipeline(events); assert.equal(result.rows.some(row => row.kind === "worker_abort"), false);
+    assert.ok(result.rows.some(row => row.kind === "failure"));
+  }
+});
+test("worker abort diagnostic pure: file scoped IDs and parent presence stay distinct", async () => {
+  const fixture = await abortDiagnosticCase({ fault: "retire" });
+  for (const parent of [undefined, null, 0, 5]) {
+    const events = workerAbortNativeEvents(fixture.frames[0]); events[0].data.parentId = parent; events[1].data.parentId = parent;
+    events.push({ type: "test:enqueue", data: { ...events[0].data, file: "worker/test/other.test.mjs" } });
+    assert.equal((await workerAbortPipeline(events)).rows.filter(row => row.kind === "worker_abort").length, 1);
+  }
+  const absent = workerAbortNativeEvents(fixture.frames[0]); delete absent[0].data.parentId; delete absent[1].data.parentId;
+  assert.equal((await workerAbortPipeline(absent)).rows.filter(row => row.kind === "worker_abort").length, 1);
+});
+test("worker abort diagnostic pure: combined quota reserves identity and stage before unrelated leaves", async () => {
+  const evidence = workerAbortEvidence(); evidence.stage(24); evidence.failed(undefined); let frame;
+  evidence.observation(15, { status: "fulfilled", value: { operations: 1000000, syncFailures: 1000000, checks: [1000000, 1000000, 1000000, 1000000, false] } });
+  evidence.observation(16, { status: "fulfilled", value: { calls: [], active: 1000000, canceled: 1000000, aborted: 1000000, expired: 1000000, finished: 1000000 } });
+  evidence.report({ diagnostic(value) { frame = value; } });
+  const events = workerAbortNativeEvents(frame), unrelated = Array.from({ length: 12 }, (_, i) => ({ type: "test:fail", data: { file: "worker/test/other.test.mjs", line: i + 1, details: {} } }));
+  const result = await workerAbortPipeline([...unrelated, ...events]);
+  assert.equal(result.rows.length, 10); assert.deepEqual(result.rows.slice(0, 2).map(row => row.kind), ["failure", "worker_abort"]);
+  assert.equal(result.rows.at(-1).reported, 8); assert.equal(result.rows.at(-1).omittedEvents, 5);
+});
+test("worker abort diagnostic pure: missing completion and reporter failure cannot manufacture evidence", async () => {
+  const fixture = await abortDiagnosticCase({ fault: "retire" }), events = workerAbortNativeEvents(fixture.frames[0]);
+  let release, returned = false;
+  const pending = new Promise(resolve => { release = resolve; });
+  async function* held() { yield* events; await pending; }
+  const result = workerAbortPipeline(held()).then(value => { returned = true; return value; });
+  await Promise.resolve(); assert.equal(returned, false); release(); assert.ok((await result).rows.some(row => row.kind === "worker_abort"));
+  async function* failed() { yield* events; throw undefined; }
+  let caught = false; try { await workerAbortPipeline(failed()); } catch (error) { caught = true; assert.equal(error, undefined); }
+  assert.equal(caught, true);
+  const iterator = pureWorkerReporter()(events); await iterator.next(); caught = false;
+  try { await iterator.throw(undefined); } catch (error) { caught = true; assert.equal(error, undefined); }
+  assert.equal(caught, true);
+});
+test("worker abort diagnostic pure: default coarse output is byte exact and hostile event getters never run", async () => {
+  let reads = 0; const hostile = Object.defineProperty({}, "type", { get() { reads++; throw undefined; } });
+  const events = [hostile, { type: "test:diagnostic", data: Object.defineProperty({}, "message", { get() { reads++; throw undefined; } }) },
+    { type: "test:fail", data: { file: "worker/test/other.test.mjs", line: 4, details: {} } }];
+  const result = await workerAbortPipeline(events); assert.equal(reads, 0);
+  const target = workerAbortNativeEvents("").slice(0, 2);
+  const disabled = await workerAbortPipeline(target);
+  assert.equal(Object.hasOwn(disabled.rows.at(-1), "diagnostics"), false);
+  assert.equal(disabled.rows.length, 2);
+  assert.equal(result.lines.join(""), '::error title=Worker test identity::{"v":1,"kind":"failure","file":"worker/test/other.test.mjs","line":4,"failureType":"unknown","errorClass":"missing","code":"unknown"}\n'
+    + '::error title=Worker test identity::{"v":1,"kind":"summary","failureEvents":1,"reported":1,"omittedEvents":0,"unknownFiles":0,"countsSaturated":false}\n');
+});
+// END worker abort diagnostic pure tests.
 // These children start independent native runners, not nested IPC test workers.
 const { NODE_TEST_CONTEXT: _context, ...childEnv } = process.env;
 let scratch;
