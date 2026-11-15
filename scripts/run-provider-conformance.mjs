@@ -44,10 +44,13 @@ async function checkMessage(actual, expected, label) {
 function preflight({ provider, scenario }) {
   const endpoint = provider.endpoints.find(row => row.id === scenario.endpoint);
   check(provider.class === "rest_json" && provider.adapter.request === "rest_json" && provider.adapter.response === "rest_json", "only REST JSON adapters are supported");
-  check(provider.auth.schemes.length === 1 && provider.auth.schemes[0].type === "bearer"
-    && provider.auth.schemes[0].secretKind === "api_key" && provider.auth.schemes[0].required
-    && provider.auth.schemes[0].header.toLowerCase() === "authorization" && provider.auth.schemes[0].format === "Bearer ${secret}",
-  "one required API-key bearer scheme is supported");
+  const scheme = provider.auth.schemes[0];
+  const bearer = scheme?.type === "bearer" && scheme.required
+    && scheme.header.toLowerCase() === "authorization" && scheme.format === "Bearer ${secret}";
+  const headerKey = scheme?.type === "api_key" && /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(scheme.header);
+  check(provider.auth.schemes.length === 1 && scheme.secretKind === "api_key" && (bearer || headerKey),
+    "one required bearer or header API-key scheme is supported");
+  const authentication = { header: scheme.header.toLowerCase(), value: bearer ? `Bearer ${secret}` : secret };
   check(!provider.auth.authorization && !provider.auth.refresh && !Object.keys(provider.auth.grantTransports).length,
     "subscription and OAuth execution are not supported");
   check(provider.config_keys.length === 1 && provider.config_keys[0].endsWith("_API_KEY"), "one API-key configuration value is supported");
@@ -68,9 +71,11 @@ function preflight({ provider, scenario }) {
     check(type === undefined || /^application\/(?:[a-z0-9.+-]+\+)?json(?:;|$)/i.test(type), "JSON content types are required");
   }
   check(scenario.request.method === "POST" && scenario.upstream.request.method === "POST", "POST JSON exchanges are supported");
-  check(!scenario.request.headers?.authorization, "client authorization belongs to the host fixture");
+  check(!Object.keys(scenario.request.headers ?? {}).some(name =>
+    ["authorization", authentication.header].includes(name.toLowerCase())), "client authorization belongs to the host fixture");
   check(scenario.upstream.response.status !== 204 && scenario.upstream.response.status !== 205 && scenario.upstream.response.status !== 304
     || !Object.hasOwn(scenario.upstream.response, "body"), "bodyless HTTP statuses cannot contain a body");
+  return authentication;
 }
 
 async function environment(provider, sha256Hex) {
@@ -99,7 +104,7 @@ async function environment(provider, sha256Hex) {
  */
 export async function runProviderConformance(pluginPaths) {
   const plan = loadProviderConformancePlan(pluginPaths);
-  plan.cases.forEach(preflight);
+  const cases = plan.cases.map(entry => ({ ...entry, authentication: preflight(entry) }));
   const [{ default: worker }, { snapshot }, { sha256Hex }, { clearHotCaches }] = await Promise.all([
     import("../worker/index.ts"), import("../worker/providers.ts"), import("../worker/utils.ts"), import("../worker/hot-cache.ts"),
   ]);
@@ -109,7 +114,7 @@ export async function runProviderConformance(pluginPaths) {
   try {
     snapshot.providers = plan.snapshot.providers;
     snapshot.model_index = plan.snapshot.model_index;
-    for (const { provider, scenario } of plan.cases) {
+    for (const { provider, scenario, authentication } of cases) {
       active = `${provider.id}/${scenario.id}`;
       clearHotCaches();
       const env = await environment(provider, sha256Hex), pending = [];
@@ -122,7 +127,8 @@ export async function runProviderConformance(pluginPaths) {
           check(url.pathname + url.search === scenario.upstream.request.path, "upstream path mismatch");
           check(request.method === scenario.upstream.request.method, "upstream method mismatch");
           check(request.redirect === "manual", "upstream redirects must remain disabled");
-          check(request.headers.get("authorization") === `Bearer ${secret}`, "synthetic upstream authorization mismatch");
+          check(request.headers.get(authentication.header) === authentication.value, "synthetic upstream authorization mismatch");
+          if (authentication.header !== "authorization") check(!request.headers.has("authorization"), "unexpected upstream authorization");
           await checkMessage(request, scenario.upstream.request, "upstream request");
           const response = scenario.upstream.response;
           return new Response(Object.hasOwn(response, "body") ? JSON.stringify(response.body) : null, {
