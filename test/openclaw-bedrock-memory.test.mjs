@@ -43,7 +43,7 @@ const secretHash = secret => createHash("sha256").update(secret).digest("hex");
 const token = (id, secret = "fixture-secret") => `clawrouter-live-${id}-${secret}`;
 
 test("Bedrock memory pin matches all nine compiled native cards and selects the complete consumer matrix", () => {
-  assert.equal(manifests.length, 87);
+  assert.equal(manifests.length, 90);
   assert.deepEqual(provider.models.filter(row => row.capabilities.includes("llm.embeddings")).map(row => row.id).sort(), cases.map(row => row.model).sort());
   const endpoint = provider.endpoints.find(row => row.id === "embed_text");
   assert.equal(endpoint.path, "/model/${model}/invoke");
