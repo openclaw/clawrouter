@@ -208,12 +208,7 @@ jobs:
           node -p 'JSON.stringify({node:process.version,platform:process.platform,arch:process.arch})'
           pnpm --version
       - name: Actual consumer through workerd and SQLite
-        run: |
-          if [ "$CONTRACT_TEST" = "test/openclaw-litellm.test.mjs" ]; then
-            node --test --test-reporter=./scripts/worker-test-failure-reporter.mjs --test-reporter-destination=stdout "$CONTRACT_TEST"
-          else
-            node --test "$CONTRACT_TEST"
-          fi
+        run: node --test "$CONTRACT_TEST"
         env:
           CONTRACT_TEST: ${{ matrix.test }}
           CLAWROUTER_OPENCLAW_CHECKOUT: .openclaw-contract
