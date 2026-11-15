@@ -42,8 +42,10 @@ assert.equal(audioProtocol.pin, sourceHead);
 
 function audioDiagnosticSession(write = line => process.stdout.write(line)) {
   const emitter = audioProtocol.emitter(write), failures = [], observers = [];
+  let evidence;
   function mark(phase, caseId, role, outcome, failed = false, error, counts = {}) {
-    try { emitter.put(audioProtocol.record({ source: "outer", caseId, phase, role, outcome, ...counts }, failed, error)); }
+    try { emitter.put(audioProtocol.record({ source: "outer", caseId, phase, role, outcome, ...(failed ? audioProtocol.errorClass(error) : {}),
+      ...(phase === "upstream_sqlite" ? evidence ?? {} : {}), ...counts }, failed, error)); }
     catch (failure) { failures.push(failure); }
   }
   function rejected(error) {
@@ -65,7 +67,7 @@ function audioDiagnosticSession(write = line => process.stdout.write(line)) {
           emitter.put(row); records++;
           if (audioProtocol.checkpointIds.includes(row.caseId) && ["body", "checkpoint"].includes(row.phase) && Object.hasOwn(row, "checkpoint")) {
             const previous = checkpoints.get(row.caseId);
-            if (!previous || row.phase === "checkpoint" || previous.phase !== "checkpoint") checkpoints.set(row.caseId, row);
+            if (!previous || row.phase === "checkpoint" || previous.phase !== "checkpoint") checkpoints.set(row.caseId, { ...row, errorCode: row.errorCode ?? previous?.errorCode });
           }
         });
         invalid += parsed.invalid;
@@ -86,7 +88,8 @@ function audioDiagnosticSession(write = line => process.stdout.write(line)) {
     for (const [index, key] of ["gs", "gr", "ms"].entries()) {
       const value = checkpoints.get(audioProtocol.checkpointIds[index]);
       Object.assign(summary, { [key + "Step"]: value?.checkpoint ?? null, [key + "Call"]: value?.callOutcome ?? "unseen",
-        [key + "Defined"]: value?.callReasonDefined ?? null, [key + "Same"]: value?.bodyReasonSameAsCallReason ?? null });
+        [key + "Defined"]: value?.callReasonDefined ?? null, [key + "Same"]: value?.bodyReasonSameAsCallReason ?? null,
+        [key + "Code"]: value?.errorCode ?? "unobserved" });
     }
     mark("report", null, "summary", invalid ? "rejected" : records ? "fulfilled" : "unknown", invalid > 0, undefined,
       { records, invalid: Math.min(65535, invalid), ...summary });
@@ -102,7 +105,14 @@ function audioDiagnosticSession(write = line => process.stdout.write(line)) {
     else mark(phase, caseId, "cleanup", "fulfilled");
     return original;
   }
-  return { mark, observe, rejected(error) { try { rejected(error); } catch (failure) { failures.push(failure); } }, async finish() {
+  return { mark, observe, evidence(step, caseId = null, calls = null, events = null, expected = null) {
+    evidence = undefined;
+    try {
+      const detail = { sqlStep: step, sqlCase: caseId, sqlCalls: calls, sqlEvents: events, sqlExpected: expected };
+      audioProtocol.record({ source: "outer", caseId: null, phase: "upstream_sqlite", role: "progress", outcome: "entered", ...detail });
+      evidence = detail;
+    } catch (error) { failures.push(error); }
+  }, rejected(error) { try { rejected(error); } catch (failure) { failures.push(failure); } }, async finish() {
     await Promise.all(observers);
     await finishOwned(failures, [() => emitter.flush()]);
   } };
@@ -390,7 +400,11 @@ test("audio checkpoints validate strict case, phase, failure flags and summary a
 });
 
 function checkpointBudgetChild() {
-  const rows = [...audioProtocol.checkpointIds.map(caseId => checkpointRow(caseId, { checkpoint: caseId === "groq_rotation" ? "rotated_select" : "native_rejection", callOutcome: "sync_throw", callReasonDefined: true }))];
+  const rows = [...audioProtocol.checkpointIds.flatMap(caseId => [
+    audioProtocol.record({ ...audioDiagnosticContext({ caseId }), checkpoint: caseId === "groq_rotation" ? "selected_call" : "proxy_profile_rejected", callOutcome: "sync_throw", callReasonDefined: true, bodyReasonSameAsCallReason: true,
+      ...audioProtocol.errorClass({ code: "ERR_INVALID_ARG_TYPE" }) }, true, {}),
+    checkpointRow(caseId, { checkpoint: caseId === "groq_rotation" ? "selected_call" : "proxy_profile_rejected", callOutcome: "sync_throw", callReasonDefined: true }),
+  ])];
   for (let i = 0; i < 5; i++) for (const caseId of audioProtocol.ids) {
     rows.push(audioProtocol.record(audioDiagnosticContext({ caseId }), true, undefined));
     rows.push(audioProtocol.record(audioDiagnosticContext({ caseId, phase: "original_join", role: "cleanup" }), true, {}));
@@ -402,19 +416,24 @@ function checkCheckpointSummary(lines) {
   assert.ok(lines.every(line => line.startsWith("::error title=Audio contract diagnostic::") && Buffer.byteLength(line) <= 768));
   const rows = lines.map(line => JSON.parse(line.slice("::error title=Audio contract diagnostic::".length)));
   assert.ok(rows.every(row => audioProtocol.validate(row))); const summary = rows.find(row => row.phase === "report"); assert.ok(summary);
-  for (const key of ["gs", "gr", "ms"]) { assert.equal(summary[key + "Step"], key === "gr" ? "rotated_select" : "native_rejection"); assert.equal(summary[key + "Call"], "sync_throw"); assert.equal(summary[key + "Defined"], true); assert.equal(summary[key + "Same"], true); }
+  for (const key of ["gs", "gr", "ms"]) { assert.equal(summary[key + "Step"], key === "gr" ? "selected_call" : "proxy_profile_rejected"); assert.equal(summary[key + "Call"], "sync_throw"); assert.equal(summary[key + "Defined"], true); assert.equal(summary[key + "Same"], true); assert.equal(summary[key + "Code"], "invalid_argument"); }
   for (const caseId of ["groq_abort", "mistral_abort"]) assert.ok(rows.some(row => row.phase === "worker_retirement" && row.caseId === caseId));
   assert.ok(rows.some(row => row.role === "primary" && row.source === "sdk")); assert.ok(rows.some(row => row.phase === "original_join"));
   assert.ok(rows.some(row => row.failurePresent && row.reasonDefined === false)); assert.equal(rows.at(-1).phase, "capacity");
+  assert.ok(rows.some(row => row.phase === "upstream_sqlite" && row.sqlStep === "egress_count"));
 }
 test("audio checkpoints retain all three summaries alongside essential failures at quota", async () => {
   const lines = [], session = audioDiagnosticSession(line => lines.push(line)); session.rejected(checkpointBudgetChild());
   for (const caseId of ["groq_abort", "mistral_abort"]) await session.observe("worker_retirement", caseId, () => Promise.resolve());
+  session.evidence("egress_count", "groq_success", 0, null, 1);
+  await assert.rejects(session.observe("upstream_sqlite", null, () => Promise.reject(undefined)), error => error === undefined);
   await session.finish(); checkCheckpointSummary(lines);
 });
 test("audio checkpoint subprocess", { skip: process.env.AUDIO813_CHECKPOINT_TEST !== "1" }, async () => {
   const session = audioDiagnosticSession(); session.rejected(checkpointBudgetChild());
   for (const caseId of ["groq_abort", "mistral_abort"]) await session.observe("worker_retirement", caseId, () => Promise.resolve());
+  session.evidence("egress_count", "groq_success", 0, null, 1);
+  await assert.rejects(session.observe("upstream_sqlite", null, () => Promise.reject(undefined)), error => error === undefined);
   await session.finish();
 });
 test("audio checkpoints retain column-zero summaries through real Node24 child output", { skip: process.env.AUDIO813_CHECKPOINT_TEST === "1", timeout: 20000 }, async () => {
@@ -431,15 +450,115 @@ test("audio checkpoints inverse preserves every original runCase operand and all
   const start = audioSdkText.indexOf("async function runCase("), end = audioSdkText.indexOf("\ndescribe(", start);
   let restored = audioSdkText.slice(start, end)
     .replace(/^.*\/\/ passive checkpoint\n/gm, "")
+    .replace(/^.*\/\/ passive profile wrapper\n/gm, "").replaceAll("await writeProfile(", "await upsertAuthProfileAsync(")
     .replace(/ \/\* checkpoint:[a-z_]+ \*\/ checkpoint\.before\("[a-z_]+"\);/g, "")
     .replace("const call = checkpoint.call(", "const call = ").replace("})); // passive call wrapper", "});")
     .replace("checkpoint.body(error); /* passive body */ ", "")
-    .replace(", error, checkpoint.details());", ", error);")
+    .replace(", error, checkpoint.details(transports, row.route));", ", error);")
     .replace("checkpoint.callback(error); /* passive callback */ ", "")
     .replace('checkpoint.scopeRole()', '"cleanup"')
     .replace("[() => checkpoint.join(), () => diagnostic.join()]", "[() => diagnostic.join()]");
   assert.equal(hash(restored), "9b1b0db04b9c69711f42a2a2c5bf07ba1059df10d3734b5cd40dc66184db6f54");
   assert.deepEqual([...audioProtocol.ids], cases.map(row => row.id)); assert.equal(cases.length, 30);
+});
+
+
+test("audio boundary profile wrapper preserves invocation, original return and undefined reasons", async t => {
+  for (const mode of ["promise_reject", "promise_fulfill", "sync_throw", "sync_value"]) await t.test(mode, async () => {
+    const { observer } = createAssertionCheckpoints(), owner = {}, operand = {};
+    let calls = 0, resolve, reject, original;
+    const pending = new Promise((yes, no) => { resolve = yes; reject = no; });
+    const wrapped = observer.profile(function(...args) {
+      calls++; assert.equal(this, owner); assert.deepEqual(args, [operand]);
+      assert.equal(observer.details().checkpoint, "proxy_profile_invoke");
+      if (mode === "sync_throw") throw undefined;
+      return original = mode === "sync_value" ? operand : pending;
+    });
+    observer.before("proxy_profile");
+    if (mode === "sync_throw") {
+      let present = false; try { Reflect.apply(wrapped, owner, [operand]); } catch (error) { present = true; assert.equal(error, undefined); }
+      assert.equal(present, true); assert.equal(observer.details().checkpoint, "proxy_profile_throw"); resolve();
+    } else {
+      const returned = Reflect.apply(wrapped, owner, [operand]); assert.equal(returned, original);
+      assert.equal(observer.details().checkpoint, mode === "sync_value" ? "proxy_profile_value" : "proxy_profile_promise");
+      if (mode === "promise_reject") { reject(undefined); await assert.rejects(returned, reason => reason === undefined); }
+      else { resolve(operand); await returned; }
+      assert.equal(observer.details().checkpoint, mode === "promise_reject" ? "proxy_profile_rejected" : mode === "sync_value" ? "proxy_profile_value" : "proxy_profile_fulfilled");
+    }
+    assert.equal(calls, 1); assert.equal(observer.details().callOutcome, "unseen"); await observer.join();
+  });
+});
+
+test("audio boundary error categories use only own data and never inspect arbitrary payloads", () => {
+  let invoked = 0;
+  const hostile = Object.defineProperties({}, Object.fromEntries(["code", "name", "message", "stack", "actual", "expected"].map(key => [key, { get() { invoked++; throw undefined; } }])));
+  assert.deepEqual(audioProtocol.errorClass(hostile), { errorCode: "unobserved", errorName: "unobserved" });
+  const proxy = new Proxy({}, { getOwnPropertyDescriptor() { invoked++; throw undefined; } });
+  assert.deepEqual(audioProtocol.errorClass(proxy), { errorCode: "unobserved", errorName: "unobserved" });
+  const secret = { toString() { invoked++; throw undefined; } };
+  assert.deepEqual(audioProtocol.errorClass({ code: secret, name: secret }), { errorCode: "other", errorName: "other" });
+  assert.deepEqual(audioProtocol.errorClass(Object.create({ code: "ERR_ASSERTION", name: "AssertionError" })), { errorCode: "unobserved", errorName: "unobserved" });
+  for (const [code, kind] of [["ERR_ASSERTION", "assertion"], ["SQLITE_BUSY", "sqlite_busy"], ["ERR_MODULE_NOT_FOUND", "module_missing"], ["private", "other"]]) {
+    assert.equal(audioProtocol.errorClass({ code }).errorCode, kind);
+  }
+  assert.equal(invoked, 0);
+  const good = audioProtocol.record({ ...audioDiagnosticContext(), ...audioProtocol.errorClass({ code: "ERR_ASSERTION", name: "AssertionError" }) }, true, {});
+  assert.ok(audioProtocol.validate(good));
+  for (const changes of [{ errorCode: "ERR_ASSERTION" }, { errorName: "private" }, { message: "private" }, { failurePresent: false, reasonDefined: null, reasonType: "none", outcome: "fulfilled" }]) assert.equal(audioProtocol.validate({ ...good, ...changes }), undefined);
+});
+
+test("audio boundary state methods retain invocation and original return-kind observations", async () => {
+  const { observer, rows } = createAssertionCheckpoints(); const promise = Promise.resolve();
+  const state = { cleanup() { assert.deepEqual(rows.at(-1).returnKind, "none"); return promise; }, restoreEnv() { throw undefined; } };
+  observer.attach(state); assert.equal(state.cleanup(), promise);
+  assert.equal(rows.at(-1).returnKind, "promise"); await promise;
+  let present = false; try { state.restoreEnv(); } catch (error) { present = true; assert.equal(error, undefined); }
+  assert.equal(present, true); await observer.join();
+  assert.deepEqual(rows.filter(row => row.phase === "state_cleanup").map(row => [row.outcome, row.returnKind]), [["entered", "none"], ["entered", "promise"], ["fulfilled", "promise"]]);
+  assert.deepEqual(rows.filter(row => row.phase === "state_restore").map(row => [row.outcome, row.returnKind, row.reasonDefined]), [["entered", "none", null], ["rejected", "none", false]]);
+});
+
+test("audio boundary SQLite observer names the original failed assertion and preserves counts and reason", async () => {
+  const row = cases.find(row => row.id === "groq_success"), lines = [], session = audioDiagnosticSession(line => lines.push(line));
+  let original;
+  assert.throws(() => session.observe("upstream_sqlite", null, () => {
+    try { assertShippingEvidence({ calls: [] }, { usage: { events: [] }, policies: [] }, [row], session.evidence); }
+    catch (error) { original = error; throw error; }
+  }), error => error === original);
+  await session.finish(); const failure = lines.map(line => JSON.parse(line.slice("::error title=Audio contract diagnostic::".length))).find(row => row.phase === "upstream_sqlite");
+  assert.equal(failure.sqlStep, "egress_count"); assert.equal(failure.sqlCase, "groq_success");
+  assert.equal(failure.sqlCalls, 0); assert.equal(failure.sqlEvents, null); assert.equal(failure.sqlExpected, 1); assert.equal(failure.errorCode, "assertion");
+  for (const changes of [{ sqlStep: "unknown" }, { sqlCase: "unknown" }, { sqlCase: null }, { sqlStep: "wire_auth" }, { sqlStep: "held" }, { sqlCalls: -1 }, { sqlEvents: 65536 }, { sqlExpected: 2 }, { phase: "helper" }]) assert.equal(audioProtocol.validate({ ...failure, ...changes }), undefined);
+  const missing = { ...failure }; delete missing.sqlStep; assert.equal(audioProtocol.validate(missing), undefined);
+  const undefinedLines = [], undefinedSession = audioDiagnosticSession(line => undefinedLines.push(line));
+  assert.throws(() => undefinedSession.observe("upstream_sqlite", null, () => {
+    assertShippingEvidence(Object.defineProperty({}, "calls", { get() { throw undefined; } }), {}, [row], undefinedSession.evidence);
+  }), error => error === undefined);
+  await undefinedSession.finish(); const undef = undefinedLines.map(line => JSON.parse(line.slice("::error title=Audio contract diagnostic::".length))).find(row => row.phase === "upstream_sqlite");
+  assert.equal(undef.sqlStep, "row"); assert.equal(undef.reasonDefined, false); assert.equal(undef.failurePresent, true);
+});
+
+
+test("audio boundary transport metadata remains bounded and never reads credentials or response bodies", async () => {
+  const { observer } = createAssertionCheckpoints(), error = Object.assign(new Error(), { code: "ERR_INVALID_ARG_TYPE", name: "AssertionError" });
+  observer.before("selected_call"); await assert.rejects(observer.call(() => Promise.reject(error))()); observer.body(error);
+  let reads = 0;
+  const transport = path => Object.defineProperties({ path, status: 599 }, { credential: { get() { reads++; throw undefined; } }, body: { get() { reads++; throw undefined; } } });
+  const detail = observer.details([transport("/v1/catalog"), transport("/owned")], "/owned");
+  const record = audioProtocol.record({ ...audioDiagnosticContext(), ...detail, ...audioProtocol.errorClass(error) }, true, error);
+  assert.equal(record.catalogCount, 1); assert.equal(record.uploadCount, 1); assert.equal(record.catalogStatus, 599); assert.equal(record.uploadStatus, 599);
+  assert.equal(reads, 0); assert.ok(Buffer.byteLength(JSON.stringify(record)) <= 640);
+  for (const changes of [{ catalogCount: 65536 }, { uploadStatus: 600 }, { catalogStatus: "200" }, { source: "outer" }, { caseId: "groq_abort" }, { phase: "checkpoint" }]) assert.equal(audioProtocol.validate({ ...record, ...changes }), undefined);
+  await observer.join();
+});
+
+test("audio boundary inverse preserves every original SQLite request and assertion operand", () => {
+  const text = readFileSync(fileURLToPath(import.meta.url), "utf8"), start = text.indexOf("\nasync function verify(") + 1, end = text.indexOf("\nfunction assertShippingJoin", start);
+  const restored = text.slice(start, end).replace(/^.*\/\/ passive evidence\n/gm, "")
+    .replace(/\/\* evidence:[a-z_]+ \*\/ checkpoint\?\.\([^;]+\); /g, "")
+    .replaceAll("rows, checkpoint)", "rows)")
+    .replace('for (const field of ["input_tokens", "output_tokens", "total_tokens"]) { assert.equal(event[field], null); }', 'for (const field of ["input_tokens", "output_tokens", "total_tokens"]) assert.equal(event[field], null);');
+  assert.equal(hash(restored), "aa72b8f76adb67c5a41df5e525fac44f9c3d02544fe20de8cd19fa1fe48c7f57");
 });
 
 function wav() {
@@ -1016,44 +1135,51 @@ function assertCatalog(catalog, row) {
   assert.deepEqual(route.methods, ["POST"]); assert.equal(route.path, "/v1/audio/transcriptions");
   assert.equal(route.requestFormat, row.format); assert.equal(route.responseFormat, row.format);
 }
-async function verify(origin, rows) {
+async function verify(origin, rows, checkpoint) {
+  checkpoint?.("state_request"); // passive evidence
   const state = await control(origin, "state", "all");
+  checkpoint?.("state_return"); // passive evidence
+  checkpoint?.("usage_request"); // passive evidence
   const usage = await json(await fetch(`${origin}/v1/admin/usage`, { headers: { authorization: "Bearer fixture-admin" } }));
-  assertShippingEvidence(state, usage, rows);
+  checkpoint?.("usage_return"); // passive evidence
+  assertShippingEvidence(state, usage, rows, checkpoint);
 }
-function assertShippingEvidence(state, usage, rows) {
+function assertShippingEvidence(state, usage, rows, checkpoint) {
   for (const row of rows) {
+    checkpoint?.("row", row.id); // passive evidence
     const calls = state.calls.filter(value => value.id === row.id), expected = denied.has(row.scenario) ? 0 : 1;
-    assert.equal(calls.length, expected, `${row.id}: no denied egress, replay or fallback`);
+    /* evidence:egress_count */ checkpoint?.("egress_count", row.id, calls.length, null, expected); assert.equal(calls.length, expected, `${row.id}: no denied egress, replay or fallback`);
+    checkpoint?.("events_select", row.id, calls.length, null, expected); // passive evidence
     const events = usage.usage.events.filter(value => value.credential_id === row.id);
     if (!expected) {
-      assert.ok(events.every(value => value.actual_cost_micros === 0));
-      assert.equal(usage.policies.find(value => value.policyId === row.id).budget.spentMicros, 0); continue;
+      /* evidence:denied_cost */ checkpoint?.("denied_cost", row.id, calls.length, events.length, expected); assert.ok(events.every(value => value.actual_cost_micros === 0));
+      /* evidence:denied_budget */ checkpoint?.("denied_budget", row.id, calls.length, events.length, expected); assert.equal(usage.policies.find(value => value.policyId === row.id).budget.spentMicros, 0); continue;
     }
     const call = calls[0];
-    assert.equal(call.url, row.origin + row.path); assert.equal(call.method, "POST"); assert.equal(call.redirect, "manual");
-    assert.equal(call.authorization, `Bearer fixture-upstream-${row.provider}`); assert.equal(call.otherKey, null);
-    assert.equal(call.model, row.upstream); assert.equal(call.language, "en");
-    assert.equal(call.prompt, row.provider === "groq" ? "Synthetic café 東京" : null);
-    assert.equal(call.fileName, `${row.id}.wav`); assert.equal(call.mime, "audio/wav"); assert.equal(call.bytes, 2048); assert.equal(call.digest, hash(wav()));
-    assert.deepEqual(call.fields, row.provider === "groq" ? ["model", "language", "prompt", "file"] : ["model", "language", "file"]);
-    assert.equal(events.length, 1); const event = events[0];
-    assert.equal(event.provider, row.provider); assert.equal(event.model, row.model); assert.equal(event.capability, "audio.transcription");
-    assert.equal(event.policy_id, row.id);
+    /* evidence:wire_url */ checkpoint?.("wire_url", row.id, calls.length, events.length, expected); assert.equal(call.url, row.origin + row.path); /* evidence:wire_method */ checkpoint?.("wire_method", row.id, calls.length, events.length, expected); assert.equal(call.method, "POST"); /* evidence:wire_redirect */ checkpoint?.("wire_redirect", row.id, calls.length, events.length, expected); assert.equal(call.redirect, "manual");
+    /* evidence:wire_auth */ checkpoint?.("wire_auth", row.id, calls.length, events.length, expected); assert.equal(call.authorization, `Bearer fixture-upstream-${row.provider}`); /* evidence:wire_other_key */ checkpoint?.("wire_other_key", row.id, calls.length, events.length, expected); assert.equal(call.otherKey, null);
+    /* evidence:wire_model */ checkpoint?.("wire_model", row.id, calls.length, events.length, expected); assert.equal(call.model, row.upstream); /* evidence:wire_language */ checkpoint?.("wire_language", row.id, calls.length, events.length, expected); assert.equal(call.language, "en");
+    /* evidence:wire_prompt */ checkpoint?.("wire_prompt", row.id, calls.length, events.length, expected); assert.equal(call.prompt, row.provider === "groq" ? "Synthetic café 東京" : null);
+    /* evidence:wire_filename */ checkpoint?.("wire_filename", row.id, calls.length, events.length, expected); assert.equal(call.fileName, `${row.id}.wav`); /* evidence:wire_mime */ checkpoint?.("wire_mime", row.id, calls.length, events.length, expected); assert.equal(call.mime, "audio/wav"); /* evidence:wire_bytes */ checkpoint?.("wire_bytes", row.id, calls.length, events.length, expected); assert.equal(call.bytes, 2048); /* evidence:wire_digest */ checkpoint?.("wire_digest", row.id, calls.length, events.length, expected); assert.equal(call.digest, hash(wav()));
+    /* evidence:wire_fields */ checkpoint?.("wire_fields", row.id, calls.length, events.length, expected); assert.deepEqual(call.fields, row.provider === "groq" ? ["model", "language", "prompt", "file"] : ["model", "language", "file"]);
+    /* evidence:event_count */ checkpoint?.("event_count", row.id, calls.length, events.length, expected); assert.equal(events.length, 1); const event = events[0];
+    /* evidence:event_provider */ checkpoint?.("event_provider", row.id, calls.length, events.length, expected); assert.equal(event.provider, row.provider); /* evidence:event_model */ checkpoint?.("event_model", row.id, calls.length, events.length, expected); assert.equal(event.model, row.model); /* evidence:event_capability */ checkpoint?.("event_capability", row.id, calls.length, events.length, expected); assert.equal(event.capability, "audio.transcription");
+    /* evidence:event_policy */ checkpoint?.("event_policy", row.id, calls.length, events.length, expected); assert.equal(event.policy_id, row.id);
     if (row.scenario === "abort") {
-      assert.equal(event.status, "client_error"); assert.equal(event.status_code, 499);
-      assert.equal(call.cancelCalls, 1); assert.equal(call.cancelReturns, 1); assert.equal(call.cancelRejected, false);
-      assert.equal(call.producerPulls, 1); assert.equal(call.producerSettled, true); assert.equal(call.producerPending, false);
-      assert.equal(call.producerJoined, true); assert.equal(call.producerJoinFailures, 0); assert.equal(call.producerRejected, false);
-      assert.equal(call.fixtureExpired, false); assert.equal(call.producerExpiryAt, 0); assert.equal(call.timerActive, false);
-      assert.equal(state.producerFailures, 0);
+      /* evidence:abort_status */ checkpoint?.("abort_status", row.id, calls.length, events.length, expected); assert.equal(event.status, "client_error"); /* evidence:abort_code */ checkpoint?.("abort_code", row.id, calls.length, events.length, expected); assert.equal(event.status_code, 499);
+      /* evidence:cancel_calls */ checkpoint?.("cancel_calls", row.id, calls.length, events.length, expected); assert.equal(call.cancelCalls, 1); /* evidence:cancel_returns */ checkpoint?.("cancel_returns", row.id, calls.length, events.length, expected); assert.equal(call.cancelReturns, 1); /* evidence:cancel_rejected */ checkpoint?.("cancel_rejected", row.id, calls.length, events.length, expected); assert.equal(call.cancelRejected, false);
+      /* evidence:producer_pulls */ checkpoint?.("producer_pulls", row.id, calls.length, events.length, expected); assert.equal(call.producerPulls, 1); /* evidence:producer_settled */ checkpoint?.("producer_settled", row.id, calls.length, events.length, expected); assert.equal(call.producerSettled, true); /* evidence:producer_pending */ checkpoint?.("producer_pending", row.id, calls.length, events.length, expected); assert.equal(call.producerPending, false);
+      /* evidence:producer_joined */ checkpoint?.("producer_joined", row.id, calls.length, events.length, expected); assert.equal(call.producerJoined, true); /* evidence:producer_join_failures */ checkpoint?.("producer_join_failures", row.id, calls.length, events.length, expected); assert.equal(call.producerJoinFailures, 0); /* evidence:producer_rejected */ checkpoint?.("producer_rejected", row.id, calls.length, events.length, expected); assert.equal(call.producerRejected, false);
+      /* evidence:producer_expired */ checkpoint?.("producer_expired", row.id, calls.length, events.length, expected); assert.equal(call.fixtureExpired, false); /* evidence:producer_expiry_at */ checkpoint?.("producer_expiry_at", row.id, calls.length, events.length, expected); assert.equal(call.producerExpiryAt, 0); /* evidence:producer_timer */ checkpoint?.("producer_timer", row.id, calls.length, events.length, expected); assert.equal(call.timerActive, false);
+      /* evidence:producer_failures */ checkpoint?.("producer_failures", row.id, calls.length, events.length, expected); assert.equal(state.producerFailures, 0);
     }
-    assert.equal(event.actual_cost_micros, 700); assert.equal(event.cost_basis, "policy_fixed"); assert.equal(event.content_retained, false);
-    for (const field of ["input_tokens", "output_tokens", "total_tokens"]) assert.equal(event[field], null);
-    assert.equal(usage.policies.find(value => value.policyId === row.id).budget.spentMicros, 700);
-    assert.doesNotMatch(JSON.stringify(event), /fixture-secret|fixture-upstream|Synthetic café/);
+    /* evidence:cost */ checkpoint?.("cost", row.id, calls.length, events.length, expected); assert.equal(event.actual_cost_micros, 700); /* evidence:cost_basis */ checkpoint?.("cost_basis", row.id, calls.length, events.length, expected); assert.equal(event.cost_basis, "policy_fixed"); /* evidence:retained */ checkpoint?.("retained", row.id, calls.length, events.length, expected); assert.equal(event.content_retained, false);
+    for (const field of ["input_tokens", "output_tokens", "total_tokens"]) { /* evidence:tokens */ checkpoint?.(field, row.id, calls.length, events.length, expected); assert.equal(event[field], null); }
+    /* evidence:spent */ checkpoint?.("spent", row.id, calls.length, events.length, expected); assert.equal(usage.policies.find(value => value.policyId === row.id).budget.spentMicros, 700);
+    /* evidence:privacy */ checkpoint?.("privacy", row.id, calls.length, events.length, expected); assert.doesNotMatch(JSON.stringify(event), /fixture-secret|fixture-upstream|Synthetic café/);
   }
-  assert.equal(state.held, 0); assert.equal(state.charged, 0);
+  /* evidence:held */ checkpoint?.("held"); assert.equal(state.held, 0); /* evidence:charged */ checkpoint?.("charged"); assert.equal(state.charged, 0);
+  checkpoint?.("complete"); // passive evidence
 }
 
 function assertShippingJoin({ row, status, result }) {
@@ -1179,7 +1305,7 @@ test("registered OpenClaw Groq/Mistral native transcription through Worker and S
   await finishOwned(failures, [
     ...cases.filter(row => row.scenario === "abort").map(row => () => origin && diagnostics.observe("worker_abort", row.id, () => control(origin, "abort", row.id))),
     ...cases.map(row => () => origin && diagnostics.observe("worker_retirement", row.id, () => control(origin, "join", row.id))),
-    () => origin && diagnostics.observe("upstream_sqlite", null, () => verify(origin, cases)),
+    () => origin && diagnostics.observe("upstream_sqlite", null, () => verify(origin, cases, diagnostics.evidence)),
     () => mf && diagnostics.observe("worker_dispose", null, () => mf.dispose()),
     () => diagnostics.observe("scratch_cleanup", null, () => rm(temporary, { recursive: true, force: true })),
     () => diagnostics.finish(),
@@ -2633,7 +2759,9 @@ test("shipping adjudication rejects incomplete producer, wire, SQLite and restor
   ];
   for (const [index, change] of changes.entries()) await t.test("evidence_" + index, () => {
     const s = structuredClone(state), u = structuredClone(usage); change(s, u);
-    assert.throws(() => assertShippingEvidence(s, u, [row]));
+    let seen;
+    assert.throws(() => assertShippingEvidence(s, u, [row], (step, id) => { seen = { step, id }; }));
+    assert.equal(seen.step, ["producer_pending", "producer_join_failures", "producer_expired", "producer_expiry_at", "cancel_calls", "egress_count", "charged", "wire_auth", "wire_model", "wire_digest", "event_provider", "event_policy", "cost", "abort_status", "input_tokens", "spent"][index]);
   });
   const facts = { v: 1, test: "held_original", case: row.id, scenario: "abort" };
   const receipt = { row, status: 200, result: { retired: true, provisional: true, typed: [

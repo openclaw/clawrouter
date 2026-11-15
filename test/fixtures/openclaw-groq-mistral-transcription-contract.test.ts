@@ -19,18 +19,31 @@ function audioDiagnosticProtocol(isProxy: (value: unknown) => boolean) {
   const phases = ["module", "setup", "execute", "body", "original_join", "worker_join", "state_scope", "runtime_restore", "case_outcome", "helper", "worker_abort", "worker_retirement", "upstream_sqlite", "worker_dispose", "scratch_cleanup", "report", "capacity", "checkpoint", "state_cleanup", "state_restore"];
   const checkpointIds = ["groq_success", "groq_rotation", "mistral_success"];
   const checkpoints = ["start", "proxy_profile", "native_profile", "native_rejection", "zero_transport", "proxy_select", "rotate", "old_rejection", "zero_upload", "old_status", "rotated_select", "selected_call", "result", "uploads"];
+  const profileSteps = ["proxy_profile", "native_profile"].flatMap(step => ["invoke", "promise", "value", "fulfilled", "rejected", "throw"].map(outcome => step + "_" + outcome));
+  checkpoints.push(...profileSteps);
+  const errorCodes = { ERR_ASSERTION: "assertion", ERR_MODULE_NOT_FOUND: "module_missing", MODULE_NOT_FOUND: "module_missing", ERR_INVALID_ARG_TYPE: "invalid_argument", ERR_INVALID_STATE: "invalid_state", ERR_WORKER_NOT_RUNNING: "worker_stopped", SQLITE_BUSY: "sqlite_busy", SQLITE_LOCKED: "sqlite_locked", SQLITE_ERROR: "sqlite_error", SQLITE_CANTOPEN: "sqlite_cantopen" };
+  const errorNames = { Error: "error", TypeError: "type", RangeError: "range", AbortError: "abort", TimeoutError: "timeout", AssertionError: "assertion" };
+  const codeKinds = ["unobserved", "other", ...Object.values(errorCodes)], nameKinds = ["unobserved", "other", ...Object.values(errorNames)];
+  const sqlSteps = ["state_request", "state_return", "usage_request", "usage_return", "row", "egress_count", "events_select", "denied_cost", "denied_budget", "wire_url", "wire_method", "wire_redirect", "wire_auth", "wire_other_key", "wire_model", "wire_language", "wire_prompt", "wire_filename", "wire_mime", "wire_bytes", "wire_digest", "wire_fields", "event_count", "event_provider", "event_model", "event_capability", "event_policy", "abort_status", "abort_code", "cancel_calls", "cancel_returns", "cancel_rejected", "producer_pulls", "producer_settled", "producer_pending", "producer_joined", "producer_join_failures", "producer_rejected", "producer_expired", "producer_expiry_at", "producer_timer", "producer_failures", "cost", "cost_basis", "retained", "input_tokens", "output_tokens", "total_tokens", "spent", "privacy", "held", "charged", "complete"];
   const checkpointFor = (caseId: string, checkpoint: string) => checkpoints.includes(checkpoint)
-    && (caseId === "groq_rotation" ? !["proxy_profile", "native_profile", "native_rejection", "zero_transport", "proxy_select"].includes(checkpoint)
+    && (caseId === "groq_rotation" ? !["proxy_profile", "native_profile", "native_rejection", "zero_transport", "proxy_select", ...profileSteps].includes(checkpoint)
       : !["rotate", "old_rejection", "zero_upload", "old_status", "rotated_select"].includes(checkpoint));
   const callOutcomes = ["unseen", "pending", "fulfilled", "rejected", "sync_throw"];
   const detailKeys = ["checkpoint", "callOutcome", "callReasonDefined", "bodyReasonSameAsCallReason"];
   const stateKeys = ["bodyFailurePresent", "callbackFailurePresent", "scopeSameAsCallback", "cleanupOutcome", "restoreEnvOutcome"];
-  const summaryKeys = ["gs", "gr", "ms"].flatMap(key => [key + "Step", key + "Call", key + "Defined", key + "Same"]);
-  const keys = [...detailKeys, ...stateKeys, ...summaryKeys,"v", "pin", "source", "caseId", "phase", "role", "outcome", "failurePresent", "reasonDefined", "reasonType", "partialDelivery", "records", "invalid", "suppressed"];
+  const summaryKeys = ["gs", "gr", "ms"].flatMap(key => [key + "Step", key + "Call", key + "Defined", key + "Same", key + "Code"]);
+  const errorKeys = ["errorCode", "errorName"], transportKeys = ["catalogCount", "uploadCount", "catalogStatus", "uploadStatus"];
+  const sqlKeys = ["sqlStep", "sqlCase", "sqlCalls", "sqlEvents", "sqlExpected"];
+  const keys = [...errorKeys, ...transportKeys, ...sqlKeys, "returnKind", ...detailKeys, ...stateKeys, ...summaryKeys,"v", "pin", "source", "caseId", "phase", "role", "outcome", "failurePresent", "reasonDefined", "reasonType", "partialDelivery", "records", "invalid", "suppressed"];
   function own(value: unknown, key: string): unknown {
     if (!value || typeof value !== "object" || isProxy(value)) return;
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     return descriptor && "value" in descriptor ? descriptor.value : undefined;
+  }
+  function errorClass(error: unknown) {
+    const code = own(error, "code"), name = own(error, "name");
+    return { errorCode: code === undefined ? "unobserved" : typeof code === "string" && Object.hasOwn(errorCodes, code) ? errorCodes[code as keyof typeof errorCodes] : "other",
+      errorName: name === undefined ? "unobserved" : typeof name === "string" && Object.hasOwn(errorNames, name) ? errorNames[name as keyof typeof errorNames] : "other" };
   }
   function validate(value: unknown): Data | undefined {
     if (!value || typeof value !== "object" || isProxy(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) return;
@@ -52,6 +65,26 @@ function audioDiagnosticProtocol(isProxy: (value: unknown) => boolean) {
         || data.reasonDefined !== (data.reasonType !== "undefined") || data.outcome !== "rejected") return;
     } else if (data.reasonDefined !== null || data.reasonType !== "none" || data.outcome === "rejected") return;
     const has = (key: string) => Object.hasOwn(data, key);
+    if (errorKeys.some(has) && (!errorKeys.every(has) || !data.failurePresent || !codeKinds.includes(data.errorCode as string) || !nameKinds.includes(data.errorName as string))) return;
+    if (has("returnKind") && (data.source !== "sdk" || !["state_cleanup", "state_restore"].includes(data.phase as string)
+      || !["none", "promise", "value"].includes(data.returnKind as string)
+      || data.outcome === "fulfilled" && data.returnKind === "none" || data.outcome === "rejected" && data.returnKind === "value")) return;
+    if (transportKeys.some(has)) {
+      if (data.source !== "sdk" || data.phase !== "body" || !checkpointIds.includes(data.caseId as string) || !data.failurePresent || !transportKeys.every(has)) return;
+      for (const key of ["catalogCount", "uploadCount"]) if (!(Number.isSafeInteger(data[key]) && Number(data[key]) >= 0 && Number(data[key]) <= 65535)) return;
+      for (const key of ["catalogStatus", "uploadStatus"]) if (!(data[key] === null || Number.isSafeInteger(data[key]) && Number(data[key]) >= 100 && Number(data[key]) <= 599)) return;
+    }
+    if (sqlKeys.some(has)) {
+      if (data.source !== "outer" || data.phase !== "upstream_sqlite" || data.caseId !== null || !sqlKeys.every(has) || !sqlSteps.includes(data.sqlStep as string)
+        || !(data.sqlCase === null || ids.has(data.sqlCase as string)) || ![null, 0, 1].includes(data.sqlExpected as number | null)) return;
+      for (const key of ["sqlCalls", "sqlEvents"]) if (!(data[key] === null || Number.isSafeInteger(data[key]) && Number(data[key]) >= 0 && Number(data[key]) <= 65535)) return;
+      const global = ["state_request", "state_return", "usage_request", "usage_return", "held", "charged", "complete"].includes(data.sqlStep as string);
+      if (global ? data.sqlCase !== null : !ids.has(data.sqlCase as string)) return;
+      if (global || data.sqlStep === "row") {
+        if (data.sqlCalls !== null || data.sqlEvents !== null || data.sqlExpected !== null) return;
+      } else if (data.sqlCalls === null || data.sqlExpected === null
+        || (["egress_count", "events_select"].includes(data.sqlStep as string) ? data.sqlEvents !== null : data.sqlEvents === null)) return;
+    }
     if (detailKeys.some(has) || stateKeys.some(has)) {
       if (data.source !== "sdk" || !checkpointIds.includes(data.caseId as string)
         || !["body", "checkpoint"].includes(data.phase as string) || !detailKeys.every(has)
@@ -71,8 +104,9 @@ function audioDiagnosticProtocol(isProxy: (value: unknown) => boolean) {
     if (summaryKeys.some(has)) {
       if (data.source !== "outer" || data.caseId !== null || data.phase !== "report" || data.role !== "summary" || !summaryKeys.every(has)) return;
       for (const [index, key] of ["gs", "gr", "ms"].entries()) {
-        if (!(data[key + "Step"] === null || checkpointFor(checkpointIds[index]!, data[key + "Step"] as string))
-          || (data[key + "Step"] === null && data[key + "Call"] !== "unseen")
+        if (!codeKinds.includes(data[key + "Code"] as string)
+          || !(data[key + "Step"] === null || checkpointFor(checkpointIds[index]!, data[key + "Step"] as string))
+          || (data[key + "Step"] === null && (data[key + "Call"] !== "unseen" || data[key + "Code"] !== "unobserved"))
           || !callOutcomes.includes(data[key + "Call"] as string)
           || (["rejected", "sync_throw"].includes(data[key + "Call"] as string) ? typeof data[key + "Defined"] !== "boolean" : data[key + "Defined"] !== null)
           || ![true, false, null].includes(data[key + "Same"] as boolean | null)
@@ -128,7 +162,8 @@ function audioDiagnosticProtocol(isProxy: (value: unknown) => boolean) {
         row.source === "sdk" && row.phase === "original_join" ? "sdk_join" : null,
         row.source === "outer" && row.phase === "worker_retirement" && ["groq_abort", "mistral_abort"].includes(row.caseId as string) ? row.caseId as string : null,
         row.failurePresent && row.reasonDefined === false ? "undefined" : null, row.phase === "report" ? "report" : null,
-        row.source === "outer" && row.role === "primary" ? "outer_primary" : null, row.role === "cleanup" && row.failurePresent ? "cleanup" : null];
+        row.source === "outer" && row.role === "primary" ? "outer_primary" : null,
+        row.phase === "upstream_sqlite" && row.failurePresent ? "sql" : null, row.role === "cleanup" && row.failurePresent ? "cleanup" : null];
       for (const group of groups) if (group) {
         const previous = essential.get(group);
         if (!previous || !previous.failurePresent) essential.set(group, row);
@@ -163,7 +198,7 @@ function audioDiagnosticProtocol(isProxy: (value: unknown) => boolean) {
       if (failures.length) throw new AggregateError(failures, "audio annotation delivery failed");
     } };
   }
-  return { prefix, pin, ids, checkpointIds, own, validate, record, parse, emitter };
+  return { prefix, pin, ids, checkpointIds, own, errorClass, validate, record, parse, emitter };
 }
 // END audio diagnostic protocol.
 const audioProtocol = audioDiagnosticProtocol(nodeTypes.isProxy);
@@ -173,7 +208,7 @@ function audioCaseDiagnostics(caseId: string) {
   function mark(phase: string, role: string, outcome: string, failed = false, error?: unknown, detail = {}) {
     try {
       if (++audioRecordCount > 512) throw new Error("audio child diagnostic capacity");
-      const value = audioProtocol.record({ source: "sdk", caseId, phase, role, outcome, ...detail }, failed, error);
+      const value = audioProtocol.record({ source: "sdk", caseId, phase, role, outcome, ...(failed ? audioProtocol.errorClass(error) : {}), ...detail }, failed, error);
       process.stdout.write("\n" + audioProtocol.prefix + JSON.stringify(value) + "\n");
     } catch (failure) { failures.push(failure); }
   }
@@ -197,18 +232,25 @@ function audioAssertionCheckpoints(caseId: string, diagnostic: ReturnType<typeof
   const methods: Record<string, Outcome> = { cleanup: { outcome: "unseen" }, restoreEnv: { outcome: "unseen" } };
   let body: { error: unknown } | undefined, callback: { error: unknown } | undefined, scope: { error: unknown } | undefined;
   function safely(action: () => void) { try { action(); } catch (error) { failures.push(error); } }
-  function observe<T>(start: () => T, target: Outcome, phase?: string): T {
+  function observe<T>(start: () => T, target: Outcome, phase?: string, profileStep?: string): T {
+    let returnKind = "none";
     const settle = (outcome: string, failed = false, error?: unknown) => {
       target.outcome = outcome;
       if (target === call && outcome === "fulfilled" && checkpoint === "selected_call") checkpoint = "result";
       if (failed) target.failure = { error };
-      if (phase) diagnostic.mark(phase, "cleanup", failed ? "rejected" : "fulfilled", failed, error);
+      if (profileStep) checkpoint = profileStep + "_" + (outcome === "sync_throw" ? "throw" : outcome === "fulfilled" && returnKind === "value" ? "value" : outcome);
+      if (phase) diagnostic.mark(phase, "cleanup", failed ? "rejected" : "fulfilled", failed, error, { returnKind });
     };
     let original: T;
     target.outcome = "pending";
+    if (profileStep) checkpoint = profileStep + "_invoke";
+    if (phase) safely(() => diagnostic.mark(phase, "progress", "entered", false, undefined, { returnKind }));
     try { original = start(); }
     catch (error) { safely(() => settle("sync_throw", true, error)); throw error; }
-    if (nodeTypes.isPromise(original)) {
+    const promise = nodeTypes.isPromise(original); returnKind = promise ? "promise" : "value";
+    if (profileStep) checkpoint = profileStep + "_" + returnKind;
+    if (phase) safely(() => diagnostic.mark(phase, "progress", "entered", false, undefined, { returnKind }));
+    if (promise) {
       safely(() => { observers.push(Reflect.apply(then, original, [
         () => safely(() => settle("fulfilled")), (error: unknown) => safely(() => settle("rejected", true, error)),
       ])); });
@@ -226,6 +268,17 @@ function audioAssertionCheckpoints(caseId: string, diagnostic: ReturnType<typeof
       return function(this: unknown, ...args: never[]) {
         const current: Outcome = { outcome: "unseen" }; call = current;
         return observe(() => Reflect.apply(original, this, args), current);
+      } as T;
+    },
+    profile<T extends (...args: never[]) => unknown>(original: T): T {
+      if (!active) return original;
+      return function(this: unknown, ...args: never[]) {
+        const step = checkpoint;
+        if (!["proxy_profile", "native_profile"].includes(step)) {
+          failures.push(new Error("unbound profile observation"));
+          return Reflect.apply(original, this, args);
+        }
+        return observe(() => Reflect.apply(original, this, args), { outcome: "unseen" }, undefined, step);
       } as T;
     },
     attach(state: object) {
@@ -255,7 +308,13 @@ function audioAssertionCheckpoints(caseId: string, diagnostic: ReturnType<typeof
     callback(error: unknown) { if (active) callback = { error }; },
     scope(error: unknown) { if (active) scope = { error }; },
     scopeRole() { return Object.values(methods).some(value => value.failure) ? "cleanup" : "progress"; },
-    details() { return active ? details() : {}; },
+    details(transports?: Array<{ path: string; status?: number }>, route?: string) {
+      if (!active) return {};
+      const selected = (path: string) => transports?.filter(item => item.path === path) ?? [];
+      const catalog = selected("/v1/catalog"), upload = selected(route ?? "");
+      return { ...details(), ...(transports ? { catalogCount: catalog.length, uploadCount: upload.length,
+        catalogStatus: catalog.at(-1)?.status ?? null, uploadStatus: upload.at(-1)?.status ?? null } : {}) };
+    },
     async join() {
       const outcomes = await Promise.allSettled(observers);
       for (const outcome of outcomes) if (outcome.status === "rejected") failures.push(outcome.reason);
@@ -329,6 +388,7 @@ function wav(): Buffer {
 async function runCase(row: Case): Promise<void> {
   const diagnostic = audioCaseDiagnostics(row.id);
   const checkpoint = audioAssertionCheckpoints(row.id, diagnostic); // passive checkpoint
+  const writeProfile = checkpoint.profile(upsertAuthProfileAsync); // passive profile wrapper
   diagnostic.mark("setup", "progress", "entered");
   const failures: unknown[] = [], transports: Transport[] = [], unexpected: unknown[] = [];
   let callbackFailure: { error: unknown } | undefined;
@@ -409,9 +469,9 @@ async function runCase(row: Case): Promise<void> {
         diagnostic.mark("execute", "progress", "entered");
         if (row.scenario === "success") {
           checkpoint.before("proxy_profile"); // passive checkpoint
-          await upsertAuthProfileAsync({ agentDir, profileId: "clawrouter:audio", credential: { type: "api_key", provider: "clawrouter", key: token(row) } });
+          await writeProfile({ agentDir, profileId: "clawrouter:audio", credential: { type: "api_key", provider: "clawrouter", key: token(row) } });
           checkpoint.before("native_profile"); // passive checkpoint
-          await upsertAuthProfileAsync({ agentDir, profileId: `${row.provider}:audio`, credential: { type: "api_key", provider: row.provider, key: "must-not-fallback" } });
+          await writeProfile({ agentDir, profileId: `${row.provider}:audio`, credential: { type: "api_key", provider: row.provider, key: "must-not-fallback" } });
           model.profile = `${row.provider}:audio`; /* checkpoint:native_rejection */ checkpoint.before("native_rejection"); await expect(call()).rejects.toThrow(/unavailable for ClawRouter/);
           checkpoint.before("zero_transport"); // passive checkpoint
           expect(transports).toHaveLength(0); /* checkpoint:proxy_select */ checkpoint.before("proxy_select"); model.profile = "clawrouter:audio";
@@ -449,7 +509,7 @@ async function runCase(row: Case): Promise<void> {
         checkpoint.before("uploads"); // passive checkpoint
         expect(uploads).toHaveLength(["success", "rotation", "stale", "malformed", "partial", "error", "redirect", "truncated", "abort"].includes(row.scenario) ? 1 : 0);
         if (row.scenario === "stale") expect(uploads[0]?.status).toBe(403);
-      } catch (error) { checkpoint.body(error); /* passive body */ bodyFailures.push(error); diagnostic.mark("body", "primary", "rejected", true, error, checkpoint.details()); }
+      } catch (error) { checkpoint.body(error); /* passive body */ bodyFailures.push(error); diagnostic.mark("body", "primary", "rejected", true, error, checkpoint.details(transports, row.route)); }
       try {
         await finishOwned(bodyFailures, [
           () => { if (!caller.signal.aborted) caller.abort(callerReason); },
