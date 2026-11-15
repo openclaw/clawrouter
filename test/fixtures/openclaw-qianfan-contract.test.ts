@@ -25,7 +25,7 @@ const key = (id: string) => `clawrouter-live-qianfan_${id}-fixture-secret`;
 function qianfanDiagnostics(isProxy: (value: any) => boolean) {
   const prefix = "QIANFAN_DIAGNOSTIC ";
   const cases = ["none", "card0", "card1", "card2", "card3", "card4", "high", "max", "image2", "image4", "catalog", "catalog_denials", "observed", "admission_denials", "error", "cancel"];
-  const phases = ["module", "setup", "body", "registration", "catalog", "replay", "dispatch", "original_join", "release", "binding", "restoration", "mock_cleanup", "cache_cleanup", "worker", "grant", "helper", "receipt", "retirement", "upstream", "sqlite", "dispose", "rm", "overflow"];
+  const phases = ["module", "setup", "body", "registration", "catalog", "replay", "dispatch", "original_join", "join_contract", "join_census", "join_rejections", "retirement_router", "retirement_upstream", "release", "binding", "restoration", "mock_cleanup", "cache_cleanup", "worker", "grant", "helper", "receipt", "retirement", "upstream", "sqlite", "dispose", "rm", "overflow"];
   const enums: Record<string, any[]> = { layer: ["sdk", "outer"], route: ["none", "nativechat", "discovery"], caseId: cases, phase: phases,
     role: ["progress", "primary", "cleanup", "summary"], outcome: ["entered", "fulfilled", "rejected", "unknown"],
     category: ["none", "undefined", "null", "assertion", "aggregate", "unknown"],
@@ -34,7 +34,31 @@ function qianfanDiagnostics(isProxy: (value: any) => boolean) {
   const required = ["v", "layer", "route", "caseId", "phase", "role", "outcome", "category"];
   const counts = ["pending", "settled", "operations", "releasePending", "releaseRejected", "sdkRecords", "suppressed"];
   const bools = ["partialDelivery", "callerAborted", "killed"];
-  const optional = [...counts, ...bools, "exit", "signal", "observedCode"];
+  const optional = [...counts, ...bools, "exit", "signal", "observedCode", "bodySucceeded", "releasesFulfilled", "failureFlags", "ownership", "census", "rejections", "omitted", "predicate"];
+  // Fixed columns, not arbitrary nested data. See joinDiagnostic() for the
+  // operation/state/flag dictionaries. Null means outside the bounded range.
+  function vector(value: any, length: number, maximum: number) {
+    if (!Array.isArray(value) || isProxy(value) || value.length !== length || Reflect.ownKeys(value).length !== length + 1) return null;
+    const result = [];
+    for (let i = 0; i < length; i++) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(i));
+      if (!descriptor || !Object.hasOwn(descriptor, "value")) return null;
+      const item = descriptor.value;
+      if (item !== null && !(Number.isInteger(item) && item >= 0 && item <= maximum)) return null;
+      result.push(item);
+    }
+    return result;
+  }
+  function table(value: any, columns: number, maximum: number) {
+    if (!Array.isArray(value) || isProxy(value) || value.length > 4 || Reflect.ownKeys(value).length !== value.length + 1) return null;
+    const rows = [];
+    for (let i = 0; i < value.length; i++) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(i));
+      const row = descriptor && Object.hasOwn(descriptor, "value") ? vector(descriptor.value, columns, maximum) : null;
+      if (!row) return null; rows.push(row);
+    }
+    return rows;
+  }
   function own(value: any, field: string): any {
     try { if (!value || !["object", "function"].includes(typeof value) || isProxy(value)) return undefined;
       const descriptor = Object.getOwnPropertyDescriptor(value, field);
@@ -51,6 +75,16 @@ function qianfanDiagnostics(isProxy: (value: any) => boolean) {
         const descriptor = Object.getOwnPropertyDescriptor(value, key);
         if (!descriptor || !Object.hasOwn(descriptor, "value")) return null;
         const item = descriptor.value;
+        if (["failureFlags", "ownership", "census", "rejections"].includes(key)) {
+          const copy = key === "failureFlags" ? vector(item, 6, 1) : key === "ownership" ? vector(item, 9, 9999)
+            : key === "census" ? vector(item, 56, 9999) : table(item, 9, 2097151);
+          if (!copy) return null;
+          if (key === "rejections" && copy.some((row: any[]) => row[0] === null || row[0] > 13 || ![2, 3].includes(row[1]) || row[2] === null || row.slice(3).some((n: any) => n !== null && n > 9999))) return null;
+          result[key] = copy; continue;
+        }
+        if (key === "bodySucceeded" || key === "releasesFulfilled") { if (item !== null && typeof item !== "boolean") return null; result[key] = item; continue; }
+        if (key === "omitted") { if (item !== null && !(Number.isInteger(item) && item >= 0 && item <= 9999)) return null; result[key] = item; continue; }
+        if (key === "predicate") { if (!["accepted", "settled", "rejected", "unlocked"].includes(item)) return null; result[key] = item; continue; }
         if (key === "v" ? item !== 1 : enums[key] ? !enums[key].includes(item) : counts.includes(key) ? item !== null && !(Number.isInteger(item) && item >= 0 && item <= 9999)
           : bools.includes(key) ? item !== null && typeof item !== "boolean" : key === "exit" ? item !== null && !(Number.isInteger(item) && Math.abs(item) <= 255) : true) return null;
         result[key] = item;
@@ -90,7 +124,7 @@ function qianfanDiagnostics(isProxy: (value: any) => boolean) {
       killed: typeof killed === "boolean" ? killed : null, signal: enums.signal.includes(signal) ? signal : null, observedCode } };
   }
   function emitter(write: (text: string) => unknown) {
-    const seen = new Set<string>(); let emitted = 0, bytes = 0, suppressed = 0, overflow = false;
+    const seen = new Set<string>(), workerSides = new Set<string>(); let emitted = 0, ordinary = 0, bytes = 0, suppressed = 0, overflow = false;
     function command(value: any) {
       const text = "::error title=Qianfan contract diagnostic::" + JSON.stringify(value).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A") + "\n";
       const length = Buffer.byteLength(text); if (length > 768 || bytes + length > 8192) return;
@@ -100,7 +134,12 @@ function qianfanDiagnostics(isProxy: (value: any) => boolean) {
       const value = validate(input); if (!value) return;
       const id = [value.layer, value.route, value.caseId, value.phase, value.role].join("/");
       if (seen.has(id)) return; seen.add(id);
-      if (emitted >= 9) { suppressed = Math.min(9999, suppressed + 1); return; }
+      const worker = value.layer === "outer" && value.route === "none" && value.caseId === "none" && value.role === "cleanup" &&
+        ["retirement_router", "retirement_upstream"].includes(value.phase);
+      // The first failed SDK join retains its four records plus the helper
+      // envelope. Multiple case failures cannot crowd out either Worker side.
+      if (emitted >= 9 || (!worker && ordinary >= 7) || (worker && workerSides.has(value.phase))) { suppressed = Math.min(9999, suppressed + 1); return; }
+      if (worker) workerSides.add(value.phase); else ordinary++;
       emitted++; command(value);
     }
     function finish() {
@@ -177,6 +216,7 @@ function createLifetimeObserver(sdk?: { bindings: any[]; bodySucceeded: () => bo
   const operations: OriginalOperation[] = [], errors: unknown[] = [], readers: any[] = [], bodies: any[] = [], guards: any[] = [];
   const restores: Array<() => void> = [], bodyOwners = new WeakMap<object, any>();
   let sequence = 0;
+  let lastJoin: any = null;
   const event = () => ++sequence;
   const snapshot = (signal?: AbortSignal) => ({ aborted: signal?.aborted === true, reason: signal?.reason });
   function safe(callback: () => void) { try { callback(); } catch (error) { errors.push(error); } }
@@ -292,23 +332,73 @@ function createLifetimeObserver(sdk?: { bindings: any[]; bodySucceeded: () => bo
       if (count === operations.length && !operations.some(op => op.state === "pending")) break;
     }
     const structural: unknown[] = [...errors];
-    if (guards.some(row => row.acquired && (!row.hooked || row.releaseCalls < 1))) structural.push(new Error("original release not observed"));
-    if (bodies.some(row => !readers.some(reader => reader.body === row.body) && !operations.some(op => op.kind === "body.cancel" && op.owner === row.owner && op.receiver === row.body))) structural.push(new Error("original body consumer not observed"));
-    if (bodies.some(row => row.body.locked) || readers.some(row => row.receivedBody !== row.body || row.unlocks === 0 || row.unlocks !== row.unlocked)) structural.push(new Error("original reader still owned"));
+    const missingRelease = guards.some(row => row.acquired && (!row.hooked || row.releaseCalls < 1));
+    const missingConsumer = bodies.some(row => !readers.some(reader => reader.body === row.body) && !operations.some(op => op.kind === "body.cancel" && op.owner === row.owner && op.receiver === row.body));
+    const stillOwned = bodies.some(row => row.body.locked) || readers.some(row => row.receivedBody !== row.body || row.unlocks === 0 || row.unlocks !== row.unlocked);
+    if (missingRelease) structural.push(new Error("original release not observed"));
+    if (missingConsumer) structural.push(new Error("original body consumer not observed"));
+    if (stillOwned) structural.push(new Error("original reader still owned"));
     const releases = operations.filter(op => op.kind === "release");
     const releasesFulfilled = guards.every(row => row.acquired && row.returned && typeof row.returned.then === "function" && operations.some(op => op.kind === "acquire" && op.acquisition === row && op.pending === row.returned && op.state === "fulfilled") &&
       releases.filter(op => op.acquisition === row).length === row.releaseCalls && row.releaseCalls > 0) &&
       releases.every(op => op.state === "fulfilled" && op.pending && typeof op.pending.then === "function");
-    const failures = [...structural, ...operations.filter(op => (op.state === "rejected" || op.state === "sync_throw") &&
-      !(structural.length === 0 && releasesFulfilled && sdkAbortDisposition(op))).map(op => op.reason)];
+    const rejected = operations.filter(op => (op.state === "rejected" || op.state === "sync_throw") &&
+      !(structural.length === 0 && releasesFulfilled && sdkAbortDisposition(op)));
+    const failures = [...structural, ...rejected.map(op => op.reason)];
     if (sdk && !releasesFulfilled) failures.push(new Error("original SDK request release not fulfilled"));
+    // Diagnostic projection only, after the original verdict has been formed.
+    // Never add an observer/reporting failure to, or remove an original from, it.
+    try { lastJoin = joinDiagnostic([errors.length > 0, missingRelease, missingConsumer, stillOwned, rejected.length > 0, Boolean(sdk && !releasesFulfilled)], releasesFulfilled); } catch { /* original verdict wins */ }
     if (failures.length) throw new AggregateError(failures, "original Qianfan work failed");
+  }
+  function joinDiagnostic(flags: boolean[], releasesFulfilled: boolean) {
+    const bounded = (n: any) => Number.isInteger(n) && n >= 0 && n <= 9999 ? n : null;
+    // census: kind-major x [pending, fulfilled, rejected, sync_throw]. Unknown
+    // kinds use the final column group; they are counted, never silently lost.
+    const kinds = ["acquire", "reader.closed", "reader.read", "reader.cancel", "reader.unlock", "body.cancel", "release", "fetch", "handler", "waitUntil", "source.pull", "source.cancel", "timer-wake", "other"];
+    const states = ["pending", "fulfilled", "rejected", "sync_throw"];
+    const census = Array(56).fill(0);
+    for (const op of operations) census[(kinds.includes(op.kind) ? kinds.indexOf(op.kind) : 13) * 4 + states.indexOf(op.state)]++;
+    const rejected = operations.filter(op => op.state === "rejected" || op.state === "sync_throw");
+    const rows = rejected.slice(0, 4).map(op => {
+      const row = op.reader, acquisition = op.acquisition, reason = op.reason;
+      const related = (kind: string) => row ? operations.filter(item => item.kind === kind && item.reader === row && item.owner === op.owner && item.acquisition === acquisition) : [];
+      const closed = related("reader.closed").find(item => item.pending === row.closed);
+      // Bit positions 0..20: defined reason, owner bound, reader bound,
+      // acquisition bound, same original read/closed/cancel rejection reason,
+      // input aborted at invoke/reject, same reason at invoke/reject,
+      // invoke before every unlock, settle after first unlock return, original
+      // receiver, original closed, EOF, body locked, undefined reason, null
+      // reason, same acquisition guard-input signal, guard-input signal present.
+      // No private signal access.
+      const bits = [reason !== undefined, sdk ? sdk.bindings.includes(op.owner) && op.owner.claimed === true : null,
+        Boolean(row && readers.includes(row) && row.owner === op.owner && row.acquisition === acquisition),
+        Boolean(acquisition && guards.includes(acquisition) && acquisition.owner === op.owner),
+        ...["reader.read", "reader.closed", "reader.cancel"].map(kind => reason !== undefined && related(kind).some(item => item.state === "rejected" && item.reason === reason)),
+        op.signalAtInvoke.aborted, op.signalAtReject?.aborted === true,
+        reason !== undefined && op.signalAtInvoke.reason === reason, reason !== undefined && op.signalAtReject?.reason === reason,
+        Boolean(row && row.unlockInvocations.length && row.unlockInvocations.every((n: number) => op.invoked < n)),
+        Boolean(row && row.unlockReturns.length && typeof op.settled === "number" && op.settled > row.unlockReturns[0]),
+        Boolean(row && op.receiver === row.reader), Boolean(closed && closed.pending === row.closed), row?.eof === true, row?.body.locked === true,
+        reason === undefined, reason === null, Boolean(acquisition && op.guardSignal === acquisition.guardSignal), op.guardSignal !== undefined];
+      const mask = bits.reduce((mask: number, value, bit) => value === true ? mask + 2 ** bit : mask, 0);
+      return [kinds.includes(op.kind) ? kinds.indexOf(op.kind) : 13, states.indexOf(op.state), mask,
+        bounded(op.invoked), bounded(op.settled), bounded(op.unlocksAtInvoke), bounded(row?.unlockInvocations[0]), bounded(row?.unlockReturns[0]), bounded(closed?.settled)];
+    });
+    return {
+      contract: { bodySucceeded: sdk ? sdk.bodySucceeded() : null, failureFlags: flags.map(Number), releasesFulfilled,
+        // observer errors, guards, acquired guards, release calls, readers,
+        // EOF readers, locked bodies, unlock invocations, successful returns.
+        ownership: [errors.length, guards.length, guards.filter(row => row.acquired).length, guards.reduce((n, row) => n + row.releaseCalls, 0), readers.length,
+          readers.filter(row => row.eof).length, bodies.filter(row => row.body.locked).length, readers.reduce((n, row) => n + row.unlocks, 0), readers.reduce((n, row) => n + row.unlocked, 0)].map(bounded) },
+      census: { census: census.map(bounded) }, rejection: { rejections: rows, omitted: bounded(Math.max(0, rejected.length - rows.length)) },
+    };
   }
   async function restore() { const failures: unknown[] = []; for (const undo of restores.splice(0).reverse()) try { undo(); } catch (error) { failures.push(error); } if (failures.length) throw new AggregateError(failures, "Qianfan observer restoration failed"); }
   function summary() { return { operations: operations.length, settled: operations.filter(op => op.state !== "pending").length,
     rejected: operations.filter(op => op.state === "rejected" || op.state === "sync_throw").length + errors.length,
     readers: readers.length, unlocked: readers.filter(row => row.unlocks > 0 && row.unlocks === row.unlocked).length, releases: guards.reduce((n, row) => n + row.releaseCalls, 0) }; }
-  return { operations, errors, readers, bodies, guards, watch, invoke, patch, signal, partial, response, guard, join, restore, summary };
+  return { operations, errors, readers, bodies, guards, watch, invoke, patch, signal, partial, response, guard, join, restore, summary, joinDiagnostic: () => lastJoin };
 }
 const cancelReceiptLine = 'QIANFAN_CANCEL_RECEIPT {"v":1,"scenario":"cancel","partialDelivery":true,"callerAborted":true,"originalsJoined":true,"restored":true}';
 function createCancelReceiptReceiver(context: { diagnostic: (...args: any[]) => any }) {
@@ -351,6 +441,16 @@ function sdkStage(phase: string, route = diagnosticRoute) { diagnosticPhase = ph
 function sdkCleanup(phase: string, original: () => any) {
   return () => diagnostic.observe(original, (outcome, error) => {
     sdkDiagnostic(phase, "cleanup", outcome, error);
+    if (phase === "original_join" && outcome === "rejected") {
+      try {
+        const details = lifetime.joinDiagnostic();
+        for (const [phase, facts] of [["join_contract", details?.contract], ["join_census", details?.census], ["join_rejections", details?.rejection]]) {
+          if (!facts || diagnosticCount >= 512) continue;
+          const line = diagnostic.encode(diagnostic.record({ layer: "sdk", route: diagnosticRoute, caseId: diagnosticCase, phase, role: "summary" }, "rejected", error, facts));
+          if (line) { diagnosticCount++; process.stdout.write(line); }
+        }
+      } catch { /* original join rejection remains unchanged */ }
+    }
     if (phase === "original_join" && outcome !== "entered") sdkDiagnostic("release", "summary", "unknown");
   });
 }

@@ -65,10 +65,15 @@ function outerDiagnostics(context, annotations = stepAnnotations) {
       // Prioritize real failure outcomes; a pending boundary remains only an
       // observation. No SDK record means unknown, never an inferred loader bug.
       for (const record of values.filter(record => record.outcome === "rejected")) annotations.emit(record);
-      const last = records.at(-1); if (last && last.outcome !== "rejected") annotations.emit(last);
+      const last = records.at(-1); if (last && last.outcome !== "rejected" && !values.some(record => record.phase === "join_contract")) annotations.emit(last);
     });
   }
   return { context: adapter, helper, failure,
+    retirement(side, predicate, proof, error) {
+      failed = true;
+      safe(() => annotations.emit(diagnostic.record(base("retirement_" + side, "cleanup"), "rejected", error,
+        { ...proof.join?.contract, predicate })));
+    },
     stage(next) { phase = next; },
     cleanup(at, original) { return () => diagnostic.observe(original, (outcome, error) => {
       if (outcome === "rejected") failure(error, at, "cleanup");
@@ -117,6 +122,7 @@ test("Qianfan one-step annotation budget deduplicates, caps and flushes only onc
   emitter.emit(first); emitter.emit(first);
   emitter.emit({ ...first, route: "discovery" });
   for (const caseId of diagnostic.cases.filter(id => id !== "none")) emitter.emit({ ...first, caseId });
+  for (const side of ["router", "upstream"]) emitter.emit({ ...first, layer: "outer", route: "none", caseId: "none", role: "cleanup", phase: "retirement_" + side, predicate: "accepted" });
   emitter.finish(); emitter.finish();
   assert.equal(lines.length, 10); assert.equal(emitter.summary().emitted, 9);
   assert.ok(lines.every(line => line.startsWith("::error title=Qianfan contract diagnostic::") && Buffer.byteLength(line) <= 768));
@@ -436,16 +442,202 @@ test("Qianfan cancellation receipt is exact once and requires original consumer 
   assert.equal(caught, true);
 });
 
-async function retireWorker(mf) {
+function verifyRetirement(proof, side, diagnostics) {
+  let predicate = "accepted";
+  try {
+    assert.equal(proof.accepted, true);
+    predicate = "settled"; assert.equal(proof.settled, true);
+    predicate = "rejected"; assert.equal(proof.rejected, 0);
+    if (side === "router") { predicate = "unlocked"; assert.equal(proof.readers, proof.unlocked); }
+  } catch (error) {
+    try { diagnostics?.retirement(side, predicate, proof, error); } catch { /* original assertion wins */ }
+    throw error;
+  }
+}
+test("Qianfan join diagnostic schema bounds fixed columns without invoking nested accessors", () => {
+  const context = { ...diagnosticContext, caseId: "error", phase: "join_contract", role: "summary" };
+  const facts = { bodySucceeded: true, failureFlags: [0, 0, 0, 0, 1, 0], releasesFulfilled: true, ownership: [0, 1, 1, 1, 1, 0, 0, 1, 1] };
+  const record = diagnostic.record(context, "rejected", new AggregateError([undefined]), facts);
+  assert.ok(record); assert.deepEqual(diagnostic.validate(record), record);
+  let touched = 0;
+  const getter = Array(9).fill(0); Object.defineProperty(getter, "0", { get() { touched++; throw undefined; } });
+  const proxy = new Proxy([], { get() { touched++; throw undefined; } });
+  for (const extra of [
+    { failureFlags: [0, 0, 0, 0, 2, 0] }, { failureFlags: [0] }, { ownership: getter }, { ownership: proxy },
+    { ownership: Array(9) }, { ownership: Array(9).fill(10000) }, { census: Array(56).fill(-1) },
+    { census: Array(55).fill(0) }, { rejections: Array(5).fill(Array(9).fill(0)) },
+    { rejections: [[14, 2, 0, 1, 2, 0, null, null, null]] }, { rejections: [[2, 1, 0, 1, 2, 0, null, null, null]] },
+    { rejections: [[2, 2, 2097152, 1, 2, 0, null, null, null]] }, { rejections: [[2, 2, 0, 10000, 2, 0, null, null, null]] },
+    { rejections: [[2, 2, null, 1, 2, 0, null, null, null]] }, { rejections: [getter] }, { omitted: -1 }, { predicate: "private" }, { bodySucceeded: "true" },
+  ]) assert.equal(diagnostic.validate({ ...record, ...extra }), null);
+  assert.equal(touched, 0);
+  assert.ok(diagnostic.validate({ ...record, ownership: Array(9).fill(null) }));
+});
+
+async function errorCaseObserver(body, release = () => Promise.resolve()) {
+  const bindings = createRequestBindings(), owner = bindings.expect("error", "chat", "https://fixture.example/chat", "POST", "fixture-error");
+  bindings.claim(owner.url, { method: "POST", headers: { authorization: "Bearer fixture-error" } }, "chat");
+  const life = createLifetimeObserver({ bindings: bindings.bindings, bodySucceeded: () => true });
+  const response = new Response(body), result = { response, release }, acquired = Promise.resolve(result);
+  assert.equal(life.guard(() => acquired, null, [], owner), acquired); await acquired;
+  return { life, result, response, owner, acquired };
+}
+function joinRecordParts(life) {
+  const parts = life.joinDiagnostic(); assert.ok(parts);
+  return [["join_contract", parts.contract], ["join_census", parts.census], ["join_rejections", parts.rejection]].map(([phase, facts]) => {
+    const value = diagnostic.record({ ...diagnosticContext, caseId: "error", phase, role: "summary" }, "rejected", new AggregateError([]), facts);
+    assert.ok(value, phase); return value;
+  });
+}
+
+test("Qianfan join projection retains normal EOF and clean early cancellation acceptance", async () => {
+  for (const early of [false, true]) {
+    const f = await errorCaseObserver(new ReadableStream({ start(controller) { if (!early) controller.close(); } }, { highWaterMark: 0 }));
+    const reader = f.response.body.getReader(), closed = reader.closed, reading = reader.read();
+    let cancel;
+    if (early) { cancel = reader.cancel(); assert.equal(f.life.operations.at(-1).pending, cancel); await cancel; }
+    await reading; await closed; reader.releaseLock(); const releasing = f.result.release(); await releasing;
+    await f.life.join();
+    const proof = f.life.joinDiagnostic(); assert.deepEqual(proof.contract.failureFlags, [0, 0, 0, 0, 0, 0]);
+    assert.equal(proof.contract.bodySucceeded, true); assert.equal(proof.contract.releasesFulfilled, true);
+    assert.deepEqual(proof.contract.ownership, [0, 1, 1, 1, 1, 1, 0, 1, 1]);
+    assert.equal(proof.census.census[1], 1); assert.equal(proof.census.census[6 * 4 + 1], 1);
+    assert.equal(f.life.operations.find(op => op.kind === "reader.closed").pending, closed);
+    assert.equal(f.life.operations.find(op => op.kind === "reader.read").pending, reading);
+    assert.equal(f.life.operations.find(op => op.kind === "release").pending, releasing);
+    assert.deepEqual(proof.rejection, { rejections: [], omitted: 0 }); joinRecordParts(f.life); await f.life.restore();
+  }
+});
+
+test("Qianfan nonabort source errors keep original read closed cancel failures including undefined", async () => {
+  for (const reason of [undefined, new Error("synthetic source error")]) {
+    const f = await errorCaseObserver(new ReadableStream({ start(controller) { controller.error(reason); } }));
+    const reader = f.response.body.getReader(), closed = reader.closed, reading = reader.read(), cancelling = reader.cancel();
+    await Promise.allSettled([reading, closed, cancelling]); reader.releaseLock(); await f.result.release();
+    await assert.rejects(f.life.join(), error => error.errors.length === 3 && error.errors.every(value => value === reason));
+    const proof = f.life.joinDiagnostic(); assert.deepEqual(proof.contract.failureFlags, [0, 0, 0, 0, 1, 0]);
+    assert.equal(proof.contract.bodySucceeded, true); assert.equal(proof.contract.releasesFulfilled, true);
+    assert.equal(proof.rejection.rejections.length, 3);
+    for (const row of proof.rejection.rejections) {
+      assert.equal(row[1], 2); const bits = row[2];
+      for (const bit of [1, 2, 3, 14, 19]) assert.ok(bits & 2 ** bit);
+      for (const bit of [7, 8, 9, 10, 16, 20]) assert.equal(bits & 2 ** bit, 0);
+      for (const bit of [0, 4, 5, 6]) assert.equal(Boolean(bits & 2 ** bit), reason !== undefined);
+      assert.equal(Boolean(bits & 2 ** 17), reason === undefined);
+    }
+    assert.equal(f.life.operations.find(op => op.kind === "reader.read").pending, reading);
+    assert.equal(f.life.operations.find(op => op.kind === "reader.cancel").pending, cancelling);
+    joinRecordParts(f.life); await f.life.restore();
+  }
+});
+
+test("Qianfan pending reader unlock rejection is not converted into expected provider error", async () => {
+  const f = await errorCaseObserver(new ReadableStream({}, { highWaterMark: 0 }));
+  const reader = f.response.body.getReader(), closed = reader.closed, reading = reader.read();
+  reader.releaseLock(); await Promise.allSettled([reading, closed]); await f.result.release();
+  await assert.rejects(f.life.join(), error => error.errors.length === 2 && error.errors.every(value => value instanceof TypeError));
+  const proof = f.life.joinDiagnostic(); assert.deepEqual(proof.contract.failureFlags, [0, 0, 0, 0, 1, 0]);
+  assert.equal(proof.contract.ownership[5], 0); assert.equal(proof.contract.ownership[6], 0);
+  assert.ok(proof.rejection.rejections.every(row => (row[2] & 2 ** 12) !== 0));
+  assert.equal(f.life.operations.find(op => op.kind === "reader.closed").pending, closed);
+  joinRecordParts(f.life); await f.response.body.cancel(); await f.life.restore();
+});
+
+test("Qianfan missing and failed original releases stay hard with exact diagnostic categories", async () => {
+  const missing = createLifetimeObserver({ bindings: [], bodySucceeded: () => true });
+  const frozen = Object.freeze({ response: new Response(null), release() { return Promise.resolve(); } });
+  const acquired = Promise.resolve(frozen); missing.guard(() => acquired, null, [], {}); await acquired;
+  await assert.rejects(missing.join(), error => error.errors.length === 3);
+  assert.deepEqual(missing.joinDiagnostic().contract.failureFlags, [1, 1, 0, 0, 0, 1]);
+  assert.equal(missing.joinDiagnostic().contract.ownership[3], 0); joinRecordParts(missing); await missing.restore();
+  for (const sync of [false, true]) {
+    const f = await errorCaseObserver(new ReadableStream({ start(controller) { controller.close(); } }), () => { if (sync) throw undefined; return Promise.reject(undefined); });
+    const reader = f.response.body.getReader(); await reader.read(); await reader.closed; reader.releaseLock();
+    let caught = false; try { await f.result.release(); } catch (reason) { caught = true; assert.equal(reason, undefined); }
+    assert.equal(caught, true);
+    await assert.rejects(f.life.join(), error => error.errors.length === 2 && error.errors[0] === undefined);
+    const proof = f.life.joinDiagnostic(); assert.deepEqual(proof.contract.failureFlags, [0, 0, 0, 0, 1, 1]);
+    assert.equal(proof.contract.releasesFulfilled, false); assert.equal(proof.rejection.rejections[0][0], 6);
+    assert.equal(proof.rejection.rejections[0][1], sync ? 3 : 2); joinRecordParts(f.life); await f.life.restore();
+  }
+});
+
+test("Qianfan join projection distinguishes missing consumption and still-owned native readers", async () => {
+  const missing = createLifetimeObserver(), body = new ReadableStream({ start(controller) { controller.close(); } });
+  missing.response(new Response(body), {});
+  await assert.rejects(missing.join(), error => error.errors.length === 1);
+  assert.deepEqual(missing.joinDiagnostic().contract.failureFlags, [0, 0, 1, 0, 0, 0]);
+  joinRecordParts(missing); await body.cancel(); await missing.restore();
+  const owned = createLifetimeObserver(), response = new Response(new ReadableStream({ start(controller) { controller.close(); } }));
+  owned.response(response, {}); const reader = response.body.getReader(); await reader.read(); await reader.closed;
+  await assert.rejects(owned.join(), error => error.errors.length === 1);
+  assert.deepEqual(owned.joinDiagnostic().contract.failureFlags, [0, 0, 0, 1, 0, 0]);
+  assert.deepEqual(owned.joinDiagnostic().contract.ownership.slice(4), [1, 1, 1, 0, 0]);
+  joinRecordParts(owned); reader.releaseLock(); await owned.restore();
+});
+
+test("Qianfan diagnostic census counts dynamic originals and bounds overflow without false zero", async () => {
+  const life = createLifetimeObserver();
+  for (let i = 0; i < 10000; i++) life.watch("handler", i, {});
+  await life.join(); assert.equal(life.operations.length, 10000);
+  assert.equal(life.joinDiagnostic().census.census[8 * 4 + 1], null); joinRecordParts(life);
+  const rejected = createLifetimeObserver();
+  for (let i = 0; i < 6; i++) rejected.watch("waitUntil", Promise.reject(undefined), {});
+  await assert.rejects(rejected.join(), error => error.errors.length === 6 && error.errors.every(value => value === undefined));
+  assert.equal(rejected.joinDiagnostic().rejection.rejections.length, 4); assert.equal(rejected.joinDiagnostic().rejection.omitted, 2);
+  joinRecordParts(rejected);
+});
+
+test("Qianfan join records fit the existing step budget and preserve strict Worker failed predicates", async () => {
+  const f = await errorCaseObserver(new ReadableStream({ start(controller) { controller.error(undefined); } }));
+  const reader = f.response.body.getReader(); await Promise.allSettled([reader.read(), reader.cancel()]); reader.releaseLock(); await f.result.release();
+  await assert.rejects(f.life.join(), AggregateError);
+  const records = joinRecordParts(f.life), lines = [], diagnostics = outerDiagnostics({}, diagnostic.emitter(text => lines.push(text)));
+  const primary = Object.assign(new Error("not emitted"), { stdout: records.map(record => diagnostic.encode(record)).join(""), code: 1 });
+  await assert.rejects(diagnostics.helper(() => Promise.reject(primary)), error => error === primary);
+  for (const side of ["router", "upstream"]) for (const [predicate, proof] of [
+    ["accepted", { accepted: false }], ["settled", { accepted: true, settled: false }],
+    ["rejected", { accepted: true, settled: true, rejected: 1 }],
+    ...(side === "router" ? [["unlocked", { accepted: true, settled: true, rejected: 0, readers: 1, unlocked: 0 }]] : []),
+  ]) {
+    const events = []; assert.throws(() => verifyRetirement({ ...proof, join: f.life.joinDiagnostic() }, side, { retirement(...args) { events.push(args); } }), assert.AssertionError);
+    assert.equal(events[0][0], side); assert.equal(events[0][1], predicate);
+  }
+  for (const side of ["router", "upstream"]) assert.throws(() => verifyRetirement({ accepted: false, join: f.life.joinDiagnostic() }, side, diagnostics), assert.AssertionError);
+  diagnostics.finish(); diagnostics.finish();
+  assert.equal(lines.length, 6); assert.ok(lines.every(line => line.startsWith("::error") && Buffer.byteLength(line) <= 768));
+  assert.ok(Buffer.byteLength(lines.join("")) <= 8192);
+  assert.ok(lines.some(line => line.includes('"phase":"retirement_router"') && line.includes('"predicate":"accepted"')));
+  assert.ok(lines.some(line => line.includes('"phase":"retirement_upstream"')));
+  await f.life.restore();
+});
+
+test("Qianfan multiple SDK join failures reserve both strict Worker predicates within nine annotations", async () => {
+  const lines = [], diagnostics = outerDiagnostics({}, diagnostic.emitter(line => lines.push(line)));
+  const records = [];
+  for (const caseId of ["error", "card0", "card1"]) for (const phase of ["original_join", "join_contract", "join_census", "join_rejections"]) {
+    records.push(diagnostic.record({ ...diagnosticContext, caseId, phase, role: phase === "original_join" ? "cleanup" : "summary" }, "rejected", new AggregateError([undefined])));
+  }
+  const primary = Object.assign(new Error("never forwarded"), { stdout: records.map(record => diagnostic.encode(record)).join(""), code: 1 });
+  await assert.rejects(diagnostics.helper(() => Promise.reject(primary)), error => error === primary);
+  diagnostics.failure(undefined, "receipt");
+  for (const side of ["router", "upstream"]) assert.throws(() => verifyRetirement({ accepted: false }, side, diagnostics), assert.AssertionError);
+  diagnostics.failure(undefined, "retirement", "cleanup"); diagnostics.finish(); diagnostics.finish();
+  const emitted = lines.map(line => JSON.parse(line.slice(line.indexOf("::{") + 2)));
+  assert.equal(emitted.length, 10); assert.equal(emitted.at(-1).phase, "overflow"); assert.ok(emitted.at(-1).suppressed > 0);
+  assert.deepEqual(emitted.filter(record => record.caseId === "error").map(record => record.phase), ["original_join", "join_contract", "join_census", "join_rejections"]);
+  for (const side of ["router", "upstream"]) assert.equal(emitted.filter(record => record.phase === "retirement_" + side && record.predicate === "accepted").length, 1);
+  assert.ok(lines.every(line => line.startsWith("::error") && Buffer.byteLength(line) <= 768)); assert.ok(Buffer.byteLength(lines.join("")) <= 8192);
+});
+
+async function retireWorker(mf, diagnostics) {
   if (!mf) return;
   await preserveFailures(async () => {
     const router = await mf.getWorker("router"), response = await router.fetch("https://fixture.example/fixture/retirement");
-    const proof = await response.json();
-    assert.equal(proof.accepted, true); assert.equal(proof.settled, true); assert.equal(proof.rejected, 0);
-    assert.equal(proof.readers, proof.unlocked);
+    const proof = await response.json(); verifyRetirement(proof, "router", diagnostics);
   }, [async () => {
     const upstream = await mf.getWorker("upstream"), response = await upstream.fetch("https://fixture.example/retirement");
-    const proof = await response.json(); assert.equal(proof.accepted, true); assert.equal(proof.settled, true); assert.equal(proof.rejected, 0);
+    const proof = await response.json(); verifyRetirement(proof, "upstream", diagnostics);
   }]);
 }
 
@@ -556,7 +748,7 @@ test("actual OpenClaw Qianfan configured native client through workerd and SQLit
       assert.ok(usage.usage.events.every(event => event.actual_cost_micros === 0));
     }
     } catch (error) { diagnostics.failure(error); throw error; }
-  }, [diagnostics.cleanup("retirement", () => retireWorker(mf)), diagnostics.cleanup("dispose", () => mf?.dispose()), diagnostics.cleanup("rm", () => rm(temporary, { recursive: true, force: true }))]);
+  }, [diagnostics.cleanup("retirement", () => retireWorker(mf, diagnostics)), diagnostics.cleanup("dispose", () => mf?.dispose()), diagnostics.cleanup("rm", () => rm(temporary, { recursive: true, force: true }))]);
   } catch (error) { if (!diagnostics.failed) diagnostics.failure(error); throw error; }
   finally { diagnostics.finish(); }
 });
@@ -594,7 +786,7 @@ let accepted = false;
 async function retirement() {
   try { await preserveFailures(async () => { await lifetime.join(); ingress.verify(); outbound.verify(); }, [() => lifetime.restore()]); accepted = true; } catch (error) { lifetime.errors.push(error); }
   const proof = lifetime.summary();
-  return Response.json({ ...proof, settled: proof.operations === proof.settled, accepted });
+  return Response.json({ ...proof, settled: proof.operations === proof.settled, accepted, join: lifetime.joinDiagnostic() });
 }
 export default { ...handler, fetch(request, env, context) {
   const path = new URL(request.url).pathname;
@@ -625,7 +817,7 @@ export default { async fetch(request) {
     if (request.url === "https://fixture.example/retirement") {
       let accepted = false;
       try { await preserveFailures(async () => { await lifetime.join(); bindings.verify(); }, [() => lifetime.restore()]); accepted = true; } catch (error) { lifetime.errors.push(error); }
-      const proof = lifetime.summary(); return Response.json({ ...proof, settled: proof.operations === proof.settled, accepted });
+      const proof = lifetime.summary(); return Response.json({ ...proof, settled: proof.operations === proof.settled, accepted, join: lifetime.joinDiagnostic() });
     }
     const owner = bindings.claim(request, undefined, request.method === "GET" ? "catalog" : "chat"); lifetime.signal(owner, request.signal);
     const body = request.method === "POST" ? await request.json() : null;
