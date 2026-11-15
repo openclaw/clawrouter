@@ -13,6 +13,7 @@ import { frozenGitEnvironment, validateGitExecutable, frozenSource } from "../sc
 import { edgeProof } from "../scripts/edge-proof-profile.mjs";
 import { reaperFrame, createReaperClient, parseControlStat, validateControlPair, validateReaperElf, parseReaperTerminal, requireReaperTerminal, createReaperTerminalRetention, hostedCensusMatrix } from "../scripts/edge-proof-container.mjs";
 import { bindCensusControls, classifyCensusControl, privateProcesses, createCensusComparisonWitness } from "../scripts/edge-proof.mjs";
+import { nativeCompileOperations, nativeCompileRoles, validateCompileDetail } from "../scripts/edge-proof.mjs";
 import { launchCli, createPackagingDiagnostics, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, packReceiptOwnedDiagnostic, packReceiptCodeDiagnostic, packReceiptAssociatedDiagnostic, validateReceiptAssociatedDiagnostic, packReceiptCensusDiagnostic, packReceiptObservedWranglerDiagnostic, unpackReceiptObservedWranglerDiagnostic, unpackReceiptWranglerDiagnostic, validateReceiptObservedWranglerDiagnostic, packObservedWranglerCloseDiagnostic, validateObservedWranglerCloseDiagnostic, validateObservedWranglerGroup, packReceiptWranglerDiagnostic, validateReceiptWranglerDiagnostic, packWranglerCloseDiagnostic, validateWranglerCloseDiagnostic, validateReportedWranglerProcess, unpackReceiptCensusDiagnostic, validateReceiptCensusDiagnostic, packCensusCloseDiagnostic, unpackCensusCloseDiagnostic, validateCensusCloseDiagnostic, validateFinalCensus, createFinalCensusLedger, censusStates, unpackReceiptOwnedDiagnostic, validateReceiptOwnedDiagnostic, validateOwnedTrace, validateOwnedCloseDiagnostic, validateOwnedCodeCloseDiagnostic, validateOwnedCode, validateReceiptCodeDiagnostic, ownedCodeClasses, classifyOwnedCode, createOwnedProcessLedger, projectionBoundaries, createContainerDiagnostics, containerProcessDiagnostic, imageBuildStages, runOwnedProcess, nativePrepareStages, createNativePrepareDiagnostics, enumerationOperations, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, initGuardTags, initSourcePhases, validateInitDetail, mountPredicates, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission } from "../scripts/edge-proof.mjs";
 
 const hex = "a".repeat(64), other = "b".repeat(64), imageId = "sha256:" + hex;
@@ -664,9 +665,10 @@ async function reaperCompileFixture() {
   Buffer.from([127,69,76,70,2,1,1]).copy(elf); elf.writeUInt16LE(3,16); elf.writeUInt16LE(62,18); elf.writeUInt32LE(1,20);
   elf.writeBigUInt64LE(64n,32); elf.writeUInt16LE(56,54); elf.writeUInt16LE(1,56); elf.writeUInt32LE(3,64);
   elf.writeBigUInt64LE(128n,72); elf.writeBigUInt64LE(BigInt(interpreter.length),96); interpreter.copy(elf,128);
-  const calls = [], state = { failAt: null, reason: undefined, failures: 0, transform: null, contextHash: value.contextHash };
+  const calls = [], state = { failAt: null, reason: undefined, failures: 0, transform: null, phase:null, boundaryFault:null, contextHash: value.contextHash };
+  const boundary = () => { if (state.boundaryFault && state.phase?.[0] === state.boundaryFault[0] && state.phase?.[1] === state.boundaryFault[1]) { state.failures++; throw state.reason; } };
   const invoke = (name, args, operation) => {
-    const index = calls.length; calls.push({ name, args });
+    const index = calls.length; calls.push({ name, args, phase:state.phase });
     if (index === state.failAt) { state.failures++; throw state.reason; }
     const result = operation(); return state.transform ? state.transform(name, args, result) : result;
   };
@@ -674,16 +676,16 @@ async function reaperCompileFixture() {
   const bindings = {
     Buffer, containerContract, process: runtime, join, isAbsolute,
     hash: owner.sha, hashPattern: /^[a-f0-9]{64}$/,
-    check: (ok, code) => { if (!ok) throw new Error(code); },
+    check: (ok, code) => { boundary(); if (!ok) throw new Error(code); },
     same: (a,b) => JSON.stringify(a) === JSON.stringify(b),
-    validateContextPlan: owner.api.validateContextPlan,
+    validateContextPlan: (...args) => { boundary(); return owner.api.validateContextPlan(...args); },
     realpath: async (...args) => invoke("realpath", args, () => args[0] === "/usr/bin/gcc" ? tools.gcc : args[0]),
     stat: async (...args) => invoke("stat", args, () => { assert.ok(disk.has(args[0]), "missing inert stat: " + args[0]); return { mode: 0o755, isFile: () => invoke("isFile", args, () => true) }; }),
     readFile: async (...args) => invoke("readFile", args, () => { assert.ok(disk.has(args[0]), "missing inert read: " + args[0]); const bytes = Buffer.from(disk.get(args[0])); return args[1] ? bytes.toString(args[1]) : bytes; }),
     writeFile: async (...args) => invoke("writeFile", args, () => { assert.equal(args[0], paths.manifest); assert.deepEqual(args[2], { flag: "wx", mode: 0o444 }); assert.ok(!disk.has(args[0]), "exclusive inert manifest"); disk.set(args[0], Buffer.from(args[1])); }),
     execFileSync: (...args) => invoke("execFileSync", args, () => {
       const [command, argv, options] = args;
-      assert.deepEqual(options, { env: { PATH: "/usr/bin:/bin", LANG: "C", HOME: "/opt/build-home" }, encoding: "utf8", timeout: 60000, maxBuffer: 1024*1024 });
+      assert.deepEqual(structuredClone(options), { env: { PATH: "/usr/bin:/bin", LANG: "C", HOME: "/opt/build-home" }, encoding: "utf8", timeout: 60000, maxBuffer: 1024*1024 });
       if (argv[0] === "--version") { const role = Object.keys(tools).find(role => tools[role] === command); assert.ok(role); return role + " inert-version\n"; }
       assert.equal(command, tools.gcc);
       if (argv[0] === "-dumpmachine") return "x86_64-linux-gnu\n";
@@ -697,10 +699,21 @@ async function reaperCompileFixture() {
     }),
   };
   const helpers = select("const own =", "export function raiseContainerFailures(") + select("const reaperBuildRoot =", "export function validateNativeIdentity(");
-  const api = new Function(...Object.keys(bindings), helpers + "return { compileReaper, qualifyReaper, validateReaperBuild, reaperCompileArguments };")(...Object.values(bindings));
+  const exports = "({ compileReaper, qualifyReaper, validateReaperBuild, reaperCompileArguments })";
+  let api = new Function(...Object.keys(bindings), helpers + "return " + exports + ";")(...Object.values(bindings));
+  const useFaultRealm = () => {
+    // These realm-local JS methods are original expression seams, not native I/O.
+    // No global prototype or production function body is changed.
+    api = runInNewContext(`
+      for (const [prototype,names] of [[Array.prototype,["push","map","filter","every"]],[String.prototype,["trim","slice","replace","split","startsWith"]],[JSON,["parse","stringify"]]]) {
+        for (const name of names) { const original=prototype[name]; prototype[name]=function(...args) { boundary(); return Reflect.apply(original,this,args); }; }
+      }
+      ${helpers}; ${exports}
+    `, {...bindings,boundary});
+  };
   const setPlan = change => { const plan = JSON.parse(disk.get(paths.context)); change(plan); const text = JSON.stringify(plan); disk.set(paths.context, Buffer.from(text)); state.contextHash = owner.sha(text); };
-  return { api, paths, tools, disk, calls, state, runtime, elf, setPlan, sha: owner.sha,
-    compile: () => api.compileReaper(state.contextHash), qualify: () => api.qualifyReaper(state.contextHash) };
+  return { get api() { return api; }, paths, tools, disk, calls, state, runtime, elf, setPlan, useFaultRealm, sha: owner.sha,
+    compile: point => api.compileReaper(state.contextHash, point), qualify: () => api.qualifyReaper(state.contextHash) };
 }
 test("actual preparation helpers compile and qualify one closed inert context without native calls", async () => {
   const f = await reaperCompileFixture(); await f.compile();
@@ -814,6 +827,164 @@ test("actual preparation helper extraction retains committed imports and helper 
 });
 // END actual preparation helper tests.
 
+// BEGIN existing-channel compile tuple tests. Only source-bound inert operations.
+const compilePackets = [];
+async function compileTupleAttempt(f, options = {}) {
+  const source = await readFile(new URL("../scripts/edge-proof-container.mjs",import.meta.url),"utf8");
+  const body = source.slice(source.indexOf("async function containerPrepare("),source.indexOf("async function containerCi("));
+  const identity = {contextHash:f.state.contextHash,nonce:hex}, frames = [], points = [];
+  let writes = 0;
+  const recorder = createNativePrepareDiagnostics(identity,(bytes,offset,length) => {
+    if (options.writerFault && writes++ === 0) throw undefined;
+    frames.push(bytes.subarray(offset,offset+length).toString()); return length;
+  });
+  nativePrepareStages.slice(0,3).forEach(stage=>recorder.enter(stage));
+  const later = Object.hasOwn(options,"later") ? options.later : new Error("inert later runtime operation");
+  const bindings = {
+    check:(ok,code)=>{if(!ok)throw new Error(code);},hashPattern:/^[a-f0-9]{64}$/,
+    compileReaper:(context,point)=>{
+      assert.equal(context,f.state.contextHash);
+      return f.api.compileReaper(context,(operation,role="none")=>{
+        f.state.phase=[operation,role]; points.push([operation,role]);
+        point(operation,options.pointFault ? "foreign" : role);
+      });
+    },
+    qualifyImageInputs:async(_context,prepare)=>{prepare.enter("runtime");throw later;},
+    execFileSync:()=>assert.fail("later command after original failure"),
+    writeFile:()=>assert.fail("receipt after original failure"),containerContract,join,
+    process:{stdout:{write:()=>assert.fail("output after original failure")}},
+  };
+  const prepare = new Function(...Object.keys(bindings),body+"return containerPrepare;")(...Object.values(bindings));
+  let failed=false,reason;
+  try { await prepare(options.arguments ?? [f.state.contextHash],recorder); }
+  catch(error) { failed=true;reason=error; }
+  recorder.finish(failed,reason);
+  // Change only the outer capture's invocation identity, not any emitted frame.
+  const capture = nativePrepareCapture(frames.join(""));
+  capture.stdout=capture.stdout.split("\n").map(line=>{
+    if(!line.startsWith("EDGE_BUILD_STAGE_V1 "))return line;
+    const row=JSON.parse(line.slice("EDGE_BUILD_STAGE_V1 ".length));row.context=identity.contextHash;return "EDGE_BUILD_STAGE_V1 "+JSON.stringify(row);
+  }).join("\n");
+  capture.outputSummary.stdout.bytes=Buffer.byteLength(capture.stdout);capture.outputSummary.stdout.sha256=f.sha(capture.stdout);
+  const summary=parseNativePrepareStages(capture,identity);validateContainerDiagnostic(summary);
+  return {failed,reason,recorder,frames,points,identity,capture,summary,later};
+}
+async function compileTuplePacket(attempt) {
+  const report=createContainerDiagnostics();let failure,failed=false,calls=0;
+  try { await report.step("image_build",()=>observeImageBuild(()=>{calls++;return attempt.capture;},()=>assert.fail("image id after failure"),()=>assert.fail("receipt after failure"),report,attempt.identity)); }
+  catch(error){failed=true;failure=error;}
+  assert.equal(failed,true);assert.equal(calls,1);assert.ok(failure instanceof AggregateError);
+  report.mark("entry","rejected",failure);const lines=[];emitContainerFailure(report.records,line=>lines.push(line));
+  const packet=lines.map(line=>JSON.parse(line.slice(line.indexOf("::{")+2)));compilePackets.push(packet);return packet;
+}
+test("compile tuple actual helper preserves original commands and successful clearing",async()=>{
+  const off=await reaperCompileFixture();await off.compile();
+  const on=await reaperCompileFixture(),attempt=await compileTupleAttempt(on);
+  assert.equal(attempt.reason,attempt.later);assert.equal(attempt.summary.stage,"runtime");assert.ok(!Object.hasOwn(attempt.summary,"compile"));
+  assert.deepEqual(on.calls.map(({name,args})=>({name,args})),off.calls.map(({name,args})=>({name,args})));
+  const expected=[];for(let id=1;id<=30;id++){
+    if(id===8){for(const role of nativeCompileRoles.slice(1)){if(role!=="gcc")expected.push([8,role]);expected.push([9,role],[10,role],[11,role]);}id=11;}
+    else expected.push([id,[6,7,12,13].includes(id)?"gcc":"none"]);
+  }
+  assert.deepEqual(attempt.points,expected);
+  const arg=await reaperCompileFixture(),bad=await compileTupleAttempt(arg,{arguments:[]});
+  assert.equal(bad.reason.message,"prepare-arguments");assert.equal(arg.calls.length,0);assert.ok(!Object.hasOwn(bad.summary,"compile"));
+});
+test("compile tuple actual original I/O failures preserve reason and aggregate inventory attribution",async()=>{
+  const base=await reaperCompileFixture();await compileTupleAttempt(base);let cases=0;
+  for(let index=0;index<base.calls.length;index++)for(const reason of [new Error("inert original compile failure"),undefined]){
+    const f=await reaperCompileFixture();f.state.failAt=index;f.state.reason=reason;
+    const attempt=await compileTupleAttempt(f),[op,role]=base.calls[index].phase;
+    assert.equal(attempt.failed,true);assert.equal(attempt.reason,reason);assert.equal(f.state.failures,1);
+    assert.deepEqual(attempt.summary.compile,[1,op,nativeCompileRoles.indexOf(role)]);assert.equal(attempt.summary.defined,reason!==undefined);
+    assert.equal(attempt.summary.reportFailures,0);assert.deepEqual(f.calls[index],base.calls[index]);cases++;
+    await compileTuplePacket(attempt);
+  }
+  return {cases};
+});
+test("compile tuple every remaining original expression boundary retains Error and undefined",async()=>{
+  // The other boundaries already have original I/O injections above. These
+  // private realm seams target the original check/JS expression, never point().
+  const cases=[[1,"none"],[3,"none"],[5,"none"],...nativeCompileRoles.slice(1).map(role=>[11,role]),[15,"none"],[16,"none"],[17,"none"],[18,"none"],[19,"none"],[20,"none"],[21,"none"],[25,"none"],[28,"none"],[29,"none"]];
+  for(const boundary of cases)for(const reason of [new Error("inert expression failure"),undefined]){
+    const f=await reaperCompileFixture();f.useFaultRealm();f.state.boundaryFault=boundary;f.state.reason=reason;
+    const attempt=await compileTupleAttempt(f);assert.equal(attempt.reason,reason);assert.equal(f.state.failures,1);
+    assert.deepEqual(attempt.summary.compile,[1,boundary[0],nativeCompileRoles.indexOf(boundary[1])]);
+    await compileTuplePacket(attempt);
+  }
+  return {cases:cases.length*2};
+});
+test("compile tuple concurrent inventories retain only the escaping aggregate boundary",async()=>{
+  for(const operation of [23,24]){
+    const f=await reaperCompileFixture();let release,entered=false;
+    const held=new Promise(resolve=>{release=resolve;});
+    f.state.transform=(name,args,value)=>{
+      if(name==="realpath"&&f.state.phase?.[0]===operation){
+        if(!entered){entered=true;return held.then(()=>value);}
+        throw undefined;
+      }
+      return value;
+    };
+    const attempt=await compileTupleAttempt(f);assert.equal(entered,true);assert.equal(attempt.reason,undefined);assert.deepEqual(attempt.summary.compile,[1,operation,0]);
+    const before=attempt.frames.join("");release();await held;await Promise.resolve();await Promise.resolve();
+    assert.equal(attempt.frames.join(""),before);assert.equal(attempt.recorder.errors.length,0);assert.ok(!f.disk.has(f.paths.manifest));
+    await compileTuplePacket(attempt);
+  }
+});
+test("compile tuple observer faults remain independent and never replace original undefined",async()=>{
+  const baseline=await reaperCompileFixture();await compileTupleAttempt(baseline);const index=baseline.calls.findIndex(row=>row.phase[0]===12);
+  for(const options of [{pointFault:true},{writerFault:true}])for(const reason of [new Error("original compile"),undefined]){
+    const f=await reaperCompileFixture();f.state.failAt=index;f.state.reason=reason;
+    const attempt=await compileTupleAttempt(f,options);
+    assert.equal(attempt.reason,reason);assert.equal(f.state.failures,1);assert.ok(attempt.recorder.errors.length);assert.ok(!Object.hasOwn(attempt.summary,"compile"));
+    assert.equal(f.calls[index].name,"execFileSync");assert.equal(f.calls[index].phase[0],12);
+    if(options.writerFault)assert.ok(attempt.recorder.errors.includes(undefined));
+  }
+  for(const conflict of ["stale","duplicate","foreign-reason"]){
+    const frames=[],r=createNativePrepareDiagnostics(stageIdentity,(b,o,n)=>{frames.push(b.subarray(o,o+n).toString());return n;});
+    nativePrepareStages.slice(0,4).forEach(stage=>r.enter(stage));const owner=r.compileBegin(),reason=new Error("owned");owner.point(12,"gcc");owner.finish(true,reason);
+    if(conflict==="stale")owner.point(13,"gcc");if(conflict==="duplicate")r.compileBegin();
+    r.finish(true,conflict==="foreign-reason"?new Error("foreign"):reason);
+    assert.ok(!Object.hasOwn(JSON.parse(frames.at(-1).slice(frames.at(-1).indexOf(" {")+1)),"compile"));
+  }
+});
+test("compile tuple malformed foreign omitted and conflicting frames never acquire attribution",async()=>{
+  const f=await reaperCompileFixture();f.state.failAt=0;f.state.reason=undefined;
+  const original=await compileTupleAttempt(f),valid=original.frames.join("");assert.deepEqual(original.summary.compile,[1,2,0]);
+  const mutate=change=>original.frames.map((line,index)=>{const row=JSON.parse(line.slice(line.indexOf(" {")+1));change(row,index);return "\nEDGE_NATIVE_PREPARE_V1 "+JSON.stringify(row)+"\n";}).join("");
+  const parse=text=>{
+    const capture=structuredClone(original.capture),a=capture.stdout.indexOf(original.frames[0]),b=a+valid.length;assert.ok(a>=0);
+    capture.stdout=capture.stdout.slice(0,a)+text+capture.stdout.slice(b);capture.outputSummary.stdout.bytes=Buffer.byteLength(capture.stdout);capture.outputSummary.stdout.sha256=f.sha(capture.stdout);
+    return parseNativePrepareStages(capture,original.identity);
+  };
+  for(const detail of [[2,2,0],[1,0,0],[1,31,0],[1,12,0],[1,8,1],[1,2,1],[1,2,0,0],null]){
+    const row=parse(mutate(r=>{if(r.event==="terminal")r.compile=detail;}));assert.equal(row.reason,"invalid");assert.ok(!Object.hasOwn(row,"compile"));assert.throws(()=>validateContainerDiagnostic({...original.summary,compile:detail}));
+  }
+  for(const text of [valid+original.frames.at(-1),original.frames.slice(0,-1).join(""),valid.replace(original.identity.nonce,other),mutate((r,i)=>{if(i===0)r.compile=[1,2,0];}),mutate(r=>{if(r.event==="terminal")r.reportFailures=1;}),valid.replace('"compile":','"compile":[1,2,0],"compile":')]){
+    const row=parse(text);assert.ok(["invalid","incomplete"].includes(row.reason));assert.ok(!Object.hasOwn(row,"compile"));
+  }
+  const historical=parse(mutate(r=>{delete r.compile;}));assert.equal(historical.reason,"original_failure");assert.ok(!Object.hasOwn(historical,"compile"));validateContainerDiagnostic(historical);
+  const historicalPacket=await compileTuplePacket(original);delete historicalPacket.find(row=>row.v===5).compile;
+});
+test("compile tuple widest full packet stays atomic within all existing quotas",async()=>{
+  let frameMax=0,recordMax=0,commandMax=0,packetMax=0;
+  for(let operation=1;operation<=nativeCompileOperations.length;operation++)for(let role=0;role<nativeCompileRoles.length;role++){
+    try{validateCompileDetail([1,operation,role]);}catch{continue;}
+    const frames=[],r=createNativePrepareDiagnostics(stageIdentity,(b,o,n)=>{frames.push(b.subarray(o,o+n).toString());return n;});
+    nativePrepareStages.slice(0,4).forEach(stage=>r.enter(stage));const owner=r.compileBegin();owner.point(operation,nativeCompileRoles[role]);owner.finish(true,undefined);r.finish(true,undefined);
+    const capture=nativePrepareCapture(frames.join("")),summary=parseNativePrepareStages(capture,stageIdentity);assert.deepEqual(summary.compile,[1,operation,role]);
+    const report=createContainerDiagnostics();report.process(capture,true);report.internal(parseImageBuildStages(capture,stageIdentity));report.internal(summary);
+    for(const phase of ["entry","module_import","dispatch","image_build","context","daemon","base","image","create","attach","ready","retirement"])report.mark(phase,"rejected",undefined);
+    const lines=[];emitContainerFailure(report.records,line=>lines.push(line));const packet=lines.map(line=>JSON.parse(line.slice(line.indexOf("::{")+2)));
+    assert.equal(lines.length,10);assert.ok(packet.find(row=>row.v===5));assert.ok(packet.find(row=>row.v===3));assert.ok(packet.find(row=>row.v===4));
+    frameMax=Math.max(frameMax,...frames.map(line=>Buffer.byteLength(line)));recordMax=Math.max(recordMax,...packet.map(row=>Buffer.byteLength(JSON.stringify(row))));commandMax=Math.max(commandMax,...lines.map(line=>Buffer.byteLength(line)));packetMax=Math.max(packetMax,Buffer.byteLength(lines.join("")));
+    compilePackets.push(packet);
+  }
+  assert.ok(frameMax<=512&&recordMax<=512&&commandMax<=768&&packetMax<=8192);
+  return {frameMax,recordMax,commandMax,packetMax};
+});
+// END existing-channel compile tuple tests.
+
 async function nativePrepareFixture(failAt, ...failureArgs) {
   const failure = failureArgs.length ? failureArgs[0] : new Error("inert operation failure");
   const source = await readFile(new URL("../scripts/edge-proof-container.mjs", import.meta.url), "utf8");
@@ -890,7 +1061,8 @@ test("native preparation actual stages preserve each original call and isolate r
   assert.deepEqual(fixture.calls.find(row => row.name === "writeFile").args[2], { flag: "wx", mode: 0o444 });
   assert.equal(fixture.calls.filter(row => row.name === "loadContainer").length, 1);
   assert.equal(fixture.calls.filter(row => row.name === "containerMain").length, 1);
-  assert.deepEqual(fixture.calls.filter(row => row.name === "compileReaper").map(row => row.args), [[other]]);
+  const compileCalls = fixture.calls.filter(row => row.name === "compileReaper");
+  assert.equal(compileCalls.length, 1); assert.equal(compileCalls[0].args[0], other); assert.equal(typeof compileCalls[0].args[1], "function");
   assert.deepEqual(fixture.calls.filter(row => row.name === "qualifyReaper").map(row => row.args), [[other]]);
   assert.equal(fixture.output[0], '{"prepared":true}\n');
   const row = parseNativePrepareStages(nativePrepareCapture(fixture.diagnostics.join(""), { status: 0 }), stageIdentity);

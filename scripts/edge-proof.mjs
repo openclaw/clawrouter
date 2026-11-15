@@ -761,6 +761,23 @@ export const nativePrepareStages = Object.freeze([
   "esbuild_resolver", "native_node", "native_git", "native_typescript", "native_esbuild", "native_wrangler", "native_identity",
   "typescript_resolver", "esbuild_child", "esbuild_version_check", "pnpm_child", "pnpm_version_check", "receipt_write", "receipt_output", "cli_serialization",
 ]);
+export const nativeCompileOperations = Object.freeze([
+  "runtime", "context_read_parse", "context_validate", "source_identity", "source_inventory",
+  "compiler_identity", "compiler_target", "tool_selection", "tool_identity", "tool_version", "tool_record",
+  "compile", "link", "header_read", "header_format", "header_parse", "header_paths",
+  "link_parse", "link_object", "link_filter", "link_paths", "elf_read_validate",
+  "header_inventory", "link_inventory", "argument_copy", "object_identity", "binary_identity",
+  "manifest_validate", "manifest_write_arguments", "exclusive_write",
+]);
+export const nativeCompileRoles = Object.freeze(["none", "gcc", "cc1", "as", "collect2", "ld"]);
+export function validateCompileDetail(value) {
+  if (!Array.isArray(value) || Object.getOwnPropertyNames(value).sort().join() !== "0,1,2,length" || ownData(value,"length") !== 3) refuse("compile-detail-shape");
+  const [version, operation, role] = [0,1,2].map(index => ownData(value,String(index)));
+  if (version !== 1 || !Number.isInteger(operation) || operation < 1 || operation > nativeCompileOperations.length || !Number.isInteger(role)) refuse("compile-detail-enum");
+  const validRole = [6,7,12,13].includes(operation) ? role === 1 : operation >= 8 && operation <= 11 ? role >= (operation === 8 ? 2 : 1) && role <= 5 : role === 0;
+  if (!validRole) refuse("compile-detail-role");
+  return [version,operation,role];
+}
 export const enumerationOperations = Object.freeze(["directory_read", "directory_sort", "entry_path", "exclusion", "path_check", "directory_type", "recursion", "file_type", "file_type_check", "file_read", "byte_count", "capacity", "hash", "file_record", "final_sort"]);
 export function validateEnumerationDetail(value) {
   const fields = ["op", "type", "depth", "files", "bytes", "overflow", "failed", "defined"];
@@ -796,6 +813,7 @@ export function createNativePrepareDiagnostics(identity, write = (bytes, offset,
   const errors = []; let context, nonce, sequence = 0, index = -1, finished = false, admitted = false;
   let enumerationPoint = null, enumerationFailure = null;
   let membership = null;
+  let compilation = null, compileDetail = null;
   try {
     context = ownData(identity, "contextHash"); nonce = ownData(identity, "nonce");
     if (![context, nonce].every(value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value))) refuse("prepare-diagnostic-identity");
@@ -812,6 +830,7 @@ export function createNativePrepareDiagnostics(identity, write = (bytes, offset,
         row.enumeration = detail;
       } else row.enumeration = enumerationFailure;
     }
+    if (event === "terminal" && compileDetail) row.compile = compileDetail;
     const bytes = Buffer.from("\n" + "EDGE_NATIVE_" + "PREPARE_V1 " + JSON.stringify(row) + "\n");
     if (sequence > 32 || bytes.length > 512) refuse("prepare-diagnostic-capacity");
     for (let offset = 0; offset < bytes.length;) {
@@ -821,6 +840,25 @@ export function createNativePrepareDiagnostics(identity, write = (bytes, offset,
     }
   };
   return { errors,
+    compileBegin() {
+      const state = { active:true, invalid:false, point:null, failed:false, reason:undefined };
+      const observe = operation => { try { operation(); } catch (error) { state.invalid = true; errors.push(error); } };
+      observe(() => {
+        if (finished || nativePrepareStages[index] !== "prepare_arguments" || compilation) refuse("compile-invocation");
+        compilation = state;
+      });
+      return {
+        point(operation, role = "none") { observe(() => {
+          if (compilation !== state || !state.active || finished || nativePrepareStages[index] !== "prepare_arguments") refuse("compile-point-owner");
+          state.point = validateCompileDetail([1,operation,nativeCompileRoles.indexOf(role)]);
+        }); },
+        finish(failed, reason) { observe(() => {
+          if (compilation !== state || !state.active || finished || typeof failed !== "boolean") refuse("compile-finish-owner");
+          state.active = false; state.failed = failed; state.reason = reason;
+          if (!failed) state.point = null;
+        }); },
+      };
+    },
     enumerationManifest(manifest) {
       try {
         if (nativePrepareStages[index] !== "context_enumeration" || finished || membership !== null) refuse("enumeration-manifest-stage");
@@ -885,6 +923,7 @@ export function createNativePrepareDiagnostics(identity, write = (bytes, offset,
         if (finished || index < 0 || typeof originalFailed !== "boolean") refuse("prepare-diagnostic-terminal");
         finished = true;
         if (!originalFailed && index !== nativePrepareStages.length - 1) refuse("prepare-diagnostic-incomplete");
+        if (originalFailed && nativePrepareStages[index] === "prepare_arguments" && compilation?.failed && !compilation.active && !compilation.invalid && errors.length === 0 && Object.is(compilation.reason,reason)) compileDetail = compilation.point;
         emit("terminal", originalFailed ? "original_failure" : errors.length ? "reporter_failure" : "complete", originalFailed ? reason !== undefined : null);
       } catch (error) { errors.push(error); }
     },
@@ -1575,6 +1614,7 @@ export function validateContainerDiagnostic(value) {
   if (value && typeof value === "object" && ownData(value, "v") === 5) {
     const fields = ["v", "phase", "state", "stage", "defined", "records", "reason", "reportFailures", "undefinedReportFailures"];
     if (Object.hasOwn(value, "enumeration")) fields.push("enumeration");
+    if (Object.hasOwn(value, "compile")) fields.push("compile");
     if (Object.getOwnPropertyNames(value).sort().join() !== [...fields].sort().join()) refuse("prepare-summary-keys");
     const row = Object.fromEntries(fields.map(key => [key, ownData(value, key)]));
     if (row.phase !== "native_prepare_internal" || !["capture_unavailable", "capture_mismatch", "outer_inconsistent", "no_records", "incomplete", "invalid", "original_failure", "reporter_failure", "complete"].includes(row.reason)) refuse("prepare-summary-enum");
@@ -1592,6 +1632,10 @@ export function validateContainerDiagnostic(value) {
       if (row.reason !== "original_failure" || row.stage !== "context_enumeration") refuse("enumeration-summary-stage");
       row.enumeration = validateEnumerationDetail(row.enumeration);
       if (row.enumeration.defined !== row.defined) refuse("enumeration-summary-outcome");
+    }
+    if (Object.hasOwn(row,"compile")) {
+      if (row.reason !== "original_failure" || row.stage !== "prepare_arguments" || row.records !== 5 || row.reportFailures !== 0 || row.undefinedReportFailures !== 0 || Object.hasOwn(row,"enumeration")) refuse("compile-summary-owner");
+      row.compile = validateCompileDetail(row.compile);
     }
     return row;
   }

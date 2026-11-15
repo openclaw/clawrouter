@@ -10,6 +10,7 @@ import { channel } from "node:diagnostics_channel";
 import { errorMonitor } from "node:events";
 import { Socket } from "node:net";
 import { bindCensusControls, privateProcesses, createCensusComparisonWitness } from "./edge-proof.mjs";
+import { validateCompileDetail } from "./edge-proof.mjs";
 import { edgeProof } from "./edge-proof-profile.mjs";
 import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, validateContainerDiagnostic, initGuardTags, initSourcePhases, validateInitDetail, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic, projectionBoundaries, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, packReceiptOwnedDiagnostic, packReceiptCodeDiagnostic, packReceiptAssociatedDiagnostic, packReceiptCensusDiagnostic, unpackCensusCloseDiagnostic, validateWranglerCloseDiagnostic, packReceiptObservedWranglerDiagnostic, validateObservedWranglerCloseDiagnostic } from "./edge-proof.mjs";
 export { validateContainerDiagnostic, emitContainerFailure } from "./edge-proof.mjs";
@@ -462,37 +463,65 @@ async function reaperFile(path, executable = false) {
   check(info.isFile() && (!executable || (info.mode & 0o111) !== 0), "reaper-build-regular-file");
   return {path:canonical, sha256:hash(await readFile(canonical))};
 }
-async function compileReaper(contextHash) {
+async function compileReaper(contextHash, point) {
+  point?.(1);
   check(process.platform === "linux" && process.arch === "x64" && process.version === "v24.22.1", "reaper-build-runtime");
-  const inputPlan = JSON.parse(await readFile(join(containerContract.input,".edge-context.json"),"utf8")); validateContextPlan(inputPlan,contextHash);
+  point?.(2);
+  const inputPlan = JSON.parse(await readFile(join(containerContract.input,".edge-context.json"),"utf8"));
+  point?.(3); validateContextPlan(inputPlan,contextHash);
+  point?.(4);
   const source = await reaperFile(reaperSource);
+  point?.(5);
   check(inputPlan.harness.find(row=>row.path==="config/edge-proof/reaper.c")?.sha256 === source.sha256 && source.path === reaperSource, "reaper-original-source");
   const options = {env:{PATH:"/usr/bin:/bin",LANG:"C",HOME:"/opt/build-home"}, encoding:"utf8", timeout:60000, maxBuffer:1024*1024};
+  point?.(6,"gcc");
   const gcc = await reaperFile("/usr/bin/gcc", true);
+  point?.(7,"gcc");
   check(execFileSync(gcc.path, ["-dumpmachine"], options).trim() === "x86_64-linux-gnu", "reaper-tool-target");
   const tools = [];
   for (const role of ["gcc","cc1","as","collect2","ld"]) {
-    const selected = role === "gcc" ? gcc.path : execFileSync(gcc.path, [`-print-prog-name=${role}`], options).trim();
+    const selected = role === "gcc" ? gcc.path : (point?.(8,role), execFileSync(gcc.path, [`-print-prog-name=${role}`], options).trim());
+    point?.(9,role);
     const file = await reaperFile(isAbsolute(selected) ? selected : join("/usr/bin", selected), true);
-    const version = execFileSync(file.path, ["--version"], options).split("\n")[0]; tools.push({role,...file,version});
+    point?.(10,role);
+    const version = execFileSync(file.path, ["--version"], options).split("\n")[0];
+    point?.(11,role); tools.push({role,...file,version});
   }
+  point?.(12,"gcc");
   execFileSync(gcc.path, [...reaperCompileArguments[0]], options);
+  point?.(13,"gcc");
   const trace = execFileSync(gcc.path, [...reaperCompileArguments[1]], options);
+  point?.(14);
   const dependencyText = await readFile(join(reaperBuildRoot,"headers.d"),"utf8");
+  point?.(15);
   check(dependencyText.startsWith("reaper:"), "reaper-header-format");
+  point?.(16);
   const headerPaths = dependencyText.slice(7).replace(/\\\n/g," ").trim().split(/\s+/);
+  point?.(17);
   check(headerPaths.includes(reaperSource) && headerPaths.every(path => /^\/[a-zA-Z0-9_./+-]+$/.test(path)), "reaper-header-paths");
+  point?.(18);
   const links = trace.trim().split("\n").map(line => line.trim());
+  point?.(19);
   check(links.filter(path => path === "/opt/edge-reaper/reaper.o").length === 1, "reaper-original-link-object");
+  point?.(20);
   const linked = links.filter(path => path !== "/opt/edge-reaper/reaper.o");
+  point?.(21);
   check(linked.every(path => /^\/(?:usr|lib|lib64)\/[a-zA-Z0-9_./+-]+$/.test(path)), "reaper-link-trace");
+  point?.(22);
   const loader = validateReaperElf(await readFile(containerContract.reaper));
   const inventory = async paths => {
     const rows = await Promise.all([...new Set(paths)].sort().map(path => reaperFile(path)));
     return [...new Map(rows.map(row => [row.path,row])).values()].sort((a,b)=>a.path.localeCompare(b.path,"en"));
   };
-  const value = validateReaperBuild({version:1, contextHash, source, tools, headers:await inventory(headerPaths.filter(path=>path!==reaperSource)), links:await inventory([...linked,loader]), arguments:reaperCompileArguments.map(args=>[...args]), object:await reaperFile("/opt/edge-reaper/reaper.o"), binary:await reaperFile(containerContract.reaper,true)},contextHash);
-  await writeFile(join(reaperBuildRoot,"build.json"), JSON.stringify(value), {flag:"wx",mode:0o444});
+  const value = validateReaperBuild({version:1, contextHash, source, tools,
+    headers:await (point?.(23), inventory(headerPaths.filter(path=>path!==reaperSource))),
+    links:await (point?.(24), inventory([...linked,loader])),
+    arguments:(point?.(25), reaperCompileArguments.map(args=>[...args])),
+    object:await (point?.(26), reaperFile("/opt/edge-reaper/reaper.o")),
+    binary:await (point?.(27), reaperFile(containerContract.reaper,true))},(point?.(28),contextHash));
+  point?.(29);
+  let writeOptions;
+  await writeFile(join(reaperBuildRoot,"build.json"), JSON.stringify(value), (writeOptions = {flag:"wx",mode:0o444}, point?.(30), writeOptions));
 }
 async function qualifyReaper(contextHash) {
   const text = await readFile(join(reaperBuildRoot,"build.json"),"utf8"); check(Buffer.byteLength(text) < 128*1024,"reaper-build-capacity");
@@ -1654,12 +1683,12 @@ export function parseNativePrepareStages(result, identity) {
     if (index <= start || index >= end || !line.startsWith(prefix) || Buffer.byteLength(line) + 2 > 512 || /[\x00-\x1f\x7f-\x9f]/.test(line) || count >= 32 || terminal) return unknown("invalid");
     let row;
     try { row = JSON.parse(line.slice(prefix.length)); } catch { return unknown("invalid"); }
-    const keys = "v,context,nonce,seq,stage,event,outcome,defined,reportFailures,undefinedReportFailures" + (row && Object.hasOwn(row, "enumeration") ? ",enumeration" : "");
+    const keys = "v,context,nonce,seq,stage,event,outcome,defined,reportFailures,undefinedReportFailures" + (row && Object.hasOwn(row, "enumeration") ? ",enumeration" : "") + (row && Object.hasOwn(row,"compile") ? ",compile" : "");
     if (!row || Object.getPrototypeOf(row) !== Object.prototype || Object.keys(row).join() !== keys || JSON.stringify(row) !== line.slice(prefix.length)) return unknown("invalid");
     if (row.v !== 1 || row.context !== identity.contextHash || row.nonce !== identity.nonce || row.seq !== count + 1) return unknown("invalid");
     count++;
     if (row.event === "entered") {
-      if (Object.hasOwn(row, "enumeration") || entered >= nativePrepareStages.length || row.stage !== nativePrepareStages[entered++] || [row.outcome, row.defined, row.reportFailures, row.undefinedReportFailures].some(value => value !== null)) return unknown("invalid");
+      if (Object.hasOwn(row, "enumeration") || Object.hasOwn(row,"compile") || entered >= nativePrepareStages.length || row.stage !== nativePrepareStages[entered++] || [row.outcome, row.defined, row.reportFailures, row.undefinedReportFailures].some(value => value !== null)) return unknown("invalid");
     } else if (row.event === "terminal") {
       if (!entered || row.stage !== nativePrepareStages[entered - 1] || !["original_failure", "reporter_failure", "complete"].includes(row.outcome) || !Number.isInteger(row.reportFailures) || row.reportFailures < 0 || row.reportFailures > 32 || !Number.isInteger(row.undefinedReportFailures) || row.undefinedReportFailures < 0 || row.undefinedReportFailures > row.reportFailures) return unknown("invalid");
       if (row.outcome === "original_failure" ? typeof row.defined !== "boolean" : row.defined !== null || entered !== nativePrepareStages.length || (row.outcome === "complete" ? row.reportFailures !== 0 : row.reportFailures < 1)) return unknown("invalid");
@@ -1674,12 +1703,16 @@ export function parseNativePrepareStages(result, identity) {
         try { row.enumeration = validateEnumerationDetail(row.enumeration); } catch { return unknown("invalid"); }
         if (row.enumeration.defined !== row.defined) return unknown("invalid");
       }
+      if (Object.hasOwn(row,"compile")) {
+        if (row.outcome !== "original_failure" || row.stage !== "prepare_arguments" || count !== 5 || row.reportFailures !== 0 || row.undefinedReportFailures !== 0 || Object.hasOwn(row,"enumeration")) return unknown("invalid");
+        try { row.compile = validateCompileDetail(row.compile); } catch { return unknown("invalid"); }
+      }
       terminal = row;
     } else return unknown("invalid");
   }
   if (!terminal) return unknown(count ? "incomplete" : "no_records", count);
   if (terminal.outcome === "complete" ? outer.reason !== "complete" || own(result, "code") !== 0 : outer.reason !== "validated_failure" || own(result, "code") === 0) return unknown("outer_inconsistent");
-  return { v: 5, phase: "native_prepare_internal", state: terminal.outcome === "complete" ? "observed" : "rejected", stage: terminal.outcome === "original_failure" ? terminal.stage : null, defined: terminal.defined, records: count, reason: terminal.outcome, reportFailures: terminal.reportFailures, undefinedReportFailures: terminal.undefinedReportFailures, ...(Object.hasOwn(terminal, "enumeration") ? { enumeration: terminal.enumeration } : {}) };
+  return { v: 5, phase: "native_prepare_internal", state: terminal.outcome === "complete" ? "observed" : "rejected", stage: terminal.outcome === "original_failure" ? terminal.stage : null, defined: terminal.defined, records: count, reason: terminal.outcome, reportFailures: terminal.reportFailures, undefinedReportFailures: terminal.undefinedReportFailures, ...(Object.hasOwn(terminal, "enumeration") ? { enumeration: terminal.enumeration } : {}), ...(Object.hasOwn(terminal,"compile") ? {compile:terminal.compile} : {}) };
 }
 export async function observeImageBuild(operation, readImageId, parseReceipt, report, stageIdentity) {
   let built, available = false;
@@ -2018,7 +2051,10 @@ async function containerBuild(args) {
 async function containerPrepare(args, prepare) {
   prepare?.enter("prepare_arguments");
   check(args.length === 1 && hashPattern.test(args[0]), "prepare-arguments");
-  await compileReaper(args[0]);
+  const compilation = prepare?.compileBegin();
+  try { await compileReaper(args[0], compilation?.point); }
+  catch (error) { compilation?.finish(true,error); throw error; }
+  compilation?.finish(false);
   const native = await qualifyImageInputs(args[0], prepare);
   prepare?.enter("pnpm_child");
   const pnpm = execFileSync("/usr/local/bin/pnpm", ["--version"], { env: { PATH: "/usr/local/bin:/usr/bin:/bin", HOME: "/opt/build-home" }, encoding: "utf8", timeout: 10000 }).trim();
