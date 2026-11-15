@@ -25,13 +25,13 @@ export const bifrostControls=["stream","simple"].flatMap(api=>["eof","preabort",
 export const bifrostProgressCases=["stream","simple"].map(api=>({id:`bifrost_${api}_progress`,mode:"progress",api}));
 export function bifrostNativeEvaluator(){
  const source=readFileSync(new URL("./fixtures/openclaw-bifrost-contract.test.ts",import.meta.url),"utf8");
- const names=["createBifrostInvocationOwnership","bifrostInvocationBound","sameBifrostDescriptor","bifrostCancelOperand","bifrostStoredErrorVector","evaluateBifrostNativeControl","bifrostQualification","bifrostProductExpected","bifrostProgressQualified","bifrostProgressWitness"];
- const start="export function createBifrostInvocationOwnership(",end="function emitControl(";
+ const names=["createBifrostFetchObserver","createBifrostInvocationOwnership","bifrostInvocationBound","sameBifrostDescriptor","bifrostCancelOperand","bifrostStoredErrorVector","evaluateBifrostNativeControl","bifrostQualification","bifrostProductExpected","bifrostProgressQualified","bifrostProgressWitness"];
+ const start="export function createBifrostFetchObserver(",end="function emitControl(";
  assert.equal(source.split(start).length,2);assert.equal(source.split(end).length,2);
  const declarations=source.slice(source.indexOf(start),source.indexOf(end));
  assert.deepEqual([...declarations.matchAll(/^export function (\w+)\(/gm)].map(m=>m[1]),names);
  assert.doesNotMatch(declarations,/\bimport\b|\brequire\s*\(/);
- return runInNewContext(stripTypeScriptTypes(declarations.replace(/^export /gm,""),{mode:"strip"})+"\n({"+names.join(",")+"})",{}, {timeout:1000});
+ return runInNewContext('"use strict";\n'+stripTypeScriptTypes(declarations.replace(/^export /gm,""),{mode:"strip"})+"\n({"+names.join(",")+"})",{}, {timeout:1000});
 }
 // The control request signals one closed command. The original producer's
 // already-created continuation owns enqueue. Neither path completes its pull.
@@ -369,7 +369,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
  }
  function controlEvidence(role,identity){
   const w=nativeEvidence();w.identity=identity;for(const t of w.transports)t.acquisition.guard=identity.guard;w.role=role;
-  if(role!=="partial"){for(const o of w.originals)o.state="fulfilled";w.caller.abortCalled=role==="preabort";w.caller.signal.aborted=role==="preabort";w.caller.result=role==="eof"?"stop":role==="preabort"?"aborted":"error";}
+  if(role!=="partial"){for(const o of w.originals)o.state="fulfilled";w.caller.abortCalled=role==="preabort";w.caller.signal.aborted=role==="preabort";w.caller.result=role==="eof"?"stop":"error";w.caller.emptyContent=role==="preabort";}
   if(role==="preabort"){w.transports.shift();w.preabortPostDelta=0;}
   return w;
  }
@@ -455,6 +455,31 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   const t=w.transports[0];t.acquisition.inputSignal=t.acquisition.input.signal={};assert.equal(evaluator.evaluateBifrostNativeControl(w).qualified,true);
   const foreign=Object.freeze({...t.invocation,caller:{...w.caller},signal:{}});t.invocation=t.acquisition.invocation=foreign;t.context=t.acquisition.context=Object.freeze({invocation:foreign,acquisition:t.acquisition});t.caller=foreign.caller;
   assert.equal(evaluator.evaluateBifrostNativeControl(w).qualified,false);
+ });
+ test('Bifrost fetch receiver wrapper preserves unbound sentinel and exact original arguments and promise',async()=>{
+  for(const receiver of [undefined,{}])for(const args of [[],[{}],[{},undefined],[{}, {}, {}]]){
+   const failures=[],calls=[],pending=Promise.resolve({});let captured;
+   function original(...actual){calls.push({receiver:this,args:actual});return pending;}
+   const wrapped=evaluator.createBifrostFetchObserver(original,(actualReceiver,actualArgs)=>{captured={receiver:actualReceiver,args:actualArgs};return {returned:value=>assert.equal(value,pending),threw:()=>assert.fail('unexpected throw')};},failures);
+   const result=Reflect.apply(wrapped,receiver,args);assert.equal(result,pending);assert.equal(calls.length,1);assert.equal(calls[0].receiver,receiver);assert.deepEqual(calls[0].args,args);
+   assert.equal(captured.receiver,receiver);assert.deepEqual([...captured.args],args);assert.deepEqual(failures,[]);await result;
+  }
+ });
+ test('Bifrost fetch receiver wrapper preserves synchronous undefined and independent observer failure',()=>{
+  const failures=[],observerError={},receiver={},arg={};let called=0,threw=false;
+  function original(value){assert.equal(this,receiver);assert.equal(value,arg);called++;throw undefined;}
+  const wrapped=evaluator.createBifrostFetchObserver(original,()=>({threw:reason=>{assert.equal(reason,undefined);throw observerError;}}),failures);
+  try{Reflect.apply(wrapped,receiver,[arg]);}catch(e){threw=true;assert.equal(e,undefined);}assert.equal(threw,true);assert.equal(called,1);assert.deepEqual(failures,[observerError]);
+ });
+ test('Bifrost fetch receiver wrapper keeps rejected original promise despite return observer failure',async()=>{
+  const reason={},observerError={},failures=[],pending=Promise.reject(reason);
+  const wrapped=evaluator.createBifrostFetchObserver(()=>pending,()=>({returned:()=>{throw observerError;}}),failures);
+  const result=wrapped();assert.equal(result,pending);await assert.rejects(result,e=>e===reason);assert.deepEqual(failures,[observerError]);
+ });
+ test('Bifrost predispatch oracle requires exact error empty content and zero inference POST',()=>{
+  const identity={guard:()=>{}},good=controlEvidence('preabort',identity);assert.equal(evaluator.evaluateBifrostNativeControl(good).qualified,true);
+  for(const mutate of [w=>{w.caller.result='aborted';},w=>{w.caller.emptyContent=false;},w=>{w.preabortPostDelta=1;}]){const w=controlEvidence('preabort',identity);mutate(w);assert.equal(evaluator.evaluateBifrostNativeControl(w).qualified,false);}
+  const partial=controlEvidence('partial',identity);assert.equal(evaluator.evaluateBifrostNativeControl(partial).qualified,true);partial.caller.result='error';assert.equal(evaluator.evaluateBifrostNativeControl(partial).qualified,false);
  });
  test('Bifrost SDK evaluator records the predefined rejection vector without C0 identity or product credit',()=>{
   const w=nativeEvidence(),result=evaluator.evaluateBifrostNativeControl(w);assert.equal(result.qualified,true);assert.equal(result.vectorObserved,true);

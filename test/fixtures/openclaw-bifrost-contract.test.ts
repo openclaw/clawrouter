@@ -33,6 +33,15 @@ let diagnosticCount=0,diagnosticBytes=0;
 
 // Invocation ownership, not signal equality or a claim about C1's cause.
 // Every context is captured at the original call boundary; absent attachment fails closed.
+export function createBifrostFetchObserver(fetcher:Function,capture:Function,observerFailures:unknown[]) {
+ return function(this:unknown,...args:any[]) {
+  const receipt=capture(this,args);let original;
+  try{original=Reflect.apply(fetcher,this,args);}catch(reason){
+   try{receipt.threw(reason);}catch(error){observerFailures.push(error);}throw reason;
+  }
+  try{receipt.returned(original);}catch(error){observerFailures.push(error);}return original;
+ };
+}
 export function createBifrostInvocationOwnership(storage:any) {
  const invocations=new WeakSet<object>(),acquisitions=new WeakSet<object>(),transports=new WeakSet<object>(),responses=new WeakMap<object,any>();
  let active=true;
@@ -127,7 +136,7 @@ export function evaluateBifrostNativeControl(w:any):any {
  const strict=w.originals.every((o:any)=>o.state==="fulfilled");
  const posts=w.transports.filter((t:any)=>t.method==="POST").length,gets=w.transports.filter((t:any)=>t.method==="GET").length;
  const role=w.role;
- const matched=role==="partial"?!!vector:role==="preabort"?strict&&w.preabortPostDelta===0&&w.caller?.abortCalled===true&&w.caller?.signal.aborted===true&&w.caller?.result==="aborted":
+ const matched=role==="partial"?!!vector:role==="preabort"?strict&&w.preabortPostDelta===0&&w.caller?.abortCalled===true&&w.caller?.signal.aborted===true&&w.caller?.result==="error"&&w.caller?.emptyContent===true&&posts===0:
   (role==="eof"||role==="provider_error")&&strict&&posts===1&&w.caller?.abortCalled===false&&w.caller?.signal.aborted===false&&
    w.caller?.result===(role==="eof"?"stop":"error");
  return {qualified:!hard&&gets===1&&matched===true,vector:vector?"stored_error":"strict",operand:vector?bifrostCancelOperand(vector[0],vector[2],w.caller):null,
@@ -188,7 +197,7 @@ async function fixture(row:Case,body:(discover:()=>Promise<any>,control:AbortCon
   const settle=(state:Original["state"],v:any)=>{o.state=state;o.settle=++w.sequence;if(state==="rejected")o.reason=v;else o.value=v;
    o.callerAbortedAtSettle=o.callerSignal?.aborted??null;o.effectiveAbortedAtSettle=o.effectiveSignal?.aborted??null;};
   if(value&&typeof value.then==="function"){o.pending=value;observer(value.then((v:any)=>settle("fulfilled",v),(e:unknown)=>settle("rejected",e)));}else settle("fulfilled",value);return value;};
- const track=<T>(kind:string,p:Promise<T>):Promise<T>=>{if(kind==="inference_result")observer(p.then((v:any)=>{w.caller.result=v.stopReason;w.caller.completed=true;},()=>{w.caller.completed=true;}));return returned(record(kind),p);};
+ const track=<T>(kind:string,p:Promise<T>):Promise<T>=>{if(kind==="inference_result")observer(p.then((v:any)=>{w.caller.result=v.stopReason;w.caller.emptyContent=Array.isArray(v.content)&&v.content.length===0;w.caller.completed=true;},()=>{w.caller.completed=true;}));return returned(record(kind),p);};
  const invoke=(kind:string,fn:()=>any,details:any={})=>{const o=record(kind,details);try{return returned(o,fn());}catch(e){o.state="threw";o.reason=e;o.settle=++w.sequence;w.syncFailures.push(e);throw e;}};
  const patch=(object:any,name:string,value:any)=>{const before=Object.getOwnPropertyDescriptor(object,name),ours={configurable:true,writable:true,enumerable:before?.enumerable??false,value};Object.defineProperty(object,name,ours);
   restores.push(()=>{if(!sameBifrostDescriptor(Object.getOwnPropertyDescriptor(object,name),ours))throw Error("foreign descriptor replacement");if(before)Object.defineProperty(object,name,before);else delete object[name];});};
@@ -215,7 +224,8 @@ async function fixture(row:Case,body:(discover:()=>Promise<any>,control:AbortCon
    try{r.closed=reader.closed;returned(record("closed",{reader:r,receiver:reader,callerSignal:t.caller?.signal,effectiveSignal:t.signal,callerAbortedAtInvoke:t.caller?.signal?.aborted??null}),r.closed);}catch(e){w.syncFailures.push(e);throw e;}
    for(const kind of ["read","cancel"]){const original=reader[kind];patch(reader,kind,function(this:unknown,...args:unknown[]){return invoke(kind,()=>Reflect.apply(original,this,args),{reader:r,receiver:this,args,callerSignal:t.caller?.signal,effectiveSignal:t.signal,callerAbortedAtInvoke:t.caller?.signal?.aborted??null});});}
    const release=reader.releaseLock;patch(reader,"releaseLock",function(this:unknown,...args:unknown[]){try{const v=invoke("unlock",()=>Reflect.apply(release,this,args),{reader:r,receiver:this,args});r.unlocks++;r.unlockReceiver=this;r.unlockAt=++w.sequence;return v;}catch(e){r.unlockFailed=true;throw e;}});return reader;});};
- const observingFetch=(fetcher:Function,receiver:unknown)=>(input:RequestInfo|URL,init?:DispatcherAwareRequestInit):Promise<Response>=>{
+ const observingFetch=(fetcher:Function)=>createBifrostFetchObserver(fetcher,(receiver:unknown,args:any[])=>{
+  const [input,init]=args as [RequestInfo|URL,DispatcherAwareRequestInit|undefined];
   const u=new URL(typeof input==="string"?input:input instanceof URL?input.href:input.url);expect(u.origin).toBe(origin);expect(u.search).toBe("");
   expect(["/v1/native/bifrost/v1/models","/v1/native/bifrost/v1/chat/completions"]).toContain(u.pathname);
   const headers=new Headers(init?.headers??(input instanceof Request?input.headers:undefined));
@@ -226,9 +236,10 @@ async function fixture(row:Case,body:(discover:()=>Promise<any>,control:AbortCon
   if(t.method==="POST")expect(c.inferenceInvoked>0&&!c.completed).toBe(true);
   t.signalHistory=signalHistory(t.signal);expect(t.signal).toBeInstanceOf(AbortSignal);expect(t.dispatcher).toBeDefined();transports.push(t);
   const d=t.dispatcher as {close:Function};if(!observedDispatchers.has(d)){observedDispatchers.add(d);const close=d.close;let depth=0;patch(d,"close",function(this:unknown,...args:unknown[]){const outer=depth++===0;try{return outer?invoke("dispatcher_close",()=>Reflect.apply(close,this,args),{dispatcher:d,receiver:this,args}):Reflect.apply(close,this,args);}finally{depth--;}});}
-  const o=record("fetch",{transport:t,receiver,input,init,callerSignal:c.signal,effectiveSignal:t.signal,callerAbortedAtInvoke:c.signal.aborted});t.fetch=o;let pending:Promise<Response>;
-  try{pending=returned(o,Reflect.apply(fetcher,receiver,[input,init]));}catch(e){o.state="threw";o.reason=e;o.settle=++w.sequence;w.syncFailures.push(e);throw e;}
-  observer(pending.then(response=>{ownership.response(t,response);observeBody(response,t);},()=>{}));return pending;};
+  const o=record("fetch",{transport:t,receiver,args,input,init,callerSignal:c.signal,effectiveSignal:t.signal,callerAbortedAtInvoke:c.signal.aborted});t.fetch=o;
+  return {threw(reason:unknown){o.state="threw";o.reason=reason;o.settle=++w.sequence;w.syncFailures.push(reason);},
+   returned(pending:Promise<Response>){returned(o,pending);observer(pending.then(response=>{ownership.response(t,response);observeBody(response,t);},()=>{}));}};
+ },w.observerFailures);
  const check=async(fn:()=>unknown)=>{try{await fn();}catch(e){failures.push(e);}};
  let spy:ReturnType<typeof vi.spyOn>|undefined,spyDescriptor:PropertyDescriptor|undefined,worker=false,proof:any;
  // Undici 8.12.3 publishes the original request/socket pair synchronously.
@@ -247,7 +258,7 @@ async function fixture(row:Case,body:(discover:()=>Promise<any>,control:AbortCon
   if(row.mode==="progress"){sent.subscribe(onSent);restores.push(()=>sent.unsubscribe(onSent));}
   expect(process.env.CLAWROUTER_CONTRACT_SOURCE_HEAD).toBe(pin);expect(execFileSync("git",["rev-parse","HEAD"],{encoding:"utf8"}).trim()).toBe(pin);
   for(const name of ["OPENAI_API_KEY","ANTHROPIC_API_KEY","BIFROST_API_KEY","BIFROST_VIRTUAL_KEY","LITELLM_API_KEY"])vi.stubEnv(name,"synthetic-poison-other-provider");
-  patch(globalThis,"fetch",observingFetch(nativeFetch,globalThis));patch(globalThis,"__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__",{...undici,fetch:observingFetch(nativeUndiciFetch,undici)});
+  patch(globalThis,"fetch",observingFetch(nativeFetch));patch(globalThis,"__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__",{...undici,fetch:observingFetch(nativeUndiciFetch)});
   spy=vi.spyOn(guard,"fetchWithSsrFGuard").mockImplementation(function(this:unknown,...args:Parameters<typeof nativeGuard>){
    const input=args[0],a:any={guard:nativeGuard,input,inputSignal:input.signal??input.init?.signal,invoke:++w.sequence};a.signalHistory=signalHistory(a.inputSignal);w.acquisitions.push(a);
    const o=record("guard",{acquisition:a,receiver:this,args});a.operation=o;let pending:ReturnType<typeof nativeGuard>;
@@ -281,6 +292,7 @@ async function fixture(row:Case,body:(discover:()=>Promise<any>,control:AbortCon
  while(at<originals.length||seen<w.observers.length){const batch=originals.slice(at);at=originals.length;await Promise.allSettled(batch.flatMap(o=>o.pending?[o.pending]:[]));
   const observed=w.observers.slice(seen);seen=w.observers.length;for(const r of await Promise.allSettled(observed))if(r.status==="rejected")w.observerFailures.push(r.reason);}
  w.preabortPostDelta=transports.filter(t=>t.method==="POST").length-(c.postsBefore??0);
+ if(row.mode==="preabort")await check(()=>expect(transports.filter(t=>t.method==="POST")).toHaveLength(0));
  for(const t of transports){await check(()=>expect(t.guardObserved).toBe(true));await check(()=>expect(t.releases).toBe(1));await check(()=>expect(t.releaseDone).toBe(true));for(const r of t.readers)await check(()=>expect(r.unlocks).toBe(1));for(const b of t.bodies)await check(()=>expect(b.locked).toBe(false));}
  const workerFailures:unknown[]=[];
  try{const response=await nativeFetch(origin+"/__bifrost/join/"+row.id,{method:"POST",headers:{"content-type":"application/json"},body:"{}"});proof=JSON.parse(await response.text());w.sourceExpired=proof.source?.expired??null;worker=response.status===200&&proof.retired===true;if(!worker)workerFailures.push(Error("independent Worker retirement failed"));}catch(e){workerFailures.push(e);}
@@ -323,7 +335,8 @@ describe("Bifrost native diagnostic controls before product qualification",()=>{
    if(row.control==="partial"){let delivered=false;for await(const event of events)if(event.type==="text_delta"){
     delivered=true;callerWitnesses.get(controller.signal)!.delivered();controller.abort(new Error("synthetic diagnostic partial"));break;}
     expect(delivered).toBe(true);}
-   const value=await result;expect(value.stopReason).toBe(row.control==="eof"?"stop":row.control==="provider_error"?"error":"aborted");
+   const value=await result;expect(value.stopReason).toBe(row.control==="eof"?"stop":row.control==="partial"?"aborted":"error");
+   if(row.control==="preabort")expect(value.content).toEqual([]);
    expect(controller.signal.aborted).toBe(row.control==="preabort"||row.control==="partial");
   });
  },120000);
@@ -350,7 +363,8 @@ describe("registered Bifrost private discovery and public inference",()=>{
         expect(delivered).toBe(true);
       }
       const result=await resultPromise;
-      if(['preabort','partial'].includes(row.mode)){expect(controller.signal.aborted).toBe(true);expect(result.stopReason).toBe('aborted');}
+      if(row.mode==='preabort'){expect(controller.signal.aborted).toBe(true);expect(result.stopReason).toBe('error');expect(result.content).toEqual([]);}
+      else if(row.mode==='partial'){expect(controller.signal.aborted).toBe(true);expect(result.stopReason).toBe('aborted');}
       else if(['provider_error','unpriced'].includes(row.mode)){expect(controller.signal.aborted).toBe(false);expect(result.stopReason).toBe('error');}
       else{expect(controller.signal.aborted).toBe(false);expect(result.stopReason).toBe('stop');expect(result.content).toContainEqual({type:'text',text:'synthetic-prefix'});expect(result.usage).toMatchObject({input:4,output:3,totalTokens:7});}
     });
