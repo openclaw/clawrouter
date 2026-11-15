@@ -11,7 +11,7 @@ import { dirname, join, relative, resolve, isAbsolute } from "node:path";
 import { containerContract, harnessInputs, installInputs, parseIdentity, validateIdentity, validateMapping, validateImage, dockerEnvironment, containerEnvironment, createArguments, validateContainerInspect, parseControl, validateTerminal, validateNativeIdentity, parseImageBuildReceipt, parseImageBuildStages, parseNativePrepareStages, observeImageBuild, parseContainerReceipt, parseChildPackaging, createProjectionLedger, parseInitPrerequisites, createAttachProjection, runInitPrerequisites, createInitGuardLedger, initGuardLeaf, createMountObservation, validateEmptyMasks, validateMaskCompletion, parseMounts, validateMountFreshness, validateMounts, validateMetadataMounts, validateChildStatus, validateTarget, cgroupPath, validateLimits, attachContainer, processEvidence, retiredCgroup, raiseContainerFailures, validateContainerDiagnostic, emitContainerFailure } from "../scripts/edge-proof-container.mjs";
 import { frozenGitEnvironment, validateGitExecutable, frozenSource } from "../scripts/edge-proof-build.mjs";
 import { edgeProof } from "../scripts/edge-proof-profile.mjs";
-import { launchCli, createPackagingDiagnostics, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, packReceiptOwnedDiagnostic, packReceiptCodeDiagnostic, packReceiptAssociatedDiagnostic, validateReceiptAssociatedDiagnostic, packReceiptCensusDiagnostic, unpackReceiptCensusDiagnostic, validateReceiptCensusDiagnostic, packCensusCloseDiagnostic, unpackCensusCloseDiagnostic, validateCensusCloseDiagnostic, validateFinalCensus, createFinalCensusLedger, censusStates, unpackReceiptOwnedDiagnostic, validateReceiptOwnedDiagnostic, validateOwnedTrace, validateOwnedCloseDiagnostic, validateOwnedCodeCloseDiagnostic, validateOwnedCode, validateReceiptCodeDiagnostic, ownedCodeClasses, classifyOwnedCode, createOwnedProcessLedger, projectionBoundaries, createContainerDiagnostics, containerProcessDiagnostic, imageBuildStages, runOwnedProcess, nativePrepareStages, createNativePrepareDiagnostics, enumerationOperations, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, initGuardTags, initSourcePhases, validateInitDetail, mountPredicates, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission } from "../scripts/edge-proof.mjs";
+import { launchCli, createPackagingDiagnostics, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, packReceiptOwnedDiagnostic, packReceiptCodeDiagnostic, packReceiptAssociatedDiagnostic, validateReceiptAssociatedDiagnostic, packReceiptCensusDiagnostic, packReceiptWranglerDiagnostic, unpackReceiptWranglerDiagnostic, validateReceiptWranglerDiagnostic, packWranglerCloseDiagnostic, validateWranglerCloseDiagnostic, validateReportedWranglerProcess, unpackReceiptCensusDiagnostic, validateReceiptCensusDiagnostic, packCensusCloseDiagnostic, unpackCensusCloseDiagnostic, validateCensusCloseDiagnostic, validateFinalCensus, createFinalCensusLedger, censusStates, unpackReceiptOwnedDiagnostic, validateReceiptOwnedDiagnostic, validateOwnedTrace, validateOwnedCloseDiagnostic, validateOwnedCodeCloseDiagnostic, validateOwnedCode, validateReceiptCodeDiagnostic, ownedCodeClasses, classifyOwnedCode, createOwnedProcessLedger, projectionBoundaries, createContainerDiagnostics, containerProcessDiagnostic, imageBuildStages, runOwnedProcess, nativePrepareStages, createNativePrepareDiagnostics, enumerationOperations, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, initGuardTags, initSourcePhases, validateInitDetail, mountPredicates, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission } from "../scripts/edge-proof.mjs";
 
 const hex = "a".repeat(64), other = "b".repeat(64), imageId = "sha256:" + hex;
 const identity = { uid: [501, 501, 501, 501], gid: [20, 20, 20, 20], groups: [20, 30] };
@@ -1859,13 +1859,13 @@ test("parent target ambiguity actual diagnostics retain first failure undefined 
 });
 // Receipt diagnostics exercise extracted production helpers with inert values.
 const receiptPackets = [];
-const receiptView = row=>row.v===16?receiptView(unpackReceiptCensusDiagnostic(row)):[14,15].includes(row.v)?unpackReceiptOwnedDiagnostic({...row,v:13,detail:row.detail.slice(0,8)}):row.v===13?unpackReceiptOwnedDiagnostic(row):row;
+const receiptView = row=>row.v===17?receiptView(unpackReceiptWranglerDiagnostic(row)):row.v===16?receiptView(unpackReceiptCensusDiagnostic(row)):[14,15].includes(row.v)?unpackReceiptOwnedDiagnostic({...row,v:13,detail:row.detail.slice(0,8)}):row.v===13?unpackReceiptOwnedDiagnostic(row):row;
 async function receiptParserFactory(overrides = {}) {
   const source = await readFile(new URL("../scripts/edge-proof-container.mjs", import.meta.url), "utf8");
   const helpers = source.slice(source.indexOf("const receiptRecord ="), source.indexOf("export function raiseContainerFailures("));
   const parser = source.slice(source.indexOf("export function createReceiptLedger("), source.indexOf("async function containerInit(")).replaceAll("export ", "");
   const masks = source.slice(source.indexOf("export function validateMaskCompletion("), source.indexOf("export async function validateEmptyMasks(")).replaceAll("export ", "");
-  const bindings = { check: (value, code) => { if (!value) throw new Error(code); }, same: (a,b) => JSON.stringify(a) === JSON.stringify(b), Buffer, JSON, Object, hashPattern: /^[a-f0-9]{64}$/, receiptOperations, validateReceiptDiagnostic, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, packReceiptOwnedDiagnostic, packReceiptCodeDiagnostic, packReceiptAssociatedDiagnostic, validateReceiptAssociatedDiagnostic, packReceiptCensusDiagnostic, unpackReceiptCensusDiagnostic, validateReceiptCensusDiagnostic, packCensusCloseDiagnostic, unpackCensusCloseDiagnostic, validateCensusCloseDiagnostic, validateFinalCensus, createFinalCensusLedger, censusStates, unpackReceiptOwnedDiagnostic, validateReceiptOwnedDiagnostic, validateOwnedTrace, validateOwnedCloseDiagnostic, createOwnedProcessLedger, createProjectionLedger, raiseContainerFailures,
+  const bindings = { check: (value, code) => { if (!value) throw new Error(code); }, same: (a,b) => JSON.stringify(a) === JSON.stringify(b), Buffer, JSON, Object, hashPattern: /^[a-f0-9]{64}$/, receiptOperations, validateReceiptDiagnostic, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, packReceiptOwnedDiagnostic, packReceiptCodeDiagnostic, packReceiptAssociatedDiagnostic, validateReceiptAssociatedDiagnostic, packReceiptCensusDiagnostic, packReceiptWranglerDiagnostic, unpackReceiptWranglerDiagnostic, validateReceiptWranglerDiagnostic, packWranglerCloseDiagnostic, validateWranglerCloseDiagnostic, validateReportedWranglerProcess, unpackReceiptCensusDiagnostic, validateReceiptCensusDiagnostic, packCensusCloseDiagnostic, unpackCensusCloseDiagnostic, validateCensusCloseDiagnostic, validateFinalCensus, createFinalCensusLedger, censusStates, unpackReceiptOwnedDiagnostic, validateReceiptOwnedDiagnostic, validateOwnedTrace, validateOwnedCloseDiagnostic, createOwnedProcessLedger, createProjectionLedger, raiseContainerFailures,
     edgeProof: { sourceSha: "c".repeat(40), sourceTree: "d".repeat(40) }, containerContract, ...overrides };
   const api = new Function(...Object.keys(bindings), helpers + masks + parser + "return {parseContainerReceipt,createReceiptLedger,observeContainerReceipt};")(...Object.values(bindings));
   const plan = { nonce: hex, contextHash: other, nativeHash: imageId.slice(7) };
@@ -2191,7 +2191,7 @@ async function receiptActualProducer(failure = "wrangler_input", writerFailure =
   const frames=[], calls=[], rejections=[], builderFailures=[], builders=[], processResults=[], denied=Object.freeze({inert:"unreached-binding"}), fixed={sourceSha:"c".repeat(40),sourceTree:"d".repeat(40)}, digest=value=>createHash("sha256").update(value).digest("hex");
   const capsule={...fixed,sourceFiles:Array(600).fill(0),dependencyInputs:Array(268).fill(0),instrumentation:Array(4).fill({erasureExact:true}),observerSha256:hex,harnessInputs:[],bundles:{edge:hex,upstream:hex},runtime:{}};
   const unreachable=name=>(..._args)=>{calls.push(["unreached",name]);throw denied;};
-  const bindings={Buffer,JSON,createHash,join,relative,dirname,createOwnedProcessLedger,validateOwnedCloseDiagnostic,validateOwnedCodeCloseDiagnostic,packCensusCloseDiagnostic,validateCensusCloseDiagnostic,edgeProof:fixed,digest,refuse:code=>{throw new Error(code);},process:{execPath:"/immutable/node"},
+  const bindings={Buffer,JSON,createHash,join,relative,dirname,createOwnedProcessLedger,packWranglerCloseDiagnostic,validateWranglerCloseDiagnostic,validateOwnedCloseDiagnostic,validateOwnedCodeCloseDiagnostic,packCensusCloseDiagnostic,validateCensusCloseDiagnostic,edgeProof:fixed,digest:value=>builderOptions.wrangler&&value==="inert-cli"?containerContract.cliHash:digest(value),refuse:code=>{throw new Error(code);},process:{execPath:"/immutable/node"},
     privateProcesses:async()=>{calls.push(["inventory"]);return [];},prepareEnvironment:async path=>{calls.push(["environment",path]);return {};},
     createRequire:(...args)=>{calls.push(["require",...args]);throw denied;},resolveModule:specifier=>{calls.push(["resolve",specifier]);throw undefined;},
     realpath:unreachable("realpath"),lstat:unreachable("lstat"),writeFile:unreachable("writeFile"),renderEdgeConfig:unreachable("renderEdgeConfig"),offlineProjection:unreachable("offlineProjection"),verifyDryRun:unreachable("verifyDryRun"),
@@ -2207,12 +2207,46 @@ async function receiptActualProducer(failure = "wrangler_input", writerFailure =
       const result = builderOptions.ownedProcess ? await builderOptions.ownedProcess(command,args,options,stdout) : {code:built.failed?1:0,signal:null,closed:true,timedOut:false,interrupted:false,errors:[],remaining:[],stdout,stderr:"",outputSummary:{stdout:{bytes:Buffer.byteLength(stdout),sha256:digest(stdout),esc:false,complete:true},stderr:{bytes:0,sha256:digest(""),esc:false,complete:true}}};
       if (builderOptions.processResult) builderOptions.processResult(result,role); processResults.push(result); return result;
     }};
+  if (builderOptions.wrangler) {
+    const requested = builderOptions.wrangler, originalRun = bindings.runOwnedProcess, originalRead = bindings.readFile;
+    bindings.resolveModule = specifier => { calls.push(["resolve",specifier]); return "/opt/edge-input/node_modules/wrangler/package.json"; };
+    bindings.createRequire = anchor => { calls.push(["require",anchor]); return {resolve:specifier=>{calls.push(["require.resolve",specifier]);return anchor;}}; };
+    bindings.realpath = async path => { calls.push(["realpath",path]);return path; };
+    bindings.lstat = async path => { calls.push(["lstat",path]);return {isFile:()=>true}; };
+    bindings.readFile = async path => {
+      if (path.endsWith("source-receipt.json")) return originalRead(path);
+      calls.push(["read",path]);
+      if (path.endsWith("package.json")) return JSON.stringify({version:"4.156.0"});
+      if (path.endsWith("cli.js")) return "inert-cli";
+      return Buffer.from("inert-bundle");
+    };
+    capsule.bundles = {edge:digest(Buffer.from("inert-bundle")),upstream:digest(Buffer.from("inert-bundle"))};
+    bindings.offlineProjection = () => ({inert:true});
+    bindings.renderEdgeConfig = (plan,kind,file) => { calls.push(["config",kind,file]);assert.deepEqual(plan,{inert:true});return "inert-config"; };
+    bindings.writeFile = async (...args) => {calls.push(["write",...args]);};
+    delete bindings.verifyDryRun;
+    bindings.runOwnedProcess = async (command,args,options) => {
+      if (args[0] !== "--no-warnings") return originalRun(command,args,options);
+      const kind = args.at(-1).endsWith("edge") ? "edge" : "upstream";
+      calls.push(["wrangler",kind,command,args,options]);
+      assert.equal(command,"/immutable/node");
+      assert.deepEqual(args,["--no-warnings","/opt/edge-input/node_modules/wrangler/wrangler-dist/cli.js","deploy","--dry-run","--config","/task/capsule-a/"+kind+".toml","--outdir","/task/dry-"+kind]);
+      assert.equal(options.cwd,"/task/capsule-a");assert.equal(options.sample,bindings.privateProcesses);assert.equal(Object.hasOwn(options,"recorder"),false);
+      const result = await receiptOwnedResult(command,args,options,"--dry-run: exiting now.\n",kind===requested.role?requested.scenario:"normal",true);
+      if (kind===requested.role && requested.mutate) requested.mutate(result);
+      processResults.push(result); return result;
+    };
+  }
   // These are the external callable bindings of the extracted pipeline. The
   // later filesystem/rendering branches remain explicit inert refusals.
-  for(const name of ["validateOwnedCodeCloseDiagnostic","createRequire","resolveModule","realpath","lstat","writeFile","renderEdgeConfig","offlineProjection","verifyDryRun","readFile","runOwnedProcess","privateProcesses","prepareEnvironment","join","dirname","relative","digest","refuse"]) assert.equal(typeof bindings[name],"function",name);
-  const api=new Function(...Object.keys(bindings),diagnostics+acceptance+pipeline+"return {createPackagingDiagnostics,runPackagingPipeline,acceptPackagingProcess,validatePackagingReceipt,summarizePackagingOutput};")(...Object.values(bindings));
+  for(const name of ["validateOwnedCodeCloseDiagnostic","createRequire","resolveModule","realpath","lstat","writeFile","renderEdgeConfig","offlineProjection","readFile","runOwnedProcess","privateProcesses","prepareEnvironment","join","dirname","relative","digest","refuse"]) assert.equal(typeof bindings[name],"function",name);
+  const api=new Function(...Object.keys(bindings),diagnostics+acceptance+(builderOptions.wrangler?cut("export function verifyDryRun(","export function compareCapsules("):"")+pipeline+"return {createPackagingDiagnostics,runPackagingPipeline,acceptPackagingProcess,validatePackagingReceipt,summarizePackagingOutput};")(...Object.values(bindings));
   const report=api.createPackagingDiagnostics("child",line=>{if(writerFailure)throw undefined;frames.push(line);}), mark=report.mark;
-  report.mark=(...args)=>{if(args[1]==="rejected")rejections.push({phase:args[0],reason:args[2]});return Reflect.apply(mark,report,args);};
+  report.mark=(...args)=>{
+    if(args[1]==="rejected")rejections.push({phase:args[0],reason:args[2]});
+    if(builderOptions.wrangler?.reportFailure && args[0]===builderOptions.wrangler.role+"_close" && args[1]==="fulfilled") throw builderOptions.wrangler.reportReason;
+    return Reflect.apply(mark,report,args);
+  };
   report.mark("entry","fulfilled");let failed=false,reason;
   try{await api.runPackagingPipeline("/opt/edge-input","/task",report,{builderDiagnostics:builderOptions.diagnostics===true,checkBoundary:async()=>{calls.push(["boundary"]);if(failure==="namespace_read")throw undefined;},buildArguments:(capsule,role)=>["/opt/edge-input/scripts/edge-proof.mjs","container-build",capsule,role,hex,"501","501"]});}catch(error){failed=true;reason=error;}
   report.mark("final",failed?"rejected":"fulfilled",reason);
@@ -2221,7 +2255,7 @@ async function receiptActualProducer(failure = "wrangler_input", writerFailure =
 async function receiptProjectionFactory(overrides={}) {
   const source=await readFile(new URL("../scripts/edge-proof-container.mjs",import.meta.url),"utf8");
   const body=source.slice(source.indexOf("export function projectBuilderCloseGroup("),source.indexOf("export function createAttachProjection(")).replaceAll("export ","");
-  const bindings={Buffer,JSON,Map,hash:bytes=>createHash("sha256").update(bytes).digest("hex"),cidPattern:/^[a-f0-9]{64}$/,hashPattern:/^[a-f0-9]{64}$/,check:(value,code)=>{if(!value)throw new Error(code);},projectionBoundaries,validatePackagingDiagnostic,receiptChildPhases,validateReportedBuilderProcess,receiptBuilderSignals,unpackCensusCloseDiagnostic,...overrides};
+  const bindings={Buffer,JSON,Map,hash:bytes=>createHash("sha256").update(bytes).digest("hex"),cidPattern:/^[a-f0-9]{64}$/,hashPattern:/^[a-f0-9]{64}$/,check:(value,code)=>{if(!value)throw new Error(code);},projectionBoundaries,validatePackagingDiagnostic,receiptChildPhases,validateReportedBuilderProcess,receiptBuilderSignals,unpackCensusCloseDiagnostic,validateWranglerCloseDiagnostic,...overrides};
   return new Function(...Object.keys(bindings),body+"return {createProjectionLedger,parseChildPackaging,validateChildLifecycle,projectionRun,projectionLeaf};")(...Object.values(bindings));
 }
 function receiptBoundaryRecord(child,projection,count="ZERO") {return {v:10,phase:"receipt",state:"rejected",defined:true,exit:null,signal:null,parser:[1,2,true,3,1,1,0,1,0],child,reports:[0,0],count,projection};}
@@ -3198,6 +3232,109 @@ test("final census widest canonical packets retain every historical field and al
   // diagnostic may substitute for that original count or grant qualification.
   rec.censusRow(token,70000,1,70000,"70000","S");const next=[];rec.censusSample(token,next);rec.censusResult(next);const saturated=rec.censusFinish();
   assert.equal(saturated[6]&1,1);assert.throws(()=>validateFinalCensus(saturated,65536,true,0,trace));
+});
+// Wrangler V17 exercises the original pipeline and original owned-process body;
+// all filesystem/library/process bindings are inert, including both builders.
+test("wrangler result actual original edge and upstream failure groups are atomic",async()=>{
+  for(const role of ["edge","upstream"])for(const scenario of ["nonzero","signal","timeout","interrupt","error_undefined","sample_undefined","spawn_undefined","remaining"]){
+    const made=await receiptActualProducer("wrangler",false,{wrangler:{role,scenario}});
+    assert.equal(made.failed,true);assert.ok(made.reason instanceof AggregateError);assert.notEqual(made.reason.name,"ReferenceError");
+    assert.equal(made.calls.filter(r=>r[0]==="wrangler").length,role==="edge"?1:2);
+    const original=made.processResults.at(-1), rejected=made.rejections.find(r=>r.phase===role+"_close");
+    assert.equal(rejected.reason,made.reason);assert.equal(made.builders.length,2);assert.ok(made.builders.every(b=>!b.failed));
+    assert.equal(made.report.errors.length,0);
+    const wire=await lifecyclePacket(made,frames=>frames,"census");assert.equal(wire.v,17,role+":"+scenario);
+    const group=wire.detail[11],base=receiptView(wire);
+    assert.equal(base.child[1],"reported_rejection");assert.equal(base.child[6],receiptChildPhases.indexOf(role+"_close")+1);assert.equal(base.child[8],"UNKNOWN");
+    assert.equal(group[1],role==="edge"?1:2);assert.equal(group[2],3);assert.equal(group[12],3);
+    assert.equal(group[3],original.code);assert.equal(receiptBuilderSignals[group[4]],original.signal);
+    assert.equal(group[5]&1,Number(original.closed));assert.equal(Boolean(group[5]&2),original.timedOut);assert.equal(Boolean(group[5]&4),original.interrupted);
+    assert.equal(group[6],original.errors.length);assert.equal(group[7],original.remaining?.length??null);
+    for(const [key,index] of [["stdout",8],["stderr",10]]){assert.equal(group[index],original.outputSummary[key].bytes);assert.equal(Buffer.from(group[index+1],"base64url").toString("hex"),original.outputSummary[key].sha256);}
+    assert.deepEqual(wire.detail.slice(7,11),[null,null,null,null]);
+  }
+});
+test("wrangler result original success and reporting throws retain distinct qualification and undefined",async()=>{
+  for(const role of ["edge","upstream"])for(const reason of [undefined,new Error("inert report")]){
+    const made=await receiptActualProducer("wrangler",false,{wrangler:{role,scenario:"normal",reportFailure:true,reportReason:reason}});
+    assert.equal(made.failed,true);assert.equal(made.reason,reason);assert.equal(made.rejections.find(r=>r.phase===role+"_close").reason,reason);
+    const wire=await lifecyclePacket(made,frames=>frames,"census");assert.equal(wire.v,17);
+    assert.equal(wire.detail[11][12],1);assert.equal(wire.detail[11][2],reason===undefined?2:3);assert.equal(wire.detail[11][3],0);assert.equal(wire.detail[11][7],0);
+  }
+  const success=await receiptActualProducer("wrangler",false,{wrangler:{role:"upstream",scenario:"normal"}});
+  assert.equal(success.failed,false);assert.equal(success.calls.filter(r=>r[0]==="wrangler").length,2);assert.equal(success.report.errors.length,0);
+  const c=await receiptCapture(success.frames),ledger=createProjectionLedger();assert.equal(c.summary(ledger)[1],"reported_complete");assert.equal(ledger.wrangler(),null);
+  const source=await readFile(new URL("../scripts/edge-proof.mjs",import.meta.url),"utf8");
+  const body=source.slice(source.indexOf("export function reportWranglerProcess("),source.indexOf("export function verifyDryRun(")).replace("export ","");
+  for(const primary of [undefined,new Error("inert primary")]){
+    let checks=0,marks=0;const result={},report={mark(...args){marks++;assert.equal(args[0],"edge_close");assert.equal(args[1],"rejected");assert.equal(args[2],primary);assert.equal(args[3],result);assert.equal(args[4],primary===undefined?2:3);throw undefined;}};
+    const run=new Function("requireProcessSuccess",body+"return reportWranglerProcess;")(value=>{checks++;assert.equal(value,result);throw primary;});
+    assert.throws(()=>run(result,report,"edge_close"),error=>error instanceof AggregateError&&error.errors.length===2&&Object.is(error.errors[0],primary)&&error.errors[1]===undefined);assert.equal(checks,1);assert.equal(marks,1);
+  }
+});
+test("wrangler result full canonical framing binding and pair ambiguity fail closed",async()=>{
+  const made=await receiptActualProducer("wrangler",false,{wrangler:{role:"upstream",scenario:"remaining"}});
+  const mutateRow=(frames,change)=>frames.map(line=>{const row=JSON.parse(line.slice("EDGE_PACKAGING_V1 ".length));if(row.phase==="upstream_close")change(row);return "EDGE_PACKAGING_V1 "+JSON.stringify(row)+"\n";});
+  for(const mutate of [
+    ...["build_a","build_b"].map(role=>f=>{
+      const members=f.filter(line=>JSON.parse(line.slice("EDGE_PACKAGING_V1 ".length)).role===role),rest=f.filter(line=>JSON.parse(line.slice("EDGE_PACKAGING_V1 ".length)).role!==role);
+      const close=rest.findIndex(line=>line.includes('"phase":"'+role+'_close"'));rest.splice(close+1,0,...members);return rest;
+    }),
+    f=>f.filter(line=>!line.includes('"phase":"upstream_close"')),
+    f=>f.flatMap(line=>line.includes('"phase":"upstream_close"')?[line,line]:[line]),
+    f=>f.flatMap(line=>line.includes('"phase":"upstream_launch"')?[line,line]:[line]),
+    f=>mutateRow(f,r=>r.role="build_a"),f=>mutateRow(f,r=>r.detail[1]=1),f=>mutateRow(f,r=>r.detail.pop()),
+    f=>mutateRow(f,r=>r.detail[9]="not-a-hash"),f=>mutateRow(f,r=>r.detail[12]=1),f=>mutateRow(f,r=>r.defined=null),
+    f=>[...f,f.at(-1)],f=>[...f,"EDGE_PACKAGING_V1 {"],f=>f.map(line=>line.replace('"v":5','"v":5,"v":5')),
+    f=>f.map(line=>line.replace('"v":5','"v":5\u001b')),f=>Array(257).fill(f[0]),
+    f=>{const next=[...f],i=next.findIndex(x=>x.includes('"phase":"upstream_close"'));[next[i],next[i-1]]=[next[i-1],next[i]];return next;},
+    f=>{const edge=f.find(x=>x.includes('"phase":"edge_close"'));return f.map(x=>x.includes('"phase":"upstream_close"')?edge:x);},
+  ]){const wire=await lifecyclePacket(made,mutate,"census");assert.equal(wire.v,16);assert.equal(wire.detail[7],null);}
+  for(const key of ["stdout","stderr"])for(const field of ["bytes","retainedBytes","sha256","retainedSha256","complete","truncated"]){
+    const c=await receiptCapture(made.frames),s=c.h.attached.result.outputSummary[key];s[field]=field.endsWith("256")?other:field==="complete"?false:field==="truncated"?true:s[field]+1;
+    const ledger=createProjectionLedger();assert.ok(["capture_mismatch","capture_unavailable"].includes(c.summary(ledger)[1]));assert.equal(ledger.wrangler(),null);
+  }
+  const c=await receiptCapture(made.frames);
+  for(const change of [b=>b.cid="foreign",b=>b.nonce="foreign",b=>b.contextHash="foreign",b=>b.attached={result:{...c.h.attached.result}}]){const binding={...c.binding};change(binding);const ledger=createProjectionLedger();assert.equal(parseChildPackaging(c.h.attached.result,binding,c.initSummary,ledger)[1],"binding_unavailable");assert.equal(ledger.wrangler(),null);}
+});
+test("wrangler result preceding builder interval counterexamples close the review finding",async()=>{
+  const made=await receiptActualProducer("wrangler",false,{wrangler:{role:"edge",scenario:"remaining"}});
+  const source=await readFile(new URL("../scripts/edge-proof-container.mjs",import.meta.url),"utf8");
+  let before=source.slice(source.indexOf("export function projectWranglerCloseGroup("),source.indexOf("export function createProjectionLedger("));
+  const start=before.indexOf("  // Wrangler is reached only"),end=before.indexOf("  const owners = lifecycle.wranglers",start);assert.ok(start>0&&end>start);
+  before=before.slice(0,start)+before.slice(end); // Exact reviewed pre-fix association predicate.
+  const prior=new Function("validateWranglerCloseDiagnostic",before.replace("export ","")+"return projectWranglerCloseGroup;")(validateWranglerCloseDiagnostic);
+  for(const role of ["build_a","build_b"]){
+    const members=made.frames.filter(line=>JSON.parse(line.slice("EDGE_PACKAGING_V1 ".length)).role===role),frames=made.frames.filter(line=>JSON.parse(line.slice("EDGE_PACKAGING_V1 ".length)).role!==role);
+    frames.splice(frames.findIndex(line=>line.includes('"phase":"'+role+'_close"'))+1,0,...members);
+    const c=await receiptCapture(frames),ledger=createProjectionLedger(),seen={};
+    for(const name of ["canonical","childLifecycle","rejection"]){const original=ledger[name];ledger[name]=value=>{seen[name]=value;return original(value);};}
+    assert.equal(c.summary(ledger)[1],"reported_rejection");assert.ok(prior(seen.canonical,seen.childLifecycle,seen.rejection));assert.equal(ledger.wrangler(),null);
+    const wire=await lifecyclePacket(made,()=>frames,"census");assert.equal(wire.v,16);assert.equal(wire.detail[7],null);
+  }
+});
+test("wrangler result inconsistent original summaries and independent write failures yield unknown",async()=>{
+  for(const mutate of [r=>r.outputSummary.stdout.complete=false,r=>r.outputSummary.stderr.sha256="invalid",r=>r.outputSummary.stdout.bytes=-1]){
+    const made=await receiptActualProducer("wrangler",false,{wrangler:{role:"edge",scenario:"nonzero",mutate}});
+    assert.equal(made.failed,true);assert.ok(made.report.errors.length);assert.ok(made.reason instanceof AggregateError);assert.equal(made.reason.errors[0].message,"edge-proof: child-not-qualified");
+    const wire=await lifecyclePacket(made,frames=>frames,"census");assert.equal(wire.v,16);assert.equal(wire.detail[7],null);
+  }
+  const source=await readFile(new URL("../scripts/edge-proof.mjs",import.meta.url),"utf8");
+  const body=source.slice(source.indexOf("export function reportWranglerProcess("),source.indexOf("export function verifyDryRun(")).replace("export ","");
+  const result=await receiptOwnedResult("/immutable/node",[],{cwd:"/task",env:{}},"inert", "nonzero",true),report=createPackagingDiagnostics("child",()=>{throw undefined;});
+  const run=new Function("requireProcessSuccess",body+"return reportWranglerProcess;")(value=>{assert.equal(value,result);throw undefined;});
+  let failed=false,reason;try{run(result,report,"edge_close");}catch(error){failed=true;reason=error;}
+  assert.equal(failed,true);assert.equal(reason,undefined);assert.deepEqual(report.errors,[undefined]);assert.equal(report.records.length,1);assert.equal(report.records[0].defined,false);
+});
+test("wrangler result widest lossless packet reserves one row with no borrowed native observations",async()=>{
+  const made=await receiptActualProducer("wrangler",false,{wrangler:{role:"upstream",scenario:"nonzero"}}),original=await lifecyclePacket(made,frames=>frames,"census");
+  const wide=structuredClone(original);wide.detail[0]=false;wide.detail[1]=[1,2,false,3,1,1,0,1,0];wide.detail[2][1]=256;wide.detail[3]=4294967295;
+  wide.detail[11]=[1,2,3,-65535,14,127,65535,65535,Number.MAX_SAFE_INTEGER,"_".repeat(42)+"8",Number.MAX_SAFE_INTEGER,"_".repeat(42)+"8",3];
+  validateReceiptWranglerDiagnostic(wide);assert.ok(Buffer.byteLength(JSON.stringify(wide))<=512);
+  for(const mutate of [r=>r.detail[11][12]=1,r=>r.detail[11][9]="_".repeat(43),r=>r.detail[11][1]=1,r=>r.detail[8]=[1,null,null,[1,0,0]],r=>r.detail[9]=[1,0,0],r=>r.detail[10]=[1,0,0,null,0,null,0,null,[],0],r=>r.detail[2][5]=18,r=>r.detail[2][6]=false]){const bad=structuredClone(wide);mutate(bad);assert.throws(()=>validateContainerDiagnostic(bad));}
+  const packet=structuredClone(receiptPackets.at(-1));packet[packet.findIndex(r=>r.phase==="receipt")]=wide;
+  for(const phase of ["dispatch","image","base","create","attach","ready","cwd","temp","environment","permit"])packet.push({v:2,phase,state:"fulfilled",defined:null,exit:null,signal:null});
+  const lines=[];emitContainerFailure(packet,line=>lines.push(line));assert.equal(lines.length,10);assert.equal(JSON.parse(lines[0].slice(lines[0].indexOf("::{")+2)).v,17);assert.ok(lines.every(line=>Buffer.byteLength(line)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);receiptPackets.push(lines.map(line=>JSON.parse(line.slice(line.indexOf("::{")+2))));
 });
 // END attach diagnostic pure tests.
 

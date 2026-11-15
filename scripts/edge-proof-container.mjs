@@ -9,7 +9,7 @@ import { createRequire } from "node:module";
 import { channel } from "node:diagnostics_channel";
 import { errorMonitor } from "node:events";
 import { edgeProof } from "./edge-proof-profile.mjs";
-import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, validateContainerDiagnostic, initGuardTags, initSourcePhases, validateInitDetail, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic, projectionBoundaries, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, packReceiptOwnedDiagnostic, packReceiptCodeDiagnostic, packReceiptAssociatedDiagnostic, packReceiptCensusDiagnostic, unpackCensusCloseDiagnostic } from "./edge-proof.mjs";
+import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, validateContainerDiagnostic, initGuardTags, initSourcePhases, validateInitDetail, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic, projectionBoundaries, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, packReceiptOwnedDiagnostic, packReceiptCodeDiagnostic, packReceiptAssociatedDiagnostic, packReceiptCensusDiagnostic, unpackCensusCloseDiagnostic, validateWranglerCloseDiagnostic, packReceiptWranglerDiagnostic } from "./edge-proof.mjs";
 export { validateContainerDiagnostic, emitContainerFailure } from "./edge-proof.mjs";
 
 export const containerContract = Object.freeze({
@@ -1064,6 +1064,11 @@ export function projectBuilderCloseGroup(rows, childLifecycle, first, recordTrac
     }
   } else if (first && [4,5].includes(first[2]) && first[1] >= 18 && first[1] <= 30) role = first[2] === 4 ? "build_a" : "build_b";
   if (!role) return null;
+  return inspectBuilderCloseGroup(rows, childLifecycle, role, recordTrace, Boolean(rejection));
+}
+// Common complete source interval validation; callers choose a role only from
+// their admitted source lifecycle, never from recency or a fabricated failure.
+function inspectBuilderCloseGroup(rows, childLifecycle, role, recordTrace, allowEmpty) {
   // No canonical-but-unassociated builder frames may hide outside a wrapper's
   // original close/summary/report interval, including a different builder role.
   for (const candidate of ["build_a","build_b"]) {
@@ -1086,13 +1091,33 @@ export function projectBuilderCloseGroup(rows, childLifecycle, first, recordTrac
   if (members.length !== forwarded.length || members.some((row,i)=>row!==forwarded[i])) return null;
   if (!members.length) {
     const protocol = summaries[2];
-    if (!rejection || closes[0].outcome !== "rejected" || accepted[0].row.outcome !== "rejected" || protocol.complete !== true || ["valid","entry","final","rejected","foreign","malformed"].some(key => protocol[key] !== 0)) return null;
+    if (!allowEmpty || closes[0].outcome !== "rejected" || accepted[0].row.outcome !== "rejected" || protocol.complete !== true || ["valid","entry","final","rejected","foreign","malformed"].some(key => protocol[key] !== 0)) return null;
   }
   const close = closes[0].v === 4 ? unpackCensusCloseDiagnostic(closes[0]) : closes[0], [out,err] = summaries;
   if (!["fulfilled","rejected"].includes(close.outcome) || (close.outcome === "rejected" ? typeof close.defined !== "boolean" : close.defined !== null)) return null;
   if (![close.closed,close.timedOut,close.interrupted,out.esc,out.complete,err.esc,err.complete].every(value=>typeof value==="boolean")) return null;
   const flags = [close.closed,close.timedOut,close.interrupted,out.esc,out.complete,err.esc,err.complete].reduce((mask,value,i)=>mask+(value?2**i:0),0);
   try { const projected=validateReportedBuilderProcess([1,role === "build_a" ? 1 : 2,close.outcome==="fulfilled"?1:close.defined?3:2,close.exit,receiptBuilderSignals.indexOf(close.signal),flags,close.errors,close.remaining,out.bytes,out.sha256,err.bytes,err.sha256]); if(recordTrace)recordTrace(close.v===2||close.v===3?close.trace:null,close.v===3?close.code:null,closes[0].v===4?closes[0].detail[7]:null);return projected; } catch { return null; }
+}
+// Only the exact admitted close row and its source lifecycle launch can own
+// this group. Global canonical/capture checks run before rejection is recorded.
+export function projectWranglerCloseGroup(rows, lifecycle, rejection) {
+  if (!rows || !lifecycle || !rejection || rejection.v !== 5 || rejection.role !== "child" || rejection.outcome !== "rejected") return null;
+  // Wrangler is reached only after BOTH exact builder acceptance intervals.
+  // All forwarded rows must follow the three summaries, including foreign-role
+  // insertions that role-local lifecycle checks alone cannot detect.
+  for (const role of ["build_a","build_b"]) {
+    try {
+      const group = inspectBuilderCloseGroup(rows,lifecycle,role,undefined,false);
+      if (!group || group[2] !== 1) return null;
+    } catch { return null; }
+  }
+  const owners = lifecycle.wranglers.filter(item=>item.close===rejection);
+  if (owners.length !== 1 || rows.filter(row=>row.phase===rejection.phase).length !== 1) return null;
+  const {launch,close} = owners[0], start = rows.indexOf(launch);
+  if (start < 0 || rows[start+1] !== close || launch.role !== "child" || launch.phase !== close.phase.replace("_close","_launch") || launch.outcome !== "enter" || rows.filter(row=>row.phase===launch.phase).length !== 1) return null;
+  if (["defined","exit","signal","closed","timedOut","interrupted","errors","remaining"].some(key=>launch[key]!==null)) return null;
+  try { return validateWranglerCloseDiagnostic(close).detail; } catch { return null; }
 }
 export function createProjectionLedger() {
   const errors = [], stack = [], admitted = new WeakMap(); let first = null, firstLifecycle = null, canonicalRows = null, childLifecycle = null, firstOwnedTrace = null, firstOwnedCode = null, firstCensus = null, admittedRejection = null, broken = false;
@@ -1102,6 +1127,7 @@ export function createProjectionLedger() {
     childLifecycle(value) { note(() => { childLifecycle = value; }); },
     rejection(value) { note(() => { admittedRejection = value; }); },
     builder() { firstOwnedTrace=null;firstOwnedCode=null;firstCensus=null;return broken || errors.length || stack.length ? null : projectBuilderCloseGroup(canonicalRows, childLifecycle, first,(trace,code,census)=>{firstOwnedTrace=trace;firstOwnedCode=code;firstCensus=census;},admittedRejection); },
+    wrangler() { return broken || errors.length || stack.length ? null : projectWranglerCloseGroup(canonicalRows, childLifecycle, admittedRejection); },
     owned() { return broken || errors.length || stack.length ? null : firstOwnedTrace; },
     code() { return broken || errors.length || stack.length ? null : firstOwnedCode; },
     census() { return broken || errors.length || stack.length ? null : firstCensus; },
@@ -1189,13 +1215,13 @@ export function parseChildPackaging(result, binding, initSummary, recorder) {
   } catch { return unknown("invalid"); }
 }
 function validateChildLifecycle(rows, role, recorder, context) {
-  let index = 0, failed = false; const accepts = [];
+  let index = 0, failed = false; const accepts = [], wranglers = [];
   const peek = (phase,outcome, observed) => projectionLeaf(observed, 1, rows[index]?.phase === phase) && (projectionLeaf(observed, 2, outcome === undefined) || projectionLeaf(observed, 3, rows[index]?.outcome === outcome));
   const take = (phase,outcome) => { check(projectionRun(recorder, 28, context, () => peek(phase,outcome,recorder)),"child-lifecycle-order"); return rows[index++]; };
   const final = complete => {
     if (!peek("final")) return null;
     const row = rows[index++]; check(projectionRun(recorder, 29, context, () => projectionLeaf(recorder, 1, index === rows.length) && projectionLeaf(recorder, 2, ["fulfilled","rejected"].includes(row.outcome)) && (projectionLeaf(recorder, 3, row.outcome !== "fulfilled") || projectionLeaf(recorder, 4, complete) && projectionLeaf(recorder, 5, !failed))),"child-lifecycle-final");
-    return { terminal: row.outcome, accepts };
+    return { terminal: row.outcome, accepts, wranglers };
   };
   const step = phase => {
     take(phase,"enter"); const rowIndex = index, row=rows[index++];
@@ -1233,8 +1259,9 @@ function validateChildLifecycle(rows, role, recorder, context) {
   for (const phase of ["two_roots","wrangler_input"]) if (!step(phase)) return final(false);
   for (const role of ["edge","upstream"]) {
     if (!step(role+"_config")) return final(false);
-    take(role+"_launch","enter"); if (peek("final")) return final(false);
+    const launch = take(role+"_launch","enter"); if (peek("final")) return final(false);
     const close = rows[index++]; check(projectionRun(recorder, 31, context, () => projectionLeaf(recorder, 1, close?.phase === role+"_close") && projectionLeaf(recorder, 2, ["fulfilled","rejected"].includes(close.outcome))),"child-lifecycle-close"); failed ||= close.outcome === "rejected";
+    wranglers.push({launch,close});
     if (failed) return final(false);
     for (const suffix of ["output","marker","hash","privacy"]) if (!step(role+"_"+suffix)) return final(false);
   }
@@ -1463,8 +1490,8 @@ export async function observeContainerReceipt(report, text, plan, childSummary, 
     try { child = childSummary(projector); } catch (error) { reporting.push(error); failures.push(error); child = [1,"invalid",null,0,0,0,0,null,"UNKNOWN"]; }
     failures.push(...projector.errors);
     const diagnostics = [...reporting, ...recorder.errors, ...projector.errors];
-    try { const builder=projector.builder();report.internal(packReceiptCensusDiagnostic({ v: 12, phase: "receipt", state: "rejected", defined: failures[0] !== undefined, exit: null, signal: null,
-      parser: recorder.finish(outcome, operationReason), child, reports: [diagnostics.length, diagnostics.filter(error => error === undefined).length], count: recorder.cardinality(), projection: projector.detail(), lifecycle: projector.lifecycle(), builder },projector.owned(),projector.code(),projector.census())); }
+    try { const builder=projector.builder();report.internal(packReceiptWranglerDiagnostic(packReceiptCensusDiagnostic({ v: 12, phase: "receipt", state: "rejected", defined: failures[0] !== undefined, exit: null, signal: null,
+      parser: recorder.finish(outcome, operationReason), child, reports: [diagnostics.length, diagnostics.filter(error => error === undefined).length], count: recorder.cardinality(), projection: projector.detail(), lifecycle: projector.lifecycle(), builder },projector.owned(),projector.code(),projector.census()),projector.wrangler())); }
     catch (error) { failures.push(error); }
     raiseContainerFailures(failures);
   }
