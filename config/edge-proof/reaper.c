@@ -12,6 +12,7 @@
 #include <fcntl.h>
 #include <signal.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -98,6 +99,57 @@ static int fd_fixture(void) {
   errno = 0;
   return fcntl(3, F_GETFD) == -1 && errno == EBADF ? 0 : FAILURE;
 }
+/* FD2 is the original Docker stderr channel, owned only by this executable.
+ * Before exec the child replaces FD2 with stdout; it never inherits this writer.
+ * This record is private, and is accepted only with the independently admitted
+ * PID1 executable/CID and exact complete original attach-channel capture. */
+static int terminal(const char *nonce, const char *context, pid_t coordinator,
+                    uint32_t sequence, int status, unsigned faults, int finishing) {
+  unsigned kind = WIFEXITED(status) ? 1 : WIFSIGNALED(status) ? 2 : 0;
+  unsigned value = kind == 1 ? (unsigned)WEXITSTATUS(status) : kind == 2 ? (unsigned)WTERMSIG(status) : 0;
+  char record[256];
+  int n = snprintf(record, sizeof(record), "EDT1:%s:%s:%08x:%08x:%u:%08x:%08x:%u:1\n",
+                   nonce, context, (unsigned)coordinator, sequence, kind, value, faults, finishing ? 1u : 0u);
+  if (n <= 0 || (size_t)n >= sizeof(record)) return -1;
+  size_t sent = 0;
+  while (sent < (size_t)n) {
+    ssize_t count = write(STDERR_FILENO, record + sent, (size_t)n - sent);
+    if (count < 0 && errno == EINTR) continue;
+    if (count <= 0) return -1;
+    sent += (size_t)count;
+  }
+  return close(STDERR_FILENO);
+}
+/* No RPC/HELLO or product permit exists in this mode. The original coordinator
+ * holds a real child live, then waitable-Z, while sampling through its unchanged
+ * privateProcesses. Every child is joined before this fixture can exit zero. */
+static int census_fixture(void) {
+  if (getpid() == 1) return FAILURE;
+  int release[2]; if (pipe2(release, O_CLOEXEC)) return FAILURE;
+  pid_t child = fork(); if (child < 0) return FAILURE;
+  if (!child) {
+    close(release[1]); char byte; ssize_t n;
+    do { n = read(release[0], &byte, 1); } while (n < 0 && errno == EINTR);
+    close(release[0]); _exit(n == 1 ? 0 : FAILURE);
+  }
+  close(release[0]); int failed = 0; char byte; char line[32];
+  int size = snprintf(line, sizeof(line), "LIVE:%u\n", (unsigned)child);
+  if (size <= 0 || (size_t)size >= sizeof(line) || write(STDOUT_FILENO, line, (size_t)size) != size) failed = 1;
+  ssize_t n; do { n = read(STDIN_FILENO, &byte, 1); } while (n < 0 && errno == EINTR);
+  if (n != 1 || byte != 'L') failed = 1;
+  if (write(release[1], "x", 1) != 1) failed = 1;
+  close(release[1]);
+  siginfo_t info; memset(&info, 0, sizeof(info)); int rc;
+  do { rc = waitid(P_PID, (id_t)child, &info, WEXITED | WNOWAIT); } while (rc < 0 && errno == EINTR);
+  if (rc || info.si_pid != child || info.si_code != CLD_EXITED || info.si_status != 0) failed = 1;
+  size = snprintf(line, sizeof(line), "ZOMBIE:%u\n", (unsigned)child);
+  if (size <= 0 || (size_t)size >= sizeof(line) || write(STDOUT_FILENO, line, (size_t)size) != size) failed = 1;
+  do { n = read(STDIN_FILENO, &byte, 1); } while (n < 0 && errno == EINTR);
+  if (n != 1 || byte != 'Z') failed = 1;
+  int status; pid_t waited; do { waited = waitpid(child, &status, 0); } while (waited < 0 && errno == EINTR);
+  if (waited != child || !WIFEXITED(status) || WEXITSTATUS(status)) failed = 1;
+  return failed ? FAILURE : 0;
+}
 /* Hosted-only startup fixture: PID1 must adopt a genuinely waitable orphan.
  * One blocking WNOWAIT observation establishes Z; it is not a completion loop.
  * The same production drain function must actually reap it and its parent.
@@ -149,6 +201,7 @@ static int credential_fixture(void) {
 }
 int main(int argc, char **argv) {
   if (argc == 2 && !strcmp(argv[1], "--check-fd")) return fd_fixture();
+  if (argc == 2 && !strcmp(argv[1], "--fixture-census")) return census_fixture();
   /* Held-ACK fixture uses the same server and original owned-process deadline.
    * It is run only by the admitted coordinator before the product pipeline. */
   int hold = argc > 1 && !strcmp(argv[1], "--fixture-hold");
@@ -172,6 +225,7 @@ int main(int argc, char **argv) {
   if (coordinator == -1) return FAILURE;
   if (coordinator == 0) {
     close(pair[0]);
+    if (dup2(STDOUT_FILENO, STDERR_FILENO) < 0) _exit(FAILURE);
     if (pair[1] != 3) { if (dup2(pair[1], 3) < 0) _exit(FAILURE); close(pair[1]); }
     if (fcntl(3, F_SETFD, 0) || sigprocmask(SIG_SETMASK, &original, NULL)) _exit(FAILURE);
     execv(argv[1], argv + 1); _exit(FAILURE);
@@ -182,40 +236,42 @@ int main(int argc, char **argv) {
   for (;;) {
     if (interrupt_signal || terminate_signal) {
       int signal = terminate_signal ? SIGTERM : SIGINT; interrupt_signal = terminate_signal = 0;
-      fault = 1;
-      if (!exited && kill(coordinator, signal) && errno != ESRCH) fault = 1;
+      fault |= 1;
+      if (!exited && kill(coordinator, signal) && errno != ESRCH) fault |= 2;
       stopped = 1;
     }
     child_signal = 0;
     int empty = drain(coordinator, &exited, &status);
-    if (empty < 0 || (exited && !finishing)) fault = 1;
+    if (empty < 0) fault |= 4;
+    if (exited && !finishing) fault |= 8;
     if (exited && empty == 1 && (fault || eof)) {
-      if (fd >= 0) close(fd);
+      if (fd >= 0 && close(fd)) fault |= 16;
+      if (!hold && terminal(argv[4], argv[5], coordinator, next - 1, status, (unsigned)fault, finishing)) return FAILURE;
       if (fault || !finishing || !eof || !WIFEXITED(status)) return FAILURE;
       return WEXITSTATUS(status);
     }
     if (fault) {
-      if (fd >= 0) { close(fd); fd = -1; }
-      if (!exited && !stopped) { if (kill(coordinator, SIGTERM) && errno != ESRCH) fault = 1; stopped = 1; }
+      if (fd >= 0) { if (close(fd)) fault |= 16; fd = -1; }
+      if (!exited && !stopped) { if (kill(coordinator, SIGTERM) && errno != ESRCH) fault |= 2; stopped = 1; }
     }
     fd_set reads, writes; FD_ZERO(&reads); FD_ZERO(&writes);
-    if (fd >= FD_SETSIZE) { fault = 1; continue; }
+    if (fd >= FD_SETSIZE) { fault |= 32; continue; }
     if (fd >= 0) { FD_SET(fd, &reads); if (reply && !(hold && frame[4] == (DRAIN | 0x80))) FD_SET(fd, &writes); }
     int ready = pselect(fd + 1, &reads, &writes, NULL, NULL, &waiting);
-    if (ready < 0) { if (errno != EINTR) fault = 1; continue; }
+    if (ready < 0) { if (errno != EINTR) fault |= 32; continue; }
     if (fd >= 0 && FD_ISSET(fd, &reads)) {
       unsigned char extra;
       ssize_t n = receive(fd, reply || finishing ? &extra : frame + received, reply || finishing ? 1 : FRAME - received, coordinator);
       if (n == 0) {
-        eof = 1; if (!finishing || reply) fault = 1; close(fd); fd = -1;
-      } else if (n < 0) { if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) fault = 1; }
-      else if (reply || finishing) fault = 1;
+        eof = 1; if (!finishing || reply) fault |= 64; if (close(fd)) fault |= 16; fd = -1;
+      } else if (n < 0) { if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) fault |= 64; }
+      else if (reply || finishing) fault |= 128;
       else {
         received += (size_t)n;
         if (received == FRAME) {
-          if (!valid_frame(frame, coordinator, identity, next, hello)) { fault = 1; continue; }
+          if (!valid_frame(frame, coordinator, identity, next, hello)) { fault |= 128; continue; }
           int drained = drain(coordinator, &exited, &status);
-          if (drained != 0 || exited) { fault = 1; continue; }
+          if (drained != 0 || exited) { fault |= 4; continue; }
           hello = 1; if (frame[4] == FINISH) finishing = 1;
           frame[4] |= 0x80; reply = 1; sent = 0; next++;
         }
@@ -223,8 +279,8 @@ int main(int argc, char **argv) {
     }
     if (fd >= 0 && FD_ISSET(fd, &writes) && reply && !fault) {
       ssize_t n = send(fd, frame + sent, FRAME - sent, MSG_NOSIGNAL);
-      if (n < 0) { if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) fault = 1; }
-      else if (n == 0) fault = 1;
+      if (n < 0) { if (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) fault |= 256; }
+      else if (n == 0) fault |= 256;
       else { sent += (size_t)n; if (sent == FRAME) { reply = 0; received = 0; } }
     }
   }

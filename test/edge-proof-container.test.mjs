@@ -11,7 +11,7 @@ import { dirname, join, relative, resolve, isAbsolute } from "node:path";
 import { containerContract, harnessInputs, installInputs, parseIdentity, validateIdentity, validateMapping, validateImage, dockerEnvironment, containerEnvironment, createArguments, validateContainerInspect, parseControl, validateTerminal, validateNativeIdentity, parseImageBuildReceipt, parseImageBuildStages, parseNativePrepareStages, observeImageBuild, parseContainerReceipt, parseChildPackaging, createProjectionLedger, parseInitPrerequisites, createAttachProjection, runInitPrerequisites, createInitGuardLedger, initGuardLeaf, createMountObservation, validateEmptyMasks, validateMaskCompletion, parseMounts, validateMountFreshness, validateMounts, validateMetadataMounts, validateChildStatus, validateTarget, cgroupPath, validateLimits, attachContainer, processEvidence, retiredCgroup, raiseContainerFailures, validateContainerDiagnostic, emitContainerFailure } from "../scripts/edge-proof-container.mjs";
 import { frozenGitEnvironment, validateGitExecutable, frozenSource } from "../scripts/edge-proof-build.mjs";
 import { edgeProof } from "../scripts/edge-proof-profile.mjs";
-import { reaperFrame, createReaperClient, parseControlStat, validateControlPair, validateReaperElf } from "../scripts/edge-proof-container.mjs";
+import { reaperFrame, createReaperClient, parseControlStat, validateControlPair, validateReaperElf, parseReaperTerminal, requireReaperTerminal, createReaperTerminalRetention, hostedCensusMatrix } from "../scripts/edge-proof-container.mjs";
 import { bindCensusControls, classifyCensusControl, privateProcesses } from "../scripts/edge-proof.mjs";
 import { launchCli, createPackagingDiagnostics, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, packReceiptOwnedDiagnostic, packReceiptCodeDiagnostic, packReceiptAssociatedDiagnostic, validateReceiptAssociatedDiagnostic, packReceiptCensusDiagnostic, packReceiptObservedWranglerDiagnostic, unpackReceiptObservedWranglerDiagnostic, unpackReceiptWranglerDiagnostic, validateReceiptObservedWranglerDiagnostic, packObservedWranglerCloseDiagnostic, validateObservedWranglerCloseDiagnostic, validateObservedWranglerGroup, packReceiptWranglerDiagnostic, validateReceiptWranglerDiagnostic, packWranglerCloseDiagnostic, validateWranglerCloseDiagnostic, validateReportedWranglerProcess, unpackReceiptCensusDiagnostic, validateReceiptCensusDiagnostic, packCensusCloseDiagnostic, unpackCensusCloseDiagnostic, validateCensusCloseDiagnostic, validateFinalCensus, createFinalCensusLedger, censusStates, unpackReceiptOwnedDiagnostic, validateReceiptOwnedDiagnostic, validateOwnedTrace, validateOwnedCloseDiagnostic, validateOwnedCodeCloseDiagnostic, validateOwnedCode, validateReceiptCodeDiagnostic, ownedCodeClasses, classifyOwnedCode, createOwnedProcessLedger, projectionBoundaries, createContainerDiagnostics, containerProcessDiagnostic, imageBuildStages, runOwnedProcess, nativePrepareStages, createNativePrepareDiagnostics, enumerationOperations, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, initGuardTags, initSourcePhases, validateInitDetail, mountPredicates, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission } from "../scripts/edge-proof.mjs";
 
@@ -3674,19 +3674,19 @@ test("reaper inert actual RPC joins exact partial ACK and FINISH before close", 
 test("reaper inert actual RPC denies foreign replay malformed overflow and held ACK", async () => {
   for(const mutate of [b=>b[4]=130,b=>b[5]=1,b=>b[8]^=1,b=>b[15]^=1,b=>b[16]^=1,b=>b[48]^=1]){
     const socket=reaperSocket(),rpc=createReaperClient(socket,reaperBinding),outcome=originalOutcome(rpc.start());
-    const reply=reaperFrame(129,1,reaperBinding);mutate(reply);socket.emit("data",reply);assert.equal((await outcome).failed,true);rpc.abort();
+    const reply=reaperFrame(129,1,reaperBinding);mutate(reply);socket.emit("data",reply);assert.equal((await outcome).failed,true);await originalOutcome(rpc.abort());
   }
   const socket=reaperSocket(),rpc=createReaperClient(socket,reaperBinding);const start=rpc.start();reaperReply(socket);await start;
   let settled=false;const held=originalOutcome(rpc.drain()).then(value=>{settled=true;return value;});await reaperTick();assert.equal(settled,false);
   socket.emit("data",Buffer.alloc(81));assert.equal((await held).failed,true);
-  const ignored=originalOutcome(rpc.drain());assert.equal((await ignored).failed,true);rpc.abort();
+  const ignored=originalOutcome(rpc.drain());assert.equal((await ignored).failed,true);await originalOutcome(rpc.abort());
 });
 test("reaper inert actual RPC retains undefined write event install and close failures", async () => {
   for(const kind of ["write","event","install"]){
     const socket=reaperSocket();if(kind==="write")socket.write=()=>{throw undefined;};
     if(kind==="install"){const on=socket.on;socket.on=function(event,fn){on.call(this,event,fn);if(event==="data")throw undefined;return this;};}
     const rpc=createReaperClient(socket,reaperBinding),outcome=originalOutcome(rpc.start());if(kind==="event")socket.emit("error",undefined);
-    const value=await outcome;assert.equal(value.failed,true);assert.equal(value.reason,undefined);assert.equal(rpc.errors[0],undefined);rpc.abort();
+    const value=await outcome;assert.equal(value.failed,true);assert.equal(value.reason,undefined);assert.equal(rpc.errors[0],undefined);await originalOutcome(rpc.abort());
   }
   const socket=reaperSocket(),rpc=createReaperClient(socket,reaperBinding),pending=originalOutcome(rpc.start());socket.emit("close");assert.equal((await pending).failed,true);
 });
@@ -3759,5 +3759,116 @@ test("reaper inert source binds real hosted fixtures and original module imports
   assert.ok(c.includes('drain(intermediate, &exited, &status) != 0'));
   assert.ok(docker.includes('ENTRYPOINT ["/opt/edge-reaper/reaper", "/usr/local/bin/node"'));
   assert.ok(!c.includes('sleep('));assert.ok(!c.includes('SIG_IGN'));assert.ok(!c.includes('SA_NOCLDWAIT'));
+});
+test("reaper inert shutdown joins delayed original CLOSE and retains late independent undefined", async () => {
+  for (const destroyThrows of [false,true]) {
+    const socket=reaperSocket(), first=new Error("original"), late=undefined; let destroys=0;
+    socket.destroy=()=>{destroys++;if(destroyThrows)throw undefined;};
+    const rpc=createReaperClient(socket,reaperBinding), start=originalOutcome(rpc.start()); socket.emit("error",first);assert.equal((await start).reason,first);
+    const finish=rpc.finish();assert.equal(rpc.finish(),finish);assert.equal(rpc.abort(),finish);
+    let settled=false;const observed=originalOutcome(finish).then(value=>{settled=true;return value;});await reaperTick();assert.equal(settled,false);assert.equal(destroys,1);
+    socket.emit("error",late);await reaperTick();assert.equal(settled,false);socket.emit("close");
+    const outcome=await observed;assert.equal(outcome.failed,true);assert.equal(outcome.reason.errors[0],first);
+    assert.equal(outcome.reason.errors.filter(value=>value===undefined).length,destroyThrows?2:1);
+    const count=rpc.errors.length;socket.emit("close");assert.equal(rpc.errors.length,count);assert.equal(destroys,1);
+  }
+});
+test("reaper inert abort and successful FINISH share one original delayed close obligation", async () => {
+  const socket=reaperSocket();let end=0,destroy=0;socket.end=()=>{end++;};socket.destroy=()=>{destroy++;};
+  const rpc=createReaperClient(socket,reaperBinding),start=rpc.start();reaperReply(socket);await start;
+  const finish=rpc.finish();await reaperTick();reaperReply(socket);await reaperTick();assert.equal(end,1);
+  let settled=false;void finish.then(()=>{settled=true;});await reaperTick();assert.equal(settled,false);assert.equal(rpc.abort(),finish);
+  socket.emit("end");socket.emit("close");await finish;assert.equal(destroy,0);
+  const other=reaperSocket();other.destroy=()=>{throw undefined;};const failed=createReaperClient(other,reaperBinding);
+  const abort=originalOutcome(failed.abort());let done=false;void abort.then(()=>{done=true;});await reaperTick();assert.equal(done,false);
+  other.emit("error",undefined);other.emit("close");const outcome=await abort;assert.equal(outcome.reason.errors[0],undefined);assert.equal(outcome.reason.errors[1],undefined);
+});
+test("reaper inert shutdown preserves undefined primary and nested error identity without flattening", async () => {
+  const socket=reaperSocket();socket.destroy=()=>{};
+  const rpc=createReaperClient(socket,reaperBinding),start=originalOutcome(rpc.start());socket.emit("error",undefined);
+  const original=await start;assert.equal(original.failed,true);assert.equal(original.reason,undefined);
+  const result=originalOutcome(rpc.finish());await reaperTick();const late=new AggregateError([undefined],"independent");socket.emit("error",late);socket.emit("close");
+  const outcome=await result;assert.equal(outcome.reason.errors[0],undefined);assert.equal(outcome.reason.errors[1],late);assert.equal(outcome.reason.errors[1].errors[0],undefined);
+});
+function terminalFixture({kind=1,value=0,faults=0,finished=1,sequence=2}={}) {
+  const hex32=value=>value.toString(16).padStart(8,"0");
+  const frame=`EDT1:${reaperBinding.nonce}:${reaperBinding.contextHash}:00000002:${hex32(sequence)}:${kind}:${hex32(value)}:${hex32(faults)}:${finished}:1\n`;
+  const result={...processResult(),stdout:"original stdout",stderr:frame,supervisor:[true,true,false,false,true,true],outputSummary:{}};
+  const digest=text=>createHash("sha256").update(text).digest("hex");
+  for(const name of ["stdout","stderr"])result.outputSummary[name]={complete:true,truncated:false,bytes:Buffer.byteLength(result[name]),retainedBytes:Buffer.byteLength(result[name]),sha256:digest(result[name]),retainedSha256:digest(result[name])};
+  const attached={result};const binding={attached,cid:"c".repeat(64),...reaperBinding,sourceHash:"d".repeat(64),controls:{result:{reaper:{pid:1},coordinator:{pid:2}}}};
+  return{result,attached,binding};
+}
+test("reaper inert private terminal independently retains early42 signal FINISH42 and protocol fault", async () => {
+  for(const values of [{value:42,faults:8,finished:0,sequence:0},{kind:2,value:15,faults:8,finished:0,sequence:1},{value:42},{value:42,faults:128}]) {
+    const f=terminalFixture(values),retained=[];const retain=createReaperTerminalRetention(f.attached,()=>f.binding,async value=>retained.push(value));
+    const first=retain(f.result);assert.equal(retain(f.result),first);assert.equal((await originalOutcome(first)).failed,true);
+    assert.equal(retained.length,1);assert.equal(retained[0].terminal.coordinator.value,values.value);assert.equal(retained[0].terminal.supervisorFaults,values.faults??0);
+    assert.equal(retained[0].terminal.coordinator.kind,values.kind===2?"signal":"exit");
+    assert.ok(Buffer.byteLength(f.result.stderr)<256);
+  }
+  const f=terminalFixture(),retained=[];const value=await createReaperTerminalRetention(f.attached,()=>f.binding,async row=>retained.push(row))(f.result);
+  requireReaperTerminal(value);assert.equal(retained.length,1);
+});
+test("reaper inert terminal rejects shared stdout foreign truncated conflicting or unbound channel", async () => {
+  for(const mutate of [f=>f.result.stderr+="extra",f=>f.result.stderr="",f=>f.result.stderr=f.result.stderr.repeat(2),f=>f.binding.cid="wrong",f=>f.binding.attached={result:{}},f=>f.binding.controls.result.coordinator.pid=3,f=>f.result.supervisor[4]=false,f=>f.result.outputSummary.stdout.sha256="a".repeat(64),f=>f.result.outputSummary.stderr.truncated=true,f=>f.result.outputSummary.stderr.bytes++,f=>f.binding.contextHash="e".repeat(64)]){
+    const f=terminalFixture();mutate(f);assert.throws(()=>parseReaperTerminal(f.result,f.binding));
+  }
+  const f=terminalFixture(),sent=[];f.result.stderr="";
+  const outcome=await originalOutcome(createReaperTerminalRetention(f.attached,()=>f.binding,async row=>{sent.push(row);throw undefined;})(f.result));
+  assert.equal(outcome.failed,true);assert.equal(outcome.reason.errors.length,2);assert.equal(outcome.reason.errors[1],undefined);assert.equal(sent[0].terminal,null);
+  const g=terminalFixture();const failed=await originalOutcome(createReaperTerminalRetention(g.attached,()=>g.binding,()=>{throw undefined;})(g.result));assert.equal(failed.failed,true);assert.equal(failed.reason,undefined);
+});
+test("reaper inert actual hosted matrix uses real-bound operations in order and rejects both controls", async () => {
+  const pair={reaper:{pid:1,parent:0,start:"10"},coordinator:{pid:2,parent:1,start:"20"}}, args=[reaperBinding.nonce,reaperBinding.contextHash,"501","20"];
+  const seen=[],snapshots=[];let spawned,rows=[],closeOriginal;
+  const actualRequire= new Function((await readFile(new URL("../scripts/edge-proof.mjs",import.meta.url),"utf8")).match(/export function requireProcessSuccess\(result\) \{[\s\S]*?\n}/)[0].replace("export ","")+"return requireProcessSuccess;")();
+  const ops={
+    readControl:async pid=>{seen.push(["read",pid]);return{...pair[pid===1?"reaper":"coordinator"],exe:pid===1?containerContract.reaper:containerContract.node};},
+    validateControlPair:(a,b)=>{seen.push(["pair",a.exe,b.exe]);assert.notEqual(a.exe,"/invalid-control");assert.notEqual(b.exe,"/invalid-control");return pair;},
+    bindCensusControls:(a,b)=>({reaper:a,coordinator:b}),
+    privateProcesses:async(_recorder,token)=>{seen.push(["sample",token.reaper.start,token.coordinator.start]);assert.equal(token.reaper.start,"10");assert.equal(token.coordinator.start,"20");return rows.map(row=>({...row}));},
+    requireProcessSuccess:result=>{snapshots.push(result.remaining);return actualRequire(result);},
+    spawn:(command,argv,options)=>{
+      seen.push(["spawn",command,argv]);assert.deepEqual(options.stdio,["pipe","pipe","pipe"]);
+      const child=new EventEmitter();child.pid=3;child.stdout=new EventEmitter();child.stdin=new EventEmitter();
+      child.stdin.write=(byte,callback)=>{seen.push(["write",byte]);callback();if(byte==="L"){rows[0].state="Z";queueMicrotask(()=>child.stdout.emit("data",Buffer.from("ZOMBIE:4\n")));}else{rows=[];closeOriginal(processResult());}};
+      child.stdin.end=()=>{};child.stdin.destroy=()=>{};spawned=child;return child;
+    },
+    runOwnedProcess:async(command,argv,options)=>{
+      assert.deepEqual(argv,["--fixture-census"]);const complete=new Promise(resolve=>{closeOriginal=resolve;});options.spawnProcess(command,argv,{});
+      rows=[{pid:4,parent:3,start:"40",state:"S"}];queueMicrotask(()=>spawned.stdout.emit("data",Buffer.from("LIVE:4\n")));
+      const result=await complete;await options.beforeFinal();result.remaining=await options.sample();return result;
+    },
+  };
+  await hostedCensusMatrix(args,{drain:async()=>seen.push(["drain"])},pair,ops);
+  assert.equal(seen.filter(row=>row[0]==="spawn").length,1);assert.equal(seen.filter(row=>row[0]==="pair").length,3);
+  assert.equal(seen.filter(row=>row[0]==="sample"&&(row[1]!=="10"||row[2]!=="20")).length,2);
+  assert.deepEqual(snapshots.map(value=>value.map(row=>row.state)),[[],["S"],["Z"]]);
+  assert.ok(seen.findIndex(row=>row[0]==="drain")>seen.findIndex(row=>row[0]==="write"&&row[1]==="Z"));
+});
+test("reaper inert terminal source custody and real native fixture entry cannot share product RPC", async () => {
+  const [c,container]=await Promise.all(["config/edge-proof/reaper.c","scripts/edge-proof-container.mjs"].map(path=>readFile(new URL("../"+path,import.meta.url),"utf8")));
+  const child=c.slice(c.indexOf("if (coordinator == 0)"),c.indexOf("close(pair[1]); int fd"));
+  assert.ok(child.indexOf("dup2(STDOUT_FILENO, STDERR_FILENO)")<child.indexOf("execv("));
+  const exit=c.slice(c.indexOf("if (exited && empty == 1"),c.indexOf("if (fault) {",c.indexOf("if (exited && empty == 1")));
+  assert.ok(exit.indexOf("terminal(argv[4]")<exit.indexOf("return WEXITSTATUS(status)"));assert.ok(exit.includes("next - 1, status, (unsigned)fault"));
+  assert.ok(c.includes('argc == 2 && !strcmp(argv[1], "--fixture-census")'));
+  const fixture=c.slice(c.indexOf("static int census_fixture"),c.indexOf("static int orphan_fixture"));
+  assert.ok(fixture.includes("getpid() == 1"));assert.ok(fixture.includes("WEXITED | WNOWAIT"));assert.ok(fixture.includes("waitpid(child, &status, 0)"));assert.ok(!fixture.includes("HELLO"));
+  assert.ok(container.includes('await terminalRetention(attachResult)'));assert.ok(container.includes('await terminalRetention(outcome.value)'));
+  assert.ok(!container.includes('failures.push(error); rpc.abort()'));
+  assert.ok(container.includes('flag:"wx",mode:0o600'));
+});
+test("reaper inert hosted matrix cannot accept bypassed control negatives or hide undefined reads", async () => {
+  const pair={reaper:{pid:1,parent:0,start:"10"},coordinator:{pid:2,parent:1,start:"20"}},args=[reaperBinding.nonce,reaperBinding.contextHash,"501","20"];
+  for(const bypass of ["admission","census","read"]){
+    let spawns=0;
+    const ops={readControl:async pid=>{if(bypass==="read")throw undefined;return{...pair[pid===1?"reaper":"coordinator"],exe:pid===1?containerContract.reaper:containerContract.node};},
+      validateControlPair:(a,b)=>{if(bypass!=="admission"&&(a.exe==="/invalid-control"||b.exe==="/invalid-control"))throw undefined;return pair;},
+      bindCensusControls:(a,b)=>({reaper:a,coordinator:b}),privateProcesses:async()=>[],runOwnedProcess:()=>{spawns++;throw new Error("must not launch");}};
+    const outcome=await originalOutcome(hostedCensusMatrix(args,{},pair,ops));assert.equal(outcome.failed,true);assert.equal(spawns,0);
+    if(bypass==="read")assert.equal(outcome.reason,undefined);
+  }
 });
 // END explicit reaper inert tests.

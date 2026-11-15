@@ -169,6 +169,7 @@ export function reaperFrame(op, sequence, binding) {
 }
 export function createReaperClient(socket, binding) {
   const errors = []; let next = 1, pending = null, hello = false, finishing = false, closed = false, closeResolve;
+  let shutdown, destroyed = false;
   const close = new Promise(resolve => { closeResolve = resolve; });
   const failed = error => { errors.push(error); if (pending) { const original = pending; pending = null; original.reject(error); } };
   const guard = fn => (...args) => { try { fn(...args); } catch (error) { failed(error); } };
@@ -182,7 +183,7 @@ export function createReaperClient(socket, binding) {
   });
   const onError = guard(error => failed(error));
   const onEnd = guard(() => { check(finishing && !pending, "reaper-premature-eof"); });
-  const onClose = guard(() => { closed = true; if (!finishing || pending) failed(new Error("edge-container: reaper-premature-close")); closeResolve(); });
+  const onClose = guard(() => { if (closed) return; closed = true; if (!finishing || pending) failed(new Error("edge-container: reaper-premature-close")); closeResolve(); });
   for (const [event, listener] of [["data",onData],["error",onError],["end",onEnd],["close",onClose]]) {
     try { socket.on(event, listener); } catch (error) { failed(error); }
   }
@@ -196,18 +197,59 @@ export function createReaperClient(socket, binding) {
     try { socket.write(frame, error => { if (error != null) failed(error); }); } catch (error) { failed(error); }
     await completion; raiseContainerFailures(errors); if (op === 1) hello = true;
   };
-  return { errors, start: () => request(1), drain: () => request(2),
-    async finish() {
-      try {
-        await request(3); finishing = true;
-        socket.end(); await close; raiseContainerFailures(errors);
-      } catch (error) {
-        if (!errors.includes(error)) errors.push(error);
-        try { socket.destroy(); } catch (other) { errors.push(other); }
-        raiseContainerFailures(errors);
+  // Allocate the shared promise before any user callback can reenter shutdown.
+  // A destroy throw does not establish CLOSE. Late errors remain independent.
+  const stop = finish => {
+    if (!shutdown) shutdown = Promise.resolve().then(async () => {
+      if (finish) {
+        const prior = errors.length;
+        try { await request(3); socket.end(); }
+        catch (error) { if (errors.length === prior && prior === 0) errors.push(error); }
       }
-    },
-    abort() { try { socket.destroy(); } catch (error) { failed(error); } },
+      if ((!finish || errors.length) && !closed && !destroyed) {
+        destroyed = true; try { socket.destroy(); } catch (error) { errors.push(error); }
+      }
+      await close;
+      raiseContainerFailures(errors);
+    });
+    return shutdown;
+  };
+  return { errors, start: () => request(1), drain: () => request(2), finish: () => stop(true), abort: () => stop(false) };
+}
+// EDT1 uses ONLY the original attach stderr channel: pinned PID1 redirects the
+// coordinator's stderr to stdout before exec. No shared-text marker scan occurs.
+// Authority is the admitted producer image/control pair and original CID attach,
+// not possession of the nonce or an apparent line in workload stdout.
+export function parseReaperTerminal(result, binding) {
+  check(binding?.attached?.result === result && cidPattern.test(binding.cid) && hashPattern.test(binding.nonce) && hashPattern.test(binding.contextHash), "reaper-terminal-attach");
+  check(binding.controls?.result?.reaper.pid === 1 && binding.controls.result.coordinator.pid > 1 && hashPattern.test(binding.sourceHash), "reaper-terminal-producer");
+  check(result.closed && result.supervisor[4] && result.supervisor[5], "reaper-terminal-original-close");
+  for (const name of ["stdout", "stderr"]) {
+    const bytes = Buffer.from(result[name]), summary = result.outputSummary[name];
+    check(summary?.complete === true && summary.truncated === false && summary.bytes === bytes.length && summary.retainedBytes === bytes.length && summary.sha256 === hash(bytes) && summary.retainedSha256 === hash(bytes), "reaper-terminal-capture");
+  }
+  const match = /^EDT1:([a-f0-9]{64}):([a-f0-9]{64}):([a-f0-9]{8}):([a-f0-9]{8}):([012]):([a-f0-9]{8}):([a-f0-9]{8}):([01]):1\n$/.exec(result.stderr);
+  check(match && match[1] === binding.nonce && match[2] === binding.contextHash, "reaper-terminal-frame");
+  const pid = parseInt(match[3],16), sequence = parseInt(match[4],16), kind = Number(match[5]), value = parseInt(match[6],16), faults = parseInt(match[7],16), finished = match[8] === "1";
+  check(pid === binding.controls.result.coordinator.pid && sequence < 0xffffffff && faults <= 511 && (kind === 0 ? value === 0 : kind === 1 ? value <= 255 : value > 0 && value <= 64) && (!finished || sequence >= 2) && (finished || (faults & 8)), "reaper-terminal-values");
+  return Object.freeze({version:1, sequence, coordinator: {kind: ["unknown","exit","signal"][kind], value:kind ? value : null}, supervisorFaults:faults, finished, childrenDrained:true});
+}
+export function requireReaperTerminal(value) {
+  check(value?.coordinator.kind === "exit" && value.coordinator.value === 0 && value.supervisorFaults === 0 && value.finished && value.childrenDrained, "reaper-terminal-failure");
+}
+export function createReaperTerminalRetention(attached, binding, retain) {
+  let task;
+  return result => {
+    if (!task) task = Promise.resolve().then(async () => {
+      let value, failed = false, reason;
+      try { value = parseReaperTerminal(result, {...binding(), attached}); } catch (error) { failed = true; reason = error; }
+      const errors = failed ? [reason] : [];
+      // Retain before qualification and before CID retirement, including failure.
+      try { await retain({version:1, binding:binding(), terminal:value ?? null, unavailable:failed, failureDefined:failed ? reason !== undefined : null,
+        originalAttach:{closed:result.closed, actualClose:result.supervisor[4], code:result.code, signal:result.signal, captures:result.outputSummary}}); } catch (error) { errors.push(error); }
+      raiseContainerFailures(errors); requireReaperTerminal(value); return value;
+    });
+    return task;
   };
 }
 export function parseControlStat(raw, pid) {
@@ -1747,7 +1789,7 @@ async function containerInit(args, sharedReport) {
   } catch (error) { failures.push(error); }
   // FINISH is acknowledged before Node closes FD3 and exits. Every independent
   // failure remains fatal; a shutdown error never overwrites the primary value.
-  if (rpc) try { await rpc.finish(); } catch (error) { failures.push(error); rpc.abort(); }
+  if (rpc) try { await rpc.finish(); } catch (error) { failures.push(error); }
   raiseContainerFailures(failures);
   const [nonce, contextHash] = args;
   const { version: _version, isolated: _isolated, ...packaging } = built;
@@ -1757,6 +1799,7 @@ async function containerInit(args, sharedReport) {
 }
 async function hostedReaperFixtures(args, rpc, controls) {
   const sample = () => privateProcesses(undefined, controls), beforeFinal = () => rpc.drain();
+  await hostedCensusMatrix(args, rpc, controls);
   // The C PID1 startup fixture already established a waitable adopted orphan and
   // reaped it with the production loop. This checks the ORIGINAL Node spawn's FD
   // inheritance, not a separately constructed descriptor model.
@@ -1767,6 +1810,66 @@ async function hostedReaperFixtures(args, rpc, controls) {
   const held = await runOwnedProcess(containerContract.reaper, ["--fixture-hold",containerContract.node,"/opt/edge-input/scripts/edge-proof.mjs","container-reaper-probe",...args], {cwd:"/task",env:containerEnvironment(),sample,beforeFinal});
   check(held.closed && held.timedOut && !held.interrupted && held.errors.length === 0 && Array.isArray(held.remaining) && held.remaining.length === 0 && held.code !== 0, "reaper-held-ack-fixture");
   let rejected = false; try { requireProcessSuccess(held); } catch { rejected = true; } check(rejected, "reaper-held-ack-qualified");
+}
+export async function hostedCensusMatrix(args, rpc, controls, supplied = {}) {
+  const ops = {readControl, validateControlPair, bindCensusControls, privateProcesses, runOwnedProcess, requireProcessSuccess, spawn, ...supplied};
+  const identity = {uid:Array(4).fill(number(args[2])),gid:Array(4).fill(number(args[3])),groups:[]};
+  const reaper = await ops.readControl(1), coordinator = await ops.readControl(controls.coordinator.pid);
+  const expected = {identity,nonce:args[0],contextHash:args[1]};
+  const pair = ops.validateControlPair(reaper,coordinator,expected);
+  check(same(pair,controls), "fixture-control-original");
+  for (const role of ["reaper","coordinator"]) {
+    // Actual stable identities first, then distinct admission and original census
+    // counterexamples. No substitute ever enters the product's control token.
+    const changed = {...(role === "reaper" ? reaper : coordinator), exe:"/invalid-control"};
+    let denied = false;
+    try { ops.validateControlPair(role === "reaper" ? changed : reaper, role === "coordinator" ? changed : coordinator, expected); } catch { denied = true; }
+    check(denied,"fixture-control-substitution");
+    const wrong = {...pair,[role]:{...pair[role],start:String(BigInt(pair[role].start)+1n)}};
+    const token = ops.bindCensusControls(wrong.reaper,wrong.coordinator); denied = false;
+    try { await ops.privateProcesses(undefined,token); } catch { denied = true; }
+    check(denied,"fixture-control-census-substitution");
+  }
+  const failures = [], snapshots = []; let queued = Promise.resolve(), buffer = "", frames = 0, child;
+  const result = await ops.runOwnedProcess(containerContract.reaper,["--fixture-census"],{
+    cwd:"/task",env:containerEnvironment(),sample:()=>ops.privateProcesses(undefined,controls),beforeFinal:()=>rpc.drain(),
+    spawnProcess(command,argv,options) {
+      child = ops.spawn(command,argv,{...options,stdio:["pipe","pipe","pipe"]});
+      child.stdin.on("error",error=>failures.push(error));
+      child.stdout.on("data",bytes=>{
+        queued = queued.then(async()=>{
+          check(Buffer.isBuffer(bytes) && bytes.length + buffer.length <= 64 && bytes.every(byte=>byte===10 || byte>=32 && byte<=126),"fixture-census-frame-capacity");
+          buffer += bytes.toString("ascii");
+          if (!buffer.endsWith("\n")) return;
+          const match = /^(LIVE|ZOMBIE):([1-9]\d{0,9})\n$/.exec(buffer); buffer = "";
+          check(match && frames < 2 && match[1] === (frames === 0 ? "LIVE" : "ZOMBIE"),"fixture-census-order");
+          const pid = number(match[2]); check(pid > 1 && pid <= 0x7fffffff,"fixture-census-pid");
+          const rows = await ops.privateProcesses(undefined,controls), found = rows.filter(row=>row.pid===pid);
+          check(found.length === 1 && found[0].parent === child.pid && (frames === 0 ? ["R","S","D","I"].includes(found[0].state) : found[0].state === "Z"),"fixture-census-real-state");
+          if (frames) check(found[0].start === snapshots[0].find(row=>row.pid===pid)?.start,"fixture-census-start");
+          snapshots.push(rows); frames++;
+          await new Promise((resolveWrite,rejectWrite)=>child.stdin.write(frames===1?"L":"Z",error=>error?rejectWrite(error):resolveWrite()));
+          if (frames === 2) child.stdin.end();
+        }).catch(error=>{
+          failures.push(error);
+          try { child.stdin.destroy(); } catch (other) { failures.push(other); }
+        });
+      });
+      return child;
+    },
+  });
+  await queued;
+  try { ops.requireProcessSuccess(result); } catch (error) { failures.push(error); }
+  try {
+    check(frames===2 && buffer==="" && snapshots.length===2,"fixture-census-incomplete");
+    for (const rows of snapshots) {
+      // Counterexample to the actual success predicate using actual held rows.
+      // This is explicitly NOT a fresh product final-census/retirement claim.
+      let denied=false; try { ops.requireProcessSuccess({...result,remaining:rows}); } catch { denied=true; }
+      check(denied,"fixture-nonempty-qualified");
+    }
+  } catch (error) { failures.push(error); }
+  raiseContainerFailures(failures);
 }
 async function reaperProbe(args) {
   check(args.length === 4 && hashPattern.test(args[0]) && hashPattern.test(args[1]), "reaper-probe-arguments");
@@ -1960,7 +2063,7 @@ async function hostContainerRun(report) {
   const image = await report.step("image", async () => validateImage(await inspect("image", imageId), { derived: true, identity, id: imageId, contextHash: context.contextHash }));
   check(image.Config.Labels?.["org.openclaw.edge.nonce"] === nonce, "image-invocation");
   const plan = { image: imageId, identity, imageEnv: image.Config.Env, nonce, contextHash: context.contextHash, nativeHash: hash(JSON.stringify(native)) };
-  const cidFile = join(root, "container-id"), failures = [], admissionReporting = []; let cid, created, attached, projectAttach, waiting, bound, target, receipt, disposition = "retained";
+  const cidFile = join(root, "container-id"), failures = [], admissionReporting = []; let cid, created, attached, projectAttach, terminalRetention, controlBinding, waiting, bound, target, receipt, disposition = "retained";
   const readOwned = async recorder => validateContainerInspect(await inspect("container", cid, recorder), plan, cid, (parentSource(recorder, "inspect_validate"), recorder));
   const recheckParent = async recorder => validateIdentity(await readParentIdentity(recorder), identity, false, recorder);
   const stopOwned = async () => {
@@ -1981,6 +2084,8 @@ async function hostContainerRun(report) {
     await report.step("attach", async () => {
       await recheckParent(); attached = attachContainer(docker, ["--host=unix:///var/run/docker.sock", "start", "--attach", "--interactive", cid], { cwd: root, env, nonce: plan.nonce, contextHash: plan.contextHash, onStop: stopOwned });
       projectAttach = createAttachProjection(attached, { cid, nonce: plan.nonce, contextHash: plan.contextHash }, report);
+      terminalRetention = createReaperTerminalRetention(attached, () => ({cid, nonce, contextHash:plan.contextHash, controls:controlBinding, sourceHash:native.reaper.source.sha256}),
+        value => writeFile(join(root,"reaper-terminal.json"), JSON.stringify(value), {flag:"wx",mode:0o600}));
     });
     await report.step("ready", () => attached.ready);
     await report.step("admission", async () => {
@@ -2001,6 +2106,7 @@ async function hostContainerRun(report) {
       const rebound = second.bound; parentSource(recorder, "cgroup_freshness"); check(parentEvaluate(recorder, 40, () => parentLeaf(recorder, 1, sameCgroupBinding(bound, rebound))), "init-cgroup-drift"); bound = rebound;
       const repeatedControls = await parentControls(row.State.Pid, again, identity, nonce, plan.contextHash, native);
       check(same(controls, repeatedControls), "parent-controls-drift");
+      controlBinding = controls;
       const repeatedParent = second.parentMounts; parentSource(recorder, "metadata"); const repeatedMetadata = validateMetadataMounts(row, again.mounts, repeatedParent, daemonRoot, cid, recorder); parentSource(recorder, "metadata_freshness"); check(parentEvaluate(recorder, 41, () => parentLeaf(recorder, 1, same(metadata, repeatedMetadata))), "daemon-metadata-drift");
       parentSource(recorder, "parent_namespace"); const finalNamespace = await readlink("/proc/self/ns/mnt"); check(parentEvaluate(recorder, 42, () => parentLeaf(recorder, 1, finalNamespace === parentNamespaces.mnt)), "parent-mount-namespace-drift");
       } catch (error) { project(true, error); admissionReporting.push(...recorder.errors); throw error; }
@@ -2015,6 +2121,7 @@ async function hostContainerRun(report) {
     raiseContainerFailures(outcomes.filter(outcome => outcome.status === "rejected").map(outcome => outcome.reason));
     const attachResult = outcomes[0].value, waitResult = outcomes[1].value;
     projectAttach(attachResult);
+    await terminalRetention(attachResult);
     receipt = await observeContainerReceipt(report, attachResult.stdout, plan, recorder => projectAttach.child(attachResult, recorder));
     await report.step("terminal", async () => {
       await recheckParent(); const terminal = await readOwned();
@@ -2033,7 +2140,13 @@ async function hostContainerRun(report) {
       } catch (error) { cleanupFailures.push(error); }
       try { await stopOwned(); } catch (error) { cleanupFailures.push(error); }
       const originals = await Promise.allSettled([...(attached ? [attached.closed] : []), ...(waiting ? [waiting] : [])]);
-      for (const outcome of originals) if (outcome.status === "rejected") cleanupFailures.push(outcome.reason); else try { if (attached && outcome.value === attached.result) projectAttach(outcome.value); requireProcessSuccess(outcome.value); } catch (error) { cleanupFailures.push(error); }
+      for (const outcome of originals) if (outcome.status === "rejected") cleanupFailures.push(outcome.reason); else {
+        if (attached && outcome.value === attached.result) {
+          try { projectAttach(outcome.value); } catch (error) { cleanupFailures.push(error); }
+          try { await terminalRetention(outcome.value); } catch (error) { cleanupFailures.push(error); }
+        }
+        try { requireProcessSuccess(outcome.value); } catch (error) { cleanupFailures.push(error); }
+      }
       try {
         await recheckParent(); const row = await readOwned(); check(!row.State.Running && row.State.Pid === 0, "retirement-live");
         // A never-started container has no process/cgroup to retire. An attempted
