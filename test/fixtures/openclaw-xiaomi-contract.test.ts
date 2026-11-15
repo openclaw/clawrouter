@@ -364,64 +364,145 @@ function xiaomiObserveBody(body: ReadableStream<Uint8Array>, signal: AbortSignal
   install: (object: any, name: string, replacement: any) => void, report: (phase: string, ordinal: number, failed: boolean, error?: unknown) => void,
   clock?: () => number) {
   let sequence = 0; const tick = clock ?? (() => ++sequence), readers: any[] = [], faults: unknown[] = [];
-  const safe = (fn: () => void) => { try { fn(); } catch (error) { faults.push(error); } };
+  const originals: any[] = [], originalByPromise = new Map<any, any>(), observers: Promise<unknown>[] = [];
+  let originalCursor = 0, observerCursor = 0, revision = 0, acceptedRevision = -1;
+  let acceptedOnce = false, failed = false, sealed = false, joinAccepted: boolean | null = null;
+  let physical: Promise<void> | undefined, joining: Promise<void> | undefined, completedJoin: Promise<void> | undefined;
+  let completedRevision = -1, currentFailure: AggregateError | undefined;
+  let selectionSet = false, selected: any, firstFailure: AggregateError | undefined;
+  const fault = (error: unknown) => { faults.push(error); failed = true; joinAccepted = false; revision++; };
+  const safe = (fn: () => void) => { try { fn(); } catch (error) { fault(error); } };
+  const changed = (receiver: unknown, expected: unknown) => {
+    revision++; joinAccepted = failed ? false : null;
+    if (sealed) fault(new Error("original reader operation after ownership seal"));
+    if (receiver !== expected) fault(new Error("foreign original reader receiver"));
+  };
+  // Retain the existing settlement derivative and its nonthrowing error guard.
+  // Joining subscribes to each original once; it never returns a replacement P.
+  const observe = (pending: any, fulfilled: (value: any) => void, rejected: (reason: unknown) => void) => {
+    let original = originalByPromise.get(pending);
+    if (!original) { original = { pending, result: undefined }; originalByPromise.set(pending, original); originals.push(original); }
+    safe(() => {
+      const observed = pending.then(fulfilled, rejected); observers.push(observed);
+      observers.push(observed.then(undefined, fault));
+    });
+    return original;
+  };
   const getReader = body.getReader;
   install(body, "getReader", function(this: ReadableStream<Uint8Array>, ...args: any[]) {
+    changed(this, body);
     let reader: ReadableStreamDefaultReader<Uint8Array>;
-    try { reader = Reflect.apply(getReader, this, args); } catch (error) { faults.push(error); throw error; }
-    const row: any = { reader, body, signal, closed: reader.closed, captured: tick(), closedState: "pending", closedReasonPresent: false,
+    try { reader = Reflect.apply(getReader, this, args); } catch (error) { fault(error); throw error; }
+    if (this !== body) return reader;
+    if (readers.some(row => row.reader === reader)) { fault(new Error("duplicate original reader identity")); return reader; }
+    const row: any = { reader, body, signal, captured: 0, closedState: "pending", closedReasonPresent: false,
       operations: [], unlockCalls: 0, unlockReturns: 0, faults };
     readers.push(row);
-    void row.closed.then(() => { row.closedState = "fulfilled"; row.closedSettled = tick(); }, (reason: unknown) => {
-      row.closedState = "rejected"; row.closedSettled = tick(); row.closedReasonPresent = true; row.closedReason = reason;
+    safe(() => {
+      row.closed = reader.closed; row.captured = tick();
+      row.originalClosed = observe(row.closed, () => { row.closedState = "fulfilled"; row.closedSettled = tick(); }, (reason: unknown) => {
+        row.closedState = "rejected"; row.closedReasonPresent = true; row.closedReason = reason; row.closedSettled = tick();
+      });
     });
     for (const kind of ["read", "cancel"] as const) {
       const original = reader[kind];
       install(reader, kind, function(this: ReadableStreamDefaultReader<Uint8Array>, ...operands: unknown[]) {
+        const late = acceptedOnce; changed(this, reader);
         const op: any = { kind, state: "invoke", ordinal: row.operations.length + 1, invoked: tick(), unlockCallsBefore: row.unlockCalls,
-          reasonPresent: false, operands, operandDefined: operands.length > 0 && operands[0] !== undefined,
+          reasonPresent: false, operands, operandDefined: operands.length > 0 && operands[0] !== undefined, late,
           signalAbortedAtInvoke: signal?.aborted ?? null, signalReasonAtInvoke: signal?.reason }; row.operations.push(op);
-        try {
-          const pending = Reflect.apply(original, this, operands); op.pending = pending;
-          void pending.then((value: any) => { op.state = "fulfilled"; op.settled = tick(); op.nonempty = kind === "read" && !value.done && value.value?.byteLength > 0; op.eof = kind === "read" && value.done === true; }, (reason: unknown) => {
-            op.state = "rejected"; op.settled = tick(); op.reasonPresent = true; op.reason = reason;
-            op.signalAbortedAtReject = signal?.aborted ?? null; op.signalReasonAtReject = signal?.reason;
-            safe(() => report(kind, op.ordinal, true, reason));
-          });
-          return pending;
-        } catch (reason) { op.state = "sync_throw"; op.settled = tick(); op.reasonPresent = true; op.reason = reason; safe(() => report(kind, op.ordinal, true, reason)); throw reason; }
+        let pending;
+        try { pending = Reflect.apply(original, this, operands); op.pending = pending; }
+        catch (reason) { failed = true; joinAccepted = false; op.state = "sync_throw"; op.reasonPresent = true; op.reason = reason;
+          safe(() => { op.settled = tick(); }); safe(() => report(kind, op.ordinal, true, reason)); throw reason; }
+        op.original = observe(pending, (value: any) => {
+          op.state = "fulfilled"; op.settled = tick(); op.nonempty = kind === "read" && !value.done && value.value?.byteLength > 0; op.eof = kind === "read" && value.done === true;
+        }, (reason: unknown) => {
+          op.state = "rejected"; op.reasonPresent = true; op.reason = reason;
+          if (late) { failed = true; joinAccepted = false; }
+          op.settled = tick(); op.signalAbortedAtReject = signal?.aborted ?? null; op.signalReasonAtReject = signal?.reason;
+          safe(() => report(kind, op.ordinal, true, reason));
+        });
+        return pending;
       });
     }
     const unlock = reader.releaseLock;
     install(reader, "releaseLock", function(this: ReadableStreamDefaultReader<Uint8Array>, ...args: unknown[]) {
-      row.unlockCalls++; row.unlockInvoked = tick();
+      changed(this, reader); row.unlockCalls++; row.unlockInvoked = tick();
       try { const value = Reflect.apply(unlock, this, args); row.unlockReturns++; row.unlockReturned = tick(); return value; }
-      catch (error) { faults.push(error); throw error; }
+      catch (error) { fault(error); throw error; }
     });
     return reader;
   });
-  let physical: Promise<void> | undefined, joining: Promise<void> | undefined, joinAccepted: boolean | null = null;
-  const settle = () => physical ??= (async () => {
-    for (const row of readers) { let done = 0; while (done < row.operations.length) {
-      const batch = row.operations.slice(done); done += batch.length; await Promise.allSettled(batch.flatMap((op: any) => op.pending ? [op.pending] : []));
-    } }
-  })();
-  return { readers, settle, get joinAccepted() { return joinAccepted; }, join(selection?: any) {
-    return joining ??= (async () => {
-      await settle(); const failures: unknown[] = [];
-      for (const row of readers) {
-        const eligible = xiaomiSdkReaderDisposition(selection, row);
-        for (const op of row.operations) if (op.state === "sync_throw" || op.state === "rejected" && !eligible) failures.push(op.reason);
-        if (row.closedState === "rejected" && !eligible) failures.push(row.closedReason);
-        if (row.closedState === "pending" || !row.unlockCalls || row.unlockCalls !== row.unlockReturns) failures.push(new Error("original reader did not retire"));
-      }
-      failures.push(...faults);
-      if (!readers.length || body.locked) failures.push(new Error("original body not consumed and unlocked"));
-      joinAccepted = failures.length === 0;
-      if (failures.length) throw new AggregateError(failures, "Xiaomi original reader outcomes");
+  const settle = () => {
+    if (physical) return physical;
+    return physical = (async () => {
+      try {
+        do {
+          const batch = originals.slice(originalCursor), tails = observers.slice(observerCursor);
+          originalCursor += batch.length; observerCursor += tails.length;
+          const results = await Promise.allSettled([...batch.map(value => value.pending), ...tails]);
+          batch.forEach((value, index) => { value.result = results[index]; });
+        } while (originalCursor < originals.length || observerCursor < observers.length);
+      } finally { physical = undefined; }
     })();
-  } };
+  };
+  const join = (selection?: any) => {
+    if (!selectionSet) { selectionSet = true; selected = selection; }
+    else if (selection !== undefined && selection !== selected) fault(new Error("changed original reader disposition owner"));
+    if (joining) return joining;
+    if (completedJoin && completedRevision === revision) return completedJoin;
+    return joining = (async () => {
+      try {
+        while (true) {
+          await settle(); const failures: unknown[] = [];
+          for (const row of readers) {
+            let eligible = false; safe(() => { eligible = xiaomiSdkReaderDisposition(selected, row); });
+            for (const op of row.operations) {
+              if (op.state === "sync_throw") failures.push(op.reason);
+              else if (op.original?.result?.status === "rejected" && (!eligible || op.late)) failures.push(op.original.result.reason);
+              else if (!op.original?.result) failures.push(new Error("original reader operation not joined"));
+            }
+            if (row.originalClosed?.result?.status === "rejected" && !eligible) failures.push(row.originalClosed.result.reason);
+            if (row.closedState === "pending" || !row.unlockCalls || row.unlockCalls !== row.unlockReturns) failures.push(new Error("original reader did not retire"));
+          }
+          safe(() => { if (!readers.length || body.locked) failures.push(new Error("original body not consumed and unlocked")); });
+          if (originalCursor < originals.length || observerCursor < observers.length) continue;
+          failures.push(...faults);
+          if (failed && !failures.length) failures.push(firstFailure ?? new Error("original reader acceptance invalidated"));
+          if (failures.length) {
+            failed = true; joinAccepted = false;
+            const error = new AggregateError(failures, "Xiaomi original reader outcomes"); firstFailure ??= error; currentFailure = error; throw error;
+          }
+          acceptedOnce = true; acceptedRevision = revision; joinAccepted = true; return;
+        }
+      } finally { completedJoin = joining; completedRevision = revision; joining = undefined; }
+    })();
+  };
+  return { readers, settle, join, get joinAccepted() { return failed ? false : acceptedRevision === revision ? joinAccepted : null; },
+    get revision() { return revision; }, get sealed() { return sealed; }, seal() {
+      if (physical || joining || completedRevision !== revision || originalCursor !== originals.length || observerCursor !== observers.length) {
+        const error = new Error("original reader seal before stable joins"); fault(error); throw error;
+      }
+      sealed = true;
+      if (failed || joinAccepted !== true) throw currentFailure ?? new Error("original reader acceptance invalidated");
+    },
+  };
 }
+// Final postludes keep every body open until cross-body owned tails are stable.
+async function xiaomiSealReaderObservations(observations: any[]) {
+  const failures: unknown[] = [], seen = new Set<unknown>();
+  const retain = (error: unknown) => { if (!seen.has(error)) { seen.add(error); failures.push(error); } };
+  let versions: number[];
+  do {
+    versions = observations.map(value => value.revision);
+    const outcomes = await Promise.allSettled(observations.map(value => value.join()));
+    for (const value of outcomes) if (value.status === "rejected") retain(value.reason);
+  } while (observations.some((value, index) => value.revision !== versions[index]));
+  for (const value of observations) try { value.seal(); } catch (error) { retain(error); }
+  if (failures.length) throw new AggregateError(failures, "Xiaomi final reader joins failed");
+}
+
 function xiaomiPublicAbortResult(result: unknown, reason: unknown, isProxy: (value: unknown) => boolean) {
   try {
     if (!result || typeof result !== "object" || isProxy(result) || !reason || typeof reason !== "object" || isProxy(reason)) return false;
@@ -622,6 +703,7 @@ afterEach(async () => {
     }
   } catch (error) { failures.push(error); }
   finally { clearTimeout(timer); }
+  try { await xiaomiSealReaderObservations(planAcquisitions.flatMap(row => row.observation ? [row.observation] : [])); } catch (error) { failures.push(error); }
   if (!failures.length && planBodyPassed && context.id.startsWith("c_")) qualifiedControls.add(context.id);
   if (failures.length) throw new AggregateError(failures, "Xiaomi SDK original cleanup failed");
 });

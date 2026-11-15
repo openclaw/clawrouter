@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- Join Xiaomi reader originals and their existing observers to a stable boundary, invalidate late failures, and seal only during final cleanup without weakening retirement or accounting checks.
+
 - Distinguish an exactly owned, settled metadata read and its derived rejection from native HTTP/1 fixture retirement failures, preserving raw outcomes, permanent ownership seals and independent producer and SQLite checks without claiming the error cause.
 
 - Add a versioned, complete one-to-four-operation retirement diagnostic census and failure-preserving producer/accounting postlude guarded by the original router retirement seal; retain historical records and coarse fallback without changing strict Worker verdicts or claiming cancellation causes.

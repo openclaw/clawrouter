@@ -16,7 +16,7 @@ import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 
 const sdkSource = readFileSync(new URL("./fixtures/openclaw-xiaomi-contract.test.ts", import.meta.url), "utf8");
 const proofCode = stripTypeScriptTypes(sdkSource.slice(sdkSource.indexOf("// BEGIN Xiaomi proof functions."), sdkSource.indexOf("// END Xiaomi proof functions.")));
-const { xiaomiPlanCases, xiaomiNativeControls, xiaomiInvocationOwnership, xiaomiInstallProperty, xiaomiStopReason, xiaomiState, xiaomiReaderWitnesses, xiaomiSignal, xiaomiSdkReaderDisposition, xiaomiSdkPreabortDisposition, xiaomiPublicAbortResult, xiaomiNativeControlQualified, xiaomiDiagnostic, xiaomiObserveBody, xiaomiRethrow } = new Function(proofCode + ";return { xiaomiPlanCases, xiaomiNativeControls, xiaomiInvocationOwnership, xiaomiInstallProperty, xiaomiStopReason, xiaomiState, xiaomiReaderWitnesses, xiaomiSignal, xiaomiSdkReaderDisposition, xiaomiSdkPreabortDisposition, xiaomiPublicAbortResult, xiaomiNativeControlQualified, xiaomiDiagnostic, xiaomiObserveBody, xiaomiRethrow };")();
+const { xiaomiPlanCases, xiaomiNativeControls, xiaomiInvocationOwnership, xiaomiInstallProperty, xiaomiStopReason, xiaomiState, xiaomiReaderWitnesses, xiaomiSignal, xiaomiSdkReaderDisposition, xiaomiSdkPreabortDisposition, xiaomiPublicAbortResult, xiaomiNativeControlQualified, xiaomiDiagnostic, xiaomiObserveBody, xiaomiSealReaderObservations, xiaomiRethrow } = new Function(proofCode + ";return { xiaomiPlanCases, xiaomiNativeControls, xiaomiInvocationOwnership, xiaomiInstallProperty, xiaomiStopReason, xiaomiState, xiaomiReaderWitnesses, xiaomiSignal, xiaomiSdkReaderDisposition, xiaomiSdkPreabortDisposition, xiaomiPublicAbortResult, xiaomiNativeControlQualified, xiaomiDiagnostic, xiaomiObserveBody, xiaomiSealReaderObservations, xiaomiRethrow };")();
 const planRows = xiaomiPlanCases(), allPlanRows = [...xiaomiNativeControls(), ...planRows], diagnostic = xiaomiDiagnostic(nodeTypes.isProxy);
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
@@ -91,7 +91,7 @@ test("registered Xiaomi PAYG streams preserve original grants, retired identitie
   } catch (error) { failures.push(error); evidence.add(diagnostic.record("outer", "none", phase, 0, true, error)); }
   finally {
     if (origin) {
-      try { const r = await fetch(origin + "/fixture/retire", { method: "POST" }); await r.arrayBuffer(); if (r.status !== 200) throw new Error("original Worker joins failed"); }
+      try { const r = await fetch(origin + "/fixture/retire?seal=1", { method: "POST" }); await r.arrayBuffer(); if (r.status !== 200) throw new Error("original Worker joins failed"); }
       catch (error) { failures.push(error); evidence.add(diagnostic.record("outer", "none", "retire", 0, true, error)); }
       try { const records = await readDiagnostics(origin); sdkCount = records.filter(r => r.source === "sdk").length; for (const row of records) evidence.add(row); }
       catch (error) { failures.push(error); }
@@ -279,7 +279,14 @@ function planRouter(handler, putGrantCredentials, revokeGrantCredentials) {
       if (url.pathname === "/fixture/diagnostics") return Response.json(records.values());
       if (url.pathname === "/fixture/retire") {
         retirement ??= retire();
-        try { return Response.json(await retirement); } catch { return Response.json({ joined: false }, { status: 500 }); }
+        const failures = []; let result;
+        try { result = await retirement; } catch (error) { failures.push(error); }
+        // Only the existing final postlude seals, after control/accounting work.
+        if (url.searchParams.get("seal") === "1") {
+          try { await xiaomiSealReaderObservations(inputs.flatMap(input => input.observations)); } catch (error) { failures.push(error); }
+          if (failures.length) records.add(diagnostic.record("worker", "none", "retire", 0, true, undefined, failures.length));
+        }
+        return Response.json(failures.length ? { joined: false } : result, { status: failures.length ? 500 : 200 });
       }
       if (url.pathname.startsWith("/fixture/plan/")) {
         const [, , , id, action] = url.pathname.split("/"), row = rows.find(value => value.id === id);
@@ -434,6 +441,165 @@ test("body observer joins held originals and preserves callback failure without 
   const r = rejected.getReader(); await Promise.allSettled([r.cancel()]); r.releaseLock();
   await assert.rejects(observed.join(), error => error.errors.includes(undefined) && error.errors.includes(fault));
 });
+// BEGIN Xiaomi reader join inert tests. No native streams or transport objects.
+function xiaomiInertReader(options = {}) {
+  const calls = [], subscriptions = new Map();
+  const count = pending => {
+    if (subscriptions.has(pending)) return pending;
+    subscriptions.set(pending, 0); const then = pending.then;
+    pending.then = function(...args) { subscriptions.set(pending, subscriptions.get(pending) + 1); return Reflect.apply(then, this, args); };
+    return pending;
+  };
+  const reader = {
+    closed: count(options.closed ?? Promise.resolve()),
+    read(...args) { calls.push({ kind: "read", receiver: this, args }); return count(options.read?.(...args) ?? Promise.resolve({ done: true })); },
+    cancel(...args) { calls.push({ kind: "cancel", receiver: this, args }); return count(options.cancel?.(...args) ?? Promise.resolve()); },
+    releaseLock(...args) { calls.push({ kind: "unlock", receiver: this, args }); body.locked = false; return options.unlock?.(...args); },
+  };
+  const body = { locked: false, getReader(...args) { calls.push({ kind: "reader", receiver: this, args }); body.locked = true; return reader; } };
+  if (options.observe === false) return { body, reader, calls, subscriptions };
+  const proof = xiaomiObserveBody(body, undefined, (object, key, value) => { object[key] = value; }, options.report ?? (() => {}));
+  return { body, reader: body.getReader(), proof, calls, subscriptions };
+}
+const xiaomiInertTurns = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
+for (const sealed of [false, true]) for (const reason of [undefined, { late: true }]) test(`reader join invalidates ${sealed ? "sealed" : "open"} late cancellation defined=${reason !== undefined}`, async () => {
+  const f = xiaomiInertReader({ cancel: () => Promise.reject(reason) });
+  await f.reader.read(); f.reader.releaseLock(); await f.proof.join();
+  if (sealed) await f.proof.seal();
+  const pending = f.reader.cancel(undefined); assert.equal(f.proof.readers[0].operations.at(-1).pending, pending);
+  assert.notEqual(f.proof.joinAccepted, true);
+  await Promise.allSettled([pending]);
+  for (let n = 0; n < 2; n++) await assert.rejects(f.proof.join(), error => error.errors.includes(reason));
+  assert.equal(f.proof.joinAccepted, false); assert.equal(f.proof.readers[0].operations.at(-1).reasonPresent, true);
+});
+test("reader join shares only inflight work and does not resubscribe to unchanged originals", async () => {
+  const read = Promise.withResolvers(), cancel = Promise.withResolvers();
+  const f = xiaomiInertReader({ read: () => read.promise, cancel: () => cancel.promise });
+  const operand = {}, original = f.reader.read(operand); assert.equal(original, read.promise);
+  const first = f.proof.join(); assert.equal(f.proof.join(), first);
+  read.resolve({ done: true }); f.reader.releaseLock(); await first;
+  const before = new Map(f.subscriptions); await f.proof.join();
+  for (const [pending, count] of before) assert.equal(f.subscriptions.get(pending), count);
+  const originalCancel = f.reader.cancel(undefined); assert.equal(originalCancel, cancel.promise); assert.equal(f.proof.joinAccepted, null);
+  let done = false; const second = f.proof.join(); assert.notEqual(second, first); assert.equal(f.proof.join(), second);
+  const observed = second.then(() => { done = true; }); await xiaomiInertTurns(); assert.equal(done, false);
+  cancel.resolve(); await observed; await xiaomiSealReaderObservations([f.proof]); assert.equal(f.proof.sealed, true); assert.equal(f.proof.joinAccepted, true);
+  assert.deepEqual(f.calls.find(row => row.kind === "read").args, [operand]);
+  assert.deepEqual(f.calls.find(row => row.kind === "cancel").args, [undefined]);
+  assert.ok(f.calls.filter(row => row.kind !== "reader").every(row => row.receiver === f.reader));
+  assert.equal(f.subscriptions.get(read.promise), 2); assert.equal(f.subscriptions.get(cancel.promise), 2);
+});
+test("reader join follows an original observer tail without joining itself", async () => {
+  const read = Promise.withResolvers(), tail = Promise.withResolvers(); let f, appended = false;
+  f = xiaomiInertReader({ read: () => read.promise, cancel: () => tail.promise });
+  f.reader.read(); let done = false;
+  const joined = f.proof.join(), observed = joined.then(() => { done = true; });
+  read.resolve({ get done() { if (!appended) { appended = true; f.reader.cancel(); } return true; } });
+  await xiaomiInertTurns(); assert.equal(appended, true); assert.equal(done, false);
+  tail.resolve(); f.reader.releaseLock(); await observed; assert.equal(f.proof.joinAccepted, true);
+});
+for (const reason of [undefined, { observer: true }]) test(`reader join retains observer callback failure defined=${reason !== undefined}`, async () => {
+  const f = xiaomiInertReader({ read: () => Promise.resolve({ get done() { throw reason; } }) });
+  const original = f.reader.read(); await original; f.reader.releaseLock();
+  await assert.rejects(f.proof.join(), error => error.errors.includes(reason));
+  assert.equal(f.proof.readers[0].operations[0].state, "fulfilled");
+  assert.throws(() => f.proof.seal()); assert.equal(f.proof.joinAccepted, false);
+});
+test("reader join retains an original when observer registration throws undefined", async () => {
+  const held = Promise.withResolvers(), nativeThen = held.promise.then; let calls = 0;
+  held.promise.then = function(...args) { if (++calls === 1) throw undefined; return Reflect.apply(nativeThen, this, args); };
+  const f = xiaomiInertReader({ read: () => held.promise });
+  assert.equal(f.reader.read(), held.promise); f.reader.releaseLock();
+  let done = false; const joined = f.proof.join(); const observed = joined.then(() => { done = true; }, () => { done = true; });
+  await xiaomiInertTurns(); assert.equal(done, false);
+  const originalFailure = { original: true }; held.reject(originalFailure);
+  await assert.rejects(joined, error => error.errors.includes(undefined) && error.errors.includes(originalFailure)); await observed;
+});
+for (const kind of ["reader", "read", "cancel", "unlock"]) test(`reader join rejects foreign ${kind} binding without changing original forwarding`, async () => {
+  const f = xiaomiInertReader(), foreign = {};
+  if (kind === "reader") f.body.getReader.call(foreign);
+  else if (kind === "unlock") f.reader.releaseLock.call(foreign);
+  else await f.reader[kind].call(foreign, undefined);
+  if (kind !== "unlock") f.reader.releaseLock();
+  await assert.rejects(f.proof.join()); assert.equal(f.proof.joinAccepted, false);
+  assert.ok(f.calls.some(row => row.kind === kind && row.receiver === foreign));
+});
+test("sealed reader attempts still forward once but cannot regain acceptance", async () => {
+  const f = xiaomiInertReader(); await f.reader.read(); f.reader.releaseLock(); await xiaomiSealReaderObservations([f.proof]);
+  const before = f.calls.length, pending = f.reader.cancel(); await pending;
+  assert.equal(f.calls.length, before + 1); assert.equal(f.proof.joinAccepted, false);
+  await assert.rejects(xiaomiSealReaderObservations([f.proof])); await assert.rejects(f.proof.join());
+});
+test("final reader postlude joins cross-body tails before sealing any body", async () => {
+  const tail = Promise.withResolvers(), trigger = Promise.withResolvers(); let appended = false;
+  const first = xiaomiInertReader({ cancel: () => tail.promise });
+  await first.reader.read(); first.reader.releaseLock(); await first.proof.join();
+  const second = xiaomiInertReader({ read: () => trigger.promise }); second.reader.read(); second.reader.releaseLock();
+  const joined = xiaomiSealReaderObservations([first.proof, second.proof]); let done = false;
+  const observed = joined.then(() => { done = true; });
+  trigger.resolve({ get done() { if (!appended) { appended = true; first.reader.cancel(); } return true; } });
+  await xiaomiInertTurns(); assert.equal(appended, true); assert.equal(done, false);
+  assert.equal(first.proof.sealed, false); assert.equal(second.proof.sealed, false);
+  tail.resolve(); await observed; assert.equal(first.proof.sealed, true); assert.equal(second.proof.sealed, true);
+});
+test("reader observer refuses duplicate reader identity and an unsettled seal", async () => {
+  const f = xiaomiInertReader(); f.body.getReader(); f.reader.releaseLock();
+  await assert.rejects(f.proof.join()); assert.equal(f.proof.readers.length, 1);
+  const held = Promise.withResolvers(), pending = xiaomiInertReader({ read: () => held.promise }); pending.reader.read();
+  assert.throws(() => pending.proof.seal(), /before stable joins/); assert.equal(pending.proof.sealed, false);
+  held.resolve({ done: true }); pending.reader.releaseLock(); await assert.rejects(xiaomiSealReaderObservations([pending.proof]));
+});
+test("actual SDK postlude preserves restoration and report failures while sealing owned readers", async () => {
+  const start = sdkSource.indexOf("afterEach(async () => {"), end = sdkSource.indexOf("\n});\nasync function planControl", start);
+  assert.ok(start >= 0 && end > start);
+  const callbackSource = stripTypeScriptTypes(sdkSource.slice(start + "afterEach(".length, end + 2));
+  for (const restorationReason of [undefined, { restore: true }]) {
+    const reportReason = { report: true }, f = xiaomiInertReader(); await f.reader.read(); f.reader.releaseLock();
+    let restorationCalls = 0, reportCalls = 0;
+    const bindings = {
+      planContext: { id: "p0", phase: "assert", checkpoint: 1 }, planInvocations: [], planBodyPassed: true,
+      planAcquisitions: [{ state: "fulfilled", bound: true, observation: f.proof, returned: Promise.resolve(), released: Promise.resolve(),
+        releases: [{ state: "fulfilled", pending: Promise.resolve() }], context: { id: "p0" }, guard: { detach() {} } }],
+      planOwnership: { async join() { return []; }, restore() { restorationCalls++; throw restorationReason; } },
+      restorePlanRuntime() { restorationCalls++; }, vi: { restoreAllMocks() { restorationCalls++; } }, planObserverFaults: [],
+      xiaomiSealReaderObservations, qualifiedNativeControls: () => false, xiaomiSdkPreabortDisposition: () => false, xiaomiNativeControlQualified: () => false,
+      planRemember() {}, planRecords: { values: () => [{}] }, planDiagnostic: {}, qualifiedControls: new Set(),
+      AbortController: class { signal = {}; }, setTimeout: () => 1, clearTimeout() {}, origin: "https://fixture.example",
+      async controlFetch() { reportCalls++; throw reportReason; },
+    };
+    const callback = new Function(...Object.keys(bindings), "return (" + callbackSource + ");")(...Object.values(bindings));
+    await assert.rejects(callback(), error => error.errors.includes(restorationReason) && error.errors.includes(reportReason));
+    assert.equal(restorationCalls, 3); assert.equal(reportCalls, 1); assert.equal(f.proof.sealed, true);
+  }
+});
+test("actual Worker final retirement seals after its open drain and preserves late failures", async () => {
+  for (const outcome of ["fulfilled", "undefined", "defined"]) {
+    const reason = outcome === "undefined" ? undefined : { original: true };
+    const f = xiaomiInertReader({ observe: false, cancel: () => outcome === "fulfilled" ? Promise.resolve() : Promise.reject(reason) });
+    let fetches = 0;
+    const ownedGlobal = { fetch: () => { fetches++; return Promise.resolve({ body: f.body }); } };
+    const handler = { fetch: () => ownedGlobal.fetch("https://fixture.example/chat", { headers: { "api-key": "tp-fixture-upstream-p0" } }) };
+    const FakeHeaders = class { constructor(value) { this.value = value ?? {}; } get(key) { return this.value[key] ?? null; } };
+    const FakeResponse = class { static json(value, { status = 200 } = {}) { return { value, status }; } };
+    const plan = new Function("globalThis", "Headers", "Response", "Request", "URL", "handler",
+      proofCode + "\n" + planRouter.toString() + ";return planRouter(handler,()=>{},()=>{});")
+      (ownedGlobal, FakeHeaders, FakeResponse, class {}, URL, handler);
+    const request = { url: "https://fixture.example/v1/native/xiaomi-token-plan/chat/completions", method: "POST",
+      headers: new FakeHeaders({ authorization: "Bearer clawrouter-live-xiaomi_plan_p0-fixture-secret" }) };
+    const response = await plan.fetch(request, {}, { waitUntil() {} });
+    const reader = response.body.getReader(); await reader.read(); reader.releaseLock();
+    const control = final => plan.control({ url: "https://fixture.example/fixture/retire" + (final ? "?seal=1" : ""), method: "POST" }, {});
+    assert.equal((await control(false)).status, 200);
+    await Promise.allSettled([reader.cancel(undefined)]);
+    const final = await control(true); assert.equal(final.status, outcome === "fulfilled" ? 200 : 500);
+    if (outcome === "fulfilled") {
+      await reader.cancel(); assert.equal((await control(true)).status, 500);
+    }
+    assert.equal(fetches, 1);
+  }
+});
+// END Xiaomi reader join inert tests.
+
 test("diagnostic schema refuses getters, proxies, arbitrary data and oversized coordinates", () => {
   let invoked = 0; const error = Object.defineProperty({}, "actual", { get() { invoked++; return "secret"; } });
   const record = diagnostic.record("sdk", "p0", "assert", 1, true, error);
