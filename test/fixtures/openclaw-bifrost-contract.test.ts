@@ -216,7 +216,7 @@ export function bifrostOperationEvidence(o:any,originals:any[]):any {
 export function bifrostReasonMetadata(observed:boolean,reason:unknown):any {
  return {observed,defined:observed?reason!==undefined:null,object:observed?reason!==null&&typeof reason==="object":null};
 }
-export function bifrostCaseEvidence(index:number,w:any,proof:any,worker:boolean,workerFailures:unknown[]):any[] {
+export function bifrostCaseEvidence(index:number,w:any,proof:any,worker:boolean,workerFailures:unknown[],retirement?:any):any[] {
  const one=(values:any[])=>values.length===1?values[0]:undefined;
  const num=(n:any)=>Number.isSafeInteger(n)&&n>=0&&n<=1000000?n:null;
  const flag=(v:any)=>typeof v==="boolean"?v:null;
@@ -269,7 +269,8 @@ export function bifrostCaseEvidence(index:number,w:any,proof:any,worker:boolean,
    unlock:{invoke:num(unlock?.invoke),returned:num(unlock?.returnAt)},unlockAt:num(r?.unlockAt),
    // Undefined failure counts: all, synchronous, observer, restoration/cleanup.
    undefined:[w.failures.filter((e:unknown)=>e===undefined).length,w.syncFailures.filter((e:unknown)=>e===undefined).length,w.observerFailures.filter((e:unknown)=>e===undefined).length,num(w.evidenceRestoreUndefined)],
-   bodyUnlocked:r?flag(r.body.locked===false):null,restored:flag(w.restored),joins:flag(w.evidenceJoined),worker}
+   bodyUnlocked:r?flag(r.body.locked===false):null,restored:flag(w.restored),joins:flag(w.evidenceJoined),worker},
+  {...base,part:"postlude",...bifrostPostludeEvidence(retirement,proof)}
  ];
 }
 export function validateBifrostEvidence(record:any):void {
@@ -283,6 +284,16 @@ export function validateBifrostEvidence(record:any):void {
   reasons:{read:reason,closed:reason,cancel:reason,readClosed:boolean,readCancel:boolean,readSignals:signals,closedSignals:signals,cancelSignals:signals,cancelArgs:number,cancelRead:boolean,cancelInput:signals,abortOperand:reason,callerReason:reason,operandSignal:boolean},
   order:Object.fromEntries(("acquired prefix delivered abortInvoke abortObserved abortReturn readInvoke readSettle closedInvoke closedSettle cancelInvoke cancelReturn cancelSettle pendingReadsAtCancel").split(" ").map(k=>[k,number])),
   retirement:{states:"read closed cancel release unlock fetch",counts:"originals pending rejected sync observer restoration worker unlocks",release:(v:any)=>v&&Object.keys(v).sort().join(",")==="defined,invoke,promise,returned,settle"&&[v.invoke,v.returned,v.settle].every(number)&&[v.promise,v.defined].every(boolean),unlock:"invoke returned",unlockAt:number,undefined:(v:any)=>Array.isArray(v)&&v.length===4&&v.every(number),bodyUnlocked:boolean,restored:boolean,joins:boolean,worker:boolean},
+ };
+ fields.postlude={
+  control:(v:any)=>Array.isArray(v)&&v.length===6&&v.every((r:any)=>r===null||Array.isArray(r)&&r.length===5&&[1,2,3,4].includes(r[0])&&
+   ([3,4].includes(r[0])?typeof r[1]==="boolean":r[1]===null)&&r.slice(2).every(number)),
+  validated:(v:any)=>typeof v==="boolean",
+  producer:(v:any)=>v===null||Array.isArray(v)&&v.length===9&&typeof v[0]==="boolean"&&Array.isArray(v[1])&&v[1].length<=4&&v[1].every((r:any,i:number)=>
+   Array.isArray(r)&&r.length===3&&Number.isInteger(r[0])&&r[0]>=0&&r[0]<4&&(i===0||r[0]>v[1][i-1][0])&&[1,2,3].includes(r[1])&&
+   (r[1]===3?typeof r[2]==="boolean":r[2]===null)&&(!v[0]||r[1]!==1))&&v.slice(2).every((n:any)=>n!==null&&number(n)),
+  router:(v:any)=>v===null||Array.isArray(v)&&v.length===4&&v.every((r:any)=>Array.isArray(r)&&r.length===2&&[2,3].includes(r[0])&&(r[0]===3?typeof r[1]==="boolean":r[1]===null)),
+  usage:(v:any)=>v===null||Array.isArray(v)&&v.length===3&&typeof v[0]==="boolean"&&(v[0]?v.slice(1).every((n:any)=>n!==null&&number(n)):v[1]===null&&v[2]===null),
  };
  Object.assign(fields.order,{readRejectedAtCancel:boolean,closedRejectedAtCancel:boolean,readInvokeSignals:signals,readSettleSignals:signals,cancelInvokeSignals:signals});
  fields.order.cancelOperand=(v:any)=>v&&Object.keys(v).sort().join(",")==="defined,kind,object,observed"&&reason({observed:v.observed,defined:v.defined,object:v.object})&&["absent","undefined","same-as-stored","distinct-defined","invalid","unobserved"].includes(v.kind);
@@ -307,7 +318,7 @@ export function validateBifrostCheckpoint(record:any):void {
  const keys=["v","pin","lane","case","phase","state","defined","acq","op","count"];
  if(!record||Object.keys(record).sort().join(",")!==keys.sort().join(",")||record.v!==1||
   record.pin!=="d8bb939408aa4d2be7df0161748edb52ebf3b1fb"||!["outer","sdk"].includes(record.lane)||
-  (!["module","setup","case_setup","case_result","child","body","original_join","read","closed","cancel","release","observer","worker_retirement","restoration","cleanup","control","assertions","final","overflow"].includes(record.phase)&&!bifrostSetupPhase(record.phase))||
+  (!["module","setup","case_setup","case_result","child","body","original_join","read","closed","cancel","release","observer","worker_retirement","restoration","cleanup","control","assertions","accounting","final","overflow"].includes(record.phase)&&!bifrostSetupPhase(record.phase))||
   !["enter","fulfilled","rejected","threw","summary"].includes(record.state)||
   !(record.defined===null||typeof record.defined==="boolean")||
   ![record.case,record.acq,record.op].every((n:any)=>n===null||Number.isSafeInteger(n)&&n>=0&&n<4096)||
@@ -334,15 +345,15 @@ export function createBifrostCheckpointReporter(lane:string,emit:Function,withEv
   const selected=[...records.values()].filter(r=>r.case===index);
   selected.sort((a,b)=>Number(["rejected","threw"].includes(b.state))-Number(["rejected","threw"].includes(a.state)));
   for(const record of selected){const key=JSON.stringify(record);if(sent.has(key))continue;sent.add(key);
-   if(emitted<(withEvidence?3:7)){emitted++;send(record);}else suppressed=Math.min(65535,suppressed+1);}
+   if(emitted<(withEvidence?2:7)){emitted++;send(record);}else suppressed=Math.min(65535,suppressed+1);}
  };
  return {failures,mark,flush,
   evidence(records:any[]){
    try{
-    if(!withEvidence||lane!=="sdk"||finished||records.length!==4)throw Error("unsupported evidence group");
+    if(!withEvidence||lane!=="sdk"||finished||records.length!==5)throw Error("unsupported evidence group");
     for(const record of records)validateBifrostEvidence(record);
-    if(records.map(r=>r.part).join(",")!=="identity,reasons,order,retirement"||records.some(r=>r.case!==records[0].case||r.complete!==records[0].complete))throw Error("incomplete evidence group");
-    if(evidenceCase!==null){suppressed=Math.min(65535,suppressed+4);return;}
+    if(records.map(r=>r.part).join(",")!=="identity,reasons,order,retirement,postlude"||records.some(r=>r.case!==records[0].case||r.complete!==records[0].complete))throw Error("incomplete evidence group");
+    if(evidenceCase!==null){suppressed=Math.min(65535,suppressed+5);return;}
     evidenceCase=records[0].case;for(const record of records)send(record);
    }catch(error){failures.push(error);}
   },
@@ -380,6 +391,92 @@ export function createBifrostSetupBoundary(report:any,index:number) {
   },
  };
 }
+// The ticket is private to one original control request. Await the original
+// returns; these observations are not SDK data outcomes or a disposition.
+export function createBifrostRetirementReader() {
+ const tickets=new WeakMap<object,any>(),responses=new WeakSet<object>(),bodies=new WeakSet<object>();
+ const get=(token:object,owner?:any)=>{
+  const c=tickets.get(token);
+  if(!c||owner&&c.owner!==owner||c.owner.id!==c.id||c.owner.mode!==c.mode)throw Error("foreign retirement observation");
+  return c;
+ };
+ const begin=(c:any,phase:number,fn:Function,receiver:unknown,args:any[])=>{
+  if(c.steps[phase])throw Error("duplicate retirement operation");
+  const o:any={phase,fn,receiver,args:[...args],state:1,invoke:++c.sequence,returned:undefined};c.steps[phase]=o;
+  try{o.returned=Reflect.apply(fn,receiver,args);o.returnAt=++c.sequence;return o;}
+  catch(error){o.state=4;o.reason=error;o.settle=++c.sequence;throw error;}
+ };
+ const settle=async(c:any,o:any)=>{
+  try{const value=await o.returned;o.state=2;o.settle=++c.sequence;return value;}
+  catch(error){o.state=3;o.reason=error;o.settle=++c.sequence;throw error;}
+ };
+ const sync=(c:any,phase:number,fn:Function)=>{const o=begin(c,phase,fn,undefined,[]);o.state=2;o.settle=++c.sequence;return o.returned;};
+ const read=async(owner:any,original:Function,receiver:unknown,args:any[],method:string,observe:Function,token?:object)=>{
+  const c=token?get(token,owner):{owner,id:owner.id,mode:owner.mode,steps:[],sequence:0};
+  if(c.started)throw Error("duplicate retirement request");c.started=true;
+  const members=[...args],failures:unknown[]=[];let response:any,body:any,claimed=false,consumed=false,value:any;
+  const check=()=>{if(owner.id!==c.id||owner.mode!==c.mode||args.length!==members.length||args.some((v,i)=>v!==members[i]))throw Error("changed control ownership");};
+  const call=(phase:number,kind:string,fn:Function,that:unknown,values:any[])=>{
+   let o:any;
+   let pending:any,reported=false;
+   try{pending=observe(kind,()=>{o=begin(c,phase,fn,that,values);return o.returned;});}
+   catch(error){if(!o||o.state===4)throw error;failures.push(error);reported=true;}
+   if(!o)throw Error("missing original control invocation");
+   if(!reported&&pending!==o.returned)failures.push(Error("replaced original control return"));
+   return settle(c,o);
+  };
+  try{
+   check();response=await call(0,"control_fetch",original,receiver,args);
+   if(!response||responses.has(response))throw Error("ambiguous control response");responses.add(response);
+   body=response.body;if(body&&bodies.has(body))throw Error("foreign control body");if(body)bodies.add(body);
+   claimed=true;c.response=response;c.body=body;check();
+   if(method!=="text"&&method!=="json")throw Error("invalid control consumption");
+   const consume=response[method];value=await call(1,"control_body",consume,response,[]);consumed=true;c.value=value;check();
+  }catch(error){failures.push(error);}
+  if(failures.length&&claimed&&body&&!consumed)try{const cancel=body.cancel;await call(2,"control_cancel",cancel,body,[]);}catch(error){failures.push(error);}
+  c.readFailures=failures;c.readJoined=true;
+  if(failures.length===1)throw failures[0];if(failures.length)throw new AggregateError(failures,"control consumption and original cleanup failed");
+  return {response,value};
+ };
+ read.capture=(owner:any)=>{const token=Object.freeze({});tickets.set(token,{owner,id:owner.id,mode:owner.mode,steps:[],sequence:0,started:false,validated:false});return token;};
+ read.parse=(token:object)=>{const c=get(token);if(!c.readJoined||c.readFailures.length||typeof c.value!=="string")throw Error("unconsumed retirement response");return c.parsed=sync(c,3,()=>JSON.parse(c.value));};
+ read.validate=(token:object,validate:Function)=>{const c=get(token);if(c.steps[3]?.state!==2)throw Error("unparsed retirement response");
+  sync(c,4,()=>{if(validate(c.parsed,c.id)!==true)throw Error("invalid owned retirement proof");});c.validated=true;return c.parsed;};
+ read.verdict=(token:object,verdict:Function)=>{const c=get(token);if(!c.validated)throw Error("unvalidated retirement verdict");return sync(c,5,()=>verdict(c.response,c.parsed));};
+ read.inspect=(token:object)=>get(token);
+ return read;
+}
+
+export function validateBifrostProducerObservation(value:any):boolean {
+ if(!value||value.v!==1||typeof value.joined!=="boolean"||!Array.isArray(value.roles)||value.roles.length>4||
+  ![value.faults,value.failures,value.undefinedFailures].every(n=>Number.isSafeInteger(n)&&n>=0&&n<=1000000)||value.undefinedFailures>value.failures)return false;
+ const roles=["producer","progressTask","progressObserved","progressCommand"];
+ let prior=-1;
+ for(const row of value.roles){const at=Array.isArray(row)?roles.indexOf(row[0]):-1;
+  if(at<=prior||row.length!==3||!["pending","fulfilled","rejected"].includes(row[1])||
+   (row[1]==="rejected"?typeof row[2]!=="boolean":row[2]!==null))return false;prior=at;}
+ return (!value.joined||value.roles.every(r=>r[1]!=="pending"))&&value.failures===value.roles.filter(r=>r[1]==="rejected").length+value.faults;
+}
+export function validateBifrostSourceProof(value:any,id:string):boolean {
+ return !!value&&value.owner===id&&Array.isArray(value.calls)&&["held","canceled","expired","settled","completed","progressCalls","progressEnqueued"].every(k=>Number.isSafeInteger(value[k])&&value[k]>=0&&value[k]<=1000000)&&
+  typeof value.progressTerminal==="boolean"&&validateBifrostProducerObservation(value.producer);
+}
+export function validateBifrostRetirementProof(value:any,id:string):boolean {
+ return !!value&&value.owner===id&&typeof value.retired==="boolean"&&Array.isArray(value.calls)&&Array.isArray(value.operations)&&Array.isArray(value.readers)&&Array.isArray(value.events)&&
+  Number.isSafeInteger(value.charged)&&value.charged>=0&&["strict","provisional_worker_deadline_read"].includes(value.disposition)&&
+  (value.source===null||validateBifrostSourceProof(value.source,id))&&!!value.observation&&value.observation.owner===id&&
+  Array.isArray(value.observation.phases)&&value.observation.phases.length===4&&value.observation.phases.every(r=>Array.isArray(r)&&r.length===2&&[2,3].includes(r[0])&&(r[0]===3?typeof r[1]==="boolean":r[1]===null))&&
+  (value.observation.producer===null||validateBifrostSourceProof(value.observation.producer,id))&&typeof value.observation.usageObserved==="boolean";
+}
+export function bifrostPostludeEvidence(c:any,proof:any):any {
+ const step=(i:number)=>{const o=c?.steps?.[i];return o?[o.state,o.state===3||o.state===4?o.reason!==undefined:null,o.invoke,o.returnAt??null,o.settle??null]:null;};
+ const observation=proof?.observation,source=observation?.producer,p=source?.producer;
+ return {control:[0,1,2,3,4,5].map(step),validated:c?.validated===true,
+  producer:p?[p.joined,p.roles.map((r:any)=>[["producer","progressTask","progressObserved","progressCommand"].indexOf(r[0]),["pending","fulfilled","rejected"].indexOf(r[1])+1,r[2]]),p.faults,p.failures,p.undefinedFailures,
+   source.held,source.canceled,source.expired,source.settled]:null,
+  router:observation?.phases??null,usage:observation?[observation.usageObserved,observation.usageObserved?proof.events.length:null,observation.usageObserved?proof.charged:null]:null};
+}
+
 const checkpoints=createBifrostCheckpointReporter("sdk",(record:any)=>process.stdout.write("BIFROST_CHECKPOINT "+JSON.stringify(record)+"\n"),true);
 checkpoints.mark(null,"module","fulfilled");checkpoints.flush(null);
 afterAll(async()=>{await checkpoints.drain();checkpoints.finish();throwFailures(checkpoints.failures);});
@@ -544,8 +641,14 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
  if(row.mode==="preabort")await check(()=>expect(transports.filter(t=>t.method==="POST")).toHaveLength(0));
  for(const t of transports){await check(()=>expect(t.guardObserved).toBe(true));await check(()=>expect(t.releases).toBe(1));await check(()=>expect(t.releaseDone).toBe(true));for(const r of t.readers)await check(()=>expect(r.unlocks).toBe(1));for(const b of t.bodies)await check(()=>expect(b.locked).toBe(false));}
  const workerFailures:unknown[]=[];
+ const retirementReader=createBifrostRetirementReader(),retirementOwner=Object.freeze({id:row.id}),retirementTicket=retirementReader.capture(retirementOwner);
  checkpoints.mark(caseIndex,"worker_retirement","enter");
- try{const response=await nativeFetch(origin+"/__bifrost/join/"+row.id,{method:"POST",headers:{"content-type":"application/json"},body:"{}"});proof=JSON.parse(await response.text());w.sourceExpired=proof.source?.expired??null;worker=response.status===200&&proof.retired===true;if(!worker)workerFailures.push(Error("independent Worker retirement failed"));}catch(e){workerFailures.push(e);}
+ try{
+  await retirementReader(retirementOwner,nativeFetch,undefined,[origin+"/__bifrost/join/"+row.id,{method:"POST",headers:{"content-type":"application/json"},body:"{}"}],"text",(_kind:string,start:Function)=>start(),retirementTicket);
+  retirementReader.parse(retirementTicket);proof=retirementReader.validate(retirementTicket,validateBifrostRetirementProof);
+  w.sourceExpired=proof.source?.expired??null;
+  retirementReader.verdict(retirementTicket,(response:any,value:any)=>{worker=response.status===200&&value.retired===true;if(!worker)throw Error("independent Worker retirement failed");});
+ }catch(e){workerFailures.push(e);}
  checkpoints.mark(caseIndex,"worker_retirement",workerFailures.length?"rejected":"fulfilled",workerFailures[0]);
  const beforeRestore=failures.length;
  for(const restore of restores.toReversed())await check(()=>checkpoints.observe(caseIndex,"restoration",restore,undefined,[]));
@@ -566,7 +669,7 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
   if(!bifrostProgressQualified(f))failures.push(Error("progress case physical or accounting proof incomplete"));
  }
  failures.push(...w.syncFailures,...w.observerFailures,...workerFailures);
- if(failures.length)try{checkpoints.evidence(bifrostCaseEvidence(caseIndex,w,proof,worker,workerFailures));}catch(e){checkpoints.failures.push(e);}
+ if(failures.length)try{checkpoints.evidence(bifrostCaseEvidence(caseIndex,w,proof,worker,workerFailures,retirementReader.inspect(retirementTicket)));}catch(e){checkpoints.failures.push(e);}
  finishBifrostCheckpointCase(checkpoints,caseIndex,failures);throwFailures(failures);
 }
 

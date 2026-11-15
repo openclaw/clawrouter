@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- Preserve failed Bifrost producer, control-response and accounting observations after original joins without changing native retirement acceptance.
+
 - Join Bifrost fixture producers and their already-attached progress observers explicitly, preserving original failures and retiring acquired control bodies before reporting cleanup failures.
 
 - Activate Bifrost model discovery and versioned native aliases with original-owner catalog checks; add a pinned registered-client fixture for discovery and opaque-ID streaming.

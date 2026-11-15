@@ -88,15 +88,15 @@ export function bifrostCheckpointFunctions(){
  assert.equal(source.split(start).length,2);assert.equal(source.split(end).length,2);
  const text=source.slice(source.indexOf(start),source.indexOf(end));assert.doesNotMatch(text,/\bimport\b|\brequire\s*\(/);
  const native=bifrostNativeEvaluator();
- return runInNewContext('"use strict";\n'+stripTypeScriptTypes(text.replace(/^export /gm,""),{mode:"strip"})+"\n({bifrostSetupPhase,bifrostSignalEvidence,bifrostOperationEvidence,bifrostReasonMetadata,bifrostCaseEvidence,validateBifrostEvidence,validateBifrostCheckpoint,createBifrostCheckpointReporter,finishBifrostCheckpointCase,createBifrostSetupBoundary})",{AbortSignal,Buffer,bifrostInvocationBound:native.bifrostInvocationBound,bifrostCancelOperand:native.bifrostCancelOperand},{timeout:1000});
+ return runInNewContext('"use strict";\n'+stripTypeScriptTypes(text.replace(/^export /gm,""),{mode:"strip"})+"\n({bifrostSetupPhase,bifrostSignalEvidence,bifrostOperationEvidence,bifrostReasonMetadata,bifrostCaseEvidence,validateBifrostEvidence,validateBifrostCheckpoint,createBifrostCheckpointReporter,finishBifrostCheckpointCase,createBifrostSetupBoundary,createBifrostRetirementReader,validateBifrostProducerObservation,validateBifrostSourceProof,validateBifrostRetirementProof,bifrostPostludeEvidence})",{AbortSignal,Buffer,bifrostInvocationBound:native.bifrostInvocationBound,bifrostCancelOperand:native.bifrostCancelOperand},{timeout:1000});
 }
 export function bifrostCheckpointRecords(error){
  const {validateBifrostCheckpoint}=bifrostCheckpointFunctions();
  const records=bifrostChildDiagnosticRecords(error,"BIFROST_CHECKPOINT ",record=>{validateBifrostCheckpoint(record);assert.equal(record.lane,"sdk");return JSON.stringify(record);});
  const group=records.filter(r=>r.evidence===true);
  if(group.length){
-  assert.equal(group.length,4,"incomplete diagnostic evidence group");
-  assert.deepEqual(group.map(r=>r.part),["identity","reasons","order","retirement"]);
+  assert.equal(group.length,5,"incomplete diagnostic evidence group");
+  assert.deepEqual(group.map(r=>r.part),["identity","reasons","order","retirement","postlude"]);
   assert.ok(group.every(r=>r.case===group[0].case&&r.complete===group[0].complete),"cross-case diagnostic evidence");
  }
  return records;
@@ -137,7 +137,7 @@ export function createBifrostProducerJoin(state, request, call) {
   const id = state.id, mode = state.mode, calls = state.calls, callIndex = calls.indexOf(call);
   const roles = ["producer", "progressTask", "progressObserved", "progressCommand"];
   const records = new Map(), faults = [], seen = new Set();
-  let response, body, attached = false, running;
+  let response, body, attached = false, running, joinedSize = -1;
   const fail = () => { if (!faults.length) faults.push(Error("changed producer ownership")); };
   const check = () => {
     if (state.id !== id || state.mode !== mode || state.calls !== calls || calls[callIndex] !== call
@@ -161,6 +161,14 @@ export function createBifrostProducerJoin(state, request, call) {
       if (!check()) throw faults[0];
       return promise;
     },
+    observation() {
+      check();
+      const rows = roles.map(role => records.get(role)).filter(Boolean);
+      return { v: 1, joined: joinedSize === records.size && rows.every(row => row.state !== "pending"),
+        roles: rows.map(row => [row.role, row.state, row.state === "rejected" ? row.error !== undefined : null]),
+        faults: faults.length, failures: rows.filter(row => row.state === "rejected").length + faults.length,
+        undefinedFailures: rows.filter(row => row.state === "rejected" && row.error === undefined).length + faults.filter(error => error === undefined).length };
+    },
     drain() {
       if (running) return running;
       running = (async () => {
@@ -176,6 +184,7 @@ export function createBifrostProducerJoin(state, request, call) {
             check();
           } while ([...records.values()].some(row => row.state === "pending"));
           if (!attached) fail();
+          joinedSize = records.size;
           const rejected = roles.map(role => records.get(role)).filter(row => row?.state === "rejected");
           const failures = [...rejected.map(row => row.error), ...faults];
           if (records.get("producer")?.state === "fulfilled") state.settled = 1;
@@ -194,36 +203,34 @@ export function createBifrostProducerJoin(state, request, call) {
 // Consume the actual control response first. On failure, retire its body once
 // without replacing the original failure (which may be undefined).
 export function createBifrostControlReader() {
-  const responses = new WeakSet(), bodies = new WeakSet();
-  return async function read(owner, original, receiver, args, method, observe) {
-    const id = owner.id, mode = owner.mode, members = args.slice(), failures = [];
-    let response, body, claimed = false, consumed = false;
-    const check = () => {
-      if (owner.id !== id || owner.mode !== mode || args.length !== members.length || args.some((value, i) => value !== members[i])) throw Error("changed control ownership");
-    };
-    let value;
-    try {
-      check();
-      response = await observe("control_fetch", () => Reflect.apply(original, receiver, args));
-      if (!response || responses.has(response)) throw Error("ambiguous control response");
-      responses.add(response);
-      body = response.body;
-      if (body && bodies.has(body)) throw Error("foreign control body");
-      if (body) bodies.add(body);
-      claimed = true; check();
-      if (method !== "json" && method !== "text") throw Error("invalid control consumption");
-      const consume = response[method];
-      value = await observe("control_body", () => Reflect.apply(consume, response, []));
-      consumed = true; check();
-    } catch (error) { failures.push(error); }
-    if (failures.length && claimed && body && !consumed) {
-      try { const cancel = body.cancel; await observe("control_cancel", () => Reflect.apply(cancel, body, [])); }
-      catch (error) { failures.push(error); }
-    }
-    if (failures.length === 1) throw failures[0];
-    if (failures.length) throw new AggregateError(failures, "control consumption and original cleanup failed");
-    return { response, value };
-  };
+  return bifrostCheckpointFunctions().createBifrostRetirementReader();
+}
+export async function bifrostProducerProof(s) {
+  const failures = [], owner = s.producerJoin;
+  try {
+    if (owner) await owner.drain();
+    else if (s.producer || s.progressTask || s.progressObserved || s.progressCommand) throw Error("unbound producer originals");
+  } catch (error) { failures.push(error); }
+  s.producerProofFailures = failures;
+  const producer = owner ? owner.observation() :
+    { v: 1, joined: failures.length === 0, roles: [], faults: failures.length, failures: failures.length, undefinedFailures: failures.filter(error => error === undefined).length };
+  return { owner: s.id, calls: s.calls, held: s.held, canceled: s.canceled, expired: s.expired, settled: s.settled,
+    completed: s.completed, progressCalls: s.progressCalls, progressEnqueued: s.progressEnqueued, progressTerminal: s.progressTerminal, producer };
+}
+// The original join error remains first. Financial assertions require the same
+// request's validated payload and an observed original usage operation.
+export async function finishBifrostRow(join, evidence, retirement, financial) {
+  const failures = []; let proof;
+  try { proof = await join(); } catch (error) { failures.push(error); }
+  try { const retained = evidence(); if (proof && proof !== retained) throw Error("replaced retirement proof"); proof = retained; }
+  catch (error) { proof = undefined; failures.push(error); }
+  if (proof) {
+    try { await retirement(proof); } catch (error) { failures.push(error); }
+    if (proof.observation.usageObserved) try { await financial(proof); } catch (error) { failures.push(error); }
+  }
+  if (!proof && failures.length === 0) failures.push(Error("missing owned retirement evidence"));
+  if (failures.length === 1) throw failures[0];
+  if (failures.length) throw new AggregateError(failures, "original retirement and independent assertions failed");
 }
 // END Bifrost owned producer/control retirement helpers.
 
@@ -358,6 +365,106 @@ export async function bifrostRetirementInertCases(assert) {
   });
   return cases;
 }
+export async function bifrostFailureObservationInertCases(assert) {
+  const names = [], run = async (name, body) => { await body(); names.push(name); };
+  const outcome = async p => { try { return {failed:false,value:await p}; } catch(error) { return {failed:true,error}; } };
+  const deferred = () => { let resolve, reject; const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject}; };
+  const producer = () => {
+    const request={},call={},s={id:"case",mode:"partial",calls:[call],held:1,canceled:0,expired:0,settled:0,completed:0,progressCalls:0,progressEnqueued:0,progressTerminal:false};
+    const owner=createBifrostProducerJoin(s,request,call),body={},response={body};owner.attach(response,body);
+    const capture=(role,p)=>{s[role]=p;owner.capture(role,p,request);};return {s,owner,capture};
+  };
+  await run("failed producer keeps undefined and no invented partial observer",async()=>{
+    const c=producer(),p=deferred();c.capture("producer",p.promise);const pending=bifrostProducerProof(c.s);p.reject(undefined);
+    const proof=await pending;assert.deepEqual(c.s.producerProofFailures,[undefined]);
+    assert.deepEqual(proof.producer,{v:1,joined:true,roles:[["producer","rejected",false]],faults:0,failures:1,undefinedFailures:1});
+    assert.equal(proof.held,1);assert.equal(proof.settled,0);
+  });
+  await run("proof waits for late already attached observer",async()=>{
+    const c=producer(),p=deferred(),tail=deferred();let done=false;
+    c.capture("producer",p.promise);const attached=p.promise.then(()=>{c.capture("progressObserved",tail.promise);});c.capture("progressTask",attached);
+    const proof=bifrostProducerProof(c.s).then(v=>{done=true;return v;});p.resolve();await attached;await Promise.resolve();assert.equal(done,false);
+    tail.reject(undefined);const value=await proof;assert.deepEqual(value.producer.roles,[["producer","fulfilled",null],["progressTask","fulfilled",null],["progressObserved","rejected",false]]);
+    assert.deepEqual(c.s.producerProofFailures,[undefined]);
+  });
+  await run("late capture invalidates prior joined observation",async()=>{
+    const c=producer();c.capture("producer",Promise.resolve());await c.owner.drain();assert.equal(c.owner.observation().joined,true);
+    const held=deferred();c.capture("progressObserved",held.promise);assert.equal(c.owner.observation().joined,false);held.resolve();await c.owner.drain();assert.equal(c.owner.observation().joined,true);
+  });
+  await run("foreign producer ownership remains failed",async()=>{
+    const c=producer();c.capture("producer",Promise.resolve());c.s.producerRequest={};const value=await bifrostProducerProof(c.s);
+    assert.equal(value.producer.faults,1);assert.equal(value.producer.failures,1);assert.equal(c.s.producerProofFailures.length,1);
+  });
+  const f=bifrostCheckpointFunctions();
+  const fixture = () => {
+    const read=f.createBifrostRetirementReader(),owner=Object.freeze({id:"case"}),ticket=read.capture(owner),calls=[],receiver={},args=["fixture",{}];
+    const body={cancel(){calls.push("cancel");return Promise.resolve();}},response={status:500,body,text(){assert.equal(this,response);calls.push("text");return Promise.resolve('{"owner":"case"}');}};
+    const pending=Promise.resolve(response);function fetch(...values){assert.equal(this,receiver);assert.deepEqual(values,args);calls.push("fetch");return pending;}
+    return {read,owner,ticket,calls,body,response,pending,invoke:()=>read(owner,fetch,receiver,args,"text",(_kind,start)=>start(),ticket)};
+  };
+  await run("original return retained before failed strict verdict",async()=>{
+    const c=fixture();await c.invoke();assert.equal(c.read.inspect(c.ticket).steps[0].returned,c.pending);
+    const parsed=c.read.parse(c.ticket);assert.equal(c.read.validate(c.ticket,(v,id)=>v.owner===id),parsed);
+    const primary={};assert.throws(()=>c.read.verdict(c.ticket,()=>{throw primary;}),e=>e===primary);
+    const state=c.read.inspect(c.ticket);assert.equal(state.parsed,parsed);assert.equal(state.validated,true);assert.equal(state.steps[5].reason,primary);
+    assert.deepEqual(c.calls,["fetch","text"]);assert.equal(state.steps[1].receiver,c.response);
+  });
+  await run("parse failure and undefined verdict have distinct stages",async()=>{
+    const c=fixture();c.response.text=()=>Promise.resolve("{");await c.invoke();assert.throws(()=>c.read.parse(c.ticket));
+    assert.equal(c.read.inspect(c.ticket).steps[3].state,4);assert.equal(c.read.inspect(c.ticket).validated,false);assert.equal(c.read.inspect(c.ticket).steps[5],undefined);
+    const d=fixture();await d.invoke();d.read.parse(d.ticket);d.read.validate(d.ticket,()=>true);
+    const result=await outcome(Promise.resolve().then(()=>d.read.verdict(d.ticket,()=>{throw undefined;})));
+    assert.deepEqual(result,{failed:true,error:undefined});assert.equal(d.read.inspect(d.ticket).steps[5].state,4);
+  });
+  await run("consumption and cancellation keep separate original undefined failures",async()=>{
+    const c=fixture(),primary={},cancel=deferred();c.response.text=()=>Promise.reject(primary);c.body.cancel=()=>{c.calls.push("cancel");return cancel.promise;};
+    let done=false;const pending=outcome(c.invoke()).then(v=>{done=true;return v;});await Promise.resolve();await Promise.resolve();assert.equal(done,false);
+    cancel.reject(undefined);const result=await pending;assert.deepEqual(result.error.errors,[primary,undefined]);
+    const state=c.read.inspect(c.ticket);assert.equal(state.steps[2].returned,cancel.promise);assert.equal(state.steps[1].state,3);assert.equal(state.steps[2].state,3);assert.equal(state.readJoined,true);
+  });
+  await run("foreign owner ticket and invalid proof rejected",async()=>{
+    const c=fixture();assert.throws(()=>c.read.inspect({}));
+    assert.equal((await outcome(c.read({},()=>{},undefined,[],"text",(_kind,start)=>start(),c.ticket))).failed,true);
+    await c.invoke();c.read.parse(c.ticket);assert.throws(()=>c.read.validate(c.ticket,()=>false));assert.equal(c.read.inspect(c.ticket).validated,false);
+  });
+  await run("recorder fault cannot abandon original fetch and consumption",async()=>{
+    const read=f.createBifrostRetirementReader(),owner={id:"case"},ticket=read.capture(owner),original=deferred(),order=[],reason={};
+    const response={body:{cancel(){throw Error("unexpected cancellation");}},text(){order.push("text");return Promise.resolve("{}");}};
+    const pending=outcome(read(owner,()=>original.promise,undefined,[],"text",(kind,start)=>{const p=start();if(kind==="control_fetch")throw reason;return p;},ticket));
+    original.resolve(response);const result=await pending;assert.equal(result.error,reason);assert.deepEqual(order,["text"]);assert.equal(read.inspect(ticket).readJoined,true);
+  });
+  for(const available of [true,false])await run("failed join preserves primary with accounting availability "+available,async()=>{
+    const primary=undefined,retirement={},financial={},proof={observation:{usageObserved:available}},order=[];
+    const result=await outcome(finishBifrostRow(()=>{order.push("join");throw primary;},()=>proof,()=>{order.push("retire");throw retirement;},()=>{order.push("finance");throw financial;}));
+    assert.deepEqual(result.error.errors,available?[primary,retirement,financial]:[primary,retirement]);assert.deepEqual(order,available?["join","retire","finance"]:["join","retire"]);
+  });
+  await run("missing or replaced evidence never runs financial assertions",async()=>{
+    let calls=0;const primary={};assert.equal((await outcome(finishBifrostRow(()=>{throw primary;},()=>undefined,()=>calls++,()=>calls++))).error,primary);
+    assert.equal((await outcome(finishBifrostRow(()=>({}),()=>({}),()=>calls++,()=>calls++))).failed,true);assert.equal(calls,0);
+  });
+  await run("successful original request and assertion order unchanged",async()=>{
+    const proof={observation:{usageObserved:true}},order=[];await finishBifrostRow(()=>{order.push("join");return proof;},()=>proof,()=>order.push("retire"),()=>order.push("finance"));
+    assert.deepEqual(order,["join","retire","finance"]);
+  });
+  await run("validated proof rejects foreign owner and missing usage observation",async()=>{
+    const c=producer();c.capture("producer",Promise.resolve());const source=await bifrostProducerProof(c.s);
+    assert.equal(f.validateBifrostSourceProof(source,"case"),true);assert.equal(f.validateBifrostSourceProof(source,"foreign"),false);
+    const proof={owner:"case",retired:false,calls:[],operations:[],readers:[],events:[],charged:0,disposition:"strict",source:null,
+      observation:{owner:"case",phases:[[2,null],[3,false],[2,null],[2,null]],producer:source,usageObserved:true}};
+    assert.equal(f.validateBifrostRetirementProof(proof,"case"),true);
+    for(const value of [{...proof,owner:"foreign"},{...proof,observation:{...proof.observation,owner:"foreign"}},{...proof,observation:{...proof.observation,usageObserved:undefined}}])assert.equal(f.validateBifrostRetirementProof(value,"case"),false);
+  });
+  await run("postlude projection retains absence and bounded maximum width",async()=>{
+    const base={v:1,pin:bifrostPin,lane:"sdk",case:2,evidence:true,complete:false,part:"postlude"};
+    const absent={...base,...f.bifrostPostludeEvidence(undefined,undefined)};f.validateBifrostEvidence(absent);assert.equal(absent.producer,null);assert.equal(absent.usage,null);assert.equal(absent.validated,false);
+    const steps=Array.from({length:6},(_,phase)=>({phase,state:3,reason:undefined,invoke:1000000,returnAt:1000000,settle:1000000}));
+    const source={held:1000000,canceled:1000000,expired:1000000,settled:1000000,producer:{joined:true,roles:["producer","progressTask","progressObserved","progressCommand"].map(r=>[r,"rejected",false]),faults:1000000,failures:1000000,undefinedFailures:1000000}};
+    const wide={...base,...f.bifrostPostludeEvidence({steps,validated:true},{observation:{producer:source,phases:Array(4).fill([3,false]),usageObserved:true},events:{length:1000000},charged:1000000})};
+    f.validateBifrostEvidence(wide);assert.ok(Buffer.byteLength("::notice title=Bifrost closed diagnostic::"+JSON.stringify(wide)+"\n")<=768);
+    for(const delta of [{pin:"foreign"},{part:"foreign"},{extra:1},{control:[]},{usage:[false,0,0]}])assert.throws(()=>f.validateBifrostEvidence({...absent,...delta}));
+  });
+  return names;
+}
 // END Bifrost inert retirement regressions.
 
 // These functions are embedded unchanged in the real Worker fixture and tested
@@ -444,14 +551,19 @@ ${observeBifrostOperation.toString()}
 ${collectBifrostOperations.toString()}
 ${bifrostDeadlineQualified.toString()}
 ${bifrostDeadlineWitness.toString()}
-${createBifrostControlReader.toString()}
+${bifrostCheckpointFunctions().createBifrostRetirementReader.toString()}
+${bifrostCheckpointFunctions().validateBifrostProducerObservation.toString()}
+${bifrostCheckpointFunctions().validateBifrostSourceProof.toString()}
 import {resolveGrantCandidates,grantRoutingPolicy} from './worker/grant-selection.ts';
-const nativeFetch=globalThis.fetch,states=new Map(),base='https://gateway.fixture/openai/v1',readControl=createBifrostControlReader();
+const nativeFetch=globalThis.fetch,states=new Map(),base='https://gateway.fixture/openai/v1',readControl=createBifrostRetirementReader();
 function invoke(s,kind,run,details){return observeBifrostOperation(s,kind,run,details);}
 function observe(s,p,kind,details){return invoke(s,kind,()=>p,details);}
 async function drain(s){return collectBifrostOperations(s);}
 function publicOperations(s){return s.ops.map(o=>({kind:o.kind,ordinal:o.ordinal,state:o.state,invoke:o.invoke,settle:o.settle??null}));}
-async function control(s,path){const result=await readControl(s,nativeFetch,globalThis,['https://bifrost-control.fixture/'+path+'/'+s.id,{method:'POST',body:JSON.stringify({mode:s.mode,models:s.ids})}],'json',(kind,start)=>invoke(s,kind,start));return result.value;}
+async function control(s,path){const result=await readControl(s,nativeFetch,globalThis,['https://bifrost-control.fixture/'+path+'/'+s.id,{method:'POST',body:JSON.stringify({mode:s.mode,models:s.ids})}],'json',(kind,start)=>invoke(s,kind,start));
+ if(path==='proof'){if(!validateBifrostSourceProof(result.value,s.id))throw Error('invalid original producer proof');s.producerObservation=result.value;
+  if(result.response.status!==200||!result.value.producer.joined||result.value.producer.failures!==0)throw Error('original producer proof failed');}
+ return result.value;}
 async function mutate(s,kind){
  if(kind==='arm_revoke'||kind==='arm_destination'){s.armed=kind.slice(4);return;}
  if(kind==='revoke'||kind==='warm_revoke')await revokeGrantCredentials(s.env,s.grantKey);
@@ -523,15 +635,15 @@ export default {async fetch(request,bindings,originalContext){
   if(match[1]==='mutate'){await mutate(s,(await request.json()).kind);return Response.json({mutated:true});}
   if(match[1]==='join'){
    if(!s.retirement)s.retirement=(async()=>{
-    const failures=[];try{await drain(s);}catch(e){failures.push(e);}
-    try{s.source=await control(s,'proof');}catch(e){failures.push(e);}
-    let usage;try{usage=await invoke(s,'usage',()=>usageSnapshot(bindings,'fixture',s.id,{kind:'admin'}));}catch(e){failures.push(e);}
-    try{await drain(s);}catch(e){failures.push(e);}
+    const failures=[],phases=[];try{await drain(s);phases.push([2,null]);}catch(e){failures.push(e);phases.push([3,e!==undefined]);}
+    try{s.source=await control(s,'proof');phases.push([2,null]);}catch(e){failures.push(e);phases.push([3,e!==undefined]);}
+    let usage,usageObserved=false;try{usage=await invoke(s,'usage',()=>usageSnapshot(bindings,'fixture',s.id,{kind:'admin'}));usageObserved=true;phases.push([2,null]);}catch(e){failures.push(e);phases.push([3,e!==undefined]);}
+    try{await drain(s);phases.push([2,null]);}catch(e){failures.push(e);phases.push([3,e!==undefined]);}
     const charged=bodyBudgetCharged(),deadline=bifrostDeadlineWitness(s,InternalHttpAbort,usage,charged);
     const candidate=bifrostDeadlineQualified(deadline);
     for(const o of s.ops)if(o.state!=='fulfilled'&&!(candidate&&(o.ordinal===deadline.readOrdinal||o.ordinal===deadline.observerOrdinal)))failures.push(o.error);
     failures.push(...s.sync,...s.observerFailures);
-    const proof={calls:s.calls,operations:publicOperations(s),readers:s.readers.map(r=>({unlocks:r.unlocks,eof:r.eof,locked:r.body.locked})),source:s.source??null,events:usage?.events??[],charged,prefix:s.prefix,mutated:s.mutated,inspected:!!s.inspected,inboundChatAborted:s.inboundChatAborted===true,deadline,
+    const proof={owner:s.id,observation:{owner:s.id,phases,producer:s.producerObservation??null,usageObserved},calls:s.calls,operations:publicOperations(s),readers:s.readers.map(r=>({unlocks:r.unlocks,eof:r.eof,locked:r.body.locked})),source:s.source??null,events:usage?.events??[],charged,prefix:s.prefix,mutated:s.mutated,inspected:!!s.inspected,inboundChatAborted:s.inboundChatAborted===true,deadline,
       disposition:candidate?'provisional_worker_deadline_read':'strict',retired:failures.length===0,syncFailures:s.sync.length};
     s.retirementFailures=failures;return proof;
    })();
@@ -551,6 +663,7 @@ const upstream = `
 ${requestBifrostProgress.toString()}
 ${performBifrostProgress.toString()}
 ${createBifrostProducerJoin.toString()}
+${bifrostProducerProof.toString()}
 const states=new Map();
 export default {async fetch(request){const url=new URL(request.url);
  if(url.hostname==='bifrost-control.fixture'){
@@ -559,7 +672,7 @@ export default {async fetch(request){const url=new URL(request.url);
   const s=states.get(id);if(!s)throw Error('missing upstream owner');
   if(kind==='progress')return Response.json(await requestBifrostProgress(s));
   if(kind==='complete'){if(!s.complete)throw Error('missing producer');s.complete();return Response.json({accepted:true});}
-   if(kind==='proof'){if(s.producerJoin)await s.producerJoin.drain();else if(s.producer||s.progressTask||s.progressObserved||s.progressCommand)throw Error('unbound producer originals');return Response.json({calls:s.calls,held:s.held,canceled:s.canceled,expired:s.expired,settled:s.settled,completed:s.completed,progressCalls:s.progressCalls,progressEnqueued:s.progressEnqueued,progressTerminal:s.progressTerminal});}
+   if(kind==='proof'){const proof=await bifrostProducerProof(s);return Response.json(proof,{status:s.producerProofFailures.length?500:200});}
  }
  const secret=request.headers.get('authorization')??'',s=[...states.values()].find(s=>secret==='Bearer synthetic-owner-'+s.id||secret==='Bearer synthetic-rotated-'+s.id);
  if(!s)throw Error('foreign upstream credential');
@@ -598,8 +711,21 @@ export async function startBifrostFixture({hotCache=false}={}) {
     const { response, value: text } = await readControl(Object.freeze({id:path}),fetch,undefined,[origin+path,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body??{})}],"text",(_kind,start)=>start());
     let value;try{value=JSON.parse(text);}catch{throw Error('fixture control returned non-JSON');}assert.equal(response.status,200,JSON.stringify(value)); return value;
   };
+  const joined = new Map(), {validateBifrostRetirementProof} = bifrostCheckpointFunctions();
+  const joinOwned = async id => {
+    if (joined.has(id)) throw Error("duplicate outer retirement request");
+    const owner = Object.freeze({id}), ticket = readControl.capture(owner); joined.set(id,{owner,ticket});
+    await readControl(owner,fetch,undefined,[origin+'/__bifrost/join/'+id,{method:"POST",headers:{"content-type":"application/json"},body:"{}"}],"text",(_kind,start)=>start(),ticket);
+    readControl.parse(ticket);const proof=readControl.validate(ticket,validateBifrostRetirementProof);
+    readControl.verdict(ticket,(response,value)=>assert.equal(response.status,200,JSON.stringify(value)));return proof;
+  };
+  const joinEvidence = id => {
+    const entry=joined.get(id);if(!entry)return undefined;
+    const c=readControl.inspect(entry.ticket);if(c.owner!==entry.owner||c.id!==id)throw Error("foreign outer retirement evidence");
+    return c.validated?c.parsed:undefined;
+  };
   return { origin, runtime, setup:row=>json('/__bifrost/setup',row), mutate:(id,kind)=>json('/__bifrost/mutate/'+id,{kind}),
-    join:id=>json('/__bifrost/join/'+id), state:id=>json('/__bifrost/state/'+id),
+    join:joinOwned, joinEvidence, state:id=>json('/__bifrost/state/'+id),
     close:()=>finishBifrostOwned(()=>{},[()=>runtime.dispose(),()=>rm(directory,{recursive:true,force:true})]) };
 }
 
@@ -622,6 +748,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
  test("Bifrost original producer, observer and control retirement (inert)", async () => {
   const cases = await bifrostRetirementInertCases(assert); assert.ok(cases.length >= 30);
  });
+ test("Bifrost failed retirement observations preserve original failures (inert)",async()=>{assert.equal((await bifrostFailureObservationInertCases(assert)).length,15);});
  test("Bifrost checkpoint preserves original invocation, promise and undefined rejection",async()=>{
   const records=[],r=bifrostCheckpointFunctions().createBifrostCheckpointReporter("sdk",v=>records.push(v)),receiver={},args=[{},undefined];
   let calls=0,reject;const original=new Promise((_,no)=>{reject=no;});
@@ -901,7 +1028,7 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
   report.mark(null,"module","fulfilled");report.flush(null);
   for(let i=0;i<20;i++){report.mark(i,"setup","fulfilled");report.flush(i);}
   const group=f.bifrostCaseEvidence(2,w,proof,false,[]);report.evidence(group);report.evidence(f.bifrostCaseEvidence(3,w,proof,false,[]));report.finish();
-  assert.equal(report.failures.length,0);assert.equal(records.length,9);assert.equal(records.filter(r=>r.evidence).length,4);
+  assert.equal(report.failures.length,0);assert.equal(records.length,9);assert.equal(records.filter(r=>r.evidence).length,5);
   assert.ok(records.filter(r=>r.evidence).every(r=>r.case===2));assert.equal(records.at(-2).phase,"overflow");assert.ok(records.at(-2).count>0);
   const child={stdout:records.map(r=>"BIFROST_CHECKPOINT "+JSON.stringify(r)).join("\n")},decoded=bifrostCheckpointRecords(child);
   const lines=[],emit=bifrostAnnotationEmitter(line=>lines.push(line));decoded.forEach(emit);
@@ -1081,7 +1208,7 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
   ]){
    cancel.args=args;const group=f.bifrostCaseEvidence(2,w,proof,false,[]);group.forEach(f.validateBifrostEvidence);
    assert.deepEqual(JSON.parse(JSON.stringify(group[2].cancelOperand)),{observed:seen,defined,object,kind});
-   const parsed=bifrostCheckpointRecords({stdout:group.map(r=>'BIFROST_CHECKPOINT '+JSON.stringify(r)).join('\n')});assert.equal(parsed.length,4);
+   const parsed=bifrostCheckpointRecords({stdout:group.map(r=>'BIFROST_CHECKPOINT '+JSON.stringify(r)).join('\n')});assert.equal(parsed.length,5);
   }
   assert.equal(gets,0);
  });
@@ -1365,20 +1492,25 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
         env:{CLAWROUTER_CONTRACT_ORIGIN:f.origin,CLAWROUTER_CONTRACT_SOURCE_HEAD:bifrostPin,CLAWROUTER_BIFROST_CASES:JSON.stringify(bifrostCases),CLAWROUTER_BIFROST_CONTROLS:JSON.stringify(bifrostControls),CLAWROUTER_BIFROST_PROGRESS:JSON.stringify(bifrostProgressCases)}}]),emit);
     },[...executionCases.map((row,index)=>async report=>{
       if(!created.includes(row))return;
-      const proof=await report.observe(index,"worker_retirement",f.join,f,[row.id]);
+      await finishBifrostRow(()=>report.observe(index,"worker_retirement",f.join,f,[row.id]),()=>f.joinEvidence(row.id),async proof=>{
       report.mark(index,"assertions","enter");
       try{assertBifrostRetired(proof);
       assert.equal(proof.source.calls.filter(c=>c.chat).length,['eof','provider_error','partial','account_a','account_b','profile','rotation','progress'].includes(row.mode)?1:0);
       assert.equal(proof.source.calls.filter(c=>!c.chat).length,['missing_owner','invalid_owner'].includes(row.mode)?0:1);
       if(row.mode==='partial'||row.mode==='progress'){assert.equal(proof.source.canceled,1);assert.equal(proof.source.settled,1);}
       if(row.mode==='progress'){assert.equal(proof.inboundChatAborted,true);assert.equal(proof.source.progressCalls,1);assert.equal(proof.source.progressTerminal,false);assert.equal(proof.source.completed,0);}
-      assert.ok(proof.events.length>=1);
+      report.mark(index,"assertions","fulfilled");
+      }catch(error){report.mark(index,"assertions","rejected",error);report.flush(index);throw error;}
+      },async proof=>{
+      report.mark(index,"accounting","enter");
+      try{assert.ok(proof.events.length>=1);
       for(const event of proof.events){assert.equal(event.provider,'bifrost');assert.equal(event.policy_id,row.id);
         if(event.capability==='models.list'){assert.equal(event.model,null);assert.equal(event.actual_cost_micros,0);assert.equal(event.reserved_cost_micros,0);}
         else if(event.status==='success'){assert.equal(event.actual_cost_micros,7);assert.equal(event.input_tokens,4);assert.equal(event.output_tokens,3);}
       }
-      report.mark(index,"assertions","fulfilled");
-      }catch(error){report.mark(index,"assertions","rejected",error);report.flush(index);throw error;}
+      report.mark(index,"accounting","fulfilled");
+      }catch(error){report.mark(index,"accounting","rejected",error);report.flush(index);throw error;}
+      });
     }),report=>f?report.observe(null,"cleanup",f.close,f,[]):undefined],emit);
   });
 }
