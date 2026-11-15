@@ -7,10 +7,10 @@ import { readFile, realpath } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { dirname, join, relative } from "node:path";
-import { containerContract, harnessInputs, installInputs, parseIdentity, validateIdentity, validateMapping, validateImage, dockerEnvironment, containerEnvironment, createArguments, validateContainerInspect, parseControl, validateTerminal, validateNativeIdentity, parseImageBuildReceipt, parseImageBuildStages, observeImageBuild, parseContainerReceipt, parseMounts, validateMountFreshness, validateMounts, validateMetadataMounts, validateChildStatus, validateTarget, cgroupPath, validateLimits, attachContainer, processEvidence, retiredCgroup, raiseContainerFailures, validateContainerDiagnostic, emitContainerFailure } from "../scripts/edge-proof-container.mjs";
+import { containerContract, harnessInputs, installInputs, parseIdentity, validateIdentity, validateMapping, validateImage, dockerEnvironment, containerEnvironment, createArguments, validateContainerInspect, parseControl, validateTerminal, validateNativeIdentity, parseImageBuildReceipt, parseImageBuildStages, parseNativePrepareStages, observeImageBuild, parseContainerReceipt, parseMounts, validateMountFreshness, validateMounts, validateMetadataMounts, validateChildStatus, validateTarget, cgroupPath, validateLimits, attachContainer, processEvidence, retiredCgroup, raiseContainerFailures, validateContainerDiagnostic, emitContainerFailure } from "../scripts/edge-proof-container.mjs";
 import { frozenGitEnvironment, validateGitExecutable, frozenSource } from "../scripts/edge-proof-build.mjs";
 import { edgeProof } from "../scripts/edge-proof-profile.mjs";
-import { launchCli, createContainerDiagnostics, containerProcessDiagnostic, imageBuildStages, runOwnedProcess } from "../scripts/edge-proof.mjs";
+import { launchCli, createContainerDiagnostics, containerProcessDiagnostic, imageBuildStages, runOwnedProcess, nativePrepareStages, createNativePrepareDiagnostics } from "../scripts/edge-proof.mjs";
 
 const hex = "a".repeat(64), other = "b".repeat(64), imageId = "sha256:" + hex;
 const identity = { uid: [501, 501, 501, 501], gid: [20, 20, 20, 20], groups: [20, 30] };
@@ -295,7 +295,7 @@ async function pureCliModuleSources() {
   const names = backImport.split("{", 2)[1].split("}", 1)[0].trim().split(", ");
   const tail = entry.slice(entry.indexOf("const containerDiagnosticPhases ="));
   assert.ok(tail.includes('launchCli(process.argv.slice(2));'));
-  const pureHelpers = names.filter(name => !["createContainerDiagnostics", "emitContainerFailure", "imageBuildStages"].includes(name)).map(name => `export const ${name} = undefined;`).join("\n");
+  const pureHelpers = names.filter(name => !["createContainerDiagnostics", "emitContainerFailure", "imageBuildStages", "nativePrepareStages"].includes(name)).map(name => `export const ${name} = undefined;`).join("\n");
   // Actual dispatch and CLI functions, including their back-import. Only the
   // container operation is replaced by a closed, inert return value.
   const prefix = 'import { pathToFileURL } from "node:url"; import { resolve } from "node:path";\n' + pureHelpers + '\nconst refuse = code => { throw new Error(code); };\n' + entry.slice(entry.indexOf("function ownData("), entry.indexOf("export function validatePackagingDiagnostic("));
@@ -574,7 +574,7 @@ async function actualPackageFactories() {
   const legacy = current.replace(pattern, "createRequire($1)");
   const qualifier = cli.slice(cli.indexOf("export async function qualifyInstalledInputs("), cli.indexOf("async function offlineChild(")).replace("export ", "");
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-  const factory = text => new AsyncFunction("root", "createRequire", "realpath", "lstat", "readdir", "join", "relative", "refuse", qualifier + text + "return { containedLinks, tsRequire, wranglerRequire };");
+  const factory = text => new AsyncFunction("root", "createRequire", "realpath", "lstat", "readdir", "join", "relative", "refuse", "const prepare = undefined;" + qualifier + text + "return { containedLinks, tsRequire, wranglerRequire };");
   assert.ok(source.includes('const esbuildRequire = createRequire(wranglerRequire.resolve("esbuild/package.json"));'));
   const lock = await readFile(new URL("../pnpm-lock.yaml", import.meta.url), "utf8");
   for (const version of ["typescript@7.0.2:", "wrangler@4.156.0:", "'@typescript/typescript-linux-x64@7.0.2':", "esbuild@0.28.2:"]) assert.ok(lock.includes(version));
@@ -631,4 +631,180 @@ test("canonical package factories retain original install containment before any
     await assert.rejects(current(...fixture.args), { message: "installation-link-escape" });
     assert.equal(fixture.anchors.length, 0); assert.ok(!fixture.canonicalCalls.some(path => path.endsWith("package.json")));
   }
+});
+
+async function nativePrepareFixture(failAt, ...failureArgs) {
+  const failure = failureArgs.length ? failureArgs[0] : new Error("inert operation failure");
+  const source = await readFile(new URL("../scripts/edge-proof-container.mjs", import.meta.url), "utf8");
+  const cli = await readFile(new URL("../scripts/edge-proof.mjs", import.meta.url), "utf8");
+  const qualify = source.slice(source.indexOf("async function qualifyImageInputs("), source.indexOf("async function contextFiles(")).replace("await import(", "await importModule(");
+  const prepare = source.slice(source.indexOf("async function containerPrepare("), source.indexOf("async function containerCi("));
+  const dispatch = source.slice(source.indexOf("export async function containerMain(")).replace("export ", "");
+  const main = cli.slice(cli.indexOf("export async function main("), cli.indexOf('  if (action === "offline-ci"')).replace("export ", "").replace('import("./edge-proof-container.mjs")', "loadContainer()") + 'throw new Error("noncontainer test route"); }';
+  const frames = [], calls = []; let thrown = false;
+  const active = () => frames.at(-1)?.stage;
+  const touch = (name, ...args) => {
+    calls.push({ stage: active(), name, args });
+    if (!thrown && active() === failAt) { thrown = true; throw failure; }
+  };
+  const paths = {
+    "typescript/package.json": "/opt/edge-input/node_modules/.pnpm/ts/node_modules/typescript/package.json",
+    "@typescript/typescript-linux-x64/package.json": "/opt/edge-input/node_modules/.pnpm/ts/node_modules/@typescript/typescript-linux-x64/package.json",
+    "wrangler/package.json": "/opt/edge-input/node_modules/.pnpm/wrangler/node_modules/wrangler/package.json",
+    "esbuild/package.json": "/opt/edge-input/node_modules/.pnpm/esbuild/node_modules/esbuild/package.json",
+    "@esbuild/linux-x64/bin/esbuild": "/opt/edge-input/node_modules/.pnpm/esbuild/node_modules/@esbuild/linux-x64/bin/esbuild",
+  };
+  const tsPath = join(dirname(paths["@typescript/typescript-linux-x64/package.json"]), "lib/tsc");
+  const modules = Object.fromEntries(Object.entries(paths).map(([key, path]) => [join(containerContract.input, "node_modules", key), path]));
+  let functions;
+  const dependencies = {
+    containerContract, installInputs, edgeProof, hashPattern: /^[a-f0-9]{64}$/, join, dirname,
+    hash: value => value === "[]" ? other : installInputs[value], same: (a, b) => JSON.stringify(a) === JSON.stringify(b),
+    process: { platform: "linux", arch: "x64", version: "v24.22.1", versions: { modules: "137" }, stdout: { write(text) { touch("receipt_output", text); return true; } } },
+    check(value, code) { touch("check", code); assert.ok(value, code); },
+    readFile: async (path, encoding) => {
+      touch("readFile", path, encoding);
+      if (path.endsWith(".edge-context.json")) return JSON.stringify({ files: [], sourceSha: edgeProof.sourceSha, sourceTree: edgeProof.sourceTree });
+      if (path === paths["esbuild/package.json"]) return JSON.stringify({ version: "0.28.2" });
+      const input = path.slice(containerContract.input.length + 1); assert.ok(Object.hasOwn(installInputs, input)); return input;
+    },
+    contextFiles: async (...args) => { touch("contextFiles", ...args); return []; },
+    qualifyInstalledInputs: async (...args) => { touch("qualifyInstalledInputs", ...args); return { containedLinks: 164 }; },
+    realpath: async path => { touch("realpath", path); return modules[path] ?? path; },
+    createRequire(path) { touch("createRequire", path); return { resolve(name) { touch("resolve", name); assert.ok(Object.hasOwn(paths, name)); return paths[name]; } }; },
+    fileIdentity: async path => { touch("fileIdentity", path); return { path, sha256: path.endsWith("wrangler-dist/cli.js") ? containerContract.cliHash : hex }; },
+    validateNativeIdentity(...args) { touch("validateNativeIdentity", ...args); return validateNativeIdentity(...args); },
+    importModule: async url => { touch("importModule", url); return { default: () => { touch("getTsPath"); return tsPath; } }; },
+    execFileSync(command, args, options) { touch("execFileSync", command, args, options); return command === "/usr/local/bin/pnpm" ? "11.28.4\n" : "0.28.2\n"; },
+    writeFile: async (...args) => { touch("writeFile", ...args); },
+    loadContainer: async () => { touch("loadContainer"); return { containerMain: (...args) => { touch("containerMain"); return functions.containerMain(...args); } }; },
+    fail: () => assert.fail("unexpected container action"),
+  };
+  functions = new Function(...Object.keys(dependencies), qualify + prepare + dispatch + main + "return { main, containerMain, qualifyImageInputs };")(...Object.values(dependencies));
+  const output = [], diagnostics = [], exits = [], events = new EventEmitter();
+  const launched = () => launchCli(["container-prepare", other], {
+    run: (...args) => { touch("run"); return functions.main(...args); },
+    prepareIdentity: stageIdentity, prepareWriter(bytes, offset, length) { const text = bytes.subarray(offset, offset + length).toString(); frames.push(JSON.parse(text.slice(text.indexOf(" {") + 1))); diagnostics.push(text); return length; },
+    writer(text) { if (!text.startsWith("::error ")) touch("cli_writer", text); output.push(text); }, errorWriter() {}, events, setExit: code => exits.push(code),
+  });
+  return { launched, functions, frames, diagnostics, output, exits, events, calls, failure };
+}
+function nativePrepareCapture(frames, { status = 1, before = "", after = "" } = {}) {
+  const outer = imageBuildStages.flatMap((stage, index) => ["entered", "terminal"].map((event, offset) => "\nEDGE_BUILD_STAGE_V1 " + JSON.stringify({ v: 1, context: other, nonce: hex, seq: index * 2 + offset + 1, stage, event, status: offset ? index === 9 ? status : 0 : null }) + "\n"));
+  return capturedStageResult(before + outer.slice(0, 19).join("") + frames + outer[19] + after, "", status);
+}
+test("native preparation actual stages preserve each original call and isolate runtime requalification", async () => {
+  assert.equal(nativePrepareStages.length, 28);
+  const fixture = await nativePrepareFixture(); const call = fixture.launched(); await call.completion;
+  assert.deepEqual(fixture.frames.slice(0, -1).map(row => row.stage), nativePrepareStages);
+  assert.equal(fixture.frames.length, 29); assert.deepEqual(call.errors, []); assert.deepEqual(fixture.exits, []);
+  const children = fixture.calls.filter(row => row.name === "execFileSync");
+  assert.equal(children.length, 2);
+  assert.deepEqual(children[0].args.slice(1), [["--version"], { env: { LANG: "C.UTF-8" }, encoding: "utf8", timeout: 10000 }]);
+  assert.deepEqual(children[1].args, ["/usr/local/bin/pnpm", ["--version"], { env: { PATH: "/usr/local/bin:/usr/bin:/bin", HOME: "/opt/build-home" }, encoding: "utf8", timeout: 10000 }]);
+  assert.equal(fixture.calls.filter(row => row.name === "writeFile").length, 1);
+  assert.deepEqual(fixture.calls.find(row => row.name === "writeFile").args[2], { flag: "wx", mode: 0o444 });
+  assert.equal(fixture.calls.filter(row => row.name === "loadContainer").length, 1);
+  assert.equal(fixture.calls.filter(row => row.name === "containerMain").length, 1);
+  assert.equal(fixture.output[0], '{"prepared":true}\n');
+  const row = parseNativePrepareStages(nativePrepareCapture(fixture.diagnostics.join(""), { status: 0 }), stageIdentity);
+  assert.equal(row.reason, "complete"); assert.equal(row.stage, null); validateContainerDiagnostic(row);
+  const count = fixture.frames.length;
+  const native = await fixture.functions.qualifyImageInputs(other);
+  assert.equal(native.contextHash, other); assert.equal(fixture.frames.length, count);
+});
+test("native preparation actual flow locates every original failure including undefined without retry", async () => {
+  for (const stage of nativePrepareStages) for (const reason of [new Error("owned failure"), undefined]) {
+    const fixture = await nativePrepareFixture(stage, reason), call = fixture.launched();
+    // Pass undefined explicitly: it is a rejection, not absence of failure.
+    const expected = reason === undefined ? fixture.failure : reason;
+    await assert.rejects(call.completion, error => error === expected);
+    const row = parseNativePrepareStages(nativePrepareCapture(fixture.diagnostics.join("")), stageIdentity);
+    assert.equal(row.reason, "original_failure", stage); assert.equal(row.stage, stage);
+    assert.equal(row.defined, expected !== undefined); validateContainerDiagnostic(row);
+    assert.equal(fixture.calls.filter(item => item.stage === stage).length, 1);
+    assert.ok(fixture.calls.every(item => nativePrepareStages.indexOf(item.stage) <= nativePrepareStages.indexOf(stage)));
+  }
+});
+test("native preparation full-frame writer preserves primary and independent reporting failures", async () => {
+  const chunks = [], recorder = createNativePrepareDiagnostics(stageIdentity, (bytes, offset, length) => { const size = Math.min(7, length); chunks.push(bytes.subarray(offset, offset + size)); return size; });
+  nativePrepareStages.forEach(stage => recorder.enter(stage)); recorder.finish(false);
+  const valid = Buffer.concat(chunks).toString(); assert.equal(parseNativePrepareStages(nativePrepareCapture(valid, { status: 0 }), stageIdentity).reason, "complete");
+  for (const written of [0, -1, NaN, Infinity, 513, undefined, Promise.resolve(1)]) {
+    const failed = createNativePrepareDiagnostics(stageIdentity, () => written); failed.enter("app_entry"); failed.finish(true, undefined); assert.ok(failed.errors.length);
+  }
+  for (const primary of [false, true]) {
+    let writes = 0; const output = [], exit = [];
+    const call = launchCli(["container-prepare", other], { prepareIdentity: stageIdentity, prepareWriter() { writes++; throw undefined; },
+      run(_args, report) { nativePrepareStages.slice(1, -1).forEach(stage => report.prepare.enter(stage)); if (primary) throw undefined; return { prepared: true }; },
+      writer: line => output.push(line), errorWriter() {}, events: new EventEmitter(), setExit: value => exit.push(value),
+    });
+    await assert.rejects(call.completion, error => error instanceof AggregateError && error.errors.every(reason => reason === undefined));
+    assert.equal(call.errors.length, writes + Number(primary)); assert.equal(exit.at(-1), 1);
+  }
+  const missing = createNativePrepareDiagnostics({ contextHash: other, nonce: undefined }, () => assert.fail("must not emit unbound frame"));
+  missing.enter("app_entry"); missing.finish(true, undefined); assert.ok(missing.errors.length);
+});
+test("native preparation incomplete foreign malformed or outer-inconsistent evidence stays unknown", async () => {
+  const fixture = await nativePrepareFixture("esbuild_child"); await assert.rejects(fixture.launched().completion);
+  const text = fixture.diagnostics.join(""), lines = fixture.diagnostics;
+  const mutate = change => lines.map((line, index) => { const row = JSON.parse(line.slice(line.indexOf(" {") + 1)); change(row, index); return "\nEDGE_NATIVE_PREPARE_V1 " + JSON.stringify(row) + "\n"; }).join("");
+  const bad = [text.replace(other, hex), text.replace(hex, other), lines.toReversed().join(""), text + lines[0], text.replace('"v":1', '"v":1,"v":1'), text.replace("EDGE_NATIVE_", "\x1bEDGE_NATIVE_"), "RUN printf '" + lines[0].trim() + "'\n", mutate((row, i) => { if (!i) row.seq = 2; }), mutate((row, i) => { if (!i) row.stage = "foreign"; }), mutate(row => { row.private = "never emitted"; })];
+  for (const frames of bad) { const row = parseNativePrepareStages(nativePrepareCapture(frames), stageIdentity); assert.equal(row.reason, "invalid"); assert.equal(row.stage, null); validateContainerDiagnostic(row); }
+  for (const frames of ["", lines.slice(0, -1).join("")]) { const row = parseNativePrepareStages(nativePrepareCapture(frames), stageIdentity); assert.ok(["no_records", "incomplete"].includes(row.reason)); assert.equal(row.stage, null); }
+  for (const options of [{ before: lines[0] }, { after: lines[0] }, { status: 0 }]) assert.ok(["invalid", "outer_inconsistent"].includes(parseNativePrepareStages(nativePrepareCapture(text, options), stageIdentity).reason));
+  const final = mutate((row, index) => { if (index === lines.length - 1) { row.outcome = "reporter_failure"; row.defined = null; row.reportFailures = 1; row.undefinedReportFailures = 1; } });
+  assert.equal(parseNativePrepareStages(nativePrepareCapture(final), stageIdentity).reason, "invalid");
+  for (const prefix of ["untrusted output without LF", "prior\r", "one\ntwo", ""]) assert.equal(parseNativePrepareStages(nativePrepareCapture(prefix + text), stageIdentity).reason, "original_failure");
+});
+test("native preparation capture integrity never trusts complete flags or a surviving prefix", async () => {
+  const fixture = await nativePrepareFixture("receipt_write"); await assert.rejects(fixture.launched().completion);
+  const original = nativePrepareCapture(fixture.diagnostics.join(""));
+  const changes = [r => r.stdout = r.stdout.slice(0, -1), r => r.outputSummary.stdout.sha256 = hex, r => r.outputSummary.stdout.bytes++, r => { r.stderr = "prefix"; r.outputSummary.stderr = { bytes: 11, sha256: createHash("sha256").update("prefix tail").digest("hex"), complete: true }; }, r => r.outputSummary.stderr.sha256 = hex];
+  for (const change of changes) { const result = structuredClone(original); change(result); const row = parseNativePrepareStages(result, stageIdentity); assert.equal(row.reason, "capture_mismatch"); assert.equal(row.stage, null); }
+  for (const change of [r => r.closed = false, r => delete r.outputSummary, r => r.outputSummary.stderr.complete = false]) { const result = structuredClone(original); change(result); assert.equal(parseNativePrepareStages(result, stageIdentity).reason, "capture_unavailable"); }
+});
+test("native preparation summaries reserve original process outer inner and terminal failures without private fields", async () => {
+  const fixture = await nativePrepareFixture("pnpm_child"); await assert.rejects(fixture.launched().completion);
+  const result = nativePrepareCapture(fixture.diagnostics.join("")), report = createContainerDiagnostics();
+  await assert.rejects(report.step("image_build", () => observeImageBuild(() => result, () => assert.fail("image id after failure"), () => assert.fail("native receipt after failure"), report, stageIdentity)));
+  const context = ["entry", "module_import", "dispatch", "host_runtime", "parent_namespaces", "cwd", "temp", "environment", "docker_executable", "daemon_socket", "identity", "context", "daemon", "base"].map(phase => ({ v: 2, phase, state: "fulfilled", defined: null, exit: null, signal: null }));
+  const output = []; emitContainerFailure([...context, ...report.records], line => output.push(line));
+  const decoded = output.map(line => validateContainerDiagnostic(JSON.parse(line.slice(line.indexOf("::", 2) + 2))));
+  assert.ok(decoded.find(row => row.v === 3 && row.exit === 1)); assert.ok(decoded.find(row => row.v === 4 && row.stage === "native_prepare")); assert.ok(decoded.find(row => row.v === 5 && row.stage === "pnpm_child"));
+  assert.equal(decoded.length, 10); assert.equal(decoded.at(-1).phase, "overflow");
+  assert.ok(output.every(line => line.startsWith("::error ") && Buffer.byteLength(line) <= 768)); assert.ok(Buffer.byteLength(output.join("")) <= 8192);
+  for (const privateText of [hex, other, "/opt/", "owned failure", "pnpm --version"]) assert.ok(!output.join("").includes(privateText));
+  for (const change of [r => r.stage = "foreign", r => r.message = "private", r => r.reportFailures = -1, r => r.defined = null]) { const row = { ...decoded.find(row => row.v === 5) }; change(row); assert.throws(() => validateContainerDiagnostic(row)); }
+});
+test("native preparation reporter-only terminal never blames the successful original operation", async () => {
+  for (const originalFailed of [false, true]) {
+    const frames = [], original = new Error("original private value"); let writes = 0;
+    const prepare = createNativePrepareDiagnostics(stageIdentity, (bytes, offset, length) => {
+      frames.push(bytes.subarray(offset, offset + length).toString());
+      if (++writes === 2) throw undefined;
+      return length;
+    });
+    nativePrepareStages.forEach(stage => prepare.enter(stage)); prepare.finish(originalFailed, original);
+    assert.deepEqual(prepare.errors, [undefined]);
+    const row = parseNativePrepareStages(nativePrepareCapture(frames.join("")), stageIdentity);
+    assert.equal(row.reason, originalFailed ? "original_failure" : "reporter_failure");
+    assert.equal(row.stage, originalFailed ? "cli_serialization" : null);
+    assert.equal(row.defined, originalFailed ? true : null);
+    assert.equal(row.reportFailures, 1); assert.equal(row.undefinedReportFailures, 1); validateContainerDiagnostic(row);
+  }
+  let getters = 0;
+  const hostile = Object.defineProperty({ contextHash: other }, "nonce", { get() { getters++; throw undefined; } });
+  const prepare = createNativePrepareDiagnostics(hostile, () => assert.fail("foreign identity emitted"));
+  prepare.enter("app_entry"); prepare.finish(true, undefined); assert.equal(getters, 0); assert.ok(prepare.errors.length);
+});
+test("native preparation ordinary entry guard remains nondispatching and missing entry stays unknown", async () => {
+  const source = await readFile(new URL("../scripts/edge-proof.mjs", import.meta.url), "utf8");
+  const guard = source.slice(source.indexOf('if (process.argv[1]')).replace("import.meta.url", "moduleUrl");
+  const invoke = new Function("process", "moduleUrl", "pathToFileURL", "resolve", "launchCli", guard);
+  let calls = 0;
+  const url = path => ({ href: "file://" + path }), process = { argv: ["node", "/owned/entry.mjs", "container-prepare", other] };
+  invoke(process, "file:///owned/imported.mjs", url, path => path, () => calls++); assert.equal(calls, 0);
+  invoke(process, "file:///owned/entry.mjs", url, path => path, args => { calls++; assert.deepEqual(args, ["container-prepare", other]); }); assert.equal(calls, 1);
+  assert.equal(parseNativePrepareStages(nativePrepareCapture(""), stageIdentity).reason, "no_records");
 });

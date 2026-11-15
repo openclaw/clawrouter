@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { deflateSync } from "node:zlib";
 import { createRequire } from "node:module";
 import { edgeProof } from "./edge-proof-profile.mjs";
-import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages } from "./edge-proof.mjs";
+import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages } from "./edge-proof.mjs";
 export { validateContainerDiagnostic, emitContainerFailure } from "./edge-proof.mjs";
 
 export const containerContract = Object.freeze({
@@ -151,31 +151,50 @@ export function validateNativeIdentity(receipt, plan) {
   check(receipt.native.wrangler.sha256 === containerContract.cliHash && Number.isSafeInteger(receipt.containedLinks) && receipt.containedLinks > 0, "native-dependencies");
   return receipt;
 }
-async function qualifyImageInputs(contextHash) {
+async function qualifyImageInputs(contextHash, prepare) {
+  prepare?.enter("runtime");
   check(process.platform === "linux" && process.arch === "x64" && process.version === "v24.22.1" && process.versions.modules === "137", "image-runtime");
   const root = containerContract.input;
+  prepare?.enter("context_read");
   const inputPlan = JSON.parse(await readFile(join(root, ".edge-context.json"), "utf8"));
+  prepare?.enter("context_identity");
   check(hash(JSON.stringify(inputPlan.files)) === contextHash && inputPlan.sourceSha === edgeProof.sourceSha && inputPlan.sourceTree === edgeProof.sourceTree, "context-identity");
+  prepare?.enter("context_enumeration");
   const actual = await contextFiles(root, new Set(["node_modules", "admin/node_modules", ".edge-context.json", ".edge-native.json"]));
+  prepare?.enter("context_byte_closure");
   check(same(actual, inputPlan.files), "context-byte-closure");
+  prepare?.enter("input_hashes");
   for (const [path, expected] of Object.entries(installInputs)) check(hash(await readFile(join(root, path))) === expected, "install-input-drift");
+  prepare?.enter("link_containment");
   const { containedLinks } = await qualifyInstalledInputs(root);
+  prepare?.enter("typescript_anchor");
   const tsRequire = createRequire(await realpath(join(root, "node_modules/typescript/package.json")));
+  prepare?.enter("wrangler_anchor");
   const wranglerRequire = createRequire(await realpath(join(root, "node_modules/wrangler/package.json")));
+  prepare?.enter("esbuild_resolver");
   const esbuildRequire = createRequire(wranglerRequire.resolve("esbuild/package.json"));
-  const native = {
-    node: await fileIdentity(containerContract.node), git: await fileIdentity(containerContract.git),
-    typescript: await fileIdentity(await realpath(join(dirname(tsRequire.resolve("@typescript/typescript-linux-x64/package.json")), "lib/tsc"))),
-    esbuild: await fileIdentity(await realpath(esbuildRequire.resolve("@esbuild/linux-x64/bin/esbuild"))),
-    wrangler: await fileIdentity(join(dirname(await realpath(wranglerRequire.resolve("wrangler/package.json"))), "wrangler-dist/cli.js")),
-  };
+  prepare?.enter("native_node");
+  const native = { node: await fileIdentity(containerContract.node) };
+  prepare?.enter("native_git");
+  native.git = await fileIdentity(containerContract.git);
+  prepare?.enter("native_typescript");
+  native.typescript = await fileIdentity(await realpath(join(dirname(tsRequire.resolve("@typescript/typescript-linux-x64/package.json")), "lib/tsc")));
+  prepare?.enter("native_esbuild");
+  native.esbuild = await fileIdentity(await realpath(esbuildRequire.resolve("@esbuild/linux-x64/bin/esbuild")));
+  prepare?.enter("native_wrangler");
+  native.wrangler = await fileIdentity(join(dirname(await realpath(wranglerRequire.resolve("wrangler/package.json"))), "wrangler-dist/cli.js"));
   const result = { version: 2, contextHash, sourceSha: edgeProof.sourceSha, sourceTree: edgeProof.sourceTree, install: { ...installInputs }, runtime: { node: process.version, abi: process.versions.modules, platform: process.platform, arch: process.arch, pnpm: "11.28.4" }, native, containedLinks };
+  prepare?.enter("native_identity");
   validateNativeIdentity(result, { contextHash });
   // Only installed platform resolvers are allowed. No environment override or
   // downloaded esbuild fallback can satisfy these realpath/hash checks.
+  prepare?.enter("typescript_resolver");
   const { default: getTsPath } = await import(new URL("./lib/getExePath.js", `file://${tsRequire.resolve("typescript/package.json")}`).href);
   check(await realpath(getTsPath()) === native.typescript.path, "typescript-resolver");
-  check(execFileSync(native.esbuild.path, ["--version"], { env: { LANG: "C.UTF-8" }, encoding: "utf8", timeout: 10000 }).trim() === JSON.parse(await readFile(esbuildRequire.resolve("esbuild/package.json"), "utf8")).version, "esbuild-platform");
+  prepare?.enter("esbuild_child");
+  const esbuildVersion = execFileSync(native.esbuild.path, ["--version"], { env: { LANG: "C.UTF-8" }, encoding: "utf8", timeout: 10000 }).trim();
+  prepare?.enter("esbuild_version_check");
+  check(esbuildVersion === JSON.parse(await readFile(esbuildRequire.resolve("esbuild/package.json"), "utf8")).version, "esbuild-platform");
   return result;
 }
 async function contextFiles(root, excluded = new Set()) {
@@ -499,12 +518,45 @@ export function parseImageBuildStages(result, identity) {
   if (count === 20) return { v: 4, phase: "image_build_internal", state: "observed", stage: "native_prepare", status: 0, records: count, reason: "complete" };
   return unknown(count ? "incomplete" : "no_records", count);
 }
+export function parseNativePrepareStages(result, identity) {
+  const unknown = (reason, records = null) => ({ v: 5, phase: "native_prepare_internal", state: "observed", stage: null, defined: null, records, reason, reportFailures: null, undefinedReportFailures: null });
+  // Reuse the original BOTH-stream byte/hash prerequisite and outer grammar.
+  const outer = parseImageBuildStages(result, identity);
+  if (["capture_unavailable", "capture_mismatch"].includes(outer.reason)) return unknown(outer.reason);
+  if (!["complete", "validated_failure"].includes(outer.reason) || outer.stage !== "native_prepare") return unknown("outer_inconsistent");
+  const lines = own(result, "stdout").split("\n"), prefix = "EDGE_NATIVE_" + "PREPARE_V1 ";
+  const outerRows = lines.flatMap((line, index) => line.startsWith("EDGE_BUILD_STAGE_V1 ") ? [{ index, row: JSON.parse(line.slice("EDGE_BUILD_STAGE_V1 ".length)) }] : []);
+  const start = outerRows.find(item => item.row.seq === 19)?.index, end = outerRows.find(item => item.row.seq === 20)?.index;
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start >= end) return unknown("outer_inconsistent");
+  let count = 0, entered = 0, terminal;
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    if (!line.includes(prefix.trimEnd())) continue;
+    if (index <= start || index >= end || !line.startsWith(prefix) || Buffer.byteLength(line) + 2 > 512 || /[\x00-\x1f\x7f-\x9f]/.test(line) || count >= 32 || terminal) return unknown("invalid");
+    let row;
+    try { row = JSON.parse(line.slice(prefix.length)); } catch { return unknown("invalid"); }
+    if (!row || Object.getPrototypeOf(row) !== Object.prototype || Object.keys(row).join() !== "v,context,nonce,seq,stage,event,outcome,defined,reportFailures,undefinedReportFailures" || JSON.stringify(row) !== line.slice(prefix.length)) return unknown("invalid");
+    if (row.v !== 1 || row.context !== identity.contextHash || row.nonce !== identity.nonce || row.seq !== count + 1) return unknown("invalid");
+    count++;
+    if (row.event === "entered") {
+      if (entered >= nativePrepareStages.length || row.stage !== nativePrepareStages[entered++] || [row.outcome, row.defined, row.reportFailures, row.undefinedReportFailures].some(value => value !== null)) return unknown("invalid");
+    } else if (row.event === "terminal") {
+      if (!entered || row.stage !== nativePrepareStages[entered - 1] || !["original_failure", "reporter_failure", "complete"].includes(row.outcome) || !Number.isInteger(row.reportFailures) || row.reportFailures < 0 || row.reportFailures > 32 || !Number.isInteger(row.undefinedReportFailures) || row.undefinedReportFailures < 0 || row.undefinedReportFailures > row.reportFailures) return unknown("invalid");
+      if (row.outcome === "original_failure" ? typeof row.defined !== "boolean" : row.defined !== null || entered !== nativePrepareStages.length || (row.outcome === "complete" ? row.reportFailures !== 0 : row.reportFailures < 1)) return unknown("invalid");
+      terminal = row;
+    } else return unknown("invalid");
+  }
+  if (!terminal) return unknown(count ? "incomplete" : "no_records", count);
+  if (terminal.outcome === "complete" ? outer.reason !== "complete" || own(result, "code") !== 0 : outer.reason !== "validated_failure" || own(result, "code") === 0) return unknown("outer_inconsistent");
+  return { v: 5, phase: "native_prepare_internal", state: terminal.outcome === "complete" ? "observed" : "rejected", stage: terminal.outcome === "original_failure" ? terminal.stage : null, defined: terminal.defined, records: count, reason: terminal.outcome, reportFailures: terminal.reportFailures, undefinedReportFailures: terminal.undefinedReportFailures };
+}
 export async function observeImageBuild(operation, readImageId, parseReceipt, report, stageIdentity) {
   let built, available = false;
   const errors = [];
   try { built = await operation(); available = true; } catch (error) { errors.push(error); }
   try { report.process(built, available, errors[0]); } catch (error) { errors.push(error); }
   if (available) try { report.internal(parseImageBuildStages(built, stageIdentity)); } catch (error) { errors.push(error); }
+  if (available) try { report.internal(parseNativePrepareStages(built, stageIdentity)); } catch (error) { errors.push(error); }
   if (available) try { requireProcessSuccess(built); } catch (error) { errors.unshift(error); }
   raiseContainerFailures(errors);
   const observe = async (phase, original) => {
@@ -574,11 +626,17 @@ async function containerBuild(args) {
   report.mark("final", errors.length ? "rejected" : "fulfilled", errors[0]); errors.push(...report.errors); raiseContainerFailures(errors);
   return { built: true };
 }
-async function containerPrepare(args) {
+async function containerPrepare(args, prepare) {
+  prepare?.enter("prepare_arguments");
   check(args.length === 1 && hashPattern.test(args[0]), "prepare-arguments");
-  const native = await qualifyImageInputs(args[0]);
-  const pnpm = execFileSync("/usr/local/bin/pnpm", ["--version"], { env: { PATH: "/usr/local/bin:/usr/bin:/bin", HOME: "/opt/build-home" }, encoding: "utf8", timeout: 10000 }).trim(); check(pnpm === "11.28.4", "pnpm-version");
+  const native = await qualifyImageInputs(args[0], prepare);
+  prepare?.enter("pnpm_child");
+  const pnpm = execFileSync("/usr/local/bin/pnpm", ["--version"], { env: { PATH: "/usr/local/bin:/usr/bin:/bin", HOME: "/opt/build-home" }, encoding: "utf8", timeout: 10000 }).trim();
+  prepare?.enter("pnpm_version_check");
+  check(pnpm === "11.28.4", "pnpm-version");
+  prepare?.enter("receipt_write");
   await writeFile(join(containerContract.input, ".edge-native.json"), JSON.stringify(native), { flag: "wx", mode: 0o444 });
+  prepare?.enter("receipt_output");
   process.stdout.write("EDGE_IMAGE_V2 " + JSON.stringify(native) + "\n"); return { prepared: true };
 }
 
@@ -699,7 +757,7 @@ async function hostContainerRun(report) {
 }
 export async function containerMain(action, args, report) {
   if (action === "container-ci" && args.length === 0) return containerCi(report);
-  if (action === "container-prepare") return containerPrepare(args);
+  if (action === "container-prepare") return containerPrepare(args, report?.prepare);
   if (action === "container-init") return containerInit(args);
   if (action === "container-build") return containerBuild(args);
   fail("container-action");

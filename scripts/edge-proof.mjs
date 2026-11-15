@@ -1,4 +1,5 @@
 import { randomBytes, createHash } from "node:crypto";
+import { writeSync } from "node:fs";
 import { readFile, writeFile, mkdir, mkdtemp, realpath, readlink, readdir, lstat, open } from "node:fs/promises";
 import { resolve, join, dirname, relative } from "node:path";
 import { pathToFileURL, fileURLToPath } from "node:url";
@@ -519,11 +520,72 @@ async function offlineCi(report) {
   const receipt = report.sync("child_report", () => validatePackagingReceipt(JSON.parse(output)));
   return receipt;
 }
-const containerDiagnosticPhases = ["entry", "module_import", "dispatch", "serialization", "reporting", "pending", "host_runtime", "parent_namespaces", "cwd", "temp", "environment", "docker_executable", "daemon_socket", "identity", "context", "daemon", "base", "image_build", "image_build_process", "image_build_internal", "image_id", "native_receipt", "image", "create", "attach", "ready", "admission", "permit", "wait", "receipt", "terminal", "cgroup", "retirement", "remove", "final", "overflow"];
+const containerDiagnosticPhases = ["entry", "module_import", "dispatch", "serialization", "reporting", "pending", "host_runtime", "parent_namespaces", "cwd", "temp", "environment", "docker_executable", "daemon_socket", "identity", "context", "daemon", "base", "image_build", "image_build_process", "image_build_internal", "native_prepare_internal", "image_id", "native_receipt", "image", "create", "attach", "ready", "admission", "permit", "wait", "receipt", "terminal", "cgroup", "retirement", "remove", "final", "overflow"];
 export const imageBuildStages = ["node_version", "node_abi", "architecture", "git_executable", "pnpm_bootstrap", "pnpm_version", "input_directories", "input_ownership", "frozen_install", "native_prepare"];
+export const nativePrepareStages = Object.freeze([
+  "app_entry", "module_import", "dispatch", "prepare_arguments", "runtime", "context_read", "context_identity",
+  "context_enumeration", "context_byte_closure", "input_hashes", "link_containment", "typescript_anchor", "wrangler_anchor",
+  "esbuild_resolver", "native_node", "native_git", "native_typescript", "native_esbuild", "native_wrangler", "native_identity",
+  "typescript_resolver", "esbuild_child", "esbuild_version_check", "pnpm_child", "pnpm_version_check", "receipt_write", "receipt_output", "cli_serialization",
+]);
+// Private preparation frames never become GitHub commands. A synchronous writer
+// must deliver the entire bounded frame or retain an independent failure.
+export function createNativePrepareDiagnostics(identity, write = (bytes, offset, length) => writeSync(1, bytes, offset, length)) {
+  const errors = []; let context, nonce, sequence = 0, index = -1, finished = false, admitted = false;
+  try {
+    context = ownData(identity, "contextHash"); nonce = ownData(identity, "nonce");
+    if (![context, nonce].every(value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value))) refuse("prepare-diagnostic-identity");
+    admitted = true;
+  } catch (error) { errors.push(error); }
+  const emit = (event, outcome = null, defined = null) => {
+    if (!admitted) return;
+    const row = { v: 1, context, nonce, seq: ++sequence, stage: nativePrepareStages[index], event, outcome, defined,
+      reportFailures: event === "terminal" ? errors.length : null, undefinedReportFailures: event === "terminal" ? errors.filter(error => error === undefined).length : null };
+    const bytes = Buffer.from("\n" + "EDGE_NATIVE_" + "PREPARE_V1 " + JSON.stringify(row) + "\n");
+    if (sequence > 32 || bytes.length > 512) refuse("prepare-diagnostic-capacity");
+    for (let offset = 0; offset < bytes.length;) {
+      const written = write(bytes, offset, bytes.length - offset);
+      if (!Number.isInteger(written) || written <= 0 || written > bytes.length - offset) refuse("prepare-diagnostic-write");
+      offset += written;
+    }
+  };
+  return { errors,
+    enter(stage) {
+      try {
+        if (finished || nativePrepareStages[index + 1] !== stage) refuse("prepare-diagnostic-order");
+        index++; emit("entered");
+      } catch (error) { errors.push(error); }
+    },
+    finish(originalFailed, reason) {
+      try {
+        if (finished || index < 0 || typeof originalFailed !== "boolean") refuse("prepare-diagnostic-terminal");
+        finished = true;
+        if (!originalFailed && index !== nativePrepareStages.length - 1) refuse("prepare-diagnostic-incomplete");
+        emit("terminal", originalFailed ? "original_failure" : errors.length ? "reporter_failure" : "complete", originalFailed ? reason !== undefined : null);
+      } catch (error) { errors.push(error); }
+    },
+  };
+}
 const containerDiagnosticSignals = [null, "SIGINT", "SIGTERM", "SIGKILL", "SIGABRT", "SIGSEGV", "SIGPIPE", "SIGBUS", "SIGSYS"];
 const processDiagnosticFields = ["v", "phase", "state", "defined", "available", "exit", "signal", "closed", "timedOut", "interrupted", "errors", "undefinedErrors", "spawnErrors", "undefinedSpawnErrors", "stdoutComplete", "stderrComplete"];
 export function validateContainerDiagnostic(value) {
+  if (value && typeof value === "object" && ownData(value, "v") === 5) {
+    const fields = ["v", "phase", "state", "stage", "defined", "records", "reason", "reportFailures", "undefinedReportFailures"];
+    if (Object.getOwnPropertyNames(value).sort().join() !== [...fields].sort().join()) refuse("prepare-summary-keys");
+    const row = Object.fromEntries(fields.map(key => [key, ownData(value, key)]));
+    if (row.phase !== "native_prepare_internal" || !["capture_unavailable", "capture_mismatch", "outer_inconsistent", "no_records", "incomplete", "invalid", "original_failure", "reporter_failure", "complete"].includes(row.reason)) refuse("prepare-summary-enum");
+    const terminal = ["original_failure", "reporter_failure", "complete"].includes(row.reason);
+    if (terminal) {
+      if (!Number.isInteger(row.records) || row.records < 2 || row.records > 29 || !Number.isInteger(row.reportFailures) || row.reportFailures < 0 || row.reportFailures > 32 || !Number.isInteger(row.undefinedReportFailures) || row.undefinedReportFailures < 0 || row.undefinedReportFailures > row.reportFailures) refuse("prepare-summary-counts");
+      if (row.reason === "original_failure") {
+        if (row.state !== "rejected" || row.stage !== nativePrepareStages[row.records - 2] || typeof row.defined !== "boolean") refuse("prepare-summary-original");
+      } else if (row.stage !== null || row.defined !== null || row.records !== 29 || (row.reason === "complete" ? row.state !== "observed" || row.reportFailures !== 0 : row.state !== "rejected" || row.reportFailures < 1)) refuse("prepare-summary-outcome");
+    } else {
+      if (row.state !== "observed" || row.stage !== null || row.defined !== null || row.reportFailures !== null || row.undefinedReportFailures !== null) refuse("prepare-summary-unknown");
+      if (row.reason === "no_records" ? row.records !== 0 : row.reason === "incomplete" ? !Number.isInteger(row.records) || row.records < 1 || row.records > 28 : row.records !== null) refuse("prepare-summary-unknown-count");
+    }
+    return row;
+  }
   if (value && typeof value === "object" && ownData(value, "v") === 4) {
     const fields = ["v", "phase", "state", "stage", "status", "records", "reason"];
     if (Object.getOwnPropertyNames(value).sort().join() !== [...fields].sort().join()) refuse("container-internal-keys");
@@ -553,7 +615,7 @@ export function validateContainerDiagnostic(value) {
   }
   if (!value || typeof value !== "object" || Object.getOwnPropertyNames(value).sort().join() !== ["v", "phase", "state", "defined", "exit", "signal"].sort().join()) refuse("container-diagnostic-keys");
   const row = Object.fromEntries(["v", "phase", "state", "defined", "exit", "signal"].map(key => [key, ownData(value, key)]));
-  if (row.v !== 2 || !containerDiagnosticPhases.includes(row.phase) || ["image_build_process", "image_build_internal"].includes(row.phase) || !["entered", "fulfilled", "rejected"].includes(row.state)) refuse("container-diagnostic-enum");
+  if (row.v !== 2 || !containerDiagnosticPhases.includes(row.phase) || ["image_build_process", "image_build_internal", "native_prepare_internal"].includes(row.phase) || !["entered", "fulfilled", "rejected"].includes(row.state)) refuse("container-diagnostic-enum");
   if (![null, true, false].includes(row.defined) || !containerDiagnosticSignals.includes(row.signal) || !(row.exit === null || Number.isInteger(row.exit) && row.exit >= 0 && row.exit <= 255)) refuse("container-diagnostic-outcome");
   return row;
 }
@@ -579,7 +641,8 @@ export function emitContainerFailure(records, writer = line => process.stdout.wr
   const rows = records.map(validateContainerDiagnostic), unique = new Map();
   const rejected = rows.filter(row => row.state === "rejected");
   // Reserve the first actual failure and original build outcome before context.
-  for (const row of [...rejected.slice(0, 1), ...rows.filter(row => row.v === 3), ...rejected.slice(1), ...rows.toReversed()]) if (!unique.has(row.phase)) unique.set(row.phase, row);
+  const reserved = rows.filter(row => [3, 4, 5].includes(row.v));
+  for (const row of [...rejected.slice(0, 1), ...reserved, ...rejected.slice(1), ...rows.toReversed()]) if (!unique.has(row.phase)) unique.set(row.phase, row);
   const selected = [...unique.values()].slice(0, 9);
   if (unique.size > 9) selected.push({ v: 2, phase: "overflow", state: "rejected", defined: null, exit: Math.min(255, unique.size - 9), signal: null });
   let bytes = 0;
@@ -596,8 +659,10 @@ export function createContainerDiagnostics() {
     async step(phase, operation) { mark(phase, "entered"); try { const value = await operation(); mark(phase, "fulfilled"); return value; } catch (error) { mark(phase, "rejected", error); throw error; } },
   };
 }
-export function launchCli(argv, { run = main, writer = line => process.stdout.write(line), errorWriter = line => process.stderr.write(line), events = process, setExit = code => { process.exitCode = code; } } = {}) {
+export function launchCli(argv, { run = main, writer = line => process.stdout.write(line), errorWriter = line => process.stderr.write(line), events = process, setExit = code => { process.exitCode = code; }, prepareWriter, prepareIdentity } = {}) {
   const report = createContainerDiagnostics(), errors = [];
+  const prepare = argv[0] === "container-prepare" ? createNativePrepareDiagnostics(prepareIdentity ?? { contextHash: argv[1], nonce: process.env.TASK_NONCE }, prepareWriter) : null;
+  if (prepare) report.prepare = prepare;
   const containerAction = ["container-ci", "container-init", "container-build", "container-prepare"].includes(argv[0]);
   let pending = true, emitted = false;
   const failure = code => {
@@ -620,11 +685,17 @@ export function launchCli(argv, { run = main, writer = line => process.stdout.wr
   // a module that statically imports these exports. Keep rejection ownership,
   // and fail closed if Node would exit with original work still unresolved.
   const completion = (async () => {
+    let originalFailed = false, originalReason;
     try {
+      prepare?.enter("app_entry");
       const value = await report.step("entry", () => run(argv, report));
-      if (!errors.length) report.sync("serialization", () => writer(`${JSON.stringify(value)}\n`));
-    } catch (error) { errors.push(error); }
+      if (!errors.length) {
+        prepare?.enter("cli_serialization");
+        report.sync("serialization", () => writer(`${JSON.stringify(value)}\n`));
+      }
+    } catch (error) { originalFailed = true; originalReason = error; errors.push(error); }
     finally { pending = false; events.removeListener("beforeExit", beforeExit); }
+    if (prepare) { prepare.finish(originalFailed, originalReason); errors.push(...prepare.errors); }
     if (errors.length) {
       failure(1);
       if (errors.length === 1) throw errors[0];
@@ -639,7 +710,9 @@ export async function main(argv, report) {
   const [action = "plan", ...args] = argv;
   if (["container-ci", "container-init", "container-build", "container-prepare"].includes(action)) {
     const load = () => import("./edge-proof-container.mjs");
+    report?.prepare?.enter("module_import");
     const { containerMain } = report ? await report.step("module_import", load) : await load();
+    report?.prepare?.enter("dispatch");
     return report ? report.step("dispatch", () => containerMain(action, args, report)) : containerMain(action, args);
   }
   if (action === "offline-ci" && args.length === 0) return runPackagingBoundary("parent", offlineCi);
