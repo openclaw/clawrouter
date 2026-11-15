@@ -49,6 +49,8 @@ function createQwenLedger() {
   const generation = Object.freeze({});
   const operations: Operation[] = [], observers: Array<{ pending: Promise<unknown>; terminal?: Promise<unknown>; state: string; reason?: unknown }> = [];
   const synchronous: unknown[] = [], registration: unknown[] = [], observerFailures: unknown[] = [], ownershipFailures: unknown[] = [], restorationFailures: unknown[] = [], lateFailures: unknown[] = [];
+  const recordingFailures: unknown[] = [];
+  let firstObserverFailure: any;
   const restorers: Array<() => void> = [];
   const readers: Array<{ body: ReadableStream<Uint8Array>; reader: ReadableStreamDefaultReader<Uint8Array>; response?: Response; owner?: object; generation: object; closed: Promise<unknown>; unlocks: number; returns: number }> = [];
   const bodies = new WeakSet<object>(), responses = new WeakMap<object, object | undefined>(), originals = new WeakSet<object>();
@@ -145,7 +147,7 @@ function createQwenLedger() {
       originalCursor = originalsAt; observerCursor = observersAt;
       await Promise.allSettled([...batch.map(row => row.pending), ...tails.map(row => row.terminal ?? row.pending)]);
     } while (originalCursor < operations.length || observerCursor < observers.length);
-    const failures = [...synchronous, ...registration, ...observerFailures, ...ownershipFailures, ...restorationFailures, ...lateFailures,
+    const failures = [...synchronous, ...registration, ...observerFailures, ...ownershipFailures, ...restorationFailures, ...lateFailures, ...recordingFailures,
       ...operations.filter(operation => operation.state !== "fulfilled").map(operation => operation.reason)];
     for (const row of observers) if (row.state === "pending") failures.push(new Error("original observer remains pending"));
     for (const row of readers) if (row.unlocks !== 1 || row.returns !== 1 || row.body.locked) failures.push(new Error("original reader remains owned"));
@@ -174,8 +176,27 @@ function createQwenLedger() {
     sealed = Object.freeze({ generation, operations: Object.freeze(operations.map(row => Object.freeze({ ...row }))), observers: Object.freeze(observers.map(row => Object.freeze({ ...row }))), readers: Object.freeze(readers.map(row => Object.freeze({ ...row }))) });
     return sealed;
   }
+  function captureObserverFailure(parent: Promise<unknown>, facts: Record<string, any>, reason: unknown) {
+    if (firstObserverFailure) return;
+    const operation = operations.find(row => row.pending === parent && row.kind === "fetch");
+    if (!operation) throw new Error("observer failure lacks original parent");
+    firstObserverFailure = Object.freeze({ generation, parent, operation, reason,
+      facts: Object.freeze({ ...facts, parentState: operation.state }) });
+  }
+  function observerRecord(id: string) {
+    if (!firstObserverFailure || recordingFailures.length) return null;
+    const first = firstObserverFailure;
+    const observer = operations.find(row => row.kind === "fetch_observer" && (row.binding as any)?.parent === first.parent);
+    if (first.generation !== generation || !observer || observer.state !== "rejected" || !Object.is(observer.reason, first.reason)) {
+      throw new Error("observer failure lacks settled original association");
+    }
+    return qwenObserverRecord({ v: 1, kind: "observer_failure", case: id,
+      parent: operations.indexOf(first.operation) + 1, observer: operations.indexOf(observer) + 1,
+      ...first.facts, failurePresent: true, reasonDefined: first.reason !== undefined });
+  }
   return { generation, observe, invoke, follow, replace, body, response, drain, restore, seal, operations, observers, readers,
-    failures: () => ({ synchronous: [...synchronous], registration: [...registration], observer: [...observerFailures], ownership: [...ownershipFailures], restoration: [...restorationFailures], late: [...lateFailures] }),
+    captureObserverFailure, observerRecord, recordingFailure: (reason: unknown) => { recordingFailures.push(reason); },
+    failures: () => ({ synchronous: [...synchronous], registration: [...registration], observer: [...observerFailures], ownership: [...ownershipFailures], restoration: [...restorationFailures], late: [...lateFailures], recording: [...recordingFailures] }),
     fail: (reason: unknown) => { open(); ownershipFailures.push(reason); } };
 }
 
@@ -223,9 +244,9 @@ function createQwenOwnership(storage: AsyncLocalStorage<any>, ledger: ReturnType
   }
   function wrapFetch(original: Function) {
     return function (this: unknown, ...args: any[]) {
-      let receipt: FetchReceipt | undefined;
+      let receipt: FetchReceipt | undefined, acquisition: Acquisition | undefined, acquisitionObserved = false;
       try {
-        const context = current(), acquisition = context.acquisition as Acquisition;
+        const context = current(); acquisition = context.acquisition as Acquisition; acquisitionObserved = true;
         const [input, init] = args;
         const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
         const method = init?.method ?? (input instanceof Request ? input.method : "GET");
@@ -236,9 +257,23 @@ function createQwenOwnership(storage: AsyncLocalStorage<any>, ledger: ReturnType
       const pending = ledger.invoke("fetch", original as (...args: any[]) => Promise<Response>, this, args);
       if (receipt) receipt.pending = pending;
       ledger.follow("fetch_observer", pending, [response => {
-        ledger.response(response, receipt);
-        if (!receipt || receipt.response || responses.has(response)) incomplete();
-        receipt.response = response; responses.set(response, receipt);
+        // Passive scratch taps return each original operand unchanged. No error
+        // properties, new original subscriptions or repeated getters are used.
+        let site = 1, seen = 0, truthy = 0;
+        const tap = <T>(bit: number, value: T): T => { seen |= bit; if (value) truthy |= bit; return value; };
+        try {
+          ledger.response(response, receipt);
+          if (tap(1, !receipt) || (site = 2, tap(2, receipt!.response)) || (site = 3, tap(4, responses.has(response)))) {
+            site = 4; incomplete();
+          }
+          site = 5; receipt!.response = response;
+          site = 6; responses.set(response, receipt!);
+        } catch (error) {
+          try { ledger.captureObserverFailure(pending, { site, seen, truthy, receipt: !!receipt,
+            acquisition: acquisitionObserved ? !!acquisition : null }, error); }
+          catch (reportError) { ledger.recordingFailure(reportError); }
+          throw error;
+        }
       }, () => {}]);
       return pending;
     };
@@ -261,6 +296,34 @@ function qwenClosedRecord(id: string, phase: string, op: string, state: string, 
     || !["passed", "failed", "incomplete", "unrun"].includes(state)) throw new Error("invalid closed Qwen boundary");
   for (const value of Object.values(counts)) if (!Number.isSafeInteger(value) || value < 0 || value > 65535) throw new Error("Qwen diagnostic count exceeded");
   return { v: 1, case: id, phase, op, state, operations: counts.operations, rejected: counts.rejected, pending: counts.pending };
+}
+
+// A case-scoped ordinal names the privately retained original P and its derived
+// observer. Parent state is sampled at the throw, not inferred from the aggregate.
+function qwenObserverRecord(input: unknown): Record<string, any> {
+  const invalid = (): never => { throw new Error("invalid Qwen observer witness"); };
+  if (!input || typeof input !== "object" || Object.getPrototypeOf(input) !== Object.prototype) invalid();
+  const descriptors = Object.getOwnPropertyDescriptors(input), value: Record<string, any> = {};
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== "string" || !Object.hasOwn(descriptors[key], "value")) return invalid();
+    Object.defineProperty(value, key, { value: descriptors[key].value, enumerable: true });
+  }
+  if (Object.keys(value).join(",") !== ["v", "kind", "case", "parent", "observer", "site", "seen", "truthy", "receipt", "acquisition", "parentState", "failurePresent", "reasonDefined"].join(",")
+    || value.v !== 1 || value.kind !== "observer_failure" || !qwenRegionCases().some(row => row.id === value.case)
+    || value.failurePresent !== true || typeof value.reasonDefined !== "boolean"
+    || typeof value.receipt !== "boolean" || ![null, false, true].includes(value.acquisition)
+    || (value.receipt && value.acquisition !== true)
+    || !["pending", "fulfilled", "rejected"].includes(value.parentState)) invalid();
+  for (const key of ["parent", "observer"]) if (!Number.isSafeInteger(value[key]) || value[key] < 1 || value[key] > 65535) invalid();
+  if (value.observer <= value.parent || !Number.isInteger(value.site) || value.site < 1 || value.site > 6
+    || (value.site === 4 && !value.reasonDefined)) invalid();
+  // Short-circuit prefixes: a thrown operand has no result bit. Only the
+  // original explicit assertion can carry a truthy association operand.
+  const pairs = value.site === 1 ? [[0, 0]] : value.site === 2 ? [[1, 0]] : value.site === 3 ? [[3, 0]]
+    : value.site === 4 ? [[1, 1], [3, 2], [7, 4]] : [[7, 0]];
+  if (!pairs.some(([seen, truthy]) => value.seen === seen && value.truthy === truthy)
+    || (value.seen !== 0 && value.receipt !== !(value.truthy & 1))) invalid();
+  return value;
 }
 
 // These witnesses describe observed entry and completion, never native acceptance.
@@ -460,6 +523,10 @@ it(`${row.id}: registered Qwen ${row.mode}`, async () => {
   const rejected = ledger.operations.filter(op => op.state === "rejected"), pending = ledger.operations.filter(op => op.state === "pending");
   try {
     console.log("QWEN_SDK_V1 " + JSON.stringify(qwenClosedRecord(row.id, failures.length ? failedPhase : "join", rejected[0]?.kind ?? "case", failures.length ? "failed" : "passed", { operations: ledger.operations.length, rejected: rejected.length, pending: pending.length })));
+  } catch (error) { witness.failed(error); failures.push(error); }
+  try {
+    const observer = ledger.observerRecord(row.id);
+    if (observer) console.log("QWEN_OBSERVER_V1 " + JSON.stringify(observer));
   } catch (error) { witness.failed(error); failures.push(error); }
   witness.complete({ operations: ledger.operations.length, rejected: rejected.length, pending: pending.length });
   failures.push(...entryWitness.takeErrors());

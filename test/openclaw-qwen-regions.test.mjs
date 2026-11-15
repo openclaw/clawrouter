@@ -22,7 +22,7 @@ const shared = transformed.split("// BEGIN shared fixture functions.")[1]?.split
 assert.ok(shared, "original fixture functions are present");
 // The marker's prose ends before the first function declaration.
 const functions = shared.slice(shared.indexOf("function qwenRegionCases"));
-const { qwenRegionCases, createQwenLedger, createQwenOwnership, qwenClosedRecord, qwenEntryRecord, createQwenEntryWitness } = new Function(`${functions}; return { qwenRegionCases, createQwenLedger, createQwenOwnership, qwenClosedRecord, qwenEntryRecord, createQwenEntryWitness };`)();
+const { qwenRegionCases, createQwenLedger, createQwenOwnership, qwenClosedRecord, qwenEntryRecord, qwenObserverRecord, createQwenEntryWitness } = new Function(`${functions}; return { qwenRegionCases, createQwenLedger, createQwenOwnership, qwenClosedRecord, qwenEntryRecord, qwenObserverRecord, createQwenEntryWitness };`)();
 const rows = qwenRegionCases();
 const regions = ["qwen-cn", "qwen-coding-global", "qwen-coding-cn"];
 const bases = ["https://dashscope.aliyuncs.com/compatible-mode/v1", "https://coding-intl.dashscope.aliyuncs.com/v1", "https://coding.dashscope.aliyuncs.com/v1"];
@@ -43,7 +43,7 @@ async function finish(body, cleanups) {
 // test reporter. Only closed fixture records leave this boundary.
 const retainedNativeFailures = new WeakMap();
 
-const qwenRunnerFixtureSha256 = "a359eea4e4887cb3c133dbc1e1be2b168c6ce892327ab03c6f83c8211e2094d4";
+const qwenRunnerFixtureSha256 = "4fef30f7ef737571a4cd71ad90e79063eab3489217a5a9eb17b36bc09c57603a";
 const qwenRunnerReporterSha256 = "5cd2b7b4ebbe72f1864fd83c695c6ca521e8f382bd2a01e29af83f169f8bc4b3";
 
 // Copy only bounded own data before validation; never invoke toJSON or getters.
@@ -138,7 +138,7 @@ function qwenRelayStatus(value) {
 }
 
 function createQwenFailureRelay() {
-  const records = new Map(), sdkCases = new Map();
+  const records = new Map(), sdkCases = new Map(), observerFailures = new Map();
   let diagnosticText = false, traversed = false, traversalFailed = false, parsed = false, parseFailed = false;
   const captures = { stdout: false, stderr: false };
   let stage = "none", firstFailure;
@@ -184,6 +184,20 @@ function createQwenFailureRelay() {
       sdkCases.set(value.case, encoded);
     }
   }
+  function observerFailure(value) {
+    stage = "record_schema";
+    assert.ok(value && typeof value === "object" && !utilTypes.isProxy(value));
+    const checked = qwenObserverRecord(value);
+    stage = "entry_required"; assert.ok(entered.has(checked.case), "observer lacks case entry");
+    stage = "terminal_census";
+    const original = sdkCases.has(checked.case) ? JSON.parse(sdkCases.get(checked.case)) : undefined;
+    assert.ok(original && original.state === "failed" && original.rejected > 0 && checked.observer <= original.operations,
+      "observer lacks SDK failure census");
+    const encoded = JSON.stringify(checked);
+    stage = "duplicate";
+    if (observerFailures.has(checked.case)) assert.equal(observerFailures.get(checked.case), encoded, "conflicting observer witness");
+    observerFailures.set(checked.case, encoded);
+  }
   function entry(value) {
     stage = "record_schema";
     assert.ok(value && typeof value === "object" && !utilTypes.isProxy(value));
@@ -220,7 +234,7 @@ function createQwenFailureRelay() {
       stage = "text_bound";
       assert.ok(Buffer.byteLength(value) <= 2 * 1024 * 1024, "native output bound exceeded");
       for (const line of value.split("\n")) {
-        const prefix = ["QWEN_SDK_V1 ", "QWEN_ENTRY_V1 "].find(prefix => line.startsWith(prefix));
+        const prefix = ["QWEN_SDK_V1 ", "QWEN_ENTRY_V1 ", "QWEN_OBSERVER_V1 "].find(prefix => line.startsWith(prefix));
         if (!prefix) continue;
         stage = "line_bound";
         assert.ok(Buffer.byteLength(line) <= 768, "native record bound exceeded");
@@ -230,7 +244,9 @@ function createQwenFailureRelay() {
         // trailing material and alternate encodings without recovering raw text.
         stage = "canonical_json";
         assert.equal(JSON.stringify(parsed), payload, "noncanonical closed JSON");
-        if (prefix === "QWEN_ENTRY_V1 ") entry(parsed); else record(parsed, true);
+        if (prefix === "QWEN_ENTRY_V1 ") entry(parsed);
+        else if (prefix === "QWEN_OBSERVER_V1 ") observerFailure(parsed);
+        else record(parsed, true);
       }
     }); } catch (error) { parseFailed = true; throw error; }
   }
@@ -290,6 +306,9 @@ function createQwenFailureRelay() {
       registrationReasonDefined: registration?.reasonDefined ?? null, enteredCases: entered.size, completedCases: completed.size }, ...group,
     { kind: "helper", pin: sourceHead, state: helper, expectedCases: rows.length, observedCases: observed.length,
       failedCases: observed.filter(value => value.state !== "passed").length, unknownCases: rows.length - observed.length }, ...(runner ?? qwenUnobservedRunner("unobserved")), status()];
+    // Reserve the witness for the same first failed case atomically with entry,
+    // completion and helper/runner summaries. Absence conveys no local proof.
+    if (firstFailed && observerFailures.has(firstFailed.case)) essential.push(JSON.parse(observerFailures.get(firstFailed.case)));
     const room = 9 - essential.length, result = [...essential, ...failures.slice(0, room)];
     if (failures.length > room) result.push({ kind: "overflow", omitted: failures.length - room });
     const commands = result.map(qwenBoundaryAnnotation);
@@ -581,6 +600,133 @@ test("cleanup retains body failure and attempts both independent finalizers", as
   await assert.rejects(finish(() => { throw undefined; }, [() => { order.push(1); throw second; }, () => { order.push(2); }]), error => error instanceof AggregateError && error.errors[0] === undefined && error.errors[1] === second);
   assert.deepEqual(order, [1, 2]);
 });
+
+// BEGIN Qwen observer failure witness pure tests.
+function qwenWitnessFixture(fault, reason, reportFailure) {
+  const ledger = createQwenLedger();
+  let context, resolve, reject, subscriptions = 0, calls = 0;
+  const storage = { disable() { context = undefined; }, getStore: () => context, run(value, fn) { const prior = context; context = value; try { return fn(); } finally { context = prior; } } };
+  const expected = { url: "https://qwen.fixture/chat/completions", credential: "synthetic-fixture" };
+  class WitnessMap extends WeakMap {
+    has(key) { if (fault === "alias_throw") throw reason; return fault === "alias_true" || super.has(key); }
+    set(key, value) { if (fault === "map_set") throw reason; return super.set(key, value); }
+  }
+  // Only the map seam is inert; execute the complete actual ownership helper.
+  const factory = new Function("WeakMap", `return (${createQwenOwnership.toString()});`)(WitnessMap);
+  const owner = factory(storage, ledger, expected), response = { body: null }, receiver = {};
+  const options = { method: "POST", headers: { authorization: "Bearer " + expected.credential } };
+  const parent = new Promise((yes, no) => { resolve = yes; reject = no; });
+  const then = parent.then;
+  parent.then = function (...args) { subscriptions++; return Reflect.apply(then, this, args); };
+  const fetch = owner.wrapFetch(function (...args) {
+    calls++; assert.equal(this, receiver); assert.equal(args.length, 3);
+    assert.equal(args[0], expected.url); assert.equal(args[1], options); assert.equal(args[2], undefined);
+    return parent;
+  });
+  let returned;
+  const invokeFetch = () => { returned = fetch.call(receiver, expected.url, options, undefined); return returned; };
+  const guard = () => invokeFetch().then(response => ({ response, release: () => Promise.resolve() }));
+  const result = owner.invoke(() => fault === "missing_receipt" ? invokeFetch() : owner.guard(guard, receiver, [options]), receiver, [], {});
+  assert.equal(returned, parent);
+  const receipt = [...owner.fetches][0];
+  if (fault === "response") ledger.response = () => { throw reason; };
+  if (fault === "prior_get") Object.defineProperty(receipt, "response", { get() { throw reason; } });
+  if (fault === "prior_true") receipt.response = response;
+  if (fault === "response_set") Object.defineProperty(receipt, "response", { get: () => undefined, set() { throw reason; } });
+  if (reportFailure) ledger.captureObserverFailure = () => { throw reportFailure.reason; };
+  return { ledger, owner, parent, response, result, resolve, reject, calls: () => calls, subscriptions: () => subscriptions };
+}
+
+for (const [fault, site, seen, truthy] of [["response", 1, 0, 0], ["prior_get", 2, 1, 0], ["alias_throw", 3, 3, 0],
+  ["missing_receipt", 4, 1, 1], ["prior_true", 4, 3, 2], ["alias_true", 4, 7, 4], ["response_set", 5, 7, 0], ["map_set", 6, 7, 0]]) {
+  for (const defined of [false, true]) test(`Qwen observer witness retains ${fault} original reason defined=${defined}`, async () => {
+    const reason = defined ? {} : undefined, f = qwenWitnessFixture(fault, reason);
+    f.resolve(f.response); await f.result;
+    await assert.rejects(f.ledger.drain());
+    const row = f.ledger.observerRecord(rows[0].id), original = f.ledger.operations.find(row => row.kind === "fetch_observer");
+    assert.equal(row.site, site); assert.equal(row.seen, seen); assert.equal(row.truthy, truthy);
+    assert.equal(row.parentState, "fulfilled"); assert.equal(row.failurePresent, true);
+    assert.equal(row.reasonDefined, ["missing_receipt", "prior_true", "alias_true"].includes(fault) || defined);
+    if (!["missing_receipt", "prior_true", "alias_true"].includes(fault)) assert.equal(original.reason, reason);
+    assert.equal(f.ledger.operations[row.parent - 1].pending, f.parent);
+    assert.equal(f.ledger.operations[row.observer - 1], original);
+    assert.equal(f.calls(), 1); assert.equal(f.subscriptions(), fault === "missing_receipt" ? 3 : 4);
+    assert.equal(row.receipt, fault !== "missing_receipt"); assert.equal(row.acquisition, fault !== "missing_receipt");
+    f.ledger.restore(); f.owner.restore();
+  });
+}
+
+test("Qwen original fetch rejection cannot masquerade as observer callback failure", async () => {
+  const reason = {}, f = qwenWitnessFixture("none", reason);
+  f.reject(reason); await assert.rejects(f.result, error => error === reason);
+  await assert.rejects(f.ledger.drain());
+  assert.equal(f.ledger.observerRecord(rows[0].id), null);
+  assert.equal(f.ledger.operations.find(row => row.kind === "fetch").reason, reason);
+  assert.equal(f.ledger.operations.find(row => row.kind === "fetch_observer").state, "fulfilled");
+  f.ledger.restore(); f.owner.restore();
+});
+
+for (const reason of [undefined, {}]) for (const reportReason of [undefined, {}]) {
+  test("Qwen observer recording faults preserve both independent reasons", async () => {
+    const f = qwenWitnessFixture("response", reason, { reason: reportReason });
+    f.resolve(f.response); await f.result;
+    await assert.rejects(f.ledger.drain());
+    assert.equal(f.ledger.operations.find(row => row.kind === "fetch_observer").reason, reason);
+    const faults = f.ledger.failures().recording; assert.equal(faults.length, 1); assert.equal(faults[0], reportReason);
+    assert.equal(f.ledger.observerRecord(rows[0].id), null);
+    f.ledger.restore(); f.owner.restore();
+  });
+}
+
+test("Qwen observer failure still joins appended held work without another parent subscription", async () => {
+  const f = qwenWitnessFixture("response", undefined); let release, done = false;
+  const held = new Promise(resolve => { release = resolve; });
+  f.ledger.response = () => { f.ledger.observe("late", held); throw undefined; };
+  f.resolve(f.response); await f.result;
+  const joined = f.ledger.drain().catch(error => { done = true; return error; });
+  await Promise.resolve(); assert.equal(done, false); release(); await joined;
+  assert.equal(f.subscriptions(), 4); assert.equal(f.ledger.observerRecord(rows[0].id).reasonDefined, false);
+  f.ledger.restore(); f.owner.restore();
+});
+
+test("Qwen observer codec rejects impossible short-circuit and foreign records", async () => {
+  const f = qwenWitnessFixture("response", undefined); f.resolve(f.response); await f.result; await assert.rejects(f.ledger.drain());
+  const row = f.ledger.observerRecord(rows[0].id);
+  for (const patch of [{ case: "foreign" }, { parent: true }, { parent: row.observer }, { observer: 65536 }, { v: 2 },
+    { site: 0 }, { site: 7 }, { site: 4, seen: 3, truthy: 2, reasonDefined: false }, { seen: 1 }, { truthy: 1 }, { receipt: false, site: 5, seen: 7 },
+    { acquisition: false }, { reasonDefined: null }, { failurePresent: false }, { parentState: "unknown" }, { raw: "forbidden" }]) {
+    assert.throws(() => qwenObserverRecord({ ...row, ...patch }));
+  }
+  assert.throws(() => qwenObserverRecord(Object.fromEntries(Object.entries(row).reverse())));
+  for (const parentState of ["pending", "fulfilled", "rejected"]) assert.equal(qwenObserverRecord({ ...row, parentState }).parentState, parentState);
+  assert.throws(() => qwenClosedRecord(row.case, "observer_failure", "fetch_observer", "failed", { operations: 1, rejected: 1, pending: 0 }));
+  f.ledger.restore(); f.owner.restore();
+});
+
+test("Qwen actual observer producer survives bounded relay with its first failed case", async () => {
+  const f = qwenWitnessFixture("response", undefined); f.resolve(f.response); await f.result; await assert.rejects(f.ledger.drain());
+  const relay = createQwenFailureRelay(), witness = createQwenEntryWitness(value => relay.text("QWEN_ENTRY_V1 " + JSON.stringify(value) + "\n"));
+  witness.moduleEvaluated(); for (const row of rows) witness.registered(row.id); witness.registrationComplete();
+  const active = witness.enter(rows[0].id), failures = f.ledger.operations.filter(row => row.state === "rejected");
+  const counts = { operations: f.ledger.operations.length, rejected: failures.length, pending: 0 };
+  active.at("owned_drain"); active.failed(new AggregateError([undefined]));
+  relay.text("QWEN_SDK_V1 " + JSON.stringify(qwenClosedRecord(rows[0].id, "join", "fetch_observer", "failed", counts)) + "\n");
+  const record = f.ledger.observerRecord(rows[0].id), line = "QWEN_OBSERVER_V1 " + JSON.stringify(record) + "\n";
+  relay.text(line); active.complete(counts);
+  for (const row of rows.slice(1)) relay.record(qwenClosedRecord(row.id, "worker", "control", "failed", counts));
+  const output = relay.output("failed"), projected = output.find(row => row.kind === "observer_failure");
+  assert.deepEqual(projected, record); assert.equal(projected.reasonDefined, false);
+  assert.ok(output.some(row => row.kind === "case_complete" && row.reasonDefined));
+  assert.ok(output.some(row => row.kind === "overflow")); assert.equal(output.length, 10);
+  const commands = output.map(qwenBoundaryAnnotation); assert.ok(commands.every(line => Buffer.byteLength(line) <= 768));
+  const widest = qwenObserverRecord({ ...record, case: rows.reduce((a, b) => a.id.length > b.id.length ? a : b).id, parent: 65534, observer: 65535 });
+  assert.ok(Buffer.byteLength(qwenBoundaryAnnotation(widest)) <= 768);
+  assert.ok(Buffer.byteLength(commands.join("\n")) <= 8192);
+  const foreign = createQwenFailureRelay(); assert.throws(() => foreign.text(line));
+  assert.throws(() => relay.text("QWEN_OBSERVER_V1 " + JSON.stringify({ ...record, reasonDefined: true }) + "\n"));
+  f.ledger.restore(); f.owner.restore();
+});
+// END Qwen observer failure witness pure tests.
 
 // BEGIN Qwen observer ownership pure tests.
 function qwenDeferred() {
