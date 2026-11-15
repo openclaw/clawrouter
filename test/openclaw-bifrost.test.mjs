@@ -27,13 +27,14 @@ export const bifrostControls=["stream","simple"].flatMap(api=>["eof","preabort",
 export const bifrostProgressCases=["stream","simple"].map(api=>({id:`bifrost_${api}_progress`,mode:"progress",api}));
 export function bifrostNativeEvaluator(){
  const source=readFileSync(new URL("./fixtures/openclaw-bifrost-contract.test.ts",import.meta.url),"utf8");
- const names=["createBifrostFetchObserver","createBifrostInvocationOwnership","bifrostInvocationBound","sameBifrostDescriptor","bifrostCancelOperand","bifrostStoredErrorVector","evaluateBifrostNativeControl","bifrostQualification","bifrostProductExpected","bifrostProgressQualified","bifrostProgressWitness"];
+ const names=["createBifrostFetchObserver","createBifrostInvocationOwnership","bifrostInvocationBound","sameBifrostDescriptor","bifrostNativeContract","bifrostCancelOperand","bifrostStoredErrorVector","evaluateBifrostNativeControl","bifrostQualification","bifrostProductExpected","bifrostProgressQualified","bifrostProgressWitness"];
  const start="export function createBifrostFetchObserver(",end="function emitControl(";
  assert.equal(source.split(start).length,2);assert.equal(source.split(end).length,2);
  const declarations=source.slice(source.indexOf(start),source.indexOf(end));
  assert.deepEqual([...declarations.matchAll(/^export function (\w+)\(/gm)].map(m=>m[1]),names);
  assert.doesNotMatch(declarations,/\bimport\b|\brequire\s*\(/);
- return runInNewContext('"use strict";\n'+stripTypeScriptTypes(declarations.replace(/^export /gm,""),{mode:"strip"})+"\n({"+names.join(",")+"})",{}, {timeout:1000});
+ const signals=source.slice(source.indexOf("export function bifrostSignalEvidence("),source.indexOf("export function bifrostOperationEvidence("));
+ return runInNewContext('"use strict";\n'+stripTypeScriptTypes((signals+declarations).replace(/^export /gm,""),{mode:"strip"})+"\n({"+names.join(",")+"})",{AbortSignal}, {timeout:1000});
 }
 // The control request signals one closed command. The original producer's
 // already-created continuation owns enqueue. Neither path completes its pull.
@@ -86,7 +87,8 @@ export function bifrostCheckpointFunctions(){
  const start="export function bifrostSetupPhase(",end="const checkpoints=createBifrostCheckpointReporter(";
  assert.equal(source.split(start).length,2);assert.equal(source.split(end).length,2);
  const text=source.slice(source.indexOf(start),source.indexOf(end));assert.doesNotMatch(text,/\bimport\b|\brequire\s*\(/);
- return runInNewContext('"use strict";\n'+stripTypeScriptTypes(text.replace(/^export /gm,""),{mode:"strip"})+"\n({bifrostSetupPhase,bifrostSignalEvidence,bifrostOperationEvidence,bifrostReasonMetadata,bifrostCaseEvidence,validateBifrostEvidence,validateBifrostCheckpoint,createBifrostCheckpointReporter,finishBifrostCheckpointCase,createBifrostSetupBoundary})",{AbortSignal,Buffer,bifrostInvocationBound:bifrostNativeEvaluator().bifrostInvocationBound},{timeout:1000});
+ const native=bifrostNativeEvaluator();
+ return runInNewContext('"use strict";\n'+stripTypeScriptTypes(text.replace(/^export /gm,""),{mode:"strip"})+"\n({bifrostSetupPhase,bifrostSignalEvidence,bifrostOperationEvidence,bifrostReasonMetadata,bifrostCaseEvidence,validateBifrostEvidence,validateBifrostCheckpoint,createBifrostCheckpointReporter,finishBifrostCheckpointCase,createBifrostSetupBoundary})",{AbortSignal,Buffer,bifrostInvocationBound:native.bifrostInvocationBound,bifrostCancelOperand:native.bifrostCancelOperand},{timeout:1000});
 }
 export function bifrostCheckpointRecords(error){
  const {validateBifrostCheckpoint}=bifrostCheckpointFunctions();
@@ -533,27 +535,40 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
   assert.equal(undefinedCaught,true);
  });
  const evaluator=bifrostNativeEvaluator();
- function nativeEvidence(){
-  const owner={},identity={guard:()=>{}},reason={name:"AbortError"},stored={name:"AbortError"};
-  const caller={owner,signal:{aborted:true},reason,abortCalled:true,abortedAfter:true,noEarlierFailure:true,delivered:7,abortInvoke:8,abortObserved:9,result:"aborted"};
-  const input={signal:caller.signal},body={locked:false},response={body},acquisition={owner,guard:identity.guard,input,inputSignal:input.signal,response,result:{response},operation:{state:"fulfilled",pending:Promise.resolve()}};acquisition.pending=acquisition.operation.pending;
-  const transport={owner,method:"POST",signal:{aborted:true},acquisition,response,bodies:[body],readers:[],guardObserved:true,releases:1,releaseDone:true,fetch:{state:"fulfilled"}};acquisition.transport=transport;
-  const reader={owner,original:{},body,transport,closed:Promise.resolve(),acquired:2,unlocks:1,unlockFailed:false,unlockAt:14};reader.unlockReceiver=reader.original;transport.readers.push(reader);
-  const common={owner,reader,receiver:reader.original};
-  const read={...common,kind:"read",state:"rejected",reason:stored,invoke:6,settle:10,callerSignal:caller.signal,effectiveSignal:transport.signal,callerAbortedAtInvoke:false,callerAbortedAtSettle:true,effectiveAbortedAtSettle:true};
-  const closed={...common,kind:"closed",state:"rejected",reason:stored,pending:reader.closed,invoke:3,settle:11};
-  const cancel={...common,kind:"cancel",state:"rejected",reason:stored,args:[stored],invoke:12,settle:13};
-  const prefix={...common,kind:"read",state:"fulfilled",value:{done:false,value:new Uint8Array([1])},settle:5};
-  const release={owner,kind:"guard_release",state:"fulfilled",acquisition,receiver:acquisition.result,invoke:15,returnAt:16,settle:17};transport.release=release;caller.pending=[read];
-  const getBody={locked:false},getResponse={body:getBody},getAcquisition={owner,guard:identity.guard,response:getResponse,result:{response:getResponse},operation:{state:"fulfilled",pending:Promise.resolve()}};getAcquisition.pending=getAcquisition.operation.pending;
-  const getTransport={owner,method:"GET",response:getResponse,acquisition:getAcquisition,guardObserved:true,bodies:[getBody],readers:[],releases:1,releaseDone:true,release:{state:"fulfilled"}};getAcquisition.transport=getTransport;
+ function unitNativeIdentity(){return Object.freeze({pin:bifrostPin,node:process.version,platform:process.platform,arch:process.arch,undici:"unit-only",guard:()=>{},fetch:()=>{}});}
+ // Synthetic records exercise the actual pure predicate; they are never SDK qualification.
+ function nativeEvidence(role="partial",identity=unitNativeIdentity(),abortReason=undefined){
+  const f=bifrostCheckpointFunctions(),owner={},controller=new AbortController(),inputController=new AbortController(),effectiveController=new AbortController();
+  const caller={owner,signal:controller.signal,reason:abortReason,abortCalled:false,abortedAfter:false,noEarlierFailure:true,delivered:7,abortInvoke:8,abortObserved:9,abortReturn:10,result:"aborted"};
+  const original=(kind,details={})=>{const pending=Promise.resolve();return {kind,owner,pending,returned:pending,state:"fulfilled",invoke:1,returnAt:2,settle:3,...details};};
+  const input={signal:inputController.signal},body={locked:false},response={body},acquisition={owner,guard:identity.guard,input,inputSignal:input.signal,response,result:{response},operation:original("guard"),signalHistory:{abort:9}};acquisition.pending=acquisition.operation.pending;
+  const transport={owner,method:"POST",signal:effectiveController.signal,signalHistory:{abort:9},acquisition,response,bodies:[body],readers:[],guardObserved:true,releases:1,releaseDone:true,fetch:original("fetch")};acquisition.transport=transport;
+  const reader={owner,original:{},body,transport,closed:Promise.resolve(),acquired:2,unlocks:1,unlockFailed:false,unlockAt:17};reader.unlockReceiver=reader.original;transport.readers.push(reader);
+  const common={reader,receiver:reader.original,callerSignal:caller.signal,effectiveSignal:transport.signal};
+  const read=original("read",{...common,state:"pending",invoke:6,settle:19,callerAbortedAtInvoke:false,callerAbortedAtSettle:true,effectiveAbortedAtSettle:true});
+  const closed=original("closed",{...common,state:"pending",pending:reader.closed,returned:reader.closed,invoke:3,settle:18});
+  const cancel=original("cancel",{...common,state:"pending",args:[undefined],invoke:12,returnAt:13,settle:20});
+  const prefix=original("read",{...common,value:{done:false,value:new Uint8Array([1])},settle:5});
+  const release=original("guard_release",{acquisition,receiver:acquisition.result,invoke:21,returnAt:22,settle:23});transport.release=release;caller.pending=[read];
+  const unlock=original("unlock",{...common,pending:undefined,returned:undefined,invoke:14,returnAt:15,settle:16});
+  const getBody={locked:false},getResponse={body:getBody},getAcquisition={owner,guard:identity.guard,input:{signal:caller.signal},inputSignal:caller.signal,response:getResponse,result:{response:getResponse},operation:original("guard")};getAcquisition.pending=getAcquisition.operation.pending;
+  const getTransport={owner,method:"GET",response:getResponse,acquisition:getAcquisition,guardObserved:true,bodies:[getBody],readers:[],releases:1,releaseDone:true,release:original("guard_release"),fetch:original("fetch")};getAcquisition.transport=getTransport;
   const getReader={owner,original:{},body:getBody,transport:getTransport,unlocks:1,unlockFailed:false,unlockAt:4,closed:Promise.resolve()};getReader.unlockReceiver=getReader.original;getTransport.readers=[getReader];
-  const getClosed={owner,kind:"closed",reader:getReader,pending:getReader.closed,state:"fulfilled",invoke:2,settle:3};
+  const getClosed=original("closed",{reader:getReader,pending:getReader.closed,returned:getReader.closed,invoke:2,settle:3});
   function bind(t){const kind=t.method==="POST"?"inference":"discovery",args=kind==="inference"?[{}, {}, {signal:caller.signal}]:[{signal:caller.signal}];
    const invocation=Object.freeze({owner,caller,signal:caller.signal,kind,fn:()=>{},receiver:undefined,args:Object.freeze(args)}),a=t.acquisition;
-   a.input??={signal:caller.signal};a.inputSignal=a.input.signal;a.invocation=invocation;a.context=Object.freeze({invocation,acquisition:a});t.invocation=invocation;t.context=a.context;t.caller=caller;}
+   a.invocation=invocation;a.context=Object.freeze({invocation,acquisition:a});t.invocation=invocation;t.context=a.context;t.caller=caller;}
   bind(transport);bind(getTransport);
-  return {owner,identity,provider:"bifrost",api:"stream",role:"partial",caller,transports:[transport,getTransport],originals:[prefix,read,closed,cancel,release,getClosed],failures:[],observerFailures:[],syncFailures:[],restored:true,sourceExpired:0};
+  const w={owner,identity,provider:"bifrost",api:"stream",role,caller,transports:[transport,getTransport],acquisitions:[acquisition,getAcquisition],originals:[prefix,read,closed,cancel,release,getClosed,unlock],failures:[],observerFailures:[],syncFailures:[],reportingFailures:[],restored:true,sourceExpired:0,evidenceJoined:true};
+  for(const o of [read,closed,prefix])o.evidenceInvoke=f.bifrostOperationEvidence(o,w.originals);
+  if(role==="partial"||role==="preabort"){
+   controller.abort(abortReason);inputController.abort(controller.signal.reason);effectiveController.abort(controller.signal.reason);caller.abortCalled=true;caller.abortedAfter=true;
+  }
+  cancel.evidenceInvoke=f.bifrostOperationEvidence(cancel,w.originals);
+  for(const o of [read,closed,cancel]){o.state=role==="partial"?"rejected":"fulfilled";if(role==="partial")o.reason=controller.signal.reason;o.evidenceSettle=f.bifrostOperationEvidence(o,w.originals);}
+  caller.result=role==="partial"?"aborted":role==="eof"?"stop":"error";caller.emptyContent=role==="preabort";
+  if(role==="preabort"){w.transports=[getTransport];w.acquisitions=[getAcquisition];w.originals=[getClosed];w.preabortPostDelta=0;}
+  return w;
  }
  function reasonEvidence(){
   const f=bifrostCheckpointFunctions(),w=nativeEvidence(),controller=new AbortController();
@@ -572,8 +587,6 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
    if(o.reader){o.callerSignal=controller.signal;o.effectiveSignal=o.reader.transport.signal;
     o.evidenceInvoke=f.bifrostOperationEvidence(o,w.originals);o.evidenceSettle=f.bifrostOperationEvidence(o,w.originals);}
   }
-  const r=w.transports[0].readers[0];
-  w.originals.push({owner:w.owner,kind:"unlock",reader:r,receiver:r.original,state:"fulfilled",invoke:14,returnAt:15,settle:16});
   return {f,w,controller,proof:{source:{canceled:0,settled:0,expired:1,held:1},inboundChatAborted:false}};
  }
  test("Bifrost reason evidence observes native signal reason separately from undefined abort operand",()=>{
@@ -667,8 +680,13 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
  });
  test("Bifrost reason evidence maximum closed numeric fields fit complete original quotas",()=>{
   const {f,w,proof}=reasonEvidence();
+  w.originals.find(o=>o.kind==="cancel").args=[{}];
   const worst=value=>typeof value==="number"?1000000:Array.isArray(value)?value.map(worst):value&&typeof value==="object"?Object.fromEntries(Object.entries(value).map(([k,v])=>[k,["v","case"].includes(k)?v:worst(v)])):value;
   const group=f.bifrostCaseEvidence(2,w,proof,false,[]).map(worst),records=[];
+  for(const r of group)r.complete=false;
+  group[0].bindings.signals=false;
+  for(const key of ['readInvokeSignals','readSettleSignals','cancelInvokeSignals'])group[2][key]=[false,false,false];
+  group[2].readRejectedAtCancel=false;group[2].closedRejectedAtCancel=false;group[2].cancelOperand.object=false;
   group.forEach(f.validateBifrostEvidence);
   const report=f.createBifrostCheckpointReporter("sdk",r=>records.push(r),true);
   for(let i=0;i<4;i++){report.mark(i,"worker_retirement","rejected",undefined,4095,4095);report.flush(i);}
@@ -677,12 +695,7 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
   const lines=[],emit=bifrostAnnotationEmitter(line=>lines.push(line));decoded.forEach(emit);
   assert.ok(lines.every(line=>Buffer.byteLength(line)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);
  });
- function controlEvidence(role,identity){
-  const w=nativeEvidence();w.identity=identity;for(const t of w.transports)t.acquisition.guard=identity.guard;w.role=role;
-  if(role!=="partial"){for(const o of w.originals)o.state="fulfilled";w.caller.abortCalled=role==="preabort";w.caller.signal.aborted=role==="preabort";w.caller.result=role==="eof"?"stop":"error";w.caller.emptyContent=role==="preabort";}
-  if(role==="preabort"){w.transports.shift();w.preabortPostDelta=0;}
-  return w;
- }
+ function controlEvidence(role,identity){return nativeEvidence(role,identity);}
  function controls(identity){return ["eof","preabort","partial","provider_error"].map(role=>evaluator.evaluateBifrostNativeControl(controlEvidence(role,identity)));}
  function invocationHarness(){const storage=new AsyncLocalStorage();return {storage,ownership:evaluator.createBifrostInvocationOwnership(storage)};}
  async function runInvocation(h,caller,wait=Promise.resolve()){
@@ -762,7 +775,7 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
  });
  test('Bifrost invocation evaluator refuses coherent foreign tokens and permits distinct bound signals',()=>{
   const w=nativeEvidence();assert.equal(evaluator.evaluateBifrostNativeControl(w).qualified,true);
-  const t=w.transports[0];t.acquisition.inputSignal=t.acquisition.input.signal={};assert.equal(evaluator.evaluateBifrostNativeControl(w).qualified,true);
+  const t=w.transports[0];assert.notEqual(t.acquisition.inputSignal,w.caller.signal);assert.equal(evaluator.evaluateBifrostNativeControl(w).qualified,true);
   const foreign=Object.freeze({...t.invocation,caller:{...w.caller},signal:{}});t.invocation=t.acquisition.invocation=foreign;t.context=t.acquisition.context=Object.freeze({invocation:foreign,acquisition:t.acquisition});t.caller=foreign.caller;
   assert.equal(evaluator.evaluateBifrostNativeControl(w).qualified,false);
  });
@@ -787,11 +800,11 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
   const result=wrapped();assert.equal(result,pending);await assert.rejects(result,e=>e===reason);assert.deepEqual(failures,[observerError]);
  });
  test('Bifrost predispatch oracle requires exact error empty content and zero inference POST',()=>{
-  const identity={guard:()=>{}},good=controlEvidence('preabort',identity);assert.equal(evaluator.evaluateBifrostNativeControl(good).qualified,true);
+  const identity=unitNativeIdentity(),good=controlEvidence('preabort',identity);assert.equal(evaluator.evaluateBifrostNativeControl(good).qualified,true);
   for(const mutate of [w=>{w.caller.result='aborted';},w=>{w.caller.emptyContent=false;},w=>{w.preabortPostDelta=1;}]){const w=controlEvidence('preabort',identity);mutate(w);assert.equal(evaluator.evaluateBifrostNativeControl(w).qualified,false);}
   const partial=controlEvidence('partial',identity);assert.equal(evaluator.evaluateBifrostNativeControl(partial).qualified,true);partial.caller.result='error';assert.equal(evaluator.evaluateBifrostNativeControl(partial).qualified,false);
  });
- test('Bifrost SDK evaluator records the predefined rejection vector without C0 identity or product credit',()=>{
+ test('Bifrost SDK evaluator joins delayed reactions without learning a cancel operand or granting product credit',()=>{
   const w=nativeEvidence(),result=evaluator.evaluateBifrostNativeControl(w);assert.equal(result.qualified,true);assert.equal(result.vectorObserved,true);
   assert.notEqual(w.caller.reason,w.originals[1].reason);assert.equal(w.originals.filter(o=>o.state==='rejected').length,3);
   assert.equal(evaluator.bifrostProductExpected(w,undefined).length,0);
@@ -799,7 +812,35 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
   assert.equal(evaluator.bifrostProductExpected(w,q).length,3);assert.equal(w.originals.filter(o=>o.state==='rejected').length,3);
   assert.equal(evaluator.bifrostProductExpected({...w,api:'simple'},q).length,0);
   assert.equal(evaluator.bifrostProductExpected({...w,identity:{}},q).length,0);
-  w.originals[3].args=[];assert.equal(evaluator.evaluateBifrostNativeControl(w).qualified,true);assert.equal(evaluator.bifrostProductExpected(w,q).length,0);
+  assert.equal(q.contract,'stored-error-after-join-v2');assert.equal(Object.hasOwn(q,'operand'),false);
+  const r=w.transports[0].readers[0];assert.ok(w.originals[1].settle>r.unlockAt&&w.originals[2].settle>r.unlockAt&&w.originals[3].settle>r.unlockAt);
+  for(const args of [[],[undefined],[null],[{}],[w.originals[1].reason],['synthetic'],[42]]){
+   w.originals[3].args=args;assert.equal(evaluator.evaluateBifrostNativeControl(w).qualified,true);assert.equal(evaluator.bifrostProductExpected(w,q).length,3);
+  }
+  for(const old of [{...q,contract:undefined},{...q,contract:'stored_error'},{...q,contract:'stored-error-after-join-v1'}])assert.equal(evaluator.bifrostProductExpected(w,old).length,0);
+ });
+ test('Bifrost SDK evaluator observes native reasons without inspecting hostile error properties',()=>{
+  let gets=0;const reason={};
+  for(const field of ['name','message','stack','code','toJSON'])Object.defineProperty(reason,field,{get(){gets++;throw undefined;}});
+  const w=nativeEvidence('partial',unitNativeIdentity(),reason);
+  assert.equal(evaluator.evaluateBifrostNativeControl(w).qualified,true);assert.equal(gets,0);
+  const signal=w.transports[0].signal;
+  Object.defineProperty(signal,'reason',{get(){gets++;throw undefined;}});
+  Object.defineProperty(signal,'aborted',{get(){gets++;throw undefined;}});
+  assert.equal(evaluator.evaluateBifrostNativeControl(w).qualified,true);assert.equal(gets,0);
+ });
+ test('Bifrost reason evidence records cancel argument kinds without serializing operands',()=>{
+  const {f,w,proof}=reasonEvidence(),read=w.originals.find(o=>o.kind==='read'&&o.state==='rejected'),cancel=w.originals.find(o=>o.kind==='cancel');
+  let gets=0;const foreign={get toJSON(){gets++;throw undefined;},get message(){gets++;throw undefined;}};
+  for(const [args,kind,seen,defined,object] of [
+   [[],'absent',false,null,null],[[undefined],'undefined',true,false,false],[[read.reason],'same-as-stored',true,true,true],
+   [[foreign],'distinct-defined',true,true,true],[[null],'distinct-defined',true,true,false],[[42],'distinct-defined',true,true,false]
+  ]){
+   cancel.args=args;const group=f.bifrostCaseEvidence(2,w,proof,false,[]);group.forEach(f.validateBifrostEvidence);
+   assert.deepEqual(JSON.parse(JSON.stringify(group[2].cancelOperand)),{observed:seen,defined,object,kind});
+   const parsed=bifrostCheckpointRecords({stdout:group.map(r=>'BIFROST_CHECKPOINT '+JSON.stringify(r)).join('\n')});assert.equal(parsed.length,4);
+  }
+  assert.equal(gets,0);
  });
  const nativeCounterfactuals={
   'prior observed failure':w=>{w.caller.noEarlierFailure=false;},'different error with same name':w=>{w.originals[2].reason={name:'AbortError'};},
@@ -812,32 +853,53 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
   'late abort':w=>{w.caller.abortObserved=12;},'unobserved abort':w=>{w.caller.abortCalled=false;},'read began aborted':w=>{w.originals[1].callerAbortedAtInvoke=true;},
   'not aborted at rejection':w=>{w.originals[1].callerAbortedAtSettle=false;},'no effective abort':w=>{w.originals[1].effectiveAbortedAtSettle=false;},
   'no pending read':w=>{w.caller.pending=[];},'missing actual delivery':w=>{w.caller.delivered=0;},'missing nonempty read':w=>{w.originals[0].value.value=new Uint8Array();},
-  'cancel before stored error':w=>{w.originals[3].invoke=9;},'foreign cancel argument':w=>{w.originals[3].args=[{}];},
+  'cancel before observed abort':w=>{w.originals[3].invoke=9;},'untrusted cancel argument list':w=>{w.originals[3].args={length:1};},'multiple cancel operands':w=>{w.originals[3].args=[{},{}];},
+  'cancel after unlock':w=>{w.originals[3].invoke=18;w.originals[3].returnAt=19;},'closed captured after release':w=>{w.originals[2].invoke=24;},
+  'read reaction before abort':w=>{w.originals[1].settle=7;},'closed reaction before abort':w=>{w.originals[2].settle=7;},
+  'primitive stored reason':w=>{for(const o of w.originals.filter(o=>o.state==='rejected'))o.reason='synthetic';},
+  'mixed cancellation reason':w=>{w.originals[3].reason={};},'closed fulfilled with rejected cancel':w=>{w.originals[2].state='fulfilled';},
+  'read promise replaced':w=>{w.originals[1].returned=Promise.resolve();},'cancel promise replaced':w=>{w.originals[3].pending=Promise.resolve();},
+  'not all originals joined':w=>{w.evidenceJoined=false;},'pending original':w=>{w.originals[1].state='pending';},
+  'missing native signal':w=>{w.transports[0].signal={aborted:true,reason:w.originals[1].reason};w.originals[1].effectiveSignal=w.transports[0].signal;},
+  'actual signal reason mismatch':w=>{const c=new AbortController();c.abort({});w.transports[0].signal=c.signal;w.originals[1].effectiveSignal=c.signal;},
+  'input abort not observed before cancel':w=>{w.transports[0].acquisition.signalHistory.abort=13;},
+  'effective abort not observed before cancel':w=>{w.transports[0].signalHistory.abort=13;},
+  'missing native signal snapshot':w=>{delete w.originals[3].evidenceInvoke.input;},
+  'foreign signal reason snapshot':w=>{w.originals[2].evidenceSettle.input.reason={};},
+  'original effective read began aborted':w=>{w.originals[1].evidenceInvoke.effective.aborted=true;},
   'pending release':w=>{w.transports[0].release.state='pending';},'failed release undefined':w=>{w.transports[0].release.state='rejected';w.transports[0].release.reason=undefined;},
   'wrong release receiver':w=>{w.transports[0].release.receiver={};},'missing original release return':w=>{w.transports[0].release.returnAt=0;},
   'duplicate release':w=>{w.transports[0].releases=2;},'early unlock':w=>{w.transports[0].readers[0].unlockAt=10;},'duplicate unlock':w=>{w.transports[0].readers[0].unlocks=2;},
+  'unlock rejected undefined':w=>{w.originals[6].state='rejected';w.originals[6].reason=undefined;},'release promise replaced':w=>{w.transports[0].release.returned=Promise.resolve();},
   'releaseLock error':w=>{w.transports[0].readers[0].unlockFailed=true;w.syncFailures.push(new TypeError('synthetic'));},'locked body':w=>{w.transports[0].response.body.locked=true;},
   'failed restoration':w=>{w.restored=false;},'observer undefined':w=>{w.observerFailures.push(undefined);},'sync undefined':w=>{w.syncFailures.push(undefined);},
-  'source expiry':w=>{w.sourceExpired=1;},'unknown source':w=>{w.sourceExpired=null;},'body and cleanup failures':w=>{w.failures.push({},undefined);},
+  'source expiry':w=>{w.sourceExpired=1;},'unknown source':w=>{w.sourceExpired=null;},'body and cleanup failures':w=>{w.failures.push({},undefined);},'reporting undefined':w=>{w.reportingFailures.push(undefined);},
   'late independent join failure':w=>{w.originals.push({kind:'late',state:'rejected',reason:undefined});}
  };
  for(const [name,mutate] of Object.entries(nativeCounterfactuals))test('Bifrost SDK evaluator refuses '+name,()=>{const w=nativeEvidence();mutate(w);assert.equal(evaluator.evaluateBifrostNativeControl(w).qualified,false);});
  test('Bifrost SDK qualification needs four independent exact-runtime roles after restoration',()=>{
-  const identity={guard:()=>{}},reports=controls(identity);assert.ok(reports.every(r=>r.qualified));
+  const identity=unitNativeIdentity(),reports=controls(identity);assert.ok(reports.every(r=>r.qualified));
   const qualify=r=>evaluator.bifrostQualification(r,identity,'bifrost','stream');assert.ok(qualify(reports));assert.equal(qualify(reports.slice(1)),undefined);
   assert.equal(qualify(reports.map((r,i)=>i===2?{...r,qualified:false}:r)),undefined);
   assert.equal(qualify(reports.map(r=>({...r,owner:reports[0].owner}))),undefined);
+  assert.equal(qualify(reports.map((r,i)=>i===2?{...r,owner:undefined}:r)),undefined);
   assert.equal(qualify(reports.map((r,i)=>i===2?{...r,identity:{}}:r)),undefined);
   assert.equal(qualify(reports.map((r,i)=>i===2?{...r,provider:'novita'}:r)),undefined);
   assert.equal(qualify(reports.map((r,i)=>i===2?{...r,role:'eof'}:r)),undefined);
+  assert.equal(qualify(reports.map((r,i)=>i===2?{...r,api:'simple'}:r)),undefined);
+  assert.equal(qualify(reports.map((r,i)=>i===2?{...r,contract:undefined}:r)),undefined);
+  assert.equal(qualify(reports.map((r,i)=>i===2?{...r,contract:'stored-error-after-join-v1'}:r)),undefined);
+  for(const patch of [{pin:'e2a8b8d4ec290cd6c035f3568a14e4d7c6433635'},{pin:'old'},{node:''},{guard:undefined},{fetch:undefined}]){
+   const other=Object.freeze({...identity,...patch});assert.equal(evaluator.bifrostQualification(controls(other),other,'bifrost','stream'),undefined);
+  }
  });
  test('Bifrost SDK nonpartial controls cannot borrow the stored-error disposition',()=>{
-  const identity={guard:()=>{}};
-  for(const role of ['eof','preabort','provider_error']){const w=controlEvidence(role,identity);w.originals[1].state='rejected';assert.equal(evaluator.evaluateBifrostNativeControl(w).qualified,false);}
+  const identity=unitNativeIdentity();
+  for(const role of ['eof','preabort','provider_error']){const w=controlEvidence(role,identity);w.originals[0].state='rejected';assert.equal(evaluator.evaluateBifrostNativeControl(w).qualified,false);}
   const cold=controlEvidence('preabort',identity);delete cold.preabortPostDelta;assert.equal(evaluator.evaluateBifrostNativeControl(cold).qualified,false);
   cold.preabortPostDelta=0;cold.caller.abortCalled=false;assert.equal(evaluator.evaluateBifrostNativeControl(cold).qualified,false);
   const dispatched=controlEvidence('preabort',identity);dispatched.preabortPostDelta=1;assert.equal(evaluator.evaluateBifrostNativeControl(dispatched).qualified,false);
-  const provider=controlEvidence('provider_error',identity);provider.caller.signal.aborted=true;assert.equal(evaluator.evaluateBifrostNativeControl(provider).qualified,false);
+  const provider=controlEvidence('provider_error',identity);provider.caller.abortCalled=true;assert.equal(evaluator.evaluateBifrostNativeControl(provider).qualified,false);
   const eof=controlEvidence('eof',identity);eof.transports[0].readers=[];assert.equal(evaluator.evaluateBifrostNativeControl(eof).qualified,false);
  });
  test("Bifrost SDK inventories preserve original products and separate eight controls and two progress cases",()=>{

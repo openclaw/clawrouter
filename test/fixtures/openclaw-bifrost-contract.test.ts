@@ -85,48 +85,62 @@ export function bifrostInvocationBound(w:any,t:any):boolean {
 export function sameBifrostDescriptor(a:any,b:any):boolean {
  return !!a&&!!b&&["value","get","set","writable","enumerable","configurable"].every(k=>a[k]===b[k]);
 }
-export function bifrostCancelOperand(read:any,cancel:any,caller:any):string {
+export function bifrostNativeContract(identity:any,provider:string,api:string):string|undefined {
+ if(!identity||!Object.isFrozen(identity)||identity.pin!=="d8bb939408aa4d2be7df0161748edb52ebf3b1fb"||provider!=="bifrost"||!["stream","simple"].includes(api)||
+  ![identity.node,identity.platform,identity.arch,identity.undici].every(v=>typeof v==="string"&&v.length>0)||typeof identity.guard!=="function"||typeof identity.fetch!=="function")return;
+ return "stored-error-after-join-v2";
+}
+export function bifrostCancelOperand(read:any,cancel:any):string {
  if(!Array.isArray(cancel?.args)||cancel.args.length>1)return "invalid";
  if(cancel.args.length===0)return "absent";
  if(cancel.args[0]===undefined)return "undefined";
- if(cancel.args[0]===caller.reason)return "caller";
- if(cancel.args[0]===read.reason)return "read";
- return "invalid";
+ return Object.is(cancel.args[0],read.reason)?"same-as-stored":"distinct-defined";
 }
 // Pure, predefined vector over the original graph. It does not consult a
 // product verdict, learn an allowlist, compare error names or infer C1's cause.
 export function bifrostStoredErrorVector(w:any):any[]|undefined {
- const ts=w.transports.filter((t:any)=>t.method==="POST");if(ts.length!==1)return;
+ const ts=w.transports.filter((t:any)=>t.method==="POST");if(ts.length!==1||w.transports.filter((t:any)=>t.method==="GET").length!==1||w.evidenceJoined!==true)return;
  const t=ts[0],a=t.acquisition,c=w.caller;
  if(!c||!bifrostInvocationBound(w,t)||c.owner!==w.owner||t.owner!==w.owner||!a||a.owner!==w.owner||a.transport!==t||a.response!==t.response||
-   a.guard!==w.identity.guard||a.operation?.state!=="fulfilled"||a.pending!==a.operation.pending||a.result?.response!==t.response||!a.input||a.inputSignal!==a.input.signal&&a.inputSignal!==a.input.init?.signal||
-   !t.guardObserved||!t.response||t.bodies.length!==1||t.readers.length!==1||t.fetch.state!=="fulfilled")return;
+   a.guard!==w.identity.guard||a.operation?.state!=="fulfilled"||a.pending!==a.operation.pending||a.pending!==a.operation.returned||a.result?.response!==t.response||!a.input||a.inputSignal!==a.input.signal&&a.inputSignal!==a.input.init?.signal||
+   !t.guardObserved||!t.response||t.bodies.length!==1||t.readers.length!==1||t.fetch.state!=="fulfilled"||!t.fetch.pending||t.fetch.pending!==t.fetch.returned)return;
  const r=t.readers[0];if(r.transport!==t||r.body!==t.response.body||r.body!==t.bodies[0]||r.owner!==w.owner)return;
  const reads=w.originals.filter((o:any)=>o.kind==="read"&&o.reader===r&&o.state==="rejected"),read=reads[0];
  const closes=w.originals.filter((o:any)=>o.kind==="closed"&&o.reader===r),closed=closes[0];
  const cancels=w.originals.filter((o:any)=>o.kind==="cancel"&&o.reader===r),cancel=cancels[0];
+ const unlocks=w.originals.filter((o:any)=>o.kind==="unlock"&&o.reader===r),unlock=unlocks[0];
  const prefix=w.originals.find((o:any)=>o.kind==="read"&&o.reader===r&&o.state==="fulfilled"&&o.value?.done===false&&o.value.value?.byteLength>0);
- if(reads.length!==1||closes.length!==1||cancels.length!==1||!prefix||!read||!closed||!cancel||
+ if(reads.length!==1||closes.length!==1||cancels.length!==1||unlocks.length!==1||!prefix||!read||!closed||!cancel||unlock.state!=="fulfilled"||
    (read.reason===undefined||read.reason===null||typeof read.reason!=="object")||closed.state!=="rejected"||cancel.state!=="rejected"||closed.reason!==read.reason||cancel.reason!==read.reason||
-   ![read,closed,cancel,prefix].every(o=>o.owner===w.owner&&o.receiver===r.original)||
-   closed.pending!==r.closed||bifrostCancelOperand(read,cancel,c)==="invalid"||
+   ![read,closed,cancel,prefix,unlock].every(o=>o.owner===w.owner&&o.receiver===r.original)||
+   ![read,closed,cancel,prefix].every(o=>!!o.pending&&o.pending===o.returned)||
+   closed.pending!==r.closed||bifrostCancelOperand(read,cancel)==="invalid"||
    !c.abortCalled||!c.abortedAfter||!c.noEarlierFailure||c.pending.length!==1||c.pending[0]!==read||
    read.callerAbortedAtInvoke!==false||read.callerAbortedAtSettle!==true||read.effectiveAbortedAtSettle!==true||
    c.signal!==read.callerSignal||t.signal!==read.effectiveSignal||!c.delivered||c.result!=="aborted")return;
- const order=[r.acquired,closed.invoke,prefix.settle,read.invoke,c.delivered,c.abortInvoke,c.abortObserved,read.settle,closed.settle,cancel.invoke,cancel.settle,r.unlockAt];
+ const signals=[c.signal,a.inputSignal,t.signal].map(bifrostSignalEvidence);
+ if(signals.some(s=>!s.observed||!s.aborted||s.reason===null||typeof s.reason!=="object"||!Object.is(s.reason,read.reason)))return;
+ for(const key of ["caller","input","effective"]){
+  if(read.evidenceInvoke?.[key]?.observed!==true||read.evidenceInvoke[key].aborted!==false||cancel.evidenceInvoke?.[key]?.observed!==true||cancel.evidenceInvoke[key].aborted!==true||!Object.is(cancel.evidenceInvoke[key].reason,read.reason))return;
+  if([read,closed,cancel].some(o=>o.evidenceSettle?.[key]?.observed!==true||o.evidenceSettle[key].aborted!==true||!Object.is(o.evidenceSettle[key].reason,read.reason)))return;
+ }
+ const order=[r.acquired,closed.invoke,prefix.settle,read.invoke,c.delivered,c.abortInvoke,c.abortObserved,a.signalHistory?.abort,t.signalHistory?.abort,read.settle,closed.settle,cancel.invoke,cancel.returnAt,cancel.settle,unlock.invoke,unlock.returnAt,r.unlockAt];
+ // These are observed invocation/reaction orders, not native promise state transitions.
+ // Cancel and releaseLock can run before the queued rejection observers.
  if(!order.every(n=>Number.isSafeInteger(n)&&n>0)||!(r.acquired<closed.invoke&&closed.invoke<prefix.settle&&
-   prefix.settle<read.invoke&&read.invoke<c.abortInvoke&&c.delivered<c.abortInvoke&&c.abortInvoke<=c.abortObserved&&
-   c.abortObserved<read.settle&&c.abortObserved<closed.settle&&Math.max(read.settle,closed.settle)<cancel.invoke&&cancel.invoke<cancel.settle&&
-   Math.max(read.settle,closed.settle,cancel.settle)<r.unlockAt))return;
+   prefix.settle<read.invoke&&prefix.settle<c.delivered&&read.invoke<c.abortInvoke&&c.delivered<c.abortInvoke&&c.abortInvoke<=c.abortObserved&&
+   c.abortObserved<read.settle&&c.abortObserved<closed.settle&&Math.max(c.abortObserved,a.signalHistory.abort,t.signalHistory.abort)<cancel.invoke&&
+   cancel.invoke<cancel.returnAt&&cancel.returnAt<cancel.settle&&cancel.returnAt<unlock.invoke&&unlock.invoke<unlock.returnAt&&unlock.returnAt<r.unlockAt))return;
  if(r.unlocks!==1||r.unlockReceiver!==r.original||r.body.locked||r.unlockFailed||t.releases!==1||!t.releaseDone||
-   t.release?.state!=="fulfilled"||t.release.acquisition!==a||t.release.receiver!==a.result||
+   t.release?.state!=="fulfilled"||t.release.acquisition!==a||t.release.receiver!==a.result||!t.release.pending||t.release.pending!==t.release.returned||
    !(t.release.returnAt>t.release.invoke&&t.release.settle>t.release.returnAt))return;
  const vector=[read,closed,cancel];
  if(w.originals.some((o:any)=>o.state!=="fulfilled"&&!vector.includes(o)))return;
  return vector;
 }
 export function evaluateBifrostNativeControl(w:any):any {
- const vector=bifrostStoredErrorVector(w),hard=w.failures.length||w.observerFailures.length||w.syncFailures.length||
+ const contract=bifrostNativeContract(w.identity,w.provider,w.api);
+ const vector=bifrostStoredErrorVector(w),hard=!contract||!w.owner||typeof w.owner!=="object"||w.evidenceJoined!==true||w.failures.length||w.observerFailures.length||w.syncFailures.length||(w.reportingFailures?.length??1)||
   !w.restored||w.sourceExpired!==0||w.originals.some((o:any)=>o.state==="pending"||o.state==="threw")||
   w.transports.some((t:any)=>!bifrostInvocationBound(w,t)||!t.guardObserved||t.owner!==w.owner||t.acquisition?.owner!==w.owner||t.acquisition?.response!==t.response||
    t.acquisition?.transport!==t||t.acquisition?.guard!==w.identity.guard||t.acquisition?.operation?.state!=="fulfilled"||t.acquisition?.pending!==t.acquisition?.operation?.pending||t.acquisition?.result?.response!==t.response||t.readers.length!==1||t.bodies.length!==1||
@@ -139,21 +153,22 @@ export function evaluateBifrostNativeControl(w:any):any {
  const matched=role==="partial"?!!vector:role==="preabort"?strict&&w.preabortPostDelta===0&&w.caller?.abortCalled===true&&w.caller?.signal.aborted===true&&w.caller?.result==="error"&&w.caller?.emptyContent===true&&posts===0:
   (role==="eof"||role==="provider_error")&&strict&&posts===1&&w.caller?.abortCalled===false&&w.caller?.signal.aborted===false&&
    w.caller?.result===(role==="eof"?"stop":"error");
- return {qualified:!hard&&gets===1&&matched===true,vector:vector?"stored_error":"strict",operand:vector?bifrostCancelOperand(vector[0],vector[2],w.caller):null,
+ return {qualified:!hard&&gets===1&&matched===true,contract,vector:vector?"stored_error":"strict",operand:vector?bifrostCancelOperand(vector[0],vector[2]):null,
   vectorObserved:!!vector,owner:w.owner,identity:w.identity,provider:w.provider,api:w.api,role};
 }
 export function bifrostQualification(reports:any[],identity:any,provider:string,api:string):any {
+ const contract=bifrostNativeContract(identity,provider,api);if(!contract)return;
  const roles=["eof","preabort","partial","provider_error"];
  if(reports.length!==4||new Set(reports.map(r=>r.owner)).size!==4||!roles.every(role=>reports.filter(r=>r.role===role).length===1)||
-  reports.some(r=>!r.qualified||r.identity!==identity||r.provider!==provider||r.api!==api))return;
+  reports.some(r=>!r.qualified||!r.owner||typeof r.owner!=="object"||r.contract!==contract||r.identity!==identity||r.provider!==provider||r.api!==api))return;
  const partial=reports.find(r=>r.role==="partial");if(partial.vector!=="stored_error")return;
- return Object.freeze({identity,provider,api,roles:Object.freeze(roles),vector:partial.vector,operand:partial.operand});
+ return Object.freeze({identity,provider,api,contract,roles:Object.freeze(roles),vector:partial.vector});
 }
 export function bifrostProductExpected(w:any,q:any):any[] {
- if(!q||q.identity!==w.identity||q.provider!==w.provider||q.api!==w.api||q.vector!=="stored_error"||
+ if(!q||!q.contract||q.contract!==bifrostNativeContract(w.identity,w.provider,w.api)||q.identity!==w.identity||q.provider!==w.provider||q.api!==w.api||q.vector!=="stored_error"||
    q.roles?.join(",")!=="eof,preabort,partial,provider_error")return [];
  const raw=evaluateBifrostNativeControl({...w,role:"partial"});
- return raw.qualified&&raw.operand===q.operand?bifrostStoredErrorVector(w)??[]:[];
+ return raw.qualified?bifrostStoredErrorVector(w)??[]:[];
 }
 export function bifrostProgressQualified(f:any):boolean {
  const yes=["uniqueRequest","callerAborted","actualText","nativeQualified","workerRetired","inboundAborted","sourceCanceled",
@@ -244,13 +259,14 @@ export function bifrostCaseEvidence(index:number,w:any,proof:any,worker:boolean,
    abortOperand:bifrostReasonMetadata(c?.abortArgumentCount>0,c?.reason),callerReason:bifrostReasonMetadata(c?.evidenceAbort?.observed===true,c?.evidenceAbort?.reason),
    operandSignal:c?.abortArgumentCount>0&&c?.evidenceAbort?.observed===true?Object.is(c.reason,c.evidenceAbort.reason):null},
   {...base,part:"order",acquired:num(r?.acquired),prefix:num(prefix?.settle),delivered:num(c?.delivered),abortInvoke:num(c?.abortInvoke),abortObserved:num(c?.abortObserved),abortReturn:num(c?.abortReturn),
-   readInvoke:num(read?.invoke),readSettle:num(read?.settle),closedInvoke:num(closed?.invoke),closedSettle:num(closed?.settle),cancelInvoke:num(cancel?.invoke),cancelReturn:num(cancel?.returnAt),cancelSettle:num(cancel?.settle),unlockAt:num(r?.unlockAt),
+   cancelOperand:{...bifrostReasonMetadata(Array.isArray(cancel?.args)&&cancel.args.length>0,cancel?.args?.[0]),kind:cancel&&observed(read)?bifrostCancelOperand(read,cancel):"unobserved"},
+   readInvoke:num(read?.invoke),readSettle:num(read?.settle),closedInvoke:num(closed?.invoke),closedSettle:num(closed?.settle),cancelInvoke:num(cancel?.invoke),cancelReturn:num(cancel?.returnAt),cancelSettle:num(cancel?.settle),
    readRejectedAtCancel:flag(cancel?.evidenceInvoke?.readRejected),closedRejectedAtCancel:flag(cancel?.evidenceInvoke?.closedRejected),pendingReadsAtCancel:num(cancel?.evidenceInvoke?.pendingReads),
    readInvokeSignals:signalStates(read,"evidenceInvoke"),readSettleSignals:signalStates(read,"evidenceSettle"),cancelInvokeSignals:signalStates(cancel,"evidenceInvoke")},
   {...base,part:"retirement",states:{read:state(read),closed:state(closed),cancel:state(cancel),release:state(release),unlock:state(unlock),fetch:state(t?.fetch)},
    counts:{originals:w.originals.length,pending:w.originals.filter((o:any)=>o.state==="pending").length,rejected:w.originals.filter((o:any)=>o.state==="rejected").length,sync:w.syncFailures.length,observer:w.observerFailures.length,restoration:num(w.evidenceRestoreFailures),worker:workerFailures.length,unlocks:num(r?.unlocks)},
    release:{invoke:num(release?.invoke),returned:num(release?.returnAt),settle:num(release?.settle),promise:release?!!release.pending&&release.pending===release.returned:null,defined:observed(release)?release.reason!==undefined:null},
-   unlock:{invoke:num(unlock?.invoke),returned:num(unlock?.returnAt)},
+   unlock:{invoke:num(unlock?.invoke),returned:num(unlock?.returnAt)},unlockAt:num(r?.unlockAt),
    // Undefined failure counts: all, synchronous, observer, restoration/cleanup.
    undefined:[w.failures.filter((e:unknown)=>e===undefined).length,w.syncFailures.filter((e:unknown)=>e===undefined).length,w.observerFailures.filter((e:unknown)=>e===undefined).length,num(w.evidenceRestoreUndefined)],
    bodyUnlocked:r?flag(r.body.locked===false):null,restored:flag(w.restored),joins:flag(w.evidenceJoined),worker}
@@ -265,10 +281,11 @@ export function validateBifrostEvidence(record:any):void {
  const fields:any={
   identity:{ids:"transport acquisition reader read closed cancel release",counts:"posts gets acquisitions readers reads closed cancel",bindings:"invocation guard response reader receivers readPromise closedPromise cancelPromise fetchArgs signals",firstFailed:null,source:"canceled settled expired held",inbound:boolean},
   reasons:{read:reason,closed:reason,cancel:reason,readClosed:boolean,readCancel:boolean,readSignals:signals,closedSignals:signals,cancelSignals:signals,cancelArgs:number,cancelRead:boolean,cancelInput:signals,abortOperand:reason,callerReason:reason,operandSignal:boolean},
-  order:Object.fromEntries(("acquired prefix delivered abortInvoke abortObserved abortReturn readInvoke readSettle closedInvoke closedSettle cancelInvoke cancelReturn cancelSettle unlockAt pendingReadsAtCancel").split(" ").map(k=>[k,number])),
-  retirement:{states:"read closed cancel release unlock fetch",counts:"originals pending rejected sync observer restoration worker unlocks",release:(v:any)=>v&&Object.keys(v).sort().join(",")==="defined,invoke,promise,returned,settle"&&[v.invoke,v.returned,v.settle].every(number)&&[v.promise,v.defined].every(boolean),unlock:"invoke returned",undefined:(v:any)=>Array.isArray(v)&&v.length===4&&v.every(number),bodyUnlocked:boolean,restored:boolean,joins:boolean,worker:boolean},
+  order:Object.fromEntries(("acquired prefix delivered abortInvoke abortObserved abortReturn readInvoke readSettle closedInvoke closedSettle cancelInvoke cancelReturn cancelSettle pendingReadsAtCancel").split(" ").map(k=>[k,number])),
+  retirement:{states:"read closed cancel release unlock fetch",counts:"originals pending rejected sync observer restoration worker unlocks",release:(v:any)=>v&&Object.keys(v).sort().join(",")==="defined,invoke,promise,returned,settle"&&[v.invoke,v.returned,v.settle].every(number)&&[v.promise,v.defined].every(boolean),unlock:"invoke returned",unlockAt:number,undefined:(v:any)=>Array.isArray(v)&&v.length===4&&v.every(number),bodyUnlocked:boolean,restored:boolean,joins:boolean,worker:boolean},
  };
  Object.assign(fields.order,{readRejectedAtCancel:boolean,closedRejectedAtCancel:boolean,readInvokeSignals:signals,readSettleSignals:signals,cancelInvokeSignals:signals});
+ fields.order.cancelOperand=(v:any)=>v&&Object.keys(v).sort().join(",")==="defined,kind,object,observed"&&reason({observed:v.observed,defined:v.defined,object:v.object})&&["absent","undefined","same-as-stored","distinct-defined","invalid","unobserved"].includes(v.kind);
  const schema=fields[record?.part],base=["v","pin","lane","case","evidence","complete","part"];
  if(!schema||!record||record.v!==1||record.pin!=="d8bb939408aa4d2be7df0161748edb52ebf3b1fb"||record.lane!=="sdk"||record.evidence!==true||
   typeof record.complete!=="boolean"||!Number.isSafeInteger(record.case)||record.case<0||record.case>=32||
@@ -384,7 +401,7 @@ async function fixtureOwned(row:Case,body:(discover:()=>Promise<any>,control:Abo
  const caseIndex=checkpointCase(row);
  const state=await checkpoints.observe(caseIndex,"setup",createOpenClawTestState,undefined,[{label:"bifrost-worker-contract"}]),control=new AbortController();
  const w:any={owner:Object.freeze({id:row.id}),identity:nativeIdentity,provider:"bifrost",api:row.api,role:row.control,
-  originals:[],observers:[],transports:[],acquisitions:[],failures:[],observerFailures:[],syncFailures:[],restored:false,sourceExpired:null,sequence:0};
+  originals:[],observers:[],transports:[],acquisitions:[],failures:[],observerFailures:[],syncFailures:[],reportingFailures:checkpoints.failures,restored:false,sourceExpired:null,sequence:0};
  const ownership=createBifrostInvocationOwnership(new AsyncLocalStorage());
  const failures:unknown[]=w.failures,originals:Original[]=w.originals,transports:Transport[]=w.transports,restores:Array<()=>void>=[];
  const observer=(p:Promise<unknown>)=>{w.observers.push(p.then(()=>{},e=>{w.observerFailures.push(e);}));};
