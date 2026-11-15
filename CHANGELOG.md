@@ -35,6 +35,8 @@
 
 - Bind LiteLLM fixture transports to individual Worker ingresses with opt-in native request context and retain bounded retirement failure observations.
 
+- Join replayed response reads and cancellation before releasing readers, preserving independent source and delivery retirement failures.
+
 - Build and pack the provider plugin contract as a standalone ESM package with TypeScript declarations for external provider tooling.
 
 - Add opt-in, bounded native consumer runner diagnostics that separate collection failures from missing startup reports without changing SDK test verdicts.
