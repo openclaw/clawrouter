@@ -2396,7 +2396,7 @@ test("owned ledger actual sampler preserves each original phase predicate and un
     const f=await ownedLedgerFactory(overrides),rec=f.createOwnedProcessLedger();let failure,failed=false;
     try{await f.privateProcesses(rec);}catch(error){failed=true;failure=error;}
     assert.equal(failed,true);if(!leaf)assert.equal(failure,undefined);else assert.ok(failure instanceof Error);
-    rec.error(2,failure);const trace=rec.finish();assert.deepEqual(trace[1],[2,stage,leaf?1:0,leaf,seen,passed,failure!==undefined]);validateOwnedTrace(trace,1);
+    rec.error(2,failure);const trace=rec.finish();assert.deepEqual(trace[1],[2,stage,leaf?1:0,leaf,seen,passed,failure!==undefined]);assert.throws(()=>validateOwnedTrace(trace,1));
   }
   for(const [index,value,leaf,seen,passed] of [[0,"?",1,1,0],[19,"?",2,3,1],[1,"?",3,7,3],[2,"?",3,7,3]]){
     const f=await ownedLedgerFactory();f.fields[index]=value;const rec=f.createOwnedProcessLedger();let failure;try{await f.privateProcesses(rec);}catch(e){failure=e;}assert.ok(failure instanceof Error);rec.error(2,failure);assert.deepEqual(rec.finish()[1],[2,6,1,leaf,seen,passed,true]);
@@ -2433,10 +2433,13 @@ async function ownedProcessScenario(scenario,stdout="",override={},supplied) {
   let settled=false;promise.then(()=>{settled=true;});
   if(f.intervals.length){
     if(["monitor_undefined","iterator","row_key","capacity","held","monitor_proc"].includes(scenario)){f.intervals[0].fn();if(scenario!=="held")await samples[0].catch(()=>{});}
-    if(scenario==="timeout"||scenario==="report_fault")f.timers[0].fn();
+    if(["timeout","report_fault","escalation"].includes(scenario))f.timers[0].fn();
+    if(scenario==="escalation")f.timers[1].fn();
     if(scenario==="interrupt")f.signals.emit("SIGINT");
+    if(scenario==="interrupt_term")f.signals.emit("SIGTERM");
     if(scenario==="child_error")f.child.emit("error",undefined);
-    if(scenario==="capture")f.child.stdout.emit("data",Buffer.alloc(1024*1024+1));else if(stdout)f.child.stdout.emit("data",Buffer.from(stdout));
+    if(stdout)f.child.stdout.emit("data",Buffer.from(stdout));
+    if(scenario==="capture")f.child.stdout.emit("data",Buffer.alloc(1024*1024+1));
     f.child.emit("close",null,"SIGTERM");
     if(scenario==="held"){
       await Promise.resolve();assert.equal(settled,false);heldReject(undefined);await samples[0].catch(()=>{});
@@ -2500,7 +2503,7 @@ test("owned ledger original sampler errors still dispatch and settle when the re
   assert.equal(f.calls.filter(r=>r[0]==="clearTimeout").length,2);
 });
 test("owned ledger actual original pipeline keeps source-bound trace and lossless capture hashes",async()=>{
-  for(const scenario of ["child_error","monitor_undefined","capacity","report_fault","held"]){
+  for(const scenario of ["child_error","monitor_undefined","iterator","row_key","capacity","capture","timeout","interrupt","interrupt_term","escalation","report_fault","held","final_undefined"]){
     let original;
     const produced=await receiptActualProducer("wrangler_input",false,{diagnostics:true,ownedProcess:async(command,args,options,stdout)=>{
       assert.ok(options.recorder);assert.equal(options.timeoutMs,120000);
@@ -2515,6 +2518,38 @@ test("owned ledger actual original pipeline keeps source-bound trace and lossles
     if(scenario==="monitor_undefined"){assert.equal(wire.detail[7][1][0],2);assert.equal(wire.detail[7][2][1],1);}
     if(scenario==="report_fault"){assert.ok(original.observerErrors.includes(undefined));assert.ok(produced.reason.errors.includes(undefined));}
   }
+});
+test("owned ledger source-required reasons and original flags reject contradictory close and receipt frames",async()=>{
+  for(const scenario of ["monitor_undefined","timeout"]){
+    let original;
+    const produced=await receiptActualProducer("wrangler_input",false,{diagnostics:true,ownedProcess:async(command,args,options,stdout)=>{
+      const f=await ownedProcessScenario(scenario,stdout.split("\n").slice(0,6).join("\n")+"\n",{}, {command,args,options});original=f.result;return original;
+    }});
+    const wire=await lifecyclePacket(produced,frames=>frames,true),trace=wire.detail[7];assert.ok(trace);validateReceiptOwnedDiagnostic(wire);
+    const close=produced.frames.map(line=>JSON.parse(line.slice("EDGE_PACKAGING_V1 ".length))).find(row=>row.role==="child"&&row.phase==="build_a_close");
+    assert.ok(close);assert.equal(close.timedOut,original.timedOut);assert.equal(close.interrupted,original.interrupted);validateOwnedCloseDiagnostic(close);
+    const bad=structuredClone(wire),badClose=structuredClone(close);
+    if(scenario==="monitor_undefined"){
+      assert.deepEqual(trace[1],[2,0,0,0,0,0,false]);assert.equal(bad.detail[6][6],1);
+      bad.detail[7][2]=Array(13).fill(0);badClose.trace[2]=Array(13).fill(0);
+    }else{
+      assert.deepEqual(trace[2],[1,1,1,0,0,4,2,3,2,1,0,0,0]);assert.equal(bad.detail[6][5],83);
+      bad.detail[6][5]=81;badClose.timedOut=false;
+    }
+    assert.throws(()=>validateOwnedCloseDiagnostic(badClose));assert.throws(()=>validateReceiptOwnedDiagnostic(bad));assert.throws(()=>emitContainerFailure([bad],()=>assert.fail("invalid diagnostic emitted")));
+    const rejected=await lifecyclePacket(produced,frames=>frames.map(line=>{const row=JSON.parse(line.slice("EDGE_PACKAGING_V1 ".length));return row.role==="child"&&row.phase==="build_a_close"?"EDGE_PACKAGING_V1 "+JSON.stringify(badClose)+"\n":line;}));
+    assert.equal(rejected.child[1],"invalid");assert.equal(rejected.builder,null);
+  }
+  for(const scenario of ["interrupt","interrupt_term"]){
+    const f=await ownedProcessScenario(scenario);assert.equal(f.result.interrupted,true);
+    validateOwnedTrace(f.result.ownedTrace,f.result.errors.length,[false,true]);
+    assert.throws(()=>validateOwnedTrace(f.result.ownedTrace,f.result.errors.length,[false,false]));
+  }
+  const clean=await ownedProcessScenario("child_error");
+  validateOwnedTrace(clean.result.ownedTrace,1,[false,false]);
+  for(const flags of [[true,false],[false,true]])assert.throws(()=>validateOwnedTrace(clean.result.ownedTrace,1,flags));
+  const broken=await ownedProcessScenario("report_fault");assert.deepEqual(broken.result.ownedTrace,[1,null,null,[1,1,0]]);
+  validateOwnedTrace(broken.result.ownedTrace,0,[true,false]);
 });
 test("owned ledger original escalation and default-off process preserve arguments reads and settlement",async()=>{
   for(const enabled of [false,true])for(const observerFault of enabled?[false,true]:[false]){
@@ -2535,7 +2570,7 @@ test("owned ledger rejects undisposed requests and contradictory saturated or ig
   const valid=[255,255,255,0,0,1,2,1,2,1,0,7,0];validateOwnedTrace([1,[2,0,0,0,0,0,false],valid,[0,0,0]],1);
   for(const bad of [[...valid.slice(0,11),6,0],[...valid.slice(0,11),1,0],[1,1,0,1,0,4,2,3,2,2,1,0,1],[1,1,1,0,1,4,2,3,2,1,0,0,0]])assert.throws(()=>validateOwnedTrace([1,null,bad,[0,0,0]],0));
   assert.throws(()=>validateOwnedTrace([1,[2,6,1,3,7,3,false],zero,[0,0,0]],1));
-  validateOwnedTrace([1,[2,6,2,0,3,3,false],zero,[0,0,0]],1);
+  assert.throws(()=>validateOwnedTrace([1,[2,6,2,0,3,3,false],zero,[0,0,0]],1));
   for(const trace of [[1,null,[1,1,1,0,0,63,7,1,2,1,0,0,0],[0,0,0]],[1,null,[255,255,0,255,0,1,2,1,2,3,2,32,255],[0,0,0]],[1,null,null,[65535,65535,2]],[1,[1,0,0,0,0,0,true],[1,1,0,1,0,4,2,3,2,3,2,0,1],[0,0,0]]])assert.throws(()=>validateOwnedTrace(trace,trace[1]?1:0));
   assert.throws(()=>validateOwnedTrace([1,null,zero,[0,0,0]],null));
   for(const defined of [false,true]){
@@ -2554,7 +2589,7 @@ test("owned ledger saturation first error isolation and maximum lossless version
   rec.error(8,new Error("late"));assert.deepEqual(rec.finish(),trace);const independent=createOwnedProcessLedger();independent.error(8,undefined);assert.equal(independent.finish()[1][0],8);
   for(const change of [t=>t[1][0]=10,t=>t[1][1]=10,t=>t[1][2]=1,t=>t[1][6]=null,t=>t[2][1]=254,t=>t[2][11]=64,t=>t[2][6]=0,t=>t[2][7]=6,t=>t[2][8]=3,t=>t[2][9]=2,t=>t[3][1]=1]){const bad=structuredClone(trace);change(bad);assert.throws(()=>validateOwnedTrace(bad,2));}
   const produced=await receiptActualProducer("wrangler_input",false,{processResult:truncateActualBuilder}),prior=await lifecyclePacket(produced);prior.defined=false;prior.parser=[1,2,false,6,1,14,0,16383,8191];prior.count="ONE";prior.lifecycle=[1,256,256,14,0,2,0];prior.reports=[65535,65535];prior.builder=[1,1,3,-65535,14,127,65535,65535,Number.MAX_SAFE_INTEGER,hex,Number.MAX_SAFE_INTEGER,other];
-  const wideTrace=[1,[2,6,1,3,7,3,true],[255,255,255,255,255,63,7,6,3,3,2,63,255],[0,0,0]];
+  const wideTrace=[1,[2,6,1,3,7,3,true],[255,255,255,255,255,63,7,5,2,3,2,63,255],[0,0,0]];
   const wire=packReceiptOwnedDiagnostic(prior,wideTrace);assert.deepEqual(unpackReceiptOwnedDiagnostic(wire),prior);assert.ok(Buffer.byteLength(JSON.stringify(wire))<=512);
   for(const change of [r=>r.detail[6][9]+="=",r=>r.detail[6][11]="A".repeat(42),r=>r.detail[6][9]=r.detail[6][9].slice(0,-1)+"B",r=>r.detail[7][1][6]=null,r=>r.detail[7][2][9]=4,r=>r.detail[7][3][2]=4,r=>r.detail.push(0)]){const bad=structuredClone(wire);change(bad);assert.throws(()=>validateReceiptOwnedDiagnostic(bad));}
   const capture=await receiptCapture(produced.frames),rows=[wire,{v:2,phase:"entry",state:"rejected",defined:false,exit:null,signal:null},{v:2,phase:"retirement",state:"rejected",defined:false,exit:null,signal:null}];createAttachProjection(capture.h.attached,{cid:hex,nonce:hex,contextHash:other},{internal:r=>rows.push(r)})(capture.h.attached.result);

@@ -1018,8 +1018,10 @@ const ownedTuple=(value,length)=>{
   if(!Array.isArray(value)||Object.getOwnPropertyNames(value).join()!==[...Array(length).keys(),"length"].join())refuse("owned-tuple");
   return Array.from({length},(_,i)=>ownData(value,String(i)));
 };
-export function validateOwnedTrace(value,errorCount) {
+export function validateOwnedTrace(value,errorCount,originalFlags) {
   const trace=ownedTuple(value,4);if(trace[0]!==1)refuse("owned-version");
+  const flags=originalFlags===undefined?null:ownedTuple(originalFlags,2);
+  if(flags&&!flags.every(v=>typeof v==="boolean"))refuse("owned-original-flags");
   if(!Number.isSafeInteger(errorCount)||errorCount<0||errorCount>65535)refuse("owned-error-count");
   trace[3]=ownedTuple(trace[3],3);const [faults,undefinedFaults,reportSaturation]=trace[3];
   if(![faults,undefinedFaults].every(n=>Number.isSafeInteger(n)&&n>=0&&n<=65535)||undefinedFaults>faults)refuse("owned-reports");
@@ -1052,6 +1054,11 @@ export function validateOwnedTrace(value,errorCount) {
   const unignored=Math.max(0,(saturation&8?256:thrown)-(saturation&32?Infinity:ignored),throwDefined===1||trace[1]?.[0]===1?1:0);
   const site=trace[1]?.[0], monitorError=Boolean(reasons&1)||[2,3,4].includes(site), captureError=Boolean(reasons&2)||site===5;
   const otherError=[6,7,8,9].includes(site)?1:0;
+  // Original catch/callback sites latch these facts before requesting a stop.
+  // A skipped dispatch still records its request; observer faults return above.
+  if([2,3,4].includes(site)&&!(reasons&1)||site===5&&!(reasons&2))refuse("owned-error-stop-reason");
+  if(reasons&32&&(!(reasons&31)||!attempts||reason===6))refuse("owned-escalation-origin");
+  if(flags&&(flags[0]!==Boolean(reasons&4)||flags[1]!==Boolean(reasons&24)))refuse("owned-stop-original-flags");
   if(site===1&&(ignored===0||throwDefined===1)&&trace[1][6]!==(throwDefined===2))refuse("owned-same-throw-definedness");
   if(errorCount<65535&&unignored+Number(monitorError)+Number(captureError)+otherError>errorCount)refuse("owned-stop-error-presence");
   return trace;
@@ -1062,7 +1069,7 @@ export function validateOwnedCloseDiagnostic(value) {
   const row=Object.fromEntries(keys.map(key=>[key,ownData(value,key)]));
   if(row.v!==2||row.role!=="child"||!["build_a_close","build_b_close"].includes(row.phase))refuse("owned-close-role");
   const prior={...row,v:1};delete prior.trace;validatePackagingDiagnostic(prior);
-  row.trace=validateOwnedTrace(row.trace,row.errors);
+  row.trace=validateOwnedTrace(row.trace,row.errors,[row.timedOut,row.interrupted]);
   if(Buffer.byteLength(JSON.stringify(row))>512)refuse("owned-close-capacity");
   return row;
 }
@@ -1086,7 +1093,7 @@ export function validateReceiptOwnedDiagnostic(value) {
   if(!value||Object.getOwnPropertyNames(value).sort().join()!==[...keys].sort().join())refuse("owned-receipt-keys");
   const row=Object.fromEntries(keys.map(key=>[key,ownData(value,key)]));if(row.v!==13)refuse("owned-receipt-version");
   row.detail=ownedTuple(row.detail,8);const prior=validateReceiptBuilderDiagnostic(unpackReceiptOwnedDiagnostic(row));
-  if(row.detail[7]!==null){if(!prior.builder)refuse("owned-unbound-trace");row.detail[7]=validateOwnedTrace(row.detail[7],prior.builder[6]);}
+  if(row.detail[7]!==null){if(!prior.builder)refuse("owned-unbound-trace");row.detail[7]=validateOwnedTrace(row.detail[7],prior.builder[6],[Boolean(prior.builder[5]&2),Boolean(prior.builder[5]&4)]);}
   if(Buffer.byteLength(JSON.stringify(row))>512)refuse("owned-receipt-capacity");return row;
 }
 export function validateContainerDiagnostic(value) {
