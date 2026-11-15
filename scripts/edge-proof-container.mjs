@@ -1099,6 +1099,29 @@ function inspectBuilderCloseGroup(rows, childLifecycle, role, recordTrace, allow
   const flags = [close.closed,close.timedOut,close.interrupted,out.esc,out.complete,err.esc,err.complete].reduce((mask,value,i)=>mask+(value?2**i:0),0);
   try { const projected=validateReportedBuilderProcess([1,role === "build_a" ? 1 : 2,close.outcome==="fulfilled"?1:close.defined?3:2,close.exit,receiptBuilderSignals.indexOf(close.signal),flags,close.errors,close.remaining,out.bytes,out.sha256,err.bytes,err.sha256]); if(recordTrace)recordTrace(close.v===2||close.v===3?close.trace:null,close.v===3?close.code:null,closes[0].v===4?closes[0].detail[7]:null);return projected; } catch { return null; }
 }
+// V17 alone requires a source-consistent successful builder prefix. These
+// counts describe the exact forwarded interval, not an inferred inner capture.
+function reconcileSuccessfulBuilderSummary(rows, lifecycle, role) {
+  const owners = lifecycle.accepts.filter(item=>item.role===role);
+  if (owners.length !== 1) return false;
+  const owner = owners[0], begin = rows.indexOf(owner.close), end = rows.indexOf(owner.row);
+  if (begin < 0 || end < begin+4 || owner.row.outcome !== "fulfilled" || owner.followup?.outcome !== "fulfilled") return false;
+  const summaries = rows.slice(begin+1,begin+4), forwarded = rows.slice(begin+4,end);
+  if (!summaries.every((row,i)=>row.role === "child" && row.phase === ["stdout_summary","stderr_summary","protocol_summary"][i] && row.outcome === "observed" && row.complete === true)) return false;
+  // Canonical field types were already validated for every captured frame.
+  // Reconcile all authored counters, including classifications that successful
+  // strict parsing + the subsequent built:true check necessarily rule out.
+  const summary = summaries[2];
+  const counts = {valid:forwarded.length,entry:0,final:0,rejected:0,foreign:0,malformed:0,receipts:1,unclassified:0};
+  for (const row of forwarded) {
+    if (row.role !== role) return false;
+    if (row.phase === "entry") counts.entry++;
+    if (row.phase === "final") counts.final++;
+    if (row.outcome === "rejected") counts.rejected++;
+  }
+  if (!counts.valid || counts.entry !== 1 || counts.final !== 1 || counts.rejected !== 0 || counts.valid+1 > 256) return false;
+  return Object.entries(counts).every(([key,count])=>summary[key] === count);
+}
 // Only the exact admitted close row and its source lifecycle launch can own
 // this group. Global canonical/capture checks run before rejection is recorded.
 export function projectWranglerCloseGroup(rows, lifecycle, rejection) {
@@ -1109,7 +1132,7 @@ export function projectWranglerCloseGroup(rows, lifecycle, rejection) {
   for (const role of ["build_a","build_b"]) {
     try {
       const group = inspectBuilderCloseGroup(rows,lifecycle,role,undefined,false);
-      if (!group || group[2] !== 1) return null;
+      if (!group || group[2] !== 1 || !reconcileSuccessfulBuilderSummary(rows,lifecycle,role)) return null;
     } catch { return null; }
   }
   const owners = lifecycle.wranglers.filter(item=>item.close===rejection);

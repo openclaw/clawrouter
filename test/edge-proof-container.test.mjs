@@ -2256,7 +2256,7 @@ async function receiptProjectionFactory(overrides={}) {
   const source=await readFile(new URL("../scripts/edge-proof-container.mjs",import.meta.url),"utf8");
   const body=source.slice(source.indexOf("export function projectBuilderCloseGroup("),source.indexOf("export function createAttachProjection(")).replaceAll("export ","");
   const bindings={Buffer,JSON,Map,hash:bytes=>createHash("sha256").update(bytes).digest("hex"),cidPattern:/^[a-f0-9]{64}$/,hashPattern:/^[a-f0-9]{64}$/,check:(value,code)=>{if(!value)throw new Error(code);},projectionBoundaries,validatePackagingDiagnostic,receiptChildPhases,validateReportedBuilderProcess,receiptBuilderSignals,unpackCensusCloseDiagnostic,validateWranglerCloseDiagnostic,...overrides};
-  return new Function(...Object.keys(bindings),body+"return {createProjectionLedger,parseChildPackaging,validateChildLifecycle,projectionRun,projectionLeaf};")(...Object.values(bindings));
+  return new Function(...Object.keys(bindings),body+"return {createProjectionLedger,parseChildPackaging,validateChildLifecycle,projectionRun,projectionLeaf,inspectBuilderCloseGroup};")(...Object.values(bindings));
 }
 function receiptBoundaryRecord(child,projection,count="ZERO") {return {v:10,phase:"receipt",state:"rejected",defined:true,exit:null,signal:null,parser:[1,2,true,3,1,1,0,1,0],child,reports:[0,0],count,projection};}
 test("receipt boundary actual pipeline forwarding admits repeated reports and preserves original failures", async()=>{
@@ -3335,6 +3335,66 @@ test("wrangler result widest lossless packet reserves one row with no borrowed n
   const packet=structuredClone(receiptPackets.at(-1));packet[packet.findIndex(r=>r.phase==="receipt")]=wide;
   for(const phase of ["dispatch","image","base","create","attach","ready","cwd","temp","environment","permit"])packet.push({v:2,phase,state:"fulfilled",defined:null,exit:null,signal:null});
   const lines=[];emitContainerFailure(packet,line=>lines.push(line));assert.equal(lines.length,10);assert.equal(JSON.parse(lines[0].slice(lines[0].indexOf("::{")+2)).v,17);assert.ok(lines.every(line=>Buffer.byteLength(line)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);receiptPackets.push(lines.map(line=>JSON.parse(line.slice(line.indexOf("::{")+2))));
+});
+function wranglerBuilderFrames(frames, role, mutate) {
+  const rows = frames.map(line=>JSON.parse(line.slice("EDGE_PACKAGING_V1 ".length)));
+  const close = rows.findIndex(row=>row.role === "child" && row.phase === role+"_close");
+  assert.ok(close >= 0); assert.equal(rows[close+3].phase,"protocol_summary");
+  mutate(rows,close);
+  return rows.map(row=>"EDGE_PACKAGING_V1 "+JSON.stringify(row)+"\n");
+}
+test("wrangler result six prior summary contradictions now remain unknown",async()=>{
+  const made=await receiptActualProducer("wrangler",false,{wrangler:{role:"edge",scenario:"remaining"}});
+  assert.equal(made.failed,true);assert.equal(made.report.errors.length,0);assert.equal(made.builders.length,2);assert.ok(made.builders.every(b=>!b.failed));
+  const source=await readFile(new URL("../scripts/edge-proof-container.mjs",import.meta.url),"utf8"),api=await receiptProjectionFactory();
+  let before=source.slice(source.indexOf("export function projectWranglerCloseGroup("),source.indexOf("export function createProjectionLedger("));
+  const gate=" || !reconcileSuccessfulBuilderSummary(rows,lifecycle,role)";assert.equal(before.split(gate).length,2);before=before.replace(gate,"");
+  const prior=new Function("inspectBuilderCloseGroup","validateWranglerCloseDiagnostic",before.replace("export ","")+"return projectWranglerCloseGroup;")(api.inspectBuilderCloseGroup,validateWranglerCloseDiagnostic);
+  let cases=0;
+  for(const role of ["build_a","build_b"])for(const [key,value] of [["valid",0],["rejected",1],["complete",false]]){
+    const frames=wranglerBuilderFrames(made.frames,role,(rows,close)=>{rows[close+3][key]=value;}),c=await receiptCapture(frames),ledger=createProjectionLedger(),seen={};
+    for(const name of ["canonical","childLifecycle","rejection"]){const original=ledger[name];ledger[name]=value=>{seen[name]=value;return original(value);};}
+    assert.equal(c.summary(ledger)[1],"reported_rejection");assert.equal(ledger.errors.length,0);assert.ok(prior(seen.canonical,seen.childLifecycle,seen.rejection));assert.equal(ledger.wrangler(),null);
+    const wire=await lifecyclePacket(made,()=>frames,"census");assert.equal(wire.v,16);assert.equal(receiptView(wire).child[1],"reported_rejection");assert.equal(wire.detail[7],null);cases++;
+  }
+  assert.equal(cases,6);
+});
+test("wrangler result complete builder summary reconciliation rejects the whole contradiction class",async()=>{
+  const made=await receiptActualProducer("wrangler",false,{wrangler:{role:"upstream",scenario:"nonzero"}});
+  for(const role of ["build_a","build_b"]){
+    const changes=[
+      ...["valid","entry","final","rejected","foreign","malformed","receipts","unclassified"].flatMap(key=>[
+        (rows,c)=>{rows[c+3][key]++;},
+        (rows,c)=>{rows[c+3][key] = rows[c+3][key] ? rows[c+3][key]-1 : 65535;},
+        (rows,c)=>{rows[c+3][key] = "1";},
+      ]),
+      (rows,c)=>{rows[c+3].complete=false;},(rows,c)=>{rows[c+3].complete=null;},
+      (rows,c)=>{delete rows[c+3].valid;},(rows,c)=>{rows[c+3].extra=0;},
+      (rows,c)=>{rows[c+3].role=role;},(rows,c)=>{rows.splice(c+3,1);},(rows,c)=>{rows.splice(c+3,0,structuredClone(rows[c+3]));},
+      (rows,c)=>{[rows[c+2],rows[c+3]]=[rows[c+3],rows[c+2]];},
+      (rows,c)=>{rows[c+1].complete=false;},(rows,c)=>{rows[c+2].complete=false;},
+      (rows,c)=>{rows[c+1].bytes=-1;},(rows,c)=>{rows[c+2].sha256="invalid";},
+      (rows,c)=>{rows[c].v===4?rows[c].detail[0]=1:rows[c].exit=1;},
+      (rows,c)=>{rows[c].v===4?rows[c].detail[3]=1:rows[c].errors=1;},
+      (rows,c)=>{rows[c].v===4?rows[c].detail[4]=1:rows[c].remaining=1;},
+      (rows,c)=>{rows.splice(c+4,1);rows[c+3].valid--;rows[c+3].entry--;},
+      (rows,c)=>{const end=rows.findIndex((r,i)=>i>c+3&&r.role==="child"&&r.phase===role+"_report");rows.splice(end-1,1);rows[c+3].valid--;rows[c+3].final--;},
+      (rows,c)=>{rows[c+4].role=role==="build_a"?"build_b":"build_a";},
+      (rows,c)=>{rows[c+5].outcome="rejected";rows[c+5].defined=true;rows[c+3].rejected++;},
+      (rows,c)=>{const end=rows.findIndex((r,i)=>i>c+3&&r.role==="child"&&r.phase===role+"_report");rows[end].outcome="rejected";rows[end].defined=false;},
+      (rows,c)=>{const end=rows.findIndex((r,i)=>i>c+3&&r.role==="child"&&r.phase===role+"_report");rows[end+2].outcome="rejected";rows[end+2].defined=true;},
+    ];
+    for(const mutate of changes){
+      const frames=wranglerBuilderFrames(made.frames,role,mutate),capture=await receiptCapture(frames),ledger=createProjectionLedger();capture.summary(ledger);assert.equal(ledger.wrangler(),null);
+      const wire=await lifecyclePacket(made,()=>frames,"census");assert.equal(wire.v,16);
+      // Historical V16 may still explain its own rejected builder interval.
+      // This repair withholds Wrangler facts without weakening that decoder.
+    }
+  }
+  const foreign=wranglerBuilderFrames(made.frames,"build_a",(rows,c)=>{rows[c+3].role="foreign";});assert.equal((await lifecyclePacket(made,()=>foreign,"census")).v,16);
+  const tail=[...made.frames,'EDGE_PACKAGING_V1 {'];assert.equal((await lifecyclePacket(made,()=>tail,"census")).v,16);
+  const duplicateKey=made.frames.map(line=>line.includes('"phase":"protocol_summary"')?line.replace('"complete":true','"complete":true,"complete":true'):line);
+  assert.equal((await lifecyclePacket(made,()=>duplicateKey,"census")).v,16);
 });
 // END attach diagnostic pure tests.
 
