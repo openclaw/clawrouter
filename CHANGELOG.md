@@ -782,7 +782,7 @@
 - Qualify the finite Arcee native catalog declaration with canonical original-key GET validation, exact policy identities and independent unknown price observations.
 - Qualify the three frozen direct Arcee Trinity Chat cards with native tool/reasoning replay, original-grant transport tests and unknown pricing.
 - Include the three direct Arcee Chat cards in the generated catalog and verify catalog-selected native/manifest transport, fragmented streams and conservative accounting across the bundled Chat matrix.
-- Add separate Singapore, China and Europe Xiaomi Token Plan Chat declarations with dedicated credentials, frozen 2.6 models and pre-egress rejection of expired 2.5 identities; validate the selected plan credential before dispatch or budget reservation without borrowing PAYG or other scoped credentials.
+- Activate separate Singapore, China and Europe Xiaomi Token Plan Chat declarations with dedicated credentials, frozen 2.6 models and pre-egress rejection of expired 2.5 identities; validate the selected plan credential before dispatch or budget reservation without borrowing PAYG or other scoped credentials.
 - Add experimental GMI Cloud, Novita, LongCat and Xiaomi MiMo PAYG chat routes; keep GMI/Novita aliases canonical and Xiaomi Token Plan credentials separate.
 - Bind GMI's optional organization header to the original credential owner for Chat and keyed discovery, reject caller/static overrides, and recheck account identity and current policy after admission waits.
 - Preserve GMI unified Chat and model-prefix aliases by validating internal model selectors against the selected upstream model, while keeping caller path parameters and organization overrides closed.

@@ -66,17 +66,19 @@ cause. It is not a recoverable selected-grant failure: an invalid selected grant
 cannot borrow environment, regional or policy credentials. Standard Xiaomi
 PAYG is unchanged. No secret is materialized for catalog metadata validation.
 
-Focused tests compile and inject the regional declarations into the test
-snapshot. They exercise environment and materialized-grant selection through
+The generated snapshot activates the three regional declarations. Focused tests
+use those actual bundled provider records. They exercise environment and materialized-grant selection through
 native and manifest routes, initial rejection before upstream POST/reservation,
 credential rotation/revocation, and invalid alternate preparation after an
 already-reserved first response. In that last case the original response and
 real settlement remain; zero additional POSTs does not mean zero prior egress.
 These are Worker/SQLite fixture claims, not registered SDK or live-account proof.
 The frozen client's `tp-`-only onboarding remains separate from this `ttp-` wire
-contract. This change does not regenerate the shipping snapshot.
+contract. The registered SDK fixture covers configured native routes only; it does not prove
+Worker-offer selection or manifest-envelope compatibility. Authored SDK cases
+remain unexecuted until the pinned ephemeral CI consumer runs.
 
-Generated snapshot activation needs an explicit serialized slot, green final-head checks. Native Messages/Responses, regional plan
+Publication needs the serialized slot and green final-head checks. Native Messages/Responses, regional plan
 discovery, actual client and live account proof remain separate continuations.
 No live call, login, seat assignment, subscription action, provisioning or
 deployment is performed.

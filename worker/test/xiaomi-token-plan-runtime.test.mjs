@@ -1,7 +1,6 @@
 import { perRequestAuthority } from "./typescript-setup.mjs";
 perRequestAuthority();
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import test from "node:test";
 import { continuationAuthority } from "./continuation-authority.mjs";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
@@ -21,15 +20,16 @@ const contracts = [
 ];
 const inventory = Object.fromEntries(contracts.map(([id]) => [id, ["mimo-v2.6-pro", "mimo-v2.6-flash"]]));
 const unqualified = Object.fromEntries(contracts.map(([id]) => [id, ["mimo-v2.5-pro", "mimo-v2.5"]]));
-const { providers } = JSON.parse(execFileSync(process.execPath,
-  ["scripts/compile-providers.mjs", ...contracts.map(([id]) => `providers/${id}.provider.yaml`)], { encoding: "utf8" }));
+const providers = contracts.map(([id]) => {
+  const provider = snapshot.providers.find(row => row.id === id);
+  assert.ok(provider, `bundled snapshot must activate ${id}`);
+  return provider;
+});
 const model = "mimo-v2.6-pro", frame = value => `data: ${JSON.stringify(value)}\n\n`;
 const usage = { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 };
 const result = { id: "chatcmpl_fixture", object: "chat.completion", model, choices: [{ index: 0, message: { role: "assistant", content: "synthetic-answer" }, finish_reason: "stop" }], usage };
 
 async function fixture(t, id, { ownGrant = true, grantRouting } = {}) {
-  const rows = structuredClone(providers); snapshot.providers.push(...rows);
-  t.after(() => { for (const row of rows) snapshot.providers.splice(snapshot.providers.indexOf(row), 1); });
   const values = new Map(), pending = [], events = [], sent = [];
   const env = { XIAOMI_API_KEY: "sk-synthetic-payg", MIMO_API_KEY: "sk-synthetic-unscoped", POLICY_KV: {
       async get(key, type) {
