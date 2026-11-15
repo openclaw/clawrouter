@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -15,9 +17,9 @@ const sourceHead = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
 const sdkSource = readFileSync(new URL("./fixtures/openclaw-zai-contract.test.ts", import.meta.url), "utf8");
 const supportSource = sdkSource.split("// BEGIN ZAI CONTRACT SUPPORT\n")[1].split("// END ZAI CONTRACT SUPPORT")[0];
 const require = createRequire(import.meta.url), esbuild = createRequire(require.resolve("wrangler/package.json"))("esbuild");
-const supportJs = esbuild.transformSync(supportSource + "\nexport { regionalCases, regionalNegativeCases, allFailures, originalLifetime, diagnosticProtocol };", { loader: "ts", format: "esm" }).code;
-const { regionalCases, regionalNegativeCases, allFailures, originalLifetime, diagnosticProtocol } = await import("data:text/javascript;base64," + Buffer.from(supportJs).toString("base64"));
-const regionalRows = [...regionalCases(), ...regionalNegativeCases()];
+const supportJs = esbuild.transformSync(supportSource + "\nexport { regionalCases, regionalNegativeCases, nativeControlCases, requirePreabortOutcome, requireNativeControlLifetime, controlReceipt, controlReceiptPrefix, allFailures, originalLifetime, diagnosticProtocol };", { loader: "ts", format: "esm" }).code;
+const { regionalCases, regionalNegativeCases, nativeControlCases, requirePreabortOutcome, requireNativeControlLifetime, controlReceipt, controlReceiptPrefix, allFailures, originalLifetime, diagnosticProtocol } = await import("data:text/javascript;base64," + Buffer.from(supportJs).toString("base64"));
+const regionalRows = [...regionalCases(), ...regionalNegativeCases(), ...nativeControlCases()];
 const diagnostics = diagnosticProtocol(nodeTypes.isProxy);
 const emit = diagnostics.emitter(line => process.stdout.write(line));
 function failureRecord(phase, error) { emit({ v: 1, layer: "outer", caseId: "control", phase, category: error === undefined ? "undefined" : error === null ? "null" : "failure" }); }
@@ -37,7 +39,8 @@ test("registered Z.AI global standard streams preserve original grants, selected
   assert.ok(provider.models.every(m => m.pricing === null));
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-zai-client-"));
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs"); let mf, origin;
-  const proofContext = { diagnostic(value) { for (const record of diagnostics.parse(value)) emit(record); } };
+  const controlReceipts = [];
+  const proofContext = { diagnostic(value) { for (const record of diagnostics.parse(value)) emit(record); controlReceipts.push(...controlReceipt(value)); } };
   await allFailures(async () => {
     mf = await startWorkerdFixture(temporary, routerFixture(), upstreamFixture(), { directRouter: true });
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
@@ -68,6 +71,7 @@ test("registered Z.AI global standard streams preserve original grants, selected
       for (const record of ownChildRecords(error)) emit(record);
       failureRecord("helper", error); throw error;
     }
+    assert.equal(controlReceipts.length, 4); assert.deepEqual(controlReceipts.map(row => row.id).sort(), nativeControlCases().map(row => row.id).sort());
     const upstream = await mf.getWorker("upstream"), calls = await (await upstream.fetch("https://fixture.example/state")).json();
     const expectedRegional = regionalRows.reduce((count, row) => count + (row.outcome === "rotation" ? 2 : ["success", "http401", "http403", "http429", "embedded", "no_usage", "cancel"].includes(row.outcome) ? 1 : 0), 0);
     assert.equal(calls.length, dispatched.length + expectedRegional, "denied and pre-aborted requests must have zero egress");
@@ -114,14 +118,18 @@ test("registered Z.AI global standard streams preserve original grants, selected
   }, [async () => {
     if (!mf || !origin) return;
     await allFailures(async () => {
-      const response = await fetch(origin + "/fixture/retire", { signal: AbortSignal.timeout(15_000) });
-      const value = await response.json();
-      assert.equal(response.status, 200); assert.equal(value.pending, 0); assert.equal(value.rejected, 0);
+      try {
+        const response = await fetch(origin + "/fixture/retire", { signal: AbortSignal.timeout(15_000) });
+        const value = await response.json();
+        assert.equal(response.status, 200); assert.equal(value.pending, 0); assert.equal(value.rejected, 0);
+      } catch (error) { failureRecord("worker", error); throw error; }
     }, [async () => {
-      const upstream = await mf.getWorker("upstream");
-      const response = await upstream.fetch("https://fixture.example/retire", { signal: AbortSignal.timeout(15_000) });
-      const value = await response.json();
-      assert.equal(response.status, 200); assert.equal(value.pending, 0); assert.equal(value.rejected, 0);
+      try {
+        const upstream = await mf.getWorker("upstream");
+        const response = await upstream.fetch("https://fixture.example/retire", { signal: AbortSignal.timeout(15_000) });
+        const value = await response.json();
+        assert.equal(response.status, 200); assert.equal(value.pending, 0); assert.equal(value.rejected, 0);
+      } catch (error) { failureRecord("upstream", error); throw error; }
     }]);
   }, async () => { try { await mf?.dispose(); } catch (error) { failureRecord("dispose", error); throw error; } },
     async () => { try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failureRecord("remove", error); throw error; } }]);
@@ -132,24 +140,42 @@ import { putGrantCredentials, revokeGrantCredentials } from "./worker/grant-cred
 const regional = ${JSON.stringify(regionalRows)};
 ${originalLifetime.toString()}
 ${reservationObserver.toString()}
+${retireOwners.toString()}
 const reservations = {};
 const ownership = (${workerOwnership.toString()})();
+const controlOwners = Object.fromEntries(${JSON.stringify(nativeControlCases().map(row => row.id))}.map(id => [id, (${workerOwnership.toString()})()]));
+const ingress = {}, requestWaits = new Map();
+const requestIds = ${JSON.stringify([...ids, ...regionalRows.map(row => row.id)])};
+const callerIds = new Map(requestIds.map(id => ["Bearer clawrouter-live-zai_" + id + "-fixture-secret", id]));
+const serverIds = new Map(requestIds.flatMap(id => [["Bearer fixture-upstream-" + id, id], ["Bearer fixture-upstream-" + id + "-rotated", id]]));
 const originalFetch = globalThis.fetch;
 globalThis.fetch = function(...args) {
   const original = Reflect.apply(originalFetch, this, args);
   const input = args[0], init = args[1];
   const url = new URL(input instanceof Request ? input.url : String(input));
   if (!["api.z.ai", "open.bigmodel.cn"].includes(url.hostname)) return original;
-  const owner = { input, init, original };
-  ownership.track("fetch", original);
-  original.then(response => ownership.response(response, owner), error => ownership.failure(error));
+  const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
+  const id = serverIds.get(headers.get("authorization"));
+  const selectedOwner = controlOwners[id] ?? ownership, waitUntil = requestWaits.get(id), owner = { input, init, original, waitUntil };
+  if (!waitUntil) selectedOwner.failure(new Error("Missing original request I/O owner"));
+  selectedOwner.track("fetch", original);
+  original.then(response => selectedOwner.response(response, owner), error => selectedOwner.failure(error));
   return original;
 };
 export default { ...handler, async fetch(request, env, context) {
+  if (new URL(request.url).pathname === "/fixture/control") {
+    const id = new URL(request.url).searchParams.get("id"), owner = controlOwners[id];
+    if (!owner) return new Response(null, { status: 400 });
+    let router, upstream, failed = false;
+    try { router = await owner.retire(); } catch { router = owner.summary(); failed = true; }
+    const response = await Reflect.apply(originalFetch, globalThis, ["https://fixture.example/control?id=" + id]);
+    upstream = await response.json(); failed ||= response.status !== 200;
+    return Response.json({ router, upstream: upstream.proof, calls: upstream.calls, expired: upstream.expired, ingress: ingress[id] ?? 0 }, { status: failed ? 503 : 200 });
+  }
   if (new URL(request.url).pathname === "/fixture/reservations") return Response.json(reservations);
   if (new URL(request.url).pathname === "/fixture/retire") {
-    try { return Response.json(await ownership.retire()); }
-    catch { return Response.json(ownership.summary(), { status: 503 }); }
+    try { return Response.json(await retireOwners([ownership, ...Object.values(controlOwners)])); }
+    catch { return Response.json({ pending: null, rejected: null }, { status: 503 }); }
   }
   if (new URL(request.url).pathname === "/fixture/rotate") {
     const id = await request.text();
@@ -178,15 +204,30 @@ export default { ...handler, async fetch(request, env, context) {
   const selected = { ...env, ZAI_API_KEY: "must-not-fallback", ZAI_CODING_GLOBAL_API_KEY: "must-not-fallback", ZAI_CN_API_KEY: "must-not-fallback", ZAI_CODING_CN_API_KEY: "must-not-fallback", Z_AI_API_KEY: "must-not-fallback" };
   if (row) selected.BUDGET_LEDGER = reservationObserver(env.BUDGET_LEDGER, () => { reservations[row.id] = (reservations[row.id] ?? 0) + 1; });
   if (row?.credential === "environment") selected[row.binding] = "fixture-upstream-" + row.id;
-  return ownership.track("handler", handler.fetch(request, selected, { ...context, waitUntil(original) { ownership.track("waitUntil", original); context.waitUntil(original); } }));
+  const selectedOwner = controlOwners[row?.id] ?? ownership;
+  const callerId = callerIds.get(request.headers.get("authorization"));
+  if (callerId) requestWaits.set(callerId, context.waitUntil.bind(context));
+  if (controlOwners[row?.id]) ingress[row.id] = (ingress[row.id] ?? 0) + 1;
+  return selectedOwner.track("handler", handler.fetch(request, selected, { ...context, waitUntil(original) { selectedOwner.track("waitUntil", original); context.waitUntil(original); } }));
 } };`;
 }
 function upstreamFixture() {
-  return `const calls = []; const regional = ${JSON.stringify(regionalRows)}; const ownership = (${workerOwnership.toString()})();
+  return `${retireOwners.toString()}
+const calls = []; const regional = ${JSON.stringify(regionalRows)}; const globalOwnership = (${workerOwnership.toString()})();
+  const controlOwners = Object.fromEntries(${JSON.stringify(nativeControlCases().map(row => row.id))}.map(id => [id, (${workerOwnership.toString()})()]));
   export default { async fetch(request) {
     if (request.url === "https://fixture.example/state") return Response.json(calls);
-    if (request.url === "https://fixture.example/retire") { try { return Response.json(await ownership.retire()); } catch { return Response.json(ownership.summary(), { status: 503 }); } }
-    const body = await request.json(); const call = { url: request.url, authorization: request.headers.get("authorization"), apiKey: request.headers.get("api-key"), xApiKey: request.headers.get("x-api-key"), body }; calls.push(call);
+    if (request.url === "https://fixture.example/retire") { try { return Response.json(await retireOwners([globalOwnership, ...Object.values(controlOwners)])); } catch { return Response.json({ pending: null, rejected: null }, { status: 503 }); } }
+    if (new URL(request.url).pathname === "/control") {
+      const id = new URL(request.url).searchParams.get("id"), owner = controlOwners[id];
+      if (!owner) return new Response(null, { status: 400 });
+      const matching = calls.filter(call => call.authorization === "Bearer fixture-upstream-" + id);
+      let proof, failed = false; try { proof = await owner.retire(); } catch { proof = owner.summary(); failed = true; }
+      return Response.json({ proof, calls: matching.length, expired: matching.some(call => call.fixtureExpired === true) }, { status: failed ? 503 : 200 });
+    }
+    const requestId = request.headers.get("authorization")?.replace(/^Bearer fixture-upstream-/, "");
+    const ownership = controlOwners[requestId] ?? globalOwnership;
+    const body = await ownership.track("request-json", request.json()); const call = { url: request.url, authorization: request.headers.get("authorization"), apiKey: request.headers.get("api-key"), xApiKey: request.headers.get("x-api-key"), body }; calls.push(call);
     const id = request.headers.get("authorization").replace("Bearer fixture-upstream-", "");
     const row = regional.find(row => id === row.id || id === row.id + "-rotated"), outcome = row?.outcome;
     if (id === "http_error" || outcome?.startsWith("http")) return Response.json({ error: { message: "synthetic provider rejection" } }, { status: id === "http_error" ? 401 : Number(outcome.slice(4)) });
@@ -194,7 +235,7 @@ function upstreamFixture() {
     const usage = id === "no_usage" || outcome === "no_usage" ? {} : { usage: { prompt_tokens: 300, completion_tokens: 20, total_tokens: 320, prompt_tokens_details: { cached_tokens: 256 } } };
     const wire = id === "embedded_error" || outcome === "embedded" ? frame({ error: { code: "synthetic_error", message: "synthetic provider rejection" } })
       : frame({ id: "chat_fixture", model: body.model, choices: [{ index: 0, delta: { role: "assistant", content: "synthetic-answer" }, finish_reason: null }] })
-        + (outcome === "cancel" ? "" : frame({ id: "chat_fixture", model: body.model, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], ...usage }) + "data: [DONE]\\n\\n");
+        + (outcome === "cancel" ? "" : frame({ id: "chat_fixture", model: body.model, choices: [{ index: 0, delta: {}, finish_reason: "stop" }], ...usage }) + (id === "control_success" ? "" : "data: [DONE]\\n\\n"));
     const bytes = new TextEncoder().encode(wire); let offset = 0, finish, fail, timer, wake, beats = 0;
     const originalCompletion = new Promise((resolve, reject) => { finish = resolve; fail = reject; }); ownership.track("source", originalCompletion);
     const stop = () => { clearTimeout(timer); wake?.(); };
@@ -215,6 +256,14 @@ function upstreamFixture() {
   } };`;
 }
 
+async function retireOwners(owners) {
+  // Start every original completion even if another owner fails or remains pending.
+  const settled = await Promise.allSettled(owners.map(owner => { try { return owner.retire(); } catch (error) { return Promise.reject(error); } }));
+  const errors = settled.filter(row => row.status === "rejected").map(row => row.reason);
+  if (errors.length) throw new AggregateError(errors, "Worker owners failed");
+  return settled.reduce((sum, row) => ({ operations: sum.operations + row.value.operations, pending: sum.pending + row.value.pending, rejected: sum.rejected + row.value.rejected }), { operations: 0, pending: 0, rejected: 0 });
+}
+
 function workerOwnership() {
   const operations = [], failures = []; let completion;
   const lifetime = typeof originalLifetime === "function" ? originalLifetime() : null;
@@ -227,9 +276,13 @@ function workerOwnership() {
   function retire() {
     return completion ??= (async () => {
       let count = -1;
-      while (count !== operations.length) { count = operations.length; await Promise.allSettled(operations.map(op => op.original)); }
+      while (count !== operations.length + (lifetime?.operations.length ?? 0)) {
+        count = operations.length + (lifetime?.operations.length ?? 0);
+        await Promise.allSettled(operations.map(op => op.original)); await lifetime?.settle();
+      }
       const errors = [...failures, ...operations.filter(op => op.state !== "fulfilled").map(op => op.error)];
       try { await lifetime?.join(); } catch (error) { errors.push(error); }
+      try { lifetime?.restore(); } catch (error) { errors.push(error); }
       if (errors.length) throw new AggregateError(errors, "Original Worker work failed");
       return summary();
     })();
@@ -386,4 +439,167 @@ test("both generated Worker fixtures and the authored SDK file transform under o
     const result = await esbuild.build({ stdin: { contents, resolveDir: process.cwd(), sourcefile: `${name}-zai-fixture.ts`, loader: "ts" }, write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent" });
     assert.equal(result.errors.length, 0); assert.ok(result.outputFiles[0].text.length > 0);
   }
+});
+
+// Classifier-only native-stream comparisons. They do not populate the SDK's
+// nativeQualification set or establish any d8 registered-provider result.
+async function observedAbort(variant = "matching", qualified = false) {
+  const observer = originalLifetime({ sdkQualified: () => qualified });
+  const caller = new AbortController(), input = new AbortController();
+  const owner = observer.bind({ caseId: "control_cancel", role: "chat", outcome: "cancel", verified: true }, caller.signal);
+  let controller;
+  const response = new Response(new ReadableStream({ start(value) { controller = value; } }, { highWaterMark: 0 }));
+  const release = Promise.resolve(), resource = { response, release() { assert.equal(this, resource); return release; } };
+  const acquired = Promise.resolve(resource);
+  assert.equal(observer.acquire(() => acquired, undefined, [{ signal: input.signal }], owner), acquired); await acquired;
+  const reader = response.body.getReader(), closed = reader.closed;
+  const first = reader.read(); controller.enqueue(new Uint8Array([1])); await first;
+  const event = Promise.resolve({ done: false, value: { type: variant === "no_partial" ? "other" : "text_delta", delta: "x" } });
+  const result = Promise.resolve({ stopReason: "aborted", content: [{ type: "text", text: "x" }] });
+  const stream = { [Symbol.asyncIterator]() { return { next() { return event; } }; }, result() { return result; } };
+  observer.observeStream(stream, owner); assert.equal(stream[Symbol.asyncIterator]().next(), event); await event;
+  const pending = reader.read(), error = variant === "undefined" ? undefined : new Error("original source");
+  if (variant === "prior") { controller.error(error); await Promise.allSettled([pending, closed]); }
+  if (variant !== "no_caller") caller.abort(new Error("original caller"));
+  if (variant !== "late_guard") input.abort(variant === "foreign" ? new Error("original source") : error);
+  if (variant !== "prior") controller.error(error);
+  const cancel = reader.cancel(); reader.releaseLock(); assert.equal(resource.release(), release); await release;
+  if (variant === "late_guard") input.abort(error);
+  assert.equal(stream.result(), result); await result;
+  await Promise.allSettled([pending, closed, cancel]); await observer.settle();
+  if (variant === "wrong_reader") observer.operations.find(op => op.kind === "read" && op.rejected).reader = {};
+  if (variant === "wrong_request") observer.readers[0].acquisition = {};
+  if (variant === "expired") owner.expired = true;
+  return { observer, owner, pending, closed, cancel, release, error };
+}
+
+test("SDK disposition stays disabled until native qualification; identical Worker observations remain strict", async () => {
+  for (const qualified of [false, true]) {
+    const f = await observedAbort("matching", qualified);
+    assert.equal(f.observer.inspect().cancelWitnesses.length, 1); assert.equal(f.observer.inspect().candidates.length, 3);
+    assert.equal(f.observer.operations.find(op => op.kind === "read" && op.rejected).original, f.pending);
+    assert.equal(f.observer.operations.find(op => op.kind === "closed").original, f.closed);
+    assert.equal(f.observer.operations.find(op => op.kind === "cancel").original, f.cancel);
+    if (qualified) await f.observer.join(); else await assert.rejects(f.observer.join());
+    f.observer.restore();
+  }
+  const worker = originalLifetime(); let controller;
+  const response = new Response(new ReadableStream({ start(value) { controller = value; } })); worker.observeResponse(response, {});
+  const reader = response.body.getReader(), pending = reader.read(); controller.error(new Error("worker source"));
+  await Promise.allSettled([pending, reader.closed, reader.cancel()]); reader.releaseLock();
+  await assert.rejects(worker.join()); worker.restore();
+});
+
+for (const variant of ["no_partial", "prior", "foreign", "undefined", "no_caller", "late_guard", "wrong_reader", "wrong_request", "expired"]) test("SDK disposition rejects actual observer counterexample " + variant, async () => {
+  const f = await observedAbort(variant, true);
+  await assert.rejects(f.observer.join(), error => error instanceof AggregateError && error.errors.length > 0);
+  f.observer.restore();
+});
+
+test("native cancellation control asserts strict originals without enabling their disposition", async () => {
+  const f = await observedAbort();
+  assert.deepEqual((await requireNativeControlLifetime(f.observer, f.owner, "cancel")).sort(), ["cancel", "closed", "read"]);
+  await assert.rejects(f.observer.join()); f.observer.restore();
+});
+
+test("zero-acquisition preabort requires the original caller and exact public error with empty content", async () => {
+  for (const variant of ["matching", "wrong_error", "content", "not_aborted", "missing_caller"]) {
+    const observer = originalLifetime(), caller = new AbortController(), reason = new Error("fixture cancellation");
+    if (variant !== "not_aborted") caller.abort(reason);
+    const owner = observer.bind({ outcome: "preabort" }, variant === "missing_caller" ? undefined : caller.signal);
+    const result = Promise.resolve({ stopReason: "error", errorMessage: variant === "wrong_error" ? "unrelated" : reason.message, content: variant === "content" ? [{ type: "text", text: "x" }] : [] });
+    const stream = { result() { return result; } }; observer.observeStream(stream, owner); assert.equal(stream.result(), result); await result;
+    if (variant === "matching") { requirePreabortOutcome(observer, owner); await requireNativeControlLifetime(observer, owner, "preabort"); }
+    else assert.throws(() => requirePreabortOutcome(observer, owner));
+    await observer.join(); observer.restore();
+  }
+});
+
+test("provider error without caller cannot qualify an iterator abort as caller cancellation", async () => {
+  const f = await observedAbort("no_caller");
+  f.owner.outcome = "embedded"; f.owner.caller.signal = undefined; f.owner.terminal.stopReason = "error";
+  assert.deepEqual(await requireNativeControlLifetime(f.observer, f.owner, "embedded"), []);
+  await assert.rejects(f.observer.join()); f.observer.restore();
+});
+
+test("every original Worker owner starts retirement despite a synchronous failure and a held completion", async () => {
+  let finish; const pending = new Promise(resolve => { finish = resolve; }), started = [];
+  const failure = undefined;
+  const completion = retireOwners([{ retire() { started.push(1); throw failure; } }, { retire() { started.push(2); return pending; } }]);
+  let settled = false; void completion.then(() => { settled = true; }, () => { settled = true; });
+  await Promise.resolve(); assert.deepEqual(started, [1, 2]); assert.equal(settled, false);
+  finish({ operations: 1, pending: 0, rejected: 0 });
+  await assert.rejects(completion, error => error instanceof AggregateError && error.errors.length === 1 && error.errors[0] === undefined);
+});
+
+test("native controls are four separate cases and receipts never replace original helper success", async () => {
+  assert.deepEqual(nativeControlCases().map(row => row.outcome), ["success", "preabort", "cancel", "embedded"]);
+  const lines = nativeControlCases().map(row => controlReceiptPrefix + JSON.stringify({ v: 1, id: row.id, mask: 0 })).join("\n");
+  assert.equal(controlReceipt(lines).length, 4);
+  assert.throws(() => controlReceipt(controlReceiptPrefix + '{"v":1,"id":"control_success","mask":1}'));
+  assert.throws(() => controlReceipt(controlReceiptPrefix + '{"v":1,"id":"control_cancel","mask":8}'));
+  const helperFailure = undefined;
+  await assert.rejects(allFailures(() => { controlReceipt(lines); throw helperFailure; }, [() => {}]), error => error.errors[0] === undefined);
+  assert.match(sdkSource, /nativeQualification\.add\(control\)/);
+  assert.ok(sdkSource.indexOf('describe.sequential("genuine registered') < sdkSource.indexOf('describe("actual registered'));
+});
+
+
+test("cancel invocation signal is captured before the original method can abort it", async () => {
+  const observer = originalLifetime({ sdkQualified: () => true }), signal = new AbortController(), owner = {};
+  let receiver; const reason = new Error("during original cancel");
+  const body = new ReadableStream({ cancel() { signal.abort(reason); return Promise.reject(reason); } });
+  const response = new Response(body), resource = { response, release: () => Promise.resolve() };
+  await observer.acquire(() => Promise.resolve(resource), undefined, [{ signal: signal.signal }], owner);
+  const reader = body.getReader(), originalCancel = reader.cancel, pending = reader.cancel(); receiver = reader;
+  await Promise.allSettled([pending, reader.closed]); reader.releaseLock(); await resource.release();
+  const op = observer.operations.find(op => op.kind === "cancel");
+  assert.equal(op.original, pending); assert.equal(op.receiver, receiver); assert.deepEqual(op.operands, []);
+  assert.equal(op.guardInvoke.aborted, false); assert.equal(op.guardReject.aborted, true); assert.equal(op.guardReject.reason, reason);
+  await assert.rejects(observer.join()); observer.restore();
+});
+
+test("SDK disposition cannot accept failed release, unlock or observer restoration", async () => {
+  for (const kind of ["release", "unlock", "restore"]) {
+    const f = await observedAbort("matching", true);
+    if (kind === "release") f.observer.record("release", Promise.reject(undefined), f.owner, undefined, f.observer.acquisitions[0]);
+    else if (kind === "unlock") { let failed = false; try { Reflect.apply(f.observer.readers[0].reader.releaseLock, {}, []); } catch { failed = true; } assert.equal(failed, true); }
+    else Object.defineProperty(f.observer.readers[0].reader, "read", { configurable: false, value: f.observer.readers[0].reader.read });
+    if (kind === "restore") { await f.observer.join(); assert.throws(() => f.observer.restore(), AggregateError); }
+    else { await assert.rejects(f.observer.join()); f.observer.restore(); }
+  }
+});
+
+test("Worker original completions remain the same success or failure on every retirement call", async () => {
+  for (const failed of [false, true]) {
+    const owner = workerOwnership(), original = failed ? Promise.reject(undefined) : Promise.resolve();
+    assert.equal(owner.track("original", original), original);
+    const first = owner.retire(); assert.equal(first, owner.retire());
+    if (failed) await assert.rejects(first, error => error.errors.includes(undefined)); else assert.equal((await first).pending, 0);
+    assert.equal(first, owner.retire());
+  }
+});
+
+
+test("Worker reader observations retain the originating request waitUntil and the original promises", async () => {
+  const promises = [], context = { waitUntil(original) { assert.equal(this, context); promises.push(original); } };
+  const observer = originalLifetime(), owner = { waitUntil: context.waitUntil.bind(context) }, response = new Response("owned");
+  observer.observeResponse(response, owner);
+  const reader = response.body.getReader(), closed = reader.closed, read = reader.read(); await read; await reader.read(); reader.releaseLock();
+  assert.equal(promises[0], closed); assert.equal(promises[1], read);
+  await observer.join(); observer.restore();
+});
+
+
+test("Node default reporter preserves the actual ZAI diagnostic command at column zero", { timeout: 10000 }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "zai-diagnostic-reporter-"));
+  await allFailures(async () => {
+    const path = join(directory, "reporter.test.mjs");
+    await writeFile(path, 'import test from "node:test";import {types} from "node:util";\n' + supportJs + '\ntest("reporter",()=>{const p=diagnosticProtocol(types.isProxy);p.emitter(line=>process.stdout.write(line))({v:1,layer:"sdk",caseId:"control_cancel",phase:"join",category:"undefined"});});\n');
+    const env = { ...process.env }; delete env.NODE_TEST_CONTEXT;
+    const result = await promisify(execFile)(process.execPath, ["--test", path], { env, timeout: 5000 });
+    const lines = result.stdout.split("\n").filter(line => line.includes("::error title=ZAI contract diagnostic::"));
+    assert.equal(lines.length, 1); assert.ok(lines[0].startsWith("::error title=ZAI contract diagnostic::"));
+    assert.ok(Buffer.byteLength(lines[0]) <= 768);
+  }, [() => rm(directory, { recursive: true, force: true })]);
 });
