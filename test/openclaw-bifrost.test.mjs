@@ -549,7 +549,7 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
   const closed=original("closed",{...common,state:"pending",pending:reader.closed,returned:reader.closed,invoke:3,settle:18});
   const cancel=original("cancel",{...common,state:"pending",args:[undefined],invoke:12,returnAt:13,settle:20});
   const prefix=original("read",{...common,value:{done:false,value:new Uint8Array([1])},settle:5});
-  const release=original("guard_release",{acquisition,receiver:acquisition.result,invoke:21,returnAt:22,settle:23});transport.release=release;caller.pending=[read];
+  const release=original("guard_release",{acquisition,receiver:undefined,args:[],invoke:21,returnAt:22,settle:23});transport.release=release;caller.pending=[read];
   const unlock=original("unlock",{...common,pending:undefined,returned:undefined,invoke:14,returnAt:15,settle:16});
   const getBody={locked:false},getResponse={body:getBody},getAcquisition={owner,guard:identity.guard,input:{signal:caller.signal},inputSignal:caller.signal,response:getResponse,result:{response:getResponse},operation:original("guard")};getAcquisition.pending=getAcquisition.operation.pending;
   const getTransport={owner,method:"GET",response:getResponse,acquisition:getAcquisition,guardObserved:true,bodies:[getBody],readers:[],releases:1,releaseDone:true,release:original("guard_release"),fetch:original("fetch")};getAcquisition.transport=getTransport;
@@ -804,6 +804,14 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
   for(const mutate of [w=>{w.caller.result='aborted';},w=>{w.caller.emptyContent=false;},w=>{w.preabortPostDelta=1;}]){const w=controlEvidence('preabort',identity);mutate(w);assert.equal(evaluator.evaluateBifrostNativeControl(w).qualified,false);}
   const partial=controlEvidence('partial',identity);assert.equal(evaluator.evaluateBifrostNativeControl(partial).qualified,true);partial.caller.result='error';assert.equal(evaluator.evaluateBifrostNativeControl(partial).qualified,false);
  });
+ test('Bifrost SDK evaluator accepts the managed-response bare guard release with no arguments',()=>{
+  const w=nativeEvidence(),release=w.transports[0].release;
+  assert.equal(release.receiver,undefined);assert.deepEqual(release.args,[]);
+  assert.equal(release.acquisition,w.transports[0].acquisition);assert.equal(release.pending,release.returned);
+  const vector=evaluator.bifrostStoredErrorVector(w);assert.ok(vector);assert.equal(vector.length,3);
+  assert.equal(evaluator.evaluateBifrostNativeControl(w).qualified,true);
+  assert.equal(evaluator.bifrostProductExpected(w,undefined).length,0);
+ });
  test('Bifrost SDK evaluator joins delayed reactions without learning a cancel operand or granting product credit',()=>{
   const w=nativeEvidence(),result=evaluator.evaluateBifrostNativeControl(w);assert.equal(result.qualified,true);assert.equal(result.vectorObserved,true);
   assert.notEqual(w.caller.reason,w.originals[1].reason);assert.equal(w.originals.filter(o=>o.state==='rejected').length,3);
@@ -868,7 +876,12 @@ catch{process.exitCode=1;}finally{await r.drain();r.finish();}`;
   'foreign signal reason snapshot':w=>{w.originals[2].evidenceSettle.input.reason={};},
   'original effective read began aborted':w=>{w.originals[1].evidenceInvoke.effective.aborted=true;},
   'pending release':w=>{w.transports[0].release.state='pending';},'failed release undefined':w=>{w.transports[0].release.state='rejected';w.transports[0].release.reason=undefined;},
-  'wrong release receiver':w=>{w.transports[0].release.receiver={};},'missing original release return':w=>{w.transports[0].release.returnAt=0;},
+  'wrong release receiver':w=>{w.transports[0].release.receiver={};},'guard result release receiver':w=>{w.transports[0].release.receiver=w.transports[0].acquisition.result;},
+  'pool lease release receiver':w=>{w.transports[0].release.receiver={release:()=>{}};},'null release receiver':w=>{w.transports[0].release.receiver=null;},
+  'missing release arguments':w=>{delete w.transports[0].release.args;},'nonarray release arguments':w=>{w.transports[0].release.args={length:0};},
+  'undefined release argument':w=>{w.transports[0].release.args=[undefined];},'foreign release argument':w=>{w.transports[0].release.args=[{}];},
+  'wrong release acquisition':w=>{w.transports[0].release.acquisition=w.transports[1].acquisition;},'missing release promise':w=>{w.transports[0].release.pending=undefined;},
+  'missing original release return':w=>{w.transports[0].release.returnAt=0;},
   'duplicate release':w=>{w.transports[0].releases=2;},'early unlock':w=>{w.transports[0].readers[0].unlockAt=10;},'duplicate unlock':w=>{w.transports[0].readers[0].unlocks=2;},
   'unlock rejected undefined':w=>{w.originals[6].state='rejected';w.originals[6].reason=undefined;},'release promise replaced':w=>{w.transports[0].release.returned=Promise.resolve();},
   'releaseLock error':w=>{w.transports[0].readers[0].unlockFailed=true;w.syncFailures.push(new TypeError('synthetic'));},'locked body':w=>{w.transports[0].response.body.locked=true;},

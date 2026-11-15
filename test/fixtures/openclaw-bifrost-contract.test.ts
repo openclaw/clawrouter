@@ -132,7 +132,7 @@ export function bifrostStoredErrorVector(w:any):any[]|undefined {
    c.abortObserved<read.settle&&c.abortObserved<closed.settle&&Math.max(c.abortObserved,a.signalHistory.abort,t.signalHistory.abort)<cancel.invoke&&
    cancel.invoke<cancel.returnAt&&cancel.returnAt<cancel.settle&&cancel.returnAt<unlock.invoke&&unlock.invoke<unlock.returnAt&&unlock.returnAt<r.unlockAt))return;
  if(r.unlocks!==1||r.unlockReceiver!==r.original||r.body.locked||r.unlockFailed||t.releases!==1||!t.releaseDone||
-   t.release?.state!=="fulfilled"||t.release.acquisition!==a||t.release.receiver!==a.result||!t.release.pending||t.release.pending!==t.release.returned||
+   t.release?.state!=="fulfilled"||t.release.acquisition!==a||t.release.receiver!==undefined||!Array.isArray(t.release.args)||t.release.args.length!==0||!t.release.pending||t.release.pending!==t.release.returned||
    !(t.release.returnAt>t.release.invoke&&t.release.settle>t.release.returnAt))return;
  const vector=[read,closed,cancel];
  if(w.originals.some((o:any)=>o.state!=="fulfilled"&&!vector.includes(o)))return;
