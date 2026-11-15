@@ -643,6 +643,177 @@ test("canonical package factories retain original install containment before any
   }
 });
 
+// BEGIN actual preparation helper tests. Every helper I/O binding below is inert.
+let preparationInputSeed;
+async function reaperCompileFixture() {
+  preparationInputSeed ??= (async () => {
+    const owner = await ownershipFixture(), value = await owner.run();
+    return { owner, value, source: await readFile(new URL("../scripts/edge-proof-container.mjs", import.meta.url), "utf8") };
+  })();
+  const { owner, value, source } = await preparationInputSeed;
+  const select = (from, to) => {
+    const a = source.indexOf(from), b = source.indexOf(to, a + from.length);
+    assert.ok(a >= 0 && b > a, from); return source.slice(a, b).replaceAll("export ", "");
+  };
+  const paths = { source: "/opt/edge-input/config/edge-proof/reaper.c", object: "/opt/edge-reaper/reaper.o", binary: "/opt/edge-reaper/reaper", headers: "/opt/edge-reaper/headers.d", manifest: "/opt/edge-reaper/build.json", context: "/opt/edge-input/.edge-context.json", loader: "/lib64/ld-linux-x86-64.so.2" };
+  const tools = { gcc: "/usr/bin/gcc-inert", cc1: "/usr/lib/gcc/inert/cc1", as: "/usr/bin/as", collect2: "/usr/lib/gcc/inert/collect2", ld: "/usr/bin/ld" };
+  const disk = new Map(owner.writes.map(row => [join(containerContract.input, row.path), Buffer.from(row.bytes)]));
+  disk.set(paths.context, Buffer.from(JSON.stringify(value.plan)));
+  for (const path of [...Object.values(tools), "/usr/include/inert.h", "/usr/include/inert2.h", "/usr/lib/inert/start.o", "/usr/lib/inert/libc.so", paths.loader]) disk.set(path, Buffer.from("inert file: " + path));
+  const elf = Buffer.alloc(256), interpreter = Buffer.from(paths.loader + "\0");
+  Buffer.from([127,69,76,70,2,1,1]).copy(elf); elf.writeUInt16LE(3,16); elf.writeUInt16LE(62,18); elf.writeUInt32LE(1,20);
+  elf.writeBigUInt64LE(64n,32); elf.writeUInt16LE(56,54); elf.writeUInt16LE(1,56); elf.writeUInt32LE(3,64);
+  elf.writeBigUInt64LE(128n,72); elf.writeBigUInt64LE(BigInt(interpreter.length),96); interpreter.copy(elf,128);
+  const calls = [], state = { failAt: null, reason: undefined, failures: 0, transform: null, contextHash: value.contextHash };
+  const invoke = (name, args, operation) => {
+    const index = calls.length; calls.push({ name, args });
+    if (index === state.failAt) { state.failures++; throw state.reason; }
+    const result = operation(); return state.transform ? state.transform(name, args, result) : result;
+  };
+  const runtime = { platform: "linux", arch: "x64", version: "v24.22.1" };
+  const bindings = {
+    Buffer, containerContract, process: runtime, join, isAbsolute,
+    hash: owner.sha, hashPattern: /^[a-f0-9]{64}$/,
+    check: (ok, code) => { if (!ok) throw new Error(code); },
+    same: (a,b) => JSON.stringify(a) === JSON.stringify(b),
+    validateContextPlan: owner.api.validateContextPlan,
+    realpath: async (...args) => invoke("realpath", args, () => args[0] === "/usr/bin/gcc" ? tools.gcc : args[0]),
+    stat: async (...args) => invoke("stat", args, () => { assert.ok(disk.has(args[0]), "missing inert stat: " + args[0]); return { mode: 0o755, isFile: () => invoke("isFile", args, () => true) }; }),
+    readFile: async (...args) => invoke("readFile", args, () => { assert.ok(disk.has(args[0]), "missing inert read: " + args[0]); const bytes = Buffer.from(disk.get(args[0])); return args[1] ? bytes.toString(args[1]) : bytes; }),
+    writeFile: async (...args) => invoke("writeFile", args, () => { assert.equal(args[0], paths.manifest); assert.deepEqual(args[2], { flag: "wx", mode: 0o444 }); assert.ok(!disk.has(args[0]), "exclusive inert manifest"); disk.set(args[0], Buffer.from(args[1])); }),
+    execFileSync: (...args) => invoke("execFileSync", args, () => {
+      const [command, argv, options] = args;
+      assert.deepEqual(options, { env: { PATH: "/usr/bin:/bin", LANG: "C", HOME: "/opt/build-home" }, encoding: "utf8", timeout: 60000, maxBuffer: 1024*1024 });
+      if (argv[0] === "--version") { const role = Object.keys(tools).find(role => tools[role] === command); assert.ok(role); return role + " inert-version\n"; }
+      assert.equal(command, tools.gcc);
+      if (argv[0] === "-dumpmachine") return "x86_64-linux-gnu\n";
+      if (argv[0].startsWith("-print-prog-name=")) { const role = argv[0].split("=")[1]; assert.ok(Object.hasOwn(tools, role)); return tools[role] + "\n"; }
+      if (argv.includes("-c")) {
+        disk.set(paths.object, Buffer.from("inert object"));
+        disk.set(paths.headers, Buffer.from("reaper: " + paths.source + " \\\n /usr/include/inert.h /usr/include/inert2.h\n")); return "";
+      }
+      assert.equal(argv[0], "-pie"); disk.set(paths.binary, Buffer.from(elf));
+      return "/usr/lib/inert/start.o\n" + paths.object + "\n/usr/lib/inert/libc.so\n";
+    }),
+  };
+  const helpers = select("const own =", "export function raiseContainerFailures(") + select("const reaperBuildRoot =", "export function validateNativeIdentity(");
+  const api = new Function(...Object.keys(bindings), helpers + "return { compileReaper, qualifyReaper, validateReaperBuild, reaperCompileArguments };")(...Object.values(bindings));
+  const setPlan = change => { const plan = JSON.parse(disk.get(paths.context)); change(plan); const text = JSON.stringify(plan); disk.set(paths.context, Buffer.from(text)); state.contextHash = owner.sha(text); };
+  return { api, paths, tools, disk, calls, state, runtime, elf, setPlan, sha: owner.sha,
+    compile: () => api.compileReaper(state.contextHash), qualify: () => api.qualifyReaper(state.contextHash) };
+}
+test("actual preparation helpers compile and qualify one closed inert context without native calls", async () => {
+  const f = await reaperCompileFixture(); await f.compile();
+  const commands = f.calls.filter(row => row.name === "execFileSync").map(row => row.args.slice(0,2));
+  const expected = [[f.tools.gcc, ["-dumpmachine"]]];
+  for (const role of ["gcc","cc1","as","collect2","ld"]) {
+    if (role !== "gcc") expected.push([f.tools.gcc, ["-print-prog-name=" + role]]);
+    expected.push([f.tools[role], ["--version"]]);
+  }
+  expected.push([f.tools.gcc, ["-std=c11","-O2","-Wall","-Wextra","-Werror","-fstack-protector-strong","-fPIE","-MD","-MF",f.paths.headers,"-MT","reaper","-c",f.paths.source,"-o",f.paths.object]], [f.tools.gcc, ["-pie","-Wl,-z,relro,-z,now","-Wl,-t",f.paths.object,"-o",f.paths.binary]]);
+  assert.deepEqual(commands, expected); assert.equal(commands.length, 12);
+  const manifestText = f.disk.get(f.paths.manifest).toString(), manifest = JSON.parse(manifestText);
+  assert.equal(JSON.stringify(manifest), manifestText); assert.equal(manifest.contextHash, f.state.contextHash);
+  assert.equal(manifest.source.sha256, f.sha(f.disk.get(f.paths.source)));
+  assert.deepEqual(manifest.headers.map(row => row.path), ["/usr/include/inert.h", "/usr/include/inert2.h"]);
+  assert.deepEqual(manifest.tools.map(row => row.path), Object.values(f.tools));
+  for (const row of [manifest.source,manifest.object,manifest.binary,...manifest.tools,...manifest.headers,...manifest.links]) assert.equal(row.sha256, f.sha(f.disk.get(row.path)));
+  const before = f.calls.length, qualified = await f.qualify();
+  assert.deepEqual(qualified, { version:1, contextHash:f.state.contextHash, source:manifest.source, buildSha256:f.sha(manifestText), binary:manifest.binary });
+  assert.ok(f.calls.slice(before).every(row => row.name !== "execFileSync" && row.name !== "writeFile"));
+  assert.equal(f.calls.filter(row => row.name === "writeFile").length, 1);
+  assert.ok(f.calls.filter(row => row.name === "writeFile").every(row => !row.args[0].startsWith(containerContract.input + "/")));
+});
+test("actual preparation helpers retain Error and undefined at every original I/O occurrence", async () => {
+  const operations = {};
+  for (const phase of ["compile","qualify"]) {
+    const good = await reaperCompileFixture(); if (phase === "qualify") await good.compile(); good.calls.length = 0; await good[phase]();
+    operations[phase] = good.calls.length;
+    for (let index = 0; index < good.calls.length; index++) for (const reason of [new Error("inert original operation"), undefined]) {
+      const f = await reaperCompileFixture(); if (phase === "qualify") await f.compile(); f.calls.length = 0;
+      f.state.failAt = index; f.state.reason = reason;
+      await assert.rejects(f[phase](), error => error === reason);
+      assert.equal(f.state.failures, 1); assert.deepEqual(f.calls[index], good.calls[index]);
+      assert.ok(!f.calls.slice(index + 1).some(row => row.name === "writeFile"));
+    }
+  }
+  return { operations, rejectionCases: 2 * (operations.compile + operations.qualify) };
+});
+test("actual preparation helpers reject context, source inventory and materialized byte drift", async () => {
+  for (const [change, failure] of [
+    [f => { f.state.contextHash = "0".repeat(64); }, /context-identity/],
+    [f => f.setPlan(plan => { plan.version = 2; }), /context-identity/],
+    [f => f.setPlan(plan => { plan.harness.pop(); }), /owner-inventory-count/],
+    [f => f.setPlan(plan => { plan.current.files.pop(); }), /owner-inventory-count/],
+    [f => f.setPlan(plan => { plan.frozen.files[0].sha256 = "0".repeat(64); }), /frozen-input-digest/],
+    [f => { f.disk.set(f.paths.source, Buffer.from("changed materialized source")); }, /reaper-original-source/],
+    [f => { f.disk.delete(f.paths.source); }, /missing inert stat/],
+    [f => f.setPlan(plan => { for (const list of [plan.harness,plan.files]) list.find(row => row.path === "config/edge-proof/reaper.c").sha256 = "0".repeat(64); }), /reaper-original-source/],
+  ]) {
+    const f = await reaperCompileFixture(); change(f); await assert.rejects(f.compile(), failure);
+    assert.equal(f.calls.filter(row => row.name === "execFileSync").length, 0); assert.ok(!f.disk.has(f.paths.manifest));
+  }
+});
+test("actual preparation helpers reject unqualified tools, output inventories and ELF bytes", async () => {
+  for (const [field,value] of [["platform","foreign"],["arch","arm64"],["version","v26.0.0"]]) {
+    const f = await reaperCompileFixture(); f.runtime[field] = value; await assert.rejects(f.compile(), /reaper-build-runtime/); assert.equal(f.calls.length, 0);
+  }
+  const transforms = [
+    (name,args,value) => name === "realpath" && args[0] === "/usr/bin/gcc" ? "/task/gcc" : value,
+    (name,args,value) => name === "stat" && args[0].endsWith("gcc-inert") ? { mode:0o644,isFile:()=>true } : value,
+    (name,args,value) => name === "execFileSync" && args[1][0] === "-dumpmachine" ? "foreign-target" : value,
+    (name,args,value) => name === "execFileSync" && args[1][0] === "--version" ? "" : value,
+    (name,args,value) => name === "execFileSync" && args[1][0] === "--version" ? "bad\tversion" : value,
+    (name,args,value) => name === "readFile" && args[0].endsWith("headers.d") ? "wrong: /usr/include/inert.h" : value,
+    (name,args,value) => name === "readFile" && args[0].endsWith("headers.d") ? "reaper: /usr/include/inert.h" : value,
+    (name,args,value) => name === "execFileSync" && args[1][0] === "-pie" ? "/usr/lib/inert/libc.so\n" : value,
+    (name,args,value) => name === "execFileSync" && args[1][0] === "-pie" ? value + "/task/foreign.so\n" : value,
+    (name,args,value) => name === "readFile" && args[0] === "/opt/edge-reaper/reaper" ? Buffer.alloc(64) : value,
+  ];
+  for (const transform of transforms) {
+    const f = await reaperCompileFixture(); f.state.transform = transform; await assert.rejects(f.compile()); assert.ok(!f.disk.has(f.paths.manifest));
+  }
+  for (const path of ["object","binary","headers"]) {
+    const f = await reaperCompileFixture(); f.state.transform = (name,args,value) => { if (name === "execFileSync" && args[1][0] === "-pie") f.disk.delete(f.paths[path]); return value; };
+    await assert.rejects(f.compile()); assert.ok(!f.disk.has(f.paths.manifest));
+  }
+  const f = await reaperCompileFixture(); f.disk.set(f.paths.manifest, Buffer.from("already owned"));
+  await assert.rejects(f.compile(), /exclusive inert manifest/); assert.equal(f.disk.get(f.paths.manifest).toString(), "already owned");
+});
+test("actual preparation qualification rejects manifest and every attested file drift without rebuilding", async () => {
+  const seed = await reaperCompileFixture(); await seed.compile(); const original = JSON.parse(seed.disk.get(seed.paths.manifest));
+  for (const row of [original.source,original.object,original.binary,...original.tools,...original.headers,...original.links]) {
+    const f = await reaperCompileFixture(); await f.compile(); f.calls.length = 0; f.disk.set(row.path, Buffer.from("changed input"));
+    await assert.rejects(f.qualify(), /reaper-build-drift/); assert.ok(f.calls.every(row => row.name !== "execFileSync" && row.name !== "writeFile"));
+  }
+  for (const change of [
+    value => { value.contextHash = "0".repeat(64); }, value => { value.arguments[0].push("-extra"); },
+    value => { value.source.path = "/task/source.c"; }, value => { value.tools[0].sha256 = "bad"; },
+    value => { value.tools[0].version = "bad\tversion"; }, value => { value.tools.pop(); },
+    value => { value.headers.push(value.headers[0]); }, value => { value.links = []; },
+    value => { value.binary.path = "/task/reaper"; }, value => { value.extra = true; },
+  ]) {
+    const f = await reaperCompileFixture(); await f.compile(); const value = JSON.parse(f.disk.get(f.paths.manifest)); change(value); f.disk.set(f.paths.manifest, Buffer.from(JSON.stringify(value)));
+    await assert.rejects(f.qualify());
+  }
+  for (const text of ["{}", "not JSON", " ".repeat(128*1024), JSON.stringify(original) + "\n"]) {
+    const f = await reaperCompileFixture(); await f.compile(); f.disk.set(f.paths.manifest, Buffer.from(text)); await assert.rejects(f.qualify());
+  }
+});
+test("actual preparation helper extraction retains committed imports and helper bindings", async () => {
+  const source = await readFile(new URL("../scripts/edge-proof-container.mjs", import.meta.url), "utf8");
+  for (const name of ["compileReaper","qualifyReaper","reaperFile","validateReaperBuild","validateReaperElf","validateContextPlan"]) {
+    assert.equal((source.match(new RegExp("^(?:export )?(?:async )?function " + name + "\\(", "gm")) ?? []).length, 1, name);
+  }
+  for (const [module,names] of [["node:child_process",["execFileSync"]],["node:fs/promises",["realpath","stat","readFile","writeFile"]],["node:path",["join","isAbsolute"]],["node:crypto",["createHash"]]]) {
+    const imported = source.match(new RegExp('import \\{([^}]+)\\} from "' + module + '";'))[1].split(",").map(name => name.trim());
+    for (const name of names) assert.ok(imported.includes(name), name);
+  }
+  const compile = source.slice(source.indexOf("async function compileReaper("), source.indexOf("async function qualifyReaper("));
+  assert.ok(!compile.includes("import(")); assert.ok(!compile.includes("spawn("));
+});
+// END actual preparation helper tests.
+
 async function nativePrepareFixture(failAt, ...failureArgs) {
   const failure = failureArgs.length ? failureArgs[0] : new Error("inert operation failure");
   const source = await readFile(new URL("../scripts/edge-proof-container.mjs", import.meta.url), "utf8");
@@ -685,6 +856,8 @@ async function nativePrepareFixture(failAt, ...failureArgs) {
     createRequire(path) { touch("createRequire", path); return { resolve(name) { touch("resolve", name); assert.ok(Object.hasOwn(paths, name)); return paths[name]; } }; },
     fileIdentity: async path => { touch("fileIdentity", path); return { path, sha256: path.endsWith("wrangler-dist/cli.js") ? containerContract.cliHash : hex }; },
     validateNativeIdentity(...args) { touch("validateNativeIdentity", ...args); return validateNativeIdentity(...args); },
+    compileReaper: async (...args) => { touch("compileReaper", ...args); },
+    qualifyReaper: async (...args) => { touch("qualifyReaper", ...args); return native().reaper; },
     importModule: async url => { touch("importModule", url); return { default: () => { touch("getTsPath"); return tsPath; } }; },
     execFileSync(command, args, options) { touch("execFileSync", command, args, options); return command === "/usr/local/bin/pnpm" ? "11.28.4\n" : "0.28.2\n"; },
     writeFile: async (...args) => { touch("writeFile", ...args); },
@@ -717,12 +890,16 @@ test("native preparation actual stages preserve each original call and isolate r
   assert.deepEqual(fixture.calls.find(row => row.name === "writeFile").args[2], { flag: "wx", mode: 0o444 });
   assert.equal(fixture.calls.filter(row => row.name === "loadContainer").length, 1);
   assert.equal(fixture.calls.filter(row => row.name === "containerMain").length, 1);
+  assert.deepEqual(fixture.calls.filter(row => row.name === "compileReaper").map(row => row.args), [[other]]);
+  assert.deepEqual(fixture.calls.filter(row => row.name === "qualifyReaper").map(row => row.args), [[other]]);
   assert.equal(fixture.output[0], '{"prepared":true}\n');
   const row = parseNativePrepareStages(nativePrepareCapture(fixture.diagnostics.join(""), { status: 0 }), stageIdentity);
   assert.equal(row.reason, "complete"); assert.equal(row.stage, null); validateContainerDiagnostic(row);
   const count = fixture.frames.length;
   const native = await fixture.functions.qualifyImageInputs(other);
   assert.equal(native.contextHash, other); assert.equal(fixture.frames.length, count);
+  assert.equal(fixture.calls.filter(row => row.name === "compileReaper").length, 1);
+  assert.equal(fixture.calls.filter(row => row.name === "qualifyReaper").length, 2);
 });
 test("native preparation actual flow locates every original failure including undefined without retry", async () => {
   for (const stage of nativePrepareStages) for (const reason of [new Error("owned failure"), undefined]) {
