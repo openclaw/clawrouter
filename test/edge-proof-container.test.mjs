@@ -7,7 +7,7 @@ import { readFile, realpath } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { runInNewContext } from "node:vm";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve, isAbsolute } from "node:path";
 import { containerContract, harnessInputs, installInputs, parseIdentity, validateIdentity, validateMapping, validateImage, dockerEnvironment, containerEnvironment, createArguments, validateContainerInspect, parseControl, validateTerminal, validateNativeIdentity, parseImageBuildReceipt, parseImageBuildStages, parseNativePrepareStages, observeImageBuild, parseContainerReceipt, parseChildPackaging, createProjectionLedger, parseInitPrerequisites, createAttachProjection, runInitPrerequisites, createInitGuardLedger, initGuardLeaf, createMountObservation, validateEmptyMasks, validateMaskCompletion, parseMounts, validateMountFreshness, validateMounts, validateMetadataMounts, validateChildStatus, validateTarget, cgroupPath, validateLimits, attachContainer, processEvidence, retiredCgroup, raiseContainerFailures, validateContainerDiagnostic, emitContainerFailure } from "../scripts/edge-proof-container.mjs";
 import { frozenGitEnvironment, validateGitExecutable, frozenSource } from "../scripts/edge-proof-build.mjs";
 import { edgeProof } from "../scripts/edge-proof-profile.mjs";
@@ -667,6 +667,7 @@ async function nativePrepareFixture(failAt, ...failureArgs) {
   let functions;
   const dependencies = {
     containerContract, installInputs, edgeProof, hashPattern: /^[a-f0-9]{64}$/, join, dirname,
+    validateContextPlan(value, expected) { touch("validateContextPlan", value, expected); assert.equal(expected, other); },
     hash: value => value === "[]" ? other : installInputs[value], same: (a, b) => JSON.stringify(a) === JSON.stringify(b),
     process: { platform: "linux", arch: "x64", version: "v24.22.1", versions: { modules: "137" }, stdout: { write(text) { touch("receipt_output", text); return true; } } },
     check(value, code) { touch("check", code); assert.ok(value, code); },
@@ -2991,3 +2992,130 @@ test("final census widest canonical packets retain every historical field and al
   assert.equal(saturated[6]&1,1);assert.throws(()=>validateFinalCensus(saturated,65536,true,0,trace));
 });
 // END attach diagnostic pure tests.
+
+// BEGIN current/frozen ownership pure tests. No container/installer/native calls.
+async function ownershipFixture(overrides = {}) {
+  const source = await readFile(new URL("../scripts/edge-proof-container.mjs", import.meta.url), "utf8");
+  const select = (from, to) => { const a = source.indexOf(from), b = source.indexOf(to, a); assert.ok(a >= 0 && b > a); return source.slice(a, b).replaceAll("export ", ""); };
+  const constants = select("export const harnessInputs =", "export function createInitGuardLedger(");
+  const helpers = select("const own =", "export function raiseContainerFailures(") + select("// These owners are attested", "async function createBuildContext(");
+  const reads = [], writes = [], calls = [], disk = new Map(), objects = new Map(), entries = new Map();
+  const sha = bytes => createHash("sha256").update(bytes).digest("hex");
+  const oid = (type, bytes) => createHash("sha1").update(Buffer.concat([Buffer.from(`${type} ${bytes.length}\0`), bytes])).digest("hex");
+  const bindings = { Buffer, createHash, edgeProof, join, relative, resolve, isAbsolute,
+    realpath: async path => overrides.realpath ? overrides.realpath(path) : path,
+    lstat: async path => ({ isFile: () => overrides.special !== path }),
+    readFile: async path => { reads.push(path); if (overrides.readFailure === path) throw overrides.reason; assert.ok(disk.has(path), "inert file missing"); return disk.get(path); },
+    writeExclusive: async (root, path, bytes) => { assert.equal(root, "/proof/input"); assert.ok(!writes.some(row => row.path === path)); writes.push({ path, bytes }); },
+  };
+  const api = new Function(...Object.keys(bindings), constants + helpers + "return { harnessInputs, currentInputInventory, currentWorkspaceMembers, installInputs, observeCurrentInputs, materializeOwnedInputs, validateContextPlan };")(...Object.values(bindings));
+  for (const path of new Set([...api.harnessInputs, ...api.currentInputInventory.map(row => row.path)])) {
+    const bytes = await readFile(new URL("../" + path, import.meta.url));
+    disk.set("/checkout/" + path, bytes); const blob = oid("blob", bytes); objects.set(blob, bytes); entries.set(path, { mode: "100644", blob });
+  }
+  const treeBytes = Buffer.from("inert current tree"), tree = oid("tree", treeBytes);
+  const commitBytes = Buffer.from(`tree ${tree}\n\ninert current candidate\n`), commit = oid("commit", commitBytes);
+  const original = (cwd, args) => {
+    assert.equal(cwd, "/checkout"); calls.push(args);
+    const key = args.join(" ");
+    if (key === "rev-parse HEAD") return Buffer.from(commit + "\n");
+    if (key === `rev-parse ${commit}^{tree}`) return Buffer.from((overrides.wrongTree ? "0".repeat(40) : tree) + "\n");
+    if (key === `cat-file commit ${commit}`) return commitBytes;
+    if (key === `cat-file tree ${tree}`) return treeBytes;
+    if (key === `ls-tree -rz ${commit}`) return Buffer.from([...entries].map(([path, row]) => `${row.mode} blob ${row.blob}\t${path}\0`).join(""));
+    if (args[0] === "cat-file" && args[1] === "blob") { assert.ok(objects.has(args[2])); return objects.get(args[2]); }
+    assert.fail("unexpected inert git call");
+  };
+  const frozenBlobs = new Map();
+  for (const path of Object.keys(api.installInputs)) {
+    let bytes = disk.get("/checkout/" + path);
+    // Source-bound fixture removes exactly main143's sole workspace/importer delta.
+    if (path === "pnpm-workspace.yaml") bytes = Buffer.from(bytes.toString().replace("  - packages/provider-plugin-contract\n", ""));
+    if (path === "pnpm-lock.yaml") bytes = Buffer.from(bytes.toString().replace("  packages/provider-plugin-contract:\n    devDependencies:\n      typescript:\n        specifier: ^7.0.2\n        version: 7.0.2\n\n", ""));
+    assert.equal(sha(bytes), api.installInputs[path]); frozenBlobs.set(path, { bytes, blob: oid("blob", bytes) });
+  }
+  const run = async () => {
+    const observed = await api.observeCurrentInputs("/checkout", original);
+    const frozen = await api.materializeOwnedInputs("/checkout", "/proof/input", observed, frozenBlobs);
+    const files = [...writes.map(row => ({ path: row.path, sha256: sha(row.bytes), bytes: row.bytes.length })), ...[".git/HEAD", ".git/shallow"].map(path => ({ path, sha256: sha(edgeProof.sourceSha + "\n"), bytes: 41 }))].sort((a, b) => a.path.localeCompare(b.path, "en"));
+    const plan = { version: 3, current: observed.current, frozen, harness: observed.harness, files }, contextHash = sha(JSON.stringify(plan));
+    assert.equal(api.validateContextPlan(plan, contextHash), plan); return { observed, plan, contextHash };
+  };
+  return { api, original, reads, writes, calls, disk, objects, entries, frozenBlobs, run, sha, commit, tree };
+}
+test("ownership actual helpers separate current143 observations from frozen materialization", async () => {
+  const f = await ownershipFixture(), { plan, contextHash } = await f.run();
+  assert.equal(plan.version, 3); assert.equal(plan.current.commit, f.commit); assert.equal(plan.current.tree, f.tree);
+  assert.equal(plan.current.files.length, 12); assert.equal(plan.current.files.filter(row => row.path.startsWith("packages/")).length, 8);
+  assert.equal(plan.current.scope, "observed-not-installed-or-native-qualified");
+  assert.equal(plan.frozen.commit, edgeProof.sourceSha); assert.equal(plan.frozen.files.length, 4);
+  for (const path of ["pnpm-workspace.yaml", "pnpm-lock.yaml"]) {
+    assert.notEqual(plan.current.files.find(row => row.path === path).sha256, plan.frozen.files.find(row => row.path === path).sha256);
+    assert.ok(f.writes.find(row => row.path === path).bytes.equals(f.frozenBlobs.get(path).bytes));
+  }
+  assert.equal(new Set(f.reads).size, f.reads.length); assert.equal(f.writes.length, f.api.harnessInputs.length + 4);
+  assert.ok(f.writes.every(row => !row.path.startsWith("packages/") && !row.path.includes("node_modules")));
+  assert.equal(contextHash, f.sha(JSON.stringify(plan)));
+});
+test("ownership rejects incomplete current workspace/package inventory and Git byte drift", async () => {
+  for (const path of ["packages/provider-plugin-contract/package.json", "packages/provider-plugin-contract/src/index.ts", "pnpm-workspace.yaml", "admin/package.json"]) {
+    const f = await ownershipFixture(); f.entries.delete(path); await assert.rejects(f.run()); assert.equal(f.writes.length, 0);
+  }
+  for (const change of [f => f.entries.set("packages/provider-plugin-contract/extra.ts", f.entries.get("package.json")), f => f.disk.set("/checkout/pnpm-lock.yaml", f.frozenBlobs.get("pnpm-lock.yaml").bytes), f => f.entries.get("package.json").blob = "0".repeat(40), f => f.entries.get("package.json").mode = "120000"]) {
+    const f = await ownershipFixture(); change(f); await assert.rejects(f.run()); assert.equal(f.writes.length, 0);
+  }
+  const f = await ownershipFixture({ wrongTree: true }); await assert.rejects(f.run(), /current-tree/); assert.equal(f.writes.length, 0);
+});
+test("ownership rejects filesystem substitution, checkout writes and preserves undefined reads", async () => {
+  for (const options of [{ realpath: path => path === "/checkout/package.json" ? "/foreign/package.json" : path }, { special: "/checkout/package.json" }]) {
+    const f = await ownershipFixture(options); await assert.rejects(f.run(), /current-regular-file/); assert.equal(f.writes.length, 0);
+  }
+  const f = await ownershipFixture(), observed = await f.api.observeCurrentInputs("/checkout", f.original);
+  for (const target of ["/checkout", "/checkout/proof", "/proof/../checkout", "relative"]) await assert.rejects(f.api.materializeOwnedInputs("/checkout", target, observed, f.frozenBlobs), /exclusive-proof-root/);
+  assert.equal(f.writes.length, 0);
+  for (const reason of [undefined, new Error("inert original read")]) {
+    const failed = await ownershipFixture({ readFailure: "/checkout/package.json", reason }); let rejected = false;
+    try { await failed.run(); } catch (actual) { rejected = true; assert.equal(actual, reason); }
+    assert.equal(rejected, true); assert.equal(failed.writes.length, 0);
+  }
+});
+test("ownership frozen Git blobs and manifest owners cannot be swapped or forged", async () => {
+  for (const mutate of [f => f.frozenBlobs.delete("package.json"), f => f.frozenBlobs.get("package.json").blob = "a".repeat(40), f => f.frozenBlobs.get("pnpm-lock.yaml").bytes = f.disk.get("/checkout/pnpm-lock.yaml")]) {
+    const f = await ownershipFixture(); mutate(f); await assert.rejects(f.run(), /frozen-install-input/); assert.equal(f.writes.length, 0);
+  }
+  const f = await ownershipFixture(), { plan, contextHash } = await f.run();
+  for (const mutate of [p => p.version = 2, p => [p.current, p.frozen] = [p.frozen, p.current], p => p.current.files.pop(), p => p.current.workspaceMembers.pop(), p => p.current.scope = "qualified", p => p.frozen.files[0].blob = "a".repeat(40), p => p.frozen.files[0].sha256 = "a".repeat(64), p => p.frozen.tree = "a".repeat(40), p => p.files.pop(), p => p.files.push({ path: "node_modules/borrowed", sha256: "a".repeat(64), bytes: 1 }), p => p.files[0].path = "../escape", p => p.harness.pop()]) {
+    const forged = structuredClone(plan); mutate(forged);
+    assert.throws(() => f.api.validateContextPlan(forged, f.sha(JSON.stringify(forged))));
+  }
+  for (const key of ["commit", "tree"]) { const forged = structuredClone(plan); forged.current[key] = "b".repeat(40); assert.throws(() => f.api.validateContextPlan(forged, contextHash), /context-identity/); }
+});
+test("ownership consumer uses whole schema hash and original builder frozen equality remains strict", async () => {
+  const source = await readFile(new URL("../scripts/edge-proof-container.mjs", import.meta.url), "utf8");
+  assert.ok(source.includes("validateContextPlan(inputPlan, contextHash);"));
+  assert.ok(source.includes("const contextHash = hash(JSON.stringify(inputPlan)); validateContextPlan(inputPlan, contextHash);"));
+  assert.ok(source.includes('writeExclusive(context, "Dockerfile", observed.bytes.get("config/edge-proof/Dockerfile"))'));
+  const builder = await readFile(new URL("../scripts/edge-proof-build.mjs", import.meta.url), "utf8");
+  const loop = builder.slice(builder.indexOf('  for (const name of ["package.json"'), builder.indexOf('  for (const entry of files)', builder.indexOf('  for (const name of ["package.json"')));
+  assert.ok(loop.includes(".equals("));
+  const f = await ownershipFixture();
+  // Execute the original input-equality loop only; all reads and Git rows are inert.
+  const paths = Object.keys(f.api.installInputs), files = paths.map(path => ({ path, bytes: f.frozenBlobs.get(path).bytes }));
+  const run = new Function("files", "cwd", "readFile", "join", "check", `return (async()=>{${loop}})();`);
+  const check = (value, message) => assert.ok(value, message);
+  await assert.rejects(run(files, "/checkout", async path => f.disk.get(path), join, check));
+  await run(files, "/frozen", async path => f.frozenBlobs.get(path.slice(8)).bytes, join, check);
+});
+test("ownership actual image consumer rejects altered context before enumeration or native work", async () => {
+  const f = await ownershipFixture(), { plan, contextHash } = await f.run();
+  const source = await readFile(new URL("../scripts/edge-proof-container.mjs", import.meta.url), "utf8");
+  const start = source.indexOf("async function qualifyImageInputs("), end = source.indexOf('  prepare?.enter("context_enumeration");', start);
+  assert.ok(start >= 0 && end > start);
+  let reads = 0; const stages = [], process = { platform: "linux", arch: "x64", version: "v24.22.1", versions: { modules: "137" } };
+  const make = input => new Function("process", "containerContract", "readFile", "join", "check", "validateContextPlan", source.slice(start, end) + "return inputPlan; } return qualifyImageInputs;")(process, { input: "/image-input" }, async path => { assert.equal(path, "/image-input/.edge-context.json"); reads++; return JSON.stringify(input); }, join, (ok, code) => assert.ok(ok, code), f.api.validateContextPlan);
+  assert.deepEqual(await make(plan)(contextHash, { enter: stage => stages.push(stage) }), plan);
+  assert.deepEqual(stages, ["runtime", "context_read", "context_identity"]); assert.equal(reads, 1);
+  const forged = structuredClone(plan); forged.version = 2;
+  await assert.rejects(make(forged)(f.sha(JSON.stringify(forged))), /context-identity/);
+});
+// END current/frozen ownership pure tests.

@@ -32,6 +32,91 @@ export const installInputs = Object.freeze({
   "pnpm-workspace.yaml": "4170373a544197669e91120a9584d12f0d1e26912919546b8992615f0cea9b26",
   "admin/package.json": "cb5fc9f00b77d9da35f5499968a94460717118e21062728cc3bacca48d90ac7c",
 });
+const frozenInstallBlobs = Object.freeze({
+  "package.json": "44cea586e784a7a8c5070d230366e703f34c8eb2",
+  "pnpm-lock.yaml": "ccd79e35e8e0a1a734ea7faf81074b07bf7e11a1",
+  "pnpm-workspace.yaml": "eb0c26a19a820af176ce88c501d4a6235b3fda52",
+  "admin/package.json": "f7e97dcb4d1361cd7a6a8f0db64e94ebd6554014",
+});
+// Current packaging closure is observed only. The image installs installInputs,
+// whose owner remains the frozen Worker source, never this current workspace.
+export const currentWorkspaceMembers = Object.freeze(["admin", "packages/provider-plugin-contract"]);
+export const currentInputInventory = Object.freeze(
+[
+  {
+    "path": "admin/package.json",
+    "blob": "f7e97dcb4d1361cd7a6a8f0db64e94ebd6554014",
+    "sha256": "cb5fc9f00b77d9da35f5499968a94460717118e21062728cc3bacca48d90ac7c",
+    "bytes": 799
+  },
+  {
+    "path": "package.json",
+    "blob": "44cea586e784a7a8c5070d230366e703f34c8eb2",
+    "sha256": "07130060a46c69fe292aa5865b331cc6c06e3b215a402c362787db4c30443841",
+    "bytes": 3130
+  },
+  {
+    "path": "packages/provider-plugin-contract/LICENSE",
+    "blob": "c6d2a30e1b9e1045dd901a83ad66acfbba7aa05e",
+    "sha256": "6ae2daf92d73e912aef033d56ce374df997ae0ad1d88ca9ef76f0c11123aae27",
+    "bytes": 1065
+  },
+  {
+    "path": "packages/provider-plugin-contract/README.md",
+    "blob": "0d87b6fde00b714bfcfae22505302424cc78f0fe",
+    "sha256": "e25ebfd5e56985c231eacf40d124d3f12e465e7f49c730d6a1a71b33d9995fac",
+    "bytes": 1399
+  },
+  {
+    "path": "packages/provider-plugin-contract/package.json",
+    "blob": "59142f77a7949483e1f83e5a4463867cafc0f8dd",
+    "sha256": "fafc5d56815877825ca49d279349c09bb1492f982e10ccac821a157d95362470",
+    "bytes": 583
+  },
+  {
+    "path": "packages/provider-plugin-contract/src/conformance.ts",
+    "blob": "08024dbc187f17c9f18ddabec79d56be67ba5cf0",
+    "sha256": "09ce95daf99ecc6f31ef01d08c94b6921131954ab9c057937ecf3aa96b2cb864",
+    "bytes": 7719
+  },
+  {
+    "path": "packages/provider-plugin-contract/src/index.ts",
+    "blob": "5f609847211ac5c3283c14ba6c446af57d52c779",
+    "sha256": "f04334baef3c089f5cf2795eef42a3684cb36ae88e52b0ede819bb66d52746a1",
+    "bytes": 5478
+  },
+  {
+    "path": "packages/provider-plugin-contract/src/package-index.ts",
+    "blob": "454f53a1a801441b2c9c6e6259fb1ba23e0ed0ef",
+    "sha256": "46a21483fae6f5723d1b04387f4e593479b9755b8ba24a66ded2958edb52f986",
+    "bytes": 735
+  },
+  {
+    "path": "packages/provider-plugin-contract/src/product-metadata.ts",
+    "blob": "b8a50c10c106e20c71ca89306a7b6d7ad1c69737",
+    "sha256": "b8a0310ca7606a32ae20b9eaf74f888092a3382769e775bbdc1ba7166c9fd81e",
+    "bytes": 553
+  },
+  {
+    "path": "packages/provider-plugin-contract/tsconfig.json",
+    "blob": "8215fdf9948885613864bd0ddcd0280b651c32bc",
+    "sha256": "790af294f30d983e8dbf578f1f3e22355a3376c1368f4a6d91a7093f91dab997",
+    "bytes": 367
+  },
+  {
+    "path": "pnpm-lock.yaml",
+    "blob": "6bbea6484ace8dcadba5a1b82ac74a095ab10e2a",
+    "sha256": "00dfde610072dfde318c87a2a9f9905d737a108e7bef29fb3a16577d9cb18f53",
+    "bytes": 57136
+  },
+  {
+    "path": "pnpm-workspace.yaml",
+    "blob": "5b29aab3e6705dd83c77f36c289fb9469bfdccaa",
+    "sha256": "5504ac71d5ce21ef500542c033f4c9858c916d345636dd90b98cf385df0d77ea",
+    "bytes": 296
+  }
+]
+);
 const hash = bytes => createHash("sha256").update(bytes).digest("hex");
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const fail = code => { throw new Error(`edge-container: ${code}`); };
@@ -210,7 +295,7 @@ async function qualifyImageInputs(contextHash, prepare) {
   prepare?.enter("context_read");
   const inputPlan = JSON.parse(await readFile(join(root, ".edge-context.json"), "utf8"));
   prepare?.enter("context_identity");
-  check(hash(JSON.stringify(inputPlan.files)) === contextHash && inputPlan.sourceSha === edgeProof.sourceSha && inputPlan.sourceTree === edgeProof.sourceTree, "context-identity");
+  validateContextPlan(inputPlan, contextHash);
   prepare?.enter("context_enumeration");
   prepare?.enumerationManifest(inputPlan.files);
   const actual = await contextFiles(root, new Set(["node_modules", "admin/node_modules", ".edge-context.json", ".edge-native.json"]), prepare);
@@ -305,9 +390,90 @@ async function contextFiles(root, excluded = new Set(), prepare) {
 async function writeExclusive(root, path, bytes) {
   const target = join(root, path); await mkdir(dirname(target), { recursive: true, mode: 0o700 }); await writeFile(target, bytes, { flag: "wx", mode: 0o600 });
 }
+// These owners are attested by the trusted setup parent and bound together by
+// contextHash. Current bytes are never installed or copied over the checkout.
+const gitObjectHash = (type, bytes) => createHash("sha1").update(Buffer.concat([Buffer.from(`${type} ${bytes.length}\0`), bytes])).digest("hex");
+function inventoryRow(path, bytes) { return { path, blob: gitObjectHash("blob", bytes), sha256: hash(bytes), bytes: bytes.length }; }
+function validateInventory(rows, paths, withBlob = true) {
+  check(Array.isArray(rows) && rows.length === paths.length, "owner-inventory-count");
+  for (let i = 0; i < paths.length; i++) {
+    const row = rows[i]; exactKeys(row, withBlob ? ["path", "blob", "sha256", "bytes"] : ["path", "sha256", "bytes"]);
+    check(own(row, "path") === paths[i] && hashPattern.test(own(row, "sha256")) && Number.isSafeInteger(own(row, "bytes")) && row.bytes >= 0 && row.bytes <= 256 * 1024 * 1024, "owner-inventory-entry");
+    if (withBlob) check(shaPattern.test(own(row, "blob")), "owner-inventory-blob");
+  }
+}
+export function validateContextPlan(plan, contextHash) {
+  exactKeys(plan, ["version", "current", "frozen", "harness", "files"]);
+  check(own(plan, "version") === 3 && hash(JSON.stringify(plan)) === contextHash, "context-identity");
+  const current = own(plan, "current"), frozen = own(plan, "frozen"), harness = own(plan, "harness"), files = own(plan, "files");
+  exactKeys(current, ["scope", "commit", "tree", "workspaceMembers", "files"]);
+  check(own(current, "scope") === "observed-not-installed-or-native-qualified" && shaPattern.test(own(current, "commit")) && shaPattern.test(own(current, "tree")) && same(own(current, "workspaceMembers"), currentWorkspaceMembers), "current-owner");
+  validateInventory(own(current, "files"), currentInputInventory.map(row => row.path));
+  check(same(current.files, currentInputInventory), "current-input-closure");
+  exactKeys(frozen, ["scope", "commit", "tree", "files"]);
+  check(own(frozen, "scope") === "frozen-worker-install" && own(frozen, "commit") === edgeProof.sourceSha && own(frozen, "tree") === edgeProof.sourceTree, "frozen-owner");
+  validateInventory(own(frozen, "files"), Object.keys(installInputs).sort());
+  for (const row of frozen.files) check(row.sha256 === installInputs[row.path] && row.blob === frozenInstallBlobs[row.path], "frozen-input-digest");
+  validateInventory(harness, [...harnessInputs].sort());
+  check(Array.isArray(files) && files.length > 0 && files.length <= 50000, "materialized-inventory");
+  const paths = files.map(row => own(row, "path"));
+  check(paths.every(path => typeof path === "string" && /^[a-zA-Z0-9_./-]+$/.test(path) && !path.startsWith("/") && path.split("/").every(part => part && part !== "." && part !== "..")) && new Set(paths).size === paths.length && same(paths, [...paths].sort((a, b) => a.localeCompare(b, "en"))), "materialized-paths");
+  validateInventory(files, paths, false);
+  let size = 0; for (const row of files) size += row.bytes;
+  check(size <= 256 * 1024 * 1024, "materialized-capacity");
+  const expected = new Map([...harness, ...frozen.files].map(row => [row.path, row]));
+  for (const row of files) {
+    if (expected.has(row.path)) { const original = expected.get(row.path); check(row.sha256 === original.sha256 && row.bytes === original.bytes, "materialized-owner-bytes"); expected.delete(row.path); }
+    else check(row.path === ".git/HEAD" || row.path === ".git/shallow" || /^\.git\/objects\/[a-f0-9]{2}\/[a-f0-9]{38}$/.test(row.path), "materialized-unowned-input");
+  }
+  check(expected.size === 0 && paths.includes(".git/HEAD") && paths.includes(".git/shallow"), "materialized-owner-closure");
+  return plan;
+}
+async function observeCurrentInputs(cwd, original) {
+  check(isAbsolute(cwd) && await realpath(cwd) === cwd, "current-root");
+  const commit = original(cwd, ["rev-parse", "HEAD"]).toString().trim(); check(shaPattern.test(commit), "current-commit");
+  const commitBytes = original(cwd, ["cat-file", "commit", commit]);
+  const tree = original(cwd, ["rev-parse", `${commit}^{tree}`]).toString().trim();
+  check(shaPattern.test(tree) && gitObjectHash("commit", commitBytes) === commit && commitBytes.toString().split("\n")[0] === `tree ${tree}` && gitObjectHash("tree", original(cwd, ["cat-file", "tree", tree])) === tree, "current-tree");
+  const entries = new Map();
+  for (const entry of original(cwd, ["ls-tree", "-rz", commit]).toString().split("\0").filter(Boolean)) {
+    const tab = entry.indexOf("\t"), path = entry.slice(tab + 1), [mode, type, blob] = entry.slice(0, tab).split(" ");
+    check(tab > 0 && !entries.has(path), "current-git-inventory"); entries.set(path, { mode, type, blob });
+  }
+  const packagePaths = currentInputInventory.map(row => row.path).filter(path => path.startsWith("packages/provider-plugin-contract/"));
+  check(same([...entries.keys()].filter(path => path.startsWith("packages/provider-plugin-contract/")).sort(), packagePaths), "current-package-closure");
+  const bytes = new Map(), inventory = new Map();
+  for (const path of [...new Set([...harnessInputs, ...currentInputInventory.map(row => row.path)])].sort()) {
+    const entry = entries.get(path); check(entry && ["100644", "100755"].includes(entry.mode) && entry.type === "blob" && shaPattern.test(entry.blob), "current-git-file");
+    const candidate = join(cwd, path); check(await realpath(candidate) === candidate && (await lstat(candidate)).isFile(), "current-regular-file");
+    const data = await readFile(candidate), gitBytes = original(cwd, ["cat-file", "blob", entry.blob]);
+    check(gitObjectHash("blob", gitBytes) === entry.blob && data.equals(gitBytes), "current-git-bytes");
+    bytes.set(path, data); inventory.set(path, inventoryRow(path, data));
+  }
+  const files = currentInputInventory.map(row => inventory.get(row.path));
+  check(same(files, currentInputInventory) && original(cwd, ["rev-parse", "HEAD"]).toString().trim() === commit, "current-input-drift");
+  return { current: { scope: "observed-not-installed-or-native-qualified", commit, tree, workspaceMembers: [...currentWorkspaceMembers], files }, harness: [...harnessInputs].sort().map(path => inventory.get(path)), bytes };
+}
+async function materializeOwnedInputs(cwd, input, observed, frozenBlobs) {
+  const fromCheckout = relative(cwd, input);
+  check(isAbsolute(input) && resolve(input) === input && fromCheckout.startsWith(".." + "/"), "exclusive-proof-root");
+  const frozen = { scope: "frozen-worker-install", commit: edgeProof.sourceSha, tree: edgeProof.sourceTree, files: [] };
+  for (const path of Object.keys(installInputs).sort()) {
+    const row = frozenBlobs.get(path);
+    check(row && Buffer.isBuffer(row.bytes) && gitObjectHash("blob", row.bytes) === row.blob && row.blob === frozenInstallBlobs[path] && hash(row.bytes) === installInputs[path], "frozen-install-input");
+    frozen.files.push(inventoryRow(path, row.bytes));
+  }
+  for (const row of observed.harness) {
+    const bytes = observed.bytes.get(row.path); check(bytes && same(inventoryRow(row.path, bytes), row), "harness-snapshot-drift");
+    await writeExclusive(input, row.path, bytes);
+  }
+  for (const row of frozen.files) await writeExclusive(input, row.path, frozenBlobs.get(row.path).bytes);
+  return frozen;
+}
 async function createBuildContext(cwd, root) {
   const git = (await fileIdentity(containerContract.git)).path;
   const original = (directory, args, input) => execFileSync(git, args, { cwd: directory, env: gitEnvironment, input, maxBuffer: 64 * 1024 * 1024, timeout: 60000 });
+  const observed = await observeCurrentInputs(cwd, original);
   const fetchRoot = join(root, "source-fetch"), context = join(root, "context"), input = join(context, "input");
   await mkdir(fetchRoot); await mkdir(input, { recursive: true });
   original(fetchRoot, ["init", "--bare", "--template="]);
@@ -316,10 +482,11 @@ async function createBuildContext(cwd, root) {
   original(fetchRoot, ["-c", "gc.auto=0", "-c", "maintenance.auto=false", "-c", "fetch.writeCommitGraph=false", "fetch", "--no-auto-maintenance", "--no-tags", "--no-prune", "--no-recurse-submodules", "--no-write-fetch-head", "--refmap=", "--depth=1", "https://github.com/openclaw/clawrouter.git", edgeProof.sourceSha]);
   check(original(fetchRoot, ["rev-parse", `${edgeProof.sourceSha}^{tree}`]).toString().trim() === edgeProof.sourceTree, "source-tree");
   const entries = original(fetchRoot, ["ls-tree", "-rtz", edgeProof.sourceSha]).toString().split("\0").filter(Boolean);
-  const objects = new Map([[edgeProof.sourceSha, "commit"], [edgeProof.sourceTree, "tree"]]);
+  const objects = new Map([[edgeProof.sourceSha, "commit"], [edgeProof.sourceTree, "tree"]]), frozenPaths = new Map(), frozenBlobs = new Map();
   for (const entry of entries) {
     const [meta, path] = entry.split("\t"), [mode, type, oid] = meta.split(" ");
     check(["100644", "100755", "040000"].includes(mode) && ["blob", "tree"].includes(type) && shaPattern.test(oid) && /^[a-zA-Z0-9_./-]+$/.test(path) && !path.split("/").includes(".."), "source-object-entry"); objects.set(oid, type);
+    if (Object.hasOwn(installInputs, path)) { check(type === "blob" && mode === "100644", "frozen-input-mode"); frozenPaths.set(path, oid); }
   }
   check(objects.size < 25000, "source-object-capacity"); let sourceBytes = 0;
   for (const [oid, type] of [...objects].sort()) {
@@ -327,18 +494,16 @@ async function createBuildContext(cwd, root) {
     const raw = Buffer.concat([Buffer.from(`${type} ${bytes.length}\0`), bytes]);
     check(createHash("sha1").update(raw).digest("hex") === oid, "source-object-hash");
     await writeExclusive(input, `.git/objects/${oid.slice(0, 2)}/${oid.slice(2)}`, deflateSync(raw));
+    for (const [path, blob] of frozenPaths) if (blob === oid) frozenBlobs.set(path, { blob, bytes });
   }
   await writeExclusive(input, ".git/HEAD", edgeProof.sourceSha + "\n");
   await writeExclusive(input, ".git/shallow", edgeProof.sourceSha + "\n"); await mkdir(join(input, ".git/refs"));
-  for (const path of [...harnessInputs, ...Object.keys(installInputs)]) {
-    const candidate = join(cwd, path); check(await realpath(candidate) === candidate && (await lstat(candidate)).isFile(), "harness-file");
-    const bytes = await readFile(candidate);
-    if (Object.hasOwn(installInputs, path)) check(hash(bytes) === installInputs[path] && original(fetchRoot, ["show", `${edgeProof.sourceSha}:${path}`]).equals(bytes), "frozen-install-input");
-    await writeExclusive(input, path, bytes);
-  }
-  const files = await contextFiles(input), contextHash = hash(JSON.stringify(files));
-  await writeExclusive(input, ".edge-context.json", JSON.stringify({ version: 2, sourceSha: edgeProof.sourceSha, sourceTree: edgeProof.sourceTree, files }));
-  await writeExclusive(context, "Dockerfile", await readFile(join(cwd, "config/edge-proof/Dockerfile")));
+  const frozen = await materializeOwnedInputs(cwd, input, observed, frozenBlobs);
+  const files = await contextFiles(input);
+  const inputPlan = { version: 3, current: observed.current, frozen, harness: observed.harness, files };
+  const contextHash = hash(JSON.stringify(inputPlan)); validateContextPlan(inputPlan, contextHash);
+  await writeExclusive(input, ".edge-context.json", JSON.stringify(inputPlan));
+  await writeExclusive(context, "Dockerfile", observed.bytes.get("config/edge-proof/Dockerfile"));
   return { context, contextHash, files, dockerfileHash: hash(await readFile(join(context, "Dockerfile"))) };
 }
 
