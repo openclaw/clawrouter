@@ -1,5 +1,6 @@
 # Operator-hosted transport only: docs/configured-gateway-providers.md.
 # Endpoint/model source checked 2026-11-03: https://docs.litellm.ai/docs/proxy/docker_quick_start
+# Discovery source: openclaw/openclaw@31ad71a8addc1d42fbc5478f7e114860f5cbf6c7 extensions/litellm/index.ts:256-271.
 schema: clawrouter.service-provider.v1
 id: litellm
 displayName: LiteLLM gateway
@@ -28,10 +29,12 @@ adapter:
   stream: openai_sse
   error: openai_error
 capabilities:
+  - { id: models.list, endpoint: models_list, methods: [GET] }
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
 endpoints:
+  models_list: { method: GET, path: /models, pathParams: [], requestFormat: openai.models, responseFormat: openai.models, timeoutMs: 30000 }
   chat_completions:
     modelPassthrough: {}
     path: /chat/completions
