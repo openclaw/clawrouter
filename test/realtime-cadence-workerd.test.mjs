@@ -120,13 +120,16 @@ function delayed(ns, key) { return new Proxy(ns, { get(target, prop) {
     const url = new URL(typeof input[0] === 'string' || input[0] instanceof URL ? input[0] : input[0].url);
     if (key === 'ledger' && url.pathname === holdPath) { calls.held++; await new Promise(resolve => releases.push(resolve)); }
     const observed = key === 'authority' || url.pathname === '/status';
-    const started = Date.now();
+    const started = Date.now(), startedMono = performance.now();
     if (observed) { calls[key]++; await pause(delay[key]); }
-    const dispatched = Date.now(), response = await stub.fetch(...input);
+    const dispatched = Date.now(), dispatchedMono = performance.now(), response = await stub.fetch(...input);
+    const completedMono = performance.now();
     if(key==='authority'&&holdInspection&&!heldInspection){heldInspection=true;preparation.phase='held-completed-authority-reply';
       try{const gate=await fetch('https://cadence-gate.example/observation');await gate.text();}
       catch(primary){try{await response.body?.cancel();}catch(cleanup){throw new AggregateError([primary,cleanup],'cadence held-reply cleanup');}throw primary;}}
-    if (observing && observed && observations.length < 64) observations.push({ key, pathId:rpcPaths.indexOf(url.pathname)+1, phaseId:3, started, dispatched, completed: Date.now(), status: response.status });
+    if (observing && observed && observations.length < 64) observations.push({ key, pathId:rpcPaths.indexOf(url.pathname)+1, phaseId:3, started, dispatched, completed: Date.now(), status: response.status,
+      isolate: { clock: "performance.now", started: startedMono, dispatched: dispatchedMono, completed: completedMono,
+        injectedDelayMs: delay[key], preDispatchWaitMs: dispatchedMono - startedMono, fetchMs: completedMono - dispatchedMono } });
     return response;
   } }; };
 } }); }
@@ -172,10 +175,15 @@ export default { async fetch(r, env, ctx) {
 }, queue: handler.queue };
 `;
 const upstream = String.raw`
-let appends = [], outputs = 0, creates = 0, ticks = [], closedAt = null, connections = 0;
+let appends = [], outputs = 0, creates = 0, ticks = [], closedAt = null, connections = 0, timerStartedAt = null;
 export default { async fetch(r) {
   if(new URL(r.url).origin==='https://cadence-gate.example')return fetch(__GATE_ORIGIN__+new URL(r.url).pathname,r);
-  if (new URL(r.url).pathname === '/fixture-stats') return Response.json({ appends, outputs, creates, closedAt, connections, maxTickGapMs: Math.max(0, ...ticks.slice(1).map((at, i) => at - ticks[i])) });
+  if (new URL(r.url).pathname === '/fixture-stats') {
+    const statsSnapshotAt = Date.now();
+    return Response.json({ appends, outputs, creates, closedAt, connections, maxTickGapMs: Math.max(0, ...ticks.slice(1).map((at, i) => at - ticks[i])),
+      timer: { clock: 'upstream Date.now', startedAt: timerStartedAt, firstTickAt: ticks[0] ?? null,
+        lastTickAt: ticks.at(-1) ?? null, statsSnapshotAt, tickCount: ticks.length } });
+  }
   if (r.headers.get('authorization') !== __EXPECTED_AUTH__) throw Error('wrong route');
   connections++;
   const pair = new WebSocketPair(), ws = pair[1]; ws.accept(); let timer, active;
@@ -188,6 +196,7 @@ export default { async fetch(r) {
       creates++; active = 'response_cadence';
       send({ type: 'response.created', response: { id: active, metadata: e.response.metadata } });
       send({ type: 'response.output_item.added', response_id: active, item: { id: 'assistant_cadence', type: 'message', role: 'assistant' } });
+      timerStartedAt = Date.now();
       timer = setInterval(() => { outputs++; ticks.push(Date.now()); send({ type: 'response.output_audio.delta', response_id: active, item_id: 'assistant_cadence', delta: btoa(String.fromCharCode(...new Uint8Array(160))), fixture_at: Date.now() }); }, 20);
     }
     if (e.type === 'input_audio_buffer.append') {
@@ -330,6 +339,7 @@ async function cadence(t, asr, frames, rpc) {
   const delay = stats.appends.map(x => x.at - offeredAt[x.index]);
   const result = { asr, durationMs: Date.now() - start, offered: frames, nativeChunkMs: 20, bytesPerChunk: 160, injectedAuthorityRpcMs: rpc?.authority ?? 15, injectedLedgerStatusRpcMs: rpc?.ledger ?? 30,
     egress: stats.appends.length, acknowledgments: c.q.acks.length, upstreamAudioFrames: stats.outputs, receivedAudioFrames: c.q.outputDelay.length, maxUpstreamTickGapMs: stats.maxTickGapMs,
+    readerSnapshot: { clock: 'Node Date.now', phase: 'after stats and probeState RPCs; before close/assertions', at: Date.now(), windowStartedAt: start }, upstreamTimer: stats.timer,
     maxEgressMs: Math.max(-1, ...delay), maxDownstreamMs: Math.max(-1, ...c.q.outputDelay), maxSenderScheduleLagMs: Math.max(...scheduleLag), errors: c.q.errors, closed: c.q.closed, calls,
     limits: 'Production shared16-event/256KiB queue, aggregate/idle limits and4096 bidirectional event cap unchanged. Synthetic workerd/SQL only; no physical/provider acceptance.' };
   t.diagnostic(JSON.stringify(result));
@@ -381,7 +391,7 @@ for (const asr of [false, true]) for (const kind of ['revocation', 'principal', 
       // A failed deadline must retain authority/RPC, sender and both socket
       // observations; diagnostics after the assertion lose the failing state.
       const closeFrame = f.closeObservation.snapshot(changed, c.q.closedAt);
-      t.diagnostic(JSON.stringify({ kind, asr, mutationStarted, changed, mutationMs, closeMs: elapsed, errorAt: c.q.errorAt, clientClosedAt: c.q.closedAt, sentAt, errors: c.q.errors, stats, calls, closeFrame }));
+      t.diagnostic(JSON.stringify({ kind, asr, clocks: { host: "Date.now; authority ACK to client close before stats RPC", router: "performance.now; isolate-local only" }, mutationStarted, changed, mutationMs, closeMs: elapsed, errorAt: c.q.errorAt, clientClosedAt: c.q.closedAt, sentAt, errors: c.q.errors, stats, calls, closeFrame }));
       assert.equal(closeFrame.valid, true, 'one valid selected receiver conclude observation');
     }
     assert.equal(c.q.closed, true, JSON.stringify({ kind, elapsed, stats }));

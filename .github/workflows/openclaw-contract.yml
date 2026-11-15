@@ -44,6 +44,24 @@ jobs:
           - consumer: deepseek-search
             ref: 82dd065e23b678e61ad497f9d57fbb4c3da10eae
             test: test/openclaw-deepseek-search.test.mjs
+          - consumer: litellm
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-litellm.test.mjs
+          - consumer: abliteration
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-abliteration.test.mjs
+          - consumer: byteplus-payg
+            ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
+            test: test/openclaw-byteplus-payg.test.mjs
+          - consumer: featherless-catalog
+            ref: 1536faab19f2adf524b7ef1acef5c24501b35652
+            test: test/openclaw-featherless-catalog.test.mjs
+          - consumer: public-catalogs
+            ref: 1536faab19f2adf524b7ef1acef5c24501b35652
+            test: test/openclaw-public-catalogs.test.mjs
+          - consumer: bedrock-memory
+            ref: 0eed32b19ce3eb54b38c7dde1b88d0cf2f9613cd
+            test: test/openclaw-bedrock-memory.test.mjs
           - consumer: volcengine-payg
             ref: d8bb939408aa4d2be7df0161748edb52ebf3b1fb
             test: test/openclaw-volcengine-payg.test.mjs
