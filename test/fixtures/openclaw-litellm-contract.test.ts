@@ -702,6 +702,21 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
     if (new Set(generations).size !== generations.length) return null;
     return { api: r.api, outcomes: outcomes.map(row => row === null ? null : [...row.slice(0, 6), row[6] === null ? null : [...row[6]]]) };
   }
+  function workerLedger(v: unknown) {
+    const a = array(v, 8, (_: unknown) => true);
+    if (!a || !a.slice(0, 7).every(number) || a[1] > a[0]) return null;
+    const rows = own(a[7], "length");
+    if (!Number.isSafeInteger(rows) || rows < 0 || rows > 2) return null;
+    const ops = array(a[7], rows, (v: unknown) => {
+      const op = array(v, 10, (_: unknown) => true);
+      return !!op && number(op[0]) && number(op[1]) && op[1] <= 10 && number(op[2]) && op[2] <= 3
+        && op.slice(3, 6).every(v => v === null || number(v) && v > 0) && bool(op[6]) && nullableBool(op[7])
+        && (op[6] ? bool(op[7]) : op[7] === null) && number(op[8]) && (op[9] === null || number(op[9]))
+        && ((op[2] === 0 && !op[6] && op[9] === null) || (op[2] >= 2 && op[6] && op[9] !== null));
+    });
+    if (!ops || new Set(ops.map(op => op[0])).size !== ops.length || ops.some(op => op[0] >= a[0]) || ops.length + a[6] > a[0]) return null;
+    return [...a.slice(0, 7), ops.map(op => [...op])];
+  }
   function validate(v: unknown) {
     try {
       if (!v || typeof v !== "object" || isProxy(v)) return null;
@@ -724,9 +739,11 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
       if (keys.includes("witness")) { if (keys.includes("join") || r.phase !== "join" || !(r.witness = witnessPart(r.witness)) || (r.witness.part === 0 && (r.id !== r.witness.data.caseId || r.role !== r.witness.data.role))) return null; }
       if (keys.includes("worker")) {
         if (keys.includes("join") || keys.includes("witness") || r.layer !== "outer" || r.phase !== "retirement") return null;
-        const a = array(r.worker, 9, (v: unknown) => v === null || bool(v) || number(v));
-        if (!a || !a.slice(0, 2).every(nullableBool) || !a.slice(2, 8).every(v => v === null || number(v)) || a[8] !== null) return null;
-        r.worker = a;
+        const a = array(r.worker, 9, (_: unknown) => true);
+        if (!a || !a.slice(0, 2).every(nullableBool) || !a.slice(2, 8).every(v => v === null || number(v))) return null;
+        const ledger = a[8] === null ? null : workerLedger(a[8]);
+        if (a[8] !== null && !ledger) return null;
+        r.worker = [...a.slice(0, 8), ledger];
       }
       return r;
     } catch { return null; }

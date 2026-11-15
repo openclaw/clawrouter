@@ -51,6 +51,83 @@ export async function collectLiteLLMOperations(s) {
   while(at<s.roots.length){const batch=s.roots.slice(at);at=s.roots.length;for(const outcome of await Promise.allSettled(batch))if(outcome.status==="rejected")s.observerFailures.push(outcome.reason);}
   return s.operations.filter(r=>r.state!=="fulfilled");
 }
+// BEGIN request-owned fixture functions.
+export function litellmRequestScope(storage, generation) {
+  const requests = new WeakMap(), states = new WeakMap(), resources = new WeakMap(), transports = new WeakSet(), cleanup = new WeakMap();
+  let next = 0, nextTransport = 0, nextReader = 0;
+  const state = token => {
+    const s = token && states.get(token);
+    if (!s || !s.live || token.generation !== generation || requests.get(token.request) !== token) throw new Error("invalid ingress lifetime");
+    return s;
+  };
+  const bound = (resource, owner) => {
+    state(owner.token);
+    if (!transports.has(owner)) throw new Error("foreign ingress transport");
+    if (resources.get(resource) !== owner) throw new Error("foreign ingress resource");
+    const current = storage.getStore();
+    if (current !== undefined && current !== owner.token) throw new Error("foreign ingress context");
+  };
+  return {
+    register(request, scenario) {
+      if (!request || requests.has(request)) throw new Error("replayed ingress");
+      const token = Object.freeze({ request, scenario, generation, id: ++next });
+      requests.set(request, token); states.set(token, { live: true, entered: false }); return token;
+    },
+    invoke(token, fn, receiver, args) {
+      const s = state(token);
+      if (s.entered || args[0] !== token.request) throw new Error("foreign ingress invocation");
+      s.entered = true;
+      return storage.run(token, () => Reflect.apply(fn, receiver, args));
+    },
+    transport(scenario, signal) {
+      const token = storage.getStore(), s = state(token);
+      if (!s.entered || token.scenario !== scenario) throw new Error("unbound ingress transport");
+      const owner = Object.defineProperties({}, Object.getOwnPropertyDescriptors(Object.freeze({ token, request: token.request, signal, id: ++nextTransport })));
+      transports.add(owner); return owner;
+    },
+    response(owner, response) {
+      state(owner.token);
+      if (!transports.has(owner)) throw new Error("foreign ingress transport");
+      if (resources.has(response) || response.body && resources.has(response.body)) throw new Error("ambiguous ingress response");
+      resources.set(response, owner); if (response.body) { resources.set(response.body, owner); cleanup.set(response.body, new Set()); }
+    },
+    body(owner, body, expected = body, method = "getReader") {
+      if (body !== expected) throw new Error("foreign body receiver"); bound(body, owner);
+      if (method === "cancel") { const attempts = cleanup.get(body); if (attempts.has(method)) throw new Error("replayed body cleanup"); attempts.add(method); }
+      else if (method !== "getReader") throw new Error("foreign body method");
+    },
+    reader(owner, body, reader) {
+      bound(body, owner);
+      if (resources.has(reader)) throw new Error("ambiguous ingress reader");
+      resources.set(reader, owner); cleanup.set(reader, new Set()); return ++nextReader;
+    },
+    operation(owner, reader, expected = reader, method = "read") {
+      if (reader !== expected) throw new Error("foreign reader receiver"); bound(reader, owner);
+      if (!["read", "cancel", "unlock"].includes(method)) throw new Error("foreign reader method");
+      if (method !== "read") { const attempts = cleanup.get(reader); if (attempts.has(method)) throw new Error("replayed reader cleanup"); attempts.add(method); }
+    },
+    retire(token) { const s = state(token); s.live = false; },
+  };
+}
+export function litellmWorkerLedger(r) {
+  const cap = n => Math.min(n, 1_000_000), kinds = ["handler", "fetch", "acquisition_observer", "read", "read_observer", "closed", "cancel", "body_cancel", "wait_until", "usage_ingest"];
+  const bad = r.operations.filter(op => op.state !== "fulfilled"), selected = bad.slice(0, 2);
+  return [cap(r.operations.length), cap(r.operations.filter(op => op.state === "pending").length), cap(r.failures.length), cap(r.observerFailures.length),
+    cap(r.readers.filter(reader => reader.body.locked).length), cap(r.readers.filter(reader => reader.unlocks !== 1).length), cap(Math.max(0, bad.length - selected.length)),
+    selected.map(op => [cap(op.ordinal), kinds.indexOf(op.kind) + 1, ["pending", "fulfilled", "rejected", "threw"].indexOf(op.state),
+      op.input?.token?.id ?? op.transport?.token?.id ?? op.token?.id ?? null, op.input?.id ?? op.transport?.id ?? null, op.reader?.id ?? null,
+      Object.hasOwn(op, "error"), Object.hasOwn(op, "error") ? op.error !== undefined : null, cap(op.invoke), op.settle == null ? null : cap(op.settle)])];
+}
+export async function litellmControlResponse(response, action) {
+  const errors = []; let result;
+  try { assert.equal(response.status, 200, `control ${action}`); result = await response.json(); } catch (error) { errors.push(error); }
+  try { if (!response.bodyUsed) await response.body?.cancel(); } catch (error) { errors.push(error); }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length) throw new AggregateError(errors, "control response and cleanup failed");
+  return result;
+}
+// END request-owned fixture functions.
+
 export function litellmDeadlineQualified(f) {
   // This is a post-join data-outcome disposition, not a cause classifier. A
   // concurrent read fault observed after the deadline can satisfy it too.
@@ -103,18 +180,21 @@ export function litellmDeadlineWitness(s, InternalAbort, usage, charged) {
 
 export function routerFixture() {
   return String.raw`
-import worker from './worker/index.ts'; export * from './worker/index.ts';
+import worker from './worker/index.ts';
+import {AsyncLocalStorage} from 'node:async_hooks'; export * from './worker/index.ts';
 import {authorityCall} from './worker/authority.ts';
 import {putGrantCredentials,revokeGrantCredentials} from './worker/grant-credentials.ts';
 import {ingestUsage,usageSnapshot} from './worker/ledgers.ts';
 import {sha256Hex} from './worker/utils.ts';
 import {InternalHttpAbort} from './worker/http-operation.ts';
 import {bodyBudgetCharged} from './worker/body-budget.ts';
+${litellmRequestScope.toString()}
+${litellmWorkerLedger.toString()}
 ${observeLiteLLMOperation.toString()}
 ${collectLiteLLMOperations.toString()}
 ${litellmDeadlineQualified.toString()}
 ${litellmDeadlineWitness.toString()}
-const rawFetch=globalThis.fetch, records=new Map();
+const rawFetch=globalThis.fetch, records=new Map(), requestScope=litellmRequestScope(new AsyncLocalStorage(),1);
 const selected='tenant/private-alias', hidden='tenant/private-hidden';
 const deferred=()=>{let resolve;const promise=new Promise(done=>{resolve=done;});return {promise,resolve};};
 const signalState=signal=>signal==null?null:signal.aborted;
@@ -122,7 +202,7 @@ const invoke=(r,kind,start,details)=>observeLiteLLMOperation(r,kind,start,detail
 const observe=(r,p,kind,input,reader,details={})=>invoke(r,kind,()=>p,{input,reader,signal:input?.signal,...details});
 function observation(r){
  const counts={};for(const op of r.operations){const key=op.kind+'_'+op.state;counts[key]=(counts[key]??0)+1;}
- return {operations:r.operations.length,counts,ingress:r.ingresses.map(signalState),
+ return {ledger:litellmWorkerLedger(r),operations:r.operations.length,counts,ingress:r.ingresses.map(signalState),
   readers:r.readers.map(reader=>({unlocks:reader.unlocks,locked:reader.body.locked})),
   inputs:r.inputs.map(input=>({signalAborted:signalState(input.signal)})),
   rejections:r.operations.filter(op=>op.state==='rejected').slice(0,8).map(op=>({kind:op.kind,invoke:op.invoke,settle:op.settle,defined:op.error!==undefined,signalAtInvoke:op.signalAborted??null,signalAtSettlement:op.abortedAtSettle??null,sameSignalReason:op.sameSignalReasonAtSettle??false,
@@ -131,19 +211,23 @@ function observation(r){
   syncFailures:r.failures.length};
 }
 function observeBody(r,response,input){
+ requestScope.response(input,response);
  if(!response.body)return;
  const body=response.body;r.bodies.push(body);const get=body.getReader,cancel=body.cancel;
- body.cancel=function(...args){return invoke(r,'body_cancel',()=>Reflect.apply(cancel,this,args),{input});};
+ const check=fn=>{try{fn();}catch(error){r.observerFailures.push(error);}};
+ body.cancel=function(...args){check(()=>requestScope.body(input,this,body,'cancel'));return invoke(r,'body_cancel',()=>Reflect.apply(cancel,this,args),{input});};
  body.getReader=function(...args){
+  check(()=>requestScope.body(input,this,body));
   let reader;try{reader=Reflect.apply(get,this,args);}catch(error){r.failures.push(error);throw error;}
-  const info={body,reader,transport:input,unlocks:0,eof:false};r.readers.push(info);
+  const info={body,reader,transport:input,unlocks:0,eof:false};check(()=>{info.id=requestScope.reader(input,body,reader);});r.readers.push(info);
   observe(r,reader.closed,'closed',input,info,{receiverIdentity:this===body});
   for(const name of ['read','cancel']){const original=reader[name];reader[name]=function(...values){
+   check(()=>requestScope.operation(input,this,reader,name));
    const pending=invoke(r,name,()=>Reflect.apply(original,this,values),{reader:info,input,signal:input.signal,receiverIdentity:this===reader,operandPresent:values.length>0,reason:values[0],signalAborted:input.signal?.aborted===true});
    if(name==='read')observe(r,pending.then(chunk=>{if(chunk.done)info.eof=true;}),'read_observer',input,info,{originalRead:pending,receiverIdentity:this===reader});
    return pending;
   };}
-  const unlock=reader.releaseLock;reader.releaseLock=function(...values){try{const value=Reflect.apply(unlock,this,values);info.unlocks++;info.unlockSequence=++r.sequence;info.unlockReceiver=this===reader;return value;}catch(error){r.failures.push(error);throw error;}};
+  const unlock=reader.releaseLock;reader.releaseLock=function(...values){check(()=>requestScope.operation(input,this,reader,'unlock'));try{const value=Reflect.apply(unlock,this,values);info.unlocks++;info.unlockSequence=++r.sequence;info.unlockReceiver=this===reader;return value;}catch(error){r.failures.push(error);throw error;}};
   return reader;
  };
 }
@@ -152,7 +236,7 @@ globalThis.fetch=function(input,init){
  const r=match&&records.get(match[1]);if(!r)throw Error('unbound original upstream credential');
  const url=new URL(request.url);if(url.origin!=='https://gateway.example'||!url.pathname.startsWith(r.basePath+'/'))throw Error('unexpected original destination');
  r.calls.push({url:request.url,method:request.method,authorization:request.headers.get('authorization'),query:url.search,redirect:request.redirect,body:request.body!==null,extra:request.headers.has('x-api-key')||request.headers.has('x-upstream-url')});
- const owner={signal:init&&Object.hasOwn(init,'signal')?init.signal:input instanceof Request?input.signal:null,request:r.requests.length===1?r.requests[0].request:undefined};r.inputs.push(owner);
+ const owner=requestScope.transport(r,init&&Object.hasOwn(init,'signal')?init.signal:input instanceof Request?input.signal:null);r.inputs.push(owner);
  if(owner.signal){const aborted=()=>{owner.abortSequence=++r.sequence;owner.callerAbortedAtAbort=owner.request?.signal.aborted;owner.pendingAtAbort=r.operations.filter(op=>op.kind==='read'&&op.reader?.transport===owner&&op.state==='pending');owner.noEarlierFailure=r.failures.length===0&&r.observerFailures.length===0&&r.operations.every(op=>op.state!=='rejected'&&op.state!=='threw');};if(owner.signal.aborted)aborted();else owner.signal.addEventListener('abort',aborted,{once:true});}
  const p=invoke(r,'fetch',()=>Reflect.apply(rawFetch,this,[input,init]),{transport:owner});observe(r,p.then(response=>observeBody(r,response,owner)),'acquisition_observer',owner);return p;
 };
@@ -193,7 +277,7 @@ export default {async fetch(request,bindings,context){
   if(action==='observation')return Response.json(observation(r));
   if(action==='started'){const deadline=Date.now()+5000;while(!r.operations.some(x=>x.kind==='acquisition'&&x.state==='fulfilled')){if(Date.now()>=deadline)return new Response(null,{status:504});await scheduler.wait(10);}return Response.json({started:true});}
   if(action==='release')return Reflect.apply(rawFetch,globalThis,['https://fixture.test/release/'+id,{method:'POST'}]);
-  if(action==='retire'){for(const q of r.requests)await q.promise;if(r.workerDeadline===true){r.retirement??=retireDeadline(r,bindings);return Response.json(await r.retirement);}await drain(r);return Response.json({retired:true,calls:r.calls,operations:r.operations.map(x=>({kind:x.kind,state:x.state})),unlocked:r.readers.every(x=>x.unlocks===1&&!x.body.locked)});}
+  if(action==='retire'){for(const q of r.requests)await q.promise;try{if(r.workerDeadline===true){r.retirement??=retireDeadline(r,bindings);return Response.json(await r.retirement);}await drain(r);return Response.json({retired:true,calls:r.calls,operations:r.operations.map(x=>({kind:x.kind,state:x.state})),unlocked:r.readers.every(x=>x.unlocks===1&&!x.body.locked)});}finally{for(const q of r.requests)if(!q.retired){requestScope.retire(q.token);q.retired=true;}}}
   if(action==='usage'){await drain(r);return Response.json(await usageSnapshot(bindings,'fixture',id,{kind:'admin'}));}
   if(request.method!=='POST')return new Response(null,{status:405});
   if(action==='narrow'||action==='broaden'){r.policy={...r.policy,models:action==='narrow'?[]:null};await authorityCall(bindings,'/policies/put',{policyId:id,policy:r.policy});}
@@ -205,11 +289,11 @@ export default {async fetch(request,bindings,context){
  }
  const match=/^Bearer clawrouter-live-([a-z0-9_]+)-fixture-secret$/.exec(request.headers.get('authorization')??''),r=match&&records.get(match[1]);
  if(!r)return new Response(null,{status:401});
- r.ingresses.push(request.signal);const returned={...deferred(),request};r.requests.push(returned);
+ r.ingresses.push(request.signal);const token=requestScope.register(request,r),returned={...deferred(),request,token};r.requests.push(returned);
  const env={...bindings,LITELLM_BASE_URL:'https://gateway.example'+r.basePath,LITELLM_API_KEY:'poison-environment',OPENAI_API_KEY:'poison-unrelated',LITELLM_MODEL:selected,USAGE_QUEUE:{send:event=>observe(r,ingestUsage(bindings,event),'usage_ingest')}};
  // Deliberately injected configuration-race control, not a deployed hot-reload claim.
  if(r.destinationFault){const namespace=env.GRANT_CREDENTIALS;env.GRANT_CREDENTIALS=new Proxy(namespace,{get(target,property){if(property==='get')return (...args)=>{const stub=Reflect.apply(target.get,target,args);return new Proxy(stub,{get(object,key){if(key==='fetch')return (...values)=>{if(new URL(values[0] instanceof Request?values[0].url:String(values[0])).pathname==='/inspect'){r.destinationFault=false;env.LITELLM_BASE_URL='https://foreign.example/v1';}return Reflect.apply(object.fetch,object,values);};const value=Reflect.get(object,key,object);return typeof value==='function'?value.bind(object):value;}});};const value=Reflect.get(target,property,target);return typeof value==='function'?value.bind(target):value;}});}
- try{return await invoke(r,'handler',()=>worker.fetch(request,env,{waitUntil:p=>{observe(r,p,'wait_until');context.waitUntil(p);}}));}finally{returned.resolve();}
+ try{return await invoke(r,'handler',()=>requestScope.invoke(token,worker.fetch,worker,[request,env,{waitUntil:p=>{observe(r,p,'wait_until',undefined,undefined,{token});context.waitUntil(p);}}]),{token});}finally{returned.resolve();}
 }};`;
 }
 
@@ -268,12 +352,12 @@ export async function withGateway(rows, body, { basePath = "/team/v1", hotCache 
   const directory = await mkdtemp(join(tmpdir(), "clawrouter-litellm-"));
   const failures = []; let runtime;
   try {
-    runtime = await startWorkerdFixture(directory, routerFixture(), upstreamFixture(), { directRouter: true, hotCache, bindings: { LITELLM_BASE_URL: "https://gateway.example" + basePath, LITELLM_MODEL: selected, LITELLM_API_KEY: "poison-environment", OPENAI_API_KEY: "poison-unrelated" } });
+    runtime = await startWorkerdFixture(directory, routerFixture(), upstreamFixture(), { directRouter: true, requestContext: true, hotCache, bindings: { LITELLM_BASE_URL: "https://gateway.example" + basePath, LITELLM_MODEL: selected, LITELLM_API_KEY: "poison-environment", OPENAI_API_KEY: "poison-unrelated" } });
     const origin = String(await runtime.unsafeGetDirectURL("router")).replace(/\/$/, "");
     const upstream = await runtime.getWorker("upstream");
     assert.equal((await upstream.fetch("https://fixture.test/setup", { method: "POST", body: JSON.stringify(rows) })).status, 200);
     const setup = await fetch(origin + "/__litellm/setup", { method: "POST", body: JSON.stringify(rows) }); assert.equal(setup.status, 200); await setup.json();
-    const control = async (action, id) => { const response = await fetch(`${origin}/__litellm/${action}/${id}`, { method: ["retire", "usage", "observation"].includes(action) ? "GET" : "POST" }); assert.equal(response.status, 200, `control ${action}`); return response.json(); };
+    const control = async (action, id) => { const response = await fetch(`${origin}/__litellm/${action}/${id}`, { method: ["retire", "usage", "observation"].includes(action) ? "GET" : "POST" }); return litellmControlResponse(response, action); };
     const state = async id => (await upstream.fetch("https://fixture.test/state/" + id)).json();
     const started = async id => { const r = await upstream.fetch("https://fixture.test/started/" + id); assert.equal(r.status, 200); return r.json(); };
     const release = async id => (await upstream.fetch("https://fixture.test/release/" + id, { method: "POST" })).json();

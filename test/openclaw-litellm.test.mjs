@@ -56,6 +56,18 @@ async function withFailureEnvelope(run, proof = diagnostic, write = text => proc
   if (errors.length === 1) throw errors[0];
   if (errors.length) throw new AggregateError(errors, "LiteLLM original and reporting failures");
 }
+// BEGIN retirement observation boundary.
+async function litellmRetireSnapshot(control, id, capture) {
+  try { return await control("retire", id); }
+  catch (primary) {
+    const errors = [primary];
+    try { const observation = await control("observation", id); capture(observation.ledger); }
+    catch (error) { errors.push(error); }
+    if (errors.length === 1) throw errors[0];
+    throw new AggregateError(errors, "retirement and independent observation failed");
+  }
+}
+// END retirement observation boundary.
 function actualDrain() {
   const raise = transformed.slice(transformed.indexOf("function raise("), transformed.indexOf("function observeBody("));
   return new Function(raise + "; return drainOriginals;")();
@@ -122,7 +134,9 @@ test("actual LiteLLM registered catalog, native stream/streamSimple and original
     for (const row of cases) {
       let phase = "control"; const observed = Array(9).fill(null);
       try {
-        const proof = await f.control("retire", row.id); phase = "retirement"; observed[0] = proof.retired; observed[1] = proof.unlocked; assert.equal(proof.retired, true); assert.equal(proof.unlocked, true);
+        phase = "retirement"; const proof = await litellmRetireSnapshot(f.control, row.id, ledger => {
+          const candidate = [...observed]; candidate[8] = ledger; diagnostic.worker(diagnostic.record("outer", row.id, "retirement", undefined), candidate); observed[8] = ledger;
+        }); observed[0] = proof.retired; observed[1] = proof.unlocked; assert.equal(proof.retired, true); assert.equal(proof.unlocked, true);
         const state = await f.state(row.id);
         [observed[2], observed[3], observed[4], observed[5], observed[6], observed[7]] = [state.active, state.expired, state.canceled, state.aborted, state.finished, state.calls.length]; assert.equal(state.active, 0); assert.equal(state.expired, 0);
         const denied = ["missing", "invalid_owner", "foreign"].includes(row.mode);
@@ -1515,6 +1529,120 @@ test("reporting repair compact decoder rejects hostile fields without getters", 
   const proxy = new Proxy(wire.witness.data, { ownKeys() { touches++; throw undefined; } });
   assert.equal(proof.validate({ ...wire, witness: { ...wire.witness, data: proxy } }), null); assert.equal(touches, 0);
 });
+
+// BEGIN ingress scope pure tests.
+function ingressPureFunctions() {
+  const worker = readFileSync("worker/test/litellm-model-discovery.test.mjs", "utf8");
+  const helper = readFileSync("test/helpers/workerd.mjs", "utf8");
+  const native = worker.split("// BEGIN request-owned fixture functions.")[1].split("// END request-owned fixture functions.")[0].replaceAll("export ", "");
+  const option = helper.slice(helper.indexOf("export function workerdRequestContext"), helper.indexOf("export async function startWorkerdFixture")).replace("export ", "");
+  return new Function("assert", native + option + ";return {litellmRequestScope,litellmWorkerLedger,litellmControlResponse,workerdRequestContext};")(assert);
+}
+function inertIngress() {
+  let current;
+  const storage = { getStore: () => current, run(token, fn) { const previous = current; current = token; try { return fn(); } finally { current = previous; } } };
+  const scope = ingressPureFunctions().litellmRequestScope(storage, 1), scenario = {}, request = {}, signal = {}, token = scope.register(request, scenario);
+  let owner;
+  const pending = {};
+  scope.invoke(token, function () { owner = scope.transport(scenario, signal); return pending; }, null, [request]);
+  const body = { locked: false }, response = { body }, reader = {};
+  scope.response(owner, response); scope.reader(owner, body, reader);
+  return { scope, storage, scenario, request, signal, token, owner, body, response, reader };
+}
+test("ingress helper option validates before bundling and keeps default flags unchanged", () => {
+  const {workerdRequestContext} = ingressPureFunctions(), flags = Object.freeze(["enable_request_signal"]);
+  assert.deepEqual(workerdRequestContext(undefined, flags), {external:[],flags:[...flags]});
+  assert.deepEqual(workerdRequestContext(true, flags), {external:["node:async_hooks"],flags:[...flags,"nodejs_als"]});
+  assert.deepEqual(workerdRequestContext(true, ["nodejs_als","nodejs_als"]), {external:["node:async_hooks"],flags:["nodejs_als"]});
+  for (const value of [null,0,1,"true",{},[]]) assert.throws(() => workerdRequestContext(value, flags));
+  const helper = readFileSync("test/helpers/workerd.mjs", "utf8");
+  assert.ok(helper.indexOf("workerdRequestContext(options?.requestContext") < helper.indexOf("await build("));
+  assert.ok(helper.indexOf("const routerContext = workerdRequestContext") < helper.indexOf("const mf = new Miniflare"));
+  assert.match(helper, /name: "upstream"[\s\S]*compatibilityFlags: \["enable_request_signal"\]/);
+});
+test("ingress exact invocation preserves receiver arguments promise and undefined throw", () => {
+  const {litellmRequestScope} = ingressPureFunctions(); let current;
+  const storage = {getStore:()=>current,run(t,f){current=t;try{return f();}finally{current=undefined;}}};
+  const scope=litellmRequestScope(storage,1), request={}, token=scope.register(request,{}), receiver={}, args=[request,{},{}], p={};
+  assert.equal(scope.invoke(token,function(...a){assert.equal(this,receiver);assert.deepEqual(a,args);return p;},receiver,args),p);
+  assert.equal(current,undefined);assert.throws(()=>scope.invoke(token,()=>p,receiver,args));
+  const other={}, t=scope.register(other,{});let caught=false;
+  try { scope.invoke(t,()=>{throw undefined;},receiver,[other]); } catch(error){caught=true;assert.equal(error,undefined);}
+  assert.equal(caught,true);assert.equal(current,undefined);assert.throws(()=>scope.invoke(t,()=>p,receiver,[other]));
+});
+test("ingress catalog and inference bind distinct exact requests during nesting and interleaving", () => {
+  const {scope,storage,scenario,owner,token,reader}=inertIngress(), second={}, t=scope.register(second,scenario);let secondOwner;
+  storage.run(token,()=>{scope.invoke(t,()=>{secondOwner=scope.transport(scenario,{});assert.equal(storage.getStore(),t);},null,[second]);assert.equal(storage.getStore(),token);});
+  assert.notEqual(owner,secondOwner);assert.notEqual(owner.token,secondOwner.token);assert.equal(secondOwner.request,second);
+  assert.throws(()=>storage.run(t,()=>scope.operation(owner,reader)));
+  scope.operation(owner,reader);assert.throws(()=>scope.transport(scenario,{}));
+  assert.throws(()=>storage.run({},()=>scope.transport(scenario,{})));
+  assert.throws(()=>storage.run(token,()=>scope.transport({},{})));
+});
+test("ingress rejects wrong caller replay generation and forged transport resources", () => {
+  const a=inertIngress(), b=inertIngress();
+  assert.throws(()=>a.scope.register(a.request,a.scenario));
+  const r={}, t=a.scope.register(r,a.scenario);assert.throws(()=>a.scope.invoke(t,()=>{},null,[{}]));
+  assert.throws(()=>a.storage.run(b.token,()=>a.scope.transport(a.scenario,{})));
+  assert.throws(()=>a.scope.response({...a.owner},{body:{}}));
+  assert.throws(()=>a.scope.response(a.owner,a.response));
+  assert.throws(()=>a.scope.reader(a.owner,a.body,a.reader));
+  assert.throws(()=>a.scope.operation(a.owner,{},a.reader));
+  assert.throws(()=>a.scope.body(a.owner,{},a.body));
+  assert.equal(Reflect.set(a.owner,"request",{}),false);assert.equal(a.owner.request,a.request);
+});
+test("ingress resource lifetime survives handler return but rejects retired and foreign cleanup", () => {
+  const a=inertIngress(), b=inertIngress();
+  assert.equal(a.storage.getStore(),undefined);a.scope.operation(a.owner,a.reader);a.scope.body(a.owner,a.body);
+  assert.throws(()=>a.storage.run(b.token,()=>a.scope.operation(a.owner,a.reader)));
+  a.scope.retire(a.token);assert.throws(()=>a.scope.operation(a.owner,a.reader));assert.throws(()=>a.scope.retire(a.token));
+  assert.throws(()=>a.storage.run(a.token,()=>a.scope.transport(a.scenario,a.signal)));
+  b.scope.operation(b.owner,b.reader);
+});
+test("ingress ledger keeps failed undefined and pending distinct with bounded omission", () => {
+  const {litellmWorkerLedger}=ingressPureFunctions(), op=(ordinal,state,error)=>({ordinal,kind:"read",state,invoke:ordinal+1,...(state==="pending"?{}:{settle:10,error})});
+  const r={operations:[op(0,"rejected",undefined),op(1,"pending"),op(2,"threw",null)],failures:[undefined],observerFailures:[undefined],readers:[{body:{locked:true},unlocks:0}]};
+  const ledger=litellmWorkerLedger(r);assert.deepEqual(ledger.slice(0,7),[3,1,1,1,1,1,1]);assert.equal(ledger[7][0][6],true);assert.equal(ledger[7][0][7],false);assert.equal(ledger[7][1][6],false);assert.equal(ledger[7][1][7],null);
+});
+test("ingress control response joins original cancellation and preserves both failures", async () => {
+  const {litellmControlResponse}=ingressPureFunctions();let release,settled=false;
+  const pending=new Promise(resolve=>{release=resolve;});const response={status:500,bodyUsed:false,body:{cancel(){return pending;}}};
+  const work=litellmControlResponse(response,"retire").catch(error=>{settled=true;return error;});await Promise.resolve();assert.equal(settled,false);release();assert.ok(await work);
+  const original=undefined, cleanup=null;
+  const failed={status:200,bodyUsed:false,json(){throw original;},body:{cancel(){throw cleanup;}}};
+  await assert.rejects(litellmControlResponse(failed,"observation"),error=>{assert.deepEqual(error.errors,[original,cleanup]);return true;});
+});
+test("ingress retirement failure observes once without replacing primary or observation failures", async () => {
+  const calls=[];let captured;
+  const control=async(action,id)=>{calls.push([action,id]);if(action==="retire")throw undefined;return {ledger:[1]};};
+  let caught=false;try{await litellmRetireSnapshot(control,"case",value=>{captured=value;});}catch(error){caught=true;assert.equal(error,undefined);}
+  assert.equal(caught,true);assert.deepEqual(captured,[1]);assert.deepEqual(calls,[["retire","case"],["observation","case"]]);
+  await assert.rejects(litellmRetireSnapshot(async()=>{throw undefined;},"case",()=>{}),error=>{assert.deepEqual(error.errors,[undefined,undefined]);return true;});
+  await assert.rejects(litellmRetireSnapshot(control,"case",()=>{throw null;}),error=>{assert.deepEqual(error.errors,[undefined,null]);return true;});
+});
+test("ingress closed Worker ledger validator rejects getters malformed identities and oversize facts", () => {
+  const proof=litellmDiagnostics(["case"],nodeTypes.isProxy), base=proof.record("outer","case","retirement",undefined);
+  const ledger=[2,0,0,0,0,0,0,[[0,4,2,1,1,1,true,false,1,2],[1,6,2,1,1,1,true,true,2,3]]];
+  const facts=[null,null,null,null,null,null,null,null,ledger];assert.deepEqual(proof.worker(base,facts).worker,facts);
+  for(const mutate of [v=>{v[7][0][3]=-1;},v=>{v[7][1][0]=0;},v=>{v[7][0][7]=null;},v=>{v[0]=1000001;},v=>{v[7][0][2]=1;}]){const v=structuredClone(ledger);mutate(v);assert.throws(()=>proof.worker(base,[...facts.slice(0,8),v]));}
+  let getters=0;const hostile=structuredClone(ledger);Object.defineProperty(hostile,0,{get(){getters++;return 2;}});assert.throws(()=>proof.worker(base,[...facts.slice(0,8),hostile]));assert.equal(getters,0);
+  const lines=[];proof.emit([proof.worker(base,facts)],line=>lines.push(line));assert.equal(lines.length,1);assert.ok(Buffer.byteLength(lines[0])<=768);
+});
+test("ingress cleanup attempt is consumed before original failure and cannot replay", () => {
+  const a=inertIngress();a.scope.operation(a.owner,a.reader,a.reader,"cancel");
+  assert.throws(()=>a.scope.operation(a.owner,a.reader,a.reader,"cancel"));
+  a.scope.operation(a.owner,a.reader,a.reader,"unlock");assert.throws(()=>a.scope.operation(a.owner,a.reader,a.reader,"unlock"));
+  assert.throws(()=>a.scope.operation(a.owner,a.reader,a.reader,"foreign"));
+  a.scope.body(a.owner,a.body,a.body,"cancel");assert.throws(()=>a.scope.body(a.owner,a.body,a.body,"cancel"));
+});
+test("ingress maximum closed ledger remains within escaped annotation budget", () => {
+  const proof=litellmDiagnostics(["sdk_stream_provider_error"],nodeTypes.isProxy), n=1_000_000;
+  const op=[n-1,10,3,n,n,n,true,true,n,n], other=[...op];other[0]--;
+  const ledger=[n,n,n,n,n,n,n-2,[op,other]], facts=[false,false,n,n,n,n,n,n,ledger], lines=[];
+  proof.emit([proof.worker(proof.record("outer","sdk_stream_provider_error","retirement",undefined),facts)],line=>lines.push(line));
+  assert.equal(lines.length,1);assert.ok(Buffer.byteLength(lines[0])<=768);assert.ok(Buffer.byteLength(lines.join(""))<=8192);
+});
+// END ingress scope pure tests.
 
 }
 
