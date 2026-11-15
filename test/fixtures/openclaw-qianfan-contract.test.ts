@@ -25,7 +25,7 @@ const key = (id: string) => `clawrouter-live-qianfan_${id}-fixture-secret`;
 function qianfanDiagnostics(isProxy: (value: any) => boolean) {
   const prefix = "QIANFAN_DIAGNOSTIC ";
   const cases = ["none", "card0", "card1", "card2", "card3", "card4", "high", "max", "image2", "image4", "catalog", "catalog_denials", "observed", "admission_denials", "error", "cancel"];
-  const phases = ["module", "setup", "body", "registration", "catalog", "replay", "dispatch", "original_join", "join_contract", "join_census", "join_rejections", "retirement_router", "retirement_upstream", "release", "binding", "restoration", "mock_cleanup", "cache_cleanup", "worker", "grant", "helper", "receipt", "retirement", "upstream", "sqlite", "dispose", "rm", "overflow"];
+  const phases = ["module", "setup", "body", "registration", "catalog", "replay", "dispatch", "original_join", "join_contract", "join_census", "join_rejections", "retirement_router", "retirement_router_ops", "retirement_upstream", "retirement_upstream_ops", "release", "binding", "restoration", "mock_cleanup", "cache_cleanup", "worker", "grant", "helper", "receipt", "retirement", "upstream", "sqlite", "dispose", "rm", "controls", "overflow"];
   const enums: Record<string, any[]> = { layer: ["sdk", "outer"], route: ["none", "nativechat", "discovery"], caseId: cases, phase: phases,
     role: ["progress", "primary", "cleanup", "summary"], outcome: ["entered", "fulfilled", "rejected", "unknown"],
     category: ["none", "undefined", "null", "assertion", "aggregate", "unknown"],
@@ -34,7 +34,7 @@ function qianfanDiagnostics(isProxy: (value: any) => boolean) {
   const required = ["v", "layer", "route", "caseId", "phase", "role", "outcome", "category"];
   const counts = ["pending", "settled", "operations", "releasePending", "releaseRejected", "sdkRecords", "suppressed"];
   const bools = ["partialDelivery", "callerAborted", "killed"];
-  const optional = [...counts, ...bools, "exit", "signal", "observedCode", "bodySucceeded", "releasesFulfilled", "failureFlags", "ownership", "census", "rejections", "omitted", "predicate"];
+  const optional = [...counts, ...bools, "exit", "signal", "observedCode", "bodySucceeded", "releasesFulfilled", "failureFlags", "ownership", "census", "rejections", "omitted", "predicate", "releaseTrace", "releaseOmitted", "work", "retirement", "folded", "controlCounts", "controlSequence", "controlFlags"];
   // Fixed columns, not arbitrary nested data. See joinDiagnostic() for the
   // operation/state/flag dictionaries. Null means outside the bounded range.
   function vector(value: any, length: number, maximum: number) {
@@ -75,16 +75,20 @@ function qianfanDiagnostics(isProxy: (value: any) => boolean) {
         const descriptor = Object.getOwnPropertyDescriptor(value, key);
         if (!descriptor || !Object.hasOwn(descriptor, "value")) return null;
         const item = descriptor.value;
-        if (["failureFlags", "ownership", "census", "rejections"].includes(key)) {
-          const copy = key === "failureFlags" ? vector(item, 6, 1) : key === "ownership" ? vector(item, 9, 9999)
-            : key === "census" ? vector(item, 56, 9999) : table(item, 9, 2097151);
+        if (["failureFlags", "ownership", "census", "rejections", "releaseTrace", "work", "retirement", "folded", "controlCounts", "controlSequence", "controlFlags"].includes(key)) {
+          const copy = key === "controlCounts" ? vector(item, 7, 9999) : key === "controlSequence" ? vector(item, 8, 9999) : key === "controlFlags" ? vector(item, 6, 1) : key === "failureFlags" ? vector(item, 6, 1) : key === "ownership" ? vector(item, 9, 9999)
+            : key === "census" ? vector(item, 56, 9999) : key === "work" ? vector(item, 8, 9999) : key === "retirement" ? vector(item, 5, 9999)
+            : key === "folded" ? vector(item, 7, 9999) : key === "releaseTrace" ? table(item, 8, 1048575) : table(item, 12, 8388607);
           if (!copy) return null;
-          if (key === "rejections" && copy.some((row: any[]) => row[0] === null || row[0] > 13 || ![2, 3].includes(row[1]) || row[2] === null || row.slice(3).some((n: any) => n !== null && n > 9999))) return null;
+          if (key === "controlCounts" && (copy[0] !== 12 || copy.slice(1, 4).some((n: any) => n === null || n > 4095) || (copy[2] & copy[3]) !== 0 || ((copy[2] | copy[3]) & ~copy[1]) !== 0)) return null;
+          if (key === "retirement" && copy.slice(0, 2).some((n: any) => n !== null && n > 1)) return null;
+          if (key === "rejections" && copy.some((row: any[]) => row[0] === null || row[0] > 13 || ![2, 3].includes(row[1]) || row[2] === null || row.slice(3).some((n: any) => n !== null && n > 9999) || row[9] === null || row[9] > 19 || row[10] === null || row[10] > 2)) return null;
+          if (key === "releaseTrace" && (copy.length > 2 || copy.some((row: any[]) => row[0] === null || row[0] > 19 || row[1] === null || row[1] > 2 || row[6] === null || row.some((n: any, i: number) => i !== 6 && n !== null && n > 9999)))) return null;
           result[key] = copy; continue;
         }
         if (key === "bodySucceeded" || key === "releasesFulfilled") { if (item !== null && typeof item !== "boolean") return null; result[key] = item; continue; }
-        if (key === "omitted") { if (item !== null && !(Number.isInteger(item) && item >= 0 && item <= 9999)) return null; result[key] = item; continue; }
-        if (key === "predicate") { if (!["accepted", "settled", "rejected", "unlocked"].includes(item)) return null; result[key] = item; continue; }
+        if (key === "omitted" || key === "releaseOmitted") { if (item !== null && !(Number.isInteger(item) && item >= 0 && item <= 9999)) return null; result[key] = item; continue; }
+        if (key === "predicate") { if (!["none", "response", "accepted", "settled", "rejected", "unlocked"].includes(item)) return null; result[key] = item; continue; }
         if (key === "v" ? item !== 1 : enums[key] ? !enums[key].includes(item) : counts.includes(key) ? item !== null && !(Number.isInteger(item) && item >= 0 && item <= 9999)
           : bools.includes(key) ? item !== null && typeof item !== "boolean" : key === "exit" ? item !== null && !(Number.isInteger(item) && Math.abs(item) <= 255) : true) return null;
         result[key] = item;
@@ -124,7 +128,9 @@ function qianfanDiagnostics(isProxy: (value: any) => boolean) {
       killed: typeof killed === "boolean" ? killed : null, signal: enums.signal.includes(signal) ? signal : null, observedCode } };
   }
   function emitter(write: (text: string) => unknown) {
-    const seen = new Set<string>(), workerSides = new Set<string>(); let emitted = 0, ordinary = 0, bytes = 0, suppressed = 0, overflow = false;
+    const seen = new Set<string>(), slots = new Set<string>();
+    const folded = Array(7).fill(0); // dispose ok/fail, rm ok/fail, generic ok/fail, other
+    let emitted = 0, bytes = 0, suppressed = 0, overflow = false;
     function command(value: any) {
       const text = "::error title=Qianfan contract diagnostic::" + JSON.stringify(value).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A") + "\n";
       const length = Buffer.byteLength(text); if (length > 768 || bytes + length > 8192) return;
@@ -134,17 +140,26 @@ function qianfanDiagnostics(isProxy: (value: any) => boolean) {
       const value = validate(input); if (!value) return;
       const id = [value.layer, value.route, value.caseId, value.phase, value.role].join("/");
       if (seen.has(id)) return; seen.add(id);
-      const worker = value.layer === "outer" && value.route === "none" && value.caseId === "none" && value.role === "cleanup" &&
-        ["retirement_router", "retirement_upstream"].includes(value.phase);
-      // The first failed SDK join retains its four records plus the helper
-      // envelope. Multiple case failures cannot crowd out either Worker side.
-      if (emitted >= 9 || (!worker && ordinary >= 7) || (worker && workerSides.has(value.phase))) { suppressed = Math.min(9999, suppressed + 1); return; }
-      if (worker) workerSides.add(value.phase); else ordinary++;
+      const workerPhase = value.layer === "outer" && value.route === "none" && value.caseId === "none" && value.role === "cleanup" &&
+        ["retirement_router", "retirement_router_ops", "retirement_upstream", "retirement_upstream_ops"].includes(value.phase);
+      const slot = workerPhase ? value.phase : value.layer === "outer" && value.phase === "receipt" ? "receipt"
+        : value.layer === "outer" && value.role === "primary" ? "helper"
+        : value.layer === "sdk" && ["join_contract", "join_census", "join_rejections"].includes(value.phase) ? value.phase
+        : value.layer === "sdk" && value.role === "primary" && value.outcome === "rejected" ? "join_contract" : null;
+      // Nine fixed essential slots; optional cleanup summaries are counted,
+      // never treated as accepted retirement or allowed to crowd out identity.
+      if (!slot || slots.has(slot) || emitted >= 9) {
+        suppressed = Math.min(9999, suppressed + 1);
+        const offset = value.phase === "dispose" ? 0 : value.phase === "rm" ? 2 : 4;
+        const index = value.outcome === "fulfilled" ? offset : value.outcome === "rejected" ? offset + 1 : 6;
+        folded[index] = Math.min(9999, folded[index] + 1); return;
+      }
+      slots.add(slot);
       emitted++; command(value);
     }
     function finish() {
       if (!suppressed || overflow) return; overflow = true;
-      command(record({ layer: "outer", route: "none", caseId: "none", phase: "overflow", role: "summary" }, "unknown", undefined, { suppressed }));
+      command(record({ layer: "outer", route: "none", caseId: "none", phase: "overflow", role: "summary" }, "unknown", undefined, { suppressed, folded }));
     }
     return { emit, finish, summary: () => ({ emitted, suppressed, bytes }) };
   }
@@ -170,6 +185,32 @@ function qianfanDiagnostics(isProxy: (value: any) => boolean) {
 }
 // END QIANFAN FAILURE DIAGNOSTICS
 
+// BEGIN PINNED CONTROL BOOKKEEPING
+const pinnedControlIds = ["done", "embedded", "release", "caller", "timeout", "preabort", "binding", "prior_foreign", "undefined", "pending_release", "failed_release", "unlock"] as const;
+function createPinnedControlSummary() {
+  let entered = 0, passed = 0, failed = 0, pending = 0, cleanup = 0, deadline = 0;
+  let sequence: Array<number | null> = Array(8).fill(null), flags: Array<number | null> = Array(6).fill(null);
+  const bit = (id: string) => { const index = pinnedControlIds.indexOf(id as any); if (index < 0) throw new Error("unknown pinned control"); return 2 ** index; };
+  const bounded = (n: any) => Number.isInteger(n) && n >= 0 && n <= 9999 ? n : null;
+  return {
+    start(id: string) { const value = bit(id); if (entered & value) throw new Error("duplicate pinned control"); entered |= value; },
+    finish(id: string, ok: boolean) { const value = bit(id); if (!(entered & value) || ((passed | failed) & value)) throw new Error("invalid pinned control completion"); if (ok) passed |= value; else failed |= value; },
+    pending(n: number) { pending += n; }, cleanup() { cleanup++; }, deadline() { deadline++; },
+    embedded(life: ReturnType<typeof createLifetimeObserver>, owner: any) {
+      const op = (kind: string) => life.operations.find(row => row.kind === kind);
+      sequence = [owner.abort?.sequence, op("release")?.invoked, op("release")?.returned, op("release")?.settled,
+        life.operations.find(row => row.kind === "reader.read" && row.state === "rejected")?.settled, op("reader.closed")?.settled, op("reader.cancel")?.settled, life.readers[0]?.unlockReturns[0]].map(bounded);
+      const proof = life.joinDiagnostic(); if (proof) flags = proof.contract.failureFlags;
+    },
+    facts() { return { controlCounts: [12, entered, passed, failed, (passed | failed) === entered ? bounded(pending) : null, pending === 0 && (passed | failed) === entered ? bounded(cleanup) : null, bounded(deadline)], controlSequence: sequence.slice(), controlFlags: flags.slice() }; },
+  };
+}
+function requirePinnedControlAdmission(fetchValue: any, mocked: boolean, managed: boolean, runtime: any, installed: any, version: unknown) {
+  if (typeof fetchValue !== "function" || mocked || managed || version !== "7.43.0" ||
+      runtime.fetch !== installed.fetch || runtime.Agent !== installed.Agent || runtime.ProxyAgent !== installed.ProxyAgent) throw new Error("pinned control admission failed");
+}
+// END PINNED CONTROL BOOKKEEPING
+
 // BEGIN ORIGINAL LIFETIME OBSERVERS
 // The outer fixture executes these exact functions with native streams and
 // embeds them in the Worker. Observations never substitute an original product.
@@ -177,7 +218,7 @@ type OriginalOperation = {
   kind: string; owner: any; reader?: any; acquisition?: any; pending?: Promise<any>; state: string;
   invoked: number; settled?: number; receiver?: any; operands?: any[]; unlocksAtInvoke?: number;
   guardSignal?: AbortSignal; signalAtInvoke: { aborted: boolean; reason: unknown };
-  signalAtReject?: { aborted: boolean; reason: unknown }; value?: unknown; reason?: unknown;
+  signalAtReject?: { aborted: boolean; reason: unknown }; returned?: number; signalAtReturn?: { aborted: boolean; reason: unknown }; signalAtSettle?: { aborted: boolean; reason: unknown }; value?: unknown; reason?: unknown;
 };
 function preserveFailures(body: () => unknown, cleanups: Array<() => unknown>) {
   return (async () => {
@@ -226,13 +267,14 @@ function createLifetimeObserver(sdk?: { bindings: any[]; bodySucceeded: () => bo
   }
   function watch(kind: string, pending: any, owner: any, settled?: (value: any) => void, observed = invocation(owner)) {
     const op: OriginalOperation = { kind, owner, ...observed, pending, state: "pending" }; operations.push(op);
+    const releaseSettled = () => { try { if (kind === "release") op.signalAtSettle = snapshot(op.guardSignal); } catch { /* diagnostic only */ } };
     if (!pending || typeof pending.then !== "function") {
-      op.state = "fulfilled"; op.value = pending; op.settled = event(); if (settled) safe(() => settled(pending)); return pending;
+      op.state = "fulfilled"; op.value = pending; op.settled = event(); releaseSettled(); if (settled) safe(() => settled(pending)); return pending;
     }
     // Attach before the caller consumes the same original promise. The signal
     // here is the guard INPUT, never its private internally combined signal.
-    void pending.then((value: unknown) => { op.state = "fulfilled"; op.value = value; op.settled = event(); if (settled) safe(() => settled(value)); }, (reason: unknown) => {
-      op.state = "rejected"; op.reason = reason; op.settled = event(); op.signalAtReject = snapshot(op.guardSignal);
+    void pending.then((value: unknown) => { op.state = "fulfilled"; op.value = value; op.settled = event(); releaseSettled(); if (settled) safe(() => settled(value)); }, (reason: unknown) => {
+      op.state = "rejected"; op.reason = reason; op.settled = event(); op.signalAtReject = snapshot(op.guardSignal); releaseSettled();
     });
     return pending;
   }
@@ -241,6 +283,9 @@ function createLifetimeObserver(sdk?: { bindings: any[]; bodySucceeded: () => bo
     let value;
     try { value = Reflect.apply(original, receiver, args); }
     catch (reason) { operations.push({ kind, owner, ...observed, state: "sync_throw", reason, settled: event() }); throw reason; }
+    // Record the original synchronous return before attaching the existing
+    // settlement observer. Return the identical product, including non-promises.
+    if (kind === "release") try { Object.assign(observed, { returned: event(), signalAtReturn: snapshot(observed.guardSignal) }); } catch { /* diagnostic only */ }
     return watch(kind, value, owner, settled, observed);
   }
   function patch(target: any, key: string, replacement: (...args: any[]) => any) {
@@ -357,6 +402,13 @@ function createLifetimeObserver(sdk?: { bindings: any[]; bodySucceeded: () => bo
     // kinds use the final column group; they are counted, never silently lost.
     const kinds = ["acquire", "reader.closed", "reader.read", "reader.cancel", "reader.unlock", "body.cancel", "release", "fetch", "handler", "waitUntil", "source.pull", "source.cancel", "timer-wake", "other"];
     const states = ["pending", "fulfilled", "rejected", "sync_throw"];
+    // Closed owner codes, from actual binding objects. Unknown stays zero;
+    // neither a global current case nor an operation ordinal supplies ownership.
+    const cases = ["unknown", "card0", "card1", "card2", "card3", "card4", "high", "max", "image2", "image4", "catalog", "catalog_denials", "observed", "admission_denials", "error", "cancel", "invalid", "foreign", "unpriced", "empty"];
+    const ownerCodes = (owner: any) => {
+      const id = typeof owner?.id === "string" ? owner.id.replace(/^qianfan_/, "") : "unknown";
+      return [Math.max(0, cases.indexOf(id)), Math.max(0, ["unknown", "chat", "catalog"].indexOf(owner?.kind))];
+    };
     const census = Array(56).fill(0);
     for (const op of operations) census[(kinds.includes(op.kind) ? kinds.indexOf(op.kind) : 13) * 4 + states.indexOf(op.state)]++;
     const rejected = operations.filter(op => op.state === "rejected" || op.state === "sync_throw");
@@ -364,12 +416,13 @@ function createLifetimeObserver(sdk?: { bindings: any[]; bodySucceeded: () => bo
       const row = op.reader, acquisition = op.acquisition, reason = op.reason;
       const related = (kind: string) => row ? operations.filter(item => item.kind === kind && item.reader === row && item.owner === op.owner && item.acquisition === acquisition) : [];
       const closed = related("reader.closed").find(item => item.pending === row.closed);
-      // Bit positions 0..20: defined reason, owner bound, reader bound,
+      // Bit positions 0..22: defined reason, owner bound, reader bound,
       // acquisition bound, same original read/closed/cancel rejection reason,
       // input aborted at invoke/reject, same reason at invoke/reject,
       // invoke before every unlock, settle after first unlock return, original
       // receiver, original closed, EOF, body locked, undefined reason, null
-      // reason, same acquisition guard-input signal, guard-input signal present.
+      // reason, same acquisition guard-input signal, guard-input signal present,
+      // same owner input signal, actual owner binding claimed.
       // No private signal access.
       const bits = [reason !== undefined, sdk ? sdk.bindings.includes(op.owner) && op.owner.claimed === true : null,
         Boolean(row && readers.includes(row) && row.owner === op.owner && row.acquisition === acquisition),
@@ -380,10 +433,30 @@ function createLifetimeObserver(sdk?: { bindings: any[]; bodySucceeded: () => bo
         Boolean(row && row.unlockInvocations.length && row.unlockInvocations.every((n: number) => op.invoked < n)),
         Boolean(row && row.unlockReturns.length && typeof op.settled === "number" && op.settled > row.unlockReturns[0]),
         Boolean(row && op.receiver === row.reader), Boolean(closed && closed.pending === row.closed), row?.eof === true, row?.body.locked === true,
-        reason === undefined, reason === null, Boolean(acquisition && op.guardSignal === acquisition.guardSignal), op.guardSignal !== undefined];
+        reason === undefined, reason === null, Boolean(acquisition && op.guardSignal === acquisition.guardSignal), op.guardSignal !== undefined,
+        Boolean(op.guardSignal && op.guardSignal === op.owner?.signal), op.owner?.claimed === true];
       const mask = bits.reduce((mask: number, value, bit) => value === true ? mask + 2 ** bit : mask, 0);
       return [kinds.includes(op.kind) ? kinds.indexOf(op.kind) : 13, states.indexOf(op.state), mask,
-        bounded(op.invoked), bounded(op.settled), bounded(op.unlocksAtInvoke), bounded(row?.unlockInvocations[0]), bounded(row?.unlockReturns[0]), bounded(closed?.settled)];
+        bounded(op.invoked), bounded(op.settled), bounded(op.unlocksAtInvoke), bounded(row?.unlockInvocations[0]), bounded(row?.unlockReturns[0]), bounded(closed?.settled), ...ownerCodes(op.owner), bounded(op.owner?.abort?.sequence)];
+    });
+    const releases = operations.filter(op => op.kind === "release");
+    const releaseTrace = releases.slice(0, 2).map(op => {
+      const acquisition = op.acquisition, abort = op.owner?.abort;
+      const sameReason = (state: any) => Boolean(abort && abort.reason !== undefined && state?.reason === abort.reason);
+      // Bits: actual acquisition, same original acquisition product, receiver,
+      // guard input, owner, bound reader, aborted entry/return/settle, same abort
+      // reason entry/return/settle, returned normally, fulfilled/rejected/threw,
+      // authored caller present/aborted, defined input abort, input present.
+      const bits = [Boolean(acquisition && guards.includes(acquisition)),
+        Boolean(acquisition && operations.some(item => item.kind === "acquire" && item.acquisition === acquisition && item.pending === acquisition.returned)),
+        Boolean(acquisition && op.receiver === acquisition.result), Boolean(acquisition && op.guardSignal === acquisition.guardSignal),
+        Boolean(acquisition && op.owner === acquisition.owner), readers.some(row => row.owner === op.owner && row.acquisition === acquisition),
+        op.signalAtInvoke.aborted, op.signalAtReturn?.aborted === true, op.signalAtSettle?.aborted === true,
+        sameReason(op.signalAtInvoke), sameReason(op.signalAtReturn), sameReason(op.signalAtSettle), op.returned !== undefined,
+        op.state === "fulfilled", op.state === "rejected", op.state === "sync_throw", Boolean(op.owner?.caller), op.owner?.caller?.aborted === true,
+        Boolean(abort && abort.reason !== undefined), op.guardSignal !== undefined];
+      const mask = bits.reduce((mask: number, value, bit) => value === true ? mask + 2 ** bit : mask, 0);
+      return [...ownerCodes(op.owner), bounded(op.invoked), bounded(op.returned), bounded(op.settled), bounded(abort?.sequence), mask, bounded(op.operands?.length)];
     });
     return {
       contract: { bodySucceeded: sdk ? sdk.bodySucceeded() : null, failureFlags: flags.map(Number), releasesFulfilled,
@@ -391,7 +464,9 @@ function createLifetimeObserver(sdk?: { bindings: any[]; bodySucceeded: () => bo
         // EOF readers, locked bodies, unlock invocations, successful returns.
         ownership: [errors.length, guards.length, guards.filter(row => row.acquired).length, guards.reduce((n, row) => n + row.releaseCalls, 0), readers.length,
           readers.filter(row => row.eof).length, bodies.filter(row => row.body.locked).length, readers.reduce((n, row) => n + row.unlocks, 0), readers.reduce((n, row) => n + row.unlocked, 0)].map(bounded) },
-      census: { census: census.map(bounded) }, rejection: { rejections: rows, omitted: bounded(Math.max(0, rejected.length - rows.length)) },
+      census: { census: census.map(bounded), releaseTrace, releaseOmitted: bounded(Math.max(0, releases.length - releaseTrace.length)) },
+      rejection: { rejections: rows, omitted: bounded(Math.max(0, rejected.length - rows.length)) },
+      worker: { rejections: rows, omitted: bounded(Math.max(0, rejected.length - rows.length)), work: census.slice(32, 40).map(bounded) },
     };
   }
   async function restore() { const failures: unknown[] = []; for (const undo of restores.splice(0).reverse()) try { undo(); } catch (error) { failures.push(error); } if (failures.length) throw new AggregateError(failures, "Qianfan observer restoration failed"); }
@@ -469,20 +544,7 @@ const originalInferenceGuard = guardedTransport.fetchWithProviderHttpGuard;
 let lifetime: ReturnType<typeof createLifetimeObserver>, bindings: ReturnType<typeof createRequestBindings>, caseState: { bodySucceeded: boolean };
 let cancelReceiptCount = 0;
 sdkDiagnostic("module", "progress", "entered");
-beforeEach(async () => {
-  diagnosticCase = "none"; diagnosticRoute = "none";
-  bindings = createRequestBindings(); caseState = { bodySucceeded: false };
-  lifetime = createLifetimeObserver({ bindings: bindings.bindings, bodySucceeded: () => caseState.bodySucceeded });
-  sdkStage("setup");
-  try {
-    clearLiveCatalogCacheForTests();
-    vi.spyOn(guardedTransport, "fetchWithProviderHttpGuard").mockImplementation(function (...args) {
-      const options = args[0], owner = bindings.claim(options.url, options.init, "chat");
-      lifetime.signal(owner, options.signal ?? options.init?.signal);
-      return lifetime.guard(originalInferenceGuard, this, args, owner);
-    });
-  } catch (error) { sdkDiagnostic("setup", "primary", "rejected", error); await preserveFailures(() => { throw error; }, [sdkCleanup("original_join", () => lifetime.join()), sdkCleanup("restoration", () => lifetime.restore()), sdkCleanup("mock_cleanup", () => vi.restoreAllMocks()), sdkCleanup("cache_cleanup", () => clearLiveCatalogCacheForTests())]); }
-});
+
 async function runCase(body: () => unknown, caseId: string) {
   diagnosticCase = caseId; sdkStage("body", "none");
   await preserveFailures(async () => {
@@ -563,7 +625,205 @@ async function discovered(id: string) {
     policy: { allowPrivateNetwork: true }, requireHttps: false });
 }
 
+// BEGIN PINNED OBSERVER NEGATIVE CONTROLS
+// Native-stream observer comparisons only, not replacements for the six real
+// parser/guard controls below. Test-owned producers settle their own promises.
+async function runQianfanObserverControl(id: string, assert: any) {
+  const variants = id === "binding" ? ["owner", "acquisition"] : id === "prior_foreign" ? ["prior", "foreign"] : [id];
+  for (const variant of variants) {
+    const binding = createRequestBindings(), caller = new AbortController(), input = new AbortController();
+    const life = createLifetimeObserver({ bindings: binding.bindings, bodySucceeded: () => true });
+    const owner = binding.expect("cancel", "chat", "https://fixture.example/control", "POST", "fixture-control", caller.signal);
+    binding.claim(owner.url, { method: "POST", headers: { authorization: "Bearer fixture-control" } }, "chat");
+    owner.callerObservation = {}; life.signal(owner.callerObservation, caller.signal); life.signal(owner, input.signal);
+    let sourceController!: ReadableStreamDefaultController<Uint8Array>, finishRelease!: () => void;
+    const body = new ReadableStream<Uint8Array>({ start(value) { sourceController = value; } }, { highWaterMark: 0 });
+    const releasing = new Promise<void>((resolve, reject) => { finishRelease = variant === "failed_release" ? () => reject(undefined) : resolve; });
+    const result = { response: new Response(body), release() { assert.equal(this, result); return releasing; } };
+    const acquired = Promise.resolve(result); life.guard(() => acquired, undefined, [], owner); await acquired;
+    const reader = body.getReader(), closed = reader.closed, reading = reader.read();
+    const reason = variant === "undefined" ? undefined : new Error("observer control source");
+    if (variant === "prior") { sourceController.error(reason); await Promise.allSettled([reading, closed]); }
+    life.partial(owner); caller.abort(new Error("observer control caller"));
+    input.abort(variant === "foreign" ? new Error("observer control foreign") : reason);
+    if (variant !== "prior") sourceController.error(reason);
+    const cancellation = reader.cancel(); await Promise.allSettled([reading, closed, cancellation]);
+    if (variant === "unlock") assert.throws(() => Reflect.apply(reader.releaseLock, {}, []), TypeError);
+    reader.releaseLock(); const release = result.release(); assert.equal(release, releasing);
+    if (variant === "owner") owner.id = "foreign";
+    if (variant === "acquisition") life.readers[0].acquisition = {};
+    await preserveFailures(async () => {
+      if (variant === "pending_release") {
+        let complete = false; const originalJoin = life.join(); void originalJoin.then(() => { complete = true; }, () => { complete = true; });
+        await new Promise<void>(resolve => setImmediate(resolve)); assert.equal(complete, false);
+        assert.equal(life.operations.find(op => op.kind === "release")!.pending, releasing);
+        finishRelease(); await releasing; await originalJoin;
+      } else {
+        finishRelease(); await Promise.allSettled([release]);
+        await assert.rejects(life.join(), (error: any) => error instanceof AggregateError &&
+          (variant !== "undefined" && variant !== "failed_release" || error.errors.includes(undefined)));
+      }
+      assert.equal(body.locked, false); assert.equal(life.summary().operations, life.summary().settled);
+      assert.equal(life.operations.find(op => op.kind === "reader.read")!.pending, reading);
+      assert.equal(life.operations.find(op => op.kind === "reader.closed")!.pending, closed);
+      assert.equal(life.operations.find(op => op.kind === "reader.cancel")!.pending, cancellation);
+    }, [async () => { finishRelease(); await Promise.allSettled([reading, closed, cancellation, release]); }, () => life.restore()]);
+  }
+}
+// END PINNED OBSERVER NEGATIVE CONTROLS
+
+// BEGIN PINNED HOSTED IMPLEMENTATION CONTROLS
+async function runQianfanPinnedControl(id: string, summary: ReturnType<typeof createPinnedControlSummary>, deadlineAt: number) {
+  const [{ strict: assert }, { createServer }, { Stream }, { APIError }, guarded, bodyModule, runtime, undici, { readFile }] = await Promise.all([
+    import("node:assert"), import("node:http"), import("openai/core/streaming"), import("openai/core/error"),
+    import("../../src/infra/net/fetch-guard.js"), import("../../src/infra/net/guarded-body-stream.js"),
+    import("../../src/infra/net/undici-runtime.js"), import("undici"), import("node:fs/promises"),
+  ]);
+  const { isMockedFetch } = await import("../../src/infra/net/runtime-fetch.js");
+  const packageMetadata = JSON.parse(await readFile(new URL("../package.json", import.meta.resolve("openai/core/streaming")), "utf8"));
+  requirePinnedControlAdmission(globalThis.fetch, isMockedFetch(globalThis.fetch), guarded.isManagedProxyActive(), runtime.loadUndiciRuntimeDeps(), undici, packageMetadata.version);
+  const remaining = deadlineAt - performance.now(); if (remaining <= 0) { summary.deadline(); throw new Error("pinned control admission deadline"); }
+  const life = createLifetimeObserver(), input = new AbortController(), bindings = createRequestBindings();
+  const sockets = new Set<any>(), socketJoins: Promise<void>[] = [], responses: Promise<void>[] = [], sourceErrors: unknown[] = [];
+  let requests = 0, result: any, iterator: any, owner: any, timer: ReturnType<typeof setTimeout> | undefined, hardTimer: ReturnType<typeof setTimeout> | undefined;
+  let expired = false, strictObserved = false, releaseStarted = false, ownedSettled = false, sourcePending = 0;
+  const sourceJoin = (original: Promise<void>) => { sourcePending++; void original.then(() => { sourcePending--; }, () => { sourcePending--; }); return original; };
+  const frame = (value: unknown) => "data: " + JSON.stringify(value) + "\n\n";
+  const server = createServer((request, response) => {
+    requests++;
+    responses.push(sourceJoin(new Promise<void>(resolve => { response.once("finish", resolve); response.once("close", resolve); })));
+    response.once("error", error => { sourceErrors.push(error); });
+    if (request.method !== "GET" || request.url !== "/control" || request.headers.authorization !== "Bearer fixture-control") {
+      sourceErrors.push(new Error("unexpected control request")); response.writeHead(400).end(); return;
+    }
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    if (id === "done") response.end(frame({ control: 1 }) + "data: [DONE]\n\n");
+    else { response.write(frame({ control: 1 }) + (id === "embedded" ? frame({ error: { message: "synthetic-control-error", type: "fixture", code: "fixture_error" } }) : "")); response.flushHeaders(); }
+  });
+  server.on("connection", socket => {
+    sockets.add(socket); socketJoins.push(sourceJoin(new Promise<void>(resolve => socket.once("close", () => { sockets.delete(socket); resolve(); }))));
+    socket.on("error", error => { sourceErrors.push(error); });
+  });
+  server.on("error", error => { sourceErrors.push(error); });
+  const failDeadline = new Error("pinned control deadline");
+  let rejectDeadline!: (reason: unknown) => void;
+  const deadline = new Promise<never>((_, reject) => { rejectDeadline = reject; });
+  const owned = preserveFailures(async () => {
+    await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", () => { server.removeListener("error", reject); resolve(); }); });
+    const address = server.address(); assert.ok(address && typeof address !== "string");
+    const url = `http://127.0.0.1:${address.port}/control`, init = { method: "GET", headers: { authorization: "Bearer fixture-control" } };
+    owner = bindings.expect("error", "chat", url, "GET", "fixture-control"); bindings.claim(url, init, "chat");
+    if (id === "preabort") input.abort(new Error("control preabort"));
+    life.signal(owner, input.signal);
+    const options = { url, init, signal: input.signal, capture: false as const, mode: "strict" as const, maxRedirects: 0,
+      requireHttps: false, policy: { allowedHostnames: ["127.0.0.1"], hostnameAllowlist: ["127.0.0.1"] },
+      ...(id === "timeout" ? { timeoutMs: 1000 } : {}) };
+    const acquisition = life.guard(guarded.fetchWithSsrFGuard, undefined, [options], owner);
+    if (id === "preabort") { await assert.rejects(acquisition); assert.equal(requests, 0); }
+    else {
+      result = await acquisition; assert.equal(requests, 1);
+      if (id === "release") {
+        assert.equal(input.signal.aborted, false); releaseStarted = true; await result.release(); assert.equal(input.signal.aborted, false);
+      } else {
+        // Matches buildManagedResponse: no added signal shortcut. The original
+        // guard response stays owned by its actual reader and original release.
+        const managed = new Response(bodyModule.wrapGuardedBodyStream({ body: result.response.body!, cleanup: () => { releaseStarted = true; return result.release(); }, refreshTimeout: result.refreshTimeout }), result.response);
+        iterator = Stream.fromSSEResponse<{ control: number }>(managed, input)[Symbol.asyncIterator]();
+        const first = await iterator.next(); assert.equal(first.done, false); assert.equal(first.value.control, 1);
+        if (id === "caller") input.abort(new Error("control caller abort"));
+        if (id === "embedded") await assert.rejects(iterator.next(), (error: any) => error instanceof APIError && (error.error as { message?: unknown } | undefined)?.message === "synthetic-control-error");
+        else if (id === "done") assert.equal((await iterator.next()).done, true);
+        else await Promise.allSettled([iterator.next()]);
+      }
+    }
+    // No disposition change: expected source failures remain strict failures.
+    let rejected = false, rejection: any;
+    try { await life.join(); } catch (error) { rejected = true; rejection = error; }
+    strictObserved = true;
+    const originals = life.operations.filter(op => op.state === "rejected" || op.state === "sync_throw");
+    if (id === "done") { assert.equal(rejected, false); assert.equal(originals.length, 0); }
+    else if (id !== "release") { assert.equal(rejected, true); assert.ok(originals.length > 0); }
+    if (rejected) {
+      assert.ok(rejection instanceof AggregateError); assert.deepEqual(rejection.errors, originals.map(op => op.reason));
+      assert.deepEqual(life.joinDiagnostic().contract.failureFlags.slice(0, 4), [0, 0, 0, 0]);
+    }
+    if (id === "embedded") {
+      const releasing = life.operations.find(op => op.kind === "release")!;
+      assert.ok(owner.abort && owner.abort.sequence < releasing.invoked); assert.equal(owner.caller, undefined);
+      const reading = life.operations.find(op => op.kind === "reader.read" && op.state === "rejected")!;
+      const closed = life.operations.find(op => op.kind === "reader.closed" && op.state === "rejected")!;
+      const cancellation = life.operations.find(op => op.kind === "reader.cancel" && op.state === "rejected")!;
+      assert.ok(reading && closed && cancellation); assert.notEqual(reading.reason, undefined);
+      assert.equal(reading.reader, closed.reader); assert.equal(reading.reader, cancellation.reader);
+      assert.equal(reading.reason, closed.reason); assert.equal(reading.reason, cancellation.reason);
+    }
+    if (id === "timeout") assert.ok(life.operations.some(op => op.kind === "reader.read" && op.state === "rejected" && op.signalAtReject?.aborted === false));
+    assert.equal(life.summary().operations, life.summary().settled); assert.equal(life.summary().readers, life.summary().unlocked);
+    if (result) assert.ok(life.operations.filter(op => op.kind === "release").every(op => op.state === "fulfilled"));
+  }, [
+    async () => { if (iterator) await iterator.return?.(); },
+    async () => { if (result && !releaseStarted) { releaseStarted = true; await result.release(); } },
+    async () => { if (!strictObserved) await life.join(); },
+    async () => { await Promise.all([...responses, ...socketJoins]); if (sourceErrors.length) throw new AggregateError(sourceErrors, "control source failed"); },
+    async () => { if (server.listening) await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); },
+    () => { if (id === "embedded" && owner) try { summary.embedded(life, owner); } catch { /* diagnostic only */ } },
+    () => life.restore(),
+  ].map(cleanup => async () => { try { await cleanup(); } catch (error) { summary.cleanup(); throw error; } }));
+  // The five-second bound includes imports. Reserve the last half-second for
+  // failure-only owned cleanup; hitting either boundary is never a PASS.
+  const outcome = owned.then(() => { ownedSettled = true; return { ok: true as const }; }, error => { ownedSettled = true; return { ok: false as const, error }; });
+  timer = setTimeout(() => {
+    expired = true; summary.deadline(); input.abort(failDeadline);
+    for (const socket of sockets) socket.destroy(); server.close();
+  }, Math.max(0, remaining - 500));
+  hardTimer = setTimeout(() => rejectDeadline(failDeadline), remaining);
+  try {
+    const completed = await Promise.race([outcome, deadline]);
+    if (expired) throw new AggregateError([failDeadline, ...(completed.ok ? [] : [completed.error])], "control deadline and original work");
+    if (!completed.ok) throw completed.error;
+  } finally {
+    clearTimeout(timer); clearTimeout(hardTimer);
+    summary.pending(life.operations.filter(op => op.state === "pending").length + sourcePending + Number(!ownedSettled));
+    // An unsettled original stays owned by its observed outcome. Its later
+    // failure remains in that outcome, never a claimed successful retirement.
+  }
+
+}
+
+describe.sequential("exact d8 parser and guard controls, separate from registered product cases", () => {
+  const controls = createPinnedControlSummary(); let groupDeadline: number | undefined;
+  nativeIt.each(pinnedControlIds)("pinned control %s", async id => {
+    groupDeadline ??= performance.now() + 45000; controls.start(id); let ok = false;
+    const emit = (outcome: string) => { try { const line = diagnostic.encode(diagnostic.record({ layer: "sdk", route: "none", caseId: "none", phase: "controls", role: "summary" }, outcome, undefined, controls.facts())); if (line) process.stdout.write(line); } catch { /* original control verdict wins */ } };
+    emit("entered");
+    try {
+      const remaining = groupDeadline - performance.now(); if (remaining <= 0 || controls.facts().controlCounts[6]) { controls.deadline(); throw new Error("pinned control group deadline"); }
+      if (pinnedControlIds.indexOf(id) < 6) await runQianfanPinnedControl(id, controls, Math.min(groupDeadline, performance.now() + 5000));
+      else { const { strict: assert } = await import("node:assert"); await runQianfanObserverControl(id, assert); }
+      ok = true;
+    } finally {
+      controls.finish(id, ok);
+      emit(ok ? "fulfilled" : "rejected");
+    }
+  }, 5000);
+});
+// END PINNED HOSTED IMPLEMENTATION CONTROLS
+
 describe("actual Qianfan configured catalog and replay through Worker and SQLite", () => {
+beforeEach(async () => {
+  diagnosticCase = "none"; diagnosticRoute = "none";
+  bindings = createRequestBindings(); caseState = { bodySucceeded: false };
+  lifetime = createLifetimeObserver({ bindings: bindings.bindings, bodySucceeded: () => caseState.bodySucceeded });
+  sdkStage("setup");
+  try {
+    clearLiveCatalogCacheForTests();
+    vi.spyOn(guardedTransport, "fetchWithProviderHttpGuard").mockImplementation(function (...args) {
+      const options = args[0], owner = bindings.claim(options.url, options.init, "chat");
+      lifetime.signal(owner, options.signal ?? options.init?.signal);
+      return lifetime.guard(originalInferenceGuard, this, args, owner);
+    });
+  } catch (error) { sdkDiagnostic("setup", "primary", "rejected", error); await preserveFailures(() => { throw error; }, [sdkCleanup("original_join", () => lifetime.join()), sdkCleanup("restoration", () => lifetime.restore()), sdkCleanup("mock_cleanup", () => vi.restoreAllMocks()), sdkCleanup("cache_cleanup", () => clearLiveCatalogCacheForTests())]); }
+});
   it.each(models.map((model, i) => [model, `card${i}`]))("streams frozen %s through the registered replay policy", async (model, id) => {
     const result = await (await start(id, model)).result();
     expect(result.stopReason, result.errorMessage).toBe("stop");

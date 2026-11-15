@@ -34,14 +34,25 @@ assert.ok(diagnosticStart >= 0 && diagnosticEnd > diagnosticStart);
 const diagnosticCode = stripTypeScriptTypes(sdkText.slice(diagnosticStart, diagnosticEnd));
 const makeDiagnostic = new Function(diagnosticCode + "; return qianfanDiagnostics;")();
 const diagnostic = makeDiagnostic(nodeTypes.isProxy);
+const controlStart = sdkText.indexOf("// BEGIN PINNED CONTROL BOOKKEEPING"), controlEnd = sdkText.indexOf("// END PINNED CONTROL BOOKKEEPING");
+const controlCode = stripTypeScriptTypes(sdkText.slice(controlStart, controlEnd));
+const { pinnedControlIds, createPinnedControlSummary, requirePinnedControlAdmission } = new Function(controlCode + ";return { pinnedControlIds, createPinnedControlSummary, requirePinnedControlAdmission };")();
+const negativeStart = sdkText.indexOf("// BEGIN PINNED OBSERVER NEGATIVE CONTROLS"), negativeEnd = sdkText.indexOf("// END PINNED OBSERVER NEGATIVE CONTROLS");
+const negativeCode = stripTypeScriptTypes(sdkText.slice(negativeStart, negativeEnd));
+const runQianfanObserverControl = new Function("createRequestBindings", "createLifetimeObserver", "preserveFailures", negativeCode + ";return runQianfanObserverControl;")(createRequestBindings, createLifetimeObserver, preserveFailures);
 const stepAnnotations = diagnostic.emitter(text => process.stdout.write(text));
 function outerDiagnostics(context, annotations = stepAnnotations) {
-  const records = []; let failed = false, phase = "worker";
+  const records = [], retirements = new Map(); let failed = false, phase = "worker";
   const base = (phase, role) => ({ layer: "outer", route: "none", caseId: "none", phase, role });
   const collect = text => { for (const record of diagnostic.parse(text)) if (records.length < 512) records.push(record); };
   const safe = fn => { try { fn(); } catch { /* reporting never replaces original errors */ } };
+  function controlFacts() {
+    const record = records.findLast(row => row.phase === "controls" && row.controlCounts);
+    return record ? { controlCounts: record.controlCounts, controlSequence: record.controlSequence, controlFlags: record.controlFlags } : {};
+  }
   function failure(error, at = phase, role = "primary", facts = {}) {
-    failed = true; safe(() => annotations.emit(diagnostic.record(base(at, role), "rejected", error, facts)));
+    failed = true; safe(() => annotations.emit(diagnostic.record(base(at, role), "rejected", error,
+      { ...(role === "primary" && at !== "receipt" ? controlFacts() : {}), ...facts }))); reportWorkers();
   }
   const adapter = new Proxy(context, { get(target, property, receiver) {
     if (property !== "diagnostic") return Reflect.get(target, property, receiver);
@@ -64,15 +75,34 @@ function outerDiagnostics(context, annotations = stepAnnotations) {
       const values = [...latest.values()];
       // Prioritize real failure outcomes; a pending boundary remains only an
       // observation. No SDK record means unknown, never an inferred loader bug.
-      for (const record of values.filter(record => record.outcome === "rejected")) annotations.emit(record);
+      const rejected = values.filter(record => record.outcome === "rejected");
+      // Keep the three summaries from the same first failing case together.
+      const first = rejected.find(record => record.phase === "join_contract");
+      if (first) for (const at of ["join_contract", "join_census", "join_rejections"]) {
+        const record = rejected.find(record => record.caseId === first.caseId && record.route === first.route && record.phase === at);
+        if (record) annotations.emit(record);
+      }
+      for (const record of rejected) annotations.emit(record);
       const last = records.at(-1); if (last && last.outcome !== "rejected" && !values.some(record => record.phase === "join_contract")) annotations.emit(last);
     });
   }
+  function reportWorkers() {
+    if (failed) safe(() => { for (const records of retirements.values()) for (const record of records) annotations.emit(record); });
+  }
   return { context: adapter, helper, failure,
-    retirement(side, predicate, proof, error) {
-      failed = true;
-      safe(() => annotations.emit(diagnostic.record(base("retirement_" + side, "cleanup"), "rejected", error,
-        { ...proof.join?.contract, predicate })));
+    retirement(side, predicate, proof, error, fulfilled = false) {
+      if (!fulfilled) failed = true;
+      safe(() => {
+        const bounded = value => Number.isInteger(value) && value >= 0 && value <= 9999 ? value : null;
+        const bit = value => typeof value === "boolean" ? Number(value) : null;
+        const outcome = fulfilled ? "fulfilled" : "rejected";
+        retirements.set(side, [
+          diagnostic.record(base("retirement_" + side, "cleanup"), outcome, error, { ...proof?.join?.contract, predicate,
+            retirement: [bit(proof?.accepted), bit(proof?.settled), bounded(proof?.rejected), bounded(proof?.readers), bounded(proof?.unlocked)] }),
+          diagnostic.record(base("retirement_" + side + "_ops", "cleanup"), outcome, error, { ...proof?.join?.worker, predicate }),
+        ]);
+      });
+      reportWorkers();
     },
     stage(next) { phase = next; },
     cleanup(at, original) { return () => diagnostic.observe(original, (outcome, error) => {
@@ -80,7 +110,7 @@ function outerDiagnostics(context, annotations = stepAnnotations) {
       else if (failed && outcome === "fulfilled") safe(() => annotations.emit(diagnostic.record(base(at, "cleanup"), outcome)));
     }); },
     get failed() { return failed; },
-    finish() { if (failed) { reportSdk(); safe(() => annotations.finish()); } },
+    finish() { if (failed) { reportSdk(); reportWorkers(); safe(() => annotations.finish()); } },
     count() { return records.length; },
   };
 }
@@ -119,17 +149,25 @@ test("Qianfan diagnostics parse only new closed records and own child DATA field
 test("Qianfan one-step annotation budget deduplicates, caps and flushes only once", () => {
   const lines = [], emitter = diagnostic.emitter(line => lines.push(line));
   const first = diagnostic.record(diagnosticContext, "rejected", undefined);
-  emitter.emit(first); emitter.emit(first);
-  emitter.emit({ ...first, route: "discovery" });
+  for (const phase of ["helper", "receipt"]) emitter.emit({ ...first, layer: "outer", route: "none", caseId: "none", phase });
+  for (const phase of ["join_contract", "join_census", "join_rejections"]) {
+    emitter.emit({ ...first, phase, role: "summary" }); emitter.emit({ ...first, phase, role: "summary" });
+  }
   for (const caseId of diagnostic.cases.filter(id => id !== "none")) emitter.emit({ ...first, caseId });
-  for (const side of ["router", "upstream"]) emitter.emit({ ...first, layer: "outer", route: "none", caseId: "none", role: "cleanup", phase: "retirement_" + side, predicate: "accepted" });
+  for (const phase of ["retirement_router", "retirement_router_ops", "retirement_upstream", "retirement_upstream_ops"]) {
+    emitter.emit({ ...first, layer: "outer", route: "none", caseId: "none", role: "cleanup", phase, predicate: "accepted" });
+  }
+  for (const phase of ["dispose", "rm"]) for (const outcome of ["fulfilled", "rejected"]) {
+    emitter.emit({ ...first, layer: "outer", phase, role: outcome === "fulfilled" ? "summary" : "cleanup", outcome });
+  }
   emitter.finish(); emitter.finish();
   assert.equal(lines.length, 10); assert.equal(emitter.summary().emitted, 9);
   assert.ok(lines.every(line => line.startsWith("::error title=Qianfan contract diagnostic::") && Buffer.byteLength(line) <= 768));
   assert.ok(Buffer.byteLength(lines.join("")) <= 8192);
   const records = lines.map(line => JSON.parse(line.slice(line.indexOf("::{") + 2)));
   assert.equal(records.at(-1).phase, "overflow"); assert.ok(records.at(-1).suppressed > 0);
-  assert.equal(records.filter(row => row.caseId === "cancel").length, 2);
+  assert.deepEqual(records.at(-1).folded.slice(0, 4), [1, 1, 1, 1]);
+  assert.equal(records.filter(row => row.caseId === "cancel").length, 3);
   emitter.emit({ ...first, message: "private\r\n::error" }); assert.equal(lines.length, 10);
 });
 
@@ -150,7 +188,8 @@ test("Qianfan rejected child emits early safe attribution and retains primary pl
   assert.equal(diagnostics.helper(() => original), original);
   await assert.rejects(preserveFailures(() => original, [diagnostics.cleanup("dispose", () => { throw undefined; }), diagnostics.cleanup("rm", () => {})]), error => error.errors.length === 2 && error.errors[0] === primary && error.errors[1] === undefined);
   diagnostics.finish(); assert.ok(lines[0].includes('"phase":"helper"')); assert.ok(lines.some(line => line.includes('"caseId":"cancel"')));
-  assert.ok(lines.some(line => line.includes('"phase":"dispose"') && line.includes('"category":"undefined"')));
+  const overflow = lines.map(line => JSON.parse(line.slice(line.indexOf("::{") + 2))).find(record => record.phase === "overflow");
+  assert.deepEqual(overflow.folded.slice(0, 4), [0, 1, 1, 0]);
   assert.doesNotMatch(lines.join(""), /private/);
 });
 
@@ -453,6 +492,7 @@ function verifyRetirement(proof, side, diagnostics) {
     try { diagnostics?.retirement(side, predicate, proof, error); } catch { /* original assertion wins */ }
     throw error;
   }
+  try { diagnostics?.retirement(side, "none", proof, undefined, true); } catch { /* diagnostic only */ }
 }
 test("Qianfan join diagnostic schema bounds fixed columns without invoking nested accessors", () => {
   const context = { ...diagnosticContext, caseId: "error", phase: "join_contract", role: "summary" };
@@ -465,10 +505,10 @@ test("Qianfan join diagnostic schema bounds fixed columns without invoking neste
   for (const extra of [
     { failureFlags: [0, 0, 0, 0, 2, 0] }, { failureFlags: [0] }, { ownership: getter }, { ownership: proxy },
     { ownership: Array(9) }, { ownership: Array(9).fill(10000) }, { census: Array(56).fill(-1) },
-    { census: Array(55).fill(0) }, { rejections: Array(5).fill(Array(9).fill(0)) },
-    { rejections: [[14, 2, 0, 1, 2, 0, null, null, null]] }, { rejections: [[2, 1, 0, 1, 2, 0, null, null, null]] },
-    { rejections: [[2, 2, 2097152, 1, 2, 0, null, null, null]] }, { rejections: [[2, 2, 0, 10000, 2, 0, null, null, null]] },
-    { rejections: [[2, 2, null, 1, 2, 0, null, null, null]] }, { rejections: [getter] }, { omitted: -1 }, { predicate: "private" }, { bodySucceeded: "true" },
+    { census: Array(55).fill(0) }, { rejections: Array(5).fill(Array(12).fill(0)) },
+    { rejections: [[14, 2, 0, 1, 2, 0, null, null, null, 14, 1, null]] }, { rejections: [[2, 1, 0, 1, 2, 0, null, null, null, 14, 1, null]] },
+    { rejections: [[2, 2, 8388608, 1, 2, 0, null, null, null, 14, 1, null]] }, { rejections: [[2, 2, 0, 10000, 2, 0, null, null, null, 14, 1, null]] },
+    { rejections: [[2, 2, null, 1, 2, 0, null, null, null, 14, 1, null]] }, { rejections: [getter] }, { omitted: -1 }, { predicate: "private" }, { bodySucceeded: "true" },
   ]) assert.equal(diagnostic.validate({ ...record, ...extra }), null);
   assert.equal(touched, 0);
   assert.ok(diagnostic.validate({ ...record, ownership: Array(9).fill(null) }));
@@ -605,7 +645,7 @@ test("Qianfan join records fit the existing step budget and preserve strict Work
   }
   for (const side of ["router", "upstream"]) assert.throws(() => verifyRetirement({ accepted: false, join: f.life.joinDiagnostic() }, side, diagnostics), assert.AssertionError);
   diagnostics.finish(); diagnostics.finish();
-  assert.equal(lines.length, 6); assert.ok(lines.every(line => line.startsWith("::error") && Buffer.byteLength(line) <= 768));
+  assert.equal(lines.length, 8); assert.ok(lines.every(line => line.startsWith("::error") && Buffer.byteLength(line) <= 768));
   assert.ok(Buffer.byteLength(lines.join("")) <= 8192);
   assert.ok(lines.some(line => line.includes('"phase":"retirement_router"') && line.includes('"predicate":"accepted"')));
   assert.ok(lines.some(line => line.includes('"phase":"retirement_upstream"')));
@@ -625,21 +665,224 @@ test("Qianfan multiple SDK join failures reserve both strict Worker predicates w
   diagnostics.failure(undefined, "retirement", "cleanup"); diagnostics.finish(); diagnostics.finish();
   const emitted = lines.map(line => JSON.parse(line.slice(line.indexOf("::{") + 2)));
   assert.equal(emitted.length, 10); assert.equal(emitted.at(-1).phase, "overflow"); assert.ok(emitted.at(-1).suppressed > 0);
-  assert.deepEqual(emitted.filter(record => record.caseId === "error").map(record => record.phase), ["original_join", "join_contract", "join_census", "join_rejections"]);
-  for (const side of ["router", "upstream"]) assert.equal(emitted.filter(record => record.phase === "retirement_" + side && record.predicate === "accepted").length, 1);
+  assert.deepEqual(emitted.filter(record => record.caseId === "error").map(record => record.phase), ["join_contract", "join_census", "join_rejections"]);
+  for (const side of ["router", "upstream"]) for (const suffix of ["", "_ops"]) assert.equal(emitted.filter(record => record.phase === "retirement_" + side + suffix && record.predicate === "accepted").length, 1);
   assert.ok(lines.every(line => line.startsWith("::error") && Buffer.byteLength(line) <= 768)); assert.ok(Buffer.byteLength(lines.join("")) <= 8192);
 });
 
 async function retireWorker(mf, diagnostics) {
   if (!mf) return;
-  await preserveFailures(async () => {
-    const router = await mf.getWorker("router"), response = await router.fetch("https://fixture.example/fixture/retirement");
-    const proof = await response.json(); verifyRetirement(proof, "router", diagnostics);
-  }, [async () => {
-    const upstream = await mf.getWorker("upstream"), response = await upstream.fetch("https://fixture.example/retirement");
-    const proof = await response.json(); verifyRetirement(proof, "upstream", diagnostics);
-  }]);
+  async function retire(side, url) {
+    let proof;
+    try {
+      const worker = await mf.getWorker(side), response = await worker.fetch(url);
+      proof = await response.json();
+    } catch (error) {
+      try { diagnostics?.retirement(side, "response", undefined, error); } catch { /* original rejection wins */ }
+      throw error;
+    }
+    verifyRetirement(proof, side, diagnostics);
+  }
+  await preserveFailures(() => retire("router", "https://fixture.example/fixture/retirement"),
+    [() => retire("upstream", "https://fixture.example/retirement")]);
 }
+
+test("Qianfan release chronology observes original entry return and settlement without accepting source errors", async () => {
+  // Observer instrumentation controls only. These are not OpenAI/parser or guard
+  // implementation comparisons and establish no SDK error disposition.
+  for (const when of ["before", "inside", "after", "never"]) {
+    const input = new AbortController(), released = deferred(), reason = new Error("observer control");
+    const bindings = createRequestBindings(), owner = bindings.expect("error", "chat", "https://fixture.example/chat", "POST", "fixture-error");
+    bindings.claim(owner.url, { method: "POST", headers: { authorization: "Bearer fixture-error" } }, "chat");
+    const life = createLifetimeObserver({ bindings: bindings.bindings, bodySucceeded: () => true }); life.signal(owner, input.signal);
+    const response = new Response(new ReadableStream({ start(controller) { controller.error(reason); } }));
+    const operands = [17]; let receiver, originalOperands;
+    const result = { response, release(...args) { receiver = this; originalOperands = args; if (when === "inside") input.abort(reason); return released.promise; } };
+    const acquisition = Promise.resolve(result); assert.equal(life.guard(() => acquisition, null, [], owner), acquisition); await acquisition;
+    const reader = response.body.getReader(), closed = reader.closed, reading = reader.read(), cancelling = reader.cancel();
+    await Promise.allSettled([reading, closed, cancelling]); reader.releaseLock();
+    if (when === "before") input.abort(reason);
+    const product = result.release(...operands); assert.equal(product, released.promise); assert.equal(receiver, result); assert.deepEqual(originalOperands, operands);
+    const releasing = life.operations.find(op => op.kind === "release");
+    assert.equal(releasing.pending, product); assert.equal(releasing.state, "pending");
+    assert.ok(releasing.returned > releasing.invoked); assert.equal(releasing.settled, undefined);
+    if (when === "after") input.abort(reason);
+    released.resolve(); await product;
+    await assert.rejects(life.join(), error => error.errors.length === 3 && error.errors.every(value => value === reason));
+    assert.equal(life.operations.find(op => op.kind === "reader.read").pending, reading);
+    assert.equal(life.operations.find(op => op.kind === "reader.closed").pending, closed);
+    assert.equal(life.operations.find(op => op.kind === "reader.cancel").pending, cancelling);
+    const trace = life.joinDiagnostic().census.releaseTrace[0], mask = trace[6];
+    assert.deepEqual(trace.slice(0, 2), [14, 1]); assert.equal(trace[7], 1);
+    assert.ok(trace[2] < trace[3] && trace[3] < trace[4]);
+    for (const bit of [0, 1, 2, 3, 4, 5, 12, 13, 19]) assert.ok(mask & 2 ** bit);
+    for (const bit of [14, 15, 16, 17]) assert.equal(mask & 2 ** bit, 0);
+    assert.equal(Boolean(mask & 2 ** 6), when === "before");
+    assert.equal(Boolean(mask & 2 ** 7), ["before", "inside"].includes(when));
+    assert.equal(Boolean(mask & 2 ** 8), when !== "never");
+    assert.equal(Boolean(mask & 2 ** 9), when === "before");
+    assert.equal(Boolean(mask & 2 ** 10), ["before", "inside"].includes(when));
+    assert.equal(Boolean(mask & 2 ** 11), when !== "never");
+    if (when === "before") assert.ok(trace[5] < trace[2]);
+    if (when === "inside") assert.ok(trace[2] < trace[5] && trace[5] < trace[3]);
+    if (when === "after") assert.ok(trace[3] < trace[5] && trace[5] < trace[4]);
+    if (when === "never") assert.equal(trace[5], null);
+    joinRecordParts(life); await life.restore();
+  }
+});
+
+test("Qianfan strict Worker identities use original case role signal and handler waitUntil products", async () => {
+  const life = createLifetimeObserver(), bindings = createRequestBindings(), signal = new AbortController(), reason = new Error("owned signal");
+  const owner = bindings.expect("qianfan_error", "chat", "https://fixture.example/chat", "POST", "fixture-error");
+  bindings.claim(owner.url, { method: "POST", headers: { authorization: "Bearer fixture-error" } }, "chat"); life.signal(owner, signal.signal);
+  let controller; const response = new Response(new ReadableStream({ start(value) { controller = value; } }, { highWaterMark: 0 }));
+  life.response(response, owner); const reader = response.body.getReader(), closed = reader.closed, reading = reader.read();
+  const handler = Promise.resolve(response), waitUntil = Promise.resolve();
+  assert.equal(life.watch("handler", handler, owner), handler); assert.equal(life.watch("waitUntil", waitUntil, owner), waitUntil);
+  signal.abort(reason); controller.error(reason); const cancelling = reader.cancel();
+  await Promise.allSettled([reading, closed, cancelling, handler, waitUntil]); reader.releaseLock();
+  await assert.rejects(life.join(), error => error.errors.length === 3 && error.errors.every(value => value === reason));
+  const projection = life.joinDiagnostic(); assert.deepEqual(projection.worker.work, [0, 1, 0, 0, 0, 1, 0, 0]);
+  for (const row of projection.worker.rejections) {
+    assert.deepEqual(row.slice(9, 11), [14, 1]); assert.equal(row[11], owner.abort.sequence);
+    for (const bit of [8, 10, 20, 21, 22]) assert.ok(row[2] & 2 ** bit);
+    assert.equal(row[2] & 2 ** 19, 0); // No SDK acquisition is invented for Worker reads.
+  }
+  assert.equal(projection.contract.bodySucceeded, null); assert.deepEqual(projection.contract.failureFlags, [0, 0, 0, 0, 1, 0]);
+  await life.restore();
+});
+
+test("Qianfan extended diagnostics reject malformed owner release and nested fields without reading them", () => {
+  const context = { ...diagnosticContext, phase: "join_rejections", role: "summary" };
+  const row = [2, 2, 8388607, 1, 9, 0, 5, 6, 8, 14, 1, 4];
+  const valid = diagnostic.record(context, "rejected", undefined, { rejections: [row], omitted: 0 }); assert.ok(valid);
+  let touched = 0; const getter = row.slice(); Object.defineProperty(getter, "9", { get() { touched++; throw undefined; } });
+  const proxy = new Proxy(row, { get() { touched++; throw undefined; } });
+  const release = [14, 1, 1, 3, 7, 2, 1048575, 0];
+  for (const fields of [
+    { rejections: [getter] }, { rejections: [proxy] }, { rejections: [[...row.slice(0, 9), 20, 1, 4]] },
+    { rejections: [[...row.slice(0, 10), 3, 4]] }, { rejections: [[...row.slice(0, 11), 10000]] },
+    { releaseTrace: [[...release.slice(0, 6), 1048576, 0]] }, { releaseTrace: [release, release, release] },
+    { releaseTrace: [[20, ...release.slice(1)]] }, { work: Array(8).fill(10000) }, { folded: Array(8).fill(0) },
+    { retirement: [2, 1, 0, 0, 0] }, { retirement: [1, "true", 0, 0, 0] },
+  ]) assert.equal(diagnostic.validate({ ...valid, ...fields }), null);
+  assert.equal(touched, 0);
+  assert.ok(diagnostic.validate({ ...valid, releaseTrace: [release], releaseOmitted: 0 }));
+  assert.equal(diagnostic.validate("x".repeat(159)), null);
+  assert.deepEqual(diagnostic.parse("QIANFAN_DIAGNOSTIC " + JSON.stringify("x".repeat(159)) + "\n"), []);
+});
+
+test("Qianfan both Worker summaries survive overall failure including previously fulfilled retirement", async () => {
+  for (const failure of ["none", "helper", "router", "upstream"]) {
+    const lines = [], diagnostics = outerDiagnostics({}, diagnostic.emitter(line => lines.push(line)));
+    const proof = { accepted: true, settled: true, rejected: 0, readers: 1, unlocked: 1,
+      join: { contract: { bodySucceeded: null, failureFlags: Array(6).fill(0), releasesFulfilled: true, ownership: Array(9).fill(0) },
+        worker: { rejections: [], omitted: 0, work: [0, 1, 0, 0, 0, 1, 0, 0] } } };
+    if (failure === "helper") diagnostics.failure(undefined, "helper");
+    for (const side of ["router", "upstream"]) {
+      if (failure === side) assert.throws(() => verifyRetirement({ ...proof, accepted: false }, side, diagnostics), assert.AssertionError);
+      else verifyRetirement(proof, side, diagnostics);
+      if (failure === "upstream" && side === "router") assert.deepEqual(lines, []);
+    }
+    diagnostics.finish(); diagnostics.finish();
+    const records = lines.map(line => JSON.parse(line.slice(line.indexOf("::{") + 2)));
+    if (failure === "none") { assert.deepEqual(records, []); continue; }
+    for (const side of ["router", "upstream"]) for (const suffix of ["", "_ops"]) {
+      const matching = records.filter(row => row.phase === "retirement_" + side + suffix); assert.equal(matching.length, 1);
+      assert.equal(matching[0].outcome, failure === side ? "rejected" : "fulfilled");
+      assert.equal(matching[0].predicate, failure === side ? "accepted" : "none");
+    }
+    assert.ok(lines.every(line => Buffer.byteLength(line) <= 768));
+  }
+});
+
+test("Qianfan unknown Worker response failure stays distinct and still attempts the original other retirement", async () => {
+  const lines = [], diagnostics = outerDiagnostics({}, diagnostic.emitter(line => lines.push(line))), calls = [];
+  const proof = { accepted: true, settled: true, rejected: 0, readers: 0, unlocked: 0 };
+  const mf = { async getWorker(side) { calls.push(side); return { async fetch() { if (side === "router") throw undefined; return Response.json(proof); } }; } };
+  let rejected = false; try { await retireWorker(mf, diagnostics); } catch (error) { rejected = true; assert.equal(error, undefined); }
+  assert.equal(rejected, true); assert.deepEqual(calls, ["router", "upstream"]); diagnostics.finish();
+  const records = lines.map(line => JSON.parse(line.slice(line.indexOf("::{") + 2)));
+  assert.equal(records.length, 4);
+  assert.equal(records[0].predicate, "response"); assert.deepEqual(records[0].retirement, [null, null, null, null, null]);
+  assert.equal(records[2].outcome, "fulfilled");
+});
+
+for (const id of pinnedControlIds.slice(6)) test("Qianfan hosted observer control implementation " + id, { timeout: 5000 }, async () => {
+  await runQianfanObserverControl(id, assert);
+});
+
+test("Qianfan controls reject mocked or foreign dependency admission without executing imports", () => {
+  const installed = { fetch() {}, Agent: class {}, ProxyAgent: class {} };
+  requirePinnedControlAdmission(installed.fetch, false, false, installed, installed, "7.43.0");
+  for (const args of [
+    [undefined, false, false, installed, installed, "7.43.0"],
+    [installed.fetch, true, false, installed, installed, "7.43.0"],
+    [installed.fetch, false, true, installed, installed, "7.43.0"],
+    [installed.fetch, false, false, installed, installed, "7.45.1"],
+    ...["fetch", "Agent", "ProxyAgent"].map(key => [installed.fetch, false, false, { ...installed, [key]() {} }, installed, "7.43.0"]),
+  ]) assert.throws(() => requirePinnedControlAdmission(...args));
+});
+
+test("Qianfan actual registrations isolate twelve controls from the exact fifteen product hooks", () => {
+  const scopes = [], cases = [], hooks = [];
+  function suite(name, body) { scopes.push(name); body(); scopes.pop(); }
+  suite.sequential = suite;
+  function register(name, body) { cases.push({ name, body, scope: scopes.at(-1), hooks: hooks.filter(h => h.scope === scopes.at(-1)).length }); }
+  register.each = rows => (name, body) => { for (const row of rows) register(name, () => body(...Array.isArray(row) ? row : [row])); };
+  const registrations = stripTypeScriptTypes(sdkText.slice(sdkText.indexOf('describe.sequential("exact d8 parser')));
+  new Function("describe", "beforeEach", "nativeIt", "it", "models", "createPinnedControlSummary", "pinnedControlIds", registrations)(
+    suite, body => hooks.push({ scope: scopes.at(-1), body }), register, register, models, createPinnedControlSummary, pinnedControlIds);
+  assert.equal(cases.length, 27); assert.equal(hooks.length, 1);
+  assert.ok(cases.slice(0, 12).every(row => row.scope.startsWith("exact d8 parser") && row.hooks === 0));
+  assert.ok(cases.slice(12).every(row => row.scope.startsWith("actual Qianfan") && row.hooks === 1));
+  assert.equal((sdkText.match(/\bbeforeEach\(/g) ?? []).length, 1);
+  assert.equal((sdkText.match(/\b(?:afterEach|beforeAll|afterAll)\(/g) ?? []).length, 0);
+});
+
+test("Qianfan twelve-control summary rejects inconsistent masks and preserves unknown in-flight state", () => {
+  const controls = createPinnedControlSummary(); controls.start("done");
+  assert.equal(controls.facts().controlCounts[4], null); controls.finish("done", true);
+  assert.deepEqual(controls.facts().controlCounts, [12, 1, 1, 0, 0, 0, 0]);
+  assert.throws(() => controls.start("done")); assert.throws(() => controls.finish("done", false)); assert.throws(() => controls.start("private"));
+  const context = { ...diagnosticContext, caseId: "none", route: "none", phase: "controls", role: "summary" };
+  const valid = diagnostic.record(context, "fulfilled", undefined, controls.facts()); assert.ok(valid);
+  for (const controlCounts of [[13, 1, 1, 0, 0, 0, 0], [12, 4096, 0, 0, 0, 0, 0], [12, 1, 1, 1, 0, 0, 0], [12, 1, 2, 0, 0, 0, 0]]) assert.equal(diagnostic.validate({ ...valid, controlCounts }), null);
+  let calls = 0; const values = Array(8).fill(0); Object.defineProperty(values, "3", { get() { calls++; throw undefined; } });
+  assert.equal(diagnostic.validate({ ...valid, controlSequence: values }), null); assert.equal(calls, 0);
+  assert.equal(diagnostic.validate({ ...valid, controlFlags: [0, 0, 0, 0, 0, 2] }), null);
+});
+
+test("Qianfan full twelve plus fifteen failure pipeline keeps all nine essential slots within budget", async () => {
+  const controls = createPinnedControlSummary(); for (const id of pinnedControlIds) { controls.start(id); controls.finish(id, false); }
+  const records = [diagnostic.record({ ...diagnosticContext, caseId: "none", route: "none", phase: "controls", role: "summary" }, "rejected", undefined, controls.facts())];
+  for (const caseId of diagnostic.cases.filter(id => id !== "none")) for (const phase of ["body", "original_join", "join_contract", "join_census", "join_rejections"]) {
+    records.push(diagnostic.record({ ...diagnosticContext, caseId, phase, role: phase.startsWith("join_") ? "summary" : "primary" }, "rejected", undefined));
+  }
+  const lines = [], diagnostics = outerDiagnostics({}, diagnostic.emitter(line => lines.push(line)));
+  const primary = Object.assign(new Error("not forwarded"), { stdout: records.map(record => diagnostic.encode(record)).join(""), code: 1, killed: false, signal: null });
+  await assert.rejects(preserveFailures(() => diagnostics.helper(() => Promise.reject(primary)), [
+    diagnostics.cleanup("dispose", () => { throw undefined; }), diagnostics.cleanup("rm", () => { throw undefined; }),
+  ]), error => error.errors[0] === primary && error.errors[1] === undefined && error.errors[2] === undefined);
+  diagnostics.failure(undefined, "receipt");
+  for (const side of ["router", "upstream"]) assert.throws(() => verifyRetirement({ accepted: false }, side, diagnostics));
+  diagnostics.finish(); diagnostics.finish();
+  const emitted = lines.map(line => JSON.parse(line.slice(line.indexOf("::{") + 2)));
+  assert.equal(emitted.length, 10); assert.deepEqual(emitted[0].controlCounts, [12, 4095, 0, 4095, 0, 0, 0]);
+  assert.ok(lines.every(line => line.startsWith("::error") && Buffer.byteLength(line) <= 768)); assert.ok(Buffer.byteLength(lines.join("")) <= 8192);
+  for (const phase of ["helper", "receipt", "join_contract", "join_census", "join_rejections", "retirement_router", "retirement_router_ops", "retirement_upstream", "retirement_upstream_ops", "overflow"]) assert.equal(emitted.filter(row => row.phase === phase).length, 1);
+  assert.deepEqual(emitted.at(-1).folded.slice(0, 4), [0, 1, 0, 1]);
+});
+
+test("Qianfan maximum closed control metadata fits the reserved helper command", () => {
+  const facts = { sdkRecords: 512, exit: 255, killed: true, signal: "SIGTERM", observedCode: "ERR_PACKAGE_PATH_NOT_EXPORTED",
+    controlCounts: [12, 4095, 0, 4095, 9999, 9999, 9999], controlSequence: Array(8).fill(9999), controlFlags: Array(6).fill(1) };
+  const record = diagnostic.record({ layer: "outer", route: "none", caseId: "none", phase: "helper", role: "primary" }, "rejected", undefined, facts);
+  assert.ok(record); const lines = [], emitter = diagnostic.emitter(line => lines.push(line)); emitter.emit(record);
+  assert.equal(lines.length, 1); assert.ok(Buffer.byteLength(lines[0]) <= 768);
+  const controls = createPinnedControlSummary(); controls.start("embedded"); controls.pending(1); controls.finish("embedded", false);
+  assert.equal(controls.facts().controlCounts[4], 1); assert.equal(controls.facts().controlCounts[5], null);
+});
 
 test("actual OpenClaw Qianfan configured native client through workerd and SQLite", { skip: !source, timeout: 300_000 }, async t => {
   const diagnostics = outerDiagnostics(t);
