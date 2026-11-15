@@ -64,6 +64,7 @@ function ownData(value, name) {
   return descriptor.value;
 }
 export function validatePackagingDiagnostic(value) {
+  if(value && typeof value==="object" && ownData(value,"v")===3) return validateOwnedCodeCloseDiagnostic(value);
   if(value && typeof value==="object" && ownData(value,"v")===2) return validateOwnedCloseDiagnostic(value);
   const phase = value && typeof value === "object" ? ownData(value, "phase") : null;
   const summaries = {
@@ -116,6 +117,7 @@ export function createPackagingDiagnostics(role, writer) {
         const remaining = ownData(result, "remaining"); row.remaining = remaining === null ? null : ownData(remaining, "length");
       }
       if (result && Object.hasOwn(result,"ownedTrace")) { row.v=2;row.trace=ownData(result,"ownedTrace"); }
+      if (result && Object.hasOwn(result,"ownedCode")) { row.v=3;row.code=ownData(result,"ownedCode"); }
       accept(row);
     } catch (error) { errors.push(error); }
   };
@@ -339,13 +341,22 @@ export function namespaceArguments(node, args) {
   return ["--user", "--map-root-user", "--net", "--mount", "--propagation", "private", "--pid", "--fork", "--kill-child=SIGKILL", "--mount-proc", "--", node, ...args];
 }
 // Optional, invocation-local observations. No error properties or native calls.
+export const ownedCodeClasses = Object.freeze(["ENOENT","ESRCH","EACCES","EPERM","EIO","ENOTDIR","EBADF","EINTR","EMFILE","ENFILE","ENOMEM","EAGAIN","OTHER_STRING","UNDEFINED","NULL","OTHER_NONSTRING"]);
+export function classifyOwnedCode(value) {
+  if(typeof value==="string"){const index=ownedCodeClasses.slice(0,12).indexOf(value);return index<0?13:index+1;}
+  return value===undefined?14:value===null?15:16;
+}
 export const ownedErrorSites = Object.freeze(["stop_throw","monitor_sample","monitor_rows","monitor_capacity","capture_capacity","spawn","setup","child_error","final_sample"]);
 export const ownedSampleStages = Object.freeze(["admission","directory","entry_filter","stat_read","stat_parse","stat_shape","row","stat_error_filter","returned"]);
 export function createOwnedProcessLedger() {
-  const errors=[], counts=Array(5).fill(0); let saturation=0, first=null, sample=[0,0,0,0,0], condition=[0,0,0,0], operation=0, reasons=0, signals=0, firstReason=0, firstSignal=0, firstOutcome=0, firstThrow=0, active=false, sealed=false, ignored=0;
+  const errors=[], counts=Array(5).fill(0); let activeSamples=0, pendingCode=null, firstCode=[1,0,0]; let saturation=0, first=null, sample=[0,0,0,0,0], condition=[0,0,0,0], operation=0, reasons=0, signals=0, firstReason=0, firstSignal=0, firstOutcome=0, firstThrow=0, active=false, sealed=false, ignored=0;
   const note=fn=>{try{return fn();}catch(error){errors.push(error);}};
   const bump=i=>{if(counts[i]===255)saturation|=2**i;else counts[i]++;};
   return {errors,
+    sampleBegin(){note(()=>{if(sealed)return;if(++activeSamples!==1)throw new Error("edge-proof: overlapping-sampler-observation");if(!first)pendingCode=null;});},
+    sampleEnd(){note(()=>{if(!sealed)activeSamples--;});},
+    sampleCode(reason,access,value){note(()=>{if(!sealed&&!first)pendingCode={reason,tuple:[1,access,access===1?classifyOwnedCode(value):0]};});},
+    code(){return note(()=>errors.length?null:firstCode.slice());},
     sampleStage(stage){note(()=>{if(!sealed)sample=[stage,0,0,0,0];});},
     sampleLeaf(id,value,negative){note(()=>{if(sealed)return;sample[3]|=2**(id-1);if(negative?!value:!!value)sample[4]|=2**(id-1);});},
     sampleFalse(){note(()=>{if(sealed)return;sample[1]=1;sample[2]=[1,2,3].find(id=>(sample[3]&~sample[4])&2**(id-1))??0;});},
@@ -358,6 +369,8 @@ export function createOwnedProcessLedger() {
       const fact=[2,9].includes(site)?sample:[4,5].includes(site)?[1,...condition]:[site===3?operation:stage,0,0,0,0];
       if(fact[1]===0&&fact[3])fact[1]=2;
       first=[site,...fact,reason!==undefined];
+      if([2,9].includes(site)&&pendingCode&&Object.is(pendingCode.reason,reason))firstCode=pendingCode.tuple;
+      pendingCode=null;
     });},
     request(reason,signal){note(()=>{if(sealed)return;bump(0);reasons|=2**(reason-1);signals|=signal==="SIGINT"?1:signal==="SIGTERM"?2:4;active=false;});},
     skipped(){note(()=>{if(!sealed)bump(4);});},
@@ -374,6 +387,8 @@ const ownedValue=(recorder,method,observed,value)=>{ownedNote(recorder,method,ob
 const ownedCondition=(recorder,value)=>{ownedNote(recorder,"condition",value);return value;};
 const ownedArgument=(recorder,reason,signal,value)=>{ownedNote(recorder,"attempt",reason,signal);return value;};
 export async function privateProcesses(recorder) {
+  ownedNote(recorder,"sampleBegin");
+  try {
   ownedNote(recorder,"sampleStage",1);
   if (ownedLeaf(recorder,1,process.platform !== "linux",true) || ownedLeaf(recorder,2,process.pid !== 1,true)) { ownedNote(recorder,"sampleFalse"); refuse("process-census-outside-private-init"); }
   const rows = [];
@@ -392,11 +407,15 @@ export async function privateProcesses(recorder) {
       rows.push({ pid: Number(name), parent: Number(fields[1]), group: Number(fields[2]), start: fields[19], state: fields[0] });
     } catch (error) {
       const failure=ownedNote(recorder,"sampleState");ownedNote(recorder,"sampleStage",8);
-      if (error?.code !== "ENOENT") { ownedNote(recorder,"sampleRestore",failure);throw error; }
+      let code;
+      try { code=error?.code; }
+      catch (accessError) { ownedNote(recorder,"sampleCode",accessError,2);throw accessError; }
+      if (code !== "ENOENT") { ownedNote(recorder,"sampleCode",error,1,code);ownedNote(recorder,"sampleRestore",failure);throw error; }
     }
   }
   ownedNote(recorder,"sampleStage",9);
   return rows;
+  } finally { ownedNote(recorder,"sampleEnd"); }
 }
 
 // Original operations remain authoritative; observations never stop cleanup.
@@ -452,7 +471,7 @@ export async function runOwnedProcess(command, args, { cwd, env, timeoutMs = 600
   while (sampling) await new Promise(resolveTick => setTimeout(resolveTick, 1));
   try { ownedNote(recorder,"sampleStage",0);result.remaining = await sample(); } catch (error) { result.errors.push(error);ownedNote(recorder,"error",9,error);result.remaining = null; }
   result.outputSummary = Object.fromEntries(Object.entries(captures).map(([key, value]) => [key, { bytes: value.bytes, sha256: value.hash.digest("hex"), esc: value.esc, complete: result.closed }]));
-  if(recorder){result.ownedTrace=ownedNote(recorder,"finish");result.observerErrors=recorder.errors;}
+  if(recorder){result.ownedCode=ownedNote(recorder,"code");result.ownedTrace=ownedNote(recorder,"finish");result.observerErrors=recorder.errors;}
   return result;
 }
 export function requireProcessSuccess(result) {
@@ -1096,7 +1115,44 @@ export function validateReceiptOwnedDiagnostic(value) {
   if(row.detail[7]!==null){if(!prior.builder)refuse("owned-unbound-trace");row.detail[7]=validateOwnedTrace(row.detail[7],prior.builder[6],[Boolean(prior.builder[5]&2),Boolean(prior.builder[5]&4)]);}
   if(Buffer.byteLength(JSON.stringify(row))>512)refuse("owned-receipt-capacity");return row;
 }
+// Display classes describe only the original primitive operand, never errno/cause.
+// [version, access: 0 UNOBSERVED / 1 RETURNED / 2 THREW, display class].
+export function validateOwnedCode(value,trace) {
+  if(value===null)return null;
+  const code=ownedTuple(value,3),[v,access,kind]=code;
+  if(v!==1||![0,1,2].includes(access)||!Number.isInteger(kind)||kind<0||kind>16||(access===1?kind===0:kind!==0))refuse("owned-code-tuple");
+  if(!trace||trace[3][0])refuse("owned-code-unbound");
+  const first=trace[1];
+  if(access!==0){
+    if(!first||![2,9].includes(first[0]))refuse("owned-code-source");
+    if(access===2?first[1]!==8:first[1]<4||first[1]>7||kind===1||(!first[6]&&kind!==14))refuse("owned-code-relation");
+  }
+  return code;
+}
+export function validateOwnedCodeCloseDiagnostic(value) {
+  const keys=["v","role","phase","outcome","defined","exit","signal","closed","timedOut","interrupted","errors","remaining","trace","code"];
+  if(Object.getOwnPropertyNames(value).sort().join()!==[...keys].sort().join())refuse("owned-code-close-keys");
+  const row=Object.fromEntries(keys.map(key=>[key,ownData(value,key)]));
+  if(row.v!==3)refuse("owned-code-close-version");
+  const prior={...row,v:2};delete prior.code;validateOwnedCloseDiagnostic(prior);
+  row.code=validateOwnedCode(row.code,row.trace);
+  if(Buffer.byteLength(JSON.stringify(row))>512)refuse("owned-code-close-capacity");return row;
+}
+export function packReceiptCodeDiagnostic(value,trace,code) {
+  const prior=packReceiptOwnedDiagnostic(value,trace);
+  return validateReceiptCodeDiagnostic({...prior,v:14,detail:[...prior.detail,code]});
+}
+export function validateReceiptCodeDiagnostic(value) {
+  const keys=["v","phase","state","defined","exit","signal","detail"];
+  if(!value||Object.getOwnPropertyNames(value).sort().join()!==[...keys].sort().join())refuse("code-receipt-keys");
+  const row=Object.fromEntries(keys.map(key=>[key,ownData(value,key)]));if(row.v!==14)refuse("code-receipt-version");
+  row.detail=ownedTuple(row.detail,9);
+  const prior=validateReceiptOwnedDiagnostic({...row,v:13,detail:row.detail.slice(0,8)});
+  row.detail[8]=validateOwnedCode(row.detail[8],prior.detail[7]);
+  if(Buffer.byteLength(JSON.stringify(row))>512)refuse("code-receipt-capacity");return row;
+}
 export function validateContainerDiagnostic(value) {
+  if (value && typeof value === "object" && ownData(value, "v") === 14) return validateReceiptCodeDiagnostic(value);
   if (value && typeof value === "object" && ownData(value, "v") === 13) return validateReceiptOwnedDiagnostic(value);
   if (value && typeof value === "object" && ownData(value, "v") === 12) return validateReceiptBuilderDiagnostic(value);
   if (value && typeof value === "object" && ownData(value, "v") === 11) return validateReceiptLifecycleDiagnostic(value);
@@ -1208,7 +1264,7 @@ export function containerProcessDiagnostic(result, available = true, reason) {
 export function emitContainerFailure(records, writer = line => process.stdout.write(line)) {
   const validated = records.map(validateContainerDiagnostic), detailed = validated.filter(row => row.v === 8);
   if (detailed.length > 1) refuse("parent-admission-duplicate");
-  const receipt = validated.filter(row => row.v === 9 || row.v === 10 || row.v === 11 || row.v === 12 || row.v === 13); if (receipt.length > 1) refuse("receipt-diagnostic-duplicate");
+  const receipt = validated.filter(row => row.v === 9 || row.v === 10 || row.v === 11 || row.v === 12 || row.v === 13 || row.v === 14); if (receipt.length > 1) refuse("receipt-diagnostic-duplicate");
   const rows = validated.filter(row => !(detailed.length && row.phase === "admission" && row.v === 2) && !(receipt.length && row.phase === "receipt" && row.v === 2)), unique = new Map();
   const rejected = rows.filter(row => row.state === "rejected");
   // Reserve the first actual failure and original build outcome before context.

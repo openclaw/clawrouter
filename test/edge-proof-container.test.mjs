@@ -11,7 +11,7 @@ import { dirname, join, relative } from "node:path";
 import { containerContract, harnessInputs, installInputs, parseIdentity, validateIdentity, validateMapping, validateImage, dockerEnvironment, containerEnvironment, createArguments, validateContainerInspect, parseControl, validateTerminal, validateNativeIdentity, parseImageBuildReceipt, parseImageBuildStages, parseNativePrepareStages, observeImageBuild, parseContainerReceipt, parseChildPackaging, createProjectionLedger, parseInitPrerequisites, createAttachProjection, runInitPrerequisites, createInitGuardLedger, initGuardLeaf, createMountObservation, validateEmptyMasks, validateMaskCompletion, parseMounts, validateMountFreshness, validateMounts, validateMetadataMounts, validateChildStatus, validateTarget, cgroupPath, validateLimits, attachContainer, processEvidence, retiredCgroup, raiseContainerFailures, validateContainerDiagnostic, emitContainerFailure } from "../scripts/edge-proof-container.mjs";
 import { frozenGitEnvironment, validateGitExecutable, frozenSource } from "../scripts/edge-proof-build.mjs";
 import { edgeProof } from "../scripts/edge-proof-profile.mjs";
-import { launchCli, createPackagingDiagnostics, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, packReceiptOwnedDiagnostic, unpackReceiptOwnedDiagnostic, validateReceiptOwnedDiagnostic, validateOwnedTrace, validateOwnedCloseDiagnostic, createOwnedProcessLedger, projectionBoundaries, createContainerDiagnostics, containerProcessDiagnostic, imageBuildStages, runOwnedProcess, nativePrepareStages, createNativePrepareDiagnostics, enumerationOperations, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, initGuardTags, initSourcePhases, validateInitDetail, mountPredicates, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission } from "../scripts/edge-proof.mjs";
+import { launchCli, createPackagingDiagnostics, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, packReceiptOwnedDiagnostic, packReceiptCodeDiagnostic, unpackReceiptOwnedDiagnostic, validateReceiptOwnedDiagnostic, validateOwnedTrace, validateOwnedCloseDiagnostic, validateOwnedCodeCloseDiagnostic, validateOwnedCode, validateReceiptCodeDiagnostic, ownedCodeClasses, classifyOwnedCode, createOwnedProcessLedger, projectionBoundaries, createContainerDiagnostics, containerProcessDiagnostic, imageBuildStages, runOwnedProcess, nativePrepareStages, createNativePrepareDiagnostics, enumerationOperations, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, initGuardTags, initSourcePhases, validateInitDetail, mountPredicates, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission } from "../scripts/edge-proof.mjs";
 
 const hex = "a".repeat(64), other = "b".repeat(64), imageId = "sha256:" + hex;
 const identity = { uid: [501, 501, 501, 501], gid: [20, 20, 20, 20], groups: [20, 30] };
@@ -1858,13 +1858,13 @@ test("parent target ambiguity actual diagnostics retain first failure undefined 
 });
 // Receipt diagnostics exercise extracted production helpers with inert values.
 const receiptPackets = [];
-const receiptView = row=>row.v===13?unpackReceiptOwnedDiagnostic(row):row;
+const receiptView = row=>row.v===14?unpackReceiptOwnedDiagnostic({...row,v:13,detail:row.detail.slice(0,8)}):row.v===13?unpackReceiptOwnedDiagnostic(row):row;
 async function receiptParserFactory(overrides = {}) {
   const source = await readFile(new URL("../scripts/edge-proof-container.mjs", import.meta.url), "utf8");
   const helpers = source.slice(source.indexOf("const receiptRecord ="), source.indexOf("export function raiseContainerFailures("));
   const parser = source.slice(source.indexOf("export function createReceiptLedger("), source.indexOf("async function containerInit(")).replaceAll("export ", "");
   const masks = source.slice(source.indexOf("export function validateMaskCompletion("), source.indexOf("export async function validateEmptyMasks(")).replaceAll("export ", "");
-  const bindings = { check: (value, code) => { if (!value) throw new Error(code); }, same: (a,b) => JSON.stringify(a) === JSON.stringify(b), Buffer, JSON, Object, hashPattern: /^[a-f0-9]{64}$/, receiptOperations, validateReceiptDiagnostic, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, packReceiptOwnedDiagnostic, unpackReceiptOwnedDiagnostic, validateReceiptOwnedDiagnostic, validateOwnedTrace, validateOwnedCloseDiagnostic, createOwnedProcessLedger, createProjectionLedger, raiseContainerFailures,
+  const bindings = { check: (value, code) => { if (!value) throw new Error(code); }, same: (a,b) => JSON.stringify(a) === JSON.stringify(b), Buffer, JSON, Object, hashPattern: /^[a-f0-9]{64}$/, receiptOperations, validateReceiptDiagnostic, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, packReceiptOwnedDiagnostic, packReceiptCodeDiagnostic, unpackReceiptOwnedDiagnostic, validateReceiptOwnedDiagnostic, validateOwnedTrace, validateOwnedCloseDiagnostic, createOwnedProcessLedger, createProjectionLedger, raiseContainerFailures,
     edgeProof: { sourceSha: "c".repeat(40), sourceTree: "d".repeat(40) }, containerContract, ...overrides };
   const api = new Function(...Object.keys(bindings), helpers + masks + parser + "return {parseContainerReceipt,createReceiptLedger,observeContainerReceipt};")(...Object.values(bindings));
   const plan = { nonce: hex, contextHash: other, nativeHash: imageId.slice(7) };
@@ -2036,7 +2036,7 @@ async function receiptActualProducer(failure = "wrangler_input", writerFailure =
   const frames=[], calls=[], rejections=[], builderFailures=[], builders=[], processResults=[], denied=Object.freeze({inert:"unreached-binding"}), fixed={sourceSha:"c".repeat(40),sourceTree:"d".repeat(40)}, digest=value=>createHash("sha256").update(value).digest("hex");
   const capsule={...fixed,sourceFiles:Array(600).fill(0),dependencyInputs:Array(268).fill(0),instrumentation:Array(4).fill({erasureExact:true}),observerSha256:hex,harnessInputs:[],bundles:{edge:hex,upstream:hex},runtime:{}};
   const unreachable=name=>(..._args)=>{calls.push(["unreached",name]);throw denied;};
-  const bindings={Buffer,JSON,createHash,join,relative,dirname,createOwnedProcessLedger,validateOwnedCloseDiagnostic,edgeProof:fixed,digest,refuse:code=>{throw new Error(code);},process:{execPath:"/immutable/node"},
+  const bindings={Buffer,JSON,createHash,join,relative,dirname,createOwnedProcessLedger,validateOwnedCloseDiagnostic,validateOwnedCodeCloseDiagnostic,edgeProof:fixed,digest,refuse:code=>{throw new Error(code);},process:{execPath:"/immutable/node"},
     privateProcesses:async()=>{calls.push(["inventory"]);return [];},prepareEnvironment:async path=>{calls.push(["environment",path]);return {};},
     createRequire:(...args)=>{calls.push(["require",...args]);throw denied;},resolveModule:specifier=>{calls.push(["resolve",specifier]);throw undefined;},
     realpath:unreachable("realpath"),lstat:unreachable("lstat"),writeFile:unreachable("writeFile"),renderEdgeConfig:unreachable("renderEdgeConfig"),offlineProjection:unreachable("offlineProjection"),verifyDryRun:unreachable("verifyDryRun"),
@@ -2054,7 +2054,7 @@ async function receiptActualProducer(failure = "wrangler_input", writerFailure =
     }};
   // These are the external callable bindings of the extracted pipeline. The
   // later filesystem/rendering branches remain explicit inert refusals.
-  for(const name of ["createRequire","resolveModule","realpath","lstat","writeFile","renderEdgeConfig","offlineProjection","verifyDryRun","readFile","runOwnedProcess","privateProcesses","prepareEnvironment","join","dirname","relative","digest","refuse"]) assert.equal(typeof bindings[name],"function",name);
+  for(const name of ["validateOwnedCodeCloseDiagnostic","createRequire","resolveModule","realpath","lstat","writeFile","renderEdgeConfig","offlineProjection","verifyDryRun","readFile","runOwnedProcess","privateProcesses","prepareEnvironment","join","dirname","relative","digest","refuse"]) assert.equal(typeof bindings[name],"function",name);
   const api=new Function(...Object.keys(bindings),diagnostics+acceptance+pipeline+"return {createPackagingDiagnostics,runPackagingPipeline,acceptPackagingProcess,validatePackagingReceipt,summarizePackagingOutput};")(...Object.values(bindings));
   const report=api.createPackagingDiagnostics("child",line=>{if(writerFailure)throw undefined;frames.push(line);}), mark=report.mark;
   report.mark=(...args)=>{if(args[1]==="rejected")rejections.push({phase:args[0],reason:args[2]});return Reflect.apply(mark,report,args);};
@@ -2183,7 +2183,7 @@ async function lifecyclePacket(produced, mutate=frames=>frames,wire=false) {
   const capture=await receiptCapture(mutate(produced.frames)),api=await receiptParserFactory(),report=createContainerDiagnostics();
   let failed=false,reason;try{await api.observeContainerReceipt(report,"",api.plan,capture.summary);}catch(error){failed=true;reason=error;}
   assert.equal(failed,true);assert.ok(reason instanceof Error);
-  const raw=report.records.find(r=>r.phase==="receipt"&&r.v>=9),row=receiptView(raw);assert.ok(row);validateReceiptOwnedDiagnostic(raw);
+  const raw=report.records.find(r=>r.phase==="receipt"&&r.v>=9),row=receiptView(raw);assert.ok(row);validateReceiptCodeDiagnostic(raw);
   const full=[{v:2,phase:"entry",state:"rejected",defined:true,exit:null,signal:null},...report.records,{v:2,phase:"retirement",state:"rejected",defined:false,exit:null,signal:null}];
   createAttachProjection(capture.h.attached,{cid:hex,nonce:hex,contextHash:other},{internal:r=>full.push(r)})(capture.h.attached.result);
   const lines=[];emitContainerFailure(full,line=>lines.push(line));receiptPackets.push(lines.map(line=>JSON.parse(line.slice(line.indexOf("::{")+2))));
@@ -2511,7 +2511,7 @@ test("owned ledger actual original pipeline keeps source-bound trace and lossles
     }});
     assert.equal(produced.processResults.length,1);assert.equal(produced.processResults[0],original);
     assert.equal(produced.builders[0].calls.filter(r=>r[0]==="build").length,1);
-    const wire=await lifecyclePacket(produced,frames=>frames,true);assert.equal(wire.v,13);const prior=unpackReceiptOwnedDiagnostic(wire);validateReceiptBuilderDiagnostic(prior);
+    const wire=await lifecyclePacket(produced,frames=>frames,true);assert.equal(wire.v,14);const prior=receiptView(wire);validateReceiptBuilderDiagnostic(prior);
     assert.equal(prior.child[1],"invalid");assert.deepEqual(wire.detail[7],original.ownedTrace);assert.deepEqual(prior.builder.slice(8),[original.outputSummary.stdout.bytes,original.outputSummary.stdout.sha256,original.outputSummary.stderr.bytes,original.outputSummary.stderr.sha256]);
     assert.equal(wire.detail[6][9].length,43);assert.equal(wire.detail[6][11].length,43);
     if(scenario==="child_error"){assert.equal(wire.detail[7][1][0],8);assert.equal(wire.detail[7][2][1],0);assert.equal(prior.builder[4],2);}
@@ -2525,9 +2525,9 @@ test("owned ledger source-required reasons and original flags reject contradicto
     const produced=await receiptActualProducer("wrangler_input",false,{diagnostics:true,ownedProcess:async(command,args,options,stdout)=>{
       const f=await ownedProcessScenario(scenario,stdout.split("\n").slice(0,6).join("\n")+"\n",{}, {command,args,options});original=f.result;return original;
     }});
-    const wire=await lifecyclePacket(produced,frames=>frames,true),trace=wire.detail[7];assert.ok(trace);validateReceiptOwnedDiagnostic(wire);
+    const wire=await lifecyclePacket(produced,frames=>frames,true),trace=wire.detail[7];assert.ok(trace);validateReceiptCodeDiagnostic(wire);
     const close=produced.frames.map(line=>JSON.parse(line.slice("EDGE_PACKAGING_V1 ".length))).find(row=>row.role==="child"&&row.phase==="build_a_close");
-    assert.ok(close);assert.equal(close.timedOut,original.timedOut);assert.equal(close.interrupted,original.interrupted);validateOwnedCloseDiagnostic(close);
+    assert.ok(close);assert.equal(close.timedOut,original.timedOut);assert.equal(close.interrupted,original.interrupted);validateOwnedCodeCloseDiagnostic(close);
     const bad=structuredClone(wire),badClose=structuredClone(close);
     if(scenario==="monitor_undefined"){
       assert.deepEqual(trace[1],[2,0,0,0,0,0,false]);assert.equal(bad.detail[6][6],1);
@@ -2536,7 +2536,7 @@ test("owned ledger source-required reasons and original flags reject contradicto
       assert.deepEqual(trace[2],[1,1,1,0,0,4,2,3,2,1,0,0,0]);assert.equal(bad.detail[6][5],83);
       bad.detail[6][5]=81;badClose.timedOut=false;
     }
-    assert.throws(()=>validateOwnedCloseDiagnostic(badClose));assert.throws(()=>validateReceiptOwnedDiagnostic(bad));assert.throws(()=>emitContainerFailure([bad],()=>assert.fail("invalid diagnostic emitted")));
+    assert.throws(()=>validateOwnedCodeCloseDiagnostic(badClose));assert.throws(()=>validateReceiptCodeDiagnostic(bad));assert.throws(()=>emitContainerFailure([bad],()=>assert.fail("invalid diagnostic emitted")));
     const rejected=await lifecyclePacket(produced,frames=>frames.map(line=>{const row=JSON.parse(line.slice("EDGE_PACKAGING_V1 ".length));return row.role==="child"&&row.phase==="build_a_close"?"EDGE_PACKAGING_V1 "+JSON.stringify(badClose)+"\n":line;}));
     assert.equal(rejected.child[1],"invalid");assert.equal(rejected.builder,null);
   }
@@ -2594,5 +2594,79 @@ test("owned ledger saturation first error isolation and maximum lossless version
   for(const change of [r=>r.detail[6][9]+="=",r=>r.detail[6][11]="A".repeat(42),r=>r.detail[6][9]=r.detail[6][9].slice(0,-1)+"B",r=>r.detail[7][1][6]=null,r=>r.detail[7][2][9]=4,r=>r.detail[7][3][2]=4,r=>r.detail.push(0)]){const bad=structuredClone(wire);change(bad);assert.throws(()=>validateReceiptOwnedDiagnostic(bad));}
   const capture=await receiptCapture(produced.frames),rows=[wire,{v:2,phase:"entry",state:"rejected",defined:false,exit:null,signal:null},{v:2,phase:"retirement",state:"rejected",defined:false,exit:null,signal:null}];createAttachProjection(capture.h.attached,{cid:hex,nonce:hex,contextHash:other},{internal:r=>rows.push(r)})(capture.h.attached.result);
   const lines=[];emitContainerFailure(rows,line=>lines.push(line));assert.ok(lines.every(line=>Buffer.byteLength(line)<=768));receiptPackets.push(lines.map(line=>JSON.parse(line.slice(line.indexOf("::{")+2))));
+});
+
+test("owned code actual sampler classifies only the original operand once and retains error identity",async()=>{
+  const values=[...ownedCodeClasses.slice(0,12),"private-unclassified",undefined,null,0,{},Symbol("private"),()=>{}];
+  for(const value of values)for(const inherited of [false,true]){
+    let reads=0;const holder={get code(){reads++;return value;}},reason=inherited?Object.create(holder):holder;
+    const f=await ownedLedgerFactory({readFile:async()=>{throw reason;}}),rec=f.createOwnedProcessLedger();let failed=false,caught;
+    try{await f.privateProcesses(rec);}catch(error){failed=true;caught=error;rec.error(2,error);rec.request(1,"SIGTERM");rec.skipped();}
+    assert.equal(reads,1);assert.equal(failed,value!=="ENOENT");if(failed)assert.equal(caught,reason);
+    const trace=rec.finish(),code=rec.code();validateOwnedTrace(trace,failed?1:0,[false,false]);validateOwnedCode(code,trace);
+    assert.deepEqual(code,value==="ENOENT"?[1,0,0]:[1,1,classifyOwnedCode(value)]);
+  }
+  for(const reason of [undefined,null]){
+    const f=await ownedLedgerFactory({readFile:async()=>{throw reason;}}),rec=f.createOwnedProcessLedger();let caught=false;
+    try{await f.privateProcesses(rec);}catch(error){caught=true;assert.equal(error,reason);rec.error(2,error);}
+    assert.ok(caught);assert.deepEqual(rec.code(),[1,1,14]);assert.equal(rec.finish()[1][6],reason!==undefined);
+  }
+});
+test("owned code getter throws remain stage eight with the exact escaping reason",async()=>{
+  for(const thrown of [new Error("inert"),undefined])for(const enabled of [false,true]){
+    let reads=0;const reason={get code(){reads++;throw thrown;}},f=await ownedLedgerFactory({readFile:async()=>{throw reason;}}),rec=enabled?f.createOwnedProcessLedger():undefined;let failed=false;
+    try{await f.privateProcesses(rec);}catch(error){failed=true;assert.equal(error,thrown);if(rec){rec.error(2,error);rec.request(1,"SIGTERM");rec.skipped();}}
+    assert.ok(failed);assert.equal(reads,1);if(rec){const trace=rec.finish();assert.deepEqual(trace[1],[2,8,0,0,0,0,thrown!==undefined]);assert.deepEqual(rec.code(),[1,2,0]);validateOwnedCode(rec.code(),trace);}
+  }
+});
+test("owned code ignored ENOENT and overlapping invocations cannot supply stale code evidence",async()=>{
+  let ordinal=0;const original={code:"EPERM"},f=await ownedLedgerFactory({readdir:async()=>["12","13"],readFile:async()=>{throw ordinal++===0?{code:"ENOENT"}:original;}}),rec=f.createOwnedProcessLedger();
+  try{await f.privateProcesses(rec);assert.fail("escape required");}catch(error){assert.equal(error,original);rec.error(2,error);}
+  assert.equal(ordinal,2);assert.deepEqual(rec.code(),[1,1,4]);
+  const pending=[];const g=await ownedLedgerFactory({readFile:()=>new Promise((resolve,reject)=>pending.push({resolve,reject}))}),shared=g.createOwnedProcessLedger();
+  const a=g.privateProcesses(shared),b=g.privateProcesses(shared);const settled=Promise.allSettled([a,b]);await Promise.resolve();assert.equal(pending.length,2);
+  pending[1].reject({code:"EIO"});pending[0].reject(original);const outcomes=await settled;assert.equal(outcomes[0].reason,original);shared.error(2,original);assert.ok(shared.errors.length);assert.equal(shared.code(),null);assert.equal(shared.finish()[1],null);
+  const separate=[g.createOwnedProcessLedger(),g.createOwnedProcessLedger()],c=g.privateProcesses(separate[0]),d=g.privateProcesses(separate[1]),done=Promise.allSettled([c,d]);await Promise.resolve();
+  pending[3].reject({code:"EIO"});pending[2].reject(original);const distinct=await done;
+  for(let i=0;i<2;i++)separate[i].error(2,distinct[i].reason);
+  assert.deepEqual(separate.map(r=>r.code()),[[1,1,4],[1,1,5]]);
+});
+test("owned code recorder failure does not become getter failure or suppress original stop and cleanup",async()=>{
+  const original={code:"EPERM"};let reads=0;
+  const f=await ownedLedgerFactory({readFile:async()=>{reads++;throw original;}}),rec=f.createOwnedProcessLedger();rec.sampleCode=()=>{throw undefined;};let samples=0;
+  const work=f.runOwnedProcess(f.command,f.args,{cwd:"/task",env:f.environment,recorder:rec,signalSource:f.signals,sample:()=>++samples===1?f.privateProcesses(rec):Promise.resolve([])});
+  f.intervals[0].fn();for(let i=0;i<8;i++)await Promise.resolve();assert.deepEqual(f.calls.filter(r=>r[0]==="kill"),[["kill",-12,"SIGTERM"]]);
+  f.child.emit("close",null,"SIGTERM");const result=await work;
+  assert.equal(reads,1);assert.equal(samples,2);assert.equal(result.errors[0],original);assert.deepEqual(result.observerErrors,[undefined]);assert.equal(result.ownedCode,null);assert.equal(result.ownedTrace[1],null);assert.equal(f.signals.listenerCount("SIGTERM"),0);assert.equal(f.calls.filter(r=>r[0]==="clearTimeout").length,2);
+});
+test("owned code actual process acceptor projector pipeline preserves each display class and both hashes",async()=>{
+  for(const value of [...ownedCodeClasses.slice(1,12),"private-other",undefined,null,{},"THROW_UNDEFINED"]){
+    let original,reads=0;const reason={get code(){reads++;if(value==="THROW_UNDEFINED")throw undefined;return value;}};
+    const produced=await receiptActualProducer("wrangler_input",false,{diagnostics:true,ownedProcess:async(command,args,options,stdout)=>{
+      let calls=0;const f=await ownedProcessScenario("monitor_proc",stdout.split("\n").slice(0,6).join("\n")+"\n",{readFile:async()=>{if(calls++===0)throw reason;return"12 (inert) S 1 12 "+Array(16).fill("0").join(" ")+" 123";}},{command,args,options});original=f.result;assert.deepEqual(f.calls.filter(r=>r[0]==="kill"),[["kill",-12,"SIGTERM"]]);return original;
+    }});
+    assert.equal(reads,1);assert.equal(original.errors[0],value==="THROW_UNDEFINED"?undefined:reason);
+    const wire=await lifecyclePacket(produced,frames=>frames,true);assert.equal(wire.v,14);assert.deepEqual(wire.detail[8],value==="THROW_UNDEFINED"?[1,2,0]:[1,1,classifyOwnedCode(value)]);assert.deepEqual(wire.detail[7],original.ownedTrace);assert.equal(receiptView(wire).builder[9],original.outputSummary.stdout.sha256);assert.equal(receiptView(wire).child[1],"invalid");
+  }
+});
+test("owned code closed schemas reject contradictions missing fields and malformed frames without lifecycle credit",async()=>{
+  const trace=[1,[2,4,0,0,0,0,true],[1,0,0,0,1,1,2,0,0,0,0,0,0],[0,0,0]];
+  for(const bad of [[1,1,1],[1,1,0],[1,2,14],[1,0,14],[1,3,0],[1,1,17],[2,1,4],undefined,[1,1,4,0]])assert.throws(()=>validateOwnedCode(bad,trace));
+  assert.throws(()=>validateOwnedCode([1,2,0],trace));const undef=structuredClone(trace);undef[1][6]=false;assert.throws(()=>validateOwnedCode([1,1,4],undef));
+  for(const stage of [0,1,2,3,8,9]){const wrong=structuredClone(trace);wrong[1][1]=stage;assert.throws(()=>validateOwnedCode([1,1,4],wrong));}
+  const made=await receiptActualProducer("wrangler_input",false,{diagnostics:true,ownedProcess:async(command,args,options,stdout)=>(await ownedProcessScenario("monitor_proc",stdout.split("\n").slice(0,6).join("\n")+"\n",{readFile:async()=>{throw{code:"EPERM"};}},{command,args,options})).result});
+  const wire=await lifecyclePacket(made,frames=>frames,true);validateReceiptCodeDiagnostic(wire);
+  for(const mutate of [r=>r.detail.pop(),r=>r.detail[8]=[1,1,1],r=>r.detail[8][2]=17,r=>r.detail[8]=[1,2,0]]){const bad=structuredClone(wire);mutate(bad);assert.throws(()=>validateReceiptCodeDiagnostic(bad));}
+  for(const mutate of [r=>delete r.code,r=>r.code=[1,1,1],r=>r.code=[1,2,0]]){
+    const rejected=await lifecyclePacket(made,frames=>frames.map(line=>{const row=JSON.parse(line.slice("EDGE_PACKAGING_V1 ".length));if(row.phase==="build_a_close")mutate(row);return"EDGE_PACKAGING_V1 "+JSON.stringify(row)+"\n";}));assert.equal(rejected.child[1],"invalid");assert.equal(rejected.builder,null);
+  }
+});
+test("owned code widest receipt retains historical codecs all process fields and strict packet budgets",async()=>{
+  const made=await receiptActualProducer("wrangler_input",false,{processResult:truncateActualBuilder}),prior=await lifecyclePacket(made);prior.defined=false;prior.parser=[1,2,false,6,1,14,0,16383,8191];prior.count="ONE";prior.lifecycle=[1,255,256,14,33,1,0];prior.reports=[65535,65535];prior.builder=[1,1,3,-65535,14,127,65535,65535,Number.MAX_SAFE_INTEGER,hex,Number.MAX_SAFE_INTEGER,other];
+  const trace=[1,[2,6,2,0,3,3,false],[255,255,255,255,255,63,7,5,2,3,2,63,255],[0,0,0]],wire=packReceiptCodeDiagnostic(prior,trace,[1,1,14]);
+  assert.deepEqual(receiptView(wire),prior);assert.deepEqual(validateReceiptOwnedDiagnostic({...wire,v:13,detail:wire.detail.slice(0,8)}),packReceiptOwnedDiagnostic(prior,trace));
+  assert.ok(Buffer.byteLength(JSON.stringify(wire))<=512);const rows=[wire,...["entry","dispatch","retirement","host_runtime","cwd","context","environment","image"].map(phase=>({v:2,phase,state:"rejected",defined:false,exit:null,signal:null}))],lines=[];
+  const captured=await receiptCapture(made.frames);createAttachProjection(captured.h.attached,{cid:hex,nonce:hex,contextHash:other},{internal:r=>rows.push(r)})(captured.h.attached.result);
+  emitContainerFailure(rows,line=>lines.push(line));assert.equal(lines.length,10);assert.ok(lines.every(line=>Buffer.byteLength(line)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);receiptPackets.push(lines.map(line=>JSON.parse(line.slice(line.indexOf("::{")+2))));
 });
 // END attach diagnostic pure tests.
