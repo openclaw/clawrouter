@@ -208,11 +208,17 @@ export function validatePrivateCheckpoint(record:any):void {
   }
   throw Error("unknown Private boundary capsule");
  }
- if(record?.v===2){
-  const keys=["v","pin","lane","case","phase","state","defined","decl","stages","owner","receipt"];
+ if(record?.v===2||record?.v===4){
+  const keys=["v","pin","lane","case","phase","state","defined","decl","stages","owner","receipt",...(record.v===4?["body"]:[])];
   if(Object.keys(record).sort().join(",")!==keys.sort().join(",")||record.pin!=="e2a8b8d4ec290cd6c035f3568a14e4d7c6433635"||
    !["sdk","outer"].includes(record.lane)||!nullable(record.case,107)||!phases.includes(record.phase)||!["rejected","threw"].includes(record.state)||typeof record.defined!=="boolean"||
    !nullable(record.decl,65)||!tuple(record.stages,7,x=>integer(x,3))||!(record.owner===null||tuple(record.owner,6,x=>integer(x,65535))))throw Error("invalid Private primary capsule");
+  if(record.v===4){const b=record.body;
+   if(record.lane!=="sdk"||record.phase!=="body"||record.case===null||record.decl===null||record.decl>=24||record.decl%4!==0||record.stages[4]!==3||record.owner!==null||record.receipt!==null||
+    !Array.isArray(b)||b.length!==7||!integer(b[0],22)||![5,6,7].includes(b[1])||b[2]!==record.defined||!integer(b[3],4194303)||b[3]>=2**b[0]||!integer(b[4],3)||
+    (b[0]<5&&b[4]!==0)||(b[0]<18&&(b[4]&2)!==0)||!nullable(b[5],3)||!(b[6]===null||tuple(b[6],4,x=>integer(x,65535)))||
+    (b[1]===6&&(![5,18].includes(b[0])||(b[4]&(b[0]===5?1:2))!==0))||(b[5]!==null&&b[0]<20))throw Error("invalid Private EOF body span");
+  }
   if(record.owner!==null&&(record.lane!=="sdk"||record.case===null||record.stages[5]!==2))throw Error("unjoined Private owner capsule");
   if(record.receipt!==null){const r=record.receipt;
    if(record.lane!=="outer"||!Array.isArray(r)||r.length!==6||!integer(r[0],107)||!(r[1]===null||Array.isArray(r[1])&&r[1].length===4&&integer(r[1][0],33)&&nullable(r[1][1],65535)&&integer(r[1][2],1)&&typeof r[1][3]==="boolean")||
@@ -235,6 +241,7 @@ export function validatePrivateCheckpoint(record:any):void {
 }
 export function createPrivateCheckpointReporter(lane:string,emit:Function) {
  const records=new Map<string,any>(),sent=new Set<string>(),observers:Promise<unknown>[]=[],failures:unknown[]=[];
+ const bodyScopes=new Map<number,any>();
  const declarations=new Map<number,number>(),scopes=new Map<string,number[]>(),owners=new Map<number,number[]>();
  let emitted=0,suppressed=0,finished=false,failed=0,first:any=null,receipt:any=null,primarySent=false,entrySent=false,registrationFailed=false;
  const registration:(number|null)[]=[0,0,0,0,0,null];
@@ -243,8 +250,20 @@ export function createPrivateCheckpointReporter(lane:string,emit:Function) {
  const make=(index:number|null,phase:string,state:string,reason:unknown,acq:number|null=null,op:number|null=null,count=0)=>({v:1,pin:"e2a8b8d4ec290cd6c035f3568a14e4d7c6433635",lane,case:index,phase,state,
   defined:state==="rejected"||state==="threw"?reason!==undefined:null,acq,op,count});
  const send=(record:any)=>{try{validatePrivateCheckpoint(record);emit(record);}catch(error){failures.push(error);}};
- const primary=()=>{if(!first||primarySent)return;primarySent=true;send({v:2,pin:first.pin,lane,case:first.case,phase:first.phase,state:first.state,defined:first.defined,decl:first.decl,
-  stages:[...scope(first.case,first.decl)],owner:first.case===null?null:owners.get(first.case)??null,receipt});};
+ // V4 is the same reserved primary slot. It adds a source span, never a matcher
+ // verdict or a joined owner. 1 entered, 2 returned, 3 awaiting, 4 await fulfilled;
+ // failure snapshots use 5 sync span threw, 6 await rejected, 7 intervening UNKNOWN.
+ // Tuple: site, failure kind, definedness, returned-site bits, fulfilled-await bits,
+ // original stop operand enum, retained read-state counts (pending/fulfilled/rejected/threw).
+ // stop: null unobserved, 0 stop, 1 error, 2 aborted, 3 other original operand.
+ // Read counts do not inspect chunks/done or prove EOF, absence of I/O, or joins.
+ const bodySnapshot=(index:number,reason:unknown)=>{const b=bodyScopes.get(index);if(!b||b.invalid)return null;
+  b.failed=true;const counts=[0,0,0,0];
+  for(const o of b.originals)if(o.kind==="read"){const at=["pending","fulfilled","rejected","threw"].indexOf(o.state);if(at<0||++counts[at]>65535)return null;}
+  return [b.site,b.state===1?5:b.state===3?6:7,reason!==undefined,b.returned,b.awaited,b.stop,counts];};
+ const primary=()=>{if(!first||primarySent)return;primarySent=true;const b=first.body??null;
+  send({v:b===null?2:4,pin:first.pin,lane,case:first.case,phase:first.phase,state:first.state,defined:first.defined,decl:first.decl,
+   stages:[...scope(first.case,first.decl)],owner:first.case===null?null:owners.get(first.case)??null,receipt,...(b===null?{}:{body:b})});};
  const progress=(point:string,decl:number|null)=>({v:3,pin:"e2a8b8d4ec290cd6c035f3568a14e4d7c6433635",lane,kind:"progress",point,decl,registration:[...registration]});
  const entry=(record:any)=>{if(entrySent)return;entrySent=true;send(record);};
  const mark=(index:number|null,phase:string,state:string,reason?:unknown,acq:number|null=null,op:number|null=null,decl:number|null=null)=>{
@@ -254,7 +273,7 @@ export function createPrivateCheckpointReporter(lane:string,emit:Function) {
    const key=String(index)+":"+phase;if(!["rejected","threw"].includes(records.get(key)?.state))records.set(key,record);
    if(state==="rejected"||state==="threw"){failed++;
     // Raw read/closed/cancel outcomes are not themselves the SDK case verdict.
-    if(!first&&!["read","closed","cancel","release"].includes(phase)){first={...record,decl};if(lane==="sdk")primary();}}
+    if(!first&&!["read","closed","cancel","release"].includes(phase)){first={...record,decl,body:lane==="sdk"&&phase==="body"&&index!==null?bodySnapshot(index,reason):null};if(lane==="sdk")primary();}}
    if(lane==="sdk"&&phase==="callback"&&state==="enter")entry(progress("callback",decl));
   }catch(error){failures.push(error);}
  };
@@ -265,6 +284,15 @@ export function createPrivateCheckpointReporter(lane:string,emit:Function) {
    if(emitted<5){emitted++;send(record);}else suppressed=Math.min(65535,suppressed+1);}
  };
  return {failures,mark,flush,
+  bindBody(index:number,owner:object,originals:Original[]){try{
+   const decl=declarations.get(index);if(lane!=="sdk"||finished||decl===undefined||decl>=24||decl%4!==0||bodyScopes.has(index)||!owner||!Array.isArray(originals))throw Error("foreign Private body owner");
+   bodyScopes.set(index,{owner,originals,site:0,state:0,returned:0,awaited:0,stop:null,failed:false,invalid:false});
+  }catch(error){const b=bodyScopes.get(index);if(b)b.invalid=true;failures.push(error);}},
+  bodySite(index:number,owner:object,site:number,state:number,...operand:unknown[]){const b=bodyScopes.get(index),stop=operand[0];try{
+   if(!b||b.owner!==owner||b.failed||b.invalid||finished||!Number.isSafeInteger(site)||site<1||site>22||![1,2,3,4].includes(state)||operand.length>1||(operand.length===1&&!(site===20&&state===1))||
+    (state===1||state===3?(site<b.site||site===b.site&&!(site===20&&b.state===1&&operand.length===1)):site!==b.site)||(state===2&&b.state!==1)||(state===3&&![5,18].includes(site))||(state===4&&b.state!==3))throw Error("foreign Private body source span");
+   b.site=site;b.state=state;if(state===2)b.returned|=2**(site-1);if(state===4)b.awaited|=site===5?1:2;if(site===20&&state===1&&operand.length===1)b.stop=stop==="stop"?0:stop==="error"?1:stop==="aborted"?2:3;
+  }catch(error){if(b)b.invalid=true;failures.push(error);}},
   registration(site:string,state:string,decl:number|null=null){try{
    if(lane!=="sdk"||finished||!["afterAll","describe","suite","it"].includes(site)||!["enter","returned"].includes(state))throw Error("invalid Private registration boundary");
    if(site==="afterAll"||site==="describe")registration[site==="afterAll"?0:1]=state==="enter"?1:2;
@@ -325,6 +353,7 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
  const w:any={owner:Object.freeze({id:row.id}),identity:nativeIdentity,provider:row.provider,api:row.api,role:row.control,
   originals:[],observers:[],transports:[],acquisitions:[],callers:[],failures:[],observerFailures:[],syncFailures:[],restored:false,sourceExpired:null,sequence:0};
  checkpoints.mark(caseIndex,"owner","fulfilled");
+ if(row.control==="eof")checkpoints.bindBody(caseIndex,row,w.originals);
  const ownership=createPrivateInvocationOwnership(new AsyncLocalStorage());
  const failures:unknown[]=w.failures,originals:Original[]=w.originals,transports:Transport[]=w.transports,restores:Array<()=>void>=[];
  const signalHistory=(signal:AbortSignal|undefined)=>{const history={signal,initial:signal?.aborted??null,invoke:++w.sequence,abort:0,reason:undefined as unknown};
@@ -446,6 +475,8 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
 }
 
 async function session(row:Case,state:Awaited<ReturnType<typeof createOpenClawTestState>>,track:<T>(kind:string,p:Promise<T>)=>Promise<T>,transports:Transport[],witness:any){
+ // The row reference is the private context key; other scenarios are unchanged.
+ const bodySite=(id:number,state:number,...operand:unknown[])=>{if(row.control==="eof")checkpoints.bodySite(checkpointCase(row),row,id,state,...operand);};
  const {default:entry}=await loadBundledPluginFacade<{default:Parameters<typeof registerSingleProviderPlugin>[0]}>({pluginId:row.provider,artifactBasename:"index.js"});
  const plugin=await registerSingleProviderPlugin(entry);expect(plugin.id).toBe(row.provider);expect(plugin.catalog?.run).toBeTypeOf("function");
  const store:AuthProfileStore={version:1,profiles:{[row.provider+":selected"]:{type:"api_key",provider:row.provider,key:key(row,"discovery")},[row.provider+":other-label"]:{type:"api_key",provider:row.provider,key:key(row,"discovery")},"openai:poison":{type:"api_key",provider:"openai",key:"synthetic-foreign-profile"}}};await state.writeAuthProfiles(store);
@@ -456,23 +487,26 @@ async function session(row:Case,state:Awaited<ReturnType<typeof createOpenClawTe
   const env=options.profile?{}:{[envNames[row.provider]]:options.credential??key(row,"discovery",options.secret)};
   const resolveProviderApiKey=createProviderApiKeyResolver(env,store,config),resolveProviderAuth=createProviderAuthResolver(env,store,config);
   const selected=row.provider==="baseten"?resolveProviderAuth(row.provider):resolveProviderApiKey(row.provider);
-  expect(selected.discoveryApiKey).toBe(options.profile?key(row,"discovery"):options.credential??key(row,"discovery",options.secret));
-  return track("catalog_result",witness.invoke(witness.caller(options.signal,"discovery"),"discovery",plugin.catalog!.run,plugin.catalog,[{config,env,agentDir:state.agentDir(),workspaceDir:state.workspaceDir,signal:options.signal,resolveProviderApiKey,resolveProviderAuth}]));
+  bodySite(3,1);expect(selected.discoveryApiKey).toBe(options.profile?key(row,"discovery"):options.credential??key(row,"discovery",options.secret));bodySite(3,2);
+  bodySite(4,1);const original=track("catalog_result",witness.invoke(witness.caller(options.signal,"discovery"),"discovery",plugin.catalog!.run,plugin.catalog,[{config,env,agentDir:state.agentDir(),workspaceDir:state.workspaceDir,signal:options.signal,resolveProviderApiKey,resolveProviderAuth}]));bodySite(4,2);return original;
  };
  const infer=(provider:any,options:{signal?:AbortSignal;credential?:string;api?:"stream"|"simple"}={})=>{
-  expect([base(row),base(row,true)]).toContain(provider.baseUrl);expect(provider.api).toBe("openai-completions");
-  const actual=provider.models.find((m:{id:string})=>m.id==="tenant/opaque-a");expect(actual).toBeDefined();
-  const model={...actual,provider:row.provider,api:provider.api,baseUrl:provider.baseUrl} as Model<"openai-completions">;
+  bodySite(8,1);expect([base(row),base(row,true)]).toContain(provider.baseUrl);bodySite(8,2);bodySite(9,1);expect(provider.api).toBe("openai-completions");bodySite(9,2);
+  bodySite(10,1);const actual=provider.models.find((m:{id:string})=>m.id==="tenant/opaque-a");expect(actual).toBeDefined();bodySite(10,2);
+  bodySite(11,1);const model={...actual,provider:row.provider,api:provider.api,baseUrl:provider.baseUrl} as Model<"openai-completions">;
   const context:Context={messages:[{role:"user",content:"synthetic private catalog request",timestamp:1}]};
   const which=options.api??row.api,plain=which==="stream"?stream:streamSimple;
   const hook=which==="stream"?plugin.wrapStreamFn:plugin.wrapSimpleCompletionStreamFn;
-  const fn=row.provider==="baseten"?(expect(hook).toBeTypeOf("function"),hook!({streamFn:plain,sourceApi:model.api,modelId:model.id,config:{},providerId:row.provider} as Parameters<NonNullable<typeof hook>>[0])):plain;
+  bodySite(11,2);bodySite(12,1);const fn=row.provider==="baseten"?(expect(hook).toBeTypeOf("function"),hook!({streamFn:plain,sourceApi:model.api,modelId:model.id,config:{},providerId:row.provider} as Parameters<NonNullable<typeof hook>>[0])):plain;
   if(row.provider!=="baseten")expect(hook).toBeUndefined();
-  const caller=witness.begin(options.signal);const result=witness.invoke(caller,"inference",fn!,undefined,[model,context,{apiKey:options.credential??key(row),signal:options.signal,maxTokens:16}]);const pending=track("inference_result",result.result());witness.finish(caller,pending);return {stream:result,result:pending};
+  bodySite(12,2);bodySite(13,1);const caller=witness.begin(options.signal);bodySite(13,2);
+  bodySite(14,1);const result=witness.invoke(caller,"inference",fn!,undefined,[model,context,{apiKey:options.credential??key(row),signal:options.signal,maxTokens:16}]);bodySite(14,2);
+  bodySite(15,1);const originalResult=result.result();bodySite(15,2);
+  bodySite(16,1);const pending=track("inference_result",originalResult);witness.finish(caller,pending);bodySite(16,2);return {stream:result,result:pending};
  };
- return {discover,infer,transports,...witness};
+ return {discover,infer,transports,...witness,bodySite};
 }
-function ready(result:any){expect(result.provider).toBeDefined();expect(result.provider.models.map((m:{id:string})=>m.id)).toContain("tenant/opaque-a");return result.provider;}
+function ready(result:any,site:(id:number,state:number)=>void=()=>{}){site(6,1);expect(result.provider).toBeDefined();site(6,2);site(7,1);expect(result.provider.models.map((m:{id:string})=>m.id)).toContain("tenant/opaque-a");site(7,2);return result.provider;}
 function failedCatalog(result:any,status:"auth-rejected"|"unavailable"){expect(result.provider).toBeUndefined();expect(Object.keys(result.providers??{})).toEqual([]);expect(result.outcomes).toContainEqual(expect.objectContaining({status}));}
 async function completeInference(f:Awaited<ReturnType<typeof session>>,provider:any,options:Parameters<typeof f.infer>[1]={}){const result=f.infer(provider,options),value=await result.result;expect(value.stopReason).toBe("stop");expect(value.content).toContainEqual({type:"text",text:"private-prefix"});expect(value.usage).toMatchObject({input:4,output:3,totalTokens:7});return value;}
 async function waitPrefix(row:Case){const end=Date.now()+5000;while(Date.now()<end){if((await command(row,"state")).prefix)return;await new Promise(resolve=>setTimeout(resolve,10));}throw Error("owned prefix not observed");}
@@ -506,7 +540,7 @@ async function exercise(row:Case){await fixture(row,async f=>{
 });}
 
 async function diagnosticControl(row:Case){await fixture(row,async f=>{
- const controller=new AbortController();
+ const site=f.bodySite;site(1,1);const controller=new AbortController();site(1,2);
  if(row.control==="preabort"){
   const cold=new AbortController();f.abort(cold,new Error("synthetic cold preabort"));
   failedCatalog(await f.discover({signal:cold.signal}),"unavailable");expect(f.transports).toHaveLength(0);
@@ -515,6 +549,15 @@ async function diagnosticControl(row:Case){await fixture(row,async f=>{
   f.abort(controller,new Error("synthetic inference preabort"));
   const result=await f.infer(provider,{signal:controller.signal}).result;expect(result.stopReason).toBe("error");expect(result.content).toEqual([]);
   const delta=f.transports.filter((t:Transport)=>t.method==="POST").length-before;expect(delta).toBe(0);f.preabortProof(coldZero,delta);return;
+ }
+ if(row.control==="eof"){
+  site(2,1);const discovery=f.discover();site(5,3);const catalog=await discovery;site(5,4);
+  const provider=ready(catalog,site),pending=f.infer(provider,{signal:controller.signal});
+  site(17,1);const originalResult=pending.result;site(17,2);site(18,3);const result=await originalResult;site(18,4);
+  site(19,1);expect(controller.signal.aborted).toBe(false);site(19,2);
+  site(20,1);const stopReason=result.stopReason;site(20,1,stopReason);expect(stopReason).toBe("stop");site(20,2);
+  site(21,1);expect(result.content).toContainEqual({type:"text",text:"private-prefix"});site(21,2);
+  site(22,1);expect(result.usage).toMatchObject({input:4,output:3,totalTokens:7});site(22,2);return;
  }
  const provider=ready(await f.discover()),pending=f.infer(provider,{signal:controller.signal});
  if(row.control==="partial"){

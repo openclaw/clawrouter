@@ -511,6 +511,93 @@ export async function privateInertReader(read,closed=Promise.resolve()){
  const actual=s.ownership.run(token,()=>response.body.getReader());return {s,context,token,request,body,reader:actual,calls};
 }
 if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
+ // BEGIN Private EOF body witness inert regressions
+ function privateEOFSource(deps){
+  const source=readFileSync(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url),'utf8');
+  const code=source.slice(source.indexOf('async function session('),source.indexOf('function failedCatalog('))+
+   source.slice(source.indexOf('async function diagnosticControl('),source.indexOf('checkpoints.registration("describe","enter")'));
+  return new Function(...Object.keys(deps),'"use strict";'+stripTypeScriptTypes(code,{mode:'strip'})+';return {session,diagnosticControl};')(...Object.values(deps));
+ }
+ async function privateEOFRun({fail=0,reason=undefined,reject=false,stop='stop',reportFail=false,saturate=false,operand=false}={}){
+  const out=[],calls=[],reads=[],row={id:'inert',provider:'baseten',api:'stream',scenario:'eof',control:'eof'},report=privateCheckpointFunctions().createPrivateCheckpointReporter('sdk',r=>{out.push(r);if(reportFail&&r.v===4)throw undefined;});
+  if(saturate)for(let i=0;i<20;i++){report.mark(i,'module','fulfilled');report.flush(i);}
+  report.mark(null,'callback','enter',undefined,null,null,0);report.mark(null,'selection','fulfilled',undefined,null,null,0);report.bindCase(0,0);report.mark(0,'setup','fulfilled');report.mark(0,'owner','fulfilled');report.bindBody(0,row,reads);
+  let site=0,discoveryP,resultP,stopGets=0,resultCalls=0,bodyPending;
+  const at=report.bodySite;report.bodySite=function(...args){site=args[2];return Reflect.apply(at,report,args);};
+  const check=id=>{if(id>0&&fail===id)throw reason;};
+  const model={id:'tenant/opaque-a'};if(operand&&fail===11)Object.defineProperty(model,'opaque',{enumerable:true,get(){throw reason;}});
+  const provider={baseUrl:'https://fixture.invalid/v1/native/baseten',api:'openai-completions',models:[model]};
+  const value={get stopReason(){stopGets++;if(operand&&fail===20)throw reason;return stop;},content:[{type:'text',text:'private-prefix'}],usage:{input:4,output:3,totalTokens:7}};
+  const key=()=> 'synthetic-key',base=()=>provider.baseUrl;
+  const catalog={run(...args){calls.push('catalog');assert.equal(this,catalog);assert.equal(args.length,1);check(4);discoveryP=fail===5?Promise.reject(reason):Promise.resolve({provider});return discoveryP;}};
+  function stream(...args){calls.push('stream');assert.equal(this,undefined);assert.equal(args.length,3);assert.equal(args[2].maxTokens,16);assert.equal(args[2].apiKey,key());check(14);
+   return {result(){resultCalls++;calls.push('result');check(15);resultP=fail===18?Promise.reject(reason):Promise.resolve(value);return resultP;}};}
+  const plugin={id:'baseten',catalog,wrapStreamFn({streamFn}){check(12);assert.equal(streamFn,stream);return streamFn;}};
+  const expect=value=>({toBe(expected){if(site===20&&stop!=='stop')throw reason;if(!operand)check(site);assert.equal(value,expected);},
+   toBeDefined(){check(site);assert.notEqual(value,undefined);},toBeTypeOf(type){check(site);assert.equal(typeof value,type);},
+   toContain(expected){check(site);assert.ok(value.includes(expected));},toContainEqual(expected){check(site);assert.deepEqual(value,[expected]);},toMatchObject(expected){check(site);assert.deepEqual(value,expected);}});
+  const witness={begin(signal){check(13);return {signal};},invoke(c,kind,fn,receiver,args){return Reflect.apply(fn,receiver,args);},caller(){return {};},finish(c,p){calls.push('finish');check(16);assert.equal(p,resultP);}};
+  let api;const deps={loadBundledPluginFacade:async()=>({default:{}}),registerSingleProviderPlugin:async()=>plugin,expect,key,base,envNames:{baseten:'BASETEN_API_KEY'},
+   createProviderApiKeyResolver:()=>()=>({}),createProviderAuthResolver:()=>()=>{check(2);return {get discoveryApiKey(){if(operand&&fail===3)throw reason;return key();}};},
+   stream,streamSimple:()=>{throw Error('foreign API');},checkpoints:report,checkpointCase:()=>0,
+   AbortController:class{constructor(){check(1);this.signal={aborted:false};}},
+   fixture:async(actual,body)=>{assert.equal(actual,row);const f=await api.session(row,{writeAuthProfiles:async()=>{},agentDir:()=>'',workspaceDir:''},(kind,p)=>{calls.push(kind);if(kind==='catalog_result')assert.equal(p,discoveryP);else{check(16);assert.equal(p,resultP);}return p;},[],witness);
+    if(fail===17){const infer=f.infer;f.infer=function(...args){const original=Reflect.apply(infer,this,args);return {get result(){throw reason;},stream:original.stream};};}
+    bodyPending=report.observe(0,'body',body,undefined,[f]);return await bodyPending;}};
+  api=privateEOFSource(deps);let failure=false,error;
+  try{await api.diagnosticControl(row);}catch(e){failure=true;error=e;}
+  await report.drain();return {out,report,row,calls,failure,error,stopGets,resultCalls,bodyPending,reads};
+ }
+ test('Private EOF source spans preserve every original failure including undefined',async()=>{
+  for(let site=1;site<=22;site++)for(const reason of [undefined,{}]){
+   const r=await privateEOFRun({fail:site,reason,operand:site===11});assert.equal(r.failure,true,'site '+site);assert.equal(r.error,reason);
+   const cap=r.out.find(x=>x.v===4);assert.ok(cap,'capsule '+site);assert.equal(cap.body[0],site);assert.equal(cap.body[1],[5,18].includes(site)?6:5);assert.equal(cap.defined,reason!==undefined);assert.equal(cap.owner,null);assert.equal(cap.receipt,null);
+   assert.equal(r.report.failures.length,0);assert.ok(r.resultCalls<=1);assert.equal(r.out.filter(x=>x.v===4).length,1);
+  }
+ });
+ test('Private EOF original error result and direct rejection stay distinct with single getters',async()=>{
+  const success=await privateEOFRun();assert.equal(success.failure,false);assert.equal(success.stopGets,1);assert.equal(success.resultCalls,1);assert.equal(success.report.failures.length,0);
+  assert.deepEqual(success.calls,['catalog','catalog_result','stream','result','inference_result','finish']);
+  const error=await privateEOFRun({stop:'error'}),rejected=await privateEOFRun({fail:18});
+  assert.deepEqual([...error.out.find(x=>x.v===4).body].filter((_,i)=>[0,1,2,5].includes(i)),[20,5,false,1]);assert.equal(error.stopGets,1);assert.equal(error.out.find(x=>x.v===4).body[4],3);
+  assert.deepEqual([...rejected.out.find(x=>x.v===4).body].filter((_,i)=>[0,1,2,5].includes(i)),[18,6,false,null]);assert.equal(rejected.stopGets,0);assert.equal(rejected.out.find(x=>x.v===4).body[4],1);
+  for(const site of [3,20]){const r=await privateEOFRun({fail:site,operand:true});assert.equal(r.error,undefined);assert.equal(r.out.find(x=>x.v===4).body[0],site);assert.equal(r.report.failures.length,0);}
+ });
+ test('Private EOF source observation does not subscribe to or substitute original promises',async()=>{
+  // The actual callback and session contain no additional then/iterator/read calls.
+  const source=readFileSync(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url),'utf8');
+  const session=source.slice(source.indexOf('async function session('),source.indexOf('function failedCatalog('));
+  const eof=source.slice(source.indexOf(' if(row.control==="eof"){\n  site(2,1)'),source.indexOf(' const provider=ready(await f.discover()),pending=f.infer(provider'));
+  assert.doesNotMatch(session,/\.then\(|\.read\(|getReader\(/);assert.doesNotMatch(eof,/\.then\(|for await|\.read\(/);
+  const r=await privateEOFRun();assert.equal(r.failure,false);assert.equal(r.resultCalls,1);assert.equal(r.calls.filter(x=>x==='stream').length,1);
+ });
+ test('Private EOF first span survives saturation reporting faults and held late joins',async()=>{
+  const reason={},r=await privateEOFRun({fail:21,reason,reportFail:true,saturate:true});assert.equal(r.error,reason);assert.deepEqual([...r.report.failures],[undefined]);
+  const cap=r.out.find(x=>x.v===4),before=JSON.stringify(cap);let release;const held=new Promise(resolve=>{release=resolve;});
+  r.report.observe(0,'original_join',()=>held,undefined,[]);assert.equal(cap.stages[5],0);assert.equal(cap.owner,null);
+  release();await r.report.drain();r.report.observe(0,'postlude',()=>Promise.reject(undefined),undefined,[]);await r.report.drain();r.report.finish();
+  assert.equal(JSON.stringify(cap),before);assert.equal(r.out.filter(x=>x.v===4).length,1);assert.ok(r.out.length<=9);
+ });
+ test('Private EOF foreign contexts invalidate source coverage without replacing raw failure',()=>{
+  for(const mutate of [(r,row)=>r.bodySite(0,{},2,1),(r,row)=>r.bindBody(0,{},[]),(r,row)=>r.bodySite(0,row,1,2),(r,row)=>r.bodySite(0,row,23,1)]){
+   const out=[],r=privateCheckpointFunctions().createPrivateCheckpointReporter('sdk',x=>out.push(x)),row={};r.bindCase(0,0);r.bindBody(0,row,[]);mutate(r,row);r.mark(0,'body','rejected',undefined);
+   assert.ok(r.failures.length);assert.equal(out.some(x=>x.v===4),false);assert.equal(out.find(x=>x.v===2).defined,false);
+  }
+ });
+ test('Private EOF V4 source tuple is bounded and relays within the existing shared quota',async()=>{
+  const {validatePrivateCheckpoint,createPrivateCheckpointReporter}=privateCheckpointFunctions(),r=await privateEOFRun({fail:22,reason:{}}),cap=r.out.find(x=>x.v===4);
+  const maximum={...cap,case:107,decl:20,body:[22,5,true,2097151,3,3,Array(4).fill(65535)]};validatePrivateCheckpoint(maximum);
+  for(const body of [[23,5,true,0,0,null,[0,0,0,0]],[5,6,false,0,0,null,[0,0,0,0]],[4,6,true,0,0,null,[0,0,0,0]],[1,5,true,0,0,1,[0,0,0,0]],[1,5,true,0,0,null,[0,0,0,65536]],[5,6,true,0,1,null,[0,0,0,0]],[5,5,true,65535,0,null,[0,0,0,0]],[]])assert.throws(()=>validatePrivateCheckpoint({...maximum,body}));
+  for(const change of [{lane:'outer'},{decl:1},{phase:'postlude'},{owner:[1,0,0,0,0,0]},{unexpected:1}])assert.throws(()=>validatePrivateCheckpoint({...maximum,...change}));
+  const records=privateCheckpointRecords({stdout:'PRIVATE_CHECKPOINT '+JSON.stringify(cap)+'\n'});assert.equal(records.length,1);assert.equal(records[0].v,4);
+  const commands=[],emit=privateAnnotationEmitter(x=>commands.push(x));
+  for(const row of privateNativeControls)emit({v:1,pin:privateCatalogPin,p:row.provider,a:row.api,r:row.control,q:false,vect:false,worker:false,restore:false,rejects:1024,pending:1024});
+  emit(maximum);const outer=createPrivateCheckpointReporter('outer',emit);for(let i=0;i<108;i++){outer.mark(i,'body','rejected',undefined);outer.flush(i);}outer.execOutcome({v:3,pin:privateCatalogPin,lane:'outer',kind:'exec',phase:'exec',state:'rejected',defined:true,fields:[[2,-2147483648],[2,'SIGTERM'],[2,false]]});outer.finish();
+  for(const x of r.out.filter(x=>x.v!==4))emit(x);
+  for(let i=0;i<4;i++)emit({v:1,pin:privateCatalogPin,lane:'outer',case:107,phase:'observer',state:'rejected',defined:false,acq:4095,op:4095,count:65535});
+  assert.ok(commands.length<=48);assert.ok(commands.every(x=>Buffer.byteLength(x)<=768));assert.ok(Buffer.byteLength(commands.join(''))<=16384);
+ });
+ // END Private EOF body witness inert regressions
  // BEGIN Private early runner inert regressions
  test('Private copied target verification precedes the one original exec and removal',async()=>{
   const h=privateExecFunctions(),bytes=Buffer.from('fixture'),order=[],records=[],report=privateCheckpointFunctions().createPrivateCheckpointReporter('outer',r=>records.push(r));

@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- Preserve the first Private EOF body source span and original call/await outcomes in the existing bounded failure capsule, without changing SDK operations or retirement/accounting acceptance.
+
 - Register the Private E2 consumer suite with Vitest 5 explicit serial options instead of the removed sequential chain, preserving all original cases and strict retirement/accounting assertions.
 
 - Preserve the original default OpenClaw consumer launch block alongside the Private-only runner observer, keeping the existing command/options/diagnostic compatibility assertion intact.
