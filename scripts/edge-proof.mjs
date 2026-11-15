@@ -434,17 +434,34 @@ const ownedLeaf=(recorder,id,value,negative=false)=>{ownedNote(recorder,"sampleL
 const ownedValue=(recorder,method,observed,value)=>{ownedNote(recorder,method,observed);return value;};
 const ownedCondition=(recorder,value)=>{ownedNote(recorder,"condition",value);return value;};
 const ownedArgument=(recorder,reason,signal,value)=>{ownedNote(recorder,"attempt",reason,signal);return value;};
-export async function privateProcesses(recorder) {
+// Only the container admission path mints this invocation-local capability.
+// Each census must observe both exact PID:start controls; a missing/reused PID
+// cannot be omitted. The old private-init caller remains PID1-only.
+const censusControls = new WeakSet();
+export function bindCensusControls(reaper, coordinator) {
+  if (reaper.pid !== 1 || coordinator.pid <= 1 || coordinator.parent !== 1 || !/^\d+$/.test(reaper.start) || !/^\d+$/.test(coordinator.start)) refuse("census-control-identity");
+  const controls = Object.freeze({ reaper: Object.freeze({...reaper}), coordinator: Object.freeze({...coordinator}) });
+  censusControls.add(controls); return controls;
+}
+export function classifyCensusControl(row, controls) {
+  if (!censusControls.has(controls)) refuse("census-control-authority");
+  for (const [key, expected] of Object.entries(controls)) if (row.pid === expected.pid) {
+    if (row.start !== expected.start || row.parent !== expected.parent || !["R", "S", "D", "I"].includes(row.state)) refuse("census-control-drift");
+    return key;
+  }
+  return null;
+}
+export async function privateProcesses(recorder, controls) {
   const census=ownedNote(recorder,"censusBegin");
   ownedNote(recorder,"sampleBegin");
   try {
   ownedNote(recorder,"sampleStage",1);
-  if (ownedLeaf(recorder,1,process.platform !== "linux",true) || ownedLeaf(recorder,2,process.pid !== 1,true)) { ownedNote(recorder,"sampleFalse"); refuse("process-census-outside-private-init"); }
-  const rows = [];
+  if (ownedLeaf(recorder,1,process.platform !== "linux",true) || ownedLeaf(recorder,2,controls ? !censusControls.has(controls) || process.pid !== controls.coordinator.pid || process.ppid !== 1 : process.pid !== 1,true)) { ownedNote(recorder,"sampleFalse"); refuse("process-census-outside-private-init"); }
+  const rows = [], seenControls = new Set();
   ownedNote(recorder,"sampleStage",2);
   for (const name of await readdir("/proc")) {
     ownedNote(recorder,"sampleStage",3);
-    if (!/^\d+$/.test(name) || name === "1") continue;
+    if (!/^\d+$/.test(name) || !controls && name === "1") continue;
     let readingStat = false;
     try {
       ownedNote(recorder,"sampleStage",4);
@@ -457,7 +474,10 @@ export async function privateProcesses(recorder) {
       ownedNote(recorder,"sampleStage",6);
       if (ownedLeaf(recorder,1,!/^[RSDZTWXIKt]$/.test(fields[0]),true) || ownedLeaf(recorder,2,!/^\d+$/.test(fields[19]),true) || ownedLeaf(recorder,3,![fields[1], fields[2]].every(value => /^\d+$/.test(value)),true)) { ownedNote(recorder,"sampleFalse"); refuse("private-process-state-unknown"); }
       ownedNote(recorder,"sampleStage",7);
-      const row={ pid: Number(name), parent: Number(fields[1]), group: Number(fields[2]), start: fields[19], state: fields[0] }; rows.push(row);
+      const row={ pid: Number(name), parent: Number(fields[1]), group: Number(fields[2]), start: fields[19], state: fields[0] };
+      const control = controls ? classifyCensusControl(row, controls) : null;
+      if (control) { if (seenControls.has(control)) refuse("duplicate-census-control"); seenControls.add(control); continue; }
+      rows.push(row);
       ownedNote(recorder,"censusRow",census,row.pid,row.parent,row.group,row.start,row.state);
     } catch (error) {
       const failure=ownedNote(recorder,"sampleState");ownedNote(recorder,"sampleStage",8);
@@ -470,13 +490,14 @@ export async function privateProcesses(recorder) {
     }
   }
   ownedNote(recorder,"sampleStage",9);
+  if (controls && seenControls.size !== 2) refuse("missing-census-control");
   ownedNote(recorder,"censusSample",census,rows);
   return rows;
   } finally { ownedNote(recorder,"sampleEnd"); }
 }
 
 // Original operations remain authoritative; observations never stop cleanup.
-export async function runOwnedProcess(command, args, { cwd, env, timeoutMs = 60000, graceMs = 1000, sample = async () => [], spawnProcess = spawn, signalSource = process, recorder } = {}) {
+export async function runOwnedProcess(command, args, { cwd, env, timeoutMs = 60000, graceMs = 1000, sample = async () => [], spawnProcess = spawn, signalSource = process, recorder, beforeFinal } = {}) {
   const result = { code: null, signal: null, timedOut: false, interrupted: false, closed: false, errors: [], spawnErrors: [], observed: new Map(), stdout: "", stderr: "" };
   const captures = Object.fromEntries(["stdout", "stderr"].map(key => [key, { bytes: 0, hash: createHash("sha256"), esc: false }]));
   let child, escalation, bytes = 0, sampling = false, stopped = false, finished = false;
@@ -527,6 +548,12 @@ export async function runOwnedProcess(command, args, { cwd, env, timeoutMs = 600
     signalSource.removeListener("SIGINT", onInt); signalSource.removeListener("SIGTERM", onTerm);
   }
   while (sampling) await new Promise(resolveTick => setTimeout(resolveTick, 1));
+  // A failed control barrier never replaces the original process errors and
+  // never skips the original final sample. A pending ACK uses the outer lease.
+  if (beforeFinal) try {
+    if (!result.closed) refuse("control-barrier-without-close");
+    await beforeFinal();
+  } catch (error) { result.errors.push(error); }
   ownedNote(recorder,"censusFinal");
   try { ownedNote(recorder,"sampleStage",0);const remaining = await sample();result.remaining = remaining;ownedNote(recorder,"censusResult",remaining); } catch (error) { result.errors.push(error);ownedNote(recorder,"error",9,error);result.remaining = null;ownedNote(recorder,"censusFailed",error); }
   result.outputSummary = Object.fromEntries(Object.entries(captures).map(([key, value]) => [key, { bytes: value.bytes, sha256: value.hash.digest("hex"), esc: value.esc, complete: result.closed }]));
@@ -633,15 +660,16 @@ async function offlineChild(cwd, root, parent, report) {
 // Both admitted isolation routes use the same original builder, two-root
 // comparison, direct CLI, output checks and private-process retirement.
 export async function runPackagingPipeline(cwd, root, report, boundary) {
+  const census = recorder => privateProcesses(recorder, boundary.controls);
   await report.step("namespace_read", boundary.checkBoundary);
-  await report.step("process_inventory", async () => { if ((await privateProcesses()).length) refuse("unexpected-private-process"); });
+  await report.step("process_inventory", async () => { if ((await census()).length) refuse("unexpected-private-process"); });
   const env = await report.step("environment", () => prepareEnvironment(join(root, "child")));
   const receipts = [];
   for (const [label, role, launch, close, check] of [["a", "build_a", "build_a_launch", "build_a_close", "build_a_report"], ["b", "build_b", "build_b_launch", "build_b_close", "build_b_report"]]) {
     const capsule = join(root, `capsule-${label}`);
     report.mark(launch, "enter");
     const recorder=boundary.builderDiagnostics?createOwnedProcessLedger():undefined;
-    const built = await runOwnedProcess(process.execPath, boundary.buildArguments(capsule, role), { cwd: root, env, timeoutMs: 120000, sample: recorder?()=>privateProcesses(recorder):privateProcesses, ...(recorder?{recorder}:{}) });
+    const built = await runOwnedProcess(process.execPath, boundary.buildArguments(capsule, role), { cwd: root, env, timeoutMs: 120000, sample: () => census(recorder), ...(recorder?{recorder}:{}), ...(boundary.drain ? {beforeFinal: boundary.drain} : {}) });
     const value = JSON.parse(acceptPackagingProcess(built, report, role, close, check));
     if (value.built !== true || Object.keys(value).join() !== "built") refuse("invalid-builder-receipt");
     receipts.push(await report.step(check, async () => JSON.parse(await readFile(join(capsule, "source-receipt.json"), "utf8"))));
@@ -661,13 +689,13 @@ export async function runPackagingPipeline(cwd, root, report, boundary) {
     await report.step(configPhase, () => writeFile(config, renderEdgeConfig(offlineProjection(), kind, `${kind}.mjs`), { flag: "wx", mode: 0o600 }));
     report.mark(launch, "enter");
     const recorder = boundary.builderDiagnostics ? createOwnedProcessLedger() : undefined;
-    const result = await runOwnedProcess(process.execPath, ["--no-warnings", cli, "deploy", "--dry-run", "--config", config, "--outdir", output], { cwd: capsule, env, sample: recorder ? () => privateProcesses(recorder) : privateProcesses, ...(recorder ? {recorder} : {}) });
+    const result = await runOwnedProcess(process.execPath, ["--no-warnings", cli, "deploy", "--dry-run", "--config", config, "--outdir", output], { cwd: capsule, env, sample: () => census(recorder), ...(recorder ? {recorder} : {}), ...(boundary.drain ? {beforeFinal: boundary.drain} : {}) });
     (recorder ? reportObservedWranglerProcess : reportWranglerProcess)(result, report, close);
     const bytes = await report.step(outputPhase, () => readFile(join(output, `${kind}.mjs`)));
     results[kind] = verifyDryRun(result, bytes, receipts[0].bundles[kind], report, { marker, hash, privacy }, [root, cwd]);
   }
   await report.step("final_namespace", boundary.checkBoundary);
-  await report.step("final_descendants", async () => { if ((await privateProcesses()).length) refuse("private-descendant-not-retired"); });
+  await report.step("final_descendants", async () => { if ((await census()).length) refuse("private-descendant-not-retired"); });
   return { version: 1, isolated: true, sourceSha: edgeProof.sourceSha, sourceTree: edgeProof.sourceTree, sourceFiles: 600, dependencyFiles: 268, exactErasures: 4, twoRoots: true, cliSha256: digest(await readFile(cli)), results, cloud: "UNRUN", sdk: "UNRUN" };
 }
 async function offlineCi(report) {
@@ -1614,7 +1642,7 @@ export function launchCli(argv, { run = main, writer = line => process.stdout.wr
   const report = createContainerDiagnostics(), errors = [];
   const prepare = argv[0] === "container-prepare" ? createNativePrepareDiagnostics(prepareIdentity ?? { contextHash: argv[1], nonce: process.env.TASK_NONCE }, prepareWriter) : null;
   if (prepare) report.prepare = prepare;
-  const containerAction = ["container-ci", "container-init", "container-build", "container-prepare"].includes(argv[0]);
+  const containerAction = ["container-ci", "container-init", "container-build", "container-prepare", "container-reaper-probe"].includes(argv[0]);
   let pending = true, emitted = false;
   const failure = code => {
     setExit(code);
@@ -1659,7 +1687,7 @@ export function launchCli(argv, { run = main, writer = line => process.stdout.wr
 }
 export async function main(argv, report) {
   const [action = "plan", ...args] = argv;
-  if (["container-ci", "container-init", "container-build", "container-prepare"].includes(action)) {
+  if (["container-ci", "container-init", "container-build", "container-prepare", "container-reaper-probe"].includes(action)) {
     const load = () => import("./edge-proof-container.mjs");
     report?.prepare?.enter("module_import");
     const { containerMain } = report ? await report.step("module_import", load) : await load();

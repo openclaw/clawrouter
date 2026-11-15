@@ -11,6 +11,8 @@ import { dirname, join, relative, resolve, isAbsolute } from "node:path";
 import { containerContract, harnessInputs, installInputs, parseIdentity, validateIdentity, validateMapping, validateImage, dockerEnvironment, containerEnvironment, createArguments, validateContainerInspect, parseControl, validateTerminal, validateNativeIdentity, parseImageBuildReceipt, parseImageBuildStages, parseNativePrepareStages, observeImageBuild, parseContainerReceipt, parseChildPackaging, createProjectionLedger, parseInitPrerequisites, createAttachProjection, runInitPrerequisites, createInitGuardLedger, initGuardLeaf, createMountObservation, validateEmptyMasks, validateMaskCompletion, parseMounts, validateMountFreshness, validateMounts, validateMetadataMounts, validateChildStatus, validateTarget, cgroupPath, validateLimits, attachContainer, processEvidence, retiredCgroup, raiseContainerFailures, validateContainerDiagnostic, emitContainerFailure } from "../scripts/edge-proof-container.mjs";
 import { frozenGitEnvironment, validateGitExecutable, frozenSource } from "../scripts/edge-proof-build.mjs";
 import { edgeProof } from "../scripts/edge-proof-profile.mjs";
+import { reaperFrame, createReaperClient, parseControlStat, validateControlPair, validateReaperElf } from "../scripts/edge-proof-container.mjs";
+import { bindCensusControls, classifyCensusControl, privateProcesses } from "../scripts/edge-proof.mjs";
 import { launchCli, createPackagingDiagnostics, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, packReceiptOwnedDiagnostic, packReceiptCodeDiagnostic, packReceiptAssociatedDiagnostic, validateReceiptAssociatedDiagnostic, packReceiptCensusDiagnostic, packReceiptObservedWranglerDiagnostic, unpackReceiptObservedWranglerDiagnostic, unpackReceiptWranglerDiagnostic, validateReceiptObservedWranglerDiagnostic, packObservedWranglerCloseDiagnostic, validateObservedWranglerCloseDiagnostic, validateObservedWranglerGroup, packReceiptWranglerDiagnostic, validateReceiptWranglerDiagnostic, packWranglerCloseDiagnostic, validateWranglerCloseDiagnostic, validateReportedWranglerProcess, unpackReceiptCensusDiagnostic, validateReceiptCensusDiagnostic, packCensusCloseDiagnostic, unpackCensusCloseDiagnostic, validateCensusCloseDiagnostic, validateFinalCensus, createFinalCensusLedger, censusStates, unpackReceiptOwnedDiagnostic, validateReceiptOwnedDiagnostic, validateOwnedTrace, validateOwnedCloseDiagnostic, validateOwnedCodeCloseDiagnostic, validateOwnedCode, validateReceiptCodeDiagnostic, ownedCodeClasses, classifyOwnedCode, createOwnedProcessLedger, projectionBoundaries, createContainerDiagnostics, containerProcessDiagnostic, imageBuildStages, runOwnedProcess, nativePrepareStages, createNativePrepareDiagnostics, enumerationOperations, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, initGuardTags, initSourcePhases, validateInitDetail, mountPredicates, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission } from "../scripts/edge-proof.mjs";
 
 const hex = "a".repeat(64), other = "b".repeat(64), imageId = "sha256:" + hex;
@@ -36,8 +38,8 @@ const mounts = () => [
   mount(113, 102, "/proc/kcore", "tmpfs", "0:4", ["rw", "nosuid"], "/null", ["rw", "size=65536k", "mode=755"]),
   mount(114, 107, "/sys/firmware", "tmpfs", "0:10", ["ro"], "/", ["ro"]),
 ];
-const container = () => ({ Id: hex, Image: imageId, State: { Status: "created", Pid: 0, Running: false, Dead: false, ExitCode: 0, OOMKilled: false, Error: "" }, Config: { Labels: { "org.openclaw.edge.nonce": hex, "org.openclaw.edge.context": other }, Entrypoint: [containerContract.node], Cmd: createArguments(plan(), "/owned/cid").slice(createArguments(plan(), "/owned/cid").indexOf(imageId) + 1), User: "501:20", WorkingDir: "/task", Env: plan().imageEnv, Volumes: null }, HostConfig: { NetworkMode: "none", PidMode: "", Tmpfs: { "/task": "rw,noexec,nosuid,nodev,size=2147483648,mode=0700,uid=501,gid=20" }, IpcMode: "private", CgroupnsMode: "private", ReadonlyRootfs: true, Privileged: false, CapDrop: ["ALL"], CapAdd: null, SecurityOpt: ["no-new-privileges=true"], Memory: 4294967296, MemorySwap: 4294967296, NanoCpus: 2000000000, PidsLimit: 128 }, Mounts: [] });
-const native = () => ({ version: 2, contextHash: other, sourceSha: edgeProof.sourceSha, sourceTree: edgeProof.sourceTree, install: { ...installInputs }, runtime: { node: "v24.22.1", abi: "137", platform: "linux", arch: "x64", pnpm: "11.28.4" }, containedLinks: 164, native: { node: { path: containerContract.node, sha256: hex }, git: { path: containerContract.git, sha256: hex }, typescript: { path: "/opt/edge-input/node_modules/.pnpm/ts/lib/tsc", sha256: hex }, esbuild: { path: "/opt/edge-input/node_modules/.pnpm/esbuild/bin/esbuild", sha256: hex }, wrangler: { path: "/opt/edge-input/node_modules/.pnpm/wrangler/wrangler-dist/cli.js", sha256: containerContract.cliHash } } });
+const container = () => ({ Id: hex, Image: imageId, State: { Status: "created", Pid: 0, Running: false, Dead: false, ExitCode: 0, OOMKilled: false, Error: "" }, Config: { Labels: { "org.openclaw.edge.nonce": hex, "org.openclaw.edge.context": other }, Entrypoint: [containerContract.reaper], Cmd: createArguments(plan(), "/owned/cid").slice(createArguments(plan(), "/owned/cid").indexOf(imageId) + 1), User: "501:20", WorkingDir: "/task", Env: plan().imageEnv, Volumes: null }, HostConfig: { NetworkMode: "none", PidMode: "", Tmpfs: { "/task": "rw,noexec,nosuid,nodev,size=2147483648,mode=0700,uid=501,gid=20" }, IpcMode: "private", CgroupnsMode: "private", ReadonlyRootfs: true, Privileged: false, CapDrop: ["ALL"], CapAdd: null, SecurityOpt: ["no-new-privileges=true"], Memory: 4294967296, MemorySwap: 4294967296, NanoCpus: 2000000000, PidsLimit: 128 }, Mounts: [] });
+const native = () => ({ version: 3, reaper: {version:1,contextHash:other,source:{path:"/opt/edge-input/config/edge-proof/reaper.c",sha256:hex},buildSha256:hex,binary:{path:containerContract.reaper,sha256:hex}}, contextHash: other, sourceSha: edgeProof.sourceSha, sourceTree: edgeProof.sourceTree, install: { ...installInputs }, runtime: { node: "v24.22.1", abi: "137", platform: "linux", arch: "x64", pnpm: "11.28.4" }, containedLinks: 164, native: { node: { path: containerContract.node, sha256: hex }, git: { path: containerContract.git, sha256: hex }, typescript: { path: "/opt/edge-input/node_modules/.pnpm/ts/lib/tsc", sha256: hex }, esbuild: { path: "/opt/edge-input/node_modules/.pnpm/esbuild/bin/esbuild", sha256: hex }, wrangler: { path: "/opt/edge-input/node_modules/.pnpm/wrangler/wrangler-dist/cli.js", sha256: containerContract.cliHash } } });
 const receipt = () => ({ version: 2, isolation: "private-container-pid-net-mount", nonce: hex, contextHash: other, nativeHash: hex, sourceSha: edgeProof.sourceSha, sourceTree: edgeProof.sourceTree, sourceFiles: 600, dependencyFiles: 268, exactErasures: 4, twoRoots: true, cliSha256: containerContract.cliHash, results: Object.fromEntries(["edge", "upstream"].map(kind => [kind, { code: 0, signal: null, closed: true, sha256: hex, observedProcesses: 1 }])), cloud: "UNRUN", sdk: "UNRUN", masks: [1, 1, 1, 1, 1, "UNOBSERVABLE"] });
 
 test("parent identity includes real/effective/saved/filesystem columns with no arbitrary UID floor", () => {
@@ -53,7 +55,7 @@ test("parent identity includes real/effective/saved/filesystem columns with no a
 test("base and derived image validators reject inherited hooks, volumes, environment and identity drift", () => {
   validateImage(image());
   for (const change of [r => r.Id = "wrong", r => r.Architecture = "arm64", r => r.Config.OnBuild = ["RUN unsafe"], r => r.Config.Volumes = { "/host": {} }, r => r.Config.Env = [...baseEnv, "HTTP_PROXY=private"], r => r.Config.User = "10001", r => r.Config.Entrypoint = ["sh"], r => r.RepoDigests = []]) { const row = image(); change(row); assert.throws(() => validateImage(row)); }
-  const derived = image(); Object.assign(derived.Config, { Env: plan().imageEnv, User: "501:20", WorkingDir: "/task", Entrypoint: [containerContract.node, "/opt/edge-input/scripts/edge-proof.mjs", "container-init"], Cmd: [], Labels: { "org.openclaw.edge.context": other } });
+  const derived = image(); Object.assign(derived.Config, { Env: plan().imageEnv, User: "501:20", WorkingDir: "/task", Entrypoint: [containerContract.reaper, containerContract.node, "/opt/edge-input/scripts/edge-proof.mjs", "container-init"], Cmd: [], Labels: { "org.openclaw.edge.context": other } });
   validateImage(derived, { derived: true, identity, id: imageId, contextHash: other });
   assert.throws(() => validateImage(derived, { derived: true, identity, id: "sha256:" + other, contextHash: other }));
   assert.throws(() => validateImage(derived, { derived: true, identity, id: imageId, contextHash: hex }));
@@ -157,8 +159,8 @@ test("bounded diagnostics never read getters or print private data and retain al
   let caught = false; try { raiseContainerFailures([undefined]); } catch (error) { caught = true; assert.equal(error, undefined); } assert.equal(caught, true);
   assert.throws(() => raiseContainerFailures([undefined, null]), error => error instanceof AggregateError && error.errors[0] === undefined && error.errors[1] === null);
 });
-test("explicit context inventory is exactly the reviewed 22 paths plus frozen workspace closure", async () => {
-  assert.equal(harnessInputs.length, 22); assert.equal(new Set(harnessInputs).size, 22);
+test("explicit context inventory is exactly the reviewed 23 paths plus frozen workspace closure", async () => {
+  assert.equal(harnessInputs.length, 23); assert.equal(new Set(harnessInputs).size, 23);
   assert.deepEqual(Object.keys(installInputs), ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "admin/package.json"]);
   const dockerfile = await readFile(new URL("../config/edge-proof/Dockerfile", import.meta.url), "utf8");
   assert.ok(dockerfile.includes(containerContract.base)); assert.match(dockerfile, /USER \$\{HOST_UID\}:\$\{HOST_GID\}/); assert.match(dockerfile, /COPY --chown=\$\{HOST_UID\}:\$\{HOST_GID\} input\//);
@@ -3644,3 +3646,118 @@ test("ownership actual image consumer rejects altered context before enumeration
   await assert.rejects(make(forged)(f.sha(JSON.stringify(forged))), /context-identity/);
 });
 // END current/frozen ownership pure tests.
+
+// BEGIN explicit reaper inert tests. Only these callbacks are selected locally.
+function reaperSocket() {
+  const socket = new EventEmitter(); socket.writes = []; socket.destroyed = false;
+  socket.write = (bytes, callback) => { socket.writes.push(Buffer.from(bytes)); callback(); return true; };
+  socket.end = () => { socket.emit("end"); socket.emit("close"); };
+  socket.destroy = () => { socket.destroyed = true; socket.emit("close"); };
+  return socket;
+}
+const reaperBinding = {pid:2, nonce:"a".repeat(64),contextHash:"b".repeat(64)};
+const originalOutcome = promise => promise.then(value=>({failed:false,value}),reason=>({failed:true,reason}));
+const reaperTick = async () => { for(let i=0;i<8;i++)await Promise.resolve(); };
+function reaperReply(socket, index = socket.writes.length - 1, split = 80) {
+  const reply=Buffer.from(socket.writes[index]);reply[4]|=128;
+  socket.emit("data",reply.subarray(0,split));if(split<80)socket.emit("data",reply.subarray(split));
+}
+test("reaper inert actual RPC joins exact partial ACK and FINISH before close", async () => {
+  const socket=reaperSocket(), rpc=createReaperClient(socket,reaperBinding);
+  let done=false;const start=rpc.start().then(()=>{done=true;});await reaperTick();assert.equal(done,false);
+  assert.equal(socket.writes[0].length,80);reaperReply(socket,0,3);await start;
+  const drain=rpc.drain();await reaperTick();assert.equal(socket.writes[1][4],2);assert.equal(socket.writes[1].readUInt32BE(8),2);
+  reaperReply(socket,1,79);await drain;
+  const finish=rpc.finish();await reaperTick();assert.equal(socket.writes[2][4],3);reaperReply(socket,2);await finish;
+  assert.deepEqual(rpc.errors,[]);
+});
+test("reaper inert actual RPC denies foreign replay malformed overflow and held ACK", async () => {
+  for(const mutate of [b=>b[4]=130,b=>b[5]=1,b=>b[8]^=1,b=>b[15]^=1,b=>b[16]^=1,b=>b[48]^=1]){
+    const socket=reaperSocket(),rpc=createReaperClient(socket,reaperBinding),outcome=originalOutcome(rpc.start());
+    const reply=reaperFrame(129,1,reaperBinding);mutate(reply);socket.emit("data",reply);assert.equal((await outcome).failed,true);rpc.abort();
+  }
+  const socket=reaperSocket(),rpc=createReaperClient(socket,reaperBinding);const start=rpc.start();reaperReply(socket);await start;
+  let settled=false;const held=originalOutcome(rpc.drain()).then(value=>{settled=true;return value;});await reaperTick();assert.equal(settled,false);
+  socket.emit("data",Buffer.alloc(81));assert.equal((await held).failed,true);
+  const ignored=originalOutcome(rpc.drain());assert.equal((await ignored).failed,true);rpc.abort();
+});
+test("reaper inert actual RPC retains undefined write event install and close failures", async () => {
+  for(const kind of ["write","event","install"]){
+    const socket=reaperSocket();if(kind==="write")socket.write=()=>{throw undefined;};
+    if(kind==="install"){const on=socket.on;socket.on=function(event,fn){on.call(this,event,fn);if(event==="data")throw undefined;return this;};}
+    const rpc=createReaperClient(socket,reaperBinding),outcome=originalOutcome(rpc.start());if(kind==="event")socket.emit("error",undefined);
+    const value=await outcome;assert.equal(value.failed,true);assert.equal(value.reason,undefined);assert.equal(rpc.errors[0],undefined);rpc.abort();
+  }
+  const socket=reaperSocket(),rpc=createReaperClient(socket,reaperBinding),pending=originalOutcome(rpc.start());socket.emit("close");assert.equal((await pending).failed,true);
+});
+test("reaper inert control exclusion rejects PID reuse missing authority live lookalikes and Z", () => {
+  const controls=bindCensusControls({pid:1,parent:0,start:"10"},{pid:2,parent:1,start:"20"});
+  assert.equal(classifyCensusControl({pid:1,parent:0,start:"10",state:"S"},controls),"reaper");
+  assert.equal(classifyCensusControl({pid:2,parent:1,start:"20",state:"S"},controls),"coordinator");
+  for(const state of ["R","S","Z"])assert.equal(classifyCensusControl({pid:3,parent:1,start:"20",state},controls),null);
+  for(const row of [{pid:2,parent:1,start:"21",state:"S"},{pid:2,parent:3,start:"20",state:"S"},{pid:1,parent:0,start:"10",state:"Z"}])assert.throws(()=>classifyCensusControl(row,controls));
+  assert.throws(()=>classifyCensusControl({pid:1,parent:0,start:"10",state:"S"},{...controls}));
+});
+test("reaper inert actual pair validator binds both namespace views and exact invocation", () => {
+  const identity={uid:[501,501,501,501],gid:[20,20,20,20],groups:[]};
+  const status=pid=>`Uid:\t501\t501\t501\t501\nGid:\t20\t20\t20\t20\nGroups:\t\nNSpid:\t${pid}\nCapInh:\t0\nCapPrm:\t0\nCapEff:\t0\nCapBnd:\t0\nCapAmb:\t0\nNoNewPrivs:\t1\nSeccomp:\t2\n`;
+  const command=[containerContract.node,"/opt/edge-input/scripts/edge-proof.mjs","container-init",reaperBinding.nonce,reaperBinding.contextHash,"501","20"];
+  const namespaces=Object.fromEntries(["pid","mnt","net","user","cgroup"].map((name,i)=>[name,`${name}:[${i+1}]`]));
+  const reaper={pid:1,parent:0,start:"10",status:status(1),exe:containerContract.reaper,namespaces,cgroup:"0::/\n",command:Buffer.from([containerContract.reaper,...command].join("\0")+"\0")};
+  const coordinator={pid:2,parent:1,start:"20",status:status(2),exe:containerContract.node,namespaces,cgroup:"0::/\n",command:Buffer.from(command.join("\0")+"\0")};
+  const expected={identity,...reaperBinding};assert.equal(validateControlPair(reaper,coordinator,expected).coordinator.pid,2);
+  for(const change of [row=>row.parent=3,row=>row.exe="/wrong",row=>row.status=status(3),row=>row.namespaces={...namespaces,pid:"pid:[99]"},row=>row.cgroup="0::/foreign\n",row=>row.command=Buffer.from("foreign")]){
+    const bad={...coordinator};change(bad);assert.throws(()=>validateControlPair(reaper,bad,expected));
+  }
+  const hostReaper={...reaper,pid:100,parent:90,status:status("100\t1")},hostCoordinator={...coordinator,pid:101,parent:100,status:status("101\t2")};
+  assert.equal(validateControlPair(hostReaper,hostCoordinator,{...expected,host:true}).coordinator.pid,2);
+  assert.throws(()=>validateControlPair(hostReaper,hostCoordinator,expected));
+});
+async function reaperOwnedFactory(sample, beforeFinal) {
+  const source=await readFile(new URL("../scripts/edge-proof.mjs",import.meta.url),"utf8");
+  const body=source.slice(source.indexOf("export async function runOwnedProcess("),source.indexOf("export function requireProcessSuccess("));
+  assert.ok(body.includes("await beforeFinal()"));
+  const child=new EventEmitter();child.pid=42;child.stdout=new EventEmitter();child.stderr=new EventEmitter();
+  const signals=new EventEmitter(),ticks=[],calls=[];
+  const bindings={createHash,process:{kill:(...args)=>calls.push(args)},spawn:()=>child,setTimeout:fn=>{ticks.push(fn);return fn;},setInterval:fn=>{calls.monitor=fn;return fn;},clearTimeout:()=>{},clearInterval:()=>{},ownedNote:()=>{},ownedArgument:(_r,_why,_sig,value)=>value,ownedValue:(_r,_m,_v,value)=>value,ownedCondition:(_r,value)=>value,refuse:code=>{throw new Error(code);}};
+  const run=new Function(...Object.keys(bindings),body.replace("export ","")+"return runOwnedProcess;")(...Object.values(bindings));
+  const result=run("inert",[],{sample,beforeFinal,signalSource:signals});return{child,result,ticks,calls};
+}
+test("reaper inert original close monitor drain census ordering and undefined failure progress", async () => {
+  const order=[];let release;
+  const f=await reaperOwnedFactory(async()=>{order.push("sample");return[];},()=>new Promise(resolve=>{order.push("drain");release=resolve;}));
+  f.child.emit("close",0,null);await reaperTick();assert.deepEqual(order,["drain"]);release();const value=await f.result;assert.deepEqual(order,["drain","sample"]);assert.equal(value.closed,true);
+  const g=await reaperOwnedFactory(async()=>{order.push("failure-census");return[];},()=>{throw undefined;});g.child.emit("close",0,null);const failed=await g.result;assert.equal(failed.errors.length,1);assert.equal(failed.errors[0],undefined);assert.equal(order.at(-1),"failure-census");
+  let releaseMonitor, samples=0, drained=false;
+  const h=await reaperOwnedFactory(()=>++samples===1?new Promise(resolve=>{releaseMonitor=resolve;}):Promise.resolve([]),()=>{drained=true;});
+  h.calls.monitor();h.child.emit("close",0,null);await reaperTick();assert.equal(drained,false);releaseMonitor([]);await reaperTick();h.ticks.at(-1)();await h.result;assert.equal(drained,true);assert.equal(samples,2);
+});
+test("reaper inert actual census requires both exact controls and retains every workload state", async () => {
+  const source=await readFile(new URL("../scripts/edge-proof.mjs",import.meta.url),"utf8");
+  const body=source.slice(source.indexOf("const censusControls ="),source.indexOf("// Original operations remain authoritative;"));
+  const text=(pid,parent,start,state)=>`${pid} (inert) ${[state,String(parent),String(pid),...Array(16).fill("0"),start].join(" ")}`;
+  let rows={"1":text(1,0,"10","S"),"2":text(2,1,"20","S"),"3":text(3,1,"30","Z")};
+  const bindings={process:{platform:"linux",pid:2,ppid:1},readdir:async()=>Object.keys(rows),readFile:async path=>rows[path.split("/")[2]],ownedNote:()=>{},ownedLeaf:(_r,_id,value)=>value,refuse:code=>{throw new Error(code);}};
+  const api=new Function(...Object.keys(bindings),body.replaceAll("export ","")+"return{bindCensusControls,privateProcesses};")(...Object.values(bindings));
+  const controls=api.bindCensusControls({pid:1,parent:0,start:"10"},{pid:2,parent:1,start:"20"});
+  const found=await api.privateProcesses(undefined,controls);assert.equal(found.length,1);assert.equal(found[0].state,"Z");
+  delete rows["1"];await assert.rejects(api.privateProcesses(undefined,controls),/missing-census-control/);
+  rows["1"]=text(1,0,"11","S");await assert.rejects(api.privateProcesses(undefined,controls),/census-control-drift/);
+});
+test("reaper inert ELF admission rejects foreign ABI and malformed interpreter", () => {
+  const elf=Buffer.alloc(256);Buffer.from([127,69,76,70,2,1,1]).copy(elf);elf.writeUInt16LE(3,16);elf.writeUInt16LE(62,18);elf.writeUInt32LE(1,20);elf.writeBigUInt64LE(64n,32);elf.writeUInt16LE(56,54);elf.writeUInt16LE(1,56);elf.writeUInt32LE(3,64);elf.writeBigUInt64LE(128n,72);
+  const path=Buffer.from("/lib64/ld-linux-x86-64.so.2\0");elf.writeBigUInt64LE(BigInt(path.length),96);path.copy(elf,128);assert.equal(validateReaperElf(elf),"/lib64/ld-linux-x86-64.so.2");
+  for(const change of [b=>b[4]=1,b=>b[18]=183,b=>b.writeBigUInt64LE(9999n,32),b=>b[128]=0]){const bad=Buffer.from(elf);change(bad);assert.throws(()=>validateReaperElf(bad));}
+});
+test("reaper inert source binds real hosted fixtures and original module imports", async () => {
+  const [container,proof,c,docker]=await Promise.all(["scripts/edge-proof-container.mjs","scripts/edge-proof.mjs","config/edge-proof/reaper.c","config/edge-proof/Dockerfile"].map(path=>readFile(new URL("../"+path,import.meta.url),"utf8")));
+  assert.ok(container.includes('import { Socket } from "node:net"'));
+  assert.ok(container.includes('import { bindCensusControls, privateProcesses } from "./edge-proof.mjs"'));
+  assert.ok(proof.includes('"container-reaper-probe"'));
+  assert.ok(container.includes('await hostedReaperFixtures(args, rpc, controls)'));
+  for(const literal of ['waitpid(-1, &value, WNOHANG)','SCM_CREDENTIALS','MSG_CTRUNC | MSG_TRUNC','SO_PASSCRED','pselect(','orphan_fixture() || credential_fixture()','--fixture-hold','--check-fd'])assert.ok(c.includes(literal),literal);
+  assert.ok(c.includes('drain(intermediate, &exited, &status) != 0'));
+  assert.ok(docker.includes('ENTRYPOINT ["/opt/edge-reaper/reaper", "/usr/local/bin/node"'));
+  assert.ok(!c.includes('sleep('));assert.ok(!c.includes('SIG_IGN'));assert.ok(!c.includes('SA_NOCLDWAIT'));
+});
+// END explicit reaper inert tests.

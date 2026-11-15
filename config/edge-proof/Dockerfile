@@ -16,8 +16,8 @@ RUN edge_seq=0; \
     git_executable() { test -x /usr/bin/git; }; \
     pnpm_bootstrap() { /usr/local/bin/npm install --global --ignore-scripts pnpm@11.28.4; }; \
     pnpm_version() { test "$(/usr/local/bin/pnpm --version)" = 11.28.4; }; \
-    input_directories() { mkdir -p /opt/edge-input /opt/build-home; }; \
-    input_ownership() { chown "$HOST_UID:$HOST_GID" /opt/edge-input /opt/build-home; }; \
+    input_directories() { mkdir -p /opt/edge-input /opt/build-home /opt/edge-reaper; }; \
+    input_ownership() { chown "$HOST_UID:$HOST_GID" /opt/edge-input /opt/build-home /opt/edge-reaper; }; \
     edge_stage node_version node_version \
     && edge_stage node_abi node_abi \
     && edge_stage architecture architecture \
@@ -38,5 +38,5 @@ RUN edge_seq=16; \
     && edge_stage native_prepare native_prepare
 LABEL org.openclaw.edge.context=${CONTEXT_HASH} org.openclaw.edge.nonce=${TASK_NONCE}
 WORKDIR /task
-ENTRYPOINT ["/usr/local/bin/node", "/opt/edge-input/scripts/edge-proof.mjs", "container-init"]
+ENTRYPOINT ["/opt/edge-reaper/reaper", "/usr/local/bin/node", "/opt/edge-input/scripts/edge-proof.mjs", "container-init"]
 CMD []

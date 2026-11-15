@@ -8,6 +8,8 @@ import { deflateSync } from "node:zlib";
 import { createRequire } from "node:module";
 import { channel } from "node:diagnostics_channel";
 import { errorMonitor } from "node:events";
+import { Socket } from "node:net";
+import { bindCensusControls, privateProcesses } from "./edge-proof.mjs";
 import { edgeProof } from "./edge-proof-profile.mjs";
 import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, validateContainerDiagnostic, initGuardTags, initSourcePhases, validateInitDetail, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic, projectionBoundaries, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, packReceiptOwnedDiagnostic, packReceiptCodeDiagnostic, packReceiptAssociatedDiagnostic, packReceiptCensusDiagnostic, unpackCensusCloseDiagnostic, validateWranglerCloseDiagnostic, packReceiptObservedWranglerDiagnostic, validateObservedWranglerCloseDiagnostic } from "./edge-proof.mjs";
 export { validateContainerDiagnostic, emitContainerFailure } from "./edge-proof.mjs";
@@ -15,7 +17,7 @@ export { validateContainerDiagnostic, emitContainerFailure } from "./edge-proof.
 export const containerContract = Object.freeze({
   version: 2,
   base: "docker.io/library/node@sha256:0925478b811e8890f5508ad2a75135933310effd45492696ecf7c111c8339d02",
-  input: "/opt/edge-input", node: "/usr/local/bin/node", git: "/usr/bin/git",
+  input: "/opt/edge-input", node: "/usr/local/bin/node", git: "/usr/bin/git", reaper: "/opt/edge-reaper/reaper",
   cliHash: "934d8051582ed5d85336e9e6677126ec87324a47166974de22d49a5523ba4d11",
   memory: 4294967296, taskBytes: 2147483648, pids: 128, cpus: 2000000000,
 });
@@ -27,6 +29,7 @@ export const harnessInputs = Object.freeze([
   "test/edge-proof-upstream.test.mjs", "test/edge-proof.test.mjs", "test/fixtures/openclaw-edge-native-cancellation-contract.test.ts",
   "test/openclaw-edge-native-cancellation.test.mjs", "worker/fixtures/edge-native-cancellation.ts", "worker/fixtures/edge-native-upstream.ts",
   "wrangler.edge-proof-upstream.toml", "wrangler.edge-proof.toml",
+  "config/edge-proof/reaper.c",
 ]);
 export const installInputs = Object.freeze({
   "package.json": "07130060a46c69fe292aa5865b331cc6c06e3b215a402c362787db4c30443841",
@@ -156,6 +159,105 @@ export function raiseContainerFailures(errors) {
   if (errors.length) throw new AggregateError(errors, "edge-container: independent failures");
 }
 
+// Private EDR1 wire. No identity or native error text is forwarded publicly.
+export function reaperFrame(op, sequence, binding) {
+  check([1,2,3,129,130,131].includes(op) && Number.isInteger(sequence) && sequence > 0 && sequence < 0xffffffff && Number.isInteger(binding.pid) && binding.pid > 1 && binding.pid <= 0x7fffffff && hashPattern.test(binding.nonce) && hashPattern.test(binding.contextHash), "reaper-frame-identity");
+  const frame = Buffer.alloc(80); frame.write("EDR1", 0, "ascii"); frame[4] = op;
+  frame.writeUInt32BE(sequence, 8); frame.writeUInt32BE(binding.pid, 12);
+  Buffer.from(binding.nonce, "hex").copy(frame, 16); Buffer.from(binding.contextHash, "hex").copy(frame, 48);
+  return frame;
+}
+export function createReaperClient(socket, binding) {
+  const errors = []; let next = 1, pending = null, hello = false, finishing = false, closed = false, closeResolve;
+  const close = new Promise(resolve => { closeResolve = resolve; });
+  const failed = error => { errors.push(error); if (pending) { const original = pending; pending = null; original.reject(error); } };
+  const guard = fn => (...args) => { try { fn(...args); } catch (error) { failed(error); } };
+  const onData = guard(data => {
+    check(Buffer.isBuffer(data) && pending && !closed && pending.bytes.length + data.length <= 80, "reaper-unsolicited-or-overflow");
+    pending.bytes = Buffer.concat([pending.bytes, data]);
+    if (pending.bytes.length === 80) {
+      check(pending.bytes.equals(reaperFrame(pending.op | 128, pending.sequence, binding)), "reaper-ack-identity");
+      const original = pending; pending = null; if (original.op === 3) finishing = true; original.resolve();
+    }
+  });
+  const onError = guard(error => failed(error));
+  const onEnd = guard(() => { check(finishing && !pending, "reaper-premature-eof"); });
+  const onClose = guard(() => { closed = true; if (!finishing || pending) failed(new Error("edge-container: reaper-premature-close")); closeResolve(); });
+  for (const [event, listener] of [["data",onData],["error",onError],["end",onEnd],["close",onClose]]) {
+    try { socket.on(event, listener); } catch (error) { failed(error); }
+  }
+  const request = async op => {
+    raiseContainerFailures(errors);
+    check(!closed && !pending && !finishing && (hello ? op === 2 || op === 3 : op === 1), "reaper-request-order");
+    const sequence = next++, frame = reaperFrame(op, sequence, binding);
+    const completion = new Promise((resolve, reject) => { pending = {op, sequence, bytes: Buffer.alloc(0), resolve, reject}; });
+    // Install the rejection observer before write: callbacks may be synchronous.
+    void completion.catch(() => {});
+    try { socket.write(frame, error => { if (error != null) failed(error); }); } catch (error) { failed(error); }
+    await completion; raiseContainerFailures(errors); if (op === 1) hello = true;
+  };
+  return { errors, start: () => request(1), drain: () => request(2),
+    async finish() {
+      try {
+        await request(3); finishing = true;
+        socket.end(); await close; raiseContainerFailures(errors);
+      } catch (error) {
+        if (!errors.includes(error)) errors.push(error);
+        try { socket.destroy(); } catch (other) { errors.push(other); }
+        raiseContainerFailures(errors);
+      }
+    },
+    abort() { try { socket.destroy(); } catch (error) { failed(error); } },
+  };
+}
+export function parseControlStat(raw, pid) {
+  check(typeof raw === "string" && raw.length < 65536 && raw.startsWith(`${pid} (`), "control-stat");
+  const fields = raw.slice(raw.lastIndexOf(")") + 2).trim().split(" ");
+  check(["R","S","D","I"].includes(fields[0]) && /^\d+$/.test(fields[1]) && /^\d+$/.test(fields[19]), "control-stat-fields");
+  return {pid, parent: number(fields[1]), start: fields[19]};
+}
+async function readControl(pid, read = readFile, link = readlink) {
+  const prefix = `/proc/${pid}`;
+  const first = parseControlStat(await read(`${prefix}/stat`, "utf8"), pid);
+  const value = {...first, status: await read(`${prefix}/status`, "utf8"), exe: await link(`${prefix}/exe`), executableHash: hash(await read(`${prefix}/exe`)), command: await read(`${prefix}/cmdline`),
+    namespaces: Object.fromEntries(await Promise.all(["pid","mnt","net","user","cgroup"].map(async name => [name, await link(`${prefix}/ns/${name}`)]))), cgroup: await read(`${prefix}/cgroup`, "utf8")};
+  const closingNamespaces = Object.fromEntries(await Promise.all(["pid","mnt","net","user","cgroup"].map(async name=>[name,await link(`${prefix}/ns/${name}`)])));
+  check(same(first, parseControlStat(await read(`${prefix}/stat`, "utf8"), pid)) && same(value.namespaces,closingNamespaces) && value.cgroup === await read(`${prefix}/cgroup`,"utf8") && value.exe === await link(`${prefix}/exe`), "control-read-drift"); return value;
+}
+export function validateControlPair(reaper, coordinator, {identity, nonce, contextHash, host = false}) {
+  validateChildStatus(reaper.status, identity); validateChildStatus(coordinator.status, identity);
+  const nspids = row => {
+    const lines = row.status.split("\n").filter(line => line.startsWith("NSpid:")); check(lines.length === 1, "control-nspid");
+    return lines[0].slice(6).trim().split(/\s+/).map(text => number(text));
+  };
+  const a = nspids(reaper), b = nspids(coordinator);
+  check(a.length === (host ? 2 : 1) && b.length === a.length && a[0] === reaper.pid && b[0] === coordinator.pid && a.at(-1) === 1 && b.at(-1) > 1 && coordinator.parent === reaper.pid, "control-pid-correspondence");
+  check(host || reaper.parent === 0, "control-init-parent");
+  check(["pid","mnt","net","user","cgroup"].every(name=>new RegExp(`^${name}:\\[\\d+\\]$`).test(reaper.namespaces[name])), "control-namespace-format");
+  check(reaper.exe === containerContract.reaper && coordinator.exe === containerContract.node && ["pid","mnt","net","user","cgroup"].every(name => reaper.namespaces[name] === coordinator.namespaces[name]) && reaper.cgroup === coordinator.cgroup, "control-custody");
+  const command = [containerContract.node, "/opt/edge-input/scripts/edge-proof.mjs", "container-init", nonce, contextHash, String(identity.uid[0]), String(identity.gid[0])];
+  check(Buffer.isBuffer(coordinator.command) && coordinator.command.equals(Buffer.from(command.join("\0") + "\0")) && Buffer.isBuffer(reaper.command) && reaper.command.equals(Buffer.from([containerContract.reaper, ...command].join("\0") + "\0")), "control-invocation");
+  return {reaper: {pid:a.at(-1), parent:host ? 0 : reaper.parent, start:reaper.start}, coordinator: {pid:b.at(-1), parent:1, start:coordinator.start}};
+}
+async function qualifyControls(identity, nonce, contextHash, coordinatorPid = process.pid) {
+  const reaper = await readControl(1), coordinator = await readControl(coordinatorPid);
+  const qualified = await qualifyReaper(contextHash);
+  check(reaper.executableHash === qualified.binary.sha256 && coordinator.executableHash === hash(await readFile(containerContract.node)), "control-executable-hash");
+  return validateControlPair(reaper, coordinator, {identity, nonce, contextHash});
+}
+async function parentControls(initPid, expected, identity, nonce, contextHash, native) {
+  const before = await cgroupStamp(readlink, "/proc/self");
+  const children = (await readFile(`/proc/${initPid}/task/${initPid}/children`, "utf8")).trim().split(/\s+/);
+  check(children.length === 1 && /^[1-9]\d*$/.test(children[0]), "control-single-coordinator");
+  const reaper = await readControl(initPid), coordinator = await readControl(number(children[0]));
+  check(reaper.start === expected.start && ["pid","mnt","net","user","cgroup"].every(name => reaper.namespaces[name] === expected.namespaces[name]) && reaper.cgroup === expected.cgroup, "control-target-binding");
+  check(reaper.executableHash === native.reaper.binary.sha256 && coordinator.executableHash === native.native.node.sha256, "parent-control-executable");
+  const result = validateControlPair(reaper, coordinator, {identity, nonce, contextHash, host:true});
+  check(same(before, await cgroupStamp(readlink, "/proc/self")), "control-observer-drift");
+  const snapshot = row => ({pid:row.pid, parent:row.parent, start:row.start, exe:row.exe, executableHash:row.executableHash, command:row.command.toString("hex"), namespaces:row.namespaces, cgroup:row.cgroup});
+  return {reaper:snapshot(reaper), coordinator:snapshot(coordinator), result};
+}
+
 // This ledger belongs only to one parent admission callback; cleanup never receives it.
 export function createParentAdmissionLedger() {
   const errors = [], stack = []; let source = 0, visit = 1, role = 0, predicate = 0, seen = 0, passed = 0, falseLeaf = 0, evaluating = false, sealed = false, broken = false, count = null, saturation = 0, mount;
@@ -216,7 +318,7 @@ export function validateImage(image, { derived = false, identity, id, contextHas
   check(config && (!config.OnBuild || config.OnBuild.length === 0) && (!config.Volumes || Object.keys(config.Volumes).length === 0), "image-implicit-input");
   const baseEnv = ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "NODE_VERSION=24.22.1", "YARN_VERSION=1.22.22"];
   check(same(config.Env, derived ? [...baseEnv, "PNPM_HOME=/usr/local/share/pnpm"] : baseEnv), "image-environment");
-  check(same(config.Entrypoint, derived ? [containerContract.node, "/opt/edge-input/scripts/edge-proof.mjs", "container-init"] : ["docker-entrypoint.sh"]), "image-entrypoint");
+  check(same(config.Entrypoint, derived ? [containerContract.reaper, containerContract.node, "/opt/edge-input/scripts/edge-proof.mjs", "container-init"] : ["docker-entrypoint.sh"]), "image-entrypoint");
   check(same(config.Cmd, derived ? [] : ["node"]) || derived && config.Cmd === null, "image-command");
   check(config.User === (derived ? `${identity.uid[0]}:${identity.gid[0]}` : "") && config.WorkingDir === (derived ? "/task" : ""), "image-user-cwd");
   if (derived) check(config.Labels?.["org.openclaw.edge.context"] === contextHash, "image-context-label");
@@ -238,7 +340,7 @@ export function createArguments(plan, cidFile) {
   check(imagePattern.test(plan.image) && hashPattern.test(plan.nonce) && hashPattern.test(plan.contextHash) && isAbsolute(cidFile), "create-plan");
   const uid = plan.identity.uid[0], gid = plan.identity.gid[0];
   check(uid > 0 && gid > 0 && Number.isSafeInteger(uid) && Number.isSafeInteger(gid), "create-identity");
-  return ["create", "--cidfile", cidFile, "--platform=linux/amd64", "--network=none", "--ipc=private", "--cgroupns=private", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges=true", "--user", `${uid}:${gid}`, "--pids-limit=128", "--cpus=2", "--memory=4g", "--memory-swap=4g", "--stop-timeout=2", "--interactive", "--log-driver=none", "--tmpfs", `/task:rw,noexec,nosuid,nodev,size=2147483648,mode=0700,uid=${uid},gid=${gid}`, "--workdir=/task", "--label", `org.openclaw.edge.nonce=${plan.nonce}`, "--label", `org.openclaw.edge.context=${plan.contextHash}`, "--entrypoint", containerContract.node, plan.image, "/opt/edge-input/scripts/edge-proof.mjs", "container-init", plan.nonce, plan.contextHash, String(uid), String(gid)];
+  return ["create", "--cidfile", cidFile, "--platform=linux/amd64", "--network=none", "--ipc=private", "--cgroupns=private", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges=true", "--user", `${uid}:${gid}`, "--pids-limit=128", "--cpus=2", "--memory=4g", "--memory-swap=4g", "--stop-timeout=2", "--interactive", "--log-driver=none", "--tmpfs", `/task:rw,noexec,nosuid,nodev,size=2147483648,mode=0700,uid=${uid},gid=${gid}`, "--workdir=/task", "--label", `org.openclaw.edge.nonce=${plan.nonce}`, "--label", `org.openclaw.edge.context=${plan.contextHash}`, "--entrypoint", containerContract.reaper, plan.image, containerContract.node, "/opt/edge-input/scripts/edge-proof.mjs", "container-init", plan.nonce, plan.contextHash, String(uid), String(gid)];
 }
 export function validateContainerInspect(row, plan, cid, recorder) {
   check(parentEvaluate(recorder, 8, () => parentLeaf(recorder, 1, cidPattern.test(cid)) && parentLeaf(recorder, 2, row.Id === cid) && parentLeaf(recorder, 3, row.Image === plan.image) && parentLeaf(recorder, 4, row.Config?.Labels?.["org.openclaw.edge.nonce"] === plan.nonce) && parentLeaf(recorder, 5, row.Config.Labels["org.openclaw.edge.context"] === plan.contextHash)), "container-custody");
@@ -253,7 +355,7 @@ export function validateContainerInspect(row, plan, cid, recorder) {
   check(parentEvaluate(recorder, 15, () => parentLeaf(recorder, 1, Array.isArray(row.Mounts)) && parentLeaf(recorder, 2, row.Mounts.length === 0)), "container-mounts");
   check(parentEvaluate(recorder, 16, () => parentLeaf(recorder, 1, same(h.Tmpfs, { "/task": `rw,noexec,nosuid,nodev,size=2147483648,mode=0700,uid=${plan.identity.uid[0]},gid=${plan.identity.gid[0]}` }))), "container-tmpfs");
   const expected = createArguments(plan, "/unused");
-  check(parentEvaluate(recorder, 17, () => parentLeaf(recorder, 1, same(c.Entrypoint, [containerContract.node])) && parentLeaf(recorder, 2, same(c.Cmd, expected.slice(expected.indexOf(plan.image) + 1))) && parentLeaf(recorder, 3, c.User === `${plan.identity.uid[0]}:${plan.identity.gid[0]}`) && parentLeaf(recorder, 4, c.WorkingDir === "/task")), "container-command");
+  check(parentEvaluate(recorder, 17, () => parentLeaf(recorder, 1, same(c.Entrypoint, [containerContract.reaper])) && parentLeaf(recorder, 2, same(c.Cmd, expected.slice(expected.indexOf(plan.image) + 1))) && parentLeaf(recorder, 3, c.User === `${plan.identity.uid[0]}:${plan.identity.gid[0]}`) && parentLeaf(recorder, 4, c.WorkingDir === "/task")), "container-command");
   check(parentEvaluate(recorder, 18, () => parentLeaf(recorder, 1, same(c.Env, plan.imageEnv)) && parentLeaf(recorder, 2, !c.Volumes) && parentLeaf(recorder, 3, !c.OnBuild?.length)), "container-env");
   return row;
 }
@@ -277,9 +379,95 @@ async function fileIdentity(path) {
   check(isAbsolute(path) && await realpath(path) === path && (await lstat(path)).isFile(), "native-realpath");
   return { path, sha256: hash(await readFile(path)) };
 }
+const reaperBuildRoot = "/opt/edge-reaper";
+const reaperSource = "/opt/edge-input/config/edge-proof/reaper.c";
+const reaperCompileArguments = Object.freeze([
+  ["-std=c11", "-O2", "-Wall", "-Wextra", "-Werror", "-fstack-protector-strong", "-fPIE", "-MD", "-MF", "/opt/edge-reaper/headers.d", "-MT", "reaper", "-c", reaperSource, "-o", "/opt/edge-reaper/reaper.o"],
+  ["-pie", "-Wl,-z,relro,-z,now", "-Wl,-t", "/opt/edge-reaper/reaper.o", "-o", "/opt/edge-reaper/reaper"],
+]);
+export function validateReaperElf(bytes) {
+  check(Buffer.isBuffer(bytes) && bytes.length >= 64 && bytes.subarray(0,7).equals(Buffer.from([127,69,76,70,2,1,1])) && [0,3].includes(bytes[7]) && bytes[8] === 0 && bytes.readUInt16LE(16) === 3 && bytes.readUInt16LE(18) === 62 && bytes.readUInt32LE(20) === 1, "reaper-elf-linux-x64");
+  const offset = bytes.readBigUInt64LE(32), size = bytes.readUInt16LE(54), count = bytes.readUInt16LE(56);
+  check(offset <= BigInt(bytes.length) && size === 56 && count > 0 && count < 64 && offset + BigInt(size * count) <= BigInt(bytes.length), "reaper-elf-headers");
+  const interpreters = [];
+  for (let i = 0; i < count; i++) {
+    const row = Number(offset) + i * size;
+    if (bytes.readUInt32LE(row) !== 3) continue;
+    const start = bytes.readBigUInt64LE(row + 8), length = bytes.readBigUInt64LE(row + 32);
+    check(length > 1n && length < 256n && start + length <= BigInt(bytes.length), "reaper-elf-interpreter");
+    const value = bytes.subarray(Number(start), Number(start + length));
+    check(value.at(-1) === 0 && !value.subarray(0,-1).includes(0), "reaper-elf-interpreter-nul"); interpreters.push(value.subarray(0,-1).toString("ascii"));
+  }
+  check(same(interpreters, ["/lib64/ld-linux-x86-64.so.2"]), "reaper-elf-loader"); return interpreters[0];
+}
+function validateReaperBuild(value, contextHash) {
+  exactKeys(value, ["version","contextHash","source","tools","headers","links","arguments","object","binary"]);
+  check(value.version === 1 && value.contextHash === contextHash && same(value.arguments, reaperCompileArguments) && value.source.path === reaperSource && hashPattern.test(value.source.sha256) && value.binary.path === containerContract.reaper && hashPattern.test(value.binary.sha256), "reaper-build-binding");
+  check(value.object.path === "/opt/edge-reaper/reaper.o" && hashPattern.test(value.object.sha256), "reaper-object-binding");
+  for (const row of [value.source,value.object,value.binary,...value.headers,...value.links]) exactKeys(row,["path","sha256"]);
+  check(Array.isArray(value.tools) && value.tools.length === 5 && value.tools.map(row => row.role).join() === "gcc,cc1,as,collect2,ld", "reaper-build-tools");
+  for (const row of value.tools) {
+    exactKeys(row, ["role","path","sha256","version"]); check(typeof row.version === "string" && row.version.length > 0 && row.version.length <= 512 && !/[\x00-\x1f\x7f]/.test(row.version), "reaper-tool-version");
+  }
+  for (const rows of [value.headers,value.links]) check(Array.isArray(rows) && rows.length > 0 && rows.length <= 512 && new Set(rows.map(row => row.path)).size === rows.length, "reaper-build-closure");
+  for (const row of [...value.tools,...value.headers,...value.links]) check(typeof row.path === "string" && /^\/(?:usr|lib|lib64)\/[a-zA-Z0-9_./+-]+$/.test(row.path) && !row.path.split("/").includes("..") && hashPattern.test(row.sha256), "reaper-build-file");
+  return value;
+}
+async function reaperFile(path, executable = false) {
+  const canonical = await realpath(path), info = await stat(canonical);
+  check([reaperSource,containerContract.reaper,"/opt/edge-reaper/reaper.o"].includes(canonical) || /^\/(?:usr|lib|lib64)\/[a-zA-Z0-9_./+-]+$/.test(canonical) && !canonical.split("/").includes(".."), "reaper-file-root");
+  check(info.isFile() && (!executable || (info.mode & 0o111) !== 0), "reaper-build-regular-file");
+  return {path:canonical, sha256:hash(await readFile(canonical))};
+}
+async function compileReaper(contextHash) {
+  check(process.platform === "linux" && process.arch === "x64" && process.version === "v24.22.1", "reaper-build-runtime");
+  const inputPlan = JSON.parse(await readFile(join(containerContract.input,".edge-context.json"),"utf8")); validateContextPlan(inputPlan,contextHash);
+  const source = await reaperFile(reaperSource);
+  check(inputPlan.harness.find(row=>row.path==="config/edge-proof/reaper.c")?.sha256 === source.sha256 && source.path === reaperSource, "reaper-original-source");
+  const options = {env:{PATH:"/usr/bin:/bin",LANG:"C",HOME:"/opt/build-home"}, encoding:"utf8", timeout:60000, maxBuffer:1024*1024};
+  const gcc = await reaperFile("/usr/bin/gcc", true);
+  check(execFileSync(gcc.path, ["-dumpmachine"], options).trim() === "x86_64-linux-gnu", "reaper-tool-target");
+  const tools = [];
+  for (const role of ["gcc","cc1","as","collect2","ld"]) {
+    const selected = role === "gcc" ? gcc.path : execFileSync(gcc.path, [`-print-prog-name=${role}`], options).trim();
+    const file = await reaperFile(isAbsolute(selected) ? selected : join("/usr/bin", selected), true);
+    const version = execFileSync(file.path, ["--version"], options).split("\n")[0]; tools.push({role,...file,version});
+  }
+  execFileSync(gcc.path, [...reaperCompileArguments[0]], options);
+  const trace = execFileSync(gcc.path, [...reaperCompileArguments[1]], options);
+  const dependencyText = await readFile(join(reaperBuildRoot,"headers.d"),"utf8");
+  check(dependencyText.startsWith("reaper:"), "reaper-header-format");
+  const headerPaths = dependencyText.slice(7).replace(/\\\n/g," ").trim().split(/\s+/);
+  check(headerPaths.includes(reaperSource) && headerPaths.every(path => /^\/[a-zA-Z0-9_./+-]+$/.test(path)), "reaper-header-paths");
+  const links = trace.trim().split("\n").map(line => line.trim());
+  check(links.filter(path => path === "/opt/edge-reaper/reaper.o").length === 1, "reaper-original-link-object");
+  const linked = links.filter(path => path !== "/opt/edge-reaper/reaper.o");
+  check(linked.every(path => /^\/(?:usr|lib|lib64)\/[a-zA-Z0-9_./+-]+$/.test(path)), "reaper-link-trace");
+  const loader = validateReaperElf(await readFile(containerContract.reaper));
+  const inventory = async paths => {
+    const rows = await Promise.all([...new Set(paths)].sort().map(path => reaperFile(path)));
+    return [...new Map(rows.map(row => [row.path,row])).values()].sort((a,b)=>a.path.localeCompare(b.path,"en"));
+  };
+  const value = validateReaperBuild({version:1, contextHash, source, tools, headers:await inventory(headerPaths.filter(path=>path!==reaperSource)), links:await inventory([...linked,loader]), arguments:reaperCompileArguments.map(args=>[...args]), object:await reaperFile("/opt/edge-reaper/reaper.o"), binary:await reaperFile(containerContract.reaper,true)},contextHash);
+  await writeFile(join(reaperBuildRoot,"build.json"), JSON.stringify(value), {flag:"wx",mode:0o444});
+}
+async function qualifyReaper(contextHash) {
+  const text = await readFile(join(reaperBuildRoot,"build.json"),"utf8"); check(Buffer.byteLength(text) < 128*1024,"reaper-build-capacity");
+  const value = validateReaperBuild(JSON.parse(text),contextHash);
+  check(JSON.stringify(value) === text,"reaper-build-canonical");
+  for (const row of [value.source,value.object,value.binary,...value.tools,...value.headers,...value.links]) check(same(await reaperFile(row.path, row === value.binary || value.tools.includes(row)), {path:row.path,sha256:row.sha256}), "reaper-build-drift");
+  validateReaperElf(await readFile(containerContract.reaper));
+  return {version:1, contextHash, source:value.source, buildSha256:hash(text), binary:value.binary};
+}
+function validateReaperIdentity(value, contextHash) {
+  exactKeys(value,["version","contextHash","source","buildSha256","binary"]);
+  exactKeys(value.source,["path","sha256"]); exactKeys(value.binary,["path","sha256"]);
+  check(value.version === 1 && value.contextHash === contextHash && value.source.path === reaperSource && value.binary.path === containerContract.reaper && [value.source.sha256,value.buildSha256,value.binary.sha256].every(value=>hashPattern.test(value)), "reaper-image-identity");
+}
 export function validateNativeIdentity(receipt, plan) {
-  exactKeys(receipt, ["version", "contextHash", "sourceSha", "sourceTree", "install", "runtime", "native", "containedLinks"]);
-  check(receipt.version === 2 && receipt.contextHash === plan.contextHash && receipt.sourceSha === edgeProof.sourceSha && receipt.sourceTree === edgeProof.sourceTree && same(receipt.install, installInputs), "native-inputs");
+  exactKeys(receipt, ["version", "contextHash", "sourceSha", "sourceTree", "install", "runtime", "native", "containedLinks", "reaper"]);
+  check(receipt.version === 3 && receipt.contextHash === plan.contextHash && receipt.sourceSha === edgeProof.sourceSha && receipt.sourceTree === edgeProof.sourceTree && same(receipt.install, installInputs), "native-inputs");
+  validateReaperIdentity(receipt.reaper, plan.contextHash);
   check(same(receipt.runtime, { node: "v24.22.1", abi: "137", platform: "linux", arch: "x64", pnpm: "11.28.4" }), "native-runtime");
   exactKeys(receipt.native, ["node", "git", "typescript", "esbuild", "wrangler"]);
   for (const [key, value] of Object.entries(receipt.native)) {
@@ -323,7 +511,7 @@ async function qualifyImageInputs(contextHash, prepare) {
   native.esbuild = await fileIdentity(await realpath(esbuildRequire.resolve("@esbuild/linux-x64/bin/esbuild")));
   prepare?.enter("native_wrangler");
   native.wrangler = await fileIdentity(join(dirname(await realpath(wranglerRequire.resolve("wrangler/package.json"))), "wrangler-dist/cli.js"));
-  const result = { version: 2, contextHash, sourceSha: edgeProof.sourceSha, sourceTree: edgeProof.sourceTree, install: { ...installInputs }, runtime: { node: process.version, abi: process.versions.modules, platform: process.platform, arch: process.arch, pnpm: "11.28.4" }, native, containedLinks };
+  const result = { version: 3, contextHash, sourceSha: edgeProof.sourceSha, sourceTree: edgeProof.sourceTree, install: { ...installInputs }, runtime: { node: process.version, abi: process.versions.modules, platform: process.platform, arch: process.arch, pnpm: "11.28.4" }, native, containedLinks, reaper: await qualifyReaper(contextHash) };
   prepare?.enter("native_identity");
   validateNativeIdentity(result, { contextHash });
   // Only installed platform resolvers are allowed. No environment override or
@@ -1342,7 +1530,12 @@ async function validateContainerRuntime(identity, builder = false, recorder, ins
   initRecord(recorder, "source", "runtime");
   initGuardCheck(process.platform === "linux" && process.arch === "x64" && process.version === "v24.22.1" && process.versions.modules === "137", "container-runtime", recorder, "runtime");
   initRecord(recorder, "source", "ancestry");
-  initGuardCheck(builder ? process.pid > 1 && process.ppid === 1 : process.pid === 1, "container-init-ancestry", recorder, "ancestry");
+  initGuardCheck(builder ? process.pid > 1 && process.ppid > 1 : process.pid > 1 && process.ppid === 1, "container-init-ancestry", recorder, "ancestry");
+  const coordinatorPid = builder ? process.ppid : process.pid;
+  const command = (await readFile(`/proc/${coordinatorPid}/cmdline`)).toString("utf8").split("\0");
+  const contextHash = process.argv[builder ? 5 : 4];
+  check(hashPattern.test(command[3]) && command[4] === contextHash, "coordinator-context");
+  await qualifyControls(identity, command[3], contextHash, coordinatorPid);
   initRecord(recorder, "source", "status_read"); const status = await readFile("/proc/self/status", "utf8");
   initRecord(recorder, "source", "status_validate"); validateChildStatus(status, identity, recorder);
   initRecord(recorder, "source", "mount_read"); const mounts = await readFile("/proc/self/mountinfo", "utf8");
@@ -1521,29 +1714,66 @@ export async function observeContainerReceipt(report, text, plan, childSummary, 
   return value;
 }
 async function containerInit(args, sharedReport) {
-  let identity, masks; const trace = createInitDiagnostics(), ledger = createInitGuardLedger(); if (sharedReport) sharedReport.init = trace;
-  const native = await runInitPrerequisites(args, trace, {
+  let identity, masks, rpc, controls, native, built; const failures = [];
+  const trace = createInitDiagnostics(), ledger = createInitGuardLedger(); if (sharedReport) sharedReport.init = trace;
+  try {
+  native = await runInitPrerequisites(args, trace, {
     arguments: values => check(values.length === 4 && hashPattern.test(values[0]) && hashPattern.test(values[1]), "init-arguments"),
     identity: ([nonce, contextHash, uid, gid]) => (identity = { uid: Array(4).fill(number(uid)), gid: Array(4).fill(number(gid)), groups: [] }),
     reset: () => { for (const key of Object.keys(process.env)) delete process.env[key]; Object.assign(process.env, containerEnvironment()); },
-    prepare: () => prepareEnvironment("/task"), runtime: async identity => { masks = await validateContainerRuntime(identity, false, ledger, true); }, native: contextHash => nativeReceipt(contextHash, ledger),
+    prepare: async () => {
+      rpc = createReaperClient(new Socket({fd:3, readable:true, writable:true}), {pid:process.pid, nonce:args[0], contextHash:args[1]});
+      await rpc.start(); await prepareEnvironment("/task");
+    }, runtime: async identity => {
+      masks = await validateContainerRuntime(identity, false, ledger, true);
+      const pair = await qualifyControls(identity, args[0], args[1]); controls = bindCensusControls(pair.reaper, pair.coordinator);
+    }, native: contextHash => nativeReceipt(contextHash, ledger),
     ready: (nonce, contextHash) => process.stdout.write(control("ready", nonce, contextHash)), permit: (nonce, contextHash) => receivePermit(nonce, contextHash),
   }, ledger);
   const [nonce, contextHash, uid, gid] = args;
-  const report = createPackagingDiagnostics("child", line => process.stdout.write(line)), errors = []; let built;
+  // Native fixtures run only in this admitted original container, after permit.
+  await hostedReaperFixtures(args, rpc, controls);
+  const report = createPackagingDiagnostics("child", line => process.stdout.write(line)), errors = [];
   report.mark("entry", "fulfilled");
   try {
     built = await runPackagingPipeline(containerContract.input, "/task", report, {
       builderDiagnostics: true,
+      controls, drain: () => rpc.drain(),
       checkBoundary: async () => { await validateContainerRuntime(identity); await nativeReceipt(contextHash); },
       buildArguments: (capsule, role) => ["/opt/edge-input/scripts/edge-proof.mjs", "container-build", capsule, role, contextHash, uid, gid],
     });
   } catch (error) { errors.push(error); }
   report.mark("final", errors.length ? "rejected" : "fulfilled", errors[0]); errors.push(...report.errors); raiseContainerFailures(errors);
+  } catch (error) { failures.push(error); }
+  // FINISH is acknowledged before Node closes FD3 and exits. Every independent
+  // failure remains fatal; a shutdown error never overwrites the primary value.
+  if (rpc) try { await rpc.finish(); } catch (error) { failures.push(error); rpc.abort(); }
+  raiseContainerFailures(failures);
+  const [nonce, contextHash] = args;
   const { version: _version, isolated: _isolated, ...packaging } = built;
   const receipt = { version: 2, isolation: "private-container-pid-net-mount", nonce, contextHash, nativeHash: hash(JSON.stringify(native)), masks, ...packaging };
   process.stdout.write("EDGE_CONTAINER_RECEIPT_V2 " + JSON.stringify(receipt) + "\n");
   return { container: "complete", version: 2 };
+}
+async function hostedReaperFixtures(args, rpc, controls) {
+  const sample = () => privateProcesses(undefined, controls), beforeFinal = () => rpc.drain();
+  // The C PID1 startup fixture already established a waitable adopted orphan and
+  // reaped it with the production loop. This checks the ORIGINAL Node spawn's FD
+  // inheritance, not a separately constructed descriptor model.
+  const fd = await runOwnedProcess(containerContract.reaper, ["--check-fd"], {cwd:"/task",env:containerEnvironment(),sample,beforeFinal});
+  requireProcessSuccess(fd);
+  // Use the original supervisor's existing default deadline and escalation.
+  // The fixture server authenticates HELLO but deliberately withholds DRAIN ACK.
+  const held = await runOwnedProcess(containerContract.reaper, ["--fixture-hold",containerContract.node,"/opt/edge-input/scripts/edge-proof.mjs","container-reaper-probe",...args], {cwd:"/task",env:containerEnvironment(),sample,beforeFinal});
+  check(held.closed && held.timedOut && !held.interrupted && held.errors.length === 0 && Array.isArray(held.remaining) && held.remaining.length === 0 && held.code !== 0, "reaper-held-ack-fixture");
+  let rejected = false; try { requireProcessSuccess(held); } catch { rejected = true; } check(rejected, "reaper-held-ack-qualified");
+}
+async function reaperProbe(args) {
+  check(args.length === 4 && hashPattern.test(args[0]) && hashPattern.test(args[1]), "reaper-probe-arguments");
+  const rpc = createReaperClient(new Socket({fd:3,readable:true,writable:true}), {pid:process.pid,nonce:args[0],contextHash:args[1]});
+  await rpc.start(); await rpc.drain();
+  // This path is forbidden for the held-ACK fixture; no success receipt exists.
+  throw new Error("edge-container: held-ack-returned");
 }
 // These are the same-thread async acquisition routes in the frozen packages.
 // Hash before importing the builder; no private handles or spawn replacement.
@@ -1683,6 +1913,7 @@ async function containerBuild(args) {
 async function containerPrepare(args, prepare) {
   prepare?.enter("prepare_arguments");
   check(args.length === 1 && hashPattern.test(args[0]), "prepare-arguments");
+  await compileReaper(args[0]);
   const native = await qualifyImageInputs(args[0], prepare);
   prepare?.enter("pnpm_child");
   const pnpm = execFileSync("/usr/local/bin/pnpm", ["--version"], { env: { PATH: "/usr/local/bin:/usr/bin:/bin", HOME: "/opt/build-home" }, encoding: "utf8", timeout: 10000 }).trim();
@@ -1759,6 +1990,7 @@ async function hostContainerRun(report) {
       await recheckParent(recorder); const row = await readOwned(recorder); parentSource(recorder, "live_init"); check(parentEvaluate(recorder, 37, () => parentLeaf(recorder, 1, row.State.Running) && parentLeaf(recorder, 2, row.State.Pid > 1)), "missing-live-init");
       const cgroups = createParentCgroupAdmission(cid, parentNamespaces, identity, {}, { inspect: row, daemonRoot });
       const first = await cgroups.observe(row.State.Pid, 1, recorder); target = first.target; bound = first.bound;
+      const controls = await parentControls(row.State.Pid, target, identity, nonce, plan.contextHash, native);
       // Parent and target kernel mount tables correlate the daemon's exact
       // per-container metadata paths without privileged storage traversal.
       parentSource(recorder, "parent_namespace"); const currentNamespace = await readlink("/proc/self/ns/mnt"); check(parentEvaluate(recorder, 38, () => parentLeaf(recorder, 1, currentNamespace === parentNamespaces.mnt)), "parent-mount-namespace-drift");
@@ -1767,6 +1999,8 @@ async function hostContainerRun(report) {
       parentRecord(recorder, "visit", 2); const second = await cgroups.observe(target.pid, 2, recorder), again = second.target; parentSource(recorder, "identity_freshness"); check(parentEvaluate(recorder, 39, () => parentLeaf(recorder, 1, again.start === target.start) && parentLeaf(recorder, 2, same(again.namespaces, target.namespaces)) && parentLeaf(recorder, 3, again.cgroup === target.cgroup)), "init-identity-drift");
       parentSource(recorder, "mount_freshness"); validateMountFreshness(target.mounts, again.mounts, recorder);
       const rebound = second.bound; parentSource(recorder, "cgroup_freshness"); check(parentEvaluate(recorder, 40, () => parentLeaf(recorder, 1, sameCgroupBinding(bound, rebound))), "init-cgroup-drift"); bound = rebound;
+      const repeatedControls = await parentControls(row.State.Pid, again, identity, nonce, plan.contextHash, native);
+      check(same(controls, repeatedControls), "parent-controls-drift");
       const repeatedParent = second.parentMounts; parentSource(recorder, "metadata"); const repeatedMetadata = validateMetadataMounts(row, again.mounts, repeatedParent, daemonRoot, cid, recorder); parentSource(recorder, "metadata_freshness"); check(parentEvaluate(recorder, 41, () => parentLeaf(recorder, 1, same(metadata, repeatedMetadata))), "daemon-metadata-drift");
       parentSource(recorder, "parent_namespace"); const finalNamespace = await readlink("/proc/self/ns/mnt"); check(parentEvaluate(recorder, 42, () => parentLeaf(recorder, 1, finalNamespace === parentNamespaces.mnt)), "parent-mount-namespace-drift");
       } catch (error) { project(true, error); admissionReporting.push(...recorder.errors); throw error; }
@@ -1822,5 +2056,6 @@ export async function containerMain(action, args, report) {
   if (action === "container-prepare") return containerPrepare(args, report?.prepare);
   if (action === "container-init") return containerInit(args, report);
   if (action === "container-build") return containerBuild(args);
+  if (action === "container-reaper-probe") return reaperProbe(args);
   fail("container-action");
 }
