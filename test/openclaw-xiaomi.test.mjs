@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -15,7 +16,7 @@ import { runOpenClawConsumer } from "./helpers/openclaw-consumer.mjs";
 
 const sdkSource = readFileSync(new URL("./fixtures/openclaw-xiaomi-contract.test.ts", import.meta.url), "utf8");
 const proofCode = stripTypeScriptTypes(sdkSource.slice(sdkSource.indexOf("// BEGIN Xiaomi proof functions."), sdkSource.indexOf("// END Xiaomi proof functions.")));
-const { xiaomiPlanCases, xiaomiNativeControls, xiaomiSignal, xiaomiSdkReaderDisposition, xiaomiSdkPreabortDisposition, xiaomiPublicAbortResult, xiaomiNativeControlQualified, xiaomiDiagnostic, xiaomiObserveBody, xiaomiRethrow } = new Function(proofCode + ";return { xiaomiPlanCases, xiaomiNativeControls, xiaomiSignal, xiaomiSdkReaderDisposition, xiaomiSdkPreabortDisposition, xiaomiPublicAbortResult, xiaomiNativeControlQualified, xiaomiDiagnostic, xiaomiObserveBody, xiaomiRethrow };")();
+const { xiaomiPlanCases, xiaomiNativeControls, xiaomiInvocationOwnership, xiaomiInstallProperty, xiaomiStopReason, xiaomiState, xiaomiReaderWitnesses, xiaomiSignal, xiaomiSdkReaderDisposition, xiaomiSdkPreabortDisposition, xiaomiPublicAbortResult, xiaomiNativeControlQualified, xiaomiDiagnostic, xiaomiObserveBody, xiaomiRethrow } = new Function(proofCode + ";return { xiaomiPlanCases, xiaomiNativeControls, xiaomiInvocationOwnership, xiaomiInstallProperty, xiaomiStopReason, xiaomiState, xiaomiReaderWitnesses, xiaomiSignal, xiaomiSdkReaderDisposition, xiaomiSdkPreabortDisposition, xiaomiPublicAbortResult, xiaomiNativeControlQualified, xiaomiDiagnostic, xiaomiObserveBody, xiaomiRethrow };")();
 const planRows = xiaomiPlanCases(), allPlanRows = [...xiaomiNativeControls(), ...planRows], diagnostic = xiaomiDiagnostic(nodeTypes.isProxy);
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
@@ -219,21 +220,30 @@ async function assertPlanOracles(origin, calls, physical, report) {
 // Embedded only in the fixture Worker. Each record owns its original operations.
 function planRouter(handler, putGrantCredentials, revokeGrantCredentials) {
   const rows = [...xiaomiNativeControls(), ...xiaomiPlanCases()], diagnostic = xiaomiDiagnostic(), records = diagnostic.store(), inputs = [], requests = [], budgets = [], materializations = [];
-  const originalFetch = globalThis.fetch; let retirement;
+  const originalFetch = globalThis.fetch; let retirement, sequence = 0; const tick = () => ++sequence;
   const identify = value => rows.find(row => value === `${row.prefix}-fixture-upstream-${row.id}` || row.kind === "rotation" && value === `ttp-fixture-upstream-${row.id}`);
   globalThis.fetch = function(input, init) {
     const headers = new Headers(init?.headers !== undefined ? init.headers : input instanceof Request ? input.headers : undefined);
     const row = identify(headers.get("api-key"));
-    const returned = Reflect.apply(originalFetch, this, arguments);
-    const item = { returned, observations: [], row, errors: [] }; inputs.push(item);
+    const item = { ordinal: inputs.length + 1, observations: [], row, errors: [], state: "invoke", invoked: tick() }; inputs.push(item);
+    let returned;
+    try { returned = Reflect.apply(originalFetch, this, arguments); item.returned = returned; }
+    catch (error) { item.state = "sync_throw"; item.settled = tick(); item.errors.push(error); throw error; }
     void returned.then(response => {
+      item.state = "fulfilled"; item.settled = tick();
       try { if (response.body) item.observations.push(xiaomiObserveBody(response.body, init?.signal ?? (input instanceof Request ? input.signal : undefined),
         (object, name, replacement) => { object[name] = replacement; },
-        (phase, checkpoint, failed) => records.add(diagnostic.record("worker", row?.id ?? "payg", phase, checkpoint, failed)))); }
+        (phase, checkpoint, failed, error) => records.add(diagnostic.record("worker", row?.id ?? "payg", phase, checkpoint, failed, error)), tick)); }
       catch (error) { item.errors.push(error); }
-    }, () => {});
+    }, () => { item.state = "rejected"; item.settled = tick(); });
     return returned;
   };
+  function snapshotInput(input, failures) {
+    if (!["c_cancel", "n_cancel"].includes(input.row?.id)) return;
+    try {
+      for (const observation of input.observations) for (const value of xiaomiReaderWitnesses(diagnostic, "worker", input.row.id, input.ordinal, observation)) records.add(value);
+    } catch (error) { failures.push(error); }
+  }
   async function retire() {
     const failures = [];
     for (const request of requests) {
@@ -242,6 +252,7 @@ function planRouter(handler, putGrantCredentials, revokeGrantCredentials) {
     }
     for (const input of inputs) {
       failures.push(...(await Promise.allSettled([input.returned, ...input.observations.map(value => value.join())])).flatMap(v => v.status === "rejected" ? [v.reason] : []), ...input.errors);
+      snapshotInput(input, failures);
     }
     failures.push(...(await Promise.allSettled(budgets.map(row => row.joined))).flatMap(v => v.status === "rejected" ? [v.reason] : []));
     if (failures.length) { records.add(diagnostic.record("worker", "none", "retire", 0, true, undefined, failures.length)); throw new AggregateError(failures, "original Worker retirement failed"); }
@@ -279,7 +290,10 @@ function planRouter(handler, putGrantCredentials, revokeGrantCredentials) {
             let done = 0; while (done < owned.pending.length) { const batch = owned.pending.slice(done); done += batch.length;
               failures.push(...(await Promise.allSettled(batch)).flatMap(value => value.status === "rejected" ? [value.reason] : [])); }
           }
-          for (const owned of matchingInputs) failures.push(...(await Promise.allSettled([owned.returned, ...owned.observations.map(value => value.join())])).flatMap(value => value.status === "rejected" ? [value.reason] : []), ...owned.errors);
+          for (const owned of matchingInputs) {
+            failures.push(...(await Promise.allSettled([owned.returned, ...owned.observations.map(value => value.join())])).flatMap(value => value.status === "rejected" ? [value.reason] : []), ...owned.errors);
+            snapshotInput(owned, failures);
+          }
           // Control I/O is deliberately outside the observed inference fetch. It
           // consumes its actual response before returning only fixed safe facts.
           let calls = [];
@@ -619,4 +633,287 @@ test("original synchronous cancel throw is preserved and cannot qualify as a rej
   assert.equal(threw, true); source.close(); reader.releaseLock();
   await assert.rejects(observed.join(), error => error.errors.includes(undefined));
   assert.equal(observed.readers[0].operations[0].state, "sync_throw"); assert.equal(observed.readers[0].operations[0].pending, undefined);
+});
+
+test("passive witnesses whitelist public stop reasons without invoking getters or proxies", () => {
+  for (const [index, stopReason] of ["stop", "length", "toolUse", "error", "aborted"].entries()) assert.equal(xiaomiStopReason({ stopReason }, nodeTypes.isProxy), index + 1);
+  let invoked = 0;
+  const getter = Object.defineProperty({}, "stopReason", { get() { invoked++; throw undefined; } });
+  for (const value of [undefined, null, {}, { stopReason: "private marker" }, getter, new Proxy({}, { getOwnPropertyDescriptor() { invoked++; throw undefined; } })]) assert.equal(xiaomiStopReason(value, nodeTypes.isProxy), 0);
+  assert.equal(invoked, 0);
+});
+test("passive original witnesses retain foreign and undefined failures without identity from absence", async () => {
+  for (const variant of ["foreign", "undefined", "callbacks_after_unlock", "release_error", "unlock_error"]) {
+    const state = await sdkDispositionFixture(variant);
+    try {
+      await assert.rejects(state.observation.join());
+      const rows = xiaomiReaderWitnesses(diagnostic, "sdk", "c_cancel", 1, state.observation, state.acquisition.releases);
+      assert.equal(rows.length, 3); assert.ok(rows.every(row => diagnostic.validate(row)));
+      const read = rows.find(row => row.facts.operationKind === 1), cancel = rows.find(row => row.facts.operationKind === 2), physical = rows.find(row => row.phase === "reader_witness");
+      assert.equal(read.facts.state, 3); assert.equal(cancel.facts.state, 3);
+      assert.equal(physical.facts.joinAccepted, false); assert.equal(physical.facts.bodyLocked, false);
+      assert.equal(physical.facts.operations, physical.facts.settledOperations);
+      if (variant === "undefined") {
+        assert.equal(read.facts.reasonPresent, true); assert.equal(read.facts.reasonDefined, false);
+        for (const key of ["sameInvokeReason", "sameRejectReason", "sameClosed", "sameRead", "sameOperand"]) assert.equal(cancel.facts[key], null);
+      }
+      if (variant === "foreign") assert.equal(cancel.facts.sameInvokeReason, false);
+      if (variant === "release_error") assert.equal(physical.facts.allReleasesFulfilled, false);
+      if (variant === "unlock_error") assert.equal(physical.facts.unlockCalls, 2);
+    } finally { state.detach(); }
+  }
+});
+test("passive witness snapshots do not settle originals, unlock readers, or make pending joins accepted", async () => {
+  let controller;
+  const body = new ReadableStream({ start(value) { controller = value; } });
+  const observer = xiaomiObserveBody(body, undefined, originalMethodInstall, () => {}), reader = body.getReader();
+  const pending = reader.read();
+  const before = xiaomiReaderWitnesses(diagnostic, "worker", "c_cancel", 26, observer);
+  assert.equal(before.length, 1); assert.equal(before[0].facts.closedState, 5); assert.equal(before[0].facts.joinAccepted, null);
+  assert.equal(before[0].facts.settledOperations, 0); assert.equal(before[0].facts.bodyLocked, true); assert.equal(before[0].facts.releaseCalls, null);
+  assert.equal(observer.readers[0].operations[0].pending, pending);
+  controller.close(); await pending; reader.releaseLock(); await observer.join();
+  const after = xiaomiReaderWitnesses(diagnostic, "worker", "c_cancel", 26, observer)[0];
+  assert.equal(after.facts.closedState, 2); assert.equal(after.facts.joinAccepted, true); assert.equal(after.facts.bodyLocked, false);
+});
+test("passive synchronous throw witness preserves original receiver, operands and undefined", async () => {
+  let controller, receiver, args;
+  const body = new ReadableStream({ start(value) { controller = value; } });
+  const originalGetReader = body.getReader;
+  body.getReader = function(...operands) {
+    const reader = Reflect.apply(originalGetReader, this, operands);
+    reader.cancel = function(...values) { receiver = this; args = values; throw undefined; };
+    return reader;
+  };
+  const observed = xiaomiObserveBody(body, undefined, originalMethodInstall, () => {}), reader = body.getReader(), operand = {};
+  let threw = false; try { reader.cancel(operand); } catch (error) { threw = true; assert.equal(error, undefined); }
+  assert.equal(threw, true); assert.equal(receiver, reader); assert.equal(args[0], operand);
+  controller.close(); reader.releaseLock(); await assert.rejects(observed.join(), error => error.errors.includes(undefined));
+  const cancel = xiaomiReaderWitnesses(diagnostic, "worker", "c_cancel", 1, observed)[0];
+  assert.equal(cancel.facts.state, 4); assert.equal(cancel.facts.reasonPresent, true); assert.equal(cancel.facts.reasonDefined, false); assert.equal(cancel.facts.sameOperand, null);
+});
+test("passive witness schema is closed and refuses nested getters, proxies and arbitrary fields", async () => {
+  const state = await sdkDispositionFixture("fulfilled");
+  try {
+    await state.observation.join(state.selection);
+    const row = xiaomiReaderWitnesses(diagnostic, "sdk", "c_cancel", 1, state.observation, state.acquisition.releases)[0];
+    let invoked = 0;
+    const getter = { ...row.facts }; Object.defineProperty(getter, "state", { get() { invoked++; return 1; } });
+    for (const facts of [{ ...row.facts, secret: "private marker" }, { ...row.facts, state: "fulfilled" }, { ...row.facts, state: -1 }, getter,
+      new Proxy(row.facts, { ownKeys() { invoked++; throw undefined; } })]) assert.equal(diagnostic.validate({ ...row, facts }), null);
+    assert.equal(invoked, 0);
+    let bytes = ""; diagnostic.emit([row], true, text => { bytes += text; });
+    assert.doesNotMatch(bytes, /private marker|synthetic owned abort/); assert.ok(Buffer.byteLength(JSON.stringify(row)) <= 768);
+  } finally { state.detach(); }
+});
+test("passive witness emission keeps case and original-operation identities, final snapshots and nine-plus-one bounds", async () => {
+  const state = await sdkDispositionFixture("fulfilled");
+  try {
+    const before = xiaomiReaderWitnesses(diagnostic, "sdk", "c_cancel", 1, state.observation, state.acquisition.releases);
+    await state.observation.join(state.selection);
+    const after = xiaomiReaderWitnesses(diagnostic, "sdk", "c_cancel", 1, state.observation, state.acquisition.releases);
+    const other = after.map(row => ({ ...row, caseId: "n_cancel" }));
+    let text = ""; diagnostic.emit([...before, ...other, ...after], true, value => { text += value; });
+    const records = text.trim().split("\n").map(line => JSON.parse(line.split("::").at(-1)));
+    assert.equal(records.length, 4); assert.equal(records.filter(row => row.caseId === "c_cancel").length, 2);
+    assert.equal(records.find(row => row.caseId === "c_cancel" && row.phase === "reader_witness").facts.joinAccepted, true);
+    const extra = Array.from({ length: 20 }, (_, i) => ({ ...after[0], facts: { ...after[0].facts, acquisition: i + 2 } }));
+    text = ""; diagnostic.emit([...after, ...extra, diagnostic.record("outer", "none", "helper", 2, true, undefined, 0)], true, value => { text += value; });
+    const lines = text.trim().split("\n"); assert.equal(lines.length, 10); assert.match(lines[0], /"phase":"helper"/); assert.match(lines[9], /"phase":"overflow"/); assert.ok(Buffer.byteLength(text) <= 8192);
+    diagnostic.emit(after, false, () => assert.fail("passing snapshots are not errors"));
+    let empty = null; diagnostic.emit([], true, value => { empty = value; }); assert.equal(empty, "");
+    const primary = {}, writer = {};
+    assert.throws(() => xiaomiRethrow(primary, () => diagnostic.emit(after, true, () => { throw writer; })), error => error.errors[0] === primary && error.errors[1] === writer);
+  } finally { state.detach(); }
+});
+
+test("passive Worker control relay retains strict original rejection and completed physical witnesses", async () => {
+  // This is an in-memory fixture-function regression, not a hosted SDK/workerd receipt.
+  const prior = globalThis.fetch, reason = {}, calls = []; let controller;
+  const body = new ReadableStream({ start(value) { controller = value; value.enqueue(new Uint8Array([1])); } });
+  globalThis.fetch = function(input, init) {
+    if (String(input) === "https://fixture.example/state") return Promise.resolve(Response.json([{ planId: "c_cancel", canceled: true, expired: false, sourceJoined: true }]));
+    calls.push({ receiver: this, input, init }); return Promise.resolve(new Response(body));
+  };
+  try {
+    const handler = { async fetch() {
+      const input = "https://fixture.example/upstream", init = { method: "POST", headers: { "api-key": "tp-fixture-upstream-c_cancel" } };
+      const response = await globalThis.fetch(input, init), reader = response.body.getReader();
+      await reader.read(); const pending = reader.read(); void pending.catch(() => {}); controller.error(reason);
+      const cancel = reader.cancel(); await Promise.allSettled([pending, cancel]); reader.releaseLock();
+      assert.equal(calls[0].input, input); assert.equal(calls[0].init, init); assert.equal(calls[0].receiver, globalThis);
+      return new Response(null, { status: 200 });
+    } };
+    const plan = planRouter(handler, () => {}, () => {});
+    const ingress = new Request("https://fixture.example/v1/native/xiaomi-token-plan/chat/completions", { method: "POST", headers: { authorization: "Bearer clawrouter-live-xiaomi_plan_c_cancel-fixture-secret" } });
+    const response = await plan.fetch(ingress, { GRANT_CREDENTIALS: {}, BUDGET_LEDGER: {} }, { waitUntil() {} }); await response.arrayBuffer();
+    const witness = await plan.control(new Request("https://fixture.example/fixture/plan/c_cancel/witness"), {});
+    assert.equal(witness.status, 500); assert.equal((await witness.json()).joined, false);
+    const records = await (await plan.control(new Request("https://fixture.example/fixture/diagnostics"), {})).json();
+    assert.ok(records.every(row => diagnostic.validate(row)));
+    const read = records.find(row => row.phase === "operation_witness" && row.facts.operationKind === 1);
+    const cancel = records.find(row => row.phase === "operation_witness" && row.facts.operationKind === 2);
+    const physical = records.find(row => row.phase === "reader_witness");
+    assert.equal(read.facts.reasonDefined, true); assert.equal(cancel.facts.sameRead, true);
+    assert.equal(physical.facts.bodyLocked, false); assert.equal(physical.facts.joinAccepted, false);
+    assert.equal(physical.facts.operations, physical.facts.settledOperations);
+    assert.ok(records.filter(row => ["read", "cancel"].includes(row.phase)).every(row => row.kind === "unknown"));
+  } finally { globalThis.fetch = prior; }
+});
+
+test("lineage tokens keep concurrent public calls distinct with reused or absent signals and exact original returns", async () => {
+  for (const signal of [undefined, new AbortController().signal]) {
+    const storage = new AsyncLocalStorage(), owner = xiaomiInvocationOwnership(storage);
+    const receiver = {}, guardReceiver = {}, fetchReceiver = {}, rows = [], calls = []; let sequence = 0;
+    const pending = [Promise.withResolvers(), Promise.withResolvers()];
+    for (let i = 0; i < 2; i++) {
+      const invocation = { caller: { signal } }, options = { signal }, args = [{}, {}, options];
+      let publicReturn, guardReturn;
+      function publicCall(...received) {
+        assert.equal(this, receiver); received.forEach((value, index) => assert.equal(value, args[index]));
+        publicReturn = Promise.resolve().then(() => {
+          assert.equal(owner.currentInvocation(), invocation);
+          const acquisition = { invocation, context: { id: "c_cancel" } }; rows.push(acquisition);
+          const guardArgs = [{}];
+          function guard(...receivedGuard) {
+            assert.equal(this, guardReceiver); assert.equal(receivedGuard[0], guardArgs[0]);
+            const fetchArgs = ["https://fixture.example/same", { method: "POST", signal }];
+            function originalFetch(...receivedFetch) {
+              assert.equal(this, fetchReceiver); receivedFetch.forEach((value, index) => assert.equal(value, fetchArgs[index]));
+              calls.push(i); return pending[i].promise;
+            }
+            const original = owner.fetch(originalFetch, fetchReceiver, fetchArgs, signal, () => ++sequence);
+            assert.equal(original, pending[i].promise);
+            guardReturn = original.then(response => ({ response, release: () => Promise.resolve() })); return guardReturn;
+          }
+          const returned = owner.guard(guard, guardReceiver, guardArgs, acquisition);
+          assert.equal(returned, guardReturn);
+          return returned.then(result => { assert.equal(owner.attach(acquisition, result), true); return result; });
+        });
+        return publicReturn;
+      }
+      const returned = owner.invoke(invocation, publicCall, receiver, args);
+      assert.equal(returned, publicReturn); invocation.returned = returned; rows.push(invocation);
+    }
+    await Promise.resolve(); assert.deepEqual(calls, [0, 1]); assert.equal(owner.currentInvocation(), undefined);
+    pending[1].resolve(new Response("second")); pending[0].resolve(new Response("first"));
+    const invocations = rows.filter(row => row.caller), acquisitions = rows.filter(row => row.invocation);
+    const results = await Promise.all(invocations.map(row => row.returned));
+    assert.notEqual(invocations[0].token, invocations[1].token);
+    for (const row of acquisitions) { assert.equal(row.context.id, "c_cancel"); assert.equal(owner.bound(row), true); }
+    for (const result of results) {
+      const originalBody = result.response.body, reader = originalBody.getReader();
+      await reader.read(); await reader.read(); reader.releaseLock(); await result.release();
+      assert.equal(result.response.body, originalBody); assert.equal(originalBody.locked, false);
+    }
+    assert.deepEqual(await owner.join(), []); owner.restore(); assert.equal(owner.bound(acquisitions[0]), false);
+  }
+});
+
+test("lineage missing or detached guard context never borrows a concurrent matching request", async () => {
+  for (const detached of [false, true]) {
+    const storage = new AsyncLocalStorage(), owner = xiaomiInvocationOwnership(storage), invocation = { caller: { signal: undefined } };
+    const row = { invocation }; let sequence = 0, original;
+    function fetch() { original = Promise.resolve(new Response(null)); return original; }
+    function guard() {
+      const call = () => owner.fetch(fetch, undefined, ["https://fixture.example/same", { method: "POST" }], undefined, () => ++sequence);
+      const result = detached ? storage.exit(call) : call(); assert.equal(result, original); return result.then(response => ({ response }));
+    }
+    const actual = detached
+      ? owner.invoke(invocation, () => owner.guard(guard, undefined, [], row), undefined, [{}, {}, {}])
+      : owner.guard(guard, undefined, [], row);
+    const result = await actual;
+    assert.equal(owner.attach(row, result), false); assert.equal(owner.bound(row), false);
+    assert.ok((await owner.join()).length > 0); owner.restore();
+  }
+});
+
+test("lineage rejects ambiguous original responses, changed bodies and missing runtime-hook observations", async () => {
+  for (const variant of ["shared-response", "shared-body", "changed-response", "missing-fetch"]) {
+    const owner = xiaomiInvocationOwnership(new AsyncLocalStorage()); let sequence = 0;
+    const original = new Response(null), body = new ReadableStream({ start(c) { c.close(); } }), rows = [];
+    for (let i = 0; i < 2; i++) {
+      const invocation = { caller: { signal: undefined } }, row = { invocation }; rows.push(row);
+      const actual = await owner.invoke(invocation, () => owner.guard(() => {
+        const response = variant === "shared-body" ? new Response(body) : original;
+        const returned = variant === "missing-fetch" ? Promise.resolve(response)
+          : owner.fetch(() => Promise.resolve(response), undefined, [], undefined, () => ++sequence);
+        return returned.then(value => ({ response: variant === "changed-response" ? new Response(null) : value }));
+      }, undefined, [], row), undefined, [{}, {}, {}]);
+      owner.attach(row, actual);
+    }
+    assert.ok(rows.every(row => !owner.bound(row))); assert.ok((await owner.join()).length > 0); owner.restore();
+  }
+});
+
+test("lineage original pending fetch keeps its join pending and preserves undefined throws and rejections", async () => {
+  for (const state of ["pending", "sync_throw", "rejected"]) {
+    const owner = xiaomiInvocationOwnership(new AsyncLocalStorage()), invocation = { caller: { signal: undefined } }, row = { invocation };
+    const deferred = Promise.withResolvers(); let sequence = 0, nativeReturn;
+    const call = () => owner.invoke(invocation, () => owner.guard(() => {
+      function fetch() { if (state === "sync_throw") throw undefined; nativeReturn = deferred.promise; return nativeReturn; }
+      const returned = owner.fetch(fetch, undefined, [], undefined, () => ++sequence); assert.equal(returned, nativeReturn); return returned;
+    }, undefined, [], row), undefined, [{}, {}, {}]);
+    if (state === "sync_throw") {
+      let thrown = false; try { call(); } catch (error) { thrown = true; assert.equal(error, undefined); }
+      assert.equal(thrown, true); assert.deepEqual(await owner.join(), [undefined]);
+    } else {
+      const returned = call(); let settled = false;
+      const joined = owner.join().then(value => { settled = true; return value; });
+      await Promise.resolve(); assert.equal(settled, false); assert.equal(returned, deferred.promise);
+      if (state === "rejected") { deferred.reject(undefined); await assert.rejects(returned, error => error === undefined); assert.deepEqual(await joined, [undefined]); }
+      else { deferred.resolve(new Response(null)); const response = await returned; assert.equal(owner.attach(row, { response }), true); assert.deepEqual(await joined, []); }
+    }
+    owner.restore();
+  }
+});
+
+test("lineage observer failure does not replace the original fetch promise or synchronous public throw", async () => {
+  const owner = xiaomiInvocationOwnership(new AsyncLocalStorage()), invocation = { caller: { signal: undefined } }, row = { invocation };
+  const fault = {}, response = Object.defineProperty({}, "body", { get() { throw fault; } });
+  const original = Promise.resolve(response); let sequence = 0;
+  const returned = owner.invoke(invocation, () => owner.guard(() => owner.fetch(() => original, undefined, [], undefined, () => ++sequence), undefined, [], row), undefined, [{}, {}, {}]);
+  assert.equal(returned, original); assert.equal(await returned, response); assert.deepEqual(await owner.join(), [fault]); owner.restore();
+  for (const stage of ["public", "guard"]) {
+    const next = xiaomiInvocationOwnership(new AsyncLocalStorage()), call = { caller: { signal: undefined } }; let thrown = false;
+    try { next.invoke(call, () => { if (stage === "public") throw undefined; return next.guard(() => { throw undefined; }, undefined, [], { invocation: call }); }, undefined, [{}, {}, {}]); }
+    catch (error) { thrown = true; assert.equal(error, undefined); }
+    assert.equal(thrown, true); next.restore();
+  }
+});
+
+test("lineage refuses reused invocation tokens and foreign acquisition ownership without changing dispatch", async () => {
+  const owner = xiaomiInvocationOwnership(new AsyncLocalStorage()), first = { caller: { signal: undefined } }, foreign = { caller: { signal: undefined } };
+  let calls = 0;
+  const fn = () => { calls++; return calls; };
+  assert.equal(owner.invoke(first, fn, undefined, [{}, {}, {}]), 1);
+  assert.equal(owner.invoke(first, fn, undefined, [{}, {}, {}]), 2);
+  assert.equal(owner.invoke(foreign, () => owner.guard(fn, undefined, [], { invocation: first }), undefined, [{}, {}, {}]), 3);
+  assert.equal(calls, 3); assert.equal((await owner.join()).length, 2); owner.restore();
+});
+
+test("lineage runtime-hook restoration preserves exact prior descriptors and refuses foreign replacement", () => {
+  let getterCalls = 0; const object = {}, previous = { configurable: true, enumerable: true, get() { getterCalls++; return {}; } };
+  Object.defineProperty(object, "runtime", previous); const before = Object.getOwnPropertyDescriptor(object, "runtime"), ours = {};
+  const restore = xiaomiInstallProperty(object, "runtime", ours); assert.equal(object.runtime, ours); restore();
+  assert.deepEqual(Object.getOwnPropertyDescriptor(object, "runtime"), before); assert.equal(getterCalls, 0); assert.throws(restore);
+  const absent = {}, undo = xiaomiInstallProperty(absent, "runtime", ours); undo(); assert.equal(Object.hasOwn(absent, "runtime"), false);
+  const guarded = {}, finish = xiaomiInstallProperty(guarded, "runtime", ours), other = {};
+  guarded.runtime = other; assert.throws(finish); assert.equal(guarded.runtime, other);
+  const fixed = Object.defineProperty({}, "runtime", { value: ours, configurable: false });
+  assert.throws(() => xiaomiInstallProperty(fixed, "runtime", other)); assert.equal(fixed.runtime, ours);
+});
+
+test("lineage observes separate caller, guard-input and fetch-input controllers without inferring propagation", async () => {
+  const owner = xiaomiInvocationOwnership(new AsyncLocalStorage()), caller = new AbortController(), guard = new AbortController(), fetch = new AbortController();
+  let sequence = 0; const tick = () => ++sequence;
+  const invocation = { caller: xiaomiSignal(caller.signal, tick) }, row = { invocation, guard: xiaomiSignal(guard.signal, tick) };
+  const result = await owner.invoke(invocation, () => owner.guard(() => owner.fetch(() => Promise.resolve(new Response(null)), undefined, [], fetch.signal, tick).then(response => ({ response })), undefined, [], row), undefined, [{}, {}, { signal: caller.signal }]);
+  assert.equal(owner.attach(row, result), true);
+  caller.abort({}); assert.equal(guard.signal.aborted, false); assert.equal(fetch.signal.aborted, false);
+  guard.abort({}); fetch.abort({});
+  assert.ok(invocation.caller.event < row.guard.event); assert.ok(row.guard.event < row.transport.signalTrace.event);
+  assert.notEqual(row.transport.signalTrace.reason, row.guard.reason); assert.notEqual(row.guard.reason, invocation.caller.reason);
+  assert.equal(owner.bound(row), true); assert.deepEqual(await owner.join(), []);
+  invocation.caller.detach(); row.guard.detach(); owner.restore();
 });

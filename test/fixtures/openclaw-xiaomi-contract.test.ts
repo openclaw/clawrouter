@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createRequire } from "node:module";
 import { stream, streamSimple, type Context, type Model } from "openclaw/plugin-sdk/llm";
 import { registerProviderPlugin, requireRegisteredProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -103,7 +105,7 @@ function xiaomiPlanCases() {
 }
 function xiaomiDiagnostic(isProxy: (value: unknown) => boolean = () => false) {
   const cases = new Set(["none", "payg", ...xiaomiPlanCases().map(row => row.id), ...xiaomiNativeControls().map(row => row.id)]);
-  const phases = new Set(["setup", "register", "catalog", "history", "wrapper", "call", "result", "assert", "acquire", "read", "cancel", "closed", "unlock", "release", "join", "restore", "report", "helper", "sdk_cancel_receipt", "control", "qualification", "wire", "usage", "retire", "dispose", "remove", "overflow"]);
+  const phases = new Set(["setup", "register", "catalog", "history", "wrapper", "call", "result", "assert", "acquire", "read", "cancel", "closed", "unlock", "release", "join", "restore", "report", "helper", "sdk_cancel_receipt", "control", "qualification", "wire", "usage", "retire", "dispose", "remove", "overflow", "result_witness", "owner_witness", "operation_witness", "reader_witness", "release_witness"]);
   const own = (value: unknown, key: string): unknown => {
     if (!value || typeof value !== "object" || isProxy(value)) return undefined;
     return Object.getOwnPropertyDescriptor(value, key)?.value;
@@ -113,18 +115,41 @@ function xiaomiDiagnostic(isProxy: (value: unknown) => boolean = () => false) {
     return validate({ v: 1, source, caseId, phase, checkpoint, failed, kind: !failed ? "none" : error === undefined ? "undefined" : "unknown",
       actual: scalar(own(error, "actual")) ? own(error, "actual") : null, expected: scalar(own(error, "expected")) ? own(error, "expected") : null, count });
   }
+  const factKeys: Record<string, { numbers: string; flags: string }> = {
+    result_witness: { numbers: "stopReason acquisitions assertion", flags: "partial callerAborted bodyPassed" },
+    owner_witness: { numbers: "acquisition invocation state callerAbort guardAbort partialSeq fetchAbort", flags: "resourceReturned admitted requestMatched callerLineageObserved callerObserved callerInitial callerReasonDefined guardObserved guardInitial guardReasonDefined sameSignal sameReason fetchObserved fetchInitial fetchReasonDefined fetchSameGuard fetchSameCaller" },
+    operation_witness: { numbers: "acquisition reader operation operationKind state invoked settled unlockBefore", flags: "reasonPresent reasonDefined operandDefined signalAtInvoke signalAtReject sameInvokeReason sameRejectReason sameClosed sameRead sameOperand nonempty eof" },
+    reader_witness: { numbers: "acquisition reader captured closedState closedSettled unlockCalls unlockReturns unlockInvoked unlockReturned operations settledOperations releaseCalls releaseSettled releaseInvoked releaseSettledSeq", flags: "closedReasonPresent closedReasonDefined bodyLocked joinAccepted allReleasesFulfilled" },
+    release_witness: { numbers: "acquisition operation state invoked settled", flags: "resourceReturned reasonPresent reasonDefined" },
+  };
   function validate(value: unknown): Record<string, any> | null {
     try {
       if (!value || typeof value !== "object" || isProxy(value)) return null;
       const keys = ["v", "source", "caseId", "phase", "checkpoint", "failed", "kind", "actual", "expected", "count"];
+      const shape = factKeys[own(value, "phase") as string];
+      if (shape) keys.push("facts");
       if (Reflect.ownKeys(value).length !== keys.length || keys.some(k => !Object.hasOwn(Object.getOwnPropertyDescriptor(value, k) ?? {}, "value"))) return null;
       const v = Object.fromEntries(keys.map(k => [k, own(value, k)]));
       if (v.v !== 1 || !["sdk", "worker", "outer"].includes(v.source as string) || !cases.has(v.caseId as string) || !phases.has(v.phase as string)
         || !Number.isInteger(v.checkpoint) || (v.checkpoint as number) < 0 || (v.checkpoint as number) > 65535 || typeof v.failed !== "boolean"
         || !["none", "undefined", "unknown"].includes(v.kind as string) || !scalar(v.actual) || !scalar(v.expected)
         || !(v.count === null || Number.isInteger(v.count) && (v.count as number) >= 0 && (v.count as number) <= 1_000_000)) return null;
+      if (shape) {
+        const facts = v.facts, numbers = shape.numbers.split(" "), flags = shape.flags.split(" "), names = [...numbers, ...flags];
+        if (!facts || typeof facts !== "object" || isProxy(facts) || Reflect.ownKeys(facts).length !== names.length
+          || names.some(key => !Object.hasOwn(Object.getOwnPropertyDescriptor(facts, key) ?? {}, "value"))) return null;
+        const safe = Object.fromEntries(names.map(key => [key, own(facts, key)]));
+        if (numbers.some(key => safe[key] !== null && !(Number.isSafeInteger(safe[key]) && (safe[key] as number) >= 0 && (safe[key] as number) <= 1_000_000))
+          || flags.some(key => safe[key] !== null && typeof safe[key] !== "boolean")) return null;
+        v.facts = safe;
+      }
       return new TextEncoder().encode(JSON.stringify(v)).length <= 768 ? v : null;
     } catch { return null; }
+  }
+  function witness(source: string, caseId: string, phase: string, facts: Record<string, unknown>) {
+    const value = validate({ v: 1, source, caseId, phase, checkpoint: 0, failed: false, kind: "none", actual: null, expected: null, count: null, facts });
+    if (!value) throw new Error("invalid Xiaomi witness");
+    return value;
   }
   function store() {
     const rows: Record<string, any>[] = []; let suppressed = 0;
@@ -135,20 +160,160 @@ function xiaomiDiagnostic(isProxy: (value: unknown) => boolean = () => false) {
     if (!failed) return;
     const rows = values.map(v => { const row = validate(v); if (!row) throw new Error("invalid Xiaomi diagnostic"); return row; });
     const unique = new Map<string, Record<string, any>>();
-    for (const row of rows) unique.set([row.source, row.caseId, row.phase, row.checkpoint].join("/"), row);
-    const selected = [...unique.values()].sort((a, b) => Number(b.phase === "helper") - Number(a.phase === "helper") || Number(b.failed) - Number(a.failed));
+    for (const row of rows) unique.set([row.source, row.caseId, row.phase, row.checkpoint,
+      row.facts?.acquisition, row.facts?.reader, row.facts?.operation].join("/"), row);
+    const priority = (row: Record<string, any>) => row.phase === "helper" ? 0
+      : row.caseId === "c_cancel" && row.phase === "result_witness" ? 1
+      : row.caseId === "c_cancel" && row.phase === "owner_witness" ? 2
+      : row.caseId === "c_cancel" && ["operation_witness", "reader_witness"].includes(row.phase) ? 3
+      : row.failed ? 4 : 5;
+    const selected = [...unique.values()].sort((a, b) => priority(a) - priority(b));
     const count = selected.length; const out = selected.slice(0, 9);
     if (count > 9) out.push(record("outer", "none", "overflow", 0, false, undefined, count - 9)!);
     const text = out.map(row => `::error title=Xiaomi typed contract::${JSON.stringify(row).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A")}\n`).join("");
     if (new TextEncoder().encode(text).length > 8192) throw new Error("Xiaomi annotation capacity");
     write(text);
   }
-  return { own, record, validate, store, emit };
+  return { own, record, witness, validate, store, emit };
 }
 function xiaomiNativeControls() {
   const base = xiaomiPlanCases()[0];
   return ["eof", "preabort", "cancel", "provider_error"].map(name => ({ ...base, id: `c_${name}`, source: "grant", simple: true,
     kind: name === "eof" ? "success" : name === "provider_error" ? "embedded" : name }));
+}
+// Invocation tokens establish ancestry. Signal/request equality is only an additional check.
+function xiaomiInvocationOwnership(storage: any) {
+  const tokens = new WeakSet<object>(), acquisitions = new WeakSet<object>(), responses = new WeakMap<object, any>(), bodies = new WeakMap<object, any>();
+  const failures: unknown[] = [], transports: any[] = [], observers: Promise<unknown>[] = []; let active = true;
+  const incomplete = () => { failures.push(new Error("incomplete Xiaomi invocation ownership")); };
+  const context = () => { const value = storage.getStore(); return active && value && tokens.has(value.token) ? value : undefined; };
+  const bound = (a: any) => {
+    const t = a?.transport, token = a?.lineageContext?.token;
+    return !!(active && acquisitions.has(a) && tokens.has(token) && token.invocation === a.invocation
+      && t?.context === a.lineageContext && t.acquisition === a && t.state === "fulfilled" && t.unique === true
+      && a.result?.response === t.response && a.result.response.body === t.body && responses.get(t.response) === t
+      && (!t.body || bodies.get(t.body) === t));
+  };
+  return {
+    failures, transports,
+    currentInvocation() { return context()?.token.invocation; },
+    invoke(invocation: any, fn: Function, receiver: unknown, args: any[]) {
+      if (!active || invocation.token || args[2]?.signal !== invocation.caller.signal) {
+        incomplete(); return Reflect.apply(fn, receiver, args);
+      }
+      const token = Object.freeze({ invocation, fn, receiver, args: Object.freeze([...args]) });
+      tokens.add(token); invocation.token = token;
+      return storage.run(Object.freeze({ token }), () => Reflect.apply(fn, receiver, args));
+    },
+    guard(fn: Function, receiver: unknown, args: any[], acquisition: any) {
+      const outer = context();
+      if (!outer || outer.acquisition || acquisitions.has(acquisition) || acquisition.invocation !== outer.token.invocation) {
+        incomplete(); return Reflect.apply(fn, receiver, args);
+      }
+      acquisitions.add(acquisition); acquisition.guardFunction = fn; acquisition.guardReceiver = receiver; acquisition.guardArguments = args;
+      acquisition.lineageContext = Object.freeze({ token: outer.token, acquisition });
+      return storage.run(acquisition.lineageContext, () => Reflect.apply(fn, receiver, args));
+    },
+    fetch(fn: Function, receiver: unknown, args: any[], signal: AbortSignal | null | undefined, clock: () => number) {
+      const captured = context(), acquisition = captured?.acquisition;
+      const t: any = { context: captured, acquisition, fn, receiver, args, signal, signalTrace: xiaomiSignal(signal, clock), state: "invoke", invoked: clock(), unique: false };
+      transports.push(t);
+      if (!captured || !acquisitions.has(acquisition) || acquisition.lineageContext !== captured || acquisition.transport) incomplete();
+      else acquisition.transport = t;
+      let returned;
+      try { returned = Reflect.apply(fn, receiver, args); t.pending = returned; }
+      catch (reason) { t.state = "sync_throw"; t.reasonPresent = true; t.reason = reason; t.settled = clock(); throw reason; }
+      const observed = returned.then((response: Response) => {
+        t.state = "fulfilled"; t.settled = clock(); t.response = response; t.body = response.body;
+        const priorResponse = responses.get(response), priorBody = t.body && bodies.get(t.body);
+        if (priorResponse || priorBody) {
+          if (priorResponse) priorResponse.unique = false;
+          if (priorBody) priorBody.unique = false;
+          incomplete(); return;
+        }
+        responses.set(response, t); if (t.body) bodies.set(t.body, t); t.unique = true;
+      }, (reason: unknown) => { t.state = "rejected"; t.reasonPresent = true; t.reason = reason; t.settled = clock(); });
+      observers.push(observed.catch((error: unknown) => { failures.push(error); }));
+      return returned;
+    },
+    attach(acquisition: any, result: any) {
+      acquisition.result = result;
+      if (!bound(acquisition)) incomplete();
+      return bound(acquisition);
+    },
+    bound,
+    async join() {
+      let done = 0;
+      while (done < transports.length) {
+        const batch = transports.slice(done); done += batch.length;
+        await Promise.allSettled(batch.flatMap(t => t.pending ? [t.pending] : []));
+      }
+      await Promise.all(observers);
+      return [...failures, ...transports.filter(t => t.state === "rejected" || t.state === "sync_throw").map(t => t.reason)];
+    },
+    restore() {
+      if (!active) throw new Error("duplicate Xiaomi ownership restoration");
+      active = false; const errors: unknown[] = [];
+      for (const t of transports) try { t.signalTrace.detach(); } catch (error) { errors.push(error); }
+      try { storage.disable(); } catch (error) { errors.push(error); }
+      if (errors.length) throw new AggregateError(errors, "Xiaomi ownership restoration failed");
+    },
+  };
+}
+function xiaomiInstallProperty(object: any, name: string, value: unknown) {
+  const before = Object.getOwnPropertyDescriptor(object, name);
+  const ours = { configurable: true, enumerable: before?.enumerable ?? false, writable: true, value };
+  Object.defineProperty(object, name, ours); let restored = false;
+  return () => {
+    const current = Object.getOwnPropertyDescriptor(object, name);
+    if (restored || !current || ["value", "get", "set", "writable", "enumerable", "configurable"].some(key => current[key as keyof PropertyDescriptor] !== ours[key as keyof typeof ours])) throw new Error("foreign Xiaomi observer descriptor");
+    if (before) Object.defineProperty(object, name, before); else delete object[name];
+    restored = true;
+  };
+}
+// Only fixed numeric codes cross the fixture boundary; original reasons stay private.
+function xiaomiStopReason(value: unknown, isProxy: (value: unknown) => boolean): number {
+  if (!value || typeof value !== "object" || isProxy(value)) return 0;
+  const reason = Object.getOwnPropertyDescriptor(value, "stopReason")?.value;
+  return ["stop", "length", "toolUse", "error", "aborted"].indexOf(reason) + 1;
+}
+function xiaomiState(value: unknown): number {
+  return ["invoke", "fulfilled", "rejected", "sync_throw", "pending"].indexOf(value as string) + 1;
+}
+function xiaomiSameReason(leftPresent: boolean, left: unknown, rightPresent: boolean, right: unknown): boolean | null {
+  return leftPresent && rightPresent && left !== undefined && right !== undefined ? left === right : null;
+}
+function xiaomiReaderWitnesses(diagnostic: ReturnType<typeof xiaomiDiagnostic>, source: string, caseId: string,
+  acquisition: number, observation: any, releases?: any[]) {
+  const values: Record<string, any>[] = [];
+  for (const [index, reader] of observation.readers.entries()) {
+    const read = reader.operations.find((op: any) => op.kind === "read" && op.reasonPresent);
+    const cancel = reader.operations.filter((op: any) => op.kind === "cancel").at(-1);
+    for (const op of [read, cancel].filter(Boolean)) values.push(diagnostic.witness(source, caseId, "operation_witness", {
+      acquisition, reader: index + 1, operation: op.ordinal, operationKind: op.kind === "read" ? 1 : 2,
+      state: xiaomiState(op.state), invoked: op.invoked, settled: op.settled ?? null, unlockBefore: op.unlockCallsBefore,
+      reasonPresent: op.reasonPresent, reasonDefined: op.reasonPresent && op.reason !== undefined, operandDefined: op.operandDefined,
+      signalAtInvoke: op.signalAbortedAtInvoke, signalAtReject: op.signalAbortedAtReject ?? null,
+      sameInvokeReason: xiaomiSameReason(op.reasonPresent, op.reason, op.signalAbortedAtInvoke === true, op.signalReasonAtInvoke),
+      sameRejectReason: xiaomiSameReason(op.reasonPresent, op.reason, op.signalAbortedAtReject === true, op.signalReasonAtReject),
+      sameClosed: xiaomiSameReason(op.reasonPresent, op.reason, reader.closedReasonPresent, reader.closedReason),
+      sameRead: xiaomiSameReason(op.reasonPresent, op.reason, read?.reasonPresent === true, read?.reason),
+      sameOperand: xiaomiSameReason(op.reasonPresent, op.reason, op.operandDefined, op.operands[0]),
+      nonempty: op.nonempty ?? null, eof: op.eof ?? null,
+    }));
+    const last = releases?.at(-1);
+    values.push(diagnostic.witness(source, caseId, "reader_witness", {
+      acquisition, reader: index + 1, captured: reader.captured, closedState: xiaomiState(reader.closedState), closedSettled: reader.closedSettled ?? null,
+      closedReasonPresent: reader.closedReasonPresent, closedReasonDefined: reader.closedReasonPresent && reader.closedReason !== undefined,
+      unlockCalls: reader.unlockCalls, unlockReturns: reader.unlockReturns, unlockInvoked: reader.unlockInvoked ?? null, unlockReturned: reader.unlockReturned ?? null,
+      operations: reader.operations.length, settledOperations: reader.operations.filter((op: any) => ["fulfilled", "rejected", "sync_throw"].includes(op.state)).length,
+      bodyLocked: reader.body.locked, joinAccepted: observation.joinAccepted,
+      releaseCalls: releases?.length ?? null, releaseSettled: releases?.filter(op => ["fulfilled", "rejected", "sync_throw"].includes(op.state)).length ?? null,
+      releaseInvoked: last?.invoked ?? null, releaseSettledSeq: last?.settled ?? null,
+      allReleasesFulfilled: releases ? releases.length > 0 && releases.every(op => op.state === "fulfilled") : null,
+    }));
+  }
+  return values;
 }
 function xiaomiSignal(signal: AbortSignal | null | undefined, tick: () => number) {
   const value: any = { signal, observed: !!signal, initial: signal?.aborted ?? null, event: null, reasonPresent: false };
@@ -235,13 +400,13 @@ function xiaomiObserveBody(body: ReadableStream<Uint8Array>, signal: AbortSignal
     });
     return reader;
   });
-  let physical: Promise<void> | undefined, joining: Promise<void> | undefined;
+  let physical: Promise<void> | undefined, joining: Promise<void> | undefined, joinAccepted: boolean | null = null;
   const settle = () => physical ??= (async () => {
     for (const row of readers) { let done = 0; while (done < row.operations.length) {
       const batch = row.operations.slice(done); done += batch.length; await Promise.allSettled(batch.flatMap((op: any) => op.pending ? [op.pending] : []));
     } }
   })();
-  return { readers, settle, join(selection?: any) {
+  return { readers, settle, get joinAccepted() { return joinAccepted; }, join(selection?: any) {
     return joining ??= (async () => {
       await settle(); const failures: unknown[] = [];
       for (const row of readers) {
@@ -252,6 +417,7 @@ function xiaomiObserveBody(body: ReadableStream<Uint8Array>, signal: AbortSignal
       }
       failures.push(...faults);
       if (!readers.length || body.locked) failures.push(new Error("original body not consumed and unlocked"));
+      joinAccepted = failures.length === 0;
       if (failures.length) throw new AggregateError(failures, "Xiaomi original reader outcomes");
     })();
   } };
@@ -299,6 +465,8 @@ function xiaomiRethrow(primary: unknown, report: () => void): never {
 
 const planRows = xiaomiPlanCases(), planDiagnostic = xiaomiDiagnostic(nodeTypes.isProxy), controlFetch = globalThis.fetch;
 const originalPlanGuard = guardedTransport.fetchWithProviderHttpGuard, qualifiedControls = new Set<string>();
+const planUndici = createRequire(import.meta.url)("undici/index.js") as typeof import("undici"), originalPlanFetch = planUndici.fetch;
+let planOwnership = xiaomiInvocationOwnership(new AsyncLocalStorage()), restorePlanRuntime: (() => void) | undefined;
 let planContext: { id: string; phase: string; checkpoint: number } | undefined;
 let planRecords = planDiagnostic.store(), planAcquisitions: any[] = [], planObserverFaults: unknown[] = [], planInvocations: any[] = [];
 let planBodyPassed = false, planPartial = false, planCaller: AbortSignal | undefined, planSequence = 0;
@@ -311,27 +479,37 @@ function qualifiedNativeControls() { return xiaomiNativeControls().every(row => 
 beforeEach(() => {
   planContext = undefined; planRecords = planDiagnostic.store(); planAcquisitions = []; planObserverFaults = []; planInvocations = [];
   planBodyPassed = false; planPartial = false; planCaller = undefined; planSequence = 0;
+  planOwnership = xiaomiInvocationOwnership(new AsyncLocalStorage());
+  restorePlanRuntime = xiaomiInstallProperty(globalThis, "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__", { ...planUndici,
+    fetch: function(this: unknown, ...args: Parameters<typeof originalPlanFetch>) {
+      if (!planContext) return Reflect.apply(originalPlanFetch, this, args);
+      const [input, init] = args;
+      const signal = init?.signal !== undefined ? init.signal : input instanceof Request ? input.signal : undefined;
+      return planOwnership.fetch(originalPlanFetch, this, args, signal, planTick);
+    },
+  });
   vi.spyOn(guardedTransport, "fetchWithProviderHttpGuard").mockImplementation(function(options) {
     if (!planContext) return Reflect.apply(originalPlanGuard, this, [options]);
     const headers = new Headers(options.init?.headers);
-    const matches = planInvocations.filter(invocation => !invocation.complete && options.url === invocation.url
+    const invocation = planOwnership.currentInvocation();
+    const requestMatched = !!invocation && !invocation.complete && options.url === invocation.url
       && options.init?.method?.toUpperCase() === "POST" && headers.get("authorization") === invocation.authorization
-      && options.capture && options.capture.meta?.provider === "xiaomi-token-plan" && options.capture.meta?.model === invocation.model);
-    const invocation = matches.length === 1 ? matches[0] : undefined;
+      && !!options.capture && options.capture.meta?.provider === "xiaomi-token-plan" && options.capture.meta?.model === invocation.model;
     const context = { ...planContext, phase: "acquire", checkpoint: planAcquisitions.length + 1 };
     // This is the observable guard INPUT; the private composed transport signal is not observed.
     const guard = xiaomiSignal(options.signal ?? options.init?.signal, planTick);
     let released!: () => void;
-    const row: any = { invocation, bound: !!invocation, guard, state: "invoke", invoked: planTick(), reasonPresent: false,
-      releases: [], released: new Promise<void>(resolve => { released = resolve; }), context };
+    const row: any = { invocation, requestMatched, bound: false, guard, state: "invoke", invoked: planTick(), reasonPresent: false,
+      releases: [], ordinal: planAcquisitions.length + 1, released: new Promise<void>(resolve => { released = resolve; }), context };
     planAcquisitions.push(row); invocation?.acquisitions.push(row);
     let returned;
-    try { returned = Reflect.apply(originalPlanGuard, this, [options]); row.returned = returned; }
+    try { returned = planOwnership.guard(originalPlanGuard, this, [options], row); row.returned = returned; }
     catch (error) { row.state = "sync_throw"; row.reasonPresent = true; row.reason = error; row.settled = planTick(); released(); throw error; }
     void returned.then(result => {
       row.state = "fulfilled"; row.settled = planTick(); row.result = result;
       row.accepted = result.finalUrl === options.url && result.response.status === 200 && /^text\/event-stream\b/i.test(result.response.headers.get("content-type") ?? "");
       try {
+        const lineage = planOwnership.attach(row, result); row.bound = lineage && row.requestMatched;
         const release = result.release;
         vi.spyOn(result, "release").mockImplementation(function(...args) {
           const operation: any = { state: "invoke", invoked: planTick(), reasonPresent: false }; row.releases.push(operation);
@@ -362,11 +540,17 @@ async function planWitness(invocation: any) {
   return value;
 }
 afterEach(async () => {
-  if (!planContext) { vi.restoreAllMocks(); return; }
+  if (!planContext) {
+    const failures: unknown[] = [];
+    for (const restore of [restorePlanRuntime, () => planOwnership.restore(), () => vi.restoreAllMocks()]) try { restore?.(); } catch (error) { failures.push(error); }
+    if (failures.length) throw new AggregateError(failures, "Xiaomi observer restoration failed");
+    return;
+  }
   const failures: unknown[] = [], context = { ...planContext };
   for (const invocation of planInvocations) invocation.bodyPassed = planBodyPassed;
   try {
     await Promise.allSettled(planAcquisitions.flatMap(row => row.returned ? [row.returned] : []));
+    failures.push(...await planOwnership.join());
     await Promise.all(planAcquisitions.map(row => row.released));
     const physical = await Promise.allSettled(planAcquisitions.flatMap(row => [
       ...row.releases.flatMap((operation: any) => operation.pending ? [operation.pending] : []), ...(row.observation ? [row.observation.settle()] : [])]));
@@ -390,10 +574,40 @@ afterEach(async () => {
       if (invocation.id === "n_preabort" && !xiaomiSdkPreabortDisposition({ invocation, qualified: qualifiedNativeControls() })) failures.push(new Error("original public pre-abort result did not qualify"));
     }
   } catch (error) { failures.push(error); }
+  // Snapshot existing originals only. These records never grant a disposition.
+  for (const invocation of planInvocations) if (["c_cancel", "n_cancel"].includes(invocation.id)) try {
+    planRecords.add(planDiagnostic.witness("sdk", invocation.id, "result_witness", {
+      stopReason: invocation.stopReasonCode ?? 0, acquisitions: invocation.acquisitions.length,
+      assertion: context.phase === "assert" ? context.checkpoint : null, partial: invocation.textDelta ?? false,
+      callerAborted: invocation.caller.signal?.aborted ?? null, bodyPassed: invocation.bodyPassed,
+    }));
+  } catch (error) { failures.push(error); }
+  for (const row of planAcquisitions) if (["c_cancel", "n_cancel"].includes(row.context.id)) try {
+    const invocation = row.invocation;
+    planRecords.add(planDiagnostic.witness("sdk", row.context.id, "owner_witness", {
+      acquisition: row.ordinal, invocation: invocation?.ordinal ?? null, state: xiaomiState(row.state), resourceReturned: row.state === "fulfilled", admitted: row.accepted ?? null, requestMatched: row.requestMatched,
+      callerLineageObserved: planOwnership.bound(row), callerObserved: invocation?.caller.observed ?? null, callerInitial: invocation?.caller.initial ?? null,
+      callerAbort: invocation?.caller.event ?? null, callerReasonDefined: invocation ? invocation.caller.reasonPresent && invocation.caller.reason !== undefined : null,
+      guardObserved: row.guard.observed, guardInitial: row.guard.initial, guardAbort: row.guard.event,
+      guardReasonDefined: row.guard.reasonPresent && row.guard.reason !== undefined, partialSeq: invocation?.partial ?? null,
+      sameSignal: invocation?.caller.observed && row.guard.observed ? invocation.caller.signal === row.guard.signal : null,
+      sameReason: xiaomiSameReason(invocation?.caller.reasonPresent === true, invocation?.caller.reason, row.guard.reasonPresent, row.guard.reason),
+      fetchAbort: row.transport?.signalTrace.event ?? null, fetchObserved: row.transport?.signalTrace.observed ?? null,
+      fetchInitial: row.transport?.signalTrace.initial ?? null,
+      fetchReasonDefined: row.transport ? row.transport.signalTrace.reasonPresent && row.transport.signalTrace.reason !== undefined : null,
+      fetchSameGuard: row.transport?.signalTrace.observed && row.guard.observed ? row.transport.signal === row.guard.signal : null,
+      fetchSameCaller: row.transport?.signalTrace.observed && invocation?.caller.observed ? row.transport.signal === invocation.caller.signal : null,
+    }));
+    if (row.observation) for (const value of xiaomiReaderWitnesses(planDiagnostic, "sdk", row.context.id, row.ordinal, row.observation, row.releases)) planRecords.add(value);
+    for (const [index, op] of row.releases.entries()) planRecords.add(planDiagnostic.witness("sdk", row.context.id, "release_witness", {
+      acquisition: row.ordinal, operation: index + 1, state: xiaomiState(op.state), invoked: op.invoked, settled: op.settled ?? null,
+      resourceReturned: row.state === "fulfilled", reasonPresent: op.reasonPresent, reasonDefined: op.reasonPresent && op.reason !== undefined,
+    }));
+  } catch (error) { failures.push(error); }
   // Detach our passive listeners only after the original operations have joined.
   for (const row of planAcquisitions) try { row.guard.detach(); } catch (error) { failures.push(error); }
   for (const invocation of planInvocations) try { invocation.caller.detach(); } catch (error) { failures.push(error); }
-  try { vi.restoreAllMocks(); } catch (error) { failures.push(error); }
+  for (const restore of [restorePlanRuntime, () => planOwnership.restore(), () => vi.restoreAllMocks()]) try { restore?.(); } catch (error) { failures.push(error); }
   for (const error of [...failures]) try { planRemember({ ...context, phase: "join" }, error); } catch (reportError) { failures.push(reportError); }
   if (!failures.length && context.id === "n_cancel" && planBodyPassed && planPartial && planCaller?.aborted) {
     try { planRecords.add(planDiagnostic.record("sdk", context.id, "sdk_cancel_receipt", 1, false, undefined, planAcquisitions.length)); }
@@ -450,8 +664,9 @@ async function invokePlanStream(row: (typeof planRows)[number], selected: Model<
     url: origin + `/v1/native/${row.provider}/chat/completions`, authorization: `Bearer ${apiKey}`, caller: xiaomiSignal(signal, planTick), acquisitions: [], complete: false };
   planInvocations.push(invocation);
   planMark("call");
-  const value = streamFn(selected, context, { apiKey, maxTokens: 128, reasoning: "high", signal });
+  const value = planOwnership.invoke(invocation, streamFn, undefined, [selected, context, { apiKey, maxTokens: 128, reasoning: "high", signal }]);
   if (onPartial) for await (const event of value) if (event.type === "text_delta") {
+    invocation.textDelta = (invocation.textDelta ?? false) || event.delta.length > 0;
     if (event.delta.length > 0 && invocation.acquisitions.length === 1) {
       const readers = invocation.acquisitions[0].observation?.readers;
       if (readers?.length === 1 && readers[0].operations.some((op: any) => op.kind === "read" && op.state === "fulfilled" && op.nonempty)) {
@@ -461,7 +676,7 @@ async function invokePlanStream(row: (typeof planRows)[number], selected: Model<
     onPartial();
   }
   const pending = value.result(); planMark("result");
-  try { const result = await pending; invocation.resultAborted = result.stopReason === "error" && signal?.aborted === true;
+  try { const result = await pending; invocation.stopReasonCode = xiaomiStopReason(result, nodeTypes.isProxy); invocation.resultAborted = result.stopReason === "aborted" && signal?.aborted === true;
     invocation.resultErrorEmpty = result.stopReason === "error" && result.content.length === 0;
     invocation.publicAbortMatched = xiaomiPublicAbortResult(result, invocation.caller.reason, nodeTypes.isProxy); return result;
   } finally { invocation.complete = true; }
@@ -482,9 +697,9 @@ function registerNativeLifetimeControls() {
       if (row.kind === "preabort") caller.abort(new Error("Synthetic native pre-abort"));
       try {
         const result = await runNativeControl(row, caller.signal, row.kind === "cancel" ? () => { partial = true; caller.abort(new Error("Synthetic native caller abort")); } : undefined);
-        planMark("assert", 1); expect(result.stopReason).toBe(row.kind === "success" ? "stop" : "error");
+        planMark("assert", 1); expect(result.stopReason).toBe(row.kind === "success" ? "stop" : row.kind === "cancel" ? "aborted" : "error");
         if (row.kind === "preabort") { expect(result.content).toEqual([]); expect(result.errorMessage).toBe(caller.signal.reason.message); }
-        if (row.kind === "cancel") { expect(partial).toBe(true); expect(caller.signal.aborted).toBe(true); }
+        if (row.kind === "cancel") { planMark("assert", 2); expect(partial).toBe(true); planMark("assert", 3); expect(caller.signal.aborted).toBe(true); }
         if (row.kind === "embedded") expect(caller.signal.aborted).toBe(false);
         if (row.kind === "success") expect(result.content).toContainEqual({ type: "text", text: "synthetic-plan-answer" });
         planBodyPassed = true;
@@ -510,8 +725,8 @@ describe("configured registered Xiaomi Token Plan native client through Worker",
           planMark("assert", 3); expect(result.usage.totalTokens).toBe(row.kind === "no_usage" ? 0 : 320);
           if (row.kind === "success") expect(result.usage).toMatchObject({ input: 44, cacheRead: 256, output: 20 });
         } else {
-          expect(result.stopReason).toBe("error"); planMark("assert", 2); expect(result.errorMessage).not.toMatch(/fixture-secret|fixture-upstream|must-not-fallback/);
-          if (row.kind === "cancel") { planMark("assert", 3); expect(partial).toBe(true); expect(controller.signal.aborted).toBe(true); }
+          expect(result.stopReason).toBe(row.kind === "cancel" ? "aborted" : "error"); planMark("assert", 2); expect(result.errorMessage).not.toMatch(/fixture-secret|fixture-upstream|must-not-fallback/);
+          if (row.kind === "cancel") { planMark("assert", 3); expect(partial).toBe(true); planMark("assert", 4); expect(controller.signal.aborted).toBe(true); }
         }
       }
       planBodyPassed = true;
