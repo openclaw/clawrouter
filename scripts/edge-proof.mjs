@@ -6,7 +6,6 @@ import { spawn, execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { edgeProof, validatePlan, renderEdgeConfig, planDigest } from "./edge-proof-profile.mjs";
-import { buildCapsule } from "./edge-proof-build.mjs";
 
 export const cases = ["stream", "streamSimple"].flatMap(api => ["eof", "preabort", "partial_abort", "provider_error"].map(role => ({ id: `${api === "stream" ? "stream" : "simple"}_${role}`, api, role })));
 export function newRuntimeAuthority() {
@@ -54,6 +53,132 @@ const script = fileURLToPath(import.meta.url);
 const digest = bytes => createHash("sha256").update(bytes).digest("hex");
 const refuse = code => { throw new Error(`edge-proof: ${code}`); };
 const namespaceNames = ["net", "pid", "mnt", "user"];
+const diagnosticPrefix = "EDGE_PACKAGING_V1 ";
+const diagnosticRoles = ["parent", "child", "build_a", "build_b"];
+const diagnosticPhases = ["entry", "runtime", "cwd", "source", "dependencies", "temp", "environment", "parent_namespaces", "parent_launch", "supervisor_close", "child_report", "namespace_read", "private_init", "user_namespace", "net_namespace", "pid_namespace", "mount_namespace", "interfaces", "routes", "private_mount", "process_inventory", "build_a_launch", "build_a_close", "build_a_report", "build_b_launch", "build_b_close", "build_b_report", "builder_import", "build", "receipt_write", "build_service_stop", "two_roots", "wrangler_input", "edge_config", "edge_launch", "edge_close", "edge_output", "edge_marker", "edge_hash", "edge_privacy", "upstream_config", "upstream_launch", "upstream_close", "upstream_output", "upstream_marker", "upstream_hash", "upstream_privacy", "final_namespace", "final_descendants", "final", "overflow"];
+const diagnosticSignals = [null, "SIGINT", "SIGTERM", "SIGKILL", "SIGABRT", "SIGSEGV", "SIGBUS", "SIGILL", "SIGPIPE", "SIGHUP", "SIGQUIT", "SIGTRAP", "SIGXCPU", "SIGXFSZ", "SIGSYS"];
+function ownData(value, name) {
+  const descriptor = Object.getOwnPropertyDescriptor(value, name);
+  if (!descriptor || !("value" in descriptor)) refuse("diagnostic-data-required");
+  return descriptor.value;
+}
+export function validatePackagingDiagnostic(value) {
+  const keys = ["v", "role", "phase", "outcome", "defined", "exit", "signal", "closed", "timedOut", "interrupted", "errors", "remaining"];
+  if (!value || typeof value !== "object" || Object.getOwnPropertyNames(value).sort().join() !== [...keys].sort().join()) refuse("diagnostic-schema");
+  const row = Object.fromEntries(keys.map(key => [key, ownData(value, key)]));
+  if (row.v !== 1 || !diagnosticRoles.includes(row.role) || !diagnosticPhases.includes(row.phase) || !["enter", "fulfilled", "rejected"].includes(row.outcome) || !diagnosticSignals.includes(row.signal)) refuse("diagnostic-enum");
+  for (const key of ["defined", "closed", "timedOut", "interrupted"]) if (row[key] !== null && typeof row[key] !== "boolean") refuse("diagnostic-boolean");
+  for (const key of ["exit", "errors", "remaining"]) if (row[key] !== null && (!Number.isSafeInteger(row[key]) || row[key] < (key === "exit" ? -65535 : 0) || row[key] > 65535)) refuse("diagnostic-count");
+  if (Buffer.byteLength(JSON.stringify(row)) > 640) refuse("diagnostic-capacity");
+  return row;
+}
+export function createPackagingDiagnostics(role, writer) {
+  if (!diagnosticRoles.includes(role)) refuse("diagnostic-role");
+  const records = [], errors = [];
+  const accept = value => {
+    try {
+      const row = validatePackagingDiagnostic(value);
+      if (records.length >= 256) refuse("diagnostic-capacity");
+      records.push(row);
+      if (writer) writer(diagnosticPrefix + JSON.stringify(row) + "\n");
+    } catch (error) { errors.push(error); }
+  };
+  const mark = (phase, outcome, reason, result) => {
+    try {
+      const row = { v: 1, role, phase, outcome, defined: outcome === "rejected" ? reason !== undefined : null, exit: null, signal: null, closed: null, timedOut: null, interrupted: null, errors: null, remaining: null };
+      if (result) {
+        for (const [to, from] of [["exit", "code"], ["signal", "signal"], ["closed", "closed"], ["timedOut", "timedOut"], ["interrupted", "interrupted"]]) row[to] = ownData(result, from);
+        row.errors = ownData(ownData(result, "errors"), "length");
+        const remaining = ownData(result, "remaining"); row.remaining = remaining === null ? null : ownData(remaining, "length");
+      }
+      accept(row);
+    } catch (error) { errors.push(error); }
+  };
+  return {
+    records, errors, accept, mark,
+    sync(phase, operation) { mark(phase, "enter"); try { const value = operation(); mark(phase, "fulfilled"); return value; } catch (error) { mark(phase, "rejected", error); throw error; } },
+    async step(phase, operation) { mark(phase, "enter"); try { const value = await operation(); mark(phase, "fulfilled"); return value; } catch (error) { mark(phase, "rejected", error); throw error; } },
+  };
+}
+export function parsePackagingOutput(text, roles) {
+  if (typeof text !== "string" || Buffer.byteLength(text) > 1024 * 1024) refuse("diagnostic-output-capacity");
+  const records = [], output = [];
+  for (const line of text.split("\n")) {
+    if (line.startsWith(diagnosticPrefix)) {
+      if (Buffer.byteLength(line) > 768 || records.length >= 256) refuse("diagnostic-capacity");
+      const record = validatePackagingDiagnostic(JSON.parse(line.slice(diagnosticPrefix.length)));
+      if (!roles.includes(record.role)) refuse("diagnostic-foreign-role");
+      records.push(record);
+    } else if (line.trim()) output.push(line);
+  }
+  return { records, output };
+}
+export function validatePackagingReceipt(value) {
+  const exact = (object, keys) => {
+    if (!object || typeof object !== "object" || Object.getOwnPropertyNames(object).sort().join() !== [...keys].sort().join()) refuse("receipt-schema");
+    return Object.fromEntries(keys.map(key => [key, ownData(object, key)]));
+  };
+  const row = exact(value, ["version", "isolated", "sourceSha", "sourceTree", "sourceFiles", "dependencyFiles", "exactErasures", "twoRoots", "cliSha256", "results", "cloud", "sdk"]);
+  if (row.version !== 1 || row.isolated !== true || row.sourceSha !== edgeProof.sourceSha || row.sourceTree !== edgeProof.sourceTree || row.sourceFiles !== 600 || row.dependencyFiles !== 268 || row.exactErasures !== 4 || row.twoRoots !== true || !/^[a-f0-9]{64}$/.test(row.cliSha256) || row.cloud !== "UNRUN" || row.sdk !== "UNRUN") refuse("receipt-identity");
+  row.results = exact(row.results, ["edge", "upstream"]);
+  for (const kind of ["edge", "upstream"]) {
+    const result = exact(row.results[kind], ["code", "signal", "closed", "sha256", "observedProcesses"]);
+    if (result.code !== 0 || result.signal !== null || result.closed !== true || !/^[a-f0-9]{64}$/.test(result.sha256) || !Number.isSafeInteger(result.observedProcesses) || result.observedProcesses < 0 || result.observedProcesses > 512) refuse("receipt-result");
+    row.results[kind] = result;
+  }
+  return row;
+}
+function raisePackagingFailures(errors) { if (errors.length === 1) throw errors[0]; if (errors.length) throw new AggregateError(errors, "edge-proof: original and diagnostic failures"); }
+export function acceptPackagingProcess(result, report, role, closePhase, reportPhase) {
+  const errors = []; let parsed;
+  try { requireProcessSuccess(result); report.mark(closePhase, "fulfilled", undefined, result); }
+  catch (error) { errors.push(error); report.mark(closePhase, "rejected", error, result); }
+  // Parse only newly generated, strictly validated records. Never echo child
+  // stdout/stderr or classify their arbitrary text as an operating-system cause.
+  try {
+    parsed = parsePackagingOutput(ownData(result, "stdout"), role === "child" ? ["child", "build_a", "build_b"] : [role]);
+    for (const row of parsed.records) report.accept(row);
+    const entry = parsed.records.filter(row => row.role === role && row.phase === "entry" && row.outcome === "fulfilled");
+    const final = parsed.records.filter(row => row.role === role && row.phase === "final" && row.outcome === "fulfilled");
+    if (entry.length !== 1 || final.length !== 1 || parsed.records.some(row => row.outcome === "rejected") || parsed.output.length !== 1) refuse("missing-or-failed-child-milestone");
+    report.mark(reportPhase, "fulfilled");
+  } catch (error) { errors.push(error); report.mark(reportPhase, "rejected", error); }
+  raisePackagingFailures(errors);
+  return parsed.output[0];
+}
+export function emitPackagingFailure(records, writer) {
+  const valid = records.map(validatePackagingDiagnostic), unique = new Map();
+  // Keep failure boundaries first, then the most recent phase per role. All
+  // omitted failures still fail the operation; this is only a bounded report.
+  for (const row of [...valid.filter(row => row.outcome === "rejected"), ...valid.toReversed()]) {
+    const key = `${row.role}:${row.phase}`; if (!unique.has(key)) unique.set(key, row);
+  }
+  let bytes = 0;
+  const selected = [...unique.values()].slice(0, 9);
+  if (unique.size > 9) selected.push({ v: 1, role: "parent", phase: "overflow", outcome: "rejected", defined: null, exit: null, signal: null, closed: null, timedOut: null, interrupted: null, errors: Math.min(65535, unique.size - 9), remaining: null });
+  for (const row of selected) {
+    const encoded = JSON.stringify(validatePackagingDiagnostic(row)).replaceAll("%", "%25").replaceAll("\r", "%0D").replaceAll("\n", "%0A");
+    const command = `::error title=Edge packaging boundary::${encoded}\n`;
+    bytes += Buffer.byteLength(command);
+    if (Buffer.byteLength(command) > 768 || bytes > 8192) refuse("annotation-capacity");
+    writer(command);
+  }
+}
+export async function runPackagingBoundary(role, operation, { writer, emit = line => process.stdout.write(line) } = {}) {
+  const report = createPackagingDiagnostics(role, writer), failures = [];
+  report.mark("entry", "fulfilled"); let value;
+  try { value = await operation(report); } catch (error) { failures.push(error); }
+  failures.push(...report.errors);
+  const reportedErrors = report.errors.length;
+  report.mark("final", failures.length ? "rejected" : "fulfilled", failures[0]);
+  // A final-record writer failure must never allow a success receipt.
+  failures.push(...report.errors.slice(reportedErrors));
+  if (failures.length && role === "parent") {
+    try { emitPackagingFailure(report.records, emit); } catch (error) { failures.push(error); }
+  }
+  raisePackagingFailures(failures);
+  return value;
+}
 
 // Construct, never merge, the child environment. This is credential/environment
 // isolation, not filesystem confinement from other files readable by this UID.
@@ -71,13 +196,18 @@ async function prepareEnvironment(root) {
   for (const key of ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "TMPDIR", "WRANGLER_LOG_PATH"]) await mkdir(env[key], { recursive: true, mode: 0o700 });
   return env;
 }
-export function validateNamespace(evidence, parent, builder = false) {
-  if (evidence.platform !== "linux" || evidence.uid !== 0 || (builder ? !(evidence.pid > 1 && evidence.ppid === 1) : evidence.pid !== 1)) refuse("private-init-required");
+export function validateNamespace(evidence, parent, builder = false, report) {
+  const check = (phase, fn) => report ? report.sync(phase, fn) : fn();
+  check("private_init", () => { if (evidence.platform !== "linux" || evidence.uid !== 0 || (builder ? !(evidence.pid > 1 && evidence.ppid === 1) : evidence.pid !== 1)) refuse("private-init-required"); });
+  const phases = { net: "net_namespace", pid: "pid_namespace", mnt: "mount_namespace", user: "user_namespace" };
   for (const name of namespaceNames) {
-    const pattern = new RegExp(`^${name}:\\[\\d+\\]$`);
-    if (!pattern.test(evidence.namespaces?.[name]) || !pattern.test(parent[name]) || evidence.namespaces[name] === parent[name]) refuse("namespace-mismatch");
+    check(phases[name], () => {
+      const pattern = new RegExp(`^${name}:\\[\\d+\\]$`);
+      if (!pattern.test(evidence.namespaces?.[name]) || !pattern.test(parent[name]) || evidence.namespaces[name] === parent[name]) refuse("namespace-mismatch");
+    });
   }
-  if (JSON.stringify(evidence.interfaces) !== '["lo"]') refuse("external-interface");
+  check("interfaces", () => { if (JSON.stringify(evidence.interfaces) !== '["lo"]') refuse("external-interface"); });
+  check("routes", () => {
   if (evidence.routes4.length || evidence.routes6.some(line => {
     const fields = line.trim().split(/\s+/);
     if (fields.length !== 10 || fields[9] !== "lo" || ![0, 2, 4].every(index => /^[a-f0-9]{32}$/i.test(fields[index])) || ![1, 3].every(index => /^[a-f0-9]{2}$/i.test(fields[index])) || ![5, 6, 7, 8].every(index => /^[a-f0-9]{8}$/i.test(fields[index])) || fields[2] !== "0".repeat(32) || fields[3] !== "00" || fields[4] !== "0".repeat(32)) return true;
@@ -87,7 +217,8 @@ export function validateNamespace(evidence, parent, builder = false) {
     return !(reject && fields[0] === "0".repeat(32) && fields[1] === "00") &&
       !(fields[0] === "0".repeat(31) + "1" && fields[1] === "80");
   })) refuse("external-route");
-  if (evidence.sharedMount !== false || evidence.procMounted !== true) refuse("private-proc-required");
+  });
+  check("private_mount", () => { if (evidence.sharedMount !== false || evidence.procMounted !== true) refuse("private-proc-required"); });
   return true;
 }
 async function namespaceIdentity() {
@@ -181,9 +312,12 @@ export function requireProcessSuccess(result) {
     throw new AggregateError([new Error("edge-proof: child-not-qualified"), ...result.errors], "edge-proof: child-not-qualified");
   }
 }
-export function verifyDryRun(result, bytes, expectedHash) {
+export function verifyDryRun(result, bytes, expectedHash, report, phases, privateRoots = []) {
   requireProcessSuccess(result);
-  if (!result.stdout.split(/\r?\n/).some(line => line.trim() === "--dry-run: exiting now.") || !Buffer.isBuffer(bytes) || !bytes.length || digest(bytes) !== expectedHash) refuse("dry-run-marker-or-bundle-mismatch");
+  const check = (phase, fn) => report ? report.sync(phase, fn) : fn();
+  check(phases?.marker, () => { if (!result.stdout.split(/\r?\n/).some(line => line.trim() === "--dry-run: exiting now.")) refuse("dry-run-marker-or-bundle-mismatch"); });
+  check(phases?.hash, () => { if (!Buffer.isBuffer(bytes) || !bytes.length || digest(bytes) !== expectedHash) refuse("dry-run-marker-or-bundle-mismatch"); });
+  check(phases?.privacy, () => { if ([...privateRoots, "/Users/", "/home/"].some(path => bytes.includes(path))) refuse("dry-run-private-path"); });
   return { code: result.code, signal: result.signal, closed: true, sha256: digest(bytes), observedProcesses: result.observed.size };
 }
 export function compareCapsules(first, second) {
@@ -229,61 +363,67 @@ export async function qualifyInstalledInputs(cwd) {
   }
   return { owned: true, containedLinks: links };
 }
-async function offlineChild(cwd, root, parent) {
-  validateNamespace(await namespaceEvidence(), parent);
-  if ((await privateProcesses()).length) refuse("unexpected-private-process");
-  const env = await prepareEnvironment(join(root, "child"));
+async function offlineChild(cwd, root, parent, report) {
+  validateNamespace(await report.step("namespace_read", namespaceEvidence), parent, false, report);
+  await report.step("process_inventory", async () => { if ((await privateProcesses()).length) refuse("unexpected-private-process"); });
+  const env = await report.step("environment", () => prepareEnvironment(join(root, "child")));
   const receipts = [];
-  for (const label of ["a", "b"]) {
+  for (const [label, role, launch, close, check] of [["a", "build_a", "build_a_launch", "build_a_close", "build_a_report"], ["b", "build_b", "build_b_launch", "build_b_close", "build_b_report"]]) {
     const capsule = join(root, `capsule-${label}`);
-    const built = await runOwnedProcess(process.execPath, [script, "offline-build", cwd, capsule, JSON.stringify(parent)], { cwd: root, env, timeoutMs: 120000, sample: privateProcesses });
-    requireProcessSuccess(built);
-    receipts.push(JSON.parse(await readFile(join(capsule, "source-receipt.json"), "utf8")));
+    report.mark(launch, "enter");
+    const built = await runOwnedProcess(process.execPath, [script, "offline-build", cwd, capsule, JSON.stringify(parent), role], { cwd: root, env, timeoutMs: 120000, sample: privateProcesses });
+    const value = JSON.parse(acceptPackagingProcess(built, report, role, close, check));
+    if (value.built !== true || Object.keys(value).join() !== "built") refuse("invalid-builder-receipt");
+    receipts.push(await report.step(check, async () => JSON.parse(await readFile(join(capsule, "source-receipt.json"), "utf8"))));
   }
-  compareCapsules(...receipts);
-  const require = createRequire(import.meta.resolve("wrangler/package.json"));
-  const packageRoot = dirname(await realpath(require.resolve("wrangler/package.json")));
-  const cli = join(packageRoot, "wrangler-dist/cli.js");
-  if (relative(await realpath(join(cwd, "node_modules")), packageRoot).startsWith("..") || !(await lstat(cli)).isFile() || JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8")).version !== "4.156.0" || digest(await readFile(cli)) !== "934d8051582ed5d85336e9e6677126ec87324a47166974de22d49a5523ba4d11") refuse("wrangler-input-mismatch");
+  report.sync("two_roots", () => compareCapsules(...receipts));
+  const cli = await report.step("wrangler_input", async () => {
+    const require = createRequire(import.meta.resolve("wrangler/package.json"));
+    const packageRoot = dirname(await realpath(require.resolve("wrangler/package.json")));
+    const cli = join(packageRoot, "wrangler-dist/cli.js");
+    if (relative(await realpath(join(cwd, "node_modules")), packageRoot).startsWith("..") || !(await lstat(cli)).isFile() || JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8")).version !== "4.156.0" || digest(await readFile(cli)) !== "934d8051582ed5d85336e9e6677126ec87324a47166974de22d49a5523ba4d11") refuse("wrangler-input-mismatch");
+    return cli;
+  });
   const results = {};
   const capsule = join(root, "capsule-a");
-  for (const kind of ["edge", "upstream"]) {
+  for (const [kind, configPhase, launch, close, outputPhase, marker, hash, privacy] of [["edge", "edge_config", "edge_launch", "edge_close", "edge_output", "edge_marker", "edge_hash", "edge_privacy"], ["upstream", "upstream_config", "upstream_launch", "upstream_close", "upstream_output", "upstream_marker", "upstream_hash", "upstream_privacy"]]) {
     const config = join(capsule, `${kind}.toml`), output = join(root, `dry-${kind}`);
-    await writeFile(config, renderEdgeConfig(offlineProjection(), kind, `${kind}.mjs`), { flag: "wx", mode: 0o600 });
+    await report.step(configPhase, () => writeFile(config, renderEdgeConfig(offlineProjection(), kind, `${kind}.mjs`), { flag: "wx", mode: 0o600 }));
+    report.mark(launch, "enter");
     const result = await runOwnedProcess(process.execPath, ["--no-warnings", cli, "deploy", "--dry-run", "--config", config, "--outdir", output], { cwd: capsule, env, sample: privateProcesses });
-    requireProcessSuccess(result);
-    results[kind] = verifyDryRun(result, await readFile(join(output, `${kind}.mjs`)), receipts[0].bundles[kind]);
+    try { requireProcessSuccess(result); report.mark(close, "fulfilled", undefined, result); } catch (error) { report.mark(close, "rejected", error, result); throw error; }
+    const bytes = await report.step(outputPhase, () => readFile(join(output, `${kind}.mjs`)));
+    results[kind] = verifyDryRun(result, bytes, receipts[0].bundles[kind], report, { marker, hash, privacy }, [root, cwd]);
   }
-  validateNamespace(await namespaceEvidence(), parent);
-  if ((await privateProcesses()).length) refuse("private-descendant-not-retired");
+  await report.step("final_namespace", async () => validateNamespace(await namespaceEvidence(), parent));
+  await report.step("final_descendants", async () => { if ((await privateProcesses()).length) refuse("private-descendant-not-retired"); });
   return { version: 1, isolated: true, sourceSha: edgeProof.sourceSha, sourceTree: edgeProof.sourceTree, sourceFiles: 600, dependencyFiles: 268, exactErasures: 4, twoRoots: true, cliSha256: digest(await readFile(cli)), results, cloud: "UNRUN", sdk: "UNRUN" };
 }
-async function offlineCi() {
-  if (process.platform !== "linux" || process.version !== "v24.22.1" || process.versions.modules !== "137" || process.arch !== "x64") refuse("linux-runtime-unqualified");
-  const cwd = await realpath(process.cwd());
-  admitSource(cwd);
-  await qualifyInstalledInputs(cwd);
-  const root = await mkdtemp(join(tmpdir(), "edge-offline-"));
-  const env = await prepareEnvironment(root), parent = await namespaceIdentity();
+async function offlineCi(report) {
+  report.sync("runtime", () => { if (process.platform !== "linux" || process.version !== "v24.22.1" || process.versions.modules !== "137" || process.arch !== "x64") refuse("linux-runtime-unqualified"); });
+  const cwd = await report.step("cwd", () => realpath(process.cwd()));
+  report.sync("source", () => admitSource(cwd));
+  await report.step("dependencies", () => qualifyInstalledInputs(cwd));
+  const root = await report.step("temp", () => mkdtemp(join(tmpdir(), "edge-offline-")));
+  const env = await report.step("environment", () => prepareEnvironment(root)), parent = await report.step("parent_namespaces", namespaceIdentity);
+  report.mark("parent_launch", "enter");
   const result = await runOwnedProcess("/usr/bin/unshare", namespaceArguments(process.execPath, [script, "offline-child", cwd, root, JSON.stringify(parent)]), { cwd: root, env, timeoutMs: 480000 });
-  requireProcessSuccess(result);
-  const lines = result.stdout.trim().split("\n");
-  if (lines.length !== 1) refuse("missing-isolated-receipt");
-  const receipt = JSON.parse(lines[0]);
-  if (receipt.version !== 1 || receipt.isolated !== true || receipt.sourceSha !== edgeProof.sourceSha || receipt.sourceTree !== edgeProof.sourceTree || receipt.cloud !== "UNRUN" || receipt.sdk !== "UNRUN") refuse("invalid-isolated-receipt");
+  const output = acceptPackagingProcess(result, report, "child", "supervisor_close", "child_report");
+  const receipt = report.sync("child_report", () => validatePackagingReceipt(JSON.parse(output)));
   return receipt;
 }
 export async function main(argv) {
   const [action = "plan", ...args] = argv;
-  if (action === "offline-ci" && args.length === 0) return offlineCi();
-  if (action === "offline-child" && args.length === 3) return offlineChild(args[0], args[1], JSON.parse(args[2]));
-  if (action === "offline-build" && args.length === 3) {
-    validateNamespace(await namespaceEvidence(), JSON.parse(args[2]), true);
-    const receipt = await buildCapsule(args[0], args[1]);
-    await writeFile(join(args[1], "source-receipt.json"), JSON.stringify(receipt), { flag: "wx", mode: 0o600 });
-    createRequire(import.meta.resolve("wrangler/package.json"))("esbuild").stop();
+  if (action === "offline-ci" && args.length === 0) return runPackagingBoundary("parent", offlineCi);
+  if (action === "offline-child" && args.length === 3) return runPackagingBoundary("child", report => offlineChild(args[0], args[1], JSON.parse(args[2]), report), { writer: line => process.stdout.write(line) });
+  if (action === "offline-build" && args.length === 4 && ["build_a", "build_b"].includes(args[3])) return runPackagingBoundary(args[3], async report => {
+    validateNamespace(await report.step("namespace_read", namespaceEvidence), JSON.parse(args[2]), true, report);
+    const { buildCapsule } = await report.step("builder_import", () => import("./edge-proof-build.mjs"));
+    const receipt = await report.step("build", () => buildCapsule(args[0], args[1]));
+    await report.step("receipt_write", () => writeFile(join(args[1], "source-receipt.json"), JSON.stringify(receipt), { flag: "wx", mode: 0o600 }));
+    report.sync("build_service_stop", () => createRequire(import.meta.resolve("wrangler/package.json"))("esbuild").stop());
     return { built: true };
-  }
+  }, { writer: line => process.stdout.write(line) });
   if (!["plan", "render", "build"].includes(action) || args.includes("--execute")) throw new Error("edge-proof: this code-only route does not activate, provision or delete cloud resources");
   const options = {};
   for (let index = 0; index < args.length; index += 2) {
@@ -300,6 +440,7 @@ export async function main(argv) {
     for (const kind of ["edge", "upstream"]) await writeFile(join(output, `${kind}.toml`), renderEdgeConfig(plan, kind, `${kind}.mjs`), { flag: "wx", mode: 0o600 });
     return { rendered: true, cloud: "UNRUN", planDigest: planDigest(plan) };
   }
+  const { buildCapsule } = await import("./edge-proof-build.mjs");
   const receipt = await buildCapsule(process.cwd(), output);
   await writeFile(join(output, "source-receipt.json"), JSON.stringify(receipt, null, 2) + "\n", { flag: "wx", mode: 0o600 });
   return { built: true, sourceSha: receipt.sourceSha, sourceTree: receipt.sourceTree, sourceFiles: receipt.sourceFiles.length, cloud: "UNRUN", sdk: "UNRUN" };

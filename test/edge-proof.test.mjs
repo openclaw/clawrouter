@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import YAML from "yaml";
 import { edgeProof, validatePlan, renderEdgeConfig } from "../scripts/edge-proof-profile.mjs";
-import { cases, newRuntimeAuthority, secretProjections, teardownGuard, packagingEnvironment, validateNamespace, namespaceArguments, runOwnedProcess, requireProcessSuccess, verifyDryRun, compareCapsules, admitSource, qualifyInstalledInputs } from "../scripts/edge-proof.mjs";
+import { cases, newRuntimeAuthority, secretProjections, teardownGuard, packagingEnvironment, validateNamespace, namespaceArguments, runOwnedProcess, requireProcessSuccess, verifyDryRun, compareCapsules, admitSource, qualifyInstalledInputs, createPackagingDiagnostics, validatePackagingDiagnostic, parsePackagingOutput, acceptPackagingProcess, emitPackagingFailure, runPackagingBoundary, validatePackagingReceipt } from "../scripts/edge-proof.mjs";
 import { deploymentTarget, assertDeploymentMutation } from "../scripts/deployment-profile.mjs";
 import { parseSdkReceipts, readBoundedJson } from "./openclaw-edge-native-cancellation.test.mjs";
 
@@ -228,4 +228,110 @@ test("actual owned workspace installation qualifies contained links without a do
   const result = await qualifyInstalledInputs(process.cwd());
   assert.equal(result.owned, true); assert.ok(result.containedLinks > 0);
   await assert.rejects(qualifyInstalledInputs(join(process.cwd(), "test")));
+});
+
+function diagnosticChildOutput(role = "child") {
+  const lines = [], report = createPackagingDiagnostics(role, line => lines.push(line));
+  report.mark("entry", "fulfilled"); report.mark("final", "fulfilled");
+  return lines.join("") + '{"built":true}\n';
+}
+test("packaging diagnostics preserve failed launch, nonzero, timeout and original signal without claiming entry", () => {
+  for (const change of [{ code: -2, errors: [undefined], stdout: "" }, { code: 7, stdout: "" }, { timedOut: true, signal: "SIGKILL", code: null, stdout: "" }, { interrupted: true, signal: "SIGTERM", code: null, stdout: "" }]) {
+    const result = { ...successfulProcess(), ...change }, report = createPackagingDiagnostics("parent");
+    assert.throws(() => acceptPackagingProcess(result, report, "child", "supervisor_close", "child_report"));
+    const closed = report.records.find(row => row.phase === "supervisor_close");
+    assert.equal(closed.outcome, "rejected"); assert.equal(closed.exit, result.code); assert.equal(closed.signal, result.signal);
+    assert.equal(closed.timedOut, result.timedOut); assert.equal(report.records.some(row => row.role === "child"), false);
+    assert.equal(report.records.find(row => row.phase === "child_report").outcome, "rejected");
+  }
+});
+test("zero exit cannot replace missing, failed, duplicate or invalid child milestones", () => {
+  const good = diagnosticChildOutput();
+  for (const stdout of ['{"built":true}\n', good + good, good.replace('"role":"child"', '"role":"parent"'), good.replace('"phase":"entry"', '"phase":"arbitrary/private/path"'), 'EDGE_PACKAGING_V1 {bad}\n', good.replace('"outcome":"fulfilled"', '"outcome":"rejected"')]) {
+    const report = createPackagingDiagnostics("parent");
+    assert.throws(() => acceptPackagingProcess({ ...successfulProcess(), stdout }, report, "child", "supervisor_close", "child_report"));
+  }
+  const report = createPackagingDiagnostics("parent");
+  assert.equal(acceptPackagingProcess({ ...successfulProcess(), stdout: good }, report, "child", "supervisor_close", "child_report"), '{"built":true}');
+  assert.throws(() => acceptPackagingProcess({ ...successfulProcess(), code: 1, stdout: good }, createPackagingDiagnostics("parent"), "child", "supervisor_close", "child_report"));
+});
+test("namespace refusal is reported at the exact gate without changing the predicate", () => {
+  const { parent, evidence } = networkEvidence();
+  for (const [namespace, phase] of [["user", "user_namespace"], ["net", "net_namespace"], ["pid", "pid_namespace"], ["mnt", "mount_namespace"]]) {
+    const report = createPackagingDiagnostics("child");
+    assert.throws(() => validateNamespace({ ...evidence, namespaces: { ...evidence.namespaces, [namespace]: parent[namespace] } }, parent, false, report));
+    assert.equal(report.records.filter(row => row.outcome === "rejected").at(-1).phase, phase);
+  }
+});
+test("diagnostic schema refuses getters, hostile proxies, unknown fields and raw output", () => {
+  const report = createPackagingDiagnostics("child"); report.mark("entry", "fulfilled"); const valid = report.records[0];
+  let reads = 0;
+  const getter = { ...valid }; Object.defineProperty(getter, "phase", { get() { reads++; return "entry"; } });
+  assert.throws(() => validatePackagingDiagnostic(getter)); assert.equal(reads, 0);
+  assert.throws(() => validatePackagingDiagnostic(new Proxy({}, { ownKeys() { throw undefined; } })));
+  for (const invalid of [{ ...valid, message: "private" }, { ...valid, signal: "secret" }, { ...valid, errors: -1 }, { ...valid, exit: 1.1 }]) assert.throws(() => validatePackagingDiagnostic(invalid));
+  const parsed = parsePackagingOutput('raw child output is never forwarded\n' + diagnosticChildOutput(), ["child"]);
+  assert.equal(parsed.records.length, 2);
+  const annotations = []; emitPackagingFailure(parsed.records, line => annotations.push(line));
+  assert.ok(annotations.every(line => !line.includes("raw child output")));
+});
+test("undefined primary and independent diagnostic writer failures remain failures", async () => {
+  const lines = []; let caught = false;
+  try { await runPackagingBoundary("parent", report => report.step("source", () => { throw undefined; }), { emit: line => lines.push(line) }); }
+  catch (error) { caught = true; assert.equal(error, undefined); }
+  assert.equal(caught, true); assert.ok(lines.some(line => line.includes('"defined":false')));
+  const primary = {}, secondary = {};
+  await assert.rejects(runPackagingBoundary("parent", () => { throw primary; }, { emit() { throw secondary; } }), error => error instanceof AggregateError && error.errors[0] === primary && error.errors[1] === secondary);
+  await assert.rejects(runPackagingBoundary("child", () => 1, { writer() { throw undefined; } }), error => error instanceof AggregateError && error.errors.every(value => value === undefined));
+  const pass = []; assert.equal(await runPackagingBoundary("parent", () => 42, { emit: line => pass.push(line) }), 42); assert.deepEqual(pass, []);
+});
+test("annotation budget is global, closed and column-zero with deduplication and overflow", () => {
+  const report = createPackagingDiagnostics("parent");
+  for (const phase of ["entry", "runtime", "source", "dependencies", "temp", "environment", "parent_namespaces", "parent_launch", "supervisor_close", "child_report", "final"]) {
+    report.mark(phase, "rejected", undefined); report.mark(phase, "rejected", undefined);
+  }
+  const lines = []; emitPackagingFailure(report.records, line => lines.push(line));
+  assert.equal(lines.length, 10); assert.ok(lines.at(-1).includes('"phase":"overflow"'));
+  assert.ok(lines.every(line => line.startsWith("::error ") && Buffer.byteLength(line) <= 768));
+  assert.ok(Buffer.byteLength(lines.join("")) <= 8192);
+  const records = lines.map(line => JSON.parse(line.slice(line.indexOf("::", 2) + 2)));
+  assert.equal(new Set(records.map(row => row.role + ":" + row.phase)).size, records.length);
+});
+test("one actual local Node report passes, while launch and child failures never pass", async () => {
+  const moduleUrl = new URL("../scripts/edge-proof.mjs", import.meta.url).href;
+  const source = `import {runPackagingBoundary} from ${JSON.stringify(moduleUrl)};const value=await runPackagingBoundary('child',r=>r.step('runtime',()=>({built:true})),{writer:line=>process.stdout.write(line)});console.log(JSON.stringify(value));`;
+  const options = { cwd: process.cwd(), env: packagingEnvironment(join(tmpdir(), "edge-unit-unused")), timeoutMs: 10000 };
+  const success = await runOwnedProcess(process.execPath, ["--input-type=module", "-e", source], options);
+  const report = createPackagingDiagnostics("parent");
+  assert.deepEqual(JSON.parse(acceptPackagingProcess(success, report, "child", "supervisor_close", "child_report")), { built: true });
+  const missing = await runOwnedProcess("/nonexistent-edge-diagnostic-command", [], options);
+  assert.throws(() => acceptPackagingProcess(missing, createPackagingDiagnostics("parent"), "child", "supervisor_close", "child_report"));
+  const failed = await runOwnedProcess(process.execPath, ["-e", "process.exitCode=7"], options);
+  assert.equal(failed.code, 7); assert.throws(() => acceptPackagingProcess(failed, createPackagingDiagnostics("parent"), "child", "supervisor_close", "child_report"));
+  const emitted = await runOwnedProcess(process.execPath, ["--input-type=module", "-e", `import {runPackagingBoundary} from ${JSON.stringify(moduleUrl)};try{await runPackagingBoundary('parent',r=>r.step('source',()=>{throw undefined}));}catch{process.exitCode=1}`], options);
+  assert.equal(emitted.code, 1); assert.ok(emitted.stdout.split("\n").filter(Boolean).every(line => line.startsWith("::error ")));
+});
+test("successful packaging receipt excludes extra data and invalid completion fields", () => {
+  const result = { code: 0, signal: null, closed: true, sha256: "a".repeat(64), observedProcesses: 2 };
+  const receipt = { version: 1, isolated: true, sourceSha: edgeProof.sourceSha, sourceTree: edgeProof.sourceTree, sourceFiles: 600, dependencyFiles: 268, exactErasures: 4, twoRoots: true, cliSha256: "b".repeat(64), results: { edge: result, upstream: result }, cloud: "UNRUN", sdk: "UNRUN" };
+  assert.deepEqual(validatePackagingReceipt(receipt), receipt);
+  assert.throws(() => validatePackagingReceipt({ ...receipt, stderr: "private" }));
+  assert.throws(() => validatePackagingReceipt({ ...receipt, results: { ...receipt.results, edge: { ...result, signal: "SIGKILL" } } }));
+  assert.throws(() => validatePackagingReceipt({ ...receipt, sourceFiles: 599 }));
+});
+test("Wrangler completion reports distinct marker, output hash and privacy gates", () => {
+  const bytes = Buffer.from("export default {};"), hash = createHash("sha256").update(bytes).digest("hex");
+  const phases = { marker: "edge_marker", hash: "edge_hash", privacy: "edge_privacy" };
+  const report = createPackagingDiagnostics("child");
+  verifyDryRun(successfulProcess(), bytes, hash, report, phases);
+  assert.deepEqual(report.records.filter(row => row.outcome === "fulfilled").map(row => row.phase), Object.values(phases));
+  for (const [result, body, expected, phase, roots] of [
+    [{ ...successfulProcess(), stdout: "" }, bytes, hash, "edge_marker", []],
+    [successfulProcess(), bytes, "0".repeat(64), "edge_hash", []],
+    [successfulProcess(), bytes, hash, "edge_privacy", ["export default"]],
+  ]) {
+    const failure = createPackagingDiagnostics("child");
+    assert.throws(() => verifyDryRun(result, body, expected, failure, phases, roots));
+    assert.equal(failure.records.filter(row => row.outcome === "rejected").at(-1).phase, phase);
+  }
 });
