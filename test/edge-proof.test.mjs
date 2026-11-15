@@ -3,8 +3,13 @@ import test from "node:test";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import YAML from "yaml";
 import { edgeProof, validatePlan, renderEdgeConfig } from "../scripts/edge-proof-profile.mjs";
-import { cases, newRuntimeAuthority, secretProjections, teardownGuard } from "../scripts/edge-proof.mjs";
+import { cases, newRuntimeAuthority, secretProjections, teardownGuard, packagingEnvironment, validateNamespace, namespaceArguments, runOwnedProcess, requireProcessSuccess, verifyDryRun, compareCapsules, admitSource, qualifyInstalledInputs } from "../scripts/edge-proof.mjs";
 import { deploymentTarget, assertDeploymentMutation } from "../scripts/deployment-profile.mjs";
 import { parseSdkReceipts, readBoundedJson } from "./openclaw-edge-native-cancellation.test.mjs";
 
@@ -117,4 +122,110 @@ test("actual authority initialization places all eight cases before global fence
   new Function("module", "authorityCall", "sha256Hex", code.code)(failing, async () => { invoked++; throw originalFailure; }, hash);
   try { await failing.exports.initializeProofAuthorities(env, authority); } catch (error) { caught = true; assert.equal(error, originalFailure); }
   assert.equal(caught, true); assert.equal(invoked, 1);
+});
+
+function networkEvidence() {
+  const parent = { net: "net:[10]", pid: "pid:[11]", mnt: "mnt:[12]", user: "user:[13]" };
+  const evidence = { platform: "linux", pid: 1, ppid: 0, uid: 0, namespaces: { net: "net:[20]", pid: "pid:[21]", mnt: "mnt:[22]", user: "user:[23]" }, interfaces: ["lo"], routes4: [], routes6: [], sharedMount: false, procMounted: true };
+  // PID is both a namespace name and process identity in the OS: keep them
+  // separate in evidence so neither can accidentally overwrite the other.
+  return { parent, evidence };
+}
+test("packaging environment is an explicit allowlist, never inherited credentials", () => {
+  const env = packagingEnvironment("/tmp/offline-fixture", "/runtime/bin/node");
+  assert.deepEqual(Object.keys(env).sort(), ["PATH", "HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "TMPDIR", "WRANGLER_LOG_PATH", "WRANGLER_SEND_METRICS", "DO_NOT_TRACK", "NO_COLOR", "LANG"].sort());
+  assert.equal(env.PATH, "/runtime/bin:/usr/bin:/bin");
+  assert.equal(env.HOME, "/tmp/offline-fixture/home");
+  assert.equal(env.WRANGLER_SEND_METRICS, "false");
+  assert.equal(env.DO_NOT_TRACK, "1");
+  for (const key of ["GITHUB_TOKEN", "GH_TOKEN", "CLOUDFLARE_API_TOKEN", "HTTPS_PROXY", "NODE_OPTIONS", "FORCE_COLOR"]) assert.equal(Object.hasOwn(env, key), false);
+});
+test("namespace invocation contains private descendant and mount boundaries with no privileged fallback", () => {
+  assert.deepEqual(namespaceArguments("/runtime/node", ["runner", "offline-child"]), ["--user", "--map-root-user", "--net", "--mount", "--propagation", "private", "--pid", "--fork", "--kill-child=SIGKILL", "--mount-proc", "--", "/runtime/node", "runner", "offline-child"]);
+});
+test("namespace evidence rejects absent, shared, external and malformed state", () => {
+  const { parent, evidence } = networkEvidence();
+  assert.equal(validateNamespace(evidence, parent), true);
+  for (const change of [{ platform: "darwin" }, { pid: 2 }, { uid: 1 }, { namespaces: undefined }, { interfaces: [] }, { interfaces: ["lo", "eth0"] }, { routes4: ["lo 00000000"] }, { routes6: ["malformed"] }, { sharedMount: true }, { sharedMount: undefined }, { procMounted: false }]) assert.throws(() => validateNamespace({ ...evidence, ...change }, parent));
+  for (const name of ["net", "pid", "mnt", "user"]) for (const value of [parent[name], undefined]) assert.throws(() => validateNamespace({ ...evidence, namespaces: { ...evidence.namespaces, [name]: value } }, parent));
+  assert.equal(validateNamespace({ ...evidence, pid: 2, ppid: 1 }, parent, true), true);
+  assert.throws(() => validateNamespace({ ...evidence, pid: 2, ppid: 3 }, parent, true));
+  const reject = `${"0".repeat(32)} 00 ${"0".repeat(32)} 00 ${"0".repeat(32)} ffffffff 00000000 00000000 00200200 lo`;
+  assert.equal(validateNamespace({ ...evidence, routes6: [reject] }, parent), true);
+  assert.throws(() => validateNamespace({ ...evidence, routes6: [reject.replace("00200200", "00000001")] }, parent));
+});
+const successfulProcess = () => ({ code: 0, signal: null, closed: true, timedOut: false, interrupted: false, errors: [], remaining: [], observed: new Map(), stdout: "--dry-run: exiting now.\n", stderr: "" });
+test("dry-run requires original successful close, marker and exact bytes, retaining undefined errors", () => {
+  const bytes = Buffer.from("export default {};\n"), hash = createHash("sha256").update(bytes).digest("hex");
+  assert.equal(verifyDryRun(successfulProcess(), bytes, hash).sha256, hash);
+  for (const change of [{ code: 1 }, { signal: "SIGABRT" }, { closed: false }, { timedOut: true }, { interrupted: true }, { errors: [undefined] }, { remaining: null }, { remaining: [{ pid: 42 }] }, { stdout: "child exited zero" }]) assert.throws(() => verifyDryRun({ ...successfulProcess(), ...change }, bytes, hash));
+  assert.throws(() => verifyDryRun(successfulProcess(), Buffer.alloc(0), hash));
+  assert.throws(() => verifyDryRun(successfulProcess(), Buffer.from("changed"), hash));
+  assert.throws(() => requireProcessSuccess({ ...successfulProcess(), errors: [undefined] }), error => error.errors.length === 2 && error.errors[1] === undefined);
+});
+test("source admission requires the exact commit and tree without fallback", () => {
+  const calls = [];
+  const git = (command, args) => { calls.push([command, args]); return args[1].endsWith("^{tree}") ? edgeProof.sourceTree : edgeProof.sourceSha; };
+  admitSource("/owned", git); assert.equal(calls.length, 2);
+  assert.ok(calls.every(([command, args]) => command === "git" && args[0] === "rev-parse"));
+  assert.throws(() => admitSource("/owned", () => "0".repeat(40)));
+  let caught = false; try { admitSource("/owned", () => { throw undefined; }); } catch (error) { caught = true; assert.equal(error, undefined); } assert.equal(caught, true);
+});
+test("two-root proof compares complete source, dependency and erasure receipts", () => {
+  const receipt = { sourceSha: edgeProof.sourceSha, sourceTree: edgeProof.sourceTree, sourceFiles: Array.from({ length: 600 }, (_, path) => ({ path, hash: "a" })), dependencyInputs: Array.from({ length: 268 }, (_, path) => ({ path, hash: "b" })), instrumentation: Array.from({ length: 4 }, (_, path) => ({ path, erasureExact: true })), observerSha256: "observer", harnessInputs: { one: "a" }, bundles: { edge: "b", upstream: "c" }, runtime: { node: "24.22.1" } };
+  compareCapsules(receipt, structuredClone(receipt));
+  for (const mutate of [r => { r.sourceFiles[1].hash = "x"; }, r => { r.dependencyInputs[0].hash = "x"; }, r => { r.instrumentation[0].erasureExact = false; }, r => { r.sourceFiles.pop(); }, r => { r.bundles.edge = "changed"; }, r => { r.sourceTree = "0".repeat(40); }]) { const changed = structuredClone(receipt); mutate(changed); assert.throws(() => compareCapsules(receipt, changed)); }
+});
+test("actual child success and unshare refusal retain original exit without executing namespaces", async () => {
+  const options = { cwd: process.cwd(), env: packagingEnvironment(join(tmpdir(), "edge-unit-unused")), timeoutMs: 10000 };
+  const success = await runOwnedProcess(process.execPath, ["-e", "process.stdout.write('complete\\n')"], options);
+  requireProcessSuccess(success); assert.equal(success.stdout, "complete\n");
+  const refused = await runOwnedProcess(process.execPath, ["-e", "process.exitCode=1"], options);
+  assert.equal(refused.code, 1); assert.equal(refused.closed, true); assert.throws(() => requireProcessSuccess(refused));
+  const missing = await runOwnedProcess("/nonexistent-edge-proof-command", [], options);
+  assert.equal(missing.closed, true); assert.ok(missing.errors.length); assert.throws(() => requireProcessSuccess(missing));
+});
+for (const signal of ["SIGINT", "SIGTERM"]) test(`actual child ${signal} forwarding joins original close and records interruption`, async () => {
+  const signals = new EventEmitter(); let ready = false;
+  const spawnProcess = (...args) => {
+    const child = spawn(...args);
+    child.stdout.on("data", data => { if (data.toString().includes("READY")) { ready = true; signals.emit(signal); } });
+    return child;
+  };
+  const source = `process.on('${signal}',()=>{process.stdout.write('TERM\\n');process.exitCode=7;clearInterval(held)});const held=setInterval(()=>{},1000);process.stdout.write('READY\\n')`;
+  const result = await runOwnedProcess(process.execPath, ["-e", source], { cwd: process.cwd(), env: packagingEnvironment(join(tmpdir(), "edge-unit-unused")), spawnProcess, signalSource: signals, timeoutMs: 10000 });
+  assert.equal(ready, true); assert.equal(result.interrupted, true); assert.equal(result.code, 7); assert.equal(result.closed, true); assert.match(result.stdout, /TERM/); assert.throws(() => requireProcessSuccess(result));
+  assert.equal(signals.listenerCount(signal), 0);
+});
+test("actual timeout escalates the owned group and joins parent and descendant closes", async () => {
+  const descendant = "process.on('SIGTERM',()=>process.exit(0));setInterval(()=>{},1000);process.stdout.write('DESCENDANT_READY\\n')";
+  const source = `const {spawn}=require('node:child_process');const child=spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:['ignore','pipe','inherit']});child.stdout.on('data',data=>process.stdout.write(data));child.on('close',()=>process.stdout.write('DESCENDANT_CLOSED\\n'));process.on('SIGTERM',()=>process.stdout.write('TERM\\n'));setInterval(()=>{},1000)`;
+  const result = await runOwnedProcess(process.execPath, ["-e", source], { cwd: process.cwd(), env: packagingEnvironment(join(tmpdir(), "edge-unit-unused")), timeoutMs: 2000, graceMs: 250 });
+  assert.match(result.stdout, /DESCENDANT_READY/); assert.match(result.stdout, /DESCENDANT_CLOSED/); assert.match(result.stdout, /TERM/);
+  assert.equal(result.timedOut, true); assert.equal(result.signal, "SIGKILL"); assert.equal(result.closed, true); assert.throws(() => requireProcessSuccess(result));
+});
+test("sample and synchronous spawn errors preserve undefined without passing cleanup", async () => {
+  const options = { cwd: process.cwd(), env: packagingEnvironment(join(tmpdir(), "edge-unit-unused")), timeoutMs: 10000 };
+  const sync = await runOwnedProcess("unused", [], { ...options, spawnProcess: () => { throw undefined; } });
+  assert.deepEqual(sync.errors, [undefined]); assert.equal(sync.closed, false); assert.throws(() => requireProcessSuccess(sync));
+  const sample = await runOwnedProcess(process.execPath, ["-e", ""], { ...options, sample: async () => { throw undefined; } });
+  assert.equal(sample.remaining, null); assert.ok(sample.errors.includes(undefined)); assert.throws(() => requireProcessSuccess(sample));
+});
+test("fresh packaging job uses pinned online setup and no credentials, upload, cache or activation", async () => {
+  const workflow = YAML.parse(await readFile(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"));
+  const job = workflow.jobs["edge-offline-packaging"];
+  assert.equal(job["runs-on"], "ubuntu-24.04"); assert.deepEqual(job.permissions, { contents: "read" });
+  assert.equal(job.environment, undefined); assert.equal(job.env, undefined);
+  assert.equal(job.steps[0].with["persist-credentials"], false);
+  assert.equal(job.steps[1].with["node-version"], "24.22.1"); assert.equal(job.steps[2].with.version, "11.28.4");
+  assert.ok(job.steps.filter(step => step.uses).every(step => /@[a-f0-9]{40}$/.test(step.uses)));
+  const text = JSON.stringify(job);
+  assert.doesNotMatch(text, /secrets\.|id-token|upload-artifact|actions\/cache|--execute|cf:provision|cf:deploy|sudo|sysctl|workflow_dispatch/);
+  assert.match(text, /online setup/); assert.match(text, new RegExp(edgeProof.sourceSha)); assert.match(text, new RegExp(edgeProof.sourceTree));
+  assert.equal(job.steps.at(-1).run, "node scripts/edge-proof.mjs offline-ci");
+});
+test("actual owned workspace installation qualifies contained links without a donor receipt", async () => {
+  const result = await qualifyInstalledInputs(process.cwd());
+  assert.equal(result.owned, true); assert.ok(result.containedLinks > 0);
+  await assert.rejects(qualifyInstalledInputs(join(process.cwd(), "test")));
 });
