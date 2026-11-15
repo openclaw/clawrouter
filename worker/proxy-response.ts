@@ -54,7 +54,8 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   const sse = !nativeChat && !bedrock && !compact && !images && !responses && eventStream ? createSseUsageInspector(revokeRejection, bodyInspection?.acceptJson, usageContext) : null;
   let inspect = !validated && !nativeChat && !bedrock && !compact && !images && !responses && !sse && json;
   const decoder = new TextDecoder();
-  const reader = response.body.getReader(), input = inputRetirement(reader, replayRetirements.get(response.body));
+  const reader = response.body.getReader(), sourceRetired = replayRetirements.get(response.body);
+  const input = sourceRetired ? replayInputOwner(reader, sourceRetired) : inputRetirement(reader);
   let text = "", bytes = 0, nonempty = false, finished = false;
   let completedJson: UsageInspection | undefined;
   let resolve!: (result: ObservedUsage) => void;

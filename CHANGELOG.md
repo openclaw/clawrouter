@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- Preserve both replay source and delivery-reader release failures when usage observation retires a mapped replay body.
+
 - Preserve the original LiteLLM retirement failure definedness before independent observation or reporting errors are aggregated.
 
 - Match LiteLLM public waiter cancellation and pre-output rejection receipts, retaining the first Worker predicate independently of SDK failure evidence.
