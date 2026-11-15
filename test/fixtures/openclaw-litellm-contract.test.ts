@@ -870,6 +870,14 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
     if (!ops || new Set(ops.map(op => op[0])).size !== ops.length || ops.some(op => op[0] >= a[0]) || ops.length + a[6] > a[0]) return null;
     return [...a.slice(0, 7), ops.map(op => [...op])];
   }
+  const fixedStages = new Set(["warm_a", "warm_b", "warm_cached", "warm_versioned", "warm_count", "warm_window", "held_started", "held_mutation", "held_release", "held_join", "held_result", "waiter_started", "waiter_mutation", "waiter_release", "waiter_join", "waiter_result"]);
+  const stageCase = (id: unknown, phase: unknown) => typeof phase === "string" && fixedStages.has(phase) && names.has(id as string)
+    && (phase.startsWith("warm_") ? id === (phase === "warm_b" ? "sdk_warm_b" : "sdk_warm_a")
+      : phase.startsWith("held_") ? ["sdk_held_narrow", "sdk_held_broaden", "sdk_held_revoke"].includes(id as string) : id === "sdk_waiter_abort");
+  const stageFacts = (value: unknown) => {
+    const a = array(value, 3, (_: unknown) => true);
+    return a && stageCase(a[0], a[1]) && ["unknown", "undefined"].includes(a[2] as string) ? [...a] : null;
+  };
   function validate(v: unknown) {
     try {
       if (!v || typeof v !== "object" || isProxy(v)) return null;
@@ -878,11 +886,15 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
       if (Object.hasOwn(v, "witness")) keys.push("witness");
       if (Object.hasOwn(v, "worker")) keys.push("worker");
       if (Object.hasOwn(v, "roles")) keys.push("roles");
+      if (Object.hasOwn(v, "stage")) keys.push("stage");
       if (Reflect.ownKeys(v).length !== keys.length || keys.some(k => !Object.hasOwn(Object.getOwnPropertyDescriptor(v, k) ?? {}, "value"))) return null;
       const r: any = Object.fromEntries(keys.map(k => [k, own(v, k)]));
       if (r.v !== 1 || !["sdk", "outer"].includes(r.layer) || !names.has(r.id) || !["unknown", "catalog", "chat"].includes(r.role) || !phases.has(r.phase)
         || !["undefined", "unknown", "child", "overflow"].includes(r.kind) || !(r.count === null || Number.isSafeInteger(r.count) && r.count >= 0 && r.count <= 1000000)
         || !["UNKNOWN", "EXIT_1", "TIMEOUT", "SIGTERM", "SIGKILL", "REPORT_INVALID", "REPORT_GROUP", "REPORT_QUOTA", "REPORT_WRITE", "REPORT_WORKER", "REPORT_WITNESS", "REPORT_FLUSH"].includes(r.code)) return null;
+      if (fixedStages.has(r.phase) && (r.layer !== "sdk" || r.role !== "catalog" || !stageCase(r.id, r.phase) || keys.length !== 8 || !["unknown", "undefined"].includes(r.kind))) return null;
+      if (keys.includes("stage") && (keys.length !== 9 || r.layer !== "outer" || r.id !== "none" || r.role !== "unknown"
+        || r.phase !== "child_result" || r.kind !== "child" || !(r.stage = stageFacts(r.stage)))) return null;
       if (r.code.startsWith("REPORT_") && r.phase !== "reporting") return null;
       if (r.phase === "reporting" && (r.id !== "none" || r.role !== "unknown" || !r.code.startsWith("REPORT_") || keys.length !== 8)) return null;
       if (keys.includes("roles")) {
@@ -972,6 +984,19 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
     for (const value of records) {
       const r = validate(value);
       if (r) valid.push(r); else failed("REPORT_INVALID", new Error("invalid LiteLLM diagnostic"));
+    }
+    // The reserved helper record carries the first precise stage without taking
+    // a slot from original witnesses, API roles or the generic primary failure.
+    const firstStage = valid.find(r => fixedStages.has(r.phase));
+    if (firstStage) for (let i = 0; i < valid.length; i++) if (valid[i].phase === "child_result") {
+      const stage = [firstStage.id, firstStage.phase, firstStage.kind];
+      if (valid[i].stage && JSON.stringify(valid[i].stage) !== JSON.stringify(stage)) {
+        failed("REPORT_GROUP", new Error("conflicting LiteLLM stage witness"));
+        const { stage: discarded, ...helper } = valid[i];
+        valid[i] = validate({ ...helper, stage }); continue;
+      }
+      const retained = validate({ ...valid[i], stage });
+      if (retained) valid[i] = retained; else failed("REPORT_INVALID", new Error("invalid LiteLLM stage envelope"));
     }
     const groups = new Map<string, any[]>();
     for (const r of valid) if (r.witness) { const key = [r.layer, r.role, r.id].join("/"); const group = groups.get(key) ?? []; group.push(r); groups.set(key, group); }

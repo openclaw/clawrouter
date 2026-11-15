@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve the first precise LiteLLM catalog failure stage in the reserved helper envelope without displacing original failure, role or retirement evidence.
+
 - Correct LiteLLM canonical catalog cache expectations and bind held readiness to original request reads, preserving all discovery joins after control or release failures.
 
 - Distinguish source-qualified native stored-error data outcomes from LiteLLM local handle-retirement failures while retaining independent Worker and accounting checks.

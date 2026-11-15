@@ -1612,9 +1612,33 @@ test("warm held D8 source cache aliases hit while credential endpoint expiry and
   assert.equal(await hit(store,make("https://fixture.example/other","credential-a"),1001),"MISS");assert.equal(await hit(store,key,61000),"MISS");assert.equal(await hit(store,key,1001,true),"MISS");
 });
 test("warm held fixed stages retain undefined and fit closed annotation budgets",()=>{
-  const proof=litellmDiagnostics(["sdk_warm_a","sdk_held_narrow"],nodeTypes.isProxy),lines=[];
-  for(const phase of ["warm_a","warm_b","warm_cached","warm_versioned","warm_count","warm_window","held_started","held_mutation","held_release","held_join","held_result","waiter_started","waiter_mutation","waiter_release","waiter_join","waiter_result"]){const r=proof.record("sdk","sdk_warm_a",phase,undefined,"catalog");assert.equal(proof.validate(r).kind,"undefined");proof.emit([r],s=>lines.push(s));}
+  const proof=litellmDiagnostics(["sdk_warm_a","sdk_warm_b","sdk_held_narrow","sdk_waiter_abort"],nodeTypes.isProxy),lines=[];
+  for(const phase of ["warm_a","warm_b","warm_cached","warm_versioned","warm_count","warm_window","held_started","held_mutation","held_release","held_join","held_result","waiter_started","waiter_mutation","waiter_release","waiter_join","waiter_result"]){const id=phase.startsWith("held_")?"sdk_held_narrow":phase.startsWith("waiter_")?"sdk_waiter_abort":phase==="warm_b"?"sdk_warm_b":"sdk_warm_a";const r=proof.record("sdk",id,phase,undefined,"catalog");assert.equal(proof.validate(r).kind,"undefined");proof.emit([r],s=>lines.push(s));}
   proof.flush(s=>lines.push(s));assert.ok(lines.every(s=>Buffer.byteLength(s)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);assert.ok(lines.length<=10);
+});
+test("warm held reserved stage survives full witness role helper and generic envelope",()=>{
+  for (const [id,phase] of [["sdk_held_narrow","held_started"],["sdk_waiter_abort","waiter_release"]]) {
+    const proof=litellmDiagnostics(cases.map(r=>r.id),nodeTypes.isProxy),lines=[];
+    const pairs=[...reportingPair(proof,"sdk_provider_error",[true,false],true),...reportingPair(proof,"sdk_partial_abort",[false,true],true)],roles=roleRecords(proof,true);
+    const generic=proof.record("sdk",id,"control",undefined,"catalog"),precise=proof.record("sdk",id,phase,undefined,"catalog");
+    const later=proof.record("sdk","sdk_held_broaden","held_release",{},"catalog");
+    proof.emit([generic,...pairs,...roles,proof.child({code:1}).envelope,precise,later,proof.boundary("REPORT_WORKER",undefined)],line=>lines.push(line));proof.flush(line=>lines.push(line));
+    const records=reportingDecode(proof,lines);
+    assert.deepEqual(records.slice(0,4),pairs);assert.deepEqual(records.slice(4,6),roles);assert.ok(records.some(r=>r.phase==="control"&&r.id===id&&r.kind==="undefined"));
+    const helper=records.find(r=>r.phase==="child_result");assert.equal(helper.code,"EXIT_1");assert.deepEqual(helper.stage,[id,phase,"undefined"]);
+    assert.ok(records.some(r=>r.phase==="reporting"&&r.kind==="undefined"));assert.ok(records.some(r=>r.phase==="overflow"));
+    assert.ok(lines.length<=10);assert.ok(Buffer.byteLength(lines.join(""))<=8192);
+  }
+});
+test("warm held stage envelope rejects foreign case phase kind and hostile fields",()=>{
+  const proof=litellmDiagnostics(cases.map(r=>r.id),nodeTypes.isProxy),helper=proof.child({code:1}).envelope;
+  for(const stage of [["sdk_eof","held_started","undefined"],["sdk_held_narrow","waiter_join","unknown"],["sdk_warm_a","warm_b","undefined"],["sdk_waiter_abort","waiter_join","object"],["sdk_held_narrow","held_unknown","unknown"]])assert.equal(proof.validate({...helper,stage}),null);
+  let reads=0;const hostile={...helper};Object.defineProperty(hostile,"stage",{enumerable:true,get(){reads++;throw undefined;}});assert.equal(proof.validate(hostile),null);assert.equal(reads,0);
+  assert.equal(proof.validate({...proof.record("sdk","sdk_held_narrow","held_started",undefined,"catalog"),id:"sdk_eof"}),null);
+  const lines=[],first=proof.record("sdk","sdk_held_narrow","held_started",undefined,"catalog");
+  assert.throws(()=>proof.emit([first,{...helper,stage:["sdk_waiter_abort","waiter_release","undefined"]}],line=>lines.push(line)));
+  assert.ok(reportingDecode(proof,lines).some(r=>r.phase==="reporting"&&r.code==="REPORT_GROUP"));
+  assert.deepEqual(reportingDecode(proof,lines).find(r=>r.phase==="child_result").stage,["sdk_held_narrow","held_started","undefined"]);
 });
 // END warm held pure tests.
 
