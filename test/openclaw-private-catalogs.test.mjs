@@ -518,19 +518,19 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
    source.slice(source.indexOf('async function diagnosticControl('),source.indexOf('checkpoints.registration("describe","enter")'));
   return new Function(...Object.keys(deps),'"use strict";'+stripTypeScriptTypes(code,{mode:'strip'})+';return {session,diagnosticControl};')(...Object.values(deps));
  }
- async function privateEOFRun({fail=0,reason=undefined,reject=false,stop='stop',reportFail=false,saturate=false,operand=false}={}){
-  const out=[],calls=[],reads=[],row={id:'inert',provider:'baseten',api:'stream',scenario:'eof',control:'eof'},report=privateCheckpointFunctions().createPrivateCheckpointReporter('sdk',r=>{out.push(r);if(reportFail&&r.v===4)throw undefined;});
+ async function privateEOFRun({fail=0,reason=undefined,reject=false,stop='stop',reportFail=false,saturate=false,operand=false,fields={},http=null,hookFault=null,proxyCheck=privateNodeTypes.isProxy}={}){
+  const out=[],calls=[],reads=[],row={id:'inert',provider:'baseten',api:'stream',scenario:'eof',control:'eof'},report=privateCheckpointFunctions().createPrivateCheckpointReporter('sdk',r=>{out.push(r);if(reportFail&&[4,5].includes(r.v))throw undefined;});
   if(saturate)for(let i=0;i<20;i++){report.mark(i,'module','fulfilled');report.flush(i);}
-  report.mark(null,'callback','enter',undefined,null,null,0);report.mark(null,'selection','fulfilled',undefined,null,null,0);report.bindCase(0,0);report.mark(0,'setup','fulfilled');report.mark(0,'owner','fulfilled');report.bindBody(0,row,reads);
+  report.mark(null,'callback','enter',undefined,null,null,0);report.mark(null,'selection','fulfilled',undefined,null,null,0);report.bindCase(0,0);report.mark(0,'setup','fulfilled');report.mark(0,'owner','fulfilled');report.bindBody(0,row,reads);report.bindBodyMetadata(0,row,proxyCheck);
   let site=0,discoveryP,resultP,stopGets=0,resultCalls=0,bodyPending;
   const at=report.bodySite;report.bodySite=function(...args){site=args[2];return Reflect.apply(at,report,args);};
   const check=id=>{if(id>0&&fail===id)throw reason;};
   const model={id:'tenant/opaque-a'};if(operand&&fail===11)Object.defineProperty(model,'opaque',{enumerable:true,get(){throw reason;}});
   const provider={baseUrl:'https://fixture.invalid/v1/native/baseten',api:'openai-completions',models:[model]};
-  const value={get stopReason(){stopGets++;if(operand&&fail===20)throw reason;return stop;},content:[{type:'text',text:'private-prefix'}],usage:{input:4,output:3,totalTokens:7}};
+  const value={...fields,get stopReason(){stopGets++;if(operand&&fail===20)throw reason;return stop;},content:[{type:'text',text:'private-prefix'}],usage:{input:4,output:3,totalTokens:7}};
   const key=()=> 'synthetic-key',base=()=>provider.baseUrl;
   const catalog={run(...args){calls.push('catalog');assert.equal(this,catalog);assert.equal(args.length,1);check(4);discoveryP=fail===5?Promise.reject(reason):Promise.resolve({provider});return discoveryP;}};
-  function stream(...args){calls.push('stream');assert.equal(this,undefined);assert.equal(args.length,3);assert.equal(args[2].maxTokens,16);assert.equal(args[2].apiKey,key());check(14);
+  function stream(...args){calls.push('stream');assert.equal(this,undefined);assert.equal(args.length,3);assert.equal(args[2].maxTokens,16);assert.equal(args[2].apiKey,key());check(14);if(http!==null){const response=typeof http==='number'?{status:http}:http;const options=args[2];if(hookFault==='foreign')options.onResponse.call({},response,args[0]);else{options.onResponse(response,args[0]);if(hookFault==='duplicate')options.onResponse(response,args[0]);}}
    return {result(){resultCalls++;calls.push('result');check(15);resultP=fail===18?Promise.reject(reason):Promise.resolve(value);return resultP;}};}
   const plugin={id:'baseten',catalog,wrapStreamFn({streamFn}){check(12);assert.equal(streamFn,stream);return streamFn;}};
   const expect=value=>({toBe(expected){if(site===20&&stop!=='stop')throw reason;if(!operand)check(site);assert.equal(value,expected);},
@@ -551,17 +551,17 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
  test('Private EOF source spans preserve every original failure including undefined',async()=>{
   for(let site=1;site<=22;site++)for(const reason of [undefined,{}]){
    const r=await privateEOFRun({fail:site,reason,operand:site===11});assert.equal(r.failure,true,'site '+site);assert.equal(r.error,reason);
-   const cap=r.out.find(x=>x.v===4);assert.ok(cap,'capsule '+site);assert.equal(cap.body[0],site);assert.equal(cap.body[1],[5,18].includes(site)?6:5);assert.equal(cap.defined,reason!==undefined);assert.equal(cap.owner,null);assert.equal(cap.receipt,null);
-   assert.equal(r.report.failures.length,0);assert.ok(r.resultCalls<=1);assert.equal(r.out.filter(x=>x.v===4).length,1);
+   const cap=r.out.find(x=>[4,5].includes(x.v));assert.ok(cap,'capsule '+site);assert.equal(cap.body[0],site);assert.equal(cap.body[1],[5,18].includes(site)?6:5);assert.equal(cap.defined,reason!==undefined);assert.equal(cap.owner,null);assert.equal(cap.receipt,null);
+   assert.equal(r.report.failures.length,0);assert.ok(r.resultCalls<=1);assert.equal(r.out.filter(x=>[4,5].includes(x.v)).length,1);
   }
  });
  test('Private EOF original error result and direct rejection stay distinct with single getters',async()=>{
   const success=await privateEOFRun();assert.equal(success.failure,false);assert.equal(success.stopGets,1);assert.equal(success.resultCalls,1);assert.equal(success.report.failures.length,0);
   assert.deepEqual(success.calls,['catalog','catalog_result','stream','result','inference_result','finish']);
   const error=await privateEOFRun({stop:'error'}),rejected=await privateEOFRun({fail:18});
-  assert.deepEqual([...error.out.find(x=>x.v===4).body].filter((_,i)=>[0,1,2,5].includes(i)),[20,5,false,1]);assert.equal(error.stopGets,1);assert.equal(error.out.find(x=>x.v===4).body[4],3);
-  assert.deepEqual([...rejected.out.find(x=>x.v===4).body].filter((_,i)=>[0,1,2,5].includes(i)),[18,6,false,null]);assert.equal(rejected.stopGets,0);assert.equal(rejected.out.find(x=>x.v===4).body[4],1);
-  for(const site of [3,20]){const r=await privateEOFRun({fail:site,operand:true});assert.equal(r.error,undefined);assert.equal(r.out.find(x=>x.v===4).body[0],site);assert.equal(r.report.failures.length,0);}
+  assert.deepEqual([...error.out.find(x=>[4,5].includes(x.v)).body].filter((_,i)=>[0,1,2,5].includes(i)),[20,5,false,1]);assert.equal(error.stopGets,1);assert.equal(error.out.find(x=>[4,5].includes(x.v)).body[4],3);
+  assert.deepEqual([...rejected.out.find(x=>[4,5].includes(x.v)).body].filter((_,i)=>[0,1,2,5].includes(i)),[18,6,false,null]);assert.equal(rejected.stopGets,0);assert.equal(rejected.out.find(x=>[4,5].includes(x.v)).body[4],1);
+  for(const site of [3,20]){const r=await privateEOFRun({fail:site,operand:true});assert.equal(r.error,undefined);assert.equal(r.out.find(x=>[4,5].includes(x.v)).body[0],site);assert.equal(r.report.failures.length,0);}
  });
  test('Private EOF source observation does not subscribe to or substitute original promises',async()=>{
   // The actual callback and session contain no additional then/iterator/read calls.
@@ -573,29 +573,86 @@ if(process.argv[1]&&fileURLToPath(import.meta.url)===process.argv[1]){
  });
  test('Private EOF first span survives saturation reporting faults and held late joins',async()=>{
   const reason={},r=await privateEOFRun({fail:21,reason,reportFail:true,saturate:true});assert.equal(r.error,reason);assert.deepEqual([...r.report.failures],[undefined]);
-  const cap=r.out.find(x=>x.v===4),before=JSON.stringify(cap);let release;const held=new Promise(resolve=>{release=resolve;});
+  const cap=r.out.find(x=>[4,5].includes(x.v)),before=JSON.stringify(cap);let release;const held=new Promise(resolve=>{release=resolve;});
   r.report.observe(0,'original_join',()=>held,undefined,[]);assert.equal(cap.stages[5],0);assert.equal(cap.owner,null);
   release();await r.report.drain();r.report.observe(0,'postlude',()=>Promise.reject(undefined),undefined,[]);await r.report.drain();r.report.finish();
-  assert.equal(JSON.stringify(cap),before);assert.equal(r.out.filter(x=>x.v===4).length,1);assert.ok(r.out.length<=9);
+  assert.equal(JSON.stringify(cap),before);assert.equal(r.out.filter(x=>[4,5].includes(x.v)).length,1);assert.ok(r.out.length<=9);
  });
  test('Private EOF foreign contexts invalidate source coverage without replacing raw failure',()=>{
   for(const mutate of [(r,row)=>r.bodySite(0,{},2,1),(r,row)=>r.bindBody(0,{},[]),(r,row)=>r.bodySite(0,row,1,2),(r,row)=>r.bodySite(0,row,23,1)]){
    const out=[],r=privateCheckpointFunctions().createPrivateCheckpointReporter('sdk',x=>out.push(x)),row={};r.bindCase(0,0);r.bindBody(0,row,[]);mutate(r,row);r.mark(0,'body','rejected',undefined);
-   assert.ok(r.failures.length);assert.equal(out.some(x=>x.v===4),false);assert.equal(out.find(x=>x.v===2).defined,false);
+   assert.ok(r.failures.length);assert.equal(out.some(x=>[4,5].includes(x.v)),false);assert.equal(out.find(x=>x.v===2).defined,false);
   }
  });
  test('Private EOF V4 source tuple is bounded and relays within the existing shared quota',async()=>{
-  const {validatePrivateCheckpoint,createPrivateCheckpointReporter}=privateCheckpointFunctions(),r=await privateEOFRun({fail:22,reason:{}}),cap=r.out.find(x=>x.v===4);
-  const maximum={...cap,case:107,decl:20,body:[22,5,true,2097151,3,3,Array(4).fill(65535)]};validatePrivateCheckpoint(maximum);
+  const {validatePrivateCheckpoint,createPrivateCheckpointReporter}=privateCheckpointFunctions(),r=await privateEOFRun({fail:22,reason:{}}),cap=r.out.find(x=>[4,5].includes(x.v));
+  const {meta:ignored,...legacy}=cap;const maximum={...legacy,v:4,case:107,decl:20,body:[22,5,true,2097151,3,3,Array(4).fill(65535)]};validatePrivateCheckpoint(maximum);
   for(const body of [[23,5,true,0,0,null,[0,0,0,0]],[5,6,false,0,0,null,[0,0,0,0]],[4,6,true,0,0,null,[0,0,0,0]],[1,5,true,0,0,1,[0,0,0,0]],[1,5,true,0,0,null,[0,0,0,65536]],[5,6,true,0,1,null,[0,0,0,0]],[5,5,true,65535,0,null,[0,0,0,0]],[]])assert.throws(()=>validatePrivateCheckpoint({...maximum,body}));
   for(const change of [{lane:'outer'},{decl:1},{phase:'postlude'},{owner:[1,0,0,0,0,0]},{unexpected:1}])assert.throws(()=>validatePrivateCheckpoint({...maximum,...change}));
-  const records=privateCheckpointRecords({stdout:'PRIVATE_CHECKPOINT '+JSON.stringify(cap)+'\n'});assert.equal(records.length,1);assert.equal(records[0].v,4);
+  const records=privateCheckpointRecords({stdout:'PRIVATE_CHECKPOINT '+JSON.stringify(cap)+'\n'});assert.equal(records.length,1);assert.equal(records[0].v,5);
   const commands=[],emit=privateAnnotationEmitter(x=>commands.push(x));
   for(const row of privateNativeControls)emit({v:1,pin:privateCatalogPin,p:row.provider,a:row.api,r:row.control,q:false,vect:false,worker:false,restore:false,rejects:1024,pending:1024});
   emit(maximum);const outer=createPrivateCheckpointReporter('outer',emit);for(let i=0;i<108;i++){outer.mark(i,'body','rejected',undefined);outer.flush(i);}outer.execOutcome({v:3,pin:privateCatalogPin,lane:'outer',kind:'exec',phase:'exec',state:'rejected',defined:true,fields:[[2,-2147483648],[2,'SIGTERM'],[2,false]]});outer.finish();
-  for(const x of r.out.filter(x=>x.v!==4))emit(x);
+  for(const x of r.out.filter(x=>![4,5].includes(x.v)))emit(x);
   for(let i=0;i<4;i++)emit({v:1,pin:privateCatalogPin,lane:'outer',case:107,phase:'observer',state:'rejected',defined:false,acq:4095,op:4095,count:65535});
   assert.ok(commands.length<=48);assert.ok(commands.every(x=>Buffer.byteLength(x)<=768));assert.ok(Buffer.byteLength(commands.join(''))<=16384);
+ });
+ test('Private V5 result labels and original HTTP status remain independent',async()=>{
+  const r=await privateEOFRun({stop:'error',fields:{errorType:'SqliteWorkerError',errorCode:'unavailable'},http:200});
+  assert.equal(r.failure,true);const cap=r.out.find(x=>x.v===5);assert.deepEqual([...cap.meta].map(x=>x===null?null:[...x]),[[5,2],[5,10],[1,200],null]);
+  assert.equal(r.resultCalls,1);assert.equal(r.calls.filter(x=>x==='stream').length,1);assert.equal(r.stopGets,1);assert.equal(r.report.failures.length,0);
+  const projected=await privateEOFRun({stop:'error',fields:{errorCode:'503'},http:401});
+  assert.deepEqual([...projected.out.find(x=>x.v===5).meta[1]],[4,null]);assert.deepEqual([...projected.out.find(x=>x.v===5).meta[2]],[1,401]);
+  for(const options of [{fail:2},{fail:14},{fail:18}]){const x=await privateEOFRun(options),m=x.out.find(x=>x.v===5).meta;assert.deepEqual([...m[0]],[0,null]);assert.deepEqual([...m[2]],[0,null]);}
+ });
+ function privateMetadataOwner(proxyCheck=privateNodeTypes.isProxy){const out=[],r=privateCheckpointFunctions().createPrivateCheckpointReporter('sdk',x=>out.push(x)),row={provider:'baseten',api:'stream',control:'eof'},originals=[];
+  r.bindCase(0,0);r.bindBody(0,row,originals);r.bindBodyMetadata(0,row,proxyCheck);const caller={},model={},hook=r.bodyResponseObserver(0,row,caller,model),pending={};r.bodyResultPending(0,row,caller,pending);
+  const snapshot=()=>{r.bodySite(0,row,18,3);r.bodySite(0,row,18,4);r.bodySite(0,row,20,1);r.mark(0,'body','rejected',undefined);return out.find(x=>x.v===5);};return {r,row,originals,caller,model,hook,pending,out,snapshot};
+ }
+ test('Private V5 own-data projection never calls getters or traverses proxies',()=>{
+  let gets=0;const value={get errorType(){gets++;throw undefined;},errorCode:undefined},h=privateMetadataOwner();h.r.bodyResult(0,h.row,h.pending,value);
+  h.hook.call({onResponse:h.hook},{get status(){gets++;throw undefined;}},h.model);const m=h.snapshot().meta;
+  assert.deepEqual([...m[0]],[3,null]);assert.deepEqual([...m[1]],[2,null]);assert.deepEqual([...m[2]],[2,null]);assert.equal(gets,0);assert.equal(h.r.failures.length,0);
+  const proxy=new Proxy({}, {getOwnPropertyDescriptor(){gets++;throw undefined;}}),p=privateMetadataOwner();p.r.bodyResult(0,p.row,p.pending,proxy);p.hook.call({onResponse:p.hook},proxy,p.model);
+  assert.deepEqual([...p.snapshot().meta[0]],[4,null]);assert.equal(gets,0);
+  for(const value of [null,undefined,{},Object.create({errorCode:'unavailable'}),{errorType:'private arbitrary prose',errorCode:'503'}]){const a=privateMetadataOwner();a.r.bodyResult(0,a.row,a.pending,value);assert.ok(a.snapshot().meta[0][0]!==5);}
+ });
+ test('Private V5 observer faults preserve original errors and cannot bind aliases',async()=>{
+  for(const hookFault of ['foreign','duplicate']){const r=await privateEOFRun({stop:'error',reason:undefined,http:200,hookFault});assert.equal(r.failure,true);assert.equal(r.error,undefined);assert.equal(r.report.failures.length,3);assert.deepEqual([...r.out.find(x=>x.v===5).meta[2]],[3,null]);}
+  const h=privateMetadataOwner(()=>{throw undefined;});h.hook.call({onResponse:h.hook},{status:200},h.model);h.r.bodyResult(0,h.row,h.pending,{});assert.equal(h.r.failures.length,2);assert.equal(h.r.failures[0],undefined);assert.ok(h.r.failures[1]);assert.deepEqual([...h.snapshot().meta[2]],[3,null]);
+  for(const change of [h=>h.r.bodyResult(0,{},h.pending,{}),h=>h.r.bodyResult(0,h.row,{},{}),h=>h.hook.call({onResponse:h.hook},{status:200},{})]){const h=privateMetadataOwner();change(h);assert.equal(h.r.failures.length,1);assert.notEqual(h.snapshot().meta[2][0],1);}
+  const primary={},r=await privateEOFRun({stop:'error',reason:primary,reportFail:true,saturate:true,http:200});assert.equal(r.error,primary);assert.deepEqual([...r.report.failures],[undefined]);assert.equal(r.out.filter(x=>x.v===5).length,1);
+ });
+ test('Private V5 captures first actual original failure in observation order',async()=>{
+  const source=readFileSync(new URL('./fixtures/openclaw-private-catalogs-contract.test.ts',import.meta.url),'utf8');
+  const code=source.slice(source.indexOf(' const observer=(p:Promise<unknown>)'),source.indexOf(' const patch=(object:any'));
+  for(const kind of ['guard','fetch','read'])for(const reason of [undefined,{}])for(const synchronous of [false,true]){
+   const h=privateMetadataOwner(),w={owner:{},originals:h.originals,observers:[],observerFailures:[],syncFailures:[],sequence:0};
+   const api=new Function('w','originals','transports','checkpoints','caseIndex','row','"use strict";'+stripTypeScriptTypes(code,{mode:'strip'})+';return {invoke};')(w,h.originals,[],h.r,0,h.row);
+   const pending=synchronous?null:Promise.reject(reason);let thrown=false,error;
+   try{const original=api.invoke(kind,()=>{if(synchronous)throw reason;return pending;});assert.equal(original,pending);await original;}catch(e){thrown=true;error=e;}
+   await Promise.all(w.observers);assert.equal(thrown,true);assert.equal(error,reason);assert.equal(h.originals.length,1);
+   const second={kind:'read',state:'rejected',reason:{}};h.originals.push(second);h.r.bodyOperationFailure(0,h.row,second,second.reason);
+   assert.deepEqual([...h.snapshot().meta[3]],[['guard','fetch','read'].indexOf(kind)+1,synchronous?1:2,reason!==undefined]);
+  }
+  const h=privateMetadataOwner(),foreign={kind:'read',state:'rejected',reason:undefined};h.r.bodyOperationFailure(0,h.row,foreign,undefined);assert.equal(h.r.failures.length,1);assert.equal(h.snapshot().meta[3],null);
+ });
+ test('Private V5 binding faults permanently invalidate metadata before any later valid call',()=>{
+  for(const breakBinding of [h=>h.r.bodyResultPending(0,h.row,h.caller,h.pending),h=>h.r.bodyResultPending(0,h.row,{},{}),h=>h.r.bodyResult(0,h.row,{},{}),h=>h.r.bodyResult(0,{},h.pending,{}),h=>h.r.bodyResponseObserver(0,h.row,h.caller,h.model),h=>h.r.bindBodyMetadata(0,h.row,privateNodeTypes.isProxy)]){
+   const h=privateMetadataOwner();breakBinding(h);h.r.bodySite(0,h.row,18,3);h.r.bodySite(0,h.row,18,4);
+   h.r.bodyResult(0,h.row,h.pending,{errorType:'SqliteWorkerError',errorCode:'unavailable'});h.hook.call({onResponse:h.hook},{status:200},h.model);
+   h.r.bodySite(0,h.row,20,1);h.r.mark(0,'body','rejected',undefined);const m=h.out.find(x=>x.v===5).meta;
+   assert.ok(h.r.failures.length>=3);assert.deepEqual([...m[0]],[4,null]);assert.deepEqual([...m[1]],[4,null]);assert.deepEqual([...m[2]],[3,null]);assert.equal(m[3],null);
+  }
+  const h=privateMetadataOwner();h.r.bodySite(0,h.row,18,3);h.r.bodySite(0,h.row,18,4);h.r.bodyResult(0,h.row,h.pending,{errorType:'SqliteWorkerError',errorCode:'unavailable'});
+  h.hook.call({onResponse:h.hook},{status:200},h.model);h.r.bodyResult(0,h.row,h.pending,{});h.r.bodySite(0,h.row,20,1);h.r.mark(0,'body','rejected',undefined);
+  const m=h.out.find(x=>x.v===5).meta;assert.deepEqual([...m[0]],[4,null]);assert.deepEqual([...m[2]],[3,null]);
+ });
+ test('Private V5 schema denies foreign cases malformed metadata and completion claims',async()=>{
+  const r=await privateEOFRun({stop:'error',http:200}),cap=r.out.find(x=>x.v===5),validate=privateCheckpointFunctions().validatePrivateCheckpoint;
+  for(const meta of [[],[[5,3],[0,null],[0,null],null],[[0,1],[0,null],[0,null],null],[[0,null],[5,11],[0,null],null],[[0,null],[0,null],[1,99],null],[[0,null],[0,null],[0,200],null],[[0,null],[0,null],[0,null],[4,2,true]]])assert.throws(()=>validate({...cap,meta}));
+  for(const change of [{case:4},{decl:4},{owner:[0,0,0,0,0,0]},{receipt:[]},{extra:true},{body:[18,6,true,0,1,null,[0,0,0,0]]}])assert.throws(()=>validate({...cap,...change}));
+  const command='::notice title=Private closed diagnostic::'+JSON.stringify(cap)+'\n';assert.ok(Buffer.byteLength(command)<=768);assert.equal(privateCheckpointRecords({stdout:'PRIVATE_CHECKPOINT '+JSON.stringify(cap)+'\n'})[0].v,5);
  });
  // END Private EOF body witness inert regressions
  // BEGIN Private early runner inert regressions

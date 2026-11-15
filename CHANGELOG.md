@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- Observe the first Private Baseten EOF result labels and original response status with bounded, case-owned diagnostics; preserve original SDK errors and independent observer failures.
+
 - Preserve the first Private EOF body source span and original call/await outcomes in the existing bounded failure capsule, without changing SDK operations or retirement/accounting acceptance.
 
 - Register the Private E2 consumer suite with Vitest 5 explicit serial options instead of the removed sequential chain, preserving all original cases and strict retirement/accounting assertions.

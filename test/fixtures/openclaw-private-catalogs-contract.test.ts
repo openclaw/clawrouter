@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
+import { isProxy } from "node:util/types";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { stream, streamSimple, type Context, type Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -208,16 +209,23 @@ export function validatePrivateCheckpoint(record:any):void {
   }
   throw Error("unknown Private boundary capsule");
  }
- if(record?.v===2||record?.v===4){
-  const keys=["v","pin","lane","case","phase","state","defined","decl","stages","owner","receipt",...(record.v===4?["body"]:[])];
+ if(record?.v===2||record?.v===4||record?.v===5){
+  const keys=["v","pin","lane","case","phase","state","defined","decl","stages","owner","receipt",...([4,5].includes(record.v)?["body"]:[]),...(record.v===5?["meta"]:[])];
   if(Object.keys(record).sort().join(",")!==keys.sort().join(",")||record.pin!=="e2a8b8d4ec290cd6c035f3568a14e4d7c6433635"||
    !["sdk","outer"].includes(record.lane)||!nullable(record.case,107)||!phases.includes(record.phase)||!["rejected","threw"].includes(record.state)||typeof record.defined!=="boolean"||
    !nullable(record.decl,65)||!tuple(record.stages,7,x=>integer(x,3))||!(record.owner===null||tuple(record.owner,6,x=>integer(x,65535))))throw Error("invalid Private primary capsule");
-  if(record.v===4){const b=record.body;
+  if(record.v===4||record.v===5){const b=record.body;
    if(record.lane!=="sdk"||record.phase!=="body"||record.case===null||record.decl===null||record.decl>=24||record.decl%4!==0||record.stages[4]!==3||record.owner!==null||record.receipt!==null||
     !Array.isArray(b)||b.length!==7||!integer(b[0],22)||![5,6,7].includes(b[1])||b[2]!==record.defined||!integer(b[3],4194303)||b[3]>=2**b[0]||!integer(b[4],3)||
     (b[0]<5&&b[4]!==0)||(b[0]<18&&(b[4]&2)!==0)||!nullable(b[5],3)||!(b[6]===null||tuple(b[6],4,x=>integer(x,65535)))||
     (b[1]===6&&(![5,18].includes(b[0])||(b[4]&(b[0]===5?1:2))!==0))||(b[5]!==null&&b[0]<20))throw Error("invalid Private EOF body span");
+  }
+  if(record.v===5){const m=record.meta;
+   const field=(p:any,max:number)=>Array.isArray(p)&&p.length===2&&integer(p[0],5)&&(p[0]===5?integer(p[1],max)&&p[1]>0:p[1]===null);
+   if(record.case!==0||record.decl!==0||!Array.isArray(m)||m.length!==4||!field(m[0],2)||!field(m[1],10)||
+    !Array.isArray(m[2])||m[2].length!==2||!integer(m[2][0],3)||(m[2][0]===1?!(Number.isInteger(m[2][1])&&m[2][1]>=100&&m[2][1]<=599):m[2][1]!==null)||
+    !(m[3]===null||Array.isArray(m[3])&&m[3].length===3&&[1,2,3].includes(m[3][0])&&[1,2].includes(m[3][1])&&typeof m[3][2]==="boolean")||
+    (record.body[0]<14&&m[2][0]!==0)||(!(record.body[4]&2)&&(m[0][0]!==0||m[1][0]!==0)))throw Error("invalid Private result metadata span");
   }
   if(record.owner!==null&&(record.lane!=="sdk"||record.case===null||record.stages[5]!==2))throw Error("unjoined Private owner capsule");
   if(record.receipt!==null){const r=record.receipt;
@@ -262,8 +270,8 @@ export function createPrivateCheckpointReporter(lane:string,emit:Function) {
   for(const o of b.originals)if(o.kind==="read"){const at=["pending","fulfilled","rejected","threw"].indexOf(o.state);if(at<0||++counts[at]>65535)return null;}
   return [b.site,b.state===1?5:b.state===3?6:7,reason!==undefined,b.returned,b.awaited,b.stop,counts];};
  const primary=()=>{if(!first||primarySent)return;primarySent=true;const b=first.body??null;
-  send({v:b===null?2:4,pin:first.pin,lane,case:first.case,phase:first.phase,state:first.state,defined:first.defined,decl:first.decl,
-   stages:[...scope(first.case,first.decl)],owner:first.case===null?null:owners.get(first.case)??null,receipt,...(b===null?{}:{body:b})});};
+  send({v:b===null?2:first.meta===null?4:5,pin:first.pin,lane,case:first.case,phase:first.phase,state:first.state,defined:first.defined,decl:first.decl,
+   stages:[...scope(first.case,first.decl)],owner:first.case===null?null:owners.get(first.case)??null,receipt,...(b===null?{}:{body:b}),...(first.meta===null?{}:{meta:first.meta})});};
  const progress=(point:string,decl:number|null)=>({v:3,pin:"e2a8b8d4ec290cd6c035f3568a14e4d7c6433635",lane,kind:"progress",point,decl,registration:[...registration]});
  const entry=(record:any)=>{if(entrySent)return;entrySent=true;send(record);};
  const mark=(index:number|null,phase:string,state:string,reason?:unknown,acq:number|null=null,op:number|null=null,decl:number|null=null)=>{
@@ -273,7 +281,7 @@ export function createPrivateCheckpointReporter(lane:string,emit:Function) {
    const key=String(index)+":"+phase;if(!["rejected","threw"].includes(records.get(key)?.state))records.set(key,record);
    if(state==="rejected"||state==="threw"){failed++;
     // Raw read/closed/cancel outcomes are not themselves the SDK case verdict.
-    if(!first&&!["read","closed","cancel","release"].includes(phase)){first={...record,decl,body:lane==="sdk"&&phase==="body"&&index!==null?bodySnapshot(index,reason):null};if(lane==="sdk")primary();}}
+    if(!first&&!["read","closed","cancel","release"].includes(phase)){first={...record,decl,body:lane==="sdk"&&phase==="body"&&index!==null?bodySnapshot(index,reason):null,meta:null};if(first.body!==null){const m=bodyScopes.get(index!)?.metadata;if(m)first.meta=[m.type,m.code,m.http,m.first].map((v:any)=>v===null?null:[...v]);}if(lane==="sdk")primary();}}
    if(lane==="sdk"&&phase==="callback"&&state==="enter")entry(progress("callback",decl));
   }catch(error){failures.push(error);}
  };
@@ -283,7 +291,45 @@ export function createPrivateCheckpointReporter(lane:string,emit:Function) {
    // Five ordinary slots, one original-entry/exec capsule and one primary capsule.
    if(emitted<5){emitted++;send(record);}else suppressed=Math.min(65535,suppressed+1);}
  };
+ // V5 labels are exact E2 facade outputs: stream.ts, sqlite-error-diagnostics.ts,
+ // postgres-sync/protocol.ts. Arbitrary transport labels (including numeric code
+ // strings) stay UNKNOWN; a projected code never stands in for HTTP status.
+ // Field pairs: 0 unobserved, 1 missing, 2 undefined, 3 accessor, 4 UNKNOWN,
+ // 5 exact whitelist enum (one-based). HTTP: 0 absent, 1 supplied own status,
+ // 2 unknown field, 3 invalid invocation. Failure: guard/fetch/read, threw/rejected,
+ // definedness. These observations do not establish cause, EOF or joined ownership.
+ const own=(m:any,value:any,key:string)=>{if(!value||typeof value!=="object"||m.isProxy(value))return [4,null];
+  const d=Object.getOwnPropertyDescriptor(value,key);return !d?[1,null]:!Object.hasOwn(d,"value")?[3,null]:d.value===undefined?[2,null]:[5,d.value];};
+ const invalidateMetadata=(index:number)=>{const b=bodyScopes.get(index),m=b?.metadata;if(m){m.invalid=true;m.type=b.awaited&2?[4,null]:[0,null];m.code=b.awaited&2?[4,null]:[0,null];m.http=m.responseSeen?[3,null]:[0,null];m.first=null;}};
+ const metadata=(index:number,owner:object)=>{const b=bodyScopes.get(index);if(!b||b.owner!==owner||b.invalid||b.failed||finished||!b.metadata||b.metadata.invalid)throw Error("foreign Private metadata owner");return b;};
+ const label=(p:any,values:string[])=>p[0]!==5?p:values.includes(p[1])?[5,values.indexOf(p[1])+1]:[4,null];
  return {failures,mark,flush,
+  bindBodyMetadata(index:number,owner:any,proxyCheck:Function){try{const b=bodyScopes.get(index);
+   if(index!==0||declarations.get(index)!==0||!b||b.owner!==owner||b.metadata||b.failed||b.invalid||finished||owner.provider!=="baseten"||owner.api!=="stream"||owner.control!=="eof"||typeof proxyCheck!=="function")throw Error("foreign Private metadata case");
+   b.metadata={isProxy:proxyCheck,type:[0,null],code:[0,null],http:[0,null],first:null,caller:null,model:null,pending:null,responseSeen:false,resultSeen:false,invalid:false};
+  }catch(error){invalidateMetadata(index);failures.push(error);}},
+  bodyResponseObserver(index:number,owner:object,caller:object,model:object){let b:any;try{b=metadata(index,owner);if(!caller||!model||b.metadata.caller)throw Error("duplicate Private response observer");b.metadata.caller=caller;b.metadata.model=model;
+  }catch(error){invalidateMetadata(index);failures.push(error);return undefined;}
+   const m=b.metadata;
+   const hook=function(this:unknown,response:unknown,actualModel:unknown){try{
+    const repeated=m.responseSeen;m.responseSeen=true;
+    if(metadata(index,owner)!==b||repeated||arguments.length!==2||actualModel!==m.model||own(m,this,"onResponse")[1]!==hook)throw Error("foreign Private response callback");
+    const p=own(m,response,"status");m.http=p[0]===5&&Number.isInteger(p[1])&&p[1]>=100&&p[1]<=599?[1,p[1]]:[2,null];
+   }catch(error){invalidateMetadata(index);failures.push(error);}return undefined;};return hook;
+  },
+  bodyResultPending(index:number,owner:object,caller:object,pending:unknown){try{const m=metadata(index,owner).metadata;
+   if(m.caller!==caller||m.pending!==null||!pending)throw Error("foreign Private result promise");m.pending=pending;
+  }catch(error){invalidateMetadata(index);failures.push(error);}},
+  bodyResult(index:number,owner:object,pending:unknown,value:unknown){let m:any;try{m=metadata(index,owner).metadata;
+   if(m.resultSeen||m.pending===null||m.pending!==pending)throw Error("foreign Private result observation");m.resultSeen=true;
+   m.type=label(own(m,value,"errorType"),["PostgresQueryCanceledError","SqliteWorkerError"]);
+   m.code=label(own(m,value,"errorCode"),["SQLITE_BUSY","SQLITE_LOCKED","SQLITE_READONLY","SQLITE_IOERR","SQLITE_FULL","transcript_writer_fenced","session_actor_reconciliation","57014","storage-worker-memory","unavailable"]);
+  }catch(error){invalidateMetadata(index);failures.push(error);}},
+  bodyOperationFailure(index:number,owner:object,operation:Original,reason:unknown){try{const b=bodyScopes.get(index);if(!b?.metadata)return;
+   if(b.failed)return;metadata(index,owner);const site=["guard","fetch","read"].indexOf(operation.kind)+1;if(!site)return;
+   if(!b.originals.includes(operation)||!["threw","rejected"].includes(operation.state)||!Object.hasOwn(operation,"reason")||!Object.is(operation.reason,reason))throw Error("foreign Private failure observation");
+   if(b.metadata.first===null)b.metadata.first=[site,operation.state==="threw"?1:2,reason!==undefined];
+  }catch(error){invalidateMetadata(index);failures.push(error);}},
   bindBody(index:number,owner:object,originals:Original[]){try{
    const decl=declarations.get(index);if(lane!=="sdk"||finished||decl===undefined||decl>=24||decl%4!==0||bodyScopes.has(index)||!owner||!Array.isArray(originals))throw Error("foreign Private body owner");
    bodyScopes.set(index,{owner,originals,site:0,state:0,returned:0,awaited:0,stop:null,failed:false,invalid:false});
@@ -354,6 +400,7 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
   originals:[],observers:[],transports:[],acquisitions:[],callers:[],failures:[],observerFailures:[],syncFailures:[],restored:false,sourceExpired:null,sequence:0};
  checkpoints.mark(caseIndex,"owner","fulfilled");
  if(row.control==="eof")checkpoints.bindBody(caseIndex,row,w.originals);
+ if(caseIndex===0)checkpoints.bindBodyMetadata(caseIndex,row,isProxy);
  const ownership=createPrivateInvocationOwnership(new AsyncLocalStorage());
  const failures:unknown[]=w.failures,originals:Original[]=w.originals,transports:Transport[]=w.transports,restores:Array<()=>void>=[];
  const signalHistory=(signal:AbortSignal|undefined)=>{const history={signal,initial:signal?.aborted??null,invoke:++w.sequence,abort:0,reason:undefined as unknown};
@@ -361,13 +408,13 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
  const observer=(p:Promise<unknown>)=>{w.observers.push(p.then(()=>{},e=>{w.observerFailures.push(e);}));};
  const record=(kind:string,details:any={})=>{const o:Original={owner:w.owner,kind,invoke:++w.sequence,settle:0,returnAt:0,state:"pending",returned:undefined,...details};originals.push(o);return o;};
  const returned=(o:Original,value:any)=>{o.returned=value;o.returnAt=++w.sequence;
-  const settle=(state:Original["state"],v:any)=>{o.state=state;o.settle=++w.sequence;if(state==="rejected")o.reason=v;else o.value=v;
+  const settle=(state:Original["state"],v:any)=>{o.state=state;o.settle=++w.sequence;if(state==="rejected"){o.reason=v;checkpoints.bodyOperationFailure(caseIndex,row,o,v);}else o.value=v;
    o.callerAbortedAtSettle=o.callerSignal?.aborted??null;o.effectiveAbortedAtSettle=o.effectiveSignal?.aborted??null;
    const phase=["read","closed","cancel"].includes(o.kind)?o.kind:o.kind==="guard_release"?"release":null;
    if(phase)checkpoints.mark(caseIndex,phase,state,v,o.reader?transports.indexOf(o.reader.transport):null,originals.indexOf(o));};
   if(value&&typeof value.then==="function"){o.pending=value;observer(value.then((v:any)=>settle("fulfilled",v),(e:unknown)=>settle("rejected",e)));}else settle("fulfilled",value);return value;};
  const track=<T>(kind:string,pending:Promise<T>):Promise<T>=>returned(record(kind),pending);
- const invoke=(kind:string,fn:()=>any,details:any={})=>{const o=record(kind,details);try{return returned(o,fn());}catch(e){o.state="threw";o.reason=e;o.settle=++w.sequence;w.syncFailures.push(e);throw e;}};
+ const invoke=(kind:string,fn:()=>any,details:any={})=>{const o=record(kind,details);try{return returned(o,fn());}catch(e){o.state="threw";o.reason=e;o.settle=++w.sequence;checkpoints.bodyOperationFailure(caseIndex,row,o,e);w.syncFailures.push(e);throw e;}};
  const patch=(object:any,name:string,value:any)=>{const before=Object.getOwnPropertyDescriptor(object,name),ours={configurable:true,writable:true,enumerable:before?.enumerable??false,value};Object.defineProperty(object,name,ours);
   restores.push(()=>{if(!samePrivateDescriptor(Object.getOwnPropertyDescriptor(object,name),ours))throw Error("foreign descriptor replacement");if(before)Object.defineProperty(object,name,before);else delete object[name];});};
  const authoredAborts=new WeakMap<AbortSignal,any[]>();
@@ -415,7 +462,7 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
   expect(headers.has("x-api-key")).toBe(false);expect(headers.has("x-upstream-url")).toBe(false);expect(["inference","discovery","alternate"].flatMap(kind=>["fixture-secret","rotated-secret","invalid-secret"].map(secret=>"Bearer "+key(row,kind,secret)))).toContain(t.credential);expect(t.signal).toBeInstanceOf(AbortSignal);expect(t.dispatcher).toBeDefined();transports.push(t);
   const d=t.dispatcher as {close:Function};if(!observedDispatchers.has(d)){observedDispatchers.add(d);const close=d.close;let depth=0;patch(d,"close",function(this:unknown,...args:unknown[]){const outer=depth++===0;try{return outer?invoke("dispatcher_close",()=>Reflect.apply(close,this,args),{dispatcher:d,receiver:this,args}):Reflect.apply(close,this,args);}finally{depth--;}});}
   const o=record("fetch",{transport:t,receiver,args,input,init,callerSignal:t.caller?.signal,effectiveSignal:t.signal,callerAbortedAtInvoke:t.caller?.signal?.aborted??null});t.fetch=o;
-  return {threw(reason:unknown){o.state="threw";o.reason=reason;o.settle=++w.sequence;w.syncFailures.push(reason);},
+  return {threw(reason:unknown){o.state="threw";o.reason=reason;o.settle=++w.sequence;checkpoints.bodyOperationFailure(caseIndex,row,o,reason);w.syncFailures.push(reason);},
    returned(pending:Promise<Response>){returned(o,pending);observer(pending.then(response=>{ownership.response(t,response);observeBody(response,t);},()=>{}));}};
  },w.observerFailures);
  const check=async(fn:()=>unknown)=>{try{await fn();}catch(e){failures.push(e);}};
@@ -428,12 +475,12 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
   spy=vi.spyOn(guard,"fetchWithSsrFGuard").mockImplementation(function(this:unknown,...args:Parameters<typeof originalGuard>){
    const input=args[0],a:any={guard:originalGuard,input,inputSignal:input.signal??input.init?.signal,invoke:++w.sequence};a.signalHistory=signalHistory(a.inputSignal);w.acquisitions.push(a);
    const o=record("guard",{acquisition:a,receiver:this,args});a.operation=o;let pending:ReturnType<typeof originalGuard>;
-   try{pending=returned(o,ownership.guard(originalGuard,this,args,a));a.pending=pending;}catch(e){o.state="threw";o.reason=e;o.settle=++w.sequence;w.syncFailures.push(e);throw e;}
+   try{pending=returned(o,ownership.guard(originalGuard,this,args,a));a.pending=pending;}catch(e){o.state="threw";o.reason=e;o.settle=++w.sequence;checkpoints.bodyOperationFailure(caseIndex,row,o,e);w.syncFailures.push(e);throw e;}
    observer(pending.then((result:any)=>{const found=transports.filter(t=>t.response===result.response&&!t.guardObserved);expect(found).toHaveLength(1);const t=found[0];
     expect(new URL(input.url).pathname).toBe(t.path);expect(input.init?.method??"GET").toBe(t.method);expect(new Headers(input.init?.headers).get("authorization")).toBe(t.credential);
     ownership.attach(a,result);
     const release=result.release;patch(result,"release",function(this:unknown,...params:unknown[]){t.releases++;const o=record("guard_release",{acquisition:a,receiver:this,args:params});t.release=o;
-     let p;try{p=returned(o,Reflect.apply(release,this,params));}catch(e){o.state="threw";o.reason=e;o.settle=++w.sequence;w.syncFailures.push(e);throw e;}
+     let p;try{p=returned(o,Reflect.apply(release,this,params));}catch(e){o.state="threw";o.reason=e;o.settle=++w.sequence;checkpoints.bodyOperationFailure(caseIndex,row,o,e);w.syncFailures.push(e);throw e;}
      observer(p.then(()=>{t.releaseDone=true;},()=>{}));return p;});
    },()=>{}));return pending;
   } as typeof originalGuard);spyDescriptor=Object.getOwnPropertyDescriptor(guard,"fetchWithSsrFGuard");
@@ -476,6 +523,8 @@ async function fixtureOwned(row:Case,body:(f:Awaited<ReturnType<typeof session>>
 
 async function session(row:Case,state:Awaited<ReturnType<typeof createOpenClawTestState>>,track:<T>(kind:string,p:Promise<T>)=>Promise<T>,transports:Transport[],witness:any){
  // The row reference is the private context key; other scenarios are unchanged.
+ const metadataCase=checkpointCase(row)===0;
+ const bodyResult=(pending:unknown,value:unknown)=>{if(metadataCase)checkpoints.bodyResult(0,row,pending,value);};
  const bodySite=(id:number,state:number,...operand:unknown[])=>{if(row.control==="eof")checkpoints.bodySite(checkpointCase(row),row,id,state,...operand);};
  const {default:entry}=await loadBundledPluginFacade<{default:Parameters<typeof registerSingleProviderPlugin>[0]}>({pluginId:row.provider,artifactBasename:"index.js"});
  const plugin=await registerSingleProviderPlugin(entry);expect(plugin.id).toBe(row.provider);expect(plugin.catalog?.run).toBeTypeOf("function");
@@ -500,11 +549,13 @@ async function session(row:Case,state:Awaited<ReturnType<typeof createOpenClawTe
   bodySite(11,2);bodySite(12,1);const fn=row.provider==="baseten"?(expect(hook).toBeTypeOf("function"),hook!({streamFn:plain,sourceApi:model.api,modelId:model.id,config:{},providerId:row.provider} as Parameters<NonNullable<typeof hook>>[0])):plain;
   if(row.provider!=="baseten")expect(hook).toBeUndefined();
   bodySite(12,2);bodySite(13,1);const caller=witness.begin(options.signal);bodySite(13,2);
-  bodySite(14,1);const result=witness.invoke(caller,"inference",fn!,undefined,[model,context,{apiKey:options.credential??key(row),signal:options.signal,maxTokens:16}]);bodySite(14,2);
+  const responseObserver=metadataCase?checkpoints.bodyResponseObserver(0,row,caller,model):undefined;
+  bodySite(14,1);const result=witness.invoke(caller,"inference",fn!,undefined,[model,context,{apiKey:options.credential??key(row),signal:options.signal,maxTokens:16,...(responseObserver?{onResponse:responseObserver}:{})}]);bodySite(14,2);
   bodySite(15,1);const originalResult=result.result();bodySite(15,2);
+  if(metadataCase)checkpoints.bodyResultPending(0,row,caller,originalResult);
   bodySite(16,1);const pending=track("inference_result",originalResult);witness.finish(caller,pending);bodySite(16,2);return {stream:result,result:pending};
  };
- return {discover,infer,transports,...witness,bodySite};
+ return {discover,infer,transports,...witness,bodySite,bodyResult};
 }
 function ready(result:any,site:(id:number,state:number)=>void=()=>{}){site(6,1);expect(result.provider).toBeDefined();site(6,2);site(7,1);expect(result.provider.models.map((m:{id:string})=>m.id)).toContain("tenant/opaque-a");site(7,2);return result.provider;}
 function failedCatalog(result:any,status:"auth-rejected"|"unavailable"){expect(result.provider).toBeUndefined();expect(Object.keys(result.providers??{})).toEqual([]);expect(result.outcomes).toContainEqual(expect.objectContaining({status}));}
@@ -553,7 +604,7 @@ async function diagnosticControl(row:Case){await fixture(row,async f=>{
  if(row.control==="eof"){
   site(2,1);const discovery=f.discover();site(5,3);const catalog=await discovery;site(5,4);
   const provider=ready(catalog,site),pending=f.infer(provider,{signal:controller.signal});
-  site(17,1);const originalResult=pending.result;site(17,2);site(18,3);const result=await originalResult;site(18,4);
+  site(17,1);const originalResult=pending.result;site(17,2);site(18,3);const result=await originalResult;site(18,4);f.bodyResult(originalResult,result);
   site(19,1);expect(controller.signal.aborted).toBe(false);site(19,2);
   site(20,1);const stopReason=result.stopReason;site(20,1,stopReason);expect(stopReason).toBe("stop");site(20,2);
   site(21,1);expect(result.content).toContainEqual({type:"text",text:"private-prefix"});site(21,2);
