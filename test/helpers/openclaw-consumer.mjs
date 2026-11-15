@@ -9,8 +9,7 @@ export async function runOpenClawConsumer(t, { source, sourceHead, fixture, env,
   assert.equal(process.env.CI, "true", "the public client uses its own native install in ephemeral CI only");
   assert.equal(execFileSync("git", ["rev-parse", "HEAD"], { cwd: source, encoding: "utf8" }).trim(), sourceHead);
   const clientTest = join(resolve(source), testPath);
-  await copyFile(fixture, clientTest, constants.COPYFILE_EXCL);
-  try {
+  await withCopiedConsumerFixture(() => copyFile(fixture, clientTest, constants.COPYFILE_EXCL), async () => {
     const started = performance.now();
     const result = await promisify(execFile)("pnpm", ["test", testPath, "--maxWorkers=1"], {
       // The native runner compiles its own SDK worker graph on a cold CI host.
@@ -18,7 +17,23 @@ export async function runOpenClawConsumer(t, { source, sourceHead, fixture, env,
       env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: process.env.TMPDIR, CI: "true", ...env },
     });
     t.diagnostic(`OpenClaw ${sourceHead}; native test wall time ${Math.round(performance.now() - started)}ms\n${result.stdout}`);
-  } finally {
-    await rm(clientTest);
+  }, () => rm(clientTest));
+}
+
+export async function withCopiedConsumerFixture(copy, run, remove) {
+  // A failed exclusive copy never owns the target, including a competing fixture.
+  await copy();
+  let result;
+  try {
+    result = await run();
+  } catch (error) {
+    try {
+      await remove();
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "OpenClaw consumer and fixture removal failed");
+    }
+    throw error;
   }
+  await remove();
+  return result;
 }
