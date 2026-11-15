@@ -24,31 +24,92 @@ function deferred() {
 // One actual upstream is held open. Only its original request cancellation or
 // deadline may close it during the witness; disposal is never a join oracle.
 async function abortBarrier() {
-  const seen = deferred(), closed = deferred();
+  const seen = deferred(), closed = deferred(), socketClosed = deferred();
+  const state = { requests: 0, responseClosed: false, socketClosed: false, teardown: false };
   let held;
   const server = createServer(async (request, response) => {
     if (request.method !== "GET" || request.headers.authorization) { response.writeHead(400); response.end(); return; }
     if (request.url === "/hold") {
       if (held) { response.writeHead(409); response.end(); return; }
       held = response;
-      response.once("close", () => closed.resolve());
+      state.requests++;
+      response.once("close", () => { state.responseClosed = true; closed.resolve(); });
+      request.socket.once("close", () => { state.socketClosed = true; socketClosed.resolve(); });
       seen.resolve();
     } else if (request.url === "/seen") {
       await seen.promise; response.end("seen");
     } else if (request.url === "/closed") {
       await closed.promise; response.end("closed");
+    } else if (request.url === "/socket-closed") {
+      await socketClosed.promise; response.end("socket-closed");
     } else { response.writeHead(404); response.end(); }
   });
   await new Promise((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
   return {
     origin: `http://127.0.0.1:${server.address().port}`,
+    state: () => ({ ...state }),
     async close() {
+      state.teardown = true;
       held?.end("teardown");
       server.closeAllConnections();
       await new Promise((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
     },
   };
 }
+
+test("DeepSeek held upstream joins original cancellation before teardown", { timeout: 60_000 }, async () => {
+  const failures = [], reason = new Error("synthetic DeepSeek raw cancellation");
+  const caller = new AbortController();
+  let barrier, temporary, mf, reader, cancellation, phase = "setup", observed;
+  let timer;
+  const expired = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("bounded DeepSeek ownership probe expired")), 45_000); });
+  const bounded = promise => Promise.race([promise, expired]);
+  try {
+    barrier = await abortBarrier();
+    temporary = await mkdtemp(join(tmpdir(), "clawrouter-deepseek-cancel-"));
+    const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
+    mf = await startWorkerdFixture(temporary, routerFixture([]), upstreamFixture(barrier.origin), { directRouter: true, preventEviction: true });
+    const upstream = await mf.getWorker("upstream");
+    const response = await bounded(upstream.fetch("https://api.deepseek.com/v1/tools/search", {
+      method: "POST", headers: { authorization: "Bearer managed-ds_abort", "content-type": "application/json" },
+      body: JSON.stringify({ query, count: 5, need_content: false }), signal: caller.signal,
+    }));
+    reader = response.body.getReader();
+    phase = "prefix";
+    assert.equal(new TextDecoder().decode((await bounded(reader.read())).value), '{"results":[');
+    phase = "acquired";
+    assert.equal(await bounded(fetch(barrier.origin + "/seen").then(response => response.text())), "seen");
+    assert.deepEqual(barrier.state(), { requests: 1, responseClosed: false, socketClosed: false, teardown: false });
+    caller.abort(reason);
+    phase = "cancel";
+    cancellation = reader.cancel(reason);
+    const [canceled] = await bounded(Promise.allSettled([cancellation]));
+    reader.releaseLock(); reader = undefined;
+    phase = "retirement";
+    observed = await bounded(upstream.fetch("https://fixture.example/state").then(response => response.json()));
+    console.log("deepseek-held-ownership", JSON.stringify({ phase, cancellation: { status: canceled.status, originalCallerReason: canceled.status === "rejected" && canceled.reason === reason }, barrier: barrier.state(), calls: observed.map(call => ({ finished: call.finished, abort: call.abort })) }));
+    assert.equal(observed.length, 1);
+    assert.equal(observed[0].finished, true, "original nested fetch must settle before teardown");
+    assert.equal(await bounded(fetch(barrier.origin + "/socket-closed").then(response => response.text())), "socket-closed");
+    assert.equal(barrier.state().teardown, false);
+  } catch (error) { failures.push(error); }
+  finally {
+    clearTimeout(timer);
+    console.log("deepseek-held-cleanup", JSON.stringify({ phase, beforeTeardown: barrier?.state() }));
+    caller.abort(reason);
+    try { await barrier?.close(); } catch (error) { failures.push(error); }
+    if (reader) {
+      try { if (cancellation) await Promise.allSettled([cancellation]); else await reader.cancel(reason); }
+      catch (error) { failures.push(error); }
+      finally { try { reader.releaseLock(); } catch (error) { failures.push(error); } }
+    }
+    try { await mf?.dispose(); } catch (error) { failures.push(error); }
+    if (temporary !== undefined) try { await rm(temporary, { recursive: true, force: true }); } catch (error) { failures.push(error); }
+  }
+  if (failures.length) console.log("deepseek-held-failures", JSON.stringify(failures.map(error => ({ category: error?.name ?? "unknown", originalCallerReason: error === reason }))));
+  if (failures.length === 1) throw failures[0];
+  if (failures.length) throw new AggregateError(failures, "DeepSeek cancellation or cleanup failed");
+});
 
 test("actual OpenClaw DeepSeek native Search through workerd and SQLite", { skip: !source, timeout: 300_000 }, async t => {
   const provider = snapshot.providers.find(row => row.id === "deepseek");
@@ -271,14 +332,22 @@ export default { async fetch(request) {
   if (!id || request.url !== "https://api.deepseek.com/v1/tools/search" || request.method !== "POST" || !noCredentialOverride) return new Response(null, { status: 400 });
   const scenario = id.slice(3), headers = { "content-type": "application/json" };
   if (scenario === "abort") {
+    const trace = call.abort = { pulls: 0, requestAbort: 0, sourceCancel: 0, fetchStarted: 0, fetchSettled: 0, bodyCancelSettled: 0 };
+    const onAbort = () => { trace.requestAbort++; };
+    request.signal.addEventListener("abort", onAbort, { once: true });
     let started = false;
     return new Response(new ReadableStream({ async pull(controller) {
+      trace.pulls++;
       if (started) return; started = true; controller.enqueue(new TextEncoder().encode('{"results":['));
       try {
+        trace.fetchStarted++;
         const held = await fetch(CONTROL + "/hold", { signal: request.signal });
-        await held.body?.cancel(); throw new Error("held response ended without original cancellation");
+        trace.fetchSettled++;
+        await held.body?.cancel(); trace.bodyCancelSettled++; throw new Error("held response ended without original cancellation");
       } catch (error) { controller.error(error); }
-      finally { call.finished = true; }
+      finally { trace.fetchSettled ||= 1; call.finished = true; request.signal.removeEventListener("abort", onAbort); }
+    }, cancel() {
+      trace.sourceCancel++;
     } }, { highWaterMark: 0 }), { headers });
   }
   call.finished = true;
