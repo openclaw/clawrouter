@@ -15,7 +15,7 @@ const contractMode = litellmControlMode(process.env.CLAWROUTER_LITELLM_MODE);
 if (contractMode === "control-only") {
   registerWrapperControlConsumer();
 } else {
-const { selected, withGateway, litellmPredicateFacts } = await import("../worker/test/litellm-model-discovery.test.mjs");
+const { selected, withGateway, litellmPredicateFacts, litellmProducerRetired } = await import("../worker/test/litellm-model-discovery.test.mjs");
 const source = process.env.CLAWROUTER_OPENCLAW_CHECKOUT;
 const sourceHead = "d8bb939408aa4d2be7df0161748edb52ebf3b1fb";
 const cases = [
@@ -114,11 +114,18 @@ test("actual Worker unknown-price admission denies inference before any paid POS
     });
   });
 });
+function litellmPartialPublicOutcome(row, helperFulfilled, summaries) {
+  const api=row.nativeApi??"streamSimple",expected=api==="stream"?"sdk_stream_partial_abort":"sdk_partial_abort";
+  if(!helperFulfilled||row.id!==expected||row.control!=="partial_abort"||row.mode!=="partial_abort")return false;
+  const matches=summaries.filter(summary=>summary.api===api);
+  // These exact unchanged role bodies assert public text, their authored abort and stopReason=aborted.
+  return matches.length===1&&matches[0].outcomes[2]?.[2]===1;
+}
 test("actual LiteLLM registered catalog, native stream/streamSimple and original retirement through Worker SQLite", { skip: !source, timeout: 300000 }, async t => {
   await withFailureEnvelope(async envelope => withGateway(cases, async f => {
     envelope.entered();
-    const failures = [], witnessCases = new Set(); let helperFulfilled = false, firstWorker = null;
-    const capture = records => { for (const r of records) if (r.witness) witnessCases.add(r.id); envelope.emit(records); };
+    const failures = [], witnessCases = new Set(), completedRoles = []; let helperFulfilled = false, firstWorker = null;
+    const capture = records => { for (const r of records) { if (r.witness) witnessCases.add(r.id); if(r.roles)completedRoles.push(r.roles); } envelope.emit(records); };
     try {
       await runOpenClawConsumer({ diagnostic(value) { capture(diagnostic.parse(value)); } }, { source, sourceHead, fixture, testPath: "extensions/litellm/worker-contract.test.ts", env: {
         CLAWROUTER_CONTRACT_ORIGIN: f.origin, CLAWROUTER_CONTRACT_SOURCE_HEAD: sourceHead, CLAWROUTER_CONTRACT_CASES: JSON.stringify(cases),
@@ -152,7 +159,7 @@ test("actual LiteLLM registered catalog, native stream/streamSimple and original
           if (call.method === "POST") { checks.run(11, () => assert.equal(call.body.model, selected)); checks.run(12, () => assert.equal(call.body.stream, true)); }
           else checks.run(13, () => assert.equal(call.body, null));
         }
-        if (row.control === "partial_abort") { checks.run(14, () => assert.equal(state.canceled, 1)); checks.run(15, () => assert.ok(state.aborted >= 1)); }
+        if (row.control === "partial_abort") { checks.run(14, () => assert.equal(state.canceled, 1)); checks.run(15, () => { assert.equal(litellmPartialPublicOutcome(row,helperFulfilled,completedRoles),true); assert.equal(litellmProducerRetired({...row,basePath:"/team/v1",calls:proof.calls},proof.source),true); }); }
         const usage = await checks.wait(16, () => f.control("usage", row.id));
         const inference = checks.run(17, () => usage.events.filter(event => event.reserved_cost_micros === 7));
         checks.run(17, () => assert.equal(inference.length, Number(post)));
@@ -2059,6 +2066,118 @@ test("native data pure current schema preserves local facts under fixed wire bud
 
 
 
+// BEGIN joined Worker data pure tests.
+function joinedWorkerFunctions() {
+  const text=readFileSync("worker/test/litellm-model-discovery.test.mjs","utf8");
+  const local=text.slice(text.indexOf("export function observeLiteLLMOperation"),text.indexOf("export function litellmDeadlineQualified")).replaceAll("export ","");
+  const producer=text.slice(text.indexOf("export function litellmObserveProducer"),text.indexOf("export function upstreamFixture")).replaceAll("export ","");
+  return new Function("assert",local+producer+";return {litellmRequestScope,litellmPartialRole,litellmProducerRetired,litellmJoinedReadData,litellmWorkerDrain,litellmWorkerSourceProof,litellmWorkerLedger,observeLiteLLMOperation,litellmObserveProducer,litellmProducerOwners,joinLiteLLMProducer};")(assert);
+}
+function joinedWorkerCase(api="streamSimple") {
+  const f=joinedWorkerFunctions();let current;const storage={getStore:()=>current,run(token,fn){const old=current;current=token;try{return fn();}finally{current=old;}}},scope=f.litellmRequestScope(storage,1);
+  const r={id:api==="stream"?"sdk_stream_partial_abort":"sdk_partial_abort",nativeApi:api==="stream"?"stream":undefined,control:"partial_abort",mode:"partial_abort",basePath:"/team/v1",sequence:60,operations:[],roots:[],failures:[],observerFailures:[],requests:[],inputs:[],readers:[],bodies:[],calls:[]};
+  const op=(kind,state,fields={})=>{const item={kind,state,pending:{},ordinal:r.operations.length,invoke:1,settle:2,...fields};r.operations.push(item);return item;};
+  for(const method of ["GET","POST"]){const request={},token=scope.register(request,r);let input;scope.invoke(token,()=>{input=scope.transport(r,{});},undefined,[request]);r.inputs.push(input);r.requests.push({request,token,promise:Promise.resolve()});op("handler","fulfilled",{token});
+    const url="https://gateway.example/team/v1/"+(method==="GET"?"models":"chat/completions");r.calls.push({method,url,authorization:"Bearer fixture-upstream-"+r.id,query:"",redirect:"manual",body:method==="POST",extra:false});
+  }
+  const input=r.inputs[1],body={locked:false},response={body},originalRead=function(){},originalCancel=function(){},unlock=function(){};
+  const native={read(){},cancel(){},releaseLock(){}},reader={reader:native,body,response,transport:input,methods:Object.freeze({read:originalRead,cancel:originalCancel,unlock}),wrappers:Object.freeze({read:native.read,cancel:native.cancel,unlock:native.releaseLock}),closed:{},unlocks:1,unlockReceiver:true,unlockInvoke:51,unlockSequence:52,eof:false};
+  scope.response(input,response);input.response=response;reader.id=scope.reader(input,body,native);reader.bound=scope.owns(input,response,body,native);r.readers.push(reader);r.bodies.push(body);
+  const fetch=op("fetch","fulfilled",{transport:input,value:response});op("acquisition_observer","fulfilled",{input,originalFetch:fetch.pending});
+  const closed=op("closed","fulfilled",{reader,input,pending:reader.closed,invoke:31,settle:47});
+  op("read","fulfilled",{reader,input,invoke:32,settle:35,value:{done:false,value:{byteLength:7}},receiver:native,originalMethod:originalRead,receiverIdentity:true});
+  const error={},read=op("read","rejected",{reader,input,error,invoke:42,settle:49,receiver:native,originalMethod:originalRead,receiverIdentity:true});
+  const derivative=op("read_observer","rejected",{reader,input,error,originalRead:read.pending,invoke:43,settle:50,receiver:native,originalMethod:originalRead,receiverIdentity:true});
+  const cancel=op("cancel","fulfilled",{reader,input,invoke:45,settle:48,receiver:native,originalMethod:originalCancel,receiverIdentity:true,argc:1,operandPresent:true,reason:{},signalAborted:true});
+  const source={released:false,active:0,expired:0,canceled:1,aborted:0,finished:2,calls:r.calls.map(call=>({...call,body:call.method==="GET"?null:{model:"tenant/private-alias",stream:true}})),operations:[{kind:"pull",state:"fulfilled"},{kind:"pull",state:"fulfilled"},{kind:"pull",state:"fulfilled"},{kind:"cancel",state:"fulfilled"}],joined:[1,4,8,0],owners:[{call:0,held:false,chat:false,finished:true,eof:true,cancels:0,fulfilledCancels:0,operations:2,observers:4},{call:1,held:true,chat:true,finished:true,eof:false,cancels:1,fulfilledCancels:1,operations:2,observers:4}]};
+  return {f,r,scope,source,read,derivative,closed,cancel,reader,input,op,storage};
+}
+test("joined Worker data preserves rejected originals and seals producer proof before usage",async()=>{
+  for(const api of ["streamSimple","stream"]){const c=joinedWorkerCase(api);let loads=0;const receipt=await c.f.litellmWorkerDrain(c.r,c.scope,async()=>{loads++;return c.source;});
+    assert.deepEqual(c.r.workerDataDisposition,[2,2,0]);assert.equal(c.read.state,"rejected");assert.equal(c.derivative.state,"rejected");assert.equal(c.r.retireChecks.snapshot()[3]&16,16);assert.equal(receipt.valid(),true);
+    for(const q of c.r.requests){c.scope.retire(q.token);q.retired=true;}
+    assert.equal(await c.f.litellmWorkerDrain(c.r,c.scope,()=>assert.fail("no repeated proof")),receipt);assert.equal(loads,1);
+  }
+});
+test("joined Worker data rejects alternate ownership cleanup and producer faults",async()=>{
+  const negatives={
+    role:c=>{c.r.control="provider_error";},api:c=>{c.r.nativeApi="foreign";},undefined:c=>{c.read.error=c.derivative.error=undefined;},null:c=>{c.read.error=c.derivative.error=null;},lookalike:c=>{c.derivative.error={};},wrongP:c=>{c.derivative.originalRead={};},sameQ:c=>{c.derivative.pending=c.read.pending;},alias:c=>{c.op("wait_until","fulfilled",{pending:c.read.pending});},rootAlias:c=>{c.r.roots.push(c.read.pending);},readAlias:c=>{c.op("wait_until","fulfilled",{originalRead:c.read.pending});},fetchAlias:c=>{c.op("acquisition_observer","fulfilled",{originalFetch:c.read.pending});},derivativeAlias:c=>{c.op("read_observer","fulfilled",{originalRead:c.derivative.pending});},foreignReader:c=>{c.derivative.reader={};},foreignInput:c=>{c.derivative.input={};},foreignResponse:c=>{c.reader.response={};},foreignBody:c=>{c.reader.body={locked:false};},foreignScope:c=>{c.scope=joinedWorkerCase().scope;},method:c=>{c.read.originalMethod={};},receiver:c=>{c.read.receiver={};},wrapper:c=>{c.reader.reader.read=function(){};},closedSwap:c=>{c.reader.closed={};},closedReject:c=>{c.closed.state="rejected";c.closed.error=undefined;},cancelReject:c=>{c.cancel.state="rejected";c.cancel.error=undefined;},extraCancel:c=>{c.op("cancel","fulfilled",{...c.cancel});},earlyUnlock:c=>{c.reader.unlockInvoke=48;},duplicateUnlock:c=>{c.reader.unlocks=2;},locked:c=>{c.reader.body.locked=true;},handler:c=>{c.r.operations[0].state="rejected";c.r.operations[0].error=undefined;},waitUntil:c=>{c.op("wait_until","rejected",{error:undefined});},sync:c=>{c.r.failures.push(undefined);},observer:c=>{c.r.observerFailures.push(undefined);},prefix:c=>{c.r.operations.find(op=>op.value?.done===false).value.value.byteLength=0;},producerAbsent:c=>{c.source=null;},producerPending:c=>{c.source.operations[0].state="pending";},producerRejected:c=>{c.source.operations[3].state="rejected";},producerObserver:c=>{c.source.joined[3]=1;},producerUnjoined:c=>{c.source.joined[0]=0;},producerActive:c=>{c.source.active=1;},producerExpired:c=>{c.source.expired=1;},producerForeign:c=>{c.source.owners[1].call=0;},producerEOF:c=>{c.source.owners[1].eof=true;},producerReleased:c=>{c.source.released=true;},producerCancelAbsent:c=>{c.source.owners[1].cancels=0;},producerCancelPending:c=>{c.source.owners[1].fulfilledCancels=0;},replay:c=>{c.source.calls.push(c.source.calls[1]);},credential:c=>{c.source.calls[1].authorization="foreign";},model:c=>{c.source.calls[1].body.model="foreign";},destination:c=>{c.source.calls[1].url="https://foreign.example/v1/chat/completions";}
+  };
+  for(const [name,change] of Object.entries(negatives)){const c=joinedWorkerCase();change(c);assert.equal(c.f.litellmJoinedReadData(c.r,c.scope,c.source),null,name);}
+});
+test("joined Worker retirement awaits control originals and rejects late aliases without losing undefined",async()=>{
+  const c=joinedWorkerCase();let release,settled=false;const held=new Promise(resolve=>release=resolve);
+  const work=c.f.litellmWorkerDrain(c.r,c.scope,()=>c.f.observeLiteLLMOperation(c.r,"control_body",()=>held));work.then(()=>{settled=true;});
+  for(let i=0;i<8;i++)await Promise.resolve();assert.equal(settled,false);assert.equal(c.r.workerDataDisposition,undefined);
+  release(c.source);await work;assert.equal(c.r.localRetirement.valid(),true);
+  c.op("wait_until","rejected",{pending:c.read.pending,error:undefined});
+  await assert.rejects(c.f.litellmWorkerDrain(c.r,c.scope,()=>assert.fail()),error=>{assert.ok(error.errors.includes(undefined));return true;});
+  assert.equal(c.r.workerDataDisposition[0],1);
+});
+test("joined Worker source control preserves primary and cleanup undefined and blocks disposition",async()=>{
+  const c=joinedWorkerCase();let cancels=0;const response={status:500,bodyUsed:false,body:{cancel(){cancels++;throw undefined;}}};
+  await assert.rejects(c.f.litellmWorkerDrain(c.r,c.scope,()=>c.f.litellmWorkerSourceProof(c.r,()=>Promise.resolve(response))),error=>{assert.ok(error.errors.length>=3);return true;});
+  assert.equal(cancels,1);assert.notEqual(c.r.workerDataDisposition[0],2);assert.equal(c.read.state,"rejected");
+});
+test("joined Worker seal rejects method ownership report and source changes after candidate",async()=>{
+  for(const change of [c=>{c.reader.reader.cancel=function(){};},c=>{c.reader.body={locked:false};},c=>{c.r.observerFailures.push(undefined);},c=>{c.source.released=true;},c=>{c.read.error={};},c=>{c.r.failures=[undefined];},c=>{c.r.operations=[...c.r.operations,{kind:"wait_until",state:"rejected",error:undefined}];},c=>{c.r.roots=[...c.r.roots];}]){
+    const c=joinedWorkerCase();await c.f.litellmWorkerDrain(c.r,c.scope,async()=>c.source);change(c);await assert.rejects(c.f.litellmWorkerDrain(c.r,c.scope,()=>assert.fail()));
+  }
+});
+test("ordinary Worker retirement remains strict and permits later requests",async()=>{
+  const c=joinedWorkerCase();c.r.control="eof";c.r.mode="normal";
+  for(const op of [c.read,c.derivative]){op.state="fulfilled";delete op.error;}
+  await c.f.litellmWorkerDrain(c.r,c.scope,()=>assert.fail("ordinary callers do not query producer proof"));assert.equal(c.r.localRetirement,undefined);
+  c.op("handler","fulfilled");await c.f.litellmWorkerDrain(c.r,c.scope,()=>assert.fail());assert.equal(c.r.localRetirement,undefined);
+  c.op("wait_until","rejected",{error:undefined});await assert.rejects(c.f.litellmWorkerDrain(c.r,c.scope,()=>assert.fail()),error=>{assert.ok(error.errors.includes(undefined));return true;});
+});
+test("joined producer cancel needs no abort event but joins the original pending wait",async()=>{
+  const text=readFileSync("worker/test/litellm-model-discovery.test.mjs","utf8"),f=joinedWorkerFunctions();
+  const code=text.slice(text.indexOf(" const abort=()=>{r.aborted++;};"),text.indexOf(" for(const kind of ['pull','cancel'])"));
+  for(const aborted of [false,true]){
+    let release,settled=false,removed=0;const waiting=new Promise(resolve=>release=resolve),call={method:"POST"},producer={call,finished:false,eof:false,held:true,chat:true};
+    const r={aborted:0,canceled:0,finished:0,operations:[],observers:[],observerFailures:[],producers:[producer],calls:[call]},request={signal:{aborted,addEventListener(){},removeEventListener(){removed++;}}};
+    const source=new Function("r","producer","request","waiting","let stopped=false;"+code+";return source;")(r,producer,request,waiting);
+    const original=f.litellmObserveProducer(r,producer,"cancel",source.cancel,source,[]),joined=f.joinLiteLLMProducer(r);joined.then(()=>{settled=true;});
+    for(let i=0;i<8;i++)await Promise.resolve();assert.equal(settled,false);assert.equal(r.canceled,1);assert.equal(r.aborted,0);assert.equal(removed,1);
+    release();await original;assert.deepEqual(await joined,[1,1,2,0]);assert.equal(f.litellmProducerOwners(r)[0].fulfilledCancels,1);
+  }
+  const c=joinedWorkerCase();c.source.aborted=1;c.source.joined[0]=0;assert.equal(c.f.litellmProducerRetired(c.r,c.source),false);
+});
+test("joined producer rejects original or observer undefined and foreign callback association",async()=>{
+  const f=joinedWorkerFunctions(),producer={call:{},held:true,chat:true,finished:true,eof:false},r={operations:[],observers:[],observerFailures:[],producers:[producer],calls:[producer.call]};
+  const rejected=Promise.reject(undefined);assert.equal(f.litellmObserveProducer(r,producer,"cancel",()=>rejected,null,[]),rejected);assert.deepEqual(await f.joinLiteLLMProducer(r),[1,1,2,1]);
+  const extra=Promise.reject(undefined);r.observers.push(extra);assert.equal((await f.joinLiteLLMProducer(r))[3],2);assert.ok(r.observerFailures.includes(undefined));assert.throws(()=>f.litellmProducerOwners(r));
+});
+test("joined Worker full formatter retains raw failures disposition roles and producer evidence",async()=>{
+  for(const reverse of [false,true])for(const maximum of [false,true]){
+    const c=joinedWorkerCase(),proof=litellmDiagnostics(cases.map(row=>row.id),nodeTypes.isProxy),lines=[];await c.f.litellmWorkerDrain(c.r,c.scope,async()=>c.source);
+    const ledger=c.f.litellmWorkerLedger(c.r,c.scope);
+    if(maximum){ledger[0]=1000000;for(const [i,op]of ledger[7].entries()){op[0]=999996+i;op[3]=op[4]=op[5]=1000000;op[8]=999992+i;op[9]=999998+i;}
+      ledger[8][0]=[1000000,1000000,1000000,1000000];ledger[8][2]=[[999996,2,7,999992,999998],[999997,2,7,999993,999999],[999994,1,0,999991,999995],[999998,1,0,999994,999997]];ledger[8][5]=[999999,1000000,1];}
+    const failure=proof.workerFailure(c.r.id,[15,65535,32767,32768,null],c.r.retireChecks.snapshot(),ledger,[0,0,1,0,2,2,4,0,4,0,0,1,4,8,0]);
+    const roles=roleRecords(proof,true);if(reverse)roles.reverse();
+    proof.emit([...reportingPair(proof,"sdk_provider_error",[true,false],true),...reportingPair(proof,"sdk_partial_abort",[false,true],true),...roles,proof.child({code:1}).envelope,failure,proof.record("sdk","sdk_waiter_abort","waiter_mutation",undefined,"catalog")],line=>lines.push(line));proof.flush(line=>lines.push(line));
+    const decoded=reportingDecode(proof,lines);assert.deepEqual(decoded.find(row=>row.phase==="child_result").retire[3],ledger);assert.equal(decoded.filter(row=>row.witness).length,4);assert.equal(decoded.filter(row=>row.roles).length,2);assert.ok(lines.every(line=>Buffer.byteLength(line)<=768));assert.ok(Buffer.byteLength(lines.join(""))<=8192);assert.ok(lines.length<=10);
+    const malformed=structuredClone(failure);malformed.retire[3][9][1]=1;assert.equal(proof.validate(malformed),null);
+  }
+});
+test("joined Worker data never replaces independent public body or accounting outcomes",async()=>{
+  const row={id:"sdk_partial_abort",control:"partial_abort",mode:"partial_abort"},roles=[{api:"streamSimple",outcomes:[null,null,[1,2,1,null,0,false],null]}];
+  assert.equal(litellmPartialPublicOutcome(row,true,roles),true);assert.equal(litellmPartialPublicOutcome(row,false,roles),false);
+  roles[0].outcomes[2][2]=2;assert.equal(litellmPartialPublicOutcome(row,true,roles),false);assert.equal(litellmPartialPublicOutcome(row,true,[...roles,...roles]),false);
+  const sdk=readFileSync("test/fixtures/openclaw-litellm-contract.test.ts","utf8");
+  for(const id of ["sdk_partial_abort","sdk_stream_partial_abort"]){assert.ok(sdk.includes('if (id === "'+id+'" && event.type === "text_delta") { partial = true; controller.abort(); break; }'));assert.ok(sdk.includes('if (id === "'+id+'") expect(partial).toBe(true)'));}
+  assert.equal((sdk.match(/expect\(result.stopReason\)\.toBe\(id === "sdk_(?:stream_)?preabort" \? "error" : "aborted"\)/g)||[]).length,2);
+  const c=joinedWorkerCase();await c.f.litellmWorkerDrain(c.r,c.scope,async()=>c.source);assert.deepEqual(c.r.workerDataDisposition,[2,2,0]);
+  const outer=readFileSync("test/openclaw-litellm.test.mjs","utf8"),start=outer.indexOf("        for (const event of usage.events) {");
+  const accounting=outer.slice(start,outer.indexOf("\n      } catch (error) {",start)),checks=litellmPredicateFacts();
+  const usage={events:[{credential_id:c.r.id,policy_id:c.r.id,provider:"litellm",reserved_cost_micros:7,actual_cost_micros:0}]};
+  assert.throws(()=>new Function("assert","checks","row","usage",accounting)(assert,checks,c.r,usage));assert.equal(checks.snapshot()[0],22);
+  const proof=litellmDiagnostics(cases.map(row=>row.id),nodeTypes.isProxy);let failed=false;
+  try{proof.emit([proof.child({code:1}).envelope],()=>{throw undefined;});}catch(error){failed=true;assert.ok(error instanceof AggregateError);assert.deepEqual(error.errors,[undefined,undefined]);}assert.equal(failed,true);assert.equal(c.read.state,"rejected");
+});
+// END joined Worker data pure tests.
 }
 
 function registerWrapperControlConsumer() {

@@ -5,6 +5,8 @@
 
 ## Unreleased
 
+- Distinguish joined partial-delivery read outcomes from Worker retirement failures only after exact producer cancellation and observer joins; retain raw rejections and independent SDK, SQLite and cleanup checks.
+
 - Preserve pending Worker reason unknowns and project retained response/body bindings without additional native body getter calls.
 
 - Preserve both replay source and delivery-reader release failures when usage observation retires a mapped replay body.

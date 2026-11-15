@@ -124,6 +124,7 @@ export function litellmRequestScope(storage, generation) {
       if (!["read", "cancel", "unlock"].includes(method)) throw new Error("foreign reader method");
       if (method !== "read") { const attempts = cleanup.get(reader); if (attempts.has(method)) throw new Error("replayed reader cleanup"); attempts.add(method); }
     },
+    retains(owner, response, body, reader) { return matchesResponse(owner,response,body) && resources.get(reader)===owner; },
     owns(owner, response, body, reader) {
       try { state(owner.token); } catch { return false; }
       return matchesResponse(owner, response, body) && resources.get(reader) === owner;
@@ -177,7 +178,102 @@ export function litellmWorkerLedger(r, scope) {
     cap(r.readers.filter(reader => reader.body.locked).length), cap(r.readers.filter(reader => reader.unlocks !== 1).length), cap(Math.max(0, bad.length - selected.length)),
     selected.map(op => [cap(op.ordinal), kinds.indexOf(op.kind) + 1, ["pending", "fulfilled", "rejected", "threw"].indexOf(op.state),
       op.input?.token?.id ?? op.transport?.token?.id ?? op.token?.id ?? null, op.input?.id ?? op.transport?.id ?? null, op.reader?.id ?? null,
-      Object.hasOwn(op, "error"), Object.hasOwn(op, "error") ? op.error !== undefined : null, cap(op.invoke), op.settle == null ? null : cap(op.settle)]), litellmWorkerResource(r,scope)];
+      Object.hasOwn(op, "error"), Object.hasOwn(op, "error") ? op.error !== undefined : null, cap(op.invoke), op.settle == null ? null : cap(op.settle)]), litellmWorkerResource(r,scope),...(r.workerDataDisposition?[r.workerDataDisposition]:[])];
+}
+// Only the two authored partial-abort roles may receive this post-join DATA partition.
+export function litellmPartialRole(r) {
+  return r.control === "partial_abort" && r.mode === "partial_abort"
+    && (r.id === "sdk_partial_abort" && r.nativeApi === undefined || r.id === "sdk_stream_partial_abort" && r.nativeApi === "stream");
+}
+export function litellmProducerRetired(r, source) {
+  if(!source||source.released!==false||source.active!==0||source.expired!==0||source.canceled!==1||source.finished!==2||!Array.isArray(source.operations)||!source.operations.length
+    || source.operations.some(op=>op.state!=="fulfilled")||source.operations.filter(op=>op.kind==="cancel").length!==1
+    || JSON.stringify(source.joined)!==JSON.stringify([1,source.operations.length,source.operations.length*2,0]))return false;
+  if(r.calls.length!==2||!Array.isArray(source.calls)||source.calls.length!==2)return false;
+  if(!Array.isArray(source.owners)||source.owners.length!==2||source.owners.reduce((n,o)=>n+o.operations,0)!==source.operations.length||source.operations.some(op=>!["pull","cancel"].includes(op.kind)))return false;
+  for(const method of ["GET","POST"]){
+    const calls=source.calls.filter(call=>call.method===method), local=r.calls.filter(call=>call.method===method);
+    if(calls.length!==1||local.length!==1)return false;const call=calls[0], request=local[0];
+    const index=source.calls.indexOf(call),owners=source.owners.filter(owner=>owner.call===index);
+    if(owners.length!==1)return false;const owner=owners[0];
+    if(owner.finished!==true||owner.held!==(method==="POST")||owner.chat!==(method==="POST")||owner.eof!==(method==="GET")
+      || owner.cancels!==(method==="POST"?1:0)||owner.fulfilledCancels!==owner.cancels||owner.operations<1||owner.observers!==owner.operations*2)return false;
+    const url="https://gateway.example"+r.basePath+(method==="GET"?"/models":"/chat/completions");
+    if(call.url!==url||request.url!==url||call.authorization!=="Bearer fixture-upstream-"+r.id||request.authorization!==call.authorization
+      || request.query!==""||request.redirect!=="manual"||request.extra!==false||request.body!==(method==="POST")
+      || (method==="GET"?call.body!==null:call.body?.model!=="tenant/private-alias"||call.body.stream!==true))return false;
+  }
+  return true;
+}
+export function litellmJoinedReadData(r, scope, source) {
+  if (!litellmPartialRole(r) || r.failures.length || r.observerFailures.length || r.requests.length !== 2 || r.inputs.length !== 2) return null;
+  const bad = r.operations.filter(op => op.state !== "fulfilled");
+  if (bad.length !== 2) return null;
+  const read = bad.find(op => op.kind === "read"), derivative = bad.find(op => op.kind === "read_observer");
+  if (!read || !derivative || bad.some(op => op.state !== "rejected" || !Object.hasOwn(op,"error"))
+    || read.error === null || typeof read.error !== "object" || !Object.is(read.error,derivative.error)
+    || !read.pending || !derivative.pending || read.pending === derivative.pending || derivative.originalRead !== read.pending) return null;
+  const reader=read.reader, input=read.input;
+  if (!reader || !input || derivative.reader!==reader || derivative.input!==input || reader.transport!==input || reader.response!==input.response
+    || !scope.owns(input,reader.response,reader.body,reader.reader) || reader.bound!==true || reader.eof || reader.unlocks!==1 || reader.body.locked || reader.unlockReceiver!==true) return null;
+  if (input.token.scenario!==r || input.token.request!==input.request || r.requests.filter(q=>q.token===input.token&&q.request===input.request&&!q.retired).length!==1
+    || r.readers.filter(value=>value===reader).length!==1 || r.inputs.filter(value=>value===input).length!==1) return null;
+  for(const op of [read,derivative])if(op.receiver!==reader.reader||op.receiverIdentity!==true||op.originalMethod!==reader.methods.read)return null;
+  for(const [name,key] of [["read","read"],["cancel","cancel"],["releaseLock","unlock"]])if(Object.getOwnPropertyDescriptor(reader.reader,name)?.value!==reader.wrappers[key])return null;
+  for(const pending of [read.pending,derivative.pending])if(r.operations.filter(op=>op.pending===pending).length!==1||r.roots.includes(pending))return null;
+  if(r.operations.some(op=>[read.pending,derivative.pending].includes(op.originalFetch)||(op.originalRead===read.pending&&op!==derivative)||op.originalRead===derivative.pending))return null;
+  const owned=r.operations.filter(op=>op.reader===reader), closed=owned.filter(op=>op.kind==="closed"), canceled=owned.filter(op=>op.kind==="cancel");
+  if(closed.length!==1||closed[0].pending!==reader.closed||closed[0].state!=="fulfilled"||canceled.length!==1||canceled[0].state!=="fulfilled"
+    || canceled[0].input!==input||canceled[0].receiver!==reader.reader||canceled[0].originalMethod!==reader.methods.cancel||canceled[0].receiverIdentity!==true) return null;
+  if(!Number.isSafeInteger(reader.unlockInvoke)||!Number.isSafeInteger(reader.unlockSequence)||reader.unlockSequence<=reader.unlockInvoke
+    || owned.some(op=>!Number.isSafeInteger(op.settle)||op.settle>=reader.unlockInvoke)||closed[0].invoke>=read.invoke||canceled[0].invoke>=reader.unlockInvoke) return null;
+  if(!owned.some(op=>op.kind==="read"&&op.state==="fulfilled"&&op.value?.done===false&&op.value.value?.byteLength>0&&op.settle<read.invoke))return null;
+  const fetches=r.operations.filter(op=>op.kind==="fetch"&&op.transport===input), acquisitions=r.operations.filter(op=>op.kind==="acquisition_observer"&&op.input===input);
+  if(fetches.length!==1||fetches[0].value!==reader.response||acquisitions.length!==1||acquisitions[0].originalFetch!==fetches[0].pending)return null;
+  if(r.requests.some(q=>r.operations.filter(op=>op.kind==="handler"&&op.token===q.token&&op.state==="fulfilled").length!==1))return null;
+  if(!litellmProducerRetired(r,source))return null;
+  return [read,derivative];
+}
+// Snapshot every retained data field and array membership; no getter or error inspection.
+export function litellmRetirementSeal(r, scope, pair) {
+  const names=["operations","roots","inputs","readers","bodies","requests","failures","observerFailures","calls"],arrays=names.map(name=>r[name]);
+  const members=arrays.map(values=>values.slice());
+  const rows=[...r.operations,...r.inputs,...r.readers,...r.calls];
+  const captured=rows.map(row=>Object.getOwnPropertyDescriptors(row));
+  return () => arrays.every((values,i)=>r[names[i]]===values&&values.length===members[i].length&&values.every((v,j)=>v===members[i][j]))
+    && rows.every((row,i)=>{const now=Object.getOwnPropertyDescriptors(row),before=captured[i];return Reflect.ownKeys(now).length===Reflect.ownKeys(before).length&&Reflect.ownKeys(before).every(key=>Object.hasOwn(before[key],"value")&&Object.hasOwn(now[key],"value")&&Object.is(before[key].value,now[key].value));})
+    && r.readers.every(reader=>reader.unlocks===1&&!reader.body.locked&&scope.retains(reader.transport,reader.response,reader.body,reader.reader))
+    && r.readers.every(reader=>[["read","read"],["cancel","cancel"],["releaseLock","unlock"]].every(([name,key])=>Object.getOwnPropertyDescriptor(reader.reader,name)?.value===reader.wrappers[key]))
+    && (!pair||pair.every(op=>op.state==="rejected"));
+}
+export async function litellmWorkerDrain(r, scope, loadSource) {
+  const checks=r.retireChecks??=litellmPredicateFacts();await checks.wait(1,()=>collectLiteLLMOperations(r));
+  if(r.localRetirement){if(!r.localRetirement.valid()){const late=[...r.failures,...r.observerFailures,...r.operations.filter(op=>op.state!=="fulfilled").map(op=>op.error),new Error("late Worker retirement mutation")];r.workerDataDisposition=Object.freeze([1,r.operations.filter(op=>op.state==="rejected"||op.state==="threw").length,late.length]);throw new AggregateError(late,"invalidated Worker retirement");}if(r.localRetirement.failures.length)throw new AggregateError(r.localRetirement.failures,"original Worker retirement failed");return r.localRetirement;}
+  const controlFailures=[];let source;
+  if(litellmPartialRole(r))try{source=await loadSource();}catch(error){controlFailures.push(error);}
+  await checks.wait(1,()=>collectLiteLLMOperations(r));
+  const failures=[...r.failures,...r.observerFailures,...controlFailures];
+  checks.note(2,r.failures.length===0);checks.note(3,r.observerFailures.length===0);
+  if(litellmPartialRole(r)&&!litellmProducerRetired(r,source))failures.push(new Error("original producer did not retire"));
+  const pair=failures.length===0?litellmJoinedReadData(r,scope,source):null;
+  for(const op of r.operations)if(!checks.note(4,op.state==="fulfilled")&&!pair?.includes(op))failures.push(op.error);
+  for(const reader of r.readers)if(!checks.note(5,reader.unlocks===1&&!reader.body.locked))failures.push(new Error("original reader remained owned"));
+  if(!checks.note(6,!r.bodies.some(body=>body.locked)))failures.push(new Error("original body locked"));
+  const raw=r.operations.filter(op=>op.state==="rejected"||op.state==="threw").length;
+  r.workerDataDisposition=Object.freeze([pair&&failures.length===0?2:raw?1:0,raw,failures.length]);
+  const stable=litellmRetirementSeal(r,scope,pair), sourceSnapshot=source===undefined?undefined:JSON.stringify(source);
+  const result=Object.freeze({failures:Object.freeze(failures),source,valid:()=>stable()&&(source===undefined?sourceSnapshot===undefined:JSON.stringify(source)===sourceSnapshot)});if(litellmPartialRole(r))r.localRetirement=result;
+  if(failures.length)throw new AggregateError(failures,"original Worker retirement failed");return result;
+}
+export async function litellmWorkerSourceProof(r, fetchOriginal) {
+  const failures=[];let response,result;
+  try{
+    response=await observeLiteLLMOperation(r,"control_fetch",()=>Reflect.apply(fetchOriginal,globalThis,["https://fixture.test/proof/"+r.id]));
+    if(response.status!==200)throw new Error("producer proof control failed");
+    result=await observeLiteLLMOperation(r,"control_body",()=>response.json());
+  }catch(error){failures.push(error);}
+  try{if(response&&!response.bodyUsed)await observeLiteLLMOperation(r,"control_cancel",()=>response.body?.cancel());}catch(error){failures.push(error);}
+  if(failures.length===1)throw failures[0];if(failures.length)throw new AggregateError(failures,"producer control and cleanup failed");return result;
 }
 export async function litellmControlResponse(response, action) {
   const errors = []; let result;
@@ -251,6 +347,12 @@ import {InternalHttpAbort} from './worker/http-operation.ts';
 import {bodyBudgetCharged} from './worker/body-budget.ts';
 ${litellmPredicateFacts.toString()}
 ${litellmRequestScope.toString()}
+${litellmPartialRole.toString()}
+${litellmProducerRetired.toString()}
+${litellmJoinedReadData.toString()}
+${litellmRetirementSeal.toString()}
+${litellmWorkerDrain.toString()}
+${litellmWorkerSourceProof.toString()}
 ${litellmWorkerResource.toString()}
 ${litellmWorkerLedger.toString()}
 ${litellmHeldReady.toString()}
@@ -284,14 +386,16 @@ function observeBody(r,response,input){
   check(()=>requestScope.body(input,this,body));
   let reader;try{reader=Reflect.apply(get,this,args);}catch(error){r.failures.push(error);throw error;}
   const info={body,reader,response,transport:input,unlocks:0,eof:false};check(()=>{info.id=requestScope.reader(input,body,reader);info.bound=requestScope.owns(input,response,body,reader);});r.readers.push(info);
-  observe(r,reader.closed,'closed',input,info,{receiverIdentity:this===body});
-  for(const name of ['read','cancel']){const original=reader[name];reader[name]=function(...values){
+  const closed=reader.closed;info.closed=closed;info.methods={};info.wrappers={};
+  observe(r,closed,'closed',input,info,{receiverIdentity:this===body});
+  for(const name of ['read','cancel']){const original=reader[name];info.methods[name]=original;reader[name]=function(...values){
    check(()=>requestScope.operation(input,this,reader,name));
-   const pending=invoke(r,name,()=>Reflect.apply(original,this,values),{reader:info,input,signal:input.signal,receiverIdentity:this===reader,argc:values.length,operandPresent:values.length>0,reason:values[0],signalAborted:input.signal?.aborted===true});
-   if(name==='read')observe(r,pending.then(chunk=>{if(chunk.done)info.eof=true;}),'read_observer',input,info,{originalRead:pending,receiverIdentity:this===reader});
+   const pending=invoke(r,name,()=>Reflect.apply(original,this,values),{reader:info,input,signal:input.signal,originalMethod:original,receiver:this,receiverIdentity:this===reader,argc:values.length,operandPresent:values.length>0,reason:values[0],signalAborted:input.signal?.aborted===true});
+   if(name==='read')observe(r,pending.then(chunk=>{if(chunk.done)info.eof=true;}),'read_observer',input,info,{originalRead:pending,originalMethod:original,receiver:this,receiverIdentity:this===reader});
    return pending;
-  };}
-  const unlock=reader.releaseLock;reader.releaseLock=function(...values){info.unlockInvoke=++r.sequence;check(()=>requestScope.operation(input,this,reader,'unlock'));try{const value=Reflect.apply(unlock,this,values);info.unlocks++;info.unlockSequence=++r.sequence;info.unlockReceiver=this===reader;return value;}catch(error){r.failures.push(error);throw error;}};
+  };info.wrappers[name]=reader[name];}
+  const unlock=reader.releaseLock;info.methods.unlock=unlock;reader.releaseLock=function(...values){info.unlockInvoke=++r.sequence;check(()=>requestScope.operation(input,this,reader,'unlock'));try{const value=Reflect.apply(unlock,this,values);info.unlocks++;info.unlockSequence=++r.sequence;info.unlockReceiver=this===reader;return value;}catch(error){r.failures.push(error);throw error;}};
+  info.wrappers.unlock=reader.releaseLock;Object.freeze(info.methods);Object.freeze(info.wrappers);
   return reader;
  };
 }
@@ -304,12 +408,7 @@ globalThis.fetch=function(input,init){
  if(owner.signal){const aborted=()=>{owner.abortSequence=++r.sequence;owner.callerAbortedAtAbort=owner.request?.signal.aborted;owner.pendingAtAbort=r.operations.filter(op=>op.kind==='read'&&op.reader?.transport===owner&&op.state==='pending');owner.noEarlierFailure=r.failures.length===0&&r.observerFailures.length===0&&r.operations.every(op=>op.state!=='rejected'&&op.state!=='threw');};if(owner.signal.aborted)aborted();else owner.signal.addEventListener('abort',aborted,{once:true});}
  const p=invoke(r,'fetch',()=>Reflect.apply(rawFetch,this,[input,init]),{transport:owner});observe(r,p.then(response=>observeBody(r,response,owner)),'acquisition_observer',owner,undefined,{originalFetch:p});return p;
 };
-async function drain(r){const checks=r.retireChecks??=litellmPredicateFacts();await checks.wait(1,()=>collectLiteLLMOperations(r));const failures=[...r.failures,...r.observerFailures];
- checks.note(2,r.failures.length===0);checks.note(3,r.observerFailures.length===0);
- for(const op of r.operations)if(!checks.note(4,op.state==='fulfilled'))failures.push(op.error);
- for(const reader of r.readers)if(!checks.note(5,reader.unlocks===1&&!reader.body.locked))failures.push(Error('original reader remained owned'));
- if(!checks.note(6,!r.bodies.some(body=>body.locked)))failures.push(Error('original body locked'));
- if(failures.length)throw new AggregateError(failures,'original Worker retirement failed');}
+async function drain(r){return litellmWorkerDrain(r,requestScope,()=>litellmWorkerSourceProof(r,rawFetch));}
 async function retireDeadline(r,bindings){
  await collectLiteLLMOperations(r);
  const failures=[];let usage;
@@ -342,7 +441,7 @@ export default {async fetch(request,bindings,context){
   if(action==='observation')return Response.json(observation(r));
   if(action==='started'){const deadline=Date.now()+5000;while(!litellmHeldReady(r,requestScope)){if(Date.now()>=deadline)return new Response(null,{status:504});await scheduler.wait(10);}return Response.json({started:true});}
   if(action==='release')return Reflect.apply(rawFetch,globalThis,['https://fixture.test/release/'+id,{method:'POST'}]);
-  if(action==='retire'){r.retireChecks??=litellmPredicateFacts();for(const q of r.requests)await r.retireChecks.wait(0,()=>q.promise);try{if(r.workerDeadline===true){r.retirement??=retireDeadline(r,bindings);return Response.json(await r.retirement);}await drain(r);return Response.json({retired:true,calls:r.calls,operations:r.operations.map(x=>({kind:x.kind,state:x.state})),unlocked:r.readers.every(x=>x.unlocks===1&&!x.body.locked)});}finally{for(const q of r.requests)if(!q.retired){requestScope.retire(q.token);q.retired=true;}}}
+  if(action==='retire'){r.retireChecks??=litellmPredicateFacts();for(const q of r.requests)await r.retireChecks.wait(0,()=>q.promise);try{if(r.workerDeadline===true){r.retirement??=retireDeadline(r,bindings);return Response.json(await r.retirement);}const retirement=await drain(r);return Response.json({retired:true,source:retirement.source,dataDisposition:r.workerDataDisposition,calls:r.calls,operations:r.operations.map(x=>({kind:x.kind,state:x.state})),unlocked:r.readers.every(x=>x.unlocks===1&&!x.body.locked)});}finally{for(const q of r.requests)if(!q.retired){requestScope.retire(q.token);q.retired=true;}}}
   if(action==='usage'){await drain(r);return Response.json(await usageSnapshot(bindings,'fixture',id,{kind:'admin'}));}
   if(request.method!=='POST')return new Response(null,{status:405});
   if(action==='narrow'||action==='broaden'){r.policy={...r.policy,models:action==='narrow'?[]:null};await authorityCall(bindings,'/policies/put',{policyId:id,policy:r.policy});}
@@ -362,32 +461,50 @@ export default {async fetch(request,bindings,context){
 }};`;
 }
 
+export function litellmObserveProducer(r, producer, kind, original, receiver, args) {
+  const op={kind,state:"pending",producer};r.operations.push(op);let pending;
+  try{pending=Reflect.apply(original,receiver,args);}catch(error){op.state="threw";op.error=error;throw error;}
+  op.promise=pending;const observer=pending.then(()=>{op.state="fulfilled";},error=>{op.state="rejected";op.error=error;});r.observers.push(observer);op.observer=observer;
+  const guard=observer.then(()=>undefined,error=>{r.observerFailures.push(error);});r.observers.push(guard);op.guard=guard;return pending;
+}
+export function litellmProducerOwners(r) {
+  if(r.producers.length!==r.calls.length||r.operations.some(op=>!r.producers.includes(op.producer))||new Set(r.operations.map(op=>op.promise)).size!==r.operations.length||r.observers.length!==r.operations.length*2||new Set(r.observers).size!==r.observers.length)throw new Error("foreign producer ownership");
+  return r.producers.map(producer=>{
+    const index=r.calls.indexOf(producer.call),ops=r.operations.filter(op=>op.producer===producer),cancels=ops.filter(op=>op.kind==="cancel");
+    if(index<0||r.producers.filter(p=>p.call===producer.call).length!==1||ops.some(op=>!r.observers.includes(op.observer)||!r.observers.includes(op.guard)))throw new Error("unbound producer observation");
+    return {call:index,held:producer.held,chat:producer.chat,finished:producer.finished,eof:producer.eof,cancels:cancels.length,fulfilledCancels:cancels.filter(op=>op.state==="fulfilled").length,operations:ops.length,observers:ops.length*2};
+  });
+}
 export async function joinLiteLLMProducer(r) {
   let at=0, observed=0;
   while(at<r.operations.length||observed<r.observers.length) {
-    const batch=[...r.operations.slice(at).map(op=>op.promise),...r.observers.slice(observed)];
-    at=r.operations.length;observed=r.observers.length;await Promise.allSettled(batch);
+    const originals=r.operations.slice(at).map(op=>op.promise), observers=r.observers.slice(observed), batch=[...originals,...observers];
+    at=r.operations.length;observed=r.observers.length;const outcomes=await Promise.allSettled(batch);
+    r.reportedObserverFailures??=new Set();
+    for(let i=0;i<observers.length;i++)if(outcomes[originals.length+i].status==="rejected"&&!r.reportedObserverFailures.has(observers[i])){r.reportedObserverFailures.add(observers[i]);r.observerFailures.push(outcomes[originals.length+i].reason);}
   }
   return [1,r.operations.length,r.observers.length,r.operations.filter(op=>op.state!=="fulfilled").length+r.observerFailures.length];
 }
 export function upstreamFixture() {
   return String.raw`
 ${joinLiteLLMProducer.toString()}
+${litellmObserveProducer.toString()}
+${litellmProducerOwners.toString()}
 const rows=new Map(),encoder=new TextEncoder();
 const frame=value=>'data: '+JSON.stringify(value)+'\n\n';
 export default {async fetch(request){
  const u=new URL(request.url);
  if(u.origin==='https://fixture.test'){
-  if(u.pathname==='/setup'){for(const row of await request.json())rows.set(row.id,{...row,calls:[],active:0,canceled:0,aborted:0,expired:0,finished:0,release:false,operations:[],observers:[],observerFailures:[]});return Response.json({ready:true});}
+  if(u.pathname==='/setup'){for(const row of await request.json())rows.set(row.id,{...row,calls:[],active:0,canceled:0,aborted:0,expired:0,finished:0,release:false,operations:[],observers:[],observerFailures:[],producers:[]});return Response.json({ready:true});}
   const m=/^\/(release|state|started|proof)\/([a-z0-9_]+)$/.exec(u.pathname);if(!m||!rows.has(m[2]))return new Response(null,{status:404});const r=rows.get(m[2]);
   if(m[1]==='release')r.release=true;
-  if(m[1]==='proof'){const joined=await joinLiteLLMProducer(r);return Response.json({calls:r.calls,active:r.active,canceled:r.canceled,aborted:r.aborted,expired:r.expired,finished:r.finished,operations:r.operations.map(op=>({kind:op.kind,state:op.state})),joined});}
+  if(m[1]==='proof'){const joined=await joinLiteLLMProducer(r);return Response.json({owners:r.mode==='partial_abort'?litellmProducerOwners(r):null,released:r.release,calls:r.calls,active:r.active,canceled:r.canceled,aborted:r.aborted,expired:r.expired,finished:r.finished,operations:r.operations.map(op=>({kind:op.kind,state:op.state})),joined});}
   if(m[1]==='started'){const deadline=Date.now()+5000;while(r.calls.length===0){if(Date.now()>=deadline)return new Response(null,{status:504});await scheduler.wait(10);}}
   return Response.json({calls:r.calls,active:r.active,canceled:r.canceled,aborted:r.aborted,expired:r.expired,finished:r.finished,producer:[r.operations.length,...['pending','fulfilled','rejected','threw'].map(state=>r.operations.filter(op=>op.state===state).length)]});
  }
  const id=/^Bearer fixture-upstream-([a-z0-9_]+)(?:-rotated)?$/.exec(request.headers.get('authorization')??'')?.[1],r=rows.get(id);
  if(!r)throw Error('unknown original upstream key');
- const body=request.body?await request.json():null;r.calls.push({url:request.url,method:request.method,body,authorization:request.headers.get('authorization')});
+ const body=request.body?await request.json():null,call={url:request.url,method:request.method,body,authorization:request.headers.get('authorization')};r.calls.push(call);
  const chat=u.pathname.endsWith('/chat/completions');
  if(r.mode==='redirect')return new Response(null,{status:302,headers:{location:'https://foreign.example/models'}});
  if(r.mode==='error401'||r.mode==='error403')return Response.json({error:{message:'synthetic upstream denial'}},{status:r.mode==='error401'?401:403});
@@ -398,8 +515,9 @@ export default {async fetch(request){
  if(r.mode==='malformed'&&!chat)text='{bad';if(r.mode==='truncated'&&!chat)text=text.slice(0,-4);if(r.mode==='oversized')text=JSON.stringify({object:'list',data:[{id:'x',padding:'x'.repeat(2*1024*1024)}]});
  if(chat&&r.mode==='provider_error')text=frame({error:{message:'synthetic provider failure'}});
  const held=r.mode==='held'||r.mode==='deadline'||chat&&r.mode==='partial_abort';let offset=0,waiting,stopped=false;const started=Date.now();
+ const producer={call,request,held,chat,finished:false,eof:false};r.producers.push(producer);
  const abort=()=>{r.aborted++;};request.signal.addEventListener('abort',abort,{once:true});
- const finish=()=>{if(!stopped){stopped=true;r.finished++;request.signal.removeEventListener('abort',abort);}};
+ const finish=()=>{if(!stopped){stopped=true;producer.finished=true;r.finished++;request.signal.removeEventListener('abort',abort);}};
  const source={async pull(controller){
   r.active++;
   try{
@@ -411,11 +529,11 @@ export default {async fetch(request){
     if(Date.now()-started>=(r.mode==='deadline'?35000:10000)){r.expired++;finish();controller.error(Error('fixture producer expired'));return;}
     controller.enqueue(encoder.encode(chat?': fixture heartbeat\n\n':' '));return;
    }
-   if(offset===text.length){finish();controller.close();return;}
+   if(offset===text.length){producer.eof=true;finish();controller.close();return;}
    const end=held&&offset===0?(chat?text.indexOf('\n\n')+4:1):Math.min(offset+4096,text.length);controller.enqueue(encoder.encode(text.slice(offset,end)));offset=end;
   }finally{r.active--;}
  },async cancel(){r.canceled++;finish();if(waiting)await waiting;}};
- for(const kind of ['pull','cancel']){const original=source[kind];source[kind]=function(...args){const op={kind,state:'pending'};r.operations.push(op);let pending;try{pending=Reflect.apply(original,this,args);}catch(error){op.state='threw';op.error=error;throw error;}op.promise=pending;const observer=pending.then(()=>{op.state='fulfilled';},error=>{op.state='rejected';op.error=error;});r.observers.push(observer);const guard=observer.then(()=>undefined,error=>{r.observerFailures.push(error);});r.observers.push(guard);return pending;};}
+ for(const kind of ['pull','cancel']){const original=source[kind];source[kind]=function(...args){return litellmObserveProducer(r,producer,kind,original,this,args);};}
  const stream=new ReadableStream(source,{highWaterMark:0});
  return new Response(stream,{headers:{'content-type':chat?'text/event-stream':'application/json'}});
 }};`;

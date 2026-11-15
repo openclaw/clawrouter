@@ -867,7 +867,7 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
   }
   function workerLedger(v: unknown) {
     const width = own(v, "length");
-    const a = [8,9].includes(width) ? array(v, width, (_: unknown) => true) : null;
+    const a = [8,9,10].includes(width) ? array(v, width, (_: unknown) => true) : null;
     if (!a || !a.slice(0, 7).every(number) || a[1] > a[0]) return null;
     const rows = own(a[7], "length");
     if (!Number.isSafeInteger(rows) || rows < 0 || rows > 2) return null;
@@ -879,8 +879,8 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
         && ((op[2] === 0 && !op[6] && op[9] === null) || (op[2] >= 2 && op[6] && op[9] !== null));
     });
     if (!ops || new Set(ops.map(op => op[0])).size !== ops.length || ops.some(op => op[0] >= a[0]) || ops.length + a[6] > a[0]) return null;
-    const detail = a.length === 9 ? workerResource(a[8]) : null;
-    if (a.length === 9 && a[8] !== null && !detail) return null;
+    const detail = a.length >= 9 ? workerResource(a[8]) : null;
+    if (a.length >= 9 && a[8] !== null && !detail) return null;
     if (detail) {
       const raw = detail[2][0], op = raw && ops.find(op => op[0] === raw[0]);
       if (!op || op[1] !== 4 || op[2] !== raw[1] || op[6] !== !!(raw[2]&1) || op[7] !== (raw[2]&1 ? !!(raw[2]&2) : null) || op[8] !== raw[3] || op[9] !== raw[4]
@@ -890,7 +890,10 @@ function litellmDiagnostics(ids: string[], isProxy: (v: unknown) => boolean) {
       if (retained && (retained[1]!==5 || retained[2]!==derivative[1] || retained[6]!==!!(derivative[2]&1) || retained[7]!==(derivative[2]&1 ? !!(derivative[2]&2) : null) || retained[8]!==derivative[3] || retained[9]!==derivative[4]
         || JSON.stringify(retained.slice(3,6))!==JSON.stringify(detail[0].slice(1)))) return null;
     }
-    return [...a.slice(0, 7), ops.map(op => [...op]), ...(a.length === 9 ? [detail] : [])];
+    const local = a.length === 10 ? array(a[9],3,number) : null;
+    if(a.length===10&&(!local||local[0]>2||local[1]>a[0]||(local[0]===2&&(local[1]!==2||local[2]!==0||a.slice(1,7).some(v=>v!==0)||!detail||detail[1]!==63
+      || detail[2][0]?.[1]!==2||detail[2][1]?.[1]!==2||detail[2][2]?.[1]!==1||detail[2][3]?.[1]!==1||detail[3][0]!==true))))return null;
+    return [...a.slice(0, 7), ops.map(op => [...op]), ...(a.length >= 9 ? [detail] : []),...(local?[[...local]]:[])];
   }
   function predicateFacts(v: unknown) {
     const a = array(v, 5, (_: unknown) => true), mask = (v: unknown) => Number.isSafeInteger(v) && (v as number) >= 0 && (v as number) <= 1073741823;
