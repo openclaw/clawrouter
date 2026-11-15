@@ -6,6 +6,8 @@ import { join, dirname, resolve, relative, isAbsolute } from "node:path";
 import { tmpdir } from "node:os";
 import { deflateSync } from "node:zlib";
 import { createRequire } from "node:module";
+import { channel } from "node:diagnostics_channel";
+import { errorMonitor } from "node:events";
 import { edgeProof } from "./edge-proof-profile.mjs";
 import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, validateContainerDiagnostic, initGuardTags, initSourcePhases, validateInitDetail, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic, projectionBoundaries, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, packReceiptOwnedDiagnostic, packReceiptCodeDiagnostic, packReceiptAssociatedDiagnostic, packReceiptCensusDiagnostic, unpackCensusCloseDiagnostic } from "./edge-proof.mjs";
 export { validateContainerDiagnostic, emitContainerFailure } from "./edge-proof.mjs";
@@ -1493,20 +1495,134 @@ async function containerInit(args, sharedReport) {
   process.stdout.write("EDGE_CONTAINER_RECEIPT_V2 " + JSON.stringify(receipt) + "\n");
   return { container: "complete", version: 2 };
 }
+// These are the same-thread async acquisition routes in the frozen packages.
+// Hash before importing the builder; no private handles or spawn replacement.
+async function qualifyNativeChildRoutes(native, capsule) {
+  check(process.version === "v24.22.1" && process.versions.modules === "137" && process.platform === "linux" && process.arch === "x64", "native-child-runtime");
+  const tsRoot = join(containerContract.input, "node_modules/typescript/dist/api");
+  const esbuildEntry = createRequire(import.meta.resolve("wrangler/package.json")).resolve("esbuild");
+  for (const [path, expected] of [
+    [join(tsRoot, "sync/api.js"), "e27255574a3c1a3236c4083c769758de3327bba8d3cd19f015551b619ae783d2"],
+    [join(tsRoot, "sync/client.js"), "4cca322e20fff9460d1843a62b2cac4ee963109b4d07e984bed9f54e7baa10b8"],
+    [join(tsRoot, "syncChannel.js"), "132714a6e2dd7fd079f7f67bf9ed41d4123ab2ab4d94043a34ea3b1a8f1fb001"],
+    [join(tsRoot, "options.js"), "b47b35b4b92d2ede9c72018859528eef2a1b57c4539cb7b58eaf1b5be193ea58"],
+    [join(tsRoot, "../../lib/getExePath.js"), "96c10fd3a18e165d7323de8e314ac8d755ad96811f9fbc304a5b3ba4e05285cc"],
+    [esbuildEntry, "61ec0ba144ff93f4bf0e96ad6fab6f430ede0aa13e27ace8063ed63ba416b3cd"],
+  ]) {
+    const canonical = await realpath(path);
+    check(canonical.startsWith(containerContract.input + "/node_modules/"), "native-child-source-containment");
+    check((await fileIdentity(canonical)).sha256 === expected, "native-child-source");
+  }
+  return [
+    [native.native.typescript.path, "--api", "--cwd", capsule],
+    [native.native.esbuild.path, "--service=0.28.2", "--ping"],
+  ];
+}
+
+function createNativeChildOwner(routes) {
+  const publication = channel("child_process"), rows = [], errors = [];
+  let active = true, subscribed = false, draining = false;
+  const fault = code => errors.push(new Error(code));
+  const protect = operation => { try { return operation(); } catch (error) { errors.push(error); } };
+  const classify = row => {
+    const file = row.child.spawnfile, args = row.child.spawnargs;
+    check(typeof file === "string" && Array.isArray(args), "native-child-spawn-metadata");
+    const role = routes.findIndex(route => file === route[0] && args.length === route.length && route.every((part, i) => args[i] === part));
+    check(role >= 0, "native-child-route");
+    check(!rows.some(other => other !== row && other.role === role), "native-child-duplicate-route");
+    if (row.role !== null) check(row.role === role, "native-child-route-drift");
+    row.role = role;
+  };
+  const subscriber = message => {
+    // A diagnostics-channel subscriber exception would be an uncaught exception.
+    protect(() => {
+      check(active && rows.length < 4, "native-child-capture-capacity");
+      const child = message.process;
+      check(child && !rows.some(row => row.child === child), "native-child-duplicate-object");
+      let closed;
+      const row = { child, role: null, spawned: false, exited: false, closed: false, listeningClose: false, listeners: [], close: new Promise(resolve => { closed = resolve; }) };
+      rows.push(row);
+      const listen = (event, handler) => {
+        const callback = (...args) => protect(() => handler(...args));
+        row.listeners.push([event, callback]);
+        protect(() => { child.on(event, callback); if (event === "close") row.listeningClose = true; });
+      };
+      // Close never rejects on error. Only the original close event resolves it.
+      listen("close", () => { if (row.closed) fault("native-child-duplicate-close"); row.closed = true; closed(); });
+      listen(errorMonitor, error => { errors.push(error); });
+      listen("exit", () => { if (row.exited) fault("native-child-duplicate-exit"); row.exited = true; });
+      listen("spawn", () => {
+        check(!row.spawned, "native-child-duplicate-spawn"); row.spawned = true;
+        classify(row);
+        if (draining && !row.closed) child.ref();
+      });
+    });
+  };
+  try { publication.subscribe(subscriber); subscribed = true; }
+  catch (error) { errors.push(error); protect(() => publication.unsubscribe(subscriber)); }
+  return {
+    start() { raiseContainerFailures(errors); },
+    async drain(requireRoutes) {
+      draining = true;
+      try {
+        // At most four constructed objects and five passes. Each close join is
+        // bounded by the existing outer owned-builder deadline, not a new timer.
+        let stable = false;
+        for (let pass = 0; pass < 5; pass++) {
+          const count = rows.length, joins = [];
+          for (const row of rows) {
+            if (row.closed) continue;
+            // Constructor publication precedes spawn. A synchronous spawn throw
+            // may have no PID and no future close: fail, never invent closure.
+            const pid = protect(() => row.child.pid);
+            if (!Number.isSafeInteger(pid) || pid <= 0 || !row.listeningClose) { fault("native-child-unconfirmed-close"); continue; }
+            protect(() => row.child.ref());
+            joins.push(row.close);
+          }
+          await Promise.all(joins);
+          if (rows.length === count) { stable = true; break; }
+        }
+        if (!stable) fault("native-child-drain-capacity");
+        for (const row of rows) protect(() => {
+          check(row.closed && row.spawned, "native-child-incomplete"); classify(row);
+        });
+        if (requireRoutes) protect(() => check(routes.every((_, role) => rows.filter(row => row.role === role).length === 1), "native-child-missing-route"));
+      } finally {
+        // Never remove another subscriber or library listener. All cleanup
+        // attempts survive independent failures, including thrown undefined.
+        if (subscribed) protect(() => check(publication.unsubscribe(subscriber) === true, "native-child-unsubscribe"));
+        active = false;
+        for (const row of rows) for (const [event, callback] of row.listeners) protect(() => row.child.removeListener(event, callback));
+      }
+      raiseContainerFailures(errors);
+    },
+  };
+}
+
 async function containerBuild(args) {
   check(args.length === 5 && ["/task/capsule-a", "/task/capsule-b"].includes(args[0]) && ["build_a", "build_b"].includes(args[1]) && hashPattern.test(args[2]), "builder-arguments");
   const [capsule, role, contextHash, uid, gid] = args, identity = { uid: Array(4).fill(number(uid)), gid: Array(4).fill(number(gid)), groups: [] };
   const report = createPackagingDiagnostics(role, line => process.stdout.write(line)), errors = [];
-  report.mark("entry", "fulfilled"); let esbuild;
+  report.mark("entry", "fulfilled"); let esbuild, children;
   try {
     await report.step("namespace_read", () => validateContainerRuntime(identity, true));
     const native = await nativeReceipt(contextHash);
+    children = createNativeChildOwner(await qualifyNativeChildRoutes(native, capsule));
+    children.start();
     const { buildCapsule } = await report.step("builder_import", () => import("./edge-proof-build.mjs"));
     esbuild = createRequire(import.meta.resolve("wrangler/package.json"))("esbuild");
     const receipt = await report.step("build", () => buildCapsule(containerContract.input, capsule, { executable: native.native.git.path, sha256: native.native.git.sha256, env: { ...gitEnvironment } }));
     await report.step("receipt_write", () => writeFile(join(capsule, "source-receipt.json"), JSON.stringify(receipt), { flag: "wx", mode: 0o600 }));
   } catch (error) { errors.push(error); }
-  if (esbuild) try { report.sync("build_service_stop", () => esbuild.stop()); } catch (error) { errors.push(error); }
+  if (esbuild) try {
+    await report.step("build_service_stop", async () => {
+      const shutdown = [];
+      try { await esbuild.stop(); } catch (error) { shutdown.push(error); }
+      if (children) try { await children.drain(errors.length === 0 && shutdown.length === 0); } catch (error) { shutdown.push(error); }
+      raiseContainerFailures(shutdown);
+    });
+  } catch (error) { errors.push(error); }
+  else if (children) try { await children.drain(false); } catch (error) { errors.push(error); }
   report.mark("final", errors.length ? "rejected" : "fulfilled", errors[0]); errors.push(...report.errors); raiseContainerFailures(errors);
   return { built: true };
 }

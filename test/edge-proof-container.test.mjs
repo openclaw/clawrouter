@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { EventEmitter } from "node:events";
+import { EventEmitter, errorMonitor } from "node:events";
 import { spawnSync } from "node:child_process";
 import { PassThrough, Writable } from "node:stream";
 import { readFile, realpath } from "node:fs/promises";
@@ -1987,22 +1987,108 @@ test("receipt child original capture tail integrity and reporting failure never 
   const api=await receiptParserFactory(),report=createContainerDiagnostics();report.internal=()=>{throw undefined;};let reason;try{await api.observeContainerReceipt(report,{split(){throw undefined;}},api.plan,()=>[1,"no_records",0,0,0,0,0,null,"UNKNOWN"]);}catch(error){reason=error;}assert.ok(reason instanceof AggregateError);assert.deepEqual(reason.errors,[undefined,undefined]);
   const original=receiptWrapperFrames("namespace_read").frames, c=await receiptCapture(original);const otherBinding={...c.binding,attached:{result:{...c.h.attached.result}}};assert.equal(parseChildPackaging(c.h.attached.result,otherBinding,c.initSummary)[1],"binding_unavailable");
 });
+// Native-child tests use only inert event objects and ordinary promises. No
+// library, process, native stream or actual diagnostics subscriber is acquired.
+async function nativeOwnerFixture(options = {}) {
+  const source = await readFile(new URL("../scripts/edge-proof-container.mjs", import.meta.url), "utf8");
+  const body = source.slice(source.indexOf("function createNativeChildOwner("), source.indexOf("async function containerBuild("));
+  const subscribers = new Set(), foreign = () => {}, calls = [], routes = [["/immutable/tsc", "--api", "--cwd", "/task/capsule-a"], ["/immutable/esbuild", "--service=0.28.2", "--ping"]];
+  subscribers.add(foreign);
+  const publication = {
+    subscribe(fn) { calls.push("subscribe"); subscribers.add(fn); if (options.subscribeFailure) throw options.reason; },
+    unsubscribe(fn) { calls.push("unsubscribe"); const removed = subscribers.delete(fn); if (options.unsubscribeFailure) throw options.reason; return removed; },
+  };
+  const factory = new Function("channel", "errorMonitor", "check", "raiseContainerFailures", body + "return createNativeChildOwner;")(
+    name => { assert.equal(name, "child_process"); return publication; }, errorMonitor,
+    (ok, label) => { if (!ok) throw new Error(label); }, raiseContainerFailures,
+  );
+  const owner = factory(routes);
+  const publish = child => { for (const fn of [...subscribers]) fn({ process: child }); };
+  let nextPid = 10;
+  const construct = (role = 0, configuration = {}) => {
+    const child = new EventEmitter(); child.references = 0;
+    child.ref = function() { assert.equal(this, child); calls.push("ref"); this.references++; if (configuration.refFailure) throw configuration.reason; return this; };
+    const originalOn = child.on, originalRemove = child.removeListener;
+    child.on = function(event, listener) { assert.equal(this, child); originalOn.call(this, event, listener); if (event === configuration.listenerFailure) throw configuration.reason; return this; };
+    child.removeListener = function(event, listener) { assert.equal(this, child); originalRemove.call(this, event, listener); if (configuration.removeFailure) throw configuration.reason; return this; };
+    publish(child); // Constructor has neither PID nor spawn metadata yet.
+    child.launch = () => {
+      child.pid = nextPid++; child.spawnfile = routes[role]?.[0] ?? "/foreign"; child.spawnargs = [...(routes[role] ?? ["/foreign"])]; child.emit("spawn");
+    };
+    return child;
+  };
+  return { owner, construct, publish, calls, subscribers, foreign, routes };
+}
+async function nativeOwnerFailure(promise) { let failed = false, reason; try { await promise; } catch (error) { failed = true; reason = error; } assert.equal(failed, true); return reason; }
+function nativeOwnerErrors(reason) { return reason instanceof AggregateError ? reason.errors.flatMap(nativeOwnerErrors) : [reason]; }
+test("native child owner original close stays pending after stop and exit and survives later unref", async () => {
+  const f = await nativeOwnerFixture(); f.owner.start(); const a = f.construct(), b = f.construct(1);
+  a.launch(); b.launch(); a.references = b.references = 0; // library's final unref
+  let done = false; const drain = f.owner.drain(true).then(() => { done = true; });
+  await Promise.resolve(); assert.equal(done, false); assert.equal(a.references, 1); assert.equal(b.references, 1);
+  a.emit("exit", 0, null); b.emit("exit", 0, null); await Promise.resolve(); assert.equal(done, false);
+  a.emit("close", 0, null); await Promise.resolve(); assert.equal(done, false);
+  b.emit("close", 0, null); await drain; assert.equal(done, true);
+  assert.deepEqual([...f.subscribers], [f.foreign]); assert.equal(a.listenerCount(errorMonitor), 0); assert.equal(a.listenerCount("error"), 0);
+});
+test("native child owner constructor throw has no invented close and spawn error preserves original reason", async () => {
+  for (const reason of [undefined, Object.freeze({ original: true })]) {
+    const f = await nativeOwnerFixture(); f.construct(); await nativeOwnerFailure(f.owner.drain(false)); assert.deepEqual([...f.subscribers], [f.foreign]);
+    const g = await nativeOwnerFixture(), child = g.construct(); let seen;
+    child.on("error", value => { seen = value; }); child.emit("error", reason); assert.equal(seen, reason);
+    child.emit("close", -1, null); const failure = await nativeOwnerFailure(g.owner.drain(false)); assert.ok(nativeOwnerErrors(failure).includes(reason));
+  }
+  const h = await nativeOwnerFixture(), child = h.construct(); const original = new Error("inert original");
+  assert.throws(() => child.emit("error", original), error => error === original); // No added error listener.
+  child.emit("close"); assert.ok(nativeOwnerErrors(await nativeOwnerFailure(h.owner.drain(false))).includes(original));
+});
+test("native child owner unknown duplicate missing and changed routes deny success without skipping joins", async () => {
+  for (const variant of ["foreign", "duplicate-role", "duplicate-object", "missing", "changed"]) {
+    const f = await nativeOwnerFixture(), a = f.construct(variant === "foreign" ? 2 : 0); a.launch();
+    const b = variant === "missing" ? null : f.construct(variant === "duplicate-role" ? 0 : 1); b?.launch();
+    if (variant === "duplicate-object") f.publish(a);
+    if (variant === "changed") a.spawnargs[1] = "--foreign";
+    const drain = f.owner.drain(true); a.emit("close"); b?.emit("close"); await nativeOwnerFailure(drain);
+    assert.deepEqual([...f.subscribers], [f.foreign]);
+  }
+});
+test("native child owner fixed point includes late acquisitions and independent listener ref unsubscribe faults", async () => {
+  const f = await nativeOwnerFixture(), a = f.construct(); a.launch();
+  let b, done = false; a.on("close", () => { b = f.construct(1); b.launch(); });
+  const drain = f.owner.drain(true).then(() => { done = true; }); a.emit("close"); await Promise.resolve(); await Promise.resolve();
+  assert.equal(done, false); assert.ok(b.references > 0); b.emit("close"); await drain;
+  for (const variant of ["listenerFailure", "refFailure", "removeFailure", "unsubscribeFailure", "subscribeFailure"]) {
+    const options = { reason: undefined, [variant]: true }, g = await nativeOwnerFixture(options);
+    if (variant === "subscribeFailure") { assert.throws(() => g.owner.start()); await nativeOwnerFailure(g.owner.drain(false)); continue; }
+    const c = g.construct(0, { ...options, listenerFailure: variant === "listenerFailure" ? "spawn" : undefined }); c.launch();
+    const pending = g.owner.drain(false); c.emit("close"); const failure = await nativeOwnerFailure(pending);
+    assert.ok(nativeOwnerErrors(failure).includes(undefined)); assert.deepEqual([...g.subscribers], [g.foreign]);
+    assert.equal(c.listenerCount("close"), 0); assert.equal(c.listenerCount(errorMonitor), 0);
+  }
+});
+test("native child owner capacity and close-listener failure cannot invent completion", async () => {
+  const f = await nativeOwnerFixture(), c = f.construct(0, { listenerFailure: "close", reason: undefined }); c.launch();
+  const failed = await nativeOwnerFailure(f.owner.drain(false)); assert.ok(nativeOwnerErrors(failed).includes(undefined));
+  const g = await nativeOwnerFixture(); for (let i = 0; i < 5; i++) g.construct(); await nativeOwnerFailure(g.owner.drain(false));
+  assert.deepEqual([...g.subscribers], [g.foreign]);
+});
+
 // The hash pins the complete function and these two manually audited AST
 // expression spans. No search/replace can redirect another import or callee.
 async function receiptActualBuilder(args, failure, options = {}) {
   const source=await readFile(new URL("../scripts/edge-proof-container.mjs",import.meta.url),"utf8");
   const from=source.indexOf("async function containerBuild("),to=source.indexOf("async function containerPrepare(",from);
   let body=source.slice(from,to);
-  assert.equal(createHash("sha256").update(body).digest("hex"),"575333e5e5443a65477c3f23161d370fa1535ef46fa262419ed8f3a98a8440c7");
-  for(const [start,end,original,replacement] of [[802,846,'import.meta.resolve("wrangler/package.json")','resolveWrangler("wrangler/package.json")'],[739,771,'import("./edge-proof-build.mjs")','importBuilder()']]){
+  assert.equal(createHash("sha256").update(body).digest("hex"),"3bf9da32f9defefe60248bf2ebe3d73f029226ff9cb81c0b06060a43f91d1fab");
+  for(const [start,end,original,replacement] of [[922,966,'import.meta.resolve("wrangler/package.json")','resolveWrangler("wrangler/package.json")'],[859,891,'import("./edge-proof-build.mjs")','importBuilder()']]){
     assert.equal(body.slice(start,end),original);body=body.slice(0,start)+replacement+body.slice(end);
   }
   const frames=[],calls=[],reason=Object.hasOwn(options,"reason")?options.reason:undefined;
   const capsule={sourceSha:"c".repeat(40),sourceTree:"d".repeat(40),sourceFiles:Array(600).fill(0),dependencyInputs:Array(268).fill(0),instrumentation:Array(4).fill({erasureExact:true}),observerSha256:hex,harnessInputs:[],bundles:{edge:hex,upstream:hex},runtime:{}};
   const git={path:"/immutable/git",sha256:hex}, environment=Object.freeze({GIT_CONFIG_NOSYSTEM:"1"});
-  const visit=(name,...values)=>{calls.push([name,...values]);if(failure===name)throw reason;};
-  let report,writeFailed=false;
-  const esbuild={stop(){assert.equal(this,esbuild);visit("build_service_stop");if(options.stopFailure)throw options.stopReason;}};
+  const visit=(name,...values)=>{calls.push([name,...values]);options.onVisit?.(name,...values);if(failure===name)throw reason;};
+  let report,writeFailed=false;const ownerCalls=[];
+  const esbuild={stop(){assert.equal(this,esbuild);visit("build_service_stop");if(options.stopFailure)throw options.stopReason;return options.stopPromise;}};
   const requireInert=function(name){visit("require",name);assert.equal(name,"esbuild");return esbuild;};
   const bindings={Array,Object,JSON,join,hashPattern:/^[a-f0-9]{64}$/,containerContract:{input:"/opt/edge-input"},gitEnvironment:environment,
     check:(value,code)=>{if(!value)throw new Error(code);},number:value=>{assert.equal(value,"501");return 501;},raiseContainerFailures,
@@ -2012,6 +2098,8 @@ async function receiptActualBuilder(args, failure, options = {}) {
       frames.push(line);return true;
     }}},
     createPackagingDiagnostics:(...values)=>{report=createPackagingDiagnostics(...values);return report;},
+    qualifyNativeChildRoutes:async(n,c)=>{ownerCalls.push(["qualify",n,c]);if(options.qualifyFailure)throw options.qualifyReason;return [["inert"]];},
+    createNativeChildOwner:routes=>options.owner ?? {start(){ownerCalls.push(["start",routes]);if(options.startFailure)throw options.startReason;},async drain(complete){ownerCalls.push(["drain",complete]);if(options.drainFailure)throw options.drainReason;}},
     validateContainerRuntime:async(identity,builder)=>{visit("namespace_read",identity,builder);assert.equal(builder,true);assert.deepEqual(identity,{uid:Array(4).fill(501),gid:Array(4).fill(501),groups:[]});},
     nativeReceipt:async context=>{visit("native_receipt",context);assert.equal(context,hex);return{native:{git}};},
     importBuilder:async()=>{visit("builder_import");return{buildCapsule:async(...values)=>{
@@ -2021,10 +2109,10 @@ async function receiptActualBuilder(args, failure, options = {}) {
     createRequire:anchor=>{visit("createRequire",anchor);assert.equal(anchor,"/immutable/wrangler/package.json");return requireInert;},
     writeFile:async(...values)=>{visit("receipt_write",...values);assert.deepEqual(values,[join(args[0],"source-receipt.json"),JSON.stringify(capsule),{flag:"wx",mode:0o600}]);},
   };
-  for(const name of ["check","number","raiseContainerFailures","createPackagingDiagnostics","validateContainerRuntime","nativeReceipt","importBuilder","resolveWrangler","createRequire","writeFile","join"])assert.equal(typeof bindings[name],"function",name);
+  for(const name of ["check","number","raiseContainerFailures","createPackagingDiagnostics","qualifyNativeChildRoutes","createNativeChildOwner","validateContainerRuntime","nativeReceipt","importBuilder","resolveWrangler","createRequire","writeFile","join"])assert.equal(typeof bindings[name],"function",name);
   const run=new Function(...Object.keys(bindings),body+"return containerBuild;")(...Object.values(bindings));
   let failed=false,error,value;try{value=await run(args);}catch(thrown){failed=true;error=thrown;}
-  return{frames,calls,report,failed,reason:error,value,writeFailed};
+  return{frames,calls,report,failed,reason:error,value,writeFailed,ownerCalls};
 }
 async function receiptActualProducer(failure = "wrangler_input", writerFailure = false, builderOptions = {}) {
   const source = await readFile(new URL("../scripts/edge-proof.mjs", import.meta.url), "utf8");
@@ -2179,6 +2267,60 @@ test("receipt lifecycle actual builder preserves every original failure and oper
   const both=await receiptActualBuilder(args,"build",{stopFailure:true,stopReason:undefined});assert.equal(both.failed,true);assert.ok(both.reason instanceof AggregateError);assert.deepEqual(both.reason.errors,[undefined,undefined]);assert.equal(both.calls.filter(r=>r[0]==="build_service_stop").length,1);
   const report=await receiptActualBuilder(args,"build",{writeFailure:["build","rejected"]});assert.ok(report.reason instanceof AggregateError);assert.deepEqual(report.reason.errors,[undefined,undefined]);assert.deepEqual(report.report.errors,[undefined]);
   const onlyReport=await receiptActualBuilder(args,undefined,{writeFailure:["final","fulfilled"]});assert.equal(onlyReport.failed,true);assert.equal(onlyReport.reason,undefined);assert.equal(onlyReport.report.records.at(-1).outcome,"fulfilled");assert.deepEqual(onlyReport.report.errors,[undefined]);
+});
+test("native child owner actual builder denies early success and joins despite original stop and report failures", async () => {
+  const args = ["/task/capsule-a", "build_a", hex, "501", "501"];
+  for (const variant of ["success", "primary-stop-undefined", "async-stop-undefined", "report-undefined"]) {
+    const f = await nativeOwnerFixture(); let a, b, stopReached = false, finished = false, rejectStop, reachedStop;
+    const reached = new Promise(resolve => { reachedStop = resolve; });
+    const stopPromise = variant === "async-stop-undefined" ? new Promise((_, reject) => { rejectStop = reject; }) : undefined;
+    const result = receiptActualBuilder(args, variant === "primary-stop-undefined" ? "build" : undefined, {
+      owner: f.owner, stopPromise, stopFailure: variant === "primary-stop-undefined", stopReason: undefined,
+      writeFailure: variant === "report-undefined" ? ["build_service_stop", "enter"] : undefined,
+      onVisit(name) {
+        if (name === "build") { a = f.construct(); b = f.construct(1); a.launch(); b.launch(); a.references = b.references = 0; }
+        if (name === "build_service_stop") { stopReached = true; reachedStop(); }
+      },
+    }).then(value => { finished = true; return value; });
+    await Promise.race([reached, result.then(value => { throw new Error("unexpected early builder return", { cause: value.reason }); })]);
+    assert.equal(stopReached, true); assert.equal(finished, false);
+    rejectStop?.(undefined); await Promise.resolve(); await Promise.resolve();
+    assert.equal(finished, false); a.emit("close"); await Promise.resolve(); assert.equal(finished, false); b.emit("close");
+    const built = await result; assert.equal(built.failed, variant !== "success");
+    assert.equal(built.calls.filter(row => row[0] === "build_service_stop").length, 1);
+    if (variant === "primary-stop-undefined") assert.deepEqual(nativeOwnerErrors(built.reason), [undefined, undefined]);
+    if (variant === "async-stop-undefined" || variant === "report-undefined") assert.equal(built.reason, undefined);
+    assert.deepEqual([...f.subscribers], [f.foreign]);
+  }
+  for (const phase of ["qualify", "start", "drain"]) {
+    const built = await receiptActualBuilder(args, undefined, { [phase + "Failure"]: true, [phase + "Reason"]: undefined });
+    assert.equal(built.failed, true); assert.equal(built.reason, undefined);
+    assert.equal(built.calls.some(row => row[0] === "builder_import"), phase === "drain");
+  }
+});
+test("native child owner source routes are version bound and qualified before actual builder import", async () => {
+  const source = await readFile(new URL("../scripts/edge-proof-container.mjs", import.meta.url), "utf8");
+  let body = source.slice(source.indexOf("async function qualifyNativeChildRoutes("), source.indexOf("function createNativeChildOwner("));
+  const expression = 'import.meta.resolve("wrangler/package.json")'; assert.equal(body.split(expression).length, 2);
+  body = body.replace(expression, '"/immutable/wrangler/package.json"');
+  const expected = [...body.matchAll(/"([0-9a-f]{64})"/g)].map(match => match[1]); assert.equal(expected.length, 6);
+  for (const variant of ["valid", "runtime", "escape", "hash", "undefined"]) {
+    const calls = []; let index = 0;
+    const bindings = { join, containerContract: { input: "/opt/edge-input" }, process: { version: variant === "runtime" ? "v26.0.0" : "v24.22.1", versions: { modules: "137" }, platform: "linux", arch: "x64" },
+      check: (ok, code) => { if (!ok) throw new Error(code); },
+      createRequire: anchor => { assert.equal(anchor, "/immutable/wrangler/package.json"); return { resolve(name) { assert.equal(name, "esbuild"); return "/opt/edge-input/node_modules/esbuild/lib/main.js"; } }; },
+      realpath: async path => { calls.push(["realpath", path]); if (variant === "undefined") throw undefined; return variant === "escape" ? "/outside/input" : path; },
+      fileIdentity: async path => { calls.push(["identity", path]); return { sha256: variant === "hash" ? other : expected[index++] }; },
+    };
+    const qualify = new Function(...Object.keys(bindings), body + "return qualifyNativeChildRoutes;")(...Object.values(bindings));
+    const n = { native: { typescript: { path: "/immutable/tsc" }, esbuild: { path: "/immutable/esbuild" } } };
+    if (variant === "valid") { assert.deepEqual(await qualify(n, "/task/capsule-a"), [["/immutable/tsc", "--api", "--cwd", "/task/capsule-a"], ["/immutable/esbuild", "--service=0.28.2", "--ping"]]); assert.equal(calls.length, 12); }
+    else { const error = await nativeOwnerFailure(qualify(n, "/task/capsule-a")); if (variant === "undefined") assert.equal(error, undefined); }
+  }
+  const build = source.slice(source.indexOf("async function containerBuild("), source.indexOf("async function containerPrepare("));
+  assert.ok(build.indexOf("qualifyNativeChildRoutes") < build.indexOf('import("./edge-proof-build.mjs")'));
+  assert.ok(build.indexOf("children.start()") < build.indexOf('import("./edge-proof-build.mjs")'));
+  assert.equal(build.split("esbuild.stop()").length, 2); assert.equal(build.includes('report.sync("build_service_stop"'), false);
 });
 async function lifecyclePacket(produced, mutate=frames=>frames,wire=false) {
   const capture=await receiptCapture(mutate(produced.frames)),api=await receiptParserFactory(),report=createContainerDiagnostics();

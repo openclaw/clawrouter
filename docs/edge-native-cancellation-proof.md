@@ -51,6 +51,23 @@ Bookworm amd64 installs its own pnpm 11.28.4 frozen dependencies inside the imag
 
 The trusted parent uses a new empty Docker configuration and an explicit environment with one local Unix daemon socket. No inherited proxy, auth configuration, remote Docker endpoint or build arguments are accepted. Base and derived image inspection rejects ONBUILD, volumes and unexpected command/environment defaults. The final image ID comes from the successful build's iidfile and is checked against actual image inspection, context/Dockerfile hashes, source/install inputs and the native receipt. A fresh invocation nonce prevents treating an old derived image as this invocation's resource. Labels alone are not proof.
 
+### Builder native-child completion
+
+The builder uses the public `child_process` diagnostics channel before importing its build module. This is source-qualified against Node 24.22.1 commit `ce7aaf1cee78b8cf0ce17364260535c418d3ed26`: constructor publication precedes spawn, while the original `close` follows process exit/error and stdio closure. It uses `errorMonitor`, never an added `error` listener, and never replaces `spawn` or inspects private process handles. The pinned TypeScript 7.0.2 synchronous API uses one same-thread `SyncRpcChannel` child with `--api --cwd <capsule>`; esbuild 0.28.2 asynchronous builds use one service child with `--service=0.28.2 --ping`. The image rechecks these acquisition sources before import:
+
+| Source | SHA256 |
+| --- | --- |
+| TypeScript `dist/api/sync/api.js` | `e27255574a3c1a3236c4083c769758de3327bba8d3cd19f015551b619ae783d2` |
+| TypeScript `dist/api/sync/client.js` | `4cca322e20fff9460d1843a62b2cac4ee963109b4d07e984bed9f54e7baa10b8` |
+| TypeScript `dist/api/syncChannel.js` | `132714a6e2dd7fd079f7f67bf9ed41d4123ab2ab4d94043a34ea3b1a8f1fb001` |
+| TypeScript `dist/api/options.js` | `b47b35b4b92d2ede9c72018859528eef2a1b57c4539cb7b58eaf1b5be193ea58` |
+| TypeScript `lib/getExePath.js` | `96c10fd3a18e165d7323de8e314ac8d755ad96811f9fbc304a5b3ba4e05285cc` |
+| esbuild `lib/main.js` | `61ec0ba144ff93f4bf0e96ad6fab6f430ede0aa13e27ace8063ed63ba416b3cd` |
+
+Constructor observation is not spawn confirmation. Exact public executable/argument metadata must match the attested immutable executable and expected route; unknown, missing, duplicate or conflicting routes deny success. A constructor left without a confirmed launch or observable close fails without inventing completion or waiting forever for an impossible event. Original errors, including `undefined`, remain independent of close completion and observation faults.
+
+After the original TypeScript close and esbuild stop calls, the owner refs unresolved original children and joins their actual close promises. A bounded fixed-point drain includes late acquisitions before removing only its own subscriber and listeners. The existing outer builder deadline still bounds unresolved closes. Subscription, listener, ref, drain and reporting failures deny success independently of original build/stop failures. Capsule operations and bytes are unchanged; successful builder completion waits for this barrier. The parent still requires its original builder close, zero final census for **both live and zombie rows**, and independent cgroup retirement. The barrier is not a PID1 reaper, continuous custody proof, or attribution of a previously observed zombie. Hosted execution of this change remains **UNRUN**; inert Node 26 tests do not qualify Node 24 native behavior or SDK/cloud operations.
+
 ### Runtime isolation and supervision
 
 The container uses a private PID, network, mount, IPC and cgroup view; network mode is `none`. It drops all capabilities, enables no-new-privileges, requires seccomp filtering and a read-only root, and exposes no caller bind mount, Docker socket, device, port or secret. Docker-generated proc/dev/shm and resolver metadata mounts have an explicit checked topology. The parent correlates the daemon's exact per-container metadata paths with filesystem device/root entries in its own and the target's kernel mount tables; those target mounts must be read-only. It does not traverse Docker's root-owned storage. Ambiguous or changing mappings fail. `/task` is a 2 GiB noexec/nosuid/nodev tmpfs, inside a 4 GiB memory limit with no extra swap; the process limit is 128 and CPU limit is two cores. HOME, XDG, temporary files and logs are created there before use.
