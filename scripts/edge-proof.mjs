@@ -1571,7 +1571,59 @@ export function validateReceiptObservedWranglerDiagnostic(value) {
   if (Buffer.byteLength(JSON.stringify(row)) > 512) refuse("wrangler-observed-receipt-capacity");
   return row;
 }
+// V19 enriches the existing attach row; historical V6 and receipt codecs stay strict.
+export function validateCoordinatorRuntime(value) {
+  if (value === null) return null;
+  const row = ownedTuple(value,5), [first,failed,defined,finish,finishDefined] = row;
+  if (!Number.isInteger(first) || first < 0 || first > 5 || typeof failed !== "boolean" ||
+      (failed ? first === 0 || typeof defined !== "boolean" : first !== 0 || defined !== null) ||
+      ![0,1,2].includes(finish) || (finish === 2 ? typeof finishDefined !== "boolean" : finishDefined !== null)) refuse("coordinator-runtime-fields");
+  return row;
+}
+export function validateReaperTerminalDetail(value) {
+  const row = ownedTuple(value,11), [decode,decodeDefined,sequence,kind,code,faults,finished,drained,retention,retentionDefined,receiptSha] = row;
+  if (![0,1,2,3].includes(decode) || ([1,2].includes(decode) ? typeof decodeDefined !== "boolean" : decodeDefined !== null)) refuse("terminal-detail-decode");
+  if (decode === 3) {
+    if (!Number.isInteger(sequence) || sequence < 0 || sequence >= 0xffffffff || ![0,1,2].includes(kind) ||
+        (kind === 0 ? code !== null : !Number.isInteger(code) || (kind === 1 ? code < 0 || code > 255 : code < 1 || code > 64)) ||
+        !Number.isInteger(faults) || faults < 0 || faults > 511 || typeof finished !== "boolean" || drained !== true ||
+        (finished ? sequence < 2 : !(faults & 8))) refuse("terminal-detail-values");
+  } else if (row.slice(2,8).some(x=>x!==null)) refuse("terminal-detail-unavailable");
+  if (![0,1,2].includes(retention) || (retention === 2 ? typeof retentionDefined !== "boolean" : retentionDefined !== null) ||
+      (retention === 1 ? typeof receiptSha !== "string" || !/^[a-f0-9]{64}$/.test(receiptSha) : receiptSha !== null) ||
+      (decode === 0 ? retention !== 0 : retention === 0)) refuse("terminal-detail-retention");
+  return row;
+}
+export function unpackAttachTerminalDiagnostic(value) {
+  const a=ownedTuple(ownData(value,"attach"),9), [exit,signal,flags,errors,undefinedErrors,supervisor,first,branches,capture]=a;
+  if (!Number.isInteger(signal) || signal < 0 || signal >= containerDiagnosticSignals.length || !Number.isInteger(flags) || flags < 0 || flags > 15 ||
+      !Number.isInteger(supervisor) || supervisor < 0 || supervisor > 63 || !Number.isInteger(first) || first < 0 || first > attachFailureBranches.length ||
+      !Number.isInteger(capture) || capture < 0 || capture > 3) refuse("attach-terminal-mask");
+  return {v:6,phase:"attach_process",state:"observed",exit,signal:containerDiagnosticSignals[signal],closed:Boolean(flags&1),timedOut:Boolean(flags&2),interrupted:Boolean(flags&4),errors,undefinedErrors,
+    supervisor:Array.from({length:6},(_,i)=>Boolean(supervisor&2**i)),ready:Boolean(flags&8),first:first?attachFailureBranches[first-1]:null,branches,capture:[Boolean(capture&1),Boolean(capture&2)]};
+}
+export function validateAttachTerminalDiagnostic(value) {
+  const keys=["v","phase","state","attach","terminal","runtime"];
+  if (!value || Object.getOwnPropertyNames(value).sort().join()!==[...keys].sort().join()) refuse("attach-terminal-keys");
+  const row=Object.fromEntries(keys.map(k=>[k,ownData(value,k)]));
+  if (row.v!==19 || row.phase!=="attach_process" || row.state!=="observed") refuse("attach-terminal-identity");
+  row.attach=ownedTuple(row.attach,9);const prior=validateContainerDiagnostic(unpackAttachTerminalDiagnostic(row));
+  row.terminal=validateReaperTerminalDetail(row.terminal);row.runtime=validateCoordinatorRuntime(row.runtime);
+  if ((row.terminal[0]>=2 || row.runtime!==null) && (!prior.supervisor[4] || !prior.capture.every(Boolean))) refuse("attach-terminal-capture");
+  if (row.runtime!==null && (row.terminal[0]<2 || !prior.ready)) refuse("attach-runtime-binding");
+  if (row.runtime?.[3]===1 && row.terminal[0]===3 && !row.terminal[6]) refuse("attach-finish-contradiction");
+  if (row.runtime!==null && row.terminal[0]===3 && row.terminal[3]===1 && row.terminal[4]===0 && (row.runtime[1] || row.runtime[3]===2)) refuse("attach-runtime-exit-contradiction");
+  if (Buffer.byteLength(JSON.stringify(row))>512) refuse("attach-terminal-capacity");
+  return row;
+}
+export function packAttachTerminalDiagnostic(prior,terminal,runtime) {
+  const row=validateContainerDiagnostic(prior);if(row.v!==6)refuse("attach-terminal-original");
+  const mask=values=>values.reduce((n,value,i)=>n+(value?2**i:0),0);
+  return validateAttachTerminalDiagnostic({v:19,phase:"attach_process",state:"observed",
+    attach:[row.exit,containerDiagnosticSignals.indexOf(row.signal),mask([row.closed,row.timedOut,row.interrupted,row.ready]),row.errors,row.undefinedErrors,mask(row.supervisor),row.first===null?0:attachFailureBranches.indexOf(row.first)+1,row.branches,mask(row.capture)],terminal,runtime});
+}
 export function validateContainerDiagnostic(value) {
+  if (value && typeof value === "object" && ownData(value,"v") === 19) return validateAttachTerminalDiagnostic(value);
   if (value && typeof value === "object" && ownData(value,"v") === 18) return validateReceiptObservedWranglerDiagnostic(value);
   if (value && typeof value === "object" && ownData(value,"v") === 17) return validateReceiptWranglerDiagnostic(value);
   if (value && typeof value === "object" && ownData(value,"v") === 16) return validateReceiptCensusDiagnostic(value);
@@ -1712,7 +1764,12 @@ export function emitContainerFailure(records, writer = line => process.stdout.wr
 export function createContainerDiagnostics() {
   const records = [];
   const mark = (phase, state, reason) => records.push(validateContainerDiagnostic({ v: 2, phase, state, defined: state === "rejected" ? reason !== undefined : null, exit: null, signal: null }));
-  return { records, mark, process(result, available, reason) { records.push(containerProcessDiagnostic(result, available, reason)); }, internal(row) { records.push(validateContainerDiagnostic(row)); },
+  return { records, mark, replace(original,value) {
+      const prior=validateContainerDiagnostic(original),next=validateContainerDiagnostic(value);
+      const indexes=records.flatMap((row,index)=>row.phase===prior.phase?[index]:[]);
+      if(prior.v!==6 || next.v!==19 || indexes.length!==1 || JSON.stringify(records[indexes[0]])!==JSON.stringify(prior))refuse("attach-replacement-conflict");
+      records[indexes[0]]=next;
+    }, process(result, available, reason) { records.push(containerProcessDiagnostic(result, available, reason)); }, internal(row) { records.push(validateContainerDiagnostic(row)); },
     sync(phase, operation) { mark(phase, "entered"); try { const value = operation(); mark(phase, "fulfilled"); return value; } catch (error) { mark(phase, "rejected", error); throw error; } },
     async step(phase, operation, reporting) {
       if (reporting === undefined) { mark(phase, "entered"); try { const value = await operation(); mark(phase, "fulfilled"); return value; } catch (error) { mark(phase, "rejected", error); throw error; } }

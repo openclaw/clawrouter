@@ -10,7 +10,7 @@ import { channel } from "node:diagnostics_channel";
 import { errorMonitor } from "node:events";
 import { Socket } from "node:net";
 import { bindCensusControls, privateProcesses, createCensusComparisonWitness } from "./edge-proof.mjs";
-import { validateCompileDetail } from "./edge-proof.mjs";
+import { validateCompileDetail, packAttachTerminalDiagnostic, validateCoordinatorRuntime } from "./edge-proof.mjs";
 import { edgeProof } from "./edge-proof-profile.mjs";
 import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, validateContainerDiagnostic, initGuardTags, initSourcePhases, validateInitDetail, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, parentAdmissionSources, parentAdmissionPredicates, parentAdmissionRoles, validateParentAdmission, validatePackagingDiagnostic, receiptOperations, receiptChildPhases, validateReceiptDiagnostic, projectionBoundaries, validateReceiptBoundaryDiagnostic, validateReceiptLifecycleDiagnostic, validateReceiptBuilderDiagnostic, validateReportedBuilderProcess, receiptBuilderSignals, packReceiptOwnedDiagnostic, packReceiptCodeDiagnostic, packReceiptAssociatedDiagnostic, packReceiptCensusDiagnostic, unpackCensusCloseDiagnostic, validateWranglerCloseDiagnostic, packReceiptObservedWranglerDiagnostic, validateObservedWranglerCloseDiagnostic } from "./edge-proof.mjs";
 export { validateContainerDiagnostic, emitContainerFailure } from "./edge-proof.mjs";
@@ -222,7 +222,10 @@ export function createReaperClient(socket, binding) {
 // coordinator's stderr to stdout before exec. No shared-text marker scan occurs.
 // Authority is the admitted producer image/control pair and original CID attach,
 // not possession of the nonce or an apparent line in workload stdout.
-export function parseReaperTerminal(result, binding) {
+const reaperTerminalOutcomes = new WeakMap();
+const terminalPoint = (recorder, stage) => { if (recorder) try { recorder.at(stage); } catch (error) { recorder.errors.push(error); } };
+export function parseReaperTerminal(result, binding, recorder) {
+  terminalPoint(recorder, 1);
   check(binding?.attached?.result === result && cidPattern.test(binding.cid) && hashPattern.test(binding.nonce) && hashPattern.test(binding.contextHash), "reaper-terminal-attach");
   check(binding.controls?.result?.reaper.pid === 1 && binding.controls.result.coordinator.pid > 1 && hashPattern.test(binding.sourceHash), "reaper-terminal-producer");
   check(result.closed && result.supervisor[4] && result.supervisor[5], "reaper-terminal-original-close");
@@ -230,6 +233,7 @@ export function parseReaperTerminal(result, binding) {
     const bytes = Buffer.from(result[name]), summary = result.outputSummary[name];
     check(summary?.complete === true && summary.truncated === false && summary.bytes === bytes.length && summary.retainedBytes === bytes.length && summary.sha256 === hash(bytes) && summary.retainedSha256 === hash(bytes), "reaper-terminal-capture");
   }
+  terminalPoint(recorder, 2);
   const match = /^EDT1:([a-f0-9]{64}):([a-f0-9]{64}):([a-f0-9]{8}):([a-f0-9]{8}):([012]):([a-f0-9]{8}):([a-f0-9]{8}):([01]):1\n$/.exec(result.stderr);
   check(match && match[1] === binding.nonce && match[2] === binding.contextHash, "reaper-terminal-frame");
   const pid = parseInt(match[3],16), sequence = parseInt(match[4],16), kind = Number(match[5]), value = parseInt(match[6],16), faults = parseInt(match[7],16), finished = match[8] === "1";
@@ -239,21 +243,79 @@ export function parseReaperTerminal(result, binding) {
 export function requireReaperTerminal(value) {
   check(value?.coordinator.kind === "exit" && value.coordinator.value === 0 && value.supervisorFaults === 0 && value.finished && value.childrenDrained, "reaper-terminal-failure");
 }
-export function createReaperTerminalRetention(attached, binding, retain) {
-  let task;
-  return result => {
+export function createReaperTerminalRetention(attached, binding, retain, publish) {
+  let task, outcome, decodedRejection = false;
+  const retention = result => {
     if (!task) task = Promise.resolve().then(async () => {
-      let value, failed = false, reason;
-      try { value = parseReaperTerminal(result, {...binding(), attached}); } catch (error) { failed = true; reason = error; }
-      const errors = failed ? [reason] : [];
-      // Retain before qualification and before CID retirement, including failure.
-      try { await retain({version:1, binding:binding(), terminal:value ?? null, unavailable:failed, failureDefined:failed ? reason !== undefined : null,
-        originalAttach:{closed:result.closed, actualClose:result.supervisor[4], code:result.code, signal:result.signal, captures:result.outputSummary}}); } catch (error) { errors.push(error); }
-      raiseContainerFailures(errors); requireReaperTerminal(value); return value;
+      let value, failed = false, reason, owner, stage = 0, retentionState = 0, retentionDefined = null, receiptSha = null;
+      const observer = {errors:[],at(value) { stage=value; }};
+      try { owner={...binding(),attached}; value = parseReaperTerminal(result, owner, observer); } catch (error) { failed = true; reason = error; }
+      const errors = failed ? [reason] : [], reporting = [];
+      // Serialize once; the original exclusive write receives these same bytes.
+      try {
+        const bytes=Buffer.from(JSON.stringify({version:1, binding:binding(), terminal:value ?? null, unavailable:failed, failureDefined:failed ? reason !== undefined : null,
+          originalAttach:{closed:result.closed, actualClose:result.supervisor[4], code:result.code, signal:result.signal, captures:result.outputSummary}}),"utf8");
+        const digest=hash(bytes);await retain(bytes);retentionState=1;receiptSha=digest;
+      } catch (error) { retentionState=2;retentionDefined=error!==undefined;errors.push(error); }
+      if (!observer.errors.length) {
+        const terminal=Object.freeze([failed ? stage===2?2:1 : 3,failed?reason!==undefined:null,
+          value?.sequence??null,value?["unknown","exit","signal"].indexOf(value.coordinator.kind):null,value?.coordinator.value??null,value?.supervisorFaults??null,value?.finished??null,value?.childrenDrained??null,
+          retentionState,retentionDefined,receiptSha]);
+        outcome=Object.freeze({terminal});
+        reaperTerminalOutcomes.set(outcome,{attached,result,owner,prerequisites:stage===2});
+        if(publish)try { publish(outcome); } catch(error) { reporting.push(error); }
+      }
+      if(value)try { requireReaperTerminal(value); } catch(error) { errors.push(error); }
+      decodedRejection=Boolean(value) && errors.length+observer.errors.length+reporting.length>0;
+      raiseContainerFailures([...errors,...observer.errors,...reporting]);return value;
     });
     return task;
   };
+  retention.outcome = () => outcome ?? null;
+  retention.rejected = result => decodedRejection && reaperTerminalOutcomes.get(outcome)?.result === result;
+  return retention;
 }
+const coordinatorPrefix = "EDGE_COORDINATOR_V1 ";
+export function createCoordinatorWitness() {
+  const errors=[];let point=0,first=0,failed=false,defined=null,finish=0,finishDefined=null,sealed=false;
+  const note=operation=>{try{check(!sealed,"coordinator-witness-sealed");operation();}catch(error){errors.push(error);}};
+  return {errors,
+    point(value){note(()=>{check(Number.isInteger(value)&&value>=1&&value<=5,"coordinator-point");point=value;});},
+    escape(reason){note(()=>{if(!failed&&point){first=point;failed=true;defined=reason!==undefined;}});},
+    finish(value,reason){note(()=>{check(finish===0&&[1,2].includes(value),"coordinator-finish");finish=value;finishDefined=value===2?reason!==undefined:null;});},
+    record(nonce,contextHash,coordinator){check(!sealed,"coordinator-witness-duplicate");sealed=true;if(errors.length)return null;
+      check(hashPattern.test(nonce)&&hashPattern.test(contextHash)&&Number.isInteger(coordinator)&&coordinator>1&&coordinator<=0x7fffffff,"coordinator-witness-binding");
+      validateCoordinatorRuntime([first,failed,defined,finish,finishDefined]);
+      return {v:1,nonce,contextHash,coordinator,first,failed,defined,finish,finishDefined};},
+  };
+}
+export async function writeCoordinatorWitness(witness, args, coordinator, writer) {
+  const row=witness.record(args[0],args[1],coordinator);if(row===null)return;
+  const text=coordinatorPrefix+JSON.stringify(row)+"\n";
+  check(Buffer.byteLength(text)<=512 && /^[\x20-\x7e]+\n$/.test(text),"coordinator-witness-capacity");
+  const errors=[];
+  await new Promise(resolveWrite=>{
+    let returned=false,completed=false;
+    const complete=()=>{if(returned&&completed)resolveWrite();};
+    try { writer(text,error=>{try{if(error!=null)errors.push(error);}catch(other){errors.push(other);}completed=true;complete();}); }
+    catch(error){errors.push(error);completed=true;}
+    returned=true;complete();
+  });
+  raiseContainerFailures(errors);
+}
+export function parseCoordinatorWitness(result, outcome, initSummary) {
+  const custody=reaperTerminalOutcomes.get(outcome);
+  if(!custody || custody.result!==result || custody.attached.result!==result || !custody.prerequisites || initSummary?.reason!=="complete" || initSummary.records!==9)return null;
+  const allLines=result.stdout.split("\n"),lines=allLines.filter(line=>line.includes(coordinatorPrefix.trimEnd()));
+  if(lines.length===0)return null;
+  check(lines.length===1 && allLines.indexOf(lines[0])<allLines.length-1 && lines[0].startsWith(coordinatorPrefix) && Buffer.byteLength(lines[0])+1<=512 && /^[\x20-\x7e]+$/.test(lines[0]),"coordinator-witness-frame");
+  const text=lines[0].slice(coordinatorPrefix.length),row=JSON.parse(text),keys="v,nonce,contextHash,coordinator,first,failed,defined,finish,finishDefined";
+  check(row && Object.keys(row).join()===keys && JSON.stringify(row)===text,"coordinator-witness-canonical");
+  const owner=custody.owner;
+  check(row.v===1 && row.nonce===owner.nonce && row.contextHash===owner.contextHash && row.coordinator===owner.controls.result.coordinator.pid,"coordinator-witness-owner");
+  return validateCoordinatorRuntime([row.first,row.failed,row.defined,row.finish,row.finishDefined]);
+}
+
 export function parseControlStat(raw, pid) {
   check(typeof raw === "string" && raw.length < 65536 && raw.startsWith(`${pid} (`), "control-stat");
   const fields = raw.slice(raw.lastIndexOf(")") + 2).trim().split(" ");
@@ -1559,19 +1621,29 @@ function validateChildLifecycle(rows, role, recorder, context) {
   return final(true);
 }
 export function createAttachProjection(attached, plan, report) {
-  const binding = { attached, cid: plan.cid, nonce: plan.nonce, contextHash: plan.contextHash }; let projected = false, initSummary;
+  const binding = { attached, cid: plan.cid, nonce: plan.nonce, contextHash: plan.contextHash }; let projected = false, initSummary, attachSummary;
   const project = result => {
     if (projected) return; projected = true;
     const retain = operation => { try { operation(); } catch (error) { attached.result.errors.push(error); } };
     retain(() => {
       check(result === attached.result && result.supervisor[5], "attach-original-unsettled");
-      report.internal(validateContainerDiagnostic({ v: 6, phase: "attach_process", state: "observed", exit: result.code, signal: result.signal, closed: result.closed, timedOut: result.timedOut, interrupted: result.interrupted,
+      attachSummary = validateContainerDiagnostic({ v: 6, phase: "attach_process", state: "observed", exit: result.code, signal: result.signal, closed: result.closed, timedOut: result.timedOut, interrupted: result.interrupted,
         errors: result.errors.length, undefinedErrors: result.errors.filter(error => error === undefined).length, supervisor: [...result.supervisor], ready: result.readyAccepted, first: result.firstBranch, branches: result.branches,
-        capture: [result.outputSummary.stdout?.complete === true, result.outputSummary.stderr?.complete === true] }));
+        capture: [result.outputSummary.stdout?.complete === true, result.outputSummary.stderr?.complete === true] });
+      report.internal(attachSummary);
     });
     retain(() => { initSummary = parseInitPrerequisites(result, binding); report.internal(initSummary); });
   };
   project.child = (result, recorder) => parseChildPackaging(result, binding, initSummary, recorder);
+  project.terminal = (result, outcome) => {
+    const custody=reaperTerminalOutcomes.get(outcome);
+    check(projected && attachSummary && result===attached.result && custody?.result===result && custody.attached===attached,"attach-terminal-original");
+    let runtime=null,failed=false,reason;
+    try { runtime=parseCoordinatorWitness(result,outcome,initSummary); } catch(error) { failed=true;reason=error; }
+    const errors=failed?[reason]:[];
+    try { report.replace(attachSummary,packAttachTerminalDiagnostic(attachSummary,outcome.terminal,runtime)); } catch(error) { errors.push(error); }
+    raiseContainerFailures(errors);
+  };
   return project;
 }
 export async function runInitPrerequisites(args, trace, operations, ledger) {
@@ -1797,7 +1869,8 @@ export async function observeContainerReceipt(report, text, plan, childSummary, 
   return value;
 }
 async function containerInit(args, sharedReport) {
-  let identity, masks, rpc, controls, native, built; const failures = [];
+  let identity, masks, rpc, controls, native, built, postPermit=false; const failures = [];
+  const witness=createCoordinatorWitness();
   const trace = createInitDiagnostics(), ledger = createInitGuardLedger(); if (sharedReport) sharedReport.init = trace;
   try {
   native = await runInitPrerequisites(args, trace, {
@@ -1813,24 +1886,30 @@ async function containerInit(args, sharedReport) {
     }, native: contextHash => nativeReceipt(contextHash, ledger),
     ready: (nonce, contextHash) => process.stdout.write(control("ready", nonce, contextHash)), permit: (nonce, contextHash) => receivePermit(nonce, contextHash),
   }, ledger);
+  postPermit=true;
   const [nonce, contextHash, uid, gid] = args;
   // Native fixtures run only in this admitted original container, after permit.
-  await hostedReaperFixtures(args, rpc, controls);
+  await hostedReaperFixtures(args, rpc, controls, witness);
+  witness.point(5);
   const report = createPackagingDiagnostics("child", line => process.stdout.write(line)), errors = [];
   report.mark("entry", "fulfilled");
   try {
+    witness.point(4);
     built = await runPackagingPipeline(containerContract.input, "/task", report, {
       builderDiagnostics: true,
       controls, drain: () => rpc.drain(),
       checkBoundary: async () => { await validateContainerRuntime(identity); await nativeReceipt(contextHash); },
       buildArguments: (capsule, role) => ["/opt/edge-input/scripts/edge-proof.mjs", "container-build", capsule, role, contextHash, uid, gid],
     });
-  } catch (error) { errors.push(error); }
+  } catch (error) { witness.escape(error);errors.push(error); }
+  witness.point(5);
   report.mark("final", errors.length ? "rejected" : "fulfilled", errors[0]); errors.push(...report.errors); raiseContainerFailures(errors);
-  } catch (error) { failures.push(error); }
+  } catch (error) { if(postPermit)witness.escape(error);failures.push(error); }
   // FINISH is acknowledged before Node closes FD3 and exits. Every independent
   // failure remains fatal; a shutdown error never overwrites the primary value.
-  if (rpc) try { await rpc.finish(); } catch (error) { failures.push(error); }
+  if (rpc) try { await rpc.finish();witness.finish(1); } catch (error) { witness.finish(2,error);failures.push(error); }
+  if(postPermit)try { await writeCoordinatorWitness(witness,args,process.pid,(text,callback)=>process.stdout.write(text,callback)); } catch(error) { failures.push(error); }
+  failures.push(...witness.errors);
   raiseContainerFailures(failures);
   const [nonce, contextHash] = args;
   const { version: _version, isolated: _isolated, ...packaging } = built;
@@ -1838,16 +1917,18 @@ async function containerInit(args, sharedReport) {
   process.stdout.write("EDGE_CONTAINER_RECEIPT_V2 " + JSON.stringify(receipt) + "\n");
   return { container: "complete", version: 2 };
 }
-async function hostedReaperFixtures(args, rpc, controls) {
+async function hostedReaperFixtures(args, rpc, controls, witness) {
   const sample = () => privateProcesses(undefined, controls), beforeFinal = () => rpc.drain();
-  await hostedCensusMatrix(args, rpc, controls);
+  witness?.point(1);await hostedCensusMatrix(args, rpc, controls);
   // The C PID1 startup fixture already established a waitable adopted orphan and
   // reaped it with the production loop. This checks the ORIGINAL Node spawn's FD
   // inheritance, not a separately constructed descriptor model.
+  witness?.point(2);
   const fd = await runOwnedProcess(containerContract.reaper, ["--check-fd"], {cwd:"/task",env:containerEnvironment(),sample,beforeFinal});
   requireProcessSuccess(fd);
   // Use the original supervisor's existing default deadline and escalation.
   // The fixture server authenticates HELLO but deliberately withholds DRAIN ACK.
+  witness?.point(3);
   const held = await runOwnedProcess(containerContract.reaper, ["--fixture-hold",containerContract.node,"/opt/edge-input/scripts/edge-proof.mjs","container-reaper-probe",...args], {cwd:"/task",env:containerEnvironment(),sample,beforeFinal});
   try { check(held.closed && held.timedOut && !held.interrupted && held.errors.length === 0 && Array.isArray(held.remaining) && held.remaining.length === 0 && held.code !== 0, "reaper-held-ack-fixture"); }
   catch (error) { raiseContainerFailures([...held.errors, error]); }
@@ -2131,7 +2212,7 @@ async function hostContainerRun(report) {
       await recheckParent(); attached = attachContainer(docker, ["--host=unix:///var/run/docker.sock", "start", "--attach", "--interactive", cid], { cwd: root, env, nonce: plan.nonce, contextHash: plan.contextHash, onStop: stopOwned });
       projectAttach = createAttachProjection(attached, { cid, nonce: plan.nonce, contextHash: plan.contextHash }, report);
       terminalRetention = createReaperTerminalRetention(attached, () => ({cid, nonce, contextHash:plan.contextHash, controls:controlBinding, sourceHash:native.reaper.source.sha256}),
-        value => writeFile(join(root,"reaper-terminal.json"), JSON.stringify(value), {flag:"wx",mode:0o600}));
+        bytes => writeFile(join(root,"reaper-terminal.json"), bytes, {flag:"wx",mode:0o600}), outcome=>projectAttach.terminal(attached.result,outcome));
     });
     await report.step("ready", () => attached.ready);
     await report.step("admission", async () => {
@@ -2167,7 +2248,13 @@ async function hostContainerRun(report) {
     raiseContainerFailures(outcomes.filter(outcome => outcome.status === "rejected").map(outcome => outcome.reason));
     const attachResult = outcomes[0].value, waitResult = outcomes[1].value;
     projectAttach(attachResult);
-    await terminalRetention(attachResult);
+    let terminalFailed=false,terminalReason;
+    try { await terminalRetention(attachResult); } catch(error) { terminalFailed=true;terminalReason=error; }
+    if(terminalFailed){
+      const errors=[terminalReason];
+      if(terminalRetention.rejected(attachResult))try { await observeContainerReceipt(report,attachResult.stdout,plan,recorder=>projectAttach.child(attachResult,recorder)); } catch(error) { errors.push(error); }
+      raiseContainerFailures(errors);
+    }
     receipt = await observeContainerReceipt(report, attachResult.stdout, plan, recorder => projectAttach.child(attachResult, recorder));
     await report.step("terminal", async () => {
       await recheckParent(); const terminal = await readOwned();
