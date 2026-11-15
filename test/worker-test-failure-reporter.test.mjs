@@ -820,12 +820,14 @@ function inertResetCaller(options = {}) {
   };
   socket.resetAndDestroy = function(...args) {
     calls.push(["reset", this, args]);
-    if (options.resetThrow) throw undefined;
+    options.onReset?.({ request, socket });
+    if (options.resetThrow) throw options.resetReason;
     if (options.holdClose) lateClose = close; else close();
     return options.wrongReturn ? {} : socket;
   };
   request.destroy = function(...args) {
     calls.push(["destroy", this, args]); socket.destroyed = true;
+    if (Object.hasOwn(options, "cleanupError")) request.emit("error", options.cleanupError);
     request.emit("close"); socket.emit("close");
     if (options.destroyThrow) throw undefined;
     return request;
@@ -956,7 +958,8 @@ test("owned HTTP/1 reset pure: producer proof joins original and attached observ
 test("owned HTTP/1 reset pure: restoration late failures and primary undefined stay independent", async () => {
   const c = inertResetCaller({ holdClose: true, removeFault: true }); c.caller.start(); await c.caller.ready(); c.caller.reset();
   const original = {}; c.socket.emit("error", original); c.close();
-  const failed = await captureReset(() => c.caller.join()); assert.equal(failed.error, original);
+  const failed = await captureReset(() => c.caller.join()); assert.ok(failed.error instanceof AggregateError);
+  assert.deepEqual(failed.error.errors, [original, c.reason]);
   assert.deepEqual(await c.caller.close(), [undefined]);
   const r = await abortDiagnosticCase({ fault: "retire", undefinedFault: true, secondary: ["caller_cleanup", "dispose", "remove"], reportingFault: true });
   assert.equal(r.failed, true);
@@ -977,6 +980,69 @@ test("owned HTTP/1 reset pure: actual module bindings target name and unchanged 
   assert.ok(target.indexOf('f.control("started", "native_abort")') < target.indexOf('caller.reset()'));
   assert.ok(target.indexOf('f.proof("native_abort")') < target.indexOf('f.control("usage", "native_abort")'));
   assert.ok(!target.includes("controller.abort") && !target.includes("f.release("));
+});
+
+test("owned HTTP/1 reset repair pure: every pre-reset failure permanently denies the native call", async () => {
+  for (const reason of [undefined, {}]) for (const phase of ["before-ready", "during-readiness", "after-ready", "delivered-history"]) for (const channel of ["request", "socket"]) {
+    const c = inertResetCaller({ holdEnd: phase === "during-readiness" }); c.caller.start();
+    let observed;
+    if (phase === "during-readiness") {
+      const waiting = captureReset(() => c.caller.ready()); c[channel].emit("error", reason); observed = await waiting; c.end();
+    } else if (phase === "before-ready") {
+      c[channel].emit("error", reason); observed = await captureReset(() => c.caller.ready());
+    } else {
+      await c.caller.ready(); c[channel].emit("error", reason);
+      if (phase === "delivered-history") observed = await captureReset(() => c.caller.ready());
+    }
+    const denied = await captureReset(() => c.caller.reset());
+    assert.equal(denied.fulfilled, false, phase); assert.equal(c.calls.filter(row => row[0] === "reset").length, 0, phase);
+    assert.equal(observed ? observed.error : denied.error, reason);
+    assert.equal((await captureReset(() => c.caller.reset())).fulfilled, false);
+    assert.equal(c.calls.filter(row => row[0] === "reset").length, 0);
+    await c.caller.close();
+  }
+});
+test("owned HTTP/1 reset repair pure: original reset throw retains reentrant late and cleanup errors independently", async () => {
+  for (const resetReason of [undefined, {}]) for (const requestReason of [undefined, {}]) for (const late of [undefined, {}]) for (const cleanup of [undefined, {}]) {
+    const c = inertResetCaller({ resetThrow: true, resetReason, cleanupError: cleanup, onReset({ request }) { request.emit("error", requestReason); } });
+    c.caller.start(); await c.caller.ready();
+    const result = await captureReset(() => c.caller.reset()); assert.equal(result.fulfilled, false);
+    assert.ok(result.error instanceof AggregateError);
+    assert.deepEqual(result.error.errors, [resetReason, requestReason]);
+    c.request.emit("error", late); const rest = await c.caller.close(); assert.deepEqual(rest, [late, cleanup]);
+    assert.equal(c.calls.filter(row => row[0] === "reset").length, 1);
+  }
+  const same = {}, c = inertResetCaller({ resetThrow: true, onReset({ request }) { request.emit("error", same); request.emit("error", same); } });
+  c.caller.start(); await c.caller.ready(); const result = await captureReset(() => c.caller.reset());
+  assert.deepEqual(result.error.errors, [undefined, same, same]); await c.caller.close();
+});
+test("owned HTTP/1 reset repair pure: successful return admits only the first bound pre-close termination", async () => {
+  for (const phase of ["during", "after-return"]) for (const reason of [undefined, {}]) {
+    const c = inertResetCaller({ noRequestError: true, holdClose: phase === "after-return", onReset: phase === "during" ? ({ request }) => request.emit("error", reason) : undefined });
+    c.caller.start(); await c.caller.ready(); assert.equal(c.caller.reset(), c.socket);
+    if (phase === "after-return") { c.request.emit("error", reason); c.close(); }
+    await c.caller.join(); assert.deepEqual(await c.caller.close(), []);
+  }
+  for (const failure of ["wrong-return", "foreign-socket", "duplicate", "after-close", "after-socket-close", "cleanup"]) for (const reason of [undefined, {}]) {
+    const options = { noRequestError: true, wrongReturn: failure === "wrong-return", holdClose: failure === "cleanup" || failure === "after-socket-close" };
+    if (["wrong-return", "foreign-socket", "duplicate"].includes(failure)) options.onReset = ({ request }) => {
+      if (failure === "foreign-socket") request.socket = {};
+      request.emit("error", reason); if (failure === "duplicate") request.emit("error", reason);
+    };
+    if (failure === "cleanup") options.cleanupError = reason;
+    const c = inertResetCaller(options); c.caller.start(); await c.caller.ready();
+    const result = await captureReset(() => c.caller.reset());
+    if (failure === "after-close") c.request.emit("error", reason);
+    if (failure === "after-socket-close") { c.socket.emit("close"); c.request.emit("error", reason); c.request.emit("close"); }
+    let joined;
+    if (result.fulfilled && failure !== "cleanup") joined = await captureReset(() => c.caller.join());
+    const rest = await c.caller.close();
+    const leaves = value => { const descriptor = Object.getOwnPropertyDescriptor(value ?? {}, "errors"); return Array.isArray(descriptor?.value) ? descriptor.value.flatMap(leaves) : [value]; };
+    const original = [...(!result.fulfilled ? leaves(result.error) : []), ...(joined && !joined.fulfilled ? leaves(joined.error) : []), ...rest];
+    assert.ok(original.some(value => Object.is(value, reason)), failure);
+    assert.ok(!result.fulfilled || joined?.fulfilled === false || rest.length > 0, failure);
+    assert.equal(c.calls.filter(row => row[0] === "reset").length, 1);
+  }
 });
 // END worker abort diagnostic pure tests.
 // These children start independent native runners, not nested IPC test workers.

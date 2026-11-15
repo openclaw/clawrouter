@@ -642,7 +642,7 @@ export default {async fetch(request){
 // Node-side owner only: never copied into either Worker and never used by f.call.
 export function litellmOwnedH1Reset(requestOriginal, isSocket, url, authorization, signal) {
   const failures = [], listeners = [], joins = [], responses = [], requestErrors = [];
-  let delivered = 0, request, socket, resetMethod, started = false, resetAttempts = 0, resetReturned;
+  let delivered = 0, request, socket, resetMethod, started = false, resetAttempts = 0, resetReturned, resetState = "idle";
   let connected = false, finished = false, ended = false, requestClosed = false, socketClosed = false, requestDestroyed = false, destroyRequest;
   const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
   const faulted = deferred(), connectedGate = deferred(), finishGate = deferred(), endGate = deferred();
@@ -664,6 +664,32 @@ export function litellmOwnedH1Reset(requestOriginal, isSocket, url, authorizatio
     assert.equal(request.socket, socket); assert.equal(request.reusedSocket, false);
     assert.equal(socket.resetAndDestroy, resetMethod);
   };
+  const requestError = error => {
+    // Each event retains its own value/presence, even when values are equal.
+    const row = { error, pending: resetState === "calling", reported: false, eligible: false };
+    requestErrors.push(row);
+    if (!row.pending && resetState !== "returned") { row.reported = true; fail(error); return; }
+    try {
+      requireSocket();
+      row.eligible = !requestClosed && !socketClosed && !requestDestroyed && requestErrors.length === 1
+        && (resetState === "calling" || resetState === "returned") && failures.length === 0;
+    } catch (bindingError) { fail(bindingError); }
+    if (row.pending) return; // The original reset return/throw decides admission.
+    if (!(resetState === "returned" && row.eligible)) { row.reported = true; fail(error); }
+  };
+  const settleResetErrors = () => {
+    const admit = resetState === "returned" && failures.length === 0 && requestErrors.length === 1;
+    for (const row of requestErrors) if (row.pending) {
+      row.pending = false;
+      if (!(admit && row.eligible) && !row.reported) { row.reported = true; fail(row.error); }
+    }
+  };
+  const denyFailedReset = () => {
+    resetState = "failed"; settleResetErrors();
+    // Already delivered failures remain a permanent veto, never a fresh ticket.
+    if (delivered === failures.length) fail(new Error("earlier caller failure denies reset"));
+    throwFailures();
+  };
   const destroyResponse = row => {
     if (row.closed || row.destroyAttempted) return;
     row.destroyAttempted = true;
@@ -682,7 +708,7 @@ export function litellmOwnedH1Reset(requestOriginal, isSocket, url, authorizatio
       request = Reflect.apply(requestOriginal, undefined, [url, { method: "GET", agent: false, headers: { authorization } }]);
       destroyRequest = request.destroy;
       const closed = deferred(); joins.push(closed.promise);
-      watch(request, "error", error => { requestErrors.push(error); if (requestErrors.length > 1 || resetAttempts !== 1) fail(error); });
+      watch(request, "error", requestError);
       watch(request, "close", () => { if (requestClosed) fail(new Error("duplicate request close")); requestClosed = true; closed.resolve(); });
       watch(request, "finish", () => { if (finished) fail(new Error("duplicate request finish")); finished = true; finishGate.resolve(); });
       watch(request, "response", value => {
@@ -727,13 +753,20 @@ export function litellmOwnedH1Reset(requestOriginal, isSocket, url, authorizatio
     },
     reset() {
       if (++resetAttempts !== 1) { const error = new Error("replayed socket reset"); fail(error); throwFailures(); }
+      if (failures.length) { denyFailedReset(); return; }
       try {
         requireSocket(); assert.ok(connected && finished && ended && !requestClosed && !socketClosed && responses.length === 0);
         assert.equal(socket.connecting, false); assert.equal(socket.destroyed, false);
+      } catch (error) { fail(error); }
+      if (failures.length) { denyFailedReset(); return; }
+      resetState = "calling";
+      try {
         resetReturned = Reflect.apply(resetMethod, socket, []);
-        assert.equal(resetReturned, socket);
-        return resetReturned;
-      } catch (error) { fail(error); throwFailures(); }
+        assert.equal(resetReturned, socket); requireSocket();
+        resetState = "returned";
+      } catch (error) { resetState = "failed"; fail(error); }
+      settleResetErrors(); throwFailures();
+      return resetReturned;
     },
     async join() {
       let cursor = 0;
@@ -742,7 +775,7 @@ export function litellmOwnedH1Reset(requestOriginal, isSocket, url, authorizatio
         for (const outcome of await Promise.allSettled(batch)) if (outcome.status === "rejected") fail(outcome.reason);
       }
       throwFailures(); requireSocket();
-      assert.ok(resetAttempts === 1 && resetReturned === socket && connected && finished && ended && requestClosed && socketClosed && responses.length === 0);
+      assert.ok(resetState === "returned" && resetAttempts === 1 && resetReturned === socket && connected && finished && ended && requestClosed && socketClosed && responses.length === 0);
     },
     async close() {
       stop();
