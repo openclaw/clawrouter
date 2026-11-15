@@ -5,10 +5,10 @@ import { spawnSync } from "node:child_process";
 import { PassThrough, Writable } from "node:stream";
 import { readFile, realpath } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { containerContract, harnessInputs, installInputs, parseIdentity, validateIdentity, validateMapping, validateImage, dockerEnvironment, containerEnvironment, createArguments, validateContainerInspect, parseControl, validateTerminal, validateNativeIdentity, parseImageBuildReceipt, parseContainerReceipt, parseMounts, validateMountFreshness, validateMounts, validateMetadataMounts, validateChildStatus, validateTarget, cgroupPath, validateLimits, attachContainer, processEvidence, retiredCgroup, raiseContainerFailures, validateContainerDiagnostic, emitContainerFailure } from "../scripts/edge-proof-container.mjs";
+import { containerContract, harnessInputs, installInputs, parseIdentity, validateIdentity, validateMapping, validateImage, dockerEnvironment, containerEnvironment, createArguments, validateContainerInspect, parseControl, validateTerminal, validateNativeIdentity, parseImageBuildReceipt, observeImageBuild, parseContainerReceipt, parseMounts, validateMountFreshness, validateMounts, validateMetadataMounts, validateChildStatus, validateTarget, cgroupPath, validateLimits, attachContainer, processEvidence, retiredCgroup, raiseContainerFailures, validateContainerDiagnostic, emitContainerFailure } from "../scripts/edge-proof-container.mjs";
 import { frozenGitEnvironment, validateGitExecutable, frozenSource } from "../scripts/edge-proof-build.mjs";
 import { edgeProof } from "../scripts/edge-proof-profile.mjs";
-import { launchCli, createContainerDiagnostics } from "../scripts/edge-proof.mjs";
+import { launchCli, createContainerDiagnostics, containerProcessDiagnostic, runOwnedProcess } from "../scripts/edge-proof.mjs";
 
 const hex = "a".repeat(64), other = "b".repeat(64), imageId = "sha256:" + hex;
 const identity = { uid: [501, 501, 501, 501], gid: [20, 20, 20, 20], groups: [20, 30] };
@@ -336,4 +336,87 @@ test("CLI actual extracted host startup records each boundary before the origina
       assert.deepEqual(report.records.filter(row => row.state === "entered").map(row => row.phase), ["host_runtime", "identity", "parent_namespaces", "cwd", "temp", "environment", "docker_executable", "daemon_socket"]);
     }
   }
+});
+
+test("image build diagnostics preserve original Node exits, signals, timeout and capture closure", async () => {
+  const env = { PATH: "/usr/bin:/bin", NO_COLOR: "1" };
+  for (const [code, expected] of [
+    ['process.stdout.write("owned-child\\n");process.stderr.write("owned-stderr\\n");', { exit: 0, signal: null, timedOut: false }],
+    ['process.exitCode=23;', { exit: 23, signal: null, timedOut: false }],
+    ['process.kill(process.pid,"SIGTERM");', { exit: null, signal: "SIGTERM", timedOut: false }],
+    ['setInterval(()=>{},1000);', { exit: null, signal: "SIGTERM", timedOut: true }],
+  ]) {
+    const original = await runOwnedProcess(process.execPath, ["-e", code], { env, timeoutMs: expected.timedOut ? 1000 : 5000 });
+    const report = createContainerDiagnostics(); let reads = 0;
+    const operation = observeImageBuild(() => original, () => { reads++; return imageId; }, () => native(), report);
+    if (expected.exit === 0) assert.equal((await operation).imageId, imageId); else await assert.rejects(operation);
+    const row = report.records[0]; validateContainerDiagnostic(row);
+    assert.equal(row.exit, original.code); assert.equal(row.signal, original.signal); assert.equal(row.timedOut, original.timedOut);
+    assert.equal(row.exit, expected.exit); assert.equal(row.signal, expected.signal); assert.equal(row.timedOut, expected.timedOut);
+    assert.equal(row.closed, true); assert.equal(row.interrupted, false); assert.equal(row.stdoutComplete, true); assert.equal(row.stderrComplete, true);
+    assert.equal(row.errors, 0); assert.equal(row.spawnErrors, 0); assert.equal(reads, expected.exit === 0 ? 1 : 0);
+    assert.deepEqual(original.remaining, []); assert.equal(original.errors.length, 0);
+  }
+});
+test("image build diagnostics distinguish all three original suboperations without changing their outcomes", async () => {
+  const reason = new Error("private fixture failure");
+  for (const phase of ["image_build", "image_id", "native_receipt", "success"]) {
+    const report = createContainerDiagnostics(), calls = [], original = { ...processResult("receipt"), spawnErrors: [] };
+    if (phase === "image_build") original.code = 19;
+    const work = report.step("image_build", () => observeImageBuild(() => { calls.push("process"); return original; }, () => {
+      calls.push("id"); if (phase === "image_id") throw undefined; return imageId;
+    }, stdout => { calls.push("receipt"); assert.equal(stdout, original.stdout); if (phase === "native_receipt") throw reason; return native(); }, report));
+    if (phase === "success") assert.deepEqual(await work, { imageId, native: native() });
+    else await assert.rejects(work, error => phase === "image_build" ? error instanceof AggregateError : error === (phase === "image_id" ? undefined : reason));
+    assert.deepEqual(calls, phase === "image_build" ? ["process"] : phase === "image_id" ? ["process", "id"] : ["process", "id", "receipt"]);
+    const rejected = report.records.filter(row => row.state === "rejected");
+    assert.equal(rejected[0]?.phase, phase === "success" ? undefined : phase);
+    assert.equal(report.records.find(row => row.v === 3).exit, original.code);
+    if (phase === "image_id") assert.equal(rejected[0].defined, false);
+  }
+});
+test("image build diagnostics retain undefined spawn and operation failures plus independent reporting failures", async () => {
+  const original = await runOwnedProcess("unused", [], { spawnProcess() { throw undefined; } });
+  const row = containerProcessDiagnostic(original);
+  assert.equal(row.errors, 1); assert.equal(row.undefinedErrors, 1); assert.equal(row.spawnErrors, 1); assert.equal(row.undefinedSpawnErrors, 1); assert.equal(row.closed, false);
+  assert.deepEqual(original.errors, [undefined]); assert.deepEqual(original.spawnErrors, [undefined]);
+  const observerError = new Error("private observer failure");
+  const report = { process() { throw observerError; }, mark() { throw new Error("must not reach ID"); } };
+  await assert.rejects(observeImageBuild(() => { throw undefined; }, () => {}, () => {}, report), error => error instanceof AggregateError && error.errors.length === 2 && error.errors[0] === undefined && error.errors[1] === observerError);
+  await assert.rejects(observeImageBuild(() => original, () => {}, () => {}, report), error => error instanceof AggregateError && error.errors.length === 2 && error.errors[0] instanceof AggregateError && error.errors[0].errors.includes(undefined) && error.errors[1] === observerError);
+  await assert.rejects(observeImageBuild(() => processResult(), () => {}, () => {}, report), error => error === observerError);
+  const failed = createContainerDiagnostics();
+  await assert.rejects(observeImageBuild(() => { throw undefined; }, () => {}, () => {}, failed), error => error === undefined);
+  assert.equal(failed.records[0].available, false); assert.equal(failed.records[0].defined, false); assert.equal(failed.records[0].exit, null);
+  for (const phase of ["image_id", "native_receipt"]) {
+    const recording = createContainerDiagnostics(), mark = recording.mark;
+    recording.mark = (name, state, reason) => { if (state === "rejected") throw observerError; mark(name, state, reason); };
+    await assert.rejects(observeImageBuild(() => processResult(), () => { if (phase === "image_id") throw undefined; return imageId; }, () => { throw undefined; }, recording), error => error instanceof AggregateError && error.errors[0] === undefined && error.errors[1] === observerError);
+  }
+});
+test("image build process schema preserves unknowns and rejects getters, counts and extra payload", () => {
+  const row = containerProcessDiagnostic(processResult());
+  assert.equal(row.spawnErrors, null); assert.equal(row.stdoutComplete, null); assert.equal(row.stderrComplete, null);
+  assert.equal(containerProcessDiagnostic({ ...processResult(), code: -2 }).exit, -2);
+  for (const change of [r => r.phase = "image", r => r.available = false, r => r.exit = 2147483648, r => r.errors = -1, r => r.undefinedErrors = 1, r => r.closed = "unknown", r => r.signal = "foreign", r => r.stdout = "private"]) {
+    const invalid = { ...row }; change(invalid); assert.throws(() => validateContainerDiagnostic(invalid));
+  }
+  let accessed = false; const hostile = { ...processResult() }; Object.defineProperty(hostile, "code", { get() { accessed = true; return 0; } });
+  assert.throws(() => containerProcessDiagnostic(hostile)); assert.equal(accessed, false);
+  const absent = containerProcessDiagnostic(undefined, false, undefined); assert.equal(absent.defined, false);
+  assert.throws(() => validateContainerDiagnostic({ ...absent, closed: false }));
+});
+test("image build failure packet reserves terminal and original process facts before overflow", () => {
+  const phases = ["entry", "module_import", "dispatch", "host_runtime", "parent_namespaces", "cwd", "temp", "environment", "docker_executable", "daemon_socket", "identity", "context", "daemon", "base"];
+  const rows = phases.map(phase => ({ v: 2, phase, state: "fulfilled", defined: null, exit: null, signal: null }));
+  const process = containerProcessDiagnostic({ ...processResult(), code: 23, spawnErrors: [] });
+  const terminal = { v: 2, phase: "image_build", state: "rejected", defined: true, exit: null, signal: null };
+  const output = []; emitContainerFailure([...rows, process, terminal, { ...terminal, phase: "entry" }, ...rows], line => output.push(line));
+  const packet = output.map(line => validateContainerDiagnostic(JSON.parse(line.slice(line.indexOf("::", 2) + 2))));
+  assert.deepEqual(packet.slice(0, 2), [terminal, process]); assert.equal(packet.length, 10); assert.equal(packet.at(-1).exit, new Set([...phases, "image_build_process", "image_build"]).size - 9);
+  assert.ok(output.every(line => line.startsWith("::error") && Buffer.byteLength(line) <= 768)); assert.ok(Buffer.byteLength(output.join("")) <= 8192);
+  assert.equal(packet[1].exit, 23); assert.notEqual(packet.at(-1).phase, "image_build_process");
+  assert.throws(() => emitContainerFailure([terminal, process], () => { throw undefined; }), error => error === undefined);
+  const maximum = { ...process, exit: 2147483647, errors: Number.MAX_SAFE_INTEGER, undefinedErrors: Number.MAX_SAFE_INTEGER, spawnErrors: Number.MAX_SAFE_INTEGER, undefinedSpawnErrors: Number.MAX_SAFE_INTEGER };
+  const capped = []; emitContainerFailure([terminal, maximum], line => capped.push(line)); assert.ok(capped.every(line => Buffer.byteLength(line) <= 768));
 });

@@ -353,7 +353,7 @@ export async function privateProcesses() {
 // mapping; output remains private and bounded. Timers supervise, never make a
 // failed command pass. The outer PID namespace also contains escaped groups.
 export async function runOwnedProcess(command, args, { cwd, env, timeoutMs = 60000, graceMs = 1000, sample = async () => [], spawnProcess = spawn, signalSource = process } = {}) {
-  const result = { code: null, signal: null, timedOut: false, interrupted: false, closed: false, errors: [], observed: new Map(), stdout: "", stderr: "" };
+  const result = { code: null, signal: null, timedOut: false, interrupted: false, closed: false, errors: [], spawnErrors: [], observed: new Map(), stdout: "", stderr: "" };
   const captures = Object.fromEntries(["stdout", "stderr"].map(key => [key, { bytes: 0, hash: createHash("sha256"), esc: false }]));
   let child, escalation, bytes = 0, sampling = false, stopped = false, finished = false;
   const stop = signal => {
@@ -383,13 +383,14 @@ export async function runOwnedProcess(command, args, { cwd, env, timeoutMs = 600
   };
   let deadline, monitor;
   try {
-    child = spawnProcess(command, args, { cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
+    try { child = spawnProcess(command, args, { cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] }); }
+    catch (error) { result.spawnErrors.push(error); throw error; }
     child.stdout.on("data", append("stdout")); child.stderr.on("data", append("stderr"));
     signalSource.on("SIGINT", onInt); signalSource.on("SIGTERM", onTerm);
     deadline = setTimeout(() => { result.timedOut = true; stop("SIGTERM"); }, timeoutMs);
     monitor = setInterval(() => { void observe(); }, 20);
     await new Promise(resolveClose => {
-      child.on("error", error => { result.errors.push(error); });
+      child.on("error", error => { result.spawnErrors.push(error); result.errors.push(error); });
       child.once("close", (code, signal) => { result.code = code; result.signal = signal; result.closed = true; resolveClose(); });
     });
   } catch (error) { result.errors.push(error); }
@@ -518,18 +519,51 @@ async function offlineCi(report) {
   const receipt = report.sync("child_report", () => validatePackagingReceipt(JSON.parse(output)));
   return receipt;
 }
-const containerDiagnosticPhases = ["entry", "module_import", "dispatch", "serialization", "reporting", "pending", "host_runtime", "parent_namespaces", "cwd", "temp", "environment", "docker_executable", "daemon_socket", "identity", "context", "daemon", "base", "image_build", "image", "create", "attach", "ready", "admission", "permit", "wait", "receipt", "terminal", "cgroup", "retirement", "remove", "final", "overflow"];
+const containerDiagnosticPhases = ["entry", "module_import", "dispatch", "serialization", "reporting", "pending", "host_runtime", "parent_namespaces", "cwd", "temp", "environment", "docker_executable", "daemon_socket", "identity", "context", "daemon", "base", "image_build", "image_build_process", "image_id", "native_receipt", "image", "create", "attach", "ready", "admission", "permit", "wait", "receipt", "terminal", "cgroup", "retirement", "remove", "final", "overflow"];
 const containerDiagnosticSignals = [null, "SIGINT", "SIGTERM", "SIGKILL", "SIGABRT", "SIGSEGV", "SIGPIPE", "SIGBUS", "SIGSYS"];
+const processDiagnosticFields = ["v", "phase", "state", "defined", "available", "exit", "signal", "closed", "timedOut", "interrupted", "errors", "undefinedErrors", "spawnErrors", "undefinedSpawnErrors", "stdoutComplete", "stderrComplete"];
 export function validateContainerDiagnostic(value) {
+  if (value && typeof value === "object" && ownData(value, "v") === 3) {
+    if (Object.getOwnPropertyNames(value).sort().join() !== [...processDiagnosticFields].sort().join()) refuse("container-process-keys");
+    const row = Object.fromEntries(processDiagnosticFields.map(key => [key, ownData(value, key)]));
+    if (row.phase !== "image_build_process" || typeof row.available !== "boolean" || row.state !== (row.available ? "observed" : "rejected") || !(row.available ? row.defined === null : typeof row.defined === "boolean")) refuse("container-process-identity");
+    // Node may report a negative OS error code when spawning fails.
+    if (!containerDiagnosticSignals.includes(row.signal) || !(row.exit === null || Number.isInteger(row.exit) && row.exit >= -2147483648 && row.exit <= 2147483647)) refuse("container-process-exit");
+    for (const key of ["closed", "timedOut", "interrupted", "stdoutComplete", "stderrComplete"]) if (row[key] !== null && typeof row[key] !== "boolean") refuse("container-process-boolean");
+    for (const key of ["errors", "undefinedErrors", "spawnErrors", "undefinedSpawnErrors"]) if (!(row[key] === null || Number.isSafeInteger(row[key]) && row[key] >= 0)) refuse("container-process-count");
+    for (const [part, total] of [["undefinedErrors", "errors"], ["spawnErrors", "errors"], ["undefinedSpawnErrors", "spawnErrors"], ["undefinedSpawnErrors", "undefinedErrors"]]) if (row[part] !== null && row[total] !== null && row[part] > row[total]) refuse("container-process-count-order");
+    if (!row.available && processDiagnosticFields.slice(5).some(key => row[key] !== null)) refuse("container-process-unavailable");
+    return row;
+  }
   if (!value || typeof value !== "object" || Object.getOwnPropertyNames(value).sort().join() !== ["v", "phase", "state", "defined", "exit", "signal"].sort().join()) refuse("container-diagnostic-keys");
   const row = Object.fromEntries(["v", "phase", "state", "defined", "exit", "signal"].map(key => [key, ownData(value, key)]));
-  if (row.v !== 2 || !containerDiagnosticPhases.includes(row.phase) || !["entered", "fulfilled", "rejected"].includes(row.state)) refuse("container-diagnostic-enum");
+  if (row.v !== 2 || !containerDiagnosticPhases.includes(row.phase) || row.phase === "image_build_process" || !["entered", "fulfilled", "rejected"].includes(row.state)) refuse("container-diagnostic-enum");
   if (![null, true, false].includes(row.defined) || !containerDiagnosticSignals.includes(row.signal) || !(row.exit === null || Number.isInteger(row.exit) && row.exit >= 0 && row.exit <= 255)) refuse("container-diagnostic-outcome");
   return row;
 }
+export function containerProcessDiagnostic(result, available = true, reason) {
+  const field = (object, key) => object && Object.hasOwn(object, key) ? ownData(object, key) : null;
+  const count = values => {
+    if (values === null) return [null, null];
+    if (!Array.isArray(values)) refuse("container-process-errors");
+    let undefinedCount = 0;
+    for (let i = 0; i < values.length; i++) if (ownData(values, String(i)) === undefined) undefinedCount++;
+    return [values.length, undefinedCount];
+  };
+  const [errors, undefinedErrors] = available ? count(field(result, "errors")) : [null, null];
+  const [spawnErrors, undefinedSpawnErrors] = available ? count(field(result, "spawnErrors")) : [null, null];
+  const summary = available ? field(result, "outputSummary") : null;
+  return validateContainerDiagnostic({ v: 3, phase: "image_build_process", state: available ? "observed" : "rejected", defined: available ? null : reason !== undefined, available,
+    exit: available ? field(result, "code") : null, signal: available ? field(result, "signal") : null,
+    closed: available ? field(result, "closed") : null, timedOut: available ? field(result, "timedOut") : null, interrupted: available ? field(result, "interrupted") : null,
+    errors, undefinedErrors, spawnErrors, undefinedSpawnErrors,
+    stdoutComplete: field(field(summary, "stdout"), "complete"), stderrComplete: field(field(summary, "stderr"), "complete") });
+}
 export function emitContainerFailure(records, writer = line => process.stdout.write(line)) {
   const rows = records.map(validateContainerDiagnostic), unique = new Map();
-  for (const row of [...rows.filter(row => row.state === "rejected"), ...rows.toReversed()]) if (!unique.has(row.phase)) unique.set(row.phase, row);
+  const rejected = rows.filter(row => row.state === "rejected");
+  // Reserve the first actual failure and original build outcome before context.
+  for (const row of [...rejected.slice(0, 1), ...rows.filter(row => row.v === 3), ...rejected.slice(1), ...rows.toReversed()]) if (!unique.has(row.phase)) unique.set(row.phase, row);
   const selected = [...unique.values()].slice(0, 9);
   if (unique.size > 9) selected.push({ v: 2, phase: "overflow", state: "rejected", defined: null, exit: Math.min(255, unique.size - 9), signal: null });
   let bytes = 0;
@@ -541,7 +575,7 @@ export function emitContainerFailure(records, writer = line => process.stdout.wr
 export function createContainerDiagnostics() {
   const records = [];
   const mark = (phase, state, reason) => records.push(validateContainerDiagnostic({ v: 2, phase, state, defined: state === "rejected" ? reason !== undefined : null, exit: null, signal: null }));
-  return { records, mark,
+  return { records, mark, process(result, available, reason) { records.push(containerProcessDiagnostic(result, available, reason)); },
     sync(phase, operation) { mark(phase, "entered"); try { const value = operation(); mark(phase, "fulfilled"); return value; } catch (error) { mark(phase, "rejected", error); throw error; } },
     async step(phase, operation) { mark(phase, "entered"); try { const value = await operation(); mark(phase, "fulfilled"); return value; } catch (error) { mark(phase, "rejected", error); throw error; } },
   };

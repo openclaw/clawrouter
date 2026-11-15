@@ -469,6 +469,28 @@ export function parseImageBuildReceipt(text, contextHash) {
   check(lines.length === 1 && Buffer.byteLength(lines[0]) <= 8192, "image-attestation-count");
   return validateNativeIdentity(JSON.parse(lines[0].slice("EDGE_IMAGE_V2 ".length)), { contextHash });
 }
+export async function observeImageBuild(operation, readImageId, parseReceipt, report) {
+  let built, available = false;
+  const errors = [];
+  try { built = await operation(); available = true; } catch (error) { errors.push(error); }
+  try { report.process(built, available, errors[0]); } catch (error) { errors.push(error); }
+  if (available) try { requireProcessSuccess(built); } catch (error) { errors.unshift(error); }
+  raiseContainerFailures(errors);
+  const observe = async (phase, original) => {
+    report.mark(phase, "entered");
+    let value;
+    try { value = await original(); }
+    catch (error) {
+      try { report.mark(phase, "rejected", error); }
+      catch (reportError) { raiseContainerFailures([error, reportError]); }
+      throw error;
+    }
+    report.mark(phase, "fulfilled"); return value;
+  };
+  const imageId = await observe("image_id", readImageId);
+  const native = await observe("native_receipt", () => parseReceipt(built.stdout));
+  return { imageId, native };
+}
 export function parseContainerReceipt(text, plan) {
   const lines = text.split("\n").filter(line => line.startsWith("EDGE_CONTAINER_RECEIPT_V2 "));
   check(lines.length === 1 && Buffer.byteLength(lines[0]) <= 8192, "container-receipt-count");
@@ -542,9 +564,8 @@ async function hostContainerRun(report) {
   const env = await report.step("environment", async () => { const value = dockerEnvironment(root); await mkdir(value.HOME, { mode: 0o700 }); await mkdir(value.DOCKER_CONFIG, { mode: 0o700 }); return value; });
   const docker = (await report.step("docker_executable", () => fileIdentity("/usr/bin/docker"))).path;
   await report.step("daemon_socket", async () => check((await stat("/var/run/docker.sock")).isSocket() && ["/run/docker.sock", "/var/run/docker.sock"].includes(await realpath("/var/run/docker.sock")), "local-daemon-socket"));
-  const run = async (args, timeoutMs = 30000) => {
-    const result = await runOwnedProcess(docker, ["--host=unix:///var/run/docker.sock", ...args], { cwd: root, env, timeoutMs }); requireProcessSuccess(result); return result;
-  };
+  const runOriginal = (args, timeoutMs = 30000) => runOwnedProcess(docker, ["--host=unix:///var/run/docker.sock", ...args], { cwd: root, env, timeoutMs });
+  const run = async (args, timeoutMs = 30000) => { const result = await runOriginal(args, timeoutMs); requireProcessSuccess(result); return result; };
   const inspect = async (type, id) => { const result = await run([type, "inspect", id]); const rows = JSON.parse(result.stdout); check(Array.isArray(rows) && rows.length === 1, "inspect-count"); return rows[0]; };
   let daemonRoot;
   await report.step("daemon", async () => {
@@ -558,9 +579,9 @@ async function hostContainerRun(report) {
   const iidFile = join(root, "image-id"), nonce = randomBytes(32).toString("hex"); let imageId, native;
   await report.step("image_build", async () => {
     const args = ["build", "--platform=linux/amd64", "--pull=false", "--no-cache", "--iidfile", iidFile, "--build-arg", `HOST_UID=${identity.uid[0]}`, "--build-arg", `HOST_GID=${identity.gid[0]}`, "--build-arg", `CONTEXT_HASH=${context.contextHash}`, "--build-arg", `TASK_NONCE=${nonce}`, context.context];
-    const built = await run(args, 480000);
-    imageId = (await readFile(iidFile, "utf8")).trim(); check(imagePattern.test(imageId), "image-build-result");
-    native = parseImageBuildReceipt(built.stdout, context.contextHash);
+    ({ imageId, native } = await observeImageBuild(() => runOriginal(args, 480000), async () => {
+      const id = (await readFile(iidFile, "utf8")).trim(); check(imagePattern.test(id), "image-build-result"); return id;
+    }, stdout => parseImageBuildReceipt(stdout, context.contextHash), report));
   });
   const image = await report.step("image", async () => validateImage(await inspect("image", imageId), { derived: true, identity, id: imageId, contextHash: context.contextHash }));
   check(image.Config.Labels?.["org.openclaw.edge.nonce"] === nonce, "image-invocation");
