@@ -1,5 +1,7 @@
 # Changelog
 
+- Join replayed response reads and first cancellation before releasing the original reader, retaining independent source retirement failures.
+
 ## Unreleased
 
 - Preserve the original LiteLLM retirement failure definedness before independent observation or reporting errors are aggregated.

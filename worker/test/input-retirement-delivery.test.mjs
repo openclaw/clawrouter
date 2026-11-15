@@ -3,6 +3,19 @@ import test from "node:test";
 import { observeUsage } from "../proxy-response.ts";
 import { HttpOperation } from "../http-operation.ts";
 import { BodyLease, bodyBudgetCharged } from "../body-budget.ts";
+import { readFileSync } from "node:fs";
+import { stripTypeScriptTypes } from "node:module";
+function inertReplayFunctions() {
+  const source = readFileSync(new URL("../proxy-response.ts", import.meta.url), "utf8");
+  const input = readFileSync(new URL("../input-retirement.ts", import.meta.url), "utf8").replaceAll("export ", "");
+  const replay = source.slice(source.indexOf("const replayRetirements ="), source.indexOf("export interface SseBoundaryCursor"));
+  class InertStream { constructor(source, strategy) { this.source = source; this.strategy = strategy; } }
+  class InertResponse { constructor(body, init) { this.body = body; Object.assign(this, init); } }
+  return new Function("ReadableStream", "Response", stripTypeScriptTypes(input + replay, {mode:"transform"}) + ";return {replayInputOwner,replayResponse,replayRetirements};")(InertStream, InertResponse);
+}
+const replayDeferred = () => { let resolve, reject; const promise = new Promise((yes,no) => { resolve=yes; reject=no; }); return {promise,resolve,reject}; };
+const replayTurns = async () => { for(let i=0;i<12;i++) await Promise.resolve(); };
+
 const deferred = () => { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; };
 
 for (const cause of ["abort", "downstream"]) for (const rejects of [false, true]) test(`delivery result precedes held ${cause} retirement, cleanup rejects=${rejects}`, async () => {
@@ -55,3 +68,19 @@ test("delivery retirement joins an active inspection after prompt abort without 
   inspection.resolve(); await retired; reader.releaseLock();
   assert.equal(calls, 1); assert.equal(results, 1); assert.equal(source.locked, false); assert.equal(bodyBudgetCharged(), 0);
 });
+
+// BEGIN inert replay tail tests.
+test("inert replay predecessor and outer retirement cannot bypass a held original cancel",async()=>{
+  const {replayInputOwner}=inertReplayFunctions(), cancel=replayDeferred();let innerUnlocks=0,outerUnlocks=0,settled=false;
+  const inner=replayInputOwner({cancel(){return cancel.promise;},releaseLock(){innerUnlocks++;}});
+  const outer=replayInputOwner({cancel(reason){return inner.retire("cancel",reason);},releaseLock(){outerUnlocks++;}},inner.retired);
+  const result=outer.retire("cancel");result.then(()=>{settled=true;});await replayTurns();assert.equal(settled,false);assert.equal(innerUnlocks,0);assert.equal(outerUnlocks,0);
+  cancel.resolve();await result;assert.equal(innerUnlocks,1);assert.equal(outerUnlocks,1);
+});
+test("inert replay retains predecessor and outer release failures independently",async()=>{
+  const {replayInputOwner}=inertReplayFunctions(), source=replayDeferred();let calls=0;
+  const owner=replayInputOwner({cancel(){calls++;return Promise.resolve();},releaseLock(){throw undefined;}},source.promise);
+  const retiring=owner.retire("cancel"), failure=retiring.catch(error=>error);source.reject(undefined);
+  const error=await failure;assert.ok(error instanceof AggregateError);assert.deepEqual(error.errors,[undefined,undefined]);assert.equal(calls,1);
+});
+// END inert replay tail tests.
