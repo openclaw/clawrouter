@@ -8,10 +8,10 @@ import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { runInNewContext } from "node:vm";
 import { dirname, join, relative } from "node:path";
-import { containerContract, harnessInputs, installInputs, parseIdentity, validateIdentity, validateMapping, validateImage, dockerEnvironment, containerEnvironment, createArguments, validateContainerInspect, parseControl, validateTerminal, validateNativeIdentity, parseImageBuildReceipt, parseImageBuildStages, parseNativePrepareStages, observeImageBuild, parseContainerReceipt, parseInitPrerequisites, createAttachProjection, runInitPrerequisites, createInitGuardLedger, initGuardLeaf, createMountObservation, parseMounts, validateMountFreshness, validateMounts, validateMetadataMounts, validateChildStatus, validateTarget, cgroupPath, validateLimits, attachContainer, processEvidence, retiredCgroup, raiseContainerFailures, validateContainerDiagnostic, emitContainerFailure } from "../scripts/edge-proof-container.mjs";
+import { containerContract, harnessInputs, installInputs, parseIdentity, validateIdentity, validateMapping, validateImage, dockerEnvironment, containerEnvironment, createArguments, validateContainerInspect, parseControl, validateTerminal, validateNativeIdentity, parseImageBuildReceipt, parseImageBuildStages, parseNativePrepareStages, observeImageBuild, parseContainerReceipt, parseInitPrerequisites, createAttachProjection, runInitPrerequisites, createInitGuardLedger, initGuardLeaf, createMountObservation, validateEmptyMasks, validateMaskCompletion, parseMounts, validateMountFreshness, validateMounts, validateMetadataMounts, validateChildStatus, validateTarget, cgroupPath, validateLimits, attachContainer, processEvidence, retiredCgroup, raiseContainerFailures, validateContainerDiagnostic, emitContainerFailure } from "../scripts/edge-proof-container.mjs";
 import { frozenGitEnvironment, validateGitExecutable, frozenSource } from "../scripts/edge-proof-build.mjs";
 import { edgeProof } from "../scripts/edge-proof-profile.mjs";
-import { launchCli, createContainerDiagnostics, containerProcessDiagnostic, imageBuildStages, runOwnedProcess, nativePrepareStages, createNativePrepareDiagnostics, enumerationOperations, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, initGuardTags, initSourcePhases, validateInitDetail, mountPredicates, mountTargets, mountFilesystems, validateMountDetail } from "../scripts/edge-proof.mjs";
+import { launchCli, createContainerDiagnostics, containerProcessDiagnostic, imageBuildStages, runOwnedProcess, nativePrepareStages, createNativePrepareDiagnostics, enumerationOperations, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, initGuardTags, initSourcePhases, validateInitDetail, mountPredicates, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail } from "../scripts/edge-proof.mjs";
 
 const hex = "a".repeat(64), other = "b".repeat(64), imageId = "sha256:" + hex;
 const identity = { uid: [501, 501, 501, 501], gid: [20, 20, 20, 20], groups: [20, 30] };
@@ -38,7 +38,7 @@ const mounts = () => [
 ];
 const container = () => ({ Id: hex, Image: imageId, State: { Status: "created", Pid: 0, Running: false, Dead: false, ExitCode: 0, OOMKilled: false, Error: "" }, Config: { Labels: { "org.openclaw.edge.nonce": hex, "org.openclaw.edge.context": other }, Entrypoint: [containerContract.node], Cmd: createArguments(plan(), "/owned/cid").slice(createArguments(plan(), "/owned/cid").indexOf(imageId) + 1), User: "501:20", WorkingDir: "/task", Env: plan().imageEnv, Volumes: null }, HostConfig: { NetworkMode: "none", PidMode: "", Tmpfs: { "/task": "rw,noexec,nosuid,nodev,size=2147483648,mode=0700,uid=501,gid=20" }, IpcMode: "private", CgroupnsMode: "private", ReadonlyRootfs: true, Privileged: false, CapDrop: ["ALL"], CapAdd: null, SecurityOpt: ["no-new-privileges=true"], Memory: 4294967296, MemorySwap: 4294967296, NanoCpus: 2000000000, PidsLimit: 128 }, Mounts: [] });
 const native = () => ({ version: 2, contextHash: other, sourceSha: edgeProof.sourceSha, sourceTree: edgeProof.sourceTree, install: { ...installInputs }, runtime: { node: "v24.22.1", abi: "137", platform: "linux", arch: "x64", pnpm: "11.28.4" }, containedLinks: 164, native: { node: { path: containerContract.node, sha256: hex }, git: { path: containerContract.git, sha256: hex }, typescript: { path: "/opt/edge-input/node_modules/.pnpm/ts/lib/tsc", sha256: hex }, esbuild: { path: "/opt/edge-input/node_modules/.pnpm/esbuild/bin/esbuild", sha256: hex }, wrangler: { path: "/opt/edge-input/node_modules/.pnpm/wrangler/wrangler-dist/cli.js", sha256: containerContract.cliHash } } });
-const receipt = () => ({ version: 2, isolation: "private-container-pid-net-mount", nonce: hex, contextHash: other, nativeHash: hex, sourceSha: edgeProof.sourceSha, sourceTree: edgeProof.sourceTree, sourceFiles: 600, dependencyFiles: 268, exactErasures: 4, twoRoots: true, cliSha256: containerContract.cliHash, results: Object.fromEntries(["edge", "upstream"].map(kind => [kind, { code: 0, signal: null, closed: true, sha256: hex, observedProcesses: 1 }])), cloud: "UNRUN", sdk: "UNRUN" });
+const receipt = () => ({ version: 2, isolation: "private-container-pid-net-mount", nonce: hex, contextHash: other, nativeHash: hex, sourceSha: edgeProof.sourceSha, sourceTree: edgeProof.sourceTree, sourceFiles: 600, dependencyFiles: 268, exactErasures: 4, twoRoots: true, cliSha256: containerContract.cliHash, results: Object.fromEntries(["edge", "upstream"].map(kind => [kind, { code: 0, signal: null, closed: true, sha256: hex, observedProcesses: 1 }])), cloud: "UNRUN", sdk: "UNRUN", masks: [1, 1, 1, 1, 1, "UNOBSERVABLE"] });
 
 test("parent identity includes real/effective/saved/filesystem columns with no arbitrary UID floor", () => {
   assert.deepEqual(parseIdentity(status("20 30")), identity);
@@ -1151,14 +1151,14 @@ test("init prerequisite actual operations preserve order operands original undef
   assert.deepEqual(success.calls[0].args, [[hex, other, "501", "20"]]); assert.equal(success.calls[4].args[0], identity); assert.deepEqual(success.calls[6].args, [hex, other]);
   for (const [index, op] of success.calls.entries()) {
     const failed = await initCapture(op.name); assert.equal(failed.failed, true); assert.equal(failed.reason, undefined); assert.equal(failed.calls.length, index + 1);
-    if (index) { const both = await initCapture(op.name, true); assert.ok(both.reason instanceof AggregateError); assert.equal(both.reason.errors[0], undefined); assert.equal(both.calls.length, index + 1); }
+    if (index) { const both = await initCapture(op.name, true); assert.ok(both.reason instanceof AggregateError); assert.equal(both.reason.errors[0], undefined); assert.equal(both.calls.length, Math.min(index + 1, 6)); }
     const { h, binding } = await attachWithFrames(failed.frames.join("")); const row = parseInitPrerequisites(h.attached.result, binding);
     assert.equal(row.reason, index === 0 ? "no_records" : "original_failure"); if (index) { assert.equal(row.stage, initPrerequisiteStages[index]); assert.equal(row.defined, false); }
   }
   const brokenTrace = createInitDiagnostics(() => {}); brokenTrace.enter = () => { throw undefined; };
   await assert.rejects(runInitPrerequisites([hex, other, "501", "20"], brokenTrace, inertInitOperations("arguments", [])), error => error instanceof AggregateError && error.errors.length === 3 && error.errors[0] === undefined && error.errors[2] === undefined);
   const reports = await initCapture("runtime", true); assert.ok(reports.reason instanceof AggregateError); assert.equal(reports.reason.errors[0], undefined); assert.ok(reports.reason.errors.length > 1); assert.equal(reports.calls.length, 5);
-  const onlyReports = await initCapture(undefined, true); assert.equal(onlyReports.failed, true); assert.equal(onlyReports.calls.length, 8);
+  const onlyReports = await initCapture(undefined, true); assert.equal(onlyReports.failed, true); assert.equal(onlyReports.calls.length, 6);
 });
 test("init private parser rejects capture loss foreign identity incomplete duplicate and malformed frames", async () => {
   const captured = await initCapture(); const text = captured.frames.join("");
@@ -1201,10 +1201,10 @@ async function initGuardFactory(overrides = {}) {
   const helpers = source.slice(source.indexOf("export function createInitGuardLedger("), source.indexOf("const own =")).replaceAll("export ", "");
   const declarations = source.slice(source.indexOf("const same ="), source.indexOf("const hashPattern =")) + source.slice(source.indexOf("const number ="), source.indexOf("export function parseIdentity("));
   const goodStatus = "Groups:\t20\nUid:\t501 501 501 501\nGid:\t20 20 20 20\n" + ["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"].map(k => k + ":\t0000\n").join("") + "NoNewPrivs:\t1\nSeccomp:\t2\n";
-  const calls = [], bindings = { initGuardTags, initSourcePhases, mountTargets, mountFilesystems, validateMountDetail, process: { platform: "linux", arch: "x64", version: "v24.22.1", versions: { modules: "137" }, pid: 1, env: {} },
+  const calls = [], bindings = { initGuardTags, initSourcePhases, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail, raiseContainerFailures, process: { platform: "linux", arch: "x64", version: "v24.22.1", versions: { modules: "137" }, pid: 1, env: {} },
     readFile: async path => { calls.push(path); if (path.endsWith("status")) return goodStatus; if (path.endsWith("mountinfo")) return ""; return "{}"; }, namespaceEvidence: async () => ({ interfaces: ["lo"], routes4: [], routes6: [] }), containerEnvironment: () => ({}),
     validateNativeIdentity: value => value, qualifyImageInputs: async () => ({}), containerContract: { input: "/input" }, join: (...parts) => parts.join("/"), ...overrides };
-  const api = new Function(...Object.keys(bindings), declarations + helpers + status + mounts + runtime + "return { validateContainerRuntime, nativeReceipt, validateChildStatus, parseIdentity, validateIdentity, parseMounts, validateMounts, mountTable, canonicalMountPath, decodeMountPath, createMountObservation, createInitGuardLedger, initGuardLeaf }; ")(...Object.values(bindings));
+  const api = new Function(...Object.keys(bindings), declarations + helpers + status + mounts + runtime + "return { validateContainerRuntime, nativeReceipt, validateChildStatus, parseIdentity, validateIdentity, parseMounts, validateMounts, mountTable, canonicalMountPath, decodeMountPath, createMountObservation, validateEmptyMasks, validateMaskCompletion, createInitGuardLedger, initGuardLeaf }; ")(...Object.values(bindings));
   const runtimeBindings = { ...bindings, validateChildStatus: api.validateChildStatus, parseMounts: api.parseMounts, validateMounts: api.validateMounts, ...overrides };
   const runtimeApi = new Function(...Object.keys(runtimeBindings), declarations + helpers.replace(/export /g, "") + runtime + "return { validateContainerRuntime, nativeReceipt }; ")(...Object.values(runtimeBindings));
   return { ...api, ...runtimeApi, calls, goodStatus };
@@ -1313,7 +1313,7 @@ test("mount diagnostics actual topology and branch checks preserve row and aggre
   fail("/etc/hosts", r => r.fs = "tmpfs", 19, 1); fail("/etc/hosts", r => r.options = ["rw"], 19, 2);
   for (const [change, leaf] of [[r => r.fs = "ext4", 1], [r => r.device = "0:99", 2], [r => r.root = "/other", 3], [r => r.options = ["rw", "nosuid", "nodev", "noexec"], 4], [r => r.options = ["ro", "nodev", "noexec"], 5], [r => r.options = ["ro", "nosuid", "noexec"], 6], [r => r.options = ["ro", "nosuid", "nodev"], 7]]) fail("/proc/bus", change, 20, leaf);
   for (const [change, leaf] of [[r => r.fs = "ext4", 1], [r => r.device = "0:99", 2], [r => r.root = "/other", 3], [r => r.options.push("noexec"), 4], [r => r.superOptions.push("extra"), 5]]) fail("/proc/kcore", change, 21, leaf);
-  for (const [change, leaf] of [[r => r.fs = "ext4", 1], [r => r.device = "8:1", 2], [r => r.root = "/other", 3], [r => r.options = ["rw"], 4], [r => r.superOptions = ["rw"], 5], [r => r.device = "0:2", 6]]) fail("/sys/firmware", change, 22, leaf);
+  for (const [change, leaf] of [[r => r.fs = "ext4", 1], [r => r.device = "8:1", 2], [r => r.root = "/other", 3], [r => r.options = ["rw"], 4], [r => r.superOptions = ["rw"], 5], [r => r.device = "0:2", 6]]) fail("/sys/firmware", change, 27, leaf);
   const alias = fail("/task", r => r.device = "0:3", 23, 1); assert.equal(alias.detail.m[3], null); assert.deepEqual(alias.detail.m.slice(8, 10), [8, 7]);
   fail("/task", r => r.superOptions = ["rw", "size=1k"], 24, 1); fail("/dev", (r, rows) => { r.superOptions = ["rw", "size=1k", "mode=755"]; rows.find(row => row.target === "/proc/kcore").superOptions = [...r.superOptions]; }, 25, 1); fail("/dev", (r, rows) => { r.superOptions = ["rw", "size=65536k", "mode=700"]; rows.find(row => row.target === "/proc/kcore").superOptions = [...r.superOptions]; }, 25, 2);
   fail("/dev/shm", r => r.superOptions = ["rw", "size=1k"], 26, 1);
@@ -1367,7 +1367,7 @@ test("mount diagnostics each structural leaf and original unobserved operand rel
   const covered = new Set(mountDiagnosticCases.map(detail => `${detail.m[1]}:${detail.m[2]}`));
   for (const [index, [, width]] of mountPredicates.entries()) for (let leaf = 1; leaf <= width; leaf++) {
     // A failed OR has both operands false; the first false is not a terminal leaf.
-    if (index + 1 === 14 && leaf === 1) continue;
+    if (index + 1 === 22 || index + 1 === 28 || index + 1 === 14 && leaf === 1) continue;
     assert.ok(covered.has(`${index + 1}:${leaf}`), `missing original predicate ${index + 1} leaf ${leaf}`);
   }
   const firstFs = mountDiagnosticCases.find(detail => detail.m[1] === 18 && detail.m[2] === 1).m;
@@ -1393,10 +1393,10 @@ test("mount diagnostics reject valid-range enum contradictions without inventing
     if (predicate === 19) opposite(4, 1, fs("ext4"), fs("tmpfs"));
     if (predicate === 20) opposite(4, 1, fs("proc"), fs("tmpfs"));
     if (predicate === 21) opposite(5, 3, 2, 1);
-    if (predicate === 22) { opposite(4, 1, fs("tmpfs"), fs("proc")); opposite(5, 3, 1, 2); }
+    if (predicate === 27) { opposite(4, 1, fs("tmpfs"), fs("proc")); opposite(5, 3, 1, 2); }
   }
   for (const m of contradictoryMountEnums) assert.throws(() => validateMountDetail(m, "mount_validate"));
-  for (const predicate of [16, 18, 19, 20, 21, 22]) assert.ok(contradictoryMountEnums.some(m => m[1] === predicate));
+  for (const predicate of [16, 18, 19, 20, 21, 27]) assert.ok(contradictoryMountEnums.some(m => m[1] === predicate));
   for (const detail of mountDiagnosticCases.filter(d => [1, 5].includes(d.m[1]))) {
     const invalid = [...detail.m]; invalid[invalid[1] === 1 ? 5 : 4] = invalid[1] === 1 ? 1 : fs("proc");
     assert.throws(() => validateMountDetail(invalid, detail.source));
@@ -1420,5 +1420,111 @@ test("mount diagnostics framed parser refuses contradictory enums with complete 
     assert.equal(result.outputSummary.stdout.complete, true); assert.equal(result.outputSummary.stderr.complete, true);
     const parsed = parseInitPrerequisites(result, captured.binding); assert.equal(parsed.reason, "invalid"); assert.equal(Object.hasOwn(parsed, "detail"), false);
   }
+});
+function inertMasks(options = {}) {
+  const rows = options.rows ?? [...mounts(), mount(121, 102, "/proc/acpi", "tmpfs", "0:10", ["ro"], "/", ["ro"]), mount(122, 102, "/proc/scsi", "tmpfs", "0:10", ["ro"], "/", ["ro"])];
+  const calls = [], state = { ready: false, readEntered: false, dirClosed: 0, anchorClosed: 0 }; let active, fd = 40, snapshots = 0, namespaces = 0;
+  const fault = name => { calls.push(name); if (options.fail === name) throw undefined; };
+  const stats = kind => ({ dev: 1n, ino: BigInt(active.id + 1000 + (options.mismatch && kind === "named" ? 1 : 0)), isDirectory: () => options.notDirectory !== kind });
+  const io = {
+    constants: { O_RDONLY: 0, O_DIRECTORY: 65536, O_NOFOLLOW: 131072 },
+    realpath: async path => { fault("realpath"); return options.symlink ? "/unadmitted" : path; },
+    lstat: async () => { fault("lstat"); return stats("named"); },
+    readlink: async path => {
+      fault("readlink");
+      if (path === "/proc/self/ns/mnt") return `mnt:[${++namespaces > 1 && options.namespaceDrift ? 2 : 1}]`;
+      assert.equal(path, `/proc/self/fd/${fd}`); return options.linkMismatch ? "/unadmitted" : active.target;
+    },
+    readFile: async path => {
+      fault("readFile");
+      if (path === "/proc/self/mountinfo") {
+        snapshots++; return rows.map((r, i) => `${r.id + (options.mountDrift && snapshots > 1 && i === 0 ? 999 : 0)} ${r.parentId} ${r.device} ${r.root} ${r.target} ${r.options.join(",")} - ${r.fs} none ${r.superOptions.join(",")}`).join("\n") + "\n";
+      }
+      assert.equal(path, `/proc/self/fdinfo/${fd}`); return `mnt_id:\t${active.id + (options.mountMismatch ? 1 : 0)}\nino:\t${active.id + 1000}\n`.replaceAll("\\t", "\t").replaceAll("\\n", "\n");
+    },
+    open: async (path, flags) => {
+      fault("open"); assert.equal(flags, 196608); active = rows.find(r => r.target === path); assert.ok(active); fd++;
+      return { get fd() { fault("fd"); return fd; }, stat: async opts => { fault("stat"); assert.deepEqual(opts, { bigint: true }); return stats("held"); }, close() { state.anchorClosed++; fault("anchorClose"); return options.anchorPending ?? Promise.resolve(); } };
+    },
+    opendir: async (path, opts) => {
+      fault("opendir"); assert.equal(path, `/proc/self/fd/${fd}`); assert.deepEqual(opts, { bufferSize: 1, recursive: false });
+      return { read() { state.readEntered = true; fault("read"); if (options.readPending) return options.readPending; return Promise.resolve(options.nonempty ? Object.defineProperty({}, "name", { get() { assert.fail("entry name inspected"); } }) : null); }, close() { state.dirClosed++; fault("dirClose"); return options.dirPending ?? Promise.resolve(); } };
+    },
+  };
+  return { rows, io, calls, state };
+}
+test("closed directory alias profile checks every member and excludes every other mount class", async () => {
+  const api = await initGuardFactory(), valid = inertMasks(); assert.equal(api.validateMounts(valid.rows), true);
+  const thermal = mount(123, 107, "/sys/devices/system/cpu/cpu0/thermal_throttle", "tmpfs", "0:10", ["ro"], "/", ["ro"]);
+  for (const rows of [[...valid.rows, thermal], [...valid.rows, thermal].reverse()]) assert.equal(api.validateMounts(rows), true);
+  for (const mutate of [r => r.fs = "ext4", r => r.root = "/other", r => r.options = ["rw"], r => r.superOptions = ["rw"], r => r.device = "8:1", r => r.target = "/extra"]) {
+    const rows = structuredClone(valid.rows); mutate(rows.at(-1)); assert.throws(() => api.validateMounts(rows));
+  }
+  for (const target of ["/", "/task", "/proc", "/dev", "/dev/pts", "/dev/shm", "/dev/mqueue", "/sys", "/sys/fs/cgroup", "/etc/hosts", "/proc/bus", "/proc/kcore"]) {
+    const rows = structuredClone(valid.rows), device = rows.find(r => r.target === target).device;
+    for (const row of rows.filter(r => ["/sys/firmware", "/proc/acpi", "/proc/scsi"].includes(r.target))) row.device = device;
+    assert.throws(() => api.validateMounts(rows));
+  }
+  for (const mutate of [rows => rows.at(-1).id = rows[0].id, rows => rows.at(-1).target = rows.at(-2).target, rows => rows.at(-1).parentId = 999]) { const rows = structuredClone(valid.rows); mutate(rows); assert.throws(() => api.validateMounts(rows)); }
+  const legacy = mountDiagnosticCases.find(d => d.m[1] === 27).m; validateMountDetail([legacy[0], 22, ...legacy.slice(2)], "mount_validate");
+});
+test("empty gate binds held descriptors checks every singleton and alias root and closes before return", async () => {
+  const api = await initGuardFactory();
+  for (const rows of [mounts(), inertMasks().rows]) {
+    const f = inertMasks({ rows }), ledger = createInitGuardLedger(); ledger.source("mount_validate");
+    const result = await api.validateEmptyMasks(f.rows, ledger, f.io), count = rows.length === mounts().length ? 1 : 3;
+    assert.deepEqual(result, [1, count, count, count, count, "UNOBSERVABLE"]); assert.equal(f.state.dirClosed, count); assert.equal(f.state.anchorClosed, count);
+    assert.equal(f.calls.filter(n => n === "read").length, count); assert.deepEqual(ledger.errors, []); api.validateMaskCompletion(result);
+  }
+});
+test("empty gate rejects content binding ambiguity drift and original undefined while closing independently", async () => {
+  const api = await initGuardFactory();
+  for (const options of [{ nonempty: true }, { symlink: true }, { notDirectory: "named" }, { notDirectory: "held" }, { mismatch: true }, { mountMismatch: true }, { linkMismatch: true }, { namespaceDrift: true }, { mountDrift: true }, ...["open", "fd", "stat", "lstat", "readFile", "readlink", "opendir", "read", "dirClose", "anchorClose"].map(fail => ({ fail }))]) {
+    const f = inertMasks(options), ledger = createInitGuardLedger(); ledger.source("mount_validate");
+    await assert.rejects(api.validateEmptyMasks(f.rows, ledger, f.io), error => options.fail ? error === undefined : error instanceof Error);
+    const detail = ledger.failure(); validateInitDetail(detail); assert.ok(detail.e); assert.equal(detail.e[7], "UNOBSERVABLE");
+    if (f.calls.includes("opendir") && options.fail !== "opendir") assert.equal(f.state.dirClosed, options.namespaceDrift || options.mountDrift ? 3 : 1);
+    if (f.calls.includes("open") && options.fail !== "open") assert.equal(f.state.anchorClosed, options.namespaceDrift || options.mountDrift ? 3 : 1);
+  }
+  const f = inertMasks({ fail: "read" }); f.io.opendir = async () => ({ read() { throw undefined; }, close() { f.state.dirClosed++; throw undefined; } }); f.io.open = async () => ({ fd: 41, stat: async () => ({ dev: 1n, ino: 1114n, isDirectory: () => true }), close() { f.state.anchorClosed++; throw undefined; } });
+  // Independent close preservation is exercised without relying on error messages.
+  f.io.lstat = async () => ({ dev: 1n, ino: 1114n, isDirectory: () => true }); f.io.realpath = async p => p;
+  f.io.readlink = async p => p.endsWith("/mnt") ? "mnt:[1]" : "/sys/firmware";
+  const originalRead = f.io.readFile; f.io.readFile = async p => p.includes("fdinfo") ? "mnt_id:\t114\nino:\t1114\n" : originalRead(p);
+  await assert.rejects(api.validateEmptyMasks(f.rows, undefined, f.io), e => e instanceof AggregateError && e.errors.length === 3 && e.errors.every(x => x === undefined)); assert.equal(f.state.dirClosed, 1); assert.equal(f.state.anchorClosed, 1);
+});
+test("empty gate holds original pending operations and denies READY on content close or reporter failure", async () => {
+  const api = await initGuardFactory();
+  for (const key of ["readPending", "dirPending"]) {
+    const held = Promise.withResolvers(), f = inertMasks({ rows: mounts(), [key]: held.promise }); let settled = false;
+    const original = api.validateEmptyMasks(f.rows, undefined, f.io); void original.then(() => settled = true);
+    for (let i = 0; i < 100; i++) await Promise.resolve(); assert.equal(settled, false);
+    if (key === "readPending") assert.equal(f.state.dirClosed, 0); else { assert.equal(f.state.dirClosed, 1); assert.equal(f.state.anchorClosed, 1); }
+    held.resolve(key === "readPending" ? null : undefined); await original; assert.equal(settled, true);
+  }
+  for (const mode of ["nonempty", "close", "recorder", "writer"]) {
+    const f = inertMasks(mode === "nonempty" ? { nonempty: true } : mode === "close" ? { fail: "dirClose" } : {}), frames = [], ledger = createInitGuardLedger(), calls = [];
+    if (mode === "recorder") ledger.source = () => { throw undefined; };
+    const trace = createInitDiagnostics(line => { if (mode === "writer") throw undefined; frames.push(line); }), ops = inertInitOperations(undefined, calls);
+    ops.runtime = () => api.validateEmptyMasks(f.rows, ledger, f.io);
+    await assert.rejects(runInitPrerequisites([hex, other, "501", "20"], trace, ops, ledger)); assert.ok(!calls.some(c => c.name === "ready" || c.name === "permit"));
+    if (frames.length && mode !== "recorder") { const c = await attachWithFrames(frames.join("")); const report = parseInitPrerequisites(c.h.attached.result, c.binding); assert.equal(report.reason, "original_failure"); assert.equal(report.detail.e[7], "UNOBSERVABLE"); assert.ok(frames.every(line => Buffer.byteLength(line) <= 512)); }
+  }
+});
+test("empty gate closed evidence rejects inconsistent states and fits worst-case bound frames", async () => {
+  const detail = { guard: "mounts", source: "mask_read", m: [1,28,1,30,null,null,1,0,null,null,0], e: [1,30,4095,4094,1,2,2,"UNOBSERVABLE"] };
+  validateInitDetail(detail);
+  const frames = [], trace = createInitDiagnostics(line => frames.push(line)); trace.enter("arguments"); trace.bind(hex, other); for (const stage of initPrerequisiteStages.slice(1,5)) trace.enter(stage);
+  trace.finish(true, undefined, detail, Array(16).fill(undefined)); assert.deepEqual(trace.errors, []); assert.ok(frames.every(frame => Buffer.byteLength(frame) <= 512));
+  const captured = await attachWithFrames(frames.join("")), row = parseInitPrerequisites(captured.h.attached.result, captured.binding); assert.deepEqual(row.detail, detail);
+  for (const mutate of [d => d.e[0] = 2, d => d.e[1] = 2, d => d.e[2] = 4096, d => d.e[3] = 4095, d => d.e[4] = 0, d => d.e[5] = 0, d => d.e[6] = 0, d => d.e[7] = "ZERO", d => d.source = "mask_anchor_close", d => delete d.e]) {
+    const invalid = structuredClone(detail); mutate(invalid); assert.throws(() => validateInitDetail(invalid));
+  }
+  let getter = false; const hostile = [...detail.e]; Object.defineProperty(hostile, "4", { get() { getter = true; throw undefined; } }); assert.throws(() => validateMaskDetail(hostile)); assert.equal(getter, false);
+  const report = createContainerDiagnostics(); createAttachProjection(captured.h.attached, captured.binding, report)(captured.h.attached.result);
+  for (const phase of ["entry", "dispatch", "ready", "retirement"]) report.mark(phase, "rejected", undefined);
+  for (const phase of ["module_import", "host_runtime", "cwd", "temp", "environment", "image", "base", "create"]) report.mark(phase, "fulfilled");
+  const output = []; emitContainerFailure(report.records, line => output.push(line)); assert.equal(output.length, 10); assert.ok(output.every(line => Buffer.byteLength(line) <= 768)); assert.ok(Buffer.byteLength(output.join("")) <= 8192);
+  assert.ok(!output.join("").includes(hex) && !output.join("").includes(other));
 });
 // END attach diagnostic pure tests.

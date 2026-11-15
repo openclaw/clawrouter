@@ -1,12 +1,13 @@
 import { createHash, randomBytes } from "node:crypto";
+import { constants as fsConstants } from "node:fs";
 import { spawn, execFileSync } from "node:child_process";
-import { readFile, writeFile, mkdir, mkdtemp, realpath, readlink, readdir, lstat, stat } from "node:fs/promises";
+import { readFile, writeFile, mkdir, mkdtemp, realpath, readlink, readdir, lstat, stat, open, opendir } from "node:fs/promises";
 import { join, dirname, resolve, relative, isAbsolute } from "node:path";
 import { tmpdir } from "node:os";
 import { deflateSync } from "node:zlib";
 import { createRequire } from "node:module";
 import { edgeProof } from "./edge-proof-profile.mjs";
-import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, validateContainerDiagnostic, initGuardTags, initSourcePhases, validateInitDetail, mountTargets, mountFilesystems, validateMountDetail } from "./edge-proof.mjs";
+import { runOwnedProcess, requireProcessSuccess, qualifyInstalledInputs, namespaceEvidence, namespaceIdentity, prepareEnvironment, runPackagingPipeline, createPackagingDiagnostics, createContainerDiagnostics, emitContainerFailure, imageBuildStages, nativePrepareStages, validateEnumerationDetail, createInitDiagnostics, initPrerequisiteStages, attachFailureBranches, validateContainerDiagnostic, initGuardTags, initSourcePhases, validateInitDetail, mountTargets, mountFilesystems, validateMountDetail, validateMaskDetail } from "./edge-proof.mjs";
 export { validateContainerDiagnostic, emitContainerFailure } from "./edge-proof.mjs";
 
 export const containerContract = Object.freeze({
@@ -41,12 +42,13 @@ const imagePattern = /^sha256:[a-f0-9]{64}$/;
 const shaPattern = /^[a-f0-9]{40}$/;
 const protocol = "EDGE_CONTAINER_V2 ";
 export function createInitGuardLedger() {
-  const errors = []; let source = null, guard = null, sealed = false, detail, mount;
+  const errors = []; let source = null, guard = null, sealed = false, detail, mount, mask;
   return { errors,
     source(value) { try { check(!sealed && initSourcePhases.includes(value), "init-source-phase"); source = value; } catch (error) { errors.push(error); } },
     guard(value) { try { check(!sealed && initGuardTags.includes(value), "init-guard-tag"); guard ??= value; } catch (error) { errors.push(error); } },
     mount(value) { try { check(!sealed && mount === undefined, "mount-detail-stale"); mount = validateMountDetail(value, source); } catch (error) { errors.push(error); } },
-    failure() { if (!sealed) { sealed = true; if (source !== null) detail = { guard, source, ...(mount === undefined ? {} : { m: mount }) }; } return detail; },
+    mask(value) { try { check(!sealed && mask === undefined, "mask-detail-stale"); mask = validateMaskDetail(value); } catch (error) { errors.push(error); } },
+    failure() { if (!sealed) { sealed = true; if (source !== null) detail = { guard, source, ...(mount === undefined ? {} : { m: mount }), ...(mask === undefined ? {} : { e: mask }) }; } return detail; },
   };
 }
 function initRecord(recorder, method, value) { if (recorder) try { recorder[method](value); } catch (error) { recorder.errors.push(error); } }
@@ -399,12 +401,15 @@ export function validateMetadataMounts(inspect, targetMounts, parentMounts, daem
   }
   return result;
 }
+const directoryMaskTargets = Object.freeze(["/proc/asound", "/proc/acpi", "/proc/scsi", "/sys/firmware", "/sys/devices/virtual/powercap"]);
+const thermalMaskTarget = path => /^\/sys\/devices\/system\/cpu\/cpu(0|[1-9]\d*)\/thermal_throttle$/.test(path);
+const isDirectoryMask = target => directoryMaskTargets.includes(target) || thermalMaskTarget(target);
 export function validateMounts(rows, recorder) {
   mountTable(rows, recorder);
   // moby v28.5.2 oci/defaults.go: automatic mounts and conditional masks.
   const readonlyProc = ["/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys", "/proc/sysrq-trigger"];
   const fileMasks = ["/proc/interrupts", "/proc/kcore", "/proc/keys", "/proc/latency_stats", "/proc/timer_list", "/proc/timer_stats", "/proc/sched_debug"];
-  const directoryMasks = ["/proc/asound", "/proc/acpi", "/proc/scsi", "/sys/firmware", "/sys/devices/virtual/powercap"];
+  const directoryMasks = directoryMaskTargets;
   const automatic = {
     "/task": ["tmpfs", "rw", "nosuid", "nodev", "noexec"], "/proc": ["proc", "rw", "nosuid", "nodev", "noexec"],
     "/dev": ["tmpfs", "rw", "nosuid"], "/dev/pts": ["devpts", "rw", "nosuid", "noexec"],
@@ -412,7 +417,7 @@ export function validateMounts(rows, recorder) {
     "/sys": ["sysfs", "ro", "nosuid", "nodev", "noexec"], "/sys/fs/cgroup": ["cgroup2", "ro", "nosuid", "nodev", "noexec"],
   };
   const metadata = ["/etc/resolv.conf", "/etc/hostname", "/etc/hosts"];
-  const thermalMask = path => /^\/sys\/devices\/system\/cpu\/cpu(0|[1-9]\d*)\/thermal_throttle$/.test(path);
+  const thermalMask = thermalMaskTarget;
   const permitted = new Set(["/", ...Object.keys(automatic), ...metadata, ...readonlyProc, ...fileMasks, ...directoryMasks]);
   {
     let failingRow;
@@ -442,8 +447,8 @@ export function validateMounts(rows, recorder) {
       const m = createMountObservation(recorder, 21, target);
       m.check(m.leaf(1, m.value("fs", row.fs) === dev.fs) && m.leaf(2, row.device === dev.device) && m.leaf(3, m.value("root", row.root) === "/null") && m.leaf(4, same([...row.options].sort(), [...dev.options].sort())) && m.leaf(5, same([...row.superOptions].sort(), [...dev.superOptions].sort())), "null-mask-mount");
     } else {
-      const m = createMountObservation(recorder, 22, target);
-      m.check(m.leaf(1, m.value("fs", row.fs) === "tmpfs") && m.leaf(2, row.device.startsWith("0:")) && m.leaf(3, m.value("root", row.root) === "/") && m.leaf(4, row.options.includes("ro")) && m.leaf(5, row.superOptions.includes("ro")) && m.leaf(6, !rows.some(other => other !== row && other.device === row.device)), "directory-mask-mount");
+      const m = createMountObservation(recorder, 27, target);
+      m.check(m.leaf(1, m.value("fs", row.fs) === "tmpfs") && m.leaf(2, row.device.startsWith("0:")) && m.leaf(3, m.value("root", row.root) === "/") && m.leaf(4, row.options.includes("ro")) && m.leaf(5, row.superOptions.includes("ro")) && m.leaf(6, rows.every(other => other === row || other.device !== row.device || isDirectoryMask(other.target) && other.fs === "tmpfs" && other.device.startsWith("0:") && other.root === "/" && other.options.includes("ro") && other.superOptions.includes("ro"))), "directory-mask-mount");
     }
   }
   const devices = Object.keys(automatic).map(path => at(path).device);
@@ -453,6 +458,72 @@ export function validateMounts(rows, recorder) {
   { const m = createMountObservation(recorder, 26, "/dev/shm"); m.check(m.leaf(1, at("/dev/shm").superOptions.includes("size=65536k")), "shm-mount"); }
   return true;
 }
+// Node v24.22.1 fs.Dir uses the held proc-FD path, bufferSize 1, and explicit
+// read/close promises. Native closedir errno is not exposed by bundled libuv.
+export function validateMaskCompletion(value) {
+  check(Array.isArray(value) && value.length === 6 && value[0] === 1 && Number.isInteger(value[1]) && value[1] >= 0 && value[1] < 4096 && value.slice(2, 5).every(n => n === value[1]) && value[5] === "UNOBSERVABLE", "mask-completion");
+  return value;
+}
+export async function validateEmptyMasks(rows, recorder, io = { open, opendir, realpath, lstat, readFile, readlink, constants: fsConstants }) {
+  validateMounts(rows, recorder);
+  const targets = rows.filter(row => isDirectoryMask(row.target)), errors = [];
+  let completed = 0, role = null, readState = 0, dirClose = 0, anchorClose = 0;
+  const phase = value => initRecord(recorder, "source", value);
+  const expect = (value, code) => initGuardCheck(value, code, recorder, "mounts");
+  const snapshot = async () => parseMounts(await io.readFile("/proc/self/mountinfo", "utf8"));
+  const ns = async () => { const value = await io.readlink("/proc/self/ns/mnt"); expect(/^mnt:\[\d+\]$/.test(value), "mask-namespace"); return value; };
+  try {
+    phase("mask_namespace"); const namespace = await ns();
+    phase("mask_snapshot"); validateMountFreshness(rows, await snapshot());
+    for (const row of targets) {
+      role = mountTargets.indexOf(row.target) + 2; readState = dirClose = anchorClose = 0;
+      let anchor, directory;
+      try {
+        phase("mask_open");
+        expect([io.constants.O_RDONLY, io.constants.O_DIRECTORY, io.constants.O_NOFOLLOW].every(Number.isInteger), "mask-open-flags");
+        expect(await io.realpath(row.target) === row.target, "mask-canonical-target");
+        anchor = await io.open(row.target, io.constants.O_RDONLY | io.constants.O_DIRECTORY | io.constants.O_NOFOLLOW);
+        const fd = anchor.fd; expect(Number.isSafeInteger(fd) && fd >= 0, "mask-fd");
+        const boundPath = `/proc/self/fd/${fd}`;
+        const bind = async () => {
+          phase("mask_identity");
+          const held = await anchor.stat({ bigint: true }), named = await io.lstat(row.target, { bigint: true });
+          expect(held.isDirectory() && named.isDirectory() && typeof held.dev === "bigint" && typeof held.ino === "bigint" && held.dev === named.dev && held.ino === named.ino, "mask-directory-identity");
+          expect(await io.realpath(row.target) === row.target && await io.readlink(boundPath) === row.target, "mask-path-identity");
+          const info = await io.readFile(`/proc/self/fdinfo/${fd}`, "utf8");
+          expect(typeof info === "string" && info.length <= 4096, "mask-fdinfo-capacity");
+          const mounts = [...info.matchAll(/^mnt_id:[ \t]+([1-9]\d*)$/gm)], inodes = [...info.matchAll(/^ino:[ \t]+([1-9]\d*)$/gm)];
+          expect(mounts.length === 1 && inodes.length === 1 && BigInt(mounts[0][1]) === BigInt(row.id) && BigInt(inodes[0][1]) === held.ino, "mask-mount-identity");
+        };
+        await bind();
+        phase("mask_opendir"); directory = await io.opendir(boundPath, { bufferSize: 1, recursive: false });
+        phase("mask_read"); let empty;
+        try { empty = (await directory.read()) === null; readState = 1; } catch (error) { readState = 2; throw error; }
+        const m = createMountObservation(recorder, 28, row.target); m.check(m.leaf(1, empty), "mask-nonempty");
+        await bind();
+      } catch (error) { errors.push(error); }
+      // Attempt both owned closes once, even if either call throws synchronously.
+      const pending = [];
+      for (const [handle, kind] of [[directory, "mask_dir_close"], [anchor, "mask_anchor_close"]]) if (handle) {
+        try { const original = handle.close(); pending.push({ original, kind }); }
+        catch (error) { if (!errors.length) phase(kind); errors.push(error); if (kind === "mask_dir_close") dirClose = 2; else anchorClose = 2; }
+      }
+      const outcomes = await Promise.allSettled(pending.map(item => item.original));
+      for (const [index, outcome] of outcomes.entries()) {
+        const { kind } = pending[index];
+        if (outcome.status === "rejected") { if (!errors.length) phase(kind); errors.push(outcome.reason); }
+        if (kind === "mask_dir_close") dirClose = outcome.status === "fulfilled" ? 1 : 2; else anchorClose = outcome.status === "fulfilled" ? 1 : 2;
+      }
+      if (errors.length) break;
+      completed++;
+    }
+    if (!errors.length) { role = null; readState = dirClose = anchorClose = 0; phase("mask_namespace"); expect(await ns() === namespace, "mask-namespace-drift"); phase("mask_snapshot"); validateMountFreshness(rows, await snapshot()); }
+  } catch (error) { errors.push(error); }
+  if (errors.length) initRecord(recorder, "mask", [1, role, targets.length, completed, readState, dirClose, anchorClose, "UNOBSERVABLE"]);
+  raiseContainerFailures(errors);
+  return validateMaskCompletion([1, targets.length, completed, completed, completed, "UNOBSERVABLE"]);
+}
+
 export function validateChildStatus(text, expected, recorder) {
   validateIdentity(parseIdentity(text, recorder), expected, true, recorder);
   for (const name of ["CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"]) initGuardCheck(new RegExp(`^${name}:\\s+0+$`, "m").test(text), "child-capability", recorder, "capabilities");
@@ -617,8 +688,11 @@ export async function runInitPrerequisites(args, trace, operations, ledger) {
     observe(() => trace.enter("environment_prepare")); await operations.prepare();
     observe(() => trace.enter("runtime")); detailActive = true; await operations.runtime(identity); detailActive = false;
     observe(() => trace.enter("native_receipt")); detailActive = true; native = await operations.native(args[1]); detailActive = false;
-    observe(() => trace.enter("ready_write")); operations.ready(args[0], args[1]);
-    observe(() => trace.enter("permit_receive")); await operations.permit(args[0], args[1]);
+    const reportsFailed = () => trace.errors.length || reporting.length || ledger?.errors.length;
+    if (!reportsFailed()) {
+      observe(() => trace.enter("ready_write"));
+      if (!reportsFailed()) { operations.ready(args[0], args[1]); observe(() => trace.enter("permit_receive")); await operations.permit(args[0], args[1]); }
+    }
   } catch (error) { failed = true; reason = error; }
   let detail; if (failed && detailActive && ledger) observe(() => { detail = ledger.failure(); });
   observe(() => trace.finish(failed, reason, detail, [...(ledger ? ledger.errors : []), ...reporting]));
@@ -634,7 +708,7 @@ async function receivePermit(nonce, contextHash) {
     return parseControl(text, "permit", nonce, contextHash);
   } finally { clearTimeout(deadline); }
 }
-async function validateContainerRuntime(identity, builder = false, recorder) {
+async function validateContainerRuntime(identity, builder = false, recorder, inspectMasks = false) {
   initRecord(recorder, "source", "runtime");
   initGuardCheck(process.platform === "linux" && process.arch === "x64" && process.version === "v24.22.1" && process.versions.modules === "137", "container-runtime", recorder, "runtime");
   initRecord(recorder, "source", "ancestry");
@@ -653,6 +727,7 @@ async function validateContainerRuntime(identity, builder = false, recorder) {
   }
   initRecord(recorder, "source", "environment_construct"); const expected = containerEnvironment(builder ? "/task/child" : "/task");
   initRecord(recorder, "source", "environment_validate"); initGuardCheck(same(Object.entries(process.env).sort(), Object.entries(expected).sort()), "container-effective-environment", recorder, "effective_env");
+  if (inspectMasks) return validateEmptyMasks(parsed, recorder);
 }
 async function nativeReceipt(contextHash, recorder) {
   initRecord(recorder, "source", "native_read"); const bytes = await readFile(join(containerContract.input, ".edge-native.json"), "utf8");
@@ -768,19 +843,20 @@ export function parseContainerReceipt(text, plan) {
   const lines = text.split("\n").filter(line => line.startsWith("EDGE_CONTAINER_RECEIPT_V2 "));
   check(lines.length === 1 && Buffer.byteLength(lines[0]) <= 8192, "container-receipt-count");
   const receipt = JSON.parse(lines[0].slice("EDGE_CONTAINER_RECEIPT_V2 ".length));
-  exactKeys(receipt, ["version", "isolation", "nonce", "contextHash", "nativeHash", "sourceSha", "sourceTree", "sourceFiles", "dependencyFiles", "exactErasures", "twoRoots", "cliSha256", "results", "cloud", "sdk"]);
+  exactKeys(receipt, ["version", "isolation", "nonce", "contextHash", "nativeHash", "sourceSha", "sourceTree", "sourceFiles", "dependencyFiles", "exactErasures", "twoRoots", "cliSha256", "results", "cloud", "sdk", "masks"]);
   check(receipt.version === 2 && receipt.isolation === "private-container-pid-net-mount" && receipt.nonce === plan.nonce && receipt.contextHash === plan.contextHash && receipt.nativeHash === plan.nativeHash && receipt.sourceSha === edgeProof.sourceSha && receipt.sourceTree === edgeProof.sourceTree && receipt.sourceFiles === 600 && receipt.dependencyFiles === 268 && receipt.exactErasures === 4 && receipt.twoRoots === true && receipt.cliSha256 === containerContract.cliHash && receipt.sdk === "UNRUN" && receipt.cloud === "UNRUN", "container-receipt-identity");
+  validateMaskCompletion(receipt.masks);
   exactKeys(receipt.results, ["edge", "upstream"]);
   for (const result of Object.values(receipt.results)) { exactKeys(result, ["code", "signal", "closed", "sha256", "observedProcesses"]); check(result.code === 0 && result.signal === null && result.closed === true && hashPattern.test(result.sha256) && Number.isSafeInteger(result.observedProcesses) && result.observedProcesses >= 1, "container-wrangler-result"); }
   return receipt;
 }
 async function containerInit(args, sharedReport) {
-  let identity; const trace = createInitDiagnostics(), ledger = createInitGuardLedger(); if (sharedReport) sharedReport.init = trace;
+  let identity, masks; const trace = createInitDiagnostics(), ledger = createInitGuardLedger(); if (sharedReport) sharedReport.init = trace;
   const native = await runInitPrerequisites(args, trace, {
     arguments: values => check(values.length === 4 && hashPattern.test(values[0]) && hashPattern.test(values[1]), "init-arguments"),
     identity: ([nonce, contextHash, uid, gid]) => (identity = { uid: Array(4).fill(number(uid)), gid: Array(4).fill(number(gid)), groups: [] }),
     reset: () => { for (const key of Object.keys(process.env)) delete process.env[key]; Object.assign(process.env, containerEnvironment()); },
-    prepare: () => prepareEnvironment("/task"), runtime: identity => validateContainerRuntime(identity, false, ledger), native: contextHash => nativeReceipt(contextHash, ledger),
+    prepare: () => prepareEnvironment("/task"), runtime: async identity => { masks = await validateContainerRuntime(identity, false, ledger, true); }, native: contextHash => nativeReceipt(contextHash, ledger),
     ready: (nonce, contextHash) => process.stdout.write(control("ready", nonce, contextHash)), permit: (nonce, contextHash) => receivePermit(nonce, contextHash),
   }, ledger);
   const [nonce, contextHash, uid, gid] = args;
@@ -794,7 +870,7 @@ async function containerInit(args, sharedReport) {
   } catch (error) { errors.push(error); }
   report.mark("final", errors.length ? "rejected" : "fulfilled", errors[0]); errors.push(...report.errors); raiseContainerFailures(errors);
   const { version: _version, isolated: _isolated, ...packaging } = built;
-  const receipt = { version: 2, isolation: "private-container-pid-net-mount", nonce, contextHash, nativeHash: hash(JSON.stringify(native)), ...packaging };
+  const receipt = { version: 2, isolation: "private-container-pid-net-mount", nonce, contextHash, nativeHash: hash(JSON.stringify(native)), masks, ...packaging };
   process.stdout.write("EDGE_CONTAINER_RECEIPT_V2 " + JSON.stringify(receipt) + "\n");
   return { container: "complete", version: 2 };
 }

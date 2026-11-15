@@ -660,7 +660,7 @@ export function createNativePrepareDiagnostics(identity, write = (bytes, offset,
 export const initPrerequisiteStages = Object.freeze(["arguments", "identity", "environment_reset", "environment_prepare", "runtime", "native_receipt", "ready_write", "permit_receive"]);
 export const attachFailureBranches = Object.freeze(["spawn_throw", "setup_failure", "child_error", "stdin_error", "close_before_ready", "invalid_ready", "replayed_ready", "deadline", "ready_deadline", "interrupt", "output_capacity", "permit_write", "incomplete_ready"]);
 export const initGuardTags = Object.freeze(["runtime", "ancestry", "uid_gid_groups", "capabilities", "nnp", "seccomp", "mounts", "interfaces", "routes4", "routes6", "effective_env", "native_receipt_equality"]);
-export const initSourcePhases = Object.freeze(["runtime", "ancestry", "status_read", "status_validate", "mount_read", "mount_parse", "mount_validate", "namespace_read", "network_validate", "environment_construct", "environment_validate", "native_read", "native_parse", "native_validate", "native_qualify", "native_equality"]);
+export const initSourcePhases = Object.freeze(["runtime", "ancestry", "status_read", "status_validate", "mount_read", "mount_parse", "mount_validate", "namespace_read", "network_validate", "environment_construct", "environment_validate", "native_read", "native_parse", "native_validate", "native_qualify", "native_equality", "mask_namespace", "mask_snapshot", "mask_open", "mask_identity", "mask_opendir", "mask_read", "mask_dir_close", "mask_anchor_close"]);
 // Wire IDs are fixed source-owned predicates, never parsed exception text.
 export const mountPredicates = Object.freeze([
   ["path", 4], ["escape", 1], ["table_capacity", 3], ["row_identity", 5], ["filesystem_token", 2],
@@ -669,6 +669,7 @@ export const mountPredicates = Object.freeze([
   ["required_target", 1], ["root", 3], ["nearest_parent", 2], ["automatic", 8], ["metadata", 2],
   ["readonly_proc", 7], ["null_mask", 5], ["directory_mask", 6], ["automatic_devices", 1],
   ["task_size", 1], ["dev_size_mode", 2], ["shm_size", 1],
+  ["directory_mask_group", 6], ["mask_empty", 1],
 ]);
 export const mountTargets = Object.freeze(["/", "/task", "/proc", "/dev", "/dev/pts", "/dev/shm", "/dev/mqueue", "/sys", "/sys/fs/cgroup", "/etc/resolv.conf", "/etc/hostname", "/etc/hosts", "/proc/bus", "/proc/fs", "/proc/irq", "/proc/sys", "/proc/sysrq-trigger", "/proc/interrupts", "/proc/kcore", "/proc/keys", "/proc/latency_stats", "/proc/timer_list", "/proc/timer_stats", "/proc/sched_debug", "/proc/asound", "/proc/acpi", "/proc/scsi", "/sys/firmware", "/sys/devices/virtual/powercap"]);
 export const mountFilesystems = Object.freeze(["tmpfs", "proc", "devpts", "mqueue", "sysfs", "cgroup2", "overlay", "ext4", "xfs"]);
@@ -676,8 +677,8 @@ export function validateMountDetail(value, source) {
   if (!Array.isArray(value) || Object.getOwnPropertyNames(value).join() !== [...Array(11).keys(), "length"].join()) refuse("mount-detail-shape");
   const row = Array.from({ length: 11 }, (_, i) => ownData(value, String(i)));
   const [version, predicate, leaf, role, fs, root, seen, passed, count, distinct, overflow] = row;
-  if (version !== 1 || !Number.isInteger(predicate) || predicate < 1 || predicate > mountPredicates.length || !["mount_parse", "mount_validate"].includes(source)) refuse("mount-detail-predicate");
-  if (predicate >= 10 && predicate <= 13 ? source !== "mount_parse" : predicate >= 14 && source !== "mount_validate") refuse("mount-detail-source");
+  if (version !== 1 || !Number.isInteger(predicate) || predicate < 1 || predicate > mountPredicates.length || !["mount_parse", "mount_validate", "mask_read"].includes(source)) refuse("mount-detail-predicate");
+  if (predicate === 28 ? source !== "mask_read" : source === "mask_read" || (predicate >= 10 && predicate <= 13 ? source !== "mount_parse" : predicate >= 14 && source !== "mount_validate")) refuse("mount-detail-source");
   const width = mountPredicates[predicate - 1][1], limit = 2 ** width - 1;
   if (!Number.isInteger(leaf) || leaf < 1 || leaf > width || !Number.isInteger(seen) || seen < 1 || seen > limit || !Number.isInteger(passed) || passed < 0 || (passed & seen) !== passed || !(seen & 2 ** (leaf - 1)) || passed & 2 ** (leaf - 1)) refuse("mount-detail-leaf");
   let order = Array.from({ length: width }, (_, i) => i + 1);
@@ -694,12 +695,12 @@ export function validateMountDetail(value, source) {
   }
   const optional = (n, max) => n === null || Number.isInteger(n) && n >= 1 && n <= max;
   if (!optional(role, mountTargets.length + 1) || !optional(fs, mountFilesystems.length + 1) || !optional(root, 3)) refuse("mount-detail-enum");
-  const roles = { 15: Array.from({length:12},(_,i)=>i+2), 16:[2], 19:[11,12,13], 20:[14,15,16,17,18], 21:[19,20,21,22,23,24,25], 22:[1,26,27,28,29,30], 24:[3], 25:[5], 26:[7] };
+  const roles = { 15: Array.from({length:12},(_,i)=>i+2), 16:[2], 19:[11,12,13], 20:[14,15,16,17,18], 21:[19,20,21,22,23,24,25], 22:[1,26,27,28,29,30], 24:[3], 25:[5], 26:[7], 27:[1,26,27,28,29,30], 28:[1,26,27,28,29,30] };
   if (roles[predicate] && !roles[predicate].includes(role)) refuse("mount-detail-role");
   for (const n of [count, distinct]) if (!(n === null || Number.isInteger(n) && n >= 0 && n <= 4095)) refuse("mount-detail-count");
   if (!Number.isInteger(overflow) || overflow < 0 || overflow > 3 || overflow & 1 && count !== 4095 || overflow & 2 && distinct !== 4095) refuse("mount-detail-saturation");
-  if (fs !== null && ![5, 16, 18, 19, 20, 21, 22].includes(predicate) || root !== null && ![1, 16, 18, 20, 21, 22].includes(predicate)) refuse("mount-detail-unobserved-field");
-  if (predicate === 16 && (leaf < 3 && fs !== null || leaf < 2 && root !== null) || predicate === 18 && leaf < 2 && root !== null || [20, 21, 22].includes(predicate) && leaf < 3 && root !== null || predicate === 1 && root !== null && role !== null) refuse("mount-detail-unreached-field");
+  if (fs !== null && ![5, 16, 18, 19, 20, 21, 22, 27].includes(predicate) || root !== null && ![1, 16, 18, 20, 21, 22, 27].includes(predicate)) refuse("mount-detail-unobserved-field");
+  if (predicate === 16 && (leaf < 3 && fs !== null || leaf < 2 && root !== null) || predicate === 18 && leaf < 2 && root !== null || [20, 21, 22, 27].includes(predicate) && leaf < 3 && root !== null || predicate === 1 && root !== null && role !== null) refuse("mount-detail-unreached-field");
   if (count !== null && ![3, 6, 7, 9, 10, 11, 23].includes(predicate) || distinct !== null && ![6, 7, 9, 23].includes(predicate) || [6, 7].includes(predicate) && leaf < 4 && distinct !== null) refuse("mount-detail-unobserved-count");
   if ([2, 3, 4, 9, 10, 11, 12, 13, 23].includes(predicate) && role !== null) refuse("mount-detail-unobserved-role");
   const relation = (id, result) => { if (result !== null && seen & 2 ** (id - 1) && Boolean(passed & 2 ** (id - 1)) !== result) refuse("mount-detail-value-comparison"); };
@@ -718,20 +719,43 @@ export function validateMountDetail(value, source) {
   if (predicate === 19) relation(1, fsIs(["ext4", "xfs"]));
   if (predicate === 20) relation(1, fsIs(["proc"]));
   if (predicate === 21) relation(3, rootIs(2));
-  if (predicate === 22) { relation(1, fsIs(["tmpfs"])); relation(3, rootIs(1)); }
+  if ([22, 27].includes(predicate)) { relation(1, fsIs(["tmpfs"])); relation(3, rootIs(1)); }
   // The proc root RHS and null-mask filesystem RHS are separate, uncaptured reads.
   const comparison = predicate === 9 ? leaf : predicate === 23 ? 1 : [6, 7].includes(predicate) && leaf >= 4 ? 4 : null;
   if (comparison !== null && count !== null && distinct !== null && overflow === 0 && (count === distinct) !== Boolean(passed & 2 ** (comparison - 1))) refuse("mount-detail-count-comparison");
   if (predicate === 23 && (count === null || distinct === null || role !== null)) refuse("mount-detail-aggregate");
   return row;
 }
+// Close states: 0 not called, 1 original Node promise fulfilled, 2 rejected/threw.
+// The pinned libuv path does not expose native closedir errno.
+export function validateMaskDetail(value) {
+  if (!Array.isArray(value) || Object.getOwnPropertyNames(value).join() !== [...Array(8).keys(), "length"].join()) refuse("mask-detail-shape");
+  const row = Array.from({ length: 8 }, (_, i) => ownData(value, String(i)));
+  const [version, role, total, completed, read, directoryClose, anchorClose, nativeErrno] = row;
+  if (version !== 1 || !(role === null || [1,26,27,28,29,30].includes(role)) || !Number.isInteger(total) || total < 0 || total >= 4096 || !Number.isInteger(completed) || completed < 0 || completed > total || ![read, directoryClose, anchorClose].every(n => [0,1,2].includes(n)) || nativeErrno !== "UNOBSERVABLE") refuse("mask-detail-value");
+  if (read !== 0 && directoryClose === 0 || directoryClose !== 0 && anchorClose === 0 || role === null && [read,directoryClose,anchorClose].some(Boolean)) refuse("mask-detail-order");
+  return row;
+}
 export function validateInitDetail(value) {
-  if (!value || Object.getOwnPropertyNames(value).sort().join() !== (Object.hasOwn(value, "m") ? "guard,m,source" : "guard,source")) refuse("init-detail-keys");
+  if (!value || Object.getOwnPropertyNames(value).sort().join() !== ["guard", "source", ...(Object.hasOwn(value, "m") ? ["m"] : []), ...(Object.hasOwn(value, "e") ? ["e"] : [])].sort().join()) refuse("init-detail-keys");
   const row = { guard: ownData(value, "guard"), source: ownData(value, "source") };
   if (!(row.guard === null || initGuardTags.includes(row.guard)) || !initSourcePhases.includes(row.source)) refuse("init-detail-enum");
-  const sources = { runtime: ["runtime"], ancestry: ["ancestry"], uid_gid_groups: ["status_validate"], capabilities: ["status_validate"], nnp: ["status_validate"], seccomp: ["status_validate"], mounts: ["mount_parse", "mount_validate"], interfaces: ["network_validate"], routes4: ["network_validate"], routes6: ["network_validate"], effective_env: ["environment_validate"], native_receipt_equality: ["native_equality"] };
+  const sources = { runtime: ["runtime"], ancestry: ["ancestry"], uid_gid_groups: ["status_validate"], capabilities: ["status_validate"], nnp: ["status_validate"], seccomp: ["status_validate"], mounts: ["mount_parse", "mount_validate", ...initSourcePhases.filter(phase => phase.startsWith("mask_"))], interfaces: ["network_validate"], routes4: ["network_validate"], routes6: ["network_validate"], effective_env: ["environment_validate"], native_receipt_equality: ["native_equality"] };
   if (row.guard !== null && !sources[row.guard].includes(row.source)) refuse("init-detail-pair");
   if (Object.hasOwn(value, "m")) { if (row.guard !== "mounts") refuse("mount-detail-guard"); row.m = validateMountDetail(ownData(value, "m"), row.source); }
+  if (Object.hasOwn(value, "e")) {
+    if (!row.source.startsWith("mask_") || ![null, "mounts"].includes(row.guard)) refuse("mask-detail-source");
+    row.e = validateMaskDetail(ownData(value, "e"));
+    if (row.m && (row.m[1] !== 28 || row.m[3] !== row.e[1] || row.e[4] !== 1)) refuse("mask-detail-binding");
+    const [, role, total, completed, read, directoryClose, anchorClose] = row.e;
+    if (["mask_namespace", "mask_snapshot"].includes(row.source)) {
+      if (role !== null || ![0, total].includes(completed) || read || directoryClose || anchorClose) refuse("mask-detail-snapshot");
+    } else {
+      if (role === null || completed >= total) refuse("mask-detail-target");
+      if (row.source === "mask_open" && (read || directoryClose) || row.source === "mask_opendir" && (read || directoryClose || !anchorClose) || row.source === "mask_identity" && read === 2 || row.source === "mask_read" && !read || row.source === "mask_dir_close" && (read !== 1 || directoryClose !== 2) || row.source === "mask_anchor_close" && (read !== 1 || directoryClose !== 1 || anchorClose !== 2)) refuse("mask-detail-phase");
+    }
+  }
+  if (row.m?.[1] === 28 && !row.e) refuse("mask-detail-missing-close");
   return row;
 }
 export function createInitDiagnostics(writer = text => {
@@ -753,7 +777,7 @@ export function createInitDiagnostics(writer = text => {
     } catch (error) { errors.push(error); } },
     enter(stage) { try { if (finished || initPrerequisiteStages[index + 1] !== stage) refuse("init-frame-order"); index++; emit("entered"); } catch (error) { errors.push(error); } },
     finish(failed, reason, detail, extraErrors = []) { try {
-      if (finished || index < 0 || typeof failed !== "boolean" || !failed && index !== 7) refuse("init-frame-terminal");
+      if (finished || index < 0 || typeof failed !== "boolean" || !failed && index !== 7 && errors.length + extraErrors.length === 0) refuse("init-frame-terminal");
       finished = true; emit("terminal", failed ? "original_failure" : errors.length + extraErrors.length ? "reporter_failure" : "complete", failed ? reason !== undefined : null, failed ? detail : undefined, extraErrors);
     } catch (error) { errors.push(error); } },
   };
@@ -783,7 +807,7 @@ export function validateContainerDiagnostic(value) {
     if (row.phase !== "init_prerequisite" || !["binding_unavailable", "capture_unavailable", "capture_mismatch", "no_records", "incomplete", "invalid", "original_failure", "reporter_failure", "complete"].includes(row.reason)) refuse("init-summary-enum");
     if (terminal) {
       if (!Number.isInteger(row.records) || row.records < 2 || row.records > 9 || !Number.isInteger(row.reportFailures) || row.reportFailures < 0 || row.reportFailures > 16 || !Number.isInteger(row.undefinedReportFailures) || row.undefinedReportFailures < 0 || row.undefinedReportFailures > row.reportFailures) refuse("init-summary-counts");
-      if (row.reason === "original_failure" ? row.state !== "rejected" || row.stage !== initPrerequisiteStages[row.records - 2] || typeof row.defined !== "boolean" : row.stage !== null || row.defined !== null || row.records !== 9 || (row.reason === "complete" ? row.state !== "observed" || row.reportFailures !== 0 : row.state !== "rejected" || row.reportFailures < 1)) refuse("init-summary-terminal");
+      if (row.reason === "original_failure" ? row.state !== "rejected" || row.stage !== initPrerequisiteStages[row.records - 2] || typeof row.defined !== "boolean" : row.stage !== null || row.defined !== null || (row.reason === "complete" ? row.records !== 9 || row.state !== "observed" || row.reportFailures !== 0 : row.state !== "rejected" || row.reportFailures < 1)) refuse("init-summary-terminal");
     } else if (row.state !== "observed" || row.stage !== null || row.defined !== null || row.reportFailures !== null || row.undefinedReportFailures !== null || (row.reason === "no_records" ? row.records !== 0 : row.reason === "incomplete" ? !Number.isInteger(row.records) || row.records < 1 || row.records > 8 : row.records !== null)) refuse("init-summary-unknown");
     return row;
   }
